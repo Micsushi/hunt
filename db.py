@@ -1,6 +1,5 @@
 import sqlite3
-
-DB_PATH = "hunt.db"
+from config import DB_PATH
 
 def get_connection():
     conn = sqlite3.connect(DB_PATH)
@@ -26,7 +25,8 @@ def init_db():
             status TEXT DEFAULT 'new',
             date_scraped TEXT DEFAULT CURRENT_TIMESTAMP,
             level TEXT,
-            priority BOOLEAN DEFAULT 0
+            priority BOOLEAN DEFAULT 0,
+            category TEXT
             )
         """)
         conn.commit()
@@ -72,9 +72,9 @@ def add_job(job_data):
     try:
         cursor = conn.cursor()
         cursor.execute("""
-            INSERT OR IGNORE INTO jobs (title, company, location, job_url, apply_url, description, source, date_posted, is_remote, level, priority)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """, (job_data['title'], job_data['company'], job_data['location'], job_data['job_url'], job_data['apply_url'], job_data['description'], job_data['source'], job_data['date_posted'], job_data['is_remote'], job_data['level'], job_data.get('priority', 0)))
+            INSERT OR IGNORE INTO jobs (title, company, location, job_url, apply_url, description, source, date_posted, is_remote, level, priority, category)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (job_data['title'], job_data['company'], job_data['location'], job_data['job_url'], job_data['apply_url'], job_data['description'], job_data['source'], job_data['date_posted'], job_data['is_remote'], job_data['level'], job_data.get('priority', 0), job_data.get('category')))
         conn.commit()
         return cursor.lastrowid
     finally:

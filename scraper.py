@@ -1,5 +1,6 @@
 from jobspy import scrape_jobs
 from db import init_db, add_job
+from config import SEARCH_TERMS, LOCATIONS, SITES, MAX_WORKERS, WATCHLIST, TITLE_BLACKLIST
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 def classify_level(title):
@@ -19,43 +20,20 @@ def classify_level(title):
     
     return "unknown"
 
-WATCHLIST = [
-    "amazon", "robinhood", "stripe", "shopify", "bloomberg", "microsoft",
-    "salesforce", "meta", "apple", "drw", "connor, clark & lunn",
-    "wealthsimple", "cloudflare", "pcl",
-    "1password", "amd", "unity", "doordash",
-    "uber", "pinterest", "reddit", "ibm", "d2l", "sap", "atlassian",
-    "celestica", "cisco", "dell", "hp", "hewlett packard",
-    "vmware", "qualcomm", "adobe","paypal", "google",
-    "datadog", "hashicorp", "okta", "flare", "hootsuite",
-]
-
 def is_priority(company):
     if not company or not isinstance(company, str):
         return False
     company_lower = company.lower()
     return any(w in company_lower for w in WATCHLIST)
 
-SEARCH_TERMS = [
-    "software engineer intern",
-    "software engineer new grad",
-    "junior software engineer",
-    "software developer intern",
-    "software developer new grad",
-    "junior software developer",
-]
+def should_skip(title):
+    if not title or not isinstance(title, str):
+        return False
+    title_lower = title.lower()
+    return any(word in title_lower for word in TITLE_BLACKLIST)
 
-LOCATIONS = [
-    "Canada",
-    # "Remote",
-]
-
-SITES = ["indeed", "linkedin", "glassdoor"]
-
-MAX_WORKERS = 3
-
-def scrape_single(site, term, location):
-    print(f"  [{site}] Searching: '{term}' in '{location}'...")
+def scrape_single(site, term, location, category):
+    print(f"  [{site}] [{category}] Searching: '{term}' in '{location}'...")
     try:
         jobs_df = scrape_jobs(
             site_name=[site],
@@ -66,15 +44,20 @@ def scrape_single(site, term, location):
             country_indeed="Canada",
         )
     except Exception as e:
-        print(f"  [{site}] Error for '{term}' in '{location}': {e}")
+        print(f"  [{site}] [{category}] Error for '{term}' in '{location}': {e}")
         return []
 
-    print(f"  [{site}] Found {len(jobs_df)} jobs for '{term}' in '{location}'")
+    print(f"  [{site}] [{category}] Found {len(jobs_df)} jobs for '{term}' in '{location}'")
 
     jobs = []
     for _, row in jobs_df.iterrows():
+        title = row.get("title")
+
+        if should_skip(title):
+            continue
+
         job_data = {
-            "title": row.get("title"),
+            "title": title,
             "company": row.get("company"),
             "location": row.get("location"),
             "job_url": str(row.get("job_url")) if row.get("job_url") else None,
@@ -83,8 +66,9 @@ def scrape_single(site, term, location):
             "source": row.get("site"),
             "date_posted": str(row.get("date_posted")) if row.get("date_posted") else None,
             "is_remote": row.get("is_remote"),
-            "level": classify_level(row.get("title")),
+            "level": classify_level(title),
             "priority": is_priority(row.get("company")),
+            "category": category,
         }
         if job_data["job_url"]:
             jobs.append(job_data)
@@ -95,8 +79,9 @@ def scrape():
 
     all_jobs = []
     tasks = [
-        (site, term, location)
-        for term in SEARCH_TERMS
+        (site, term, location, category)
+        for category, terms in SEARCH_TERMS.items()
+        for term in terms
         for location in LOCATIONS
         for site in SITES
     ]
@@ -105,8 +90,8 @@ def scrape():
 
     with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
         futures = {
-            executor.submit(scrape_single, site, term, location): (site, term, location)
-            for site, term, location in tasks
+            executor.submit(scrape_single, site, term, location, category): (site, term, location, category)
+            for site, term, location, category in tasks
         }
 
         for future in as_completed(futures):
@@ -121,4 +106,9 @@ def scrape():
     print(f"\nDone! Scraped {len(all_jobs)} total jobs, added {added} to database")
 
 if __name__ == "__main__":
+    import time
+    start = time.time()
     scrape()
+    elapsed = time.time() - start
+    minutes, seconds = divmod(int(elapsed), 60)
+    print(f"Completed in {minutes}m {seconds}s")
