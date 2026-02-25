@@ -19,6 +19,23 @@ def classify_level(title):
     
     return "unknown"
 
+WATCHLIST = [
+    "amazon", "robinhood", "stripe", "shopify", "bloomberg", "microsoft",
+    "salesforce", "meta", "apple", "drw", "connor, clark & lunn",
+    "wealthsimple", "cloudflare", "pcl",
+    "1password", "amd", "unity", "doordash",
+    "uber", "pinterest", "reddit", "ibm", "d2l", "sap", "atlassian",
+    "celestica", "cisco", "dell", "hp", "hewlett packard",
+    "vmware", "qualcomm", "adobe","paypal", "google",
+    "datadog", "hashicorp", "okta", "flare", "hootsuite",
+]
+
+def is_priority(company):
+    if not company:
+        return False
+    company_lower = company.lower()
+    return any(w in company_lower for w in WATCHLIST)
+
 SEARCH_TERMS = [
     "software engineer intern",
     "software engineer new grad",
@@ -35,7 +52,7 @@ LOCATIONS = [
 
 SITES = ["indeed", "linkedin", "glassdoor"]
 
-MAX_WORKERS = 5
+MAX_WORKERS = 3
 
 def scrape_single(site, term, location):
     print(f"  [{site}] Searching: '{term}' in '{location}'...")
@@ -67,6 +84,7 @@ def scrape_single(site, term, location):
             "date_posted": str(row.get("date_posted")) if row.get("date_posted") else None,
             "is_remote": row.get("is_remote"),
             "level": classify_level(row.get("title")),
+            "priority": is_priority(row.get("company")),
         }
         if job_data["job_url"]:
             jobs.append(job_data)

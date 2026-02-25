@@ -25,7 +25,8 @@ def init_db():
             is_remote BOOLEAN,
             status TEXT DEFAULT 'new',
             date_scraped TEXT DEFAULT CURRENT_TIMESTAMP,
-            level TEXT
+            level TEXT,
+            priority BOOLEAN DEFAULT 0
             )
         """)
         conn.commit()
@@ -71,9 +72,9 @@ def add_job(job_data):
     try:
         cursor = conn.cursor()
         cursor.execute("""
-            INSERT OR IGNORE INTO jobs (title, company, location, job_url, apply_url, description, source, date_posted, is_remote, level)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """, (job_data['title'], job_data['company'], job_data['location'], job_data['job_url'], job_data['apply_url'], job_data['description'], job_data['source'], job_data['date_posted'], job_data['is_remote'], job_data['level']))
+            INSERT OR IGNORE INTO jobs (title, company, location, job_url, apply_url, description, source, date_posted, is_remote, level, priority)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (job_data['title'], job_data['company'], job_data['location'], job_data['job_url'], job_data['apply_url'], job_data['description'], job_data['source'], job_data['date_posted'], job_data['is_remote'], job_data['level'], job_data.get('priority', 0)))
         conn.commit()
         return cursor.lastrowid
     finally:
