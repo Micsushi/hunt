@@ -1,0 +1,9 @@
+python-jobspy
+numpy
+pandas
+requests
+beautifulsoup4
+tls-client
+pydantic
+regex
+markdownify
