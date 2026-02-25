@@ -32,3 +32,23 @@ pip install python-jobspy --no-deps
 # Run the scraper
 python scraper.py
 ```
+
+## Scheduled Runs
+
+To automatically scrape every day at noon, register a Windows Task Scheduler task:
+
+```bash
+schtasks /create /tn "HuntScraper" /tr "C:\path\to\hunt\run_scheduled.bat" /sc daily /st 12:00
+```
+
+Replace `C:\path\to\hunt\` with the actual path to this project.
+
+Manage the task:
+
+```bash
+schtasks /query /tn "HuntScraper"       # Check status
+schtasks /run /tn "HuntScraper"         # Run manually
+schtasks /delete /tn "HuntScraper" /f   # Remove
+```
+
+> The task runs under your user account in interactive mode. Your PC must be on and you must be logged in at the scheduled time.
