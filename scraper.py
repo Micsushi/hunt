@@ -3,7 +3,7 @@ from db import init_db, add_job
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 def classify_level(title):
-    if not title:
+    if not title or not isinstance(title, str):
         return "unknown"
     
     title_lower = title.lower()
@@ -31,7 +31,7 @@ WATCHLIST = [
 ]
 
 def is_priority(company):
-    if not company:
+    if not company or not isinstance(company, str):
         return False
     company_lower = company.lower()
     return any(w in company_lower for w in WATCHLIST)

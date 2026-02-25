@@ -65,7 +65,7 @@ def job_exists(job_data):
         conn.close()
 
 def add_job(job_data):
-    if job_exists(job_data):
+    if not job_data.get('priority') and job_exists(job_data):
         return None
 
     conn = get_connection()

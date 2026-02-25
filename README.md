@@ -7,14 +7,9 @@ Scrapes job postings from multiple job boards (Indeed, LinkedIn, Glassdoor) and 
 Requires Python 3.12 or 3.13 (3.14 is not supported due to dependency issues).
 
 ```bash
-# Create a virtual environment if not on 3.12 or 3.13 already
-py -3.13 -m venv venv
-Set-ExecutionPolicy -Scope CurrentUser -ExecutionPolicy RemoteSigned
-.\venv\Scripts\Activate
-
-pip install -r requirements.txt
-pip install python-jobspy --no-deps
+# First time setup
+.\setup.bat
 
 # Run the scraper
-python scraper.py
+.\run.bat
 ```
