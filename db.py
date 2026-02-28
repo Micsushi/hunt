@@ -54,6 +54,7 @@ def job_exists(job_data):
         if not existing_date or not new_date or existing_date == "None" or new_date == "None":
             return True
 
+        # checking if there is a job with the same title and company in the last 7 days
         from datetime import datetime, timedelta
         try:
             existing_dt = datetime.strptime(existing_date[:10], "%Y-%m-%d")

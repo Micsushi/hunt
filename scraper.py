@@ -39,7 +39,7 @@ def scrape_single(site, term, location, category):
             site_name=[site],
             search_term=term,
             location=location,
-            results_wanted=1000,
+            results_wanted=500,
             hours_old=24,
             country_indeed="Canada",
         )
@@ -100,10 +100,10 @@ def scrape():
 
     added = 0
     for job_data in all_jobs:
-        add_job(job_data)
-        added += 1
+        if add_job(job_data):
+            added += 1
 
-    print(f"\nDone! Scraped {len(all_jobs)} total jobs, added {added} to database")
+    print(f"\nDone! Scraped {len(all_jobs)} total jobs, added {added} new to database ({len(all_jobs) - added} duplicates skipped)")
 
 if __name__ == "__main__":
     import time
