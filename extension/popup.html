@@ -1,0 +1,147 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <header>
+    <h1>Hunt Autofill</h1>
+    <div class="header-actions">
+      <button id="importBtn" title="Import profile from JSON">Import</button>
+      <button id="exportBtn" title="Export profile to JSON">Export</button>
+    </div>
+  </header>
+
+  <input type="file" id="importFile" accept=".json" class="hidden-input">
+
+  <div class="section">
+    <div class="section-title">Personal</div>
+    <div class="row">
+      <div class="field">
+        <label for="firstName">First Name</label>
+        <input type="text" id="firstName" data-key="firstName">
+      </div>
+      <div class="field">
+        <label for="lastName">Last Name</label>
+        <input type="text" id="lastName" data-key="lastName">
+      </div>
+    </div>
+    <div class="row">
+      <div class="field">
+        <label for="email">Email</label>
+        <input type="email" id="email" data-key="email">
+      </div>
+      <div class="field">
+        <label for="phone">Phone</label>
+        <input type="tel" id="phone" data-key="phone">
+      </div>
+    </div>
+    <div class="field">
+      <label for="address">Street Address</label>
+      <input type="text" id="address" data-key="address">
+    </div>
+    <div class="row">
+      <div class="field">
+        <label for="city">City</label>
+        <input type="text" id="city" data-key="city">
+      </div>
+      <div class="field">
+        <label for="province">Province/State</label>
+        <input type="text" id="province" data-key="province">
+      </div>
+    </div>
+    <div class="row">
+      <div class="field">
+        <label for="postalCode">Postal Code</label>
+        <input type="text" id="postalCode" data-key="postalCode">
+      </div>
+      <div class="field">
+        <label for="country">Country</label>
+        <input type="text" id="country" data-key="country" value="Canada">
+      </div>
+    </div>
+  </div>
+
+  <div class="section">
+    <div class="section-title">Online Profiles</div>
+    <div class="field">
+      <label for="linkedin">LinkedIn URL</label>
+      <input type="url" id="linkedin" data-key="linkedin" placeholder="https://linkedin.com/in/...">
+    </div>
+    <div class="field">
+      <label for="github">GitHub URL</label>
+      <input type="url" id="github" data-key="github" placeholder="https://github.com/...">
+    </div>
+    <div class="field">
+      <label for="portfolio">Portfolio / Website</label>
+      <input type="url" id="portfolio" data-key="portfolio" placeholder="https://...">
+    </div>
+  </div>
+
+  <div class="section">
+    <div class="section-title">Education</div>
+    <div class="field">
+      <label for="school">School / University</label>
+      <input type="text" id="school" data-key="school">
+    </div>
+    <div class="row">
+      <div class="field">
+        <label for="degree">Degree</label>
+        <input type="text" id="degree" data-key="degree" placeholder="Bachelor's">
+      </div>
+      <div class="field">
+        <label for="fieldOfStudy">Field of Study</label>
+        <input type="text" id="fieldOfStudy" data-key="fieldOfStudy">
+      </div>
+    </div>
+    <div class="row">
+      <div class="field">
+        <label for="graduationDate">Graduation Date</label>
+        <input type="text" id="graduationDate" data-key="graduationDate" placeholder="May 2026">
+      </div>
+      <div class="field">
+        <label for="gpa">GPA</label>
+        <input type="text" id="gpa" data-key="gpa" placeholder="3.5">
+      </div>
+    </div>
+  </div>
+
+  <div class="section">
+    <div class="section-title">Experience</div>
+    <div class="row">
+      <div class="field">
+        <label for="jobTitle">Most Recent Title</label>
+        <input type="text" id="jobTitle" data-key="jobTitle">
+      </div>
+      <div class="field">
+        <label for="company">Company</label>
+        <input type="text" id="company" data-key="company">
+      </div>
+    </div>
+  </div>
+
+  <div class="section">
+    <div class="section-title">Preferences</div>
+    <div class="row">
+      <div class="field">
+        <label for="salary">Desired Salary</label>
+        <input type="text" id="salary" data-key="salary" placeholder="e.g. 60000">
+      </div>
+      <div class="field">
+        <label for="startDate">Available Start Date</label>
+        <input type="text" id="startDate" data-key="startDate" placeholder="Immediately">
+      </div>
+    </div>
+  </div>
+
+  <div class="status" id="status"></div>
+
+  <div class="actions">
+    <button id="saveBtn">Save Profile</button>
+    <button id="fillBtn">Fill Page</button>
+  </div>
+
+  <script src="popup.js"></script>
+</body>
+</html>

@@ -1,3 +1,6 @@
+import sys, os
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
 from jobspy import scrape_jobs
 from db import init_db, add_job
 from config import SEARCH_TERMS, LOCATIONS, SITES, MAX_WORKERS, RESULTS_WANTED, HOURS_OLD, WATCHLIST, TITLE_BLACKLIST

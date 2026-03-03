@@ -1,4 +1,6 @@
-DB_PATH = "hunt.db"
+import os as _os
+_ROOT = _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)))
+DB_PATH = _os.path.join(_ROOT, "hunt.db")
 
 SEARCH_TERMS = {
     "engineering": [
