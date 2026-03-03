@@ -1,6 +1,6 @@
 from jobspy import scrape_jobs
 from db import init_db, add_job
-from config import SEARCH_TERMS, LOCATIONS, SITES, MAX_WORKERS, WATCHLIST, TITLE_BLACKLIST
+from config import SEARCH_TERMS, LOCATIONS, SITES, MAX_WORKERS, RESULTS_WANTED, HOURS_OLD, WATCHLIST, TITLE_BLACKLIST
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 def classify_level(title):
@@ -39,8 +39,8 @@ def scrape_single(site, term, location, category):
             site_name=[site],
             search_term=term,
             location=location,
-            results_wanted=500,
-            hours_old=24,
+            results_wanted=RESULTS_WANTED,
+            hours_old=HOURS_OLD,
             country_indeed="Canada",
         )
     except Exception as e:

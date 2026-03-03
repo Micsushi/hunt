@@ -1,5 +1,5 @@
 import sqlite3
-from config import DB_PATH
+from config import DB_PATH, TITLE_BLACKLIST
 
 def get_connection():
     conn = sqlite3.connect(DB_PATH)
@@ -36,37 +36,50 @@ def init_db():
 
 
 def job_exists(job_data):
+    from datetime import datetime
+
+    is_priority = job_data.get("priority", False)
     conn = get_connection()
     try:
         cursor = conn.cursor()
-        cursor.execute("""
-            SELECT date_posted FROM jobs
-            WHERE company = ? AND title = ?
-            ORDER BY date_posted DESC
-            LIMIT 1
-            """, (job_data['company'], job_data['title']))
+
+        if is_priority:
+            cursor.execute("""
+                SELECT date_posted FROM jobs
+                WHERE company = ? AND title = ? AND location = ?
+                ORDER BY date_posted DESC
+                LIMIT 1
+                """, (job_data['company'], job_data['title'], job_data['location']))
+            gap_days = 1
+        else:
+            cursor.execute("""
+                SELECT date_posted FROM jobs
+                WHERE company = ? AND title = ?
+                ORDER BY date_posted DESC
+                LIMIT 1
+                """, (job_data['company'], job_data['title']))
+            gap_days = 7
+
         row = cursor.fetchone()
         if row is None:
             return False
 
         existing_date = row["date_posted"]
         new_date = job_data.get("date_posted")
-        if not existing_date or not new_date or existing_date == "None" or new_date == "None":
+        if not existing_date or not new_date or existing_date in ("None", "nan") or new_date in ("None", "nan"):
             return True
 
-        # checking if there is a job with the same title and company in the last 7 days
-        from datetime import datetime, timedelta
         try:
             existing_dt = datetime.strptime(existing_date[:10], "%Y-%m-%d")
             new_dt = datetime.strptime(new_date[:10], "%Y-%m-%d")
-            return abs((new_dt - existing_dt).days) < 7
+            return abs((new_dt - existing_dt).days) < gap_days
         except ValueError:
             return True
     finally:
         conn.close()
 
 def add_job(job_data):
-    if not job_data.get('priority') and job_exists(job_data):
+    if job_exists(job_data):
         return None
 
     conn = get_connection()
@@ -147,6 +160,21 @@ def update_job_status(id, status):
         return cursor.rowcount
     finally:
         conn.close()
+
+def remove_high_level_jobs():
+    if not TITLE_BLACKLIST:
+        return 0
+    conn = get_connection()
+    try:
+        cursor = conn.cursor()
+        patterns = [f"%{word}%".lower() for word in TITLE_BLACKLIST]
+        placeholders = " OR ".join(["lower(title) LIKE ?"] * len(patterns))
+        cursor.execute(f"DELETE FROM jobs WHERE {placeholders}", patterns)
+        conn.commit()
+        return cursor.rowcount
+    finally:
+        conn.close()
+
 
 def clear_db():
     conn = get_connection()

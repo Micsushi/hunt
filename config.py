@@ -42,9 +42,11 @@ LOCATIONS = [
     # "Remote",
 ]
 
-SITES = ["indeed", "linkedin", "glassdoor"]
+SITES = ["indeed", "linkedin"]
 
-MAX_WORKERS = 3
+MAX_WORKERS = 10
+RESULTS_WANTED = 500
+HOURS_OLD = 24
 
 WATCHLIST = [
     "1password", "adobe", "amazon", "amd", "apple", "atlassian",
@@ -59,5 +61,14 @@ WATCHLIST = [
 
 TITLE_BLACKLIST = [
     "master", "phd", "ph.d", "doctoral", "postdoc", "post-doc",
-    "senior", "staff", "principal", "lead", "director",
+    "senior", "sr.", "sr ", "staff", "principal", "lead", "director",
+    "vp ", "vice president", "head of", "chief ", "architect",
+    # Higher than Tier I / Level 1
+    "engineer ii", "engineer iii", "engineer iv", "engineer v",
+    "developer ii", "developer iii", "developer iv",
+    "analyst ii", "analyst iii", "scientist ii", "scientist iii",
+    "level 2", "level 3", "level 4", "level 5",
+    " l2", " l3", " l4", " l5", "l2 ", "l3 ", "l4 ", "l5 ",
+    "tier 2", "tier 3", "tier 4", "tier ii", "tier iii", "tier iv",
+    " ii ", " iii ", " iv ", " v ", " ii", " iii", " iv", " v ",
 ]
