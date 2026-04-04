@@ -1,0 +1,16 @@
+[Unit]
+Description=Hunt job scraper
+After=network.target
+
+[Service]
+Type=simple
+User=ubuntu
+WorkingDirectory=/home/ubuntu/hunt
+ExecStart=/home/ubuntu/hunt/venv/bin/python /home/ubuntu/hunt/scraper/runner.py
+Restart=on-failure
+RestartSec=30
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

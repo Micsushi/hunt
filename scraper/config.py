@@ -48,7 +48,8 @@ SITES = ["indeed", "linkedin"]
 
 MAX_WORKERS = 10
 RESULTS_WANTED = 500
-HOURS_OLD = 24
+HOURS_OLD = 24         # 24h lookback — job_url uniqueness handles dedup across runs
+RUN_INTERVAL_SECONDS = 600   # 10 minutes between runs
 
 WATCHLIST = [
     "1password", "adobe", "amazon", "amd", "apple", "atlassian",
