@@ -10,10 +10,54 @@ SCRAPER_DIR = os.path.join(REPO_ROOT, "scraper")
 sys.path.insert(0, SCRAPER_DIR)
 
 import db
+import enrich_linkedin
 import url_utils
 
 
 class Stage2Tests(unittest.TestCase):
+    class FakeLocator:
+        def __init__(self, texts=None, *, count=None, visible=True):
+            self._texts = texts or []
+            self._count = count if count is not None else len(self._texts)
+            self._visible = visible
+            self.first = self
+
+        def count(self):
+            return self._count
+
+        def is_visible(self):
+            return self._visible
+
+        def all_inner_texts(self):
+            return list(self._texts)
+
+        def inner_text(self, timeout=None):
+            return self._texts[0] if self._texts else ""
+
+        def text_content(self):
+            return self.inner_text()
+
+    class FakePage:
+        def __init__(self, *, url, title="", selectors=None):
+            self.url = url
+            self._title = title
+            self._selectors = selectors or {}
+
+        def title(self):
+            return self._title
+
+        def locator(self, selector):
+            value = self._selectors.get(selector)
+            if isinstance(value, Stage2Tests.FakeLocator):
+                return value
+            if value is None:
+                return Stage2Tests.FakeLocator()
+            if isinstance(value, str):
+                return Stage2Tests.FakeLocator([value])
+            if isinstance(value, (list, tuple)):
+                return Stage2Tests.FakeLocator(list(value))
+            return Stage2Tests.FakeLocator(count=int(value))
+
     def make_temp_db_path(self):
         fd, path = tempfile.mkstemp(suffix=".db")
         os.close(fd)
@@ -143,6 +187,25 @@ class Stage2Tests(unittest.TestCase):
             self.assertEqual(row["enrichment_status"], "done")
             self.assertIsNotNone(row["enriched_at"])
 
+    def test_mark_linkedin_enrichment_succeeded_can_use_done_verified_status(self):
+        with self.with_temp_db() as path:
+            job_id = self.insert_linkedin_job(path)
+            db.claim_linkedin_job_for_enrichment(job_id=job_id)
+            updated = db.mark_linkedin_enrichment_succeeded(
+                job_id,
+                description="Verified in visible browser",
+                apply_type="external_apply",
+                auto_apply_eligible=1,
+                apply_url="https://boards.greenhouse.io/acme/jobs/123",
+                apply_host="boards.greenhouse.io",
+                ats_type="greenhouse",
+                enrichment_status="done_verified",
+            )
+            self.assertEqual(updated, 1)
+            row = db.get_job_by_id(job_id)
+            self.assertEqual(row["enrichment_status"], "done_verified")
+            self.assertIsNotNone(row["enriched_at"])
+
     def test_mark_linkedin_enrichment_failed_records_error(self):
         with self.with_temp_db() as path:
             job_id = self.insert_linkedin_job(path)
@@ -152,6 +215,183 @@ class Stage2Tests(unittest.TestCase):
             row = db.get_job_by_id(job_id)
             self.assertEqual(row["enrichment_status"], "failed")
             self.assertEqual(row["last_enrichment_error"], "layout_changed: apply button missing")
+
+    def test_mark_linkedin_enrichment_failed_can_use_blocked_status(self):
+        with self.with_temp_db() as path:
+            job_id = self.insert_linkedin_job(path)
+            db.claim_linkedin_job_for_enrichment(job_id=job_id)
+            updated = db.mark_linkedin_enrichment_failed(
+                job_id,
+                "security_verification: blocked by external challenge",
+                enrichment_status="blocked",
+            )
+            self.assertEqual(updated, 1)
+            row = db.get_job_by_id(job_id)
+            self.assertEqual(row["enrichment_status"], "blocked")
+            self.assertEqual(row["last_enrichment_error"], "security_verification: blocked by external challenge")
+
+    def test_mark_linkedin_enrichment_failed_can_persist_partial_apply_metadata(self):
+        with self.with_temp_db() as path:
+            job_id = self.insert_linkedin_job(
+                path,
+                apply_url="https://old.example.com/apply",
+                apply_host="old.example.com",
+                ats_type="unknown",
+            )
+            db.claim_linkedin_job_for_enrichment(job_id=job_id)
+            updated = db.mark_linkedin_enrichment_failed(
+                job_id,
+                "security_verification: blocked by external challenge",
+                apply_type="easy_apply",
+                auto_apply_eligible=0,
+                apply_url=None,
+                apply_host=None,
+                ats_type=None,
+            )
+            self.assertEqual(updated, 1)
+            row = db.get_job_by_id(job_id)
+            self.assertEqual(row["enrichment_status"], "failed")
+            self.assertEqual(row["last_enrichment_error"], "security_verification: blocked by external challenge")
+            self.assertEqual(row["apply_type"], "easy_apply")
+            self.assertEqual(row["auto_apply_eligible"], 0)
+            self.assertIsNone(row["apply_url"])
+            self.assertIsNone(row["apply_host"])
+            self.assertIsNone(row["ats_type"])
+
+    def test_init_db_backfills_linkedin_derived_fields_from_apply_url(self):
+        with self.with_temp_db() as path:
+            job_id = self.insert_linkedin_job(
+                path,
+                apply_url=(
+                    "https://www.linkedin.com/redir/redirect"
+                    "?url=https%3A%2F%2Fjob-boards.greenhouse.io%2Facme%2Fjobs%2F123"
+                ),
+                apply_type="unknown",
+                auto_apply_eligible=None,
+                enrichment_status="done",
+                apply_host=None,
+                ats_type=None,
+                description="Already enriched description",
+            )
+
+            db.init_db()
+            row = db.get_job_by_id(job_id)
+            self.assertEqual(row["apply_url"], "https://job-boards.greenhouse.io/acme/jobs/123")
+            self.assertEqual(row["apply_type"], "unknown")
+            self.assertIsNone(row["auto_apply_eligible"])
+            self.assertEqual(row["enrichment_status"], "pending")
+            self.assertEqual(row["apply_host"], "job-boards.greenhouse.io")
+            self.assertEqual(row["ats_type"], "greenhouse")
+
+    def test_requeue_linkedin_rows_for_refresh_targets_sparse_historical_failures(self):
+        with self.with_temp_db() as path:
+            stale_failed_id = self.insert_linkedin_job(
+                path,
+                job_url="https://www.linkedin.com/jobs/view/456",
+                enrichment_status="failed",
+                apply_type="unknown",
+                description=None,
+            )
+            preserved_failed_id = self.insert_linkedin_job(
+                path,
+                job_url="https://www.linkedin.com/jobs/view/789",
+                enrichment_status="failed",
+                apply_type="external_apply",
+                apply_url="https://boards.greenhouse.io/acme/jobs/123",
+                description="Has useful metadata already",
+            )
+
+            job_ids = db.requeue_linkedin_rows_for_refresh()
+
+            self.assertEqual(job_ids, [stale_failed_id])
+            stale_row = db.get_job_by_id(stale_failed_id)
+            self.assertEqual(stale_row["enrichment_status"], "pending")
+            preserved_row = db.get_job_by_id(preserved_failed_id)
+            self.assertEqual(preserved_row["enrichment_status"], "failed")
+
+    def test_analyze_security_challenge_requires_multiple_signal_types(self):
+        page = self.FakePage(
+            url="https://jobs.careerbeacon.com/security-verification",
+            title="Performing security verification",
+            selectors={
+                "body": (
+                    "Performing security verification. "
+                    "This website uses a security service to protect against malicious bots. "
+                    "Please solve this CAPTCHA to request unblock."
+                ),
+                "h1": "Performing security verification",
+                "#challenge-form": self.FakeLocator(count=1),
+            },
+        )
+
+        signals = enrich_linkedin.analyze_security_challenge(page)
+
+        self.assertIsNotNone(signals)
+        self.assertIn("title", signals)
+        self.assertIn("text", signals)
+        self.assertIn("dom", signals)
+
+    def test_analyze_security_challenge_does_not_flag_text_only_job_content(self):
+        page = self.FakePage(
+            url="https://jobs.example.com/security-engineer",
+            title="Security Engineer",
+            selectors={
+                "body": (
+                    "Build bot-detection systems and improve security verification "
+                    "workflows for internal tooling."
+                ),
+                "h1": "Security Engineer",
+            },
+        )
+
+        self.assertIsNone(enrich_linkedin.analyze_security_challenge(page))
+
+    def test_ui_verify_status_helpers(self):
+        self.assertEqual(enrich_linkedin.get_success_enrichment_status(ui_verify=False), "done")
+        self.assertEqual(enrich_linkedin.get_success_enrichment_status(ui_verify=True), "done_verified")
+        self.assertEqual(
+            enrich_linkedin.get_failure_enrichment_status("security_verification", ui_verify=False),
+            "blocked",
+        )
+        self.assertEqual(
+            enrich_linkedin.get_failure_enrichment_status("security_verification", ui_verify=True),
+            "blocked_verified",
+        )
+        self.assertEqual(
+            enrich_linkedin.get_failure_enrichment_status("description_not_found", ui_verify=True),
+            "failed",
+        )
+
+    def test_ui_verify_wait_helpers_use_faster_profile(self):
+        self.assertGreater(
+            enrich_linkedin.get_networkidle_timeout_ms(fast_ui=False),
+            enrich_linkedin.get_networkidle_timeout_ms(fast_ui=True),
+        )
+        self.assertGreater(
+            enrich_linkedin.get_post_click_wait_ms(fast_ui=False),
+            enrich_linkedin.get_post_click_wait_ms(fast_ui=True),
+        )
+
+    def test_looks_like_usable_job_description_rejects_thin_application_shell_text(self):
+        thin_text = """
+        Apply now as a QA Engineer - AI Trainer.
+        Continue with Email.
+        Continue with Google.
+        Do you already have an account? Sign in.
+        """
+        detailed_text = """
+        Senior Software Engineer
+        Job Details
+        Responsibilities include owning backend systems, mentoring teammates,
+        improving reliability, and collaborating across product and platform teams.
+        Minimum Qualifications include Python experience, distributed systems knowledge,
+        and strong communication skills. Compensation and benefits are included below.
+        """
+        self.assertFalse(enrich_linkedin.looks_like_usable_job_description(thin_text))
+        self.assertTrue(enrich_linkedin.looks_like_usable_job_description(detailed_text))
+
+    def test_security_verification_is_treated_as_batch_blocker(self):
+        self.assertTrue(enrich_linkedin.is_blocking_error_code("security_verification"))
 
 
 if __name__ == "__main__":

@@ -143,12 +143,20 @@ def scrape():
             jobs = future.result()
             all_jobs.extend(jobs)
 
-    added = 0
+    inserted = 0
+    refreshed = 0
     for job_data in all_jobs:
-        if add_job(job_data):
-            added += 1
+        result = add_job(job_data)
+        if result == "inserted":
+            inserted += 1
+        elif result == "updated":
+            refreshed += 1
 
-    print(f"\nDone! Scraped {len(all_jobs)} total jobs, added {added} new to database ({len(all_jobs) - added} duplicates skipped)")
+    skipped = len(all_jobs) - inserted - refreshed
+    print(
+        f"\nDone! Scraped {len(all_jobs)} total jobs, added {inserted} new to database, "
+        f"refreshed {refreshed} existing row(s), skipped {skipped} unchanged duplicate(s)"
+    )
 
 
 if __name__ == "__main__":

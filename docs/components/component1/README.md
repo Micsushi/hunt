@@ -43,6 +43,10 @@ Rules:
 - `Easy Apply` jobs should not be retried by later automation
 - external `Apply` means `apply_type = 'external_apply'`
 - external `Apply` means `auto_apply_eligible = 1`
+- normal successful enrichment uses `enrichment_status = 'done'`
+- a successful interactive rerun uses `enrichment_status = 'done_verified'`
+- an external security challenge uses `enrichment_status = 'blocked'`
+- a security challenge that still reproduces during an interactive rerun uses `enrichment_status = 'blocked_verified'`
 
 ## Stage Breakdown
 
@@ -75,7 +79,10 @@ Worker responsibilities:
 - expand description and store it
 - detect `Easy Apply` vs external `Apply`
 - capture the external destination URL when present
+- treat `Easy Apply` as a terminal classification even if LinkedIn hides the full description
 - if LinkedIn does not expose a usable description but the job is external apply, fall back to the external page for the description
+- if the external page does not expose a clean job-description block, fall back to broad visible page text from that site
+- if the external page says the job is unavailable, fail it as `job_removed` instead of treating that page text as a successful enrichment
 - save `apply_type`, `auto_apply_eligible`, `apply_url`, `apply_host`, `ats_type`, `enrichment_status`, `enriched_at`
 
 Testing goal:
@@ -86,18 +93,21 @@ Auth setup note:
 - when saving Playwright auth state for LinkedIn, prefer `Sign in with email`
 - Google SSO popups can be unreliable in automation-managed browsers
 - if a manual test is interrupted and leaves a row stuck in `processing`, rerun that same job with `--force`
+- if you want to explicitly re-check a blocked or flaky row in a visible browser, rerun that specific job with `--ui-verify`
+- if older sparse `failed/unknown` rows need another pass with the newer Stage 2 logic, requeue them with `python scripts/requeue_linkedin_refresh_candidates.py`
 
 ### Stage 3 : batch enrichment and runner integration
 
 Planned changes:
-- add batch processing for pending LinkedIn rows
+- batch processing already exists in `scraper/enrich_linkedin.py`
 - integrate enrichment after discovery inside `scraper/runner.py`
 - add retry limits and backoff
-- record failure categories like `auth_expired`, `layout_changed`, `rate_limited`, `job_removed`
+- record failure categories like `auth_expired`, `layout_changed`, `rate_limited`, `job_removed`, `security_verification`
 
 Testing goal:
 - process a small batch safely
 - confirm the queue drains without corrupting rows
+- blocked ATS pages should fail cleanly without storing anti-bot challenge text as the description
 
 ### Stage 4 : hardening and backfill
 

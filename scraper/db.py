@@ -1,6 +1,7 @@
 import sqlite3
 
 from config import DB_PATH, TITLE_BLACKLIST
+from url_utils import detect_ats_type, get_apply_host, looks_like_linkedin_url, normalize_apply_url
 
 
 JOBS_TABLE_SQL = """
@@ -63,9 +64,23 @@ INSERT_COLUMNS = (
     "ats_type",
 )
 
+_UNSET = object()
+
 
 def _get_column_names(cursor):
     return {row[1] for row in cursor.execute("PRAGMA table_info(jobs)")}
+
+
+def _is_blank(value):
+    return value is None or (isinstance(value, str) and not value.strip())
+
+
+def _should_upgrade_text(current_value, new_value):
+    return _is_blank(current_value) and not _is_blank(new_value)
+
+
+def _should_upgrade_unknown(current_value, new_value):
+    return (current_value is None or current_value == "unknown") and new_value not in (None, "", "unknown")
 
 
 def _migrate_jobs_table(cursor):
@@ -108,9 +123,14 @@ def _backfill_enrichment_metadata(cursor):
         WHERE source = 'linkedin'
           AND enriched_at IS NULL
           AND (
-                apply_type = 'external_apply'
-             OR auto_apply_eligible = 1
-             OR enrichment_status = 'done'
+                enrichment_status = 'done'
+             OR (
+                    enrichment_status IS NULL
+                AND (
+                        apply_type = 'external_apply'
+                     OR auto_apply_eligible = 1
+                    )
+                )
           )
         """
     )
@@ -147,9 +167,92 @@ def _backfill_enrichment_metadata(cursor):
         """
     )
 
+
+def _backfill_linkedin_derived_fields(conn):
+    cursor = conn.cursor()
+    rows = cursor.execute(
+        """
+        SELECT id, apply_url, apply_type, auto_apply_eligible, enrichment_status, apply_host, ats_type
+        FROM jobs
+        WHERE source = 'linkedin'
+          AND (
+                apply_url IS NOT NULL
+             OR apply_type IN ('external_apply', 'easy_apply', 'unknown')
+          )
+        """
+    ).fetchall()
+
+    updated_count = 0
+    for row in rows:
+        current_apply_url = row["apply_url"]
+        normalized_apply_url = normalize_apply_url(current_apply_url)
+        current_apply_type = row["apply_type"]
+        current_status = row["enrichment_status"]
+
+        new_apply_type = current_apply_type
+        new_auto_apply_eligible = row["auto_apply_eligible"]
+        new_apply_host = row["apply_host"]
+        new_ats_type = row["ats_type"]
+
+        if normalized_apply_url:
+            normalized_host = get_apply_host(normalized_apply_url)
+            normalized_ats_type = detect_ats_type(normalized_apply_url)
+            if normalized_host and not new_apply_host:
+                new_apply_host = normalized_host
+            if normalized_ats_type and not new_ats_type:
+                new_ats_type = normalized_ats_type
+
+            if (
+                current_status in ("done", "done_verified", "blocked", "blocked_verified")
+                and current_apply_type in (None, "unknown")
+                and not looks_like_linkedin_url(normalized_apply_url)
+            ):
+                new_apply_type = "external_apply"
+
+        if new_apply_type == "external_apply" and new_auto_apply_eligible is None:
+            new_auto_apply_eligible = 1
+        elif new_apply_type == "easy_apply" and new_auto_apply_eligible is None:
+            new_auto_apply_eligible = 0
+
+        if (
+            normalized_apply_url != current_apply_url
+            or new_apply_type != current_apply_type
+            or new_auto_apply_eligible != row["auto_apply_eligible"]
+            or new_apply_host != row["apply_host"]
+            or new_ats_type != row["ats_type"]
+        ):
+            cursor.execute(
+                """
+                UPDATE jobs
+                SET apply_url = ?,
+                    apply_type = ?,
+                    auto_apply_eligible = ?,
+                    apply_host = ?,
+                    ats_type = ?
+                WHERE id = ?
+                  AND source = 'linkedin'
+                """,
+                (
+                    normalized_apply_url,
+                    new_apply_type,
+                    new_auto_apply_eligible,
+                    new_apply_host,
+                    new_ats_type,
+                    row["id"],
+                ),
+            )
+            updated_count += cursor.rowcount
+
+    return updated_count
+
 def get_connection():
-    conn = sqlite3.connect(DB_PATH)
+    conn = sqlite3.connect(DB_PATH, timeout=30.0)
     conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA busy_timeout = 30000")
+    try:
+        conn.execute("PRAGMA journal_mode = WAL")
+    except sqlite3.OperationalError:
+        pass
     return conn
 
 
@@ -160,7 +263,53 @@ def init_db():
         cursor.execute(JOBS_TABLE_SQL)
         _migrate_jobs_table(cursor)
         _backfill_enrichment_metadata(cursor)
+        _backfill_linkedin_derived_fields(conn)
         conn.commit()
+    finally:
+        conn.close()
+
+
+def requeue_linkedin_rows_for_refresh(*, limit=None):
+    conn = get_connection()
+    try:
+        cursor = conn.cursor()
+        params = []
+        limit_sql = ""
+        if limit is not None:
+            limit_sql = "LIMIT ?"
+            params.append(limit)
+
+        rows = cursor.execute(
+            f"""
+            SELECT id
+            FROM jobs
+            WHERE source = 'linkedin'
+              AND enrichment_status = 'failed'
+              AND coalesce(apply_type, 'unknown') = 'unknown'
+              AND (description IS NULL OR trim(description) = '')
+            ORDER BY date_scraped DESC, id DESC
+            {limit_sql}
+            """,
+            tuple(params),
+        ).fetchall()
+
+        if not rows:
+            return []
+
+        job_ids = [row["id"] for row in rows]
+        placeholders = ", ".join(["?"] * len(job_ids))
+        cursor.execute(
+            f"""
+            UPDATE jobs
+            SET enrichment_status = 'pending',
+                last_enrichment_error = NULL
+            WHERE id IN ({placeholders})
+              AND source = 'linkedin'
+            """,
+            tuple(job_ids),
+        )
+        conn.commit()
+        return job_ids
     finally:
         conn.close()
 
@@ -252,6 +401,7 @@ def mark_linkedin_enrichment_succeeded(
     apply_url,
     apply_host,
     ats_type,
+    enrichment_status="done",
 ):
     conn = get_connection()
     try:
@@ -263,7 +413,7 @@ def mark_linkedin_enrichment_succeeded(
                 apply_url = ?,
                 apply_type = ?,
                 auto_apply_eligible = ?,
-                enrichment_status = 'done',
+                enrichment_status = ?,
                 enriched_at = CURRENT_TIMESTAMP,
                 last_enrichment_error = NULL,
                 apply_host = ?,
@@ -276,6 +426,7 @@ def mark_linkedin_enrichment_succeeded(
                 apply_url,
                 apply_type,
                 auto_apply_eligible,
+                enrichment_status,
                 apply_host,
                 ats_type,
                 job_id,
@@ -287,19 +438,50 @@ def mark_linkedin_enrichment_succeeded(
         conn.close()
 
 
-def mark_linkedin_enrichment_failed(job_id, error_message):
+def mark_linkedin_enrichment_failed(
+    job_id,
+    error_message,
+    *,
+    enrichment_status="failed",
+    description=_UNSET,
+    apply_type=_UNSET,
+    auto_apply_eligible=_UNSET,
+    apply_url=_UNSET,
+    apply_host=_UNSET,
+    ats_type=_UNSET,
+):
     conn = get_connection()
     try:
         cursor = conn.cursor()
+        updates = [
+            "enrichment_status = ?",
+            "last_enrichment_error = ?",
+        ]
+        params = [enrichment_status, error_message]
+
+        optional_updates = (
+            ("description", description),
+            ("apply_type", apply_type),
+            ("auto_apply_eligible", auto_apply_eligible),
+            ("apply_url", apply_url),
+            ("apply_host", apply_host),
+            ("ats_type", ats_type),
+        )
+        for column_name, value in optional_updates:
+            if value is _UNSET:
+                continue
+            updates.append(f"{column_name} = ?")
+            params.append(value)
+
+        params.append(job_id)
         cursor.execute(
-            """
+            f"""
             UPDATE jobs
-            SET enrichment_status = 'failed',
-                last_enrichment_error = ?
+            SET {", ".join(updates)}
             WHERE id = ?
               AND source = 'linkedin'
             """,
-            (error_message, job_id),
+            tuple(params),
         )
         conn.commit()
         return cursor.rowcount
@@ -311,18 +493,76 @@ def add_job(job_data):
     conn = get_connection()
     try:
         cursor = conn.cursor()
-        placeholders = ", ".join(["?"] * len(INSERT_COLUMNS))
-        columns_sql = ", ".join(INSERT_COLUMNS)
-        values = tuple(job_data.get(column) for column in INSERT_COLUMNS)
+        cursor.execute("SELECT * FROM jobs WHERE job_url = ?", (job_data.get("job_url"),))
+        existing_row = cursor.fetchone()
+
+        if not existing_row:
+            placeholders = ", ".join(["?"] * len(INSERT_COLUMNS))
+            columns_sql = ", ".join(INSERT_COLUMNS)
+            values = tuple(job_data.get(column) for column in INSERT_COLUMNS)
+            cursor.execute(
+                f"""
+                INSERT INTO jobs ({columns_sql})
+                VALUES ({placeholders})
+                """,
+                values,
+            )
+            conn.commit()
+            return "inserted"
+
+        existing = dict(existing_row)
+        updates = {}
+
+        for field_name in ("company", "location", "description", "date_posted", "category"):
+            if _should_upgrade_text(existing.get(field_name), job_data.get(field_name)):
+                updates[field_name] = job_data.get(field_name)
+
+        if existing.get("is_remote") is None and job_data.get("is_remote") is not None:
+            updates["is_remote"] = job_data.get("is_remote")
+
+        if _should_upgrade_unknown(existing.get("level"), job_data.get("level")):
+            updates["level"] = job_data.get("level")
+
+        if int(existing.get("priority") or 0) == 0 and int(job_data.get("priority") or 0) == 1:
+            updates["priority"] = 1
+
+        if _should_upgrade_text(existing.get("apply_url"), job_data.get("apply_url")):
+            updates["apply_url"] = normalize_apply_url(job_data.get("apply_url"))
+
+        if _should_upgrade_text(existing.get("apply_host"), job_data.get("apply_host")):
+            updates["apply_host"] = job_data.get("apply_host")
+
+        if _should_upgrade_unknown(existing.get("ats_type"), job_data.get("ats_type")):
+            updates["ats_type"] = job_data.get("ats_type")
+
+        if existing.get("apply_type") is None and job_data.get("apply_type") is not None:
+            updates["apply_type"] = job_data.get("apply_type")
+
+        if existing.get("auto_apply_eligible") is None and job_data.get("auto_apply_eligible") is not None:
+            updates["auto_apply_eligible"] = job_data.get("auto_apply_eligible")
+
+        if existing.get("enrichment_status") is None and job_data.get("enrichment_status") is not None:
+            updates["enrichment_status"] = job_data.get("enrichment_status")
+
+        if existing.get("enrichment_attempts") is None and job_data.get("enrichment_attempts") is not None:
+            updates["enrichment_attempts"] = job_data.get("enrichment_attempts")
+
+        if not updates:
+            conn.commit()
+            return "skipped"
+
+        assignments = ", ".join(f"{field_name} = ?" for field_name in updates)
+        params = list(updates.values()) + [existing["id"]]
         cursor.execute(
             f"""
-            INSERT OR IGNORE INTO jobs ({columns_sql})
-            VALUES ({placeholders})
+            UPDATE jobs
+            SET {assignments}
+            WHERE id = ?
             """,
-            values,
+            tuple(params),
         )
         conn.commit()
-        return cursor.rowcount
+        return "updated"
     finally:
         conn.close()
 

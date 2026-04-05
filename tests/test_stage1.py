@@ -245,6 +245,72 @@ class Stage1Tests(unittest.TestCase):
             if os.path.exists(path):
                 os.remove(path)
 
+    def test_add_job_refreshes_missing_discovery_fields_on_duplicate_job_url(self):
+        path = self.make_temp_db_path()
+        old_db_path = db.DB_PATH
+        try:
+            db.DB_PATH = path
+            db.init_db()
+
+            inserted = db.add_job(
+                {
+                    "title": "Software Engineer",
+                    "company": "Acme",
+                    "location": "Canada",
+                    "job_url": "https://www.linkedin.com/jobs/view/42",
+                    "apply_url": None,
+                    "description": None,
+                    "source": "linkedin",
+                    "date_posted": "2026-04-04",
+                    "is_remote": True,
+                    "level": "unknown",
+                    "priority": 0,
+                    "category": "engineering",
+                    "apply_type": "unknown",
+                    "auto_apply_eligible": None,
+                    "enrichment_status": "pending",
+                    "enrichment_attempts": 0,
+                    "apply_host": None,
+                    "ats_type": None,
+                }
+            )
+            refreshed = db.add_job(
+                {
+                    "title": "Software Engineer",
+                    "company": "Acme",
+                    "location": "Canada",
+                    "job_url": "https://www.linkedin.com/jobs/view/42",
+                    "apply_url": "https://job-boards.greenhouse.io/acme/jobs/42",
+                    "description": "Feed description",
+                    "source": "linkedin",
+                    "date_posted": "2026-04-04",
+                    "is_remote": True,
+                    "level": "junior",
+                    "priority": 1,
+                    "category": "engineering",
+                    "apply_type": "unknown",
+                    "auto_apply_eligible": None,
+                    "enrichment_status": "pending",
+                    "enrichment_attempts": 0,
+                    "apply_host": "job-boards.greenhouse.io",
+                    "ats_type": "greenhouse",
+                }
+            )
+
+            row = db.get_job_by_id(1)
+            self.assertEqual(inserted, "inserted")
+            self.assertEqual(refreshed, "updated")
+            self.assertEqual(row["apply_url"], "https://job-boards.greenhouse.io/acme/jobs/42")
+            self.assertEqual(row["apply_host"], "job-boards.greenhouse.io")
+            self.assertEqual(row["ats_type"], "greenhouse")
+            self.assertEqual(row["description"], "Feed description")
+            self.assertEqual(row["level"], "junior")
+            self.assertEqual(row["priority"], 1)
+        finally:
+            db.DB_PATH = old_db_path
+            if os.path.exists(path):
+                os.remove(path)
+
 
 if __name__ == "__main__":
     unittest.main()

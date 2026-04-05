@@ -17,6 +17,11 @@ def main():
         help="Optional expected apply_type for the row.",
     )
     parser.add_argument(
+        "--expect-status",
+        choices=["done", "done_verified", "blocked", "blocked_verified", "failed"],
+        help="Optional expected enrichment_status for the row.",
+    )
+    parser.add_argument(
         "--db",
         default=str(DEFAULT_DB_PATH),
         help=f"Path to SQLite DB (default: {DEFAULT_DB_PATH})",
@@ -49,14 +54,35 @@ def main():
         return 1
 
     failures = []
-    if row["enrichment_status"] != "done":
-        failures.append(f"expected enrichment_status='done', got {row['enrichment_status']!r}")
-    if not row["description"] or not str(row["description"]).strip():
-        failures.append("description is empty")
-    if not row["enriched_at"]:
-        failures.append("enriched_at is empty")
-    if row["last_enrichment_error"]:
-        failures.append(f"last_enrichment_error is set: {row['last_enrichment_error']}")
+    actual_status = row["enrichment_status"]
+    expected_success_statuses = {"done", "done_verified"}
+    if args.expect_status:
+        if actual_status != args.expect_status:
+            failures.append(
+                f"expected enrichment_status={args.expect_status!r}, got {actual_status!r}"
+            )
+    elif actual_status not in expected_success_statuses:
+        failures.append(f"expected enrichment_status in {sorted(expected_success_statuses)!r}, got {actual_status!r}")
+
+    blocked_statuses = {"blocked", "blocked_verified"}
+    success_like = actual_status in expected_success_statuses
+    blocked_like = actual_status in blocked_statuses
+
+    if success_like:
+        if row["apply_type"] == "external_apply" and (not row["description"] or not str(row["description"]).strip()):
+            failures.append("description is empty")
+        if not row["enriched_at"]:
+            failures.append("enriched_at is empty")
+        if row["last_enrichment_error"]:
+            failures.append(f"last_enrichment_error is set: {row['last_enrichment_error']}")
+    elif blocked_like:
+        if not row["last_enrichment_error"]:
+            failures.append("blocked row should keep last_enrichment_error")
+        if row["enriched_at"]:
+            failures.append("blocked row should not set enriched_at")
+    else:
+        if not row["last_enrichment_error"]:
+            failures.append("failed row should keep last_enrichment_error")
     if args.expect_type and row["apply_type"] != args.expect_type:
         failures.append(f"expected apply_type={args.expect_type!r}, got {row['apply_type']!r}")
 
@@ -85,6 +111,7 @@ def main():
     print(f"id: {row['id']}")
     print(f"company: {row['company']}")
     print(f"title: {row['title']}")
+    print(f"enrichment_status: {row['enrichment_status']}")
     print(f"apply_type: {row['apply_type']}")
     print(f"auto_apply_eligible: {row['auto_apply_eligible']}")
     print(f"apply_url: {row['apply_url']}")

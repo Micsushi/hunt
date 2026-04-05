@@ -45,7 +45,9 @@ Only process jobs where `priority = 0`.
 Only process jobs that are already verified for external apply:
 
 ```sql
-apply_type = 'external_apply' AND auto_apply_eligible = 1
+apply_type = 'external_apply'
+AND auto_apply_eligible = 1
+AND enrichment_status IN ('done', 'done_verified')
 ```
 
 Do not use `status` for LinkedIn enrichment state. `status` is only for application lifecycle.
@@ -61,7 +63,8 @@ WHERE id = ?
   AND status = 'new'
   AND priority = 0
   AND apply_type = 'external_apply'
-  AND auto_apply_eligible = 1;
+  AND auto_apply_eligible = 1
+  AND enrichment_status IN ('done', 'done_verified');
 ```
 
 Only proceed if `rowcount == 1`. If another agent already claimed it, skip.
@@ -101,6 +104,7 @@ WHERE status = 'new'
   AND priority = 0
   AND apply_type = 'external_apply'
   AND auto_apply_eligible = 1
+  AND enrichment_status IN ('done', 'done_verified')
 ORDER BY date_scraped DESC
 LIMIT 10;
 ```
