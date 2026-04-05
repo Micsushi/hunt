@@ -29,7 +29,9 @@ def main():
 
         start = time.time()
         try:
-            scrape()
+            summary = scrape()
+            if summary and summary.get("enrichment_exit_code") not in (None, 0):
+                print("[runner] Post-scrape enrichment finished with some unresolved failures.")
         except Exception as e:
             print(f"[runner] Run #{run_number} failed with error: {e}")
 

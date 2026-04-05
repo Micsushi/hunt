@@ -147,6 +147,7 @@ FAILURE_STATUS_DEFAULT = "failed"
 FAILURE_STATUS_BLOCKED = "blocked"
 FAILURE_STATUS_BLOCKED_UI_VERIFIED = "blocked_verified"
 BLOCKED_ERROR_CODES = {"security_verification", "access_challenged"}
+BATCH_HARD_STOP_ERROR_CODES = {"auth_expired", "rate_limited"}
 FAST_UI_NETWORKIDLE_TIMEOUT_MS = 1200
 DEFAULT_NETWORKIDLE_TIMEOUT_MS = 5000
 DEFAULT_POST_CLICK_WAIT_MS = 1500
@@ -804,7 +805,19 @@ def get_error_code(error_message):
 
 
 def is_blocking_error_code(error_code):
-    return error_code in {"auth_expired", "rate_limited", "access_challenged", "security_verification"}
+    return error_code in BATCH_HARD_STOP_ERROR_CODES or error_code in BLOCKED_ERROR_CODES
+
+
+def is_ui_verifiable_error_code(error_code):
+    return error_code in BLOCKED_ERROR_CODES
+
+
+def should_stop_batch_after_failure(error_code, *, ui_verify_blocked=False):
+    if error_code in BATCH_HARD_STOP_ERROR_CODES:
+        return True
+    if error_code in BLOCKED_ERROR_CODES:
+        return not ui_verify_blocked
+    return False
 
 
 def build_failure_update_kwargs(error):
@@ -953,9 +966,12 @@ def process_batch(
     slow_mo=0,
     timeout_ms=45000,
     browser_channel=None,
+    ui_verify_blocked=False,
 ):
     started_at = time.monotonic()
     results = []
+    final_results_by_job_id = {}
+    blocked_job_ids = []
 
     with open_linkedin_context(
         storage_state_path=storage_state_path,
@@ -976,22 +992,70 @@ def process_batch(
                 timeout_ms=timeout_ms,
             )
             results.append(result)
+            final_results_by_job_id[result["job_id"]] = result
 
-            if result["status"] == "failed" and is_blocking_error_code(result.get("error_code")):
-                print(f"[batch] Stopping early because of blocking error: {result['error_code']}")
-                break
+            if result["status"] == "failed":
+                error_code = result.get("error_code")
+                if ui_verify_blocked and is_ui_verifiable_error_code(error_code):
+                    blocked_job_ids.append(result["job_id"])
+                    print(f"[batch] Queued blocked job id={result['job_id']} for interactive verification after the first pass.")
+                    continue
+
+                if should_stop_batch_after_failure(error_code, ui_verify_blocked=ui_verify_blocked):
+                    print(f"[batch] Stopping early because of blocking error: {error_code}")
+                    break
+
+    ui_verify_results = []
+    if ui_verify_blocked and blocked_job_ids:
+        print(f"\n[batch] Starting interactive verification for {len(blocked_job_ids)} blocked job(s).")
+        with open_linkedin_context(
+            storage_state_path=storage_state_path,
+            headless=False,
+            slow_mo=slow_mo,
+            browser_channel=browser_channel,
+        ) as ui_context:
+            for index, job_id in enumerate(blocked_job_ids, start=1):
+                claimed_job = claim_linkedin_job_for_enrichment(job_id=job_id, force=True)
+                if not claimed_job:
+                    print(f"[batch-ui] Could not reclaim blocked LinkedIn job id={job_id} for UI verification.")
+                    result = {
+                        "status": "failed",
+                        "job_id": job_id,
+                        "error": "claim_failed: could not reclaim blocked job for UI verification",
+                        "error_code": "claim_failed",
+                        "duration_seconds": 0.0,
+                    }
+                else:
+                    print(f"\n[batch-ui] Verifying blocked job {index}/{len(blocked_job_ids)}")
+                    result = process_claimed_job(
+                        claimed_job,
+                        context=ui_context,
+                        timeout_ms=timeout_ms,
+                        ui_verify=True,
+                    )
+
+                ui_verify_results.append(result)
+                final_results_by_job_id[result["job_id"]] = result
+
+                if result["status"] == "failed" and should_stop_batch_after_failure(result.get("error_code"), ui_verify_blocked=False):
+                    print(f"[batch-ui] Stopping early because of blocking error: {result['error_code']}")
+                    break
 
     total_elapsed = time.monotonic() - started_at
-    successes = [result for result in results if result["status"] == "success"]
-    failures = [result for result in results if result["status"] == "failed"]
+    final_results = list(final_results_by_job_id.values())
+    successes = [result for result in final_results if result["status"] == "success"]
+    failures = [result for result in final_results if result["status"] == "failed"]
 
     print("\n[batch] Summary")
     print(f"  attempted: {len(results)}")
+    if ui_verify_results:
+        print(f"  ui_verified: {len(ui_verify_results)}")
     print(f"  succeeded: {len(successes)}")
     print(f"  failed: {len(failures)}")
     print(f"  total_elapsed_seconds: {total_elapsed:.1f}")
-    if results:
-        avg_seconds = sum(result["duration_seconds"] for result in results) / len(results)
+    all_timed_results = results + ui_verify_results
+    if all_timed_results:
+        avg_seconds = sum(result["duration_seconds"] for result in all_timed_results) / len(all_timed_results)
         print(f"  average_seconds_per_job: {avg_seconds:.1f}")
 
     if failures:
@@ -1032,6 +1096,11 @@ def main():
         default=1,
         help="Number of pending LinkedIn jobs to enrich sequentially (default: 1).",
     )
+    parser.add_argument(
+        "--ui-verify-blocked",
+        action="store_true",
+        help="For batch runs, rerun rows blocked by CAPTCHA/security challenges in a visible browser after the first pass.",
+    )
     args = parser.parse_args()
 
     if args.force and args.job_id is None:
@@ -1046,6 +1115,10 @@ def main():
         parser.error("--ui-verify cannot be used with --limit")
     if args.ui_verify and not args.headful:
         print("[enrich] --ui-verify implies a visible browser window; running headful.")
+    if args.ui_verify_blocked and args.limit == 1:
+        parser.error("--ui-verify-blocked requires --limit greater than 1")
+    if args.ui_verify_blocked and args.job_id is not None:
+        parser.error("--ui-verify-blocked cannot be used with --job-id")
 
     if args.limit > 1:
         return process_batch(
@@ -1055,6 +1128,7 @@ def main():
             slow_mo=args.slow_mo,
             timeout_ms=args.timeout_ms,
             browser_channel=args.channel,
+            ui_verify_blocked=args.ui_verify_blocked,
         )
 
     return process_one_job(

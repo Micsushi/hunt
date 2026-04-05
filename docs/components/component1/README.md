@@ -14,6 +14,7 @@ LinkedIn is the priority source even if other sources remain enabled.
 ## Current State
 
 Discovery already exists in `scraper/scraper.py`.
+The discovery script can now optionally trigger a follow-up LinkedIn enrichment pass immediately after it writes rows to SQLite.
 
 What Stage 1 changed:
 - `job_url` now represents the discovered listing URL
@@ -94,13 +95,15 @@ Auth setup note:
 - Google SSO popups can be unreliable in automation-managed browsers
 - if a manual test is interrupted and leaves a row stuck in `processing`, rerun that same job with `--force`
 - if you want to explicitly re-check a blocked or flaky row in a visible browser, rerun that specific job with `--ui-verify`
+- if you want a batch run to do a normal first pass and then automatically rerun blocked rows in a visible browser, use `--ui-verify-blocked`
 - if older sparse `failed/unknown` rows need another pass with the newer Stage 2 logic, requeue them with `python scripts/requeue_linkedin_refresh_candidates.py`
 
 ### Stage 3 : batch enrichment and runner integration
 
 Planned changes:
 - batch processing already exists in `scraper/enrich_linkedin.py`
-- integrate enrichment after discovery inside `scraper/runner.py`
+- `scraper/runner.py` now calls discovery and then a post-scrape LinkedIn enrichment pass each cycle
+- `scraper/scraper.py` can now do the same thing for one-off manual runs
 - add retry limits and backoff
 - record failure categories like `auth_expired`, `layout_changed`, `rate_limited`, `job_removed`, `security_verification`
 
@@ -108,6 +111,81 @@ Testing goal:
 - process a small batch safely
 - confirm the queue drains without corrupting rows
 - blocked ATS pages should fail cleanly without storing anti-bot challenge text as the description
+- for a larger staged run, `python scraper/enrich_linkedin.py --limit 100 --channel chrome --ui-verify-blocked` should do a normal first pass and then a second UI-verification pass only for blocked rows
+
+Useful commands:
+- run discovery and then enrich pending LinkedIn rows with the default configured batch size:
+  `python scraper/scraper.py`
+- run discovery and then enrich up to 100 pending LinkedIn rows right away:
+  `python scraper/scraper.py --enrich-pending --enrich-limit 100 --channel chrome`
+- run discovery and then do a second visible-browser pass for blocked rows:
+  `python scraper/scraper.py --enrich-pending --enrich-limit 100 --channel chrome --ui-verify-blocked`
+- enrich existing pending LinkedIn rows already in the DB without doing a new discovery scrape:
+  `python scraper/enrich_linkedin.py --limit 100 --channel chrome`
+
+## Command Reference
+
+### Session setup
+
+- save LinkedIn auth state:
+  `python scraper/linkedin_session.py --save-storage-state --channel chrome`
+- check whether the saved LinkedIn auth state exists:
+  `python scraper/linkedin_session.py --check`
+
+### Stage 1 verification
+
+- run the Stage 1 unit tests:
+  `python -m unittest discover -s tests -p "test_stage1.py" -v`
+- run a syntax check:
+  `python -m compileall scraper tests`
+- verify the live Stage 1 DB state:
+  `python scripts/verify_stage1_db.py`
+
+### Stage 2 verification
+
+- run the Stage 2 unit tests:
+  `python -m unittest discover -s tests -p "test_stage2.py" -v`
+- list pending LinkedIn rows:
+  `python scripts/list_linkedin_enrichment_queue.py --status pending --limit 10`
+- inspect one LinkedIn row:
+  `python scripts/show_linkedin_job.py --job-id <ID>`
+- verify one enriched LinkedIn row:
+  `python scripts/verify_stage2_job.py --job-id <ID>`
+- verify one enriched LinkedIn row with a specific expected apply type:
+  `python scripts/verify_stage2_job.py --job-id <ID> --expect-type external_apply`
+
+### Requeue and refresh
+
+- requeue older sparse LinkedIn failures for another Stage 2 pass:
+  `python scripts/requeue_linkedin_refresh_candidates.py`
+- rerun a specific row even if it is not currently pending:
+  `python scraper/enrich_linkedin.py --job-id <ID> --channel chrome --force`
+- re-check one blocked or flaky row in a visible browser:
+  `python scraper/enrich_linkedin.py --job-id <ID> --channel chrome --ui-verify`
+
+### Enrichment runs
+
+- enrich one specific LinkedIn row:
+  `python scraper/enrich_linkedin.py --job-id <ID> --channel chrome`
+- enrich one specific LinkedIn row in a visible browser:
+  `python scraper/enrich_linkedin.py --job-id <ID> --headful --channel chrome`
+- enrich a batch of pending LinkedIn rows:
+  `python scraper/enrich_linkedin.py --limit 100 --channel chrome`
+- enrich a batch and then UI-verify only blocked rows:
+  `python scraper/enrich_linkedin.py --limit 100 --channel chrome --ui-verify-blocked`
+
+### Discovery plus enrichment
+
+- run discovery only:
+  `python scraper/scraper.py --skip-enrichment`
+- run discovery and then enrich pending LinkedIn rows:
+  `python scraper/scraper.py`
+- run discovery and then enrich up to 100 pending LinkedIn rows:
+  `python scraper/scraper.py --enrich-pending --enrich-limit 100 --channel chrome`
+- run discovery and then do a second UI pass for blocked rows:
+  `python scraper/scraper.py --enrich-pending --enrich-limit 100 --channel chrome --ui-verify-blocked`
+- run the continuous server loop:
+  `python scraper/runner.py`
 
 ### Stage 4 : hardening and backfill
 

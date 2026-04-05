@@ -314,6 +314,23 @@ def requeue_linkedin_rows_for_refresh(*, limit=None):
         conn.close()
 
 
+def count_pending_linkedin_jobs():
+    conn = get_connection()
+    try:
+        cursor = conn.cursor()
+        row = cursor.execute(
+            """
+            SELECT COUNT(*)
+            FROM jobs
+            WHERE source = 'linkedin'
+              AND enrichment_status = 'pending'
+            """
+        ).fetchone()
+        return int(row[0] if row else 0)
+    finally:
+        conn.close()
+
+
 def claim_linkedin_job_for_enrichment(job_id=None, force=False):
     conn = get_connection()
     try:

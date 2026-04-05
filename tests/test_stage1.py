@@ -311,6 +311,61 @@ class Stage1Tests(unittest.TestCase):
             if os.path.exists(path):
                 os.remove(path)
 
+    def test_scrape_can_trigger_post_scrape_enrichment(self):
+        path = self.make_temp_db_path()
+        old_db_path = db.DB_PATH
+        jobs_df = pd.DataFrame(
+            [
+                {
+                    "title": "Software Engineer",
+                    "company": "Acme",
+                    "location": "Canada",
+                    "job_url": "https://www.linkedin.com/jobs/view/77",
+                    "job_url_direct": "https://boards.greenhouse.io/acme/jobs/77",
+                    "description": "Feed description",
+                    "site": "linkedin",
+                    "date_posted": "2026-04-04",
+                    "is_remote": True,
+                }
+            ]
+        )
+
+        try:
+            db.DB_PATH = path
+
+            with patch.object(scraper_module, "SEARCH_TERMS", {"engineering": ["software engineer"]}), \
+                 patch.object(scraper_module, "LOCATIONS", ["Canada"]), \
+                 patch.object(scraper_module, "SITES", ["linkedin"]), \
+                 patch.object(scraper_module, "MAX_WORKERS", 1), \
+                 patch.object(scraper_module, "scrape_jobs", return_value=jobs_df), \
+                 patch.object(scraper_module, "run_pending_linkedin_enrichment", return_value=0) as mock_enrich:
+                summary = scraper_module.scrape(
+                    enrich_pending=True,
+                    enrich_limit=5,
+                    enrichment_headless=True,
+                    enrichment_slow_mo=0,
+                    enrichment_timeout_ms=12345,
+                    enrichment_browser_channel="chrome",
+                    ui_verify_blocked=True,
+                )
+
+            self.assertEqual(summary["inserted"], 1)
+            self.assertEqual(summary["refreshed"], 0)
+            self.assertEqual(summary["enrichment_exit_code"], 0)
+            mock_enrich.assert_called_once_with(
+                limit=5,
+                storage_state_path=None,
+                headless=True,
+                slow_mo=0,
+                timeout_ms=12345,
+                browser_channel="chrome",
+                ui_verify_blocked=True,
+            )
+        finally:
+            db.DB_PATH = old_db_path
+            if os.path.exists(path):
+                os.remove(path)
+
 
 if __name__ == "__main__":
     unittest.main()

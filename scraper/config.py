@@ -50,6 +50,12 @@ MAX_WORKERS = 10
 RESULTS_WANTED = 500
 HOURS_OLD = 24         # 24h lookback — job_url uniqueness handles dedup across runs
 RUN_INTERVAL_SECONDS = 600   # 10 minutes between runs
+ENRICH_AFTER_SCRAPE = True
+ENRICHMENT_BATCH_LIMIT = 25
+ENRICHMENT_TIMEOUT_MS = 45000
+ENRICHMENT_SLOW_MO_MS = 0
+ENRICHMENT_HEADFUL = False
+ENRICHMENT_UI_VERIFY_BLOCKED = False
 
 WATCHLIST = [
     "1password", "adobe", "amazon", "amd", "apple", "atlassian",

@@ -392,6 +392,24 @@ class Stage2Tests(unittest.TestCase):
 
     def test_security_verification_is_treated_as_batch_blocker(self):
         self.assertTrue(enrich_linkedin.is_blocking_error_code("security_verification"))
+        self.assertTrue(
+            enrich_linkedin.should_stop_batch_after_failure(
+                "security_verification",
+                ui_verify_blocked=False,
+            )
+        )
+        self.assertFalse(
+            enrich_linkedin.should_stop_batch_after_failure(
+                "security_verification",
+                ui_verify_blocked=True,
+            )
+        )
+        self.assertTrue(
+            enrich_linkedin.should_stop_batch_after_failure(
+                "rate_limited",
+                ui_verify_blocked=True,
+            )
+        )
 
 
 if __name__ == "__main__":

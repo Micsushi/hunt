@@ -1,11 +1,27 @@
+import argparse
 import os
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from jobspy import scrape_jobs
-from db import init_db, add_job
-from config import SEARCH_TERMS, LOCATIONS, SITES, MAX_WORKERS, RESULTS_WANTED, HOURS_OLD, WATCHLIST, TITLE_BLACKLIST
+from db import add_job, count_pending_linkedin_jobs, init_db
+from config import (
+    ENRICH_AFTER_SCRAPE,
+    ENRICHMENT_BATCH_LIMIT,
+    ENRICHMENT_HEADFUL,
+    ENRICHMENT_SLOW_MO_MS,
+    ENRICHMENT_TIMEOUT_MS,
+    ENRICHMENT_UI_VERIFY_BLOCKED,
+    HOURS_OLD,
+    LOCATIONS,
+    MAX_WORKERS,
+    RESULTS_WANTED,
+    SEARCH_TERMS,
+    SITES,
+    TITLE_BLACKLIST,
+    WATCHLIST,
+)
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from url_utils import detect_ats_type, get_apply_host, normalize_optional_str
 
@@ -119,8 +135,77 @@ def scrape_single(site, term, location, category):
     return jobs
 
 
-def scrape():
+def run_pending_linkedin_enrichment(
+    *,
+    limit,
+    storage_state_path=None,
+    headless=True,
+    slow_mo=0,
+    timeout_ms=45000,
+    browser_channel=None,
+    ui_verify_blocked=False,
+):
+    pending_count = count_pending_linkedin_jobs()
+    if pending_count == 0:
+        print("[scrape] No pending LinkedIn rows to enrich after discovery.")
+        return 0
+
+    if limit is None:
+        effective_limit = pending_count
+    else:
+        effective_limit = max(0, min(limit, pending_count))
+
+    if effective_limit == 0:
+        print("[scrape] Post-scrape LinkedIn enrichment is enabled, but the configured limit is 0.")
+        return 0
+
+    print(
+        f"[scrape] Starting post-scrape LinkedIn enrichment for up to {effective_limit} "
+        f"pending row(s) out of {pending_count}."
+    )
+
+    try:
+        from enrich_linkedin import process_batch
+
+        return process_batch(
+            limit=effective_limit,
+            storage_state_path=storage_state_path,
+            headless=headless,
+            slow_mo=slow_mo,
+            timeout_ms=timeout_ms,
+            browser_channel=browser_channel,
+            ui_verify_blocked=ui_verify_blocked,
+        )
+    except Exception as exc:
+        print(f"[scrape] Post-scrape LinkedIn enrichment could not start: {exc}")
+        return 1
+
+
+def scrape(
+    *,
+    enrich_pending=None,
+    enrich_limit=None,
+    storage_state_path=None,
+    enrichment_headless=None,
+    enrichment_slow_mo=None,
+    enrichment_timeout_ms=None,
+    enrichment_browser_channel=None,
+    ui_verify_blocked=None,
+):
     init_db()
+
+    if enrich_pending is None:
+        enrich_pending = ENRICH_AFTER_SCRAPE
+    if enrich_limit is None:
+        enrich_limit = ENRICHMENT_BATCH_LIMIT
+    if enrichment_headless is None:
+        enrichment_headless = not ENRICHMENT_HEADFUL
+    if enrichment_slow_mo is None:
+        enrichment_slow_mo = ENRICHMENT_SLOW_MO_MS
+    if enrichment_timeout_ms is None:
+        enrichment_timeout_ms = ENRICHMENT_TIMEOUT_MS
+    if ui_verify_blocked is None:
+        ui_verify_blocked = ENRICHMENT_UI_VERIFY_BLOCKED
 
     all_jobs = []
     tasks = [
@@ -158,12 +243,98 @@ def scrape():
         f"refreshed {refreshed} existing row(s), skipped {skipped} unchanged duplicate(s)"
     )
 
+    enrichment_exit_code = None
+    if enrich_pending:
+        enrichment_exit_code = run_pending_linkedin_enrichment(
+            limit=enrich_limit,
+            storage_state_path=storage_state_path,
+            headless=enrichment_headless,
+            slow_mo=enrichment_slow_mo,
+            timeout_ms=enrichment_timeout_ms,
+            browser_channel=enrichment_browser_channel,
+            ui_verify_blocked=ui_verify_blocked,
+        )
+        if enrichment_exit_code == 0:
+            print("[scrape] Post-scrape LinkedIn enrichment finished cleanly.")
+        else:
+            print("[scrape] Post-scrape LinkedIn enrichment finished with some unresolved failures.")
+
+    return {
+        "scraped_total": len(all_jobs),
+        "inserted": inserted,
+        "refreshed": refreshed,
+        "skipped": skipped,
+        "enrichment_exit_code": enrichment_exit_code,
+    }
+
 
 if __name__ == "__main__":
     import time
 
+    parser = argparse.ArgumentParser(description="Run discovery scraping and optionally enrich pending LinkedIn rows.")
+    enrichment_toggle = parser.add_mutually_exclusive_group()
+    enrichment_toggle.add_argument(
+        "--enrich-pending",
+        action="store_true",
+        help="Run a post-scrape LinkedIn enrichment pass after discovery.",
+    )
+    enrichment_toggle.add_argument(
+        "--skip-enrichment",
+        action="store_true",
+        help="Skip the post-scrape LinkedIn enrichment pass for this run.",
+    )
+    parser.add_argument(
+        "--enrich-limit",
+        type=int,
+        help=f"Maximum number of pending LinkedIn rows to enrich after discovery (default: {ENRICHMENT_BATCH_LIMIT}).",
+    )
+    parser.add_argument(
+        "--storage-state",
+        help="Optional Playwright storage-state path for LinkedIn enrichment.",
+    )
+    parser.add_argument(
+        "--headful",
+        action="store_true",
+        help="Run the post-scrape LinkedIn enrichment browser visibly.",
+    )
+    parser.add_argument(
+        "--slow-mo",
+        type=int,
+        help=f"Optional Playwright slow_mo for post-scrape enrichment (default: {ENRICHMENT_SLOW_MO_MS}).",
+    )
+    parser.add_argument(
+        "--timeout-ms",
+        type=int,
+        help=f"Navigation/action timeout for post-scrape enrichment (default: {ENRICHMENT_TIMEOUT_MS}).",
+    )
+    parser.add_argument(
+        "--channel",
+        help="Optional Playwright browser channel such as chrome or msedge for post-scrape enrichment.",
+    )
+    parser.add_argument(
+        "--ui-verify-blocked",
+        action="store_true",
+        help="After the normal post-scrape pass, rerun blocked rows in a visible browser.",
+    )
+    args = parser.parse_args()
+
+    enrich_pending = ENRICH_AFTER_SCRAPE
+    if args.enrich_pending:
+        enrich_pending = True
+    elif args.skip_enrichment:
+        enrich_pending = False
+
     start = time.time()
-    scrape()
+    scrape(
+        enrich_pending=enrich_pending,
+        enrich_limit=args.enrich_limit,
+        storage_state_path=args.storage_state,
+        enrichment_headless=not args.headful if args.headful else None,
+        enrichment_slow_mo=args.slow_mo,
+        enrichment_timeout_ms=args.timeout_ms,
+        enrichment_browser_channel=args.channel,
+        ui_verify_blocked=args.ui_verify_blocked if args.ui_verify_blocked else None,
+    )
     elapsed = time.time() - start
     minutes, seconds = divmod(int(elapsed), 60)
     print(f"Completed in {minutes}m {seconds}s")
