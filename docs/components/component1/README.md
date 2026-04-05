@@ -15,6 +15,7 @@ LinkedIn is the priority source even if other sources remain enabled.
 
 Discovery already exists in `scraper/scraper.py`.
 The discovery script can now optionally trigger a follow-up LinkedIn enrichment pass immediately after it writes rows to SQLite.
+Stage 1 and Stage 2 are complete. Stage 3 is the current focus.
 
 What Stage 1 changed:
 - `job_url` now represents the discovered listing URL
@@ -69,7 +70,7 @@ Verification goal:
 
 ### Stage 2 : one-job enrichment worker
 
-Planned files:
+Implemented files:
 - `scraper/enrich_linkedin.py`
 - `scraper/linkedin_session.py`
 - `scraper/url_utils.py`
@@ -100,12 +101,21 @@ Auth setup note:
 
 ### Stage 3 : batch enrichment and runner integration
 
-Planned changes:
+Current state:
 - batch processing already exists in `scraper/enrich_linkedin.py`
 - `scraper/runner.py` now calls discovery and then a post-scrape LinkedIn enrichment pass each cycle
 - `scraper/scraper.py` can now do the same thing for one-off manual runs
-- add retry limits and backoff
-- record failure categories like `auth_expired`, `layout_changed`, `rate_limited`, `job_removed`, `security_verification`
+- blocked rows can be rerun interactively with `--ui-verify`
+
+Still to implement:
+- retry limits and backoff
+- unattended-server failure policy by error code
+- a browser-facing review/control-plane service
+- queue-health visibility and stale-processing cleanup
+- cleaner server deployment notes for the `ansible_homelab` repo
+
+Detailed plan:
+- see `docs/components/component1/stage3_server2_plan.md`
 
 Testing goal:
 - process a small batch safely

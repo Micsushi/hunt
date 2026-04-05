@@ -10,19 +10,22 @@ The long-term flow is:
 - Component 3 : apply on external job sites using automation
 
 Current focus:
-- finish Component 1 first
+- Component 1 Stage 3 hardening and deployment
 - prioritize LinkedIn over every other source
 - skip LinkedIn Easy Apply jobs entirely
 
 ## Repo Overview
 
-This repo currently implements the discovery half of Component 1.
+This repo currently implements Component 1 discovery plus LinkedIn enrichment.
 
 Main files:
 - `scraper/scraper.py` : single-run scraper that discovers jobs and writes them to SQLite
 - `scraper/runner.py` : loop runner for continuous scraping
 - `scraper/db.py` : schema, migration, and DB helpers
 - `scraper/config.py` : search terms, locations, watchlist, and run interval
+- `scraper/enrich_linkedin.py` : LinkedIn enrichment worker and batch runner
+- `scraper/linkedin_session.py` : LinkedIn Playwright auth-state management
+- `scraper/url_utils.py` : URL normalization and ATS detection helpers
 - `agents/system_prompt.md` : agent contract for downstream application automation
 
 ## Current Data Model Rules
@@ -59,16 +62,19 @@ Stage 1 : completed
 - updated scraper URL semantics
 - marked historical LinkedIn rows as pending enrichment
 
-Stage 2 : next
-- add a one-job Playwright LinkedIn enrichment worker using a logged-in session
-- extract full LinkedIn description
-- detect `Easy Apply` vs external `Apply`
-- save external application URL when present
+Stage 2 : completed
+- added a one-job Playwright LinkedIn enrichment worker using a logged-in session
+- extracts LinkedIn/external descriptions
+- detects `Easy Apply` vs external `Apply`
+- saves external application URL when present
+- supports blocked/UI verification flows
 
-Stage 3 : after Stage 2
-- add batch enrichment
-- integrate enrichment into `scraper/runner.py`
-- add retry and failure handling
+Stage 3 : current
+- harden batch enrichment for unattended server use
+- finalize retry/backoff and terminal-state policy
+- document and support the `server2` deployment/runtime model
+- add a browser-facing review/control-plane service for manual review
+- keep the flow ready for later Component 2/3 agents
 
 Stage 4 : after Stage 3
 - backfill old LinkedIn jobs
@@ -82,12 +88,17 @@ Stage 4 : after Stage 3
 - external apply jobs are the main target
 - Easy Apply jobs should be classified and excluded as early as possible
 - downstream resume generation should use enriched descriptions, not shallow board metadata
+- deployment/runtime context for `server2` lives in a separate repo:
+  `C:\Users\sushi\Documents\Github\ansible_homelab`
+- if the task involves service deployment, Cloudflare ingress, timers, or operator UI hosting on `server2`, read:
+  `docs/components/component1/stage3_server2_plan.md`
 
 ## Docs
 
 - System roadmap : `docs/roadmap.md`
 - Component docs index : `docs/components/README.md`
 - Component 1 plan : `docs/components/component1/README.md`
+- Component 1 Stage 3 + server2 deployment plan : `docs/components/component1/stage3_server2_plan.md`
 - Component 2 plan : `docs/components/component2/README.md`
 - Component 3 plan : `docs/components/component3/README.md`
 - Existing repo notes for other tools : `CLAUDE.md`

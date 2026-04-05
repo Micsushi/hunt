@@ -14,7 +14,7 @@ The system is split into three major components:
 - Component 3 : application automation
 
 Current implementation priority:
-1. finish Component 1
+1. finish Component 1 Stage 3 hardening and deployment
 2. validate the end-to-end handoff from Component 1 to Component 2
 3. build Component 3 only on top of stable external-apply flows
 
@@ -45,7 +45,10 @@ Primary source priority:
 Current status:
 - discovery exists
 - DB migration for enrichment exists
-- LinkedIn browser enrichment is the next implementation step
+- LinkedIn browser enrichment exists
+- the repo now supports post-scrape enrichment inside the main scrape flow
+- current focus is Stage 3 hardening, retries, and deployment/runtime design
+- deployment notes for `server2` live in `docs/components/component1/stage3_server2_plan.md`
 
 Doc:
 - `docs/components/component1/README.md`
