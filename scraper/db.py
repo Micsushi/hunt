@@ -164,6 +164,149 @@ def init_db():
     finally:
         conn.close()
 
+
+def claim_linkedin_job_for_enrichment(job_id=None, force=False):
+    conn = get_connection()
+    try:
+        cursor = conn.cursor()
+        cursor.execute("BEGIN IMMEDIATE")
+
+        if job_id is None:
+            cursor.execute(
+                """
+                SELECT * FROM jobs
+                WHERE source = 'linkedin'
+                  AND enrichment_status = 'pending'
+                ORDER BY date_scraped DESC, id DESC
+                LIMIT 1
+                """
+            )
+        elif force:
+            cursor.execute(
+                """
+                SELECT * FROM jobs
+                WHERE id = ?
+                  AND source = 'linkedin'
+                """,
+                (job_id,),
+            )
+        else:
+            cursor.execute(
+                """
+                SELECT * FROM jobs
+                WHERE id = ?
+                  AND source = 'linkedin'
+                  AND enrichment_status = 'pending'
+                """,
+                (job_id,),
+            )
+
+        row = cursor.fetchone()
+        if not row:
+            conn.rollback()
+            return None
+
+        cursor.execute(
+            (
+                """
+                UPDATE jobs
+                SET enrichment_status = 'processing',
+                    enrichment_attempts = coalesce(enrichment_attempts, 0) + 1,
+                    last_enrichment_error = NULL
+                WHERE id = ?
+                  AND source = 'linkedin'
+                """
+                if force
+                else
+                """
+                UPDATE jobs
+                SET enrichment_status = 'processing',
+                    enrichment_attempts = coalesce(enrichment_attempts, 0) + 1,
+                    last_enrichment_error = NULL
+                WHERE id = ?
+                  AND source = 'linkedin'
+                  AND coalesce(enrichment_status, '') != 'processing'
+                """
+            ),
+            (row["id"],),
+        )
+
+        if cursor.rowcount != 1:
+            conn.rollback()
+            return None
+
+        cursor.execute("SELECT * FROM jobs WHERE id = ?", (row["id"],))
+        claimed_row = cursor.fetchone()
+        conn.commit()
+        return dict(claimed_row) if claimed_row else None
+    finally:
+        conn.close()
+
+
+def mark_linkedin_enrichment_succeeded(
+    job_id,
+    *,
+    description,
+    apply_type,
+    auto_apply_eligible,
+    apply_url,
+    apply_host,
+    ats_type,
+):
+    conn = get_connection()
+    try:
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            UPDATE jobs
+            SET description = ?,
+                apply_url = ?,
+                apply_type = ?,
+                auto_apply_eligible = ?,
+                enrichment_status = 'done',
+                enriched_at = CURRENT_TIMESTAMP,
+                last_enrichment_error = NULL,
+                apply_host = ?,
+                ats_type = ?
+            WHERE id = ?
+              AND source = 'linkedin'
+            """,
+            (
+                description,
+                apply_url,
+                apply_type,
+                auto_apply_eligible,
+                apply_host,
+                ats_type,
+                job_id,
+            ),
+        )
+        conn.commit()
+        return cursor.rowcount
+    finally:
+        conn.close()
+
+
+def mark_linkedin_enrichment_failed(job_id, error_message):
+    conn = get_connection()
+    try:
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            UPDATE jobs
+            SET enrichment_status = 'failed',
+                last_enrichment_error = ?
+            WHERE id = ?
+              AND source = 'linkedin'
+            """,
+            (error_message, job_id),
+        )
+        conn.commit()
+        return cursor.rowcount
+    finally:
+        conn.close()
+
+
 def add_job(job_data):
     conn = get_connection()
     try:

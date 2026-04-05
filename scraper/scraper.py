@@ -1,14 +1,13 @@
 import os
 import sys
-from urllib.parse import urlparse
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from jobspy import scrape_jobs
-import pandas as pd
 from db import init_db, add_job
 from config import SEARCH_TERMS, LOCATIONS, SITES, MAX_WORKERS, RESULTS_WANTED, HOURS_OLD, WATCHLIST, TITLE_BLACKLIST
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from url_utils import detect_ats_type, get_apply_host, normalize_optional_str
 
 
 def classify_level(title):
@@ -41,48 +40,6 @@ def should_skip(title):
         return False
     title_lower = title.lower()
     return any(word in title_lower for word in TITLE_BLACKLIST)
-
-
-def normalize_optional_str(value):
-    try:
-        if pd.isna(value):
-            return None
-    except (TypeError, ValueError):
-        pass
-
-    if value is None:
-        return None
-    normalized = str(value).strip()
-    return normalized or None
-
-
-def detect_ats_type(url):
-    if not url:
-        return None
-
-    host = (urlparse(url).netloc or "").lower()
-    ats_hosts = {
-        "greenhouse": ("greenhouse.io",),
-        "lever": ("lever.co",),
-        "workday": ("myworkdayjobs.com", "workday.com"),
-        "ashby": ("ashbyhq.com",),
-        "smartrecruiters": ("smartrecruiters.com",),
-        "jobvite": ("jobvite.com",),
-        "icims": ("icims.com",),
-        "bamboohr": ("bamboohr.com",),
-    }
-
-    for ats_type, suffixes in ats_hosts.items():
-        if any(host.endswith(suffix) for suffix in suffixes):
-            return ats_type
-    return "unknown"
-
-
-def get_apply_host(url):
-    if not url:
-        return None
-    host = (urlparse(url).netloc or "").lower()
-    return host or None
 
 
 def build_job_urls(row, source):

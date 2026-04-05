@@ -75,11 +75,17 @@ Worker responsibilities:
 - expand description and store it
 - detect `Easy Apply` vs external `Apply`
 - capture the external destination URL when present
+- if LinkedIn does not expose a usable description but the job is external apply, fall back to the external page for the description
 - save `apply_type`, `auto_apply_eligible`, `apply_url`, `apply_host`, `ats_type`, `enrichment_status`, `enriched_at`
 
 Testing goal:
 - run against one known LinkedIn row only
 - verify the DB changed exactly as expected
+
+Auth setup note:
+- when saving Playwright auth state for LinkedIn, prefer `Sign in with email`
+- Google SSO popups can be unreliable in automation-managed browsers
+- if a manual test is interrupted and leaves a row stuck in `processing`, rerun that same job with `--force`
 
 ### Stage 3 : batch enrichment and runner integration
 

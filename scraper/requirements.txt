@@ -7,3 +7,4 @@ tls-client
 pydantic
 regex
 markdownify
+playwright
