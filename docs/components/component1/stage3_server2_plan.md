@@ -290,6 +290,11 @@ This should still be deployed as a separate service from the scraper timer.
 Current repo implementation:
 - `scripts/queue_health.py`
 - `scraper/db.py` queue summary helpers
+- `scripts/backfill_enrichment.py` for operator-driven batch backfills across:
+  - LinkedIn only
+  - Indeed only
+  - all supported sources together
+  - selected job ids only
 
 Implemented checks include:
 - pending backlog size

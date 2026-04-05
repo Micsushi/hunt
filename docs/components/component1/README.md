@@ -237,9 +237,18 @@ Common examples:
 - run a controlled backfill in 100-row chunks with a checkpoint after each batch:
   `.\hunt.ps1 backfill --ui-verify-blocked`
   `./hunt.sh backfill --ui-verify-blocked`
+- run a controlled backfill for Indeed only in 100-row chunks:
+  `.\hunt.ps1 backfill --source indeed --ui-verify-blocked`
+  `./hunt.sh backfill --source indeed --ui-verify-blocked`
+- run a controlled backfill for all supported sources in 100-row chunks:
+  `.\hunt.ps1 backfill --source all --ui-verify-blocked`
+  `./hunt.sh backfill --source all --ui-verify-blocked`
 - run a controlled backfill in custom chunk sizes:
   `.\hunt.ps1 backfill 250 --ui-verify-blocked`
   `./hunt.sh backfill 250 --ui-verify-blocked`
+- run backfill for a selected set of job ids only:
+  `.\hunt.ps1 backfill --source all --job-id 13143 --job-id 13073`
+  `./hunt.sh backfill --source all --job-id 13143 --job-id 13073`
 - save LinkedIn auth state on a Linux desktop session:
   `./hunt.sh auth-save --display :0`
 - start one manual server scrape cycle:
@@ -291,6 +300,10 @@ Common examples:
   `python scripts/queue_health.py`
 - run a controlled backfill in chunks and stop for operator confirmation after each chunk:
   `python scripts/backfill_linkedin.py --ui-verify-blocked`
+- run a controlled backfill across supported sources in chunks and stop for operator confirmation after each chunk:
+  `python scripts/backfill_enrichment.py --source all --ui-verify-blocked`
+- run a controlled backfill for selected rows only:
+  `python scripts/backfill_enrichment.py --source all --job-id 13143 --job-id 13073`
 - browse the live review/control-plane app:
   `python review_app.py`
 - smoke-test integrated discovery plus newest-first enrichment:
