@@ -71,6 +71,11 @@ From `playbooks/tasks/scraper.yml` in `ansible_homelab`:
 Important current service command:
 - `ExecStart={{ scraper_dir }}/.venv/bin/python scraper/scraper.py`
 
+Important runtime-path note:
+- the live SQLite DB and Playwright browser cache should live outside the git checkout
+- on `server2`, the intended runtime path is:
+  - `/home/michael/data/hunt/hunt.db`
+
 This matters because `scraper.py` now triggers post-scrape enrichment by default, so the deployed service behavior has effectively become:
 - discover jobs
 - add/update rows in SQLite

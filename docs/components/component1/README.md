@@ -23,6 +23,7 @@ What Stage 1 changed:
 - new LinkedIn metadata columns were added for enrichment
 - existing LinkedIn rows were marked `enrichment_status = 'pending'`
 - old fake LinkedIn `apply_url` values that simply copied `job_url` were cleared
+- runtime SQLite data should not live inside the git checkout on deployed servers
 
 Why this matters:
 - later automation must not confuse a LinkedIn listing page with an external ATS application URL
