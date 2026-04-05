@@ -3,6 +3,7 @@ import sqlite3
 import sys
 import tempfile
 import unittest
+from contextlib import contextmanager
 from datetime import timedelta
 from unittest.mock import patch
 
@@ -260,6 +261,42 @@ class Stage32Tests(unittest.TestCase):
         self.assertEqual(summary["succeeded"], 1)
         self.assertEqual(row["enrichment_status"], "done")
         self.assertTrue(row["description"].startswith("Analyze product usage"))
+
+    def test_indeed_ui_verify_marks_row_done_verified(self):
+        @contextmanager
+        def fake_browser_context(**_kwargs):
+            yield object()
+
+        with self.with_temp_db() as path:
+            job_id = self.insert_job(
+                path,
+                source="indeed",
+                job_url="https://ca.indeed.com/viewjob?jk=555",
+            )
+            with patch.object(enrich_indeed, "open_browser_context", fake_browser_context), patch.object(
+                enrich_indeed,
+                "enrich_indeed_job_in_context",
+                return_value={
+                    "description": "Browser-rendered description with enough detail to be valid.",
+                    "apply_url": "https://jobs.acme.com/apply/555",
+                    "apply_type": "external_apply",
+                    "auto_apply_eligible": 1,
+                    "apply_host": "jobs.acme.com",
+                    "ats_type": "unknown",
+                },
+            ):
+                exit_code = enrich_indeed.process_one_job(
+                    job_id=job_id,
+                    timeout_ms=1000,
+                    force=True,
+                    ui_verify=True,
+                )
+                row = db.get_job_by_id(job_id)
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(row["enrichment_status"], "done_verified")
+        self.assertEqual(row["apply_type"], "external_apply")
+        self.assertEqual(row["last_enrichment_error"], None)
 
     def test_indeed_enrichment_reuses_existing_description_when_page_parse_misses(self):
         page_url = "https://ca.indeed.com/viewjob?jk=444"

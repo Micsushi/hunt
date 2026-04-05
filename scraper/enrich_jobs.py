@@ -61,6 +61,8 @@ def process_multi_source_batch(
             summary = process_indeed_batch(
                 limit=source_limit,
                 timeout_ms=timeout_ms,
+                browser_channel=browser_channel,
+                ui_verify_blocked=ui_verify_blocked,
                 return_summary=True,
             )
         else:

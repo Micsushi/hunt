@@ -93,7 +93,7 @@ def cmd_enrich(args):
     if args.source == "linkedin":
         command = [PYTHON, "scraper/enrich_linkedin.py", "--channel", args.channel]
     elif args.source == "indeed":
-        command = [PYTHON, "scraper/enrich_indeed.py"]
+        command = [PYTHON, "scraper/enrich_indeed.py", "--channel", args.channel]
     else:
         command = [PYTHON, "scraper/enrich_jobs.py", "--channel", args.channel]
     if args.job_id is not None:
@@ -102,9 +102,9 @@ def cmd_enrich(args):
         command.extend(["--limit", str(args.limit)])
     if args.force and args.source != "all":
         command.append("--force")
-    if args.ui_verify and args.source == "linkedin":
+    if args.ui_verify and args.source in {"linkedin", "indeed"}:
         command.append("--ui-verify")
-    if args.ui_verify_blocked and args.source in {"linkedin", "all"}:
+    if args.ui_verify_blocked and args.source in {"linkedin", "indeed", "all"}:
         command.append("--ui-verify-blocked")
     if args.headful:
         command.append("--headful")

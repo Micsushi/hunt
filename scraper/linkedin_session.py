@@ -9,6 +9,8 @@ DEFAULT_STORAGE_STATE_PATH = ROOT / ".state" / "linkedin_auth_state.json"
 DEFAULT_BROWSER_CHANNEL = os.getenv("LINKEDIN_BROWSER_CHANNEL") or None
 LOGIN_VERIFICATION_URL = "https://www.linkedin.com/feed/"
 
+from browser_runtime import BrowserRuntimeError, open_browser_context, load_sync_playwright
+
 
 class LinkedInSessionError(RuntimeError):
     pass
@@ -20,18 +22,6 @@ class LinkedInSessionCancelled(LinkedInSessionError):
 
 class LinkedInSessionNotSaved(LinkedInSessionError):
     pass
-
-
-def load_sync_playwright():
-    try:
-        from playwright.sync_api import sync_playwright
-    except ModuleNotFoundError as exc:
-        raise LinkedInSessionError(
-            "Playwright is not installed in this venv. Run "
-            "'venv\\Scripts\\python.exe -m pip install playwright' and then "
-            "'venv\\Scripts\\python.exe -m playwright install chromium'."
-        ) from exc
-    return sync_playwright
 
 
 def resolve_storage_state_path(storage_state_path=None):
@@ -67,31 +57,22 @@ def assert_logged_in(page):
     if page_looks_logged_out(page):
         raise LinkedInSessionError("LinkedIn session appears to be logged out or expired.")
 
-
 @contextmanager
 def open_linkedin_context(storage_state_path=None, *, headless=True, slow_mo=0, browser_channel=None):
     storage_state = ensure_storage_state_exists(storage_state_path)
-    sync_playwright = load_sync_playwright()
-
-    with sync_playwright() as playwright:
-        browser = playwright.chromium.launch(
-            headless=headless,
-            slow_mo=slow_mo,
-            channel=browser_channel or DEFAULT_BROWSER_CHANNEL,
-        )
-        context = browser.new_context(storage_state=str(storage_state))
-        try:
-            yield context
-        finally:
-            context.close()
-            browser.close()
+    with open_browser_context(
+        headless=headless,
+        slow_mo=slow_mo,
+        browser_channel=browser_channel or DEFAULT_BROWSER_CHANNEL,
+        storage_state_path=str(storage_state),
+    ) as context:
+        yield context
 
 
 def save_storage_state_interactively(storage_state_path=None, *, browser_channel=None):
     target_path = resolve_storage_state_path(storage_state_path)
     target_path.parent.mkdir(parents=True, exist_ok=True)
     sync_playwright = load_sync_playwright()
-
     with sync_playwright() as playwright:
         browser = playwright.chromium.launch(
             headless=False,
@@ -186,6 +167,9 @@ def main():
     except LinkedInSessionNotSaved as exc:
         print(exc)
         return 0
+    except BrowserRuntimeError as exc:
+        print(f"Session error: {exc}")
+        return 1
     except LinkedInSessionError as exc:
         print(f"Session error: {exc}")
         return 1
