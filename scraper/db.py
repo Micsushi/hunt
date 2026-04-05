@@ -76,10 +76,35 @@ INSERT_COLUMNS = (
 )
 
 _UNSET = object()
+ENRICHMENT_SOURCE_PRIORITY = ("linkedin", "indeed")
 
 
 def _get_column_names(cursor):
     return {row[1] for row in cursor.execute("PRAGMA table_info(jobs)")}
+
+
+def _normalize_enrichment_sources(sources=None):
+    if sources is None:
+        return ENRICHMENT_SOURCE_PRIORITY
+    if isinstance(sources, str):
+        sources = (sources,)
+    normalized = tuple(source for source in sources if source in ENRICHMENT_SOURCE_PRIORITY)
+    return normalized or ENRICHMENT_SOURCE_PRIORITY
+
+
+def _build_source_filter_sql(sources):
+    normalized_sources = _normalize_enrichment_sources(sources)
+    placeholders = ", ".join(["?"] * len(normalized_sources))
+    return f" AND source IN ({placeholders})", list(normalized_sources)
+
+
+def _build_source_priority_sql(sources):
+    normalized_sources = _normalize_enrichment_sources(sources)
+    cases = " ".join(
+        f"WHEN '{source}' THEN {index}"
+        for index, source in enumerate(normalized_sources)
+    )
+    return f"CASE source {cases} ELSE 999 END"
 
 
 def _is_blank(value):
@@ -168,7 +193,7 @@ def _backfill_enrichment_metadata(cursor):
         """
         UPDATE jobs
         SET apply_type = 'unknown'
-        WHERE source = 'linkedin'
+        WHERE source IN ('linkedin', 'indeed')
           AND apply_type IS NULL
         """
     )
@@ -177,46 +202,40 @@ def _backfill_enrichment_metadata(cursor):
         """
         UPDATE jobs
         SET enrichment_status = 'pending'
-        WHERE source = 'linkedin'
+        WHERE source IN ('linkedin', 'indeed')
           AND enrichment_status IS NULL
-          AND (
-                apply_url IS NULL
-             OR apply_type IS NULL
-             OR apply_type = 'unknown'
-             OR description IS NULL
-             OR trim(description) = ''
-          )
         """
     )
 
     cursor.execute(
         """
-        CREATE INDEX IF NOT EXISTS idx_jobs_linkedin_enrichment
+        CREATE INDEX IF NOT EXISTS idx_jobs_enrichment_queue
         ON jobs(source, enrichment_status, date_scraped DESC)
         """
     )
 
     cursor.execute(
         """
-        CREATE INDEX IF NOT EXISTS idx_jobs_linkedin_retry_queue
+        CREATE INDEX IF NOT EXISTS idx_jobs_enrichment_retry_queue
         ON jobs(source, enrichment_status, next_enrichment_retry_at, date_scraped DESC)
         """
     )
 
 
 def _backfill_retry_schedule(cursor):
+    source_filter_sql, source_params = _build_source_filter_sql(None)
     rows = cursor.execute(
-        """
+        f"""
         SELECT id, enrichment_attempts, last_enrichment_error
         FROM jobs
-        WHERE source = 'linkedin'
+        WHERE 1=1 {source_filter_sql}
           AND enrichment_status = 'failed'
           AND next_enrichment_retry_at IS NULL
           AND last_enrichment_error IS NOT NULL
           AND trim(last_enrichment_error) != ''
           AND coalesce(enrichment_attempts, 0) < ?
         """,
-        (ENRICHMENT_MAX_ATTEMPTS,),
+        tuple(source_params + [ENRICHMENT_MAX_ATTEMPTS]),
     ).fetchall()
 
     for row in rows:
@@ -232,7 +251,6 @@ def _backfill_retry_schedule(cursor):
             UPDATE jobs
             SET next_enrichment_retry_at = ?
             WHERE id = ?
-              AND source = 'linkedin'
             """,
             (
                 format_sqlite_timestamp(retry_after),
@@ -248,21 +266,22 @@ def _requeue_stale_processing_rows(cursor):
             utc_now() - timedelta(minutes=ENRICHMENT_STALE_PROCESSING_MINUTES)
         )
 
+    source_filter_sql, source_params = _build_source_filter_sql(None)
     cursor.execute(
-        """
+        f"""
         UPDATE jobs
         SET enrichment_status = 'pending',
             last_enrichment_error = 'stale_processing: Requeued automatically after a stale processing claim.',
             last_enrichment_started_at = NULL,
             next_enrichment_retry_at = NULL
-        WHERE source = 'linkedin'
+        WHERE 1=1 {source_filter_sql}
           AND enrichment_status = 'processing'
           AND (
                 last_enrichment_started_at IS NULL
              OR last_enrichment_started_at <= ?
           )
         """,
-        (stale_cutoff,),
+        tuple(source_params + [stale_cutoff]),
     )
 
 
@@ -417,32 +436,39 @@ def requeue_linkedin_rows_for_refresh(*, limit=None):
         conn.close()
 
 
-def count_pending_linkedin_jobs():
+def count_pending_jobs_for_enrichment(*, sources=None):
     conn = get_connection()
     try:
         cursor = conn.cursor()
+        source_filter_sql, source_params = _build_source_filter_sql(sources)
         row = cursor.execute(
-            """
+            f"""
             SELECT COUNT(*)
             FROM jobs
-            WHERE source = 'linkedin'
+            WHERE 1=1 {source_filter_sql}
               AND enrichment_status = 'pending'
-            """
+            """,
+            tuple(source_params),
         ).fetchone()
         return int(row[0] if row else 0)
     finally:
         conn.close()
 
 
-def count_ready_linkedin_jobs_for_enrichment():
+def count_pending_linkedin_jobs():
+    return count_pending_jobs_for_enrichment(sources=("linkedin",))
+
+
+def count_ready_jobs_for_enrichment(*, sources=None):
     conn = get_connection()
     try:
         cursor = conn.cursor()
+        source_filter_sql, source_params = _build_source_filter_sql(sources)
         row = cursor.execute(
-            """
+            f"""
             SELECT COUNT(*)
             FROM jobs
-            WHERE source = 'linkedin'
+            WHERE 1=1 {source_filter_sql}
               AND (
                     enrichment_status = 'pending'
                  OR (
@@ -453,7 +479,37 @@ def count_ready_linkedin_jobs_for_enrichment():
                  )
               )
             """,
-            (ENRICHMENT_MAX_ATTEMPTS,),
+            tuple(source_params + [ENRICHMENT_MAX_ATTEMPTS]),
+        ).fetchone()
+        return int(row[0] if row else 0)
+    finally:
+        conn.close()
+
+
+def count_ready_linkedin_jobs_for_enrichment():
+    return count_ready_jobs_for_enrichment(sources=("linkedin",))
+
+
+def count_stale_processing_jobs(*, sources=None):
+    conn = get_connection()
+    try:
+        cursor = conn.cursor()
+        stale_cutoff = format_sqlite_timestamp(
+            utc_now() - timedelta(minutes=ENRICHMENT_STALE_PROCESSING_MINUTES)
+        )
+        source_filter_sql, source_params = _build_source_filter_sql(sources)
+        row = cursor.execute(
+            f"""
+            SELECT COUNT(*)
+            FROM jobs
+            WHERE 1=1 {source_filter_sql}
+              AND enrichment_status = 'processing'
+              AND (
+                    last_enrichment_started_at IS NULL
+                 OR last_enrichment_started_at <= ?
+              )
+            """,
+            tuple(source_params + [stale_cutoff]),
         ).fetchone()
         return int(row[0] if row else 0)
     finally:
@@ -461,41 +517,22 @@ def count_ready_linkedin_jobs_for_enrichment():
 
 
 def count_stale_processing_linkedin_jobs():
-    conn = get_connection()
-    try:
-        cursor = conn.cursor()
-        stale_cutoff = format_sqlite_timestamp(
-            utc_now() - timedelta(minutes=ENRICHMENT_STALE_PROCESSING_MINUTES)
-        )
-        row = cursor.execute(
-            """
-            SELECT COUNT(*)
-            FROM jobs
-            WHERE source = 'linkedin'
-              AND enrichment_status = 'processing'
-              AND (
-                    last_enrichment_started_at IS NULL
-                 OR last_enrichment_started_at <= ?
-              )
-            """,
-            (stale_cutoff,),
-        ).fetchone()
-        return int(row[0] if row else 0)
-    finally:
-        conn.close()
+    return count_stale_processing_jobs(sources=("linkedin",))
 
 
-def claim_linkedin_job_for_enrichment(job_id=None, force=False):
+def claim_job_for_enrichment(job_id=None, force=False, *, sources=None):
     conn = get_connection()
     try:
         cursor = conn.cursor()
         cursor.execute("BEGIN IMMEDIATE")
+        source_filter_sql, source_params = _build_source_filter_sql(sources)
+        source_priority_sql = _build_source_priority_sql(sources)
 
         if job_id is None:
             cursor.execute(
-                """
+                f"""
                 SELECT * FROM jobs
-                WHERE source = 'linkedin'
+                WHERE 1=1 {source_filter_sql}
                   AND (
                         enrichment_status = 'pending'
                      OR (
@@ -505,30 +542,31 @@ def claim_linkedin_job_for_enrichment(job_id=None, force=False):
                         AND coalesce(enrichment_attempts, 0) < ?
                      )
                   )
-                ORDER BY CASE enrichment_status WHEN 'pending' THEN 0 ELSE 1 END,
+                ORDER BY {source_priority_sql},
+                         CASE enrichment_status WHEN 'pending' THEN 0 ELSE 1 END,
                          CASE WHEN enrichment_status = 'pending' THEN date_scraped END DESC,
                          CASE WHEN enrichment_status != 'pending' THEN next_enrichment_retry_at END ASC,
                          date_scraped DESC,
                          id DESC
                 LIMIT 1
                 """,
-                (ENRICHMENT_MAX_ATTEMPTS,),
+                tuple(source_params + [ENRICHMENT_MAX_ATTEMPTS]),
             )
         elif force:
             cursor.execute(
-                """
+                f"""
                 SELECT * FROM jobs
                 WHERE id = ?
-                  AND source = 'linkedin'
+                  {source_filter_sql}
                 """,
-                (job_id,),
+                tuple([job_id] + source_params),
             )
         else:
             cursor.execute(
-                """
+                f"""
                 SELECT * FROM jobs
                 WHERE id = ?
-                  AND source = 'linkedin'
+                  {source_filter_sql}
                   AND (
                         enrichment_status = 'pending'
                      OR (
@@ -539,7 +577,7 @@ def claim_linkedin_job_for_enrichment(job_id=None, force=False):
                      )
                   )
                 """,
-                (job_id, ENRICHMENT_MAX_ATTEMPTS),
+                tuple([job_id] + source_params + [ENRICHMENT_MAX_ATTEMPTS]),
             )
 
         row = cursor.fetchone()
@@ -557,7 +595,6 @@ def claim_linkedin_job_for_enrichment(job_id=None, force=False):
                     last_enrichment_started_at = CURRENT_TIMESTAMP,
                     next_enrichment_retry_at = NULL
                 WHERE id = ?
-                  AND source = 'linkedin'
                 """
                 if force
                 else
@@ -569,7 +606,6 @@ def claim_linkedin_job_for_enrichment(job_id=None, force=False):
                     last_enrichment_started_at = CURRENT_TIMESTAMP,
                     next_enrichment_retry_at = NULL
                 WHERE id = ?
-                  AND source = 'linkedin'
                   AND coalesce(enrichment_status, '') != 'processing'
                 """
             ),
@@ -588,7 +624,11 @@ def claim_linkedin_job_for_enrichment(job_id=None, force=False):
         conn.close()
 
 
-def mark_linkedin_enrichment_succeeded(
+def claim_linkedin_job_for_enrichment(job_id=None, force=False):
+    return claim_job_for_enrichment(job_id=job_id, force=force, sources=("linkedin",))
+
+
+def mark_job_enrichment_succeeded(
     job_id,
     *,
     description,
@@ -598,12 +638,27 @@ def mark_linkedin_enrichment_succeeded(
     apply_host,
     ats_type,
     enrichment_status="done",
+    source=None,
 ):
     conn = get_connection()
     try:
         cursor = conn.cursor()
+        source_sql = ""
+        params = [
+            description,
+            apply_url,
+            apply_type,
+            auto_apply_eligible,
+            enrichment_status,
+            apply_host,
+            ats_type,
+            job_id,
+        ]
+        if source:
+            source_sql = " AND source = ?"
+            params.append(source)
         cursor.execute(
-            """
+            f"""
             UPDATE jobs
             SET description = ?,
                 apply_url = ?,
@@ -617,18 +672,9 @@ def mark_linkedin_enrichment_succeeded(
                 last_enrichment_started_at = NULL,
                 next_enrichment_retry_at = NULL
             WHERE id = ?
-              AND source = 'linkedin'
+              {source_sql}
             """,
-            (
-                description,
-                apply_url,
-                apply_type,
-                auto_apply_eligible,
-                enrichment_status,
-                apply_host,
-                ats_type,
-                job_id,
-            ),
+            tuple(params),
         )
         conn.commit()
         return cursor.rowcount
@@ -636,7 +682,31 @@ def mark_linkedin_enrichment_succeeded(
         conn.close()
 
 
-def mark_linkedin_enrichment_failed(
+def mark_linkedin_enrichment_succeeded(
+    job_id,
+    *,
+    description,
+    apply_type,
+    auto_apply_eligible,
+    apply_url,
+    apply_host,
+    ats_type,
+    enrichment_status="done",
+):
+    return mark_job_enrichment_succeeded(
+        job_id,
+        description=description,
+        apply_type=apply_type,
+        auto_apply_eligible=auto_apply_eligible,
+        apply_url=apply_url,
+        apply_host=apply_host,
+        ats_type=ats_type,
+        enrichment_status=enrichment_status,
+        source="linkedin",
+    )
+
+
+def mark_job_enrichment_failed(
     job_id,
     error_message,
     *,
@@ -648,6 +718,7 @@ def mark_linkedin_enrichment_failed(
     apply_url=_UNSET,
     apply_host=_UNSET,
     ats_type=_UNSET,
+    source=None,
 ):
     conn = get_connection()
     try:
@@ -677,12 +748,71 @@ def mark_linkedin_enrichment_failed(
             updates.append("last_enrichment_started_at = NULL")
 
         params.append(job_id)
+        source_sql = ""
+        if source:
+            source_sql = " AND source = ?"
+            params.append(source)
         cursor.execute(
             f"""
             UPDATE jobs
             SET {", ".join(updates)}
             WHERE id = ?
-              AND source = 'linkedin'
+              {source_sql}
+            """,
+            tuple(params),
+        )
+        conn.commit()
+        return cursor.rowcount
+    finally:
+        conn.close()
+
+
+def mark_linkedin_enrichment_failed(
+    job_id,
+    error_message,
+    *,
+    enrichment_status="failed",
+    next_enrichment_retry_at=_UNSET,
+    description=_UNSET,
+    apply_type=_UNSET,
+    auto_apply_eligible=_UNSET,
+    apply_url=_UNSET,
+    apply_host=_UNSET,
+    ats_type=_UNSET,
+):
+    return mark_job_enrichment_failed(
+        job_id,
+        error_message,
+        enrichment_status=enrichment_status,
+        next_enrichment_retry_at=next_enrichment_retry_at,
+        description=description,
+        apply_type=apply_type,
+        auto_apply_eligible=auto_apply_eligible,
+        apply_url=apply_url,
+        apply_host=apply_host,
+        ats_type=ats_type,
+        source="linkedin",
+    )
+
+
+def requeue_job(job_id, *, source=None):
+    conn = get_connection()
+    try:
+        cursor = conn.cursor()
+        source_sql = ""
+        params = [job_id]
+        if source:
+            source_sql = " AND source = ?"
+            params.append(source)
+        cursor.execute(
+            f"""
+            UPDATE jobs
+            SET enrichment_status = 'pending',
+                last_enrichment_error = NULL,
+                last_enrichment_started_at = NULL,
+                next_enrichment_retry_at = NULL
+            WHERE id = ?
+              {source_sql}
             """,
             tuple(params),
         )
@@ -693,25 +823,7 @@ def mark_linkedin_enrichment_failed(
 
 
 def requeue_linkedin_job(job_id):
-    conn = get_connection()
-    try:
-        cursor = conn.cursor()
-        cursor.execute(
-            """
-            UPDATE jobs
-            SET enrichment_status = 'pending',
-                last_enrichment_error = NULL,
-                last_enrichment_started_at = NULL,
-                next_enrichment_retry_at = NULL
-            WHERE id = ?
-              AND source = 'linkedin'
-            """,
-            (job_id,),
-        )
-        conn.commit()
-        return cursor.rowcount
-    finally:
-        conn.close()
+    return requeue_job(job_id, source="linkedin")
 
 
 def get_linkedin_queue_summary():
@@ -768,6 +880,19 @@ def get_review_queue_summary(*, source=None):
                   )
                 GROUP BY error_code
                 ORDER BY count DESC, error_code ASC
+                """,
+                tuple(params),
+            ).fetchall()
+        }
+        source_counts = {
+            row["source"] or "unknown": row["count"]
+            for row in cursor.execute(
+                f"""
+                SELECT coalesce(source, 'unknown') AS source, COUNT(*) AS count
+                FROM jobs
+                WHERE 1=1 {source_filter_sql}
+                GROUP BY 1
+                ORDER BY 1
                 """,
                 tuple(params),
             ).fetchall()
@@ -832,6 +957,7 @@ def get_review_queue_summary(*, source=None):
             "stale_processing_count": int(stale_processing_count or 0),
             "oldest_processing_started_at": oldest_processing,
             "failure_counts": failure_counts,
+            "source_counts": source_counts,
         }
     finally:
         conn.close()

@@ -19,7 +19,7 @@ from db import (  # noqa: E402
     get_review_queue_summary,
     init_db,
     list_jobs_for_review,
-    requeue_linkedin_job,
+    requeue_job as requeue_review_job,
 )
 
 
@@ -33,6 +33,11 @@ STATUS_OPTIONS = (
     "blocked",
     "blocked_verified",
     "all",
+)
+SOURCE_OPTIONS = (
+    "all",
+    "linkedin",
+    "indeed",
 )
 
 
@@ -317,27 +322,65 @@ def render_summary_cards(summary):
     )
 
 
-def render_status_toolbar(active_status, *, limit, q="", sort="date_scraped", direction="desc"):
+def render_status_toolbar(active_status, *, source, limit, q="", sort="date_scraped", direction="desc"):
     pills = []
     for status in STATUS_OPTIONS:
         class_name = "pill active" if status == active_status else "pill"
         pills.append(
-            f'<a class="{class_name}" href="/jobs?status={quote(status)}&limit={limit}&q={quote(q)}&sort={quote(sort)}&direction={quote(direction)}">{html.escape(status)}</a>'
+            f'<a class="{class_name}" href="/jobs?source={quote(source)}&status={quote(status)}&limit={limit}&q={quote(q)}&sort={quote(sort)}&direction={quote(direction)}">{html.escape(status)}</a>'
         )
     return "".join(pills)
 
 
-def render_search_bar(*, status, limit, q, sort, direction):
+def render_source_toolbar(active_source, *, status, limit, q="", sort="date_scraped", direction="desc"):
+    pills = []
+    for source in SOURCE_OPTIONS:
+        class_name = "pill active" if source == active_source else "pill"
+        pills.append(
+            f'<a class="{class_name}" href="/jobs?source={quote(source)}&status={quote(status)}&limit={limit}&q={quote(q)}&sort={quote(sort)}&direction={quote(direction)}">{html.escape(source)}</a>'
+        )
+    return "".join(pills)
+
+
+def render_search_bar(*, source, status, limit, q, sort, direction):
     return f"""
     <form class="panel" method="get" action="/jobs" style="margin-bottom: 18px;">
-      <div style="display:grid; gap:12px; grid-template-columns: minmax(220px, 2fr) repeat(3, minmax(120px, 1fr)); align-items:end;">
+      <div style="display:grid; gap:12px; grid-template-columns: minmax(220px, 2fr) repeat(4, minmax(120px, 1fr)); align-items:end;">
         <div>
           <label class="label" for="q">Search</label>
           <input id="q" name="q" type="text" value="{html.escape(q)}" placeholder="company, title, description, or URL keyword" style="width:100%; box-sizing:border-box; border:1px solid var(--line); border-radius:12px; padding:10px 12px; background:#faf5ec;">
         </div>
         <div>
+          <label class="label" for="source">Source</label>
+          <select id="source" name="source" style="width:100%; box-sizing:border-box; border:1px solid var(--line); border-radius:12px; padding:10px 12px; background:#faf5ec;">
+            {''.join(
+                f'<option value="{value}"{" selected" if source == value else ""}>{label}</option>'
+                for value, label in (
+                    ("all", "All sources"),
+                    ("linkedin", "LinkedIn"),
+                    ("indeed", "Indeed"),
+                )
+            )}
+          </select>
+        </div>
+        <div>
           <label class="label" for="status">Status</label>
-          <input id="status" name="status" type="text" value="{html.escape(status)}" style="width:100%; box-sizing:border-box; border:1px solid var(--line); border-radius:12px; padding:10px 12px; background:#faf5ec;">
+          <select id="status" name="status" style="width:100%; box-sizing:border-box; border:1px solid var(--line); border-radius:12px; padding:10px 12px; background:#faf5ec;">
+            {''.join(
+                f'<option value="{value}"{" selected" if status == value else ""}>{label}</option>'
+                for value, label in (
+                    ("ready", "Ready"),
+                    ("pending", "Pending"),
+                    ("processing", "Processing"),
+                    ("done", "Done"),
+                    ("done_verified", "Done verified"),
+                    ("failed", "Failed"),
+                    ("blocked", "Blocked"),
+                    ("blocked_verified", "Blocked verified"),
+                    ("all", "All statuses"),
+                )
+            )}
+          </select>
         </div>
         <div>
           <label class="label" for="sort">Sort</label>
@@ -369,24 +412,24 @@ def render_search_bar(*, status, limit, q, sort, direction):
       <input type="hidden" name="limit" value="{limit}">
       <div class="actions">
         <button type="submit">Apply filters</button>
-        <a class="pill" href="/jobs?status=ready&limit=50">Reset</a>
+        <a class="pill" href="/jobs?source=all&status=ready&limit=50">Reset</a>
       </div>
     </form>
     """
 
 
-def _sortable_link(label, column, *, status, limit, page, q, current_sort, current_direction):
+def _sortable_link(label, column, *, source, status, limit, page, q, current_sort, current_direction):
     next_direction = "asc"
     if current_sort == column and current_direction == "asc":
         next_direction = "desc"
     arrow = ""
     if current_sort == column:
         arrow = " &uarr;" if current_direction == "asc" else " &darr;"
-    href = f"/jobs?status={quote(status)}&limit={limit}&page={page}&q={quote(q)}&sort={quote(column)}&direction={quote(next_direction)}"
+    href = f"/jobs?source={quote(source)}&status={quote(status)}&limit={limit}&page={page}&q={quote(q)}&sort={quote(column)}&direction={quote(next_direction)}"
     return f'<a href="{href}">{html.escape(label)}{arrow}</a>'
 
 
-def render_jobs_table(rows, *, status, limit, page, q, sort, direction):
+def render_jobs_table(rows, *, source, status, limit, page, q, sort, direction):
     if not rows:
         return '<div class="panel"><p>No jobs match this filter.</p></div>'
 
@@ -426,16 +469,16 @@ def render_jobs_table(rows, *, status, limit, page, q, sort, direction):
       <table>
         <thead>
           <tr>
-            <th>{_sortable_link("ID", "id", status=status, limit=limit, page=page, q=q, current_sort=sort, current_direction=direction)}</th>
-            <th>{_sortable_link("Source", "source", status=status, limit=limit, page=page, q=q, current_sort=sort, current_direction=direction)}</th>
-            <th>{_sortable_link("Company", "company", status=status, limit=limit, page=page, q=q, current_sort=sort, current_direction=direction)}</th>
-            <th>{_sortable_link("Title", "title", status=status, limit=limit, page=page, q=q, current_sort=sort, current_direction=direction)}</th>
+            <th>{_sortable_link("ID", "id", source=source, status=status, limit=limit, page=page, q=q, current_sort=sort, current_direction=direction)}</th>
+            <th>{_sortable_link("Source", "source", source=source, status=status, limit=limit, page=page, q=q, current_sort=sort, current_direction=direction)}</th>
+            <th>{_sortable_link("Company", "company", source=source, status=status, limit=limit, page=page, q=q, current_sort=sort, current_direction=direction)}</th>
+            <th>{_sortable_link("Title", "title", source=source, status=status, limit=limit, page=page, q=q, current_sort=sort, current_direction=direction)}</th>
             <th>Links</th>
-            <th>{_sortable_link("Enrichment", "enrichment_status", status=status, limit=limit, page=page, q=q, current_sort=sort, current_direction=direction)}</th>
-            <th>{_sortable_link("Apply Type", "apply_type", status=status, limit=limit, page=page, q=q, current_sort=sort, current_direction=direction)}</th>
-            <th>{_sortable_link("Attempts", "enrichment_attempts", status=status, limit=limit, page=page, q=q, current_sort=sort, current_direction=direction)}</th>
-            <th>{_sortable_link("Next Retry", "next_enrichment_retry_at", status=status, limit=limit, page=page, q=q, current_sort=sort, current_direction=direction)}</th>
-            <th>{_sortable_link("Last Error", "last_enrichment_error", status=status, limit=limit, page=page, q=q, current_sort=sort, current_direction=direction)}</th>
+            <th>{_sortable_link("Enrichment", "enrichment_status", source=source, status=status, limit=limit, page=page, q=q, current_sort=sort, current_direction=direction)}</th>
+            <th>{_sortable_link("Apply Type", "apply_type", source=source, status=status, limit=limit, page=page, q=q, current_sort=sort, current_direction=direction)}</th>
+            <th>{_sortable_link("Attempts", "enrichment_attempts", source=source, status=status, limit=limit, page=page, q=q, current_sort=sort, current_direction=direction)}</th>
+            <th>{_sortable_link("Next Retry", "next_enrichment_retry_at", source=source, status=status, limit=limit, page=page, q=q, current_sort=sort, current_direction=direction)}</th>
+            <th>{_sortable_link("Last Error", "last_enrichment_error", source=source, status=status, limit=limit, page=page, q=q, current_sort=sort, current_direction=direction)}</th>
           </tr>
         </thead>
         <tbody>
@@ -446,7 +489,7 @@ def render_jobs_table(rows, *, status, limit, page, q, sort, direction):
     """
 
 
-def render_pagination(*, total_rows, status, limit, page, q, sort, direction):
+def render_pagination(*, total_rows, source, status, limit, page, q, sort, direction):
     if total_rows <= limit:
         return ""
 
@@ -457,7 +500,7 @@ def render_pagination(*, total_rows, status, limit, page, q, sort, direction):
     if current_page > 1:
         prev_page = current_page - 1
         links.append(
-            f'<a class="pill" href="/jobs?status={quote(status)}&limit={limit}&page={prev_page}&q={quote(q)}&sort={quote(sort)}&direction={quote(direction)}">Previous</a>'
+            f'<a class="pill" href="/jobs?source={quote(source)}&status={quote(status)}&limit={limit}&page={prev_page}&q={quote(q)}&sort={quote(sort)}&direction={quote(direction)}">Previous</a>'
         )
 
     start_page = max(1, current_page - 2)
@@ -465,13 +508,13 @@ def render_pagination(*, total_rows, status, limit, page, q, sort, direction):
     for page_number in range(start_page, end_page + 1):
         class_name = "pill active" if page_number == current_page else "pill"
         links.append(
-            f'<a class="{class_name}" href="/jobs?status={quote(status)}&limit={limit}&page={page_number}&q={quote(q)}&sort={quote(sort)}&direction={quote(direction)}">{page_number}</a>'
+            f'<a class="{class_name}" href="/jobs?source={quote(source)}&status={quote(status)}&limit={limit}&page={page_number}&q={quote(q)}&sort={quote(sort)}&direction={quote(direction)}">{page_number}</a>'
         )
 
     if current_page < total_pages:
         next_page = current_page + 1
         links.append(
-            f'<a class="pill" href="/jobs?status={quote(status)}&limit={limit}&page={next_page}&q={quote(q)}&sort={quote(sort)}&direction={quote(direction)}">Next</a>'
+            f'<a class="pill" href="/jobs?source={quote(source)}&status={quote(status)}&limit={limit}&page={next_page}&q={quote(q)}&sort={quote(sort)}&direction={quote(direction)}">Next</a>'
         )
 
     return f"""
@@ -484,7 +527,7 @@ def render_pagination(*, total_rows, status, limit, page, q, sort, direction):
 
 def render_failure_breakdown(summary):
     if not summary["failure_counts"]:
-        return "<p>No failed or blocked LinkedIn rows right now.</p>"
+        return "<p>No failed or blocked rows right now.</p>"
     items = "".join(
         f"<tr><td>{format_text(error_code)}</td><td>{count}</td></tr>"
         for error_code, count in summary["failure_counts"].items()
@@ -512,6 +555,10 @@ def render_summary_table(summary):
         f"<tr><td>{format_text(status)}</td><td>{count}</td></tr>"
         for status, count in sorted(summary["counts_by_status"].items())
     )
+    source_rows = "".join(
+        f"<tr><td>{format_text(source)}</td><td>{count}</td></tr>"
+        for source, count in sorted(summary["source_counts"].items())
+    )
     main_rows = "".join(
         f"<tr><td>{format_text(label)}</td><td>{format_text(value)}</td></tr>"
         for label, value in rows
@@ -533,6 +580,15 @@ def render_summary_table(summary):
           <table>
             <thead><tr><th>Status</th><th>Count</th></tr></thead>
             <tbody>{status_rows}</tbody>
+          </table>
+        </div>
+      </div>
+      <div class="panel">
+        <h2>Counts by source</h2>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Source</th><th>Count</th></tr></thead>
+            <tbody>{source_rows}</tbody>
           </table>
         </div>
       </div>
@@ -617,6 +673,7 @@ def summary_view():
 
 @app.get("/api/jobs")
 def api_jobs(
+    source: str = "all",
     status: str = "ready",
     limit: int = 50,
     page: int = 1,
@@ -625,6 +682,8 @@ def api_jobs(
     sort: str = "date_scraped",
     direction: str = "desc",
 ):
+    if source not in SOURCE_OPTIONS:
+        raise HTTPException(status_code=400, detail=f"Unsupported source filter: {source}")
     if status not in STATUS_OPTIONS:
         raise HTTPException(status_code=400, detail=f"Unsupported status filter: {status}")
     safe_limit = max(1, min(limit, 250))
@@ -637,6 +696,7 @@ def api_jobs(
         query=q,
         sort=sort,
         direction=direction,
+        source=None if source == "all" else source,
     )
     return JSONResponse(rows)
 
@@ -652,11 +712,11 @@ def api_job(job_id: int):
 @app.post("/api/jobs/{job_id}/requeue")
 def api_requeue_job(job_id: int):
     row = get_job_by_id(job_id)
-    if not row or row.get("source") != "linkedin":
-        raise HTTPException(status_code=400, detail="Requeue is only supported for LinkedIn rows right now.")
-    updated = requeue_linkedin_job(job_id)
+    if not row or row.get("source") not in {"linkedin", "indeed"}:
+        raise HTTPException(status_code=400, detail="Requeue is only supported for rows with an enrichment worker.")
+    updated = requeue_review_job(job_id, source=row.get("source"))
     if updated != 1:
-        raise HTTPException(status_code=404, detail="LinkedIn job not found.")
+        raise HTTPException(status_code=404, detail="Job not found.")
     return JSONResponse({"status": "ok", "job_id": job_id})
 
 
@@ -670,7 +730,7 @@ def dashboard():
     body = f"""
     <section class="hero">
       <h1>Hunt review lane</h1>
-      <p>Component 1 control plane for the live jobs table on server2. LinkedIn currently has the real enrichment pipeline; other sources are shown here too and can be treated as pending for future Stage 3.2 enrichment work.</p>
+      <p>Component 1 control plane for the live jobs table on server2. LinkedIn and Indeed now share the same enrichment queue model, while other sources can still be surfaced here for later adapters.</p>
     </section>
     <section class="cards">{render_summary_cards(summary)}</section>
     <section class="stack">
@@ -687,12 +747,15 @@ def dashboard():
 
 
 @app.get("/jobs", response_class=HTMLResponse)
-def jobs_page(status: str = "ready", limit: int = 50, page: int = 1, q: str = "", sort: str = "date_scraped", direction: str = "desc"):
+def jobs_page(source: str = "all", status: str = "ready", limit: int = 50, page: int = 1, q: str = "", sort: str = "date_scraped", direction: str = "desc"):
+    if source not in SOURCE_OPTIONS:
+        raise HTTPException(status_code=400, detail=f"Unsupported source filter: {source}")
     if status not in STATUS_OPTIONS:
         raise HTTPException(status_code=400, detail=f"Unsupported status filter: {status}")
     safe_limit = max(1, min(limit, 250))
     safe_page = max(1, page)
-    total_rows = count_jobs_for_review(status=status, query=q)
+    source_filter = None if source == "all" else source
+    total_rows = count_jobs_for_review(status=status, query=q, source=source_filter)
     rows = list_jobs_for_review(
         status=status,
         limit=safe_limit,
@@ -700,8 +763,9 @@ def jobs_page(status: str = "ready", limit: int = 50, page: int = 1, q: str = ""
         query=q,
         sort=sort,
         direction=direction,
+        source=source_filter,
     )
-    summary = get_review_queue_summary()
+    summary = get_review_queue_summary(source=source_filter)
 
     body = f"""
     <section class="hero">
@@ -709,10 +773,11 @@ def jobs_page(status: str = "ready", limit: int = 50, page: int = 1, q: str = ""
       <p>Browse the live jobs table across sources, search by company, title, description, or URL keywords, sort by column headings, and open both the listing and apply link directly from the table.</p>
     </section>
     <section class="cards">{render_summary_cards(summary)}</section>
-    {render_search_bar(status=status, limit=safe_limit, q=q, sort=sort, direction=direction)}
-    <div class="toolbar">{render_status_toolbar(status, limit=safe_limit, q=q, sort=sort, direction=direction)}</div>
-    {render_jobs_table(rows, status=status, limit=safe_limit, page=safe_page, q=q, sort=sort, direction=direction)}
-    {render_pagination(total_rows=total_rows, status=status, limit=safe_limit, page=safe_page, q=q, sort=sort, direction=direction)}
+    {render_search_bar(source=source, status=status, limit=safe_limit, q=q, sort=sort, direction=direction)}
+    <div class="toolbar">{render_source_toolbar(source, status=status, limit=safe_limit, q=q, sort=sort, direction=direction)}</div>
+    <div class="toolbar">{render_status_toolbar(status, source=source, limit=safe_limit, q=q, sort=sort, direction=direction)}</div>
+    {render_jobs_table(rows, source=source, status=status, limit=safe_limit, page=safe_page, q=q, sort=sort, direction=direction)}
+    {render_pagination(total_rows=total_rows, source=source, status=status, limit=safe_limit, page=safe_page, q=q, sort=sort, direction=direction)}
     """
     return HTMLResponse(render_layout("Hunt jobs", body))
 
@@ -752,7 +817,7 @@ def job_detail(job_id: int):
         <div class="actions">
           <a class="pill active" href="{html.escape(row['job_url'])}" target="_blank" rel="noreferrer">Open listing</a>
           {f'<a class="pill" href="{html.escape(row["apply_url"])}" target="_blank" rel="noreferrer">Open apply URL</a>' if row.get("apply_url") else ""}
-          {f'<form method="post" action="/jobs/{row["id"]}/requeue"><button type="submit">Requeue enrichment</button></form>' if row.get("source") == "linkedin" else '<span class="pill">Non-LinkedIn rows are shown as pending for now</span>'}
+          {f'<form method="post" action="/jobs/{row["id"]}/requeue"><button type="submit">Requeue enrichment</button></form>' if row.get("source") in {"linkedin", "indeed"} else '<span class="pill">This source is visible here, but does not have a worker yet</span>'}
         </div>
       </div>
       <div class="panel">
@@ -771,11 +836,11 @@ def job_detail(job_id: int):
 @app.post("/jobs/{job_id}/requeue")
 def requeue_job(job_id: int):
     row = get_job_by_id(job_id)
-    if not row or row.get("source") != "linkedin":
-        raise HTTPException(status_code=400, detail="Requeue is only supported for LinkedIn rows right now.")
-    updated = requeue_linkedin_job(job_id)
+    if not row or row.get("source") not in {"linkedin", "indeed"}:
+        raise HTTPException(status_code=400, detail="Requeue is only supported for rows with an enrichment worker.")
+    updated = requeue_review_job(job_id, source=row.get("source"))
     if updated != 1:
-        raise HTTPException(status_code=404, detail="LinkedIn job not found.")
+        raise HTTPException(status_code=404, detail="Job not found.")
     return RedirectResponse(url=f"/jobs/{job_id}", status_code=303)
 
 

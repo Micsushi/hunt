@@ -31,7 +31,7 @@ def print_job_rows(rows):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Show LinkedIn enrichment queue health.")
+    parser = argparse.ArgumentParser(description="Show enrichment queue health across supported sources.")
     parser.add_argument(
         "--limit",
         type=int,
@@ -41,15 +41,19 @@ def main():
     args = parser.parse_args()
 
     db.init_db(maintenance=False)
-    summary = db.get_linkedin_queue_summary()
+    summary = db.get_review_queue_summary()
 
-    print_section("LinkedIn queue summary")
+    print_section("Enrichment queue summary")
     print(f"total: {summary['total']}")
     print(f"ready: {summary['ready_count']}")
     print(f"pending: {summary['pending_count']}")
     print(f"blocked: {summary['blocked_count']}")
     print(f"stale_processing: {summary['stale_processing_count']}")
     print(f"oldest_processing_started_at: {summary['oldest_processing_started_at']}")
+
+    print_section("\nsource_counts:")
+    for source, count in sorted(summary["source_counts"].items()):
+        print(f"  {source}: {count}")
 
     print_section("\ncounts_by_status:")
     for status, count in sorted(summary["counts_by_status"].items()):
@@ -67,7 +71,7 @@ def main():
         ("failed", "failed jobs"),
     )
     for status, title in sections:
-        rows = db.list_linkedin_jobs_for_review(status=status, limit=args.limit)
+        rows = db.list_jobs_for_review(status=status, limit=args.limit)
         if not rows:
             continue
         print_section(f"\n{title}:")

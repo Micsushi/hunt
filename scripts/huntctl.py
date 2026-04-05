@@ -90,16 +90,21 @@ def cmd_scrape(args):
 
 
 def cmd_enrich(args):
-    command = [PYTHON, "scraper/enrich_linkedin.py", "--channel", args.channel]
+    if args.source == "linkedin":
+        command = [PYTHON, "scraper/enrich_linkedin.py", "--channel", args.channel]
+    elif args.source == "indeed":
+        command = [PYTHON, "scraper/enrich_indeed.py"]
+    else:
+        command = [PYTHON, "scraper/enrich_jobs.py", "--channel", args.channel]
     if args.job_id is not None:
         command.extend(["--job-id", str(args.job_id)])
     if args.limit is not None:
         command.extend(["--limit", str(args.limit)])
-    if args.force:
+    if args.force and args.source != "all":
         command.append("--force")
-    if args.ui_verify:
+    if args.ui_verify and args.source == "linkedin":
         command.append("--ui-verify")
-    if args.ui_verify_blocked:
+    if args.ui_verify_blocked and args.source in {"linkedin", "all"}:
         command.append("--ui-verify-blocked")
     if args.headful:
         command.append("--headful")
@@ -122,7 +127,36 @@ def cmd_list_status(args):
     _run(command)
 
 
+def cmd_list_jobs(args):
+    command = [
+        PYTHON,
+        "scripts/list_jobs.py",
+        "--source",
+        args.source,
+        "--status",
+        args.status,
+        "--limit",
+        str(args.limit),
+        "--offset",
+        str(args.offset),
+        "--sort",
+        args.sort,
+        "--direction",
+        args.direction,
+    ]
+    if args.query:
+        command.extend(["--query", args.query])
+    _run(command)
+
+
 def cmd_job(args):
+    command = [PYTHON, "scripts/show_job.py", str(args.job_id)]
+    if args.full_description:
+        command.append("--full-description")
+    _run(command)
+
+
+def cmd_job_linkedin(args):
     _run([PYTHON, "scripts/show_linkedin_job.py", "--job-id", str(args.job_id)])
 
 
@@ -138,6 +172,9 @@ def cmd_requeue_refresh(_args):
 
 
 def cmd_backfill(args):
+    if args.source != "linkedin":
+        raise SystemExit("`backfill` currently supports only LinkedIn batches.")
+
     command = [PYTHON, "scripts/backfill_linkedin.py", "--batch-size", str(args.batch_size)]
     if args.max_batches is not None:
         command.extend(["--max-batches", str(args.max_batches)])
@@ -234,6 +271,7 @@ def build_parser():
     scrape.set_defaults(func=cmd_scrape)
 
     enrich = subparsers.add_parser("enrich", help="Run direct LinkedIn enrichment commands.")
+    enrich.add_argument("--source", choices=["linkedin", "indeed", "all"], default="linkedin")
     enrich.add_argument("--job-id", type=int)
     enrich.add_argument("--limit", type=int)
     enrich.add_argument("--channel", default="chrome")
@@ -246,14 +284,37 @@ def build_parser():
     queue = subparsers.add_parser("queue", help="Show overall queue health.")
     queue.set_defaults(func=cmd_queue)
 
+    jobs = subparsers.add_parser("jobs", help="List jobs with source/status filters.")
+    jobs.add_argument("--source", choices=["all", "linkedin", "indeed"], default="all")
+    jobs.add_argument(
+        "--status",
+        choices=["ready", "pending", "processing", "done", "done_verified", "failed", "blocked", "blocked_verified", "all"],
+        default="ready",
+    )
+    jobs.add_argument("--limit", type=int, default=10)
+    jobs.add_argument("--offset", type=int, default=0)
+    jobs.add_argument("--query", default="")
+    jobs.add_argument(
+        "--sort",
+        choices=["id", "source", "company", "title", "enrichment_status", "apply_type", "enrichment_attempts", "next_enrichment_retry_at", "last_enrichment_error", "date_scraped", "enriched_at"],
+        default="date_scraped",
+    )
+    jobs.add_argument("--direction", choices=["asc", "desc"], default="desc")
+    jobs.set_defaults(func=cmd_list_jobs)
+
     for status_name in ("ready", "blocked", "failed", "done", "processing", "pending"):
         status_parser = subparsers.add_parser(status_name, help=f"List {status_name} LinkedIn rows.")
         status_parser.add_argument("--limit", type=int, default=10)
         status_parser.set_defaults(func=cmd_list_status, status=status_name)
 
-    job = subparsers.add_parser("job", help="Show one LinkedIn job by id.")
+    job = subparsers.add_parser("job", help="Show one job by id.")
     job.add_argument("job_id", type=int)
+    job.add_argument("--full-description", action="store_true")
     job.set_defaults(func=cmd_job)
+
+    linkedin_job = subparsers.add_parser("job-linkedin", help="Show one LinkedIn job by id using the old inspector.")
+    linkedin_job.add_argument("job_id", type=int)
+    linkedin_job.set_defaults(func=cmd_job_linkedin)
 
     verify = subparsers.add_parser("verify", help="Verify one enriched LinkedIn row.")
     verify.add_argument("job_id", type=int)
@@ -264,6 +325,7 @@ def build_parser():
     requeue.set_defaults(func=cmd_requeue_refresh)
 
     backfill = subparsers.add_parser("backfill", help="Run LinkedIn backfill in batches with a checkpoint after each batch.")
+    backfill.add_argument("--source", choices=["linkedin"], default="linkedin")
     backfill.add_argument("batch_size", type=int, nargs="?", default=100)
     backfill.add_argument("--max-batches", type=int, default=None)
     backfill.add_argument("--channel", default="chrome")

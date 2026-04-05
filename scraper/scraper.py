@@ -5,7 +5,7 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from jobspy import scrape_jobs
-from db import add_job, count_ready_linkedin_jobs_for_enrichment, init_db
+from db import count_ready_jobs_for_enrichment, add_job, init_db
 from config import (
     ENRICH_AFTER_SCRAPE,
     ENRICHMENT_BATCH_LIMIT,
@@ -69,12 +69,12 @@ def build_job_urls(row, source):
 
 
 def build_enrichment_fields(source):
-    if source != "linkedin":
+    if source not in {"linkedin", "indeed"}:
         return None, None, None
 
-    # Discovery may retain a best-known outbound URL hint, but LinkedIn rows
-    # stay queued for browser verification until enrichment classifies the
-    # primary action as Easy Apply vs external Apply.
+    # Discovery may retain a best-known outbound URL hint, but supported
+    # board rows still enter the enrichment queue so Stage 3+ workers can
+    # verify descriptions and application targets consistently.
     return "unknown", None, "pending"
 
 
@@ -135,7 +135,7 @@ def scrape_single(site, term, location, category):
     return jobs
 
 
-def run_pending_linkedin_enrichment(
+def run_pending_job_enrichment(
     *,
     limit,
     storage_state_path=None,
@@ -145,9 +145,9 @@ def run_pending_linkedin_enrichment(
     browser_channel=None,
     ui_verify_blocked=False,
 ):
-    ready_count = count_ready_linkedin_jobs_for_enrichment()
+    ready_count = count_ready_jobs_for_enrichment()
     if ready_count == 0:
-        print("[scrape] No LinkedIn rows are ready for enrichment after discovery.")
+        print("[scrape] No supported rows are ready for enrichment after discovery.")
         return 0
 
     if limit is None:
@@ -160,14 +160,14 @@ def run_pending_linkedin_enrichment(
         return 0
 
     print(
-        f"[scrape] Starting post-scrape LinkedIn enrichment for up to {effective_limit} "
+        f"[scrape] Starting post-scrape enrichment for up to {effective_limit} "
         f"ready row(s) out of {ready_count}."
     )
 
     try:
-        from enrich_linkedin import process_batch
+        from enrich_jobs import process_multi_source_batch
 
-        return process_batch(
+        return process_multi_source_batch(
             limit=effective_limit,
             storage_state_path=storage_state_path,
             headless=headless,
@@ -177,8 +177,29 @@ def run_pending_linkedin_enrichment(
             ui_verify_blocked=ui_verify_blocked,
         )
     except Exception as exc:
-        print(f"[scrape] Post-scrape LinkedIn enrichment could not start: {exc}")
+        print(f"[scrape] Post-scrape enrichment could not start: {exc}")
         return 1
+
+
+def run_pending_linkedin_enrichment(
+    *,
+    limit,
+    storage_state_path=None,
+    headless=True,
+    slow_mo=0,
+    timeout_ms=45000,
+    browser_channel=None,
+    ui_verify_blocked=False,
+):
+    return run_pending_job_enrichment(
+        limit=limit,
+        storage_state_path=storage_state_path,
+        headless=headless,
+        slow_mo=slow_mo,
+        timeout_ms=timeout_ms,
+        browser_channel=browser_channel,
+        ui_verify_blocked=ui_verify_blocked,
+    )
 
 
 def scrape(
@@ -255,9 +276,9 @@ def scrape(
             ui_verify_blocked=ui_verify_blocked,
         )
         if enrichment_exit_code == 0:
-            print("[scrape] Post-scrape LinkedIn enrichment finished cleanly.")
+            print("[scrape] Post-scrape enrichment finished cleanly.")
         else:
-            print("[scrape] Post-scrape LinkedIn enrichment finished with some unresolved failures.")
+            print("[scrape] Post-scrape enrichment finished with some unresolved failures.")
 
     return {
         "scraped_total": len(all_jobs),

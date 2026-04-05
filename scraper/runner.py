@@ -8,7 +8,7 @@ from datetime import datetime
 
 from scraper import scrape
 from config import RUN_INTERVAL_SECONDS
-from db import get_linkedin_queue_summary
+from db import get_review_queue_summary
 
 _shutdown = False
 
@@ -33,9 +33,9 @@ def main():
             summary = scrape()
             if summary and summary.get("enrichment_exit_code") not in (None, 0):
                 print("[runner] Post-scrape enrichment finished with some unresolved failures.")
-            queue_summary = get_linkedin_queue_summary()
+            queue_summary = get_review_queue_summary()
             print(
-                "[runner] LinkedIn queue "
+                "[runner] Enrichment queue "
                 f"ready={queue_summary['ready_count']} "
                 f"pending={queue_summary['pending_count']} "
                 f"blocked={queue_summary['blocked_count']} "

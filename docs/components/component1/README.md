@@ -1,4 +1,4 @@
-# Component 1 : Posting Discovery And LinkedIn Enrichment
+# Component 1 : Posting Discovery And Multi-Source Enrichment
 
 ## Goal
 
@@ -14,8 +14,8 @@ LinkedIn is the priority source even if other sources remain enabled.
 ## Current State
 
 Discovery already exists in `scraper/scraper.py`.
-The discovery script can now optionally trigger a follow-up LinkedIn enrichment pass immediately after it writes rows to SQLite.
-Stage 1 and Stage 2 are complete. Stage 3 repo-side code is complete and ready for deployment rollout.
+The discovery script can now optionally trigger a follow-up enrichment pass immediately after it writes rows to SQLite.
+Stage 1, Stage 2, Stage 3, and Stage 3.2 repo-side code are complete.
 
 What Stage 1 changed:
 - `job_url` now represents the discovered listing URL
@@ -155,71 +155,41 @@ Useful commands:
 
 ### Stage 3.2 : multi-source enrichment on top of the Stage 3 runtime
 
-Goal:
-- keep the existing Stage 3 queue/runtime/review-app infrastructure
-- expand enrichment beyond LinkedIn without building a second enrichment system
-- start with Indeed as the first non-LinkedIn source
+Implemented files:
+- `scraper/enrich_jobs.py`
+- `scraper/enrich_indeed.py`
+- `scraper/db.py`
+- `scraper/scraper.py`
+- `scraper/runner.py`
+- `review_app.py`
+- `scripts/queue_health.py`
+- `scripts/huntctl.py`
+- `tests/test_stage32.py`
 
-Guiding approach:
-- reuse the current enrichment columns and retry model where possible
-- reuse the existing claim/update/review flow instead of creating source-specific queue tables
-- add source-specific enrichers behind one shared runtime shape
+Implemented behavior:
+- reuse the same enrichment columns for LinkedIn and Indeed
+- reuse the same retry scheduling, stale-processing recovery, and claim/update flow
+- keep one jobs table and one review app
+- dispatch post-scrape enrichment by source priority:
+  - LinkedIn first
+  - Indeed second
+- mark newly discovered Indeed rows as `pending` so they enter the same queue model
+- add an Indeed enrichment worker that:
+  - opens the Indeed job page with HTTP + HTML parsing
+  - extracts a usable description
+  - resolves an external apply URL when one is discoverable
+  - stores `apply_url`, `apply_host`, `ats_type`, `apply_type`, and `enrichment_status`
+- expand the review app with source-aware views:
+  - source counts
+  - source filters
+  - source-aware requeue for supported workers
 
-What should be reused:
-- `scraper/db.py` claim/update/retry helpers
-- `scraper/enrichment_policy.py` retry and hard-stop policy
-- `scraper/enrich_linkedin.py` as the reference worker shape
-- `scraper/scraper.py` post-scrape enrichment hook
-- `review_app.py` as the operator UI
-
-Planned implementation shape:
-- keep one jobs table
-- keep one review app
-- keep one timer/service
-- add a shared source-aware enrichment dispatcher
-- keep LinkedIn as the richest/most advanced enricher
-- add Indeed next
-
-Recommended worker split:
-- `scraper/enrichors/base.py`
-- `scraper/enrichors/linkedin.py`
-- `scraper/enrichors/indeed.py`
-- later adapters for other sources as needed
-
-Shared enrichment contract per worker:
-- return `description`
-- return `apply_url`
-- return `apply_host`
-- return `ats_type`
-- return `apply_type`
-- return `status`
-- return `error_code`
-
-Indeed as the first Stage 3.2 source:
-- open the Indeed job page directly
-- extract the full description from the Indeed page
-- capture any outbound apply URL when present
-- normalize/store `apply_url`, `apply_host`, and `ats_type`
-- reuse the same DB update helpers and retry/error handling style
-
-Current review-app behavior that supports Stage 3.2:
-- all sources are now shown in the jobs table
-- non-LinkedIn rows can appear as effectively pending/manual in the review layer
-- LinkedIn remains the only source with full real enrichment + requeue behavior right now
-
-Stage 3.2 sequence:
-1. generalize queue/review helpers from LinkedIn-only views to source-aware enrichment views
-2. extract the LinkedIn worker behind a reusable source-worker interface
-3. implement the Indeed enricher using the same result contract
-4. dispatch enrichment by source priority during the post-scrape pass
-5. add source filters/counts in the review app
-6. add tests for non-LinkedIn pending/done/failed flows
-
-Stage 3.2 success criteria:
-- the existing runtime, review app, and service deployment stay intact
+Stage 3.2 outcome:
+- the existing runtime, review app, and service deployment shape stay intact
 - LinkedIn continues to work as-is
-- Indeed rows can move from pending to enriched using the same operational model
-- the review app becomes a whole-job-table control plane, not just a LinkedIn queue viewer
+- Indeed rows can move from pending to done/failed using the same operational model
+- the review app is now a whole-job-table control plane with source-aware filtering
+- later sources can be added behind the same queue/runtime model
 
 ## Command Reference
 
@@ -235,9 +205,21 @@ Common examples:
 - queue health:
   `.\hunt.ps1 queue`
   `./hunt.sh queue`
+- run multi-source enrichment directly:
+  `.\hunt.ps1 enrich --source all --limit 25 --channel chrome`
+  `./hunt.sh enrich --source all --limit 25 --channel chrome`
+- run Indeed-only enrichment:
+  `.\hunt.ps1 enrich --source indeed --limit 25`
+  `./hunt.sh enrich --source indeed --limit 25`
 - list newest ready rows:
   `.\hunt.ps1 ready --limit 10`
   `./hunt.sh ready --limit 10`
+- list jobs across sources:
+  `.\hunt.ps1 jobs --source all --status ready --limit 10`
+  `./hunt.sh jobs --source all --status ready --limit 10`
+- list Indeed rows only:
+  `.\hunt.ps1 jobs --source indeed --status all --limit 10`
+  `./hunt.sh jobs --source indeed --status all --limit 10`
 - inspect one job:
   `.\hunt.ps1 job 13179`
   `./hunt.sh job 13179`
@@ -293,6 +275,8 @@ Common examples:
 
 - run the Stage 3 unit tests:
   `python -m unittest discover -s tests -p "test_stage3.py" -v`
+- run the Stage 3.2 unit tests:
+  `python -m unittest discover -s tests -p "test_stage32.py" -v`
 - inspect unattended queue health:
   `python scripts/queue_health.py`
 - run a controlled backfill in chunks and stop for operator confirmation after each chunk:
@@ -325,6 +309,10 @@ Common examples:
   `python scraper/enrich_linkedin.py --limit 100 --channel chrome`
 - enrich a batch and then UI-verify only blocked rows:
   `python scraper/enrich_linkedin.py --limit 100 --channel chrome --ui-verify-blocked`
+- enrich a batch of pending Indeed rows:
+  `python scraper/enrich_indeed.py --limit 100`
+- enrich a multi-source batch with LinkedIn priority first:
+  `python scraper/enrich_jobs.py --limit 100 --channel chrome --ui-verify-blocked`
 - inspect Stage 3 queue health:
   `python scripts/queue_health.py`
 
@@ -334,7 +322,7 @@ Common examples:
   `python scraper/scraper.py --skip-enrichment`
 - run discovery and then enrich pending LinkedIn rows:
   `python scraper/scraper.py`
-- run discovery and then enrich up to 100 pending LinkedIn rows:
+- run discovery and then enrich up to 100 pending supported rows with LinkedIn priority first:
   `python scraper/scraper.py --enrich-pending --enrich-limit 100 --channel chrome`
 - run discovery and then do a second UI pass for blocked rows:
   `python scraper/scraper.py --enrich-pending --enrich-limit 100 --channel chrome --ui-verify-blocked`
