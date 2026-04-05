@@ -172,10 +172,7 @@ def cmd_requeue_refresh(_args):
 
 
 def cmd_backfill(args):
-    if args.source != "linkedin":
-        raise SystemExit("`backfill` currently supports only LinkedIn batches.")
-
-    command = [PYTHON, "scripts/backfill_linkedin.py", "--batch-size", str(args.batch_size)]
+    command = [PYTHON, "scripts/backfill_enrichment.py", str(args.batch_size), "--source", args.source]
     if args.max_batches is not None:
         command.extend(["--max-batches", str(args.max_batches)])
     if args.channel:
@@ -190,6 +187,9 @@ def cmd_backfill(args):
         command.append("--headful")
     if args.ui_verify_blocked:
         command.append("--ui-verify-blocked")
+    if args.job_ids:
+        for job_id in args.job_ids:
+            command.extend(["--job-id", str(job_id)])
     if args.yes:
         command.append("--yes")
     _run(command)
@@ -324,9 +324,10 @@ def build_parser():
     requeue = subparsers.add_parser("requeue-refresh", help="Requeue sparse historical LinkedIn rows.")
     requeue.set_defaults(func=cmd_requeue_refresh)
 
-    backfill = subparsers.add_parser("backfill", help="Run LinkedIn backfill in batches with a checkpoint after each batch.")
-    backfill.add_argument("--source", choices=["linkedin"], default="linkedin")
+    backfill = subparsers.add_parser("backfill", help="Run enrichment backfill in batches with a checkpoint after each batch.")
+    backfill.add_argument("--source", choices=["linkedin", "indeed", "all"], default="linkedin")
     backfill.add_argument("batch_size", type=int, nargs="?", default=100)
+    backfill.add_argument("--job-id", type=int, action="append", dest="job_ids")
     backfill.add_argument("--max-batches", type=int, default=None)
     backfill.add_argument("--channel", default="chrome")
     backfill.add_argument("--storage-state", default=None)
