@@ -715,27 +715,44 @@ def requeue_linkedin_job(job_id):
 
 
 def get_linkedin_queue_summary():
+    return get_review_queue_summary(source="linkedin")
+
+
+def get_review_queue_summary(*, source=None):
     conn = get_connection()
     try:
         cursor = conn.cursor()
         stale_cutoff = format_sqlite_timestamp(
             utc_now() - timedelta(minutes=ENRICHMENT_STALE_PROCESSING_MINUTES)
         )
+        source_filter_sql = ""
+        params = []
+        if source:
+            source_filter_sql = " AND source = ?"
+            params.append(source)
+
         counts = {
             row["enrichment_status"] or "unknown": row["count"]
             for row in cursor.execute(
-                """
-                SELECT enrichment_status, COUNT(*) AS count
+                f"""
+                SELECT
+                    CASE
+                        WHEN source != 'linkedin' AND (enrichment_status IS NULL OR trim(enrichment_status) = '') THEN 'pending'
+                        WHEN enrichment_status IS NULL OR trim(enrichment_status) = '' THEN 'unknown'
+                        ELSE enrichment_status
+                    END AS enrichment_status,
+                    COUNT(*) AS count
                 FROM jobs
-                WHERE source = 'linkedin'
-                GROUP BY enrichment_status
-                """
+                WHERE 1=1 {source_filter_sql}
+                GROUP BY 1
+                """,
+                tuple(params),
             ).fetchall()
         }
         failure_counts = {
             row["error_code"]: row["count"]
             for row in cursor.execute(
-                """
+                f"""
                 SELECT
                     CASE
                         WHEN last_enrichment_error IS NULL OR trim(last_enrichment_error) = '' THEN 'unknown'
@@ -744,53 +761,66 @@ def get_linkedin_queue_summary():
                     END AS error_code,
                     COUNT(*) AS count
                 FROM jobs
-                WHERE source = 'linkedin'
-                  AND enrichment_status IN ('failed', 'blocked', 'blocked_verified')
+                WHERE 1=1 {source_filter_sql}
+                  AND (
+                        enrichment_status IN ('failed', 'blocked', 'blocked_verified')
+                     OR (source != 'linkedin' AND last_enrichment_error IS NOT NULL AND trim(last_enrichment_error) != '')
+                  )
                 GROUP BY error_code
                 ORDER BY count DESC, error_code ASC
-                """
+                """,
+                tuple(params),
             ).fetchall()
         }
 
         oldest_processing = cursor.execute(
-            """
+            f"""
             SELECT MIN(last_enrichment_started_at)
             FROM jobs
-            WHERE source = 'linkedin'
+            WHERE 1=1 {source_filter_sql}
               AND enrichment_status = 'processing'
-            """
+            """,
+            tuple(params),
         ).fetchone()[0]
 
         ready_count = cursor.execute(
-            """
+            f"""
             SELECT COUNT(*)
             FROM jobs
-            WHERE source = 'linkedin'
+            WHERE 1=1 {source_filter_sql}
               AND (
                     enrichment_status = 'pending'
                  OR (
+                        source != 'linkedin'
+                    AND (enrichment_status IS NULL OR trim(enrichment_status) = '')
+                 )
+                 OR (
+                        source = 'linkedin'
+                    AND
+                    (
                         enrichment_status = 'failed'
                     AND next_enrichment_retry_at IS NOT NULL
                     AND next_enrichment_retry_at <= CURRENT_TIMESTAMP
                     AND coalesce(enrichment_attempts, 0) < ?
+                    )
                  )
               )
             """,
-            (ENRICHMENT_MAX_ATTEMPTS,),
+            tuple(params + [ENRICHMENT_MAX_ATTEMPTS]),
         ).fetchone()[0]
 
         stale_processing_count = cursor.execute(
-            """
+            f"""
             SELECT COUNT(*)
             FROM jobs
-            WHERE source = 'linkedin'
+            WHERE 1=1 {source_filter_sql}
               AND enrichment_status = 'processing'
               AND (
                     last_enrichment_started_at IS NULL
                  OR last_enrichment_started_at <= ?
               )
             """,
-            (stale_cutoff,),
+            tuple(params + [stale_cutoff]),
         ).fetchone()[0]
 
         return {
@@ -807,7 +837,39 @@ def get_linkedin_queue_summary():
         conn.close()
 
 
-def list_linkedin_jobs_for_review(*, status="all", limit=50, include_description=False):
+def list_linkedin_jobs_for_review(
+    *,
+    status="all",
+    limit=50,
+    offset=0,
+    include_description=False,
+    query=None,
+    sort="date_scraped",
+    direction="desc",
+):
+    return list_jobs_for_review(
+        status=status,
+        limit=limit,
+        offset=offset,
+        include_description=include_description,
+        query=query,
+        sort=sort,
+        direction=direction,
+        source="linkedin",
+    )
+
+
+def list_jobs_for_review(
+    *,
+    status="all",
+    limit=50,
+    offset=0,
+    include_description=False,
+    query=None,
+    sort="date_scraped",
+    direction="desc",
+    source=None,
+):
     conn = get_connection()
     try:
         cursor = conn.cursor()
@@ -818,45 +880,171 @@ def list_linkedin_jobs_for_review(*, status="all", limit=50, include_description
                    apply_host, ats_type, last_enrichment_started_at, next_enrichment_retry_at,
                    date_scraped
             FROM jobs
-            WHERE source = 'linkedin'
+            WHERE 1=1
         """
 
         params = []
+        query_value = (query or "").strip()
+        if source:
+            base_select += " AND source = ?"
+            params.append(source)
+
         if status == "ready":
             base_select += """
               AND (
                     enrichment_status = 'pending'
                  OR (
+                        source != 'linkedin'
+                    AND (enrichment_status IS NULL OR trim(enrichment_status) = '')
+                 )
+                 OR (
+                        source = 'linkedin'
+                    AND
+                    (
                         enrichment_status = 'failed'
                     AND next_enrichment_retry_at IS NOT NULL
                     AND next_enrichment_retry_at <= CURRENT_TIMESTAMP
                     AND coalesce(enrichment_attempts, 0) < ?
+                    )
                  )
               )
             """
             params.append(ENRICHMENT_MAX_ATTEMPTS)
+        elif status != "all":
+            if status == "pending":
+                base_select += """
+                  AND (
+                        enrichment_status = 'pending'
+                     OR (source != 'linkedin' AND (enrichment_status IS NULL OR trim(enrichment_status) = ''))
+                  )
+                """
+            else:
+                base_select += " AND enrichment_status = ?"
+                params.append(status)
+
+        if query_value:
+            like_query = f"%{query_value.lower()}%"
             base_select += """
+              AND (
+                    lower(coalesce(company, '')) LIKE ?
+                 OR lower(coalesce(title, '')) LIKE ?
+                 OR lower(coalesce(description, '')) LIKE ?
+                 OR lower(coalesce(apply_url, '')) LIKE ?
+                 OR lower(coalesce(job_url, '')) LIKE ?
+              )
+            """
+            params.extend([like_query, like_query, like_query, like_query, like_query])
+
+        safe_direction = "ASC" if str(direction).lower() == "asc" else "DESC"
+        sortable_columns = {
+            "id": "id",
+            "source": "source",
+            "company": "company",
+            "title": "title",
+            "enrichment_status": "enrichment_status",
+            "apply_type": "apply_type",
+            "enrichment_attempts": "coalesce(enrichment_attempts, 0)",
+            "next_enrichment_retry_at": "coalesce(next_enrichment_retry_at, '')",
+            "last_enrichment_error": "coalesce(last_enrichment_error, '')",
+            "date_scraped": "date_scraped",
+            "enriched_at": "coalesce(enriched_at, '')",
+        }
+        safe_sort_sql = sortable_columns.get(sort, "date_scraped")
+
+        if status == "ready":
+            base_select += f"""
             ORDER BY CASE enrichment_status WHEN 'pending' THEN 0 ELSE 1 END,
+                     CASE
+                       WHEN enrichment_status = 'pending' AND {safe_sort_sql} IS NOT NULL THEN {safe_sort_sql}
+                     END {safe_direction},
+                     CASE
+                       WHEN enrichment_status != 'pending' AND {safe_sort_sql} IS NOT NULL THEN {safe_sort_sql}
+                     END {safe_direction},
                      CASE WHEN enrichment_status = 'pending' THEN date_scraped END DESC,
                      CASE WHEN enrichment_status != 'pending' THEN next_enrichment_retry_at END ASC,
-                     date_scraped DESC,
                      id DESC
             """
-        elif status != "all":
-            base_select += " AND enrichment_status = ?"
-            params.append(status)
-            base_select += " ORDER BY date_scraped DESC, id DESC"
         else:
-            base_select += " ORDER BY date_scraped DESC, id DESC"
+            base_select += f" ORDER BY {safe_sort_sql} {safe_direction}, id DESC"
 
-        base_select += " LIMIT ?"
-        params.append(limit)
+        base_select += " LIMIT ? OFFSET ?"
+        params.extend([limit, max(0, offset)])
 
         rows = [dict(row) for row in cursor.execute(base_select, tuple(params)).fetchall()]
         if not include_description:
             for row in rows:
                 row["description"] = None
         return rows
+    finally:
+        conn.close()
+
+
+def count_linkedin_jobs_for_review(*, status="all", query=None):
+    return count_jobs_for_review(status=status, query=query, source="linkedin")
+
+
+def count_jobs_for_review(*, status="all", query=None, source=None):
+    conn = get_connection()
+    try:
+        cursor = conn.cursor()
+        sql = """
+            SELECT COUNT(*)
+            FROM jobs
+            WHERE 1=1
+        """
+        params = []
+        query_value = (query or "").strip()
+        if source:
+            sql += " AND source = ?"
+            params.append(source)
+
+        if status == "ready":
+            sql += """
+              AND (
+                    enrichment_status = 'pending'
+                 OR (
+                        source != 'linkedin'
+                    AND (enrichment_status IS NULL OR trim(enrichment_status) = '')
+                 )
+                 OR (
+                        source = 'linkedin'
+                    AND
+                    (
+                        enrichment_status = 'failed'
+                    AND next_enrichment_retry_at IS NOT NULL
+                    AND next_enrichment_retry_at <= CURRENT_TIMESTAMP
+                    AND coalesce(enrichment_attempts, 0) < ?
+                    )
+                 )
+              )
+            """
+            params.append(ENRICHMENT_MAX_ATTEMPTS)
+        elif status != "all":
+            if status == "pending":
+                sql += """
+                  AND (
+                        enrichment_status = 'pending'
+                     OR (source != 'linkedin' AND (enrichment_status IS NULL OR trim(enrichment_status) = ''))
+                  )
+                """
+            else:
+                sql += " AND enrichment_status = ?"
+                params.append(status)
+
+        if query_value:
+            like_query = f"%{query_value.lower()}%"
+            sql += """
+              AND (
+                    lower(coalesce(company, '')) LIKE ?
+                 OR lower(coalesce(title, '')) LIKE ?
+                 OR lower(coalesce(description, '')) LIKE ?
+                 OR lower(coalesce(apply_url, '')) LIKE ?
+                 OR lower(coalesce(job_url, '')) LIKE ?
+              )
+            """
+            params.extend([like_query, like_query, like_query, like_query, like_query])
+
+        return int(cursor.execute(sql, tuple(params)).fetchone()[0])
     finally:
         conn.close()
 
