@@ -154,6 +154,43 @@ Useful commands:
 
 ## Command Reference
 
+Short wrappers are now available at the repo root:
+- Windows PowerShell:
+  `.\hunt.ps1 <command>`
+- Windows cmd:
+  `hunt.cmd <command>`
+- Linux/macOS:
+  `./hunt.sh <command>`
+
+Common examples:
+- queue health:
+  `.\hunt.ps1 queue`
+  `./hunt.sh queue`
+- list newest ready rows:
+  `.\hunt.ps1 ready --limit 10`
+  `./hunt.sh ready --limit 10`
+- inspect one job:
+  `.\hunt.ps1 job 13179`
+  `./hunt.sh job 13179`
+- run local review app:
+  `.\hunt.ps1 review`
+  `./hunt.sh review`
+- run a controlled backfill in 100-row chunks with a checkpoint after each batch:
+  `.\hunt.ps1 backfill --ui-verify-blocked`
+  `./hunt.sh backfill --ui-verify-blocked`
+- run a controlled backfill in custom chunk sizes:
+  `.\hunt.ps1 backfill 250 --ui-verify-blocked`
+  `./hunt.sh backfill 250 --ui-verify-blocked`
+- save LinkedIn auth state on a Linux desktop session:
+  `./hunt.sh auth-save --display :0`
+- start one manual server scrape cycle:
+  `./hunt.sh svc-start`
+- follow live service logs on the server:
+  `./hunt.sh svc-follow`
+- stop the timer on the server:
+  `./hunt.sh timer-stop`
+  `./hunt.sh timer-disable`
+
 ### Session setup
 
 - save LinkedIn auth state:
@@ -189,6 +226,8 @@ Useful commands:
   `python -m unittest discover -s tests -p "test_stage3.py" -v`
 - inspect unattended queue health:
   `python scripts/queue_health.py`
+- run a controlled backfill in chunks and stop for operator confirmation after each chunk:
+  `python scripts/backfill_linkedin.py --ui-verify-blocked`
 - browse the live review/control-plane app:
   `python review_app.py`
 - smoke-test integrated discovery plus newest-first enrichment:
