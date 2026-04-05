@@ -27,6 +27,13 @@ Current Component 1 state in this repo:
   - blocked/security statuses
   - `--ui-verify`
   - `--ui-verify-blocked`
+- `scraper/enrich_indeed.py` now supports:
+  - one-job enrichment
+  - batch enrichment
+  - an HTTP-first path
+  - `--ui-verify` for a visible browser rerun
+  - `--ui-verify-blocked` for browser-fixable failures after the first pass
+- `scraper/browser_runtime.py` now provides the shared Playwright browser/context layer used by supported UI/browser fallback flows
 - `scraper/enrichment_policy.py` now defines retry and backoff behavior for unattended runs
 - `scripts/queue_health.py` now exposes queue-health checks for operators
 - `review_app.py` now provides the minimal browser-facing review/control-plane service
@@ -108,8 +115,8 @@ Runs on `server2` continuously.
 
 Purpose:
 - discover jobs
-- enrich pending LinkedIn rows headlessly first
-- immediately rerun blocked rows with a browser-open fallback pass
+- enrich pending supported-source rows with a cheap first pass
+- immediately rerun only browser-fixable rows with a browser-open fallback pass
 - keep the browser-open fallback off the main desktop foreground
 
 Recommended process model:
@@ -119,9 +126,9 @@ Recommended process model:
 Recommended behavior each cycle:
 1. run discovery
 2. insert/update DB rows
-3. enqueue LinkedIn rows as `pending`
-4. run a bounded headless enrichment batch, prioritizing the newest pending rows first
-5. immediately rerun any blocked rows with the equivalent of `--ui-verify-blocked`
+3. enqueue supported-source rows as `pending`
+4. run a bounded first-pass enrichment batch, prioritizing the newest pending rows first and LinkedIn before other supported sources
+5. immediately rerun any browser-fixable rows with the equivalent of `--ui-verify-blocked`
 6. run that browser-open fallback on a separate virtual X display such as `:98`
 7. stop cleanly
 8. wait for the next timer tick
@@ -168,17 +175,17 @@ The intended production flow is:
 2. `hunt-scraper.service` runs `scraper/scraper.py`
 3. discovery scrapes LinkedIn/Indeed/etc.
 4. rows are inserted or refreshed in SQLite
-5. new LinkedIn rows are left as:
+5. new supported rows are left as:
    - `apply_type = 'unknown'`
    - `enrichment_status = 'pending'`
 6. the same run starts a bounded post-scrape enrichment pass
-7. each LinkedIn row becomes one of:
+7. each supported row becomes one of:
    - `done` + `easy_apply`
    - `done` + `external_apply`
    - `blocked`
    - `failed`
    - `job_removed`-style failure
-8. rows that become `blocked` during the first pass immediately get a second browser-open retry on the virtual display
+8. rows that hit browser-fixable failures during the first pass can immediately get a second browser-open retry on the virtual display
 9. a human later checks:
    - `blocked`
    - suspicious `done`

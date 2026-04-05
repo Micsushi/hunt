@@ -14,8 +14,8 @@ The system is split into three major components:
 - Component 3 : application automation
 
 Current implementation priority:
-1. finish Component 1 Stage 3 hardening and deployment
-2. validate the new Component 1 Stage 3.2 multi-source enrichment flow, starting with Indeed
+1. finish rolling out the latest Component 1 Stage 3.2 Hunt code to `server2`
+2. start Component 1 Stage 4 hardening and backfill work
 3. validate the end-to-end handoff from Component 1 to Component 2
 4. build Component 3 only on top of stable external-apply flows
 
@@ -62,6 +62,7 @@ Current status:
   - an Indeed enricher built on the same claim/update/retry model
   - a multi-source dispatcher with LinkedIn-first priority
   - source-aware review-app counts and filters
+  - a shared browser runtime for UI/browser fallback across supported sources
 - deployment notes for `server2` live in `docs/components/component1/stage3_server2_plan.md`
 
 Doc:

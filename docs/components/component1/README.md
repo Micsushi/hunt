@@ -15,7 +15,7 @@ LinkedIn is the priority source even if other sources remain enabled.
 
 Discovery already exists in `scraper/scraper.py`.
 The discovery script can now optionally trigger a follow-up enrichment pass immediately after it writes rows to SQLite.
-Stage 1, Stage 2, Stage 3, and Stage 3.2 repo-side code are complete.
+Stage 1, Stage 2, Stage 3, and Stage 3.2 repo-side code are complete and locally validated.
 
 What Stage 1 changed:
 - `job_url` now represents the discovered listing URL
@@ -97,7 +97,7 @@ Auth setup note:
 - Google SSO popups can be unreliable in automation-managed browsers
 - if a manual test is interrupted and leaves a row stuck in `processing`, rerun that same job with `--force`
 - if you want to explicitly re-check a blocked or flaky row in a visible browser, rerun that specific job with `--ui-verify`
-- if you want a batch run to do a normal first pass and then automatically rerun blocked rows in a visible browser, use `--ui-verify-blocked`
+- if you want a batch run to do a normal first pass and then automatically rerun only browser-fixable failures in a visible browser, use `--ui-verify-blocked`
 - if older sparse `failed/unknown` rows need another pass with the newer Stage 2 logic, requeue them with `python scripts/requeue_linkedin_refresh_candidates.py`
 
 ### Stage 3 : batch enrichment and runner integration
@@ -179,6 +179,8 @@ Implemented behavior:
   - extracts a usable description
   - resolves an external apply URL when one is discoverable
   - stores `apply_url`, `apply_host`, `ats_type`, `apply_type`, and `enrichment_status`
+- add a shared browser runtime so supported sources can reuse one UI/browser fallback layer instead of duplicating Playwright setup
+- allow Indeed to use a visible browser rerun for browser-fixable failures while still preferring the cheaper non-UI path first
 - expand the review app with source-aware views:
   - source counts
   - source filters
@@ -190,6 +192,9 @@ Stage 3.2 outcome:
 - Indeed rows can move from pending to done/failed using the same operational model
 - the review app is now a whole-job-table control plane with source-aware filtering
 - later sources can be added behind the same queue/runtime model
+- `--ui-verify-blocked` now means:
+  - LinkedIn: rerun blocked/security-challenged rows in a visible browser
+  - Indeed: rerun browser-fixable failures such as `description_not_found`, `rate_limited`, or similar page-shape issues in a visible browser
 
 ## Command Reference
 
@@ -211,6 +216,9 @@ Common examples:
 - run Indeed-only enrichment:
   `.\hunt.ps1 enrich --source indeed --limit 25`
   `./hunt.sh enrich --source indeed --limit 25`
+- force one visible-browser rerun for a specific Indeed row:
+  `.\hunt.ps1 enrich --source indeed --job-id 13143 --force --ui-verify`
+  `./hunt.sh enrich --source indeed --job-id 13143 --force --ui-verify`
 - list newest ready rows:
   `.\hunt.ps1 ready --limit 10`
   `./hunt.sh ready --limit 10`
@@ -277,6 +285,8 @@ Common examples:
   `python -m unittest discover -s tests -p "test_stage3.py" -v`
 - run the Stage 3.2 unit tests:
   `python -m unittest discover -s tests -p "test_stage32.py" -v`
+- run the full Stage 1 through Stage 3.2 suite:
+  `python -m unittest discover -s tests -p "test_stage*.py" -v`
 - inspect unattended queue health:
   `python scripts/queue_health.py`
 - run a controlled backfill in chunks and stop for operator confirmation after each chunk:
@@ -311,6 +321,10 @@ Common examples:
   `python scraper/enrich_linkedin.py --limit 100 --channel chrome --ui-verify-blocked`
 - enrich a batch of pending Indeed rows:
   `python scraper/enrich_indeed.py --limit 100`
+- enrich a batch of pending Indeed rows and then rerun only browser-fixable failures visibly:
+  `python scraper/enrich_indeed.py --limit 100 --channel chrome --ui-verify-blocked`
+- enrich one specific Indeed row in a visible browser:
+  `python scraper/enrich_indeed.py --job-id <ID> --force --channel chrome --ui-verify`
 - enrich a multi-source batch with LinkedIn priority first:
   `python scraper/enrich_jobs.py --limit 100 --channel chrome --ui-verify-blocked`
 - inspect Stage 3 queue health:
@@ -334,6 +348,8 @@ Common examples:
   `uvicorn review_app:app --host 127.0.0.1 --port 8000`
 
 ### Stage 4 : hardening and backfill
+
+Stage 4 is the next phase after the current repo-side work. Stages 1 through 3.2 should be treated as implementation-complete pending server rollout of the latest Hunt code.
 
 Planned changes:
 - backfill old LinkedIn rows in batches

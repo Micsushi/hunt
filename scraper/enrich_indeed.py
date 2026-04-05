@@ -600,17 +600,32 @@ def process_one_job(job_id=None, *, timeout_ms=45000, force=False, browser_chann
         return 1
 
     if ui_verify:
-        with open_browser_context(
-            headless=False,
-            slow_mo=0,
-            browser_channel=browser_channel or DEFAULT_BROWSER_CHANNEL,
-        ) as context:
-            result = _process_claimed_job(
-                claimed_job,
-                timeout_ms=timeout_ms,
-                context=context,
-                ui_verify=True,
+        try:
+            with open_browser_context(
+                headless=False,
+                slow_mo=0,
+                browser_channel=browser_channel or DEFAULT_BROWSER_CHANNEL,
+            ) as context:
+                result = _process_claimed_job(
+                    claimed_job,
+                    timeout_ms=timeout_ms,
+                    context=context,
+                    ui_verify=True,
+                )
+        except Exception as exc:
+            error_message = _format_error_message(exc)
+            error_code = error_message.split(":", 1)[0].strip()
+            mark_job_enrichment_failed(
+                claimed_job["id"],
+                error_message,
+                enrichment_status=_get_failure_enrichment_status(error_code, ui_verify=True),
+                next_enrichment_retry_at=None,
+                source=SOURCE,
             )
+            print("[indeed] Failed")
+            print(f"  id: {claimed_job['id']}")
+            print(f"  error: {error_message}")
+            return 1
     else:
         result = _process_claimed_job(claimed_job, timeout_ms=timeout_ms)
     return 0 if result["status"] == "success" else 1

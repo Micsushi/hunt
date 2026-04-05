@@ -298,6 +298,27 @@ class Stage32Tests(unittest.TestCase):
         self.assertEqual(row["apply_type"], "external_apply")
         self.assertEqual(row["last_enrichment_error"], None)
 
+    def test_indeed_ui_verify_browser_launch_failure_does_not_leave_processing(self):
+        with self.with_temp_db() as path:
+            job_id = self.insert_job(
+                path,
+                source="indeed",
+                job_url="https://ca.indeed.com/viewjob?jk=556",
+            )
+            with patch.object(enrich_indeed, "open_browser_context", side_effect=enrich_indeed.BrowserRuntimeError("Missing X server")):
+                exit_code = enrich_indeed.process_one_job(
+                    job_id=job_id,
+                    timeout_ms=1000,
+                    force=True,
+                    ui_verify=True,
+                )
+                row = db.get_job_by_id(job_id)
+
+        self.assertEqual(exit_code, 1)
+        self.assertNotEqual(row["enrichment_status"], "processing")
+        self.assertEqual(row["enrichment_status"], "failed")
+        self.assertIn("browser_unavailable", row["last_enrichment_error"])
+
     def test_indeed_enrichment_reuses_existing_description_when_page_parse_misses(self):
         page_url = "https://ca.indeed.com/viewjob?jk=444"
         html = """

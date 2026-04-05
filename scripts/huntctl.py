@@ -201,7 +201,7 @@ def cmd_review(_args):
 
 def cmd_tests(args):
     if args.stage == "all":
-        patterns = ["test_stage1.py", "test_stage2.py", "test_stage3.py"]
+        patterns = ["test_stage1.py", "test_stage2.py", "test_stage3.py", "test_stage32.py"]
     else:
         patterns = [f"test_stage{args.stage}.py"]
 
@@ -270,7 +270,7 @@ def build_parser():
     scrape.add_argument("--skip-enrichment", action="store_true")
     scrape.set_defaults(func=cmd_scrape)
 
-    enrich = subparsers.add_parser("enrich", help="Run direct LinkedIn enrichment commands.")
+    enrich = subparsers.add_parser("enrich", help="Run direct enrichment commands for supported sources.")
     enrich.add_argument("--source", choices=["linkedin", "indeed", "all"], default="linkedin")
     enrich.add_argument("--job-id", type=int)
     enrich.add_argument("--limit", type=int)
@@ -341,7 +341,7 @@ def build_parser():
     review.set_defaults(func=cmd_review)
 
     tests = subparsers.add_parser("tests", help="Run Hunt unit tests.")
-    tests.add_argument("stage", choices=["1", "2", "3", "all"], default="all", nargs="?")
+    tests.add_argument("stage", choices=["1", "2", "3", "32", "all"], default="all", nargs="?")
     tests.set_defaults(func=cmd_tests)
 
     runner = subparsers.add_parser("runner", help="Run the continuous local runner.")
