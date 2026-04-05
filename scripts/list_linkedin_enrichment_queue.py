@@ -6,6 +6,10 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_DB_PATH = REPO_ROOT / "hunt.db"
+SCRAPER_DIR = REPO_ROOT / "scraper"
+sys.path.insert(0, str(SCRAPER_DIR))
+
+from config import ENRICHMENT_MAX_ATTEMPTS  # noqa: E402
 
 
 def main():
@@ -14,6 +18,7 @@ def main():
         "--status",
         default="pending",
         choices=[
+            "ready",
             "pending",
             "processing",
             "done",
@@ -40,7 +45,8 @@ def main():
             rows = conn.execute(
                 """
                 SELECT id, company, title, apply_type, enrichment_status, enrichment_attempts,
-                       date_scraped, last_enrichment_error
+                       date_scraped, last_enrichment_error, last_enrichment_started_at,
+                       next_enrichment_retry_at
                 FROM jobs
                 WHERE source = 'linkedin'
                 ORDER BY date_scraped DESC, id DESC
@@ -48,11 +54,37 @@ def main():
                 """,
                 (args.limit,),
             ).fetchall()
+        elif args.status == "ready":
+            rows = conn.execute(
+                """
+                SELECT id, company, title, apply_type, enrichment_status, enrichment_attempts,
+                       date_scraped, last_enrichment_error, last_enrichment_started_at,
+                       next_enrichment_retry_at
+                FROM jobs
+                WHERE source = 'linkedin'
+                  AND (
+                        enrichment_status = 'pending'
+                     OR (
+                        enrichment_status = 'failed'
+                    AND next_enrichment_retry_at IS NOT NULL
+                        AND next_enrichment_retry_at <= CURRENT_TIMESTAMP
+                        AND coalesce(enrichment_attempts, 0) < ?
+                     )
+                  )
+                ORDER BY CASE enrichment_status WHEN 'pending' THEN 0 ELSE 1 END,
+                         coalesce(next_enrichment_retry_at, date_scraped) ASC,
+                         date_scraped DESC,
+                         id DESC
+                LIMIT ?
+                """,
+                (ENRICHMENT_MAX_ATTEMPTS, args.limit),
+            ).fetchall()
         else:
             rows = conn.execute(
                 """
                 SELECT id, company, title, apply_type, enrichment_status, enrichment_attempts,
-                       date_scraped, last_enrichment_error
+                       date_scraped, last_enrichment_error, last_enrichment_started_at,
+                       next_enrichment_retry_at
                 FROM jobs
                 WHERE source = 'linkedin'
                   AND enrichment_status = ?
@@ -76,6 +108,10 @@ def main():
         )
         if row["last_enrichment_error"]:
             message += f" | error={row['last_enrichment_error']}"
+        if row["last_enrichment_started_at"]:
+            message += f" | started_at={row['last_enrichment_started_at']}"
+        if row["next_enrichment_retry_at"]:
+            message += f" | next_retry_at={row['next_enrichment_retry_at']}"
         print(message)
     return 0
 

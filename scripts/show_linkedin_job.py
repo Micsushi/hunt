@@ -26,7 +26,8 @@ def main():
             SELECT id, title, company, source, job_url, apply_url, description,
                    status, apply_type, auto_apply_eligible, enrichment_status,
                    enrichment_attempts, enriched_at, last_enrichment_error,
-                   apply_host, ats_type
+                   apply_host, ats_type, last_enrichment_started_at,
+                   next_enrichment_retry_at
             FROM jobs
             WHERE id = ?
             """,

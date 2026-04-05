@@ -47,7 +47,12 @@ Current status:
 - DB migration for enrichment exists
 - LinkedIn browser enrichment exists
 - the repo now supports post-scrape enrichment inside the main scrape flow
-- current focus is Stage 3 hardening, retries, and deployment/runtime design
+- the repo now includes Stage 3 runtime code:
+  - retry/backoff policy
+  - stale-processing recovery
+  - queue-health CLI visibility
+  - a minimal review/control-plane web app
+- current focus is Stage 3 deployment rollout on `server2`
 - deployment notes for `server2` live in `docs/components/component1/stage3_server2_plan.md`
 
 Doc:

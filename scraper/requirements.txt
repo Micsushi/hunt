@@ -8,3 +8,5 @@ pydantic
 regex
 markdownify
 playwright
+fastapi
+uvicorn

@@ -18,6 +18,7 @@ The main goal of Stage 3 is to make Component 1 run continuously and safely on t
 Current Component 1 state in this repo:
 - Stage 1 is complete
 - Stage 2 is complete
+- Stage 3 runtime code now exists in the Hunt repo
 - `scraper/scraper.py` now supports discovery followed by a post-scrape LinkedIn enrichment pass
 - `scraper/runner.py` can loop discovery + enrichment continuously
 - `scraper/enrich_linkedin.py` supports:
@@ -26,6 +27,9 @@ Current Component 1 state in this repo:
   - blocked/security statuses
   - `--ui-verify`
   - `--ui-verify-blocked`
+- `scraper/enrichment_policy.py` now defines retry and backoff behavior for unattended runs
+- `scripts/queue_health.py` now exposes queue-health checks for operators
+- `review_app.py` now provides the minimal browser-facing review/control-plane service
 
 ### `ansible_homelab` repo
 
@@ -153,13 +157,16 @@ The intended production flow is:
 
 This keeps the hot path automatic while preserving a manual lane for exceptions.
 
-## What Stage 3 Still Needs To Implement
+## What Stage 3 Implements In The Hunt Repo
 
-Stage 3 is partially implemented already. The remaining work is mostly operational hardening.
+The Hunt repo now contains the runtime code for Stage 3. The remaining work is mostly deployment rollout and operational polish in `ansible_homelab`.
 
 ### 1. Retry and backoff policy
 
-Implement a clear retry policy by error type.
+Implemented in:
+- `scraper/enrichment_policy.py`
+- `scraper/db.py`
+- `scraper/enrich_linkedin.py`
 
 Recommended policy:
 - `easy_apply`
@@ -198,7 +205,7 @@ This keeps the timer predictable and prevents a single large backlog from monopo
 
 ### 3. Manual review service
 
-Add a separate browser-facing service on `server2` for queue review and operator actions.
+The repo now includes a separate browser-facing service for queue review and operator actions.
 
 Recommended service name:
 - `hunt-review`
@@ -221,11 +228,28 @@ Recommended purpose:
   - request UI verification
   - mark skipped/manual
 
-This should be a separate service from the scraper timer.
+Current repo implementation:
+- `review_app.py`
+- HTML routes:
+  - `/`
+  - `/jobs`
+  - `/jobs/{id}`
+- API routes:
+  - `/health`
+  - `/api/summary`
+  - `/api/jobs`
+  - `/api/jobs/{id}`
+  - `/api/jobs/{id}/requeue`
+
+This should still be deployed as a separate service from the scraper timer.
 
 ### 4. Queue monitoring
 
-Add lightweight operational checks for:
+Current repo implementation:
+- `scripts/queue_health.py`
+- `scraper/db.py` queue summary helpers
+
+Implemented checks include:
 - pending backlog size
 - rows stuck in `processing`
 - blocked count
@@ -340,11 +364,10 @@ Important assumption:
 
 ## Recommended Next Implementation Order
 
-1. Harden the unattended timer deployment in `ansible_homelab`
+1. Roll out the existing Stage 3 Hunt code in `ansible_homelab`
    - Playwright browser install
    - env vars
    - auth-state path expectations
-2. Finalize retry/backoff policy in Hunt
-3. Add the `hunt-review` service design and minimal UI
-4. Add queue-health visibility and stale `processing` handling
-5. Only then begin wiring in broader agent orchestration for Component 2 and 3
+2. Deploy `review_app.py` as the `hunt-review` service on `server2`
+3. Add monitoring wiring from the queue-health outputs into your preferred service layer
+4. Only then begin wiring in broader agent orchestration for Component 2 and 3

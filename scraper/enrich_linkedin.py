@@ -12,6 +12,7 @@ from db import (
     mark_linkedin_enrichment_failed,
     mark_linkedin_enrichment_succeeded,
 )
+from enrichment_policy import compute_retry_after, format_sqlite_timestamp
 from linkedin_session import LinkedInSessionError, assert_logged_in, open_linkedin_context
 from url_utils import (
     detect_ats_type,
@@ -849,6 +850,17 @@ def get_failure_enrichment_status(error_code, *, ui_verify=False):
     return FAILURE_STATUS_DEFAULT
 
 
+def get_next_retry_timestamp(claimed_job, error_code, *, ui_verify=False):
+    if ui_verify:
+        return None
+
+    retry_after = compute_retry_after(
+        error_code,
+        claimed_job.get("enrichment_attempts"),
+    )
+    return format_sqlite_timestamp(retry_after) if retry_after else None
+
+
 def process_claimed_job(
     claimed_job,
     *,
@@ -914,16 +926,24 @@ def process_claimed_job(
         error_message = format_error_message(exc)
         error_code = get_error_code(error_message)
         failure_update_kwargs = build_failure_update_kwargs(exc)
+        next_retry_timestamp = get_next_retry_timestamp(
+            claimed_job,
+            error_code,
+            ui_verify=ui_verify,
+        )
         mark_linkedin_enrichment_failed(
             claimed_job["id"],
             error_message,
             enrichment_status=get_failure_enrichment_status(error_code, ui_verify=ui_verify),
+            next_enrichment_retry_at=next_retry_timestamp,
             **failure_update_kwargs,
         )
         elapsed_seconds = time.monotonic() - started_at
         print("[enrich] Failed")
         print(f"  id: {claimed_job['id']}")
         print(f"  error: {error_message}")
+        if next_retry_timestamp:
+            print(f"  next_retry_at: {next_retry_timestamp}")
         if failure_update_kwargs:
             print(f"  partial_apply_type: {failure_update_kwargs.get('apply_type')}")
             print(f"  partial_apply_url: {failure_update_kwargs.get('apply_url')}")

@@ -5,7 +5,7 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from jobspy import scrape_jobs
-from db import add_job, count_pending_linkedin_jobs, init_db
+from db import add_job, count_ready_linkedin_jobs_for_enrichment, init_db
 from config import (
     ENRICH_AFTER_SCRAPE,
     ENRICHMENT_BATCH_LIMIT,
@@ -145,15 +145,15 @@ def run_pending_linkedin_enrichment(
     browser_channel=None,
     ui_verify_blocked=False,
 ):
-    pending_count = count_pending_linkedin_jobs()
-    if pending_count == 0:
-        print("[scrape] No pending LinkedIn rows to enrich after discovery.")
+    ready_count = count_ready_linkedin_jobs_for_enrichment()
+    if ready_count == 0:
+        print("[scrape] No LinkedIn rows are ready for enrichment after discovery.")
         return 0
 
     if limit is None:
-        effective_limit = pending_count
+        effective_limit = ready_count
     else:
-        effective_limit = max(0, min(limit, pending_count))
+        effective_limit = max(0, min(limit, ready_count))
 
     if effective_limit == 0:
         print("[scrape] Post-scrape LinkedIn enrichment is enabled, but the configured limit is 0.")
@@ -161,7 +161,7 @@ def run_pending_linkedin_enrichment(
 
     print(
         f"[scrape] Starting post-scrape LinkedIn enrichment for up to {effective_limit} "
-        f"pending row(s) out of {pending_count}."
+        f"ready row(s) out of {ready_count}."
     )
 
     try:

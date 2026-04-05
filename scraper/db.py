@@ -1,6 +1,13 @@
 import sqlite3
+from datetime import timedelta
 
-from config import DB_PATH, TITLE_BLACKLIST
+from config import (
+    DB_PATH,
+    ENRICHMENT_MAX_ATTEMPTS,
+    ENRICHMENT_STALE_PROCESSING_MINUTES,
+    TITLE_BLACKLIST,
+)
+from enrichment_policy import format_sqlite_timestamp, utc_now
 from url_utils import detect_ats_type, get_apply_host, looks_like_linkedin_url, normalize_apply_url
 
 
@@ -28,7 +35,9 @@ CREATE TABLE IF NOT EXISTS jobs (
     enriched_at TEXT,
     last_enrichment_error TEXT,
     apply_host TEXT,
-    ats_type TEXT
+    ats_type TEXT,
+    last_enrichment_started_at TEXT,
+    next_enrichment_retry_at TEXT
 )
 """
 
@@ -41,6 +50,8 @@ MIGRATION_COLUMNS = {
     "last_enrichment_error": "TEXT",
     "apply_host": "TEXT",
     "ats_type": "TEXT",
+    "last_enrichment_started_at": "TEXT",
+    "next_enrichment_retry_at": "TEXT",
 }
 
 INSERT_COLUMNS = (
@@ -96,6 +107,24 @@ def _backfill_enrichment_metadata(cursor):
         UPDATE jobs
         SET enrichment_attempts = 0
         WHERE enrichment_attempts IS NULL
+        """
+    )
+
+    cursor.execute(
+        """
+        UPDATE jobs
+        SET last_enrichment_started_at = NULL
+        WHERE last_enrichment_started_at IS NOT NULL
+          AND trim(last_enrichment_started_at) = ''
+        """
+    )
+
+    cursor.execute(
+        """
+        UPDATE jobs
+        SET next_enrichment_retry_at = NULL
+        WHERE next_enrichment_retry_at IS NOT NULL
+          AND trim(next_enrichment_retry_at) = ''
         """
     )
 
@@ -165,6 +194,38 @@ def _backfill_enrichment_metadata(cursor):
         CREATE INDEX IF NOT EXISTS idx_jobs_linkedin_enrichment
         ON jobs(source, enrichment_status, date_scraped DESC)
         """
+    )
+
+    cursor.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_jobs_linkedin_retry_queue
+        ON jobs(source, enrichment_status, next_enrichment_retry_at, date_scraped DESC)
+        """
+    )
+
+
+def _requeue_stale_processing_rows(cursor):
+    stale_cutoff = format_sqlite_timestamp(utc_now().replace(microsecond=0))
+    if ENRICHMENT_STALE_PROCESSING_MINUTES:
+        stale_cutoff = format_sqlite_timestamp(
+            utc_now() - timedelta(minutes=ENRICHMENT_STALE_PROCESSING_MINUTES)
+        )
+
+    cursor.execute(
+        """
+        UPDATE jobs
+        SET enrichment_status = 'pending',
+            last_enrichment_error = 'stale_processing: Requeued automatically after a stale processing claim.',
+            last_enrichment_started_at = NULL,
+            next_enrichment_retry_at = NULL
+        WHERE source = 'linkedin'
+          AND enrichment_status = 'processing'
+          AND (
+                last_enrichment_started_at IS NULL
+             OR last_enrichment_started_at <= ?
+          )
+        """,
+        (stale_cutoff,),
     )
 
 
@@ -263,6 +324,7 @@ def init_db():
         cursor.execute(JOBS_TABLE_SQL)
         _migrate_jobs_table(cursor)
         _backfill_enrichment_metadata(cursor)
+        _requeue_stale_processing_rows(cursor)
         _backfill_linkedin_derived_fields(conn)
         conn.commit()
     finally:
@@ -302,7 +364,9 @@ def requeue_linkedin_rows_for_refresh(*, limit=None):
             f"""
             UPDATE jobs
             SET enrichment_status = 'pending',
-                last_enrichment_error = NULL
+                last_enrichment_error = NULL,
+                last_enrichment_started_at = NULL,
+                next_enrichment_retry_at = NULL
             WHERE id IN ({placeholders})
               AND source = 'linkedin'
             """,
@@ -331,6 +395,57 @@ def count_pending_linkedin_jobs():
         conn.close()
 
 
+def count_ready_linkedin_jobs_for_enrichment():
+    conn = get_connection()
+    try:
+        cursor = conn.cursor()
+        row = cursor.execute(
+            """
+            SELECT COUNT(*)
+            FROM jobs
+            WHERE source = 'linkedin'
+              AND (
+                    enrichment_status = 'pending'
+                 OR (
+                        enrichment_status = 'failed'
+                    AND next_enrichment_retry_at IS NOT NULL
+                    AND next_enrichment_retry_at <= CURRENT_TIMESTAMP
+                    AND coalesce(enrichment_attempts, 0) < ?
+                 )
+              )
+            """,
+            (ENRICHMENT_MAX_ATTEMPTS,),
+        ).fetchone()
+        return int(row[0] if row else 0)
+    finally:
+        conn.close()
+
+
+def count_stale_processing_linkedin_jobs():
+    conn = get_connection()
+    try:
+        cursor = conn.cursor()
+        stale_cutoff = format_sqlite_timestamp(
+            utc_now() - timedelta(minutes=ENRICHMENT_STALE_PROCESSING_MINUTES)
+        )
+        row = cursor.execute(
+            """
+            SELECT COUNT(*)
+            FROM jobs
+            WHERE source = 'linkedin'
+              AND enrichment_status = 'processing'
+              AND (
+                    last_enrichment_started_at IS NULL
+                 OR last_enrichment_started_at <= ?
+              )
+            """,
+            (stale_cutoff,),
+        ).fetchone()
+        return int(row[0] if row else 0)
+    finally:
+        conn.close()
+
+
 def claim_linkedin_job_for_enrichment(job_id=None, force=False):
     conn = get_connection()
     try:
@@ -342,10 +457,22 @@ def claim_linkedin_job_for_enrichment(job_id=None, force=False):
                 """
                 SELECT * FROM jobs
                 WHERE source = 'linkedin'
-                  AND enrichment_status = 'pending'
-                ORDER BY date_scraped DESC, id DESC
+                  AND (
+                        enrichment_status = 'pending'
+                     OR (
+                            enrichment_status = 'failed'
+                        AND next_enrichment_retry_at IS NOT NULL
+                        AND next_enrichment_retry_at <= CURRENT_TIMESTAMP
+                        AND coalesce(enrichment_attempts, 0) < ?
+                     )
+                  )
+                ORDER BY CASE enrichment_status WHEN 'pending' THEN 0 ELSE 1 END,
+                         coalesce(next_enrichment_retry_at, date_scraped) ASC,
+                         date_scraped DESC,
+                         id DESC
                 LIMIT 1
-                """
+                """,
+                (ENRICHMENT_MAX_ATTEMPTS,),
             )
         elif force:
             cursor.execute(
@@ -362,9 +489,17 @@ def claim_linkedin_job_for_enrichment(job_id=None, force=False):
                 SELECT * FROM jobs
                 WHERE id = ?
                   AND source = 'linkedin'
-                  AND enrichment_status = 'pending'
+                  AND (
+                        enrichment_status = 'pending'
+                     OR (
+                            enrichment_status = 'failed'
+                        AND next_enrichment_retry_at IS NOT NULL
+                        AND next_enrichment_retry_at <= CURRENT_TIMESTAMP
+                        AND coalesce(enrichment_attempts, 0) < ?
+                     )
+                  )
                 """,
-                (job_id,),
+                (job_id, ENRICHMENT_MAX_ATTEMPTS),
             )
 
         row = cursor.fetchone()
@@ -378,7 +513,9 @@ def claim_linkedin_job_for_enrichment(job_id=None, force=False):
                 UPDATE jobs
                 SET enrichment_status = 'processing',
                     enrichment_attempts = coalesce(enrichment_attempts, 0) + 1,
-                    last_enrichment_error = NULL
+                    last_enrichment_error = NULL,
+                    last_enrichment_started_at = CURRENT_TIMESTAMP,
+                    next_enrichment_retry_at = NULL
                 WHERE id = ?
                   AND source = 'linkedin'
                 """
@@ -388,7 +525,9 @@ def claim_linkedin_job_for_enrichment(job_id=None, force=False):
                 UPDATE jobs
                 SET enrichment_status = 'processing',
                     enrichment_attempts = coalesce(enrichment_attempts, 0) + 1,
-                    last_enrichment_error = NULL
+                    last_enrichment_error = NULL,
+                    last_enrichment_started_at = CURRENT_TIMESTAMP,
+                    next_enrichment_retry_at = NULL
                 WHERE id = ?
                   AND source = 'linkedin'
                   AND coalesce(enrichment_status, '') != 'processing'
@@ -434,7 +573,9 @@ def mark_linkedin_enrichment_succeeded(
                 enriched_at = CURRENT_TIMESTAMP,
                 last_enrichment_error = NULL,
                 apply_host = ?,
-                ats_type = ?
+                ats_type = ?,
+                last_enrichment_started_at = NULL,
+                next_enrichment_retry_at = NULL
             WHERE id = ?
               AND source = 'linkedin'
             """,
@@ -460,6 +601,7 @@ def mark_linkedin_enrichment_failed(
     error_message,
     *,
     enrichment_status="failed",
+    next_enrichment_retry_at=_UNSET,
     description=_UNSET,
     apply_type=_UNSET,
     auto_apply_eligible=_UNSET,
@@ -477,6 +619,7 @@ def mark_linkedin_enrichment_failed(
         params = [enrichment_status, error_message]
 
         optional_updates = (
+            ("next_enrichment_retry_at", next_enrichment_retry_at),
             ("description", description),
             ("apply_type", apply_type),
             ("auto_apply_eligible", auto_apply_eligible),
@@ -490,6 +633,9 @@ def mark_linkedin_enrichment_failed(
             updates.append(f"{column_name} = ?")
             params.append(value)
 
+        if enrichment_status != "processing":
+            updates.append("last_enrichment_started_at = NULL")
+
         params.append(job_id)
         cursor.execute(
             f"""
@@ -502,6 +648,165 @@ def mark_linkedin_enrichment_failed(
         )
         conn.commit()
         return cursor.rowcount
+    finally:
+        conn.close()
+
+
+def requeue_linkedin_job(job_id):
+    conn = get_connection()
+    try:
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            UPDATE jobs
+            SET enrichment_status = 'pending',
+                last_enrichment_error = NULL,
+                last_enrichment_started_at = NULL,
+                next_enrichment_retry_at = NULL
+            WHERE id = ?
+              AND source = 'linkedin'
+            """,
+            (job_id,),
+        )
+        conn.commit()
+        return cursor.rowcount
+    finally:
+        conn.close()
+
+
+def get_linkedin_queue_summary():
+    conn = get_connection()
+    try:
+        cursor = conn.cursor()
+        stale_cutoff = format_sqlite_timestamp(
+            utc_now() - timedelta(minutes=ENRICHMENT_STALE_PROCESSING_MINUTES)
+        )
+        counts = {
+            row["enrichment_status"] or "unknown": row["count"]
+            for row in cursor.execute(
+                """
+                SELECT enrichment_status, COUNT(*) AS count
+                FROM jobs
+                WHERE source = 'linkedin'
+                GROUP BY enrichment_status
+                """
+            ).fetchall()
+        }
+        failure_counts = {
+            row["error_code"]: row["count"]
+            for row in cursor.execute(
+                """
+                SELECT
+                    CASE
+                        WHEN last_enrichment_error IS NULL OR trim(last_enrichment_error) = '' THEN 'unknown'
+                        WHEN instr(last_enrichment_error, ':') > 0 THEN substr(last_enrichment_error, 1, instr(last_enrichment_error, ':') - 1)
+                        ELSE last_enrichment_error
+                    END AS error_code,
+                    COUNT(*) AS count
+                FROM jobs
+                WHERE source = 'linkedin'
+                  AND enrichment_status IN ('failed', 'blocked', 'blocked_verified')
+                GROUP BY error_code
+                ORDER BY count DESC, error_code ASC
+                """
+            ).fetchall()
+        }
+
+        oldest_processing = cursor.execute(
+            """
+            SELECT MIN(last_enrichment_started_at)
+            FROM jobs
+            WHERE source = 'linkedin'
+              AND enrichment_status = 'processing'
+            """
+        ).fetchone()[0]
+
+        ready_count = cursor.execute(
+            """
+            SELECT COUNT(*)
+            FROM jobs
+            WHERE source = 'linkedin'
+              AND (
+                    enrichment_status = 'pending'
+                 OR (
+                        enrichment_status = 'failed'
+                    AND next_enrichment_retry_at IS NOT NULL
+                    AND next_enrichment_retry_at <= CURRENT_TIMESTAMP
+                    AND coalesce(enrichment_attempts, 0) < ?
+                 )
+              )
+            """,
+            (ENRICHMENT_MAX_ATTEMPTS,),
+        ).fetchone()[0]
+
+        stale_processing_count = cursor.execute(
+            """
+            SELECT COUNT(*)
+            FROM jobs
+            WHERE source = 'linkedin'
+              AND enrichment_status = 'processing'
+              AND (
+                    last_enrichment_started_at IS NULL
+                 OR last_enrichment_started_at <= ?
+              )
+            """,
+            (stale_cutoff,),
+        ).fetchone()[0]
+
+        return {
+            "total": sum(counts.values()),
+            "counts_by_status": counts,
+            "ready_count": int(ready_count or 0),
+            "pending_count": counts.get("pending", 0),
+            "blocked_count": counts.get("blocked", 0) + counts.get("blocked_verified", 0),
+            "stale_processing_count": int(stale_processing_count or 0),
+            "oldest_processing_started_at": oldest_processing,
+            "failure_counts": failure_counts,
+        }
+    finally:
+        conn.close()
+
+
+def list_linkedin_jobs_for_review(*, status="all", limit=50, include_description=False):
+    conn = get_connection()
+    try:
+        cursor = conn.cursor()
+        base_select = """
+            SELECT id, title, company, source, job_url, apply_url, description,
+                   status, apply_type, auto_apply_eligible, enrichment_status,
+                   enrichment_attempts, enriched_at, last_enrichment_error,
+                   apply_host, ats_type, last_enrichment_started_at, next_enrichment_retry_at,
+                   date_scraped
+            FROM jobs
+            WHERE source = 'linkedin'
+        """
+
+        params = []
+        if status == "ready":
+            base_select += """
+              AND (
+                    enrichment_status = 'pending'
+                 OR (
+                        enrichment_status = 'failed'
+                    AND next_enrichment_retry_at IS NOT NULL
+                    AND next_enrichment_retry_at <= CURRENT_TIMESTAMP
+                    AND coalesce(enrichment_attempts, 0) < ?
+                 )
+              )
+            """
+            params.append(ENRICHMENT_MAX_ATTEMPTS)
+        elif status != "all":
+            base_select += " AND enrichment_status = ?"
+            params.append(status)
+
+        base_select += " ORDER BY date_scraped DESC, id DESC LIMIT ?"
+        params.append(limit)
+
+        rows = [dict(row) for row in cursor.execute(base_select, tuple(params)).fetchall()]
+        if not include_description:
+            for row in rows:
+                row["description"] = None
+        return rows
     finally:
         conn.close()
 

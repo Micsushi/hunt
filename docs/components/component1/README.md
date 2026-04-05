@@ -101,18 +101,28 @@ Auth setup note:
 
 ### Stage 3 : batch enrichment and runner integration
 
-Current state:
-- batch processing already exists in `scraper/enrich_linkedin.py`
-- `scraper/runner.py` now calls discovery and then a post-scrape LinkedIn enrichment pass each cycle
-- `scraper/scraper.py` can now do the same thing for one-off manual runs
-- blocked rows can be rerun interactively with `--ui-verify`
+Implemented files:
+- `scraper/enrich_linkedin.py`
+- `scraper/enrichment_policy.py`
+- `scraper/db.py`
+- `scraper/scraper.py`
+- `scraper/runner.py`
+- `review_app.py`
+- `scripts/queue_health.py`
 
-Still to implement:
-- retry limits and backoff
-- unattended-server failure policy by error code
-- a browser-facing review/control-plane service
-- queue-health visibility and stale-processing cleanup
-- cleaner server deployment notes for the `ansible_homelab` repo
+Implemented behavior:
+- batch processing for pending and retry-due LinkedIn rows
+- post-scrape enrichment inside `scraper.py`
+- continuous discovery + enrichment inside `runner.py`
+- retry scheduling with `next_enrichment_retry_at`
+- stale `processing` recovery with `last_enrichment_started_at`
+- bounded retries using `ENRICHMENT_MAX_ATTEMPTS`
+- queue-health CLI visibility
+- browser-facing review/control-plane app for manual queue inspection and requeue actions
+
+Repo-level Stage 3 outcome:
+- the Hunt repo now contains the runtime code needed for unattended Stage 3 behavior
+- the remaining work is deployment rollout on `server2` through `ansible_homelab`
 
 Detailed plan:
 - see `docs/components/component1/stage3_server2_plan.md`
@@ -164,6 +174,15 @@ Useful commands:
 - verify one enriched LinkedIn row with a specific expected apply type:
   `python scripts/verify_stage2_job.py --job-id <ID> --expect-type external_apply`
 
+### Stage 3 verification
+
+- run the Stage 3 unit tests:
+  `python -m unittest discover -s tests -p "test_stage3.py" -v`
+- inspect unattended queue health:
+  `python scripts/queue_health.py`
+- browse the live review/control-plane app:
+  `python review_app.py`
+
 ### Requeue and refresh
 
 - requeue older sparse LinkedIn failures for another Stage 2 pass:
@@ -183,6 +202,8 @@ Useful commands:
   `python scraper/enrich_linkedin.py --limit 100 --channel chrome`
 - enrich a batch and then UI-verify only blocked rows:
   `python scraper/enrich_linkedin.py --limit 100 --channel chrome --ui-verify-blocked`
+- inspect Stage 3 queue health:
+  `python scripts/queue_health.py`
 
 ### Discovery plus enrichment
 
@@ -196,14 +217,18 @@ Useful commands:
   `python scraper/scraper.py --enrich-pending --enrich-limit 100 --channel chrome --ui-verify-blocked`
 - run the continuous server loop:
   `python scraper/runner.py`
+- start the browser-facing review/control-plane app locally:
+  `python review_app.py`
+- expose the review app with uvicorn explicitly if preferred:
+  `uvicorn review_app:app --host 127.0.0.1 --port 8000`
 
 ### Stage 4 : hardening and backfill
 
 Planned changes:
 - backfill old LinkedIn rows in batches
 - add screenshots or saved HTML for hard failures
-- add monitoring counters and queue health checks
-- document server setup for Playwright auth state and Chromium dependencies
+- add richer monitoring/export paths beyond the queue-health script and review app
+- finish server deployment steps for Playwright auth state and Chromium dependencies in `ansible_homelab`
 
 Testing goal:
 - complete a controlled backfill

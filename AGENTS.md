@@ -24,8 +24,10 @@ Main files:
 - `scraper/db.py` : schema, migration, and DB helpers
 - `scraper/config.py` : search terms, locations, watchlist, and run interval
 - `scraper/enrich_linkedin.py` : LinkedIn enrichment worker and batch runner
+- `scraper/enrichment_policy.py` : retry/backoff policy for unattended enrichment
 - `scraper/linkedin_session.py` : LinkedIn Playwright auth-state management
 - `scraper/url_utils.py` : URL normalization and ATS detection helpers
+- `review_app.py` : browser-facing review/control-plane app for the live queue
 - `agents/system_prompt.md` : agent contract for downstream application automation
 
 ## Current Data Model Rules
@@ -46,6 +48,8 @@ LinkedIn-specific enrichment columns:
 - `last_enrichment_error` : last failure reason
 - `apply_host` : hostname of the external destination
 - `ats_type` : `greenhouse`, `lever`, `workday`, `ashby`, `smartrecruiters`, `jobvite`, `icims`, `bamboohr`, or `unknown`
+- `last_enrichment_started_at` : timestamp of the current/last claim start for stale-processing recovery
+- `next_enrichment_retry_at` : next unattended retry time for retryable failures
 
 ## Business Rules
 
