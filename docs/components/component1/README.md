@@ -114,6 +114,7 @@ Implemented behavior:
 - batch processing for pending and retry-due LinkedIn rows
 - post-scrape enrichment inside `scraper.py`
 - continuous discovery + enrichment inside `runner.py`
+- blocked-row fallback support through `--ui-verify-blocked`
 - retry scheduling with `next_enrichment_retry_at`
 - stale `processing` recovery with `last_enrichment_started_at`
 - backfill of retry scheduling for older retryable failed rows
@@ -126,6 +127,9 @@ Implemented behavior:
 
 Repo-level Stage 3 outcome:
 - the Hunt repo now contains the runtime code needed for unattended Stage 3 behavior
+- the intended `server2` deployment shape is now:
+  - one service for timed scrape + enrich + blocked-row UI fallback
+  - one service for the browser-facing review app
 - the remaining work is deployment rollout on `server2` through `ansible_homelab`
 
 Detailed plan:
@@ -144,6 +148,7 @@ Useful commands:
   `python scraper/scraper.py --enrich-pending --enrich-limit 100 --channel chrome`
 - run discovery and then do a second visible-browser pass for blocked rows:
   `python scraper/scraper.py --enrich-pending --enrich-limit 100 --channel chrome --ui-verify-blocked`
+- for `server2`, the intended deployment is to keep that blocked-row UI fallback enabled, but run it on a separate virtual display such as `Xvfb :98` so it does not steal the main desktop foreground
 - enrich existing pending LinkedIn rows already in the DB without doing a new discovery scrape:
   `python scraper/enrich_linkedin.py --limit 100 --channel chrome`
 

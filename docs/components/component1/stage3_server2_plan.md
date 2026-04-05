@@ -95,30 +95,53 @@ This is different from `server1`, which uses Traefik/Authelia more directly.
 
 ## Stage 3 Runtime Model
 
-Stage 3 should use two runtime lanes.
+Stage 3 should use two deployed parts on `server2`.
 
-### Lane 1 : unattended server lane
+### Part 1 : unattended Hunt runtime
 
 Runs on `server2` continuously.
 
 Purpose:
 - discover jobs
-- enrich pending LinkedIn rows headlessly
-- leave manual-only or blocked cases for review
+- enrich pending LinkedIn rows headlessly first
+- immediately rerun blocked rows with a browser-open fallback pass
+- keep the browser-open fallback off the main desktop foreground
 
 Recommended process model:
 - continue using the Ansible-managed `hunt-scraper.service` / `hunt-scraper.timer`
-- keep it as the unattended headless worker
+- keep it as the unattended worker for discovery plus enrichment
 
 Recommended behavior each cycle:
 1. run discovery
 2. insert/update DB rows
 3. enqueue LinkedIn rows as `pending`
 4. run a bounded headless enrichment batch, prioritizing the newest pending rows first
-5. stop cleanly
-6. wait for the next timer tick
+5. immediately rerun any blocked rows with the equivalent of `--ui-verify-blocked`
+6. run that browser-open fallback on a separate virtual X display such as `:98`
+7. stop cleanly
+8. wait for the next timer tick
 
-### Lane 2 : manual review / visible-browser lane
+Why the fallback should use a separate display:
+- the browser-open retry should render a real page, not stay pure headless
+- it should not steal focus from the main desktop session
+- `Xvfb` is acceptable even when no physical monitor is attached
+
+### Part 2 : review/control-plane web app
+
+Runs continuously as a separate service.
+
+Purpose:
+- expose the live queue and DB state from a browser URL
+- let the operator inspect rows, descriptions, and errors
+- support lightweight queue actions such as requeue
+
+Recommended tools:
+- `review_app.py`
+- Docker container on `server2`
+- Cloudflare Tunnel ingress
+- optional Uptime Kuma monitor
+
+### Separate manual/operator lane
 
 Runs only when needed.
 
@@ -130,7 +153,7 @@ Recommended tools:
 - Sunshine for remote desktop access to `server2`
 - `python scraper/enrich_linkedin.py --job-id <ID> --channel chrome --ui-verify`
 
-This lane should not be part of the unattended timer by default.
+This lane still exists, but it is no longer the only way blocked rows get a browser-open retry.
 
 ## Full Stage 1 + 2 + 3 Flow
 
@@ -150,15 +173,16 @@ The intended production flow is:
    - `blocked`
    - `failed`
    - `job_removed`-style failure
-8. a human later checks:
+8. rows that become `blocked` during the first pass immediately get a second browser-open retry on the virtual display
+9. a human later checks:
    - `blocked`
    - suspicious `done`
    - important `failed`
-9. specific rows can be rerun with:
+10. specific rows can still be rerun manually with:
    - `--force`
    - `--ui-verify`
 
-This keeps the hot path automatic while preserving a manual lane for exceptions.
+This keeps the hot path automatic while preserving a manual lane for exceptions and debugging.
 
 ## What Stage 3 Implements In The Hunt Repo
 
@@ -332,6 +356,21 @@ Recommended hostname pattern:
 
 Because `server2` currently uses Cloudflare Tunnel and not Traefik/Authelia locally, the review app should follow the same `server2` model.
 
+### Xvfb-backed UI fallback for blocked rows
+
+Recommended additions to the Hunt deployment:
+- install and manage a virtual X display such as `Xvfb :98`
+- run the browser-open blocked-row fallback against that display instead of the main desktop session
+- make the display configurable through env vars so the Hunt runtime can use:
+  - normal headless enrichment first
+  - UI fallback for blocked rows on `:98`
+
+Why this is the preferred shape:
+- it keeps the blocked-row retry closer to a real browser than pure headless mode
+- it does not require a second monitor
+- it still works when no monitor is physically attached to `server2`
+- it avoids stealing the visible foreground on the main desktop
+
 ## Why The Review Service Should Be Separate
 
 The review service is not just a Stage 2 helper.
@@ -378,7 +417,8 @@ Important assumption:
    - Playwright browser install
    - env vars
    - auth-state path expectations
-2. Verify the deployed timer still prioritizes newest pending rows before older backlog
-3. Deploy `review_app.py` as the `hunt-review` service on `server2`
-4. Add monitoring wiring from the queue-health outputs into your preferred service layer
-5. Only then begin wiring in broader agent orchestration for Component 2 and 3
+2. Add the Xvfb-backed blocked-row UI fallback to the deployed Hunt runtime
+3. Verify the deployed timer still prioritizes newest pending rows before older backlog
+4. Deploy `review_app.py` as the `hunt-review` service on `server2`
+5. Add monitoring wiring from the queue-health outputs into your preferred service layer
+6. Only then begin wiring in broader agent orchestration for Component 2 and 3

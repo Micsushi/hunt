@@ -84,6 +84,10 @@ Current repo-side Stage 3 implementation notes:
 - newly discovered pending LinkedIn rows are prioritized ahead of older backlog rows during post-scrape enrichment
 - read-only queue tools and the review app should not mutate queue state during normal inspection
 - terminal failures like `job_removed` should be recorded cleanly without being treated as retryable/actionable failures
+- the intended `server2` deployment shape is two-part:
+  - timed Hunt runtime for discovery + headless enrichment + blocked-row UI fallback
+  - separate review/control-plane web app
+- for `server2`, blocked-row UI fallback is intended to run on a separate virtual display such as `Xvfb :98`, not the main desktop foreground
 
 Stage 4 : after Stage 3
 - backfill old LinkedIn jobs

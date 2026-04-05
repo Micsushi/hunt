@@ -1,6 +1,38 @@
 import os as _os
+
+
+def _get_str_env(name, default):
+    value = _os.getenv(name)
+    if value is None:
+        return default
+    value = value.strip()
+    return value if value else default
+
+
+def _get_int_env(name, default):
+    value = _os.getenv(name)
+    if value is None or not value.strip():
+        return default
+    return int(value)
+
+
+def _get_bool_env(name, default):
+    value = _os.getenv(name)
+    if value is None or not value.strip():
+        return default
+
+    normalized = value.strip().lower()
+    if normalized in {"1", "true", "yes", "on"}:
+        return True
+    if normalized in {"0", "false", "no", "off"}:
+        return False
+    return default
+
+
 _ROOT = _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)))
-DB_PATH = _os.path.join(_ROOT, "hunt.db")
+DB_PATH = _os.path.abspath(
+    _os.path.expanduser(_get_str_env("HUNT_DB_PATH", _os.path.join(_ROOT, "hunt.db")))
+)
 
 SEARCH_TERMS = {
     "engineering": [
@@ -46,20 +78,20 @@ LOCATIONS = [
 
 SITES = ["indeed", "linkedin"]
 
-MAX_WORKERS = 10
-RESULTS_WANTED = 500
-HOURS_OLD = 24         # 24h lookback — job_url uniqueness handles dedup across runs
-RUN_INTERVAL_SECONDS = 600   # 10 minutes between runs
-ENRICH_AFTER_SCRAPE = True
-ENRICHMENT_BATCH_LIMIT = 25
-ENRICHMENT_TIMEOUT_MS = 45000
-ENRICHMENT_SLOW_MO_MS = 0
-ENRICHMENT_HEADFUL = False
-ENRICHMENT_UI_VERIFY_BLOCKED = False
-ENRICHMENT_MAX_ATTEMPTS = 4
-ENRICHMENT_STALE_PROCESSING_MINUTES = 30
-REVIEW_APP_HOST = "127.0.0.1"
-REVIEW_APP_PORT = 8000
+MAX_WORKERS = _get_int_env("MAX_WORKERS", 10)
+RESULTS_WANTED = _get_int_env("RESULTS_WANTED", 500)
+HOURS_OLD = _get_int_env("HOURS_OLD", 24)  # 24h lookback: job_url uniqueness handles dedup across runs
+RUN_INTERVAL_SECONDS = _get_int_env("RUN_INTERVAL_SECONDS", 600)  # 10 minutes between runs
+ENRICH_AFTER_SCRAPE = _get_bool_env("ENRICH_AFTER_SCRAPE", True)
+ENRICHMENT_BATCH_LIMIT = _get_int_env("ENRICHMENT_BATCH_LIMIT", 25)
+ENRICHMENT_TIMEOUT_MS = _get_int_env("ENRICHMENT_TIMEOUT_MS", 45000)
+ENRICHMENT_SLOW_MO_MS = _get_int_env("ENRICHMENT_SLOW_MO_MS", 0)
+ENRICHMENT_HEADFUL = _get_bool_env("ENRICHMENT_HEADFUL", False)
+ENRICHMENT_UI_VERIFY_BLOCKED = _get_bool_env("ENRICHMENT_UI_VERIFY_BLOCKED", False)
+ENRICHMENT_MAX_ATTEMPTS = _get_int_env("ENRICHMENT_MAX_ATTEMPTS", 4)
+ENRICHMENT_STALE_PROCESSING_MINUTES = _get_int_env("ENRICHMENT_STALE_PROCESSING_MINUTES", 30)
+REVIEW_APP_HOST = _get_str_env("REVIEW_APP_HOST", "127.0.0.1")
+REVIEW_APP_PORT = _get_int_env("REVIEW_APP_PORT", 8000)
 
 WATCHLIST = [
     "1password", "adobe", "amazon", "amd", "apple", "atlassian",

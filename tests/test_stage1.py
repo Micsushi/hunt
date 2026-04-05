@@ -1,4 +1,5 @@
 import math
+import importlib
 import os
 import sqlite3
 import sys
@@ -19,6 +20,7 @@ jobspy_stub.scrape_jobs = lambda **kwargs: None
 sys.modules.setdefault("jobspy", jobspy_stub)
 
 import db
+import config as config_module
 import scraper as scraper_module
 
 
@@ -58,6 +60,25 @@ class Stage1Tests(unittest.TestCase):
             scraper_module.normalize_optional_str(" https://boards.greenhouse.io/acme/jobs/1 "),
             "https://boards.greenhouse.io/acme/jobs/1",
         )
+
+    def test_config_reads_env_overrides_for_stage3_runtime(self):
+        with patch.dict(
+            os.environ,
+            {
+                "HUNT_DB_PATH": os.path.join(REPO_ROOT, "tmp-hunt.db"),
+                "ENRICHMENT_BATCH_LIMIT": "7",
+                "ENRICHMENT_UI_VERIFY_BLOCKED": "true",
+                "REVIEW_APP_PORT": "9001",
+            },
+            clear=False,
+        ):
+            reloaded = importlib.reload(config_module)
+            self.assertTrue(reloaded.DB_PATH.endswith("tmp-hunt.db"))
+            self.assertEqual(reloaded.ENRICHMENT_BATCH_LIMIT, 7)
+            self.assertTrue(reloaded.ENRICHMENT_UI_VERIFY_BLOCKED)
+            self.assertEqual(reloaded.REVIEW_APP_PORT, 9001)
+
+        importlib.reload(config_module)
 
     def test_scrape_single_keeps_linkedin_rows_pending_for_browser_enrichment(self):
         jobs_df = pd.DataFrame(
