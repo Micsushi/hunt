@@ -813,6 +813,10 @@ def is_ui_verifiable_error_code(error_code):
     return error_code in BLOCKED_ERROR_CODES
 
 
+def is_non_actionable_failure_code(error_code):
+    return error_code == "job_removed"
+
+
 def should_stop_batch_after_failure(error_code, *, ui_verify_blocked=False):
     if error_code in BATCH_HARD_STOP_ERROR_CODES:
         return True
@@ -1065,6 +1069,9 @@ def process_batch(
     final_results = list(final_results_by_job_id.values())
     successes = [result for result in final_results if result["status"] == "success"]
     failures = [result for result in final_results if result["status"] == "failed"]
+    actionable_failures = [
+        result for result in failures if not is_non_actionable_failure_code(result.get("error_code"))
+    ]
 
     print("\n[batch] Summary")
     print(f"  attempted: {len(results)}")
@@ -1086,7 +1093,7 @@ def process_batch(
         for error_code, count in sorted(counts_by_error.items()):
             print(f"    {error_code}: {count}")
 
-    return 0 if not failures else 1
+    return 0 if not actionable_failures else 1
 
 
 def main():

@@ -80,6 +80,11 @@ Stage 3 : current
 - add a browser-facing review/control-plane service for manual review
 - keep the flow ready for later Component 2/3 agents
 
+Current repo-side Stage 3 implementation notes:
+- newly discovered pending LinkedIn rows are prioritized ahead of older backlog rows during post-scrape enrichment
+- read-only queue tools and the review app should not mutate queue state during normal inspection
+- terminal failures like `job_removed` should be recorded cleanly without being treated as retryable/actionable failures
+
 Stage 4 : after Stage 3
 - backfill old LinkedIn jobs
 - add monitoring and operational hardening

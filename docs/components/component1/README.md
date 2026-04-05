@@ -15,7 +15,7 @@ LinkedIn is the priority source even if other sources remain enabled.
 
 Discovery already exists in `scraper/scraper.py`.
 The discovery script can now optionally trigger a follow-up LinkedIn enrichment pass immediately after it writes rows to SQLite.
-Stage 1 and Stage 2 are complete. Stage 3 is the current focus.
+Stage 1 and Stage 2 are complete. Stage 3 repo-side code is complete and ready for deployment rollout.
 
 What Stage 1 changed:
 - `job_url` now represents the discovered listing URL
@@ -116,9 +116,13 @@ Implemented behavior:
 - continuous discovery + enrichment inside `runner.py`
 - retry scheduling with `next_enrichment_retry_at`
 - stale `processing` recovery with `last_enrichment_started_at`
+- backfill of retry scheduling for older retryable failed rows
 - bounded retries using `ENRICHMENT_MAX_ATTEMPTS`
+- newest pending rows are claimed before older backlog rows during post-scrape enrichment
+- terminal failures like `job_removed` are recorded cleanly without being treated as actionable retry failures
 - queue-health CLI visibility
 - browser-facing review/control-plane app for manual queue inspection and requeue actions
+- read-only queue tools avoid queue-maintenance side effects
 
 Repo-level Stage 3 outcome:
 - the Hunt repo now contains the runtime code needed for unattended Stage 3 behavior
@@ -182,6 +186,12 @@ Useful commands:
   `python scripts/queue_health.py`
 - browse the live review/control-plane app:
   `python review_app.py`
+- smoke-test integrated discovery plus newest-first enrichment:
+  `python scraper/scraper.py --enrich-pending --enrich-limit 5 --channel chrome`
+- confirm the ready queue still shows the newest rows first after the smoke test:
+  `python scripts/list_linkedin_enrichment_queue.py --status ready --limit 10`
+- do one continuous-loop sanity check before deployment:
+  `python scraper/runner.py`
 
 ### Requeue and refresh
 

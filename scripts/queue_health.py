@@ -40,7 +40,7 @@ def main():
     )
     args = parser.parse_args()
 
-    db.init_db()
+    db.init_db(maintenance=False)
     summary = db.get_linkedin_queue_summary()
 
     print_section("LinkedIn queue summary")

@@ -411,6 +411,10 @@ class Stage2Tests(unittest.TestCase):
             )
         )
 
+    def test_job_removed_is_non_actionable_failure(self):
+        self.assertTrue(enrich_linkedin.is_non_actionable_failure_code("job_removed"))
+        self.assertFalse(enrich_linkedin.is_non_actionable_failure_code("rate_limited"))
+
 
 if __name__ == "__main__":
     unittest.main()

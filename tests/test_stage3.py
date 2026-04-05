@@ -61,6 +61,7 @@ class Stage3Tests(unittest.TestCase):
             "enrichment_attempts": 0,
             "apply_host": None,
             "ats_type": None,
+            "last_enrichment_error": None,
             "last_enrichment_started_at": None,
             "next_enrichment_retry_at": None,
         }
@@ -74,9 +75,9 @@ class Stage3Tests(unittest.TestCase):
                     title, company, location, job_url, apply_url, description,
                     source, date_posted, is_remote, level, priority, category,
                     apply_type, auto_apply_eligible, enrichment_status,
-                    enrichment_attempts, apply_host, ats_type,
+                    enrichment_attempts, apply_host, ats_type, last_enrichment_error,
                     last_enrichment_started_at, next_enrichment_retry_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     defaults["title"],
@@ -97,6 +98,7 @@ class Stage3Tests(unittest.TestCase):
                     defaults["enrichment_attempts"],
                     defaults["apply_host"],
                     defaults["ats_type"],
+                    defaults["last_enrichment_error"],
                     defaults["last_enrichment_started_at"],
                     defaults["next_enrichment_retry_at"],
                 ),
@@ -142,6 +144,38 @@ class Stage3Tests(unittest.TestCase):
             self.assertIsNotNone(claimed["last_enrichment_started_at"])
             self.assertIsNone(claimed["next_enrichment_retry_at"])
 
+    def test_claim_prefers_newest_pending_rows_before_old_backlog(self):
+        with self.with_temp_db() as path:
+            old_id = self.insert_linkedin_job(
+                path,
+                job_url="https://www.linkedin.com/jobs/view/300",
+                date_posted="2026-03-01",
+            )
+            new_id = self.insert_linkedin_job(
+                path,
+                job_url="https://www.linkedin.com/jobs/view/301",
+                date_posted="2026-04-05",
+            )
+
+            conn = sqlite3.connect(path)
+            try:
+                conn.execute(
+                    "UPDATE jobs SET date_scraped = '2026-04-04 00:00:00' WHERE id = ?",
+                    (old_id,),
+                )
+                conn.execute(
+                    "UPDATE jobs SET date_scraped = '2026-04-05 09:00:00' WHERE id = ?",
+                    (new_id,),
+                )
+                conn.commit()
+            finally:
+                conn.close()
+
+            claimed = db.claim_linkedin_job_for_enrichment()
+
+            self.assertIsNotNone(claimed)
+            self.assertEqual(claimed["id"], new_id)
+
     def test_claim_skips_failed_rows_before_retry_time(self):
         with self.with_temp_db() as path:
             job_id = self.insert_linkedin_job(
@@ -157,6 +191,36 @@ class Stage3Tests(unittest.TestCase):
             self.assertIsNone(claimed)
             row = db.get_job_by_id(job_id)
             self.assertEqual(row["enrichment_status"], "failed")
+
+    def test_init_db_backfills_retry_schedule_for_retryable_failed_rows(self):
+        with self.with_temp_db() as path:
+            job_id = self.insert_linkedin_job(
+                path,
+                enrichment_status="failed",
+                enrichment_attempts=1,
+                last_enrichment_error="external_description_not_usable: thin application shell",
+            )
+
+            db.init_db()
+
+            row = db.get_job_by_id(job_id)
+            self.assertEqual(row["enrichment_status"], "failed")
+            self.assertIsNotNone(row["next_enrichment_retry_at"])
+
+    def test_init_db_without_maintenance_does_not_requeue_processing_rows(self):
+        with self.with_temp_db() as path:
+            job_id = self.insert_linkedin_job(
+                path,
+                enrichment_status="processing",
+                enrichment_attempts=1,
+                last_enrichment_started_at=format_sqlite_timestamp(utc_now() - timedelta(hours=2)),
+            )
+
+            db.init_db(maintenance=False)
+
+            row = db.get_job_by_id(job_id)
+            self.assertEqual(row["enrichment_status"], "processing")
+            self.assertIsNotNone(row["last_enrichment_started_at"])
 
     def test_process_claimed_job_schedules_retry_for_retryable_failure(self):
         with self.with_temp_db() as path:

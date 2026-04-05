@@ -1,6 +1,7 @@
 import html
 import os
 import sys
+from contextlib import asynccontextmanager
 from urllib.parse import quote
 
 from fastapi import FastAPI, HTTPException
@@ -33,7 +34,14 @@ STATUS_OPTIONS = (
     "all",
 )
 
-app = FastAPI(title="Hunt Review", version="0.1.0")
+
+@asynccontextmanager
+async def lifespan(app):
+    init_db(maintenance=False)
+    yield
+
+
+app = FastAPI(title="Hunt Review", version="0.1.0", lifespan=lifespan)
 
 
 def format_text(value):
@@ -404,11 +412,6 @@ def render_link_list(title, rows):
     """
 
 
-@app.on_event("startup")
-def on_startup():
-    init_db()
-
-
 @app.get("/health")
 def health():
     summary = get_linkedin_queue_summary()
@@ -557,7 +560,7 @@ def requeue_job(job_id: int):
 
 
 def main():
-    init_db()
+    init_db(maintenance=False)
     import uvicorn
 
     uvicorn.run(app, host=REVIEW_APP_HOST, port=REVIEW_APP_PORT)

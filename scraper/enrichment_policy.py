@@ -37,6 +37,12 @@ def format_sqlite_timestamp(value):
     return value.astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
 
 
+def get_error_code(error_message):
+    if not error_message:
+        return "unknown"
+    return str(error_message).split(":", 1)[0].strip()
+
+
 def is_retryable_error_code(error_code):
     return error_code in RETRYABLE_ERROR_BASE_MINUTES
 

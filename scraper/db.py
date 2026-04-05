@@ -7,7 +7,7 @@ from config import (
     ENRICHMENT_STALE_PROCESSING_MINUTES,
     TITLE_BLACKLIST,
 )
-from enrichment_policy import format_sqlite_timestamp, utc_now
+from enrichment_policy import compute_retry_after, format_sqlite_timestamp, get_error_code, utc_now
 from url_utils import detect_ats_type, get_apply_host, looks_like_linkedin_url, normalize_apply_url
 
 
@@ -204,6 +204,43 @@ def _backfill_enrichment_metadata(cursor):
     )
 
 
+def _backfill_retry_schedule(cursor):
+    rows = cursor.execute(
+        """
+        SELECT id, enrichment_attempts, last_enrichment_error
+        FROM jobs
+        WHERE source = 'linkedin'
+          AND enrichment_status = 'failed'
+          AND next_enrichment_retry_at IS NULL
+          AND last_enrichment_error IS NOT NULL
+          AND trim(last_enrichment_error) != ''
+          AND coalesce(enrichment_attempts, 0) < ?
+        """,
+        (ENRICHMENT_MAX_ATTEMPTS,),
+    ).fetchall()
+
+    for row in rows:
+        error_code = get_error_code(row["last_enrichment_error"])
+        retry_after = compute_retry_after(
+            error_code,
+            row["enrichment_attempts"],
+        )
+        if retry_after is None:
+            continue
+        cursor.execute(
+            """
+            UPDATE jobs
+            SET next_enrichment_retry_at = ?
+            WHERE id = ?
+              AND source = 'linkedin'
+            """,
+            (
+                format_sqlite_timestamp(retry_after),
+                row["id"],
+            ),
+        )
+
+
 def _requeue_stale_processing_rows(cursor):
     stale_cutoff = format_sqlite_timestamp(utc_now().replace(microsecond=0))
     if ENRICHMENT_STALE_PROCESSING_MINUTES:
@@ -317,15 +354,17 @@ def get_connection():
     return conn
 
 
-def init_db():
+def init_db(*, maintenance=True):
     conn = get_connection()
     try:
         cursor = conn.cursor()
         cursor.execute(JOBS_TABLE_SQL)
         _migrate_jobs_table(cursor)
-        _backfill_enrichment_metadata(cursor)
-        _requeue_stale_processing_rows(cursor)
-        _backfill_linkedin_derived_fields(conn)
+        if maintenance:
+            _backfill_enrichment_metadata(cursor)
+            _backfill_retry_schedule(cursor)
+            _requeue_stale_processing_rows(cursor)
+            _backfill_linkedin_derived_fields(conn)
         conn.commit()
     finally:
         conn.close()
@@ -467,7 +506,8 @@ def claim_linkedin_job_for_enrichment(job_id=None, force=False):
                      )
                   )
                 ORDER BY CASE enrichment_status WHEN 'pending' THEN 0 ELSE 1 END,
-                         coalesce(next_enrichment_retry_at, date_scraped) ASC,
+                         CASE WHEN enrichment_status = 'pending' THEN date_scraped END DESC,
+                         CASE WHEN enrichment_status != 'pending' THEN next_enrichment_retry_at END ASC,
                          date_scraped DESC,
                          id DESC
                 LIMIT 1
@@ -795,11 +835,21 @@ def list_linkedin_jobs_for_review(*, status="all", limit=50, include_description
               )
             """
             params.append(ENRICHMENT_MAX_ATTEMPTS)
+            base_select += """
+            ORDER BY CASE enrichment_status WHEN 'pending' THEN 0 ELSE 1 END,
+                     CASE WHEN enrichment_status = 'pending' THEN date_scraped END DESC,
+                     CASE WHEN enrichment_status != 'pending' THEN next_enrichment_retry_at END ASC,
+                     date_scraped DESC,
+                     id DESC
+            """
         elif status != "all":
             base_select += " AND enrichment_status = ?"
             params.append(status)
+            base_select += " ORDER BY date_scraped DESC, id DESC"
+        else:
+            base_select += " ORDER BY date_scraped DESC, id DESC"
 
-        base_select += " ORDER BY date_scraped DESC, id DESC LIMIT ?"
+        base_select += " LIMIT ?"
         params.append(limit)
 
         rows = [dict(row) for row in cursor.execute(base_select, tuple(params)).fetchall()]

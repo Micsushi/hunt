@@ -30,6 +30,9 @@ Current Component 1 state in this repo:
 - `scraper/enrichment_policy.py` now defines retry and backoff behavior for unattended runs
 - `scripts/queue_health.py` now exposes queue-health checks for operators
 - `review_app.py` now provides the minimal browser-facing review/control-plane service
+- pending rows discovered in the current scrape are now prioritized ahead of older backlog rows
+- read-only operator tooling avoids queue-maintenance side effects
+- historical retryable failed rows can be seeded into the unattended retry schedule
 
 ### `ansible_homelab` repo
 
@@ -111,7 +114,7 @@ Recommended behavior each cycle:
 1. run discovery
 2. insert/update DB rows
 3. enqueue LinkedIn rows as `pending`
-4. run a bounded headless enrichment batch
+4. run a bounded headless enrichment batch, prioritizing the newest pending rows first
 5. stop cleanly
 6. wait for the next timer tick
 
@@ -192,6 +195,9 @@ Recommended policy:
   - retry limited number of times
   - then leave `failed`
 
+Important implementation detail:
+- older retryable failed rows can now receive `next_enrichment_retry_at` during DB maintenance so the unattended retry system applies to historical rows too
+
 ### 2. Bounded enrichment per timer cycle
 
 Do not try to drain the entire backlog every 10 minutes.
@@ -255,6 +261,10 @@ Implemented checks include:
 - blocked count
 - repeated auth failures
 - recent done rate
+
+Important behavior:
+- `scripts/queue_health.py` and `review_app.py` are intended to be observational surfaces
+- they now initialize the schema without performing stale-processing recovery or other queue-maintenance side effects
 
 This can later feed:
 - Uptime Kuma
@@ -368,6 +378,7 @@ Important assumption:
    - Playwright browser install
    - env vars
    - auth-state path expectations
-2. Deploy `review_app.py` as the `hunt-review` service on `server2`
-3. Add monitoring wiring from the queue-health outputs into your preferred service layer
-4. Only then begin wiring in broader agent orchestration for Component 2 and 3
+2. Verify the deployed timer still prioritizes newest pending rows before older backlog
+3. Deploy `review_app.py` as the `hunt-review` service on `server2`
+4. Add monitoring wiring from the queue-health outputs into your preferred service layer
+5. Only then begin wiring in broader agent orchestration for Component 2 and 3
