@@ -1,27 +1,33 @@
-import sys, os
+import os
+import sys
+from urllib.parse import urlparse
+
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from jobspy import scrape_jobs
+import pandas as pd
 from db import init_db, add_job
 from config import SEARCH_TERMS, LOCATIONS, SITES, MAX_WORKERS, RESULTS_WANTED, HOURS_OLD, WATCHLIST, TITLE_BLACKLIST
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
+
 def classify_level(title):
     if not title or not isinstance(title, str):
         return "unknown"
-    
+
     title_lower = title.lower()
-    
+
     if any(word in title_lower for word in ["intern", "student", "co-op", "coop", "internship"]):
         return "intern"
-    
+
     if any(word in title_lower for word in ["new grad", "new graduate", "entry level", "entry-level", "graduate"]):
         return "new_grad"
-    
+
     if any(word in title_lower for word in ["junior", "associate", "jr.", "jr ", "engineer i", "developer i", "level 1", "l1"]):
         return "junior"
-    
+
     return "unknown"
+
 
 def is_priority(company):
     if not company or not isinstance(company, str):
@@ -29,11 +35,75 @@ def is_priority(company):
     company_lower = company.lower()
     return any(w in company_lower for w in WATCHLIST)
 
+
 def should_skip(title):
     if not title or not isinstance(title, str):
         return False
     title_lower = title.lower()
     return any(word in title_lower for word in TITLE_BLACKLIST)
+
+
+def normalize_optional_str(value):
+    try:
+        if pd.isna(value):
+            return None
+    except (TypeError, ValueError):
+        pass
+
+    if value is None:
+        return None
+    normalized = str(value).strip()
+    return normalized or None
+
+
+def detect_ats_type(url):
+    if not url:
+        return None
+
+    host = (urlparse(url).netloc or "").lower()
+    ats_hosts = {
+        "greenhouse": ("greenhouse.io",),
+        "lever": ("lever.co",),
+        "workday": ("myworkdayjobs.com", "workday.com"),
+        "ashby": ("ashbyhq.com",),
+        "smartrecruiters": ("smartrecruiters.com",),
+        "jobvite": ("jobvite.com",),
+        "icims": ("icims.com",),
+        "bamboohr": ("bamboohr.com",),
+    }
+
+    for ats_type, suffixes in ats_hosts.items():
+        if any(host.endswith(suffix) for suffix in suffixes):
+            return ats_type
+    return "unknown"
+
+
+def get_apply_host(url):
+    if not url:
+        return None
+    host = (urlparse(url).netloc or "").lower()
+    return host or None
+
+
+def build_job_urls(row, source):
+    listing_url = normalize_optional_str(row.get("job_url"))
+    direct_url = normalize_optional_str(row.get("job_url_direct"))
+
+    if source == "linkedin":
+        return listing_url, direct_url
+
+    return listing_url, direct_url or listing_url
+
+
+def build_enrichment_fields(source):
+    if source != "linkedin":
+        return None, None, None
+
+    # Discovery may retain a best-known outbound URL hint, but LinkedIn rows
+    # stay queued for browser verification until enrichment classifies the
+    # primary action as Easy Apply vs external Apply.
+    return "unknown", None, "pending"
+
 
 def scrape_single(site, term, location, category):
     print(f"  [{site}] [{category}] Searching: '{term}' in '{location}'...")
@@ -54,28 +124,43 @@ def scrape_single(site, term, location, category):
 
     jobs = []
     for _, row in jobs_df.iterrows():
-        title = row.get("title")
+        title = normalize_optional_str(row.get("title"))
+        source = normalize_optional_str(row.get("site")) or site
 
         if should_skip(title):
             continue
 
+        if not title:
+            continue
+
+        job_url, apply_url = build_job_urls(row, source)
+        description = normalize_optional_str(row.get("description"))
+        apply_type, auto_apply_eligible, enrichment_status = build_enrichment_fields(source)
+
         job_data = {
             "title": title,
-            "company": row.get("company"),
-            "location": row.get("location"),
-            "job_url": str(row.get("job_url")) if row.get("job_url") else None,
-            "apply_url": str(row.get("job_url")) if row.get("job_url") else None,
-            "description": row.get("description"),
-            "source": row.get("site"),
-            "date_posted": str(row.get("date_posted")) if row.get("date_posted") else None,
+            "company": normalize_optional_str(row.get("company")),
+            "location": normalize_optional_str(row.get("location")),
+            "job_url": job_url,
+            "apply_url": apply_url,
+            "description": description,
+            "source": source,
+            "date_posted": normalize_optional_str(row.get("date_posted")),
             "is_remote": row.get("is_remote"),
             "level": classify_level(title),
             "priority": is_priority(row.get("company")),
             "category": category,
+            "apply_type": apply_type,
+            "auto_apply_eligible": auto_apply_eligible,
+            "enrichment_status": enrichment_status,
+            "enrichment_attempts": 0,
+            "apply_host": get_apply_host(apply_url),
+            "ats_type": detect_ats_type(apply_url),
         }
         if job_data["job_url"]:
             jobs.append(job_data)
     return jobs
+
 
 def scrape():
     init_db()
@@ -108,8 +193,10 @@ def scrape():
 
     print(f"\nDone! Scraped {len(all_jobs)} total jobs, added {added} new to database ({len(all_jobs) - added} duplicates skipped)")
 
+
 if __name__ == "__main__":
     import time
+
     start = time.time()
     scrape()
     elapsed = time.time() - start
