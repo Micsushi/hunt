@@ -153,6 +153,74 @@ Useful commands:
 - enrich existing pending LinkedIn rows already in the DB without doing a new discovery scrape:
   `python scraper/enrich_linkedin.py --limit 100 --channel chrome`
 
+### Stage 3.2 : multi-source enrichment on top of the Stage 3 runtime
+
+Goal:
+- keep the existing Stage 3 queue/runtime/review-app infrastructure
+- expand enrichment beyond LinkedIn without building a second enrichment system
+- start with Indeed as the first non-LinkedIn source
+
+Guiding approach:
+- reuse the current enrichment columns and retry model where possible
+- reuse the existing claim/update/review flow instead of creating source-specific queue tables
+- add source-specific enrichers behind one shared runtime shape
+
+What should be reused:
+- `scraper/db.py` claim/update/retry helpers
+- `scraper/enrichment_policy.py` retry and hard-stop policy
+- `scraper/enrich_linkedin.py` as the reference worker shape
+- `scraper/scraper.py` post-scrape enrichment hook
+- `review_app.py` as the operator UI
+
+Planned implementation shape:
+- keep one jobs table
+- keep one review app
+- keep one timer/service
+- add a shared source-aware enrichment dispatcher
+- keep LinkedIn as the richest/most advanced enricher
+- add Indeed next
+
+Recommended worker split:
+- `scraper/enrichors/base.py`
+- `scraper/enrichors/linkedin.py`
+- `scraper/enrichors/indeed.py`
+- later adapters for other sources as needed
+
+Shared enrichment contract per worker:
+- return `description`
+- return `apply_url`
+- return `apply_host`
+- return `ats_type`
+- return `apply_type`
+- return `status`
+- return `error_code`
+
+Indeed as the first Stage 3.2 source:
+- open the Indeed job page directly
+- extract the full description from the Indeed page
+- capture any outbound apply URL when present
+- normalize/store `apply_url`, `apply_host`, and `ats_type`
+- reuse the same DB update helpers and retry/error handling style
+
+Current review-app behavior that supports Stage 3.2:
+- all sources are now shown in the jobs table
+- non-LinkedIn rows can appear as effectively pending/manual in the review layer
+- LinkedIn remains the only source with full real enrichment + requeue behavior right now
+
+Stage 3.2 sequence:
+1. generalize queue/review helpers from LinkedIn-only views to source-aware enrichment views
+2. extract the LinkedIn worker behind a reusable source-worker interface
+3. implement the Indeed enricher using the same result contract
+4. dispatch enrichment by source priority during the post-scrape pass
+5. add source filters/counts in the review app
+6. add tests for non-LinkedIn pending/done/failed flows
+
+Stage 3.2 success criteria:
+- the existing runtime, review app, and service deployment stay intact
+- LinkedIn continues to work as-is
+- Indeed rows can move from pending to enriched using the same operational model
+- the review app becomes a whole-job-table control plane, not just a LinkedIn queue viewer
+
 ## Command Reference
 
 Short wrappers are now available at the repo root:

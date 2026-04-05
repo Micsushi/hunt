@@ -991,6 +991,7 @@ def process_batch(
     timeout_ms=45000,
     browser_channel=None,
     ui_verify_blocked=False,
+    return_summary=False,
 ):
     started_at = time.monotonic()
     results = []
@@ -1085,15 +1086,41 @@ def process_batch(
         avg_seconds = sum(result["duration_seconds"] for result in all_timed_results) / len(all_timed_results)
         print(f"  average_seconds_per_job: {avg_seconds:.1f}")
 
+    counts_by_error = {}
     if failures:
-        counts_by_error = {}
         for failure in failures:
             counts_by_error[failure["error_code"]] = counts_by_error.get(failure["error_code"], 0) + 1
         print("  failure_breakdown:")
         for error_code, count in sorted(counts_by_error.items()):
             print(f"    {error_code}: {count}")
 
-    return 0 if not actionable_failures else 1
+    stop_error_code = None
+    for failure in failures:
+        error_code = failure.get("error_code")
+        if should_stop_batch_after_failure(error_code, ui_verify_blocked=False):
+            stop_error_code = error_code
+            break
+
+    exit_code = 0 if not actionable_failures else 1
+    if return_summary:
+        return {
+            "exit_code": exit_code,
+            "attempted": len(results),
+            "ui_verified": len(ui_verify_results),
+            "succeeded": len(successes),
+            "failed": len(failures),
+            "actionable_failed": len(actionable_failures),
+            "failure_breakdown": counts_by_error,
+            "total_elapsed_seconds": total_elapsed,
+            "average_seconds_per_job": (
+                sum(result["duration_seconds"] for result in all_timed_results) / len(all_timed_results)
+                if all_timed_results
+                else 0.0
+            ),
+            "stop_error_code": stop_error_code,
+        }
+
+    return exit_code
 
 
 def main():

@@ -15,8 +15,9 @@ The system is split into three major components:
 
 Current implementation priority:
 1. finish Component 1 Stage 3 hardening and deployment
-2. validate the end-to-end handoff from Component 1 to Component 2
-3. build Component 3 only on top of stable external-apply flows
+2. implement Component 1 Stage 3.2 multi-source enrichment, starting with Indeed
+3. validate the end-to-end handoff from Component 1 to Component 2
+4. build Component 3 only on top of stable external-apply flows
 
 ## System Principles
 
@@ -56,6 +57,10 @@ Current status:
   - a minimal review/control-plane web app
   - read-only operator tools that avoid queue-maintenance side effects
 - current focus is Stage 3 deployment rollout on `server2`
+- next planned step after Stage 3 is Stage 3.2:
+  - reuse the Stage 3 runtime for non-LinkedIn sources
+  - start with Indeed enrichment
+  - keep one queue/runtime/review-app model instead of building a second enrichment system
 - deployment notes for `server2` live in `docs/components/component1/stage3_server2_plan.md`
 
 Doc:

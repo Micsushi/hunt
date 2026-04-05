@@ -276,6 +276,20 @@ class Stage3Tests(unittest.TestCase):
             self.assertEqual(summary["ready_count"], 2)
             self.assertEqual(summary["stale_processing_count"], 1)
 
+    def test_process_batch_can_return_structured_summary(self):
+        with patch.object(enrich_linkedin, "open_linkedin_context"), \
+             patch.object(enrich_linkedin, "claim_linkedin_job_for_enrichment", return_value=None):
+            summary = enrich_linkedin.process_batch(limit=5, return_summary=True)
+
+        self.assertEqual(summary["exit_code"], 0)
+        self.assertEqual(summary["attempted"], 0)
+        self.assertEqual(summary["ui_verified"], 0)
+        self.assertEqual(summary["succeeded"], 0)
+        self.assertEqual(summary["failed"], 0)
+        self.assertEqual(summary["actionable_failed"], 0)
+        self.assertEqual(summary["failure_breakdown"], {})
+        self.assertIsNone(summary["stop_error_code"])
+
 
 if __name__ == "__main__":
     unittest.main()

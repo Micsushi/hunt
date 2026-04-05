@@ -381,14 +381,14 @@ def _sortable_link(label, column, *, status, limit, page, q, current_sort, curre
         next_direction = "desc"
     arrow = ""
     if current_sort == column:
-        arrow = " ↑" if current_direction == "asc" else " ↓"
+        arrow = " &uarr;" if current_direction == "asc" else " &darr;"
     href = f"/jobs?status={quote(status)}&limit={limit}&page={page}&q={quote(q)}&sort={quote(column)}&direction={quote(next_direction)}"
     return f'<a href="{href}">{html.escape(label)}{arrow}</a>'
 
 
 def render_jobs_table(rows, *, status, limit, page, q, sort, direction):
     if not rows:
-        return '<div class="panel"><p>No LinkedIn rows match this filter.</p></div>'
+        return '<div class="panel"><p>No jobs match this filter.</p></div>'
 
     body = []
     for row in rows:
@@ -411,7 +411,7 @@ def render_jobs_table(rows, *, status, limit, page, q, sort, direction):
               <td>{format_text(row['source'])}</td>
               <td>{format_text(row['company'])}</td>
               <td>{format_text(row['title'])}</td>
-              <td>{linkedin_link}{' · ' + apply_link if linkedin_link and apply_link else apply_link}</td>
+              <td>{linkedin_link}{' | ' + apply_link if linkedin_link and apply_link else apply_link}</td>
               <td><span class="status {status_class}">{format_text(row['enrichment_status'])}</span></td>
               <td>{format_text(row['apply_type'])}</td>
               <td>{format_text(row['enrichment_attempts'])}</td>
@@ -587,7 +587,7 @@ def health_view():
     body = f"""
     <section class="hero">
       <h1>Health</h1>
-      <p>Human-readable operational health for the live LinkedIn enrichment queue. Use the raw endpoints only for scripts, checks, or debugging.</p>
+      <p>Human-readable operational health for the live jobs review lane. Use the raw endpoints only for scripts, checks, or debugging.</p>
     </section>
     <section class="cards">{render_summary_cards(summary)}</section>
     <section class="stack">
@@ -607,7 +607,7 @@ def summary_view():
     body = f"""
     <section class="hero">
       <h1>Summary</h1>
-      <p>High-level queue counts and enrichment-state totals for the current LinkedIn backlog.</p>
+      <p>High-level queue counts and enrichment-state totals for the current jobs table across sources.</p>
     </section>
     <section class="cards">{render_summary_cards(summary)}</section>
     {render_summary_table(summary)}
@@ -750,7 +750,7 @@ def job_detail(job_id: int):
           <div class="field"><div class="label">Application status</div><div class="value">{format_text(row['status'])}</div></div>
         </div>
         <div class="actions">
-          <a class="pill active" href="{html.escape(row['job_url'])}" target="_blank" rel="noreferrer">Open LinkedIn listing</a>
+          <a class="pill active" href="{html.escape(row['job_url'])}" target="_blank" rel="noreferrer">Open listing</a>
           {f'<a class="pill" href="{html.escape(row["apply_url"])}" target="_blank" rel="noreferrer">Open apply URL</a>' if row.get("apply_url") else ""}
           {f'<form method="post" action="/jobs/{row["id"]}/requeue"><button type="submit">Requeue enrichment</button></form>' if row.get("source") == "linkedin" else '<span class="pill">Non-LinkedIn rows are shown as pending for now</span>'}
         </div>
