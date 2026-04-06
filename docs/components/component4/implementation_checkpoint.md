@@ -164,7 +164,7 @@ What has been verified so far:
 
 What is not finished yet:
 - the Component 4 test suite has not been rewritten to match the new runtime
-- the shared C3 helper path has not been fully refactored onto the new C4 service
+- `huntctl apply-prep` and the docs should consistently point at the shared C4 service rather than older helper scripts
 - the docs still need a final "implemented commands" polish pass once tests are in place
 
 ## Resume Point
@@ -179,8 +179,8 @@ When continuing C4 work later, the clean next order is:
    - manual-review resolution
    - submit approval + submitted transitions
    - scheduler `pick-next` blocking behavior
-3. decide whether `scripts/c3_apply_prep.py` should delegate directly to `orchestration/context.py` or `orchestration/service.py`
-4. decide whether `scripts/huntctl.py` should expose the new C4 commands directly
+3. keep `scripts/c3_apply_prep.py` only as a legacy C3-payload helper and avoid treating it as the shared apply-prep seam
+4. expose more of the shared C4 commands through `scripts/huntctl.py` as needed
 5. only then tighten the OpenClaw integration surface
 
 ## Practical Notes

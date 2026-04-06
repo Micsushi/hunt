@@ -94,13 +94,18 @@ Recommended interaction model:
 3. that command reads the DB row and resolves:
    - `apply_url`
    - selected resume metadata from C2
-4. that command opens the target site
-5. that command updates C3 with the selected resume context for that job
+4. the current implementation writes:
+   - one C4 apply-context artifact
+   - one C3-ready payload artifact
+5. later browser-opening and extension-priming steps should happen from C4 or OpenClaw using those artifacts
 6. C3 then fills the page when triggered
 
 Important detail:
 - C4 should not hand-build resume-selection logic each time
 - the shared command should resolve the selected resume from the DB contract
+- a plain selected resume path is not enough for upload by itself:
+  - the extension currently uploads from a cached file payload such as embedded resume data
+  - queue-driven C4 flows therefore need to provide resume bytes or a C3-side cached copy, not just a filesystem path
 
 Component 3 itself should not depend on Component 4 to be useful.
 

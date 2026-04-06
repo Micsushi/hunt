@@ -12,3 +12,4 @@ This folder contains the current planning docs for each major part of the system
 - `component4/README.md` : orchestration and submit-control layer, including OpenClaw direction
 - `component4/design.md` : orchestration architecture, stage plan details, and browser-agent research notes
 - `component4/implementation_checkpoint.md` : current C4 architecture checkpoint, partial implementation status, and restart notes
+- `../to_do.md` : live cross-component fix list and sign-off tracker

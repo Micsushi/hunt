@@ -31,6 +31,9 @@ Current implementation priority:
 5. build Component 3 only on top of stable external-apply flows
 6. add Component 4 only after Component 3 contracts are dependable
 
+Live tracker:
+- `docs/to_do.md` records the current fix list and remaining sign-off work across all components
+
 ## System Principles
 
 - LinkedIn is the highest-priority source
@@ -112,7 +115,7 @@ Current status:
 - detailed design notes now live in:
   - `docs/components/component2/README.md`
   - `docs/components/component2/design.md`
-  - `glossary.md`
+  - `docs/components/component2/glossary.md`
 - remaining work is mostly production hardening:
   - Ollama-backed prompt execution
   - richer family-base resume curation

@@ -181,8 +181,8 @@ class Component2PipelineTests(unittest.TestCase):
         self.assertTrue(first_result["selected_for_c3"])
         self.assertTrue(first_context["selected_resume_ready_for_c3"])
         self.assertEqual(
-            first_context["selected_resume_version_id"],
-            first_result["resume_version_id"],
+            str(first_context["selected_resume_version_id"]),
+            str(first_result["resume_version_id"]),
         )
 
         with patch("resume_tailor.pipeline.compile_tex") as mock_compile:

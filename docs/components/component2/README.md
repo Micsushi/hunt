@@ -104,6 +104,7 @@ That means:
 - C3 should consume the latest useful C2 result, not trigger its own resume generation by default.
 - C4 or OpenClaw should normally fetch one explicit apply context for a job instead of independently deciding which link and which resume to use.
 - in the current C4 direction, that should happen through one shared apply-prep command
+- the `resume_tailor` CLI may still expose C2-local apply-context inspection, but that is not the shared C4 apply-prep seam
 - that apply context should include:
   - the selected `apply_url`
   - the selected resume path

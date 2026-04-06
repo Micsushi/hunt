@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from contextlib import contextmanager
 import json
 import sqlite3
 import uuid
@@ -84,9 +85,14 @@ class OrchestrationService:
         (self.runtime_root / "runs").mkdir(parents=True, exist_ok=True)
         (self.runtime_root / "approvals").mkdir(parents=True, exist_ok=True)
 
-    def _connect(self) -> sqlite3.Connection:
+    @contextmanager
+    def _connect(self):
         self.ensure_initialized()
-        return get_connection(self.db_path)
+        conn = get_connection(self.db_path)
+        try:
+            yield conn
+        finally:
+            conn.close()
 
     def _job_select_sql(self) -> str:
         return """

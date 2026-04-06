@@ -196,8 +196,16 @@ Recommended responsibilities:
 - resolve the downstream-selected resume from C2 state
 - confirm the job is still C4-eligible
 - write an explicit apply-context artifact
-- optionally open the target URL in the intended browser lane
+- write a C3-ready payload artifact
 - return machine-readable context for C3 or OpenClaw
+
+Current local checkpoint:
+- `python -m orchestration.cli apply-prep --job-id <ID>` already:
+  - evaluates readiness
+  - creates an orchestration run
+  - writes `apply_context.json`
+  - writes `c3_apply_context.json`
+- browser opening and live extension-session priming are still later integration work
 
 Recommended output payload:
 - `job_id`

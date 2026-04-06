@@ -18,6 +18,24 @@ Implementation-oriented design notes and research-backed recommendations live in
 - `docs/components/component4/design.md`
 - `docs/components/component4/implementation_checkpoint.md`
 
+## Current Status
+
+An initial local Component 4 implementation now exists under:
+- `orchestration/`
+
+Current checkpoint:
+- DB-backed readiness evaluation over C1 and C2 state
+- one shared apply-prep flow that creates:
+  - an orchestration run
+  - `apply_context.json`
+  - `c3_apply_context.json`
+- fill-request, fill-result, review, and submit-gate state transitions
+
+Still later:
+- browser opening from the shared apply-prep command
+- loading C3 context directly into a live Chrome extension session
+- full OpenClaw/browser-lane integration on `server2`
+
 ## Why Component 4 Should Be Separate
 
 Component 3 should remain the browser autofill engine.
@@ -115,8 +133,8 @@ The recommended interaction should be:
    - `apply_url`
    - selected resume version
    - selected resume path
-5. that command opens the target page
-6. that command updates C3 with the active resume context for that job
+5. the current implementation writes one explicit C4 context plus one C3-ready payload artifact
+6. a later bridge can open the target page and load the C3 payload into the extension session
 7. C4 then asks C3 to fill
 
 Benefits:
@@ -124,10 +142,11 @@ Benefits:
 - less duplicated logic in OpenClaw prompts
 - fewer mismatches between DB state and browser state
 
-Recommended future command shape:
+Current shared command shape:
 
 ```text
-hunt apply-prep --job-id <ID>
+python -m orchestration.cli apply-prep --job-id <ID>
+./hunt.sh apply-prep <ID>
 ```
 
 Minimum resolved output:
@@ -139,11 +158,16 @@ Minimum resolved output:
 - best available JD snapshot path
 - relevant flags from C1/C2 that may affect apply behavior
 - C3-ready context path or payload id
+- orchestration run id
 
-Recommended side effects:
+Current side effects:
+- create one orchestration run record
 - write one explicit apply-context artifact for C3
+- write one C4 apply-context artifact for orchestration state
+
+Later side effects:
 - optionally open the target page in the intended browser lane
-- record that an orchestration run has entered the apply-prep step
+- optionally prime a live C3 extension session
 
 ## Out Of Scope For Component 4
 

@@ -161,13 +161,12 @@ class Component4CliTests(unittest.TestCase):
                 selected_resume_ready_for_c3=0,
             )
             with redirect_stdout(stdout):
-                exit_code = main(["ready", "--job-id", str(job_id)])
+                exit_code = main(["ready", "--db-path", path, "--job-id", str(job_id)])
         self.assertEqual(exit_code, 0)
         payload = json.loads(stdout.getvalue())
         self.assertEqual(payload["job_id"], job_id)
         self.assertFalse(payload["ready"])
-        self.assertEqual(payload["reason"], "not_external_apply")
-        self.assertIn("not_external_apply", payload["flags"])
+        self.assertEqual(payload["reason"], "easy_apply_excluded")
 
     def test_apply_prep_command_returns_json(self) -> None:
         stdout = io.StringIO()
@@ -189,7 +188,7 @@ class Component4CliTests(unittest.TestCase):
                 )
                 with self.with_temp_orchestration_root():
                     with redirect_stdout(stdout):
-                        exit_code = main(["apply-prep", "--job-id", str(job_id)])
+                        exit_code = main(["apply-prep", "--db-path", path, "--job-id", str(job_id)])
                     payload = json.loads(stdout.getvalue())
                     self.assertTrue(Path(payload["apply_context_path"]).exists())
             finally:
@@ -221,17 +220,19 @@ class Component4CliTests(unittest.TestCase):
                 )
                 with self.with_temp_orchestration_root():
                     with redirect_stdout(stdout):
-                        exit_code = main(["run", "--job-id", str(job_id), "--source-runtime", "openclaw"])
+                        exit_code = main(["run", "--db-path", path, "--job-id", str(job_id), "--source-runtime", "openclaw"])
             finally:
                 if os.path.exists(resume_path):
                     os.remove(resume_path)
         self.assertEqual(exit_code, 0)
         payload = json.loads(stdout.getvalue())
-        self.assertEqual(payload["run_id"], f"run-{job_id}")
-        self.assertEqual(payload["source_runtime"], "openclaw")
-        self.assertEqual(payload["status"], "ready_for_fill")
-        self.assertEqual(payload["selected_resume_version_id"], "resume-v9")
-        self.assertTrue(payload["apply_context_path"])
+        self.assertEqual(payload["decision"], "fill_requested")
+        self.assertEqual(payload["run"]["job_id"], job_id)
+        self.assertEqual(payload["run"]["source_runtime"], "openclaw")
+        self.assertEqual(payload["run"]["status"], "fill_requested")
+        self.assertEqual(payload["run"]["selected_resume_version_id"], "resume-v9")
+        self.assertTrue(payload["run"]["apply_context_path"])
+        self.assertTrue(payload["apply_context"]["run_id"])
 
 
 if __name__ == "__main__":

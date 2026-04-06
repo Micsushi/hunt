@@ -10,7 +10,7 @@ from .config import get_db_path
 JOB_COLUMNS = {
     "resume_status": "TEXT",
     "latest_resume_attempt_id": "INTEGER",
-    "latest_resume_version_id": "INTEGER",
+    "latest_resume_version_id": "TEXT",
     "latest_resume_pdf_path": "TEXT",
     "latest_resume_tex_path": "TEXT",
     "latest_resume_keywords_path": "TEXT",
@@ -21,7 +21,7 @@ JOB_COLUMNS = {
     "latest_resume_generated_at": "TEXT",
     "latest_resume_fallback_used": "BOOLEAN",
     "latest_resume_flags": "TEXT",
-    "selected_resume_version_id": "INTEGER",
+    "selected_resume_version_id": "TEXT",
     "selected_resume_pdf_path": "TEXT",
     "selected_resume_tex_path": "TEXT",
     "selected_resume_selected_at": "TEXT",

@@ -105,7 +105,10 @@ def build_parser() -> argparse.ArgumentParser:
     generate_ad_hoc.add_argument("--resume", default=str(DEFAULT_OG_RESUME_PATH))
     generate_ad_hoc.set_defaults(func=cmd_generate_ad_hoc)
 
-    apply_context = subparsers.add_parser("apply-context", help="Resolve the downstream apply context for a job.")
+    apply_context = subparsers.add_parser(
+        "apply-context",
+        help="Inspect the C2-side selected-resume context for one job. This is not the shared C4 apply-prep command.",
+    )
     apply_context.add_argument("job_id", type=int)
     apply_context.add_argument("--db", default=str(get_db_path()))
     apply_context.set_defaults(func=cmd_apply_context)

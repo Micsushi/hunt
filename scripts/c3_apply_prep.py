@@ -1,14 +1,19 @@
 #!/usr/bin/env python3
 import argparse
 import json
+import sys
 from pathlib import Path
+
+REPO_ROOT = Path(__file__).resolve().parent.parent
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
 
 from orchestration.apply_prep import ApplyPrepNotReadyError, build_apply_prep_payload
 
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Build an explicit apply context payload for Component 3 / Component 4."
+        description="Legacy helper: build the C3-only camelCase apply payload for one job."
     )
     parser.add_argument("job_id", type=int)
     parser.add_argument(

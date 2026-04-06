@@ -14,6 +14,13 @@ _MANUAL_REVIEW_SEED_FLAGS = {
 }
 
 
+def _mapping_get(value: Mapping[str, Any], key: str, default: Any = None) -> Any:
+    try:
+        return value[key]
+    except (KeyError, IndexError, TypeError):
+        return default
+
+
 def _string_or_none(value: Any) -> str | None:
     if value is None:
         return None
@@ -60,13 +67,13 @@ def build_resume_data_url(pdf_path: str | None) -> str:
 
 
 def derive_concern_flags(job: Mapping[str, Any]) -> list[str]:
-    flags = list(_normalize_flag_list(job.get("latest_resume_flags")))
+    flags = list(_normalize_flag_list(_mapping_get(job, "latest_resume_flags")))
 
-    enrichment_status = _string_or_none(job.get("enrichment_status"))
+    enrichment_status = _string_or_none(_mapping_get(job, "enrichment_status"))
     if enrichment_status and enrichment_status not in {"done", "done_verified"}:
         flags.append(f"enrichment_status:{enrichment_status}")
 
-    last_enrichment_error = _string_or_none(job.get("last_enrichment_error"))
+    last_enrichment_error = _string_or_none(_mapping_get(job, "last_enrichment_error"))
     if last_enrichment_error:
         flags.append(f"enrichment_error:{last_enrichment_error}")
 
@@ -99,21 +106,21 @@ def build_apply_context_payload(
     return {
         "run_id": run_id,
         "job_id": int(job["job_id"]),
-        "title": _string_or_none(job.get("title")),
-        "company": _string_or_none(job.get("company")),
-        "source": _string_or_none(job.get("source")),
-        "apply_url": _string_or_none(job.get("apply_url")),
-        "job_url": _string_or_none(job.get("job_url")),
-        "ats_type": _string_or_none(job.get("ats_type")) or "unknown",
-        "apply_type": _string_or_none(job.get("apply_type")) or "unknown",
-        "auto_apply_eligible": int(job.get("auto_apply_eligible") or 0),
-        "priority": int(job.get("priority") or 0),
-        "description": _string_or_none(job.get("description")),
-        "selected_resume_version_id": _string_or_none(job.get("selected_resume_version_id")),
-        "selected_resume_pdf_path": _string_or_none(job.get("selected_resume_pdf_path")),
-        "selected_resume_tex_path": _string_or_none(job.get("selected_resume_tex_path")),
-        "selected_resume_ready_for_c3": bool(job.get("selected_resume_ready_for_c3")),
-        "job_description_path": _string_or_none(job.get("latest_resume_job_description_path")),
+        "title": _string_or_none(_mapping_get(job, "title")),
+        "company": _string_or_none(_mapping_get(job, "company")),
+        "source": _string_or_none(_mapping_get(job, "source")),
+        "apply_url": _string_or_none(_mapping_get(job, "apply_url")),
+        "job_url": _string_or_none(_mapping_get(job, "job_url")),
+        "ats_type": _string_or_none(_mapping_get(job, "ats_type")) or "unknown",
+        "apply_type": _string_or_none(_mapping_get(job, "apply_type")) or "unknown",
+        "auto_apply_eligible": int(_mapping_get(job, "auto_apply_eligible") or 0),
+        "priority": int(_mapping_get(job, "priority") or 0),
+        "description": _string_or_none(_mapping_get(job, "description")),
+        "selected_resume_version_id": _string_or_none(_mapping_get(job, "selected_resume_version_id")),
+        "selected_resume_pdf_path": _string_or_none(_mapping_get(job, "selected_resume_pdf_path")),
+        "selected_resume_tex_path": _string_or_none(_mapping_get(job, "selected_resume_tex_path")),
+        "selected_resume_ready_for_c3": bool(_mapping_get(job, "selected_resume_ready_for_c3")),
+        "job_description_path": _string_or_none(_mapping_get(job, "latest_resume_job_description_path")),
         "concern_flags": concern_flags,
         "manual_review_flags": manual_review_flags,
         "source_mode": source_mode,
@@ -131,25 +138,25 @@ def build_c3_apply_payload(
     embed_resume_data: bool = False,
 ) -> dict[str, Any]:
     primed_at = primed_at or utc_now_iso()
-    selected_resume_path = _string_or_none(job.get("selected_resume_pdf_path")) or ""
+    selected_resume_path = _string_or_none(_mapping_get(job, "selected_resume_pdf_path")) or ""
 
     payload = {
         "jobId": str(job["job_id"]),
-        "title": _string_or_none(job.get("title")) or "",
-        "company": _string_or_none(job.get("company")) or "",
-        "applyUrl": _string_or_none(job.get("apply_url")) or "",
-        "jobUrl": _string_or_none(job.get("job_url")) or "",
+        "title": _string_or_none(_mapping_get(job, "title")) or "",
+        "company": _string_or_none(_mapping_get(job, "company")) or "",
+        "applyUrl": _string_or_none(_mapping_get(job, "apply_url")) or "",
+        "jobUrl": _string_or_none(_mapping_get(job, "job_url")) or "",
         "sourceMode": source_mode,
-        "source": _string_or_none(job.get("source")) or "",
-        "atsType": _string_or_none(job.get("ats_type")) or "unknown",
-        "applyType": _string_or_none(job.get("apply_type")) or "unknown",
-        "autoApplyEligible": int(job.get("auto_apply_eligible") or 0),
-        "description": _string_or_none(job.get("description")) or "",
-        "selectedResumeVersionId": _string_or_none(job.get("selected_resume_version_id")) or "",
+        "source": _string_or_none(_mapping_get(job, "source")) or "",
+        "atsType": _string_or_none(_mapping_get(job, "ats_type")) or "unknown",
+        "applyType": _string_or_none(_mapping_get(job, "apply_type")) or "unknown",
+        "autoApplyEligible": int(_mapping_get(job, "auto_apply_eligible") or 0),
+        "description": _string_or_none(_mapping_get(job, "description")) or "",
+        "selectedResumeVersionId": _string_or_none(_mapping_get(job, "selected_resume_version_id")) or "",
         "selectedResumePath": selected_resume_path,
-        "selectedResumeTexPath": _string_or_none(job.get("selected_resume_tex_path")) or "",
-        "selectedResumeReadyForC3": bool(job.get("selected_resume_ready_for_c3")),
-        "jdSnapshotPath": _string_or_none(job.get("latest_resume_job_description_path")) or "",
+        "selectedResumeTexPath": _string_or_none(_mapping_get(job, "selected_resume_tex_path")) or "",
+        "selectedResumeReadyForC3": bool(_mapping_get(job, "selected_resume_ready_for_c3")),
+        "jdSnapshotPath": _string_or_none(_mapping_get(job, "latest_resume_job_description_path")) or "",
         "concernFlags": derive_concern_flags(job),
         "primedAt": primed_at,
     }

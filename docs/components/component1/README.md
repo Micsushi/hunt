@@ -507,6 +507,12 @@ Remaining Stage 4 operator work:
 - complete the full backlog drain with the updated backfill flow
 - tune alerting, retention, and batch defaults based on real `server2` runs
 
+Current `server2` tuning note:
+- the current all-source `100`-row backfill default is still aggressive for LinkedIn
+- mixed-source batches can hit `rate_limited` before the overall backlog is normalized because the dispatcher still processes LinkedIn first
+- until a larger safe batch size is proven, treat smaller LinkedIn-friendly batches such as `25` as the safer operator default for backlog drain
+- if LinkedIn pressure is the blocker, it is reasonable to drain Indeed separately after the LinkedIn-sensitive portion settles down
+
 Component 1 completion checklist:
 - discovery quality is acceptable in production
   - especially for Indeed, where broad board matches should no longer flood the queue with unrelated retail/store jobs
@@ -530,9 +536,14 @@ C1 sign-off runbook on `server2`:
    - `./hunt.sh retry`
    - `./hunt.sh requeue-enrich --source all`
 4. drain the backlog manually first
-   - `DISPLAY=:98 ./hunt.sh backfill-all`
+   - safer current default:
+     - `DISPLAY=:98 ./hunt.sh backfill-all 25`
+   - if LinkedIn looks healthy and you want a more aggressive run:
+     - `DISPLAY=:98 ./hunt.sh backfill-all`
    - `DISPLAY=:98 ./hunt.sh drain`
    - `DISPLAY=:98 ./hunt.sh backfill 100 --source all --ui-verify-blocked --yes`
+   - if Indeed still needs additional cleanup after the LinkedIn-sensitive portion:
+     - `DISPLAY=:98 ./hunt.sh backfill 100 --source indeed --ui-verify-blocked --yes`
 5. confirm queue health after the manual drain
    - `./hunt.sh queue`
    - `./.venv/bin/python scripts/queue_health.py --json`

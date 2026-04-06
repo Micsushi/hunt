@@ -75,8 +75,10 @@ Recommended later orchestration flow:
    - `apply_url`
    - `selected_resume_version_id`
    - selected resume path
-5. the command opens the target page
-6. the command primes C3 with the resolved resume context
+5. the current implementation writes:
+   - `apply_context.json` for C4
+   - `c3_apply_context.json` for C3
+6. a later browser/runtime bridge should open the page and load that C3 payload into the extension session
 7. C4 then triggers C3 autofill
 8. C4 inspects the result and decides whether to continue
 
@@ -117,6 +119,10 @@ Recommended normal queue-driven shape:
 - that context includes the selected `apply_url` and selected resume path together
 - the shared apply-prep command primes C3 with that explicit resume context
 - C3 consumes that explicit answer rather than recomputing selection logic during the fill run
+- for actual upload behavior, the current extension implementation needs either:
+  - embedded resume bytes in the C3 payload, or
+  - a previously cached resume inside extension storage
+- a filesystem path alone is not sufficient for Chrome-extension upload
 
 ### Component 4
 
@@ -343,6 +349,7 @@ Recommended future ephemeral context:
 - enough for C3 to know:
   - current `job_id`
   - selected resume path
+  - selected resume data payload or cache key
   - selected resume version id
   - apply URL origin
   - source mode such as manual or C4
