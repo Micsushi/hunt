@@ -181,6 +181,20 @@ JOB_DESCRIPTION_SIGNAL_KEYWORDS = (
     "salary",
     "compensation",
 )
+LINKEDIN_DESCRIPTION_START_MARKERS = (
+    "About the job",
+    "Description de poste",
+)
+LINKEDIN_DESCRIPTION_END_MARKERS = (
+    "Set alert for similar jobs",
+    "About the company",
+    "Meet the hiring team",
+    "Job search faster with Premium",
+    "More jobs",
+    "People you can reach out to",
+    "Interested in working with us in the future?",
+    "Company photos",
+)
 
 
 class LinkedInEnrichmentError(RuntimeError):
@@ -342,6 +356,62 @@ def extract_best_text(page, selectors):
     return best_text
 
 
+def extract_linkedin_description_from_body_text(page):
+    try:
+        body_text = page.locator("body").inner_text(timeout=5000)
+    except Exception:
+        return None
+
+    normalized = normalize_description_text(body_text)
+    if not normalized:
+        return None
+
+    start_index = None
+    matched_marker = None
+    for marker in LINKEDIN_DESCRIPTION_START_MARKERS:
+        index = normalized.find(marker)
+        if index == -1:
+            continue
+        if start_index is None or index < start_index:
+            start_index = index
+            matched_marker = marker
+
+    if start_index is None:
+        return None
+
+    candidate = normalized[start_index:]
+
+    if matched_marker == "About the job":
+        description_marker_index = candidate.find("Description de poste")
+        if description_marker_index > 0:
+            candidate = candidate[description_marker_index:]
+
+    end_index = None
+    for marker in LINKEDIN_DESCRIPTION_END_MARKERS:
+        index = candidate.find(marker)
+        if index <= 0:
+            continue
+        if end_index is None or index < end_index:
+            end_index = index
+
+    if end_index is not None:
+        candidate = candidate[:end_index]
+
+    candidate = re.sub(r"\n?… more\s*$", "", candidate, flags=re.IGNORECASE)
+    candidate = re.sub(r"\n?\.{3}\s*more\s*$", "", candidate, flags=re.IGNORECASE)
+    candidate = normalize_description_text(candidate)
+    if not candidate:
+        return None
+
+    if candidate.startswith("About the job\n"):
+        candidate = candidate[len("About the job\n"):]
+    candidate = normalize_description_text(candidate)
+    if not candidate:
+        return None
+
+    return candidate
+
+
 def extract_description(
     page,
     *,
@@ -357,6 +427,10 @@ def extract_description(
 
     if best_text:
         return best_text
+
+    linkedin_body_fallback = extract_linkedin_description_from_body_text(page)
+    if linkedin_body_fallback:
+        return linkedin_body_fallback
 
     raise LinkedInEnrichmentError(error_code, error_message)
 

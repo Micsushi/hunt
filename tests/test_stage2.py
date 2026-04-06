@@ -450,6 +450,70 @@ class Stage2Tests(unittest.TestCase):
 
         self.assertEqual(extracted, enrich_linkedin.normalize_description_text(expanded))
 
+    def test_extract_description_falls_back_to_linkedin_body_text(self):
+        body_text = """
+        Home
+        Jobs
+        About the job
+        Description de poste
+        Build backend systems and collaborate across product and platform teams.
+        Responsibilities
+        Own services and mentor teammates.
+        Minimum Qualifications
+        Python experience and distributed systems knowledge.
+        Set alert for similar jobs
+        About the company
+        """
+        page = self.FakePage(
+            url="https://www.linkedin.com/jobs/view/123",
+            selectors={
+                "body": body_text,
+            },
+        )
+
+        extracted = enrich_linkedin.extract_description(page, selectors=(), expand_selectors=())
+
+        self.assertEqual(
+            extracted,
+            enrich_linkedin.normalize_description_text(
+                """
+                Description de poste
+                Build backend systems and collaborate across product and platform teams.
+                Responsibilities
+                Own services and mentor teammates.
+                Minimum Qualifications
+                Python experience and distributed systems knowledge.
+                """
+            ),
+        )
+
+    def test_extract_description_body_fallback_trims_more_suffix(self):
+        body_text = """
+        About the job
+        Description de poste
+        Build backend systems and collaborate across product and platform teams.
+        … more
+        About the company
+        """
+        page = self.FakePage(
+            url="https://www.linkedin.com/jobs/view/123",
+            selectors={
+                "body": body_text,
+            },
+        )
+
+        extracted = enrich_linkedin.extract_description(page, selectors=(), expand_selectors=())
+
+        self.assertEqual(
+            extracted,
+            enrich_linkedin.normalize_description_text(
+                """
+                Description de poste
+                Build backend systems and collaborate across product and platform teams.
+                """
+            ),
+        )
+
     def test_security_verification_is_not_treated_as_batch_hard_stop(self):
         self.assertTrue(enrich_linkedin.is_blocking_error_code("security_verification"))
         self.assertFalse(
