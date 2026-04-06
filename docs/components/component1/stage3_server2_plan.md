@@ -313,6 +313,11 @@ This can later feed:
 - a small metrics endpoint
 - or future dashboards
 
+Stage 4 implementation note:
+- `scripts/queue_health.py` now also supports `--json`
+- `review_app.py` now exposes `/metrics`
+- failed rows can now carry artifact paths for screenshot/HTML/text snapshots
+
 ### 5. Future handoff to Component 2 and Component 3
 
 Stage 3 should keep data and states clean enough for future agent workers.
@@ -440,3 +445,51 @@ Important assumption:
 4. Deploy `review_app.py` as the `hunt-review` service on `server2`
 5. Add monitoring wiring from the queue-health outputs into your preferred service layer
 6. Only then begin wiring in broader agent orchestration for Component 2 and 3
+
+## Stage 4 Server2 Follow-Up Plan
+
+After the current Stage 3.2 rollout is stable on `server2`, Stage 4 should build on the existing deployment shape rather than replacing it.
+
+Keep using:
+- `hunt-scraper.service` for scheduled scrape + enrich
+- `hunt-scraper.timer` for unattended runs
+- `hunt-xvfb.service` on `:98` for browser-open/UI fallback
+- the separate `hunt-review` container for operator inspection and control
+
+Recommended Stage 4 server work:
+1. complete the backlog drain with the current `backfill` wrapper
+   - preferred command family:
+     - `DISPLAY=:98 ./hunt.sh backfill 100 --source all --ui-verify-blocked`
+   - use prompting mode first, then `--yes` once the run behavior is trusted
+2. add runtime artifact storage under `{{ scraper_runtime_dir }}`
+   - example subdirectories:
+     - `artifacts/screenshots`
+     - `artifacts/html`
+     - `artifacts/text`
+   - keep artifacts outside the repo checkout so deploys remain clean
+3. add any Stage 4 env vars through the existing scraper service template
+   - artifact root path
+   - optional artifact retention limit
+   - optional metrics/export toggle
+   - current implementation now expects `HUNT_ARTIFACTS_DIR`
+4. expose queue-health data in a machine-readable way that fits the existing monitoring stack
+   - Uptime Kuma remains useful for up/down checks
+   - richer queue-state data should come from Hunt itself, not from ad hoc journal scraping
+5. document the normal operator flow in the Ansible-facing docs
+   - pause auto timer
+   - run backfill manually
+   - inspect blocked rows in review app
+   - re-enable timer when backlog drain is done
+
+Stage 4 server success looks like:
+- the backlog can be drained without timer interference
+- blocked/security failures leave inspectable artifacts
+- queue health is visible without tailing journals
+- all required runtime paths and env vars come from Stage 6 automation, not one-off shell setup
+
+Current Stage 4 deployment wiring:
+- Stage 6 should create `{{ scraper_artifacts_dir }}`
+- `hunt-scraper.service` should export:
+  - `HUNT_ARTIFACTS_DIR={{ scraper_artifacts_dir }}`
+- `hunt-review` should mount the same directory read-only and export:
+  - `HUNT_ARTIFACTS_DIR=/app/artifacts`

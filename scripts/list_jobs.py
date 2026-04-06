@@ -87,6 +87,8 @@ def main():
             message += f" | apply_url={row['apply_url']}"
         if row.get("last_enrichment_error"):
             message += f" | error={row['last_enrichment_error']}"
+        if row.get("last_artifact_dir"):
+            message += f" | artifact_dir={row['last_artifact_dir']}"
         if row.get("next_enrichment_retry_at"):
             message += f" | next_retry_at={row['next_enrichment_retry_at']}"
         print(message)

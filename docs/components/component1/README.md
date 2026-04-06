@@ -312,10 +312,12 @@ Common examples:
   `python -m unittest discover -s tests -p "test_stage*.py" -v`
 - inspect unattended queue health:
   `python scripts/queue_health.py`
-- run a controlled backfill in chunks and stop for operator confirmation after each chunk:
-  `python scripts/backfill_linkedin.py --ui-verify-blocked`
+- inspect unattended queue health as JSON:
+  `python scripts/queue_health.py --json`
+- run a controlled LinkedIn-only backfill in chunks and stop for operator confirmation after each chunk:
+  `python scraper/enrich_linkedin.py --limit 100 --channel chrome --ui-verify-blocked`
 - run a controlled backfill across supported sources in chunks and stop for operator confirmation after each chunk:
-  `python scripts/backfill_enrichment.py --source all --ui-verify-blocked`
+  `python scripts/backfill_enrichment.py 100 --source all --ui-verify-blocked`
 - run a controlled backfill for selected rows only:
   `python scripts/backfill_enrichment.py --source all --job-id 13143 --job-id 13073`
 - browse the live review/control-plane app:
@@ -378,15 +380,76 @@ Common examples:
 
 Stage 4 is the next phase after the current repo-side work. Stages 1 through 3.2 should be treated as implementation-complete pending server rollout of the latest Hunt code.
 
-Planned changes:
-- backfill old LinkedIn rows in batches
-- add screenshots or saved HTML for hard failures
-- add richer monitoring/export paths beyond the queue-health script and review app
-- finish server deployment steps for Playwright auth state and Chromium dependencies in `ansible_homelab`
+Stage 4 goal:
+- drain the existing enrichment backlog safely
+- make hard failures easier to debug without attaching live browsers
+- add operator-facing monitoring that is useful during unattended server runs
+- tighten the `server2` deployment so backfill and unattended runtime use the same stable paths and service assumptions
 
-Testing goal:
-- complete a controlled backfill
-- confirm failure handling and retry behavior
+Initial Stage 4 implementation now includes:
+- failure-artifact capture for blocked/browser-fixable rows
+  - relative artifact paths are now stored on the job row
+  - artifacts are intended to live under the runtime artifact root, not the git repo
+- machine-readable queue monitoring
+  - `python scripts/queue_health.py --json`
+  - review app `/metrics`
+- review-surface visibility for artifacts
+  - the job detail page now shows saved artifact paths and links for screenshot/HTML/text snapshots when present
+- Stage 6 deployment wiring for artifact storage
+  - Hunt runtime uses `HUNT_ARTIFACTS_DIR`
+  - the review container mounts the same artifact directory read-only
+
+Stage 4 workstreams:
+- backlog drain and queue policy
+  - finish controlled backfills for the remaining ready backlog
+  - keep LinkedIn first in mixed-source runs, but continue supporting all-source backfill through the shared dispatcher
+  - keep `security_verification` as a row-level blocked result rather than a batch hard-stop
+  - review whether batch size, timeout, and UI-fallback defaults should change after observing real `server2` runs
+- hard-failure artifacts
+  - save a screenshot and lightweight HTML/text snapshot for browser-fixable or security-challenged failures
+  - store artifacts under the Hunt runtime directory on `server2`, not inside the git repo
+  - link or surface artifact paths in the review app and queue tooling so blocked rows are easier to inspect
+- monitoring and operator visibility
+  - add a machine-readable export path for queue health beyond plain CLI output
+  - expose richer counts for:
+    - ready backlog
+    - blocked rows
+    - stale processing
+    - repeated auth/rate-limit/security failures
+    - recent done rate by source
+  - wire those outputs into the existing `server2` monitoring stack where useful
+- `ansible_homelab` deployment follow-up
+  - keep Stage 6 as the deployment home for Hunt runtime and review app
+  - add any missing env vars for Stage 4 artifact directories and monitoring endpoints
+  - document the expected `server2` manual-ops commands:
+    - timer on/off
+    - backfill all
+    - UI backfill with `DISPLAY=:98`
+    - queue/review checks
+  - keep the current Xvfb + Playwright + review-container model rather than redesigning deployment
+
+Recommended implementation order:
+1. finish a controlled all-source backlog drain on `server2` and record what failure classes remain after the current Stage 3.2 code
+2. add failure-artifact capture for blocked/security-challenged/browser-fixable rows
+3. expose machine-readable queue-health/metrics output using the existing queue summary helpers
+4. wire the new Stage 4 runtime knobs and docs into `ansible_homelab`
+5. only after that, decide whether batch sizes, retry windows, or monitoring alerts need tuning
+
+Stage 4 success criteria:
+- a full controlled backfill can run to completion in production-sized batches
+- blocked/security rows no longer force manual guesswork because artifacts exist
+- operators can tell from one place whether the queue is healthy, stuck, or auth-challenged
+- `server2` deployment docs and automation match the real command flow used during backfill and unattended runs
+
+Remaining Stage 4 operator work:
+- deploy the latest Hunt + `ansible_homelab` changes to `server2`
+- complete the full backlog drain with the updated backfill flow
+- tune alerting, retention, and batch defaults based on real `server2` runs
+
+Stage 4 non-goals:
+- no Component 2 resume tailoring work yet
+- no Component 3 application submission work yet
+- no attempt to bypass CAPTCHA or anti-bot systems
 
 ## Notes For Later Components
 

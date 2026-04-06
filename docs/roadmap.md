@@ -16,6 +16,11 @@ The system is split into three major components:
 Current implementation priority:
 1. finish rolling out the latest Component 1 Stage 3.2 Hunt code to `server2`
 2. start Component 1 Stage 4 hardening and backfill work
+   - drain backlog safely with the new source-aware backfill flow
+   - add failure-artifact capture for blocked/security/browser-fixable rows
+   - add machine-readable queue monitoring on top of the existing review app and queue helpers
+   - keep Stage 6 Ansible as the deployment home for runtime paths, env vars, and operator docs
+   - current implementation now covers the artifact + monitoring plumbing; the remaining work is rollout, backlog drain, and tuning
 3. validate the end-to-end handoff from Component 1 to Component 2
 4. build Component 3 only on top of stable external-apply flows
 

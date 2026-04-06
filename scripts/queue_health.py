@@ -1,4 +1,5 @@
 import argparse
+import json
 import sys
 from pathlib import Path
 
@@ -27,6 +28,8 @@ def print_job_rows(rows):
             message += f" | started_at={row['last_enrichment_started_at']}"
         if row.get("last_enrichment_error"):
             message += f" | error={row['last_enrichment_error']}"
+        if row.get("last_artifact_dir"):
+            message += f" | artifact_dir={row['last_artifact_dir']}"
         print(message)
 
 
@@ -38,10 +41,38 @@ def main():
         default=5,
         help="How many rows to show in each detailed section (default: 5).",
     )
+    parser.add_argument(
+        "--json",
+        action="store_true",
+        help="Emit queue health as JSON instead of human-readable text.",
+    )
     args = parser.parse_args()
 
     db.init_db(maintenance=False)
     summary = db.get_review_queue_summary()
+    detail_sections = {}
+    sections = (
+        ("ready", "ready jobs"),
+        ("processing", "processing jobs"),
+        ("blocked", "blocked jobs"),
+        ("failed", "failed jobs"),
+    )
+    for status, _title in sections:
+        rows = db.list_jobs_for_review(status=status, limit=args.limit)
+        if rows:
+            detail_sections[status] = rows
+
+    if args.json:
+        print(
+            json.dumps(
+                {
+                    "summary": summary,
+                    "sections": detail_sections,
+                },
+                indent=2,
+            )
+        )
+        return 0
 
     print_section("Enrichment queue summary")
     print(f"total: {summary['total']}")
@@ -64,14 +95,8 @@ def main():
         for error_code, count in summary["failure_counts"].items():
             print(f"  {error_code}: {count}")
 
-    sections = (
-        ("ready", "ready jobs"),
-        ("processing", "processing jobs"),
-        ("blocked", "blocked jobs"),
-        ("failed", "failed jobs"),
-    )
     for status, title in sections:
-        rows = db.list_jobs_for_review(status=status, limit=args.limit)
+        rows = detail_sections.get(status, [])
         if not rows:
             continue
         print_section(f"\n{title}:")

@@ -37,7 +37,11 @@ CREATE TABLE IF NOT EXISTS jobs (
     apply_host TEXT,
     ats_type TEXT,
     last_enrichment_started_at TEXT,
-    next_enrichment_retry_at TEXT
+    next_enrichment_retry_at TEXT,
+    last_artifact_dir TEXT,
+    last_artifact_screenshot_path TEXT,
+    last_artifact_html_path TEXT,
+    last_artifact_text_path TEXT
 )
 """
 
@@ -52,6 +56,10 @@ MIGRATION_COLUMNS = {
     "ats_type": "TEXT",
     "last_enrichment_started_at": "TEXT",
     "next_enrichment_retry_at": "TEXT",
+    "last_artifact_dir": "TEXT",
+    "last_artifact_screenshot_path": "TEXT",
+    "last_artifact_html_path": "TEXT",
+    "last_artifact_text_path": "TEXT",
 }
 
 INSERT_COLUMNS = (
@@ -593,7 +601,11 @@ def claim_job_for_enrichment(job_id=None, force=False, *, sources=None):
                     enrichment_attempts = coalesce(enrichment_attempts, 0) + 1,
                     last_enrichment_error = NULL,
                     last_enrichment_started_at = CURRENT_TIMESTAMP,
-                    next_enrichment_retry_at = NULL
+                    next_enrichment_retry_at = NULL,
+                    last_artifact_dir = NULL,
+                    last_artifact_screenshot_path = NULL,
+                    last_artifact_html_path = NULL,
+                    last_artifact_text_path = NULL
                 WHERE id = ?
                 """
                 if force
@@ -604,7 +616,11 @@ def claim_job_for_enrichment(job_id=None, force=False, *, sources=None):
                     enrichment_attempts = coalesce(enrichment_attempts, 0) + 1,
                     last_enrichment_error = NULL,
                     last_enrichment_started_at = CURRENT_TIMESTAMP,
-                    next_enrichment_retry_at = NULL
+                    next_enrichment_retry_at = NULL,
+                    last_artifact_dir = NULL,
+                    last_artifact_screenshot_path = NULL,
+                    last_artifact_html_path = NULL,
+                    last_artifact_text_path = NULL
                 WHERE id = ?
                   AND coalesce(enrichment_status, '') != 'processing'
                 """
@@ -670,7 +686,11 @@ def mark_job_enrichment_succeeded(
                 apply_host = ?,
                 ats_type = ?,
                 last_enrichment_started_at = NULL,
-                next_enrichment_retry_at = NULL
+                next_enrichment_retry_at = NULL,
+                last_artifact_dir = NULL,
+                last_artifact_screenshot_path = NULL,
+                last_artifact_html_path = NULL,
+                last_artifact_text_path = NULL
             WHERE id = ?
               {source_sql}
             """,
@@ -718,6 +738,10 @@ def mark_job_enrichment_failed(
     apply_url=_UNSET,
     apply_host=_UNSET,
     ats_type=_UNSET,
+    artifact_dir=_UNSET,
+    artifact_screenshot_path=_UNSET,
+    artifact_html_path=_UNSET,
+    artifact_text_path=_UNSET,
     source=None,
 ):
     conn = get_connection()
@@ -737,6 +761,10 @@ def mark_job_enrichment_failed(
             ("apply_url", apply_url),
             ("apply_host", apply_host),
             ("ats_type", ats_type),
+            ("last_artifact_dir", artifact_dir),
+            ("last_artifact_screenshot_path", artifact_screenshot_path),
+            ("last_artifact_html_path", artifact_html_path),
+            ("last_artifact_text_path", artifact_text_path),
         )
         for column_name, value in optional_updates:
             if value is _UNSET:
@@ -779,6 +807,10 @@ def mark_linkedin_enrichment_failed(
     apply_url=_UNSET,
     apply_host=_UNSET,
     ats_type=_UNSET,
+    artifact_dir=_UNSET,
+    artifact_screenshot_path=_UNSET,
+    artifact_html_path=_UNSET,
+    artifact_text_path=_UNSET,
 ):
     return mark_job_enrichment_failed(
         job_id,
@@ -791,6 +823,10 @@ def mark_linkedin_enrichment_failed(
         apply_url=apply_url,
         apply_host=apply_host,
         ats_type=ats_type,
+        artifact_dir=artifact_dir,
+        artifact_screenshot_path=artifact_screenshot_path,
+        artifact_html_path=artifact_html_path,
+        artifact_text_path=artifact_text_path,
         source="linkedin",
     )
 
@@ -810,7 +846,11 @@ def requeue_job(job_id, *, source=None):
             SET enrichment_status = 'pending',
                 last_enrichment_error = NULL,
                 last_enrichment_started_at = NULL,
-                next_enrichment_retry_at = NULL
+                next_enrichment_retry_at = NULL,
+                last_artifact_dir = NULL,
+                last_artifact_screenshot_path = NULL,
+                last_artifact_html_path = NULL,
+                last_artifact_text_path = NULL
             WHERE id = ?
               {source_sql}
             """,
@@ -1004,6 +1044,7 @@ def list_jobs_for_review(
                    status, apply_type, auto_apply_eligible, enrichment_status,
                    enrichment_attempts, enriched_at, last_enrichment_error,
                    apply_host, ats_type, last_enrichment_started_at, next_enrichment_retry_at,
+                   last_artifact_dir, last_artifact_screenshot_path, last_artifact_html_path, last_artifact_text_path,
                    date_scraped
             FROM jobs
             WHERE 1=1

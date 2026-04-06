@@ -5,7 +5,7 @@ from contextlib import asynccontextmanager
 from urllib.parse import quote
 
 from fastapi import FastAPI, HTTPException
-from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, PlainTextResponse, RedirectResponse
 
 
 REPO_ROOT = os.path.dirname(os.path.abspath(__file__))
@@ -21,6 +21,7 @@ from db import (  # noqa: E402
     list_jobs_for_review,
     requeue_job as requeue_review_job,
 )
+from failure_artifacts import resolve_artifact_path  # noqa: E402
 
 
 STATUS_OPTIONS = (
@@ -299,6 +300,59 @@ def render_layout(title, body):
 </body>
 </html>
 """
+
+
+def render_metrics(summary):
+    lines = [
+        "# HELP hunt_queue_total Total jobs known to the Hunt review queue.",
+        "# TYPE hunt_queue_total gauge",
+        f"hunt_queue_total {summary['total']}",
+        "# HELP hunt_queue_ready Number of rows currently ready for enrichment.",
+        "# TYPE hunt_queue_ready gauge",
+        f"hunt_queue_ready {summary['ready_count']}",
+        "# HELP hunt_queue_pending Number of rows currently pending enrichment.",
+        "# TYPE hunt_queue_pending gauge",
+        f"hunt_queue_pending {summary['pending_count']}",
+        "# HELP hunt_queue_blocked Number of blocked enrichment rows.",
+        "# TYPE hunt_queue_blocked gauge",
+        f"hunt_queue_blocked {summary['blocked_count']}",
+        "# HELP hunt_queue_stale_processing Number of stale processing rows.",
+        "# TYPE hunt_queue_stale_processing gauge",
+        f"hunt_queue_stale_processing {summary['stale_processing_count']}",
+    ]
+    for source, count in sorted(summary.get("source_counts", {}).items()):
+        lines.append(f'hunt_queue_source_count{{source="{source}"}} {count}')
+    for status, count in sorted(summary.get("counts_by_status", {}).items()):
+        lines.append(f'hunt_queue_status_count{{status="{status}"}} {count}')
+    for error_code, count in sorted(summary.get("failure_counts", {}).items()):
+        lines.append(f'hunt_queue_failure_count{{error_code="{error_code}"}} {count}')
+    return "\n".join(lines) + "\n"
+
+
+def render_artifact_links(row):
+    artifact_fields = (
+        ("last_artifact_dir", "Artifact dir", None),
+        ("last_artifact_screenshot_path", "Screenshot", "screenshot"),
+        ("last_artifact_html_path", "HTML snapshot", "html"),
+        ("last_artifact_text_path", "Text snapshot", "text"),
+    )
+    rendered = []
+    for field_name, label, artifact_kind in artifact_fields:
+        value = row.get(field_name)
+        if not value:
+            continue
+        if artifact_kind:
+            rendered.append(
+                f'<div class="field"><div class="label">{html.escape(label)}</div>'
+                f'<div class="value mono"><a href="/api/jobs/{row["id"]}/artifacts/{artifact_kind}" target="_blank" rel="noreferrer">{format_text(value)}</a></div></div>'
+            )
+        else:
+            rendered.append(
+                f'<div class="field"><div class="label">{html.escape(label)}</div><div class="value mono">{format_text(value)}</div></div>'
+            )
+    if not rendered:
+        return '<div class="field"><div class="label">Artifacts</div><div class="value">No failure artifacts saved.</div></div>'
+    return "".join(rendered)
 
 
 def render_summary_cards(summary):
@@ -637,6 +691,11 @@ def api_summary():
     return JSONResponse(get_review_queue_summary())
 
 
+@app.get("/metrics")
+def metrics():
+    return PlainTextResponse(render_metrics(get_review_queue_summary()), media_type="text/plain; version=0.0.4")
+
+
 @app.get("/health-view", response_class=HTMLResponse)
 def health_view():
     summary = get_review_queue_summary()
@@ -707,6 +766,28 @@ def api_job(job_id: int):
     if not row:
         raise HTTPException(status_code=404, detail="Job not found.")
     return JSONResponse(row)
+
+
+@app.get("/api/jobs/{job_id}/artifacts/{artifact_kind}")
+def api_job_artifact(job_id: int, artifact_kind: str):
+    row = get_job_by_id(job_id)
+    if not row:
+        raise HTTPException(status_code=404, detail="Job not found.")
+
+    field_map = {
+        "screenshot": ("last_artifact_screenshot_path", "image/png"),
+        "html": ("last_artifact_html_path", "text/html; charset=utf-8"),
+        "text": ("last_artifact_text_path", "text/plain; charset=utf-8"),
+    }
+    artifact_info = field_map.get(artifact_kind)
+    if artifact_info is None:
+        raise HTTPException(status_code=400, detail="Unsupported artifact kind.")
+
+    relative_path, media_type = artifact_info
+    artifact_path = resolve_artifact_path(row.get(relative_path))
+    if artifact_path is None or not artifact_path.exists():
+        raise HTTPException(status_code=404, detail="Artifact not found.")
+    return FileResponse(artifact_path, media_type=media_type)
 
 
 @app.post("/api/jobs/{job_id}/requeue")
@@ -823,6 +904,12 @@ def job_detail(job_id: int):
       <div class="panel">
         <h2>Last enrichment error</h2>
         <pre>{format_text(row.get('last_enrichment_error'))}</pre>
+      </div>
+      <div class="panel">
+        <h2>Failure artifacts</h2>
+        <div class="grid">
+          {render_artifact_links(row)}
+        </div>
       </div>
       <div class="panel">
         <h2>Description</h2>

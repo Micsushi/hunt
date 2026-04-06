@@ -19,6 +19,7 @@ from db import (  # noqa: E402
     mark_job_enrichment_succeeded,
 )
 from enrichment_policy import compute_retry_after, format_sqlite_timestamp  # noqa: E402
+from failure_artifacts import capture_page_artifacts, capture_text_artifacts  # noqa: E402
 from url_utils import detect_ats_type, get_apply_host, normalize_apply_url, normalize_optional_str  # noqa: E402
 
 
@@ -340,6 +341,22 @@ def enrich_indeed_job_in_context(context, job, *, timeout_ms=45000):
             "apply_host": apply_host,
             "ats_type": ats_type,
         }
+    except IndeedEnrichmentError as exc:
+        if exc.code in UI_VERIFIABLE_ERROR_CODES.union({"job_removed"}):
+            try:
+                artifact_paths = capture_page_artifacts(
+                    job,
+                    exc.code,
+                    page=page,
+                    source=SOURCE,
+                    metadata={"error_message": exc.message},
+                )
+                partial = dict(exc.partial_result or {})
+                partial.update(artifact_paths)
+                exc.partial_result = partial
+            except Exception:
+                pass
+        raise
     finally:
         try:
             page.close()
@@ -360,27 +377,68 @@ def enrich_indeed_job(job, *, timeout_ms=45000):
 
     body_text = _normalize_text(response.text) or ""
     if _detect_rate_limited(response, body_text):
-        raise IndeedEnrichmentError("rate_limited", "Indeed appears to be rate-limiting or challenging requests.")
+        raise IndeedEnrichmentError(
+            "rate_limited",
+            "Indeed appears to be rate-limiting or challenging requests.",
+            partial_result=capture_text_artifacts(
+                job,
+                "rate_limited",
+                source=SOURCE,
+                page_url=response.url,
+                html_content=response.text,
+                text_content=body_text,
+                metadata={"error_message": "Indeed appears to be rate-limiting or challenging requests."},
+            ),
+        )
     if _detect_job_removed(body_text):
-        raise IndeedEnrichmentError("job_removed", "Indeed indicates the job is no longer available.")
+        raise IndeedEnrichmentError(
+            "job_removed",
+            "Indeed indicates the job is no longer available.",
+            partial_result=capture_text_artifacts(
+                job,
+                "job_removed",
+                source=SOURCE,
+                page_url=response.url,
+                html_content=response.text,
+                text_content=body_text,
+                metadata={"error_message": "Indeed indicates the job is no longer available."},
+            ),
+        )
 
     soup = BeautifulSoup(response.text, "html.parser")
-    job_posting = _find_job_posting_json(soup)
-    description = _select_best_description(job, soup, job_posting)
-    apply_url = _extract_apply_url(session, soup, response.url, existing_apply_url=job.get("apply_url"))
-    apply_host = get_apply_host(apply_url)
-    ats_type = detect_ats_type(apply_url)
-    apply_type = "external_apply" if apply_url else "unknown"
-    auto_apply_eligible = 1 if apply_type == "external_apply" else None
+    try:
+        job_posting = _find_job_posting_json(soup)
+        description = _select_best_description(job, soup, job_posting)
+        apply_url = _extract_apply_url(session, soup, response.url, existing_apply_url=job.get("apply_url"))
+        apply_host = get_apply_host(apply_url)
+        ats_type = detect_ats_type(apply_url)
+        apply_type = "external_apply" if apply_url else "unknown"
+        auto_apply_eligible = 1 if apply_type == "external_apply" else None
 
-    return {
-        "description": description,
-        "apply_url": apply_url,
-        "apply_type": apply_type,
-        "auto_apply_eligible": auto_apply_eligible,
-        "apply_host": apply_host,
-        "ats_type": ats_type,
-    }
+        return {
+            "description": description,
+            "apply_url": apply_url,
+            "apply_type": apply_type,
+            "auto_apply_eligible": auto_apply_eligible,
+            "apply_host": apply_host,
+            "ats_type": ats_type,
+        }
+    except IndeedEnrichmentError as exc:
+        if exc.code in UI_VERIFIABLE_ERROR_CODES.union({"job_removed"}):
+            partial = dict(exc.partial_result or {})
+            partial.update(
+                capture_text_artifacts(
+                    job,
+                    exc.code,
+                    source=SOURCE,
+                    page_url=response.url,
+                    html_content=response.text,
+                    text_content=body_text,
+                    metadata={"error_message": exc.message},
+                )
+            )
+            exc.partial_result = partial
+        raise
 
 
 def _format_error_message(error):
@@ -453,6 +511,7 @@ def _process_claimed_job(claimed_job, *, timeout_ms=45000, context=None, ui_veri
     except Exception as exc:
         error_message = _format_error_message(exc)
         error_code = error_message.split(":", 1)[0].strip()
+        partial_result = getattr(exc, "partial_result", None) or {}
         retry_after = compute_retry_after(error_code, claimed_job.get("enrichment_attempts"))
         next_retry_at = None if ui_verify else (format_sqlite_timestamp(retry_after) if retry_after else None)
         mark_job_enrichment_failed(
@@ -460,6 +519,10 @@ def _process_claimed_job(claimed_job, *, timeout_ms=45000, context=None, ui_veri
             error_message,
             enrichment_status=_get_failure_enrichment_status(error_code, ui_verify=ui_verify),
             next_enrichment_retry_at=next_retry_at,
+            artifact_dir=partial_result.get("artifact_dir"),
+            artifact_screenshot_path=partial_result.get("artifact_screenshot_path"),
+            artifact_html_path=partial_result.get("artifact_html_path"),
+            artifact_text_path=partial_result.get("artifact_text_path"),
             source=SOURCE,
         )
         elapsed_seconds = time.monotonic() - started_at

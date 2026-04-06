@@ -1,0 +1,240 @@
+\documentclass[10pt, letterpaper]{article}
+
+% Packages:
+\usepackage[
+    ignoreheadfoot,
+    top=0.7 cm,
+    bottom=1 cm,
+    left=1 cm,
+    right=1 cm,
+    footskip=1.0 cm,
+]{geometry}
+\usepackage{titlesec}
+\usepackage{tabularx}
+\usepackage{array}
+\usepackage[dvipsnames]{xcolor}
+\definecolor{primaryColor}{RGB}{0, 0, 0}
+\usepackage{enumitem}
+\usepackage{fontawesome5}
+\usepackage{amsmath}
+\usepackage[
+    pdftitle={Michael Shi's CV},
+    pdfauthor={Michael Shi},
+    pdfcreator={LaTeX with RenderCV},
+    colorlinks=true,
+    urlcolor=primaryColor
+]{hyperref}
+\usepackage[pscoord]{eso-pic}
+\usepackage{calc}
+\usepackage{bookmark}
+
+\usepackage{changepage}
+\usepackage{paracol}
+\usepackage{ifthen}
+\usepackage{needspace}
+\usepackage{iftex}
+
+% Ensure that generate pdf is machine readable/ATS parsable:
+\ifPDFTeX
+    \input{glyphtounicode}
+    \pdfgentounicode=1
+    \usepackage[T1]{fontenc}
+    \usepackage[utf8]{inputenc}
+    \usepackage{lmodern}
+\fi
+
+\usepackage{charter}
+
+% Some settings:
+\raggedright
+\AtBeginEnvironment{adjustwidth}{\partopsep0pt}
+\pagestyle{empty}
+\setcounter{secnumdepth}{0}
+\setlength{\parindent}{0pt}
+\setlength{\topskip}{0pt}
+\setlength{\columnsep}{0.15cm}
+\pagenumbering{gobble}
+
+\titleformat{\section}{\needspace{4\baselineskip}\bfseries\large}{}{0pt}{}[\vspace{1pt}\titlerule]
+
+\titlespacing{\section}{
+    -1pt
+}{
+    0.2 cm
+}{
+    0.2 cm
+}
+
+\renewcommand\labelitemi{$\vcenter{\hbox{\small$\bullet$}}$}
+
+\newenvironment{highlights}{
+    \begin{itemize}[
+        topsep=0.10 cm,
+        parsep=0.10 cm,
+        partopsep=0pt,
+        itemsep=0pt,
+        leftmargin=0 cm + 10pt
+    ]
+}{
+    \end{itemize}
+}
+
+\newenvironment{highlightsforbulletentries}{
+    \begin{itemize}[
+        topsep=0.10 cm,
+        parsep=0.10 cm,
+        partopsep=0pt,
+        itemsep=0pt,
+        leftmargin=10pt
+    ]
+}{
+    \end{itemize}
+}
+
+\newenvironment{onecolentry}{
+    \begin{adjustwidth}{
+        0 cm + 0.00001 cm
+    }{
+        0 cm + 0.00001 cm
+    }
+}{
+    \end{adjustwidth}
+}
+
+\newenvironment{twocolentry}[2][]{
+    \onecolentry
+    \def\secondColumn{#2}
+    \setcolumnwidth{\fill, 6 cm}
+    \begin{paracol}{2}
+}{
+    \switchcolumn \raggedleft \secondColumn
+    \end{paracol}
+    \endonecolentry
+}
+
+\newenvironment{threecolentry}[3][]{
+    \onecolentry
+    \def\thirdColumn{#3}
+    \setcolumnwidth{, \fill, 4.5 cm}
+    \begin{paracol}{3}
+    {\raggedright #2} \switchcolumn
+}{
+    \switchcolumn \raggedleft \thirdColumn
+    \end{paracol}
+    \endonecolentry
+}
+
+\let\hrefWithoutArrow\href
+
+\begin{document}
+    \begin{center}
+        {\fontsize{24pt}{24pt}\selectfont\textbf{Michael Shi}}
+        
+        \vspace{0.2cm}
+        
+        Edmonton, AB | \href{mailto:wenjian2@ualberta.ca}{wenjian2@ualberta.ca} | \href{https://mshi.ca}{mshi.ca} | \href{https://linkedin.com/in/wjshi}{linkedin.com/in/wjshi} | \href{https://github.com/micsushi}{github.com/micsushi}
+    \end{center}
+    
+    \vspace{0.10 cm}
+    \section{Education}
+
+    \begin{twocolentry}{Expected Graduation: \textbf{Sep 2026}}
+        \textbf{University of Alberta}, BSc in Computer Science with Specialization
+    \end{twocolentry}
+
+    \vspace{0.10 cm}
+    \begin{onecolentry}
+        \begin{itemize}[leftmargin=2em, itemsep=1pt, parsep=0pt, topsep=0pt, partopsep=0pt]
+            \item \textbf{Awards:} Undergraduate Leadership Award, 4x Faculty of Science Scholarship, Dean's Honor Roll
+        \end{itemize}
+    \end{onecolentry}
+    
+    \vspace{0.10 cm}
+    \section{Experience}
+    
+
+    \begin{twocolentry}{May 2025 - Feb 2026}
+        \textbf{Junior Software Developer (Part-time)}, INVIDI Technologies -- Edmonton, AB
+    \end{twocolentry}
+
+    \vspace{0.10 cm}
+    \begin{onecolentry}
+        \begin{itemize}[leftmargin=2em, itemsep=1pt, parsep=0pt, topsep=0pt, partopsep=0pt]
+            \item Enhanced real-time subscriber targeting accuracy by developing Kotlin microservices that integrated external marketing, forecasting, and analytics platforms via RESTful APIs.
+            \item Established S3 cost saving blueprint for \textbf{100+} developers, resulting in a \textbf{74\% (\$18,000) reduction} by implementing intelligent-tiering and S3 life cycle policies in our Terraform architecture.
+            \item Accelerated deployment cycles and saved 2 hours of weekly developer time by automating CI/CD via Bitbucket pipelines and ECR/Kubernetes.
+            \item Optimized bug detection speed by configuring Datadog metrics, monitors and centralized logging with automated alerting and error traces.
+            \item Drove technical alignment by presenting completed features to stakeholders and leading design discussion meetings to gather feedback and refine system architecture.
+            \item Minimized product downtime by resolving critical production node failures and bugs during on-call incident management.
+        \end{itemize}
+    \end{onecolentry}
+
+    \vspace{0.10 cm}
+
+    \begin{twocolentry}{May 2024 - May 2025}
+        \textbf{Software Developer Intern}, INVIDI Technologies -- Edmonton, AB
+    \end{twocolentry}
+
+    \vspace{0.10 cm}
+    \begin{onecolentry}
+        \begin{itemize}[leftmargin=2em, itemsep=1pt, parsep=0pt, topsep=0pt, partopsep=0pt]
+            \item Slashed backend operational costs by \textbf{89\% (\$38,000)} and eliminated false-positive alerts by migrating the database from Apache Ignite to AWS Aurora PostgreSQL.
+            \item Boosted authentication performance by \textbf{30\%} by decoupling OAuth permissions into SPA and M2M clients across TypeScript/Vue.js and Kotlin services.
+            \item Improved system performance and reduced API costs by implementing forecast caching in sync services using DynamoDB, eliminating redundant external calls.
+            \item Maintained consistent team velocity during leadership transitions by assuming Scrum Master duties and facilitating Agile ceremonies and sprint planning.
+        \end{itemize}
+    \end{onecolentry}
+
+    \vspace{0.10 cm}
+
+    \begin{twocolentry}{Sep 2023 - Present}
+        \textbf{Undergraduate Teaching Assistant}, University of Alberta -- Edmonton, AB
+    \end{twocolentry}
+
+   \vspace{0.10 cm}
+    \begin{onecolentry}
+        \begin{itemize}[leftmargin=2em, itemsep=1pt, parsep=0pt, topsep=0pt, partopsep=0pt]
+            \item Taught multiple upper-level Computer Science courses, providing instructional support and mentoring students in advanced programming concepts.
+            \item Mentored \textbf{500+} students in technical best practices, ensuring a \textbf{95\% project success rate} in attaining A/A+ grades through Agile workflow facilitation.
+            \item Reduced evaluation time by \textbf{85\%} and ensured grading consistency by developing Python-based automation scripts for grading workflows.
+        \end{itemize}
+    \end{onecolentry}
+    
+    \vspace{0.10 cm}
+    \section{Projects}
+
+    \begin{twocolentry}{\href{https://github.com/NatRunners/StudyAmp}{github.com/NatRunners/StudyAmp}}
+        \textbf{StudyAmp: NatHacks 1st Place}
+    \end{twocolentry}
+
+    \vspace{0.10 cm}
+    \begin{onecolentry}
+        \begin{itemize}[leftmargin=2em, itemsep=1pt, parsep=0pt, topsep=0pt, partopsep=0pt]
+            \item Secured \textbf{\$4,000} in research funding by leading a team of 5 to develop an EEG-based attention monitoring web app during a hackathon.
+            \item Optimized system scalability to support \textbf{10,000+} concurrent users by engineering a full-stack architecture on Vercel and Supabase.
+            \item Achieved \textbf{85\% accuracy} in attention scoring by developing a Python backend for real-time brainwave processing and data optimization.
+            \item Enhanced user engagement by building a responsive UI using Next.js and Framer Motion based on beta tester feedback.
+            \item Slashed recording review time by \textbf{80\%} by integrating Gemini AI to automatically summarize audio content during detected attention drops.
+        \end{itemize}
+    \end{onecolentry}
+    
+    \vspace{0.10 cm}
+    \section{Technical Skills}
+
+    \begin{onecolentry}
+        \textbf{Languages:} Python, C, C++, Java, Kotlin, R, JavaScript, TypeScript, Bash
+    \end{onecolentry}
+
+    \vspace{0.1 cm}
+
+    \begin{onecolentry}
+        \textbf{Frameworks:} Node.js, REST API, Express.js, Flask, FastAPI, React, Next.js, Vue.js, Tailwind
+    \end{onecolentry}
+
+    \vspace{0.1 cm}
+
+    \begin{onecolentry}
+        \textbf{Developer Tools:} Git, Docker, Kubernetes, MongoDB, Firebase, PostgreSQL, AWS, Gradle, Terraform, Datadog, Snyk
+    \end{onecolentry}
+
+\end{document}

@@ -13,6 +13,7 @@ from db import (
     mark_linkedin_enrichment_succeeded,
 )
 from enrichment_policy import compute_retry_after, format_sqlite_timestamp
+from failure_artifacts import capture_page_artifacts
 from linkedin_session import LinkedInSessionError, assert_logged_in, open_linkedin_context
 from url_utils import (
     detect_ats_type,
@@ -930,6 +931,25 @@ def process_claimed_job(
         error_message = format_error_message(exc)
         error_code = get_error_code(error_message)
         failure_update_kwargs = build_failure_update_kwargs(exc)
+        if context is not None and error_code in BLOCKED_ERROR_CODES.union({"description_not_found", "external_description_not_found", "external_description_not_usable", "unexpected_error", "rate_limited"}):
+            page = context.pages[-1] if getattr(context, "pages", None) else None
+            if page is not None:
+                try:
+                    artifact_paths = capture_page_artifacts(
+                        claimed_job,
+                        error_code,
+                        page=page,
+                        source="linkedin",
+                        metadata={"error_message": error_message},
+                    )
+                    failure_update_kwargs.update(
+                        artifact_dir=artifact_paths["artifact_dir"],
+                        artifact_screenshot_path=artifact_paths["artifact_screenshot_path"],
+                        artifact_html_path=artifact_paths["artifact_html_path"],
+                        artifact_text_path=artifact_paths["artifact_text_path"],
+                    )
+                except Exception:
+                    pass
         next_retry_timestamp = get_next_retry_timestamp(
             claimed_job,
             error_code,
