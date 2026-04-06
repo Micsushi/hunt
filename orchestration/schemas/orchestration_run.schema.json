@@ -28,6 +28,7 @@
     "selected_resume_version_id": {
       "type": [
         "integer",
+        "string",
         "null"
       ]
     },

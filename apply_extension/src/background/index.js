@@ -159,7 +159,10 @@ function createWorkdayFillFunction() {
       const jobTitle = normalizeText(activeApplyContext.title);
       const companyName = normalizeText(activeApplyContext.company);
       const descriptionTerms = extractDescriptionTerms(activeApplyContext.description);
+      const resumeSummary = normalizeText(activeApplyContext.selectedResumeSummary);
+      const resumeTerms = extractDescriptionTerms(resumeSummary, 2);
       const focusArea = descriptionTerms.slice(0, 2).join(" and ");
+      const resumeFocus = resumeTerms.join(" and ");
       const contextualRole = [jobTitle, companyName ? `at ${companyName}` : ""]
         .filter(Boolean)
         .join(" ");
@@ -201,7 +204,7 @@ function createWorkdayFillFunction() {
 
       if (question.includes("why") || question.includes("interest")) {
         const contextualAnswer = contextualRole
-          ? `I am interested in the ${contextualRole} opportunity because it aligns well with my background${focusArea ? ` in ${focusArea}` : ""} and would let me contribute quickly while continuing to grow.`
+          ? `I am interested in the ${contextualRole} opportunity because it aligns well with my background${focusArea ? ` in ${focusArea}` : ""}${resumeFocus ? ` and with experience around ${resumeFocus}` : ""} and would let me contribute quickly while continuing to grow.`
           : "";
         return {
           answerText:
@@ -214,8 +217,8 @@ function createWorkdayFillFunction() {
       }
 
       const contextualFallback =
-        contextualRole && focusArea
-          ? `I believe my background is a strong fit for the ${contextualRole} opportunity, especially around ${focusArea}.`
+        contextualRole && (focusArea || resumeFocus)
+          ? `I believe my background is a strong fit for the ${contextualRole} opportunity, especially around ${focusArea || resumeFocus}${focusArea && resumeFocus ? `, with experience in ${resumeFocus}` : ""}.`
           : contextualRole
             ? `I believe my background is a strong fit for the ${contextualRole} opportunity and I would be excited to contribute while continuing to grow in the role.`
             : "";

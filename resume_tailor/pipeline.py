@@ -27,6 +27,68 @@ from .source_loader import load_bullet_library, load_candidate_profile
 from .storage import build_attempt_dir, ensure_dir, file_hash, write_json, write_text
 
 
+def _trim_resume_for_page_fit(doc, structured_output: dict) -> bool:
+    if doc.projects:
+        last_project = doc.projects[-1]
+        if last_project.bullets:
+            last_project.bullets.pop()
+            for entry in reversed(structured_output.get("project_entries", [])):
+                if entry.get("entry_id") == last_project.entry_id and entry.get("bullet_plan"):
+                    entry["bullet_plan"].pop()
+                    break
+            if not last_project.bullets:
+                doc.projects.pop()
+                structured_output["project_entries"] = [
+                    entry
+                    for entry in structured_output.get("project_entries", [])
+                    if entry.get("entry_id") != last_project.entry_id
+                ]
+            return True
+
+    for entry in reversed(doc.experience):
+        if len(entry.bullets) > 1:
+            entry.bullets.pop()
+            for structured_entry in reversed(structured_output.get("experience_entries", [])):
+                if structured_entry.get("entry_id") == entry.entry_id and structured_entry.get("bullet_plan"):
+                    structured_entry["bullet_plan"].pop()
+                    break
+            return True
+
+    if len(doc.experience) > 1:
+        removed_entry = doc.experience.pop()
+        structured_output["experience_entries"] = [
+            entry
+            for entry in structured_output.get("experience_entries", [])
+            if entry.get("entry_id") != removed_entry.entry_id
+        ]
+        return True
+
+    return False
+
+
+def _compile_with_fit_retry(attempt_dir: Path, tailored_doc, structured_output: dict) -> tuple[str, dict, str, list[dict]]:
+    compile_history: list[dict] = []
+    while True:
+        structured_output_path = write_json(attempt_dir / "tailored_resume.json", structured_output)
+        tex_path = write_text(attempt_dir / "output.tex", render_resume_tex(tailored_doc))
+        compile_result = compile_tex(tex_path)
+        compile_history.append(
+            {
+                "compile_status": compile_result["compile_status"],
+                "page_count": compile_result["page_count"],
+                "fits_one_page": compile_result["fits_one_page"],
+            }
+        )
+        if compile_result["fits_one_page"]:
+            return structured_output_path, compile_result, tex_path, compile_history
+        if compile_result["compile_status"] != "ok":
+            return structured_output_path, compile_result, tex_path, compile_history
+        if compile_result["page_count"] is None or compile_result["page_count"] <= 1:
+            return structured_output_path, compile_result, tex_path, compile_history
+        if not _trim_resume_for_page_fit(tailored_doc, structured_output):
+            return structured_output_path, compile_result, tex_path, compile_history
+
+
 def generate_resume_for_job(
     job_id: int,
     *,
@@ -148,10 +210,11 @@ def _run_pipeline(
         "candidate_profile": candidate_profile,
         "bullet_library": bullet_library,
     })
-    structured_output_path = write_json(attempt_dir / "tailored_resume.json", structured_output)
-    tex_path = write_text(attempt_dir / "output.tex", render_resume_tex(tailored_doc))
-
-    compile_result = compile_tex(tex_path)
+    structured_output_path, compile_result, tex_path, compile_history = _compile_with_fit_retry(
+        attempt_dir,
+        tailored_doc,
+        structured_output,
+    )
     compile_log_path = write_text(attempt_dir / "compile.log", compile_result["log_text"])
     metadata = {
         "job_id": job_id,
@@ -164,6 +227,8 @@ def _run_pipeline(
         "compile_status": compile_result["compile_status"],
         "page_count": compile_result["page_count"],
         "fits_one_page": compile_result["fits_one_page"],
+        "page_fit_retry_count": max(0, len(compile_history) - 1),
+        "compile_history": compile_history,
         "model_backend": DEFAULT_MODEL_BACKEND,
         "model_name": DEFAULT_MODEL_NAME,
         "selected_base_resume": base_resume_name,

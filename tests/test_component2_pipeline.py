@@ -374,3 +374,31 @@ class Component2PipelineTests(unittest.TestCase):
         )
         self.assertEqual(structured_output["selected_base_resume"], "pm")
         self.assertEqual(metadata["source_resume_path"], str(family_resume_path))
+
+    def test_page_fit_retry_recompiles_after_controlled_reduction(self):
+        init_resume_db(self.db_path)
+        compile_results = [
+            {
+                "compile_status": "ok",
+                "page_count": 2,
+                "fits_one_page": False,
+                "pdf_path": str(Path(self.temp_dir.name) / "first_try.pdf"),
+                "log_text": "mock two-page result",
+            },
+            {
+                "compile_status": "ok",
+                "page_count": 1,
+                "fits_one_page": True,
+                "pdf_path": str(Path(self.temp_dir.name) / "second_try.pdf"),
+                "log_text": "mock one-page result",
+            },
+        ]
+
+        with patch("resume_tailor.pipeline.compile_tex", side_effect=compile_results) as mock_compile:
+            result = generate_resume_for_job(1, db_path=self.db_path)
+
+        metadata = json.loads(Path(result["metadata_path"]).read_text(encoding="utf-8"))
+        self.assertEqual(mock_compile.call_count, 2)
+        self.assertIn(result["status"], {"done", "done_with_flags"})
+        self.assertEqual(metadata["page_fit_retry_count"], 1)
+        self.assertEqual(len(metadata["compile_history"]), 2)

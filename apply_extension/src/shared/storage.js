@@ -95,6 +95,7 @@ export function sanitizeApplyContext(context = {}) {
     selectedResumeVersionId: sanitizeText(context.selectedResumeVersionId),
     selectedResumePath: sanitizeText(context.selectedResumePath),
     selectedResumeTexPath: sanitizeText(context.selectedResumeTexPath),
+    selectedResumeSummary: sanitizeText(context.selectedResumeSummary),
     selectedResumeName: sanitizeText(context.selectedResumeName),
     selectedResumeMimeType: sanitizeText(context.selectedResumeMimeType || "application/pdf"),
     selectedResumeDataUrl: sanitizeText(context.selectedResumeDataUrl),

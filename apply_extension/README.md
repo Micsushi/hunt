@@ -1,11 +1,17 @@
 # Apply Extension
 
-This directory contains the future Chrome extension source for Component 3.
+This directory contains the current local Chrome extension source for Component 3.
 
 Current scope:
 - standalone browser autofill tool
 - Chrome only
 - Workday first
+
+Current implementation:
+- local profile, resume, settings, and apply-context storage
+- Workday form fill, resume upload, and generated-answer support
+- append-only attempt logging and generated-answer history
+- explicit per-job apply-context priming for C2 and C4 handoff
 
 Design goals:
 - useful manually without C1, C2, or OpenClaw

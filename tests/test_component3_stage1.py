@@ -43,6 +43,25 @@ class Component3Stage1Tests(unittest.TestCase):
 
         return TempDbContext(self)
 
+    def with_temp_orchestration_root(self):
+        class TempRootContext:
+            def __init__(self):
+                self.root = tempfile.TemporaryDirectory()
+                self.old_root = os.environ.get("HUNT_ORCHESTRATION_ROOT")
+
+            def __enter__(self):
+                os.environ["HUNT_ORCHESTRATION_ROOT"] = self.root.name
+                return self.root.name
+
+            def __exit__(self, exc_type, exc, tb):
+                if self.old_root is None:
+                    os.environ.pop("HUNT_ORCHESTRATION_ROOT", None)
+                else:
+                    os.environ["HUNT_ORCHESTRATION_ROOT"] = self.old_root
+                self.root.cleanup()
+
+        return TempRootContext()
+
     def insert_job(self, path, **overrides):
         defaults = {
             "title": "Software Engineer",
@@ -202,7 +221,7 @@ class Component3Stage1Tests(unittest.TestCase):
             self.assertTrue(context["selected_resume_ready_for_c3"])
             self.assertTrue(context["selected_resume_selected_at"])
 
-    def test_build_apply_prep_payload_embeds_resume_and_flags_non_terminal_context(self):
+    def test_build_apply_prep_payload_embeds_resume_and_writes_apply_context_artifact(self):
         with self.with_temp_db() as path:
             with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as resume_file:
                 resume_file.write(b"%PDF-1.4 test resume")
@@ -213,8 +232,8 @@ class Component3Stage1Tests(unittest.TestCase):
                 job_id = self.insert_job(
                     path,
                     job_url="https://www.linkedin.com/jobs/view/456",
-                    enrichment_status="pending",
-                    last_enrichment_error="description_not_found: temporary",
+                    enrichment_status="done",
+                    last_enrichment_error=None,
                     latest_resume_job_description_path=str(REPO_ROOT / "tmp_jd.txt"),
                     latest_resume_flags='["manual_review_recommended", "weak_description"]',
                     selected_resume_version_id="resume-v2",
@@ -223,29 +242,48 @@ class Component3Stage1Tests(unittest.TestCase):
                     selected_resume_ready_for_c3=1,
                 )
 
-                payload = c3_apply_prep.build_apply_prep_payload(job_id, embed_resume_data=True)
+                with self.with_temp_orchestration_root():
+                    payload = c3_apply_prep.build_apply_prep_payload(job_id, embed_resume_data=True)
+                    self.assertTrue(Path(payload["applyContextPath"]).exists())
 
                 self.assertEqual(payload["jobId"], str(job_id))
                 self.assertEqual(payload["atsType"], "workday")
                 self.assertEqual(payload["selectedResumeVersionId"], "resume-v2")
                 self.assertEqual(payload["selectedResumePath"], resume_path)
                 self.assertEqual(payload["selectedResumeTexPath"], str(REPO_ROOT / "main.tex"))
+                self.assertTrue(payload["selectedResumeSummary"])
                 self.assertTrue(payload["selectedResumeReadyForC3"])
                 self.assertEqual(payload["jdSnapshotPath"], str(REPO_ROOT / "tmp_jd.txt"))
-                self.assertIn("enrichment_status:pending", payload["concernFlags"])
-                self.assertIn("enrichment_error:description_not_found: temporary", payload["concernFlags"])
                 self.assertIn("manual_review_recommended", payload["concernFlags"])
                 self.assertIn("weak_description", payload["concernFlags"])
                 self.assertEqual(payload["selectedResumeName"], Path(resume_path).name)
                 self.assertEqual(payload["selectedResumeMimeType"], "application/pdf")
                 self.assertTrue(payload["selectedResumeDataUrl"].startswith("data:application/pdf;base64,"))
                 self.assertTrue(payload["primedAt"])
+                self.assertTrue(payload["applyContextPath"])
 
                 encoded_payload = payload["selectedResumeDataUrl"].split(",", 1)[1]
                 self.assertEqual(base64.b64decode(encoded_payload), b"%PDF-1.4 test resume")
             finally:
                 if os.path.exists(resume_path):
                     os.remove(resume_path)
+
+    def test_build_apply_prep_payload_rejects_jobs_that_are_not_ready(self):
+        with self.with_temp_db() as path:
+            job_id = self.insert_job(
+                path,
+                job_url="https://www.linkedin.com/jobs/view/789",
+                apply_type="easy_apply",
+                auto_apply_eligible=0,
+                selected_resume_ready_for_c3=0,
+            )
+
+            with self.assertRaises(c3_apply_prep.ApplyPrepNotReadyError) as error:
+                c3_apply_prep.build_apply_prep_payload(job_id)
+
+            self.assertEqual(error.exception.job_id, job_id)
+            self.assertEqual(error.exception.reason, "not_external_apply")
+            self.assertIn("not_external_apply", error.exception.flags)
 
 
 if __name__ == "__main__":

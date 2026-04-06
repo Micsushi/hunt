@@ -16,6 +16,7 @@ OpenClaw is the current most likely first implementation of Component 4.
 This document is the stage plan.
 Implementation-oriented design notes and research-backed recommendations live in:
 - `docs/components/component4/design.md`
+- `docs/components/component4/implementation_checkpoint.md`
 
 ## Why Component 4 Should Be Separate
 

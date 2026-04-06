@@ -1,86 +1,9 @@
 #!/usr/bin/env python3
 import argparse
-import base64
 import json
-import mimetypes
-import sys
-from datetime import datetime, timezone
 from pathlib import Path
 
-
-REPO_ROOT = Path(__file__).resolve().parent.parent
-SCRAPER_DIR = REPO_ROOT / "scraper"
-if str(SCRAPER_DIR) not in sys.path:
-    sys.path.insert(0, str(SCRAPER_DIR))
-
-from db import get_apply_context_for_job, init_db  # noqa: E402
-
-
-def _build_resume_data_url(pdf_path: str) -> str:
-    if not pdf_path:
-        return ""
-
-    path = Path(pdf_path)
-    if not path.exists() or not path.is_file():
-        return ""
-
-    mime_type = mimetypes.guess_type(path.name)[0] or "application/pdf"
-    encoded = base64.b64encode(path.read_bytes()).decode("ascii")
-    return f"data:{mime_type};base64,{encoded}"
-
-
-def build_apply_prep_payload(job_id: int, *, embed_resume_data: bool = False):
-    context = get_apply_context_for_job(job_id)
-    if not context:
-        raise SystemExit(f"Job {job_id} was not found.")
-
-    payload = {
-        "jobId": context["job_id"],
-        "title": context["title"],
-        "company": context["company"],
-        "applyUrl": context["apply_url"],
-        "jobUrl": context["job_url"],
-        "sourceMode": "c4",
-        "source": context["source"],
-        "atsType": context["ats_type"],
-        "applyType": context["apply_type"],
-        "autoApplyEligible": context["auto_apply_eligible"],
-        "description": context["description"],
-        "selectedResumeVersionId": context["selected_resume_version_id"],
-        "selectedResumePath": context["selected_resume_pdf_path"],
-        "selectedResumeTexPath": context["selected_resume_tex_path"],
-        "selectedResumeReadyForC3": context["selected_resume_ready_for_c3"],
-        "jdSnapshotPath": context["latest_resume_job_description_path"],
-        "concernFlags": [],
-        "primedAt": datetime.now(timezone.utc).isoformat(),
-    }
-
-    if context["latest_resume_flags"]:
-        try:
-            payload["concernFlags"].extend(json.loads(context["latest_resume_flags"]))
-        except json.JSONDecodeError:
-            payload["concernFlags"].append("resume_flags:unparseable")
-
-    if context["last_enrichment_error"]:
-        payload["concernFlags"].append(f"enrichment_error:{context['last_enrichment_error']}")
-
-    if context["enrichment_status"] not in {"done", "done_verified"}:
-        payload["concernFlags"].append(f"enrichment_status:{context['enrichment_status']}")
-
-    payload["concernFlags"] = list(dict.fromkeys(flag for flag in payload["concernFlags"] if flag))
-
-    if embed_resume_data:
-        payload["selectedResumeDataUrl"] = _build_resume_data_url(
-            context["selected_resume_pdf_path"]
-        )
-        payload["selectedResumeName"] = (
-            Path(context["selected_resume_pdf_path"]).name
-            if context["selected_resume_pdf_path"]
-            else ""
-        )
-        payload["selectedResumeMimeType"] = "application/pdf"
-
-    return payload
+from orchestration.apply_prep import ApplyPrepNotReadyError, build_apply_prep_payload
 
 
 def main():
@@ -96,20 +19,30 @@ def main():
     parser.add_argument(
         "--output",
         default="",
-        help="Optional path to write the JSON payload to disk.",
+        help="Optional path to write the JSON payload to disk. If omitted, the shared apply-prep runtime path is used.",
+    )
+    parser.add_argument(
+        "--allow-not-ready",
+        action="store_true",
+        help="Build the payload even when the job does not meet the documented ready-to-apply predicate.",
     )
     args = parser.parse_args()
 
-    init_db()
-    payload = build_apply_prep_payload(
-        args.job_id,
-        embed_resume_data=args.embed_resume_data,
-    )
+    try:
+        payload = build_apply_prep_payload(
+            args.job_id,
+            embed_resume_data=args.embed_resume_data,
+            require_ready=not args.allow_not_ready,
+            output_path=Path(args.output) if args.output else None,
+        )
+    except ApplyPrepNotReadyError as error:
+        raise SystemExit(
+            f"Job {error.job_id} is not ready for apply-prep: {error.reason}"
+        ) from error
 
     rendered = json.dumps(payload, indent=2)
     if args.output:
-        output_path = Path(args.output)
-        output_path.write_text(rendered + "\n", encoding="utf-8")
+        Path(args.output).write_text(rendered + "\n", encoding="utf-8")
     print(rendered)
 
 

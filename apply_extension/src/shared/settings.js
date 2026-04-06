@@ -60,6 +60,7 @@ export function createEmptyApplyContext() {
     selectedResumeVersionId: "",
     selectedResumePath: "",
     selectedResumeTexPath: "",
+    selectedResumeSummary: "",
     selectedResumeName: "",
     selectedResumeMimeType: "application/pdf",
     selectedResumeDataUrl: "",

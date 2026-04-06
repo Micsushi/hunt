@@ -5,7 +5,7 @@
   "required": [
     "job_id",
     "source_mode",
-    "manual_review_flags",
+    "concern_flags",
     "created_at"
   ],
   "properties": {
@@ -31,7 +31,34 @@
         "null"
       ]
     },
+    "job_url": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "source": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
     "ats_type": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "apply_type": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "auto_apply_eligible": {
+      "type": "boolean"
+    },
+    "description": {
       "type": [
         "string",
         "null"
@@ -40,6 +67,7 @@
     "selected_resume_version_id": {
       "type": [
         "integer",
+        "string",
         "null"
       ]
     },
@@ -48,6 +76,21 @@
         "string",
         "null"
       ]
+    },
+    "selected_resume_tex_path": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "selected_resume_summary": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "selected_resume_ready_for_c3": {
+      "type": "boolean"
     },
     "job_description_path": {
       "type": [
@@ -58,7 +101,7 @@
     "source_mode": {
       "type": "string"
     },
-    "manual_review_flags": {
+    "concern_flags": {
       "type": "array",
       "items": {
         "type": "string"

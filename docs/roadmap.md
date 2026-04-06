@@ -101,14 +101,22 @@ Purpose:
 - save a per-job output resume without overwriting the source resume
 
 Current status:
-- requirements and desired prompting flow are defined
-- initial repo scaffold now exists under `resume_tailor/`
+- an initial local runtime now exists under `resume_tailor/`
 - the OG resume source has been locked to `main.tex`
+- the current local implementation covers:
+  - parser and renderer code around `main.tex`
+  - deterministic job classification and keyword extraction
+  - attempt persistence and selected-resume DB wiring
+  - compile plus one-page retry gating
+  - shared apply-context fields for later C3 and C4 handoff
 - detailed design notes now live in:
   - `docs/components/component2/README.md`
   - `docs/components/component2/design.md`
-  - `docs/components/component2/glossary.md`
-- runtime code is not implemented yet
+  - `glossary.md`
+- remaining work is mostly production hardening:
+  - Ollama-backed prompt execution
+  - richer family-base resume curation
+  - broader review-surface support
 
 Doc:
 - `docs/components/component2/README.md`
@@ -123,12 +131,17 @@ Purpose:
 - later support orchestration by OpenClaw or another higher-level agent
 
 Current status:
-- docs and scaffold stage
-- first implementation target is a standalone Chrome extension for Workday
+- an initial Chrome-extension implementation now exists under `apply_extension/`
+- the current local implementation covers:
+  - local profile, resume, settings, and per-job apply-context storage
+  - Workday page detection, form fill, resume upload, and generated answers
+  - append-only attempt logging and generated-answer history
+  - explicit C2/C4 apply-context priming support
 - should remain useful without Component 1, Component 2, or OpenClaw
-- later consumes:
-  - C1 job/apply metadata
-  - C2 job-specific resumes
+- remaining work is mostly deeper grounding and wider coverage:
+  - stronger answer grounding from selected resume facts
+  - richer auth/account helpers
+  - broader ATS support and packaging polish
 
 Important limitation:
 - anti-bot and CAPTCHA bypassing are not a supported goal
@@ -146,8 +159,13 @@ Purpose:
 - later own final submit policy and higher-level automation behavior
 
 Current status:
-- docs stage only
-- OpenClaw is the likely first implementation target
+- an initial local contract implementation now exists under `orchestration/`
+- the current local implementation covers:
+  - a shared readiness predicate over C1 and C2 state
+  - one shared apply-prep command and payload builder
+  - initial CLI, models, and schema contracts
+  - basic orchestration-run shaping for fill-only flows
+- OpenClaw is still the likely first production runtime target
 - should remain separate from Component 3 so the extension stays usable manually
 
 Doc:

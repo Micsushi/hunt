@@ -6,6 +6,7 @@ It now contains the first working local implementation plus the supporting scaff
 - parser and renderer code around `main.tex`
 - pipeline and CLI entrypoints
 - DB helpers for attempt/version persistence and downstream resume selection
+- controlled compile retry logic for the one-page gate
 - `base_resumes/` for curated family-specific starting resumes
 - `prompts/` for structured LLM prompt templates
 - `schemas/` for JSON output contracts
@@ -18,5 +19,5 @@ Important notes:
 
 Still planned:
 - Ollama-backed prompt execution
-- smarter page-fit retry logic
+- richer family-base resume curation
 - richer review UI flows

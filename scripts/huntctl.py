@@ -276,19 +276,49 @@ def cmd_review(_args):
 
 
 def cmd_apply_prep(args):
-    command = [PYTHON, "scripts/c3_apply_prep.py", str(args.job_id)]
+    command = [
+        PYTHON,
+        "-m",
+        "orchestration.cli",
+        "apply-prep",
+        "--job-id",
+        str(args.job_id),
+        "--source-runtime",
+        args.source_runtime,
+    ]
     if args.embed_resume_data:
         command.append("--embed-resume-data")
     if args.output:
-        command.extend(["--output", args.output])
+        raise SystemExit(
+            "`huntctl apply-prep --output` is no longer supported because the shared C4 apply-prep command writes its own runtime artifacts. "
+            "Use `scripts/c3_apply_prep.py` directly if you need the legacy C3-only payload helper."
+        )
     _run(command)
 
 
 def cmd_tests(args):
-    if args.stage == "all":
-        patterns = ["test_stage1.py", "test_stage2.py", "test_stage3.py", "test_stage32.py"]
-    else:
-        patterns = [f"test_stage{args.stage}.py"]
+    suites = {
+        "1": ["test_stage1.py"],
+        "2": ["test_stage2.py"],
+        "3": ["test_stage3.py"],
+        "32": ["test_stage32.py"],
+        "4": ["test_stage4.py"],
+        "c2": ["test_component2_stage1.py", "test_component2_pipeline.py"],
+        "c3": ["test_component3_stage1.py"],
+        "c4": ["test_component4_cli.py"],
+        "all": [
+            "test_stage1.py",
+            "test_stage2.py",
+            "test_stage3.py",
+            "test_stage32.py",
+            "test_stage4.py",
+            "test_component2_stage1.py",
+            "test_component2_pipeline.py",
+            "test_component3_stage1.py",
+            "test_component4_cli.py",
+        ],
+    }
+    patterns = suites[args.stage]
 
     for pattern in patterns:
         result = subprocess.run(
@@ -486,15 +516,16 @@ def build_parser():
 
     apply_prep = subparsers.add_parser(
         "apply-prep",
-        help="Build an explicit apply context payload for one job.",
+        help="Run the shared C4 apply-prep command for one job.",
     )
     apply_prep.add_argument("job_id", type=int)
+    apply_prep.add_argument("--source-runtime", default="manual")
     apply_prep.add_argument("--embed-resume-data", action="store_true")
     apply_prep.add_argument("--output", default="")
     apply_prep.set_defaults(func=cmd_apply_prep)
 
-    tests = subparsers.add_parser("tests", help="Run Hunt unit tests.")
-    tests.add_argument("stage", choices=["1", "2", "3", "32", "all"], default="all", nargs="?")
+    tests = subparsers.add_parser("tests", help="Run Hunt unit tests by stage or component.")
+    tests.add_argument("stage", choices=["1", "2", "3", "32", "4", "c2", "c3", "c4", "all"], default="all", nargs="?")
     tests.set_defaults(func=cmd_tests)
 
     runner = subparsers.add_parser("runner", help="Run the continuous local runner.")

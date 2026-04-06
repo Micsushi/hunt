@@ -50,7 +50,7 @@ These decisions are now treated as the default Component 2 contract unless the u
 - If a job still needs UI enrichment, Component 2 should wait.
 - Easy Apply matters for Component 3, not for whether Component 2 may generate a resume.
 - One page is a hard gate. Over-one-page attempts are failures.
-- Ollama is the default backend.
+- Ollama is the planned production default backend.
 - Gemini or another API backend is a later optional toggle.
 - Every attempt should be saved.
 - Limited concern flags are allowed.
