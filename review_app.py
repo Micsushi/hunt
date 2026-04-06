@@ -3,7 +3,7 @@ import os
 import sys
 from contextlib import asynccontextmanager
 from pathlib import Path
-from urllib.parse import quote
+from urllib.parse import parse_qsl, quote, urlencode, urlsplit, urlunsplit
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, PlainTextResponse, RedirectResponse
@@ -50,6 +50,13 @@ SOURCE_OPTIONS = (
     "indeed",
 )
 
+APP_ROUTE_PATHS = {
+    "/",
+    "/jobs",
+    "/health-view",
+    "/summary",
+}
+
 
 @asynccontextmanager
 async def lifespan(app):
@@ -73,6 +80,37 @@ def truncate_text(value, *, max_chars=180):
     if len(value) <= max_chars:
         return value
     return value[: max_chars - 3] + "..."
+
+
+def is_app_route_path(path):
+    return path in APP_ROUTE_PATHS or path.startswith("/jobs/")
+
+
+def normalize_return_to(value):
+    if not value:
+        return ""
+    parts = urlsplit(str(value))
+    path = parts.path or "/"
+    if not is_app_route_path(path):
+        return ""
+    return urlunsplit(("", "", path, parts.query, ""))
+
+
+def add_return_to(href, return_to):
+    safe_return_to = normalize_return_to(return_to)
+    if not safe_return_to:
+        return href
+
+    parts = urlsplit(href)
+    params = parse_qsl(parts.query, keep_blank_values=True)
+    params = [(key, value) for key, value in params if key != "return_to"]
+    params.append(("return_to", safe_return_to))
+    return urlunsplit(("", "", parts.path, urlencode(params, doseq=True), ""))
+
+
+def request_path_with_query(request):
+    query = request.url.query
+    return f"{request.url.path}?{query}" if query else request.url.path
 
 
 def _nav_link(label, href, *, current_path, exact=False):
@@ -129,17 +167,34 @@ def render_layout(title, body, *, current_path="/"):
       background: linear-gradient(180deg, #f6f1e7 0%, #efe8db 100%);
       color: var(--ink);
     }
-    body.is-loading #app-shell {
-      opacity: 0.62;
-      transform: translateY(4px);
-    }
     a { color: var(--accent); text-decoration: none; }
     a:hover { text-decoration: underline; }
+    .loading-bar {
+      position: fixed;
+      inset: 0 0 auto 0;
+      height: 3px;
+      background: linear-gradient(90deg, #245b4e 0%, #4e8c7c 100%);
+      box-shadow: 0 8px 24px rgba(36, 91, 78, 0.2);
+      opacity: 0;
+      transform-origin: left center;
+      transform: scaleX(0.08);
+      transition: opacity 160ms ease;
+      z-index: 40;
+      pointer-events: none;
+    }
+    body.is-loading .loading-bar {
+      opacity: 1;
+      animation: hunt-progress 1.15s ease-in-out infinite alternate;
+    }
+    @keyframes hunt-progress {
+      from { transform: scaleX(0.12); }
+      to { transform: scaleX(0.72); }
+    }
     .shell {
       max-width: 1180px;
       margin: 0 auto;
       padding: 28px 20px 40px;
-      transition: opacity 150ms ease, transform 150ms ease;
+      transition: opacity 120ms ease;
     }
     .nav {
       display: flex;
@@ -428,14 +483,29 @@ def render_layout(title, body, *, current_path="/"):
     script = """
   <script>
     (() => {
-      const APP_ROUTE_PATTERNS = [/^\\/$/, /^\\/jobs(?:\\/\\d+)?$/, /^\\/health-view$/, /^\\/summary$/];
+      const APP_ROUTE_PATTERNS = [
+        new RegExp('^/$'),
+        new RegExp('^/jobs(?:/[0-9]+)?$'),
+        new RegExp('^/health-view$'),
+        new RegExp('^/summary$'),
+      ];
+      const PENDING_REFRESH_KEY = 'hunt-pending-refresh';
       const toast = () => document.getElementById('app-toast');
       let inFlightController = null;
+
+      if ('scrollRestoration' in window.history) {
+        window.history.scrollRestoration = 'manual';
+      }
 
       function isAppRoute(url) {
         if (url.origin !== window.location.origin) return false;
         if (url.searchParams.get('download')) return false;
         return APP_ROUTE_PATTERNS.some((pattern) => pattern.test(url.pathname));
+      }
+
+      function normalizeUrl(url) {
+        const parsed = new URL(url, window.location.origin);
+        return `${parsed.pathname}${parsed.search}`;
       }
 
       function showToast(message, kind = 'ok') {
@@ -452,6 +522,28 @@ def render_layout(title, body, *, current_path="/"):
       function rememberScroll() {
         const state = window.history.state || {};
         window.history.replaceState({ ...state, url: window.location.href, scrollY: window.scrollY }, '', window.location.href);
+      }
+
+      function setPendingRefresh(url, message) {
+        window.sessionStorage.setItem(PENDING_REFRESH_KEY, JSON.stringify({
+          url: normalizeUrl(url),
+          message,
+        }));
+      }
+
+      function takePendingRefresh() {
+        const raw = window.sessionStorage.getItem(PENDING_REFRESH_KEY);
+        if (!raw) return null;
+        try {
+          const payload = JSON.parse(raw);
+          if (payload && payload.url === normalizeUrl(window.location.href)) {
+            window.sessionStorage.removeItem(PENDING_REFRESH_KEY);
+            return payload;
+          }
+        } catch (_error) {
+          window.sessionStorage.removeItem(PENDING_REFRESH_KEY);
+        }
+        return null;
       }
 
       async function swapTo(url, { push = false, replace = false, restoreScroll = false } = {}) {
@@ -489,6 +581,10 @@ def render_layout(title, body, *, current_path="/"):
 
           const state = window.history.state || {};
           window.scrollTo(0, restoreScroll ? (state.scrollY || 0) : 0);
+          const pending = takePendingRefresh();
+          if (pending && pending.message) {
+            showToast(pending.message);
+          }
         } catch (error) {
           if (error.name !== 'AbortError') {
             window.location.href = url;
@@ -513,6 +609,16 @@ def render_layout(title, body, *, current_path="/"):
           if (!response.ok) {
             throw new Error(payload.detail || payload.error || 'Requeue failed.');
           }
+          const returnTo = payload.return_to;
+          if (returnTo) {
+            setPendingRefresh(returnTo, 'Job requeued for enrichment.');
+            if (window.history.length > 1) {
+              window.history.back();
+              return;
+            }
+            await swapTo(returnTo, { replace: true, restoreScroll: true });
+            return;
+          }
           showToast('Job requeued for enrichment.');
           await swapTo(payload.redirect_url || window.location.href, { replace: true, restoreScroll: true });
         } catch (error) {
@@ -522,7 +628,9 @@ def render_layout(title, body, *, current_path="/"):
       }
 
       document.addEventListener('click', (event) => {
-        const anchor = event.target.closest('a[href]');
+        const target = event.target instanceof Element ? event.target : event.target && event.target.parentElement;
+        if (!target) return;
+        const anchor = target.closest('a[href]');
         if (!anchor) return;
         if (anchor.dataset.noAppNav === 'true') return;
         if (anchor.target && anchor.target !== '_self') return;
@@ -563,6 +671,13 @@ def render_layout(title, body, *, current_path="/"):
         swapTo(window.location.href, { replace: true, restoreScroll: true });
       });
 
+      window.addEventListener('pageshow', (event) => {
+        if (!event.persisted) return;
+        const url = new URL(window.location.href);
+        if (!isAppRoute(url)) return;
+        swapTo(url.toString(), { replace: true, restoreScroll: true });
+      });
+
       if (!window.history.state || !window.history.state.url) {
         window.history.replaceState({ url: window.location.href, scrollY: window.scrollY }, '', window.location.href);
       }
@@ -570,14 +685,15 @@ def render_layout(title, body, *, current_path="/"):
   </script>
     """
     return f"""<!DOCTYPE html>
-<html lang="en">
+<html lang="en" style="background:#f6f1e7;">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>{html.escape(title)}</title>
   <style>{styles}</style>
 </head>
-<body>
+<body style="margin:0; min-height:100vh; background:#f6f1e7; color:#1f2421;">
+    <div class="loading-bar" aria-hidden="true"></div>
     <div id="app-shell" class="shell" data-current-path="{html.escape(current_path)}">
       {render_nav(current_path)}
       {body}
@@ -848,14 +964,14 @@ def _sortable_link(label, column, *, source, status, limit, page, q, current_sor
     return f'<a href="{href}">{html.escape(label)}{arrow}</a>'
 
 
-def render_jobs_table(rows, *, source, status, limit, page, q, sort, direction):
+def render_jobs_table(rows, *, source, status, limit, page, q, sort, direction, return_to=""):
     if not rows:
         return '<div class="panel"><p>No jobs match this filter.</p></div>'
 
     body = []
     for row in rows:
         status_class = html.escape(row["enrichment_status"] or "unknown")
-        job_link = f"/jobs/{row['id']}"
+        job_link = add_return_to(f"/jobs/{row['id']}", return_to)
         linkedin_link = (
             f'<a class="mono" href="{html.escape(row["job_url"])}" target="_blank" rel="noreferrer">listing</a>'
             if row.get("job_url")
@@ -869,7 +985,7 @@ def render_jobs_table(rows, *, source, status, limit, page, q, sort, direction):
         body.append(
             f"""
             <tr>
-              <td><a href="{job_link}">#{row['id']}</a></td>
+              <td><a href="{job_link}" data-app-nav="true">#{row['id']}</a></td>
               <td>{format_text(row['source'])}</td>
               <td>{format_text(row['company'])}</td>
               <td>{format_text(row['title'])}</td>
@@ -1016,13 +1132,13 @@ def render_summary_table(summary):
     """
 
 
-def render_link_list(title, rows):
+def render_link_list(title, rows, *, return_to=""):
     if not rows:
         return f'<div class="panel"><h2>{html.escape(title)}</h2><p>No rows.</p></div>'
     items = "".join(
         f"""
         <tr>
-          <td><a href="/jobs/{row['id']}">#{row['id']}</a></td>
+          <td><a href="{add_return_to(f"/jobs/{row['id']}", return_to)}" data-app-nav="true">#{row['id']}</a></td>
           <td>{format_text(row['company'])}</td>
           <td>{format_text(truncate_text(row['title'], max_chars=80))}</td>
           <td>{format_text(row['enrichment_status'])}</td>
@@ -1193,11 +1309,12 @@ def api_requeue_job(job_id: int):
 
 
 @app.get("/", response_class=HTMLResponse)
-def dashboard():
+def dashboard(request: Request):
     summary = get_review_queue_summary()
     ready_rows = list_jobs_for_review(status="ready", limit=8)
     blocked_rows = list_jobs_for_review(status="blocked", limit=8)
     failed_rows = list_jobs_for_review(status="failed", limit=8)
+    return_to = request_path_with_query(request)
 
     body = f"""
     <section class="hero">
@@ -1210,16 +1327,16 @@ def dashboard():
         <h2>Failure breakdown</h2>
         {render_failure_breakdown(summary)}
       </div>
-      {render_link_list("Ready now", ready_rows)}
-      {render_link_list("Blocked", blocked_rows)}
-      {render_link_list("Failed", failed_rows)}
+      {render_link_list("Ready now", ready_rows, return_to=return_to)}
+      {render_link_list("Blocked", blocked_rows, return_to=return_to)}
+      {render_link_list("Failed", failed_rows, return_to=return_to)}
     </section>
     """
     return HTMLResponse(render_layout("Hunt review", body, current_path="/"))
 
 
 @app.get("/jobs", response_class=HTMLResponse)
-def jobs_page(source: str = "all", status: str = "ready", limit: int = 50, page: int = 1, q: str = "", sort: str = "date_scraped", direction: str = "desc"):
+def jobs_page(request: Request, source: str = "all", status: str = "ready", limit: int = 50, page: int = 1, q: str = "", sort: str = "date_scraped", direction: str = "desc"):
     if source not in SOURCE_OPTIONS:
         raise HTTPException(status_code=400, detail=f"Unsupported source filter: {source}")
     if status not in STATUS_OPTIONS:
@@ -1238,6 +1355,7 @@ def jobs_page(source: str = "all", status: str = "ready", limit: int = 50, page:
         source=source_filter,
     )
     summary = get_review_queue_summary(source=source_filter)
+    return_to = request_path_with_query(request)
 
     body = f"""
     <section class="hero">
@@ -1248,14 +1366,14 @@ def jobs_page(source: str = "all", status: str = "ready", limit: int = 50, page:
     {render_search_bar(source=source, status=status, limit=safe_limit, q=q, sort=sort, direction=direction)}
     <div class="toolbar">{render_source_toolbar(source, status=status, limit=safe_limit, q=q, sort=sort, direction=direction)}</div>
     <div class="toolbar">{render_status_toolbar(status, source=source, limit=safe_limit, q=q, sort=sort, direction=direction)}</div>
-    {render_jobs_table(rows, source=source, status=status, limit=safe_limit, page=safe_page, q=q, sort=sort, direction=direction)}
+    {render_jobs_table(rows, source=source, status=status, limit=safe_limit, page=safe_page, q=q, sort=sort, direction=direction, return_to=return_to)}
     {render_pagination(total_rows=total_rows, source=source, status=status, limit=safe_limit, page=safe_page, q=q, sort=sort, direction=direction)}
     """
     return HTMLResponse(render_layout("Hunt jobs", body, current_path="/jobs"))
 
 
 @app.get("/jobs/{job_id}", response_class=HTMLResponse)
-def job_detail(job_id: int):
+def job_detail(request: Request, job_id: int, return_to: str = ""):
     row = get_job_by_id(job_id)
     if not row:
         raise HTTPException(status_code=404, detail="Job not found.")
@@ -1263,6 +1381,11 @@ def job_detail(job_id: int):
     status_class = html.escape(row.get("enrichment_status") or "unknown")
     description = row.get("description") or "No description saved."
     resume_attempts = list_resume_attempts(job_id, limit=8)
+    safe_return_to = normalize_return_to(return_to)
+    if not safe_return_to:
+        safe_return_to = normalize_return_to(request.headers.get("referer"))
+    requeue_action = add_return_to(f"/jobs/{row['id']}/requeue", safe_return_to)
+    back_link = safe_return_to or "/jobs"
     body = f"""
     <section class="hero">
       <h1>{format_text(row['title'])}</h1>
@@ -1288,9 +1411,10 @@ def job_detail(job_id: int):
           <div class="field"><div class="label">Application status</div><div class="value">{format_text(row['status'])}</div></div>
         </div>
         <div class="actions">
+          <a class="pill" href="{html.escape(back_link)}" data-app-nav="true">Back to list</a>
           <a class="pill active" href="{html.escape(row['job_url'])}" target="_blank" rel="noreferrer">Open listing</a>
           {f'<a class="pill" href="{html.escape(row["apply_url"])}" target="_blank" rel="noreferrer">Open apply URL</a>' if row.get("apply_url") else ""}
-          {f'<form method="post" action="/jobs/{row["id"]}/requeue" data-async-requeue="true"><button type="submit">Requeue enrichment</button></form>' if row.get("source") in {"linkedin", "indeed"} else '<span class="pill">This source is visible here, but does not have a worker yet</span>'}
+          {f'<form method="post" action="{html.escape(requeue_action)}" data-async-requeue="true"><button type="submit">Requeue enrichment</button></form>' if row.get("source") in {"linkedin", "indeed"} else '<span class="pill">This source is visible here, but does not have a worker yet</span>'}
         </div>
       </div>
       <div class="panel">
@@ -1333,16 +1457,24 @@ def job_detail(job_id: int):
 
 
 @app.post("/jobs/{job_id}/requeue")
-def requeue_job(job_id: int, request: Request):
+def requeue_job(job_id: int, request: Request, return_to: str = ""):
     row = get_job_by_id(job_id)
     if not row or row.get("source") not in {"linkedin", "indeed"}:
         raise HTTPException(status_code=400, detail="Requeue is only supported for rows with an enrichment worker.")
     updated = requeue_review_job(job_id, source=row.get("source"))
     if updated != 1:
         raise HTTPException(status_code=404, detail="Job not found.")
+    safe_return_to = normalize_return_to(return_to)
     if request.headers.get("X-Hunt-Async") == "1":
-        return JSONResponse({"status": "ok", "job_id": job_id, "redirect_url": f"/jobs/{job_id}"})
-    return RedirectResponse(url=f"/jobs/{job_id}", status_code=303)
+        return JSONResponse(
+            {
+                "status": "ok",
+                "job_id": job_id,
+                "redirect_url": add_return_to(f"/jobs/{job_id}", safe_return_to),
+                "return_to": safe_return_to,
+            }
+        )
+    return RedirectResponse(url=safe_return_to or add_return_to(f"/jobs/{job_id}", safe_return_to), status_code=303)
 
 
 def main():
