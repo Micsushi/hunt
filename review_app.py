@@ -23,7 +23,14 @@ from db import (  # noqa: E402
     requeue_job as requeue_review_job,
 )
 from failure_artifacts import resolve_artifact_path  # noqa: E402
-from resume_tailor.db import list_resume_attempts  # noqa: E402
+try:  # noqa: E402
+    from resume_tailor.db import list_resume_attempts  # type: ignore
+    RESUME_TAILOR_AVAILABLE = True
+except ModuleNotFoundError:  # noqa: E402
+    RESUME_TAILOR_AVAILABLE = False
+
+    def list_resume_attempts(_job_id, limit=8):  # type: ignore
+        return []
 
 
 STATUS_OPTIONS = (
@@ -421,6 +428,8 @@ def render_resume_links(row):
 
 def render_resume_attempts(attempts):
     if not attempts:
+        if not RESUME_TAILOR_AVAILABLE:
+            return "<p>Resume tailoring is not deployed in this review container yet.</p>"
         return "<p>No resume attempts yet.</p>"
     rows = []
     for attempt in attempts:
