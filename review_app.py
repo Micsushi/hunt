@@ -380,12 +380,11 @@ def render_artifact_links(row):
 def render_summary_cards(summary):
     cards = [
         ("Total rows", summary["total"]),
-        ("Ready now", summary["ready_count"]),
-        ("Pending", summary["pending_count"]),
+        ("Pending enrich", summary["pending_count"]),
         ("Retry due", summary["retry_ready_count"]),
         ("Processing", summary["processing_count"]),
         ("Enriched", summary["counts_by_status"].get("done", 0) + summary["counts_by_status"].get("done_verified", 0)),
-        ("Failed enrich", summary["counts_by_status"].get("failed", 0)),
+        ("Failed", summary["counts_by_status"].get("failed", 0)),
         ("Blocked", summary["blocked_count"]),
     ]
     return "".join(
@@ -465,11 +464,11 @@ def render_resume_attempts(attempts):
 def render_status_toolbar(active_status, *, source, limit, q="", sort="date_scraped", direction="desc"):
     status_labels = {
         "ready": "ready",
-        "pending": "pending",
+        "pending": "pending_enrich",
         "processing": "processing",
         "done": "done",
         "done_verified": "done_verified",
-        "failed": "failed_enrich",
+        "failed": "failed",
         "blocked": "blocked",
         "blocked_verified": "blocked_verified",
         "all": "all",
@@ -521,11 +520,11 @@ def render_search_bar(*, source, status, limit, q, sort, direction):
                 f'<option value="{value}"{" selected" if status == value else ""}>{label}</option>'
                 for value, label in (
                     ("ready", "Ready"),
-                    ("pending", "Pending"),
+                    ("pending", "Pending enrich"),
                     ("processing", "Processing"),
                     ("done", "Done"),
                     ("done_verified", "Done verified"),
-                    ("failed", "Failed enrich"),
+                    ("failed", "Failed"),
                     ("blocked", "Blocked"),
                     ("blocked_verified", "Blocked verified"),
                     ("all", "All statuses"),
@@ -696,8 +695,7 @@ def render_failure_breakdown(summary):
 def render_summary_table(summary):
     rows = [
         ("Total rows", summary["total"]),
-        ("Ready now", summary["ready_count"]),
-        ("Pending", summary["pending_count"]),
+        ("Pending enrich", summary["pending_count"]),
         ("Retry due", summary["retry_ready_count"]),
         ("Processing", summary["processing_count"]),
         ("Blocked", summary["blocked_count"]),
