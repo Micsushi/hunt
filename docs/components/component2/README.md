@@ -56,7 +56,7 @@ These decisions are now treated as the default Component 2 contract unless the u
 ## Terminology
 
 Common shorthand is now documented in:
-- `glossary.md`
+- `docs/components/component2/glossary.md`
 
 Important terms used throughout the Component 2 docs:
 - `C1`, `C2`, `C3`
@@ -290,5 +290,5 @@ Early tests should focus on:
 ## Related Docs
 
 - `docs/components/component2/design.md`
-- `glossary.md`
+- `docs/components/component2/glossary.md`
 - `docs/components/component3/README.md`

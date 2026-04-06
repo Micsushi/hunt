@@ -7,7 +7,8 @@ Build a fully automated job application system that runs continuously on a Linux
 The long-term flow is:
 - Component 1 : discover and enrich job postings
 - Component 2 : tailor a LaTeX resume to each posting
-- Component 3 : apply on external job sites using automation
+- Component 3 : browser autofill and apply assistance
+- Component 4 : orchestration and submit control
 
 Current focus:
 - Component 1 Stage 4 hardening, backlog drain, and deployment polish
@@ -32,7 +33,7 @@ Main files:
 - `scraper/linkedin_session.py` : LinkedIn Playwright auth-state management
 - `scraper/url_utils.py` : URL normalization and ATS detection helpers
 - `review_app.py` : browser-facing review/control-plane app for the live queue
-- `agents/system_prompt.md` : agent contract for downstream application automation
+- `agents/system_prompt.md` : agent contract for downstream apply/orchestration work
 
 ## Current Data Model Rules
 
@@ -100,7 +101,8 @@ Current repo-side runtime notes:
 - the current Ansible deployment split is:
   - Component 1 on `job_agent` Stage 6
   - later Component 2 in its own separate step/stage
-  - later Component 3 / OpenClaw integration in its own separate step/stage
+  - later Component 3 in its own separate step/stage
+  - later Component 4 / OpenClaw integration in its own separate step/stage
 
 Stage 4 : current
 - backfill old and mixed-source backlog safely
@@ -128,4 +130,5 @@ Stage 4 : current
 - Component 1 Stage 3 + server2 deployment plan : `docs/components/component1/stage3_server2_plan.md`
 - Component 2 plan : `docs/components/component2/README.md`
 - Component 3 plan : `docs/components/component3/README.md`
+- Component 4 plan : `docs/components/component4/README.md`
 - Existing repo notes for other tools : `CLAUDE.md`

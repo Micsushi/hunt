@@ -5,7 +5,7 @@
 This document captures how Component 1 should run in production across the two related repos:
 
 - Hunt repo:
-  - discovery, enrichment, queue logic, and later handoff to resume/apply agents
+  - discovery, enrichment, queue logic, and later handoff to resume/autofill/orchestration components
 - `ansible_homelab` repo:
   - deployment of the Hunt runtime and related support services onto `server2`
 
@@ -64,7 +64,8 @@ The current Ansible deployment for Hunt is systemd-based, not Docker-based.
 Important component-scope note:
 - the current `job_agent` Stage 6 deployment is the Component 1 deployment step
 - later Component 2 runtime/deployment should be added as a separate Ansible step/stage
-- later Component 3 / OpenClaw-driven apply runtime should be added as a separate Ansible step/stage
+- later Component 3 runtime should be added as a separate Ansible step/stage
+- later Component 4 / OpenClaw-driven orchestration runtime should be added as a separate Ansible step/stage
 
 From `playbooks/tasks/scraper.yml` in `ansible_homelab`:
 - installs `git`, `python3-venv`, `python3-pip`, and `sqlite3`
@@ -339,7 +340,8 @@ Future downstream consumers will need:
 The review/control plane should eventually become the operator layer for:
 - Component 1 enrichment
 - Component 2 resume tailoring
-- Component 3 apply agents
+- Component 3 browser autofill and evidence
+- Component 4 orchestration and submit history
 
 ## Planned Server2 Ansible Changes
 

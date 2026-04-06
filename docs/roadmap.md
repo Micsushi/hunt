@@ -19,7 +19,8 @@ Current implementation priority:
 2. keep the Ansible deployment model split by component
    - Component 1 deploys through the current Hunt-focused job-agent step
    - Component 2 should deploy in a later separate step/stage
-   - Component 3 / OpenClaw integration should deploy in a later separate step/stage
+   - Component 3 should deploy in a later separate step/stage
+   - Component 4 / OpenClaw integration should deploy in a later separate step/stage
 3. continue Component 1 Stage 4 hardening and backfill work
    - drain backlog safely with the new source-aware backfill flow
    - add failure-artifact capture for blocked/security/browser-fixable rows
@@ -100,7 +101,7 @@ Current status:
 - detailed design notes now live in:
   - `docs/components/component2/README.md`
   - `docs/components/component2/design.md`
-  - `glossary.md`
+  - `docs/components/component2/glossary.md`
 - runtime code is not implemented yet
 
 Doc:

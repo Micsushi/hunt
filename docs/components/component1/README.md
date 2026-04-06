@@ -39,7 +39,8 @@ Component deployment on `server2` is intentionally split:
 - Component 1 deploys through the current Hunt-focused Ansible step/stage
   - today that is the `job_agent` Stage 6 deployment in `ansible_homelab`
 - Component 2 should deploy in its own later Ansible step/stage
-- Component 3 / OpenClaw integration should deploy in its own later Ansible step/stage
+- Component 3 should deploy in its own later Ansible step/stage
+- Component 4 / OpenClaw integration should deploy in its own later Ansible step/stage
 
 Do not treat Component 2 or Component 3 as extensions of the current Component 1 Stage 6 deploy.
 
@@ -498,10 +499,15 @@ Component 2 : resume tailoring
 - should consume enriched descriptions, not raw board snippets
 - should only run after Component 1 marks a job ready
 
-Component 3 : application automation
+Component 3 : browser autofill and apply assistance
 - should only open jobs where `apply_type = 'external_apply'`
 - should not attempt LinkedIn Easy Apply jobs
 - should prefer ATS URLs over board URLs
+
+Component 4 : orchestration and submit control
+- should fetch one explicit apply context for a chosen `job_id`
+- should not re-decide resume selection if C2 has already selected a downstream resume
+- should invoke Component 3 rather than absorb C3 behavior into orchestration prompts
 
 ## Important Constraints
 

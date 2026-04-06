@@ -1,6 +1,6 @@
 # Hunt
 
-Automated job scraper. Scrapes LinkedIn and Indeed every 10 minutes and stores results in a SQLite DB.
+Automated Hunt runtime. Today it primarily covers Component 1 discovery and enrichment, with later Components 2 through 4 planned on top of the same system.
 
 Current focus:
 - finish Component 1 first
@@ -54,7 +54,8 @@ See `agents/system_prompt.md` for the full agent contract (DB schema, status lif
 - Component docs index: `docs/components/README.md`
 - Component 1 LinkedIn enrichment plan: `docs/components/component1/README.md`
 - Component 2 resume tailoring plan: `docs/components/component2/README.md`
-- Component 3 application automation plan: `docs/components/component3/README.md`
+- Component 3 browser autofill plan: `docs/components/component3/README.md`
+- Component 4 orchestration plan: `docs/components/component4/README.md`
 
 ## Legacy Helpers
 
