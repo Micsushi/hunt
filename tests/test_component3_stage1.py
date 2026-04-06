@@ -69,6 +69,8 @@ class Component3Stage1Tests(unittest.TestCase):
             "last_enrichment_error": None,
             "last_enrichment_started_at": None,
             "next_enrichment_retry_at": None,
+            "latest_resume_job_description_path": "",
+            "latest_resume_flags": "",
             "selected_resume_version_id": "",
             "selected_resume_pdf_path": "",
             "selected_resume_tex_path": "",
@@ -87,10 +89,11 @@ class Component3Stage1Tests(unittest.TestCase):
                     apply_type, auto_apply_eligible, enrichment_status,
                     enrichment_attempts, apply_host, ats_type, last_enrichment_error,
                     last_enrichment_started_at, next_enrichment_retry_at,
+                    latest_resume_job_description_path, latest_resume_flags,
                     selected_resume_version_id, selected_resume_pdf_path,
                     selected_resume_tex_path, selected_resume_selected_at,
                     selected_resume_ready_for_c3
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     defaults["title"],
@@ -114,6 +117,8 @@ class Component3Stage1Tests(unittest.TestCase):
                     defaults["last_enrichment_error"],
                     defaults["last_enrichment_started_at"],
                     defaults["next_enrichment_retry_at"],
+                    defaults["latest_resume_job_description_path"],
+                    defaults["latest_resume_flags"],
                     defaults["selected_resume_version_id"],
                     defaults["selected_resume_pdf_path"],
                     defaults["selected_resume_tex_path"],
@@ -173,6 +178,8 @@ class Component3Stage1Tests(unittest.TestCase):
             self.assertIn("selected_resume_tex_path", columns)
             self.assertIn("selected_resume_selected_at", columns)
             self.assertIn("selected_resume_ready_for_c3", columns)
+            self.assertIn("latest_resume_job_description_path", columns)
+            self.assertIn("latest_resume_flags", columns)
         finally:
             db.DB_PATH = old_db_path
             if os.path.exists(path):
@@ -211,6 +218,8 @@ class Component3Stage1Tests(unittest.TestCase):
                     job_url="https://www.linkedin.com/jobs/view/456",
                     enrichment_status="pending",
                     last_enrichment_error="description_not_found: temporary",
+                    latest_resume_job_description_path=str(REPO_ROOT / "tmp_jd.txt"),
+                    latest_resume_flags='["manual_review_recommended", "weak_description"]',
                     selected_resume_version_id="resume-v2",
                     selected_resume_pdf_path=resume_path,
                     selected_resume_tex_path=str(REPO_ROOT / "main.tex"),
@@ -225,11 +234,15 @@ class Component3Stage1Tests(unittest.TestCase):
                 self.assertEqual(payload["selectedResumePath"], resume_path)
                 self.assertEqual(payload["selectedResumeTexPath"], str(REPO_ROOT / "main.tex"))
                 self.assertTrue(payload["selectedResumeReadyForC3"])
+                self.assertEqual(payload["jdSnapshotPath"], str(REPO_ROOT / "tmp_jd.txt"))
                 self.assertIn("enrichment_status:pending", payload["concernFlags"])
                 self.assertIn("enrichment_error:description_not_found: temporary", payload["concernFlags"])
+                self.assertIn("manual_review_recommended", payload["concernFlags"])
+                self.assertIn("weak_description", payload["concernFlags"])
                 self.assertEqual(payload["selectedResumeName"], Path(resume_path).name)
                 self.assertEqual(payload["selectedResumeMimeType"], "application/pdf")
                 self.assertTrue(payload["selectedResumeDataUrl"].startswith("data:application/pdf;base64,"))
+                self.assertTrue(payload["primedAt"])
 
                 encoded_payload = payload["selectedResumeDataUrl"].split(",", 1)[1]
                 self.assertEqual(base64.b64decode(encoded_payload), b"%PDF-1.4 test resume")

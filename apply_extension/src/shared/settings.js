@@ -47,13 +47,23 @@ export const DEFAULT_RESUME = {
 export function createEmptyApplyContext() {
   return {
     jobId: "",
+    title: "",
+    company: "",
     applyUrl: "",
+    jobUrl: "",
     sourceMode: "manual",
+    source: "",
+    atsType: "",
+    applyType: "",
+    autoApplyEligible: false,
+    description: "",
     selectedResumeVersionId: "",
     selectedResumePath: "",
+    selectedResumeTexPath: "",
     selectedResumeName: "",
     selectedResumeMimeType: "application/pdf",
     selectedResumeDataUrl: "",
+    selectedResumeReadyForC3: false,
     jdSnapshotPath: "",
     concernFlags: [],
     primedAt: null

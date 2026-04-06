@@ -25,9 +25,14 @@ function buildQuestionHash(value = "") {
 function createWorkdayFillFunction() {
   return async ({ profile, settings, activeApplyContext, defaultResume }) => {
     function normalizeText(value) {
-      return String(value || "")
-        .replace(/\u2014/g, "-")
-        .replace(/\u2013/g, "-")
+      let normalized = String(value || "");
+      if (settings.stripLongDash !== false) {
+        normalized = normalized
+          .replace(/\u2014/g, "-")
+          .replace(/\u2013/g, "-");
+      }
+
+      return normalized
         .replace(/\s+/g, " ")
         .trim();
     }
@@ -109,9 +114,56 @@ function createWorkdayFillFunction() {
       return "";
     }
 
+    function extractDescriptionTerms(text, maxTerms = 3) {
+      const stopWords = new Set([
+        "about",
+        "across",
+        "ability",
+        "candidate",
+        "company",
+        "customer",
+        "deliver",
+        "experience",
+        "including",
+        "looking",
+        "opportunity",
+        "preferred",
+        "required",
+        "responsible",
+        "strong",
+        "team",
+        "their",
+        "using",
+        "with",
+        "work"
+      ]);
+      const counts = new Map();
+      const tokens = normalizeText(text)
+        .toLowerCase()
+        .match(/[a-z][a-z0-9+#/-]{3,}/g) || [];
+      for (const token of tokens) {
+        if (stopWords.has(token)) {
+          continue;
+        }
+        counts.set(token, (counts.get(token) || 0) + 1);
+      }
+      return Array.from(counts.entries())
+        .sort((left, right) => right[1] - left[1] || left[0].localeCompare(right[0]))
+        .slice(0, maxTerms)
+        .map(([token]) => token);
+    }
+
     function generateAnswer(questionText) {
       const question = normalizeText(questionText).toLowerCase();
       const notes = normalizeText(profile.notes);
+      const jobTitle = normalizeText(activeApplyContext.title);
+      const companyName = normalizeText(activeApplyContext.company);
+      const descriptionTerms = extractDescriptionTerms(activeApplyContext.description);
+      const focusArea = descriptionTerms.slice(0, 2).join(" and ");
+      const contextualRole = [jobTitle, companyName ? `at ${companyName}` : ""]
+        .filter(Boolean)
+        .join(" ");
+      const weakContext = (activeApplyContext.concernFlags || []).includes("weak_description");
 
       if (question.includes("sponsor")) {
         return {
@@ -148,20 +200,31 @@ function createWorkdayFillFunction() {
       }
 
       if (question.includes("why") || question.includes("interest")) {
+        const contextualAnswer = contextualRole
+          ? `I am interested in the ${contextualRole} opportunity because it aligns well with my background${focusArea ? ` in ${focusArea}` : ""} and would let me contribute quickly while continuing to grow.`
+          : "";
         return {
           answerText:
             notes ||
+            contextualAnswer ||
             "I am interested in the role because it aligns well with my background and I believe I can contribute quickly while continuing to grow with the team.",
-          confidence: notes ? "medium" : "low",
-          manualReviewRequired: !notes
+          confidence: notes ? "medium" : contextualAnswer && !weakContext ? "medium" : "low",
+          manualReviewRequired: !notes && (!contextualAnswer || weakContext)
         };
       }
 
+      const contextualFallback =
+        contextualRole && focusArea
+          ? `I believe my background is a strong fit for the ${contextualRole} opportunity, especially around ${focusArea}.`
+          : contextualRole
+            ? `I believe my background is a strong fit for the ${contextualRole} opportunity and I would be excited to contribute while continuing to grow in the role.`
+            : "";
       return {
         answerText:
+          contextualFallback ||
           "I believe my background is a strong fit for this opportunity, and I would be excited to contribute while continuing to grow in the role.",
-        confidence: "low",
-        manualReviewRequired: true
+        confidence: contextualFallback && !weakContext ? "medium" : "low",
+        manualReviewRequired: !contextualFallback || weakContext
       };
     }
 
@@ -257,6 +320,12 @@ function createWorkdayFillFunction() {
     const filledFields = [];
     const generatedAnswers = [];
     const manualReviewReasons = [];
+    if (
+      activeApplyContext.jobId &&
+      activeApplyContext.selectedResumeReadyForC3 === false
+    ) {
+      manualReviewReasons.push("resume_not_ready_for_c3");
+    }
 
     const textInputs = getVisibleElements('input:not([type="hidden"]):not([type="file"])');
     for (const input of textInputs) {
@@ -274,7 +343,7 @@ function createWorkdayFillFunction() {
     const textareas = getVisibleElements("textarea");
     for (const textarea of textareas) {
       const descriptor = getDescriptor(textarea);
-      if (!descriptor || textarea.value) {
+      if (!descriptor || textarea.value || settings.allowGeneratedAnswers === false) {
         continue;
       }
 
@@ -291,7 +360,7 @@ function createWorkdayFillFunction() {
           manualReviewRequired: answer.manualReviewRequired
         });
         filledFields.push({ field: descriptor, valueSource: "generated_answer" });
-        if (answer.manualReviewRequired) {
+        if (settings.flagLowConfidenceAnswers !== false && answer.manualReviewRequired) {
           manualReviewReasons.push(`low_confidence_answer:${questionHash}`);
         }
       }

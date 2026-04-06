@@ -2,7 +2,10 @@
 
 This directory is the repo home for Component 2.
 
-It currently contains scaffolding only:
+It now contains the first working local implementation plus the supporting scaffolding:
+- parser and renderer code around `main.tex`
+- pipeline and CLI entrypoints
+- DB helpers for attempt/version persistence and downstream resume selection
 - `base_resumes/` for curated family-specific starting resumes
 - `prompts/` for structured LLM prompt templates
 - `schemas/` for JSON output contracts
@@ -13,9 +16,7 @@ Important notes:
 - generated artifacts should live outside the repo on `server2`
 - this folder is for source files and implementation code, not runtime output storage
 
-Planned future additions:
-- parser and renderer code
-- CLI entrypoints
-- tests
-- DB integration helpers
-
+Still planned:
+- Ollama-backed prompt execution
+- smarter page-fit retry logic
+- richer review UI flows

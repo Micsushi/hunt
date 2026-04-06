@@ -14,14 +14,16 @@ Component 2 should:
 
 ## Current Status
 
-Component 2 runtime code has not been implemented yet, but the initial repo scaffold now exists under:
+Component 2 now has an initial working local implementation under:
 - `resume_tailor/`
 
-That scaffold now includes:
-- prompt placeholders
-- JSON schemas
-- candidate profile templates
-- bullet-library templates
+What exists now:
+- parser and renderer code around `main.tex`
+- initial job classification and keyword extraction
+- local pipeline and CLI entrypoints
+- DB helpers for resume attempts, resume versions, and selected downstream resume state
+- prompt placeholders and JSON schemas
+- candidate profile templates and bullet-library templates
 - base-resume family placeholders
 
 Deployment should happen only after the current Component 1 server rollout is stable on `server2`.
@@ -56,7 +58,7 @@ These decisions are now treated as the default Component 2 contract unless the u
 ## Terminology
 
 Common shorthand is now documented in:
-- `docs/components/component2/glossary.md`
+- `glossary.md`
 
 Important terms used throughout the Component 2 docs:
 - `C1`, `C2`, `C3`
@@ -290,5 +292,5 @@ Early tests should focus on:
 ## Related Docs
 
 - `docs/components/component2/design.md`
-- `docs/components/component2/glossary.md`
+- `glossary.md`
 - `docs/components/component3/README.md`

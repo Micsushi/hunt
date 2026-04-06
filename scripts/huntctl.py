@@ -172,11 +172,7 @@ def cmd_requeue_refresh(_args):
 
 
 def cmd_requeue_enrich(args):
-    command = [PYTHON, "scripts/requeue_enrichment_rows.py", "--source", args.source]
-    if args.statuses:
-        for status in args.statuses:
-            command.extend(["--status", status])
-    _run(command)
+    _run(_build_requeue_enrich_command(source=args.source, statuses=args.statuses))
 
 
 def cmd_cleanup_indeed(args):
@@ -191,27 +187,88 @@ def cmd_cleanup_indeed(args):
 
 
 def cmd_backfill(args):
-    command = [PYTHON, "scripts/backfill_enrichment.py", str(args.batch_size), "--source", args.source]
-    if args.max_batches is not None:
-        command.extend(["--max-batches", str(args.max_batches)])
-    if args.channel:
-        command.extend(["--channel", args.channel])
-    if args.storage_state:
-        command.extend(["--storage-state", args.storage_state])
-    if args.timeout_ms is not None:
-        command.extend(["--timeout-ms", str(args.timeout_ms)])
-    if args.slow_mo is not None:
-        command.extend(["--slow-mo", str(args.slow_mo)])
-    if args.headful:
+    _run(
+        _build_backfill_command(
+            batch_size=args.batch_size,
+            source=args.source,
+            max_batches=args.max_batches,
+            channel=args.channel,
+            storage_state=args.storage_state,
+            timeout_ms=args.timeout_ms,
+            slow_mo=args.slow_mo,
+            headful=args.headful,
+            ui_verify_blocked=args.ui_verify_blocked,
+            job_ids=args.job_ids,
+            yes=args.yes,
+        )
+    )
+
+
+def cmd_retry(args):
+    _run(_build_requeue_enrich_command(source="all", statuses=args.statuses))
+
+
+def cmd_drain(args):
+    _run(
+        _build_backfill_command(
+            batch_size=args.batch_size,
+            source=args.source,
+            max_batches=args.max_batches,
+            channel=args.channel,
+            storage_state=args.storage_state,
+            timeout_ms=args.timeout_ms,
+            slow_mo=args.slow_mo,
+            headful=args.headful,
+            ui_verify_blocked=not args.no_ui_verify_blocked,
+            job_ids=args.job_ids,
+            yes=not args.ask,
+        )
+    )
+
+
+def _build_requeue_enrich_command(*, source, statuses=None):
+    command = [PYTHON, "scripts/requeue_enrichment_rows.py", "--source", source]
+    if statuses:
+        for status in statuses:
+            command.extend(["--status", status])
+    return command
+
+
+def _build_backfill_command(
+    *,
+    batch_size,
+    source,
+    max_batches=None,
+    channel="chrome",
+    storage_state=None,
+    timeout_ms=45000,
+    slow_mo=0,
+    headful=False,
+    ui_verify_blocked=False,
+    job_ids=None,
+    yes=False,
+):
+    command = [PYTHON, "scripts/backfill_enrichment.py", str(batch_size), "--source", source]
+    if max_batches is not None:
+        command.extend(["--max-batches", str(max_batches)])
+    if channel:
+        command.extend(["--channel", channel])
+    if storage_state:
+        command.extend(["--storage-state", storage_state])
+    if timeout_ms is not None:
+        command.extend(["--timeout-ms", str(timeout_ms)])
+    if slow_mo is not None:
+        command.extend(["--slow-mo", str(slow_mo)])
+    if headful:
         command.append("--headful")
-    if args.ui_verify_blocked:
+    if ui_verify_blocked:
         command.append("--ui-verify-blocked")
-    if args.job_ids:
-        for job_id in args.job_ids:
+    if job_ids:
+        for job_id in job_ids:
             command.extend(["--job-id", str(job_id)])
-    if args.yes:
+    if yes:
         command.append("--yes")
-    _run(command)
+    return command
 
 
 def cmd_review(_args):
@@ -369,9 +426,23 @@ def build_parser():
     )
     requeue_enrich.set_defaults(func=cmd_requeue_enrich)
 
+    retry = subparsers.add_parser(
+        "retry",
+        help="Short form: requeue failed/blocked enrichment rows across all sources.",
+    )
+    retry.add_argument(
+        "--status",
+        action="append",
+        dest="statuses",
+        choices=["failed", "blocked", "blocked_verified", "processing", "pending"],
+        help="Optional enrichment statuses to requeue. Defaults to failed + blocked + blocked_verified.",
+    )
+    retry.set_defaults(func=cmd_retry)
+
     cleanup_indeed = subparsers.add_parser(
         "cleanup-indeed",
         help="Preview or delete currently stored irrelevant Indeed rows.",
+        aliases=["clean-indeed"],
     )
     cleanup_indeed.add_argument("--apply", action="store_true")
     cleanup_indeed.add_argument("--include-non-new", action="store_true")
@@ -391,6 +462,23 @@ def build_parser():
     backfill.add_argument("--ui-verify-blocked", action="store_true")
     backfill.add_argument("--yes", action="store_true")
     backfill.set_defaults(func=cmd_backfill)
+
+    drain = subparsers.add_parser(
+        "drain",
+        help="Short form: backfill all sources in 100-row batches with UI verification and auto-continue.",
+    )
+    drain.add_argument("batch_size", type=int, nargs="?", default=100)
+    drain.add_argument("--source", choices=["linkedin", "indeed", "all"], default="all")
+    drain.add_argument("--job-id", type=int, action="append", dest="job_ids")
+    drain.add_argument("--max-batches", type=int, default=None)
+    drain.add_argument("--channel", default="chrome")
+    drain.add_argument("--storage-state", default=None)
+    drain.add_argument("--timeout-ms", type=int, default=45000)
+    drain.add_argument("--slow-mo", type=int, default=0)
+    drain.add_argument("--headful", action="store_true")
+    drain.add_argument("--no-ui-verify-blocked", action="store_true")
+    drain.add_argument("--ask", action="store_true")
+    drain.set_defaults(func=cmd_drain)
 
     review = subparsers.add_parser("review", help="Run the local review app.")
     review.set_defaults(func=cmd_review)

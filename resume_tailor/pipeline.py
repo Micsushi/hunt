@@ -10,6 +10,7 @@ from .config import (
     DEFAULT_MODEL_BACKEND,
     DEFAULT_MODEL_NAME,
     DEFAULT_OG_RESUME_PATH,
+    resolve_base_resume_path,
 )
 from .db import (
     get_apply_context,
@@ -112,16 +113,23 @@ def _run_pipeline(
     candidate_profile_path: str | Path,
     bullet_library_path: str | Path,
 ) -> dict:
-    parsed_resume = parse_resume_file(resume_path)
     classification = classify_job(title=title, description=description)
     keywords = extract_keywords(title=title, description=description, classification=classification)
     candidate_profile = load_candidate_profile(candidate_profile_path)
     bullet_library = load_bullet_library(bullet_library_path)
+    base_resume_name, selected_resume_path = resolve_base_resume_path(classification["role_family"])
+    if Path(resume_path) != Path(DEFAULT_OG_RESUME_PATH):
+        base_resume_name = "custom"
+        selected_resume_path = Path(resume_path)
+    parsed_resume = parse_resume_file(selected_resume_path)
 
     tailored_doc, structured_output = generate_tailored_resume(
         parsed_resume,
         classification=classification,
         keywords=keywords,
+        candidate_profile=candidate_profile,
+        bullet_library=bullet_library,
+        selected_base_resume=base_resume_name,
     )
 
     fallback_used = False
@@ -156,7 +164,8 @@ def _run_pipeline(
         "fits_one_page": compile_result["fits_one_page"],
         "model_backend": DEFAULT_MODEL_BACKEND,
         "model_name": DEFAULT_MODEL_NAME,
-        "source_resume_path": str(Path(resume_path)),
+        "selected_base_resume": base_resume_name,
+        "source_resume_path": str(Path(selected_resume_path)),
         "role_classification_path": role_classification_path,
     }
     metadata_path = write_json(attempt_dir / "metadata.json", metadata)
@@ -182,9 +191,9 @@ def _run_pipeline(
         "latest_result_kind": latest_result_kind,
         "role_family": classification["role_family"],
         "job_level": classification["job_level"],
-        "base_resume_name": "original",
-        "source_resume_type": "original",
-        "source_resume_path": str(Path(resume_path)),
+        "base_resume_name": base_resume_name,
+        "source_resume_type": "family_base" if base_resume_name not in {"original", "custom"} else ("custom" if base_resume_name == "custom" else "original"),
+        "source_resume_path": str(Path(selected_resume_path)),
         "fallback_used": fallback_used,
         "model_backend": DEFAULT_MODEL_BACKEND,
         "model_name": DEFAULT_MODEL_NAME,

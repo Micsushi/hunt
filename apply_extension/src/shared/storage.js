@@ -82,13 +82,23 @@ export function sanitizeResume(resume = {}) {
 export function sanitizeApplyContext(context = {}) {
   return {
     jobId: sanitizeText(String(context.jobId ?? "")),
+    title: sanitizeText(context.title),
+    company: sanitizeText(context.company),
     applyUrl: sanitizeUrl(context.applyUrl),
+    jobUrl: sanitizeUrl(context.jobUrl),
     sourceMode: sanitizeText(context.sourceMode || "manual"),
+    source: sanitizeText(context.source),
+    atsType: sanitizeText(context.atsType),
+    applyType: sanitizeText(context.applyType),
+    autoApplyEligible: sanitizeBoolean(context.autoApplyEligible),
+    description: sanitizeText(context.description),
     selectedResumeVersionId: sanitizeText(context.selectedResumeVersionId),
     selectedResumePath: sanitizeText(context.selectedResumePath),
+    selectedResumeTexPath: sanitizeText(context.selectedResumeTexPath),
     selectedResumeName: sanitizeText(context.selectedResumeName),
     selectedResumeMimeType: sanitizeText(context.selectedResumeMimeType || "application/pdf"),
     selectedResumeDataUrl: sanitizeText(context.selectedResumeDataUrl),
+    selectedResumeReadyForC3: sanitizeBoolean(context.selectedResumeReadyForC3),
     jdSnapshotPath: sanitizeText(context.jdSnapshotPath),
     concernFlags: sanitizeStringArray(context.concernFlags),
     primedAt: sanitizeText(context.primedAt || new Date().toISOString())

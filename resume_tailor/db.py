@@ -149,13 +149,29 @@ def record_resume_attempt(job_id: int | None, payload: dict, db_path: str | Path
         cursor.execute(
             """
             UPDATE resume_versions
-            SET is_latest_generated = 0,
-                is_latest_useful = 0,
-                is_selected_for_c3 = 0
+            SET is_latest_generated = 0
             WHERE job_id IS ?
             """,
             (job_id,),
         )
+        if payload["is_latest_useful"]:
+            cursor.execute(
+                """
+                UPDATE resume_versions
+                SET is_latest_useful = 0
+                WHERE job_id IS ?
+                """,
+                (job_id,),
+            )
+        if payload["is_selected_for_c3"]:
+            cursor.execute(
+                """
+                UPDATE resume_versions
+                SET is_selected_for_c3 = 0
+                WHERE job_id IS ?
+                """,
+                (job_id,),
+            )
         cursor.execute(
             """
             INSERT INTO resume_versions (
@@ -179,50 +195,85 @@ def record_resume_attempt(job_id: int | None, payload: dict, db_path: str | Path
         version_id = int(cursor.lastrowid)
 
         if job_id is not None:
-            cursor.execute(
-                """
-                UPDATE jobs
-                SET resume_status = ?,
-                    latest_resume_attempt_id = ?,
-                    latest_resume_version_id = ?,
-                    latest_resume_pdf_path = ?,
-                    latest_resume_tex_path = ?,
-                    latest_resume_keywords_path = ?,
-                    latest_resume_job_description_path = ?,
-                    latest_resume_family = ?,
-                    latest_resume_job_level = ?,
-                    latest_resume_model = ?,
-                    latest_resume_generated_at = CURRENT_TIMESTAMP,
-                    latest_resume_fallback_used = ?,
-                    latest_resume_flags = ?,
-                    selected_resume_version_id = ?,
-                    selected_resume_pdf_path = ?,
-                    selected_resume_tex_path = ?,
-                    selected_resume_selected_at = CASE WHEN ? THEN CURRENT_TIMESTAMP ELSE selected_resume_selected_at END,
-                    selected_resume_ready_for_c3 = ?
-                WHERE id = ?
-                """,
-                (
-                    payload["status"],
-                    attempt_id,
-                    version_id,
-                    payload["pdf_path"],
-                    payload["tex_path"],
-                    payload["keywords_path"],
-                    payload["job_description_path"],
-                    payload["role_family"],
-                    payload["job_level"],
-                    payload["model_name"],
-                    int(payload["fallback_used"]),
-                    json.dumps(payload["concern_flags"]),
-                    version_id if payload["is_selected_for_c3"] else None,
-                    payload["pdf_path"] if payload["is_selected_for_c3"] else None,
-                    payload["tex_path"] if payload["is_selected_for_c3"] else None,
-                    int(payload["is_selected_for_c3"]),
-                    int(payload["is_selected_for_c3"]),
-                    job_id,
-                ),
-            )
+            if payload["is_selected_for_c3"]:
+                cursor.execute(
+                    """
+                    UPDATE jobs
+                    SET resume_status = ?,
+                        latest_resume_attempt_id = ?,
+                        latest_resume_version_id = ?,
+                        latest_resume_pdf_path = ?,
+                        latest_resume_tex_path = ?,
+                        latest_resume_keywords_path = ?,
+                        latest_resume_job_description_path = ?,
+                        latest_resume_family = ?,
+                        latest_resume_job_level = ?,
+                        latest_resume_model = ?,
+                        latest_resume_generated_at = CURRENT_TIMESTAMP,
+                        latest_resume_fallback_used = ?,
+                        latest_resume_flags = ?,
+                        selected_resume_version_id = ?,
+                        selected_resume_pdf_path = ?,
+                        selected_resume_tex_path = ?,
+                        selected_resume_selected_at = CURRENT_TIMESTAMP,
+                        selected_resume_ready_for_c3 = ?
+                    WHERE id = ?
+                    """,
+                    (
+                        payload["status"],
+                        attempt_id,
+                        version_id,
+                        payload["pdf_path"],
+                        payload["tex_path"],
+                        payload["keywords_path"],
+                        payload["job_description_path"],
+                        payload["role_family"],
+                        payload["job_level"],
+                        payload["model_name"],
+                        int(payload["fallback_used"]),
+                        json.dumps(payload["concern_flags"]),
+                        version_id,
+                        payload["pdf_path"],
+                        payload["tex_path"],
+                        1,
+                        job_id,
+                    ),
+                )
+            else:
+                cursor.execute(
+                    """
+                    UPDATE jobs
+                    SET resume_status = ?,
+                        latest_resume_attempt_id = ?,
+                        latest_resume_version_id = ?,
+                        latest_resume_pdf_path = ?,
+                        latest_resume_tex_path = ?,
+                        latest_resume_keywords_path = ?,
+                        latest_resume_job_description_path = ?,
+                        latest_resume_family = ?,
+                        latest_resume_job_level = ?,
+                        latest_resume_model = ?,
+                        latest_resume_generated_at = CURRENT_TIMESTAMP,
+                        latest_resume_fallback_used = ?,
+                        latest_resume_flags = ?
+                    WHERE id = ?
+                    """,
+                    (
+                        payload["status"],
+                        attempt_id,
+                        version_id,
+                        payload["pdf_path"],
+                        payload["tex_path"],
+                        payload["keywords_path"],
+                        payload["job_description_path"],
+                        payload["role_family"],
+                        payload["job_level"],
+                        payload["model_name"],
+                        int(payload["fallback_used"]),
+                        json.dumps(payload["concern_flags"]),
+                        job_id,
+                    ),
+                )
 
         conn.commit()
         return attempt_id, version_id

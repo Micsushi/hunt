@@ -15,10 +15,11 @@
     isWorkday &&
     stateResponse?.ok &&
     stateResponse?.settings?.autofillOnLoad &&
-    stateResponse?.activeApplyContext?.selectedResumePath
+    (
+      stateResponse?.activeApplyContext?.selectedResumeDataUrl ||
+      stateResponse?.defaultResume?.pdfDataUrl
+    )
   ) {
-    console.log(
-      "Autofill on load is enabled, but Stage 2 fill logic is not implemented yet."
-    );
+    console.log("Autofill on load is enabled for this Workday page.");
   }
 })();

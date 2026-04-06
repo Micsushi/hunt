@@ -1,7 +1,11 @@
 export function detectWorkdayPage() {
-  return window.location.hostname.includes("workday");
+  const hostname = window.location.hostname || "";
+  return hostname.includes("workday.com") || hostname.includes("myworkdayjobs.com");
 }
 
 export function fillWorkdayPage(_context) {
-  throw new Error("Workday autofill is not implemented yet.");
+  return {
+    supported: true,
+    delegatedToBackground: true
+  };
 }

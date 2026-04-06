@@ -257,8 +257,10 @@ Common examples:
   `.\hunt.ps1 jobs --source indeed --status all --limit 10`
   `./hunt.sh jobs --source indeed --status all --limit 10`
 - preview currently stored irrelevant Indeed rows using the current title filter:
+  `./hunt.sh clean-indeed`
   `./hunt.sh cleanup-indeed`
 - delete currently stored irrelevant Indeed rows:
+  `./hunt.sh clean-indeed --apply`
   `./hunt.sh cleanup-indeed --apply`
 - inspect one job:
   `.\hunt.ps1 job 13179`
@@ -275,6 +277,16 @@ Common examples:
 - run a controlled backfill for all supported sources in 100-row chunks:
   `.\hunt.ps1 backfill --source all --ui-verify-blocked`
   `./hunt.sh backfill --source all --ui-verify-blocked`
+- requeue the common retryable enrichment rows across all sources:
+  `./hunt.sh retry`
+  `./hunt.sh requeue-enrich --source all`
+- drain the all-source backlog in 100-row batches with blocked-row UI verification and automatic continue:
+  `DISPLAY=:98 ./hunt.sh drain`
+  `DISPLAY=:98 ./hunt.sh backfill 100 --source all --ui-verify-blocked --yes`
+- drain with a custom batch size:
+  `DISPLAY=:98 ./hunt.sh drain 250`
+- drain but stop after each batch for confirmation:
+  `DISPLAY=:98 ./hunt.sh drain --ask`
 - run a controlled backfill in custom chunk sizes:
   `.\hunt.ps1 backfill 250 --ui-verify-blocked`
   `./hunt.sh backfill 250 --ui-verify-blocked`
@@ -512,8 +524,10 @@ C1 sign-off runbook on `server2`:
    - `systemctl cat hunt-scraper.service | grep HUNT_ARTIFACTS_DIR`
    - `curl -s https://agent-hunt-review.mshi.ca/metrics | head`
 3. requeue failed/blocked enrichment rows you want retried
+   - `./hunt.sh retry`
    - `./hunt.sh requeue-enrich --source all`
 4. drain the backlog manually first
+   - `DISPLAY=:98 ./hunt.sh drain`
    - `DISPLAY=:98 ./hunt.sh backfill 100 --source all --ui-verify-blocked --yes`
 5. confirm queue health after the manual drain
    - `./hunt.sh queue`

@@ -4,6 +4,7 @@ import base64
 import json
 import mimetypes
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 
 
@@ -49,16 +50,24 @@ def build_apply_prep_payload(job_id: int, *, embed_resume_data: bool = False):
         "selectedResumePath": context["selected_resume_pdf_path"],
         "selectedResumeTexPath": context["selected_resume_tex_path"],
         "selectedResumeReadyForC3": context["selected_resume_ready_for_c3"],
-        "jdSnapshotPath": "",
+        "jdSnapshotPath": context["latest_resume_job_description_path"],
         "concernFlags": [],
-        "primedAt": "",
+        "primedAt": datetime.now(timezone.utc).isoformat(),
     }
+
+    if context["latest_resume_flags"]:
+        try:
+            payload["concernFlags"].extend(json.loads(context["latest_resume_flags"]))
+        except json.JSONDecodeError:
+            payload["concernFlags"].append("resume_flags:unparseable")
 
     if context["last_enrichment_error"]:
         payload["concernFlags"].append(f"enrichment_error:{context['last_enrichment_error']}")
 
     if context["enrichment_status"] not in {"done", "done_verified"}:
         payload["concernFlags"].append(f"enrichment_status:{context['enrichment_status']}")
+
+    payload["concernFlags"] = list(dict.fromkeys(flag for flag in payload["concernFlags"] if flag))
 
     if embed_resume_data:
         payload["selectedResumeDataUrl"] = _build_resume_data_url(
