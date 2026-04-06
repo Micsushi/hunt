@@ -36,15 +36,19 @@ DESCRIPTION_SELECTORS = (
     ".jobs-box__html-content",
     ".jobs-description-content__text",
     ".jobs-description__container",
-    "section.show-more-less-html__markup",
+    ".show-more-less-html__markup",
     ".jobs-search__job-details--container",
 )
 
 DESCRIPTION_EXPAND_SELECTORS = (
     "button[aria-label*='description' i]",
+    "button[aria-label='Show more' i]",
+    "button[aria-expanded='false'][aria-label*='more' i]",
     "button.jobs-description__footer-button",
     "button.inline-show-more-text__button",
+    "button.show-more-less-html__button--more",
     "button:has-text('See more')",
+    "button:has-text('Show more')",
 )
 
 EXTERNAL_DESCRIPTION_SELECTORS = (
@@ -154,6 +158,8 @@ FAST_UI_NETWORKIDLE_TIMEOUT_MS = 1200
 DEFAULT_NETWORKIDLE_TIMEOUT_MS = 5000
 DEFAULT_POST_CLICK_WAIT_MS = 1500
 FAST_UI_POST_CLICK_WAIT_MS = 350
+DESCRIPTION_EXPAND_WAIT_MS = 250
+DESCRIPTION_EXPAND_MAX_ROUNDS = 3
 GENERIC_EXTERNAL_DESCRIPTION_MIN_CHARS = 500
 GENERIC_EXTERNAL_DESCRIPTION_MIN_SIGNAL_HITS = 2
 JOB_DESCRIPTION_SIGNAL_KEYWORDS = (
@@ -251,13 +257,66 @@ def first_visible_locator(locators):
 
 
 def click_expand_description(page, selectors):
-    for selector in selectors:
+    seen_candidates = set()
+    clicked_any = False
+
+    for _ in range(DESCRIPTION_EXPAND_MAX_ROUNDS):
+        round_clicked = False
+        for selector in selectors:
+            try:
+                locator_group = page.locator(selector)
+                count = locator_group.count()
+            except Exception:
+                continue
+
+            if count <= 0:
+                continue
+
+            for index in range(count):
+                try:
+                    locator = locator_group.nth(index)
+                except Exception:
+                    if index > 0:
+                        break
+                    locator = locator_group.first
+
+                try:
+                    if not locator.is_visible():
+                        continue
+                except Exception:
+                    continue
+
+                label = None
+                for getter in (locator.inner_text, locator.text_content):
+                    try:
+                        label = normalize_optional_str(getter())
+                    except Exception:
+                        continue
+                    if label:
+                        break
+
+                signature = (selector, index, label)
+                if signature in seen_candidates:
+                    continue
+
+                try:
+                    locator.click(timeout=1500)
+                except Exception:
+                    continue
+
+                seen_candidates.add(signature)
+                clicked_any = True
+                round_clicked = True
+
+        if not round_clicked:
+            break
+
         try:
-            locator = page.locator(selector)
-            if locator.count() > 0 and locator.first.is_visible():
-                locator.first.click(timeout=1500)
+            page.wait_for_timeout(DESCRIPTION_EXPAND_WAIT_MS)
         except Exception:
-            continue
+            pass
+
+    return clicked_any
 
 
 def extract_best_text(page, selectors):

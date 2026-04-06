@@ -16,14 +16,18 @@ import url_utils
 
 class Stage2Tests(unittest.TestCase):
     class FakeLocator:
-        def __init__(self, texts=None, *, count=None, visible=True):
+        def __init__(self, texts=None, *, count=None, visible=True, on_click=None):
             self._texts = texts or []
             self._count = count if count is not None else len(self._texts)
             self._visible = visible
+            self._on_click = on_click
             self.first = self
 
         def count(self):
             return self._count
+
+        def nth(self, index):
+            return self
 
         def is_visible(self):
             return self._visible
@@ -36,6 +40,10 @@ class Stage2Tests(unittest.TestCase):
 
         def text_content(self):
             return self.inner_text()
+
+        def click(self, timeout=None):
+            if self._on_click:
+                self._on_click()
 
     class FakePage:
         def __init__(self, *, url, title="", selectors=None):
@@ -57,6 +65,9 @@ class Stage2Tests(unittest.TestCase):
             if isinstance(value, (list, tuple)):
                 return Stage2Tests.FakeLocator(list(value))
             return Stage2Tests.FakeLocator(count=int(value))
+
+        def wait_for_timeout(self, timeout):
+            return None
 
     def make_temp_db_path(self):
         fd, path = tempfile.mkstemp(suffix=".db")
@@ -389,6 +400,55 @@ class Stage2Tests(unittest.TestCase):
         """
         self.assertFalse(enrich_linkedin.looks_like_usable_job_description(thin_text))
         self.assertTrue(enrich_linkedin.looks_like_usable_job_description(detailed_text))
+
+    def test_extract_description_reads_show_more_less_markup(self):
+        description = """
+        About the job
+        Responsibilities include building backend services, mentoring teammates,
+        and collaborating across product and platform groups.
+        Minimum Qualifications include Python experience and distributed systems knowledge.
+        """
+        page = self.FakePage(
+            url="https://www.linkedin.com/jobs/view/123",
+            selectors={
+                ".show-more-less-html__markup": description,
+            },
+        )
+
+        extracted = enrich_linkedin.extract_description(page, expand_selectors=())
+
+        self.assertEqual(extracted, enrich_linkedin.normalize_description_text(description))
+
+    def test_extract_description_clicks_linkedin_show_more_button(self):
+        truncated = """
+        About the job
+        Responsibilities include building backend services.
+        ... more
+        """
+        expanded = """
+        About the job
+        Responsibilities include building backend services, mentoring teammates,
+        and collaborating across product and platform groups.
+        Minimum Qualifications include Python experience and distributed systems knowledge.
+        """
+        page = self.FakePage(
+            url="https://www.linkedin.com/jobs/view/123",
+            selectors={
+                ".show-more-less-html__markup": self.FakeLocator([truncated]),
+            },
+        )
+
+        def expand_description():
+            page._selectors[".show-more-less-html__markup"] = self.FakeLocator([expanded])
+
+        page._selectors["button.show-more-less-html__button--more"] = self.FakeLocator(
+            ["Show more"],
+            on_click=expand_description,
+        )
+
+        extracted = enrich_linkedin.extract_description(page)
+
+        self.assertEqual(extracted, enrich_linkedin.normalize_description_text(expanded))
 
     def test_security_verification_is_not_treated_as_batch_hard_stop(self):
         self.assertTrue(enrich_linkedin.is_blocking_error_code("security_verification"))
