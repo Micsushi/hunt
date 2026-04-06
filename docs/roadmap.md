@@ -8,21 +8,27 @@ Build a continuously running Linux-hosted system that can:
 - tailor a LaTeX resume to each job
 - automate external job applications where the flow is stable and eligible
 
-The system is split into three major components:
+The system is split into four major components:
 - Component 1 : posting discovery and enrichment
 - Component 2 : resume tailoring
-- Component 3 : application automation
+- Component 3 : browser autofill and apply assistance
+- Component 4 : orchestration and submit control
 
 Current implementation priority:
-1. finish rolling out the latest Component 1 Stage 3.2 Hunt code to `server2`
-2. start Component 1 Stage 4 hardening and backfill work
+1. finish Component 1 Stage 4 production validation and backlog drain on `server2`
+2. keep the Ansible deployment model split by component
+   - Component 1 deploys through the current Hunt-focused job-agent step
+   - Component 2 should deploy in a later separate step/stage
+   - Component 3 / OpenClaw integration should deploy in a later separate step/stage
+3. continue Component 1 Stage 4 hardening and backfill work
    - drain backlog safely with the new source-aware backfill flow
    - add failure-artifact capture for blocked/security/browser-fixable rows
    - add machine-readable queue monitoring on top of the existing review app and queue helpers
    - keep Stage 6 Ansible as the deployment home for runtime paths, env vars, and operator docs
    - current implementation now covers the artifact + monitoring plumbing; the remaining work is rollout, backlog drain, and tuning
-3. validate the end-to-end handoff from Component 1 to Component 2
-4. build Component 3 only on top of stable external-apply flows
+4. validate the end-to-end handoff from Component 1 to Component 2
+5. build Component 3 only on top of stable external-apply flows
+6. add Component 4 only after Component 3 contracts are dependable
 
 ## System Principles
 
@@ -61,14 +67,19 @@ Current status:
   - queue-health CLI visibility
   - a minimal review/control-plane web app
   - read-only operator tools that avoid queue-maintenance side effects
-- current focus is Stage 3 deployment rollout on `server2`
+- current focus is Stage 4 production validation, backlog drain, and deployment polish on `server2`
 - the repo now also includes Stage 3.2 runtime code:
   - one source-aware enrichment queue for LinkedIn and Indeed
   - an Indeed enricher built on the same claim/update/retry model
   - a multi-source dispatcher with LinkedIn-first priority
   - source-aware review-app counts and filters
   - a shared browser runtime for UI/browser fallback across supported sources
+- the repo now also includes the initial Stage 4 runtime slice:
+  - failure-artifact capture
+  - machine-readable queue monitoring
+  - review-surface artifact visibility
 - deployment notes for `server2` live in `docs/components/component1/stage3_server2_plan.md`
+- Component 1 deploys separately from later Component 2 and Component 3 work
 
 Doc:
 - `docs/components/component1/README.md`
@@ -119,6 +130,22 @@ Important limitation:
 Doc:
 - `docs/components/component3/README.md`
 
+### Component 4 : orchestration and submit control
+
+Purpose:
+- coordinate Components 1, 2, and 3
+- decide when a job should proceed through downstream steps
+- decide when Component 3 should run
+- later own final submit policy and higher-level automation behavior
+
+Current status:
+- docs stage only
+- OpenClaw is the likely first implementation target
+- should remain separate from Component 3 so the extension stays usable manually
+
+Doc:
+- `docs/components/component4/README.md`
+
 ## Cross-Component Data Contract
 
 Component 1 should hand off:
@@ -129,16 +156,24 @@ Component 1 should hand off:
 - ATS classification
 
 Component 2 should hand off:
-- job-specific tailored resume source
-- compiled PDF
+- selected resume version
+- selected resume PDF path
+- latest useful output metadata
 - structured metadata about what was changed
 - validation result such as page count and compile status
+- explicit selected-resume data that downstream apply flows can consume without re-deciding
 
 Component 3 should hand off:
 - account/auth status for the target site
 - field mapping results
 - generated responses used in the form
-- final submission status or failure reason
+- fill/evidence state and review flags
+
+Component 4 should hand off:
+- orchestration decisions
+- submit/not-submit outcomes
+- operator-handoff state
+- explicit apply context when invoking Component 3
 
 ## What To Watch Closely
 

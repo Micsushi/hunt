@@ -26,6 +26,62 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from url_utils import detect_ats_type, get_apply_host, normalize_optional_str
 
 
+INDEED_CATEGORY_KEYWORDS = {
+    "engineering": (
+        "software",
+        "developer",
+        "engineer",
+        "frontend",
+        "front-end",
+        "backend",
+        "back-end",
+        "fullstack",
+        "full stack",
+        "web developer",
+        "application developer",
+        "devops",
+        "sdet",
+        "qa engineer",
+        ".net",
+        "ingénieur",
+        "ingenieur",
+        "développeur",
+        "developpeur",
+        "logiciel",
+    ),
+    "product": (
+        "product",
+        "project manager",
+        "project management",
+        "scrum",
+        "business analyst",
+        "business analysis",
+        "product owner",
+        "associate product manager",
+        "program manager",
+        "gestionnaire de produit",
+        "chef de produit",
+        "analyste d'affaires",
+        "analyste daffaires",
+    ),
+    "data": (
+        "data",
+        "analytics",
+        "scientist",
+        "machine learning",
+        "business intelligence",
+        "bi developer",
+        "bi analyst",
+        "analyste de donnees",
+        "analyste de données",
+        "scientifique des donnees",
+        "scientifique des données",
+        "donnees",
+        "données",
+    ),
+}
+
+
 def classify_level(title):
     if not title or not isinstance(title, str):
         return "unknown"
@@ -56,6 +112,18 @@ def should_skip(title):
         return False
     title_lower = title.lower()
     return any(word in title_lower for word in TITLE_BLACKLIST)
+
+
+def matches_indeed_category(title, category):
+    if not title or not isinstance(title, str):
+        return False
+
+    keywords = INDEED_CATEGORY_KEYWORDS.get(category)
+    if not keywords:
+        return True
+
+    title_lower = title.lower()
+    return any(keyword in title_lower for keyword in keywords)
 
 
 def build_job_urls(row, source):
@@ -104,6 +172,9 @@ def scrape_single(site, term, location, category):
             continue
 
         if not title:
+            continue
+
+        if source == "indeed" and not matches_indeed_category(title, category):
             continue
 
         job_url, apply_url = build_job_urls(row, source)

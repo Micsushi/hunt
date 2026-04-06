@@ -27,12 +27,14 @@ The goal is to give C2 more truthful material than can fit on any one-page resum
 
 - Bullet ID:
   - Text:
+  - Supported by fact IDs:
   - Evidence notes:
   - Metrics:
   - Relevance tags:
 
 - Bullet ID:
   - Text:
+  - Supported by fact IDs:
   - Evidence notes:
   - Metrics:
   - Relevance tags:
@@ -51,22 +53,27 @@ The goal is to give C2 more truthful material than can fit on any one-page resum
 
 - Bullet ID:
   - Text:
+  - Supported by fact IDs:
   - Evidence notes:
   - Metrics:
   - Relevance tags:
 
 ## Skill Signals
 
-- Skill:
-- Where it was used:
-- Strength of evidence:
-- Related role families:
+- Skill ID:
+  - Name:
+  - Where it was used:
+  - Strength of evidence:
+  - Related role families:
+  - Related entry IDs:
 
 ## Optional Generated Drafts
 
 You can also store later generated bullet drafts here if they are still truthful and reviewed.
 
 - Draft bullet:
-- Source facts:
+  - Draft ID:
+  - Text:
+  - Source facts:
+  - Supported by fact IDs:
 - Review status:
-

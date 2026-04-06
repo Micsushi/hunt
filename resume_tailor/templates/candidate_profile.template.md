@@ -61,14 +61,25 @@ Repeat this block for each role you want available to C2, including roles not cu
 
 #### Immutable facts
 
-- Fact 1:
-- Fact 2:
+- Fact ID:
+  - Text:
+- Fact ID:
+  - Text:
 
 #### Bullet candidates
 
-- Bullet 1:
-- Bullet 2:
-- Bullet 3:
+- Bullet ID:
+  - Text:
+  - Supported by fact IDs:
+  - Relevance tags:
+- Bullet ID:
+  - Text:
+  - Supported by fact IDs:
+  - Relevance tags:
+- Bullet ID:
+  - Text:
+  - Supported by fact IDs:
+  - Relevance tags:
 
 #### Extra context
 
@@ -93,31 +104,51 @@ Repeat this block for each project.
 
 #### Immutable facts
 
-- Fact 1:
-- Fact 2:
+- Fact ID:
+  - Text:
+- Fact ID:
+  - Text:
 
 #### Bullet candidates
 
-- Bullet 1:
-- Bullet 2:
-- Bullet 3:
+- Bullet ID:
+  - Text:
+  - Supported by fact IDs:
+  - Relevance tags:
+- Bullet ID:
+  - Text:
+  - Supported by fact IDs:
+  - Relevance tags:
+- Bullet ID:
+  - Text:
+  - Supported by fact IDs:
+  - Relevance tags:
 
 ## Skills Inventory
 
 ### Languages
 
-- Python
-- Java
+- Skill ID:
+  - Name:
+  - Where used:
+  - Strength of evidence:
+  - Related role families:
 
 ### Frameworks
 
-- FastAPI
-- React
+- Skill ID:
+  - Name:
+  - Where used:
+  - Strength of evidence:
+  - Related role families:
 
 ### Developer Tools
 
-- Docker
-- Kubernetes
+- Skill ID:
+  - Name:
+  - Where used:
+  - Strength of evidence:
+  - Related role families:
 
 ## Leadership Examples
 
@@ -139,4 +170,3 @@ Repeat this block for each project.
 - Never invent tools or metrics that did not happen.
 - Never change dates, titles, employers, education, or contact info.
 - If a detail is uncertain, leave it blank or mark it for review.
-

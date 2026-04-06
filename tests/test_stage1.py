@@ -138,6 +138,53 @@ class Stage1Tests(unittest.TestCase):
         self.assertEqual(job["apply_type"], "unknown")
         self.assertEqual(job["enrichment_status"], "pending")
 
+    def test_scrape_single_filters_unrelated_indeed_product_false_positive(self):
+        jobs_df = pd.DataFrame(
+            [
+                {
+                    "title": "Cashier",
+                    "company": "Walmart",
+                    "location": "Canada",
+                    "job_url": "https://ca.indeed.com/viewjob?jk=123",
+                    "job_url_direct": "https://walmart.wd5.myworkdayjobs.com/job/123",
+                    "description": "Retail cashier role",
+                    "site": "indeed",
+                    "date_posted": "2026-04-05",
+                    "is_remote": False,
+                }
+            ]
+        )
+
+        with patch.object(scraper_module, "scrape_jobs", return_value=jobs_df):
+            jobs = scraper_module.scrape_single("indeed", "associate product manager", "Canada", "product")
+
+        self.assertEqual(jobs, [])
+
+    def test_scrape_single_keeps_relevant_indeed_product_title(self):
+        jobs_df = pd.DataFrame(
+            [
+                {
+                    "title": "Associate Product Manager",
+                    "company": "Acme",
+                    "location": "Canada",
+                    "job_url": "https://ca.indeed.com/viewjob?jk=456",
+                    "job_url_direct": "https://boards.greenhouse.io/acme/jobs/456",
+                    "description": "APM role",
+                    "site": "indeed",
+                    "date_posted": "2026-04-05",
+                    "is_remote": True,
+                }
+            ]
+        )
+
+        with patch.object(scraper_module, "scrape_jobs", return_value=jobs_df):
+            jobs = scraper_module.scrape_single("indeed", "associate product manager", "Canada", "product")
+
+        self.assertEqual(len(jobs), 1)
+        self.assertEqual(jobs[0]["title"], "Associate Product Manager")
+        self.assertEqual(jobs[0]["source"], "indeed")
+        self.assertEqual(jobs[0]["enrichment_status"], "pending")
+
     def test_init_db_migrates_old_schema_and_backfills_legacy_linkedin_rows(self):
         path = self.make_temp_db_path()
         old_db_path = db.DB_PATH

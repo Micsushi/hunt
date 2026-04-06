@@ -28,9 +28,10 @@ In this repo, C3 is the browser autofill extension and apply-assistance layer.
 
 Component 4.
 
-In this repo, C4 is the higher-level orchestration and submit-control layer.
-
-OpenClaw is the current most likely first implementation of C4.
+In this repo, C4 is higher-level orchestration such as OpenClaw deciding:
+- when to invoke C3
+- whether a job should proceed
+- whether final submit should happen
 
 ### S1, S2, S3, ...
 
@@ -133,12 +134,6 @@ The current best or most recent useful C2 output surfaced on the job row and lat
 
 The automated C2 path triggered from normal C1 output.
 
-### Apply context
-
-The explicit bundle used by C4 or OpenClaw when handing a job to C3.
-
-It should include the selected application link plus the selected resume and related metadata for the same `job_id`.
-
 ### Ad hoc path
 
 The manual C2 path where the user selects a DB job, pastes a JD, or uploads a JD text file.
@@ -161,3 +156,9 @@ The hard rule that a generated resume PDF must be exactly one page to count as u
 ### Latest useful result
 
 The most recent C2 attempt that passed the one-page gate and is acceptable for downstream use.
+
+### Selected resume
+
+The specific C2 output currently chosen for downstream application use.
+
+This is the resume C3 should upload for the job when a job-specific resume is available.

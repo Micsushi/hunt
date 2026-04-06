@@ -25,6 +25,8 @@ That scaffold now includes:
 - base-resume family placeholders
 
 Deployment should happen only after the current Component 1 server rollout is stable on `server2`.
+When deployment starts, Component 2 should be its own Ansible step/stage rather than being folded into the current Component 1 Hunt deployment.
+Component 2 deployment should also stay separate from later Component 3 deployment.
 
 ## Locked Decisions
 
@@ -75,14 +77,37 @@ Important terms used throughout the Component 2 docs:
 This is the main automated path.
 
 1. C1 marks a job enriched and ready for normal downstream work.
-2. C2 classifies the job into a role family and job level.
-3. C2 attempts to tailor a resume from the best starting point:
+2. C2 claims the job only after C1 reaches a normal done state.
+3. C2 classifies the job into a role family and job level.
+4. C2 attempts to tailor a resume from the best starting point:
    - a role-family base resume when possible
    - otherwise the OG resume
-4. C2 compiles the LaTeX output to PDF.
-5. If the PDF exceeds one page, the attempt fails the one-page gate and retries with controlled reductions.
-6. C2 stores all artifacts for the attempt.
-7. The latest useful result is surfaced in the DB and later in the web app.
+5. C2 compiles the LaTeX output to PDF.
+6. If the PDF exceeds one page, the attempt fails the one-page gate and retries with controlled reductions.
+7. C2 stores all artifacts for the attempt.
+8. The latest useful result is surfaced in the DB and later in the web app.
+
+### Cross-component contract
+
+The intended high-level contract is:
+
+1. C1 owns job discovery, enrichment, and ready-for-downstream gating.
+2. C2 owns resume generation for all jobs, not just later automation-eligible jobs.
+3. C3 should only engage when the job is actually ready to apply and C2 has produced a usable one-page resume.
+
+That means:
+- C1 decides whether a job is still waiting on headless or UI enrichment.
+- C2 should wait until C1 is done enough to provide the best available JD snapshot.
+- C2 should still generate for jobs that will never be sent to C3, such as Easy Apply or manual-only cases.
+- C3 should consume the latest useful C2 result, not trigger its own resume generation by default.
+- C4 or OpenClaw should normally fetch one explicit apply context for a job instead of independently deciding which link and which resume to use.
+- in the current C4 direction, that should happen through one shared apply-prep command
+- that apply context should include:
+  - the selected `apply_url`
+  - the selected resume path
+  - the selected resume version or attempt id
+  - the best available JD snapshot path
+  - any relevant concern flags
 
 ### Ad hoc workflow
 
@@ -197,6 +222,14 @@ Recommended runtime root:
 - add user-maintained factual source files
 - support more roles and more bullet candidates than appear in `main.tex`
 - keep everything grounded in truthful source material
+- require durable IDs for:
+  - experience entries
+  - project entries
+  - immutable facts
+  - bullet candidates
+  - generated-but-reviewed draft bullets
+- capture skill evidence, not just raw skill names
+- prepare the factual source material later used to curate family-specific base resumes
 
 ### Stage 3 : job classification and keyword extraction
 
@@ -204,6 +237,7 @@ Recommended runtime root:
 - detect job level
 - extract must-have and nice-to-have requirements
 - flag weak or noisy JDs
+- recommend the best starting base resume family for Stage 4
 
 ### Stage 4 : resume selection and rewrite plan
 
@@ -218,11 +252,18 @@ Recommended runtime root:
 - reject outputs longer than one page
 - retry with controlled reductions
 
-### Stage 6 : persistence and latest-result wiring
+### Stage 6 : persistence, selection, and latest-result wiring
 
 - save all attempt artifacts
+- store immutable resume version metadata for every artifact set
+- distinguish:
+  - latest generated result
+  - latest useful result
+  - selected resume for downstream application use
 - update latest-result fields on the job row
 - prepare the data for web review and later C3 handoff
+- make the selected downstream apply context easy for C4 or OpenClaw to fetch in one step
+- make it easy for the shared apply-prep command to prime C3 with the selected resume for that job
 
 ### Stage 7 : queue-driven automation
 

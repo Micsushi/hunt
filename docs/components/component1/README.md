@@ -16,6 +16,10 @@ LinkedIn is the priority source even if other sources remain enabled.
 Discovery already exists in `scraper/scraper.py`.
 The discovery script can now optionally trigger a follow-up enrichment pass immediately after it writes rows to SQLite.
 Stage 1, Stage 2, Stage 3, and Stage 3.2 repo-side code are complete and locally validated.
+The initial Stage 4 runtime slice now exists too:
+- failure-artifact capture
+- machine-readable queue monitoring
+- review-surface artifact visibility
 
 What Stage 1 changed:
 - `job_url` now represents the discovered listing URL
@@ -28,6 +32,16 @@ What Stage 1 changed:
 Why this matters:
 - later automation must not confuse a LinkedIn listing page with an external ATS application URL
 - `status` remains reserved for actual application lifecycle
+
+## Deployment Model
+
+Component deployment on `server2` is intentionally split:
+- Component 1 deploys through the current Hunt-focused Ansible step/stage
+  - today that is the `job_agent` Stage 6 deployment in `ansible_homelab`
+- Component 2 should deploy in its own later Ansible step/stage
+- Component 3 / OpenClaw integration should deploy in its own later Ansible step/stage
+
+Do not treat Component 2 or Component 3 as extensions of the current Component 1 Stage 6 deploy.
 
 ## Desired LinkedIn Behavior
 
@@ -185,6 +199,7 @@ Implemented behavior:
   - stores `apply_url`, `apply_host`, `ats_type`, `apply_type`, and `enrichment_status`
 - add a shared browser runtime so supported sources can reuse one UI/browser fallback layer instead of duplicating Playwright setup
 - allow Indeed to use a visible browser rerun for browser-fixable failures while still preferring the cheaper non-UI path first
+- apply an Indeed-only category-aware title gate during discovery so broad Indeed matches like retail/cashier/store-associate rows are dropped before they enter the queue
 - expand the review app with source-aware views:
   - source counts
   - source filters
@@ -343,6 +358,10 @@ Common examples:
 
 - requeue older sparse LinkedIn failures for another Stage 2 pass:
   `python scripts/requeue_linkedin_refresh_candidates.py`
+- bulk requeue failed/blocked enrichment rows across supported sources back to `pending`:
+  `./hunt.sh requeue-enrich --source all`
+- if you also want to requeue stale `processing` rows manually:
+  `./hunt.sh requeue-enrich --source all --status failed --status blocked --status blocked_verified --status processing`
 - if a deployment bug caused broad false negatives, requeue only the likely-bugged LinkedIn failures instead of all failed rows:
   `sqlite3 /home/michael/data/hunt/hunt.db "update jobs set enrichment_status='pending', last_enrichment_error=NULL, next_enrichment_retry_at=NULL, last_enrichment_started_at=NULL where source='linkedin' and enrichment_status='failed' and (last_enrichment_error like 'external_description_not_usable:%' or last_enrichment_error like 'external_description_not_found:%' or last_enrichment_error like 'apply_button_not_found:%' or last_enrichment_error like 'unexpected_error:%');"`
 - rerun a specific row even if it is not currently pending:
@@ -400,7 +419,7 @@ Common examples:
 
 ### Stage 4 : hardening and backfill
 
-Stage 4 is the next phase after the current repo-side work. Stages 1 through 3.2 should be treated as implementation-complete pending server rollout of the latest Hunt code.
+Stage 4 is the current phase after the completed Stage 1 through Stage 3.2 work. The initial Stage 4 runtime slice is now implemented; the remaining work is production validation, backlog drain, and tuning on `server2`.
 
 Stage 4 goal:
 - drain the existing enrichment backlog safely

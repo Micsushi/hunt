@@ -862,6 +862,46 @@ def requeue_job(job_id, *, source=None):
         conn.close()
 
 
+def requeue_enrichment_rows(*, source=None, statuses=None):
+    conn = get_connection()
+    try:
+        cursor = conn.cursor()
+        allowed_statuses = {"failed", "blocked", "blocked_verified", "processing", "pending"}
+        normalized_statuses = tuple(
+            status for status in (statuses or ("failed", "blocked", "blocked_verified")) if status in allowed_statuses
+        )
+        if not normalized_statuses:
+            return 0
+
+        status_placeholders = ", ".join(["?"] * len(normalized_statuses))
+        params = list(normalized_statuses)
+        source_sql = ""
+        if source and source != "all":
+            source_sql = " AND source = ?"
+            params.append(source)
+
+        cursor.execute(
+            f"""
+            UPDATE jobs
+            SET enrichment_status = 'pending',
+                last_enrichment_error = NULL,
+                last_enrichment_started_at = NULL,
+                next_enrichment_retry_at = NULL,
+                last_artifact_dir = NULL,
+                last_artifact_screenshot_path = NULL,
+                last_artifact_html_path = NULL,
+                last_artifact_text_path = NULL
+            WHERE enrichment_status IN ({status_placeholders})
+              {source_sql}
+            """,
+            tuple(params),
+        )
+        conn.commit()
+        return cursor.rowcount
+    finally:
+        conn.close()
+
+
 def requeue_linkedin_job(job_id):
     return requeue_job(job_id, source="linkedin")
 

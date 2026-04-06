@@ -11,7 +11,8 @@ The intended long-term flow is still:
 1. C1 discovery and enrichment
 2. C2 resume generation
 3. C3 autofill and upload
-4. later orchestration by OpenClaw or another higher-level agent
+4. later orchestration by Component 4
+5. OpenClaw as one likely first implementation of Component 4
 
 But the first C3 milestone should work even when only these are available:
 - one supported browser
@@ -41,7 +42,7 @@ The following rules should be treated as current hard constraints.
 - The long dash character must be removed from generated output.
 - OTP and similar verification remain manual handoff initially.
 - Account creation/login support is later-stage, not first milestone.
-- OpenClaw should use C3 later, but C3 should not depend on OpenClaw.
+- C4 should use C3 later, but C3 should not depend on C4.
 
 ## Product Shape
 
@@ -63,7 +64,21 @@ Recommended first use flow:
 6. extension uploads the selected resume
 7. extension generates free-text answers when needed
 8. extension records the answers and review flags
-9. the user or later OpenClaw decides whether to continue toward submit
+9. the user or later Component 4 decides whether to continue toward submit
+
+Recommended later orchestration flow:
+
+1. C4 selects a `job_id`
+2. C4 calls one apply-prep command
+3. the command reads the Hunt DB row
+4. the command resolves:
+   - `apply_url`
+   - `selected_resume_version_id`
+   - selected resume path
+5. the command opens the target page
+6. the command primes C3 with the resolved resume context
+7. C4 then triggers C3 autofill
+8. C4 inspects the result and decides whether to continue
 
 ## Separation From Other Components
 
@@ -97,18 +112,30 @@ Later automatic mode:
 - C3 is told which resume belongs to which job
 - C3 uploads that job-specific resume when the matching `apply_url` is being used
 
-### OpenClaw
+Recommended normal queue-driven shape:
+- C4 or OpenClaw fetches one explicit apply context for a `job_id`
+- that context includes the selected `apply_url` and selected resume path together
+- the shared apply-prep command primes C3 with that explicit resume context
+- C3 consumes that explicit answer rather than recomputing selection logic during the fill run
 
-OpenClaw is a later orchestration layer.
+### Component 4
+
+Component 4 is a later orchestration layer.
 
 Recommended relationship:
 - C3 owns autofill behavior
-- OpenClaw decides whether to invoke C3 and whether to submit later
+- C4 decides whether to invoke C3 and whether to submit later
+
+Recommended boundary:
+- C4 should call a shared apply-prep interface instead of re-implementing DB lookup and resume resolution itself
+- C3 should accept a resolved resume/job context rather than trying to infer orchestration intent from the page alone
 
 This keeps C3 reusable:
 - manually by the user
 - by a future different orchestrator
 - by tests and fixtures without a full agent stack
+
+OpenClaw should be treated as one likely first implementation of C4, not as the definition of C3 itself.
 
 ## ATS Rollout Strategy
 
@@ -159,6 +186,14 @@ Recommended rules:
 2. otherwise use the latest manually provided default resume
 3. record which resume was used for every attempt
 
+In the OpenClaw path, this should normally come from a single explicit apply-context handoff rather than from extension-side guessing.
+
+Recommended later C4 flow:
+
+- C4 should pass `job_id`
+- shared apply-prep logic should resolve the selected resume from the DB
+- C3 should be updated with that resolved resume before fill starts
+
 Recommended storage concept:
 - one latest default resume pointer
 - optional per-job resume pointer
@@ -198,6 +233,8 @@ Suggested future fields:
 - `apply_stage`
 - `apply_status`
 - `latest_application_attempt_id`
+- `apply_job_context_source`
+- `selected_resume_version_id`
 - `latest_application_resume_path`
 - `latest_application_started_at`
 - `latest_application_submitted_at`
@@ -301,6 +338,15 @@ Why this shape:
 - works with SQLite path references
 - supports both ad hoc and queue-driven runs
 
+Recommended future ephemeral context:
+- a small per-job apply context written by the shared apply-prep command
+- enough for C3 to know:
+  - current `job_id`
+  - selected resume path
+  - selected resume version id
+  - apply URL origin
+  - source mode such as manual or C4
+
 ## Extension Repo Layout
 
 The repo scaffold for C3 should live in:
@@ -361,7 +407,7 @@ That milestone does not require:
 - account creation
 - OTP handling
 - generic multi-ATS support
-- OpenClaw integration
+- Component 4 integration
 
 ## Separate Review Surface
 
@@ -390,4 +436,4 @@ But it should not be the first place where C3 actions are implemented.
 7. add Hunt job context and per-job resume selection
 8. add separate C3 review/action surface
 9. add login/account helpers
-10. add OpenClaw integration only after the extension is dependable
+10. add Component 4 integration only after the extension is dependable

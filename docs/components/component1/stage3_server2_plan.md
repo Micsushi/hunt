@@ -19,7 +19,7 @@ Current Component 1 state in this repo:
 - Stage 1 is complete
 - Stage 2 is complete
 - Stage 3 runtime code now exists in the Hunt repo
-- `scraper/scraper.py` now supports discovery followed by a post-scrape LinkedIn enrichment pass
+- `scraper/scraper.py` now supports discovery followed by a post-scrape supported-source enrichment pass with LinkedIn-first priority
 - `scraper/runner.py` can loop discovery + enrichment continuously
 - `scraper/enrich_linkedin.py` supports:
   - one-job enrichment
@@ -60,6 +60,11 @@ Server target:
 ## Existing Ansible Deployment On Server2
 
 The current Ansible deployment for Hunt is systemd-based, not Docker-based.
+
+Important component-scope note:
+- the current `job_agent` Stage 6 deployment is the Component 1 deployment step
+- later Component 2 runtime/deployment should be added as a separate Ansible step/stage
+- later Component 3 / OpenClaw-driven apply runtime should be added as a separate Ansible step/stage
 
 From `playbooks/tasks/scraper.yml` in `ansible_homelab`:
 - installs `git`, `python3-venv`, `python3-pip`, and `sqlite3`

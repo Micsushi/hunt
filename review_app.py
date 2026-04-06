@@ -222,6 +222,13 @@ def render_layout(title, body):
       font-size: 0.9rem;
       word-break: break-word;
     }}
+    .link-cell {{
+      min-width: 128px;
+    }}
+    .link-cell a {{
+      display: inline-block;
+      white-space: nowrap;
+    }}
     .stack {{
       display: grid;
       gap: 16px;
@@ -519,7 +526,7 @@ def render_jobs_table(rows, *, source, status, limit, page, q, sort, direction):
               <td>{format_text(row['source'])}</td>
               <td>{format_text(row['company'])}</td>
               <td>{format_text(row['title'])}</td>
-              <td>{linkedin_link}{' | ' + apply_link if linkedin_link and apply_link else apply_link}</td>
+              <td class="link-cell">{linkedin_link}{' | ' + apply_link if linkedin_link and apply_link else apply_link}</td>
               <td><span class="status {status_class}">{format_text(row['enrichment_status'])}</span></td>
               <td>{format_text(row['apply_type'])}</td>
               <td>{format_text(row['enrichment_attempts'])}</td>

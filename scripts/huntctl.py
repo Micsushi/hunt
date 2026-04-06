@@ -171,6 +171,14 @@ def cmd_requeue_refresh(_args):
     _run([PYTHON, "scripts/requeue_linkedin_refresh_candidates.py"])
 
 
+def cmd_requeue_enrich(args):
+    command = [PYTHON, "scripts/requeue_enrichment_rows.py", "--source", args.source]
+    if args.statuses:
+        for status in args.statuses:
+            command.extend(["--status", status])
+    _run(command)
+
+
 def cmd_backfill(args):
     command = [PYTHON, "scripts/backfill_enrichment.py", str(args.batch_size), "--source", args.source]
     if args.max_batches is not None:
@@ -326,6 +334,20 @@ def build_parser():
 
     requeue = subparsers.add_parser("requeue-refresh", help="Requeue sparse historical LinkedIn rows.")
     requeue.set_defaults(func=cmd_requeue_refresh)
+
+    requeue_enrich = subparsers.add_parser(
+        "requeue-enrich",
+        help="Bulk requeue failed/blocked enrichment rows back to pending.",
+    )
+    requeue_enrich.add_argument("--source", choices=["linkedin", "indeed", "all"], default="all")
+    requeue_enrich.add_argument(
+        "--status",
+        action="append",
+        dest="statuses",
+        choices=["failed", "blocked", "blocked_verified", "processing", "pending"],
+        help="Optional enrichment statuses to requeue. Defaults to failed + blocked + blocked_verified.",
+    )
+    requeue_enrich.set_defaults(func=cmd_requeue_enrich)
 
     backfill = subparsers.add_parser("backfill", help="Run enrichment backfill in batches with a checkpoint after each batch.")
     backfill.add_argument("--source", choices=["linkedin", "indeed", "all"], default="linkedin")

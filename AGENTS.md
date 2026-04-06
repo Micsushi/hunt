@@ -10,20 +10,24 @@ The long-term flow is:
 - Component 3 : apply on external job sites using automation
 
 Current focus:
-- Component 1 Stage 3 hardening and deployment
+- Component 1 Stage 4 hardening, backlog drain, and deployment polish
 - prioritize LinkedIn over every other source
 - skip LinkedIn Easy Apply jobs entirely
+- keep Component 1 deployment separate from later Component 2 and Component 3 deployment steps in Ansible
 
 ## Repo Overview
 
-This repo currently implements Component 1 discovery plus LinkedIn enrichment.
+This repo currently implements Component 1 discovery plus multi-source enrichment with LinkedIn-first priority.
 
 Main files:
 - `scraper/scraper.py` : single-run scraper that discovers jobs and writes them to SQLite
 - `scraper/runner.py` : loop runner for continuous scraping
 - `scraper/db.py` : schema, migration, and DB helpers
 - `scraper/config.py` : search terms, locations, watchlist, and run interval
+- `scraper/browser_runtime.py` : shared Playwright browser/context runtime for supported UI fallback flows
 - `scraper/enrich_linkedin.py` : LinkedIn enrichment worker and batch runner
+- `scraper/enrich_indeed.py` : Indeed enrichment worker and batch runner
+- `scraper/enrich_jobs.py` : multi-source enrichment dispatcher
 - `scraper/enrichment_policy.py` : retry/backoff policy for unattended enrichment
 - `scraper/linkedin_session.py` : LinkedIn Playwright auth-state management
 - `scraper/url_utils.py` : URL normalization and ATS detection helpers
@@ -73,14 +77,19 @@ Stage 2 : completed
 - saves external application URL when present
 - supports blocked/UI verification flows
 
-Stage 3 : current
-- harden batch enrichment for unattended server use
-- finalize retry/backoff and terminal-state policy
-- document and support the `server2` deployment/runtime model
-- add a browser-facing review/control-plane service for manual review
-- keep the flow ready for later Component 2/3 agents
+Stage 3 : completed
+- hardened batch enrichment for unattended server use
+- finalized retry/backoff and terminal-state policy
+- documented and supported the `server2` deployment/runtime model
+- added a browser-facing review/control-plane service for manual review
+- kept the flow ready for later Component 2/3 agents
 
-Current repo-side Stage 3 implementation notes:
+Stage 3.2 : completed
+- generalized the enrichment queue/runtime to support LinkedIn and Indeed
+- added shared browser-runtime support for UI/browser fallback
+- expanded the review app into a source-aware whole-job-table control plane
+
+Current repo-side runtime notes:
 - newly discovered pending LinkedIn rows are prioritized ahead of older backlog rows during post-scrape enrichment
 - read-only queue tools and the review app should not mutate queue state during normal inspection
 - terminal failures like `job_removed` should be recorded cleanly without being treated as retryable/actionable failures
@@ -88,10 +97,15 @@ Current repo-side Stage 3 implementation notes:
   - timed Hunt runtime for discovery + headless enrichment + blocked-row UI fallback
   - separate review/control-plane web app
 - for `server2`, blocked-row UI fallback is intended to run on a separate virtual display such as `Xvfb :98`, not the main desktop foreground
+- the current Ansible deployment split is:
+  - Component 1 on `job_agent` Stage 6
+  - later Component 2 in its own separate step/stage
+  - later Component 3 / OpenClaw integration in its own separate step/stage
 
-Stage 4 : after Stage 3
-- backfill old LinkedIn jobs
+Stage 4 : current
+- backfill old and mixed-source backlog safely
 - add monitoring and operational hardening
+- save failure artifacts for blocked/browser-fixable rows
 
 ## What To Take Note Of
 

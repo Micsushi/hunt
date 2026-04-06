@@ -15,6 +15,11 @@ That means it must support:
 The current first target is:
 - `Workday`
 
+Deployment note:
+- Component 3 should deploy separately from the current Component 1 Hunt deployment
+- Component 3 should also remain a separate Ansible step/stage from Component 2
+- current `server2` Stage 6 is for Component 1 only
+
 Out of scope for the first milestone:
 - LinkedIn Easy Apply
 - generic direct company sites
@@ -66,18 +71,45 @@ Component 2 supplies the resume that Component 3 should upload for a specific jo
 Important rule:
 - Component 3 always uses the latest resume explicitly assigned to the current job
 - when no job-specific resume exists, Component 3 falls back to the last provided default resume
+- in the normal queue-driven path, C3 should receive one explicit apply context rather than guessing resume selection on its own
+- the shared apply-prep command should prime C3 with that job's selected resume before fill actions run
+
+### Component 4 handoff
+
+Component 4 is the future orchestration layer.
+
+In the current plan, OpenClaw belongs here rather than inside Component 3.
+
+Component 4 may:
+- open the target page
+- decide whether the job should proceed
+- decide when to invoke Component 3
+- fetch the explicit apply context for the chosen job
+- review output and decide whether to submit
+
+Recommended interaction model:
+
+1. C4 chooses a Hunt `job_id`
+2. C4 calls one apply-prep command for that job
+3. that command reads the DB row and resolves:
+   - `apply_url`
+   - selected resume metadata from C2
+4. that command opens the target site
+5. that command updates C3 with the selected resume context for that job
+6. C3 then fills the page when triggered
+
+Important detail:
+- C4 should not hand-build resume-selection logic each time
+- the shared command should resolve the selected resume from the DB contract
+
+Component 3 itself should not depend on Component 4 to be useful.
 
 ### OpenClaw handoff
 
 OpenClaw is later-stage orchestration.
 
-OpenClaw may:
-- open the target page
-- decide whether to proceed
-- trigger Component 3 autofill
-- review output and decide whether to submit
-
-Component 3 itself should not depend on OpenClaw to be useful.
+Recommended placement:
+- OpenClaw should be treated as the first planned implementation of Component 4
 
 ## Current User Decisions Locked In
 
@@ -155,6 +187,7 @@ Component 3 itself should not depend on OpenClaw to be useful.
 - consume job records from Hunt
 - use `apply_url` and `ats_type`
 - switch resume automatically when Component 2 produces a job-specific output
+- support an explicit apply-context handoff so the selected link and selected resume arrive together
 
 ### Stage 6 : account and auth helpers
 
@@ -162,10 +195,14 @@ Component 3 itself should not depend on OpenClaw to be useful.
 - support login/account creation helpers
 - leave OTP and verification as manual handoff first
 
-### Stage 7 : OpenClaw integration
+### Stage 7 : Component 4 integration
 
 - expose Component 3 as a dependable tool layer
-- let OpenClaw trigger fill actions and inspect results
+- let a higher-level orchestrator trigger fill actions and inspect results
+- support a one-command apply-prep flow that:
+  - resolves the DB row
+  - opens `apply_url`
+  - primes C3 with the selected resume for that job
 - keep submit decisions outside C3 when desired
 
 ## Recommended Defaults
@@ -220,9 +257,20 @@ This layout is only for extension source and test fixtures.
 
 Runtime artifacts should live outside the repo.
 
+Recommended future C4-facing helper shape:
+
+- one command that accepts:
+  - `job_id`
+- and resolves:
+  - `apply_url`
+  - `selected_resume_version_id`
+  - selected resume file path
+  - any needed C3 page/session context
+
 ## Related Docs
 
 - `docs/components/component3/design.md`
+- `docs/components/component4/README.md`
 - `docs/roadmap.md`
 - `docs/components/component1/README.md`
 - `docs/components/component2/README.md`
