@@ -69,12 +69,20 @@ What still needs to be fixed or completed:
   - pm
   - data
   - general
+- harden the queue-driven generation path against real production inputs
+  - confirm C2 only starts after C1 reaches a normal done state
+  - confirm sparse or weak JDs still produce sensible fallback behavior
 - expand review-surface support
   - latest result visibility
   - selected resume visibility
   - attempt browsing and artifact inspection
 - validate the end-to-end C1 -> C2 handoff
   - C2 should consume enriched descriptions only after C1 is in a normal done state
+- keep the selected downstream resume contract stable for C3/C4
+  - selected resume version
+  - selected PDF/TEX paths
+  - selected-ready-for-C3 signal
+  - resume concern flags
 - keep deployment separate from C1
   - C2 should become its own Ansible step/stage after C1 is stable
 
@@ -91,10 +99,24 @@ Status:
 
 What still needs to be fixed or completed:
 - strengthen answer grounding from selected resume facts
+- keep the apply-context contract explicit and stable
+  - resolved apply URL
+  - selected resume metadata
+  - per-job context import
+  - generated-answer review flags
+- close the resume-upload gap for queue-driven orchestration
+  - a plain filesystem path is not enough for extension-driven upload
+  - C3/C4 flows need resume bytes or a C3-side cached file payload
 - add richer auth/account helpers
   - signed-in detection
   - account/login helper flows where reasonable
+- keep OTP, CAPTCHA, and protected verification flows as manual-review handoff rather than automation goals
 - broaden ATS support beyond the current first-family coverage
+- harden Workday-first behavior before widening ATS coverage
+  - manual fill
+  - auto-fill-on-load
+  - generated-answer storage
+  - attempt/evidence persistence
 - improve packaging and operator polish
 - keep deployment separate from C1 and C2
   - C3 should be its own Ansible step/stage
@@ -102,6 +124,10 @@ What still needs to be fixed or completed:
   - selected resume
   - resolved apply URL
   - per-job apply context
+- define the stable trigger surface C4/OpenClaw should call
+  - import context
+  - request fill
+  - read result/evidence summary
 
 Done means:
 - Workday-first flows are dependable
@@ -111,21 +137,52 @@ Done means:
 ## Component 4 : Orchestration And Submit Control
 
 Status:
-- initial local contract implementation exists
-- still early compared with C1/C2/C3
+- partial local runtime now exists under `orchestration/`
+- still not ready for production or server deployment
 
 What still needs to be fixed or completed:
-- finish the ready-to-apply predicate and persistence model
-- build the shared apply-prep flow out fully
-- add bounded C3 invocation with evidence capture
-- add manual-review routing rules
-- separate submit approval from fill success
+- rewrite and expand the Component 4 test suite
+  - replace the placeholder `tests/test_component4_cli.py`
+  - add stage-based tests for:
+    - readiness reason codes
+    - apply-prep artifacts
+    - fill result routing
+    - manual-review resolution
+    - submit approval and final submitted transitions
+    - scheduler `pick-next` blocking behavior
+- finish tightening the shared apply-prep seam
+  - treat `python -m orchestration.cli apply-prep` as the canonical C4 seam
+  - stop pointing shared-flow docs at older helper scripts as if they were the main boundary
+  - expose the shared C4 commands more clearly through `scripts/huntctl.py`
+- complete the current runtime checkpoint into a dependable local flow
+  - validate the ready-to-apply predicate against real Hunt DB rows
+  - validate run creation and event logging
+  - validate fill-request and fill-result transitions
+  - validate submit approval and final-status artifact writing
+- add the live C3 bridge that is still missing
+  - open the browser lane intentionally
+  - load the C3-ready payload into a live extension session
+  - trigger fill without rebuilding context in prompt text
+- keep bounded C3 invocation with evidence capture
+- keep manual-review routing explicit and auditable
+- keep submit approval separate from fill success
 - add unattended orchestration guardrails
-  - concurrency limits
+  - one active execution run at a time
   - retry budgets
   - cooldown after auth or anti-bot trouble
+  - stop-the-world hold when auth/security issues imply a broken shared dependency
+- finish the OpenClaw and `server2` integration layer
+  - separate C4 runtime storage outside the repo checkout
+  - separate deployment/runtime docs
+  - separate Ansible step/stage from C1/C2/C3
 - keep deployment separate from other components
   - likely its own OpenClaw-focused Ansible step/stage
+
+Recommended next order:
+1. finish the C4 tests first
+2. make `huntctl` and the docs consistently use the shared C4 CLI surface
+3. wire the live C3 bridge
+4. only then tighten OpenClaw/server2 runtime integration
 
 Done means:
 - C4 coordinates the other components without redefining their contracts
@@ -137,6 +194,7 @@ Done means:
 Still important across the whole system:
 - keep the deployment split by component in Ansible
 - keep apply-context resolution centralized instead of rebuilding it ad hoc in prompts
+- keep the shared apply-prep boundary anchored in C4 rather than letting older helper scripts drift into the main contract
 - keep review surfaces clear about which lifecycle they are showing:
   - enrichment
   - resume generation

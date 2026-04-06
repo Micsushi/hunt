@@ -51,7 +51,7 @@ See `agents/system_prompt.md` for the full agent contract (DB schema, status lif
 
 - Repo-local instructions: `AGENTS.md`
 - System roadmap: `docs/roadmap.md`
-- Live fix tracker: `docs/to_do.md`
+- Live fix tracker: `todo.md`
 - Component docs index: `docs/components/README.md`
 - Component 1 LinkedIn enrichment plan: `docs/components/component1/README.md`
 - Component 2 resume tailoring plan: `docs/components/component2/README.md`

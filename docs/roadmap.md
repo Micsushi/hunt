@@ -32,7 +32,7 @@ Current implementation priority:
 6. add Component 4 only after Component 3 contracts are dependable
 
 Live tracker:
-- `docs/to_do.md` records the current fix list and remaining sign-off work across all components
+- `todo.md` records the current fix list and remaining sign-off work across all components
 
 ## System Principles
 

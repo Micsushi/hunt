@@ -5,7 +5,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from urllib.parse import quote
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, PlainTextResponse, RedirectResponse
 
 
@@ -75,133 +75,211 @@ def truncate_text(value, *, max_chars=180):
     return value[: max_chars - 3] + "..."
 
 
-def render_layout(title, body):
-    return f"""<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>{html.escape(title)}</title>
-  <style>
-    :root {{
+def _nav_link(label, href, *, current_path, exact=False):
+    is_active = current_path == href if exact else current_path == href or current_path.startswith(f"{href}/")
+    class_name = "nav-link active" if is_active else "nav-link"
+    return f'<a class="{class_name}" href="{href}">{html.escape(label)}</a>'
+
+
+def render_nav(current_path):
+    return f"""
+      <div class="nav">
+        <div class="nav-group">
+          {_nav_link("Overview", "/", current_path=current_path, exact=True)}
+          {_nav_link("Jobs", "/jobs", current_path=current_path)}
+          {_nav_link("Health", "/health-view", current_path=current_path, exact=True)}
+          {_nav_link("Summary", "/summary", current_path=current_path, exact=True)}
+        </div>
+        <div class="nav-group nav-group-secondary">
+          <a class="nav-link nav-link-secondary" href="/health" data-no-app-nav="true">Raw health</a>
+          <a class="nav-link nav-link-secondary" href="/api/summary" data-no-app-nav="true">Raw API</a>
+        </div>
+      </div>
+    """
+
+
+def render_layout(title, body, *, current_path="/"):
+    styles = """
+    :root {
       --bg: #f3efe7;
       --panel: #fffdf8;
+      --panel-strong: #fff9ef;
       --ink: #1f2421;
       --muted: #65706c;
       --line: #ddd4c7;
       --accent: #245b4e;
       --accent-soft: #e2efe9;
+      --accent-ink: #0f3e34;
       --warning: #845d00;
       --warning-soft: #fff3d6;
       --danger: #a93f31;
       --danger-soft: #ffe6e1;
       --good: #256b38;
       --good-soft: #dff3e5;
+      --shadow: 0 10px 30px rgba(31, 36, 33, 0.06);
       font-family: "Segoe UI", system-ui, sans-serif;
-    }}
-    body {{
+    }
+    html {
+      min-height: 100%;
+      background: linear-gradient(180deg, #f6f1e7 0%, #efe8db 100%);
+    }
+    body {
       margin: 0;
+      min-height: 100vh;
       background: linear-gradient(180deg, #f6f1e7 0%, #efe8db 100%);
       color: var(--ink);
-    }}
-    a {{ color: var(--accent); text-decoration: none; }}
-    a:hover {{ text-decoration: underline; }}
-    .shell {{ max-width: 1180px; margin: 0 auto; padding: 28px 20px 40px; }}
-    .nav {{
+    }
+    body.is-loading #app-shell {
+      opacity: 0.62;
+      transform: translateY(4px);
+    }
+    a { color: var(--accent); text-decoration: none; }
+    a:hover { text-decoration: underline; }
+    .shell {
+      max-width: 1180px;
+      margin: 0 auto;
+      padding: 28px 20px 40px;
+      transition: opacity 150ms ease, transform 150ms ease;
+    }
+    .nav {
       display: flex;
-      gap: 16px;
+      justify-content: space-between;
+      gap: 14px;
       align-items: center;
       margin-bottom: 24px;
+      padding: 14px 16px;
+      border: 1px solid rgba(221, 212, 199, 0.9);
+      border-radius: 18px;
+      background: rgba(255, 253, 248, 0.88);
+      box-shadow: var(--shadow);
+      backdrop-filter: blur(12px);
+      position: sticky;
+      top: 12px;
+      z-index: 10;
+    }
+    .nav-group {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      align-items: center;
+    }
+    .nav-link {
+      display: inline-flex;
+      align-items: center;
+      border-radius: 999px;
+      padding: 9px 13px;
+      color: var(--accent-ink);
+      font-weight: 700;
+      transition: background 140ms ease, color 140ms ease, transform 140ms ease;
+    }
+    .nav-link:hover {
+      text-decoration: none;
+      background: rgba(226, 239, 233, 0.75);
+      transform: translateY(-1px);
+    }
+    .nav-link.active {
+      background: var(--accent);
+      color: white;
+      box-shadow: 0 8px 16px rgba(36, 91, 78, 0.2);
+    }
+    .nav-link-secondary {
       color: var(--muted);
-    }}
-    .nav a {{
       font-weight: 600;
-    }}
-    .hero {{
+    }
+    .hero {
       margin-bottom: 22px;
-    }}
-    .hero h1 {{
+    }
+    .hero h1 {
       margin: 0 0 8px;
       font-size: 2rem;
       line-height: 1.1;
-    }}
-    .hero p {{
+    }
+    .hero p {
       margin: 0;
       color: var(--muted);
       max-width: 760px;
-    }}
-    .cards {{
+    }
+    .cards {
       display: grid;
       gap: 12px;
       grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
       margin-bottom: 24px;
-    }}
-    .card {{
+    }
+    .card {
       background: var(--panel);
       border: 1px solid var(--line);
       border-radius: 16px;
       padding: 16px;
-      box-shadow: 0 6px 22px rgba(31, 36, 33, 0.04);
-    }}
-    .card .label {{
+      box-shadow: var(--shadow);
+    }
+    .card .label {
       font-size: 0.85rem;
       text-transform: uppercase;
       letter-spacing: 0.06em;
       color: var(--muted);
       margin-bottom: 8px;
-    }}
-    .card .value {{
+    }
+    .card .value {
       font-size: 1.6rem;
       font-weight: 700;
-    }}
-    .toolbar {{
+    }
+    .toolbar {
       display: flex;
       flex-wrap: wrap;
       gap: 10px;
       margin-bottom: 18px;
-    }}
-    .pill {{
+    }
+    .pill {
       border: 1px solid var(--line);
       background: var(--panel);
       border-radius: 999px;
       padding: 8px 12px;
       color: var(--ink);
       font-weight: 600;
-    }}
-    .pill.active {{
+      transition: background 140ms ease, border-color 140ms ease, transform 140ms ease;
+    }
+    .pill:hover {
+      text-decoration: none;
+      background: var(--panel-strong);
+      transform: translateY(-1px);
+    }
+    .pill.active {
       background: var(--accent);
       border-color: var(--accent);
       color: white;
-    }}
-    .table-wrap {{
+    }
+    .table-wrap {
       overflow-x: auto;
       background: var(--panel);
       border: 1px solid var(--line);
       border-radius: 18px;
-      box-shadow: 0 6px 22px rgba(31, 36, 33, 0.04);
-    }}
-    table {{
+      box-shadow: var(--shadow);
+    }
+    table {
       width: 100%;
       border-collapse: collapse;
-    }}
-    th, td {{
+    }
+    th, td {
       padding: 12px 14px;
       border-bottom: 1px solid var(--line);
       text-align: left;
       vertical-align: top;
       font-size: 0.95rem;
-    }}
-    tr:last-child td {{
+    }
+    tr:last-child td {
       border-bottom: none;
-    }}
-    th {{
+    }
+    th {
       font-size: 0.83rem;
       text-transform: uppercase;
       letter-spacing: 0.06em;
       color: var(--muted);
       background: #faf5ec;
-    }}
-    .status {{
+    }
+    tr[data-job-row]:hover td {
+      background: rgba(250, 245, 236, 0.72);
+    }
+    .status {
       display: inline-flex;
       align-items: center;
       gap: 6px;
@@ -209,77 +287,78 @@ def render_layout(title, body):
       padding: 5px 10px;
       font-size: 0.8rem;
       font-weight: 700;
-    }}
-    .status.done, .status.done_verified {{
+    }
+    .status.done, .status.done_verified {
       background: var(--good-soft);
       color: var(--good);
-    }}
-    .status.pending, .status.processing {{
+    }
+    .status.pending, .status.processing {
       background: var(--accent-soft);
       color: var(--accent);
-    }}
-    .status.blocked, .status.blocked_verified {{
+    }
+    .status.blocked, .status.blocked_verified {
       background: var(--warning-soft);
       color: var(--warning);
-    }}
-    .status.failed {{
+    }
+    .status.failed {
       background: var(--danger-soft);
       color: var(--danger);
-    }}
-    .mono {{
+    }
+    .mono {
       font-family: Consolas, "SFMono-Regular", monospace;
       font-size: 0.9rem;
       word-break: break-word;
-    }}
-    .link-cell {{
+    }
+    .link-cell {
       min-width: 128px;
-    }}
-    .link-cell a {{
+    }
+    .link-cell a {
       display: inline-block;
       white-space: nowrap;
-    }}
-    .stack {{
+    }
+    .stack {
       display: grid;
       gap: 16px;
-    }}
-    .panel {{
+    }
+    .panel {
       background: var(--panel);
       border: 1px solid var(--line);
       border-radius: 18px;
       padding: 18px;
-      box-shadow: 0 6px 22px rgba(31, 36, 33, 0.04);
-    }}
-    .panel h2 {{
+      box-shadow: var(--shadow);
+    }
+    .panel h2 {
       margin: 0 0 12px;
       font-size: 1.15rem;
-    }}
-    .grid {{
+    }
+    .grid {
       display: grid;
       gap: 12px;
       grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
-    }}
-    .field {{
+    }
+    .field {
       background: #faf5ec;
       border-radius: 12px;
       padding: 12px;
-    }}
-    .field .label {{
+    }
+    .field .label {
       font-size: 0.8rem;
       text-transform: uppercase;
       letter-spacing: 0.05em;
       color: var(--muted);
       margin-bottom: 6px;
-    }}
-    .field .value {{
+    }
+    .field .value {
       word-break: break-word;
-    }}
-    .actions {{
+    }
+    .actions {
       display: flex;
       gap: 10px;
       flex-wrap: wrap;
       margin-top: 14px;
-    }}
-    button {{
+      align-items: center;
+    }
+    button {
       border: 0;
       background: var(--accent);
       color: white;
@@ -287,32 +366,224 @@ def render_layout(title, body):
       padding: 10px 14px;
       font-weight: 700;
       cursor: pointer;
-    }}
-    button.secondary {{
+      transition: transform 140ms ease, opacity 140ms ease, box-shadow 140ms ease;
+      box-shadow: 0 8px 16px rgba(36, 91, 78, 0.18);
+    }
+    button:hover {
+      transform: translateY(-1px);
+    }
+    button.secondary {
       background: #5d6a66;
-    }}
-    pre {{
+    }
+    button:disabled {
+      opacity: 0.6;
+      cursor: progress;
+      transform: none;
+      box-shadow: none;
+    }
+    pre {
       margin: 0;
       white-space: pre-wrap;
       word-break: break-word;
       font-family: Consolas, "SFMono-Regular", monospace;
       font-size: 0.92rem;
       line-height: 1.45;
-    }}
-  </style>
+    }
+    .toast {
+      position: fixed;
+      right: 18px;
+      bottom: 18px;
+      max-width: min(420px, calc(100vw - 36px));
+      border-radius: 16px;
+      padding: 14px 16px;
+      background: rgba(31, 36, 33, 0.92);
+      color: white;
+      box-shadow: 0 18px 40px rgba(0, 0, 0, 0.24);
+      opacity: 0;
+      pointer-events: none;
+      transform: translateY(12px);
+      transition: opacity 160ms ease, transform 160ms ease;
+      z-index: 30;
+    }
+    .toast.show {
+      opacity: 1;
+      transform: translateY(0);
+    }
+    .toast.error {
+      background: rgba(169, 63, 49, 0.96);
+    }
+    @media (max-width: 760px) {
+      .shell {
+        padding: 18px 14px 32px;
+      }
+      .nav {
+        position: static;
+        padding: 12px;
+      }
+      .hero h1 {
+        font-size: 1.7rem;
+      }
+    }
+    """
+    script = """
+  <script>
+    (() => {
+      const APP_ROUTE_PATTERNS = [/^\\/$/, /^\\/jobs(?:\\/\\d+)?$/, /^\\/health-view$/, /^\\/summary$/];
+      const toast = () => document.getElementById('app-toast');
+      let inFlightController = null;
+
+      function isAppRoute(url) {
+        if (url.origin !== window.location.origin) return false;
+        if (url.searchParams.get('download')) return false;
+        return APP_ROUTE_PATTERNS.some((pattern) => pattern.test(url.pathname));
+      }
+
+      function showToast(message, kind = 'ok') {
+        const node = toast();
+        if (!node) return;
+        node.textContent = message;
+        node.className = kind === 'error' ? 'toast show error' : 'toast show';
+        window.clearTimeout(node._hideTimer);
+        node._hideTimer = window.setTimeout(() => {
+          node.className = kind === 'error' ? 'toast error' : 'toast';
+        }, 2200);
+      }
+
+      function rememberScroll() {
+        const state = window.history.state || {};
+        window.history.replaceState({ ...state, url: window.location.href, scrollY: window.scrollY }, '', window.location.href);
+      }
+
+      async function swapTo(url, { push = false, replace = false, restoreScroll = false } = {}) {
+        if (inFlightController) {
+          inFlightController.abort();
+        }
+        inFlightController = new AbortController();
+        document.body.classList.add('is-loading');
+        try {
+          const response = await fetch(url, {
+            headers: { 'X-Hunt-App': '1', 'Accept': 'text/html' },
+            signal: inFlightController.signal,
+          });
+          const text = await response.text();
+          if (!response.ok) {
+            window.location.href = url;
+            return;
+          }
+          const parsed = new DOMParser().parseFromString(text, 'text/html');
+          const nextShell = parsed.getElementById('app-shell');
+          if (!nextShell) {
+            window.location.href = url;
+            return;
+          }
+          const currentShell = document.getElementById('app-shell');
+          currentShell.replaceWith(nextShell);
+          document.title = parsed.title;
+
+          if (push) {
+            window.history.pushState({ url, scrollY: 0 }, '', url);
+          } else if (replace) {
+            const previous = window.history.state || {};
+            window.history.replaceState({ ...previous, url }, '', url);
+          }
+
+          const state = window.history.state || {};
+          window.scrollTo(0, restoreScroll ? (state.scrollY || 0) : 0);
+        } catch (error) {
+          if (error.name !== 'AbortError') {
+            window.location.href = url;
+          }
+        } finally {
+          document.body.classList.remove('is-loading');
+        }
+      }
+
+      async function handleAsyncRequeue(form) {
+        const submitButton = form.querySelector('button[type="submit"]');
+        if (submitButton) submitButton.disabled = true;
+        try {
+          const response = await fetch(form.action, {
+            method: 'POST',
+            headers: {
+              'X-Hunt-Async': '1',
+              'Accept': 'application/json',
+            },
+          });
+          const payload = await response.json().catch(() => ({}));
+          if (!response.ok) {
+            throw new Error(payload.detail || payload.error || 'Requeue failed.');
+          }
+          showToast('Job requeued for enrichment.');
+          await swapTo(payload.redirect_url || window.location.href, { replace: true, restoreScroll: true });
+        } catch (error) {
+          showToast(error.message || 'Requeue failed.', 'error');
+          if (submitButton) submitButton.disabled = false;
+        }
+      }
+
+      document.addEventListener('click', (event) => {
+        const anchor = event.target.closest('a[href]');
+        if (!anchor) return;
+        if (anchor.dataset.noAppNav === 'true') return;
+        if (anchor.target && anchor.target !== '_self') return;
+        if (anchor.hasAttribute('download')) return;
+        if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+        const url = new URL(anchor.href, window.location.href);
+        if (!isAppRoute(url)) return;
+        event.preventDefault();
+        rememberScroll();
+        swapTo(url.toString(), { push: true });
+      });
+
+      document.addEventListener('submit', (event) => {
+        const form = event.target;
+        if (!(form instanceof HTMLFormElement)) return;
+        if (form.dataset.asyncRequeue === 'true') {
+          event.preventDefault();
+          handleAsyncRequeue(form);
+          return;
+        }
+        const method = (form.method || 'get').toLowerCase();
+        if (method !== 'get') return;
+        event.preventDefault();
+        rememberScroll();
+        const url = new URL(form.action || window.location.pathname, window.location.origin);
+        const formData = new FormData(form);
+        for (const [key, value] of formData.entries()) {
+          if (value === '') {
+            url.searchParams.delete(key);
+          } else {
+            url.searchParams.set(key, value.toString());
+          }
+        }
+        swapTo(url.toString(), { push: true });
+      });
+
+      window.addEventListener('popstate', () => {
+        swapTo(window.location.href, { replace: true, restoreScroll: true });
+      });
+
+      if (!window.history.state || !window.history.state.url) {
+        window.history.replaceState({ url: window.location.href, scrollY: window.scrollY }, '', window.location.href);
+      }
+    })();
+  </script>
+    """
+    return f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{html.escape(title)}</title>
+  <style>{styles}</style>
 </head>
 <body>
-    <div class="shell">
-      <div class="nav">
-        <a href="/">Overview</a>
-        <a href="/jobs">Jobs</a>
-        <a href="/health-view">Health</a>
-        <a href="/summary">Summary</a>
-        <a href="/health">Raw health</a>
-        <a href="/api/summary">Raw API</a>
-      </div>
+    <div id="app-shell" class="shell" data-current-path="{html.escape(current_path)}">
+      {render_nav(current_path)}
       {body}
     </div>
+    <div id="app-toast" class="toast" aria-live="polite"></div>
+    {script}
 </body>
 </html>
 """
@@ -808,7 +1079,7 @@ def health_view():
       </div>
     </section>
     """
-    return HTMLResponse(render_layout("Hunt health", body))
+    return HTMLResponse(render_layout("Hunt health", body, current_path="/health-view"))
 
 
 @app.get("/summary", response_class=HTMLResponse)
@@ -822,7 +1093,7 @@ def summary_view():
     <section class="cards">{render_summary_cards(summary)}</section>
     {render_summary_table(summary)}
     """
-    return HTMLResponse(render_layout("Hunt summary", body))
+    return HTMLResponse(render_layout("Hunt summary", body, current_path="/summary"))
 
 
 @app.get("/api/jobs")
@@ -944,7 +1215,7 @@ def dashboard():
       {render_link_list("Failed", failed_rows)}
     </section>
     """
-    return HTMLResponse(render_layout("Hunt review", body))
+    return HTMLResponse(render_layout("Hunt review", body, current_path="/"))
 
 
 @app.get("/jobs", response_class=HTMLResponse)
@@ -980,7 +1251,7 @@ def jobs_page(source: str = "all", status: str = "ready", limit: int = 50, page:
     {render_jobs_table(rows, source=source, status=status, limit=safe_limit, page=safe_page, q=q, sort=sort, direction=direction)}
     {render_pagination(total_rows=total_rows, source=source, status=status, limit=safe_limit, page=safe_page, q=q, sort=sort, direction=direction)}
     """
-    return HTMLResponse(render_layout("Hunt jobs", body))
+    return HTMLResponse(render_layout("Hunt jobs", body, current_path="/jobs"))
 
 
 @app.get("/jobs/{job_id}", response_class=HTMLResponse)
@@ -1019,7 +1290,7 @@ def job_detail(job_id: int):
         <div class="actions">
           <a class="pill active" href="{html.escape(row['job_url'])}" target="_blank" rel="noreferrer">Open listing</a>
           {f'<a class="pill" href="{html.escape(row["apply_url"])}" target="_blank" rel="noreferrer">Open apply URL</a>' if row.get("apply_url") else ""}
-          {f'<form method="post" action="/jobs/{row["id"]}/requeue"><button type="submit">Requeue enrichment</button></form>' if row.get("source") in {"linkedin", "indeed"} else '<span class="pill">This source is visible here, but does not have a worker yet</span>'}
+          {f'<form method="post" action="/jobs/{row["id"]}/requeue" data-async-requeue="true"><button type="submit">Requeue enrichment</button></form>' if row.get("source") in {"linkedin", "indeed"} else '<span class="pill">This source is visible here, but does not have a worker yet</span>'}
         </div>
       </div>
       <div class="panel">
@@ -1058,17 +1329,19 @@ def job_detail(job_id: int):
       </div>
     </section>
     """
-    return HTMLResponse(render_layout(f"Hunt job {job_id}", body))
+    return HTMLResponse(render_layout(f"Hunt job {job_id}", body, current_path=f"/jobs/{job_id}"))
 
 
 @app.post("/jobs/{job_id}/requeue")
-def requeue_job(job_id: int):
+def requeue_job(job_id: int, request: Request):
     row = get_job_by_id(job_id)
     if not row or row.get("source") not in {"linkedin", "indeed"}:
         raise HTTPException(status_code=400, detail="Requeue is only supported for rows with an enrichment worker.")
     updated = requeue_review_job(job_id, source=row.get("source"))
     if updated != 1:
         raise HTTPException(status_code=404, detail="Job not found.")
+    if request.headers.get("X-Hunt-Async") == "1":
+        return JSONResponse({"status": "ok", "job_id": job_id, "redirect_url": f"/jobs/{job_id}"})
     return RedirectResponse(url=f"/jobs/{job_id}", status_code=303)
 
 
