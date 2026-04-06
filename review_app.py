@@ -381,8 +381,6 @@ def render_summary_cards(summary):
     cards = [
         ("Total rows", summary["total"]),
         ("Pending enrich", summary["pending_count"]),
-        ("Retry due", summary["retry_ready_count"]),
-        ("Processing", summary["processing_count"]),
         ("Enriched", summary["counts_by_status"].get("done", 0) + summary["counts_by_status"].get("done_verified", 0)),
         ("Failed", summary["counts_by_status"].get("failed", 0)),
         ("Blocked", summary["blocked_count"]),
