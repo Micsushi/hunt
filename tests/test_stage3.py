@@ -273,7 +273,9 @@ class Stage3Tests(unittest.TestCase):
             summary = db.get_linkedin_queue_summary()
 
             self.assertEqual(summary["pending_count"], 1)
+            self.assertEqual(summary["retry_ready_count"], 1)
             self.assertEqual(summary["ready_count"], 2)
+            self.assertEqual(summary["processing_count"], 1)
             self.assertEqual(summary["stale_processing_count"], 1)
 
     def test_process_batch_can_return_structured_summary(self):

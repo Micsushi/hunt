@@ -1028,6 +1028,20 @@ def get_review_queue_summary(*, source=None):
             tuple(params + [ENRICHMENT_MAX_ATTEMPTS]),
         ).fetchone()[0]
 
+        retry_ready_count = cursor.execute(
+            f"""
+            SELECT COUNT(*)
+            FROM jobs
+            WHERE 1=1 {source_filter_sql}
+              AND source = 'linkedin'
+              AND enrichment_status = 'failed'
+              AND next_enrichment_retry_at IS NOT NULL
+              AND next_enrichment_retry_at <= CURRENT_TIMESTAMP
+              AND coalesce(enrichment_attempts, 0) < ?
+            """,
+            tuple(params + [ENRICHMENT_MAX_ATTEMPTS]),
+        ).fetchone()[0]
+
         stale_processing_count = cursor.execute(
             f"""
             SELECT COUNT(*)
@@ -1047,6 +1061,8 @@ def get_review_queue_summary(*, source=None):
             "counts_by_status": counts,
             "ready_count": int(ready_count or 0),
             "pending_count": counts.get("pending", 0),
+            "retry_ready_count": int(retry_ready_count or 0),
+            "processing_count": counts.get("processing", 0),
             "blocked_count": counts.get("blocked", 0) + counts.get("blocked_verified", 0),
             "stale_processing_count": int(stale_processing_count or 0),
             "oldest_processing_started_at": oldest_processing,

@@ -38,6 +38,8 @@ def main():
                 "[runner] Enrichment queue "
                 f"ready={queue_summary['ready_count']} "
                 f"pending={queue_summary['pending_count']} "
+                f"retry_ready={queue_summary['retry_ready_count']} "
+                f"processing={queue_summary['processing_count']} "
                 f"blocked={queue_summary['blocked_count']} "
                 f"stale_processing={queue_summary['stale_processing_count']}"
             )

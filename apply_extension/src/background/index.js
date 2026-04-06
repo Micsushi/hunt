@@ -525,7 +525,6 @@ async function maybeAutofillOnLoad(tabId, changeInfo, tab) {
   const state = await getExtensionState();
   if (
     !state.settings.autofillOnLoad ||
-    !state.settings.manualFillEnabled ||
     !(
       state.activeApplyContext.selectedResumeDataUrl ||
       state.defaultResume.pdfDataUrl
@@ -563,7 +562,17 @@ async function handleMessage(message) {
         activeApplyContext: await clearActiveApplyContext()
       };
     case "hunt.apply.fill_current_page":
-      return runFillForTab(message.payload?.tabId, await getExtensionState());
+      {
+        const state = await getExtensionState();
+        if (!state.settings.manualFillEnabled) {
+          return {
+            ok: false,
+            reason: "manual_fill_disabled",
+            message: "Manual fill is currently disabled in extension settings."
+          };
+        }
+        return runFillForTab(message.payload?.tabId, state);
+      }
     default:
       return {
         ok: false,

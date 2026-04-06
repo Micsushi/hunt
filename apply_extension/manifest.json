@@ -5,6 +5,7 @@
   "description": "Component 3 Chrome extension scaffold for Workday autofill.",
   "permissions": [
     "storage",
+    "unlimitedStorage",
     "activeTab",
     "scripting",
     "tabs"

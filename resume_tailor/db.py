@@ -172,6 +172,15 @@ def record_resume_attempt(job_id: int | None, payload: dict, db_path: str | Path
                 """,
                 (job_id,),
             )
+        elif payload.get("clear_existing_selection"):
+            cursor.execute(
+                """
+                UPDATE resume_versions
+                SET is_selected_for_c3 = 0
+                WHERE job_id IS ?
+                """,
+                (job_id,),
+            )
         cursor.execute(
             """
             INSERT INTO resume_versions (
@@ -236,6 +245,46 @@ def record_resume_attempt(job_id: int | None, payload: dict, db_path: str | Path
                         payload["pdf_path"],
                         payload["tex_path"],
                         1,
+                        job_id,
+                    ),
+                )
+            elif payload.get("clear_existing_selection"):
+                cursor.execute(
+                    """
+                    UPDATE jobs
+                    SET resume_status = ?,
+                        latest_resume_attempt_id = ?,
+                        latest_resume_version_id = ?,
+                        latest_resume_pdf_path = ?,
+                        latest_resume_tex_path = ?,
+                        latest_resume_keywords_path = ?,
+                        latest_resume_job_description_path = ?,
+                        latest_resume_family = ?,
+                        latest_resume_job_level = ?,
+                        latest_resume_model = ?,
+                        latest_resume_generated_at = CURRENT_TIMESTAMP,
+                        latest_resume_fallback_used = ?,
+                        latest_resume_flags = ?,
+                        selected_resume_version_id = NULL,
+                        selected_resume_pdf_path = NULL,
+                        selected_resume_tex_path = NULL,
+                        selected_resume_selected_at = NULL,
+                        selected_resume_ready_for_c3 = 0
+                    WHERE id = ?
+                    """,
+                    (
+                        payload["status"],
+                        attempt_id,
+                        version_id,
+                        payload["pdf_path"],
+                        payload["tex_path"],
+                        payload["keywords_path"],
+                        payload["job_description_path"],
+                        payload["role_family"],
+                        payload["job_level"],
+                        payload["model_name"],
+                        int(payload["fallback_used"]),
+                        json.dumps(payload["concern_flags"]),
                         job_id,
                     ),
                 )

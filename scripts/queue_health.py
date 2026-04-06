@@ -78,6 +78,8 @@ def main():
     print(f"total: {summary['total']}")
     print(f"ready: {summary['ready_count']}")
     print(f"pending: {summary['pending_count']}")
+    print(f"retry_ready: {summary['retry_ready_count']}")
+    print(f"processing: {summary['processing_count']}")
     print(f"blocked: {summary['blocked_count']}")
     print(f"stale_processing: {summary['stale_processing_count']}")
     print(f"oldest_processing_started_at: {summary['oldest_processing_started_at']}")

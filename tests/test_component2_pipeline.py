@@ -208,6 +208,72 @@ class Component2PipelineTests(unittest.TestCase):
         )
         self.assertTrue(failed_context["selected_resume_ready_for_c3"])
 
+    def test_manual_only_job_does_not_select_resume_for_c3(self):
+        conn = sqlite3.connect(self.db_path)
+        conn.execute("UPDATE jobs SET priority = 1 WHERE id = 1")
+        conn.commit()
+        conn.close()
+
+        init_resume_db(self.db_path)
+        with patch("resume_tailor.pipeline.compile_tex") as mock_compile:
+            mock_compile.return_value = {
+                "compile_status": "ok",
+                "page_count": 1,
+                "fits_one_page": True,
+                "pdf_path": str(Path(self.temp_dir.name) / "manual_only_resume.pdf"),
+                "log_text": "mock one-page result",
+            }
+            result = generate_resume_for_job(1, db_path=self.db_path)
+
+        context = get_apply_context(1, db_path=self.db_path)
+        self.assertFalse(result["selected_for_c3"])
+        self.assertFalse(context["selected_resume_ready_for_c3"])
+        self.assertIsNone(context["selected_resume_version_id"])
+        self.assertIsNone(context["selected_resume_pdf_path"])
+
+    def test_easy_apply_job_clears_stale_selected_resume_context(self):
+        init_resume_db(self.db_path)
+        with patch("resume_tailor.pipeline.compile_tex") as mock_compile:
+            mock_compile.return_value = {
+                "compile_status": "ok",
+                "page_count": 1,
+                "fits_one_page": True,
+                "pdf_path": str(Path(self.temp_dir.name) / "selected_resume.pdf"),
+                "log_text": "mock one-page result",
+            }
+            first_result = generate_resume_for_job(1, db_path=self.db_path)
+
+        self.assertTrue(first_result["selected_for_c3"])
+
+        conn = sqlite3.connect(self.db_path)
+        conn.execute(
+            """
+            UPDATE jobs
+            SET apply_type = 'easy_apply',
+                auto_apply_eligible = 0,
+                apply_url = ''
+            WHERE id = 1
+            """
+        )
+        conn.commit()
+        conn.close()
+
+        with patch("resume_tailor.pipeline.compile_tex") as mock_compile:
+            mock_compile.return_value = {
+                "compile_status": "ok",
+                "page_count": 1,
+                "fits_one_page": True,
+                "pdf_path": str(Path(self.temp_dir.name) / "easy_apply_resume.pdf"),
+                "log_text": "mock one-page result",
+            }
+            second_result = generate_resume_for_job(1, db_path=self.db_path)
+
+        context = get_apply_context(1, db_path=self.db_path)
+        self.assertFalse(second_result["selected_for_c3"])
+        self.assertFalse(context["selected_resume_ready_for_c3"])
+        self.assertIsNone(context["selected_resume_version_id"])
+        self.assertIsNone(context["selected_resume_pdf_path"])
+
     def test_generate_resume_uses_source_material_bullets(self):
         profile_path = Path(self.temp_dir.name) / "candidate_profile.md"
         bullet_library_path = Path(self.temp_dir.name) / "bullet_library.md"

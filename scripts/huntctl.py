@@ -464,7 +464,8 @@ def build_parser():
     backfill.set_defaults(func=cmd_backfill)
 
     drain = subparsers.add_parser(
-        "drain",
+        "backfill-all",
+        aliases=["drain"],
         help="Short form: backfill all sources in 100-row batches with UI verification and auto-continue.",
     )
     drain.add_argument("batch_size", type=int, nargs="?", default=100)

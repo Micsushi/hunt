@@ -47,6 +47,7 @@ def generate_resume_for_job(
         source_mode="queue",
         job_id=job_id,
         db_path=db_path,
+        allow_downstream_selection=_job_is_ready_for_c3(job),
         resume_path=resume_path,
         candidate_profile_path=candidate_profile_path,
         bullet_library_path=bullet_library_path,
@@ -109,6 +110,7 @@ def _run_pipeline(
     job_id: int | None = None,
     db_path: str | Path | None = None,
     ad_hoc_label: str | None = None,
+    allow_downstream_selection: bool = False,
     resume_path: str | Path,
     candidate_profile_path: str | Path,
     bullet_library_path: str | Path,
@@ -180,7 +182,7 @@ def _run_pipeline(
         status = "done_with_flags" if concern_flags else "done"
         latest_result_kind = "latest_useful"
         is_latest_useful = True
-        is_selected_for_c3 = job_id is not None
+        is_selected_for_c3 = job_id is not None and allow_downstream_selection
     else:
         if "page_limit_failed" not in concern_flags:
             concern_flags.append("page_limit_failed")
@@ -209,6 +211,7 @@ def _run_pipeline(
         "content_hash": file_hash(Path(tex_path)),
         "is_latest_useful": is_latest_useful,
         "is_selected_for_c3": is_selected_for_c3,
+        "clear_existing_selection": source_mode == "queue" and not allow_downstream_selection,
     }
 
     attempt_id = None
@@ -233,3 +236,19 @@ def _run_pipeline(
     }
     write_json(attempt_dir / "result.json", result)
     return result
+
+
+def _job_is_ready_for_c3(job: dict) -> bool:
+    enrichment_status = (job.get("enrichment_status") or "").strip().lower()
+    apply_type = (job.get("apply_type") or "").strip().lower()
+    apply_url = (job.get("apply_url") or "").strip()
+    priority = int(job.get("priority") or 0)
+    auto_apply_eligible = int(job.get("auto_apply_eligible") or 0)
+
+    return (
+        enrichment_status in {"done", "done_verified"}
+        and apply_type == "external_apply"
+        and auto_apply_eligible == 1
+        and priority == 0
+        and bool(apply_url)
+    )

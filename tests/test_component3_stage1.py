@@ -3,7 +3,6 @@ import os
 import sqlite3
 import sys
 import tempfile
-import types
 import unittest
 from pathlib import Path
 
@@ -14,8 +13,6 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 if str(SCRAPER_DIR) not in sys.path:
     sys.path.insert(0, str(SCRAPER_DIR))
-if "pandas" not in sys.modules:
-    sys.modules["pandas"] = types.ModuleType("pandas")
 
 import db  # noqa: E402
 from scripts import c3_apply_prep  # noqa: E402

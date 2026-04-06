@@ -280,12 +280,15 @@ Common examples:
 - requeue the common retryable enrichment rows across all sources:
   `./hunt.sh retry`
   `./hunt.sh requeue-enrich --source all`
-- drain the all-source backlog in 100-row batches with blocked-row UI verification and automatic continue:
+- backfill all sources in 100-row batches with blocked-row UI verification and automatic continue:
+  `DISPLAY=:98 ./hunt.sh backfill-all`
   `DISPLAY=:98 ./hunt.sh drain`
   `DISPLAY=:98 ./hunt.sh backfill 100 --source all --ui-verify-blocked --yes`
-- drain with a custom batch size:
+- backfill all with a custom batch size:
+  `DISPLAY=:98 ./hunt.sh backfill-all 250`
   `DISPLAY=:98 ./hunt.sh drain 250`
-- drain but stop after each batch for confirmation:
+- backfill all but stop after each batch for confirmation:
+  `DISPLAY=:98 ./hunt.sh backfill-all --ask`
   `DISPLAY=:98 ./hunt.sh drain --ask`
 - run a controlled backfill in custom chunk sizes:
   `.\hunt.ps1 backfill 250 --ui-verify-blocked`
@@ -527,6 +530,7 @@ C1 sign-off runbook on `server2`:
    - `./hunt.sh retry`
    - `./hunt.sh requeue-enrich --source all`
 4. drain the backlog manually first
+   - `DISPLAY=:98 ./hunt.sh backfill-all`
    - `DISPLAY=:98 ./hunt.sh drain`
    - `DISPLAY=:98 ./hunt.sh backfill 100 --source all --ui-verify-blocked --yes`
 5. confirm queue health after the manual drain
