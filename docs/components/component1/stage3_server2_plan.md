@@ -82,6 +82,8 @@ Important runtime-path note:
 - the live SQLite DB and Playwright browser cache should live outside the git checkout
 - on `server2`, the intended runtime path is:
   - `/home/michael/data/hunt/hunt.db`
+- the repo-local `~/hunt/hunt.db` may exist during manual debugging, but it is not the production runtime DB
+- manual SQLite checks and debug scripts on `server2` should point at `/home/michael/data/hunt/hunt.db`
 
 This matters because `scraper.py` now triggers post-scrape enrichment by default, so the deployed service behavior has effectively become:
 - discover jobs
@@ -354,6 +356,34 @@ Recommended additions:
 Important note:
 - Python dependency install alone is not enough for Playwright
 - browser binaries still need to be installed
+- this matters even when `.venv` already contains the Playwright Python package; without the browser download, enrichment fails before it reaches LinkedIn
+
+### LinkedIn extractor hardening note
+
+Observed during `server2` rollout:
+- some logged-in LinkedIn job pages exposed the full description in visible page text, but not under the older stable class names previously used by the extractor
+- those pages still rendered a readable `About the job` section in `body.innerText`
+- the LinkedIn enrichment worker now needs to treat that visible-text section as a first-class fallback before declaring the LinkedIn description missing and jumping to the external ATS page
+
+Operational consequence:
+- after deploying an extractor fix of this kind, older `failed` rows with errors such as:
+  - `external_description_not_usable`
+  - `external_description_not_found`
+  - `apply_button_not_found`
+  - some `unexpected_error` rows
+  may need to be requeued to avoid keeping stale false negatives in the backlog
+
+### Indeed apply-link hardening note
+
+Observed during Stage 3.2 rollout:
+- Indeed enrichment primarily uses HTTP + HTML parsing, but it still shares the Playwright runtime for visible-browser fallback flows
+- on `server2`, missing Playwright browser binaries can therefore break both:
+  - LinkedIn enrichment
+  - Indeed `--ui-verify` / `--ui-verify-blocked`
+- for Indeed rows, the intended stored `apply_url` is the external destination, not an Indeed-hosted intermediate link, when redirect resolution succeeds
+
+Operational consequence:
+- when reviewing older Indeed rows, treat stuck Indeed-hosted `apply_url` values as something worth spot-checking if those rows were enriched before the current redirect-resolution logic or before the shared Playwright/browser runtime was fully installed
 
 ### New review/control-plane service
 

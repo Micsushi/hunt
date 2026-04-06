@@ -80,6 +80,7 @@ Worker responsibilities:
 - claim one pending LinkedIn row
 - open `job_url` in Playwright using saved auth state
 - expand description and store it
+- prefer dedicated LinkedIn description selectors when they exist, but fall back to the visible page text anchored on `About the job` when LinkedIn serves obfuscated class names
 - detect `Easy Apply` vs external `Apply`
 - capture the external destination URL when present
 - treat `Easy Apply` as a terminal classification even if LinkedIn hides the full description
@@ -95,6 +96,8 @@ Testing goal:
 Auth setup note:
 - when saving Playwright auth state for LinkedIn, prefer `Sign in with email`
 - Google SSO popups can be unreliable in automation-managed browsers
+- on Linux/server deployments, installing the Python `playwright` package is not sufficient by itself
+- after dependency install, also run `python -m playwright install chromium` so the browser binaries exist under the runtime user's Playwright cache
 - if a manual test is interrupted and leaves a row stuck in `processing`, rerun that same job with `--force`
 - if you want to explicitly re-check a blocked or flaky row in a visible browser, rerun that specific job with `--ui-verify`
 - if you want a batch run to do a normal first pass and then automatically rerun only browser-fixable failures in a visible browser, use `--ui-verify-blocked`
@@ -178,6 +181,7 @@ Implemented behavior:
   - opens the Indeed job page with HTTP + HTML parsing
   - extracts a usable description
   - resolves an external apply URL when one is discoverable
+  - keeps `apply_url` pointed at the external destination rather than leaving it on an Indeed-hosted intermediate URL when redirect resolution succeeds
   - stores `apply_url`, `apply_host`, `ats_type`, `apply_type`, and `enrichment_status`
 - add a shared browser runtime so supported sources can reuse one UI/browser fallback layer instead of duplicating Playwright setup
 - allow Indeed to use a visible browser rerun for browser-fixable failures while still preferring the cheaper non-UI path first
@@ -293,6 +297,10 @@ Common examples:
 
 - run the Stage 2 unit tests:
   `python -m unittest discover -s tests -p "test_stage2.py" -v`
+- debug LinkedIn-only description extraction without mutating the DB:
+  `python scripts/debug_linkedin_description.py --job-id <ID>`
+- on deployed Linux hosts, point that debug script at the runtime DB explicitly:
+  `python scripts/debug_linkedin_description.py --db /home/michael/data/hunt/hunt.db --job-id <ID> --output ./tmp/linkedin_<ID>.txt`
 - list pending LinkedIn rows:
   `python scripts/list_linkedin_enrichment_queue.py --status pending --limit 10`
 - inspect one LinkedIn row:
@@ -314,6 +322,8 @@ Common examples:
   `python scripts/queue_health.py`
 - inspect unattended queue health as JSON:
   `python scripts/queue_health.py --json`
+- on deployed Linux hosts, the shared browser/UI fallback used by LinkedIn and Indeed still requires:
+  `python -m playwright install chromium`
 - run a controlled LinkedIn-only backfill in chunks and stop for operator confirmation after each chunk:
   `python scraper/enrich_linkedin.py --limit 100 --channel chrome --ui-verify-blocked`
 - run a controlled backfill across supported sources in chunks and stop for operator confirmation after each chunk:
@@ -333,10 +343,22 @@ Common examples:
 
 - requeue older sparse LinkedIn failures for another Stage 2 pass:
   `python scripts/requeue_linkedin_refresh_candidates.py`
+- if a deployment bug caused broad false negatives, requeue only the likely-bugged LinkedIn failures instead of all failed rows:
+  `sqlite3 /home/michael/data/hunt/hunt.db "update jobs set enrichment_status='pending', last_enrichment_error=NULL, next_enrichment_retry_at=NULL, last_enrichment_started_at=NULL where source='linkedin' and enrichment_status='failed' and (last_enrichment_error like 'external_description_not_usable:%' or last_enrichment_error like 'external_description_not_found:%' or last_enrichment_error like 'apply_button_not_found:%' or last_enrichment_error like 'unexpected_error:%');"`
 - rerun a specific row even if it is not currently pending:
   `python scraper/enrich_linkedin.py --job-id <ID> --channel chrome --force`
 - re-check one blocked or flaky row in a visible browser:
   `python scraper/enrich_linkedin.py --job-id <ID> --channel chrome --ui-verify`
+
+### Debugging notes from server2 rollout
+
+- a saved LinkedIn session plus the Python Playwright package does not guarantee browser automation will run
+- if Playwright reports `Executable doesn't exist`, install the browser binaries with:
+  `python -m playwright install chromium`
+- on `server2`, the live DB is expected at `/home/michael/data/hunt/hunt.db`, not inside the repo checkout
+- if a manual LinkedIn-only debug command can see the full `About the job` text but `scraper/enrich_linkedin.py` still reports `description_not_found`, verify the deployed repo actually contains the latest extractor fallback code before requeueing large batches
+- the same browser-binary requirement also applies to Indeed `--ui-verify` and `--ui-verify-blocked` runs because they use the shared Playwright browser runtime
+- for Indeed rows, `apply_url` should resolve to the off-Indeed destination when possible; if manual checks only show an Indeed-hosted link, verify whether the row was enriched before the latest redirect-resolution logic was deployed
 
 ### Enrichment runs
 
