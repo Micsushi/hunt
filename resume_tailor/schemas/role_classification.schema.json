@@ -1,0 +1,69 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "RoleClassification",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "role_family",
+    "job_level",
+    "confidence",
+    "weak_description",
+    "recommended_base_resume",
+    "reasons",
+    "concern_flags"
+  ],
+  "properties": {
+    "role_family": {
+      "type": "string",
+      "enum": ["software", "pm", "data", "general", "unknown"]
+    },
+    "job_level": {
+      "type": "string",
+      "enum": [
+        "intern",
+        "new_grad",
+        "junior",
+        "mid",
+        "senior",
+        "staff",
+        "principal",
+        "manager",
+        "director",
+        "unknown"
+      ]
+    },
+    "confidence": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 1
+    },
+    "weak_description": {
+      "type": "boolean"
+    },
+    "recommended_base_resume": {
+      "type": "string",
+      "enum": ["software", "pm", "data", "general", "original"]
+    },
+    "reasons": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "concern_flags": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "enum": [
+          "weak_description",
+          "low_confidence_match",
+          "page_limit_failed",
+          "insufficient_source_facts",
+          "manual_review_recommended"
+        ]
+      }
+    }
+  }
+}
+

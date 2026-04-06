@@ -1,119 +1,228 @@
-# Component 3 : Application Automation
+# Component 3 : Browser Autofill Extension
 
 ## Goal
 
-Automate stable external job application flows using:
-- the external application URL from Component 1
-- the tailored resume from Component 2
-- stored candidate profile and preference data
+Build Component 3 as a Chrome extension that can autofill external job application forms.
 
-The purpose of this component is to automate eligible external applications, not LinkedIn Easy Apply.
+Component 3 should work on its own.
 
-## Desired Workflow
+That means it must support:
+- manual use by the user with one remembered profile
+- one remembered resume by default
+- later handoff from Component 2 when a job-specific resume is available
+- later use by OpenClaw as a tool, not as the owner of Component 3 behavior
 
-1. Receive a job that is marked ready for automation.
-2. Open the external `apply_url`.
-3. Determine whether the user already has an account for the target site.
-4. Sign in or create an account when appropriate.
-5. Fill fields using candidate profile data.
-6. Upload the tailored resume generated for that specific job.
-7. Generate paragraph responses when the application asks for free-text questions.
-8. Verify the field mappings before submission.
-9. Submit the application if the flow is eligible and stable.
-10. Save the result, evidence, and any follow-up requirements.
+The current first target is:
+- `Workday`
 
-## Eligibility Rules
+Out of scope for the first milestone:
+- LinkedIn Easy Apply
+- generic direct company sites
+- mandatory account creation flows
+- OTP automation
+- full autonomous submit decisions
 
-Only attempt automation when:
-- `apply_type = 'external_apply'`
-- `auto_apply_eligible = 1`
-- a tailored resume exists
-- the target flow is stable enough to automate
+## Core Product Shape
 
-Do not attempt automation when:
-- the job is LinkedIn Easy Apply
-- the flow is blocked by CAPTCHA or anti-bot protection
-- the site requires unsupported verification steps
-- the page is too ambiguous to submit confidently
+Component 3 is not the final decision-maker.
 
-Protected or blocked flows should be marked for manual review or failure handling.
+Its primary job is:
+- detect supported application pages
+- load the latest selected resume and candidate profile
+- fill text fields, textareas, dropdowns, radio groups, and common uploads
+- generate and store question answers when needed
+- leave clear evidence and logs for later review
 
-## Input Data Needed
+OpenClaw can later use Component 3 to reduce browser work, but C3 must remain useful even when:
+- Component 1 is not involved
+- Component 2 is not involved
+- OpenClaw is not running
 
-From Component 1:
-- title
-- company
+## How It Fits With Other Components
+
+### Standalone mode
+
+The user opens a supported job application page in Chrome and uses the extension directly.
+
+Initial standalone assumptions:
+- the user is already signed in when sign-in is required
+- the active resume is the most recently provided resume
+- the first default source resume can come from the repo resume flow such as `main.tex` plus its compiled PDF
+
+### Component 1 handoff
+
+Component 1 supplies:
+- job metadata
+- `apply_url`
 - enriched description
-- external application URL
-- ATS classification
+- ATS type
 
-From Component 2:
-- tailored LaTeX resume
-- compiled PDF
-- metadata about what resume version was generated
+Component 3 should still be usable without that handoff, but the normal queue-driven path should eventually use it.
 
-From user profile storage:
-- name and contact info
-- work authorization
-- education history
-- experience facts
-- links like GitHub and LinkedIn
-- saved answers and writing samples when appropriate
+### Component 2 handoff
 
-## Planned Capabilities
+Component 2 supplies the resume that Component 3 should upload for a specific job.
 
-- account creation and sign-in support for repeated job sites
-- browser extension or browser automation support for form filling
-- structured field mapping before submission
-- generated free-text responses grounded in the job description and candidate facts
-- post-submit evidence capture
+Important rule:
+- Component 3 always uses the latest resume explicitly assigned to the current job
+- when no job-specific resume exists, Component 3 falls back to the last provided default resume
 
-Possible technical shape:
-- browser automation with Playwright or a similar driver
-- an autofill extension for common fields
-- an agent layer for harder page understanding and response generation
+### OpenClaw handoff
+
+OpenClaw is later-stage orchestration.
+
+OpenClaw may:
+- open the target page
+- decide whether to proceed
+- trigger Component 3 autofill
+- review output and decide whether to submit
+
+Component 3 itself should not depend on OpenClaw to be useful.
+
+## Current User Decisions Locked In
+
+- browser extension first
+- Chrome only
+- Workday first
+- standalone/manual use is required
+- autofill should support:
+  - text inputs
+  - textareas
+  - dropdowns
+  - radio groups
+  - resume upload
+- autofill should support:
+  - auto-fill on page load
+  - manual click-to-fill
+  - settings toggles for behavior
+- account creation is allowed later, but not part of the first milestone
+- OTP flows are manual handoff for now
+- SQLite remains the source of truth
+- only one candidate profile is needed initially
+- `priority = 1` jobs remain manual-only
+- generated paragraph answers are allowed
+- generated answers must be stored for later review
+- the long dash character should be actively stripped from generated text
+- low-confidence answers should still fill something useful, then be flagged for manual review
+- review surfaces for applied jobs and artifacts should remain visible in the existing review app later, but actions should live in a separate C3 surface
 
 ## Proposed Stages
 
-### Stage 1 : site profile and account model
+### Stage 0 : contract and scaffolding
 
-- model account state per target site
-- store credentials and verification status securely
-- define when account creation is allowed
+- lock the standalone C3 boundaries
+- document the data contract with C1 and C2
+- define runtime artifact layout
+- create the extension repo scaffold
 
-### Stage 2 : form detection and field mapping
+### Stage 1 : local profile, resume, and settings storage
 
-- classify common application fields
-- map candidate profile data into those fields
-- add review logic before submission
+- one editable candidate profile
+- one active default resume
+- one active resume override per job later
+- extension settings for:
+  - auto-fill on page load
+  - manual fill only
+  - answer-generation policy
+  - review flags
 
-### Stage 3 : resume upload and text generation
+### Stage 2 : Workday manual autofill
 
-- upload the tailored resume for the job
-- answer paragraph questions using grounded context
-- record which generated answers were used
+- detect Workday application pages
+- autofill common Workday fields
+- upload the active resume
+- support manual fill and optional page-load auto-fill
 
-### Stage 4 : submission and evidence
+### Stage 3 : generated answers and review flags
 
-- capture what was submitted
-- save screenshots or structured logs
-- mark final DB status
+- generate free-text answers from:
+  - candidate facts
+  - selected resume
+  - job description when available
+- strip banned punctuation such as the long dash
+- store the exact question and answer pair
+- mark low-confidence answers for later review
 
-### Stage 5 : recovery and manual handoff
+### Stage 4 : persistence and evidence
 
-- handle partial submissions
-- record why a flow failed
-- hand blocked flows to manual review
+- save per-attempt artifacts
+- save screenshots and HTML when OpenClaw uses C3
+- keep append-only attempt history
+- maintain a latest summary state on each job
 
-## Risks And Constraints
+### Stage 5 : C1 and C2 integration
 
-- sites vary heavily in structure and required fields
-- login and account-creation flows can change without notice
-- unsupported verification flows will need manual fallback
-- anti-bot and CAPTCHA bypassing are out of scope
-- low-confidence field mapping should never auto-submit
+- consume job records from Hunt
+- use `apply_url` and `ats_type`
+- switch resume automatically when Component 2 produces a job-specific output
 
-## Dependency On Other Components
+### Stage 6 : account and auth helpers
 
-- depends on Component 1 for trustworthy external application URLs
-- depends on Component 2 for a job-specific resume that is ready to upload
+- detect signed-in vs signed-out state
+- support login/account creation helpers
+- leave OTP and verification as manual handoff first
+
+### Stage 7 : OpenClaw integration
+
+- expose Component 3 as a dependable tool layer
+- let OpenClaw trigger fill actions and inspect results
+- keep submit decisions outside C3 when desired
+
+## Recommended Defaults
+
+Recommended initial defaults based on current user decisions:
+
+- willing to relocate:
+  - `yes`
+- open to any location:
+  - `yes`
+- salary flexibility:
+  - `yes`
+- sponsorship required:
+  - `no`
+
+These are product defaults, not permanent hardcoding.
+They should become toggles/settings later.
+
+## Data Model Direction
+
+Recommended model:
+
+- append-only application attempts for history
+- plus a current summary state on each job for quick inspection
+
+This keeps:
+- reliable history
+- easy UI rendering
+- safer retries
+
+See `design.md` for the fuller proposal.
+
+## File Layout
+
+The initial C3 scaffold lives in:
+
+```text
+apply_extension/
+  manifest.json
+  README.md
+  src/
+    background/
+    content/
+    options/
+    popup/
+    shared/
+  fixtures/
+    workday/
+```
+
+This layout is only for extension source and test fixtures.
+
+Runtime artifacts should live outside the repo.
+
+## Related Docs
+
+- `docs/components/component3/design.md`
+- `docs/roadmap.md`
+- `docs/components/component1/README.md`
+- `docs/components/component2/README.md`

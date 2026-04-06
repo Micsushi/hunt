@@ -1,0 +1,186 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "TailoredResume",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "selected_base_resume",
+    "role_family",
+    "job_level",
+    "fallback_used",
+    "section_order",
+    "education",
+    "experience_entries",
+    "project_entries",
+    "skills",
+    "concern_flags"
+  ],
+  "properties": {
+    "selected_base_resume": {
+      "type": "string"
+    },
+    "role_family": {
+      "type": "string",
+      "enum": ["software", "pm", "data", "general", "unknown"]
+    },
+    "job_level": {
+      "type": "string",
+      "enum": [
+        "intern",
+        "new_grad",
+        "junior",
+        "mid",
+        "senior",
+        "staff",
+        "principal",
+        "manager",
+        "director",
+        "unknown"
+      ]
+    },
+    "fallback_used": {
+      "type": "boolean"
+    },
+    "section_order": {
+      "type": "array",
+      "const": ["Education", "Experience", "Projects", "Technical Skills"]
+    },
+    "education": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["keep_original"],
+      "properties": {
+        "keep_original": {
+          "type": "boolean",
+          "const": true
+        }
+      }
+    },
+    "experience_entries": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "entry_id",
+          "keep_header_original",
+          "bullet_plan"
+        ],
+        "properties": {
+          "entry_id": {
+            "type": "string"
+          },
+          "keep_header_original": {
+            "type": "boolean",
+            "const": true
+          },
+          "bullet_plan": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "source_fact_id",
+                "mode",
+                "text"
+              ],
+              "properties": {
+                "source_fact_id": {
+                  "type": "string"
+                },
+                "mode": {
+                  "type": "string",
+                  "enum": ["reuse", "rewrite", "generate_from_facts"]
+                },
+                "text": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "project_entries": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "entry_id",
+          "bullet_plan"
+        ],
+        "properties": {
+          "entry_id": {
+            "type": "string"
+          },
+          "bullet_plan": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "source_fact_id",
+                "mode",
+                "text"
+              ],
+              "properties": {
+                "source_fact_id": {
+                  "type": "string"
+                },
+                "mode": {
+                  "type": "string",
+                  "enum": ["reuse", "rewrite", "generate_from_facts"]
+                },
+                "text": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "skills": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["languages", "frameworks", "developer_tools"],
+      "properties": {
+        "languages": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "frameworks": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "developer_tools": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "concern_flags": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "enum": [
+          "weak_description",
+          "low_confidence_match",
+          "page_limit_failed",
+          "insufficient_source_facts",
+          "manual_review_recommended"
+        ]
+      }
+    }
+  }
+}
+

@@ -1,0 +1,68 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "KeywordExtraction",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "must_have_terms",
+    "nice_to_have_terms",
+    "responsibilities",
+    "tools_and_technologies",
+    "domain_terms",
+    "seniority_signals",
+    "concern_flags"
+  ],
+  "properties": {
+    "must_have_terms": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "nice_to_have_terms": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "responsibilities": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "tools_and_technologies": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "domain_terms": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "seniority_signals": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "concern_flags": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "enum": [
+          "weak_description",
+          "low_confidence_match",
+          "page_limit_failed",
+          "insufficient_source_facts",
+          "manual_review_recommended"
+        ]
+      }
+    }
+  }
+}
+

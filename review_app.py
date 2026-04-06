@@ -377,11 +377,22 @@ def render_summary_cards(summary):
 
 
 def render_status_toolbar(active_status, *, source, limit, q="", sort="date_scraped", direction="desc"):
+    status_labels = {
+        "ready": "ready",
+        "pending": "pending",
+        "processing": "processing",
+        "done": "done",
+        "done_verified": "done_verified",
+        "failed": "failed_enrich",
+        "blocked": "blocked",
+        "blocked_verified": "blocked_verified",
+        "all": "all",
+    }
     pills = []
     for status in STATUS_OPTIONS:
         class_name = "pill active" if status == active_status else "pill"
         pills.append(
-            f'<a class="{class_name}" href="/jobs?source={quote(source)}&status={quote(status)}&limit={limit}&q={quote(q)}&sort={quote(sort)}&direction={quote(direction)}">{html.escape(status)}</a>'
+            f'<a class="{class_name}" href="/jobs?source={quote(source)}&status={quote(status)}&limit={limit}&q={quote(q)}&sort={quote(sort)}&direction={quote(direction)}">{html.escape(status_labels.get(status, status))}</a>'
         )
     return "".join(pills)
 
@@ -428,7 +439,7 @@ def render_search_bar(*, source, status, limit, q, sort, direction):
                     ("processing", "Processing"),
                     ("done", "Done"),
                     ("done_verified", "Done verified"),
-                    ("failed", "Failed"),
+                    ("failed", "Failed enrich"),
                     ("blocked", "Blocked"),
                     ("blocked_verified", "Blocked verified"),
                     ("all", "All statuses"),

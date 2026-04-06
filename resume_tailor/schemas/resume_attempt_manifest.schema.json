@@ -1,0 +1,100 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ResumeAttemptManifest",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "attempt_id",
+    "job_id",
+    "mode",
+    "status",
+    "role_family",
+    "job_level",
+    "fallback_used",
+    "concern_flags",
+    "model_backend",
+    "model_name",
+    "generated_at",
+    "artifact_paths"
+  ],
+  "properties": {
+    "attempt_id": {
+      "type": "string"
+    },
+    "job_id": {
+      "type": ["integer", "null"]
+    },
+    "mode": {
+      "type": "string",
+      "enum": ["queue", "ad_hoc"]
+    },
+    "status": {
+      "type": "string",
+      "enum": ["done", "done_with_flags", "fallback_used", "failed"]
+    },
+    "role_family": {
+      "type": "string"
+    },
+    "job_level": {
+      "type": "string"
+    },
+    "fallback_used": {
+      "type": "boolean"
+    },
+    "concern_flags": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "model_backend": {
+      "type": "string"
+    },
+    "model_name": {
+      "type": "string"
+    },
+    "generated_at": {
+      "type": "string"
+    },
+    "artifact_paths": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "job_description",
+        "role_classification",
+        "keywords",
+        "structured_output",
+        "tex",
+        "compile_log",
+        "metadata"
+      ],
+      "properties": {
+        "job_description": {
+          "type": "string"
+        },
+        "role_classification": {
+          "type": "string"
+        },
+        "keywords": {
+          "type": "string"
+        },
+        "structured_output": {
+          "type": "string"
+        },
+        "tex": {
+          "type": "string"
+        },
+        "pdf": {
+          "type": ["string", "null"]
+        },
+        "compile_log": {
+          "type": "string"
+        },
+        "metadata": {
+          "type": "string"
+        }
+      }
+    }
+  }
+}
+

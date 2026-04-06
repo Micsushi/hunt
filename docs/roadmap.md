@@ -84,23 +84,33 @@ Purpose:
 
 Current status:
 - requirements and desired prompting flow are defined
-- implementation has not started in this repo
+- initial repo scaffold now exists under `resume_tailor/`
+- the OG resume source has been locked to `main.tex`
+- detailed design notes now live in:
+  - `docs/components/component2/README.md`
+  - `docs/components/component2/design.md`
+  - `glossary.md`
+- runtime code is not implemented yet
 
 Doc:
 - `docs/components/component2/README.md`
 
-### Component 3 : application automation
+### Component 3 : browser autofill and apply assistance
 
 Purpose:
-- open the external application URL
-- sign in or create accounts where appropriate
+- autofill external application forms through a browser extension
+- upload the currently selected resume
 - fill application fields using stored candidate data
 - generate paragraph responses when needed
-- verify field mappings before submission
+- later support orchestration by OpenClaw or another higher-level agent
 
 Current status:
-- idea stage only
-- should only begin after Component 1 consistently resolves external apply URLs
+- docs and scaffold stage
+- first implementation target is a standalone Chrome extension for Workday
+- should remain useful without Component 1, Component 2, or OpenClaw
+- later consumes:
+  - C1 job/apply metadata
+  - C2 job-specific resumes
 
 Important limitation:
 - anti-bot and CAPTCHA bypassing are not a supported goal

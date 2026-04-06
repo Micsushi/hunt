@@ -1,0 +1,33 @@
+# Apply Extension
+
+This directory contains the future Chrome extension source for Component 3.
+
+Current scope:
+- standalone browser autofill tool
+- Chrome only
+- Workday first
+
+Design goals:
+- useful manually without C1, C2, or OpenClaw
+- later able to consume Hunt job context and C2 resume outputs
+- structured so ATS-specific behavior lives in adapters instead of one giant script
+
+Planned source layout:
+
+- `manifest.json`
+- `src/background/`
+- `src/content/`
+- `src/options/`
+- `src/popup/`
+- `src/shared/`
+- `fixtures/workday/`
+
+Implementation notes:
+- keep the first milestone framework-light
+- favor plain JavaScript until the extension behavior is stable
+- isolate DOM selectors and field-mapping heuristics by ATS family
+- keep generated-answer sanitization in shared utilities so every caller uses the same rules
+
+Related docs:
+- `docs/components/component3/README.md`
+- `docs/components/component3/design.md`

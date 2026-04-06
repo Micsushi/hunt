@@ -2,123 +2,252 @@
 
 ## Goal
 
-Generate a truthful, job-specific resume from a source LaTeX resume using the enriched job description from Component 1.
+Generate a truthful, job-specific one-page resume from the original LaTeX resume in `main.tex`.
 
-The desired output is:
-- a job-specific LaTeX resume
-- a compiled PDF
-- a one-page result when possible
-- a saved output in a dated or named directory without overwriting the source resume
+Component 2 should:
+- preserve the existing section order from the original resume
+- preserve the existing document structure and visual layout
+- keep dates, titles, employers, education, and contact info immutable
+- allow bullet rewriting, entry selection, project selection, and skill emphasis
+- save every attempt to disk
+- expose the latest useful result in the DB and web app
 
-## Desired Workflow
+## Current Status
 
-1. Load the enriched job description and candidate profile context.
-2. Parse the source resume into structured sections:
-   - Experience
-   - Education
-   - Skills
-   - Projects
-3. Run Pass 1 to extract required and preferred keywords from the job description.
-4. Run Pass 2 to rewrite and reorder resume content around the job requirements.
-5. Validate the model JSON before using it.
-6. Render the updated resume back into LaTeX.
-7. Compile LaTeX to PDF.
-8. Check page count with `pdfinfo`.
-9. If the result exceeds one page, reduce length using controlled retries.
-10. Save the final resume for that job.
+Component 2 runtime code has not been implemented yet, but the initial repo scaffold now exists under:
+- `resume_tailor/`
 
-## Prompting Rules
+That scaffold now includes:
+- prompt placeholders
+- JSON schemas
+- candidate profile templates
+- bullet-library templates
+- base-resume family placeholders
 
-Pass 1 should:
-- extract the top required and preferred keywords or skills
-- separate must-have from nice-to-have qualifications
+Deployment should happen only after the current Component 1 server rollout is stable on `server2`.
 
-Pass 2 should:
-- mirror exact job-description terminology where appropriate
-- avoid introducing untrue claims
-- rewrite bullets in XYZ style when possible
-- rank and drop less relevant bullets
-- preserve standard section headings that match the input resume format
-- return structured JSON only
+## Locked Decisions
 
-If the resume exceeds one page:
-- adjust spacing and margins first
-- if still too long, re-prompt with explicit cutting order:
-  - oldest jobs
-  - least relevant bullets
-  - education details
+These decisions are now treated as the default Component 2 contract unless the user changes them later.
 
-## Backend Plan
+- The OG resume is `main.tex`.
+- `main.tex` stays immutable.
+- Section order stays:
+  - `Education`
+  - `Experience`
+  - `Projects`
+  - `Technical Skills`
+- No summary section is added.
+- The existing LaTeX layout should be preserved.
+- Projects are optional when experience needs the space.
+- At least one experience role should remain.
+- Component 2 should generate a resume for all jobs, not just automation-eligible jobs.
+- Component 2 should run automatically after Component 1 enrichment reaches a done state.
+- If a job still needs UI enrichment, Component 2 should wait.
+- Easy Apply matters for Component 3, not for whether Component 2 may generate a resume.
+- One page is a hard gate. Over-one-page attempts are failures.
+- Ollama is the default backend.
+- Gemini or another API backend is a later optional toggle.
+- Every attempt should be saved.
+- Limited concern flags are allowed.
 
-Default local backend:
-- Ollama
-- `qwen3:8b`
+## Terminology
 
-Optional API backend:
-- Gemini via a flag such as `--api gemini`
-- preferred model: `gemini-2.5-flash`
+Common shorthand is now documented in:
+- `glossary.md`
 
-Shared expectations:
-- structured JSON output only
-- retry once on malformed JSON
-- target context large enough to fit resume plus job description
-- lower temperature for consistency
+Important terms used throughout the Component 2 docs:
+- `C1`, `C2`, `C3`
+- `S1`, `S2`, and later stage shorthands
+- `JD`
+- `OG resume`
+- `base resume`
+- `UI enrich`
+- `role family`
+- `job level`
+- `attempt`
+- `latest result`
 
-## Implementation Notes
+## Component 2 Workflows
 
-Inputs:
-- enriched job record from Component 1
-- source resume in LaTeX
-- optional candidate profile data and reusable facts
+### Queue-driven workflow
 
-Outputs:
-- per-job output directory
-- intermediate JSON artifacts when useful
-- final `.tex`
+This is the main automated path.
+
+1. C1 marks a job enriched and ready for normal downstream work.
+2. C2 classifies the job into a role family and job level.
+3. C2 attempts to tailor a resume from the best starting point:
+   - a role-family base resume when possible
+   - otherwise the OG resume
+4. C2 compiles the LaTeX output to PDF.
+5. If the PDF exceeds one page, the attempt fails the one-page gate and retries with controlled reductions.
+6. C2 stores all artifacts for the attempt.
+7. The latest useful result is surfaced in the DB and later in the web app.
+
+### Ad hoc workflow
+
+This is the manual path for later UI work.
+
+Supported future inputs should include:
+1. select an existing DB job
+2. paste a JD directly
+3. upload a JD text file
+
+That path should still produce the same artifact set:
+- job-description snapshot
+- structured model output
+- rendered `.tex`
+- compile logs
 - final `.pdf`
-- metadata describing compile status and page count
+
+## Fallback Rules
+
+If C2 cannot produce a trustworthy tailored result from the JD:
+
+1. try a role-family base resume if the job type is clear
+2. otherwise use the OG resume
+3. still save the failed attempt and its flags
+
+If the JD is weak, sparse, or noisy:
+- C2 should still attempt classification and tailoring first
+- if that attempt is not usable, C2 falls back
+
+## Recommended Data Model
+
+The most likely clean shape is:
+
+- latest-result columns on `jobs`
+- one `resume_attempts` history table for every saved attempt
+
+This keeps:
+- fast access to the current best result
+- complete historical traceability
+- clean artifact-to-job mapping
+
+The detailed proposal lives in:
+- `docs/components/component2/design.md`
+
+## Concern Flags
+
+Keep the initial flag set intentionally small:
+- `weak_description`
+- `low_confidence_match`
+- `page_limit_failed`
+- `insufficient_source_facts`
+- `manual_review_recommended`
+
+These flags should mark uncertainty without blocking normal operation unless the output is unusable.
+
+## Base Resume Families
+
+Initial family buckets:
+- `software`
+- `pm`
+- `data`
+- `general`
+
+The OG resume remains the source of truth.
+
+Family-specific base resumes are planned as curated variants, not replacements for the OG resume.
+
+## Candidate Facts And Bullet Library
+
+Component 2 should be grounded by:
+- the OG resume
+- a candidate profile file
+- a bullet-library file
+- later generated or curated family-specific base resumes
+
+Starter templates now live under:
+- `resume_tailor/templates/candidate_profile.template.md`
+- `resume_tailor/templates/bullet_library.template.md`
+- `resume_tailor/templates/ad_hoc_job_description.template.md`
+
+## Initial Repo Layout
+
+Component 2 now has a dedicated repo home:
+
+- `resume_tailor/README.md`
+- `resume_tailor/base_resumes/`
+- `resume_tailor/prompts/`
+- `resume_tailor/schemas/`
+- `resume_tailor/templates/`
+
+Runtime artifacts should not live inside the git checkout on `server2`.
+
+Recommended runtime root:
+- `/home/michael/data/hunt/resumes`
 
 ## Proposed Stages
 
-### Stage 1 : source resume parsing
+### Stage 0 : terminology, structure, and storage contract
 
-- parse the LaTeX resume into a structured representation
-- define the JSON schema for the parsed resume
-- preserve enough detail to reconstruct LaTeX safely
+- lock the C2 vocabulary
+- define runtime directories
+- define DB latest-result fields and attempt-history shape
 
-### Stage 2 : keyword extraction
+### Stage 1 : parser and renderer around `main.tex`
 
-- build Pass 1 prompt and schema
-- validate the JSON result
-- save extracted keywords with the job record
+- parse the OG resume into structured data
+- preserve enough structure to render back into the same LaTeX layout
+- verify round-trip rendering
 
-### Stage 3 : resume rewrite
+### Stage 2 : candidate profile and bullet library
 
-- build Pass 2 prompt and schema
-- generate a structured rewritten resume
-- map the structured output back to the LaTeX template
+- add user-maintained factual source files
+- support more roles and more bullet candidates than appear in `main.tex`
+- keep everything grounded in truthful source material
 
-### Stage 4 : compile and fit loop
+### Stage 3 : job classification and keyword extraction
 
-- compile to PDF
-- inspect page count
-- retry with spacing and content cuts when needed
-- stop when the resume fits or the retry budget is exhausted
+- detect role family
+- detect job level
+- extract must-have and nice-to-have requirements
+- flag weak or noisy JDs
 
-### Stage 5 : output packaging
+### Stage 4 : resume selection and rewrite plan
 
-- store outputs by job and timestamp
-- keep source resume immutable
-- record metadata for later application automation
+- pick the starting base resume
+- choose which experience entries and projects to keep
+- rewrite or generate bullets while staying truthful
+- preserve section order and overall structure
 
-## Risks And Constraints
+### Stage 5 : compile and one-page gate
 
-- overly aggressive rewriting can drift from truthful experience
-- LaTeX regeneration can break formatting if the template is not preserved carefully
-- one-page enforcement needs deterministic fallback rules
-- low-quality job descriptions from Component 1 will weaken tailoring quality
+- compile LaTeX to PDF
+- reject outputs longer than one page
+- retry with controlled reductions
 
-## Dependency On Other Components
+### Stage 6 : persistence and latest-result wiring
 
-- depends on Component 1 for the enriched description and clean application metadata
-- produces assets that Component 3 will upload or submit
+- save all attempt artifacts
+- update latest-result fields on the job row
+- prepare the data for web review and later C3 handoff
+
+### Stage 7 : queue-driven automation
+
+- auto-run after C1 reaches a done state
+- skip jobs still waiting on UI enrichment
+- support all job sources
+
+### Stage 8 : review UI and ad hoc generation
+
+- view the latest PDF in browser
+- expose the generated LaTeX
+- allow manual generation from DB jobs or pasted JDs
+- add diff views later as a nice-to-have
+
+## Verification Priorities
+
+Early tests should focus on:
+- schema validation
+- parser and renderer stability
+- resume selection logic
+- one-page enforcement
+- artifact writing
+
+## Related Docs
+
+- `docs/components/component2/design.md`
+- `glossary.md`
+- `docs/components/component3/README.md`
