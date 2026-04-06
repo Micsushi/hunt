@@ -390,26 +390,22 @@ class Stage2Tests(unittest.TestCase):
         self.assertFalse(enrich_linkedin.looks_like_usable_job_description(thin_text))
         self.assertTrue(enrich_linkedin.looks_like_usable_job_description(detailed_text))
 
-    def test_security_verification_is_treated_as_batch_blocker(self):
+    def test_security_verification_is_not_treated_as_batch_hard_stop(self):
         self.assertTrue(enrich_linkedin.is_blocking_error_code("security_verification"))
-        self.assertTrue(
+        self.assertFalse(
             enrich_linkedin.should_stop_batch_after_failure(
                 "security_verification",
                 ui_verify_blocked=False,
             )
         )
-        self.assertFalse(
-            enrich_linkedin.should_stop_batch_after_failure(
-                "security_verification",
-                ui_verify_blocked=True,
-            )
-        )
+        self.assertFalse(enrich_linkedin.is_hard_stop_error_code("security_verification"))
         self.assertTrue(
             enrich_linkedin.should_stop_batch_after_failure(
                 "rate_limited",
                 ui_verify_blocked=True,
             )
         )
+        self.assertTrue(enrich_linkedin.is_hard_stop_error_code("rate_limited"))
 
     def test_job_removed_is_non_actionable_failure(self):
         self.assertTrue(enrich_linkedin.is_non_actionable_failure_code("job_removed"))

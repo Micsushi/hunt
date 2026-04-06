@@ -218,6 +218,7 @@ Recommended policy:
   - do not auto-retry forever in unattended mode
   - leave as `blocked`
   - require manual or UI verification
+  - do not treat as a batch hard-stop during backfill; keep draining the remaining queue
 - `auth_expired`
   - stop the batch early
   - operator action required

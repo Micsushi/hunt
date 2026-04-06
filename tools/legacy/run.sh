@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 set -e
-cd "$(dirname "$0")"
+cd "$(dirname "$0")/../.."
 
 if [ ! -d "venv" ]; then
     echo "Creating virtual environment..."

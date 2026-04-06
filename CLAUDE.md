@@ -15,7 +15,7 @@ Automated job scraper that feeds a SQLite DB for AI agents to apply on behalf of
 
 - `scraper/runner.py` : infinite loop, runs `scrape()` every 10 minutes, handles SIGTERM gracefully
 - `scraper/scraper.py` : single run entrypoint
-- `hunt.service` : systemd unit for Ubuntu server (edit `User=` to match server username before deploying)
+- `tools/legacy/hunt.service` : older root-level systemd helper kept for reference
 - DB path : project root `hunt.db`
 
 ## Current Focus

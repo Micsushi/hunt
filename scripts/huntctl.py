@@ -223,6 +223,9 @@ def cmd_runner(_args):
 def cmd_service(args):
     _require_linux(args.command_name)
     mapping = {
+        "auto-on": ["sudo", "systemctl", "enable", "--now", "hunt-scraper.timer"],
+        "auto-off": ["sudo", "systemctl", "disable", "--now", "hunt-scraper.timer"],
+        "auto-status": ["systemctl", "status", "hunt-scraper.timer", "--no-pager"],
         "svc-start": ["sudo", "systemctl", "start", "hunt-scraper.service"],
         "svc-stop": ["sudo", "systemctl", "stop", "hunt-scraper.service"],
         "svc-status": ["systemctl", "status", "hunt-scraper.service", "--no-pager"],
@@ -349,6 +352,9 @@ def build_parser():
     runner.set_defaults(func=cmd_runner)
 
     for service_command in (
+        "auto-on",
+        "auto-off",
+        "auto-status",
         "svc-start",
         "svc-stop",
         "svc-status",

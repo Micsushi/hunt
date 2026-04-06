@@ -195,6 +195,7 @@ Stage 3.2 outcome:
 - `--ui-verify-blocked` now means:
   - LinkedIn: rerun blocked/security-challenged rows in a visible browser
   - Indeed: rerun browser-fixable failures such as `description_not_found`, `rate_limited`, or similar page-shape issues in a visible browser
+- LinkedIn `security_verification` rows remain blocked row-level failures, but they no longer hard-stop a whole backfill batch by themselves
 
 ## Command Reference
 
@@ -205,6 +206,13 @@ Short wrappers are now available at the repo root:
   `hunt.cmd <command>`
 - Linux/macOS:
   `./hunt.sh <command>`
+
+Launcher note:
+- the repo-root wrapper files are now thin shims
+- the real launcher implementations live under:
+  - `scripts/launchers/hunt.ps1`
+  - `scripts/launchers/hunt.cmd`
+  - `scripts/launchers/hunt.sh`
 
 Common examples:
 - queue health:
@@ -258,6 +266,12 @@ Common examples:
 - stop the timer on the server:
   `./hunt.sh timer-stop`
   `./hunt.sh timer-disable`
+- pause automatic scrape/enrich cycles on the server:
+  `./hunt.sh auto-off`
+- resume automatic scrape/enrich cycles on the server:
+  `./hunt.sh auto-on`
+- check whether the automatic timer is paused or running:
+  `./hunt.sh auto-status`
 
 ### Session setup
 

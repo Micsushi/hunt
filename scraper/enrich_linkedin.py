@@ -809,6 +809,10 @@ def is_blocking_error_code(error_code):
     return error_code in BATCH_HARD_STOP_ERROR_CODES or error_code in BLOCKED_ERROR_CODES
 
 
+def is_hard_stop_error_code(error_code):
+    return error_code in BATCH_HARD_STOP_ERROR_CODES
+
+
 def is_ui_verifiable_error_code(error_code):
     return error_code in BLOCKED_ERROR_CODES
 
@@ -818,11 +822,7 @@ def is_non_actionable_failure_code(error_code):
 
 
 def should_stop_batch_after_failure(error_code, *, ui_verify_blocked=False):
-    if error_code in BATCH_HARD_STOP_ERROR_CODES:
-        return True
-    if error_code in BLOCKED_ERROR_CODES:
-        return not ui_verify_blocked
-    return False
+    return is_hard_stop_error_code(error_code)
 
 
 def build_failure_update_kwargs(error):
@@ -1097,7 +1097,7 @@ def process_batch(
     stop_error_code = None
     for failure in failures:
         error_code = failure.get("error_code")
-        if should_stop_batch_after_failure(error_code, ui_verify_blocked=False):
+        if is_hard_stop_error_code(error_code):
             stop_error_code = error_code
             break
 
