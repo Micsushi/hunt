@@ -530,3 +530,12 @@ Current Stage 4 deployment wiring:
   - `HUNT_ARTIFACTS_DIR={{ scraper_artifacts_dir }}`
 - `hunt-review` should mount the same directory read-only and export:
   - `HUNT_ARTIFACTS_DIR=/app/artifacts`
+
+Recommended C1 sign-off sequence on `server2`:
+1. deploy the latest Hunt repo plus the latest Stage 6 Ansible changes
+2. verify Stage 6 exports the artifact path and that the review app exposes `/metrics`
+3. bulk requeue any failed/blocked rows that should be retried
+4. run a manual all-source backfill until the backlog is under control
+5. confirm queue health from the CLI and review app
+6. re-enable the timer and watch one scheduled scrape + enrich cycle
+7. if a real blocked/browser-fixable row appears, confirm artifact files are written and linked in the review app

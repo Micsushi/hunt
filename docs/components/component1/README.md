@@ -256,6 +256,10 @@ Common examples:
 - list Indeed rows only:
   `.\hunt.ps1 jobs --source indeed --status all --limit 10`
   `./hunt.sh jobs --source indeed --status all --limit 10`
+- preview currently stored irrelevant Indeed rows using the current title filter:
+  `./hunt.sh cleanup-indeed`
+- delete currently stored irrelevant Indeed rows:
+  `./hunt.sh cleanup-indeed --apply`
 - inspect one job:
   `.\hunt.ps1 job 13179`
   `./hunt.sh job 13179`
@@ -487,6 +491,42 @@ Remaining Stage 4 operator work:
 - deploy the latest Hunt + `ansible_homelab` changes to `server2`
 - complete the full backlog drain with the updated backfill flow
 - tune alerting, retention, and batch defaults based on real `server2` runs
+
+Component 1 completion checklist:
+- discovery quality is acceptable in production
+  - especially for Indeed, where broad board matches should no longer flood the queue with unrelated retail/store jobs
+- the backlog is drained or reduced to a normal steady-state queue
+  - manual backfill should no longer be the dominant operating mode
+- at least one real blocked/browser-fixable failure is observed end-to-end with saved artifacts
+  - screenshot/HTML/text files exist
+  - the review app links to them correctly
+- Stage 6 deployment is reproducible without manual container cleanup
+  - scraper runtime and review app should update correctly from Ansible alone
+- scheduled scrape runs and post-scrape enrichment behave predictably on `server2`
+  - timer on/off flow is documented
+  - batch size, retry timing, and UI-fallback defaults feel stable in practice
+
+C1 sign-off runbook on `server2`:
+1. deploy the latest Hunt repo and latest `ansible_homelab` Stage 6 changes
+2. verify the deployed runtime shape
+   - `systemctl cat hunt-scraper.service | grep HUNT_ARTIFACTS_DIR`
+   - `curl -s https://agent-hunt-review.mshi.ca/metrics | head`
+3. requeue failed/blocked enrichment rows you want retried
+   - `./hunt.sh requeue-enrich --source all`
+4. drain the backlog manually first
+   - `DISPLAY=:98 ./hunt.sh backfill 100 --source all --ui-verify-blocked --yes`
+5. confirm queue health after the manual drain
+   - `./hunt.sh queue`
+   - `./.venv/bin/python scripts/queue_health.py --json`
+6. if a real blocked/browser-fixable row occurs, confirm the artifact path end to end
+   - files exist under `/home/michael/data/hunt/artifacts`
+   - the review app job page links to them
+7. re-enable the unattended timer
+   - `./hunt.sh auto-on`
+   - `./hunt.sh auto-status`
+8. observe at least one normal scheduled cycle
+   - it should scrape and then run post-scrape enrichment up to the configured batch limit
+9. only after those checks pass, treat Component 1 as operationally complete
 
 Stage 4 non-goals:
 - no Component 2 resume tailoring work yet

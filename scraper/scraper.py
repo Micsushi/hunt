@@ -4,8 +4,8 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from jobspy import scrape_jobs
-from db import count_ready_jobs_for_enrichment, add_job, init_db
+from concurrent.futures import ThreadPoolExecutor, as_completed
+
 from config import (
     ENRICH_AFTER_SCRAPE,
     ENRICHMENT_BATCH_LIMIT,
@@ -22,64 +22,10 @@ from config import (
     TITLE_BLACKLIST,
     WATCHLIST,
 )
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from db import add_job, count_ready_jobs_for_enrichment, init_db
+from indeed_filters import matches_indeed_category
+from jobspy import scrape_jobs
 from url_utils import detect_ats_type, get_apply_host, normalize_optional_str
-
-
-INDEED_CATEGORY_KEYWORDS = {
-    "engineering": (
-        "software",
-        "developer",
-        "engineer",
-        "frontend",
-        "front-end",
-        "backend",
-        "back-end",
-        "fullstack",
-        "full stack",
-        "web developer",
-        "application developer",
-        "devops",
-        "sdet",
-        "qa engineer",
-        ".net",
-        "ingénieur",
-        "ingenieur",
-        "développeur",
-        "developpeur",
-        "logiciel",
-    ),
-    "product": (
-        "product",
-        "project manager",
-        "project management",
-        "scrum",
-        "business analyst",
-        "business analysis",
-        "product owner",
-        "associate product manager",
-        "program manager",
-        "gestionnaire de produit",
-        "chef de produit",
-        "analyste d'affaires",
-        "analyste daffaires",
-    ),
-    "data": (
-        "data",
-        "analytics",
-        "scientist",
-        "machine learning",
-        "business intelligence",
-        "bi developer",
-        "bi analyst",
-        "analyste de donnees",
-        "analyste de données",
-        "scientifique des donnees",
-        "scientifique des données",
-        "donnees",
-        "données",
-    ),
-}
 
 
 def classify_level(title):
@@ -94,7 +40,10 @@ def classify_level(title):
     if any(word in title_lower for word in ["new grad", "new graduate", "entry level", "entry-level", "graduate"]):
         return "new_grad"
 
-    if any(word in title_lower for word in ["junior", "associate", "jr.", "jr ", "engineer i", "developer i", "level 1", "l1"]):
+    if any(
+        word in title_lower
+        for word in ["junior", "associate", "jr.", "jr ", "engineer i", "developer i", "level 1", "l1"]
+    ):
         return "junior"
 
     return "unknown"
@@ -112,18 +61,6 @@ def should_skip(title):
         return False
     title_lower = title.lower()
     return any(word in title_lower for word in TITLE_BLACKLIST)
-
-
-def matches_indeed_category(title, category):
-    if not title or not isinstance(title, str):
-        return False
-
-    keywords = INDEED_CATEGORY_KEYWORDS.get(category)
-    if not keywords:
-        return True
-
-    title_lower = title.lower()
-    return any(keyword in title_lower for keyword in keywords)
 
 
 def build_job_urls(row, source):

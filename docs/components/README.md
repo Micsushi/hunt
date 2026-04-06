@@ -10,3 +10,4 @@ This folder contains the current planning docs for each major part of the system
 - `component3/README.md` : browser autofill extension overview and stage plan
 - `component3/design.md` : browser extension architecture, data model, and rollout notes
 - `component4/README.md` : orchestration and submit-control layer, including OpenClaw direction
+- `component4/design.md` : orchestration architecture, stage plan details, and browser-agent research notes

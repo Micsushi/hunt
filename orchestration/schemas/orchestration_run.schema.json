@@ -1,0 +1,81 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "OrchestrationRun",
+  "type": "object",
+  "required": [
+    "run_id",
+    "job_id",
+    "status",
+    "source_runtime",
+    "manual_review_required",
+    "submit_allowed",
+    "started_at"
+  ],
+  "properties": {
+    "run_id": {
+      "type": "string"
+    },
+    "job_id": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "status": {
+      "type": "string"
+    },
+    "source_runtime": {
+      "type": "string"
+    },
+    "selected_resume_version_id": {
+      "type": [
+        "integer",
+        "null"
+      ]
+    },
+    "apply_url": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "ats_type": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "apply_context_path": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "manual_review_required": {
+      "type": "boolean"
+    },
+    "manual_review_reason": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "submit_allowed": {
+      "type": "boolean"
+    },
+    "submit_approval_id": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "started_at": {
+      "type": "string"
+    },
+    "completed_at": {
+      "type": [
+        "string",
+        "null"
+      ]
+    }
+  },
+  "additionalProperties": false
+}

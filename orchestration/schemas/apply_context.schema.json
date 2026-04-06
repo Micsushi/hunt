@@ -1,0 +1,78 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ApplyContext",
+  "type": "object",
+  "required": [
+    "job_id",
+    "source_mode",
+    "manual_review_flags",
+    "created_at"
+  ],
+  "properties": {
+    "job_id": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "title": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "company": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "apply_url": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "ats_type": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "selected_resume_version_id": {
+      "type": [
+        "integer",
+        "null"
+      ]
+    },
+    "selected_resume_pdf_path": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "job_description_path": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "source_mode": {
+      "type": "string"
+    },
+    "manual_review_flags": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "apply_context_path": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "created_at": {
+      "type": "string"
+    }
+  },
+  "additionalProperties": false
+}

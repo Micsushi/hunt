@@ -1,6 +1,5 @@
+import math
 from urllib.parse import parse_qs, unquote, urlparse
-
-import pandas as pd
 
 
 ATS_HOST_SUFFIXES = {
@@ -24,8 +23,10 @@ LINKEDIN_REDIRECT_QUERY_KEYS = (
 
 
 def is_missing_value(value):
+    if value is None:
+        return True
     try:
-        return bool(pd.isna(value))
+        return math.isnan(value)
     except (TypeError, ValueError):
         return False
 

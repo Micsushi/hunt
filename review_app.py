@@ -2,6 +2,7 @@ import html
 import os
 import sys
 from contextlib import asynccontextmanager
+from pathlib import Path
 from urllib.parse import quote
 
 from fastapi import FastAPI, HTTPException
@@ -22,6 +23,7 @@ from db import (  # noqa: E402
     requeue_job as requeue_review_job,
 )
 from failure_artifacts import resolve_artifact_path  # noqa: E402
+from resume_tailor.db import list_resume_attempts  # noqa: E402
 
 
 STATUS_OPTIONS = (
@@ -381,6 +383,67 @@ def render_summary_cards(summary):
         """
         for label, value in cards
     )
+
+
+def resolve_resume_path(value):
+    if not value:
+        return None
+    path = Path(value).expanduser()
+    try:
+        resolved = path.resolve(strict=False)
+    except OSError:
+        resolved = path
+    return resolved
+
+
+def render_resume_links(row):
+    link_specs = (
+        ("selected_resume_pdf_path", "Selected PDF", "selected-pdf"),
+        ("selected_resume_tex_path", "Selected TeX", "selected-tex"),
+        ("latest_resume_pdf_path", "Latest PDF", "latest-pdf"),
+        ("latest_resume_tex_path", "Latest TeX", "latest-tex"),
+        ("latest_resume_keywords_path", "Keywords", "keywords"),
+        ("latest_resume_job_description_path", "JD snapshot", "job-description"),
+    )
+    rendered = []
+    for field_name, label, artifact_kind in link_specs:
+        value = row.get(field_name)
+        if not value:
+            continue
+        rendered.append(
+            f'<div class="field"><div class="label">{html.escape(label)}</div>'
+            f'<div class="value mono"><a href="/api/jobs/{row["id"]}/resume/{artifact_kind}" target="_blank" rel="noreferrer">{format_text(value)}</a></div></div>'
+        )
+    if not rendered:
+        return '<div class="field"><div class="label">Resume artifacts</div><div class="value">No resume artifacts saved yet.</div></div>'
+    return "".join(rendered)
+
+
+def render_resume_attempts(attempts):
+    if not attempts:
+        return "<p>No resume attempts yet.</p>"
+    rows = []
+    for attempt in attempts:
+        rows.append(
+            f"""
+            <tr>
+              <td>{format_text(attempt.get('id'))}</td>
+              <td>{format_text(attempt.get('status'))}</td>
+              <td>{format_text(attempt.get('role_family'))}</td>
+              <td>{format_text(attempt.get('job_level'))}</td>
+              <td>{format_text(attempt.get('latest_result_kind'))}</td>
+              <td>{format_text(attempt.get('created_at'))}</td>
+            </tr>
+            """
+        )
+    return f"""
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>ID</th><th>Status</th><th>Family</th><th>Level</th><th>Kind</th><th>Created</th></tr></thead>
+        <tbody>{''.join(rows)}</tbody>
+      </table>
+    </div>
+    """
 
 
 def render_status_toolbar(active_status, *, source, limit, q="", sort="date_scraped", direction="desc"):
@@ -808,6 +871,31 @@ def api_job_artifact(job_id: int, artifact_kind: str):
     return FileResponse(artifact_path, media_type=media_type)
 
 
+@app.get("/api/jobs/{job_id}/resume/{artifact_kind}")
+def api_job_resume_artifact(job_id: int, artifact_kind: str):
+    row = get_job_by_id(job_id)
+    if not row:
+        raise HTTPException(status_code=404, detail="Job not found.")
+
+    field_map = {
+        "selected-pdf": ("selected_resume_pdf_path", "application/pdf"),
+        "selected-tex": ("selected_resume_tex_path", "application/x-tex"),
+        "latest-pdf": ("latest_resume_pdf_path", "application/pdf"),
+        "latest-tex": ("latest_resume_tex_path", "application/x-tex"),
+        "keywords": ("latest_resume_keywords_path", "application/json"),
+        "job-description": ("latest_resume_job_description_path", "text/plain; charset=utf-8"),
+    }
+    artifact_info = field_map.get(artifact_kind)
+    if artifact_info is None:
+        raise HTTPException(status_code=400, detail="Unsupported resume artifact kind.")
+
+    relative_path, media_type = artifact_info
+    artifact_path = resolve_resume_path(row.get(relative_path))
+    if artifact_path is None or not artifact_path.exists():
+        raise HTTPException(status_code=404, detail="Resume artifact not found.")
+    return FileResponse(artifact_path, media_type=media_type)
+
+
 @app.post("/api/jobs/{job_id}/requeue")
 def api_requeue_job(job_id: int):
     row = get_job_by_id(job_id)
@@ -889,6 +977,7 @@ def job_detail(job_id: int):
 
     status_class = html.escape(row.get("enrichment_status") or "unknown")
     description = row.get("description") or "No description saved."
+    resume_attempts = list_resume_attempts(job_id, limit=8)
     body = f"""
     <section class="hero">
       <h1>{format_text(row['title'])}</h1>
@@ -922,6 +1011,26 @@ def job_detail(job_id: int):
       <div class="panel">
         <h2>Last enrichment error</h2>
         <pre>{format_text(row.get('last_enrichment_error'))}</pre>
+      </div>
+      <div class="panel">
+        <h2>Resume generation</h2>
+        <div class="grid">
+          <div class="field"><div class="label">Resume status</div><div class="value">{format_text(row.get('resume_status'))}</div></div>
+          <div class="field"><div class="label">Latest attempt</div><div class="value">{format_text(row.get('latest_resume_attempt_id'))}</div></div>
+          <div class="field"><div class="label">Latest version</div><div class="value">{format_text(row.get('latest_resume_version_id'))}</div></div>
+          <div class="field"><div class="label">Role family</div><div class="value">{format_text(row.get('latest_resume_family'))}</div></div>
+          <div class="field"><div class="label">Job level</div><div class="value">{format_text(row.get('latest_resume_job_level'))}</div></div>
+          <div class="field"><div class="label">Generated at</div><div class="value mono">{format_text(row.get('latest_resume_generated_at'))}</div></div>
+          <div class="field"><div class="label">Fallback used</div><div class="value">{format_text(row.get('latest_resume_fallback_used'))}</div></div>
+          <div class="field"><div class="label">Flags</div><div class="value">{format_text(row.get('latest_resume_flags'))}</div></div>
+          <div class="field"><div class="label">Selected version</div><div class="value">{format_text(row.get('selected_resume_version_id'))}</div></div>
+          <div class="field"><div class="label">Ready for C3</div><div class="value">{format_text(row.get('selected_resume_ready_for_c3'))}</div></div>
+          {render_resume_links(row)}
+        </div>
+      </div>
+      <div class="panel">
+        <h2>Recent resume attempts</h2>
+        {render_resume_attempts(resume_attempts)}
       </div>
       <div class="panel">
         <h2>Failure artifacts</h2>

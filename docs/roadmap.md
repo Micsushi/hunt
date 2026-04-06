@@ -81,6 +81,12 @@ Current status:
   - review-surface artifact visibility
 - deployment notes for `server2` live in `docs/components/component1/stage3_server2_plan.md`
 - Component 1 deploys separately from later Component 2 and Component 3 work
+- remaining sign-off work for Component 1 is operational:
+  - keep discovery quality tight, especially for Indeed
+  - finish backlog drain
+  - observe one real artifact-producing failure end to end
+  - confirm Stage 6 deploys cleanly without manual review-container repair
+  - tune steady-state timer/backfill defaults on `server2`
 
 Doc:
 - `docs/components/component1/README.md`

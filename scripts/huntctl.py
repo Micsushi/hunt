@@ -179,6 +179,17 @@ def cmd_requeue_enrich(args):
     _run(command)
 
 
+def cmd_cleanup_indeed(args):
+    command = [PYTHON, "scripts/cleanup_indeed_irrelevant_rows.py"]
+    if args.apply:
+        command.append("--apply")
+    if args.include_non_new:
+        command.append("--include-non-new")
+    if args.limit is not None:
+        command.extend(["--limit", str(args.limit)])
+    _run(command)
+
+
 def cmd_backfill(args):
     command = [PYTHON, "scripts/backfill_enrichment.py", str(args.batch_size), "--source", args.source]
     if args.max_batches is not None:
@@ -205,6 +216,15 @@ def cmd_backfill(args):
 
 def cmd_review(_args):
     _run([PYTHON, "review_app.py"])
+
+
+def cmd_apply_prep(args):
+    command = [PYTHON, "scripts/c3_apply_prep.py", str(args.job_id)]
+    if args.embed_resume_data:
+        command.append("--embed-resume-data")
+    if args.output:
+        command.extend(["--output", args.output])
+    _run(command)
 
 
 def cmd_tests(args):
@@ -349,6 +369,15 @@ def build_parser():
     )
     requeue_enrich.set_defaults(func=cmd_requeue_enrich)
 
+    cleanup_indeed = subparsers.add_parser(
+        "cleanup-indeed",
+        help="Preview or delete currently stored irrelevant Indeed rows.",
+    )
+    cleanup_indeed.add_argument("--apply", action="store_true")
+    cleanup_indeed.add_argument("--include-non-new", action="store_true")
+    cleanup_indeed.add_argument("--limit", type=int, default=None)
+    cleanup_indeed.set_defaults(func=cmd_cleanup_indeed)
+
     backfill = subparsers.add_parser("backfill", help="Run enrichment backfill in batches with a checkpoint after each batch.")
     backfill.add_argument("--source", choices=["linkedin", "indeed", "all"], default="linkedin")
     backfill.add_argument("batch_size", type=int, nargs="?", default=100)
@@ -365,6 +394,15 @@ def build_parser():
 
     review = subparsers.add_parser("review", help="Run the local review app.")
     review.set_defaults(func=cmd_review)
+
+    apply_prep = subparsers.add_parser(
+        "apply-prep",
+        help="Build an explicit apply context payload for one job.",
+    )
+    apply_prep.add_argument("job_id", type=int)
+    apply_prep.add_argument("--embed-resume-data", action="store_true")
+    apply_prep.add_argument("--output", default="")
+    apply_prep.set_defaults(func=cmd_apply_prep)
 
     tests = subparsers.add_parser("tests", help="Run Hunt unit tests.")
     tests.add_argument("stage", choices=["1", "2", "3", "32", "all"], default="all", nargs="?")

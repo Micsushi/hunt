@@ -3,10 +3,262 @@
   <head>
     <meta charset="utf-8">
     <title>Hunt Apply Options</title>
+    <style>
+      body {
+        font-family: Arial, sans-serif;
+        margin: 0;
+        padding: 24px;
+      }
+
+      h1,
+      h2,
+      p {
+        margin: 0;
+      }
+
+      .page {
+        display: grid;
+        gap: 20px;
+        max-width: 960px;
+      }
+
+      .panel {
+        border: 1px solid #d0d7de;
+        border-radius: 8px;
+        padding: 16px;
+      }
+
+      form {
+        display: grid;
+        gap: 12px;
+        margin-top: 12px;
+      }
+
+      .grid {
+        display: grid;
+        gap: 12px;
+        grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+      }
+
+      label {
+        display: grid;
+        gap: 6px;
+        font-size: 14px;
+      }
+
+      input,
+      textarea,
+      select {
+        font: inherit;
+        padding: 8px;
+      }
+
+      textarea {
+        min-height: 96px;
+      }
+
+      .checkboxes {
+        display: grid;
+        gap: 8px;
+      }
+
+      .checkbox {
+        align-items: center;
+        display: flex;
+        gap: 8px;
+      }
+
+      .checkbox input {
+        margin: 0;
+      }
+
+      .actions {
+        display: flex;
+        gap: 12px;
+      }
+
+      button {
+        cursor: pointer;
+        padding: 8px 12px;
+      }
+
+      .status {
+        border-radius: 6px;
+        padding: 10px 12px;
+      }
+
+      .status.info {
+        background: #eff6ff;
+        color: #0f3d91;
+      }
+
+      .status.warn {
+        background: #fff8e6;
+        color: #8a5a00;
+      }
+    </style>
   </head>
   <body>
-    <h1>Hunt Apply Options</h1>
-    <p>Component 3 options scaffold.</p>
-    <script src="options.js"></script>
+    <div class="page">
+      <div>
+        <h1>Hunt Apply Options</h1>
+        <p>Stage 1 extension state for profile, resume, and settings.</p>
+      </div>
+
+      <div id="options-status" class="status info">Loading extension state...</div>
+
+      <section class="panel">
+        <h2>Behavior Settings</h2>
+        <form id="settings-form">
+          <div class="checkboxes">
+            <label class="checkbox">
+              <input id="autofill-on-load" name="autofillOnLoad" type="checkbox">
+              <span>Autofill on page load</span>
+            </label>
+            <label class="checkbox">
+              <input id="manual-fill-enabled" name="manualFillEnabled" type="checkbox">
+              <span>Manual fill enabled</span>
+            </label>
+            <label class="checkbox">
+              <input id="allow-generated-answers" name="allowGeneratedAnswers" type="checkbox">
+              <span>Allow generated answers</span>
+            </label>
+            <label class="checkbox">
+              <input id="flag-low-confidence-answers" name="flagLowConfidenceAnswers" type="checkbox">
+              <span>Flag low-confidence answers</span>
+            </label>
+            <label class="checkbox">
+              <input id="strip-long-dash" name="stripLongDash" type="checkbox">
+              <span>Strip long-dash punctuation</span>
+            </label>
+          </div>
+          <div class="actions">
+            <button type="submit">Save Settings</button>
+          </div>
+        </form>
+      </section>
+
+      <section class="panel">
+        <h2>Candidate Profile</h2>
+        <form id="profile-form">
+          <div class="grid">
+            <label>
+              Full name
+              <input id="profile-full-name" name="fullName" type="text">
+            </label>
+            <label>
+              Email
+              <input id="profile-email" name="email" type="email">
+            </label>
+            <label>
+              Phone
+              <input id="profile-phone" name="phone" type="text">
+            </label>
+            <label>
+              Location
+              <input id="profile-location" name="location" type="text">
+            </label>
+            <label>
+              LinkedIn URL
+              <input id="profile-linkedin-url" name="linkedinUrl" type="url">
+            </label>
+            <label>
+              GitHub URL
+              <input id="profile-github-url" name="githubUrl" type="url">
+            </label>
+            <label>
+              Website URL
+              <input id="profile-website-url" name="websiteUrl" type="url">
+            </label>
+          </div>
+          <div class="checkboxes">
+            <label class="checkbox">
+              <input id="profile-work-authorized" name="workAuthorized" type="checkbox">
+              <span>Work authorized</span>
+            </label>
+            <label class="checkbox">
+              <input id="profile-sponsorship-required" name="sponsorshipRequired" type="checkbox">
+              <span>Sponsorship required</span>
+            </label>
+            <label class="checkbox">
+              <input id="profile-willing-to-relocate" name="willingToRelocate" type="checkbox">
+              <span>Willing to relocate</span>
+            </label>
+            <label class="checkbox">
+              <input id="profile-open-to-any-location" name="openToAnyLocation" type="checkbox">
+              <span>Open to any location</span>
+            </label>
+            <label class="checkbox">
+              <input id="profile-salary-flexible" name="salaryFlexible" type="checkbox">
+              <span>Salary flexible</span>
+            </label>
+          </div>
+          <label>
+            Notes
+            <textarea id="profile-notes" name="notes"></textarea>
+          </label>
+          <div class="actions">
+            <button type="submit">Save Profile</button>
+          </div>
+        </form>
+      </section>
+
+      <section class="panel">
+        <h2>Default Resume</h2>
+        <form id="resume-form">
+          <div class="grid">
+            <label>
+              Label
+              <input id="resume-label" name="label" type="text">
+            </label>
+            <label>
+              Source type
+              <select id="resume-source-type" name="sourceType">
+                <option value="manual_default">manual_default</option>
+                <option value="c2_selected">c2_selected</option>
+              </select>
+            </label>
+            <label>
+              PDF path
+              <input id="resume-pdf-path" name="pdfPath" type="text">
+            </label>
+            <label>
+              TeX path
+              <input id="resume-tex-path" name="texPath" type="text">
+            </label>
+            <label>
+              Version id
+              <input id="resume-version-id" name="versionId" type="text">
+            </label>
+            <label>
+              Job id
+              <input id="resume-job-id" name="jobId" type="text">
+            </label>
+            <label>
+              Import PDF
+              <input id="resume-pdf-file" name="pdfFile" type="file" accept="application/pdf">
+            </label>
+          </div>
+          <div class="actions">
+            <button type="submit">Save Default Resume</button>
+          </div>
+        </form>
+      </section>
+
+      <section class="panel">
+        <h2>Apply Context Import</h2>
+        <form id="apply-context-form">
+          <label>
+            Apply context JSON
+            <textarea id="apply-context-json" name="applyContextJson"></textarea>
+          </label>
+          <div class="actions">
+            <button type="submit">Import Apply Context</button>
+            <button id="clear-imported-context" type="button">Clear Active Context</button>
+          </div>
+        </form>
+      </section>
+    </div>
+    <script type="module" src="options.js"></script>
   </body>
 </html>

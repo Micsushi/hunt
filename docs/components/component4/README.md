@@ -13,6 +13,10 @@ Component 4 should decide:
 
 OpenClaw is the current most likely first implementation of Component 4.
 
+This document is the stage plan.
+Implementation-oriented design notes and research-backed recommendations live in:
+- `docs/components/component4/design.md`
+
 ## Why Component 4 Should Be Separate
 
 Component 3 should remain the browser autofill engine.
@@ -44,6 +48,19 @@ Recommended role:
 Important rule:
 - C4 should consume the other components
 - it should not redefine their internal contracts ad hoc
+
+Recommended first execution style:
+- OpenClaw owns job selection, sequencing, and policy decisions
+- one shared Hunt apply-prep command resolves DB state and primes Component 3
+- Component 3 remains the deterministic browser autofill layer
+- final submit remains a separate explicit decision point
+
+That keeps browser-agent prompting narrow:
+- choose one job
+- fetch one explicit apply context
+- trigger one bounded browser action
+- inspect evidence
+- either continue or hand off
 
 ## Inputs
 
@@ -77,6 +94,10 @@ From Component 3:
 - handling blocked/manual-review paths
 - later notifications and summaries
 
+Recommended data ownership:
+- C4 owns orchestration runs, decisions, and submit approvals
+- C4 does not become the source of truth for job discovery, resume generation, or ATS selectors
+
 ## Shared Apply-Prep Command
 
 The recommended C4 interaction should not be:
@@ -102,6 +123,27 @@ Benefits:
 - less duplicated logic in OpenClaw prompts
 - fewer mismatches between DB state and browser state
 
+Recommended future command shape:
+
+```text
+hunt apply-prep --job-id <ID>
+```
+
+Minimum resolved output:
+- `job_id`
+- `apply_url`
+- `ats_type`
+- selected resume version id
+- selected resume path
+- best available JD snapshot path
+- relevant flags from C1/C2 that may affect apply behavior
+- C3-ready context path or payload id
+
+Recommended side effects:
+- write one explicit apply-context artifact for C3
+- optionally open the target page in the intended browser lane
+- record that an orchestration run has entered the apply-prep step
+
 ## Out Of Scope For Component 4
 
 Component 4 should not own:
@@ -114,48 +156,164 @@ Those responsibilities belong to Components 1, 2, and 3 respectively.
 
 ## Proposed Stages
 
-### Stage 0 : contract and boundaries
+### Stage 0 : contracts, schema, and policy boundaries
 
-- define the orchestration boundary
-- define what C4 may assume from C1, C2, and C3
-- define which final actions require explicit policy
+What to do:
+- lock the C4 boundary against C1, C2, and C3
+- define the minimum ready-to-apply contract
+- define which actions are always allowed versus approval-gated
+- add C4-owned persistence for orchestration runs and decisions
+
+Recommended deliverables:
+- `docs/components/component4/design.md`
+- one C4 state model, likely:
+  - `orchestration_runs`
+  - `orchestration_events`
+  - `submit_approvals`
+- one ready-job predicate based on existing C1/C2 state
+
+Minimum ready predicate:
+- C1 enrichment is in a normal done state
+- `apply_type = external_apply`
+- `auto_apply_eligible = 1`
+- `priority = 0`
+- C2 has a selected resume ready for C3
+- no active manual-review hold exists
+
+Exit criteria:
+- the repo has one documented definition of "ready for C4"
+- C4 persistence is separate from enrichment and application-attempt history
 
 ### Stage 1 : read-only orchestration view
 
-- inspect component state without mutating it
-- show whether a job is ready for downstream steps
+What to do:
+- build a read-only view of downstream readiness
+- show why a job is ready, blocked, or excluded
+- make it easy to audit why LinkedIn Easy Apply and manual-only rows are excluded
 
-### Stage 2 : trigger C3 intentionally
+Recommended output:
+- CLI or API summary of:
+  - ready jobs
+  - waiting-on-C2 jobs
+  - excluded Easy Apply jobs
+  - manual-only jobs
+  - blocked/manual-review jobs
 
-- choose a job
-- call the shared apply-prep command
-- invoke C3 autofill
-- capture the resulting state
+Exit criteria:
+- an operator can inspect C4 readiness without mutating queue state
+- the review surface can explain "why this job is not proceeding"
 
-Expected inputs to that command:
+### Stage 2 : shared apply-prep command
+
+What to do:
+- implement the single job-resolution command C4 will call
+- resolve the selected resume and apply URL from DB state
+- emit one explicit apply context for C3
+
+Inputs:
 - `job_id`
 
-Expected resolved outputs:
+Resolved outputs:
 - `apply_url`
+- `ats_type`
 - selected resume version id
 - selected resume file path
-- C3-ready context for that page/job
+- JD snapshot path
+- C3-ready context path or payload id
 
-### Stage 3 : manual-review routing
+Exit criteria:
+- OpenClaw does not need to hand-build a browser payload from raw DB fields
+- C3 can be primed from one explicit apply-prep result
 
-- detect blocked or flagged flows
-- route them to operator review instead of continuing blindly
+### Stage 3 : intentional C3 invocation
 
-### Stage 4 : submit policy
+What to do:
+- let C4 choose one job
+- run apply-prep
+- trigger C3 fill in a bounded, explicit way
+- save evidence and the result summary
 
-- define when submit is allowed
-- make submit decisions explicit and reviewable
+Recommended first policy:
+- fill only
+- no autonomous submit yet
 
-### Stage 5 : unattended runs
+Exit criteria:
+- one orchestration run can move a job from ready state to filled-with-evidence
+- C4 captures whether the result is:
+  - success and reviewable
+  - blocked
+  - suspicious
+  - failed
 
-- add bounded scheduling
-- add retry limits
-- add notifications and summaries later
+### Stage 4 : manual-review routing
+
+What to do:
+- define review-trigger conditions
+- route questionable flows away from unattended continuation
+- expose the exact reason for handoff
+
+Recommended initial review triggers:
+- login required
+- CAPTCHA / OTP / verification
+- unsupported ATS step
+- low-confidence generated answers
+- unexpected multi-page flow
+- missing required fields after fill
+- resume upload failure
+
+Exit criteria:
+- manual-review routing is explicit and auditable
+- C4 never silently continues through a suspicious browser flow
+
+### Stage 5 : submit policy and approval gate
+
+What to do:
+- define the policy for when final submit is allowed
+- separate autofill success from submit permission
+- record who or what approved the final submit decision
+
+Recommended first policy:
+- require explicit operator approval for every submit
+- allow fill and evidence capture without submit
+
+Later policy options:
+- per-ATS allowlist
+- per-company denylist
+- confidence/risk threshold rules
+- bounded unattended submit for narrow known-good flows
+
+Exit criteria:
+- submit is a first-class state transition, not a side effect
+- every submit attempt is tied to an approval record
+
+### Stage 6 : unattended orchestration runs
+
+What to do:
+- let OpenClaw or another runtime pick from the ready queue on a schedule
+- enforce concurrency, retry, and per-run limits
+- write summaries and notifications
+
+Recommended first unattended guardrails:
+- one active apply run at a time
+- max jobs per cycle
+- retry budget per job
+- cooldown after auth or anti-bot trouble
+- stop-the-world behavior for broken shared dependencies
+
+Exit criteria:
+- C4 can run continuously without blindly draining the queue
+- operators get enough summary state to trust or pause the system
+
+### Stage 7 : operational hardening and wider ATS coverage
+
+What to do:
+- expand beyond the first stable ATS family only after Workday-style flows are dependable
+- improve review surfaces, metrics, and artifacts
+- tune policy per ATS family
+
+Exit criteria:
+- C4 decisions remain inspectable as ATS coverage grows
+- growth happens by adapter and policy expansion, not by prompt sprawl
 
 ## Deployment Direction
 
@@ -166,9 +324,22 @@ For now that likely means:
 - separate deployment/runtime docs
 - separate operator controls from the C3 extension itself
 
+Recommended server shape:
+- separate OpenClaw runtime on `server2`
+- separate C4-facing config and secrets from Component 1 timers
+- separate operator controls from the C3 extension UI
+- separate deployment step in `ansible_homelab`
+
+Recommended first runtime responsibilities on `server2`:
+- read ready jobs from Hunt state
+- run one bounded orchestration task at a time
+- persist orchestration records outside the repo checkout
+- expose enough logs and artifacts for later review
+
 ## Related Docs
 
 - `docs/components/component3/README.md`
 - `docs/components/component3/design.md`
 - `docs/components/component2/design.md`
+- `docs/components/component4/design.md`
 - `docs/roadmap.md`

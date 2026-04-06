@@ -41,7 +41,12 @@ CREATE TABLE IF NOT EXISTS jobs (
     last_artifact_dir TEXT,
     last_artifact_screenshot_path TEXT,
     last_artifact_html_path TEXT,
-    last_artifact_text_path TEXT
+    last_artifact_text_path TEXT,
+    selected_resume_version_id TEXT,
+    selected_resume_pdf_path TEXT,
+    selected_resume_tex_path TEXT,
+    selected_resume_selected_at TEXT,
+    selected_resume_ready_for_c3 BOOLEAN
 )
 """
 
@@ -60,6 +65,11 @@ MIGRATION_COLUMNS = {
     "last_artifact_screenshot_path": "TEXT",
     "last_artifact_html_path": "TEXT",
     "last_artifact_text_path": "TEXT",
+    "selected_resume_version_id": "TEXT",
+    "selected_resume_pdf_path": "TEXT",
+    "selected_resume_tex_path": "TEXT",
+    "selected_resume_selected_at": "TEXT",
+    "selected_resume_ready_for_c3": "BOOLEAN",
 }
 
 INSERT_COLUMNS = (
@@ -1349,6 +1359,68 @@ def get_job_by_id(job_id):
         cursor.execute("SELECT * FROM jobs WHERE id = ?", (job_id,))
         row = cursor.fetchone()
         return dict(row) if row else None
+    finally:
+        conn.close()
+
+
+def get_apply_context_for_job(job_id):
+    job = get_job_by_id(job_id)
+    if not job:
+        return None
+
+    return {
+        "job_id": str(job["id"]),
+        "title": job.get("title") or "",
+        "company": job.get("company") or "",
+        "apply_url": job.get("apply_url") or "",
+        "job_url": job.get("job_url") or "",
+        "source": job.get("source") or "",
+        "ats_type": job.get("ats_type") or "unknown",
+        "priority": int(job.get("priority") or 0),
+        "apply_type": job.get("apply_type") or "unknown",
+        "auto_apply_eligible": int(job.get("auto_apply_eligible") or 0),
+        "description": job.get("description") or "",
+        "selected_resume_version_id": job.get("selected_resume_version_id") or "",
+        "selected_resume_pdf_path": job.get("selected_resume_pdf_path") or "",
+        "selected_resume_tex_path": job.get("selected_resume_tex_path") or "",
+        "selected_resume_selected_at": job.get("selected_resume_selected_at") or "",
+        "selected_resume_ready_for_c3": bool(job.get("selected_resume_ready_for_c3")),
+        "last_enrichment_error": job.get("last_enrichment_error") or "",
+        "enrichment_status": job.get("enrichment_status") or "",
+    }
+
+
+def update_selected_resume_for_job(
+    job_id,
+    *,
+    version_id,
+    pdf_path,
+    tex_path=None,
+    ready_for_c3=True,
+):
+    conn = get_connection()
+    try:
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            UPDATE jobs
+            SET selected_resume_version_id = ?,
+                selected_resume_pdf_path = ?,
+                selected_resume_tex_path = ?,
+                selected_resume_selected_at = CURRENT_TIMESTAMP,
+                selected_resume_ready_for_c3 = ?
+            WHERE id = ?
+            """,
+            (
+                version_id,
+                pdf_path,
+                tex_path,
+                1 if ready_for_c3 else 0,
+                job_id,
+            ),
+        )
+        conn.commit()
+        return cursor.rowcount
     finally:
         conn.close()
 

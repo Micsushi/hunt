@@ -57,6 +57,11 @@ See `agents/system_prompt.md` for the full agent contract (DB schema, status lif
 - Component 3 browser autofill plan: `docs/components/component3/README.md`
 - Component 4 orchestration plan: `docs/components/component4/README.md`
 
+Repo homes for later components:
+- `resume_tailor/` for Component 2 source and contracts
+- `apply_extension/` for Component 3 source and fixtures
+- `orchestration/` for Component 4 source and contracts
+
 ## Legacy Helpers
 
 Older one-off setup and run helpers now live under:
