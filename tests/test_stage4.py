@@ -536,6 +536,39 @@ class Stage4Tests(unittest.TestCase):
 
         self.assertIn("no X server / DISPLAY is available", str(ctx.exception))
 
+    def test_open_browser_context_does_not_relabel_errors_from_inside_context(self):
+        class FakeContext:
+            def close(self):
+                return None
+
+        class FakeBrowser:
+            def new_context(self):
+                return FakeContext()
+
+            def close(self):
+                return None
+
+        class FakeChromium:
+            def launch(self, **_kwargs):
+                return FakeBrowser()
+
+        class FakePlaywright:
+            chromium = FakeChromium()
+
+        class FakePlaywrightManager:
+            def __enter__(self):
+                return FakePlaywright()
+
+            def __exit__(self, exc_type, exc, tb):
+                return False
+
+        with patch.object(browser_runtime, "load_sync_playwright", return_value=lambda: FakePlaywrightManager()):
+            with self.assertRaises(linkedin_session.LinkedInSessionError) as ctx:
+                with browser_runtime.open_browser_context():
+                    raise linkedin_session.LinkedInSessionError("inner relogin failure")
+
+        self.assertEqual(str(ctx.exception), "inner relogin failure")
+
     def test_save_storage_state_interactively_ignores_browser_close_error_on_cancel(self):
         class FakeBrowser:
             def new_context(self):

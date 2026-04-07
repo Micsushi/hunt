@@ -17,6 +17,7 @@ LOGIN_URL = "https://www.linkedin.com/login"
 AUTO_RELOGIN_EMAIL_ENV = "LINKEDIN_EMAIL"
 AUTO_RELOGIN_PASSWORD_ENV = "LINKEDIN_PASSWORD"
 AUTO_RELOGIN_ENABLED_ENV = "LINKEDIN_AUTO_RELOGIN"
+AUTO_RELOGIN_DEBUG_ENV = "LINKEDIN_RELOGIN_DEBUG"
 LINKEDIN_ACCOUNTS_ENV = "LINKEDIN_ACCOUNTS"
 ACCOUNT_CHOOSER_SELECTORS = (
     "button:has-text('Continue as')",
@@ -104,6 +105,15 @@ def get_auto_relogin_credentials():
         "email": email,
         "password": password,
     }
+
+
+def _relogin_debug_enabled():
+    return _get_bool_env(AUTO_RELOGIN_DEBUG_ENV, False)
+
+
+def _log_relogin(message):
+    if _relogin_debug_enabled():
+        print(f"[linkedin_relogin] {message}", flush=True)
 
 
 def get_all_accounts():
@@ -333,6 +343,26 @@ def _login_form_available(page):
     )
 
 
+def _wait_for_login_surface(page, *, email=None, timeout_ms=30000, poll_ms=500):
+    remaining = max(timeout_ms, poll_ms)
+    while remaining > 0:
+        sign_in_other = _try_sign_in_another_account(page, timeout_ms=poll_ms)
+        email_input = page.locator("input[name='session_key']")
+        password_input = page.locator("input[name='session_password']")
+        if email_input.count() and password_input.count():
+            _log_relogin("email/password login form is available")
+            return "login_form"
+        chooser = _try_account_chooser_sign_in(page, email=email, timeout_ms=poll_ms)
+        if chooser:
+            _log_relogin(f"account chooser result: {chooser}")
+            return chooser
+        if sign_in_other:
+            _log_relogin("clicked 'Sign in using another account' but login form is still not visible yet")
+        page.wait_for_timeout(poll_ms)
+        remaining -= poll_ms
+    return None
+
+
 def _try_account_chooser_sign_in(page, *, email=None, timeout_ms=30000):
     for selector in ACCOUNT_CHOOSER_SELECTORS:
         locator = page.locator(selector)
@@ -345,6 +375,7 @@ def _try_account_chooser_sign_in(page, *, email=None, timeout_ms=30000):
         try:
             locator.first.click(timeout=timeout_ms)
             page.wait_for_timeout(1500)
+            _log_relogin(f"clicked chooser selector: {selector}")
         except Exception:
             continue
         if _login_form_available(page):
@@ -359,6 +390,7 @@ def _try_account_chooser_sign_in(page, *, email=None, timeout_ms=30000):
             if locator.count():
                 locator.first.click(timeout=timeout_ms)
                 page.wait_for_timeout(1500)
+                _log_relogin("clicked chooser using exact email text match")
                 if _login_form_available(page):
                     return "login_form"
                 return "clicked"
@@ -383,6 +415,7 @@ def _try_account_chooser_sign_in(page, *, email=None, timeout_ms=30000):
                 if locator.count():
                     locator.first.click(timeout=timeout_ms)
                     page.wait_for_timeout(1500)
+                    _log_relogin(f"clicked welcome-back fallback selector: {sel}")
                     if _login_form_available(page):
                         return "login_form"
                     return "clicked"
@@ -405,6 +438,7 @@ def _try_sign_in_another_account(page, *, timeout_ms=30000):
             if locator.count():
                 locator.first.click(timeout=timeout_ms)
                 page.wait_for_timeout(1500)
+                _log_relogin(f"clicked alternate sign-in selector: {selector}")
                 return True
         except Exception:
             continue
@@ -412,49 +446,42 @@ def _try_sign_in_another_account(page, *, timeout_ms=30000):
 
 
 def _submit_login_form(page, *, email, password, timeout_ms=30000):
+    _log_relogin(f"starting relogin on url={page.url}")
     # Give LinkedIn's login surface a moment to hydrate before chooser detection.
     page.wait_for_timeout(1000)
     email_input = page.locator("input[name='session_key']")
     password_input = page.locator("input[name='session_password']")
 
-    # Prefer the deterministic email/password flow when LinkedIn offers
-    # "Sign in using another account" on welcome-back screens.
     if not email_input.count() or not password_input.count():
-        _try_sign_in_another_account(page, timeout_ms=timeout_ms)
+        _log_relogin("login form not visible yet; waiting for login surface")
+        surface = _wait_for_login_surface(page, email=email, timeout_ms=min(timeout_ms, 5000))
         email_input = page.locator("input[name='session_key']")
         password_input = page.locator("input[name='session_password']")
-
-    chooser_result = None
-    if not email_input.count() or not password_input.count():
-        chooser_result = _try_account_chooser_sign_in(page, email=email, timeout_ms=timeout_ms)
-        if chooser_result == "clicked":
+        if surface == "clicked":
             return "chooser_clicked"
-        email_input = page.locator("input[name='session_key']")
-        password_input = page.locator("input[name='session_password']")
 
     if not email_input.count() or not password_input.count():
+        _log_relogin("login surface still unavailable; navigating directly to LOGIN_URL and retrying")
         page.goto(LOGIN_URL, wait_until="domcontentloaded", timeout=timeout_ms)
         page.wait_for_timeout(1000)
-        _try_sign_in_another_account(page, timeout_ms=timeout_ms)
+        surface = _wait_for_login_surface(page, email=email, timeout_ms=min(timeout_ms, 5000))
         email_input = page.locator("input[name='session_key']")
         password_input = page.locator("input[name='session_password']")
-
-    if not email_input.count() or not password_input.count():
-        chooser_result = _try_account_chooser_sign_in(page, email=email, timeout_ms=timeout_ms)
-        if chooser_result == "clicked":
+        if surface == "clicked":
             return "chooser_clicked"
-        email_input = page.locator("input[name='session_key']")
-        password_input = page.locator("input[name='session_password']")
 
     submit_button = page.locator("button[type='submit']")
 
     if not email_input.count() or not password_input.count():
+        _log_relogin(f"login form unavailable after retries; final url={page.url}")
         raise LinkedInSessionError(
             "LinkedIn login form or account chooser was not available for auto relogin."
         )
     if not submit_button.count():
+        _log_relogin(f"submit button unavailable on url={page.url}")
         raise LinkedInSessionError("LinkedIn login submit button was not available for auto relogin.")
 
+    _log_relogin("filling email/password form and submitting")
     email_input.first.fill(email, timeout=timeout_ms)
     password_input.first.fill(password, timeout=timeout_ms)
     submit_button.first.click(timeout=timeout_ms)
@@ -466,7 +493,9 @@ def _attempt_auto_relogin_in_context(context, target_path, *, email, password, t
     page = context.new_page()
     try:
         page.goto(LOGIN_VERIFICATION_URL, wait_until="domcontentloaded", timeout=timeout_ms)
+        _log_relogin(f"opened verification url; current url={page.url}")
         if not page_looks_logged_out(page) and _feed_loaded(page):
+            _log_relogin("existing session already reaches feed")
             _verify_session_and_save(context, target_path, timeout_ms=timeout_ms)
             return "session_reused"
 

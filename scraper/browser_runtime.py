@@ -60,11 +60,12 @@ def open_browser_context(*, headless=True, slow_mo=0, browser_channel=None, stor
             if storage_state:
                 context_kwargs["storage_state"] = storage_state
             context = browser.new_context(**context_kwargs)
-            yield context
         except BrowserRuntimeError:
             raise
         except Exception as exc:
             raise BrowserRuntimeError(_friendly_browser_launch_error(exc, headless=headless)) from exc
+        try:
+            yield context
         finally:
             if context is not None:
                 context.close()
