@@ -3,13 +3,11 @@ import argparse
 import os
 import sys
 
-
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-SCRAPER_DIR = os.path.join(REPO_ROOT, "scraper")
-sys.path.insert(0, SCRAPER_DIR)
+sys.path.insert(0, REPO_ROOT)
 
-from db import get_linkedin_queue_summary  # noqa: E402
-from enrich_linkedin import process_batch  # noqa: E402
+from hunter.db import get_linkedin_queue_summary  # noqa: E402
+from hunter.enrich_linkedin import process_batch  # noqa: E402
 
 
 def _is_interactive():
@@ -30,13 +28,22 @@ def main():
     parser = argparse.ArgumentParser(
         description="Run LinkedIn enrichment backfill in batches with an operator checkpoint after each batch."
     )
-    parser.add_argument("batch_size", type=int, nargs="?", default=100, help="Rows to process per batch.")
-    parser.add_argument("--max-batches", type=int, default=0, help="Optional max number of batches; 0 means no limit.")
+    parser.add_argument(
+        "batch_size", type=int, nargs="?", default=100, help="Rows to process per batch."
+    )
+    parser.add_argument(
+        "--max-batches",
+        type=int,
+        default=0,
+        help="Optional max number of batches; 0 means no limit.",
+    )
     parser.add_argument("--storage-state", help="Override LinkedIn storage state path.")
     parser.add_argument("--channel", default=None, help="Playwright browser channel, e.g. chrome.")
     parser.add_argument("--timeout-ms", type=int, default=45000)
     parser.add_argument("--slow-mo", type=int, default=0)
-    parser.add_argument("--headful", action="store_true", help="Use a visible browser for the first pass too.")
+    parser.add_argument(
+        "--headful", action="store_true", help="Use a visible browser for the first pass too."
+    )
     parser.add_argument(
         "--ui-verify-blocked",
         action="store_true",
@@ -106,7 +113,9 @@ def main():
                 print(f"  {error_code}: {count}")
 
         if summary["stop_error_code"]:
-            print(f"[backfill] Stopping because a hard-stop error occurred: {summary['stop_error_code']}")
+            print(
+                f"[backfill] Stopping because a hard-stop error occurred: {summary['stop_error_code']}"
+            )
             return 1
 
         if summary["attempted"] == 0:

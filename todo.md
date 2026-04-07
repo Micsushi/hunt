@@ -5,10 +5,10 @@ This document is the live cross-component fix list.
 Use it to track the remaining work needed to move the system from "implemented" to "operationally complete."
 
 Deployment note:
-- Component 1, Component 2, Component 3, and Component 4 should continue to deploy through separate Ansible steps/stages.
-- Do not treat this list as a signal to fold later components into the current Component 1 Stage 6 deployment.
+- C1 (Hunter), C2 (Trapper), C3 (Executioner), and C4 (Coordinator) should continue to deploy through separate Ansible steps/stages.
+- Do not treat this list as a signal to fold later components into the current C1 (Hunter) Stage 6 deployment.
 
-## Component 1 : Discovery And Enrichment
+## C1 (Hunter) : Discovery And Enrichment
 
 Status:
 - feature-complete
@@ -55,7 +55,7 @@ Done means:
 - Ansible deploy is reproducible without manual container repair
 - review app and metrics are stable
 
-## Component 2 : Resume Tailoring
+## C2 (Trapper) : Resume Tailoring
 
 Status:
 - initial local runtime exists
@@ -91,7 +91,7 @@ Done means:
 - one-page gating is stable
 - selected resume state is easy for C3/C4 to consume
 
-## Component 3 : Browser Autofill Extension
+## C3 (Executioner) : Browser Autofill Extension
 
 Status:
 - initial local extension implementation exists
@@ -134,14 +134,14 @@ Done means:
 - selected resume handoff is explicit and stable
 - manual and orchestrated use both work
 
-## Component 4 : Orchestration And Submit Control
+## C4 (Coordinator) : Orchestration And Submit Control
 
 Status:
-- partial local runtime now exists under `orchestration/`
+- partial local runtime now exists under `coordinator/`
 - still not ready for production or server deployment
 
 What still needs to be fixed or completed:
-- rewrite and expand the Component 4 test suite
+- rewrite and expand the C4 (Coordinator) test suite
   - replace the placeholder `tests/test_component4_cli.py`
   - add stage-based tests for:
     - readiness reason codes
@@ -151,7 +151,7 @@ What still needs to be fixed or completed:
     - submit approval and final submitted transitions
     - scheduler `pick-next` blocking behavior
 - finish tightening the shared apply-prep seam
-  - treat `python -m orchestration.cli apply-prep` as the canonical C4 seam
+  - treat `python -m coordinator.cli apply-prep` as the canonical C4 seam
   - stop pointing shared-flow docs at older helper scripts as if they were the main boundary
   - expose the shared C4 commands more clearly through `scripts/huntctl.py`
 - complete the current runtime checkpoint into a dependable local flow

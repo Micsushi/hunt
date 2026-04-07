@@ -1,12 +1,12 @@
-# Component 4 : Design And Research Notes
+# C4 (Coordinator) : Design And Research Notes
 
 ## Purpose
 
-This document turns the high-level Component 4 idea into an implementation plan.
+This document turns the high-level C4 (Coordinator) idea into an implementation plan.
 
 It answers:
-- what Component 4 should do first
-- what should stay outside Component 4
+- what C4 (Coordinator) should do first
+- what should stay outside C4 (Coordinator)
 - how OpenClaw most likely fits
 - what browser-agent patterns are worth copying
 - what concrete repo work should happen stage by stage
@@ -17,17 +17,17 @@ The current intended first implementation remains:
 But the important design choice is not "use OpenClaw everywhere."
 It is:
 - use OpenClaw for orchestration and policy
-- keep deterministic browser execution in Component 3
+- keep deterministic browser execution in C3 (Executioner)
 - keep final submit behind an explicit gate
 
 ## Recommended Product Boundary
 
-Component 4 should be the control plane for apply work.
+C4 (Coordinator) should be the control plane for apply work.
 
 It should decide:
 - which job is eligible right now
 - whether the job should proceed
-- whether Component 3 should fill
+- whether C3 (Executioner) should fill
 - whether the run should stop for review
 - whether final submit is allowed
 
@@ -107,18 +107,18 @@ Implication for Hunt:
 
 ### Roles
 
-Component 1:
+C1 (Hunter):
 - decides job discovery and enrichment state
 - owns `apply_url`, `apply_type`, `auto_apply_eligible`, `ats_type`
 
-Component 2:
+C2 (Trapper):
 - decides which resume is selected for downstream use
 - owns selected resume version/path
 
-Component 3:
+C3 (Executioner):
 - owns ATS-specific browser autofill and evidence capture
 
-Component 4:
+C4 (Coordinator):
 - owns sequencing, gating, routing, and submit policy
 
 ### First-class C4 objects
@@ -170,7 +170,7 @@ Recommended `submit_approvals` fields:
 
 ### 1. Ready-job selector
 
-Component 4 needs one canonical ready predicate.
+C4 (Coordinator) needs one canonical ready predicate.
 
 Recommended initial rule:
 - C1 enrichment is `done` or equivalent normal verified-done state
@@ -200,7 +200,7 @@ Recommended responsibilities:
 - return machine-readable context for C3 or OpenClaw
 
 Current local checkpoint:
-- `python -m orchestration.cli apply-prep --job-id <ID>` already:
+- `python -m coordinator.cli apply-prep --job-id <ID>` already:
   - evaluates readiness
   - creates an orchestration run
   - writes `apply_context.json`
@@ -408,21 +408,21 @@ It also postpones the riskiest part:
 
 ## Deployment Direction
 
-Component 4 should stay a separate deployment step in `ansible_homelab`.
+C4 (Coordinator) should stay a separate deployment step in `ansible_homelab`.
 
 Recommended first deployment shape on `server2`:
 - separate OpenClaw runtime or service lane
 - separate C4 env/config
 - runtime storage outside the git checkout
-- no coupling to the current Component 1 timer unit
+- no coupling to the current C1 (Hunter) timer unit
 
 Recommended runtime storage root:
-- `/home/michael/data/hunt/orchestration`
+- `/home/michael/data/hunt/coordinator`
 
 Possible layout:
 
 ```text
-/home/michael/data/hunt/orchestration/
+/home/michael/data/hunt/coordinator/
   runs/
     <run_id>/
       apply_context.json

@@ -3,13 +3,11 @@ import argparse
 import os
 import sys
 
-
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-SCRAPER_DIR = os.path.join(REPO_ROOT, "scraper")
-sys.path.insert(0, SCRAPER_DIR)
+sys.path.insert(0, REPO_ROOT)
 
-from db import get_connection, init_db  # noqa: E402
-from indeed_filters import matches_indeed_category  # noqa: E402
+from hunter.db import get_connection, init_db  # noqa: E402
+from hunter.indeed_filters import matches_indeed_category  # noqa: E402
 
 
 def parse_args():
@@ -64,9 +62,7 @@ def find_irrelevant_indeed_rows(*, include_non_new=False, limit=None):
         ).fetchall()
 
         return [
-            dict(row)
-            for row in rows
-            if not matches_indeed_category(row["title"], row["category"])
+            dict(row) for row in rows if not matches_indeed_category(row["title"], row["category"])
         ]
     finally:
         conn.close()

@@ -1,5 +1,5 @@
-import math
 import importlib
+import math
 import os
 import sqlite3
 import sys
@@ -8,20 +8,27 @@ import types
 import unittest
 from unittest.mock import patch
 
-import pandas as pd
-
-
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-SCRAPER_DIR = os.path.join(REPO_ROOT, "scraper")
-sys.path.insert(0, SCRAPER_DIR)
+sys.path.insert(0, REPO_ROOT)
 
 jobspy_stub = types.ModuleType("jobspy")
 jobspy_stub.scrape_jobs = lambda **kwargs: None
 sys.modules.setdefault("jobspy", jobspy_stub)
 
-import db
-import config as config_module
-import scraper as scraper_module
+from hunter import config as config_module  # noqa: E402
+from hunter import db  # noqa: E402
+from hunter import scraper as discovery  # noqa: E402  # C1 (Hunter) discovery module
+
+
+class FakeDf:
+    def __init__(self, rows):
+        self._rows = rows
+
+    def iterrows(self):
+        yield from enumerate(self._rows)
+
+    def __len__(self):
+        return len(self._rows)
 
 
 OLD_JOBS_TABLE_SQL = """
@@ -52,12 +59,12 @@ class Stage1Tests(unittest.TestCase):
         return path
 
     def test_normalize_optional_str_handles_missing_values(self):
-        self.assertIsNone(scraper_module.normalize_optional_str(None))
-        self.assertIsNone(scraper_module.normalize_optional_str(""))
-        self.assertIsNone(scraper_module.normalize_optional_str("   "))
-        self.assertIsNone(scraper_module.normalize_optional_str(math.nan))
+        self.assertIsNone(discovery.normalize_optional_str(None))
+        self.assertIsNone(discovery.normalize_optional_str(""))
+        self.assertIsNone(discovery.normalize_optional_str("   "))
+        self.assertIsNone(discovery.normalize_optional_str(math.nan))
         self.assertEqual(
-            scraper_module.normalize_optional_str(" https://boards.greenhouse.io/acme/jobs/1 "),
+            discovery.normalize_optional_str(" https://boards.greenhouse.io/acme/jobs/1 "),
             "https://boards.greenhouse.io/acme/jobs/1",
         )
 
@@ -81,7 +88,7 @@ class Stage1Tests(unittest.TestCase):
         importlib.reload(config_module)
 
     def test_scrape_single_keeps_linkedin_rows_pending_for_browser_enrichment(self):
-        jobs_df = pd.DataFrame(
+        jobs_df = FakeDf(
             [
                 {
                     "title": "Software Engineer",
@@ -97,8 +104,12 @@ class Stage1Tests(unittest.TestCase):
             ]
         )
 
-        with patch.object(scraper_module, "scrape_jobs", return_value=jobs_df):
-            jobs = scraper_module.scrape_single("linkedin", "software engineer", "Canada", "engineering")
+        jobspy_fake = types.ModuleType("jobspy")
+        jobspy_fake.scrape_jobs = lambda **_kwargs: jobs_df
+        with patch.dict(sys.modules, {"jobspy": jobspy_fake}):
+            jobs = discovery.scrape_single(
+                "linkedin", "software engineer", "Canada", "engineering"
+            )
 
         self.assertEqual(len(jobs), 1)
         job = jobs[0]
@@ -111,7 +122,7 @@ class Stage1Tests(unittest.TestCase):
         self.assertEqual(job["ats_type"], "greenhouse")
 
     def test_scrape_single_treats_nan_feed_values_as_missing(self):
-        jobs_df = pd.DataFrame(
+        jobs_df = FakeDf(
             [
                 {
                     "title": "Software Engineer",
@@ -127,8 +138,12 @@ class Stage1Tests(unittest.TestCase):
             ]
         )
 
-        with patch.object(scraper_module, "scrape_jobs", return_value=jobs_df):
-            jobs = scraper_module.scrape_single("linkedin", "software engineer", "Canada", "engineering")
+        jobspy_fake = types.ModuleType("jobspy")
+        jobspy_fake.scrape_jobs = lambda **_kwargs: jobs_df
+        with patch.dict(sys.modules, {"jobspy": jobspy_fake}):
+            jobs = discovery.scrape_single(
+                "linkedin", "software engineer", "Canada", "engineering"
+            )
 
         self.assertEqual(len(jobs), 1)
         job = jobs[0]
@@ -139,7 +154,7 @@ class Stage1Tests(unittest.TestCase):
         self.assertEqual(job["enrichment_status"], "pending")
 
     def test_scrape_single_filters_unrelated_indeed_product_false_positive(self):
-        jobs_df = pd.DataFrame(
+        jobs_df = FakeDf(
             [
                 {
                     "title": "Cashier",
@@ -155,13 +170,17 @@ class Stage1Tests(unittest.TestCase):
             ]
         )
 
-        with patch.object(scraper_module, "scrape_jobs", return_value=jobs_df):
-            jobs = scraper_module.scrape_single("indeed", "associate product manager", "Canada", "product")
+        jobspy_fake = types.ModuleType("jobspy")
+        jobspy_fake.scrape_jobs = lambda **_kwargs: jobs_df
+        with patch.dict(sys.modules, {"jobspy": jobspy_fake}):
+            jobs = discovery.scrape_single(
+                "indeed", "associate product manager", "Canada", "product"
+            )
 
         self.assertEqual(jobs, [])
 
     def test_scrape_single_keeps_relevant_indeed_product_title(self):
-        jobs_df = pd.DataFrame(
+        jobs_df = FakeDf(
             [
                 {
                     "title": "Associate Product Manager",
@@ -177,8 +196,12 @@ class Stage1Tests(unittest.TestCase):
             ]
         )
 
-        with patch.object(scraper_module, "scrape_jobs", return_value=jobs_df):
-            jobs = scraper_module.scrape_single("indeed", "associate product manager", "Canada", "product")
+        jobspy_fake = types.ModuleType("jobspy")
+        jobspy_fake.scrape_jobs = lambda **_kwargs: jobs_df
+        with patch.dict(sys.modules, {"jobspy": jobspy_fake}):
+            jobs = discovery.scrape_single(
+                "indeed", "associate product manager", "Canada", "product"
+            )
 
         self.assertEqual(len(jobs), 1)
         self.assertEqual(jobs[0]["title"], "Associate Product Manager")
@@ -366,8 +389,8 @@ class Stage1Tests(unittest.TestCase):
             )
 
             row = db.get_job_by_id(1)
-            self.assertEqual(inserted, "inserted")
-            self.assertEqual(refreshed, "updated")
+            self.assertEqual(inserted[0], "inserted")
+            self.assertEqual(refreshed[0], "updated")
             self.assertEqual(row["apply_url"], "https://job-boards.greenhouse.io/acme/jobs/42")
             self.assertEqual(row["apply_host"], "job-boards.greenhouse.io")
             self.assertEqual(row["ats_type"], "greenhouse")
@@ -382,7 +405,7 @@ class Stage1Tests(unittest.TestCase):
     def test_scrape_can_trigger_post_scrape_enrichment(self):
         path = self.make_temp_db_path()
         old_db_path = db.DB_PATH
-        jobs_df = pd.DataFrame(
+        jobs_df = FakeDf(
             [
                 {
                     "title": "Software Engineer",
@@ -401,13 +424,21 @@ class Stage1Tests(unittest.TestCase):
         try:
             db.DB_PATH = path
 
-            with patch.object(scraper_module, "SEARCH_TERMS", {"engineering": ["software engineer"]}), \
-                 patch.object(scraper_module, "LOCATIONS", ["Canada"]), \
-                 patch.object(scraper_module, "SITES", ["linkedin"]), \
-                 patch.object(scraper_module, "MAX_WORKERS", 1), \
-                 patch.object(scraper_module, "scrape_jobs", return_value=jobs_df), \
-                 patch.object(scraper_module, "run_pending_linkedin_enrichment", return_value=0) as mock_enrich:
-                summary = scraper_module.scrape(
+            jobspy_fake = types.ModuleType("jobspy")
+            jobspy_fake.scrape_jobs = lambda **_kwargs: jobs_df
+            with (
+                patch.object(
+                    discovery, "SEARCH_TERMS", {"engineering": ["software engineer"]}
+                ),
+                patch.object(discovery, "LOCATIONS", ["Canada"]),
+                patch.object(discovery, "SITES", ["linkedin"]),
+                patch.object(discovery, "MAX_WORKERS", 1),
+                patch.dict(sys.modules, {"jobspy": jobspy_fake}),
+                patch.object(
+                    discovery, "run_pending_linkedin_enrichment", return_value=0
+                ) as mock_enrich,
+            ):
+                summary = discovery.scrape(
                     enrich_pending=True,
                     enrich_limit=5,
                     enrichment_headless=True,

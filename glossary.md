@@ -1,4 +1,4 @@
-# Component 2 : Glossary
+# C2 (Trapper) : Glossary
 
 ## Purpose
 
@@ -8,25 +8,25 @@ This file standardizes the shorthand and terms used across the Hunt docs so futu
 
 ### C1
 
-Component 1.
+C1 (Hunter).
 
 In this repo, C1 is job discovery and enrichment.
 
 ### C2
 
-Component 2.
+C2 (Trapper).
 
 In this repo, C2 is resume tailoring.
 
 ### C3
 
-Component 3.
+C3 (Executioner).
 
 In this repo, C3 is the browser autofill extension and apply-assistance layer.
 
 ### C4
 
-Component 4.
+C4 (Coordinator).
 
 In this repo, C4 is the higher-level orchestration and submit-control layer.
 
@@ -37,8 +37,8 @@ OpenClaw is the current most likely first implementation of C4.
 Stage numbers inside the currently discussed component unless the doc explicitly says otherwise.
 
 Example:
-- `C2 S1` means Component 2 Stage 1
-- `C1 S4` means Component 1 Stage 4
+- `C2 S1` means C2 (Trapper) Stage 1
+- `C1 S4` means C1 (Hunter) Stage 4
 
 ### JD
 

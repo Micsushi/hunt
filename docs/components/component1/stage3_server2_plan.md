@@ -1,40 +1,47 @@
-# Component 1 : Stage 3 Server2 Deployment Plan
+# C1 (Hunter) : Stage 3 Server2 Deployment Plan
+
+## Naming (read this first)
+
+- **C1 (Hunter)** is posting discovery and enrichment. Runtime code lives in the **`hunter/`** Python package (the former **`scraper/`** tree was renamed).
+- **`hunter/scraper.py`** is the **discovery script** inside that package (historical filename), not a second component.
+- On the server, Ansible **`playbooks/tasks/scraper.yml`** is still the filename for the **C1 (Hunter)** deploy task; systemd **`hunt-scraper.service`** / **`hunt-scraper.timer`** are **legacy unit names** that run **`python hunter/scraper.py`**.
+- **C2 (Trapper)** = `trapper/`, **C3 (Executioner)** = extension, **C4 (Coordinator)** = `coordinator/`. Full table: **`docs/NAMING.md`**.
 
 ## Purpose
 
-This document captures how Component 1 should run in production across the two related repos:
+This document captures how **C1 (Hunter)** should run in production across the two related repos:
 
 - Hunt repo:
   - discovery, enrichment, queue logic, and later handoff to resume/autofill/orchestration components
 - `ansible_homelab` repo:
   - deployment of the Hunt runtime and related support services onto `server2`
 
-The main goal of Stage 3 is to make Component 1 run continuously and safely on the job-agent server without requiring constant manual babysitting.
+The main goal of Stage 3 is to make **C1 (Hunter)** run continuously and safely on the job-agent server without requiring constant manual babysitting.
 
 ## Current Cross-Repo Situation
 
 ### Hunt repo
 
-Current Component 1 state in this repo:
+Current **C1 (Hunter)** state in this repo:
 - Stage 1 is complete
 - Stage 2 is complete
 - Stage 3 runtime code now exists in the Hunt repo
-- `scraper/scraper.py` now supports discovery followed by a post-scrape supported-source enrichment pass with LinkedIn-first priority
-- `scraper/runner.py` can loop discovery + enrichment continuously
-- `scraper/enrich_linkedin.py` supports:
+- `hunter/scraper.py` now supports discovery followed by a post-scrape supported-source enrichment pass with LinkedIn-first priority
+- `hunter/runner.py` can loop discovery + enrichment continuously
+- `hunter/enrich_linkedin.py` supports:
   - one-job enrichment
   - batch enrichment
   - blocked/security statuses
   - `--ui-verify`
   - `--ui-verify-blocked`
-- `scraper/enrich_indeed.py` now supports:
+- `hunter/enrich_indeed.py` now supports:
   - one-job enrichment
   - batch enrichment
   - an HTTP-first path
   - `--ui-verify` for a visible browser rerun
   - `--ui-verify-blocked` for browser-fixable failures after the first pass
-- `scraper/browser_runtime.py` now provides the shared Playwright browser/context layer used by supported UI/browser fallback flows
-- `scraper/enrichment_policy.py` now defines retry and backoff behavior for unattended runs
+- `hunter/browser_runtime.py` now provides the shared Playwright browser/context layer used by supported UI/browser fallback flows
+- `hunter/enrichment_policy.py` now defines retry and backoff behavior for unattended runs
 - `scripts/queue_health.py` now exposes queue-health checks for operators
 - `review_app.py` now provides the minimal browser-facing review/control-plane service
 - pending rows discovered in the current scrape are now prioritized ahead of older backlog rows
@@ -62,10 +69,10 @@ Server target:
 The current Ansible deployment for Hunt is systemd-based, not Docker-based.
 
 Important component-scope note:
-- the current `job_agent` Stage 6 deployment is the Component 1 deployment step
-- later Component 2 runtime/deployment should be added as a separate Ansible step/stage
-- later Component 3 runtime should be added as a separate Ansible step/stage
-- later Component 4 / OpenClaw-driven orchestration runtime should be added as a separate Ansible step/stage
+- the current `job_agent` Stage 6 deployment is the C1 (Hunter) deployment step
+- later C2 (Trapper) runtime/deployment should be added as a separate Ansible step/stage
+- later C3 (Executioner) runtime should be added as a separate Ansible step/stage
+- later C4 (Coordinator) / OpenClaw-driven orchestration runtime should be added as a separate Ansible step/stage
 
 From `playbooks/tasks/scraper.yml` in `ansible_homelab`:
 - installs `git`, `python3-venv`, `python3-pip`, and `sqlite3`
@@ -74,7 +81,7 @@ From `playbooks/tasks/scraper.yml` in `ansible_homelab`:
 - creates the Python virtualenv at:
   - `/home/{{ username }}/hunt/.venv`
 - installs Python dependencies from:
-  - `{{ scraper_dir }}/scraper/requirements.txt`
+  - `{{ scraper_dir }}/hunter/requirements.txt`
 - deploys:
   - `/etc/systemd/system/hunt-scraper.service`
   - `/etc/systemd/system/hunt-scraper.timer`
@@ -82,7 +89,7 @@ From `playbooks/tasks/scraper.yml` in `ansible_homelab`:
   - `{{ scraper_interval_minutes }}` minutes
 
 Important current service command:
-- `ExecStart={{ scraper_dir }}/.venv/bin/python scraper/scraper.py`
+- `ExecStart={{ scraper_dir }}/.venv/bin/python hunter/scraper.py`
 
 Important runtime-path note:
 - the live SQLite DB and Playwright browser cache should live outside the git checkout
@@ -91,7 +98,7 @@ Important runtime-path note:
 - the repo-local `~/hunt/hunt.db` may exist during manual debugging, but it is not the production runtime DB
 - manual SQLite checks and debug scripts on `server2` should point at `/home/michael/data/hunt/hunt.db`
 
-This matters because `scraper.py` now triggers post-scrape enrichment by default, so the deployed service behavior has effectively become:
+This matters because **`hunter/scraper.py`** (C1 discovery entrypoint) now triggers post-scrape enrichment by default, so the deployed service behavior has effectively become:
 - discover jobs
 - add/update rows in SQLite
 - enrich pending LinkedIn rows
@@ -171,7 +178,7 @@ Purpose:
 
 Recommended tools:
 - Sunshine for remote desktop access to `server2`
-- `python scraper/enrich_linkedin.py --job-id <ID> --channel chrome --ui-verify`
+- `python hunter/enrich_linkedin.py --job-id <ID> --channel chrome --ui-verify`
 
 This lane still exists, but it is no longer the only way blocked rows get a browser-open retry.
 
@@ -180,7 +187,7 @@ This lane still exists, but it is no longer the only way blocked rows get a brow
 The intended production flow is:
 
 1. `hunt-scraper.timer` fires on `server2`
-2. `hunt-scraper.service` runs `scraper/scraper.py`
+2. `hunt-scraper.service` runs `hunter/scraper.py`
 3. discovery scrapes LinkedIn/Indeed/etc.
 4. rows are inserted or refreshed in SQLite
 5. new supported rows are left as:
@@ -211,9 +218,9 @@ The Hunt repo now contains the runtime code for Stage 3. The remaining work is m
 ### 1. Retry and backoff policy
 
 Implemented in:
-- `scraper/enrichment_policy.py`
-- `scraper/db.py`
-- `scraper/enrich_linkedin.py`
+- `hunter/enrichment_policy.py`
+- `hunter/db.py`
+- `hunter/enrich_linkedin.py`
 
 Recommended policy:
 - `easy_apply`
@@ -292,13 +299,13 @@ Current repo implementation:
   - `/api/jobs/{id}`
   - `/api/jobs/{id}/requeue`
 
-This should still be deployed as a separate service from the scraper timer.
+This should still be deployed as a separate service from the **C1 (Hunter)** timer (`hunt-scraper.timer`).
 
 ### 4. Queue monitoring
 
 Current repo implementation:
 - `scripts/queue_health.py`
-- `scraper/db.py` queue summary helpers
+- `hunter/db.py` queue summary helpers
 - `scripts/backfill_enrichment.py` for operator-driven batch backfills across:
   - LinkedIn only
   - Indeed only
@@ -326,7 +333,7 @@ Stage 4 implementation note:
 - `review_app.py` now exposes `/metrics`
 - failed rows can now carry artifact paths for screenshot/HTML/text snapshots
 
-### 5. Future handoff to Component 2 and Component 3
+### 5. Future handoff to C2 (Trapper) and C3 (Executioner)
 
 Stage 3 should keep data and states clean enough for future agent workers.
 
@@ -338,10 +345,10 @@ Future downstream consumers will need:
 - stable terminal/error states
 
 The review/control plane should eventually become the operator layer for:
-- Component 1 enrichment
-- Component 2 resume tailoring
-- Component 3 browser autofill and evidence
-- Component 4 orchestration and submit history
+- C1 (Hunter) enrichment
+- C2 (Trapper) resume tailoring
+- C3 (Executioner) browser autofill and evidence
+- C4 (Coordinator) orchestration and submit history
 
 ## Planned Server2 Ansible Changes
 
@@ -436,9 +443,9 @@ Why this is the preferred shape:
 The review service is not just a Stage 2 helper.
 
 It should eventually support:
-- Component 1 queue review
-- Component 2 outputs and failures
-- Component 3 apply history and manual intervention
+- C1 (Hunter) queue review
+- C2 (Trapper) outputs and failures
+- C3 (Executioner) apply history and manual intervention
 - future agents and ownership/state transitions
 
 So it is better to design it now as:
@@ -452,10 +459,10 @@ rather than:
 If a future agent needs to reason about deployment, these are the first places to read:
 
 ### In Hunt repo
-- `scraper/scraper.py`
-- `scraper/runner.py`
-- `scraper/enrich_linkedin.py`
-- `scraper/config.py`
+- `hunter/scraper.py`
+- `hunter/runner.py`
+- `hunter/enrich_linkedin.py`
+- `hunter/config.py`
 - `docs/components/component1/README.md`
 - this file
 
@@ -469,7 +476,7 @@ If a future agent needs to reason about deployment, these are the first places t
 Important assumption:
 - the job-agent host for Hunt runtime is `server2`
 - current deployment target path is `/home/michael/hunt`
-- current scheduled entrypoint is `scraper/scraper.py`
+- current scheduled entrypoint is `hunter/scraper.py`
 
 ## Recommended Next Implementation Order
 
@@ -478,11 +485,13 @@ Important assumption:
    - env vars
    - auth-state path expectations
    - auth-health verification with:
-     - `cd ~/hunt && set -a && source .env && set +a && .venv/bin/python scraper/linkedin_session.py --auto-relogin --channel chrome`
+     - preferred on `server2`:
+       - `cd ~/hunt && ./hunt.sh auth-auto-relogin --channel chrome`
      - if a visible browser is needed on `server2`:
        - real monitor session:
-         - `cd ~/hunt && set -a && source .env && set +a && DISPLAY=:0 .venv/bin/python scraper/linkedin_session.py --auto-relogin --headful --channel chrome`
+         - `cd ~/hunt && DISPLAY=:0 ./hunt.sh auth-auto-relogin --headful --display :0 --channel chrome`
        - `cd ~/hunt && DISPLAY=:98 ./hunt.sh auth-auto-relogin --headful --display :98 --channel chrome`
+     - direct `.venv/bin/python hunter/linkedin_session.py --auto-relogin ...` on `server2` should only be used if `HUNT_DB_PATH` is exported first
    - that command should reuse the saved session first when possible, then fall back to stored credentials, and finally flip the shared auth flag used by the review app and `/metrics`
    - when debugging a flaky LinkedIn relogin flow, enable:
      - `LINKEDIN_RELOGIN_DEBUG=1`
@@ -499,11 +508,15 @@ Important assumption:
      - the second screen can include `Sign in with Apple`, so the worker must only submit the exact LinkedIn `Sign in` button after it has already identified real email/password fields
      - an immediate post-submit trace snapshot can report `Execution context was destroyed` during navigation; treat the later `/feed/` snapshot and successful `run_end` record as the real success confirmation
      - if auth succeeds but `/metrics` still reports `hunt_auth_available{source="linkedin"} 0`, verify that the auth command and the review app are using the same `HUNT_DB_PATH`
+     - confirmed `server2` example:
+       - manual relogin updated `/home/michael/hunt/hunt.db`
+       - review app metrics were reading `/home/michael/data/hunt/hunt.db`
+       - rerunning through `./hunt.sh auth-auto-relogin ...` updated the runtime DB and flipped `hunt_auth_available{source="linkedin"}` back to `1`
 2. Add the Xvfb-backed blocked-row UI fallback to the deployed Hunt runtime
 3. Verify the deployed timer still prioritizes newest pending rows before older backlog
 4. Deploy `review_app.py` as the `hunt-review` service on `server2`
 5. Add monitoring wiring from the queue-health outputs into your preferred service layer
-6. Only then begin wiring in broader agent orchestration for Component 2 and 3
+6. Only then begin wiring in broader agent orchestration for C2 (Trapper) and C3 (Executioner)
 
 ## Stage 4 Server2 Follow-Up Plan
 
@@ -526,7 +539,7 @@ Recommended Stage 4 server work:
      - `artifacts/html`
      - `artifacts/text`
    - keep artifacts outside the repo checkout so deploys remain clean
-3. add any Stage 4 env vars through the existing scraper service template
+3. add any Stage 4 env vars through the existing **C1 (Hunter)** service template (`hunt-scraper.service`)
    - artifact root path
    - optional artifact retention limit
    - optional metrics/export toggle

@@ -1,12 +1,12 @@
 [Unit]
-Description=Hunt job scraper
+Description=Hunt C1 (Hunter) discovery loop (legacy helper; prefer Ansible hunt-scraper units)
 After=network.target
 
 [Service]
 Type=simple
 User=ubuntu
 WorkingDirectory=/home/ubuntu/hunt
-ExecStart=/home/ubuntu/hunt/venv/bin/python /home/ubuntu/hunt/scraper/runner.py
+ExecStart=/home/ubuntu/hunt/venv/bin/python /home/ubuntu/hunt/hunter/runner.py
 Restart=on-failure
 RestartSec=30
 StandardOutput=journal

@@ -1,4 +1,5 @@
 import html
+import json
 import os
 import sys
 from contextlib import asynccontextmanager
@@ -6,25 +7,33 @@ from pathlib import Path
 from urllib.parse import parse_qsl, quote, urlencode, urlsplit, urlunsplit
 
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, PlainTextResponse, RedirectResponse
-
+from fastapi.responses import (
+    FileResponse,
+    HTMLResponse,
+    JSONResponse,
+    PlainTextResponse,
+    RedirectResponse,
+)
 
 REPO_ROOT = os.path.dirname(os.path.abspath(__file__))
-SCRAPER_DIR = os.path.join(REPO_ROOT, "scraper")
-sys.path.insert(0, SCRAPER_DIR)
+sys.path.insert(0, REPO_ROOT)
 
-from config import REVIEW_APP_HOST, REVIEW_APP_PORT  # noqa: E402
-from db import (  # noqa: E402
+from hunter.config import REVIEW_APP_HOST, REVIEW_APP_PORT  # noqa: E402
+from hunter.db import (  # noqa: E402
     count_jobs_for_review,
     get_job_by_id,
     get_review_queue_summary,
     init_db,
     list_jobs_for_review,
+)
+from hunter.db import (  # noqa: E402
     requeue_job as requeue_review_job,
 )
-from failure_artifacts import resolve_artifact_path  # noqa: E402
+from hunter.failure_artifacts import resolve_artifact_path  # noqa: E402
+
 try:  # noqa: E402
-    from resume_tailor.db import list_resume_attempts  # type: ignore
+    from trapper.db import list_resume_attempts  # type: ignore
+
     RESUME_TAILOR_AVAILABLE = True
 except ModuleNotFoundError:  # noqa: E402
     RESUME_TAILOR_AVAILABLE = False
@@ -64,7 +73,7 @@ async def lifespan(app):
     yield
 
 
-app = FastAPI(title="Hunt Review", version="0.1.0", lifespan=lifespan)
+app = FastAPI(title="Hunt Review (C1 Hunter)", version="0.1.0", lifespan=lifespan)
 
 
 def format_text(value):
@@ -114,7 +123,11 @@ def request_path_with_query(request):
 
 
 def _nav_link(label, href, *, current_path, exact=False):
-    is_active = current_path == href if exact else current_path == href or current_path.startswith(f"{href}/")
+    is_active = (
+        current_path == href
+        if exact
+        else current_path == href or current_path.startswith(f"{href}/")
+    )
     class_name = "nav-link active" if is_active else "nav-link"
     return f'<a class="{class_name}" href="{href}">{html.escape(label)}</a>'
 
@@ -773,7 +786,11 @@ def render_summary_cards(summary):
     cards = [
         ("Total rows", summary["total"]),
         ("Pending enrich", summary["pending_count"]),
-        ("Enriched", summary["counts_by_status"].get("done", 0) + summary["counts_by_status"].get("done_verified", 0)),
+        (
+            "Enriched",
+            summary["counts_by_status"].get("done", 0)
+            + summary["counts_by_status"].get("done_verified", 0),
+        ),
         ("Failed", summary["counts_by_status"].get("failed", 0)),
         ("Blocked", summary["blocked_count"]),
         ("LinkedIn auth", "ready" if linkedin_auth.get("available", True) else "login needed"),
@@ -791,6 +808,7 @@ def render_summary_cards(summary):
 
 def render_auth_status(summary):
     linkedin_auth = summary.get("auth", {}).get("linkedin", {})
+    events = summary.get("events", {}) or {}
     if not linkedin_auth:
         return ""
 
@@ -809,13 +827,57 @@ def render_auth_status(summary):
     ]
     if linkedin_auth.get("last_error"):
         details.append(("Last error", linkedin_auth.get("last_error")))
+
+    def _format_event(payload):
+        if not payload or not payload.get("value"):
+            return None
+        raw = payload.get("value")
+        try:
+            parsed = json.loads(raw)
+            msg = parsed.get("message") or raw
+            ts = parsed.get("ts") or payload.get("updated_at")
+            return f"{msg} @ {ts}"
+        except Exception:
+            return f"{raw} @ {payload.get('updated_at')}"
+
+    rate_limited = events.get("linkedin_last_rate_limited")
+    rate_text = _format_event(rate_limited)
+    if rate_text:
+        details.append(
+            (
+                "Last rate limit",
+                rate_text,
+            )
+        )
+    automation_flagged = events.get("linkedin_last_automation_flagged")
+    automation_text = _format_event(automation_flagged)
+    if automation_text:
+        details.append(
+            (
+                "Last automation detection",
+                automation_text,
+            )
+        )
+    last_priority = events.get("hunt_last_priority_job")
+    priority_text = _format_event(last_priority)
+    if priority_text:
+        details.append(("Last priority job", priority_text))
+    discord_err = events.get("discord_last_priority_notify_error")
+    discord_text = _format_event(discord_err)
+    if discord_text:
+        details.append(
+            (
+                "Last Discord priority error",
+                discord_text,
+            )
+        )
     rows = "".join(
         f"<tr><td>{format_text(label)}</td><td>{format_text(value)}</td></tr>"
         for label, value in details
     )
     hint = ""
     if not available:
-        hint = "<p style=\"color: var(--muted);\">Refresh auth with <code>DISPLAY=:98 ./hunt.sh auth-save --channel chrome</code>, then press Enter after the LinkedIn feed is visible.</p>"
+        hint = '<p style="color: var(--muted);">Refresh auth with <code>DISPLAY=:98 ./hunt.sh auth-save --channel chrome</code>, then press Enter after the LinkedIn feed is visible.</p>'
     return f"""
     <div class="panel">
       <h2>{html.escape(headline)}</h2>
@@ -876,12 +938,12 @@ def render_resume_attempts(attempts):
         rows.append(
             f"""
             <tr>
-              <td>{format_text(attempt.get('id'))}</td>
-              <td>{format_text(attempt.get('status'))}</td>
-              <td>{format_text(attempt.get('role_family'))}</td>
-              <td>{format_text(attempt.get('job_level'))}</td>
-              <td>{format_text(attempt.get('latest_result_kind'))}</td>
-              <td>{format_text(attempt.get('created_at'))}</td>
+              <td>{format_text(attempt.get("id"))}</td>
+              <td>{format_text(attempt.get("status"))}</td>
+              <td>{format_text(attempt.get("role_family"))}</td>
+              <td>{format_text(attempt.get("job_level"))}</td>
+              <td>{format_text(attempt.get("latest_result_kind"))}</td>
+              <td>{format_text(attempt.get("created_at"))}</td>
             </tr>
             """
         )
@@ -889,13 +951,15 @@ def render_resume_attempts(attempts):
     <div class="table-wrap">
       <table>
         <thead><tr><th>ID</th><th>Status</th><th>Family</th><th>Level</th><th>Kind</th><th>Created</th></tr></thead>
-        <tbody>{''.join(rows)}</tbody>
+        <tbody>{"".join(rows)}</tbody>
       </table>
     </div>
     """
 
 
-def render_status_toolbar(active_status, *, source, limit, q="", sort="date_scraped", direction="desc"):
+def render_status_toolbar(
+    active_status, *, source, limit, q="", sort="date_scraped", direction="desc"
+):
     status_labels = {
         "ready": "ready",
         "pending": "pending_enrich",
@@ -916,7 +980,9 @@ def render_status_toolbar(active_status, *, source, limit, q="", sort="date_scra
     return "".join(pills)
 
 
-def render_source_toolbar(active_source, *, status, limit, q="", sort="date_scraped", direction="desc"):
+def render_source_toolbar(
+    active_source, *, status, limit, q="", sort="date_scraped", direction="desc"
+):
     pills = []
     for source in SOURCE_OPTIONS:
         class_name = "pill active" if source == active_source else "pill"
@@ -932,57 +998,65 @@ def render_search_bar(*, source, status, limit, q, sort, direction):
       <div style="display:grid; gap:12px; grid-template-columns: minmax(220px, 2fr) repeat(4, minmax(120px, 1fr)); align-items:end;">
         <div>
           <label class="label" for="q">Search</label>
-          <input id="q" name="q" type="text" value="{html.escape(q)}" placeholder="company, title, description, or URL keyword" style="width:100%; box-sizing:border-box; border:1px solid var(--line); border-radius:12px; padding:10px 12px; background:#faf5ec;">
+          <input id="q" name="q" type="text" value="{
+        html.escape(q)
+    }" placeholder="company, title, description, or URL keyword" style="width:100%; box-sizing:border-box; border:1px solid var(--line); border-radius:12px; padding:10px 12px; background:#faf5ec;">
         </div>
         <div>
           <label class="label" for="source">Source</label>
           <select id="source" name="source" style="width:100%; box-sizing:border-box; border:1px solid var(--line); border-radius:12px; padding:10px 12px; background:#faf5ec;">
-            {''.join(
-                f'<option value="{value}"{" selected" if source == value else ""}>{label}</option>'
-                for value, label in (
-                    ("all", "All sources"),
-                    ("linkedin", "LinkedIn"),
-                    ("indeed", "Indeed"),
-                )
-            )}
+            {
+        "".join(
+            f'<option value="{value}"{" selected" if source == value else ""}>{label}</option>'
+            for value, label in (
+                ("all", "All sources"),
+                ("linkedin", "LinkedIn"),
+                ("indeed", "Indeed"),
+            )
+        )
+    }
           </select>
         </div>
         <div>
           <label class="label" for="status">Status</label>
           <select id="status" name="status" style="width:100%; box-sizing:border-box; border:1px solid var(--line); border-radius:12px; padding:10px 12px; background:#faf5ec;">
-            {''.join(
-                f'<option value="{value}"{" selected" if status == value else ""}>{label}</option>'
-                for value, label in (
-                    ("ready", "Ready"),
-                    ("pending", "Pending enrich"),
-                    ("processing", "Processing"),
-                    ("done", "Done"),
-                    ("done_verified", "Done verified"),
-                    ("failed", "Failed"),
-                    ("blocked", "Blocked"),
-                    ("blocked_verified", "Blocked verified"),
-                    ("all", "All statuses"),
-                )
-            )}
+            {
+        "".join(
+            f'<option value="{value}"{" selected" if status == value else ""}>{label}</option>'
+            for value, label in (
+                ("ready", "Ready"),
+                ("pending", "Pending enrich"),
+                ("processing", "Processing"),
+                ("done", "Done"),
+                ("done_verified", "Done verified"),
+                ("failed", "Failed"),
+                ("blocked", "Blocked"),
+                ("blocked_verified", "Blocked verified"),
+                ("all", "All statuses"),
+            )
+        )
+    }
           </select>
         </div>
         <div>
           <label class="label" for="sort">Sort</label>
           <select id="sort" name="sort" style="width:100%; box-sizing:border-box; border:1px solid var(--line); border-radius:12px; padding:10px 12px; background:#faf5ec;">
-            {''.join(
-                f'<option value="{value}"{" selected" if sort == value else ""}>{label}</option>'
-                for value, label in (
-                    ("date_scraped", "Date scraped"),
-                    ("company", "Company"),
-                    ("title", "Title"),
-                    ("enrichment_status", "Enrichment"),
-                    ("apply_type", "Apply type"),
-                    ("enrichment_attempts", "Attempts"),
-                    ("next_enrichment_retry_at", "Next retry"),
-                    ("enriched_at", "Enriched at"),
-                    ("id", "ID"),
-                )
-            )}
+            {
+        "".join(
+            f'<option value="{value}"{" selected" if sort == value else ""}>{label}</option>'
+            for value, label in (
+                ("date_scraped", "Date scraped"),
+                ("company", "Company"),
+                ("title", "Title"),
+                ("enrichment_status", "Enrichment"),
+                ("apply_type", "Apply type"),
+                ("enrichment_attempts", "Attempts"),
+                ("next_enrichment_retry_at", "Next retry"),
+                ("enriched_at", "Enriched at"),
+                ("id", "ID"),
+            )
+        )
+    }
           </select>
         </div>
         <div>
@@ -1002,7 +1076,9 @@ def render_search_bar(*, source, status, limit, q, sort, direction):
     """
 
 
-def _sortable_link(label, column, *, source, status, limit, page, q, current_sort, current_direction):
+def _sortable_link(
+    label, column, *, source, status, limit, page, q, current_sort, current_direction
+):
     next_direction = "asc"
     if current_sort == column and current_direction == "asc":
         next_direction = "desc"
@@ -1034,16 +1110,16 @@ def render_jobs_table(rows, *, source, status, limit, page, q, sort, direction, 
         body.append(
             f"""
             <tr>
-              <td><a href="{job_link}" data-app-nav="true">#{row['id']}</a></td>
-              <td>{format_text(row['source'])}</td>
-              <td>{format_text(row['company'])}</td>
-              <td>{format_text(row['title'])}</td>
-              <td class="link-cell">{linkedin_link}{' | ' + apply_link if linkedin_link and apply_link else apply_link}</td>
-              <td><span class="status {status_class}">{format_text(row['enrichment_status'])}</span></td>
-              <td>{format_text(row['apply_type'])}</td>
-              <td>{format_text(row['enrichment_attempts'])}</td>
-              <td class="mono">{format_text(row['next_enrichment_retry_at'])}</td>
-              <td>{format_text(truncate_text(row['last_enrichment_error']))}</td>
+              <td><a href="{job_link}" data-app-nav="true">#{row["id"]}</a></td>
+              <td>{format_text(row["source"])}</td>
+              <td>{format_text(row["company"])}</td>
+              <td>{format_text(row["title"])}</td>
+              <td class="link-cell">{linkedin_link}{" | " + apply_link if linkedin_link and apply_link else apply_link}</td>
+              <td><span class="status {status_class}">{format_text(row["enrichment_status"])}</span></td>
+              <td>{format_text(row["apply_type"])}</td>
+              <td>{format_text(row["enrichment_attempts"])}</td>
+              <td class="mono">{format_text(row["next_enrichment_retry_at"])}</td>
+              <td>{format_text(truncate_text(row["last_enrichment_error"]))}</td>
             </tr>
             """
         )
@@ -1066,7 +1142,7 @@ def render_jobs_table(rows, *, source, status, limit, page, q, sort, direction, 
           </tr>
         </thead>
         <tbody>
-          {''.join(body)}
+          {"".join(body)}
         </tbody>
       </table>
     </div>
@@ -1104,7 +1180,7 @@ def render_pagination(*, total_rows, source, status, limit, page, q, sort, direc
     return f"""
     <div class="toolbar" style="margin-top: 18px;">
       <span class="pill">Page {current_page} of {total_pages}</span>
-      {''.join(links)}
+      {"".join(links)}
     </div>
     """
 
@@ -1187,10 +1263,10 @@ def render_link_list(title, rows, *, return_to=""):
     items = "".join(
         f"""
         <tr>
-          <td><a href="{add_return_to(f"/jobs/{row['id']}", return_to)}" data-app-nav="true">#{row['id']}</a></td>
-          <td>{format_text(row['company'])}</td>
-          <td>{format_text(truncate_text(row['title'], max_chars=80))}</td>
-          <td>{format_text(row['enrichment_status'])}</td>
+          <td><a href="{add_return_to(f"/jobs/{row['id']}", return_to)}" data-app-nav="true">#{row["id"]}</a></td>
+          <td>{format_text(row["company"])}</td>
+          <td>{format_text(truncate_text(row["title"], max_chars=80))}</td>
+          <td>{format_text(row["enrichment_status"])}</td>
         </tr>
         """
         for row in rows
@@ -1224,7 +1300,9 @@ def api_summary():
 
 @app.get("/metrics")
 def metrics():
-    return PlainTextResponse(render_metrics(get_review_queue_summary()), media_type="text/plain; version=0.0.4")
+    return PlainTextResponse(
+        render_metrics(get_review_queue_summary()), media_type="text/plain; version=0.0.4"
+    )
 
 
 @app.get("/health-view", response_class=HTMLResponse)
@@ -1352,7 +1430,9 @@ def api_job_resume_artifact(job_id: int, artifact_kind: str):
 def api_requeue_job(job_id: int):
     row = get_job_by_id(job_id)
     if not row or row.get("source") not in {"linkedin", "indeed"}:
-        raise HTTPException(status_code=400, detail="Requeue is only supported for rows with an enrichment worker.")
+        raise HTTPException(
+            status_code=400, detail="Requeue is only supported for rows with an enrichment worker."
+        )
     updated = requeue_review_job(job_id, source=row.get("source"))
     if updated != 1:
         raise HTTPException(status_code=404, detail="Job not found.")
@@ -1370,7 +1450,7 @@ def dashboard(request: Request):
     body = f"""
     <section class="hero">
       <h1>Hunt review lane</h1>
-      <p>Component 1 control plane for the live jobs table on server2. LinkedIn and Indeed now share the same enrichment queue model, while other sources can still be surfaced here for later adapters.</p>
+      <p>C1 (Hunter) control plane for the live jobs table on server2. LinkedIn and Indeed now share the same enrichment queue model, while other sources can still be surfaced here for later adapters.</p>
     </section>
     <section class="cards">{render_summary_cards(summary)}</section>
     <section class="stack">
@@ -1388,7 +1468,16 @@ def dashboard(request: Request):
 
 
 @app.get("/jobs", response_class=HTMLResponse)
-def jobs_page(request: Request, source: str = "all", status: str = "ready", limit: int = 50, page: int = 1, q: str = "", sort: str = "date_scraped", direction: str = "desc"):
+def jobs_page(
+    request: Request,
+    source: str = "all",
+    status: str = "ready",
+    limit: int = 50,
+    page: int = 1,
+    q: str = "",
+    sort: str = "date_scraped",
+    direction: str = "desc",
+):
     if source not in SOURCE_OPTIONS:
         raise HTTPException(status_code=400, detail=f"Unsupported source filter: {source}")
     if status not in STATUS_OPTIONS:
@@ -1415,7 +1504,7 @@ def jobs_page(request: Request, source: str = "all", status: str = "ready", limi
       <p>Browse the live jobs table across sources, search by company, title, description, or URL keywords, sort by column headings, and open both the listing and apply link directly from the table.</p>
     </section>
     <section class="cards">{render_summary_cards(summary)}</section>
-    {render_auth_status(summary) if source in ('all', 'linkedin') else ''}
+    {render_auth_status(summary) if source in ("all", "linkedin") else ""}
     {render_search_bar(source=source, status=status, limit=safe_limit, q=q, sort=sort, direction=direction)}
     <div class="toolbar">{render_source_toolbar(source, status=status, limit=safe_limit, q=q, sort=sort, direction=direction)}</div>
     <div class="toolbar">{render_status_toolbar(status, source=source, limit=safe_limit, q=q, sort=sort, direction=direction)}</div>
@@ -1441,52 +1530,52 @@ def job_detail(request: Request, job_id: int, return_to: str = ""):
     back_link = safe_return_to or "/jobs"
     body = f"""
     <section class="hero">
-      <h1>{format_text(row['title'])}</h1>
-      <p>{format_text(row['company'])}</p>
+      <h1>{format_text(row["title"])}</h1>
+      <p>{format_text(row["company"])}</p>
       <div style="margin-top: 14px;">
-        <span class="status {status_class}">{format_text(row['enrichment_status'])}</span>
+        <span class="status {status_class}">{format_text(row["enrichment_status"])}</span>
       </div>
     </section>
     <section class="stack">
       <div class="panel">
         <h2>Job metadata</h2>
         <div class="grid">
-          <div class="field"><div class="label">ID</div><div class="value">{row['id']}</div></div>
-          <div class="field"><div class="label">Source</div><div class="value">{format_text(row['source'])}</div></div>
-          <div class="field"><div class="label">Apply type</div><div class="value">{format_text(row['apply_type'])}</div></div>
-          <div class="field"><div class="label">Auto apply eligible</div><div class="value">{format_text(row['auto_apply_eligible'])}</div></div>
-          <div class="field"><div class="label">Attempts</div><div class="value">{format_text(row['enrichment_attempts'])}</div></div>
-          <div class="field"><div class="label">ATS type</div><div class="value">{format_text(row['ats_type'])}</div></div>
-          <div class="field"><div class="label">Apply host</div><div class="value">{format_text(row['apply_host'])}</div></div>
-          <div class="field"><div class="label">Enriched at</div><div class="value mono">{format_text(row.get('enriched_at'))}</div></div>
-          <div class="field"><div class="label">Started at</div><div class="value mono">{format_text(row.get('last_enrichment_started_at'))}</div></div>
-          <div class="field"><div class="label">Next retry</div><div class="value mono">{format_text(row.get('next_enrichment_retry_at'))}</div></div>
-          <div class="field"><div class="label">Application status</div><div class="value">{format_text(row['status'])}</div></div>
+          <div class="field"><div class="label">ID</div><div class="value">{row["id"]}</div></div>
+          <div class="field"><div class="label">Source</div><div class="value">{format_text(row["source"])}</div></div>
+          <div class="field"><div class="label">Apply type</div><div class="value">{format_text(row["apply_type"])}</div></div>
+          <div class="field"><div class="label">Auto apply eligible</div><div class="value">{format_text(row["auto_apply_eligible"])}</div></div>
+          <div class="field"><div class="label">Attempts</div><div class="value">{format_text(row["enrichment_attempts"])}</div></div>
+          <div class="field"><div class="label">ATS type</div><div class="value">{format_text(row["ats_type"])}</div></div>
+          <div class="field"><div class="label">Apply host</div><div class="value">{format_text(row["apply_host"])}</div></div>
+          <div class="field"><div class="label">Enriched at</div><div class="value mono">{format_text(row.get("enriched_at"))}</div></div>
+          <div class="field"><div class="label">Started at</div><div class="value mono">{format_text(row.get("last_enrichment_started_at"))}</div></div>
+          <div class="field"><div class="label">Next retry</div><div class="value mono">{format_text(row.get("next_enrichment_retry_at"))}</div></div>
+          <div class="field"><div class="label">Application status</div><div class="value">{format_text(row["status"])}</div></div>
         </div>
         <div class="actions">
           <a class="pill" href="{html.escape(back_link)}" data-app-nav="true">Back to list</a>
-          <a class="pill active" href="{html.escape(row['job_url'])}" target="_blank" rel="noreferrer">Open listing</a>
+          <a class="pill active" href="{html.escape(row["job_url"])}" target="_blank" rel="noreferrer">Open listing</a>
           {f'<a class="pill" href="{html.escape(row["apply_url"])}" target="_blank" rel="noreferrer">Open apply URL</a>' if row.get("apply_url") else ""}
           {f'<form method="post" action="{html.escape(requeue_action)}" data-async-requeue="true"><button type="submit">Requeue enrichment</button></form>' if row.get("source") in {"linkedin", "indeed"} else '<span class="pill">This source is visible here, but does not have a worker yet</span>'}
         </div>
       </div>
       <div class="panel">
         <h2>Last enrichment error</h2>
-        <pre>{format_text(row.get('last_enrichment_error'))}</pre>
+        <pre>{format_text(row.get("last_enrichment_error"))}</pre>
       </div>
       <div class="panel">
         <h2>Resume generation</h2>
         <div class="grid">
-          <div class="field"><div class="label">Resume status</div><div class="value">{format_text(row.get('resume_status'))}</div></div>
-          <div class="field"><div class="label">Latest attempt</div><div class="value">{format_text(row.get('latest_resume_attempt_id'))}</div></div>
-          <div class="field"><div class="label">Latest version</div><div class="value">{format_text(row.get('latest_resume_version_id'))}</div></div>
-          <div class="field"><div class="label">Role family</div><div class="value">{format_text(row.get('latest_resume_family'))}</div></div>
-          <div class="field"><div class="label">Job level</div><div class="value">{format_text(row.get('latest_resume_job_level'))}</div></div>
-          <div class="field"><div class="label">Generated at</div><div class="value mono">{format_text(row.get('latest_resume_generated_at'))}</div></div>
-          <div class="field"><div class="label">Fallback used</div><div class="value">{format_text(row.get('latest_resume_fallback_used'))}</div></div>
-          <div class="field"><div class="label">Flags</div><div class="value">{format_text(row.get('latest_resume_flags'))}</div></div>
-          <div class="field"><div class="label">Selected version</div><div class="value">{format_text(row.get('selected_resume_version_id'))}</div></div>
-          <div class="field"><div class="label">Ready for C3</div><div class="value">{format_text(row.get('selected_resume_ready_for_c3'))}</div></div>
+          <div class="field"><div class="label">Resume status</div><div class="value">{format_text(row.get("resume_status"))}</div></div>
+          <div class="field"><div class="label">Latest attempt</div><div class="value">{format_text(row.get("latest_resume_attempt_id"))}</div></div>
+          <div class="field"><div class="label">Latest version</div><div class="value">{format_text(row.get("latest_resume_version_id"))}</div></div>
+          <div class="field"><div class="label">Role family</div><div class="value">{format_text(row.get("latest_resume_family"))}</div></div>
+          <div class="field"><div class="label">Job level</div><div class="value">{format_text(row.get("latest_resume_job_level"))}</div></div>
+          <div class="field"><div class="label">Generated at</div><div class="value mono">{format_text(row.get("latest_resume_generated_at"))}</div></div>
+          <div class="field"><div class="label">Fallback used</div><div class="value">{format_text(row.get("latest_resume_fallback_used"))}</div></div>
+          <div class="field"><div class="label">Flags</div><div class="value">{format_text(row.get("latest_resume_flags"))}</div></div>
+          <div class="field"><div class="label">Selected version</div><div class="value">{format_text(row.get("selected_resume_version_id"))}</div></div>
+          <div class="field"><div class="label">Ready for C3</div><div class="value">{format_text(row.get("selected_resume_ready_for_c3"))}</div></div>
           {render_resume_links(row)}
         </div>
       </div>
@@ -1513,7 +1602,9 @@ def job_detail(request: Request, job_id: int, return_to: str = ""):
 def requeue_job(job_id: int, request: Request, return_to: str = ""):
     row = get_job_by_id(job_id)
     if not row or row.get("source") not in {"linkedin", "indeed"}:
-        raise HTTPException(status_code=400, detail="Requeue is only supported for rows with an enrichment worker.")
+        raise HTTPException(
+            status_code=400, detail="Requeue is only supported for rows with an enrichment worker."
+        )
     updated = requeue_review_job(job_id, source=row.get("source"))
     if updated != 1:
         raise HTTPException(status_code=404, detail="Job not found.")
@@ -1527,7 +1618,9 @@ def requeue_job(job_id: int, request: Request, return_to: str = ""):
                 "return_to": safe_return_to,
             }
         )
-    return RedirectResponse(url=safe_return_to or add_return_to(f"/jobs/{job_id}", safe_return_to), status_code=303)
+    return RedirectResponse(
+        url=safe_return_to or add_return_to(f"/jobs/{job_id}", safe_return_to), status_code=303
+    )
 
 
 def main():

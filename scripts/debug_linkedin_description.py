@@ -3,13 +3,11 @@ import sqlite3
 import sys
 from pathlib import Path
 
-
 REPO_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_DB_PATH = REPO_ROOT / "hunt.db"
-SCRAPER_DIR = REPO_ROOT / "scraper"
-sys.path.insert(0, str(SCRAPER_DIR))
+sys.path.insert(0, str(REPO_ROOT))
 
-from enrich_linkedin import (  # noqa: E402
+from hunter.enrich_linkedin import (  # noqa: E402
     DESCRIPTION_SELECTORS,
     LinkedInEnrichmentError,
     detect_apply_result,
@@ -20,7 +18,11 @@ from enrich_linkedin import (  # noqa: E402
     raise_if_security_challenged,
     settle_page_after_navigation,
 )
-from linkedin_session import LinkedInSessionError, assert_logged_in, open_linkedin_context  # noqa: E402
+from hunter.linkedin_session import (  # noqa: E402
+    LinkedInSessionError,
+    assert_logged_in,
+    open_linkedin_context,
+)
 
 
 def get_job_row(job_id, db_path):
@@ -66,7 +68,9 @@ def dump_selector_matches(page, *, preview_chars):
             for index, raw_text in enumerate(locator.all_inner_texts()[:3], start=1):
                 preview = preview_text(raw_text, preview_chars)
                 if preview:
-                    print(f"    match={index} chars={len(normalize_description_text(raw_text))} preview={preview!r}")
+                    print(
+                        f"    match={index} chars={len(normalize_description_text(raw_text))} preview={preview!r}"
+                    )
                 else:
                     print(f"    match={index} preview=None")
         except Exception as exc:
@@ -98,8 +102,12 @@ def main():
     parser.add_argument("--storage-state", help="Optional Playwright storage state path.")
     parser.add_argument("--channel", help="Optional Playwright browser channel such as chrome.")
     parser.add_argument("--headful", action="store_true", help="Run with a visible browser window.")
-    parser.add_argument("--slow-mo", type=int, default=0, help="Optional Playwright slow_mo in milliseconds.")
-    parser.add_argument("--timeout-ms", type=int, default=45000, help="Navigation/action timeout in milliseconds.")
+    parser.add_argument(
+        "--slow-mo", type=int, default=0, help="Optional Playwright slow_mo in milliseconds."
+    )
+    parser.add_argument(
+        "--timeout-ms", type=int, default=45000, help="Navigation/action timeout in milliseconds."
+    )
     parser.add_argument(
         "--preview-chars",
         type=int,
@@ -198,7 +206,7 @@ def main():
                 except Exception:
                     pass
     except (LinkedInEnrichmentError, LinkedInSessionError, ValueError) as exc:
-        print(f"[debug] LinkedIn description extraction: FAIL")
+        print("[debug] LinkedIn description extraction: FAIL")
         print(f"  error: {exc}")
         return 1
 

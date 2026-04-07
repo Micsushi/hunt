@@ -1,8 +1,8 @@
-# Component 4 Implementation Checkpoint
+# C4 (Coordinator) Implementation Checkpoint
 
 ## Why This Exists
 
-This note captures the current Component 4 thinking and partial repo work so the project can resume cleanly later without re-deriving the design.
+This note captures the current C4 (Coordinator) thinking and partial repo work so the project can resume cleanly later without re-deriving the design.
 
 It is a checkpoint, not a claim that C4 is fully production-ready yet.
 
@@ -10,7 +10,7 @@ It is a checkpoint, not a claim that C4 is fully production-ready yet.
 
 The current recommended C4 shape remains:
 - OpenClaw or another higher-level runtime for orchestration and policy
-- Component 3 as the deterministic browser execution layer
+- C3 (Executioner) as the deterministic browser execution layer
 - final submit behind an explicit approval boundary
 
 The main research conclusions have not changed:
@@ -139,7 +139,7 @@ Still deferred:
 
 ## Current Repo Checkpoint
 
-The current partial implementation now lives in `orchestration/`:
+The current partial implementation now lives in `coordinator/`:
 - `config.py`
 - `context.py`
 - `db.py`
@@ -159,11 +159,11 @@ What is present in code right now:
 - scheduler `pick-next` and `run-once`
 
 What has been verified so far:
-- `python -m compileall orchestration`
-- `python -m orchestration.cli init-db --db-path <temp.db> --runtime-root <tempdir>`
+- `python -m compileall coordinator`
+- `python -m coordinator.cli init-db --db-path <temp.db> --runtime-root <tempdir>`
 
 What is not finished yet:
-- the Component 4 test suite has not been rewritten to match the new runtime
+- the C4 (Coordinator) test suite has not been rewritten to match the new runtime
 - `huntctl apply-prep` and the docs should consistently point at the shared C4 service rather than older helper scripts
 - the docs still need a final "implemented commands" polish pass once tests are in place
 
@@ -186,7 +186,7 @@ When continuing C4 work later, the clean next order is:
 ## Practical Notes
 
 - Per-command path overrides currently live on each CLI subcommand, so the working form is:
-  - `python -m orchestration.cli init-db --db-path <DB> --runtime-root <ROOT>`
+  - `python -m coordinator.cli init-db --db-path <DB> --runtime-root <ROOT>`
   - not global args before the subcommand
 - the current runtime root default is local-repo-friendly for development; `server2` should still use an external runtime directory
 - the current code is a useful checkpoint, but it should be treated as experimental until the C4 tests land

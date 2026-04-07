@@ -2,9 +2,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from resume_tailor.parser import parse_resume_file, parse_resume_tex
-from resume_tailor.renderer import render_resume_tex
-
+from trapper.parser import parse_resume_file, parse_resume_tex
+from trapper.renderer import render_resume_tex
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 MAIN_TEX = REPO_ROOT / "main.tex"
@@ -15,7 +14,9 @@ class Component2Stage1Tests(unittest.TestCase):
         doc = parse_resume_file(MAIN_TEX)
 
         self.assertEqual(doc.header.name, "Michael Shi")
-        self.assertEqual(doc.section_order, ["Education", "Experience", "Projects", "Technical Skills"])
+        self.assertEqual(
+            doc.section_order, ["Education", "Experience", "Projects", "Technical Skills"]
+        )
         self.assertEqual(doc.education.entry.entry_id, "edu_primary")
         self.assertEqual(len(doc.experience), 3)
         self.assertEqual(len(doc.projects), 1)
@@ -46,7 +47,7 @@ class Component2Stage1Tests(unittest.TestCase):
                 [
                     sys.executable,
                     "-m",
-                    "resume_tailor.cli",
+                    "trapper.cli",
                     "parse-resume",
                     "--resume",
                     str(MAIN_TEX),
@@ -64,4 +65,3 @@ class Component2Stage1Tests(unittest.TestCase):
             self.assertTrue(json_path.exists())
             self.assertTrue(tex_path.exists())
             self.assertIn("\\section{Experience}", tex_path.read_text(encoding="utf-8"))
-

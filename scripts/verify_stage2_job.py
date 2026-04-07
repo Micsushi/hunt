@@ -3,13 +3,14 @@ import sqlite3
 import sys
 from pathlib import Path
 
-
 REPO_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_DB_PATH = REPO_ROOT / "hunt.db"
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Verify Stage 2 enrichment fields for one LinkedIn job.")
+    parser = argparse.ArgumentParser(
+        description="Verify Stage 2 enrichment fields for one LinkedIn job."
+    )
     parser.add_argument("--job-id", type=int, required=True, help="LinkedIn job id to verify.")
     parser.add_argument(
         "--expect-type",
@@ -62,14 +63,18 @@ def main():
                 f"expected enrichment_status={args.expect_status!r}, got {actual_status!r}"
             )
     elif actual_status not in expected_success_statuses:
-        failures.append(f"expected enrichment_status in {sorted(expected_success_statuses)!r}, got {actual_status!r}")
+        failures.append(
+            f"expected enrichment_status in {sorted(expected_success_statuses)!r}, got {actual_status!r}"
+        )
 
     blocked_statuses = {"blocked", "blocked_verified"}
     success_like = actual_status in expected_success_statuses
     blocked_like = actual_status in blocked_statuses
 
     if success_like:
-        if row["apply_type"] == "external_apply" and (not row["description"] or not str(row["description"]).strip()):
+        if row["apply_type"] == "external_apply" and (
+            not row["description"] or not str(row["description"]).strip()
+        ):
             failures.append("description is empty")
         if not row["enriched_at"]:
             failures.append("enriched_at is empty")

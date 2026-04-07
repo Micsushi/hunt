@@ -1,0 +1,23 @@
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = [
+  "E",   # pycodestyle errors
+  "F",   # pyflakes
+  "I",   # isort
+  "UP",  # pyupgrade
+]
+ignore = [
+  "E501", # line length: keep this off, we use formatter for wrapping
+]
+
+[tool.ruff.lint.isort]
+known-first-party = ["hunter", "scripts", "coordinator", "trapper"]
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+line-ending = "auto"
+

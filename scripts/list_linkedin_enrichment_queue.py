@@ -3,13 +3,11 @@ import sqlite3
 import sys
 from pathlib import Path
 
-
 REPO_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_DB_PATH = REPO_ROOT / "hunt.db"
-SCRAPER_DIR = REPO_ROOT / "scraper"
-sys.path.insert(0, str(SCRAPER_DIR))
+sys.path.insert(0, str(REPO_ROOT))
 
-from config import ENRICHMENT_MAX_ATTEMPTS  # noqa: E402
+from hunter.config import ENRICHMENT_MAX_ATTEMPTS  # noqa: E402
 
 
 def main():

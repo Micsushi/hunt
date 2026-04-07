@@ -112,6 +112,6 @@ These notes should not be read as approval to import the following as-is:
 
 Most likely later touchpoints:
 
-- C2 prompt drafts under `resume_tailor/prompts/`
-- C3 answer-generation prompt or helper docs under `apply_extension/`
+- C2 prompt drafts under `trapper/prompts/`
+- C3 answer-generation prompt or helper docs under `executioner/`
 - future review-app or operator notes that explain generated-answer tone and constraints

@@ -1,18 +1,18 @@
-# Component 3 : Design Notes
+# C3 (Executioner) : Design Notes
 
 ## Purpose
 
-This document captures the current recommended design for Component 3 based on the repo state and the user decisions locked in so far.
+This document captures the current recommended design for C3 (Executioner) based on the repo state and the user decisions locked in so far.
 
-Component 3 should be independently useful before it is integrated into the full pipeline.
+C3 (Executioner) should be independently useful before it is integrated into the full pipeline.
 
 The intended long-term flow is still:
 
 1. C1 discovery and enrichment
 2. C2 resume generation
 3. C3 autofill and upload
-4. later orchestration by Component 4
-5. OpenClaw as one likely first implementation of Component 4
+4. later orchestration by C4 (Coordinator)
+5. OpenClaw as one likely first implementation of C4 (Coordinator)
 
 But the first C3 milestone should work even when only these are available:
 - one supported browser
@@ -24,7 +24,7 @@ But the first C3 milestone should work even when only these are available:
 
 The following rules should be treated as current hard constraints.
 
-- Component 3 is a Chrome extension first.
+- C3 (Executioner) is a Chrome extension first.
 - Workday is the first supported ATS family.
 - C3 must support manual use without C1, C2, or OpenClaw.
 - C3 should fill directly by default instead of requiring a pre-fill approval screen.
@@ -64,7 +64,7 @@ Recommended first use flow:
 6. extension uploads the selected resume
 7. extension generates free-text answers when needed
 8. extension records the answers and review flags
-9. the user or later Component 4 decides whether to continue toward submit
+9. the user or later C4 (Coordinator) decides whether to continue toward submit
 
 Recommended later orchestration flow:
 
@@ -84,7 +84,7 @@ Recommended later orchestration flow:
 
 ## Separation From Other Components
 
-### Component 1
+### C1 (Hunter)
 
 C1 should be treated as the queue and apply-link source, not as a runtime dependency for the extension.
 
@@ -102,7 +102,7 @@ Recommended C3 behavior:
 - if a Hunt job context exists, use it
 - otherwise allow ad hoc/manual page-only mode
 
-### Component 2
+### C2 (Trapper)
 
 C2 should be treated as the resume producer, not as a gate that prevents C3 from existing.
 
@@ -124,9 +124,9 @@ Recommended normal queue-driven shape:
   - a previously cached resume inside extension storage
 - a filesystem path alone is not sufficient for Chrome-extension upload
 
-### Component 4
+### C4 (Coordinator)
 
-Component 4 is a later orchestration layer.
+C4 (Coordinator) is a later orchestration layer.
 
 Recommended relationship:
 - C3 owns autofill behavior
@@ -359,7 +359,7 @@ Recommended future ephemeral context:
 The repo scaffold for C3 should live in:
 
 ```text
-apply_extension/
+executioner/
   manifest.json
   README.md
   src/
@@ -414,7 +414,7 @@ That milestone does not require:
 - account creation
 - OTP handling
 - generic multi-ATS support
-- Component 4 integration
+- C4 (Coordinator) integration
 
 ## Separate Review Surface
 
@@ -443,4 +443,4 @@ But it should not be the first place where C3 actions are implemented.
 7. add Hunt job context and per-job resume selection
 8. add separate C3 review/action surface
 9. add login/account helpers
-10. add Component 4 integration only after the extension is dependable
+10. add C4 (Coordinator) integration only after the extension is dependable

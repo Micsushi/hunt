@@ -1,11 +1,16 @@
 #!/usr/bin/env python3
+"""
+Hunt repo CLI helper (paths, auth, queue, C4 apply-prep).
+
+On Linux servers, systemd units **hunt-scraper.service** / **hunt-scraper.timer** keep a legacy
+name but run **C1 (Hunter)** : `python hunter/scraper.py` from the Hunt repo root. See **docs/NAMING.md**.
+"""
 import argparse
 import os
 import shlex
 import subprocess
 import sys
 from pathlib import Path
-
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 IS_WINDOWS = os.name == "nt"
@@ -37,7 +42,9 @@ def _find_repo_python() -> str:
 PYTHON = _find_repo_python()
 
 
-def _get_default_runtime_env(base_env=None, *, repo_root=REPO_ROOT, home_dir=None, is_windows=IS_WINDOWS):
+def _get_default_runtime_env(
+    base_env=None, *, repo_root=REPO_ROOT, home_dir=None, is_windows=IS_WINDOWS
+):
     if is_windows:
         return {}
 
@@ -85,7 +92,7 @@ def cmd_auth_save(args):
     _run(
         [
             PYTHON,
-            "scraper/linkedin_session.py",
+            "hunter/linkedin_session.py",
             "--save-storage-state",
             "--channel",
             args.channel,
@@ -97,11 +104,17 @@ def cmd_auth_save(args):
 
 
 def cmd_auth_check(_args):
-    _run([PYTHON, "scraper/linkedin_session.py", "--check"])
+    _run([PYTHON, "hunter/linkedin_session.py", "--check"])
 
 
 def cmd_auth_auto_relogin(args):
-    command = [PYTHON, "scraper/linkedin_session.py", "--auto-relogin", "--timeout-ms", str(args.timeout_ms)]
+    command = [
+        PYTHON,
+        "hunter/linkedin_session.py",
+        "--auto-relogin",
+        "--timeout-ms",
+        str(args.timeout_ms),
+    ]
     env = {}
     if args.display:
         env["DISPLAY"] = args.display
@@ -115,14 +128,22 @@ def cmd_auth_auto_relogin(args):
 
 
 def cmd_auth_test_discord(args):
-    command = [PYTHON, "scraper/linkedin_session.py", "--test-discord-webhook", "--discord-message", args.message]
+    command = [
+        PYTHON,
+        "hunter/linkedin_session.py",
+        "--test-discord-webhook",
+        "--discord-message",
+        args.message,
+    ]
     _run(command)
 
 
 def cmd_scrape(args):
-    command = [PYTHON, "scraper/scraper.py"]
+    command = [PYTHON, "hunter/scraper.py"]
     if args.limit is not None:
-        command.extend(["--enrich-pending", "--enrich-limit", str(args.limit), "--channel", args.channel])
+        command.extend(
+            ["--enrich-pending", "--enrich-limit", str(args.limit), "--channel", args.channel]
+        )
     if args.ui_verify_blocked:
         if "--enrich-pending" not in command:
             command.extend(["--enrich-pending", "--channel", args.channel])
@@ -136,11 +157,11 @@ def cmd_scrape(args):
 
 def cmd_enrich(args):
     if args.source == "linkedin":
-        command = [PYTHON, "scraper/enrich_linkedin.py", "--channel", args.channel]
+        command = [PYTHON, "hunter/enrich_linkedin.py", "--channel", args.channel]
     elif args.source == "indeed":
-        command = [PYTHON, "scraper/enrich_indeed.py", "--channel", args.channel]
+        command = [PYTHON, "hunter/enrich_indeed.py", "--channel", args.channel]
     else:
-        command = [PYTHON, "scraper/enrich_jobs.py", "--channel", args.channel]
+        command = [PYTHON, "hunter/enrich_jobs.py", "--channel", args.channel]
     if args.job_id is not None:
         command.extend(["--job-id", str(args.job_id)])
     if args.limit is not None:
@@ -218,6 +239,15 @@ def cmd_requeue_refresh(_args):
 
 def cmd_requeue_enrich(args):
     _run(_build_requeue_enrich_command(source=args.source, statuses=args.statuses))
+
+
+def cmd_requeue_errors(args):
+    if not args.error_codes:
+        raise SystemExit("At least one --error-code is required.")
+    command = [PYTHON, "scripts/requeue_enrichment_rows.py", "--source", args.source]
+    for code in args.error_codes:
+        command.extend(["--error-code", code])
+    _run(command)
 
 
 def cmd_cleanup_indeed(args):
@@ -324,7 +354,7 @@ def cmd_apply_prep(args):
     command = [
         PYTHON,
         "-m",
-        "orchestration.cli",
+        "coordinator.cli",
         "apply-prep",
         "--job-id",
         str(args.job_id),
@@ -377,7 +407,7 @@ def cmd_tests(args):
 
 
 def cmd_runner(_args):
-    _run([PYTHON, "scraper/runner.py"])
+    _run([PYTHON, "hunter/runner.py"])
 
 
 def cmd_service(args):
@@ -389,7 +419,14 @@ def cmd_service(args):
         "svc-start": ["sudo", "systemctl", "start", "hunt-scraper.service"],
         "svc-stop": ["sudo", "systemctl", "stop", "hunt-scraper.service"],
         "svc-status": ["systemctl", "status", "hunt-scraper.service", "--no-pager"],
-        "svc-log": ["journalctl", "-u", "hunt-scraper.service", "-n", str(args.lines), "--no-pager"],
+        "svc-log": [
+            "journalctl",
+            "-u",
+            "hunt-scraper.service",
+            "-n",
+            str(args.lines),
+            "--no-pager",
+        ],
         "svc-follow": ["journalctl", "-u", "hunt-scraper.service", "-f"],
         "timer-enable": ["sudo", "systemctl", "enable", "hunt-scraper.timer"],
         "timer-disable": ["sudo", "systemctl", "disable", "hunt-scraper.timer"],
@@ -410,11 +447,15 @@ def cmd_service(args):
 
 
 def build_parser():
-    parser = argparse.ArgumentParser(description="Short Hunt commands for local and server workflows.")
+    parser = argparse.ArgumentParser(
+        description="Short Hunt commands for local and server workflows."
+    )
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     auth_save = subparsers.add_parser("auth-save", help="Open Chrome and save LinkedIn auth state.")
-    auth_save.add_argument("--display", default=None, help="Optional DISPLAY override, e.g. :0 on Linux.")
+    auth_save.add_argument(
+        "--display", default=None, help="Optional DISPLAY override, e.g. :0 on Linux."
+    )
     auth_save.add_argument("--channel", default="chrome")
     auth_save.add_argument(
         "--storage-state",
@@ -422,7 +463,9 @@ def build_parser():
     )
     auth_save.set_defaults(func=cmd_auth_save)
 
-    auth_check = subparsers.add_parser("auth-check", help="Check whether LinkedIn auth state exists.")
+    auth_check = subparsers.add_parser(
+        "auth-check", help="Check whether LinkedIn auth state exists."
+    )
     auth_check.set_defaults(func=cmd_auth_check)
 
     auth_auto = subparsers.add_parser(
@@ -430,7 +473,9 @@ def build_parser():
         help="Attempt a best-effort LinkedIn relogin using stored environment credentials.",
     )
     auth_auto.add_argument("--headful", action="store_true")
-    auth_auto.add_argument("--display", default=None, help="Optional DISPLAY override for headed relogin, e.g. :98.")
+    auth_auto.add_argument(
+        "--display", default=None, help="Optional DISPLAY override for headed relogin, e.g. :98."
+    )
     auth_auto.add_argument("--channel", default="chrome")
     auth_auto.add_argument("--storage-state", default=None)
     auth_auto.add_argument("--timeout-ms", type=int, default=30000)
@@ -446,15 +491,21 @@ def build_parser():
     )
     auth_test_discord.set_defaults(func=cmd_auth_test_discord)
 
-    scrape = subparsers.add_parser("scrape", help="Run discovery, optionally with immediate enrichment.")
-    scrape.add_argument("--limit", type=int, default=None, help="Run post-scrape enrichment for up to N rows.")
+    scrape = subparsers.add_parser(
+        "scrape", help="Run discovery, optionally with immediate enrichment."
+    )
+    scrape.add_argument(
+        "--limit", type=int, default=None, help="Run post-scrape enrichment for up to N rows."
+    )
     scrape.add_argument("--channel", default="chrome")
     scrape.add_argument("--ui-verify-blocked", action="store_true")
     scrape.add_argument("--headful", action="store_true")
     scrape.add_argument("--skip-enrichment", action="store_true")
     scrape.set_defaults(func=cmd_scrape)
 
-    enrich = subparsers.add_parser("enrich", help="Run direct enrichment commands for supported sources.")
+    enrich = subparsers.add_parser(
+        "enrich", help="Run direct enrichment commands for supported sources."
+    )
     enrich.add_argument("--source", choices=["linkedin", "indeed", "all"], default="linkedin")
     enrich.add_argument("--job-id", type=int)
     enrich.add_argument("--limit", type=int)
@@ -472,7 +523,17 @@ def build_parser():
     jobs.add_argument("--source", choices=["all", "linkedin", "indeed"], default="all")
     jobs.add_argument(
         "--status",
-        choices=["ready", "pending", "processing", "done", "done_verified", "failed", "blocked", "blocked_verified", "all"],
+        choices=[
+            "ready",
+            "pending",
+            "processing",
+            "done",
+            "done_verified",
+            "failed",
+            "blocked",
+            "blocked_verified",
+            "all",
+        ],
         default="ready",
     )
     jobs.add_argument("--limit", type=int, default=10)
@@ -480,14 +541,28 @@ def build_parser():
     jobs.add_argument("--query", default="")
     jobs.add_argument(
         "--sort",
-        choices=["id", "source", "company", "title", "enrichment_status", "apply_type", "enrichment_attempts", "next_enrichment_retry_at", "last_enrichment_error", "date_scraped", "enriched_at"],
+        choices=[
+            "id",
+            "source",
+            "company",
+            "title",
+            "enrichment_status",
+            "apply_type",
+            "enrichment_attempts",
+            "next_enrichment_retry_at",
+            "last_enrichment_error",
+            "date_scraped",
+            "enriched_at",
+        ],
         default="date_scraped",
     )
     jobs.add_argument("--direction", choices=["asc", "desc"], default="desc")
     jobs.set_defaults(func=cmd_list_jobs)
 
     for status_name in ("ready", "blocked", "failed", "done", "processing", "pending"):
-        status_parser = subparsers.add_parser(status_name, help=f"List {status_name} LinkedIn rows.")
+        status_parser = subparsers.add_parser(
+            status_name, help=f"List {status_name} LinkedIn rows."
+        )
         status_parser.add_argument("--limit", type=int, default=10)
         status_parser.set_defaults(func=cmd_list_status, status=status_name)
 
@@ -496,7 +571,9 @@ def build_parser():
     job.add_argument("--full-description", action="store_true")
     job.set_defaults(func=cmd_job)
 
-    linkedin_job = subparsers.add_parser("job-linkedin", help="Show one LinkedIn job by id using the old inspector.")
+    linkedin_job = subparsers.add_parser(
+        "job-linkedin", help="Show one LinkedIn job by id using the old inspector."
+    )
     linkedin_job.add_argument("job_id", type=int)
     linkedin_job.set_defaults(func=cmd_job_linkedin)
 
@@ -505,7 +582,9 @@ def build_parser():
     verify.add_argument("--expect-type", default=None)
     verify.set_defaults(func=cmd_verify)
 
-    requeue = subparsers.add_parser("requeue-refresh", help="Requeue sparse historical LinkedIn rows.")
+    requeue = subparsers.add_parser(
+        "requeue-refresh", help="Requeue sparse historical LinkedIn rows."
+    )
     requeue.set_defaults(func=cmd_requeue_refresh)
 
     requeue_enrich = subparsers.add_parser(
@@ -521,6 +600,21 @@ def build_parser():
         help="Optional enrichment statuses to requeue. Defaults to failed + blocked + blocked_verified.",
     )
     requeue_enrich.set_defaults(func=cmd_requeue_enrich)
+
+    requeue_errors = subparsers.add_parser(
+        "requeue-errors",
+        help="Requeue failed enrichment rows back to pending by last error code.",
+    )
+    requeue_errors.add_argument("--source", choices=["linkedin", "indeed", "all"], default="all")
+    requeue_errors.add_argument(
+        "--error-code",
+        action="append",
+        dest="error_codes",
+        choices=["auth_expired", "rate_limited"],
+        help="One or more error codes to requeue (matches last_enrichment_error prefix).",
+        required=True,
+    )
+    requeue_errors.set_defaults(func=cmd_requeue_errors)
 
     retry = subparsers.add_parser(
         "retry",
@@ -545,7 +639,9 @@ def build_parser():
     cleanup_indeed.add_argument("--limit", type=int, default=None)
     cleanup_indeed.set_defaults(func=cmd_cleanup_indeed)
 
-    backfill = subparsers.add_parser("backfill", help="Run enrichment backfill in batches with a checkpoint after each batch.")
+    backfill = subparsers.add_parser(
+        "backfill", help="Run enrichment backfill in batches with a checkpoint after each batch."
+    )
     backfill.add_argument("--source", choices=["linkedin", "indeed", "all"], default="linkedin")
     backfill.add_argument("batch_size", type=int, nargs="?", default=100)
     backfill.add_argument("--job-id", type=int, action="append", dest="job_ids")
@@ -591,7 +687,12 @@ def build_parser():
     apply_prep.set_defaults(func=cmd_apply_prep)
 
     tests = subparsers.add_parser("tests", help="Run Hunt unit tests by stage or component.")
-    tests.add_argument("stage", choices=["1", "2", "3", "32", "4", "c2", "c3", "c4", "all"], default="all", nargs="?")
+    tests.add_argument(
+        "stage",
+        choices=["1", "2", "3", "32", "4", "c2", "c3", "c4", "all"],
+        default="all",
+        nargs="?",
+    )
     tests.set_defaults(func=cmd_tests)
 
     runner = subparsers.add_parser("runner", help="Run the continuous local runner.")
@@ -614,7 +715,9 @@ def build_parser():
         "xvfb-status",
         "review-health",
     ):
-        service_parser = subparsers.add_parser(service_command, help=f"Server helper: {service_command}.")
+        service_parser = subparsers.add_parser(
+            service_command, help=f"Server helper: {service_command}."
+        )
         service_parser.set_defaults(func=cmd_service, command_name=service_command, lines=200)
         if service_command == "svc-log":
             service_parser.add_argument("--lines", type=int, default=200)

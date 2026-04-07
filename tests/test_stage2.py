@@ -4,14 +4,10 @@ import sys
 import tempfile
 import unittest
 
-
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-SCRAPER_DIR = os.path.join(REPO_ROOT, "scraper")
-sys.path.insert(0, SCRAPER_DIR)
+sys.path.insert(0, REPO_ROOT)
 
-import db
-import enrich_linkedin
-import url_utils
+from hunter import db, enrich_linkedin, url_utils  # noqa: E402
 
 
 class Stage2Tests(unittest.TestCase):
@@ -149,7 +145,9 @@ class Stage2Tests(unittest.TestCase):
                 ),
             )
             conn.commit()
-            return conn.execute("SELECT id FROM jobs WHERE job_url = ?", (defaults["job_url"],)).fetchone()[0]
+            return conn.execute(
+                "SELECT id FROM jobs WHERE job_url = ?", (defaults["job_url"],)
+            ).fetchone()[0]
         finally:
             conn.close()
 
@@ -221,7 +219,9 @@ class Stage2Tests(unittest.TestCase):
         with self.with_temp_db() as path:
             job_id = self.insert_linkedin_job(path)
             db.claim_linkedin_job_for_enrichment(job_id=job_id)
-            updated = db.mark_linkedin_enrichment_failed(job_id, "layout_changed: apply button missing")
+            updated = db.mark_linkedin_enrichment_failed(
+                job_id, "layout_changed: apply button missing"
+            )
             self.assertEqual(updated, 1)
             row = db.get_job_by_id(job_id)
             self.assertEqual(row["enrichment_status"], "failed")
@@ -239,7 +239,9 @@ class Stage2Tests(unittest.TestCase):
             self.assertEqual(updated, 1)
             row = db.get_job_by_id(job_id)
             self.assertEqual(row["enrichment_status"], "blocked")
-            self.assertEqual(row["last_enrichment_error"], "security_verification: blocked by external challenge")
+            self.assertEqual(
+                row["last_enrichment_error"], "security_verification: blocked by external challenge"
+            )
 
     def test_mark_linkedin_enrichment_failed_can_persist_partial_apply_metadata(self):
         with self.with_temp_db() as path:
@@ -262,7 +264,9 @@ class Stage2Tests(unittest.TestCase):
             self.assertEqual(updated, 1)
             row = db.get_job_by_id(job_id)
             self.assertEqual(row["enrichment_status"], "failed")
-            self.assertEqual(row["last_enrichment_error"], "security_verification: blocked by external challenge")
+            self.assertEqual(
+                row["last_enrichment_error"], "security_verification: blocked by external challenge"
+            )
             self.assertEqual(row["apply_type"], "easy_apply")
             self.assertEqual(row["auto_apply_eligible"], 0)
             self.assertIsNone(row["apply_url"])
@@ -359,7 +363,9 @@ class Stage2Tests(unittest.TestCase):
 
     def test_ui_verify_status_helpers(self):
         self.assertEqual(enrich_linkedin.get_success_enrichment_status(ui_verify=False), "done")
-        self.assertEqual(enrich_linkedin.get_success_enrichment_status(ui_verify=True), "done_verified")
+        self.assertEqual(
+            enrich_linkedin.get_success_enrichment_status(ui_verify=True), "done_verified"
+        )
         self.assertEqual(
             enrich_linkedin.get_failure_enrichment_status("security_verification", ui_verify=False),
             "blocked",

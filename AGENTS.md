@@ -5,33 +5,36 @@
 Build a fully automated job application system that runs continuously on a Linux server.
 
 The long-term flow is:
-- Component 1 : discover and enrich job postings
-- Component 2 : tailor a LaTeX resume to each posting
-- Component 3 : browser autofill and apply assistance
-- Component 4 : orchestration and submit control
+- **C1 (Hunter)** : discover and enrich job postings (`hunter/` package)
+- **C2 (Trapper)** : tailor a LaTeX resume to each posting (`trapper/`)
+- **C3 (Executioner)** : browser autofill and apply assistance (extension)
+- **C4 (Coordinator)** : orchestration and submit control (`coordinator/`)
+
+Canonical naming: **`docs/NAMING.md`**. The old **`scraper/`** package directory was renamed to **`hunter/`**; **`hunter/scraper.py`** is only the discovery entrypoint filename.
 
 Current focus:
-- Component 1 Stage 4 hardening, backlog drain, and deployment polish
-- prioritize LinkedIn over every other source
-- skip LinkedIn Easy Apply jobs entirely
-- keep Component 1 deployment separate from later Component 2 and Component 3 deployment steps in Ansible
+- C1 (Hunter) Stage 4 hardening, backlog drain, and deployment polish
+- prioritize LinkedIn over every other source in enrichment dispatch
+- classify LinkedIn Easy Apply during enrichment (`easy_apply`, `auto_apply_eligible = 0`) so later automation does not treat them as external-apply targets
+- keep **C1 (Hunter)** deployment separate from later **C2 (Trapper)** and **C3 (Executioner)** deployment steps in Ansible
 
 ## Repo Overview
 
-This repo currently implements Component 1 discovery plus multi-source enrichment with LinkedIn-first priority.
+This repo currently implements **C1 (Hunter)** discovery plus multi-source enrichment with LinkedIn-first priority.
 
 Main files:
-- `scraper/scraper.py` : single-run scraper that discovers jobs and writes them to SQLite
-- `scraper/runner.py` : loop runner for continuous scraping
-- `scraper/db.py` : schema, migration, and DB helpers
-- `scraper/config.py` : search terms, locations, watchlist, and run interval
-- `scraper/browser_runtime.py` : shared Playwright browser/context runtime for supported UI fallback flows
-- `scraper/enrich_linkedin.py` : LinkedIn enrichment worker and batch runner
-- `scraper/enrich_indeed.py` : Indeed enrichment worker and batch runner
-- `scraper/enrich_jobs.py` : multi-source enrichment dispatcher
-- `scraper/enrichment_policy.py` : retry/backoff policy for unattended enrichment
-- `scraper/linkedin_session.py` : LinkedIn Playwright auth-state management
-- `scraper/url_utils.py` : URL normalization and ATS detection helpers
+- `hunter/scraper.py` : C1 (Hunter) discovery entrypoint (historical filename; discovers jobs and writes them to SQLite)
+- `hunter/runner.py` : loop runner for continuous discovery/enrichment cycles
+- `hunter/db.py` : schema, migration, and DB helpers
+- `hunter/config.py` : search terms, locations, watchlist, and run interval
+- `hunter/browser_runtime.py` : shared Playwright browser/context runtime for supported UI fallback flows
+- `hunter/enrich_linkedin.py` : LinkedIn enrichment worker and batch runner
+- `hunter/enrich_indeed.py` : Indeed enrichment worker and batch runner
+- `hunter/enrichment_dispatch.py` : central enrichment routing by `jobs.source` (priority, per-source auth)
+- `hunter/enrich_jobs.py` : CLI entrypoint; delegates to `enrichment_dispatch.run_enrichment_round`
+- `hunter/enrichment_policy.py` : retry/backoff policy for unattended enrichment
+- `hunter/linkedin_session.py` : LinkedIn Playwright auth-state management
+- `hunter/url_utils.py` : URL normalization and ATS detection helpers
 - `review_app.py` : browser-facing review/control-plane app for the live queue
 - `agents/system_prompt.md` : agent contract for downstream apply/orchestration work
 
@@ -60,15 +63,15 @@ LinkedIn-specific enrichment columns:
 
 - `priority = 1` jobs are for manual application by the user only
 - automation should only act on `priority = 0` jobs unless the user explicitly says otherwise
-- LinkedIn Easy Apply jobs are not targets for automation
-- if a LinkedIn job is detected as Easy Apply, classify it so later stages never try to use it
-- Component 1 should discover and enrich jobs only : it should not submit applications
+- LinkedIn Easy Apply jobs are not targets for downstream apply automation
+- if a LinkedIn job is detected as Easy Apply during enrichment, classify it (`apply_type`, `auto_apply_eligible`) so later stages never treat it like an external ATS apply
+- C1 (Hunter) should discover and enrich jobs only : it should not submit applications
 
 ## Current Stage Plan
 
 Stage 1 : completed
 - added enrichment-ready DB columns
-- updated scraper URL semantics
+- updated C1 listing vs apply URL semantics (`job_url` vs `apply_url`)
 - marked historical LinkedIn rows as pending enrichment
 
 Stage 2 : completed
@@ -83,7 +86,7 @@ Stage 3 : completed
 - finalized retry/backoff and terminal-state policy
 - documented and supported the `server2` deployment/runtime model
 - added a browser-facing review/control-plane service for manual review
-- kept the flow ready for later Component 2/3 agents
+- kept the flow ready for later C2 (Trapper)/C3 (Executioner) agents
 
 Stage 3.2 : completed
 - generalized the enrichment queue/runtime to support LinkedIn and Indeed
@@ -99,10 +102,10 @@ Current repo-side runtime notes:
   - separate review/control-plane web app
 - for `server2`, blocked-row UI fallback is intended to run on a separate virtual display such as `Xvfb :98`, not the main desktop foreground
 - the current Ansible deployment split is:
-  - Component 1 on `job_agent` Stage 6
-  - later Component 2 in its own separate step/stage
-  - later Component 3 in its own separate step/stage
-  - later Component 4 / OpenClaw integration in its own separate step/stage
+  - C1 (Hunter) on `job_agent` Stage 6
+  - later C2 (Trapper) in its own separate step/stage
+  - later C3 (Executioner) in its own separate step/stage
+  - later C4 (Coordinator) / OpenClaw integration in its own separate step/stage
 
 Stage 4 : current
 - backfill old and mixed-source backlog safely
@@ -126,9 +129,9 @@ Stage 4 : current
 
 - System roadmap : `docs/roadmap.md`
 - Component docs index : `docs/components/README.md`
-- Component 1 plan : `docs/components/component1/README.md`
-- Component 1 Stage 3 + server2 deployment plan : `docs/components/component1/stage3_server2_plan.md`
-- Component 2 plan : `docs/components/component2/README.md`
-- Component 3 plan : `docs/components/component3/README.md`
-- Component 4 plan : `docs/components/component4/README.md`
+- C1 (Hunter) plan : `docs/components/component1/README.md`
+- C1 (Hunter) Stage 3 + server2 deployment plan : `docs/components/component1/stage3_server2_plan.md`
+- C2 (Trapper) plan : `docs/components/component2/README.md`
+- C3 (Executioner) plan : `docs/components/component3/README.md`
+- C4 (Coordinator) plan : `docs/components/component4/README.md`
 - Existing repo notes for other tools : `CLAUDE.md`

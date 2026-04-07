@@ -9,14 +9,11 @@ from contextlib import redirect_stdout
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-SCRAPER_DIR = REPO_ROOT / "scraper"
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
-if str(SCRAPER_DIR) not in sys.path:
-    sys.path.insert(0, str(SCRAPER_DIR))
 
-import db  # noqa: E402
-from orchestration.cli import main
+from coordinator.cli import main  # noqa: E402
+from hunter import db  # noqa: E402
 
 
 class Component4CliTests(unittest.TestCase):
@@ -48,17 +45,22 @@ class Component4CliTests(unittest.TestCase):
         class TempRootContext:
             def __init__(self):
                 self.root = tempfile.TemporaryDirectory()
-                self.old_root = os.environ.get("HUNT_ORCHESTRATION_ROOT")
+                self.old_coord = os.environ.get("HUNT_COORDINATOR_ROOT")
+                self.old_orch = os.environ.get("HUNT_ORCHESTRATION_ROOT")
 
             def __enter__(self):
-                os.environ["HUNT_ORCHESTRATION_ROOT"] = self.root.name
+                os.environ.pop("HUNT_COORDINATOR_ROOT", None)
+                os.environ.pop("HUNT_ORCHESTRATION_ROOT", None)
+                os.environ["HUNT_COORDINATOR_ROOT"] = self.root.name
                 return self.root.name
 
             def __exit__(self, exc_type, exc, tb):
-                if self.old_root is None:
-                    os.environ.pop("HUNT_ORCHESTRATION_ROOT", None)
-                else:
-                    os.environ["HUNT_ORCHESTRATION_ROOT"] = self.old_root
+                for key in ("HUNT_COORDINATOR_ROOT", "HUNT_ORCHESTRATION_ROOT"):
+                    os.environ.pop(key, None)
+                if self.old_coord is not None:
+                    os.environ["HUNT_COORDINATOR_ROOT"] = self.old_coord
+                if self.old_orch is not None:
+                    os.environ["HUNT_ORCHESTRATION_ROOT"] = self.old_orch
                 self.root.cleanup()
 
         return TempRootContext()
@@ -220,7 +222,17 @@ class Component4CliTests(unittest.TestCase):
                 )
                 with self.with_temp_orchestration_root():
                     with redirect_stdout(stdout):
-                        exit_code = main(["run", "--db-path", path, "--job-id", str(job_id), "--source-runtime", "openclaw"])
+                        exit_code = main(
+                            [
+                                "run",
+                                "--db-path",
+                                path,
+                                "--job-id",
+                                str(job_id),
+                                "--source-runtime",
+                                "openclaw",
+                            ]
+                        )
             finally:
                 if os.path.exists(resume_path):
                     os.remove(resume_path)

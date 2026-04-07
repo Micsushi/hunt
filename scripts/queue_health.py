@@ -3,12 +3,10 @@ import json
 import sys
 from pathlib import Path
 
-
 REPO_ROOT = Path(__file__).resolve().parent.parent
-SCRAPER_DIR = REPO_ROOT / "scraper"
-sys.path.insert(0, str(SCRAPER_DIR))
+sys.path.insert(0, str(REPO_ROOT))
 
-import db  # noqa: E402
+from hunter import db  # noqa: E402
 
 
 def print_section(title):
@@ -34,7 +32,9 @@ def print_job_rows(rows):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Show enrichment queue health across supported sources.")
+    parser = argparse.ArgumentParser(
+        description="Show enrichment queue health across supported sources."
+    )
     parser.add_argument(
         "--limit",
         type=int,
