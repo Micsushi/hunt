@@ -33,6 +33,14 @@ ACCOUNT_CHOOSER_SELECTORS = (
     "ul[class*='account-picker'] button",
     "ul[class*='account-picker'] li",
 )
+ALT_SIGN_IN_SELECTORS = (
+    "a:has-text('Sign in using another account')",
+    "button:has-text('Sign in using another account')",
+    "text=/Sign in using another account/i",
+    "a:has-text('Use a different account')",
+    "button:has-text('Use a different account')",
+    "text=/Use a different account/i",
+)
 
 # LinkedIn's "Important notice" automation-detection page.
 # Appears at /checkpoint/ URLs so it looks "logged out" to page_looks_logged_out;
@@ -114,6 +122,13 @@ def _relogin_debug_enabled():
 def _log_relogin(message):
     if _relogin_debug_enabled():
         print(f"[linkedin_relogin] {message}", flush=True)
+
+
+def _selector_count(page, selector):
+    try:
+        return page.locator(selector).count()
+    except Exception:
+        return 0
 
 
 def get_all_accounts():
@@ -345,7 +360,22 @@ def _login_form_available(page):
 
 def _wait_for_login_surface(page, *, email=None, timeout_ms=30000, poll_ms=500):
     remaining = max(timeout_ms, poll_ms)
+    attempt = 0
     while remaining > 0:
+        attempt += 1
+        if _relogin_debug_enabled():
+            alt_counts = {
+                selector: _selector_count(page, selector)
+                for selector in ALT_SIGN_IN_SELECTORS
+            }
+            chooser_counts = {
+                selector: _selector_count(page, selector)
+                for selector in ACCOUNT_CHOOSER_SELECTORS
+            }
+            _log_relogin(
+                f"wait_for_login_surface attempt={attempt} url={page.url} "
+                f"alt_sign_in_counts={alt_counts} chooser_counts={chooser_counts}"
+            )
         sign_in_other = _try_sign_in_another_account(page, timeout_ms=poll_ms)
         email_input = page.locator("input[name='session_key']")
         password_input = page.locator("input[name='session_password']")
@@ -427,12 +457,7 @@ def _try_account_chooser_sign_in(page, *, email=None, timeout_ms=30000):
 
 def _try_sign_in_another_account(page, *, timeout_ms=30000):
     """Click 'Sign in using another account' if present, to reach the email/password form."""
-    for selector in (
-        "a:has-text('Sign in using another account')",
-        "button:has-text('Sign in using another account')",
-        "a:has-text('Use a different account')",
-        "button:has-text('Use a different account')",
-    ):
+    for selector in ALT_SIGN_IN_SELECTORS:
         try:
             locator = page.locator(selector)
             if locator.count():
