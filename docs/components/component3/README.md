@@ -27,6 +27,10 @@ Out of scope for the first milestone:
 - OTP automation
 - full autonomous submit decisions
 
+## Operator CLI (convention)
+
+Extension packaging and browser-side tooling stay in **`executioner/`**. Any **repo-level** operator command (load packed extension, run a harness, etc.) should be added to **`scripts/huntctl.py`** so users keep using **`hunt …`**. See **`docs/CLI_CONVENTIONS.md`**.
+
 ## Core Product Shape
 
 C3 (Executioner) is not the final decision-maker.

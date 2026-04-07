@@ -1,6 +1,6 @@
 # Local Testing Guide (C1 Hunter + Review Webapp)
 
-This guide explains how to run **C1 (Hunter)** discovery + enrichment (Python package **`hunter/`**, script **`hunter/scraper.py`**) and the **review webapp** locally. Naming reference: **`docs/NAMING.md`**. End-to-end operator picture (cadence, queues, headful fallback) : **`docs/C1_OPERATOR_WORKFLOW.md`**.
+This guide explains how to run **C1 (Hunter)** discovery + enrichment (Python package **`hunter/`**, script **`hunter/scraper.py`**) and the **review webapp** locally. Naming reference: **`docs/NAMING.md`**. End-to-end operator picture (cadence, queues, headful fallback) : **`docs/C1_OPERATOR_WORKFLOW.md`**. **`hunt` / `hunter` CLI** conventions : **`docs/CLI_CONVENTIONS.md`**.
 
 ## Goals
 

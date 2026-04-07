@@ -12,6 +12,10 @@ C1 (Hunter).
 
 In this repo, C1 is job discovery and enrichment.
 
+### `hunt` / `hunter` / `huntctl`
+
+Repo-root launchers **`hunt`** and **`hunter`** (shell/PowerShell/cmd) both invoke **`scripts/huntctl.py`**. Operator-facing subcommands (**`start`**, **`enrich N`**, **`apply-prep`**, …) live there; see **`docs/CLI_CONVENTIONS.md`** for how to add C2–C4 commands.
+
 ### C2
 
 C2 (Trapper).

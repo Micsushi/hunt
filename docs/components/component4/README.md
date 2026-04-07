@@ -36,6 +36,10 @@ Still later:
 - loading C3 context directly into a live Chrome extension session
 - full OpenClaw/browser-lane integration on `server2`
 
+## Operator CLI (convention)
+
+C4 already surfaces **`hunt apply-prep <job_id>`** via **`huntctl`**. Additional coordinator commands (submit-gate, run status, drain orchestration queue) should follow the same pattern : new **`huntctl`** subparsers, documented here and in **`docs/CLI_CONVENTIONS.md`**. Prefer **`python -m coordinator.cli`** (or shared service modules) as the implementation target that **`huntctl`** invokes.
+
 ## Why C4 (Coordinator) Should Be Separate
 
 C3 (Executioner) should remain the browser autofill engine.

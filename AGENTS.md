@@ -10,7 +10,7 @@ The long-term flow is:
 - **C3 (Executioner)** : browser autofill and apply assistance (extension)
 - **C4 (Coordinator)** : orchestration and submit control (`coordinator/`)
 
-Canonical naming: **`docs/NAMING.md`**. The old **`scraper/`** package directory was renamed to **`hunter/`**; **`hunter/scraper.py`** is only the discovery entrypoint filename.
+Canonical naming: **`docs/NAMING.md`**. The old **`scraper/`** package directory was renamed to **`hunter/`**; **`hunter/scraper.py`** is only the discovery entrypoint filename. **Operator CLI contract** (and how to add commands for C2–C4): **`docs/CLI_CONVENTIONS.md`**.
 
 Current focus:
 - C1 (Hunter) Stage 4 hardening, backlog drain, and deployment polish
@@ -36,6 +36,7 @@ Main files:
 - `hunter/linkedin_session.py` : LinkedIn Playwright auth-state management
 - `hunter/url_utils.py` : URL normalization and ATS detection helpers
 - `review_app.py` : browser-facing review/control-plane app for the live queue
+- `hunt` / `hunter` repo-root launchers : thin shims to `scripts/huntctl.py` (`start` / `stop` / `restart` on Linux systemd, `enrich N` batch shorthand)
 - `agents/system_prompt.md` : agent contract for downstream apply/orchestration work
 
 ## Current Data Model Rules

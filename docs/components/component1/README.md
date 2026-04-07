@@ -232,13 +232,15 @@ Stage 3.2 outcome:
 
 ## Command Reference
 
-Short wrappers are now available at the repo root:
+**Conventions for all `hunt` subcommands and for adding C2–C4 commands later:** **`docs/CLI_CONVENTIONS.md`**.
+
+Short wrappers are now available at the repo root ( **`hunter.*`** is the same CLI):
 - Windows PowerShell:
-  `.\hunt.ps1 <command>`
+  `.\hunt.ps1 <command>` or `.\hunter.ps1 <command>`
 - Windows cmd:
-  `hunt.cmd <command>`
+  `hunt.cmd <command>` or `hunter.cmd <command>`
 - Linux/macOS:
-  `./hunt.sh <command>`
+  `./hunt.sh <command>` or `./hunter.sh <command>`
 
 Launcher note:
 - the repo-root wrapper files are now thin shims
@@ -249,6 +251,12 @@ Launcher note:
 - on deployed Linux hosts, `./hunt.sh` now auto-targets `~/data/hunt/hunt.db` and `~/data/hunt/artifacts` when that runtime directory exists, so manual queue/auth commands line up with the `systemd` runtime
 
 Common examples:
+- **start / stop / restart** scheduled C1 on Linux (systemd timer + Xvfb):
+  `./hunt.sh start`
+  `./hunt.sh stop`
+  `./hunt.sh restart`
+- enrichment batch of **50** (all sources):
+  `./hunt.sh enrich 50 --source all`
 - queue health:
   `.\hunt.ps1 queue`
   `./hunt.sh queue`
@@ -322,7 +330,7 @@ Common examples:
 - pause automatic scrape/enrich cycles on the server:
   `./hunt.sh auto-off`
 - resume automatic scrape/enrich cycles on the server:
-  `./hunt.sh auto-on`
+  `./hunt.sh auto-on` (legacy; prefer **`./hunt.sh start`**)
 - check whether the automatic timer is paused or running:
   `./hunt.sh auto-status`
 
@@ -637,7 +645,7 @@ C1 sign-off runbook on `server2`:
    - files exist under `/home/michael/data/hunt/artifacts`
    - the review app job page links to them
 7. re-enable the unattended timer
-   - `./hunt.sh auto-on`
+   - `./hunt.sh start` (or legacy `./hunt.sh auto-on`)
    - `./hunt.sh auto-status`
 8. observe at least one normal scheduled cycle
    - it should scrape and then run post-scrape enrichment up to the configured batch limit

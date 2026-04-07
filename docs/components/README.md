@@ -2,6 +2,8 @@
 
 **Naming:** Each component has an ID and a code name: **C1 (Hunter)**, **C2 (Trapper)**, **C3 (Executioner)**, **C4 (Coordinator)**. See **`../NAMING.md`** for how that maps to folders (`hunter/`, `trapper/`, `coordinator/`, extension).
 
+**CLI:** **`../CLI_CONVENTIONS.md`** defines how **`hunt` / `hunter`** commands are added so C2–C4 match C1 patterns.
+
 This folder contains the current planning docs for each major part of the system.
 
 - `component1/README.md` : posting discovery and multi-source enrichment (LinkedIn + Indeed)

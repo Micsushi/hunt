@@ -23,8 +23,9 @@ This file is the **single place** to resolve naming: **C1–C4**, **Hunter / Tra
 ## Quick map for operators
 
 - Install C1 deps: `pip install -r hunter/requirements.txt`
-- One-shot discovery (typical): `python hunter/scraper.py`
+- One-shot discovery (typical): `python hunter/scraper.py` (or **`./hunt.sh scrape`** from repo root)
 - C1 apply/readiness helpers used by C4: `coordinator/` + `scripts/huntctl.py`
+- **CLI conventions** ( **`hunt` / `hunter`**, adding future C2–C4 subcommands): **`docs/CLI_CONVENTIONS.md`**
 
 ## Docs convention
 

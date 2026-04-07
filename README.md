@@ -75,6 +75,7 @@ See `agents/system_prompt.md` for the full agent contract (DB schema, status lif
 - System roadmap: `docs/roadmap.md`
 - Version roadmap (draft): `docs/VERSIONS.md`
 - C1 operator workflow (discovery / enrichment / review): `docs/C1_OPERATOR_WORKFLOW.md`
+- CLI conventions (`hunt` / `hunter`, adding C2–C4 commands): `docs/CLI_CONVENTIONS.md`
 - Local testing guide: `docs/LOCAL_TESTING.md`
 - Live fix tracker: `todo.md`
 - Component docs index: `docs/components/README.md`
@@ -104,6 +105,8 @@ Older one-off setup and run helpers now live under:
 - `tools/legacy/hunt.service`
 
 The preferred modern entrypoints are:
-- `.\hunt.ps1`
-- `hunt.cmd`
-- `./hunt.sh`
+- `.\hunt.ps1` or `.\hunter.ps1` (same CLI)
+- `hunt.cmd` or `hunter.cmd`
+- `./hunt.sh` or `./hunter.sh`
+
+**C1 shortcuts** (see **`docs/C1_OPERATOR_WORKFLOW.md`**): on the server, `./hunt.sh start` / `stop` / `restart` for the systemd timer; `./hunt.sh enrich 50 --source all` for a 50-job enrichment batch.

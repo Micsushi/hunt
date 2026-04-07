@@ -164,7 +164,7 @@ What has been verified so far:
 
 What is not finished yet:
 - the C4 (Coordinator) test suite has not been rewritten to match the new runtime
-- `huntctl apply-prep` and the docs should consistently point at the shared C4 service rather than older helper scripts
+- `huntctl apply-prep` and the docs should consistently point at the shared C4 service rather than older helper scripts; new C4 operator verbs follow **`docs/CLI_CONVENTIONS.md`**
 - the docs still need a final "implemented commands" polish pass once tests are in place
 
 ## Resume Point

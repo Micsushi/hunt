@@ -2,6 +2,8 @@
 
 **Component IDs and code names:** C1 (Hunter), C2 (Trapper), C3 (Executioner), C4 (Coordinator). Repo layout: **`docs/NAMING.md`**.
 
+**Operator CLI:** repo-root **`hunt` / `hunter`** → **`scripts/huntctl.py`**. Conventions and how to add C2–C4 commands: **`docs/CLI_CONVENTIONS.md`**. C1 quick reference: **`docs/C1_OPERATOR_WORKFLOW.md`**.
+
 ## Goal
 
 Build a continuously running Linux-hosted system that can:

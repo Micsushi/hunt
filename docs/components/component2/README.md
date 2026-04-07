@@ -30,6 +30,10 @@ Deployment should happen only after the current C1 (Hunter) server rollout is st
 When deployment starts, C2 (Trapper) should be its own Ansible step/stage rather than being folded into the current C1 (Hunter) Hunt deployment.
 C2 (Trapper) deployment should also stay separate from later C3 (Executioner) deployment.
 
+## Operator CLI (convention)
+
+Stable operator flows for C2 (batch tailor, status, etc.) should be exposed as **`hunt`** / **`hunter`** subcommands by extending **`scripts/huntctl.py`** (which may delegate to `python -m trapper.cli` or `trapper/cli.py`). Do not introduce a second repo-wide CLI. See **`docs/CLI_CONVENTIONS.md`**.
+
 ## Locked Decisions
 
 These decisions are now treated as the default C2 (Trapper) contract unless the user changes them later.

@@ -3,7 +3,7 @@
 This document is a **planning note**: it describes likely future expansions and version milestones.
 It is intentionally **non-binding** and will be refined as the system is used in production.
 
-**Naming:** C1–C4 code names (Hunter, Trapper, Executioner, Coordinator) and repo layout (`hunter/` package, `trapper/`, `coordinator/`, etc.) are summarized in **`docs/NAMING.md`**. C1 runtime code lives in the **`hunter`** Python package; the file **`hunter/scraper.py`** is only the discovery entrypoint (historical filename), not a separate component.
+**Naming:** C1–C4 code names (Hunter, Trapper, Executioner, Coordinator) and repo layout (`hunter/` package, `trapper/`, `coordinator/`, etc.) are summarized in **`docs/NAMING.md`**. C1 runtime code lives in the **`hunter`** Python package; the file **`hunter/scraper.py`** is only the discovery entrypoint (historical filename), not a separate component. **Operator commands** : **`docs/CLI_CONVENTIONS.md`**, C1 narrative **`docs/C1_OPERATOR_WORKFLOW.md`**.
 
 ## Component Versions (Code Names)
 

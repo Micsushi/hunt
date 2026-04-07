@@ -156,6 +156,7 @@ def cmd_scrape(args):
 
 
 def cmd_enrich(args):
+    batch_limit = args.limit if args.limit is not None else args.batch
     if args.source == "linkedin":
         command = [PYTHON, "hunter/enrich_linkedin.py", "--channel", args.channel]
     elif args.source == "indeed":
@@ -164,8 +165,8 @@ def cmd_enrich(args):
         command = [PYTHON, "hunter/enrich_jobs.py", "--channel", args.channel]
     if args.job_id is not None:
         command.extend(["--job-id", str(args.job_id)])
-    if args.limit is not None:
-        command.extend(["--limit", str(args.limit)])
+    if batch_limit is not None:
+        command.extend(["--limit", str(batch_limit)])
     if args.force and args.source != "all":
         command.append("--force")
     if args.ui_verify and args.source in {"linkedin", "indeed"}:
@@ -410,6 +411,53 @@ def cmd_runner(_args):
     _run([PYTHON, "hunter/runner.py"])
 
 
+def cmd_start(args):
+    """Enable scheduled C1 runs (Linux) or one local scrape cycle (Windows)."""
+    if IS_WINDOWS:
+        cmd_scrape(
+            argparse.Namespace(
+                limit=None,
+                channel=args.channel,
+                ui_verify_blocked=False,
+                headful=False,
+                skip_enrichment=False,
+            )
+        )
+        return
+    steps = [["sudo", "systemctl", "enable", "--now", "hunt-scraper.timer"]]
+    _run_systemd_steps(steps)
+
+
+def cmd_stop(args):
+    """Stop the C1 timer (Linux). On Windows, no-op with a hint."""
+    if IS_WINDOWS:
+        raise SystemExit(
+            "On Windows there is no Hunt systemd timer. "
+            "Stop the terminal where `hunt runner` or `hunt review` is running."
+        )
+    _run_systemd_steps([["sudo", "systemctl", "disable", "--now", "hunt-scraper.timer"]])
+
+
+def cmd_restart(args):
+    """Reload units and restart Xvfb + scraper timer (Linux server)."""
+    _require_linux("restart")
+    steps = [
+        ["sudo", "systemctl", "daemon-reload"],
+        ["sudo", "systemctl", "restart", "hunt-xvfb.service"],
+        ["sudo", "systemctl", "restart", "hunt-scraper.timer"],
+    ]
+    _run_systemd_steps(steps)
+
+
+def _run_systemd_steps(steps):
+    for step in steps:
+        print("[huntctl] Running:", " ".join(shlex.quote(str(p)) for p in step))
+        result = subprocess.run(step, cwd=REPO_ROOT)
+        if result.returncode != 0:
+            raise SystemExit(result.returncode)
+    raise SystemExit(0)
+
+
 def cmd_service(args):
     _require_linux(args.command_name)
     mapping = {
@@ -503,12 +551,44 @@ def build_parser():
     scrape.add_argument("--skip-enrichment", action="store_true")
     scrape.set_defaults(func=cmd_scrape)
 
+    start = subparsers.add_parser(
+        "start",
+        help="Linux: enable and start hunt-scraper.timer. Windows: one scrape+enrich cycle.",
+    )
+    start.add_argument(
+        "--channel",
+        default="chrome",
+        help="Windows only: passed to scrape when running a local cycle.",
+    )
+    start.set_defaults(func=cmd_start)
+
+    stop = subparsers.add_parser(
+        "stop",
+        help="Linux: disable and stop hunt-scraper.timer (stops scheduled C1 runs).",
+    )
+    stop.set_defaults(func=cmd_stop)
+
+    restart = subparsers.add_parser(
+        "restart",
+        help="Linux: daemon-reload, restart hunt-xvfb and hunt-scraper.timer (after unit or code changes).",
+    )
+    restart.set_defaults(func=cmd_restart)
+
     enrich = subparsers.add_parser(
-        "enrich", help="Run direct enrichment commands for supported sources."
+        "enrich",
+        help="Run enrichment for supported sources. Example: hunt enrich 50 --source all",
+    )
+    enrich.add_argument(
+        "batch",
+        type=int,
+        nargs="?",
+        default=None,
+        metavar="N",
+        help="Batch size (shortcut for --limit). Example: hunt enrich 50",
     )
     enrich.add_argument("--source", choices=["linkedin", "indeed", "all"], default="linkedin")
     enrich.add_argument("--job-id", type=int)
-    enrich.add_argument("--limit", type=int)
+    enrich.add_argument("--limit", type=int, default=None)
     enrich.add_argument("--channel", default="chrome")
     enrich.add_argument("--force", action="store_true")
     enrich.add_argument("--ui-verify", action="store_true")
