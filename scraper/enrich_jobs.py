@@ -4,8 +4,9 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from db import ENRICHMENT_SOURCE_PRIORITY, count_ready_jobs_for_enrichment  # noqa: E402
+from db import ENRICHMENT_SOURCE_PRIORITY, count_ready_jobs_for_enrichment, get_linkedin_auth_state  # noqa: E402
 from enrich_indeed import process_batch as process_indeed_batch  # noqa: E402
+from linkedin_session import attempt_auto_relogin, rotate_linkedin_account  # noqa: E402
 from enrich_linkedin import process_batch as process_linkedin_batch  # noqa: E402
 
 
@@ -20,6 +21,41 @@ def process_multi_source_batch(
     ui_verify_blocked=False,
     return_summary=False,
 ):
+    relogin_result = None
+    linkedin_auth = get_linkedin_auth_state()
+    if not linkedin_auth.get("available"):
+        relogin_result = attempt_auto_relogin(
+            storage_state_path=storage_state_path,
+            browser_channel=browser_channel,
+            headless=headless,
+            slow_mo=slow_mo,
+            timeout_ms=timeout_ms,
+        )
+        if relogin_result.get("attempted"):
+            print(f"[enrich] {relogin_result['message']}")
+        linkedin_auth = get_linkedin_auth_state()
+
+    if not linkedin_auth.get("available"):
+        aggregate = {
+            "exit_code": 1,
+            "attempted": 0,
+            "ui_verified": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "actionable_failed": 0,
+            "failure_breakdown": {},
+            "total_elapsed_seconds": 0.0,
+            "average_seconds_per_job": 0.0,
+            "stop_error_code": "auth_expired",
+            "by_source": {},
+        }
+        print("[enrich] Skipping multi-source enrichment because LinkedIn auth needs to be refreshed.")
+        if linkedin_auth.get("last_error") and not (relogin_result and relogin_result.get("attempted")):
+            print(f"[enrich] Last auth error: {linkedin_auth['last_error']}")
+        if return_summary:
+            return aggregate
+        return aggregate["exit_code"]
+
     remaining = limit
     aggregate = {
         "exit_code": 0,
@@ -81,6 +117,14 @@ def process_multi_source_batch(
         remaining -= summary["attempted"]
         if summary["stop_error_code"] and not aggregate["stop_error_code"]:
             aggregate["stop_error_code"] = summary["stop_error_code"]
+            if summary["stop_error_code"] == "rate_limited":
+                rotation = rotate_linkedin_account(
+                    browser_channel=browser_channel,
+                    headless=headless,
+                    slow_mo=slow_mo,
+                    timeout_ms=timeout_ms,
+                )
+                print(f"[enrich] {rotation['message']}")
             break
 
     if aggregate["attempted"]:

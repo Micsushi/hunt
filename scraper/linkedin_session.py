@@ -1,4 +1,6 @@
 import argparse
+import datetime
+import json
 import os
 import sys
 from contextlib import contextmanager
@@ -6,10 +8,49 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_STORAGE_STATE_PATH = ROOT / ".state" / "linkedin_auth_state.json"
+LINKEDIN_ACTIVE_ACCOUNT_FILE = ROOT / ".state" / "linkedin_active_account"
+ACCOUNT_BLOCKS_FILE = ROOT / ".state" / "linkedin_account_blocks.json"
+ACCOUNT_BLOCK_DAYS = 7
 DEFAULT_BROWSER_CHANNEL = os.getenv("LINKEDIN_BROWSER_CHANNEL") or None
 LOGIN_VERIFICATION_URL = "https://www.linkedin.com/feed/"
+LOGIN_URL = "https://www.linkedin.com/login"
+AUTO_RELOGIN_EMAIL_ENV = "LINKEDIN_EMAIL"
+AUTO_RELOGIN_PASSWORD_ENV = "LINKEDIN_PASSWORD"
+AUTO_RELOGIN_ENABLED_ENV = "LINKEDIN_AUTO_RELOGIN"
+LINKEDIN_ACCOUNTS_ENV = "LINKEDIN_ACCOUNTS"
+ACCOUNT_CHOOSER_SELECTORS = (
+    "button:has-text('Continue as')",
+    "a:has-text('Continue as')",
+    "button:has-text('Continue')",
+    "a:has-text('Continue')",
+    "button:has-text('Sign in')",
+    "a:has-text('Sign in')",
+)
+
+# LinkedIn's "Important notice" automation-detection page.
+# Appears at /checkpoint/ URLs so it looks "logged out" to page_looks_logged_out;
+# must be checked first.
+AUTOMATION_NOTICE_SELECTOR = "button:has-text('Agree to comply')"
+
+# Buttons LinkedIn may show between login and the feed (interstitials / confirmations).
+# Only clicked when the page is neither the feed nor a login page.
+POST_LOGIN_CONFIRMATION_SELECTORS = (
+    "button:has-text('Yes, stay signed in')",
+    "button:has-text('Stay signed in')",
+    "button:has-text('Accept')",
+    "button:has-text('I agree')",
+    "button:has-text('Continue')",
+    "a:has-text('Continue')",
+    "button:has-text('Done')",
+    "button:has-text('Next')",
+    "button:has-text('Skip')",
+    "button:has-text('Remind me later')",
+    "button:has-text('Not now')",
+)
 
 from browser_runtime import BrowserRuntimeError, open_browser_context, load_sync_playwright
+from db import mark_linkedin_auth_available
+from notifications import send_discord_webhook_message
 
 
 class LinkedInSessionError(RuntimeError):
@@ -24,9 +65,126 @@ class LinkedInSessionNotSaved(LinkedInSessionError):
     pass
 
 
+class LinkedInAutomationFlagged(LinkedInSessionError):
+    """Raised when LinkedIn shows the automation-tool compliance notice for an account."""
+    pass
+
+
+def _get_bool_env(name, default):
+    value = os.getenv(name)
+    if value is None or not value.strip():
+        return default
+
+    normalized = value.strip().lower()
+    if normalized in {"1", "true", "yes", "on"}:
+        return True
+    if normalized in {"0", "false", "no", "off"}:
+        return False
+    return default
+
+
+def get_auto_relogin_credentials():
+    email = (os.getenv(AUTO_RELOGIN_EMAIL_ENV) or "").strip()
+    password = os.getenv(AUTO_RELOGIN_PASSWORD_ENV) or ""
+    enabled = _get_bool_env(AUTO_RELOGIN_ENABLED_ENV, True)
+    return {
+        "enabled": bool(enabled and email and password),
+        "email": email,
+        "password": password,
+    }
+
+
+def get_all_accounts():
+    """Return a list of {email, password} dicts.
+
+    Reads from LINKEDIN_ACCOUNTS (JSON array) if set, otherwise falls back to
+    the single-account LINKEDIN_EMAIL / LINKEDIN_PASSWORD env vars.
+    """
+    raw = (os.getenv(LINKEDIN_ACCOUNTS_ENV) or "").strip()
+    if raw:
+        try:
+            accounts = json.loads(raw)
+            if isinstance(accounts, list):
+                valid = [
+                    a for a in accounts
+                    if isinstance(a, dict)
+                    and (a.get("email") or "").strip()
+                    and a.get("password")
+                ]
+                if valid:
+                    return valid
+        except (json.JSONDecodeError, ValueError):
+            pass
+
+    creds = get_auto_relogin_credentials()
+    if creds["enabled"]:
+        return [{"email": creds["email"], "password": creds["password"]}]
+    return []
+
+
+def get_active_account_index():
+    """Return the persisted active account index (0-based), defaulting to 0."""
+    try:
+        return max(0, int(LINKEDIN_ACTIVE_ACCOUNT_FILE.read_text().strip()))
+    except Exception:
+        return 0
+
+
+def set_active_account_index(index):
+    """Write the active account index to disk."""
+    LINKEDIN_ACTIVE_ACCOUNT_FILE.parent.mkdir(parents=True, exist_ok=True)
+    LINKEDIN_ACTIVE_ACCOUNT_FILE.write_text(str(index))
+
+
+def get_storage_state_path_for_account(index):
+    """Map an account index to its storage state file path."""
+    if index == 0:
+        return DEFAULT_STORAGE_STATE_PATH
+    return ROOT / ".state" / f"linkedin_auth_state_{index}.json"
+
+
+def load_account_blocks():
+    """Return a dict mapping str(account_index) -> ISO blocked-until timestamp."""
+    try:
+        return json.loads(ACCOUNT_BLOCKS_FILE.read_text())
+    except Exception:
+        return {}
+
+
+def save_account_blocks(blocks):
+    ACCOUNT_BLOCKS_FILE.parent.mkdir(parents=True, exist_ok=True)
+    ACCOUNT_BLOCKS_FILE.write_text(json.dumps(blocks, indent=2))
+
+
+def block_account_for_days(index, days=ACCOUNT_BLOCK_DAYS):
+    """Block an account for the given number of days."""
+    until = (datetime.datetime.utcnow() + datetime.timedelta(days=days)).isoformat()
+    blocks = load_account_blocks()
+    blocks[str(index)] = until
+    save_account_blocks(blocks)
+
+
+def is_account_blocked(index):
+    """Return True if account at index is still within its cooldown period."""
+    blocks = load_account_blocks()
+    until_str = blocks.get(str(index))
+    if not until_str:
+        return False
+    try:
+        return datetime.datetime.utcnow() < datetime.datetime.fromisoformat(until_str)
+    except Exception:
+        return False
+
+
 def resolve_storage_state_path(storage_state_path=None):
-    raw_path = storage_state_path or os.getenv("LINKEDIN_STORAGE_STATE_PATH") or str(DEFAULT_STORAGE_STATE_PATH)
-    return Path(raw_path).expanduser().resolve()
+    raw_path = storage_state_path or os.getenv("LINKEDIN_STORAGE_STATE_PATH")
+    if raw_path:
+        return Path(raw_path).expanduser().resolve()
+    # Multi-account mode: use the active account's dedicated file
+    if (os.getenv(LINKEDIN_ACCOUNTS_ENV) or "").strip():
+        index = get_active_account_index()
+        return get_storage_state_path_for_account(index)
+    return DEFAULT_STORAGE_STATE_PATH
 
 
 def ensure_storage_state_exists(storage_state_path=None):
@@ -56,6 +214,401 @@ def page_looks_logged_out(page):
 def assert_logged_in(page):
     if page_looks_logged_out(page):
         raise LinkedInSessionError("LinkedIn session appears to be logged out or expired.")
+
+
+def _feed_loaded(page):
+    url = (page.url or "").lower()
+    return "/feed" in url
+
+
+def _close_page(page):
+    if not page:
+        return
+    try:
+        page.close()
+    except Exception:
+        pass
+
+
+def _handle_post_login_screens(page, *, max_rounds=5, timeout_ms=30000):
+    """Click through LinkedIn interstitial / confirmation screens shown after login.
+
+    Checks for the automation compliance notice first because that page lives at a
+    /checkpoint/ URL which page_looks_logged_out would otherwise short-circuit.
+    Raises LinkedInAutomationFlagged if that notice is detected so the caller can
+    block the account.
+    """
+    for _ in range(max_rounds):
+        if _feed_loaded(page):
+            return
+
+        # Must check automation notice before page_looks_logged_out because the
+        # notice URL contains /checkpoint/ which that helper treats as logged out.
+        try:
+            automation_btn = page.locator(AUTOMATION_NOTICE_SELECTOR)
+            if automation_btn.count():
+                try:
+                    automation_btn.first.click(timeout=timeout_ms)
+                    page.wait_for_timeout(1500)
+                except Exception:
+                    pass
+                raise LinkedInAutomationFlagged(
+                    "LinkedIn detected automation activity on this account "
+                    "and showed a compliance notice."
+                )
+        except LinkedInAutomationFlagged:
+            raise
+        except Exception:
+            pass
+
+        if page_looks_logged_out(page):
+            return
+
+        page.wait_for_timeout(1500)
+
+        if _feed_loaded(page):
+            return
+        if page_looks_logged_out(page):
+            return
+
+        clicked = False
+        for selector in POST_LOGIN_CONFIRMATION_SELECTORS:
+            try:
+                locator = page.locator(selector)
+                if locator.count():
+                    locator.first.click(timeout=timeout_ms)
+                    page.wait_for_timeout(1000)
+                    clicked = True
+                    break
+            except Exception:
+                continue
+
+        if not clicked:
+            break
+
+
+def _verify_session_and_save(context, target_path, *, timeout_ms=30000):
+    verification_page = context.new_page()
+    try:
+        verification_page.goto(
+            LOGIN_VERIFICATION_URL, wait_until="domcontentloaded", timeout=timeout_ms
+        )
+        _handle_post_login_screens(verification_page, timeout_ms=timeout_ms)
+        assert_logged_in(verification_page)
+        if not _feed_loaded(verification_page):
+            raise LinkedInSessionError(
+                "LinkedIn login did not reach the home feed. "
+                "Additional verification may still be required."
+            )
+        context.storage_state(path=str(target_path))
+    finally:
+        _close_page(verification_page)
+
+
+def _login_form_available(page):
+    return bool(
+        page.locator("input[name='session_key']").count()
+        and page.locator("input[name='session_password']").count()
+    )
+
+
+def _try_account_chooser_sign_in(page, *, timeout_ms=30000):
+    for selector in ACCOUNT_CHOOSER_SELECTORS:
+        locator = page.locator(selector)
+        try:
+            count = locator.count()
+        except Exception:
+            continue
+        if not count:
+            continue
+        try:
+            locator.first.click(timeout=timeout_ms)
+            page.wait_for_timeout(1500)
+        except Exception:
+            continue
+        if _login_form_available(page):
+            return "login_form"
+        return "clicked"
+    return None
+
+
+def _submit_login_form(page, *, email, password, timeout_ms=30000):
+    chooser_result = _try_account_chooser_sign_in(page, timeout_ms=timeout_ms)
+    if chooser_result == "clicked":
+        return "chooser_clicked"
+
+    if chooser_result is None:
+        page.goto(LOGIN_URL, wait_until="domcontentloaded", timeout=timeout_ms)
+        chooser_result = _try_account_chooser_sign_in(page, timeout_ms=timeout_ms)
+        if chooser_result == "clicked":
+            return "chooser_clicked"
+
+    email_input = page.locator("input[name='session_key']")
+    password_input = page.locator("input[name='session_password']")
+    submit_button = page.locator("button[type='submit']")
+
+    if not email_input.count() or not password_input.count():
+        raise LinkedInSessionError(
+            "LinkedIn login form or account chooser was not available for auto relogin."
+        )
+    if not submit_button.count():
+        raise LinkedInSessionError("LinkedIn login submit button was not available for auto relogin.")
+
+    email_input.first.fill(email, timeout=timeout_ms)
+    password_input.first.fill(password, timeout=timeout_ms)
+    submit_button.first.click(timeout=timeout_ms)
+    page.wait_for_timeout(1500)
+    return "form_submitted"
+
+
+def _attempt_auto_relogin_in_context(context, target_path, *, email, password, timeout_ms=30000):
+    page = context.new_page()
+    try:
+        page.goto(LOGIN_VERIFICATION_URL, wait_until="domcontentloaded", timeout=timeout_ms)
+        if not page_looks_logged_out(page) and _feed_loaded(page):
+            _verify_session_and_save(context, target_path, timeout_ms=timeout_ms)
+            return "session_reused"
+
+        _submit_login_form(page, email=email, password=password, timeout_ms=timeout_ms)
+        # Handle any post-login confirmation screens on the current page before
+        # opening the verification page so session cookies are fully set.
+        _handle_post_login_screens(page, timeout_ms=timeout_ms)
+        _verify_session_and_save(context, target_path, timeout_ms=timeout_ms)
+        return "relogged"
+    finally:
+        _close_page(page)
+
+
+def _all_accounts_blocked_discord_alert(n_accounts):
+    msg = (
+        f"Hunt: all {n_accounts} LinkedIn account(s) are blocked for "
+        f"{ACCOUNT_BLOCK_DAYS} days due to automation detection. "
+        "No scraping will run until accounts are unblocked or new ones are added. "
+        "Manual intervention required."
+    )
+    send_discord_webhook_message(msg)
+    return msg
+
+
+def attempt_auto_relogin(
+    storage_state_path=None,
+    *,
+    browser_channel=None,
+    context=None,
+    headless=True,
+    slow_mo=0,
+    timeout_ms=30000,
+):
+    accounts = get_all_accounts()
+    if not accounts:
+        return {
+            "attempted": False,
+            "recovered": False,
+            "message": (
+                "LinkedIn auto relogin is not configured. "
+                f"Set {AUTO_RELOGIN_EMAIL_ENV} and {AUTO_RELOGIN_PASSWORD_ENV} "
+                f"or set {LINKEDIN_ACCOUNTS_ENV} with a JSON array of credentials."
+            ),
+        }
+
+    # Find the first non-blocked account starting from the current active index.
+    current = get_active_account_index()
+    account_index = None
+    for offset in range(len(accounts)):
+        idx = (current + offset) % len(accounts)
+        if not is_account_blocked(idx):
+            account_index = idx
+            break
+
+    if account_index is None:
+        msg = _all_accounts_blocked_discord_alert(len(accounts))
+        return {"attempted": True, "recovered": False, "message": msg}
+
+    if account_index != current:
+        set_active_account_index(account_index)
+
+    account = accounts[account_index]
+    target_path = (
+        Path(storage_state_path).expanduser().resolve()
+        if storage_state_path
+        else get_storage_state_path_for_account(account_index)
+    )
+    target_path.parent.mkdir(parents=True, exist_ok=True)
+    storage_state = str(target_path) if target_path.exists() else None
+
+    try:
+        if context is not None:
+            mode = _attempt_auto_relogin_in_context(
+                context,
+                target_path,
+                email=account["email"],
+                password=account["password"],
+                timeout_ms=timeout_ms,
+            )
+        else:
+            with open_browser_context(
+                headless=headless,
+                slow_mo=slow_mo,
+                browser_channel=browser_channel or DEFAULT_BROWSER_CHANNEL,
+                storage_state_path=storage_state,
+            ) as relogin_context:
+                mode = _attempt_auto_relogin_in_context(
+                    relogin_context,
+                    target_path,
+                    email=account["email"],
+                    password=account["password"],
+                    timeout_ms=timeout_ms,
+                )
+    except LinkedInAutomationFlagged:
+        block_account_for_days(account_index)
+        # Find another available account to use on the next run.
+        next_idx = None
+        for offset in range(1, len(accounts) + 1):
+            idx = (account_index + offset) % len(accounts)
+            if not is_account_blocked(idx):
+                next_idx = idx
+                break
+        if next_idx is None:
+            msg = _all_accounts_blocked_discord_alert(len(accounts))
+            return {"attempted": True, "recovered": False, "message": msg}
+        set_active_account_index(next_idx)
+        return {
+            "attempted": True,
+            "recovered": False,
+            "message": (
+                f"LinkedIn account {account_index} flagged for automation and blocked "
+                f"for {ACCOUNT_BLOCK_DAYS} days. Rotated to account {next_idx} "
+                "for the next run."
+            ),
+        }
+    except (BrowserRuntimeError, LinkedInSessionError) as exc:
+        return {
+            "attempted": True,
+            "recovered": False,
+            "message": f"LinkedIn auto relogin failed: {exc}",
+        }
+
+    mark_linkedin_auth_available()
+    action = (
+        "reused the existing session"
+        if mode == "session_reused"
+        else "signed in with stored credentials"
+    )
+    return {
+        "attempted": True,
+        "recovered": True,
+        "message": f"LinkedIn auto relogin {action} and refreshed the saved auth state.",
+    }
+
+
+def rotate_linkedin_account(
+    *,
+    browser_channel=None,
+    headless=True,
+    slow_mo=0,
+    timeout_ms=30000,
+):
+    """Advance to the next non-blocked LinkedIn account and attempt auto relogin.
+
+    Returns a dict with keys:
+      rotated (bool) : whether a different account was selected
+      account_index (int) : the new active account index
+      recovered (bool) : whether relogin succeeded
+      message (str) : human-readable summary
+    """
+    accounts = get_all_accounts()
+    if len(accounts) <= 1:
+        return {
+            "rotated": False,
+            "account_index": 0,
+            "recovered": False,
+            "message": "Only one account configured; rotation skipped.",
+        }
+
+    current = get_active_account_index()
+    # Find the next account that is not blocked.
+    next_index = None
+    for offset in range(1, len(accounts) + 1):
+        idx = (current + offset) % len(accounts)
+        if not is_account_blocked(idx):
+            next_index = idx
+            break
+
+    if next_index is None:
+        msg = _all_accounts_blocked_discord_alert(len(accounts))
+        return {"rotated": False, "account_index": current, "recovered": False, "message": msg}
+
+    set_active_account_index(next_index)
+    account = accounts[next_index]
+    target_path = get_storage_state_path_for_account(next_index)
+    target_path.parent.mkdir(parents=True, exist_ok=True)
+    storage_state = str(target_path) if target_path.exists() else None
+
+    try:
+        with open_browser_context(
+            headless=headless,
+            slow_mo=slow_mo,
+            browser_channel=browser_channel or DEFAULT_BROWSER_CHANNEL,
+            storage_state_path=storage_state,
+        ) as relogin_context:
+            mode = _attempt_auto_relogin_in_context(
+                relogin_context,
+                target_path,
+                email=account["email"],
+                password=account["password"],
+                timeout_ms=timeout_ms,
+            )
+    except LinkedInAutomationFlagged:
+        block_account_for_days(next_index)
+        # Check if yet another account is available.
+        fallback = None
+        for offset in range(1, len(accounts) + 1):
+            idx = (next_index + offset) % len(accounts)
+            if not is_account_blocked(idx):
+                fallback = idx
+                break
+        if fallback is None:
+            msg = _all_accounts_blocked_discord_alert(len(accounts))
+            return {
+                "rotated": True,
+                "account_index": next_index,
+                "recovered": False,
+                "message": msg,
+            }
+        set_active_account_index(fallback)
+        return {
+            "rotated": True,
+            "account_index": next_index,
+            "recovered": False,
+            "message": (
+                f"LinkedIn account {next_index} flagged for automation and blocked "
+                f"for {ACCOUNT_BLOCK_DAYS} days. Queued account {fallback} for next run."
+            ),
+        }
+    except (BrowserRuntimeError, LinkedInSessionError) as exc:
+        return {
+            "rotated": True,
+            "account_index": next_index,
+            "recovered": False,
+            "message": f"Rotated to account {next_index} but relogin failed: {exc}",
+        }
+
+    mark_linkedin_auth_available()
+    action = (
+        "reused existing session"
+        if mode == "session_reused"
+        else "signed in with stored credentials"
+    )
+    return {
+        "rotated": True,
+        "account_index": next_index,
+        "recovered": True,
+        "message": (
+            f"Rotated to LinkedIn account {next_index}, "
+            f"{action} and saved auth state."
+        ),
+    }
+
 
 @contextmanager
 def open_linkedin_context(storage_state_path=None, *, headless=True, slow_mo=0, browser_channel=None):
@@ -96,10 +649,7 @@ def save_storage_state_interactively(storage_state_path=None, *, browser_channel
 
             verification_page = None
             try:
-                verification_page = context.new_page()
-                verification_page.goto(LOGIN_VERIFICATION_URL, wait_until="domcontentloaded", timeout=30000)
-                assert_logged_in(verification_page)
-                context.storage_state(path=str(target_path))
+                _verify_session_and_save(context, target_path, timeout_ms=30000)
             except LinkedInSessionError as exc:
                 raise LinkedInSessionNotSaved(
                     "LinkedIn auth state was not saved because the session does not appear "
@@ -111,15 +661,10 @@ def save_storage_state_interactively(storage_state_path=None, *, browser_channel
                     "LinkedIn auth state was not saved because the browser window or tab "
                     "closed before verification completed."
                 ) from exc
-            finally:
-                if verification_page:
-                    try:
-                        verification_page.close()
-                    except Exception:
-                        pass
         finally:
             browser.close()
 
+    mark_linkedin_auth_available()
     return target_path
 
 
@@ -143,6 +688,32 @@ def main():
         "--channel",
         help="Optional Playwright browser channel such as chrome or msedge.",
     )
+    parser.add_argument(
+        "--auto-relogin",
+        action="store_true",
+        help="Attempt a best-effort relogin using LINKEDIN_EMAIL and LINKEDIN_PASSWORD.",
+    )
+    parser.add_argument(
+        "--headful",
+        action="store_true",
+        help="When used with --auto-relogin, show a visible browser window.",
+    )
+    parser.add_argument(
+        "--timeout-ms",
+        type=int,
+        default=30000,
+        help="Timeout for login verification and auto relogin steps (default: 30000).",
+    )
+    parser.add_argument(
+        "--test-discord-webhook",
+        action="store_true",
+        help="Send a test message through the configured Discord webhook.",
+    )
+    parser.add_argument(
+        "--discord-message",
+        default="Hunt test: Discord webhook connectivity check.",
+        help="Optional message to send with --test-discord-webhook.",
+    )
     args = parser.parse_args()
 
     try:
@@ -154,10 +725,28 @@ def main():
             print(f"Saved LinkedIn auth state to: {saved_path}")
             return 0
 
+        if args.auto_relogin:
+            result = attempt_auto_relogin(
+                storage_state_path=args.storage_state,
+                browser_channel=args.channel,
+                headless=not args.headful,
+                timeout_ms=args.timeout_ms,
+            )
+            print(result["message"])
+            return 0 if result.get("recovered") else 1
+
         if args.check:
             path = ensure_storage_state_exists(args.storage_state)
             print(f"LinkedIn auth state found: {path}")
             return 0
+
+        if args.test_discord_webhook:
+            result = send_discord_webhook_message(args.discord_message)
+            if result["sent"]:
+                print("Discord webhook test sent successfully.")
+                return 0
+            print(f"Discord webhook test failed: {result['reason']}")
+            return 1
 
         parser.print_help()
         return 0

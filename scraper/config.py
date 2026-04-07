@@ -92,6 +92,7 @@ ENRICHMENT_MAX_ATTEMPTS = _get_int_env("ENRICHMENT_MAX_ATTEMPTS", 4)
 ENRICHMENT_STALE_PROCESSING_MINUTES = _get_int_env("ENRICHMENT_STALE_PROCESSING_MINUTES", 30)
 REVIEW_APP_HOST = _get_str_env("REVIEW_APP_HOST", "127.0.0.1")
 REVIEW_APP_PORT = _get_int_env("REVIEW_APP_PORT", 8000)
+REVIEW_APP_PUBLIC_URL = _get_str_env("REVIEW_APP_PUBLIC_URL", "https://agent-hunt-review.mshi.ca")
 
 WATCHLIST = [
     "1password", "adobe", "amazon", "amd", "apple", "atlassian",

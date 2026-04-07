@@ -84,6 +84,15 @@ def main():
     print(f"stale_processing: {summary['stale_processing_count']}")
     print(f"oldest_processing_started_at: {summary['oldest_processing_started_at']}")
 
+    linkedin_auth = summary.get("auth", {}).get("linkedin", {})
+    if linkedin_auth:
+        print_section("\nlinkedin_auth:")
+        print(f"  status: {linkedin_auth.get('status')}")
+        print(f"  available: {linkedin_auth.get('available')}")
+        print(f"  updated_at: {linkedin_auth.get('updated_at')}")
+        if linkedin_auth.get("last_error"):
+            print(f"  last_error: {linkedin_auth.get('last_error')}")
+
     print_section("\nsource_counts:")
     for source, count in sorted(summary["source_counts"].items()):
         print(f"  {source}: {count}")

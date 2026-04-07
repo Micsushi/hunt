@@ -233,6 +233,7 @@ Launcher note:
   - `scripts/launchers/hunt.ps1`
   - `scripts/launchers/hunt.cmd`
   - `scripts/launchers/hunt.sh`
+- on deployed Linux hosts, `./hunt.sh` now auto-targets `~/data/hunt/hunt.db` and `~/data/hunt/artifacts` when that runtime directory exists, so manual queue/auth commands line up with the `systemd` runtime
 
 Common examples:
 - queue health:
@@ -318,6 +319,13 @@ Common examples:
   `python scraper/linkedin_session.py --save-storage-state --channel chrome`
 - check whether the saved LinkedIn auth state exists:
   `python scraper/linkedin_session.py --check`
+- optional best-effort auto relogin is available when these env vars are present:
+  `LINKEDIN_EMAIL`
+  `LINKEDIN_PASSWORD`
+  `LINKEDIN_AUTO_RELOGIN=true`
+- if LinkedIn auth expires during enrichment, Hunt now pauses the LinkedIn lane without failing the current row
+- when stored LinkedIn credentials are configured, Hunt now attempts one Playwright relogin before pausing the lane
+- after logging in again and pressing Enter in the auth-save flow, the saved auth state is refreshed and the paused-auth flag is cleared
 
 ### Stage 1 verification
 

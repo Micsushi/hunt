@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 import argparse
 import os
-import platform
 import shlex
 import subprocess
 import sys
@@ -38,10 +37,37 @@ def _find_repo_python() -> str:
 PYTHON = _find_repo_python()
 
 
+def _get_default_runtime_env(base_env=None, *, repo_root=REPO_ROOT, home_dir=None, is_windows=IS_WINDOWS):
+    if is_windows:
+        return {}
+
+    env = base_env or os.environ
+    runtime_dir_raw = env.get("HUNT_RUNTIME_DIR")
+    if runtime_dir_raw:
+        runtime_dir = Path(runtime_dir_raw).expanduser()
+    else:
+        home_path = Path(home_dir).expanduser() if home_dir else Path.home()
+        if Path(repo_root).resolve() != (home_path / "hunt").resolve():
+            return {}
+        runtime_dir = home_path / "data" / "hunt"
+
+    if not runtime_dir.exists():
+        return {}
+
+    defaults = {}
+    if not env.get("HUNT_DB_PATH"):
+        defaults["HUNT_DB_PATH"] = str(runtime_dir / "hunt.db")
+    if not env.get("HUNT_ARTIFACTS_DIR"):
+        defaults["HUNT_ARTIFACTS_DIR"] = str(runtime_dir / "artifacts")
+    return defaults
+
+
 def _run(command, *, env=None):
     final_env = os.environ.copy()
     if env:
         final_env.update(env)
+    for key, value in _get_default_runtime_env(final_env).items():
+        final_env.setdefault(key, value)
 
     print("[huntctl] Running:", " ".join(shlex.quote(str(part)) for part in command))
     raise SystemExit(subprocess.run(command, cwd=REPO_ROOT, env=final_env).returncode)
@@ -72,6 +98,22 @@ def cmd_auth_save(args):
 
 def cmd_auth_check(_args):
     _run([PYTHON, "scraper/linkedin_session.py", "--check"])
+
+
+def cmd_auth_auto_relogin(args):
+    command = [PYTHON, "scraper/linkedin_session.py", "--auto-relogin", "--timeout-ms", str(args.timeout_ms)]
+    if args.headful:
+        command.append("--headful")
+    if args.channel:
+        command.extend(["--channel", args.channel])
+    if args.storage_state:
+        command.extend(["--storage-state", args.storage_state])
+    _run(command)
+
+
+def cmd_auth_test_discord(args):
+    command = [PYTHON, "scraper/linkedin_session.py", "--test-discord-webhook", "--discord-message", args.message]
+    _run(command)
 
 
 def cmd_scrape(args):
@@ -379,6 +421,26 @@ def build_parser():
 
     auth_check = subparsers.add_parser("auth-check", help="Check whether LinkedIn auth state exists.")
     auth_check.set_defaults(func=cmd_auth_check)
+
+    auth_auto = subparsers.add_parser(
+        "auth-auto-relogin",
+        help="Attempt a best-effort LinkedIn relogin using stored environment credentials.",
+    )
+    auth_auto.add_argument("--headful", action="store_true")
+    auth_auto.add_argument("--channel", default="chrome")
+    auth_auto.add_argument("--storage-state", default=None)
+    auth_auto.add_argument("--timeout-ms", type=int, default=30000)
+    auth_auto.set_defaults(func=cmd_auth_auto_relogin)
+
+    auth_test_discord = subparsers.add_parser(
+        "auth-test-discord",
+        help="Send a test message through the configured Discord webhook.",
+    )
+    auth_test_discord.add_argument(
+        "--message",
+        default="Hunt test: Discord webhook connectivity check.",
+    )
+    auth_test_discord.set_defaults(func=cmd_auth_test_discord)
 
     scrape = subparsers.add_parser("scrape", help="Run discovery, optionally with immediate enrichment.")
     scrape.add_argument("--limit", type=int, default=None, help="Run post-scrape enrichment for up to N rows.")

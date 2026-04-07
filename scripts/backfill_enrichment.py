@@ -8,7 +8,7 @@ REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SCRAPER_DIR = os.path.join(REPO_ROOT, "scraper")
 sys.path.insert(0, SCRAPER_DIR)
 
-from db import get_job_by_id, get_review_queue_summary  # noqa: E402
+from db import get_job_by_id, get_linkedin_auth_state, get_review_queue_summary  # noqa: E402
 from enrich_indeed import process_batch as process_indeed_batch  # noqa: E402
 from enrich_indeed import process_one_job as process_indeed_one  # noqa: E402
 from enrich_jobs import process_multi_source_batch  # noqa: E402
@@ -129,6 +129,17 @@ def _process_single_selected_job(job_id, args):
 
     if updated and _is_done_status(updated.get("enrichment_status")) and exit_code == 0:
         return {"status": "success", "job_id": job_id}
+
+    if source == "linkedin":
+        auth_state = get_linkedin_auth_state()
+        if not auth_state.get("available"):
+            error_message = auth_state.get("last_error") or "auth_expired: LinkedIn auth needs to be refreshed."
+            return {
+                "status": "failed",
+                "job_id": job_id,
+                "error": error_message,
+                "error_code": "auth_expired",
+            }
 
     error_message = updated.get("last_enrichment_error") if updated else "unexpected_error: No row returned after processing."
     return {

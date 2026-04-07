@@ -18,10 +18,72 @@ sys.path.insert(0, SCRIPTS_DIR)
 
 import db
 import failure_artifacts
+import huntctl
+import linkedin_session
 import queue_health
 
 
 class Stage4Tests(unittest.TestCase):
+    class FakeLocator:
+        def __init__(self, *, count=0, on_click=None, on_fill=None):
+            self._count = count
+            self._on_click = on_click
+            self._on_fill = on_fill
+            self.first = self
+
+        def count(self):
+            return self._count
+
+        def click(self, timeout=None):
+            if self._on_click:
+                self._on_click()
+
+        def fill(self, value, timeout=None):
+            if self._on_fill:
+                self._on_fill(value)
+
+    class FakePage:
+        def __init__(self, states, *, initial_state):
+            self.states = states
+            self.state = initial_state
+            self.url = states[initial_state].get("url", "")
+            self.filled = {}
+
+        def locator(self, selector):
+            config = self.states[self.state].get("selectors", {}).get(selector)
+            if config is None:
+                return Stage4Tests.FakeLocator()
+            if isinstance(config, Stage4Tests.FakeLocator):
+                return config
+            if isinstance(config, dict):
+                def on_click():
+                    next_state = config.get("next_state")
+                    if next_state:
+                        self.state = next_state
+                        self.url = self.states[next_state].get("url", self.url)
+
+                def on_fill(value):
+                    fill_key = config.get("fill_key")
+                    if fill_key:
+                        self.filled[fill_key] = value
+
+                return Stage4Tests.FakeLocator(
+                    count=config.get("count", 1),
+                    on_click=on_click if config.get("clickable", True) else None,
+                    on_fill=on_fill,
+                )
+            return Stage4Tests.FakeLocator(count=int(config))
+
+        def goto(self, url, wait_until=None, timeout=None):
+            self.url = url
+            for state_name, payload in self.states.items():
+                if payload.get("url") == url:
+                    self.state = state_name
+                    break
+
+        def wait_for_timeout(self, timeout):
+            return None
+
     def make_temp_db_path(self):
         fd, path = tempfile.mkstemp(suffix=".db")
         os.close(fd)
@@ -158,6 +220,7 @@ class Stage4Tests(unittest.TestCase):
     def test_queue_health_json_emits_summary_and_sections(self):
         with self.with_temp_db() as path:
             job_id = self.insert_job(path, enrichment_status="failed")
+            db.mark_linkedin_auth_unavailable("auth_expired: LinkedIn session appears to be logged out or expired.")
             db.mark_linkedin_enrichment_failed(
                 job_id,
                 "external_description_not_found: missing",
@@ -172,6 +235,73 @@ class Stage4Tests(unittest.TestCase):
             self.assertIn("sections", payload)
             self.assertIn("failed", payload["sections"])
             self.assertEqual(payload["sections"]["failed"][0]["last_artifact_dir"], "linkedin/job_1/test_run")
+            self.assertFalse(payload["summary"]["auth"]["linkedin"]["available"])
+
+    def test_mark_linkedin_auth_state_recreates_runtime_state_table(self):
+        with self.with_temp_db() as path:
+            conn = sqlite3.connect(path)
+            try:
+                conn.execute("DROP TABLE runtime_state")
+                conn.commit()
+            finally:
+                conn.close()
+
+            db.mark_linkedin_auth_unavailable("auth_expired: LinkedIn session appears to be logged out or expired.")
+            auth_state = db.get_linkedin_auth_state()
+            self.assertFalse(auth_state["available"])
+            self.assertEqual(auth_state["status"], "expired")
+
+            db.mark_linkedin_auth_available()
+            auth_state = db.get_linkedin_auth_state()
+            self.assertTrue(auth_state["available"])
+            self.assertEqual(auth_state["status"], "ok")
+            self.assertIsNone(auth_state["last_error"])
+
+    def test_huntctl_defaults_to_runtime_db_on_linux_server_layout(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            home_path = Path(temp_dir)
+            repo_root = home_path / "hunt"
+            runtime_dir = home_path / "data" / "hunt"
+            repo_root.mkdir(parents=True)
+            runtime_dir.mkdir(parents=True)
+
+            defaults = huntctl._get_default_runtime_env(
+                {},
+                repo_root=repo_root,
+                home_dir=home_path,
+                is_windows=False,
+            )
+
+            self.assertEqual(defaults["HUNT_DB_PATH"], str(runtime_dir / "hunt.db"))
+            self.assertEqual(defaults["HUNT_ARTIFACTS_DIR"], str(runtime_dir / "artifacts"))
+
+    def test_submit_login_form_clicks_account_chooser_before_form_fill(self):
+        page = self.FakePage(
+            {
+                "chooser": {
+                    "url": "https://www.linkedin.com/feed/",
+                    "selectors": {
+                        "button:has-text('Continue as')": {"count": 1, "next_state": "authed"},
+                    },
+                },
+                "authed": {
+                    "url": "https://www.linkedin.com/feed/",
+                    "selectors": {},
+                },
+            },
+            initial_state="chooser",
+        )
+
+        result = linkedin_session._submit_login_form(
+            page,
+            email="person@example.com",
+            password="secret",
+            timeout_ms=1000,
+        )
+
+        self.assertEqual(result, "chooser_clicked")
+        self.assertEqual(page.state, "authed")
+        self.assertEqual(page.filled, {})
 
 
 if __name__ == "__main__":

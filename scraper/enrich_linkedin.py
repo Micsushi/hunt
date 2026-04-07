@@ -9,12 +9,21 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from db import (
     claim_linkedin_job_for_enrichment,
     get_job_by_id,
+    get_linkedin_auth_state,
+    mark_linkedin_auth_unavailable,
     mark_linkedin_enrichment_failed,
     mark_linkedin_enrichment_succeeded,
+    restore_linkedin_enrichment_claim,
 )
 from enrichment_policy import compute_retry_after, format_sqlite_timestamp
 from failure_artifacts import capture_page_artifacts
-from linkedin_session import LinkedInSessionError, assert_logged_in, open_linkedin_context
+from linkedin_session import (
+    LinkedInSessionError,
+    assert_logged_in,
+    attempt_auto_relogin,
+    open_linkedin_context,
+)
+from notifications import send_discord_webhook_message
 from url_utils import (
     detect_ats_type,
     get_apply_host,
@@ -999,6 +1008,61 @@ def get_next_retry_timestamp(claimed_job, error_code, *, ui_verify=False):
     return format_sqlite_timestamp(retry_after) if retry_after else None
 
 
+def _notify_linkedin_auth_pause(claimed_job, error_message, *, relogin_result=None):
+    lines = [
+        "Hunt alert: LinkedIn enrichment auth is paused.",
+        f"Error: {error_message}",
+    ]
+    if relogin_result and relogin_result.get("attempted"):
+        lines.append(f"Auto relogin: {relogin_result.get('message')}")
+    if claimed_job:
+        lines.append(
+            f"Job: id={claimed_job['id']} company={claimed_job.get('company') or 'unknown'} "
+            f"title={claimed_job.get('title') or 'unknown'}"
+        )
+    return send_discord_webhook_message("\n".join(lines))
+
+
+def pause_linkedin_enrichment_for_auth(claimed_job, error_message, *, relogin_result=None):
+    previous_auth_state = get_linkedin_auth_state()
+    mark_linkedin_auth_unavailable(error_message)
+    if claimed_job:
+        restore_linkedin_enrichment_claim(claimed_job)
+    if previous_auth_state.get("available"):
+        _notify_linkedin_auth_pause(claimed_job, error_message, relogin_result=relogin_result)
+
+
+def maybe_resume_linkedin_auth(
+    *,
+    storage_state_path=None,
+    headless=True,
+    slow_mo=0,
+    timeout_ms=45000,
+    browser_channel=None,
+    context=None,
+    log_prefix="[auth]",
+):
+    auth_state = get_linkedin_auth_state()
+    if auth_state.get("available"):
+        return {
+            "attempted": False,
+            "recovered": True,
+            "message": "LinkedIn auth is already available.",
+        }
+
+    relogin_result = attempt_auto_relogin(
+        storage_state_path=storage_state_path,
+        browser_channel=browser_channel,
+        context=context,
+        headless=headless,
+        slow_mo=slow_mo,
+        timeout_ms=timeout_ms,
+    )
+    if relogin_result.get("attempted"):
+        print(f"{log_prefix} {relogin_result['message']}")
+    return relogin_result
+
+
 def process_claimed_job(
     claimed_job,
     *,
@@ -1009,6 +1073,7 @@ def process_claimed_job(
     timeout_ms=45000,
     browser_channel=None,
     ui_verify=False,
+    _auth_recovery_attempted=False,
 ):
     started_at = time.monotonic()
     print(f"[enrich] Claimed LinkedIn job id={claimed_job['id']} company={claimed_job.get('company')} title={claimed_job.get('title')}")
@@ -1063,6 +1128,50 @@ def process_claimed_job(
     except Exception as exc:
         error_message = format_error_message(exc)
         error_code = get_error_code(error_message)
+        elapsed_seconds = time.monotonic() - started_at
+        if error_code == "auth_expired":
+            relogin_result = None
+            if not _auth_recovery_attempted:
+                relogin_result = maybe_resume_linkedin_auth(
+                    storage_state_path=storage_state_path,
+                    headless=headless,
+                    slow_mo=slow_mo,
+                    timeout_ms=timeout_ms,
+                    browser_channel=browser_channel,
+                    context=context,
+                    log_prefix="[enrich]",
+                )
+                if relogin_result.get("recovered"):
+                    print("[enrich] Auth recovered from stored session or credentials. Retrying the same job once.")
+                    return process_claimed_job(
+                        claimed_job,
+                        context=context,
+                        storage_state_path=storage_state_path,
+                        headless=headless,
+                        slow_mo=slow_mo,
+                        timeout_ms=timeout_ms,
+                        browser_channel=browser_channel,
+                        ui_verify=ui_verify,
+                        _auth_recovery_attempted=True,
+                    )
+            pause_linkedin_enrichment_for_auth(
+                claimed_job,
+                error_message,
+                relogin_result=relogin_result,
+            )
+            print("[enrich] Paused")
+            print(f"  id: {claimed_job['id']}")
+            print(f"  error: {error_message}")
+            print("  action: LinkedIn enrichment paused until auth is refreshed and saved again.")
+            print(f"  elapsed_seconds: {elapsed_seconds:.1f}")
+            return {
+                "status": "auth_paused",
+                "job_id": claimed_job["id"],
+                "error": error_message,
+                "error_code": error_code,
+                "duration_seconds": elapsed_seconds,
+            }
+
         failure_update_kwargs = build_failure_update_kwargs(exc)
         if context is not None and error_code in BLOCKED_ERROR_CODES.union({"description_not_found", "external_description_not_found", "external_description_not_usable", "unexpected_error", "rate_limited"}):
             page = context.pages[-1] if getattr(context, "pages", None) else None
@@ -1095,7 +1204,6 @@ def process_claimed_job(
             next_enrichment_retry_at=next_retry_timestamp,
             **failure_update_kwargs,
         )
-        elapsed_seconds = time.monotonic() - started_at
         print("[enrich] Failed")
         print(f"  id: {claimed_job['id']}")
         print(f"  error: {error_message}")
@@ -1115,8 +1223,22 @@ def process_claimed_job(
 
 
 def process_one_job(job_id=None, *, storage_state_path=None, headless=True, slow_mo=0, timeout_ms=45000, browser_channel=None, force=False, ui_verify=False):
+    maybe_resume_linkedin_auth(
+        storage_state_path=storage_state_path,
+        headless=headless,
+        slow_mo=slow_mo,
+        timeout_ms=timeout_ms,
+        browser_channel=browser_channel,
+        log_prefix="[enrich]",
+    )
     claimed_job = claim_linkedin_job_for_enrichment(job_id=job_id, force=force)
     if not claimed_job:
+        auth_state = get_linkedin_auth_state()
+        if not auth_state.get("available"):
+            print("LinkedIn enrichment is paused because auth needs to be refreshed.")
+            if auth_state.get("last_error"):
+                print(f"Last auth error: {auth_state['last_error']}")
+            return 1
         if job_id is None:
             print("No pending LinkedIn rows are ready for enrichment.")
         else:
@@ -1147,82 +1269,130 @@ def process_batch(
     return_summary=False,
 ):
     started_at = time.monotonic()
+    maybe_resume_linkedin_auth(
+        storage_state_path=storage_state_path,
+        headless=headless,
+        slow_mo=slow_mo,
+        timeout_ms=timeout_ms,
+        browser_channel=browser_channel,
+        log_prefix="[batch]",
+    )
+    auth_state = get_linkedin_auth_state()
+    if not auth_state.get("available"):
+        print("[batch] LinkedIn enrichment is paused because auth needs to be refreshed.")
+        if auth_state.get("last_error"):
+            print(f"[batch] Last auth error: {auth_state['last_error']}")
+        total_elapsed = time.monotonic() - started_at
+        if return_summary:
+            return {
+                "exit_code": 1,
+                "attempted": 0,
+                "ui_verified": 0,
+                "succeeded": 0,
+                "failed": 0,
+                "actionable_failed": 0,
+                "failure_breakdown": {},
+                "total_elapsed_seconds": total_elapsed,
+                "average_seconds_per_job": 0.0,
+                "stop_error_code": "auth_expired",
+            }
+        return 1
+
     results = []
     final_results_by_job_id = {}
     blocked_job_ids = []
 
-    with open_linkedin_context(
-        storage_state_path=storage_state_path,
-        headless=headless,
-        slow_mo=slow_mo,
-        browser_channel=browser_channel,
-    ) as context:
-        for index in range(limit):
-            claimed_job = claim_linkedin_job_for_enrichment()
-            if not claimed_job:
-                print(f"[batch] No more pending LinkedIn rows after {index} job(s).")
-                break
-
-            print(f"\n[batch] Processing job {index + 1}/{limit}")
-            result = process_claimed_job(
-                claimed_job,
-                context=context,
-                timeout_ms=timeout_ms,
-            )
-            results.append(result)
-            final_results_by_job_id[result["job_id"]] = result
-
-            if result["status"] == "failed":
-                error_code = result.get("error_code")
-                if ui_verify_blocked and is_ui_verifiable_error_code(error_code):
-                    blocked_job_ids.append(result["job_id"])
-                    print(f"[batch] Queued blocked job id={result['job_id']} for interactive verification after the first pass.")
-                    continue
-
-                if should_stop_batch_after_failure(error_code, ui_verify_blocked=ui_verify_blocked):
-                    print(f"[batch] Stopping early because of blocking error: {error_code}")
+    try:
+        with open_linkedin_context(
+            storage_state_path=storage_state_path,
+            headless=headless,
+            slow_mo=slow_mo,
+            browser_channel=browser_channel,
+        ) as context:
+            for index in range(limit):
+                claimed_job = claim_linkedin_job_for_enrichment()
+                if not claimed_job:
+                    print(f"[batch] No more pending LinkedIn rows after {index} job(s).")
                     break
+
+                print(f"\n[batch] Processing job {index + 1}/{limit}")
+                result = process_claimed_job(
+                    claimed_job,
+                    context=context,
+                    timeout_ms=timeout_ms,
+                )
+                results.append(result)
+                final_results_by_job_id[result["job_id"]] = result
+
+                if result["status"] == "auth_paused":
+                    print(f"[batch] Stopping early because LinkedIn auth needs refresh: {result['error_code']}")
+                    break
+
+                if result["status"] == "failed":
+                    error_code = result.get("error_code")
+                    if ui_verify_blocked and is_ui_verifiable_error_code(error_code):
+                        blocked_job_ids.append(result["job_id"])
+                        print(f"[batch] Queued blocked job id={result['job_id']} for interactive verification after the first pass.")
+                        continue
+
+                    if should_stop_batch_after_failure(error_code, ui_verify_blocked=ui_verify_blocked):
+                        print(f"[batch] Stopping early because of blocking error: {error_code}")
+                        break
+    except LinkedInSessionError as exc:
+        error_message = format_error_message(exc)
+        pause_linkedin_enrichment_for_auth(None, error_message)
+        print(f"[batch] Stopping early because LinkedIn auth needs refresh: {error_message}")
 
     ui_verify_results = []
     if ui_verify_blocked and blocked_job_ids:
         print(f"\n[batch] Starting interactive verification for {len(blocked_job_ids)} blocked job(s).")
-        with open_linkedin_context(
-            storage_state_path=storage_state_path,
-            headless=False,
-            slow_mo=slow_mo,
-            browser_channel=browser_channel,
-        ) as ui_context:
-            for index, job_id in enumerate(blocked_job_ids, start=1):
-                claimed_job = claim_linkedin_job_for_enrichment(job_id=job_id, force=True)
-                if not claimed_job:
-                    print(f"[batch-ui] Could not reclaim blocked LinkedIn job id={job_id} for UI verification.")
-                    result = {
-                        "status": "failed",
-                        "job_id": job_id,
-                        "error": "claim_failed: could not reclaim blocked job for UI verification",
-                        "error_code": "claim_failed",
-                        "duration_seconds": 0.0,
-                    }
-                else:
-                    print(f"\n[batch-ui] Verifying blocked job {index}/{len(blocked_job_ids)}")
-                    result = process_claimed_job(
-                        claimed_job,
-                        context=ui_context,
-                        timeout_ms=timeout_ms,
-                        ui_verify=True,
-                    )
+        try:
+            with open_linkedin_context(
+                storage_state_path=storage_state_path,
+                headless=False,
+                slow_mo=slow_mo,
+                browser_channel=browser_channel,
+            ) as ui_context:
+                for index, job_id in enumerate(blocked_job_ids, start=1):
+                    claimed_job = claim_linkedin_job_for_enrichment(job_id=job_id, force=True)
+                    if not claimed_job:
+                        print(f"[batch-ui] Could not reclaim blocked LinkedIn job id={job_id} for UI verification.")
+                        result = {
+                            "status": "failed",
+                            "job_id": job_id,
+                            "error": "claim_failed: could not reclaim blocked job for UI verification",
+                            "error_code": "claim_failed",
+                            "duration_seconds": 0.0,
+                        }
+                    else:
+                        print(f"\n[batch-ui] Verifying blocked job {index}/{len(blocked_job_ids)}")
+                        result = process_claimed_job(
+                            claimed_job,
+                            context=ui_context,
+                            timeout_ms=timeout_ms,
+                            ui_verify=True,
+                        )
 
-                ui_verify_results.append(result)
-                final_results_by_job_id[result["job_id"]] = result
+                    ui_verify_results.append(result)
+                    final_results_by_job_id[result["job_id"]] = result
 
-                if result["status"] == "failed" and should_stop_batch_after_failure(result.get("error_code"), ui_verify_blocked=False):
-                    print(f"[batch-ui] Stopping early because of blocking error: {result['error_code']}")
-                    break
+                    if result["status"] == "auth_paused":
+                        print(f"[batch-ui] Stopping early because LinkedIn auth needs refresh: {result['error_code']}")
+                        break
+
+                    if result["status"] == "failed" and should_stop_batch_after_failure(result.get("error_code"), ui_verify_blocked=False):
+                        print(f"[batch-ui] Stopping early because of blocking error: {result['error_code']}")
+                        break
+        except LinkedInSessionError as exc:
+            error_message = format_error_message(exc)
+            pause_linkedin_enrichment_for_auth(None, error_message)
+            print(f"[batch-ui] Stopping early because LinkedIn auth needs refresh: {error_message}")
 
     total_elapsed = time.monotonic() - started_at
     final_results = list(final_results_by_job_id.values())
     successes = [result for result in final_results if result["status"] == "success"]
     failures = [result for result in final_results if result["status"] == "failed"]
+    auth_paused_results = [result for result in final_results if result["status"] == "auth_paused"]
     actionable_failures = [
         result for result in failures if not is_non_actionable_failure_code(result.get("error_code"))
     ]
@@ -1233,6 +1403,8 @@ def process_batch(
         print(f"  ui_verified: {len(ui_verify_results)}")
     print(f"  succeeded: {len(successes)}")
     print(f"  failed: {len(failures)}")
+    if auth_paused_results or not get_linkedin_auth_state().get("available"):
+        print(f"  auth_paused: {len(auth_paused_results) or 1}")
     print(f"  total_elapsed_seconds: {total_elapsed:.1f}")
     all_timed_results = results + ui_verify_results
     if all_timed_results:
@@ -1248,13 +1420,15 @@ def process_batch(
             print(f"    {error_code}: {count}")
 
     stop_error_code = None
+    if auth_paused_results or not get_linkedin_auth_state().get("available"):
+        stop_error_code = "auth_expired"
     for failure in failures:
         error_code = failure.get("error_code")
         if is_hard_stop_error_code(error_code):
             stop_error_code = error_code
             break
 
-    exit_code = 0 if not actionable_failures else 1
+    exit_code = 0 if not actionable_failures and not stop_error_code else 1
     if return_summary:
         return {
             "exit_code": exit_code,

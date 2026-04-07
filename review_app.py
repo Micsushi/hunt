@@ -706,6 +706,7 @@ def render_layout(title, body, *, current_path="/"):
 
 
 def render_metrics(summary):
+    linkedin_auth = summary.get("auth", {}).get("linkedin", {})
     lines = [
         "# HELP hunt_queue_total Total jobs known to the Hunt review queue.",
         "# TYPE hunt_queue_total gauge",
@@ -728,6 +729,9 @@ def render_metrics(summary):
         "# HELP hunt_queue_stale_processing Number of stale processing rows.",
         "# TYPE hunt_queue_stale_processing gauge",
         f"hunt_queue_stale_processing {summary['stale_processing_count']}",
+        "# HELP hunt_auth_available Whether LinkedIn auth is currently available for enrichment.",
+        "# TYPE hunt_auth_available gauge",
+        f'hunt_auth_available{{source="linkedin"}} {1 if linkedin_auth.get("available", True) else 0}',
     ]
     for source, count in sorted(summary.get("source_counts", {}).items()):
         lines.append(f'hunt_queue_source_count{{source="{source}"}} {count}')
@@ -765,12 +769,14 @@ def render_artifact_links(row):
 
 
 def render_summary_cards(summary):
+    linkedin_auth = summary.get("auth", {}).get("linkedin", {})
     cards = [
         ("Total rows", summary["total"]),
         ("Pending enrich", summary["pending_count"]),
         ("Enriched", summary["counts_by_status"].get("done", 0) + summary["counts_by_status"].get("done_verified", 0)),
         ("Failed", summary["counts_by_status"].get("failed", 0)),
         ("Blocked", summary["blocked_count"]),
+        ("LinkedIn auth", "ready" if linkedin_auth.get("available", True) else "login needed"),
     ]
     return "".join(
         f"""
@@ -781,6 +787,49 @@ def render_summary_cards(summary):
         """
         for label, value in cards
     )
+
+
+def render_auth_status(summary):
+    linkedin_auth = summary.get("auth", {}).get("linkedin", {})
+    if not linkedin_auth:
+        return ""
+
+    available = linkedin_auth.get("available", True)
+    status_class = "done" if available else "failed"
+    headline = "LinkedIn auth ready" if available else "LinkedIn auth paused"
+    description = (
+        "Saved LinkedIn auth is currently available for unattended enrichment."
+        if available
+        else "LinkedIn enrichment is paused until the saved auth state is refreshed and saved again."
+    )
+    details = [
+        ("State", linkedin_auth.get("status") or "unknown"),
+        ("Available", str(bool(linkedin_auth.get("available", True))).lower()),
+        ("Updated", linkedin_auth.get("updated_at") or "unknown"),
+    ]
+    if linkedin_auth.get("last_error"):
+        details.append(("Last error", linkedin_auth.get("last_error")))
+    rows = "".join(
+        f"<tr><td>{format_text(label)}</td><td>{format_text(value)}</td></tr>"
+        for label, value in details
+    )
+    hint = ""
+    if not available:
+        hint = "<p style=\"color: var(--muted);\">Refresh auth with <code>DISPLAY=:98 ./hunt.sh auth-save --channel chrome</code>, then press Enter after the LinkedIn feed is visible.</p>"
+    return f"""
+    <div class="panel">
+      <h2>{html.escape(headline)}</h2>
+      <div style="margin-bottom: 12px;"><span class="status {status_class}">{html.escape(headline)}</span></div>
+      <p>{html.escape(description)}</p>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Detail</th><th>Value</th></tr></thead>
+          <tbody>{rows}</tbody>
+        </table>
+      </div>
+      {hint}
+    </div>
+    """
 
 
 def resolve_resume_path(value):
@@ -1188,6 +1237,7 @@ def health_view():
     </section>
     <section class="cards">{render_summary_cards(summary)}</section>
     <section class="stack">
+      {render_auth_status(summary)}
       {render_summary_table(summary)}
       <div class="panel">
         <h2>Failure breakdown</h2>
@@ -1207,6 +1257,7 @@ def summary_view():
       <p>High-level queue counts and enrichment-state totals for the current jobs table across sources.</p>
     </section>
     <section class="cards">{render_summary_cards(summary)}</section>
+    {render_auth_status(summary)}
     {render_summary_table(summary)}
     """
     return HTMLResponse(render_layout("Hunt summary", body, current_path="/summary"))
@@ -1323,6 +1374,7 @@ def dashboard(request: Request):
     </section>
     <section class="cards">{render_summary_cards(summary)}</section>
     <section class="stack">
+      {render_auth_status(summary)}
       <div class="panel">
         <h2>Failure breakdown</h2>
         {render_failure_breakdown(summary)}
@@ -1363,6 +1415,7 @@ def jobs_page(request: Request, source: str = "all", status: str = "ready", limi
       <p>Browse the live jobs table across sources, search by company, title, description, or URL keywords, sort by column headings, and open both the listing and apply link directly from the table.</p>
     </section>
     <section class="cards">{render_summary_cards(summary)}</section>
+    {render_auth_status(summary) if source in ('all', 'linkedin') else ''}
     {render_search_bar(source=source, status=status, limit=safe_limit, q=q, sort=sort, direction=direction)}
     <div class="toolbar">{render_source_toolbar(source, status=status, limit=safe_limit, q=q, sort=sort, direction=direction)}</div>
     <div class="toolbar">{render_status_toolbar(status, source=source, limit=safe_limit, q=q, sort=sort, direction=direction)}</div>

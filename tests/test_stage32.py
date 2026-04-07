@@ -209,6 +209,27 @@ class Stage32Tests(unittest.TestCase):
             self.assertEqual(claimed["id"], linkedin_id)
             self.assertNotEqual(claimed["id"], indeed_id)
 
+    def test_claim_job_for_enrichment_skips_linkedin_when_auth_is_paused(self):
+        with self.with_temp_db() as path:
+            self.insert_job(
+                path,
+                source="linkedin",
+                job_url="https://www.linkedin.com/jobs/view/2",
+                date_posted="2026-04-05",
+            )
+            indeed_id = self.insert_job(
+                path,
+                source="indeed",
+                job_url="https://ca.indeed.com/viewjob?jk=333",
+            )
+
+            db.mark_linkedin_auth_unavailable("auth_expired: LinkedIn session appears to be logged out or expired.")
+
+            claimed = db.claim_job_for_enrichment()
+
+            self.assertIsNotNone(claimed)
+            self.assertEqual(claimed["id"], indeed_id)
+
     def test_indeed_enrichment_extracts_description_and_apply_url(self):
         page_url = "https://ca.indeed.com/viewjob?jk=123"
         redirect_url = "https://ca.indeed.com/applystart?jk=123"

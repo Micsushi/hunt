@@ -17,12 +17,14 @@ from config import (
     LOCATIONS,
     MAX_WORKERS,
     RESULTS_WANTED,
+    REVIEW_APP_PUBLIC_URL,
     SEARCH_TERMS,
     SITES,
     TITLE_BLACKLIST,
     WATCHLIST,
 )
 from db import add_job, count_ready_jobs_for_enrichment, init_db
+from notifications import send_discord_webhook_message
 from indeed_filters import matches_indeed_category
 from jobspy import scrape_jobs
 from url_utils import detect_ats_type, get_apply_host, normalize_optional_str
@@ -81,6 +83,15 @@ def build_enrichment_fields(source):
     # board rows still enter the enrichment queue so Stage 3+ workers can
     # verify descriptions and application targets consistently.
     return "unknown", None, "pending"
+
+
+def _notify_priority_job(job_id, job_data):
+    title = job_data.get("title") or "Unknown title"
+    company = job_data.get("company") or "Unknown company"
+    url = f"{REVIEW_APP_PUBLIC_URL.rstrip('/')}/jobs/{job_id}"
+    send_discord_webhook_message(
+        f"Priority job: {title} at {company}\n{url}"
+    )
 
 
 def scrape_single(site, term, location, category):
@@ -260,11 +271,18 @@ def scrape(
     inserted = 0
     refreshed = 0
     for job_data in all_jobs:
-        result = add_job(job_data)
+        add_result = add_job(job_data)
+        result = add_result[0]
+        job_id = add_result[1]
         if result == "inserted":
             inserted += 1
+            if job_data.get("priority"):
+                _notify_priority_job(job_id, job_data)
         elif result == "updated":
             refreshed += 1
+            priority_changed = len(add_result) > 2 and add_result[2]
+            if priority_changed:
+                _notify_priority_job(job_id, job_data)
 
     skipped = len(all_jobs) - inserted - refreshed
     print(
