@@ -26,6 +26,20 @@ def load_sync_playwright():
     return sync_playwright
 
 
+def _friendly_browser_launch_error(exc, *, headless):
+    message = str(exc)
+    if not headless and (
+        "Missing X server or $DISPLAY" in message
+        or "headed browser without having a XServer running" in message
+    ):
+        return (
+            "Headful browser launch failed because no X server / DISPLAY is available. "
+            "Use headless mode for saved-session checks, or run headed flows with "
+            "`DISPLAY=:98` / `xvfb-run`."
+        )
+    return f"Browser launch failed: {message}"
+
+
 @contextmanager
 def open_browser_context(*, headless=True, slow_mo=0, browser_channel=None, storage_state_path=None):
     sync_playwright = load_sync_playwright()
@@ -34,17 +48,25 @@ def open_browser_context(*, headless=True, slow_mo=0, browser_channel=None, stor
         storage_state = str(Path(storage_state_path).expanduser().resolve())
 
     with sync_playwright() as playwright:
-        browser = playwright.chromium.launch(
-            headless=headless,
-            slow_mo=slow_mo,
-            channel=browser_channel or None,
-        )
-        context_kwargs = {}
-        if storage_state:
-            context_kwargs["storage_state"] = storage_state
-        context = browser.new_context(**context_kwargs)
+        browser = None
+        context = None
         try:
+            browser = playwright.chromium.launch(
+                headless=headless,
+                slow_mo=slow_mo,
+                channel=browser_channel or None,
+            )
+            context_kwargs = {}
+            if storage_state:
+                context_kwargs["storage_state"] = storage_state
+            context = browser.new_context(**context_kwargs)
             yield context
+        except BrowserRuntimeError:
+            raise
+        except Exception as exc:
+            raise BrowserRuntimeError(_friendly_browser_launch_error(exc, headless=headless)) from exc
         finally:
-            context.close()
-            browser.close()
+            if context is not None:
+                context.close()
+            if browser is not None:
+                browser.close()

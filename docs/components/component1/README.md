@@ -321,8 +321,10 @@ Common examples:
   `python scraper/linkedin_session.py --save-storage-state --channel chrome`
 - check whether the saved LinkedIn auth state exists:
   `python scraper/linkedin_session.py --check`
-- on the server, verify or refresh the current saved LinkedIn login and update shared auth health:
-  `set -a && source .env && set +a && .venv/bin/python scraper/linkedin_session.py --auto-relogin --headful --channel chrome`
+- on the server, verify or refresh the current saved LinkedIn login and update shared auth health without needing X/`DISPLAY`:
+  `set -a && source .env && set +a && .venv/bin/python scraper/linkedin_session.py --auto-relogin --channel chrome`
+- if you want the relogin flow to open a visible browser on `server2`, run it on the Xvfb display:
+  `DISPLAY=:98 ./hunt.sh auth-auto-relogin --headful --display :98 --channel chrome`
 - `--check` only confirms that the storage-state JSON exists; it does not prove the saved session still reaches the LinkedIn feed
 - `--auto-relogin` now reuses the saved auth state first when it is still valid
 - optional credential fallback for `--auto-relogin` is available when these env vars are present:
@@ -557,7 +559,9 @@ C1 sign-off runbook on `server2`:
 2. verify the deployed runtime shape and auth health
    - `systemctl cat hunt-scraper.service | grep HUNT_ARTIFACTS_DIR`
    - `curl -s https://agent-hunt-review.mshi.ca/metrics | head`
-   - `cd ~/hunt && set -a && source .env && set +a && .venv/bin/python scraper/linkedin_session.py --auto-relogin --headful --channel chrome`
+   - `cd ~/hunt && set -a && source .env && set +a && .venv/bin/python scraper/linkedin_session.py --auto-relogin --channel chrome`
+   - if you need a visible browser for auth debugging:
+     - `cd ~/hunt && DISPLAY=:98 ./hunt.sh auth-auto-relogin --headful --display :98 --channel chrome`
    - `curl -s https://agent-hunt-review.mshi.ca/metrics | grep 'hunt_auth_available{source="linkedin"}'`
 3. requeue failed/blocked enrichment rows you want retried
    - `./hunt.sh retry`

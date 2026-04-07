@@ -102,13 +102,16 @@ def cmd_auth_check(_args):
 
 def cmd_auth_auto_relogin(args):
     command = [PYTHON, "scraper/linkedin_session.py", "--auto-relogin", "--timeout-ms", str(args.timeout_ms)]
+    env = {}
+    if args.display:
+        env["DISPLAY"] = args.display
     if args.headful:
         command.append("--headful")
     if args.channel:
         command.extend(["--channel", args.channel])
     if args.storage_state:
         command.extend(["--storage-state", args.storage_state])
-    _run(command)
+    _run(command, env=env)
 
 
 def cmd_auth_test_discord(args):
@@ -427,6 +430,7 @@ def build_parser():
         help="Attempt a best-effort LinkedIn relogin using stored environment credentials.",
     )
     auth_auto.add_argument("--headful", action="store_true")
+    auth_auto.add_argument("--display", default=None, help="Optional DISPLAY override for headed relogin, e.g. :98.")
     auth_auto.add_argument("--channel", default="chrome")
     auth_auto.add_argument("--storage-state", default=None)
     auth_auto.add_argument("--timeout-ms", type=int, default=30000)

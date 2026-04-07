@@ -478,7 +478,9 @@ Important assumption:
    - env vars
    - auth-state path expectations
    - auth-health verification with:
-     - `cd ~/hunt && set -a && source .env && set +a && .venv/bin/python scraper/linkedin_session.py --auto-relogin --headful --channel chrome`
+     - `cd ~/hunt && set -a && source .env && set +a && .venv/bin/python scraper/linkedin_session.py --auto-relogin --channel chrome`
+     - if a visible browser is needed on `server2`:
+       - `cd ~/hunt && DISPLAY=:98 ./hunt.sh auth-auto-relogin --headful --display :98 --channel chrome`
    - that command should reuse the saved session first when possible, then fall back to stored credentials, and finally flip the shared auth flag used by the review app and `/metrics`
 2. Add the Xvfb-backed blocked-row UI fallback to the deployed Hunt runtime
 3. Verify the deployed timer still prioritizes newest pending rows before older backlog

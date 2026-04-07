@@ -17,6 +17,7 @@ sys.path.insert(0, SCRAPER_DIR)
 sys.path.insert(0, SCRIPTS_DIR)
 
 import db
+import browser_runtime
 import failure_artifacts
 import huntctl
 import linkedin_session
@@ -462,6 +463,68 @@ class Stage4Tests(unittest.TestCase):
             auth_state = db.get_linkedin_auth_state()
             self.assertFalse(auth_state["available"])
             self.assertEqual(auth_state["last_error"], result["message"])
+
+    def test_open_browser_context_reports_missing_display_cleanly(self):
+        class FakeChromium:
+            def launch(self, **_kwargs):
+                raise RuntimeError("Missing X server or $DISPLAY")
+
+        class FakePlaywright:
+            chromium = FakeChromium()
+
+        class FakePlaywrightManager:
+            def __enter__(self):
+                return FakePlaywright()
+
+            def __exit__(self, exc_type, exc, tb):
+                return False
+
+        with patch.object(browser_runtime, "load_sync_playwright", return_value=lambda: FakePlaywrightManager()):
+            with self.assertRaises(browser_runtime.BrowserRuntimeError) as ctx:
+                with browser_runtime.open_browser_context(headless=False, browser_channel="chrome"):
+                    pass
+
+        self.assertIn("no X server / DISPLAY is available", str(ctx.exception))
+
+    def test_huntctl_auth_auto_relogin_can_set_display(self):
+        captured = {}
+
+        def fake_run(command, *, env=None):
+            captured["command"] = command
+            captured["env"] = env
+            raise SystemExit(0)
+
+        args = type(
+            "Args",
+            (),
+            {
+                "timeout_ms": 12345,
+                "headful": True,
+                "display": ":98",
+                "channel": "chrome",
+                "storage_state": None,
+            },
+        )()
+
+        with patch.object(huntctl, "_run", side_effect=fake_run):
+            with self.assertRaises(SystemExit) as ctx:
+                huntctl.cmd_auth_auto_relogin(args)
+
+        self.assertEqual(ctx.exception.code, 0)
+        self.assertEqual(
+            captured["command"],
+            [
+                huntctl.PYTHON,
+                "scraper/linkedin_session.py",
+                "--auto-relogin",
+                "--timeout-ms",
+                "12345",
+                "--headful",
+                "--channel",
+                "chrome",
+            ],
+        )
+        self.assertEqual(captured["env"], {"DISPLAY": ":98"})
 
 
 if __name__ == "__main__":
