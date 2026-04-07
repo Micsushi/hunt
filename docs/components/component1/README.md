@@ -369,6 +369,16 @@ Common examples:
   - visible screen components such as buttons, links, inputs, labels, headings, and forms
   - clicked selectors
   - filled fields and values, with passwords redacted
+- current observed `server2` LinkedIn relogin shape:
+  - step 1 stays on `https://www.linkedin.com/login/?session_redirect=...` and renders the `Welcome back` chooser
+  - step 2 after clicking `Sign in using another account` still keeps the same `linkedin.com/login` URL, but the DOM changes into a real email/password login form
+  - that second screen can include a visible `Sign in with Apple` provider button, so submit detection must stay limited to the exact LinkedIn `Sign in` control
+  - the observed successful server-side selectors were:
+    - email: `input[type='text']`
+    - password: `input[autocomplete='current-password']`
+    - submit: `xpath=//button[normalize-space(.)='Sign in']`
+  - a transient trace snapshot right after submit may show `Execution context was destroyed` if LinkedIn navigates immediately; use the later `/feed/` snapshot plus `run_end: success` as the authoritative success signal
+  - if a relogin run reaches `/feed/` and ends with success but `/metrics` still shows `hunt_auth_available{source="linkedin"} 0`, the relogin worker and the review app are almost certainly pointed at different `HUNT_DB_PATH` values
 - successful manual auth save or successful `--auto-relogin` marks LinkedIn auth available again in shared runtime state
 - failures such as expired saved auth, automation-flagged accounts, all accounts blocked, or failed account rotation mark LinkedIn auth unavailable in shared runtime state
 - the review app and `/metrics` both read that shared runtime auth state:

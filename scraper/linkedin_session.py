@@ -10,6 +10,7 @@ from urllib.parse import urlparse
 ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_STORAGE_STATE_PATH = ROOT / ".state" / "linkedin_auth_state.json"
 DEFAULT_AUTH_TRACE_PATH = ROOT / ".state" / "linkedin_auth_trace.jsonl"
+DEFAULT_SERVER_RUNTIME_DIR = Path.home() / "data" / "hunt"
 LINKEDIN_ACTIVE_ACCOUNT_FILE = ROOT / ".state" / "linkedin_active_account"
 ACCOUNT_BLOCKS_FILE = ROOT / ".state" / "linkedin_account_blocks.json"
 ACCOUNT_BLOCK_DAYS = 7
@@ -183,6 +184,7 @@ _AUTH_TRACE_SEQUENCE = 0
 _AUTH_TRACE_LAST_SNAPSHOT_KEY = None
 
 from browser_runtime import BrowserRuntimeError, open_browser_context, load_sync_playwright
+from config import DB_PATH as HUNT_DB_PATH
 from db import mark_linkedin_auth_available, mark_linkedin_auth_unavailable
 from notifications import send_discord_webhook_message
 
@@ -258,6 +260,41 @@ def resolve_auth_trace_path():
     if raw_path:
         return Path(raw_path).expanduser().resolve()
     return DEFAULT_AUTH_TRACE_PATH
+
+
+def _expected_runtime_db_path():
+    if os.name == "nt":
+        return None
+    try:
+        if ROOT.resolve() != (Path.home() / "hunt").resolve():
+            return None
+    except Exception:
+        return None
+    runtime_dir_raw = os.getenv("HUNT_RUNTIME_DIR")
+    runtime_dir = (
+        Path(runtime_dir_raw).expanduser()
+        if runtime_dir_raw
+        else DEFAULT_SERVER_RUNTIME_DIR
+    )
+    if not runtime_dir.exists():
+        return None
+    return (runtime_dir / "hunt.db").resolve()
+
+
+def get_db_path_warning():
+    expected_runtime_db = _expected_runtime_db_path()
+    try:
+        current_db = Path(HUNT_DB_PATH).resolve()
+    except Exception:
+        current_db = Path(HUNT_DB_PATH)
+    if not expected_runtime_db or current_db == expected_runtime_db:
+        return None
+    return (
+        "LinkedIn auth is using a different DB than the default server runtime DB. "
+        f"Current: {current_db}. Expected server runtime DB: {expected_runtime_db}. "
+        "Use './hunt.sh auth-auto-relogin ...' or export HUNT_DB_PATH before running "
+        "scraper/linkedin_session.py so auth state updates reach the review app and /metrics."
+    )
 
 
 def _append_auth_trace_record(record):
@@ -1136,16 +1173,19 @@ def attempt_auto_relogin(
         browser_channel=browser_channel or DEFAULT_BROWSER_CHANNEL,
         headless=headless,
         storage_state_path=str(resolve_storage_state_path(storage_state_path)),
+        db_path=HUNT_DB_PATH,
     )
 
     def finalize(result):
         result = dict(result)
         result["trace_path"] = str(resolve_auth_trace_path())
+        result["db_path"] = HUNT_DB_PATH
         _finish_auth_trace_run(
             "success" if result.get("recovered") else "failure",
             message=result.get("message"),
             attempted=result.get("attempted"),
             recovered=result.get("recovered"),
+            db_path=HUNT_DB_PATH,
         )
         return result
 
@@ -1461,6 +1501,7 @@ def save_storage_state_interactively(storage_state_path=None, *, browser_channel
         "save_storage_state",
         browser_channel=browser_channel or DEFAULT_BROWSER_CHANNEL,
         storage_state_path=str(resolve_storage_state_path(storage_state_path)),
+        db_path=HUNT_DB_PATH,
     )
     target_path = resolve_storage_state_path(storage_state_path)
     target_path.parent.mkdir(parents=True, exist_ok=True)
@@ -1504,11 +1545,15 @@ def save_storage_state_interactively(storage_state_path=None, *, browser_channel
             finally:
                 _close_browser(browser)
     except Exception as exc:
-        _finish_auth_trace_run("failure", message=str(exc))
+        _finish_auth_trace_run("failure", message=str(exc), db_path=HUNT_DB_PATH)
         raise
 
     mark_linkedin_auth_available()
-    _finish_auth_trace_run("success", message=f"Saved LinkedIn auth state to {target_path}")
+    _finish_auth_trace_run(
+        "success",
+        message=f"Saved LinkedIn auth state to {target_path}",
+        db_path=HUNT_DB_PATH,
+    )
     return target_path
 
 
@@ -1565,15 +1610,22 @@ def main():
 
     try:
         if args.save_storage_state:
+            db_warning = get_db_path_warning()
+            if db_warning:
+                print(f"Warning: {db_warning}")
             saved_path = save_storage_state_interactively(
                 storage_state_path=args.storage_state,
                 browser_channel=args.channel,
             )
             print(f"Saved LinkedIn auth state to: {saved_path}")
             print(f"LinkedIn auth trace appended to: {resolve_auth_trace_path()}")
+            print(f"LinkedIn auth DB path: {HUNT_DB_PATH}")
             return 0
 
         if args.auto_relogin:
+            db_warning = get_db_path_warning()
+            if db_warning:
+                print(f"Warning: {db_warning}")
             result = attempt_auto_relogin(
                 storage_state_path=args.storage_state,
                 browser_channel=args.channel,
@@ -1583,6 +1635,8 @@ def main():
             print(result["message"])
             if result.get("trace_path"):
                 print(f"LinkedIn auth trace appended to: {result['trace_path']}")
+            if result.get("db_path"):
+                print(f"LinkedIn auth DB path: {result['db_path']}")
             return 0 if result.get("recovered") else 1
 
         if args.check:

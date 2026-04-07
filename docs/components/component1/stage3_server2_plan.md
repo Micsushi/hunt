@@ -494,6 +494,11 @@ Important assumption:
    - every auth run also appends a persistent JSONL trace at `.state/linkedin_auth_trace.jsonl`
      - override path with `LINKEDIN_AUTH_TRACE_PATH`
      - trace entries include URL, screen type, visible components, clicks, fills, and final run outcome
+   - latest observed `server2` auth trace confirms:
+     - LinkedIn may keep the same `/login/?session_redirect=...` URL across both the welcome-back chooser and the real email/password form
+     - the second screen can include `Sign in with Apple`, so the worker must only submit the exact LinkedIn `Sign in` button after it has already identified real email/password fields
+     - an immediate post-submit trace snapshot can report `Execution context was destroyed` during navigation; treat the later `/feed/` snapshot and successful `run_end` record as the real success confirmation
+     - if auth succeeds but `/metrics` still reports `hunt_auth_available{source="linkedin"} 0`, verify that the auth command and the review app are using the same `HUNT_DB_PATH`
 2. Add the Xvfb-backed blocked-row UI fallback to the deployed Hunt runtime
 3. Verify the deployed timer still prioritizes newest pending rows before older backlog
 4. Deploy `review_app.py` as the `hunt-review` service on `server2`
