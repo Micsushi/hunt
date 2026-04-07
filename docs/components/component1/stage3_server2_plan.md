@@ -477,6 +477,9 @@ Important assumption:
    - Playwright browser install
    - env vars
    - auth-state path expectations
+   - auth-health verification with:
+     - `cd ~/hunt && set -a && source .env && set +a && .venv/bin/python scraper/linkedin_session.py --auto-relogin --headful --channel chrome`
+   - that command should reuse the saved session first when possible, then fall back to stored credentials, and finally flip the shared auth flag used by the review app and `/metrics`
 2. Add the Xvfb-backed blocked-row UI fallback to the deployed Hunt runtime
 3. Verify the deployed timer still prioritizes newest pending rows before older backlog
 4. Deploy `review_app.py` as the `hunt-review` service on `server2`

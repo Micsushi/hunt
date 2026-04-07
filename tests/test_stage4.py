@@ -5,7 +5,7 @@ import sqlite3
 import sys
 import tempfile
 import unittest
-from contextlib import redirect_stdout
+from contextlib import contextmanager, redirect_stdout
 from pathlib import Path
 from unittest.mock import patch
 
@@ -302,6 +302,166 @@ class Stage4Tests(unittest.TestCase):
         self.assertEqual(result, "chooser_clicked")
         self.assertEqual(page.state, "authed")
         self.assertEqual(page.filled, {})
+
+    def test_submit_login_form_can_fall_back_to_sign_in_using_another_account(self):
+        page = self.FakePage(
+            {
+                "login": {
+                    "url": linkedin_session.LOGIN_URL,
+                    "selectors": {
+                        "a:has-text('Sign in using another account')": {
+                            "count": 1,
+                            "next_state": "form",
+                        },
+                    },
+                },
+                "form": {
+                    "url": linkedin_session.LOGIN_URL,
+                    "selectors": {
+                        "input[name='session_key']": {"count": 1, "fill_key": "email"},
+                        "input[name='session_password']": {"count": 1, "fill_key": "password"},
+                        "button[type='submit']": {"count": 1, "next_state": "submitted"},
+                    },
+                },
+                "submitted": {
+                    "url": "https://www.linkedin.com/feed/",
+                    "selectors": {},
+                },
+            },
+            initial_state="login",
+        )
+
+        result = linkedin_session._submit_login_form(
+            page,
+            email="person@example.com",
+            password="secret",
+            timeout_ms=1000,
+        )
+
+        self.assertEqual(result, "form_submitted")
+        self.assertEqual(page.state, "submitted")
+        self.assertEqual(
+            page.filled,
+            {"email": "person@example.com", "password": "secret"},
+        )
+
+    def test_attempt_auto_relogin_reuses_saved_session_without_credentials(self):
+        with self.with_temp_db():
+            with tempfile.NamedTemporaryFile(suffix=".json") as storage_state_file:
+                opened = {}
+
+                @contextmanager
+                def fake_open_browser_context(**kwargs):
+                    opened.update(kwargs)
+                    yield object()
+
+                with patch.object(linkedin_session, "get_all_accounts", return_value=[]), patch.object(
+                    linkedin_session,
+                    "open_browser_context",
+                    fake_open_browser_context,
+                ), patch.object(
+                    linkedin_session,
+                    "_attempt_session_reuse_in_context",
+                    return_value="session_reused",
+                ) as mock_reuse:
+                    result = linkedin_session.attempt_auto_relogin(
+                        storage_state_path=storage_state_file.name,
+                        timeout_ms=1000,
+                    )
+
+                self.assertTrue(result["attempted"])
+                self.assertTrue(result["recovered"])
+                self.assertIn("reused the existing saved session", result["message"])
+                self.assertEqual(
+                    opened["storage_state_path"],
+                    str(Path(storage_state_file.name).resolve()),
+                )
+                auth_state = db.get_linkedin_auth_state()
+                self.assertTrue(auth_state["available"])
+                self.assertIsNone(auth_state["last_error"])
+                mock_reuse.assert_called_once()
+
+    def test_attempt_auto_relogin_marks_auth_unavailable_when_saved_session_check_fails(self):
+        with self.with_temp_db():
+            with tempfile.NamedTemporaryFile(suffix=".json") as storage_state_file:
+                @contextmanager
+                def fake_open_browser_context(**_kwargs):
+                    yield object()
+
+                with patch.object(linkedin_session, "get_all_accounts", return_value=[]), patch.object(
+                    linkedin_session,
+                    "open_browser_context",
+                    fake_open_browser_context,
+                ), patch.object(
+                    linkedin_session,
+                    "_attempt_session_reuse_in_context",
+                    side_effect=linkedin_session.LinkedInSessionError("LinkedIn session appears to be logged out or expired."),
+                ):
+                    result = linkedin_session.attempt_auto_relogin(
+                        storage_state_path=storage_state_file.name,
+                        timeout_ms=1000,
+                    )
+
+                self.assertTrue(result["attempted"])
+                self.assertFalse(result["recovered"])
+                self.assertIn("saved session check failed", result["message"])
+                auth_state = db.get_linkedin_auth_state()
+                self.assertFalse(auth_state["available"])
+                self.assertEqual(auth_state["last_error"], result["message"])
+
+    def test_rotate_linkedin_account_marks_auth_unavailable_when_relogin_fails(self):
+        with self.with_temp_db():
+            with tempfile.TemporaryDirectory() as temp_dir:
+                next_state_path = Path(temp_dir) / "linkedin_auth_state_1.json"
+                selected_indexes = []
+
+                @contextmanager
+                def fake_open_browser_context(**_kwargs):
+                    yield object()
+
+                with patch.object(
+                    linkedin_session,
+                    "get_all_accounts",
+                    return_value=[
+                        {"email": "person1@example.com", "password": "secret1"},
+                        {"email": "person2@example.com", "password": "secret2"},
+                    ],
+                ), patch.object(
+                    linkedin_session,
+                    "get_active_account_index",
+                    return_value=0,
+                ), patch.object(
+                    linkedin_session,
+                    "is_account_blocked",
+                    return_value=False,
+                ), patch.object(
+                    linkedin_session,
+                    "set_active_account_index",
+                    side_effect=selected_indexes.append,
+                ), patch.object(
+                    linkedin_session,
+                    "get_storage_state_path_for_account",
+                    return_value=next_state_path,
+                ), patch.object(
+                    linkedin_session,
+                    "open_browser_context",
+                    fake_open_browser_context,
+                ), patch.object(
+                    linkedin_session,
+                    "_attempt_auto_relogin_in_context",
+                    side_effect=linkedin_session.LinkedInSessionError(
+                        "LinkedIn session appears to be logged out or expired."
+                    ),
+                ):
+                    result = linkedin_session.rotate_linkedin_account(timeout_ms=1000)
+
+            self.assertTrue(result["rotated"])
+            self.assertFalse(result["recovered"])
+            self.assertEqual(selected_indexes, [1])
+            self.assertIn("Rotated to account 1 but relogin failed", result["message"])
+            auth_state = db.get_linkedin_auth_state()
+            self.assertFalse(auth_state["available"])
+            self.assertEqual(auth_state["last_error"], result["message"])
 
 
 if __name__ == "__main__":

@@ -445,6 +445,23 @@ def _attempt_auto_relogin_in_context(context, target_path, *, email, password, t
         _close_page(page)
 
 
+def _attempt_session_reuse_in_context(context, target_path, *, timeout_ms=30000):
+    page = context.new_page()
+    try:
+        page.goto(LOGIN_VERIFICATION_URL, wait_until="domcontentloaded", timeout=timeout_ms)
+        _handle_post_login_screens(page, timeout_ms=timeout_ms)
+        assert_logged_in(page)
+        if not _feed_loaded(page):
+            raise LinkedInSessionError(
+                "LinkedIn saved auth state did not reach the home feed. "
+                "Additional verification may still be required."
+            )
+        context.storage_state(path=str(target_path))
+        return "session_reused"
+    finally:
+        _close_page(page)
+
+
 def _all_accounts_blocked_discord_alert(n_accounts):
     msg = (
         f"Hunt: all {n_accounts} LinkedIn account(s) are blocked for "
@@ -468,14 +485,71 @@ def attempt_auto_relogin(
 ):
     accounts = get_all_accounts()
     if not accounts:
-        return {
-            "attempted": False,
-            "recovered": False,
-            "message": (
-                "LinkedIn auto relogin is not configured. "
+        target_path = resolve_storage_state_path(storage_state_path)
+        if not target_path.exists():
+            msg = (
+                "LinkedIn auto relogin is not configured, and no saved auth state was found. "
                 f"Set {AUTO_RELOGIN_EMAIL_ENV} and {AUTO_RELOGIN_PASSWORD_ENV} "
-                f"or set {LINKEDIN_ACCOUNTS_ENV} with a JSON array of credentials."
-            ),
+                f"or run 'python scraper/linkedin_session.py --save-storage-state --storage-state "
+                f"\"{target_path}\"'."
+            )
+            mark_linkedin_auth_unavailable(msg)
+            return {
+                "attempted": False,
+                "recovered": False,
+                "message": msg,
+            }
+
+        try:
+            if context is not None:
+                mode = _attempt_session_reuse_in_context(
+                    context,
+                    target_path,
+                    timeout_ms=timeout_ms,
+                )
+            else:
+                with open_browser_context(
+                    headless=headless,
+                    slow_mo=slow_mo,
+                    browser_channel=browser_channel or DEFAULT_BROWSER_CHANNEL,
+                    storage_state_path=str(target_path),
+                ) as relogin_context:
+                    mode = _attempt_session_reuse_in_context(
+                        relogin_context,
+                        target_path,
+                        timeout_ms=timeout_ms,
+                    )
+        except LinkedInAutomationFlagged as exc:
+            msg = f"LinkedIn saved session check failed: {exc}"
+            mark_linkedin_auth_unavailable(msg)
+            return {
+                "attempted": True,
+                "recovered": False,
+                "message": msg,
+            }
+        except PlaywrightTargetClosedError as exc:
+            msg = f"LinkedIn saved session check aborted: browser was closed before completion ({exc})."
+            mark_linkedin_auth_unavailable(msg)
+            return {
+                "attempted": True,
+                "recovered": False,
+                "message": msg,
+            }
+        except (BrowserRuntimeError, LinkedInSessionError) as exc:
+            msg = f"LinkedIn saved session check failed: {exc}"
+            mark_linkedin_auth_unavailable(msg)
+            return {
+                "attempted": True,
+                "recovered": False,
+                "message": msg,
+            }
+
+        mark_linkedin_auth_available()
+        action = "reused the existing saved session" if mode == "session_reused" else "refreshed the saved auth state"
+        return {
+            "attempted": True,
+            "recovered": True,
+            "message": f"LinkedIn auto relogin {action}.",
         }
 
     # Find the first non-blocked account starting from the current active index.
@@ -552,16 +626,20 @@ def attempt_auto_relogin(
             ),
         }
     except PlaywrightTargetClosedError as exc:
+        msg = f"LinkedIn auto relogin aborted: browser was closed before completion ({exc})."
+        mark_linkedin_auth_unavailable(msg)
         return {
             "attempted": True,
             "recovered": False,
-            "message": f"LinkedIn auto relogin aborted: browser was closed before completion ({exc}).",
+            "message": msg,
         }
     except (BrowserRuntimeError, LinkedInSessionError) as exc:
+        msg = f"LinkedIn auto relogin failed: {exc}"
+        mark_linkedin_auth_unavailable(msg)
         return {
             "attempted": True,
             "recovered": False,
-            "message": f"LinkedIn auto relogin failed: {exc}",
+            "message": msg,
         }
 
     mark_linkedin_auth_available()
@@ -652,6 +730,9 @@ def rotate_linkedin_account(
                 "message": msg,
             }
         set_active_account_index(fallback)
+        mark_linkedin_auth_unavailable(
+            f"Account {next_index} flagged for automation; queued account {fallback} for the next run."
+        )
         return {
             "rotated": True,
             "account_index": next_index,
@@ -662,18 +743,22 @@ def rotate_linkedin_account(
             ),
         }
     except PlaywrightTargetClosedError as exc:
+        msg = f"Rotated to account {next_index} but browser was closed before completion: {exc}"
+        mark_linkedin_auth_unavailable(msg)
         return {
             "rotated": True,
             "account_index": next_index,
             "recovered": False,
-            "message": f"Rotated to account {next_index} but browser was closed before completion: {exc}",
+            "message": msg,
         }
     except (BrowserRuntimeError, LinkedInSessionError) as exc:
+        msg = f"Rotated to account {next_index} but relogin failed: {exc}"
+        mark_linkedin_auth_unavailable(msg)
         return {
             "rotated": True,
             "account_index": next_index,
             "recovered": False,
-            "message": f"Rotated to account {next_index} but relogin failed: {exc}",
+            "message": msg,
         }
 
     mark_linkedin_auth_available()
@@ -774,7 +859,10 @@ def main():
     parser.add_argument(
         "--auto-relogin",
         action="store_true",
-        help="Attempt a best-effort relogin using LINKEDIN_EMAIL and LINKEDIN_PASSWORD.",
+        help=(
+            "Reuse the saved LinkedIn auth state when possible, otherwise attempt "
+            "a best-effort relogin using stored credentials."
+        ),
     )
     parser.add_argument(
         "--headful",

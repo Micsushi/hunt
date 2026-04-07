@@ -111,6 +111,8 @@ Testing goal:
 Auth setup note:
 - when saving Playwright auth state for LinkedIn, prefer `Sign in with email`
 - Google SSO popups can be unreliable in automation-managed browsers
+- auto relogin now first tries visible LinkedIn account-chooser flows, including `Welcome back` cards and email-text matches
+- if the chooser flow is not usable, auto relogin falls back to `Sign in using another account` / `Use a different account` and then fills the standard email/password form
 - on Linux/server deployments, installing the Python `playwright` package is not sufficient by itself
 - after dependency install, also run `python -m playwright install chromium` so the browser binaries exist under the runtime user's Playwright cache
 - if a manual test is interrupted and leaves a row stuck in `processing`, rerun that same job with `--force`
@@ -319,12 +321,25 @@ Common examples:
   `python scraper/linkedin_session.py --save-storage-state --channel chrome`
 - check whether the saved LinkedIn auth state exists:
   `python scraper/linkedin_session.py --check`
-- optional best-effort auto relogin is available when these env vars are present:
+- on the server, verify or refresh the current saved LinkedIn login and update shared auth health:
+  `set -a && source .env && set +a && .venv/bin/python scraper/linkedin_session.py --auto-relogin --headful --channel chrome`
+- `--check` only confirms that the storage-state JSON exists; it does not prove the saved session still reaches the LinkedIn feed
+- `--auto-relogin` now reuses the saved auth state first when it is still valid
+- optional credential fallback for `--auto-relogin` is available when these env vars are present:
   `LINKEDIN_EMAIL`
   `LINKEDIN_PASSWORD`
   `LINKEDIN_AUTO_RELOGIN=true`
+- multi-account rotation can also be configured with:
+  `LINKEDIN_ACCOUNTS`
 - if LinkedIn auth expires during enrichment, Hunt now pauses the LinkedIn lane without failing the current row
 - when stored LinkedIn credentials are configured, Hunt now attempts one Playwright relogin before pausing the lane
+- if LinkedIn shows an account chooser during relogin, Hunt first tries chooser buttons/cards/email-text matches before it fills credentials
+- if chooser selection is not available, Hunt clicks `Sign in using another account` / `Use a different account` and falls back to the standard email/password form
+- successful manual auth save or successful `--auto-relogin` marks LinkedIn auth available again in shared runtime state
+- failures such as expired saved auth, automation-flagged accounts, all accounts blocked, or failed account rotation mark LinkedIn auth unavailable in shared runtime state
+- the review app and `/metrics` both read that shared runtime auth state:
+  - review app headline toggles between `LinkedIn auth ready` and `LinkedIn auth paused`
+  - `/metrics` exposes `hunt_auth_available{source="linkedin"}` as `1` or `0`
 - after logging in again and pressing Enter in the auth-save flow, the saved auth state is refreshed and the paused-auth flag is cleared
 
 ### Stage 1 verification
@@ -462,8 +477,10 @@ Initial Stage 4 implementation now includes:
 - machine-readable queue monitoring
   - `python scripts/queue_health.py --json`
   - review app `/metrics`
+  - shared LinkedIn auth availability now comes from runtime SQLite state so auth tooling, the review app, and `/metrics` stay aligned
 - review-surface visibility for artifacts
   - the job detail page now shows saved artifact paths and links for screenshot/HTML/text snapshots when present
+  - the review app auth card now reflects the same shared LinkedIn auth ready/paused state used by unattended enrichment
 - Stage 6 deployment wiring for artifact storage
   - Hunt runtime uses `HUNT_ARTIFACTS_DIR`
   - the review container mounts the same artifact directory read-only
@@ -537,9 +554,11 @@ Component 1 completion checklist:
 
 C1 sign-off runbook on `server2`:
 1. deploy the latest Hunt repo and latest `ansible_homelab` Stage 6 changes
-2. verify the deployed runtime shape
+2. verify the deployed runtime shape and auth health
    - `systemctl cat hunt-scraper.service | grep HUNT_ARTIFACTS_DIR`
    - `curl -s https://agent-hunt-review.mshi.ca/metrics | head`
+   - `cd ~/hunt && set -a && source .env && set +a && .venv/bin/python scraper/linkedin_session.py --auto-relogin --headful --channel chrome`
+   - `curl -s https://agent-hunt-review.mshi.ca/metrics | grep 'hunt_auth_available{source="linkedin"}'`
 3. requeue failed/blocked enrichment rows you want retried
    - `./hunt.sh retry`
    - `./hunt.sh requeue-enrich --source all`
