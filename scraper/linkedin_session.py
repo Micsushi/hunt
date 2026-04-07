@@ -460,12 +460,39 @@ def _try_sign_in_another_account(page, *, timeout_ms=30000):
     for selector in ALT_SIGN_IN_SELECTORS:
         try:
             locator = page.locator(selector)
-            if locator.count():
-                locator.first.click(timeout=timeout_ms)
-                page.wait_for_timeout(1500)
-                _log_relogin(f"clicked alternate sign-in selector: {selector}")
-                return True
-        except Exception:
+            count = locator.count()
+            if not count:
+                continue
+            for index in range(count):
+                candidate = locator.nth(index)
+                try:
+                    if hasattr(candidate, "is_visible") and not candidate.is_visible():
+                        continue
+                except Exception:
+                    pass
+                try:
+                    candidate.click(timeout=timeout_ms)
+                    page.wait_for_timeout(1500)
+                    _log_relogin(f"clicked alternate sign-in selector: {selector} [index={index}]")
+                    return True
+                except Exception as exc:
+                    _log_relogin(
+                        f"alternate sign-in click failed for selector: {selector} [index={index}] error={exc}"
+                    )
+                    try:
+                        candidate.click(timeout=timeout_ms, force=True)
+                        page.wait_for_timeout(1500)
+                        _log_relogin(
+                            f"force-clicked alternate sign-in selector: {selector} [index={index}]"
+                        )
+                        return True
+                    except Exception as force_exc:
+                        _log_relogin(
+                            f"alternate sign-in force click failed for selector: {selector} "
+                            f"[index={index}] error={force_exc}"
+                        )
+        except Exception as exc:
+            _log_relogin(f"alternate sign-in selector probe failed: {selector} error={exc}")
             continue
     return False
 
