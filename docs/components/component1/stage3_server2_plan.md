@@ -491,6 +491,9 @@ Important assumption:
      - which selectors/buttons were clicked
      - which fields were filled
      - redacted password fill details
+   - every auth run also appends a persistent JSONL trace at `.state/linkedin_auth_trace.jsonl`
+     - override path with `LINKEDIN_AUTH_TRACE_PATH`
+     - trace entries include URL, screen type, visible components, clicks, fills, and final run outcome
 2. Add the Xvfb-backed blocked-row UI fallback to the deployed Hunt runtime
 3. Verify the deployed timer still prioritizes newest pending rows before older backlog
 4. Deploy `review_app.py` as the `hunt-review` service on `server2`

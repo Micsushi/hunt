@@ -352,12 +352,23 @@ Common examples:
 - if chooser selection is not available, Hunt clicks `Sign in using another account` / `Use a different account` and waits for the standard LinkedIn email/password form
 - relogin debug logging can be enabled with:
   `LINKEDIN_RELOGIN_DEBUG=1`
+- every auth run now also appends a persistent JSONL trace file at:
+  `.state/linkedin_auth_trace.jsonl`
+  or the path from:
+  `LINKEDIN_AUTH_TRACE_PATH`
 - debug logs now record:
   - screen classification
   - selector/button clicks
   - failed click attempts
   - filled email value
   - a redacted password placeholder such as `<redacted len=12>`
+- the persistent auth trace now records per-run:
+  - `run_start` / `run_end`
+  - current URL and host
+  - detected screen type
+  - visible screen components such as buttons, links, inputs, labels, headings, and forms
+  - clicked selectors
+  - filled fields and values, with passwords redacted
 - successful manual auth save or successful `--auto-relogin` marks LinkedIn auth available again in shared runtime state
 - failures such as expired saved auth, automation-flagged accounts, all accounts blocked, or failed account rotation mark LinkedIn auth unavailable in shared runtime state
 - the review app and `/metrics` both read that shared runtime auth state:

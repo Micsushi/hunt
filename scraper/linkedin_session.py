@@ -5,9 +5,11 @@ import os
 import sys
 from contextlib import contextmanager
 from pathlib import Path
+from urllib.parse import urlparse
 
 ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_STORAGE_STATE_PATH = ROOT / ".state" / "linkedin_auth_state.json"
+DEFAULT_AUTH_TRACE_PATH = ROOT / ".state" / "linkedin_auth_trace.jsonl"
 LINKEDIN_ACTIVE_ACCOUNT_FILE = ROOT / ".state" / "linkedin_active_account"
 ACCOUNT_BLOCKS_FILE = ROOT / ".state" / "linkedin_account_blocks.json"
 ACCOUNT_BLOCK_DAYS = 7
@@ -18,6 +20,7 @@ AUTO_RELOGIN_EMAIL_ENV = "LINKEDIN_EMAIL"
 AUTO_RELOGIN_PASSWORD_ENV = "LINKEDIN_PASSWORD"
 AUTO_RELOGIN_ENABLED_ENV = "LINKEDIN_AUTO_RELOGIN"
 AUTO_RELOGIN_DEBUG_ENV = "LINKEDIN_RELOGIN_DEBUG"
+AUTH_TRACE_PATH_ENV = "LINKEDIN_AUTH_TRACE_PATH"
 LINKEDIN_ACCOUNTS_ENV = "LINKEDIN_ACCOUNTS"
 ACCOUNT_CHOOSER_SELECTORS = (
     "button:has-text('Continue as')",
@@ -42,6 +45,46 @@ ALT_SIGN_IN_SELECTORS = (
     "text=/Use a different account/i",
 )
 
+EMAIL_FIELD_SELECTORS = (
+    "input[name='session_key']",
+    "input[name*='session_key']",
+    "input[id*='session_key']",
+    "input[autocomplete='username']",
+    "input[autocomplete='email']",
+    "input[name='username']",
+    "input[id*='username']",
+    "input[aria-label='Email or phone']",
+    "input[aria-label='Email or phone number']",
+    "input[placeholder='Email or phone']",
+    "input[placeholder='Email or phone number']",
+    "input[type='email']",
+    "input[type='text']",
+    "input[inputmode='email']",
+    "xpath=//label[contains(normalize-space(.), 'Email') or contains(normalize-space(.), 'phone')]/following::input[not(@type='hidden') and not(@type='password')][1]",
+    "#username",
+)
+
+PASSWORD_FIELD_SELECTORS = (
+    "input[name='session_password']",
+    "input[name*='session_password']",
+    "input[id*='session_password']",
+    "input[autocomplete='current-password']",
+    "input[name='password']",
+    "input[placeholder='Password']",
+    "input[type='password']",
+    "input[id*='password']",
+    "xpath=//label[contains(normalize-space(.), 'Password')]/following::input[@type='password'][1]",
+    "#password",
+)
+
+SUBMIT_BUTTON_SELECTORS = (
+    "button[type='submit']",
+    "xpath=//button[normalize-space(.)='Sign in']",
+    "xpath=//a[normalize-space(.)='Sign in']",
+    "button[aria-label='Sign in']",
+    "button:has-text('Sign in')",
+)
+
 # LinkedIn's "Important notice" automation-detection page.
 # Appears at /checkpoint/ URLs so it looks "logged out" to page_looks_logged_out;
 # must be checked first.
@@ -62,6 +105,82 @@ POST_LOGIN_CONFIRMATION_SELECTORS = (
     "button:has-text('Remind me later')",
     "button:has-text('Not now')",
 )
+
+AUTH_TRACE_COMPONENT_SCRIPT = """
+(limit) => {
+  const clean = (value, maxLen = 200) => {
+    const normalized = String(value || "").replace(/\\s+/g, " ").trim();
+    return normalized.length > maxLen ? normalized.slice(0, maxLen) + "..." : normalized;
+  };
+
+  const isVisible = (el) => {
+    if (!el) return false;
+    const style = window.getComputedStyle(el);
+    if (!style || style.visibility === "hidden" || style.display === "none") return false;
+    const rect = el.getBoundingClientRect();
+    return rect.width > 0 && rect.height > 0;
+  };
+
+  const selectors = [
+    "button",
+    "a",
+    "input",
+    "textarea",
+    "select",
+    "label",
+    "form",
+    "h1",
+    "h2",
+    "h3",
+    "h4",
+    "[role='button']",
+    "[role='link']",
+    "[role='textbox']",
+    "[aria-label]",
+    "[placeholder]",
+  ].join(",");
+
+  const nodes = Array.from(document.querySelectorAll(selectors));
+  const components = [];
+
+  for (const el of nodes) {
+    if (!isVisible(el)) continue;
+    const tag = (el.tagName || "").toLowerCase();
+    const type = clean(el.getAttribute("type") || "");
+    const value =
+      tag === "input"
+        ? (type === "password"
+            ? ((el.value || "").length ? "<redacted>" : "")
+            : clean(el.value || "", 120))
+        : "";
+    components.push({
+      tag,
+      type,
+      role: clean(el.getAttribute("role") || ""),
+      name: clean(el.getAttribute("name") || ""),
+      id: clean(el.id || ""),
+      text: clean(el.innerText || el.textContent || "", 240),
+      label: clean(el.getAttribute("aria-label") || "", 160),
+      placeholder: clean(el.getAttribute("placeholder") || "", 160),
+      href: clean(el.getAttribute("href") || "", 240),
+      value,
+    });
+    if (components.length >= limit) break;
+  }
+
+  return {
+    title: clean(document.title || "", 240),
+    body_text_excerpt: clean(document.body ? document.body.innerText : "", 1200),
+    component_count: components.length,
+    components,
+  };
+}
+"""
+
+_AUTH_TRACE_RUN_ID = None
+_AUTH_TRACE_FLOW = None
+_AUTH_TRACE_SEQUENCE = 0
+_AUTH_TRACE_LAST_SNAPSHOT_KEY = None
 
 from browser_runtime import BrowserRuntimeError, open_browser_context, load_sync_playwright
 from db import mark_linkedin_auth_available, mark_linkedin_auth_unavailable
@@ -130,7 +249,137 @@ def _mask_secret(value):
     return f"<redacted len={len(value)}>"
 
 
+def _normalize_text(value):
+    return " ".join((value or "").split())
+
+
+def resolve_auth_trace_path():
+    raw_path = os.getenv(AUTH_TRACE_PATH_ENV)
+    if raw_path:
+        return Path(raw_path).expanduser().resolve()
+    return DEFAULT_AUTH_TRACE_PATH
+
+
+def _append_auth_trace_record(record):
+    global _AUTH_TRACE_SEQUENCE
+    if not _AUTH_TRACE_RUN_ID:
+        return
+    trace_path = resolve_auth_trace_path()
+    trace_path.parent.mkdir(parents=True, exist_ok=True)
+    _AUTH_TRACE_SEQUENCE += 1
+    now_utc = datetime.datetime.now(datetime.timezone.utc)
+    payload = {
+        "timestamp": now_utc.isoformat().replace("+00:00", "Z"),
+        "run_id": _AUTH_TRACE_RUN_ID,
+        "flow": _AUTH_TRACE_FLOW,
+        "seq": _AUTH_TRACE_SEQUENCE,
+    }
+    payload.update(record)
+    with trace_path.open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps(payload, sort_keys=True) + "\n")
+
+
+def _start_auth_trace_run(flow, **metadata):
+    global _AUTH_TRACE_RUN_ID, _AUTH_TRACE_FLOW, _AUTH_TRACE_SEQUENCE, _AUTH_TRACE_LAST_SNAPSHOT_KEY
+    now_utc = datetime.datetime.now(datetime.timezone.utc)
+    _AUTH_TRACE_RUN_ID = (
+        now_utc.strftime("%Y%m%dT%H%M%S.%fZ")
+        + f"-pid{os.getpid()}"
+    )
+    _AUTH_TRACE_FLOW = flow
+    _AUTH_TRACE_SEQUENCE = 0
+    _AUTH_TRACE_LAST_SNAPSHOT_KEY = None
+    _append_auth_trace_record(
+        {
+            "event": "run_start",
+            "metadata": metadata,
+        }
+    )
+
+
+def _finish_auth_trace_run(status, *, message=None, **metadata):
+    global _AUTH_TRACE_RUN_ID, _AUTH_TRACE_FLOW, _AUTH_TRACE_SEQUENCE, _AUTH_TRACE_LAST_SNAPSHOT_KEY
+    if _AUTH_TRACE_RUN_ID:
+        _append_auth_trace_record(
+            {
+                "event": "run_end",
+                "status": status,
+                "message": message,
+                "metadata": metadata,
+            }
+        )
+    _AUTH_TRACE_RUN_ID = None
+    _AUTH_TRACE_FLOW = None
+    _AUTH_TRACE_SEQUENCE = 0
+    _AUTH_TRACE_LAST_SNAPSHOT_KEY = None
+
+
+def _capture_auth_screen_components(page, *, component_limit=200):
+    try:
+        snapshot = page.evaluate(AUTH_TRACE_COMPONENT_SCRIPT, component_limit)
+        if isinstance(snapshot, dict):
+            return snapshot
+    except Exception as exc:
+        return {
+            "title": "",
+            "body_text_excerpt": "",
+            "component_count": 0,
+            "components": [],
+            "capture_error": str(exc),
+        }
+    return {
+        "title": "",
+        "body_text_excerpt": "",
+        "component_count": 0,
+        "components": [],
+    }
+
+
+def _screen_snapshot_key(snapshot):
+    component_preview = [
+        {
+            "tag": component.get("tag"),
+            "text": component.get("text"),
+            "label": component.get("label"),
+            "placeholder": component.get("placeholder"),
+        }
+        for component in snapshot.get("components", [])[:8]
+    ]
+    return json.dumps(
+        {
+            "url": snapshot.get("url"),
+            "screen_type": snapshot.get("screen_type"),
+            "title": snapshot.get("title"),
+            "component_preview": component_preview,
+        },
+        sort_keys=True,
+    )
+
+
+def _trace_auth_screen(page, event="screen_snapshot", *, force=False, **payload):
+    global _AUTH_TRACE_LAST_SNAPSHOT_KEY
+    if not _AUTH_TRACE_RUN_ID:
+        return
+    snapshot = _capture_auth_screen_components(page)
+    current_url = _page_url(page)
+    snapshot.update(
+        {
+            "event": event,
+            "url": current_url,
+            "host": _page_host(page),
+            "screen_type": _classify_login_screen(page),
+        }
+    )
+    snapshot.update(payload)
+    snapshot_key = _screen_snapshot_key(snapshot)
+    if not force and snapshot_key == _AUTH_TRACE_LAST_SNAPSHOT_KEY:
+        return
+    _AUTH_TRACE_LAST_SNAPSHOT_KEY = snapshot_key
+    _append_auth_trace_record(snapshot)
+
+
 def _log_relogin_event(event, **payload):
+    _append_auth_trace_record({"event": event, **payload})
     if not _relogin_debug_enabled():
         return
     details = {"event": event}
@@ -143,6 +392,22 @@ def _selector_count(page, selector):
         return page.locator(selector).count()
     except Exception:
         return 0
+
+
+def _page_url(page):
+    return getattr(page, "url", "") or ""
+
+
+def _page_host(page):
+    try:
+        return (urlparse(_page_url(page)).hostname or "").lower()
+    except Exception:
+        return ""
+
+
+def _is_linkedin_page(page):
+    host = _page_host(page)
+    return host == "linkedin.com" or host.endswith(".linkedin.com")
 
 
 def get_all_accounts():
@@ -250,9 +515,12 @@ def ensure_storage_state_exists(storage_state_path=None):
 
 
 def page_looks_logged_out(page):
-    url = (page.url or "").lower()
+    url = _page_url(page).lower()
     if any(token in url for token in ("/login", "/checkpoint", "/signup")):
         return True
+
+    if not hasattr(page, "locator"):
+        return False
 
     selectors = (
         "input[name='session_key']",
@@ -268,7 +536,7 @@ def assert_logged_in(page):
 
 
 def _feed_loaded(page):
-    url = (page.url or "").lower()
+    url = _page_url(page).lower()
     return "/feed" in url
 
 
@@ -353,6 +621,11 @@ def _verify_session_and_save(context, target_path, *, timeout_ms=30000):
         verification_page.goto(
             LOGIN_VERIFICATION_URL, wait_until="domcontentloaded", timeout=timeout_ms
         )
+        _trace_auth_screen(
+            verification_page,
+            action="verify_session_loaded",
+            force=True,
+        )
         _handle_post_login_screens(verification_page, timeout_ms=timeout_ms)
         assert_logged_in(verification_page)
         if not _feed_loaded(verification_page):
@@ -366,22 +639,8 @@ def _verify_session_and_save(context, target_path, *, timeout_ms=30000):
 
 
 def _login_form_available(page):
-    email_selectors = (
-        "input[name='session_key']",
-        "input[autocomplete='username']",
-        "input[name='username']",
-        "input[aria-label='Email or phone']",
-        "#username",
-    )
-    password_selectors = (
-        "input[name='session_password']",
-        "input[autocomplete='current-password']",
-        "input[name='password']",
-        "#password",
-    )
-    return any(page.locator(selector).count() for selector in email_selectors) and any(
-        page.locator(selector).count() for selector in password_selectors
-    )
+    email_input, _, password_input, _, _, _ = _get_login_form_controls(page)
+    return email_input is not None and password_input is not None
 
 
 def _welcome_back_available(page):
@@ -395,8 +654,10 @@ def _welcome_back_available(page):
 
 
 def _classify_login_screen(page):
-    url = page.url or ""
+    url = _page_url(page)
     lower_url = url.lower()
+    if url and not _is_linkedin_page(page):
+        return "third_party_auth"
     if _feed_loaded(page):
         return "feed"
     if _login_form_available(page):
@@ -410,47 +671,57 @@ def _classify_login_screen(page):
     return "unknown"
 
 
+def _find_first_matching_locator(page, selectors, *, exact_text=None):
+    if not hasattr(page, "locator"):
+        return None, None
+    for selector in selectors:
+        locator = page.locator(selector)
+        try:
+            count = locator.count()
+        except Exception:
+            continue
+        if not count:
+            continue
+        for index in range(count):
+            candidate = locator.nth(index)
+            try:
+                if hasattr(candidate, "is_visible") and not candidate.is_visible():
+                    continue
+            except Exception:
+                pass
+            if exact_text is not None:
+                try:
+                    text = _normalize_text(candidate.text_content(timeout=1000))
+                except Exception:
+                    text = ""
+                if text != exact_text:
+                    continue
+            return candidate, selector
+    return None, None
+
+
 def _get_login_form_controls(page):
-    email_selectors = (
-        "input[name='session_key']",
-        "input[autocomplete='username']",
-        "input[name='username']",
-        "input[aria-label='Email or phone']",
-        "#username",
+    email_input, email_selector = _find_first_matching_locator(page, EMAIL_FIELD_SELECTORS)
+    password_input, password_selector = _find_first_matching_locator(page, PASSWORD_FIELD_SELECTORS)
+    submit_button, submit_selector = _find_first_matching_locator(
+        page,
+        SUBMIT_BUTTON_SELECTORS,
+        exact_text="Sign in",
     )
-    password_selectors = (
-        "input[name='session_password']",
-        "input[autocomplete='current-password']",
-        "input[name='password']",
-        "#password",
+    if submit_button is None:
+        submit_button, submit_selector = _find_first_matching_locator(
+            page,
+            ("button[type='submit']",),
+        )
+
+    return (
+        email_input,
+        email_selector,
+        password_input,
+        password_selector,
+        submit_button,
+        submit_selector,
     )
-    submit_selectors = (
-        "button[type='submit']",
-        "text=/^Sign in$/",
-        "button[aria-label='Sign in']",
-    )
-
-    email_input = None
-    password_input = None
-    submit_button = None
-
-    for selector in email_selectors:
-        locator = page.locator(selector)
-        if locator.count():
-            email_input = locator.first
-            break
-    for selector in password_selectors:
-        locator = page.locator(selector)
-        if locator.count():
-            password_input = locator.first
-            break
-    for selector in submit_selectors:
-        locator = page.locator(selector)
-        if locator.count():
-            submit_button = locator.first
-            break
-
-    return email_input, password_input, submit_button
 
 
 def _wait_for_login_surface(page, *, email=None, timeout_ms=30000, poll_ms=500):
@@ -459,6 +730,8 @@ def _wait_for_login_surface(page, *, email=None, timeout_ms=30000, poll_ms=500):
     while remaining > 0:
         attempt += 1
         screen_type = _classify_login_screen(page)
+        alt_counts = None
+        chooser_counts = None
         if _relogin_debug_enabled():
             alt_counts = {
                 selector: _selector_count(page, selector)
@@ -469,7 +742,7 @@ def _wait_for_login_surface(page, *, email=None, timeout_ms=30000, poll_ms=500):
                 for selector in ACCOUNT_CHOOSER_SELECTORS
             }
             _log_relogin(
-                f"wait_for_login_surface attempt={attempt} url={page.url} screen_type={screen_type} "
+                f"wait_for_login_surface attempt={attempt} url={page.url} host={_page_host(page)} screen_type={screen_type} "
                 f"alt_sign_in_counts={alt_counts} chooser_counts={chooser_counts} "
                 f"login_form_available={_login_form_available(page)}"
             )
@@ -478,9 +751,21 @@ def _wait_for_login_surface(page, *, email=None, timeout_ms=30000, poll_ms=500):
                 attempt=attempt,
                 screen_type=screen_type,
                 url=page.url,
+                host=_page_host(page),
                 alt_sign_in_counts=alt_counts,
                 chooser_counts=chooser_counts,
                 login_form_available=_login_form_available(page),
+            )
+        _trace_auth_screen(
+            page,
+            attempt=attempt,
+            alt_sign_in_counts=alt_counts if _relogin_debug_enabled() else None,
+            chooser_counts=chooser_counts if _relogin_debug_enabled() else None,
+            login_form_available=_login_form_available(page),
+        )
+        if screen_type == "third_party_auth":
+            raise LinkedInSessionError(
+                f"LinkedIn relogin navigated to a third-party auth page ({_page_host(page)})."
             )
         sign_in_other = _try_sign_in_another_account(page, timeout_ms=poll_ms)
         if _login_form_available(page):
@@ -514,6 +799,12 @@ def _try_account_chooser_sign_in(page, *, email=None, timeout_ms=30000):
             page.wait_for_timeout(1500)
             _log_relogin(f"clicked chooser selector: {selector}")
             _log_relogin_event("click", target="chooser", selector=selector, url=page.url)
+            _trace_auth_screen(
+                page,
+                action="after_chooser_click",
+                selector=selector,
+                force=True,
+            )
         except Exception:
             continue
         if _login_form_available(page):
@@ -530,6 +821,12 @@ def _try_account_chooser_sign_in(page, *, email=None, timeout_ms=30000):
                 page.wait_for_timeout(1500)
                 _log_relogin("clicked chooser using exact email text match")
                 _log_relogin_event("click", target="chooser_email_match", selector=f"text={email}", url=page.url)
+                _trace_auth_screen(
+                    page,
+                    action="after_chooser_email_click",
+                    selector=f"text={email}",
+                    force=True,
+                )
                 if _login_form_available(page):
                     return "login_form"
                 return "clicked"
@@ -556,6 +853,12 @@ def _try_account_chooser_sign_in(page, *, email=None, timeout_ms=30000):
                     page.wait_for_timeout(1500)
                     _log_relogin(f"clicked welcome-back fallback selector: {sel}")
                     _log_relogin_event("click", target="welcome_back_fallback", selector=sel, url=page.url)
+                    _trace_auth_screen(
+                        page,
+                        action="after_welcome_back_fallback_click",
+                        selector=sel,
+                        force=True,
+                    )
                     if _login_form_available(page):
                         return "login_form"
                     return "clicked"
@@ -591,6 +894,13 @@ def _try_sign_in_another_account(page, *, timeout_ms=30000):
                         index=index,
                         url=page.url,
                     )
+                    _trace_auth_screen(
+                        page,
+                        action="after_alt_sign_in_click",
+                        selector=selector,
+                        index=index,
+                        force=True,
+                    )
                     return True
                 except Exception as exc:
                     _log_relogin(
@@ -617,6 +927,14 @@ def _try_sign_in_another_account(page, *, timeout_ms=30000):
                             index=index,
                             forced=True,
                             url=page.url,
+                        )
+                        _trace_auth_screen(
+                            page,
+                            action="after_alt_sign_in_force_click",
+                            selector=selector,
+                            index=index,
+                            forced=True,
+                            force=True,
                         )
                         return True
                     except Exception as force_exc:
@@ -648,15 +966,35 @@ def _try_sign_in_another_account(page, *, timeout_ms=30000):
 
 def _submit_login_form(page, *, email, password, timeout_ms=30000):
     _log_relogin(f"starting relogin on url={page.url}")
-    _log_relogin_event("screen_observed", screen_type=_classify_login_screen(page), url=page.url)
+    _log_relogin_event(
+        "screen_observed",
+        screen_type=_classify_login_screen(page),
+        url=page.url,
+        host=_page_host(page),
+    )
+    _trace_auth_screen(page, action="submit_login_form_started", force=True)
     # Give LinkedIn's login surface a moment to hydrate before chooser detection.
     page.wait_for_timeout(1000)
-    email_input, password_input, submit_button = _get_login_form_controls(page)
+    (
+        email_input,
+        email_selector,
+        password_input,
+        password_selector,
+        submit_button,
+        submit_selector,
+    ) = _get_login_form_controls(page)
 
     if email_input is None or password_input is None:
         _log_relogin("login form not visible yet; waiting for login surface")
         surface = _wait_for_login_surface(page, email=email, timeout_ms=min(timeout_ms, 5000))
-        email_input, password_input, submit_button = _get_login_form_controls(page)
+        (
+            email_input,
+            email_selector,
+            password_input,
+            password_selector,
+            submit_button,
+            submit_selector,
+        ) = _get_login_form_controls(page)
         if surface == "clicked":
             return "chooser_clicked"
 
@@ -665,7 +1003,14 @@ def _submit_login_form(page, *, email, password, timeout_ms=30000):
         page.goto(LOGIN_URL, wait_until="domcontentloaded", timeout=timeout_ms)
         page.wait_for_timeout(1000)
         surface = _wait_for_login_surface(page, email=email, timeout_ms=min(timeout_ms, 5000))
-        email_input, password_input, submit_button = _get_login_form_controls(page)
+        (
+            email_input,
+            email_selector,
+            password_input,
+            password_selector,
+            submit_button,
+            submit_selector,
+        ) = _get_login_form_controls(page)
         if surface == "clicked":
             return "chooser_clicked"
 
@@ -678,14 +1023,45 @@ def _submit_login_form(page, *, email, password, timeout_ms=30000):
         _log_relogin(f"submit button unavailable on url={page.url}")
         raise LinkedInSessionError("LinkedIn login submit button was not available for auto relogin.")
 
+    if not _is_linkedin_page(page):
+        raise LinkedInSessionError(
+            f"Refusing to fill credentials on a non-LinkedIn page ({_page_host(page)})."
+        )
+
     _log_relogin("filling email/password form and submitting")
+    _log_relogin_event(
+        "form_controls_selected",
+        email_selector=email_selector,
+        password_selector=password_selector,
+        submit_selector=submit_selector,
+        url=page.url,
+    )
+    _trace_auth_screen(
+        page,
+        action="before_form_fill",
+        email_selector=email_selector,
+        password_selector=password_selector,
+        submit_selector=submit_selector,
+        force=True,
+    )
     _log_relogin_event("fill", field="email", value=email, url=page.url)
     email_input.fill(email, timeout=timeout_ms)
     _log_relogin_event("fill", field="password", value=_mask_secret(password), url=page.url)
     password_input.fill(password, timeout=timeout_ms)
-    _log_relogin_event("click", target="submit", selector="login_submit", url=page.url)
+    _log_relogin_event(
+        "click",
+        target="submit",
+        selector=submit_selector or "login_submit",
+        url=page.url,
+    )
     submit_button.click(timeout=timeout_ms)
     page.wait_for_timeout(1500)
+    _trace_auth_screen(
+        page,
+        action="after_submit_click",
+        submit_selector=submit_selector or "login_submit",
+        force=True,
+    )
     return "form_submitted"
 
 
@@ -694,7 +1070,13 @@ def _attempt_auto_relogin_in_context(context, target_path, *, email, password, t
     try:
         page.goto(LOGIN_VERIFICATION_URL, wait_until="domcontentloaded", timeout=timeout_ms)
         _log_relogin(f"opened verification url; current url={page.url}")
-        _log_relogin_event("screen_observed", screen_type=_classify_login_screen(page), url=page.url)
+        _log_relogin_event(
+            "screen_observed",
+            screen_type=_classify_login_screen(page),
+            url=page.url,
+            host=_page_host(page),
+        )
+        _trace_auth_screen(page, action="verification_page_loaded", force=True)
         if not page_looks_logged_out(page) and _feed_loaded(page):
             _log_relogin("existing session already reaches feed")
             _log_relogin_event("session_reused", url=page.url)
@@ -749,6 +1131,24 @@ def attempt_auto_relogin(
     slow_mo=0,
     timeout_ms=30000,
 ):
+    _start_auth_trace_run(
+        "auto_relogin",
+        browser_channel=browser_channel or DEFAULT_BROWSER_CHANNEL,
+        headless=headless,
+        storage_state_path=str(resolve_storage_state_path(storage_state_path)),
+    )
+
+    def finalize(result):
+        result = dict(result)
+        result["trace_path"] = str(resolve_auth_trace_path())
+        _finish_auth_trace_run(
+            "success" if result.get("recovered") else "failure",
+            message=result.get("message"),
+            attempted=result.get("attempted"),
+            recovered=result.get("recovered"),
+        )
+        return result
+
     accounts = get_all_accounts()
     if not accounts:
         target_path = resolve_storage_state_path(storage_state_path)
@@ -760,11 +1160,11 @@ def attempt_auto_relogin(
                 f"\"{target_path}\"'."
             )
             mark_linkedin_auth_unavailable(msg)
-            return {
+            return finalize({
                 "attempted": False,
                 "recovered": False,
                 "message": msg,
-            }
+            })
 
         try:
             if context is not None:
@@ -788,35 +1188,35 @@ def attempt_auto_relogin(
         except LinkedInAutomationFlagged as exc:
             msg = f"LinkedIn saved session check failed: {exc}"
             mark_linkedin_auth_unavailable(msg)
-            return {
+            return finalize({
                 "attempted": True,
                 "recovered": False,
                 "message": msg,
-            }
+            })
         except PlaywrightTargetClosedError as exc:
             msg = f"LinkedIn saved session check aborted: browser was closed before completion ({exc})."
             mark_linkedin_auth_unavailable(msg)
-            return {
+            return finalize({
                 "attempted": True,
                 "recovered": False,
                 "message": msg,
-            }
+            })
         except (BrowserRuntimeError, LinkedInSessionError) as exc:
             msg = f"LinkedIn saved session check failed: {exc}"
             mark_linkedin_auth_unavailable(msg)
-            return {
+            return finalize({
                 "attempted": True,
                 "recovered": False,
                 "message": msg,
-            }
+            })
 
         mark_linkedin_auth_available()
         action = "reused the existing saved session" if mode == "session_reused" else "refreshed the saved auth state"
-        return {
+        return finalize({
             "attempted": True,
             "recovered": True,
             "message": f"LinkedIn auto relogin {action}.",
-        }
+        })
 
     # Find the first non-blocked account starting from the current active index.
     current = get_active_account_index()
@@ -829,7 +1229,7 @@ def attempt_auto_relogin(
 
     if account_index is None:
         msg = _all_accounts_blocked_discord_alert(len(accounts))
-        return {"attempted": True, "recovered": False, "message": msg}
+        return finalize({"attempted": True, "recovered": False, "message": msg})
 
     if account_index != current:
         set_active_account_index(account_index)
@@ -877,12 +1277,12 @@ def attempt_auto_relogin(
                 break
         if next_idx is None:
             msg = _all_accounts_blocked_discord_alert(len(accounts))
-            return {"attempted": True, "recovered": False, "message": msg}
+            return finalize({"attempted": True, "recovered": False, "message": msg})
         set_active_account_index(next_idx)
         mark_linkedin_auth_unavailable(
             f"Account {account_index} flagged for automation; rotated to {next_idx}."
         )
-        return {
+        return finalize({
             "attempted": True,
             "recovered": False,
             "message": (
@@ -890,23 +1290,23 @@ def attempt_auto_relogin(
                 f"for {ACCOUNT_BLOCK_DAYS} days. Rotated to account {next_idx} "
                 "for the next run."
             ),
-        }
+        })
     except PlaywrightTargetClosedError as exc:
         msg = f"LinkedIn auto relogin aborted: browser was closed before completion ({exc})."
         mark_linkedin_auth_unavailable(msg)
-        return {
+        return finalize({
             "attempted": True,
             "recovered": False,
             "message": msg,
-        }
+        })
     except (BrowserRuntimeError, LinkedInSessionError) as exc:
         msg = f"LinkedIn auto relogin failed: {exc}"
         mark_linkedin_auth_unavailable(msg)
-        return {
+        return finalize({
             "attempted": True,
             "recovered": False,
             "message": msg,
-        }
+        })
 
     mark_linkedin_auth_available()
     action = (
@@ -914,11 +1314,11 @@ def attempt_auto_relogin(
         if mode == "session_reused"
         else "signed in with stored credentials"
     )
-    return {
+    return finalize({
         "attempted": True,
         "recovered": True,
         "message": f"LinkedIn auto relogin {action} and refreshed the saved auth state.",
-    }
+    })
 
 
 def rotate_linkedin_account(
@@ -1057,48 +1457,58 @@ def open_linkedin_context(storage_state_path=None, *, headless=True, slow_mo=0, 
 
 
 def save_storage_state_interactively(storage_state_path=None, *, browser_channel=None):
+    _start_auth_trace_run(
+        "save_storage_state",
+        browser_channel=browser_channel or DEFAULT_BROWSER_CHANNEL,
+        storage_state_path=str(resolve_storage_state_path(storage_state_path)),
+    )
     target_path = resolve_storage_state_path(storage_state_path)
     target_path.parent.mkdir(parents=True, exist_ok=True)
     sync_playwright = load_sync_playwright()
-    with sync_playwright() as playwright:
-        browser = playwright.chromium.launch(
-            headless=False,
-            channel=browser_channel or DEFAULT_BROWSER_CHANNEL,
-        )
-        try:
-            context = browser.new_context()
-            page = context.new_page()
-            page.goto("https://www.linkedin.com/", wait_until="domcontentloaded")
-
-            print("A browser window opened for LinkedIn login.")
-            print("Prefer LinkedIn's 'Sign in with email' flow here.")
-            print("Google SSO popups can hang in Playwright-managed browsers.")
-            print("After login, wait until your LinkedIn home/feed is visible.")
+    try:
+        with sync_playwright() as playwright:
+            browser = playwright.chromium.launch(
+                headless=False,
+                channel=browser_channel or DEFAULT_BROWSER_CHANNEL,
+            )
             try:
-                input("Press Enter here after login is complete, or Ctrl+C to cancel...")
-            except KeyboardInterrupt as exc:
-                raise LinkedInSessionCancelled(
-                    "LinkedIn auth state save cancelled. No auth state was written."
-                ) from exc
+                context = browser.new_context()
+                page = context.new_page()
+                page.goto("https://www.linkedin.com/", wait_until="domcontentloaded")
+                _trace_auth_screen(page, action="manual_login_opened", force=True)
 
-            verification_page = None
-            try:
-                _verify_session_and_save(context, target_path, timeout_ms=30000)
-            except LinkedInSessionError as exc:
-                raise LinkedInSessionNotSaved(
-                    "LinkedIn auth state was not saved because the session does not appear "
-                    "fully logged in yet. Preferred workflow: use 'Sign in with email', "
-                    "wait for the LinkedIn feed to load, then press Enter."
-                ) from exc
-            except Exception as exc:
-                raise LinkedInSessionNotSaved(
-                    "LinkedIn auth state was not saved because the browser window or tab "
-                    "closed before verification completed."
-                ) from exc
-        finally:
-            _close_browser(browser)
+                print("A browser window opened for LinkedIn login.")
+                print("Prefer LinkedIn's 'Sign in with email' flow here.")
+                print("Google SSO popups can hang in Playwright-managed browsers.")
+                print("After login, wait until your LinkedIn home/feed is visible.")
+                try:
+                    input("Press Enter here after login is complete, or Ctrl+C to cancel...")
+                except KeyboardInterrupt as exc:
+                    raise LinkedInSessionCancelled(
+                        "LinkedIn auth state save cancelled. No auth state was written."
+                    ) from exc
+
+                try:
+                    _verify_session_and_save(context, target_path, timeout_ms=30000)
+                except LinkedInSessionError as exc:
+                    raise LinkedInSessionNotSaved(
+                        "LinkedIn auth state was not saved because the session does not appear "
+                        "fully logged in yet. Preferred workflow: use 'Sign in with email', "
+                        "wait for the LinkedIn feed to load, then press Enter."
+                    ) from exc
+                except Exception as exc:
+                    raise LinkedInSessionNotSaved(
+                        "LinkedIn auth state was not saved because the browser window or tab "
+                        "closed before verification completed."
+                    ) from exc
+            finally:
+                _close_browser(browser)
+    except Exception as exc:
+        _finish_auth_trace_run("failure", message=str(exc))
+        raise
 
     mark_linkedin_auth_available()
+    _finish_auth_trace_run("success", message=f"Saved LinkedIn auth state to {target_path}")
     return target_path
 
 
@@ -1160,6 +1570,7 @@ def main():
                 browser_channel=args.channel,
             )
             print(f"Saved LinkedIn auth state to: {saved_path}")
+            print(f"LinkedIn auth trace appended to: {resolve_auth_trace_path()}")
             return 0
 
         if args.auto_relogin:
@@ -1170,6 +1581,8 @@ def main():
                 timeout_ms=args.timeout_ms,
             )
             print(result["message"])
+            if result.get("trace_path"):
+                print(f"LinkedIn auth trace appended to: {result['trace_path']}")
             return 0 if result.get("recovered") else 1
 
         if args.check:

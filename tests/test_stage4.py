@@ -96,6 +96,19 @@ class Stage4Tests(unittest.TestCase):
         def wait_for_timeout(self, timeout):
             return None
 
+        def evaluate(self, _script, arg=None):
+            result = self.states[self.state].get("evaluate_result")
+            if callable(result):
+                return result(arg)
+            if result is not None:
+                return result
+            return {
+                "title": "",
+                "body_text_excerpt": "",
+                "component_count": 0,
+                "components": [],
+            }
+
     def make_temp_db_path(self):
         fd, path = tempfile.mkstemp(suffix=".db")
         os.close(fd)
@@ -407,6 +420,61 @@ class Stage4Tests(unittest.TestCase):
             {"email": "person@example.com", "password": "secret"},
         )
 
+    def test_submit_login_form_handles_server_style_second_screen(self):
+        page = self.FakePage(
+            {
+                "welcome": {
+                    "url": linkedin_session.LOGIN_URL,
+                    "selectors": {
+                        "a:has-text('Sign in using another account')": {
+                            "count": 1,
+                            "next_state": "server_form",
+                        },
+                    },
+                },
+                "server_form": {
+                    "url": linkedin_session.LOGIN_URL,
+                    "selectors": {
+                        "input[type='text']": {"count": 1, "fill_key": "email"},
+                        "input[type='password']": {"count": 1, "fill_key": "password"},
+                        "xpath=//button[normalize-space(.)='Sign in']": {
+                            "count": 1,
+                            "text": "Sign in",
+                            "next_state": "submitted",
+                        },
+                        "button:has-text('Sign in')": {
+                            "count": 1,
+                            "text": "Sign in with Apple",
+                            "next_state": "apple",
+                        },
+                    },
+                },
+                "apple": {
+                    "url": "https://appleid.apple.com/auth/authorize",
+                    "selectors": {},
+                },
+                "submitted": {
+                    "url": "https://www.linkedin.com/feed/",
+                    "selectors": {},
+                },
+            },
+            initial_state="welcome",
+        )
+
+        result = linkedin_session._submit_login_form(
+            page,
+            email="person@example.com",
+            password="secret",
+            timeout_ms=1000,
+        )
+
+        self.assertEqual(result, "form_submitted")
+        self.assertEqual(page.state, "submitted")
+        self.assertEqual(
+            page.filled,
+            {"email": "person@example.com", "password": "secret"},
+        )
+
     def test_classify_login_screen_distinguishes_welcome_back_and_login_form(self):
         welcome_page = self.FakePage(
             {
@@ -473,7 +541,61 @@ class Stage4Tests(unittest.TestCase):
         self.assertIn('"value": "person@example.com"', printed)
         self.assertIn('"field": "password"', printed)
         self.assertIn('<redacted len=6>', printed)
+        self.assertIn('"event": "form_controls_selected"', printed)
         self.assertIn('"target": "submit"', printed)
+
+    def test_auth_trace_file_appends_runs_with_screen_components(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            trace_path = Path(temp_dir) / "linkedin_auth_trace.jsonl"
+            page = self.FakePage(
+                {
+                    "welcome": {
+                        "url": linkedin_session.LOGIN_URL,
+                        "evaluate_result": {
+                            "title": "LinkedIn Login",
+                            "body_text_excerpt": "Welcome back Sign in using another account",
+                            "component_count": 2,
+                            "components": [
+                                {"tag": "h1", "text": "Welcome back"},
+                                {"tag": "a", "text": "Sign in using another account"},
+                            ],
+                        },
+                    },
+                },
+                initial_state="welcome",
+            )
+
+            with patch.dict(
+                os.environ,
+                {linkedin_session.AUTH_TRACE_PATH_ENV: str(trace_path)},
+                clear=False,
+            ):
+                linkedin_session._start_auth_trace_run("auto_relogin", headless=False)
+                linkedin_session._trace_auth_screen(page, action="first_snapshot", force=True)
+                linkedin_session._finish_auth_trace_run("failure", message="first run failed")
+
+                linkedin_session._start_auth_trace_run("auto_relogin", headless=True)
+                linkedin_session._trace_auth_screen(page, action="second_snapshot", force=True)
+                linkedin_session._finish_auth_trace_run("success", message="second run ok")
+
+            records = [
+                json.loads(line)
+                for line in trace_path.read_text(encoding="utf-8").splitlines()
+                if line.strip()
+            ]
+            run_ids = {record["run_id"] for record in records}
+
+            self.assertEqual(len(run_ids), 2)
+            self.assertEqual(sum(1 for record in records if record["event"] == "run_start"), 2)
+            self.assertEqual(sum(1 for record in records if record["event"] == "run_end"), 2)
+            snapshots = [record for record in records if record["event"] == "screen_snapshot"]
+            self.assertEqual(len(snapshots), 2)
+            self.assertEqual(snapshots[0]["components"][0]["text"], "Welcome back")
+            self.assertEqual(
+                snapshots[0]["components"][1]["text"],
+                "Sign in using another account",
+            )
+            self.assertEqual(snapshots[0]["url"], linkedin_session.LOGIN_URL)
 
     def test_attempt_auto_relogin_reuses_saved_session_without_credentials(self):
         with self.with_temp_db():
