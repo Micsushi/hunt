@@ -480,8 +480,17 @@ Important assumption:
    - auth-health verification with:
      - `cd ~/hunt && set -a && source .env && set +a && .venv/bin/python scraper/linkedin_session.py --auto-relogin --channel chrome`
      - if a visible browser is needed on `server2`:
+       - real monitor session:
+         - `cd ~/hunt && set -a && source .env && set +a && DISPLAY=:0 .venv/bin/python scraper/linkedin_session.py --auto-relogin --headful --channel chrome`
        - `cd ~/hunt && DISPLAY=:98 ./hunt.sh auth-auto-relogin --headful --display :98 --channel chrome`
    - that command should reuse the saved session first when possible, then fall back to stored credentials, and finally flip the shared auth flag used by the review app and `/metrics`
+   - when debugging a flaky LinkedIn relogin flow, enable:
+     - `LINKEDIN_RELOGIN_DEBUG=1`
+   - the relogin worker now logs:
+     - detected screen type such as `welcome_back` or `login_form`
+     - which selectors/buttons were clicked
+     - which fields were filled
+     - redacted password fill details
 2. Add the Xvfb-backed blocked-row UI fallback to the deployed Hunt runtime
 3. Verify the deployed timer still prioritizes newest pending rows before older backlog
 4. Deploy `review_app.py` as the `hunt-review` service on `server2`

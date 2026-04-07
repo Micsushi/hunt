@@ -26,14 +26,21 @@ import queue_health
 
 class Stage4Tests(unittest.TestCase):
     class FakeLocator:
-        def __init__(self, *, count=0, on_click=None, on_fill=None):
+        def __init__(self, *, count=0, on_click=None, on_fill=None, text=""):
             self._count = count
             self._on_click = on_click
             self._on_fill = on_fill
+            self._text = text
             self.first = self
 
         def count(self):
             return self._count
+
+        def nth(self, _index):
+            return self
+
+        def is_visible(self):
+            return self._count > 0
 
         def click(self, timeout=None):
             if self._on_click:
@@ -42,6 +49,9 @@ class Stage4Tests(unittest.TestCase):
         def fill(self, value, timeout=None):
             if self._on_fill:
                 self._on_fill(value)
+
+        def text_content(self, timeout=None):
+            return self._text
 
     class FakePage:
         def __init__(self, states, *, initial_state):
@@ -72,6 +82,7 @@ class Stage4Tests(unittest.TestCase):
                     count=config.get("count", 1),
                     on_click=on_click if config.get("clickable", True) else None,
                     on_fill=on_fill,
+                    text=config.get("text", ""),
                 )
             return Stage4Tests.FakeLocator(count=int(config))
 
@@ -395,6 +406,74 @@ class Stage4Tests(unittest.TestCase):
             page.filled,
             {"email": "person@example.com", "password": "secret"},
         )
+
+    def test_classify_login_screen_distinguishes_welcome_back_and_login_form(self):
+        welcome_page = self.FakePage(
+            {
+                "welcome": {
+                    "url": linkedin_session.LOGIN_URL,
+                    "selectors": {
+                        "h1:has-text('Welcome back')": {"count": 1},
+                    },
+                },
+            },
+            initial_state="welcome",
+        )
+        form_page = self.FakePage(
+            {
+                "form": {
+                    "url": linkedin_session.LOGIN_URL,
+                    "selectors": {
+                        "input[name='session_key']": {"count": 1},
+                        "input[name='session_password']": {"count": 1},
+                    },
+                },
+            },
+            initial_state="form",
+        )
+
+        self.assertEqual(linkedin_session._classify_login_screen(welcome_page), "welcome_back")
+        self.assertEqual(linkedin_session._classify_login_screen(form_page), "login_form")
+
+    def test_submit_login_form_logs_screen_and_input_actions(self):
+        page = self.FakePage(
+            {
+                "form": {
+                    "url": linkedin_session.LOGIN_URL,
+                    "selectors": {
+                        "input[name='session_key']": {"count": 1, "fill_key": "email"},
+                        "input[name='session_password']": {"count": 1, "fill_key": "password"},
+                        "button[type='submit']": {"count": 1, "next_state": "submitted"},
+                    },
+                },
+                "submitted": {
+                    "url": "https://www.linkedin.com/feed/",
+                    "selectors": {},
+                },
+            },
+            initial_state="form",
+        )
+
+        with patch.object(linkedin_session, "_relogin_debug_enabled", return_value=True), patch(
+            "builtins.print"
+        ) as mock_print:
+            result = linkedin_session._submit_login_form(
+                page,
+                email="person@example.com",
+                password="secret",
+                timeout_ms=1000,
+            )
+
+        self.assertEqual(result, "form_submitted")
+        printed = "\n".join(call.args[0] for call in mock_print.call_args_list if call.args)
+        self.assertIn('"event": "screen_observed"', printed)
+        self.assertIn('"screen_type": "login_form"', printed)
+        self.assertIn('"event": "fill"', printed)
+        self.assertIn('"field": "email"', printed)
+        self.assertIn('"value": "person@example.com"', printed)
+        self.assertIn('"field": "password"', printed)
+        self.assertIn('<redacted len=6>', printed)
+        self.assertIn('"target": "submit"', printed)
 
     def test_attempt_auto_relogin_reuses_saved_session_without_credentials(self):
         with self.with_temp_db():

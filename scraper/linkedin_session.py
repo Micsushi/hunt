@@ -41,11 +41,6 @@ ALT_SIGN_IN_SELECTORS = (
     "button:has-text('Use a different account')",
     "text=/Use a different account/i",
 )
-LOGIN_CONTINUE_SELECTORS = (
-    "button:has-text('Sign in')",
-    "a:has-text('Sign in')",
-    "[type='submit']",
-)
 
 # LinkedIn's "Important notice" automation-detection page.
 # Appears at /checkpoint/ URLs so it looks "logged out" to page_looks_logged_out;
@@ -127,6 +122,20 @@ def _relogin_debug_enabled():
 def _log_relogin(message):
     if _relogin_debug_enabled():
         print(f"[linkedin_relogin] {message}", flush=True)
+
+
+def _mask_secret(value):
+    if value is None:
+        return None
+    return f"<redacted len={len(value)}>"
+
+
+def _log_relogin_event(event, **payload):
+    if not _relogin_debug_enabled():
+        return
+    details = {"event": event}
+    details.update(payload)
+    _log_relogin(json.dumps(details, sort_keys=True))
 
 
 def _selector_count(page, selector):
@@ -357,10 +366,91 @@ def _verify_session_and_save(context, target_path, *, timeout_ms=30000):
 
 
 def _login_form_available(page):
-    return bool(
-        page.locator("input[name='session_key']").count()
-        and page.locator("input[name='session_password']").count()
+    email_selectors = (
+        "input[name='session_key']",
+        "input[autocomplete='username']",
+        "input[name='username']",
+        "input[aria-label='Email or phone']",
+        "#username",
     )
+    password_selectors = (
+        "input[name='session_password']",
+        "input[autocomplete='current-password']",
+        "input[name='password']",
+        "#password",
+    )
+    return any(page.locator(selector).count() for selector in email_selectors) and any(
+        page.locator(selector).count() for selector in password_selectors
+    )
+
+
+def _welcome_back_available(page):
+    welcome_back_selectors = (
+        "h1:has-text('Welcome back')",
+        "text=/Welcome back/i",
+        "a:has-text('Sign in using another account')",
+        "text=/Sign in using another account/i",
+    )
+    return any(_selector_count(page, selector) for selector in welcome_back_selectors)
+
+
+def _classify_login_screen(page):
+    url = page.url or ""
+    lower_url = url.lower()
+    if _feed_loaded(page):
+        return "feed"
+    if _login_form_available(page):
+        return "login_form"
+    if _welcome_back_available(page):
+        return "welcome_back"
+    if any(token in lower_url for token in ("/login", "/uas/login")):
+        return "login_gate"
+    if page_looks_logged_out(page):
+        return "logged_out"
+    return "unknown"
+
+
+def _get_login_form_controls(page):
+    email_selectors = (
+        "input[name='session_key']",
+        "input[autocomplete='username']",
+        "input[name='username']",
+        "input[aria-label='Email or phone']",
+        "#username",
+    )
+    password_selectors = (
+        "input[name='session_password']",
+        "input[autocomplete='current-password']",
+        "input[name='password']",
+        "#password",
+    )
+    submit_selectors = (
+        "button[type='submit']",
+        "button:has-text(/^Sign in$/)",
+        "button[aria-label='Sign in']",
+    )
+
+    email_input = None
+    password_input = None
+    submit_button = None
+
+    for selector in email_selectors:
+        locator = page.locator(selector)
+        if locator.count():
+            email_input = locator.first
+            break
+    for selector in password_selectors:
+        locator = page.locator(selector)
+        if locator.count():
+            password_input = locator.first
+            break
+    for selector in submit_selectors:
+        locator = page.locator(selector)
+        if locator.count():
+            submit_button = locator.first
+            break
+
+    return email_input, password_input, submit_button
 
 
 def _wait_for_login_surface(page, *, email=None, timeout_ms=30000, poll_ms=500):
@@ -368,6 +458,7 @@ def _wait_for_login_surface(page, *, email=None, timeout_ms=30000, poll_ms=500):
     attempt = 0
     while remaining > 0:
         attempt += 1
+        screen_type = _classify_login_screen(page)
         if _relogin_debug_enabled():
             alt_counts = {
                 selector: _selector_count(page, selector)
@@ -377,36 +468,33 @@ def _wait_for_login_surface(page, *, email=None, timeout_ms=30000, poll_ms=500):
                 selector: _selector_count(page, selector)
                 for selector in ACCOUNT_CHOOSER_SELECTORS
             }
-            login_continue_counts = {
-                selector: _selector_count(page, selector)
-                for selector in LOGIN_CONTINUE_SELECTORS
-            }
             _log_relogin(
-                f"wait_for_login_surface attempt={attempt} url={page.url} "
+                f"wait_for_login_surface attempt={attempt} url={page.url} screen_type={screen_type} "
                 f"alt_sign_in_counts={alt_counts} chooser_counts={chooser_counts} "
-                f"login_continue_counts={login_continue_counts}"
+                f"login_form_available={_login_form_available(page)}"
+            )
+            _log_relogin_event(
+                "screen_observed",
+                attempt=attempt,
+                screen_type=screen_type,
+                url=page.url,
+                alt_sign_in_counts=alt_counts,
+                chooser_counts=chooser_counts,
+                login_form_available=_login_form_available(page),
             )
         sign_in_other = _try_sign_in_another_account(page, timeout_ms=poll_ms)
-        email_input = page.locator("input[name='session_key']")
-        password_input = page.locator("input[name='session_password']")
-        if email_input.count() and password_input.count():
+        if _login_form_available(page):
             _log_relogin("email/password login form is available")
+            _log_relogin_event("screen_ready", screen_type="login_form", url=page.url)
             return "login_form"
-        continued = _try_continue_to_login_form(page, timeout_ms=poll_ms)
-        if continued:
-            _log_relogin("clicked sign-in continue control while waiting for login form")
-            page.wait_for_timeout(poll_ms)
-            email_input = page.locator("input[name='session_key']")
-            password_input = page.locator("input[name='session_password']")
-            if email_input.count() and password_input.count():
-                _log_relogin("email/password login form became available after clicking sign-in continue")
-                return "login_form"
         chooser = _try_account_chooser_sign_in(page, email=email, timeout_ms=poll_ms)
         if chooser:
             _log_relogin(f"account chooser result: {chooser}")
+            _log_relogin_event("screen_ready", screen_type="welcome_back", chooser_result=chooser, url=page.url)
             return chooser
         if sign_in_other:
             _log_relogin("clicked 'Sign in using another account' but login form is still not visible yet")
+            _log_relogin_event("action_result", action="alt_sign_in_clicked", next_screen=_classify_login_screen(page), url=page.url)
         page.wait_for_timeout(poll_ms)
         remaining -= poll_ms
     return None
@@ -425,6 +513,7 @@ def _try_account_chooser_sign_in(page, *, email=None, timeout_ms=30000):
             locator.first.click(timeout=timeout_ms)
             page.wait_for_timeout(1500)
             _log_relogin(f"clicked chooser selector: {selector}")
+            _log_relogin_event("click", target="chooser", selector=selector, url=page.url)
         except Exception:
             continue
         if _login_form_available(page):
@@ -440,6 +529,7 @@ def _try_account_chooser_sign_in(page, *, email=None, timeout_ms=30000):
                 locator.first.click(timeout=timeout_ms)
                 page.wait_for_timeout(1500)
                 _log_relogin("clicked chooser using exact email text match")
+                _log_relogin_event("click", target="chooser_email_match", selector=f"text={email}", url=page.url)
                 if _login_form_available(page):
                     return "login_form"
                 return "clicked"
@@ -465,6 +555,7 @@ def _try_account_chooser_sign_in(page, *, email=None, timeout_ms=30000):
                     locator.first.click(timeout=timeout_ms)
                     page.wait_for_timeout(1500)
                     _log_relogin(f"clicked welcome-back fallback selector: {sel}")
+                    _log_relogin_event("click", target="welcome_back_fallback", selector=sel, url=page.url)
                     if _login_form_available(page):
                         return "login_form"
                     return "clicked"
@@ -493,10 +584,25 @@ def _try_sign_in_another_account(page, *, timeout_ms=30000):
                     candidate.click(timeout=timeout_ms)
                     page.wait_for_timeout(1500)
                     _log_relogin(f"clicked alternate sign-in selector: {selector} [index={index}]")
+                    _log_relogin_event(
+                        "click",
+                        target="alt_sign_in",
+                        selector=selector,
+                        index=index,
+                        url=page.url,
+                    )
                     return True
                 except Exception as exc:
                     _log_relogin(
                         f"alternate sign-in click failed for selector: {selector} [index={index}] error={exc}"
+                    )
+                    _log_relogin_event(
+                        "click_failed",
+                        target="alt_sign_in",
+                        selector=selector,
+                        index=index,
+                        url=page.url,
+                        error=str(exc),
                     )
                     try:
                         candidate.click(timeout=timeout_ms, force=True)
@@ -504,95 +610,81 @@ def _try_sign_in_another_account(page, *, timeout_ms=30000):
                         _log_relogin(
                             f"force-clicked alternate sign-in selector: {selector} [index={index}]"
                         )
+                        _log_relogin_event(
+                            "click",
+                            target="alt_sign_in",
+                            selector=selector,
+                            index=index,
+                            forced=True,
+                            url=page.url,
+                        )
                         return True
                     except Exception as force_exc:
                         _log_relogin(
                             f"alternate sign-in force click failed for selector: {selector} "
                             f"[index={index}] error={force_exc}"
                         )
+                        _log_relogin_event(
+                            "click_failed",
+                            target="alt_sign_in",
+                            selector=selector,
+                            index=index,
+                            forced=True,
+                            url=page.url,
+                            error=str(force_exc),
+                        )
         except Exception as exc:
             _log_relogin(f"alternate sign-in selector probe failed: {selector} error={exc}")
-            continue
-    return False
-
-
-def _try_continue_to_login_form(page, *, timeout_ms=30000):
-    for selector in LOGIN_CONTINUE_SELECTORS:
-        try:
-            locator = page.locator(selector)
-            count = locator.count()
-            if not count:
-                continue
-            for index in range(count):
-                candidate = locator.nth(index)
-                try:
-                    if hasattr(candidate, "is_visible") and not candidate.is_visible():
-                        continue
-                except Exception:
-                    pass
-                try:
-                    text = ""
-                    try:
-                        text = (candidate.text_content(timeout=timeout_ms) or "").strip()
-                    except Exception:
-                        pass
-                    candidate.click(timeout=timeout_ms)
-                    page.wait_for_timeout(1500)
-                    _log_relogin(
-                        f"clicked login-continue selector: {selector} [index={index}] text={text!r}"
-                    )
-                    return True
-                except Exception as exc:
-                    _log_relogin(
-                        f"login-continue click failed for selector: {selector} [index={index}] error={exc}"
-                    )
-                    continue
-        except Exception as exc:
-            _log_relogin(f"login-continue selector probe failed: {selector} error={exc}")
+            _log_relogin_event(
+                "probe_failed",
+                target="alt_sign_in",
+                selector=selector,
+                url=page.url,
+                error=str(exc),
+            )
             continue
     return False
 
 
 def _submit_login_form(page, *, email, password, timeout_ms=30000):
     _log_relogin(f"starting relogin on url={page.url}")
+    _log_relogin_event("screen_observed", screen_type=_classify_login_screen(page), url=page.url)
     # Give LinkedIn's login surface a moment to hydrate before chooser detection.
     page.wait_for_timeout(1000)
-    email_input = page.locator("input[name='session_key']")
-    password_input = page.locator("input[name='session_password']")
+    email_input, password_input, submit_button = _get_login_form_controls(page)
 
-    if not email_input.count() or not password_input.count():
+    if email_input is None or password_input is None:
         _log_relogin("login form not visible yet; waiting for login surface")
         surface = _wait_for_login_surface(page, email=email, timeout_ms=min(timeout_ms, 5000))
-        email_input = page.locator("input[name='session_key']")
-        password_input = page.locator("input[name='session_password']")
+        email_input, password_input, submit_button = _get_login_form_controls(page)
         if surface == "clicked":
             return "chooser_clicked"
 
-    if not email_input.count() or not password_input.count():
+    if email_input is None or password_input is None:
         _log_relogin("login surface still unavailable; navigating directly to LOGIN_URL and retrying")
         page.goto(LOGIN_URL, wait_until="domcontentloaded", timeout=timeout_ms)
         page.wait_for_timeout(1000)
         surface = _wait_for_login_surface(page, email=email, timeout_ms=min(timeout_ms, 5000))
-        email_input = page.locator("input[name='session_key']")
-        password_input = page.locator("input[name='session_password']")
+        email_input, password_input, submit_button = _get_login_form_controls(page)
         if surface == "clicked":
             return "chooser_clicked"
 
-    submit_button = page.locator("button[type='submit']")
-
-    if not email_input.count() or not password_input.count():
+    if email_input is None or password_input is None:
         _log_relogin(f"login form unavailable after retries; final url={page.url}")
         raise LinkedInSessionError(
             "LinkedIn login form or account chooser was not available for auto relogin."
         )
-    if not submit_button.count():
+    if submit_button is None:
         _log_relogin(f"submit button unavailable on url={page.url}")
         raise LinkedInSessionError("LinkedIn login submit button was not available for auto relogin.")
 
     _log_relogin("filling email/password form and submitting")
-    email_input.first.fill(email, timeout=timeout_ms)
-    password_input.first.fill(password, timeout=timeout_ms)
-    submit_button.first.click(timeout=timeout_ms)
+    _log_relogin_event("fill", field="email", value=email, url=page.url)
+    email_input.fill(email, timeout=timeout_ms)
+    _log_relogin_event("fill", field="password", value=_mask_secret(password), url=page.url)
+    password_input.fill(password, timeout=timeout_ms)
+    _log_relogin_event("click", target="submit", selector="login_submit", url=page.url)
+    submit_button.click(timeout=timeout_ms)
     page.wait_for_timeout(1500)
     return "form_submitted"
 
@@ -602,8 +694,10 @@ def _attempt_auto_relogin_in_context(context, target_path, *, email, password, t
     try:
         page.goto(LOGIN_VERIFICATION_URL, wait_until="domcontentloaded", timeout=timeout_ms)
         _log_relogin(f"opened verification url; current url={page.url}")
+        _log_relogin_event("screen_observed", screen_type=_classify_login_screen(page), url=page.url)
         if not page_looks_logged_out(page) and _feed_loaded(page):
             _log_relogin("existing session already reaches feed")
+            _log_relogin_event("session_reused", url=page.url)
             _verify_session_and_save(context, target_path, timeout_ms=timeout_ms)
             return "session_reused"
 

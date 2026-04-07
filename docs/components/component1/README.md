@@ -111,8 +111,12 @@ Testing goal:
 Auth setup note:
 - when saving Playwright auth state for LinkedIn, prefer `Sign in with email`
 - Google SSO popups can be unreliable in automation-managed browsers
-- auto relogin now first tries visible LinkedIn account-chooser flows, including `Welcome back` cards and email-text matches
-- if the chooser flow is not usable, auto relogin falls back to `Sign in using another account` / `Use a different account` and then fills the standard email/password form
+- auto relogin now treats LinkedIn login as two explicit UI states:
+  - `welcome_back`: remembered account card and `Sign in using another account`
+  - `login_form`: plain LinkedIn email/password form
+- on `welcome_back`, Hunt only interacts with the remembered-account chooser or `Sign in using another account`
+- on `login_form`, Hunt only fills the LinkedIn email/password inputs and clicks the LinkedIn submit button
+- Hunt should not intentionally click third-party auth providers such as Google or Apple during unattended relogin
 - on Linux/server deployments, installing the Python `playwright` package is not sufficient by itself
 - after dependency install, also run `python -m playwright install chromium` so the browser binaries exist under the runtime user's Playwright cache
 - if a manual test is interrupted and leaves a row stuck in `processing`, rerun that same job with `--force`
@@ -319,10 +323,14 @@ Common examples:
 
 - save LinkedIn auth state:
   `python scraper/linkedin_session.py --save-storage-state --channel chrome`
+- save LinkedIn auth state on the real Linux desktop session:
+  `DISPLAY=:0 python scraper/linkedin_session.py --save-storage-state --channel chrome`
 - check whether the saved LinkedIn auth state exists:
   `python scraper/linkedin_session.py --check`
 - on the server, verify or refresh the current saved LinkedIn login and update shared auth health without needing X/`DISPLAY`:
   `set -a && source .env && set +a && .venv/bin/python scraper/linkedin_session.py --auto-relogin --channel chrome`
+- if you want the relogin flow to open a visible browser on the real `server2` monitor:
+  `set -a && source .env && set +a && DISPLAY=:0 .venv/bin/python scraper/linkedin_session.py --auto-relogin --headful --channel chrome`
 - if you want the relogin flow to open a visible browser on `server2`, run it on the Xvfb display:
   `DISPLAY=:98 ./hunt.sh auth-auto-relogin --headful --display :98 --channel chrome`
 - `--check` only confirms that the storage-state JSON exists; it does not prove the saved session still reaches the LinkedIn feed
@@ -335,14 +343,28 @@ Common examples:
   `LINKEDIN_ACCOUNTS`
 - if LinkedIn auth expires during enrichment, Hunt now pauses the LinkedIn lane without failing the current row
 - when stored LinkedIn credentials are configured, Hunt now attempts one Playwright relogin before pausing the lane
+- relogin action order is now:
+  - classify the page as `welcome_back`, `login_form`, `login_gate`, `feed`, or `unknown`
+  - if `welcome_back`, click the remembered-account card or `Sign in using another account`
+  - if `login_form`, fill the LinkedIn email/password inputs and click the LinkedIn submit button
+  - if the page is neither of those states, log the observed screen type and fail cleanly instead of clicking unrelated provider buttons
 - if LinkedIn shows an account chooser during relogin, Hunt first tries chooser buttons/cards/email-text matches before it fills credentials
-- if chooser selection is not available, Hunt clicks `Sign in using another account` / `Use a different account` and falls back to the standard email/password form
+- if chooser selection is not available, Hunt clicks `Sign in using another account` / `Use a different account` and waits for the standard LinkedIn email/password form
+- relogin debug logging can be enabled with:
+  `LINKEDIN_RELOGIN_DEBUG=1`
+- debug logs now record:
+  - screen classification
+  - selector/button clicks
+  - failed click attempts
+  - filled email value
+  - a redacted password placeholder such as `<redacted len=12>`
 - successful manual auth save or successful `--auto-relogin` marks LinkedIn auth available again in shared runtime state
 - failures such as expired saved auth, automation-flagged accounts, all accounts blocked, or failed account rotation mark LinkedIn auth unavailable in shared runtime state
 - the review app and `/metrics` both read that shared runtime auth state:
   - review app headline toggles between `LinkedIn auth ready` and `LinkedIn auth paused`
   - `/metrics` exposes `hunt_auth_available{source="linkedin"}` as `1` or `0`
 - after logging in again and pressing Enter in the auth-save flow, the saved auth state is refreshed and the paused-auth flag is cleared
+- cancelling `--save-storage-state` with `Ctrl+C` or closing the Playwright browser should now fail cleanly without a noisy cleanup traceback
 
 ### Stage 1 verification
 
