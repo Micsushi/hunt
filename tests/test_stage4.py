@@ -346,6 +346,56 @@ class Stage4Tests(unittest.TestCase):
             {"email": "person@example.com", "password": "secret"},
         )
 
+    def test_submit_login_form_prefers_sign_in_using_another_account_over_chooser(self):
+        page = self.FakePage(
+            {
+                "login": {
+                    "url": linkedin_session.LOGIN_URL,
+                    "selectors": {
+                        "a:has-text('Sign in using another account')": {
+                            "count": 1,
+                            "next_state": "form",
+                        },
+                        "button:has-text('Continue as')": {
+                            "count": 1,
+                            "next_state": "authed",
+                        },
+                    },
+                },
+                "form": {
+                    "url": linkedin_session.LOGIN_URL,
+                    "selectors": {
+                        "input[name='session_key']": {"count": 1, "fill_key": "email"},
+                        "input[name='session_password']": {"count": 1, "fill_key": "password"},
+                        "button[type='submit']": {"count": 1, "next_state": "submitted"},
+                    },
+                },
+                "authed": {
+                    "url": "https://www.linkedin.com/feed/",
+                    "selectors": {},
+                },
+                "submitted": {
+                    "url": "https://www.linkedin.com/feed/",
+                    "selectors": {},
+                },
+            },
+            initial_state="login",
+        )
+
+        result = linkedin_session._submit_login_form(
+            page,
+            email="person@example.com",
+            password="secret",
+            timeout_ms=1000,
+        )
+
+        self.assertEqual(result, "form_submitted")
+        self.assertEqual(page.state, "submitted")
+        self.assertEqual(
+            page.filled,
+            {"email": "person@example.com", "password": "secret"},
+        )
+
     def test_attempt_auto_relogin_reuses_saved_session_without_credentials(self):
         with self.with_temp_db():
             with tempfile.NamedTemporaryFile(suffix=".json") as storage_state_file:

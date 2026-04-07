@@ -358,7 +358,18 @@ def _try_account_chooser_sign_in(page, *, email=None, timeout_ms=30000):
 
     try:
         if page.locator("h1:has-text('Welcome back')").count():
-            for sel in ("ul li button", "ul li a", "ul li"):
+            for sel in (
+                # Newer LinkedIn welcome-back screens sometimes render the
+                # remembered account as a clickable div/span card and mask the
+                # email, so the full-email text fallback above will not match.
+                "text=/@/",
+                "[role='button']:has-text('@')",
+                "button:has-text('@')",
+                "a:has-text('@')",
+                "ul li button",
+                "ul li a",
+                "ul li",
+            ):
                 locator = page.locator(sel)
                 if locator.count():
                     locator.first.click(timeout=timeout_ms)
@@ -392,22 +403,37 @@ def _try_sign_in_another_account(page, *, timeout_ms=30000):
 
 
 def _submit_login_form(page, *, email, password, timeout_ms=30000):
-    chooser_result = _try_account_chooser_sign_in(page, email=email, timeout_ms=timeout_ms)
-    if chooser_result == "clicked":
-        return "chooser_clicked"
-
-    if chooser_result is None:
-        page.goto(LOGIN_URL, wait_until="domcontentloaded", timeout=timeout_ms)
-        chooser_result = _try_account_chooser_sign_in(page, email=email, timeout_ms=timeout_ms)
-        if chooser_result == "clicked":
-            return "chooser_clicked"
-
+    # Give LinkedIn's login surface a moment to hydrate before chooser detection.
+    page.wait_for_timeout(1000)
     email_input = page.locator("input[name='session_key']")
     password_input = page.locator("input[name='session_password']")
 
-    # If the form isn't visible yet, try "Sign in using another account" to get to it.
+    # Prefer the deterministic email/password flow when LinkedIn offers
+    # "Sign in using another account" on welcome-back screens.
     if not email_input.count() or not password_input.count():
         _try_sign_in_another_account(page, timeout_ms=timeout_ms)
+        email_input = page.locator("input[name='session_key']")
+        password_input = page.locator("input[name='session_password']")
+
+    chooser_result = None
+    if not email_input.count() or not password_input.count():
+        chooser_result = _try_account_chooser_sign_in(page, email=email, timeout_ms=timeout_ms)
+        if chooser_result == "clicked":
+            return "chooser_clicked"
+        email_input = page.locator("input[name='session_key']")
+        password_input = page.locator("input[name='session_password']")
+
+    if not email_input.count() or not password_input.count():
+        page.goto(LOGIN_URL, wait_until="domcontentloaded", timeout=timeout_ms)
+        page.wait_for_timeout(1000)
+        _try_sign_in_another_account(page, timeout_ms=timeout_ms)
+        email_input = page.locator("input[name='session_key']")
+        password_input = page.locator("input[name='session_password']")
+
+    if not email_input.count() or not password_input.count():
+        chooser_result = _try_account_chooser_sign_in(page, email=email, timeout_ms=timeout_ms)
+        if chooser_result == "clicked":
+            return "chooser_clicked"
         email_input = page.locator("input[name='session_key']")
         password_input = page.locator("input[name='session_password']")
 
