@@ -41,6 +41,11 @@ ALT_SIGN_IN_SELECTORS = (
     "button:has-text('Use a different account')",
     "text=/Use a different account/i",
 )
+LOGIN_CONTINUE_SELECTORS = (
+    "button:has-text('Sign in')",
+    "a:has-text('Sign in')",
+    "[type='submit']",
+)
 
 # LinkedIn's "Important notice" automation-detection page.
 # Appears at /checkpoint/ URLs so it looks "logged out" to page_looks_logged_out;
@@ -372,9 +377,14 @@ def _wait_for_login_surface(page, *, email=None, timeout_ms=30000, poll_ms=500):
                 selector: _selector_count(page, selector)
                 for selector in ACCOUNT_CHOOSER_SELECTORS
             }
+            login_continue_counts = {
+                selector: _selector_count(page, selector)
+                for selector in LOGIN_CONTINUE_SELECTORS
+            }
             _log_relogin(
                 f"wait_for_login_surface attempt={attempt} url={page.url} "
-                f"alt_sign_in_counts={alt_counts} chooser_counts={chooser_counts}"
+                f"alt_sign_in_counts={alt_counts} chooser_counts={chooser_counts} "
+                f"login_continue_counts={login_continue_counts}"
             )
         sign_in_other = _try_sign_in_another_account(page, timeout_ms=poll_ms)
         email_input = page.locator("input[name='session_key']")
@@ -382,6 +392,15 @@ def _wait_for_login_surface(page, *, email=None, timeout_ms=30000, poll_ms=500):
         if email_input.count() and password_input.count():
             _log_relogin("email/password login form is available")
             return "login_form"
+        continued = _try_continue_to_login_form(page, timeout_ms=poll_ms)
+        if continued:
+            _log_relogin("clicked sign-in continue control while waiting for login form")
+            page.wait_for_timeout(poll_ms)
+            email_input = page.locator("input[name='session_key']")
+            password_input = page.locator("input[name='session_password']")
+            if email_input.count() and password_input.count():
+                _log_relogin("email/password login form became available after clicking sign-in continue")
+                return "login_form"
         chooser = _try_account_chooser_sign_in(page, email=email, timeout_ms=poll_ms)
         if chooser:
             _log_relogin(f"account chooser result: {chooser}")
@@ -493,6 +512,43 @@ def _try_sign_in_another_account(page, *, timeout_ms=30000):
                         )
         except Exception as exc:
             _log_relogin(f"alternate sign-in selector probe failed: {selector} error={exc}")
+            continue
+    return False
+
+
+def _try_continue_to_login_form(page, *, timeout_ms=30000):
+    for selector in LOGIN_CONTINUE_SELECTORS:
+        try:
+            locator = page.locator(selector)
+            count = locator.count()
+            if not count:
+                continue
+            for index in range(count):
+                candidate = locator.nth(index)
+                try:
+                    if hasattr(candidate, "is_visible") and not candidate.is_visible():
+                        continue
+                except Exception:
+                    pass
+                try:
+                    text = ""
+                    try:
+                        text = (candidate.text_content(timeout=timeout_ms) or "").strip()
+                    except Exception:
+                        pass
+                    candidate.click(timeout=timeout_ms)
+                    page.wait_for_timeout(1500)
+                    _log_relogin(
+                        f"clicked login-continue selector: {selector} [index={index}] text={text!r}"
+                    )
+                    return True
+                except Exception as exc:
+                    _log_relogin(
+                        f"login-continue click failed for selector: {selector} [index={index}] error={exc}"
+                    )
+                    continue
+        except Exception as exc:
+            _log_relogin(f"login-continue selector probe failed: {selector} error={exc}")
             continue
     return False
 
