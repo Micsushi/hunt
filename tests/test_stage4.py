@@ -536,6 +536,45 @@ class Stage4Tests(unittest.TestCase):
 
         self.assertIn("no X server / DISPLAY is available", str(ctx.exception))
 
+    def test_save_storage_state_interactively_ignores_browser_close_error_on_cancel(self):
+        class FakeBrowser:
+            def new_context(self):
+                class FakeContext:
+                    def new_page(self_inner):
+                        class FakePage:
+                            def goto(self_page, *_args, **_kwargs):
+                                return None
+
+                        return FakePage()
+
+                return FakeContext()
+
+            def close(self):
+                raise Exception("Connection closed while reading from the driver")
+
+        class FakeChromium:
+            def launch(self, **_kwargs):
+                return FakeBrowser()
+
+        class FakePlaywright:
+            chromium = FakeChromium()
+
+        class FakePlaywrightManager:
+            def __enter__(self):
+                return FakePlaywright()
+
+            def __exit__(self, exc_type, exc, tb):
+                return False
+
+        with patch.object(linkedin_session, "load_sync_playwright", return_value=lambda: FakePlaywrightManager()), patch(
+            "builtins.input",
+            side_effect=KeyboardInterrupt,
+        ):
+            with self.assertRaises(linkedin_session.LinkedInSessionCancelled) as ctx:
+                linkedin_session.save_storage_state_interactively()
+
+        self.assertIn("save cancelled", str(ctx.exception))
+
     def test_huntctl_auth_auto_relogin_can_set_display(self):
         captured = {}
 

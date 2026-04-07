@@ -242,6 +242,15 @@ def _close_page(page):
         pass
 
 
+def _close_browser(browser):
+    if not browser:
+        return
+    try:
+        browser.close()
+    except Exception:
+        pass
+
+
 def _handle_post_login_screens(page, *, max_rounds=5, timeout_ms=30000):
     """Click through LinkedIn interstitial / confirmation screens shown after login.
 
@@ -856,7 +865,7 @@ def save_storage_state_interactively(storage_state_path=None, *, browser_channel
                     "closed before verification completed."
                 ) from exc
         finally:
-            browser.close()
+            _close_browser(browser)
 
     mark_linkedin_auth_available()
     return target_path
