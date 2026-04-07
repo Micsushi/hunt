@@ -25,6 +25,12 @@ ACCOUNT_CHOOSER_SELECTORS = (
     "a:has-text('Continue')",
     "button:has-text('Sign in')",
     "a:has-text('Sign in')",
+    # "Welcome back" account picker card selectors (various LinkedIn versions)
+    ".account-picker__account-btn",
+    "[class*='account-picker__account'] button",
+    "[class*='account-picker__account'] a",
+    "ul[class*='account-picker'] button",
+    "ul[class*='account-picker'] li",
 )
 
 # LinkedIn's "Important notice" automation-detection page.
@@ -49,8 +55,14 @@ POST_LOGIN_CONFIRMATION_SELECTORS = (
 )
 
 from browser_runtime import BrowserRuntimeError, open_browser_context, load_sync_playwright
-from db import mark_linkedin_auth_available
+from db import mark_linkedin_auth_available, mark_linkedin_auth_unavailable
 from notifications import send_discord_webhook_message
+
+try:
+    from playwright.sync_api import TargetClosedError as PlaywrightTargetClosedError
+except (ModuleNotFoundError, ImportError):
+    class PlaywrightTargetClosedError(Exception):  # type: ignore[misc]
+        pass
 
 
 class LinkedInSessionError(RuntimeError):
@@ -312,7 +324,7 @@ def _login_form_available(page):
     )
 
 
-def _try_account_chooser_sign_in(page, *, timeout_ms=30000):
+def _try_account_chooser_sign_in(page, *, email=None, timeout_ms=30000):
     for selector in ACCOUNT_CHOOSER_SELECTORS:
         locator = page.locator(selector)
         try:
@@ -329,22 +341,76 @@ def _try_account_chooser_sign_in(page, *, timeout_ms=30000):
         if _login_form_available(page):
             return "login_form"
         return "clicked"
+
+    # Fallback for "Welcome back" screen: find the account card by email text
+    # or just click the first item in any account list on the page.
+    if email:
+        try:
+            locator = page.locator(f"text={email}")
+            if locator.count():
+                locator.first.click(timeout=timeout_ms)
+                page.wait_for_timeout(1500)
+                if _login_form_available(page):
+                    return "login_form"
+                return "clicked"
+        except Exception:
+            pass
+
+    try:
+        if page.locator("h1:has-text('Welcome back')").count():
+            for sel in ("ul li button", "ul li a", "ul li"):
+                locator = page.locator(sel)
+                if locator.count():
+                    locator.first.click(timeout=timeout_ms)
+                    page.wait_for_timeout(1500)
+                    if _login_form_available(page):
+                        return "login_form"
+                    return "clicked"
+    except Exception:
+        pass
+
     return None
 
 
+def _try_sign_in_another_account(page, *, timeout_ms=30000):
+    """Click 'Sign in using another account' if present, to reach the email/password form."""
+    for selector in (
+        "a:has-text('Sign in using another account')",
+        "button:has-text('Sign in using another account')",
+        "a:has-text('Use a different account')",
+        "button:has-text('Use a different account')",
+    ):
+        try:
+            locator = page.locator(selector)
+            if locator.count():
+                locator.first.click(timeout=timeout_ms)
+                page.wait_for_timeout(1500)
+                return True
+        except Exception:
+            continue
+    return False
+
+
 def _submit_login_form(page, *, email, password, timeout_ms=30000):
-    chooser_result = _try_account_chooser_sign_in(page, timeout_ms=timeout_ms)
+    chooser_result = _try_account_chooser_sign_in(page, email=email, timeout_ms=timeout_ms)
     if chooser_result == "clicked":
         return "chooser_clicked"
 
     if chooser_result is None:
         page.goto(LOGIN_URL, wait_until="domcontentloaded", timeout=timeout_ms)
-        chooser_result = _try_account_chooser_sign_in(page, timeout_ms=timeout_ms)
+        chooser_result = _try_account_chooser_sign_in(page, email=email, timeout_ms=timeout_ms)
         if chooser_result == "clicked":
             return "chooser_clicked"
 
     email_input = page.locator("input[name='session_key']")
     password_input = page.locator("input[name='session_password']")
+
+    # If the form isn't visible yet, try "Sign in using another account" to get to it.
+    if not email_input.count() or not password_input.count():
+        _try_sign_in_another_account(page, timeout_ms=timeout_ms)
+        email_input = page.locator("input[name='session_key']")
+        password_input = page.locator("input[name='session_password']")
+
     submit_button = page.locator("button[type='submit']")
 
     if not email_input.count() or not password_input.count():
@@ -386,6 +452,7 @@ def _all_accounts_blocked_discord_alert(n_accounts):
         "No scraping will run until accounts are unblocked or new ones are added. "
         "Manual intervention required."
     )
+    mark_linkedin_auth_unavailable(msg)
     send_discord_webhook_message(msg)
     return msg
 
@@ -472,6 +539,9 @@ def attempt_auto_relogin(
             msg = _all_accounts_blocked_discord_alert(len(accounts))
             return {"attempted": True, "recovered": False, "message": msg}
         set_active_account_index(next_idx)
+        mark_linkedin_auth_unavailable(
+            f"Account {account_index} flagged for automation; rotated to {next_idx}."
+        )
         return {
             "attempted": True,
             "recovered": False,
@@ -480,6 +550,12 @@ def attempt_auto_relogin(
                 f"for {ACCOUNT_BLOCK_DAYS} days. Rotated to account {next_idx} "
                 "for the next run."
             ),
+        }
+    except PlaywrightTargetClosedError as exc:
+        return {
+            "attempted": True,
+            "recovered": False,
+            "message": f"LinkedIn auto relogin aborted: browser was closed before completion ({exc}).",
         }
     except (BrowserRuntimeError, LinkedInSessionError) as exc:
         return {
@@ -584,6 +660,13 @@ def rotate_linkedin_account(
                 f"LinkedIn account {next_index} flagged for automation and blocked "
                 f"for {ACCOUNT_BLOCK_DAYS} days. Queued account {fallback} for next run."
             ),
+        }
+    except PlaywrightTargetClosedError as exc:
+        return {
+            "rotated": True,
+            "account_index": next_index,
+            "recovered": False,
+            "message": f"Rotated to account {next_index} but browser was closed before completion: {exc}",
         }
     except (BrowserRuntimeError, LinkedInSessionError) as exc:
         return {
