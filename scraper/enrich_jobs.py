@@ -6,7 +6,13 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from db import ENRICHMENT_SOURCE_PRIORITY, count_ready_jobs_for_enrichment, get_linkedin_auth_state  # noqa: E402
 from enrich_indeed import process_batch as process_indeed_batch  # noqa: E402
-from linkedin_session import attempt_auto_relogin, rotate_linkedin_account  # noqa: E402
+from linkedin_session import (  # noqa: E402
+    attempt_auto_relogin,
+    block_account_for_days,
+    get_active_account_index,
+    rotate_linkedin_account,
+)
+RATE_LIMIT_BLOCK_DAYS = 1
 from enrich_linkedin import process_batch as process_linkedin_batch  # noqa: E402
 
 
@@ -118,6 +124,12 @@ def process_multi_source_batch(
         if summary["stop_error_code"] and not aggregate["stop_error_code"]:
             aggregate["stop_error_code"] = summary["stop_error_code"]
             if summary["stop_error_code"] == "rate_limited":
+                blocked_index = get_active_account_index()
+                block_account_for_days(blocked_index, days=RATE_LIMIT_BLOCK_DAYS)
+                print(
+                    f"[enrich] Account {blocked_index} rate-limited; "
+                    f"blocked for {RATE_LIMIT_BLOCK_DAYS} day(s)."
+                )
                 rotation = rotate_linkedin_account(
                     browser_channel=browser_channel,
                     headless=headless,
