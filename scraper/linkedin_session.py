@@ -426,7 +426,7 @@ def _get_login_form_controls(page):
     )
     submit_selectors = (
         "button[type='submit']",
-        "button:has-text(/^Sign in$/)",
+        "text=/^Sign in$/",
         "button[aria-label='Sign in']",
     )
 
