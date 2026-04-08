@@ -57,6 +57,8 @@ def _ollama_chat(user_prompt: str) -> str:
     timeout = config.OLLAMA_TIMEOUT_SEC
     payload = {
         "model": model,
+        # Ask Ollama to return strict JSON (reduces parse failures).
+        "format": "json",
         "stream": False,
         "options": {"temperature": 0.2},
         "messages": [
