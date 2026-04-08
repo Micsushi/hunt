@@ -11,23 +11,21 @@ Deployment note:
 ## C1 (Hunter) : Discovery And Enrichment
 
 Status:
-- feature-complete
-- not yet fully signed off operationally
+- **Stage 4 repo scope** : implemented (artifacts, metrics, queue health JSON, backfill defaults **25**, discovery **lane** title filter in `hunter/search_lanes.py` + discovery + `scripts/cleanup_lane_mismatch_rows.py`)
+- **v1.0 release** : pending your operational sign-off on `server2` (sole user today is fine with v0.1 tag until then)
 
-What still needs to be fixed or validated:
+Repo-side defaults and discovery lane filtering:
+- Backfill / drain default batch size **25** (`hunterctl`, `backfill_enrichment.py`).
+- **All boards** : after fetch, title must match the **engineering / product / data** lane for the search that fetched it (`title_matches_search_lane` in `hunter/search_lanes.py`; aligned with **`SEARCH_TERMS`** in `hunter/config.py`).
+- **Existing DB junk** : run `./hunter.sh clean-lane-mismatch` (preview) then `./hunter.sh clean-lane-mismatch --apply` to remove stored rows whose title does not match their stored category lane (legacy: `clean-indeed`; optional `--source linkedin` / `--source indeed`).
+
+What still needs **your validation on `server2`** (environment-specific):
 - finish backlog drain on `server2`
-  - LinkedIn backfill is still hitting `rate_limited` when the mixed-source batch is too aggressive
-  - treat smaller LinkedIn-oriented runs as the expected operating mode until the safe batch size is proven
-- tune the short operator command defaults
-  - consider lowering `backfill-all` from `100` rows to a safer default such as `25`
-  - keep the longer `backfill` command available for explicit larger runs
+  - LinkedIn backfill can still hit `rate_limited` if you override defaults to very large batches or mix sources aggressively
 - validate a stable production drain sequence
   - retry failed/blocked rows
-  - run smaller LinkedIn-safe batches first
+  - run LinkedIn-safe batches first (defaults help)
   - run Indeed separately if LinkedIn pressure would otherwise stop the batch early
-- confirm discovery quality stays acceptable after the new Indeed cleanup/filtering changes
-  - watch for unrelated retail/store/associate rows returning again
-  - tighten the Indeed-only relevance rules further if needed
 - observe one real blocked/browser-fixable failure end to end with artifacts
   - screenshot saved
   - HTML/text snapshot saved
@@ -40,9 +38,10 @@ What still needs to be fixed or validated:
 Recommended finish sequence:
 1. keep the current queue cleanup commands:
    - `./hunter.sh retry`
-   - `./hunter.sh clean-indeed --apply`
-2. drain with smaller batches first:
-   - `DISPLAY=:98 ./hunter.sh backfill-all 25`
+   - `./hunter.sh clean-lane-mismatch --apply`
+2. drain with default batch size (25) or smaller if needed:
+   - `DISPLAY=:98 ./hunter.sh backfill-all`
+   - or explicitly: `DISPLAY=:98 ./hunter.sh backfill-all 25`
 3. if LinkedIn remains sensitive, drain Indeed separately:
    - `DISPLAY=:98 ./hunter.sh backfill 100 --source indeed --ui-verify-blocked --yes`
 4. once the backlog is under control, turn the timer back on:

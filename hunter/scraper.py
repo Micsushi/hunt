@@ -33,7 +33,7 @@ from hunter.config import (
     WATCHLIST,
 )
 from hunter.db import add_job, count_ready_jobs_for_enrichment, init_db
-from hunter.indeed_filters import matches_indeed_category
+from hunter.search_lanes import title_matches_search_lane
 from hunter.url_utils import detect_ats_type, get_apply_host, normalize_optional_str
 
 
@@ -154,8 +154,10 @@ def scrape_single(site, term, location, category):
         if not title:
             continue
 
-        if source == "indeed" and not matches_indeed_category(title, category):
+        if category and not title_matches_search_lane(title, category):
             continue
+
+        company = normalize_optional_str(row.get("company"))
 
         job_url, apply_url = build_job_urls(row, source)
         description = normalize_optional_str(row.get("description"))
@@ -163,7 +165,7 @@ def scrape_single(site, term, location, category):
 
         job_data = {
             "title": title,
-            "company": normalize_optional_str(row.get("company")),
+            "company": company,
             "location": normalize_optional_str(row.get("location")),
             "job_url": job_url,
             "apply_url": apply_url,

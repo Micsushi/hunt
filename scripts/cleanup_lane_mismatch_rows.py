@@ -1,4 +1,9 @@
 #!/usr/bin/env python3
+"""
+Preview or delete jobs whose title does not match their discovery search lane (category).
+
+Applies to all sources (LinkedIn, Indeed, …) that store ``category`` from SEARCH_TERMS lanes.
+"""
 import argparse
 import os
 import sys
@@ -7,12 +12,12 @@ REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, REPO_ROOT)
 
 from hunter.db import get_connection, init_db  # noqa: E402
-from hunter.indeed_filters import matches_indeed_category  # noqa: E402
+from hunter.search_lanes import title_matches_search_lane  # noqa: E402
 
 
 def parse_args():
     parser = argparse.ArgumentParser(
-        description="Preview or delete currently stored Indeed rows that do not match the intended target categories."
+        description="Preview or delete job rows whose title does not match the stored search lane (engineering/product/data)."
     )
     parser.add_argument(
         "--apply",
@@ -22,7 +27,7 @@ def parse_args():
     parser.add_argument(
         "--include-non-new",
         action="store_true",
-        help="Also consider Indeed rows whose application status is not 'new'.",
+        help="Also consider rows whose application status is not 'new'.",
     )
     parser.add_argument(
         "--limit",
@@ -30,10 +35,16 @@ def parse_args():
         default=None,
         help="Optional max number of rows to inspect from newest to oldest.",
     )
+    parser.add_argument(
+        "--source",
+        default="all",
+        choices=["linkedin", "indeed", "all"],
+        help="Limit to one board (default: all sources).",
+    )
     return parser.parse_args()
 
 
-def find_irrelevant_indeed_rows(*, include_non_new=False, limit=None):
+def find_lane_mismatch_rows(*, include_non_new=False, limit=None, source_filter=None):
     conn = get_connection()
     try:
         cursor = conn.cursor()
@@ -42,6 +53,11 @@ def find_irrelevant_indeed_rows(*, include_non_new=False, limit=None):
         if not include_non_new:
             status_sql = " AND coalesce(status, 'new') = 'new'"
 
+        source_sql = ""
+        if source_filter and source_filter != "all":
+            source_sql = " AND source = ?"
+            params.append(source_filter)
+
         limit_sql = ""
         if limit is not None:
             limit_sql = " LIMIT ?"
@@ -49,12 +65,12 @@ def find_irrelevant_indeed_rows(*, include_non_new=False, limit=None):
 
         rows = cursor.execute(
             f"""
-            SELECT id, company, title, category, enrichment_status, status, date_scraped
+            SELECT id, source, company, title, category, enrichment_status, status, date_scraped
             FROM jobs
-            WHERE source = 'indeed'
-              AND category IS NOT NULL
+            WHERE category IS NOT NULL
               AND trim(category) != ''
               {status_sql}
+              {source_sql}
             ORDER BY date_scraped DESC, id DESC
             {limit_sql}
             """,
@@ -62,7 +78,9 @@ def find_irrelevant_indeed_rows(*, include_non_new=False, limit=None):
         ).fetchall()
 
         return [
-            dict(row) for row in rows if not matches_indeed_category(row["title"], row["category"])
+            dict(row)
+            for row in rows
+            if not title_matches_search_lane(row["title"], row["category"])
         ]
     finally:
         conn.close()
@@ -89,20 +107,22 @@ def delete_rows(job_ids):
 def main():
     args = parse_args()
     init_db()
-    rows = find_irrelevant_indeed_rows(
+    src = None if args.source == "all" else args.source
+    rows = find_lane_mismatch_rows(
         include_non_new=args.include_non_new,
         limit=args.limit,
+        source_filter=src,
     )
 
     if not rows:
-        print("No irrelevant Indeed rows matched the current cleanup rule.")
+        print("No rows failed the search-lane title check.")
         return
 
-    print(f"Matched {len(rows)} irrelevant Indeed row(s):")
+    print(f"Matched {len(rows)} row(s) (title vs lane):")
     for row in rows[:20]:
         print(
-            f"id={row['id']} | company={row.get('company')} | title={row.get('title')} "
-            f"| category={row.get('category')} | enrichment={row.get('enrichment_status')} | status={row.get('status')}"
+            f"id={row['id']} | source={row.get('source')} | company={row.get('company')} | title={row.get('title')} "
+            f"| lane={row.get('category')} | enrichment={row.get('enrichment_status')} | status={row.get('status')}"
         )
     if len(rows) > 20:
         print(f"... plus {len(rows) - 20} more row(s)")
@@ -112,7 +132,7 @@ def main():
         return
 
     deleted = delete_rows([row["id"] for row in rows])
-    print(f"Deleted {deleted} irrelevant Indeed row(s).")
+    print(f"Deleted {deleted} row(s).")
 
 
 if __name__ == "__main__":

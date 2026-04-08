@@ -41,6 +41,8 @@ def get_db_path():
 # Backwards-compatible constant: prefer `get_db_path()` for runtime correctness.
 DB_PATH = get_db_path()
 
+# Discovery runs one query per (lane, term). Broad board results are trimmed afterward:
+# see hunter.search_lanes.LANE_TITLE_KEYWORDS (keep lanes aligned when you change terms).
 SEARCH_TERMS = {
     "engineering": [
         "software engineer intern",

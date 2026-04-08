@@ -231,7 +231,11 @@ def main():
         description="Run enrichment backfill in batches with an operator checkpoint after each batch."
     )
     parser.add_argument(
-        "batch_size", type=int, nargs="?", default=100, help="Rows to process per batch."
+        "batch_size",
+        type=int,
+        nargs="?",
+        default=25,
+        help="Rows to process per batch (default 25; increase for explicit larger batches).",
     )
     parser.add_argument("--source", choices=["linkedin", "indeed", "all"], default="linkedin")
     parser.add_argument(

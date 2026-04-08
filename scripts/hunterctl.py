@@ -254,14 +254,16 @@ def cmd_requeue_errors(args):
     _run(command)
 
 
-def cmd_cleanup_indeed(args):
-    command = [PYTHON, "scripts/cleanup_indeed_irrelevant_rows.py"]
+def cmd_cleanup_lane_mismatch(args):
+    command = [PYTHON, "scripts/cleanup_lane_mismatch_rows.py"]
     if args.apply:
         command.append("--apply")
     if args.include_non_new:
         command.append("--include-non-new")
     if args.limit is not None:
         command.extend(["--limit", str(args.limit)])
+    if getattr(args, "source", "all") and args.source != "all":
+        command.extend(["--source", args.source])
     _run(command)
 
 
@@ -381,7 +383,7 @@ def cmd_tests(args):
         "2": ["test_stage2.py"],
         "3": ["test_stage3.py"],
         "32": ["test_stage32.py"],
-        "4": ["test_stage4.py"],
+        "4": ["test_stage4.py", "test_search_lanes.py"],
         "c2": ["test_component2_stage1.py", "test_component2_pipeline.py"],
         "c3": ["test_component3_stage1.py"],
         "c4": ["test_component4_cli.py"],
@@ -391,6 +393,7 @@ def cmd_tests(args):
             "test_stage3.py",
             "test_stage32.py",
             "test_stage4.py",
+            "test_search_lanes.py",
             "test_component2_stage1.py",
             "test_component2_pipeline.py",
             "test_component3_stage1.py",
@@ -712,21 +715,37 @@ def build_parser():
     )
     retry.set_defaults(func=cmd_retry)
 
-    cleanup_indeed = subparsers.add_parser(
-        "cleanup-indeed",
-        help="Preview or delete currently stored irrelevant Indeed rows.",
-        aliases=["clean-indeed"],
+    cleanup_lane = subparsers.add_parser(
+        "cleanup-lane-mismatch",
+        help="Preview or delete rows whose title does not match their discovery lane (all boards).",
+        aliases=[
+            "clean-lane-mismatch",
+            "cleanup-indeed",
+            "clean-indeed",
+        ],
     )
-    cleanup_indeed.add_argument("--apply", action="store_true")
-    cleanup_indeed.add_argument("--include-non-new", action="store_true")
-    cleanup_indeed.add_argument("--limit", type=int, default=None)
-    cleanup_indeed.set_defaults(func=cmd_cleanup_indeed)
+    cleanup_lane.add_argument("--apply", action="store_true")
+    cleanup_lane.add_argument("--include-non-new", action="store_true")
+    cleanup_lane.add_argument("--limit", type=int, default=None)
+    cleanup_lane.add_argument(
+        "--source",
+        choices=["linkedin", "indeed", "all"],
+        default="all",
+        help="Limit to one board (default: all sources).",
+    )
+    cleanup_lane.set_defaults(func=cmd_cleanup_lane_mismatch)
 
     backfill = subparsers.add_parser(
         "backfill", help="Run enrichment backfill in batches with a checkpoint after each batch."
     )
     backfill.add_argument("--source", choices=["linkedin", "indeed", "all"], default="linkedin")
-    backfill.add_argument("batch_size", type=int, nargs="?", default=100)
+    backfill.add_argument(
+        "batch_size",
+        type=int,
+        nargs="?",
+        default=25,
+        help="Rows per batch (default 25; use a larger N for explicit bigger runs).",
+    )
     backfill.add_argument("--job-id", type=int, action="append", dest="job_ids")
     backfill.add_argument("--max-batches", type=int, default=None)
     backfill.add_argument("--channel", default="chrome")
@@ -741,9 +760,15 @@ def build_parser():
     drain = subparsers.add_parser(
         "backfill-all",
         aliases=["drain"],
-        help="Short form: backfill all sources in 100-row batches with UI verification and auto-continue.",
+        help="Short form: backfill all sources in batches (default 25 rows) with UI verification and auto-continue.",
     )
-    drain.add_argument("batch_size", type=int, nargs="?", default=100)
+    drain.add_argument(
+        "batch_size",
+        type=int,
+        nargs="?",
+        default=25,
+        help="Rows per batch (default 25; pass e.g. 100 for larger explicit runs).",
+    )
     drain.add_argument("--source", choices=["linkedin", "indeed", "all"], default="all")
     drain.add_argument("--job-id", type=int, action="append", dest="job_ids")
     drain.add_argument("--max-batches", type=int, default=None)
