@@ -55,16 +55,20 @@ def _score_text(text: str, keywords: list[str], family: str) -> int:
     return score
 
 
-def _rewrite_bullet(text: str, must_haves: list[str]) -> str:
+def _rewrite_bullet(text: str, must_haves: list[str]) -> str:  # noqa: ARG001
+    """Clean the bullet text without injecting keywords.
+
+    Keywords are only added when they genuinely appear in the bullet already
+    (scoring handles selection); forced appending produces unnatural text.
+    The must_haves parameter is kept for API compatibility but is intentionally
+    not used to modify the bullet content.
+    """
     normalized = text.strip()
     if not normalized:
         return normalized
+    # Normalise trailing punctuation: ensure exactly one period.
     if normalized.endswith("."):
-        normalized = normalized[:-1]
-    if must_haves:
-        top = must_haves[0]
-        if top.lower() not in normalized.lower():
-            normalized = f"{normalized}; aligned with {top}"
+        return normalized
     return normalized + "."
 
 

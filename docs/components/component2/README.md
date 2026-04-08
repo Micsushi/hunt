@@ -14,7 +14,7 @@ C2 (Fletcher) should:
 
 ## Current Status
 
-**Shipped today (~v0.1)** — full local pipeline (parse → classify/keywords → optional Ollama refinement of those steps → heuristic bullet tailoring → compile → DB + artifacts), **`fletch`** / **`fletcher.cli`**, review-app structured diff + JD highlights on JSON, Ansible Stage 7. See **`fletcher/README.md`**.
+**Shipped today (~v0.1)** — full local pipeline (parse → classify/keywords → optional Ollama refinement of those steps → heuristic bullet tailoring → compile → DB + artifacts), **`fletch`** / **`fletcher.cli`**, review-app structured diff + JD highlights on JSON, Ansible Stage 7. Keyword extraction is noise-filtered (0–10 meaningful terms, multi-word phrases first). Bullets are selected by relevance score — keywords are never force-injected. LLM I/O (prompt + response) logged to attempt directory by default. Review app shows per-attempt PDF/TeX/Keywords/LLM I/O links and a dedicated LLM I/O viewer. See **`fletcher/README.md`**.
 
 **v1.0 target (current engineering focus)** — meet the **locked decisions** below with **LLM-driven resume generation** (prompted bullet/section work on top of the same structured pipeline), reliable **Ollama (or chosen) backend**, stable **queue + one-page + handoff** to C3/C4. This is **not** required to ship interactive “pick keywords → regen → chat edit” flows; those are **v2.0**.
 
@@ -197,9 +197,11 @@ C2 (Fletcher) should be grounded by:
 - later generated or curated family-specific base resumes
 
 Starter templates now live under:
-- `fletcher/templates/candidate_profile.template.md`
-- `fletcher/templates/bullet_library.template.md`
+- `fletcher/templates/candidate_profile.template.md` — copy to `fletcher/candidate_profile.md` (gitignored) and fill in your real history
+- `fletcher/templates/bullet_library.template.md` — copy to `fletcher/bullet_library.md` (gitignored) for extra curated bullets
 - `fletcher/templates/ad_hoc_job_description.template.md`
+
+Run `fletch context` to see the Entry IDs C2 derives from your `main.tex` so you can match them in the profile.
 
 ## Initial Repo Layout
 
@@ -276,9 +278,10 @@ The **stage list below** adds **Stages 9–12** for these capabilities without r
 
 - detect role family
 - detect job level
-- extract must-have and nice-to-have requirements
+- extract must-have and nice-to-have requirements (0–10 meaningful terms; multi-word tech phrases matched first; noise-filtered)
 - flag weak or noisy JDs
 - recommend the best starting base resume family for Stage 4
+- optional Ollama refinement of classification + keywords when `HUNT_RESUME_MODEL_BACKEND=ollama`
 
 ### Stage 4 : resume selection and rewrite plan
 
@@ -318,6 +321,8 @@ The **stage list below** adds **Stages 9–12** for these capabilities without r
 - expose the generated LaTeX
 - allow manual generation from DB jobs or pasted JDs
 - structured diff and JD keyword highlights on **structured JSON** (presentation in the review app; no requirement on LaTeX→HTML)
+- **per-attempt artifact links**: each attempt row in the job detail page has PDF / TeX / Keywords / LLM I/O links (not just the latest)
+- **LLM I/O viewer**: `/api/attempts/{id}/llm` shows the full Ollama prompt, raw response, and timing metadata for any attempt
 - optional HTML preview later as a **second renderer** from the same JSON, not a replacement for the contract
 
 ### Stage 9 : JD coverage and gap analysis

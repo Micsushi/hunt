@@ -1,4 +1,4 @@
-# Hunt : To Do
+﻿# Hunt : To Do
 
 This document is the live cross-component fix list.
 
@@ -64,7 +64,16 @@ Status:
 - **~v0.1 shipped** in repo: pipeline, Ollama optional for **classification/keywords only**, Ansible Stage 7, review diff/highlight panel on structured JSON
 - **v1.0 not done** until the items below are true
 
-v1.0 work (in order of dependency):
+**Recently completed (v0.1 → v1.0 progress):**
+- **Keyword extraction rewrite** (`fletcher/keyword_extractor.py`): multi-word tech phrases matched first, noise-filtered stopword list, minimum-frequency filter, punctuation-safe tokenizer, 0–10 meaningful terms only.
+- **Bullet injection removed** (`fletcher/generator.py` `_rewrite_bullet`): the `"; aligned with pricing."` forced append is gone. Keywords are surfaced by scoring and selection only.
+- **Candidate profile template** (`fletcher/templates/candidate_profile.template.md`): full instructions, Entry ID matching guide, complete example entries. File is gitignored (`fletcher/candidate_profile.md`).
+- **LLM I/O logging on by default**: `HUNT_RESUME_LOG_LLM_IO=1`; prompt captured before the network call so it is preserved even on timeouts.
+- **Review webapp — per-attempt artifact links**: each attempt row now has PDF / TeX / Keywords / LLM I/O links. New endpoints: `/api/attempts/{id}/pdf|tex|keywords|llm`.
+- **Review webapp — LLM I/O viewer**: `/api/attempts/{id}/llm` renders enrichment metadata, full Ollama prompt, and raw response.
+
+v1.0 remaining work (in order of dependency):
+- **Fill in candidate profile** (`fletcher/candidate_profile.md`) with real job history — C2 cannot surface better bullets without it
 - **LLM tailoring path**
   - prompts + JSON (or validated structured output) for bullet/skill emphasis aligned with JD, grounded in candidate profile / bullet library / OG facts
   - wire **Ollama** (or chosen backend) for this step with clear **fallback** when the model fails (heuristic or safe minimal edit)
@@ -79,12 +88,13 @@ v1.0 work (in order of dependency):
 - **Deploy** remains separate Ansible Stage 7 (already); document operator smoke for v1.0
 
 **Explicitly out of scope for v1.0** (do not block release on these):
-- user-driven keyword pick lists and “regen with my selections”
+- user-driven keyword pick lists and "regen with my selections"
 - per-bullet chat / iterative edit sessions
 - PDF-side heatmaps or LaTeX `latexdiff` as a product feature
 - parity with Jobright-style interactive polish
 
 v1.0 **done** means:
+- candidate profile is filled in with real history
 - LLM-backed tailoring meets locked decisions in practice (truthful, one page, artifacts + DB)
 - timer/CLI paths stable; handoff fields trusted by C3/C4
 

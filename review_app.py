@@ -1604,29 +1604,58 @@ def render_resume_keywords_panel(row, attempts):
     """
 
 
-def render_resume_attempts(attempts):
+def render_resume_attempts(attempts, job_id=None):
     if not attempts:
         if not RESUME_TAILOR_AVAILABLE:
             return "<p>Resume tailoring is not deployed in this review container yet.</p>"
         return "<p>No resume attempts yet.</p>"
     rows = []
     for attempt in attempts:
+        aid = attempt.get("id")
+        jid = job_id or attempt.get("job_id")
+        # Build artifact links for this specific attempt
+        artifact_links = []
+        if aid and jid:
+            if attempt.get("pdf_path"):
+                artifact_links.append(
+                    f'<a href="/api/attempts/{aid}/pdf" target="_blank" rel="noreferrer" class="pill" style="padding:3px 8px;font-size:0.8rem;">PDF</a>'
+                )
+            if attempt.get("tex_path"):
+                artifact_links.append(
+                    f'<a href="/api/attempts/{aid}/tex" target="_blank" rel="noreferrer" class="pill" style="padding:3px 8px;font-size:0.8rem;">TeX</a>'
+                )
+            if attempt.get("keywords_path"):
+                artifact_links.append(
+                    f'<a href="/api/attempts/{aid}/keywords" target="_blank" rel="noreferrer" class="pill" style="padding:3px 8px;font-size:0.8rem;">Keywords</a>'
+                )
+            artifact_links.append(
+                f'<a href="/api/attempts/{aid}/llm" target="_blank" rel="noreferrer" class="pill" style="padding:3px 8px;font-size:0.8rem;">LLM I/O</a>'
+            )
+        links_html = " ".join(artifact_links) if artifact_links else "—"
+
+        selected_badge = ""
+        if attempt.get("is_selected_for_c3"):
+            selected_badge = ' <span class="status done" style="font-size:0.75rem;padding:2px 6px;">selected</span>'
+        elif attempt.get("is_latest_useful"):
+            selected_badge = ' <span class="status done_verified" style="font-size:0.75rem;padding:2px 6px;">useful</span>'
+
         rows.append(
             f"""
             <tr>
-              <td>{format_text(attempt.get("id"))}</td>
+              <td>{format_text(aid)}{selected_badge}</td>
               <td>{format_text(attempt.get("status"))}</td>
               <td>{format_text(attempt.get("role_family"))}</td>
               <td>{format_text(attempt.get("job_level"))}</td>
-              <td>{format_text(attempt.get("latest_result_kind"))}</td>
+              <td>{format_text(attempt.get("base_resume_name"))}</td>
               <td>{format_text(attempt.get("created_at"))}</td>
+              <td style="white-space:nowrap;">{links_html}</td>
             </tr>
             """
         )
     return f"""
     <div class="table-wrap">
       <table>
-        <thead><tr><th>ID</th><th>Status</th><th>Family</th><th>Level</th><th>Kind</th><th>Created</th></tr></thead>
+        <thead><tr><th>ID</th><th>Status</th><th>Family</th><th>Level</th><th>Base</th><th>Created</th><th>Files</th></tr></thead>
         <tbody>{"".join(rows)}</tbody>
       </table>
     </div>
@@ -2635,6 +2664,136 @@ def api_job_resume_artifact(job_id: int, artifact_kind: str):
     return FileResponse(artifact_path, media_type=media_type)
 
 
+@app.get("/api/attempts/{attempt_id}/pdf")
+def api_attempt_pdf(attempt_id: int):
+    return _serve_attempt_artifact(attempt_id, "pdf_path", "application/pdf")
+
+
+@app.get("/api/attempts/{attempt_id}/tex")
+def api_attempt_tex(attempt_id: int):
+    return _serve_attempt_artifact(attempt_id, "tex_path", "text/plain; charset=utf-8")
+
+
+@app.get("/api/attempts/{attempt_id}/keywords")
+def api_attempt_keywords(attempt_id: int):
+    return _serve_attempt_artifact(attempt_id, "keywords_path", "application/json")
+
+
+@app.get("/api/attempts/{attempt_id}/llm", response_class=HTMLResponse)
+def api_attempt_llm(attempt_id: int):
+    """Render an HTML page showing the Ollama prompt and response for this attempt."""
+    attempt = _get_attempt_row(attempt_id)
+    if not attempt:
+        raise HTTPException(status_code=404, detail="Attempt not found.")
+
+    attempt_dir = _attempt_dir_from_row(attempt)
+    if not attempt_dir:
+        raise HTTPException(status_code=404, detail="Attempt directory not found.")
+
+    enrichment_path = attempt_dir / "llm_enrichment.json"
+    prompt_path = attempt_dir / "ollama_prompt.txt"
+    response_path = attempt_dir / "ollama_response.txt"
+
+    enrichment = {}
+    if enrichment_path.exists():
+        try:
+            enrichment = json.loads(enrichment_path.read_text(encoding="utf-8"))
+        except Exception:
+            pass
+
+    prompt_text = ""
+    if prompt_path.exists():
+        try:
+            prompt_text = prompt_path.read_text(encoding="utf-8")
+        except Exception:
+            pass
+
+    response_text = ""
+    if response_path.exists():
+        try:
+            response_text = response_path.read_text(encoding="utf-8")
+        except Exception:
+            pass
+
+    job_id = attempt.get("job_id")
+    back_link = f"/jobs/{job_id}" if job_id else "/jobs"
+
+    meta_rows = ""
+    for key in ("ollama_enriched", "error", "model", "duration_ms"):
+        val = enrichment.get(key)
+        if val is not None:
+            meta_rows += f'<div class="field"><div class="label">{html.escape(key)}</div><div class="value mono">{html.escape(str(val))}</div></div>'
+
+    prompt_block = f'<pre style="white-space:pre-wrap;word-break:break-word;max-height:600px;overflow:auto;background:#faf5ec;padding:16px;border-radius:12px;font-size:0.82rem;">{html.escape(prompt_text) if prompt_text else "<em>No prompt saved (enable HUNT_RESUME_LOG_LLM_IO=1)</em>"}</pre>'
+    response_block = f'<pre style="white-space:pre-wrap;word-break:break-word;max-height:400px;overflow:auto;background:#faf5ec;padding:16px;border-radius:12px;font-size:0.82rem;">{html.escape(response_text) if response_text else "<em>No response saved</em>"}</pre>'
+
+    body = f"""
+    <section class="hero">
+      <h1>LLM I/O — Attempt {attempt_id}</h1>
+      <p>Job {job_id} &middot; {html.escape(str(attempt.get("created_at") or ""))}</p>
+    </section>
+    <section class="stack">
+      <div class="panel">
+        <h2>Enrichment metadata</h2>
+        <div class="grid">{meta_rows if meta_rows else "<p>No enrichment metadata found.</p>"}</div>
+        <div class="actions" style="margin-top:12px;">
+          <a class="pill" href="{html.escape(back_link)}" data-app-nav="true">Back to job</a>
+        </div>
+      </div>
+      <div class="panel">
+        <h2>Prompt sent to Ollama</h2>
+        {prompt_block}
+      </div>
+      <div class="panel">
+        <h2>Raw response from Ollama</h2>
+        {response_block}
+      </div>
+    </section>
+    """
+    return HTMLResponse(render_layout(f"LLM I/O — Attempt {attempt_id}", body, current_path=""))
+
+
+def _get_attempt_row(attempt_id: int) -> dict | None:
+    if not RESUME_TAILOR_AVAILABLE:
+        return None
+    try:
+        from fletcher.db import get_connection as fletcher_get_connection  # type: ignore
+        conn = fletcher_get_connection(None)
+        try:
+            row = conn.execute(
+                "SELECT * FROM resume_attempts WHERE id = ? LIMIT 1", (attempt_id,)
+            ).fetchone()
+            return dict(row) if row else None
+        finally:
+            conn.close()
+    except Exception:
+        return None
+
+
+def _attempt_dir_from_row(attempt: dict) -> Path | None:
+    """Derive the attempt directory from stored artifact paths."""
+    for field in ("tex_path", "pdf_path", "metadata_path", "keywords_path"):
+        val = attempt.get(field)
+        if val:
+            p = Path(val)
+            if p.parent.exists():
+                return p.parent
+    return None
+
+
+def _serve_attempt_artifact(attempt_id: int, path_field: str, media_type: str):
+    attempt = _get_attempt_row(attempt_id)
+    if not attempt:
+        raise HTTPException(status_code=404, detail="Attempt not found.")
+    raw_path = attempt.get(path_field)
+    if not raw_path:
+        raise HTTPException(status_code=404, detail=f"No {path_field} for this attempt.")
+    artifact_path = Path(raw_path)
+    if not artifact_path.exists():
+        raise HTTPException(status_code=404, detail="File not found on disk.")
+    return FileResponse(artifact_path, media_type=media_type)
+
+
 @app.post("/api/jobs/{job_id}/requeue", dependencies=[Depends(review_ops_dependency)])
 def api_requeue_job(job_id: int):
     row = get_job_by_id(job_id)
@@ -2907,8 +3066,9 @@ def job_detail(request: Request, job_id: int, return_to: str = ""):
       </div>
       {render_resume_keywords_panel(row, resume_attempts)}
       <div class="panel">
-        <h2>Recent resume attempts</h2>
-        {render_resume_attempts(resume_attempts)}
+        <h2>Resume attempts (newest first)</h2>
+        <p class="muted" style="margin-top:0;">Each row is one generation run. Click PDF/TeX to view that version. LLM I/O shows the prompt sent to Ollama and the raw response.</p>
+        {render_resume_attempts(resume_attempts, job_id=job_id)}
       </div>
       <div class="panel">
         <h2>Failure artifacts</h2>
