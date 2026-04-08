@@ -133,41 +133,48 @@ def _apply_jd_keywords(
     return new_c, new_k
 
 
-def rewrite_summary(existing_summary: str, keywords: list[str]) -> dict[str, Any]:
-    """Ask Ollama to rewrite the resume summary injecting the given keywords.
+def generate_summary(
+    candidate_context: str,
+    job_title: str,
+    keywords: list[str],
+) -> dict[str, Any]:
+    """Ask Ollama to generate a professional summary paragraph for this candidate + job.
 
+    candidate_context: brief string built from experience titles/companies + top skills.
     Returns dict with keys:
-      - "summary": rewritten summary string (or original on failure)
+      - "summary": generated summary string
       - "success": bool
       - "error": str or None
       - "duration_ms": int or None
     """
-    result: dict[str, Any] = {"summary": existing_summary, "success": False, "error": None, "duration_ms": None}
+    result: dict[str, Any] = {"summary": "", "success": False, "error": None, "duration_ms": None}
     if config.DEFAULT_MODEL_BACKEND != "ollama":
         return result
-    if not existing_summary or not keywords:
+    if not candidate_context or not job_title:
         return result
 
-    kw_list = ", ".join(keywords[:5])
+    kw_list = ", ".join(keywords[:5]) if keywords else ""
+    kw_line = f"Keywords to include naturally: {kw_list}\n" if kw_list else ""
     prompt = (
-        f"Rewrite this resume summary to naturally include these keywords: {kw_list}\n"
-        f"Keep the same meaning, same length (2-3 sentences), no invented facts.\n"
-        f"Summary: {existing_summary.strip()}\n"
+        f"Job title: {job_title}\n"
+        f"{kw_line}"
+        f"Candidate background: {candidate_context}\n"
+        f"Write a 2-3 sentence professional summary for this candidate targeting this job. "
+        f"No invented facts. Use only the background provided.\n"
         f'Return only: {{"summary": "..."}}'
     )
+    start = time.perf_counter()
     try:
-        start = time.perf_counter()
         raw = _ollama_chat(prompt)
         result["duration_ms"] = int((time.perf_counter() - start) * 1000)
         parsed = _extract_json_object(raw)
-        text = parsed.get("summary", "").strip()
+        text = (parsed.get("summary") or "").strip()
         if text:
             result["summary"] = text
             result["success"] = True
     except Exception as exc:
         result["error"] = str(exc) or exc.__class__.__name__
-        if result["duration_ms"] is None:
-            result["duration_ms"] = int((time.perf_counter() - start) * 1000) if "start" in dir() else None
+        result["duration_ms"] = int((time.perf_counter() - start) * 1000)
     return result
 
 

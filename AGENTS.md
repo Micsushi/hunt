@@ -113,6 +113,14 @@ Stage 4 : current
 - add monitoring and operational hardening
 - save failure artifacts for blocked/browser-fixable rows
 
+## C2 (Fletcher) : Key Constraints Agents Must Know
+
+- **`ResumeDocument` has no `summary` field.** The model in `fletcher/models.py` is bullets-only (experience, projects, skills, header). Never attempt to read or write `.summary` on it. To generate a summary paragraph, build candidate context from `candidate_profile["experience_entries"]` and `candidate_profile["skills"]`, then call `generate_summary()` in `llm_enrich.py`.
+- **Two DB files exist on the server.** `/home/michael/hunt/hunt.db` is empty (created by default fallback). `/home/michael/data/hunt/hunt.db` is the live DB with all jobs. Always ensure `HUNT_DB_PATH=/home/michael/data/hunt/hunt.db` is set in `.env` before running any Python commands.
+- **Python must be run from the venv.** Activate with `source ~/hunt/.venv/bin/activate` before running any `python3` commands. The system Python at `/usr/bin/python3` does not have project dependencies.
+- **Ollama model on the server is `gemma4:e4b`.** Timeout is set to 300s. Backend must be enabled via `HUNT_RESUME_MODEL_BACKEND=ollama` in `.env`. Default (without that env var) is heuristic mode (no LLM calls).
+- **`candidate_profile` parsed structure** (from `source_loader.py`): keys are `experience_entries`, `project_entries`, `skills` (with `languages`, `frameworks`, `developer_tools`). No top-level `summary`, `targeting_notes`, or `name` fields — those are not parsed.
+
 ## What To Take Note Of
 
 - LinkedIn is the most important source for this project right now

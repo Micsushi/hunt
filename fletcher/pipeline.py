@@ -26,8 +26,8 @@ from .generator import generate_tailored_resume
 from .llm_enrich import (
     distribute_keywords,
     enrich_with_ollama_if_enabled,
+    generate_summary,
     rewrite_bullets,
-    rewrite_summary,
 )
 from .keyword_extractor import extract_keywords
 from .parser import parse_resume_file
@@ -232,15 +232,32 @@ def _run_pipeline(
         all_selected_bullets,
     )
 
+    # Build candidate context from profile for summary generation.
+    exp_lines = [
+        f"{e.get('title', '')} at {e.get('company', '')}"
+        for e in (candidate_profile.get("experience_entries") or [])[:3]
+        if e.get("title") and e.get("company")
+    ]
+    skill_names = [
+        s.get("name", "")
+        for bucket in ("languages", "frameworks", "developer_tools")
+        for s in (candidate_profile.get("skills", {}).get(bucket) or [])
+        if s.get("name")
+    ][:8]
+    candidate_context = ""
+    if exp_lines:
+        candidate_context += "Experience: " + "; ".join(exp_lines) + ". "
+    if skill_names:
+        candidate_context += "Skills: " + ", ".join(skill_names) + "."
+
     summary_rewrite_meta: dict = {}
-    if tailored_doc.summary:
-        summary_result = rewrite_summary(
-            tailored_doc.summary,
+    if candidate_context:
+        summary_result = generate_summary(
+            candidate_context,
+            title,
             kw_distribution["summary_keywords"],
         )
         summary_rewrite_meta = summary_result
-        if summary_result["success"]:
-            tailored_doc.summary = summary_result["summary"]
 
     bullet_rewrite_meta: dict = {}
     if all_selected_bullets and kw_distribution["bullet_keywords"]:
@@ -283,7 +300,7 @@ def _run_pipeline(
             )
     if summary_rewrite_meta:
         write_json(attempt_dir / "summary_rewrite.json", {
-            "summary": tailored_doc.summary or "",
+            "summary": summary_rewrite_meta.get("summary", ""),
             "success": summary_rewrite_meta.get("success", False),
             "duration_ms": summary_rewrite_meta.get("duration_ms"),
             "error": summary_rewrite_meta.get("error"),
