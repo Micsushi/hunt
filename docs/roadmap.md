@@ -88,12 +88,11 @@ Current status:
   - review-surface artifact visibility
 - production layout and Ansible pointers for `server2` live in **`docs/C1_OPERATOR_WORKFLOW.md`** (section **Production host (server2)**) and in **`ansible_homelab/docs/2.01-job-agent-plan.md`**
 - C1 (Hunter) deploys separately from later C2 (Fletcher) and C3 (Executioner) work
-- remaining sign-off work for C1 (Hunter) is operational:
-  - keep discovery quality tight, especially for Indeed
-  - finish backlog drain
+- remaining sign-off work for C1 (Hunter) is **operational on `server2`** (sole-user v0.1 until you tag v1.0):
+  - finish backlog drain and watch LinkedIn rate limits
   - observe one real artifact-producing failure end to end
   - confirm Stage 6 deploys cleanly without manual review-container repair
-  - tune steady-state timer/backfill defaults on `server2`
+  - tune steady-state timer and env defaults on `server2` (CLI backfill/drain default batch is **25**; discovery lane title filter lives in `hunter/search_lanes.py`; run `clean-lane-mismatch` or legacy `clean-indeed` to purge mismatched titles)
 
 Doc:
 - `docs/components/component1/README.md`

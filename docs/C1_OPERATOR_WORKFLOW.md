@@ -24,7 +24,7 @@ Older subcommand names still work: **`hunter timer-start`**, **`hunter auto-on`*
 ## Discovery
 
 - Uses the **JobSpy** library to pull recent postings from **LinkedIn** and **Indeed** for your configured search terms and locations (`hunter/config.py`).
-- **Indeed** matching is broad by design (category/title filters trim obvious junk before rows enter the queue).
+- Board results are often broad : a **discovery lane title filter** (`hunter/search_lanes.py`) trims rows whose title does not match the **engineering / product / data** lane of the query that fetched them (all sources).
 - Listing data from discovery is often thin : **LinkedIn listing payloads rarely carry a full description**; that is why enrichment opens each job in a browser when needed.
 - New/updated rows for supported boards are written to **SQLite** with **`enrichment_status = 'pending'`** (and related apply fields) so they join the enrichment queue.
 
@@ -54,8 +54,34 @@ Typical production facts (adjust user/host if your deploy differs):
 - Install Playwright browsers on the host (**`python -m playwright install chromium`**) : the Python package alone is not enough
 - Headful / UI-verify fallback on a headless box: virtual display (e.g. **Xvfb** on **`:98`**) and **`DISPLAY=:98`** on enrichment commands; **`hunter restart`** reloads timer + Xvfb where deployed
 - Review app: separate service from the scraper timer; deploy flags and ingress live in **`ansible_homelab`**
+- **`REVIEW_APP_PUBLIC_URL`** should match the public review hostname (Ansible sets this on **`hunt-scraper.service`** so Discord and deep links use the right base URL).
 
 After you deploy **LinkedIn or Indeed enrichment fixes**, consider requeuing older **`failed`** rows whose errors may have been false negatives (for example `external_description_not_usable`, `external_description_not_found`, or some `unexpected_error` cases) so the backlog is not stuck on stale classifications.
+
+## Deploy (Ansible, server2)
+
+When the Hunt changes you care about are **merged to `main`** on the remote the playbook clones (default **`https://github.com/Micsushi/hunt`**):
+
+1. From your Ansible control machine, run the job-agent playbook for **`server2`** (inventory must list the **`job_agent`** host). Typical full refresh:
+   - `ansible-playbook -i inventory.local playbooks/job_agent/main.yml`
+2. To limit churn, you can tag stages (run **stage6** after a Hunt code change; re-run **stage3** if Prometheus config changed in Ansible):
+   - `ansible-playbook -i inventory.local playbooks/job_agent/main.yml --tags stage6`
+3. After Stage 6, reload systemd if units changed, then restart the timer:
+   - `sudo systemctl daemon-reload && sudo systemctl restart hunt-scraper.timer hunt-xvfb.service`
+
+**You can deploy** once the playbook completes without task failures and Hunt **`main`** contains your commits.
+
+## Smoke test after deploy
+
+On **`server2`** as the deploy user (paths match **`group_vars/job_agent/vars.yml`**):
+
+1. **Units** : `systemctl is-active hunt-xvfb hunt-scraper.timer` (both should be **active**).
+2. **Scraper env** : `systemctl cat hunt-scraper.service | grep -E 'HUNT_|REVIEW_APP_PUBLIC'` (DB, artifacts dir, and public review URL present).
+3. **One-shot scrape** (optional) : `sudo systemctl start hunt-scraper.service` then `journalctl -u hunt-scraper.service -n 80 --no-pager`.
+4. **Review app** : open **`https://<hunt_review_hostname>`** (e.g. **`https://agent-hunt-review.mshi.ca`**) : queue loads, **`/health`** returns OK.
+5. **Metrics** : `curl -sS http://127.0.0.1:8000/metrics` from the host fails if the app is only in Docker : use `docker exec hunt_review curl -sS http://127.0.0.1:8000/metrics | head` (container name from Ansible).
+6. **Queue JSON** : from the Hunt repo root with runtime env exported (or **`./hunter.sh`** when it targets **`~/data/hunt`**): `python scripts/queue_health.py --json | head -c 2000`.
+7. **Prometheus** (if monitoring is enabled) : in Grafana or Prometheus UI, confirm target **`hunt_review`** is **UP** after the review container exists.
 
 ---
 
@@ -72,7 +98,7 @@ Use this as a checklist for notes you keep outside the repo (on-call, server-spe
 | **Requeue** failed rows by error code | `scripts/hunterctl.py`, `scripts/requeue_enrichment_rows.py` |
 | **Queue health** / ops helpers | `scripts/queue_health.py`, `./hunter.sh queue` |
 | **Start / stop / restart** scheduled C1 on the server | `./hunter.sh start` / `stop` / `restart` (see table above); production layout: **Production host (server2)** above |
-| **Indeed** title/category cleanup | launcher `clean-indeed` / `cleanup-indeed` |
+| Title vs discovery **lane** cleanup (all boards) | launcher `clean-lane-mismatch` (aliases: `clean-indeed`, `cleanup-indeed`) |
 | Adding a **new job board** later | `db.ENRICHMENT_SOURCE_PRIORITY` + `hunter/enrichment_dispatch.py` |
 | Tests, Ruff, noisy unittest output | `docs/LOCAL_TESTING.md` §8 |
 | Systemd unit names still say **`hunt-scraper`** while running C1 | `docs/NAMING.md`, Ansible `scraper.yml` |

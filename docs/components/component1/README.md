@@ -213,7 +213,7 @@ Implemented behavior:
   - stores `apply_url`, `apply_host`, `ats_type`, `apply_type`, and `enrichment_status`
 - add a shared browser runtime so supported sources can reuse one UI/browser fallback layer instead of duplicating Playwright setup
 - allow Indeed to use a visible browser rerun for browser-fixable failures while still preferring the cheaper non-UI path first
-- apply an Indeed-only category-aware title gate during discovery so broad Indeed matches like retail/cashier/store-associate rows are dropped before they enter the queue
+- apply a **discovery lane title filter** during fetch for every board (`title_matches_search_lane` in `hunter/search_lanes.py`) : broad job-board results are trimmed so each row still matches the **same lane** as the query that produced it (**`engineering`** / **`product`** / **`data`**) using keyword sets aligned with **`hunter/config.py` `SEARCH_TERMS`**. **`scripts/cleanup_lane_mismatch_rows.py`** drops stored rows whose title does not match their stored `category` lane (all sources; optional `--source`).
 - expand the review app with source-aware views:
   - source counts
   - source filters
@@ -275,31 +275,32 @@ Common examples:
 - list Indeed rows only:
   `.\hunter.ps1 jobs --source indeed --status all --limit 10`
   `./hunter.sh jobs --source indeed --status all --limit 10`
-- preview currently stored irrelevant Indeed rows using the current title filter:
-  `./hunter.sh clean-indeed`
-  `./hunter.sh cleanup-indeed`
-- delete currently stored irrelevant Indeed rows:
-  `./hunter.sh clean-indeed --apply`
-  `./hunter.sh cleanup-indeed --apply`
+- preview stored rows whose title **does not match the row's category lane** (LinkedIn, Indeed, …):
+  `./hunter.sh clean-lane-mismatch`
+  `./hunter.sh cleanup-lane-mismatch`
+  (legacy aliases: `clean-indeed`, `cleanup-indeed`)
+- delete those rows:
+  `./hunter.sh clean-lane-mismatch --apply`
+  `./hunter.sh cleanup-lane-mismatch --apply`
 - inspect one job:
   `.\hunter.ps1 job 13179`
   `./hunter.sh job 13179`
 - run local review app:
   `.\hunter.ps1 review`
   `./hunter.sh review`
-- run a controlled backfill in 100-row chunks with a checkpoint after each batch:
+- run a controlled backfill in **25-row** chunks by default (checkpoint after each batch); pass a larger N for bigger chunks:
   `.\hunter.ps1 backfill --ui-verify-blocked`
   `./hunter.sh backfill --ui-verify-blocked`
-- run a controlled backfill for Indeed only in 100-row chunks:
+- run a controlled backfill for Indeed only (same default batch size):
   `.\hunter.ps1 backfill --source indeed --ui-verify-blocked`
   `./hunter.sh backfill --source indeed --ui-verify-blocked`
-- run a controlled backfill for all supported sources in 100-row chunks:
+- run a controlled backfill for all supported sources (same default batch size):
   `.\hunter.ps1 backfill --source all --ui-verify-blocked`
   `./hunter.sh backfill --source all --ui-verify-blocked`
 - requeue the common retryable enrichment rows across all sources:
   `./hunter.sh retry`
   `./hunter.sh requeue-enrich --source all`
-- backfill all sources in 100-row batches with blocked-row UI verification and automatic continue:
+- backfill all sources with blocked-row UI verification and automatic continue (**default 25 rows** per batch; omit N or pass e.g. `100`):
   `DISPLAY=:98 ./hunter.sh backfill-all`
   `DISPLAY=:98 ./hunter.sh drain`
   `DISPLAY=:98 ./hunter.sh backfill 100 --source all --ui-verify-blocked --yes`
