@@ -52,6 +52,74 @@ def cmd_fletcher(args):
     _run(argv)
 
 
+def _run_fletcher_cli(argv_tail: list[str]):
+    _run([PYTHON, "-m", "fletcher.cli"] + argv_tail)
+
+
+def cmd_init_db(args):
+    argv = ["init-db"]
+    if args.db:
+        argv += ["--db", args.db]
+    _run_fletcher_cli(argv)
+
+
+def cmd_generate_job(args):
+    argv = ["generate-job", str(args.job_id)]
+    if args.db:
+        argv += ["--db", args.db]
+    if args.resume:
+        argv += ["--resume", args.resume]
+    _run_fletcher_cli(argv)
+
+
+def cmd_generate_ready(args):
+    argv = ["generate-ready", "--limit", str(args.limit)]
+    if args.only_missing:
+        argv.append("--only-missing")
+    if args.db:
+        argv += ["--db", args.db]
+    if args.resume:
+        argv += ["--resume", args.resume]
+    _run_fletcher_cli(argv)
+
+
+def cmd_generate_ad_hoc(args):
+    argv = [
+        "generate-ad-hoc",
+        "--title",
+        args.title,
+        "--company",
+        args.company or "",
+        "--description",
+        args.description or "",
+    ]
+    if args.jd_file:
+        argv += ["--jd-file", args.jd_file]
+    if args.label:
+        argv += ["--label", args.label]
+    if args.resume:
+        argv += ["--resume", args.resume]
+    _run_fletcher_cli(argv)
+
+
+def cmd_apply_context(args):
+    argv = ["apply-context", str(args.job_id)]
+    if args.db:
+        argv += ["--db", args.db]
+    _run_fletcher_cli(argv)
+
+
+def cmd_parse_resume(args):
+    argv = ["parse-resume"]
+    if args.resume:
+        argv += ["--resume", args.resume]
+    if args.output_json:
+        argv += ["--output-json", args.output_json]
+    if args.roundtrip_tex:
+        argv += ["--roundtrip-tex", args.roundtrip_tex]
+    _run_fletcher_cli(argv)
+
+
 def cmd_tests(_args):
     patterns = [
         "test_component2_stage1.py",
@@ -72,6 +140,43 @@ def build_parser() -> argparse.ArgumentParser:
 
     tests = sub.add_parser("tests", help="Run C2 unit tests.")
     tests.set_defaults(func=cmd_tests)
+
+    init_db = sub.add_parser("init-db", help="Initialize C2 tables/columns in a Hunt SQLite DB.")
+    init_db.add_argument("--db", default=None)
+    init_db.set_defaults(func=cmd_init_db)
+
+    job = sub.add_parser("job", help="Generate a resume for one Hunt job id.")
+    job.add_argument("job_id", type=int)
+    job.add_argument("--db", default=None)
+    job.add_argument("--resume", default=None)
+    job.set_defaults(func=cmd_generate_job)
+
+    ready = sub.add_parser("ready", help="Batch-generate resumes for done/done_verified jobs.")
+    ready.add_argument("--limit", type=int, default=25)
+    ready.add_argument("--only-missing", action="store_true")
+    ready.add_argument("--db", default=None)
+    ready.add_argument("--resume", default=None)
+    ready.set_defaults(func=cmd_generate_ready)
+
+    ad_hoc = sub.add_parser("ad-hoc", help="Generate from a pasted JD (no DB job).")
+    ad_hoc.add_argument("--title", required=True)
+    ad_hoc.add_argument("--company", default="")
+    ad_hoc.add_argument("--description", default="")
+    ad_hoc.add_argument("--jd-file", default=None, dest="jd_file")
+    ad_hoc.add_argument("--label", default=None)
+    ad_hoc.add_argument("--resume", default=None)
+    ad_hoc.set_defaults(func=cmd_generate_ad_hoc)
+
+    ctx = sub.add_parser("context", help="Print C2 apply context for one job.")
+    ctx.add_argument("job_id", type=int)
+    ctx.add_argument("--db", default=None)
+    ctx.set_defaults(func=cmd_apply_context)
+
+    parse = sub.add_parser("parse", help="Parse main.tex (or --resume) to JSON / round-trip TeX.")
+    parse.add_argument("--resume", default=None)
+    parse.add_argument("--output-json", default=None, dest="output_json")
+    parse.add_argument("--roundtrip-tex", default=None, dest="roundtrip_tex")
+    parse.set_defaults(func=cmd_parse_resume)
 
     fx = sub.add_parser(
         "run",

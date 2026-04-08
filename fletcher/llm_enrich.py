@@ -194,12 +194,14 @@ def enrich_with_ollama_if_enabled(
         return classification, keywords, meta
     try:
         prompt = _build_user_prompt(title, description, classification, keywords)
+        if config.LOG_LLM_IO:
+            limit = max(1, int(config.LOG_LLM_MAX_CHARS))
+            meta["prompt_text"] = prompt[:limit]
         start = time.perf_counter()
         content = _ollama_chat(prompt)
         meta["duration_ms"] = int((time.perf_counter() - start) * 1000)
         if config.LOG_LLM_IO:
             limit = max(1, int(config.LOG_LLM_MAX_CHARS))
-            meta["prompt_text"] = prompt[:limit]
             meta["response_text"] = (content or "")[:limit]
         parsed = _extract_json_object(content)
         cls_raw = parsed.get("classification")
@@ -211,8 +213,13 @@ def enrich_with_ollama_if_enabled(
         meta["ollama_enriched"] = True
         return new_c, new_k, meta
     except (urllib.error.URLError, urllib.error.HTTPError, TimeoutError) as exc:
-        meta["error"] = str(exc)
+        # Capture duration even on failures when possible.
+        if meta.get("duration_ms") is None:
+            meta["duration_ms"] = int((time.perf_counter() - start) * 1000) if "start" in locals() else None
+        meta["error"] = str(exc) or exc.__class__.__name__
         return classification, keywords, meta
     except (json.JSONDecodeError, ValueError, TypeError, KeyError) as exc:
-        meta["error"] = str(exc)
+        if meta.get("duration_ms") is None:
+            meta["duration_ms"] = int((time.perf_counter() - start) * 1000) if "start" in locals() else None
+        meta["error"] = str(exc) or exc.__class__.__name__
         return classification, keywords, meta

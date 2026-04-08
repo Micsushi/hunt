@@ -224,10 +224,12 @@ def _run_pipeline(
             job_id=job_id, role_family=classification["role_family"], ad_hoc_label=ad_hoc_label
         )
     )
-    if llm_meta.get("prompt_text") or llm_meta.get("response_text"):
-        if llm_meta.get("prompt_text"):
+    # Always persist LLM I/O + timing when available (prompt may exist even on timeouts).
+    if llm_meta:
+        write_json(attempt_dir / "llm_enrichment.json", llm_meta)
+        if llm_meta.get("prompt_text") is not None:
             write_text(attempt_dir / "ollama_prompt.txt", str(llm_meta.get("prompt_text") or ""))
-        if llm_meta.get("response_text"):
+        if llm_meta.get("response_text") is not None:
             write_text(
                 attempt_dir / "ollama_response.txt", str(llm_meta.get("response_text") or "")
             )
