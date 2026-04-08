@@ -1,5 +1,7 @@
 # Hunt
 
+Putting in the Work so it is less Work for you to apply for Work
+
 Automated Hunt runtime. Today it primarily covers **C1 (Hunter)** discovery and enrichment, with **C2 (Fletcher)**, **C3 (Executioner)**, and **C4 (Coordinator)** planned on top of the same system.
 
 **Names and folders:** see **`docs/NAMING.md`** (C1 code is the **`hunter`** package; **`hunter/scraper.py`** is the discovery script name only).
