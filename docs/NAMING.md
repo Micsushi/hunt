@@ -1,13 +1,13 @@
 # Hunt: component IDs, code names, and code layout
 
-This file is the **single place** to resolve naming: **C1–C4**, **Hunter / Trapper / Executioner / Coordinator**, and **where code lives in this repo**.
+This file is the **single place** to resolve naming: **C1–C4**, **Hunter / Fletcher / Executioner / Coordinator**, and **where code lives in this repo**.
 
 ## Four components (same system, stable labels)
 
 | ID | Code name | Role | Primary code in this repo |
 |----|-----------|------|---------------------------|
 | **C1** | **Hunter** | Job discovery and multi-source enrichment (SQLite, review app, C1 logging) | Python package **`hunter/`** (see below) |
-| **C2** | **Trapper** | Resume tailoring (LaTeX pipeline, PDF, DB attempts) | **`trapper/`** |
+| **C2** | **Fletcher** | Resume tailoring (LaTeX pipeline, PDF, DB attempts) | **`fletcher/`** |
 | **C3** | **Executioner** | Browser autofill and apply assistance (extension) | **`executioner/`** (Chrome extension sources) |
 | **C4** | **Coordinator** | Orchestration, readiness, apply-prep, submit control | **`coordinator/`** |
 
@@ -23,14 +23,14 @@ This file is the **single place** to resolve naming: **C1–C4**, **Hunter / Tra
 ## Quick map for operators
 
 - Install C1 deps: `pip install -r hunter/requirements.txt`
-- One-shot discovery (typical): `python hunter/scraper.py` (or **`./hunt.sh scrape`** from repo root)
-- C1 apply/readiness helpers used by C4: `coordinator/` + `scripts/huntctl.py`
+- One-shot discovery (typical): `python hunter/scraper.py` (or **`./hunter.sh scrape`** from repo root)
+- C1 apply/readiness helpers used by C4: `coordinator/` + `scripts/hunterctl.py` (legacy: `scripts/huntctl.py`)
 - **CLI conventions** ( **`hunt` / `hunter`**, adding future C2–C4 subcommands): **`docs/CLI_CONVENTIONS.md`**
 
 ## Docs convention
 
 - Prefer **“C1 (Hunter)”** on first mention in a doc, then **C1** or **Hunter** where clear.
-- Same for **C2 (Trapper)**, **C3 (Executioner)**, **C4 (Coordinator)**.
+- Same for **C2 (Fletcher)**, **C3 (Executioner)**, **C4 (Coordinator)**.
 - Avoid saying “the scraper package” for C1; say **`hunter` package** or **C1 (Hunter)**.
 - Older prose used **“Component N”**; repo docs and user-facing strings now use **“CN (code name)”** consistently (folder names like `docs/components/component1/` stay as stable paths).
 
@@ -40,4 +40,4 @@ This file is the **single place** to resolve naming: **C1–C4**, **Hunter / Tra
 - **Runtime filesystem root** for C4 artifacts: set **`HUNT_COORDINATOR_ROOT`** (preferred). **`HUNT_ORCHESTRATION_ROOT`** is accepted as a backward-compatible alias (same resolution order in code).
 - SQLite tables are still named **`orchestration_runs`**, **`orchestration_events`**, etc. Renaming those would require a DB migration; they keep the historical **orchestration** prefix.
 
-See also: `docs/VERSIONS.md`, `README.md`, and per-component folders under `docs/components/`.
+See also: `docs/roadmap.md` (includes version snapshot and future milestones), `docs/GLOSSARY.md`, `README.md`, and per-component folders under `docs/components/`.

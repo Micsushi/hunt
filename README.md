@@ -1,6 +1,6 @@
 # Hunt
 
-Automated Hunt runtime. Today it primarily covers **C1 (Hunter)** discovery and enrichment, with **C2 (Trapper)**, **C3 (Executioner)**, and **C4 (Coordinator)** planned on top of the same system.
+Automated Hunt runtime. Today it primarily covers **C1 (Hunter)** discovery and enrichment, with **C2 (Fletcher)**, **C3 (Executioner)**, and **C4 (Coordinator)** planned on top of the same system.
 
 **Names and folders:** see **`docs/NAMING.md`** (C1 code is the **`hunter`** package; **`hunter/scraper.py`** is the discovery script name only).
 
@@ -17,16 +17,7 @@ Current focus:
 - **Enrichment** : **Playwright** (and related workers) process the queue **by `source`** (**LinkedIn first**, then **Indeed**), **in batches** per run, usually **headless**. **LinkedIn** needs **auth** (saved session and/or env credentials). **Easy Apply** is **detected and labeled** so later automation ignores it as an external apply target. Optional **headful** rerun for blocked rows when **`ENRICHMENT_UI_VERIFY_BLOCKED`** is enabled (often on **Xvfb** on servers).
 - **Review** : **`review_app.py`** : filter, sort, search jobs, errors, and artifacts over the same DB.
 
-## Component Versions
-
-This repo is organized around four long-term components.
-
-| Component | Name | Version | Status |
-|---|---|---:|---|
-| C1 (Hunter) | discovery + enrichment (`hunter/` package) | 0.1 | functional, polishing Stage 4 ops |
-| C2 (Trapper) | resume tailoring (`trapper/`) | 0.0 | planned / local-only checkpoint |
-| C3 (Executioner) | browser extension: autofill + apply assist | 0.0 | planned / local-only checkpoint |
-| C4 (Coordinator) | orchestration + submit control (`coordinator/`) | 0.0 | planned / partial local checkpoint |
+**Component versions and future milestones:** **`docs/roadmap.md`** (snapshot table + draft v0.2+ ideas).
 
 ## Setup (Ubuntu)
 
@@ -70,28 +61,28 @@ See `agents/system_prompt.md` for the full agent contract (DB schema, status lif
 
 ## Planning Docs
 
-- **Component IDs and code names:** `docs/NAMING.md` (C1 Hunter, C2 Trapper, C3 Executioner, C4 Coordinator)
+- **Component IDs and code names:** `docs/NAMING.md` (C1 Hunter, C2 Fletcher, C3 Executioner, C4 Coordinator)
 - Repo-local instructions: `AGENTS.md`
-- System roadmap: `docs/roadmap.md`
-- Version roadmap (draft): `docs/VERSIONS.md`
+- System roadmap (includes version snapshot and draft milestones): `docs/roadmap.md`
 - C1 operator workflow (discovery / enrichment / review): `docs/C1_OPERATOR_WORKFLOW.md`
 - CLI conventions (`hunt` / `hunter`, adding C2–C4 commands): `docs/CLI_CONVENTIONS.md`
 - Local testing guide: `docs/LOCAL_TESTING.md`
-- Live fix tracker: `todo.md`
+- Shared glossary (terms for C1–C4): `docs/GLOSSARY.md`
+- Live fix tracker: `docs/TODO.md`
 - Component docs index: `docs/components/README.md`
 - **C1 (Hunter)** plan: `docs/components/component1/README.md`
-- **C2 (Trapper)** plan: `docs/components/component2/README.md`
+- **C2 (Fletcher)** plan: `docs/components/component2/README.md`
 - **C3 (Executioner)** plan: `docs/components/component3/README.md`
 - **C4 (Coordinator)** plan: `docs/components/component4/README.md`
 
 Repo homes by component:
 - `hunter/` : **C1 (Hunter)** runtime package (discovery script: `hunter/scraper.py`)
-- `trapper/` : **C2 (Trapper)** source and contracts
+- `fletcher/` : **C2 (Fletcher)** source and contracts
 - `executioner/` : **C3 (Executioner)** source and fixtures
 - `coordinator/` : **C4 (Coordinator)** source and contracts
 
 Current local checkpoint for later components:
-- `trapper/` now contains an initial local **C2 (Trapper)** pipeline and DB wiring
+- `fletcher/` now contains an initial local **C2 (Fletcher)** pipeline and DB wiring
 - `executioner/` now contains an initial local **C3 (Executioner)** Workday extension implementation
 - `coordinator/` now contains an initial local **C4 (Coordinator)** readiness/apply-prep/runtime skeleton
 
@@ -104,9 +95,11 @@ Older one-off setup and run helpers now live under:
 - `tools/legacy/setup.bat`
 - `tools/legacy/hunt.service`
 
-The preferred modern entrypoints are:
-- `.\hunt.ps1` or `.\hunter.ps1` (same CLI)
-- `hunt.cmd` or `hunter.cmd`
-- `./hunt.sh` or `./hunter.sh`
+The preferred modern entrypoints are **C1 (Hunter)** scoped (not the whole Hunt product name):
+- `.\hunter.ps1` (Windows PowerShell)
+- `hunter.cmd` (Windows cmd)
+- `./hunter.sh` (POSIX)
 
-**C1 shortcuts** (see **`docs/C1_OPERATOR_WORKFLOW.md`**): on the server, `./hunt.sh start` / `stop` / `restart` for the systemd timer; `./hunt.sh enrich 50 --source all` for a 50-job enrichment batch.
+**Legacy aliases:** `hunt.ps1`, `hunt.cmd`, `./hunt.sh`, and `python scripts/huntctl.py` forward to the same CLI.
+
+**C1 shortcuts** (see **`docs/C1_OPERATOR_WORKFLOW.md`**): on the server, `./hunter.sh start` / `stop` / `restart` for the systemd timer; `./hunter.sh enrich 50 --source all` for a 50-job enrichment batch.

@@ -73,7 +73,7 @@ def cmd_apply_context(args: argparse.Namespace) -> int:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="C2 (Trapper) Stage 0/1 resume tools.")
+    parser = argparse.ArgumentParser(description="C2 (Fletcher) Stage 0/1 resume tools.")
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     parse_cmd = subparsers.add_parser(
@@ -85,7 +85,7 @@ def build_parser() -> argparse.ArgumentParser:
     parse_cmd.set_defaults(func=cmd_parse)
 
     init_cmd = subparsers.add_parser(
-        "init-db", help="Add C2 (Trapper) tables/columns to the Hunt DB."
+        "init-db", help="Add C2 (Fletcher) tables/columns to the Hunt DB."
     )
     init_cmd.add_argument("--db", default=str(get_db_path()))
     init_cmd.set_defaults(func=cmd_init_db)

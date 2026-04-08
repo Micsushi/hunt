@@ -1,6 +1,6 @@
 # Base Resumes
 
-This folder is reserved for curated role-family base resumes used by C2 (Trapper).
+This folder is reserved for curated role-family base resumes used by C2 (Fletcher).
 
 The source of truth remains:
 - `main.tex`

@@ -6,7 +6,7 @@ Build a fully automated job application system that runs continuously on a Linux
 
 The long-term flow is:
 - **C1 (Hunter)** : discover and enrich job postings (`hunter/` package)
-- **C2 (Trapper)** : tailor a LaTeX resume to each posting (`trapper/`)
+- **C2 (Fletcher)** : tailor a LaTeX resume to each posting (`fletcher/`)
 - **C3 (Executioner)** : browser autofill and apply assistance (extension)
 - **C4 (Coordinator)** : orchestration and submit control (`coordinator/`)
 
@@ -16,7 +16,7 @@ Current focus:
 - C1 (Hunter) Stage 4 hardening, backlog drain, and deployment polish
 - prioritize LinkedIn over every other source in enrichment dispatch
 - classify LinkedIn Easy Apply during enrichment (`easy_apply`, `auto_apply_eligible = 0`) so later automation does not treat them as external-apply targets
-- keep **C1 (Hunter)** deployment separate from later **C2 (Trapper)** and **C3 (Executioner)** deployment steps in Ansible
+- keep **C1 (Hunter)** deployment separate from later **C2 (Fletcher)** and **C3 (Executioner)** deployment steps in Ansible
 
 ## Repo Overview
 
@@ -36,7 +36,7 @@ Main files:
 - `hunter/linkedin_session.py` : LinkedIn Playwright auth-state management
 - `hunter/url_utils.py` : URL normalization and ATS detection helpers
 - `review_app.py` : browser-facing review/control-plane app for the live queue
-- `hunt` / `hunter` repo-root launchers : thin shims to `scripts/huntctl.py` (`start` / `stop` / `restart` on Linux systemd, `enrich N` batch shorthand)
+- `hunter` repo-root launchers (canonical) : thin shims to `scripts/hunterctl.py` (`start` / `stop` / `restart` on Linux systemd, `enrich N` batch shorthand); `hunt` / `huntctl.py` remain legacy aliases
 - `agents/system_prompt.md` : agent contract for downstream apply/orchestration work
 
 ## Current Data Model Rules
@@ -87,7 +87,7 @@ Stage 3 : completed
 - finalized retry/backoff and terminal-state policy
 - documented and supported the `server2` deployment/runtime model
 - added a browser-facing review/control-plane service for manual review
-- kept the flow ready for later C2 (Trapper)/C3 (Executioner) agents
+- kept the flow ready for later C2 (Fletcher)/C3 (Executioner) agents
 
 Stage 3.2 : completed
 - generalized the enrichment queue/runtime to support LinkedIn and Indeed
@@ -104,7 +104,7 @@ Current repo-side runtime notes:
 - for `server2`, blocked-row UI fallback is intended to run on a separate virtual display such as `Xvfb :98`, not the main desktop foreground
 - the current Ansible deployment split is:
   - C1 (Hunter) on `job_agent` Stage 6
-  - later C2 (Trapper) in its own separate step/stage
+  - later C2 (Fletcher) in its own separate step/stage
   - later C3 (Executioner) in its own separate step/stage
   - later C4 (Coordinator) / OpenClaw integration in its own separate step/stage
 
@@ -123,16 +123,16 @@ Stage 4 : current
 - downstream resume generation should use enriched descriptions, not shallow board metadata
 - deployment/runtime context for `server2` lives in a separate repo:
   `C:\Users\sushi\Documents\Github\ansible_homelab`
-- if the task involves service deployment, Cloudflare ingress, timers, or operator UI hosting on `server2`, read:
-  `docs/components/component1/stage3_server2_plan.md`
+- Hunt-side production pointers (paths, systemd, Playwright, review app) : **`docs/C1_OPERATOR_WORKFLOW.md`** section **Production host (server2)** ; full Ansible plan : **`ansible_homelab/docs/2.01-job-agent-plan.md`**
 
 ## Docs
 
-- System roadmap : `docs/roadmap.md`
+- System roadmap (includes version snapshot and draft milestones) : `docs/roadmap.md`
+- Live fix tracker : `docs/TODO.md`
+- Shared glossary : `docs/GLOSSARY.md`
 - Component docs index : `docs/components/README.md`
 - C1 (Hunter) plan : `docs/components/component1/README.md`
-- C1 (Hunter) Stage 3 + server2 deployment plan : `docs/components/component1/stage3_server2_plan.md`
-- C2 (Trapper) plan : `docs/components/component2/README.md`
+- C2 (Fletcher) plan : `docs/components/component2/README.md`
 - C3 (Executioner) plan : `docs/components/component3/README.md`
 - C4 (Coordinator) plan : `docs/components/component4/README.md`
-- Existing repo notes for other tools : `CLAUDE.md`
+- Short pointer for other AI tools : `CLAUDE.md`

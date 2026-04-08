@@ -2,7 +2,7 @@
 
 ## Goal
 
-Build C4 (Coordinator) as the orchestration layer that coordinates C1 (Hunter), C2 (Trapper), and C3 (Executioner).
+Build C4 (Coordinator) as the orchestration layer that coordinates C1 (Hunter), C2 (Fletcher), and C3 (Executioner).
 
 C4 (Coordinator) should decide:
 - which jobs should proceed
@@ -14,9 +14,8 @@ C4 (Coordinator) should decide:
 OpenClaw is the current most likely first implementation of C4 (Coordinator).
 
 This document is the stage plan.
-Implementation-oriented design notes and research-backed recommendations live in:
+Implementation-oriented design notes, research-backed recommendations, and the **living implementation checkpoint** live in:
 - `docs/components/component4/design.md`
-- `docs/components/component4/implementation_checkpoint.md`
 
 ## Current Status
 
@@ -38,7 +37,7 @@ Still later:
 
 ## Operator CLI (convention)
 
-C4 already surfaces **`hunt apply-prep <job_id>`** via **`huntctl`**. Additional coordinator commands (submit-gate, run status, drain orchestration queue) should follow the same pattern : new **`huntctl`** subparsers, documented here and in **`docs/CLI_CONVENTIONS.md`**. Prefer **`python -m coordinator.cli`** (or shared service modules) as the implementation target that **`huntctl`** invokes.
+C4 already surfaces **`hunter apply-prep <job_id>`** via **`hunterctl`**. Additional coordinator commands (submit-gate, run status, drain orchestration queue) should follow the same pattern : new **`hunterctl`** subparsers, documented here and in **`docs/CLI_CONVENTIONS.md`**. Prefer **`python -m coordinator.cli`** (or shared service modules) as the implementation target that **`hunterctl`** invokes.
 
 ## Why C4 (Coordinator) Should Be Separate
 
@@ -94,7 +93,7 @@ From C1 (Hunter):
 - enriched description
 - priority/manual-only signals
 
-From C2 (Trapper):
+From C2 (Fletcher):
 - selected resume version
 - selected resume PDF path
 - resume concern flags
@@ -150,7 +149,7 @@ Current shared command shape:
 
 ```text
 python -m coordinator.cli apply-prep --job-id <ID>
-./hunt.sh apply-prep <ID>
+./hunter.sh apply-prep <ID>
 ```
 
 Minimum resolved output:
@@ -181,7 +180,7 @@ C4 (Coordinator) should not own:
 - ATS DOM selector logic
 - low-level browser extension field mapping
 
-Those responsibilities belong to C1 (Hunter), C2 (Trapper), and C3 (Executioner) respectively.
+Those responsibilities belong to C1 (Hunter), C2 (Fletcher), and C3 (Executioner) respectively.
 
 ## Proposed Stages
 
@@ -346,7 +345,7 @@ Exit criteria:
 
 ## Deployment Direction
 
-C4 (Coordinator) should deploy separately from C1 (Hunter), C2 (Trapper), and C3 (Executioner).
+C4 (Coordinator) should deploy separately from C1 (Hunter), C2 (Fletcher), and C3 (Executioner).
 
 For now that likely means:
 - OpenClaw on `server2`

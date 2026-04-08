@@ -1,6 +1,6 @@
 # Templates
 
-This folder contains editable starter files for C2 (Trapper) source material.
+This folder contains editable starter files for C2 (Fletcher) source material.
 
 Current templates:
 - `candidate_profile.template.md`

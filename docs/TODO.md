@@ -5,7 +5,7 @@ This document is the live cross-component fix list.
 Use it to track the remaining work needed to move the system from "implemented" to "operationally complete."
 
 Deployment note:
-- C1 (Hunter), C2 (Trapper), C3 (Executioner), and C4 (Coordinator) should continue to deploy through separate Ansible steps/stages.
+- C1 (Hunter), C2 (Fletcher), C3 (Executioner), and C4 (Coordinator) should continue to deploy through separate Ansible steps/stages.
 - Do not treat this list as a signal to fold later components into the current C1 (Hunter) Stage 6 deployment.
 
 ## C1 (Hunter) : Discovery And Enrichment
@@ -39,15 +39,15 @@ What still needs to be fixed or validated:
 
 Recommended finish sequence:
 1. keep the current queue cleanup commands:
-   - `./hunt.sh retry`
-   - `./hunt.sh clean-indeed --apply`
+   - `./hunter.sh retry`
+   - `./hunter.sh clean-indeed --apply`
 2. drain with smaller batches first:
-   - `DISPLAY=:98 ./hunt.sh backfill-all 25`
+   - `DISPLAY=:98 ./hunter.sh backfill-all 25`
 3. if LinkedIn remains sensitive, drain Indeed separately:
-   - `DISPLAY=:98 ./hunt.sh backfill 100 --source indeed --ui-verify-blocked --yes`
+   - `DISPLAY=:98 ./hunter.sh backfill 100 --source indeed --ui-verify-blocked --yes`
 4. once the backlog is under control, turn the timer back on:
-   - `./hunt.sh auto-on`
-   - `./hunt.sh auto-status`
+   - `./hunter.sh auto-on`
+   - `./hunter.sh auto-status`
 
 Done means:
 - backlog is at a normal steady-state level
@@ -55,7 +55,7 @@ Done means:
 - Ansible deploy is reproducible without manual container repair
 - review app and metrics are stable
 
-## C2 (Trapper) : Resume Tailoring
+## C2 (Fletcher) : Resume Tailoring
 
 Status:
 - initial local runtime exists
@@ -153,7 +153,7 @@ What still needs to be fixed or completed:
 - finish tightening the shared apply-prep seam
   - treat `python -m coordinator.cli apply-prep` as the canonical C4 seam
   - stop pointing shared-flow docs at older helper scripts as if they were the main boundary
-  - expose the shared C4 commands more clearly through `scripts/huntctl.py`
+  - expose the shared C4 commands more clearly through `scripts/hunterctl.py`
 - complete the current runtime checkpoint into a dependable local flow
   - validate the ready-to-apply predicate against real Hunt DB rows
   - validate run creation and event logging
@@ -180,7 +180,7 @@ What still needs to be fixed or completed:
 
 Recommended next order:
 1. finish the C4 tests first
-2. make `huntctl` and the docs consistently use the shared C4 CLI surface
+2. make `hunterctl` and the docs consistently use the shared C4 CLI surface
 3. wire the live C3 bridge
 4. only then tighten OpenClaw/server2 runtime integration
 

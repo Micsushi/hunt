@@ -9,7 +9,7 @@ C3 (Executioner) should work on its own.
 That means it must support:
 - manual use by the user with one remembered profile
 - one remembered resume by default
-- later handoff from C2 (Trapper) when a job-specific resume is available
+- later handoff from C2 (Fletcher) when a job-specific resume is available
 - later use by OpenClaw as a tool, not as the owner of C3 (Executioner) behavior
 
 The current first target is:
@@ -17,7 +17,7 @@ The current first target is:
 
 Deployment note:
 - C3 (Executioner) should deploy separately from the current C1 (Hunter) Hunt deployment
-- C3 (Executioner) should also remain a separate Ansible step/stage from C2 (Trapper)
+- C3 (Executioner) should also remain a separate Ansible step/stage from C2 (Fletcher)
 - current `server2` Stage 6 is for C1 (Hunter) only
 
 Out of scope for the first milestone:
@@ -29,7 +29,7 @@ Out of scope for the first milestone:
 
 ## Operator CLI (convention)
 
-Extension packaging and browser-side tooling stay in **`executioner/`**. Any **repo-level** operator command (load packed extension, run a harness, etc.) should be added to **`scripts/huntctl.py`** so users keep using **`hunt …`**. See **`docs/CLI_CONVENTIONS.md`**.
+Extension packaging and browser-side tooling stay in **`executioner/`**. Any **repo-level** operator command (load packed extension, run a harness, etc.) should be added to **`scripts/hunterctl.py`** so users keep using **`hunter …`**. See **`docs/CLI_CONVENTIONS.md`**.
 
 ## Core Product Shape
 
@@ -44,7 +44,7 @@ Its primary job is:
 
 OpenClaw can later use C3 (Executioner) to reduce browser work, but C3 must remain useful even when:
 - C1 (Hunter) is not involved
-- C2 (Trapper) is not involved
+- C2 (Fletcher) is not involved
 - OpenClaw is not running
 
 ## How It Fits With Other Components
@@ -68,9 +68,9 @@ C1 (Hunter) supplies:
 
 C3 (Executioner) should still be usable without that handoff, but the normal queue-driven path should eventually use it.
 
-### C2 (Trapper) handoff
+### C2 (Fletcher) handoff
 
-C2 (Trapper) supplies the resume that C3 (Executioner) should upload for a specific job.
+C2 (Fletcher) supplies the resume that C3 (Executioner) should upload for a specific job.
 
 Important rule:
 - C3 (Executioner) always uses the latest resume explicitly assigned to the current job
@@ -195,7 +195,7 @@ Recommended placement:
 
 - consume job records from Hunt
 - use `apply_url` and `ats_type`
-- switch resume automatically when C2 (Trapper) produces a job-specific output
+- switch resume automatically when C2 (Fletcher) produces a job-specific output
 - support an explicit apply-context handoff so the selected link and selected resume arrive together
 
 ### Stage 6 : account and auth helpers

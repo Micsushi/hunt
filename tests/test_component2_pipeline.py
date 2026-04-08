@@ -6,9 +6,9 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from trapper.db import get_apply_context, init_resume_db
-from trapper.parser import parse_resume_file
-from trapper.pipeline import (
+from fletcher.db import get_apply_context, init_resume_db
+from fletcher.parser import parse_resume_file
+from fletcher.pipeline import (
     generate_resume_for_ad_hoc,
     generate_resume_for_job,
     generate_resumes_for_ready_jobs,
@@ -170,7 +170,7 @@ class Component2PipelineTests(unittest.TestCase):
 
     def test_failed_retry_does_not_clear_selected_resume_context(self):
         init_resume_db(self.db_path)
-        with patch("trapper.pipeline.compile_tex") as mock_compile:
+        with patch("fletcher.pipeline.compile_tex") as mock_compile:
             mock_compile.return_value = {
                 "compile_status": "ok",
                 "page_count": 1,
@@ -188,7 +188,7 @@ class Component2PipelineTests(unittest.TestCase):
             str(first_result["resume_version_id"]),
         )
 
-        with patch("trapper.pipeline.compile_tex") as mock_compile:
+        with patch("fletcher.pipeline.compile_tex") as mock_compile:
             mock_compile.return_value = {
                 "compile_status": "page_limit_failed",
                 "page_count": 2,
@@ -218,7 +218,7 @@ class Component2PipelineTests(unittest.TestCase):
         conn.close()
 
         init_resume_db(self.db_path)
-        with patch("trapper.pipeline.compile_tex") as mock_compile:
+        with patch("fletcher.pipeline.compile_tex") as mock_compile:
             mock_compile.return_value = {
                 "compile_status": "ok",
                 "page_count": 1,
@@ -236,7 +236,7 @@ class Component2PipelineTests(unittest.TestCase):
 
     def test_easy_apply_job_clears_stale_selected_resume_context(self):
         init_resume_db(self.db_path)
-        with patch("trapper.pipeline.compile_tex") as mock_compile:
+        with patch("fletcher.pipeline.compile_tex") as mock_compile:
             mock_compile.return_value = {
                 "compile_status": "ok",
                 "page_count": 1,
@@ -261,7 +261,7 @@ class Component2PipelineTests(unittest.TestCase):
         conn.commit()
         conn.close()
 
-        with patch("trapper.pipeline.compile_tex") as mock_compile:
+        with patch("fletcher.pipeline.compile_tex") as mock_compile:
             mock_compile.return_value = {
                 "compile_status": "ok",
                 "page_count": 1,
@@ -319,7 +319,7 @@ class Component2PipelineTests(unittest.TestCase):
         )
         bullet_library_path.write_text("# Bullet Library Template\n", encoding="utf-8")
 
-        with patch("trapper.pipeline.compile_tex") as mock_compile:
+        with patch("fletcher.pipeline.compile_tex") as mock_compile:
             mock_compile.return_value = {
                 "compile_status": "ok",
                 "page_count": 1,
@@ -358,7 +358,7 @@ class Component2PipelineTests(unittest.TestCase):
             (REPO_ROOT / "main.tex").read_text(encoding="utf-8"), encoding="utf-8"
         )
 
-        with patch("trapper.pipeline.compile_tex") as mock_compile:
+        with patch("fletcher.pipeline.compile_tex") as mock_compile:
             mock_compile.return_value = {
                 "compile_status": "ok",
                 "page_count": 1,
@@ -366,7 +366,7 @@ class Component2PipelineTests(unittest.TestCase):
                 "pdf_path": str(Path(self.temp_dir.name) / "pm_resume.pdf"),
                 "log_text": "mock one-page result",
             }
-            with patch("trapper.config.BASE_RESUMES_ROOT", base_root):
+            with patch("fletcher.config.BASE_RESUMES_ROOT", base_root):
                 result = generate_resume_for_ad_hoc(
                     title="Associate Product Manager",
                     company="Beta",
@@ -400,7 +400,7 @@ class Component2PipelineTests(unittest.TestCase):
         ]
 
         with patch(
-            "trapper.pipeline.compile_tex", side_effect=compile_results
+            "fletcher.pipeline.compile_tex", side_effect=compile_results
         ) as mock_compile:
             result = generate_resume_for_job(1, db_path=self.db_path)
 

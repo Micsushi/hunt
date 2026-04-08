@@ -302,7 +302,7 @@ def get_db_path_warning():
     return (
         "LinkedIn auth is using a different DB than the default server runtime DB. "
         f"Current: {current_db}. Expected server runtime DB: {expected_runtime_db}. "
-        "Use './hunt.sh auth-auto-relogin ...' or export HUNT_DB_PATH before running "
+        "Use './hunter.sh auth-auto-relogin ...' or export HUNT_DB_PATH before running "
         "hunter/linkedin_session.py so auth state updates reach the review app and /metrics."
     )
 

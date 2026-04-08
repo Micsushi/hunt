@@ -49,4 +49,4 @@ Current CLI surface:
 Checkpoint docs:
 - `docs/components/component4/README.md`
 - `docs/components/component4/design.md`
-- `docs/components/component4/implementation_checkpoint.md`
+- `docs/components/component4/design.md` (includes implementation checkpoint section)

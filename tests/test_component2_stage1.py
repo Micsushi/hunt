@@ -2,8 +2,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from trapper.parser import parse_resume_file, parse_resume_tex
-from trapper.renderer import render_resume_tex
+from fletcher.parser import parse_resume_file, parse_resume_tex
+from fletcher.renderer import render_resume_tex
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 MAIN_TEX = REPO_ROOT / "main.tex"
@@ -47,7 +47,7 @@ class Component2Stage1Tests(unittest.TestCase):
                 [
                     sys.executable,
                     "-m",
-                    "trapper.cli",
+                    "fletcher.cli",
                     "parse-resume",
                     "--resume",
                     str(MAIN_TEX),

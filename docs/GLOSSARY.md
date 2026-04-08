@@ -1,8 +1,8 @@
-# C2 (Trapper) : Glossary
+# Hunt : Glossary
 
 ## Purpose
 
-This file standardizes the shorthand and terms used across the Hunt docs so future agents and prompts read the same way.
+Shared shorthand and terms used across Hunt docs (C1–C4).
 
 ## Terms
 
@@ -12,13 +12,17 @@ C1 (Hunter).
 
 In this repo, C1 is job discovery and enrichment.
 
-### `hunt` / `hunter` / `huntctl`
+### `hunter` / `hunt` / `hunterctl`
 
-Repo-root launchers **`hunt`** and **`hunter`** (shell/PowerShell/cmd) both invoke **`scripts/huntctl.py`**. Operator-facing subcommands (**`start`**, **`enrich N`**, **`apply-prep`**, …) live there; see **`docs/CLI_CONVENTIONS.md`** for how to add C2–C4 commands.
+**Canonical:** repo-root **`hunter`** launchers (shell/PowerShell/cmd) invoke **`scripts/hunterctl.py`**. That CLI is **C1 (Hunter)** plus shared operator glue, not the whole Hunt product.
+
+**Legacy:** **`hunt`** launchers and **`scripts/huntctl.py`** forward to the same implementation.
+
+Operator-facing subcommands (**`start`**, **`enrich N`**, **`apply-prep`**, …) live there; see **`docs/CLI_CONVENTIONS.md`** for how to add C2–C4 commands.
 
 ### C2
 
-C2 (Trapper).
+C2 (Fletcher).
 
 In this repo, C2 is resume tailoring.
 
@@ -41,7 +45,7 @@ OpenClaw is the current most likely first implementation of C4.
 Stage numbers inside the currently discussed component unless the doc explicitly says otherwise.
 
 Example:
-- `C2 S1` means C2 (Trapper) Stage 1
+- `C2 S1` means C2 (Fletcher) Stage 1
 - `C1 S4` means C1 (Hunter) Stage 4
 
 ### JD

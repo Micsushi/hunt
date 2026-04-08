@@ -1,10 +1,10 @@
-# C2 (Trapper) : Design Notes
+# C2 (Fletcher) : Design Notes
 
 ## Purpose
 
-This document captures the current recommended design for C2 (Trapper) based on the repo state and the user decisions locked in so far.
+This document captures the current recommended design for C2 (Fletcher) based on the repo state and the user decisions locked in so far.
 
-C2 (Trapper) should stay runnable on its own, but it is intended to sit in the larger production flow:
+C2 (Fletcher) should stay runnable on its own, but it is intended to sit in the larger production flow:
 
 1. C1 scrape
 2. C1 enrichment
@@ -38,7 +38,7 @@ The following rules should be treated as hard constraints.
 
 ## C1 (Hunter) Handoff
 
-C2 (Trapper) should be able to run independently of C1 (Hunter), but the normal queue-driven path should consume C1 output.
+C2 (Fletcher) should be able to run independently of C1 (Hunter), but the normal queue-driven path should consume C1 output.
 
 Recommended automatic trigger:
 - C2 queues a job when C1 enrichment reaches:
@@ -236,7 +236,7 @@ The exact schema can still move, but the latest-on-job plus history-table split 
 
 ## C2 To C3 Handoff
 
-C2 (Trapper) should not leave C3 (Executioner) guessing which file to upload.
+C2 (Fletcher) should not leave C3 (Executioner) guessing which file to upload.
 
 Recommended contract:
 
@@ -306,7 +306,7 @@ The DB should point to the selected and latest-useful artifact paths rather than
 The repo scaffold for C2 now lives in:
 
 ```text
-trapper/
+fletcher/
   base_resumes/
   prompts/
   schemas/
@@ -372,7 +372,7 @@ Nice-to-have later:
 
 ## Deployment Notes
 
-C2 (Trapper) should reuse the `server2` patterns already established for Hunt:
+C2 (Fletcher) should reuse the `server2` patterns already established for Hunt:
 
 - unattended worker lane:
   - systemd, similar to the current Hunt runtime lane

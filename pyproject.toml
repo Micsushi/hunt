@@ -14,7 +14,7 @@ ignore = [
 ]
 
 [tool.ruff.lint.isort]
-known-first-party = ["hunter", "scripts", "coordinator", "trapper"]
+known-first-party = ["hunter", "scripts", "coordinator", "fletcher"]
 
 [tool.ruff.format]
 quote-style = "double"

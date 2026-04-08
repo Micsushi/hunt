@@ -1,10 +1,10 @@
-# C2 (Trapper) : Resume Tailoring
+# C2 (Fletcher) : Resume Tailoring
 
 ## Goal
 
 Generate a truthful, job-specific one-page resume from the original LaTeX resume in `main.tex`.
 
-C2 (Trapper) should:
+C2 (Fletcher) should:
 - preserve the existing section order from the original resume
 - preserve the existing document structure and visual layout
 - keep dates, titles, employers, education, and contact info immutable
@@ -14,8 +14,8 @@ C2 (Trapper) should:
 
 ## Current Status
 
-C2 (Trapper) now has an initial working local implementation under:
-- `trapper/`
+C2 (Fletcher) now has an initial working local implementation under:
+- `fletcher/`
 
 What exists now:
 - parser and renderer code around `main.tex`
@@ -27,16 +27,16 @@ What exists now:
 - base-resume family placeholders
 
 Deployment should happen only after the current C1 (Hunter) server rollout is stable on `server2`.
-When deployment starts, C2 (Trapper) should be its own Ansible step/stage rather than being folded into the current C1 (Hunter) Hunt deployment.
-C2 (Trapper) deployment should also stay separate from later C3 (Executioner) deployment.
+When deployment starts, C2 (Fletcher) should be its own Ansible step/stage rather than being folded into the current C1 (Hunter) Hunt deployment.
+C2 (Fletcher) deployment should also stay separate from later C3 (Executioner) deployment.
 
 ## Operator CLI (convention)
 
-Stable operator flows for C2 (batch tailor, status, etc.) should be exposed as **`hunt`** / **`hunter`** subcommands by extending **`scripts/huntctl.py`** (which may delegate to `python -m trapper.cli` or `trapper/cli.py`). Do not introduce a second repo-wide CLI. See **`docs/CLI_CONVENTIONS.md`**.
+Stable operator flows for C2 (batch tailor, status, etc.) should be exposed as **`hunter`** subcommands by extending **`scripts/hunterctl.py`** (which may delegate to `python -m fletcher.cli` or `fletcher/cli.py`). Do not introduce a second repo-wide CLI. See **`docs/CLI_CONVENTIONS.md`**.
 
 ## Locked Decisions
 
-These decisions are now treated as the default C2 (Trapper) contract unless the user changes them later.
+These decisions are now treated as the default C2 (Fletcher) contract unless the user changes them later.
 
 - The OG resume is `main.tex`.
 - `main.tex` stays immutable.
@@ -49,10 +49,10 @@ These decisions are now treated as the default C2 (Trapper) contract unless the 
 - The existing LaTeX layout should be preserved.
 - Projects are optional when experience needs the space.
 - At least one experience role should remain.
-- C2 (Trapper) should generate a resume for all jobs, not just automation-eligible jobs.
-- C2 (Trapper) should run automatically after C1 (Hunter) enrichment reaches a done state.
-- If a job still needs UI enrichment, C2 (Trapper) should wait.
-- Easy Apply matters for C3 (Executioner), not for whether C2 (Trapper) may generate a resume.
+- C2 (Fletcher) should generate a resume for all jobs, not just automation-eligible jobs.
+- C2 (Fletcher) should run automatically after C1 (Hunter) enrichment reaches a done state.
+- If a job still needs UI enrichment, C2 (Fletcher) should wait.
+- Easy Apply matters for C3 (Executioner), not for whether C2 (Fletcher) may generate a resume.
 - One page is a hard gate. Over-one-page attempts are failures.
 - Ollama is the planned production default backend.
 - Gemini or another API backend is a later optional toggle.
@@ -62,9 +62,9 @@ These decisions are now treated as the default C2 (Trapper) contract unless the 
 ## Terminology
 
 Common shorthand is now documented in:
-- `glossary.md`
+- `docs/GLOSSARY.md`
 
-Important terms used throughout the C2 (Trapper) docs:
+Important terms used throughout the C2 (Fletcher) docs:
 - `C1`, `C2`, `C3`
 - `S1`, `S2`, and later stage shorthands
 - `JD`
@@ -76,7 +76,7 @@ Important terms used throughout the C2 (Trapper) docs:
 - `attempt`
 - `latest result`
 
-## C2 (Trapper) Workflows
+## C2 (Fletcher) Workflows
 
 ### Queue-driven workflow
 
@@ -108,7 +108,7 @@ That means:
 - C3 should consume the latest useful C2 result, not trigger its own resume generation by default.
 - C4 or OpenClaw should normally fetch one explicit apply context for a job instead of independently deciding which link and which resume to use.
 - in the current C4 direction, that should happen through one shared apply-prep command
-- the `trapper` CLI may still expose C2-local apply-context inspection, but that is not the shared C4 apply-prep seam
+- the `fletcher` CLI may still expose C2-local apply-context inspection, but that is not the shared C4 apply-prep seam
 - that apply context should include:
   - the selected `apply_url`
   - the selected resume path
@@ -184,26 +184,26 @@ Family-specific base resumes are planned as curated variants, not replacements f
 
 ## Candidate Facts And Bullet Library
 
-C2 (Trapper) should be grounded by:
+C2 (Fletcher) should be grounded by:
 - the OG resume
 - a candidate profile file
 - a bullet-library file
 - later generated or curated family-specific base resumes
 
 Starter templates now live under:
-- `trapper/templates/candidate_profile.template.md`
-- `trapper/templates/bullet_library.template.md`
-- `trapper/templates/ad_hoc_job_description.template.md`
+- `fletcher/templates/candidate_profile.template.md`
+- `fletcher/templates/bullet_library.template.md`
+- `fletcher/templates/ad_hoc_job_description.template.md`
 
 ## Initial Repo Layout
 
-C2 (Trapper) now has a dedicated repo home:
+C2 (Fletcher) now has a dedicated repo home:
 
-- `trapper/README.md`
-- `trapper/base_resumes/`
-- `trapper/prompts/`
-- `trapper/schemas/`
-- `trapper/templates/`
+- `fletcher/README.md`
+- `fletcher/base_resumes/`
+- `fletcher/prompts/`
+- `fletcher/schemas/`
+- `fletcher/templates/`
 
 Runtime artifacts should not live inside the git checkout on `server2`.
 
@@ -297,5 +297,5 @@ Early tests should focus on:
 ## Related Docs
 
 - `docs/components/component2/design.md`
-- `glossary.md`
+- `docs/GLOSSARY.md`
 - `docs/components/component3/README.md`

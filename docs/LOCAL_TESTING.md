@@ -180,7 +180,7 @@ python scripts/requeue_enrichment_rows.py --source all --error-code auth_expired
 Or via the wrapper:
 
 ```bash
-python scripts/huntctl.py requeue-errors --source all --error-code auth_expired --error-code rate_limited
+python scripts/hunterctl.py requeue-errors --source all --error-code auth_expired --error-code rate_limited
 ```
 
 ### 7.1 Seed rows to test requeue manually
@@ -189,7 +189,7 @@ If you want to test requeue end-to-end without waiting for real failures:
 
 ```powershell
 python hunter/devtools/seed_requeue_rows.py --source linkedin
-python scripts/huntctl.py requeue-errors --source all --error-code auth_expired --error-code rate_limited
+python scripts/hunterctl.py requeue-errors --source all --error-code auth_expired --error-code rate_limited
 ```
 
 ## 8. Unit tests and Ruff (C1 vs full suite; lint; format)
@@ -288,7 +288,7 @@ ruff check . --fix && ruff format .
 ### Optional: byte-compile main packages (fast sanity check)
 
 ```bash
-python -m compileall -q coordinator trapper hunter scripts review_app.py
+python -m compileall -q coordinator fletcher hunter scripts review_app.py
 ```
 
 ## 9. Quick local verification checklist

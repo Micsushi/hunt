@@ -1,6 +1,6 @@
-# trapper
+# fletcher
 
-This directory is the repo home for **C2 (Trapper)** : resume tailoring. See **`docs/NAMING.md`** for component IDs and code names.
+This directory is the repo home for **C2 (Fletcher)** : resume tailoring. See **`docs/NAMING.md`** for component IDs and code names.
 
 It now contains the first working local implementation plus the supporting scaffolding:
 - parser and renderer code around `main.tex`

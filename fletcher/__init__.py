@@ -1,4 +1,4 @@
-"""C2 (Trapper) package home for resume-tailoring prompts, schemas, templates, and runtime code."""
+"""C2 (Fletcher) package home for resume-tailoring prompts, schemas, templates, and runtime code."""
 
 from .parser import parse_resume_file, parse_resume_tex
 from .renderer import render_resume_tex

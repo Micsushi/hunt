@@ -1,6 +1,6 @@
 # Candidate Profile Template
 
-Use this file to capture truthful details that may not fit in the OG resume but are still safe for C2 (Trapper) to use.
+Use this file to capture truthful details that may not fit in the OG resume but are still safe for C2 (Fletcher) to use.
 
 Keep everything factual.
 

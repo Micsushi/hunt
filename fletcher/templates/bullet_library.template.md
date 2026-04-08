@@ -1,6 +1,6 @@
 # Bullet Library Template
 
-Use this file as the reusable bullet and fact pool for C2 (Trapper).
+Use this file as the reusable bullet and fact pool for C2 (Fletcher).
 
 The goal is to give C2 more truthful material than can fit on any one-page resume.
 

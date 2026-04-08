@@ -42,11 +42,11 @@ Why this matters:
 Component deployment on `server2` is intentionally split:
 - **C1 (Hunter)** deploys through the current Hunt-focused Ansible step/stage
   - today that is the `job_agent` Stage 6 deployment in `ansible_homelab` (systemd units may still be named `hunt-scraper.*`; they run `python hunter/scraper.py`)
-- **C2 (Trapper)** should deploy in its own later Ansible step/stage
+- **C2 (Fletcher)** should deploy in its own later Ansible step/stage
 - **C3 (Executioner)** should deploy in its own later Ansible step/stage
 - **C4 (Coordinator)** / OpenClaw integration should deploy in its own later Ansible step/stage
 
-Do not treat **C2 (Trapper)** or **C3 (Executioner)** as extensions of the current **C1 (Hunter)** Stage 6 deploy.
+Do not treat **C2 (Fletcher)** or **C3 (Executioner)** as extensions of the current **C1 (Hunter)** Stage 6 deploy.
 
 ## Desired LinkedIn Behavior
 
@@ -162,7 +162,7 @@ Repo-level Stage 3 outcome:
 - the remaining work is deployment rollout on `server2` through `ansible_homelab`
 
 Detailed plan:
-- see `docs/components/component1/stage3_server2_plan.md`
+- production / Ansible / `server2` layout : **`docs/C1_OPERATOR_WORKFLOW.md`** (**Production host (server2)**) and **`ansible_homelab/docs/2.01-job-agent-plan.md`**
 
 Testing goal:
 - process a small batch safely
@@ -192,7 +192,7 @@ Implemented files:
 - `hunter/runner.py`
 - `review_app.py`
 - `scripts/queue_health.py`
-- `scripts/huntctl.py`
+- `scripts/hunterctl.py` (legacy: `scripts/huntctl.py`)
 - `tests/test_stage32.py`
 
 Implemented behavior:
@@ -232,107 +232,104 @@ Stage 3.2 outcome:
 
 ## Command Reference
 
-**Conventions for all `hunt` subcommands and for adding C2–C4 commands later:** **`docs/CLI_CONVENTIONS.md`**.
+**Conventions for all `hunter` subcommands (legacy launcher: `hunt`) and for adding C2–C4 commands later:** **`docs/CLI_CONVENTIONS.md`**.
 
-Short wrappers are now available at the repo root ( **`hunter.*`** is the same CLI):
-- Windows PowerShell:
-  `.\hunt.ps1 <command>` or `.\hunter.ps1 <command>`
-- Windows cmd:
-  `hunt.cmd <command>` or `hunter.cmd <command>`
-- Linux/macOS:
-  `./hunt.sh <command>` or `./hunter.sh <command>`
+Short wrappers at the repo root (**canonical:** **`hunter.*`**; **`hunt.*`** is a legacy alias):
+- Windows PowerShell: `.\hunter.ps1 <command>`
+- Windows cmd: `hunter.cmd <command>`
+- Linux/macOS: `./hunter.sh <command>`
 
 Launcher note:
 - the repo-root wrapper files are now thin shims
 - the real launcher implementations live under:
-  - `scripts/launchers/hunt.ps1`
-  - `scripts/launchers/hunt.cmd`
-  - `scripts/launchers/hunt.sh`
-- on deployed Linux hosts, `./hunt.sh` now auto-targets `~/data/hunt/hunt.db` and `~/data/hunt/artifacts` when that runtime directory exists, so manual queue/auth commands line up with the `systemd` runtime
+  - `scripts/launchers/hunter.ps1`
+  - `scripts/launchers/hunter.cmd`
+  - `scripts/launchers/hunter.sh`
+- on deployed Linux hosts, `./hunter.sh` now auto-targets `~/data/hunt/hunt.db` and `~/data/hunt/artifacts` when that runtime directory exists, so manual queue/auth commands line up with the `systemd` runtime
 
 Common examples:
 - **start / stop / restart** scheduled C1 on Linux (systemd timer + Xvfb):
-  `./hunt.sh start`
-  `./hunt.sh stop`
-  `./hunt.sh restart`
+  `./hunter.sh start`
+  `./hunter.sh stop`
+  `./hunter.sh restart`
 - enrichment batch of **50** (all sources):
-  `./hunt.sh enrich 50 --source all`
+  `./hunter.sh enrich 50 --source all`
 - queue health:
-  `.\hunt.ps1 queue`
-  `./hunt.sh queue`
+  `.\hunter.ps1 queue`
+  `./hunter.sh queue`
 - run multi-source enrichment directly:
-  `.\hunt.ps1 enrich --source all --limit 25 --channel chrome`
-  `./hunt.sh enrich --source all --limit 25 --channel chrome`
+  `.\hunter.ps1 enrich --source all --limit 25 --channel chrome`
+  `./hunter.sh enrich --source all --limit 25 --channel chrome`
 - run Indeed-only enrichment:
-  `.\hunt.ps1 enrich --source indeed --limit 25`
-  `./hunt.sh enrich --source indeed --limit 25`
+  `.\hunter.ps1 enrich --source indeed --limit 25`
+  `./hunter.sh enrich --source indeed --limit 25`
 - force one visible-browser rerun for a specific Indeed row:
-  `.\hunt.ps1 enrich --source indeed --job-id 13143 --force --ui-verify`
-  `./hunt.sh enrich --source indeed --job-id 13143 --force --ui-verify`
+  `.\hunter.ps1 enrich --source indeed --job-id 13143 --force --ui-verify`
+  `./hunter.sh enrich --source indeed --job-id 13143 --force --ui-verify`
 - list newest ready rows:
-  `.\hunt.ps1 ready --limit 10`
-  `./hunt.sh ready --limit 10`
+  `.\hunter.ps1 ready --limit 10`
+  `./hunter.sh ready --limit 10`
 - list jobs across sources:
-  `.\hunt.ps1 jobs --source all --status ready --limit 10`
-  `./hunt.sh jobs --source all --status ready --limit 10`
+  `.\hunter.ps1 jobs --source all --status ready --limit 10`
+  `./hunter.sh jobs --source all --status ready --limit 10`
 - list Indeed rows only:
-  `.\hunt.ps1 jobs --source indeed --status all --limit 10`
-  `./hunt.sh jobs --source indeed --status all --limit 10`
+  `.\hunter.ps1 jobs --source indeed --status all --limit 10`
+  `./hunter.sh jobs --source indeed --status all --limit 10`
 - preview currently stored irrelevant Indeed rows using the current title filter:
-  `./hunt.sh clean-indeed`
-  `./hunt.sh cleanup-indeed`
+  `./hunter.sh clean-indeed`
+  `./hunter.sh cleanup-indeed`
 - delete currently stored irrelevant Indeed rows:
-  `./hunt.sh clean-indeed --apply`
-  `./hunt.sh cleanup-indeed --apply`
+  `./hunter.sh clean-indeed --apply`
+  `./hunter.sh cleanup-indeed --apply`
 - inspect one job:
-  `.\hunt.ps1 job 13179`
-  `./hunt.sh job 13179`
+  `.\hunter.ps1 job 13179`
+  `./hunter.sh job 13179`
 - run local review app:
-  `.\hunt.ps1 review`
-  `./hunt.sh review`
+  `.\hunter.ps1 review`
+  `./hunter.sh review`
 - run a controlled backfill in 100-row chunks with a checkpoint after each batch:
-  `.\hunt.ps1 backfill --ui-verify-blocked`
-  `./hunt.sh backfill --ui-verify-blocked`
+  `.\hunter.ps1 backfill --ui-verify-blocked`
+  `./hunter.sh backfill --ui-verify-blocked`
 - run a controlled backfill for Indeed only in 100-row chunks:
-  `.\hunt.ps1 backfill --source indeed --ui-verify-blocked`
-  `./hunt.sh backfill --source indeed --ui-verify-blocked`
+  `.\hunter.ps1 backfill --source indeed --ui-verify-blocked`
+  `./hunter.sh backfill --source indeed --ui-verify-blocked`
 - run a controlled backfill for all supported sources in 100-row chunks:
-  `.\hunt.ps1 backfill --source all --ui-verify-blocked`
-  `./hunt.sh backfill --source all --ui-verify-blocked`
+  `.\hunter.ps1 backfill --source all --ui-verify-blocked`
+  `./hunter.sh backfill --source all --ui-verify-blocked`
 - requeue the common retryable enrichment rows across all sources:
-  `./hunt.sh retry`
-  `./hunt.sh requeue-enrich --source all`
+  `./hunter.sh retry`
+  `./hunter.sh requeue-enrich --source all`
 - backfill all sources in 100-row batches with blocked-row UI verification and automatic continue:
-  `DISPLAY=:98 ./hunt.sh backfill-all`
-  `DISPLAY=:98 ./hunt.sh drain`
-  `DISPLAY=:98 ./hunt.sh backfill 100 --source all --ui-verify-blocked --yes`
+  `DISPLAY=:98 ./hunter.sh backfill-all`
+  `DISPLAY=:98 ./hunter.sh drain`
+  `DISPLAY=:98 ./hunter.sh backfill 100 --source all --ui-verify-blocked --yes`
 - backfill all with a custom batch size:
-  `DISPLAY=:98 ./hunt.sh backfill-all 250`
-  `DISPLAY=:98 ./hunt.sh drain 250`
+  `DISPLAY=:98 ./hunter.sh backfill-all 250`
+  `DISPLAY=:98 ./hunter.sh drain 250`
 - backfill all but stop after each batch for confirmation:
-  `DISPLAY=:98 ./hunt.sh backfill-all --ask`
-  `DISPLAY=:98 ./hunt.sh drain --ask`
+  `DISPLAY=:98 ./hunter.sh backfill-all --ask`
+  `DISPLAY=:98 ./hunter.sh drain --ask`
 - run a controlled backfill in custom chunk sizes:
-  `.\hunt.ps1 backfill 250 --ui-verify-blocked`
-  `./hunt.sh backfill 250 --ui-verify-blocked`
+  `.\hunter.ps1 backfill 250 --ui-verify-blocked`
+  `./hunter.sh backfill 250 --ui-verify-blocked`
 - run backfill for a selected set of job ids only:
-  `.\hunt.ps1 backfill --source all --job-id 13143 --job-id 13073`
-  `./hunt.sh backfill --source all --job-id 13143 --job-id 13073`
+  `.\hunter.ps1 backfill --source all --job-id 13143 --job-id 13073`
+  `./hunter.sh backfill --source all --job-id 13143 --job-id 13073`
 - save LinkedIn auth state on a Linux desktop session:
-  `./hunt.sh auth-save --display :0`
+  `./hunter.sh auth-save --display :0`
 - start one manual server scrape cycle:
-  `./hunt.sh svc-start`
+  `./hunter.sh svc-start`
 - follow live service logs on the server:
-  `./hunt.sh svc-follow`
+  `./hunter.sh svc-follow`
 - stop the timer on the server:
-  `./hunt.sh timer-stop`
-  `./hunt.sh timer-disable`
+  `./hunter.sh timer-stop`
+  `./hunter.sh timer-disable`
 - pause automatic scrape/enrich cycles on the server:
-  `./hunt.sh auto-off`
+  `./hunter.sh auto-off`
 - resume automatic scrape/enrich cycles on the server:
-  `./hunt.sh auto-on` (legacy; prefer **`./hunt.sh start`**)
+  `./hunter.sh auto-on` (legacy; prefer **`./hunter.sh start`**)
 - check whether the automatic timer is paused or running:
-  `./hunt.sh auto-status`
+  `./hunter.sh auto-status`
 
 ### Session setup
 
@@ -343,11 +340,11 @@ Common examples:
 - check whether the saved LinkedIn auth state exists:
   `python hunter/linkedin_session.py --check`
 - on `server2`, prefer the wrapper so auth refresh uses the same runtime DB as the review app and `/metrics`:
-  `./hunt.sh auth-auto-relogin --channel chrome`
+  `./hunter.sh auth-auto-relogin --channel chrome`
 - if you want the relogin flow to open a visible browser on the real `server2` monitor:
-  `DISPLAY=:0 ./hunt.sh auth-auto-relogin --headful --display :0 --channel chrome`
+  `DISPLAY=:0 ./hunter.sh auth-auto-relogin --headful --display :0 --channel chrome`
 - if you want the relogin flow to open a visible browser on `server2`, run it on the Xvfb display:
-  `DISPLAY=:98 ./hunt.sh auth-auto-relogin --headful --display :98 --channel chrome`
+  `DISPLAY=:98 ./hunter.sh auth-auto-relogin --headful --display :98 --channel chrome`
 - direct Python auth commands on `server2` are only safe if `HUNT_DB_PATH` is exported first; otherwise they can write auth state to the repo-local DB instead of the runtime DB used by the deployed review app
 - `--check` only confirms that the storage-state JSON exists; it does not prove the saved session still reaches the LinkedIn feed
 - `--auto-relogin` now reuses the saved auth state first when it is still valid
@@ -398,7 +395,7 @@ Common examples:
   - the confirmed `server2` mismatch was:
     - direct shell relogin wrote to `/home/michael/hunt/hunt.db`
     - the deployed review app was reading `/home/michael/data/hunt/hunt.db`
-    - rerunning auth through `./hunt.sh auth-auto-relogin ...` fixed `/metrics` immediately
+    - rerunning auth through `./hunter.sh auth-auto-relogin ...` fixed `/metrics` immediately
 - successful manual auth save or successful `--auto-relogin` marks LinkedIn auth available again in shared runtime state
 - failures such as expired saved auth, automation-flagged accounts, all accounts blocked, or failed account rotation mark LinkedIn auth unavailable in shared runtime state
 - the review app and `/metrics` both read that shared runtime auth state:
@@ -467,9 +464,9 @@ Common examples:
 - requeue older sparse LinkedIn failures for another Stage 2 pass:
   `python scripts/requeue_linkedin_refresh_candidates.py`
 - bulk requeue failed/blocked enrichment rows across supported sources back to `pending`:
-  `./hunt.sh requeue-enrich --source all`
+  `./hunter.sh requeue-enrich --source all`
 - if you also want to requeue stale `processing` rows manually:
-  `./hunt.sh requeue-enrich --source all --status failed --status blocked --status blocked_verified --status processing`
+  `./hunter.sh requeue-enrich --source all --status failed --status blocked --status blocked_verified --status processing`
 - if a deployment bug caused broad false negatives, requeue only the likely-bugged LinkedIn failures instead of all failed rows:
   `sqlite3 /home/michael/data/hunt/hunt.db "update jobs set enrichment_status='pending', last_enrichment_error=NULL, next_enrichment_retry_at=NULL, last_enrichment_started_at=NULL where source='linkedin' and enrichment_status='failed' and (last_enrichment_error like 'external_description_not_usable:%' or last_enrichment_error like 'external_description_not_found:%' or last_enrichment_error like 'apply_button_not_found:%' or last_enrichment_error like 'unexpected_error:%');"`
 - rerun a specific row even if it is not currently pending:
@@ -624,41 +621,41 @@ C1 sign-off runbook on `server2`:
    - `curl -s https://agent-hunt-review.mshi.ca/metrics | head`
    - `cd ~/hunt && set -a && source .env && set +a && .venv/bin/python hunter/linkedin_session.py --auto-relogin --channel chrome`
    - if you need a visible browser for auth debugging:
-     - `cd ~/hunt && DISPLAY=:98 ./hunt.sh auth-auto-relogin --headful --display :98 --channel chrome`
+     - `cd ~/hunt && DISPLAY=:98 ./hunter.sh auth-auto-relogin --headful --display :98 --channel chrome`
    - `curl -s https://agent-hunt-review.mshi.ca/metrics | grep 'hunt_auth_available{source="linkedin"}'`
 3. requeue failed/blocked enrichment rows you want retried
-   - `./hunt.sh retry`
-   - `./hunt.sh requeue-enrich --source all`
+   - `./hunter.sh retry`
+   - `./hunter.sh requeue-enrich --source all`
 4. drain the backlog manually first
    - safer current default:
-     - `DISPLAY=:98 ./hunt.sh backfill-all 25`
+     - `DISPLAY=:98 ./hunter.sh backfill-all 25`
    - if LinkedIn looks healthy and you want a more aggressive run:
-     - `DISPLAY=:98 ./hunt.sh backfill-all`
-   - `DISPLAY=:98 ./hunt.sh drain`
-   - `DISPLAY=:98 ./hunt.sh backfill 100 --source all --ui-verify-blocked --yes`
+     - `DISPLAY=:98 ./hunter.sh backfill-all`
+   - `DISPLAY=:98 ./hunter.sh drain`
+   - `DISPLAY=:98 ./hunter.sh backfill 100 --source all --ui-verify-blocked --yes`
    - if Indeed still needs additional cleanup after the LinkedIn-sensitive portion:
-     - `DISPLAY=:98 ./hunt.sh backfill 100 --source indeed --ui-verify-blocked --yes`
+     - `DISPLAY=:98 ./hunter.sh backfill 100 --source indeed --ui-verify-blocked --yes`
 5. confirm queue health after the manual drain
-   - `./hunt.sh queue`
+   - `./hunter.sh queue`
    - `./.venv/bin/python scripts/queue_health.py --json`
 6. if a real blocked/browser-fixable row occurs, confirm the artifact path end to end
    - files exist under `/home/michael/data/hunt/artifacts`
    - the review app job page links to them
 7. re-enable the unattended timer
-   - `./hunt.sh start` (or legacy `./hunt.sh auto-on`)
-   - `./hunt.sh auto-status`
+   - `./hunter.sh start` (or legacy `./hunter.sh auto-on`)
+   - `./hunter.sh auto-status`
 8. observe at least one normal scheduled cycle
    - it should scrape and then run post-scrape enrichment up to the configured batch limit
 9. only after those checks pass, treat C1 (Hunter) as operationally complete
 
 Stage 4 non-goals:
-- no C2 (Trapper) resume tailoring work yet
+- no C2 (Fletcher) resume tailoring work yet
 - no C3 (Executioner) application submission work yet
 - no attempt to bypass CAPTCHA or anti-bot systems
 
 ## Notes For Later Components
 
-**C2 (Trapper)** : resume tailoring (`trapper/`)
+**C2 (Fletcher)** : resume tailoring (`fletcher/`)
 - should consume enriched descriptions, not raw board snippets
 - should only run after C1 (Hunter) marks a job ready
 

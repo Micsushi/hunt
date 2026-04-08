@@ -102,7 +102,7 @@ Recommended C3 behavior:
 - if a Hunt job context exists, use it
 - otherwise allow ad hoc/manual page-only mode
 
-### C2 (Trapper)
+### C2 (Fletcher)
 
 C2 should be treated as the resume producer, not as a gate that prevents C3 from existing.
 

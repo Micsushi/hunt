@@ -1,23 +1,25 @@
 # C1 (Hunter) v0.1 : operator workflow
 
-Short description of how discovery, enrichment, and review fit together. Canonical naming: **`docs/NAMING.md`**. Deeper design: **`docs/components/component1/README.md`**. How **`hunt`** commands are extended for C2–C4: **`docs/CLI_CONVENTIONS.md`**.
+Short description of how discovery, enrichment, and review fit together. Canonical naming: **`docs/NAMING.md`**. Deeper design: **`docs/components/component1/README.md`**. How **`hunter`** commands are extended for C2–C4: **`docs/CLI_CONVENTIONS.md`**.
 
 ## Cadence
 
 On a typical deploy, **`hunter/scraper.py`** runs on a timer (often **every 10 minutes** : `RUN_INTERVAL_SECONDS` default **600** in `hunter/config.py`, or the systemd/Ansible interval you set). **`hunter/runner.py`** is the continuous loop variant.
 
-## CLI shortcuts (`hunt` / `hunter`)
+## CLI shortcuts (`hunter`, legacy `hunt`)
 
-From the repo root, **`./hunt.sh`** and **`./hunter.sh`** are the same (Windows: **`hunt.ps1`** / **`hunter.ps1`**). They run **`scripts/huntctl.py`**.
+From the repo root, prefer **`./hunter.sh`** (Windows: **`hunter.ps1`** / **`hunter.cmd`**). It runs **`scripts/hunterctl.py`**, the **C1 (Hunter)** operator CLI.
+
+**Legacy:** **`./hunt.sh`** / **`hunt.ps1`** / **`hunt.cmd`** and **`python scripts/huntctl.py`** are the same entrypoint.
 
 | Command | Meaning |
 |--------|---------|
-| **`hunt start`** | **Linux:** `systemctl enable --now hunt-scraper.timer` (scheduled C1 on). **Windows:** one **`hunter/scraper.py`** run (discovery + default post-scrape enrichment). |
-| **`hunt stop`** | **Linux:** `systemctl disable --now hunt-scraper.timer`. **Windows:** not applicable (stop your terminal job manually). |
-| **`hunt restart`** | **Linux only:** `daemon-reload`, restart **`hunt-xvfb`** and **`hunt-scraper.timer`** (use after editing unit files or deploying code). |
-| **`hunt enrich 50`** | Enrichment batch of **50** (same as **`hunt enrich --limit 50`**). Add **`--source all`** for LinkedIn+Indeed via **`hunter/enrich_jobs.py`**. |
+| **`hunter start`** | **Linux:** `systemctl enable --now hunt-scraper.timer` (scheduled C1 on). **Windows:** one **`hunter/scraper.py`** run (discovery + default post-scrape enrichment). |
+| **`hunter stop`** | **Linux:** `systemctl disable --now hunt-scraper.timer`. **Windows:** not applicable (stop your terminal job manually). |
+| **`hunter restart`** | **Linux only:** `daemon-reload`, restart **`hunt-xvfb`** and **`hunt-scraper.timer`** (use after editing unit files or deploying code). |
+| **`hunter enrich 50`** | Enrichment batch of **50** (same as **`hunter enrich --limit 50`**). Add **`--source all`** for LinkedIn+Indeed via **`hunter/enrich_jobs.py`**. |
 
-Older names still work: **`hunt timer-start`**, **`hunt auto-on`**, **`hunt svc-start`** (one immediate scrape run), etc.
+Older subcommand names still work: **`hunter timer-start`**, **`hunter auto-on`**, **`hunter svc-start`** (one immediate scrape run), etc. **`hunt …`** is an alias.
 
 ## Discovery
 
@@ -41,6 +43,20 @@ Older names still work: **`hunt timer-start`**, **`hunt auto-on`**, **`hunt svc-
 - **`review_app.py`** : FastAPI **web app** over the same SQLite DB and artifacts directory.
 - Browse jobs with **filter, sort, and search**; inspect **enrichment errors**, **queue state**, and **failure artifacts** (screenshots/HTML/text when captured).
 
+## Production host (server2)
+
+Ansible and service layout live in the **`ansible_homelab`** repo : start with **`ansible_homelab/docs/2.01-job-agent-plan.md`**. Hunt-side naming : **`docs/NAMING.md`**.
+
+Typical production facts (adjust user/host if your deploy differs):
+- Hunt checkout: `/home/michael/hunt`, venv: `/home/michael/hunt/.venv`
+- Runtime DB and artifacts outside the git tree, e.g. **`/home/michael/data/hunt/hunt.db`** and artifacts under the same `data/hunt` tree (set **`HUNT_DB_PATH`** / **`HUNT_ARTIFACTS_DIR`** or rely on **`hunterctl`** defaults when `~/hunt` matches the server layout)
+- Scheduled C1: systemd **`hunt-scraper.timer`** / **`hunt-scraper.service`** (legacy unit names) with **`ExecStart`** running **`hunter/scraper.py`** from the repo root
+- Install Playwright browsers on the host (**`python -m playwright install chromium`**) : the Python package alone is not enough
+- Headful / UI-verify fallback on a headless box: virtual display (e.g. **Xvfb** on **`:98`**) and **`DISPLAY=:98`** on enrichment commands; **`hunter restart`** reloads timer + Xvfb where deployed
+- Review app: separate service from the scraper timer; deploy flags and ingress live in **`ansible_homelab`**
+
+After you deploy **LinkedIn or Indeed enrichment fixes**, consider requeuing older **`failed`** rows whose errors may have been false negatives (for example `external_description_not_usable`, `external_description_not_found`, or some `unexpected_error` cases) so the backlog is not stuck on stale classifications.
+
 ---
 
 ## Personal runbook : features not spelled out above
@@ -53,9 +69,9 @@ Use this as a checklist for notes you keep outside the repo (on-call, server-spe
 | Discord / structured C1 events (priority job, rate limit, automation flagged) | `hunter/c1_logging.py`, review **`/summary`** |
 | LinkedIn **multi-account** rotation / blocks | `hunter/linkedin_session.py`, `.state` files |
 | **Stale** `processing` row recovery | `hunter/db.py`, `ENRICHMENT_STALE_PROCESSING_MINUTES` |
-| **Requeue** failed rows by error code | `scripts/huntctl.py`, `scripts/requeue_enrichment_rows.py` |
-| **Queue health** / ops helpers | `scripts/queue_health.py`, `./hunt.sh queue` |
-| **Start / stop / restart** scheduled C1 on the server | `./hunt.sh start` / `stop` / `restart` (see table above) |
+| **Requeue** failed rows by error code | `scripts/hunterctl.py`, `scripts/requeue_enrichment_rows.py` |
+| **Queue health** / ops helpers | `scripts/queue_health.py`, `./hunter.sh queue` |
+| **Start / stop / restart** scheduled C1 on the server | `./hunter.sh start` / `stop` / `restart` (see table above); production layout: **Production host (server2)** above |
 | **Indeed** title/category cleanup | launcher `clean-indeed` / `cleanup-indeed` |
 | Adding a **new job board** later | `db.ENRICHMENT_SOURCE_PRIORITY` + `hunter/enrichment_dispatch.py` |
 | Tests, Ruff, noisy unittest output | `docs/LOCAL_TESTING.md` §8 |

@@ -6,12 +6,12 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_OG_RESUME_PATH = REPO_ROOT / "main.tex"
 DEFAULT_CANDIDATE_PROFILE_PATH = (
-    REPO_ROOT / "trapper" / "templates" / "candidate_profile.template.md"
+    REPO_ROOT / "fletcher" / "templates" / "candidate_profile.template.md"
 )
 DEFAULT_BULLET_LIBRARY_PATH = (
-    REPO_ROOT / "trapper" / "templates" / "bullet_library.template.md"
+    REPO_ROOT / "fletcher" / "templates" / "bullet_library.template.md"
 )
-BASE_RESUMES_ROOT = REPO_ROOT / "trapper" / "base_resumes"
+BASE_RESUMES_ROOT = REPO_ROOT / "fletcher" / "base_resumes"
 
 # Stage 0 runtime layout contract. Actual server paths live outside the repo.
 DEFAULT_RUNTIME_ROOT = Path(

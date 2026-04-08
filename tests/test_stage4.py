@@ -14,7 +14,7 @@ SCRIPTS_DIR = os.path.join(REPO_ROOT, "scripts")
 sys.path.insert(0, REPO_ROOT)
 sys.path.insert(0, SCRIPTS_DIR)
 
-import huntctl  # type: ignore  # noqa: E402
+import hunterctl  # type: ignore  # noqa: E402
 import queue_health  # type: ignore  # noqa: E402
 
 from hunter import (  # type: ignore  # noqa: E402
@@ -303,7 +303,7 @@ class Stage4Tests(unittest.TestCase):
             self.assertEqual(auth_state["status"], "ok")
             self.assertIsNone(auth_state["last_error"])
 
-    def test_huntctl_defaults_to_runtime_db_on_linux_server_layout(self):
+    def test_hunterctl_defaults_to_runtime_db_on_linux_server_layout(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             home_path = Path(temp_dir)
             repo_root = home_path / "hunt"
@@ -311,7 +311,7 @@ class Stage4Tests(unittest.TestCase):
             repo_root.mkdir(parents=True)
             runtime_dir.mkdir(parents=True)
 
-            defaults = huntctl._get_default_runtime_env(
+            defaults = hunterctl._get_default_runtime_env(
                 {},
                 repo_root=repo_root,
                 home_dir=home_path,
@@ -861,7 +861,7 @@ class Stage4Tests(unittest.TestCase):
 
         self.assertIn("save cancelled", str(ctx.exception))
 
-    def test_huntctl_auth_auto_relogin_can_set_display(self):
+    def test_hunterctl_auth_auto_relogin_can_set_display(self):
         captured = {}
 
         def fake_run(command, *, env=None):
@@ -881,15 +881,15 @@ class Stage4Tests(unittest.TestCase):
             },
         )()
 
-        with patch.object(huntctl, "_run", side_effect=fake_run):
+        with patch.object(hunterctl, "_run", side_effect=fake_run):
             with self.assertRaises(SystemExit) as ctx:
-                huntctl.cmd_auth_auto_relogin(args)
+                hunterctl.cmd_auth_auto_relogin(args)
 
         self.assertEqual(ctx.exception.code, 0)
         self.assertEqual(
             captured["command"],
             [
-                huntctl.PYTHON,
+                hunterctl.PYTHON,
                 "hunter/linkedin_session.py",
                 "--auto-relogin",
                 "--timeout-ms",

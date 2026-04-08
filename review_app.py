@@ -32,7 +32,7 @@ from hunter.db import (  # noqa: E402
 from hunter.failure_artifacts import resolve_artifact_path  # noqa: E402
 
 try:  # noqa: E402
-    from trapper.db import list_resume_attempts  # type: ignore
+    from fletcher.db import list_resume_attempts  # type: ignore
 
     RESUME_TAILOR_AVAILABLE = True
 except ModuleNotFoundError:  # noqa: E402
@@ -877,7 +877,7 @@ def render_auth_status(summary):
     )
     hint = ""
     if not available:
-        hint = '<p style="color: var(--muted);">Refresh auth with <code>DISPLAY=:98 ./hunt.sh auth-save --channel chrome</code>, then press Enter after the LinkedIn feed is visible.</p>'
+        hint = '<p style="color: var(--muted);">Refresh auth with <code>DISPLAY=:98 ./hunter.sh auth-save --channel chrome</code>, then press Enter after the LinkedIn feed is visible.</p>'
     return f"""
     <div class="panel">
       <h2>{html.escape(headline)}</h2>

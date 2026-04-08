@@ -1,6 +1,6 @@
 # Ad Hoc Job Description Template
 
-Use this file for later manual C2 (Trapper) runs when you want to generate a resume without first pulling from the DB.
+Use this file for later manual C2 (Fletcher) runs when you want to generate a resume without first pulling from the DB.
 
 ## Job Metadata
 
