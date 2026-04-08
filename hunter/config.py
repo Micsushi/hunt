@@ -108,6 +108,10 @@ REVIEW_APP_PUBLIC_URL = _get_str_env("REVIEW_APP_PUBLIC_URL", "https://agent-hun
 REVIEW_OPS_TOKEN = _get_str_env("REVIEW_OPS_TOKEN", "")
 # Max rows a single bulk requeue from the review UI may touch.
 REVIEW_BULK_REQUEUE_MAX = _get_int_env("REVIEW_BULK_REQUEUE_MAX", 500)
+# Max rows per request for checkbox-driven bulk actions (requeue, set status).
+REVIEW_BULK_SELECTED_MAX = _get_int_env("REVIEW_BULK_SELECTED_MAX", 250)
+# Max rows per request for bulk delete (guards accidents).
+REVIEW_BULK_DELETE_MAX = _get_int_env("REVIEW_BULK_DELETE_MAX", 50)
 
 WATCHLIST = [
     "1password",

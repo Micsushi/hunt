@@ -1067,6 +1067,109 @@ def requeue_job(job_id, *, source=None):
         conn.close()
 
 
+def _normalize_int_job_ids(job_ids, *, max_count):
+    normalized = []
+    seen = set()
+    for raw in job_ids or ():
+        try:
+            i = int(raw)
+        except (TypeError, ValueError):
+            continue
+        if i < 1 or i in seen:
+            continue
+        seen.add(i)
+        normalized.append(i)
+        if len(normalized) >= max_count:
+            break
+    return normalized
+
+
+def bulk_requeue_jobs_by_ids(job_ids):
+    """Requeue LinkedIn/Indeed rows by primary key (same fields cleared as requeue_job)."""
+    cap = max(0, int(config.REVIEW_BULK_SELECTED_MAX))
+    normalized = _normalize_int_job_ids(job_ids, max_count=cap)
+    if not normalized:
+        return 0
+    placeholders = ", ".join(["?"] * len(normalized))
+    conn = get_connection()
+    try:
+        cursor = conn.cursor()
+        cursor.execute(
+            f"""
+            UPDATE jobs
+            SET enrichment_status = 'pending',
+                last_enrichment_error = NULL,
+                last_enrichment_started_at = NULL,
+                next_enrichment_retry_at = NULL,
+                last_artifact_dir = NULL,
+                last_artifact_screenshot_path = NULL,
+                last_artifact_html_path = NULL,
+                last_artifact_text_path = NULL
+            WHERE id IN ({placeholders})
+              AND source IN ('linkedin', 'indeed')
+            """,
+            tuple(normalized),
+        )
+        conn.commit()
+        return cursor.rowcount
+    finally:
+        conn.close()
+
+
+def set_enrichment_status_for_job_ids(job_ids, *, enrichment_status):
+    """Set enrichment_status for the given job IDs (operator override)."""
+    allowed = {
+        "pending",
+        "processing",
+        "done",
+        "done_verified",
+        "failed",
+        "blocked",
+        "blocked_verified",
+    }
+    if enrichment_status not in allowed:
+        raise ValueError(f"enrichment_status must be one of {sorted(allowed)}")
+    cap = max(0, int(config.REVIEW_BULK_SELECTED_MAX))
+    normalized = _normalize_int_job_ids(job_ids, max_count=cap)
+    if not normalized:
+        return 0
+    placeholders = ", ".join(["?"] * len(normalized))
+    conn = get_connection()
+    try:
+        cursor = conn.cursor()
+        cursor.execute(
+            f"""
+            UPDATE jobs
+            SET enrichment_status = ?
+            WHERE id IN ({placeholders})
+            """,
+            tuple([enrichment_status] + normalized),
+        )
+        conn.commit()
+        return cursor.rowcount
+    finally:
+        conn.close()
+
+
+def delete_jobs_by_ids(job_ids):
+    cap = max(0, int(config.REVIEW_BULK_DELETE_MAX))
+    normalized = _normalize_int_job_ids(job_ids, max_count=cap)
+    if not normalized:
+        return 0
+    placeholders = ", ".join(["?"] * len(normalized))
+    conn = get_connection()
+    try:
+        cursor = conn.cursor()
+        cursor.execute(
+            f"DELETE FROM jobs WHERE id IN ({placeholders})",
+            tuple(normalized),
+        )
+        conn.commit()
+        return cursor.rowcount
+    finally:
+        conn.close()
+
+
 def requeue_enrichment_rows(*, source=None, statuses=None):
     conn = get_connection()
     try:

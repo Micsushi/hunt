@@ -3,6 +3,7 @@ import html
 import io
 import json
 import os
+import sqlite3
 import sys
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -28,8 +29,10 @@ from hunter.config import (  # noqa: E402
 )
 from hunter.db import (  # noqa: E402
     append_review_audit_entry,
+    bulk_requeue_jobs_by_ids,
     bulk_requeue_jobs_matching_review_filters,
     count_jobs_for_review,
+    delete_jobs_by_ids,
     get_job_by_id,
     get_review_activity_summary,
     get_review_audit_entries,
@@ -39,6 +42,7 @@ from hunter.db import (  # noqa: E402
     list_runtime_state_recent,
     manual_requeue_stale_processing_rows,
     requeue_enrichment_rows_by_error_codes,
+    set_enrichment_status_for_job_ids,
     set_job_priority,
     update_job_operator_meta,
 )
@@ -80,6 +84,38 @@ SOURCE_OPTIONS = (
     "linkedin",
     "indeed",
 )
+
+# Human-readable labels for enrichment values and filter chips.
+ENRICHMENT_STATUS_LABELS = {
+    "pending": "Pending enrichment",
+    "processing": "Processing",
+    "done": "Done",
+    "done_verified": "Done (verified)",
+    "failed": "Failed",
+    "blocked": "Blocked",
+    "blocked_verified": "Blocked (verified)",
+}
+
+STATUS_FILTER_LABELS = {
+    "all": "All",
+    "ready": "Ready",
+    "pending": "Pending enrichment",
+    "processing": "Processing",
+    "done": "Done",
+    "done_verified": "Done verified",
+    "failed": "Failed",
+    "blocked": "Blocked",
+    "blocked_verified": "Blocked verified",
+}
+
+
+def enrichment_status_display(raw):
+    if raw is None:
+        return "Not set"
+    s = str(raw).strip()
+    if not s:
+        return "Not set"
+    return ENRICHMENT_STATUS_LABELS.get(s, s.replace("_", " "))
 
 APP_ROUTE_PATHS = {
     "/",
@@ -561,6 +597,101 @@ def render_layout(title, body, *, current_path="/"):
       outline-offset: -2px;
       background: var(--accent-soft);
     }
+    .badge-priority {
+      display: inline-block;
+      font-size: 0.68rem;
+      font-weight: 800;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+      padding: 3px 8px;
+      border-radius: 6px;
+      background: var(--warning-soft);
+      color: var(--warning);
+      border: 1px solid rgba(132, 93, 0, 0.35);
+      cursor: help;
+      user-select: none;
+      white-space: nowrap;
+    }
+    .jobs-selection-bar {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 10px 14px;
+      padding: 12px 16px;
+      margin-bottom: 14px;
+      border-radius: 14px;
+      border: 1px solid var(--line);
+      background: var(--panel-strong);
+      box-shadow: var(--shadow);
+      position: sticky;
+      bottom: 12px;
+      z-index: 8;
+    }
+    .jobs-selection-bar.is-hidden {
+      display: none;
+    }
+    .jobs-selection-bar select {
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      padding: 8px 10px;
+      background: #faf5ec;
+      font: inherit;
+    }
+    .jobs-selection-bar .selection-count {
+      font-weight: 700;
+      color: var(--accent-ink);
+    }
+    #jobs-selection-status-wrap.is-hidden {
+      display: none !important;
+    }
+    #jobs-selection-status-wrap:not(.is-hidden) {
+      display: flex;
+    }
+    .jobs-advanced-panel {
+      margin-bottom: 18px;
+      border: 1px solid var(--line);
+      border-radius: 16px;
+      background: var(--panel);
+      box-shadow: var(--shadow);
+    }
+    .jobs-advanced-panel summary {
+      cursor: pointer;
+      padding: 14px 16px;
+      font-weight: 700;
+      color: var(--accent-ink);
+      list-style: none;
+    }
+    .jobs-advanced-panel summary::-webkit-details-marker { display: none; }
+    .jobs-advanced-panel[open] summary {
+      border-bottom: 1px solid var(--line);
+    }
+    .jobs-advanced-panel .jobs-advanced-body {
+      padding: 16px;
+    }
+    .filter-form-grid {
+      display: grid;
+      gap: 12px;
+      grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+      align-items: end;
+    }
+    .jobs-table-wrap table th:first-child,
+    .jobs-table-wrap table td:first-child {
+      width: 2.25rem;
+      text-align: center;
+      vertical-align: middle;
+    }
+    .jobs-table-wrap table th:nth-child(3),
+    .jobs-table-wrap table td:nth-child(3) {
+      text-align: center;
+      white-space: nowrap;
+    }
+    kbd {
+      font: 0.82em ui-monospace, Consolas, monospace;
+      padding: 2px 6px;
+      border-radius: 6px;
+      border: 1px solid var(--line);
+      background: #faf5ec;
+    }
     @media (max-width: 760px) {
       .shell {
         padding: 18px 14px 32px;
@@ -612,6 +743,52 @@ def render_layout(title, body, *, current_path="/"):
           node.className = kind === 'error' ? 'toast error' : 'toast';
         }, 2200);
       }
+
+      function syncJobsSelectionBar() {
+        const bar = document.getElementById('jobs-selection-bar');
+        const countEl = document.getElementById('jobs-selection-count');
+        const all = document.getElementById('jobs-select-all');
+        if (!bar || !countEl) return;
+        const checks = Array.from(document.querySelectorAll('.jobs-row-check'));
+        const n = checks.filter((c) => c.checked).length;
+        if (n === 0) {
+          bar.classList.add('is-hidden');
+          if (all) {
+            all.checked = false;
+            all.indeterminate = false;
+          }
+        } else {
+          bar.classList.remove('is-hidden');
+          countEl.textContent = `${n} selected`;
+          if (all && checks.length) {
+            all.indeterminate = n > 0 && n < checks.length;
+            all.checked = n === checks.length;
+          }
+        }
+      }
+
+      document.addEventListener('change', (event) => {
+        const t = event.target;
+        if (!(t instanceof HTMLElement)) return;
+        if (t.id === 'jobs-select-all') {
+          document.querySelectorAll('.jobs-row-check').forEach((c) => { c.checked = t.checked; });
+          syncJobsSelectionBar();
+          return;
+        }
+        if (t.classList.contains('jobs-row-check')) {
+          syncJobsSelectionBar();
+          return;
+        }
+        if (t.id === 'jobs-selection-action') {
+          const wrap = document.getElementById('jobs-selection-status-wrap');
+          if (!wrap) return;
+          if (t.value === 'set_status') {
+            wrap.classList.remove('is-hidden');
+          } else {
+            wrap.classList.add('is-hidden');
+          }
+        }
+      });
 
       function rememberScroll() {
         const state = window.history.state || {};
@@ -936,6 +1113,73 @@ def render_layout(title, body, *, current_path="/"):
             .finally(() => {
               priBtn.disabled = false;
             });
+        }
+        const selApply = target && target.closest('#jobs-selection-apply');
+        if (selApply) {
+          event.preventDefault();
+          const actionEl = document.getElementById('jobs-selection-action');
+          const statusEl = document.getElementById('jobs-selection-status');
+          const action = actionEl && actionEl.value;
+          const ids = Array.from(document.querySelectorAll('.jobs-row-check:checked'))
+            .map((c) => parseInt(c.value, 10))
+            .filter((x) => !Number.isNaN(x));
+          if (!ids.length) {
+            showToast('Select at least one row.', 'error');
+            return;
+          }
+          if (!action) {
+            showToast('Choose an action.', 'error');
+            return;
+          }
+          const payload = { action, job_ids: ids };
+          if (action === 'set_status') {
+            payload.enrichment_status = statusEl && statusEl.value;
+            if (!payload.enrichment_status) {
+              showToast('Choose a new status.', 'error');
+              return;
+            }
+          }
+          if (action === 'delete') {
+            const ok = window.confirm(
+              `Delete ${ids.length} job row(s) from the database? This cannot be undone.`,
+            );
+            if (!ok) return;
+            payload.confirm_delete = true;
+          }
+          const tv = document.getElementById('hunt-review-ops-token-value');
+          const hdr = { 'Content-Type': 'application/json', Accept: 'application/json' };
+          if (tv && tv.value) hdr['X-Review-Ops-Token'] = tv.value;
+          selApply.disabled = true;
+          fetch('/api/jobs/bulk-selection', { method: 'POST', headers: hdr, body: JSON.stringify(payload) })
+            .then(async (r) => {
+              const data = await r.json().catch(() => ({}));
+              if (!r.ok) {
+                const msg = typeof data.detail === 'string' ? data.detail : JSON.stringify(data.detail || data);
+                throw new Error(msg || 'Bulk action failed.');
+              }
+              showToast(`Updated ${data.updated} row(s).`, 'ok');
+              await swapTo(window.location.href, { replace: true });
+            })
+            .catch((e) => showToast(e.message || 'Bulk action failed.', 'error'))
+            .finally(() => {
+              selApply.disabled = false;
+            });
+          return;
+        }
+        const selClear = target && target.closest('#jobs-selection-clear');
+        if (selClear) {
+          event.preventDefault();
+          document.querySelectorAll('.jobs-row-check').forEach((c) => { c.checked = false; });
+          const all = document.getElementById('jobs-select-all');
+          if (all) {
+            all.checked = false;
+            all.indeterminate = false;
+          }
+          const ae = document.getElementById('jobs-selection-action');
+          if (ae) ae.value = '';
+          const wrap = document.getElementById('jobs-selection-status-wrap');
+          if (wrap) wrap.classList.add('is-hidden');
+          syncJobsSelectionBar();
         }
       });
 
@@ -1355,17 +1599,6 @@ def render_status_toolbar(
     direction="desc",
     tag="",
 ):
-    status_labels = {
-        "all": "all",
-        "ready": "ready",
-        "pending": "pending_enrich",
-        "processing": "processing",
-        "done": "done",
-        "done_verified": "done_verified",
-        "failed": "failed",
-        "blocked": "blocked",
-        "blocked_verified": "blocked_verified",
-    }
     pills = []
     for status in STATUS_OPTIONS:
         class_name = "pill active" if status == active_status else "pill"
@@ -1379,8 +1612,9 @@ def render_status_toolbar(
             direction=direction,
             tag=tag,
         )
+        label = STATUS_FILTER_LABELS.get(status, status)
         pills.append(
-            f'<a class="{class_name}" href="/jobs?{qs}">{html.escape(status_labels.get(status, status))}</a>'
+            f'<a class="{class_name}" href="/jobs?{qs}" title="{html.escape(status)}">{html.escape(label)}</a>'
         )
     return "".join(pills)
 
@@ -1417,18 +1651,19 @@ def render_source_toolbar(
 def render_search_bar(*, source, status, limit, q, sort, direction, tag=""):
     return f"""
     <form class="panel" method="get" action="/jobs" style="margin-bottom: 18px;">
-      <div style="display:grid; gap:12px; grid-template-columns: minmax(200px, 2fr) minmax(140px, 1fr) repeat(4, minmax(120px, 1fr)); align-items:end;">
-        <div>
+      <p class="muted" style="margin:0 0 12px;">Filter the list below. Status chips are the same filters as the Status menu.</p>
+      <div class="filter-form-grid">
+        <div style="grid-column: span 2; min-width:min(100%, 280px);">
           <label class="label" for="q">Search</label>
           <input id="q" name="q" type="text" value="{
         html.escape(q)
     }" placeholder="company, title, description, or URL keyword" style="width:100%; box-sizing:border-box; border:1px solid var(--line); border-radius:12px; padding:10px 12px; background:#faf5ec;">
         </div>
         <div>
-          <label class="label" for="tag">Operator tag</label>
+          <label class="label" for="tag">Tag</label>
           <input id="tag" name="tag" type="text" value="{
         html.escape(tag)
-    }" placeholder="exact tag filter" style="width:100%; box-sizing:border-box; border:1px solid var(--line); border-radius:12px; padding:10px 12px; background:#faf5ec;">
+    }" placeholder="exact match on operator tag" style="width:100%; box-sizing:border-box; border:1px solid var(--line); border-radius:12px; padding:10px 12px; background:#faf5ec;">
         </div>
         <div>
           <label class="label" for="source">Source</label>
@@ -1551,32 +1786,71 @@ def render_jobs_bulk_panel(*, source, status, limit, page, q, sort, direction, t
         )
     )
     return f"""
-    <div class="panel" id="jobs-bulk-panel" style="margin-bottom: 18px;"
-         data-source="{html.escape(source)}"
-         data-status="{html.escape(status)}"
-         data-q="{html.escape(q)}"
-         data-tag="{html.escape(tag)}"
-         data-sort="{html.escape(sort)}"
-         data-direction="{html.escape(direction)}">
-      <h2>Bulk requeue (matches current filters)</h2>
-      <p class="muted">Counts and updates only rows whose enrichment status is checked below. Respects the same source, tab, search, and tag filters as the table. Hard-capped server-side.</p>
-      <div style="display:flex; flex-wrap:wrap; gap:12px; align-items:center; margin: 12px 0;">
-        <label><input type="checkbox" class="jobs-bulk-status" value="failed" checked /> failed</label>
-        <label><input type="checkbox" class="jobs-bulk-status" value="processing" /> processing</label>
-        <label><input type="checkbox" class="jobs-bulk-status" value="pending" /> pending</label>
-        <label><input type="checkbox" class="jobs-bulk-status" value="blocked" /> blocked</label>
-        <label><input type="checkbox" class="jobs-bulk-status" value="blocked_verified" /> blocked_verified</label>
+    <details class="jobs-advanced-panel">
+      <summary>Advanced: requeue many rows by filters (not checkboxes)</summary>
+      <div class="jobs-advanced-body">
+        <p class="muted" style="margin-top:0;">Use this when you want every row that matches your <strong>current filters</strong> (source, status tab, search, tag), not only ticked rows. Choose which stored enrichment states to send back to <strong>Pending</strong>. Server caps batch size.</p>
+        <div id="jobs-bulk-panel"
+             data-source="{html.escape(source)}"
+             data-status="{html.escape(status)}"
+             data-q="{html.escape(q)}"
+             data-tag="{html.escape(tag)}"
+             data-sort="{html.escape(sort)}"
+             data-direction="{html.escape(direction)}">
+          <div style="display:flex; flex-wrap:wrap; gap:12px 18px; align-items:center; margin: 12px 0;">
+            <label><input type="checkbox" class="jobs-bulk-status" value="failed" checked /> Failed</label>
+            <label><input type="checkbox" class="jobs-bulk-status" value="processing" /> Processing</label>
+            <label><input type="checkbox" class="jobs-bulk-status" value="pending" /> Pending enrichment</label>
+            <label><input type="checkbox" class="jobs-bulk-status" value="blocked" /> Blocked</label>
+            <label><input type="checkbox" class="jobs-bulk-status" value="blocked_verified" /> Blocked verified</label>
+          </div>
+          <div class="actions" style="flex-wrap:wrap;">
+            <button type="button" class="pill secondary" id="jobs-bulk-dry-run">Count only (dry run)</button>
+            <button type="button" class="pill active" id="jobs-bulk-run">Requeue matching rows</button>
+            <span class="muted" id="jobs-bulk-result"></span>
+          </div>
+        </div>
+        <p class="muted" style="margin-bottom:0;">
+          <a class="pill" data-no-app-nav="true" href="/api/jobs/export?format=csv&amp;{exp_csv}">Download CSV</a>
+          <a class="pill" data-no-app-nav="true" href="/api/jobs/export?format=json&amp;{exp_csv}">Download JSON</a>
+          <span class="muted"> · Keyboard: <kbd>j</kbd> / <kbd>k</kbd> move, <kbd>Enter</kbd> opens row</span>
+        </p>
       </div>
-      <div class="actions" style="flex-wrap:wrap;">
-        <button type="button" class="pill secondary" id="jobs-bulk-dry-run">Dry-run count</button>
-        <button type="button" class="pill active" id="jobs-bulk-run">Requeue matched rows</button>
-        <span class="muted" id="jobs-bulk-result"></span>
-      </div>
-      <p class="muted" style="margin-top:10px;">
-        <a class="pill" data-no-app-nav="true" href="/api/jobs/export?format=csv&amp;{exp_csv}">Export CSV (up to 5000)</a>
-        <a class="pill" data-no-app-nav="true" href="/api/jobs/export?format=json&amp;{exp_csv}">Export JSON</a>
-        <span class="pill">Shortcuts on this page: j / k move row, Enter opens detail</span>
-      </p>
+    </details>
+    """
+
+
+def render_jobs_selection_bar():
+    opts = "".join(
+        f'<option value="{html.escape(k)}">{html.escape(v)}</option>'
+        for k, v in (
+            ("pending", ENRICHMENT_STATUS_LABELS["pending"]),
+            ("processing", ENRICHMENT_STATUS_LABELS["processing"]),
+            ("failed", ENRICHMENT_STATUS_LABELS["failed"]),
+            ("blocked", ENRICHMENT_STATUS_LABELS["blocked"]),
+            ("blocked_verified", ENRICHMENT_STATUS_LABELS["blocked_verified"]),
+            ("done", ENRICHMENT_STATUS_LABELS["done"]),
+            ("done_verified", ENRICHMENT_STATUS_LABELS["done_verified"]),
+        )
+    )
+    return f"""
+    <div id="jobs-selection-bar" class="jobs-selection-bar is-hidden" role="region" aria-label="Bulk actions for selected jobs">
+      <span id="jobs-selection-count" class="selection-count">0 selected</span>
+      <label class="muted" style="display:flex; align-items:center; gap:8px;">
+        Action
+        <select id="jobs-selection-action" aria-label="Bulk action">
+          <option value="">Choose…</option>
+          <option value="requeue">Requeue for enrichment (LinkedIn / Indeed only)</option>
+          <option value="set_status">Set enrichment status…</option>
+          <option value="delete">Delete rows…</option>
+        </select>
+      </label>
+      <label id="jobs-selection-status-wrap" class="muted is-hidden" style="align-items:center; gap:8px;">
+        New status
+        <select id="jobs-selection-status" aria-label="New enrichment status">{opts}</select>
+      </label>
+      <button type="button" class="pill active" id="jobs-selection-apply">Run action</button>
+      <button type="button" class="pill secondary" id="jobs-selection-clear">Clear selection</button>
     </div>
     """
 
@@ -1600,18 +1874,25 @@ def render_jobs_table(rows, *, source, status, limit, page, q, sort, direction, 
             else ""
         )
         pri = row.get("priority")
-        pri_badge = '<span class="pill" style="margin-left:6px;font-size:0.75rem;">next</span>' if pri else ""
+        pri_cell = (
+            '<span class="badge-priority" title="This row is flagged “run next” for enrichment (set on the job page). Not a button.">Run next</span>'
+            if pri
+            else "—"
+        )
+        enrich_label = enrichment_status_display(row.get("enrichment_status"))
         notes_cell = format_text(truncate_text(row.get("operator_notes") or "", max_chars=40))
         tag_cell = format_text(row.get("operator_tag") or "")
         body.append(
             f"""
             <tr data-job-id="{row["id"]}">
-              <td><a href="{job_link}" data-app-nav="true">#{row["id"]}</a>{pri_badge}</td>
+              <td><input type="checkbox" class="jobs-row-check" value="{row["id"]}" aria-label="Select job {row["id"]}" /></td>
+              <td><a href="{job_link}" data-app-nav="true">#{row["id"]}</a></td>
+              <td>{pri_cell}</td>
               <td>{format_text(row["source"])}</td>
               <td>{format_text(row["company"])}</td>
               <td>{format_text(row["title"])}</td>
               <td class="link-cell">{linkedin_link}{" | " + apply_link if linkedin_link and apply_link else apply_link}</td>
-              <td><span class="status {status_class}">{format_text(row["enrichment_status"])}</span></td>
+              <td><span class="status {status_class}" title="Stored value: {html.escape(row.get('enrichment_status') or '')}">{format_text(enrich_label)}</span></td>
               <td>{format_text(row["apply_type"])}</td>
               <td>{format_text(row["enrichment_attempts"])}</td>
               <td class="mono">{format_text(row["next_enrichment_retry_at"])}</td>
@@ -1627,18 +1908,20 @@ def render_jobs_table(rows, *, source, status, limit, page, q, sort, direction, 
       <table>
         <thead>
           <tr>
-            <th>{_sortable_link("ID", "id", source=source, status=status, limit=limit, page=page, q=q, current_sort=sort, current_direction=direction, tag=tag)}</th>
-            <th>{_sortable_link("Source", "source", source=source, status=status, limit=limit, page=page, q=q, current_sort=sort, current_direction=direction, tag=tag)}</th>
-            <th>{_sortable_link("Company", "company", source=source, status=status, limit=limit, page=page, q=q, current_sort=sort, current_direction=direction, tag=tag)}</th>
-            <th>{_sortable_link("Title", "title", source=source, status=status, limit=limit, page=page, q=q, current_sort=sort, current_direction=direction, tag=tag)}</th>
-            <th>Links</th>
-            <th>{_sortable_link("Enrichment", "enrichment_status", source=source, status=status, limit=limit, page=page, q=q, current_sort=sort, current_direction=direction, tag=tag)}</th>
-            <th>{_sortable_link("Apply Type", "apply_type", source=source, status=status, limit=limit, page=page, q=q, current_sort=sort, current_direction=direction, tag=tag)}</th>
-            <th>{_sortable_link("Attempts", "enrichment_attempts", source=source, status=status, limit=limit, page=page, q=q, current_sort=sort, current_direction=direction, tag=tag)}</th>
-            <th>{_sortable_link("Next Retry", "next_enrichment_retry_at", source=source, status=status, limit=limit, page=page, q=q, current_sort=sort, current_direction=direction, tag=tag)}</th>
-            <th>{_sortable_link("Last Error", "last_enrichment_error", source=source, status=status, limit=limit, page=page, q=q, current_sort=sort, current_direction=direction, tag=tag)}</th>
-            <th>Note</th>
-            <th>Tag</th>
+            <th scope="col"><input type="checkbox" id="jobs-select-all" aria-label="Select all rows on this page" /></th>
+            <th scope="col">{_sortable_link("ID", "id", source=source, status=status, limit=limit, page=page, q=q, current_sort=sort, current_direction=direction, tag=tag)}</th>
+            <th scope="col" title="Shows when this row is flagged to run before other enrichment work">Queue</th>
+            <th scope="col">{_sortable_link("Source", "source", source=source, status=status, limit=limit, page=page, q=q, current_sort=sort, current_direction=direction, tag=tag)}</th>
+            <th scope="col">{_sortable_link("Company", "company", source=source, status=status, limit=limit, page=page, q=q, current_sort=sort, current_direction=direction, tag=tag)}</th>
+            <th scope="col">{_sortable_link("Title", "title", source=source, status=status, limit=limit, page=page, q=q, current_sort=sort, current_direction=direction, tag=tag)}</th>
+            <th scope="col">Links</th>
+            <th scope="col">{_sortable_link("Enrichment", "enrichment_status", source=source, status=status, limit=limit, page=page, q=q, current_sort=sort, current_direction=direction, tag=tag)}</th>
+            <th scope="col">{_sortable_link("Apply type", "apply_type", source=source, status=status, limit=limit, page=page, q=q, current_sort=sort, current_direction=direction, tag=tag)}</th>
+            <th scope="col">{_sortable_link("Attempts", "enrichment_attempts", source=source, status=status, limit=limit, page=page, q=q, current_sort=sort, current_direction=direction, tag=tag)}</th>
+            <th scope="col">{_sortable_link("Next retry", "next_enrichment_retry_at", source=source, status=status, limit=limit, page=page, q=q, current_sort=sort, current_direction=direction, tag=tag)}</th>
+            <th scope="col">{_sortable_link("Last error", "last_enrichment_error", source=source, status=status, limit=limit, page=page, q=q, current_sort=sort, current_direction=direction, tag=tag)}</th>
+            <th scope="col">Note</th>
+            <th scope="col">Tag</th>
           </tr>
         </thead>
         <tbody>
@@ -2369,6 +2652,49 @@ def api_job_operator_meta(job_id: int, payload: dict = Body(...)):
     return JSONResponse({"status": "ok", "job_id": job_id})
 
 
+@app.post("/api/jobs/bulk-selection", dependencies=[Depends(review_ops_dependency)])
+def api_jobs_bulk_selection(payload: dict = Body(...)):
+    action = payload.get("action")
+    if action not in ("requeue", "set_status", "delete"):
+        raise HTTPException(
+            status_code=400,
+            detail="action must be one of: requeue, set_status, delete.",
+        )
+    raw_ids = payload.get("job_ids")
+    if not isinstance(raw_ids, list) or not raw_ids:
+        raise HTTPException(status_code=400, detail="job_ids must be a non-empty list.")
+    try:
+        if action == "requeue":
+            updated = bulk_requeue_jobs_by_ids(raw_ids)
+        elif action == "set_status":
+            st = payload.get("enrichment_status")
+            if not isinstance(st, str) or not st.strip():
+                raise HTTPException(status_code=400, detail="enrichment_status is required.")
+            updated = set_enrichment_status_for_job_ids(raw_ids, enrichment_status=st.strip())
+        else:
+            if payload.get("confirm_delete") is not True:
+                raise HTTPException(
+                    status_code=400,
+                    detail="confirm_delete must be true to delete rows.",
+                )
+            updated = delete_jobs_by_ids(raw_ids)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except sqlite3.IntegrityError as exc:
+        raise HTTPException(
+            status_code=409,
+            detail=f"Database rejected the change (likely a linked record): {exc}",
+        ) from exc
+    try:
+        append_review_audit_entry(
+            "bulk_selection",
+            {"action": action, "updated": updated, "count_ids": len(raw_ids)},
+        )
+    except Exception:
+        pass
+    return JSONResponse({"status": "ok", "action": action, "updated": updated})
+
+
 @app.get("/", response_class=HTMLResponse)
 def dashboard(request: Request):
     summary = get_review_queue_summary()
@@ -2431,15 +2757,18 @@ def jobs_page(
 
     body = f"""
     <section class="hero">
-      <h1>Jobs queue</h1>
-      <p>Browse the live jobs table across sources, search by company, title, description, or URL keywords, sort by column headings, and open both the listing and apply link directly from the table.</p>
+      <h1>Jobs</h1>
+      <p>Filter with the form and chips, tick rows for bulk actions (requeue, set status, delete), or open a row for detail. The <strong>Queue</strong> column shows when a job is flagged to run before others : it is not a control.</p>
     </section>
     <section class="cards">{render_summary_cards(summary)}</section>
     {render_auth_status(summary) if source in ("all", "linkedin") else ""}
     {render_search_bar(source=source, status=status, limit=safe_limit, q=q, sort=sort, direction=direction, tag=tag_display)}
+    <p class="muted" style="margin:0 0 8px;">Source</p>
     <div class="toolbar">{render_source_toolbar(source, status=status, limit=safe_limit, q=q, sort=sort, direction=direction, tag=tag_display)}</div>
+    <p class="muted" style="margin:12px 0 8px;">Enrichment status</p>
     <div class="toolbar">{render_status_toolbar(status, source=source, limit=safe_limit, q=q, sort=sort, direction=direction, tag=tag_display)}</div>
     {render_jobs_bulk_panel(source=source, status=status, limit=safe_limit, page=safe_page, q=q, sort=sort, direction=direction, tag=tag_display)}
+    {render_jobs_selection_bar()}
     {render_jobs_table(rows, source=source, status=status, limit=safe_limit, page=safe_page, q=q, sort=sort, direction=direction, return_to=return_to, tag=tag_display)}
     {render_pagination(total_rows=total_rows, source=source, status=status, limit=safe_limit, page=safe_page, q=q, sort=sort, direction=direction, tag=tag_display)}
     """
@@ -2507,8 +2836,8 @@ def job_detail(request: Request, job_id: int, return_to: str = ""):
           <button type="submit" class="pill active">Save notes and tag</button>
         </form>
         <div class="actions" style="margin-top: 14px;">
-          <button type="button" class="pill active" data-job-priority-set="1" data-job-id="{row["id"]}">Run next</button>
-          <button type="button" class="pill secondary" data-job-priority-set="0" data-job-id="{row["id"]}">Clear priority</button>
+          <button type="button" class="pill active" data-job-priority-set="1" data-job-id="{row["id"]}">Flag for queue (shows in Jobs list)</button>
+          <button type="button" class="pill secondary" data-job-priority-set="0" data-job-id="{row["id"]}">Remove queue flag</button>
           <a class="pill" href="/jobs/compare?a={row["id"]}" data-app-nav="true">Compare with another job</a>
         </div>
       </div>

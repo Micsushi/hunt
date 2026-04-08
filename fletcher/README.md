@@ -2,14 +2,20 @@
 
 This directory is the repo home for **C2 (Fletcher)** : resume tailoring. See **`docs/NAMING.md`** for component IDs and code names.
 
-## v0.1 (current)
+## Version targets
 
-End-to-end pipeline:
+| Version | Focus |
+|---------|--------|
+| **~v0.1 (shipped in repo)** | End-to-end pipeline, heuristic tailoring, optional Ollama for **classification + keywords only**, DB/artifacts, `hunter tailor`, review-app structured diff + highlights, Ansible Stage 7. |
+| **v1.0 (current goal)** | **LLM-driven resume generation** with prompts (bullet/skill work grounded in profile + library + JD), reliable backend (Ollama default), meet **locked decisions** in `docs/components/component2/README.md`, stable queue + one-page + C3/C4 handoff. |
+| **v2.0 (deferred)** | Interactive editing: gap/coverage, user-selected keywords, constrained regen, scoped bullet edits — **Stages 9–12** in component2 README; tracked in **`docs/TODO.md`** (C2 v2.0). Not required for v1.0. |
+
+## v0.1 runtime (what exists today)
 
 - Parse / render **`main.tex`** (immutable OG resume), optional **family base** resumes under `fletcher/base_resumes/<family>/`.
-- Heuristic **classification** and **keyword** extraction, optional **Ollama** refinement of those two steps when **`HUNT_RESUME_MODEL_BACKEND=ollama`**.
-- **Selection + bullet tailoring** (heuristic scoring, candidate profile + bullet library), **LaTeX compile**, **one-page gate** with controlled retries.
-- **SQLite**: `resume_attempts`, `resume_versions`, job latest/selected resume columns, **`get_apply_context`** for downstream handoff.
+- Heuristic **classification** and **keyword** extraction, optional **Ollama** refinement of **those two steps** when **`HUNT_RESUME_MODEL_BACKEND=ollama`**.
+- **Heuristic** selection + bullet tailoring (candidate profile + bullet library), **LaTeX compile**, **one-page gate** with controlled retries.
+- **SQLite**: `resume_attempts`, `resume_versions`, job latest/selected resume columns, **`get_apply_context`**.
 - **Queue batch**: `python -m fletcher.cli generate-ready` (jobs with `enrichment_status` in `done` / `done_verified`).
 
 ### Environment variables
@@ -28,8 +34,8 @@ Ollama failures **fall back** to the heuristic classification/keywords; see `met
 
 ### Operator entrypoints
 
-- **`hunter tailor …`** (from repo root launchers) delegates to **`python -m fletcher.cli`** — see **`hunter tailor --help`**.
-- Direct module: **`python -m fletcher.cli init-db`**, **`generate-job`**, **`generate-ready`**, **`generate-ad-hoc`**, **`apply-context`**, **`parse-resume`**.
+- **`hunter tailor …`** delegates to **`python -m fletcher.cli`** — see **`hunter tailor --help`**.
+- Direct: **`python -m fletcher.cli init-db`**, **`generate-job`**, **`generate-ready`**, **`generate-ad-hoc`**, **`apply-context`**, **`parse-resume`**.
 
 ### Tests
 
@@ -39,7 +45,6 @@ hunter tests c2
 
 Requires **`pdflatex`** (and optionally **`pdfinfo`**) on PATH for full pipeline tests.
 
-### Still planned (post–v0.1)
+### v1.0 implementation note
 
-- Deeper LLM-driven bullet rewriting (beyond classify/keywords).
-- Richer review UI flows dedicated to C2.
+The main gap vs v1.0 is **LLM participation in tailoring** (Stages 4–5 logic), not more review chrome. See **`docs/TODO.md`** § C2 v1.0.

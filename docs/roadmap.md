@@ -111,18 +111,17 @@ Current status:
 - the OG resume source has been locked to `main.tex`
 - the current local implementation covers:
   - parser and renderer code around `main.tex`
-  - deterministic job classification and keyword extraction
+  - job classification and keyword extraction (heuristic + optional Ollama for those steps only)
+  - heuristic bullet tailoring, compile, one-page retry gating
   - attempt persistence and selected-resume DB wiring
-  - compile plus one-page retry gating
   - shared apply-context fields for later C3 and C4 handoff
+  - basic review-app structured diff + JD keyword highlights (JSON-driven, not interactive regen)
 - detailed design notes now live in:
   - `docs/components/component2/README.md`
   - `docs/components/component2/design.md`
   - shared terms: `docs/GLOSSARY.md`
-- remaining work is mostly production hardening:
-  - Ollama-backed prompt execution
-  - richer family-base resume curation
-  - broader review-surface support
+- **v1.0 focus** (see `docs/TODO.md`): **LLM prompt-driven tailoring** for generation (not only classify/keywords), production hardening on `server2`, curated family bases, stable C1→C2→C3 handoff
+- **v2.0 deferred**: interactive editing, coverage/gap UX, constrained regen, scoped edits — **Stages 9–12** in component2 README; do not block v1.0
 
 Doc:
 - `docs/components/component2/README.md`
@@ -223,7 +222,7 @@ Planning note : non-binding. Refined as production use continues.
 | Component | Name | Current version | Notes |
 |---|---|---:|---|
 | C1 (Hunter) | discovery + enrichment | 0.1 | Python package `hunter/`; Stage 4 ops polishing remains |
-| C2 (Fletcher) | resume tailoring | 0.1 | `fletcher/`; heuristic + optional Ollama enrichment; Ansible Stage 7 (`hunt-fletcher.timer`) in `ansible_homelab` |
+| C2 (Fletcher) | resume tailoring | 0.1 → **1.0** | `fletcher/`; **1.0** = LLM tailoring + prompts + locked contract + Stage 7 deploy. **2.0** = Stages 9–12 interactive/coverage (see `docs/TODO.md`) |
 | C3 (Executioner) | browser autofill + apply assistance | 0.0 | extension; local-only checkpoint: not deployed |
 | C4 (Coordinator) | orchestration + submit control | 0.0 | `coordinator/`; partial local checkpoint: not deployed |
 

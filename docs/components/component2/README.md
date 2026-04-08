@@ -18,7 +18,7 @@ C2 (Fletcher) should:
 
 **v1.0 target (current engineering focus)** — meet the **locked decisions** below with **LLM-driven resume generation** (prompted bullet/section work on top of the same structured pipeline), reliable **Ollama (or chosen) backend**, stable **queue + one-page + handoff** to C3/C4. This is **not** required to ship interactive “pick keywords → regen → chat edit” flows; those are **v2.0**.
 
-**v2.0 (deferred)** — human-in-the-loop editing and richer diff/heatmap UX: coverage/gap artifacts, saved user intent, constrained regeneration, scoped bullet edits. Specified under **Stages 9–12** and **Human-in-the-loop** in this doc; tracked in **`docs/TODO.md`** (C2 v2.0). Optional patterns: open-source **ResumeAgent**-style TeX colorization, **latexdiff** for TeX-to-TeX review PDFs (see prior research notes in chat / future `docs/` if codified).
+**v2.0 (deferred)** — human-in-the-loop editing and richer diff/heatmap UX: coverage/gap artifacts, saved user intent, constrained regeneration, scoped bullet edits. Specified under **Stages 9–12** and **Human-in-the-loop** in this doc; tracked in **`docs/TODO.md`** (C2 v2.0). When v2.0 starts, borrow ideas from OSS (e.g. **ResumeAgent**-style TeX highlight injection, **latexdiff** for TeX diffs) as optional adjuncts—not v1.0 blockers.
 
 C2 (Fletcher) implementation lives under:
 - `fletcher/`

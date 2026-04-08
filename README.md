@@ -82,7 +82,7 @@ Repo homes by component:
 - `coordinator/` : **C4 (Coordinator)** source and contracts
 
 Current local checkpoint for later components:
-- `fletcher/` contains **C2 (Fletcher) v0.1** (pipeline, optional Ollama, DB wiring); deploy via Ansible Stage 7 in `ansible_homelab`
+- `fletcher/` : **C2 (Fletcher)** — **v0.1** shipped in-repo; **v1.0** = LLM tailoring + prompts (`docs/TODO.md`); **v2.0** = interactive editing (deferred). Deploy: Ansible Stage 7 in `ansible_homelab`
 - `executioner/` now contains an initial local **C3 (Executioner)** Workday extension implementation
 - `coordinator/` now contains an initial local **C4 (Coordinator)** readiness/apply-prep/runtime skeleton
 

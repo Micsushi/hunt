@@ -56,39 +56,51 @@ Done means:
 
 ## C2 (Fletcher) : Resume Tailoring
 
+### v1.0 — **current focus** (LLM generation + existing contract)
+
+Goal: ship **one-shot** (per run) tailored resumes that satisfy **`docs/components/component2/README.md` locked decisions**, with the **LLM doing real prompt-driven generation** for tailoring—not only heuristic bullets with LLM on classify/keywords.
+
 Status:
-- initial local runtime exists
-- not yet deployed
+- **~v0.1 shipped** in repo: pipeline, Ollama optional for **classification/keywords only**, Ansible Stage 7, review diff/highlight panel on structured JSON
+- **v1.0 not done** until the items below are true
 
-What still needs to be fixed or completed:
-- finish production backend selection and wiring
-  - Ollama-backed prompt execution is still the main intended production path
-- curate stronger family-base resumes
-  - software
-  - pm
-  - data
-  - general
-- harden the queue-driven generation path against real production inputs
-  - confirm C2 only starts after C1 reaches a normal done state
-  - confirm sparse or weak JDs still produce sensible fallback behavior
-- expand review-surface support
-  - latest result visibility
-  - selected resume visibility
-  - attempt browsing and artifact inspection
-- validate the end-to-end C1 -> C2 handoff
-  - C2 should consume enriched descriptions only after C1 is in a normal done state
-- keep the selected downstream resume contract stable for C3/C4
-  - selected resume version
-  - selected PDF/TEX paths
-  - selected-ready-for-C3 signal
-  - resume concern flags
-- keep deployment separate from C1
-  - C2 should become its own Ansible step/stage after C1 is stable
+v1.0 work (in order of dependency):
+- **LLM tailoring path**
+  - prompts + JSON (or validated structured output) for bullet/skill emphasis aligned with JD, grounded in candidate profile / bullet library / OG facts
+  - wire **Ollama** (or chosen backend) for this step with clear **fallback** when the model fails (heuristic or safe minimal edit)
+  - keep **`main.tex` immutable** and preserve locked section order / one-page gate / concern flags
+- **Production hardening**
+  - queue-driven **`generate-ready`** dependable on `server2` with real JDs
+  - confirm C2 only consumes jobs after C1 **`done` / `done_verified`** (existing SQL intent)
+  - weak/sparse JDs: fallback behavior + flags remain sensible
+- **Curate family base resumes** (`fletcher/base_resumes/`) for software / pm / data / general where used
+- **End-to-end C1 → C2 handoff** validated on `server2`
+- **C3/C4 contract** unchanged: selected version, PDF/TeX paths, `selected_resume_ready_for_c3`, flags
+- **Deploy** remains separate Ansible Stage 7 (already); document operator smoke for v1.0
 
-Done means:
-- queue-driven resume generation is dependable
-- one-page gating is stable
-- selected resume state is easy for C3/C4 to consume
+**Explicitly out of scope for v1.0** (do not block release on these):
+- user-driven keyword pick lists and “regen with my selections”
+- per-bullet chat / iterative edit sessions
+- PDF-side heatmaps or LaTeX `latexdiff` as a product feature
+- parity with Jobright-style interactive polish
+
+v1.0 **done** means:
+- LLM-backed tailoring meets locked decisions in practice (truthful, one page, artifacts + DB)
+- timer/CLI paths stable; handoff fields trusted by C3/C4
+
+---
+
+### v2.0 — deferred (interactive editing + diff / coverage UX)
+
+**Do not implement until v1.0 is signed off.** Design is already sketched in **`docs/components/component2/README.md`**:
+- **Human-in-the-loop : how to implement** (presentation-agnostic contract)
+- **Stages 9–12**: JD coverage/gap report, user intent storage, constrained regeneration with lineage, scoped bullet AI edit
+
+Implementation hints (when you start v2.0):
+- keep **JSON** as the negotiation layer; PDF/LaTeX remain outputs
+- optional references: open **ResumeAgent** (LaTeX heatmap via color injection + sandbox compile), **latexdiff** for engineer-facing TeX diffs, **Reactive Resume**-style structured editor patterns for UI-only ideas
+
+Tracker: add v2.0 tasks here as you break down Stages 9–12; link back to component2 README so the stage list stays canonical.
 
 ## C3 (Executioner) : Browser Autofill Extension
 
