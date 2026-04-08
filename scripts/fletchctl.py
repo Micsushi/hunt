@@ -120,6 +120,57 @@ def cmd_parse_resume(args):
     _run_fletcher_cli(argv)
 
 
+def cmd_test_job(args):
+    import json
+    import time
+    sys.path.insert(0, str(REPO_ROOT))
+    from fletcher.pipeline import generate_resume_for_job
+
+    print(f"[fletchctl] Testing job {args.job_id} ...")
+    start = time.time()
+    r = generate_resume_for_job(args.job_id)
+    elapsed = time.time() - start
+
+    print(f"\n--- Result ---")
+    print(f"Total time  : {elapsed:.1f}s")
+    print(f"Status      : {r['status']}")
+    print(f"Compile     : {r['compile_status']}")
+    print(f"Fits 1 page : {r['fits_one_page']}")
+    print(f"PDF         : {r.get('pdf_path') or '—'}")
+
+    summary_path = r.get("summary_rewrite_path")
+    if summary_path:
+        try:
+            data = json.loads(Path(summary_path).read_text(encoding="utf-8"))
+            print(f"\n--- AI Summary (call 2) ---")
+            print(f"Success     : {data.get('success')}")
+            print(f"Duration    : {data.get('duration_ms')}ms")
+            print(f"Keywords    : {data.get('keywords_used')}")
+            print(f"Text        :\n  {data.get('summary', '(empty)')}")
+        except Exception as e:
+            print(f"Summary file error: {e}")
+    else:
+        print("\nAI Summary  : not generated (ollama backend not active?)")
+
+    bullet_path = r.get("bullet_rewrite_path")
+    if bullet_path:
+        try:
+            data = json.loads(Path(bullet_path).read_text(encoding="utf-8"))
+            print(f"\n--- Bullet rewrite (call 3) ---")
+            print(f"Success     : {data.get('success')}")
+            print(f"Duration    : {data.get('duration_ms')}ms")
+            print(f"Keywords    : {data.get('keywords_used')}")
+            bullets = data.get("bullets") or []
+            for i, b in enumerate(bullets, 1):
+                print(f"  {i}. {b}")
+        except Exception as e:
+            print(f"Bullet file error: {e}")
+    else:
+        print("Bullet rewrite: not generated")
+
+    raise SystemExit(0)
+
+
 def cmd_tests(_args):
     patterns = [
         "test_component2_stage1.py",
@@ -177,6 +228,10 @@ def build_parser() -> argparse.ArgumentParser:
     parse.add_argument("--output-json", default=None, dest="output_json")
     parse.add_argument("--roundtrip-tex", default=None, dest="roundtrip_tex")
     parse.set_defaults(func=cmd_parse_resume)
+
+    test_job = sub.add_parser("test-job", help="Run pipeline on one job and print timing + LLM output.")
+    test_job.add_argument("job_id", type=int)
+    test_job.set_defaults(func=cmd_test_job)
 
     fx = sub.add_parser(
         "run",
