@@ -24,6 +24,10 @@ function buildQuestionHash(value = "") {
 
 function createWorkdayFillFunction() {
   return async ({ profile, settings, activeApplyContext, defaultResume }) => {
+    const perFieldDelayMs = 25;
+    const perUploadDelayMs = 75;
+    const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
     function normalizeText(value) {
       let normalized = String(value || "");
       if (settings.stripLongDash !== false) {
@@ -330,52 +334,11 @@ function createWorkdayFillFunction() {
       manualReviewReasons.push("resume_not_ready_for_c3");
     }
 
+    // v0.1: walk fields field-by-field in a top-down DOM order.
     const textInputs = getVisibleElements('input:not([type="hidden"]):not([type="file"])');
-    for (const input of textInputs) {
-      const descriptor = getDescriptor(input);
-      if (!descriptor) {
-        continue;
-      }
-
-      const profileValue = chooseProfileValue(descriptor);
-      if (profileValue && setElementValue(input, profileValue)) {
-        filledFields.push({ field: descriptor, valueSource: "profile" });
-      }
-    }
-
     const textareas = getVisibleElements("textarea");
-    for (const textarea of textareas) {
-      const descriptor = getDescriptor(textarea);
-      if (!descriptor || textarea.value || settings.allowGeneratedAnswers === false) {
-        continue;
-      }
-
-      const answer = generateAnswer(descriptor);
-      if (setElementValue(textarea, answer.answerText)) {
-        const questionText = descriptor;
-        const questionHash = buildQuestionHash(questionText);
-        generatedAnswers.push({
-          questionHash,
-          questionText,
-          answerText: answer.answerText,
-          answerSource: "generated",
-          confidence: answer.confidence,
-          manualReviewRequired: answer.manualReviewRequired
-        });
-        filledFields.push({ field: descriptor, valueSource: "generated_answer" });
-        if (settings.flagLowConfidenceAnswers !== false && answer.manualReviewRequired) {
-          manualReviewReasons.push(`low_confidence_answer:${questionHash}`);
-        }
-      }
-    }
-
     const selects = getVisibleElements("select");
-    for (const select of selects) {
-      const descriptor = getDescriptor(select);
-      if (descriptor && fillSelectElement(select, descriptor)) {
-        filledFields.push({ field: descriptor, valueSource: "select_rule" });
-      }
-    }
+    const fileInputs = getVisibleElements('input[type="file"]');
 
     const radios = getVisibleElements('input[type="radio"]');
     const radiosByName = new Map();
@@ -387,23 +350,105 @@ function createWorkdayFillFunction() {
       radiosByName.get(name).push(radio);
     }
 
-    for (const radioGroup of radiosByName.values()) {
-      const descriptor = radioGroup.map((radio) => getDescriptor(radio)).join(" ").toLowerCase();
-      if (fillRadioGroup(radioGroup, descriptor)) {
-        filledFields.push({ field: descriptor, valueSource: "radio_rule" });
+    const candidates = [];
+    for (const element of [...textInputs, ...textareas, ...selects, ...fileInputs]) {
+      candidates.push({
+        kind: "element",
+        element,
+        rect: element.getBoundingClientRect()
+      });
+    }
+    for (const group of radiosByName.values()) {
+      const anchor = group[0];
+      if (!anchor) {
+        continue;
       }
+      candidates.push({
+        kind: "radioGroup",
+        radios: group,
+        rect: anchor.getBoundingClientRect()
+      });
     }
 
-    const fileInputs = getVisibleElements('input[type="file"]');
-    for (const fileInput of fileInputs) {
-      const attachment = await attachResumeToFileInput(fileInput);
-      if (attachment.attached) {
-        filledFields.push({
-          field: getDescriptor(fileInput) || "resume_upload",
-          valueSource: "resume_upload"
-        });
-      } else {
-        manualReviewReasons.push(`resume_upload:${attachment.reason}`);
+    candidates.sort((left, right) => {
+      if (left.rect.top !== right.rect.top) {
+        return left.rect.top - right.rect.top;
+      }
+      if (left.rect.left !== right.rect.left) {
+        return left.rect.left - right.rect.left;
+      }
+      return 0;
+    });
+
+    for (const candidate of candidates) {
+      if (candidate.kind === "radioGroup") {
+        const group = candidate.radios;
+        const descriptor = group.map((radio) => getDescriptor(radio)).join(" ").toLowerCase();
+        if (fillRadioGroup(group, descriptor)) {
+          filledFields.push({ field: descriptor, valueSource: "radio_rule" });
+          await sleep(perFieldDelayMs);
+        }
+        continue;
+      }
+
+      const element = candidate.element;
+      const descriptor = getDescriptor(element);
+      if (!descriptor) {
+        continue;
+      }
+
+      if (element.tagName === "TEXTAREA") {
+        if (element.value || settings.allowGeneratedAnswers === false) {
+          continue;
+        }
+
+        const answer = generateAnswer(descriptor);
+        if (setElementValue(element, answer.answerText)) {
+          const questionText = descriptor;
+          const questionHash = buildQuestionHash(questionText);
+          generatedAnswers.push({
+            questionHash,
+            questionText,
+            answerText: answer.answerText,
+            answerSource: "generated",
+            confidence: answer.confidence,
+            manualReviewRequired: answer.manualReviewRequired
+          });
+          filledFields.push({ field: descriptor, valueSource: "generated_answer" });
+          if (settings.flagLowConfidenceAnswers !== false && answer.manualReviewRequired) {
+            manualReviewReasons.push(`low_confidence_answer:${questionHash}`);
+          }
+          await sleep(perFieldDelayMs);
+        }
+        continue;
+      }
+
+      if (element.tagName === "SELECT") {
+        if (fillSelectElement(element, descriptor)) {
+          filledFields.push({ field: descriptor, valueSource: "select_rule" });
+          await sleep(perFieldDelayMs);
+        }
+        continue;
+      }
+
+      if (element.tagName === "INPUT" && element.type === "file") {
+        const attachment = await attachResumeToFileInput(element);
+        if (attachment.attached) {
+          filledFields.push({
+            field: getDescriptor(element) || "resume_upload",
+            valueSource: "resume_upload"
+          });
+          await sleep(perUploadDelayMs);
+        } else {
+          manualReviewReasons.push(`resume_upload:${attachment.reason}`);
+        }
+        continue;
+      }
+
+      const profileValue = chooseProfileValue(descriptor);
+      if (profileValue && setElementValue(element, profileValue)) {
+        filledFields.push({ field: descriptor, valueSource: "profile" });
+        await sleep(perFieldDelayMs);
       }
     }
 

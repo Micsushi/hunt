@@ -1,4 +1,4 @@
-# Hunt : CLI conventions (`hunter` / `hunterctl`)
+# Hunt : CLI conventions (`hunter` / `hunterctl` / `fletch`)
 
 This doc is the contract for **operator-facing commands** so C1–C4 stay consistent as the repo grows.
 
@@ -8,13 +8,15 @@ The **Hunt** repo is the whole product; repo-root **`hunter`** launchers and **`
 
 | Path | Role |
 |------|------|
-| **`./hunter.sh`**, **`./hunter.ps1`**, **`hunter.cmd`** | **Canonical** repo-root launchers (POSIX / Windows). |
+| **`./hunter.sh`**, **`./hunter.ps1`**, **`hunter.cmd`** | **C1 canonical** repo-root launchers (POSIX / Windows). |
+| **`./fletch.sh`**, **`./fletch.ps1`**, **`fletch.cmd`** | **C2 canonical** repo-root launchers (POSIX / Windows). |
 | **`scripts/launchers/hunter.sh`** | Used by repo-root **`hunter.sh`** : picks venv Python, `cd` to repo root. |
-| **`scripts/hunterctl.py`** | Single Python CLI implementation : all launchers invoke this with passthrough args. |
+| **`scripts/hunterctl.py`** | C1 Python CLI implementation : `hunter.*` launchers invoke this. |
+| **`scripts/fletchctl.py`** | C2 Python CLI implementation : `fletch.*` launchers invoke this (delegates to `python -m fletcher.cli`). |
 | **`./hunt.sh`**, **`./hunt.ps1`**, **`hunt.cmd`** | **Legacy alias** : same CLI as **`hunter.*`** (product name collision avoided in new docs). |
 | **`scripts/huntctl.py`** | **Compatibility forwarder** to **`hunterctl.py`** (old scripts and muscle memory). |
 
-**Rule:** Do not add a second parallel CLI framework. New verbs go into **`scripts/hunterctl.py`** (or a module it calls).
+**Rule:** `hunter` commands are **C1-only**. C2 operator commands live under **`fletch`**.
 
 ## C1 (Hunter) commands today
 
@@ -27,7 +29,8 @@ C1 is the most mature surface. Short narrative : **`docs/C1_OPERATOR_WORKFLOW.md
 | **`hunter restart`** | Linux : **`daemon-reload`**, restart **`hunt-xvfb`**, restart **`hunt-scraper.timer`**. |
 | **`hunter enrich N`** | Positional batch size (same as **`--limit N`**). Often **`hunter enrich 50 --source all`**. |
 | **`hunter scrape`**, **`hunter queue`**, **`hunter review`**, … | See **`hunter --help`** or **`docs/components/component1/README.md`** (Command Reference). |
-| **`hunter tailor …`** | **C2 (Fletcher) v0.1** : `init-db`, `job`, `ready`, `ad-hoc`, `context`, `parse` (delegates to **`python -m fletcher.cli`**). |
+| **`fletch run …`** | Delegate to **`python -m fletcher.cli …`** (C2). Example: `fletch run generate-job 123`. |
+| **`fletch tests`** | Run C2 unit tests (including review/diff helpers). |
 
 **`hunt <verb>`** is identical (legacy launcher). Legacy subcommand names remain valid (**`timer-start`**, **`auto-on`**, **`svc-start`**, etc.) but **prefer `start` / `stop` / `restart`** in new docs.
 
@@ -35,8 +38,9 @@ C1 is the most mature surface. Short narrative : **`docs/C1_OPERATOR_WORKFLOW.md
 
 When you add automation an operator runs from the repo (not the extension popup, not OpenClaw-only), follow this pattern.
 
-1. **Implement in `hunterctl`**  
-   Add a **`argparse`** subparser under **`build_parser()`** in **`scripts/hunterctl.py`**, with a **`cmd_*`** handler that builds argv and calls **`_run([PYTHON, …])`** (or **`subprocess`** for non-Python steps). Keep Linux-only server actions behind **`_require_linux`** when appropriate.
+1. **Implement in the correct component CLI**  
+   - C1: add a subparser to **`scripts/hunterctl.py`**.  
+   - C2: add a subparser to **`scripts/fletchctl.py`** (or keep delegating to **`python -m fletcher.cli`**).
 
 2. **Name verbs for humans**  
    Prefer short verbs : **`start`**, **`stop`**, **`restart`**, **`status`**, **`logs`**, **`enrich`**, **`tailor`** (example for C2), **`apply-prep`** (C4 already). Avoid duplicating systemd unit names in user-facing docs unless explaining internals.
@@ -47,7 +51,7 @@ When you add automation an operator runs from the repo (not the extension popup,
    - **`AGENTS.md`** : one-line mention in the repo overview if the command is part of the default workflow.
 
 4. **Optional : thin package CLI**  
-   It is fine for **`fletcher/`**, **`coordinator/`**, etc. to keep **`python -m fletcher.cli`** or **`python -m coordinator.cli`** for library-style use. **`hunterctl`** should call those entrypoints so operators only learn **`hunter …`** (or legacy **`hunt …`**).
+   It is fine for **`fletcher/`**, **`coordinator/`**, etc. to keep **`python -m fletcher.cli`** or **`python -m coordinator.cli`** for library-style use. The component wrapper CLI (**`fletch`**, etc.) should call those entrypoints.
 
 5. **Windows vs Linux**  
    If a command only makes sense on the server (systemd, Docker socket), use **`_require_linux`** and print a clear Windows message (same pattern as **`hunter restart`**).

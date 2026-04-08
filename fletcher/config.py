@@ -3,7 +3,17 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
+try:
+    from hunter.dotenv import load_dotenv as _load_dotenv  # type: ignore
+except Exception:  # pragma: no cover
+    _load_dotenv = None  # type: ignore
+
 REPO_ROOT = Path(__file__).resolve().parent.parent
+if _load_dotenv is not None:
+    try:
+        _load_dotenv(REPO_ROOT / ".env", override=False)
+    except Exception:
+        pass
 DEFAULT_OG_RESUME_PATH = REPO_ROOT / "main.tex"
 DEFAULT_CANDIDATE_PROFILE_PATH = (
     REPO_ROOT / "fletcher" / "templates" / "candidate_profile.template.md"

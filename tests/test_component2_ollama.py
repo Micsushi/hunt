@@ -8,13 +8,14 @@ from fletcher.llm_enrich import enrich_with_ollama_if_enabled
 
 class Component2OllamaTests(unittest.TestCase):
     def test_heuristic_backend_skips_network(self):
-        with patch("fletcher.llm_enrich._ollama_chat") as mock_chat:
-            c, k, meta = enrich_with_ollama_if_enabled(
-                title="Backend Engineer",
-                description="Python and AWS backend services.",
-                classification={"role_family": "software", "job_level": "mid"},
-                keywords={"must_have_terms": ["python"]},
-            )
+        with patch.object(config, "DEFAULT_MODEL_BACKEND", "heuristic"):
+            with patch("fletcher.llm_enrich._ollama_chat") as mock_chat:
+                c, k, meta = enrich_with_ollama_if_enabled(
+                    title="Backend Engineer",
+                    description="Python and AWS backend services.",
+                    classification={"role_family": "software", "job_level": "mid"},
+                    keywords={"must_have_terms": ["python"]},
+                )
         mock_chat.assert_not_called()
         self.assertFalse(meta["ollama_enriched"])
         self.assertEqual(c["role_family"], "software")

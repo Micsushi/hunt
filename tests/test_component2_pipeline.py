@@ -21,6 +21,25 @@ class Component2PipelineTests(unittest.TestCase):
     def setUp(self):
         self.temp_dir = tempfile.TemporaryDirectory()
         self.db_path = Path(self.temp_dir.name) / "hunt.db"
+        # Tests should never depend on a live Ollama daemon or local .env defaults.
+        # Force heuristic backend for deterministic unit runs.
+        self._model_backend_patcher = patch("fletcher.config.DEFAULT_MODEL_BACKEND", "heuristic")
+        self._model_backend_patcher.start()
+        # Also avoid slow/host-dependent LaTeX compilation in unit tests.
+        # Individual tests may override this with their own patch(...) if needed.
+        def _fast_compile(_tex_path):
+            pdf_path = Path(self.temp_dir.name) / "mock.pdf"
+            pdf_path.write_bytes(b"%PDF-1.4\n%mock\n")
+            return {
+                "compile_status": "ok",
+                "page_count": 1,
+                "fits_one_page": True,
+                "pdf_path": str(pdf_path),
+                "log_text": "mock compile",
+            }
+
+        self._compile_patcher = patch("fletcher.pipeline.compile_tex", side_effect=_fast_compile)
+        self._compile_patcher.start()
         conn = sqlite3.connect(self.db_path)
         conn.execute(
             """
@@ -93,6 +112,8 @@ class Component2PipelineTests(unittest.TestCase):
     def tearDown(self):
         self.temp_dir.cleanup()
         os.environ.pop("HUNT_RESUME_ARTIFACTS_DIR", None)
+        self._compile_patcher.stop()
+        self._model_backend_patcher.stop()
 
     def test_generate_resume_for_job_records_attempt_and_apply_context(self):
         init_resume_db(self.db_path)

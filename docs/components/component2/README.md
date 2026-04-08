@@ -14,7 +14,7 @@ C2 (Fletcher) should:
 
 ## Current Status
 
-**Shipped today (~v0.1)** — full local pipeline (parse → classify/keywords → optional Ollama refinement of those steps → heuristic bullet tailoring → compile → DB + artifacts), **`hunter tailor`** / **`fletcher.cli`**, review-app structured diff + JD highlights on JSON, Ansible Stage 7. See **`fletcher/README.md`**.
+**Shipped today (~v0.1)** — full local pipeline (parse → classify/keywords → optional Ollama refinement of those steps → heuristic bullet tailoring → compile → DB + artifacts), **`fletch`** / **`fletcher.cli`**, review-app structured diff + JD highlights on JSON, Ansible Stage 7. See **`fletcher/README.md`**.
 
 **v1.0 target (current engineering focus)** — meet the **locked decisions** below with **LLM-driven resume generation** (prompted bullet/section work on top of the same structured pipeline), reliable **Ollama (or chosen) backend**, stable **queue + one-page + handoff** to C3/C4. This is **not** required to ship interactive “pick keywords → regen → chat edit” flows; those are **v2.0**.
 
@@ -38,7 +38,7 @@ C2 (Fletcher) deployment should also stay separate from later C3 (Executioner) d
 
 ## Operator CLI (convention)
 
-Stable operator flows for C2 (batch tailor, status, etc.) should be exposed as **`hunter`** subcommands by extending **`scripts/hunterctl.py`** (which may delegate to `python -m fletcher.cli` or `fletcher/cli.py`). Do not introduce a second repo-wide CLI. See **`docs/CLI_CONVENTIONS.md`**.
+Stable operator flows for C2 (batch tailor, status, etc.) should be exposed as **`fletch`** commands (delegating to `python -m fletcher.cli` as needed). See **`docs/CLI_CONVENTIONS.md`**.
 
 ## Locked Decisions
 

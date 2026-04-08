@@ -147,6 +147,46 @@ Recommended placement:
 - low-confidence answers should still fill something useful, then be flagged for manual review
 - review surfaces for applied jobs and artifacts should remain visible in the existing review app later, but actions should live in a separate C3 surface
 
+## Versioning and Stages
+
+### Planned Extension Versions
+
+The Chrome extension itself should grow in small, testable versions:
+
+- **v0.1 – Manual Workday fill**
+  - user is already signed in
+  - user clicks a C3 control (popup button) to trigger fill
+  - extension walks the current Workday step field-by-field in a consistent DOM order
+  - fills supported inputs and textareas from the profile and active apply context
+  - uploads the active resume when possible
+  - leaves multi-step navigation and required-field detection to later versions
+- **v0.2 – Apply detection and required-field summary**
+  - extension detects when the user is on a supported Workday apply step
+  - shows a prompt or popup state offering autofill
+  - computes how many fields look required and how many it expects to fill
+  - records that coverage in the attempt log for later review
+- **v0.3 – Multi-step wizard support and ATS-specific modes**
+  - adds an opt-in mode that can advance through Workday steps:
+    - fill the current page
+    - click the primary “Next” / “Continue” button when safe
+    - repeat on the next step while tracking validation errors
+  - exposes per-ATS settings (for Workday first) for:
+    - whether to auto-advance across steps
+    - whether to fill required fields only or a broader set
+- **v0.4 – Mail / verification helpers**
+  - introduce an email integration (for example, Gmail via API/OAuth) that can surface recent verification codes or links
+  - keep CAPTCHA and OTP decision flows as explicit, operator-aware steps
+  - connect mail helpers to account/login helper flows without forcing them into the first-run experience
+- **v1.0 – Polished end-to-end flow**
+  - stable Workday adapter with clear error states and review surfaces
+  - safe modes for:
+    - manual-only help on the current page
+    - guided multi-step apply with operator confirmation points
+    - later C4 / OpenClaw orchestration using apply-prep artifacts and C3 as the execution engine
+  - account and verification helpers that keep the user in control of risky steps
+
+These versions sit on top of the existing staged plan below.
+
 ## Proposed Stages
 
 ### Stage 0 : contract and scaffolding

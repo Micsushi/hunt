@@ -1,5 +1,10 @@
 import os as _os
 
+try:
+    from hunter.dotenv import load_dotenv as _load_dotenv  # type: ignore
+except Exception:  # pragma: no cover
+    _load_dotenv = None  # type: ignore
+
 
 def _get_str_env(name, default):
     value = _os.getenv(name)
@@ -30,6 +35,14 @@ def _get_bool_env(name, default):
 
 
 _ROOT = _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)))
+
+# Optional local/dev env file support. Environment variables (systemd/Ansible/Docker)
+# still take precedence; .env only fills missing values.
+if _load_dotenv is not None:
+    try:
+        _load_dotenv(_os.path.join(_ROOT, ".env"), override=False)
+    except Exception:
+        pass
 
 
 def get_db_path():
