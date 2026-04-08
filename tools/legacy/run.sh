@@ -8,6 +8,6 @@ if [ ! -d "venv" ]; then
 fi
 
 source venv/bin/activate
-pip install -q -r scraper/requirements.txt
+pip install -q -r hunter/requirements.txt
 
-exec python scraper/runner.py
+exec python hunter/runner.py

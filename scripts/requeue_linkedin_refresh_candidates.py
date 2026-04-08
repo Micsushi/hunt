@@ -2,12 +2,11 @@ import argparse
 import sys
 from pathlib import Path
 
-
 REPO_ROOT = Path(__file__).resolve().parent.parent
-SCRAPER_DIR = REPO_ROOT / "scraper"
-sys.path.insert(0, str(SCRAPER_DIR))
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
 
-import db
+from hunter import db  # noqa: E402
 
 
 def main():

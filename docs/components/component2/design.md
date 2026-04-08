@@ -1,10 +1,10 @@
-# Component 2 : Design Notes
+# C2 (Fletcher) : Design Notes
 
 ## Purpose
 
-This document captures the current recommended design for Component 2 based on the repo state and the user decisions locked in so far.
+This document captures the current recommended design for C2 (Fletcher) based on the repo state and the user decisions locked in so far.
 
-Component 2 should stay runnable on its own, but it is intended to sit in the larger production flow:
+C2 (Fletcher) should stay runnable on its own, but it is intended to sit in the larger production flow:
 
 1. C1 scrape
 2. C1 enrichment
@@ -36,9 +36,9 @@ The following rules should be treated as hard constraints.
 - The `Projects` section is optional if experience needs the space.
 - One page is a hard gate.
 
-## Component 1 Handoff
+## C1 (Hunter) Handoff
 
-Component 2 should be able to run independently of Component 1, but the normal queue-driven path should consume C1 output.
+C2 (Fletcher) should be able to run independently of C1 (Hunter), but the normal queue-driven path should consume C1 output.
 
 Recommended automatic trigger:
 - C2 queues a job when C1 enrichment reaches:
@@ -236,7 +236,7 @@ The exact schema can still move, but the latest-on-job plus history-table split 
 
 ## C2 To C3 Handoff
 
-Component 2 should not leave Component 3 guessing which file to upload.
+C2 (Fletcher) should not leave C3 (Executioner) guessing which file to upload.
 
 Recommended contract:
 
@@ -306,7 +306,7 @@ The DB should point to the selected and latest-useful artifact paths rather than
 The repo scaffold for C2 now lives in:
 
 ```text
-resume_tailor/
+fletcher/
   base_resumes/
   prompts/
   schemas/
@@ -372,7 +372,7 @@ Nice-to-have later:
 
 ## Deployment Notes
 
-Component 2 should reuse the `server2` patterns already established for Hunt:
+C2 (Fletcher) should reuse the `server2` patterns already established for Hunt:
 
 - unattended worker lane:
   - systemd, similar to the current Hunt runtime lane

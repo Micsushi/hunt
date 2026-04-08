@@ -1,27 +1,26 @@
-# Component 4 : Orchestration And Submit Control
+# C4 (Coordinator) : Orchestration And Submit Control
 
 ## Goal
 
-Build Component 4 as the orchestration layer that coordinates Components 1, 2, and 3.
+Build C4 (Coordinator) as the orchestration layer that coordinates C1 (Hunter), C2 (Fletcher), and C3 (Executioner).
 
-Component 4 should decide:
+C4 (Coordinator) should decide:
 - which jobs should proceed
 - when a page should be opened
-- when Component 3 should autofill
+- when C3 (Executioner) should autofill
 - when final submit is allowed
 - when manual review or handoff is required
 
-OpenClaw is the current most likely first implementation of Component 4.
+OpenClaw is the current most likely first implementation of C4 (Coordinator).
 
 This document is the stage plan.
-Implementation-oriented design notes and research-backed recommendations live in:
+Implementation-oriented design notes, research-backed recommendations, and the **living implementation checkpoint** live in:
 - `docs/components/component4/design.md`
-- `docs/components/component4/implementation_checkpoint.md`
 
 ## Current Status
 
-An initial local Component 4 implementation now exists under:
-- `orchestration/`
+An initial local C4 (Coordinator) implementation now exists under:
+- `coordinator/`
 
 Current checkpoint:
 - DB-backed readiness evaluation over C1 and C2 state
@@ -36,16 +35,20 @@ Still later:
 - loading C3 context directly into a live Chrome extension session
 - full OpenClaw/browser-lane integration on `server2`
 
-## Why Component 4 Should Be Separate
+## Operator CLI (convention)
 
-Component 3 should remain the browser autofill engine.
+C4 already surfaces **`hunter apply-prep <job_id>`** via **`hunterctl`**. Additional coordinator commands (submit-gate, run status, drain orchestration queue) should follow the same pattern : new **`hunterctl`** subparsers, documented here and in **`docs/CLI_CONVENTIONS.md`**. Prefer **`python -m coordinator.cli`** (or shared service modules) as the implementation target that **`hunterctl`** invokes.
 
-If submit logic, job gating, and higher-level decision-making are mixed into Component 3, then:
+## Why C4 (Coordinator) Should Be Separate
+
+C3 (Executioner) should remain the browser autofill engine.
+
+If submit logic, job gating, and higher-level decision-making are mixed into C3 (Executioner), then:
 - the extension becomes harder to test
 - manual use becomes harder to reason about
 - future orchestrators become tightly coupled to extension internals
 
-Keeping Component 4 separate gives cleaner ownership:
+Keeping C4 (Coordinator) separate gives cleaner ownership:
 - C1 finds and enriches jobs
 - C2 prepares resumes
 - C3 fills forms and uploads the chosen resume
@@ -53,7 +56,7 @@ Keeping Component 4 separate gives cleaner ownership:
 
 ## Current Expected Shape
 
-Recommended first Component 4 implementation:
+Recommended first C4 (Coordinator) implementation:
 - OpenClaw on `server2`
 
 Recommended role:
@@ -70,8 +73,8 @@ Important rule:
 
 Recommended first execution style:
 - OpenClaw owns job selection, sequencing, and policy decisions
-- one shared Hunt apply-prep command resolves DB state and primes Component 3
-- Component 3 remains the deterministic browser autofill layer
+- one shared Hunt apply-prep command resolves DB state and primes C3 (Executioner)
+- C3 (Executioner) remains the deterministic browser autofill layer
 - final submit remains a separate explicit decision point
 
 That keeps browser-agent prompting narrow:
@@ -83,20 +86,20 @@ That keeps browser-agent prompting narrow:
 
 ## Inputs
 
-From Component 1:
+From C1 (Hunter):
 - job metadata
 - `apply_url`
 - ATS type
 - enriched description
 - priority/manual-only signals
 
-From Component 2:
+From C2 (Fletcher):
 - selected resume version
 - selected resume PDF path
 - resume concern flags
 - generation metadata
 
-From Component 3:
+From C3 (Executioner):
 - fill results
 - generated answers used
 - evidence paths
@@ -145,8 +148,8 @@ Benefits:
 Current shared command shape:
 
 ```text
-python -m orchestration.cli apply-prep --job-id <ID>
-./hunt.sh apply-prep <ID>
+python -m coordinator.cli apply-prep --job-id <ID>
+./hunter.sh apply-prep <ID>
 ```
 
 Minimum resolved output:
@@ -169,15 +172,15 @@ Later side effects:
 - optionally open the target page in the intended browser lane
 - optionally prime a live C3 extension session
 
-## Out Of Scope For Component 4
+## Out Of Scope For C4 (Coordinator)
 
-Component 4 should not own:
+C4 (Coordinator) should not own:
 - scraping logic
 - resume generation logic
 - ATS DOM selector logic
 - low-level browser extension field mapping
 
-Those responsibilities belong to Components 1, 2, and 3 respectively.
+Those responsibilities belong to C1 (Hunter), C2 (Fletcher), and C3 (Executioner) respectively.
 
 ## Proposed Stages
 
@@ -342,7 +345,7 @@ Exit criteria:
 
 ## Deployment Direction
 
-Component 4 should deploy separately from Components 1, 2, and 3.
+C4 (Coordinator) should deploy separately from C1 (Hunter), C2 (Fletcher), and C3 (Executioner).
 
 For now that likely means:
 - OpenClaw on `server2`
@@ -351,7 +354,7 @@ For now that likely means:
 
 Recommended server shape:
 - separate OpenClaw runtime on `server2`
-- separate C4-facing config and secrets from Component 1 timers
+- separate C4-facing config and secrets from C1 (Hunter) timers
 - separate operator controls from the C3 extension UI
 - separate deployment step in `ansible_homelab`
 

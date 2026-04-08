@@ -1,0 +1,143 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <title>Hunt Apply</title>
+    <style>
+      body {
+        font-family: Arial, sans-serif;
+        margin: 0;
+        min-width: 320px;
+        padding: 16px;
+      }
+
+      h1,
+      h2,
+      p {
+        margin: 0;
+      }
+
+      .stack {
+        display: grid;
+        gap: 12px;
+      }
+
+      .card {
+        border: 1px solid #d0d7de;
+        border-radius: 8px;
+        padding: 12px;
+      }
+
+      .label {
+        color: #57606a;
+        display: block;
+        font-size: 12px;
+        margin-bottom: 4px;
+        text-transform: uppercase;
+      }
+
+      .value {
+        font-size: 14px;
+        word-break: break-word;
+      }
+
+      .actions {
+        display: grid;
+        gap: 8px;
+      }
+
+      button {
+        cursor: pointer;
+        padding: 8px 10px;
+      }
+
+      .muted {
+        color: #57606a;
+        font-size: 12px;
+      }
+
+      .status {
+        border-radius: 6px;
+        font-size: 12px;
+        padding: 8px;
+      }
+
+      .status.info {
+        background: #eff6ff;
+        color: #0f3d91;
+      }
+
+      .status.warn {
+        background: #fff8e6;
+        color: #8a5a00;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="stack">
+      <div>
+        <h1>Hunt Apply</h1>
+        <p class="muted">C3 (Executioner) Stage 1 state</p>
+      </div>
+
+      <div id="popup-status" class="status info">Loading extension state...</div>
+
+      <section class="card">
+        <h2>Active Context</h2>
+        <div class="stack" style="margin-top: 8px;">
+          <div>
+            <span class="label">Job ID</span>
+            <div id="active-job-id" class="value">None</div>
+          </div>
+          <div>
+            <span class="label">Apply URL</span>
+            <div id="active-apply-url" class="value">None</div>
+          </div>
+          <div>
+            <span class="label">Selected Resume</span>
+            <div id="active-resume-path" class="value">None</div>
+          </div>
+        </div>
+      </section>
+
+      <section class="card">
+        <h2>Defaults</h2>
+        <div class="stack" style="margin-top: 8px;">
+          <div>
+            <span class="label">Profile</span>
+            <div id="profile-name" class="value">Not set</div>
+          </div>
+          <div>
+            <span class="label">Default Resume</span>
+            <div id="default-resume-path" class="value">Not set</div>
+          </div>
+          <div>
+            <span class="label">Autofill On Load</span>
+            <div id="autofill-on-load" class="value">Disabled</div>
+          </div>
+        </div>
+      </section>
+
+      <section class="card">
+        <h2>Latest Attempt</h2>
+        <div class="stack" style="margin-top: 8px;">
+          <div>
+            <span class="label">Status</span>
+            <div id="latest-attempt-status" class="value">None</div>
+          </div>
+          <div>
+            <span class="label">Summary</span>
+            <div id="latest-attempt-summary" class="value">No attempts logged.</div>
+          </div>
+        </div>
+      </section>
+
+      <div class="actions">
+        <button id="fill-now" type="button">Fill Current Page</button>
+        <button id="open-options" type="button">Open Options</button>
+        <button id="clear-context" type="button">Clear Active Context</button>
+      </div>
+    </div>
+    <script type="module" src="popup.js"></script>
+  </body>
+</html>

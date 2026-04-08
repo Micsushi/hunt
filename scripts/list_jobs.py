@@ -2,16 +2,16 @@ import argparse
 import sys
 from pathlib import Path
 
-
 REPO_ROOT = Path(__file__).resolve().parent.parent
-SCRAPER_DIR = REPO_ROOT / "scraper"
-sys.path.insert(0, str(SCRAPER_DIR))
+sys.path.insert(0, str(REPO_ROOT))
 
-from db import count_jobs_for_review, list_jobs_for_review  # noqa: E402
+from hunter.db import count_jobs_for_review, list_jobs_for_review  # noqa: E402
 
 
 def main():
-    parser = argparse.ArgumentParser(description="List jobs from the review queue with source/status filters.")
+    parser = argparse.ArgumentParser(
+        description="List jobs from the review queue with source/status filters."
+    )
     parser.add_argument(
         "--source",
         choices=["all", "linkedin", "indeed"],
@@ -36,7 +36,9 @@ def main():
     )
     parser.add_argument("--limit", type=int, default=10, help="Max rows to print (default: 10).")
     parser.add_argument("--offset", type=int, default=0, help="Starting offset (default: 0).")
-    parser.add_argument("--query", default="", help="Optional keyword search across company/title/description/URLs.")
+    parser.add_argument(
+        "--query", default="", help="Optional keyword search across company/title/description/URLs."
+    )
     parser.add_argument(
         "--sort",
         default="date_scraped",

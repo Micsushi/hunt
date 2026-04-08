@@ -8,7 +8,10 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from orchestration.apply_prep import ApplyPrepNotReadyError, build_apply_prep_payload
+from coordinator.apply_prep import (  # noqa: E402
+    ApplyPrepNotReadyError,
+    build_apply_prep_payload,
+)
 
 
 def main():

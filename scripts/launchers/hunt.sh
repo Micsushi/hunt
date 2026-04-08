@@ -1,11 +1,3 @@
 #!/usr/bin/env bash
 set -euo pipefail
-cd "$(dirname "$0")/../.."
-
-if [ -x ".venv/bin/python" ]; then
-  exec .venv/bin/python scripts/huntctl.py "$@"
-elif [ -x "venv/bin/python" ]; then
-  exec venv/bin/python scripts/huntctl.py "$@"
-else
-  exec python3 scripts/huntctl.py "$@"
-fi
+exec "$(dirname "$0")/hunter.sh" "$@"

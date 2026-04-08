@@ -6,15 +6,11 @@ import tempfile
 import unittest
 from pathlib import Path
 
-
 REPO_ROOT = Path(__file__).resolve().parent.parent
-SCRAPER_DIR = REPO_ROOT / "scraper"
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
-if str(SCRAPER_DIR) not in sys.path:
-    sys.path.insert(0, str(SCRAPER_DIR))
 
-import db  # noqa: E402
+from hunter import db  # noqa: E402
 from scripts import c3_apply_prep  # noqa: E402
 
 
@@ -30,14 +26,20 @@ class Component3Stage1Tests(unittest.TestCase):
                 self.outer = outer
                 self.path = outer.make_temp_db_path()
                 self.old_db_path = db.DB_PATH
+                self.old_env_db_path = os.environ.get("HUNT_DB_PATH")
 
             def __enter__(self):
                 db.DB_PATH = self.path
+                os.environ["HUNT_DB_PATH"] = self.path
                 db.init_db()
                 return self.path
 
             def __exit__(self, exc_type, exc, tb):
                 db.DB_PATH = self.old_db_path
+                if self.old_env_db_path is None:
+                    os.environ.pop("HUNT_DB_PATH", None)
+                else:
+                    os.environ["HUNT_DB_PATH"] = self.old_env_db_path
                 if os.path.exists(self.path):
                     os.remove(self.path)
 
@@ -47,17 +49,22 @@ class Component3Stage1Tests(unittest.TestCase):
         class TempRootContext:
             def __init__(self):
                 self.root = tempfile.TemporaryDirectory()
-                self.old_root = os.environ.get("HUNT_ORCHESTRATION_ROOT")
+                self.old_coord = os.environ.get("HUNT_COORDINATOR_ROOT")
+                self.old_orch = os.environ.get("HUNT_ORCHESTRATION_ROOT")
 
             def __enter__(self):
-                os.environ["HUNT_ORCHESTRATION_ROOT"] = self.root.name
+                os.environ.pop("HUNT_COORDINATOR_ROOT", None)
+                os.environ.pop("HUNT_ORCHESTRATION_ROOT", None)
+                os.environ["HUNT_COORDINATOR_ROOT"] = self.root.name
                 return self.root.name
 
             def __exit__(self, exc_type, exc, tb):
-                if self.old_root is None:
-                    os.environ.pop("HUNT_ORCHESTRATION_ROOT", None)
-                else:
-                    os.environ["HUNT_ORCHESTRATION_ROOT"] = self.old_root
+                for key in ("HUNT_COORDINATOR_ROOT", "HUNT_ORCHESTRATION_ROOT"):
+                    os.environ.pop(key, None)
+                if self.old_coord is not None:
+                    os.environ["HUNT_COORDINATOR_ROOT"] = self.old_coord
+                if self.old_orch is not None:
+                    os.environ["HUNT_ORCHESTRATION_ROOT"] = self.old_orch
                 self.root.cleanup()
 
         return TempRootContext()
@@ -183,10 +190,7 @@ class Component3Stage1Tests(unittest.TestCase):
             db.init_db()
 
             conn = sqlite3.connect(path)
-            columns = {
-                row[1]
-                for row in conn.execute("PRAGMA table_info(jobs)").fetchall()
-            }
+            columns = {row[1] for row in conn.execute("PRAGMA table_info(jobs)").fetchall()}
             conn.close()
 
             self.assertIn("selected_resume_version_id", columns)
@@ -258,7 +262,9 @@ class Component3Stage1Tests(unittest.TestCase):
                 self.assertIn("weak_description", payload["concernFlags"])
                 self.assertEqual(payload["selectedResumeName"], Path(resume_path).name)
                 self.assertEqual(payload["selectedResumeMimeType"], "application/pdf")
-                self.assertTrue(payload["selectedResumeDataUrl"].startswith("data:application/pdf;base64,"))
+                self.assertTrue(
+                    payload["selectedResumeDataUrl"].startswith("data:application/pdf;base64,")
+                )
                 self.assertTrue(payload["primedAt"])
                 self.assertTrue(payload["applyContextPath"])
 

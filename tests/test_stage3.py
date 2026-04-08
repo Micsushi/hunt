@@ -6,14 +6,11 @@ import unittest
 from datetime import timedelta
 from unittest.mock import patch
 
-
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-SCRAPER_DIR = os.path.join(REPO_ROOT, "scraper")
-sys.path.insert(0, SCRAPER_DIR)
+sys.path.insert(0, REPO_ROOT)
 
-import db
-import enrich_linkedin
-from enrichment_policy import format_sqlite_timestamp, utc_now
+from hunter import db, enrich_linkedin  # noqa: E402
+from hunter.enrichment_policy import format_sqlite_timestamp, utc_now  # noqa: E402
 
 
 class Stage3Tests(unittest.TestCase):
@@ -104,7 +101,9 @@ class Stage3Tests(unittest.TestCase):
                 ),
             )
             conn.commit()
-            return conn.execute("SELECT id FROM jobs WHERE job_url = ?", (defaults["job_url"],)).fetchone()[0]
+            return conn.execute(
+                "SELECT id FROM jobs WHERE job_url = ?", (defaults["job_url"],)
+            ).fetchone()[0]
         finally:
             conn.close()
 
@@ -281,31 +280,34 @@ class Stage3Tests(unittest.TestCase):
             job_id = self.insert_linkedin_job(path)
             claimed = db.claim_linkedin_job_for_enrichment(job_id=job_id)
 
-            with patch.object(
-                enrich_linkedin,
-                "enrich_linkedin_job_in_context",
-                side_effect=[
-                    enrich_linkedin.LinkedInSessionError(
-                        "LinkedIn session appears to be logged out or expired."
-                    ),
-                    {
-                        "description": "Recovered description",
-                        "apply_type": "external_apply",
-                        "auto_apply_eligible": 1,
-                        "apply_url": "https://boards.greenhouse.io/acme/jobs/123",
-                        "apply_host": "boards.greenhouse.io",
-                        "ats_type": "greenhouse",
+            with (
+                patch.object(
+                    enrich_linkedin,
+                    "enrich_linkedin_job_in_context",
+                    side_effect=[
+                        enrich_linkedin.LinkedInSessionError(
+                            "LinkedIn session appears to be logged out or expired."
+                        ),
+                        {
+                            "description": "Recovered description",
+                            "apply_type": "external_apply",
+                            "auto_apply_eligible": 1,
+                            "apply_url": "https://boards.greenhouse.io/acme/jobs/123",
+                            "apply_host": "boards.greenhouse.io",
+                            "ats_type": "greenhouse",
+                        },
+                    ],
+                ),
+                patch.object(
+                    enrich_linkedin,
+                    "attempt_auto_relogin",
+                    return_value={
+                        "attempted": True,
+                        "recovered": True,
+                        "message": "LinkedIn auto relogin signed in with stored credentials and refreshed the saved auth state.",
                     },
-                ],
-            ), patch.object(
-                enrich_linkedin,
-                "attempt_auto_relogin",
-                return_value={
-                    "attempted": True,
-                    "recovered": True,
-                    "message": "LinkedIn auto relogin signed in with stored credentials and refreshed the saved auth state.",
-                },
-            ) as mock_relogin:
+                ),
+            ):
                 result = enrich_linkedin.process_claimed_job(
                     claimed,
                     context=object(),
@@ -327,7 +329,9 @@ class Stage3Tests(unittest.TestCase):
 
             self.assertEqual(db.count_ready_linkedin_jobs_for_enrichment(), 1)
 
-            db.mark_linkedin_auth_unavailable("auth_expired: LinkedIn session appears to be logged out or expired.")
+            db.mark_linkedin_auth_unavailable(
+                "auth_expired: LinkedIn session appears to be logged out or expired."
+            )
 
             self.assertEqual(db.count_ready_linkedin_jobs_for_enrichment(), 0)
             self.assertIsNone(db.claim_linkedin_job_for_enrichment())
@@ -340,8 +344,10 @@ class Stage3Tests(unittest.TestCase):
             self.assertEqual(db.count_ready_linkedin_jobs_for_enrichment(), 1)
 
     def test_process_batch_attempts_auto_relogin_when_auth_is_paused(self):
-        with self.with_temp_db() as path:
-            db.mark_linkedin_auth_unavailable("auth_expired: LinkedIn session appears to be logged out or expired.")
+        with self.with_temp_db():
+            db.mark_linkedin_auth_unavailable(
+                "auth_expired: LinkedIn session appears to be logged out or expired."
+            )
 
             def fake_relogin(**_kwargs):
                 db.mark_linkedin_auth_available()
@@ -351,9 +357,15 @@ class Stage3Tests(unittest.TestCase):
                     "message": "LinkedIn auto relogin signed in with stored credentials and refreshed the saved auth state.",
                 }
 
-            with patch.object(enrich_linkedin, "attempt_auto_relogin", side_effect=fake_relogin) as mock_relogin, \
-                 patch.object(enrich_linkedin, "open_linkedin_context"), \
-                 patch.object(enrich_linkedin, "claim_linkedin_job_for_enrichment", return_value=None):
+            with (
+                patch.object(
+                    enrich_linkedin, "attempt_auto_relogin", side_effect=fake_relogin
+                ) as mock_relogin,
+                patch.object(enrich_linkedin, "open_linkedin_context"),
+                patch.object(
+                    enrich_linkedin, "claim_linkedin_job_for_enrichment", return_value=None
+                ),
+            ):
                 summary = enrich_linkedin.process_batch(limit=5, return_summary=True)
 
             self.assertEqual(mock_relogin.call_count, 1)
@@ -392,8 +404,13 @@ class Stage3Tests(unittest.TestCase):
             self.assertEqual(summary["stale_processing_count"], 1)
 
     def test_process_batch_can_return_structured_summary(self):
-        with patch.object(enrich_linkedin, "open_linkedin_context"), \
-             patch.object(enrich_linkedin, "claim_linkedin_job_for_enrichment", return_value=None):
+        with (
+            patch.object(enrich_linkedin, "open_linkedin_context"),
+            patch.object(
+                enrich_linkedin, "get_linkedin_auth_state", return_value={"available": True}
+            ),
+            patch.object(enrich_linkedin, "claim_linkedin_job_for_enrichment", return_value=None),
+        ):
             summary = enrich_linkedin.process_batch(limit=5, return_summary=True)
 
         self.assertEqual(summary["exit_code"], 0)

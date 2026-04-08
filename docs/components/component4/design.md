@@ -1,12 +1,12 @@
-# Component 4 : Design And Research Notes
+# C4 (Coordinator) : Design And Research Notes
 
 ## Purpose
 
-This document turns the high-level Component 4 idea into an implementation plan.
+This document turns the high-level C4 (Coordinator) idea into an implementation plan.
 
 It answers:
-- what Component 4 should do first
-- what should stay outside Component 4
+- what C4 (Coordinator) should do first
+- what should stay outside C4 (Coordinator)
 - how OpenClaw most likely fits
 - what browser-agent patterns are worth copying
 - what concrete repo work should happen stage by stage
@@ -17,17 +17,17 @@ The current intended first implementation remains:
 But the important design choice is not "use OpenClaw everywhere."
 It is:
 - use OpenClaw for orchestration and policy
-- keep deterministic browser execution in Component 3
+- keep deterministic browser execution in C3 (Executioner)
 - keep final submit behind an explicit gate
 
 ## Recommended Product Boundary
 
-Component 4 should be the control plane for apply work.
+C4 (Coordinator) should be the control plane for apply work.
 
 It should decide:
 - which job is eligible right now
 - whether the job should proceed
-- whether Component 3 should fill
+- whether C3 (Executioner) should fill
 - whether the run should stop for review
 - whether final submit is allowed
 
@@ -107,18 +107,18 @@ Implication for Hunt:
 
 ### Roles
 
-Component 1:
+C1 (Hunter):
 - decides job discovery and enrichment state
 - owns `apply_url`, `apply_type`, `auto_apply_eligible`, `ats_type`
 
-Component 2:
+C2 (Fletcher):
 - decides which resume is selected for downstream use
 - owns selected resume version/path
 
-Component 3:
+C3 (Executioner):
 - owns ATS-specific browser autofill and evidence capture
 
-Component 4:
+C4 (Coordinator):
 - owns sequencing, gating, routing, and submit policy
 
 ### First-class C4 objects
@@ -170,7 +170,7 @@ Recommended `submit_approvals` fields:
 
 ### 1. Ready-job selector
 
-Component 4 needs one canonical ready predicate.
+C4 (Coordinator) needs one canonical ready predicate.
 
 Recommended initial rule:
 - C1 enrichment is `done` or equivalent normal verified-done state
@@ -200,7 +200,7 @@ Recommended responsibilities:
 - return machine-readable context for C3 or OpenClaw
 
 Current local checkpoint:
-- `python -m orchestration.cli apply-prep --job-id <ID>` already:
+- `python -m coordinator.cli apply-prep --job-id <ID>` already:
   - evaluates readiness
   - creates an orchestration run
   - writes `apply_context.json`
@@ -408,21 +408,21 @@ It also postpones the riskiest part:
 
 ## Deployment Direction
 
-Component 4 should stay a separate deployment step in `ansible_homelab`.
+C4 (Coordinator) should stay a separate deployment step in `ansible_homelab`.
 
 Recommended first deployment shape on `server2`:
 - separate OpenClaw runtime or service lane
 - separate C4 env/config
 - runtime storage outside the git checkout
-- no coupling to the current Component 1 timer unit
+- no coupling to the current C1 (Hunter) timer unit
 
 Recommended runtime storage root:
-- `/home/michael/data/hunt/orchestration`
+- `/home/michael/data/hunt/coordinator`
 
 Possible layout:
 
 ```text
-/home/michael/data/hunt/orchestration/
+/home/michael/data/hunt/coordinator/
   runs/
     <run_id>/
       apply_context.json
@@ -455,3 +455,169 @@ The recommended default for now:
   - `https://playwright.dev/docs/best-practices`
 - BrowserClaw task-bus example:
   - `https://www.reddit.com/user/Last_Net_9807/comments/1rqyb9w/i_built_a_bridge_between_my_ai_assistant_and_a/`
+
+---
+
+## Implementation checkpoint and resume notes
+
+This section captures the current C4 (Coordinator) thinking and partial repo work so work can resume without re-deriving the design. It is a checkpoint, not a claim that C4 is production-ready.
+
+### Research-backed direction
+
+The current recommended C4 shape remains:
+- OpenClaw or another higher-level runtime for orchestration and policy
+- C3 (Executioner) as the deterministic browser execution layer
+- final submit behind an explicit approval boundary
+
+The main research conclusions have not changed:
+- browser agents work best when they sequence and route, not when they become the only source of truth for queue state or ATS DOM details
+- durable run records and event logs are better than prompt-only handoffs
+- auth, anti-bot, and evidence artifacts need to be first-class runtime concerns
+- the shared apply-prep boundary is still the cleanest seam between C4 and C3
+
+### Stage-by-stage shape (intended)
+
+**Stage 0 :** lock contracts and persistence.
+
+Current intended C4-owned DB objects:
+- `orchestration_runs`
+- `orchestration_events`
+- `submit_approvals`
+
+Current intended job lifecycle mapping:
+- C4 reads the existing Hunt `jobs` row as the source of truth
+- when a run starts, C4 claims the job by moving `jobs.status` from `new` to `claimed`
+- when a run fails terminally, C4 marks the job `failed`
+- when submit is denied, C4 marks the job `skipped`
+- when submit completes, C4 marks the job `applied`
+
+**Stage 1 :** read-only readiness and audit.
+
+Current ready predicate:
+- no open C4 run already exists for the job
+- `jobs.status` is not already `claimed`, `applied`, `failed`, or `skipped`
+- `priority = 0`
+- `enrichment_status in ('done', 'done_verified')`
+- `apply_type = external_apply`
+- `auto_apply_eligible = 1`
+- `apply_url` is present
+- C2 has a selected resume ready for C3
+
+Current non-ready reason codes:
+- `missing_job`
+- `manual_review_hold`
+- `active_run`
+- `application_claimed`
+- `already_applied`
+- `application_terminal`
+- `manual_only`
+- `waiting_on_enrichment`
+- `easy_apply_excluded`
+- `unsupported_apply_type`
+- `not_auto_apply_eligible`
+- `missing_apply_url`
+- `waiting_on_resume`
+- `ready`
+
+**Stage 2 :** shared apply-prep.
+
+Current intended artifacts per run:
+- `runs/<run_id>/apply_context.json`
+- `runs/<run_id>/c3_apply_context.json`
+
+Current intended behavior:
+- choose one ready job
+- create one orchestration run
+- claim the job
+- write one explicit C4 context plus one C3-ready payload
+
+**Stage 3 :** intentional fill-only orchestration.
+
+Current intended behavior:
+- `request-fill` moves a run to `fill_requested`
+- `record-fill` stores the browser result and evidence summary
+- no autonomous submit occurs at this stage
+
+**Stage 4 :** manual-review routing.
+
+Current review triggers to preserve:
+- login required
+- auth/security challenge
+- CAPTCHA
+- OTP / verification
+- unsupported ATS step
+- low-confidence answers
+- missing required fields
+- unexpected multi-page flow
+- resume upload failure
+- hostname drift / suspicious redirect
+
+**Stage 5 :** submit approval gate.
+
+Current intended behavior:
+- every submit decision is recorded in `submit_approvals`
+- `approve-submit` does not itself submit
+- `mark-submitted` is a separate final state transition
+
+**Stage 6 :** unattended scheduler guards.
+
+Current intended guardrails:
+- one active execution run at a time
+- global stop-the-world hold when open manual-review runs indicate auth/anti-bot trouble
+- LinkedIn-first picking when multiple jobs are ready
+
+**Stage 7 :** hardening later.
+
+Still deferred:
+- real OpenClaw trigger bridge
+- dedicated operator UI for C4 review/submit actions
+- full end-to-end tests across C1, C2, C3, and C4
+- ATS-family tuning and wider rollout policy
+
+### Current repo checkpoint
+
+The current partial implementation lives in `coordinator/` (`config.py`, `context.py`, `db.py`, `models.py`, `service.py`, `cli.py`).
+
+What is present in code right now:
+- DB creation/migration for C4 tables
+- model objects for readiness, runs, events, approvals, and apply context
+- readiness evaluation against the existing Hunt `jobs` row
+- run creation via apply-prep
+- artifact writing under a runtime root
+- fill request + fill result recording
+- manual-review routing
+- submit approvals + submit completion
+- scheduler `pick-next` and `run-once`
+
+What has been verified so far:
+- `python -m compileall coordinator`
+- `python -m coordinator.cli init-db --db-path <temp.db> --runtime-root <tempdir>`
+
+What is not finished yet:
+- the C4 (Coordinator) test suite has not been rewritten to match the new runtime
+- `hunterctl apply-prep` and the docs should consistently point at the shared C4 service rather than older helper scripts; new C4 operator verbs follow **`docs/CLI_CONVENTIONS.md`**
+- the docs still need a final "implemented commands" polish pass once tests are in place
+
+### Resume point
+
+When continuing C4 work later, the clean next order is:
+
+1. rewrite `tests/test_component4_cli.py` into stage-based tests against temp DB/runtime roots
+2. add focused tests for:
+   - readiness reasons
+   - apply-prep artifacts
+   - fill result routing
+   - manual-review resolution
+   - submit approval + submitted transitions
+   - scheduler `pick-next` blocking behavior
+3. keep `scripts/c3_apply_prep.py` only as a legacy C3-payload helper and avoid treating it as the shared apply-prep seam
+4. expose more of the shared C4 commands through `scripts/hunterctl.py` as needed
+5. only then tighten the OpenClaw integration surface
+
+### Practical notes
+
+- Per-command path overrides currently live on each CLI subcommand, so the working form is:
+  - `python -m coordinator.cli init-db --db-path <DB> --runtime-root <ROOT>`
+  - not global args before the subcommand
+- the current runtime root default is local-repo-friendly for development; `server2` should still use an external runtime directory
+- the current code is a useful checkpoint, but it should be treated as experimental until the C4 tests land

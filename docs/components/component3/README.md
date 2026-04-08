@@ -1,24 +1,24 @@
-# Component 3 : Browser Autofill Extension
+# C3 (Executioner) : Browser Autofill Extension
 
 ## Goal
 
-Build Component 3 as a Chrome extension that can autofill external job application forms.
+Build C3 (Executioner) as a Chrome extension that can autofill external job application forms.
 
-Component 3 should work on its own.
+C3 (Executioner) should work on its own.
 
 That means it must support:
 - manual use by the user with one remembered profile
 - one remembered resume by default
-- later handoff from Component 2 when a job-specific resume is available
-- later use by OpenClaw as a tool, not as the owner of Component 3 behavior
+- later handoff from C2 (Fletcher) when a job-specific resume is available
+- later use by OpenClaw as a tool, not as the owner of C3 (Executioner) behavior
 
 The current first target is:
 - `Workday`
 
 Deployment note:
-- Component 3 should deploy separately from the current Component 1 Hunt deployment
-- Component 3 should also remain a separate Ansible step/stage from Component 2
-- current `server2` Stage 6 is for Component 1 only
+- C3 (Executioner) should deploy separately from the current C1 (Hunter) Hunt deployment
+- C3 (Executioner) should also remain a separate Ansible step/stage from C2 (Fletcher)
+- current `server2` Stage 6 is for C1 (Hunter) only
 
 Out of scope for the first milestone:
 - LinkedIn Easy Apply
@@ -27,9 +27,13 @@ Out of scope for the first milestone:
 - OTP automation
 - full autonomous submit decisions
 
+## Operator CLI (convention)
+
+Extension packaging and browser-side tooling stay in **`executioner/`**. Any **repo-level** operator command (load packed extension, run a harness, etc.) should be added to **`scripts/hunterctl.py`** so users keep using **`hunter …`**. See **`docs/CLI_CONVENTIONS.md`**.
+
 ## Core Product Shape
 
-Component 3 is not the final decision-maker.
+C3 (Executioner) is not the final decision-maker.
 
 Its primary job is:
 - detect supported application pages
@@ -38,9 +42,9 @@ Its primary job is:
 - generate and store question answers when needed
 - leave clear evidence and logs for later review
 
-OpenClaw can later use Component 3 to reduce browser work, but C3 must remain useful even when:
-- Component 1 is not involved
-- Component 2 is not involved
+OpenClaw can later use C3 (Executioner) to reduce browser work, but C3 must remain useful even when:
+- C1 (Hunter) is not involved
+- C2 (Fletcher) is not involved
 - OpenClaw is not running
 
 ## How It Fits With Other Components
@@ -54,36 +58,36 @@ Initial standalone assumptions:
 - the active resume is the most recently provided resume
 - the first default source resume can come from the repo resume flow such as `main.tex` plus its compiled PDF
 
-### Component 1 handoff
+### C1 (Hunter) handoff
 
-Component 1 supplies:
+C1 (Hunter) supplies:
 - job metadata
 - `apply_url`
 - enriched description
 - ATS type
 
-Component 3 should still be usable without that handoff, but the normal queue-driven path should eventually use it.
+C3 (Executioner) should still be usable without that handoff, but the normal queue-driven path should eventually use it.
 
-### Component 2 handoff
+### C2 (Fletcher) handoff
 
-Component 2 supplies the resume that Component 3 should upload for a specific job.
+C2 (Fletcher) supplies the resume that C3 (Executioner) should upload for a specific job.
 
 Important rule:
-- Component 3 always uses the latest resume explicitly assigned to the current job
-- when no job-specific resume exists, Component 3 falls back to the last provided default resume
+- C3 (Executioner) always uses the latest resume explicitly assigned to the current job
+- when no job-specific resume exists, C3 (Executioner) falls back to the last provided default resume
 - in the normal queue-driven path, C3 should receive one explicit apply context rather than guessing resume selection on its own
 - the shared apply-prep command should prime C3 with that job's selected resume before fill actions run
 
-### Component 4 handoff
+### C4 (Coordinator) handoff
 
-Component 4 is the future orchestration layer.
+C4 (Coordinator) is the future orchestration layer.
 
-In the current plan, OpenClaw belongs here rather than inside Component 3.
+In the current plan, OpenClaw belongs here rather than inside C3 (Executioner).
 
-Component 4 may:
+C4 (Coordinator) may:
 - open the target page
 - decide whether the job should proceed
-- decide when to invoke Component 3
+- decide when to invoke C3 (Executioner)
 - fetch the explicit apply context for the chosen job
 - review output and decide whether to submit
 
@@ -107,14 +111,14 @@ Important detail:
   - the extension currently uploads from a cached file payload such as embedded resume data
   - queue-driven C4 flows therefore need to provide resume bytes or a C3-side cached copy, not just a filesystem path
 
-Component 3 itself should not depend on Component 4 to be useful.
+C3 (Executioner) itself should not depend on C4 (Coordinator) to be useful.
 
 ### OpenClaw handoff
 
 OpenClaw is later-stage orchestration.
 
 Recommended placement:
-- OpenClaw should be treated as the first planned implementation of Component 4
+- OpenClaw should be treated as the first planned implementation of C4 (Coordinator)
 
 ## Current User Decisions Locked In
 
@@ -191,7 +195,7 @@ Recommended placement:
 
 - consume job records from Hunt
 - use `apply_url` and `ats_type`
-- switch resume automatically when Component 2 produces a job-specific output
+- switch resume automatically when C2 (Fletcher) produces a job-specific output
 - support an explicit apply-context handoff so the selected link and selected resume arrive together
 
 ### Stage 6 : account and auth helpers
@@ -200,9 +204,9 @@ Recommended placement:
 - support login/account creation helpers
 - leave OTP and verification as manual handoff first
 
-### Stage 7 : Component 4 integration
+### Stage 7 : C4 (Coordinator) integration
 
-- expose Component 3 as a dependable tool layer
+- expose C3 (Executioner) as a dependable tool layer
 - let a higher-level orchestrator trigger fill actions and inspect results
 - support a one-command apply-prep flow that:
   - resolves the DB row
@@ -245,7 +249,7 @@ See `design.md` for the fuller proposal.
 The initial C3 scaffold lives in:
 
 ```text
-apply_extension/
+executioner/
   manifest.json
   README.md
   src/

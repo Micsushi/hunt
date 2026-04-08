@@ -4,19 +4,19 @@ import sys
 import tempfile
 import unittest
 from contextlib import contextmanager
-from datetime import timedelta
 from unittest.mock import patch
 
-
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-SCRAPER_DIR = os.path.join(REPO_ROOT, "scraper")
-sys.path.insert(0, SCRAPER_DIR)
+sys.path.insert(0, REPO_ROOT)
 
-import db
-import enrich_indeed
-import enrich_jobs
-import scraper as scraper_module
-from enrichment_policy import format_sqlite_timestamp, utc_now
+from hunter import db  # noqa: E402
+
+try:
+    from hunter import enrich_indeed
+except ModuleNotFoundError:
+    enrich_indeed = None
+from hunter import enrich_jobs, enrichment_dispatch  # noqa: E402
+from hunter import scraper as discovery  # noqa: E402
 
 
 class FakeResponse:
@@ -35,6 +35,7 @@ class FakeSession:
         return self.responses[url]
 
 
+@unittest.skipIf(enrich_indeed is None, "optional dependency missing: requests")
 class Stage32Tests(unittest.TestCase):
     def make_temp_db_path(self):
         fd, path = tempfile.mkstemp(suffix=".db")
@@ -123,14 +124,24 @@ class Stage32Tests(unittest.TestCase):
                 ),
             )
             conn.commit()
-            return conn.execute("SELECT id FROM jobs WHERE job_url = ?", (defaults["job_url"],)).fetchone()[0]
+            return conn.execute(
+                "SELECT id FROM jobs WHERE job_url = ?", (defaults["job_url"],)
+            ).fetchone()[0]
         finally:
             conn.close()
 
     def test_scrape_single_marks_indeed_rows_pending_for_stage32_enrichment(self):
-        import pandas as pd
+        class FakeDf:
+            def __init__(self, rows):
+                self._rows = rows
 
-        jobs_df = pd.DataFrame(
+            def iterrows(self):
+                yield from enumerate(self._rows)
+
+            def __len__(self):
+                return len(self._rows)
+
+        jobs_df = FakeDf(
             [
                 {
                     "title": "Data Scientist",
@@ -146,8 +157,13 @@ class Stage32Tests(unittest.TestCase):
             ]
         )
 
-        with patch.object(scraper_module, "scrape_jobs", return_value=jobs_df):
-            jobs = scraper_module.scrape_single("indeed", "data scientist", "Canada", "data")
+        class FakeJobspy:
+            @staticmethod
+            def scrape_jobs(*_args, **_kwargs):
+                return jobs_df
+
+        with patch.dict(sys.modules, {"jobspy": FakeJobspy}):
+            jobs = discovery.scrape_single("indeed", "data scientist", "Canada", "data")
 
         self.assertEqual(len(jobs), 1)
         self.assertEqual(jobs[0]["source"], "indeed")
@@ -223,7 +239,9 @@ class Stage32Tests(unittest.TestCase):
                 job_url="https://ca.indeed.com/viewjob?jk=333",
             )
 
-            db.mark_linkedin_auth_unavailable("auth_expired: LinkedIn session appears to be logged out or expired.")
+            db.mark_linkedin_auth_unavailable(
+                "auth_expired: LinkedIn session appears to be logged out or expired."
+            )
 
             claimed = db.claim_job_for_enrichment()
 
@@ -255,7 +273,9 @@ class Stage32Tests(unittest.TestCase):
         )
 
         with patch.object(enrich_indeed, "_session", return_value=session):
-            result = enrich_indeed.enrich_indeed_job({"job_url": page_url, "apply_url": None}, timeout_ms=1000)
+            result = enrich_indeed.enrich_indeed_job(
+                {"job_url": page_url, "apply_url": None}, timeout_ms=1000
+            )
 
         self.assertEqual(result["apply_type"], "external_apply")
         self.assertEqual(result["apply_url"], "https://jobs.acme.com/apply/123")
@@ -273,7 +293,10 @@ class Stage32Tests(unittest.TestCase):
         """
         session = FakeSession({page_url: FakeResponse(text=html, url=page_url, status_code=200)})
 
-        with self.with_temp_db() as path, patch.object(enrich_indeed, "_session", return_value=session):
+        with (
+            self.with_temp_db() as path,
+            patch.object(enrich_indeed, "_session", return_value=session),
+        ):
             job_id = self.insert_job(path, job_url=page_url, source="indeed")
             summary = enrich_indeed.process_batch(limit=1, timeout_ms=1000, return_summary=True)
             row = db.get_job_by_id(job_id)
@@ -294,17 +317,20 @@ class Stage32Tests(unittest.TestCase):
                 source="indeed",
                 job_url="https://ca.indeed.com/viewjob?jk=555",
             )
-            with patch.object(enrich_indeed, "open_browser_context", fake_browser_context), patch.object(
-                enrich_indeed,
-                "enrich_indeed_job_in_context",
-                return_value={
-                    "description": "Browser-rendered description with enough detail to be valid.",
-                    "apply_url": "https://jobs.acme.com/apply/555",
-                    "apply_type": "external_apply",
-                    "auto_apply_eligible": 1,
-                    "apply_host": "jobs.acme.com",
-                    "ats_type": "unknown",
-                },
+            with (
+                patch.object(enrich_indeed, "open_browser_context", fake_browser_context),
+                patch.object(
+                    enrich_indeed,
+                    "enrich_indeed_job_in_context",
+                    return_value={
+                        "description": "Browser-rendered description with enough detail to be valid.",
+                        "apply_url": "https://jobs.acme.com/apply/555",
+                        "apply_type": "external_apply",
+                        "auto_apply_eligible": 1,
+                        "apply_host": "jobs.acme.com",
+                        "ats_type": "unknown",
+                    },
+                ),
             ):
                 exit_code = enrich_indeed.process_one_job(
                     job_id=job_id,
@@ -326,7 +352,11 @@ class Stage32Tests(unittest.TestCase):
                 source="indeed",
                 job_url="https://ca.indeed.com/viewjob?jk=556",
             )
-            with patch.object(enrich_indeed, "open_browser_context", side_effect=enrich_indeed.BrowserRuntimeError("Missing X server")):
+            with patch.object(
+                enrich_indeed,
+                "open_browser_context",
+                side_effect=enrich_indeed.BrowserRuntimeError("Missing X server"),
+            ):
                 exit_code = enrich_indeed.process_one_job(
                     job_id=job_id,
                     timeout_ms=1000,
@@ -369,7 +399,7 @@ class Stage32Tests(unittest.TestCase):
         self.assertEqual(result["apply_url"], "https://jobs.acme.com/apply/444")
 
     def test_process_multi_source_batch_dispatches_across_sources(self):
-        with patch.object(enrich_jobs, "process_linkedin_batch", return_value={
+        fake_linkedin_summary = {
             "exit_code": 0,
             "attempted": 1,
             "ui_verified": 0,
@@ -380,7 +410,8 @@ class Stage32Tests(unittest.TestCase):
             "total_elapsed_seconds": 1.0,
             "average_seconds_per_job": 1.0,
             "stop_error_code": None,
-        }) as mock_linkedin, patch.object(enrich_jobs, "process_indeed_batch", return_value={
+        }
+        fake_indeed_summary = {
             "exit_code": 0,
             "attempted": 1,
             "ui_verified": 0,
@@ -391,19 +422,89 @@ class Stage32Tests(unittest.TestCase):
             "total_elapsed_seconds": 1.0,
             "average_seconds_per_job": 1.0,
             "stop_error_code": None,
-        }) as mock_indeed, patch.object(enrich_jobs, "count_ready_jobs_for_enrichment") as mock_count:
+        }
+
+        with (
+            patch.object(
+                enrichment_dispatch, "get_linkedin_auth_state", return_value={"available": True}
+            ),
+            patch.object(
+                enrichment_dispatch, "_run_linkedin_batch", return_value=fake_linkedin_summary
+            ) as mock_linkedin_run,
+            patch.object(
+                enrichment_dispatch, "_run_indeed_batch", return_value=fake_indeed_summary
+            ) as mock_indeed_run,
+            patch.object(
+                enrichment_dispatch, "count_ready_jobs_for_enrichment"
+            ) as mock_count,
+        ):
             mock_count.side_effect = lambda sources=None: 1
             summary = enrich_jobs.process_multi_source_batch(limit=2, return_summary=True)
 
         self.assertEqual(summary["attempted"], 2)
         self.assertIn("linkedin", summary["by_source"])
         self.assertIn("indeed", summary["by_source"])
-        mock_linkedin.assert_called_once()
-        mock_indeed.assert_called_once()
+        mock_linkedin_run.assert_called()
+        mock_indeed_run.assert_called()
+
+    def test_process_multi_source_batch_skips_linkedin_without_auth_but_runs_indeed(self):
+        """Indeed must not be blocked when LinkedIn auth is missing."""
+        fake_indeed_summary = {
+            "exit_code": 0,
+            "attempted": 2,
+            "ui_verified": 0,
+            "succeeded": 2,
+            "failed": 0,
+            "actionable_failed": 0,
+            "failure_breakdown": {},
+            "total_elapsed_seconds": 2.0,
+            "average_seconds_per_job": 1.0,
+            "stop_error_code": None,
+        }
+
+        with (
+            patch.object(
+                enrichment_dispatch,
+                "get_linkedin_auth_state",
+                return_value={"available": False, "last_error": "auth_expired: session dead"},
+            ),
+            patch.object(
+                enrichment_dispatch,
+                "attempt_auto_relogin",
+                return_value={"attempted": True, "recovered": False, "message": "relogin failed"},
+            ),
+            patch.object(enrichment_dispatch, "_run_linkedin_batch") as mock_linkedin_run,
+            patch.object(
+                enrichment_dispatch, "_run_indeed_batch", return_value=fake_indeed_summary
+            ) as mock_indeed_run,
+            patch.object(
+                enrichment_dispatch, "count_ready_jobs_for_enrichment"
+            ) as mock_count,
+        ):
+            mock_count.side_effect = lambda sources=None: 2
+            summary = enrich_jobs.process_multi_source_batch(limit=3, return_summary=True)
+
+        mock_linkedin_run.assert_not_called()
+        mock_indeed_run.assert_called()
+        self.assertEqual(summary["attempted"], 2)
+        self.assertNotIn("linkedin", summary["by_source"])
+        self.assertIn("indeed", summary["by_source"])
+        self.assertEqual(summary["exit_code"], 0)
+
+    def test_enrichment_dispatch_registry_covers_db_source_priority(self):
+        """Every source in db.ENRICHMENT_SOURCE_PRIORITY must have dispatch metadata."""
+        for source in db.ENRICHMENT_SOURCE_PRIORITY:
+            self.assertIn(
+                source,
+                enrichment_dispatch._REQUIRES_LINKEDIN_SESSION,
+                msg=f"Add {source!r} to enrichment_dispatch._REQUIRES_LINKEDIN_SESSION and _run_batch_for_source",
+            )
 
     def test_review_queue_summary_includes_source_counts(self):
         with self.with_temp_db() as path:
-            self.insert_job(path, source="linkedin", job_url="https://www.linkedin.com/jobs/view/55")
+            self.insert_job(
+                path, source="linkedin", job_url="https://www.linkedin.com/jobs/view/55"
+            )
             self.insert_job(path, source="indeed", job_url="https://ca.indeed.com/viewjob?jk=55")
 
             summary = db.get_review_queue_summary()

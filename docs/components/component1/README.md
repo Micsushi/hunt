@@ -1,8 +1,12 @@
-# Component 1 : Posting Discovery And Multi-Source Enrichment
+# C1 (Hunter) : Posting Discovery And Multi-Source Enrichment
+
+**C1 (Hunter)** runtime code lives in the Python package **`hunter/`** (the old **`scraper/`** directory was renamed). The file **`hunter/scraper.py`** is only the **discovery entrypoint** (historical filename), not a separate component. See **`docs/NAMING.md`**.
+
+**Short operator narrative** (JobSpy discovery → Playwright enrichment → review app) : **`docs/C1_OPERATOR_WORKFLOW.md`**.
 
 ## Goal
 
-Complete Component 1 so the system can:
+Complete **C1 (Hunter)** so the system can:
 - discover new jobs continuously
 - store the listing URL
 - store the real external application URL when available
@@ -13,7 +17,7 @@ LinkedIn is the priority source even if other sources remain enabled.
 
 ## Current State
 
-Discovery already exists in `scraper/scraper.py`.
+Discovery already exists in **`hunter/scraper.py`** (C1 discovery script inside the **`hunter`** package).
 The discovery script can now optionally trigger a follow-up enrichment pass immediately after it writes rows to SQLite.
 Stage 1, Stage 2, Stage 3, and Stage 3.2 repo-side code are complete and locally validated.
 The initial Stage 4 runtime slice now exists too:
@@ -36,13 +40,13 @@ Why this matters:
 ## Deployment Model
 
 Component deployment on `server2` is intentionally split:
-- Component 1 deploys through the current Hunt-focused Ansible step/stage
-  - today that is the `job_agent` Stage 6 deployment in `ansible_homelab`
-- Component 2 should deploy in its own later Ansible step/stage
-- Component 3 should deploy in its own later Ansible step/stage
-- Component 4 / OpenClaw integration should deploy in its own later Ansible step/stage
+- **C1 (Hunter)** deploys through the current Hunt-focused Ansible step/stage
+  - today that is the `job_agent` Stage 6 deployment in `ansible_homelab` (systemd units may still be named `hunt-scraper.*`; they run `python hunter/scraper.py`)
+- **C2 (Fletcher)** should deploy in its own later Ansible step/stage
+- **C3 (Executioner)** should deploy in its own later Ansible step/stage
+- **C4 (Coordinator)** / OpenClaw integration should deploy in its own later Ansible step/stage
 
-Do not treat Component 2 or Component 3 as extensions of the current Component 1 Stage 6 deploy.
+Do not treat **C2 (Fletcher)** or **C3 (Executioner)** as extensions of the current **C1 (Hunter)** Stage 6 deploy.
 
 ## Desired LinkedIn Behavior
 
@@ -71,8 +75,8 @@ Rules:
 ### Stage 1 : completed
 
 Files changed:
-- `scraper/db.py`
-- `scraper/scraper.py`
+- `hunter/db.py`
+- `hunter/scraper.py`
 
 Results:
 - added enrichment columns
@@ -87,9 +91,9 @@ Verification goal:
 ### Stage 2 : one-job enrichment worker
 
 Implemented files:
-- `scraper/enrich_linkedin.py`
-- `scraper/linkedin_session.py`
-- `scraper/url_utils.py`
+- `hunter/enrich_linkedin.py`
+- `hunter/linkedin_session.py`
+- `hunter/url_utils.py`
 
 Worker responsibilities:
 - claim one pending LinkedIn row
@@ -127,17 +131,17 @@ Auth setup note:
 ### Stage 3 : batch enrichment and runner integration
 
 Implemented files:
-- `scraper/enrich_linkedin.py`
-- `scraper/enrichment_policy.py`
-- `scraper/db.py`
-- `scraper/scraper.py`
-- `scraper/runner.py`
+- `hunter/enrich_linkedin.py`
+- `hunter/enrichment_policy.py`
+- `hunter/db.py`
+- `hunter/scraper.py`
+- `hunter/runner.py`
 - `review_app.py`
 - `scripts/queue_health.py`
 
 Implemented behavior:
 - batch processing for pending and retry-due LinkedIn rows
-- post-scrape enrichment inside `scraper.py`
+- post-scrape enrichment inside `hunter/scraper.py`
 - continuous discovery + enrichment inside `runner.py`
 - blocked-row fallback support through `--ui-verify-blocked`
 - retry scheduling with `next_enrichment_retry_at`
@@ -158,36 +162,37 @@ Repo-level Stage 3 outcome:
 - the remaining work is deployment rollout on `server2` through `ansible_homelab`
 
 Detailed plan:
-- see `docs/components/component1/stage3_server2_plan.md`
+- production / Ansible / `server2` layout : **`docs/C1_OPERATOR_WORKFLOW.md`** (**Production host (server2)**) and **`ansible_homelab/docs/2.01-job-agent-plan.md`**
 
 Testing goal:
 - process a small batch safely
 - confirm the queue drains without corrupting rows
 - blocked ATS pages should fail cleanly without storing anti-bot challenge text as the description
-- for a larger staged run, `python scraper/enrich_linkedin.py --limit 100 --channel chrome --ui-verify-blocked` should do a normal first pass and then a second UI-verification pass only for blocked rows
+- for a larger staged run, `python hunter/enrich_linkedin.py --limit 100 --channel chrome --ui-verify-blocked` should do a normal first pass and then a second UI-verification pass only for blocked rows
 
 Useful commands:
 - run discovery and then enrich pending LinkedIn rows with the default configured batch size:
-  `python scraper/scraper.py`
+  `python hunter/scraper.py`
 - run discovery and then enrich up to 100 pending LinkedIn rows right away:
-  `python scraper/scraper.py --enrich-pending --enrich-limit 100 --channel chrome`
+  `python hunter/scraper.py --enrich-pending --enrich-limit 100 --channel chrome`
 - run discovery and then do a second visible-browser pass for blocked rows:
-  `python scraper/scraper.py --enrich-pending --enrich-limit 100 --channel chrome --ui-verify-blocked`
+  `python hunter/scraper.py --enrich-pending --enrich-limit 100 --channel chrome --ui-verify-blocked`
 - for `server2`, the intended deployment is to keep that blocked-row UI fallback enabled, but run it on a separate virtual display such as `Xvfb :98` so it does not steal the main desktop foreground
 - enrich existing pending LinkedIn rows already in the DB without doing a new discovery scrape:
-  `python scraper/enrich_linkedin.py --limit 100 --channel chrome`
+  `python hunter/enrich_linkedin.py --limit 100 --channel chrome`
 
 ### Stage 3.2 : multi-source enrichment on top of the Stage 3 runtime
 
 Implemented files:
-- `scraper/enrich_jobs.py`
-- `scraper/enrich_indeed.py`
-- `scraper/db.py`
-- `scraper/scraper.py`
-- `scraper/runner.py`
+- `hunter/enrichment_dispatch.py` : single dispatcher for enrichment (source priority, per-source auth, batch fan-out)
+- `hunter/enrich_jobs.py` : CLI wrapper; calls `run_enrichment_round`
+- `hunter/enrich_indeed.py`
+- `hunter/db.py`
+- `hunter/scraper.py`
+- `hunter/runner.py`
 - `review_app.py`
 - `scripts/queue_health.py`
-- `scripts/huntctl.py`
+- `scripts/hunterctl.py` (legacy: `scripts/huntctl.py`)
 - `tests/test_stage32.py`
 
 Implemented behavior:
@@ -197,6 +202,8 @@ Implemented behavior:
 - dispatch post-scrape enrichment by source priority:
   - LinkedIn first
   - Indeed second
+- if LinkedIn auth is missing after an auto-relogin attempt, **skip only the LinkedIn slice** for that run; **Indeed still runs** (Indeed does not use LinkedIn cookies)
+- adding a new board later: append its `source` string to `db.ENRICHMENT_SOURCE_PRIORITY`, add a row to `enrichment_dispatch._REQUIRES_LINKEDIN_SESSION`, extend `_run_batch_for_source`, and implement `process_batch` (or equivalent) for that source
 - mark newly discovered Indeed rows as `pending` so they enter the same queue model
 - add an Indeed enrichment worker that:
   - opens the Indeed job page with HTTP + HTML parsing
@@ -225,114 +232,120 @@ Stage 3.2 outcome:
 
 ## Command Reference
 
-Short wrappers are now available at the repo root:
-- Windows PowerShell:
-  `.\hunt.ps1 <command>`
-- Windows cmd:
-  `hunt.cmd <command>`
-- Linux/macOS:
-  `./hunt.sh <command>`
+**Conventions for all `hunter` subcommands (legacy launcher: `hunt`) and for adding C2–C4 commands later:** **`docs/CLI_CONVENTIONS.md`**.
+
+Short wrappers at the repo root (**canonical:** **`hunter.*`**; **`hunt.*`** is a legacy alias):
+- Windows PowerShell: `.\hunter.ps1 <command>`
+- Windows cmd: `hunter.cmd <command>`
+- Linux/macOS: `./hunter.sh <command>`
 
 Launcher note:
 - the repo-root wrapper files are now thin shims
 - the real launcher implementations live under:
-  - `scripts/launchers/hunt.ps1`
-  - `scripts/launchers/hunt.cmd`
-  - `scripts/launchers/hunt.sh`
-- on deployed Linux hosts, `./hunt.sh` now auto-targets `~/data/hunt/hunt.db` and `~/data/hunt/artifacts` when that runtime directory exists, so manual queue/auth commands line up with the `systemd` runtime
+  - `scripts/launchers/hunter.ps1`
+  - `scripts/launchers/hunter.cmd`
+  - `scripts/launchers/hunter.sh`
+- on deployed Linux hosts, `./hunter.sh` now auto-targets `~/data/hunt/hunt.db` and `~/data/hunt/artifacts` when that runtime directory exists, so manual queue/auth commands line up with the `systemd` runtime
 
 Common examples:
+- **start / stop / restart** scheduled C1 on Linux (systemd timer + Xvfb):
+  `./hunter.sh start`
+  `./hunter.sh stop`
+  `./hunter.sh restart`
+- enrichment batch of **50** (all sources):
+  `./hunter.sh enrich 50 --source all`
 - queue health:
-  `.\hunt.ps1 queue`
-  `./hunt.sh queue`
+  `.\hunter.ps1 queue`
+  `./hunter.sh queue`
 - run multi-source enrichment directly:
-  `.\hunt.ps1 enrich --source all --limit 25 --channel chrome`
-  `./hunt.sh enrich --source all --limit 25 --channel chrome`
+  `.\hunter.ps1 enrich --source all --limit 25 --channel chrome`
+  `./hunter.sh enrich --source all --limit 25 --channel chrome`
 - run Indeed-only enrichment:
-  `.\hunt.ps1 enrich --source indeed --limit 25`
-  `./hunt.sh enrich --source indeed --limit 25`
+  `.\hunter.ps1 enrich --source indeed --limit 25`
+  `./hunter.sh enrich --source indeed --limit 25`
 - force one visible-browser rerun for a specific Indeed row:
-  `.\hunt.ps1 enrich --source indeed --job-id 13143 --force --ui-verify`
-  `./hunt.sh enrich --source indeed --job-id 13143 --force --ui-verify`
+  `.\hunter.ps1 enrich --source indeed --job-id 13143 --force --ui-verify`
+  `./hunter.sh enrich --source indeed --job-id 13143 --force --ui-verify`
 - list newest ready rows:
-  `.\hunt.ps1 ready --limit 10`
-  `./hunt.sh ready --limit 10`
+  `.\hunter.ps1 ready --limit 10`
+  `./hunter.sh ready --limit 10`
 - list jobs across sources:
-  `.\hunt.ps1 jobs --source all --status ready --limit 10`
-  `./hunt.sh jobs --source all --status ready --limit 10`
+  `.\hunter.ps1 jobs --source all --status ready --limit 10`
+  `./hunter.sh jobs --source all --status ready --limit 10`
 - list Indeed rows only:
-  `.\hunt.ps1 jobs --source indeed --status all --limit 10`
-  `./hunt.sh jobs --source indeed --status all --limit 10`
+  `.\hunter.ps1 jobs --source indeed --status all --limit 10`
+  `./hunter.sh jobs --source indeed --status all --limit 10`
 - preview currently stored irrelevant Indeed rows using the current title filter:
-  `./hunt.sh clean-indeed`
-  `./hunt.sh cleanup-indeed`
+  `./hunter.sh clean-indeed`
+  `./hunter.sh cleanup-indeed`
 - delete currently stored irrelevant Indeed rows:
-  `./hunt.sh clean-indeed --apply`
-  `./hunt.sh cleanup-indeed --apply`
+  `./hunter.sh clean-indeed --apply`
+  `./hunter.sh cleanup-indeed --apply`
 - inspect one job:
-  `.\hunt.ps1 job 13179`
-  `./hunt.sh job 13179`
+  `.\hunter.ps1 job 13179`
+  `./hunter.sh job 13179`
 - run local review app:
-  `.\hunt.ps1 review`
-  `./hunt.sh review`
+  `.\hunter.ps1 review`
+  `./hunter.sh review`
 - run a controlled backfill in 100-row chunks with a checkpoint after each batch:
-  `.\hunt.ps1 backfill --ui-verify-blocked`
-  `./hunt.sh backfill --ui-verify-blocked`
+  `.\hunter.ps1 backfill --ui-verify-blocked`
+  `./hunter.sh backfill --ui-verify-blocked`
 - run a controlled backfill for Indeed only in 100-row chunks:
-  `.\hunt.ps1 backfill --source indeed --ui-verify-blocked`
-  `./hunt.sh backfill --source indeed --ui-verify-blocked`
+  `.\hunter.ps1 backfill --source indeed --ui-verify-blocked`
+  `./hunter.sh backfill --source indeed --ui-verify-blocked`
 - run a controlled backfill for all supported sources in 100-row chunks:
-  `.\hunt.ps1 backfill --source all --ui-verify-blocked`
-  `./hunt.sh backfill --source all --ui-verify-blocked`
+  `.\hunter.ps1 backfill --source all --ui-verify-blocked`
+  `./hunter.sh backfill --source all --ui-verify-blocked`
 - requeue the common retryable enrichment rows across all sources:
-  `./hunt.sh retry`
-  `./hunt.sh requeue-enrich --source all`
+  `./hunter.sh retry`
+  `./hunter.sh requeue-enrich --source all`
 - backfill all sources in 100-row batches with blocked-row UI verification and automatic continue:
-  `DISPLAY=:98 ./hunt.sh backfill-all`
-  `DISPLAY=:98 ./hunt.sh drain`
-  `DISPLAY=:98 ./hunt.sh backfill 100 --source all --ui-verify-blocked --yes`
+  `DISPLAY=:98 ./hunter.sh backfill-all`
+  `DISPLAY=:98 ./hunter.sh drain`
+  `DISPLAY=:98 ./hunter.sh backfill 100 --source all --ui-verify-blocked --yes`
 - backfill all with a custom batch size:
-  `DISPLAY=:98 ./hunt.sh backfill-all 250`
-  `DISPLAY=:98 ./hunt.sh drain 250`
+  `DISPLAY=:98 ./hunter.sh backfill-all 250`
+  `DISPLAY=:98 ./hunter.sh drain 250`
 - backfill all but stop after each batch for confirmation:
-  `DISPLAY=:98 ./hunt.sh backfill-all --ask`
-  `DISPLAY=:98 ./hunt.sh drain --ask`
+  `DISPLAY=:98 ./hunter.sh backfill-all --ask`
+  `DISPLAY=:98 ./hunter.sh drain --ask`
 - run a controlled backfill in custom chunk sizes:
-  `.\hunt.ps1 backfill 250 --ui-verify-blocked`
-  `./hunt.sh backfill 250 --ui-verify-blocked`
+  `.\hunter.ps1 backfill 250 --ui-verify-blocked`
+  `./hunter.sh backfill 250 --ui-verify-blocked`
 - run backfill for a selected set of job ids only:
-  `.\hunt.ps1 backfill --source all --job-id 13143 --job-id 13073`
-  `./hunt.sh backfill --source all --job-id 13143 --job-id 13073`
+  `.\hunter.ps1 backfill --source all --job-id 13143 --job-id 13073`
+  `./hunter.sh backfill --source all --job-id 13143 --job-id 13073`
 - save LinkedIn auth state on a Linux desktop session:
-  `./hunt.sh auth-save --display :0`
+  `./hunter.sh auth-save --display :0`
 - start one manual server scrape cycle:
-  `./hunt.sh svc-start`
+  `./hunter.sh svc-start`
 - follow live service logs on the server:
-  `./hunt.sh svc-follow`
+  `./hunter.sh svc-follow`
 - stop the timer on the server:
-  `./hunt.sh timer-stop`
-  `./hunt.sh timer-disable`
+  `./hunter.sh timer-stop`
+  `./hunter.sh timer-disable`
 - pause automatic scrape/enrich cycles on the server:
-  `./hunt.sh auto-off`
+  `./hunter.sh auto-off`
 - resume automatic scrape/enrich cycles on the server:
-  `./hunt.sh auto-on`
+  `./hunter.sh auto-on` (legacy; prefer **`./hunter.sh start`**)
 - check whether the automatic timer is paused or running:
-  `./hunt.sh auto-status`
+  `./hunter.sh auto-status`
 
 ### Session setup
 
 - save LinkedIn auth state:
-  `python scraper/linkedin_session.py --save-storage-state --channel chrome`
+  `python hunter/linkedin_session.py --save-storage-state --channel chrome`
 - save LinkedIn auth state on the real Linux desktop session:
-  `DISPLAY=:0 python scraper/linkedin_session.py --save-storage-state --channel chrome`
+  `DISPLAY=:0 python hunter/linkedin_session.py --save-storage-state --channel chrome`
 - check whether the saved LinkedIn auth state exists:
-  `python scraper/linkedin_session.py --check`
-- on the server, verify or refresh the current saved LinkedIn login and update shared auth health without needing X/`DISPLAY`:
-  `set -a && source .env && set +a && .venv/bin/python scraper/linkedin_session.py --auto-relogin --channel chrome`
+  `python hunter/linkedin_session.py --check`
+- on `server2`, prefer the wrapper so auth refresh uses the same runtime DB as the review app and `/metrics`:
+  `./hunter.sh auth-auto-relogin --channel chrome`
 - if you want the relogin flow to open a visible browser on the real `server2` monitor:
-  `set -a && source .env && set +a && DISPLAY=:0 .venv/bin/python scraper/linkedin_session.py --auto-relogin --headful --channel chrome`
+  `DISPLAY=:0 ./hunter.sh auth-auto-relogin --headful --display :0 --channel chrome`
 - if you want the relogin flow to open a visible browser on `server2`, run it on the Xvfb display:
-  `DISPLAY=:98 ./hunt.sh auth-auto-relogin --headful --display :98 --channel chrome`
+  `DISPLAY=:98 ./hunter.sh auth-auto-relogin --headful --display :98 --channel chrome`
+- direct Python auth commands on `server2` are only safe if `HUNT_DB_PATH` is exported first; otherwise they can write auth state to the repo-local DB instead of the runtime DB used by the deployed review app
 - `--check` only confirms that the storage-state JSON exists; it does not prove the saved session still reaches the LinkedIn feed
 - `--auto-relogin` now reuses the saved auth state first when it is still valid
 - optional credential fallback for `--auto-relogin` is available when these env vars are present:
@@ -379,6 +392,10 @@ Common examples:
     - submit: `xpath=//button[normalize-space(.)='Sign in']`
   - a transient trace snapshot right after submit may show `Execution context was destroyed` if LinkedIn navigates immediately; use the later `/feed/` snapshot plus `run_end: success` as the authoritative success signal
   - if a relogin run reaches `/feed/` and ends with success but `/metrics` still shows `hunt_auth_available{source="linkedin"} 0`, the relogin worker and the review app are almost certainly pointed at different `HUNT_DB_PATH` values
+  - the confirmed `server2` mismatch was:
+    - direct shell relogin wrote to `/home/michael/hunt/hunt.db`
+    - the deployed review app was reading `/home/michael/data/hunt/hunt.db`
+    - rerunning auth through `./hunter.sh auth-auto-relogin ...` fixed `/metrics` immediately
 - successful manual auth save or successful `--auto-relogin` marks LinkedIn auth available again in shared runtime state
 - failures such as expired saved auth, automation-flagged accounts, all accounts blocked, or failed account rotation mark LinkedIn auth unavailable in shared runtime state
 - the review app and `/metrics` both read that shared runtime auth state:
@@ -392,7 +409,7 @@ Common examples:
 - run the Stage 1 unit tests:
   `python -m unittest discover -s tests -p "test_stage1.py" -v`
 - run a syntax check:
-  `python -m compileall scraper tests`
+  `python -m compileall hunter tests`
 - verify the live Stage 1 DB state:
   `python scripts/verify_stage1_db.py`
 
@@ -428,7 +445,7 @@ Common examples:
 - on deployed Linux hosts, the shared browser/UI fallback used by LinkedIn and Indeed still requires:
   `python -m playwright install chromium`
 - run a controlled LinkedIn-only backfill in chunks and stop for operator confirmation after each chunk:
-  `python scraper/enrich_linkedin.py --limit 100 --channel chrome --ui-verify-blocked`
+  `python hunter/enrich_linkedin.py --limit 100 --channel chrome --ui-verify-blocked`
 - run a controlled backfill across supported sources in chunks and stop for operator confirmation after each chunk:
   `python scripts/backfill_enrichment.py 100 --source all --ui-verify-blocked`
 - run a controlled backfill for selected rows only:
@@ -436,26 +453,26 @@ Common examples:
 - browse the live review/control-plane app:
   `python review_app.py`
 - smoke-test integrated discovery plus newest-first enrichment:
-  `python scraper/scraper.py --enrich-pending --enrich-limit 5 --channel chrome`
+  `python hunter/scraper.py --enrich-pending --enrich-limit 5 --channel chrome`
 - confirm the ready queue still shows the newest rows first after the smoke test:
   `python scripts/list_linkedin_enrichment_queue.py --status ready --limit 10`
 - do one continuous-loop sanity check before deployment:
-  `python scraper/runner.py`
+  `python hunter/runner.py`
 
 ### Requeue and refresh
 
 - requeue older sparse LinkedIn failures for another Stage 2 pass:
   `python scripts/requeue_linkedin_refresh_candidates.py`
 - bulk requeue failed/blocked enrichment rows across supported sources back to `pending`:
-  `./hunt.sh requeue-enrich --source all`
+  `./hunter.sh requeue-enrich --source all`
 - if you also want to requeue stale `processing` rows manually:
-  `./hunt.sh requeue-enrich --source all --status failed --status blocked --status blocked_verified --status processing`
+  `./hunter.sh requeue-enrich --source all --status failed --status blocked --status blocked_verified --status processing`
 - if a deployment bug caused broad false negatives, requeue only the likely-bugged LinkedIn failures instead of all failed rows:
   `sqlite3 /home/michael/data/hunt/hunt.db "update jobs set enrichment_status='pending', last_enrichment_error=NULL, next_enrichment_retry_at=NULL, last_enrichment_started_at=NULL where source='linkedin' and enrichment_status='failed' and (last_enrichment_error like 'external_description_not_usable:%' or last_enrichment_error like 'external_description_not_found:%' or last_enrichment_error like 'apply_button_not_found:%' or last_enrichment_error like 'unexpected_error:%');"`
 - rerun a specific row even if it is not currently pending:
-  `python scraper/enrich_linkedin.py --job-id <ID> --channel chrome --force`
+  `python hunter/enrich_linkedin.py --job-id <ID> --channel chrome --force`
 - re-check one blocked or flaky row in a visible browser:
-  `python scraper/enrich_linkedin.py --job-id <ID> --channel chrome --ui-verify`
+  `python hunter/enrich_linkedin.py --job-id <ID> --channel chrome --ui-verify`
 
 ### Debugging notes from server2 rollout
 
@@ -463,43 +480,43 @@ Common examples:
 - if Playwright reports `Executable doesn't exist`, install the browser binaries with:
   `python -m playwright install chromium`
 - on `server2`, the live DB is expected at `/home/michael/data/hunt/hunt.db`, not inside the repo checkout
-- if a manual LinkedIn-only debug command can see the full `About the job` text but `scraper/enrich_linkedin.py` still reports `description_not_found`, verify the deployed repo actually contains the latest extractor fallback code before requeueing large batches
+- if a manual LinkedIn-only debug command can see the full `About the job` text but `hunter/enrich_linkedin.py` still reports `description_not_found`, verify the deployed repo actually contains the latest extractor fallback code before requeueing large batches
 - the same browser-binary requirement also applies to Indeed `--ui-verify` and `--ui-verify-blocked` runs because they use the shared Playwright browser runtime
 - for Indeed rows, `apply_url` should resolve to the off-Indeed destination when possible; if manual checks only show an Indeed-hosted link, verify whether the row was enriched before the latest redirect-resolution logic was deployed
 
 ### Enrichment runs
 
 - enrich one specific LinkedIn row:
-  `python scraper/enrich_linkedin.py --job-id <ID> --channel chrome`
+  `python hunter/enrich_linkedin.py --job-id <ID> --channel chrome`
 - enrich one specific LinkedIn row in a visible browser:
-  `python scraper/enrich_linkedin.py --job-id <ID> --headful --channel chrome`
+  `python hunter/enrich_linkedin.py --job-id <ID> --headful --channel chrome`
 - enrich a batch of pending LinkedIn rows:
-  `python scraper/enrich_linkedin.py --limit 100 --channel chrome`
+  `python hunter/enrich_linkedin.py --limit 100 --channel chrome`
 - enrich a batch and then UI-verify only blocked rows:
-  `python scraper/enrich_linkedin.py --limit 100 --channel chrome --ui-verify-blocked`
+  `python hunter/enrich_linkedin.py --limit 100 --channel chrome --ui-verify-blocked`
 - enrich a batch of pending Indeed rows:
-  `python scraper/enrich_indeed.py --limit 100`
+  `python hunter/enrich_indeed.py --limit 100`
 - enrich a batch of pending Indeed rows and then rerun only browser-fixable failures visibly:
-  `python scraper/enrich_indeed.py --limit 100 --channel chrome --ui-verify-blocked`
+  `python hunter/enrich_indeed.py --limit 100 --channel chrome --ui-verify-blocked`
 - enrich one specific Indeed row in a visible browser:
-  `python scraper/enrich_indeed.py --job-id <ID> --force --channel chrome --ui-verify`
+  `python hunter/enrich_indeed.py --job-id <ID> --force --channel chrome --ui-verify`
 - enrich a multi-source batch with LinkedIn priority first:
-  `python scraper/enrich_jobs.py --limit 100 --channel chrome --ui-verify-blocked`
+  `python hunter/enrich_jobs.py --limit 100 --channel chrome --ui-verify-blocked`
 - inspect Stage 3 queue health:
   `python scripts/queue_health.py`
 
 ### Discovery plus enrichment
 
 - run discovery only:
-  `python scraper/scraper.py --skip-enrichment`
+  `python hunter/scraper.py --skip-enrichment`
 - run discovery and then enrich pending LinkedIn rows:
-  `python scraper/scraper.py`
+  `python hunter/scraper.py`
 - run discovery and then enrich up to 100 pending supported rows with LinkedIn priority first:
-  `python scraper/scraper.py --enrich-pending --enrich-limit 100 --channel chrome`
+  `python hunter/scraper.py --enrich-pending --enrich-limit 100 --channel chrome`
 - run discovery and then do a second UI pass for blocked rows:
-  `python scraper/scraper.py --enrich-pending --enrich-limit 100 --channel chrome --ui-verify-blocked`
+  `python hunter/scraper.py --enrich-pending --enrich-limit 100 --channel chrome --ui-verify-blocked`
 - run the continuous server loop:
-  `python scraper/runner.py`
+  `python hunter/runner.py`
 - start the browser-facing review/control-plane app locally:
   `python review_app.py`
 - expose the review app with uvicorn explicitly if preferred:
@@ -583,7 +600,7 @@ Current `server2` tuning note:
 - until a larger safe batch size is proven, treat smaller LinkedIn-friendly batches such as `25` as the safer operator default for backlog drain
 - if LinkedIn pressure is the blocker, it is reasonable to drain Indeed separately after the LinkedIn-sensitive portion settles down
 
-Component 1 completion checklist:
+C1 (Hunter) completion checklist:
 - discovery quality is acceptable in production
   - especially for Indeed, where broad board matches should no longer flood the queue with unrelated retail/store jobs
 - the backlog is drained or reduced to a normal steady-state queue
@@ -592,7 +609,7 @@ Component 1 completion checklist:
   - screenshot/HTML/text files exist
   - the review app links to them correctly
 - Stage 6 deployment is reproducible without manual container cleanup
-  - scraper runtime and review app should update correctly from Ansible alone
+  - **C1 (Hunter)** runtime (`hunter/` package) and review app should update correctly from Ansible alone
 - scheduled scrape runs and post-scrape enrichment behave predictably on `server2`
   - timer on/off flow is documented
   - batch size, retry timing, and UI-fallback defaults feel stable in practice
@@ -602,55 +619,55 @@ C1 sign-off runbook on `server2`:
 2. verify the deployed runtime shape and auth health
    - `systemctl cat hunt-scraper.service | grep HUNT_ARTIFACTS_DIR`
    - `curl -s https://agent-hunt-review.mshi.ca/metrics | head`
-   - `cd ~/hunt && set -a && source .env && set +a && .venv/bin/python scraper/linkedin_session.py --auto-relogin --channel chrome`
+   - `cd ~/hunt && set -a && source .env && set +a && .venv/bin/python hunter/linkedin_session.py --auto-relogin --channel chrome`
    - if you need a visible browser for auth debugging:
-     - `cd ~/hunt && DISPLAY=:98 ./hunt.sh auth-auto-relogin --headful --display :98 --channel chrome`
+     - `cd ~/hunt && DISPLAY=:98 ./hunter.sh auth-auto-relogin --headful --display :98 --channel chrome`
    - `curl -s https://agent-hunt-review.mshi.ca/metrics | grep 'hunt_auth_available{source="linkedin"}'`
 3. requeue failed/blocked enrichment rows you want retried
-   - `./hunt.sh retry`
-   - `./hunt.sh requeue-enrich --source all`
+   - `./hunter.sh retry`
+   - `./hunter.sh requeue-enrich --source all`
 4. drain the backlog manually first
    - safer current default:
-     - `DISPLAY=:98 ./hunt.sh backfill-all 25`
+     - `DISPLAY=:98 ./hunter.sh backfill-all 25`
    - if LinkedIn looks healthy and you want a more aggressive run:
-     - `DISPLAY=:98 ./hunt.sh backfill-all`
-   - `DISPLAY=:98 ./hunt.sh drain`
-   - `DISPLAY=:98 ./hunt.sh backfill 100 --source all --ui-verify-blocked --yes`
+     - `DISPLAY=:98 ./hunter.sh backfill-all`
+   - `DISPLAY=:98 ./hunter.sh drain`
+   - `DISPLAY=:98 ./hunter.sh backfill 100 --source all --ui-verify-blocked --yes`
    - if Indeed still needs additional cleanup after the LinkedIn-sensitive portion:
-     - `DISPLAY=:98 ./hunt.sh backfill 100 --source indeed --ui-verify-blocked --yes`
+     - `DISPLAY=:98 ./hunter.sh backfill 100 --source indeed --ui-verify-blocked --yes`
 5. confirm queue health after the manual drain
-   - `./hunt.sh queue`
+   - `./hunter.sh queue`
    - `./.venv/bin/python scripts/queue_health.py --json`
 6. if a real blocked/browser-fixable row occurs, confirm the artifact path end to end
    - files exist under `/home/michael/data/hunt/artifacts`
    - the review app job page links to them
 7. re-enable the unattended timer
-   - `./hunt.sh auto-on`
-   - `./hunt.sh auto-status`
+   - `./hunter.sh start` (or legacy `./hunter.sh auto-on`)
+   - `./hunter.sh auto-status`
 8. observe at least one normal scheduled cycle
    - it should scrape and then run post-scrape enrichment up to the configured batch limit
-9. only after those checks pass, treat Component 1 as operationally complete
+9. only after those checks pass, treat C1 (Hunter) as operationally complete
 
 Stage 4 non-goals:
-- no Component 2 resume tailoring work yet
-- no Component 3 application submission work yet
+- no C2 (Fletcher) resume tailoring work yet
+- no C3 (Executioner) application submission work yet
 - no attempt to bypass CAPTCHA or anti-bot systems
 
 ## Notes For Later Components
 
-Component 2 : resume tailoring
+**C2 (Fletcher)** : resume tailoring (`fletcher/`)
 - should consume enriched descriptions, not raw board snippets
-- should only run after Component 1 marks a job ready
+- should only run after C1 (Hunter) marks a job ready
 
-Component 3 : browser autofill and apply assistance
+**C3 (Executioner)** : browser autofill and apply assistance (extension)
 - should only open jobs where `apply_type = 'external_apply'`
 - should not attempt LinkedIn Easy Apply jobs
 - should prefer ATS URLs over board URLs
 
-Component 4 : orchestration and submit control
+**C4 (Coordinator)** : orchestration and submit control (`coordinator/`)
 - should fetch one explicit apply context for a chosen `job_id`
 - should not re-decide resume selection if C2 has already selected a downstream resume
-- should invoke Component 3 rather than absorb C3 behavior into orchestration prompts
+- should invoke C3 (Executioner) rather than absorb C3 behavior into orchestration prompts
 
 ## Important Constraints
 

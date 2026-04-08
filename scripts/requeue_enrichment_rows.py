@@ -3,12 +3,14 @@ import argparse
 import os
 import sys
 
-
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-SCRAPER_DIR = os.path.join(REPO_ROOT, "scraper")
-sys.path.insert(0, SCRAPER_DIR)
+sys.path.insert(0, REPO_ROOT)
 
-from db import init_db, requeue_enrichment_rows  # noqa: E402
+from hunter.db import (  # noqa: E402
+    init_db,
+    requeue_enrichment_rows,
+    requeue_enrichment_rows_by_error_codes,
+)
 
 
 def parse_args():
@@ -28,18 +30,34 @@ def parse_args():
         dest="statuses",
         help="One or more enrichment statuses to requeue. Defaults to failed + blocked + blocked_verified.",
     )
+    parser.add_argument(
+        "--error-code",
+        action="append",
+        dest="error_codes",
+        choices=["auth_expired", "rate_limited"],
+        help="Optional: requeue only failed rows whose last error code matches one of these values.",
+    )
     return parser.parse_args()
 
 
 def main():
     args = parse_args()
     init_db()
-    updated = requeue_enrichment_rows(source=args.source, statuses=args.statuses)
-    chosen_statuses = args.statuses or ["failed", "blocked", "blocked_verified"]
-    print(
-        f"Requeued {updated} row(s) to pending for source={args.source} "
-        f"statuses={','.join(chosen_statuses)}"
-    )
+    if args.error_codes:
+        updated = requeue_enrichment_rows_by_error_codes(
+            source=args.source, error_codes=args.error_codes
+        )
+        print(
+            f"Requeued {updated} row(s) to pending for source={args.source} "
+            f"error_codes={','.join(args.error_codes)}"
+        )
+    else:
+        updated = requeue_enrichment_rows(source=args.source, statuses=args.statuses)
+        chosen_statuses = args.statuses or ["failed", "blocked", "blocked_verified"]
+        print(
+            f"Requeued {updated} row(s) to pending for source={args.source} "
+            f"statuses={','.join(chosen_statuses)}"
+        )
 
 
 if __name__ == "__main__":

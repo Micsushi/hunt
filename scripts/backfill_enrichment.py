@@ -3,18 +3,19 @@ import argparse
 import os
 import sys
 
-
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-SCRAPER_DIR = os.path.join(REPO_ROOT, "scraper")
-sys.path.insert(0, SCRAPER_DIR)
+sys.path.insert(0, REPO_ROOT)
 
-from db import get_job_by_id, get_linkedin_auth_state, get_review_queue_summary  # noqa: E402
-from enrich_indeed import process_batch as process_indeed_batch  # noqa: E402
-from enrich_indeed import process_one_job as process_indeed_one  # noqa: E402
-from enrich_jobs import process_multi_source_batch  # noqa: E402
-from enrich_linkedin import process_batch as process_linkedin_batch  # noqa: E402
-from enrich_linkedin import process_one_job as process_linkedin_one  # noqa: E402
-
+from hunter.db import (  # noqa: E402
+    get_job_by_id,
+    get_linkedin_auth_state,
+    get_review_queue_summary,
+)
+from hunter.enrich_indeed import process_batch as process_indeed_batch  # noqa: E402
+from hunter.enrich_indeed import process_one_job as process_indeed_one  # noqa: E402
+from hunter.enrich_jobs import process_multi_source_batch  # noqa: E402
+from hunter.enrich_linkedin import process_batch as process_linkedin_batch  # noqa: E402
+from hunter.enrich_linkedin import process_one_job as process_linkedin_one  # noqa: E402
 
 BROWSER_FALLBACK_ERROR_CODES = {"description_not_found", "rate_limited", "unexpected_error"}
 
@@ -68,7 +69,9 @@ def _process_single_selected_job(job_id, args):
 
     source = row.get("source")
     if args.source != "all" and source != args.source:
-        print(f"[backfill] Skipping job id={job_id} because source={source} does not match source={args.source}.")
+        print(
+            f"[backfill] Skipping job id={job_id} because source={source} does not match source={args.source}."
+        )
         return {
             "status": "failed",
             "job_id": job_id,
@@ -133,7 +136,9 @@ def _process_single_selected_job(job_id, args):
     if source == "linkedin":
         auth_state = get_linkedin_auth_state()
         if not auth_state.get("available"):
-            error_message = auth_state.get("last_error") or "auth_expired: LinkedIn auth needs to be refreshed."
+            error_message = (
+                auth_state.get("last_error") or "auth_expired: LinkedIn auth needs to be refreshed."
+            )
             return {
                 "status": "failed",
                 "job_id": job_id,
@@ -141,7 +146,11 @@ def _process_single_selected_job(job_id, args):
                 "error_code": "auth_expired",
             }
 
-    error_message = updated.get("last_enrichment_error") if updated else "unexpected_error: No row returned after processing."
+    error_message = (
+        updated.get("last_enrichment_error")
+        if updated
+        else "unexpected_error: No row returned after processing."
+    )
     return {
         "status": "failed",
         "job_id": job_id,
@@ -221,15 +230,30 @@ def main():
     parser = argparse.ArgumentParser(
         description="Run enrichment backfill in batches with an operator checkpoint after each batch."
     )
-    parser.add_argument("batch_size", type=int, nargs="?", default=100, help="Rows to process per batch.")
+    parser.add_argument(
+        "batch_size", type=int, nargs="?", default=100, help="Rows to process per batch."
+    )
     parser.add_argument("--source", choices=["linkedin", "indeed", "all"], default="linkedin")
-    parser.add_argument("--job-id", type=int, action="append", dest="job_ids", help="Specific job id to include. Repeat for multiple rows.")
-    parser.add_argument("--max-batches", type=int, default=0, help="Optional max number of batches; 0 means no limit.")
+    parser.add_argument(
+        "--job-id",
+        type=int,
+        action="append",
+        dest="job_ids",
+        help="Specific job id to include. Repeat for multiple rows.",
+    )
+    parser.add_argument(
+        "--max-batches",
+        type=int,
+        default=0,
+        help="Optional max number of batches; 0 means no limit.",
+    )
     parser.add_argument("--storage-state", help="Override LinkedIn storage state path.")
     parser.add_argument("--channel", default=None, help="Playwright browser channel, e.g. chrome.")
     parser.add_argument("--timeout-ms", type=int, default=45000)
     parser.add_argument("--slow-mo", type=int, default=0)
-    parser.add_argument("--headful", action="store_true", help="Use a visible browser for the first pass too.")
+    parser.add_argument(
+        "--headful", action="store_true", help="Use a visible browser for the first pass too."
+    )
     parser.add_argument(
         "--ui-verify-blocked",
         action="store_true",
@@ -264,14 +288,16 @@ def main():
             if selected_index >= len(selected_job_ids):
                 print("[backfill] Selected job list is drained.")
                 return 0
-            current_ids = selected_job_ids[selected_index:selected_index + args.batch_size]
+            current_ids = selected_job_ids[selected_index : selected_index + args.batch_size]
             print(
                 f"\n[backfill] Batch {batch_number} starting "
                 f"(selected_ids={','.join(str(job_id) for job_id in current_ids)})."
             )
             summary = _process_selected_batch(current_ids, args)
             selected_index += len(current_ids)
-            ready_after = get_review_queue_summary(source=None if args.source == "all" else args.source)["ready_count"]
+            ready_after = get_review_queue_summary(
+                source=None if args.source == "all" else args.source
+            )["ready_count"]
             drained = max(0, ready_before - ready_after)
         else:
             if ready_before <= 0:
@@ -304,7 +330,9 @@ def main():
                 print(f"  {error_code}: {count}")
 
         if summary["stop_error_code"]:
-            print(f"[backfill] Stopping because a hard-stop error occurred: {summary['stop_error_code']}")
+            print(
+                f"[backfill] Stopping because a hard-stop error occurred: {summary['stop_error_code']}"
+            )
             return 1
 
         if summary["attempted"] == 0:

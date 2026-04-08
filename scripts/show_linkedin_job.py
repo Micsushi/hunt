@@ -3,13 +3,14 @@ import sqlite3
 import sys
 from pathlib import Path
 
-
 REPO_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_DB_PATH = REPO_ROOT / "hunt.db"
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Show the key enrichment fields for one LinkedIn job.")
+    parser = argparse.ArgumentParser(
+        description="Show the key enrichment fields for one LinkedIn job."
+    )
     parser.add_argument("--job-id", type=int, required=True, help="LinkedIn job id to inspect.")
     parser.add_argument(
         "--db",

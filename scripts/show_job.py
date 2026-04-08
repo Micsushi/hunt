@@ -2,12 +2,10 @@ import argparse
 import sys
 from pathlib import Path
 
-
 REPO_ROOT = Path(__file__).resolve().parent.parent
-SCRAPER_DIR = REPO_ROOT / "scraper"
-sys.path.insert(0, str(SCRAPER_DIR))
+sys.path.insert(0, str(REPO_ROOT))
 
-from db import get_job_by_id  # noqa: E402
+from hunter.db import get_job_by_id  # noqa: E402
 
 
 def main():

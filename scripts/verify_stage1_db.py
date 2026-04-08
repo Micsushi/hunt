@@ -3,7 +3,6 @@ import sqlite3
 import sys
 from pathlib import Path
 
-
 REPO_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_DB_PATH = REPO_ROOT / "hunt.db"
 
@@ -94,7 +93,9 @@ def evaluate_results(columns, checks):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Verify the live hunt.db matches Stage 1 LinkedIn baseline expectations.")
+    parser = argparse.ArgumentParser(
+        description="Verify the live hunt.db matches Stage 1 LinkedIn baseline expectations."
+    )
     parser.add_argument(
         "--db",
         default=str(DEFAULT_DB_PATH),
