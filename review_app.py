@@ -1560,6 +1560,50 @@ def render_resume_links(row):
     return "".join(rendered)
 
 
+def _render_keyword_pills(bucket_label: str, values: list[str]) -> str:
+    if not values:
+        return ""
+    pills = "".join(
+        f'<span class="pill" style="padding:6px 10px; font-size:0.85rem; font-weight:600;">{html.escape(v)}</span>'
+        for v in values
+        if v
+    )
+    return f"""
+    <div style="margin-bottom: 12px;">
+      <div class="label" style="margin-bottom:8px;">{html.escape(bucket_label)}</div>
+      <div class="actions" style="flex-wrap:wrap; gap:8px;">{pills}</div>
+    </div>
+    """
+
+
+def render_resume_keywords_panel(row, attempts):
+    if not RESUME_TAILOR_AVAILABLE:
+        return ""
+    keywords = None
+    if attempts:
+        keywords = load_json_file((attempts[0] or {}).get("keywords_path"))
+    if keywords is None:
+        keywords = load_json_file(row.get("latest_resume_keywords_path"))
+    if not keywords:
+        return ""
+    must = [str(x).strip() for x in (keywords.get("must_have_terms") or []) if str(x).strip()]
+    nice = [str(x).strip() for x in (keywords.get("nice_to_have_terms") or []) if str(x).strip()]
+    tools = [str(x).strip() for x in (keywords.get("tools_and_technologies") or []) if str(x).strip()]
+    domain = [str(x).strip() for x in (keywords.get("domain_terms") or []) if str(x).strip()]
+    if not (must or nice or tools or domain):
+        return ""
+    return f"""
+    <div class="panel">
+      <h2>Keywords extracted (C2)</h2>
+      <p class="muted" style="margin-top:0;">Phrases extracted from the job description and used to score/shape the tailored resume.</p>
+      {_render_keyword_pills("Must-have", must)}
+      {_render_keyword_pills("Nice-to-have", nice)}
+      {_render_keyword_pills("Tools & technologies", tools)}
+      {_render_keyword_pills("Domain terms", domain)}
+    </div>
+    """
+
+
 def render_resume_attempts(attempts):
     if not attempts:
         if not RESUME_TAILOR_AVAILABLE:
@@ -2861,6 +2905,7 @@ def job_detail(request: Request, job_id: int, return_to: str = ""):
           {render_resume_links(row)}
         </div>
       </div>
+      {render_resume_keywords_panel(row, resume_attempts)}
       <div class="panel">
         <h2>Recent resume attempts</h2>
         {render_resume_attempts(resume_attempts)}

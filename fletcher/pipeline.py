@@ -224,6 +224,13 @@ def _run_pipeline(
             job_id=job_id, role_family=classification["role_family"], ad_hoc_label=ad_hoc_label
         )
     )
+    if llm_meta.get("prompt_text") or llm_meta.get("response_text"):
+        if llm_meta.get("prompt_text"):
+            write_text(attempt_dir / "ollama_prompt.txt", str(llm_meta.get("prompt_text") or ""))
+        if llm_meta.get("response_text"):
+            write_text(
+                attempt_dir / "ollama_response.txt", str(llm_meta.get("response_text") or "")
+            )
     job_description_path = write_text(attempt_dir / "job_description.txt", description or "")
     role_classification_path = write_json(attempt_dir / "role_classification.json", classification)
     keywords_path = write_json(attempt_dir / "keywords.json", keywords)

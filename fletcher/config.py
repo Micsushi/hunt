@@ -44,6 +44,17 @@ OLLAMA_HOST = os.getenv("HUNT_OLLAMA_HOST", "http://127.0.0.1:11434").rstrip("/"
 OLLAMA_TIMEOUT_SEC = float(os.getenv("HUNT_OLLAMA_TIMEOUT_SEC", "120"))
 OLLAMA_MODEL_NAME = os.getenv("HUNT_OLLAMA_MODEL", "qwen3:8b")
 PROMPT_VERSION_TAG = "c2_v0.1"
+
+# Optional debugging: write LLM prompt/response to attempt_dir.
+# On by default for resume generation so slow runs are inspectable.
+# Disable explicitly with: HUNT_RESUME_LOG_LLM_IO=0
+LOG_LLM_IO = os.getenv("HUNT_RESUME_LOG_LLM_IO", "1").strip().lower() in {
+    "1",
+    "true",
+    "yes",
+    "on",
+}
+LOG_LLM_MAX_CHARS = int(os.getenv("HUNT_RESUME_LOG_LLM_MAX_CHARS", "120000"))
 DEFAULT_MAX_EXPERIENCE_BULLETS = 8
 DEFAULT_MAX_PROJECT_BULLETS = 3
 DEFAULT_MAX_TOTAL_BULLETS = 12

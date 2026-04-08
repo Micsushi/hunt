@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import re
+import time
 import urllib.error
 import urllib.request
 from typing import Any
@@ -181,11 +182,23 @@ def enrich_with_ollama_if_enabled(
 
     On any failure, returns the original classification/keywords and ollama_enriched=False.
     """
-    meta: dict = {"ollama_enriched": False, "error": None, "model": config.OLLAMA_MODEL_NAME}
+    meta: dict = {
+        "ollama_enriched": False,
+        "error": None,
+        "model": config.OLLAMA_MODEL_NAME,
+        "duration_ms": None,
+    }
     if config.DEFAULT_MODEL_BACKEND != "ollama":
         return classification, keywords, meta
     try:
-        content = _ollama_chat(_build_user_prompt(title, description, classification, keywords))
+        prompt = _build_user_prompt(title, description, classification, keywords)
+        start = time.perf_counter()
+        content = _ollama_chat(prompt)
+        meta["duration_ms"] = int((time.perf_counter() - start) * 1000)
+        if config.LOG_LLM_IO:
+            limit = max(1, int(config.LOG_LLM_MAX_CHARS))
+            meta["prompt_text"] = prompt[:limit]
+            meta["response_text"] = (content or "")[:limit]
         parsed = _extract_json_object(content)
         cls_raw = parsed.get("classification")
         kw_raw = parsed.get("keywords")
