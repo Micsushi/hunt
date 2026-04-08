@@ -41,9 +41,9 @@ SECTION_ORDER = (
 DEFAULT_MODEL_BACKEND = os.getenv("HUNT_RESUME_MODEL_BACKEND", "heuristic").strip().lower()
 DEFAULT_MODEL_NAME = os.getenv("HUNT_RESUME_MODEL_NAME", "deterministic-stage1")
 OLLAMA_HOST = os.getenv("HUNT_OLLAMA_HOST", "http://127.0.0.1:11434").rstrip("/")
-OLLAMA_TIMEOUT_SEC = float(os.getenv("HUNT_OLLAMA_TIMEOUT_SEC", "120"))
-OLLAMA_MODEL_NAME = os.getenv("HUNT_OLLAMA_MODEL", "qwen3:8b")
-PROMPT_VERSION_TAG = "c2_v0.1"
+OLLAMA_TIMEOUT_SEC = float(os.getenv("HUNT_OLLAMA_TIMEOUT_SEC", "300"))
+OLLAMA_MODEL_NAME = os.getenv("HUNT_OLLAMA_MODEL", "gemma4:e4b")
+PROMPT_VERSION_TAG = "c2_v0.2_jd_keywords"
 
 # Optional debugging: write LLM prompt/response to attempt_dir.
 # On by default for resume generation so slow runs are inspectable.

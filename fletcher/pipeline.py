@@ -18,11 +18,17 @@ from .db import (
     get_apply_context,
     get_job_context,
     init_resume_db,
+    job_description_fingerprint,
     list_jobs_ready_for_resume,
     record_resume_attempt,
 )
 from .generator import generate_tailored_resume
-from .llm_enrich import enrich_with_ollama_if_enabled
+from .llm_enrich import (
+    distribute_keywords,
+    enrich_with_ollama_if_enabled,
+    rewrite_bullets,
+    rewrite_summary,
+)
 from .keyword_extractor import extract_keywords
 from .parser import parse_resume_file
 from .renderer import render_resume_tex
@@ -189,6 +195,9 @@ def _run_pipeline(
     classification, keywords, llm_meta = enrich_with_ollama_if_enabled(
         title=title, description=description, classification=classification, keywords=keywords
     )
+    desc_fingerprint = job_description_fingerprint(description)
+    if llm_meta:
+        llm_meta["job_description_hash"] = desc_fingerprint
     model_name = OLLAMA_MODEL_NAME if DEFAULT_MODEL_BACKEND == "ollama" else DEFAULT_MODEL_NAME
     if llm_meta.get("ollama_enriched"):
         prompt_version = f"{PROMPT_VERSION_TAG}_ollama"
@@ -213,6 +222,45 @@ def _run_pipeline(
         selected_base_resume=base_resume_name,
     )
 
+    # --- LLM rewrite passes (ollama only) ---
+    all_selected_bullets: list[str] = [
+        b for entry in tailored_doc.experience for b in entry.bullets
+    ] + [b for entry in tailored_doc.projects for b in entry.bullets]
+
+    kw_distribution = distribute_keywords(
+        keywords.get("must_have_terms", []),
+        all_selected_bullets,
+    )
+
+    summary_rewrite_meta: dict = {}
+    if tailored_doc.summary:
+        summary_result = rewrite_summary(
+            tailored_doc.summary,
+            kw_distribution["summary_keywords"],
+        )
+        summary_rewrite_meta = summary_result
+        if summary_result["success"]:
+            tailored_doc.summary = summary_result["summary"]
+
+    bullet_rewrite_meta: dict = {}
+    if all_selected_bullets and kw_distribution["bullet_keywords"]:
+        bullet_result = rewrite_bullets(all_selected_bullets, kw_distribution["bullet_keywords"])
+        bullet_rewrite_meta = bullet_result
+        if bullet_result["success"]:
+            rewritten = bullet_result["bullets"]
+            idx = 0
+            for entry in tailored_doc.experience:
+                for j in range(len(entry.bullets)):
+                    if idx < len(rewritten):
+                        entry.bullets[j] = rewritten[idx]
+                    idx += 1
+            for entry in tailored_doc.projects:
+                for j in range(len(entry.bullets)):
+                    if idx < len(rewritten):
+                        entry.bullets[j] = rewritten[idx]
+                    idx += 1
+    # --- end LLM rewrite passes ---
+
     fallback_used = False
     concern_flags = list(dict.fromkeys(structured_output["concern_flags"]))
     if classification["weak_description"]:
@@ -233,6 +281,24 @@ def _run_pipeline(
             write_text(
                 attempt_dir / "ollama_response.txt", str(llm_meta.get("response_text") or "")
             )
+    if summary_rewrite_meta:
+        write_json(attempt_dir / "summary_rewrite.json", {
+            "summary": tailored_doc.summary or "",
+            "success": summary_rewrite_meta.get("success", False),
+            "duration_ms": summary_rewrite_meta.get("duration_ms"),
+            "error": summary_rewrite_meta.get("error"),
+            "keywords_used": kw_distribution.get("summary_keywords", []),
+        })
+    if bullet_rewrite_meta:
+        write_json(attempt_dir / "bullet_rewrite.json", {
+            "bullets": bullet_rewrite_meta.get("bullets", []),
+            "success": bullet_rewrite_meta.get("success", False),
+            "duration_ms": bullet_rewrite_meta.get("duration_ms"),
+            "error": bullet_rewrite_meta.get("error"),
+            "keywords_used": kw_distribution.get("bullet_keywords", []),
+        })
+    write_json(attempt_dir / "keyword_distribution.json", kw_distribution)
+
     job_description_path = write_text(attempt_dir / "job_description.txt", description or "")
     role_classification_path = write_json(attempt_dir / "role_classification.json", classification)
     keywords_path = write_json(attempt_dir / "keywords.json", keywords)
@@ -265,6 +331,7 @@ def _run_pipeline(
         "model_backend": DEFAULT_MODEL_BACKEND,
         "model_name": model_name,
         "llm_enrichment": llm_meta,
+        "job_description_hash": desc_fingerprint,
         "selected_base_resume": base_resume_name,
         "source_resume_path": str(Path(selected_resume_path)),
         "role_classification_path": role_classification_path,
@@ -285,6 +352,12 @@ def _run_pipeline(
     else:
         if "page_limit_failed" not in concern_flags:
             concern_flags.append("page_limit_failed")
+
+    jd_usable_db = None
+    jd_usable_reason_db = None
+    if llm_meta.get("ollama_enriched") and isinstance(llm_meta.get("jd_usable"), bool):
+        jd_usable_db = llm_meta["jd_usable"]
+        jd_usable_reason_db = llm_meta.get("jd_usable_reason")
 
     attempt_payload = {
         "attempt_type": source_mode,
@@ -313,6 +386,9 @@ def _run_pipeline(
         "is_latest_useful": is_latest_useful,
         "is_selected_for_c3": is_selected_for_c3,
         "clear_existing_selection": source_mode == "queue" and not allow_downstream_selection,
+        "jd_usable": jd_usable_db,
+        "jd_usable_reason": jd_usable_reason_db,
+        "job_description_hash": desc_fingerprint,
     }
 
     attempt_id = None
@@ -333,6 +409,8 @@ def _run_pipeline(
         "pdf_path": pdf_path,
         "tex_path": tex_path,
         "metadata_path": metadata_path,
+        "summary_rewrite_path": str(attempt_dir / "summary_rewrite.json") if summary_rewrite_meta else None,
+        "bullet_rewrite_path": str(attempt_dir / "bullet_rewrite.json") if bullet_rewrite_meta else None,
         "apply_context": get_apply_context(job_id, db_path) if job_id is not None else None,
     }
     write_json(attempt_dir / "result.json", result)

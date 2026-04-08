@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import sqlite3
 from pathlib import Path
@@ -25,6 +26,15 @@ JOB_COLUMNS = {
     "selected_resume_tex_path": "TEXT",
     "selected_resume_selected_at": "TEXT",
     "selected_resume_ready_for_c3": "BOOLEAN",
+    "latest_resume_jd_usable": "INTEGER",
+    "latest_resume_jd_usable_reason": "TEXT",
+}
+
+# Added to existing resume_attempts via ALTER (older DBs).
+RESUME_ATTEMPT_EXTRA_COLUMNS = {
+    "jd_usable": "INTEGER",
+    "jd_usable_reason": "TEXT",
+    "job_description_hash": "TEXT",
 }
 
 RESUME_ATTEMPTS_TABLE_SQL = """
@@ -73,6 +83,28 @@ CREATE TABLE IF NOT EXISTS resume_versions (
 """
 
 
+def job_description_fingerprint(description: str | None) -> str:
+    """SHA-256 hex of normalized job description (for skip-regeneration checks)."""
+    return hashlib.sha256((description or "").strip().encode("utf-8")).hexdigest()
+
+
+def should_skip_resume_regeneration(
+    conn: sqlite3.Connection, *, job_id: int, description: str | None
+) -> bool:
+    """True when the model already marked this exact JD text as unusable (do not auto-regenerate)."""
+    h = job_description_fingerprint(description)
+    row = conn.execute(
+        """
+        SELECT 1 FROM resume_attempts
+        WHERE job_id = ? AND jd_usable = 0 AND job_description_hash = ?
+        ORDER BY id DESC
+        LIMIT 1
+        """,
+        (job_id, h),
+    ).fetchone()
+    return row is not None
+
+
 def get_connection(db_path: str | Path | None = None) -> sqlite3.Connection:
     path = Path(db_path or get_db_path())
     conn = sqlite3.connect(path, timeout=30.0)
@@ -91,6 +123,12 @@ def init_resume_db(db_path: str | Path | None = None) -> None:
                 cursor.execute(f"ALTER TABLE jobs ADD COLUMN {column_name} {column_def}")
         cursor.execute(RESUME_ATTEMPTS_TABLE_SQL)
         cursor.execute(RESUME_VERSIONS_TABLE_SQL)
+        ra_existing = {row[1] for row in cursor.execute("PRAGMA table_info(resume_attempts)")}
+        for column_name, column_def in RESUME_ATTEMPT_EXTRA_COLUMNS.items():
+            if column_name not in ra_existing:
+                cursor.execute(
+                    f"ALTER TABLE resume_attempts ADD COLUMN {column_name} {column_def}"
+                )
         conn.commit()
     finally:
         conn.close()
@@ -111,6 +149,9 @@ def record_resume_attempt(
     conn = get_connection(db_path)
     try:
         cursor = conn.cursor()
+        jd_sql = payload.get("jd_usable")
+        if jd_sql is not None:
+            jd_sql = 1 if jd_sql else 0
         cursor.execute(
             """
             INSERT INTO resume_attempts (
@@ -118,8 +159,9 @@ def record_resume_attempt(
                 base_resume_name, source_resume_type, source_resume_path, fallback_used,
                 model_backend, model_name, prompt_version, concern_flags,
                 job_description_path, keywords_path, structured_output_path, tex_path,
-                pdf_path, compile_log_path, metadata_path
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                pdf_path, compile_log_path, metadata_path,
+                jd_usable, jd_usable_reason, job_description_hash
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 job_id,
@@ -143,6 +185,9 @@ def record_resume_attempt(
                 payload["pdf_path"],
                 payload["compile_log_path"],
                 payload["metadata_path"],
+                jd_sql,
+                (payload.get("jd_usable_reason") or None),
+                (payload.get("job_description_hash") or None),
             ),
         )
         attempt_id = int(cursor.lastrowid)
@@ -204,6 +249,10 @@ def record_resume_attempt(
         )
         version_id = int(cursor.lastrowid)
 
+        jdu_job = payload.get("jd_usable")
+        if jdu_job is not None:
+            jdu_job = 1 if jdu_job else 0
+
         if job_id is not None:
             if payload["is_selected_for_c3"]:
                 cursor.execute(
@@ -222,6 +271,8 @@ def record_resume_attempt(
                         latest_resume_generated_at = CURRENT_TIMESTAMP,
                         latest_resume_fallback_used = ?,
                         latest_resume_flags = ?,
+                        latest_resume_jd_usable = ?,
+                        latest_resume_jd_usable_reason = ?,
                         selected_resume_version_id = ?,
                         selected_resume_pdf_path = ?,
                         selected_resume_tex_path = ?,
@@ -242,6 +293,8 @@ def record_resume_attempt(
                         payload["model_name"],
                         int(payload["fallback_used"]),
                         json.dumps(payload["concern_flags"]),
+                        jdu_job,
+                        (payload.get("jd_usable_reason") or None),
                         version_id,
                         payload["pdf_path"],
                         payload["tex_path"],
@@ -266,6 +319,8 @@ def record_resume_attempt(
                         latest_resume_generated_at = CURRENT_TIMESTAMP,
                         latest_resume_fallback_used = ?,
                         latest_resume_flags = ?,
+                        latest_resume_jd_usable = ?,
+                        latest_resume_jd_usable_reason = ?,
                         selected_resume_version_id = NULL,
                         selected_resume_pdf_path = NULL,
                         selected_resume_tex_path = NULL,
@@ -286,6 +341,8 @@ def record_resume_attempt(
                         payload["model_name"],
                         int(payload["fallback_used"]),
                         json.dumps(payload["concern_flags"]),
+                        jdu_job,
+                        (payload.get("jd_usable_reason") or None),
                         job_id,
                     ),
                 )
@@ -305,7 +362,9 @@ def record_resume_attempt(
                         latest_resume_model = ?,
                         latest_resume_generated_at = CURRENT_TIMESTAMP,
                         latest_resume_fallback_used = ?,
-                        latest_resume_flags = ?
+                        latest_resume_flags = ?,
+                        latest_resume_jd_usable = ?,
+                        latest_resume_jd_usable_reason = ?
                     WHERE id = ?
                     """,
                     (
@@ -321,6 +380,8 @@ def record_resume_attempt(
                         payload["model_name"],
                         int(payload["fallback_used"]),
                         json.dumps(payload["concern_flags"]),
+                        jdu_job,
+                        (payload.get("jd_usable_reason") or None),
                         job_id,
                     ),
                 )
@@ -359,23 +420,30 @@ def list_jobs_ready_for_resume(
     limit: int = 25,
     only_missing: bool = False,
 ) -> list[dict]:
+    """Jobs eligible for queue-driven resume generation.
+
+    Skips jobs where the model already recorded **jd_usable=0** for the **same**
+    description text (SHA-256 fingerprint), so the timer does not keep
+    regenerating when the JD scrape is still useless. If the description changes,
+    the job becomes eligible again. Manual ``generate-job <id>`` still works.
+    """
     conn = get_connection(db_path)
     try:
         cursor = conn.cursor()
-        sql = """
+        base_sql = """
             SELECT *
             FROM jobs
             WHERE enrichment_status IN ('done', 'done_verified')
         """
         params: list[object] = []
         if only_missing:
-            sql += """
+            base_sql += """
               AND (
                     latest_resume_generated_at IS NULL
                  OR trim(coalesce(latest_resume_generated_at, '')) = ''
               )
             """
-        sql += """
+        base_sql += """
             ORDER BY
                 CASE
                     WHEN latest_resume_generated_at IS NULL OR trim(coalesce(latest_resume_generated_at, '')) = '' THEN 0
@@ -383,10 +451,32 @@ def list_jobs_ready_for_resume(
                 END,
                 coalesce(enriched_at, date_scraped, CURRENT_TIMESTAMP) DESC,
                 id DESC
-            LIMIT ?
         """
-        params.append(max(1, limit))
-        return [dict(row) for row in cursor.execute(sql, tuple(params)).fetchall()]
+        want = max(1, limit)
+        batch_size = max(50, want * 5)
+        max_scan = 5000
+        out: list[dict] = []
+        offset = 0
+        scanned = 0
+        while len(out) < want and scanned < max_scan:
+            rows = cursor.execute(
+                base_sql + " LIMIT ? OFFSET ?",
+                tuple(params) + (batch_size, offset),
+            ).fetchall()
+            if not rows:
+                break
+            for row in rows:
+                scanned += 1
+                r = dict(row)
+                if should_skip_resume_regeneration(
+                    conn, job_id=int(r["id"]), description=r.get("description")
+                ):
+                    continue
+                out.append(r)
+                if len(out) >= want:
+                    break
+            offset += batch_size
+        return out
     finally:
         conn.close()
 

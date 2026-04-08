@@ -9,32 +9,6 @@ from typing import Any
 
 from . import config
 
-ALLOWED_FAMILIES = frozenset({"software", "pm", "data", "general", "unknown"})
-ALLOWED_LEVELS = frozenset(
-    {
-        "intern",
-        "new_grad",
-        "junior",
-        "mid",
-        "senior",
-        "staff",
-        "principal",
-        "manager",
-        "director",
-        "unknown",
-    }
-)
-ALLOWED_BASE = frozenset({"software", "pm", "data", "general", "original"})
-ALLOWED_CONCERN = frozenset(
-    {
-        "weak_description",
-        "low_confidence_match",
-        "page_limit_failed",
-        "insufficient_source_facts",
-        "manual_review_recommended",
-    }
-)
-
 
 def _extract_json_object(text: str) -> dict[str, Any]:
     raw = (text or "").strip()
@@ -57,7 +31,6 @@ def _ollama_chat(user_prompt: str) -> str:
     timeout = config.OLLAMA_TIMEOUT_SEC
     payload = {
         "model": model,
-        # Ask Ollama to return strict JSON (reduces parse failures).
         "format": "json",
         "stream": False,
         "options": {"temperature": 0.2},
@@ -65,8 +38,8 @@ def _ollama_chat(user_prompt: str) -> str:
             {
                 "role": "system",
                 "content": (
-                    "You assist with job posting analysis for resume tailoring. "
-                    "Respond with a single JSON object only, no markdown, no commentary."
+                    "You read job postings for resume tailoring. "
+                    "Respond with one JSON object only, no markdown, no commentary."
                 ),
             },
             {"role": "user", "content": user_prompt},
@@ -85,92 +58,200 @@ def _ollama_chat(user_prompt: str) -> str:
     return (message.get("content") or "").strip()
 
 
-def _clamp_str(value: Any, allowed: frozenset[str], default: str) -> str:
-    if not isinstance(value, str):
-        return default
-    v = value.strip().lower()
-    return v if v in allowed else default
-
-
-def _normalize_classification(raw: dict[str, Any] | None, base: dict) -> dict:
-    if not raw or not isinstance(raw, dict):
-        return dict(base)
-    out = dict(base)
-    out["role_family"] = _clamp_str(
-        raw.get("role_family"), ALLOWED_FAMILIES, base["role_family"]
-    )
-    out["job_level"] = _clamp_str(raw.get("job_level"), ALLOWED_LEVELS, base["job_level"])
-    conf = raw.get("confidence")
-    if isinstance(conf, (int, float)):
-        out["confidence"] = max(0.0, min(0.95, float(conf)))
-    if isinstance(raw.get("weak_description"), bool):
-        out["weak_description"] = raw["weak_description"]
-    out["recommended_base_resume"] = _clamp_str(
-        raw.get("recommended_base_resume"),
-        ALLOWED_BASE,
-        base["recommended_base_resume"],
-    )
-    reasons = raw.get("reasons")
-    if isinstance(reasons, list) and all(isinstance(x, str) for x in reasons):
-        out["reasons"] = reasons[:24]
-    flags = raw.get("concern_flags")
-    if isinstance(flags, list):
-        merged = [f for f in flags if isinstance(f, str) and f in ALLOWED_CONCERN]
-        out["concern_flags"] = list(dict.fromkeys(merged + base.get("concern_flags", [])))
-    return out
-
-
-def _normalize_keywords(raw: dict[str, Any] | None, base: dict) -> dict:
-    if not raw or not isinstance(raw, dict):
-        return dict(base)
-    out = dict(base)
-    for key in (
-        "must_have_terms",
-        "nice_to_have_terms",
-        "responsibilities",
-        "tools_and_technologies",
-        "domain_terms",
-        "seniority_signals",
-    ):
-        val = raw.get(key)
-        if isinstance(val, list) and all(isinstance(x, str) for x in val):
-            cap = 16 if key == "responsibilities" else 24
-            out[key] = val[:cap]
-    flags = raw.get("concern_flags")
-    if isinstance(flags, list):
-        merged = [f for f in flags if isinstance(f, str) and f in ALLOWED_CONCERN]
-        out["concern_flags"] = list(dict.fromkeys(merged + base.get("concern_flags", [])))
-    return out
-
-
-def _build_user_prompt(title: str, description: str, base_c: dict, base_k: dict) -> str:
+def _build_user_prompt(title: str, description: str) -> str:
+    desc_truncated = (description or "")[:1200]
     return f"""Job title: {title}
 Job description:
-{description or "(empty)"}
+{desc_truncated or "(empty)"}
 
-Heuristic baseline (JSON) — refine if needed, stay consistent with the posting:
-classification: {json.dumps(base_c)}
-keywords: {json.dumps(base_k)}
+Answer two questions using only the title and description above.
 
-Return one JSON object with exactly two keys, "classification" and "keywords".
+1) Is this posting usable for tailoring a resume? Usable means there is enough concrete content (not just "apply on company site", not empty, not a useless stub). Scrapes that lost the real JD should be marked not usable.
 
-"classification" must match this shape:
-- role_family: one of software, pm, data, general, unknown
-- job_level: one of intern, new_grad, junior, mid, senior, staff, principal, manager, director, unknown
-- confidence: number 0..1
-- weak_description: boolean (true if the description is too sparse to tailor well, e.g. under ~120 chars of substance)
-- recommended_base_resume: one of software, pm, data, general, original (use original only if family is unclear)
-- reasons: array of short strings explaining signals
-- concern_flags: subset of weak_description, low_confidence_match, insufficient_source_facts, manual_review_recommended
+2) List up to 20 keywords: technologies, tools, platforms, languages, cloud vendors, data tools, or clear domain phrases that **appear verbatim** in the title or description (same spelling; minor case differences ok). Do not invent anything not in the text. Skip generic filler ("team", "experience", "communication skills"). If the posting is not usable, return an empty keyword list.
 
-"keywords" must match this shape:
-- must_have_terms: up to 12 short tokens or phrases strongly tied to the role
-- nice_to_have_terms: up to 12 secondary terms
-- responsibilities: up to 6 short paraphrased responsibility lines from the JD (empty if JD too thin)
-- tools_and_technologies: up to 12 tools/languages/platforms explicitly mentioned
-- domain_terms: up to 8 domain phrases
-- seniority_signals: array of strings (may repeat job_level)
-- concern_flags: same flag vocabulary as classification (may overlap)"""
+Return a single JSON object with exactly these keys:
+- "jd_usable": boolean
+- "jd_usable_reason": string (one short sentence)
+- "keywords": array of 0 to 20 strings
+
+No other keys."""
+
+
+def _apply_jd_keywords(
+    parsed: dict[str, Any],
+    *,
+    classification: dict,
+    keywords: dict,
+) -> tuple[dict, dict]:
+    """Merge Ollama jd_usable + keywords into classification and keywords dicts."""
+    jd_usable = parsed.get("jd_usable")
+    if not isinstance(jd_usable, bool):
+        raise ValueError("jd_usable must be a boolean")
+
+    reason = parsed.get("jd_usable_reason")
+    reason_str = reason.strip() if isinstance(reason, str) else ""
+
+    raw_list = parsed.get("keywords")
+    if not isinstance(raw_list, list):
+        raise ValueError("keywords must be an array")
+    terms: list[str] = []
+    seen: set[str] = set()
+    for item in raw_list:
+        if not isinstance(item, str):
+            continue
+        s = item.strip()
+        if not s or s.lower() in seen:
+            continue
+        seen.add(s.lower())
+        terms.append(s)
+        if len(terms) >= 20:
+            break
+
+    if not jd_usable:
+        terms = []
+
+    new_c = dict(classification)
+    new_c["weak_description"] = not jd_usable
+    flags = list(new_c.get("concern_flags") or [])
+    if not jd_usable:
+        if "weak_description" not in flags:
+            flags.append("weak_description")
+    else:
+        flags = [f for f in flags if f != "weak_description"]
+    new_c["concern_flags"] = flags
+    if reason_str:
+        reasons = list(new_c.get("reasons") or [])
+        reasons.append(f"jd_usable_model: {reason_str[:200]}")
+        new_c["reasons"] = reasons[:24]
+
+    new_k = dict(keywords)
+    new_k["must_have_terms"] = terms
+    new_k["nice_to_have_terms"] = []
+    new_k["tools_and_technologies"] = list(terms)
+    new_k["domain_terms"] = []
+    return new_c, new_k
+
+
+def rewrite_summary(existing_summary: str, keywords: list[str]) -> dict[str, Any]:
+    """Ask Ollama to rewrite the resume summary injecting the given keywords.
+
+    Returns dict with keys:
+      - "summary": rewritten summary string (or original on failure)
+      - "success": bool
+      - "error": str or None
+      - "duration_ms": int or None
+    """
+    result: dict[str, Any] = {"summary": existing_summary, "success": False, "error": None, "duration_ms": None}
+    if config.DEFAULT_MODEL_BACKEND != "ollama":
+        return result
+    if not existing_summary or not keywords:
+        return result
+
+    kw_list = ", ".join(keywords[:5])
+    prompt = (
+        f"Rewrite this resume summary to naturally include these keywords: {kw_list}\n"
+        f"Keep the same meaning, same length (2-3 sentences), no invented facts.\n"
+        f"Summary: {existing_summary.strip()}\n"
+        f'Return only: {{"summary": "..."}}'
+    )
+    try:
+        start = time.perf_counter()
+        raw = _ollama_chat(prompt)
+        result["duration_ms"] = int((time.perf_counter() - start) * 1000)
+        parsed = _extract_json_object(raw)
+        text = parsed.get("summary", "").strip()
+        if text:
+            result["summary"] = text
+            result["success"] = True
+    except Exception as exc:
+        result["error"] = str(exc) or exc.__class__.__name__
+        if result["duration_ms"] is None:
+            result["duration_ms"] = int((time.perf_counter() - start) * 1000) if "start" in dir() else None
+    return result
+
+
+def rewrite_bullets(bullets: list[str], keywords: list[str]) -> dict[str, Any]:
+    """Ask Ollama to reformulate selected bullets to use JD keyword vocabulary.
+
+    Sends all bullets in one call. Returns dict with keys:
+      - "bullets": list of rewritten bullet strings (falls back to originals on failure)
+      - "success": bool
+      - "error": str or None
+      - "duration_ms": int or None
+    """
+    result: dict[str, Any] = {"bullets": list(bullets), "success": False, "error": None, "duration_ms": None}
+    if config.DEFAULT_MODEL_BACKEND != "ollama":
+        return result
+    if not bullets or not keywords:
+        return result
+
+    kw_list = ", ".join(keywords[:5])
+    numbered = "\n".join(f"{i + 1}. {b.strip()}" for i, b in enumerate(bullets))
+    prompt = (
+        f"Rewrite these resume bullets to naturally use these keywords where they fit: {kw_list}\n"
+        f"Rules: same meaning, same metrics, no invented facts, keep each bullet one sentence.\n"
+        f"Bullets:\n{numbered}\n"
+        f'Return only: {{"bullets": ["bullet 1 text", "bullet 2 text", ...]}}'
+    )
+    try:
+        start = time.perf_counter()
+        raw = _ollama_chat(prompt)
+        result["duration_ms"] = int((time.perf_counter() - start) * 1000)
+        parsed = _extract_json_object(raw)
+        rewritten = parsed.get("bullets")
+        if isinstance(rewritten, list) and len(rewritten) == len(bullets):
+            cleaned = [str(b).strip() for b in rewritten if str(b).strip()]
+            if len(cleaned) == len(bullets):
+                result["bullets"] = cleaned
+                result["success"] = True
+    except Exception as exc:
+        result["error"] = str(exc) or exc.__class__.__name__
+        if result["duration_ms"] is None:
+            result["duration_ms"] = int((time.perf_counter() - start) * 1000) if "start" in dir() else None
+    return result
+
+
+def distribute_keywords(
+    keywords: list[str],
+    selected_bullets: list[str],
+    *,
+    max_total: int = 10,
+) -> dict[str, list[str]]:
+    """Split keywords into two buckets: bullet_keywords and summary_keywords.
+
+    Strategy:
+    - Score each keyword against the combined bullet text.
+    - Keywords that appear or have strong overlap with existing bullets
+      go to bullet_keywords (the LLM will work them in during reformulation).
+    - The rest go to summary_keywords (injected during summary rewrite).
+    - Total across both buckets is capped at max_total.
+    """
+    if not keywords:
+        return {"bullet_keywords": [], "summary_keywords": []}
+
+    bullets_text = " ".join(selected_bullets).lower()
+
+    bullet_kws: list[str] = []
+    summary_kws: list[str] = []
+
+    for kw in keywords:
+        kw_lower = kw.lower()
+        # Check if keyword or any word from keyword appears in bullet text.
+        tokens = [t for t in re.split(r"[\s/+#.-]+", kw_lower) if len(t) > 2]
+        hits = sum(1 for t in tokens if t in bullets_text) if tokens else 0
+        if hits > 0 or kw_lower in bullets_text:
+            bullet_kws.append(kw)
+        else:
+            summary_kws.append(kw)
+
+    # Cap combined to max_total, split evenly but favour bullets.
+    bullet_cap = max_total // 2 + max_total % 2
+    summary_cap = max_total // 2
+    return {
+        "bullet_keywords": bullet_kws[:bullet_cap],
+        "summary_keywords": summary_kws[:summary_cap],
+    }
 
 
 def enrich_with_ollama_if_enabled(
@@ -180,7 +261,7 @@ def enrich_with_ollama_if_enabled(
     classification: dict,
     keywords: dict,
 ) -> tuple[dict, dict, dict]:
-    """When model backend is ollama, ask the local model to refine classification + keywords.
+    """When backend is ollama, ask the model for jd_usable + grounded keywords.
 
     On any failure, returns the original classification/keywords and ollama_enriched=False.
     """
@@ -193,7 +274,7 @@ def enrich_with_ollama_if_enabled(
     if config.DEFAULT_MODEL_BACKEND != "ollama":
         return classification, keywords, meta
     try:
-        prompt = _build_user_prompt(title, description, classification, keywords)
+        prompt = _build_user_prompt(title, description)
         if config.LOG_LLM_IO:
             limit = max(1, int(config.LOG_LLM_MAX_CHARS))
             meta["prompt_text"] = prompt[:limit]
@@ -204,22 +285,25 @@ def enrich_with_ollama_if_enabled(
             limit = max(1, int(config.LOG_LLM_MAX_CHARS))
             meta["response_text"] = (content or "")[:limit]
         parsed = _extract_json_object(content)
-        cls_raw = parsed.get("classification")
-        kw_raw = parsed.get("keywords")
-        if not isinstance(cls_raw, dict) or not isinstance(kw_raw, dict):
-            raise ValueError("missing classification or keywords object")
-        new_c = _normalize_classification(cls_raw, classification)
-        new_k = _normalize_keywords(kw_raw, keywords)
+        new_c, new_k = _apply_jd_keywords(parsed, classification=classification, keywords=keywords)
         meta["ollama_enriched"] = True
+        if isinstance(parsed.get("jd_usable"), bool):
+            meta["jd_usable"] = parsed["jd_usable"]
+        reason = parsed.get("jd_usable_reason")
+        if isinstance(reason, str) and reason.strip():
+            meta["jd_usable_reason"] = reason.strip()[:500]
         return new_c, new_k, meta
     except (urllib.error.URLError, urllib.error.HTTPError, TimeoutError) as exc:
-        # Capture duration even on failures when possible.
         if meta.get("duration_ms") is None:
-            meta["duration_ms"] = int((time.perf_counter() - start) * 1000) if "start" in locals() else None
+            meta["duration_ms"] = (
+                int((time.perf_counter() - start) * 1000) if "start" in locals() else None
+            )
         meta["error"] = str(exc) or exc.__class__.__name__
         return classification, keywords, meta
     except (json.JSONDecodeError, ValueError, TypeError, KeyError) as exc:
         if meta.get("duration_ms") is None:
-            meta["duration_ms"] = int((time.perf_counter() - start) * 1000) if "start" in locals() else None
+            meta["duration_ms"] = (
+                int((time.perf_counter() - start) * 1000) if "start" in locals() else None
+            )
         meta["error"] = str(exc) or exc.__class__.__name__
         return classification, keywords, meta

@@ -65,7 +65,7 @@ Status:
 - **v1.0 not done** until the items below are true
 
 **Recently completed (v0.1 → v1.0 progress):**
-- **Keyword extraction rewrite** (`fletcher/keyword_extractor.py`): multi-word tech phrases matched first, noise-filtered stopword list, minimum-frequency filter, punctuation-safe tokenizer, 0–10 meaningful terms only.
+- **Keywords**: `keyword_extractor` is a **minimal draft** (title tokens when heuristic). With Ollama, **`llm_enrich`** asks the model only for **`jd_usable`**, a short reason, and up to **10 grounded keywords** from the posting (no invented terms); that list drives `must_have_terms` and `weak_description`.
 - **Bullet injection removed** (`fletcher/generator.py` `_rewrite_bullet`): the `"; aligned with pricing."` forced append is gone. Keywords are surfaced by scoring and selection only.
 - **Candidate profile template** (`fletcher/templates/candidate_profile.template.md`): full instructions, Entry ID matching guide, complete example entries. File is gitignored (`fletcher/candidate_profile.md`).
 - **LLM I/O logging on by default**: `HUNT_RESUME_LOG_LLM_IO=1`; prompt captured before the network call so it is preserved even on timeouts.

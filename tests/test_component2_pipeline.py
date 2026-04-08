@@ -6,7 +6,12 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from fletcher.db import get_apply_context, init_resume_db
+from fletcher.db import (
+    get_apply_context,
+    init_resume_db,
+    job_description_fingerprint,
+    list_jobs_ready_for_resume,
+)
 from fletcher.parser import parse_resume_file
 from fletcher.pipeline import (
     generate_resume_for_ad_hoc,
@@ -430,3 +435,47 @@ class Component2PipelineTests(unittest.TestCase):
         self.assertIn(result["status"], {"done", "done_with_flags"})
         self.assertEqual(metadata["page_fit_retry_count"], 1)
         self.assertEqual(len(metadata["compile_history"]), 2)
+
+    def test_list_jobs_ready_for_resume_skips_unusable_jd_same_description(self):
+        init_resume_db(self.db_path)
+        desc = (
+            "We are hiring a junior software engineer with Python, Docker, AWS, "
+            "and REST API experience."
+        )
+        h = job_description_fingerprint(desc)
+        conn = sqlite3.connect(self.db_path)
+        conn.execute(
+            """
+            INSERT INTO resume_attempts (
+                job_id, attempt_type, status, latest_result_kind, role_family, job_level,
+                base_resume_name, source_resume_type, source_resume_path, fallback_used,
+                model_backend, model_name, prompt_version, concern_flags,
+                job_description_path, keywords_path, structured_output_path, tex_path,
+                pdf_path, compile_log_path, metadata_path,
+                jd_usable, jd_usable_reason, job_description_hash
+            ) VALUES (
+                1, 'queue', 'done', 'latest_useful', 'software', 'junior',
+                'original', 'original', '', 0,
+                'ollama', 'm', 'p', '[]',
+                '', '', '', '/tmp/x.tex',
+                '/tmp/x.pdf', '', '',
+                0, 'Scrape stub only', ?
+            )
+            """,
+            (h,),
+        )
+        conn.commit()
+        conn.close()
+
+        rows = list_jobs_ready_for_resume(db_path=self.db_path, limit=10, only_missing=False)
+        self.assertEqual([r["id"] for r in rows], [])
+
+        conn = sqlite3.connect(self.db_path)
+        conn.execute(
+            "UPDATE jobs SET description = ? WHERE id = 1",
+            (desc + " Extended JD text.",),
+        )
+        conn.commit()
+        conn.close()
+        rows2 = list_jobs_ready_for_resume(db_path=self.db_path, limit=10, only_missing=False)
+        self.assertEqual([r["id"] for r in rows2], [1])

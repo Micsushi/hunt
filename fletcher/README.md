@@ -13,11 +13,11 @@ This directory is the repo home for **C2 (Fletcher)** : resume tailoring. See **
 ## v0.1 runtime (what exists today)
 
 - Parse / render **`main.tex`** (immutable OG resume), optional **family base** resumes under `fletcher/base_resumes/<family>/`.
-- **Keyword extraction** (`fletcher/keyword_extractor.py`): multi-word tech phrases matched first, noise-filtered, 0–10 meaningful terms only. Optional **Ollama** refinement of classification + keywords when `HUNT_RESUME_MODEL_BACKEND=ollama`.
+- **Keywords** (`fletcher/keyword_extractor.py`): tiny **draft** from the job title when the backend is `heuristic`. With **`HUNT_RESUME_MODEL_BACKEND=ollama`**, the model returns **`jd_usable`** (is the scraped JD good enough to tailor from?), **`jd_usable_reason`**, and up to **10 grounded `keywords`** taken only from the title + description (no invented terms). That list becomes `must_have_terms` / `tools_and_technologies` for scoring and the review UI.
 - **Heuristic** bullet scoring and selection (candidate profile + bullet library). Bullets are selected by relevance score — keywords are **never force-injected** into unrelated bullets.
 - **LaTeX compile**, **one-page gate** with controlled retries.
 - **SQLite**: `resume_attempts`, `resume_versions`, job latest/selected resume columns, **`get_apply_context`**.
-- **Queue batch**: `python -m fletcher.cli generate-ready` (jobs with `enrichment_status` in `done` / `done_verified`).
+- **Queue batch**: `python -m fletcher.cli generate-ready` (jobs with `enrichment_status` in `done` / `done_verified`). Jobs are **skipped** when there is already a resume attempt with **`jd_usable = 0`** (model said JD not usable) **and** the job `description` text is unchanged (SHA-256 fingerprint). Re-enrich or edit the description to retry. **`fletch run generate-job <job_id>`** still forces a new attempt.
 - **LLM I/O logging**: prompt and response written to `ollama_prompt.txt` / `ollama_response.txt` in each attempt directory (on by default).
 - **Review app**: per-attempt PDF/TeX/Keywords/LLM I/O links; keyword pills panel; LLM I/O viewer page at `/api/attempts/{id}/llm`.
 
@@ -42,7 +42,7 @@ Both files are **gitignored** — they contain personal data. See the template f
 | `HUNT_RESUME_MODEL_BACKEND` | `heuristic` | `heuristic` (fast, no network) or `ollama`. |
 | `HUNT_RESUME_MODEL_NAME` | `deterministic-stage1` | Logged when backend is heuristic. |
 | `HUNT_OLLAMA_HOST` | `http://127.0.0.1:11434` | Ollama HTTP API base URL. |
-| `HUNT_OLLAMA_MODEL` | `qwen3:8b` | Chat model for classification/keyword refinement. |
+| `HUNT_OLLAMA_MODEL` | `gemma2:9b` | Ollama chat model (run `ollama pull gemma2:9b` first). |
 | `HUNT_OLLAMA_TIMEOUT_SEC` | `120` | Per-request timeout in seconds. |
 | `HUNT_RESUME_LOG_LLM_IO` | `1` | Write prompt + response to attempt dir (`0` to disable). |
 | `HUNT_RESUME_LOG_LLM_MAX_CHARS` | `120000` | Max chars captured from prompt/response. |

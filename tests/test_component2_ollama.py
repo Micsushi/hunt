@@ -20,27 +20,12 @@ class Component2OllamaTests(unittest.TestCase):
         self.assertFalse(meta["ollama_enriched"])
         self.assertEqual(c["role_family"], "software")
 
-    def test_ollama_success_merges_classification(self):
+    def test_ollama_success_sets_keywords_and_jd_usable(self):
         fake_response = json.dumps(
             {
-                "classification": {
-                    "role_family": "data",
-                    "job_level": "senior",
-                    "confidence": 0.88,
-                    "weak_description": False,
-                    "recommended_base_resume": "data",
-                    "reasons": ["llm_signal"],
-                    "concern_flags": [],
-                },
-                "keywords": {
-                    "must_have_terms": ["sql", "spark"],
-                    "nice_to_have_terms": ["airflow"],
-                    "responsibilities": ["Build pipelines."],
-                    "tools_and_technologies": ["sql"],
-                    "domain_terms": ["analytics"],
-                    "seniority_signals": ["senior"],
-                    "concern_flags": [],
-                },
+                "jd_usable": True,
+                "jd_usable_reason": "Full JD with stack listed.",
+                "keywords": ["SQL", "Spark", "Airflow"],
             }
         )
         with patch.object(config, "DEFAULT_MODEL_BACKEND", "ollama"):
@@ -51,17 +36,17 @@ class Component2OllamaTests(unittest.TestCase):
                     "role_family": "software",
                     "job_level": "unknown",
                     "confidence": 0.5,
-                    "weak_description": False,
+                    "weak_description": True,
                     "recommended_base_resume": "software",
                     "reasons": [],
-                    "concern_flags": [],
+                    "concern_flags": ["weak_description"],
                 }
                 base_k = {
                     "must_have_terms": ["java"],
-                    "nice_to_have_terms": [],
-                    "responsibilities": [],
+                    "nice_to_have_terms": ["x"],
+                    "responsibilities": ["Old."],
                     "tools_and_technologies": [],
-                    "domain_terms": [],
+                    "domain_terms": ["y"],
                     "seniority_signals": [],
                     "concern_flags": [],
                 }
@@ -73,9 +58,55 @@ class Component2OllamaTests(unittest.TestCase):
                 )
         self.assertTrue(meta["ollama_enriched"])
         self.assertIsNone(meta["error"])
-        self.assertEqual(c["role_family"], "data")
-        self.assertEqual(c["job_level"], "senior")
-        self.assertIn("sql", k["must_have_terms"])
+        self.assertTrue(meta.get("jd_usable"))
+        self.assertIn("Full JD", meta.get("jd_usable_reason", ""))
+        self.assertFalse(c["weak_description"])
+        self.assertNotIn("weak_description", c.get("concern_flags", []))
+        self.assertEqual(k["must_have_terms"], ["SQL", "Spark", "Airflow"])
+        self.assertEqual(k["nice_to_have_terms"], [])
+        self.assertEqual(k["tools_and_technologies"], ["SQL", "Spark", "Airflow"])
+        self.assertEqual(k["domain_terms"], [])
+
+    def test_ollama_jd_not_usable_clears_keywords(self):
+        fake_response = json.dumps(
+            {
+                "jd_usable": False,
+                "jd_usable_reason": "Stub only.",
+                "keywords": ["Should", "Be", "Ignored"],
+            }
+        )
+        with patch.object(config, "DEFAULT_MODEL_BACKEND", "ollama"):
+            with patch(
+                "fletcher.llm_enrich._ollama_chat", return_value=fake_response
+            ):
+                base_c = {
+                    "role_family": "pm",
+                    "job_level": "mid",
+                    "confidence": 0.7,
+                    "weak_description": False,
+                    "recommended_base_resume": "pm",
+                    "reasons": [],
+                    "concern_flags": [],
+                }
+                base_k = {
+                    "must_have_terms": ["roadmap"],
+                    "nice_to_have_terms": [],
+                    "responsibilities": [],
+                    "tools_and_technologies": [],
+                    "domain_terms": [],
+                    "seniority_signals": [],
+                    "concern_flags": [],
+                }
+                c, k, meta = enrich_with_ollama_if_enabled(
+                    title="PM",
+                    description="Product manager for B2B SaaS.",
+                    classification=base_c,
+                    keywords=base_k,
+                )
+        self.assertTrue(meta["ollama_enriched"])
+        self.assertTrue(c["weak_description"])
+        self.assertIn("weak_description", c["concern_flags"])
+        self.assertEqual(k["must_have_terms"], [])
 
     def test_ollama_malformed_json_falls_back(self):
         with patch.object(config, "DEFAULT_MODEL_BACKEND", "ollama"):

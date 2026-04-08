@@ -95,6 +95,8 @@ MIGRATION_COLUMNS = {
     "selected_resume_tex_path": "TEXT",
     "selected_resume_selected_at": "TEXT",
     "selected_resume_ready_for_c3": "BOOLEAN",
+    "latest_resume_jd_usable": "INTEGER",
+    "latest_resume_jd_usable_reason": "TEXT",
 }
 
 INSERT_COLUMNS = (

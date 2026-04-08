@@ -168,6 +168,21 @@ def format_text(value):
     return html.escape(str(value))
 
 
+def _format_jd_usable_cell(value):
+    """Human-readable JD usability from jobs.latest_resume_jd_usable (0/1/NULL)."""
+    if value is None:
+        return "—"
+    try:
+        v = int(value)
+    except (TypeError, ValueError):
+        return format_text(value)
+    if v == 1:
+        return "yes"
+    if v == 0:
+        return "no"
+    return "—"
+
+
 def truncate_text(value, *, max_chars=180):
     if not value:
         return ""
@@ -1604,6 +1619,134 @@ def render_resume_keywords_panel(row, attempts):
     """
 
 
+def _load_summary_for_attempt(attempt: dict) -> str | None:
+    """Load the AI-generated summary from summary_rewrite.json in the attempt dir."""
+    pdf_path = attempt.get("pdf_path") or attempt.get("tex_path")
+    if not pdf_path:
+        return None
+    attempt_dir = Path(pdf_path).parent
+    summary_path = attempt_dir / "summary_rewrite.json"
+    data = load_json_file(summary_path)
+    if not data:
+        return None
+    if not data.get("success"):
+        return None
+    return (data.get("summary") or "").strip() or None
+
+
+def render_ai_summary_panel(attempts: list) -> str:
+    """Prominent card showing the latest AI-generated summary paragraph."""
+    if not RESUME_TAILOR_AVAILABLE or not attempts:
+        return ""
+    summary = None
+    keywords_used: list[str] = []
+    for attempt in attempts:
+        summary = _load_summary_for_attempt(attempt)
+        if summary:
+            pdf_path = attempt.get("pdf_path") or attempt.get("tex_path")
+            if pdf_path:
+                dist = load_json_file(Path(pdf_path).parent / "keyword_distribution.json")
+                if dist:
+                    keywords_used = dist.get("summary_keywords") or []
+            break
+    if not summary:
+        return ""
+    kw_pills = "".join(
+        f'<span style="display:inline-block;background:#d8f5e0;color:#1a4a2e;border-radius:999px;'
+        f'padding:2px 10px;font-size:0.78rem;margin:2px 3px 2px 0;">{html.escape(k)}</span>'
+        for k in keywords_used
+    )
+    kw_block = f'<p style="margin:10px 0 0 0;">{kw_pills}</p>' if kw_pills else ""
+    return f"""
+    <div class="panel">
+      <h2>AI-generated summary <span class="status done" style="font-size:0.75rem;padding:2px 6px;vertical-align:middle;">latest attempt</span></h2>
+      <p class="muted" style="margin-top:0;margin-bottom:12px;">Rewritten by the LLM to include JD keywords. Not added to the resume yet — review only.</p>
+      <blockquote style="margin:0;padding:12px 16px;background:#fffdf8;border-left:3px solid #3cb878;border-radius:0 10px 10px 0;font-family:Georgia,serif;font-size:0.97rem;line-height:1.6;">
+        {html.escape(summary)}
+      </blockquote>
+      {kw_block}
+    </div>
+    """
+
+
+def render_resume_history_cards(attempts: list, job_id: int | None = None) -> str:
+    """Attempt history as cards with PDF download and summary paragraph."""
+    if not attempts:
+        return ""
+    cards = []
+    for attempt in attempts:
+        aid = attempt.get("id")
+        jid = job_id or attempt.get("job_id")
+        created = format_text(attempt.get("created_at") or "—")
+        status = attempt.get("status") or "—"
+        family = format_text(attempt.get("role_family") or "—")
+        level = format_text(attempt.get("job_level") or "—")
+        model = format_text(attempt.get("model_name") or "—")
+
+        status_cls = "done" if "done" in status else ("failed" if "fail" in status else "pending")
+        selected_badge = ""
+        if attempt.get("is_selected_for_c3"):
+            selected_badge = '<span class="status done" style="font-size:0.72rem;padding:1px 6px;">selected for apply</span> '
+        elif attempt.get("is_latest_useful"):
+            selected_badge = '<span class="status done_verified" style="font-size:0.72rem;padding:1px 6px;">useful</span> '
+
+        download_links = []
+        if aid and jid and attempt.get("pdf_path"):
+            download_links.append(
+                f'<a href="/api/attempts/{aid}/pdf" target="_blank" rel="noreferrer" '
+                f'class="pill active" style="padding:5px 14px;font-size:0.85rem;">Download PDF</a>'
+            )
+        if aid and attempt.get("tex_path"):
+            download_links.append(
+                f'<a href="/api/attempts/{aid}/tex" target="_blank" rel="noreferrer" '
+                f'class="pill" style="padding:5px 14px;font-size:0.85rem;">TeX</a>'
+            )
+        links_html = " ".join(download_links) if download_links else ""
+
+        summary_html = ""
+        summary_text = _load_summary_for_attempt(attempt)
+        if summary_text:
+            summary_html = (
+                f'<blockquote style="margin:12px 0 0 0;padding:10px 14px;background:#fffdf8;'
+                f'border-left:3px solid #3cb878;border-radius:0 8px 8px 0;'
+                f'font-family:Georgia,serif;font-size:0.9rem;line-height:1.55;color:#2a2a2a;">'
+                f'{html.escape(summary_text)}</blockquote>'
+            )
+        else:
+            summary_html = '<p class="muted" style="margin:10px 0 0 0;font-size:0.85rem;">No AI summary for this attempt.</p>'
+
+        flags = format_text(attempt.get("concern_flags") or "—")
+
+        cards.append(f"""
+        <div style="background:var(--panel-strong);border:1px solid var(--line);border-radius:14px;
+                    padding:16px 18px;box-shadow:var(--shadow);margin-bottom:14px;">
+          <div style="display:flex;justify-content:space-between;align-items:flex-start;flex-wrap:wrap;gap:8px;">
+            <div>
+              {selected_badge}<span class="status {html.escape(status_cls)}" style="font-size:0.78rem;padding:2px 7px;">{html.escape(status)}</span>
+              <span class="muted tiny" style="margin-left:8px;">ID {html.escape(str(aid or '?'))}</span>
+              <span class="muted tiny" style="margin-left:8px;">{created}</span>
+            </div>
+            <div style="display:flex;gap:8px;flex-wrap:wrap;">{links_html}</div>
+          </div>
+          <div style="display:flex;gap:16px;flex-wrap:wrap;margin:10px 0 0 0;">
+            <span class="muted tiny">Family: <strong>{family}</strong></span>
+            <span class="muted tiny">Level: <strong>{level}</strong></span>
+            <span class="muted tiny">Model: <strong>{model}</strong></span>
+            <span class="muted tiny">Flags: <strong>{flags}</strong></span>
+          </div>
+          {summary_html}
+        </div>
+        """)
+
+    return f"""
+    <div class="panel">
+      <h2>Resume history</h2>
+      <p class="muted" style="margin-top:0;">Each card is one generation run. Click Download PDF to get that version. AI summaries are shown below each card — review only, not yet on the resume.</p>
+      {"".join(cards)}
+    </div>
+    """
+
+
 def render_resume_attempts(attempts, job_id=None):
     if not attempts:
         if not RESUME_TAILOR_AVAILABLE:
@@ -1639,11 +1782,16 @@ def render_resume_attempts(attempts, job_id=None):
         elif attempt.get("is_latest_useful"):
             selected_badge = ' <span class="status done_verified" style="font-size:0.75rem;padding:2px 6px;">useful</span>'
 
+        jd_cell = _format_jd_usable_cell(attempt.get("jd_usable"))
+        jd_note = format_text(attempt.get("jd_usable_reason")) if attempt.get("jd_usable_reason") else "—"
+
         rows.append(
             f"""
             <tr>
               <td>{format_text(aid)}{selected_badge}</td>
               <td>{format_text(attempt.get("status"))}</td>
+              <td>{jd_cell}</td>
+              <td style="max-width:220px;font-size:0.85rem;">{jd_note}</td>
               <td>{format_text(attempt.get("role_family"))}</td>
               <td>{format_text(attempt.get("job_level"))}</td>
               <td>{format_text(attempt.get("base_resume_name"))}</td>
@@ -1655,7 +1803,7 @@ def render_resume_attempts(attempts, job_id=None):
     return f"""
     <div class="table-wrap">
       <table>
-        <thead><tr><th>ID</th><th>Status</th><th>Family</th><th>Level</th><th>Base</th><th>Created</th><th>Files</th></tr></thead>
+        <thead><tr><th>ID</th><th>Status</th><th>JD OK</th><th>JD note</th><th>Family</th><th>Level</th><th>Base</th><th>Created</th><th>Files</th></tr></thead>
         <tbody>{"".join(rows)}</tbody>
       </table>
     </div>
@@ -3059,14 +3207,18 @@ def job_detail(request: Request, job_id: int, return_to: str = ""):
           <div class="field"><div class="label">Generated at</div><div class="value mono">{format_text(row.get("latest_resume_generated_at"))}</div></div>
           <div class="field"><div class="label">Fallback used</div><div class="value">{format_text(row.get("latest_resume_fallback_used"))}</div></div>
           <div class="field"><div class="label">Flags</div><div class="value">{format_text(row.get("latest_resume_flags"))}</div></div>
+          <div class="field"><div class="label">JD usable (C2)</div><div class="value">{_format_jd_usable_cell(row.get("latest_resume_jd_usable"))}</div></div>
+          <div class="field"><div class="label">JD usable reason</div><div class="value">{format_text(row.get("latest_resume_jd_usable_reason"))}</div></div>
           <div class="field"><div class="label">Selected version</div><div class="value">{format_text(row.get("selected_resume_version_id"))}</div></div>
           <div class="field"><div class="label">Ready for C3</div><div class="value">{format_text(row.get("selected_resume_ready_for_c3"))}</div></div>
           {render_resume_links(row)}
         </div>
       </div>
       {render_resume_keywords_panel(row, resume_attempts)}
+      {render_ai_summary_panel(resume_attempts)}
+      {render_resume_history_cards(resume_attempts, job_id=job_id)}
       <div class="panel">
-        <h2>Resume attempts (newest first)</h2>
+        <h2>Resume attempts (raw table)</h2>
         <p class="muted" style="margin-top:0;">Each row is one generation run. Click PDF/TeX to view that version. LLM I/O shows the prompt sent to Ollama and the raw response.</p>
         {render_resume_attempts(resume_attempts, job_id=job_id)}
       </div>

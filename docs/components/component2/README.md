@@ -14,7 +14,7 @@ C2 (Fletcher) should:
 
 ## Current Status
 
-**Shipped today (~v0.1)** — full local pipeline (parse → classify/keywords → optional Ollama refinement of those steps → heuristic bullet tailoring → compile → DB + artifacts), **`fletch`** / **`fletcher.cli`**, review-app structured diff + JD highlights on JSON, Ansible Stage 7. Keyword extraction is noise-filtered (0–10 meaningful terms, multi-word phrases first). Bullets are selected by relevance score — keywords are never force-injected. LLM I/O (prompt + response) logged to attempt directory by default. Review app shows per-attempt PDF/TeX/Keywords/LLM I/O links and a dedicated LLM I/O viewer. See **`fletcher/README.md`**.
+**Shipped today (~v0.1)** — full local pipeline (parse → classify + keyword draft → optional Ollama **jd_usable + grounded keywords** → heuristic bullet tailoring → compile → DB + artifacts), **`fletch`** / **`fletcher.cli`**, review-app structured diff + JD highlights on JSON, Ansible Stage 7. With Ollama, keywords are **model-extracted** (max 10, verbatim from posting). Bullets are selected by relevance score — keywords are never force-injected. LLM I/O logged by default. Review app shows per-attempt PDF/TeX/Keywords/LLM I/O links. See **`fletcher/README.md`**.
 
 **v1.0 target (current engineering focus)** — meet the **locked decisions** below with **LLM-driven resume generation** (prompted bullet/section work on top of the same structured pipeline), reliable **Ollama (or chosen) backend**, stable **queue + one-page + handoff** to C3/C4. This is **not** required to ship interactive “pick keywords → regen → chat edit” flows; those are **v2.0**.
 
@@ -276,12 +276,11 @@ The **stage list below** adds **Stages 9–12** for these capabilities without r
 
 ### Stage 3 : job classification and keyword extraction
 
-- detect role family
-- detect job level
-- extract must-have and nice-to-have requirements (0–10 meaningful terms; multi-word tech phrases matched first; noise-filtered)
-- flag weak or noisy JDs
-- recommend the best starting base resume family for Stage 4
-- optional Ollama refinement of classification + keywords when `HUNT_RESUME_MODEL_BACKEND=ollama`
+- detect role family and job level (heuristic classifier on title + description)
+- optional Ollama when `HUNT_RESUME_MODEL_BACKEND=ollama`: **`jd_usable`** (is the scraped JD enough to tailor from?), reason string, and **up to 10 keywords** grounded in the posting only
+- keyword draft when Ollama is off: a few tokens from the title for minimal scoring signal
+- `weak_description` / flags align with **`jd_usable`** when the model runs successfully
+- recommend the best starting base resume family for Stage 4 (from heuristic classification)
 
 ### Stage 4 : resume selection and rewrite plan
 

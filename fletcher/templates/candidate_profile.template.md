@@ -1,34 +1,65 @@
 # Candidate Profile Template
-#
+
+
+
 # HOW TO USE THIS FILE
+
 # ====================
+
 # Copy this file to `fletcher/candidate_profile.md` (gitignored) and fill in YOUR real details.
+
 # C2 (Fletcher) reads this file to get extra bullets and facts beyond what is in main.tex.
-#
+
+
+
 # Rules:
-#   - Keep everything 100% truthful. Never invent metrics, tools, or dates.
-#   - Entry IDs must match the slugs C2 derives from your main.tex roles.
-#     Run `fletch context` to see what IDs C2 sees for your current resume.
-#   - You can add more bullet candidates than will ever appear on one page.
-#     C2 will pick the most relevant ones per job.
-#   - Leave fields blank if you don't have data for them.
-#   - Dates use any human-readable format: "May 2023", "2022-09", "Present", etc.
-#
+
+# - Keep everything 100% truthful. Never invent metrics, tools, or dates.
+
+# - Entry IDs must match the slugs C2 derives from your main.tex roles.
+
+# Run `fletch context` to see what IDs C2 sees for your current resume.
+
+# - You can add more bullet candidates than will ever appear on one page.
+
+# C2 will pick the most relevant ones per job.
+
+# - Leave fields blank if you don't have data for them.
+
+# - Dates use any human-readable format: "May 2023", "2022-09", "Present", etc.
+
+
+
 # ENTRY ID MATCHING
+
 # =================
+
 # C2 matches entries by slug: it lowercases the title + company + location, strips punctuation,
+
 # and joins with underscores.  Example:
-#   Title: "Software Developer Intern"  Company: "Acme Corp"  Location: "Toronto, ON"
-#   → entry_id slug: "software_developer_intern_acme_corp_toronto_on"
+
+# Title: "Software Developer Intern"  Company: "Acme Corp"  Location: "Toronto, ON"
+
+# → entry_id slug: "software_developer_intern_acme_corp_toronto_on"
+
 # Set Entry ID below to the same slug, or run `fletch context` to see exact IDs.
-#
+
+
+
 # ROLE-FAMILY TAGS
+
 # ================
+
 # Use one or more of: software, pm, data, general
+
 # These control which job families this entry is surfaced for.
-#
+
+
+
 # JOB-LEVEL TAGS
+
 # ==============
+
 # Use one or more of: intern, new_grad, junior, mid, senior, staff, principal, manager, director
 
 ## Profile Metadata
@@ -67,9 +98,13 @@
 - Awards:
 
 ## Experience Inventory
-#
+
+
+
 # Add one block per role. Duplicate the block as many times as needed.
+
 # The Entry ID should match what `fletch context` shows for your main.tex roles.
+
 # If you add a role NOT in main.tex, C2 may surface it as a supplemental entry.
 
 ### Experience Entry
@@ -88,7 +123,9 @@
 - Data tags:
 
 #### Immutable facts
+
 # Facts are things that MUST be true and cannot be changed (dates, titles, employers).
+
 # They are used to anchor bullet rewrites.
 
 - Fact ID: jsw_fact_01
@@ -97,25 +134,25 @@
   - Text: Maintained a FastAPI service handling internal tooling requests.
 
 #### Bullet candidates
+
 # These are the raw bullet points C2 can choose from and score against the job description.
+
 # Write them in resume style: start with a strong verb, be specific, include metrics where real.
+
 # C2 will pick the highest-scoring ones for the target job.
 
 - Bullet ID: jsw_b01
   - Text: Built and maintained a FastAPI REST service used by 3 internal teams, reducing manual data entry by ~40%.
   - Supported by fact IDs: jsw_fact_02
   - Relevance tags: software, backend, api
-
 - Bullet ID: jsw_b02
   - Text: Wrote automated integration tests (pytest) that caught 12 regressions before production deploys.
   - Supported by fact IDs: jsw_fact_02
   - Relevance tags: software, testing, quality
-
 - Bullet ID: jsw_b03
   - Text: Containerized the service with Docker and deployed to a staging environment, cutting environment setup time from 2 hours to 15 minutes.
   - Supported by fact IDs: jsw_fact_02
   - Relevance tags: software, devops, docker
-
 - Bullet ID: jsw_b04
   - Text: Collaborated with a senior engineer on database schema design (PostgreSQL), improving query performance by ~30%.
   - Supported by fact IDs: jsw_fact_01
@@ -157,12 +194,10 @@
   - Text: Developed 3 new dashboard views in React/TypeScript, adopted by the customer success team within the first sprint after launch.
   - Supported by fact IDs: sdi_fact_02
   - Relevance tags: software, frontend, react
-
 - Bullet ID: sdi_b02
   - Text: Integrated an AWS S3 file-upload flow into the existing API, enabling customers to attach documents to support tickets.
   - Supported by fact IDs: sdi_fact_01
   - Relevance tags: software, aws, backend
-
 - Bullet ID: sdi_b03
   - Text: Participated in daily standups and sprint planning; shipped 2 features in a 2-week sprint cycle.
   - Supported by fact IDs: sdi_fact_01
@@ -177,14 +212,16 @@
 - Tools: React, TypeScript, Python, AWS, Jira
 
 ## Project Inventory
-#
+
+
+
 # Add one block per project. These appear in the Projects section of the resume.
 
 ### Project Entry
 
 - Entry ID: hunt_job_agent
 - Project name: Hunt — Automated Job Agent
-- URL: https://github.com/Micsushi/hunt
+- URL: [https://github.com/Micsushi/hunt](https://github.com/Micsushi/hunt)
 - Role-family tags: software, pm
 - Technology tags: python, fastapi, playwright, sqlite, docker, ollama
 - Relevance notes: End-to-end job discovery, enrichment, and resume tailoring system
@@ -200,12 +237,10 @@
   - Text: Designed and built a multi-component job agent (C1–C4) that scrapes LinkedIn/Indeed, enriches postings with Playwright, and generates tailored resumes via a local LLM (Ollama).
   - Supported by fact IDs: hunt_fact_01
   - Relevance tags: software, pm, automation
-
 - Bullet ID: hunt_p02
   - Text: Implemented a FastAPI review webapp with job queue management, resume diff view, and keyword highlighting panels.
   - Supported by fact IDs: hunt_fact_01
   - Relevance tags: software, frontend, fullstack
-
 - Bullet ID: hunt_p03
   - Text: Deployed the full stack to a home server using Ansible playbooks with systemd timers for automated scraping and resume generation.
   - Supported by fact IDs: hunt_fact_01
@@ -215,7 +250,7 @@
 
 - Entry ID: your_other_project
 - Project name: Your Other Project
-- URL: https://github.com/yourhandle/project
+- URL: [https://github.com/yourhandle/project](https://github.com/yourhandle/project)
 - Role-family tags: software
 - Technology tags: python, react
 - Relevance notes: Brief description of what the project does
@@ -233,8 +268,11 @@
   - Relevance tags: software
 
 ## Skills Inventory
-#
+
+
+
 # List your actual skills. C2 uses these to augment the skills section of the resume
+
 # when a job description mentions matching technologies.
 
 ### Languages
@@ -244,13 +282,11 @@
   - Where used: All personal projects, internship backend work
   - Strength of evidence: strong
   - Related role families: software, data
-
 - Skill ID: lang_typescript
   - Name: TypeScript
   - Where used: Internship frontend dashboard
   - Strength of evidence: moderate
   - Related role families: software
-
 - Skill ID: lang_sql
   - Name: SQL
   - Where used: PostgreSQL at part-time job, SQLite in Hunt project
@@ -264,13 +300,11 @@
   - Where used: Part-time job backend service, Hunt project
   - Strength of evidence: strong
   - Related role families: software
-
 - Skill ID: fw_react
   - Name: React
   - Where used: Internship frontend dashboard
   - Strength of evidence: moderate
   - Related role families: software
-
 - Skill ID: fw_pytest
   - Name: pytest
   - Where used: Part-time job automated tests
@@ -284,13 +318,11 @@
   - Where used: Part-time job containerization, Hunt project
   - Strength of evidence: moderate
   - Related role families: software
-
 - Skill ID: tool_git
   - Name: Git / GitHub
   - Where used: All projects
   - Strength of evidence: strong
   - Related role families: software, pm, data
-
 - Skill ID: tool_ansible
   - Name: Ansible
   - Where used: Hunt project server deployment
