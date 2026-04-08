@@ -92,10 +92,10 @@ Use this as a checklist for notes you keep outside the repo (on-call, server-spe
 | Topic | Where to look |
 |------|----------------|
 | Env vars (`HUNT_DB_PATH`, `HUNT_ARTIFACTS_DIR`, Playwright paths, LinkedIn env) | `hunter/config.py`, `docs/LOCAL_TESTING.md` |
-| Discord / structured C1 events (priority job, rate limit, automation flagged) | `hunter/c1_logging.py`, review **`/summary`** |
+| Discord / structured C1 events (priority job, rate limit, automation flagged) | `hunter/c1_logging.py`, review **`/health-view`** (Queue & health : auth panel) |
 | LinkedIn **multi-account** rotation / blocks | `hunter/linkedin_session.py`, `.state` files |
 | **Stale** `processing` row recovery | `hunter/db.py`, `ENRICHMENT_STALE_PROCESSING_MINUTES` |
-| **Requeue** failed rows by error code | `scripts/hunterctl.py`, `scripts/requeue_enrichment_rows.py` |
+| **Requeue** failed rows by error code | Review app **`/ops`** (Operator console), or CLI: **`requeue-retryable`** / **`requeue-errors`**, or `scripts/requeue_enrichment_rows.py` |
 | **Queue health** / ops helpers | `scripts/queue_health.py`, `./hunter.sh queue` |
 | **Start / stop / restart** scheduled C1 on the server | `./hunter.sh start` / `stop` / `restart` (see table above); production layout: **Production host (server2)** above |
 | Title vs discovery **lane** cleanup (all boards) | launcher `clean-lane-mismatch` (aliases: `clean-indeed`, `cleanup-indeed`) |

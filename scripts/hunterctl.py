@@ -254,6 +254,21 @@ def cmd_requeue_errors(args):
     _run(command)
 
 
+def cmd_requeue_retryable(args):
+    """Requeue failed rows with auth_expired or rate_limited (same as Review Ops one-click)."""
+    command = [
+        PYTHON,
+        "scripts/requeue_enrichment_rows.py",
+        "--source",
+        args.source,
+        "--error-code",
+        "auth_expired",
+        "--error-code",
+        "rate_limited",
+    ]
+    _run(command)
+
+
 def cmd_cleanup_lane_mismatch(args):
     command = [PYTHON, "scripts/cleanup_lane_mismatch_rows.py"]
     if args.apply:
@@ -356,6 +371,64 @@ def cmd_review(_args):
     _run([PYTHON, "review_app.py"])
 
 
+def cmd_tailor(args):
+    """C2 (Fletcher): delegate to `python -m fletcher.cli` (v0.1)."""
+    cmd = [PYTHON, "-m", "fletcher.cli"]
+    t = args.tailor_command
+    if t == "init-db":
+        cmd.append("init-db")
+        if args.db:
+            cmd.extend(["--db", args.db])
+    elif t == "job":
+        cmd.extend(["generate-job", str(args.job_id)])
+        if args.db:
+            cmd.extend(["--db", args.db])
+        if args.resume:
+            cmd.extend(["--resume", args.resume])
+    elif t == "ready":
+        cmd.append("generate-ready")
+        if args.db:
+            cmd.extend(["--db", args.db])
+        cmd.extend(["--limit", str(args.limit)])
+        if args.only_missing:
+            cmd.append("--only-missing")
+        if args.resume:
+            cmd.extend(["--resume", args.resume])
+    elif t == "ad-hoc":
+        cmd.extend(
+            [
+                "generate-ad-hoc",
+                "--title",
+                args.title,
+                "--company",
+                args.company or "",
+                "--description",
+                args.description or "",
+            ]
+        )
+        if args.jd_file:
+            cmd.extend(["--jd-file", args.jd_file])
+        if args.label:
+            cmd.extend(["--label", args.label])
+        if args.resume:
+            cmd.extend(["--resume", args.resume])
+    elif t == "context":
+        cmd.extend(["apply-context", str(args.job_id)])
+        if args.db:
+            cmd.extend(["--db", args.db])
+    elif t == "parse":
+        cmd.append("parse-resume")
+        if args.resume:
+            cmd.extend(["--resume", args.resume])
+        if args.output_json:
+            cmd.extend(["--output-json", args.output_json])
+        if args.roundtrip_tex:
+            cmd.extend(["--roundtrip-tex", args.roundtrip_tex])
+    else:
+        raise SystemExit(f"Unknown tailor subcommand: {t}")
+    _run(cmd)
+
+
 def cmd_apply_prep(args):
     command = [
         PYTHON,
@@ -383,8 +456,12 @@ def cmd_tests(args):
         "2": ["test_stage2.py"],
         "3": ["test_stage3.py"],
         "32": ["test_stage32.py"],
-        "4": ["test_stage4.py", "test_search_lanes.py"],
-        "c2": ["test_component2_stage1.py", "test_component2_pipeline.py"],
+        "4": ["test_stage4.py", "test_search_lanes.py", "test_review_ops.py"],
+        "c2": [
+            "test_component2_stage1.py",
+            "test_component2_pipeline.py",
+            "test_component2_ollama.py",
+        ],
         "c3": ["test_component3_stage1.py"],
         "c4": ["test_component4_cli.py"],
         "all": [
@@ -394,8 +471,11 @@ def cmd_tests(args):
             "test_stage32.py",
             "test_stage4.py",
             "test_search_lanes.py",
+            "test_review_ops.py",
             "test_component2_stage1.py",
             "test_component2_pipeline.py",
+            "test_component2_ollama.py",
+            "test_resume_review_ui.py",
             "test_component3_stage1.py",
             "test_component4_cli.py",
         ],
@@ -702,6 +782,19 @@ def build_parser():
     )
     requeue_errors.set_defaults(func=cmd_requeue_errors)
 
+    requeue_retryable = subparsers.add_parser(
+        "requeue-retryable",
+        help="Requeue failed rows that failed with auth_expired or rate_limited (default source: linkedin).",
+        aliases=["requeue-transient"],
+    )
+    requeue_retryable.add_argument(
+        "--source",
+        choices=["linkedin", "indeed", "all"],
+        default="linkedin",
+        help="Board filter (default: linkedin).",
+    )
+    requeue_retryable.set_defaults(func=cmd_requeue_retryable)
+
     retry = subparsers.add_parser(
         "retry",
         help="Short form: requeue failed/blocked enrichment rows across all sources.",
@@ -783,6 +876,56 @@ def build_parser():
 
     review = subparsers.add_parser("review", help="Run the local review app.")
     review.set_defaults(func=cmd_review)
+
+    tailor = subparsers.add_parser(
+        "tailor",
+        help="C2 (Fletcher) v0.1: resume DB init, generation, apply-context (see also: python -m fletcher.cli).",
+    )
+    tailor_sub = tailor.add_subparsers(dest="tailor_command", required=True)
+
+    tailor_init = tailor_sub.add_parser(
+        "init-db", help="Add C2 resume columns/tables to the Hunt SQLite database."
+    )
+    tailor_init.add_argument("--db", default=None, help="SQLite path (default: HUNT_DB_PATH or hunt.db).")
+    tailor_init.set_defaults(func=cmd_tailor, tailor_command="init-db")
+
+    tailor_job = tailor_sub.add_parser("job", help="Generate a tailored resume for one job id.")
+    tailor_job.add_argument("job_id", type=int)
+    tailor_job.add_argument("--db", default=None)
+    tailor_job.add_argument("--resume", default=None, help="Override OG LaTeX resume path.")
+    tailor_job.set_defaults(func=cmd_tailor, tailor_command="job")
+
+    tailor_ready = tailor_sub.add_parser(
+        "ready", help="Batch-generate for jobs with enrichment done (optionally only missing resumes)."
+    )
+    tailor_ready.add_argument("--db", default=None)
+    tailor_ready.add_argument("--limit", type=int, default=25)
+    tailor_ready.add_argument("--only-missing", action="store_true")
+    tailor_ready.add_argument("--resume", default=None)
+    tailor_ready.set_defaults(func=cmd_tailor, tailor_command="ready")
+
+    tailor_adhoc = tailor_sub.add_parser("ad-hoc", help="Generate from a pasted JD (no DB job).")
+    tailor_adhoc.add_argument("--title", required=True)
+    tailor_adhoc.add_argument("--company", default="")
+    tailor_adhoc.add_argument("--description", default="", help="Inline JD text.")
+    tailor_adhoc.add_argument("--jd-file", default=None, dest="jd_file", help="JD text file path.")
+    tailor_adhoc.add_argument("--label", default=None)
+    tailor_adhoc.add_argument("--resume", default=None)
+    tailor_adhoc.set_defaults(func=cmd_tailor, tailor_command="ad-hoc")
+
+    tailor_ctx = tailor_sub.add_parser(
+        "context",
+        help="Print C2-side apply context for a job (paths, flags; not the full C4 apply-prep payload).",
+    )
+    tailor_ctx.add_argument("job_id", type=int)
+    tailor_ctx.add_argument("--db", default=None)
+    tailor_ctx.set_defaults(func=cmd_tailor, tailor_command="context")
+
+    tailor_parse = tailor_sub.add_parser("parse", help="Parse main.tex (or --resume) to JSON / round-trip TeX.")
+    tailor_parse.add_argument("--resume", default=None)
+    tailor_parse.add_argument("--output-json", default=None, dest="output_json")
+    tailor_parse.add_argument("--roundtrip-tex", default=None, dest="roundtrip_tex")
+    tailor_parse.set_defaults(func=cmd_tailor, tailor_command="parse")
 
     apply_prep = subparsers.add_parser(
         "apply-prep",

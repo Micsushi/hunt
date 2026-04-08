@@ -10,6 +10,7 @@ RUN pip install --no-cache-dir -r /tmp/requirements.txt
 
 COPY review_app.py /app/review_app.py
 COPY hunter /app/hunter
+COPY fletcher /app/fletcher
 
 EXPOSE 8000
 

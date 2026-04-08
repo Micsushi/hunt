@@ -278,6 +278,7 @@ def _build_bullet_candidates_for_entry(
         candidates.append(
             {
                 "text": _rewrite_bullet(bullet, must_haves[: 2 if not project else 1]),
+                "prior_text": bullet,
                 "source_fact_id": _stable_source_id(f"og_{entry.entry_id}", bullet),
                 "mode": "rewrite",
                 "score": _score_text(bullet, must_haves, role_family),
@@ -327,6 +328,20 @@ def _build_bullet_candidates_for_entry(
         seen_text.add(key)
         deduped.append(candidate)
     return deduped
+
+
+def _bullet_plan_item(candidate: dict) -> dict:
+    text = candidate["text"]
+    prior = candidate.get("prior_text")
+    original = (prior if prior is not None else text) or ""
+    if isinstance(original, str):
+        original = original.strip()
+    return {
+        "source_fact_id": candidate["source_fact_id"],
+        "mode": candidate["mode"],
+        "text": text,
+        "original_text": original if original else text,
+    }
 
 
 def _select_bullets(candidates: list[dict], *, max_count: int, min_count: int = 1) -> list[dict]:
@@ -488,14 +503,7 @@ def generate_tailored_resume(
             {
                 "entry_id": entry.entry_id,
                 "keep_header_original": True,
-                "bullet_plan": [
-                    {
-                        "source_fact_id": bullet["source_fact_id"],
-                        "mode": bullet["mode"],
-                        "text": bullet["text"],
-                    }
-                    for bullet in chosen_bullets
-                ],
+                "bullet_plan": [_bullet_plan_item(bullet) for bullet in chosen_bullets],
             }
         )
         exp_budget_remaining = max(0, exp_budget_remaining - len(chosen_bullets))
@@ -508,13 +516,16 @@ def generate_tailored_resume(
                 "entry_id": fallback_entry.entry_id,
                 "keep_header_original": True,
                 "bullet_plan": [
-                    {
-                        "source_fact_id": _stable_source_id(
-                            f"og_{fallback_entry.entry_id}", bullet
-                        ),
-                        "mode": "rewrite",
-                        "text": _rewrite_bullet(bullet, must_haves[:2]),
-                    }
+                    _bullet_plan_item(
+                        {
+                            "source_fact_id": _stable_source_id(
+                                f"og_{fallback_entry.entry_id}", bullet
+                            ),
+                            "mode": "rewrite",
+                            "text": _rewrite_bullet(bullet, must_haves[:2]),
+                            "prior_text": bullet,
+                        }
+                    )
                     for bullet in fallback_entry.bullets[
                         : max(1, min(2, len(fallback_entry.bullets)))
                     ]
@@ -612,14 +623,7 @@ def generate_tailored_resume(
             structured_projects.append(
                 {
                     "entry_id": entry.entry_id,
-                    "bullet_plan": [
-                        {
-                            "source_fact_id": bullet["source_fact_id"],
-                            "mode": bullet["mode"],
-                            "text": bullet["text"],
-                        }
-                        for bullet in chosen_bullets
-                    ],
+                    "bullet_plan": [_bullet_plan_item(bullet) for bullet in chosen_bullets],
                 }
             )
             project_budget -= len(chosen_bullets)

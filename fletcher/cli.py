@@ -73,7 +73,7 @@ def cmd_apply_context(args: argparse.Namespace) -> int:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="C2 (Fletcher) Stage 0/1 resume tools.")
+    parser = argparse.ArgumentParser(description="C2 (Fletcher) v0.1 resume tailoring CLI.")
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     parse_cmd = subparsers.add_parser(

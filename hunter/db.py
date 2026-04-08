@@ -1,3 +1,4 @@
+import json
 import os
 import sqlite3
 from datetime import timedelta
@@ -71,6 +72,8 @@ CREATE TABLE IF NOT EXISTS runtime_state (
 """
 
 MIGRATION_COLUMNS = {
+    "operator_notes": "TEXT",
+    "operator_tag": "TEXT",
     "apply_type": "TEXT",
     "auto_apply_eligible": "BOOLEAN",
     "enrichment_status": "TEXT",
@@ -122,6 +125,7 @@ LINKEDIN_AUTH_ERROR_KEY = "linkedin_auth_error"
 LINKEDIN_AUTH_STATE_OK = "ok"
 LINKEDIN_AUTH_STATE_EXPIRED = "expired"
 LINKEDIN_AUTH_STATE_UNKNOWN = "unknown"
+REVIEW_AUDIT_LOG_KEY = "review_audit_log"
 
 # Backwards compatible: tests and older scripts may patch `db.DB_PATH` directly.
 # Prefer setting `HUNT_DB_PATH` in the environment for normal runtime use.
@@ -400,6 +404,19 @@ def _requeue_stale_processing_rows(cursor):
         """,
         tuple(source_params + [stale_cutoff]),
     )
+    return cursor.rowcount
+
+
+def manual_requeue_stale_processing_rows():
+    """Requeue processing rows whose claim is stale : same rules as init_db maintenance."""
+    conn = get_connection()
+    try:
+        cursor = conn.cursor()
+        updated = _requeue_stale_processing_rows(cursor)
+        conn.commit()
+        return int(updated or 0)
+    finally:
+        conn.close()
 
 
 def _backfill_linkedin_derived_fields(conn):
@@ -1376,6 +1393,85 @@ def get_review_queue_summary(*, source=None):
         conn.close()
 
 
+def _review_jobs_filter_sql_and_params(
+    *,
+    status,
+    source,
+    query,
+    linkedin_auth_available,
+    operator_tag=None,
+):
+    """Shared AND-fragment for review list, counts, exports, and bulk requeue.
+
+    Returns (None, None) when the LinkedIn ready tab is impossible without auth.
+    """
+    parts = []
+    params = []
+    if source:
+        parts.append(" AND source = ?")
+        params.append(source)
+    if status == "ready":
+        if source == "linkedin" and not linkedin_auth_available:
+            return None, None
+        parts.append(
+            """
+              AND (
+                    enrichment_status = 'pending'
+                 OR (
+                        source != 'linkedin'
+                    AND (enrichment_status IS NULL OR trim(enrichment_status) = '')
+                 )
+                 OR (
+                        source = 'linkedin'
+                    AND
+                    (
+                        enrichment_status = 'failed'
+                    AND next_enrichment_retry_at IS NOT NULL
+                    AND next_enrichment_retry_at <= CURRENT_TIMESTAMP
+                    AND coalesce(enrichment_attempts, 0) < ?
+                    )
+                  )
+              )
+            """
+        )
+        params.append(ENRICHMENT_MAX_ATTEMPTS)
+        if not linkedin_auth_available:
+            parts.append(" AND source != 'linkedin'")
+    elif status != "all":
+        if status == "pending":
+            parts.append(
+                """
+                  AND (
+                        enrichment_status = 'pending'
+                     OR (source != 'linkedin' AND (enrichment_status IS NULL OR trim(enrichment_status) = ''))
+                  )
+                """
+            )
+        else:
+            parts.append(" AND enrichment_status = ?")
+            params.append(status)
+    query_value = (query or "").strip()
+    if query_value:
+        like_query = f"%{query_value.lower()}%"
+        parts.append(
+            """
+              AND (
+                    lower(coalesce(company, '')) LIKE ?
+                 OR lower(coalesce(title, '')) LIKE ?
+                 OR lower(coalesce(description, '')) LIKE ?
+                 OR lower(coalesce(apply_url, '')) LIKE ?
+                 OR lower(coalesce(job_url, '')) LIKE ?
+              )
+            """
+        )
+        params.extend([like_query, like_query, like_query, like_query, like_query])
+    tag = (operator_tag or "").strip()
+    if tag:
+        parts.append(" AND lower(trim(coalesce(operator_tag, ''))) = lower(?)")
+        params.append(tag)
+    return "".join(parts), params
+
+
 def list_linkedin_jobs_for_review(
     *,
     status="all",
@@ -1408,8 +1504,18 @@ def list_jobs_for_review(
     sort="date_scraped",
     direction="desc",
     source=None,
+    operator_tag=None,
 ):
     linkedin_auth_available = is_linkedin_auth_available()
+    frag, filter_params = _review_jobs_filter_sql_and_params(
+        status=status,
+        source=source,
+        query=query,
+        linkedin_auth_available=linkedin_auth_available,
+        operator_tag=operator_tag,
+    )
+    if frag is None:
+        return []
     conn = get_connection()
     try:
         cursor = conn.cursor()
@@ -1419,66 +1525,12 @@ def list_jobs_for_review(
                    enrichment_attempts, enriched_at, last_enrichment_error,
                    apply_host, ats_type, last_enrichment_started_at, next_enrichment_retry_at,
                    last_artifact_dir, last_artifact_screenshot_path, last_artifact_html_path, last_artifact_text_path,
-                   date_scraped
+                   date_scraped, priority, operator_notes, operator_tag
             FROM jobs
             WHERE 1=1
-        """
+        """ + frag
 
-        params = []
-        query_value = (query or "").strip()
-        if source:
-            base_select += " AND source = ?"
-            params.append(source)
-
-        if status == "ready":
-            if source == "linkedin" and not linkedin_auth_available:
-                return []
-            base_select += """
-              AND (
-                    enrichment_status = 'pending'
-                 OR (
-                        source != 'linkedin'
-                    AND (enrichment_status IS NULL OR trim(enrichment_status) = '')
-                 )
-                 OR (
-                        source = 'linkedin'
-                    AND
-                    (
-                        enrichment_status = 'failed'
-                    AND next_enrichment_retry_at IS NOT NULL
-                    AND next_enrichment_retry_at <= CURRENT_TIMESTAMP
-                    AND coalesce(enrichment_attempts, 0) < ?
-                    )
-                  )
-              )
-            """
-            params.append(ENRICHMENT_MAX_ATTEMPTS)
-            if not linkedin_auth_available:
-                base_select += " AND source != 'linkedin'"
-        elif status != "all":
-            if status == "pending":
-                base_select += """
-                  AND (
-                        enrichment_status = 'pending'
-                     OR (source != 'linkedin' AND (enrichment_status IS NULL OR trim(enrichment_status) = ''))
-                  )
-                """
-            else:
-                base_select += " AND enrichment_status = ?"
-                params.append(status)
-
-        if query_value:
-            like_query = f"%{query_value.lower()}%"
-            base_select += """
-              AND (
-                    lower(coalesce(company, '')) LIKE ?
-                 OR lower(coalesce(title, '')) LIKE ?
-                 OR lower(coalesce(description, '')) LIKE ?
-                 OR lower(coalesce(apply_url, '')) LIKE ?
-                 OR lower(coalesce(job_url, '')) LIKE ?
-              )
-            """
-            params.extend([like_query, like_query, like_query, like_query, like_query])
+        params = list(filter_params)
 
         safe_direction = "ASC" if str(direction).lower() == "asc" else "DESC"
         sortable_columns = {
@@ -1528,73 +1580,243 @@ def count_linkedin_jobs_for_review(*, status="all", query=None):
     return count_jobs_for_review(status=status, query=query, source="linkedin")
 
 
-def count_jobs_for_review(*, status="all", query=None, source=None):
+def count_jobs_for_review(*, status="all", query=None, source=None, operator_tag=None):
     linkedin_auth_available = is_linkedin_auth_available()
+    frag, filter_params = _review_jobs_filter_sql_and_params(
+        status=status,
+        source=source,
+        query=query,
+        linkedin_auth_available=linkedin_auth_available,
+        operator_tag=operator_tag,
+    )
+    if frag is None:
+        return 0
     conn = get_connection()
     try:
         cursor = conn.cursor()
-        sql = """
-            SELECT COUNT(*)
-            FROM jobs
-            WHERE 1=1
+        sql = "SELECT COUNT(*) FROM jobs WHERE 1=1" + frag
+        return int(cursor.execute(sql, tuple(filter_params)).fetchone()[0])
+    finally:
+        conn.close()
+
+
+def bulk_requeue_jobs_matching_review_filters(
+    *,
+    status="all",
+    source=None,
+    query=None,
+    operator_tag=None,
+    target_statuses=None,
+    limit_cap=None,
+    dry_run=False,
+):
+    """Requeue up to limit_cap jobs matching review filters and enrichment_status IN target_statuses."""
+    cap = limit_cap if limit_cap is not None else config.REVIEW_BULK_REQUEUE_MAX
+    cap = max(0, int(cap))
+    allowed = {"failed", "blocked", "blocked_verified", "processing", "pending"}
+    targets = tuple(s for s in (target_statuses or ()) if s in allowed)
+    if not targets or cap == 0:
+        return 0
+
+    linkedin_auth_available = is_linkedin_auth_available()
+    frag, filter_params = _review_jobs_filter_sql_and_params(
+        status=status,
+        source=source,
+        query=query,
+        linkedin_auth_available=linkedin_auth_available,
+        operator_tag=operator_tag,
+    )
+    if frag is None:
+        return 0
+
+    placeholders = ", ".join(["?"] * len(targets))
+    where_status = f" AND enrichment_status IN ({placeholders})"
+    count_sql = f"SELECT COUNT(*) FROM jobs WHERE 1=1 {frag}{where_status}"
+    count_params = tuple(filter_params + list(targets))
+
+    conn = get_connection()
+    try:
+        cursor = conn.cursor()
+        total_match = int(cursor.execute(count_sql, count_params).fetchone()[0])
+        would_touch = min(cap, total_match)
+        if dry_run:
+            return would_touch
+        if would_touch == 0:
+            return 0
+        subq = (
+            f"SELECT id FROM jobs WHERE 1=1 {frag}{where_status} ORDER BY id ASC LIMIT ?"
+        )
+        subq_params = tuple(filter_params + list(targets) + [cap])
+        update_sql = f"""
+            UPDATE jobs
+            SET enrichment_status = 'pending',
+                last_enrichment_error = NULL,
+                last_enrichment_started_at = NULL,
+                next_enrichment_retry_at = NULL,
+                last_artifact_dir = NULL,
+                last_artifact_screenshot_path = NULL,
+                last_artifact_html_path = NULL,
+                last_artifact_text_path = NULL
+            WHERE id IN ({subq})
         """
-        params = []
-        query_value = (query or "").strip()
-        if source:
-            sql += " AND source = ?"
-            params.append(source)
+        cursor.execute(update_sql, subq_params)
+        conn.commit()
+        return cursor.rowcount
+    finally:
+        conn.close()
 
-        if status == "ready":
-            if source == "linkedin" and not linkedin_auth_available:
-                return 0
-            sql += """
-              AND (
-                    enrichment_status = 'pending'
-                 OR (
-                        source != 'linkedin'
-                    AND (enrichment_status IS NULL OR trim(enrichment_status) = '')
-                 )
-                 OR (
-                        source = 'linkedin'
-                    AND
-                    (
-                        enrichment_status = 'failed'
-                    AND next_enrichment_retry_at IS NOT NULL
-                    AND next_enrichment_retry_at <= CURRENT_TIMESTAMP
-                    AND coalesce(enrichment_attempts, 0) < ?
-                    )
-                  )
-              )
+
+def set_job_priority(job_id, *, run_next):
+    """Mark a job for worker preference (jobs.priority boolean)."""
+    conn = get_connection()
+    try:
+        cursor = conn.cursor()
+        cursor.execute(
+            "UPDATE jobs SET priority = ? WHERE id = ?",
+            (1 if run_next else 0, job_id),
+        )
+        conn.commit()
+        return cursor.rowcount
+    finally:
+        conn.close()
+
+
+def update_job_operator_meta(job_id, *, notes=_UNSET, operator_tag=_UNSET):
+    assignments = []
+    params = []
+    if notes is not _UNSET:
+        assignments.append("operator_notes = ?")
+        params.append(notes)
+    if operator_tag is not _UNSET:
+        assignments.append("operator_tag = ?")
+        params.append(operator_tag)
+    if not assignments:
+        return 0
+    params.append(job_id)
+    conn = get_connection()
+    try:
+        cursor = conn.cursor()
+        cursor.execute(
+            f"UPDATE jobs SET {', '.join(assignments)} WHERE id = ?",
+            tuple(params),
+        )
+        conn.commit()
+        return cursor.rowcount
+    finally:
+        conn.close()
+
+
+def list_runtime_state_recent(*, limit=40):
+    safe_limit = max(1, min(int(limit), 200))
+    conn = get_connection()
+    try:
+        cursor = conn.cursor()
+        rows = cursor.execute(
             """
-            params.append(ENRICHMENT_MAX_ATTEMPTS)
-            if not linkedin_auth_available:
-                sql += " AND source != 'linkedin'"
-        elif status != "all":
-            if status == "pending":
-                sql += """
-                  AND (
-                        enrichment_status = 'pending'
-                     OR (source != 'linkedin' AND (enrichment_status IS NULL OR trim(enrichment_status) = ''))
-                  )
-                """
-            else:
-                sql += " AND enrichment_status = ?"
-                params.append(status)
+            SELECT key, value, updated_at
+            FROM runtime_state
+            ORDER BY datetime(coalesce(updated_at, '')) DESC
+            LIMIT ?
+            """,
+            (safe_limit,),
+        ).fetchall()
+        return [dict(row) for row in rows]
+    finally:
+        conn.close()
 
-        if query_value:
-            like_query = f"%{query_value.lower()}%"
-            sql += """
-              AND (
-                    lower(coalesce(company, '')) LIKE ?
-                 OR lower(coalesce(title, '')) LIKE ?
-                 OR lower(coalesce(description, '')) LIKE ?
-                 OR lower(coalesce(apply_url, '')) LIKE ?
-                 OR lower(coalesce(job_url, '')) LIKE ?
-              )
+
+def get_review_activity_summary(*, hours=24):
+    safe_hours = max(1, min(int(hours), 24 * 30))
+    mod = f"-{safe_hours} hours"
+    conn = get_connection()
+    try:
+        cursor = conn.cursor()
+        done = cursor.execute(
             """
-            params.extend([like_query, like_query, like_query, like_query, like_query])
+            SELECT COUNT(*) FROM jobs
+            WHERE enrichment_status IN ('done', 'done_verified')
+              AND enriched_at IS NOT NULL
+              AND trim(enriched_at) != ''
+              AND datetime(enriched_at) >= datetime('now', ?)
+            """,
+            (mod,),
+        ).fetchone()[0]
+        failed = cursor.execute(
+            """
+            SELECT COUNT(*) FROM jobs
+            WHERE enrichment_status = 'failed'
+              AND date_scraped IS NOT NULL
+              AND datetime(date_scraped) >= datetime('now', ?)
+            """,
+            (mod,),
+        ).fetchone()[0]
+        scraped = cursor.execute(
+            """
+            SELECT COUNT(*) FROM jobs
+            WHERE date_scraped IS NOT NULL
+              AND datetime(date_scraped) >= datetime('now', ?)
+            """,
+            (mod,),
+        ).fetchone()[0]
+        return {
+            "hours": safe_hours,
+            "done_or_verified": int(done or 0),
+            "failed_scraped_window": int(failed or 0),
+            "rows_scraped_window": int(scraped or 0),
+        }
+    finally:
+        conn.close()
 
-        return int(cursor.execute(sql, tuple(params)).fetchone()[0])
+
+def get_review_audit_entries(*, limit=80):
+    conn = get_connection()
+    try:
+        cursor = conn.cursor()
+        row = cursor.execute(
+            "SELECT value FROM runtime_state WHERE key = ?",
+            (REVIEW_AUDIT_LOG_KEY,),
+        ).fetchone()
+        if not row or not row["value"]:
+            return []
+        try:
+            entries = json.loads(row["value"])
+        except json.JSONDecodeError:
+            return []
+        if not isinstance(entries, list):
+            return []
+        tail = entries[-max(1, min(int(limit), 200)) :]
+        return list(reversed(tail))
+    finally:
+        conn.close()
+
+
+def append_review_audit_entry(action, detail=None, *, max_entries=100):
+    conn = get_connection()
+    try:
+        cursor = conn.cursor()
+        cursor.execute(RUNTIME_STATE_TABLE_SQL)
+        row = cursor.execute(
+            "SELECT value FROM runtime_state WHERE key = ?",
+            (REVIEW_AUDIT_LOG_KEY,),
+        ).fetchone()
+        entries = []
+        if row and row["value"]:
+            try:
+                entries = json.loads(row["value"])
+            except json.JSONDecodeError:
+                entries = []
+        if not isinstance(entries, list):
+            entries = []
+        entry = {
+            "at": format_sqlite_timestamp(utc_now().replace(microsecond=0)),
+            "action": str(action),
+            "detail": detail,
+        }
+        entries.append(entry)
+        entries = entries[-max_entries:]
+        _upsert_runtime_state(cursor, REVIEW_AUDIT_LOG_KEY, json.dumps(entries))
+        conn.commit()
+        return len(entries)
     finally:
         conn.close()
 

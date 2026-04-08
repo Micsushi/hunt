@@ -522,6 +522,8 @@ Common examples:
   `python review_app.py`
 - expose the review app with uvicorn explicitly if preferred:
   `uvicorn review_app:app --host 127.0.0.1 --port 8000`
+- operator console in the review app (bulk requeue for `auth_expired` / `rate_limited`, quick links to `/health`, `/api/summary`, `/metrics`):
+  open **`/ops`** in the browser (nav : **Ops**)
 
 ### Stage 4 : hardening and backfill
 

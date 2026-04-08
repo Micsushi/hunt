@@ -10,6 +10,8 @@ from .config import (
     DEFAULT_MODEL_BACKEND,
     DEFAULT_MODEL_NAME,
     DEFAULT_OG_RESUME_PATH,
+    OLLAMA_MODEL_NAME,
+    PROMPT_VERSION_TAG,
     resolve_base_resume_path,
 )
 from .db import (
@@ -20,6 +22,7 @@ from .db import (
     record_resume_attempt,
 )
 from .generator import generate_tailored_resume
+from .llm_enrich import enrich_with_ollama_if_enabled
 from .keyword_extractor import extract_keywords
 from .parser import parse_resume_file
 from .renderer import render_resume_tex
@@ -183,6 +186,16 @@ def _run_pipeline(
 ) -> dict:
     classification = classify_job(title=title, description=description)
     keywords = extract_keywords(title=title, description=description, classification=classification)
+    classification, keywords, llm_meta = enrich_with_ollama_if_enabled(
+        title=title, description=description, classification=classification, keywords=keywords
+    )
+    model_name = OLLAMA_MODEL_NAME if DEFAULT_MODEL_BACKEND == "ollama" else DEFAULT_MODEL_NAME
+    if llm_meta.get("ollama_enriched"):
+        prompt_version = f"{PROMPT_VERSION_TAG}_ollama"
+    elif DEFAULT_MODEL_BACKEND == "ollama":
+        prompt_version = f"{PROMPT_VERSION_TAG}_ollama_fallback"
+    else:
+        prompt_version = f"{PROMPT_VERSION_TAG}_heuristic"
     candidate_profile = load_candidate_profile(candidate_profile_path)
     bullet_library = load_bullet_library(bullet_library_path)
     base_resume_name, selected_resume_path = resolve_base_resume_path(classification["role_family"])
@@ -241,7 +254,8 @@ def _run_pipeline(
         "page_fit_retry_count": max(0, len(compile_history) - 1),
         "compile_history": compile_history,
         "model_backend": DEFAULT_MODEL_BACKEND,
-        "model_name": DEFAULT_MODEL_NAME,
+        "model_name": model_name,
+        "llm_enrichment": llm_meta,
         "selected_base_resume": base_resume_name,
         "source_resume_path": str(Path(selected_resume_path)),
         "role_classification_path": role_classification_path,
@@ -276,8 +290,8 @@ def _run_pipeline(
         "source_resume_path": str(Path(selected_resume_path)),
         "fallback_used": fallback_used,
         "model_backend": DEFAULT_MODEL_BACKEND,
-        "model_name": DEFAULT_MODEL_NAME,
-        "prompt_version": "stage0_stage1_deterministic_v1",
+        "model_name": model_name,
+        "prompt_version": prompt_version,
         "concern_flags": list(dict.fromkeys(concern_flags)),
         "job_description_path": job_description_path,
         "keywords_path": keywords_path,

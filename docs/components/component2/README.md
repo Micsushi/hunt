@@ -14,7 +14,13 @@ C2 (Fletcher) should:
 
 ## Current Status
 
-C2 (Fletcher) now has an initial working local implementation under:
+**Shipped today (~v0.1)** — full local pipeline (parse → classify/keywords → optional Ollama refinement of those steps → heuristic bullet tailoring → compile → DB + artifacts), **`hunter tailor`** / **`fletcher.cli`**, review-app structured diff + JD highlights on JSON, Ansible Stage 7. See **`fletcher/README.md`**.
+
+**v1.0 target (current engineering focus)** — meet the **locked decisions** below with **LLM-driven resume generation** (prompted bullet/section work on top of the same structured pipeline), reliable **Ollama (or chosen) backend**, stable **queue + one-page + handoff** to C3/C4. This is **not** required to ship interactive “pick keywords → regen → chat edit” flows; those are **v2.0**.
+
+**v2.0 (deferred)** — human-in-the-loop editing and richer diff/heatmap UX: coverage/gap artifacts, saved user intent, constrained regeneration, scoped bullet edits. Specified under **Stages 9–12** and **Human-in-the-loop** in this doc; tracked in **`docs/TODO.md`** (C2 v2.0). Optional patterns: open-source **ResumeAgent**-style TeX colorization, **latexdiff** for TeX-to-TeX review PDFs (see prior research notes in chat / future `docs/` if codified).
+
+C2 (Fletcher) implementation lives under:
 - `fletcher/`
 
 What exists now:
@@ -210,6 +216,34 @@ Runtime artifacts should not live inside the git checkout on `server2`.
 Recommended runtime root:
 - `/home/michael/data/hunt/resumes`
 
+## Human-in-the-loop : how to implement (before picking “HTML vs PDF”)
+
+Jobright-style flows (missing keywords → user picks → regen → diff → partial AI edits) must not be bolted onto **PDF** or **LaTeX source** as the primary place logic runs. Decide the **contract first**, then attach **views**.
+
+### What is canonical
+
+| Layer | Role |
+|--------|------|
+| **Structured tailoring state** | `tailored_resume.json` shape (bullet_plan with stable IDs, skills buckets, flags) + `keywords.json` + per-attempt **metadata**. All gap math, “missing term” lists, and diffs are defined **here**. |
+| **LaTeX / PDF** | **Outputs** of the pipeline for employers and ATS. Not the source of truth for keyword coverage or user selections. |
+| **Review UI** | A **consumer** of the same JSON the CLI could consume. |
+
+### Presentation choice (explicit)
+
+- **Do not** depend on **PDF → HTML** or **LaTeX → HTML** conversion for gap analysis, chip selection, or per-bullet edit. Those conversions are brittle and duplicate the truth.
+- **HTML (or any web UI)** is the **default adapter** for interactive controls in the Hunt **review app** because browsers handle selection, toggles, and async regen well. The UI reads/writes **JSON** (and optional small new DB columns / tables), not pixel layers.
+- **Optional later**: an HTML **preview** generated from the same structured model (for nicer reading) is a separate, optional renderer; it does not replace the JSON contract.
+- **APIs**: expose gap lists, “apply user constraints,” and “scoped bullet edit” as **JSON HTTP endpoints** (or shared Python functions called from CLI) so the surface is not locked to one front-end.
+
+### Feature mapping (implementation order)
+
+1. **Coverage / gap artifact** — deterministic function: JD terms vs current tailored text + skills → `coverage_report.json` (or embedded in attempt metadata).
+2. **Persist user intent** — selected terms, ignored terms, free-text hint; stored per job or per **edit session** linked to `job_id` / `resume_attempt_id`.
+3. **Constrained regen** — new `resume_attempt` produced with `user_constraints` in metadata; pipeline reads constraints before Stage 4–5.
+4. **Scoped edit** — target `entry_id` + `source_fact_id` (or bullet index) + instruction → patch one bullet, new micro-attempt or version row.
+
+The **stage list below** adds **Stages 9–12** for these capabilities without requiring a final decision on “HTML preview vs PDF-only view”; Stage 8 remains the baseline review shell, extended by data and APIs.
+
 ## Proposed Stages
 
 ### Stage 0 : terminology, structure, and storage contract
@@ -283,7 +317,35 @@ Recommended runtime root:
 - view the latest PDF in browser
 - expose the generated LaTeX
 - allow manual generation from DB jobs or pasted JDs
-- add diff views later as a nice-to-have
+- structured diff and JD keyword highlights on **structured JSON** (presentation in the review app; no requirement on LaTeX→HTML)
+- optional HTML preview later as a **second renderer** from the same JSON, not a replacement for the contract
+
+### Stage 9 : JD coverage and gap analysis
+
+- define a machine-readable **coverage report** for each attempt: JD terms (from Stage 3) vs current tailored bullets + skills
+- classify terms as **covered**, **missing**, or **weak** (heuristic rules; later tunable)
+- persist the report beside the attempt (e.g. `coverage_report.json`) and/or reference from DB
+- review app (or CLI) **displays** gaps; no regen requirement in this stage
+
+### Stage 10 : user intent capture
+
+- persist **operator choices**: terms to emphasize next run, terms to ignore, optional free-text hints
+- storage shape: e.g. `resume_edit_intent` row or JSON blob keyed by `job_id` + optional `base_attempt_id`
+- APIs or CLI to read/update intent without coupling to HTML (review app is one client)
+
+### Stage 11 : constrained regeneration and versioning
+
+- run a **new** resume attempt that merges Stage 4–6 with **user_constraints** from Stage 10
+- record lineage in metadata (`parent_attempt_id`, constraint snapshot)
+- after run, refresh coverage (Stage 9) and structured diff (Stage 8) so the user sees **what changed**
+- keep one-page gate and concern flags from Stage 5–6
+
+### Stage 12 : scoped edit and AI-assisted bullet patch
+
+- target a **single bullet** (or small section) by stable IDs from the structured model
+- apply a **small** model or rules pass with explicit user instruction; write a new attempt or a **draft** revision pointer
+- support compare-to-previous and undo by retaining attempt history (Stage 6)
+- same endpoints usable from review UI or future tools; still **no** PDF-as-edit-surface
 
 ## Verification Priorities
 
@@ -293,6 +355,12 @@ Early tests should focus on:
 - resume selection logic
 - one-page enforcement
 - artifact writing
+
+For Stages 9–12, add:
+- deterministic coverage reports (golden JD + tailored fixture → expected missing/covered sets)
+- intent round-trip (save constraints → regen reads same fields)
+- lineage metadata on chained attempts
+- scoped bullet patch: ID stability and no silent cross-bullet bleed
 
 ## Related Docs
 

@@ -16,7 +16,7 @@ Current focus:
 - C1 (Hunter) Stage 4 hardening, backlog drain, and deployment polish
 - prioritize LinkedIn over every other source in enrichment dispatch
 - classify LinkedIn Easy Apply during enrichment (`easy_apply`, `auto_apply_eligible = 0`) so later automation does not treat them as external-apply targets
-- keep **C1 (Hunter)** deployment separate from later **C2 (Fletcher)** and **C3 (Executioner)** deployment steps in Ansible
+- keep **C1 (Hunter)** (Ansible Stage 6) separate from **C2 (Fletcher)** (Stage 7 in `ansible_homelab`) and **C3 (Executioner)** deployment steps
 
 ## Repo Overview
 

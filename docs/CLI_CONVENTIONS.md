@@ -27,6 +27,7 @@ C1 is the most mature surface. Short narrative : **`docs/C1_OPERATOR_WORKFLOW.md
 | **`hunter restart`** | Linux : **`daemon-reload`**, restart **`hunt-xvfb`**, restart **`hunt-scraper.timer`**. |
 | **`hunter enrich N`** | Positional batch size (same as **`--limit N`**). Often **`hunter enrich 50 --source all`**. |
 | **`hunter scrape`**, **`hunter queue`**, **`hunter review`**, … | See **`hunter --help`** or **`docs/components/component1/README.md`** (Command Reference). |
+| **`hunter tailor …`** | **C2 (Fletcher) v0.1** : `init-db`, `job`, `ready`, `ad-hoc`, `context`, `parse` (delegates to **`python -m fletcher.cli`**). |
 
 **`hunt <verb>`** is identical (legacy launcher). Legacy subcommand names remain valid (**`timer-start`**, **`auto-on`**, **`svc-start`**, etc.) but **prefer `start` / `stop` / `restart`** in new docs.
 

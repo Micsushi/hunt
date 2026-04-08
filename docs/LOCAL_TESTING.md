@@ -92,7 +92,7 @@ python review_app.py
 ```
 
 Open:
-- `http://127.0.0.1:8000/summary`
+- `http://127.0.0.1:8000/health-view` (Queue & health; legacy `/summary` redirects here)
 - `http://127.0.0.1:8000/api/summary`
 
 ## 4. Run discovery locally (C1: Hunter)
@@ -103,7 +103,7 @@ In a second terminal (same env vars), run discovery:
 python hunter/scraper.py --skip-enrichment
 ```
 
-You should then see rows appear in the webapp (`/jobs`) and queue totals update (`/summary`).
+You should then see rows appear in the webapp (`/jobs`) and queue totals update (`/health-view` or `/api/summary`).
 
 ## 5. Validate Discord + event plumbing (without waiting for real failures)
 
@@ -121,7 +121,7 @@ python hunter/linkedin_session.py --test-discord-webhook --discord-message "Hunt
 
 ### 5.2 Webapp-visible C1 events
 
-C1 emits structured JSON events into runtime state. The review webapp surfaces the **latest** events on `/summary` under the LinkedIn auth panel.
+C1 emits structured JSON events into runtime state. The review webapp surfaces the **latest** events on **Queue & health** (`/health-view`) under the LinkedIn auth panel.
 
 The keys currently used include:
 - `hunt_last_priority_job`
@@ -134,7 +134,7 @@ To simulate an event locally (no LinkedIn required):
 python -c "from hunter.c1_logging import C1Logger; C1Logger(discord=False).event(key='linkedin_last_rate_limited', level='warn', message='Simulated rate limit', code='rate_limited', details={'account_index':0,'blocked_days':1})"
 ```
 
-Refresh `http://127.0.0.1:8000/summary` and confirm the “Last rate limit” row updates.
+Refresh `http://127.0.0.1:8000/health-view` and confirm the “Last rate limit” row updates.
 
 #### PowerShell-friendly (recommended on Windows)
 
@@ -167,7 +167,7 @@ python hunter/linkedin_session.py --save-storage-state --channel chrome
 python hunter/enrich_linkedin.py --limit 5 --channel chrome
 ```
 
-If LinkedIn auth is expired, the system can pause the LinkedIn lane and the webapp `/summary` should show “LinkedIn auth paused”.
+If LinkedIn auth is expired, the system can pause the LinkedIn lane and the webapp `/health-view` should show “LinkedIn auth paused”.
 
 ## 7. Requeue by error code (auth_expired / rate_limited)
 
@@ -293,8 +293,8 @@ python -m compileall -q coordinator fletcher hunter scripts review_app.py
 
 ## 9. Quick local verification checklist
 
-- Webapp loads: `/summary` and `/jobs` render.
+- Webapp loads: `/health-view` and `/jobs` render.
 - Webapp reads your chosen DB: `/api/summary` changes after `hunter/scraper.py --skip-enrichment`.
 - Discord test message succeeds (if configured).
-- Simulated event shows up on `/summary`.
+- Simulated event shows up on `/health-view`.
 

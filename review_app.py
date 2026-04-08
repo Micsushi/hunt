@@ -1,12 +1,15 @@
+import csv
 import html
+import io
 import json
 import os
 import sys
 from contextlib import asynccontextmanager
 from pathlib import Path
+from typing import Optional
 from urllib.parse import parse_qsl, quote, urlencode, urlsplit, urlunsplit
 
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import Body, Depends, FastAPI, Form, HTTPException, Query, Request
 from fastapi.responses import (
     FileResponse,
     HTMLResponse,
@@ -18,18 +21,37 @@ from fastapi.responses import (
 REPO_ROOT = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, REPO_ROOT)
 
-from hunter.config import REVIEW_APP_HOST, REVIEW_APP_PORT  # noqa: E402
+from hunter.config import (  # noqa: E402
+    REVIEW_APP_HOST,
+    REVIEW_APP_PORT,
+    REVIEW_OPS_TOKEN,
+)
 from hunter.db import (  # noqa: E402
+    append_review_audit_entry,
+    bulk_requeue_jobs_matching_review_filters,
     count_jobs_for_review,
     get_job_by_id,
+    get_review_activity_summary,
+    get_review_audit_entries,
     get_review_queue_summary,
     init_db,
     list_jobs_for_review,
+    list_runtime_state_recent,
+    manual_requeue_stale_processing_rows,
+    requeue_enrichment_rows_by_error_codes,
+    set_job_priority,
+    update_job_operator_meta,
 )
 from hunter.db import (  # noqa: E402
     requeue_job as requeue_review_job,
 )
 from hunter.failure_artifacts import resolve_artifact_path  # noqa: E402
+from hunter.resume_review_ui import (  # noqa: E402
+    RESUME_REVIEW_SCRIPT,
+    RESUME_REVIEW_STYLES,
+    build_resume_review_html,
+    load_json_file,
+)
 
 try:  # noqa: E402
     from fletcher.db import list_resume_attempts  # type: ignore
@@ -43,6 +65,7 @@ except ModuleNotFoundError:  # noqa: E402
 
 
 STATUS_OPTIONS = (
+    "all",
     "ready",
     "pending",
     "processing",
@@ -51,7 +74,6 @@ STATUS_OPTIONS = (
     "failed",
     "blocked",
     "blocked_verified",
-    "all",
 )
 SOURCE_OPTIONS = (
     "all",
@@ -62,9 +84,37 @@ SOURCE_OPTIONS = (
 APP_ROUTE_PATHS = {
     "/",
     "/jobs",
+    "/jobs/compare",
     "/health-view",
-    "/summary",
+    "/ops",
 }
+
+OPS_ALLOWED_ERROR_CODES = frozenset({"auth_expired", "rate_limited"})
+
+BULK_REQUEUE_STATUS_CHOICES = frozenset(
+    {"failed", "blocked", "blocked_verified", "processing", "pending"}
+)
+
+
+def assert_review_ops_allowed(request: Request, form_ops_token: Optional[str] = None) -> None:
+    expected = (REVIEW_OPS_TOKEN or "").strip()
+    if not expected:
+        return
+    if request.headers.get("x-review-ops-token", "").strip() == expected:
+        return
+    auth = request.headers.get("authorization") or ""
+    if auth.lower().startswith("bearer ") and auth[7:].strip() == expected:
+        return
+    if form_ops_token and form_ops_token.strip() == expected:
+        return
+    raise HTTPException(
+        status_code=401,
+        detail="Missing or invalid review ops credential. Use header X-Review-Ops-Token or Authorization: Bearer, or ops_token on forms.",
+    )
+
+
+def review_ops_dependency(request: Request):
+    assert_review_ops_allowed(request, None)
 
 
 @asynccontextmanager
@@ -105,6 +155,32 @@ def normalize_return_to(value):
     return urlunsplit(("", "", path, parts.query, ""))
 
 
+def build_jobs_query(
+    *,
+    source="all",
+    status="all",
+    limit=50,
+    page=1,
+    q="",
+    sort="date_scraped",
+    direction="desc",
+    tag="",
+):
+    pairs = [
+        ("source", source),
+        ("status", status),
+        ("limit", str(limit)),
+        ("page", str(page)),
+        ("q", q),
+        ("sort", sort),
+        ("direction", direction),
+    ]
+    t = (tag or "").strip()
+    if t:
+        pairs.append(("tag", t))
+    return urlencode(pairs, doseq=True)
+
+
 def add_return_to(href, return_to):
     safe_return_to = normalize_return_to(return_to)
     if not safe_return_to:
@@ -138,8 +214,8 @@ def render_nav(current_path):
         <div class="nav-group">
           {_nav_link("Overview", "/", current_path=current_path, exact=True)}
           {_nav_link("Jobs", "/jobs", current_path=current_path)}
-          {_nav_link("Health", "/health-view", current_path=current_path, exact=True)}
-          {_nav_link("Summary", "/summary", current_path=current_path, exact=True)}
+          {_nav_link("Queue & health", "/health-view", current_path=current_path, exact=True)}
+          {_nav_link("Ops", "/ops", current_path=current_path, exact=True)}
         </div>
         <div class="nav-group nav-group-secondary">
           <a class="nav-link nav-link-secondary" href="/health" data-no-app-nav="true">Raw health</a>
@@ -480,6 +556,11 @@ def render_layout(title, body, *, current_path="/"):
     .toast.error {
       background: rgba(169, 63, 49, 0.96);
     }
+    tr.job-row-focus {
+      outline: 2px solid var(--accent);
+      outline-offset: -2px;
+      background: var(--accent-soft);
+    }
     @media (max-width: 760px) {
       .shell {
         padding: 18px 14px 32px;
@@ -498,9 +579,9 @@ def render_layout(title, body, *, current_path="/"):
     (() => {
       const APP_ROUTE_PATTERNS = [
         new RegExp('^/$'),
-        new RegExp('^/jobs(?:/[0-9]+)?$'),
+        new RegExp('^/jobs(?:/[0-9]+|/compare)?$'),
         new RegExp('^/health-view$'),
-        new RegExp('^/summary$'),
+        new RegExp('^/ops$'),
       ];
       const PENDING_REFRESH_KEY = 'hunt-pending-refresh';
       const toast = () => document.getElementById('app-toast');
@@ -563,6 +644,13 @@ def render_layout(title, body, *, current_path="/"):
         if (inFlightController) {
           inFlightController.abort();
         }
+        const fromUrl = new URL(window.location.href);
+        const toUrl = new URL(url, window.location.origin);
+        const preserveJobsListScroll =
+          !restoreScroll &&
+          fromUrl.pathname === '/jobs' &&
+          toUrl.pathname === '/jobs';
+        const jobsListScrollY = preserveJobsListScroll ? window.scrollY : 0;
         inFlightController = new AbortController();
         document.body.classList.add('is-loading');
         try {
@@ -586,14 +674,32 @@ def render_layout(title, body, *, current_path="/"):
           document.title = parsed.title;
 
           if (push) {
-            window.history.pushState({ url, scrollY: 0 }, '', url);
+            window.history.pushState(
+              { url, scrollY: preserveJobsListScroll ? jobsListScrollY : 0 },
+              '',
+              url
+            );
           } else if (replace) {
             const previous = window.history.state || {};
-            window.history.replaceState({ ...previous, url }, '', url);
+            window.history.replaceState(
+              {
+                ...previous,
+                url,
+                scrollY: preserveJobsListScroll ? jobsListScrollY : (previous.scrollY ?? 0),
+              },
+              '',
+              url
+            );
           }
 
           const state = window.history.state || {};
-          window.scrollTo(0, restoreScroll ? (state.scrollY || 0) : 0);
+          if (restoreScroll) {
+            window.scrollTo(0, state.scrollY || 0);
+          } else if (preserveJobsListScroll) {
+            window.scrollTo(0, jobsListScrollY);
+          } else {
+            window.scrollTo(0, 0);
+          }
           const pending = takePendingRefresh();
           if (pending && pending.message) {
             showToast(pending.message);
@@ -611,12 +717,15 @@ def render_layout(title, body, *, current_path="/"):
         const submitButton = form.querySelector('button[type="submit"]');
         if (submitButton) submitButton.disabled = true;
         try {
+          const tv = document.getElementById('hunt-review-ops-token-value');
+          const headers = {
+            'X-Hunt-Async': '1',
+            'Accept': 'application/json',
+          };
+          if (tv && tv.value) headers['X-Review-Ops-Token'] = tv.value;
           const response = await fetch(form.action, {
             method: 'POST',
-            headers: {
-              'X-Hunt-Async': '1',
-              'Accept': 'application/json',
-            },
+            headers,
           });
           const payload = await response.json().catch(() => ({}));
           if (!response.ok) {
@@ -680,6 +789,156 @@ def render_layout(title, body, *, current_path="/"):
         swapTo(url.toString(), { push: true });
       });
 
+      document.addEventListener('click', (event) => {
+        const target = event.target instanceof Element ? event.target : null;
+        const requeueBtn = target && target.closest('.ops-requeue-btn');
+        if (requeueBtn) {
+          event.preventDefault();
+          const source = requeueBtn.getAttribute('data-source') || 'linkedin';
+          const codesRaw = requeueBtn.getAttribute('data-codes') || '';
+          const error_codes = codesRaw.split(',').map((s) => s.trim()).filter(Boolean);
+          if (!error_codes.length) {
+            showToast('No error codes on button.', 'error');
+            return;
+          }
+          requeueBtn.disabled = true;
+          const tv = document.getElementById('hunt-review-ops-token-value');
+          const hdr = { 'Content-Type': 'application/json', Accept: 'application/json' };
+          if (tv && tv.value) hdr['X-Review-Ops-Token'] = tv.value;
+          fetch('/api/ops/requeue-errors', {
+            method: 'POST',
+            headers: hdr,
+            body: JSON.stringify({ source, error_codes }),
+          })
+            .then(async (response) => {
+              const payload = await response.json().catch(() => ({}));
+              if (!response.ok) {
+                const msg = typeof payload.detail === 'string'
+                  ? payload.detail
+                  : (payload.detail && JSON.stringify(payload.detail)) || 'Requeue failed.';
+                throw new Error(msg);
+              }
+              showToast(`Requeued ${payload.updated} row(s).`, 'ok');
+              await swapTo('/ops', { replace: true });
+            })
+            .catch((error) => {
+              showToast(error.message || 'Requeue failed.', 'error');
+            })
+            .finally(() => {
+              requeueBtn.disabled = false;
+            });
+          return;
+        }
+        const summaryBtn = target && target.closest('#ops-fetch-summary');
+        if (summaryBtn) {
+          event.preventDefault();
+          fetch('/api/summary', { headers: { Accept: 'application/json' } })
+            .then((r) => r.json())
+            .then((data) => {
+              const pre = document.getElementById('ops-summary-preview');
+              if (pre) {
+                pre.style.display = 'block';
+                pre.textContent = JSON.stringify(data, null, 2);
+              }
+              showToast('Loaded /api/summary', 'ok');
+            })
+            .catch((e) => showToast(e.message || 'Fetch failed', 'error'));
+        }
+        const bulkDry = target && target.closest('#jobs-bulk-dry-run');
+        const bulkRun = target && target.closest('#jobs-bulk-run');
+        if (bulkDry || bulkRun) {
+          event.preventDefault();
+          const panel = document.getElementById('jobs-bulk-panel');
+          const out = document.getElementById('jobs-bulk-result');
+          if (!panel) return;
+          const statuses = Array.from(panel.querySelectorAll('.jobs-bulk-status:checked')).map((el) => el.value);
+          if (!statuses.length) {
+            showToast('Select at least one target status.', 'error');
+            return;
+          }
+          const src = panel.dataset.source;
+          const payload = {
+            source: src === 'all' ? null : src,
+            status: panel.dataset.status,
+            q: panel.dataset.q || '',
+            tag: panel.dataset.tag || '',
+            target_statuses: statuses,
+            dry_run: Boolean(bulkDry),
+          };
+          const tv = document.getElementById('hunt-review-ops-token-value');
+          const hdr = { 'Content-Type': 'application/json', Accept: 'application/json' };
+          if (tv && tv.value) hdr['X-Review-Ops-Token'] = tv.value;
+          const btn = bulkDry || bulkRun;
+          btn.disabled = true;
+          fetch('/api/ops/bulk-requeue', { method: 'POST', headers: hdr, body: JSON.stringify(payload) })
+            .then(async (response) => {
+              const data = await response.json().catch(() => ({}));
+              if (!response.ok) {
+                const msg = typeof data.detail === 'string' ? data.detail : JSON.stringify(data.detail || data);
+                throw new Error(msg || 'Bulk requeue failed.');
+              }
+              if (out) {
+                out.textContent = data.dry_run
+                  ? `Would requeue ${data.count} row(s).`
+                  : `Requeued ${data.updated} row(s).`;
+              }
+              showToast(data.dry_run ? `Dry-run: ${data.count} row(s)` : `Requeued ${data.updated} row(s)`, 'ok');
+              if (!data.dry_run) await swapTo(window.location.href, { replace: true });
+            })
+            .catch((error) => showToast(error.message || 'Bulk requeue failed.', 'error'))
+            .finally(() => {
+              btn.disabled = false;
+            });
+        }
+        const staleBtn = target && target.closest('#ops-stale-reset');
+        if (staleBtn) {
+          event.preventDefault();
+          const out = document.getElementById('ops-stale-result');
+          const tv = document.getElementById('hunt-review-ops-token-value');
+          const hdr = { 'Content-Type': 'application/json', Accept: 'application/json' };
+          if (tv && tv.value) hdr['X-Review-Ops-Token'] = tv.value;
+          staleBtn.disabled = true;
+          fetch('/api/ops/requeue-stale-processing', { method: 'POST', headers: hdr, body: '{}' })
+            .then(async (response) => {
+              const data = await response.json().catch(() => ({}));
+              if (!response.ok) throw new Error(data.detail || 'Stale reset failed.');
+              if (out) out.textContent = `Updated ${data.updated} row(s).`;
+              showToast(`Stale processing requeue: ${data.updated}`, 'ok');
+              await swapTo('/ops', { replace: true });
+            })
+            .catch((e) => showToast(e.message || 'Stale reset failed.', 'error'))
+            .finally(() => {
+              staleBtn.disabled = false;
+            });
+        }
+        const priBtn = target && target.closest('[data-job-priority-set]');
+        if (priBtn) {
+          event.preventDefault();
+          const id = priBtn.getAttribute('data-job-id');
+          if (!id) return;
+          const runNext = priBtn.getAttribute('data-job-priority-set') === '1';
+          const tv = document.getElementById('hunt-review-ops-token-value');
+          const hdr = { 'Content-Type': 'application/json', Accept: 'application/json' };
+          if (tv && tv.value) hdr['X-Review-Ops-Token'] = tv.value;
+          priBtn.disabled = true;
+          fetch(`/api/jobs/${id}/priority`, {
+            method: 'POST',
+            headers: hdr,
+            body: JSON.stringify({ run_next: runNext }),
+          })
+            .then(async (r) => {
+              const data = await r.json().catch(() => ({}));
+              if (!r.ok) throw new Error(data.detail || 'Priority update failed.');
+              showToast(runNext ? 'Marked run next.' : 'Cleared priority flag.', 'ok');
+              await swapTo(window.location.href, { replace: true, restoreScroll: true });
+            })
+            .catch((e) => showToast(e.message || 'Priority update failed.', 'error'))
+            .finally(() => {
+              priBtn.disabled = false;
+            });
+        }
+      });
+
       window.addEventListener('popstate', () => {
         swapTo(window.location.href, { replace: true, restoreScroll: true });
       });
@@ -694,9 +953,74 @@ def render_layout(title, body, *, current_path="/"):
       if (!window.history.state || !window.history.state.url) {
         window.history.replaceState({ url: window.location.href, scrollY: window.scrollY }, '', window.location.href);
       }
+
+      (function injectOpsTokenIntoPostForms() {
+        const tv = document.getElementById('hunt-review-ops-token-value');
+        if (!tv || !tv.value) return;
+        document.addEventListener('submit', (e) => {
+          const form = e.target;
+          if (!(form instanceof HTMLFormElement)) return;
+          if ((form.method || 'get').toLowerCase() !== 'post') return;
+          let h = form.querySelector('input[name="ops_token"]');
+          if (!h) {
+            h = document.createElement('input');
+            h.type = 'hidden';
+            h.name = 'ops_token';
+            form.appendChild(h);
+          }
+          h.value = tv.value;
+        });
+      })();
+
+      (function jobsListKeyboardNav() {
+        const path = window.location.pathname || '';
+        if (path !== '/jobs') return;
+        const table = document.querySelector('.jobs-table-wrap table tbody');
+        if (!table) return;
+        let idx = -1;
+        const rows = () => Array.from(table.querySelectorAll('tr[data-job-id]'));
+        function focusRow(i) {
+          const r = rows();
+          if (!r.length) return;
+          idx = ((i % r.length) + r.length) % r.length;
+          r.forEach((row, j) => row.classList.toggle('job-row-focus', j === idx));
+          r[idx].scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+        }
+        document.addEventListener('keydown', (e) => {
+          if (e.target && (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA' || e.target.tagName === 'SELECT')) return;
+          if (e.key === 'j') { e.preventDefault(); focusRow(idx < 0 ? 0 : idx + 1); }
+          if (e.key === 'k') { e.preventDefault(); focusRow(idx < 0 ? 0 : idx - 1); }
+          if (e.key === 'Enter' && idx >= 0) {
+            const link = rows()[idx] && rows()[idx].querySelector('a[href^="/jobs/"]');
+            if (link) { e.preventDefault(); link.click(); }
+          }
+        });
+      })();
+
+      (function persistJobsFilters() {
+        const KEY = 'hunt-jobs-query-v1';
+        const path = window.location.pathname || '';
+        if (path === '/jobs' && window.location.search) {
+          try {
+            window.sessionStorage.setItem(KEY, window.location.search);
+          } catch (_e) {}
+        }
+        if (path === '/jobs' && !window.location.search) {
+          try {
+            const saved = window.sessionStorage.getItem(KEY);
+            if (saved && saved.startsWith('?')) {
+              window.history.replaceState(window.history.state || {}, '', '/jobs' + saved);
+              window.location.reload();
+            }
+          } catch (_e) {}
+        }
+      })();
     })();
   </script>
     """
+    ops_token_el = ""
+    if (REVIEW_OPS_TOKEN or "").strip():
+        ops_token_el = f'<input type="hidden" id="hunt-review-ops-token-value" value="{html.escape((REVIEW_OPS_TOKEN or "").strip())}" aria-hidden="true" />'
     return f"""<!DOCTYPE html>
 <html lang="en" style="background:#f6f1e7;">
 <head>
@@ -712,6 +1036,7 @@ def render_layout(title, body, *, current_path="/"):
       {body}
     </div>
     <div id="app-toast" class="toast" aria-live="polite"></div>
+    {ops_token_el}
     {script}
 </body>
 </html>
@@ -806,6 +1131,69 @@ def render_summary_cards(summary):
     )
 
 
+def _jobs_href(*, source="all", status="ready", limit=50):
+    return f"/jobs?source={quote(source)}&status={quote(status)}&limit={limit}"
+
+
+def render_queue_jump_strip(summary):
+    """Compact links for overview : no duplicate of full health tables."""
+    failed_n = int(summary.get("counts_by_status", {}).get("failed") or 0)
+    done_n = int(summary.get("counts_by_status", {}).get("done") or 0) + int(
+        summary.get("counts_by_status", {}).get("done_verified") or 0
+    )
+    pills = [
+        ("All jobs", "all", "all"),
+        ("Ready", "all", "ready"),
+        ("Pending enrich", "all", "pending"),
+        ("Processing", "all", "processing"),
+        ("Failed", "all", "failed"),
+        ("Blocked", "all", "blocked"),
+        ("Done", "all", "done"),
+        ("Done verified", "all", "done_verified"),
+    ]
+    parts = []
+    for label, src, st in pills:
+        parts.append(
+            f'<a class="pill" href="{_jobs_href(source=src, status=st)}" data-app-nav="true">{html.escape(label)}</a>'
+        )
+    linkedin_auth = summary.get("auth", {}).get("linkedin", {})
+    auth_ok = linkedin_auth.get("available", True)
+    auth_hint = "LinkedIn auth OK" if auth_ok else "LinkedIn auth needs refresh"
+    auth_class = "pill" if auth_ok else "pill active"
+    return f"""
+    <div class="panel">
+      <h2 style="margin-top:0;font-size:1.05rem;">Jump into the queue</h2>
+      <p class="muted" style="margin:0 0 10px 0;">
+        At a glance : <strong>{summary["total"]}</strong> rows total,
+        <strong>{summary["ready_count"]}</strong> ready,
+        <strong>{summary["pending_count"]}</strong> pending,
+        <strong>{failed_n}</strong> failed,
+        <strong>{done_n}</strong> done.
+        <a class="{auth_class}" style="margin-left:8px;" href="/health-view#review-auth-panel" data-app-nav="true">{html.escape(auth_hint)}</a>
+      </p>
+      <div class="actions" style="flex-wrap:wrap;gap:8px;">{"".join(parts)}</div>
+      <p class="muted" style="margin:12px 0 0 0;font-size:0.9rem;">
+        Full tables and events : <a href="/health-view" data-app-nav="true">Queue &amp; health</a>
+        · Operator tools : <a href="/ops" data-app-nav="true">Ops</a>
+      </p>
+    </div>
+    """
+
+
+def render_monitoring_endpoints_panel():
+    return """
+    <div class="panel">
+      <h2>Monitoring endpoints</h2>
+      <p class="muted">Same queue snapshot in formats for scripts, Prometheus, and UIs.</p>
+      <div class="actions" style="flex-wrap:wrap;gap:8px;">
+        <a class="pill" href="/health" target="_blank" rel="noreferrer" data-no-app-nav="true">GET /health (JSON)</a>
+        <a class="pill" href="/api/summary" target="_blank" rel="noreferrer" data-no-app-nav="true">GET /api/summary</a>
+        <a class="pill" href="/metrics" target="_blank" rel="noreferrer" data-no-app-nav="true">GET /metrics</a>
+      </div>
+    </div>
+    """
+
+
 def render_auth_status(summary):
     linkedin_auth = summary.get("auth", {}).get("linkedin", {})
     events = summary.get("events", {}) or {}
@@ -879,7 +1267,7 @@ def render_auth_status(summary):
     if not available:
         hint = '<p style="color: var(--muted);">Refresh auth with <code>DISPLAY=:98 ./hunter.sh auth-save --channel chrome</code>, then press Enter after the LinkedIn feed is visible.</p>'
     return f"""
-    <div class="panel">
+    <div class="panel" id="review-auth-panel">
       <h2>{html.escape(headline)}</h2>
       <div style="margin-bottom: 12px;"><span class="status {status_class}">{html.escape(headline)}</span></div>
       <p>{html.escape(description)}</p>
@@ -958,9 +1346,17 @@ def render_resume_attempts(attempts):
 
 
 def render_status_toolbar(
-    active_status, *, source, limit, q="", sort="date_scraped", direction="desc"
+    active_status,
+    *,
+    source,
+    limit,
+    q="",
+    sort="date_scraped",
+    direction="desc",
+    tag="",
 ):
     status_labels = {
+        "all": "all",
         "ready": "ready",
         "pending": "pending_enrich",
         "processing": "processing",
@@ -969,38 +1365,70 @@ def render_status_toolbar(
         "failed": "failed",
         "blocked": "blocked",
         "blocked_verified": "blocked_verified",
-        "all": "all",
     }
     pills = []
     for status in STATUS_OPTIONS:
         class_name = "pill active" if status == active_status else "pill"
+        qs = build_jobs_query(
+            source=source,
+            status=status,
+            limit=limit,
+            page=1,
+            q=q,
+            sort=sort,
+            direction=direction,
+            tag=tag,
+        )
         pills.append(
-            f'<a class="{class_name}" href="/jobs?source={quote(source)}&status={quote(status)}&limit={limit}&q={quote(q)}&sort={quote(sort)}&direction={quote(direction)}">{html.escape(status_labels.get(status, status))}</a>'
+            f'<a class="{class_name}" href="/jobs?{qs}">{html.escape(status_labels.get(status, status))}</a>'
         )
     return "".join(pills)
 
 
 def render_source_toolbar(
-    active_source, *, status, limit, q="", sort="date_scraped", direction="desc"
+    active_source,
+    *,
+    status,
+    limit,
+    q="",
+    sort="date_scraped",
+    direction="desc",
+    tag="",
 ):
     pills = []
     for source in SOURCE_OPTIONS:
         class_name = "pill active" if source == active_source else "pill"
+        qs = build_jobs_query(
+            source=source,
+            status=status,
+            limit=limit,
+            page=1,
+            q=q,
+            sort=sort,
+            direction=direction,
+            tag=tag,
+        )
         pills.append(
-            f'<a class="{class_name}" href="/jobs?source={quote(source)}&status={quote(status)}&limit={limit}&q={quote(q)}&sort={quote(sort)}&direction={quote(direction)}">{html.escape(source)}</a>'
+            f'<a class="{class_name}" href="/jobs?{qs}">{html.escape(source)}</a>'
         )
     return "".join(pills)
 
 
-def render_search_bar(*, source, status, limit, q, sort, direction):
+def render_search_bar(*, source, status, limit, q, sort, direction, tag=""):
     return f"""
     <form class="panel" method="get" action="/jobs" style="margin-bottom: 18px;">
-      <div style="display:grid; gap:12px; grid-template-columns: minmax(220px, 2fr) repeat(4, minmax(120px, 1fr)); align-items:end;">
+      <div style="display:grid; gap:12px; grid-template-columns: minmax(200px, 2fr) minmax(140px, 1fr) repeat(4, minmax(120px, 1fr)); align-items:end;">
         <div>
           <label class="label" for="q">Search</label>
           <input id="q" name="q" type="text" value="{
         html.escape(q)
     }" placeholder="company, title, description, or URL keyword" style="width:100%; box-sizing:border-box; border:1px solid var(--line); border-radius:12px; padding:10px 12px; background:#faf5ec;">
+        </div>
+        <div>
+          <label class="label" for="tag">Operator tag</label>
+          <input id="tag" name="tag" type="text" value="{
+        html.escape(tag)
+    }" placeholder="exact tag filter" style="width:100%; box-sizing:border-box; border:1px solid var(--line); border-radius:12px; padding:10px 12px; background:#faf5ec;">
         </div>
         <div>
           <label class="label" for="source">Source</label>
@@ -1024,6 +1452,7 @@ def render_search_bar(*, source, status, limit, q, sort, direction):
         "".join(
             f'<option value="{value}"{" selected" if status == value else ""}>{label}</option>'
             for value, label in (
+                ("all", "All statuses"),
                 ("ready", "Ready"),
                 ("pending", "Pending enrich"),
                 ("processing", "Processing"),
@@ -1032,7 +1461,6 @@ def render_search_bar(*, source, status, limit, q, sort, direction):
                 ("failed", "Failed"),
                 ("blocked", "Blocked"),
                 ("blocked_verified", "Blocked verified"),
-                ("all", "All statuses"),
             )
         )
     }
@@ -1070,14 +1498,24 @@ def render_search_bar(*, source, status, limit, q, sort, direction):
       <input type="hidden" name="limit" value="{limit}">
       <div class="actions">
         <button type="submit">Apply filters</button>
-        <a class="pill" href="/jobs?source=all&status=ready&limit=50">Reset</a>
+        <a class="pill" href="/jobs?source=all&status=all&limit=50">Reset</a>
       </div>
     </form>
     """
 
 
 def _sortable_link(
-    label, column, *, source, status, limit, page, q, current_sort, current_direction
+    label,
+    column,
+    *,
+    source,
+    status,
+    limit,
+    page,
+    q,
+    current_sort,
+    current_direction,
+    tag="",
 ):
     next_direction = "asc"
     if current_sort == column and current_direction == "asc":
@@ -1085,11 +1523,65 @@ def _sortable_link(
     arrow = ""
     if current_sort == column:
         arrow = " &uarr;" if current_direction == "asc" else " &darr;"
-    href = f"/jobs?source={quote(source)}&status={quote(status)}&limit={limit}&page={page}&q={quote(q)}&sort={quote(column)}&direction={quote(next_direction)}"
+    qs = build_jobs_query(
+        source=source,
+        status=status,
+        limit=limit,
+        page=page,
+        q=q,
+        sort=column,
+        direction=next_direction,
+        tag=tag,
+    )
+    href = f"/jobs?{qs}"
     return f'<a href="{href}">{html.escape(label)}{arrow}</a>'
 
 
-def render_jobs_table(rows, *, source, status, limit, page, q, sort, direction, return_to=""):
+def render_jobs_bulk_panel(*, source, status, limit, page, q, sort, direction, tag=""):
+    exp_csv = html.escape(
+        build_jobs_query(
+            source=source,
+            status=status,
+            limit=5000,
+            page=1,
+            q=q,
+            sort=sort,
+            direction=direction,
+            tag=tag,
+        )
+    )
+    return f"""
+    <div class="panel" id="jobs-bulk-panel" style="margin-bottom: 18px;"
+         data-source="{html.escape(source)}"
+         data-status="{html.escape(status)}"
+         data-q="{html.escape(q)}"
+         data-tag="{html.escape(tag)}"
+         data-sort="{html.escape(sort)}"
+         data-direction="{html.escape(direction)}">
+      <h2>Bulk requeue (matches current filters)</h2>
+      <p class="muted">Counts and updates only rows whose enrichment status is checked below. Respects the same source, tab, search, and tag filters as the table. Hard-capped server-side.</p>
+      <div style="display:flex; flex-wrap:wrap; gap:12px; align-items:center; margin: 12px 0;">
+        <label><input type="checkbox" class="jobs-bulk-status" value="failed" checked /> failed</label>
+        <label><input type="checkbox" class="jobs-bulk-status" value="processing" /> processing</label>
+        <label><input type="checkbox" class="jobs-bulk-status" value="pending" /> pending</label>
+        <label><input type="checkbox" class="jobs-bulk-status" value="blocked" /> blocked</label>
+        <label><input type="checkbox" class="jobs-bulk-status" value="blocked_verified" /> blocked_verified</label>
+      </div>
+      <div class="actions" style="flex-wrap:wrap;">
+        <button type="button" class="pill secondary" id="jobs-bulk-dry-run">Dry-run count</button>
+        <button type="button" class="pill active" id="jobs-bulk-run">Requeue matched rows</button>
+        <span class="muted" id="jobs-bulk-result"></span>
+      </div>
+      <p class="muted" style="margin-top:10px;">
+        <a class="pill" data-no-app-nav="true" href="/api/jobs/export?format=csv&amp;{exp_csv}">Export CSV (up to 5000)</a>
+        <a class="pill" data-no-app-nav="true" href="/api/jobs/export?format=json&amp;{exp_csv}">Export JSON</a>
+        <span class="pill">Shortcuts on this page: j / k move row, Enter opens detail</span>
+      </p>
+    </div>
+    """
+
+
+def render_jobs_table(rows, *, source, status, limit, page, q, sort, direction, return_to="", tag=""):
     if not rows:
         return '<div class="panel"><p>No jobs match this filter.</p></div>'
 
@@ -1107,10 +1599,14 @@ def render_jobs_table(rows, *, source, status, limit, page, q, sort, direction, 
             if row.get("apply_url")
             else ""
         )
+        pri = row.get("priority")
+        pri_badge = '<span class="pill" style="margin-left:6px;font-size:0.75rem;">next</span>' if pri else ""
+        notes_cell = format_text(truncate_text(row.get("operator_notes") or "", max_chars=40))
+        tag_cell = format_text(row.get("operator_tag") or "")
         body.append(
             f"""
-            <tr>
-              <td><a href="{job_link}" data-app-nav="true">#{row["id"]}</a></td>
+            <tr data-job-id="{row["id"]}">
+              <td><a href="{job_link}" data-app-nav="true">#{row["id"]}</a>{pri_badge}</td>
               <td>{format_text(row["source"])}</td>
               <td>{format_text(row["company"])}</td>
               <td>{format_text(row["title"])}</td>
@@ -1120,25 +1616,29 @@ def render_jobs_table(rows, *, source, status, limit, page, q, sort, direction, 
               <td>{format_text(row["enrichment_attempts"])}</td>
               <td class="mono">{format_text(row["next_enrichment_retry_at"])}</td>
               <td>{format_text(truncate_text(row["last_enrichment_error"]))}</td>
+              <td class="muted">{notes_cell}</td>
+              <td class="muted">{tag_cell}</td>
             </tr>
             """
         )
 
     return f"""
-    <div class="table-wrap">
+    <div class="table-wrap jobs-table-wrap">
       <table>
         <thead>
           <tr>
-            <th>{_sortable_link("ID", "id", source=source, status=status, limit=limit, page=page, q=q, current_sort=sort, current_direction=direction)}</th>
-            <th>{_sortable_link("Source", "source", source=source, status=status, limit=limit, page=page, q=q, current_sort=sort, current_direction=direction)}</th>
-            <th>{_sortable_link("Company", "company", source=source, status=status, limit=limit, page=page, q=q, current_sort=sort, current_direction=direction)}</th>
-            <th>{_sortable_link("Title", "title", source=source, status=status, limit=limit, page=page, q=q, current_sort=sort, current_direction=direction)}</th>
+            <th>{_sortable_link("ID", "id", source=source, status=status, limit=limit, page=page, q=q, current_sort=sort, current_direction=direction, tag=tag)}</th>
+            <th>{_sortable_link("Source", "source", source=source, status=status, limit=limit, page=page, q=q, current_sort=sort, current_direction=direction, tag=tag)}</th>
+            <th>{_sortable_link("Company", "company", source=source, status=status, limit=limit, page=page, q=q, current_sort=sort, current_direction=direction, tag=tag)}</th>
+            <th>{_sortable_link("Title", "title", source=source, status=status, limit=limit, page=page, q=q, current_sort=sort, current_direction=direction, tag=tag)}</th>
             <th>Links</th>
-            <th>{_sortable_link("Enrichment", "enrichment_status", source=source, status=status, limit=limit, page=page, q=q, current_sort=sort, current_direction=direction)}</th>
-            <th>{_sortable_link("Apply Type", "apply_type", source=source, status=status, limit=limit, page=page, q=q, current_sort=sort, current_direction=direction)}</th>
-            <th>{_sortable_link("Attempts", "enrichment_attempts", source=source, status=status, limit=limit, page=page, q=q, current_sort=sort, current_direction=direction)}</th>
-            <th>{_sortable_link("Next Retry", "next_enrichment_retry_at", source=source, status=status, limit=limit, page=page, q=q, current_sort=sort, current_direction=direction)}</th>
-            <th>{_sortable_link("Last Error", "last_enrichment_error", source=source, status=status, limit=limit, page=page, q=q, current_sort=sort, current_direction=direction)}</th>
+            <th>{_sortable_link("Enrichment", "enrichment_status", source=source, status=status, limit=limit, page=page, q=q, current_sort=sort, current_direction=direction, tag=tag)}</th>
+            <th>{_sortable_link("Apply Type", "apply_type", source=source, status=status, limit=limit, page=page, q=q, current_sort=sort, current_direction=direction, tag=tag)}</th>
+            <th>{_sortable_link("Attempts", "enrichment_attempts", source=source, status=status, limit=limit, page=page, q=q, current_sort=sort, current_direction=direction, tag=tag)}</th>
+            <th>{_sortable_link("Next Retry", "next_enrichment_retry_at", source=source, status=status, limit=limit, page=page, q=q, current_sort=sort, current_direction=direction, tag=tag)}</th>
+            <th>{_sortable_link("Last Error", "last_enrichment_error", source=source, status=status, limit=limit, page=page, q=q, current_sort=sort, current_direction=direction, tag=tag)}</th>
+            <th>Note</th>
+            <th>Tag</th>
           </tr>
         </thead>
         <tbody>
@@ -1149,7 +1649,7 @@ def render_jobs_table(rows, *, source, status, limit, page, q, sort, direction, 
     """
 
 
-def render_pagination(*, total_rows, source, status, limit, page, q, sort, direction):
+def render_pagination(*, total_rows, source, status, limit, page, q, sort, direction, tag=""):
     if total_rows <= limit:
         return ""
 
@@ -1159,23 +1659,47 @@ def render_pagination(*, total_rows, source, status, limit, page, q, sort, direc
     links = []
     if current_page > 1:
         prev_page = current_page - 1
-        links.append(
-            f'<a class="pill" href="/jobs?source={quote(source)}&status={quote(status)}&limit={limit}&page={prev_page}&q={quote(q)}&sort={quote(sort)}&direction={quote(direction)}">Previous</a>'
+        qs = build_jobs_query(
+            source=source,
+            status=status,
+            limit=limit,
+            page=prev_page,
+            q=q,
+            sort=sort,
+            direction=direction,
+            tag=tag,
         )
+        links.append(f'<a class="pill" href="/jobs?{qs}">Previous</a>')
 
     start_page = max(1, current_page - 2)
     end_page = min(total_pages, current_page + 2)
     for page_number in range(start_page, end_page + 1):
         class_name = "pill active" if page_number == current_page else "pill"
-        links.append(
-            f'<a class="{class_name}" href="/jobs?source={quote(source)}&status={quote(status)}&limit={limit}&page={page_number}&q={quote(q)}&sort={quote(sort)}&direction={quote(direction)}">{page_number}</a>'
+        qs = build_jobs_query(
+            source=source,
+            status=status,
+            limit=limit,
+            page=page_number,
+            q=q,
+            sort=sort,
+            direction=direction,
+            tag=tag,
         )
+        links.append(f'<a class="{class_name}" href="/jobs?{qs}">{page_number}</a>')
 
     if current_page < total_pages:
         next_page = current_page + 1
-        links.append(
-            f'<a class="pill" href="/jobs?source={quote(source)}&status={quote(status)}&limit={limit}&page={next_page}&q={quote(q)}&sort={quote(sort)}&direction={quote(direction)}">Next</a>'
+        qs = build_jobs_query(
+            source=source,
+            status=status,
+            limit=limit,
+            page=next_page,
+            q=q,
+            sort=sort,
+            direction=direction,
+            tag=tag,
         )
+        links.append(f'<a class="pill" href="/jobs?{qs}">Next</a>')
 
     return f"""
     <div class="toolbar" style="margin-top: 18px;">
@@ -1200,6 +1724,128 @@ def render_failure_breakdown(summary):
       </table>
     </div>
     """
+
+
+def _failure_count(summary, code):
+    return int(summary.get("failure_counts", {}).get(code) or 0)
+
+
+def render_ops_console(*, summary, last_updated: Optional[int] = None):
+    auth_n = _failure_count(summary, "auth_expired")
+    rate_n = _failure_count(summary, "rate_limited")
+    banner = ""
+    if last_updated is not None:
+        banner = f"""
+        <div class="panel" style="border-color: var(--good); background: var(--good-soft);">
+          <p><strong>Done.</strong> Requeued <strong>{last_updated}</strong> failed row(s) back to <code>pending</code>.</p>
+          <p class="muted">The next scheduled scrape or a manual enrichment run will pick them up.</p>
+        </div>
+        """
+    return f"""
+    {banner}
+    <div class="panel">
+      <h2>Transient failures : one-click requeue</h2>
+      <p class="muted">Moves <strong>failed</strong> rows whose last error starts with <code>auth_expired:</code> or <code>rate_limited:</code> back to <strong>pending</strong> (clears retry timers and artifacts on those rows). Use after auth is fixed or a rate-limit window has passed.</p>
+      <p>Current failed counts from summary : <strong>auth_expired</strong> {auth_n}, <strong>rate_limited</strong> {rate_n}.</p>
+      <div class="actions" style="flex-wrap: wrap; gap: 10px;">
+        <button type="button" class="pill active ops-requeue-btn" data-source="linkedin" data-codes="auth_expired,rate_limited">LinkedIn : both codes</button>
+        <button type="button" class="pill ops-requeue-btn" data-source="linkedin" data-codes="auth_expired">LinkedIn : auth_expired only</button>
+        <button type="button" class="pill ops-requeue-btn" data-source="linkedin" data-codes="rate_limited">LinkedIn : rate_limited only</button>
+        <button type="button" class="pill ops-requeue-btn" data-source="indeed" data-codes="rate_limited">Indeed : rate_limited</button>
+        <button type="button" class="pill ops-requeue-btn" data-source="all" data-codes="auth_expired,rate_limited">All sources : both codes</button>
+      </div>
+    </div>
+    <div class="panel">
+      <h2>Custom requeue (form, no JavaScript)</h2>
+      <form method="post" action="/ops/requeue-errors" class="stack" style="gap: 12px;">
+        <label>Source
+          <select name="source">
+            <option value="linkedin" selected>linkedin</option>
+            <option value="indeed">indeed</option>
+            <option value="all">all</option>
+          </select>
+        </label>
+        <div>
+          <div class="label">Error codes</div>
+          <label><input type="checkbox" name="error_code" value="auth_expired" checked /> auth_expired</label>
+          <label style="margin-left: 16px;"><input type="checkbox" name="error_code" value="rate_limited" checked /> rate_limited</label>
+        </div>
+        <button type="submit" class="pill active">Requeue matching rows</button>
+      </form>
+    </div>
+    <div class="panel">
+      <h2>Test and debug endpoints</h2>
+      <p class="muted">Open in a new tab for raw machine output, or use the button to preview JSON in-page.</p>
+      <div class="actions" style="flex-wrap: wrap; gap: 10px;">
+        <a class="pill" href="/health" target="_blank" rel="noreferrer" data-no-app-nav="true">GET /health</a>
+        <a class="pill" href="/api/summary" target="_blank" rel="noreferrer" data-no-app-nav="true">GET /api/summary</a>
+        <a class="pill" href="/metrics" target="_blank" rel="noreferrer" data-no-app-nav="true">GET /metrics</a>
+        <button type="button" class="pill" id="ops-fetch-summary">Fetch /api/summary (here)</button>
+      </div>
+      <pre id="ops-summary-preview" style="display:none; max-height: 320px; overflow: auto; margin-top: 12px; font-size: 0.85rem;"></pre>
+    </div>
+    <div class="panel">
+      <h2>API : scripts and automation</h2>
+      <p class="muted">POST JSON to <code>/api/ops/requeue-errors</code> with body <code>{{"source":"linkedin","error_codes":["auth_expired","rate_limited"]}}</code>.</p>
+      <p class="muted">Bulk filters : <code>POST /api/ops/bulk-requeue</code> with <code>source</code>, <code>status</code> (review tab), <code>q</code>, <code>tag</code>, <code>target_statuses</code>, <code>dry_run</code>. Stale processing : <code>POST /api/ops/requeue-stale-processing</code>.</p>
+      <p class="muted">When <code>REVIEW_OPS_TOKEN</code> is set, send header <code>X-Review-Ops-Token</code> or <code>Authorization: Bearer …</code> on those POSTs (forms pick it up automatically in this UI).</p>
+      <p class="muted">CLI equivalent : <code>python3 scripts/hunterctl.py requeue-retryable</code> or <code>requeue-errors --error-code …</code> from the Hunt repo with <code>HUNT_DB_PATH</code> set.</p>
+    </div>
+    <div class="panel">
+      <h2>Stale processing reset</h2>
+      <p class="muted">Same maintenance rule as DB init : old <code>processing</code> claims go back to <code>pending</code>.</p>
+      <div class="actions" style="flex-wrap:wrap;">
+        <button type="button" class="pill active" id="ops-stale-reset">Requeue stale processing</button>
+        <span class="muted" id="ops-stale-result"></span>
+      </div>
+    </div>
+    """
+
+
+def _parse_ops_requeue_payload(payload: dict):
+    source = payload.get("source") or "linkedin"
+    if source not in SOURCE_OPTIONS:
+        raise HTTPException(status_code=400, detail=f"Unsupported source: {source}")
+    raw_codes = payload.get("error_codes")
+    if not isinstance(raw_codes, list) or not raw_codes:
+        raise HTTPException(status_code=400, detail="error_codes must be a non-empty list.")
+    codes = [c for c in raw_codes if isinstance(c, str) and c in OPS_ALLOWED_ERROR_CODES]
+    if not codes:
+        raise HTTPException(
+            status_code=400,
+            detail=f"error_codes must include at least one of: {', '.join(sorted(OPS_ALLOWED_ERROR_CODES))}",
+        )
+    return source, codes
+
+
+def _parse_bulk_requeue_payload(payload: dict):
+    raw_source = payload.get("source")
+    if raw_source in (None, "", "all"):
+        source = None
+    elif raw_source in ("linkedin", "indeed"):
+        source = raw_source
+    else:
+        raise HTTPException(status_code=400, detail=f"Unsupported source: {raw_source}")
+    status = payload.get("status") or "all"
+    if status not in STATUS_OPTIONS:
+        raise HTTPException(status_code=400, detail=f"Unsupported status filter: {status}")
+    q = payload.get("q")
+    if q is not None and not isinstance(q, str):
+        raise HTTPException(status_code=400, detail="q must be a string when provided.")
+    tag = payload.get("tag")
+    if tag is not None and not isinstance(tag, str):
+        raise HTTPException(status_code=400, detail="tag must be a string when provided.")
+    dry_run = bool(payload.get("dry_run"))
+    raw_targets = payload.get("target_statuses")
+    if not isinstance(raw_targets, list) or not raw_targets:
+        raise HTTPException(status_code=400, detail="target_statuses must be a non-empty list.")
+    targets = [t for t in raw_targets if isinstance(t, str) and t in BULK_REQUEUE_STATUS_CHOICES]
+    if not targets:
+        raise HTTPException(
+            status_code=400,
+            detail=f"target_statuses must contain at least one of: {', '.join(sorted(BULK_REQUEUE_STATUS_CHOICES))}",
+        )
+    return source, status, (q or ""), ((tag or "").strip() or None), tuple(targets), dry_run
 
 
 def render_summary_table(summary):
@@ -1305,50 +1951,235 @@ def metrics():
     )
 
 
+def render_activity_stats_panel():
+    stats = get_review_activity_summary(hours=24)
+    return f"""
+    <div class="panel">
+      <h2>Activity (last {stats["hours"]}h, approximate)</h2>
+      <p class="muted">Done counts use <code>enriched_at</code>. Failed-in-window uses <code>date_scraped</code> as a proxy when precise failure time is not stored.</p>
+      <div class="table-wrap">
+        <table>
+          <tbody>
+            <tr><td>Done or verified</td><td>{stats["done_or_verified"]}</td></tr>
+            <tr><td>Failed rows (scraped in window)</td><td>{stats["failed_scraped_window"]}</td></tr>
+            <tr><td>Rows scraped in window</td><td>{stats["rows_scraped_window"]}</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+    """
+
+
+def render_runtime_state_timeline_panel():
+    rows = list_runtime_state_recent(limit=60)
+    if not rows:
+        return '<div class="panel"><h2>Runtime state (recent)</h2><p>No rows.</p></div>'
+    body = []
+    for row in rows:
+        val = row.get("value") or ""
+        if len(val) > 200:
+            val = val[:197] + "..."
+        body.append(
+            f"<tr><td class=\"mono\">{format_text(row.get('key'))}</td>"
+            f"<td class=\"mono\">{format_text(row.get('updated_at'))}</td>"
+            f"<td><pre>{format_text(val)}</pre></td></tr>"
+        )
+    return f"""
+    <div class="panel">
+      <h2>Runtime state (recent)</h2>
+      <p class="muted">Latest keys from the <code>runtime_state</code> table (includes LinkedIn auth markers, rate-limit flags, and review audit tail).</p>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Key</th><th>Updated</th><th>Value (trimmed)</th></tr></thead>
+          <tbody>{"".join(body)}</tbody>
+        </table>
+      </div>
+    </div>
+    """
+
+
+def render_review_audit_panel():
+    entries = get_review_audit_entries(limit=25)
+    if not entries:
+        return '<div class="panel"><h2>Review audit (recent)</h2><p>No audit entries yet. Destructive API actions append here when enabled.</p></div>'
+    lines = []
+    for entry in entries:
+        detail = entry.get("detail")
+        detail_s = json.dumps(detail, ensure_ascii=False) if detail is not None else ""
+        lines.append(
+            f"<tr><td class=\"mono\">{format_text(entry.get('at'))}</td>"
+            f"<td>{format_text(entry.get('action'))}</td>"
+            f"<td><pre>{format_text(detail_s)}</pre></td></tr>"
+        )
+    return f"""
+    <div class="panel">
+      <h2>Review audit (recent)</h2>
+      <p class="muted">Last writes from the review app (bulk requeue, stale reset, etc.).</p>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>At</th><th>Action</th><th>Detail</th></tr></thead>
+          <tbody>{"".join(lines)}</tbody>
+        </table>
+      </div>
+    </div>
+    """
+
+
+def render_systemd_help_panel():
+    return """
+    <div class="panel">
+      <h2>systemd and journalctl (host)</h2>
+      <p class="muted">Replace unit names with whatever you use on the server. These are typical patterns for inspecting Hunt-related services.</p>
+      <pre style="white-space: pre-wrap;"># Follow logs for a service
+sudo journalctl -u hunt-review.service -f
+
+# Last 200 lines since boot
+sudo journalctl -u hunt-c1-enrichment.service -n 200 --no-pager
+
+# Errors since yesterday
+sudo journalctl -u hunt-review.service --since yesterday -p err --no-pager
+
+# Timer-triggered jobs (if using .timer units)
+systemctl list-timers | grep -i hunt
+</pre>
+    </div>
+    """
+
+
 @app.get("/health-view", response_class=HTMLResponse)
 def health_view():
     summary = get_review_queue_summary()
     body = f"""
     <section class="hero">
-      <h1>Health</h1>
-      <p>Human-readable operational health for the live jobs review lane. Use the raw endpoints only for scripts, checks, or debugging.</p>
+      <h1>Queue &amp; health</h1>
+      <p>LinkedIn auth, runtime events, full counts by status and source, and enrichment failure codes. The <a href="/" data-app-nav="true">Overview</a> page only shows shortcuts and sample rows : use this page when you need the complete picture.</p>
     </section>
-    <section class="cards">{render_summary_cards(summary)}</section>
     <section class="stack">
       {render_auth_status(summary)}
       {render_summary_table(summary)}
+      {render_activity_stats_panel()}
       <div class="panel">
         <h2>Failure breakdown</h2>
         {render_failure_breakdown(summary)}
       </div>
+      {render_runtime_state_timeline_panel()}
+      {render_review_audit_panel()}
+      {render_systemd_help_panel()}
+      {render_monitoring_endpoints_panel()}
     </section>
     """
-    return HTMLResponse(render_layout("Hunt health", body, current_path="/health-view"))
+    return HTMLResponse(render_layout("Queue & health", body, current_path="/health-view"))
 
 
-@app.get("/summary", response_class=HTMLResponse)
-def summary_view():
+@app.get("/summary")
+def summary_redirect():
+    """Legacy path : merged into Queue & health."""
+    return RedirectResponse(url="/health-view", status_code=307)
+
+
+@app.get("/ops", response_class=HTMLResponse)
+def ops_console(updated: Optional[int] = Query(default=None, ge=0)):
     summary = get_review_queue_summary()
     body = f"""
     <section class="hero">
-      <h1>Summary</h1>
-      <p>High-level queue counts and enrichment-state totals for the current jobs table across sources.</p>
+      <h1>Operator console</h1>
+      <p>Bulk requeue for common transient enrichment failures, quick links to raw JSON and metrics, and the same POST API the CLI uses. Intended as the primary C1 control surface alongside job browse.</p>
     </section>
-    <section class="cards">{render_summary_cards(summary)}</section>
-    {render_auth_status(summary)}
-    {render_summary_table(summary)}
+    <section class="stack">
+      {render_ops_console(summary=summary, last_updated=updated)}
+    </section>
     """
-    return HTMLResponse(render_layout("Hunt summary", body, current_path="/summary"))
+    return HTMLResponse(render_layout("Hunt ops", body, current_path="/ops"))
+
+
+@app.post("/api/ops/requeue-errors", dependencies=[Depends(review_ops_dependency)])
+def api_ops_requeue_errors(payload: dict = Body(...)):
+    source, codes = _parse_ops_requeue_payload(payload)
+    updated = requeue_enrichment_rows_by_error_codes(source=source, error_codes=codes)
+    try:
+        append_review_audit_entry(
+            "ops_requeue_errors",
+            {"updated": updated, "source": source, "error_codes": list(codes)},
+        )
+    except Exception:
+        pass
+    return JSONResponse(
+        {"status": "ok", "updated": updated, "source": source, "error_codes": codes}
+    )
+
+
+@app.post("/api/ops/bulk-requeue", dependencies=[Depends(review_ops_dependency)])
+def api_ops_bulk_requeue(payload: dict = Body(...)):
+    source, status, q, tag, targets, dry_run = _parse_bulk_requeue_payload(payload)
+    count = bulk_requeue_jobs_matching_review_filters(
+        status=status,
+        source=source,
+        query=q,
+        operator_tag=tag,
+        target_statuses=targets,
+        dry_run=dry_run,
+    )
+    if dry_run:
+        return JSONResponse({"status": "ok", "dry_run": True, "count": count})
+    try:
+        append_review_audit_entry(
+            "bulk_requeue",
+            {
+                "updated": count,
+                "source": source,
+                "status": status,
+                "target_statuses": list(targets),
+            },
+        )
+    except Exception:
+        pass
+    return JSONResponse({"status": "ok", "dry_run": False, "updated": count})
+
+
+@app.post("/api/ops/requeue-stale-processing", dependencies=[Depends(review_ops_dependency)])
+def api_ops_requeue_stale_processing():
+    updated = manual_requeue_stale_processing_rows()
+    try:
+        append_review_audit_entry("requeue_stale_processing", {"updated": updated})
+    except Exception:
+        pass
+    return JSONResponse({"status": "ok", "updated": updated})
+
+
+@app.post("/ops/requeue-errors")
+async def ops_requeue_errors_form(request: Request):
+    form = await request.form()
+    assert_review_ops_allowed(request, str(form.get("ops_token") or ""))
+    source = str(form.get("source") or "linkedin")
+    if source not in SOURCE_OPTIONS:
+        raise HTTPException(status_code=400, detail=f"Unsupported source: {source}")
+    raw_list = form.getlist("error_code")
+    codes = [str(c) for c in raw_list if str(c) in OPS_ALLOWED_ERROR_CODES]
+    if not codes:
+        raise HTTPException(
+            status_code=400,
+            detail="Select at least one of auth_expired or rate_limited.",
+        )
+    updated = requeue_enrichment_rows_by_error_codes(source=source, error_codes=codes)
+    try:
+        append_review_audit_entry(
+            "ops_requeue_errors_form",
+            {"updated": updated, "source": source, "error_codes": codes},
+        )
+    except Exception:
+        pass
+    return RedirectResponse(url=f"/ops?updated={updated}", status_code=303)
 
 
 @app.get("/api/jobs")
 def api_jobs(
     source: str = "all",
-    status: str = "ready",
+    status: str = "all",
     limit: int = 50,
     page: int = 1,
     include_description: bool = False,
     q: str = "",
+    tag: str = "",
     sort: str = "date_scraped",
     direction: str = "desc",
 ):
@@ -1358,6 +2189,7 @@ def api_jobs(
         raise HTTPException(status_code=400, detail=f"Unsupported status filter: {status}")
     safe_limit = max(1, min(limit, 250))
     safe_page = max(1, page)
+    tag_clean = (tag or "").strip() or None
     rows = list_jobs_for_review(
         status=status,
         limit=safe_limit,
@@ -1367,8 +2199,58 @@ def api_jobs(
         sort=sort,
         direction=direction,
         source=None if source == "all" else source,
+        operator_tag=tag_clean,
     )
     return JSONResponse(rows)
+
+
+@app.get("/api/jobs/export")
+def api_jobs_export(
+    export_format: str = Query("csv", alias="format"),
+    source: str = "all",
+    status: str = "all",
+    limit: int = 5000,
+    page: int = 1,
+    q: str = "",
+    tag: str = "",
+    sort: str = "date_scraped",
+    direction: str = "desc",
+):
+    if export_format not in ("csv", "json"):
+        raise HTTPException(status_code=400, detail="format must be csv or json.")
+    if source not in SOURCE_OPTIONS:
+        raise HTTPException(status_code=400, detail=f"Unsupported source filter: {source}")
+    if status not in STATUS_OPTIONS:
+        raise HTTPException(status_code=400, detail=f"Unsupported status filter: {status}")
+    safe_limit = max(1, min(limit, 5000))
+    safe_page = max(1, page)
+    tag_clean = (tag or "").strip() or None
+    rows = list_jobs_for_review(
+        status=status,
+        limit=safe_limit,
+        offset=(safe_page - 1) * safe_limit,
+        include_description=True,
+        query=q,
+        sort=sort,
+        direction=direction,
+        source=None if source == "all" else source,
+        operator_tag=tag_clean,
+    )
+    if export_format == "json":
+        return JSONResponse(rows)
+    if not rows:
+        return PlainTextResponse("", media_type="text/csv; charset=utf-8")
+    columns = list(rows[0].keys())
+    buf = io.StringIO()
+    writer = csv.DictWriter(buf, fieldnames=columns, extrasaction="ignore")
+    writer.writeheader()
+    writer.writerows(rows)
+    data = buf.getvalue()
+    return PlainTextResponse(
+        data,
+        media_type="text/csv; charset=utf-8",
+        headers={"Content-Disposition": 'attachment; filename="hunt-jobs-export.csv"'},
+    )
 
 
 @app.get("/api/jobs/{job_id}")
@@ -1426,7 +2308,7 @@ def api_job_resume_artifact(job_id: int, artifact_kind: str):
     return FileResponse(artifact_path, media_type=media_type)
 
 
-@app.post("/api/jobs/{job_id}/requeue")
+@app.post("/api/jobs/{job_id}/requeue", dependencies=[Depends(review_ops_dependency)])
 def api_requeue_job(job_id: int):
     row = get_job_by_id(job_id)
     if not row or row.get("source") not in {"linkedin", "indeed"}:
@@ -1436,6 +2318,54 @@ def api_requeue_job(job_id: int):
     updated = requeue_review_job(job_id, source=row.get("source"))
     if updated != 1:
         raise HTTPException(status_code=404, detail="Job not found.")
+    try:
+        append_review_audit_entry("requeue_job", {"job_id": job_id})
+    except Exception:
+        pass
+    return JSONResponse({"status": "ok", "job_id": job_id})
+
+
+@app.post("/api/jobs/{job_id}/priority", dependencies=[Depends(review_ops_dependency)])
+def api_job_priority(job_id: int, payload: dict = Body(...)):
+    row = get_job_by_id(job_id)
+    if not row:
+        raise HTTPException(status_code=404, detail="Job not found.")
+    run_next = bool(payload.get("run_next"))
+    updated = set_job_priority(job_id, run_next=run_next)
+    if updated != 1:
+        raise HTTPException(status_code=404, detail="Job not found.")
+    try:
+        append_review_audit_entry("set_priority", {"job_id": job_id, "run_next": run_next})
+    except Exception:
+        pass
+    return JSONResponse({"status": "ok", "job_id": job_id, "run_next": run_next})
+
+
+@app.post("/api/jobs/{job_id}/operator-meta", dependencies=[Depends(review_ops_dependency)])
+def api_job_operator_meta(job_id: int, payload: dict = Body(...)):
+    row = get_job_by_id(job_id)
+    if not row:
+        raise HTTPException(status_code=404, detail="Job not found.")
+    notes = payload.get("operator_notes")
+    tag = payload.get("operator_tag")
+    if notes is not None and not isinstance(notes, str):
+        raise HTTPException(status_code=400, detail="operator_notes must be a string or null.")
+    if tag is not None and not isinstance(tag, str):
+        raise HTTPException(status_code=400, detail="operator_tag must be a string or null.")
+    kw = {}
+    if "operator_notes" in payload:
+        kw["notes"] = notes
+    if "operator_tag" in payload:
+        kw["operator_tag"] = tag
+    if not kw:
+        raise HTTPException(status_code=400, detail="Send operator_notes and/or operator_tag.")
+    updated = update_job_operator_meta(job_id, **kw)
+    if updated != 1:
+        raise HTTPException(status_code=404, detail="Job not found.")
+    try:
+        append_review_audit_entry("operator_meta", {"job_id": job_id, **kw})
+    except Exception:
+        pass
     return JSONResponse({"status": "ok", "job_id": job_id})
 
 
@@ -1449,32 +2379,28 @@ def dashboard(request: Request):
 
     body = f"""
     <section class="hero">
-      <h1>Hunt review lane</h1>
-      <p>C1 (Hunter) control plane for the live jobs table on server2. LinkedIn and Indeed now share the same enrichment queue model, while other sources can still be surfaced here for later adapters.</p>
+      <h1>Overview</h1>
+      <p>Quick entry to filtered job lists and a small sample of rows that often need attention. For full counts, auth detail, and failure tables open <a href="/health-view" data-app-nav="true">Queue &amp; health</a> : for bulk requeue and API tests use <a href="/ops" data-app-nav="true">Ops</a>.</p>
     </section>
-    <section class="cards">{render_summary_cards(summary)}</section>
     <section class="stack">
-      {render_auth_status(summary)}
-      <div class="panel">
-        <h2>Failure breakdown</h2>
-        {render_failure_breakdown(summary)}
-      </div>
+      {render_queue_jump_strip(summary)}
       {render_link_list("Ready now", ready_rows, return_to=return_to)}
       {render_link_list("Blocked", blocked_rows, return_to=return_to)}
       {render_link_list("Failed", failed_rows, return_to=return_to)}
     </section>
     """
-    return HTMLResponse(render_layout("Hunt review", body, current_path="/"))
+    return HTMLResponse(render_layout("Overview", body, current_path="/"))
 
 
 @app.get("/jobs", response_class=HTMLResponse)
 def jobs_page(
     request: Request,
     source: str = "all",
-    status: str = "ready",
+    status: str = "all",
     limit: int = 50,
     page: int = 1,
     q: str = "",
+    tag: str = "",
     sort: str = "date_scraped",
     direction: str = "desc",
 ):
@@ -1485,7 +2411,11 @@ def jobs_page(
     safe_limit = max(1, min(limit, 250))
     safe_page = max(1, page)
     source_filter = None if source == "all" else source
-    total_rows = count_jobs_for_review(status=status, query=q, source=source_filter)
+    tag_opt = (tag or "").strip() or None
+    tag_display = (tag or "").strip()
+    total_rows = count_jobs_for_review(
+        status=status, query=q, source=source_filter, operator_tag=tag_opt
+    )
     rows = list_jobs_for_review(
         status=status,
         limit=safe_limit,
@@ -1494,6 +2424,7 @@ def jobs_page(
         sort=sort,
         direction=direction,
         source=source_filter,
+        operator_tag=tag_opt,
     )
     summary = get_review_queue_summary(source=source_filter)
     return_to = request_path_with_query(request)
@@ -1505,11 +2436,12 @@ def jobs_page(
     </section>
     <section class="cards">{render_summary_cards(summary)}</section>
     {render_auth_status(summary) if source in ("all", "linkedin") else ""}
-    {render_search_bar(source=source, status=status, limit=safe_limit, q=q, sort=sort, direction=direction)}
-    <div class="toolbar">{render_source_toolbar(source, status=status, limit=safe_limit, q=q, sort=sort, direction=direction)}</div>
-    <div class="toolbar">{render_status_toolbar(status, source=source, limit=safe_limit, q=q, sort=sort, direction=direction)}</div>
-    {render_jobs_table(rows, source=source, status=status, limit=safe_limit, page=safe_page, q=q, sort=sort, direction=direction, return_to=return_to)}
-    {render_pagination(total_rows=total_rows, source=source, status=status, limit=safe_limit, page=safe_page, q=q, sort=sort, direction=direction)}
+    {render_search_bar(source=source, status=status, limit=safe_limit, q=q, sort=sort, direction=direction, tag=tag_display)}
+    <div class="toolbar">{render_source_toolbar(source, status=status, limit=safe_limit, q=q, sort=sort, direction=direction, tag=tag_display)}</div>
+    <div class="toolbar">{render_status_toolbar(status, source=source, limit=safe_limit, q=q, sort=sort, direction=direction, tag=tag_display)}</div>
+    {render_jobs_bulk_panel(source=source, status=status, limit=safe_limit, page=safe_page, q=q, sort=sort, direction=direction, tag=tag_display)}
+    {render_jobs_table(rows, source=source, status=status, limit=safe_limit, page=safe_page, q=q, sort=sort, direction=direction, return_to=return_to, tag=tag_display)}
+    {render_pagination(total_rows=total_rows, source=source, status=status, limit=safe_limit, page=safe_page, q=q, sort=sort, direction=direction, tag=tag_display)}
     """
     return HTMLResponse(render_layout("Hunt jobs", body, current_path="/jobs"))
 
@@ -1560,6 +2492,27 @@ def job_detail(request: Request, job_id: int, return_to: str = ""):
         </div>
       </div>
       <div class="panel">
+        <h2>Operator</h2>
+        <p class="muted">Notes and tags live on the job row. Priority is the <code>jobs.priority</code> flag for workers that honor it.</p>
+        <div class="field" style="margin-bottom: 10px;">
+          <div class="label">Priority flag</div>
+          <div class="value">{format_text(row.get("priority"))}</div>
+        </div>
+        <form method="post" action="/jobs/{row["id"]}/operator-meta" class="stack" style="gap:12px;">
+          <input type="hidden" name="return_to" value="{html.escape(add_return_to(f"/jobs/{row['id']}", safe_return_to))}" />
+          <label class="label" for="operator_notes">Notes</label>
+          <textarea id="operator_notes" name="operator_notes" rows="4" style="width:100%; box-sizing:border-box; border:1px solid var(--line); border-radius:12px; padding:10px; background:#faf5ec;">{html.escape(row.get("operator_notes") or "")}</textarea>
+          <label class="label" for="operator_tag">Tag</label>
+          <input id="operator_tag" name="operator_tag" type="text" value="{html.escape(row.get("operator_tag") or "")}" style="width:100%; box-sizing:border-box; border:1px solid var(--line); border-radius:12px; padding:10px; background:#faf5ec;" />
+          <button type="submit" class="pill active">Save notes and tag</button>
+        </form>
+        <div class="actions" style="margin-top: 14px;">
+          <button type="button" class="pill active" data-job-priority-set="1" data-job-id="{row["id"]}">Run next</button>
+          <button type="button" class="pill secondary" data-job-priority-set="0" data-job-id="{row["id"]}">Clear priority</button>
+          <a class="pill" href="/jobs/compare?a={row["id"]}" data-app-nav="true">Compare with another job</a>
+        </div>
+      </div>
+      <div class="panel">
         <h2>Last enrichment error</h2>
         <pre>{format_text(row.get("last_enrichment_error"))}</pre>
       </div>
@@ -1598,8 +2551,90 @@ def job_detail(request: Request, job_id: int, return_to: str = ""):
     return HTMLResponse(render_layout(f"Hunt job {job_id}", body, current_path=f"/jobs/{job_id}"))
 
 
+@app.get("/jobs/compare", response_class=HTMLResponse)
+def jobs_compare(
+    a: Optional[int] = Query(None),
+    b: Optional[int] = Query(None),
+):
+    if a is None or b is None:
+        a_val = "" if a is None else str(int(a))
+        body = f"""
+    <section class="hero">
+      <h1>Compare jobs</h1>
+      <p>Enter two job IDs from the jobs table.</p>
+    </section>
+    <form class="panel" method="get" action="/jobs/compare" style="display:grid; gap:14px; max-width:420px;">
+      <label>Job A <input name="a" type="number" min="1" required value="{html.escape(a_val)}" style="width:100%; box-sizing:border-box; padding:10px; border-radius:12px; border:1px solid var(--line);" /></label>
+      <label>Job B <input name="b" type="number" min="1" required style="width:100%; box-sizing:border-box; padding:10px; border-radius:12px; border:1px solid var(--line);" /></label>
+      <button type="submit" class="pill active">Compare</button>
+    </form>
+    """
+        return HTMLResponse(render_layout("Compare jobs", body, current_path="/jobs/compare"))
+    left = get_job_by_id(a)
+    right = get_job_by_id(b)
+    if not left or not right:
+        raise HTTPException(status_code=404, detail="One or both jobs were not found.")
+    fields = (
+        ("id", "ID"),
+        ("title", "Title"),
+        ("company", "Company"),
+        ("source", "Source"),
+        ("enrichment_status", "Enrichment"),
+        ("apply_type", "Apply type"),
+        ("enrichment_attempts", "Attempts"),
+        ("enriched_at", "Enriched at"),
+        ("last_enrichment_error", "Last error"),
+        ("operator_notes", "Operator notes"),
+        ("operator_tag", "Operator tag"),
+        ("priority", "Priority"),
+        ("job_url", "Job URL"),
+        ("apply_url", "Apply URL"),
+    )
+    rows_html = []
+    for key, label in fields:
+        lv = left.get(key)
+        rv = right.get(key)
+        rows_html.append(
+            f"<tr><td>{html.escape(label)}</td><td><pre>{format_text(lv)}</pre></td>"
+            f"<td><pre>{format_text(rv)}</pre></td></tr>"
+        )
+    body = f"""
+    <section class="hero">
+      <h1>Compare #{a} and #{b}</h1>
+      <p><a href="/jobs/{a}" data-app-nav="true">Open A</a> · <a href="/jobs/{b}" data-app-nav="true">Open B</a> · <a href="/jobs/compare" data-app-nav="true">New compare</a></p>
+    </section>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Field</th><th>Job {a}</th><th>Job {b}</th></tr></thead>
+        <tbody>{"".join(rows_html)}</tbody>
+      </table>
+    </div>
+    """
+    return HTMLResponse(render_layout(f"Compare {a} vs {b}", body, current_path="/jobs/compare"))
+
+
+@app.post("/jobs/{job_id}/operator-meta")
+async def job_operator_meta_form(request: Request, job_id: int):
+    form = await request.form()
+    assert_review_ops_allowed(request, str(form.get("ops_token") or ""))
+    row = get_job_by_id(job_id)
+    if not row:
+        raise HTTPException(status_code=404, detail="Job not found.")
+    notes = str(form.get("operator_notes") or "")
+    tag = str(form.get("operator_tag") or "")
+    update_job_operator_meta(job_id, notes=notes, operator_tag=tag)
+    try:
+        append_review_audit_entry("operator_meta_form", {"job_id": job_id})
+    except Exception:
+        pass
+    dest = normalize_return_to(str(form.get("return_to") or "")) or f"/jobs/{job_id}"
+    return RedirectResponse(url=dest, status_code=303)
+
+
 @app.post("/jobs/{job_id}/requeue")
-def requeue_job(job_id: int, request: Request, return_to: str = ""):
+async def requeue_job_post(job_id: int, request: Request):
+    form = await request.form()
+    assert_review_ops_allowed(request, str(form.get("ops_token") or ""))
     row = get_job_by_id(job_id)
     if not row or row.get("source") not in {"linkedin", "indeed"}:
         raise HTTPException(
@@ -1608,7 +2643,12 @@ def requeue_job(job_id: int, request: Request, return_to: str = ""):
     updated = requeue_review_job(job_id, source=row.get("source"))
     if updated != 1:
         raise HTTPException(status_code=404, detail="Job not found.")
+    return_to = request.query_params.get("return_to") or ""
     safe_return_to = normalize_return_to(return_to)
+    try:
+        append_review_audit_entry("requeue_job_form", {"job_id": job_id})
+    except Exception:
+        pass
     if request.headers.get("X-Hunt-Async") == "1":
         return JSONResponse(
             {

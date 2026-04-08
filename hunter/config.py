@@ -104,6 +104,10 @@ ENRICHMENT_STALE_PROCESSING_MINUTES = _get_int_env("ENRICHMENT_STALE_PROCESSING_
 REVIEW_APP_HOST = _get_str_env("REVIEW_APP_HOST", "127.0.0.1")
 REVIEW_APP_PORT = _get_int_env("REVIEW_APP_PORT", 8000)
 REVIEW_APP_PUBLIC_URL = _get_str_env("REVIEW_APP_PUBLIC_URL", "https://agent-hunt-review.mshi.ca")
+# Optional : require this bearer token for mutating review-app POST APIs (empty = disabled).
+REVIEW_OPS_TOKEN = _get_str_env("REVIEW_OPS_TOKEN", "")
+# Max rows a single bulk requeue from the review UI may touch.
+REVIEW_BULK_REQUEUE_MAX = _get_int_env("REVIEW_BULK_REQUEUE_MAX", 500)
 
 WATCHLIST = [
     "1password",

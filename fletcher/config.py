@@ -27,8 +27,13 @@ SECTION_ORDER = (
     "Technical Skills",
 )
 
-DEFAULT_MODEL_BACKEND = os.getenv("HUNT_RESUME_MODEL_BACKEND", "heuristic")
+# heuristic: fast local rules only. ollama: refine classification + keywords via local Ollama (/api/chat).
+DEFAULT_MODEL_BACKEND = os.getenv("HUNT_RESUME_MODEL_BACKEND", "heuristic").strip().lower()
 DEFAULT_MODEL_NAME = os.getenv("HUNT_RESUME_MODEL_NAME", "deterministic-stage1")
+OLLAMA_HOST = os.getenv("HUNT_OLLAMA_HOST", "http://127.0.0.1:11434").rstrip("/")
+OLLAMA_TIMEOUT_SEC = float(os.getenv("HUNT_OLLAMA_TIMEOUT_SEC", "120"))
+OLLAMA_MODEL_NAME = os.getenv("HUNT_OLLAMA_MODEL", "qwen3:8b")
+PROMPT_VERSION_TAG = "c2_v0.1"
 DEFAULT_MAX_EXPERIENCE_BULLETS = 8
 DEFAULT_MAX_PROJECT_BULLETS = 3
 DEFAULT_MAX_TOTAL_BULLETS = 12

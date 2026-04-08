@@ -223,7 +223,7 @@ Planning note : non-binding. Refined as production use continues.
 | Component | Name | Current version | Notes |
 |---|---|---:|---|
 | C1 (Hunter) | discovery + enrichment | 0.1 | Python package `hunter/`; Stage 4 ops polishing remains |
-| C2 (Fletcher) | resume tailoring | 0.0 | `fletcher/`; local-only checkpoint: not deployed |
+| C2 (Fletcher) | resume tailoring | 0.1 | `fletcher/`; heuristic + optional Ollama enrichment; Ansible Stage 7 (`hunt-fletcher.timer`) in `ansible_homelab` |
 | C3 (Executioner) | browser autofill + apply assistance | 0.0 | extension; local-only checkpoint: not deployed |
 | C4 (Coordinator) | orchestration + submit control | 0.0 | `coordinator/`; partial local checkpoint: not deployed |
 
