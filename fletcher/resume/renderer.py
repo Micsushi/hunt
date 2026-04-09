@@ -17,13 +17,27 @@ def _render_header(doc: ResumeDocument) -> str:
     )
 
 
+def _escape_bullet(text: str) -> str:
+    """Escape LaTeX special characters that aren't already escaped.
+
+    Bullets from main.tex already have \\$ etc. Bullets from candidate_profile
+    or LLM rewrites may have raw $, %, & which break LaTeX compilation.
+    """
+    import re
+    # Escape each special char only when NOT already preceded by a backslash.
+    result = text
+    for char in ("$", "%", "&", "#"):
+        result = re.sub(r"(?<!\\)" + re.escape(char), "\\" + char, result)
+    return result
+
+
 def _render_bullets(bullets: list[str]) -> str:
     lines = [
         "    \\begin{onecolentry}",
         "        \\begin{itemize}[leftmargin=2em, itemsep=1pt, parsep=0pt, topsep=0pt, partopsep=0pt]",
     ]
     for bullet in bullets:
-        lines.append(f"            \\item {bullet}")
+        lines.append(f"            \\item {_escape_bullet(bullet)}")
     lines.extend(
         [
             "        \\end{itemize}",
