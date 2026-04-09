@@ -9,7 +9,7 @@ from typing import Any
 
 from .. import config
 
-_LOG_LLM = config.LOG_LLM_IO  # reuse existing flag — set HUNT_RESUME_LOG_LLM_IO=1 to enable
+_LOG_LLM = False  # per-call LLM noise suppressed; full trace printed by pipeline._print_trace
 
 
 def _llm_log(call_name: str, prompt: str, response: str, duration_ms: int | None) -> None:

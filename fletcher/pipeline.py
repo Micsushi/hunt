@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import time
 from pathlib import Path
 
 from . import config as _config
@@ -178,6 +179,89 @@ def generate_resumes_for_ready_jobs(
     return results
 
 
+def _print_trace(trace: dict) -> None:
+    """Print a clean human-readable summary of the full pipeline trace."""
+    W = 70
+    div = "=" * W
+    thin = "-" * W
+
+    def section(title: str) -> None:
+        print(f"\n{div}")
+        print(f"  {title}")
+        print(div)
+
+    def row(label: str, value: str) -> None:
+        print(f"  {label:<28} {value}")
+
+    print(f"\n{'=' * W}")
+    print(f"  PIPELINE TRACE  |  job={trace.get('job_id')}  |  {trace.get('title')} @ {trace.get('company')}")
+    print(f"  model: {trace.get('model')}  |  total: {trace.get('total_ms')}ms")
+    print(f"{'=' * W}")
+
+    # Step 1: keyword extraction
+    step1 = trace.get("step1_keywords", {})
+    section("STEP 1: JD -> LLM (keyword extraction)")
+    row("job title sent:", step1.get("title_sent", ""))
+    jd_preview = (step1.get("description_sent") or "")[:120].replace("\n", " ")
+    row("jd preview:", jd_preview + "...")
+    row("jd_usable:", str(step1.get("jd_usable")) + "  " + step1.get("jd_usable_reason", ""))
+    row("duration:", f"{step1.get('duration_ms')}ms")
+    kws = step1.get("keywords_returned", [])
+    print(f"\n  keywords returned ({len(kws)}):")
+    for i, kw in enumerate(kws, 1):
+        print(f"    {i:>2}. {kw}")
+
+    # Step 2: RAG matching
+    step2 = trace.get("step2_rag", {})
+    section("STEP 2: keywords -> RAG (bullet matching)")
+    row("bullets in resume:", str(step2.get("bullet_count", 0)))
+    row("thresholds:", f"high >= {step2.get('high_threshold')}  mid >= {step2.get('mid_threshold')}")
+    row("index rebuilt:", str(step2.get("index_rebuilt", False)))
+    scores = step2.get("scores", [])
+    if scores:
+        print(f"\n  {'keyword':<35} {'score':>6}  {'tier':<7}  nearest bullet")
+        print(f"  {thin}")
+        for s in scores:
+            preview = (s.get("bullet_preview") or "")[:35]
+            tier = s.get("tier", "")
+            marker = "<<" if tier == "high" else ("~" if tier == "mid" else "")
+            print(f"  {s['keyword']:<35} {s['score']:>6.3f}  {tier:<7}  {preview}  {marker}")
+    print(f"\n  high -> rewrite bullet : {[m['keyword'] for m in step2.get('bullet_matches', [])]}")
+    print(f"  mid  -> summary        : {step2.get('summary_keywords', [])}")
+    print(f"  low  -> ignored        : {step2.get('ignored_keywords', [])}")
+
+    # Step 3: bullet rewrites
+    step3 = trace.get("step3_bullet_rewrites", [])
+    section(f"STEP 3: high-score bullets -> LLM rewrite ({len(step3)} bullets)")
+    if not step3:
+        print("  (no high-score matches — no bullet rewrites)")
+    for r in step3:
+        status = "ok" if r.get("success") else "FAILED"
+        print(f"\n  bullet[{r['bullet_idx']}]  keywords={r['keywords']}  [{status}]  {r.get('duration_ms')}ms")
+        print(f"  {thin}")
+        print(f"  BEFORE: {r.get('original', '')[:W-10]}")
+        print(f"  AFTER : {r.get('rewritten', '')[:W-10]}")
+
+    # Step 4: summary
+    step4 = trace.get("step4_summary", {})
+    section("STEP 4: candidate context + mid keywords -> LLM (summary)")
+    row("keywords used:", str(step4.get("keywords_used", [])))
+    row("context sent:", (step4.get("context_sent") or "")[:60] + "...")
+    row("duration:", f"{step4.get('duration_ms')}ms")
+    row("success:", str(step4.get("success")))
+    summary_text = step4.get("summary", "")
+    if summary_text:
+        print(f"\n  summary:\n    {summary_text}")
+
+    # Result
+    section("RESULT")
+    row("status:", trace.get("status", ""))
+    row("compile:", trace.get("compile_status", ""))
+    row("fits 1 page:", str(trace.get("fits_one_page")))
+    row("pdf:", trace.get("pdf_path") or "(none)")
+    print(f"{div}\n")
+
+
 def _run_pipeline(
     *,
     title: str,
@@ -225,14 +309,39 @@ def _run_pipeline(
     )
 
     # --- LLM rewrite passes ---
+    _t_pipeline_start = time.perf_counter()
     all_selected_bullets: list[str] = [
         b for entry in tailored_doc.experience for b in entry.bullets
     ] + [b for entry in tailored_doc.projects for b in entry.bullets]
 
-    _verbose = _config.LOG_LLM_IO
     raw_kws = keywords.get("must_have_terms", [])
 
-    # Step 1: RAG index maintenance (auto-rebuild if stale).
+    # Build pipeline trace (written to attempt_dir at the end).
+    trace: dict = {
+        "job_id": job_id,
+        "title": title,
+        "company": company,
+        "model": OLLAMA_MODEL_NAME if DEFAULT_MODEL_BACKEND == "ollama" else DEFAULT_MODEL_NAME,
+        "step1_keywords": {
+            "title_sent": title,
+            "description_sent": (description or "")[:500],
+            "jd_usable": llm_meta.get("jd_usable"),
+            "jd_usable_reason": llm_meta.get("jd_usable_reason", ""),
+            "keywords_returned": raw_kws,
+            "duration_ms": llm_meta.get("duration_ms"),
+        },
+        "step2_rag": {},
+        "step3_bullet_rewrites": [],
+        "step4_summary": {},
+        "status": None,
+        "compile_status": None,
+        "fits_one_page": None,
+        "pdf_path": None,
+        "total_ms": None,
+    }
+
+    # Step 2: RAG index maintenance + keyword-to-bullet matching.
+    index_rebuilt = False
     if _config.RAG_ENABLED and raw_kws:
         try:
             stale = is_stale(
@@ -241,44 +350,41 @@ def _run_pipeline(
                 Path(bullet_library_path),
             )
             if stale:
-                if _verbose:
-                    print("\n[RAG] Source files changed - rebuilding index...")
                 build_index(
                     Path(selected_resume_path),
                     Path(candidate_profile_path),
                     Path(bullet_library_path),
-                    verbose=_verbose,
                 )
-            elif _verbose:
-                print("\n[RAG] Index up to date.")
-        except Exception as _exc:
-            if _verbose:
-                print(f"[RAG] Index maintenance skipped: {_exc}")
+                index_rebuilt = True
+        except Exception:
+            pass
 
-    # Step 2: Match each keyword to the best selected bullet (in-memory cosine sim).
-    kw_match: dict = {"bullet_matches": [], "summary_keywords": [], "ignored_keywords": list(raw_kws), "scores": [], "rag_used": False}
+    kw_match: dict = {
+        "bullet_matches": [], "summary_keywords": [],
+        "ignored_keywords": list(raw_kws), "scores": [], "rag_used": False,
+    }
     if _config.RAG_ENABLED and raw_kws and all_selected_bullets:
         try:
-            if _verbose:
-                print(
-                    f"[RAG] Matching {len(raw_kws)} keywords against {len(all_selected_bullets)} bullets "
-                    f"(high={_config.RAG_HIGH_THRESHOLD}, mid={_config.RAG_MID_THRESHOLD}):"
-                )
-            kw_match = match_keywords_to_bullets(raw_kws, all_selected_bullets, verbose=_verbose)
-            if _verbose:
-                high_kws = [m["keyword"] for m in kw_match["bullet_matches"]]
-                print(f"[RAG] high (rewrite bullet) : {high_kws}")
-                print(f"[RAG] mid  (summary)        : {kw_match['summary_keywords']}")
-                print(f"[RAG] low  (ignored)        : {kw_match['ignored_keywords']}")
-                print("-" * 60)
-        except Exception as _exc:
-            if _verbose:
-                print(f"[RAG] matching failed ({_exc}), keywords skipped.")
+            kw_match = match_keywords_to_bullets(raw_kws, all_selected_bullets)
+        except Exception:
+            pass
+
+    trace["step2_rag"] = {
+        "bullet_count": len(all_selected_bullets),
+        "bullets": all_selected_bullets,
+        "high_threshold": _config.RAG_HIGH_THRESHOLD,
+        "mid_threshold": _config.RAG_MID_THRESHOLD,
+        "index_rebuilt": index_rebuilt,
+        "scores": kw_match.get("scores", []),
+        "bullet_matches": kw_match.get("bullet_matches", []),
+        "summary_keywords": kw_match.get("summary_keywords", []),
+        "ignored_keywords": kw_match.get("ignored_keywords", []),
+        "rag_used": kw_match.get("rag_used", False),
+    }
 
     # Step 3: Targeted bullet rewrites — one LLM call per bullet that has high-score keywords.
     bullet_rewrites: list[dict] = []
     if kw_match["bullet_matches"]:
-        # Group keywords by bullet index.
         from collections import defaultdict
         by_bullet: dict[int, list[str]] = defaultdict(list)
         for m in kw_match["bullet_matches"]:
@@ -296,7 +402,6 @@ def _run_pipeline(
                 "duration_ms": result["duration_ms"],
                 "error": result["error"],
             })
-            # Apply rewrite back into tailored_doc.
             if result["success"]:
                 idx = 0
                 for entry in tailored_doc.experience:
@@ -309,6 +414,8 @@ def _run_pipeline(
                         if idx == bullet_idx:
                             entry.bullets[j] = result["bullet"]
                         idx += 1
+
+    trace["step3_bullet_rewrites"] = bullet_rewrites
 
     # Step 4: Generate summary from candidate context + mid-tier keywords.
     exp_lines = [
@@ -336,6 +443,15 @@ def _run_pipeline(
             kw_match["summary_keywords"],
         )
         summary_rewrite_meta = summary_result
+
+    trace["step4_summary"] = {
+        "context_sent": candidate_context,
+        "keywords_used": kw_match.get("summary_keywords", []),
+        "summary": summary_rewrite_meta.get("summary", ""),
+        "success": summary_rewrite_meta.get("success", False),
+        "duration_ms": summary_rewrite_meta.get("duration_ms"),
+        "error": summary_rewrite_meta.get("error"),
+    }
     # --- end LLM rewrite passes ---
 
     fallback_used = False
@@ -473,6 +589,16 @@ def _run_pipeline(
     if source_mode == "queue":
         attempt_id, version_id = record_resume_attempt(job_id, attempt_payload, db_path)
 
+    # Finalise and write pipeline trace.
+    trace["status"] = status
+    trace["compile_status"] = compile_result["compile_status"]
+    trace["fits_one_page"] = compile_result["fits_one_page"]
+    trace["pdf_path"] = pdf_path
+    trace["total_ms"] = int((time.perf_counter() - _t_pipeline_start) * 1000)
+    write_json(attempt_dir / "pipeline_trace.json", trace)
+    if _config.LOG_LLM_IO:
+        _print_trace(trace)
+
     result = {
         "job_id": job_id,
         "attempt_id": attempt_id,
@@ -488,6 +614,7 @@ def _run_pipeline(
         "metadata_path": metadata_path,
         "summary_rewrite_path": str(attempt_dir / "summary_rewrite.json"),
         "bullet_rewrite_path": str(attempt_dir / "bullet_rewrite.json") if bullet_rewrites else None,
+        "pipeline_trace_path": str(attempt_dir / "pipeline_trace.json"),
         "apply_context": get_apply_context(job_id, db_path) if job_id is not None else None,
     }
     write_json(attempt_dir / "result.json", result)
