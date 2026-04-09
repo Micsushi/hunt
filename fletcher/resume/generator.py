@@ -4,7 +4,7 @@ import copy
 import hashlib
 import re
 
-from .config import (
+from ..config import (
     DEFAULT_MAX_EXPERIENCE_BULLETS,
     DEFAULT_MAX_PROJECT_BULLETS,
     DEFAULT_MAX_TOTAL_BULLETS,

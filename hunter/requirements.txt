@@ -10,3 +10,4 @@ markdownify
 playwright
 fastapi
 uvicorn
+chromadb

@@ -3,13 +3,13 @@ import unittest
 from unittest.mock import patch
 
 from fletcher import config
-from fletcher.llm_enrich import enrich_with_ollama_if_enabled
+from fletcher.llm.llm_enrich import enrich_with_ollama_if_enabled
 
 
 class Component2OllamaTests(unittest.TestCase):
     def test_heuristic_backend_skips_network(self):
         with patch.object(config, "DEFAULT_MODEL_BACKEND", "heuristic"):
-            with patch("fletcher.llm_enrich._ollama_chat") as mock_chat:
+            with patch("fletcher.llm.llm_enrich._ollama_chat") as mock_chat:
                 c, k, meta = enrich_with_ollama_if_enabled(
                     title="Backend Engineer",
                     description="Python and AWS backend services.",
@@ -30,7 +30,7 @@ class Component2OllamaTests(unittest.TestCase):
         )
         with patch.object(config, "DEFAULT_MODEL_BACKEND", "ollama"):
             with patch(
-                "fletcher.llm_enrich._ollama_chat", return_value=fake_response
+                "fletcher.llm.llm_enrich._ollama_chat", return_value=fake_response
             ):
                 base_c = {
                     "role_family": "software",
@@ -77,7 +77,7 @@ class Component2OllamaTests(unittest.TestCase):
         )
         with patch.object(config, "DEFAULT_MODEL_BACKEND", "ollama"):
             with patch(
-                "fletcher.llm_enrich._ollama_chat", return_value=fake_response
+                "fletcher.llm.llm_enrich._ollama_chat", return_value=fake_response
             ):
                 base_c = {
                     "role_family": "pm",
@@ -110,7 +110,7 @@ class Component2OllamaTests(unittest.TestCase):
 
     def test_ollama_malformed_json_falls_back(self):
         with patch.object(config, "DEFAULT_MODEL_BACKEND", "ollama"):
-            with patch("fletcher.llm_enrich._ollama_chat", return_value="not json"):
+            with patch("fletcher.llm.llm_enrich._ollama_chat", return_value="not json"):
                 base_c = {
                     "role_family": "pm",
                     "job_level": "mid",
@@ -144,7 +144,7 @@ class Component2OllamaTests(unittest.TestCase):
         import urllib.error
 
         with patch.object(config, "DEFAULT_MODEL_BACKEND", "ollama"):
-            with patch("fletcher.llm_enrich.urllib.request.urlopen") as mock_open:
+            with patch("fletcher.llm.llm_enrich.urllib.request.urlopen") as mock_open:
                 mock_open.side_effect = urllib.error.URLError("refused")
                 base_c = {
                     "role_family": "general",

@@ -12,7 +12,7 @@ from fletcher.db import (
     job_description_fingerprint,
     list_jobs_ready_for_resume,
 )
-from fletcher.parser import parse_resume_file
+from fletcher.resume.parser import parse_resume_file
 from fletcher.pipeline import (
     generate_resume_for_ad_hoc,
     generate_resume_for_job,

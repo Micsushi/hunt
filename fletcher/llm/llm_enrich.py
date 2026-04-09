@@ -7,7 +7,22 @@ import urllib.error
 import urllib.request
 from typing import Any
 
-from . import config
+from .. import config
+
+_LOG_LLM = config.LOG_LLM_IO  # reuse existing flag — set HUNT_RESUME_LOG_LLM_IO=1 to enable
+
+
+def _llm_log(call_name: str, prompt: str, response: str, duration_ms: int | None) -> None:
+    if not _LOG_LLM:
+        return
+    sep = "-" * 60
+    prompt_preview = prompt.replace("\n", " ").strip()[:300]
+    response_preview = response.replace("\n", " ").strip()[:300]
+    ms = f"{duration_ms}ms" if duration_ms is not None else "?"
+    print(f"\n[LLM] {call_name} | {ms}")
+    print(f"  prompt  : {prompt_preview}")
+    print(f"  response: {response_preview}")
+    print(sep)
 
 
 def _extract_json_object(text: str) -> dict[str, Any]:
@@ -165,8 +180,10 @@ def generate_summary(
     )
     start = time.perf_counter()
     try:
+        _llm_log("call 2/3: summary [sending]", prompt, "", None)
         raw = _ollama_chat(prompt)
         result["duration_ms"] = int((time.perf_counter() - start) * 1000)
+        _llm_log("call 2/3: summary [done]", prompt, raw, result["duration_ms"])
         parsed = _extract_json_object(raw)
         text = (parsed.get("summary") or "").strip()
         if text:
@@ -175,6 +192,7 @@ def generate_summary(
     except Exception as exc:
         result["error"] = str(exc) or exc.__class__.__name__
         result["duration_ms"] = int((time.perf_counter() - start) * 1000)
+        _llm_log("call 2/3: summary [ERROR]", prompt, str(exc), result["duration_ms"])
     return result
 
 
@@ -203,8 +221,10 @@ def rewrite_bullets(bullets: list[str], keywords: list[str]) -> dict[str, Any]:
     )
     try:
         start = time.perf_counter()
+        _llm_log(f"call 3/3: bullets [sending {len(bullets)} bullets]", prompt, "", None)
         raw = _ollama_chat(prompt)
         result["duration_ms"] = int((time.perf_counter() - start) * 1000)
+        _llm_log(f"call 3/3: bullets [done]", prompt, raw, result["duration_ms"])
         parsed = _extract_json_object(raw)
         rewritten = parsed.get("bullets")
         if isinstance(rewritten, list) and len(rewritten) == len(bullets):
@@ -214,9 +234,17 @@ def rewrite_bullets(bullets: list[str], keywords: list[str]) -> dict[str, Any]:
                 result["success"] = True
     except Exception as exc:
         result["error"] = str(exc) or exc.__class__.__name__
-        if result["duration_ms"] is None:
-            result["duration_ms"] = int((time.perf_counter() - start) * 1000) if "start" in dir() else None
+        result["duration_ms"] = int((time.perf_counter() - start) * 1000) if "start" in locals() else None
+        _llm_log("call 3/3: bullets [ERROR]", prompt, str(exc), result["duration_ms"])
     return result
+
+
+# Tokens too common to count as domain evidence when scoring keyword-to-bullet overlap.
+_TRIVIAL_TOKENS = {
+    "work", "role", "team", "new", "key", "use", "used", "our", "their",
+    "this", "that", "with", "for", "and", "the", "from", "into", "over",
+    "able", "help", "support", "using", "make", "take", "give", "need",
+}
 
 
 def distribute_keywords(
@@ -225,14 +253,18 @@ def distribute_keywords(
     *,
     max_total: int = 10,
 ) -> dict[str, list[str]]:
-    """Split keywords into two buckets: bullet_keywords and summary_keywords.
+    """Split keywords into bullet_keywords and summary_keywords.
 
-    Strategy:
-    - Score each keyword against the combined bullet text.
-    - Keywords that appear or have strong overlap with existing bullets
-      go to bullet_keywords (the LLM will work them in during reformulation).
-    - The rest go to summary_keywords (injected during summary rewrite).
-    - Total across both buckets is capped at max_total.
+    A keyword goes to bullet_keywords only when its concepts already exist in
+    the selected bullets — meaning the LLM is reformulating existing vocabulary,
+    not injecting foreign domain terms.
+
+    Rules:
+    - Full phrase appears verbatim in bullet text → bullet bucket.
+    - Single meaningful token keyword → bullet bucket if token is in bullets.
+    - Multi-word keyword → bullet bucket only if ALL distinctive tokens
+      (len > 4, non-trivial) appear in bullet text. Otherwise → summary.
+    - Keywords with no distinctive tokens → summary bucket.
     """
     if not keywords:
         return {"bullet_keywords": [], "summary_keywords": []}
@@ -244,15 +276,32 @@ def distribute_keywords(
 
     for kw in keywords:
         kw_lower = kw.lower()
-        # Check if keyword or any word from keyword appears in bullet text.
-        tokens = [t for t in re.split(r"[\s/+#.-]+", kw_lower) if len(t) > 2]
-        hits = sum(1 for t in tokens if t in bullets_text) if tokens else 0
-        if hits > 0 or kw_lower in bullets_text:
+
+        # Full phrase match — safe to put in bullets.
+        if kw_lower in bullets_text:
+            bullet_kws.append(kw)
+            continue
+
+        # Extract distinctive tokens: length > 4 and not trivial filler.
+        distinctive = [
+            t for t in re.split(r"[\s/+#.\-]+", kw_lower)
+            if len(t) > 4 and t not in _TRIVIAL_TOKENS
+        ]
+
+        if not distinctive:
+            # No distinctive tokens (e.g. "2D", "CAD") — send to summary.
+            summary_kws.append(kw)
+            continue
+
+        hits = sum(1 for t in distinctive if t in bullets_text)
+
+        if hits == len(distinctive):
+            # Every distinctive token already in bullets — safe to reformulate.
             bullet_kws.append(kw)
         else:
+            # At least one foreign domain token — keep out of bullets.
             summary_kws.append(kw)
 
-    # Cap combined to max_total, split evenly but favour bullets.
     bullet_cap = max_total // 2 + max_total % 2
     summary_cap = max_total // 2
     return {
@@ -285,9 +334,11 @@ def enrich_with_ollama_if_enabled(
         if config.LOG_LLM_IO:
             limit = max(1, int(config.LOG_LLM_MAX_CHARS))
             meta["prompt_text"] = prompt[:limit]
+        _llm_log("call 1/3: keywords [sending]", prompt, "", None)
         start = time.perf_counter()
         content = _ollama_chat(prompt)
         meta["duration_ms"] = int((time.perf_counter() - start) * 1000)
+        _llm_log("call 1/3: keywords [done]", prompt, content, meta["duration_ms"])
         if config.LOG_LLM_IO:
             limit = max(1, int(config.LOG_LLM_MAX_CHARS))
             meta["response_text"] = (content or "")[:limit]

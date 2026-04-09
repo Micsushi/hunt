@@ -171,6 +171,36 @@ def cmd_test_job(args):
     raise SystemExit(0)
 
 
+def cmd_index(args):
+    import json
+    sys.path.insert(0, str(REPO_ROOT))
+    from fletcher import rag, config
+
+    action = args.action
+    if action == "build":
+        print("[fletchctl] Building RAG index (verbose)...")
+        result = rag.build_index(
+            config.DEFAULT_OG_RESUME_PATH,
+            config.DEFAULT_CANDIDATE_PROFILE_PATH,
+            config.DEFAULT_BULLET_LIBRARY_PATH,
+            verbose=True,
+        )
+        print(
+            f"[fletchctl] Done: {result['embedded']} docs embedded, "
+            f"{result['duration_ms']}ms, {result['errors']} errors."
+        )
+    elif action == "status":
+        status = rag.index_status()
+        if not status.get("built"):
+            print("[fletchctl] RAG index: not built.")
+        else:
+            print(json.dumps(status, indent=2))
+    elif action == "clear":
+        rag.clear_index()
+        print("[fletchctl] RAG index cleared.")
+    raise SystemExit(0)
+
+
 def cmd_tests(_args):
     patterns = [
         "test_component2_stage1.py",
@@ -232,6 +262,10 @@ def build_parser() -> argparse.ArgumentParser:
     test_job = sub.add_parser("test-job", help="Run pipeline on one job and print timing + LLM output.")
     test_job.add_argument("job_id", type=int)
     test_job.set_defaults(func=cmd_test_job)
+
+    index = sub.add_parser("index", help="Manage the RAG vector index.")
+    index.add_argument("action", choices=["build", "status", "clear"], help="build: force rebuild | status: show info | clear: delete index")
+    index.set_defaults(func=cmd_index)
 
     fx = sub.add_parser(
         "run",

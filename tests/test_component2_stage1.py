@@ -2,8 +2,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from fletcher.parser import parse_resume_file, parse_resume_tex
-from fletcher.renderer import render_resume_tex
+from fletcher.resume.parser import parse_resume_file, parse_resume_tex
+from fletcher.resume.renderer import render_resume_tex
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 MAIN_TEX = REPO_ROOT / "main.tex"

@@ -6,13 +6,13 @@ from pathlib import Path
 
 from .config import DEFAULT_OG_RESUME_PATH, get_db_path
 from .db import get_apply_context, init_resume_db
-from .parser import parse_resume_file
+from .resume.parser import parse_resume_file
 from .pipeline import (
     generate_resume_for_ad_hoc,
     generate_resume_for_job,
     generate_resumes_for_ready_jobs,
 )
-from .renderer import render_resume_tex
+from .resume.renderer import render_resume_tex
 
 
 def cmd_parse(args: argparse.Namespace) -> int:

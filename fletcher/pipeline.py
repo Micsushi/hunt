@@ -2,8 +2,9 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from .classifier import classify_job, slugify
-from .compiler import compile_tex
+from . import config as _config
+from .jobs.classifier import classify_job, slugify
+from .resume.compiler import compile_tex
 from .config import (
     DEFAULT_BULLET_LIBRARY_PATH,
     DEFAULT_CANDIDATE_PROFILE_PATH,
@@ -22,17 +23,18 @@ from .db import (
     list_jobs_ready_for_resume,
     record_resume_attempt,
 )
-from .generator import generate_tailored_resume
-from .llm_enrich import (
+from .resume.generator import generate_tailored_resume
+from .llm.llm_enrich import (
     distribute_keywords,
     enrich_with_ollama_if_enabled,
     generate_summary,
     rewrite_bullets,
 )
-from .keyword_extractor import extract_keywords
-from .parser import parse_resume_file
-from .renderer import render_resume_tex
-from .source_loader import load_bullet_library, load_candidate_profile
+from .jobs.keyword_extractor import extract_keywords
+from .resume.parser import parse_resume_file
+from .llm.rag import build_index, distribute_keywords_rag, is_stale
+from .resume.renderer import render_resume_tex
+from .resume.source_loader import load_bullet_library, load_candidate_profile
 from .storage import build_attempt_dir, ensure_dir, file_hash, write_json, write_text
 
 
@@ -227,10 +229,32 @@ def _run_pipeline(
         b for entry in tailored_doc.experience for b in entry.bullets
     ] + [b for entry in tailored_doc.projects for b in entry.bullets]
 
-    kw_distribution = distribute_keywords(
-        keywords.get("must_have_terms", []),
-        all_selected_bullets,
-    )
+    # Auto-rebuild RAG index if source files changed, then distribute keywords.
+    _rag_ok = False
+    if _config.RAG_ENABLED:
+        try:
+            if is_stale(
+                Path(selected_resume_path),
+                Path(candidate_profile_path),
+                Path(bullet_library_path),
+            ):
+                build_index(
+                    Path(selected_resume_path),
+                    Path(candidate_profile_path),
+                    Path(bullet_library_path),
+                )
+            kw_distribution = distribute_keywords_rag(
+                keywords.get("must_have_terms", []),
+            )
+            _rag_ok = True
+        except Exception:
+            pass  # RAG unavailable : fall through to heuristic
+
+    if not _rag_ok:
+        kw_distribution = distribute_keywords(
+            keywords.get("must_have_terms", []),
+            all_selected_bullets,
+        )
 
     # Build candidate context from profile for summary generation.
     exp_lines = [

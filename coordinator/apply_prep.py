@@ -83,7 +83,7 @@ def _build_resume_summary(tex_path: str) -> str:
         return ""
 
     try:
-        from fletcher.parser import parse_resume_file
+        from fletcher.resume.parser import parse_resume_file
     except Exception:
         return ""
 
