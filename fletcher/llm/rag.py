@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import time
 import urllib.request
 from pathlib import Path
@@ -432,6 +433,129 @@ def distribute_keywords_rag(
         "summary_keywords": summary_kws[:summary_cap],
         "scores": scores,
         "threshold_used": sim_threshold,
+        "rag_used": True,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Targeted keyword-to-bullet matching (in-memory cosine sim)
+# ---------------------------------------------------------------------------
+
+def _cosine_sim(a: list[float], b: list[float]) -> float:
+    dot = sum(x * y for x, y in zip(a, b))
+    norm_a = math.sqrt(sum(x * x for x in a))
+    norm_b = math.sqrt(sum(x * x for x in b))
+    if norm_a == 0.0 or norm_b == 0.0:
+        return 0.0
+    return dot / (norm_a * norm_b)
+
+
+def match_keywords_to_bullets(
+    keywords: list[str],
+    bullets: list[str],
+    *,
+    high_threshold: float | None = None,
+    mid_threshold: float | None = None,
+    max_mid: int | None = None,
+    verbose: bool = False,
+) -> dict[str, Any]:
+    """Match each JD keyword to the most semantically similar selected resume bullet.
+
+    Three tiers:
+      high (>= high_threshold) : keyword maps to a specific bullet -> rewrite that bullet
+      mid  (>= mid_threshold)  : loosely related -> add to summary paragraph (up to max_mid)
+      low  (< mid_threshold)   : no meaningful match -> ignored
+
+    Returns:
+      bullet_matches : list of {keyword, score, bullet_idx, bullet_text} - one per high keyword
+      summary_keywords : list of str, mid-tier (up to max_mid)
+      ignored_keywords : list of str, low-tier
+      scores : full per-keyword detail list
+      high_threshold, mid_threshold : floats used
+    """
+    hi = high_threshold if high_threshold is not None else config.RAG_HIGH_THRESHOLD
+    mid = mid_threshold if mid_threshold is not None else config.RAG_MID_THRESHOLD
+    max_s = max_mid if max_mid is not None else config.RAG_MAX_SUMMARY_KEYWORDS
+
+    empty = {
+        "bullet_matches": [],
+        "summary_keywords": [],
+        "ignored_keywords": list(keywords),
+        "scores": [],
+        "high_threshold": hi,
+        "mid_threshold": mid,
+        "rag_used": True,
+    }
+    if not keywords or not bullets:
+        return empty
+
+    # Embed all selected bullets once.
+    bullet_vecs: list[list[float]] = []
+    for b in bullets:
+        try:
+            bullet_vecs.append(_embed(b))
+        except Exception:
+            bullet_vecs.append([])
+
+    bullet_matches: list[dict] = []
+    summary_keywords: list[str] = []
+    ignored_keywords: list[str] = []
+    scores: list[dict] = []
+
+    for kw in keywords:
+        try:
+            kw_vec = _embed(kw)
+            best_idx, best_score = -1, 0.0
+            for i, bvec in enumerate(bullet_vecs):
+                if bvec:
+                    s = _cosine_sim(kw_vec, bvec)
+                    if s > best_score:
+                        best_score, best_idx = s, i
+            best_score = round(best_score, 4)
+
+            if best_score >= hi and best_idx >= 0:
+                tier = "high"
+                bullet_matches.append({
+                    "keyword": kw,
+                    "score": best_score,
+                    "bullet_idx": best_idx,
+                    "bullet_text": bullets[best_idx],
+                })
+            elif best_score >= mid:
+                tier = "mid"
+                if len(summary_keywords) < max_s:
+                    summary_keywords.append(kw)
+                else:
+                    ignored_keywords.append(kw)
+            else:
+                tier = "low"
+                ignored_keywords.append(kw)
+
+            scores.append({
+                "keyword": kw,
+                "score": best_score,
+                "tier": tier,
+                "bullet_idx": best_idx if best_idx >= 0 else None,
+                "bullet_preview": bullets[best_idx][:80] if best_idx >= 0 else "",
+            })
+            if verbose:
+                print(
+                    f"  [RAG] '{kw}' -> {best_score:.3f} ({tier})"
+                    + (f" | bullet[{best_idx}]: '{bullets[best_idx][:55]}'" if best_idx >= 0 else "")
+                )
+        except Exception as exc:
+            ignored_keywords.append(kw)
+            scores.append({"keyword": kw, "score": 0.0, "tier": "error", "error": str(exc)})
+            if verbose:
+                print(f"  [RAG] error for '{kw}': {exc}")
+
+    return {
+        "bullet_matches": bullet_matches,
+        "summary_keywords": summary_keywords,
+        "ignored_keywords": ignored_keywords,
+        "scores": scores,
+        "high_threshold": hi,
+        "mid_threshold": mid,
         "rag_used": True,
     }
 

@@ -239,6 +239,49 @@ def rewrite_bullets(bullets: list[str], keywords: list[str]) -> dict[str, Any]:
     return result
 
 
+def rewrite_bullet_targeted(bullet: str, keywords: list[str]) -> dict[str, Any]:
+    """Rewrite a single resume bullet to naturally include specific keywords.
+
+    Only modifies vocabulary where the keywords genuinely fit - same facts, same metrics.
+
+    Returns dict with keys:
+      - bullet: rewritten bullet string (falls back to original on failure)
+      - success: bool
+      - error: str or None
+      - duration_ms: int or None
+    """
+    result: dict[str, Any] = {"bullet": bullet, "success": False, "error": None, "duration_ms": None}
+    if config.DEFAULT_MODEL_BACKEND != "ollama":
+        return result
+    if not bullet or not keywords:
+        return result
+
+    kw_list = ", ".join(keywords)
+    prompt = (
+        f"Rewrite this resume bullet to naturally include these keywords where they genuinely fit: {kw_list}\n"
+        f"Rules: same facts, same metrics, no invented content, minimal changes, one sentence.\n"
+        f"If the keywords do not fit naturally, return the bullet unchanged.\n"
+        f"Bullet: {bullet.strip()}\n"
+        f'Return only: {{"bullet": "..."}}'
+    )
+    start = time.perf_counter()
+    try:
+        _llm_log(f"rewrite bullet [{kw_list[:40]}] [sending]", prompt, "", None)
+        raw = _ollama_chat(prompt)
+        result["duration_ms"] = int((time.perf_counter() - start) * 1000)
+        _llm_log(f"rewrite bullet [{kw_list[:40]}] [done]", prompt, raw, result["duration_ms"])
+        parsed = _extract_json_object(raw)
+        text = (parsed.get("bullet") or "").strip()
+        if text:
+            result["bullet"] = text
+            result["success"] = True
+    except Exception as exc:
+        result["error"] = str(exc) or exc.__class__.__name__
+        result["duration_ms"] = int((time.perf_counter() - start) * 1000) if "start" in locals() else None
+        _llm_log("rewrite bullet [ERROR]", prompt, str(exc), result["duration_ms"])
+    return result
+
+
 # Tokens too common to count as domain evidence when scoring keyword-to-bullet overlap.
 _TRIVIAL_TOKENS = {
     "work", "role", "team", "new", "key", "use", "used", "our", "their",

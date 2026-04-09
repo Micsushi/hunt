@@ -49,7 +49,10 @@ PROMPT_VERSION_TAG = "c2_v0.2_jd_keywords"
 OLLAMA_EMBED_MODEL = os.getenv("HUNT_OLLAMA_EMBED_MODEL", "mxbai-embed-large")
 _default_rag_dir = str(DEFAULT_RUNTIME_ROOT / "rag_index")
 RAG_INDEX_DIR = Path(os.getenv("HUNT_RAG_INDEX_DIR", _default_rag_dir))
-RAG_SIMILARITY_THRESHOLD = float(os.getenv("HUNT_RAG_SIMILARITY_THRESHOLD", "0.60"))
+RAG_SIMILARITY_THRESHOLD = float(os.getenv("HUNT_RAG_SIMILARITY_THRESHOLD", "0.60"))  # kept for index query CLI
+RAG_HIGH_THRESHOLD = float(os.getenv("HUNT_RAG_HIGH_THRESHOLD", "0.60"))   # keyword -> rewrite that bullet
+RAG_MID_THRESHOLD = float(os.getenv("HUNT_RAG_MID_THRESHOLD", "0.35"))     # keyword -> summary only
+RAG_MAX_SUMMARY_KEYWORDS = int(os.getenv("HUNT_RAG_MAX_SUMMARY_KEYWORDS", "5"))
 RAG_ENABLED = os.getenv("HUNT_RAG_ENABLED", "1").strip().lower() in {"1", "true", "yes", "on"}
 
 # Optional debugging: write LLM prompt/response to attempt_dir.

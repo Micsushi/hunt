@@ -28,11 +28,11 @@ from .llm.llm_enrich import (
     distribute_keywords,
     enrich_with_ollama_if_enabled,
     generate_summary,
-    rewrite_bullets,
+    rewrite_bullet_targeted,
 )
 from .jobs.keyword_extractor import extract_keywords
 from .resume.parser import parse_resume_file
-from .llm.rag import build_index, distribute_keywords_rag, is_stale
+from .llm.rag import build_index, is_stale, match_keywords_to_bullets
 from .resume.renderer import render_resume_tex
 from .resume.source_loader import load_bullet_library, load_candidate_profile
 from .storage import build_attempt_dir, ensure_dir, file_hash, write_json, write_text
@@ -224,15 +224,16 @@ def _run_pipeline(
         selected_base_resume=base_resume_name,
     )
 
-    # --- LLM rewrite passes (ollama only) ---
+    # --- LLM rewrite passes ---
     all_selected_bullets: list[str] = [
         b for entry in tailored_doc.experience for b in entry.bullets
     ] + [b for entry in tailored_doc.projects for b in entry.bullets]
 
-    # Auto-rebuild RAG index if source files changed, then distribute keywords.
-    _rag_ok = False
     _verbose = _config.LOG_LLM_IO
-    if _config.RAG_ENABLED:
+    raw_kws = keywords.get("must_have_terms", [])
+
+    # Step 1: RAG index maintenance (auto-rebuild if stale).
+    if _config.RAG_ENABLED and raw_kws:
         try:
             stale = is_stale(
                 Path(selected_resume_path),
@@ -248,35 +249,68 @@ def _run_pipeline(
                     Path(bullet_library_path),
                     verbose=_verbose,
                 )
-            else:
-                if _verbose:
-                    print("\n[RAG] Index up to date, skipping rebuild.")
-            raw_kws = keywords.get("must_have_terms", [])
+            elif _verbose:
+                print("\n[RAG] Index up to date.")
+        except Exception as _exc:
             if _verbose:
-                print(f"[RAG] Distributing {len(raw_kws)} keywords (threshold={_config.RAG_SIMILARITY_THRESHOLD}):")
-            kw_distribution = distribute_keywords_rag(
-                raw_kws,
-                verbose=_verbose,
-            )
+                print(f"[RAG] Index maintenance skipped: {_exc}")
+
+    # Step 2: Match each keyword to the best selected bullet (in-memory cosine sim).
+    kw_match: dict = {"bullet_matches": [], "summary_keywords": [], "ignored_keywords": list(raw_kws), "scores": [], "rag_used": False}
+    if _config.RAG_ENABLED and raw_kws and all_selected_bullets:
+        try:
             if _verbose:
-                bullet_k = kw_distribution["bullet_keywords"]
-                summary_k = kw_distribution["summary_keywords"]
-                print(f"[RAG] -> bullets : {bullet_k}")
-                print(f"[RAG] -> summary : {summary_k}")
+                print(
+                    f"[RAG] Matching {len(raw_kws)} keywords against {len(all_selected_bullets)} bullets "
+                    f"(high={_config.RAG_HIGH_THRESHOLD}, mid={_config.RAG_MID_THRESHOLD}):"
+                )
+            kw_match = match_keywords_to_bullets(raw_kws, all_selected_bullets, verbose=_verbose)
+            if _verbose:
+                high_kws = [m["keyword"] for m in kw_match["bullet_matches"]]
+                print(f"[RAG] high (rewrite bullet) : {high_kws}")
+                print(f"[RAG] mid  (summary)        : {kw_match['summary_keywords']}")
+                print(f"[RAG] low  (ignored)        : {kw_match['ignored_keywords']}")
                 print("-" * 60)
-            _rag_ok = True
-        except Exception as _rag_exc:
+        except Exception as _exc:
             if _verbose:
-                print(f"[RAG] unavailable ({_rag_exc}), falling back to heuristic.")
+                print(f"[RAG] matching failed ({_exc}), keywords skipped.")
 
-    if not _rag_ok:
-        kw_distribution = distribute_keywords(
-            keywords.get("must_have_terms", []),
-            all_selected_bullets,
-        )
-        kw_distribution["rag_used"] = False
+    # Step 3: Targeted bullet rewrites — one LLM call per bullet that has high-score keywords.
+    bullet_rewrites: list[dict] = []
+    if kw_match["bullet_matches"]:
+        # Group keywords by bullet index.
+        from collections import defaultdict
+        by_bullet: dict[int, list[str]] = defaultdict(list)
+        for m in kw_match["bullet_matches"]:
+            by_bullet[m["bullet_idx"]].append(m["keyword"])
 
-    # Build candidate context from profile for summary generation.
+        for bullet_idx, kws in sorted(by_bullet.items()):
+            original = all_selected_bullets[bullet_idx]
+            result = rewrite_bullet_targeted(original, kws)
+            bullet_rewrites.append({
+                "bullet_idx": bullet_idx,
+                "original": original,
+                "rewritten": result["bullet"],
+                "keywords": kws,
+                "success": result["success"],
+                "duration_ms": result["duration_ms"],
+                "error": result["error"],
+            })
+            # Apply rewrite back into tailored_doc.
+            if result["success"]:
+                idx = 0
+                for entry in tailored_doc.experience:
+                    for j in range(len(entry.bullets)):
+                        if idx == bullet_idx:
+                            entry.bullets[j] = result["bullet"]
+                        idx += 1
+                for entry in tailored_doc.projects:
+                    for j in range(len(entry.bullets)):
+                        if idx == bullet_idx:
+                            entry.bullets[j] = result["bullet"]
+                        idx += 1
+
+    # Step 4: Generate summary from candidate context + mid-tier keywords.
     exp_lines = [
         f"{e.get('title', '')} at {e.get('company', '')}"
         for e in (candidate_profile.get("experience_entries") or [])[:3]
@@ -299,27 +333,9 @@ def _run_pipeline(
         summary_result = generate_summary(
             candidate_context,
             title,
-            kw_distribution["summary_keywords"],
+            kw_match["summary_keywords"],
         )
         summary_rewrite_meta = summary_result
-
-    bullet_rewrite_meta: dict = {}
-    if all_selected_bullets and kw_distribution["bullet_keywords"]:
-        bullet_result = rewrite_bullets(all_selected_bullets, kw_distribution["bullet_keywords"])
-        bullet_rewrite_meta = bullet_result
-        if bullet_result["success"]:
-            rewritten = bullet_result["bullets"]
-            idx = 0
-            for entry in tailored_doc.experience:
-                for j in range(len(entry.bullets)):
-                    if idx < len(rewritten):
-                        entry.bullets[j] = rewritten[idx]
-                    idx += 1
-            for entry in tailored_doc.projects:
-                for j in range(len(entry.bullets)):
-                    if idx < len(rewritten):
-                        entry.bullets[j] = rewritten[idx]
-                    idx += 1
     # --- end LLM rewrite passes ---
 
     fallback_used = False
@@ -342,24 +358,23 @@ def _run_pipeline(
             write_text(
                 attempt_dir / "ollama_response.txt", str(llm_meta.get("response_text") or "")
             )
-    if summary_rewrite_meta:
-        write_json(attempt_dir / "summary_rewrite.json", {
-            "summary": summary_rewrite_meta.get("summary", ""),
-            "success": summary_rewrite_meta.get("success", False),
-            "duration_ms": summary_rewrite_meta.get("duration_ms"),
-            "error": summary_rewrite_meta.get("error"),
-            "keywords_used": kw_distribution.get("summary_keywords", []),
-        })
-    if bullet_rewrite_meta:
+    # Always write summary (even if empty - webapp always shows the card).
+    write_json(attempt_dir / "summary_rewrite.json", {
+        "summary": summary_rewrite_meta.get("summary", ""),
+        "success": summary_rewrite_meta.get("success", False),
+        "duration_ms": summary_rewrite_meta.get("duration_ms"),
+        "error": summary_rewrite_meta.get("error"),
+        "keywords_used": kw_match.get("summary_keywords", []),
+    })
+    if bullet_rewrites:
         write_json(attempt_dir / "bullet_rewrite.json", {
-            "bullets": bullet_rewrite_meta.get("bullets", []),
-            "success": bullet_rewrite_meta.get("success", False),
-            "duration_ms": bullet_rewrite_meta.get("duration_ms"),
-            "error": bullet_rewrite_meta.get("error"),
-            "keywords_used": kw_distribution.get("bullet_keywords", []),
+            "rewrites": bullet_rewrites,
+            "total_rewrites": len(bullet_rewrites),
+            "successful_rewrites": sum(1 for r in bullet_rewrites if r["success"]),
+            "total_duration_ms": sum(r["duration_ms"] or 0 for r in bullet_rewrites),
         })
-    # Write full keyword distribution (includes per-keyword RAG scores when RAG was used).
-    write_json(attempt_dir / "keyword_distribution.json", kw_distribution)
+    # Write keyword matching detail for inspection.
+    write_json(attempt_dir / "keyword_distribution.json", kw_match)
 
     job_description_path = write_text(attempt_dir / "job_description.txt", description or "")
     role_classification_path = write_json(attempt_dir / "role_classification.json", classification)
@@ -471,8 +486,8 @@ def _run_pipeline(
         "pdf_path": pdf_path,
         "tex_path": tex_path,
         "metadata_path": metadata_path,
-        "summary_rewrite_path": str(attempt_dir / "summary_rewrite.json") if summary_rewrite_meta else None,
-        "bullet_rewrite_path": str(attempt_dir / "bullet_rewrite.json") if bullet_rewrite_meta else None,
+        "summary_rewrite_path": str(attempt_dir / "summary_rewrite.json"),
+        "bullet_rewrite_path": str(attempt_dir / "bullet_rewrite.json") if bullet_rewrites else None,
         "apply_context": get_apply_context(job_id, db_path) if job_id is not None else None,
     }
     write_json(attempt_dir / "result.json", result)
