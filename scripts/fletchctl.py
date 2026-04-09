@@ -174,7 +174,8 @@ def cmd_test_job(args):
 def cmd_index(args):
     import json
     sys.path.insert(0, str(REPO_ROOT))
-    from fletcher import rag, config
+    from fletcher.llm import rag
+    from fletcher import config
 
     action = args.action
     if action == "build":
@@ -198,6 +199,19 @@ def cmd_index(args):
     elif action == "clear":
         rag.clear_index()
         print("[fletchctl] RAG index cleared.")
+    elif action == "query":
+        keyword = args.keyword
+        n = args.top or 5
+        threshold = rag.config.RAG_SIMILARITY_THRESHOLD
+        print(f"[fletchctl] Querying index for: '{keyword}' (top {n}, threshold={threshold})")
+        hits = rag.query_keyword(keyword, n_results=n)
+        if not hits:
+            print("  No results.")
+        else:
+            for i, h in enumerate(hits, 1):
+                bucket = "bullet" if h["similarity"] >= threshold else "summary"
+                print(f"  {i}. [{bucket:7s}] score={h['similarity']:.4f} | {h['text'][:80]}")
+                print(f"          source={h['meta'].get('source')} entry={h['meta'].get('entry_id')}")
     raise SystemExit(0)
 
 
@@ -264,7 +278,9 @@ def build_parser() -> argparse.ArgumentParser:
     test_job.set_defaults(func=cmd_test_job)
 
     index = sub.add_parser("index", help="Manage the RAG vector index.")
-    index.add_argument("action", choices=["build", "status", "clear"], help="build: force rebuild | status: show info | clear: delete index")
+    index.add_argument("action", choices=["build", "status", "clear", "query"], help="build: force rebuild | status: show info | clear: delete index | query: test a keyword")
+    index.add_argument("keyword", nargs="?", default=None, help="keyword to query (required for query action)")
+    index.add_argument("--top", type=int, default=5, help="number of results to show for query (default: 5)")
     index.set_defaults(func=cmd_index)
 
     fx = sub.add_parser(

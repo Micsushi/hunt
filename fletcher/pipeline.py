@@ -231,30 +231,50 @@ def _run_pipeline(
 
     # Auto-rebuild RAG index if source files changed, then distribute keywords.
     _rag_ok = False
+    _verbose = _config.LOG_LLM_IO
     if _config.RAG_ENABLED:
         try:
-            if is_stale(
+            stale = is_stale(
                 Path(selected_resume_path),
                 Path(candidate_profile_path),
                 Path(bullet_library_path),
-            ):
+            )
+            if stale:
+                if _verbose:
+                    print("\n[RAG] Source files changed - rebuilding index...")
                 build_index(
                     Path(selected_resume_path),
                     Path(candidate_profile_path),
                     Path(bullet_library_path),
+                    verbose=_verbose,
                 )
+            else:
+                if _verbose:
+                    print("\n[RAG] Index up to date, skipping rebuild.")
+            raw_kws = keywords.get("must_have_terms", [])
+            if _verbose:
+                print(f"[RAG] Distributing {len(raw_kws)} keywords (threshold={_config.RAG_SIMILARITY_THRESHOLD}):")
             kw_distribution = distribute_keywords_rag(
-                keywords.get("must_have_terms", []),
+                raw_kws,
+                verbose=_verbose,
             )
+            if _verbose:
+                bullet_k = kw_distribution["bullet_keywords"]
+                summary_k = kw_distribution["summary_keywords"]
+                print(f"[RAG] -> bullets : {bullet_k}")
+                print(f"[RAG] -> summary : {summary_k}")
+                print("-" * 60)
             _rag_ok = True
-        except Exception:
-            pass  # RAG unavailable : fall through to heuristic
+        except Exception as _rag_exc:
+            if _verbose:
+                print(f"[RAG] unavailable ({_rag_exc}), falling back to heuristic.")
 
     if not _rag_ok:
         kw_distribution = distribute_keywords(
             keywords.get("must_have_terms", []),
             all_selected_bullets,
         )
+        kw_distribution["rag_used"] = False
 
     # Build candidate context from profile for summary generation.
     exp_lines = [
@@ -338,6 +358,7 @@ def _run_pipeline(
             "error": bullet_rewrite_meta.get("error"),
             "keywords_used": kw_distribution.get("bullet_keywords", []),
         })
+    # Write full keyword distribution (includes per-keyword RAG scores when RAG was used).
     write_json(attempt_dir / "keyword_distribution.json", kw_distribution)
 
     job_description_path = write_text(attempt_dir / "job_description.txt", description or "")
