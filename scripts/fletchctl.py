@@ -156,17 +156,17 @@ def cmd_test_job(args):
     if bullet_path:
         try:
             data = json.loads(Path(bullet_path).read_text(encoding="utf-8"))
-            print(f"\n--- Bullet rewrite (call 3) ---")
-            print(f"Success     : {data.get('success')}")
-            print(f"Duration    : {data.get('duration_ms')}ms")
-            print(f"Keywords    : {data.get('keywords_used')}")
-            bullets = data.get("bullets") or []
-            for i, b in enumerate(bullets, 1):
-                print(f"  {i}. {b}")
+            rewrites = data.get("rewrites") or []
+            print(f"\n--- Bullet rewrites ({data.get('successful_rewrites', 0)}/{data.get('total_rewrites', 0)} ok, {data.get('total_duration_ms', 0)}ms total) ---")
+            for r2 in rewrites:
+                status = "ok" if r2.get("success") else "FAIL"
+                print(f"  [{status}] bullet[{r2['bullet_idx']}] keywords={r2['keywords']}")
+                print(f"    before: {r2['original'][:100]}")
+                print(f"    after : {r2['rewritten'][:100]}")
         except Exception as e:
             print(f"Bullet file error: {e}")
     else:
-        print("Bullet rewrite: not generated")
+        print("Bullet rewrite: not generated (no high-score keyword matches)")
 
     raise SystemExit(0)
 
