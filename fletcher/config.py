@@ -15,11 +15,17 @@ if _load_dotenv is not None:
     except Exception:
         pass
 DEFAULT_OG_RESUME_PATH = REPO_ROOT / "main.tex"
+
+_candidate_profile_real = REPO_ROOT / "fletcher" / "candidate_profile.md"
+_candidate_profile_template = REPO_ROOT / "fletcher" / "templates" / "candidate_profile.template.md"
 DEFAULT_CANDIDATE_PROFILE_PATH = (
-    REPO_ROOT / "fletcher" / "templates" / "candidate_profile.template.md"
+    _candidate_profile_real if _candidate_profile_real.exists() else _candidate_profile_template
 )
+
+_bullet_library_real = REPO_ROOT / "fletcher" / "bullet_library.md"
+_bullet_library_template = REPO_ROOT / "fletcher" / "templates" / "bullet_library.template.md"
 DEFAULT_BULLET_LIBRARY_PATH = (
-    REPO_ROOT / "fletcher" / "templates" / "bullet_library.template.md"
+    _bullet_library_real if _bullet_library_real.exists() else _bullet_library_template
 )
 BASE_RESUMES_ROOT = REPO_ROOT / "fletcher" / "base_resumes"
 
