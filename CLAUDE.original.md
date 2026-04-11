@@ -1,6 +1,6 @@
 # Hunt : pointer for Claude / Codex
 
-Repo guidance: **`AGENTS.md`**.
+Authoritative repo guidance lives in **`AGENTS.md`**.
 
 Also read:
 - **`docs/NAMING.md`** : C1–C4 IDs, code names, folder map
@@ -9,4 +9,4 @@ Also read:
 - **`docs/C1_OPERATOR_WORKFLOW.md`** : C1 operator narrative
 - **`agents/system_prompt.md`** : downstream agent contract
 
-No dup rules here : extend **`AGENTS.md`** or docs above.
+Do not duplicate long rules here : extend **`AGENTS.md`** or the docs above when something should persist.
