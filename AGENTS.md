@@ -1,146 +1,163 @@
-# Hunt : Repo Instructions
+# Hunt: Repo Instructions
 
-## Project Goal
+## Goal
 
-Build a fully automated job application system that runs continuously on a Linux server.
+Build fully automated job-application system for continuous Linux-server operation.
 
-The long-term flow is:
-- **C1 (Hunter)** : discover and enrich job postings (`hunter/` package)
-- **C2 (Fletcher)** : tailor a LaTeX resume to each posting (`fletcher/`)
-- **C3 (Executioner)** : browser autofill and apply assistance (extension)
-- **C4 (Coordinator)** : orchestration and submit control (`coordinator/`)
+Pipeline:
 
-Canonical naming: **`docs/NAMING.md`**. The old **`scraper/`** package directory was renamed to **`hunter/`**; **`hunter/scraper.py`** is only the discovery entrypoint filename. **Operator CLI contract** (and how to add commands for C2–C4): **`docs/CLI_CONVENTIONS.md`**.
+- `C1 (Hunter)`: discover and enrich jobs in `hunter/`
+- `C2 (Fletcher)`: tailor LaTeX resume in `fletcher/`
+- `C3 (Executioner)`: browser autofill/apply assist
+- `C4 (Coordinator)`: orchestration and submit control in `coordinator/`
 
-Current focus:
-- C1 (Hunter) Stage 4 hardening, backlog drain, and deployment polish
-- prioritize LinkedIn over every other source in enrichment dispatch
-- classify LinkedIn Easy Apply during enrichment (`easy_apply`, `auto_apply_eligible = 0`) so later automation does not treat them as external-apply targets
-- keep **C1 (Hunter)** (Ansible Stage 6) separate from **C2 (Fletcher)** (Stage 7 in `ansible_homelab`) and **C3 (Executioner)** deployment steps
+Canonical naming: `docs/NAMING.md`. Old `scraper/` package renamed to `hunter/`. `hunter/scraper.py` remains discovery entrypoint filename only. CLI contract: `docs/CLI_CONVENTIONS.md`.
 
-## Repo Overview
+## Current Focus
 
-This repo currently implements **C1 (Hunter)** discovery plus multi-source enrichment with LinkedIn-first priority.
+- Harden `C1 (Hunter)` Stage 4.
+- Drain backlog safely.
+- Polish deployment/ops.
+- Prioritize LinkedIn above all other enrichment sources.
+- Detect LinkedIn Easy Apply during enrichment and set `easy_apply`, `auto_apply_eligible = 0`.
+- Keep C1 deployment separate from later C2/C3/C4 deployment work.
 
-Main files:
-- `hunter/scraper.py` : C1 (Hunter) discovery entrypoint (historical filename; discovers jobs and writes them to SQLite)
-- `hunter/runner.py` : loop runner for continuous discovery/enrichment cycles
-- `hunter/db.py` : schema, migration, and DB helpers
-- `hunter/config.py` : search terms, locations, watchlist, and run interval
-- `hunter/browser_runtime.py` : shared Playwright browser/context runtime for supported UI fallback flows
-- `hunter/enrich_linkedin.py` : LinkedIn enrichment worker and batch runner
-- `hunter/enrich_indeed.py` : Indeed enrichment worker and batch runner
-- `hunter/enrichment_dispatch.py` : central enrichment routing by `jobs.source` (priority, per-source auth)
-- `hunter/enrich_jobs.py` : CLI entrypoint; delegates to `enrichment_dispatch.run_enrichment_round`
-- `hunter/enrichment_policy.py` : retry/backoff policy for unattended enrichment
-- `hunter/linkedin_session.py` : LinkedIn Playwright auth-state management
-- `hunter/url_utils.py` : URL normalization and ATS detection helpers
-- `review_app.py` : browser-facing review/control-plane app for the live queue
-- `hunter` repo-root launchers (canonical) : thin shims to `scripts/hunterctl.py` (`start` / `stop` / `restart` on Linux systemd, `enrich N` batch shorthand); `hunt` / `huntctl.py` remain legacy aliases
-- `agents/system_prompt.md` : agent contract for downstream apply/orchestration work
+## Repo Map
 
-## Current Data Model Rules
+- `hunter/scraper.py`: discovery entrypoint, writes jobs to SQLite
+- `hunter/runner.py`: continuous loop runner
+- `hunter/db.py`: schema, migrations, DB helpers
+- `hunter/config.py`: terms, locations, watchlist, interval
+- `hunter/browser_runtime.py`: shared Playwright runtime
+- `hunter/enrich_linkedin.py`: LinkedIn enrichment
+- `hunter/enrich_indeed.py`: Indeed enrichment
+- `hunter/enrichment_dispatch.py`: source-based routing and priority
+- `hunter/enrich_jobs.py`: CLI entrypoint for enrichment rounds
+- `hunter/enrichment_policy.py`: retry/backoff policy
+- `hunter/linkedin_session.py`: LinkedIn auth state
+- `hunter/url_utils.py`: URL normalization and ATS detection
+- `review_app.py`: queue review/control-plane app
+- repo-root `hunter`: shim to `scripts/hunterctl.py`
+- `agents/system_prompt.md`: downstream apply/orchestration contract
 
-- `job_url` is the listing URL where the job was discovered
-- `apply_url` is the best-known external application URL
-- for historical LinkedIn rows, mirrored `apply_url = job_url` values are cleared during migration because they are not real off-platform application links
-- `job_url` remains the dedup key for now
-- `status` is only for application lifecycle state like `new`, `claimed`, `applied`, `failed`, `skipped`
-- LinkedIn enrichment state must not be stored in `status`
+## Data Model Rules
 
-LinkedIn-specific enrichment columns:
-- `apply_type` : `external_apply`, `easy_apply`, or `unknown`
-- `auto_apply_eligible` : `1` only when the job uses external apply
-- `enrichment_status` : `pending`, `processing`, `done`, or `failed`
-- `enrichment_attempts` : retry counter
-- `enriched_at` : timestamp of the last successful enrichment
-- `last_enrichment_error` : last failure reason
-- `apply_host` : hostname of the external destination
-- `ats_type` : `greenhouse`, `lever`, `workday`, `ashby`, `smartrecruiters`, `jobvite`, `icims`, `bamboohr`, or `unknown`
-- `last_enrichment_started_at` : timestamp of the current/last claim start for stale-processing recovery
-- `next_enrichment_retry_at` : next unattended retry time for retryable failures
+- `job_url`: discovery/listing URL
+- `apply_url`: best known external apply URL
+- historical LinkedIn rows with mirrored `apply_url = job_url` must be cleared during migration
+- `job_url` remains dedupe key for now
+- `status`: application lifecycle only (`new`, `claimed`, `applied`, `failed`, `skipped`)
+- LinkedIn enrichment state must not live in `status`
+
+LinkedIn enrichment fields:
+
+- `apply_type`: `external_apply`, `easy_apply`, `unknown`
+- `auto_apply_eligible`: `1` only for external apply
+- `enrichment_status`: `pending`, `processing`, `done`, `failed`
+- `enrichment_attempts`: retry counter
+- `enriched_at`: last successful enrichment time
+- `last_enrichment_error`: last failure reason
+- `apply_host`: external destination host
+- `ats_type`: `greenhouse`, `lever`, `workday`, `ashby`, `smartrecruiters`, `jobvite`, `icims`, `bamboohr`, `unknown`
+- `last_enrichment_started_at`: claim start for stale recovery
+- `next_enrichment_retry_at`: next unattended retry time
 
 ## Business Rules
 
-- `priority = 1` jobs are for manual application by the user only
-- automation should only act on `priority = 0` jobs unless the user explicitly says otherwise
-- LinkedIn Easy Apply jobs are not targets for downstream apply automation
-- if a LinkedIn job is detected as Easy Apply during enrichment, classify it (`apply_type`, `auto_apply_eligible`) so later stages never treat it like an external ATS apply
-- C1 (Hunter) should discover and enrich jobs only : it should not submit applications
+- `priority = 1`: manual apply only
+- automation acts only on `priority = 0` unless user says otherwise
+- LinkedIn Easy Apply is never downstream auto-apply target
+- classify Easy Apply during enrichment so later stages never treat it as external ATS apply
+- `C1 (Hunter)` only discovers and enriches; it does not submit applications
 
-## Current Stage Plan
+## Stage Snapshot
 
-Stage 1 : completed
+Stage 1 complete:
+
 - added enrichment-ready DB columns
-- updated C1 listing vs apply URL semantics (`job_url` vs `apply_url`)
-- marked historical LinkedIn rows as pending enrichment
+- split listing URL vs apply URL semantics
+- marked historical LinkedIn rows pending enrichment
 
-Stage 2 : completed
-- added a one-job Playwright LinkedIn enrichment worker using a logged-in session
+Stage 2 complete:
+
+- added single-job Playwright LinkedIn enrichment worker
 - extracts LinkedIn/external descriptions
-- detects `Easy Apply` vs external `Apply`
-- saves external application URL when present
+- detects Easy Apply vs external Apply
+- saves external apply URL
 - supports blocked/UI verification flows
 
-Stage 3 : completed
-- hardened batch enrichment for unattended server use
+Stage 3 complete:
+
+- hardened unattended batch enrichment
 - finalized retry/backoff and terminal-state policy
-- documented and supported the `server2` deployment/runtime model
-- added a browser-facing review/control-plane service for manual review
-- kept the flow ready for later C2 (Fletcher)/C3 (Executioner) agents
+- documented `server2` runtime
+- added browser review/control-plane app
+- kept path open for C2/C3 agents
 
-Stage 3.2 : completed
-- generalized the enrichment queue/runtime to support LinkedIn and Indeed
-- added shared browser-runtime support for UI/browser fallback
-- expanded the review app into a source-aware whole-job-table control plane
+Stage 3.2 complete:
 
-Current repo-side runtime notes:
-- newly discovered pending LinkedIn rows are prioritized ahead of older backlog rows during post-scrape enrichment
-- read-only queue tools and the review app should not mutate queue state during normal inspection
-- terminal failures like `job_removed` should be recorded cleanly without being treated as retryable/actionable failures
-- the intended `server2` deployment shape is two-part:
-  - timed Hunt runtime for discovery + headless enrichment + blocked-row UI fallback
-  - separate review/control-plane web app
-- for `server2`, blocked-row UI fallback is intended to run on a separate virtual display such as `Xvfb :98`, not the main desktop foreground
-- the current Ansible deployment split is:
-  - C1 (Hunter) on `job_agent` Stage 6
-  - later C2 (Fletcher) in its own separate step/stage
-  - later C3 (Executioner) in its own separate step/stage
-  - later C4 (Coordinator) / OpenClaw integration in its own separate step/stage
+- generalized queue/runtime for LinkedIn and Indeed
+- added shared browser runtime
+- expanded review app to source-aware whole-job table control plane
 
-Stage 4 : current
+Stage 4 current:
+
 - backfill old and mixed-source backlog safely
-- add monitoring and operational hardening
+- add monitoring and ops hardening
 - save failure artifacts for blocked/browser-fixable rows
 
-## C2 (Fletcher) : Key Constraints Agents Must Know
+## Runtime Notes
 
-- **`ResumeDocument` has no `summary` field.** The model in `fletcher/models.py` is bullets-only (experience, projects, skills, header). Never attempt to read or write `.summary` on it. To generate a summary paragraph, build candidate context from `candidate_profile["experience_entries"]` and `candidate_profile["skills"]`, then call `generate_summary()` in `llm_enrich.py`.
-- **Two DB files exist on the server.** `/home/michael/hunt/hunt.db` is empty (created by default fallback). `/home/michael/data/hunt/hunt.db` is the live DB with all jobs. Always ensure `HUNT_DB_PATH=/home/michael/data/hunt/hunt.db` is set in `.env` before running any Python commands.
-- **Python must be run from the venv.** Activate with `source ~/hunt/.venv/bin/activate` before running any `python3` commands. The system Python at `/usr/bin/python3` does not have project dependencies.
-- **Ollama model on the server is `gemma4:e4b`.** Timeout is set to 300s. Backend must be enabled via `HUNT_RESUME_MODEL_BACKEND=ollama` in `.env`. Default (without that env var) is heuristic mode (no LLM calls).
-- **`candidate_profile` parsed structure** (from `source_loader.py`): keys are `experience_entries`, `project_entries`, `skills` (with `languages`, `frameworks`, `developer_tools`). No top-level `summary`, `targeting_notes`, or `name` fields — those are not parsed.
+- newly discovered pending LinkedIn rows outrank old backlog rows in post-scrape enrichment
+- read-only queue tools and review app must not mutate queue state during normal inspection
+- terminal failures like `job_removed` should be recorded cleanly, not retried as actionable failures
+- intended `server2` shape:
+- timed Hunt runtime for discovery + headless enrichment + blocked-row UI fallback
+- separate review/control-plane web app
+- blocked-row UI fallback should run on separate virtual display like `Xvfb :98`, not main desktop foreground
+- Ansible split:
+- C1 on `job_agent` Stage 6
+- C2 separate later step/stage
+- C3 separate later step/stage
+- C4/OpenClaw separate later step/stage
 
-## What To Take Note Of
+## C2 Constraints
 
-- LinkedIn is the most important source for this project right now
-- LinkedIn is also the most brittle source and changes markup often
-- browser-based enrichment is slower than discovery scraping
-- external apply jobs are the main target
-- Easy Apply jobs should be classified and excluded as early as possible
-- downstream resume generation should use enriched descriptions, not shallow board metadata
-- deployment/runtime context for `server2` lives in a separate repo:
-  `C:\Users\sushi\Documents\Github\ansible_homelab`
-- Hunt-side production pointers (paths, systemd, Playwright, review app) : **`docs/C1_OPERATOR_WORKFLOW.md`** section **Production host (server2)** ; full Ansible plan : **`ansible_homelab/docs/2.01-job-agent-plan.md`**
+- `ResumeDocument` has no `summary` field. Use bullets-only model in `fletcher/models.py`.
+- To generate summary text, build context from `candidate_profile["experience_entries"]` and `candidate_profile["skills"]`, then call `generate_summary()` in `llm_enrich.py`.
+- Live DB on server is `/home/michael/data/hunt/hunt.db`.
+- `/home/michael/hunt/hunt.db` is empty fallback DB.
+- Always set `HUNT_DB_PATH=/home/michael/data/hunt/hunt.db` in `.env` before Python commands.
+- Run Python from venv: `source ~/hunt/.venv/bin/activate`.
+- System Python lacks project deps.
+- Ollama model on server is `gemma4:e4b`.
+- Timeout is `300s`.
+- Enable backend with `HUNT_RESUME_MODEL_BACKEND=ollama` in `.env`.
+- Without that env var, backend defaults to heuristic mode.
+- `candidate_profile` keys: `experience_entries`, `project_entries`, `skills` with `languages`, `frameworks`, `developer_tools`.
+- No top-level `summary`, `targeting_notes`, or `name` fields in parsed structure.
+
+## Keep In Mind
+
+- LinkedIn is highest-value source.
+- LinkedIn markup is brittle and changes often.
+- Browser enrichment is slower than discovery scraping.
+- External-apply jobs are main target.
+- Exclude Easy Apply as early as possible.
+- Resume generation should use enriched descriptions, not shallow board metadata.
+- `server2` deployment context lives in `C:\Users\sushi\Documents\Github\ansible_homelab`.
+- Hunt-side production pointers: `docs/C1_OPERATOR_WORKFLOW.md`, section `Production host (server2)`.
+- Full Ansible plan: `ansible_homelab/docs/2.01-job-agent-plan.md`.
+- If caveman skill is available, use it by default.
 
 ## Docs
 
-- System roadmap (includes version snapshot and draft milestones) : `docs/roadmap.md`
-- Live fix tracker : `docs/TODO.md`
-- Shared glossary : `docs/GLOSSARY.md`
-- Component docs index : `docs/components/README.md`
-- C1 (Hunter) plan : `docs/components/component1/README.md`
-- C2 (Fletcher) plan : `docs/components/component2/README.md`
-- C3 (Executioner) plan : `docs/components/component3/README.md`
-- C4 (Coordinator) plan : `docs/components/component4/README.md`
-- Short pointer for other AI tools : `CLAUDE.md`
+- roadmap: `docs/roadmap.md`
+- live fix tracker: `docs/TODO.md`
+- glossary: `docs/GLOSSARY.md`
+- docs index: `docs/components/README.md`
+- C1 plan: `docs/components/component1/README.md`
+- C2 plan: `docs/components/component2/README.md`
+- C3 plan: `docs/components/component3/README.md`
+- C4 plan: `docs/components/component4/README.md`
+- short pointer for other AI tools: `CLAUDE.md`
