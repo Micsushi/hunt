@@ -62,6 +62,17 @@ HUNT_DB_URL = _get_str_env("HUNT_DB_URL", "")
 # Generate: python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
 HUNT_CREDENTIAL_KEY = _get_str_env("HUNT_CREDENTIAL_KEY", "")
 
+# Shared bearer token used by all component service APIs.
+# C0 backend sends this token when calling C1/C2/C4 services.
+# Each service validates it on every request.
+# Leave blank in dev to disable auth on service APIs.
+HUNT_SERVICE_TOKEN = _get_str_env("HUNT_SERVICE_TOKEN", "")
+
+# Component service base URLs (used by C0 gateway to reach each service).
+HUNT_HUNTER_URL = _get_str_env("HUNT_HUNTER_URL", "http://localhost:8001")
+HUNT_FLETCHER_URL = _get_str_env("HUNT_FLETCHER_URL", "http://localhost:8002")
+HUNT_COORDINATOR_URL = _get_str_env("HUNT_COORDINATOR_URL", "http://localhost:8003")
+
 # Discovery runs one query per (lane, term). Broad board results are trimmed afterward:
 # see hunter.search_lanes.LANE_TITLE_KEYWORDS (keep lanes aligned when you change terms).
 SEARCH_TERMS = {

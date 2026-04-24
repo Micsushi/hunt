@@ -11,6 +11,9 @@ def db(tmp_path):
     db_file = tmp_path / "test.db"
     os.environ["HUNT_DB_PATH"] = str(db_file)
     os.environ.pop("HUNT_DB_URL", None)
+    import hunter.db as _db
+
+    _db.DB_PATH = str(db_file)
     from hunter.db import init_db, get_connection
 
     init_db(maintenance=False)

@@ -10,5 +10,6 @@ markdownify
 playwright
 fastapi
 uvicorn
+httpx
 chromadb
 cryptography
