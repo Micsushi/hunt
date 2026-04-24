@@ -13,3 +13,4 @@ uvicorn
 httpx
 chromadb
 cryptography
+psycopg2-binary

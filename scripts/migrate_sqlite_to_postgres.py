@@ -94,8 +94,6 @@ def _migrate_table(
 
     columns = list(rows[0].keys())
     col_list = ", ".join(columns)
-    placeholders = ", ".join(["%s"] * len(columns))
-
     records = [tuple(row[col] for col in columns) for row in rows]
 
     if dry_run:
@@ -103,18 +101,13 @@ def _migrate_table(
         return
 
     cur = pg_conn.cursor()
-    # Disable trigger-based sequence updates during bulk insert
-    cur.execute(f"ALTER TABLE {table} DISABLE TRIGGER ALL")
-    try:
-        import psycopg2.extras
+    import psycopg2.extras
 
-        psycopg2.extras.execute_values(
-            cur,
-            f"INSERT INTO {table} ({col_list}) VALUES %s ON CONFLICT DO NOTHING",
-            records,
-        )
-    finally:
-        cur.execute(f"ALTER TABLE {table} ENABLE TRIGGER ALL")
+    psycopg2.extras.execute_values(
+        cur,
+        f"INSERT INTO {table} ({col_list}) VALUES %s ON CONFLICT DO NOTHING",
+        records,
+    )
 
     print(f"  {table}: {len(records)} rows migrated")
 

@@ -7,6 +7,8 @@ The gateway adds the HUNT_SERVICE_TOKEN bearer header before forwarding.
 
 from __future__ import annotations
 
+import json
+
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import JSONResponse
@@ -37,18 +39,31 @@ async def _proxy_get(url: str) -> JSONResponse:
     async with httpx.AsyncClient(timeout=10) as client:
         try:
             resp = await client.get(url, headers=_service_headers())
-        except httpx.ConnectError:
+        except httpx.HTTPError:
             raise HTTPException(status_code=503, detail=f"Service unavailable: {url}")
-    return JSONResponse(content=resp.json(), status_code=resp.status_code)
+    return _json_response(resp, url)
 
 
 async def _proxy_post(url: str, body: dict | None = None) -> JSONResponse:
     async with httpx.AsyncClient(timeout=30) as client:
         try:
             resp = await client.post(url, json=body or {}, headers=_service_headers())
-        except httpx.ConnectError:
+        except httpx.HTTPError:
             raise HTTPException(status_code=503, detail=f"Service unavailable: {url}")
-    return JSONResponse(content=resp.json(), status_code=resp.status_code)
+    return _json_response(resp, url)
+
+
+def _json_response(resp: httpx.Response, url: str) -> JSONResponse:
+    try:
+        content = resp.json()
+    except json.JSONDecodeError:
+        content = {
+            "detail": "Upstream service returned non-JSON response",
+            "service_url": url,
+            "status_code": resp.status_code,
+        }
+        return JSONResponse(content=content, status_code=502)
+    return JSONResponse(content=content, status_code=resp.status_code)
 
 
 # ---------------------------------------------------------------------------
