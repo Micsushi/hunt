@@ -67,20 +67,44 @@ Recommended order:
 
 ## Component Contract
 
-**C4 receives from C1:** `job_url`, `apply_url`, `ats_type`, `enrichment_status`, `priority`, `auto_apply_eligible`
+**C4 reads from DB:**
+- `jobs` — reads C1/C2 handoff fields to determine readiness
+- `component_settings` for its own settings (run limits, cooldowns, auto-approve policy)
 
-**C4 receives from C2:** `selected_resume_version_id`, `selected_resume_pdf_path`, `selected_resume_ready_for_c3`, `latest_resume_flags`
+**C4 writes to DB:**
+- `orchestration_runs`, `orchestration_events`, `submit_approvals`
+- Lifecycle status updates when acting as orchestrator (`claimed`, `failed`, `skipped`, and final applied/submitted state through backend-owned write path)
 
-**C4 hands off to C3:** `c3_apply_context.json` — resolved `apply_url` + selected resume bytes/path + orchestration run id
+**C4 service API** (called by C0 backend):
 
-**C4 produces:** `orchestration_runs` record, `submit_approvals` record, decision/final-status artifacts
+| Endpoint | Purpose |
+|---|---|
+| `POST /run` | Start an orchestration run for a `job_id` |
+| `GET /runs` | List recent runs with status |
+| `GET /runs/{id}` | Single run detail |
+| `POST /runs/{id}/approve` | Submit approval — creates `submit_approvals` record |
+| `POST /runs/{id}/fill-result` | C3 posts fill result here after completing a fill |
+| `GET /status` | Health check — online/offline |
+
+**C3 fill-request queue (C4 → C3):**
+C4 writes pending fill requests to DB. C3 polls `GET /api/c3/pending-fills` (via C0 backend) to pick them up. C4 does not call C3 directly — the C0 backend mediates. This removes the need for C3 to have an inbound port.
+
+**C4 hands off to C3** via `c3_apply_context.json`:
+- `apply_url` (resolved)
+- `resume_bytes` (base64 PDF)
+- `ats_type`
+- `job_id`
+- `orchestration_run_id` (triggers pipeline mode in C3)
 
 **Coupling rule:** C4 depends on other components by design. C1/C2/C3 must not depend on C4 to perform their own standalone work or testing.
+
+**Default-resume rule:** if `selected_resume_ready_for_c3 = 0` (C2 not deployed or generation failed), C4 falls back to a configured default resume rather than blocking the run.
 
 ## Related
 
 - `runbook.md` : operational how-to (apply-prep, run status, manual review)
 - `design.md` : architecture, research notes, implementation checkpoint
+- `api.md` : C4 service API contract
 - `hunter-coordinator-plan.md` : Hunter→Coordinator seam planning
 - `hunter-coordinator-ops.md` : server2 runtime and monitoring
 - `coordinator/` : implementation

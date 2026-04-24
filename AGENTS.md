@@ -2,17 +2,21 @@
 
 ## Goal
 
-Build fully automated job-application system for continuous Linux-server operation.
+Build fully automated job-application pipeline for continuous Linux-server operation.
 
-Pipeline:
+Components:
 
-- `C0 (Frontend)`: operator dashboard SPA in `frontend/` with backend in `backend/`
-- `C1 (Hunter)`: discover and enrich jobs in `hunter/`
-- `C2 (Fletcher)`: tailor LaTeX resume in `fletcher/`
-- `C3 (Executioner)`: browser autofill/apply assist
-- `C4 (Coordinator)`: orchestration and submit control in `coordinator/`
+- `C0 (Frontend)`: operator dashboard — `frontend/` (React SPA, `hunt-frontend` container) + `backend/` (FastAPI API gateway, `hunt-backend` container). Backend calls DB directly and proxies all component API calls. Frontend never calls component services directly.
+- `C1 (Hunter)`: discover and enrich jobs — `hunter/` — container `hunt-hunter`. Exposes service API for UI-triggered scrapes and enrichment. Manages LinkedIn accounts from `linkedin_accounts` table.
+- `C2 (Fletcher)`: tailor LaTeX resume — `fletcher/` — container `hunt-fletcher`. Exposes service API for generation; supports one-off file-drop generation triggered from C0 UI.
+- `C3 (Executioner)`: browser autofill Chrome extension — `executioner/` — runs on operator's local machine only, no server container. Polls C0 backend for fill requests in pipeline mode. Posts fill results to C0; backend/C4 update DB state.
+- `C4 (Coordinator)`: orchestration and submit control — `coordinator/` — container `hunt-coordinator`. Queues fill requests for C3; exposes submit approval API.
+- `Postgres`: shared DB for all components. `hunt-backend` + `hunt-hunter` + `hunt-fletcher` + `hunt-coordinator` all connect via `HUNT_DB_URL`.
+- `Ollama`: LLM backend for C2 — single container, one model (`gemma4:e4b`).
 
 Canonical naming: `docs/NAMING.md`. Old `scraper/` package renamed to `hunter/`. `hunter/scraper.py` remains discovery entrypoint filename only. CLI contract: `docs/CLI_CONVENTIONS.md`.
+
+**Any-combination rule:** the system works with any subset of components deployed. C0 + DB is the required base. Each additional component enables more features without breaking what's already working.
 
 ## Current Focus
 
@@ -74,14 +78,14 @@ Key semantics:
 
 - `ResumeDocument` has no `summary` field. Use bullets-only model in `fletcher/models.py`.
 - To generate summary text, build context from `candidate_profile["experience_entries"]` and `candidate_profile["skills"]`, then call `generate_summary()` in `llm_enrich.py`.
-- Live DB on server is `/home/michael/data/hunt/hunt.db`.
-- `/home/michael/hunt/hunt.db` is empty fallback DB.
-- Always set `HUNT_DB_PATH=/home/michael/data/hunt/hunt.db` in `.env` before Python commands.
+- DB connection: use `HUNT_DB_URL` (Postgres). `HUNT_DB_PATH` is SQLite fallback for local dev only.
+- Live Postgres on server: configured via `HUNT_DB_URL` in `.env`.
 - Run Python from venv: `source ~/hunt/.venv/bin/activate`.
 - System Python lacks project deps.
 - Ollama model on server is `gemma4:e4b`.
 - Timeout is `300s`.
-- Enable backend with `HUNT_RESUME_MODEL_BACKEND=ollama` in `.env`.
+- Ollama base URL: `OLLAMA_BASE_URL` (default `http://ollama:11434` in container; `http://localhost:11434` locally).
+- Enable LLM backend with `HUNT_RESUME_MODEL_BACKEND=ollama` in `.env`.
 - Without that env var, backend defaults to heuristic mode.
 - `candidate_profile` keys: `experience_entries`, `project_entries`, `skills` with `languages`, `frameworks`, `developer_tools`.
 - No top-level `summary`, `targeting_notes`, or `name` fields in parsed structure.
@@ -98,15 +102,20 @@ All code must run on Windows (local dev) and Linux (server2). Test locally on Wi
 
 ## Keep In Mind
 
-- LinkedIn is highest-value source; markup is brittle and changes often.
-- Browser enrichment is slower than discovery scraping.
-- External-apply jobs are main target — exclude Easy Apply as early as possible.
-- Resume generation must use enriched descriptions, not shallow board metadata.
-- Build and test each component so it can run on its own. C0 should stay usable against `backend/app.py` + DB without other component services running; C1/C2/C3 should keep standalone terminal-driven paths; C4 is the only intentionally coupled component because it orchestrates the others.
-- All code must run on both Windows (local dev/test) and Linux (server2 production). Use `pathlib`, env vars — no hardcoded paths or bash-only assumptions.
-- Deployment details live in `docs/deployment.md` — do not duplicate in component docs.
-- If caveman skill is available, use it by default.
-- CLI commands must be short (e.g. `./hunter.sh drain`, not `python -m hunter.backfill_enrichment`) but support args where needed (e.g. `./hunter.sh drain 25 --source linkedin`). Applies to all new hunterctl/hunter.sh commands.
+- LinkedIn: highest-value source. Markup brittle, changes often.
+- Browser enrichment slower than discovery. Exclude Easy Apply at C1 — never reaches C3/C4.
+- Resume generation: enriched descriptions only, not board metadata.
+- C0 backend: API gateway. Frontend never calls component APIs. All routes through `backend/app.py`.
+- Each component runnable alone. C0 + DB: required base. Others optional. C4 only intentionally coupled.
+- C3: Chrome extension, operator's machine only. No server container. Polls C0 for fill requests. No direct DB credentials or DB writes; posts results to C0.
+- `component_settings`: per-component settings, managed via C0 UI. `linkedin_accounts`: C1 credentials, managed via C0 UI.
+- DB: Postgres, `HUNT_DB_URL`. `HUNT_DB_PATH`: SQLite dev fallback only. New code uses `HUNT_DB_URL`.
+- Service auth: `HUNT_SERVICE_TOKEN` bearer token on all C0↔component calls. C3 uses same token to call C0. C3 must never receive `HUNT_DB_URL`.
+- Cross-platform: `pathlib` + env vars. No hardcoded paths or bash-only assumptions.
+- Deployment details: `docs/deployment.md`. Don't duplicate in component docs.
+- API contracts: `docs/API_CONTRACTS.md`. Settings/secrets: `docs/SETTINGS_AND_SECRETS.md`. Postgres migration: `docs/DB_MIGRATION_SQLITE_TO_POSTGRES.md`.
+- Caveman skill: use by default.
+- CLI: short verbs + optional args (`./hunter.sh drain 25 --source linkedin`). Never `python -m ...` for operator commands.
 
 ## Docs
 
@@ -114,6 +123,9 @@ Project-level (brief, high-level only):
 - `docs/roadmap.md` : priorities, version table, component summary
 - `docs/deployment.md` : all server2/Ansible/env/path details — canonical source, all other docs refer here
 - `docs/DATA_MODEL.md` : full DB schema, field meanings, valid values, owning component
+- `docs/API_CONTRACTS.md` : C0 gateway + component service API contract
+- `docs/SETTINGS_AND_SECRETS.md` : component settings, LinkedIn accounts, tokens, secret handling
+- `docs/DB_MIGRATION_SQLITE_TO_POSTGRES.md` : SQLite to Postgres migration plan
 - `docs/GLOSSARY.md` : shared terms
 - `docs/NAMING.md` : C1–C4 IDs, code names, folder map
 - `docs/CLI_CONVENTIONS.md` : operator CLI conventions
@@ -122,10 +134,14 @@ Component-level (detailed — read these to find next thing to work on):
 - `docs/components/component0/README.md` : C0 feature status (working / in-progress / bugs)
 - `docs/components/component0/runbook.md` : C0 local dev, build, testing
 - `docs/components/component1/README.md` : C1 feature status (working / in-progress / bugs)
+- `docs/components/component1/api.md` : C1 service API
 - `docs/components/component1/runbook.md` : C1 operational how-to (start, drain, recover)
 - `docs/components/component2/README.md` : C2 feature status
+- `docs/components/component2/api.md` : C2 service API
 - `docs/components/component2/runbook.md` : C2 operational how-to
 - `docs/components/component3/README.md` : C3 feature status
+- `docs/components/component3/backend-contract.md` : C3 polling/result contract
 - `docs/components/component3/runbook.md` : C3 operational how-to
 - `docs/components/component4/README.md` : C4 feature status
+- `docs/components/component4/api.md` : C4 service API
 - `docs/components/component4/runbook.md` : C4 operational how-to

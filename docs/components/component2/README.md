@@ -78,23 +78,41 @@ Small intentional set — marks uncertainty without blocking generation:
 
 ## Component Contract
 
-**C2 receives from C1:** `enrichment_status = done`, enriched `description`, `job_url`, `apply_url`, `ats_type`
+**C2 reads from DB:**
+- `jobs` (`description`, `apply_url`, `ats_type`, `enrichment_status`) — waits for `enrichment_status = done`
+- `component_settings` for its own settings (default role family, fallback policy, model config)
 
-**C2 hands off to C3/C4:**
+**C2 writes to DB:**
+- `resume_attempts`, `resume_versions`
+- `jobs` resume fields (`latest_resume_*`, `selected_resume_*`)
+
+**C2 service API** (called by C0 backend, not the frontend directly):
+
+| Endpoint | Purpose |
+|---|---|
+| `POST /generate` | Trigger generation for a `job_id` |
+| `POST /generate-once` | One-off generation: accepts uploaded JD file + optional `job_id` |
+| `GET /jobs/{job_id}/status` | Latest attempt status for a job |
+| `GET /status` | Health check — online/offline |
+
+The `/generate-once` endpoint supports the C0 frontend file-drop flow: operator drags a JD onto the Fletcher page, backend calls this endpoint, result appears in the job detail.
+
+**C2 hands off to C3/C4** via these DB fields:
 - `selected_resume_version_id`
 - `selected_resume_pdf_path`, `selected_resume_tex_path`
 - `selected_resume_selected_at`
 - `selected_resume_ready_for_c3 = 1`
 - `latest_resume_flags` (concern flags)
 
-C3 and C4 consume these fields — they do not re-run resume selection logic.
+C3 and C4 read these fields — they do not re-run resume selection logic.
 
-**Standalone behavior:** C2 can be run from terminal against shared DB/job data without UI or C4. Review UI is optional for inspecting outputs, not required for generation.
+**Standalone behavior:** C2 runs from CLI against the DB without UI or C4. The C0 UI is optional for reviewing outputs.
 
 ## Related
 
 - `runbook.md` : operational how-to (generate, queue, review)
 - `design.md` : data model, runtime layout, implementation notes
+- `api.md` : C2 service API contract
 - `docs/deployment.md` : server2 paths, Ollama config, env vars
 - `docs/DATA_MODEL.md` : full resume_attempts / resume_versions schema
 - `fletcher/` : implementation

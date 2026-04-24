@@ -4,13 +4,13 @@ This file is the **single place** to resolve naming: **C1–C4**, **Hunter / Fle
 
 ## Components (stable labels)
 
-| ID | Code name | Role | Primary code in this repo |
-|----|-----------|------|---------------------------|
-| **C0** | **Frontend** | Operator dashboard and control plane — SPA UI plus FastAPI backend for queue review, ops, logs, and component settings | **`frontend/`** + **`backend/`** |
-| **C1** | **Hunter** | Job discovery and multi-source enrichment (SQLite, scraping, enrichment, C1 logging) | Python package **`hunter/`** (see below) |
-| **C2** | **Fletcher** | Resume tailoring (LaTeX pipeline, PDF, DB attempts) | **`fletcher/`** |
-| **C3** | **Executioner** | Browser autofill and apply assistance (extension) | **`executioner/`** (Chrome extension sources) |
-| **C4** | **Coordinator** | Orchestration, readiness, apply-prep, submit control | **`coordinator/`** |
+| ID | Code name | Role | Primary code in this repo | Container(s) |
+|----|-----------|------|---------------------------|--------------|
+| **C0** | **Frontend** | Operator dashboard and control plane — SPA UI plus FastAPI backend. Backend is the API gateway: all component API calls route through it. | **`frontend/`** + **`backend/`** | `hunt-frontend` (nginx + SPA) + `hunt-backend` (FastAPI) |
+| **C1** | **Hunter** | Job discovery and multi-source enrichment. Exposes service API for backend to trigger scrapes and enrichment from the UI. | Python package **`hunter/`** (see below) | `hunt-hunter` |
+| **C2** | **Fletcher** | Resume tailoring (LaTeX pipeline, PDF, DB attempts). Exposes service API for one-off generation triggered from the UI file drop. | **`fletcher/`** | `hunt-fletcher` |
+| **C3** | **Executioner** | Browser autofill and apply assistance (Chrome extension). Runs on operator's local machine — not a server container. Polls backend for pipeline fill requests. | **`executioner/`** (Chrome extension sources) | local only — no server container |
+| **C4** | **Coordinator** | Orchestration, readiness, apply-prep, submit control. Exposes submit approval API. | **`coordinator/`** | `hunt-coordinator` |
 
 **C1 (Hunter)** is what used to be described as “the scraper” in older docs. The **directory `scraper/` is gone**: runtime code now lives under the **`hunter`** package.
 

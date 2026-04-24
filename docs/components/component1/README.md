@@ -66,18 +66,36 @@ Recommended finish sequence:
 
 ## Component Contract
 
-**C1 hands off to C2/C3/C4:**
-- `job_url`, `apply_url`, `ats_type`, `apply_type`, `auto_apply_eligible`
-- enriched `description`
-- `enrichment_status = done` as the C2 trigger signal
+**C1 writes to DB:**
+- `jobs` table (discovery fields, enrichment fields, failure artifact fields)
+- `runtime_state` (`linkedin_auth_state`, `linkedin_auth_error`, `review_audit_log`)
+- `linkedin_accounts.auth_state` + `last_auth_at` after each auth attempt
 
-**Standalone behavior:** C1 discovery/enrichment runs from CLI and shared DB state. Review UI is optional convenience, not required for scraping, draining, or enrichment testing.
+**C1 reads from DB:**
+- `component_settings` for its own settings (search terms, batch size, lanes, intervals)
+- `linkedin_accounts` to select the active account for enrichment
+
+**C1 service API** (called by C0 backend, not the frontend directly):
+
+| Endpoint | Purpose |
+|---|---|
+| `POST /scrape` | Trigger one discovery run |
+| `POST /enrich` | Trigger one enrichment batch (accepts `limit`, `source`) |
+| `POST /accounts/{id}/reauth` | Trigger LinkedIn re-auth for a specific account |
+| `GET /queue` | Return queue health JSON |
+| `GET /status` | Health check — online/offline |
+
+**Standalone behavior:** C1 discovery/enrichment runs from CLI against the DB. C0 is optional convenience.
 
 **C1 does not:** submit applications, make resume decisions, depend on C0, or block on C2/C3/C4 state.
+
+**LinkedIn multi-account:** C1 reads from `linkedin_accounts` table (managed via C0 UI). `LINKEDIN_EMAIL` / `LINKEDIN_PASSWORD` env vars are a legacy fallback for single-account setups.
 
 ## Related
 
 - `runbook.md` : operational how-to (start, drain, recover, auth)
+- `api.md` : C1 service API contract
 - `docs/deployment.md` : server2 layout, Ansible, env vars
-- `docs/DATA_MODEL.md` : full field reference
+- `docs/DATA_MODEL.md` : full field reference including `linkedin_accounts`
+- `docs/SETTINGS_AND_SECRETS.md` : LinkedIn credential and setting rules
 - `hunter/` : implementation

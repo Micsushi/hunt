@@ -238,3 +238,46 @@ Key-value store for singleton runtime flags. Used by C1 for auth state and audit
 | `linkedin_auth_state` | LinkedIn session health | `ok`, `expired`, `unknown` |
 | `linkedin_auth_error` | last LinkedIn auth error message | free text |
 | `review_audit_log` | JSON log of operator review actions | JSON array |
+
+---
+
+## Entity: component_settings
+
+Key-value settings per component. Written and read by the C0 backend on behalf of each component. Components pull their settings at startup or on demand via the backend API. The C0 UI provides a settings panel for each component.
+
+Unique constraint on `(component, key)`.
+
+| Field | Type | Purpose | Valid values |
+|---|---|---|---|
+| `id` | integer, PK | auto | |
+| `component` | string | which component owns this setting | `c0`, `c1`, `c2`, `c3`, `c4` |
+| `key` | string | setting name | free text |
+| `value` | string | setting value; parse according to `value_type` | free text |
+| `value_type` | string | parser/validator hint | `string`, `integer`, `float`, `boolean`, `json` |
+| `secret` | boolean | redact value from UI responses after save | 0 / 1 |
+| `updated_at` | string | when last changed | ISO datetime UTC |
+| `updated_by` | string | operator/service that changed value | username or service name |
+
+---
+
+## Entity: linkedin_accounts
+
+LinkedIn credentials for C1 discovery and enrichment. Managed from the C0 UI. Multiple accounts supported to rotate sessions or recover from auth failures.
+
+| Field | Type | Purpose | Valid values |
+|---|---|---|---|
+| `id` | integer, PK | auto | |
+| `email` | string, unique | LinkedIn login email | email address |
+| `password_encrypted` | string | encrypted credential | AES-encrypted; key from env var |
+| `display_name` | string | human label for this account | free text |
+| `active` | boolean | whether C1 currently uses this account | 0 / 1 |
+| `auth_state` | string | current session health | `ok`, `expired`, `unknown`, `locked` |
+| `storage_state_path` | string | Playwright auth/session state path outside repo checkout | filesystem path |
+| `last_auth_at` | string | timestamp of last successful auth | ISO datetime UTC |
+| `last_used_at` | string | timestamp of last enrichment/search use | ISO datetime UTC |
+| `cooldown_until` | string | account unavailable until this time | ISO datetime UTC |
+| `auth_error` | string | most recent auth error | free text |
+| `created_at` | string | | ISO datetime UTC |
+| `updated_at` | string | | ISO datetime UTC |
+
+See `docs/SETTINGS_AND_SECRETS.md` for validation, redaction, encryption, and rotation rules.

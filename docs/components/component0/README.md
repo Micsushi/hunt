@@ -1,26 +1,30 @@
 # C0 (Frontend) : Operator Dashboard
 
-Code lives in `frontend/` plus `backend/`. Built with Vite + React 18 + TypeScript plus FastAPI backend. CLI: `ui serve` (local), `ui build` (compile only). Legacy aliases: `hunter review`, `hunter build-ui`.
+Code lives in `frontend/` plus `backend/`. Two containers: `hunt-frontend` (nginx serving compiled SPA) and `hunt-backend` (FastAPI). CLI: `ui serve` (local dev), `ui build` (compile only). Legacy aliases: `hunter review`, `hunter build-ui`.
 
 ## Goal
 
-Single-page application for the operator to inspect the job queue, trigger enrichment ops, monitor logs, and eventually manage Fletcher and Executioner settings. All data comes from the FastAPI backend (`backend/app.py`) via REST.
+Single-page application for the operator to manage the full pipeline: inspect the job queue, trigger component actions, monitor logs, manage settings for all components, manage LinkedIn accounts, review generated resumes, and approve submit actions. All data comes from the FastAPI backend (`backend/app.py`) via REST.
+
+The backend is the **API gateway** — it talks to the DB directly and calls each component's service API when the operator triggers an action from the UI. The frontend never calls component services directly.
 
 ## Locked Decisions
 
-- Vite + React 18 + TypeScript - no framework switch without full rewrite
-- CSS Modules + CSS custom properties - no CSS-in-JS
+- Vite + React 18 + TypeScript — no framework switch without full rewrite
+- CSS Modules + CSS custom properties — no CSS-in-JS
 - TanStack Query v5 for data fetching + caching
 - Zustand for global UI state (toasts, row selection)
 - React Router v6 for client-side routing
-- Session-based auth: SQLite `review_sessions` table, `hunt_session` httponly cookie, 7-day TTL
+- Session-based auth: `review_sessions` table, `hunt_session` httponly cookie, 7-day TTL
 - Credentials via env vars: `HUNT_ADMIN_USERNAME` (default `admin`), `HUNT_ADMIN_PASSWORD` (required)
-- `frontend/dist/` is the compiled output - not committed to git, compiled on deploy
+- `frontend/dist/` is the compiled output — not committed to git, compiled on deploy
 - `ui serve` auto-builds if `frontend/dist/index.html` is missing
 - `ui build` is the explicit compile command
-- Multi-user / proper auth deferred to v0.4 - current single-admin model is designed to extend cleanly
-- C0 stays usable for inspection and DB-backed ops even when C1/C2/C3/C4 runtimes are not running
+- Multi-user / proper auth deferred to v0.4 — current single-admin model is designed to extend cleanly
+- C0 stays usable for browse/review/settings even when C1/C2/C3/C4 services are not running — those actions simply show as unavailable
 - C0 is convenience/control-plane UI, not required for C1/C2/C3 terminal workflows
+- Backend calls component service APIs; frontend never calls component services directly
+- Component availability is determined by a `/api/status` endpoint that health-checks each configured service URL
 
 ## Feature Status
 
@@ -68,28 +72,42 @@ None confirmed yet - not tested against live data.
 | `/jobs/:id` | Job detail | Per-job metadata, enrichment, resume history |
 | `/logs` | Logs | Auth status, queue stats, error breakdown, audit log |
 | `/ops` | Ops | Requeue controls, bulk ops |
-| `/fletcher` | Fletcher (stub) | Future: resume upload and tailoring UI |
-| `/executioner` | Executioner (stub) | Future: Chrome extension settings |
+| `/fletcher` | Fletcher | Resume file-drop (one-off generation), generation history, C2 settings — stub until C2 service wired |
+| `/executioner` | Executioner | C3 settings (pulled from DB, pushed to extension), apply attempt history — stub until C3 wired |
+| `/coordinator` | Coordinator | Pending runs, manual review queue, submit approval — stub until C4 wired |
+| `/settings` | Settings | Per-component settings (reads/writes `component_settings` table), LinkedIn account management |
+| `/status` | Status | Live health indicators for each component service |
 | `/login` | Login | Session auth entry point |
 
 ## Component Contract
 
-**C0 reads from:**
-- `/api/summary` - queue counts, activity stats, runtime state, LinkedIn auth
-- `/api/jobs` - job list with filter/sort/pagination
-- `/api/jobs/{id}` - single job detail
-- `/api/jobs/{id}/attempts` - resume attempt history
-- `/api/jobs/count` - filtered count (for bulk dry-run display)
-- `/api/logs` - auth failures, runtime events, audit entries
-- `/api/ops/*` - requeue, set_status, delete, bulk ops
+**C0 backend reads/writes DB directly:**
+- All `jobs`, `resume_attempts`, `resume_versions`, `orchestration_runs`, `orchestration_events`, `submit_approvals`, `review_sessions`, `runtime_state`, `component_settings`, `linkedin_accounts`
 
-**Current standalone behavior:** `backend/app.py` reads shared DB/artifact state directly. Queue browsing and most current ops work without live C1/C2/C3/C4 services running; if a future UI action invokes a component runtime, that runtime must be available for that action only.
+**C0 backend calls component service APIs:**
+- `C1_API_URL` — trigger scrape, trigger enrich, get queue health, trigger LinkedIn re-auth
+- `C2_API_URL` — trigger generation for job_id, one-off file-drop generation, get generation status
+- `C4_API_URL` — trigger pipeline run, get run list, submit approval actions
+- C3 has no inbound API — C3 polls `GET /api/c3/pending-fills`; backend queues fill requests written by C4
 
-**C0 does not:** require C1/C2/C3/C4 to be running for basic browse/review, run enrichment itself, or make routing decisions on behalf of other components.
+**`/api/status` response shape:**
+```json
+{
+  "hunter":      { "online": true/false },
+  "fletcher":    { "online": true/false },
+  "executioner": { "online": true/false },
+  "coordinator": { "online": true/false }
+}
+```
+If a component URL is not configured, it reports `online: false`. UI grays out that section.
+
+**C0 does not:** require any component service to be running for browse/review/settings operations.
 
 ## Related
 
 - `runbook.md` : local dev, build, deploy, testing commands
 - `backend/app.py` : FastAPI backend that serves C0 and owns all `/api/*` routes
 - `backend/auth_session.py` : session management
+- `docs/API_CONTRACTS.md` : C0 gateway and component service API shapes
+- `docs/SETTINGS_AND_SECRETS.md` : settings, tokens, LinkedIn account storage
 - `docs/DATA_MODEL.md` : field reference for what the API returns

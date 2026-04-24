@@ -8,7 +8,7 @@ Chrome extension that autofills external job application forms. Must work standa
 
 ## Locked Decisions
 
-- Chrome extension only
+- Chrome extension only — runs on operator's local machine, not a server container
 - Workday first — harden before widening ATS coverage
 - Standalone/manual use is always required
 - Auto-fill on page load + manual click-to-fill both supported
@@ -18,7 +18,10 @@ Chrome extension that autofills external job application forms. Must work standa
 - No autonomous submit decisions — submit is always a separate explicit step
 - `priority = 1` jobs are manual-only, same as all components
 - C3 must remain directly usable without C0/C4
-- Deployment: separate from C1/C2/C4 — see `docs/deployment.md`
+- C3 does not receive DB credentials and does not write to DB directly
+- In pipeline mode, C3 posts fill results to C0; backend/C4 update job/run state
+- C3 settings have two surfaces: the extension options page (local, for ATS-specific config) and the C0 settings panel (stored in `component_settings`, pulled by the extension at fill time)
+- Deployment: runs on operator machine — no Ansible server stage
 
 ## Feature Status
 
@@ -53,24 +56,39 @@ Chrome extension that autofills external job application forms. Must work standa
 
 ## Component Contract
 
-**C3 receives from C4 (queue-driven path):**
-- `apply_url` (resolved, not job board URL)
-- Selected resume bytes or cached C3 payload (not just a path)
-- `ats_type`
-- Per-job context (`c3_apply_context.json` written by `hunter apply-prep`)
+**C3 apply context fields** (passed in `c3_apply_context.json`):
 
-**C3 hands off to C4:**
-- Fill result summary
-- Generated answers used
-- Evidence paths (screenshots, HTML)
-- Manual-review flags
-- Attempt status
+| Field | Required | Purpose |
+|---|---|---|
+| `apply_url` | yes | resolved external ATS URL |
+| `resume_bytes` | yes | base64-encoded resume PDF |
+| `ats_type` | yes | ATS platform hint |
+| `job_id` | no | DB row ID for backend result correlation |
+| `orchestration_run_id` | no | run ID for backend/C4 result correlation |
 
-**Standalone mode:** user is signed in, extension uses last provided resume, no C1/C2/C4 needed.
+**C3 result write-back logic (post-fill):**
+1. `HUNT_BACKEND_URL` unset? Save fill result locally, done.
+2. `HUNT_BACKEND_URL` set? Post result to `POST /api/c3/fill-results`.
+3. Backend/C4 updates `jobs`, `orchestration_runs`, `orchestration_events`, and `submit_approvals` as needed.
+
+C3 never queries or writes to the DB directly.
+
+**C3 pipeline mode (polling):**
+When `HUNT_BACKEND_URL` is set, C3 polls `GET /api/c3/pending-fills` for work queued by C4. No inbound connection from server is needed — C3 opens the outbound connection.
+
+**C3 settings sources (priority order):**
+1. Extension options page (local) — ATS-specific field mappings, autofill policy
+2. `component_settings` table pulled via `GET /api/settings/c3` at fill time — operator-managed defaults
+
+**C3 hands off** fill result summary, generated answers, evidence screenshots, manual-review flags, and attempt status by posting to C0.
+
+**Standalone mode:** `HUNT_BACKEND_URL` unset — extension uses last provided resume and context, no C1/C2/C4 needed, fill result saved locally only.
 
 ## Related
 
 - `runbook.md` : operational how-to (install, load, test)
 - `design.md` : architecture, data model, rollout notes
+- `backend-contract.md` : C0 polling/result contract
 - `executioner/` : implementation
 - `docs/components/component4/README.md` : C4 orchestration contract
+- `docs/DATA_MODEL.md` : `jobs.status` field, `orchestration_runs` schema

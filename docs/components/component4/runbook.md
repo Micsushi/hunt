@@ -32,14 +32,13 @@ Check output to confirm:
 ## Checking Orchestration Runs
 
 ```bash
-# Not yet in hunterctl — query DB directly for now:
+# Not yet in hunterctl — query DB directly for now (Postgres):
 python -c "
-import sqlite3, json, os
-db = os.environ.get('HUNT_DB_PATH', 'hunt.db')
-conn = sqlite3.connect(db)
-conn.row_factory = sqlite3.Row
-rows = conn.execute('SELECT id, job_id, status, started_at FROM orchestration_runs ORDER BY started_at DESC LIMIT 10').fetchall()
-for r in rows: print(dict(r))
+import os, psycopg2
+conn = psycopg2.connect(os.environ['HUNT_DB_URL'])
+cur = conn.cursor()
+cur.execute('SELECT id, job_id, status, started_at FROM orchestration_runs ORDER BY started_at DESC LIMIT 10')
+for r in cur.fetchall(): print(r)
 "
 ```
 

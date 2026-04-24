@@ -45,6 +45,17 @@ C1 is the most mature surface. Short narrative : **`docs/C1_OPERATOR_WORKFLOW.md
 
 **`hunt <verb>`** is identical (legacy launcher). Legacy subcommand names remain valid (**`timer-start`**, **`auto-on`**, **`svc-start`**, etc.) but **prefer `start` / `stop` / `restart`** in new docs.
 
+## Component Service APIs vs CLI
+
+Each component (C1–C4) exposes both a **CLI** (for operator/terminal use) and a **service API** (called by the C0 backend when the operator triggers actions from the UI). These are separate surfaces:
+
+| Surface | Caller | Lives in |
+|---|---|---|
+| CLI (`hunter`, `fletch`, etc.) | operator, terminal, scripts | `scripts/hunterctl.py`, `scripts/fletchctl.py`, etc. |
+| Service API (HTTP) | C0 `backend/app.py` only | each component's FastAPI/Flask app |
+
+The frontend never calls service APIs directly. If you add a new operator action accessible from the UI, implement it as both: a CLI command in the appropriate `*ctl.py` and a service API endpoint in the component's HTTP layer.
+
 ## Conventions for **future** C2, C3, C4 commands
 
 When you add automation an operator runs from the repo (not the extension popup, not OpenClaw-only), follow this pattern.

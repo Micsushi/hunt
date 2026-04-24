@@ -25,9 +25,10 @@ These commands are primary test path for C2. UI is optional.
    ```
 2. Run `fletch context` to get Entry IDs from `main.tex` — use these in `candidate_profile.md` to match bullets to entries.
 3. Set env vars (see `docs/deployment.md`):
-   - `HUNT_DB_PATH`
+   - `HUNT_DB_URL` (Postgres) or `HUNT_DB_PATH` (SQLite local dev fallback)
    - `HUNT_RESUME_MODEL_BACKEND=ollama` (or omit for heuristic)
    - `HUNT_RESUME_LOG_LLM_IO=1`
+   - `OLLAMA_BASE_URL=http://localhost:11434` (local) or `http://ollama:11434` (container)
 
 ## Backends
 

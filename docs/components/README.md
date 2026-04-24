@@ -8,11 +8,19 @@
 
 **DB schema**: `../DATA_MODEL.md`
 
+**API contracts**: `../API_CONTRACTS.md`
+
+**Settings/secrets**: `../SETTINGS_AND_SECRETS.md`
+
 **Deployment**: `../deployment.md`
 
 ---
 
-**Shared rule**: components should be independently runnable for local testing and debugging. C0 should work through `backend/app.py` against DB/artifact state even when other runtimes are down. C1/C2/C3 should keep standalone terminal/manual entrypoints. C4 is the only intentionally coupled component because it orchestrates C1/C2/C3 rather than replacing their standalone workflows.
+**Shared rule**: components should be independently runnable for local testing and debugging. C0 + DB is the required base layer — it works without any other component running. C1/C2/C3 each work standalone (CLI + DB when available). C4 is the only intentionally coupled component: it depends on C1/C2 outputs and a live C3 session to do anything useful.
+
+**API gateway rule**: the C0 backend is the single gateway. All component API calls from the frontend route through the C0 backend. Components expose small service APIs; the backend calls them. The frontend never calls component services directly.
+
+**C3 special rule**: C3 is a Chrome extension running on the operator's local machine — not a server container. It polls the C0 backend for pending fill requests when in pipeline mode. It posts fill results back to C0; backend/C4 perform DB writes. C3 must not receive DB credentials.
 
 ---
 
@@ -22,6 +30,7 @@ Each component has two docs:
 |---|---|---|
 | `README.md` | Feature status: done / in-progress / bugs + locked decisions + contract | Finding next thing to work on |
 | `runbook.md` | Operational how-to: commands, setup, recovery | Running or debugging the component |
+| `api.md` / `backend-contract.md` | HTTP/service contract where applicable | Wiring C0 gateway or component service APIs |
 
 ---
 
