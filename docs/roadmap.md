@@ -55,14 +55,14 @@ Each component deploys in its own container and Ansible stage. Never fold a late
 
 ## Principles
 
-- Standalone-first: every component must be runnable and testable on its own. C0 + DB is the base layer; all other components are optional. C4 is the only intentionally coupled component.
-- C0 backend is the single API gateway — frontend never calls component services directly
-- LinkedIn is highest-priority source
-- LinkedIn Easy Apply is classified and excluded at C1 — never reaches C3/C4
-- `priority = 1` jobs are always manual-only
-- Submit is always a separate explicit decision from fill
-- Do not attempt CAPTCHA/anti-bot bypass
-- All code runs on both Windows (local dev) and Linux (server2)
+- Standalone-first: each component runnable alone. C0 + DB: required base. C4 only intentionally coupled.
+- C0 backend: single API gateway — frontend never calls component services directly
+- LinkedIn: highest-priority source
+- Easy Apply: classified + excluded at C1 — never reaches C3/C4
+- `priority = 1`: manual-only always
+- Submit: always separate explicit decision from fill
+- No CAPTCHA/anti-bot bypass
+- Windows (local) + Linux (server2): both required
 
 ## Component Docs
 

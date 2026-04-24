@@ -4,7 +4,7 @@ Code lives in `fletcher/`. CLI: `fletch <cmd>` (delegates to `python -m fletcher
 
 ## Goal
 
-Generate a truthful, job-specific one-page resume from `main.tex` for every enriched job. Pass selected resume + metadata to C3/C4 for downstream apply.
+Generate truthful job-specific one-page resume from `main.tex` for every enriched job. Pass selected resume + metadata to C3/C4 for downstream apply.
 
 ## Locked Decisions
 

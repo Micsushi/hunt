@@ -16,11 +16,11 @@
 
 ---
 
-**Shared rule**: components should be independently runnable for local testing and debugging. C0 + DB is the required base layer — it works without any other component running. C1/C2/C3 each work standalone (CLI + DB when available). C4 is the only intentionally coupled component: it depends on C1/C2 outputs and a live C3 session to do anything useful.
+**Standalone rule**: C0 + DB required base — works without other components. C1/C2/C3: standalone (CLI + DB). C4 only intentionally coupled: depends on C1/C2 outputs + live C3.
 
-**API gateway rule**: the C0 backend is the single gateway. All component API calls from the frontend route through the C0 backend. Components expose small service APIs; the backend calls them. The frontend never calls component services directly.
+**API gateway rule**: C0 backend single gateway. All component API calls route through it. Frontend never calls component services directly.
 
-**C3 special rule**: C3 is a Chrome extension running on the operator's local machine — not a server container. It polls the C0 backend for pending fill requests when in pipeline mode. It posts fill results back to C0; backend/C4 perform DB writes. C3 must not receive DB credentials.
+**C3 rule**: Chrome extension, operator's local machine — no server container. Polls C0 for fill requests. Posts fill results to C0; backend/C4 do DB writes. No DB credentials.
 
 ---
 

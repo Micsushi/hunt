@@ -18,7 +18,7 @@ component_settings(component, key, value, value_type, secret, updated_at, update
 
 ## Validation
 
-Generic storage does not mean unvalidated settings. Each component owns a settings schema in code and rejects unknown or invalid values.
+Generic storage != unvalidated. Each component owns a settings schema in code; rejects unknown/invalid values.
 
 Minimum validation:
 
@@ -93,12 +93,11 @@ linkedin_accounts(
 
 Rules:
 
-- C0 UI manages account records.
-- C1 performs login/re-auth.
-- Passwords are encrypted at rest with `HUNT_CREDENTIAL_KEY`.
-- Auth/session state files live under runtime data dir, not repo checkout.
-- Only one account should be active by default unless account rotation is explicitly enabled.
-- Locked/cooldown accounts must not be selected by C1.
+- C0 UI: manage account records. C1: login/re-auth.
+- Passwords encrypted at rest with `HUNT_CREDENTIAL_KEY`.
+- Auth/session state files: runtime data dir, not repo checkout.
+- Default: one active account unless rotation explicitly enabled.
+- Locked/cooldown accounts: C1 must not select.
 
 ## Secret Env Vars
 

@@ -1,8 +1,8 @@
 # Hunt : Data Model
 
-Logical schema — describes meaning, not storage implementation. Backend is currently SQLite; fields and semantics here remain stable across backend changes (e.g. Postgres/Supabase). Implementation lives in `hunter/db.py`, `fletcher/db.py`, `coordinator/db.py`.
+Logical schema — meaning, not storage implementation. Fields stable across backends (SQLite/Postgres/Supabase). Implementation: `hunter/db.py`, `fletcher/db.py`, `coordinator/db.py`.
 
-When fields are added or semantics change: update this file as part of the same task.
+Fields added or semantics changed: update this file in same task.
 
 ---
 

@@ -4,7 +4,7 @@ Code lives in `executioner/`. Chrome extension — no server-side process. Repo-
 
 ## Goal
 
-Chrome extension that autofills external job application forms. Must work standalone (no C1/C2/C4 required) and also accept explicit apply-context payloads from C4 for queue-driven orchestration.
+Chrome extension: autofill external job application forms. Works standalone (no C1/C2/C4 needed) and accepts explicit apply-context payloads from C4 for queue-driven orchestration.
 
 ## Locked Decisions
 

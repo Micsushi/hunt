@@ -4,7 +4,7 @@ Code lives in `hunter/`. CLI: `./hunter.sh <cmd>` (Windows: `.\hunter.ps1 <cmd>`
 
 ## Goal
 
-Continuously discover job postings, enrich them with full descriptions and external apply URLs, and classify Easy Apply jobs so they never reach downstream automation.
+Discover job postings, enrich with full descriptions + external apply URLs, classify Easy Apply so it never reaches downstream automation.
 
 ## Locked Decisions
 

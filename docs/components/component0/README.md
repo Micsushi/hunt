@@ -4,9 +4,9 @@ Code lives in `frontend/` plus `backend/`. Two containers: `hunt-frontend` (ngin
 
 ## Goal
 
-Single-page application for the operator to manage the full pipeline: inspect the job queue, trigger component actions, monitor logs, manage settings for all components, manage LinkedIn accounts, review generated resumes, and approve submit actions. All data comes from the FastAPI backend (`backend/app.py`) via REST.
+SPA for operator: inspect queue, trigger component actions, manage settings/LinkedIn accounts, review resumes, approve submits. All data via FastAPI backend REST.
 
-The backend is the **API gateway** — it talks to the DB directly and calls each component's service API when the operator triggers an action from the UI. The frontend never calls component services directly.
+Backend: API gateway — DB direct + calls component service APIs. Frontend never calls component services directly.
 
 ## Locked Decisions
 

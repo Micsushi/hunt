@@ -47,12 +47,11 @@ Canonical naming: `docs/NAMING.md`. Old `scraper/` package renamed to `hunter/`.
 
 ## Data Model Rules
 
-Full schema with all fields, types, valid values, and owning component: `docs/DATA_MODEL.md`.
+Full schema: `docs/DATA_MODEL.md`.
 
-Key semantics:
-- `job_url`: discovery/listing URL — dedupe key
+- `job_url`: listing URL — dedupe key
 - `apply_url`: best known external apply URL
-- `status`: application lifecycle only (`new`, `claimed`, `applied`, `failed`, `skipped`) — never enrichment state
+- `status`: lifecycle only (`new`, `claimed`, `applied`, `failed`, `skipped`) — never enrichment state
 - `apply_type`: `external_apply`, `easy_apply`, `unknown`
 - `auto_apply_eligible`: `1` only for `external_apply`
 - `enrichment_status`: `pending`, `processing`, `done`, `failed`
@@ -60,45 +59,41 @@ Key semantics:
 
 ## Business Rules
 
-- `priority = 1`: manual apply only
-- automation acts only on `priority = 0` unless user says otherwise
-- LinkedIn Easy Apply is never downstream auto-apply target
-- classify Easy Apply during enrichment so later stages never treat it as external ATS apply
-- `C1 (Hunter)` only discovers and enriches; it does not submit applications
+- `priority = 1`: manual only
+- automation: `priority = 0` only
+- Easy Apply: never downstream auto-apply target
+- classify Easy Apply at C1 — later stages never see it as external ATS
+- C1: discover + enrich only — no submit
 
 ## Runtime Rules
 
-- newly discovered pending LinkedIn rows outrank old backlog rows in post-scrape enrichment
-- read-only queue tools and control plane must not mutate queue state during normal inspection
-- C0 mutating control-plane endpoints require a valid web session or `REVIEW_OPS_TOKEN`
-- terminal failures like `job_removed` must be recorded cleanly, not retried as actionable failures
-- deployment details (server2 shape, Ansible stages, env vars, paths): `docs/deployment.md`
+- new LinkedIn rows outrank old backlog in post-scrape enrichment queue
+- read-only tools: no queue mutation
+- C0 mutating endpoints: require web session or `REVIEW_OPS_TOKEN`
+- `job_removed` and similar terminal failures: record, don't retry
+- deployment details: `docs/deployment.md`
 
 ## C2 Constraints
 
-- `ResumeDocument` has no `summary` field. Use bullets-only model in `fletcher/models.py`.
-- To generate summary text, build context from `candidate_profile["experience_entries"]` and `candidate_profile["skills"]`, then call `generate_summary()` in `llm_enrich.py`.
-- DB connection: use `HUNT_DB_URL` (Postgres). `HUNT_DB_PATH` is SQLite fallback for local dev only.
-- Live Postgres on server: configured via `HUNT_DB_URL` in `.env`.
-- Run Python from venv: `source ~/hunt/.venv/bin/activate`.
-- System Python lacks project deps.
-- Ollama model on server is `gemma4:e4b`.
-- Timeout is `300s`.
-- Ollama base URL: `OLLAMA_BASE_URL` (default `http://ollama:11434` in container; `http://localhost:11434` locally).
-- Enable LLM backend with `HUNT_RESUME_MODEL_BACKEND=ollama` in `.env`.
-- Without that env var, backend defaults to heuristic mode.
-- `candidate_profile` keys: `experience_entries`, `project_entries`, `skills` with `languages`, `frameworks`, `developer_tools`.
-- No top-level `summary`, `targeting_notes`, or `name` fields in parsed structure.
+- `ResumeDocument`: no `summary` field — bullets-only model (`fletcher/models.py`)
+- summary text: build from `candidate_profile["experience_entries"]` + `["skills"]`, call `generate_summary()` in `llm_enrich.py`
+- DB: `HUNT_DB_URL` (Postgres); `HUNT_DB_PATH` SQLite fallback local dev only
+- venv: `source ~/hunt/.venv/bin/activate` — system Python lacks deps
+- Ollama model: `gemma4:e4b`, timeout `300s`
+- `OLLAMA_BASE_URL`: `http://ollama:11434` in container; `http://localhost:11434` locally
+- enable LLM: `HUNT_RESUME_MODEL_BACKEND=ollama` — else heuristic mode
+- `candidate_profile` keys: `experience_entries`, `project_entries`, `skills` (`languages`, `frameworks`, `developer_tools`)
+- no top-level `summary`, `targeting_notes`, or `name` in parsed structure
 
 ## Doc Maintenance
 
-When specs change (new DB fields, business rules, component boundaries, CLI contracts): update this file and the relevant component doc before marking work done.
+Specs change (DB fields, rules, component boundaries, CLI contracts): update this file + relevant component doc before marking done.
 
-When new stylistic/workflow preferences are established: add here under Keep In Mind, then compress with caveman skill.
+New style/workflow preferences: add to Keep In Mind, compress with caveman skill.
 
 ## Cross-Platform
 
-All code must run on Windows (local dev) and Linux (server2). Test locally on Windows before deploying. Never hard-code Linux paths or shell assumptions into Python — use `pathlib`, `os.path`, env vars.
+Windows (local) + Linux (server2). Test locally first. `pathlib` + env vars — no hardcoded paths or shell assumptions.
 
 ## Keep In Mind
 

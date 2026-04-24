@@ -4,7 +4,7 @@ Code lives in `coordinator/`. CLI: shared `hunter apply-prep <id>` plus prefixed
 
 ## Goal
 
-Coordinate C1→C2→C3 into end-to-end apply runs. Decide when jobs proceed, when C3 fills, and when submit is allowed. Route blocked flows to manual review. OpenClaw is the planned first production runtime.
+Coordinate C1→C2→C3 into end-to-end apply runs. Decide job progression, C3 fill timing, submit gating. Route blocked flows to manual review. OpenClaw: planned first production runtime.
 
 ## Locked Decisions
 
@@ -87,7 +87,7 @@ Recommended order:
 | `GET /status` | Health check — online/offline |
 
 **C3 fill-request queue (C4 → C3):**
-C4 writes pending fill requests to DB. C3 polls `GET /api/c3/pending-fills` (via C0 backend) to pick them up. C4 does not call C3 directly — the C0 backend mediates. This removes the need for C3 to have an inbound port.
+C4 writes fill requests to DB. C3 polls `GET /api/c3/pending-fills` via C0 backend. C4 never calls C3 directly — C0 mediates. C3 needs no inbound port.
 
 **C4 hands off to C3** via `c3_apply_context.json`:
 - `apply_url` (resolved)

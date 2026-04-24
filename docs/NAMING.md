@@ -1,6 +1,6 @@
 # Hunt: component IDs, code names, and code layout
 
-This file is the **single place** to resolve naming: **C1–C4**, **Hunter / Fletcher / Executioner / Coordinator**, and **where code lives in this repo**.
+Single source for resolving naming: **C1–C4**, **Hunter / Fletcher / Executioner / Coordinator**, code locations.
 
 ## Components (stable labels)
 
@@ -12,14 +12,14 @@ This file is the **single place** to resolve naming: **C1–C4**, **Hunter / Fle
 | **C3** | **Executioner** | Browser autofill and apply assistance (Chrome extension). Runs on operator's local machine — not a server container. Polls backend for pipeline fill requests. | **`executioner/`** (Chrome extension sources) | local only — no server container |
 | **C4** | **Coordinator** | Orchestration, readiness, apply-prep, submit control. Exposes submit approval API. | **`coordinator/`** | `hunt-coordinator` |
 
-**C1 (Hunter)** is what used to be described as “the scraper” in older docs. The **directory `scraper/` is gone**: runtime code now lives under the **`hunter`** package.
+**C1 (Hunter)**: formerly “the scraper”. `scraper/` directory gone — code in `hunter` package.
 
 ## C1 (Hunter): `hunter` package vs `hunter/scraper.py`
 
-- **`hunter/`** (with `__init__.py`) is the **Python package name** for C1 (Hunter). Import like: `from hunter.db import ...`.
-- **`hunter/scraper.py`** is only the **discovery entrypoint script** (historical filename: “scraper”). It is **not** a separate component and **not** the old `scraper` package.
-- **`hunter/runner.py`** loops and calls into the discovery/enrichment flow for unattended runs.
-- Systemd units **`hunt-scraper.service`** / **`hunt-scraper.timer`** are **legacy unit names** on the server; they run **C1 (Hunter)** (`python hunter/scraper.py` from the Hunt repo root). Renaming those units would be a separate Ansible change.
+- `hunter/` (`__init__.py`): Python package. Import: `from hunter.db import ...`.
+- `hunter/scraper.py`: discovery entrypoint only (historical filename). Not a separate component.
+- `hunter/runner.py`: continuous loop for unattended runs.
+- Systemd units `hunt-scraper.service`/`hunt-scraper.timer`: legacy names — run C1 (`python hunter/scraper.py`). Renaming needs separate Ansible change.
 
 ## Quick map for operators
 
@@ -30,15 +30,14 @@ This file is the **single place** to resolve naming: **C1–C4**, **Hunter / Fle
 
 ## Docs convention
 
-- Prefer **“C1 (Hunter)”** on first mention in a doc, then **C1** or **Hunter** where clear.
-- Same for **C2 (Fletcher)**, **C3 (Executioner)**, **C4 (Coordinator)**.
-- Avoid saying “the scraper package” for C1; say **`hunter` package** or **C1 (Hunter)**.
-- Older prose used **“Component N”**; repo docs and user-facing strings now use **“CN (code name)”** consistently (folder names like `docs/components/component1/` stay as stable paths).
+- First mention: **”C1 (Hunter)”**, then **C1** or **Hunter**. Same for C2/C3/C4.
+- Never “the scraper package” for C1 — use `hunter` package or C1 (Hunter).
+- Folder names `docs/components/component1/` stay stable; prose uses `CN (code name)`.
 
-## C4 (Coordinator) : package vs SQLite tables vs env vars
+## C4 (Coordinator): package vs tables vs env vars
 
-- The Python package directory is **`coordinator/`** (import `from coordinator...`, run `python -m coordinator.cli ...`).
-- **Runtime filesystem root** for C4 artifacts: set **`HUNT_COORDINATOR_ROOT`** (preferred). **`HUNT_ORCHESTRATION_ROOT`** is accepted as a backward-compatible alias (same resolution order in code).
-- SQLite tables are still named **`orchestration_runs`**, **`orchestration_events`**, etc. Renaming those would require a DB migration; they keep the historical **orchestration** prefix.
+- Package: `coordinator/` (import `from coordinator...`, run `python -m coordinator.cli`).
+- Artifacts root: `HUNT_COORDINATOR_ROOT` (preferred); `HUNT_ORCHESTRATION_ROOT` backward-compatible alias.
+- DB tables: `orchestration_runs`, `orchestration_events` etc. keep historical prefix — rename needs migration.
 
 See also: `docs/roadmap.md` (includes version snapshot and future milestones), `docs/GLOSSARY.md`, `README.md`, and per-component folders under `docs/components/`.

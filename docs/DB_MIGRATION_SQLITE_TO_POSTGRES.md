@@ -6,15 +6,15 @@ Current v1 uses SQLite via `HUNT_DB_PATH`. Target v2 uses Postgres via `HUNT_DB_
 
 ## Goals
 
-- Preserve all existing jobs, enrichment fields, resume attempts, orchestration records, runtime state, and artifacts.
-- Keep artifact files on disk under `HUNT_ARTIFACTS_DIR`.
-- Allow local dev to keep SQLite fallback during transition.
-- Make server2 production use Postgres only after migration validation.
+- Preserve all rows: jobs, enrichment, resume attempts, orchestration, runtime state.
+- Artifact files stay on disk under `HUNT_ARTIFACTS_DIR`.
+- Local dev: SQLite fallback during transition.
+- server2: Postgres only after validation.
 
 ## Non-Goals
 
-- No schema redesign hidden inside migration.
-- No direct browser-extension DB access.
+- No schema redesign inside migration.
+- No browser-extension DB access.
 - No hardcoded server paths in Python.
 
 ## Compatibility Phase
@@ -25,7 +25,7 @@ DB access code should choose:
 2. else `HUNT_DB_PATH` set -> SQLite
 3. else repo-local fallback only for tests/dev
 
-During compatibility, migrations must run against both engines or have clearly separate migration paths.
+Migrations must run against both engines or have separate paths.
 
 ## Migration Order
 
@@ -83,9 +83,9 @@ If validation fails after switch:
 4. Restart v1 services.
 5. Keep failed Postgres DB for inspection.
 
-Any writes made to Postgres after cutover are not automatically copied back to SQLite. Treat rollback after writes as data-loss risk unless reverse export is performed.
+Writes to Postgres after cutover are not auto-synced back. Rollback after writes = data-loss risk without reverse export.
 
 ## Local Dev
 
-Windows local dev may keep SQLite until Postgres support is complete. Tests that cover DB access should run against both engines when behavior matters.
+Windows: keep SQLite until Postgres support complete. DB-access tests: run against both engines when behavior differs.
 

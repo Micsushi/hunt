@@ -1,8 +1,8 @@
 # Hunt : CLI conventions (`hunter` / `hunterctl` / `fletch`)
 
-This doc is the contract for **operator-facing commands** so C1–C4 stay consistent as the repo grows.
+Contract for operator-facing commands — keeps C1–C4 consistent as repo grows.
 
-The **Hunt** repo is the whole product; repo-root **`hunter`** launchers and **`hunterctl`** are scoped to **C1 (Hunter)** and shared operator glue, not “everything named Hunt.”
+`hunter` launchers + `hunterctl` are scoped to **C1 (Hunter)** and shared operator glue — not “everything named Hunt.”
 
 ## Entry points
 
@@ -47,39 +47,30 @@ C1 is the most mature surface. Short narrative : **`docs/C1_OPERATOR_WORKFLOW.md
 
 ## Component Service APIs vs CLI
 
-Each component (C1–C4) exposes both a **CLI** (for operator/terminal use) and a **service API** (called by the C0 backend when the operator triggers actions from the UI). These are separate surfaces:
+C1–C4 expose both a **CLI** (operator/terminal) and a **service API** (called by C0 backend only). Separate surfaces:
 
 | Surface | Caller | Lives in |
 |---|---|---|
 | CLI (`hunter`, `fletch`, etc.) | operator, terminal, scripts | `scripts/hunterctl.py`, `scripts/fletchctl.py`, etc. |
 | Service API (HTTP) | C0 `backend/app.py` only | each component's FastAPI/Flask app |
 
-The frontend never calls service APIs directly. If you add a new operator action accessible from the UI, implement it as both: a CLI command in the appropriate `*ctl.py` and a service API endpoint in the component's HTTP layer.
+Frontend never calls service APIs directly. New UI-accessible operator action: implement as CLI command in `*ctl.py` + service API endpoint in component HTTP layer.
 
 ## Conventions for **future** C2, C3, C4 commands
 
-When you add automation an operator runs from the repo (not the extension popup, not OpenClaw-only), follow this pattern.
+New repo-level operator automation: follow this pattern.
 
-1. **Implement in the correct component CLI**  
-   - C1: add a subparser to **`scripts/hunterctl.py`**.  
-   - C2: add a subparser to **`scripts/fletchctl.py`** (or keep delegating to **`python -m fletcher.cli`**).
+1. **Correct CLI** — C1: subparser in `scripts/hunterctl.py`. C2: subparser in `scripts/fletchctl.py`.
 
-2. **Name verbs for humans**  
-   Prefer short verbs : **`start`**, **`stop`**, **`restart`**, **`status`**, **`logs`**, **`enrich`**, **`tailor`** (example for C2), **`apply-prep`** (C4 already). Avoid duplicating systemd unit names in user-facing docs unless explaining internals.
+2. **Short verbs** — `start`, `stop`, `restart`, `status`, `logs`, `enrich`, `tailor`, `apply-prep`. No systemd unit name duplication in user-facing docs.
 
-3. **Document in three places**  
-   - **Component README** under **`docs/components/componentN/README.md`** : a **“CLI”** subsection with examples.  
-   - **`docs/C1_OPERATOR_WORKFLOW.md`** only for **C1**; for C2+ add a subsection in the relevant component doc or a short **“Operator CLI”** bullet in **`docs/roadmap.md`** when the command ships.  
-   - **`AGENTS.md`** : one-line mention in the repo overview if the command is part of the default workflow.
+3. **Docs: three places** — component README `docs/components/componentN/README.md` (CLI subsection + examples); C1 only in `docs/C1_OPERATOR_WORKFLOW.md`; `AGENTS.md` one-liner if part of default workflow.
 
-4. **Optional : thin package CLI**  
-   It is fine for **`fletcher/`**, **`coordinator/`**, etc. to keep **`python -m fletcher.cli`** or **`python -m coordinator.cli`** for library-style use. The component wrapper CLI (**`fletch`**, etc.) should call those entrypoints.
+4. **Thin package CLI optional** — `fletcher/`, `coordinator/` etc. can keep `python -m fletcher.cli` for library use; wrapper CLI (`fletch`) calls those.
 
-5. **Windows vs Linux**  
-   If a command only makes sense on the server (systemd, Docker socket), use **`_require_linux`** and print a clear Windows message (same pattern as **`hunter restart`**).
+5. **Windows vs Linux** — server-only commands (systemd, Docker): use `_require_linux`, print clear Windows message.
 
-6. **Tests**  
-   Prefer a small **unit test** that the parser accepts the new subcommand and the handler builds the expected argv (patch **`subprocess.run`**), when the behavior is non-trivial.
+6. **Tests** — small unit test: parser accepts subcommand, handler builds expected argv (patch `subprocess.run`).
 
 ## Related docs
 
