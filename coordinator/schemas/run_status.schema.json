@@ -1,0 +1,21 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "RunStatus",
+  "type": "object",
+  "required": [
+    "run",
+    "events"
+  ],
+  "properties": {
+    "run": {
+      "$ref": "./orchestration_run.schema.json"
+    },
+    "events": {
+      "type": "array",
+      "items": {
+        "$ref": "./orchestration_event.schema.json"
+      }
+    }
+  },
+  "additionalProperties": false
+}

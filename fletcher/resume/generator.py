@@ -13,7 +13,7 @@ from .models import ExperienceEntry, ProjectEntry, ResumeDocument
 
 
 def _normalize_words(text: str) -> set[str]:
-    return {token.lower() for token in re.findall(r"[a-zA-Z][a-zA-Z0-9.+#/-]{2,}", text)}
+    return {token.lower() for token in re.findall(r"[a-zA-Z][a-zA-Z0-9.+#/-]{1,}", text)}
 
 
 def _slugify(value: str) -> str:
@@ -32,7 +32,11 @@ def _score_text(text: str, keywords: list[str], family: str) -> int:
     score = 0
     for keyword in keywords:
         lowered = keyword.lower()
-        if lowered in words or lowered in text.lower():
+        if not lowered:
+            continue
+        if lowered in words or re.search(
+            r"(?<![a-zA-Z0-9])" + re.escape(lowered) + r"(?![a-zA-Z0-9])", text.lower()
+        ):
             score += 3
     family_bonus_terms = {
         "software": (
@@ -96,7 +100,6 @@ def _merge_source_entries(
     candidate_entries: list[dict], library_entries: list[dict], *, project: bool = False
 ) -> list[dict]:
     merged: dict[str, dict] = {}
-    key_name = "entry_id" if not project else "entry_id"
 
     def ensure(key: str, template: dict) -> dict:
         if key not in merged:
@@ -147,7 +150,8 @@ def _merge_source_entries(
         if not key:
             continue
         template = {
-            key_name: key,
+            "entry_id": key,
+            "source_entry_id": key,
             "company": entry.get("company", ""),
             "title": entry.get("title", ""),
             "location": "",

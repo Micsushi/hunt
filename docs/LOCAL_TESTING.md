@@ -77,7 +77,7 @@ $env:HUNT_ARTIFACTS_DIR="C:\temp\hunt_runtime\artifacts"
 $env:REVIEW_APP_HOST="127.0.0.1"
 $env:REVIEW_APP_PORT="8000"
 $env:REVIEW_APP_PUBLIC_URL="http://127.0.0.1:8000"
-python review_app.py
+python -m backend.app
 ```
 
 - Linux/macOS:
@@ -88,7 +88,7 @@ export HUNT_ARTIFACTS_DIR="$HOME/tmp/hunt_runtime/artifacts"
 export REVIEW_APP_HOST="127.0.0.1"
 export REVIEW_APP_PORT="8000"
 export REVIEW_APP_PUBLIC_URL="http://127.0.0.1:8000"
-python review_app.py
+python -m backend.app
 ```
 
 Open:
@@ -288,7 +288,7 @@ ruff check . --fix && ruff format .
 ### Optional: byte-compile main packages (fast sanity check)
 
 ```bash
-python -m compileall -q coordinator fletcher hunter scripts review_app.py
+python -m compileall -q backend coordinator fletcher hunter scripts control_plane_api.py review_app.py
 ```
 
 ## 9. Quick local verification checklist

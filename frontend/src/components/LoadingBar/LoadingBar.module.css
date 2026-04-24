@@ -1,0 +1,23 @@
+.bar {
+  position: fixed;
+  inset: 0 0 auto 0;
+  height: 3px;
+  background: linear-gradient(90deg, var(--accent) 0%, #4e8c7c 100%);
+  box-shadow: 0 8px 24px rgba(36, 91, 78, 0.2);
+  opacity: 0;
+  transform-origin: left center;
+  transform: scaleX(0.08);
+  transition: opacity 160ms ease;
+  z-index: 200;
+  pointer-events: none;
+}
+
+.bar.active {
+  opacity: 1;
+  animation: progress 1.15s ease-in-out infinite alternate;
+}
+
+@keyframes progress {
+  from { transform: scaleX(0.12); }
+  to   { transform: scaleX(0.72); }
+}

@@ -1,0 +1,37 @@
+/* Design tokens — matches the existing control-plane color system */
+:root {
+  /* Colors */
+  --bg: #f3efe7;
+  --bg-grad-top: #f6f1e7;
+  --bg-grad-bottom: #efe8db;
+  --panel: #fffdf8;
+  --panel-strong: #fff9ef;
+  --ink: #1f2421;
+  --muted: #65706c;
+  --line: #ddd4c7;
+  --accent: #245b4e;
+  --accent-soft: #e2efe9;
+  --accent-ink: #0f3e34;
+  --warning: #845d00;
+  --warning-soft: #fff3d6;
+  --danger: #a93f31;
+  --danger-soft: #ffe6e1;
+  --good: #256b38;
+  --good-soft: #dff3e5;
+  --shadow: 0 10px 30px rgba(31, 36, 33, 0.06);
+  --shadow-raised: 0 18px 40px rgba(31, 36, 33, 0.12);
+
+  /* Typography */
+  --font-sans: "Segoe UI", system-ui, -apple-system, sans-serif;
+  --font-mono: Consolas, "SFMono-Regular", "SF Mono", monospace;
+
+  /* Spacing */
+  --radius-sm: 8px;
+  --radius-md: 12px;
+  --radius-lg: 16px;
+  --radius-xl: 18px;
+  --radius-pill: 999px;
+
+  /* Transitions */
+  --ease: 140ms ease;
+}

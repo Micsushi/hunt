@@ -91,6 +91,7 @@ def build_apply_context_payload(
     *,
     run_id: str,
     source_mode: str = "c4",
+    browser_lane: str | None = None,
     created_at: str | None = None,
     apply_context_path: str | None = None,
     c3_apply_context_path: str | None = None,
@@ -124,6 +125,7 @@ def build_apply_context_payload(
         "concern_flags": concern_flags,
         "manual_review_flags": manual_review_flags,
         "source_mode": source_mode,
+        "browser_lane": _string_or_none(browser_lane),
         "apply_context_path": apply_context_path,
         "c3_apply_context_path": c3_apply_context_path,
         "created_at": created_at,
@@ -134,6 +136,7 @@ def build_c3_apply_payload(
     job: Mapping[str, Any],
     *,
     source_mode: str = "c4",
+    browser_lane: str | None = None,
     primed_at: str | None = None,
     embed_resume_data: bool = False,
 ) -> dict[str, Any]:
@@ -161,6 +164,7 @@ def build_c3_apply_payload(
         "jdSnapshotPath": _string_or_none(_mapping_get(job, "latest_resume_job_description_path"))
         or "",
         "concernFlags": derive_concern_flags(job),
+        "browserLane": _string_or_none(browser_lane) or "",
         "primedAt": primed_at,
     }
 

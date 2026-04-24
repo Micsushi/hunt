@@ -320,6 +320,10 @@ class Stage4Tests(unittest.TestCase):
 
             self.assertEqual(defaults["HUNT_DB_PATH"], str(runtime_dir / "hunt.db"))
             self.assertEqual(defaults["HUNT_ARTIFACTS_DIR"], str(runtime_dir / "artifacts"))
+            self.assertEqual(
+                defaults["HUNT_COORDINATOR_ROOT"],
+                str(runtime_dir / "coordinator"),
+            )
 
     def test_submit_login_form_clicks_account_chooser_before_form_fill(self):
         page = self.FakePage(

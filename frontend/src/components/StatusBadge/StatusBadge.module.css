@@ -1,0 +1,43 @@
+.badge {
+  display: inline-flex;
+  align-items: center;
+  border-radius: var(--radius-pill);
+  padding: 5px 10px;
+  font-size: 0.8rem;
+  font-weight: 700;
+  white-space: nowrap;
+  cursor: default;
+}
+
+.badge.sm {
+  padding: 2px 7px;
+  font-size: 0.72rem;
+}
+
+.done,
+.done_verified {
+  background: var(--good-soft);
+  color: var(--good);
+}
+
+.pending,
+.processing {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.blocked,
+.blocked_verified {
+  background: var(--warning-soft);
+  color: var(--warning);
+}
+
+.failed {
+  background: var(--danger-soft);
+  color: var(--danger);
+}
+
+.unknown {
+  background: var(--line);
+  color: var(--muted);
+}

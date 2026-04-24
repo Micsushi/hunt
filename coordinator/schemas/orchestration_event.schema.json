@@ -1,0 +1,45 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "OrchestrationEvent",
+  "type": "object",
+  "required": [
+    "event_id",
+    "run_id",
+    "event_type",
+    "step_name",
+    "created_at"
+  ],
+  "properties": {
+    "event_id": {
+      "type": [
+        "integer",
+        "null"
+      ]
+    },
+    "run_id": {
+      "type": "string"
+    },
+    "event_type": {
+      "type": "string"
+    },
+    "step_name": {
+      "type": "string"
+    },
+    "payload_json": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "payload_path": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "created_at": {
+      "type": "string"
+    }
+  },
+  "additionalProperties": false
+}

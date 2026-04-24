@@ -420,12 +420,12 @@ That milestone does not require:
 
 Recommended product split:
 
-- existing review app:
+- existing control plane:
   - read-only or broad project inspection surface
 - future C3 app/surface:
   - C3 actions and focused operational controls
 
-The existing review app should eventually be able to display:
+The existing control plane should eventually be able to display:
 - latest application state
 - screenshots
 - evidence links

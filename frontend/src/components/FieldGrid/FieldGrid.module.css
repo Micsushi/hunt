@@ -1,0 +1,29 @@
+.grid {
+  display: grid;
+  gap: 10px;
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+}
+
+.field {
+  background: #faf5ec;
+  border-radius: var(--radius-md);
+  padding: 12px;
+}
+
+.field.span {
+  grid-column: 1 / -1;
+}
+
+.label {
+  font-size: 0.78rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--muted);
+  margin-bottom: 5px;
+}
+
+.value {
+  word-break: break-word;
+  font-size: 0.95rem;
+  line-height: 1.4;
+}

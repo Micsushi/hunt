@@ -1,0 +1,58 @@
+.page { display: flex; flex-direction: column; gap: 16px; }
+.hero { margin-bottom: 4px; }
+.heroTitle { font-size: 2rem; margin-bottom: 6px; }
+
+.panel {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-xl);
+  padding: 18px;
+  box-shadow: var(--shadow);
+}
+
+.panelTitle { font-size: 1.05rem; font-weight: 700; margin-bottom: 12px; }
+
+.buttons { display: flex; flex-wrap: wrap; gap: 10px; }
+
+.btn {
+  border: 1px solid var(--line);
+  background: var(--panel-strong);
+  border-radius: var(--radius-pill);
+  padding: 9px 16px;
+  font-size: 0.9rem;
+  font-weight: 600;
+  color: var(--ink);
+  cursor: pointer;
+  transition: background var(--ease), transform var(--ease), opacity var(--ease);
+}
+.btn:hover:not(:disabled) { transform: translateY(-1px); background: var(--accent-soft); }
+.btn:disabled { opacity: 0.6; cursor: progress; }
+.btn.btnPrimary { background: var(--accent); color: white; border-color: var(--accent); }
+.btn.btnPrimary:hover:not(:disabled) { background: var(--accent-ink); }
+
+.checkboxRow {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px 20px;
+  margin-bottom: 14px;
+}
+
+.checkLabel {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 0.9rem;
+  cursor: pointer;
+}
+
+.apiRef {
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: var(--font-mono);
+  font-size: 0.82rem;
+  line-height: 1.55;
+  background: #faf5ec;
+  padding: 14px 16px;
+  border-radius: var(--radius-md);
+  color: var(--ink);
+}

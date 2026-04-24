@@ -1,0 +1,51 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "SubmitApproval",
+  "type": "object",
+  "required": [
+    "approval_id",
+    "job_id",
+    "run_id",
+    "approval_mode",
+    "approved_by",
+    "decision",
+    "created_at"
+  ],
+  "properties": {
+    "approval_id": {
+      "type": "string"
+    },
+    "job_id": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "run_id": {
+      "type": "string"
+    },
+    "approval_mode": {
+      "type": "string"
+    },
+    "approved_by": {
+      "type": "string"
+    },
+    "decision": {
+      "type": "string"
+    },
+    "reason": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "artifact_path": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "created_at": {
+      "type": "string"
+    }
+  },
+  "additionalProperties": false
+}

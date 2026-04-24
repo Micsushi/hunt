@@ -439,7 +439,7 @@ Possible layout:
 - whether OpenClaw should call a local Hunt CLI, local API, or both
 - how C3 should expose its trigger surface to C4
 - whether C4 state should live entirely in the Hunt DB or partly in an OpenClaw-side store
-- whether initial review actions belong in the existing review app or a later dedicated C4/C3 control surface
+- whether initial review actions belong in the existing control plane or a later dedicated C4/C3 control surface
 
 The recommended default for now:
 - Hunt DB plus local CLI/API contracts

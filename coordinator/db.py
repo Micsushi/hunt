@@ -38,6 +38,7 @@ CREATE TABLE IF NOT EXISTS orchestration_runs (
     job_id INTEGER NOT NULL,
     status TEXT NOT NULL,
     source_runtime TEXT NOT NULL,
+    browser_lane TEXT,
     job_source TEXT,
     job_title TEXT,
     company TEXT,
@@ -64,6 +65,7 @@ CREATE TABLE IF NOT EXISTS orchestration_runs (
 """
 
 ORCHESTRATION_RUNS_MIGRATION_COLUMNS = {
+    "browser_lane": "TEXT",
     "job_source": "TEXT",
     "job_title": "TEXT",
     "company": "TEXT",

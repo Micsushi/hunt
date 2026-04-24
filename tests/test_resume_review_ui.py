@@ -1,6 +1,6 @@
 import unittest
 
-from hunter.resume_review_ui import (
+from backend.resume_review_ui import (
     collect_highlight_terms,
     highlight_terms,
     summarize_tailoring,

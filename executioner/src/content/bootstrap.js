@@ -1,18 +1,18 @@
+// Content script injected into all registered ATS pages (see manifest.json).
+// ATS detection and fill dispatch live in the background; this script only:
+//   - logs that the extension is active on this page
+//   - signals to the background when autofill-on-load may apply
 (async () => {
   const stateResponse = await chrome.runtime.sendMessage({ type: "hunt.apply.get_state" });
-  const hostname = window.location.hostname;
-  const isWorkday =
-    hostname.includes("workday.com") || hostname.includes("myworkdayjobs.com");
 
   console.log("Hunt Apply content bootstrap loaded.", {
     ok: stateResponse?.ok,
-    isWorkday,
+    url: window.location.href,
     autofillOnLoad: stateResponse?.settings?.autofillOnLoad,
     activeJobId: stateResponse?.activeApplyContext?.jobId || ""
   });
 
   if (
-    isWorkday &&
     stateResponse?.ok &&
     stateResponse?.settings?.autofillOnLoad &&
     (
@@ -20,6 +20,7 @@
       stateResponse?.defaultResume?.pdfDataUrl
     )
   ) {
-    console.log("Autofill on load is enabled for this Workday page.");
+    console.log("Autofill on load is enabled for this page.");
+    // Actual fill is triggered by the tabs.onUpdated listener in background/index.js.
   }
 })();

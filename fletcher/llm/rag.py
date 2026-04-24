@@ -2,16 +2,17 @@
 RAG index for keyword-to-bullet semantic matching.
 
 Flow:
-  1. build_index()   — embed all bullets/skills from resume + profile + library
-                       into a ChromaDB collection on disk.
-  2. is_stale()      — hash check: returns True if source files changed since
-                       the last build.
-  3. distribute_keywords_rag() — embed each JD keyword, query the collection,
-                                  route to bullet_keywords or summary_keywords
-                                  based on similarity threshold.
+  1. build_index()            — embed all bullets/skills from resume + profile + library
+                                into a ChromaDB collection on disk.
+  2. is_stale()               — hash check: returns True if source files changed since
+                                the last build.
+  3. match_keywords_to_bullets() — embed each JD keyword and each selected resume bullet
+                                   in-memory, then route keywords to high/mid/low tiers
+                                   based on cosine similarity.
 
-The index is rebuilt automatically in the pipeline when source files change.
-Run `fletch index build` to force a manual rebuild.
+Build the index manually with `fletch index build`. The pipeline uses
+match_keywords_to_bullets() which embeds only the already-selected bullets
+in-memory without querying ChromaDB.
 """
 
 from __future__ import annotations
@@ -365,76 +366,6 @@ def query_keyword(
         similarity = round(1.0 - dist / 2.0, 4)
         hits.append({"text": text, "similarity": similarity, "meta": meta})
     return hits
-
-
-# ---------------------------------------------------------------------------
-# Distribute keywords via RAG
-# ---------------------------------------------------------------------------
-
-def distribute_keywords_rag(
-    keywords: list[str],
-    index_dir: Path | None = None,
-    *,
-    threshold: float | None = None,
-    max_total: int = 10,
-    verbose: bool = False,
-) -> dict:
-    """Route each keyword to bullet_keywords or summary_keywords using RAG.
-
-    - bullet_keywords: top match >= threshold - concept already in candidate
-      background, LLM reformulates existing bullets to use JD vocabulary.
-    - summary_keywords: top match < threshold - foreign concept, LLM injects
-      naturally into summary paragraph only.
-
-    Returns dict with keys:
-      bullet_keywords, summary_keywords, scores (per-keyword detail list),
-      threshold_used, rag_used=True.
-    """
-    if not keywords:
-        return {"bullet_keywords": [], "summary_keywords": [], "scores": [], "threshold_used": None, "rag_used": True}
-
-    sim_threshold = threshold if threshold is not None else config.RAG_SIMILARITY_THRESHOLD
-    bullet_kws: list[str] = []
-    summary_kws: list[str] = []
-    scores: list[dict] = []
-
-    for kw in keywords:
-        try:
-            hits = query_keyword(kw, index_dir, n_results=1)
-            top_score = hits[0]["similarity"] if hits else 0.0
-            top_text = hits[0]["text"] if hits else ""
-            bucket = "bullet" if top_score >= sim_threshold else "summary"
-            scores.append({
-                "keyword": kw,
-                "score": round(top_score, 4),
-                "bucket": bucket,
-                "nearest": top_text[:80],
-            })
-            if verbose:
-                print(
-                    f"  [RAG] '{kw}' -> score {top_score:.3f} "
-                    f"({bucket}) "
-                    f"| nearest: '{top_text[:60]}'"
-                )
-            if bucket == "bullet":
-                bullet_kws.append(kw)
-            else:
-                summary_kws.append(kw)
-        except Exception as exc:
-            scores.append({"keyword": kw, "score": 0.0, "bucket": "summary", "nearest": "", "error": str(exc)})
-            if verbose:
-                print(f"  [RAG] query error for '{kw}': {exc}")
-            summary_kws.append(kw)
-
-    bullet_cap = max_total // 2 + max_total % 2
-    summary_cap = max_total // 2
-    return {
-        "bullet_keywords": bullet_kws[:bullet_cap],
-        "summary_keywords": summary_kws[:summary_cap],
-        "scores": scores,
-        "threshold_used": sim_threshold,
-        "rag_used": True,
-    }
 
 
 # ---------------------------------------------------------------------------

@@ -6,6 +6,7 @@ Build fully automated job-application system for continuous Linux-server operati
 
 Pipeline:
 
+- `C0 (Frontend)`: operator dashboard SPA in `frontend/` with backend in `backend/`
 - `C1 (Hunter)`: discover and enrich jobs in `hunter/`
 - `C2 (Fletcher)`: tailor LaTeX resume in `fletcher/`
 - `C3 (Executioner)`: browser autofill/apply assist
@@ -36,31 +37,22 @@ Canonical naming: `docs/NAMING.md`. Old `scraper/` package renamed to `hunter/`.
 - `hunter/enrichment_policy.py`: retry/backoff policy
 - `hunter/linkedin_session.py`: LinkedIn auth state
 - `hunter/url_utils.py`: URL normalization and ATS detection
-- `review_app.py`: queue review/control-plane app
+- `backend/app.py`: C0 control-plane backend for dashboard and `/api/*` routes
 - repo-root `hunter`: shim to `scripts/hunterctl.py`
 - `agents/system_prompt.md`: downstream apply/orchestration contract
 
 ## Data Model Rules
 
-- `job_url`: discovery/listing URL
+Full schema with all fields, types, valid values, and owning component: `docs/DATA_MODEL.md`.
+
+Key semantics:
+- `job_url`: discovery/listing URL — dedupe key
 - `apply_url`: best known external apply URL
-- historical LinkedIn rows with mirrored `apply_url = job_url` must be cleared during migration
-- `job_url` remains dedupe key for now
-- `status`: application lifecycle only (`new`, `claimed`, `applied`, `failed`, `skipped`)
-- LinkedIn enrichment state must not live in `status`
-
-LinkedIn enrichment fields:
-
+- `status`: application lifecycle only (`new`, `claimed`, `applied`, `failed`, `skipped`) — never enrichment state
 - `apply_type`: `external_apply`, `easy_apply`, `unknown`
-- `auto_apply_eligible`: `1` only for external apply
+- `auto_apply_eligible`: `1` only for `external_apply`
 - `enrichment_status`: `pending`, `processing`, `done`, `failed`
-- `enrichment_attempts`: retry counter
-- `enriched_at`: last successful enrichment time
-- `last_enrichment_error`: last failure reason
-- `apply_host`: external destination host
 - `ats_type`: `greenhouse`, `lever`, `workday`, `ashby`, `smartrecruiters`, `jobvite`, `icims`, `bamboohr`, `unknown`
-- `last_enrichment_started_at`: claim start for stale recovery
-- `next_enrichment_retry_at`: next unattended retry time
 
 ## Business Rules
 
@@ -70,56 +62,13 @@ LinkedIn enrichment fields:
 - classify Easy Apply during enrichment so later stages never treat it as external ATS apply
 - `C1 (Hunter)` only discovers and enriches; it does not submit applications
 
-## Stage Snapshot
-
-Stage 1 complete:
-
-- added enrichment-ready DB columns
-- split listing URL vs apply URL semantics
-- marked historical LinkedIn rows pending enrichment
-
-Stage 2 complete:
-
-- added single-job Playwright LinkedIn enrichment worker
-- extracts LinkedIn/external descriptions
-- detects Easy Apply vs external Apply
-- saves external apply URL
-- supports blocked/UI verification flows
-
-Stage 3 complete:
-
-- hardened unattended batch enrichment
-- finalized retry/backoff and terminal-state policy
-- documented `server2` runtime
-- added browser review/control-plane app
-- kept path open for C2/C3 agents
-
-Stage 3.2 complete:
-
-- generalized queue/runtime for LinkedIn and Indeed
-- added shared browser runtime
-- expanded review app to source-aware whole-job table control plane
-
-Stage 4 current:
-
-- backfill old and mixed-source backlog safely
-- add monitoring and ops hardening
-- save failure artifacts for blocked/browser-fixable rows
-
-## Runtime Notes
+## Runtime Rules
 
 - newly discovered pending LinkedIn rows outrank old backlog rows in post-scrape enrichment
-- read-only queue tools and review app must not mutate queue state during normal inspection
-- terminal failures like `job_removed` should be recorded cleanly, not retried as actionable failures
-- intended `server2` shape:
-- timed Hunt runtime for discovery + headless enrichment + blocked-row UI fallback
-- separate review/control-plane web app
-- blocked-row UI fallback should run on separate virtual display like `Xvfb :98`, not main desktop foreground
-- Ansible split:
-- C1 on `job_agent` Stage 6
-- C2 separate later step/stage
-- C3 separate later step/stage
-- C4/OpenClaw separate later step/stage
+- read-only queue tools and control plane must not mutate queue state during normal inspection
+- C0 mutating control-plane endpoints require a valid web session or `REVIEW_OPS_TOKEN`
+- terminal failures like `job_removed` must be recorded cleanly, not retried as actionable failures
+- deployment details (server2 shape, Ansible stages, env vars, paths): `docs/deployment.md`
 
 ## C2 Constraints
 
@@ -137,27 +86,46 @@ Stage 4 current:
 - `candidate_profile` keys: `experience_entries`, `project_entries`, `skills` with `languages`, `frameworks`, `developer_tools`.
 - No top-level `summary`, `targeting_notes`, or `name` fields in parsed structure.
 
+## Doc Maintenance
+
+When specs change (new DB fields, business rules, component boundaries, CLI contracts): update this file and the relevant component doc before marking work done.
+
+When new stylistic/workflow preferences are established: add here under Keep In Mind, then compress with caveman skill.
+
+## Cross-Platform
+
+All code must run on Windows (local dev) and Linux (server2). Test locally on Windows before deploying. Never hard-code Linux paths or shell assumptions into Python — use `pathlib`, `os.path`, env vars.
+
 ## Keep In Mind
 
-- LinkedIn is highest-value source.
-- LinkedIn markup is brittle and changes often.
+- LinkedIn is highest-value source; markup is brittle and changes often.
 - Browser enrichment is slower than discovery scraping.
-- External-apply jobs are main target.
-- Exclude Easy Apply as early as possible.
-- Resume generation should use enriched descriptions, not shallow board metadata.
-- `server2` deployment context lives in `C:\Users\sushi\Documents\Github\ansible_homelab`.
-- Hunt-side production pointers: `docs/C1_OPERATOR_WORKFLOW.md`, section `Production host (server2)`.
-- Full Ansible plan: `ansible_homelab/docs/2.01-job-agent-plan.md`.
+- External-apply jobs are main target — exclude Easy Apply as early as possible.
+- Resume generation must use enriched descriptions, not shallow board metadata.
+- Build and test each component so it can run on its own. C0 should stay usable against `backend/app.py` + DB without other component services running; C1/C2/C3 should keep standalone terminal-driven paths; C4 is the only intentionally coupled component because it orchestrates the others.
+- All code must run on both Windows (local dev/test) and Linux (server2 production). Use `pathlib`, env vars — no hardcoded paths or bash-only assumptions.
+- Deployment details live in `docs/deployment.md` — do not duplicate in component docs.
 - If caveman skill is available, use it by default.
+- CLI commands must be short (e.g. `./hunter.sh drain`, not `python -m hunter.backfill_enrichment`) but support args where needed (e.g. `./hunter.sh drain 25 --source linkedin`). Applies to all new hunterctl/hunter.sh commands.
 
 ## Docs
 
-- roadmap: `docs/roadmap.md`
-- live fix tracker: `docs/TODO.md`
-- glossary: `docs/GLOSSARY.md`
-- docs index: `docs/components/README.md`
-- C1 plan: `docs/components/component1/README.md`
-- C2 plan: `docs/components/component2/README.md`
-- C3 plan: `docs/components/component3/README.md`
-- C4 plan: `docs/components/component4/README.md`
-- short pointer for other AI tools: `CLAUDE.md`
+Project-level (brief, high-level only):
+- `docs/roadmap.md` : priorities, version table, component summary
+- `docs/deployment.md` : all server2/Ansible/env/path details — canonical source, all other docs refer here
+- `docs/DATA_MODEL.md` : full DB schema, field meanings, valid values, owning component
+- `docs/GLOSSARY.md` : shared terms
+- `docs/NAMING.md` : C1–C4 IDs, code names, folder map
+- `docs/CLI_CONVENTIONS.md` : operator CLI conventions
+
+Component-level (detailed — read these to find next thing to work on):
+- `docs/components/component0/README.md` : C0 feature status (working / in-progress / bugs)
+- `docs/components/component0/runbook.md` : C0 local dev, build, testing
+- `docs/components/component1/README.md` : C1 feature status (working / in-progress / bugs)
+- `docs/components/component1/runbook.md` : C1 operational how-to (start, drain, recover)
+- `docs/components/component2/README.md` : C2 feature status
+- `docs/components/component2/runbook.md` : C2 operational how-to
+- `docs/components/component3/README.md` : C3 feature status
+- `docs/components/component3/runbook.md` : C3 operational how-to
+- `docs/components/component4/README.md` : C4 feature status
+- `docs/components/component4/runbook.md` : C4 operational how-to

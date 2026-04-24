@@ -1,0 +1,99 @@
+.page { display: flex; flex-direction: column; gap: 16px; }
+.hero { margin-bottom: 4px; }
+.heroTitle { font-size: 2rem; margin-bottom: 6px; }
+.loading, .error { padding: 40px; text-align: center; color: var(--muted); }
+.error { color: var(--danger); }
+
+.authCard {
+  border-radius: var(--radius-xl);
+  padding: 18px 20px;
+  border: 2px solid;
+}
+.authOk  { background: var(--good-soft);    border-color: var(--good);    color: var(--good); }
+.authBad { background: var(--danger-soft);  border-color: var(--danger);  color: var(--danger); }
+.authHeader { display: flex; align-items: center; gap: 10px; font-size: 1rem; }
+.authDot {
+  width: 10px; height: 10px; border-radius: 50%;
+  background: currentColor;
+  flex-shrink: 0;
+}
+
+.gridThree {
+  display: grid;
+  gap: 16px;
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+}
+
+.panel {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-xl);
+  padding: 18px;
+  box-shadow: var(--shadow);
+}
+
+.panelTitle { font-size: 1.05rem; font-weight: 700; margin-bottom: 14px; }
+
+.tableWrap { overflow-x: auto; }
+
+.table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.88rem;
+}
+.table th {
+  text-align: left;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--line);
+  font-size: 0.78rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--muted);
+}
+.table td {
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--line);
+  vertical-align: top;
+}
+.table tr:last-child td { border-bottom: none; }
+
+.tableLabel { color: var(--ink); cursor: default; }
+.tableValue { font-weight: 600; }
+.tipIcon { font-size: 0.7rem; color: var(--muted); cursor: help; margin-left: 3px; }
+
+.expandBtn {
+  background: none;
+  border: none;
+  cursor: pointer;
+  font-size: 0.9rem;
+  color: var(--accent);
+  padding: 0 4px 0 0;
+  line-height: 1;
+}
+
+.jsonPre {
+  margin-top: 6px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
+  background: #faf5ec;
+  padding: 8px 10px;
+  border-radius: var(--radius-md);
+  max-height: 300px;
+  overflow-y: auto;
+}
+
+.pills { display: flex; flex-wrap: wrap; gap: 8px; }
+.pill {
+  border: 1px solid var(--line);
+  border-radius: var(--radius-pill);
+  padding: 7px 13px;
+  font-size: 0.86rem;
+  font-weight: 600;
+  color: var(--ink);
+  text-decoration: none;
+  background: var(--panel-strong);
+  transition: background var(--ease), transform var(--ease);
+}
+.pill:hover { background: var(--accent-soft); transform: translateY(-1px); text-decoration: none; }

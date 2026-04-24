@@ -51,6 +51,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     apply_prep_parser.add_argument("--job-id", type=int, required=True)
     apply_prep_parser.add_argument("--source-runtime", default="manual")
+    apply_prep_parser.add_argument("--browser-lane", choices=["isolated", "attached"], default=None)
     apply_prep_parser.add_argument("--embed-resume-data", action="store_true")
 
     request_fill_parser = subparsers.add_parser(
@@ -102,6 +103,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     run_parser.add_argument("--job-id", type=int, required=True)
     run_parser.add_argument("--source-runtime", default="manual")
+    run_parser.add_argument("--browser-lane", choices=["isolated", "attached"], default=None)
     run_parser.add_argument("--embed-resume-data", action="store_true")
     run_parser.add_argument("--prepare-only", action="store_true")
 
@@ -111,6 +113,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="Pick the next ready job and start one bounded orchestration run.",
     )
     run_once_parser.add_argument("--source-runtime", default="scheduler")
+    run_once_parser.add_argument("--browser-lane", choices=["isolated", "attached"], default=None)
     run_once_parser.add_argument("--embed-resume-data", action="store_true")
     run_once_parser.add_argument("--prepare-only", action="store_true")
 
@@ -163,6 +166,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             payload = service.build_apply_context(
                 args.job_id,
                 source_runtime=args.source_runtime,
+                browser_lane=args.browser_lane,
                 embed_resume_data=args.embed_resume_data,
             ).to_dict()
         elif args.command == "request-fill":
@@ -192,12 +196,14 @@ def main(argv: Sequence[str] | None = None) -> int:
             payload = service.run_job(
                 args.job_id,
                 source_runtime=args.source_runtime,
+                browser_lane=args.browser_lane,
                 embed_resume_data=args.embed_resume_data,
                 prepare_only=args.prepare_only,
             )
         elif args.command == "run-once":
             payload = service.run_once(
                 source_runtime=args.source_runtime,
+                browser_lane=args.browser_lane,
                 embed_resume_data=args.embed_resume_data,
                 prepare_only=args.prepare_only,
             )

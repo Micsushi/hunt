@@ -1,0 +1,32 @@
+.stack {
+  position: fixed;
+  right: 18px;
+  bottom: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  z-index: 100;
+  pointer-events: none;
+}
+
+.toast {
+  max-width: min(420px, calc(100vw - 36px));
+  border-radius: var(--radius-lg);
+  padding: 14px 16px;
+  background: rgba(31, 36, 33, 0.92);
+  color: white;
+  box-shadow: var(--shadow-raised);
+  font-size: 0.93rem;
+  cursor: pointer;
+  pointer-events: auto;
+  animation: slideIn 160ms ease;
+}
+
+.toast.error {
+  background: rgba(169, 63, 49, 0.96);
+}
+
+@keyframes slideIn {
+  from { opacity: 0; transform: translateY(10px); }
+  to   { opacity: 1; transform: translateY(0); }
+}

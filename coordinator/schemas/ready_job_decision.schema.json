@@ -1,0 +1,84 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ReadyJobDecision",
+  "type": "object",
+  "required": [
+    "job_id",
+    "ready",
+    "reason",
+    "flags"
+  ],
+  "properties": {
+    "job_id": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "ready": {
+      "type": "boolean"
+    },
+    "reason": {
+      "type": "string"
+    },
+    "source": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "title": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "company": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "apply_url": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "ats_type": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "selected_resume_version_id": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "selected_resume_pdf_path": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "blocking_run_id": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "manual_review_reason": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "flags": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    }
+  },
+  "additionalProperties": false
+}

@@ -74,7 +74,7 @@ def _ollama_chat(user_prompt: str) -> str:
 
 
 def _build_user_prompt(title: str, description: str) -> str:
-    desc_truncated = (description or "")[:1200]
+    desc_truncated = (description or "")[:4000]
     return f"""Job title: {title}
 Job description:
 {desc_truncated or "(empty)"}
@@ -196,48 +196,6 @@ def generate_summary(
     return result
 
 
-def rewrite_bullets(bullets: list[str], keywords: list[str]) -> dict[str, Any]:
-    """Ask Ollama to reformulate selected bullets to use JD keyword vocabulary.
-
-    Sends all bullets in one call. Returns dict with keys:
-      - "bullets": list of rewritten bullet strings (falls back to originals on failure)
-      - "success": bool
-      - "error": str or None
-      - "duration_ms": int or None
-    """
-    result: dict[str, Any] = {"bullets": list(bullets), "success": False, "error": None, "duration_ms": None}
-    if config.DEFAULT_MODEL_BACKEND != "ollama":
-        return result
-    if not bullets or not keywords:
-        return result
-
-    kw_list = ", ".join(keywords[:5])
-    numbered = "\n".join(f"{i + 1}. {b.strip()}" for i, b in enumerate(bullets))
-    prompt = (
-        f"Rewrite these resume bullets to naturally use these keywords where they fit: {kw_list}\n"
-        f"Rules: same meaning, same metrics, no invented facts, keep each bullet one sentence.\n"
-        f"Bullets:\n{numbered}\n"
-        f'Return only: {{"bullets": ["bullet 1 text", "bullet 2 text", ...]}}'
-    )
-    try:
-        start = time.perf_counter()
-        _llm_log(f"call 3/3: bullets [sending {len(bullets)} bullets]", prompt, "", None)
-        raw = _ollama_chat(prompt)
-        result["duration_ms"] = int((time.perf_counter() - start) * 1000)
-        _llm_log(f"call 3/3: bullets [done]", prompt, raw, result["duration_ms"])
-        parsed = _extract_json_object(raw)
-        rewritten = parsed.get("bullets")
-        if isinstance(rewritten, list) and len(rewritten) == len(bullets):
-            cleaned = [str(b).strip() for b in rewritten if str(b).strip()]
-            if len(cleaned) == len(bullets):
-                result["bullets"] = cleaned
-                result["success"] = True
-    except Exception as exc:
-        result["error"] = str(exc) or exc.__class__.__name__
-        result["duration_ms"] = int((time.perf_counter() - start) * 1000) if "start" in locals() else None
-        _llm_log("call 3/3: bullets [ERROR]", prompt, str(exc), result["duration_ms"])
-    return result
-
 
 def rewrite_bullet_targeted(bullet: str, keywords: list[str]) -> dict[str, Any]:
     """Rewrite a single resume bullet to naturally include specific keywords.
@@ -280,77 +238,6 @@ def rewrite_bullet_targeted(bullet: str, keywords: list[str]) -> dict[str, Any]:
         result["duration_ms"] = int((time.perf_counter() - start) * 1000) if "start" in locals() else None
         _llm_log("rewrite bullet [ERROR]", prompt, str(exc), result["duration_ms"])
     return result
-
-
-# Tokens too common to count as domain evidence when scoring keyword-to-bullet overlap.
-_TRIVIAL_TOKENS = {
-    "work", "role", "team", "new", "key", "use", "used", "our", "their",
-    "this", "that", "with", "for", "and", "the", "from", "into", "over",
-    "able", "help", "support", "using", "make", "take", "give", "need",
-}
-
-
-def distribute_keywords(
-    keywords: list[str],
-    selected_bullets: list[str],
-    *,
-    max_total: int = 10,
-) -> dict[str, list[str]]:
-    """Split keywords into bullet_keywords and summary_keywords.
-
-    A keyword goes to bullet_keywords only when its concepts already exist in
-    the selected bullets — meaning the LLM is reformulating existing vocabulary,
-    not injecting foreign domain terms.
-
-    Rules:
-    - Full phrase appears verbatim in bullet text → bullet bucket.
-    - Single meaningful token keyword → bullet bucket if token is in bullets.
-    - Multi-word keyword → bullet bucket only if ALL distinctive tokens
-      (len > 4, non-trivial) appear in bullet text. Otherwise → summary.
-    - Keywords with no distinctive tokens → summary bucket.
-    """
-    if not keywords:
-        return {"bullet_keywords": [], "summary_keywords": []}
-
-    bullets_text = " ".join(selected_bullets).lower()
-
-    bullet_kws: list[str] = []
-    summary_kws: list[str] = []
-
-    for kw in keywords:
-        kw_lower = kw.lower()
-
-        # Full phrase match — safe to put in bullets.
-        if kw_lower in bullets_text:
-            bullet_kws.append(kw)
-            continue
-
-        # Extract distinctive tokens: length > 4 and not trivial filler.
-        distinctive = [
-            t for t in re.split(r"[\s/+#.\-]+", kw_lower)
-            if len(t) > 4 and t not in _TRIVIAL_TOKENS
-        ]
-
-        if not distinctive:
-            # No distinctive tokens (e.g. "2D", "CAD") — send to summary.
-            summary_kws.append(kw)
-            continue
-
-        hits = sum(1 for t in distinctive if t in bullets_text)
-
-        if hits == len(distinctive):
-            # Every distinctive token already in bullets — safe to reformulate.
-            bullet_kws.append(kw)
-        else:
-            # At least one foreign domain token — keep out of bullets.
-            summary_kws.append(kw)
-
-    bullet_cap = max_total // 2 + max_total % 2
-    summary_cap = max_total // 2
-    return {
-        "bullet_keywords": bullet_kws[:bullet_cap],
-        "summary_keywords": summary_kws[:summary_cap],
-    }
 
 
 def enrich_with_ollama_if_enabled(

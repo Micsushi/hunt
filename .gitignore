@@ -9,3 +9,6 @@ hunt.db
 # Personal candidate data — copy from fletcher/templates/candidate_profile.template.md
 fletcher/candidate_profile.md
 fletcher/bullet_library.md
+# Frontend build artifacts
+frontend/dist/
+frontend/node_modules/

@@ -26,14 +26,13 @@ from .db import (
 )
 from .resume.generator import generate_tailored_resume
 from .llm.llm_enrich import (
-    distribute_keywords,
     enrich_with_ollama_if_enabled,
     generate_summary,
     rewrite_bullet_targeted,
 )
 from .jobs.keyword_extractor import extract_keywords
 from .resume.parser import parse_resume_file
-from .llm.rag import build_index, is_stale, match_keywords_to_bullets
+from .llm.rag import match_keywords_to_bullets
 from .resume.renderer import render_resume_tex
 from .resume.source_loader import load_bullet_library, load_candidate_profile
 from .storage import build_attempt_dir, ensure_dir, file_hash, write_json, write_text
@@ -216,7 +215,6 @@ def _print_trace(trace: dict) -> None:
     section("STEP 2: keywords -> RAG (bullet matching)")
     row("bullets in resume:", str(step2.get("bullet_count", 0)))
     row("thresholds:", f"high >= {step2.get('high_threshold')}  mid >= {step2.get('mid_threshold')}")
-    row("index rebuilt:", str(step2.get("index_rebuilt", False)))
     scores = step2.get("scores", [])
     if scores:
         print(f"\n  {'keyword':<35} {'score':>6}  {'tier':<7}  nearest bullet")
@@ -276,14 +274,14 @@ def _run_pipeline(
     candidate_profile_path: str | Path,
     bullet_library_path: str | Path,
 ) -> dict:
+    _t_pipeline_start = time.perf_counter()
     classification = classify_job(title=title, description=description)
     keywords = extract_keywords(title=title, description=description, classification=classification)
     classification, keywords, llm_meta = enrich_with_ollama_if_enabled(
         title=title, description=description, classification=classification, keywords=keywords
     )
     desc_fingerprint = job_description_fingerprint(description)
-    if llm_meta:
-        llm_meta["job_description_hash"] = desc_fingerprint
+    llm_meta["job_description_hash"] = desc_fingerprint
     model_name = OLLAMA_MODEL_NAME if DEFAULT_MODEL_BACKEND == "ollama" else DEFAULT_MODEL_NAME
     if llm_meta.get("ollama_enriched"):
         prompt_version = f"{PROMPT_VERSION_TAG}_ollama"
@@ -309,7 +307,6 @@ def _run_pipeline(
     )
 
     # --- LLM rewrite passes ---
-    _t_pipeline_start = time.perf_counter()
     all_selected_bullets: list[str] = [
         b for entry in tailored_doc.experience for b in entry.bullets
     ] + [b for entry in tailored_doc.projects for b in entry.bullets]
@@ -340,25 +337,7 @@ def _run_pipeline(
         "total_ms": None,
     }
 
-    # Step 2: RAG index maintenance + keyword-to-bullet matching.
-    index_rebuilt = False
-    if _config.RAG_ENABLED and raw_kws:
-        try:
-            stale = is_stale(
-                Path(selected_resume_path),
-                Path(candidate_profile_path),
-                Path(bullet_library_path),
-            )
-            if stale:
-                build_index(
-                    Path(selected_resume_path),
-                    Path(candidate_profile_path),
-                    Path(bullet_library_path),
-                )
-                index_rebuilt = True
-        except Exception:
-            pass
-
+    # Step 2: RAG keyword-to-bullet matching (in-memory cosine sim against selected bullets).
     kw_match: dict = {
         "bullet_matches": [], "summary_keywords": [],
         "ignored_keywords": list(raw_kws), "scores": [], "rag_used": False,
@@ -374,7 +353,6 @@ def _run_pipeline(
         "bullets": all_selected_bullets,
         "high_threshold": _config.RAG_HIGH_THRESHOLD,
         "mid_threshold": _config.RAG_MID_THRESHOLD,
-        "index_rebuilt": index_rebuilt,
         "scores": kw_match.get("scores", []),
         "bullet_matches": kw_match.get("bullet_matches", []),
         "summary_keywords": kw_match.get("summary_keywords", []),
@@ -404,18 +382,45 @@ def _run_pipeline(
             })
             if result["success"]:
                 idx = 0
+                found = False
                 for entry in tailored_doc.experience:
                     for j in range(len(entry.bullets)):
                         if idx == bullet_idx:
                             entry.bullets[j] = result["bullet"]
+                            found = True
+                            break
                         idx += 1
-                for entry in tailored_doc.projects:
-                    for j in range(len(entry.bullets)):
-                        if idx == bullet_idx:
-                            entry.bullets[j] = result["bullet"]
-                        idx += 1
+                    if found:
+                        break
+                if not found:
+                    for entry in tailored_doc.projects:
+                        for j in range(len(entry.bullets)):
+                            if idx == bullet_idx:
+                                entry.bullets[j] = result["bullet"]
+                                found = True
+                                break
+                            idx += 1
+                        if found:
+                            break
 
     trace["step3_bullet_rewrites"] = bullet_rewrites
+
+    # Sync rewritten bullet texts back into structured_output so tailored_resume.json
+    # and the review UI match the PDF/TeX (structured_output is written by _compile_with_fit_retry).
+    for s_entry, t_entry in zip(
+        structured_output.get("experience_entries") or [], tailored_doc.experience
+    ):
+        plan = s_entry.get("bullet_plan") or []
+        for k, t_bullet in enumerate(t_entry.bullets):
+            if k < len(plan):
+                plan[k]["text"] = t_bullet
+    for s_entry, t_entry in zip(
+        structured_output.get("project_entries") or [], tailored_doc.projects
+    ):
+        plan = s_entry.get("bullet_plan") or []
+        for k, t_bullet in enumerate(t_entry.bullets):
+            if k < len(plan):
+                plan[k]["text"] = t_bullet
 
     # Step 4: Generate summary from candidate context + mid-tier keywords.
     exp_lines = [

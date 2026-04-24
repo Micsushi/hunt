@@ -1,0 +1,117 @@
+.wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-xl);
+  padding: 16px;
+  box-shadow: var(--shadow);
+  margin-bottom: 18px;
+}
+
+.chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.chip {
+  border: 1px solid var(--line);
+  background: var(--panel);
+  border-radius: var(--radius-pill);
+  padding: 6px 12px;
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--ink);
+  cursor: pointer;
+  transition: background var(--ease), border-color var(--ease), transform var(--ease);
+}
+
+.chip:hover {
+  background: var(--panel-strong);
+  transform: translateY(-1px);
+}
+
+.chip.active {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: white;
+}
+
+.row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+
+.searchInput {
+  flex: 2 1 220px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  padding: 9px 12px;
+  background: #faf5ec;
+  font-size: 0.93rem;
+}
+
+.tagInput {
+  flex: 1 1 120px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  padding: 9px 12px;
+  background: #faf5ec;
+  font-size: 0.93rem;
+}
+
+.select {
+  flex: 1 1 130px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  padding: 9px 10px;
+  background: #faf5ec;
+  font-size: 0.93rem;
+}
+
+.dirBtn,
+.applyBtn,
+.resetBtn {
+  border: 1px solid var(--line);
+  border-radius: var(--radius-pill);
+  padding: 9px 14px;
+  font-size: 0.88rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background var(--ease), transform var(--ease);
+  white-space: nowrap;
+}
+
+.dirBtn  { background: var(--panel-strong); color: var(--ink); }
+.applyBtn { background: var(--accent); border-color: var(--accent); color: white; }
+.resetBtn { background: var(--panel); color: var(--muted); }
+
+.dirBtn:hover, .resetBtn:hover { transform: translateY(-1px); background: var(--panel-strong); }
+.applyBtn:hover { transform: translateY(-1px); }
+
+.limitRow {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.limitBtn {
+  border: 1px solid var(--line);
+  background: var(--panel);
+  border-radius: var(--radius-pill);
+  padding: 4px 10px;
+  font-size: 0.83rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background var(--ease);
+}
+
+.limitBtn.active {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: white;
+}

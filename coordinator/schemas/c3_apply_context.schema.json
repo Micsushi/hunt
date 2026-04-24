@@ -1,0 +1,100 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "C3ApplyContext",
+  "type": "object",
+  "required": [
+    "jobId",
+    "title",
+    "company",
+    "applyUrl",
+    "jobUrl",
+    "sourceMode",
+    "source",
+    "atsType",
+    "applyType",
+    "autoApplyEligible",
+    "description",
+    "selectedResumeVersionId",
+    "selectedResumePath",
+    "selectedResumeTexPath",
+    "selectedResumeReadyForC3",
+    "jdSnapshotPath",
+    "concernFlags",
+    "browserLane",
+    "primedAt"
+  ],
+  "properties": {
+    "jobId": {
+      "type": "string"
+    },
+    "title": {
+      "type": "string"
+    },
+    "company": {
+      "type": "string"
+    },
+    "applyUrl": {
+      "type": "string"
+    },
+    "jobUrl": {
+      "type": "string"
+    },
+    "sourceMode": {
+      "type": "string"
+    },
+    "source": {
+      "type": "string"
+    },
+    "atsType": {
+      "type": "string"
+    },
+    "applyType": {
+      "type": "string"
+    },
+    "autoApplyEligible": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 1
+    },
+    "description": {
+      "type": "string"
+    },
+    "selectedResumeVersionId": {
+      "type": "string"
+    },
+    "selectedResumePath": {
+      "type": "string"
+    },
+    "selectedResumeTexPath": {
+      "type": "string"
+    },
+    "selectedResumeReadyForC3": {
+      "type": "boolean"
+    },
+    "jdSnapshotPath": {
+      "type": "string"
+    },
+    "concernFlags": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "browserLane": {
+      "type": "string"
+    },
+    "primedAt": {
+      "type": "string"
+    },
+    "selectedResumeDataUrl": {
+      "type": "string"
+    },
+    "selectedResumeName": {
+      "type": "string"
+    },
+    "selectedResumeMimeType": {
+      "type": "string"
+    }
+  },
+  "additionalProperties": false
+}

@@ -84,6 +84,7 @@ class ApplyContext:
     concern_flags: list[str] = field(default_factory=list)
     manual_review_flags: list[str] = field(default_factory=list)
     source_mode: str = "c4"
+    browser_lane: str | None = None
     apply_context_path: str | None = None
     c3_apply_context_path: str | None = None
     created_at: str = field(default_factory=utc_now_iso)
@@ -98,6 +99,7 @@ class OrchestrationRun:
     job_id: int
     status: str
     source_runtime: str = "manual"
+    browser_lane: str | None = None
     job_source: str | None = None
     job_title: str | None = None
     company: str | None = None
@@ -128,6 +130,7 @@ class OrchestrationRun:
             job_id=int(row["job_id"]),
             status=str(row["status"]),
             source_runtime=str(row["source_runtime"]),
+            browser_lane=row["browser_lane"],
             job_source=row["job_source"],
             job_title=row["job_title"],
             company=row["company"],

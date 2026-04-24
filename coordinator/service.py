@@ -504,7 +504,12 @@ class OrchestrationService:
             }
 
     def _create_run_payloads(
-        self, *, row: sqlite3.Row, run_id: str, embed_resume_data: bool
+        self,
+        *,
+        row: sqlite3.Row,
+        run_id: str,
+        browser_lane: str | None,
+        embed_resume_data: bool,
     ) -> tuple[dict[str, Any], str, str]:
         created_at = utc_now_iso()
         run_dir = self._run_dir(run_id)
@@ -513,19 +518,28 @@ class OrchestrationService:
         apply_context = build_apply_context_payload(
             row,
             run_id=run_id,
+            browser_lane=browser_lane,
             created_at=created_at,
             apply_context_path=apply_context_path,
             c3_apply_context_path=c3_apply_context_path,
         )
         c3_payload = build_c3_apply_payload(
-            row, primed_at=created_at, embed_resume_data=embed_resume_data
+            row,
+            browser_lane=browser_lane,
+            primed_at=created_at,
+            embed_resume_data=embed_resume_data,
         )
         self._write_json_artifact(Path(apply_context_path), apply_context)
         self._write_json_artifact(Path(c3_apply_context_path), c3_payload)
         return apply_context, apply_context_path, c3_apply_context_path
 
     def build_apply_context(
-        self, job_id: int, *, source_runtime: str = "manual", embed_resume_data: bool = False
+        self,
+        job_id: int,
+        *,
+        source_runtime: str = "manual",
+        browser_lane: str | None = None,
+        embed_resume_data: bool = False,
     ) -> ApplyContext:
         with self._connect() as conn:
             row = self._get_job_row(conn, job_id)
@@ -539,24 +553,26 @@ class OrchestrationService:
             apply_context, apply_context_path, c3_apply_context_path = self._create_run_payloads(
                 row=row,
                 run_id=run_id,
+                browser_lane=browser_lane,
                 embed_resume_data=embed_resume_data,
             )
             now = utc_now_iso()
             conn.execute(
                 """
                 INSERT INTO orchestration_runs (
-                    id, job_id, status, source_runtime, job_source, job_title, company,
+                    id, job_id, status, source_runtime, browser_lane, job_source, job_title, company,
                     selected_resume_version_id, selected_resume_pdf_path, selected_resume_tex_path,
                     apply_url, ats_type, apply_context_path, c3_apply_context_path,
                     manual_review_required, manual_review_reason, manual_review_flags_json,
                     submit_allowed, started_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     run_id,
                     job_id,
                     "apply_prepared",
                     source_runtime,
+                    browser_lane,
                     _text(row["source"]) or None,
                     _text(row["title"]) or None,
                     _text(row["company"]) or None,
@@ -588,8 +604,17 @@ class OrchestrationService:
 
         return ApplyContext(**apply_context)
 
-    def start_run(self, job_id: int, source_runtime: str = "manual") -> OrchestrationRun:
-        context = self.build_apply_context(job_id, source_runtime=source_runtime)
+    def start_run(
+        self,
+        job_id: int,
+        source_runtime: str = "manual",
+        browser_lane: str | None = None,
+    ) -> OrchestrationRun:
+        context = self.build_apply_context(
+            job_id,
+            source_runtime=source_runtime,
+            browser_lane=browser_lane,
+        )
         run = self.get_run(context.run_id)
         if run is None:
             raise OrchestrationError(f"Run {context.run_id} could not be loaded after creation.")
@@ -1175,11 +1200,15 @@ class OrchestrationService:
         job_id: int,
         *,
         source_runtime: str = "manual",
+        browser_lane: str | None = None,
         embed_resume_data: bool = False,
         prepare_only: bool = False,
     ) -> dict[str, Any]:
         context = self.build_apply_context(
-            job_id, source_runtime=source_runtime, embed_resume_data=embed_resume_data
+            job_id,
+            source_runtime=source_runtime,
+            browser_lane=browser_lane,
+            embed_resume_data=embed_resume_data,
         )
         if prepare_only:
             run = self.get_run(context.run_id)
@@ -1204,6 +1233,7 @@ class OrchestrationService:
         self,
         *,
         source_runtime: str = "scheduler",
+        browser_lane: str | None = None,
         embed_resume_data: bool = False,
         prepare_only: bool = False,
     ) -> dict[str, Any]:
@@ -1213,6 +1243,7 @@ class OrchestrationService:
         result = self.run_job(
             int(pick["job_id"]),
             source_runtime=source_runtime,
+            browser_lane=browser_lane,
             embed_resume_data=embed_resume_data,
             prepare_only=prepare_only,
         )

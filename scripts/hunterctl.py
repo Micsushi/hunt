@@ -69,6 +69,8 @@ def _get_default_runtime_env(
         defaults["HUNT_DB_PATH"] = str(runtime_dir / "hunt.db")
     if not env.get("HUNT_ARTIFACTS_DIR"):
         defaults["HUNT_ARTIFACTS_DIR"] = str(runtime_dir / "artifacts")
+    if not env.get("HUNT_COORDINATOR_ROOT") and not env.get("HUNT_ORCHESTRATION_ROOT"):
+        defaults["HUNT_COORDINATOR_ROOT"] = str(runtime_dir / "coordinator")
     return defaults
 
 
@@ -86,6 +88,10 @@ def _run(command, *, env=None):
 def _require_linux(command_name: str):
     if IS_WINDOWS:
         raise SystemExit(f"`{command_name}` is Linux/server-only.")
+
+
+def _coordinator_command(subcommand: str, *parts: str) -> list[str]:
+    return [PYTHON, "-m", "coordinator.cli", subcommand, *parts]
 
 
 def cmd_auth_save(args):
@@ -367,21 +373,61 @@ def _build_backfill_command(
     return command
 
 
-def cmd_review(_args):
-    _run([PYTHON, "review_app.py"])
+def _frontend_dir():
+    return os.path.join(REPO_ROOT, "frontend")
+
+
+def _run_npm_build():
+    """Run npm install + npm run build in frontend/. Returns True on success."""
+    import subprocess
+    fe = _frontend_dir()
+    if not os.path.isdir(fe):
+        print("[hunter] frontend/ directory not found — skipping build.")
+        return False
+    print("[hunter] Building frontend (npm install && npm run build)…")
+    for cmd in [["npm", "install"], ["npm", "run", "build"]]:
+        result = subprocess.run(cmd, cwd=fe)
+        if result.returncode != 0:
+            print(f"[hunter] Build step failed: {' '.join(cmd)}")
+            return False
+    print("[hunter] Frontend build complete.")
+    return True
+
+
+def cmd_ui_build(_args):
+    if not _run_npm_build():
+        raise SystemExit(1)
+
+
+def cmd_ui_serve(_args):
+    dist_index = os.path.join(_frontend_dir(), "dist", "index.html")
+    if not os.path.isfile(dist_index):
+        print("[hunter] frontend/dist not found — running build first.")
+        if not _run_npm_build():
+            print("[hunter] Build failed. Starting server anyway (will show 503 for UI).")
+    _run([PYTHON, "-m", "backend.app"])
+
+
+def cmd_build_ui(args):
+    print("[hunter] `hunter build-ui` is a legacy alias for `hunter ui build`.")
+    cmd_ui_build(args)
+
+
+def cmd_review(args):
+    print("[hunter] `hunter review` is a legacy alias for `hunter ui serve`.")
+    cmd_ui_serve(args)
 
 
 def cmd_apply_prep(args):
-    command = [
-        PYTHON,
-        "-m",
-        "coordinator.cli",
+    command = _coordinator_command(
         "apply-prep",
         "--job-id",
         str(args.job_id),
         "--source-runtime",
         args.source_runtime,
-    ]
+    )
+    if args.browser_lane:
+        command.extend(["--browser-lane", args.browser_lane])
     if args.embed_resume_data:
         command.append("--embed-resume-data")
     if args.output:
@@ -390,6 +436,121 @@ def cmd_apply_prep(args):
             "Use `scripts/c3_apply_prep.py` directly if you need the legacy C3-only payload helper."
         )
     _run(command)
+
+
+def cmd_c4_init_db(_args):
+    _run(_coordinator_command("init-db"))
+
+
+def cmd_c4_ready(args):
+    _run(_coordinator_command("ready", "--job-id", str(args.job_id)))
+
+
+def cmd_c4_ready_list(args):
+    command = _coordinator_command("ready-list", "--limit", str(args.limit))
+    if args.reason:
+        command.extend(["--reason", args.reason])
+    if args.only_ready:
+        command.append("--only-ready")
+    _run(command)
+
+
+def cmd_c4_summary(args):
+    _run(_coordinator_command("summary", "--sample-limit", str(args.sample_limit)))
+
+
+def cmd_c4_request_fill(args):
+    _run(_coordinator_command("request-fill", "--run-id", args.run_id))
+
+
+def cmd_c4_record_fill(args):
+    _run(_coordinator_command("record-fill", "--run-id", args.run_id, "--result-json", args.result_json))
+
+
+def cmd_c4_resolve_review(args):
+    command = _coordinator_command(
+        "resolve-review",
+        "--run-id",
+        args.run_id,
+        "--decision",
+        args.decision,
+        "--approved-by",
+        args.approved_by,
+    )
+    if args.reason:
+        command.extend(["--reason", args.reason])
+    _run(command)
+
+
+def cmd_c4_approve_submit(args):
+    command = _coordinator_command(
+        "approve-submit",
+        "--run-id",
+        args.run_id,
+        "--decision",
+        args.decision,
+        "--approved-by",
+        args.approved_by,
+        "--approval-mode",
+        args.approval_mode,
+    )
+    if args.reason:
+        command.extend(["--reason", args.reason])
+    _run(command)
+
+
+def cmd_c4_mark_submitted(args):
+    command = _coordinator_command("mark-submitted", "--run-id", args.run_id)
+    if args.summary_json:
+        command.extend(["--summary-json", args.summary_json])
+    _run(command)
+
+
+def cmd_c4_pick_next(_args):
+    _run(_coordinator_command("pick-next"))
+
+
+def cmd_c4_run(args):
+    command = _coordinator_command(
+        "run",
+        "--job-id",
+        str(args.job_id),
+        "--source-runtime",
+        args.source_runtime,
+    )
+    if args.browser_lane:
+        command.extend(["--browser-lane", args.browser_lane])
+    if args.embed_resume_data:
+        command.append("--embed-resume-data")
+    if args.prepare_only:
+        command.append("--prepare-only")
+    _run(command)
+
+
+def cmd_c4_run_once(args):
+    command = _coordinator_command("run-once", "--source-runtime", args.source_runtime)
+    if args.browser_lane:
+        command.extend(["--browser-lane", args.browser_lane])
+    if args.embed_resume_data:
+        command.append("--embed-resume-data")
+    if args.prepare_only:
+        command.append("--prepare-only")
+    _run(command)
+
+
+def cmd_c4_run_status(args):
+    _run(_coordinator_command("run-status", "--run-id", args.run_id))
+
+
+def cmd_c4_runs(args):
+    command = _coordinator_command("runs", "--limit", str(args.limit))
+    if args.status:
+        command.extend(["--status", args.status])
+    _run(command)
+
+
+def cmd_c4_events(args):
+    _run(_coordinator_command("events", "--run-id", args.run_id))
 
 
 def cmd_tests(args):
@@ -461,7 +622,7 @@ def cmd_stop(args):
     if IS_WINDOWS:
         raise SystemExit(
             "On Windows there is no Hunt systemd timer. "
-            "Stop the terminal where `hunter runner` or `hunter review` is running."
+            "Stop the terminal where `hunter runner` or `ui serve` is running."
         )
     _run_systemd_steps([["sudo", "systemctl", "disable", "--now", "hunt-scraper.timer"]])
 
@@ -816,8 +977,51 @@ def build_parser():
     drain.add_argument("--ask", action="store_true")
     drain.set_defaults(func=cmd_drain)
 
-    review = subparsers.add_parser("review", help="Run the local review app.")
+    ui = subparsers.add_parser("ui", help="Frontend UI commands.")
+    ui_subs = ui.add_subparsers(dest="ui_action", required=True)
+    ui_serve = ui_subs.add_parser("serve", help="Build (if needed) and start the Hunt control plane.")
+    ui_serve.set_defaults(func=cmd_ui_serve)
+    ui_build = ui_subs.add_parser("build", help="Build the frontend SPA (npm install + build).")
+    ui_build.set_defaults(func=cmd_ui_build)
+
+    review = subparsers.add_parser(
+        "review", help="Legacy alias for `hunter ui serve`."
+    )
     review.set_defaults(func=cmd_review)
+
+    build_ui = subparsers.add_parser(
+        "build-ui", help="Legacy alias for `hunter ui build`."
+    )
+    build_ui.set_defaults(func=cmd_build_ui)
+
+    init_db = subparsers.add_parser(
+        "c4-init-db",
+        help="Create or migrate the C4 (Coordinator) orchestration tables.",
+    )
+    init_db.set_defaults(func=cmd_c4_init_db)
+
+    ready = subparsers.add_parser(
+        "c4-ready",
+        help="Show the C4 readiness decision for one job.",
+    )
+    ready.add_argument("job_id", type=int)
+    ready.set_defaults(func=cmd_c4_ready)
+
+    ready_list = subparsers.add_parser(
+        "c4-ready-list",
+        help="List C4 readiness decisions across the queue.",
+    )
+    ready_list.add_argument("--limit", type=int, default=20)
+    ready_list.add_argument("--reason", default=None)
+    ready_list.add_argument("--only-ready", action="store_true")
+    ready_list.set_defaults(func=cmd_c4_ready_list)
+
+    summary = subparsers.add_parser(
+        "c4-summary",
+        help="Summarize C4 readiness counts and scheduler blockers.",
+    )
+    summary.add_argument("--sample-limit", type=int, default=10)
+    summary.set_defaults(func=cmd_c4_summary)
 
     apply_prep = subparsers.add_parser(
         "apply-prep",
@@ -825,9 +1029,103 @@ def build_parser():
     )
     apply_prep.add_argument("job_id", type=int)
     apply_prep.add_argument("--source-runtime", default="manual")
+    apply_prep.add_argument("--browser-lane", choices=["isolated", "attached"], default=None)
     apply_prep.add_argument("--embed-resume-data", action="store_true")
     apply_prep.add_argument("--output", default="")
     apply_prep.set_defaults(func=cmd_apply_prep)
+
+    request_fill = subparsers.add_parser(
+        "c4-request-fill",
+        help="Move an apply-prepared C4 run into fill_requested.",
+    )
+    request_fill.add_argument("run_id")
+    request_fill.set_defaults(func=cmd_c4_request_fill)
+
+    record_fill = subparsers.add_parser(
+        "c4-record-fill",
+        help="Record a fill result JSON for a C4 run.",
+    )
+    record_fill.add_argument("run_id")
+    record_fill.add_argument("result_json")
+    record_fill.set_defaults(func=cmd_c4_record_fill)
+
+    resolve_review = subparsers.add_parser(
+        "c4-resolve-review",
+        help="Resolve a C4 manual-review hold by continuing or failing the run.",
+    )
+    resolve_review.add_argument("run_id")
+    resolve_review.add_argument("--decision", choices=["continue", "fail"], required=True)
+    resolve_review.add_argument("--approved-by", required=True)
+    resolve_review.add_argument("--reason", default="")
+    resolve_review.set_defaults(func=cmd_c4_resolve_review)
+
+    approve_submit = subparsers.add_parser(
+        "c4-approve-submit",
+        help="Record an explicit C4 submit approval or denial.",
+    )
+    approve_submit.add_argument("run_id")
+    approve_submit.add_argument("--decision", choices=["approve", "deny"], required=True)
+    approve_submit.add_argument("--approved-by", required=True)
+    approve_submit.add_argument("--reason", default="")
+    approve_submit.add_argument("--approval-mode", default="operator")
+    approve_submit.set_defaults(func=cmd_c4_approve_submit)
+
+    mark_submitted = subparsers.add_parser(
+        "c4-mark-submitted",
+        help="Mark a submit-approved C4 run as submitted.",
+    )
+    mark_submitted.add_argument("run_id")
+    mark_submitted.add_argument("--summary-json", default=None)
+    mark_submitted.set_defaults(func=cmd_c4_mark_submitted)
+
+    pick_next = subparsers.add_parser(
+        "c4-pick-next",
+        help="Pick the next C4-ready job while enforcing scheduler guardrails.",
+    )
+    pick_next.set_defaults(func=cmd_c4_pick_next)
+
+    run = subparsers.add_parser(
+        "c4-run",
+        help="Create one C4 run for a job and optionally request fill.",
+    )
+    run.add_argument("job_id", type=int)
+    run.add_argument("--source-runtime", default="manual")
+    run.add_argument("--browser-lane", choices=["isolated", "attached"], default=None)
+    run.add_argument("--embed-resume-data", action="store_true")
+    run.add_argument("--prepare-only", action="store_true")
+    run.set_defaults(func=cmd_c4_run)
+
+    run_once = subparsers.add_parser(
+        "c4-run-once",
+        help="Pick the next C4-ready job and start one bounded orchestration run.",
+    )
+    run_once.add_argument("--source-runtime", default="scheduler")
+    run_once.add_argument("--browser-lane", choices=["isolated", "attached"], default=None)
+    run_once.add_argument("--embed-resume-data", action="store_true")
+    run_once.add_argument("--prepare-only", action="store_true")
+    run_once.set_defaults(func=cmd_c4_run_once)
+
+    run_status = subparsers.add_parser(
+        "c4-run-status",
+        help="Show one C4 run and its event history.",
+    )
+    run_status.add_argument("run_id")
+    run_status.set_defaults(func=cmd_c4_run_status)
+
+    runs = subparsers.add_parser(
+        "c4-runs",
+        help="List C4 orchestration runs.",
+    )
+    runs.add_argument("--status", default=None)
+    runs.add_argument("--limit", type=int, default=20)
+    runs.set_defaults(func=cmd_c4_runs)
+
+    events = subparsers.add_parser(
+        "c4-events",
+        help="List event history for one C4 run.",
+    )
+    events.add_argument("run_id")
+    events.set_defaults(func=cmd_c4_events)
 
     tests = subparsers.add_parser("tests", help="Run Hunt unit tests by stage or component.")
     tests.add_argument(

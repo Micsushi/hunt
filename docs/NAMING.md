@@ -2,11 +2,12 @@
 
 This file is the **single place** to resolve naming: **C1–C4**, **Hunter / Fletcher / Executioner / Coordinator**, and **where code lives in this repo**.
 
-## Four components (same system, stable labels)
+## Components (stable labels)
 
 | ID | Code name | Role | Primary code in this repo |
 |----|-----------|------|---------------------------|
-| **C1** | **Hunter** | Job discovery and multi-source enrichment (SQLite, review app, C1 logging) | Python package **`hunter/`** (see below) |
+| **C0** | **Frontend** | Operator dashboard and control plane — SPA UI plus FastAPI backend for queue review, ops, logs, and component settings | **`frontend/`** + **`backend/`** |
+| **C1** | **Hunter** | Job discovery and multi-source enrichment (SQLite, scraping, enrichment, C1 logging) | Python package **`hunter/`** (see below) |
 | **C2** | **Fletcher** | Resume tailoring (LaTeX pipeline, PDF, DB attempts) | **`fletcher/`** |
 | **C3** | **Executioner** | Browser autofill and apply assistance (extension) | **`executioner/`** (Chrome extension sources) |
 | **C4** | **Coordinator** | Orchestration, readiness, apply-prep, submit control | **`coordinator/`** |

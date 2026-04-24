@@ -8,8 +8,10 @@
     "status",
     "source_runtime",
     "manual_review_required",
+    "manual_review_flags",
     "submit_allowed",
-    "started_at"
+    "started_at",
+    "updated_at"
   ],
   "properties": {
     "run_id": {
@@ -25,9 +27,44 @@
     "source_runtime": {
       "type": "string"
     },
+    "browser_lane": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "job_source": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "job_title": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "company": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
     "selected_resume_version_id": {
       "type": [
-        "integer",
+        "string",
+        "null"
+      ]
+    },
+    "selected_resume_pdf_path": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "selected_resume_tex_path": {
+      "type": [
         "string",
         "null"
       ]
@@ -50,6 +87,36 @@
         "null"
       ]
     },
+    "c3_apply_context_path": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "fill_result_path": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "browser_summary_path": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "decision_path": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "final_status_path": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
     "manual_review_required": {
       "type": "boolean"
     },
@@ -58,6 +125,12 @@
         "string",
         "null"
       ]
+    },
+    "manual_review_flags": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
     },
     "submit_allowed": {
       "type": "boolean"
@@ -69,6 +142,9 @@
       ]
     },
     "started_at": {
+      "type": "string"
+    },
+    "updated_at": {
       "type": "string"
     },
     "completed_at": {

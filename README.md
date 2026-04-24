@@ -4,6 +4,8 @@ Putting in the Work so it is less Work for you to apply for Work
 
 Automated Hunt runtime. Today it primarily covers **C1 (Hunter)** discovery and enrichment, with **C2 (Fletcher)**, **C3 (Executioner)**, and **C4 (Coordinator)** planned on top of the same system.
 
+Component rule: build each component so it can run and be tested on its own. Today that means **C0 (Frontend)** should remain usable through `backend/app.py` against the shared DB/artifacts even if other component runtimes are not running, and **C1/C2/C3** should keep direct terminal-driven workflows without requiring the UI. **C4 (Coordinator)** is the only intentionally coupled component: it depends on C1/C2/C3 contracts to do end-to-end orchestration, but the other components must not depend on C4 to do their own work.
+
 **Names and folders:** see **`docs/NAMING.md`** (C1 code is the **`hunter`** package; **`hunter/scraper.py`** is the discovery script name only).
 
 Current focus:
@@ -17,7 +19,7 @@ Current focus:
 
 - **Discovery** : **JobSpy** fetches recent **LinkedIn** and **Indeed** listings for your search terms; rows land in **SQLite** as **`pending`** enrichment when the board is supported. Indeed matching is loose; LinkedIn listing payloads are often thin until enrichment.
 - **Enrichment** : **Playwright** (and related workers) process the queue **by `source`** (**LinkedIn first**, then **Indeed**), **in batches** per run, usually **headless**. **LinkedIn** needs **auth** (saved session and/or env credentials). **Easy Apply** is **detected and labeled** so later automation ignores it as an external apply target. Optional **headful** rerun for blocked rows when **`ENRICHMENT_UI_VERIFY_BLOCKED`** is enabled (often on **Xvfb** on servers).
-- **Review** : **`review_app.py`** : filter, sort, search jobs, errors, and artifacts over the same DB.
+- **Control plane** : **`backend/app.py`** : serve the C0 dashboard plus filter, sort, search jobs, errors, and artifacts over the same DB.
 
 **Component versions and future milestones:** **`docs/roadmap.md`** (snapshot table + draft v0.2+ ideas).
 
@@ -78,10 +80,16 @@ See `agents/system_prompt.md` for the full agent contract (DB schema, status lif
 - **C4 (Coordinator)** plan: `docs/components/component4/README.md`
 
 Repo homes by component:
+- `frontend/` + `backend/` : **C0 (Frontend)** UI and control-plane backend
 - `hunter/` : **C1 (Hunter)** runtime package (discovery script: `hunter/scraper.py`)
 - `fletcher/` : **C2 (Fletcher)** source and contracts
 - `executioner/` : **C3 (Executioner)** source and fixtures
 - `coordinator/` : **C4 (Coordinator)** source and contracts
+
+Testing posture by component:
+- `backend/app.py` / C0: browse and inspect DB-backed state without requiring live C1/C2/C3/C4 services
+- C1/C2/C3: runnable from terminal without C0
+- C4: depends on upstream/downstream component outputs by design
 
 Current local checkpoint for later components:
 - `fletcher/` : **C2 (Fletcher)** — **v0.1** shipped in-repo; **v1.0** = LLM tailoring + prompts (`docs/TODO.md`); **v2.0** = interactive editing (deferred). Deploy: Ansible Stage 7 in `ansible_homelab`

@@ -1,21 +1,34 @@
 # Components
 
-**Naming:** Each component has an ID and a code name: **C1 (Hunter)**, **C2 (Fletcher)**, **C3 (Executioner)**, **C4 (Coordinator)**. See **`../NAMING.md`** for how that maps to folders (`hunter/`, `fletcher/`, `coordinator/`, extension).
+**Naming**: C1 (Hunter), C2 (Fletcher), C3 (Executioner), C4 (Coordinator). Folder map: `../NAMING.md`.
 
-**CLI:** **`../CLI_CONVENTIONS.md`** defines how **`hunt` / `hunter`** commands are added so C2–C4 match C1 patterns.
+**CLI conventions**: `../CLI_CONVENTIONS.md`
 
-**Shared terms:** **`../GLOSSARY.md`**
+**Shared terms**: `../GLOSSARY.md`
 
-**Live tracker:** **`../TODO.md`**
+**DB schema**: `../DATA_MODEL.md`
 
-This folder contains planning docs for each major part of the system.
+**Deployment**: `../deployment.md`
 
-- `component1/README.md` : posting discovery and multi-source enrichment (LinkedIn + Indeed)
-- `../C1_OPERATOR_WORKFLOW.md` : short C1 v0.1 operator narrative (discovery → enrichment → review) and **Production host (server2)** pointers
-- `component2/README.md` : resume tailoring (C2: Fletcher) overview and stage plan
-- `component2/design.md` : resume tailoring data model, runtime layout, and implementation notes
-- `../../fletcher/prompts/README.md` : C2 prompt templates plus **career-ops** reference takeaways (not adopted behavior)
-- `component3/README.md` : browser autofill extension (C3: Executioner) overview and stage plan
-- `component3/design.md` : browser extension architecture, data model, and rollout notes
-- `component4/README.md` : orchestration and submit-control layer (C4: Coordinator), including OpenClaw direction
-- `component4/design.md` : orchestration architecture, research notes, and **implementation checkpoint** (living)
+---
+
+**Shared rule**: components should be independently runnable for local testing and debugging. C0 should work through `backend/app.py` against DB/artifact state even when other runtimes are down. C1/C2/C3 should keep standalone terminal/manual entrypoints. C4 is the only intentionally coupled component because it orchestrates C1/C2/C3 rather than replacing their standalone workflows.
+
+---
+
+Each component has two docs:
+
+| Doc | Purpose | When to read |
+|---|---|---|
+| `README.md` | Feature status: done / in-progress / bugs + locked decisions + contract | Finding next thing to work on |
+| `runbook.md` | Operational how-to: commands, setup, recovery | Running or debugging the component |
+
+---
+
+## Components
+
+- `component0/` : C0 (Frontend) — operator dashboard SPA (`frontend/`)
+- `component1/` : C1 (Hunter) — discovery and enrichment
+- `component2/` : C2 (Fletcher) — resume tailoring
+- `component3/` : C3 (Executioner) — browser autofill extension
+- `component4/` : C4 (Coordinator) — orchestration and submit control
