@@ -71,6 +71,34 @@ CREATE TABLE IF NOT EXISTS runtime_state (
 )
 """
 
+COMPONENT_SETTINGS_TABLE_SQL = """
+CREATE TABLE IF NOT EXISTS component_settings (
+    component   TEXT NOT NULL,
+    key         TEXT NOT NULL,
+    value       TEXT,
+    value_type  TEXT NOT NULL DEFAULT 'string',
+    secret      BOOLEAN NOT NULL DEFAULT 0,
+    updated_at  TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_by  TEXT,
+    PRIMARY KEY (component, key)
+)
+"""
+
+LINKEDIN_ACCOUNTS_TABLE_SQL = """
+CREATE TABLE IF NOT EXISTS linkedin_accounts (
+    id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+    username            TEXT NOT NULL UNIQUE,
+    password_encrypted  TEXT,
+    display_name        TEXT,
+    active              BOOLEAN NOT NULL DEFAULT 1,
+    auth_state          TEXT NOT NULL DEFAULT 'unknown',
+    last_auth_check     TEXT,
+    last_auth_error     TEXT,
+    created_at          TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at          TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+)
+"""
+
 MIGRATION_COLUMNS = {
     "operator_notes": "TEXT",
     "operator_tag": "TEXT",
@@ -500,15 +528,10 @@ def _backfill_linkedin_derived_fields(conn):
 
 
 def get_connection():
-    db_path = (os.getenv("HUNT_DB_PATH") or "").strip() or DB_PATH
-    conn = sqlite3.connect(db_path, timeout=30.0)
-    conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA busy_timeout = 30000")
-    try:
-        conn.execute("PRAGMA journal_mode = WAL")
-    except sqlite3.OperationalError:
-        pass
-    return conn
+    from hunter.db_compat import get_connection as _get_connection
+
+    # Pass DB_PATH explicitly so tests that mutate `db.DB_PATH` are respected.
+    return _get_connection(DB_PATH)
 
 
 def init_db(*, maintenance=True):
@@ -517,6 +540,8 @@ def init_db(*, maintenance=True):
         cursor = conn.cursor()
         cursor.execute(JOBS_TABLE_SQL)
         cursor.execute(RUNTIME_STATE_TABLE_SQL)
+        cursor.execute(COMPONENT_SETTINGS_TABLE_SQL)
+        cursor.execute(LINKEDIN_ACCOUNTS_TABLE_SQL)
         _migrate_jobs_table(cursor)
         if maintenance:
             _backfill_enrichment_metadata(cursor)
