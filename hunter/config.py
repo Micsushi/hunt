@@ -54,6 +54,14 @@ def get_db_path():
 # Backwards-compatible constant: prefer `get_db_path()` for runtime correctness.
 DB_PATH = get_db_path()
 
+# Postgres connection URL. When set, all components use Postgres instead of SQLite.
+# Format: postgresql://user:password@host:5432/dbname
+HUNT_DB_URL = _get_str_env("HUNT_DB_URL", "")
+
+# Fernet key for encrypting linkedin_accounts.password_encrypted.
+# Generate: python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+HUNT_CREDENTIAL_KEY = _get_str_env("HUNT_CREDENTIAL_KEY", "")
+
 # Discovery runs one query per (lane, term). Broad board results are trimmed afterward:
 # see hunter.search_lanes.LANE_TITLE_KEYWORDS (keep lanes aligned when you change terms).
 SEARCH_TERMS = {
