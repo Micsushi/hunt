@@ -132,19 +132,18 @@ INDEX_STATEMENTS = (
 )
 
 
-def get_connection(db_path: str | Path) -> sqlite3.Connection:
-    path = Path(db_path).expanduser().resolve()
-    if path.parent:
-        path.parent.mkdir(parents=True, exist_ok=True)
+def get_connection(db_path: str | Path):
+    import os as _os
 
-    conn = sqlite3.connect(path, timeout=30.0)
-    conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA busy_timeout = 30000")
-    try:
-        conn.execute("PRAGMA journal_mode = WAL")
-    except sqlite3.OperationalError:
-        pass
-    return conn
+    from hunter.db_compat import get_connection as _get_connection
+
+    db_url = (_os.environ.get("HUNT_DB_URL") or "").strip()
+    if db_url:
+        return _get_connection()
+    # SQLite: ensure parent directory exists before connecting
+    path = Path(db_path).expanduser().resolve()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    return _get_connection(path)
 
 
 def _existing_columns(cursor: sqlite3.Cursor, table_name: str) -> set[str]:

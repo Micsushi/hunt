@@ -105,11 +105,10 @@ def should_skip_resume_regeneration(
     return row is not None
 
 
-def get_connection(db_path: str | Path | None = None) -> sqlite3.Connection:
-    path = Path(db_path or get_db_path())
-    conn = sqlite3.connect(path, timeout=30.0)
-    conn.row_factory = sqlite3.Row
-    return conn
+def get_connection(db_path: str | Path | None = None):
+    from hunter.db_compat import get_connection as _get_connection
+
+    return _get_connection(db_path or get_db_path())
 
 
 def init_resume_db(db_path: str | Path | None = None) -> None:
