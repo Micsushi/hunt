@@ -7,7 +7,6 @@ This directory is the repo home for **C2 (Fletcher)** : resume tailoring. See **
 | Version | Focus |
 |---------|--------|
 | **~v0.1 (shipped in repo)** | End-to-end pipeline, heuristic tailoring, optional Ollama for **classification + keywords only**, DB/artifacts, `fletch`, review-app structured diff + highlights, Ansible Stage 7. |
-| **v1.0 (current goal)** | **LLM-driven resume generation** with prompts (bullet/skill work grounded in profile + library + JD), reliable backend (Ollama default), meet **locked decisions** in `docs/components/component2/README.md`, stable queue + one-page + C3/C4 handoff. |
 | **v2.0 (deferred)** | Interactive editing: gap/coverage, user-selected keywords, constrained regen, scoped bullet edits — **Stages 9–12** in component2 README; tracked in **`docs/TODO.md`** (C2 v2.0). Not required for v1.0. |
 
 ## v0.1 runtime (what exists today)

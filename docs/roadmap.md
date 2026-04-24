@@ -51,7 +51,6 @@ C0 Backend (FastAPI — API gateway)
 
 ## Deployment Split
 
-Each component deploys in its own container and Ansible stage. Never fold a later component into an earlier stage. See `docs/deployment.md`.
 
 ## Principles
 
@@ -68,11 +67,3 @@ Each component deploys in its own container and Ansible stage. Never fold a late
 
 Read these to find the next thing to work on — feature status, bugs, what's in progress:
 
-- `docs/components/component0/README.md`
-- `docs/components/component1/README.md`
-- `docs/components/component2/README.md`
-- `docs/components/component3/README.md`
-- `docs/components/component4/README.md`
-- `docs/API_CONTRACTS.md`
-- `docs/SETTINGS_AND_SECRETS.md`
-- `docs/DB_MIGRATION_SQLITE_TO_POSTGRES.md`

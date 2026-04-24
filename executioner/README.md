@@ -33,7 +33,3 @@ Implementation notes:
 - favor plain JavaScript until the extension behavior is stable
 - isolate DOM selectors and field-mapping heuristics by ATS family
 - keep generated-answer sanitization in shared utilities so every caller uses the same rules
-
-Related docs:
-- `docs/components/component3/README.md`
-- `docs/components/component3/design.md`

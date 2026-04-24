@@ -15,8 +15,6 @@ Current focus:
 
 ## C1 (Hunter) v0.1 : how it runs (~every 10 minutes)
 
-**Operator-friendly narrative** (discovery → enrichment → review) lives in **`docs/C1_OPERATOR_WORKFLOW.md`**. In short:
-
 - **Discovery** : **JobSpy** fetches recent **LinkedIn** and **Indeed** listings for your search terms; rows land in **SQLite** as **`pending`** enrichment when the board is supported. Indeed matching is loose; LinkedIn listing payloads are often thin until enrichment.
 - **Enrichment** : **Playwright** (and related workers) process the queue **by `source`** (**LinkedIn first**, then **Indeed**), **in batches** per run, usually **headless**. **LinkedIn** needs **auth** (saved session and/or env credentials). **Easy Apply** is **detected and labeled** so later automation ignores it as an external apply target. Optional **headful** rerun for blocked rows when **`ENRICHMENT_UI_VERIFY_BLOCKED`** is enabled (often on **Xvfb** on servers).
 - **Control plane** : **`backend/app.py`** : serve the C0 dashboard plus filter, sort, search jobs, errors, and artifacts over the same DB.
@@ -59,25 +57,12 @@ Edit `hunter/config.py`:
 - `WATCHLIST` : companies you want to apply to manually (flagged as `priority=1`, ignored by agents)
 - `TITLE_BLACKLIST` : job titles to filter out
 
-## Agents
-
-See `agents/system_prompt.md` for the full agent contract (DB schema, status lifecycle, claim pattern).
-
 ## Planning Docs
 
 - **Component IDs and code names:** `docs/NAMING.md` (C1 Hunter, C2 Fletcher, C3 Executioner, C4 Coordinator)
-- Repo-local instructions: `AGENTS.md`
 - System roadmap (includes version snapshot and draft milestones): `docs/roadmap.md`
-- C1 operator workflow (discovery / enrichment / review): `docs/C1_OPERATOR_WORKFLOW.md`
-- CLI conventions (`hunt` / `hunter`, adding C2–C4 commands): `docs/CLI_CONVENTIONS.md`
-- Local testing guide: `docs/LOCAL_TESTING.md`
 - Shared glossary (terms for C1–C4): `docs/GLOSSARY.md`
 - Live fix tracker: `docs/TODO.md`
-- Component docs index: `docs/components/README.md`
-- **C1 (Hunter)** plan: `docs/components/component1/README.md`
-- **C2 (Fletcher)** plan: `docs/components/component2/README.md`
-- **C3 (Executioner)** plan: `docs/components/component3/README.md`
-- **C4 (Coordinator)** plan: `docs/components/component4/README.md`
 
 Repo homes by component:
 - `frontend/` + `backend/` : **C0 (Frontend)** UI and control-plane backend
@@ -111,5 +96,3 @@ The preferred modern entrypoints are **C1 (Hunter)** scoped (not the whole Hunt 
 - `./hunter.sh` (POSIX)
 
 **Legacy aliases:** `hunt.ps1`, `hunt.cmd`, `./hunt.sh`, and `python scripts/huntctl.py` forward to the same CLI.
-
-**C1 shortcuts** (see **`docs/C1_OPERATOR_WORKFLOW.md`**): on the server, `./hunter.sh start` / `stop` / `restart` for the systemd timer; `./hunter.sh enrich 50 --source all` for a 50-job enrichment batch.

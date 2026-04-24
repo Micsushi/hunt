@@ -26,13 +26,11 @@ Single source for resolving naming: **C1–C4**, **Hunter / Fletcher / Execution
 - Install C1 deps: `pip install -r hunter/requirements.txt`
 - One-shot discovery (typical): `python hunter/scraper.py` (or **`./hunter.sh scrape`** from repo root)
 - C1 apply/readiness helpers used by C4: `coordinator/` + `scripts/hunterctl.py` (legacy: `scripts/huntctl.py`)
-- **CLI conventions** ( **`hunt` / `hunter`**, adding future C2–C4 subcommands): **`docs/CLI_CONVENTIONS.md`**
 
 ## Docs convention
 
 - First mention: **”C1 (Hunter)”**, then **C1** or **Hunter**. Same for C2/C3/C4.
 - Never “the scraper package” for C1 — use `hunter` package or C1 (Hunter).
-- Folder names `docs/components/component1/` stay stable; prose uses `CN (code name)`.
 
 ## C4 (Coordinator): package vs tables vs env vars
 
@@ -40,4 +38,3 @@ Single source for resolving naming: **C1–C4**, **Hunter / Fletcher / Execution
 - Artifacts root: `HUNT_COORDINATOR_ROOT` (preferred); `HUNT_ORCHESTRATION_ROOT` backward-compatible alias.
 - DB tables: `orchestration_runs`, `orchestration_events` etc. keep historical prefix — rename needs migration.
 
-See also: `docs/roadmap.md` (includes version snapshot and future milestones), `docs/GLOSSARY.md`, `README.md`, and per-component folders under `docs/components/`.

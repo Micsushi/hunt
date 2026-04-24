@@ -18,7 +18,6 @@ In this repo, C1 is job discovery and enrichment.
 
 **Legacy:** **`hunt`** launchers and **`scripts/huntctl.py`** forward to the same implementation.
 
-Operator-facing subcommands (**`start`**, **`enrich N`**, **`apply-prep`**, …) live there; see **`docs/CLI_CONVENTIONS.md`** for how to add C2–C4 commands.
 
 ### C2
 

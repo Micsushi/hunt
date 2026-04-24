@@ -57,11 +57,3 @@ Current CLI surface:
 Current `hunterctl` pass-throughs:
 - shared seam: `hunter apply-prep <ID>`
 - prefixed C4 helpers: `hunter c4-ready`, `hunter c4-ready-list`, `hunter c4-summary`, `hunter c4-run-status`, `hunter c4-runs`, `hunter c4-run-once`, and related `c4-*` review/submit commands
-
-Checkpoint docs:
-- `docs/components/component4/README.md`
-- `docs/components/component4/design.md`
-- `docs/components/component4/design.md` (includes implementation checkpoint section)
-- `docs/components/component4/hunter-coordinator-plan.md`
-- `docs/components/component4/hunter-coordinator-ops.md`
-- `docs/components/component4/hunter-coordinator-research.md`
