@@ -1,213 +1,113 @@
 # Hunt : TODO
 
-In-flight work only. See `docs/roadmap.md` for component status.
-
----
-
-## Architecture Migration
-
-Full migration from SQLite/systemd/monolith → Postgres/containers/microservices. Ordered by dependency.
-
----
-
-### Phase 1 : DB Schema Extensions (prerequisite for everything)
-
-New tables needed before any service APIs or C0 gateway wiring can work.
-
-- [ ] **`component_settings` table** — `(component, key, value, value_type, secret, updated_at, updated_by)`
-  - Add DDL to `hunter/db.py` migrations
-  - Add DDL to Postgres schema
-  - Verify C0 backend reads/writes it
-- [ ] **`linkedin_accounts` table**
-  - Add DDL to `hunter/db.py` migrations
-  - Add DDL to Postgres schema
-  - Wire `HUNT_CREDENTIAL_KEY` AES encryption for `password_encrypted`
-- [ ] **Run schema migrations** locally against SQLite, confirm no breakage
-- [ ] **Seed one `component_settings` row per component** in test/dev setup for smoke testing
-
----
-
-### Phase 2 : SQLite → Postgres Migration
-
-
-#### 2a : Code changes (can run on local first)
-
-- [ ] **`hunter/db.py`** — switch DB connection to `HUNT_DB_URL` (asyncpg/psycopg2); keep SQLite fallback when `HUNT_DB_URL` absent
-- [ ] **`backend/app.py`** — same `HUNT_DB_URL` switch
-- [ ] **`fletcher/db.py`** — same
-- [ ] **`coordinator/db.py`** — same
-- [ ] **Config shim** — if `HUNT_DB_URL` absent, fall back to `HUNT_DB_PATH` (SQLite). Central in `hunter/config.py` or shared util.
-- [ ] **Test locally** — run C1 scrape + enrichment cycle against local Postgres instance
-- [ ] **Test C0** — browse queue, ops page, settings page against Postgres
-
-#### 2b : server2 data migration (run once, after 2a confirmed)
-
-- [ ] Freeze `hunt-scraper.timer` + C0 write actions
-- [ ] SQLite backup: `sqlite3 hunt.db ".backup 'hunt-YYYYMMDD.db'"`
-- [ ] Provision Postgres via Ansible (Stage 6 — see Phase 5)
-- [ ] Apply schema DDL to Postgres
-- [ ] Copy table data (script or `pgloader`)
-- [ ] Validate row counts for all 9 tables
-- [ ] Spot-check: latest LinkedIn job, artifact paths, C0 queue load
-- [ ] Point server services at `HUNT_DB_URL`
-- [ ] Start C0 read-only first, then C1, then C2, C4
-- [ ] Re-enable scheduler
-
----
-
-### Phase 3 : Component Service APIs
-
-Each component needs an HTTP service alongside its existing CLI. C0 gateway calls these.
-
-#### 3a : C1 Hunter service API
-
-
-- [ ] FastAPI app in `hunter/` (e.g. `hunter/service.py`)
-- [ ] `GET /status` — health + db check
-- [ ] `GET /queue` — return queue health JSON (existing `queue_health.py` logic)
-- [ ] `POST /scrape` — trigger one discovery run (accepts `terms`, `locations`)
-- [ ] `POST /enrich` — trigger one enrichment batch (accepts `limit`, `source`)
-- [ ] `POST /accounts/{id}/reauth` — trigger LinkedIn re-auth for account
-- [ ] `HUNT_SERVICE_TOKEN` bearer auth on all endpoints
-- [ ] Local test: call each endpoint via curl with correct token
-
-#### 3b : C2 Fletcher service API
-
-
-- [ ] FastAPI app in `fletcher/` (e.g. `fletcher/service.py`)
-- [ ] `GET /status` — health check
-- [ ] `POST /generate` — trigger generation for `job_id`
-- [ ] `POST /generate-once` — multipart upload: JD file + optional `job_id`
-- [ ] `GET /attempts/{id}` — attempt detail + artifact links
-- [ ] `HUNT_SERVICE_TOKEN` auth on all endpoints
-- [ ] Local test: `POST /generate-once` with a real JD file
-
-#### 3c : C4 Coordinator service API
-
-
-- [ ] FastAPI app in `coordinator/` (e.g. `coordinator/service.py`)
-- [ ] `GET /status` — health check
-- [ ] `POST /run` — start orchestration run (`job_id`, optional `mode`, `browser_lane`)
-- [ ] `GET /runs` — list recent runs
-- [ ] `GET /runs/{id}` — single run detail
-- [ ] `POST /runs/{id}/approve` — record submit approval
-- [ ] `POST /runs/{id}/fill-result` — internal: C0 forwards C3 fill result here
-- [ ] `HUNT_SERVICE_TOKEN` auth on all endpoints
-
----
-
-### Phase 4 : C0 Gateway Wiring
-
-`backend/app.py` implements all `/api/*` routes. Frontend never calls components directly.
-
-
-#### 4a : Status + settings endpoints
-
-- [ ] `GET /api/status` — ping each configured service URL, return `{hunter, fletcher, executioner, coordinator}` online map; heartbeat for C3 from last-poll timestamp
-- [ ] `GET /api/settings/{component}` — read from `component_settings` table; redact `secret=1` values
-- [ ] `PUT /api/settings/{component}` — write to `component_settings`; validate key/type per component schema
-
-#### 4b : LinkedIn accounts endpoints
-
-- [ ] `GET /api/linkedin/accounts` — list accounts (redact `password_encrypted`)
-- [ ] `POST /api/linkedin/accounts` — add new account (encrypt password with `HUNT_CREDENTIAL_KEY`)
-- [ ] `PATCH /api/linkedin/accounts/{id}` — update `active`, `display_name`, status fields
-- [ ] `POST /api/linkedin/accounts/{id}/reauth` — forward to C1 `POST /accounts/{id}/reauth`
-
-#### 4c : C1 gateway routes
-
-- [ ] `POST /api/c1/scrape` — forward to C1 service `POST /scrape` with `HUNT_SERVICE_TOKEN`
-- [ ] `POST /api/c1/enrich` — forward to C1 service `POST /enrich`
-- [ ] Wire frontend Ops page "Trigger Scrape" / "Trigger Enrich" buttons to these routes
-
-#### 4d : C2 gateway routes
-
-- [ ] `POST /api/c2/generate` — forward to C2 service `POST /generate`
-- [ ] `POST /api/c2/generate-once` — stream multipart to C2 `POST /generate-once`
-- [ ] Wire Fletcher page file-drop UI to `/api/c2/generate-once`
-- [ ] Wire job detail Resume tab "Generate" button to `/api/c2/generate`
-
-#### 4e : C3 polling + result routes
-
-- [ ] `GET /api/c3/pending-fills` — reads fill requests from DB queue (written by C4); update C3 last-seen heartbeat
-- [ ] `POST /api/c3/fill-results` — receive fill result from C3; update `jobs`, `orchestration_runs`, `orchestration_events` via C4 or directly
-- [ ] Ensure `HUNT_SERVICE_TOKEN` required on both (C3 uses same token)
-
-#### 4f : C4 gateway routes
-
-- [ ] `POST /api/c4/runs` — forward to C4 `POST /run`
-- [ ] `GET /api/c4/runs` — forward to C4 `GET /runs`
-- [ ] `GET /api/c4/runs/{id}` — forward to C4 `GET /runs/{id}`
-- [ ] `POST /api/c4/runs/{id}/approve` — forward to C4 `POST /runs/{id}/approve`
-- [ ] Wire Coordinator page to these routes
-
----
-
-### Phase 5 : Container Dockerfiles + Compose
-
-
-- [ ] **`Dockerfile.backend`** — FastAPI C0 backend (`backend/`)
-- [ ] **`Dockerfile.frontend`** — multi-stage: `node` build → `nginx` serve `frontend/dist/`
-- [ ] **`Dockerfile.hunter`** — C1, includes Playwright/Chromium install
-- [ ] **`Dockerfile.fletcher`** — C2, includes LaTeX toolchain (tectonic)
-- [ ] **`Dockerfile.coordinator`** — C4
-- [ ] **`docker-compose.yml`** — compose for postgres, ollama, control-plane, hunter, fletcher, coordinator profiles (postgres, ollama, control-plane, hunter, fletcher, coordinator profiles)
-- [ ] **Local smoke test**: `docker compose up control-plane` — C0 + Postgres starts, queue loads
-- [ ] **Pipeline smoke test**: `docker compose --profile pipeline up` — all containers start
-
----
-
-### Phase 6 : Ansible v2 Stages
-
-
-- [ ] **Stage 6 task files** (behind `deploy_hunt_v2: true` flag):
-  - `playbooks/tasks/hunt_postgres.yml` — Postgres volume, container, user/db health
-  - `playbooks/tasks/hunt_backend.yml` — build/deploy backend image, env, Traefik route
-  - `playbooks/tasks/hunt_frontend.yml` — build SPA, nginx image/container
-- [ ] **Stage 7**: `playbooks/tasks/hunt_hunter.yml` — C1 service API + scheduler container
-- [ ] **Stage 8**: `playbooks/tasks/hunt_fletcher.yml` + Ollama container
-- [ ] **Stage 9**: `playbooks/tasks/hunt_coordinator.yml`
-- [ ] **Migration helper**: `playbooks/tasks/hunt_migration.yml` — SQLite backup/import/validate
-- [ ] Add vault vars: `vault_hunt_db_password`, `vault_hunt_admin_password`, `vault_hunt_service_token`, `vault_hunt_credential_key`
-- [ ] Deploy behind flag: `deploy_hunt_v2: false` until validated locally
-
----
-
-### Phase 7 : C2 v1.0 (parallel with above)
-
-
-- [ ] **Fill `fletcher/candidate_profile.md`** with real job history
-- [ ] **Wire LLM tailoring** — Ollama for bullet/section rewriting grounded in candidate profile + bullet library; fallback when model fails
-- [ ] **Curate base resumes** (`fletcher/base_resumes/`) for software/pm/data/general families
-- [ ] **Production validation on server2** — queue-driven `generate-ready` with real JDs
-- [ ] **C1→C2 handoff validation** on server2
-
----
-
-### Phase 8 : C3 Hardening
-
-
-- [ ] **Pipeline polling** — C3 polls `GET /api/c3/pending-fills`; picks up fill requests from C4 queue
-- [ ] **Fill result post-back** — C3 posts to `POST /api/c3/fill-results`; test full round-trip
-- [ ] **Resume upload fix** — embed `resume_bytes` (base64 PDF) in apply context; remove raw filesystem path dependency
-- [ ] **Stronger answer grounding** — answers derived from selected resume facts
-- [ ] **Workday flow hardening** — manual fill, auto-fill-on-load, generated answers, evidence persistence
-- [ ] **C4 trigger surface** — validate import context → fill → result → evidence cycle
-
----
-
-### Phase 9 : C4 Tests + Live C3 Bridge
-
-
-- [ ] **Validate apply-prep against real DB rows** on server2
-- [ ] **Wire live C3 bridge** — load apply context into live extension session, trigger fill
-- [ ] **Validate fill-request → fill-result transitions** end-to-end
-- [ ] **Validate submit approval + final-status artifact writing**
-- [ ] **Unattended guardrails** — one active run limit, retry budgets, cooldown after auth trouble
-- [ ] **Real test suite** — replace placeholder tests with actual predicate + transition tests
-
----
-
-## Active
-
-_(add in-flight items here as they come up — remove when done)_
+In-flight work and polish backlog. See `docs/roadmap.md` for component status.
+
+## Current Foundation
+
+- [x] Core Postgres schema exists in `schema/postgres_schema.sql`
+- [x] SQLite fallback / Postgres compatibility layer exists via `hunter/db_compat.py`
+- [x] C1, C2, and C4 expose FastAPI service APIs with shared bearer-token auth
+- [x] C0 backend mounts gateway routes under `/api/gateway/*`
+- [x] Service Dockerfiles exist for review/backend, frontend, hunter, fletcher, and coordinator
+- [x] Pipeline compose exists as `docker-compose.pipeline.yml`
+- [x] C4 local Postgres e2e smoke exists: `scripts/smoke_coordinator_e2e.sh`
+- [x] Server2 C4 API-level bridge was validated through run creation, pending-fill polling, fake fill-result writeback, and submit deny
+- [x] More tests: Python suite and C4 smoke coverage are in place
+
+## Cross-Component Polish
+
+- [ ] Add a clear operator status surface that shows what is working and what is broken across C0-C4
+- [ ] Keep `docs/roadmap.md`, this TODO, and `docs/LOCAL_POSTGRES_SMOKES.md` current after each deployment milestone
+- [ ] Add one command for local all-component smoke on Windows and Linux
+- [ ] Add one command or runbook path for deploying from Windows to server2
+- [ ] Decide final production shape for `Dockerfile.review` vs separate backend/frontend containers
+- [ ] Validate `docker-compose.pipeline.yml` as the standard local compose path, or add a root `docker-compose.yml` wrapper
+- [ ] Add service-level structured logs and correlation IDs for scrape, enrich, generate, fill, run, and approval flows
+- [ ] Add Discord notifications for important operator events: auth expired, scrape/enrich failed, C4 approval waiting, run failed, smoke failed
+- [ ] Add release checklist: local tests, local smoke, server smoke, docs update, vault update
+
+## C0 : Frontend / Control Plane Polish
+
+- [ ] Fully convert the frontend to the SPA for all operator workflows still using old backend-rendered pages
+- [ ] Add dashboard health cards for DB, C1, C2, C3 heartbeat, C4, queue age, and latest errors
+- [ ] Wire Ops page buttons to C1 gateway routes for trigger scrape, trigger enrich, queue/status, and account reauth
+- [ ] Add settings UI backed by `component_settings`, with secret values redacted
+- [ ] Add LinkedIn account UI backed by `linkedin_accounts`: create, activate/deactivate, status, auth error, reauth
+- [ ] Add C2 page that calls the Fletcher service rather than showing a stub
+- [ ] Add C4 page for runs, run detail, pending approvals, approve/deny, and run events
+- [ ] Add C3 status surface: last poll, pending fills, last result, extension version
+- [ ] Add better failure visibility: failed rows grouped by source/error, recent artifacts, and next retry
+- [ ] Run C0 local smoke against Postgres plus live C1/C2/C4 services
+- [ ] Run C0 server2 smoke against production Postgres and component service URLs
+
+## C1 : Hunter Polish
+
+- [ ] Validate real server2 C1 production cycle against Postgres: scrape, enrich, artifacts, queue drain, steady scheduler
+- [ ] Confirm C1 works as a standalone product from CLI on Windows and Linux
+- [ ] Add C1 service endpoint tests for status, queue, scrape, enrich, auth failure, and duplicate-run guard
+- [ ] Improve C1 monitoring: structured events for scrape start/end, enrich batch summary, auth pauses, retry exhaustion, and artifact writes
+- [ ] Improve LinkedIn auth: account-aware storage state, active/locked/cooldown states, clearer reauth flow from C0
+- [ ] Add account rotation policy for multiple LinkedIn accounts, including backoff after auth or rate-limit trouble
+- [ ] Add Discord notification hooks for auth trouble, persistent rate limit, and high failure rate
+- [ ] Verify Easy Apply classification and exclusion still hold after live C1 runs
+- [ ] Add runbook for local browser/session setup, headless/headful recovery, and Xvfb server flow
+- [ ] Add Windows-friendly local run path for discovery/enrichment without deployment
+- [ ] Polish standalone operator UX: `hunter` CLI should expose obvious status, auth, scrape, enrich, requeue, and smoke commands
+
+## C2 : Fletcher Polish
+
+- [ ] Make the web version work through C0 + C2 service
+- [ ] Support dropping a resume as PDF, LaTeX, or plain text
+- [ ] Support dropping keywords or a job description
+- [ ] Support dropping a profile, or deriving profile context from the resume when no profile is supplied
+- [ ] Add option to include a summary when the base resume lacks one
+- [ ] Show generated summary before inserting it
+- [ ] Show resume preview before accepting generated output
+- [ ] Nice to have: show a diff between original and generated resume
+- [ ] Nice to have: allow undo for specific resume sections
+- [ ] Nice to have: split resume into components that can be regenerated independently
+- [ ] Make auto-run generation work against C1 output and selected jobs
+- [ ] Fill and curate `fletcher/candidate_profile.md` with real profile/history
+- [ ] Wire LLM tailoring for grounded bullet and section rewriting
+- [ ] Support external LLM API keys instead of self-host-only Ollama
+- [ ] Evaluate OpenRouter free-model fallback order
+- [ ] Evaluate Google free-tier API options
+- [ ] Decide whether multi-account OpenRouter use is acceptable and worth supporting
+- [ ] Validate C1 -> C2 handoff on server2 with real enriched job descriptions
+
+## C3 : Executioner Polish
+
+- [ ] Structure extension code so adding ATS adapters is straightforward
+- [ ] Harden Workday flow: multi-page navigation, next-page handling, auto-fill-on-load, and evidence persistence
+- [ ] Identify all required fields before filling, then fill with known profile/resume facts where possible
+- [ ] For fields without fixed answers, use LLM-assisted selection only when grounded in the Fletcher profile/resume context
+- [ ] Add no-LLM fallback for checkbox/select/paragraph fields using deterministic defaults and manual-review flags
+- [ ] Use the same candidate profile context as Fletcher for generated paragraph answers
+- [ ] Support external LLM keys for answer generation where configured
+- [ ] Add account creation/login support only for normal user-driven signup flows, with manual handoff for email/SMS codes
+- [ ] Do not bypass CAPTCHA, bot detection, MFA, or access controls; detect these states and stop for manual action
+- [ ] Validate live extension polling from C0/C4 pending-fill queue
+- [ ] Validate live fill-result postback through C0 into C4/run state
+- [ ] Package extension for repeatable local install/update
+
+## C4 : Coordinator Polish
+
+- [ ] Add better documentation for prompts, agent roles, and how orchestration decisions are made
+- [ ] Build C0 UI for run queue, run detail, events, and submit approvals
+- [ ] Add HTTP endpoint for request-fill so operators do not need a correctly-env'd CLI fallback
+- [ ] Validate live C3 bridge in a real browser session, not only API-level fake fill results
+- [ ] Validate submit approval and final-status artifacts with real fill evidence
+- [ ] Add unattended guardrails: one active run limit, retry budget, cooldowns, and stale-run recovery
+- [ ] Add ready/not-ready explanation in UI using C4 reason codes
+- [ ] Add richer tests for readiness predicates and state transitions
+- [ ] Document server2 runtime env for C4 API and CLI parity
+
+## Deployment / Server2
+
+- [ ] Local all-component smoke: `docker-compose.pipeline.yml` with Postgres, C0, C1, C2, C4, frontend
+- [ ] Server2 C0 + Postgres smoke: dashboard loads, queue browses, artifacts resolve
+- [ ] Server2 C1 smoke: scrape/enrich against production DB, scheduler steady-state
+- [ ] Server2 C2 smoke: generate-ready with real C1 jobs
+- [ ] Server2 C3 smoke: extension polls C0, fills one safe test application page, posts result
+- [ ] Server2 C4 smoke: real run moves through apply-prepared -> fill-requested -> awaiting-submit-approval -> approved/denied
+- [ ] Ansible v2 stages remain outside this repo; update deployment docs when those tasks land

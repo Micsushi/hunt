@@ -6,21 +6,20 @@ Automated job application pipeline. Discover → Enrich → Tailor resume → Au
 
 | ID | Name | Code | Version | Status |
 |---|---|---|---|---|
-| C0 | Frontend | `frontend/` + `backend/` | 0.2 | SPA live — stub pages for C2/C3/C4; gateway API calls not yet wired |
-| C1 | Hunter | `hunter/` | 0.1 | Stage 4 ops — server2 validation pending |
-| C2 | Fletcher | `fletcher/` | 0.1 → 1.0 | LLM tailoring + candidate profile needed for v1.0 |
-| C3 | Executioner | `executioner/` | 0.0 | Local only — Workday fill works, not deployed |
-| C4 | Coordinator | `coordinator/` | 0.0 | Local API checkpoint with Postgres e2e smoke; server2/live C3 validation pending |
+| C0 | Frontend | `frontend/` + `backend/` | 0.2 | SPA live for core browse/ops; backend gateway routes mounted under `/api/gateway/*`; settings/accounts/C2/C4 UI polish pending |
+| C1 | Hunter | `hunter/` | 0.1 | Discovery/enrichment service exists; Postgres compat exists; real server2 C1 cycle and auth/account polish pending |
+| C2 | Fletcher | `fletcher/` | 0.1 → 1.0 | Service and pipeline exist; webpage workflow, real profile, and LLM tailoring polish pending |
+| C3 | Executioner | `executioner/` | 0.0 | Local Workday extension exists; live C0/C4 polling bridge and ATS expansion pending |
+| C4 | Coordinator | `coordinator/` | 0.0 | Local Postgres e2e smoke and server2 API-level bridge validated; live C3 browser session and approval UI pending |
 
 ## Current Priority
 
-1. C1 server2 production validation (backlog drain, steady-state timer, Ansible Stage 6)
-2. C2 v1.0 — fill candidate profile, wire LLM tailoring, validate C1→C2 handoff on server2
-3. SQLite → Postgres migration (start with C1 schema, then C0, C2, C4)
-4. Container architecture — Dockerfiles for C1, C2, C4; nginx container for C0 frontend
-5. C0 gateway wiring — backend calls C1/C2/C4 service APIs from UI actions
-6. C3 hardening — Workday flows, resume upload gap, backend result write-back
-7. C4 tests + live C3 bridge + submit approval UI
+1. C1 server2 production validation: scrape, enrich, artifacts, queue drain, steady scheduler
+2. C0 operator polish: clear health/status, C1 controls, settings, LinkedIn accounts
+3. C2 v1.0: webpage workflow, candidate profile, LLM/API-key support, C1 -> C2 server2 handoff
+4. C3 hardening: ATS adapter structure, required-field detection, safe LLM-assisted answers, live postback
+5. C4 polish: live C3 browser bridge, approval UI, request-fill HTTP endpoint, guardrails
+6. Deployment polish: Windows/Linux local smoke, server2 smoke path, docs kept in sync
 
 ## Cross-Component Interactions
 
@@ -37,6 +36,8 @@ C0 Backend (FastAPI — API gateway)
   └── calls C4 API  → trigger pipeline run, get run status
 ```
 
+Current gateway routes live under `/api/gateway/*`. Older planned `/api/c1/*`, `/api/c2/*`, and `/api/c4/*` aliases can still be added later if the frontend contract wants shorter paths.
+
 **C3 write-back rule:** C3 never receives DB credentials. It polls C0 for fill requests and posts fill results back to C0. Backend/C4 own DB writes for job/run lifecycle state.
 
 **Any-combination rule:** the pipeline works with any subset of components deployed. C4 is optional automation — without it, operators manually trigger C1/C2/C3 steps from the UI or CLI.
@@ -44,13 +45,16 @@ C0 Backend (FastAPI — API gateway)
 | Deployed | What works |
 |---|---|
 | C0 + DB only | Browse jobs, approve/reject, view resumes |
-| + C1 | Trigger scrapes from UI; jobs populate DB |
-| + C2 | File-drop one-off generation; resume tabs in job detail |
-| + C3 (local) | Apply to jobs; backend receives fill results and updates status |
-| + C4 | Full automated pipeline with human submit approval |
+| + C1 | Jobs populate DB through CLI/service; UI trigger controls still need polish |
+| + C2 | Service can generate; file-drop webpage workflow still needs polish |
+| + C3 (local) | Workday extension exists; live pipeline polling/postback still needs validation |
+| + C4 | API can prepare runs and bridge pending fills; live browser fill + approval UI still pending |
 
 ## Deployment Split
 
+Local container work currently uses `docker-compose.pipeline.yml`.
+
+Server2 deployment automation lives outside this repo. Keep this repo focused on service code, smoke scripts, and human-readable runtime docs.
 
 ## Principles
 
@@ -61,8 +65,9 @@ C0 Backend (FastAPI — API gateway)
 - `priority = 1`: manual-only always
 - Submit: always separate explicit decision from fill
 - No CAPTCHA/anti-bot bypass
+- Detect CAPTCHA, bot detection, MFA, or access-control challenges and stop for manual action
 - Windows (local) + Linux (server2): both required
 
 ## Component Docs
 
-Read these to find the next thing to work on — feature status, bugs, what's in progress:
+Read `docs/TODO.md` for the live polish backlog by component.

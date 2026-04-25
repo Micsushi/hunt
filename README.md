@@ -2,22 +2,23 @@
 
 Putting in the Work so it is less Work for you to apply for Work
 
-Automated Hunt runtime. Today it primarily covers **C1 (Hunter)** discovery and enrichment, with **C2 (Fletcher)**, **C3 (Executioner)**, and **C4 (Coordinator)** planned on top of the same system.
+Automated Hunt runtime. Today it includes **C0 (Frontend)**, **C1 (Hunter)** discovery/enrichment, **C2 (Fletcher)** resume generation, a local **C3 (Executioner)** browser extension, and **C4 (Coordinator)** orchestration checkpoints. The most polished path is still C0 + C1; later components exist but need operator polish and live validation.
 
 Component rule: build each component so it can run and be tested on its own. Today that means **C0 (Frontend)** should remain usable through `backend/app.py` against the shared DB/artifacts even if other component runtimes are not running, and **C1/C2/C3** should keep direct terminal-driven workflows without requiring the UI. **C4 (Coordinator)** is the only intentionally coupled component: it depends on C1/C2/C3 contracts to do end-to-end orchestration, but the other components must not depend on C4 to do their own work.
 
 **Names and folders:** see **`docs/NAMING.md`** (C1 code is the **`hunter`** package; **`hunter/scraper.py`** is the discovery script name only).
 
 Current focus:
-- finish C1 (Hunter) first
-- enrich LinkedIn jobs with full descriptions and real external application URLs
-- classify LinkedIn Easy Apply jobs (`easy_apply`, not auto-apply eligible) for downstream automation
+- validate C1 (Hunter) on server2 against Postgres
+- polish C0 controls for C1 status, scrape/enrich, settings, and LinkedIn accounts
+- keep Easy Apply classified as `easy_apply` and excluded from downstream external-apply automation
 
-## C1 (Hunter) v0.1 : how it runs (~every 10 minutes)
+## C1 (Hunter) v0.1 : how it runs
 
-- **Discovery** : **JobSpy** fetches recent **LinkedIn** and **Indeed** listings for your search terms; rows land in **SQLite** as **`pending`** enrichment when the board is supported. Indeed matching is loose; LinkedIn listing payloads are often thin until enrichment.
+- **Discovery** : **JobSpy** fetches recent **LinkedIn** and **Indeed** listings for your search terms; rows land in the Hunt DB as **`pending`** enrichment when the board is supported. The DB uses Postgres when `HUNT_DB_URL` is set and SQLite as the local fallback. Indeed matching is loose; LinkedIn listing payloads are often thin until enrichment.
 - **Enrichment** : **Playwright** (and related workers) process the queue **by `source`** (**LinkedIn first**, then **Indeed**), **in batches** per run, usually **headless**. **LinkedIn** needs **auth** (saved session and/or env credentials). **Easy Apply** is **detected and labeled** so later automation ignores it as an external apply target. Optional **headful** rerun for blocked rows when **`ENRICHMENT_UI_VERIFY_BLOCKED`** is enabled (often on **Xvfb** on servers).
-- **Control plane** : **`backend/app.py`** : serve the C0 dashboard plus filter, sort, search jobs, errors, and artifacts over the same DB.
+- **Service API** : **`hunter/service.py`** exposes status, queue, scrape, enrich, and account reauth endpoints for C0.
+- **Control plane** : **`backend/app.py`** serves the C0 dashboard plus filter, sort, search jobs, errors, artifacts, and gateway routes over the same DB.
 
 **Component versions and future milestones:** **`docs/roadmap.md`** (snapshot table + draft v0.2+ ideas).
 
@@ -39,6 +40,8 @@ sudo systemctl start hunt
 ```
 
 Check logs: `sudo journalctl -u hunt -f`
+
+The legacy systemd helper is still available, but current container smoke work uses the service Dockerfiles and `docker-compose.pipeline.yml`.
 
 ## Manual run
 
@@ -78,9 +81,9 @@ Testing posture by component:
 - C4: depends on upstream/downstream component outputs by design
 
 Current local checkpoint for later components:
-- `fletcher/` : **C2 (Fletcher)** — **v0.1** shipped in-repo; **v1.0** = LLM tailoring + prompts (`docs/TODO.md`); **v2.0** = interactive editing (deferred). Deploy: Ansible Stage 7 in `ansible_homelab`
-- `executioner/` now contains an initial local **C3 (Executioner)** Workday extension implementation
-- `coordinator/` now contains a local **C4 (Coordinator)** readiness/apply-prep/runtime skeleton plus a Postgres-backed e2e smoke for the run/fill/approval flow
+- `fletcher/` : **C2 (Fletcher)** — service and pipeline exist; webpage workflow, profile polish, and LLM/API-key work remain in `docs/TODO.md`
+- `executioner/` contains an initial local **C3 (Executioner)** Workday extension implementation; live C0/C4 polling and postback still need validation
+- `coordinator/` contains **C4 (Coordinator)** readiness/apply-prep/runtime plus a Postgres-backed e2e smoke for the run/fill/approval flow; server2 API-level bridge has been validated, live browser validation remains
 
 ## Legacy Helpers
 
