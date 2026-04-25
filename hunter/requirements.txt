@@ -11,6 +11,7 @@ playwright
 fastapi
 uvicorn
 httpx
+python-multipart
 chromadb
 cryptography
 psycopg2-binary

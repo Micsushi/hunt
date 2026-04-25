@@ -68,6 +68,11 @@ def test_postgres_driver_declared_in_runtime_requirements():
     assert "psycopg2-binary" in requirements
 
 
+def test_form_parser_declared_in_runtime_requirements():
+    requirements = Path("hunter/requirements.txt").read_text(encoding="utf-8")
+    assert "python-multipart" in requirements
+
+
 class FakeTimeoutClient:
     def __init__(self, timeout):
         self.timeout = timeout

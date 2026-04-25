@@ -87,6 +87,25 @@ for _ in $(seq 1 20); do
       echo "review root did not return built SPA HTML" >&2
       exit 1
     fi
+    curl -fsS \
+      -X POST \
+      -H "Content-Type: application/x-www-form-urlencoded" \
+      --data "username=admin&password=${ADMIN_PASSWORD}" \
+      -c /tmp/hunt-review-cookies.txt \
+      "http://127.0.0.1:${REVIEW_PORT}/auth/login" >/tmp/hunt-review-login.json
+    if ! grep -q '"status":"ok"' /tmp/hunt-review-login.json; then
+      echo "review login did not return ok" >&2
+      cat /tmp/hunt-review-login.json >&2
+      exit 1
+    fi
+    curl -fsS \
+      -b /tmp/hunt-review-cookies.txt \
+      "http://127.0.0.1:${REVIEW_PORT}/auth/me" >/tmp/hunt-review-me.json
+    if ! grep -q '"authenticated":true' /tmp/hunt-review-me.json; then
+      echo "review session auth did not persist" >&2
+      cat /tmp/hunt-review-me.json >&2
+      exit 1
+    fi
     echo "review container smoke passed"
     exit 0
   fi
