@@ -210,15 +210,25 @@ class _PgCursorCompat:
             if table_match:
                 params = (table_match.group("table"),)
         self._cur.execute(pg_query, params if params else None)
-        # Mirror SQLite's lastrowid for INSERT statements using sequences
+        # Mirror SQLite's lastrowid for INSERT statements using sequences.
+        # Use a SAVEPOINT so a lastval() failure (table has no sequence, e.g. TEXT PK)
+        # only rolls back the sub-operation and does not abort the outer transaction.
         if pg_query.strip().upper().startswith("INSERT"):
+            sp_cur = self._conn.cursor()
             try:
-                lv_cur = self._conn.cursor()
-                lv_cur.execute("SELECT lastval()")
-                row = lv_cur.fetchone()
+                sp_cur.execute("SAVEPOINT _lastval")
+                sp_cur.execute("SELECT lastval()")
+                row = sp_cur.fetchone()
                 self.lastrowid = row[0] if row else None
+                sp_cur.execute("RELEASE SAVEPOINT _lastval")
             except Exception:
+                try:
+                    sp_cur.execute("ROLLBACK TO SAVEPOINT _lastval")
+                except Exception:
+                    pass
                 self.lastrowid = None
+            finally:
+                sp_cur.close()
         return self
 
     def executemany(self, query: str, param_list) -> "_PgCursorCompat":

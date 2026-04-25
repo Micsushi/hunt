@@ -62,6 +62,7 @@ Edit `hunter/config.py`:
 - **Component IDs and code names:** `docs/NAMING.md` (C1 Hunter, C2 Fletcher, C3 Executioner, C4 Coordinator)
 - System roadmap (includes version snapshot and draft milestones): `docs/roadmap.md`
 - Shared glossary (terms for C1–C4): `docs/GLOSSARY.md`
+- Local Postgres/container smoke tests: `docs/LOCAL_POSTGRES_SMOKES.md`
 - Live fix tracker: `docs/TODO.md`
 
 Repo homes by component:
@@ -79,7 +80,7 @@ Testing posture by component:
 Current local checkpoint for later components:
 - `fletcher/` : **C2 (Fletcher)** — **v0.1** shipped in-repo; **v1.0** = LLM tailoring + prompts (`docs/TODO.md`); **v2.0** = interactive editing (deferred). Deploy: Ansible Stage 7 in `ansible_homelab`
 - `executioner/` now contains an initial local **C3 (Executioner)** Workday extension implementation
-- `coordinator/` now contains an initial local **C4 (Coordinator)** readiness/apply-prep/runtime skeleton
+- `coordinator/` now contains a local **C4 (Coordinator)** readiness/apply-prep/runtime skeleton plus a Postgres-backed e2e smoke for the run/fill/approval flow
 
 ## Legacy Helpers
 

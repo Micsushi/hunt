@@ -10,7 +10,7 @@ Automated job application pipeline. Discover → Enrich → Tailor resume → Au
 | C1 | Hunter | `hunter/` | 0.1 | Stage 4 ops — server2 validation pending |
 | C2 | Fletcher | `fletcher/` | 0.1 → 1.0 | LLM tailoring + candidate profile needed for v1.0 |
 | C3 | Executioner | `executioner/` | 0.0 | Local only — Workday fill works, not deployed |
-| C4 | Coordinator | `coordinator/` | 0.0 | Local checkpoint — not deployed, tests are placeholder |
+| C4 | Coordinator | `coordinator/` | 0.0 | Local API checkpoint with Postgres e2e smoke; server2/live C3 validation pending |
 
 ## Current Priority
 
@@ -66,4 +66,3 @@ C0 Backend (FastAPI — API gateway)
 ## Component Docs
 
 Read these to find the next thing to work on — feature status, bugs, what's in progress:
-
