@@ -10,6 +10,7 @@ The Postgres wrapper translates ? -> %s transparently.
 from __future__ import annotations
 
 import os
+import re
 import sqlite3
 from pathlib import Path
 
@@ -72,6 +73,13 @@ def _pg_sql(query: str) -> str:
         return "SELECT 1"
     # Placeholder style
     query = query.replace("?", "%s")
+    # SQLite autoincrement primary keys -> Postgres sequence-backed primary keys
+    query = re.sub(
+        r"\b(\w+)\s+INTEGER\s+PRIMARY\s+KEY\s+AUTOINCREMENT\b",
+        r"\1 SERIAL PRIMARY KEY",
+        query,
+        flags=re.IGNORECASE,
+    )
     # SQLite BEGIN IMMEDIATE -> standard Postgres BEGIN
     query = query.replace("BEGIN IMMEDIATE", "BEGIN")
     return query

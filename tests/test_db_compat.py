@@ -97,6 +97,14 @@ def test_pg_sql_begin_immediate():
     assert "BEGIN" in result
 
 
+def test_pg_sql_autoincrement_primary_key_translation():
+    from hunter.db_compat import _pg_sql
+
+    result = _pg_sql("CREATE TABLE t (id INTEGER PRIMARY KEY AUTOINCREMENT, val TEXT)")
+    assert "AUTOINCREMENT" not in result
+    assert "id SERIAL PRIMARY KEY" in result
+
+
 def test_get_connection_with_explicit_path(tmp_path, monkeypatch):
     monkeypatch.delenv("HUNT_DB_PATH", raising=False)
     db_file = tmp_path / "explicit.db"
