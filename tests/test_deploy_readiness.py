@@ -63,6 +63,67 @@ def test_migration_does_not_disable_postgres_triggers(monkeypatch, tmp_path):
     assert inserted["records"] == [(1, "Engineer")]
 
 
+def test_migration_skips_missing_legacy_sqlite_tables(tmp_path, capsys):
+    sqlite_path = tmp_path / "legacy.db"
+    import sqlite3
+
+    sqlite_conn = sqlite3.connect(sqlite_path)
+    sqlite_conn.execute("CREATE TABLE jobs (id INTEGER PRIMARY KEY, title TEXT)")
+    sqlite_conn.commit()
+    sqlite_conn.close()
+
+    sqlite_conn = sqlite3.connect(sqlite_path)
+    sqlite_conn.row_factory = sqlite3.Row
+    pg_conn = FakePgConn()
+
+    migration._migrate_table(
+        sqlite_conn,
+        pg_conn,
+        "component_settings",
+        dry_run=True,
+    )
+
+    sqlite_conn.close()
+    assert "component_settings: missing in SQLite source (skipped)" in capsys.readouterr().out
+    assert pg_conn.cursor_obj.statements == []
+
+
+def test_migration_validate_treats_missing_legacy_sqlite_tables_as_zero(monkeypatch, tmp_path, capsys):
+    sqlite_path = tmp_path / "legacy.db"
+    import sqlite3
+
+    sqlite_conn = sqlite3.connect(sqlite_path)
+    sqlite_conn.execute("CREATE TABLE jobs (id INTEGER PRIMARY KEY, title TEXT)")
+    sqlite_conn.close()
+
+    class CountCursor:
+        def __init__(self):
+            self.count = 0
+
+        def execute(self, _statement):
+            self.count = 0
+
+        def fetchone(self):
+            return (self.count,)
+
+    class CountPgConn:
+        def cursor(self):
+            return CountCursor()
+
+        def close(self):
+            pass
+
+    fake_psycopg2 = types.ModuleType("psycopg2")
+    fake_psycopg2.connect = lambda _url: CountPgConn()
+    monkeypatch.setitem(sys.modules, "psycopg2", fake_psycopg2)
+
+    migration._validate(str(sqlite_path), "postgresql://example")
+
+    output = capsys.readouterr().out
+    assert "component_settings" in output
+    assert "All counts match." in output
+
+
 def test_postgres_driver_declared_in_runtime_requirements():
     requirements = Path("hunter/requirements.txt").read_text(encoding="utf-8")
     assert "psycopg2-binary" in requirements

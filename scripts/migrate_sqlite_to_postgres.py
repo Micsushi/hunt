@@ -87,7 +87,13 @@ def _migrate_table(
     *,
     dry_run: bool,
 ) -> None:
-    rows = sqlite_conn.execute(f"SELECT * FROM {table}").fetchall()
+    try:
+        rows = sqlite_conn.execute(f"SELECT * FROM {table}").fetchall()
+    except sqlite3.OperationalError as exc:
+        if "no such table" in str(exc).lower():
+            print(f"  {table}: missing in SQLite source (skipped)")
+            return
+        raise
     if not rows:
         print(f"  {table}: 0 rows (skipped)")
         return
@@ -140,6 +146,11 @@ def _validate(sqlite_path: str, postgres_url: str) -> None:
     for table in TABLES_IN_ORDER:
         try:
             sq = sqlite_conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
+        except sqlite3.OperationalError as exc:
+            if "no such table" in str(exc).lower():
+                sq = 0
+            else:
+                sq = "N/A"
         except Exception:
             sq = "N/A"
         try:
