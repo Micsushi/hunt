@@ -89,6 +89,15 @@ def test_pg_sql_pragma_becomes_noop():
     assert result == "SELECT 1"
 
 
+def test_pg_sql_table_info_translates_to_information_schema():
+    from hunter.db_compat import _pg_sql
+
+    result = _pg_sql("PRAGMA table_info(jobs)")
+    assert "information_schema.columns" in result
+    assert "table_name = %s" in result
+    assert "jobs" not in result
+
+
 def test_pg_sql_begin_immediate():
     from hunter.db_compat import _pg_sql
 
@@ -103,6 +112,14 @@ def test_pg_sql_autoincrement_primary_key_translation():
     result = _pg_sql("CREATE TABLE t (id INTEGER PRIMARY KEY AUTOINCREMENT, val TEXT)")
     assert "AUTOINCREMENT" not in result
     assert "id SERIAL PRIMARY KEY" in result
+
+
+def test_pg_cursor_rows_support_integer_indexes_for_pragma_shape():
+    from hunter.db_compat import _PgRowCompat
+
+    row = _PgRowCompat({"cid": 0, "name": "jobs", "type": "TEXT"})
+    assert row[1] == "jobs"
+    assert row["name"] == "jobs"
 
 
 def test_get_connection_with_explicit_path(tmp_path, monkeypatch):
