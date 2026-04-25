@@ -16,3 +16,5 @@ frontend/node_modules/
 # Local agent context (private, not for repo)
 CLAUDE.md
 AGENTS.md
+.claude/settings.json
+.claude/settings.local.json

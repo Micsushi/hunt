@@ -1,0 +1,231 @@
+\documentclass[10pt, letterpaper]{article}
+
+% Packages:
+\usepackage[
+    ignoreheadfoot,
+    top=0.7 cm,
+    bottom=1 cm,
+    left=1 cm,
+    right=1 cm,
+    footskip=1.0 cm,
+]{geometry}
+\usepackage{titlesec}
+\usepackage{tabularx}
+\usepackage{array}
+\usepackage[dvipsnames]{xcolor}
+\definecolor{primaryColor}{RGB}{0, 0, 0}
+\usepackage{enumitem}
+\usepackage{fontawesome5}
+\usepackage{amsmath}
+\usepackage[
+    pdftitle={Michael Shi's CV},
+    pdfauthor={Michael Shi},
+    pdfcreator={LaTeX with RenderCV},
+    colorlinks=true,
+    urlcolor=primaryColor
+]{hyperref}
+\usepackage[pscoord]{eso-pic}
+\usepackage{calc}
+\usepackage{bookmark}
+
+\usepackage{changepage}
+\usepackage{paracol}
+\usepackage{ifthen}
+\usepackage{needspace}
+\usepackage{iftex}
+
+\ifPDFTeX
+    \input{glyphtounicode}
+    \pdfgentounicode=1
+    \usepackage[T1]{fontenc}
+    \usepackage[utf8]{inputenc}
+    \usepackage{lmodern}
+\fi
+
+\usepackage{charter}
+
+\raggedright
+\AtBeginEnvironment{adjustwidth}{\partopsep0pt}
+\pagestyle{empty}
+\setcounter{secnumdepth}{0}
+\setlength{\parindent}{0pt}
+\setlength{\topskip}{0pt}
+\setlength{\columnsep}{0.15cm}
+\pagenumbering{gobble}
+
+\titleformat{\section}{\needspace{4\baselineskip}\bfseries\large}{}{0pt}{}[\vspace{1pt}\titlerule]
+
+\titlespacing{\section}{
+    -1pt
+}{
+    0.2 cm
+}{
+    0.2 cm
+}
+
+\renewcommand\labelitemi{$\vcenter{\hbox{\small$\bullet$}}$}
+
+\newenvironment{highlights}{
+    \begin{itemize}[
+        topsep=0.10 cm,
+        parsep=0.10 cm,
+        partopsep=0pt,
+        itemsep=0pt,
+        leftmargin=0 cm + 10pt
+    ]
+}{
+    \end{itemize}
+}
+
+\newenvironment{highlightsforbulletentries}{
+    \begin{itemize}[
+        topsep=0.10 cm,
+        parsep=0.10 cm,
+        partopsep=0pt,
+        itemsep=0pt,
+        leftmargin=10pt
+    ]
+}{
+    \end{itemize}
+}
+
+\newenvironment{onecolentry}{
+    \begin{adjustwidth}{
+        0 cm + 0.00001 cm
+    }{
+        0 cm + 0.00001 cm
+    }
+}{
+    \end{adjustwidth}
+}
+
+\newenvironment{twocolentry}[2][]{
+    \onecolentry
+    \def\secondColumn{#2}
+    \setcolumnwidth{\fill, 6 cm}
+    \begin{paracol}{2}
+}{
+    \switchcolumn \raggedleft \secondColumn
+    \end{paracol}
+    \endonecolentry
+}
+
+\newenvironment{threecolentry}[3][]{
+    \onecolentry
+    \def\thirdColumn{#3}
+    \setcolumnwidth{, \fill, 4.5 cm}
+    \begin{paracol}{3}
+    {\raggedright #2} \switchcolumn
+}{
+    \switchcolumn \raggedleft \thirdColumn
+    \end{paracol}
+    \endonecolentry
+}
+
+\let\hrefWithoutArrow\href
+
+\begin{document}
+    \begin{center}
+        {\fontsize{24pt}{24pt}\selectfont\textbf{Michael Shi}}
+
+        \vspace{0.2cm}
+
+        Edmonton, AB | \href{mailto:wenjian2@ualberta.ca}{wenjian2@ualberta.ca} | \href{https://mshi.ca}{mshi.ca} | \href{https://linkedin.com/in/wjshi}{linkedin.com/in/wjshi} | \href{https://github.com/micsushi}{github.com/micsushi}
+    \end{center}
+
+    \vspace{0.10 cm}
+    \section{Education}
+
+    \begin{twocolentry}{Expected Graduation: \textbf{Sep 2026}}
+        \textbf{University of Alberta}, BSc in Computer Science with Specialization
+    \end{twocolentry}
+
+    \vspace{0.10 cm}
+    \begin{onecolentry}
+        \begin{itemize}[leftmargin=2em, itemsep=1pt, parsep=0pt, topsep=0pt, partopsep=0pt]
+            \item \textbf{Awards:} Undergraduate Leadership Award, 4x Faculty of Science Scholarship, Dean's Honor Roll
+        \end{itemize}
+    \end{onecolentry}
+
+    \vspace{0.10 cm}
+    \section{Experience}
+
+
+    \begin{twocolentry}{May 2024 - May 2025}
+        \textbf{Software Developer Intern}, INVIDI Technologies -- Edmonton, AB
+    \end{twocolentry}
+
+    \vspace{0.10 cm}
+    \begin{onecolentry}
+        \begin{itemize}[leftmargin=2em, itemsep=1pt, parsep=0pt, topsep=0pt, partopsep=0pt]
+            \item Slashed backend operational costs by \textbf{89\% (\$38,000)} and eliminated false-positive alerts by migrating the database from Apache Ignite to AWS Aurora PostgreSQL.
+            \item Reduced cloud database costs by \textbf{89\% (\$38,000)} by leading a full data migration from Apache Ignite to AWS Aurora PostgreSQL, improving reliability and removing noisy alerts.
+            \item Improved system performance and reduced API costs by implementing forecast caching in sync services using DynamoDB, eliminating redundant external calls.
+            \item Improved API efficiency by building a DynamoDB-backed caching layer for forecast data in sync services, cutting redundant third-party API calls.
+        \end{itemize}
+    \end{onecolentry}
+
+    \vspace{0.10 cm}
+
+    \begin{twocolentry}{May 2025 - Feb 2026}
+        \textbf{Junior Software Developer (Part-time)}, INVIDI Technologies -- Edmonton, AB
+    \end{twocolentry}
+
+    \vspace{0.10 cm}
+    \begin{onecolentry}
+        \begin{itemize}[leftmargin=2em, itemsep=1pt, parsep=0pt, topsep=0pt, partopsep=0pt]
+            \item Established S3 cost-saving blueprint for \textbf{100+} developers, achieving a \textbf{74\% (\$18,000) reduction} by implementing intelligent-tiering and lifecycle policies in Terraform.
+            \item Reduced cloud infrastructure spend by \textbf{74\% (\$18,000)} by designing an AWS S3 intelligent-tiering and lifecycle policy framework adopted as the standard for 100+ developers.
+            \item Improved observability and incident response time by configuring Datadog APM, custom metrics, monitors, and centralized logging with automated alerting.
+        \end{itemize}
+    \end{onecolentry}
+
+    \vspace{0.10 cm}
+
+    \begin{twocolentry}{Sep 2023 - Present}
+        \textbf{Undergraduate Teaching Assistant}, University of Alberta -- Edmonton, AB
+    \end{twocolentry}
+
+   \vspace{0.10 cm}
+    \begin{onecolentry}
+        \begin{itemize}[leftmargin=2em, itemsep=1pt, parsep=0pt, topsep=0pt, partopsep=0pt]
+            \item Reduced grading evaluation time by \textbf{85\%} and improved consistency by developing Python automation scripts for grading workflows.
+        \end{itemize}
+    \end{onecolentry}
+
+    \vspace{0.10 cm}
+    \section{Projects}
+
+    \begin{twocolentry}{\href{https://github.com/NatRunners/StudyAmp}{github.com/NatRunners/StudyAmp}}
+        \textbf{StudyAmp: NatHacks 1st Place}
+    \end{twocolentry}
+
+    \vspace{0.10 cm}
+    \begin{onecolentry}
+        \begin{itemize}[leftmargin=2em, itemsep=1pt, parsep=0pt, topsep=0pt, partopsep=0pt]
+            \item Achieved \textbf{85\% accuracy} in attention scoring by developing a Python backend for real-time EEG brainwave signal processing and data optimization.
+            \item Optimized system scalability to support \textbf{10,000+} concurrent users by engineering a full-stack architecture on Vercel and Supabase.
+            \item Reduced recording review time by \textbf{80\%} by integrating Gemini AI to automatically summarize audio content during detected attention drops.
+        \end{itemize}
+    \end{onecolentry}
+
+    \vspace{0.10 cm}
+    \section{Technical Skills}
+
+    \begin{onecolentry}
+        \textbf{Languages:} Python, SQL, Kotlin, TypeScript, Java, JavaScript, Bash
+    \end{onecolentry}
+
+    \vspace{0.1 cm}
+
+    \begin{onecolentry}
+        \textbf{Frameworks:} REST API, FastAPI, Flask, Node.js, React, Vue.js
+    \end{onecolentry}
+
+    \vspace{0.1 cm}
+
+    \begin{onecolentry}
+        \textbf{Developer Tools:} PostgreSQL, DynamoDB, MongoDB, AWS, Terraform, Docker, Git, Datadog, Firebase
+    \end{onecolentry}
+
+\end{document}

@@ -1,0 +1,107 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    profiles: ["pipeline"]
+    environment:
+      POSTGRES_USER: hunt
+      POSTGRES_PASSWORD: hunt
+      POSTGRES_DB: hunt
+    ports:
+      - "127.0.0.1:15432:5432"
+    volumes:
+      - pipeline_pg_data:/var/lib/postgresql/data
+      - ./schema/postgres_schema.sql:/docker-entrypoint-initdb.d/01-postgres_schema.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U hunt -d hunt"]
+      interval: 2s
+      timeout: 2s
+      retries: 20
+
+  review:
+    build:
+      context: .
+      dockerfile: Dockerfile.review
+    profiles: ["pipeline"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+      hunter:
+        condition: service_started
+      fletcher:
+        condition: service_started
+      coordinator:
+        condition: service_started
+    environment:
+      HUNT_DB_URL: postgresql://hunt:hunt@postgres:5432/hunt
+      HUNT_SERVICE_TOKEN: hunt-local-smoke-token
+      HUNT_ADMIN_USERNAME: admin
+      HUNT_ADMIN_PASSWORD: hunt-local-admin
+      HUNT_CREDENTIAL_KEY: 472Pa6u8kvZjh58A3oN7v026YL-KxALGTo41gH4TBZM=
+      HUNT_HUNTER_URL: http://hunter:8001
+      HUNT_FLETCHER_URL: http://fletcher:8002
+      HUNT_COORDINATOR_URL: http://coordinator:8003
+    ports:
+      - "127.0.0.1:18080:8000"
+
+  hunter:
+    build:
+      context: .
+      dockerfile: Dockerfile.hunter
+    profiles: ["pipeline"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      HUNT_DB_URL: postgresql://hunt:hunt@postgres:5432/hunt
+      HUNT_SERVICE_TOKEN: hunt-local-smoke-token
+      HUNT_CREDENTIAL_KEY: 472Pa6u8kvZjh58A3oN7v026YL-KxALGTo41gH4TBZM=
+      HUNT_DATA_DIR: /tmp/hunt-data
+    ports:
+      - "127.0.0.1:18001:8001"
+
+  fletcher:
+    build:
+      context: .
+      dockerfile: Dockerfile.fletcher
+    profiles: ["pipeline"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      HUNT_DB_URL: postgresql://hunt:hunt@postgres:5432/hunt
+      HUNT_SERVICE_TOKEN: hunt-local-smoke-token
+      HUNT_RESUME_ARTIFACTS_DIR: /tmp/hunt-resumes
+      HUNT_RESUME_MODEL_BACKEND: heuristic
+    ports:
+      - "127.0.0.1:18002:8002"
+
+  coordinator:
+    build:
+      context: .
+      dockerfile: Dockerfile.coordinator
+    profiles: ["pipeline"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      HUNT_DB_URL: postgresql://hunt:hunt@postgres:5432/hunt
+      HUNT_SERVICE_TOKEN: hunt-local-smoke-token
+      HUNT_COORDINATOR_ROOT: /tmp/hunt-coordinator
+    ports:
+      - "127.0.0.1:18003:8003"
+
+  frontend:
+    build:
+      context: .
+      dockerfile: Dockerfile.frontend
+    profiles: ["pipeline"]
+    depends_on:
+      - review
+    environment:
+      BACKEND_HOST: review
+      BACKEND_PORT: "8000"
+    ports:
+      - "127.0.0.1:18090:80"
+
+volumes:
+  pipeline_pg_data:

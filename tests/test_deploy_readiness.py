@@ -153,6 +153,75 @@ def test_form_parser_declared_in_runtime_requirements():
     assert "python-multipart" in requirements
 
 
+def test_fletcher_container_smoke_assets_exist():
+    dockerfile = Path("Dockerfile.fletcher")
+    smoke_script = Path("scripts/smoke_fletcher_container.sh")
+
+    assert dockerfile.is_file()
+    assert smoke_script.is_file()
+
+    dockerfile_text = dockerfile.read_text(encoding="utf-8")
+    assert "fletcher.service:app" in dockerfile_text
+    assert "EXPOSE 8002" in dockerfile_text
+
+    smoke_text = smoke_script.read_text(encoding="utf-8")
+    assert "Dockerfile.fletcher" in smoke_text
+    assert "/status" in smoke_text
+
+
+def test_coordinator_container_smoke_assets_exist():
+    dockerfile = Path("Dockerfile.coordinator")
+    smoke_script = Path("scripts/smoke_coordinator_container.sh")
+
+    assert dockerfile.is_file()
+    assert smoke_script.is_file()
+
+    dockerfile_text = dockerfile.read_text(encoding="utf-8")
+    assert "coordinator.service_api:app" in dockerfile_text
+    assert "EXPOSE 8003" in dockerfile_text
+
+    smoke_text = smoke_script.read_text(encoding="utf-8")
+    assert "Dockerfile.coordinator" in smoke_text
+    assert "/status" in smoke_text
+
+
+def test_hunter_container_smoke_assets_exist():
+    dockerfile = Path("Dockerfile.hunter")
+    smoke_script = Path("scripts/smoke_hunter_container.sh")
+
+    assert dockerfile.is_file()
+    assert smoke_script.is_file()
+
+    dockerfile_text = dockerfile.read_text(encoding="utf-8")
+    assert "hunter.service:app" in dockerfile_text
+    assert "playwright install" in dockerfile_text
+    assert "EXPOSE 8001" in dockerfile_text
+
+    smoke_text = smoke_script.read_text(encoding="utf-8")
+    assert "Dockerfile.hunter" in smoke_text
+    assert "/status" in smoke_text
+
+
+def test_pipeline_compose_smoke_assets_exist():
+    compose_file = Path("docker-compose.pipeline.yml")
+    smoke_script = Path("scripts/smoke_pipeline_compose.sh")
+
+    assert compose_file.is_file()
+    assert smoke_script.is_file()
+
+    compose_text = compose_file.read_text(encoding="utf-8")
+    assert "Dockerfile.review" in compose_text
+    assert "Dockerfile.hunter" in compose_text
+    assert "Dockerfile.fletcher" in compose_text
+    assert "Dockerfile.coordinator" in compose_text
+    assert "postgres:16" in compose_text
+
+    smoke_text = smoke_script.read_text(encoding="utf-8")
+    assert "docker compose" in smoke_text
+    assert "/health" in smoke_text
+    assert "/status" in smoke_text
+
+
 class FakeTimeoutClient:
     def __init__(self, timeout):
         self.timeout = timeout

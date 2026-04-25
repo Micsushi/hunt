@@ -527,7 +527,9 @@ class OrchestrationService:
             row,
             browser_lane=browser_lane,
             primed_at=created_at,
-            embed_resume_data=embed_resume_data,
+            # always embed PDF bytes in the c3 payload so the browser extension
+            # never needs filesystem access to the resume file
+            embed_resume_data=True,
         )
         self._write_json_artifact(Path(apply_context_path), apply_context)
         self._write_json_artifact(Path(c3_apply_context_path), c3_payload)
@@ -716,6 +718,41 @@ class OrchestrationService:
             raise OrchestrationError("Result JSON must be an object.")
         return payload
 
+    def get_pending_fills(self, limit: int = 5) -> list[dict[str, Any]]:
+        """Return runs in fill_requested status with their c3 apply payloads."""
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT * FROM orchestration_runs
+                WHERE status = 'fill_requested'
+                ORDER BY datetime(started_at) ASC, id ASC
+                LIMIT ?
+                """,
+                (limit,),
+            ).fetchall()
+            result: list[dict[str, Any]] = []
+            for row in rows:
+                run = OrchestrationRun.from_row(row)
+                c3_payload: dict[str, Any] = {}
+                if run.c3_apply_context_path:
+                    path = Path(run.c3_apply_context_path)
+                    if path.exists():
+                        try:
+                            c3_payload = json.loads(path.read_text(encoding="utf-8"))
+                        except (json.JSONDecodeError, OSError):
+                            pass
+                result.append(
+                    {
+                        "run_id": run.run_id,
+                        "job_id": run.job_id,
+                        "ats_type": run.ats_type,
+                        "apply_url": run.apply_url,
+                        "started_at": run.started_at,
+                        "c3_payload": c3_payload,
+                    }
+                )
+            return result
+
     def _derive_review_flags(
         self, *, run: OrchestrationRun, fill_result: dict[str, Any]
     ) -> list[str]:
@@ -807,7 +844,15 @@ class OrchestrationService:
         }
 
     def record_fill_result(self, run_id: str, result_json_path: str | Path) -> dict[str, Any]:
-        raw_result = self._load_result_json(result_json_path)
+        return self._do_record_fill_result(run_id, self._load_result_json(result_json_path))
+
+    def record_fill_result_inline(self, run_id: str, payload: dict[str, Any]) -> dict[str, Any]:
+        """Record a fill result from an inline dict (e.g. posted by C3 browser extension)."""
+        if not isinstance(payload, dict):
+            raise OrchestrationError("Fill result payload must be an object.")
+        return self._do_record_fill_result(run_id, payload)
+
+    def _do_record_fill_result(self, run_id: str, raw_result: dict[str, Any]) -> dict[str, Any]:
         with self._connect() as conn:
             row = self._get_run_row(conn, run_id)
             if not row:

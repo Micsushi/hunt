@@ -39,6 +39,11 @@ class FillResultRequest(BaseModel):
     result_json_path: str
 
 
+class InlineFillResultRequest(BaseModel):
+    run_id: str
+    payload: dict
+
+
 # ---------------------------------------------------------------------------
 # Endpoints
 # ---------------------------------------------------------------------------
@@ -64,14 +69,14 @@ def post_run(req: StartRunRequest):
         )
     except OrchestrationError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
-    return run.__dict__
+    return run.to_dict()
 
 
 @app.get("/runs", dependencies=[Depends(require_service_token)])
 def get_runs(status: str | None = None, limit: int = 20):
     svc = _get_service()
     runs = svc.list_runs(status=status, limit=limit)
-    return {"runs": [r.__dict__ for r in runs]}
+    return {"runs": [r.to_dict() for r in runs]}
 
 
 @app.get("/runs/{run_id}", dependencies=[Depends(require_service_token)])
@@ -81,7 +86,7 @@ def get_run(run_id: str):
     if not run:
         raise HTTPException(status_code=404, detail="Run not found")
     events = svc.list_events(run_id)
-    return {**run.__dict__, "events": [e.__dict__ for e in events]}
+    return {**run.to_dict(), "events": [e.to_dict() for e in events]}
 
 
 @app.post("/runs/{run_id}/approve", dependencies=[Depends(require_service_token)])
@@ -108,6 +113,29 @@ def post_fill_result(run_id: str, req: FillResultRequest):
 
     try:
         result = svc.record_fill_result(run_id, req.result_json_path)
+    except OrchestrationError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    return result
+
+
+# ---------------------------------------------------------------------------
+# C3 browser-extension bridge endpoints
+# ---------------------------------------------------------------------------
+
+
+@app.get("/c3/pending-fills", dependencies=[Depends(require_service_token)])
+def get_pending_fills(limit: int = 5):
+    svc = _get_service()
+    return {"fills": svc.get_pending_fills(limit=limit)}
+
+
+@app.post("/c3/fill-result", dependencies=[Depends(require_service_token)])
+def post_fill_result_inline(req: InlineFillResultRequest):
+    svc = _get_service()
+    from coordinator.service import OrchestrationError
+
+    try:
+        result = svc.record_fill_result_inline(req.run_id, req.payload)
     except OrchestrationError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
     return result

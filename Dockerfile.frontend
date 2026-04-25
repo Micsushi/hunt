@@ -1,0 +1,24 @@
+FROM node:22-slim AS frontend-build
+
+WORKDIR /frontend
+
+COPY frontend/package.json frontend/package-lock.json ./
+RUN npm ci
+
+COPY frontend ./
+RUN npm run build
+
+
+FROM nginx:1.27-alpine
+
+# Copy built SPA assets
+COPY --from=frontend-build /frontend/dist /usr/share/nginx/html
+
+# nginx templates dir: entrypoint runs envsubst before nginx starts
+COPY docker/nginx.frontend.conf /etc/nginx/templates/default.conf.template
+
+# Defaults: override with BACKEND_HOST / BACKEND_PORT at container runtime
+ENV BACKEND_HOST=hunt_backend
+ENV BACKEND_PORT=8000
+
+EXPOSE 80
