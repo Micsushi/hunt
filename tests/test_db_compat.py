@@ -114,6 +114,54 @@ def test_pg_sql_autoincrement_primary_key_translation():
     assert "id SERIAL PRIMARY KEY" in result
 
 
+def test_pg_sql_instr_translation():
+    from hunter.db_compat import _pg_sql
+
+    result = _pg_sql("SELECT instr(last_enrichment_error, ':') FROM jobs")
+    assert "instr(" not in result.lower()
+    assert "strpos(last_enrichment_error, ':')" in result
+
+
+def test_pg_sql_datetime_now_modifier_translation():
+    from hunter.db_compat import _pg_sql
+
+    result = _pg_sql("SELECT datetime('now', ?)")
+    assert "datetime(" not in result.lower()
+    assert "CURRENT_TIMESTAMP" in result
+    assert "%s::interval" in result
+
+
+def test_pg_sql_datetime_column_translation():
+    from hunter.db_compat import _pg_sql
+
+    result = _pg_sql("ORDER BY datetime(started_at) DESC")
+    assert "datetime(" not in result.lower()
+    assert "NULLIF(started_at, '')::timestamp" in result
+
+
+def test_pg_sql_datetime_coalesce_translation():
+    from hunter.db_compat import _pg_sql
+
+    result = _pg_sql("ORDER BY datetime(coalesce(updated_at, '')) DESC")
+    assert "datetime(" not in result.lower()
+    assert "NULLIF(coalesce(updated_at, ''), '')::timestamp" in result
+
+
+def test_pg_sql_datetime_coalesce_current_timestamp_translation():
+    from hunter.db_compat import _pg_sql
+
+    result = _pg_sql("ORDER BY datetime(coalesce(date_scraped, CURRENT_TIMESTAMP)) DESC")
+    assert "datetime(" not in result.lower()
+    assert "coalesce(NULLIF(date_scraped, '')::timestamp, CURRENT_TIMESTAMP)" in result
+
+
+def test_pg_sql_text_timestamp_current_timestamp_comparison_translation():
+    from hunter.db_compat import _pg_sql
+
+    result = _pg_sql("WHERE next_enrichment_retry_at <= CURRENT_TIMESTAMP")
+    assert "NULLIF(next_enrichment_retry_at, '')::timestamp <= CURRENT_TIMESTAMP" in result
+
+
 def test_pg_cursor_rows_support_integer_indexes_for_pragma_shape():
     from hunter.db_compat import _PgRowCompat
 

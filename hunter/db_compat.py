@@ -85,6 +85,7 @@ def _pg_sql(query: str) -> str:
     # SQLite-only PRAGMA lines become no-ops
     if query.strip().upper().startswith("PRAGMA"):
         return "SELECT 1"
+    query = _translate_sqlite_functions(query)
     # Placeholder style
     query = query.replace("?", "%s")
     # SQLite autoincrement primary keys -> Postgres sequence-backed primary keys
@@ -96,6 +97,53 @@ def _pg_sql(query: str) -> str:
     )
     # SQLite BEGIN IMMEDIATE -> standard Postgres BEGIN
     query = query.replace("BEGIN IMMEDIATE", "BEGIN")
+    return query
+
+
+def _translate_sqlite_functions(query: str) -> str:
+    """Translate SQLite scalar functions used by Hunt into Postgres equivalents."""
+    query = re.sub(
+        r"\binstr\(\s*([A-Za-z_][A-Za-z0-9_\.]*)\s*,\s*('[^']*'|\"[^\"]*\"|[A-Za-z_][A-Za-z0-9_\.]*)\s*\)",
+        r"strpos(\1, \2)",
+        query,
+        flags=re.IGNORECASE,
+    )
+    query = re.sub(
+        r"\bdatetime\(\s*'now'\s*,\s*\?\s*\)",
+        r"(CURRENT_TIMESTAMP + ?::interval)",
+        query,
+        flags=re.IGNORECASE,
+    )
+    query = re.sub(
+        r"\bdatetime\(\s*coalesce\(\s*([A-Za-z_][A-Za-z0-9_\.]*)\s*,\s*CURRENT_TIMESTAMP\s*\)\s*\)",
+        r"(coalesce(NULLIF(\1, '')::timestamp, CURRENT_TIMESTAMP))",
+        query,
+        flags=re.IGNORECASE,
+    )
+    query = re.sub(
+        r"\bdatetime\(\s*coalesce\((.*?)\)\s*\)",
+        r"(NULLIF(coalesce(\1), '')::timestamp)",
+        query,
+        flags=re.IGNORECASE | re.DOTALL,
+    )
+    query = re.sub(
+        r"\bdatetime\(\s*(CURRENT_TIMESTAMP)\s*\)",
+        r"(\1)::timestamp",
+        query,
+        flags=re.IGNORECASE,
+    )
+    query = re.sub(
+        r"\bdatetime\(\s*([A-Za-z_][A-Za-z0-9_\.]*)\s*\)",
+        r"(NULLIF(\1, '')::timestamp)",
+        query,
+        flags=re.IGNORECASE,
+    )
+    query = re.sub(
+        r"\b([A-Za-z_][A-Za-z0-9_\.]*_at)\s*(<=|>=|<|>)\s*CURRENT_TIMESTAMP\b",
+        r"NULLIF(\1, '')::timestamp \2 CURRENT_TIMESTAMP",
+        query,
+        flags=re.IGNORECASE,
+    )
     return query
 
 
