@@ -1,7 +1,7 @@
 .shell {
   max-width: 1200px;
   margin: 0 auto;
-  padding: 28px 20px 60px;
+  padding: 22px 20px 60px;
 }
 
 .nav {
@@ -13,10 +13,9 @@
   margin-bottom: 28px;
   padding: 12px 16px;
   border: 1px solid rgba(221, 212, 199, 0.9);
-  border-radius: var(--radius-xl);
-  background: rgba(255, 253, 248, 0.88);
+  border-radius: var(--radius-md);
+  background: var(--panel);
   box-shadow: var(--shadow);
-  backdrop-filter: blur(12px);
   position: sticky;
   top: 12px;
   z-index: 10;
@@ -48,7 +47,7 @@
 .navLink {
   display: inline-flex;
   align-items: center;
-  border-radius: var(--radius-pill);
+  border-radius: var(--radius-sm);
   padding: 8px 13px;
   color: var(--accent-ink);
   font-weight: 700;
@@ -58,15 +57,13 @@
 }
 
 .navLink:hover {
-  background: rgba(226, 239, 233, 0.75);
-  transform: translateY(-1px);
+  background: var(--accent-soft);
   text-decoration: none;
 }
 
 .navLink.active {
   background: var(--accent);
   color: white;
-  box-shadow: 0 6px 14px rgba(36, 91, 78, 0.2);
 }
 
 .navLink.secondary {
@@ -84,7 +81,7 @@
 .logoutBtn {
   border: 1px solid var(--line);
   background: transparent;
-  border-radius: var(--radius-pill);
+  border-radius: var(--radius-sm);
   padding: 6px 12px;
   font-size: 0.83rem;
   font-weight: 600;

@@ -82,6 +82,7 @@ class ReviewOpsApiTests(unittest.TestCase):
         import asyncio
 
         from fastapi import Response
+        from unittest.mock import patch
 
         from backend import app as control_plane_api
         from backend import auth_session
@@ -92,11 +93,13 @@ class ReviewOpsApiTests(unittest.TestCase):
 
         class LoginRequest:
             cookies = {}
+            headers = {"content-type": "application/x-www-form-urlencoded"}
 
-            async def form(self):
-                return {"username": "admin", "password": "secret"}
+            async def body(self):
+                return b"username=admin&password=secret"
 
-        login_response = asyncio.run(control_plane_api.auth_login(LoginRequest(), Response()))
+        with patch("starlette.requests.parse_options_header", None):
+            login_response = asyncio.run(control_plane_api.auth_login(LoginRequest(), Response()))
         self.assertEqual(login_response.status_code, 200)
         self.assertIn(f"{auth_session.SESSION_COOKIE_NAME}=", login_response.headers.get("set-cookie", ""))
 

@@ -5,19 +5,44 @@
 .panel {
   background: var(--panel);
   border: 1px solid var(--line);
-  border-radius: var(--radius-xl);
+  border-radius: var(--radius-md);
   padding: 18px;
   box-shadow: var(--shadow);
 }
 
+.panelStrong {
+  background: var(--panel-strong);
+  border-left: 4px solid var(--accent);
+}
+
+.panelHeader {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
 .panelTitle { font-size: 1.05rem; font-weight: 700; margin-bottom: 12px; }
+.panelHeader .panelTitle { margin-bottom: 0; }
+.panelMeta {
+  color: var(--muted);
+  font-family: var(--font-mono);
+  font-size: 0.8rem;
+}
+
+.gridTwo {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+  gap: 16px;
+}
 
 .buttons { display: flex; flex-wrap: wrap; gap: 10px; }
 
 .btn {
   border: 1px solid var(--line);
   background: var(--panel-strong);
-  border-radius: var(--radius-pill);
+  border-radius: var(--radius-sm);
   padding: 9px 16px;
   font-size: 0.9rem;
   font-weight: 600;
@@ -29,6 +54,36 @@
 .btn:disabled { opacity: 0.6; cursor: progress; }
 .btn.btnPrimary { background: var(--accent); color: white; border-color: var(--accent); }
 .btn.btnPrimary:hover:not(:disabled) { background: var(--accent-ink); }
+
+.formGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 10px;
+  align-items: end;
+  margin-bottom: 14px;
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  font-size: 0.78rem;
+  font-weight: 650;
+  color: var(--muted);
+}
+
+.input {
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--panel);
+  color: var(--ink);
+  padding: 8px 10px;
+}
+
+.input:focus {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
 
 .checkboxRow {
   display: flex;
@@ -55,4 +110,27 @@
   padding: 14px 16px;
   border-radius: var(--radius-md);
   color: var(--ink);
+  margin-top: 12px;
 }
+
+.tableWrap { overflow-x: auto; margin-top: 8px; }
+.table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.86rem;
+}
+.table th {
+  text-align: left;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--line);
+  color: var(--muted);
+  font-size: 0.74rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.table td {
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--line);
+  vertical-align: top;
+}
+.table tr:last-child td { border-bottom: none; }

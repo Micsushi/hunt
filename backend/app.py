@@ -8,8 +8,9 @@ import sys
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Optional
-from urllib.parse import parse_qsl, quote, urlencode, urlsplit, urlunsplit
+from urllib.parse import parse_qs, parse_qsl, quote, urlencode, urlsplit, urlunsplit
 
+import httpx
 from fastapi import Body, Cookie, Depends, FastAPI, Form, HTTPException, Query, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import (
@@ -25,6 +26,10 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT))
 
 from hunter.config import (  # noqa: E402
+    HUNT_COORDINATOR_URL,
+    HUNT_FLETCHER_URL,
+    HUNT_HUNTER_URL,
+    HUNT_SERVICE_TOKEN,
     REVIEW_APP_HOST,
     REVIEW_APP_PORT,
     REVIEW_OPS_TOKEN,
@@ -54,6 +59,7 @@ from backend.db import (  # noqa: E402
 from hunter.db import (  # noqa: E402
     bulk_requeue_jobs_by_ids,
     delete_jobs_by_ids,
+    get_connection,
     get_job_by_id,
     init_db,
     manual_requeue_stale_processing_rows,
@@ -2513,10 +2519,137 @@ def require_auth(request: Request) -> str:
     return username
 
 
+def _service_headers() -> dict[str, str]:
+    if HUNT_SERVICE_TOKEN:
+        return {"Authorization": f"Bearer {HUNT_SERVICE_TOKEN}"}
+    return {}
+
+
+def _has_valid_service_token(request: Request) -> bool:
+    if not HUNT_SERVICE_TOKEN:
+        return True
+    auth = request.headers.get("authorization") or ""
+    return auth.lower().startswith("bearer ") and auth[7:].strip() == HUNT_SERVICE_TOKEN
+
+
+def require_session_or_service_token(request: Request) -> str:
+    username = _session_username(request)
+    if username:
+        return username
+    if _has_valid_service_token(request):
+        return "service"
+    raise HTTPException(status_code=401, detail="Not authenticated.")
+
+
+def _bool_value(value) -> bool:
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return False
+    if isinstance(value, (int, float)):
+        return bool(value)
+    return str(value).strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _component_allowed(component: str) -> str:
+    clean = (component or "").strip().lower()
+    if clean not in {"c0", "c1", "c2", "c3", "c4"}:
+        raise HTTPException(status_code=400, detail="component must be one of c0, c1, c2, c3, c4.")
+    return clean
+
+
+def _setting_row(row) -> dict:
+    secret = _bool_value(row["secret"])
+    raw_value = row["value"]
+    return {
+        "component": row["component"],
+        "key": row["key"],
+        "value": None if secret else raw_value,
+        "value_type": row["value_type"],
+        "secret": secret,
+        "has_value": raw_value not in (None, ""),
+        "updated_at": row["updated_at"],
+        "updated_by": row["updated_by"],
+    }
+
+
+def _account_row(row) -> dict:
+    return {
+        "id": row["id"],
+        "username": row["username"],
+        "display_name": row["display_name"],
+        "active": _bool_value(row["active"]),
+        "auth_state": row["auth_state"],
+        "last_auth_check": row["last_auth_check"],
+        "last_auth_error": row["last_auth_error"],
+        "created_at": row["created_at"],
+        "updated_at": row["updated_at"],
+        "has_password": row["password_encrypted"] not in (None, ""),
+    }
+
+
+def _check_component(name: str, url: str, *, path: str = "/status") -> dict:
+    full_url = f"{url.rstrip('/')}{path}"
+    try:
+        with httpx.Client(timeout=4) as client:
+            resp = client.get(full_url, headers=_service_headers())
+        try:
+            body = resp.json()
+        except Exception:
+            body = {"detail": resp.text[:240]}
+        return {
+            "component": name,
+            "status": "ok" if 200 <= resp.status_code < 300 else "error",
+            "status_code": resp.status_code,
+            "url": full_url,
+            "detail": body,
+        }
+    except httpx.HTTPError as exc:
+        return {
+            "component": name,
+            "status": "unreachable",
+            "status_code": None,
+            "url": full_url,
+            "detail": str(exc),
+        }
+
+
+def _check_db() -> dict:
+    try:
+        conn = get_connection()
+        try:
+            conn.execute("SELECT 1")
+        finally:
+            conn.close()
+        return {"status": "ok"}
+    except Exception as exc:
+        return {"status": "error", "detail": str(exc)}
+
+
+async def _read_login_payload(request: Request) -> dict[str, str]:
+    """Read login payload without requiring python-multipart in local dev venvs."""
+    content_type = (request.headers.get("content-type") or "").lower()
+    raw = await request.body()
+    if content_type.startswith("application/json"):
+        try:
+            parsed = json.loads(raw.decode("utf-8") or "{}")
+        except json.JSONDecodeError:
+            raise HTTPException(status_code=400, detail="Invalid login JSON.")
+        return {
+            "username": str(parsed.get("username") or ""),
+            "password": str(parsed.get("password") or ""),
+        }
+    parsed = parse_qs(raw.decode("utf-8"), keep_blank_values=True)
+    return {
+        "username": parsed.get("username", [""])[0],
+        "password": parsed.get("password", [""])[0],
+    }
+
+
 @app.post("/auth/login")
 async def auth_login(request: Request, response: Response):
     """Accept form-encoded username+password, set session cookie on success."""
-    body = await request.form()
+    body = await _read_login_payload(request)
     username = str(body.get("username") or "").strip()
     password = str(body.get("password") or "")
     if not check_credentials(username, password):
@@ -2597,6 +2730,190 @@ def api_job_attempts(job_id: int, _auth: str = Depends(require_auth)):
     """Return resume attempts for a job (from fletcher DB if available)."""
     attempts = list_resume_attempts(job_id, limit=8)
     return JSONResponse(attempts)
+
+
+@app.get("/api/settings")
+def api_settings(component: str | None = None, _auth: str = Depends(require_auth)):
+    """List component settings. Secret values are redacted but presence is shown."""
+    params: list = []
+    where = ""
+    if component:
+        where = "WHERE component = ?"
+        params.append(_component_allowed(component))
+    conn = get_connection()
+    try:
+        rows = conn.execute(
+            f"""
+            SELECT component, key, value, value_type, secret, updated_at, updated_by
+            FROM component_settings
+            {where}
+            ORDER BY component ASC, key ASC
+            """,
+            params,
+        ).fetchall()
+    finally:
+        conn.close()
+    return JSONResponse({"settings": [_setting_row(row) for row in rows]})
+
+
+@app.post("/api/settings")
+def api_settings_upsert(payload: dict = Body(...), _auth: str = Depends(require_auth)):
+    """Create or update one component setting."""
+    component = _component_allowed(str(payload.get("component") or ""))
+    key = str(payload.get("key") or "").strip()
+    if not key:
+        raise HTTPException(status_code=400, detail="key is required.")
+    value_type = str(payload.get("value_type") or "string").strip() or "string"
+    secret = bool(payload.get("secret"))
+    value = payload.get("value")
+    updated_by = _auth
+    conn = get_connection()
+    try:
+        conn.execute(
+            """
+            INSERT INTO component_settings (component, key, value, value_type, secret, updated_at, updated_by)
+            VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP, ?)
+            ON CONFLICT(component, key) DO UPDATE SET
+                value = excluded.value,
+                value_type = excluded.value_type,
+                secret = excluded.secret,
+                updated_at = CURRENT_TIMESTAMP,
+                updated_by = excluded.updated_by
+            """,
+            (component, key, value, value_type, secret, updated_by),
+        )
+        conn.commit()
+        row = conn.execute(
+            """
+            SELECT component, key, value, value_type, secret, updated_at, updated_by
+            FROM component_settings
+            WHERE component = ? AND key = ?
+            """,
+            (component, key),
+        ).fetchone()
+    finally:
+        conn.close()
+    try:
+        append_review_audit_entry("setting_upsert", {"component": component, "key": key, "secret": secret})
+    except Exception:
+        pass
+    return JSONResponse({"setting": _setting_row(row)})
+
+
+@app.get("/api/linkedin/accounts")
+def api_linkedin_accounts(_auth: str = Depends(require_auth)):
+    conn = get_connection()
+    try:
+        rows = conn.execute(
+            """
+            SELECT id, username, password_encrypted, display_name, active, auth_state,
+                   last_auth_check, last_auth_error, created_at, updated_at
+            FROM linkedin_accounts
+            ORDER BY active DESC, id ASC
+            """
+        ).fetchall()
+    finally:
+        conn.close()
+    return JSONResponse({"accounts": [_account_row(row) for row in rows]})
+
+
+@app.post("/api/linkedin/accounts")
+def api_linkedin_accounts_upsert(payload: dict = Body(...), _auth: str = Depends(require_auth)):
+    username = str(payload.get("username") or "").strip()
+    if not username:
+        raise HTTPException(status_code=400, detail="username is required.")
+    display_name = str(payload.get("display_name") or "").strip() or None
+    active = bool(payload.get("active", True))
+    auth_state = str(payload.get("auth_state") or "unknown").strip() or "unknown"
+    account_id = payload.get("id")
+    conn = get_connection()
+    try:
+        if account_id:
+            conn.execute(
+                """
+                UPDATE linkedin_accounts
+                SET username = ?, display_name = ?, active = ?, auth_state = ?, updated_at = CURRENT_TIMESTAMP
+                WHERE id = ?
+                """,
+                (username, display_name, active, auth_state, int(account_id)),
+            )
+        else:
+            conn.execute(
+                """
+                INSERT INTO linkedin_accounts (username, display_name, active, auth_state, updated_at)
+                VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
+                ON CONFLICT(username) DO UPDATE SET
+                    display_name = excluded.display_name,
+                    active = excluded.active,
+                    auth_state = excluded.auth_state,
+                    updated_at = CURRENT_TIMESTAMP
+                """,
+                (username, display_name, active, auth_state),
+            )
+        conn.commit()
+        row = conn.execute(
+            """
+            SELECT id, username, password_encrypted, display_name, active, auth_state,
+                   last_auth_check, last_auth_error, created_at, updated_at
+            FROM linkedin_accounts
+            WHERE username = ?
+            """,
+            (username,),
+        ).fetchone()
+    finally:
+        conn.close()
+    try:
+        append_review_audit_entry("linkedin_account_upsert", {"username": username, "active": active})
+    except Exception:
+        pass
+    return JSONResponse({"account": _account_row(row)})
+
+
+@app.get("/api/system/status")
+def api_system_status(_auth: str = Depends(require_auth)):
+    """Return C0 operator health: DB plus component services as seen from C0."""
+    c1 = _check_component("c1", HUNT_HUNTER_URL)
+    c2 = _check_component("c2", HUNT_FLETCHER_URL)
+    c4 = _check_component("c4", HUNT_COORDINATOR_URL)
+    c3_bridge = _check_component("c3", HUNT_COORDINATOR_URL, path="/c3/pending-fills")
+    pending_fills = None
+    detail = c3_bridge.get("detail")
+    if isinstance(detail, dict) and isinstance(detail.get("fills"), list):
+        pending_fills = len(detail["fills"])
+    c3 = {
+        "component": "c3",
+        "status": c3_bridge["status"],
+        "status_code": c3_bridge["status_code"],
+        "pending_fills": pending_fills,
+        "detail": c3_bridge["detail"],
+    }
+    return JSONResponse(
+        {
+            "status": "ok",
+            "db": _check_db(),
+            "components": {
+                "c1": c1,
+                "c2": c2,
+                "c3": c3,
+                "c4": c4,
+            },
+        }
+    )
+
+
+@app.get("/api/c3/pending-fills")
+async def api_c3_pending_fills(_auth: str = Depends(require_session_or_service_token)):
+    from backend.gateway import _proxy_get
+
+    return await _proxy_get(f"{HUNT_COORDINATOR_URL}/c3/pending-fills")
+
+
+@app.post("/api/c3/fill-result")
+async def api_c3_fill_result(request: Request, _auth: str = Depends(require_session_or_service_token)):
+    from backend.gateway import _proxy_post
+
+    body = await request.json()
+    return await _proxy_post(f"{HUNT_COORDINATOR_URL}/c3/fill-result", body)
 
 
 # ---------------------------------------------------------------------------

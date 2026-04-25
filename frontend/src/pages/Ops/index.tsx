@@ -2,7 +2,20 @@ import { useState } from 'react'
 import { useSummary } from '@/hooks/useSummary'
 import { useUiStore } from '@/store/ui'
 import { requeueErrors, requeueStaleProcessing, bulkRequeue } from '@/api/ops'
-import { useQueryClient } from '@tanstack/react-query'
+import {
+  fetchC1Queue,
+  fetchC1Status,
+  fetchLinkedInAccounts,
+  fetchSettings,
+  saveLinkedInAccount,
+  saveSetting,
+  triggerC1Enrich,
+  triggerC1Reauth,
+  triggerC1Scrape,
+  type ComponentId,
+} from '@/api/control'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { SystemStatusPanel } from '@/pages/Control/SystemStatus'
 import styles from './Ops.module.css'
 
 const REQUEUE_BUTTONS = [
@@ -29,6 +42,47 @@ export function OpsPage() {
   const [staleResult, setStaleResult] = useState<string | null>(null)
   const [bulkStatuses, setBulkStatuses] = useState<string[]>(['failed'])
   const [bulkDryResult, setBulkDryResult] = useState<string | null>(null)
+  const [settingComponent, setSettingComponent] = useState<ComponentId>('c1')
+  const [settingKey, setSettingKey] = useState('')
+  const [settingValue, setSettingValue] = useState('')
+  const [settingSecret, setSettingSecret] = useState(false)
+  const [accountUsername, setAccountUsername] = useState('')
+  const [accountName, setAccountName] = useState('')
+  const [c1Result, setC1Result] = useState<unknown>(null)
+
+  const { data: accountsData } = useQuery({
+    queryKey: ['linkedin-accounts'],
+    queryFn: fetchLinkedInAccounts,
+    staleTime: 20_000,
+  })
+  const { data: settingsData } = useQuery({
+    queryKey: ['settings'],
+    queryFn: () => fetchSettings(),
+    staleTime: 20_000,
+  })
+
+  const accountMutation = useMutation({
+    mutationFn: saveLinkedInAccount,
+    onSuccess: () => {
+      showToast('Account saved')
+      setAccountUsername('')
+      setAccountName('')
+      qc.invalidateQueries({ queryKey: ['linkedin-accounts'] })
+    },
+    onError: e => showToast(e instanceof Error ? e.message : 'Account save failed', 'error'),
+  })
+
+  const settingMutation = useMutation({
+    mutationFn: saveSetting,
+    onSuccess: () => {
+      showToast('Setting saved')
+      setSettingKey('')
+      setSettingValue('')
+      setSettingSecret(false)
+      qc.invalidateQueries({ queryKey: ['settings'] })
+    },
+    onError: e => showToast(e instanceof Error ? e.message : 'Setting save failed', 'error'),
+  })
 
   const failureCounts = summary?.failure_counts ?? {}
   const authN = failureCounts['auth_expired'] ?? 0
@@ -87,15 +141,140 @@ export function OpsPage() {
     setBulkStatuses(prev => prev.includes(val) ? prev.filter(s => s !== val) : [...prev, val])
   }
 
+  async function runC1(label: string, fn: () => Promise<unknown>) {
+    setLoadingBtn(label)
+    try {
+      const res = await fn()
+      setC1Result(res)
+      showToast(`${label} sent`)
+      qc.invalidateQueries({ queryKey: ['system-status'] })
+    } catch (e) {
+      showToast(e instanceof Error ? e.message : `${label} failed`, 'error')
+    } finally {
+      setLoadingBtn(null)
+    }
+  }
+
+  function saveAccount() {
+    if (!accountUsername.trim()) {
+      showToast('Username required', 'error')
+      return
+    }
+    accountMutation.mutate({
+      username: accountUsername.trim(),
+      display_name: accountName.trim() || undefined,
+      active: true,
+    })
+  }
+
+  function submitSetting() {
+    if (!settingKey.trim()) {
+      showToast('Setting key required', 'error')
+      return
+    }
+    settingMutation.mutate({
+      component: settingComponent,
+      key: settingKey.trim(),
+      value: settingValue,
+      value_type: settingSecret ? 'secret' : 'string',
+      secret: settingSecret,
+    })
+  }
+
   return (
     <div className={styles.page}>
       <section className={styles.hero}>
         <h1 className={styles.heroTitle}>Operator console</h1>
-        <p className="muted">
-          Bulk requeue for common enrichment failures, stale processing reset, and bulk filter operations.
-          API reference at the bottom.
-        </p>
       </section>
+
+      <SystemStatusPanel />
+
+      <div className={`${styles.panel} ${styles.panelStrong}`}>
+        <div className={styles.panelHeader}>
+          <h2 className={styles.panelTitle}>Hunter controls</h2>
+          <span className={styles.panelMeta}>C1 via C0 gateway</span>
+        </div>
+        <div className={styles.buttons}>
+          <button className={styles.btn} disabled={!!loadingBtn} onClick={() => runC1('status', fetchC1Status)}>Status</button>
+          <button className={styles.btn} disabled={!!loadingBtn} onClick={() => runC1('queue', fetchC1Queue)}>Queue</button>
+          <button className={`${styles.btn} ${styles.btnPrimary}`} disabled={!!loadingBtn} onClick={() => runC1('scrape', triggerC1Scrape)}>Scrape</button>
+          <button className={styles.btn} disabled={!!loadingBtn} onClick={() => runC1('enrich', () => triggerC1Enrich(25))}>Enrich 25</button>
+        </div>
+        {c1Result ? <pre className={styles.apiRef}>{JSON.stringify(c1Result, null, 2)}</pre> : null}
+      </div>
+
+      <div className={styles.gridTwo}>
+        <div className={styles.panel}>
+          <div className={styles.panelHeader}>
+            <h2 className={styles.panelTitle}>LinkedIn accounts</h2>
+            <span className={styles.panelMeta}>{accountsData?.accounts.length ?? 0} saved</span>
+          </div>
+          <div className={styles.formGrid}>
+            <label className={styles.field}>Username
+              <input className={styles.input} value={accountUsername} onChange={e => setAccountUsername(e.target.value)} placeholder="user@example.com" />
+            </label>
+            <label className={styles.field}>Display name
+              <input className={styles.input} value={accountName} onChange={e => setAccountName(e.target.value)} placeholder="Primary" />
+            </label>
+            <button className={`${styles.btn} ${styles.btnPrimary}`} disabled={accountMutation.isPending} onClick={saveAccount}>Save account</button>
+          </div>
+          <div className={styles.tableWrap}>
+            <table className={styles.table}>
+              <thead><tr><th>Account</th><th>State</th><th>Active</th><th></th></tr></thead>
+              <tbody>
+                {(accountsData?.accounts ?? []).map(a => (
+                  <tr key={a.id}>
+                    <td><div>{a.display_name || a.username}</div><div className="mono">{a.username}</div></td>
+                    <td>{a.auth_state}</td>
+                    <td>{a.active ? 'yes' : 'no'}</td>
+                    <td><button className={styles.btn} onClick={() => runC1('reauth', () => triggerC1Reauth(a.id))}>Reauth</button></td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <div className={styles.panel}>
+          <div className={styles.panelHeader}>
+            <h2 className={styles.panelTitle}>Component settings</h2>
+            <span className={styles.panelMeta}>{settingsData?.settings.length ?? 0} keys</span>
+          </div>
+          <div className={styles.formGrid}>
+            <label className={styles.field}>Component
+              <select className={styles.input} value={settingComponent} onChange={e => setSettingComponent(e.target.value as ComponentId)}>
+                {(['c0', 'c1', 'c2', 'c3', 'c4'] as ComponentId[]).map(c => <option key={c} value={c}>{c.toUpperCase()}</option>)}
+              </select>
+            </label>
+            <label className={styles.field}>Key
+              <input className={styles.input} value={settingKey} onChange={e => setSettingKey(e.target.value)} placeholder="setting_key" />
+            </label>
+            <label className={styles.field}>Value
+              <input className={styles.input} value={settingValue} onChange={e => setSettingValue(e.target.value)} placeholder="value" />
+            </label>
+            <label className={styles.checkLabel}>
+              <input type="checkbox" checked={settingSecret} onChange={() => setSettingSecret(v => !v)} />
+              Secret
+            </label>
+            <button className={`${styles.btn} ${styles.btnPrimary}`} disabled={settingMutation.isPending} onClick={submitSetting}>Save setting</button>
+          </div>
+          <div className={styles.tableWrap}>
+            <table className={styles.table}>
+              <thead><tr><th>Component</th><th>Key</th><th>Value</th><th>Updated</th></tr></thead>
+              <tbody>
+                {(settingsData?.settings ?? []).map(s => (
+                  <tr key={`${s.component}-${s.key}`}>
+                    <td>{s.component.toUpperCase()}</td>
+                    <td className="mono">{s.key}</td>
+                    <td>{s.secret ? (s.has_value ? 'redacted' : 'empty') : (s.value || 'empty')}</td>
+                    <td className="mono">{s.updated_at ?? '—'}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
 
       {/* Transient failures */}
       <div className={styles.panel}>
@@ -176,14 +355,14 @@ export function OpsPage() {
         </div>
       </div>
 
-      {/* API reference */}
       <div className={styles.panel}>
         <h2 className={styles.panelTitle}>API reference</h2>
-        <p className="muted" style={{ fontSize: '0.88rem', marginBottom: 10 }}>
-          All POST endpoints accept JSON. Include the session cookie (set by logging in).
-        </p>
         <pre className={styles.apiRef}>{`POST /api/ops/requeue-errors
   { "source": "linkedin", "error_codes": ["auth_expired", "rate_limited"] }
+
+GET /api/system/status
+GET /api/settings
+GET /api/linkedin/accounts
 
 POST /api/ops/bulk-requeue
   { "source": null, "status": "all", "q": "", "tag": "",

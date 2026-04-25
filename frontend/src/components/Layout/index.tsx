@@ -16,9 +16,10 @@ const NAV_ITEMS: NavItem[] = [
   { to: '/',          label: 'Overview',      exact: true, tooltip: 'Dashboard: queue stats and quick lists' },
   { to: '/jobs',      label: 'Jobs',          tooltip: 'Browse, search, and filter all job listings' },
   { to: '/logs',      label: 'Logs',          tooltip: 'LinkedIn auth status, queue health, runtime events, audit log' },
-  { to: '/ops',       label: 'Ops',           tooltip: 'Operator tools: requeue, stale reset, bulk actions' },
-  { to: '/fletcher',  label: 'Fletcher',      tooltip: 'C2: Resume tailoring (coming soon)' },
-  { to: '/executioner', label: 'Executioner', tooltip: 'C3: Chrome extension settings (coming soon)' },
+  { to: '/ops',       label: 'Ops',           tooltip: 'Operator tools, health, C1 controls, settings' },
+  { to: '/fletcher',  label: 'Fletcher',      tooltip: 'C2: Resume tailoring' },
+  { to: '/executioner', label: 'Executioner', tooltip: 'C3: Chrome extension bridge' },
+  { to: '/coordinator', label: 'Coordinator', tooltip: 'C4: Runs and approvals' },
 ]
 
 interface Props {

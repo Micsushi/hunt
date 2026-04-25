@@ -1,0 +1,236 @@
+.page { display: flex; flex-direction: column; gap: 18px; }
+
+.hero {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.heroTitle {
+  font-size: 1.7rem;
+  line-height: 1.15;
+  margin-bottom: 4px;
+}
+
+.heroMeta {
+  color: var(--muted);
+  font-family: var(--font-mono);
+  font-size: 0.82rem;
+}
+
+.grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
+  gap: 12px;
+}
+
+.twoCol {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(280px, 0.7fr);
+  gap: 14px;
+}
+
+.panel {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  padding: 16px;
+  box-shadow: var(--shadow);
+}
+
+.panelStrong {
+  background: var(--panel-strong);
+  border-left: 4px solid var(--accent);
+}
+
+.panelTitle {
+  font-size: 1rem;
+  font-weight: 650;
+  margin-bottom: 12px;
+}
+
+.statusCard {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-height: 118px;
+}
+
+.statusTop {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.componentName {
+  font-weight: 700;
+  color: var(--ink);
+}
+
+.statusLine {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--muted);
+  font-size: 0.88rem;
+}
+
+.dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--muted);
+  flex-shrink: 0;
+}
+
+.dotOk { background: var(--good); }
+.dotWarn { background: var(--warning); }
+.dotBad { background: var(--danger); }
+
+.badge {
+  border-radius: var(--radius-pill);
+  padding: 2px 9px;
+  font-size: 0.75rem;
+  font-weight: 700;
+  background: var(--line);
+  color: var(--muted);
+}
+
+.badgeOk { background: var(--good-soft); color: var(--good); }
+.badgeWarn { background: var(--warning-soft); color: var(--warning); }
+.badgeBad { background: var(--danger-soft); color: var(--danger); }
+
+.meta {
+  color: var(--muted);
+  font-size: 0.84rem;
+  line-height: 1.45;
+}
+
+.mono {
+  font-family: var(--font-mono);
+  font-size: 0.82rem;
+  word-break: break-word;
+}
+
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.btn {
+  border: 1px solid var(--line);
+  background: var(--panel-strong);
+  border-radius: var(--radius-sm);
+  padding: 8px 12px;
+  color: var(--ink);
+  font-weight: 650;
+  font-size: 0.88rem;
+  cursor: pointer;
+  transition: background var(--ease), border-color var(--ease), color var(--ease);
+}
+
+.btn:hover:not(:disabled) {
+  background: var(--accent-soft);
+  border-color: var(--accent);
+}
+
+.btnPrimary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+
+.btnPrimary:hover:not(:disabled) {
+  background: var(--accent-ink);
+  color: #fff;
+}
+
+.btnDanger:hover:not(:disabled) {
+  background: var(--danger-soft);
+  border-color: var(--danger);
+  color: var(--danger);
+}
+
+.btn:disabled {
+  opacity: 0.6;
+  cursor: progress;
+}
+
+.tableWrap { overflow-x: auto; }
+
+.table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.88rem;
+}
+
+.table th {
+  text-align: left;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--line);
+  color: var(--muted);
+  font-size: 0.74rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.table td {
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--line);
+  vertical-align: top;
+}
+
+.table tr:last-child td { border-bottom: none; }
+
+.formGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 10px;
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  color: var(--muted);
+  font-size: 0.78rem;
+  font-weight: 650;
+}
+
+.input,
+.select {
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--panel);
+  color: var(--ink);
+  padding: 8px 10px;
+  font-size: 0.92rem;
+}
+
+.input:focus,
+.select:focus {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.pre {
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
+  line-height: 1.5;
+  background: #faf5ec;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  padding: 10px;
+  max-height: 260px;
+  overflow: auto;
+}
+
+@media (max-width: 860px) {
+  .hero { align-items: flex-start; flex-direction: column; }
+  .twoCol { grid-template-columns: 1fr; }
+}

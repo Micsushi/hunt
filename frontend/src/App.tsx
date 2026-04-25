@@ -11,6 +11,7 @@ import { LogsPage } from '@/pages/Logs'
 import { OpsPage } from '@/pages/Ops'
 import { FletcherPage } from '@/pages/_stubs/Fletcher'
 import { ExecutionerPage } from '@/pages/_stubs/Executioner'
+import { CoordinatorPage } from '@/pages/Coordinator'
 
 function AuthGuard({ children, username }: { children: React.ReactNode; username: string | null }) {
   const location = useLocation()
@@ -80,6 +81,12 @@ export default function App() {
         <Route path="/executioner" element={
           <AuthGuard username={username}>
             <ExecutionerPage />
+          </AuthGuard>
+        } />
+
+        <Route path="/coordinator" element={
+          <AuthGuard username={username}>
+            <CoordinatorPage />
           </AuthGuard>
         } />
 
