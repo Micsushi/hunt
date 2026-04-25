@@ -585,10 +585,10 @@ class OrchestrationService:
                     _text(row["ats_type"]) or "unknown",
                     apply_context_path,
                     c3_apply_context_path,
-                    0,
+                    False,
                     None,
                     json.dumps(apply_context["manual_review_flags"]),
-                    0,
+                    False,
                     now,
                     now,
                 ),
@@ -875,19 +875,19 @@ class OrchestrationService:
             if review_flags:
                 new_status = "manual_review"
                 completed_at = None
-                manual_review_required = 1
+                manual_review_required = True
                 manual_review_reason = review_flags[0]
                 job_status = "claimed"
             elif normalized_status in FAILURE_STATUSES:
                 new_status = "failed"
                 completed_at = utc_now_iso()
-                manual_review_required = 0
+                manual_review_required = False
                 manual_review_reason = None
                 job_status = "failed"
             else:
                 new_status = "awaiting_submit_approval"
                 completed_at = None
-                manual_review_required = 0
+                manual_review_required = False
                 manual_review_reason = None
                 job_status = "claimed"
 
@@ -997,7 +997,7 @@ class OrchestrationService:
             conn.execute(
                 """
                 UPDATE orchestration_runs
-                SET status = ?, manual_review_required = 0, manual_review_reason = NULL,
+                SET status = ?, manual_review_required = FALSE, manual_review_reason = NULL,
                     updated_at = ?, completed_at = ?
                 WHERE id = ?
                 """,
@@ -1097,12 +1097,12 @@ class OrchestrationService:
             )
             if normalized_decision == "approve":
                 new_status = "submit_approved"
-                submit_allowed = 1
+                submit_allowed = True
                 completed_at = None
                 job_status = "claimed"
             else:
                 new_status = "submit_denied"
-                submit_allowed = 0
+                submit_allowed = False
                 completed_at = now
                 job_status = "skipped"
 
