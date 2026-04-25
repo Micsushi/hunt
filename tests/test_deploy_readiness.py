@@ -63,6 +63,25 @@ def test_migration_does_not_disable_postgres_triggers(monkeypatch, tmp_path):
     assert inserted["records"] == [(1, "Engineer")]
 
 
+def test_migration_coerces_sqlite_booleans_for_postgres():
+    columns = ["id", "title", "is_remote", "priority", "auto_apply_eligible"]
+    row = {
+        "id": 1,
+        "title": "Engineer",
+        "is_remote": 1,
+        "priority": 0,
+        "auto_apply_eligible": None,
+    }
+
+    assert migration._coerce_record("jobs", columns, row) == (
+        1,
+        "Engineer",
+        True,
+        False,
+        None,
+    )
+
+
 def test_migration_skips_missing_legacy_sqlite_tables(tmp_path, capsys):
     sqlite_path = tmp_path / "legacy.db"
     import sqlite3

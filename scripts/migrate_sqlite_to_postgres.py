@@ -48,6 +48,28 @@ SERIAL_TABLES = {
     "orchestration_events",
 }
 
+BOOLEAN_COLUMNS = {
+    "jobs": {
+        "is_remote",
+        "priority",
+        "auto_apply_eligible",
+        "selected_resume_ready_for_c3",
+        "latest_resume_fallback_used",
+    },
+    "component_settings": {"secret"},
+    "linkedin_accounts": {"active"},
+    "resume_attempts": {"fallback_used"},
+    "resume_versions": {
+        "is_latest_generated",
+        "is_latest_useful",
+        "is_selected_for_c3",
+    },
+    "orchestration_runs": {
+        "manual_review_required",
+        "submit_allowed",
+    },
+}
+
 
 def migrate(sqlite_path: str, postgres_url: str, *, dry_run: bool = False) -> None:
     import psycopg2
@@ -100,7 +122,7 @@ def _migrate_table(
 
     columns = list(rows[0].keys())
     col_list = ", ".join(columns)
-    records = [tuple(row[col] for col in columns) for row in rows]
+    records = [_coerce_record(table, columns, row) for row in rows]
 
     if dry_run:
         print(f"  {table}: {len(records)} rows (dry run)")
@@ -116,6 +138,31 @@ def _migrate_table(
     )
 
     print(f"  {table}: {len(records)} rows migrated")
+
+
+def _coerce_record(table: str, columns: list[str], row: sqlite3.Row) -> tuple:
+    bool_columns = BOOLEAN_COLUMNS.get(table, set())
+    values = []
+    for col in columns:
+        value = row[col]
+        if col in bool_columns and value is not None:
+            value = _coerce_bool(value)
+        values.append(value)
+    return tuple(values)
+
+
+def _coerce_bool(value):
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, int):
+        return bool(value)
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in {"1", "true", "t", "yes", "y", "on"}:
+            return True
+        if normalized in {"0", "false", "f", "no", "n", "off", ""}:
+            return False
+    return value
 
 
 def _reset_sequences(pg_conn) -> None:
