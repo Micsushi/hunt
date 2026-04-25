@@ -78,6 +78,15 @@ for _ in $(seq 1 20); do
   if curl -fsS "http://127.0.0.1:${REVIEW_PORT}/health" >/tmp/hunt-review-health.json; then
     cat /tmp/hunt-review-health.json
     echo
+    curl -fsS "http://127.0.0.1:${REVIEW_PORT}/" >/tmp/hunt-review-root.html
+    if grep -q "Hunt frontend not built" /tmp/hunt-review-root.html; then
+      echo "review frontend is not built into the image" >&2
+      exit 1
+    fi
+    if ! grep -qi "<!doctype html" /tmp/hunt-review-root.html; then
+      echo "review root did not return built SPA HTML" >&2
+      exit 1
+    fi
     echo "review container smoke passed"
     exit 0
   fi
