@@ -12,7 +12,7 @@ from typing import Optional
 from urllib.parse import parse_qs, parse_qsl, quote, urlencode, urlsplit, urlunsplit
 
 import httpx
-from fastapi import Body, Cookie, Depends, FastAPI, Form, HTTPException, Query, Request, Response
+from fastapi import Body, Cookie, Depends, FastAPI, File, Form, HTTPException, Query, Request, Response, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import (
     FileResponse,
@@ -2506,8 +2506,13 @@ def render_link_list(title, rows, *, return_to=""):
 # Auth routes
 # ---------------------------------------------------------------------------
 
+DEV_MODE: bool = os.getenv("HUNT_DEV_MODE", "").lower() in ("1", "true", "yes")
+
+
 def _session_username(request: Request) -> str | None:
     """Extract and validate the session cookie from a request."""
+    if DEV_MODE:
+        return "dev"
     token = request.cookies.get(SESSION_COOKIE_NAME, "")
     return validate_session(token)
 
@@ -2850,6 +2855,59 @@ def api_job_attempts(job_id: int, _auth: str = Depends(require_auth)):
     """Return resume attempts for a job (from fletcher DB if available)."""
     attempts = list_resume_attempts(job_id, limit=8)
     return JSONResponse(attempts)
+
+
+@app.post("/api/fletcher/tailor")
+async def api_fletcher_tailor(
+    job_details: str = Form(...),
+    personal_details: str = Form(""),
+    resume: UploadFile | None = File(None),
+    _auth: str = Depends(require_auth),
+):
+    """Tailor a resume to a job description and return the PDF."""
+    try:
+        from fletcher.pipeline import generate_resume_for_ad_hoc  # type: ignore
+    except ModuleNotFoundError:
+        raise HTTPException(status_code=503, detail="Fletcher not available in this deployment")
+
+    import tempfile
+
+    resume_tmp = None
+    profile_tmp = None
+    try:
+        if resume and resume.filename:
+            suffix = Path(resume.filename).suffix or ".tex"
+            resume_tmp = tempfile.NamedTemporaryFile(delete=False, suffix=suffix)
+            resume_tmp.write(await resume.read())
+            resume_tmp.flush()
+            resume_tmp.close()
+
+        if personal_details.strip():
+            profile_tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".md", mode="w", encoding="utf-8")
+            profile_tmp.write(personal_details)
+            profile_tmp.flush()
+            profile_tmp.close()
+
+        kwargs: dict = dict(title="", description=job_details, company="")
+        if resume_tmp:
+            kwargs["resume_path"] = resume_tmp.name
+        if profile_tmp:
+            kwargs["candidate_profile_path"] = profile_tmp.name
+
+        result = generate_resume_for_ad_hoc(**kwargs)
+    finally:
+        for tmp in (resume_tmp, profile_tmp):
+            if tmp:
+                try:
+                    Path(tmp.name).unlink(missing_ok=True)
+                except Exception:
+                    pass
+
+    pdf_path = result.get("pdf_path")
+    if not pdf_path or not Path(pdf_path).exists():
+        raise HTTPException(status_code=500, detail=result.get("compile_status") or "PDF generation failed")
+
+    return FileResponse(pdf_path, media_type="application/pdf", filename="tailored_resume.pdf")
 
 
 @app.get("/api/settings")

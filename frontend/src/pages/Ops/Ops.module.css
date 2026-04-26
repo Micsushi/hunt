@@ -106,7 +106,7 @@
   font-family: var(--font-mono);
   font-size: 0.82rem;
   line-height: 1.55;
-  background: #faf5ec;
+  background: var(--panel-strong);
   padding: 14px 16px;
   border-radius: var(--radius-md);
   color: var(--ink);

@@ -22,11 +22,15 @@ function AuthGuard({ children, username }: { children: React.ReactNode; username
 }
 
 export default function App() {
-  // null = not yet known, '' = not logged in, string = username
-  const [username, setUsername] = useState<string | null | undefined>(undefined)
   const location = useLocation()
+  // null = not yet known, '' = not logged in, string = username
+  const [username, setUsername] = useState<string | null | undefined>(
+    location.pathname === '/login' ? null : undefined
+  )
 
   useEffect(() => {
+    // skip the check on the login page itself to avoid redirect loops
+    if (location.pathname === '/login') return
     fetchAuthStatus()
       .then(s => setUsername(s.authenticated ? (s.username ?? 'admin') : null))
       .catch(() => setUsername(null))

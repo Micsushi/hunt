@@ -1,26 +1,90 @@
 .page { display: flex; flex-direction: column; gap: 20px; }
+
+.pageHeader {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+
 .heroTitle { font-size: 1.5rem; font-weight: 700; }
 .heroMeta  { font-size: 0.85rem; color: var(--muted); margin-top: 4px; }
 
-.twoCol {
+.statusPill {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.82rem;
+  padding: 7px 14px;
+  border-radius: var(--radius-pill);
+  border: 1px solid var(--line);
+  background: var(--panel);
+  align-self: flex-start;
+}
+.statusPillOnline  { border-color: var(--good); color: var(--good); }
+.statusPillOffline { border-color: var(--danger); color: var(--danger); }
+
+.statusDot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: currentColor;
+  flex-shrink: 0;
+}
+
+/* Two-path workflow layout */
+.workflowGrid {
   display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 16px;
+  grid-template-columns: 1fr auto 1fr;
+  gap: 0;
+  align-items: start;
+}
+
+.orDivider {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 20px;
+  font-size: 0.78rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: var(--muted);
+  padding-top: 120px;
 }
 
 .panel {
   background: var(--panel);
   border: 1px solid var(--line);
   border-radius: var(--radius-lg);
-  padding: 18px;
+  padding: 22px;
   box-shadow: var(--shadow);
 }
 
-.panelHeader {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  margin-bottom: 14px;
+.workflowLabel {
+  display: inline-block;
+  font-size: 0.68rem;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: var(--accent);
+  background: var(--accent-soft);
+  border-radius: var(--radius-pill);
+  padding: 3px 10px;
+  margin-bottom: 10px;
+}
+
+.workflowTitle {
+  font-size: 1rem;
+  font-weight: 700;
+  margin-bottom: 6px;
+}
+
+.workflowDesc {
+  font-size: 0.84rem;
+  color: var(--muted);
+  line-height: 1.5;
 }
 
 .panelTitle {
@@ -31,9 +95,18 @@
   color: var(--muted);
 }
 
-.formGrid { display: flex; flex-direction: column; gap: 10px; }
+.formGrid { display: flex; flex-direction: column; gap: 12px; }
 
-.field { display: flex; flex-direction: column; gap: 4px; font-size: 0.875rem; }
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 0.8rem;
+  font-weight: 650;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
 
 .input {
   background: var(--panel-strong);
@@ -44,8 +117,60 @@
   color: var(--ink);
   height: 36px;
   transition: border-color var(--ease);
+  text-transform: none;
+  letter-spacing: normal;
+  font-weight: 400;
 }
 .input:focus { outline: none; border-color: var(--accent); }
+
+.textarea {
+  background: var(--panel-strong);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  padding: 8px 10px;
+  font-size: 0.875rem;
+  color: var(--ink);
+  resize: vertical;
+  min-height: 110px;
+  font-family: inherit;
+  font-weight: 400;
+  text-transform: none;
+  letter-spacing: normal;
+  transition: border-color var(--ease);
+}
+.textarea:focus { outline: none; border-color: var(--accent); }
+
+.fileRow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.fileInput { display: none; }
+
+.fileLabel {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 36px;
+  padding: 0 14px;
+  border-radius: var(--radius-sm);
+  font-size: 0.875rem;
+  font-weight: 500;
+  border: 1px solid var(--line);
+  background: var(--panel-strong);
+  color: var(--ink);
+  cursor: pointer;
+  transition: border-color var(--ease), color var(--ease);
+  text-transform: none;
+  letter-spacing: normal;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 260px;
+}
+.fileLabel:hover { border-color: var(--accent); }
+.fileLabelActive { border-color: var(--accent); color: var(--accent); }
 
 .btn {
   height: 36px;
@@ -58,11 +183,12 @@
   color: var(--ink);
   cursor: pointer;
   transition: background var(--ease), border-color var(--ease);
+  white-space: nowrap;
 }
 .btn:hover { background: var(--panel-hover); }
 .btn:disabled { opacity: 0.5; cursor: not-allowed; }
 .btnPrimary { background: var(--accent); border-color: var(--accent); color: var(--ink-inverse); }
-.btnPrimary:hover { background: var(--accent-dim); border-color: var(--accent-dim); }
+.btnPrimary:hover:not(:disabled) { opacity: 0.88; }
 
 .pre {
   background: var(--panel-strong);
@@ -76,8 +202,35 @@
   word-break: break-all;
   color: var(--ink);
   margin-top: 10px;
-  max-height: 300px;
+  max-height: 200px;
   overflow-y: auto;
 }
 
+.downloadLink {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 14px;
+  padding: 9px 16px;
+  border-radius: var(--radius-sm);
+  background: var(--good-soft);
+  color: var(--good);
+  font-size: 0.875rem;
+  font-weight: 600;
+  text-decoration: none;
+  border: 1px solid var(--good);
+}
+.downloadLink:hover { opacity: 0.85; }
+
 .meta { font-size: 0.85rem; color: var(--muted); }
+
+/* Responsive: stack on narrow screens */
+@media (max-width: 800px) {
+  .workflowGrid {
+    grid-template-columns: 1fr;
+  }
+  .orDivider {
+    padding: 8px 0;
+    justify-content: flex-start;
+  }
+}

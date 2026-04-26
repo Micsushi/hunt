@@ -1,6 +1,38 @@
 .page { display: flex; flex-direction: column; gap: 20px; }
+
+.pageHeader {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+
 .heroTitle { font-size: 1.5rem; font-weight: 700; }
 .heroMeta  { font-size: 0.85rem; color: var(--muted); margin-top: 4px; }
+
+.statusPill {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.82rem;
+  padding: 7px 14px;
+  border-radius: var(--radius-pill);
+  border: 1px solid var(--line);
+  background: var(--panel);
+  align-self: flex-start;
+  white-space: nowrap;
+}
+.statusPillOnline  { border-color: var(--good);   color: var(--good); }
+.statusPillOffline { border-color: var(--danger);  color: var(--danger); }
+
+.statusDot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: currentColor;
+  flex-shrink: 0;
+}
 
 .panel {
   background: var(--panel);

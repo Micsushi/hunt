@@ -9,6 +9,7 @@ $python = if (Test-Path "$root\.venv\Scripts\python.exe") { "$root\.venv\Scripts
           else { "python" }
 
 Write-Host "[dev] Starting backend (--reload) on :8000..."
+$env:HUNT_DEV_MODE = "1"
 $backend = Start-Process -FilePath $python `
     -ArgumentList "-m", "backend.app", "--reload" `
     -WorkingDirectory $root `
@@ -20,9 +21,12 @@ $frontend = Start-Process -FilePath "cmd.exe" `
     -WorkingDirectory (Join-Path $root "frontend") `
     -PassThru -NoNewWindow
 
-Write-Host "[dev] Both running. Press Ctrl+C to stop."
-Write-Host "[dev]   Backend:  http://localhost:8000"
-Write-Host "[dev]   Frontend: http://localhost:5173"
+Write-Host ""
+Write-Host "[dev] Both running. Press Ctrl+C to stop." -ForegroundColor Cyan
+Write-Host ""
+Write-Host "  --> Open the app here:  http://localhost:5173  <--" -ForegroundColor Green
+Write-Host "      (API / legacy UI):  http://localhost:8000" -ForegroundColor DarkGray
+Write-Host ""
 
 try {
     Wait-Process -Id $backend.Id, $frontend.Id

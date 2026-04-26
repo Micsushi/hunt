@@ -29,6 +29,7 @@
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(280px, 0.7fr);
   gap: 14px;
+  align-items: start;
 }
 
 .panel {
@@ -222,7 +223,7 @@
   font-family: var(--font-mono);
   font-size: 0.78rem;
   line-height: 1.5;
-  background: #faf5ec;
+  background: var(--panel-strong);
   border: 1px solid var(--line);
   border-radius: var(--radius-sm);
   padding: 10px;
@@ -233,4 +234,35 @@
 @media (max-width: 860px) {
   .hero { align-items: flex-start; flex-direction: column; }
   .twoCol { grid-template-columns: 1fr; }
+}
+
+.pageHeader {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+
+.statusPill {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.82rem;
+  padding: 7px 14px;
+  border-radius: var(--radius-pill);
+  border: 1px solid var(--line);
+  background: var(--panel);
+  align-self: flex-start;
+  white-space: nowrap;
+}
+.statusPillOnline  { border-color: var(--good);   color: var(--good); }
+.statusPillOffline { border-color: var(--danger);  color: var(--danger); }
+
+.statusDot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: currentColor;
+  flex-shrink: 0;
 }

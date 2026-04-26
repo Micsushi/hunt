@@ -117,6 +117,21 @@ export function triggerC2Generate(jobId: number): Promise<unknown> {
   return post('/api/gateway/c2/generate', { job_id: jobId })
 }
 
+export function tailorResume(params: { jobDetails: string; personalDetails: string; resume?: File | null }): Promise<Blob> {
+  const form = new FormData()
+  form.append('job_details', params.jobDetails)
+  form.append('personal_details', params.personalDetails)
+  if (params.resume) form.append('resume', params.resume)
+  return fetch('/api/fletcher/tailor', { method: 'POST', credentials: 'include', body: form })
+    .then(async r => {
+      if (!r.ok) {
+        const text = await r.text().catch(() => r.statusText)
+        throw new Error(text || r.statusText)
+      }
+      return r.blob()
+    })
+}
+
 export function fetchC4Status(): Promise<unknown> {
   return get('/api/gateway/c4/status')
 }
