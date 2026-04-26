@@ -9,8 +9,8 @@ import { JobsPage } from '@/pages/Jobs'
 import { JobDetailPage } from '@/pages/Jobs/JobDetail'
 import { LogsPage } from '@/pages/Logs'
 import { OpsPage } from '@/pages/Ops'
-import { FletcherPage } from '@/pages/_stubs/Fletcher'
-import { ExecutionerPage } from '@/pages/_stubs/Executioner'
+import { FletcherPage } from '@/pages/Fletcher'
+import { ExecutionerPage } from '@/pages/Executioner'
 import { CoordinatorPage } from '@/pages/Coordinator'
 
 function AuthGuard({ children, username }: { children: React.ReactNode; username: string | null }) {

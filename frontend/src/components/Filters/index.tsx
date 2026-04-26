@@ -40,21 +40,17 @@ interface Props {
 
 export function Filters({ query, onChange, statusCounts }: Props) {
   const [search, setSearch] = useState(query.q ?? '')
-  const [tag, setTag] = useState(query.tag ?? '')
 
   // Sync local inputs when parent resets the query (e.g. URL navigation).
   // eslint-disable-next-line react-hooks/set-state-in-effect
   useEffect(() => { setSearch(query.q ?? '') }, [query.q])
-  // eslint-disable-next-line react-hooks/set-state-in-effect
-  useEffect(() => { setTag(query.tag ?? '') }, [query.tag])
 
   function submit() {
-    onChange({ q: search.trim(), tag: tag.trim(), page: 1 })
+    onChange({ q: search.trim(), tag: '', page: 1 })
   }
 
   function reset() {
     setSearch('')
-    setTag('')
     onChange({ source: 'all', status: 'all', q: '', tag: '', sort: 'date_scraped', direction: 'desc', page: 1, limit: 50 })
   }
 
@@ -88,15 +84,6 @@ export function Filters({ query, onChange, statusCounts }: Props) {
           onChange={e => setSearch(e.target.value)}
           onKeyDown={e => e.key === 'Enter' && submit()}
           aria-label="Search jobs"
-        />
-        <input
-          className={styles.tagInput}
-          type="text"
-          placeholder="Tag filter"
-          value={tag}
-          onChange={e => setTag(e.target.value)}
-          onKeyDown={e => e.key === 'Enter' && submit()}
-          aria-label="Filter by tag"
         />
         <select
           className={styles.select}

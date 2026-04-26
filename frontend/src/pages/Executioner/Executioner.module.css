@@ -1,0 +1,70 @@
+.page { display: flex; flex-direction: column; gap: 20px; }
+.heroTitle { font-size: 1.5rem; font-weight: 700; }
+.heroMeta  { font-size: 0.85rem; color: var(--muted); margin-top: 4px; }
+
+.panel {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  padding: 18px;
+  box-shadow: var(--shadow);
+}
+
+.panelHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 14px;
+}
+
+.panelTitle {
+  font-size: 0.78rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  color: var(--muted);
+}
+
+.badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 22px;
+  height: 22px;
+  padding: 0 6px;
+  border-radius: var(--radius-pill);
+  font-size: 0.75rem;
+  font-weight: 700;
+}
+.badgeOk   { background: var(--good-soft);    color: var(--good); }
+.badgeWarn { background: var(--warning-soft); color: var(--warning); }
+
+.tableWrap { overflow-x: auto; }
+.table { width: 100%; border-collapse: collapse; font-size: 0.875rem; }
+.table th {
+  padding: 8px 12px;
+  text-align: left;
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  color: var(--muted);
+  border-bottom: 1px solid var(--line);
+}
+.table td {
+  padding: 9px 12px;
+  border-bottom: 1px solid var(--line);
+  vertical-align: middle;
+}
+.table tr:last-child td { border-bottom: none; }
+
+.mono { font-family: var(--font-mono); font-size: 0.82rem; }
+.meta { font-size: 0.875rem; color: var(--muted); }
+
+.healthPanel {
+  background: var(--panel-strong);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  padding: 14px 16px;
+  font-size: 0.875rem;
+  color: var(--muted);
+}

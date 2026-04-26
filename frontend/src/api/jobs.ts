@@ -9,6 +9,8 @@ function buildParams(q: JobsQuery): string {
   if (q.page !== undefined) p.set('page', String(q.page))
   if (q.q) p.set('q', q.q)
   if (q.tag) p.set('tag', q.tag)
+  if (q.category) p.set('category', q.category)
+  if (q.ats_type) p.set('ats_type', q.ats_type)
   if (q.sort) p.set('sort', q.sort)
   if (q.direction) p.set('direction', q.direction)
   return p.toString()
@@ -24,6 +26,8 @@ export function fetchJobCount(q: Omit<JobsQuery, 'limit' | 'page' | 'sort' | 'di
   if (q.status) p.set('status', q.status)
   if (q.q) p.set('q', q.q)
   if (q.tag) p.set('tag', q.tag)
+  if (q.category) p.set('category', q.category)
+  if (q.ats_type) p.set('ats_type', q.ats_type)
   return get<{ count: number }>(`/api/jobs/count?${p.toString()}`)
 }
 

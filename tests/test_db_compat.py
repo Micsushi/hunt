@@ -162,6 +162,24 @@ def test_pg_sql_text_timestamp_current_timestamp_comparison_translation():
     assert "NULLIF(next_enrichment_retry_at, '')::timestamp <= CURRENT_TIMESTAMP" in result
 
 
+def test_pg_sql_sqlite_date_now_modifier_translation():
+    from hunter.db_compat import _pg_sql
+
+    result = _pg_sql("WHERE SUBSTR(date_scraped,1,10) >= DATE('now', ? || ' days')")
+    assert "DATE(" not in result
+    assert "? || ' days'" not in result
+    assert "CURRENT_DATE" in result
+    assert "(%s || ' days')::interval" in result
+
+
+def test_pg_sql_substr_translation():
+    from hunter.db_compat import _pg_sql
+
+    result = _pg_sql("SELECT SUBSTR(COALESCE(date_scraped,''),1,10) AS day")
+    assert "SUBSTR(" not in result.upper()
+    assert "substring(COALESCE(date_scraped,'') from 1 for 10)" in result
+
+
 def test_pg_cursor_rows_support_integer_indexes_for_pragma_shape():
     from hunter.db_compat import _PgRowCompat
 

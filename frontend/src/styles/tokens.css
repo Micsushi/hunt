@@ -1,37 +1,44 @@
-/* Design tokens — matches the existing control-plane color system */
 :root {
-  /* Colors */
-  --bg: #f3efe7;
-  --bg-grad-top: #f6f1e7;
-  --bg-grad-bottom: #efe8db;
-  --panel: #fffdf8;
-  --panel-strong: #fff9ef;
-  --ink: #1f2421;
-  --muted: #65706c;
-  --line: #ddd4c7;
-  --accent: #245b4e;
-  --accent-soft: #e2efe9;
-  --accent-ink: #0f3e34;
-  --warning: #845d00;
-  --warning-soft: #fff3d6;
-  --danger: #a93f31;
-  --danger-soft: #ffe6e1;
-  --good: #256b38;
-  --good-soft: #dff3e5;
-  --shadow: 0 10px 30px rgba(31, 36, 33, 0.06);
-  --shadow-raised: 0 18px 40px rgba(31, 36, 33, 0.12);
+  /* Palette: coolors.co/474a2c-636940-59a96a-9bdeac-b4e7ce */
+  --bg:             #0f1a14;
+  --bg-grad-top:    #0f1a14;
+  --bg-grad-bottom: #0b120e;
+  --panel:          #172212;
+  --panel-strong:   #1d2b18;
+  --panel-hover:    #223320;
 
-  /* Typography */
+  --ink:            #d4f0dc;
+  --muted:          #9bb69f;
+  --ink-inverse:    #07100a;
+
+  --line:           #2a3f2a;
+  --line-strong:    #3a5a3a;
+
+  --accent:         #59a96a;
+  --accent-soft:    #1e3a26;
+  --accent-ink:     #07100a;
+  --accent-dim:     #4f965f;
+
+  --good:           #9bdeac;
+  --good-soft:      #1a2e1e;
+  --warning:        #f0b429;
+  --warning-soft:   #2d2410;
+  --danger:         #f05252;
+  --danger-soft:    #2d1414;
+  --info:           #7bc4d8;
+  --info-soft:      #102030;
+
+  --shadow:         0 4px 16px rgba(0, 0, 0, 0.45);
+  --shadow-raised:  0 8px 28px rgba(0, 0, 0, 0.6);
+
   --font-sans: "Segoe UI", system-ui, -apple-system, sans-serif;
   --font-mono: Consolas, "SFMono-Regular", "SF Mono", monospace;
 
-  /* Spacing */
-  --radius-sm: 8px;
-  --radius-md: 12px;
-  --radius-lg: 16px;
-  --radius-xl: 18px;
+  --radius-sm:   6px;
+  --radius-md:   10px;
+  --radius-lg:   14px;
+  --radius-xl:   16px;
   --radius-pill: 999px;
 
-  /* Transitions */
   --ease: 140ms ease;
 }

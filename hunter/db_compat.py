@@ -103,6 +103,24 @@ def _pg_sql(query: str) -> str:
 def _translate_sqlite_functions(query: str) -> str:
     """Translate SQLite scalar functions used by Hunt into Postgres equivalents."""
     query = re.sub(
+        r"\bDATE\(\s*'now'\s*,\s*\?\s*\|\|\s*' days'\s*\)",
+        r"(CURRENT_DATE + (? || ' days')::interval)",
+        query,
+        flags=re.IGNORECASE,
+    )
+    query = re.sub(
+        r"\bSUBSTR\(\s*COALESCE\(\s*([A-Za-z_][A-Za-z0-9_\.]*)\s*,\s*''\s*\)\s*,\s*(\d+)\s*,\s*(\d+)\s*\)",
+        r"substring(COALESCE(\1,'') from \2 for \3)",
+        query,
+        flags=re.IGNORECASE,
+    )
+    query = re.sub(
+        r"\bSUBSTR\(\s*([A-Za-z_][A-Za-z0-9_\.]*)\s*,\s*(\d+)\s*,\s*(\d+)\s*\)",
+        r"substring(\1 from \2 for \3)",
+        query,
+        flags=re.IGNORECASE,
+    )
+    query = re.sub(
         r"\binstr\(\s*([A-Za-z_][A-Za-z0-9_\.]*)\s*,\s*('[^']*'|\"[^\"]*\"|[A-Za-z_][A-Za-z0-9_\.]*)\s*\)",
         r"strpos(\1, \2)",
         query,

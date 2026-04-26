@@ -1,0 +1,34 @@
+# Start backend (auto-reload) + frontend (HMR) for development.
+# Opens two new terminal windows; close either or run this script's process to stop.
+param()
+$ErrorActionPreference = "Stop"
+$root = Resolve-Path (Join-Path $PSScriptRoot "..\..")
+
+$python = if (Test-Path "$root\.venv\Scripts\python.exe") { "$root\.venv\Scripts\python.exe" }
+          elseif (Test-Path "$root\venv\Scripts\python.exe") { "$root\venv\Scripts\python.exe" }
+          else { "python" }
+
+Write-Host "[dev] Starting backend (--reload) on :8000..."
+$backend = Start-Process -FilePath $python `
+    -ArgumentList "-m", "backend.app", "--reload" `
+    -WorkingDirectory $root `
+    -PassThru -NoNewWindow
+
+Write-Host "[dev] Starting frontend (HMR) on :5173..."
+$frontend = Start-Process -FilePath "cmd.exe" `
+    -ArgumentList "/c", "npm run dev" `
+    -WorkingDirectory (Join-Path $root "frontend") `
+    -PassThru -NoNewWindow
+
+Write-Host "[dev] Both running. Press Ctrl+C to stop."
+Write-Host "[dev]   Backend:  http://localhost:8000"
+Write-Host "[dev]   Frontend: http://localhost:5173"
+
+try {
+    Wait-Process -Id $backend.Id, $frontend.Id
+} finally {
+    Write-Host "[dev] Stopping..."
+    if (!$backend.HasExited)  { Stop-Process -Id $backend.Id  -Force -ErrorAction SilentlyContinue }
+    if (!$frontend.HasExited) { Stop-Process -Id $frontend.Id -Force -ErrorAction SilentlyContinue }
+    Write-Host "[dev] Done."
+}

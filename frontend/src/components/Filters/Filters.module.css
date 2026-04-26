@@ -36,7 +36,7 @@
 .chip.active {
   background: var(--accent);
   border-color: var(--accent);
-  color: white;
+  color: var(--accent-ink);
 }
 
 .row {
@@ -51,17 +51,13 @@
   border: 1px solid var(--line);
   border-radius: var(--radius-md);
   padding: 9px 12px;
-  background: #faf5ec;
+  background: var(--panel-strong);
+  color: var(--ink);
   font-size: 0.93rem;
 }
 
-.tagInput {
-  flex: 1 1 120px;
-  border: 1px solid var(--line);
-  border-radius: var(--radius-md);
-  padding: 9px 12px;
-  background: #faf5ec;
-  font-size: 0.93rem;
+.searchInput::placeholder {
+  color: var(--muted);
 }
 
 .select {
@@ -69,7 +65,8 @@
   border: 1px solid var(--line);
   border-radius: var(--radius-md);
   padding: 9px 10px;
-  background: #faf5ec;
+  background: var(--panel-strong);
+  color: var(--ink);
   font-size: 0.93rem;
 }
 
@@ -87,7 +84,7 @@
 }
 
 .dirBtn  { background: var(--panel-strong); color: var(--ink); }
-.applyBtn { background: var(--accent); border-color: var(--accent); color: white; }
+.applyBtn { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }
 .resetBtn { background: var(--panel); color: var(--muted); }
 
 .dirBtn:hover, .resetBtn:hover { transform: translateY(-1px); background: var(--panel-strong); }
@@ -102,6 +99,7 @@
 .limitBtn {
   border: 1px solid var(--line);
   background: var(--panel);
+  color: var(--ink);
   border-radius: var(--radius-pill);
   padding: 4px 10px;
   font-size: 0.83rem;
@@ -113,5 +111,5 @@
 .limitBtn.active {
   background: var(--accent);
   border-color: var(--accent);
-  color: white;
+  color: var(--accent-ink);
 }

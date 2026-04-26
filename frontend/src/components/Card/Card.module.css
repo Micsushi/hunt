@@ -14,6 +14,7 @@
 .card.clickable:hover {
   transform: translateY(-2px);
   box-shadow: var(--shadow-raised);
+  border-color: var(--line-strong);
 }
 
 .label {

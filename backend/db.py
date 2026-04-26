@@ -196,6 +196,8 @@ def _review_jobs_filter_sql_and_params(
     query,
     linkedin_auth_available,
     operator_tag=None,
+    category=None,
+    ats_type=None,
 ):
     """Shared AND-fragment for control-plane list, counts, exports, and bulk requeue."""
     parts = []
@@ -262,6 +264,14 @@ def _review_jobs_filter_sql_and_params(
     if tag:
         parts.append(" AND lower(trim(coalesce(operator_tag, ''))) = lower(?)")
         params.append(tag)
+    category_value = (category or "").strip()
+    if category_value:
+        parts.append(" AND lower(trim(coalesce(category, 'unknown'))) = lower(?)")
+        params.append(category_value)
+    ats_type_value = (ats_type or "").strip()
+    if ats_type_value:
+        parts.append(" AND lower(trim(coalesce(ats_type, 'unknown'))) = lower(?)")
+        params.append(ats_type_value)
     return "".join(parts), params
 
 
@@ -276,6 +286,8 @@ def list_jobs_for_review(
     direction="desc",
     source=None,
     operator_tag=None,
+    category=None,
+    ats_type=None,
 ):
     linkedin_auth_available = hunter_db.is_linkedin_auth_available()
     frag, filter_params = _review_jobs_filter_sql_and_params(
@@ -284,6 +296,8 @@ def list_jobs_for_review(
         query=query,
         linkedin_auth_available=linkedin_auth_available,
         operator_tag=operator_tag,
+        category=category,
+        ats_type=ats_type,
     )
     if frag is None:
         return []
@@ -296,7 +310,7 @@ def list_jobs_for_review(
                    enrichment_attempts, enriched_at, last_enrichment_error,
                    apply_host, ats_type, last_enrichment_started_at, next_enrichment_retry_at,
                    last_artifact_dir, last_artifact_screenshot_path, last_artifact_html_path, last_artifact_text_path,
-                   date_scraped, priority, operator_notes, operator_tag
+                   date_scraped, date_posted, is_remote, level, category, priority, operator_notes, operator_tag
             FROM jobs
             WHERE 1=1
         """ + frag
@@ -347,7 +361,7 @@ def list_jobs_for_review(
         conn.close()
 
 
-def count_jobs_for_review(*, status="all", query=None, source=None, operator_tag=None):
+def count_jobs_for_review(*, status="all", query=None, source=None, operator_tag=None, category=None, ats_type=None):
     linkedin_auth_available = hunter_db.is_linkedin_auth_available()
     frag, filter_params = _review_jobs_filter_sql_and_params(
         status=status,
@@ -355,6 +369,8 @@ def count_jobs_for_review(*, status="all", query=None, source=None, operator_tag
         query=query,
         linkedin_auth_available=linkedin_auth_available,
         operator_tag=operator_tag,
+        category=category,
+        ats_type=ats_type,
     )
     if frag is None:
         return 0

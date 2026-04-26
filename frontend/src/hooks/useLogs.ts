@@ -1,10 +1,10 @@
 import { useQuery } from '@tanstack/react-query'
-import { fetchLogs } from '@/api/summary'
+import { fetchLogsQuery, type LogsQuery } from '@/api/summary'
 
-export function useLogs(refetchInterval = 30_000) {
+export function useLogs(query: LogsQuery = {}, refetchInterval: false | number = false) {
   return useQuery({
-    queryKey: ['logs'],
-    queryFn: fetchLogs,
+    queryKey: ['logs', query],
+    queryFn: () => fetchLogsQuery(query),
     refetchInterval,
     staleTime: 10_000,
   })

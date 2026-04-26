@@ -1,0 +1,83 @@
+.page { display: flex; flex-direction: column; gap: 20px; }
+.heroTitle { font-size: 1.5rem; font-weight: 700; }
+.heroMeta  { font-size: 0.85rem; color: var(--muted); margin-top: 4px; }
+
+.twoCol {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+}
+
+.panel {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  padding: 18px;
+  box-shadow: var(--shadow);
+}
+
+.panelHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 14px;
+}
+
+.panelTitle {
+  font-size: 0.78rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  color: var(--muted);
+}
+
+.formGrid { display: flex; flex-direction: column; gap: 10px; }
+
+.field { display: flex; flex-direction: column; gap: 4px; font-size: 0.875rem; }
+
+.input {
+  background: var(--panel-strong);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  padding: 8px 10px;
+  font-size: 0.875rem;
+  color: var(--ink);
+  height: 36px;
+  transition: border-color var(--ease);
+}
+.input:focus { outline: none; border-color: var(--accent); }
+
+.btn {
+  height: 36px;
+  padding: 0 16px;
+  border-radius: var(--radius-sm);
+  font-size: 0.875rem;
+  font-weight: 600;
+  border: 1px solid var(--line);
+  background: var(--panel-strong);
+  color: var(--ink);
+  cursor: pointer;
+  transition: background var(--ease), border-color var(--ease);
+}
+.btn:hover { background: var(--panel-hover); }
+.btn:disabled { opacity: 0.5; cursor: not-allowed; }
+.btnPrimary { background: var(--accent); border-color: var(--accent); color: var(--ink-inverse); }
+.btnPrimary:hover { background: var(--accent-dim); border-color: var(--accent-dim); }
+
+.pre {
+  background: var(--panel-strong);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  padding: 10px;
+  font-family: var(--font-mono);
+  font-size: 0.8rem;
+  overflow-x: auto;
+  white-space: pre-wrap;
+  word-break: break-all;
+  color: var(--ink);
+  margin-top: 10px;
+  max-height: 300px;
+  overflow-y: auto;
+}
+
+.meta { font-size: 0.85rem; color: var(--muted); }

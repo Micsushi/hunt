@@ -101,6 +101,8 @@ export interface JobsQuery {
   page?: number
   q?: string
   tag?: string
+  category?: string
+  ats_type?: string
   sort?: SortField
   direction?: SortDirection
 }

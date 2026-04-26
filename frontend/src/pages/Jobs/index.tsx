@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
+import { timeAgo } from '@/utils/time'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import { useJobs } from '@/hooks/useJobs'
 import { useSummary } from '@/hooks/useSummary'
@@ -18,6 +19,8 @@ function queryFromParams(p: URLSearchParams): JobsQuery {
     status:    p.get('status')    || 'all',
     q:         p.get('q')         || '',
     tag:       p.get('tag')       || '',
+    category:  p.get('category')  || '',
+    ats_type:  p.get('ats_type')  || '',
     sort:      (p.get('sort')     || 'date_scraped') as SortField,
     direction: (p.get('direction')|| 'desc') as SortDirection,
     limit:     parseInt(p.get('limit')  || '50', 10),
@@ -31,6 +34,8 @@ function queryToParams(q: JobsQuery): URLSearchParams {
   if (q.status)    p.set('status', q.status)
   if (q.q)         p.set('q', q.q)
   if (q.tag)       p.set('tag', q.tag)
+  if (q.category)  p.set('category', q.category)
+  if (q.ats_type)  p.set('ats_type', q.ats_type)
   if (q.sort)      p.set('sort', q.sort)
   if (q.direction) p.set('direction', q.direction)
   if (q.limit)     p.set('limit', String(q.limit))
@@ -39,19 +44,14 @@ function queryToParams(q: JobsQuery): URLSearchParams {
 }
 
 const COL_TIPS: Record<string, string> = {
-  ID:         'Database row ID — unique per job listing',
-  Queue:      '"Run next" flag: this row is prioritised in the enrichment queue',
-  Source:     'Where this job was discovered: LinkedIn or Indeed',
-  Company:    'Employer name from the job listing',
-  Title:      'Job title from the listing',
-  Links:      'View the original listing or jump to the apply page',
-  Enrichment: 'Current enrichment status — hover a badge for details',
-  'Apply type': '"external_apply" means the apply button goes to the company\'s own ATS. "easy_apply" means apply through LinkedIn - we skip those.',
-  Attempts:   'How many times enrichment has been tried on this row',
-  'Next retry': 'Earliest time the enrichment worker will try this row again',
-  'Last error': 'Most recent enrichment error code or message',
-  Note:       'Operator notes — free text you can set on the job detail page',
-  Tag:        'Operator tag — short categorical label for filtering',
+  ID:           'Database row ID',
+  Company:      'Employer name',
+  Title:        'Job title',
+  Links:        'View listing or apply page',
+  Enrichment:   'Current enrichment status',
+  'Apply type': '"external_apply" = company ATS. "easy_apply" = LinkedIn — we skip those.',
+  Attempts:     'How many enrichment attempts on this row',
+  Added:        'When this job was scraped',
 }
 
 function Th({ label, sortKey, query, onChange }: {
@@ -166,32 +166,20 @@ export function JobsPage() {
             aria-label={`Select job ${job.id}`}
           />
         </td>
-        <td className="mono" style={{ fontSize: '0.83rem', color: 'var(--muted)' }}>
+        <td className={styles.idCell}>
           <a href={`/jobs/${job.id}`} onClick={e => { e.preventDefault(); navigate(`/jobs/${job.id}`) }}>#{job.id}</a>
         </td>
-        <td>
-          {job.priority ? (
-            <span className={styles.priorityBadge} title="Flagged as 'run next' in the enrichment queue — set on the job detail page">Run next</span>
-          ) : null}
-        </td>
-        <td>{job.source ?? '—'}</td>
         <td>{job.company ?? '—'}</td>
-        <td>{job.title ?? '—'}</td>
+        <td className={styles.titleCell} title={job.title ?? undefined}>{job.title ?? '—'}</td>
         <td onClick={e => e.stopPropagation()}>
-          {job.job_url && <a href={job.job_url} target="_blank" rel="noreferrer" title="View original job listing" className={styles.extLink}>Listing ↗</a>}
+          {job.job_url && <a href={job.job_url} target="_blank" rel="noreferrer" title="View original listing" className={styles.extLink}>Listing ↗</a>}
           {job.job_url && job.apply_url && <span style={{ color: 'var(--line)', margin: '0 4px' }}>|</span>}
-          {job.apply_url && <a href={job.apply_url} target="_blank" rel="noreferrer" title="Go to application page" className={styles.extLink}>Apply ↗</a>}
+          {job.apply_url && <a href={job.apply_url} target="_blank" rel="noreferrer" title="Apply page" className={styles.extLink}>Apply ↗</a>}
         </td>
         <td><StatusBadge status={job.enrichment_status} size="sm" /></td>
-        <td>{job.apply_type?.replace(/_/g, ' ') ?? '—'}</td>
-        <td>{job.enrichment_attempts ?? 0}</td>
-        <td className="mono" style={{ fontSize: '0.8rem' }}>{job.next_enrichment_retry_at ?? '—'}</td>
-        <td style={{ maxWidth: 180, fontSize: '0.83rem', color: 'var(--muted)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
-            title={job.last_enrichment_error ?? ''}>
-          {job.last_enrichment_error ? job.last_enrichment_error.slice(0, 60) + (job.last_enrichment_error.length > 60 ? '…' : '') : '—'}
-        </td>
-        <td style={{ fontSize: '0.83rem', color: 'var(--muted)' }}>{job.operator_notes?.slice(0, 40) ?? ''}</td>
-        <td style={{ fontSize: '0.83rem', color: 'var(--muted)' }}>{job.operator_tag ?? ''}</td>
+        <td className={styles.applyType}>{job.apply_type?.replace(/_/g, ' ') ?? '—'}</td>
+        <td className={styles.numCell}>{job.enrichment_attempts ?? 0}</td>
+        <td className="mono" style={{ fontSize: '0.8rem', color: 'var(--muted)' }} title={job.date_scraped ?? undefined}>{timeAgo(job.date_scraped)}</td>
       </tr>
     )
   }
@@ -218,7 +206,7 @@ export function JobsPage() {
         <summary className={styles.advSummary}>Advanced: bulk requeue by current filters</summary>
         <div className={styles.advBody}>
           <p className="muted" style={{ fontSize: '0.88rem', marginBottom: 12 }}>
-            Requeues all rows matching your current filters (source, status, search, tag) that have status: failed, blocked, or blocked_verified.
+            Requeues all rows matching your current filters (source, status, search) that have status: failed, blocked, or blocked_verified.
             Server caps batch size.
           </p>
           <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center' }}>
@@ -269,15 +257,13 @@ export function JobsPage() {
                   key={label}
                   label={label}
                   sortKey={
-                    label === 'ID'         ? 'id'                       :
-                    label === 'Source'     ? 'source'                   :
-                    label === 'Company'    ? 'company'                  :
-                    label === 'Title'      ? 'title'                    :
-                    label === 'Enrichment' ? 'enrichment_status'        :
-                    label === 'Apply type' ? 'apply_type'               :
-                    label === 'Attempts'   ? 'enrichment_attempts'      :
-                    label === 'Next retry' ? 'next_enrichment_retry_at' :
-                    label === 'Last error' ? 'last_enrichment_error'    :
+                    label === 'ID'           ? 'id'                  :
+                    label === 'Company'      ? 'company'             :
+                    label === 'Title'        ? 'title'               :
+                    label === 'Enrichment'   ? 'enrichment_status'   :
+                    label === 'Apply type'   ? 'apply_type'          :
+                    label === 'Attempts'     ? 'enrichment_attempts' :
+                    label === 'Added'        ? 'date_scraped'        :
                     undefined
                   }
                   query={query}
@@ -288,9 +274,9 @@ export function JobsPage() {
           </thead>
           <tbody ref={tbodyRef}>
             {isLoading ? (
-              <tr><td colSpan={14} style={{ textAlign: 'center', padding: 32, color: 'var(--muted)' }}>Loading…</td></tr>
+              <tr><td colSpan={9} style={{ textAlign: 'center', padding: 32, color: 'var(--muted)' }}>Loading…</td></tr>
             ) : jobs.length === 0 ? (
-              <tr><td colSpan={14} style={{ textAlign: 'center', padding: 32, color: 'var(--muted)' }}>No jobs match this filter.</td></tr>
+              <tr><td colSpan={9} style={{ textAlign: 'center', padding: 32, color: 'var(--muted)' }}>No jobs match this filter.</td></tr>
             ) : (
               jobs.map((j, i) => renderJob(j, i))
             )}

@@ -1,45 +1,43 @@
 .shell {
-  max-width: 1200px;
+  max-width: 1280px;
   margin: 0 auto;
-  padding: 22px 20px 60px;
+  padding: 20px 24px 60px;
 }
 
 .nav {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  flex-wrap: wrap;
   gap: 10px;
-  margin-bottom: 28px;
-  padding: 12px 16px;
-  border: 1px solid rgba(221, 212, 199, 0.9);
+  margin-bottom: 24px;
+  padding: 10px 14px;
+  border: 1px solid var(--line-strong);
   border-radius: var(--radius-md);
-  background: var(--panel);
+  background: var(--panel-strong);
   box-shadow: var(--shadow);
   position: sticky;
-  top: 12px;
+  top: 10px;
   z-index: 10;
 }
 
 .navGroup {
   display: flex;
   flex-wrap: wrap;
-  gap: 6px;
+  gap: 2px;
   align-items: center;
 }
 
 .navSecondary {
   display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
+  gap: 8px;
   align-items: center;
 }
 
 .brand {
   font-weight: 800;
-  font-size: 1.05rem;
-  color: var(--accent-ink);
-  padding: 0 10px 0 4px;
+  font-size: 1rem;
+  color: var(--accent);
+  padding: 0 12px 0 4px;
   letter-spacing: -0.02em;
   user-select: none;
 }
@@ -47,47 +45,42 @@
 .navLink {
   display: inline-flex;
   align-items: center;
+  gap: 5px;
   border-radius: var(--radius-sm);
-  padding: 8px 13px;
-  color: var(--accent-ink);
-  font-weight: 700;
-  font-size: 0.9rem;
-  transition: background var(--ease), color var(--ease), transform var(--ease);
+  padding: 7px 12px;
+  color: var(--muted);
+  font-weight: 600;
+  font-size: 0.875rem;
+  transition: background var(--ease), color var(--ease);
   text-decoration: none;
 }
 
 .navLink:hover {
-  background: var(--accent-soft);
+  background: var(--panel-hover);
+  color: var(--ink);
   text-decoration: none;
 }
 
 .navLink.active {
-  background: var(--accent);
-  color: white;
-}
-
-.navLink.secondary {
-  color: var(--muted);
-  font-weight: 600;
-  font-size: 0.85rem;
+  background: var(--accent-soft);
+  color: var(--accent);
 }
 
 .username {
-  font-size: 0.82rem;
+  font-size: 0.8rem;
   color: var(--muted);
-  padding: 0 4px;
 }
 
 .logoutBtn {
   border: 1px solid var(--line);
   background: transparent;
   border-radius: var(--radius-sm);
-  padding: 6px 12px;
-  font-size: 0.83rem;
+  padding: 5px 11px;
+  font-size: 0.8rem;
   font-weight: 600;
   color: var(--muted);
   cursor: pointer;
-  transition: background var(--ease), color var(--ease);
+  transition: background var(--ease), color var(--ease), border-color var(--ease);
 }
 
 .logoutBtn:hover {
@@ -96,11 +89,18 @@
   border-color: var(--danger);
 }
 
-.main {
-  /* nothing — each page handles its own layout */
+.main { /* page handles its own layout */ }
+
+/* Status dots */
+.dot {
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  flex-shrink: 0;
 }
 
-@media (max-width: 760px) {
-  .shell { padding: 14px 12px 48px; }
-  .nav { position: static; padding: 10px 12px; }
-}
+.dotOk      { background: var(--good); }
+.dotWarn    { background: var(--warning); }
+.dotError   { background: var(--danger); }
+.dotUnknown { background: var(--line-strong); }

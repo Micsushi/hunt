@@ -6,6 +6,7 @@ import os
 import sqlite3
 import sys
 from contextlib import asynccontextmanager
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Optional
 from urllib.parse import parse_qs, parse_qsl, quote, urlencode, urlsplit, urlunsplit
@@ -2695,6 +2696,8 @@ def api_jobs_count(
     status: str = "all",
     q: str = "",
     tag: str = "",
+    category: str = "",
+    ats_type: str = "",
     _auth: str = Depends(require_auth),
 ):
     """Return total row count for current filter — used for pagination."""
@@ -2704,24 +2707,141 @@ def api_jobs_count(
         raise HTTPException(status_code=400, detail=f"Unsupported status filter: {status}")
     source_filter = None if source == "all" else source
     tag_clean = (tag or "").strip() or None
+    category_clean = (category or "").strip() or None
+    ats_type_clean = (ats_type or "").strip() or None
     total = count_jobs_for_review(
-        status=status, query=q, source=source_filter, operator_tag=tag_clean
+        status=status,
+        query=q,
+        source=source_filter,
+        operator_tag=tag_clean,
+        category=category_clean,
+        ats_type=ats_type_clean,
     )
     return JSONResponse({"count": total})
 
 
+def _parse_since_hours(value: str) -> int:
+    mapping = {"1h": 1, "6h": 6, "24h": 24, "7d": 24 * 7}
+    return mapping.get((value or "24h").strip().lower(), 24)
+
+
+def _parse_log_time(value: object) -> datetime | None:
+    if not value:
+        return None
+    text = str(value).strip()
+    if not text:
+        return None
+    if text.endswith("Z"):
+        text = text[:-1] + "+00:00"
+    try:
+        parsed = datetime.fromisoformat(text)
+    except ValueError:
+        try:
+            parsed = datetime.strptime(text, "%Y-%m-%d %H:%M:%S")
+        except ValueError:
+            return None
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=UTC)
+    return parsed.astimezone(UTC)
+
+
+def _row_is_since(value: object, cutoff: datetime) -> bool:
+    parsed = _parse_log_time(value)
+    return parsed is None or parsed >= cutoff
+
+
+def _runtime_service_for_key(key: str) -> str:
+    lowered = key.lower()
+    if "linkedin" in lowered or "enrichment" in lowered:
+        return "c1"
+    if "resume" in lowered or "fletcher" in lowered:
+        return "c2"
+    if "fill" in lowered or "c3" in lowered:
+        return "c3"
+    if "run" in lowered or "coordinator" in lowered:
+        return "c4"
+    if "db" in lowered:
+        return "db"
+    return "c0"
+
+
+def _build_log_rows(summary: dict, runtime_state: list[dict], audit: list[dict]) -> list[dict]:
+    rows: list[dict] = []
+    li = (summary.get("auth") or {}).get("linkedin") or {}
+    rows.append({
+        "at": li.get("updated_at"),
+        "service": "c1",
+        "level": "INFO" if li.get("available") is not False else "WARN",
+        "message": "LinkedIn auth ready" if li.get("available") is not False else "LinkedIn auth needs refresh",
+        "detail": li,
+    })
+    for code, count in (summary.get("failure_counts") or {}).items():
+        rows.append({
+            "at": None,
+            "service": "c1",
+            "level": "ERROR",
+            "message": f"{count} failed enrichment row(s): {code}",
+            "detail": {"error_code": code, "count": count},
+        })
+    for row in runtime_state:
+        key = str(row.get("key") or "")
+        rows.append({
+            "at": row.get("updated_at"),
+            "service": _runtime_service_for_key(key),
+            "level": "DEBUG",
+            "message": key,
+            "detail": row.get("value"),
+        })
+    for entry in audit:
+        rows.append({
+            "at": entry.get("at"),
+            "service": "c0",
+            "level": "INFO",
+            "message": str(entry.get("action") or "audit"),
+            "detail": entry.get("detail"),
+        })
+    rows.sort(key=lambda row: _parse_log_time(row.get("at")) or datetime.min.replace(tzinfo=UTC), reverse=True)
+    return rows
+
+
 @app.get("/api/logs")
-def api_logs(_auth: str = Depends(require_auth)):
+def api_logs(
+    service: str = "all",
+    level: list[str] | None = Query(default=None),
+    since: str = "24h",
+    limit: int = 100,
+    _auth: str = Depends(require_auth),
+):
     """Return everything the Logs page needs in one call."""
+    allowed_services = {"all", "c0", "c1", "c2", "c3", "c4", "db"}
+    if service not in allowed_services:
+        raise HTTPException(status_code=400, detail="Unsupported service filter.")
+    safe_limit = max(1, min(int(limit), 500))
+    safe_hours = _parse_since_hours(since)
+    allowed_levels = {"ERROR", "WARN", "INFO", "DEBUG"}
+    levels = {str(v).upper() for v in (level or []) if str(v).strip()}
+    if not levels:
+        levels = allowed_levels
+    if levels - allowed_levels:
+        raise HTTPException(status_code=400, detail="Unsupported log level filter.")
     summary = get_review_queue_summary()
-    activity = get_review_activity_summary(hours=24)
+    activity = get_review_activity_summary(hours=safe_hours)
     runtime_state = list_runtime_state_recent(limit=60)
     audit = get_review_audit_entries(limit=25)
+    rows = _build_log_rows(summary, runtime_state, audit)
+    cutoff = datetime.now(UTC) - timedelta(hours=safe_hours)
+    rows = [
+        row for row in rows
+        if (service == "all" or row["service"] == service)
+        and row["level"] in levels
+        and _row_is_since(row.get("at"), cutoff)
+    ][:safe_limit]
     return JSONResponse({
         "summary": summary,
         "activity": activity,
         "runtime_state": runtime_state,
         "audit": audit,
+        "logs": rows,
     })
 
 
@@ -2932,6 +3052,141 @@ def health():
 @app.get("/api/summary")
 def api_summary(_auth: str = Depends(require_auth)):
     return JSONResponse(get_review_queue_summary())
+
+
+@app.get("/api/summary/breakdown")
+def api_summary_breakdown(field: str = "category", _auth: str = Depends(require_auth)):
+    allowed = {"category", "ats_type", "source", "enrichment_status"}
+    if field not in allowed:
+        from fastapi import HTTPException
+        raise HTTPException(status_code=400, detail=f"field must be one of: {', '.join(sorted(allowed))}")
+    conn = get_connection()
+    try:
+        rows = conn.execute(
+            f"SELECT COALESCE(NULLIF(TRIM({field}), ''), 'unknown') AS label, COUNT(*) AS count "
+            "FROM jobs GROUP BY 1 ORDER BY count DESC"
+        ).fetchall()
+        return JSONResponse({"field": field, "data": [{"label": r["label"], "count": r["count"]} for r in rows]})
+    finally:
+        conn.close()
+
+
+@app.get("/api/summary/timeline")
+def api_summary_timeline(days: int = 30, _auth: str = Depends(require_auth)):
+    if days < 1 or days > 365:
+        from fastapi import HTTPException
+        raise HTTPException(status_code=400, detail="days must be 1–365")
+    cutoff = (datetime.now(UTC).date() - timedelta(days=days)).isoformat()
+    conn = get_connection()
+    try:
+        rows = conn.execute(
+            "SELECT SUBSTR(COALESCE(date_scraped,''),1,10) AS day, COALESCE(source,'unknown') AS source, COUNT(*) AS count "
+            "FROM jobs WHERE date_scraped IS NOT NULL AND TRIM(date_scraped) != '' "
+            "AND SUBSTR(date_scraped,1,10) >= ? "
+            "GROUP BY 1,2 ORDER BY 1 ASC",
+            (cutoff,),
+        ).fetchall()
+        return JSONResponse({"days": days, "data": [{"day": r["day"], "source": r["source"], "count": r["count"]} for r in rows]})
+    finally:
+        conn.close()
+
+
+@app.get("/api/summary/daily")
+def api_summary_daily(_auth: str = Depends(require_auth)):
+    from backend.db import get_review_activity_summary
+    activity = get_review_activity_summary(hours=24)
+    conn = get_connection()
+    try:
+        today = datetime.now(UTC).date().isoformat()
+        scraped_today = conn.execute(
+            "SELECT COUNT(*) FROM jobs WHERE SUBSTR(COALESCE(date_scraped,''),1,10) = ?", (today,)
+        ).fetchone()[0]
+        enriched_today = conn.execute(
+            "SELECT COUNT(*) FROM jobs WHERE SUBSTR(COALESCE(enriched_at,''),1,10) = ? "
+            "AND enrichment_status IN ('done','done_verified')", (today,)
+        ).fetchone()[0]
+        failed_today = conn.execute(
+            "SELECT COUNT(*) FROM jobs WHERE SUBSTR(COALESCE(enriched_at,''),1,10) = ? "
+            "AND enrichment_status = 'failed'", (today,)
+        ).fetchone()[0]
+        return JSONResponse({
+            "date": today,
+            "scraped_today": int(scraped_today or 0),
+            "enriched_today": int(enriched_today or 0),
+            "failed_today": int(failed_today or 0),
+            "enriched_24h": activity["done_or_verified"],
+            "failed_24h": activity["failed_scraped_window"],
+            "scraped_24h": activity["rows_scraped_window"],
+        })
+    finally:
+        conn.close()
+
+
+@app.get("/api/summary/velocity")
+def api_summary_velocity(_auth: str = Depends(require_auth)):
+    conn = get_connection()
+    try:
+        cut24 = (datetime.now(UTC) - timedelta(hours=24)).isoformat()
+        cut48 = (datetime.now(UTC) - timedelta(hours=48)).isoformat()
+        enriched_24h = conn.execute(
+            "SELECT COUNT(*) FROM jobs WHERE enriched_at >= ? AND enrichment_status IN ('done','done_verified')",
+            (cut24,)
+        ).fetchone()[0] or 0
+        enriched_prev = conn.execute(
+            "SELECT COUNT(*) FROM jobs WHERE enriched_at >= ? AND enriched_at < ? "
+            "AND enrichment_status IN ('done','done_verified')",
+            (cut48, cut24)
+        ).fetchone()[0] or 0
+        scraped_24h = conn.execute(
+            "SELECT COUNT(*) FROM jobs WHERE date_scraped >= ?", (cut24,)
+        ).fetchone()[0] or 0
+        delta = int(enriched_24h) - int(enriched_prev)
+        return JSONResponse({
+            "enriched_24h": int(enriched_24h),
+            "enriched_prev_24h": int(enriched_prev),
+            "scraped_24h": int(scraped_24h),
+            "jobs_per_hour": round(int(enriched_24h) / 24, 1),
+            "delta": delta,
+        })
+    finally:
+        conn.close()
+
+
+@app.get("/api/summary/queue_age")
+def api_summary_queue_age(_auth: str = Depends(require_auth)):
+    conn = get_connection()
+    try:
+        rows = conn.execute(
+            "SELECT date_scraped FROM jobs WHERE enrichment_status = 'pending' "
+            "AND date_scraped IS NOT NULL AND TRIM(date_scraped) != '' "
+            "ORDER BY date_scraped ASC"
+        ).fetchall()
+        if not rows:
+            return JSONResponse({"count": 0, "oldest_hours": None, "p50_hours": None, "p90_hours": None, "over_24h": 0})
+        now = datetime.now(UTC)
+        ages: list[float] = []
+        for r in rows:
+            try:
+                raw = str(r["date_scraped"]).replace("Z", "+00:00")
+                dt = datetime.fromisoformat(raw)
+                if dt.tzinfo is None:
+                    dt = dt.replace(tzinfo=UTC)
+                ages.append((now - dt).total_seconds() / 3600)
+            except Exception:
+                pass
+        if not ages:
+            return JSONResponse({"count": 0, "oldest_hours": None, "p50_hours": None, "p90_hours": None, "over_24h": 0})
+        ages.sort()
+        n = len(ages)
+        return JSONResponse({
+            "count": n,
+            "oldest_hours": round(ages[-1], 1),
+            "p50_hours": round(ages[n // 2], 1),
+            "p90_hours": round(ages[int(n * 0.9)], 1),
+            "over_24h": sum(1 for a in ages if a > 24),
+        })
+    finally:
+        conn.close()
 
 
 @app.get("/metrics")
@@ -3170,6 +3425,8 @@ def api_jobs(
     include_description: bool = False,
     q: str = "",
     tag: str = "",
+    category: str = "",
+    ats_type: str = "",
     sort: str = "date_scraped",
     direction: str = "desc",
     _auth: str = Depends(require_auth),
@@ -3181,6 +3438,8 @@ def api_jobs(
     safe_limit = max(1, min(limit, 250))
     safe_page = max(1, page)
     tag_clean = (tag or "").strip() or None
+    category_clean = (category or "").strip() or None
+    ats_type_clean = (ats_type or "").strip() or None
     rows = list_jobs_for_review(
         status=status,
         limit=safe_limit,
@@ -3191,6 +3450,8 @@ def api_jobs(
         direction=direction,
         source=None if source == "all" else source,
         operator_tag=tag_clean,
+        category=category_clean,
+        ats_type=ats_type_clean,
     )
     return JSONResponse(rows)
 
@@ -3204,6 +3465,8 @@ def api_jobs_export(
     page: int = 1,
     q: str = "",
     tag: str = "",
+    category: str = "",
+    ats_type: str = "",
     sort: str = "date_scraped",
     direction: str = "desc",
     _auth: str = Depends(require_auth),
@@ -3217,6 +3480,8 @@ def api_jobs_export(
     safe_limit = max(1, min(limit, 5000))
     safe_page = max(1, page)
     tag_clean = (tag or "").strip() or None
+    category_clean = (category or "").strip() or None
+    ats_type_clean = (ats_type or "").strip() or None
     rows = list_jobs_for_review(
         status=status,
         limit=safe_limit,
@@ -3227,6 +3492,8 @@ def api_jobs_export(
         direction=direction,
         source=None if source == "all" else source,
         operator_tag=tag_clean,
+        category=category_clean,
+        ats_type=ats_type_clean,
     )
     if export_format == "json":
         return JSONResponse(rows)
@@ -3838,10 +4105,20 @@ async def requeue_job_post(job_id: int, request: Request):
 
 
 def main():
-    init_db(maintenance=False)
+    import argparse
     import uvicorn
 
-    uvicorn.run(app, host=REVIEW_APP_HOST, port=REVIEW_APP_PORT)
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--reload", action="store_true", help="Enable auto-reload on file changes (dev mode)")
+    args, _ = parser.parse_known_args()
+
+    init_db(maintenance=False)
+    uvicorn.run(
+        "backend.app:app" if args.reload else app,
+        host=REVIEW_APP_HOST,
+        port=REVIEW_APP_PORT,
+        reload=args.reload,
+    )
 
 
 # ---------------------------------------------------------------------------
