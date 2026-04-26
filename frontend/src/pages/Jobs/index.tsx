@@ -169,15 +169,15 @@ export function JobsPage() {
         <td className={styles.idCell}>
           <a href={`/jobs/${job.id}`} onClick={e => { e.preventDefault(); navigate(`/jobs/${job.id}`) }}>#{job.id}</a>
         </td>
-        <td>{job.company ?? '—'}</td>
-        <td className={styles.titleCell} title={job.title ?? undefined}>{job.title ?? '—'}</td>
+        <td className={styles.companyCell} title={job.company ?? undefined}>{job.company ?? '-'}</td>
+        <td className={styles.titleCell} title={job.title ?? undefined}>{job.title ?? '-'}</td>
         <td onClick={e => e.stopPropagation()}>
           {job.job_url && <a href={job.job_url} target="_blank" rel="noreferrer" title="View original listing" className={styles.extLink}>Listing ↗</a>}
           {job.job_url && job.apply_url && <span style={{ color: 'var(--line)', margin: '0 4px' }}>|</span>}
           {job.apply_url && <a href={job.apply_url} target="_blank" rel="noreferrer" title="Apply page" className={styles.extLink}>Apply ↗</a>}
         </td>
         <td><StatusBadge status={job.enrichment_status} size="sm" /></td>
-        <td className={styles.applyType}>{job.apply_type?.replace(/_/g, ' ') ?? '—'}</td>
+        <td className={styles.applyType}>{job.apply_type?.replace(/_/g, ' ') ?? '-'}</td>
         <td className={styles.numCell}>{job.enrichment_attempts ?? 0}</td>
         <td className="mono" style={{ fontSize: '0.8rem', color: 'var(--muted)' }} title={job.date_scraped ?? undefined}>{timeAgo(job.date_scraped)}</td>
       </tr>

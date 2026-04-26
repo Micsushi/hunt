@@ -485,6 +485,44 @@ def update_job_operator_meta(job_id, *, notes=hunter_db._UNSET, operator_tag=hun
         conn.close()
 
 
+_PATCHABLE_JOB_FIELDS = {
+    "company", "title", "location", "level", "category", "is_remote",
+    "description", "description_source", "operator_notes", "operator_tag",
+}
+
+
+def init_hunt_extras():
+    """Run safe column migrations on startup."""
+    conn = hunter_db.get_connection()
+    try:
+        try:
+            conn.execute("ALTER TABLE jobs ADD COLUMN description_source TEXT DEFAULT NULL")
+            conn.commit()
+        except Exception:
+            pass
+    finally:
+        conn.close()
+
+
+def patch_job(job_id: int, fields: dict) -> int:
+    allowed = {k: v for k, v in fields.items() if k in _PATCHABLE_JOB_FIELDS}
+    if not allowed:
+        return 0
+    assignments = [f"{k} = ?" for k in allowed]
+    params = list(allowed.values()) + [job_id]
+    conn = hunter_db.get_connection()
+    try:
+        cursor = conn.cursor()
+        cursor.execute(
+            f"UPDATE jobs SET {', '.join(assignments)} WHERE id = ?",
+            tuple(params),
+        )
+        conn.commit()
+        return cursor.rowcount
+    finally:
+        conn.close()
+
+
 def list_runtime_state_recent(*, limit=40):
     safe_limit = max(1, min(int(limit), 200))
     conn = hunter_db.get_connection()

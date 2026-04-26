@@ -44,7 +44,7 @@ export function ExecutionerPage() {
                 {fills.map(fill => (
                   <tr key={fill.run_id}>
                     <td className={styles.mono}>{fill.run_id}</td>
-                    <td>{fill.job_id ?? '—'}</td>
+                    <td>{fill.job_id ?? '-'}</td>
                     <td>{fill.ats_type ?? 'unknown'}</td>
                     <td className={styles.mono} style={{ color: 'var(--muted)' }}>
                       {timeAgo((fill as Record<string, unknown>).created_at as string | null)}

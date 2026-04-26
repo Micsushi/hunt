@@ -9,9 +9,8 @@ $python = if (Test-Path "$root\.venv\Scripts\python.exe") { "$root\.venv\Scripts
           else { "python" }
 
 Write-Host "[dev] Starting backend (--reload) on :8000..."
-$env:HUNT_DEV_MODE = "1"
-$backend = Start-Process -FilePath $python `
-    -ArgumentList "-m", "backend.app", "--reload" `
+$backend = Start-Process -FilePath "cmd.exe" `
+    -ArgumentList "/c", "set HUNT_DEV_MODE=1 && `"$python`" -m backend.app --reload" `
     -WorkingDirectory $root `
     -PassThru -NoNewWindow
 

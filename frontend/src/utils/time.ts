@@ -1,5 +1,5 @@
 export function timeAgo(value: string | null | undefined): string {
-  if (!value) return '—'
+  if (!value) return '-'
   const d = new Date(value)
   if (isNaN(d.getTime())) return value
   const s = Math.floor((Date.now() - d.getTime()) / 1000)

@@ -54,6 +54,8 @@ from backend.db import (  # noqa: E402
     get_review_queue_summary,
     list_jobs_for_review,
     list_runtime_state_recent,
+    init_hunt_extras,
+    patch_job,
     set_job_priority,
     update_job_operator_meta,
 )
@@ -180,6 +182,7 @@ FRONTEND_DIST = Path(REPO_ROOT) / "frontend" / "dist"
 @asynccontextmanager
 async def lifespan(app):
     init_db(maintenance=False)
+    init_hunt_extras()
     init_sessions_table()
     purge_expired_sessions()
     if not ADMIN_PASSWORD:
@@ -3570,6 +3573,36 @@ def api_jobs_export(
     )
 
 
+@app.delete("/api/jobs/{job_id}", dependencies=[Depends(review_ops_dependency)])
+def api_delete_job(job_id: int):
+    row = get_job_by_id(job_id)
+    if not row:
+        raise HTTPException(status_code=404, detail="Job not found.")
+    deleted = delete_jobs_by_ids([job_id])
+    return JSONResponse({"status": "ok", "deleted": deleted})
+
+
+@app.get("/api/jobs/{job_id}/adjacent")
+def api_job_adjacent(job_id: int, _auth: str = Depends(require_auth)):
+    """Return prev/next job IDs by insertion order, wrapping around."""
+    conn = get_connection()
+    try:
+        cur = conn.cursor()
+        cur.execute("SELECT id FROM jobs ORDER BY id")
+        ids = [r[0] for r in cur.fetchall()]
+    finally:
+        conn.close()
+    if not ids:
+        return JSONResponse({"prev_id": None, "next_id": None})
+    try:
+        idx = ids.index(job_id)
+    except ValueError:
+        return JSONResponse({"prev_id": None, "next_id": None})
+    prev_id = ids[(idx - 1) % len(ids)]
+    next_id = ids[(idx + 1) % len(ids)]
+    return JSONResponse({"prev_id": prev_id, "next_id": next_id})
+
+
 @app.get("/api/jobs/{job_id}")
 def api_job(job_id: int, _auth: str = Depends(require_auth)):
     row = get_job_by_id(job_id)
@@ -3753,6 +3786,24 @@ def _serve_attempt_artifact(attempt_id: int, path_field: str, media_type: str):
     if not artifact_path.exists():
         raise HTTPException(status_code=404, detail="File not found on disk.")
     return FileResponse(artifact_path, media_type=media_type)
+
+
+@app.patch("/api/jobs/{job_id}", dependencies=[Depends(review_ops_dependency)])
+def api_patch_job(job_id: int, payload: dict = Body(...)):
+    row = get_job_by_id(job_id)
+    if not row:
+        raise HTTPException(status_code=404, detail="Job not found.")
+    allowed = {
+        "company", "title", "location", "level", "category", "is_remote",
+        "description", "description_source", "operator_notes", "operator_tag",
+    }
+    fields = {k: v for k, v in payload.items() if k in allowed}
+    if not fields:
+        raise HTTPException(status_code=400, detail="No patchable fields provided.")
+    updated = patch_job(job_id, fields)
+    if updated != 1:
+        raise HTTPException(status_code=404, detail="Job not found.")
+    return JSONResponse({"status": "ok", "job_id": job_id, "updated": list(fields.keys())})
 
 
 @app.post("/api/jobs/{job_id}/requeue", dependencies=[Depends(review_ops_dependency)])
@@ -4171,6 +4222,7 @@ def main():
     args, _ = parser.parse_known_args()
 
     init_db(maintenance=False)
+    init_hunt_extras()
     uvicorn.run(
         "backend.app:app" if args.reload else app,
         host=REVIEW_APP_HOST,

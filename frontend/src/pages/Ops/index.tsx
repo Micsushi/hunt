@@ -267,7 +267,7 @@ export function OpsPage() {
                     <td>{s.component.toUpperCase()}</td>
                     <td className="mono">{s.key}</td>
                     <td>{s.secret ? (s.has_value ? 'redacted' : 'empty') : (s.value || 'empty')}</td>
-                    <td className="mono">{s.updated_at ?? '—'}</td>
+                    <td className="mono">{s.updated_at ?? '-'}</td>
                   </tr>
                 ))}
               </tbody>

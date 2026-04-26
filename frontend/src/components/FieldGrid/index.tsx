@@ -20,7 +20,7 @@ export function FieldGrid({ fields }: Props) {
         <div key={i} className={`${styles.field} ${f.span ? styles.span : ''}`} title={f.tooltip}>
           <div className={styles.label}>{f.label}</div>
           <div className={`${styles.value} ${f.mono ? 'mono' : ''}`}>
-            {f.value ?? <span className="muted">—</span>}
+            {f.value ?? <span className="muted">-</span>}
           </div>
         </div>
       ))}

@@ -204,7 +204,7 @@ function TimelineChart() {
 }
 
 function fmt(hours: number | null): string {
-  if (hours === null) return '—'
+  if (hours === null) return '-'
   if (hours < 24) return `${hours}h`
   return `${Math.round(hours / 24)}d`
 }
@@ -224,12 +224,12 @@ function DailyDigestPanel() {
       </div>
       {isError ? <p className={styles.empty} style={{ color: 'var(--danger)' }}>Failed to load</p> : (
         <div className={styles.statGrid}>
-          <div className={styles.statBox}><span className={styles.statVal}>{data?.scraped_today ?? '—'}</span><span className={styles.statLbl}>Scraped today</span></div>
-          <div className={styles.statBox}><span className={styles.statVal} style={{ color: 'var(--good)' }}>{data?.enriched_today ?? '—'}</span><span className={styles.statLbl}>Enriched today</span></div>
-          <div className={styles.statBox}><span className={styles.statVal} style={{ color: data?.failed_today ? 'var(--danger)' : undefined }}>{data?.failed_today ?? '—'}</span><span className={styles.statLbl}>Failed today</span></div>
-          <div className={styles.statBox}><span className={styles.statVal}>{data?.scraped_24h ?? '—'}</span><span className={styles.statLbl}>Scraped 24h</span></div>
-          <div className={styles.statBox}><span className={styles.statVal} style={{ color: 'var(--good)' }}>{data?.enriched_24h ?? '—'}</span><span className={styles.statLbl}>Enriched 24h</span></div>
-          <div className={styles.statBox}><span className={styles.statVal} style={{ color: data?.failed_24h ? 'var(--danger)' : undefined }}>{data?.failed_24h ?? '—'}</span><span className={styles.statLbl}>Failed 24h</span></div>
+          <div className={styles.statBox}><span className={styles.statVal}>{data?.scraped_today ?? '-'}</span><span className={styles.statLbl}>Scraped today</span></div>
+          <div className={styles.statBox}><span className={styles.statVal} style={{ color: 'var(--good)' }}>{data?.enriched_today ?? '-'}</span><span className={styles.statLbl}>Enriched today</span></div>
+          <div className={styles.statBox}><span className={styles.statVal} style={{ color: data?.failed_today ? 'var(--danger)' : undefined }}>{data?.failed_today ?? '-'}</span><span className={styles.statLbl}>Failed today</span></div>
+          <div className={styles.statBox}><span className={styles.statVal}>{data?.scraped_24h ?? '-'}</span><span className={styles.statLbl}>Scraped 24h</span></div>
+          <div className={styles.statBox}><span className={styles.statVal} style={{ color: 'var(--good)' }}>{data?.enriched_24h ?? '-'}</span><span className={styles.statLbl}>Enriched 24h</span></div>
+          <div className={styles.statBox}><span className={styles.statVal} style={{ color: data?.failed_24h ? 'var(--danger)' : undefined }}>{data?.failed_24h ?? '-'}</span><span className={styles.statLbl}>Failed 24h</span></div>
         </div>
       )}
     </div>
@@ -254,9 +254,9 @@ function PipelineVelocityPanel() {
       </div>
       {isError ? <p className={styles.empty} style={{ color: 'var(--danger)' }}>Failed to load</p> : (
         <div className={styles.statGrid}>
-          <div className={styles.statBox}><span className={styles.statVal}>{data?.jobs_per_hour ?? '—'}</span><span className={styles.statLbl}>Jobs / hour</span></div>
-          <div className={styles.statBox}><span className={styles.statVal} style={{ color: 'var(--good)' }}>{data?.enriched_24h ?? '—'}</span><span className={styles.statLbl}>Enriched 24h</span></div>
-          <div className={styles.statBox}><span className={styles.statVal}>{data?.scraped_24h ?? '—'}</span><span className={styles.statLbl}>Scraped 24h</span></div>
+          <div className={styles.statBox}><span className={styles.statVal}>{data?.jobs_per_hour ?? '-'}</span><span className={styles.statLbl}>Jobs / hour</span></div>
+          <div className={styles.statBox}><span className={styles.statVal} style={{ color: 'var(--good)' }}>{data?.enriched_24h ?? '-'}</span><span className={styles.statLbl}>Enriched 24h</span></div>
+          <div className={styles.statBox}><span className={styles.statVal}>{data?.scraped_24h ?? '-'}</span><span className={styles.statLbl}>Scraped 24h</span></div>
           <div className={styles.statBox}>
             <span className={styles.statVal} style={{ color: arrowColor }}>{arrow} {Math.abs(delta)}</span>
             <span className={styles.statLbl}>vs prev 24h</span>
@@ -288,7 +288,7 @@ function QueueAgePanel() {
           <div className={styles.statBox}><span className={styles.statVal}>{fmt(data?.p90_hours ?? null)}</span><span className={styles.statLbl}>P90</span></div>
           <div className={styles.statBox}>
             <span className={styles.statVal} style={{ color: over24Pct > 20 ? 'var(--warning)' : undefined }}>
-              {data?.over_24h ?? '—'}
+              {data?.over_24h ?? '-'}
               {data && data.count > 0 ? <span style={{ fontSize: '0.75rem', marginLeft: 4, color: 'var(--muted)' }}>{over24Pct}%</span> : null}
             </span>
             <span className={styles.statLbl}>Over 24h</span>

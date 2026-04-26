@@ -5,7 +5,7 @@ import styles from './Logs.module.css'
 
 function JsonExpander({ value }: { value: unknown }) {
   const [open, setOpen] = useState(false)
-  if (value === null || value === undefined || value === '') return <span className={styles.muted}>—</span>
+  if (value === null || value === undefined || value === '') return <span className={styles.muted}>-</span>
   const text = typeof value === 'string' ? value : JSON.stringify(value)
   const short = text.length > 96 ? text.slice(0, 96) + '…' : text
   return (

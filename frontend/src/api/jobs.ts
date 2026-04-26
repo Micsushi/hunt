@@ -1,4 +1,4 @@
-import { get, post } from './client'
+import { get, patch, post, del } from './client'
 import type { Job, JobDetail, JobsQuery, ResumeAttempt } from '@/types/job'
 
 function buildParams(q: JobsQuery): string {
@@ -53,6 +53,31 @@ export function setJobOperatorMeta(
 ): Promise<{ status: string }> {
   return post(`/api/jobs/${id}/operator-meta`, data)
 }
+
+export type PatchableJobFields = Partial<{
+  company: string | null
+  title: string | null
+  location: string | null
+  level: string | null
+  category: string | null
+  is_remote: number | null
+  description: string | null
+  operator_notes: string | null
+  operator_tag: string | null
+}>
+
+export function patchJob(id: number, fields: PatchableJobFields): Promise<{ status: string }> {
+  return patch(`/api/jobs/${id}`, fields)
+}
+
+export function fetchAdjacentJobs(id: number): Promise<{ prev_id: number | null; next_id: number | null }> {
+  return get(`/api/jobs/${id}/adjacent`)
+}
+
+export function deleteJob(id: number): Promise<{ status: string }> {
+  return del(`/api/jobs/${id}`)
+}
+
 
 export function bulkSelection(payload: {
   action: 'requeue' | 'set_status' | 'delete'

@@ -79,7 +79,7 @@ export function CoordinatorPage() {
                   return (
                     <tr key={runId}>
                       <td className={styles.mono}>{runId}</td>
-                      <td>{run.job_id ?? '—'}</td>
+                      <td>{run.job_id ?? '-'}</td>
                       <td>{run.status ?? 'unknown'}</td>
                       <td className={styles.mono}>{timeAgo(String(run.updated_at ?? run.created_at ?? ''))}</td>
                       <td>
