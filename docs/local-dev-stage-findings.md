@@ -99,3 +99,21 @@ Findings:
   - C2 status: `{"service":"c2-fletcher","generate_running":false}`.
   - C4 status: `{"detail":"Service unavailable: http://coordinator:8003/status"}`.
   - `/api/fletcher/tailor`: `HTTP 200`, 42 KB PDF, `file` reports `PDF document, version 1.7`.
+
+## Stage 5: final verification
+
+Status: complete.
+
+Findings:
+- Default UI-only behavior is mock-backed and does not require backend, DB, or Docker.
+- WSL shell env vars do not propagate cleanly into Windows npm/Vite. For direct smoke testing from WSL, `cmd.exe /C "set VITE_MOCK_BACKEND=true&& npm run vite:raw -- --host 127.0.0.1"` correctly starts mock mode.
+- `npm run dev` uses `scripts/dev-mode.ps1 ui`, which sets `VITE_MOCK_BACKEND=true` inside PowerShell for normal Windows use.
+- `dev:all` intentionally does not start coordinator/C4. C3 is still the manual extension bridge rather than a Docker service.
+- Verification:
+  - `.venv/Scripts/python.exe -m pytest tests/test_db_compat.py tests/test_new_tables.py tests/test_local_dev_modes.py -q`: 30 passed.
+  - `cd frontend && npm run typecheck`: exit 0.
+  - `cd frontend && npm run build`: exit 0. Vite chunk-size warning only.
+  - `docker compose -f docker-compose.pipeline.yml config --profiles`: `all`, `c0`, `c1c2`, `db`, `pipeline`.
+  - Mock UI browser smoke: `/`, `/jobs`, `/jobs/1`, `/logs`, `/ops`, `/fletcher`, `/executioner`, `/coordinator` all returned HTTP 200 and showed the mock banner.
+  - Mock job exports: CSV and JSON links were `data:` URLs.
+  - Final running compose check: Postgres, review/C0, hunter/C1, and fletcher/C2 only; no coordinator/C4 or frontend containers.
