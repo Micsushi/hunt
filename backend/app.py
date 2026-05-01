@@ -1673,7 +1673,7 @@ def render_resume_keywords_panel(row, attempts):
 
 
 def _load_summary_for_attempt(attempt: dict) -> str | None:
-    """Load the AI-generated summary from summary_rewrite.json in the attempt dir."""
+    """Load the resume summary from summary_rewrite.json in the attempt dir."""
     pdf_path = attempt.get("pdf_path") or attempt.get("tex_path")
     if not pdf_path:
         return None
@@ -1688,7 +1688,7 @@ def _load_summary_for_attempt(attempt: dict) -> str | None:
 
 
 def render_ai_summary_panel(attempts: list) -> str:
-    """Prominent card showing the latest AI-generated summary paragraph."""
+    """Prominent card showing the latest resume summary paragraph."""
     if not RESUME_TAILOR_AVAILABLE or not attempts:
         return ""
 
@@ -1733,8 +1733,8 @@ def render_ai_summary_panel(attempts: list) -> str:
 
     return f"""
     <div class="panel">
-      <h2>AI-generated summary {status_badge}</h2>
-      <p class="muted" style="margin-top:0;margin-bottom:12px;">Generated from mid-tier JD keywords. Not added to the resume — review only.</p>
+      <h2>Resume summary {status_badge}</h2>
+      <p class="muted" style="margin-top:0;margin-bottom:12px;">Generated from mid-tier JD keywords. Not added to the resume - review only.</p>
       {body}
     </div>
     """
