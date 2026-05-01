@@ -28,8 +28,8 @@ services:
     environment:
       HUNT_DB_URL: postgresql://hunt:hunt@postgres:5432/hunt
       HUNT_SERVICE_TOKEN: hunt-local-smoke-token
-      HUNT_ADMIN_USERNAME: admin
-      HUNT_ADMIN_PASSWORD: hunt-local-admin
+      HUNT_ADMIN_USERNAME: ${HUNT_ADMIN_USERNAME:-admin}
+      HUNT_ADMIN_PASSWORD: ${HUNT_ADMIN_PASSWORD:-hunt-local-admin}
       HUNT_CREDENTIAL_KEY: 472Pa6u8kvZjh58A3oN7v026YL-KxALGTo41gH4TBZM=
       HUNT_HUNTER_URL: http://hunter:8001
       HUNT_FLETCHER_URL: http://fletcher:8002
