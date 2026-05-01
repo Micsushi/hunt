@@ -27,7 +27,6 @@ if ($Mode -eq "ui") {
 if ($Mode -eq "db") {
   Start-ComposeProfile "db"
   $env:VITE_MOCK_BACKEND = "true"
-  $env:VITE_LOCAL_DB = "true"
   Start-Vite
   exit
 }
