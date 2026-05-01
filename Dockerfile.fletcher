@@ -5,6 +5,17 @@ ENV PYTHONUNBUFFERED=1
 
 WORKDIR /app
 
+RUN apt-get update \
+  && apt-get install -y --no-install-recommends \
+      lmodern \
+      texlive-fonts-extra \
+      poppler-utils \
+      texlive-fonts-recommended \
+      texlive-latex-base \
+      texlive-latex-extra \
+      texlive-latex-recommended \
+  && rm -rf /var/lib/apt/lists/*
+
 COPY hunter/requirements.txt /tmp/requirements.txt
 RUN pip install --no-cache-dir -r /tmp/requirements.txt
 

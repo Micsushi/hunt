@@ -74,4 +74,28 @@ Findings:
 
 ## Stage 4: C1/C2 local service mode
 
-Status: not started.
+Status: complete.
+
+Findings:
+- `docker compose -f docker-compose.pipeline.yml --profile c1c2 up -d --build` starts only:
+  - `hunt-postgres-1`
+  - `hunt-review-1`
+  - `hunt-hunter-1`
+  - `hunt-fletcher-1`
+- It does not start coordinator/C4 or frontend containers.
+- C0 remains usable when C4 is absent; `/api/gateway/c4/status` returns service unavailable instead of preventing startup.
+- C1 gateway status and queue work through C0.
+- C2 gateway status works through C0.
+- First real resume download smoke reached Fletcher but failed with `tool_missing`: `pdflatex not found`.
+- Added LaTeX runtime packages to both `Dockerfile.review` and `Dockerfile.fletcher`.
+- Second smoke failed on `fontawesome5.sty` missing; added `texlive-fonts-extra`.
+- Tradeoff: `texlive-fonts-extra` is large. It downloaded about 624 MB and made the LaTeX layer heavy, but it is required by the current base resume template icons.
+- Final real resume smoke posted `fletcher/base_resumes/software/main.tex` through C0 `/api/fletcher/tailor` and received a real PDF.
+- Verification:
+  - `docker compose -f docker-compose.pipeline.yml ps`: Postgres, review, hunter, and fletcher only.
+  - C0 login: `{"status":"ok","username":"admin"}`.
+  - C1 status: `{"service":"c1-hunter", ...}`.
+  - C1 queue: `{"pending":0,"ready":0}`.
+  - C2 status: `{"service":"c2-fletcher","generate_running":false}`.
+  - C4 status: `{"detail":"Service unavailable: http://coordinator:8003/status"}`.
+  - `/api/fletcher/tailor`: `HTTP 200`, 42 KB PDF, `file` reports `PDF document, version 1.7`.
