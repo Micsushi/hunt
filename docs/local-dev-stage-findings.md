@@ -54,4 +54,24 @@ Findings:
 
 ## Stage 3: UI-only mock mode
 
+Status: complete.
+
+Findings:
+- Added `frontend/src/mocks/data.ts` and `frontend/src/mocks/client.ts`.
+- `VITE_MOCK_BACKEND=true` now intercepts shared API client `get/post/patch/delete`.
+- Raw fetch helpers are handled:
+  - `auth.login()` returns immediately in mock mode.
+  - `tailorResume()` returns a fake resume text `Blob` in mock mode.
+- App skips auth fetch in mock mode and shows fixed mock banner.
+- Jobs CSV/JSON exports use data URLs in mock mode; real backend links remain for DB-backed modes.
+- Resume/artifact mock fixture paths are null so backend artifact links stay hidden unless real backend data exists.
+- Build type gap found: `ImportMeta.env` needed Vite client type reference in `frontend/src/declarations.d.ts`.
+- Verification:
+  - `cd frontend && npm run typecheck`: exit 0.
+  - Playwright route smoke against `npm run dev`: `/`, `/jobs`, `/jobs/1`, `/logs`, `/ops`, `/fletcher`, `/executioner`, `/coordinator` all HTTP 200.
+  - Playwright export check: CSV and JSON hrefs are `data:` URLs in mock mode.
+  - `cd frontend && npm run build`: exit 0. Vite chunk-size warning only.
+
+## Stage 4: C1/C2 local service mode
+
 Status: not started.

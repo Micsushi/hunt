@@ -13,6 +13,8 @@ import { FletcherPage } from '@/pages/Fletcher'
 import { ExecutionerPage } from '@/pages/Executioner'
 import { CoordinatorPage } from '@/pages/Coordinator'
 
+const MOCK = import.meta.env.VITE_MOCK_BACKEND === 'true'
+
 function AuthGuard({ children, username }: { children: React.ReactNode; username: string | null }) {
   const location = useLocation()
   if (username === null) {
@@ -25,10 +27,11 @@ export default function App() {
   const location = useLocation()
   // null = not yet known, '' = not logged in, string = username
   const [username, setUsername] = useState<string | null | undefined>(
-    location.pathname === '/login' ? null : undefined
+    MOCK ? 'dev' : (location.pathname === '/login' ? null : undefined)
   )
 
   useEffect(() => {
+    if (MOCK) return
     // skip the check on the login page itself to avoid redirect loops
     if (location.pathname === '/login') return
     fetchAuthStatus()
@@ -41,6 +44,23 @@ export default function App() {
 
   return (
     <>
+      {MOCK && (
+        <div style={{
+          position: 'fixed',
+          top: 0,
+          left: 0,
+          right: 0,
+          zIndex: 9999,
+          background: '#f59e0b',
+          color: '#000',
+          textAlign: 'center',
+          fontSize: '12px',
+          padding: '2px 0',
+          fontWeight: 600,
+        }}>
+          MOCK MODE - changes not persisted
+        </div>
+      )}
       <Routes>
         <Route path="/login" element={
           username ? <Navigate to="/" replace /> : <LoginPage />

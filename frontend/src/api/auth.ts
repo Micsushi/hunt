@@ -1,11 +1,14 @@
 import { get, post } from './client'
 import type { AuthStatus } from '@/types/summary'
 
+const MOCK = import.meta.env.VITE_MOCK_BACKEND === 'true'
+
 export function fetchAuthStatus(): Promise<AuthStatus> {
   return get<AuthStatus>('/auth/me')
 }
 
 export async function login(username: string, password: string): Promise<void> {
+  if (MOCK) return
   const form = new URLSearchParams()
   form.set('username', username)
   form.set('password', password)

@@ -1,5 +1,7 @@
 import { get, post } from './client'
 
+const MOCK = import.meta.env.VITE_MOCK_BACKEND === 'true'
+
 export type ComponentId = 'c0' | 'c1' | 'c2' | 'c3' | 'c4'
 
 export interface ComponentStatus {
@@ -118,6 +120,19 @@ export function triggerC2Generate(jobId: number): Promise<unknown> {
 }
 
 export function tailorResume(params: { jobDetails: string; personalDetails: string; resume?: File | null }): Promise<Blob> {
+  if (MOCK) {
+    const text = [
+      'Hunt mock tailored resume',
+      '',
+      'Job details:',
+      params.jobDetails || '(empty)',
+      '',
+      'Personal details:',
+      params.personalDetails || '(empty)',
+    ].join('\n')
+    return Promise.resolve(new Blob([text], { type: 'text/plain;charset=utf-8' }))
+  }
+
   const form = new FormData()
   form.append('job_details', params.jobDetails)
   form.append('personal_details', params.personalDetails)

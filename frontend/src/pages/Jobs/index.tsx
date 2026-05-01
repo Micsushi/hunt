@@ -13,6 +13,8 @@ import { useQueryClient } from '@tanstack/react-query'
 import styles from './Jobs.module.css'
 import type { JobsQuery, SortField, SortDirection, Job } from '@/types/job'
 
+const MOCK = import.meta.env.VITE_MOCK_BACKEND === 'true'
+
 function queryFromParams(p: URLSearchParams): JobsQuery {
   return {
     source:    p.get('source')    || 'all',
@@ -41,6 +43,14 @@ function queryToParams(q: JobsQuery): URLSearchParams {
   if (q.limit)     p.set('limit', String(q.limit))
   if (q.page)      p.set('page', String(q.page))
   return p
+}
+
+function mockDownloadHref(format: 'csv' | 'json'): string {
+  const content = format === 'csv'
+    ? 'id,company,title,status\n1,Acme Corp,Senior Software Engineer,done\n'
+    : JSON.stringify([{ id: 1, company: 'Acme Corp', title: 'Senior Software Engineer', status: 'done' }], null, 2)
+  const type = format === 'csv' ? 'text/csv' : 'application/json'
+  return `data:${type};charset=utf-8,${encodeURIComponent(content)}`
 }
 
 const COL_TIPS: Record<string, string> = {
@@ -221,14 +231,16 @@ export function JobsPage() {
           <div style={{ marginTop: 12, display: 'flex', gap: 8 }}>
             <a
               className={styles.exportBtn}
-              href={`/api/jobs/export?format=csv&${queryToParams(query).toString()}`}
+              href={MOCK ? mockDownloadHref('csv') : `/api/jobs/export?format=csv&${queryToParams(query).toString()}`}
+              download={MOCK ? 'hunt-mock-jobs.csv' : undefined}
               title="Download current filtered results as CSV"
             >
               Download CSV
             </a>
             <a
               className={styles.exportBtn}
-              href={`/api/jobs/export?format=json&${queryToParams(query).toString()}`}
+              href={MOCK ? mockDownloadHref('json') : `/api/jobs/export?format=json&${queryToParams(query).toString()}`}
+              download={MOCK ? 'hunt-mock-jobs.json' : undefined}
               title="Download current filtered results as JSON"
             >
               Download JSON

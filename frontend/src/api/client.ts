@@ -1,5 +1,9 @@
 /** Base fetch wrapper — sends credentials (session cookie) on every request */
 
+import { mockDel, mockGet, mockPatch, mockPost } from '@/mocks/client'
+
+const MOCK = import.meta.env.VITE_MOCK_BACKEND === 'true'
+
 export class ApiError extends Error {
   constructor(
     public status: number,
@@ -34,6 +38,7 @@ async function handleResponse<T>(res: Response): Promise<T> {
 }
 
 export async function get<T>(path: string): Promise<T> {
+  if (MOCK) return mockGet<T>(path)
   const res = await fetch(path, {
     credentials: 'include',
     headers: { Accept: 'application/json' },
@@ -42,6 +47,7 @@ export async function get<T>(path: string): Promise<T> {
 }
 
 export async function post<T>(path: string, body?: unknown): Promise<T> {
+  if (MOCK) return mockPost<T>(path)
   const res = await fetch(path, {
     method: 'POST',
     credentials: 'include',
@@ -55,6 +61,7 @@ export async function post<T>(path: string, body?: unknown): Promise<T> {
 }
 
 export async function patch<T>(path: string, body: unknown): Promise<T> {
+  if (MOCK) return mockPatch<T>()
   const res = await fetch(path, {
     method: 'PATCH',
     credentials: 'include',
@@ -68,6 +75,7 @@ export async function patch<T>(path: string, body: unknown): Promise<T> {
 }
 
 export async function del<T>(path: string, body?: unknown): Promise<T> {
+  if (MOCK) return mockDel<T>()
   const res = await fetch(path, {
     method: 'DELETE',
     credentials: 'include',
