@@ -33,4 +33,25 @@ Findings:
 
 ## Stage 2: layered frontend commands
 
+Status: complete.
+
+Findings:
+- Added `scripts/dev-mode.ps1` as Windows launcher for modes `ui`, `db`, `c0`, `c1c2`, `all`.
+- Added npm scripts:
+  - `dev`
+  - `dev:db`
+  - `dev:c0`
+  - `dev:c1c2`
+  - `dev:all`
+  - `vite:raw`
+- Used `powershell.exe -NoProfile` in npm scripts so WSL/Git Bash invoking Windows npm can still resolve the shell.
+- Vite proxy now reads `VITE_BACKEND_URL`, defaulting to `http://127.0.0.1:8000`.
+- Verification:
+  - `cd frontend && npm run typecheck`: exit 0.
+  - PowerShell AST parse for `scripts/dev-mode.ps1`: OK.
+  - PowerShell JSON parse confirmed package scripts present.
+  - `timeout 12s npm run dev`: Vite ready at `http://localhost:5173/`, timeout killed long-running server with exit 124 as expected.
+
+## Stage 3: UI-only mock mode
+
 Status: not started.
