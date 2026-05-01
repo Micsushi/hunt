@@ -1,7 +1,7 @@
 services:
   postgres:
     image: postgres:16-alpine
-    profiles: ["pipeline", "db", "c0", "c1c2", "all"]
+    profiles: ["pipeline", "db", "c0", "c1", "c2", "c1c2", "all"]
     environment:
       POSTGRES_USER: hunt
       POSTGRES_PASSWORD: hunt
@@ -21,7 +21,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.review
-    profiles: ["pipeline", "c0", "c1c2", "all"]
+    profiles: ["pipeline", "c0", "c1", "c2", "c1c2", "all"]
     depends_on:
       postgres:
         condition: service_healthy
@@ -41,7 +41,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.hunter
-    profiles: ["pipeline", "c1c2", "all"]
+    profiles: ["pipeline", "c1", "c1c2", "all"]
     depends_on:
       postgres:
         condition: service_healthy
@@ -53,19 +53,55 @@ services:
     ports:
       - "127.0.0.1:18001:8001"
 
+  ollama:
+    image: ollama/ollama:latest
+    profiles: ["pipeline", "c2", "c1c2", "all"]
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    volumes:
+      - ollama_data:/root/.ollama
+    ports:
+      - "127.0.0.1:11435:11434"
+    healthcheck:
+      test: ["CMD", "ollama", "list"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  ollama-init:
+    image: ollama/ollama:latest
+    profiles: ["pipeline", "c2", "c1c2", "all"]
+    depends_on:
+      ollama:
+        condition: service_healthy
+    environment:
+      OLLAMA_HOST: http://ollama:11434
+    entrypoint: ["/bin/sh", "-c", "ollama pull gemma4:e4b && ollama pull mxbai-embed-large"]
+    restart: "no"
+
   fletcher:
     build:
       context: .
       dockerfile: Dockerfile.fletcher
-    profiles: ["pipeline", "c1c2", "all"]
+    profiles: ["pipeline", "c2", "c1c2", "all"]
     depends_on:
       postgres:
         condition: service_healthy
+      ollama-init:
+        condition: service_completed_successfully
     environment:
       HUNT_DB_URL: postgresql://hunt:hunt@postgres:5432/hunt
       HUNT_SERVICE_TOKEN: hunt-local-smoke-token
       HUNT_RESUME_ARTIFACTS_DIR: /tmp/hunt-resumes
-      HUNT_RESUME_MODEL_BACKEND: heuristic
+      HUNT_RESUME_MODEL_BACKEND: ollama
+      HUNT_OLLAMA_HOST: http://ollama:11434
+      HUNT_OLLAMA_MODEL: gemma4:e4b
+      HUNT_OLLAMA_EMBED_MODEL: mxbai-embed-large
     ports:
       - "127.0.0.1:18002:8002"
 
@@ -99,3 +135,4 @@ services:
 
 volumes:
   pipeline_pg_data:
+  ollama_data:

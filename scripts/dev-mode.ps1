@@ -1,5 +1,5 @@
 param(
-  [ValidateSet("ui", "db", "c0", "c1c2", "all")]
+  [ValidateSet("ui", "c0", "c1", "c2", "full")]
   [string]$Mode = "ui"
 )
 
@@ -24,18 +24,13 @@ if ($Mode -eq "ui") {
   exit
 }
 
-if ($Mode -eq "db") {
-  Start-ComposeProfile "db"
-  $env:VITE_MOCK_BACKEND = "true"
-  Start-Vite
-  exit
-}
-
 if ($Mode -eq "c0") {
   Start-ComposeProfile "c0"
-} elseif ($Mode -eq "c1c2") {
-  Start-ComposeProfile "c1c2"
-} elseif ($Mode -eq "all") {
+} elseif ($Mode -eq "c1") {
+  Start-ComposeProfile "c1"
+} elseif ($Mode -eq "c2") {
+  Start-ComposeProfile "c2"
+} elseif ($Mode -eq "full") {
   Start-ComposeProfile "all"
   Write-Host "C3 is manual: load unpacked extension from executioner/. C4 is not started."
 }
