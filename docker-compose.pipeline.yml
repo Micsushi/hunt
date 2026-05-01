@@ -1,7 +1,7 @@
 services:
   postgres:
     image: postgres:16-alpine
-    profiles: ["pipeline"]
+    profiles: ["pipeline", "db", "c0", "c1c2", "all"]
     environment:
       POSTGRES_USER: hunt
       POSTGRES_PASSWORD: hunt
@@ -21,16 +21,10 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.review
-    profiles: ["pipeline"]
+    profiles: ["pipeline", "c0", "c1c2", "all"]
     depends_on:
       postgres:
         condition: service_healthy
-      hunter:
-        condition: service_started
-      fletcher:
-        condition: service_started
-      coordinator:
-        condition: service_started
     environment:
       HUNT_DB_URL: postgresql://hunt:hunt@postgres:5432/hunt
       HUNT_SERVICE_TOKEN: hunt-local-smoke-token
@@ -47,7 +41,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.hunter
-    profiles: ["pipeline"]
+    profiles: ["pipeline", "c1c2", "all"]
     depends_on:
       postgres:
         condition: service_healthy
@@ -63,7 +57,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.fletcher
-    profiles: ["pipeline"]
+    profiles: ["pipeline", "c1c2", "all"]
     depends_on:
       postgres:
         condition: service_healthy

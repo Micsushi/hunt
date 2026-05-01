@@ -62,6 +62,7 @@ export type PatchableJobFields = Partial<{
   category: string | null
   is_remote: number | null
   description: string | null
+  description_source: string | null
   operator_notes: string | null
   operator_tag: string | null
 }>

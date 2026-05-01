@@ -46,6 +46,7 @@ export interface Job {
 /** Row returned by GET /api/jobs/:id (includes description + artifact paths) */
 export interface JobDetail extends Job {
   description: string | null
+  description_source: string | null
   last_artifact_dir: string | null
   last_artifact_screenshot_path: string | null
   last_artifact_html_path: string | null

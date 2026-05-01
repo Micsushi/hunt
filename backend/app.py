@@ -2560,6 +2560,33 @@ def _bool_value(value) -> bool:
     return str(value).strip().lower() in {"1", "true", "yes", "on"}
 
 
+JOB_BOOL_INT_FIELDS = (
+    "is_remote",
+    "priority",
+    "auto_apply_eligible",
+    "selected_resume_ready_for_c3",
+)
+
+
+def _bool_int_or_none(value):
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        return 1 if value else 0
+    try:
+        return 1 if int(value) else 0
+    except (TypeError, ValueError):
+        return value
+
+
+def _job_json(row):
+    data = dict(row)
+    for field in JOB_BOOL_INT_FIELDS:
+        if field in data:
+            data[field] = _bool_int_or_none(data[field])
+    return data
+
+
 def _component_allowed(component: str) -> str:
     clean = (component or "").strip().lower()
     if clean not in {"c0", "c1", "c2", "c3", "c4"}:
@@ -3514,7 +3541,7 @@ def api_jobs(
         category=category_clean,
         ats_type=ats_type_clean,
     )
-    return JSONResponse(rows)
+    return JSONResponse([_job_json(row) for row in rows])
 
 
 @app.get("/api/jobs/export")
@@ -3556,6 +3583,7 @@ def api_jobs_export(
         category=category_clean,
         ats_type=ats_type_clean,
     )
+    rows = [_job_json(row) for row in rows]
     if export_format == "json":
         return JSONResponse(rows)
     if not rows:
@@ -3608,7 +3636,7 @@ def api_job(job_id: int, _auth: str = Depends(require_auth)):
     row = get_job_by_id(job_id)
     if not row:
         raise HTTPException(status_code=404, detail="Job not found.")
-    return JSONResponse(row)
+    return JSONResponse(_job_json(row))
 
 
 @app.get("/api/jobs/{job_id}/artifacts/{artifact_kind}")

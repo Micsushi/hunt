@@ -51,6 +51,13 @@ CREATE TABLE IF NOT EXISTS runtime_state (
     updated_at  TEXT DEFAULT to_char(CURRENT_TIMESTAMP, 'YYYY-MM-DD HH24:MI:SS')
 );
 
+CREATE TABLE IF NOT EXISTS review_sessions (
+    token      TEXT PRIMARY KEY,
+    username   TEXT    NOT NULL,
+    created_at INTEGER NOT NULL,
+    expires_at INTEGER NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS component_settings (
     component   TEXT NOT NULL,
     key         TEXT NOT NULL,
@@ -182,6 +189,7 @@ CREATE TABLE IF NOT EXISTS resume_versions (
 CREATE INDEX IF NOT EXISTS idx_jobs_status     ON jobs(status);
 CREATE INDEX IF NOT EXISTS idx_jobs_source     ON jobs(source);
 CREATE INDEX IF NOT EXISTS idx_jobs_enrichment ON jobs(enrichment_status);
+CREATE INDEX IF NOT EXISTS idx_sessions_expires ON review_sessions(expires_at);
 
 CREATE INDEX IF NOT EXISTS idx_orchestration_runs_job_status
     ON orchestration_runs(job_id, status, started_at DESC);

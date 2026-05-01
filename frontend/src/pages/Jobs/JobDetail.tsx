@@ -215,7 +215,7 @@ export function JobDetailPage() {
   }
 
   const remoteDisplay = job.is_remote === 1 ? 'Yes' : job.is_remote === 0 ? 'No' : ''
-  const descriptionSource = (job as Record<string, unknown>).description_source as string | null | undefined
+  const descriptionSource = job.description_source
 
   return (
     <div className={styles.page}>
