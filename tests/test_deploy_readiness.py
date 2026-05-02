@@ -244,6 +244,7 @@ def test_one_command_local_smoke_runner_exists(monkeypatch):
     assert "smoke_fletcher_container.sh" in runner_text
     assert "smoke_c0_pipeline_container.sh" in runner_text
     assert "smoke_coordinator_e2e.sh" in runner_text
+    assert "smoke_server2_c1.sh" in runner_text
     assert 'shutil.which("wsl")' in runner_text
 
     calls = []
@@ -343,6 +344,41 @@ def test_local_smoke_runner_target_mapping(monkeypatch):
     ]
 
 
+def test_local_smoke_runner_server2_target_runs_c0_and_c1(monkeypatch):
+    calls = []
+
+    def fake_run(command, cwd, check=False):
+        calls.append((command, cwd))
+        return types.SimpleNamespace(returncode=0)
+
+    monkeypatch.setattr(run_local_smoke, "_resolve_runner", lambda: ["bash"])
+    monkeypatch.setattr(run_local_smoke.subprocess, "run", fake_run)
+    monkeypatch.setattr(run_local_smoke.sys, "argv", ["run_local_smoke.py", "server2"])
+
+    assert run_local_smoke.main() == 0
+    assert [command for command, _cwd in calls] == [
+        ["bash", "scripts/smoke_server2.sh"],
+        ["bash", "scripts/smoke_server2_c1.sh"],
+    ]
+
+
+def test_local_smoke_runner_server2_c1_target_mapping(monkeypatch):
+    calls = []
+
+    def fake_run(command, cwd, check=False):
+        calls.append((command, cwd))
+        return types.SimpleNamespace(returncode=0)
+
+    monkeypatch.setattr(run_local_smoke, "_resolve_runner", lambda: ["bash"])
+    monkeypatch.setattr(run_local_smoke.subprocess, "run", fake_run)
+    monkeypatch.setattr(run_local_smoke.sys, "argv", ["run_local_smoke.py", "server2-c1"])
+
+    assert run_local_smoke.main() == 0
+    assert [command for command, _cwd in calls] == [
+        ["bash", "scripts/smoke_server2_c1.sh"],
+    ]
+
+
 def test_local_smoke_runner_alias_mapping(monkeypatch):
     calls = []
 
@@ -431,6 +467,19 @@ def test_server2_deploy_runbook_exists():
     assert "scripts/deploy_server2.ps1" in runbook_text
     assert "server2" in runbook_text
     assert "ansible_homelab" in runbook_text
+    assert "python smoke.py server2-c1" in runbook_text
+
+
+def test_server2_c1_smoke_assets_exist():
+    smoke_script = Path("scripts/smoke_server2_c1.sh")
+
+    assert smoke_script.is_file()
+
+    smoke_text = smoke_script.read_text(encoding="utf-8")
+    assert "/api/gateway/c1/status" in smoke_text
+    assert "/api/gateway/c1/scrape" in smoke_text
+    assert "/api/jobs/count?source=linkedin&status=processing" in smoke_text
+    assert "Server2 C1 smoke PASSED" in smoke_text
 
 
 def test_repo_root_deploy_shortcut_exists():

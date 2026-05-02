@@ -14,69 +14,27 @@ This is your current confidence snapshot (subjective, as of 2026-05-01). The bac
 
 Use that snapshot as the reality check when reading the detailed lists below.
 
-## Foundation (done)
+## Foundation 
 
 - [x] Postgres schema defined in `schema/postgres_schema.sql`
-- [x] Database compatibility layer (`hunter/db_compat.py`) — uses Postgres when `HUNT_DB_URL` is set, falls back to SQLite when it isn't (useful for running tests without Docker)
-- [x] C1, C2, and C4 each run as separate services with a shared API token for auth
-- [x] C0 backend acts as an API gateway — all frontend requests go through `/api/gateway/*` instead of hitting services directly
-- [x] Docker build files exist for all services (backend, frontend, hunter, fletcher, coordinator)
-- [x] `docker-compose.pipeline.yml` — runs the full pipeline stack locally
-- [x] End-to-end smoke test for C4 locally (`scripts/smoke_coordinator_e2e.sh`)
-- [x] C4 bridge on server2 validated: run creation, polling for pending fills, fake fill writeback, and submit deny all work
-- [x] Python test suite and C4 smoke coverage are in place
 
 ## Cross-Component
 
 Things that cut across all services.
 
 - [x] Operator status page — shows what is up or broken across C0-C4 in one view
-- [x] Keep docs current — update `docs/roadmap.md`, this file, and `docs/LOCAL_POSTGRES_SMOKES.md` after each deploy milestone
-- [x] One command to run a full local smoke test on both Windows and Linux
-- [x] One command or written runbook to deploy from Windows to server2
-- [x] Keep public `server2` access on Cloudflare Tunnel while moving the actual Hunt runtime deploy logic into this repo
-- [x] Decide whether to keep the combined `Dockerfile.review` (backend + frontend in one image) or split — keep both: `Dockerfile.review` is the backend that also serves the SPA directly (used for `c0` profile and direct-access fallback); `Dockerfile.frontend` (nginx) is the preferred web entry point for the full pipeline stack
-- [x] Confirm `docker-compose.pipeline.yml` is the standard way to run locally, or add a simpler root `docker-compose.yml` wrapper
-- [x] Add `X-Request-ID` middleware to C0 backend — generates a UUID per request, echoes it in the response header, and forwards it to C1/C2/C4 via the gateway proxy
-- [x] Add request ID logging inside C1, C2, and C4 services: shared middleware logs one correlated line per request with service name, request ID, method, path, and status; the services also echo `X-Request-ID` on direct calls
-- [x] Discord notifications for C4 state transitions: awaiting submit approval, fill failed, run rejected at manual review — C1 already notifies on LinkedIn auth issues, rate limiting, automation detected, priority job found; set `HUNT_DISCORD_WEBHOOK_URL` to enable
-- [x] Consolidate notifications into a shared library: `shared/notifications.py` is the canonical webhook util; `hunter/notifications.py` and `coordinator/notifications.py` re-export from it; C4 now writes run events to `runtime_state` so C0 Logs page shows them; C2/C3 can `from shared.notifications import send_discord_webhook_message` when ready
-- [x] Shared timestamp util: `shared/timestamps.py:utc_iso()` — consolidates 4 near-identical `_utc_iso()` definitions across C1, C4, Fletcher
-- [x] Shared JSON artifact writer: `shared/storage.py:write_json_artifact(path, payload) -> str` — 4 near-identical `_write_json()` functions in coordinator/apply_prep.py, coordinator/service.py, hunter/failure_artifacts.py, fletcher/storage.py; differences are sort_keys and trailing newline
-- [x] Shared request ID middleware base: `shared/request_id.py` — `backend/request_id.py` and `hunter/service_request_id.py` are ~80% identical; hunter version adds service-name logging and `get_request_id()` accessor on top of the same core
-- [x] Consolidate timestamp utils: `shared/timestamps.py` already exists but `coordinator/models.py:utc_now_iso()`, `coordinator/apply_prep.py:_utc_now_iso()`, and `fletcher/storage.py:utc_now_stamp()` all define their own versions instead of importing from it
-- [x] Shared normalization utils: `shared/types.py` — coordinator has 4+ near-identical bool/text/status/list normalization functions defined independently: `_truthy()` in coordinator/service.py, `_normalize_bool()` in coordinator/apply_prep.py, `_bool()` in coordinator/models.py (same logic); `_normalize_list()` / `_json_list()` / `_normalize_flag_list()` across coordinator/service.py, coordinator/models.py, coordinator/context.py; `_dedupe()` in 2-3 files
-- [x] Shared env var helpers: `shared/config_utils.py` — `_get_str_env()` / `_get_int_env()` / `_get_bool_env()` defined in hunter/config.py; `_get_bool_env()` is redefined again in hunter/linkedin_session.py instead of imported
-- [x] Shared file utils: `shared/file_utils.py` — `_write_text()` is duplicated between hunter/failure_artifacts.py and fletcher/storage.py (covered by JSON artifact writer ticket above for `_write_json()`)
-- [x] Shared path utils: `shared/paths.py` — `REPO_ROOT = Path(__file__).resolve().parent.parent` and the `sys.path.insert` pattern repeated in coordinator/config.py, fletcher/config.py, hunter/config.py, coordinator/notifications.py, hunter/c1_logging.py, and several test files; also unify `resolve_db_path()` / `get_db_path()` inconsistencies across coordinator/hunter/fletcher configs
-- [x] Discord notification when a smoke test fails: `python smoke.py ...` now sends a Discord webhook alert with target, script, exit code, and repo path when a smoke step returns non-zero
-- [x] Written release checklist — `docs/RELEASE_CHECKLIST.md`: local tests, local smoke, server2 smoke, update docs, update vault
-- [x] Short cross-platform test commands per service: `python test.py c0|c1|c2|c3|c4|shared|all`
-- [x] Short cross-platform quality check commands per service: `python quality.py c0|c1|c2|c3|c4|shared|frontend|all`
-- [x] Full CI entrypoint for local and GitHub Actions use: `python ci.py [target]`
-- [x] Project definition of done documented: run the relevant `python ci.py [target]` before claiming completion, and add tests for feature work / bug fixes when feasible
 
 ## C0 : Dashboard and Control Panel
 
 C0 is the web interface and API gateway. The frontend is a React single-page app; the backend is a Python/FastAPI server that proxies requests to C1-C4.
 
 - [x] Primary operator pages are in the React app; `/legacy/*` server-rendered routes still exist as fallback while they are retired
-- [x] Dashboard health cards — shows live status for DB, C1, C2, C3, C4, queue depth, and recent errors
-- [x] Ops page buttons wired up — trigger scrape, trigger enrich, check queue, and reauth LinkedIn all call real API endpoints
-- [x] Settings page — view and edit settings stored in the DB (`component_settings` table); secret values are masked
-- [x] LinkedIn accounts page — add accounts, activate/deactivate, see auth state, trigger reauth
-- [x] C2 (resume tailor) page — calls the real Fletcher service, not a placeholder
-- [x] C4 (coordinator) page — shows run queue, run detail, pending approvals, approve/deny buttons, and event log
-- [x] C3 (form filler) page — shows pending fills, bridge online/offline status
-- [x] Failed jobs visibility — filter jobs by failed/blocked status, see error codes, bulk requeue from the Jobs page
-- [x] **Local smoke test** — run C0 against a local Postgres container with C1, C2, and C4 services also running, and verify everything works end to end
-- [x] **Server2 smoke test** — run the same verification against production Postgres and the live service URLs on server2
 
 ## C1 : Hunter (job scraper and enricher)
 
 C1 scrapes LinkedIn for job listings and enriches them with full job descriptions. Runs as a service on server2 and as a CLI tool locally.
 
-- [ ] Validate a full production cycle on server2: scrape → enrich → write artifacts → drain queue → confirm scheduler holds steady
+- [x] Validate a full production cycle on server2: scrape → enrich → write artifacts → drain queue → confirm scheduler holds steady
 - [ ] Confirm the C1 CLI works standalone on both Windows and Linux without Docker (entry points exist: hunter.ps1, hunter.sh, hunter.cmd — needs a real test run on each platform)
 - [ ] Add API endpoint tests: status, queue, scrape, enrich, auth failure handling, and duplicate-run prevention (service.py has all 5 endpoints; no test coverage yet)
 - [ ] Add structured log events for scrape start/end, enrich batch summary, retry exhaustion, and artifact writes (auth pauses and rate limiting already notify via Discord/C1Logger)

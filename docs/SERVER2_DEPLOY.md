@@ -122,6 +122,31 @@ python deploy.py all --mode server --env-file .env.server2 --dry-run
 - confirm Cloudflare Access still challenges or grants access the same way it did before
 - run the relevant `server2` smoke checks
 
+## C1 production-cycle validation
+
+The previous repo-native `server2` smoke only proved that C0 could reach C1. It did not drive a live C1 run.
+
+Use this when you need to validate the first C1 production checklist item:
+
+```powershell
+python smoke.py server2-c1
+```
+
+What it validates:
+
+- C0 login still works
+- C0 can reach the C1 service API
+- a live `/api/gateway/c1/scrape` trigger is accepted
+- the scrape and post-scrape enrich pass return to idle
+- no LinkedIn rows remain stuck in `processing`
+- C0 still reports C1 healthy after the cycle
+
+If you want the combined production smoke:
+
+```powershell
+python smoke.py server2
+```
+
 Expected result:
 
 - Ansible updates the repo, renders the server env file, and runs the Hunt repo-native deploy command remotely

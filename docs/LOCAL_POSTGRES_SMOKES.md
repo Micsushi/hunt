@@ -54,6 +54,17 @@ HUNT_ADMIN_PASSWORD=...
 HUNT_SERVICE_TOKEN=...
 ```
 
+`python smoke.py server2` now runs both:
+
+- `scripts/smoke_server2.sh`: C0 and public surface checks
+- `scripts/smoke_server2_c1.sh`: live C1 scrape and enrich cycle through C0, then idle-state validation
+
+If you only want the C1 production check:
+
+```bash
+python smoke.py server2-c1
+```
+
 ### Dry-run (print commands without starting anything)
 
 ```bash
@@ -82,6 +93,8 @@ Targets:
 - `python smoke.py c4-container`: C4 Coordinator container boot smoke only
 - `python smoke.py review`: review image smoke
 - `python smoke.py server2`: server2 production smoke
+- `python smoke.py server2-c0`: server2 C0/public smoke only
+- `python smoke.py server2-c1`: server2 C1 scrape/enrich smoke only
 
 Aliases:
 

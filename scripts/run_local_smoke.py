@@ -25,7 +25,12 @@ SMOKE_TARGETS = {
     "c4": ("scripts/smoke_coordinator_e2e.sh",),
     "c4-container": ("scripts/smoke_coordinator_container.sh",),
     "review": ("scripts/smoke_review_container.sh",),
-    "server2": ("scripts/smoke_server2.sh",),
+    "server2": (
+        "scripts/smoke_server2.sh",
+        "scripts/smoke_server2_c1.sh",
+    ),
+    "server2-c0": ("scripts/smoke_server2.sh",),
+    "server2-c1": ("scripts/smoke_server2_c1.sh",),
 }
 TARGET_ALIASES = {
     "full": "all",
@@ -61,7 +66,7 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
         "target",
         nargs="?",
         default="all",
-        help="Smoke target: all, c0, c1, c2, c4, c4-container, review, server2",
+        help="Smoke target: all, c0, c1, c2, c4, c4-container, review, server2, server2-c0, server2-c1",
     )
     parser.add_argument(
         "--dry-run",
