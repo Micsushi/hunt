@@ -8,6 +8,11 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
 
+from shared.storage import write_json_artifact
+from shared.types import dedupe as _dedupe
+from shared.types import normalize_list as _normalize_list
+from shared.types import truthy as _truthy
+
 from .config import resolve_db_path, resolve_runtime_root
 from .context import build_apply_context_payload, build_c3_apply_payload, derive_concern_flags
 from .db import (
@@ -35,16 +40,6 @@ class OrchestrationError(RuntimeError):
     pass
 
 
-def _truthy(value: Any) -> bool:
-    if isinstance(value, bool):
-        return value
-    if value is None:
-        return False
-    if isinstance(value, (int, float)):
-        return bool(value)
-    return str(value).strip().lower() in {"1", "true", "yes", "on"}
-
-
 def _text(value: Any) -> str:
     if value is None:
         return ""
@@ -54,31 +49,6 @@ def _text(value: Any) -> str:
 def _normalize_status(value: Any, *, default: str = "new") -> str:
     text = _text(value).lower()
     return text or default
-
-
-def _normalize_list(value: Any) -> list[str]:
-    if not value:
-        return []
-    if isinstance(value, list):
-        return [str(item).strip() for item in value if str(item).strip()]
-    if isinstance(value, tuple):
-        return [str(item).strip() for item in value if str(item).strip()]
-    if isinstance(value, str):
-        text = value.strip()
-        if not text:
-            return []
-        try:
-            parsed = json.loads(text)
-        except json.JSONDecodeError:
-            return [text]
-        if isinstance(parsed, list):
-            return [str(item).strip() for item in parsed if str(item).strip()]
-        return [str(parsed).strip()] if str(parsed).strip() else []
-    return [str(value).strip()] if str(value).strip() else []
-
-
-def _dedupe(values: list[str]) -> list[str]:
-    return list(dict.fromkeys(value for value in values if value))
 
 
 class OrchestrationService:
@@ -213,11 +183,6 @@ class OrchestrationService:
 
     def _run_dir(self, run_id: str) -> Path:
         return self.runtime_root / "runs" / run_id
-
-    def _write_json_artifact(self, path: Path, payload: Any) -> str:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-        return str(path.resolve())
 
     def _claim_job_if_new(self, conn: sqlite3.Connection, job_id: int) -> None:
         conn.execute(
@@ -532,8 +497,8 @@ class OrchestrationService:
             # never needs filesystem access to the resume file
             embed_resume_data=True,
         )
-        self._write_json_artifact(Path(apply_context_path), apply_context)
-        self._write_json_artifact(Path(c3_apply_context_path), c3_payload)
+        write_json_artifact(Path(apply_context_path), apply_context)
+        write_json_artifact(Path(c3_apply_context_path), c3_payload)
         return apply_context, apply_context_path, c3_apply_context_path
 
     def build_apply_context(
@@ -678,7 +643,7 @@ class OrchestrationService:
                 )
 
             requested_at = utc_now_iso()
-            fill_request_path = self._write_json_artifact(
+            fill_request_path = write_json_artifact(
                 self._run_dir(run_id) / "fill_request.json",
                 {
                     "run_id": run_id,
@@ -865,9 +830,9 @@ class OrchestrationService:
                 )
 
             run_dir = self._run_dir(run_id)
-            fill_result_path = self._write_json_artifact(run_dir / "fill_result.json", raw_result)
+            fill_result_path = write_json_artifact(run_dir / "fill_result.json", raw_result)
             review_flags = self._derive_review_flags(run=run, fill_result=raw_result)
-            browser_summary_path = self._write_json_artifact(
+            browser_summary_path = write_json_artifact(
                 run_dir / "browser_summary.json",
                 self._browser_summary(run=run, fill_result=raw_result, review_flags=review_flags),
             )
@@ -901,7 +866,7 @@ class OrchestrationService:
                 "manual_review_reason": manual_review_reason,
                 "manual_review_flags": review_flags,
             }
-            decision_path = self._write_json_artifact(run_dir / "decisions.json", decision_payload)
+            decision_path = write_json_artifact(run_dir / "decisions.json", decision_payload)
             now = utc_now_iso()
             conn.execute(
                 """
@@ -934,7 +899,7 @@ class OrchestrationService:
                 payload_path=fill_result_path,
             )
             if new_status == "failed":
-                final_status_path = self._write_json_artifact(
+                final_status_path = write_json_artifact(
                     run_dir / "final_status.json",
                     {
                         "run_id": run_id,
@@ -987,7 +952,7 @@ class OrchestrationService:
                 raise OrchestrationError(f"Run {run_id} is not waiting on manual review.")
 
             now = utc_now_iso()
-            review_resolution_path = self._write_json_artifact(
+            review_resolution_path = write_json_artifact(
                 self._run_dir(run_id) / "review_resolution.json",
                 {
                     "run_id": run_id,
@@ -1030,7 +995,7 @@ class OrchestrationService:
                 payload_path=review_resolution_path,
             )
             if normalized_decision == "fail":
-                final_status_path = self._write_json_artifact(
+                final_status_path = write_json_artifact(
                     self._run_dir(run_id) / "final_status.json",
                     {
                         "run_id": run_id,
@@ -1086,7 +1051,7 @@ class OrchestrationService:
 
             now = utc_now_iso()
             approval_id = f"approval-{uuid.uuid4().hex[:12]}"
-            approval_path = self._write_json_artifact(
+            approval_path = write_json_artifact(
                 self.runtime_root
                 / "approvals"
                 / str(run.job_id)
@@ -1154,7 +1119,7 @@ class OrchestrationService:
                 payload_path=approval_path,
             )
             if normalized_decision == "deny":
-                final_status_path = self._write_json_artifact(
+                final_status_path = write_json_artifact(
                     self._run_dir(run_id) / "final_status.json",
                     {
                         "run_id": run_id,
@@ -1199,7 +1164,7 @@ class OrchestrationService:
                 raise OrchestrationError(f"Run {run_id} is not approved for submit.")
 
             now = utc_now_iso()
-            final_status_path = self._write_json_artifact(
+            final_status_path = write_json_artifact(
                 self._run_dir(run_id) / "final_status.json",
                 {
                     "run_id": run_id,

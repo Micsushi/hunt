@@ -1,9 +1,10 @@
-import json
 import os
 import re
 from pathlib import Path
 
 from hunter.enrichment_policy import utc_now
+from shared.file_utils import write_text as _write_text
+from shared.storage import write_json_artifact
 
 
 def get_artifacts_root():
@@ -46,14 +47,6 @@ def _build_artifact_dir(job, error_code, source):
     return root / source_slug / f"job_{job_id}" / f"{timestamp}_{error_slug}"
 
 
-def _write_text(path, content):
-    path.write_text(content or "", encoding="utf-8")
-
-
-def _write_json(path, payload):
-    path.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
-
-
 def _relative(path):
     root = get_artifacts_root().resolve()
     return str(path.resolve().relative_to(root)).replace("\\", "/")
@@ -94,7 +87,7 @@ def capture_text_artifacts(
     }
     if metadata:
         payload.update(metadata)
-    _write_json(metadata_path, payload)
+    write_json_artifact(metadata_path, payload)
 
     return {
         "artifact_dir": _relative(artifact_dir),

@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import base64
-import json
 import mimetypes
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
+
+from shared.types import dedupe as _dedupe
+from shared.types import normalize_list as _normalize_flag_list
 
 from .models import utc_now_iso
 
@@ -26,31 +28,6 @@ def _string_or_none(value: Any) -> str | None:
         return None
     text = str(value).strip()
     return text or None
-
-
-def _normalize_flag_list(value: Any) -> list[str]:
-    if not value:
-        return []
-    if isinstance(value, list):
-        return [str(item).strip() for item in value if str(item).strip()]
-    if isinstance(value, tuple):
-        return [str(item).strip() for item in value if str(item).strip()]
-    if isinstance(value, str):
-        text = value.strip()
-        if not text:
-            return []
-        try:
-            parsed = json.loads(text)
-        except json.JSONDecodeError:
-            return [text]
-        if isinstance(parsed, list):
-            return [str(item).strip() for item in parsed if str(item).strip()]
-        return [str(parsed).strip()] if str(parsed).strip() else []
-    return [str(value).strip()] if str(value).strip() else []
-
-
-def _dedupe(values: list[str]) -> list[str]:
-    return list(dict.fromkeys(value for value in values if value))
 
 
 def build_resume_data_url(pdf_path: str | None) -> str:

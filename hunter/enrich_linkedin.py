@@ -1060,7 +1060,6 @@ def _notify_linkedin_auth_pause(claimed_job, error_message, *, relogin_result=No
 
 
 def pause_linkedin_enrichment_for_auth(claimed_job, error_message, *, relogin_result=None):
-    previous_auth_state = get_linkedin_auth_state()
     mark_linkedin_auth_unavailable(error_message)
     if claimed_job:
         restore_linkedin_enrichment_claim(claimed_job)

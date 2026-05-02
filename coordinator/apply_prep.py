@@ -14,6 +14,9 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from hunter import db as hunter_db  # noqa: E402
+from shared.storage import write_json_artifact  # noqa: E402
+from shared.timestamps import utc_iso as _utc_now_iso  # noqa: E402
+from shared.types import truthy as _normalize_bool  # noqa: E402
 
 
 class ApplyPrepNotReadyError(RuntimeError):
@@ -31,16 +34,6 @@ def _orchestration_runtime_root() -> Path:
     if os.name == "nt":
         return (REPO_ROOT / ".runtime" / "coordinator").resolve()
     return Path("/home/michael/data/hunt/coordinator")
-
-
-def _utc_now_iso() -> str:
-    return datetime.now(UTC).replace(microsecond=0).isoformat()
-
-
-def _write_json(path: Path, payload: dict[str, Any]) -> Path:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
-    return path
 
 
 def _next_apply_context_path(job_id: int) -> Path:
@@ -128,16 +121,6 @@ def _parse_resume_flags(raw_flags: Any) -> list[str]:
         if isinstance(decoded, list):
             return [str(flag).strip() for flag in decoded if str(flag).strip()]
     return []
-
-
-def _normalize_bool(value: Any) -> bool:
-    if isinstance(value, bool):
-        return value
-    if isinstance(value, (int, float)):
-        return bool(value)
-    if isinstance(value, str):
-        return value.strip().lower() in {"1", "true", "yes", "y"}
-    return False
 
 
 def _get_job_context(job_id: int) -> dict[str, Any] | None:
@@ -265,5 +248,5 @@ def build_apply_prep_payload(
     final_output_path = (
         Path(output_path) if output_path else _next_apply_context_path(int(context["job_id"]))
     )
-    payload["applyContextPath"] = str(_write_json(final_output_path, payload))
+    payload["applyContextPath"] = write_json_artifact(final_output_path, payload)
     return payload

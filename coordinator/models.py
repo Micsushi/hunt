@@ -1,45 +1,12 @@
 from __future__ import annotations
 
-import json
 from collections.abc import Mapping
 from dataclasses import asdict, dataclass, field
-from datetime import UTC, datetime
 from typing import Any
 
-
-def utc_now_iso() -> str:
-    return datetime.now(UTC).replace(microsecond=0).isoformat()
-
-
-def _json_list(value: Any) -> list[str]:
-    if not value:
-        return []
-    if isinstance(value, list):
-        return [str(item) for item in value if str(item).strip()]
-    if isinstance(value, tuple):
-        return [str(item) for item in value if str(item).strip()]
-    if isinstance(value, str):
-        text = value.strip()
-        if not text:
-            return []
-        try:
-            parsed = json.loads(text)
-        except json.JSONDecodeError:
-            return [text]
-        if isinstance(parsed, list):
-            return [str(item) for item in parsed if str(item).strip()]
-        return [str(parsed)] if str(parsed).strip() else []
-    return [str(value)] if str(value).strip() else []
-
-
-def _bool(value: Any) -> bool:
-    if isinstance(value, bool):
-        return value
-    if value is None:
-        return False
-    if isinstance(value, (int, float)):
-        return bool(value)
-    return str(value).strip().lower() in {"1", "true", "yes", "on"}
+from shared.timestamps import utc_iso as utc_now_iso
+from shared.types import normalize_list as _json_list
+from shared.types import truthy as _bool
 
 
 @dataclass(slots=True)

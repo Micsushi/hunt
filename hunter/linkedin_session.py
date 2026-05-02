@@ -15,6 +15,7 @@ from hunter.browser_runtime import (
 from hunter.config import get_db_path
 from hunter.db import mark_linkedin_auth_available, mark_linkedin_auth_unavailable
 from hunter.notifications import send_discord_webhook_message
+from shared.config_utils import get_bool_env as _get_bool_env
 
 try:
     from c1_logging import C1Logger  # type: ignore
@@ -222,19 +223,6 @@ class LinkedInAutomationFlagged(LinkedInSessionError):
     """Raised when LinkedIn shows the automation-tool compliance notice for an account."""
 
     pass
-
-
-def _get_bool_env(name, default):
-    value = os.getenv(name)
-    if value is None or not value.strip():
-        return default
-
-    normalized = value.strip().lower()
-    if normalized in {"1", "true", "yes", "on"}:
-        return True
-    if normalized in {"0", "false", "no", "off"}:
-        return False
-    return default
 
 
 def get_auto_relogin_credentials():

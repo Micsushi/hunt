@@ -3,7 +3,8 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-REPO_ROOT = Path(__file__).resolve().parent.parent
+from shared.paths import REPO_ROOT
+
 DEFAULT_DB_PATH = REPO_ROOT / "hunt.db"
 DEFAULT_RUNTIME_ROOT = REPO_ROOT / ".state" / "coordinator"
 

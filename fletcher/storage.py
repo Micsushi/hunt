@@ -1,15 +1,13 @@
 from __future__ import annotations
 
 import hashlib
-import json
-from datetime import UTC, datetime
 from pathlib import Path
 
+from shared.file_utils import write_text as _shared_write_text
+from shared.storage import write_json_artifact
+from shared.timestamps import utc_now_stamp
+
 from .config import AD_HOC_DIRNAME, ATTEMPTS_DIRNAME, resolve_runtime_root
-
-
-def utc_now_stamp() -> str:
-    return datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
 
 
 def build_attempt_dir(
@@ -29,15 +27,11 @@ def ensure_dir(path: Path) -> Path:
 
 
 def write_text(path: Path, content: str) -> str:
-    ensure_dir(path.parent)
-    path.write_text(content, encoding="utf-8")
-    return str(path)
+    return _shared_write_text(path, content)
 
 
 def write_json(path: Path, payload: dict) -> str:
-    ensure_dir(path.parent)
-    path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
-    return str(path)
+    return write_json_artifact(path, payload)
 
 
 def file_hash(path: Path) -> str:

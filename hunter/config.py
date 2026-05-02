@@ -1,38 +1,13 @@
 import os as _os
 
+from shared.config_utils import get_bool_env as _get_bool_env
+from shared.config_utils import get_int_env as _get_int_env
+from shared.config_utils import get_str_env as _get_str_env
+
 try:
     from hunter.dotenv import load_dotenv as _load_dotenv  # type: ignore
 except Exception:  # pragma: no cover
     _load_dotenv = None  # type: ignore
-
-
-def _get_str_env(name, default):
-    value = _os.getenv(name)
-    if value is None:
-        return default
-    value = value.strip()
-    return value if value else default
-
-
-def _get_int_env(name, default):
-    value = _os.getenv(name)
-    if value is None or not value.strip():
-        return default
-    return int(value)
-
-
-def _get_bool_env(name, default):
-    value = _os.getenv(name)
-    if value is None or not value.strip():
-        return default
-
-    normalized = value.strip().lower()
-    if normalized in {"1", "true", "yes", "on"}:
-        return True
-    if normalized in {"0", "false", "no", "off"}:
-        return False
-    return default
-
 
 _ROOT = _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)))
 
