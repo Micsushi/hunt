@@ -623,11 +623,15 @@ def test_server2_stage7_targets_fletcher_and_uses_chromium_if_repo_present():
         pytest.skip("ansible_homelab repo not present next to hunt")
 
     vars_text = (ansible_root / "group_vars" / "job_agent" / "vars.yml").read_text(encoding="utf-8")
+    stage6_text = (
+        ansible_root / "playbooks" / "job_agent" / "stages" / "stage6_scraper.yml"
+    ).read_text(encoding="utf-8")
     stage7_text = (
         ansible_root / "playbooks" / "job_agent" / "stages" / "stage7_fletcher.yml"
     ).read_text(encoding="utf-8")
 
     assert 'scraper_browser_channel: "chromium"' in vars_text
+    assert "hunt_repo_native_deploy_target: c1" in stage6_text
     assert "hunt_repo_native_deploy_target: c2" in stage7_text
 
 
