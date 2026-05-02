@@ -1,21 +1,34 @@
 #!/usr/bin/env bash
+# Pass --existing to skip docker compose up and run checks against the already-running stack.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PROJECT="${PROJECT:-hunt-pipeline-smoke}"
 COMPOSE_FILE="${COMPOSE_FILE:-docker-compose.pipeline.yml}"
-SERVICE_TOKEN="${SERVICE_TOKEN:-hunt-local-smoke-token}"
-ADMIN_PASSWORD="${ADMIN_PASSWORD:-hunt-local-admin}"
+
+# Source .env so credentials match whatever the running stack was started with.
+# shellcheck disable=SC1091
+[ -f "$ROOT/.env" ] && set -a && source "$ROOT/.env" && set +a || true
+
+SERVICE_TOKEN="${SERVICE_TOKEN:-${HUNT_SERVICE_TOKEN:-hunt-local-smoke-token}}"
+ADMIN_PASSWORD="${ADMIN_PASSWORD:-${HUNT_ADMIN_PASSWORD:-hunt-local-admin}}"
+
+EXISTING=0
+for arg in "$@"; do
+  [ "$arg" = "--existing" ] && EXISTING=1
+done
 
 compose() {
   docker compose -f "$ROOT/$COMPOSE_FILE" -p "$PROJECT" --profile pipeline "$@"
 }
 
 cleanup() {
+  [ "$EXISTING" -eq 1 ] && return
   compose down -v --remove-orphans >/dev/null 2>&1 || true
 }
 
 dump_logs() {
+  [ "$EXISTING" -eq 1 ] && return
   echo
   echo "=== compose ps ==="
   compose ps 2>/dev/null || true
@@ -54,8 +67,10 @@ trap dump_logs ERR
 
 cd "$ROOT"
 
-cleanup
-compose up -d --build
+if [ "$EXISTING" -eq 0 ]; then
+  cleanup
+  compose up -d --build
+fi
 
 wait_for "http://127.0.0.1:18080/health" "" /tmp/hunt-compose-review-health.json
 wait_for "http://127.0.0.1:18001/status" "Authorization: Bearer ${SERVICE_TOKEN}" /tmp/hunt-compose-c1-status.json

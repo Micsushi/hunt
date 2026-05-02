@@ -9,6 +9,7 @@ from typing import Any
 from urllib.parse import urlparse
 
 from .config import resolve_db_path, resolve_runtime_root
+from .notifications import notify as _notify
 from .context import build_apply_context_payload, build_c3_apply_payload, derive_concern_flags
 from .db import (
     EXECUTING_RUN_STATUSES,
@@ -951,6 +952,10 @@ class OrchestrationService:
         updated_run = self.get_run(run_id)
         if updated_run is None:
             raise OrchestrationError(f"Run {run_id} disappeared after recording fill.")
+        if new_status == "awaiting_submit_approval":
+            _notify(f"Run {run_id} (job {run.job_id}) is awaiting submit approval")
+        elif new_status == "failed":
+            _notify(f"Run {run_id} (job {run.job_id}) failed after fill")
         return {
             "run": updated_run.to_dict(),
             "manual_review_flags": review_flags,
@@ -1036,6 +1041,10 @@ class OrchestrationService:
         updated_run = self.get_run(run_id)
         if updated_run is None:
             raise OrchestrationError(f"Run {run_id} disappeared after review resolution.")
+        if new_status == "awaiting_submit_approval":
+            _notify(f"Run {run_id} (job {run.job_id}) passed manual review — awaiting submit approval")
+        elif new_status == "failed":
+            _notify(f"Run {run_id} (job {run.job_id}) rejected at manual review")
         return {"run": updated_run.to_dict(), "review_resolution_path": review_resolution_path}
 
     def approve_submit(

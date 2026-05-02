@@ -18,6 +18,12 @@ Server-shaped deploys use the same command surface with an extra mode:
 python deploy.py all --mode server --env-file .env.server2
 ```
 
+When you are running that command manually on `server2`, keep the Ansible-owned project name:
+
+```bash
+python deploy.py all --mode server --env-file .env.server2 --project-name hunt-server2
+```
+
 ## Targets
 
 - `db`: Postgres only
@@ -139,7 +145,7 @@ python deploy.py all --mode server --env-file .env.server2 --ps
 Expected result:
 
 - the dry run prints a server-mode command with both compose files
-- Compose config renders without errors
+- `docker compose --profile server ... config` renders the server scheduler bundle without errors
 - the runtime comes up with the fixed container names and server-shaped binds from `.env.server2`
 
 Important limit:

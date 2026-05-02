@@ -11,6 +11,7 @@ import pytest
 from fastapi import HTTPException
 
 from backend import gateway
+from hunter import db as hunter_db
 from scripts import migrate_sqlite_to_postgres as migration
 from scripts import (
     run_component_checks,
@@ -433,6 +434,31 @@ def test_server_compose_override_assets_exist():
     env_text = env_template.read_text(encoding="utf-8")
     assert "HUNT_REVIEW_CONTAINER_NAME" in env_text
     assert "HUNT_HUNTER_SCHEDULER_CONTAINER_NAME" in env_text
+
+
+def test_pipeline_compose_server_profile_includes_scheduler_dependencies():
+    compose_text = Path("docker-compose.pipeline.yml").read_text(encoding="utf-8")
+
+    assert 'profiles: ["pipeline", "db", "c0", "c1", "c2", "c1c2", "all", "server"]' in compose_text
+    assert 'profiles: ["server"]' in compose_text
+
+
+def test_backfill_enrichment_metadata_uses_boolean_safe_sql():
+    class RecordingCursor:
+        def __init__(self):
+            self.statements = []
+
+        def execute(self, statement, params=None):
+            self.statements.append(statement)
+            return self
+
+    cursor = RecordingCursor()
+
+    hunter_db._backfill_enrichment_metadata(cursor)
+
+    joined = "\n".join(cursor.statements)
+    assert "auto_apply_eligible IS TRUE" in joined
+    assert "auto_apply_eligible = 1" not in joined
 
 
 def test_deploy_runner_target_mapping(monkeypatch):

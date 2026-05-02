@@ -28,11 +28,16 @@ def _require_auth(request: Request) -> str:
 
 
 def _service_headers() -> dict[str, str]:
+    from backend.request_id import request_id_var
     from hunter.config import HUNT_SERVICE_TOKEN
 
+    headers: dict[str, str] = {}
     if HUNT_SERVICE_TOKEN:
-        return {"Authorization": f"Bearer {HUNT_SERVICE_TOKEN}"}
-    return {}
+        headers["Authorization"] = f"Bearer {HUNT_SERVICE_TOKEN}"
+    rid = request_id_var.get("")
+    if rid:
+        headers["X-Request-ID"] = rid
+    return headers
 
 
 async def _proxy_get(url: str) -> JSONResponse:

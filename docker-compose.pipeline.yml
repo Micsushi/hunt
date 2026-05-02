@@ -1,7 +1,7 @@
 services:
   postgres:
     image: postgres:16-alpine
-    profiles: ["pipeline", "db", "c0", "c1", "c2", "c1c2", "all"]
+    profiles: ["pipeline", "db", "c0", "c1", "c2", "c1c2", "all", "server"]
     environment:
       POSTGRES_USER: ${HUNT_POSTGRES_USER:-hunt}
       POSTGRES_PASSWORD: ${HUNT_POSTGRES_PASSWORD:-hunt}
@@ -56,6 +56,7 @@ services:
       ENRICHMENT_TIMEOUT_MS: ${ENRICHMENT_TIMEOUT_MS:-45000}
       ENRICHMENT_SLOW_MO_MS: ${ENRICHMENT_SLOW_MO_MS:-0}
       ENRICHMENT_UI_VERIFY_BLOCKED: ${ENRICHMENT_UI_VERIFY_BLOCKED:-false}
+      HUNT_DISCORD_WEBHOOK_URL: ${HUNT_DISCORD_WEBHOOK_URL:-}
     ports:
       - "${HUNT_HUNTER_BIND_HOST:-127.0.0.1}:${HUNT_HUNTER_HOST_PORT:-18001}:8001"
 
@@ -79,6 +80,7 @@ services:
       ENRICHMENT_SLOW_MO_MS: ${ENRICHMENT_SLOW_MO_MS:-0}
       ENRICHMENT_UI_VERIFY_BLOCKED: ${ENRICHMENT_UI_VERIFY_BLOCKED:-false}
       RUN_INTERVAL_SECONDS: ${RUN_INTERVAL_SECONDS:-600}
+      HUNT_DISCORD_WEBHOOK_URL: ${HUNT_DISCORD_WEBHOOK_URL:-}
     command:
       - python
       - -u
@@ -155,6 +157,7 @@ services:
       HUNT_DB_URL: ${HUNT_COMPOSE_DB_URL:-postgresql://hunt:hunt@postgres:5432/hunt}
       HUNT_SERVICE_TOKEN: ${HUNT_SERVICE_TOKEN:-hunt-local-smoke-token}
       HUNT_COORDINATOR_ROOT: ${HUNT_COORDINATOR_ROOT:-/tmp/hunt-coordinator}
+      HUNT_DISCORD_WEBHOOK_URL: ${HUNT_DISCORD_WEBHOOK_URL:-}
     ports:
       - "${HUNT_COORDINATOR_BIND_HOST:-127.0.0.1}:${HUNT_COORDINATOR_HOST_PORT:-18003}:8003"
 

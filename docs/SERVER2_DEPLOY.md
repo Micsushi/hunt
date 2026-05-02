@@ -75,6 +75,7 @@ Important limit:
 
 1. Run local verification first: `python ci.py shared` plus the component-specific target you changed.
 2. Verify the repo-native runtime command you expect the host to run: for example `python deploy.py c1 --mode server --env-file .env.server2 --dry-run`.
+   If you run it manually on `server2`, include `--project-name hunt-server2` so Docker Compose manages the same project Ansible owns.
 3. Preview the remote deploy wrapper: `.\scripts\deploy_server2.ps1 -Stages 6 -PrintOnly`
 4. Optional Ansible check mode: `.\scripts\deploy_server2.ps1 -Stages 6 -Check`
 5. Run the real deploy.

@@ -23,6 +23,7 @@ SMOKE_TARGETS = {
     "c4": ("scripts/smoke_coordinator_e2e.sh",),
     "c4-container": ("scripts/smoke_coordinator_container.sh",),
     "review": ("scripts/smoke_review_container.sh",),
+    "server2": ("scripts/smoke_server2.sh",),
 }
 TARGET_ALIASES = {
     "full": "all",
@@ -58,12 +59,17 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
         "target",
         nargs="?",
         default="all",
-        help="Smoke target: all, c0, c1, c2, c4, c4-container, review",
+        help="Smoke target: all, c0, c1, c2, c4, c4-container, review, server2",
     )
     parser.add_argument(
         "--dry-run",
         action="store_true",
         help="Print the commands that would run without starting containers.",
+    )
+    parser.add_argument(
+        "--existing",
+        action="store_true",
+        help="Skip container startup; run checks against the already-running stack.",
     )
     return parser.parse_args(argv)
 
@@ -101,6 +107,7 @@ def _resolve_target(name: str) -> tuple[str, tuple[str, ...]]:
 
 
 def main() -> int:
+    """Entry point: resolve runner + target, then execute smoke scripts."""
     args = _parse_args(sys.argv[1:])
 
     try:
@@ -118,9 +125,11 @@ def main() -> int:
         print()
         print(f"[local-smoke] running {script}")
         if args.dry_run:
-            print(f"[local-smoke] dry-run: {' '.join([*runner, script])}")
+            extra = " --existing" if args.existing else ""
+            print(f"[local-smoke] dry-run: {' '.join([*runner, script])}{extra}")
             continue
-        completed = subprocess.run([*runner, script], cwd=ROOT)
+        extra_args = ["--existing"] if args.existing else []
+        completed = subprocess.run([*runner, script, *extra_args], cwd=ROOT, check=False)
         if completed.returncode != 0:
             print(
                 f"[local-smoke] FAILED at {script} with exit code {completed.returncode}",

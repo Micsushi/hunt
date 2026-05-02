@@ -35,11 +35,13 @@ Things that cut across all services.
 - [x] One command to run a full local smoke test on both Windows and Linux
 - [x] One command or written runbook to deploy from Windows to server2
 - [x] Keep public `server2` access on Cloudflare Tunnel while moving the actual Hunt runtime deploy logic into this repo
-- [ ] Decide whether to keep the combined `Dockerfile.review` (backend + frontend in one image) or split them into two separate containers
+- [x] Decide whether to keep the combined `Dockerfile.review` (backend + frontend in one image) or split — keep both: `Dockerfile.review` is the backend that also serves the SPA directly (used for `c0` profile and direct-access fallback); `Dockerfile.frontend` (nginx) is the preferred web entry point for the full pipeline stack
 - [x] Confirm `docker-compose.pipeline.yml` is the standard way to run locally, or add a simpler root `docker-compose.yml` wrapper
-- [ ] Add structured logging and request IDs across all flows (scrape, enrich, generate resume, fill form, run, approval) — makes it possible to trace a single job through the whole pipeline when something goes wrong
-- [ ] Discord notifications for key events: LinkedIn auth expired, scrape/enrich failed, C4 waiting for approval, run failed, smoke failed
-- [ ] Written release checklist: local tests → local smoke → server2 smoke → update docs → update vault
+- [x] Add `X-Request-ID` middleware to C0 backend — generates a UUID per request, echoes it in the response header, and forwards it to C1/C2/C4 via the gateway proxy
+- [ ] Add request ID logging inside C1, C2, and C4 services — each service receives `X-Request-ID` from C0; they should log it to correlate service-level logs with the originating request
+- [x] Discord notifications for C4 state transitions: awaiting submit approval, fill failed, run rejected at manual review — C1 already notifies on LinkedIn auth issues, rate limiting, automation detected, priority job found; set `HUNT_DISCORD_WEBHOOK_URL` to enable
+- [ ] Discord notification when a smoke test fails
+- [x] Written release checklist — `docs/RELEASE_CHECKLIST.md`: local tests, local smoke, server2 smoke, update docs, update vault
 - [x] Short cross-platform test commands per service: `python test.py c0|c1|c2|c3|c4|shared|all`
 - [x] Short cross-platform quality check commands per service: `python quality.py c0|c1|c2|c3|c4|shared|frontend|all`
 - [x] Full CI entrypoint for local and GitHub Actions use: `python ci.py [target]`
@@ -58,8 +60,8 @@ C0 is the web interface and API gateway. The frontend is a React single-page app
 - [x] C4 (coordinator) page — shows run queue, run detail, pending approvals, approve/deny buttons, and event log
 - [x] C3 (form filler) page — shows pending fills, bridge online/offline status
 - [x] Failed jobs visibility — filter jobs by failed/blocked status, see error codes, bulk requeue from the Jobs page
-- [ ] **Local smoke test** — run C0 against a local Postgres container with C1, C2, and C4 services also running, and verify everything works end to end
-- [ ] **Server2 smoke test** — run the same verification against production Postgres and the live service URLs on server2
+- [x] **Local smoke test** — run C0 against a local Postgres container with C1, C2, and C4 services also running, and verify everything works end to end
+- [x] **Server2 smoke test** — run the same verification against production Postgres and the live service URLs on server2
 
 ## C1 : Hunter (job scraper and enricher)
 

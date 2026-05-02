@@ -80,6 +80,7 @@ Edit `hunter/config.py`:
 - Shared glossary: `docs/GLOSSARY.md`
 - Repo-native deploy command: `python deploy.py all`
 - Server-shaped deploy command: `python deploy.py all --mode server --env-file .env.server2`
+- Host-side manual recovery on server2: `python deploy.py all --mode server --env-file .env.server2 --project-name hunt-server2`
 - Deploy targets runbook: `docs/DEPLOY.md`
 - Local Postgres/container smoke tests: `docs/LOCAL_POSTGRES_SMOKES.md`
 - Server2 deploy runbook: `docs/SERVER2_DEPLOY.md`

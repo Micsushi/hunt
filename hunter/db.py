@@ -328,10 +328,10 @@ def _backfill_enrichment_metadata(cursor):
           AND (
                 enrichment_status = 'done'
              OR (
-                    enrichment_status IS NULL
+                enrichment_status IS NULL
                 AND (
                         apply_type = 'external_apply'
-                     OR auto_apply_eligible = 1
+                     OR auto_apply_eligible IS TRUE
                     )
                 )
           )

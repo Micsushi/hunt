@@ -208,6 +208,7 @@ async def lifespan(app):
 app = FastAPI(title="Hunt Control Plane", version="0.1.0", lifespan=lifespan)
 
 from backend.gateway import router as _gateway_router  # noqa: E402
+from backend.request_id import RequestIDMiddleware  # noqa: E402
 
 app.include_router(_gateway_router)
 
@@ -224,6 +225,7 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+app.add_middleware(RequestIDMiddleware)
 
 # Serve built SPA assets at /assets/* if frontend/dist exists
 if (FRONTEND_DIST / "assets").exists():

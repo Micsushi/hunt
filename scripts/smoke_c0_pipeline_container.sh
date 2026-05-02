@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # C0 pipeline smoke: runs local compose services and verifies C0 is the operator gateway.
+# Pass --existing to skip container startup and run checks against the already-running stack.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -7,8 +8,18 @@ COMPOSE_FILE="${COMPOSE_FILE:-docker-compose.pipeline.yml}"
 PROJECT="${PROJECT:-hunt-c0-smoke-$$}"
 BASE="${BASE:-http://127.0.0.1:18080}"
 FRONTEND_BASE="${FRONTEND_BASE:-http://127.0.0.1:18090}"
-ADMIN_PASSWORD="${ADMIN_PASSWORD:-hunt-local-admin}"
-SERVICE_TOKEN="${SERVICE_TOKEN:-hunt-local-smoke-token}"
+
+# Source .env so credentials match whatever the running stack was started with.
+# shellcheck disable=SC1091
+[ -f "$ROOT/.env" ] && set -a && source "$ROOT/.env" && set +a || true
+
+ADMIN_PASSWORD="${ADMIN_PASSWORD:-${HUNT_ADMIN_PASSWORD:-hunt-local-admin}}"
+SERVICE_TOKEN="${SERVICE_TOKEN:-${HUNT_SERVICE_TOKEN:-hunt-local-smoke-token}}"
+
+EXISTING=0
+for arg in "$@"; do
+  [ "$arg" = "--existing" ] && EXISTING=1
+done
 
 PASS=0
 FAIL=0
@@ -25,9 +36,11 @@ check_http() {
 }
 
 cleanup() {
+  [ "$EXISTING" -eq 1 ] && return
   docker compose -p "$PROJECT" -f "$ROOT/$COMPOSE_FILE" --profile pipeline down -v >/dev/null 2>&1 || true
 }
 dump_logs() {
+  [ "$EXISTING" -eq 1 ] && return
   echo
   echo "=== compose ps ==="
   docker compose -p "$PROJECT" -f "$ROOT/$COMPOSE_FILE" --profile pipeline ps || true
@@ -40,14 +53,19 @@ trap dump_logs ERR
 
 cd "$ROOT"
 echo "=== hunt C0 pipeline smoke ==="
-docker compose -p "$PROJECT" -f "$COMPOSE_FILE" --profile pipeline up -d --build
 
-for _ in $(seq 1 60); do
-  if curl -fsS "$BASE/health" >/tmp/hunt-c0-health.json 2>/dev/null; then
-    break
-  fi
-  sleep 2
-done
+if [ "$EXISTING" -eq 0 ]; then
+  docker compose -p "$PROJECT" -f "$COMPOSE_FILE" --profile pipeline up -d --build
+
+  for _ in $(seq 1 60); do
+    if curl -fsS "$BASE/health" >/tmp/hunt-c0-health.json 2>/dev/null; then
+      break
+    fi
+    sleep 2
+  done
+else
+  echo "  --existing: skipping container startup, using running stack at $BASE"
+fi
 
 health="$(curl -fsS "$BASE/health")"
 check_contains "GET /health reports ok" '"status":"ok"' "$health"
