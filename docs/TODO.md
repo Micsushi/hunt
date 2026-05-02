@@ -33,9 +33,10 @@ Things that cut across all services.
 - [x] Operator status page — shows what is up or broken across C0-C4 in one view
 - [x] Keep docs current — update `docs/roadmap.md`, this file, and `docs/LOCAL_POSTGRES_SMOKES.md` after each deploy milestone
 - [x] One command to run a full local smoke test on both Windows and Linux
-- [ ] One command or written runbook to deploy from Windows to server2
+- [x] One command or written runbook to deploy from Windows to server2
+- [x] Keep public `server2` access on Cloudflare Tunnel while moving the actual Hunt runtime deploy logic into this repo
 - [ ] Decide whether to keep the combined `Dockerfile.review` (backend + frontend in one image) or split them into two separate containers
-- [ ] Confirm `docker-compose.pipeline.yml` is the standard way to run locally, or add a simpler root `docker-compose.yml` wrapper
+- [x] Confirm `docker-compose.pipeline.yml` is the standard way to run locally, or add a simpler root `docker-compose.yml` wrapper
 - [ ] Add structured logging and request IDs across all flows (scrape, enrich, generate resume, fill form, run, approval) — makes it possible to trace a single job through the whole pipeline when something goes wrong
 - [ ] Discord notifications for key events: LinkedIn auth expired, scrape/enrich failed, C4 waiting for approval, run failed, smoke failed
 - [ ] Written release checklist: local tests → local smoke → server2 smoke → update docs → update vault

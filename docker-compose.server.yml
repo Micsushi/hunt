@@ -1,0 +1,104 @@
+services:
+  postgres:
+    container_name: ${HUNT_POSTGRES_CONTAINER_NAME}
+    restart: unless-stopped
+
+  review:
+    container_name: ${HUNT_REVIEW_CONTAINER_NAME}
+    restart: unless-stopped
+    environment:
+      HUNT_DB_URL: ${HUNT_COMPOSE_DB_URL}
+      HUNT_SERVICE_TOKEN: ${HUNT_SERVICE_TOKEN}
+      HUNT_CREDENTIAL_KEY: ${HUNT_CREDENTIAL_KEY}
+      HUNT_ADMIN_USERNAME: ${HUNT_ADMIN_USERNAME}
+      HUNT_ADMIN_PASSWORD: ${HUNT_ADMIN_PASSWORD}
+      HUNT_ARTIFACTS_DIR: /app/artifacts
+      HUNT_RESUME_ARTIFACTS_DIR: /app/resumes
+      HUNT_HUNTER_URL: ${HUNT_HUNTER_URL}
+      HUNT_FLETCHER_URL: ${HUNT_FLETCHER_URL}
+      HUNT_COORDINATOR_URL: ${HUNT_COORDINATOR_URL}
+    volumes:
+      - ${HUNT_ARTIFACTS_STORAGE}:/app/artifacts:ro
+      - ${HUNT_RESUME_STORAGE}:/app/resumes:ro
+    networks:
+      default:
+        aliases:
+          - ${HUNT_BACKEND_CONTAINER_NAME}
+
+  frontend:
+    container_name: ${HUNT_FRONTEND_CONTAINER_NAME}
+    restart: unless-stopped
+    environment:
+      BACKEND_HOST: ${HUNT_BACKEND_CONTAINER_NAME}
+      BACKEND_PORT: "8000"
+
+  hunter:
+    container_name: ${HUNT_HUNTER_CONTAINER_NAME}
+    restart: unless-stopped
+    environment:
+      HUNT_DB_URL: ${HUNT_COMPOSE_DB_URL}
+      HUNT_SERVICE_TOKEN: ${HUNT_SERVICE_TOKEN}
+      HUNT_CREDENTIAL_KEY: ${HUNT_CREDENTIAL_KEY}
+      HUNT_DATA_DIR: /app/data
+      LINKEDIN_STORAGE_STATE_PATH: /app/.state/linkedin_auth_state.json
+      LINKEDIN_BROWSER_CHANNEL: ${LINKEDIN_BROWSER_CHANNEL}
+      ENRICHMENT_BATCH_LIMIT: ${ENRICHMENT_BATCH_LIMIT}
+      ENRICHMENT_TIMEOUT_MS: ${ENRICHMENT_TIMEOUT_MS}
+      ENRICHMENT_SLOW_MO_MS: ${ENRICHMENT_SLOW_MO_MS}
+      ENRICHMENT_UI_VERIFY_BLOCKED: ${ENRICHMENT_UI_VERIFY_BLOCKED}
+    volumes:
+      - ${HUNT_ARTIFACTS_STORAGE}:/app/data
+      - ${HUNT_STATE_STORAGE}:/app/.state
+
+  hunter-scheduler:
+    container_name: ${HUNT_HUNTER_SCHEDULER_CONTAINER_NAME}
+    restart: unless-stopped
+    environment:
+      HUNT_DB_URL: ${HUNT_COMPOSE_DB_URL}
+      HUNT_SERVICE_TOKEN: ${HUNT_SERVICE_TOKEN}
+      HUNT_CREDENTIAL_KEY: ${HUNT_CREDENTIAL_KEY}
+      HUNT_DATA_DIR: /app/data
+      LINKEDIN_STORAGE_STATE_PATH: /app/.state/linkedin_auth_state.json
+      LINKEDIN_BROWSER_CHANNEL: ${LINKEDIN_BROWSER_CHANNEL}
+      ENRICHMENT_BATCH_LIMIT: ${ENRICHMENT_BATCH_LIMIT}
+      ENRICHMENT_TIMEOUT_MS: ${ENRICHMENT_TIMEOUT_MS}
+      ENRICHMENT_SLOW_MO_MS: ${ENRICHMENT_SLOW_MO_MS}
+      ENRICHMENT_UI_VERIFY_BLOCKED: ${ENRICHMENT_UI_VERIFY_BLOCKED}
+      RUN_INTERVAL_SECONDS: ${RUN_INTERVAL_SECONDS}
+    volumes:
+      - ${HUNT_ARTIFACTS_STORAGE}:/app/data
+      - ${HUNT_STATE_STORAGE}:/app/.state
+
+  fletcher:
+    container_name: ${HUNT_FLETCHER_CONTAINER_NAME}
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      HUNT_DB_URL: ${HUNT_COMPOSE_DB_URL}
+      HUNT_SERVICE_TOKEN: ${HUNT_SERVICE_TOKEN}
+      HUNT_RESUME_ARTIFACTS_DIR: /app/resumes
+      HUNT_RESUME_MODEL_BACKEND: ${HUNT_RESUME_MODEL_BACKEND}
+      HUNT_OLLAMA_HOST: ${HUNT_OLLAMA_HOST}
+      HUNT_OLLAMA_MODEL: ${HUNT_OLLAMA_MODEL}
+      HUNT_OLLAMA_TIMEOUT_SEC: ${HUNT_OLLAMA_TIMEOUT_SEC}
+    volumes:
+      - ${HUNT_RESUME_STORAGE}:/app/resumes
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+  coordinator:
+    container_name: ${HUNT_COORDINATOR_CONTAINER_NAME}
+    restart: unless-stopped
+    environment:
+      HUNT_DB_URL: ${HUNT_COMPOSE_DB_URL}
+      HUNT_SERVICE_TOKEN: ${HUNT_SERVICE_TOKEN}
+      HUNT_COORDINATOR_ROOT: /app/coordinator
+    volumes:
+      - ${HUNT_COORDINATOR_STORAGE}:/app/coordinator
+
+networks:
+  default:
+    name: ${HUNT_DOCKER_NETWORK_NAME}
+    external: true

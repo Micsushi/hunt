@@ -75,10 +75,17 @@ Edit `hunter/config.py`:
 ## Planning Docs
 
 - **Component IDs and code names:** `docs/NAMING.md`
+- CI-first planning checklist for new projects, components, and features: `docs/PLANNING.md`
 - System roadmap: `docs/roadmap.md`
 - Shared glossary: `docs/GLOSSARY.md`
+- Repo-native deploy command: `python deploy.py all`
+- Server-shaped deploy command: `python deploy.py all --mode server --env-file .env.server2`
+- Deploy targets runbook: `docs/DEPLOY.md`
 - Local Postgres/container smoke tests: `docs/LOCAL_POSTGRES_SMOKES.md`
+- Server2 deploy runbook: `docs/SERVER2_DEPLOY.md`
 - One-command local smoke runner: `python smoke.py`
+- Windows deploy wrapper for server2: `.\scripts\deploy_server2.ps1 -Stages 6`
+- Public `server2` access still relies on Cloudflare Tunnel and Cloudflare Access around the Hunt runtime
 - Component smokes: `python smoke.py c0`, `python smoke.py c1`, `python smoke.py c2`, `python smoke.py c4`
 - Short test groups: `python test.py c0`, `python test.py c1`, `python test.py c2`, `python test.py c3`, `python test.py c4`
 - Short quality checks: `python quality.py c0`, `python quality.py c1`, `python quality.py c2`, `python quality.py c3`, `python quality.py c4`

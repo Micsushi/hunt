@@ -12,7 +12,13 @@ from fastapi import HTTPException
 
 from backend import gateway
 from scripts import migrate_sqlite_to_postgres as migration
-from scripts import run_component_checks, run_component_ci, run_component_tests, run_local_smoke
+from scripts import (
+    run_component_checks,
+    run_component_ci,
+    run_component_tests,
+    run_deploy_stack,
+    run_local_smoke,
+)
 
 
 class FakeCursor:
@@ -368,6 +374,220 @@ def test_repo_root_smoke_shortcut_exists():
 
     shortcut_text = shortcut.read_text(encoding="utf-8")
     assert "from scripts.run_local_smoke import main" in shortcut_text
+
+
+def test_server2_deploy_wrapper_exists():
+    script = Path("scripts/deploy_server2.ps1")
+
+    assert script.is_file()
+
+    script_text = script.read_text(encoding="utf-8")
+    assert "ansible_homelab" in script_text
+    assert '"job_agent"' in script_text
+    assert "$PrintOnly" in script_text
+    assert "-Stages" in script_text
+
+
+def test_server2_deploy_runbook_exists():
+    runbook = Path("docs/SERVER2_DEPLOY.md")
+
+    assert runbook.is_file()
+
+    runbook_text = runbook.read_text(encoding="utf-8")
+    assert "scripts/deploy_server2.ps1" in runbook_text
+    assert "server2" in runbook_text
+    assert "ansible_homelab" in runbook_text
+
+
+def test_repo_root_deploy_shortcut_exists():
+    shortcut = Path("deploy.py")
+
+    assert shortcut.is_file()
+
+    shortcut_text = shortcut.read_text(encoding="utf-8")
+    assert "from scripts.run_deploy_stack import main" in shortcut_text
+
+
+def test_repo_native_deploy_runbook_exists():
+    runbook = Path("docs/DEPLOY.md")
+
+    assert runbook.is_file()
+
+    runbook_text = runbook.read_text(encoding="utf-8")
+    assert "python deploy.py all" in runbook_text
+    assert "docker-compose.pipeline.yml" in runbook_text
+
+
+def test_server_compose_override_assets_exist():
+    override_file = Path("docker-compose.server.yml")
+    env_template = Path(".env.server.example")
+
+    assert override_file.is_file()
+    assert env_template.is_file()
+
+    override_text = override_file.read_text(encoding="utf-8")
+    assert "hunter-scheduler" in override_text
+    assert "HUNT_DOCKER_NETWORK_NAME" in override_text
+    assert "HUNT_HUNTER_SCHEDULER_CONTAINER_NAME" in override_text
+
+    env_text = env_template.read_text(encoding="utf-8")
+    assert "HUNT_REVIEW_CONTAINER_NAME" in env_text
+    assert "HUNT_HUNTER_SCHEDULER_CONTAINER_NAME" in env_text
+
+
+def test_deploy_runner_target_mapping(monkeypatch):
+    calls = []
+
+    def fake_run(command, cwd):
+        calls.append((command, cwd))
+        return types.SimpleNamespace(returncode=0)
+
+    monkeypatch.setattr(run_deploy_stack.subprocess, "run", fake_run)
+    monkeypatch.setattr(run_deploy_stack.sys, "argv", ["run_deploy_stack.py", "c1"])
+
+    assert run_deploy_stack.main() == 0
+    assert calls == [
+        (
+            [
+                "docker",
+                "compose",
+                "-p",
+                "hunt",
+                "-f",
+                str(run_deploy_stack.COMPOSE_FILE),
+                "up",
+                "-d",
+                "--build",
+                "review",
+                "frontend",
+                "hunter",
+            ],
+            run_deploy_stack.ROOT,
+        )
+    ]
+
+
+def test_deploy_runner_server_mode_mapping(monkeypatch):
+    calls = []
+
+    def fake_run(command, cwd):
+        calls.append((command, cwd))
+        return types.SimpleNamespace(returncode=0)
+
+    monkeypatch.setattr(run_deploy_stack.subprocess, "run", fake_run)
+    monkeypatch.setattr(
+        run_deploy_stack.sys,
+        "argv",
+        [
+            "run_deploy_stack.py",
+            "all",
+            "--mode",
+            "server",
+            "--env-file",
+            ".env.server2",
+        ],
+    )
+
+    assert run_deploy_stack.main() == 0
+    assert calls == [
+        (
+            [
+                "docker",
+                "compose",
+                "-p",
+                "hunt",
+                "--env-file",
+                ".env.server2",
+                "-f",
+                str(run_deploy_stack.COMPOSE_FILE),
+                "-f",
+                str(run_deploy_stack.SERVER_COMPOSE_FILE),
+                "up",
+                "-d",
+                "--build",
+                "postgres",
+                "review",
+                "frontend",
+                "hunter",
+                "hunter-scheduler",
+                "fletcher",
+                "coordinator",
+            ],
+            run_deploy_stack.ROOT,
+        )
+    ]
+
+
+def test_deploy_runner_stop_mapping(monkeypatch):
+    calls = []
+
+    def fake_run(command, cwd):
+        calls.append((command, cwd))
+        return types.SimpleNamespace(returncode=0)
+
+    monkeypatch.setattr(run_deploy_stack.subprocess, "run", fake_run)
+    monkeypatch.setattr(run_deploy_stack.sys, "argv", ["run_deploy_stack.py", "c2", "--stop"])
+
+    assert run_deploy_stack.main() == 0
+    assert calls[0][0][-5:] == [
+        "review",
+        "frontend",
+        "ollama",
+        "ollama-init",
+        "fletcher",
+    ]
+
+
+def test_deploy_runner_dry_run_skips_subprocess(monkeypatch, capsys):
+    def fail_run(_command, _cwd):
+        raise AssertionError("subprocess.run should not be called in dry-run mode")
+
+    monkeypatch.setattr(run_deploy_stack.subprocess, "run", fail_run)
+    monkeypatch.setattr(run_deploy_stack.sys, "argv", ["run_deploy_stack.py", "all", "--dry-run"])
+
+    assert run_deploy_stack.main() == 0
+
+    output = capsys.readouterr().out
+    assert "docker compose" in output
+    assert "coordinator" in output
+
+
+def test_deploy_runner_unknown_target_returns_error(monkeypatch, capsys):
+    monkeypatch.setattr(run_deploy_stack.sys, "argv", ["run_deploy_stack.py", "bogus"])
+
+    assert run_deploy_stack.main() == 1
+    assert "Unknown deploy target" in capsys.readouterr().err
+
+
+def test_server2_ansible_public_ingress_contract_if_repo_present():
+    ansible_root = Path("../ansible_homelab").resolve()
+    if not ansible_root.is_dir():
+        pytest.skip("ansible_homelab repo not present next to hunt")
+
+    vars_text = (ansible_root / "group_vars" / "job_agent" / "vars.yml").read_text(encoding="utf-8")
+    task_text = (ansible_root / "playbooks" / "tasks" / "hunt_repo_native_deploy.yml").read_text(
+        encoding="utf-8"
+    )
+
+    assert 'service: "http://{{ hunt_review_container_name }}:{{ hunt_review_port }}"' in vars_text
+    assert 'service: "http://{{ hunt_frontend_container_name }}:80"' in vars_text
+    assert "deploy_cloudflare_tunnel: true" in vars_text
+    assert "deploy_traefik: false" in vars_text
+    assert "deploy_authelia: false" in vars_text
+    assert "HUNT_REVIEW_CONTAINER_NAME={{ hunt_review_container_name }}" in task_text
+    assert "HUNT_FRONTEND_CONTAINER_NAME={{ hunt_frontend_container_name }}" in task_text
+
+
+def test_server2_auth_mode_is_documented_as_cloudflare_access_if_repo_present():
+    ansible_root = Path("../ansible_homelab").resolve()
+    if not ansible_root.is_dir():
+        pytest.skip("ansible_homelab repo not present next to hunt")
+
+    vars_text = (ansible_root / "group_vars" / "job_agent" / "vars.yml").read_text(encoding="utf-8")
+    readme_text = (ansible_root / "README.md").read_text(encoding="utf-8")
+
+    assert "auth handled by Cloudflare Access" in vars_text
+    assert "deploy.ps1" in readme_text
 
 
 def test_component_test_runner_target_mapping(monkeypatch):

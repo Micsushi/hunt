@@ -3,16 +3,16 @@ services:
     image: postgres:16-alpine
     profiles: ["pipeline", "db", "c0", "c1", "c2", "c1c2", "all"]
     environment:
-      POSTGRES_USER: hunt
-      POSTGRES_PASSWORD: hunt
-      POSTGRES_DB: hunt
+      POSTGRES_USER: ${HUNT_POSTGRES_USER:-hunt}
+      POSTGRES_PASSWORD: ${HUNT_POSTGRES_PASSWORD:-hunt}
+      POSTGRES_DB: ${HUNT_POSTGRES_DB:-hunt}
     ports:
-      - "127.0.0.1:15432:5432"
+      - "${HUNT_POSTGRES_BIND_HOST:-127.0.0.1}:${HUNT_POSTGRES_HOST_PORT:-15432}:5432"
     volumes:
-      - pipeline_pg_data:/var/lib/postgresql/data
+      - ${HUNT_POSTGRES_STORAGE:-pipeline_pg_data}:/var/lib/postgresql/data
       - ./schema/postgres_schema.sql:/docker-entrypoint-initdb.d/01-postgres_schema.sql:ro
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U hunt -d hunt"]
+      test: ["CMD-SHELL", "pg_isready -U ${HUNT_POSTGRES_USER:-hunt} -d ${HUNT_POSTGRES_DB:-hunt}"]
       interval: 2s
       timeout: 2s
       retries: 20
@@ -26,16 +26,16 @@ services:
       postgres:
         condition: service_healthy
     environment:
-      HUNT_DB_URL: postgresql://hunt:hunt@postgres:5432/hunt
-      HUNT_SERVICE_TOKEN: hunt-local-smoke-token
+      HUNT_DB_URL: ${HUNT_COMPOSE_DB_URL:-postgresql://hunt:hunt@postgres:5432/hunt}
+      HUNT_SERVICE_TOKEN: ${HUNT_SERVICE_TOKEN:-hunt-local-smoke-token}
       HUNT_ADMIN_USERNAME: ${HUNT_ADMIN_USERNAME:-admin}
       HUNT_ADMIN_PASSWORD: ${HUNT_ADMIN_PASSWORD:-hunt-local-admin}
-      HUNT_CREDENTIAL_KEY: 472Pa6u8kvZjh58A3oN7v026YL-KxALGTo41gH4TBZM=
-      HUNT_HUNTER_URL: http://hunter:8001
-      HUNT_FLETCHER_URL: http://fletcher:8002
-      HUNT_COORDINATOR_URL: http://coordinator:8003
+      HUNT_CREDENTIAL_KEY: ${HUNT_CREDENTIAL_KEY:-472Pa6u8kvZjh58A3oN7v026YL-KxALGTo41gH4TBZM=}
+      HUNT_HUNTER_URL: ${HUNT_HUNTER_URL:-http://hunter:8001}
+      HUNT_FLETCHER_URL: ${HUNT_FLETCHER_URL:-http://fletcher:8002}
+      HUNT_COORDINATOR_URL: ${HUNT_COORDINATOR_URL:-http://coordinator:8003}
     ports:
-      - "127.0.0.1:18080:8000"
+      - "${HUNT_REVIEW_BIND_HOST:-127.0.0.1}:${HUNT_REVIEW_HOST_PORT:-18080}:8000"
 
   hunter:
     build:
@@ -46,12 +46,49 @@ services:
       postgres:
         condition: service_healthy
     environment:
-      HUNT_DB_URL: postgresql://hunt:hunt@postgres:5432/hunt
-      HUNT_SERVICE_TOKEN: hunt-local-smoke-token
-      HUNT_CREDENTIAL_KEY: 472Pa6u8kvZjh58A3oN7v026YL-KxALGTo41gH4TBZM=
-      HUNT_DATA_DIR: /tmp/hunt-data
+      HUNT_DB_URL: ${HUNT_COMPOSE_DB_URL:-postgresql://hunt:hunt@postgres:5432/hunt}
+      HUNT_SERVICE_TOKEN: ${HUNT_SERVICE_TOKEN:-hunt-local-smoke-token}
+      HUNT_CREDENTIAL_KEY: ${HUNT_CREDENTIAL_KEY:-472Pa6u8kvZjh58A3oN7v026YL-KxALGTo41gH4TBZM=}
+      HUNT_DATA_DIR: ${HUNT_DATA_DIR:-/tmp/hunt-data}
+      LINKEDIN_STORAGE_STATE_PATH: ${LINKEDIN_STORAGE_STATE_PATH:-/tmp/hunt-state/linkedin_auth_state.json}
+      LINKEDIN_BROWSER_CHANNEL: ${LINKEDIN_BROWSER_CHANNEL:-chromium}
+      ENRICHMENT_BATCH_LIMIT: ${ENRICHMENT_BATCH_LIMIT:-25}
+      ENRICHMENT_TIMEOUT_MS: ${ENRICHMENT_TIMEOUT_MS:-45000}
+      ENRICHMENT_SLOW_MO_MS: ${ENRICHMENT_SLOW_MO_MS:-0}
+      ENRICHMENT_UI_VERIFY_BLOCKED: ${ENRICHMENT_UI_VERIFY_BLOCKED:-false}
     ports:
-      - "127.0.0.1:18001:8001"
+      - "${HUNT_HUNTER_BIND_HOST:-127.0.0.1}:${HUNT_HUNTER_HOST_PORT:-18001}:8001"
+
+  hunter-scheduler:
+    build:
+      context: .
+      dockerfile: Dockerfile.hunter
+    profiles: ["server"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      HUNT_DB_URL: ${HUNT_COMPOSE_DB_URL:-postgresql://hunt:hunt@postgres:5432/hunt}
+      HUNT_SERVICE_TOKEN: ${HUNT_SERVICE_TOKEN:-hunt-local-smoke-token}
+      HUNT_CREDENTIAL_KEY: ${HUNT_CREDENTIAL_KEY:-472Pa6u8kvZjh58A3oN7v026YL-KxALGTo41gH4TBZM=}
+      HUNT_DATA_DIR: ${HUNT_DATA_DIR:-/tmp/hunt-data}
+      LINKEDIN_STORAGE_STATE_PATH: ${LINKEDIN_STORAGE_STATE_PATH:-/tmp/hunt-state/linkedin_auth_state.json}
+      LINKEDIN_BROWSER_CHANNEL: ${LINKEDIN_BROWSER_CHANNEL:-chromium}
+      ENRICHMENT_BATCH_LIMIT: ${ENRICHMENT_BATCH_LIMIT:-25}
+      ENRICHMENT_TIMEOUT_MS: ${ENRICHMENT_TIMEOUT_MS:-45000}
+      ENRICHMENT_SLOW_MO_MS: ${ENRICHMENT_SLOW_MO_MS:-0}
+      ENRICHMENT_UI_VERIFY_BLOCKED: ${ENRICHMENT_UI_VERIFY_BLOCKED:-false}
+      RUN_INTERVAL_SECONDS: ${RUN_INTERVAL_SECONDS:-600}
+    command:
+      - python
+      - -u
+      - -c
+      - |
+        import os, subprocess, sys, time
+        interval = int(os.environ.get("RUN_INTERVAL_SECONDS", "600"))
+        while True:
+            subprocess.run([sys.executable, "hunter/scraper.py"], check=False)
+            time.sleep(interval)
 
   ollama:
     image: ollama/ollama:latest
@@ -95,15 +132,16 @@ services:
       ollama-init:
         condition: service_completed_successfully
     environment:
-      HUNT_DB_URL: postgresql://hunt:hunt@postgres:5432/hunt
-      HUNT_SERVICE_TOKEN: hunt-local-smoke-token
-      HUNT_RESUME_ARTIFACTS_DIR: /tmp/hunt-resumes
-      HUNT_RESUME_MODEL_BACKEND: ollama
-      HUNT_OLLAMA_HOST: http://ollama:11434
-      HUNT_OLLAMA_MODEL: gemma4:e4b
-      HUNT_OLLAMA_EMBED_MODEL: mxbai-embed-large
+      HUNT_DB_URL: ${HUNT_COMPOSE_DB_URL:-postgresql://hunt:hunt@postgres:5432/hunt}
+      HUNT_SERVICE_TOKEN: ${HUNT_SERVICE_TOKEN:-hunt-local-smoke-token}
+      HUNT_RESUME_ARTIFACTS_DIR: ${HUNT_RESUME_ARTIFACTS_DIR:-/tmp/hunt-resumes}
+      HUNT_RESUME_MODEL_BACKEND: ${HUNT_RESUME_MODEL_BACKEND:-ollama}
+      HUNT_OLLAMA_HOST: ${HUNT_OLLAMA_HOST:-http://ollama:11434}
+      HUNT_OLLAMA_MODEL: ${HUNT_OLLAMA_MODEL:-gemma4:e4b}
+      HUNT_OLLAMA_EMBED_MODEL: ${HUNT_OLLAMA_EMBED_MODEL:-mxbai-embed-large}
+      HUNT_OLLAMA_TIMEOUT_SEC: ${HUNT_OLLAMA_TIMEOUT_SEC:-300}
     ports:
-      - "127.0.0.1:18002:8002"
+      - "${HUNT_FLETCHER_BIND_HOST:-127.0.0.1}:${HUNT_FLETCHER_HOST_PORT:-18002}:8002"
 
   coordinator:
     build:
@@ -114,11 +152,11 @@ services:
       postgres:
         condition: service_healthy
     environment:
-      HUNT_DB_URL: postgresql://hunt:hunt@postgres:5432/hunt
-      HUNT_SERVICE_TOKEN: hunt-local-smoke-token
-      HUNT_COORDINATOR_ROOT: /tmp/hunt-coordinator
+      HUNT_DB_URL: ${HUNT_COMPOSE_DB_URL:-postgresql://hunt:hunt@postgres:5432/hunt}
+      HUNT_SERVICE_TOKEN: ${HUNT_SERVICE_TOKEN:-hunt-local-smoke-token}
+      HUNT_COORDINATOR_ROOT: ${HUNT_COORDINATOR_ROOT:-/tmp/hunt-coordinator}
     ports:
-      - "127.0.0.1:18003:8003"
+      - "${HUNT_COORDINATOR_BIND_HOST:-127.0.0.1}:${HUNT_COORDINATOR_HOST_PORT:-18003}:8003"
 
   frontend:
     build:
@@ -128,10 +166,10 @@ services:
     depends_on:
       - review
     environment:
-      BACKEND_HOST: review
-      BACKEND_PORT: "8000"
+      BACKEND_HOST: ${HUNT_FRONTEND_BACKEND_HOST:-review}
+      BACKEND_PORT: ${HUNT_FRONTEND_BACKEND_PORT:-8000}
     ports:
-      - "127.0.0.1:18090:80"
+      - "${HUNT_FRONTEND_BIND_HOST:-127.0.0.1}:${HUNT_FRONTEND_HOST_PORT:-18090}:80"
 
 volumes:
   pipeline_pg_data:

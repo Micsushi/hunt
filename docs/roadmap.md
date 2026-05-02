@@ -62,9 +62,9 @@ Current gateway routes live under `/api/gateway/*`. Older planned `/api/c1/*`, `
 
 ## Deployment Split
 
-Local container work currently uses `docker-compose.pipeline.yml`.
+Local and host-native runtime deploys now use `python deploy.py ...`, which wraps `docker-compose.pipeline.yml` with stable service-bundle targets.
 
-Server2 deployment automation lives outside this repo. Keep this repo focused on service code, smoke scripts, and human-readable runtime docs.
+Server2 deployment automation lives outside this repo, but Hunt now documents the Windows operator path in `docs/SERVER2_DEPLOY.md` and exposes a repo-local wrapper at `scripts/deploy_server2.ps1`. Keep the underlying deployment logic in `ansible_homelab`.
 
 ## Principles
 
