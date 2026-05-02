@@ -5,6 +5,56 @@ on:
   pull_request:
 
 jobs:
+  hunter-cli-smoke:
+    name: Hunter CLI Smoke (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+
+    steps:
+      - name: Check out repo
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install Hunter runtime dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r hunter/requirements.txt
+
+      - name: Run standalone launcher smoke on Linux
+        if: runner.os == 'Linux'
+        run: |
+          chmod +x hunter.sh scripts/launchers/hunter.sh
+          ./hunter.sh queue
+          if ./hunter.sh definitely-not-a-command >/tmp/hunter-invalid.log 2>&1; then
+            cat /tmp/hunter-invalid.log
+            exit 1
+          fi
+
+      - name: Run standalone launcher smoke on Windows PowerShell
+        if: runner.os == 'Windows'
+        shell: powershell
+        run: |
+          .\hunter.ps1 queue
+          .\hunter.ps1 definitely-not-a-command *> $null
+          if ($LASTEXITCODE -eq 0) {
+            throw "hunter.ps1 should return a non-zero exit code for an invalid command."
+          }
+
+      - name: Run standalone launcher smoke on Windows cmd
+        if: runner.os == 'Windows'
+        shell: cmd
+        run: |
+          hunter.cmd queue
+          hunter.cmd definitely-not-a-command >NUL 2>&1
+          if %ERRORLEVEL% EQU 0 exit /b 1
+
   ci:
     runs-on: ubuntu-latest
 

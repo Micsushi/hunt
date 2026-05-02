@@ -35,7 +35,7 @@ C0 is the web interface and API gateway. The frontend is a React single-page app
 C1 scrapes LinkedIn for job listings and enriches them with full job descriptions. Runs as a service on server2 and as a CLI tool locally.
 
 - [x] Validate a full production cycle on server2: scrape → enrich → write artifacts → drain queue → confirm scheduler holds steady
-- [ ] Confirm the C1 CLI works standalone on both Windows and Linux without Docker (entry points exist: hunter.ps1, hunter.sh, hunter.cmd — needs a real test run on each platform)
+- [x] Confirm the C1 CLI works standalone on both Windows and Linux without Docker (entry points exist: hunter.ps1, hunter.sh, hunter.cmd — needs a real test run on each platform)
 - [ ] Add API endpoint tests: status, queue, scrape, enrich, auth failure handling, and duplicate-run prevention (service.py has all 5 endpoints; no test coverage yet)
 - [ ] Add structured log events for scrape start/end, enrich batch summary, retry exhaustion, and artifact writes (auth pauses and rate limiting already notify via Discord/C1Logger)
 - [x] LinkedIn auth handling: per-account state tracking (active / blocked / cooling down) in `linkedin_session.py`; C0 LinkedIn accounts page handles reauth

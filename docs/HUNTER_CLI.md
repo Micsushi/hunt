@@ -1,15 +1,4 @@
-## Hunter (C1)
-
-The **`hunter` Python package** is **C1 (Hunter)**: discovery, enrichment, and C1 operational logging.
-
-Layout under this directory:
-- **Runtime modules**: `hunter/*.py` (**`scraper.py`** = C1 discovery entrypoint only, historical name; **`enrich_*.py`**, **`db.py`**, …)
-- **C1 tests**: `hunter/tests/`
-- **Manual test helpers**: `hunter/devtools/`
-
-Import in code as `from hunter...` (repo root must be on `PYTHONPATH` or run from repo root).
-
-## CLI
+# Hunter CLI
 
 The standalone C1 operator CLI lives in `scripts/hunterctl.py`.
 Use it through the repo-root launchers:
@@ -24,25 +13,25 @@ Get help:
 .\hunter.ps1 -h
 .\hunter.ps1 scrape -h
 .\hunter.ps1 enrich -h
+.\hunter.ps1 jobs -h
 ```
 
 ```bash
 ./hunter.sh -h
 ./hunter.sh scrape -h
 ./hunter.sh enrich -h
+./hunter.sh jobs -h
 ```
 
-### Common commands
+## Daily use
 
 - `queue`: show overall queue health
 - `scrape`: run discovery, optionally with immediate enrichment
 - `enrich`: run enrichment for LinkedIn, Indeed, or all sources
-- `jobs`: list jobs with source and status filters
+- `jobs`: list jobs with filters
 - `job`: show one job by id
 - `ready`, `blocked`, `failed`, `done`, `processing`, `pending`: quick status views
 - `verify`: verify one enriched LinkedIn row
-- `backfill`, `backfill-all`, `drain`: run batch enrichment catch-up flows
-- `retry`, `requeue-enrich`, `requeue-errors`, `requeue-retryable`, `requeue-refresh`: recovery and retry helpers
 
 Examples:
 
@@ -52,18 +41,18 @@ Examples:
 .\hunter.ps1 enrich 25 --source linkedin
 .\hunter.ps1 jobs --source linkedin --status pending --limit 20
 .\hunter.ps1 job 123
-.\hunter.ps1 retry
-.\hunter.ps1 backfill-all 25 --source all
 ```
 
-### Auth commands
+## Command groups
+
+### Auth
 
 - `auth-save`
 - `auth-check`
 - `auth-auto-relogin`
 - `auth-test-discord`
 
-### Queue and inspection commands
+### Queue and inspection
 
 - `queue`
 - `jobs`
@@ -77,7 +66,7 @@ Examples:
 - `job-linkedin`
 - `verify`
 
-### Scrape and enrich commands
+### Scrape and enrich
 
 - `scrape`
 - `enrich`
@@ -86,7 +75,7 @@ Examples:
 - `drain`
 - `runner`
 
-### Retry and cleanup commands
+### Retry and cleanup
 
 - `requeue-refresh`
 - `requeue-enrich`
@@ -105,6 +94,37 @@ Examples:
 - `ui build`
 - `review`: legacy alias for `ui serve`
 - `build-ui`: legacy alias for `ui build`
+
+### Local and server control
+
+- `start`
+- `stop`
+- `restart`
+- `tests`
+
+Linux/server-oriented helpers:
+
+- `auto-on`
+- `auto-off`
+- `auto-status`
+- `svc-start`
+- `svc-stop`
+- `svc-status`
+- `svc-log`
+- `svc-follow`
+- `timer-enable`
+- `timer-disable`
+- `timer-start`
+- `timer-stop`
+- `timer-status`
+- `xvfb-status`
+- `review-health`
+
+Notes:
+
+- On Linux, `start` enables the scraper timer.
+- On Windows, `start` runs one local scrape cycle instead.
+- `stop` is meaningful on Linux; on Windows it exits with a hint.
 
 ### C4 commands exposed through the Hunter CLI
 
@@ -125,32 +145,12 @@ Examples:
 - `c4-runs`
 - `c4-events`
 
-### Local and server control commands
+## Validation
 
-- `start`
-- `stop`
-- `restart`
-- `tests`
-- `auto-on`
-- `auto-off`
-- `auto-status`
-- `svc-start`
-- `svc-stop`
-- `svc-status`
-- `svc-log`
-- `svc-follow`
-- `timer-enable`
-- `timer-disable`
-- `timer-start`
-- `timer-stop`
-- `timer-status`
-- `xvfb-status`
-- `review-health`
+Standalone launcher validation completed on both Windows and Linux:
 
-Linux/server helper notes:
+- `hunter.ps1`: valid command returns `0`, invalid command returns nonzero
+- `hunter.cmd`: valid command returns `0`, invalid command returns nonzero
+- `hunter.sh`: valid command returns `0`, invalid command returns nonzero
 
-- `auto-*`, `svc-*`, `timer-*`, `xvfb-status`, and `review-health` are Linux/server-oriented helpers
-- `start` enables the scraper timer on Linux, but on Windows it runs one local scrape cycle instead
-- `stop` is Linux-only in practice and will exit with a hint on Windows
-
-Full command reference: [`docs/HUNTER_CLI.md`](../docs/HUNTER_CLI.md)
+That confirms the CLI is usable without Docker through all supported launchers.

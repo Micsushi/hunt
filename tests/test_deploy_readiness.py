@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import os
+import shutil
+import subprocess
 import sys
 import types
 from pathlib import Path
@@ -20,6 +23,16 @@ from scripts import (
     run_deploy_stack,
     run_local_smoke,
 )
+
+REPO_ROOT = Path(__file__).resolve().parent.parent
+
+
+def _standalone_launcher_env(tmp_path: Path) -> dict[str, str]:
+    env = os.environ.copy()
+    env["HUNT_DB_PATH"] = str(tmp_path / "hunt.db")
+    env["HUNT_ARTIFACTS_DIR"] = str(tmp_path / "artifacts")
+    env["HUNT_COORDINATOR_ROOT"] = str(tmp_path / "coordinator")
+    return env
 
 
 class FakeCursor:
@@ -930,6 +943,102 @@ def test_github_actions_ci_workflow_exists():
     assert "actions/setup-python@v5" in workflow_text
     assert "actions/setup-node@v4" in workflow_text
     assert "python ci.py" in workflow_text
+    assert "hunter-cli-smoke" in workflow_text
+    assert "./hunter.sh queue" in workflow_text
+    assert "./hunter.sh definitely-not-a-command" in workflow_text
+    assert ".\\hunter.ps1 queue" in workflow_text
+    assert ".\\hunter.ps1 definitely-not-a-command" in workflow_text
+    assert "hunter.cmd queue" in workflow_text
+    assert "hunter.cmd definitely-not-a-command" in workflow_text
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="Windows-only launcher smoke")
+def test_hunter_powershell_launcher_queue_runs_standalone(tmp_path):
+    result = subprocess.run(
+        ["powershell", "-ExecutionPolicy", "Bypass", "-File", "hunter.ps1", "queue"],
+        cwd=REPO_ROOT,
+        env=_standalone_launcher_env(tmp_path),
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0
+    assert "Enrichment queue summary" in result.stdout
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="Windows-only launcher smoke")
+def test_hunter_powershell_launcher_propagates_failure_exit_code():
+    result = subprocess.run(
+        ["powershell", "-ExecutionPolicy", "Bypass", "-File", "hunter.ps1", "definitely-not-a-command"],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode != 0
+    assert "invalid choice" in result.stderr
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="Windows-only launcher smoke")
+def test_hunter_cmd_launcher_queue_runs_standalone(tmp_path):
+    result = subprocess.run(
+        ["cmd", "/c", "hunter.cmd queue"],
+        cwd=REPO_ROOT,
+        env=_standalone_launcher_env(tmp_path),
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0
+    assert "Enrichment queue summary" in result.stdout
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="Windows-only launcher smoke")
+def test_hunter_cmd_launcher_propagates_failure_exit_code():
+    result = subprocess.run(
+        ["cmd", "/c", "hunter.cmd definitely-not-a-command"],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode != 0
+    assert "invalid choice" in result.stderr
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX-only launcher smoke")
+def test_hunter_sh_launcher_queue_runs_standalone(tmp_path):
+    bash = shutil.which("bash")
+    if not bash:
+        pytest.skip("bash is not installed")
+
+    result = subprocess.run(
+        [bash, "hunter.sh", "queue"],
+        cwd=REPO_ROOT,
+        env=_standalone_launcher_env(tmp_path),
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0
+    assert "Enrichment queue summary" in result.stdout
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX-only launcher smoke")
+def test_hunter_sh_launcher_propagates_failure_exit_code():
+    bash = shutil.which("bash")
+    if not bash:
+        pytest.skip("bash is not installed")
+
+    result = subprocess.run(
+        [bash, "hunter.sh", "definitely-not-a-command"],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode != 0
+    assert "invalid choice" in result.stderr
 
 
 class FakeTimeoutClient:

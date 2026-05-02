@@ -7,3 +7,4 @@ if exist ".venv\Scripts\python.exe" (
 ) else (
   python "scripts\hunterctl.py" %*
 )
+exit /b %ERRORLEVEL%

@@ -10,3 +10,4 @@ elseif (Test-Path "venv\Scripts\python.exe") {
 else {
     python "scripts\hunterctl.py" @args
 }
+exit $LASTEXITCODE
