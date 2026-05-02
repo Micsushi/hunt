@@ -32,14 +32,30 @@ if ($NormalizedStages.Count -eq 0) {
   throw "Pass at least one Hunt stage, for example -Stages 6 or -Stages 6,7."
 }
 
-$Args = @("-Target", "job_agent")
+$DeployParams = @{
+  Target = "job_agent"
+}
 if ($NormalizedStages.Count -eq 1) {
-  $Args += @("-Stage", $NormalizedStages[0])
+  $DeployParams.Stage = $NormalizedStages[0]
 } else {
-  $Args += @("-Tags", (($NormalizedStages | ForEach-Object { "stage$_" }) -join ","))
+  $DeployParams.Tags = (($NormalizedStages | ForEach-Object { "stage$_" }) -join ",")
 }
 if ($Check) {
-  $Args += "-DryRun"
+  $DeployParams.DryRun = $true
+}
+
+$RenderedArgs = @(
+  "-Target",
+  $DeployParams.Target
+)
+if ($DeployParams.ContainsKey("Stage")) {
+  $RenderedArgs += @("-Stage", $DeployParams.Stage)
+}
+if ($DeployParams.ContainsKey("Tags")) {
+  $RenderedArgs += @("-Tags", $DeployParams.Tags)
+}
+if ($DeployParams.ContainsKey("DryRun")) {
+  $RenderedArgs += "-DryRun"
 }
 
 $RenderedCommand = @(
@@ -48,7 +64,7 @@ $RenderedCommand = @(
   "Bypass",
   "-File",
   ('"{0}"' -f $DeployScript)
-) + $Args
+) + $RenderedArgs
 
 Write-Host "Hunt server2 deploy"
 Write-Host "Ansible repo: $AnsibleRepo"
@@ -59,4 +75,4 @@ if ($PrintOnly) {
   return
 }
 
-& $DeployScript @Args
+& $DeployScript @DeployParams

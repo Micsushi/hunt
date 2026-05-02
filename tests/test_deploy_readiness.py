@@ -384,9 +384,10 @@ def test_server2_deploy_wrapper_exists():
 
     script_text = script.read_text(encoding="utf-8")
     assert "ansible_homelab" in script_text
-    assert '"job_agent"' in script_text
+    assert 'Target = "job_agent"' in script_text
     assert "$PrintOnly" in script_text
     assert "-Stages" in script_text
+    assert "@DeployParams" in script_text
 
 
 def test_server2_deploy_runbook_exists():
