@@ -617,6 +617,20 @@ def test_server2_auth_mode_is_documented_as_cloudflare_access_if_repo_present():
     assert "deploy.ps1" in readme_text
 
 
+def test_server2_stage7_targets_fletcher_and_uses_chromium_if_repo_present():
+    ansible_root = Path("../ansible_homelab").resolve()
+    if not ansible_root.is_dir():
+        pytest.skip("ansible_homelab repo not present next to hunt")
+
+    vars_text = (ansible_root / "group_vars" / "job_agent" / "vars.yml").read_text(encoding="utf-8")
+    stage7_text = (
+        ansible_root / "playbooks" / "job_agent" / "stages" / "stage7_fletcher.yml"
+    ).read_text(encoding="utf-8")
+
+    assert 'scraper_browser_channel: "chromium"' in vars_text
+    assert "hunt_repo_native_deploy_target: c2" in stage7_text
+
+
 def test_component_test_runner_target_mapping(monkeypatch):
     calls = []
 
