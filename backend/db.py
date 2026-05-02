@@ -11,9 +11,9 @@ import json
 from datetime import timedelta
 
 from hunter import config
+from hunter import db as hunter_db
 from hunter.config import ENRICHMENT_MAX_ATTEMPTS, ENRICHMENT_STALE_PROCESSING_MINUTES
 from hunter.enrichment_policy import format_sqlite_timestamp, utc_now
-from hunter import db as hunter_db
 
 
 def get_review_queue_summary(*, source=None):
@@ -304,7 +304,8 @@ def list_jobs_for_review(
     conn = hunter_db.get_connection()
     try:
         cursor = conn.cursor()
-        base_select = """
+        base_select = (
+            """
             SELECT id, title, company, source, job_url, apply_url, description,
                    status, apply_type, auto_apply_eligible, enrichment_status,
                    enrichment_attempts, enriched_at, last_enrichment_error,
@@ -313,7 +314,9 @@ def list_jobs_for_review(
                    date_scraped, date_posted, is_remote, level, category, priority, operator_notes, operator_tag
             FROM jobs
             WHERE 1=1
-        """ + frag
+        """
+            + frag
+        )
 
         params = list(filter_params)
 
@@ -361,7 +364,9 @@ def list_jobs_for_review(
         conn.close()
 
 
-def count_jobs_for_review(*, status="all", query=None, source=None, operator_tag=None, category=None, ats_type=None):
+def count_jobs_for_review(
+    *, status="all", query=None, source=None, operator_tag=None, category=None, ats_type=None
+):
     linkedin_auth_available = hunter_db.is_linkedin_auth_available()
     frag, filter_params = _review_jobs_filter_sql_and_params(
         status=status,
@@ -486,8 +491,16 @@ def update_job_operator_meta(job_id, *, notes=hunter_db._UNSET, operator_tag=hun
 
 
 _PATCHABLE_JOB_FIELDS = {
-    "company", "title", "location", "level", "category", "is_remote",
-    "description", "description_source", "operator_notes", "operator_tag",
+    "company",
+    "title",
+    "location",
+    "level",
+    "category",
+    "is_remote",
+    "description",
+    "description_source",
+    "operator_notes",
+    "operator_tag",
 }
 
 

@@ -12,12 +12,12 @@ from fletcher.db import (
     job_description_fingerprint,
     list_jobs_ready_for_resume,
 )
-from fletcher.resume.parser import parse_resume_file
 from fletcher.pipeline import (
     generate_resume_for_ad_hoc,
     generate_resume_for_job,
     generate_resumes_for_ready_jobs,
 )
+from fletcher.resume.parser import parse_resume_file
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
@@ -30,6 +30,7 @@ class Component2PipelineTests(unittest.TestCase):
         # Force heuristic backend for deterministic unit runs.
         self._model_backend_patcher = patch("fletcher.config.DEFAULT_MODEL_BACKEND", "heuristic")
         self._model_backend_patcher.start()
+
         # Also avoid slow/host-dependent LaTeX compilation in unit tests.
         # Individual tests may override this with their own patch(...) if needed.
         def _fast_compile(_tex_path):
@@ -425,9 +426,7 @@ class Component2PipelineTests(unittest.TestCase):
             },
         ]
 
-        with patch(
-            "fletcher.pipeline.compile_tex", side_effect=compile_results
-        ) as mock_compile:
+        with patch("fletcher.pipeline.compile_tex", side_effect=compile_results) as mock_compile:
             result = generate_resume_for_job(1, db_path=self.db_path)
 
         metadata = json.loads(Path(result["metadata_path"]).read_text(encoding="utf-8"))

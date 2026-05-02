@@ -24,4 +24,3 @@ export function useAdjacentJobs(jobId: number) {
     staleTime: 60_000,
   })
 }
-

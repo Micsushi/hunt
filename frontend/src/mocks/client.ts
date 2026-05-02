@@ -49,12 +49,13 @@ function matchRoute(path: string): unknown | undefined {
   if (clean === '/api/summary/queue_age') return MOCK_QUEUE_AGE
   if (/^\/api\/jobs\/\d+$/.test(clean)) return MOCK_JOB_DETAIL
   if (/^\/api\/jobs\/\d+\/attempts$/.test(clean)) return MOCK_ATTEMPTS
-  if (/^\/api\/jobs\/\d+\/adjacent$/.test(clean)) return { prev_id: null, next_id: MOCK_JOBS[1]?.id ?? null }
+  if (/^\/api\/jobs\/\d+\/adjacent$/.test(clean))
+    return { prev_id: null, next_id: MOCK_JOBS[1]?.id ?? null }
   return undefined
 }
 
 function wait() {
-  return new Promise(resolve => setTimeout(resolve, 80))
+  return new Promise((resolve) => setTimeout(resolve, 80))
 }
 
 export async function mockGet<T>(path: string): Promise<T> {
@@ -70,7 +71,8 @@ export async function mockPost<T>(path: string): Promise<T> {
   if (path === '/api/settings') return { ok: true } as T
   if (path === '/api/linkedin/accounts') return { ok: true } as T
   if (path === '/api/jobs/bulk-selection') return { status: 'ok', updated: 0 } as T
-  if (path === '/api/ops/bulk-requeue') return { status: 'ok', updated: 0, count: 0, dry_run: true } as T
+  if (path === '/api/ops/bulk-requeue')
+    return { status: 'ok', updated: 0, count: 0, dry_run: true } as T
   if (path.startsWith('/api/jobs/') && path.endsWith('/priority')) return { status: 'ok' } as T
   if (path.startsWith('/api/jobs/') && path.endsWith('/operator-meta')) return { status: 'ok' } as T
   if (path.startsWith('/api/jobs/') && path.endsWith('/requeue')) return { status: 'ok' } as T

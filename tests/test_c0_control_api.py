@@ -26,8 +26,8 @@ class C0ControlApiTests(unittest.TestCase):
         )
         self._env.start()
 
-        from hunter import db
         from backend import auth_session
+        from hunter import db
 
         self.db = db
         db.DB_PATH = self.path

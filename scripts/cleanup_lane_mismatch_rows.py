@@ -4,6 +4,7 @@ Preview or delete jobs whose title does not match their discovery search lane (c
 
 Applies to all sources (LinkedIn, Indeed, …) that store ``category`` from SEARCH_TERMS lanes.
 """
+
 import argparse
 import os
 import sys

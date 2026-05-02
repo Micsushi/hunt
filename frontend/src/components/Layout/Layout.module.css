@@ -51,7 +51,9 @@
   color: var(--muted);
   font-weight: 600;
   font-size: 0.875rem;
-  transition: background var(--ease), color var(--ease);
+  transition:
+    background var(--ease),
+    color var(--ease);
   text-decoration: none;
 }
 
@@ -80,7 +82,10 @@
   font-weight: 600;
   color: var(--muted);
   cursor: pointer;
-  transition: background var(--ease), color var(--ease), border-color var(--ease);
+  transition:
+    background var(--ease),
+    color var(--ease),
+    border-color var(--ease);
 }
 
 .logoutBtn:hover {
@@ -89,7 +94,9 @@
   border-color: var(--danger);
 }
 
-.main { /* page handles its own layout */ }
+.main {
+  /* page handles its own layout */
+}
 
 /* Status dots */
 .dot {
@@ -100,7 +107,15 @@
   flex-shrink: 0;
 }
 
-.dotOk      { background: var(--good); }
-.dotWarn    { background: var(--warning); }
-.dotError   { background: var(--danger); }
-.dotUnknown { background: var(--line-strong); }
+.dotOk {
+  background: var(--good);
+}
+.dotWarn {
+  background: var(--warning);
+}
+.dotError {
+  background: var(--danger);
+}
+.dotUnknown {
+  background: var(--line-strong);
+}

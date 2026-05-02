@@ -5,7 +5,7 @@ import {
   saveActiveApplyContext,
   saveDefaultResume,
   saveProfile,
-  saveSettings
+  saveSettings,
 } from "../shared/storage.js";
 import { detectAtsFromUrl } from "../ats/registry.js";
 import { runFillForTab } from "./fill-runner.js";
@@ -25,10 +25,16 @@ async function handleMessage(message) {
       return { ok: true, profile: await saveProfile(message.payload || {}) };
 
     case "hunt.apply.save_default_resume":
-      return { ok: true, defaultResume: await saveDefaultResume(message.payload || {}) };
+      return {
+        ok: true,
+        defaultResume: await saveDefaultResume(message.payload || {}),
+      };
 
     case "hunt.apply.set_apply_context":
-      return { ok: true, activeApplyContext: await saveActiveApplyContext(message.payload || {}) };
+      return {
+        ok: true,
+        activeApplyContext: await saveActiveApplyContext(message.payload || {}),
+      };
 
     case "hunt.apply.clear_apply_context":
       return { ok: true, activeApplyContext: await clearActiveApplyContext() };
@@ -39,7 +45,7 @@ async function handleMessage(message) {
         return {
           ok: false,
           reason: "manual_fill_disabled",
-          message: "Manual fill is currently disabled in extension settings."
+          message: "Manual fill is currently disabled in extension settings.",
         };
       }
       return runFillForTab(message.payload?.tabId, state);
@@ -49,7 +55,7 @@ async function handleMessage(message) {
       return {
         ok: false,
         reason: "unknown_message",
-        message: `Unknown message type: ${message?.type || "undefined"}`
+        message: `Unknown message type: ${message?.type || "undefined"}`,
       };
   }
 }
@@ -75,7 +81,10 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
     const state = await getExtensionState();
     if (
       !state.settings.autofillOnLoad ||
-      !(state.activeApplyContext.selectedResumeDataUrl || state.defaultResume.pdfDataUrl)
+      !(
+        state.activeApplyContext.selectedResumeDataUrl ||
+        state.defaultResume.pdfDataUrl
+      )
     ) {
       return;
     }
@@ -92,8 +101,8 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       sendResponse({
         ok: false,
         reason: "background_error",
-        message: error instanceof Error ? error.message : String(error)
-      })
+        message: error instanceof Error ? error.message : String(error),
+      }),
     );
   return true;
 });

@@ -5,35 +5,56 @@
 // Chrome serialises it via Function.prototype.toString() before injection.
 // All shared logic lives in window.__huntApplyUtils (injected.js).
 export function createWorkdayFillFunction() {
-  return async function workdayFill({ profile, settings, activeApplyContext, defaultResume }) {
+  return async function workdayFill({
+    profile,
+    settings,
+    activeApplyContext,
+    defaultResume,
+  }) {
     var u = window.__huntApplyUtils;
     if (!u) {
       return {
         ok: false,
         reason: "missing_utils",
-        message: "Shared fill utils (injected.js) were not injected before this adapter ran."
+        message:
+          "Shared fill utils (injected.js) were not injected before this adapter ran.",
       };
     }
 
     var perFieldDelayMs = 25;
     var perUploadDelayMs = 75;
-    var sleep = function (ms) { return new Promise(function (r) { setTimeout(r, ms); }); };
+    var sleep = function (ms) {
+      return new Promise(function (r) {
+        setTimeout(r, ms);
+      });
+    };
     var stripLongDash = settings.stripLongDash !== false;
 
     // Workday uses data-automation-id="formField" as the canonical field container.
-    var containerSelectors = ["label", '[data-automation-id="formField"]', '[role="group"]'];
-    var getDescriptor = function (el) { return u.getDescriptor(el, containerSelectors); };
+    var containerSelectors = [
+      "label",
+      '[data-automation-id="formField"]',
+      '[role="group"]',
+    ];
+    var getDescriptor = function (el) {
+      return u.getDescriptor(el, containerSelectors);
+    };
 
     var filledFields = [];
     var generatedAnswers = [];
     var manualReviewReasons = [];
 
-    if (activeApplyContext.jobId && activeApplyContext.selectedResumeReadyForC3 === false) {
+    if (
+      activeApplyContext.jobId &&
+      activeApplyContext.selectedResumeReadyForC3 === false
+    ) {
       manualReviewReasons.push("resume_not_ready_for_c3");
     }
 
     // Collect every visible fillable element on the current step.
-    var textInputs = u.getVisibleElements('input:not([type="hidden"]):not([type="file"])');
+    var textInputs = u.getVisibleElements(
+      'input:not([type="hidden"]):not([type="file"])',
+    );
     var textareas = u.getVisibleElements("textarea");
     var selects = u.getVisibleElements("select");
     var fileInputs = u.getVisibleElements('input[type="file"]');
@@ -55,12 +76,20 @@ export function createWorkdayFillFunction() {
     var flatEls = textInputs.concat(textareas, selects, fileInputs);
     for (var j = 0; j < flatEls.length; j++) {
       var el = flatEls[j];
-      candidates.push({ kind: "element", element: el, rect: el.getBoundingClientRect() });
+      candidates.push({
+        kind: "element",
+        element: el,
+        rect: el.getBoundingClientRect(),
+      });
     }
     radiosByName.forEach(function (group) {
       var anchor = group[0];
       if (anchor) {
-        candidates.push({ kind: "radioGroup", radios: group, rect: anchor.getBoundingClientRect() });
+        candidates.push({
+          kind: "radioGroup",
+          radios: group,
+          rect: anchor.getBoundingClientRect(),
+        });
       }
     });
 
@@ -70,8 +99,20 @@ export function createWorkdayFillFunction() {
       var candidate = sorted[k];
 
       if (candidate.kind === "radioGroup") {
-        var descriptor = candidate.radios.map(function (r) { return getDescriptor(r); }).join(" ").toLowerCase();
-        if (u.fillRadioGroup(candidate.radios, descriptor, profile, containerSelectors)) {
+        var descriptor = candidate.radios
+          .map(function (r) {
+            return getDescriptor(r);
+          })
+          .join(" ")
+          .toLowerCase();
+        if (
+          u.fillRadioGroup(
+            candidate.radios,
+            descriptor,
+            profile,
+            containerSelectors,
+          )
+        ) {
           filledFields.push({ field: descriptor, valueSource: "radio_rule" });
           await sleep(perFieldDelayMs);
         }
@@ -89,7 +130,12 @@ export function createWorkdayFillFunction() {
         if (elem.value || settings.allowGeneratedAnswers === false) {
           continue;
         }
-        var answer = u.generateAnswer(desc, profile, activeApplyContext, stripLongDash);
+        var answer = u.generateAnswer(
+          desc,
+          profile,
+          activeApplyContext,
+          stripLongDash,
+        );
         if (u.setElementValue(elem, answer.answerText, stripLongDash)) {
           var qHash = u.buildQuestionHash(desc);
           generatedAnswers.push({
@@ -98,10 +144,13 @@ export function createWorkdayFillFunction() {
             answerText: answer.answerText,
             answerSource: "generated",
             confidence: answer.confidence,
-            manualReviewRequired: answer.manualReviewRequired
+            manualReviewRequired: answer.manualReviewRequired,
           });
           filledFields.push({ field: desc, valueSource: "generated_answer" });
-          if (settings.flagLowConfidenceAnswers !== false && answer.manualReviewRequired) {
+          if (
+            settings.flagLowConfidenceAnswers !== false &&
+            answer.manualReviewRequired
+          ) {
             manualReviewReasons.push("low_confidence_answer:" + qHash);
           }
           await sleep(perFieldDelayMs);
@@ -118,9 +167,16 @@ export function createWorkdayFillFunction() {
       }
 
       if (elem.tagName === "INPUT" && elem.type === "file") {
-        var attachment = await u.attachResumeToFileInput(elem, activeApplyContext, defaultResume);
+        var attachment = await u.attachResumeToFileInput(
+          elem,
+          activeApplyContext,
+          defaultResume,
+        );
         if (attachment.attached) {
-          filledFields.push({ field: getDescriptor(elem) || "resume_upload", valueSource: "resume_upload" });
+          filledFields.push({
+            field: getDescriptor(elem) || "resume_upload",
+            valueSource: "resume_upload",
+          });
           await sleep(perUploadDelayMs);
         } else {
           manualReviewReasons.push("resume_upload:" + attachment.reason);
@@ -130,7 +186,10 @@ export function createWorkdayFillFunction() {
 
       // Plain text input — map descriptor to profile value.
       var profileValue = u.chooseProfileValue(desc, profile);
-      if (profileValue && u.setElementValue(elem, profileValue, stripLongDash)) {
+      if (
+        profileValue &&
+        u.setElementValue(elem, profileValue, stripLongDash)
+      ) {
         filledFields.push({ field: desc, valueSource: "profile" });
         await sleep(perFieldDelayMs);
       }
@@ -146,7 +205,7 @@ export function createWorkdayFillFunction() {
       manualReviewReasons: manualReviewReasons,
       filledFields: filledFields,
       generatedAnswers: generatedAnswers,
-      htmlSnapshot: document.documentElement.outerHTML.slice(0, 200000)
+      htmlSnapshot: document.documentElement.outerHTML.slice(0, 200000),
     };
   };
 }

@@ -32,4 +32,3 @@ def load_dotenv(path: str | Path, *, override: bool = False) -> bool:
         os.environ[key] = value
         changed = True
     return changed
-

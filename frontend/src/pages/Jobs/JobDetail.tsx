@@ -9,8 +9,16 @@ import { useQueryClient, useQuery } from '@tanstack/react-query'
 import styles from './JobDetail.module.css'
 
 type EditableField =
-  | 'company' | 'title' | 'location' | 'level' | 'category' | 'is_remote'
-  | 'description' | 'description_source' | 'operator_notes' | 'operator_tag'
+  | 'company'
+  | 'title'
+  | 'location'
+  | 'level'
+  | 'category'
+  | 'is_remote'
+  | 'description'
+  | 'description_source'
+  | 'operator_notes'
+  | 'operator_tag'
 
 // ── Inline field (text / textarea / select) ──────────────────────────────────
 
@@ -25,7 +33,16 @@ interface InlineFieldProps {
   placeholder?: string
 }
 
-function InlineField({ label, value, field, onSave, mono, type = 'text', options, placeholder }: InlineFieldProps) {
+function InlineField({
+  label,
+  value,
+  field,
+  onSave,
+  mono,
+  type = 'text',
+  options,
+  placeholder,
+}: InlineFieldProps) {
   const [editing, setEditing] = useState(false)
   const [draft, setDraft] = useState('')
   const [saving, setSaving] = useState(false)
@@ -38,9 +55,17 @@ function InlineField({ label, value, field, onSave, mono, type = 'text', options
   }
 
   async function commit() {
-    if (draft === (value != null ? String(value) : '')) { setEditing(false); return }
+    if (draft === (value != null ? String(value) : '')) {
+      setEditing(false)
+      return
+    }
     setSaving(true)
-    try { await onSave(field, draft) } finally { setSaving(false); setEditing(false) }
+    try {
+      await onSave(field, draft)
+    } finally {
+      setSaving(false)
+      setEditing(false)
+    }
   }
 
   function onKeyDown(e: React.KeyboardEvent) {
@@ -51,30 +76,58 @@ function InlineField({ label, value, field, onSave, mono, type = 'text', options
   const display = value != null && value !== '' ? String(value) : null
 
   return (
-    <div className={`${styles.inlineField} ${styles.inlineFieldEditable} ${type === 'textarea' ? styles.inlineFieldBlock : ''}`}>
+    <div
+      className={`${styles.inlineField} ${styles.inlineFieldEditable} ${type === 'textarea' ? styles.inlineFieldBlock : ''}`}
+    >
       {label && <span className={styles.inlineLabel}>{label}</span>}
       {editing ? (
         type === 'select' && options ? (
-          <select ref={inputRef as React.Ref<HTMLSelectElement>} className={styles.inlineInput}
-            value={draft} onChange={e => setDraft(e.target.value)} onBlur={commit}>
-            {options.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
+          <select
+            ref={inputRef as React.Ref<HTMLSelectElement>}
+            className={styles.inlineInput}
+            value={draft}
+            onChange={(e) => setDraft(e.target.value)}
+            onBlur={commit}
+          >
+            {options.map((o) => (
+              <option key={o.value} value={o.value}>
+                {o.label}
+              </option>
+            ))}
           </select>
         ) : type === 'textarea' ? (
-          <textarea ref={inputRef as React.Ref<HTMLTextAreaElement>}
+          <textarea
+            ref={inputRef as React.Ref<HTMLTextAreaElement>}
             className={`${styles.inlineInput} ${styles.inlineTextarea}`}
-            value={draft} onChange={e => setDraft(e.target.value)}
-            onBlur={commit} onKeyDown={onKeyDown} disabled={saving} rows={8} placeholder={placeholder} />
+            value={draft}
+            onChange={(e) => setDraft(e.target.value)}
+            onBlur={commit}
+            onKeyDown={onKeyDown}
+            disabled={saving}
+            rows={8}
+            placeholder={placeholder}
+          />
         ) : (
-          <input ref={inputRef as React.Ref<HTMLInputElement>} className={styles.inlineInput}
-            value={draft} onChange={e => setDraft(e.target.value)}
-            onBlur={commit} onKeyDown={onKeyDown} disabled={saving} placeholder={placeholder} />
+          <input
+            ref={inputRef as React.Ref<HTMLInputElement>}
+            className={styles.inlineInput}
+            value={draft}
+            onChange={(e) => setDraft(e.target.value)}
+            onBlur={commit}
+            onKeyDown={onKeyDown}
+            disabled={saving}
+            placeholder={placeholder}
+          />
         )
       ) : (
         <button
           className={`${styles.inlineValue} ${mono ? styles.mono : ''} ${type === 'textarea' ? styles.inlineValueBlock : ''}`}
-          onClick={startEdit} title="Click to edit"
+          onClick={startEdit}
+          title="Click to edit"
         >
-          {display ?? <span className={styles.inlinePlaceholder}>{placeholder ?? 'Click to edit...'}</span>}
+          {display ?? (
+            <span className={styles.inlinePlaceholder}>{placeholder ?? 'Click to edit...'}</span>
+          )}
           <span className={styles.editHint}>✎</span>
         </button>
       )}
@@ -82,15 +135,23 @@ function InlineField({ label, value, field, onSave, mono, type = 'text', options
   )
 }
 
-
-
 // ── Readonly field ────────────────────────────────────────────────────────────
 
-function ReadonlyField({ label, value, mono }: { label: string; value: React.ReactNode; mono?: boolean }) {
+function ReadonlyField({
+  label,
+  value,
+  mono,
+}: {
+  label: string
+  value: React.ReactNode
+  mono?: boolean
+}) {
   return (
     <div className={styles.inlineField}>
       <span className={styles.inlineLabel}>{label}</span>
-      <span className={`${styles.inlineValueReadonly} ${mono ? styles.mono : ''}`}>{value ?? '-'}</span>
+      <span className={`${styles.inlineValueReadonly} ${mono ? styles.mono : ''}`}>
+        {value ?? '-'}
+      </span>
     </div>
   )
 }
@@ -108,7 +169,9 @@ function ServiceChip({ label, componentKey }: { label: string; componentKey: str
   const ok = status === 'ok'
   const unknown = !status
   return (
-    <span className={`${styles.serviceChip} ${ok ? styles.serviceOk : unknown ? styles.serviceUnknown : styles.serviceDown}`}>
+    <span
+      className={`${styles.serviceChip} ${ok ? styles.serviceOk : unknown ? styles.serviceUnknown : styles.serviceDown}`}
+    >
       <span className={styles.serviceDot} />
       {label}: {unknown ? 'unknown' : ok ? 'online' : 'offline'}
     </span>
@@ -122,7 +185,7 @@ export function JobDetailPage() {
   const jobId = parseInt(id ?? '0', 10)
   const navigate = useNavigate()
   const qc = useQueryClient()
-  const showToast = useUiStore(s => s.showToast)
+  const showToast = useUiStore((s) => s.showToast)
   const [generating, setGenerating] = useState(false)
 
   const { data: job, isLoading, error } = useJobDetail(jobId)
@@ -130,12 +193,15 @@ export function JobDetailPage() {
   const { data: adjacent } = useAdjacentJobs(jobId)
 
   if (isLoading) return <div className={styles.loading}>Loading...</div>
-  if (error || !job) return (
-    <div className={styles.errorPage}>
-      <p>Job not found or failed to load.</p>
-      <button className={styles.backBtn} onClick={() => navigate('/jobs')}>Back to jobs</button>
-    </div>
-  )
+  if (error || !job)
+    return (
+      <div className={styles.errorPage}>
+        <p>Job not found or failed to load.</p>
+        <button className={styles.backBtn} onClick={() => navigate('/jobs')}>
+          Back to jobs
+        </button>
+      </div>
+    )
 
   async function handleFieldSave(field: EditableField, value: string) {
     try {
@@ -219,54 +285,111 @@ export function JobDetailPage() {
 
   return (
     <div className={styles.page}>
-
       {/* Top menu card */}
       <div className={styles.menuCard}>
-        <button className={styles.backBtn} onClick={() => navigate(-1)}>← Back</button>
+        <button className={styles.backBtn} onClick={() => navigate(-1)}>
+          ← Back
+        </button>
         <span className={styles.headerId}>#{job.id}</span>
         <div className={styles.navBtns}>
-          <button className={styles.navBtn}
+          <button
+            className={styles.navBtn}
             onClick={() => adjacent?.prev_id != null && navigate(`/jobs/${adjacent.prev_id}`)}
-            disabled={adjacent?.prev_id == null} title="Previous job">‹</button>
-          <button className={styles.navBtn}
+            disabled={adjacent?.prev_id == null}
+            title="Previous job"
+          >
+            ‹
+          </button>
+          <button
+            className={styles.navBtn}
             onClick={() => adjacent?.next_id != null && navigate(`/jobs/${adjacent.next_id}`)}
-            disabled={adjacent?.next_id == null} title="Next job">›</button>
+            disabled={adjacent?.next_id == null}
+            title="Next job"
+          >
+            ›
+          </button>
         </div>
         <div className={styles.menuLinks}>
-          {job.job_url && <a href={job.job_url} target="_blank" rel="noreferrer" className={styles.extBtn}>Listing ↗</a>}
-          {job.apply_url && <a href={job.apply_url} target="_blank" rel="noreferrer" className={styles.extBtn}>Apply ↗</a>}
+          {job.job_url && (
+            <a href={job.job_url} target="_blank" rel="noreferrer" className={styles.extBtn}>
+              Listing ↗
+            </a>
+          )}
+          {job.apply_url && (
+            <a href={job.apply_url} target="_blank" rel="noreferrer" className={styles.extBtn}>
+              Apply ↗
+            </a>
+          )}
         </div>
-        <button className={styles.deleteBtn} onClick={handleDelete}>Delete</button>
+        <button className={styles.deleteBtn} onClick={handleDelete}>
+          Delete
+        </button>
       </div>
 
       {/* Two-column body */}
       <div className={styles.body}>
-
         {/* Left: fields + description */}
         <div className={styles.col}>
           <div className={styles.panel}>
             <h2 className={styles.panelTitle}>Job fields</h2>
             <div className={styles.fieldList}>
-              <InlineField label="Company"  field="company"        value={job.company}        onSave={handleFieldSave} />
-              <InlineField label="Title"    field="title"          value={job.title}          onSave={handleFieldSave} />
-              <InlineField label="Location" field="location"       value={job.location}       onSave={handleFieldSave} />
-              <InlineField label="Level"    field="level"          value={job.level}          onSave={handleFieldSave} />
-              <InlineField label="Category" field="category"       value={job.category}       onSave={handleFieldSave} />
-              <InlineField label="Remote"   field="is_remote"      value={remoteDisplay}      onSave={handleFieldSave}
-                type="select"
-                options={[{ label: '-', value: '' }, { label: 'Yes', value: 'Yes' }, { label: 'No', value: 'No' }]}
+              <InlineField
+                label="Company"
+                field="company"
+                value={job.company}
+                onSave={handleFieldSave}
               />
-              <ReadonlyField label="Source"     value={job.source} />
+              <InlineField label="Title" field="title" value={job.title} onSave={handleFieldSave} />
+              <InlineField
+                label="Location"
+                field="location"
+                value={job.location}
+                onSave={handleFieldSave}
+              />
+              <InlineField label="Level" field="level" value={job.level} onSave={handleFieldSave} />
+              <InlineField
+                label="Category"
+                field="category"
+                value={job.category}
+                onSave={handleFieldSave}
+              />
+              <InlineField
+                label="Remote"
+                field="is_remote"
+                value={remoteDisplay}
+                onSave={handleFieldSave}
+                type="select"
+                options={[
+                  { label: '-', value: '' },
+                  { label: 'Yes', value: 'Yes' },
+                  { label: 'No', value: 'No' },
+                ]}
+              />
+              <ReadonlyField label="Source" value={job.source} />
               <ReadonlyField label="Apply type" value={job.apply_type?.replace(/_/g, ' ')} />
-              <ReadonlyField label="ATS type"   value={job.ats_type} />
+              <ReadonlyField label="ATS type" value={job.ats_type} />
               <ReadonlyField label="Apply host" value={job.apply_host} mono />
-              <ReadonlyField label="Auto-apply" value={job.auto_apply_eligible === 1 ? 'Yes' : 'No'} />
-              <ReadonlyField label="Posted"     value={job.date_posted} />
-              <ReadonlyField label="Scraped"    value={job.date_scraped} />
-              <InlineField label="Tag"   field="operator_tag"   value={job.operator_tag}   onSave={handleFieldSave}
-                placeholder="e.g. applied, skip, followup" />
-              <InlineField label="Notes" field="operator_notes" value={job.operator_notes} onSave={handleFieldSave}
-                type="textarea" placeholder="Free-form notes..." />
+              <ReadonlyField
+                label="Auto-apply"
+                value={job.auto_apply_eligible === 1 ? 'Yes' : 'No'}
+              />
+              <ReadonlyField label="Posted" value={job.date_posted} />
+              <ReadonlyField label="Scraped" value={job.date_scraped} />
+              <InlineField
+                label="Tag"
+                field="operator_tag"
+                value={job.operator_tag}
+                onSave={handleFieldSave}
+                placeholder="e.g. applied, skip, followup"
+              />
+              <InlineField
+                label="Notes"
+                field="operator_notes"
+                value={job.operator_notes}
+                onSave={handleFieldSave}
+                type="textarea"
+                placeholder="Free-form notes..."
+              />
             </div>
           </div>
 
@@ -274,13 +397,20 @@ export function JobDetailPage() {
             <div className={styles.panelTitleRow}>
               <h2 className={styles.panelTitle}>Job description</h2>
               <div className={styles.jdMeta}>
-                {descriptionSource === 'scraped' && <span className={styles.scrapedBadge}>Scraped</span>}
-                {descriptionSource === 'manual' && <span className={styles.manualBadge}>Manual</span>}
-                <label className={styles.lockToggle} title="When locked, enrichment will not overwrite this description">
+                {descriptionSource === 'scraped' && (
+                  <span className={styles.scrapedBadge}>Scraped</span>
+                )}
+                {descriptionSource === 'manual' && (
+                  <span className={styles.manualBadge}>Manual</span>
+                )}
+                <label
+                  className={styles.lockToggle}
+                  title="When locked, enrichment will not overwrite this description"
+                >
                   <input
                     type="checkbox"
                     checked={descriptionSource === 'manual'}
-                    onChange={async e => {
+                    onChange={async (e) => {
                       const locked = e.target.checked
                       try {
                         await patchJob(jobId, { description_source: locked ? 'manual' : null })
@@ -308,42 +438,82 @@ export function JobDetailPage() {
 
         {/* Right: enrichment + resume */}
         <div className={styles.col}>
-
           <div className={styles.panel}>
             <div className={styles.panelTitleRow}>
               <h2 className={styles.panelTitle}>Enrichment</h2>
               <ServiceChip label="Hunter" componentKey="c1" />
             </div>
             <div className={styles.fieldList}>
-              <ReadonlyField label="Status"       value={<StatusBadge status={job.enrichment_status} />} />
-              <ReadonlyField label="Attempts"     value={job.enrichment_attempts} />
-              <ReadonlyField label="Enriched at"  value={job.enriched_at} />
+              <ReadonlyField
+                label="Status"
+                value={<StatusBadge status={job.enrichment_status} />}
+              />
+              <ReadonlyField label="Attempts" value={job.enrichment_attempts} />
+              <ReadonlyField label="Enriched at" value={job.enriched_at} />
               <ReadonlyField label="Last started" value={job.last_enrichment_started_at} />
-              <ReadonlyField label="Next retry"   value={job.next_enrichment_retry_at} />
+              <ReadonlyField label="Next retry" value={job.next_enrichment_retry_at} />
               {job.last_enrichment_error && (
                 <ReadonlyField label="Last error" value={job.last_enrichment_error} mono />
               )}
             </div>
             <div className={styles.panelActions}>
-              <button className={styles.actionBtn} onClick={handleRequeue}
-                disabled={!['linkedin','indeed'].includes(job.source ?? '')}>
+              <button
+                className={styles.actionBtn}
+                onClick={handleRequeue}
+                disabled={!['linkedin', 'indeed'].includes(job.source ?? '')}
+              >
                 Requeue
               </button>
               {job.priority ? (
-                <button className={`${styles.actionBtn} ${styles.actionBtnSecondary}`} onClick={() => handlePriority(false)}>
+                <button
+                  className={`${styles.actionBtn} ${styles.actionBtnSecondary}`}
+                  onClick={() => handlePriority(false)}
+                >
                   Clear priority
                 </button>
               ) : (
-                <button className={`${styles.actionBtn} ${styles.actionBtnSecondary}`} onClick={() => handlePriority(true)}>
+                <button
+                  className={`${styles.actionBtn} ${styles.actionBtnSecondary}`}
+                  onClick={() => handlePriority(true)}
+                >
                   Run next
                 </button>
               )}
             </div>
-            {(job.last_artifact_screenshot_path || job.last_artifact_html_path || job.last_artifact_text_path) && (
+            {(job.last_artifact_screenshot_path ||
+              job.last_artifact_html_path ||
+              job.last_artifact_text_path) && (
               <div className={styles.artifactLinks} style={{ marginTop: 10 }}>
-                {job.last_artifact_screenshot_path && <a href={`/api/jobs/${jobId}/artifacts/screenshot`} target="_blank" rel="noreferrer" className={styles.artifactBtn}>Screenshot ↗</a>}
-                {job.last_artifact_html_path && <a href={`/api/jobs/${jobId}/artifacts/html`} target="_blank" rel="noreferrer" className={styles.artifactBtn}>HTML ↗</a>}
-                {job.last_artifact_text_path && <a href={`/api/jobs/${jobId}/artifacts/text`} target="_blank" rel="noreferrer" className={styles.artifactBtn}>Text ↗</a>}
+                {job.last_artifact_screenshot_path && (
+                  <a
+                    href={`/api/jobs/${jobId}/artifacts/screenshot`}
+                    target="_blank"
+                    rel="noreferrer"
+                    className={styles.artifactBtn}
+                  >
+                    Screenshot ↗
+                  </a>
+                )}
+                {job.last_artifact_html_path && (
+                  <a
+                    href={`/api/jobs/${jobId}/artifacts/html`}
+                    target="_blank"
+                    rel="noreferrer"
+                    className={styles.artifactBtn}
+                  >
+                    HTML ↗
+                  </a>
+                )}
+                {job.last_artifact_text_path && (
+                  <a
+                    href={`/api/jobs/${jobId}/artifacts/text`}
+                    target="_blank"
+                    rel="noreferrer"
+                    className={styles.artifactBtn}
+                  >
+                    Text ↗
+                  </a>
+                )}
               </div>
             )}
           </div>
@@ -354,9 +524,21 @@ export function JobDetailPage() {
               <ServiceChip label="Fletcher" componentKey="c2" />
             </div>
             <div className={styles.fieldList}>
-              <ReadonlyField label="JD usable"     value={job.latest_resume_jd_usable === 1 ? 'Yes' : job.latest_resume_jd_usable === 0 ? 'No' : '-'} />
+              <ReadonlyField
+                label="JD usable"
+                value={
+                  job.latest_resume_jd_usable === 1
+                    ? 'Yes'
+                    : job.latest_resume_jd_usable === 0
+                      ? 'No'
+                      : '-'
+                }
+              />
               <ReadonlyField label="Usable reason" value={job.latest_resume_jd_usable_reason} />
-              <ReadonlyField label="Ready for C3"  value={job.selected_resume_ready_for_c3 === 1 ? 'Yes' : 'No'} />
+              <ReadonlyField
+                label="Ready for C3"
+                value={job.selected_resume_ready_for_c3 === 1 ? 'Yes' : 'No'}
+              />
             </div>
             <div className={styles.panelActions}>
               <button className={styles.actionBtn} onClick={handleGenerate} disabled={generating}>
@@ -365,43 +547,117 @@ export function JobDetailPage() {
             </div>
             {attempts.length > 0 && (
               <div className={styles.artifactLinks} style={{ marginTop: 10 }}>
-                <a href={`/api/jobs/${jobId}/resume/selected-pdf`} target="_blank" rel="noreferrer" className={styles.artifactBtn}>Selected PDF ↗</a>
-                <a href={`/api/jobs/${jobId}/resume/selected-tex`} target="_blank" rel="noreferrer" className={styles.artifactBtn}>Selected TeX ↗</a>
-                <a href={`/api/jobs/${jobId}/resume/keywords`} target="_blank" rel="noreferrer" className={styles.artifactBtn}>Keywords ↗</a>
+                <a
+                  href={`/api/jobs/${jobId}/resume/selected-pdf`}
+                  target="_blank"
+                  rel="noreferrer"
+                  className={styles.artifactBtn}
+                >
+                  Selected PDF ↗
+                </a>
+                <a
+                  href={`/api/jobs/${jobId}/resume/selected-tex`}
+                  target="_blank"
+                  rel="noreferrer"
+                  className={styles.artifactBtn}
+                >
+                  Selected TeX ↗
+                </a>
+                <a
+                  href={`/api/jobs/${jobId}/resume/keywords`}
+                  target="_blank"
+                  rel="noreferrer"
+                  className={styles.artifactBtn}
+                >
+                  Keywords ↗
+                </a>
               </div>
             )}
             {attempts.length > 0 && (
               <div style={{ marginTop: 14 }}>
-                <p className="muted" style={{ fontSize: '0.8rem', marginBottom: 8 }}>Generation history</p>
-                {attempts.map(a => (
+                <p className="muted" style={{ fontSize: '0.8rem', marginBottom: 8 }}>
+                  Generation history
+                </p>
+                {attempts.map((a) => (
                   <div key={a.id} className={styles.attemptCard}>
                     <div className={styles.attemptHeader}>
-                      <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
+                      <div
+                        style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}
+                      >
                         <StatusBadge status={a.status} size="sm" />
-                        {a.is_selected_for_c3 && <span className={styles.selectedBadge}>Selected</span>}
-                        {!a.is_selected_for_c3 && a.is_latest_useful && <span className={styles.usefulBadge}>Useful</span>}
-                        <span className="muted" style={{ fontSize: '0.75rem' }}>#{a.id} · {a.created_at}</span>
+                        {a.is_selected_for_c3 && (
+                          <span className={styles.selectedBadge}>Selected</span>
+                        )}
+                        {!a.is_selected_for_c3 && a.is_latest_useful && (
+                          <span className={styles.usefulBadge}>Useful</span>
+                        )}
+                        <span className="muted" style={{ fontSize: '0.75rem' }}>
+                          #{a.id} · {a.created_at}
+                        </span>
                       </div>
                       <div style={{ display: 'flex', gap: 5 }}>
-                        {a.pdf_path && <a href={`/api/attempts/${a.id}/pdf`} target="_blank" rel="noreferrer" className={`${styles.artifactBtn} ${styles.artifactBtnPrimary}`}>PDF ↗</a>}
-                        {a.tex_path && <a href={`/api/attempts/${a.id}/tex`} target="_blank" rel="noreferrer" className={styles.artifactBtn}>TeX ↗</a>}
-                        <a href={`/api/attempts/${a.id}/llm`} target="_blank" rel="noreferrer" className={styles.artifactBtn}>LLM ↗</a>
+                        {a.pdf_path && (
+                          <a
+                            href={`/api/attempts/${a.id}/pdf`}
+                            target="_blank"
+                            rel="noreferrer"
+                            className={`${styles.artifactBtn} ${styles.artifactBtnPrimary}`}
+                          >
+                            PDF ↗
+                          </a>
+                        )}
+                        {a.tex_path && (
+                          <a
+                            href={`/api/attempts/${a.id}/tex`}
+                            target="_blank"
+                            rel="noreferrer"
+                            className={styles.artifactBtn}
+                          >
+                            TeX ↗
+                          </a>
+                        )}
+                        <a
+                          href={`/api/attempts/${a.id}/llm`}
+                          target="_blank"
+                          rel="noreferrer"
+                          className={styles.artifactBtn}
+                        >
+                          LLM ↗
+                        </a>
                       </div>
                     </div>
-                    <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', marginTop: 6, fontSize: '0.8rem' }}>
-                      <span className="muted">Family: <strong>{a.role_family ?? '-'}</strong></span>
-                      <span className="muted">Level: <strong>{a.job_level ?? '-'}</strong></span>
-                      <span className="muted">JD OK: <strong>{a.jd_usable === 1 ? 'yes' : a.jd_usable === 0 ? 'no' : '-'}</strong></span>
+                    <div
+                      style={{
+                        display: 'flex',
+                        gap: 12,
+                        flexWrap: 'wrap',
+                        marginTop: 6,
+                        fontSize: '0.8rem',
+                      }}
+                    >
+                      <span className="muted">
+                        Family: <strong>{a.role_family ?? '-'}</strong>
+                      </span>
+                      <span className="muted">
+                        Level: <strong>{a.job_level ?? '-'}</strong>
+                      </span>
+                      <span className="muted">
+                        JD OK:{' '}
+                        <strong>
+                          {a.jd_usable === 1 ? 'yes' : a.jd_usable === 0 ? 'no' : '-'}
+                        </strong>
+                      </span>
                     </div>
                   </div>
                 ))}
               </div>
             )}
             {attempts.length === 0 && (
-              <p className="muted" style={{ fontSize: '0.85rem', marginTop: 12 }}>No attempts yet.</p>
+              <p className="muted" style={{ fontSize: '0.85rem', marginTop: 12 }}>
+                No attempts yet.
+              </p>
             )}
           </div>
-
         </div>
       </div>
     </div>

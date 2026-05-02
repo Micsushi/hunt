@@ -17,12 +17,16 @@ export function Pagination({ page, totalRows, limit, onChange }: Props) {
 
   return (
     <div className={styles.wrap}>
-      <span className={styles.info}>Page {current} of {totalPages} ({totalRows} rows)</span>
+      <span className={styles.info}>
+        Page {current} of {totalPages} ({totalRows} rows)
+      </span>
       <div className={styles.pills}>
         {current > 1 && (
-          <button className={styles.pill} onClick={() => onChange(current - 1)}>Previous</button>
+          <button className={styles.pill} onClick={() => onChange(current - 1)}>
+            Previous
+          </button>
         )}
-        {pages.map(p => (
+        {pages.map((p) => (
           <button
             key={p}
             className={`${styles.pill} ${p === current ? styles.active : ''}`}
@@ -32,7 +36,9 @@ export function Pagination({ page, totalRows, limit, onChange }: Props) {
           </button>
         ))}
         {current < totalPages && (
-          <button className={styles.pill} onClick={() => onChange(current + 1)}>Next</button>
+          <button className={styles.pill} onClick={() => onChange(current + 1)}>
+            Next
+          </button>
         )}
       </div>
     </div>

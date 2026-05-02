@@ -18,6 +18,10 @@
 }
 
 @keyframes progress {
-  from { transform: scaleX(0.12); }
-  to   { transform: scaleX(0.72); }
+  from {
+    transform: scaleX(0.12);
+  }
+  to {
+    transform: scaleX(0.72);
+  }
 }

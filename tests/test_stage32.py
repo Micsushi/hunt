@@ -434,9 +434,7 @@ class Stage32Tests(unittest.TestCase):
             patch.object(
                 enrichment_dispatch, "_run_indeed_batch", return_value=fake_indeed_summary
             ) as mock_indeed_run,
-            patch.object(
-                enrichment_dispatch, "count_ready_jobs_for_enrichment"
-            ) as mock_count,
+            patch.object(enrichment_dispatch, "count_ready_jobs_for_enrichment") as mock_count,
         ):
             mock_count.side_effect = lambda sources=None: 1
             summary = enrich_jobs.process_multi_source_batch(limit=2, return_summary=True)
@@ -477,9 +475,7 @@ class Stage32Tests(unittest.TestCase):
             patch.object(
                 enrichment_dispatch, "_run_indeed_batch", return_value=fake_indeed_summary
             ) as mock_indeed_run,
-            patch.object(
-                enrichment_dispatch, "count_ready_jobs_for_enrichment"
-            ) as mock_count,
+            patch.object(enrichment_dispatch, "count_ready_jobs_for_enrichment") as mock_count,
         ):
             mock_count.side_effect = lambda sources=None: 2
             summary = enrich_jobs.process_multi_source_batch(limit=3, return_summary=True)

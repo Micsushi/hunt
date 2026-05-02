@@ -1,6 +1,15 @@
-.page { display: flex; flex-direction: column; gap: 16px; }
-.hero { margin-bottom: 4px; }
-.heroTitle { font-size: 2rem; margin-bottom: 6px; }
+.page {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+.hero {
+  margin-bottom: 4px;
+}
+.heroTitle {
+  font-size: 2rem;
+  margin-bottom: 6px;
+}
 
 .panel {
   background: var(--panel);
@@ -23,8 +32,14 @@
   margin-bottom: 12px;
 }
 
-.panelTitle { font-size: 1.05rem; font-weight: 700; margin-bottom: 12px; }
-.panelHeader .panelTitle { margin-bottom: 0; }
+.panelTitle {
+  font-size: 1.05rem;
+  font-weight: 700;
+  margin-bottom: 12px;
+}
+.panelHeader .panelTitle {
+  margin-bottom: 0;
+}
 .panelMeta {
   color: var(--muted);
   font-family: var(--font-mono);
@@ -37,7 +52,11 @@
   gap: 16px;
 }
 
-.buttons { display: flex; flex-wrap: wrap; gap: 10px; }
+.buttons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
 
 .btn {
   border: 1px solid var(--line);
@@ -48,12 +67,27 @@
   font-weight: 600;
   color: var(--ink);
   cursor: pointer;
-  transition: background var(--ease), transform var(--ease), opacity var(--ease);
+  transition:
+    background var(--ease),
+    transform var(--ease),
+    opacity var(--ease);
 }
-.btn:hover:not(:disabled) { transform: translateY(-1px); background: var(--accent-soft); }
-.btn:disabled { opacity: 0.6; cursor: progress; }
-.btn.btnPrimary { background: var(--accent); color: white; border-color: var(--accent); }
-.btn.btnPrimary:hover:not(:disabled) { background: var(--accent-ink); }
+.btn:hover:not(:disabled) {
+  transform: translateY(-1px);
+  background: var(--accent-soft);
+}
+.btn:disabled {
+  opacity: 0.6;
+  cursor: progress;
+}
+.btn.btnPrimary {
+  background: var(--accent);
+  color: white;
+  border-color: var(--accent);
+}
+.btn.btnPrimary:hover:not(:disabled) {
+  background: var(--accent-ink);
+}
 
 .formGrid {
   display: grid;
@@ -113,7 +147,10 @@
   margin-top: 12px;
 }
 
-.tableWrap { overflow-x: auto; margin-top: 8px; }
+.tableWrap {
+  overflow-x: auto;
+  margin-top: 8px;
+}
 .table {
   width: 100%;
   border-collapse: collapse;
@@ -133,4 +170,6 @@
   border-bottom: 1px solid var(--line);
   vertical-align: top;
 }
-.table tr:last-child td { border-bottom: none; }
+.table tr:last-child td {
+  border-bottom: none;
+}

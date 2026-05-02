@@ -26,20 +26,22 @@ from pathlib import Path
 from typing import Any
 
 from .. import config
-from ..resume.source_loader import load_bullet_library, load_candidate_profile
 from ..resume.parser import parse_resume_file
-
+from ..resume.source_loader import load_bullet_library, load_candidate_profile
 
 # ---------------------------------------------------------------------------
 # Ollama embedding
 # ---------------------------------------------------------------------------
 
+
 def _embed(text: str) -> list[float]:
     """Return embedding vector for text via Ollama mxbai-embed-large."""
-    payload = json.dumps({
-        "model": config.OLLAMA_EMBED_MODEL,
-        "prompt": text.strip()[:2000],
-    }).encode("utf-8")
+    payload = json.dumps(
+        {
+            "model": config.OLLAMA_EMBED_MODEL,
+            "prompt": text.strip()[:2000],
+        }
+    ).encode("utf-8")
     req = urllib.request.Request(
         f"{config.OLLAMA_HOST}/api/embeddings",
         data=payload,
@@ -54,6 +56,7 @@ def _embed(text: str) -> list[float]:
 # ---------------------------------------------------------------------------
 # Source hash (staleness check)
 # ---------------------------------------------------------------------------
+
 
 def _hash_sources(
     resume_path: Path,
@@ -95,6 +98,7 @@ def is_stale(
 # Index documents
 # ---------------------------------------------------------------------------
 
+
 def _collect_documents(
     resume_path: Path,
     candidate_profile_path: Path,
@@ -108,42 +112,52 @@ def _collect_documents(
         resume_doc = parse_resume_file(resume_path)
         for entry in resume_doc.experience:
             for i, bullet in enumerate(entry.bullets):
-                docs.append({
-                    "id": f"resume_exp_{entry.entry_id}_{i}",
-                    "text": bullet,
-                    "source": "resume_experience",
-                    "entry_id": entry.entry_id,
-                })
+                docs.append(
+                    {
+                        "id": f"resume_exp_{entry.entry_id}_{i}",
+                        "text": bullet,
+                        "source": "resume_experience",
+                        "entry_id": entry.entry_id,
+                    }
+                )
         for entry in resume_doc.projects:
             for i, bullet in enumerate(entry.bullets):
-                docs.append({
-                    "id": f"resume_proj_{entry.entry_id}_{i}",
-                    "text": bullet,
-                    "source": "resume_project",
-                    "entry_id": entry.entry_id,
-                })
+                docs.append(
+                    {
+                        "id": f"resume_proj_{entry.entry_id}_{i}",
+                        "text": bullet,
+                        "source": "resume_project",
+                        "entry_id": entry.entry_id,
+                    }
+                )
         # Skills from resume
         for lang in resume_doc.skills.languages:
-            docs.append({
-                "id": f"resume_skill_lang_{_short_id(lang)}",
-                "text": lang,
-                "source": "resume_skill",
-                "entry_id": "skills",
-            })
+            docs.append(
+                {
+                    "id": f"resume_skill_lang_{_short_id(lang)}",
+                    "text": lang,
+                    "source": "resume_skill",
+                    "entry_id": "skills",
+                }
+            )
         for fw in resume_doc.skills.frameworks:
-            docs.append({
-                "id": f"resume_skill_fw_{_short_id(fw)}",
-                "text": fw,
-                "source": "resume_skill",
-                "entry_id": "skills",
-            })
+            docs.append(
+                {
+                    "id": f"resume_skill_fw_{_short_id(fw)}",
+                    "text": fw,
+                    "source": "resume_skill",
+                    "entry_id": "skills",
+                }
+            )
         for tool in resume_doc.skills.developer_tools:
-            docs.append({
-                "id": f"resume_skill_tool_{_short_id(tool)}",
-                "text": tool,
-                "source": "resume_skill",
-                "entry_id": "skills",
-            })
+            docs.append(
+                {
+                    "id": f"resume_skill_tool_{_short_id(tool)}",
+                    "text": tool,
+                    "source": "resume_skill",
+                    "entry_id": "skills",
+                }
+            )
     except Exception:
         pass
 
@@ -156,55 +170,65 @@ def _collect_documents(
             for bc in entry.get("bullet_candidates", []):
                 text = (bc.get("text") or "").strip()
                 if text:
-                    docs.append({
-                        "id": f"profile_exp_{eid}_{bc.get('bullet_id', _short_id(text))}",
-                        "text": text,
-                        "source": "profile_bullet",
-                        "entry_id": eid,
-                    })
+                    docs.append(
+                        {
+                            "id": f"profile_exp_{eid}_{bc.get('bullet_id', _short_id(text))}",
+                            "text": text,
+                            "source": "profile_bullet",
+                            "entry_id": eid,
+                        }
+                    )
             # Immutable facts — useful context
             for fact in entry.get("immutable_facts", []):
                 text = (fact.get("text") or "").strip()
                 if text:
-                    docs.append({
-                        "id": f"profile_fact_{eid}_{fact.get('fact_id', _short_id(text))}",
-                        "text": text,
-                        "source": "profile_fact",
-                        "entry_id": eid,
-                    })
+                    docs.append(
+                        {
+                            "id": f"profile_fact_{eid}_{fact.get('fact_id', _short_id(text))}",
+                            "text": text,
+                            "source": "profile_fact",
+                            "entry_id": eid,
+                        }
+                    )
             # Extra context fields
             ctx = entry.get("extra_context") or {}
             for field, value in ctx.items():
                 if value:
-                    docs.append({
-                        "id": f"profile_ctx_{eid}_{field}",
-                        "text": str(value),
-                        "source": "profile_context",
-                        "entry_id": eid,
-                    })
+                    docs.append(
+                        {
+                            "id": f"profile_ctx_{eid}_{field}",
+                            "text": str(value),
+                            "source": "profile_context",
+                            "entry_id": eid,
+                        }
+                    )
         for entry in profile.get("project_entries", []):
             eid = entry.get("entry_id", "unknown")
             for bc in entry.get("bullet_candidates", []):
                 text = (bc.get("text") or "").strip()
                 if text:
-                    docs.append({
-                        "id": f"profile_proj_{eid}_{bc.get('bullet_id', _short_id(text))}",
-                        "text": text,
-                        "source": "profile_project_bullet",
-                        "entry_id": eid,
-                    })
+                    docs.append(
+                        {
+                            "id": f"profile_proj_{eid}_{bc.get('bullet_id', _short_id(text))}",
+                            "text": text,
+                            "source": "profile_project_bullet",
+                            "entry_id": eid,
+                        }
+                    )
         for bucket in ("languages", "frameworks", "developer_tools"):
             for skill in profile.get("skills", {}).get(bucket, []):
                 name = (skill.get("name") or "").strip()
                 where = (skill.get("where_used") or "").strip()
                 if name:
                     text = f"{name}: {where}" if where else name
-                    docs.append({
-                        "id": f"profile_skill_{bucket}_{_short_id(name)}",
-                        "text": text,
-                        "source": "profile_skill",
-                        "entry_id": "skills",
-                    })
+                    docs.append(
+                        {
+                            "id": f"profile_skill_{bucket}_{_short_id(name)}",
+                            "text": text,
+                            "source": "profile_skill",
+                            "entry_id": "skills",
+                        }
+                    )
     except Exception:
         pass
 
@@ -216,23 +240,27 @@ def _collect_documents(
             for bc in entry.get("bullet_candidates", []):
                 text = (bc.get("text") or "").strip()
                 if text:
-                    docs.append({
-                        "id": f"lib_exp_{eid}_{bc.get('bullet_id', _short_id(text))}",
-                        "text": text,
-                        "source": "library_bullet",
-                        "entry_id": eid,
-                    })
+                    docs.append(
+                        {
+                            "id": f"lib_exp_{eid}_{bc.get('bullet_id', _short_id(text))}",
+                            "text": text,
+                            "source": "library_bullet",
+                            "entry_id": eid,
+                        }
+                    )
         for entry in library.get("project_entries", []):
             eid = entry.get("source_entry_id", "unknown")
             for bc in entry.get("bullet_candidates", []):
                 text = (bc.get("text") or "").strip()
                 if text:
-                    docs.append({
-                        "id": f"lib_proj_{eid}_{bc.get('bullet_id', _short_id(text))}",
-                        "text": text,
-                        "source": "library_project_bullet",
-                        "entry_id": eid,
-                    })
+                    docs.append(
+                        {
+                            "id": f"lib_proj_{eid}_{bc.get('bullet_id', _short_id(text))}",
+                            "text": text,
+                            "source": "library_project_bullet",
+                            "entry_id": eid,
+                        }
+                    )
     except Exception:
         pass
 
@@ -254,6 +282,7 @@ def _short_id(text: str) -> str:
 # ---------------------------------------------------------------------------
 # Build index
 # ---------------------------------------------------------------------------
+
 
 def build_index(
     resume_path: Path,
@@ -294,7 +323,7 @@ def build_index(
     start = time.perf_counter()
 
     for i in range(0, total, batch_size):
-        batch = docs[i: i + batch_size]
+        batch = docs[i : i + batch_size]
         ids, texts, embeddings, metadatas = [], [], [], []
         for doc in batch:
             try:
@@ -302,10 +331,12 @@ def build_index(
                 ids.append(doc["id"])
                 texts.append(doc["text"])
                 embeddings.append(vec)
-                metadatas.append({
-                    "source": doc["source"],
-                    "entry_id": doc.get("entry_id", ""),
-                })
+                metadatas.append(
+                    {
+                        "source": doc["source"],
+                        "entry_id": doc.get("entry_id", ""),
+                    }
+                )
                 embedded += 1
             except Exception as exc:
                 errors += 1
@@ -340,8 +371,10 @@ def build_index(
 # Query
 # ---------------------------------------------------------------------------
 
+
 def _get_collection(index_dir: Path | None = None):
     import chromadb
+
     idx_dir = Path(index_dir or config.RAG_INDEX_DIR)
     client = chromadb.PersistentClient(path=str(idx_dir))
     return client.get_collection("resume_bullets")
@@ -371,6 +404,7 @@ def query_keyword(
 # ---------------------------------------------------------------------------
 # Targeted keyword-to-bullet matching (in-memory cosine sim)
 # ---------------------------------------------------------------------------
+
 
 def _cosine_sim(a: list[float], b: list[float]) -> float:
     dot = sum(x * y for x, y in zip(a, b))
@@ -446,12 +480,14 @@ def match_keywords_to_bullets(
 
             if best_score >= hi and best_idx >= 0:
                 tier = "high"
-                bullet_matches.append({
-                    "keyword": kw,
-                    "score": best_score,
-                    "bullet_idx": best_idx,
-                    "bullet_text": bullets[best_idx],
-                })
+                bullet_matches.append(
+                    {
+                        "keyword": kw,
+                        "score": best_score,
+                        "bullet_idx": best_idx,
+                        "bullet_text": bullets[best_idx],
+                    }
+                )
             elif best_score >= mid:
                 tier = "mid"
                 if len(summary_keywords) < max_s:
@@ -462,17 +498,23 @@ def match_keywords_to_bullets(
                 tier = "low"
                 ignored_keywords.append(kw)
 
-            scores.append({
-                "keyword": kw,
-                "score": best_score,
-                "tier": tier,
-                "bullet_idx": best_idx if best_idx >= 0 else None,
-                "bullet_preview": bullets[best_idx][:80] if best_idx >= 0 else "",
-            })
+            scores.append(
+                {
+                    "keyword": kw,
+                    "score": best_score,
+                    "tier": tier,
+                    "bullet_idx": best_idx if best_idx >= 0 else None,
+                    "bullet_preview": bullets[best_idx][:80] if best_idx >= 0 else "",
+                }
+            )
             if verbose:
                 print(
                     f"  [RAG] '{kw}' -> {best_score:.3f} ({tier})"
-                    + (f" | bullet[{best_idx}]: '{bullets[best_idx][:55]}'" if best_idx >= 0 else "")
+                    + (
+                        f" | bullet[{best_idx}]: '{bullets[best_idx][:55]}'"
+                        if best_idx >= 0
+                        else ""
+                    )
                 )
         except Exception as exc:
             ignored_keywords.append(kw)
@@ -495,6 +537,7 @@ def match_keywords_to_bullets(
 # Status
 # ---------------------------------------------------------------------------
 
+
 def index_status(index_dir: Path | None = None) -> dict[str, Any]:
     """Return current index metadata, or an empty dict if not built."""
     idx_dir = Path(index_dir or config.RAG_INDEX_DIR)
@@ -513,6 +556,7 @@ def index_status(index_dir: Path | None = None) -> dict[str, Any]:
 def clear_index(index_dir: Path | None = None) -> None:
     """Delete the ChromaDB collection and meta file."""
     import chromadb
+
     idx_dir = Path(index_dir or config.RAG_INDEX_DIR)
     try:
         client = chromadb.PersistentClient(path=str(idx_dir))

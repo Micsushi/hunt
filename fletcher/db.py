@@ -125,9 +125,7 @@ def init_resume_db(db_path: str | Path | None = None) -> None:
         ra_existing = {row[1] for row in cursor.execute("PRAGMA table_info(resume_attempts)")}
         for column_name, column_def in RESUME_ATTEMPT_EXTRA_COLUMNS.items():
             if column_name not in ra_existing:
-                cursor.execute(
-                    f"ALTER TABLE resume_attempts ADD COLUMN {column_name} {column_def}"
-                )
+                cursor.execute(f"ALTER TABLE resume_attempts ADD COLUMN {column_name} {column_def}")
         conn.commit()
     finally:
         conn.close()

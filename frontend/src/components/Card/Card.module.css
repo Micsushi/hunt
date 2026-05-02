@@ -4,7 +4,9 @@
   border-radius: var(--radius-xl);
   padding: 16px 18px;
   box-shadow: var(--shadow);
-  transition: transform var(--ease), box-shadow var(--ease);
+  transition:
+    transform var(--ease),
+    box-shadow var(--ease);
 }
 
 .card.clickable {
@@ -32,6 +34,12 @@
   line-height: 1;
 }
 
-.card.accent .value { color: var(--accent); }
-.card.danger .value  { color: var(--danger); }
-.card.warning .value { color: var(--warning); }
+.card.accent .value {
+  color: var(--accent);
+}
+.card.danger .value {
+  color: var(--danger);
+}
+.card.warning .value {
+  color: var(--warning);
+}

@@ -29,9 +29,7 @@ class Component2OllamaTests(unittest.TestCase):
             }
         )
         with patch.object(config, "DEFAULT_MODEL_BACKEND", "ollama"):
-            with patch(
-                "fletcher.llm.llm_enrich._ollama_chat", return_value=fake_response
-            ):
+            with patch("fletcher.llm.llm_enrich._ollama_chat", return_value=fake_response):
                 base_c = {
                     "role_family": "software",
                     "job_level": "unknown",
@@ -76,9 +74,7 @@ class Component2OllamaTests(unittest.TestCase):
             }
         )
         with patch.object(config, "DEFAULT_MODEL_BACKEND", "ollama"):
-            with patch(
-                "fletcher.llm.llm_enrich._ollama_chat", return_value=fake_response
-            ):
+            with patch("fletcher.llm.llm_enrich._ollama_chat", return_value=fake_response):
                 base_c = {
                     "role_family": "pm",
                     "job_level": "mid",

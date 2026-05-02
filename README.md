@@ -78,7 +78,56 @@ Edit `hunter/config.py`:
 - System roadmap: `docs/roadmap.md`
 - Shared glossary: `docs/GLOSSARY.md`
 - Local Postgres/container smoke tests: `docs/LOCAL_POSTGRES_SMOKES.md`
+- One-command local smoke runner: `python smoke.py`
+- Component smokes: `python smoke.py c0`, `python smoke.py c1`, `python smoke.py c2`, `python smoke.py c4`
+- Short test groups: `python test.py c0`, `python test.py c1`, `python test.py c2`, `python test.py c3`, `python test.py c4`
+- Short quality checks: `python quality.py c0`, `python quality.py c1`, `python quality.py c2`, `python quality.py c3`, `python quality.py c4`
+- Full CI entrypoints: `python ci.py` and `python ci.py c0|c1|c2|c3|c4|shared|frontend`
 - Live fix tracker: `docs/TODO.md`
+
+Quick test aliases:
+- `python test.py all`: all repo Python tests
+- `python test.py c0`: C0/backend and related UI-facing backend tests
+- `python test.py c1`: C1/Hunter tests
+- `python test.py c2`: C2/Fletcher tests
+- `python test.py c3`: C3/Executioner-related tests
+- `python test.py c4`: C4/Coordinator tests
+- `python test.py shared`: DB/runtime/deploy-readiness shared tests
+
+Quick quality aliases:
+- `python quality.py all`: Python Ruff + frontend lint/typecheck + Prettier checks + C3 Prettier check
+- `python quality.py c0`: backend Ruff + frontend lint/typecheck/Prettier
+- `python quality.py c1`: Hunter Ruff checks
+- `python quality.py c2`: Fletcher Ruff checks
+- `python quality.py c3`: Executioner Prettier check
+- `python quality.py c4`: Coordinator Ruff checks
+- `python quality.py shared`: scripts/tests Ruff checks
+
+Quick CI aliases:
+- `python ci.py all`: full quality checks plus full Python test suite
+- `python ci.py c0`: C0 checks plus C0 tests
+- `python ci.py c1`: C1 checks plus C1 tests
+- `python ci.py c2`: C2 checks plus C2 tests
+- `python ci.py c3`: C3 checks plus C3 tests
+- `python ci.py c4`: C4 checks plus C4 tests
+
+Compatibility alias:
+- `python check.py ...` still works, but `python quality.py ...` is now the preferred name.
+
+## Definition Of Done
+
+Before saying work is done:
+- run the relevant verification command for the change you made
+- prefer the smallest matching CI target first: `python ci.py c0`, `python ci.py c1`, `python ci.py c2`, `python ci.py c3`, `python ci.py c4`, `python ci.py shared`, or `python ci.py frontend`
+- run `python ci.py` when the change crosses component boundaries or when you are unsure which component owns the impact
+- do not claim success based only on reading code or on a dry-run command
+- if a required verification command cannot be run, say exactly what was not run and why
+
+For every feature or bug fix:
+- add or update tests when the behavior can be checked automatically
+- for bug fixes: add a regression test that fails before the fix and passes after it when feasible
+- for new features: add tests that prove the intended behavior, not just happy-path wiring
+- if automated coverage is not practical, say what manual validation is still required and why
 
 Repo homes by component:
 - `frontend/` + `backend/` : **C0 (Frontend)** UI and control-plane backend

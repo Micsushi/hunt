@@ -41,6 +41,7 @@ def _sqlite_connect(db_path: str | Path | None) -> sqlite3.Connection:
             path = env_path
         else:
             from hunter.config import DB_PATH  # last-resort fallback
+
             path = DB_PATH
     conn = sqlite3.connect(path, timeout=30.0)
     conn.row_factory = sqlite3.Row
@@ -57,7 +58,7 @@ def _sqlite_connect(db_path: str | Path | None) -> sqlite3.Connection:
 # ---------------------------------------------------------------------------
 
 
-def _pg_connect(db_url: str) -> "_PgConnCompat":
+def _pg_connect(db_url: str) -> _PgConnCompat:
     import psycopg2
     import psycopg2.extras
 
@@ -171,7 +172,7 @@ class _PgConnCompat:
     def __init__(self, conn):
         self._conn = conn
 
-    def cursor(self) -> "_PgCursorCompat":
+    def cursor(self) -> _PgCursorCompat:
         import psycopg2.extras
 
         return _PgCursorCompat(
@@ -179,12 +180,12 @@ class _PgConnCompat:
             self._conn,
         )
 
-    def execute(self, query: str, params=()) -> "_PgCursorCompat":
+    def execute(self, query: str, params=()) -> _PgCursorCompat:
         cur = self.cursor()
         cur.execute(query, params)
         return cur
 
-    def executemany(self, query: str, param_list) -> "_PgCursorCompat":
+    def executemany(self, query: str, param_list) -> _PgCursorCompat:
         cur = self.cursor()
         cur.executemany(query, param_list)
         return cur
@@ -217,7 +218,7 @@ class _PgCursorCompat:
         self._conn = conn  # raw psycopg2 connection for lastval() calls
         self.lastrowid: int | None = None
 
-    def execute(self, query: str, params=()) -> "_PgCursorCompat":
+    def execute(self, query: str, params=()) -> _PgCursorCompat:
         pg_query = _pg_sql(query)
         if not params:
             table_match = re.match(
@@ -249,7 +250,7 @@ class _PgCursorCompat:
                 sp_cur.close()
         return self
 
-    def executemany(self, query: str, param_list) -> "_PgCursorCompat":
+    def executemany(self, query: str, param_list) -> _PgCursorCompat:
         pg_query = _pg_sql(query)
         self._cur.executemany(pg_query, param_list)
         return self

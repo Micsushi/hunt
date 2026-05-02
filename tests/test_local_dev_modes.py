@@ -40,7 +40,11 @@ def test_auth_session_uses_db_compat_connection(monkeypatch, tmp_path):
 
     monkeypatch.setenv("HUNT_DB_URL", "postgresql://example")
     monkeypatch.setattr(db_compat, "get_connection", fake_get_connection)
-    monkeypatch.setattr(sqlite3, "connect", lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("sqlite3.connect used")))
+    monkeypatch.setattr(
+        sqlite3,
+        "connect",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("sqlite3.connect used")),
+    )
 
     import backend.auth_session as auth_session
 

@@ -1,4 +1,8 @@
-.page { display: flex; flex-direction: column; gap: 20px; }
+.page {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
 
 .pageHeader {
   display: flex;
@@ -8,8 +12,15 @@
   flex-wrap: wrap;
 }
 
-.heroTitle { font-size: 1.5rem; font-weight: 700; }
-.heroMeta  { font-size: 0.85rem; color: var(--muted); margin-top: 4px; }
+.heroTitle {
+  font-size: 1.5rem;
+  font-weight: 700;
+}
+.heroMeta {
+  font-size: 0.85rem;
+  color: var(--muted);
+  margin-top: 4px;
+}
 
 .statusPill {
   display: flex;
@@ -22,8 +33,14 @@
   background: var(--panel);
   align-self: flex-start;
 }
-.statusPillOnline  { border-color: var(--good); color: var(--good); }
-.statusPillOffline { border-color: var(--danger); color: var(--danger); }
+.statusPillOnline {
+  border-color: var(--good);
+  color: var(--good);
+}
+.statusPillOffline {
+  border-color: var(--danger);
+  color: var(--danger);
+}
 
 .statusDot {
   width: 7px;
@@ -95,7 +112,11 @@
   color: var(--muted);
 }
 
-.formGrid { display: flex; flex-direction: column; gap: 12px; }
+.formGrid {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
 
 .field {
   display: flex;
@@ -121,7 +142,10 @@
   letter-spacing: normal;
   font-weight: 400;
 }
-.input:focus { outline: none; border-color: var(--accent); }
+.input:focus {
+  outline: none;
+  border-color: var(--accent);
+}
 
 .textarea {
   background: var(--panel-strong);
@@ -138,7 +162,10 @@
   letter-spacing: normal;
   transition: border-color var(--ease);
 }
-.textarea:focus { outline: none; border-color: var(--accent); }
+.textarea:focus {
+  outline: none;
+  border-color: var(--accent);
+}
 
 .fileRow {
   display: flex;
@@ -146,7 +173,9 @@
   gap: 8px;
 }
 
-.fileInput { display: none; }
+.fileInput {
+  display: none;
+}
 
 .fileLabel {
   display: inline-flex;
@@ -161,7 +190,9 @@
   background: var(--panel-strong);
   color: var(--ink);
   cursor: pointer;
-  transition: border-color var(--ease), color var(--ease);
+  transition:
+    border-color var(--ease),
+    color var(--ease);
   text-transform: none;
   letter-spacing: normal;
   white-space: nowrap;
@@ -169,8 +200,13 @@
   text-overflow: ellipsis;
   max-width: 260px;
 }
-.fileLabel:hover { border-color: var(--accent); }
-.fileLabelActive { border-color: var(--accent); color: var(--accent); }
+.fileLabel:hover {
+  border-color: var(--accent);
+}
+.fileLabelActive {
+  border-color: var(--accent);
+  color: var(--accent);
+}
 
 .btn {
   height: 36px;
@@ -182,13 +218,26 @@
   background: var(--panel-strong);
   color: var(--ink);
   cursor: pointer;
-  transition: background var(--ease), border-color var(--ease);
+  transition:
+    background var(--ease),
+    border-color var(--ease);
   white-space: nowrap;
 }
-.btn:hover { background: var(--panel-hover); }
-.btn:disabled { opacity: 0.5; cursor: not-allowed; }
-.btnPrimary { background: var(--accent); border-color: var(--accent); color: var(--ink-inverse); }
-.btnPrimary:hover:not(:disabled) { opacity: 0.88; }
+.btn:hover {
+  background: var(--panel-hover);
+}
+.btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.btnPrimary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--ink-inverse);
+}
+.btnPrimary:hover:not(:disabled) {
+  opacity: 0.88;
+}
 
 .pre {
   background: var(--panel-strong);
@@ -220,9 +269,14 @@
   text-decoration: none;
   border: 1px solid var(--good);
 }
-.downloadLink:hover { opacity: 0.85; }
+.downloadLink:hover {
+  opacity: 0.85;
+}
 
-.meta { font-size: 0.85rem; color: var(--muted); }
+.meta {
+  font-size: 0.85rem;
+  color: var(--muted);
+}
 
 /* Responsive: stack on narrow screens */
 @media (max-width: 800px) {

@@ -25,7 +25,9 @@
   font-size: 0.88rem;
   font-weight: 600;
   color: var(--ink);
-  transition: background var(--ease), transform var(--ease);
+  transition:
+    background var(--ease),
+    transform var(--ease);
   cursor: pointer;
 }
 

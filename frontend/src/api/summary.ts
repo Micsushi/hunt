@@ -26,15 +26,28 @@ export function fetchLogsQuery(query: LogsQuery = {}): Promise<LogsData> {
   return get<LogsData>(`/api/logs${qs ? `?${qs}` : ''}`)
 }
 
-export interface BreakdownItem { label: string; count: number }
-export interface BreakdownData { field: string; data: BreakdownItem[] }
+export interface BreakdownItem {
+  label: string
+  count: number
+}
+export interface BreakdownData {
+  field: string
+  data: BreakdownItem[]
+}
 
 export function fetchBreakdown(field: string): Promise<BreakdownData> {
   return get<BreakdownData>(`/api/summary/breakdown?field=${field}`)
 }
 
-export interface TimelinePoint { day: string; source: string; count: number }
-export interface TimelineData { days: number; data: TimelinePoint[] }
+export interface TimelinePoint {
+  day: string
+  source: string
+  count: number
+}
+export interface TimelineData {
+  days: number
+  data: TimelinePoint[]
+}
 
 export function fetchTimeline(days: number): Promise<TimelineData> {
   return get<TimelineData>(`/api/summary/timeline?days=${days}`)

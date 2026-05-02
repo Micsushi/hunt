@@ -55,7 +55,9 @@
   background: var(--panel-strong);
   color: var(--ink);
   font-size: 1rem;
-  transition: border-color var(--ease), box-shadow var(--ease);
+  transition:
+    border-color var(--ease),
+    box-shadow var(--ease);
 }
 
 .input:focus {
@@ -85,9 +87,16 @@
   font-size: 1rem;
   font-weight: 700;
   cursor: pointer;
-  transition: opacity var(--ease), transform var(--ease);
+  transition:
+    opacity var(--ease),
+    transform var(--ease);
   margin-top: 4px;
 }
 
-.submit:hover:not(:disabled) { transform: translateY(-1px); }
-.submit:disabled { opacity: 0.6; cursor: progress; }
+.submit:hover:not(:disabled) {
+  transform: translateY(-1px);
+}
+.submit:disabled {
+  opacity: 0.6;
+  cursor: progress;
+}

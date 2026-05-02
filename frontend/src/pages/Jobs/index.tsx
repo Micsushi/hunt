@@ -17,54 +17,64 @@ const MOCK = import.meta.env.VITE_MOCK_BACKEND === 'true'
 
 function queryFromParams(p: URLSearchParams): JobsQuery {
   return {
-    source:    p.get('source')    || 'all',
-    status:    p.get('status')    || 'all',
-    q:         p.get('q')         || '',
-    tag:       p.get('tag')       || '',
-    category:  p.get('category')  || '',
-    ats_type:  p.get('ats_type')  || '',
-    sort:      (p.get('sort')     || 'date_scraped') as SortField,
-    direction: (p.get('direction')|| 'desc') as SortDirection,
-    limit:     parseInt(p.get('limit')  || '50', 10),
-    page:      parseInt(p.get('page')   || '1',  10),
+    source: p.get('source') || 'all',
+    status: p.get('status') || 'all',
+    q: p.get('q') || '',
+    tag: p.get('tag') || '',
+    category: p.get('category') || '',
+    ats_type: p.get('ats_type') || '',
+    sort: (p.get('sort') || 'date_scraped') as SortField,
+    direction: (p.get('direction') || 'desc') as SortDirection,
+    limit: parseInt(p.get('limit') || '50', 10),
+    page: parseInt(p.get('page') || '1', 10),
   }
 }
 
 function queryToParams(q: JobsQuery): URLSearchParams {
   const p = new URLSearchParams()
-  if (q.source)    p.set('source', q.source)
-  if (q.status)    p.set('status', q.status)
-  if (q.q)         p.set('q', q.q)
-  if (q.tag)       p.set('tag', q.tag)
-  if (q.category)  p.set('category', q.category)
-  if (q.ats_type)  p.set('ats_type', q.ats_type)
-  if (q.sort)      p.set('sort', q.sort)
+  if (q.source) p.set('source', q.source)
+  if (q.status) p.set('status', q.status)
+  if (q.q) p.set('q', q.q)
+  if (q.tag) p.set('tag', q.tag)
+  if (q.category) p.set('category', q.category)
+  if (q.ats_type) p.set('ats_type', q.ats_type)
+  if (q.sort) p.set('sort', q.sort)
   if (q.direction) p.set('direction', q.direction)
-  if (q.limit)     p.set('limit', String(q.limit))
-  if (q.page)      p.set('page', String(q.page))
+  if (q.limit) p.set('limit', String(q.limit))
+  if (q.page) p.set('page', String(q.page))
   return p
 }
 
 function mockDownloadHref(format: 'csv' | 'json'): string {
-  const content = format === 'csv'
-    ? 'id,company,title,status\n1,Acme Corp,Senior Software Engineer,done\n'
-    : JSON.stringify([{ id: 1, company: 'Acme Corp', title: 'Senior Software Engineer', status: 'done' }], null, 2)
+  const content =
+    format === 'csv'
+      ? 'id,company,title,status\n1,Acme Corp,Senior Software Engineer,done\n'
+      : JSON.stringify(
+          [{ id: 1, company: 'Acme Corp', title: 'Senior Software Engineer', status: 'done' }],
+          null,
+          2,
+        )
   const type = format === 'csv' ? 'text/csv' : 'application/json'
   return `data:${type};charset=utf-8,${encodeURIComponent(content)}`
 }
 
 const COL_TIPS: Record<string, string> = {
-  ID:           'Database row ID',
-  Company:      'Employer name',
-  Title:        'Job title',
-  Links:        'View listing or apply page',
-  Enrichment:   'Current enrichment status',
+  ID: 'Database row ID',
+  Company: 'Employer name',
+  Title: 'Job title',
+  Links: 'View listing or apply page',
+  Enrichment: 'Current enrichment status',
   'Apply type': '"external_apply" = company ATS. "easy_apply" = LinkedIn — we skip those.',
-  Attempts:     'How many enrichment attempts on this row',
-  Added:        'When this job was scraped',
+  Attempts: 'How many enrichment attempts on this row',
+  Added: 'When this job was scraped',
 }
 
-function Th({ label, sortKey, query, onChange }: {
+function Th({
+  label,
+  sortKey,
+  query,
+  onChange,
+}: {
   label: string
   sortKey?: SortField
   query: JobsQuery
@@ -95,17 +105,17 @@ export function JobsPage() {
   const tbodyRef = useRef<HTMLTableSectionElement>(null)
   const [focusIdx, setFocusIdx] = useState(-1)
   const [bulkDryResult, setBulkDryResult] = useState<string | null>(null)
-  const showToast = useUiStore(s => s.showToast)
+  const showToast = useUiStore((s) => s.showToast)
 
   // Sync URL when query changes
   useEffect(() => {
     setSearchParams(queryToParams(query), { replace: true })
     clearSelection()
     setFocusIdx(-1) // eslint-disable-line react-hooks/set-state-in-effect
-  }, [query])  // eslint-disable-line
+  }, [query]) // eslint-disable-line
 
   const updateQuery = useCallback((patch: Partial<JobsQuery>) => {
-    setQuery(prev => ({ ...prev, ...patch }))
+    setQuery((prev) => ({ ...prev, ...patch }))
   }, [])
 
   // Keyboard j/k/Enter navigation
@@ -115,8 +125,14 @@ export function JobsPage() {
       if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return
       const rows = tbodyRef.current?.querySelectorAll('tr[data-job-id]') ?? []
       if (!rows.length) return
-      if (e.key === 'j') { e.preventDefault(); setFocusIdx(i => Math.min(i + 1, rows.length - 1)) }
-      if (e.key === 'k') { e.preventDefault(); setFocusIdx(i => Math.max(i - 1, 0)) }
+      if (e.key === 'j') {
+        e.preventDefault()
+        setFocusIdx((i) => Math.min(i + 1, rows.length - 1))
+      }
+      if (e.key === 'k') {
+        e.preventDefault()
+        setFocusIdx((i) => Math.max(i - 1, 0))
+      }
       if (e.key === 'Enter' && focusIdx >= 0) {
         const row = rows[focusIdx] as HTMLElement
         const id = row.dataset.jobId
@@ -130,12 +146,13 @@ export function JobsPage() {
   useEffect(() => {
     const rows = tbodyRef.current?.querySelectorAll('tr[data-job-id]') ?? []
     rows.forEach((r, i) => r.classList.toggle(styles.focused, i === focusIdx))
-    if (focusIdx >= 0) (rows[focusIdx] as HTMLElement)?.scrollIntoView({ block: 'nearest', behavior: 'smooth' })
+    if (focusIdx >= 0)
+      (rows[focusIdx] as HTMLElement)?.scrollIntoView({ block: 'nearest', behavior: 'smooth' })
   }, [focusIdx, jobs])
 
-  const allIds = jobs.map(j => j.id)
-  const allChecked = allIds.length > 0 && allIds.every(id => selectedIds.has(id))
-  const someChecked = allIds.some(id => selectedIds.has(id))
+  const allIds = jobs.map((j) => j.id)
+  const allChecked = allIds.length > 0 && allIds.every((id) => selectedIds.has(id))
+  const someChecked = allIds.some((id) => selectedIds.has(id))
 
   async function runBulkRequeue(dry: boolean) {
     try {
@@ -168,7 +185,7 @@ export function JobsPage() {
         className={`${styles.jobRow} ${idx === focusIdx ? styles.focused : ''}`}
         onClick={() => navigate(`/jobs/${job.id}`)}
       >
-        <td onClick={e => e.stopPropagation()}>
+        <td onClick={(e) => e.stopPropagation()}>
           <input
             type="checkbox"
             checked={checked}
@@ -177,19 +194,61 @@ export function JobsPage() {
           />
         </td>
         <td className={styles.idCell}>
-          <a href={`/jobs/${job.id}`} onClick={e => { e.preventDefault(); navigate(`/jobs/${job.id}`) }}>#{job.id}</a>
+          <a
+            href={`/jobs/${job.id}`}
+            onClick={(e) => {
+              e.preventDefault()
+              navigate(`/jobs/${job.id}`)
+            }}
+          >
+            #{job.id}
+          </a>
         </td>
-        <td className={styles.companyCell} title={job.company ?? undefined}>{job.company ?? '-'}</td>
-        <td className={styles.titleCell} title={job.title ?? undefined}>{job.title ?? '-'}</td>
-        <td onClick={e => e.stopPropagation()}>
-          {job.job_url && <a href={job.job_url} target="_blank" rel="noreferrer" title="View original listing" className={styles.extLink}>Listing ↗</a>}
-          {job.job_url && job.apply_url && <span style={{ color: 'var(--line)', margin: '0 4px' }}>|</span>}
-          {job.apply_url && <a href={job.apply_url} target="_blank" rel="noreferrer" title="Apply page" className={styles.extLink}>Apply ↗</a>}
+        <td className={styles.companyCell} title={job.company ?? undefined}>
+          {job.company ?? '-'}
         </td>
-        <td><StatusBadge status={job.enrichment_status} size="sm" /></td>
+        <td className={styles.titleCell} title={job.title ?? undefined}>
+          {job.title ?? '-'}
+        </td>
+        <td onClick={(e) => e.stopPropagation()}>
+          {job.job_url && (
+            <a
+              href={job.job_url}
+              target="_blank"
+              rel="noreferrer"
+              title="View original listing"
+              className={styles.extLink}
+            >
+              Listing ↗
+            </a>
+          )}
+          {job.job_url && job.apply_url && (
+            <span style={{ color: 'var(--line)', margin: '0 4px' }}>|</span>
+          )}
+          {job.apply_url && (
+            <a
+              href={job.apply_url}
+              target="_blank"
+              rel="noreferrer"
+              title="Apply page"
+              className={styles.extLink}
+            >
+              Apply ↗
+            </a>
+          )}
+        </td>
+        <td>
+          <StatusBadge status={job.enrichment_status} size="sm" />
+        </td>
         <td className={styles.applyType}>{job.apply_type?.replace(/_/g, ' ') ?? '-'}</td>
         <td className={styles.numCell}>{job.enrichment_attempts ?? 0}</td>
-        <td className="mono" style={{ fontSize: '0.8rem', color: 'var(--muted)' }} title={job.date_scraped ?? undefined}>{timeAgo(job.date_scraped)}</td>
+        <td
+          className="mono"
+          style={{ fontSize: '0.8rem', color: 'var(--muted)' }}
+          title={job.date_scraped ?? undefined}
+        >
+          {timeAgo(job.date_scraped)}
+        </td>
       </tr>
     )
   }
@@ -202,9 +261,12 @@ export function JobsPage() {
         <h1 className={styles.heroTitle}>Jobs</h1>
         <p className="muted">
           {isLoading ? 'Loading…' : `${jobs.length} rows shown.`}
-          {isFetching && !isLoading && <span style={{ marginLeft: 8, color: 'var(--accent)' }}>Refreshing…</span>}
+          {isFetching && !isLoading && (
+            <span style={{ marginLeft: 8, color: 'var(--accent)' }}>Refreshing…</span>
+          )}
           <span style={{ marginLeft: 8, color: 'var(--muted)', fontSize: '0.83rem' }}>
-            Keyboard: <kbd className={styles.kbd}>j</kbd>/<kbd className={styles.kbd}>k</kbd> move · <kbd className={styles.kbd}>Enter</kbd> open
+            Keyboard: <kbd className={styles.kbd}>j</kbd>/<kbd className={styles.kbd}>k</kbd> move ·{' '}
+            <kbd className={styles.kbd}>Enter</kbd> open
           </span>
         </p>
       </section>
@@ -216,22 +278,38 @@ export function JobsPage() {
         <summary className={styles.advSummary}>Advanced: bulk requeue by current filters</summary>
         <div className={styles.advBody}>
           <p className="muted" style={{ fontSize: '0.88rem', marginBottom: 12 }}>
-            Requeues all rows matching your current filters (source, status, search) that have status: failed, blocked, or blocked_verified.
-            Server caps batch size.
+            Requeues all rows matching your current filters (source, status, search) that have
+            status: failed, blocked, or blocked_verified. Server caps batch size.
           </p>
           <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center' }}>
-            <button className={styles.advBtn} onClick={() => runBulkRequeue(true)} title="Count how many rows would be requeued without changing anything">
+            <button
+              className={styles.advBtn}
+              onClick={() => runBulkRequeue(true)}
+              title="Count how many rows would be requeued without changing anything"
+            >
               Count only (dry run)
             </button>
-            <button className={`${styles.advBtn} ${styles.advBtnPrimary}`} onClick={() => runBulkRequeue(false)} title="Requeue all matching failed/blocked rows to pending">
+            <button
+              className={`${styles.advBtn} ${styles.advBtnPrimary}`}
+              onClick={() => runBulkRequeue(false)}
+              title="Requeue all matching failed/blocked rows to pending"
+            >
               Requeue matching rows
             </button>
-            {bulkDryResult && <span className="muted" style={{ fontSize: '0.88rem' }}>{bulkDryResult}</span>}
+            {bulkDryResult && (
+              <span className="muted" style={{ fontSize: '0.88rem' }}>
+                {bulkDryResult}
+              </span>
+            )}
           </div>
           <div style={{ marginTop: 12, display: 'flex', gap: 8 }}>
             <a
               className={styles.exportBtn}
-              href={MOCK ? mockDownloadHref('csv') : `/api/jobs/export?format=csv&${queryToParams(query).toString()}`}
+              href={
+                MOCK
+                  ? mockDownloadHref('csv')
+                  : `/api/jobs/export?format=csv&${queryToParams(query).toString()}`
+              }
               download={MOCK ? 'hunt-mock-jobs.csv' : undefined}
               title="Download current filtered results as CSV"
             >
@@ -239,7 +317,11 @@ export function JobsPage() {
             </a>
             <a
               className={styles.exportBtn}
-              href={MOCK ? mockDownloadHref('json') : `/api/jobs/export?format=json&${queryToParams(query).toString()}`}
+              href={
+                MOCK
+                  ? mockDownloadHref('json')
+                  : `/api/jobs/export?format=json&${queryToParams(query).toString()}`
+              }
               download={MOCK ? 'hunt-mock-jobs.json' : undefined}
               title="Download current filtered results as JSON"
             >
@@ -258,25 +340,34 @@ export function JobsPage() {
                 <input
                   type="checkbox"
                   checked={allChecked}
-                  ref={el => { if (el) el.indeterminate = someChecked && !allChecked }}
-                  onChange={() => allChecked ? clearSelection() : selectAll(allIds)}
+                  ref={(el) => {
+                    if (el) el.indeterminate = someChecked && !allChecked
+                  }}
+                  onChange={() => (allChecked ? clearSelection() : selectAll(allIds))}
                   aria-label="Select all rows on this page"
                   title="Select or deselect all rows on this page"
                 />
               </th>
-              {Object.keys(COL_TIPS).map(label => (
+              {Object.keys(COL_TIPS).map((label) => (
                 <Th
                   key={label}
                   label={label}
                   sortKey={
-                    label === 'ID'           ? 'id'                  :
-                    label === 'Company'      ? 'company'             :
-                    label === 'Title'        ? 'title'               :
-                    label === 'Enrichment'   ? 'enrichment_status'   :
-                    label === 'Apply type'   ? 'apply_type'          :
-                    label === 'Attempts'     ? 'enrichment_attempts' :
-                    label === 'Added'        ? 'date_scraped'        :
-                    undefined
+                    label === 'ID'
+                      ? 'id'
+                      : label === 'Company'
+                        ? 'company'
+                        : label === 'Title'
+                          ? 'title'
+                          : label === 'Enrichment'
+                            ? 'enrichment_status'
+                            : label === 'Apply type'
+                              ? 'apply_type'
+                              : label === 'Attempts'
+                                ? 'enrichment_attempts'
+                                : label === 'Added'
+                                  ? 'date_scraped'
+                                  : undefined
                   }
                   query={query}
                   onChange={updateQuery}
@@ -286,9 +377,17 @@ export function JobsPage() {
           </thead>
           <tbody ref={tbodyRef}>
             {isLoading ? (
-              <tr><td colSpan={9} style={{ textAlign: 'center', padding: 32, color: 'var(--muted)' }}>Loading…</td></tr>
+              <tr>
+                <td colSpan={9} style={{ textAlign: 'center', padding: 32, color: 'var(--muted)' }}>
+                  Loading…
+                </td>
+              </tr>
             ) : jobs.length === 0 ? (
-              <tr><td colSpan={9} style={{ textAlign: 'center', padding: 32, color: 'var(--muted)' }}>No jobs match this filter.</td></tr>
+              <tr>
+                <td colSpan={9} style={{ textAlign: 'center', padding: 32, color: 'var(--muted)' }}>
+                  No jobs match this filter.
+                </td>
+              </tr>
             ) : (
               jobs.map((j, i) => renderJob(j, i))
             )}
@@ -298,9 +397,13 @@ export function JobsPage() {
 
       <Pagination
         page={query.page ?? 1}
-        totalRows={jobs.length >= (query.limit ?? 50) ? (query.page ?? 1) * (query.limit ?? 50) + 1 : (((query.page ?? 1) - 1) * (query.limit ?? 50)) + jobs.length}
+        totalRows={
+          jobs.length >= (query.limit ?? 50)
+            ? (query.page ?? 1) * (query.limit ?? 50) + 1
+            : ((query.page ?? 1) - 1) * (query.limit ?? 50) + jobs.length
+        }
         limit={query.limit ?? 50}
-        onChange={page => updateQuery({ page })}
+        onChange={(page) => updateQuery({ page })}
       />
 
       <BulkBar />

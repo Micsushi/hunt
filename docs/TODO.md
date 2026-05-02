@@ -31,14 +31,18 @@ Use that snapshot as the reality check when reading the detailed lists below.
 Things that cut across all services.
 
 - [x] Operator status page — shows what is up or broken across C0-C4 in one view
-- [ ] Keep docs current — update `docs/roadmap.md`, this file, and `docs/LOCAL_POSTGRES_SMOKES.md` after each deploy milestone
-- [ ] One command to run a full local smoke test on both Windows and Linux
+- [x] Keep docs current — update `docs/roadmap.md`, this file, and `docs/LOCAL_POSTGRES_SMOKES.md` after each deploy milestone
+- [x] One command to run a full local smoke test on both Windows and Linux
 - [ ] One command or written runbook to deploy from Windows to server2
 - [ ] Decide whether to keep the combined `Dockerfile.review` (backend + frontend in one image) or split them into two separate containers
 - [ ] Confirm `docker-compose.pipeline.yml` is the standard way to run locally, or add a simpler root `docker-compose.yml` wrapper
 - [ ] Add structured logging and request IDs across all flows (scrape, enrich, generate resume, fill form, run, approval) — makes it possible to trace a single job through the whole pipeline when something goes wrong
 - [ ] Discord notifications for key events: LinkedIn auth expired, scrape/enrich failed, C4 waiting for approval, run failed, smoke failed
 - [ ] Written release checklist: local tests → local smoke → server2 smoke → update docs → update vault
+- [x] Short cross-platform test commands per service: `python test.py c0|c1|c2|c3|c4|shared|all`
+- [x] Short cross-platform quality check commands per service: `python quality.py c0|c1|c2|c3|c4|shared|frontend|all`
+- [x] Full CI entrypoint for local and GitHub Actions use: `python ci.py [target]`
+- [x] Project definition of done documented: run the relevant `python ci.py [target]` before claiming completion, and add tests for feature work / bug fixes when feasible
 
 ## C0 : Dashboard and Control Panel
 

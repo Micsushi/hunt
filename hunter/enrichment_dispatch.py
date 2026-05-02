@@ -131,7 +131,9 @@ def _run_batch_for_source(
             browser_channel=browser_channel,
             ui_verify_blocked=ui_verify_blocked,
         )
-    raise RuntimeError(f"Unhandled enrichment source {source!r}: add a branch in _run_batch_for_source")
+    raise RuntimeError(
+        f"Unhandled enrichment source {source!r}: add a branch in _run_batch_for_source"
+    )
 
 
 def ensure_linkedin_session(

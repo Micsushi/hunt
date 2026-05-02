@@ -45,11 +45,18 @@
   font-weight: 700;
   font-size: 0.9rem;
   cursor: pointer;
-  transition: transform var(--ease), opacity var(--ease);
+  transition:
+    transform var(--ease),
+    opacity var(--ease);
 }
 
-.runBtn:hover:not(:disabled) { transform: translateY(-1px); }
-.runBtn:disabled { opacity: 0.6; cursor: progress; }
+.runBtn:hover:not(:disabled) {
+  transform: translateY(-1px);
+}
+.runBtn:disabled {
+  opacity: 0.6;
+  cursor: progress;
+}
 
 .clearBtn {
   background: transparent;
@@ -62,4 +69,6 @@
   transition: background var(--ease);
 }
 
-.clearBtn:hover { background: var(--panel); }
+.clearBtn:hover {
+  background: var(--panel);
+}

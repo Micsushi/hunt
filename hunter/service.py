@@ -53,7 +53,11 @@ class EnrichRequest(BaseModel):
 
 @app.get("/status", dependencies=[Depends(require_service_token)])
 def get_status():
-    from hunter.db import count_pending_jobs_for_enrichment, count_ready_jobs_for_enrichment, get_linkedin_auth_state
+    from hunter.db import (
+        count_pending_jobs_for_enrichment,
+        count_ready_jobs_for_enrichment,
+        get_linkedin_auth_state,
+    )
 
     return {
         "service": "c1-hunter",

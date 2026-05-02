@@ -1,6 +1,5 @@
 """Phase 9 tests: coordinator service API (HTTP layer) via FastAPI TestClient."""
 
-import json
 import os
 import sqlite3
 import sys
@@ -90,14 +89,34 @@ class CoordinatorServiceApiTests(unittest.TestCase):
                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
-                    "Backend Engineer", "Acme", "Canada",
+                    "Backend Engineer",
+                    "Acme",
+                    "Canada",
                     f"https://www.linkedin.com/jobs/view/{job_url_suffix}",
                     f"https://acme.wd5.myworkdayjobs.com/job/{job_url_suffix}",
-                    "A good role.", "linkedin", "2026-04-10", 1, "junior",
-                    0, "engineering", "external_apply", 1, "done", 1,
-                    "acme.wd5.myworkdayjobs.com", "workday", None, None, None,
-                    "", "", "resume-v9", resume_path, str(REPO_ROOT / "main.tex"),
-                    None, 1,
+                    "A good role.",
+                    "linkedin",
+                    "2026-04-10",
+                    1,
+                    "junior",
+                    0,
+                    "engineering",
+                    "external_apply",
+                    1,
+                    "done",
+                    1,
+                    "acme.wd5.myworkdayjobs.com",
+                    "workday",
+                    None,
+                    None,
+                    None,
+                    "",
+                    "",
+                    "resume-v9",
+                    resume_path,
+                    str(REPO_ROOT / "main.tex"),
+                    None,
+                    1,
                 ),
             )
             conn.commit()
@@ -175,6 +194,7 @@ class CoordinatorServiceApiTests(unittest.TestCase):
             try:
                 job_id = self.insert_ready_job(path, resume_path=resume_path)
                 from coordinator.service import OrchestrationService
+
                 svc = OrchestrationService(db_path=path, runtime_root=runtime_root)
                 context = svc.build_apply_context(job_id)
                 svc.request_fill(context.run_id)
@@ -255,6 +275,7 @@ class CoordinatorServiceApiTests(unittest.TestCase):
             try:
                 job_id = self.insert_ready_job(path, resume_path=resume_path)
                 from coordinator.service import OrchestrationService
+
                 svc = OrchestrationService(db_path=path, runtime_root=runtime_root)
                 context = svc.build_apply_context(job_id)
                 svc.request_fill(context.run_id)
@@ -288,6 +309,7 @@ class CoordinatorServiceApiTests(unittest.TestCase):
             try:
                 job_id = self.insert_ready_job(path, resume_path=resume_path)
                 from coordinator.service import OrchestrationService
+
                 svc = OrchestrationService(db_path=path, runtime_root=runtime_root)
                 context = svc.build_apply_context(job_id)
                 svc.request_fill(context.run_id)

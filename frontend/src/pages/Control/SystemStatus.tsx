@@ -8,10 +8,17 @@ function statusTone(status: string | undefined) {
   return status ? 'warn' : 'warn'
 }
 
-function StatusCard({ title, item }: { title: string; item?: ComponentStatus | { status: string; detail?: string } }) {
+function StatusCard({
+  title,
+  item,
+}: {
+  title: string
+  item?: ComponentStatus | { status: string; detail?: string }
+}) {
   const tone = statusTone(item?.status)
   const dotClass = tone === 'ok' ? styles.dotOk : tone === 'bad' ? styles.dotBad : styles.dotWarn
-  const badgeClass = tone === 'ok' ? styles.badgeOk : tone === 'bad' ? styles.badgeBad : styles.badgeWarn
+  const badgeClass =
+    tone === 'ok' ? styles.badgeOk : tone === 'bad' ? styles.badgeBad : styles.badgeWarn
   const status = item?.status ?? 'unknown'
   const pending = 'pending_fills' in (item ?? {}) ? (item as ComponentStatus).pending_fills : null
 
@@ -23,7 +30,11 @@ function StatusCard({ title, item }: { title: string; item?: ComponentStatus | {
       </div>
       <div className={styles.statusLine}>
         <span className={`${styles.dot} ${dotClass}`} aria-hidden="true" />
-        <span>{pending !== null && pending !== undefined ? `${pending} pending fill${pending === 1 ? '' : 's'}` : 'reachable check'}</span>
+        <span>
+          {pending !== null && pending !== undefined
+            ? `${pending} pending fill${pending === 1 ? '' : 's'}`
+            : 'reachable check'}
+        </span>
       </div>
       {'url' in (item ?? {}) && (item as ComponentStatus).url ? (
         <div className={`${styles.meta} ${styles.mono}`}>{(item as ComponentStatus).url}</div>
@@ -46,12 +57,16 @@ export function SystemStatusPanel() {
         <div>
           <h1 className={styles.heroTitle}>System status</h1>
           <div className={styles.heroMeta}>
-            {dataUpdatedAt ? `updated ${new Date(dataUpdatedAt).toLocaleTimeString()}` : 'waiting for status'}
+            {dataUpdatedAt
+              ? `updated ${new Date(dataUpdatedAt).toLocaleTimeString()}`
+              : 'waiting for status'}
           </div>
         </div>
       </div>
       {isLoading ? <div className={styles.panel}>Loading status...</div> : null}
-      {error ? <div className={`${styles.panel} ${styles.panelStrong}`}>Status check failed.</div> : null}
+      {error ? (
+        <div className={`${styles.panel} ${styles.panelStrong}`}>Status check failed.</div>
+      ) : null}
       {data ? (
         <div className={styles.grid}>
           <StatusCard title="DB" item={data.db} />

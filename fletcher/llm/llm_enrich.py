@@ -196,7 +196,6 @@ def generate_summary(
     return result
 
 
-
 def rewrite_bullet_targeted(bullet: str, keywords: list[str]) -> dict[str, Any]:
     """Rewrite a single resume bullet to naturally include specific keywords.
 
@@ -208,7 +207,12 @@ def rewrite_bullet_targeted(bullet: str, keywords: list[str]) -> dict[str, Any]:
       - error: str or None
       - duration_ms: int or None
     """
-    result: dict[str, Any] = {"bullet": bullet, "success": False, "error": None, "duration_ms": None}
+    result: dict[str, Any] = {
+        "bullet": bullet,
+        "success": False,
+        "error": None,
+        "duration_ms": None,
+    }
     if config.DEFAULT_MODEL_BACKEND != "ollama":
         return result
     if not bullet or not keywords:
@@ -235,7 +239,9 @@ def rewrite_bullet_targeted(bullet: str, keywords: list[str]) -> dict[str, Any]:
             result["success"] = True
     except Exception as exc:
         result["error"] = str(exc) or exc.__class__.__name__
-        result["duration_ms"] = int((time.perf_counter() - start) * 1000) if "start" in locals() else None
+        result["duration_ms"] = (
+            int((time.perf_counter() - start) * 1000) if "start" in locals() else None
+        )
         _llm_log("rewrite bullet [ERROR]", prompt, str(exc), result["duration_ms"])
     return result
 

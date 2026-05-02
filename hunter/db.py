@@ -1,5 +1,3 @@
-import json
-import os
 import sqlite3
 from datetime import timedelta
 
@@ -1352,6 +1350,7 @@ def get_runtime_state(keys):
 
 def get_review_queue_summary(*, source=None):
     from backend import db as backend_db  # noqa: PLC0415
+
     return backend_db.get_review_queue_summary(source=source)
 
 
@@ -1364,6 +1363,7 @@ def _review_jobs_filter_sql_and_params(
     operator_tag=None,
 ):
     from backend import db as backend_db  # noqa: PLC0415
+
     return backend_db._review_jobs_filter_sql_and_params(
         status=status,
         source=source,
@@ -1408,6 +1408,7 @@ def list_jobs_for_review(
     operator_tag=None,
 ):
     from backend import db as backend_db  # noqa: PLC0415
+
     return backend_db.list_jobs_for_review(
         status=status,
         limit=limit,
@@ -1427,6 +1428,7 @@ def count_linkedin_jobs_for_review(*, status="all", query=None):
 
 def count_jobs_for_review(*, status="all", query=None, source=None, operator_tag=None):
     from backend import db as backend_db  # noqa: PLC0415
+
     return backend_db.count_jobs_for_review(
         status=status,
         query=query,
@@ -1446,6 +1448,7 @@ def bulk_requeue_jobs_matching_review_filters(
     dry_run=False,
 ):
     from backend import db as backend_db  # noqa: PLC0415
+
     return backend_db.bulk_requeue_jobs_matching_review_filters(
         status=status,
         source=source,
@@ -1459,11 +1462,13 @@ def bulk_requeue_jobs_matching_review_filters(
 
 def set_job_priority(job_id, *, run_next):
     from backend import db as backend_db  # noqa: PLC0415
+
     return backend_db.set_job_priority(job_id, run_next=run_next)
 
 
 def update_job_operator_meta(job_id, *, notes=_UNSET, operator_tag=_UNSET):
     from backend import db as backend_db  # noqa: PLC0415
+
     return backend_db.update_job_operator_meta(
         job_id,
         notes=notes,
@@ -1473,21 +1478,25 @@ def update_job_operator_meta(job_id, *, notes=_UNSET, operator_tag=_UNSET):
 
 def list_runtime_state_recent(*, limit=40):
     from backend import db as backend_db  # noqa: PLC0415
+
     return backend_db.list_runtime_state_recent(limit=limit)
 
 
 def get_review_activity_summary(*, hours=24):
     from backend import db as backend_db  # noqa: PLC0415
+
     return backend_db.get_review_activity_summary(hours=hours)
 
 
 def get_review_audit_entries(*, limit=80):
     from backend import db as backend_db  # noqa: PLC0415
+
     return backend_db.get_review_audit_entries(limit=limit)
 
 
 def append_review_audit_entry(action, detail=None, *, max_entries=100):
     from backend import db as backend_db  # noqa: PLC0415
+
     return backend_db.append_review_audit_entry(
         action,
         detail,

@@ -14,7 +14,7 @@ def db(tmp_path):
     import hunter.db as _db
 
     _db.DB_PATH = str(db_file)
-    from hunter.db import init_db, get_connection
+    from hunter.db import get_connection, init_db
 
     init_db(maintenance=False)
     conn = get_connection()

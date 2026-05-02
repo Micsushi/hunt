@@ -5,13 +5,13 @@ import { useQueryClient } from '@tanstack/react-query'
 import styles from './BulkBar.module.css'
 
 const STATUS_CHOICES = [
-  { value: 'pending',          label: 'Pending enrichment' },
-  { value: 'processing',       label: 'Processing' },
-  { value: 'failed',           label: 'Failed' },
-  { value: 'blocked',          label: 'Blocked' },
+  { value: 'pending', label: 'Pending enrichment' },
+  { value: 'processing', label: 'Processing' },
+  { value: 'failed', label: 'Failed' },
+  { value: 'blocked', label: 'Blocked' },
   { value: 'blocked_verified', label: 'Blocked verified' },
-  { value: 'done',             label: 'Done' },
-  { value: 'done_verified',    label: 'Done verified' },
+  { value: 'done', label: 'Done' },
+  { value: 'done_verified', label: 'Done verified' },
 ]
 
 export function BulkBar() {
@@ -26,7 +26,10 @@ export function BulkBar() {
   if (n === 0) return null
 
   async function run() {
-    if (!action) { showToast('Choose an action', 'error'); return }
+    if (!action) {
+      showToast('Choose an action', 'error')
+      return
+    }
     if (action === 'delete') {
       if (!confirm(`Delete ${n} job row(s)? This cannot be undone.`)) return
     }
@@ -55,7 +58,11 @@ export function BulkBar() {
 
       <label className={styles.label}>
         Action
-        <select value={action} onChange={e => setAction(e.target.value)} className={styles.select}>
+        <select
+          value={action}
+          onChange={(e) => setAction(e.target.value)}
+          className={styles.select}
+        >
           <option value="">Choose…</option>
           <option value="requeue">Requeue for enrichment</option>
           <option value="set_status">Set enrichment status…</option>
@@ -66,8 +73,16 @@ export function BulkBar() {
       {action === 'set_status' && (
         <label className={styles.label}>
           New status
-          <select value={status} onChange={e => setStatus(e.target.value)} className={styles.select}>
-            {STATUS_CHOICES.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
+          <select
+            value={status}
+            onChange={(e) => setStatus(e.target.value)}
+            className={styles.select}
+          >
+            {STATUS_CHOICES.map((o) => (
+              <option key={o.value} value={o.value}>
+                {o.label}
+              </option>
+            ))}
           </select>
         </label>
       )}
@@ -81,11 +96,7 @@ export function BulkBar() {
         {loading ? 'Working…' : 'Run action'}
       </button>
 
-      <button
-        className={styles.clearBtn}
-        onClick={clearSelection}
-        title="Deselect all rows"
-      >
+      <button className={styles.clearBtn} onClick={clearSelection} title="Deselect all rows">
         Clear
       </button>
     </div>

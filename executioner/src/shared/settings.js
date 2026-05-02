@@ -4,7 +4,7 @@ export const STORAGE_KEYS = {
   defaultResume: "hunt.apply.defaultResume",
   activeApplyContext: "hunt.apply.activeApplyContext",
   attempts: "hunt.apply.attempts",
-  questionAnswers: "hunt.apply.questionAnswers"
+  questionAnswers: "hunt.apply.questionAnswers",
 };
 
 export const DEFAULT_SETTINGS = {
@@ -12,7 +12,7 @@ export const DEFAULT_SETTINGS = {
   manualFillEnabled: true,
   allowGeneratedAnswers: true,
   flagLowConfidenceAnswers: true,
-  stripLongDash: true
+  stripLongDash: true,
 };
 
 export const DEFAULT_PROFILE = {
@@ -28,7 +28,7 @@ export const DEFAULT_PROFILE = {
   willingToRelocate: true,
   openToAnyLocation: true,
   salaryFlexible: true,
-  notes: ""
+  notes: "",
 };
 
 export const DEFAULT_RESUME = {
@@ -41,7 +41,7 @@ export const DEFAULT_RESUME = {
   texPath: "",
   versionId: "",
   jobId: "",
-  updatedAt: null
+  updatedAt: null,
 };
 
 export function createEmptyApplyContext() {
@@ -67,6 +67,6 @@ export function createEmptyApplyContext() {
     selectedResumeReadyForC3: false,
     jdSnapshotPath: "",
     concernFlags: [],
-    primedAt: null
+    primedAt: null,
   };
 }

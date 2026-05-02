@@ -119,7 +119,11 @@ export function triggerC2Generate(jobId: number): Promise<unknown> {
   return post('/api/gateway/c2/generate', { job_id: jobId })
 }
 
-export function tailorResume(params: { jobDetails: string; personalDetails: string; resume?: File | null }): Promise<Blob> {
+export function tailorResume(params: {
+  jobDetails: string
+  personalDetails: string
+  resume?: File | null
+}): Promise<Blob> {
   if (MOCK) {
     const text = [
       'Hunt mock tailored resume',
@@ -137,14 +141,15 @@ export function tailorResume(params: { jobDetails: string; personalDetails: stri
   form.append('job_details', params.jobDetails)
   form.append('personal_details', params.personalDetails)
   if (params.resume) form.append('resume', params.resume)
-  return fetch('/api/fletcher/tailor', { method: 'POST', credentials: 'include', body: form })
-    .then(async r => {
+  return fetch('/api/fletcher/tailor', { method: 'POST', credentials: 'include', body: form }).then(
+    async (r) => {
       if (!r.ok) {
         const text = await r.text().catch(() => r.statusText)
         throw new Error(text || r.statusText)
       }
       return r.blob()
-    })
+    },
+  )
 }
 
 export function fetchC4Status(): Promise<unknown> {
@@ -159,7 +164,11 @@ export function triggerC4Run(jobId: number): Promise<unknown> {
   return post('/api/gateway/c4/run', { job_id: jobId })
 }
 
-export function approveC4Run(runId: string, decision: 'approve' | 'deny', reason: string): Promise<unknown> {
+export function approveC4Run(
+  runId: string,
+  decision: 'approve' | 'deny',
+  reason: string,
+): Promise<unknown> {
   return post(`/api/gateway/c4/runs/${encodeURIComponent(runId)}/approve`, {
     decision,
     approved_by: 'c0',

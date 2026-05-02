@@ -3,13 +3,13 @@ import {
   DEFAULT_PROFILE,
   DEFAULT_RESUME,
   DEFAULT_SETTINGS,
-  STORAGE_KEYS
+  STORAGE_KEYS,
 } from "./settings.js";
 import {
   sanitizeBoolean,
   sanitizeStringArray,
   sanitizeText,
-  sanitizeUrl
+  sanitizeUrl,
 } from "./sanitization.js";
 
 function clone(value) {
@@ -40,9 +40,13 @@ export function sanitizeSettings(settings = {}) {
   return {
     autofillOnLoad: sanitizeBoolean(settings.autofillOnLoad),
     manualFillEnabled: sanitizeBoolean(settings.manualFillEnabled ?? true),
-    allowGeneratedAnswers: sanitizeBoolean(settings.allowGeneratedAnswers ?? true),
-    flagLowConfidenceAnswers: sanitizeBoolean(settings.flagLowConfidenceAnswers ?? true),
-    stripLongDash: sanitizeBoolean(settings.stripLongDash ?? true)
+    allowGeneratedAnswers: sanitizeBoolean(
+      settings.allowGeneratedAnswers ?? true,
+    ),
+    flagLowConfidenceAnswers: sanitizeBoolean(
+      settings.flagLowConfidenceAnswers ?? true,
+    ),
+    stripLongDash: sanitizeBoolean(settings.stripLongDash ?? true),
   };
 }
 
@@ -60,7 +64,7 @@ export function sanitizeProfile(profile = {}) {
     willingToRelocate: sanitizeBoolean(profile.willingToRelocate ?? true),
     openToAnyLocation: sanitizeBoolean(profile.openToAnyLocation ?? true),
     salaryFlexible: sanitizeBoolean(profile.salaryFlexible ?? true),
-    notes: sanitizeText(profile.notes)
+    notes: sanitizeText(profile.notes),
   };
 }
 
@@ -75,7 +79,7 @@ export function sanitizeResume(resume = {}) {
     texPath: sanitizeText(resume.texPath),
     versionId: sanitizeText(resume.versionId),
     jobId: sanitizeText(String(resume.jobId ?? "")),
-    updatedAt: sanitizeText(resume.updatedAt || new Date().toISOString())
+    updatedAt: sanitizeText(resume.updatedAt || new Date().toISOString()),
   };
 }
 
@@ -97,12 +101,14 @@ export function sanitizeApplyContext(context = {}) {
     selectedResumeTexPath: sanitizeText(context.selectedResumeTexPath),
     selectedResumeSummary: sanitizeText(context.selectedResumeSummary),
     selectedResumeName: sanitizeText(context.selectedResumeName),
-    selectedResumeMimeType: sanitizeText(context.selectedResumeMimeType || "application/pdf"),
+    selectedResumeMimeType: sanitizeText(
+      context.selectedResumeMimeType || "application/pdf",
+    ),
     selectedResumeDataUrl: sanitizeText(context.selectedResumeDataUrl),
     selectedResumeReadyForC3: sanitizeBoolean(context.selectedResumeReadyForC3),
     jdSnapshotPath: sanitizeText(context.jdSnapshotPath),
     concernFlags: sanitizeStringArray(context.concernFlags),
-    primedAt: sanitizeText(context.primedAt || new Date().toISOString())
+    primedAt: sanitizeText(context.primedAt || new Date().toISOString()),
   };
 }
 
@@ -128,7 +134,7 @@ export function sanitizeAttempt(attempt = {}) {
     manualReviewReasons: sanitizeStringArray(attempt.manualReviewReasons),
     htmlSnapshot: sanitizeText(attempt.htmlSnapshot),
     screenshotDataUrl: sanitizeText(attempt.screenshotDataUrl),
-    resultSummary: sanitizeText(attempt.resultSummary)
+    resultSummary: sanitizeText(attempt.resultSummary),
   };
 }
 
@@ -143,7 +149,7 @@ export function sanitizeQuestionAnswer(entry = {}) {
     answerSource: sanitizeText(entry.answerSource || "generated"),
     confidence: sanitizeText(entry.confidence || "low"),
     manualReviewRequired: sanitizeBoolean(entry.manualReviewRequired),
-    createdAt: sanitizeText(entry.createdAt || new Date().toISOString())
+    createdAt: sanitizeText(entry.createdAt || new Date().toISOString()),
   };
 }
 
@@ -154,7 +160,7 @@ export async function ensureStageOneState() {
     STORAGE_KEYS.defaultResume,
     STORAGE_KEYS.activeApplyContext,
     STORAGE_KEYS.attempts,
-    STORAGE_KEYS.questionAnswers
+    STORAGE_KEYS.questionAnswers,
   ]);
 
   const settings = syncState[STORAGE_KEYS.settings]
@@ -172,7 +178,9 @@ export async function ensureStageOneState() {
   const attempts = Array.isArray(localState[STORAGE_KEYS.attempts])
     ? localState[STORAGE_KEYS.attempts].map(sanitizeAttempt)
     : [];
-  const questionAnswers = Array.isArray(localState[STORAGE_KEYS.questionAnswers])
+  const questionAnswers = Array.isArray(
+    localState[STORAGE_KEYS.questionAnswers],
+  )
     ? localState[STORAGE_KEYS.questionAnswers].map(sanitizeQuestionAnswer)
     : [];
 
@@ -182,10 +190,17 @@ export async function ensureStageOneState() {
     [STORAGE_KEYS.defaultResume]: defaultResume,
     [STORAGE_KEYS.activeApplyContext]: activeApplyContext,
     [STORAGE_KEYS.attempts]: attempts,
-    [STORAGE_KEYS.questionAnswers]: questionAnswers
+    [STORAGE_KEYS.questionAnswers]: questionAnswers,
   });
 
-  return { settings, profile, defaultResume, activeApplyContext, attempts, questionAnswers };
+  return {
+    settings,
+    profile,
+    defaultResume,
+    activeApplyContext,
+    attempts,
+    questionAnswers,
+  };
 }
 
 export async function getExtensionState() {
@@ -233,7 +248,10 @@ export async function appendAttempt(attempt) {
 export async function appendQuestionAnswers(entries) {
   const state = await ensureStageOneState();
   const sanitizedEntries = (entries || []).map(sanitizeQuestionAnswer);
-  const questionAnswers = clampList([...state.questionAnswers, ...sanitizedEntries], 200);
+  const questionAnswers = clampList(
+    [...state.questionAnswers, ...sanitizedEntries],
+    200,
+  );
   await setInLocalStorage({ [STORAGE_KEYS.questionAnswers]: questionAnswers });
   return sanitizedEntries;
 }

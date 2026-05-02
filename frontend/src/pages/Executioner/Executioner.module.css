@@ -1,4 +1,8 @@
-.page { display: flex; flex-direction: column; gap: 20px; }
+.page {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
 
 .pageHeader {
   display: flex;
@@ -8,8 +12,15 @@
   flex-wrap: wrap;
 }
 
-.heroTitle { font-size: 1.5rem; font-weight: 700; }
-.heroMeta  { font-size: 0.85rem; color: var(--muted); margin-top: 4px; }
+.heroTitle {
+  font-size: 1.5rem;
+  font-weight: 700;
+}
+.heroMeta {
+  font-size: 0.85rem;
+  color: var(--muted);
+  margin-top: 4px;
+}
 
 .statusPill {
   display: flex;
@@ -23,8 +34,14 @@
   align-self: flex-start;
   white-space: nowrap;
 }
-.statusPillOnline  { border-color: var(--good);   color: var(--good); }
-.statusPillOffline { border-color: var(--danger);  color: var(--danger); }
+.statusPillOnline {
+  border-color: var(--good);
+  color: var(--good);
+}
+.statusPillOffline {
+  border-color: var(--danger);
+  color: var(--danger);
+}
 
 .statusDot {
   width: 7px;
@@ -68,11 +85,23 @@
   font-size: 0.75rem;
   font-weight: 700;
 }
-.badgeOk   { background: var(--good-soft);    color: var(--good); }
-.badgeWarn { background: var(--warning-soft); color: var(--warning); }
+.badgeOk {
+  background: var(--good-soft);
+  color: var(--good);
+}
+.badgeWarn {
+  background: var(--warning-soft);
+  color: var(--warning);
+}
 
-.tableWrap { overflow-x: auto; }
-.table { width: 100%; border-collapse: collapse; font-size: 0.875rem; }
+.tableWrap {
+  overflow-x: auto;
+}
+.table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.875rem;
+}
 .table th {
   padding: 8px 12px;
   text-align: left;
@@ -87,10 +116,18 @@
   border-bottom: 1px solid var(--line);
   vertical-align: middle;
 }
-.table tr:last-child td { border-bottom: none; }
+.table tr:last-child td {
+  border-bottom: none;
+}
 
-.mono { font-family: var(--font-mono); font-size: 0.82rem; }
-.meta { font-size: 0.875rem; color: var(--muted); }
+.mono {
+  font-family: var(--font-mono);
+  font-size: 0.82rem;
+}
+.meta {
+  font-size: 0.875rem;
+  color: var(--muted);
+}
 
 .healthPanel {
   background: var(--panel-strong);

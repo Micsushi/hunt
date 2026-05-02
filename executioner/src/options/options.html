@@ -1,7 +1,7 @@
 <!doctype html>
 <html lang="en">
   <head>
-    <meta charset="utf-8">
+    <meta charset="utf-8" />
     <title>Hunt Apply Options</title>
     <style>
       body {
@@ -105,30 +105,52 @@
         <p>Stage 1 extension state for profile, resume, and settings.</p>
       </div>
 
-      <div id="options-status" class="status info">Loading extension state...</div>
+      <div id="options-status" class="status info">
+        Loading extension state...
+      </div>
 
       <section class="panel">
         <h2>Behavior Settings</h2>
         <form id="settings-form">
           <div class="checkboxes">
             <label class="checkbox">
-              <input id="autofill-on-load" name="autofillOnLoad" type="checkbox">
+              <input
+                id="autofill-on-load"
+                name="autofillOnLoad"
+                type="checkbox"
+              />
               <span>Autofill on page load</span>
             </label>
             <label class="checkbox">
-              <input id="manual-fill-enabled" name="manualFillEnabled" type="checkbox">
+              <input
+                id="manual-fill-enabled"
+                name="manualFillEnabled"
+                type="checkbox"
+              />
               <span>Manual fill enabled</span>
             </label>
             <label class="checkbox">
-              <input id="allow-generated-answers" name="allowGeneratedAnswers" type="checkbox">
+              <input
+                id="allow-generated-answers"
+                name="allowGeneratedAnswers"
+                type="checkbox"
+              />
               <span>Allow generated answers</span>
             </label>
             <label class="checkbox">
-              <input id="flag-low-confidence-answers" name="flagLowConfidenceAnswers" type="checkbox">
+              <input
+                id="flag-low-confidence-answers"
+                name="flagLowConfidenceAnswers"
+                type="checkbox"
+              />
               <span>Flag low-confidence answers</span>
             </label>
             <label class="checkbox">
-              <input id="strip-long-dash" name="stripLongDash" type="checkbox">
+              <input
+                id="strip-long-dash"
+                name="stripLongDash"
+                type="checkbox"
+              />
               <span>Strip long-dash punctuation</span>
             </label>
           </div>
@@ -144,52 +166,72 @@
           <div class="grid">
             <label>
               Full name
-              <input id="profile-full-name" name="fullName" type="text">
+              <input id="profile-full-name" name="fullName" type="text" />
             </label>
             <label>
               Email
-              <input id="profile-email" name="email" type="email">
+              <input id="profile-email" name="email" type="email" />
             </label>
             <label>
               Phone
-              <input id="profile-phone" name="phone" type="text">
+              <input id="profile-phone" name="phone" type="text" />
             </label>
             <label>
               Location
-              <input id="profile-location" name="location" type="text">
+              <input id="profile-location" name="location" type="text" />
             </label>
             <label>
               LinkedIn URL
-              <input id="profile-linkedin-url" name="linkedinUrl" type="url">
+              <input id="profile-linkedin-url" name="linkedinUrl" type="url" />
             </label>
             <label>
               GitHub URL
-              <input id="profile-github-url" name="githubUrl" type="url">
+              <input id="profile-github-url" name="githubUrl" type="url" />
             </label>
             <label>
               Website URL
-              <input id="profile-website-url" name="websiteUrl" type="url">
+              <input id="profile-website-url" name="websiteUrl" type="url" />
             </label>
           </div>
           <div class="checkboxes">
             <label class="checkbox">
-              <input id="profile-work-authorized" name="workAuthorized" type="checkbox">
+              <input
+                id="profile-work-authorized"
+                name="workAuthorized"
+                type="checkbox"
+              />
               <span>Work authorized</span>
             </label>
             <label class="checkbox">
-              <input id="profile-sponsorship-required" name="sponsorshipRequired" type="checkbox">
+              <input
+                id="profile-sponsorship-required"
+                name="sponsorshipRequired"
+                type="checkbox"
+              />
               <span>Sponsorship required</span>
             </label>
             <label class="checkbox">
-              <input id="profile-willing-to-relocate" name="willingToRelocate" type="checkbox">
+              <input
+                id="profile-willing-to-relocate"
+                name="willingToRelocate"
+                type="checkbox"
+              />
               <span>Willing to relocate</span>
             </label>
             <label class="checkbox">
-              <input id="profile-open-to-any-location" name="openToAnyLocation" type="checkbox">
+              <input
+                id="profile-open-to-any-location"
+                name="openToAnyLocation"
+                type="checkbox"
+              />
               <span>Open to any location</span>
             </label>
             <label class="checkbox">
-              <input id="profile-salary-flexible" name="salaryFlexible" type="checkbox">
+              <input
+                id="profile-salary-flexible"
+                name="salaryFlexible"
+                type="checkbox"
+              />
               <span>Salary flexible</span>
             </label>
           </div>
@@ -209,7 +251,7 @@
           <div class="grid">
             <label>
               Label
-              <input id="resume-label" name="label" type="text">
+              <input id="resume-label" name="label" type="text" />
             </label>
             <label>
               Source type
@@ -220,23 +262,28 @@
             </label>
             <label>
               PDF path
-              <input id="resume-pdf-path" name="pdfPath" type="text">
+              <input id="resume-pdf-path" name="pdfPath" type="text" />
             </label>
             <label>
               TeX path
-              <input id="resume-tex-path" name="texPath" type="text">
+              <input id="resume-tex-path" name="texPath" type="text" />
             </label>
             <label>
               Version id
-              <input id="resume-version-id" name="versionId" type="text">
+              <input id="resume-version-id" name="versionId" type="text" />
             </label>
             <label>
               Job id
-              <input id="resume-job-id" name="jobId" type="text">
+              <input id="resume-job-id" name="jobId" type="text" />
             </label>
             <label>
               Import PDF
-              <input id="resume-pdf-file" name="pdfFile" type="file" accept="application/pdf">
+              <input
+                id="resume-pdf-file"
+                name="pdfFile"
+                type="file"
+                accept="application/pdf"
+              />
             </label>
           </div>
           <div class="actions">
@@ -250,11 +297,16 @@
         <form id="apply-context-form">
           <label>
             Apply context JSON
-            <textarea id="apply-context-json" name="applyContextJson"></textarea>
+            <textarea
+              id="apply-context-json"
+              name="applyContextJson"
+            ></textarea>
           </label>
           <div class="actions">
             <button type="submit">Import Apply Context</button>
-            <button id="clear-imported-context" type="button">Clear Active Context</button>
+            <button id="clear-imported-context" type="button">
+              Clear Active Context
+            </button>
           </div>
         </form>
       </section>

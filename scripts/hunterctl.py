@@ -8,6 +8,7 @@ script are scoped to **C1 (Hunter)** and shared operator glue, not the whole pro
 On Linux servers, systemd units **hunt-scraper.service** / **hunt-scraper.timer** keep a legacy
 name but run **C1 (Hunter)** : `python hunter/scraper.py` from the Hunt repo root. See **docs/NAMING.md**.
 """
+
 import argparse
 import os
 import shlex
@@ -380,6 +381,7 @@ def _frontend_dir():
 def _run_npm_build():
     """Run npm install + npm run build in frontend/. Returns True on success."""
     import subprocess
+
     fe = _frontend_dir()
     if not os.path.isdir(fe):
         print("[hunter] frontend/ directory not found — skipping build.")
@@ -464,7 +466,11 @@ def cmd_c4_request_fill(args):
 
 
 def cmd_c4_record_fill(args):
-    _run(_coordinator_command("record-fill", "--run-id", args.run_id, "--result-json", args.result_json))
+    _run(
+        _coordinator_command(
+            "record-fill", "--run-id", args.run_id, "--result-json", args.result_json
+        )
+    )
 
 
 def cmd_c4_resolve_review(args):
@@ -979,19 +985,17 @@ def build_parser():
 
     ui = subparsers.add_parser("ui", help="Frontend UI commands.")
     ui_subs = ui.add_subparsers(dest="ui_action", required=True)
-    ui_serve = ui_subs.add_parser("serve", help="Build (if needed) and start the Hunt control plane.")
+    ui_serve = ui_subs.add_parser(
+        "serve", help="Build (if needed) and start the Hunt control plane."
+    )
     ui_serve.set_defaults(func=cmd_ui_serve)
     ui_build = ui_subs.add_parser("build", help="Build the frontend SPA (npm install + build).")
     ui_build.set_defaults(func=cmd_ui_build)
 
-    review = subparsers.add_parser(
-        "review", help="Legacy alias for `hunter ui serve`."
-    )
+    review = subparsers.add_parser("review", help="Legacy alias for `hunter ui serve`.")
     review.set_defaults(func=cmd_review)
 
-    build_ui = subparsers.add_parser(
-        "build-ui", help="Legacy alias for `hunter ui build`."
-    )
+    build_ui = subparsers.add_parser("build-ui", help="Legacy alias for `hunter ui build`.")
     build_ui.set_defaults(func=cmd_build_ui)
 
     init_db = subparsers.add_parser(

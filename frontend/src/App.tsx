@@ -27,7 +27,7 @@ export default function App() {
   const location = useLocation()
   // null = not yet known, '' = not logged in, string = username
   const [username, setUsername] = useState<string | null | undefined>(
-    MOCK ? 'dev' : (location.pathname === '/login' ? null : undefined)
+    MOCK ? 'dev' : location.pathname === '/login' ? null : undefined,
   )
 
   useEffect(() => {
@@ -35,7 +35,7 @@ export default function App() {
     // skip the check on the login page itself to avoid redirect loops
     if (location.pathname === '/login') return
     fetchAuthStatus()
-      .then(s => setUsername(s.authenticated ? (s.username ?? 'admin') : null))
+      .then((s) => setUsername(s.authenticated ? (s.username ?? 'admin') : null))
       .catch(() => setUsername(null))
   }, [location.pathname])
 
@@ -45,74 +45,98 @@ export default function App() {
   return (
     <>
       {MOCK && (
-        <div style={{
-          position: 'fixed',
-          top: 0,
-          left: 0,
-          right: 0,
-          zIndex: 9999,
-          background: '#f59e0b',
-          color: '#000',
-          textAlign: 'center',
-          fontSize: '12px',
-          padding: '2px 0',
-          fontWeight: 600,
-        }}>
+        <div
+          style={{
+            position: 'fixed',
+            top: 0,
+            left: 0,
+            right: 0,
+            zIndex: 9999,
+            background: '#f59e0b',
+            color: '#000',
+            textAlign: 'center',
+            fontSize: '12px',
+            padding: '2px 0',
+            fontWeight: 600,
+          }}
+        >
           MOCK MODE - changes not persisted
         </div>
       )}
       <Routes>
-        <Route path="/login" element={
-          username ? <Navigate to="/" replace /> : <LoginPage />
-        } />
+        <Route path="/login" element={username ? <Navigate to="/" replace /> : <LoginPage />} />
 
-        <Route path="/" element={
-          <AuthGuard username={username}>
-            <HomePage />
-          </AuthGuard>
-        } />
+        <Route
+          path="/"
+          element={
+            <AuthGuard username={username}>
+              <HomePage />
+            </AuthGuard>
+          }
+        />
 
-        <Route path="/jobs" element={
-          <AuthGuard username={username}>
-            <JobsPage />
-          </AuthGuard>
-        } />
+        <Route
+          path="/jobs"
+          element={
+            <AuthGuard username={username}>
+              <JobsPage />
+            </AuthGuard>
+          }
+        />
 
-        <Route path="/jobs/:id" element={
-          <AuthGuard username={username}>
-            <JobDetailPage />
-          </AuthGuard>
-        } />
+        <Route
+          path="/jobs/:id"
+          element={
+            <AuthGuard username={username}>
+              <JobDetailPage />
+            </AuthGuard>
+          }
+        />
 
-        <Route path="/logs" element={
-          <AuthGuard username={username}>
-            <LogsPage />
-          </AuthGuard>
-        } />
+        <Route
+          path="/logs"
+          element={
+            <AuthGuard username={username}>
+              <LogsPage />
+            </AuthGuard>
+          }
+        />
 
-        <Route path="/ops" element={
-          <AuthGuard username={username}>
-            <OpsPage />
-          </AuthGuard>
-        } />
+        <Route
+          path="/ops"
+          element={
+            <AuthGuard username={username}>
+              <OpsPage />
+            </AuthGuard>
+          }
+        />
 
-        <Route path="/fletcher" element={
-          <AuthGuard username={username}>
-            <FletcherPage />
-          </AuthGuard>
-        } />
+        <Route
+          path="/fletcher"
+          element={
+            <AuthGuard username={username}>
+              <FletcherPage />
+            </AuthGuard>
+          }
+        />
 
-        <Route path="/executioner" element={
-          <AuthGuard username={username}>
-            <ExecutionerPage />
-          </AuthGuard>
-        } />
+        <Route
+          path="/executioner"
+          element={
+            <AuthGuard username={username}>
+              <ExecutionerPage />
+            </AuthGuard>
+          }
+        />
 
-        <Route path="/coordinator" element={
-          <AuthGuard username={username}>
-            <CoordinatorPage />
-          </AuthGuard>
-        } />
+        <Route
+          path="/coordinator"
+          element={
+            <AuthGuard username={username}>
+              <CoordinatorPage />
+            </AuthGuard>
+          }
+        />
 
         {/* Legacy redirects for old SSR paths */}
         <Route path="/health-view" element={<Navigate to="/logs" replace />} />

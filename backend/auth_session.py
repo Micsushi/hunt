@@ -7,6 +7,7 @@ Credentials from env vars:
   HUNT_ADMIN_USERNAME  (default: admin)
   HUNT_ADMIN_PASSWORD  (required — app logs a warning if empty)
 """
+
 import hashlib
 import hmac
 import secrets
@@ -36,8 +37,7 @@ def init_sessions_table() -> None:
                 )
             """)
             conn.execute(
-                "CREATE INDEX IF NOT EXISTS idx_sessions_expires"
-                " ON review_sessions (expires_at)"
+                "CREATE INDEX IF NOT EXISTS idx_sessions_expires ON review_sessions (expires_at)"
             )
     finally:
         conn.close()
@@ -45,9 +45,7 @@ def init_sessions_table() -> None:
 
 def _unused_hash(password: str) -> str:
     """PBKDF2 hash — kept for future use when passwords are stored hashed."""
-    return hashlib.pbkdf2_hmac(
-        "sha256", password.encode(), b"hunt-salt", 260_000
-    ).hex()
+    return hashlib.pbkdf2_hmac("sha256", password.encode(), b"hunt-salt", 260_000).hex()
 
 
 def check_credentials(username: str, password: str) -> bool:
@@ -85,8 +83,7 @@ def validate_session(token: str) -> str | None:
     conn = get_connection()
     try:
         row = conn.execute(
-            "SELECT username FROM review_sessions"
-            " WHERE token = ? AND expires_at > ?",
+            "SELECT username FROM review_sessions WHERE token = ? AND expires_at > ?",
             (token, now),
         ).fetchone()
     finally:
@@ -99,9 +96,7 @@ def delete_session(token: str) -> None:
     conn = get_connection()
     try:
         with conn:
-            conn.execute(
-                "DELETE FROM review_sessions WHERE token = ?", (token,)
-            )
+            conn.execute("DELETE FROM review_sessions WHERE token = ?", (token,))
     finally:
         conn.close()
 
@@ -112,8 +107,6 @@ def purge_expired_sessions() -> None:
     conn = get_connection()
     try:
         with conn:
-            conn.execute(
-                "DELETE FROM review_sessions WHERE expires_at <= ?", (now,)
-            )
+            conn.execute("DELETE FROM review_sessions WHERE expires_at <= ?", (now,))
     finally:
         conn.close()

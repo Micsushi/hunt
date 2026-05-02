@@ -8,11 +8,21 @@ import sys
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Optional
 from urllib.parse import parse_qs, parse_qsl, quote, urlencode, urlsplit, urlunsplit
 
 import httpx
-from fastapi import Body, Cookie, Depends, FastAPI, File, Form, HTTPException, Query, Request, Response, UploadFile
+from fastapi import (
+    Body,
+    Depends,
+    FastAPI,
+    File,
+    Form,
+    HTTPException,
+    Query,
+    Request,
+    Response,
+    UploadFile,
+)
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import (
     FileResponse,
@@ -26,18 +36,9 @@ from fastapi.staticfiles import StaticFiles
 REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT))
 
-from hunter.config import (  # noqa: E402
-    HUNT_COORDINATOR_URL,
-    HUNT_FLETCHER_URL,
-    HUNT_HUNTER_URL,
-    HUNT_SERVICE_TOKEN,
-    REVIEW_APP_HOST,
-    REVIEW_APP_PORT,
-    REVIEW_OPS_TOKEN,
-)
 from backend.auth_session import (  # noqa: E402
-    SESSION_COOKIE_NAME,
     ADMIN_PASSWORD,
+    SESSION_COOKIE_NAME,
     check_credentials,
     create_session,
     delete_session,
@@ -52,12 +53,24 @@ from backend.db import (  # noqa: E402
     get_review_activity_summary,
     get_review_audit_entries,
     get_review_queue_summary,
+    init_hunt_extras,
     list_jobs_for_review,
     list_runtime_state_recent,
-    init_hunt_extras,
     patch_job,
     set_job_priority,
     update_job_operator_meta,
+)
+from backend.resume_review_ui import (  # noqa: E402
+    load_json_file,
+)
+from hunter.config import (  # noqa: E402
+    HUNT_COORDINATOR_URL,
+    HUNT_FLETCHER_URL,
+    HUNT_HUNTER_URL,
+    HUNT_SERVICE_TOKEN,
+    REVIEW_APP_HOST,
+    REVIEW_APP_PORT,
+    REVIEW_OPS_TOKEN,
 )
 from hunter.db import (  # noqa: E402
     bulk_requeue_jobs_by_ids,
@@ -73,12 +86,6 @@ from hunter.db import (  # noqa: E402
     requeue_job as requeue_review_job,
 )
 from hunter.failure_artifacts import resolve_artifact_path  # noqa: E402
-from backend.resume_review_ui import (  # noqa: E402
-    RESUME_REVIEW_SCRIPT,
-    RESUME_REVIEW_STYLES,
-    build_resume_review_html,
-    load_json_file,
-)
 
 try:  # noqa: E402
     from fletcher.db import list_resume_attempts  # type: ignore
@@ -140,6 +147,7 @@ def enrichment_status_display(raw):
         return "Not set"
     return ENRICHMENT_STATUS_LABELS.get(s, s.replace("_", " "))
 
+
 APP_ROUTE_PATHS = {
     "/",
     "/jobs",
@@ -155,7 +163,7 @@ BULK_REQUEUE_STATUS_CHOICES = frozenset(
 )
 
 
-def assert_review_ops_allowed(request: Request, form_ops_token: Optional[str] = None) -> None:
+def assert_review_ops_allowed(request: Request, form_ops_token: str | None = None) -> None:
     expected = (REVIEW_OPS_TOKEN or "").strip()
     if _session_username(request):
         return
@@ -179,6 +187,7 @@ def review_ops_dependency(request: Request):
 
 FRONTEND_DIST = Path(REPO_ROOT) / "frontend" / "dist"
 
+
 @asynccontextmanager
 async def lifespan(app):
     init_db(maintenance=False)
@@ -187,6 +196,7 @@ async def lifespan(app):
     purge_expired_sessions()
     if not ADMIN_PASSWORD:
         import warnings
+
         warnings.warn(
             "HUNT_ADMIN_PASSWORD is not set — all auth endpoints will reject logins. "
             "Set HUNT_ADMIN_PASSWORD in your environment to enable the web UI.",
@@ -198,10 +208,15 @@ async def lifespan(app):
 app = FastAPI(title="Hunt Control Plane", version="0.1.0", lifespan=lifespan)
 
 from backend.gateway import router as _gateway_router  # noqa: E402
+
 app.include_router(_gateway_router)
 
 # CORS — only needed during local development (Vite on :5173, FastAPI on :8000)
-_DEV_ORIGINS = [o.strip() for o in os.getenv("HUNT_CORS_ORIGINS", "http://localhost:5173").split(",") if o.strip()]
+_DEV_ORIGINS = [
+    o.strip()
+    for o in os.getenv("HUNT_CORS_ORIGINS", "http://localhost:5173").split(",")
+    if o.strip()
+]
 app.add_middleware(
     CORSMiddleware,
     allow_origins=_DEV_ORIGINS,
@@ -1656,7 +1671,9 @@ def render_resume_keywords_panel(row, attempts):
         return ""
     must = [str(x).strip() for x in (keywords.get("must_have_terms") or []) if str(x).strip()]
     nice = [str(x).strip() for x in (keywords.get("nice_to_have_terms") or []) if str(x).strip()]
-    tools = [str(x).strip() for x in (keywords.get("tools_and_technologies") or []) if str(x).strip()]
+    tools = [
+        str(x).strip() for x in (keywords.get("tools_and_technologies") or []) if str(x).strip()
+    ]
     domain = [str(x).strip() for x in (keywords.get("domain_terms") or []) if str(x).strip()]
     if not (must or nice or tools or domain):
         return ""
@@ -1727,7 +1744,11 @@ def render_ai_summary_panel(attempts: list) -> str:
       </blockquote>
       {kw_block}"""
     else:
-        reason = html.escape(error) if error else "Ollama backend not enabled, no mid-tier keywords, or candidate profile missing."
+        reason = (
+            html.escape(error)
+            if error
+            else "Ollama backend not enabled, no mid-tier keywords, or candidate profile missing."
+        )
         status_badge = '<span class="status pending" style="font-size:0.75rem;padding:2px 6px;vertical-align:middle;">not generated</span>'
         body = f'<p class="muted" style="margin:0;font-style:italic;">Not generated — {reason}</p>'
 
@@ -1779,9 +1800,9 @@ def render_resume_history_cards(attempts: list, job_id: int | None = None) -> st
         if summary_text:
             summary_html = (
                 f'<blockquote style="margin:12px 0 0 0;padding:10px 14px;background:#fffdf8;'
-                f'border-left:3px solid #3cb878;border-radius:0 8px 8px 0;'
+                f"border-left:3px solid #3cb878;border-radius:0 8px 8px 0;"
                 f'font-family:Georgia,serif;font-size:0.9rem;line-height:1.55;color:#2a2a2a;">'
-                f'{html.escape(summary_text)}</blockquote>'
+                f"{html.escape(summary_text)}</blockquote>"
             )
         else:
             summary_html = '<p class="muted" style="margin:10px 0 0 0;font-size:0.85rem;">No AI summary for this attempt.</p>'
@@ -1794,7 +1815,7 @@ def render_resume_history_cards(attempts: list, job_id: int | None = None) -> st
           <div style="display:flex;justify-content:space-between;align-items:flex-start;flex-wrap:wrap;gap:8px;">
             <div>
               {selected_badge}<span class="status {html.escape(status_cls)}" style="font-size:0.78rem;padding:2px 7px;">{html.escape(status)}</span>
-              <span class="muted tiny" style="margin-left:8px;">ID {html.escape(str(aid or '?'))}</span>
+              <span class="muted tiny" style="margin-left:8px;">ID {html.escape(str(aid or "?"))}</span>
               <span class="muted tiny" style="margin-left:8px;">{created}</span>
             </div>
             <div style="display:flex;gap:8px;flex-wrap:wrap;">{links_html}</div>
@@ -1854,7 +1875,9 @@ def render_resume_attempts(attempts, job_id=None):
             selected_badge = ' <span class="status done_verified" style="font-size:0.75rem;padding:2px 6px;">useful</span>'
 
         jd_cell = _format_jd_usable_cell(attempt.get("jd_usable"))
-        jd_note = format_text(attempt.get("jd_usable_reason")) if attempt.get("jd_usable_reason") else "—"
+        jd_note = (
+            format_text(attempt.get("jd_usable_reason")) if attempt.get("jd_usable_reason") else "—"
+        )
 
         rows.append(
             f"""
@@ -1934,9 +1957,7 @@ def render_source_toolbar(
             direction=direction,
             tag=tag,
         )
-        pills.append(
-            f'<a class="{class_name}" href="/jobs?{qs}">{html.escape(source)}</a>'
-        )
+        pills.append(f'<a class="{class_name}" href="/jobs?{qs}">{html.escape(source)}</a>')
     return "".join(pills)
 
 
@@ -2147,7 +2168,9 @@ def render_jobs_selection_bar():
     """
 
 
-def render_jobs_table(rows, *, source, status, limit, page, q, sort, direction, return_to="", tag=""):
+def render_jobs_table(
+    rows, *, source, status, limit, page, q, sort, direction, return_to="", tag=""
+):
     if not rows:
         return '<div class="panel"><p>No jobs match this filter.</p></div>'
 
@@ -2184,7 +2207,7 @@ def render_jobs_table(rows, *, source, status, limit, page, q, sort, direction, 
               <td>{format_text(row["company"])}</td>
               <td>{format_text(row["title"])}</td>
               <td class="link-cell">{linkedin_link}{" | " + apply_link if linkedin_link and apply_link else apply_link}</td>
-              <td><span class="status {status_class}" title="Stored value: {html.escape(row.get('enrichment_status') or '')}">{format_text(enrich_label)}</span></td>
+              <td><span class="status {status_class}" title="Stored value: {html.escape(row.get("enrichment_status") or "")}">{format_text(enrich_label)}</span></td>
               <td>{format_text(row["apply_type"])}</td>
               <td>{format_text(row["enrichment_attempts"])}</td>
               <td class="mono">{format_text(row["next_enrichment_retry_at"])}</td>
@@ -2305,7 +2328,7 @@ def _failure_count(summary, code):
     return int(summary.get("failure_counts", {}).get(code) or 0)
 
 
-def render_ops_console(*, summary, last_updated: Optional[int] = None):
+def render_ops_console(*, summary, last_updated: int | None = None):
     auth_n = _failure_count(summary, "auth_expired")
     rate_n = _failure_count(summary, "rate_limited")
     banner = ""
@@ -2725,6 +2748,7 @@ def auth_me(request: Request):
 # New JSON API endpoints consumed by the React SPA
 # ---------------------------------------------------------------------------
 
+
 @app.get("/api/jobs/count")
 def api_jobs_count(
     source: str = "all",
@@ -2803,39 +2827,52 @@ def _runtime_service_for_key(key: str) -> str:
 def _build_log_rows(summary: dict, runtime_state: list[dict], audit: list[dict]) -> list[dict]:
     rows: list[dict] = []
     li = (summary.get("auth") or {}).get("linkedin") or {}
-    rows.append({
-        "at": li.get("updated_at"),
-        "service": "c1",
-        "level": "INFO" if li.get("available") is not False else "WARN",
-        "message": "LinkedIn auth ready" if li.get("available") is not False else "LinkedIn auth needs refresh",
-        "detail": li,
-    })
-    for code, count in (summary.get("failure_counts") or {}).items():
-        rows.append({
-            "at": None,
+    rows.append(
+        {
+            "at": li.get("updated_at"),
             "service": "c1",
-            "level": "ERROR",
-            "message": f"{count} failed enrichment row(s): {code}",
-            "detail": {"error_code": code, "count": count},
-        })
+            "level": "INFO" if li.get("available") is not False else "WARN",
+            "message": "LinkedIn auth ready"
+            if li.get("available") is not False
+            else "LinkedIn auth needs refresh",
+            "detail": li,
+        }
+    )
+    for code, count in (summary.get("failure_counts") or {}).items():
+        rows.append(
+            {
+                "at": None,
+                "service": "c1",
+                "level": "ERROR",
+                "message": f"{count} failed enrichment row(s): {code}",
+                "detail": {"error_code": code, "count": count},
+            }
+        )
     for row in runtime_state:
         key = str(row.get("key") or "")
-        rows.append({
-            "at": row.get("updated_at"),
-            "service": _runtime_service_for_key(key),
-            "level": "DEBUG",
-            "message": key,
-            "detail": row.get("value"),
-        })
+        rows.append(
+            {
+                "at": row.get("updated_at"),
+                "service": _runtime_service_for_key(key),
+                "level": "DEBUG",
+                "message": key,
+                "detail": row.get("value"),
+            }
+        )
     for entry in audit:
-        rows.append({
-            "at": entry.get("at"),
-            "service": "c0",
-            "level": "INFO",
-            "message": str(entry.get("action") or "audit"),
-            "detail": entry.get("detail"),
-        })
-    rows.sort(key=lambda row: _parse_log_time(row.get("at")) or datetime.min.replace(tzinfo=UTC), reverse=True)
+        rows.append(
+            {
+                "at": entry.get("at"),
+                "service": "c0",
+                "level": "INFO",
+                "message": str(entry.get("action") or "audit"),
+                "detail": entry.get("detail"),
+            }
+        )
+    rows.sort(
+        key=lambda row: _parse_log_time(row.get("at")) or datetime.min.replace(tzinfo=UTC),
+        reverse=True,
+    )
     return rows
 
 
@@ -2866,18 +2903,21 @@ def api_logs(
     rows = _build_log_rows(summary, runtime_state, audit)
     cutoff = datetime.now(UTC) - timedelta(hours=safe_hours)
     rows = [
-        row for row in rows
+        row
+        for row in rows
         if (service == "all" or row["service"] == service)
         and row["level"] in levels
         and _row_is_since(row.get("at"), cutoff)
     ][:safe_limit]
-    return JSONResponse({
-        "summary": summary,
-        "activity": activity,
-        "runtime_state": runtime_state,
-        "audit": audit,
-        "logs": rows,
-    })
+    return JSONResponse(
+        {
+            "summary": summary,
+            "activity": activity,
+            "runtime_state": runtime_state,
+            "audit": audit,
+            "logs": rows,
+        }
+    )
 
 
 @app.get("/api/jobs/{job_id}/attempts")
@@ -2913,7 +2953,9 @@ async def api_fletcher_tailor(
             resume_tmp.close()
 
         if personal_details.strip():
-            profile_tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".md", mode="w", encoding="utf-8")
+            profile_tmp = tempfile.NamedTemporaryFile(
+                delete=False, suffix=".md", mode="w", encoding="utf-8"
+            )
             profile_tmp.write(personal_details)
             profile_tmp.flush()
             profile_tmp.close()
@@ -2935,7 +2977,9 @@ async def api_fletcher_tailor(
 
     pdf_path = result.get("pdf_path")
     if not pdf_path or not Path(pdf_path).exists():
-        raise HTTPException(status_code=500, detail=result.get("compile_status") or "PDF generation failed")
+        raise HTTPException(
+            status_code=500, detail=result.get("compile_status") or "PDF generation failed"
+        )
 
     return FileResponse(pdf_path, media_type="application/pdf", filename="tailored_resume.pdf")
 
@@ -3002,7 +3046,9 @@ def api_settings_upsert(payload: dict = Body(...), _auth: str = Depends(require_
     finally:
         conn.close()
     try:
-        append_review_audit_entry("setting_upsert", {"component": component, "key": key, "secret": secret})
+        append_review_audit_entry(
+            "setting_upsert", {"component": component, "key": key, "secret": secret}
+        )
     except Exception:
         pass
     return JSONResponse({"setting": _setting_row(row)})
@@ -3071,7 +3117,9 @@ def api_linkedin_accounts_upsert(payload: dict = Body(...), _auth: str = Depends
     finally:
         conn.close()
     try:
-        append_review_audit_entry("linkedin_account_upsert", {"username": username, "active": active})
+        append_review_audit_entry(
+            "linkedin_account_upsert", {"username": username, "active": active}
+        )
     except Exception:
         pass
     return JSONResponse({"account": _account_row(row)})
@@ -3117,7 +3165,9 @@ async def api_c3_pending_fills(_auth: str = Depends(require_session_or_service_t
 
 
 @app.post("/api/c3/fill-result")
-async def api_c3_fill_result(request: Request, _auth: str = Depends(require_session_or_service_token)):
+async def api_c3_fill_result(
+    request: Request, _auth: str = Depends(require_session_or_service_token)
+):
     from backend.gateway import _proxy_post
 
     body = await request.json()
@@ -3127,6 +3177,7 @@ async def api_c3_fill_result(request: Request, _auth: str = Depends(require_sess
 # ---------------------------------------------------------------------------
 # Health (unauthenticated — for monitoring scripts)
 # ---------------------------------------------------------------------------
+
 
 @app.get("/health")
 def health():
@@ -3147,14 +3198,19 @@ def api_summary_breakdown(field: str = "category", _auth: str = Depends(require_
     allowed = {"category", "ats_type", "source", "enrichment_status"}
     if field not in allowed:
         from fastapi import HTTPException
-        raise HTTPException(status_code=400, detail=f"field must be one of: {', '.join(sorted(allowed))}")
+
+        raise HTTPException(
+            status_code=400, detail=f"field must be one of: {', '.join(sorted(allowed))}"
+        )
     conn = get_connection()
     try:
         rows = conn.execute(
             f"SELECT COALESCE(NULLIF(TRIM({field}), ''), 'unknown') AS label, COUNT(*) AS count "
             "FROM jobs GROUP BY 1 ORDER BY count DESC"
         ).fetchall()
-        return JSONResponse({"field": field, "data": [{"label": r["label"], "count": r["count"]} for r in rows]})
+        return JSONResponse(
+            {"field": field, "data": [{"label": r["label"], "count": r["count"]} for r in rows]}
+        )
     finally:
         conn.close()
 
@@ -3163,6 +3219,7 @@ def api_summary_breakdown(field: str = "category", _auth: str = Depends(require_
 def api_summary_timeline(days: int = 30, _auth: str = Depends(require_auth)):
     if days < 1 or days > 365:
         from fastapi import HTTPException
+
         raise HTTPException(status_code=400, detail="days must be 1–365")
     cutoff = (datetime.now(UTC).date() - timedelta(days=days)).isoformat()
     conn = get_connection()
@@ -3174,7 +3231,14 @@ def api_summary_timeline(days: int = 30, _auth: str = Depends(require_auth)):
             "GROUP BY 1,2 ORDER BY 1 ASC",
             (cutoff,),
         ).fetchall()
-        return JSONResponse({"days": days, "data": [{"day": r["day"], "source": r["source"], "count": r["count"]} for r in rows]})
+        return JSONResponse(
+            {
+                "days": days,
+                "data": [
+                    {"day": r["day"], "source": r["source"], "count": r["count"]} for r in rows
+                ],
+            }
+        )
     finally:
         conn.close()
 
@@ -3182,6 +3246,7 @@ def api_summary_timeline(days: int = 30, _auth: str = Depends(require_auth)):
 @app.get("/api/summary/daily")
 def api_summary_daily(_auth: str = Depends(require_auth)):
     from backend.db import get_review_activity_summary
+
     activity = get_review_activity_summary(hours=24)
     conn = get_connection()
     try:
@@ -3191,21 +3256,25 @@ def api_summary_daily(_auth: str = Depends(require_auth)):
         ).fetchone()[0]
         enriched_today = conn.execute(
             "SELECT COUNT(*) FROM jobs WHERE SUBSTR(COALESCE(enriched_at,''),1,10) = ? "
-            "AND enrichment_status IN ('done','done_verified')", (today,)
+            "AND enrichment_status IN ('done','done_verified')",
+            (today,),
         ).fetchone()[0]
         failed_today = conn.execute(
             "SELECT COUNT(*) FROM jobs WHERE SUBSTR(COALESCE(enriched_at,''),1,10) = ? "
-            "AND enrichment_status = 'failed'", (today,)
+            "AND enrichment_status = 'failed'",
+            (today,),
         ).fetchone()[0]
-        return JSONResponse({
-            "date": today,
-            "scraped_today": int(scraped_today or 0),
-            "enriched_today": int(enriched_today or 0),
-            "failed_today": int(failed_today or 0),
-            "enriched_24h": activity["done_or_verified"],
-            "failed_24h": activity["failed_scraped_window"],
-            "scraped_24h": activity["rows_scraped_window"],
-        })
+        return JSONResponse(
+            {
+                "date": today,
+                "scraped_today": int(scraped_today or 0),
+                "enriched_today": int(enriched_today or 0),
+                "failed_today": int(failed_today or 0),
+                "enriched_24h": activity["done_or_verified"],
+                "failed_24h": activity["failed_scraped_window"],
+                "scraped_24h": activity["rows_scraped_window"],
+            }
+        )
     finally:
         conn.close()
 
@@ -3216,26 +3285,37 @@ def api_summary_velocity(_auth: str = Depends(require_auth)):
     try:
         cut24 = (datetime.now(UTC) - timedelta(hours=24)).isoformat()
         cut48 = (datetime.now(UTC) - timedelta(hours=48)).isoformat()
-        enriched_24h = conn.execute(
-            "SELECT COUNT(*) FROM jobs WHERE enriched_at >= ? AND enrichment_status IN ('done','done_verified')",
-            (cut24,)
-        ).fetchone()[0] or 0
-        enriched_prev = conn.execute(
-            "SELECT COUNT(*) FROM jobs WHERE enriched_at >= ? AND enriched_at < ? "
-            "AND enrichment_status IN ('done','done_verified')",
-            (cut48, cut24)
-        ).fetchone()[0] or 0
-        scraped_24h = conn.execute(
-            "SELECT COUNT(*) FROM jobs WHERE date_scraped >= ?", (cut24,)
-        ).fetchone()[0] or 0
+        enriched_24h = (
+            conn.execute(
+                "SELECT COUNT(*) FROM jobs WHERE enriched_at >= ? AND enrichment_status IN ('done','done_verified')",
+                (cut24,),
+            ).fetchone()[0]
+            or 0
+        )
+        enriched_prev = (
+            conn.execute(
+                "SELECT COUNT(*) FROM jobs WHERE enriched_at >= ? AND enriched_at < ? "
+                "AND enrichment_status IN ('done','done_verified')",
+                (cut48, cut24),
+            ).fetchone()[0]
+            or 0
+        )
+        scraped_24h = (
+            conn.execute("SELECT COUNT(*) FROM jobs WHERE date_scraped >= ?", (cut24,)).fetchone()[
+                0
+            ]
+            or 0
+        )
         delta = int(enriched_24h) - int(enriched_prev)
-        return JSONResponse({
-            "enriched_24h": int(enriched_24h),
-            "enriched_prev_24h": int(enriched_prev),
-            "scraped_24h": int(scraped_24h),
-            "jobs_per_hour": round(int(enriched_24h) / 24, 1),
-            "delta": delta,
-        })
+        return JSONResponse(
+            {
+                "enriched_24h": int(enriched_24h),
+                "enriched_prev_24h": int(enriched_prev),
+                "scraped_24h": int(scraped_24h),
+                "jobs_per_hour": round(int(enriched_24h) / 24, 1),
+                "delta": delta,
+            }
+        )
     finally:
         conn.close()
 
@@ -3250,7 +3330,15 @@ def api_summary_queue_age(_auth: str = Depends(require_auth)):
             "ORDER BY date_scraped ASC"
         ).fetchall()
         if not rows:
-            return JSONResponse({"count": 0, "oldest_hours": None, "p50_hours": None, "p90_hours": None, "over_24h": 0})
+            return JSONResponse(
+                {
+                    "count": 0,
+                    "oldest_hours": None,
+                    "p50_hours": None,
+                    "p90_hours": None,
+                    "over_24h": 0,
+                }
+            )
         now = datetime.now(UTC)
         ages: list[float] = []
         for r in rows:
@@ -3263,16 +3351,26 @@ def api_summary_queue_age(_auth: str = Depends(require_auth)):
             except Exception:
                 pass
         if not ages:
-            return JSONResponse({"count": 0, "oldest_hours": None, "p50_hours": None, "p90_hours": None, "over_24h": 0})
+            return JSONResponse(
+                {
+                    "count": 0,
+                    "oldest_hours": None,
+                    "p50_hours": None,
+                    "p90_hours": None,
+                    "over_24h": 0,
+                }
+            )
         ages.sort()
         n = len(ages)
-        return JSONResponse({
-            "count": n,
-            "oldest_hours": round(ages[-1], 1),
-            "p50_hours": round(ages[n // 2], 1),
-            "p90_hours": round(ages[int(n * 0.9)], 1),
-            "over_24h": sum(1 for a in ages if a > 24),
-        })
+        return JSONResponse(
+            {
+                "count": n,
+                "oldest_hours": round(ages[-1], 1),
+                "p50_hours": round(ages[n // 2], 1),
+                "p90_hours": round(ages[int(n * 0.9)], 1),
+                "over_24h": sum(1 for a in ages if a > 24),
+            }
+        )
     finally:
         conn.close()
 
@@ -3313,8 +3411,8 @@ def render_runtime_state_timeline_panel():
         if len(val) > 200:
             val = val[:197] + "..."
         body.append(
-            f"<tr><td class=\"mono\">{format_text(row.get('key'))}</td>"
-            f"<td class=\"mono\">{format_text(row.get('updated_at'))}</td>"
+            f'<tr><td class="mono">{format_text(row.get("key"))}</td>'
+            f'<td class="mono">{format_text(row.get("updated_at"))}</td>'
             f"<td><pre>{format_text(val)}</pre></td></tr>"
         )
     return f"""
@@ -3340,7 +3438,7 @@ def render_review_audit_panel():
         detail = entry.get("detail")
         detail_s = json.dumps(detail, ensure_ascii=False) if detail is not None else ""
         lines.append(
-            f"<tr><td class=\"mono\">{format_text(entry.get('at'))}</td>"
+            f'<tr><td class="mono">{format_text(entry.get("at"))}</td>'
             f"<td>{format_text(entry.get('action'))}</td>"
             f"<td><pre>{format_text(detail_s)}</pre></td></tr>"
         )
@@ -3411,7 +3509,7 @@ def summary_redirect():
 
 
 @app.get("/legacy/ops", response_class=HTMLResponse)
-def ops_console(updated: Optional[int] = Query(default=None, ge=0)):
+def ops_console(updated: int | None = Query(default=None, ge=0)):
     summary = get_review_queue_summary()
     body = f"""
     <section class="hero">
@@ -3780,6 +3878,7 @@ def _get_attempt_row(attempt_id: int) -> dict | None:
         return None
     try:
         from fletcher.db import get_connection as fletcher_get_connection  # type: ignore
+
         conn = fletcher_get_connection(None)
         try:
             row = conn.execute(
@@ -3822,8 +3921,16 @@ def api_patch_job(job_id: int, payload: dict = Body(...)):
     if not row:
         raise HTTPException(status_code=404, detail="Job not found.")
     allowed = {
-        "company", "title", "location", "level", "category", "is_remote",
-        "description", "description_source", "operator_notes", "operator_tag",
+        "company",
+        "title",
+        "location",
+        "level",
+        "category",
+        "is_remote",
+        "description",
+        "description_source",
+        "operator_notes",
+        "operator_tag",
     }
     fields = {k: v for k, v in payload.items() if k in allowed}
     if not fields:
@@ -4131,8 +4238,8 @@ def job_detail(request: Request, job_id: int, return_to: str = ""):
 
 @app.get("/legacy/jobs/compare", response_class=HTMLResponse)
 def jobs_compare(
-    a: Optional[int] = Query(None),
-    b: Optional[int] = Query(None),
+    a: int | None = Query(None),
+    b: int | None = Query(None),
 ):
     if a is None or b is None:
         a_val = "" if a is None else str(int(a))
@@ -4243,10 +4350,13 @@ async def requeue_job_post(job_id: int, request: Request):
 
 def main():
     import argparse
+
     import uvicorn
 
     parser = argparse.ArgumentParser()
-    parser.add_argument("--reload", action="store_true", help="Enable auto-reload on file changes (dev mode)")
+    parser.add_argument(
+        "--reload", action="store_true", help="Enable auto-reload on file changes (dev mode)"
+    )
     args, _ = parser.parse_known_args()
 
     init_db(maintenance=False)
@@ -4264,6 +4374,7 @@ def main():
 # Serves frontend/dist/index.html for every path not matched above.
 # When the SPA is not built yet, returns a 503 with instructions.
 # ---------------------------------------------------------------------------
+
 
 @app.get("/{full_path:path}", include_in_schema=False)
 def spa_shell(full_path: str):

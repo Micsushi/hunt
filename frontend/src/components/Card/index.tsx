@@ -17,10 +17,18 @@ export function Card({ label, value, tooltip, onClick, accent, danger, warning }
     accent ? styles.accent : '',
     danger ? styles.danger : '',
     warning ? styles.warning : '',
-  ].filter(Boolean).join(' ')
+  ]
+    .filter(Boolean)
+    .join(' ')
 
   return (
-    <div className={cls} onClick={onClick} title={tooltip} role={onClick ? 'button' : undefined} tabIndex={onClick ? 0 : undefined}>
+    <div
+      className={cls}
+      onClick={onClick}
+      title={tooltip}
+      role={onClick ? 'button' : undefined}
+      tabIndex={onClick ? 0 : undefined}
+    >
       <div className={styles.label}>{label}</div>
       <div className={styles.value}>{value}</div>
     </div>

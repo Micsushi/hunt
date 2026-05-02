@@ -4,8 +4,6 @@ import time
 from pathlib import Path
 
 from . import config as _config
-from .jobs.classifier import classify_job, slugify
-from .resume.compiler import compile_tex
 from .config import (
     DEFAULT_BULLET_LIBRARY_PATH,
     DEFAULT_CANDIDATE_PROFILE_PATH,
@@ -24,15 +22,17 @@ from .db import (
     list_jobs_ready_for_resume,
     record_resume_attempt,
 )
-from .resume.generator import generate_tailored_resume
+from .jobs.classifier import classify_job, slugify
+from .jobs.keyword_extractor import extract_keywords
 from .llm.llm_enrich import (
     enrich_with_ollama_if_enabled,
     generate_summary,
     rewrite_bullet_targeted,
 )
-from .jobs.keyword_extractor import extract_keywords
-from .resume.parser import parse_resume_file
 from .llm.rag import match_keywords_to_bullets
+from .resume.compiler import compile_tex
+from .resume.generator import generate_tailored_resume
+from .resume.parser import parse_resume_file
 from .resume.renderer import render_resume_tex
 from .resume.source_loader import load_bullet_library, load_candidate_profile
 from .storage import build_attempt_dir, ensure_dir, file_hash, write_json, write_text
@@ -193,7 +193,9 @@ def _print_trace(trace: dict) -> None:
         print(f"  {label:<28} {value}")
 
     print(f"\n{'=' * W}")
-    print(f"  PIPELINE TRACE  |  job={trace.get('job_id')}  |  {trace.get('title')} @ {trace.get('company')}")
+    print(
+        f"  PIPELINE TRACE  |  job={trace.get('job_id')}  |  {trace.get('title')} @ {trace.get('company')}"
+    )
     print(f"  model: {trace.get('model')}  |  total: {trace.get('total_ms')}ms")
     print(f"{'=' * W}")
 
@@ -214,7 +216,9 @@ def _print_trace(trace: dict) -> None:
     step2 = trace.get("step2_rag", {})
     section("STEP 2: keywords -> RAG (bullet matching)")
     row("bullets in resume:", str(step2.get("bullet_count", 0)))
-    row("thresholds:", f"high >= {step2.get('high_threshold')}  mid >= {step2.get('mid_threshold')}")
+    row(
+        "thresholds:", f"high >= {step2.get('high_threshold')}  mid >= {step2.get('mid_threshold')}"
+    )
     scores = step2.get("scores", [])
     if scores:
         print(f"\n  {'keyword':<35} {'score':>6}  {'tier':<7}  nearest bullet")
@@ -235,10 +239,12 @@ def _print_trace(trace: dict) -> None:
         print("  (no high-score matches — no bullet rewrites)")
     for r in step3:
         status = "ok" if r.get("success") else "FAILED"
-        print(f"\n  bullet[{r['bullet_idx']}]  keywords={r['keywords']}  [{status}]  {r.get('duration_ms')}ms")
+        print(
+            f"\n  bullet[{r['bullet_idx']}]  keywords={r['keywords']}  [{status}]  {r.get('duration_ms')}ms"
+        )
         print(f"  {thin}")
-        print(f"  BEFORE: {r.get('original', '')[:W-10]}")
-        print(f"  AFTER : {r.get('rewritten', '')[:W-10]}")
+        print(f"  BEFORE: {r.get('original', '')[: W - 10]}")
+        print(f"  AFTER : {r.get('rewritten', '')[: W - 10]}")
 
     # Step 4: summary
     step4 = trace.get("step4_summary", {})
@@ -339,8 +345,11 @@ def _run_pipeline(
 
     # Step 2: RAG keyword-to-bullet matching (in-memory cosine sim against selected bullets).
     kw_match: dict = {
-        "bullet_matches": [], "summary_keywords": [],
-        "ignored_keywords": list(raw_kws), "scores": [], "rag_used": False,
+        "bullet_matches": [],
+        "summary_keywords": [],
+        "ignored_keywords": list(raw_kws),
+        "scores": [],
+        "rag_used": False,
     }
     if _config.RAG_ENABLED and raw_kws and all_selected_bullets:
         try:
@@ -364,6 +373,7 @@ def _run_pipeline(
     bullet_rewrites: list[dict] = []
     if kw_match["bullet_matches"]:
         from collections import defaultdict
+
         by_bullet: dict[int, list[str]] = defaultdict(list)
         for m in kw_match["bullet_matches"]:
             by_bullet[m["bullet_idx"]].append(m["keyword"])
@@ -371,15 +381,17 @@ def _run_pipeline(
         for bullet_idx, kws in sorted(by_bullet.items()):
             original = all_selected_bullets[bullet_idx]
             result = rewrite_bullet_targeted(original, kws)
-            bullet_rewrites.append({
-                "bullet_idx": bullet_idx,
-                "original": original,
-                "rewritten": result["bullet"],
-                "keywords": kws,
-                "success": result["success"],
-                "duration_ms": result["duration_ms"],
-                "error": result["error"],
-            })
+            bullet_rewrites.append(
+                {
+                    "bullet_idx": bullet_idx,
+                    "original": original,
+                    "rewritten": result["bullet"],
+                    "keywords": kws,
+                    "success": result["success"],
+                    "duration_ms": result["duration_ms"],
+                    "error": result["error"],
+                }
+            )
             if result["success"]:
                 idx = 0
                 found = False
@@ -480,20 +492,26 @@ def _run_pipeline(
                 attempt_dir / "ollama_response.txt", str(llm_meta.get("response_text") or "")
             )
     # Always write summary (even if empty - webapp always shows the card).
-    write_json(attempt_dir / "summary_rewrite.json", {
-        "summary": summary_rewrite_meta.get("summary", ""),
-        "success": summary_rewrite_meta.get("success", False),
-        "duration_ms": summary_rewrite_meta.get("duration_ms"),
-        "error": summary_rewrite_meta.get("error"),
-        "keywords_used": kw_match.get("summary_keywords", []),
-    })
+    write_json(
+        attempt_dir / "summary_rewrite.json",
+        {
+            "summary": summary_rewrite_meta.get("summary", ""),
+            "success": summary_rewrite_meta.get("success", False),
+            "duration_ms": summary_rewrite_meta.get("duration_ms"),
+            "error": summary_rewrite_meta.get("error"),
+            "keywords_used": kw_match.get("summary_keywords", []),
+        },
+    )
     if bullet_rewrites:
-        write_json(attempt_dir / "bullet_rewrite.json", {
-            "rewrites": bullet_rewrites,
-            "total_rewrites": len(bullet_rewrites),
-            "successful_rewrites": sum(1 for r in bullet_rewrites if r["success"]),
-            "total_duration_ms": sum(r["duration_ms"] or 0 for r in bullet_rewrites),
-        })
+        write_json(
+            attempt_dir / "bullet_rewrite.json",
+            {
+                "rewrites": bullet_rewrites,
+                "total_rewrites": len(bullet_rewrites),
+                "successful_rewrites": sum(1 for r in bullet_rewrites if r["success"]),
+                "total_duration_ms": sum(r["duration_ms"] or 0 for r in bullet_rewrites),
+            },
+        )
     # Write keyword matching detail for inspection.
     write_json(attempt_dir / "keyword_distribution.json", kw_match)
 
@@ -618,7 +636,9 @@ def _run_pipeline(
         "tex_path": tex_path,
         "metadata_path": metadata_path,
         "summary_rewrite_path": str(attempt_dir / "summary_rewrite.json"),
-        "bullet_rewrite_path": str(attempt_dir / "bullet_rewrite.json") if bullet_rewrites else None,
+        "bullet_rewrite_path": str(attempt_dir / "bullet_rewrite.json")
+        if bullet_rewrites
+        else None,
         "pipeline_trace_path": str(attempt_dir / "pipeline_trace.json"),
         "apply_context": get_apply_context(job_id, db_path) if job_id is not None else None,
     }

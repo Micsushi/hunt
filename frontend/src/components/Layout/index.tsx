@@ -10,7 +10,12 @@ import type { ReactNode } from 'react'
 type DotState = 'ok' | 'warn' | 'error' | 'unknown'
 
 function StatusDot({ state }: { state: DotState }) {
-  return <span className={`${styles.dot} ${styles[`dot${state.charAt(0).toUpperCase()}${state.slice(1)}`]}`} aria-hidden="true" />
+  return (
+    <span
+      className={`${styles.dot} ${styles[`dot${state.charAt(0).toUpperCase()}${state.slice(1)}`]}`}
+      aria-hidden="true"
+    />
+  )
 }
 
 function getComponentState(status: 'ok' | 'error' | 'unreachable' | string): DotState {
@@ -29,13 +34,13 @@ interface NavItem {
 }
 
 const NAV_ITEMS: NavItem[] = [
-  { to: '/',             label: 'Overview',    exact: true },
-  { to: '/jobs',         label: 'Jobs' },
-  { to: '/logs',         label: 'Logs' },
-  { to: '/ops',          label: 'Ops',         dotKey: 'c1' },
-  { to: '/fletcher',     label: 'Fletcher',    dotKey: 'c2' },
-  { to: '/executioner',  label: 'Executioner', dotKey: 'c3' },
-  { to: '/coordinator',  label: 'Coordinator', dotKey: 'c4' },
+  { to: '/', label: 'Overview', exact: true },
+  { to: '/jobs', label: 'Jobs' },
+  { to: '/logs', label: 'Logs' },
+  { to: '/ops', label: 'Ops', dotKey: 'c1' },
+  { to: '/fletcher', label: 'Fletcher', dotKey: 'c2' },
+  { to: '/executioner', label: 'Executioner', dotKey: 'c3' },
+  { to: '/coordinator', label: 'Coordinator', dotKey: 'c4' },
 ]
 
 interface Props {
@@ -45,7 +50,7 @@ interface Props {
 
 export function Layout({ children, username }: Props) {
   const navigate = useNavigate()
-  const showToast = useUiStore(s => s.showToast)
+  const showToast = useUiStore((s) => s.showToast)
 
   const { data: sysStatus } = useQuery({
     queryKey: ['system-status'],
@@ -63,7 +68,9 @@ export function Layout({ children, username }: Props) {
   }
 
   async function handleLogout() {
-    try { await logout() } finally {
+    try {
+      await logout()
+    } finally {
       showToast('Logged out')
       navigate('/login')
     }
@@ -76,7 +83,7 @@ export function Layout({ children, username }: Props) {
         <nav className={styles.nav} aria-label="Main navigation">
           <div className={styles.navGroup}>
             <span className={styles.brand}>Hunt</span>
-            {NAV_ITEMS.map(item => (
+            {NAV_ITEMS.map((item) => (
               <NavLink
                 key={item.to}
                 to={item.to}
@@ -91,7 +98,9 @@ export function Layout({ children, username }: Props) {
           </div>
           <div className={styles.navSecondary}>
             {username && <span className={styles.username}>{username}</span>}
-            <button className={styles.logoutBtn} onClick={handleLogout}>Sign out</button>
+            <button className={styles.logoutBtn} onClick={handleLogout}>
+              Sign out
+            </button>
           </div>
         </nav>
         <main className={styles.main}>{children}</main>

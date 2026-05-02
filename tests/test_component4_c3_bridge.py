@@ -114,18 +114,33 @@ class C3BridgeTests(unittest.TestCase):
                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
-                    defaults["title"], defaults["company"], defaults["location"],
-                    defaults["job_url"], defaults["apply_url"], defaults["description"],
-                    defaults["source"], defaults["date_posted"], defaults["is_remote"],
-                    defaults["level"], defaults["priority"], defaults["category"],
-                    defaults["apply_type"], defaults["auto_apply_eligible"],
-                    defaults["enrichment_status"], defaults["enrichment_attempts"],
-                    defaults["apply_host"], defaults["ats_type"],
-                    defaults["last_enrichment_error"], defaults["last_enrichment_started_at"],
+                    defaults["title"],
+                    defaults["company"],
+                    defaults["location"],
+                    defaults["job_url"],
+                    defaults["apply_url"],
+                    defaults["description"],
+                    defaults["source"],
+                    defaults["date_posted"],
+                    defaults["is_remote"],
+                    defaults["level"],
+                    defaults["priority"],
+                    defaults["category"],
+                    defaults["apply_type"],
+                    defaults["auto_apply_eligible"],
+                    defaults["enrichment_status"],
+                    defaults["enrichment_attempts"],
+                    defaults["apply_host"],
+                    defaults["ats_type"],
+                    defaults["last_enrichment_error"],
+                    defaults["last_enrichment_started_at"],
                     defaults["next_enrichment_retry_at"],
-                    defaults["latest_resume_job_description_path"], defaults["latest_resume_flags"],
-                    defaults["selected_resume_version_id"], defaults["selected_resume_pdf_path"],
-                    defaults["selected_resume_tex_path"], defaults["selected_resume_selected_at"],
+                    defaults["latest_resume_job_description_path"],
+                    defaults["latest_resume_flags"],
+                    defaults["selected_resume_version_id"],
+                    defaults["selected_resume_pdf_path"],
+                    defaults["selected_resume_tex_path"],
+                    defaults["selected_resume_selected_at"],
                     defaults["selected_resume_ready_for_c3"],
                 ),
             )
@@ -182,7 +197,9 @@ class C3BridgeTests(unittest.TestCase):
                         os.remove(resume_path)
 
         self.assertIn("selectedResumeDataUrl", c3_payload)
-        self.assertTrue(c3_payload["selectedResumeDataUrl"].startswith("data:application/pdf;base64,"))
+        self.assertTrue(
+            c3_payload["selectedResumeDataUrl"].startswith("data:application/pdf;base64,")
+        )
 
     def test_get_pending_fills_empty_when_no_fill_requested_runs(self):
         with self.with_temp_db() as path:

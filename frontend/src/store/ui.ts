@@ -29,14 +29,14 @@ export const useUiStore = create<UiStore>((set, get) => ({
   toasts: [],
   showToast: (message, kind = 'ok') => {
     const id = ++toastCounter
-    set(s => ({ toasts: [...s.toasts, { id, message, kind }] }))
+    set((s) => ({ toasts: [...s.toasts, { id, message, kind }] }))
     setTimeout(() => get().dismissToast(id), 3500)
   },
-  dismissToast: (id) => set(s => ({ toasts: s.toasts.filter(t => t.id !== id) })),
+  dismissToast: (id) => set((s) => ({ toasts: s.toasts.filter((t) => t.id !== id) })),
 
   selectedIds: new Set(),
   toggleSelect: (id) =>
-    set(s => {
+    set((s) => {
       const next = new Set(s.selectedIds)
       if (next.has(id)) next.delete(id)
       else next.add(id)

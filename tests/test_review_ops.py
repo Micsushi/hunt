@@ -80,9 +80,9 @@ class ReviewOpsApiTests(unittest.TestCase):
 
     def test_auth_login_and_logout_return_session_cookie_headers(self):
         import asyncio
+        from unittest.mock import patch
 
         from fastapi import Response
-        from unittest.mock import patch
 
         from backend import app as control_plane_api
         from backend import auth_session
@@ -101,7 +101,9 @@ class ReviewOpsApiTests(unittest.TestCase):
         with patch("starlette.requests.parse_options_header", None):
             login_response = asyncio.run(control_plane_api.auth_login(LoginRequest(), Response()))
         self.assertEqual(login_response.status_code, 200)
-        self.assertIn(f"{auth_session.SESSION_COOKIE_NAME}=", login_response.headers.get("set-cookie", ""))
+        self.assertIn(
+            f"{auth_session.SESSION_COOKIE_NAME}=", login_response.headers.get("set-cookie", "")
+        )
 
         token = auth_session.create_session("admin")
 
@@ -110,7 +112,9 @@ class ReviewOpsApiTests(unittest.TestCase):
 
         logout_response = control_plane_api.auth_logout(LogoutRequest(), Response())
         self.assertEqual(logout_response.status_code, 200)
-        self.assertIn(f"{auth_session.SESSION_COOKIE_NAME}=", logout_response.headers.get("set-cookie", ""))
+        self.assertIn(
+            f"{auth_session.SESSION_COOKIE_NAME}=", logout_response.headers.get("set-cookie", "")
+        )
         self.assertIn("Max-Age=0", logout_response.headers.get("set-cookie", ""))
 
     def test_review_ops_requires_session_or_ops_token(self):

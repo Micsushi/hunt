@@ -107,9 +107,7 @@ class Stage1Tests(unittest.TestCase):
         jobspy_fake = types.ModuleType("jobspy")
         jobspy_fake.scrape_jobs = lambda **_kwargs: jobs_df
         with patch.dict(sys.modules, {"jobspy": jobspy_fake}):
-            jobs = discovery.scrape_single(
-                "linkedin", "software engineer", "Canada", "engineering"
-            )
+            jobs = discovery.scrape_single("linkedin", "software engineer", "Canada", "engineering")
 
         self.assertEqual(len(jobs), 1)
         job = jobs[0]
@@ -141,9 +139,7 @@ class Stage1Tests(unittest.TestCase):
         jobspy_fake = types.ModuleType("jobspy")
         jobspy_fake.scrape_jobs = lambda **_kwargs: jobs_df
         with patch.dict(sys.modules, {"jobspy": jobspy_fake}):
-            jobs = discovery.scrape_single(
-                "linkedin", "software engineer", "Canada", "engineering"
-            )
+            jobs = discovery.scrape_single("linkedin", "software engineer", "Canada", "engineering")
 
         self.assertEqual(len(jobs), 1)
         job = jobs[0]
@@ -427,9 +423,7 @@ class Stage1Tests(unittest.TestCase):
             jobspy_fake = types.ModuleType("jobspy")
             jobspy_fake.scrape_jobs = lambda **_kwargs: jobs_df
             with (
-                patch.object(
-                    discovery, "SEARCH_TERMS", {"engineering": ["software engineer"]}
-                ),
+                patch.object(discovery, "SEARCH_TERMS", {"engineering": ["software engineer"]}),
                 patch.object(discovery, "LOCATIONS", ["Canada"]),
                 patch.object(discovery, "SITES", ["linkedin"]),
                 patch.object(discovery, "MAX_WORKERS", 1),

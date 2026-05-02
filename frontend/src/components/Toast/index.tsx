@@ -5,7 +5,7 @@ export function ToastStack() {
   const { toasts, dismissToast } = useUiStore()
   return (
     <div className={styles.stack} aria-live="polite">
-      {toasts.map(t => (
+      {toasts.map((t) => (
         <div
           key={t.id}
           className={`${styles.toast} ${t.kind === 'error' ? styles.error : ''}`}

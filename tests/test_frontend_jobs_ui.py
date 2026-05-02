@@ -1,6 +1,5 @@
-from pathlib import Path
 import re
-
+from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -36,9 +35,15 @@ def test_dark_theme_controls_keep_readable_text_colors():
     filters = read("frontend/src/components/Filters/Filters.module.css")
     jobs = read("frontend/src/pages/Jobs/Jobs.module.css")
 
-    assert "color: var(--ink);" in re.search(r"\.limitBtn \{(?P<body>.*?)\}", filters, re.S).group("body")
-    assert "color: var(--ink);" in re.search(r"\.advSummary \{(?P<body>.*?)\}", jobs, re.S).group("body")
-    assert "color: var(--accent-ink);" in re.search(r"\.advBtn\.advBtnPrimary \{(?P<body>.*?)\}", jobs, re.S).group("body")
+    assert "color: var(--ink);" in re.search(r"\.limitBtn \{(?P<body>.*?)\}", filters, re.S).group(
+        "body"
+    )
+    assert "color: var(--ink);" in re.search(r"\.advSummary \{(?P<body>.*?)\}", jobs, re.S).group(
+        "body"
+    )
+    assert "color: var(--accent-ink);" in re.search(
+        r"\.advBtn\.advBtnPrimary \{(?P<body>.*?)\}", jobs, re.S
+    ).group("body")
 
 
 def test_job_detail_dark_theme_does_not_use_light_theme_text_assumptions():
@@ -46,13 +51,19 @@ def test_job_detail_dark_theme_does_not_use_light_theme_text_assumptions():
 
     assert "background: #faf5ec" not in detail
     assert "color: white" not in detail
-    assert "color: var(--accent-ink);" not in re.search(r"\.backBtn \{(?P<body>.*?)\}", detail, re.S).group("body")
-    assert "color: var(--accent-ink);" not in re.search(r"\.tab\.tabActive \{(?P<body>.*?)\}", detail, re.S).group("body")
-    assert "color: var(--accent-ink);" not in re.search(r"\.artifactBtn \{(?P<body>.*?)\}", detail, re.S).group("body")
+    assert "color: var(--accent-ink);" not in re.search(
+        r"\.backBtn \{(?P<body>.*?)\}", detail, re.S
+    ).group("body")
+    assert "color: var(--accent-ink);" not in re.search(
+        r"\.artifactBtn \{(?P<body>.*?)\}", detail, re.S
+    ).group("body")
+    assert "color: var(--accent-ink);" in re.search(
+        r"\.artifactBtnPrimary \{(?P<body>.*?)\}", detail, re.S
+    ).group("body")
 
 
 def test_dark_theme_accent_uses_muted_green_instead_of_bright_neon():
     tokens = read("frontend/src/styles/tokens.css")
 
-    assert "--accent:         #59a96a;" in tokens
+    assert re.search(r"--accent:\s*#59a96a;", tokens)
     assert "#3ecf6e" not in tokens

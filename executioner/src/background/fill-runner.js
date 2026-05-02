@@ -10,7 +10,7 @@ import { appendAttempt, appendQuestionAnswers } from "../shared/storage.js";
 // Each factory must return a self-contained async function (no outer references)
 // because Chrome serialises it via Function.prototype.toString() for injection.
 const FILL_ADAPTERS = {
-  workday: createWorkdayFillFunction
+  workday: createWorkdayFillFunction,
   // greenhouse: createGreenhouseFillFunction,
   // lever:      createLeverFillFunction,
   // ashby:      createAshbyFillFunction,
@@ -28,7 +28,11 @@ export async function runFillForTab(tabId, extensionState) {
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
   const activeTabId = tabId || tab?.id;
   if (!activeTabId) {
-    return { ok: false, reason: "missing_tab", message: "No active tab is available for fill." };
+    return {
+      ok: false,
+      reason: "missing_tab",
+      message: "No active tab is available for fill.",
+    };
   }
 
   const tabInfo = await chrome.tabs.get(activeTabId);
@@ -36,8 +40,7 @@ export async function runFillForTab(tabId, extensionState) {
 
   // Prefer atsType already resolved by C1 enrichment; fall back to URL detection.
   const atsType =
-    extensionState.activeApplyContext.atsType ||
-    detectAtsFromUrl(pageUrl);
+    extensionState.activeApplyContext.atsType || detectAtsFromUrl(pageUrl);
 
   const adapterFactory = FILL_ADAPTERS[atsType];
   if (!adapterFactory) {
@@ -46,14 +49,14 @@ export async function runFillForTab(tabId, extensionState) {
       ok: false,
       reason: "unsupported_ats",
       atsType,
-      message: `ATS "${atsType}" is not yet supported. Supported: ${supported}.`
+      message: `ATS "${atsType}" is not yet supported. Supported: ${supported}.`,
     };
   }
 
   // Step 1: inject shared utilities into the page.
   await chrome.scripting.executeScript({
     target: { tabId: activeTabId },
-    files: ["src/shared/injected.js"]
+    files: ["src/shared/injected.js"],
   });
 
   // Step 2: inject and run the ATS-specific fill function.
@@ -65,15 +68,15 @@ export async function runFillForTab(tabId, extensionState) {
         profile: extensionState.profile,
         settings: extensionState.settings,
         activeApplyContext: extensionState.activeApplyContext,
-        defaultResume: extensionState.defaultResume
-      }
-    ]
+        defaultResume: extensionState.defaultResume,
+      },
+    ],
   });
 
   const result = injectionResult?.result || {
     ok: false,
     reason: "missing_result",
-    message: "No fill result was returned."
+    message: "No fill result was returned.",
   };
 
   const screenshotDataUrl = await captureScreenshot();
@@ -81,7 +84,9 @@ export async function runFillForTab(tabId, extensionState) {
 
   const attempt = await appendAttempt({
     id: attemptId,
-    sourceMode: extensionState.activeApplyContext.jobId ? "c4_or_queue" : "manual",
+    sourceMode: extensionState.activeApplyContext.jobId
+      ? "c4_or_queue"
+      : "manual",
     jobId: extensionState.activeApplyContext.jobId,
     applyUrl: extensionState.activeApplyContext.applyUrl || pageUrl,
     atsType: result.atsType || atsType,
@@ -101,7 +106,7 @@ export async function runFillForTab(tabId, extensionState) {
     screenshotDataUrl,
     resultSummary: result.ok
       ? `Filled ${result.filledFieldCount || 0} fields on a ${atsType} page.`
-      : result.message || result.reason || "Fill failed."
+      : result.message || result.reason || "Fill failed.",
   });
 
   const answerEntries = (result.generatedAnswers || []).map((entry) => ({
@@ -113,7 +118,7 @@ export async function runFillForTab(tabId, extensionState) {
     answerText: entry.answerText,
     answerSource: entry.answerSource,
     confidence: entry.confidence,
-    manualReviewRequired: entry.manualReviewRequired
+    manualReviewRequired: entry.manualReviewRequired,
   }));
   await appendQuestionAnswers(answerEntries);
 
@@ -124,6 +129,6 @@ export async function runFillForTab(tabId, extensionState) {
       : result.message || "Fill failed.",
     attempt,
     generatedAnswers: answerEntries,
-    result
+    result,
   };
 }

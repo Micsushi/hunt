@@ -1,7 +1,17 @@
-.page { display: flex; flex-direction: column; gap: 20px; }
+.page {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
 
-.hero { margin-bottom: 0; }
-.heroTitle { font-size: 1.5rem; font-weight: 700; color: var(--ink); }
+.hero {
+  margin-bottom: 0;
+}
+.heroTitle {
+  font-size: 1.5rem;
+  font-weight: 700;
+  color: var(--ink);
+}
 
 .cards {
   display: grid;
@@ -9,7 +19,11 @@
   grid-template-columns: repeat(6, 1fr);
 }
 
-.serviceStrip { display: flex; flex-wrap: wrap; gap: 8px; }
+.serviceStrip {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
 
 .servicePill {
   display: inline-flex;
@@ -23,16 +37,36 @@
   background: var(--panel);
   color: var(--muted);
   cursor: pointer;
-  transition: background var(--ease), border-color var(--ease);
+  transition:
+    background var(--ease),
+    border-color var(--ease);
 }
-.servicePill:hover { background: var(--panel-hover); color: var(--ink); }
+.servicePill:hover {
+  background: var(--panel-hover);
+  color: var(--ink);
+}
 
-.serviceDot { width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; }
-.dot_ok      { background: var(--good); }
-.dot_error   { background: var(--danger); }
-.dot_unknown { background: var(--line-strong); }
-.service_ok    { border-color: var(--good-soft); }
-.service_error { border-color: var(--danger-soft); }
+.serviceDot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+.dot_ok {
+  background: var(--good);
+}
+.dot_error {
+  background: var(--danger);
+}
+.dot_unknown {
+  background: var(--line-strong);
+}
+.service_ok {
+  border-color: var(--good-soft);
+}
+.service_error {
+  border-color: var(--danger-soft);
+}
 
 .chartsRow {
   display: grid;
@@ -102,7 +136,10 @@
   color: var(--muted);
 }
 
-.meta { font-size: 0.8rem; color: var(--muted); }
+.meta {
+  font-size: 0.8rem;
+  color: var(--muted);
+}
 
 .segmented {
   display: flex;
@@ -118,18 +155,47 @@
   border: none;
   color: var(--muted);
   cursor: pointer;
-  transition: background var(--ease), color var(--ease);
+  transition:
+    background var(--ease),
+    color var(--ease);
   border-right: 1px solid var(--line);
 }
-.seg:last-child { border-right: none; }
-.seg:hover { background: var(--panel-hover); color: var(--ink); }
-.segActive { background: var(--accent-soft) !important; color: var(--accent) !important; }
+.seg:last-child {
+  border-right: none;
+}
+.seg:hover {
+  background: var(--panel-hover);
+  color: var(--ink);
+}
+.segActive {
+  background: var(--accent-soft) !important;
+  color: var(--accent) !important;
+}
 
-.legend { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
-.legendItem { display: inline-flex; align-items: center; gap: 5px; font-size: 0.78rem; color: var(--muted); }
-.legendDot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+.legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 10px;
+}
+.legendItem {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 0.78rem;
+  color: var(--muted);
+}
+.legendDot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
 
-.feedList { display: flex; flex-direction: column; }
+.feedList {
+  display: flex;
+  flex-direction: column;
+}
 .feedRow {
   display: grid;
   grid-template-columns: 1fr 2fr auto auto;
@@ -141,10 +207,36 @@
   transition: background var(--ease);
   font-size: 0.875rem;
 }
-.feedRow:hover { background: var(--panel-hover); }
-.feedCompany { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.feedTitle   { color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.feedTime    { font-size: 0.78rem; color: var(--muted); font-family: var(--font-mono); white-space: nowrap; }
+.feedRow:hover {
+  background: var(--panel-hover);
+}
+.feedCompany {
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.feedTitle {
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.feedTime {
+  font-size: 0.78rem;
+  color: var(--muted);
+  font-family: var(--font-mono);
+  white-space: nowrap;
+}
 
-.empty { font-size: 0.875rem; color: var(--muted); padding: 8px 0; }
-.loading, .error { padding: 40px; text-align: center; color: var(--muted); }
+.empty {
+  font-size: 0.875rem;
+  color: var(--muted);
+  padding: 8px 0;
+}
+.loading,
+.error {
+  padding: 40px;
+  text-align: center;
+  color: var(--muted);
+}

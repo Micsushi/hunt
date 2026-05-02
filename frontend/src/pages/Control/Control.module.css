@@ -1,4 +1,8 @@
-.page { display: flex; flex-direction: column; gap: 18px; }
+.page {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
 
 .hero {
   display: flex;
@@ -86,9 +90,15 @@
   flex-shrink: 0;
 }
 
-.dotOk { background: var(--good); }
-.dotWarn { background: var(--warning); }
-.dotBad { background: var(--danger); }
+.dotOk {
+  background: var(--good);
+}
+.dotWarn {
+  background: var(--warning);
+}
+.dotBad {
+  background: var(--danger);
+}
 
 .badge {
   border-radius: var(--radius-pill);
@@ -99,9 +109,18 @@
   color: var(--muted);
 }
 
-.badgeOk { background: var(--good-soft); color: var(--good); }
-.badgeWarn { background: var(--warning-soft); color: var(--warning); }
-.badgeBad { background: var(--danger-soft); color: var(--danger); }
+.badgeOk {
+  background: var(--good-soft);
+  color: var(--good);
+}
+.badgeWarn {
+  background: var(--warning-soft);
+  color: var(--warning);
+}
+.badgeBad {
+  background: var(--danger-soft);
+  color: var(--danger);
+}
 
 .meta {
   color: var(--muted);
@@ -130,7 +149,10 @@
   font-weight: 650;
   font-size: 0.88rem;
   cursor: pointer;
-  transition: background var(--ease), border-color var(--ease), color var(--ease);
+  transition:
+    background var(--ease),
+    border-color var(--ease),
+    color var(--ease);
 }
 
 .btn:hover:not(:disabled) {
@@ -160,7 +182,9 @@
   cursor: progress;
 }
 
-.tableWrap { overflow-x: auto; }
+.tableWrap {
+  overflow-x: auto;
+}
 
 .table {
   width: 100%;
@@ -184,7 +208,9 @@
   vertical-align: top;
 }
 
-.table tr:last-child td { border-bottom: none; }
+.table tr:last-child td {
+  border-bottom: none;
+}
 
 .formGrid {
   display: grid;
@@ -232,8 +258,13 @@
 }
 
 @media (max-width: 860px) {
-  .hero { align-items: flex-start; flex-direction: column; }
-  .twoCol { grid-template-columns: 1fr; }
+  .hero {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+  .twoCol {
+    grid-template-columns: 1fr;
+  }
 }
 
 .pageHeader {
@@ -256,8 +287,14 @@
   align-self: flex-start;
   white-space: nowrap;
 }
-.statusPillOnline  { border-color: var(--good);   color: var(--good); }
-.statusPillOffline { border-color: var(--danger);  color: var(--danger); }
+.statusPillOnline {
+  border-color: var(--good);
+  color: var(--good);
+}
+.statusPillOffline {
+  border-color: var(--danger);
+  color: var(--danger);
+}
 
 .statusDot {
   width: 7px;

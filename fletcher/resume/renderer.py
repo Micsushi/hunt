@@ -24,6 +24,7 @@ def _escape_bullet(text: str) -> str:
     or LLM rewrites may have raw $, %, & which break LaTeX compilation.
     """
     import re
+
     # Escape each special char only when NOT already preceded by a backslash.
     result = text
     for char in ("$", "%", "&", "#"):

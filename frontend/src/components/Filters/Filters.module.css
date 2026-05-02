@@ -25,7 +25,10 @@
   font-weight: 600;
   color: var(--ink);
   cursor: pointer;
-  transition: background var(--ease), border-color var(--ease), transform var(--ease);
+  transition:
+    background var(--ease),
+    border-color var(--ease),
+    transform var(--ease);
 }
 
 .chip:hover {
@@ -79,16 +82,34 @@
   font-size: 0.88rem;
   font-weight: 600;
   cursor: pointer;
-  transition: background var(--ease), transform var(--ease);
+  transition:
+    background var(--ease),
+    transform var(--ease);
   white-space: nowrap;
 }
 
-.dirBtn  { background: var(--panel-strong); color: var(--ink); }
-.applyBtn { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }
-.resetBtn { background: var(--panel); color: var(--muted); }
+.dirBtn {
+  background: var(--panel-strong);
+  color: var(--ink);
+}
+.applyBtn {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--accent-ink);
+}
+.resetBtn {
+  background: var(--panel);
+  color: var(--muted);
+}
 
-.dirBtn:hover, .resetBtn:hover { transform: translateY(-1px); background: var(--panel-strong); }
-.applyBtn:hover { transform: translateY(-1px); }
+.dirBtn:hover,
+.resetBtn:hover {
+  transform: translateY(-1px);
+  background: var(--panel-strong);
+}
+.applyBtn:hover {
+  transform: translateY(-1px);
+}
 
 .limitRow {
   display: flex;

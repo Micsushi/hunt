@@ -12,7 +12,7 @@ def _get_fernet():
     if not key:
         raise RuntimeError(
             "HUNT_CREDENTIAL_KEY is not set. "
-            "Generate one with: python -c \"from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())\""
+            'Generate one with: python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"'
         )
     from cryptography.fernet import Fernet
 

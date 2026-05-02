@@ -1,43 +1,43 @@
 :root {
   /* Palette: coolors.co/474a2c-636940-59a96a-9bdeac-b4e7ce */
-  --bg:             #0f1a14;
-  --bg-grad-top:    #0f1a14;
+  --bg: #0f1a14;
+  --bg-grad-top: #0f1a14;
   --bg-grad-bottom: #0b120e;
-  --panel:          #172212;
-  --panel-strong:   #1d2b18;
-  --panel-hover:    #223320;
+  --panel: #172212;
+  --panel-strong: #1d2b18;
+  --panel-hover: #223320;
 
-  --ink:            #d4f0dc;
-  --muted:          #9bb69f;
-  --ink-inverse:    #07100a;
+  --ink: #d4f0dc;
+  --muted: #9bb69f;
+  --ink-inverse: #07100a;
 
-  --line:           #2a3f2a;
-  --line-strong:    #3a5a3a;
+  --line: #2a3f2a;
+  --line-strong: #3a5a3a;
 
-  --accent:         #59a96a;
-  --accent-soft:    #1e3a26;
-  --accent-ink:     #07100a;
-  --accent-dim:     #4f965f;
+  --accent: #59a96a;
+  --accent-soft: #1e3a26;
+  --accent-ink: #07100a;
+  --accent-dim: #4f965f;
 
-  --good:           #9bdeac;
-  --good-soft:      #1a2e1e;
-  --warning:        #f0b429;
-  --warning-soft:   #2d2410;
-  --danger:         #f05252;
-  --danger-soft:    #2d1414;
-  --info:           #7bc4d8;
-  --info-soft:      #102030;
+  --good: #9bdeac;
+  --good-soft: #1a2e1e;
+  --warning: #f0b429;
+  --warning-soft: #2d2410;
+  --danger: #f05252;
+  --danger-soft: #2d1414;
+  --info: #7bc4d8;
+  --info-soft: #102030;
 
-  --shadow:         0 4px 16px rgba(0, 0, 0, 0.45);
-  --shadow-raised:  0 8px 28px rgba(0, 0, 0, 0.6);
+  --shadow: 0 4px 16px rgba(0, 0, 0, 0.45);
+  --shadow-raised: 0 8px 28px rgba(0, 0, 0, 0.6);
 
-  --font-sans: "Segoe UI", system-ui, -apple-system, sans-serif;
-  --font-mono: Consolas, "SFMono-Regular", "SF Mono", monospace;
+  --font-sans: 'Segoe UI', system-ui, -apple-system, sans-serif;
+  --font-mono: Consolas, 'SFMono-Regular', 'SF Mono', monospace;
 
-  --radius-sm:   6px;
-  --radius-md:   10px;
-  --radius-lg:   14px;
-  --radius-xl:   16px;
+  --radius-sm: 6px;
+  --radius-md: 10px;
+  --radius-lg: 14px;
+  --radius-xl: 16px;
   --radius-pill: 999px;
 
   --ease: 140ms ease;

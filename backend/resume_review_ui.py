@@ -131,10 +131,7 @@ def summarize_tailoring(structured: dict[str, Any] | None) -> tuple[list[str], d
                 counts["reuses"] += 1
 
     skills = structured.get("skills") or {}
-    skill_n = sum(
-        len(skills.get(k) or [])
-        for k in ("languages", "frameworks", "developer_tools")
-    )
+    skill_n = sum(len(skills.get(k) or []) for k in ("languages", "frameworks", "developer_tools"))
     if counts["rewritten_visible"]:
         lines.append(f"Reworded {counts['rewritten_visible']} bullet(s) vs your base resume.")
     if counts["reuses"]:
@@ -142,7 +139,9 @@ def summarize_tailoring(structured: dict[str, Any] | None) -> tuple[list[str], d
     if skill_n:
         lines.append(f"Skills block lists {skill_n} entries (JD-weighted ordering).")
     if not lines:
-        lines.append("No bullet-level diff metadata on this attempt (re-run Fletcher after upgrade).")
+        lines.append(
+            "No bullet-level diff metadata on this attempt (re-run Fletcher after upgrade)."
+        )
     return lines, counts
 
 
@@ -200,17 +199,23 @@ def build_resume_review_html(
 
     parts.append('<div class="resume-review-shell">')
     parts.append('<div class="resume-review-doc">')
-    parts.append(f'<p class="muted tiny">{len(terms)} keyword phrase(s) from the job description are highlighted below.</p>')
+    parts.append(
+        f'<p class="muted tiny">{len(terms)} keyword phrase(s) from the job description are highlighted below.</p>'
+    )
 
     for entry in structured.get("experience_entries") or []:
         eid = html.escape(str(entry.get("entry_id") or "experience"))
-        parts.append(f'<h4 class="resume-section-h">Experience <span class="mono tiny">{eid}</span></h4>')
+        parts.append(
+            f'<h4 class="resume-section-h">Experience <span class="mono tiny">{eid}</span></h4>'
+        )
         for b in entry.get("bullet_plan") or []:
             parts.append(render_bullet_block(b, terms, entry_label=f"Experience {eid}"))
 
     for entry in structured.get("project_entries") or []:
         eid = html.escape(str(entry.get("entry_id") or "project"))
-        parts.append(f'<h4 class="resume-section-h">Project <span class="mono tiny">{eid}</span></h4>')
+        parts.append(
+            f'<h4 class="resume-section-h">Project <span class="mono tiny">{eid}</span></h4>'
+        )
         for b in entry.get("bullet_plan") or []:
             parts.append(render_bullet_block(b, terms, entry_label=f"Project {eid}"))
 
@@ -231,13 +236,15 @@ def build_resume_review_html(
     summary_lines, _counts = summarize_tailoring(structured)
     parts.append('<aside class="resume-review-aside">')
     parts.append('<h3 class="resume-aside-h">What changed</h3>')
-    parts.append("<ul class=\"resume-summary-list\">")
+    parts.append('<ul class="resume-summary-list">')
     for line in summary_lines:
         parts.append(f"<li>{html.escape(line)}</li>")
     parts.append("</ul>")
 
     parts.append('<h3 class="resume-aside-h">Tune next run (manual)</h3>')
-    parts.append('<p class="muted tiny">Jobright-style quick prompts — copy one and use with your own LLM or a future Fletcher API.</p>')
+    parts.append(
+        '<p class="muted tiny">Jobright-style quick prompts — copy one and use with your own LLM or a future Fletcher API.</p>'
+    )
     suggestions = [
         "Use stronger action verbs in the top experience bullets.",
         "Shorten bullets to free space for more JD keywords.",

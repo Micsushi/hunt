@@ -255,7 +255,9 @@ class Component4CliTests(unittest.TestCase):
         self.assertTrue(apply_context_exists)
         self.assertEqual(apply_context["browser_lane"], "isolated")
         self.assertEqual(c3_context["browserLane"], "isolated")
-        self.assertTrue(c3_context["selectedResumeDataUrl"].startswith("data:application/pdf;base64,"))
+        self.assertTrue(
+            c3_context["selectedResumeDataUrl"].startswith("data:application/pdf;base64,")
+        )
         self.assertEqual(job["status"], "claimed")
 
     def test_end_to_end_review_then_submit_flow_records_events(self) -> None:

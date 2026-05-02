@@ -4,32 +4,32 @@
 export const ATS_REGISTRY = [
   {
     name: "workday",
-    hostPatterns: ["workday.com", "myworkdayjobs.com"]
+    hostPatterns: ["workday.com", "myworkdayjobs.com"],
   },
   {
     name: "greenhouse",
-    hostPatterns: ["boards.greenhouse.io", "app.greenhouse.io"]
+    hostPatterns: ["boards.greenhouse.io", "app.greenhouse.io"],
   },
   {
     name: "lever",
-    hostPatterns: ["jobs.lever.co"]
+    hostPatterns: ["jobs.lever.co"],
   },
   {
     name: "ashby",
-    hostPatterns: ["jobs.ashbyhq.com"]
+    hostPatterns: ["jobs.ashbyhq.com"],
   },
   {
     name: "smartrecruiters",
-    hostPatterns: ["jobs.smartrecruiters.com"]
+    hostPatterns: ["jobs.smartrecruiters.com"],
   },
   {
     name: "icims",
-    hostPatterns: ["icims.com"]
+    hostPatterns: ["icims.com"],
   },
   {
     name: "bamboohr",
-    hostPatterns: ["bamboohr.com"]
-  }
+    hostPatterns: ["bamboohr.com"],
+  },
 ];
 
 // Returns the ATS name for a URL string, or "unknown".

@@ -28,7 +28,9 @@ def _find_repo_python() -> str:
             ]
         )
     else:
-        candidates.extend([REPO_ROOT / ".venv" / "bin" / "python", REPO_ROOT / "venv" / "bin" / "python"])
+        candidates.extend(
+            [REPO_ROOT / ".venv" / "bin" / "python", REPO_ROOT / "venv" / "bin" / "python"]
+        )
     for c in candidates:
         if c.exists():
             return str(c)
@@ -123,6 +125,7 @@ def cmd_parse_resume(args):
 def cmd_test_job(args):
     import json
     import time
+
     sys.path.insert(0, str(REPO_ROOT))
     from fletcher.pipeline import generate_resume_for_job
 
@@ -131,7 +134,7 @@ def cmd_test_job(args):
     r = generate_resume_for_job(args.job_id)
     elapsed = time.time() - start
 
-    print(f"\n--- Result ---")
+    print("\n--- Result ---")
     print(f"Total time  : {elapsed:.1f}s")
     print(f"Status      : {r['status']}")
     print(f"Compile     : {r['compile_status']}")
@@ -142,7 +145,7 @@ def cmd_test_job(args):
     if summary_path:
         try:
             data = json.loads(Path(summary_path).read_text(encoding="utf-8"))
-            print(f"\n--- AI Summary (call 2) ---")
+            print("\n--- AI Summary (call 2) ---")
             print(f"Success     : {data.get('success')}")
             print(f"Duration    : {data.get('duration_ms')}ms")
             print(f"Keywords    : {data.get('keywords_used')}")
@@ -157,7 +160,9 @@ def cmd_test_job(args):
         try:
             data = json.loads(Path(bullet_path).read_text(encoding="utf-8"))
             rewrites = data.get("rewrites") or []
-            print(f"\n--- Bullet rewrites ({data.get('successful_rewrites', 0)}/{data.get('total_rewrites', 0)} ok, {data.get('total_duration_ms', 0)}ms total) ---")
+            print(
+                f"\n--- Bullet rewrites ({data.get('successful_rewrites', 0)}/{data.get('total_rewrites', 0)} ok, {data.get('total_duration_ms', 0)}ms total) ---"
+            )
             for r2 in rewrites:
                 status = "ok" if r2.get("success") else "FAIL"
                 print(f"  [{status}] bullet[{r2['bullet_idx']}] keywords={r2['keywords']}")
@@ -173,9 +178,10 @@ def cmd_test_job(args):
 
 def cmd_index(args):
     import json
+
     sys.path.insert(0, str(REPO_ROOT))
-    from fletcher.llm import rag
     from fletcher import config
+    from fletcher.llm import rag
 
     action = args.action
     if action == "build":
@@ -211,7 +217,9 @@ def cmd_index(args):
             for i, h in enumerate(hits, 1):
                 bucket = "bullet" if h["similarity"] >= threshold else "summary"
                 print(f"  {i}. [{bucket:7s}] score={h['similarity']:.4f} | {h['text'][:80]}")
-                print(f"          source={h['meta'].get('source')} entry={h['meta'].get('entry_id')}")
+                print(
+                    f"          source={h['meta'].get('source')} entry={h['meta'].get('entry_id')}"
+                )
     raise SystemExit(0)
 
 
@@ -223,7 +231,10 @@ def cmd_tests(_args):
         "test_resume_review_ui.py",
     ]
     for pattern in patterns:
-        result = subprocess.run([PYTHON, "-m", "unittest", "discover", "-s", "tests", "-p", pattern, "-v"], cwd=REPO_ROOT)
+        result = subprocess.run(
+            [PYTHON, "-m", "unittest", "discover", "-s", "tests", "-p", pattern, "-v"],
+            cwd=REPO_ROOT,
+        )
         if result.returncode != 0:
             raise SystemExit(result.returncode)
     raise SystemExit(0)
@@ -273,14 +284,24 @@ def build_parser() -> argparse.ArgumentParser:
     parse.add_argument("--roundtrip-tex", default=None, dest="roundtrip_tex")
     parse.set_defaults(func=cmd_parse_resume)
 
-    test_job = sub.add_parser("test-job", help="Run pipeline on one job and print timing + LLM output.")
+    test_job = sub.add_parser(
+        "test-job", help="Run pipeline on one job and print timing + LLM output."
+    )
     test_job.add_argument("job_id", type=int)
     test_job.set_defaults(func=cmd_test_job)
 
     index = sub.add_parser("index", help="Manage the RAG vector index.")
-    index.add_argument("action", choices=["build", "status", "clear", "query"], help="build: force rebuild | status: show info | clear: delete index | query: test a keyword")
-    index.add_argument("keyword", nargs="?", default=None, help="keyword to query (required for query action)")
-    index.add_argument("--top", type=int, default=5, help="number of results to show for query (default: 5)")
+    index.add_argument(
+        "action",
+        choices=["build", "status", "clear", "query"],
+        help="build: force rebuild | status: show info | clear: delete index | query: test a keyword",
+    )
+    index.add_argument(
+        "keyword", nargs="?", default=None, help="keyword to query (required for query action)"
+    )
+    index.add_argument(
+        "--top", type=int, default=5, help="number of results to show for query (default: 5)"
+    )
     index.set_defaults(func=cmd_index)
 
     fx = sub.add_parser(
@@ -302,4 +323,3 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-

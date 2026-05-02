@@ -87,7 +87,9 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="C0 (UI / control plane) operator CLI.")
     sub = parser.add_subparsers(dest="command", required=True)
 
-    serve = sub.add_parser("serve", help="Build the frontend if needed and start the C0 control plane.")
+    serve = sub.add_parser(
+        "serve", help="Build the frontend if needed and start the C0 control plane."
+    )
     serve.add_argument(
         "--build",
         action="store_true",
@@ -95,7 +97,9 @@ def build_parser() -> argparse.ArgumentParser:
     )
     serve.set_defaults(func=cmd_serve)
 
-    build = sub.add_parser("build", help="Compile the React frontend (frontend/ -> frontend/dist/).")
+    build = sub.add_parser(
+        "build", help="Compile the React frontend (frontend/ -> frontend/dist/)."
+    )
     build.set_defaults(func=cmd_build)
 
     return parser
@@ -110,4 +114,3 @@ def main(argv: list[str] | None = None) -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-

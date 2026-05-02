@@ -1,5 +1,11 @@
 import type { ComponentSetting, LinkedInAccount, SystemStatus } from '@/api/control'
-import type { BreakdownData, DailyDigest, QueueAgeData, TimelineData, VelocityData } from '@/api/summary'
+import type {
+  BreakdownData,
+  DailyDigest,
+  QueueAgeData,
+  TimelineData,
+  VelocityData,
+} from '@/api/summary'
 import type { Job, JobDetail, ResumeAttempt } from '@/types/job'
 import type { AuthStatus, LogsData, QueueSummary } from '@/types/summary'
 
@@ -122,7 +128,13 @@ export const MOCK_LOGS: LogsData = {
   audit: [],
   logs: [
     { at: now, service: 'c0', level: 'INFO', message: 'mock mode active', detail: null },
-    { at: now, service: 'c1', level: 'INFO', message: 'job discovery disabled in mock mode', detail: null },
+    {
+      at: now,
+      service: 'c1',
+      level: 'INFO',
+      message: 'job discovery disabled in mock mode',
+      detail: null,
+    },
   ],
 }
 
@@ -133,7 +145,13 @@ export const MOCK_SYSTEM_STATUS: SystemStatus = {
     c0: { component: 'c0', status: 'ok', status_code: 200, url: 'mock://c0' },
     c1: { component: 'c1', status: 'unreachable', status_code: null, url: 'mock://c1' },
     c2: { component: 'c2', status: 'unreachable', status_code: null, url: 'mock://c2' },
-    c3: { component: 'c3', status: 'unreachable', status_code: null, pending_fills: 0, url: 'mock://c3' },
+    c3: {
+      component: 'c3',
+      status: 'unreachable',
+      status_code: null,
+      pending_fills: 0,
+      url: 'mock://c3',
+    },
     c4: { component: 'c4', status: 'unreachable', status_code: null, url: 'mock://c4' },
   },
 }

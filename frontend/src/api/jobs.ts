@@ -20,7 +20,9 @@ export function fetchJobs(q: JobsQuery = {}): Promise<Job[]> {
   return get<Job[]>(`/api/jobs?${buildParams(q)}`)
 }
 
-export function fetchJobCount(q: Omit<JobsQuery, 'limit' | 'page' | 'sort' | 'direction'>): Promise<{ count: number }> {
+export function fetchJobCount(
+  q: Omit<JobsQuery, 'limit' | 'page' | 'sort' | 'direction'>,
+): Promise<{ count: number }> {
   const p = new URLSearchParams()
   if (q.source) p.set('source', q.source)
   if (q.status) p.set('status', q.status)
@@ -71,14 +73,15 @@ export function patchJob(id: number, fields: PatchableJobFields): Promise<{ stat
   return patch(`/api/jobs/${id}`, fields)
 }
 
-export function fetchAdjacentJobs(id: number): Promise<{ prev_id: number | null; next_id: number | null }> {
+export function fetchAdjacentJobs(
+  id: number,
+): Promise<{ prev_id: number | null; next_id: number | null }> {
   return get(`/api/jobs/${id}/adjacent`)
 }
 
 export function deleteJob(id: number): Promise<{ status: string }> {
   return del(`/api/jobs/${id}`)
 }
-
 
 export function bulkSelection(payload: {
   action: 'requeue' | 'set_status' | 'delete'

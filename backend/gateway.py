@@ -18,7 +18,7 @@ router = APIRouter(prefix="/api/gateway", tags=["gateway"])
 
 def _require_auth(request: Request) -> str:
     """Reuse the same session-cookie auth as the rest of the review app."""
-    from backend.auth_session import validate_session, SESSION_COOKIE_NAME
+    from backend.auth_session import SESSION_COOKIE_NAME, validate_session
 
     token = request.cookies.get(SESSION_COOKIE_NAME, "")
     username = validate_session(token)
@@ -89,7 +89,11 @@ async def c1_queue(_auth: str = Depends(_require_auth)):
 async def c1_scrape(request: Request, _auth: str = Depends(_require_auth)):
     from hunter.config import HUNT_HUNTER_URL
 
-    body = await request.json() if request.headers.get("content-type", "").startswith("application/json") else {}
+    body = (
+        await request.json()
+        if request.headers.get("content-type", "").startswith("application/json")
+        else {}
+    )
     return await _proxy_post(f"{HUNT_HUNTER_URL}/scrape", body)
 
 
@@ -97,7 +101,11 @@ async def c1_scrape(request: Request, _auth: str = Depends(_require_auth)):
 async def c1_enrich(request: Request, _auth: str = Depends(_require_auth)):
     from hunter.config import HUNT_HUNTER_URL
 
-    body = await request.json() if request.headers.get("content-type", "").startswith("application/json") else {}
+    body = (
+        await request.json()
+        if request.headers.get("content-type", "").startswith("application/json")
+        else {}
+    )
     return await _proxy_post(f"{HUNT_HUNTER_URL}/enrich", body)
 
 
@@ -132,7 +140,11 @@ async def c2_generate(request: Request, _auth: str = Depends(_require_auth)):
 async def c2_generate_once(request: Request, _auth: str = Depends(_require_auth)):
     from hunter.config import HUNT_FLETCHER_URL
 
-    body = await request.json() if request.headers.get("content-type", "").startswith("application/json") else {}
+    body = (
+        await request.json()
+        if request.headers.get("content-type", "").startswith("application/json")
+        else {}
+    )
     return await _proxy_post(f"{HUNT_FLETCHER_URL}/generate-once", body)
 
 

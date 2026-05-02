@@ -33,17 +33,19 @@
 
   // Returns all visible, enabled elements matching selector.
   u.getVisibleElements = function (selector) {
-    return Array.from(document.querySelectorAll(selector)).filter(function (el) {
-      var s = window.getComputedStyle(el);
-      var r = el.getBoundingClientRect();
-      return (
-        s.display !== "none" &&
-        s.visibility !== "hidden" &&
-        r.width > 0 &&
-        r.height > 0 &&
-        !el.disabled
-      );
-    });
+    return Array.from(document.querySelectorAll(selector)).filter(
+      function (el) {
+        var s = window.getComputedStyle(el);
+        var r = el.getBoundingClientRect();
+        return (
+          s.display !== "none" &&
+          s.visibility !== "hidden" &&
+          r.width > 0 &&
+          r.height > 0 &&
+          !el.disabled
+        );
+      },
+    );
   };
 
   // Fire the events frameworks listen for to pick up programmatic value changes.
@@ -83,17 +85,19 @@
 
   // Build a lowercase descriptor string for a field used to match profile keys.
   u.getDescriptor = function (el, containerSelectors) {
-    return u.normalizeText(
-      [
-        el.name,
-        el.id,
-        el.getAttribute("aria-label"),
-        el.getAttribute("placeholder"),
-        u.getContainerText(el, containerSelectors)
-      ]
-        .filter(Boolean)
-        .join(" ")
-    ).toLowerCase();
+    return u
+      .normalizeText(
+        [
+          el.name,
+          el.id,
+          el.getAttribute("aria-label"),
+          el.getAttribute("placeholder"),
+          u.getContainerText(el, containerSelectors),
+        ]
+          .filter(Boolean)
+          .join(" "),
+      )
+      .toLowerCase();
   };
 
   // Sort fill candidates top-to-bottom, left-to-right by bounding rect.
@@ -112,20 +116,28 @@
   // Returns an empty string if no match.
   u.chooseProfileValue = function (descriptor, profile) {
     var mapping = [
-      [["first name", "given name"], (profile.fullName.split(" ")[0] || "")],
-      [["last name", "family name", "surname"], (profile.fullName.split(" ").slice(1).join(" ") || "")],
+      [["first name", "given name"], profile.fullName.split(" ")[0] || ""],
+      [
+        ["last name", "family name", "surname"],
+        profile.fullName.split(" ").slice(1).join(" ") || "",
+      ],
       [["full name", "legal name", "name"], profile.fullName],
       [["email", "e-mail"], profile.email],
       [["phone", "mobile"], profile.phone],
       [["city", "location", "address"], profile.location],
       [["linkedin"], profile.linkedinUrl],
       [["github"], profile.githubUrl],
-      [["website", "portfolio", "personal site"], profile.websiteUrl]
+      [["website", "portfolio", "personal site"], profile.websiteUrl],
     ];
     for (var i = 0; i < mapping.length; i++) {
       var keywords = mapping[i][0];
       var value = mapping[i][1];
-      if (keywords.some(function (k) { return descriptor.includes(k); }) && u.normalizeText(value)) {
+      if (
+        keywords.some(function (k) {
+          return descriptor.includes(k);
+        }) &&
+        u.normalizeText(value)
+      ) {
         return u.normalizeText(value);
       }
     }
@@ -135,17 +147,37 @@
   // --- answer generation ---------------------------------------------------
 
   var STOP_WORDS = new Set([
-    "about", "across", "ability", "candidate", "company", "customer",
-    "deliver", "experience", "including", "looking", "opportunity",
-    "preferred", "required", "responsible", "strong", "team",
-    "their", "using", "with", "work"
+    "about",
+    "across",
+    "ability",
+    "candidate",
+    "company",
+    "customer",
+    "deliver",
+    "experience",
+    "including",
+    "looking",
+    "opportunity",
+    "preferred",
+    "required",
+    "responsible",
+    "strong",
+    "team",
+    "their",
+    "using",
+    "with",
+    "work",
   ]);
 
   // Return the top-N highest-frequency meaningful tokens from a text blob.
   u.extractDescriptionTerms = function (text, maxTerms) {
     var max = maxTerms || 3;
     var counts = new Map();
-    var tokens = u.normalizeText(text).toLowerCase().match(/[a-z][a-z0-9+#/-]{3,}/g) || [];
+    var tokens =
+      u
+        .normalizeText(text)
+        .toLowerCase()
+        .match(/[a-z][a-z0-9+#/-]{3,}/g) || [];
     for (var i = 0; i < tokens.length; i++) {
       var t = tokens[i];
       if (!STOP_WORDS.has(t)) {
@@ -153,31 +185,55 @@
       }
     }
     return Array.from(counts.entries())
-      .sort(function (a, b) { return b[1] - a[1] || a[0].localeCompare(b[0]); })
+      .sort(function (a, b) {
+        return b[1] - a[1] || a[0].localeCompare(b[0]);
+      })
       .slice(0, max)
-      .map(function (pair) { return pair[0]; });
+      .map(function (pair) {
+        return pair[0];
+      });
   };
 
   // Generate a heuristic answer for a free-text question.
   // Returns { answerText, confidence, manualReviewRequired }.
-  u.generateAnswer = function (questionText, profile, applyContext, stripLongDash) {
+  u.generateAnswer = function (
+    questionText,
+    profile,
+    applyContext,
+    stripLongDash,
+  ) {
     var q = u.normalizeText(questionText).toLowerCase();
     var notes = u.normalizeText(profile.notes, stripLongDash);
     var jobTitle = u.normalizeText(applyContext.title, stripLongDash);
     var company = u.normalizeText(applyContext.company, stripLongDash);
     var descTerms = u.extractDescriptionTerms(applyContext.description);
-    var resumeTerms = u.extractDescriptionTerms(u.normalizeText(applyContext.selectedResumeSummary), 2);
+    var resumeTerms = u.extractDescriptionTerms(
+      u.normalizeText(applyContext.selectedResumeSummary),
+      2,
+    );
     var focusArea = descTerms.slice(0, 2).join(" and ");
     var resumeFocus = resumeTerms.join(" and ");
-    var contextRole = [jobTitle, company ? "at " + company : ""].filter(Boolean).join(" ");
-    var weakContext = (applyContext.concernFlags || []).includes("weak_description");
+    var contextRole = [jobTitle, company ? "at " + company : ""]
+      .filter(Boolean)
+      .join(" ");
+    var weakContext = (applyContext.concernFlags || []).includes(
+      "weak_description",
+    );
 
     if (q.includes("sponsor")) {
-      return { answerText: profile.sponsorshipRequired ? "Yes." : "No.", confidence: "high", manualReviewRequired: false };
+      return {
+        answerText: profile.sponsorshipRequired ? "Yes." : "No.",
+        confidence: "high",
+        manualReviewRequired: false,
+      };
     }
 
     if (q.includes("relocat")) {
-      return { answerText: profile.willingToRelocate ? "Yes." : "No.", confidence: "high", manualReviewRequired: false };
+      return {
+        answerText: profile.willingToRelocate ? "Yes." : "No.",
+        confidence: "high",
+        manualReviewRequired: false,
+      };
     }
 
     if (q.includes("salary")) {
@@ -186,42 +242,62 @@
           ? "I am flexible and open to discussing compensation based on the role and overall package."
           : "I am open to discussing compensation based on the role and overall package.",
         confidence: "medium",
-        manualReviewRequired: false
+        manualReviewRequired: false,
       };
     }
 
     if (q.includes("authorized") || q.includes("legally")) {
-      return { answerText: profile.workAuthorized ? "Yes." : "No.", confidence: "high", manualReviewRequired: false };
+      return {
+        answerText: profile.workAuthorized ? "Yes." : "No.",
+        confidence: "high",
+        manualReviewRequired: false,
+      };
     }
 
     if (q.includes("why") || q.includes("interest")) {
       var whyAnswer = contextRole
-        ? "I am interested in the " + contextRole + " opportunity because it aligns well with my background" +
+        ? "I am interested in the " +
+          contextRole +
+          " opportunity because it aligns well with my background" +
           (focusArea ? " in " + focusArea : "") +
           (resumeFocus ? " and with experience around " + resumeFocus : "") +
           " and would let me contribute quickly while continuing to grow."
         : "";
       return {
-        answerText: notes || whyAnswer ||
+        answerText:
+          notes ||
+          whyAnswer ||
           "I am interested in the role because it aligns well with my background and I believe I can contribute quickly while continuing to grow with the team.",
-        confidence: notes ? "medium" : (whyAnswer && !weakContext ? "medium" : "low"),
-        manualReviewRequired: !notes && (!whyAnswer || weakContext)
+        confidence: notes
+          ? "medium"
+          : whyAnswer && !weakContext
+            ? "medium"
+            : "low",
+        manualReviewRequired: !notes && (!whyAnswer || weakContext),
       };
     }
 
-    var fallback = contextRole && (focusArea || resumeFocus)
-      ? "I believe my background is a strong fit for the " + contextRole + " opportunity, especially around " +
-        (focusArea || resumeFocus) +
-        (focusArea && resumeFocus ? ", with experience in " + resumeFocus : "") + "."
-      : contextRole
-        ? "I believe my background is a strong fit for the " + contextRole +
-          " opportunity and I would be excited to contribute while continuing to grow in the role."
-        : "";
+    var fallback =
+      contextRole && (focusArea || resumeFocus)
+        ? "I believe my background is a strong fit for the " +
+          contextRole +
+          " opportunity, especially around " +
+          (focusArea || resumeFocus) +
+          (focusArea && resumeFocus
+            ? ", with experience in " + resumeFocus
+            : "") +
+          "."
+        : contextRole
+          ? "I believe my background is a strong fit for the " +
+            contextRole +
+            " opportunity and I would be excited to contribute while continuing to grow in the role."
+          : "";
     return {
-      answerText: fallback ||
+      answerText:
+        fallback ||
         "I believe my background is a strong fit for this opportunity, and I would be excited to contribute while continuing to grow in the role.",
       confidence: fallback && !weakContext ? "medium" : "low",
-      manualReviewRequired: !fallback || weakContext
+      manualReviewRequired: !fallback || weakContext,
     };
   };
 
@@ -234,18 +310,29 @@
     var noValues = ["no", "false", "not authorized", "i am not authorized"];
     var chooseOption = function (candidates) {
       return options.find(function (o) {
-        return candidates.some(function (c) { return u.normalizeText(o.text).toLowerCase() === c; });
+        return candidates.some(function (c) {
+          return u.normalizeText(o.text).toLowerCase() === c;
+        });
       });
     };
 
     var selectedOption = null;
 
     if (descriptor.includes("sponsor")) {
-      selectedOption = profile.sponsorshipRequired ? chooseOption(yesValues) : chooseOption(noValues);
-    } else if (descriptor.includes("authorized") || descriptor.includes("legally")) {
-      selectedOption = profile.workAuthorized ? chooseOption(yesValues) : chooseOption(noValues);
+      selectedOption = profile.sponsorshipRequired
+        ? chooseOption(yesValues)
+        : chooseOption(noValues);
+    } else if (
+      descriptor.includes("authorized") ||
+      descriptor.includes("legally")
+    ) {
+      selectedOption = profile.workAuthorized
+        ? chooseOption(yesValues)
+        : chooseOption(noValues);
     } else if (descriptor.includes("relocat")) {
-      selectedOption = profile.willingToRelocate ? chooseOption(yesValues) : chooseOption(noValues);
+      selectedOption = profile.willingToRelocate
+        ? chooseOption(yesValues)
+        : chooseOption(noValues);
     } else if (descriptor.includes("linkedin") && profile.linkedinUrl) {
       return u.setElementValue(el, profile.linkedinUrl, stripLongDash);
     }
@@ -260,7 +347,12 @@
 
   // Click the correct radio in a group based on the descriptor and profile flags.
   // containerSelectors: passed through to getDescriptor for individual radios.
-  u.fillRadioGroup = function (radios, descriptor, profile, containerSelectors) {
+  u.fillRadioGroup = function (
+    radios,
+    descriptor,
+    profile,
+    containerSelectors,
+  ) {
     var lowered = descriptor.toLowerCase();
     var choice = null;
 
@@ -287,10 +379,21 @@
   };
 
   // Attach the active resume PDF to a file input via DataTransfer.
-  u.attachResumeToFileInput = async function (fileInput, applyContext, defaultResume) {
-    var dataUrl = applyContext.selectedResumeDataUrl || defaultResume.pdfDataUrl;
-    var fileName = applyContext.selectedResumeName || defaultResume.pdfFileName || "resume.pdf";
-    var mimeType = applyContext.selectedResumeMimeType || defaultResume.pdfMimeType || "application/pdf";
+  u.attachResumeToFileInput = async function (
+    fileInput,
+    applyContext,
+    defaultResume,
+  ) {
+    var dataUrl =
+      applyContext.selectedResumeDataUrl || defaultResume.pdfDataUrl;
+    var fileName =
+      applyContext.selectedResumeName ||
+      defaultResume.pdfFileName ||
+      "resume.pdf";
+    var mimeType =
+      applyContext.selectedResumeMimeType ||
+      defaultResume.pdfMimeType ||
+      "application/pdf";
 
     if (!dataUrl) {
       return { attached: false, reason: "missing_resume_data" };
@@ -310,7 +413,9 @@
 
   // Coarse page-text scan to detect signed-out state.
   u.detectAuthState = function () {
-    var text = u.normalizeText(document.body ? document.body.innerText : "").toLowerCase();
+    var text = u
+      .normalizeText(document.body ? document.body.innerText : "")
+      .toLowerCase();
     if (text.includes("sign in") || text.includes("create account")) {
       return "signed_out_or_unknown";
     }

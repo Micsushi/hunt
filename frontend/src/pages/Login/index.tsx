@@ -38,7 +38,7 @@ export function LoginPage() {
               className={styles.input}
               type="text"
               value={username}
-              onChange={e => setUsername(e.target.value)}
+              onChange={(e) => setUsername(e.target.value)}
               autoComplete="username"
               autoFocus
               required
@@ -51,13 +51,17 @@ export function LoginPage() {
               className={styles.input}
               type="password"
               value={password}
-              onChange={e => setPassword(e.target.value)}
+              onChange={(e) => setPassword(e.target.value)}
               autoComplete="current-password"
               required
               disabled={loading}
             />
           </label>
-          {error && <p className={styles.error} role="alert">{error}</p>}
+          {error && (
+            <p className={styles.error} role="alert">
+              {error}
+            </p>
+          )}
           <button className={styles.submit} type="submit" disabled={loading}>
             {loading ? 'Signing in…' : 'Sign in'}
           </button>
