@@ -84,6 +84,10 @@ def get_db_path() -> Path:
     return Path(os.getenv("HUNT_DB_PATH", REPO_ROOT / "hunt.db")).expanduser().resolve()
 
 
+def resolve_runtime_root() -> Path:
+    return Path(os.getenv("HUNT_RESUME_ARTIFACTS_DIR", str(DEFAULT_RUNTIME_ROOT)))
+
+
 def resolve_base_resume_path(role_family: str) -> tuple[str, Path]:
     normalized_family = (role_family or "general").strip().lower()
     if normalized_family and normalized_family != "general":

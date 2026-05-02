@@ -5,7 +5,7 @@ import json
 from datetime import UTC, datetime
 from pathlib import Path
 
-from .config import AD_HOC_DIRNAME, ATTEMPTS_DIRNAME, DEFAULT_RUNTIME_ROOT
+from .config import AD_HOC_DIRNAME, ATTEMPTS_DIRNAME, resolve_runtime_root
 
 
 def utc_now_stamp() -> str:
@@ -16,10 +16,11 @@ def build_attempt_dir(
     *, job_id: int | None, role_family: str, ad_hoc_label: str | None = None
 ) -> Path:
     timestamp = utc_now_stamp()
+    runtime_root = resolve_runtime_root()
     if job_id is not None:
-        return DEFAULT_RUNTIME_ROOT / ATTEMPTS_DIRNAME / str(job_id) / f"{timestamp}_{role_family}"
+        return runtime_root / ATTEMPTS_DIRNAME / str(job_id) / f"{timestamp}_{role_family}"
     slug = ad_hoc_label or "manual"
-    return DEFAULT_RUNTIME_ROOT / AD_HOC_DIRNAME / f"{timestamp}_{slug}"
+    return runtime_root / AD_HOC_DIRNAME / f"{timestamp}_{slug}"
 
 
 def ensure_dir(path: Path) -> Path:
