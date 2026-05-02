@@ -38,9 +38,9 @@ Things that cut across all services.
 - [x] Decide whether to keep the combined `Dockerfile.review` (backend + frontend in one image) or split — keep both: `Dockerfile.review` is the backend that also serves the SPA directly (used for `c0` profile and direct-access fallback); `Dockerfile.frontend` (nginx) is the preferred web entry point for the full pipeline stack
 - [x] Confirm `docker-compose.pipeline.yml` is the standard way to run locally, or add a simpler root `docker-compose.yml` wrapper
 - [x] Add `X-Request-ID` middleware to C0 backend — generates a UUID per request, echoes it in the response header, and forwards it to C1/C2/C4 via the gateway proxy
-- [ ] Add request ID logging inside C1, C2, and C4 services — each service receives `X-Request-ID` from C0; they should log it to correlate service-level logs with the originating request
+- [x] Add request ID logging inside C1, C2, and C4 services: shared middleware logs one correlated line per request with service name, request ID, method, path, and status; the services also echo `X-Request-ID` on direct calls
 - [x] Discord notifications for C4 state transitions: awaiting submit approval, fill failed, run rejected at manual review — C1 already notifies on LinkedIn auth issues, rate limiting, automation detected, priority job found; set `HUNT_DISCORD_WEBHOOK_URL` to enable
-- [ ] Discord notification when a smoke test fails
+- [x] Discord notification when a smoke test fails: `python smoke.py ...` now sends a Discord webhook alert with target, script, exit code, and repo path when a smoke step returns non-zero
 - [x] Written release checklist — `docs/RELEASE_CHECKLIST.md`: local tests, local smoke, server2 smoke, update docs, update vault
 - [x] Short cross-platform test commands per service: `python test.py c0|c1|c2|c3|c4|shared|all`
 - [x] Short cross-platform quality check commands per service: `python quality.py c0|c1|c2|c3|c4|shared|frontend|all`

@@ -162,7 +162,11 @@ class Stage1Tests(unittest.TestCase):
                                     with patch.object(
                                         discovery,
                                         "send_discord_webhook_message",
-                                        return_value={"sent": True, "reason": None, "status_code": 204},
+                                        return_value={
+                                            "sent": True,
+                                            "reason": None,
+                                            "status_code": 204,
+                                        },
                                     ) as send_mock:
                                         summary = discovery.scrape(enrich_pending=False)
 

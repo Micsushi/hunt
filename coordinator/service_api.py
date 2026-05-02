@@ -6,8 +6,10 @@ from fastapi import Depends, FastAPI, HTTPException
 from pydantic import BaseModel
 
 from hunter.service_auth import require_service_token
+from hunter.service_request_id import ServiceRequestIDMiddleware
 
 app = FastAPI(title="C4 Coordinator Service")
+app.add_middleware(ServiceRequestIDMiddleware, service_name="c4-coordinator")
 
 
 def _get_service():

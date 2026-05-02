@@ -10,6 +10,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+from hunter.notifications import send_discord_webhook_message
+
 ROOT = Path(__file__).resolve().parent.parent
 SMOKE_TARGETS = {
     "all": (
@@ -106,6 +108,13 @@ def _resolve_target(name: str) -> tuple[str, tuple[str, ...]]:
     return canonical, scripts
 
 
+def _notify_smoke_failure(*, target: str, script: str, exit_code: int) -> None:
+    message = (
+        f"Hunt smoke failed: target={target} script={script} exit_code={exit_code} repo={ROOT}"
+    )
+    send_discord_webhook_message(message, username="Hunt Smoke")
+
+
 def main() -> int:
     """Entry point: resolve runner + target, then execute smoke scripts."""
     args = _parse_args(sys.argv[1:])
@@ -131,6 +140,11 @@ def main() -> int:
         extra_args = ["--existing"] if args.existing else []
         completed = subprocess.run([*runner, script, *extra_args], cwd=ROOT, check=False)
         if completed.returncode != 0:
+            _notify_smoke_failure(
+                target=target,
+                script=script,
+                exit_code=completed.returncode,
+            )
             print(
                 f"[local-smoke] FAILED at {script} with exit code {completed.returncode}",
                 file=sys.stderr,

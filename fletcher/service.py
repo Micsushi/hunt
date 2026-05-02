@@ -8,8 +8,10 @@ from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException
 from pydantic import BaseModel
 
 from hunter.service_auth import require_service_token
+from hunter.service_request_id import ServiceRequestIDMiddleware
 
 app = FastAPI(title="C2 Fletcher Service")
+app.add_middleware(ServiceRequestIDMiddleware, service_name="c2-fletcher")
 
 _generate_lock = threading.Lock()
 _generate_running = False

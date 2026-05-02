@@ -248,7 +248,7 @@ def test_one_command_local_smoke_runner_exists(monkeypatch):
 
     calls = []
 
-    def fake_run(command, cwd):
+    def fake_run(command, cwd, check=False):
         calls.append((command, cwd))
         return types.SimpleNamespace(returncode=0)
 
@@ -329,7 +329,7 @@ def test_local_smoke_runner_ignores_windows_bash_launcher(monkeypatch):
 def test_local_smoke_runner_target_mapping(monkeypatch):
     calls = []
 
-    def fake_run(command, cwd):
+    def fake_run(command, cwd, check=False):
         calls.append((command, cwd))
         return types.SimpleNamespace(returncode=0)
 
@@ -346,7 +346,7 @@ def test_local_smoke_runner_target_mapping(monkeypatch):
 def test_local_smoke_runner_alias_mapping(monkeypatch):
     calls = []
 
-    def fake_run(command, cwd):
+    def fake_run(command, cwd, check=False):
         calls.append((command, cwd))
         return types.SimpleNamespace(returncode=0)
 
@@ -366,6 +366,38 @@ def test_local_smoke_runner_unknown_target_returns_error(monkeypatch, capsys):
 
     assert run_local_smoke.main() == 1
     assert "Unknown smoke target" in capsys.readouterr().err
+
+
+def test_local_smoke_runner_sends_discord_notification_on_failure(monkeypatch):
+    calls = []
+    notifications = []
+
+    def fake_run(command, cwd, check=False):
+        calls.append((command, cwd, check))
+        return types.SimpleNamespace(returncode=7)
+
+    def fake_notify(message, username="Hunt", timeout_seconds=15):
+        notifications.append(
+            {
+                "message": message,
+                "username": username,
+                "timeout_seconds": timeout_seconds,
+            }
+        )
+        return {"sent": True, "reason": None, "status_code": 204}
+
+    monkeypatch.setattr(run_local_smoke, "_resolve_runner", lambda: ["bash"])
+    monkeypatch.setattr(run_local_smoke.subprocess, "run", fake_run)
+    monkeypatch.setattr(run_local_smoke, "send_discord_webhook_message", fake_notify)
+    monkeypatch.setattr(run_local_smoke.sys, "argv", ["run_local_smoke.py", "c1"])
+
+    assert run_local_smoke.main() == 7
+    assert calls == [(["bash", "scripts/smoke_hunter_container.sh"], run_local_smoke.ROOT, False)]
+    assert len(notifications) == 1
+    assert notifications[0]["username"] == "Hunt Smoke"
+    assert "target=c1" in notifications[0]["message"]
+    assert "script=scripts/smoke_hunter_container.sh" in notifications[0]["message"]
+    assert "exit_code=7" in notifications[0]["message"]
 
 
 def test_repo_root_smoke_shortcut_exists():
