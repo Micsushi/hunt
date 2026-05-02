@@ -32,6 +32,7 @@ from hunter.config import (
     TITLE_BLACKLIST,
     WATCHLIST,
 )
+from hunter.notifications import send_discord_webhook_message
 from hunter.db import add_job, count_ready_jobs_for_enrichment, init_db
 from hunter.search_lanes import title_matches_search_lane
 from hunter.url_utils import detect_ats_type, get_apply_host, normalize_optional_str
@@ -104,23 +105,57 @@ def build_enrichment_fields(source):
     return "unknown", None, "pending"
 
 
-def _notify_priority_job(job_id, job_data):
+def _record_priority_job(job_id, job_data):
     title = job_data.get("title") or "Unknown title"
     company = job_data.get("company") or "Unknown company"
     url = f"{REVIEW_APP_PUBLIC_URL.rstrip('/')}/jobs/{job_id}"
     logger = C1Logger(discord=True)
-    event = logger.event(
+    logger.event(
         key="hunt_last_priority_job",
         level="info",
         message=f"Priority job: {title} at {company}\n{url}",
         code="priority_job",
         details={"job_id": job_id, "company": company, "title": title},
-        discord=True,
+        discord=False,
     )
-    # Preserve a simpler error signal for the summary panel if Discord fails.
-    # (Discord send is best-effort; the runtime_state event still updates.)
-    if not event:
-        return
+    return {
+        "job_id": job_id,
+        "title": title,
+        "company": company,
+        "url": url,
+    }
+
+
+def _build_priority_jobs_message(priority_jobs):
+    if not priority_jobs:
+        return None
+    lines = [f"Priority jobs found: {len(priority_jobs)}"]
+    for item in priority_jobs:
+        lines.append(f"- {item['title']} at {item['company']}")
+        lines.append(f"  {item['url']}")
+    return "\n".join(lines)
+
+
+def _notify_priority_jobs(priority_jobs):
+    if not priority_jobs:
+        return None
+    message = _build_priority_jobs_message(priority_jobs)
+    result = send_discord_webhook_message(message)
+    if result.get("sent"):
+        return result
+    C1Logger(discord=False).event(
+        key="discord_last_priority_notify_error",
+        level="warn",
+        message=f"Priority job Discord notification failed: {result.get('reason')}",
+        code="priority_job_discord_failed",
+        details={
+            "reason": result.get("reason"),
+            "status_code": result.get("status_code"),
+            "priority_job_count": len(priority_jobs),
+        },
+        discord=False,
+    )
+    return result
 
 
 def scrape_single(site, term, location, category):
@@ -309,6 +344,7 @@ def scrape(
 
     inserted = 0
     refreshed = 0
+    priority_jobs = []
     for job_data in all_jobs:
         add_result = add_job(job_data)
         result = add_result[0]
@@ -316,12 +352,14 @@ def scrape(
         if result == "inserted":
             inserted += 1
             if job_data.get("priority"):
-                _notify_priority_job(job_id, job_data)
+                priority_jobs.append(_record_priority_job(job_id, job_data))
         elif result == "updated":
             refreshed += 1
             priority_changed = len(add_result) > 2 and add_result[2]
             if priority_changed:
-                _notify_priority_job(job_id, job_data)
+                priority_jobs.append(_record_priority_job(job_id, job_data))
+
+    _notify_priority_jobs(priority_jobs)
 
     skipped = len(all_jobs) - inserted - refreshed
     print(
