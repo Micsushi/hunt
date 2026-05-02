@@ -2,15 +2,27 @@
 
 Putting in the Work so it is less Work for you to apply for Work
 
-Automated Hunt runtime. Today it includes **C0 (Frontend)**, **C1 (Hunter)** discovery/enrichment, **C2 (Fletcher)** resume generation, a local **C3 (Executioner)** browser extension, and **C4 (Coordinator)** orchestration checkpoints. The most polished path is still C0 + C1; later components exist but need operator polish and live validation.
+Automated Hunt runtime. Today it includes **C0 (Frontend)**, **C1 (Hunter)** discovery/enrichment, **C2 (Fletcher)** resume generation, a local **C3 (Executioner)** browser extension, and **C4 (Coordinator)** orchestration scaffolding.
+
+Current operator confidence snapshot (subjective, as of 2026-05-01):
+- **C0**: mostly done
+- **C1**: about 70% done
+- **C2**: about 30% working
+- **C3**: not meaningfully tested end to end yet
+- **C4**: not really implemented end to end yet
+
+The most solid path today is still **C0 + C1**. C2 exists in partial form. C3 and C4 both have code in the repo, but they should still be treated as unproven until live browser-backed runs are validated.
+
+C0 note: the React SPA is the primary operator UI, but `/legacy/*` server-rendered routes still exist as fallback while we retire them.
 
 Component rule: build each component so it can run and be tested on its own. Today that means **C0 (Frontend)** should remain usable through `backend/app.py` against the shared DB/artifacts even if other component runtimes are not running, and **C1/C2/C3** should keep direct terminal-driven workflows without requiring the UI. **C4 (Coordinator)** is the only intentionally coupled component: it depends on C1/C2/C3 contracts to do end-to-end orchestration, but the other components must not depend on C4 to do their own work.
 
 **Names and folders:** see **`docs/NAMING.md`** (C1 code is the **`hunter`** package; **`hunter/scraper.py`** is the discovery script name only).
 
 Current focus:
+- keep C0 stable and documented accurately
 - validate C1 (Hunter) on server2 against Postgres
-- polish C0 controls for C1 status, scrape/enrich, settings, and LinkedIn accounts
+- move C2 from partial pipeline to a usable operator workflow
 - keep Easy Apply classified as `easy_apply` and excluded from downstream external-apply automation
 
 ## C1 (Hunter) v0.1 : how it runs
@@ -20,7 +32,7 @@ Current focus:
 - **Service API** : **`hunter/service.py`** exposes status, queue, scrape, enrich, and account reauth endpoints for C0.
 - **Control plane** : **`backend/app.py`** serves the C0 dashboard plus filter, sort, search jobs, errors, artifacts, and gateway routes over the same DB.
 
-**Component versions and future milestones:** **`docs/roadmap.md`** (snapshot table + draft v0.2+ ideas).
+**Component versions and future milestones:** **`docs/roadmap.md`**.
 
 ## Setup (Ubuntu)
 
@@ -47,30 +59,30 @@ The legacy systemd helper is still available, but current container smoke work u
 
 ```bash
 source venv/bin/activate
-python hunter/scraper.py        # single run
-python hunter/runner.py         # continuous loop
+python hunter/scraper.py
+python hunter/runner.py
 ```
 
 ## Config
 
 Edit `hunter/config.py`:
 - `SEARCH_TERMS` : what to search
-- `HOURS_OLD` : how far back to look (default 24h)
-- `RUN_INTERVAL_SECONDS` : time between runs (default 600 = 10min)
-- `WATCHLIST` : companies you want to apply to manually (flagged as `priority=1`, ignored by agents)
+- `HOURS_OLD` : how far back to look
+- `RUN_INTERVAL_SECONDS` : time between runs
+- `WATCHLIST` : companies you want to apply to manually
 - `TITLE_BLACKLIST` : job titles to filter out
 
 ## Planning Docs
 
-- **Component IDs and code names:** `docs/NAMING.md` (C1 Hunter, C2 Fletcher, C3 Executioner, C4 Coordinator)
-- System roadmap (includes version snapshot and draft milestones): `docs/roadmap.md`
-- Shared glossary (terms for C1–C4): `docs/GLOSSARY.md`
+- **Component IDs and code names:** `docs/NAMING.md`
+- System roadmap: `docs/roadmap.md`
+- Shared glossary: `docs/GLOSSARY.md`
 - Local Postgres/container smoke tests: `docs/LOCAL_POSTGRES_SMOKES.md`
 - Live fix tracker: `docs/TODO.md`
 
 Repo homes by component:
 - `frontend/` + `backend/` : **C0 (Frontend)** UI and control-plane backend
-- `hunter/` : **C1 (Hunter)** runtime package (discovery script: `hunter/scraper.py`)
+- `hunter/` : **C1 (Hunter)** runtime package
 - `fletcher/` : **C2 (Fletcher)** source and contracts
 - `executioner/` : **C3 (Executioner)** source and fixtures
 - `coordinator/` : **C4 (Coordinator)** source and contracts
@@ -81,9 +93,9 @@ Testing posture by component:
 - C4: depends on upstream/downstream component outputs by design
 
 Current local checkpoint for later components:
-- `fletcher/` : **C2 (Fletcher)** — service and pipeline exist; webpage workflow, profile polish, and LLM/API-key work remain in `docs/TODO.md`
-- `executioner/` contains an initial local **C3 (Executioner)** Workday extension implementation; live C0/C4 polling and postback still need validation
-- `coordinator/` contains **C4 (Coordinator)** readiness/apply-prep/runtime plus a Postgres-backed e2e smoke for the run/fill/approval flow; server2 API-level bridge has been validated, live browser validation remains
+- `fletcher/` : **C2 (Fletcher)** partial implementation only. Service and pipeline exist, but the operator workflow and generation quality work are still incomplete.
+- `executioner/` : **C3 (Executioner)** local extension implementation exists, but it has not been meaningfully validated end to end through the live pipeline yet.
+- `coordinator/` : **C4 (Coordinator)** scaffolding, service routes, and smoke-test pieces exist, but it should still be treated as early-stage orchestration code rather than a completed component.
 
 ## Legacy Helpers
 
@@ -94,7 +106,7 @@ Older one-off setup and run helpers now live under:
 - `tools/legacy/setup.bat`
 - `tools/legacy/hunt.service`
 
-The preferred modern entrypoints are **C1 (Hunter)** scoped (not the whole Hunt product name):
+The preferred modern entrypoints are **C1 (Hunter)** scoped:
 - `.\hunter.ps1` (Windows PowerShell)
 - `hunter.cmd` (Windows cmd)
 - `./hunter.sh` (POSIX)
