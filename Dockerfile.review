@@ -30,6 +30,7 @@ RUN apt-get update \
 COPY hunter/requirements.txt /tmp/requirements.txt
 RUN pip install --no-cache-dir -r /tmp/requirements.txt
 
+COPY shared /app/shared
 COPY backend /app/backend
 COPY control_plane_api.py /app/control_plane_api.py
 COPY hunter /app/hunter

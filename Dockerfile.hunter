@@ -10,6 +10,7 @@ COPY hunter/requirements.txt /tmp/requirements.txt
 RUN pip install --no-cache-dir -r /tmp/requirements.txt \
   && python -m playwright install --with-deps chromium
 
+COPY shared /app/shared
 COPY hunter /app/hunter
 
 EXPOSE 8001

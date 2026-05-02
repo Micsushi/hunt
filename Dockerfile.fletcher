@@ -19,6 +19,7 @@ RUN apt-get update \
 COPY hunter/requirements.txt /tmp/requirements.txt
 RUN pip install --no-cache-dir -r /tmp/requirements.txt
 
+COPY shared /app/shared
 COPY hunter /app/hunter
 COPY fletcher /app/fletcher
 COPY main.tex /app/main.tex

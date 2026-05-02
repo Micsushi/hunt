@@ -8,6 +8,7 @@ WORKDIR /app
 COPY hunter/requirements.txt /tmp/requirements.txt
 RUN pip install --no-cache-dir -r /tmp/requirements.txt
 
+COPY shared /app/shared
 COPY coordinator /app/coordinator
 COPY fletcher /app/fletcher
 COPY hunter /app/hunter
