@@ -40,6 +40,10 @@ Things that cut across all services.
 - [x] Add `X-Request-ID` middleware to C0 backend — generates a UUID per request, echoes it in the response header, and forwards it to C1/C2/C4 via the gateway proxy
 - [x] Add request ID logging inside C1, C2, and C4 services: shared middleware logs one correlated line per request with service name, request ID, method, path, and status; the services also echo `X-Request-ID` on direct calls
 - [x] Discord notifications for C4 state transitions: awaiting submit approval, fill failed, run rejected at manual review — C1 already notifies on LinkedIn auth issues, rate limiting, automation detected, priority job found; set `HUNT_DISCORD_WEBHOOK_URL` to enable
+- [x] Consolidate notifications into a shared library: `shared/notifications.py` is the canonical webhook util; `hunter/notifications.py` and `coordinator/notifications.py` re-export from it; C4 now writes run events to `runtime_state` so C0 Logs page shows them; C2/C3 can `from shared.notifications import send_discord_webhook_message` when ready
+- [x] Shared timestamp util: `shared/timestamps.py:utc_iso()` — consolidates 4 near-identical `_utc_iso()` definitions across C1, C4, Fletcher
+- [ ] Shared JSON artifact writer: `shared/storage.py:write_json_artifact(path, payload) -> str` — 4 near-identical `_write_json()` functions in coordinator/apply_prep.py, coordinator/service.py, hunter/failure_artifacts.py, fletcher/storage.py; differences are sort_keys and trailing newline
+- [ ] Shared request ID middleware base: `shared/request_id.py` — `backend/request_id.py` and `hunter/service_request_id.py` are ~80% identical; hunter version adds service-name logging and `get_request_id()` accessor on top of the same core
 - [x] Discord notification when a smoke test fails: `python smoke.py ...` now sends a Discord webhook alert with target, script, exit code, and repo path when a smoke step returns non-zero
 - [x] Written release checklist — `docs/RELEASE_CHECKLIST.md`: local tests, local smoke, server2 smoke, update docs, update vault
 - [x] Short cross-platform test commands per service: `python test.py c0|c1|c2|c3|c4|shared|all`

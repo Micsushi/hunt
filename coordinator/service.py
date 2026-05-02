@@ -953,9 +953,17 @@ class OrchestrationService:
         if updated_run is None:
             raise OrchestrationError(f"Run {run_id} disappeared after recording fill.")
         if new_status == "awaiting_submit_approval":
-            _notify(f"Run {run_id} (job {run.job_id}) is awaiting submit approval")
+            _notify(
+                f"Run {run_id} (job {run.job_id}) is awaiting submit approval",
+                db_path=self.db_path,
+                key="coordinator_last_awaiting_approval",
+            )
         elif new_status == "failed":
-            _notify(f"Run {run_id} (job {run.job_id}) failed after fill")
+            _notify(
+                f"Run {run_id} (job {run.job_id}) failed after fill",
+                db_path=self.db_path,
+                key="coordinator_last_fill_failed",
+            )
         return {
             "run": updated_run.to_dict(),
             "manual_review_flags": review_flags,
@@ -1043,10 +1051,16 @@ class OrchestrationService:
             raise OrchestrationError(f"Run {run_id} disappeared after review resolution.")
         if new_status == "awaiting_submit_approval":
             _notify(
-                f"Run {run_id} (job {run.job_id}) passed manual review — awaiting submit approval"
+                f"Run {run_id} (job {run.job_id}) passed manual review — awaiting submit approval",
+                db_path=self.db_path,
+                key="coordinator_last_review_passed",
             )
         elif new_status == "failed":
-            _notify(f"Run {run_id} (job {run.job_id}) rejected at manual review")
+            _notify(
+                f"Run {run_id} (job {run.job_id}) rejected at manual review",
+                db_path=self.db_path,
+                key="coordinator_last_review_rejected",
+            )
         return {"run": updated_run.to_dict(), "review_resolution_path": review_resolution_path}
 
     def approve_submit(

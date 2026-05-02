@@ -112,6 +112,14 @@ SUBMIT_APPROVALS_MIGRATION_COLUMNS = {
     "artifact_path": "TEXT",
 }
 
+RUNTIME_STATE_TABLE_SQL = """
+CREATE TABLE IF NOT EXISTS runtime_state (
+    key TEXT PRIMARY KEY,
+    value TEXT,
+    updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+)
+"""
+
 INDEX_STATEMENTS = (
     """
     CREATE INDEX IF NOT EXISTS idx_orchestration_runs_job_status
@@ -155,6 +163,26 @@ def _ensure_columns(cursor: sqlite3.Cursor, table_name: str, columns: dict[str, 
     for column_name, column_def in columns.items():
         if column_name not in existing:
             cursor.execute(f"ALTER TABLE {table_name} ADD COLUMN {column_name} {column_def}")
+
+
+def set_runtime_state(db_path: str | Path, key: str, value: str) -> None:
+    conn = get_connection(db_path)
+    try:
+        cursor = conn.cursor()
+        cursor.execute(RUNTIME_STATE_TABLE_SQL)
+        cursor.execute(
+            """
+            INSERT INTO runtime_state (key, value, updated_at)
+            VALUES (?, ?, CURRENT_TIMESTAMP)
+            ON CONFLICT(key) DO UPDATE SET
+                value = excluded.value,
+                updated_at = CURRENT_TIMESTAMP
+            """,
+            (key, value),
+        )
+        conn.commit()
+    finally:
+        conn.close()
 
 
 def init_orchestration_db(db_path: str | Path) -> None:

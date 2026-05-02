@@ -2,7 +2,13 @@ import json
 import sys
 import traceback
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from pathlib import Path
+
+_repo_root = Path(__file__).resolve().parent.parent
+if str(_repo_root) not in sys.path:
+    sys.path.insert(0, str(_repo_root))
+
+from shared.timestamps import utc_iso  # noqa: E402
 
 try:
     # Package-style imports (preferred when `hunter` is imported as a module).
@@ -12,10 +18,6 @@ except ImportError:
     # Script-style fallback (used when `hunter/` is on sys.path).
     from db import set_runtime_state  # type: ignore
     from notifications import send_discord_webhook_message  # type: ignore
-
-
-def _utc_iso():
-    return datetime.now(UTC).replace(microsecond=0).isoformat()
 
 
 @dataclass(frozen=True)
@@ -34,7 +36,7 @@ class C1LogEvent:
 
     def to_json(self):
         payload = {
-            "ts": _utc_iso(),
+            "ts": utc_iso(),
             "level": self.level,
             "message": self.message,
         }

@@ -32,6 +32,27 @@ Single source for resolving naming: **C1–C4**, **Hunter / Fletcher / Execution
 - First mention: **”C1 (Hunter)”**, then **C1** or **Hunter**. Same for C2/C3/C4.
 - Never “the scraper package” for C1 — use `hunter` package or C1 (Hunter).
 
+## `shared/`: cross-component utilities
+
+`shared/` is a Python package at the repo root for code with no component-specific logic.
+
+| Module | Contents |
+|--------|----------|
+| `shared/notifications.py` | Canonical Discord webhook util — `send_discord_webhook_message()`, `get_discord_webhook_url()`. Used by C1 and C4; C2/C3 can import when needed. |
+| `shared/timestamps.py` | `utc_iso()` — ISO 8601 UTC timestamp, second precision. |
+
+**Import pattern**: each component adds the repo root to `sys.path` before importing shared, so it works regardless of whether the code runs as a package or a standalone script:
+```python
+import sys
+from pathlib import Path
+_repo_root = Path(__file__).resolve().parent.parent
+if str(_repo_root) not in sys.path:
+    sys.path.insert(0, str(_repo_root))
+from shared.notifications import send_discord_webhook_message
+```
+
+**Rule**: `shared/` must not import from any component package (`hunter`, `coordinator`, `backend`, etc.).
+
 ## C4 (Coordinator): package vs tables vs env vars
 
 - Package: `coordinator/` (import `from coordinator...`, run `python -m coordinator.cli`).
