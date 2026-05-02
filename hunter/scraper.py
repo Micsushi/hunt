@@ -32,8 +32,8 @@ from hunter.config import (
     TITLE_BLACKLIST,
     WATCHLIST,
 )
-from hunter.notifications import send_discord_webhook_message
 from hunter.db import add_job, count_ready_jobs_for_enrichment, init_db
+from hunter.notifications import send_discord_webhook_message
 from hunter.search_lanes import title_matches_search_lane
 from hunter.url_utils import detect_ats_type, get_apply_host, normalize_optional_str
 

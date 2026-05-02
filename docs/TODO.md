@@ -68,16 +68,16 @@ C0 is the web interface and API gateway. The frontend is a React single-page app
 C1 scrapes LinkedIn for job listings and enriches them with full job descriptions. Runs as a service on server2 and as a CLI tool locally.
 
 - [ ] Validate a full production cycle on server2: scrape → enrich → write artifacts → drain queue → confirm scheduler holds steady
-- [ ] Confirm the C1 CLI works standalone on both Windows and Linux without Docker
-- [ ] Add API endpoint tests: status, queue, scrape, enrich, auth failure handling, and duplicate-run prevention
-- [ ] Better structured logs: events for scrape start/end, enrich batch summary, auth pauses, retry exhaustion, artifact writes
-- [ ] Better LinkedIn auth handling: track state per account (active / locked / cooling down), clearer reauth flow from the C0 dashboard
-- [ ] Account rotation: when one LinkedIn account hits rate limits or auth trouble, automatically switch to another with backoff delays
-- [ ] Discord alerts for: auth trouble, persistent rate limiting, and high job-failure rates
-- [ ] Verify that Easy Apply job filtering still works correctly after live C1 runs (Easy Apply jobs should be excluded from the queue)
+- [ ] Confirm the C1 CLI works standalone on both Windows and Linux without Docker (entry points exist: hunter.ps1, hunter.sh, hunter.cmd — needs a real test run on each platform)
+- [ ] Add API endpoint tests: status, queue, scrape, enrich, auth failure handling, and duplicate-run prevention (service.py has all 5 endpoints; no test coverage yet)
+- [ ] Add structured log events for scrape start/end, enrich batch summary, retry exhaustion, and artifact writes (auth pauses and rate limiting already notify via Discord/C1Logger)
+- [x] LinkedIn auth handling: per-account state tracking (active / blocked / cooling down) in `linkedin_session.py`; C0 LinkedIn accounts page handles reauth
+- [x] Account rotation: `rotate_linkedin_account()` finds next non-blocked account and auto-relogs; blocked accounts cool down for 7 days
+- [ ] Discord alert for high job-failure rate (auth trouble, rate limiting, and automation detection already send alerts)
+- [ ] Verify Easy Apply filtering with a real live C1 run (code exists: easy_apply sets auto_apply_eligible=0 and excludes from C4 queue)
 - [ ] Write a runbook for: setting up a local browser session, switching between headless/headful mode, and running Xvfb on Linux
-- [ ] Document a Windows-friendly path to run scrape/enrich locally without deploying to server2
-- [ ] Polish the `hunter` CLI: add obvious commands for status, auth, scrape, enrich, requeue, and smoke test
+- [ ] Document a Windows-friendly path to run scrape/enrich locally without deploying to server2 (hunter.ps1 and hunter.cmd exist; no written guide yet)
+- [x] Hunter CLI: status, auth, scrape, enrich, requeue, smoke test, and 60+ other operator commands all implemented in hunterctl.py
 
 ## C2 : Fletcher (resume tailor)
 
