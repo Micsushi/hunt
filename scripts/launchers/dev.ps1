@@ -1,6 +1,7 @@
 # Start backend (auto-reload) + frontend (HMR) for development.
 # Opens two new terminal windows; close either or run this script's process to stop.
 param()
+$ErrorActionPreference = "Continue"
 $root = Resolve-Path (Join-Path $PSScriptRoot "..\..") -ErrorAction Stop
 
 $python = if (Test-Path "$root\.venv\Scripts\python.exe") { "$root\.venv\Scripts\python.exe" }
