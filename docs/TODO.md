@@ -29,7 +29,7 @@ Things that cut across all services.
 C0 is the web interface and API gateway. The frontend is a React single-page app; the backend is a Python/FastAPI server that proxies requests to C1-C4.
 
 - [x] Primary operator pages are in the React app; `/legacy/*` server-rendered routes still exist as fallback while they are retired
-- [ ] Settings UI: expose C1 configurable values (watchlist, title blacklist, search terms, locations, run interval, enrichment limits, etc.) as editable fields in the web UI — changes persist to a config file on disk so they survive restarts and don't require code changes
+- [x] Settings UI: expose C1 configurable values (watchlist, title blacklist, search terms, locations, run interval, enrichment limits, etc.) as editable fields in the web UI — changes persist to a config file on disk so they survive restarts and don't require code changes
 
 ## C1 : Hunter (job scraper and enricher)
 
@@ -46,8 +46,8 @@ C1 scrapes LinkedIn for job listings and enriches them with full job description
 - [x] Write a runbook for: setting up a local browser session, switching between headless/headful mode, and running Xvfb on Linux
 - [x] Document a Windows-friendly path to run scrape/enrich locally without deploying to server2 (`docs/C1_LOCAL_RUNBOOK.md`)
 - [x] Hunter CLI: status, auth, scrape, enrich, requeue, smoke test, and 60+ other operator commands all implemented in hunterctl.py
-- [ ] Move watchlist, title blacklist, and search terms out of `config.py` into a user-editable config file (JSON/TOML); C1 reads from file at runtime so changes via settings UI take effect without code deploys
-- [ ] README: clear, short commands for every key operator action — deploy C0+C1 with Docker, run locally without containers, run tests, start services; add CLI entry points to PATH where needed so commands are one-liners
+- [x] Move watchlist, title blacklist, and search terms out of `config.py` into a user-editable config file (JSON/TOML); C1 reads from file at runtime so changes via settings UI take effect without code deploys
+- [x] README: clear, short commands for every key operator action — deploy C0+C1 with Docker, run locally without containers, run tests, start services; add CLI entry points to PATH where needed so commands are one-liners
 
 ## C2 : Fletcher (resume tailor)
 

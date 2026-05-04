@@ -30,7 +30,18 @@ def main(argv=None):
     parser = build_parser()
     args = parser.parse_args(argv)
 
-    os.environ.setdefault("HUNT_DB_PATH", args.db_path)
+    _prev = os.environ.get("HUNT_DB_PATH")
+    os.environ["HUNT_DB_PATH"] = args.db_path
+    try:
+        return _main_run(args)
+    finally:
+        if _prev is None:
+            os.environ.pop("HUNT_DB_PATH", None)
+        else:
+            os.environ["HUNT_DB_PATH"] = _prev
+
+
+def _main_run(args):
     job = get_job_by_id(args.job_id)
     if not job:
         print("Easy Apply verification: FAIL")

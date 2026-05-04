@@ -48,6 +48,24 @@ class EnrichRequest(BaseModel):
     limit: int | None = None
 
 
+class ConfigPatchRequest(BaseModel):
+    watchlist: list[str] | None = None
+    title_blacklist: list[str] | None = None
+    search_terms: dict[str, list[str]] | None = None
+    locations: list[str] | None = None
+    sites: list[str] | None = None
+    max_workers: int | None = None
+    results_wanted: int | None = None
+    hours_old: int | None = None
+    run_interval_seconds: int | None = None
+    enrich_after_scrape: bool | None = None
+    enrichment_batch_limit: int | None = None
+    enrichment_timeout_ms: int | None = None
+    enrichment_max_attempts: int | None = None
+    enrichment_alert_failure_rate_percent: int | None = None
+    enrichment_alert_cooldown_minutes: int | None = None
+
+
 # ---------------------------------------------------------------------------
 # Endpoints
 # ---------------------------------------------------------------------------
@@ -134,6 +152,66 @@ def post_enrich(req: EnrichRequest, background_tasks: BackgroundTasks):
 
     background_tasks.add_task(_run)
     return {"status": "started", "limit": limit}
+
+
+@app.get("/config", dependencies=[Depends(require_service_token)])
+def get_config():
+    from hunter import user_config as _uc
+    from hunter.config import (
+        ENRICH_AFTER_SCRAPE,
+        ENRICHMENT_ALERT_COOLDOWN_MINUTES,
+        ENRICHMENT_ALERT_FAILURE_RATE_PERCENT,
+        ENRICHMENT_BATCH_LIMIT,
+        ENRICHMENT_MAX_ATTEMPTS,
+        ENRICHMENT_TIMEOUT_MS,
+        HOURS_OLD,
+        LOCATIONS,
+        MAX_WORKERS,
+        RESULTS_WANTED,
+        RUN_INTERVAL_SECONDS,
+        SEARCH_TERMS,
+        SITES,
+        TITLE_BLACKLIST,
+        WATCHLIST,
+    )
+
+    cfg_path = _uc.get_path()
+    return {
+        "config_file": str(cfg_path),
+        "config_file_exists": cfg_path.exists(),
+        "watchlist": WATCHLIST,
+        "title_blacklist": TITLE_BLACKLIST,
+        "search_terms": SEARCH_TERMS,
+        "locations": LOCATIONS,
+        "sites": SITES,
+        "max_workers": MAX_WORKERS,
+        "results_wanted": RESULTS_WANTED,
+        "hours_old": HOURS_OLD,
+        "run_interval_seconds": RUN_INTERVAL_SECONDS,
+        "enrich_after_scrape": ENRICH_AFTER_SCRAPE,
+        "enrichment_batch_limit": ENRICHMENT_BATCH_LIMIT,
+        "enrichment_timeout_ms": ENRICHMENT_TIMEOUT_MS,
+        "enrichment_max_attempts": ENRICHMENT_MAX_ATTEMPTS,
+        "enrichment_alert_failure_rate_percent": ENRICHMENT_ALERT_FAILURE_RATE_PERCENT,
+        "enrichment_alert_cooldown_minutes": ENRICHMENT_ALERT_COOLDOWN_MINUTES,
+    }
+
+
+@app.patch("/config", dependencies=[Depends(require_service_token)])
+def patch_config(req: ConfigPatchRequest):
+    from hunter import user_config as _uc
+
+    updates = req.model_dump(exclude_unset=True)
+    if not updates:
+        raise HTTPException(status_code=400, detail="No fields provided")
+    merged = _uc.patch(updates)
+    cfg_path = _uc.get_path()
+    return {
+        "saved": True,
+        "config_file": str(cfg_path),
+        "updated_keys": list(updates.keys()),
+        "config": merged,
+    }
 
 
 @app.post("/accounts/{account_id}/reauth", dependencies=[Depends(require_service_token)])

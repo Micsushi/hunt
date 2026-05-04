@@ -12,6 +12,7 @@ import { OpsPage } from '@/pages/Ops'
 import { FletcherPage } from '@/pages/Fletcher'
 import { ExecutionerPage } from '@/pages/Executioner'
 import { CoordinatorPage } from '@/pages/Coordinator'
+import { SettingsPage } from '@/pages/Settings'
 
 const MOCK = import.meta.env.VITE_MOCK_BACKEND === 'true'
 
@@ -142,6 +143,15 @@ export default function App() {
         <Route path="/health-view" element={<Navigate to="/logs" replace />} />
         <Route path="/ops/*" element={<Navigate to="/ops" replace />} />
         <Route path="/summary" element={<Navigate to="/logs" replace />} />
+
+        <Route
+          path="/settings"
+          element={
+            <AuthGuard username={username}>
+              <SettingsPage />
+            </AuthGuard>
+          }
+        />
 
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>

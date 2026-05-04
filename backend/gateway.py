@@ -49,6 +49,15 @@ async def _proxy_get(url: str) -> JSONResponse:
     return _json_response(resp, url)
 
 
+async def _proxy_patch(url: str, body: dict | None = None) -> JSONResponse:
+    async with httpx.AsyncClient(timeout=10) as client:
+        try:
+            resp = await client.patch(url, json=body or {}, headers=_service_headers())
+        except httpx.HTTPError:
+            raise HTTPException(status_code=503, detail=f"Service unavailable: {url}")
+    return _json_response(resp, url)
+
+
 async def _proxy_post(url: str, body: dict | None = None) -> JSONResponse:
     async with httpx.AsyncClient(timeout=30) as client:
         try:
@@ -119,6 +128,25 @@ async def c1_reauth(account_id: int, _auth: str = Depends(_require_auth)):
     from hunter.config import HUNT_HUNTER_URL
 
     return await _proxy_post(f"{HUNT_HUNTER_URL}/accounts/{account_id}/reauth")
+
+
+@router.get("/c1/config")
+async def c1_config_get(_auth: str = Depends(_require_auth)):
+    from hunter.config import HUNT_HUNTER_URL
+
+    return await _proxy_get(f"{HUNT_HUNTER_URL}/config")
+
+
+@router.patch("/c1/config")
+async def c1_config_patch(request: Request, _auth: str = Depends(_require_auth)):
+    from hunter.config import HUNT_HUNTER_URL
+
+    body = (
+        await request.json()
+        if request.headers.get("content-type", "").startswith("application/json")
+        else {}
+    )
+    return await _proxy_patch(f"{HUNT_HUNTER_URL}/config", body)
 
 
 # ---------------------------------------------------------------------------

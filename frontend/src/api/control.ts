@@ -1,4 +1,4 @@
-import { get, post } from './client'
+import { get, patch, post } from './client'
 
 const MOCK = import.meta.env.VITE_MOCK_BACKEND === 'true'
 
@@ -178,4 +178,41 @@ export function approveC4Run(
 
 export function fetchPendingFills(): Promise<{ fills: PendingFill[] }> {
   return get('/api/c3/pending-fills')
+}
+
+export interface C1Config {
+  config_file: string
+  config_file_exists: boolean
+  watchlist: string[]
+  title_blacklist: string[]
+  search_terms: Record<string, string[]>
+  locations: string[]
+  sites: string[]
+  max_workers: number
+  results_wanted: number
+  hours_old: number
+  run_interval_seconds: number
+  enrich_after_scrape: boolean
+  enrichment_batch_limit: number
+  enrichment_timeout_ms: number
+  enrichment_max_attempts: number
+  enrichment_alert_failure_rate_percent: number
+  enrichment_alert_cooldown_minutes: number
+}
+
+export type C1ConfigUpdates = Partial<Omit<C1Config, 'config_file' | 'config_file_exists'>>
+
+export interface ConfigSaveResult {
+  saved: boolean
+  config_file: string
+  updated_keys: string[]
+  config: Record<string, unknown>
+}
+
+export function fetchC1Config(): Promise<C1Config> {
+  return get<C1Config>('/api/gateway/c1/config')
+}
+
+export function saveC1Config(updates: C1ConfigUpdates): Promise<ConfigSaveResult> {
+  return patch<ConfigSaveResult>('/api/gateway/c1/config', updates)
 }

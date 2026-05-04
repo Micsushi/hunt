@@ -1,0 +1,58 @@
+{
+  "_comment": "Copy to hunt_user_config.json and edit. Omit any key to use the default from config.py.",
+
+  "watchlist": [
+    "shopify",
+    "stripe",
+    "cloudflare",
+    "google",
+    "microsoft",
+    "amazon"
+  ],
+
+  "title_blacklist": [
+    "senior",
+    "sr.",
+    "lead",
+    "staff",
+    "principal",
+    "director",
+    "vp ",
+    "head of",
+    "phd",
+    "doctoral"
+  ],
+
+  "search_terms": {
+    "engineering": [
+      "software engineer intern",
+      "software engineer new grad",
+      "junior software engineer"
+    ],
+    "product": [
+      "product manager intern",
+      "associate product manager"
+    ],
+    "data": [
+      "data analyst intern",
+      "data scientist intern"
+    ]
+  },
+
+  "locations": [
+    "Canada"
+  ],
+
+  "sites": ["indeed", "linkedin"],
+
+  "max_workers": 10,
+  "results_wanted": 500,
+  "hours_old": 24,
+  "run_interval_seconds": 600,
+  "enrich_after_scrape": true,
+  "enrichment_batch_limit": 25,
+  "enrichment_timeout_ms": 45000,
+  "enrichment_max_attempts": 4,
+  "enrichment_alert_failure_rate_percent": 50,
+  "enrichment_alert_cooldown_minutes": 60
+}

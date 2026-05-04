@@ -41,6 +41,7 @@ const NAV_ITEMS: NavItem[] = [
   { to: '/fletcher', label: 'Fletcher', dotKey: 'c2' },
   { to: '/executioner', label: 'Executioner', dotKey: 'c3' },
   { to: '/coordinator', label: 'Coordinator', dotKey: 'c4' },
+  { to: '/settings', label: 'Settings' },
 ]
 
 interface Props {

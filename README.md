@@ -55,22 +55,93 @@ Check logs: `sudo journalctl -u hunt -f`
 
 The legacy systemd helper is still available, but current container smoke work uses the service Dockerfiles and `docker-compose.pipeline.yml`.
 
-## Manual run
+## Quick commands
 
-```bash
-source venv/bin/activate
-python hunter/scraper.py
-python hunter/runner.py
+All commands below use the `hunter` launchers (`.\hunter.ps1` on Windows, `./hunter.sh` on Linux).
+
+**Daily use**
+```
+hunter scrape              # scrape + auto-enrich
+hunter enrich              # enrich pending queue (default 25 rows)
+hunter drain               # drain entire pending queue in batches
+hunter queue               # show pending/ready counts
+hunter status              # show C1 service status
+hunter jobs                # list recent ready jobs
+```
+
+**Auth**
+```
+hunter auth-save           # open browser to save a LinkedIn session
+hunter auth-check          # verify saved session is valid
+```
+
+**Retry after failures**
+```
+hunter requeue-errors --error-code auth_expired
+hunter requeue-errors --error-code rate_limited
+hunter requeue-errors      # requeue all retryable errors
+```
+
+**Config**
+```
+hunter config              # show current config (file + effective values)
+hunter config-set run_interval_seconds 300
+hunter config-set watchlist '["shopify","stripe","google"]'
+```
+Or edit `hunt_user_config.json` directly, or use the **Settings** page in the web UI.
+
+**Start the local UI (C0)**
+```
+hunter ui serve            # serve the review app at http://localhost:8000
+```
+
+**Start C1 as a service**
+```
+hunter start               # Windows: run one cycle; Linux: enable+start systemd timer
+hunter auto-on             # Linux: enable auto-run on boot
+hunter svc-status          # Linux: check service status
+hunter svc-follow          # Linux: tail service logs
+```
+
+**Deploy (Docker, server2)**
+```
+python deploy.py all
+python deploy.py all --mode server --env-file .env.server2
+```
+
+**Tests and CI**
+```
+python ci.py c1            # C1 checks + tests
+python ci.py               # full repo CI
+python test.py c1          # C1 tests only
+python smoke.py c1         # C1 smoke tests
 ```
 
 ## Config
 
-Edit `hunter/config.py`:
-- `SEARCH_TERMS` : what to search
-- `HOURS_OLD` : how far back to look
-- `RUN_INTERVAL_SECONDS` : time between runs
-- `WATCHLIST` : companies you want to apply to manually
-- `TITLE_BLACKLIST` : job titles to filter out
+User-tunable settings live in `hunt_user_config.json` at the repo root (gitignored).
+Copy `hunt_user_config.example.json` to get started:
+
+```bash
+cp hunt_user_config.example.json hunt_user_config.json
+# then edit it, or use: hunter config-set <key> <value>
+# or use the Settings page in the web UI (requires C1 service running)
+```
+
+**Configurable values:**
+- `watchlist` : priority company list — Discord alert fires on scrape when a match lands
+- `title_blacklist` : title phrases to filter out during scrape
+- `search_terms` : search queries per lane (engineering / product / data)
+- `locations` : where to search
+- `sites` : boards to scrape (`indeed`, `linkedin`)
+- `run_interval_seconds` : time between scrape cycles (default 600)
+- `hours_old` : job posting lookback window (default 24)
+- `results_wanted` : max listings per search term (default 500)
+- `enrichment_batch_limit` : rows enriched per cycle (default 25)
+- `enrichment_max_attempts` : retries before marking failed (default 4)
+- `enrichment_alert_failure_rate_percent` : Discord alert threshold (default 50%)
+
+Priority: **env var** > **config file** > hardcoded default in `config.py`.
 
 ## Planning Docs
 

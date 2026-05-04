@@ -248,6 +248,43 @@ def cmd_verify_easy_apply(args):
     _run([PYTHON, "scripts/verify_easy_apply_filter.py", "--job-id", str(args.job_id)])
 
 
+def cmd_config(_args):
+    import json
+    import sys
+
+    sys.path.insert(0, str(REPO_ROOT))
+    from hunter.user_config import get_path, load
+
+    cfg = load()
+    path = get_path()
+    print(f"Config file: {path}")
+    print(f"Exists: {path.exists()}")
+    if cfg:
+        print(json.dumps(cfg, indent=2))
+    else:
+        print("(no user config file — all defaults from config.py are active)")
+
+
+def cmd_config_set(args):
+    import json
+    import sys
+
+    sys.path.insert(0, str(REPO_ROOT))
+    from hunter.user_config import get_path, patch
+
+    key = args.key
+    raw = args.value
+    try:
+        value = json.loads(raw)
+    except json.JSONDecodeError:
+        value = raw  # treat as plain string if not valid JSON
+
+    merged = patch({key: value})
+    print(f"Saved {key!r} -> {json.dumps(value)}")
+    print(f"Config file: {get_path()}")
+    print(json.dumps(merged, indent=2))
+
+
 def cmd_requeue_refresh(_args):
     _run([PYTHON, "scripts/requeue_linkedin_refresh_candidates.py"])
 
@@ -867,6 +904,22 @@ def build_parser():
     )
     verify_easy_apply.add_argument("job_id", type=int)
     verify_easy_apply.set_defaults(func=cmd_verify_easy_apply)
+
+    config_cmd = subparsers.add_parser(
+        "config",
+        help="Show the current user config (hunt_user_config.json) and effective values.",
+    )
+    config_cmd.set_defaults(func=cmd_config)
+
+    config_set_cmd = subparsers.add_parser(
+        "config-set",
+        help="Set a key in hunt_user_config.json. VALUE is parsed as JSON (use quotes for strings).",
+    )
+    config_set_cmd.add_argument("key", help="Config key, e.g. run_interval_seconds")
+    config_set_cmd.add_argument(
+        "value", help='Value as JSON, e.g. 300  or  \'["Canada","Remote"]\''
+    )
+    config_set_cmd.set_defaults(func=cmd_config_set)
 
     requeue = subparsers.add_parser(
         "requeue-refresh", help="Requeue sparse historical LinkedIn rows."
