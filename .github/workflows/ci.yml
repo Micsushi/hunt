@@ -46,6 +46,7 @@ jobs:
           if ($LASTEXITCODE -eq 0) {
             throw "hunter.ps1 should return a non-zero exit code for an invalid command."
           }
+          exit 0
 
       - name: Run standalone launcher smoke on Windows cmd
         if: runner.os == 'Windows'
@@ -54,6 +55,7 @@ jobs:
           hunter.cmd queue
           hunter.cmd definitely-not-a-command >NUL 2>&1
           if %ERRORLEVEL% EQU 0 exit /b 1
+          exit /b 0
 
   ui-cli-smoke:
     name: UI CLI Smoke (${{ matrix.os }})
@@ -96,6 +98,7 @@ jobs:
           if ($LASTEXITCODE -eq 0) {
             throw "ui.ps1 should return a non-zero exit code for an invalid command."
           }
+          exit 0
 
       - name: Run standalone launcher smoke on Windows cmd
         if: runner.os == 'Windows'
@@ -104,6 +107,7 @@ jobs:
           ui.cmd --help
           ui.cmd definitely-not-a-command >NUL 2>&1
           if %ERRORLEVEL% EQU 0 exit /b 1
+          exit /b 0
 
   fletch-cli-smoke:
     name: Fletch CLI Smoke (${{ matrix.os }})
@@ -146,6 +150,7 @@ jobs:
           if ($LASTEXITCODE -eq 0) {
             throw "fletch.ps1 should return a non-zero exit code for an invalid command."
           }
+          exit 0
 
       - name: Run standalone launcher smoke on Windows cmd
         if: runner.os == 'Windows'
@@ -154,6 +159,7 @@ jobs:
           fletch.cmd --help
           fletch.cmd definitely-not-a-command >NUL 2>&1
           if %ERRORLEVEL% EQU 0 exit /b 1
+          exit /b 0
 
   ci:
     runs-on: ubuntu-latest
