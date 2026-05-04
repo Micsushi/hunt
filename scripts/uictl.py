@@ -10,6 +10,7 @@ from __future__ import annotations
 import argparse
 import os
 import shlex
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -52,13 +53,22 @@ def _frontend_dir() -> Path:
     return REPO_ROOT / "frontend"
 
 
+def _resolve_npm() -> str:
+    if os.name == "nt":
+        resolved = shutil.which("npm.cmd")
+        if resolved:
+            return resolved
+    return shutil.which("npm") or "npm"
+
+
 def _run_npm_build() -> bool:
     frontend_dir = _frontend_dir()
     if not frontend_dir.is_dir():
         print("[uictl] frontend/ directory not found — skipping build.")
         return False
+    npm = _resolve_npm()
     print("[uictl] Building frontend (npm install && npm run build)…")
-    for cmd in (["npm", "install"], ["npm", "run", "build"]):
+    for cmd in ([npm, "install"], [npm, "run", "build"]):
         result = subprocess.run(cmd, cwd=frontend_dir)
         if result.returncode != 0:
             print(f"[uictl] Build step failed: {' '.join(cmd)}")

@@ -12,6 +12,7 @@ name but run **C1 (Hunter)** : `python hunter/scraper.py` from the Hunt repo roo
 import argparse
 import os
 import shlex
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -419,16 +420,23 @@ def _frontend_dir():
     return os.path.join(REPO_ROOT, "frontend")
 
 
+def _resolve_npm() -> str:
+    if IS_WINDOWS:
+        resolved = shutil.which("npm.cmd")
+        if resolved:
+            return resolved
+    return shutil.which("npm") or "npm"
+
+
 def _run_npm_build():
     """Run npm install + npm run build in frontend/. Returns True on success."""
-    import subprocess
-
     fe = _frontend_dir()
     if not os.path.isdir(fe):
         print("[hunter] frontend/ directory not found — skipping build.")
         return False
+    npm = _resolve_npm()
     print("[hunter] Building frontend (npm install && npm run build)…")
-    for cmd in [["npm", "install"], ["npm", "run", "build"]]:
+    for cmd in [[npm, "install"], [npm, "run", "build"]]:
         result = subprocess.run(cmd, cwd=fe)
         if result.returncode != 0:
             print(f"[hunter] Build step failed: {' '.join(cmd)}")

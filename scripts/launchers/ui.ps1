@@ -10,4 +10,5 @@ elseif (Test-Path "venv\Scripts\python.exe") {
 else {
     python "scripts\uictl.py" @args
 }
+exit $LASTEXITCODE
 

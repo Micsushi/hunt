@@ -30,9 +30,11 @@ DEFAULT_BULLET_LIBRARY_PATH = (
 BASE_RESUMES_ROOT = REPO_ROOT / "fletcher" / "base_resumes"
 
 # Stage 0 runtime layout contract. Actual server paths live outside the repo.
-DEFAULT_RUNTIME_ROOT = Path(
-    os.getenv("HUNT_RESUME_ARTIFACTS_DIR", "/home/michael/data/hunt/resumes")
+_win_runtime_root = str(REPO_ROOT / ".runtime" / "resumes")
+_default_runtime_root_str = os.getenv("HUNT_RESUME_ARTIFACTS_DIR") or (
+    _win_runtime_root if os.name == "nt" else "/home/michael/data/hunt/resumes"
 )
+DEFAULT_RUNTIME_ROOT = Path(_default_runtime_root_str)
 ATTEMPTS_DIRNAME = "attempts"
 AD_HOC_DIRNAME = "ad_hoc"
 

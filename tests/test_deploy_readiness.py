@@ -964,6 +964,20 @@ def test_github_actions_ci_workflow_exists():
     assert ".\\hunter.ps1 definitely-not-a-command" in workflow_text
     assert "hunter.cmd queue" in workflow_text
     assert "hunter.cmd definitely-not-a-command" in workflow_text
+    assert "ui-cli-smoke" in workflow_text
+    assert "./ui.sh --help" in workflow_text
+    assert "./ui.sh definitely-not-a-command" in workflow_text
+    assert ".\\ui.ps1 --help" in workflow_text
+    assert ".\\ui.ps1 definitely-not-a-command" in workflow_text
+    assert "ui.cmd --help" in workflow_text
+    assert "ui.cmd definitely-not-a-command" in workflow_text
+    assert "fletch-cli-smoke" in workflow_text
+    assert "./fletch.sh --help" in workflow_text
+    assert "./fletch.sh definitely-not-a-command" in workflow_text
+    assert ".\\fletch.ps1 --help" in workflow_text
+    assert ".\\fletch.ps1 definitely-not-a-command" in workflow_text
+    assert "fletch.cmd --help" in workflow_text
+    assert "fletch.cmd definitely-not-a-command" in workflow_text
 
 
 @pytest.mark.skipif(sys.platform != "win32", reason="Windows-only launcher smoke")
@@ -1063,6 +1077,231 @@ def test_hunter_sh_launcher_propagates_failure_exit_code():
 
     assert result.returncode != 0
     assert "invalid choice" in result.stderr
+
+
+# ---------------------------------------------------------------------------
+# C0 (UI) launcher smoke tests
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="Windows-only launcher smoke")
+def test_ui_powershell_launcher_help_runs_standalone():
+    result = subprocess.run(
+        ["powershell", "-ExecutionPolicy", "Bypass", "-File", "ui.ps1", "--help"],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0
+    assert "{serve,build}" in result.stdout
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="Windows-only launcher smoke")
+def test_ui_powershell_launcher_propagates_failure_exit_code():
+    result = subprocess.run(
+        ["powershell", "-ExecutionPolicy", "Bypass", "-File", "ui.ps1", "definitely-not-a-command"],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode != 0
+    assert "invalid choice" in result.stderr
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="Windows-only launcher smoke")
+def test_ui_cmd_launcher_help_runs_standalone():
+    env = os.environ.copy()
+    env["PATH"] = str(REPO_ROOT) + os.pathsep + env.get("PATH", "")
+    result = subprocess.run(
+        ["cmd", "/c", "ui.cmd", "--help"],
+        cwd=REPO_ROOT,
+        env=env,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0
+    assert "{serve,build}" in result.stdout
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="Windows-only launcher smoke")
+def test_ui_cmd_launcher_propagates_failure_exit_code():
+    env = os.environ.copy()
+    env["PATH"] = str(REPO_ROOT) + os.pathsep + env.get("PATH", "")
+    result = subprocess.run(
+        ["cmd", "/c", "ui.cmd", "definitely-not-a-command"],
+        cwd=REPO_ROOT,
+        env=env,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode != 0
+    assert "invalid choice" in result.stderr
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX-only launcher smoke")
+def test_ui_sh_launcher_help_runs_standalone():
+    bash = shutil.which("bash")
+    if not bash:
+        pytest.skip("bash is not installed")
+
+    result = subprocess.run(
+        [bash, "ui.sh", "--help"],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0
+    assert "{serve,build}" in result.stdout
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX-only launcher smoke")
+def test_ui_sh_launcher_propagates_failure_exit_code():
+    bash = shutil.which("bash")
+    if not bash:
+        pytest.skip("bash is not installed")
+
+    result = subprocess.run(
+        [bash, "ui.sh", "definitely-not-a-command"],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode != 0
+    assert "invalid choice" in result.stderr
+
+
+def test_ui_cli_docs_exist():
+    doc = Path("docs/UI_CLI.md")
+
+    assert doc.is_file()
+
+    doc_text = doc.read_text(encoding="utf-8")
+    assert ".\\ui.ps1" in doc_text
+    assert "ui.cmd" in doc_text or "./ui.sh" in doc_text
+    assert "serve" in doc_text
+    assert "build" in doc_text
+
+
+# ---------------------------------------------------------------------------
+# C2 (Fletcher) launcher smoke tests
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="Windows-only launcher smoke")
+def test_fletch_powershell_launcher_help_runs_standalone():
+    result = subprocess.run(
+        ["powershell", "-ExecutionPolicy", "Bypass", "-File", "fletch.ps1", "--help"],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0
+    assert "init-db" in result.stdout
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="Windows-only launcher smoke")
+def test_fletch_powershell_launcher_propagates_failure_exit_code():
+    result = subprocess.run(
+        [
+            "powershell",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-File",
+            "fletch.ps1",
+            "definitely-not-a-command",
+        ],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode != 0
+    assert "invalid choice" in result.stderr
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="Windows-only launcher smoke")
+def test_fletch_cmd_launcher_help_runs_standalone():
+    env = os.environ.copy()
+    env["PATH"] = str(REPO_ROOT) + os.pathsep + env.get("PATH", "")
+    result = subprocess.run(
+        ["cmd", "/c", "fletch.cmd", "--help"],
+        cwd=REPO_ROOT,
+        env=env,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0
+    assert "init-db" in result.stdout
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="Windows-only launcher smoke")
+def test_fletch_cmd_launcher_propagates_failure_exit_code():
+    env = os.environ.copy()
+    env["PATH"] = str(REPO_ROOT) + os.pathsep + env.get("PATH", "")
+    result = subprocess.run(
+        ["cmd", "/c", "fletch.cmd", "definitely-not-a-command"],
+        cwd=REPO_ROOT,
+        env=env,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode != 0
+    assert "invalid choice" in result.stderr
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX-only launcher smoke")
+def test_fletch_sh_launcher_help_runs_standalone():
+    bash = shutil.which("bash")
+    if not bash:
+        pytest.skip("bash is not installed")
+
+    result = subprocess.run(
+        [bash, "fletch.sh", "--help"],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0
+    assert "init-db" in result.stdout
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX-only launcher smoke")
+def test_fletch_sh_launcher_propagates_failure_exit_code():
+    bash = shutil.which("bash")
+    if not bash:
+        pytest.skip("bash is not installed")
+
+    result = subprocess.run(
+        [bash, "fletch.sh", "definitely-not-a-command"],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode != 0
+    assert "invalid choice" in result.stderr
+
+
+def test_fletch_cli_docs_exist():
+    doc = Path("docs/FLETCH_CLI.md")
+
+    assert doc.is_file()
+
+    doc_text = doc.read_text(encoding="utf-8")
+    assert ".\\fletch.ps1" in doc_text
+    assert "fletch.cmd" in doc_text or "./fletch.sh" in doc_text
+    assert "init-db" in doc_text
+    assert "job" in doc_text
 
 
 class FakeTimeoutClient:
