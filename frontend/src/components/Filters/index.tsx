@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react'
+import { useEffect, useRef, useCallback } from 'react'
 import styles from './Filters.module.css'
 import type { JobsQuery, SortField } from '@/types/job'
 
@@ -26,7 +26,6 @@ const SORT_OPTIONS: { value: SortField; label: string }[] = [
   { value: 'title', label: 'Title' },
   { value: 'enrichment_status', label: 'Enrichment status' },
   { value: 'apply_type', label: 'Apply type' },
-  { value: 'enrichment_attempts', label: 'Attempts' },
   { value: 'next_enrichment_retry_at', label: 'Next retry' },
   { value: 'enriched_at', label: 'Enriched at' },
   { value: 'id', label: 'ID' },
@@ -36,25 +35,34 @@ interface Props {
   query: JobsQuery
   onChange: (q: Partial<JobsQuery>) => void
   statusCounts?: Record<string, number>
+  isFetching?: boolean
 }
 
-export function Filters({ query, onChange, statusCounts }: Props) {
-  const searchInputRef = useRef<HTMLInputElement>(null)
+export function Filters({ query, onChange, statusCounts, isFetching }: Props) {
+  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
+  // Keep search input in sync when query changes externally (e.g. reset)
+  const searchRef = useRef<HTMLInputElement>(null)
   useEffect(() => {
-    if (searchInputRef.current) {
-      searchInputRef.current.value = query.q ?? ''
+    if (searchRef.current && searchRef.current.value !== (query.q ?? '')) {
+      searchRef.current.value = query.q ?? ''
     }
   }, [query.q])
 
-  function submit() {
-    onChange({ q: searchInputRef.current?.value.trim() ?? '', tag: '', page: 1 })
-  }
+  const handleSearchChange = useCallback(
+    (e: React.ChangeEvent<HTMLInputElement>) => {
+      const val = e.target.value
+      if (debounceRef.current) clearTimeout(debounceRef.current)
+      debounceRef.current = setTimeout(() => {
+        onChange({ q: val.trim(), page: 1 })
+      }, 300)
+    },
+    [onChange],
+  )
 
   function reset() {
-    if (searchInputRef.current) {
-      searchInputRef.current.value = ''
-    }
+    if (searchRef.current) searchRef.current.value = ''
+    if (debounceRef.current) clearTimeout(debounceRef.current)
     onChange({
       source: 'all',
       status: 'all',
@@ -88,65 +96,89 @@ export function Filters({ query, onChange, statusCounts }: Props) {
         })}
       </div>
 
-      {/* Search row */}
-      <div className={styles.row}>
-        <input
-          ref={searchInputRef}
-          className={styles.searchInput}
-          type="text"
-          placeholder="Search company, title, description, URL…"
-          defaultValue={query.q ?? ''}
-          onKeyDown={(e) => e.key === 'Enter' && submit()}
-          aria-label="Search jobs"
-        />
-        <select
-          className={styles.select}
-          value={query.source ?? 'all'}
-          onChange={(e) => onChange({ source: e.target.value, page: 1 })}
-          aria-label="Filter by source"
-          title="Job source: LinkedIn or Indeed"
-        >
-          {SOURCE_OPTIONS.map((o) => (
-            <option key={o.value} value={o.value}>
-              {o.label}
-            </option>
-          ))}
-        </select>
-        <select
-          className={styles.select}
-          value={query.sort ?? 'date_scraped'}
-          onChange={(e) => onChange({ sort: e.target.value as SortField, page: 1 })}
-          aria-label="Sort by"
-          title="Column to sort by"
-        >
-          {SORT_OPTIONS.map((o) => (
-            <option key={o.value} value={o.value}>
-              {o.label}
-            </option>
-          ))}
-        </select>
-        <button
-          className={styles.dirBtn}
-          onClick={() =>
-            onChange({ direction: query.direction === 'asc' ? 'desc' : 'asc', page: 1 })
-          }
-          title={`Sort direction: ${query.direction === 'asc' ? 'ascending (click for descending)' : 'descending (click for ascending)'}`}
-        >
-          {query.direction === 'asc' ? '↑ Asc' : '↓ Desc'}
-        </button>
-        <button className={styles.applyBtn} onClick={submit} title="Apply search and tag filters">
-          Search
-        </button>
-        <button className={styles.resetBtn} onClick={reset} title="Reset all filters to defaults">
-          Reset
-        </button>
+      {/* Filter row with labeled groups */}
+      <div className={styles.filterRow}>
+        <div className={`${styles.filterGroup} ${styles.filterGroupSearch}`}>
+          <label className={styles.filterLabel} htmlFor="jobs-search">
+            Search
+          </label>
+          <div className={styles.searchWrap}>
+            <input
+              id="jobs-search"
+              ref={searchRef}
+              className={styles.searchInput}
+              type="text"
+              placeholder="Company, title, description, URL…"
+              defaultValue={query.q ?? ''}
+              onChange={handleSearchChange}
+              aria-label="Search jobs"
+            />
+            {isFetching && <span className={styles.spinner} aria-hidden="true" />}
+          </div>
+        </div>
+
+        <div className={styles.filterGroup}>
+          <label className={styles.filterLabel} htmlFor="jobs-source">
+            Source
+          </label>
+          <select
+            id="jobs-source"
+            className={styles.select}
+            value={query.source ?? 'all'}
+            onChange={(e) => onChange({ source: e.target.value, page: 1 })}
+            aria-label="Filter by source"
+          >
+            {SOURCE_OPTIONS.map((o) => (
+              <option key={o.value} value={o.value}>
+                {o.label}
+              </option>
+            ))}
+          </select>
+        </div>
+
+        <div className={styles.filterGroup}>
+          <label className={styles.filterLabel} htmlFor="jobs-sort">
+            Sort by
+          </label>
+          <select
+            id="jobs-sort"
+            className={styles.select}
+            value={query.sort ?? 'date_scraped'}
+            onChange={(e) => onChange({ sort: e.target.value as SortField, page: 1 })}
+            aria-label="Sort by"
+          >
+            {SORT_OPTIONS.map((o) => (
+              <option key={o.value} value={o.value}>
+                {o.label}
+              </option>
+            ))}
+          </select>
+        </div>
+
+        <div className={styles.filterGroup}>
+          <label className={styles.filterLabel}>Order</label>
+          <button
+            className={styles.dirBtn}
+            onClick={() =>
+              onChange({ direction: query.direction === 'asc' ? 'desc' : 'asc', page: 1 })
+            }
+            title={`Sort direction: ${query.direction === 'asc' ? 'ascending' : 'descending'}`}
+          >
+            {query.direction === 'asc' ? '↑ Asc' : '↓ Desc'}
+          </button>
+        </div>
+
+        <div className={styles.filterGroup}>
+          <label className={styles.filterLabel}>&nbsp;</label>
+          <button className={styles.resetBtn} onClick={reset} title="Reset all filters to defaults">
+            Reset
+          </button>
+        </div>
       </div>
 
-      {/* Row count / limit selector */}
+      {/* Row count selector */}
       <div className={styles.limitRow}>
-        <span className="muted" style={{ fontSize: '0.88rem' }}>
-          Rows per page:
-        </span>
+        <span className={styles.filterLabel}>Rows per page</span>
         {[25, 50, 100].map((n) => (
           <button
             key={n}

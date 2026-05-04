@@ -107,3 +107,8 @@ export interface JobsQuery {
   sort?: SortField
   direction?: SortDirection
 }
+
+export interface JobsResponse {
+  items: Job[]
+  total: number
+}

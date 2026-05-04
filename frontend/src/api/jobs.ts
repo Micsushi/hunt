@@ -1,5 +1,5 @@
 import { get, patch, post, del } from './client'
-import type { Job, JobDetail, JobsQuery, ResumeAttempt } from '@/types/job'
+import type { JobDetail, JobsQuery, JobsResponse, ResumeAttempt } from '@/types/job'
 
 function buildParams(q: JobsQuery): string {
   const p = new URLSearchParams()
@@ -16,8 +16,8 @@ function buildParams(q: JobsQuery): string {
   return p.toString()
 }
 
-export function fetchJobs(q: JobsQuery = {}): Promise<Job[]> {
-  return get<Job[]>(`/api/jobs?${buildParams(q)}`)
+export function fetchJobs(q: JobsQuery = {}): Promise<JobsResponse> {
+  return get<JobsResponse>(`/api/jobs?${buildParams(q)}`)
 }
 
 export function fetchJobCount(

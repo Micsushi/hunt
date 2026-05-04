@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef } from 'react'
+import { useState, useEffect, useCallback, useRef, useMemo } from 'react'
 import { timeAgo } from '@/utils/time'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import { useJobs } from '@/hooks/useJobs'
@@ -58,6 +58,7 @@ function mockDownloadHref(format: 'csv' | 'json'): string {
   return `data:${type};charset=utf-8,${encodeURIComponent(content)}`
 }
 
+// Columns and their sort keys (Attempts removed)
 const COL_TIPS: Record<string, string> = {
   ID: 'Database row ID',
   Company: 'Employer name',
@@ -65,31 +66,74 @@ const COL_TIPS: Record<string, string> = {
   Links: 'View listing or apply page',
   Enrichment: 'Current enrichment status',
   'Apply type': '"external_apply" = company ATS. "easy_apply" = LinkedIn - we skip those.',
-  Attempts: 'How many enrichment attempts on this row',
   Added: 'When this job was scraped',
+}
+
+const COL_SORT_KEYS: Record<string, SortField | undefined> = {
+  ID: 'id',
+  Company: 'company',
+  Title: 'title',
+  Enrichment: 'enrichment_status',
+  'Apply type': 'apply_type',
+  Added: 'date_scraped',
+}
+
+type LocalSort = { field: string; dir: 'asc' | 'desc' }
+
+function compareJobs(a: Job, b: Job, field: string, dir: 'asc' | 'desc'): number {
+  let av: string | number | null = null
+  let bv: string | number | null = null
+
+  if (field === 'id') {
+    av = a.id
+    bv = b.id
+  } else if (field === 'company') {
+    av = a.company ?? ''
+    bv = b.company ?? ''
+  } else if (field === 'title') {
+    av = a.title ?? ''
+    bv = b.title ?? ''
+  } else if (field === 'enrichment_status') {
+    av = a.enrichment_status ?? ''
+    bv = b.enrichment_status ?? ''
+  } else if (field === 'apply_type') {
+    av = a.apply_type ?? ''
+    bv = b.apply_type ?? ''
+  } else if (field === 'date_scraped') {
+    av = a.date_scraped ?? ''
+    bv = b.date_scraped ?? ''
+  }
+
+  let cmp: number
+  if (typeof av === 'number' && typeof bv === 'number') {
+    cmp = av - bv
+  } else {
+    cmp = String(av ?? '').localeCompare(String(bv ?? ''))
+  }
+  return dir === 'asc' ? cmp : -cmp
 }
 
 function Th({
   label,
   sortKey,
-  query,
-  onChange,
+  localSort,
+  onLocalSort,
 }: {
   label: string
   sortKey?: SortField
-  query: JobsQuery
-  onChange: (q: Partial<JobsQuery>) => void
+  localSort: LocalSort | null
+  onLocalSort: (s: LocalSort) => void
 }) {
-  const active = sortKey && query.sort === sortKey
-  const nextDir = active && query.direction === 'asc' ? 'desc' : 'asc'
+  const active = sortKey && localSort?.field === sortKey
+  const nextDir = active && localSort?.dir === 'asc' ? 'desc' : 'asc'
   return (
     <th
       className={sortKey ? styles.sortable : ''}
       title={COL_TIPS[label] ?? label}
-      onClick={sortKey ? () => onChange({ sort: sortKey, direction: nextDir, page: 1 }) : undefined}
+      onClick={sortKey ? () => onLocalSort({ field: sortKey, dir: nextDir }) : undefined}
     >
       {label}
-      {active && <span aria-hidden="true">{query.direction === 'asc' ? ' ↑' : ' ↓'}</span>}
+      {active && <span aria-hidden="true">{localSort?.dir === 'asc' ? ' ↑' : ' ↓'}</span>}
     </th>
   )
 }
@@ -98,13 +142,16 @@ export function JobsPage() {
   const navigate = useNavigate()
   const [searchParams, setSearchParams] = useSearchParams()
   const [query, setQuery] = useState<JobsQuery>(() => queryFromParams(searchParams))
-  const { data: jobs = [], isLoading, isFetching } = useJobs(query)
+  const { data, isLoading, isFetching } = useJobs(query)
+  const jobs = useMemo(() => data?.items ?? [], [data])
+  const total = data?.total ?? 0
   const { data: summary } = useSummary(60_000)
   const { selectedIds, toggleSelect, selectAll, clearSelection } = useUiStore()
   const qc = useQueryClient()
   const tbodyRef = useRef<HTMLTableSectionElement>(null)
   const [focusIdx, setFocusIdx] = useState(-1)
   const [bulkDryResult, setBulkDryResult] = useState<string | null>(null)
+  const [localSort, setLocalSort] = useState<LocalSort | null>(null)
   const showToast = useUiStore((s) => s.showToast)
 
   // Sync URL when query changes
@@ -112,11 +159,18 @@ export function JobsPage() {
     setSearchParams(queryToParams(query), { replace: true })
     clearSelection()
     setFocusIdx(-1) // eslint-disable-line react-hooks/set-state-in-effect
+    setLocalSort(null) // reset page-local sort when filters change
   }, [query]) // eslint-disable-line
 
   const updateQuery = useCallback((patch: Partial<JobsQuery>) => {
     setQuery((prev) => ({ ...prev, ...patch }))
   }, [])
+
+  // Client-side sorted display jobs (only sorts current page)
+  const displayJobs = useMemo(() => {
+    if (!localSort) return jobs
+    return [...jobs].sort((a, b) => compareJobs(a, b, localSort.field, localSort.dir))
+  }, [jobs, localSort])
 
   // Keyboard j/k/Enter navigation
   useEffect(() => {
@@ -241,7 +295,6 @@ export function JobsPage() {
           <StatusBadge status={job.enrichment_status} size="sm" />
         </td>
         <td className={styles.applyType}>{job.apply_type?.replace(/_/g, ' ') ?? '-'}</td>
-        <td className={styles.numCell}>{job.enrichment_attempts ?? 0}</td>
         <td
           className="mono"
           style={{ fontSize: '0.8rem', color: 'var(--muted)' }}
@@ -260,7 +313,7 @@ export function JobsPage() {
       <section className={styles.hero}>
         <h1 className={styles.heroTitle}>Jobs</h1>
         <p className="muted">
-          {isLoading ? 'Loading…' : `${jobs.length} rows shown.`}
+          {isLoading ? 'Loading…' : `${jobs.length} of ${total} rows shown.`}
           {isFetching && !isLoading && (
             <span style={{ marginLeft: 8, color: 'var(--accent)' }}>Refreshing…</span>
           )}
@@ -271,65 +324,73 @@ export function JobsPage() {
         </p>
       </section>
 
-      <Filters query={query} onChange={updateQuery} statusCounts={statusCounts} />
+      <Filters
+        query={query}
+        onChange={updateQuery}
+        statusCounts={statusCounts}
+        isFetching={isFetching && !isLoading}
+      />
 
-      {/* Advanced panel */}
-      <details className={styles.advanced}>
-        <summary className={styles.advSummary}>Advanced: bulk requeue by current filters</summary>
-        <div className={styles.advBody}>
-          <p className="muted" style={{ fontSize: '0.88rem', marginBottom: 12 }}>
-            Requeues all rows matching your current filters (source, status, search) that have
-            status: failed, blocked, or blocked_verified. Server caps batch size.
-          </p>
-          <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center' }}>
-            <button
-              className={styles.advBtn}
-              onClick={() => runBulkRequeue(true)}
-              title="Count how many rows would be requeued without changing anything"
-            >
-              Count only (dry run)
-            </button>
-            <button
-              className={`${styles.advBtn} ${styles.advBtnPrimary}`}
-              onClick={() => runBulkRequeue(false)}
-              title="Requeue all matching failed/blocked rows to pending"
-            >
-              Requeue matching rows
-            </button>
-            {bulkDryResult && (
-              <span className="muted" style={{ fontSize: '0.88rem' }}>
-                {bulkDryResult}
-              </span>
-            )}
-          </div>
-          <div style={{ marginTop: 12, display: 'flex', gap: 8 }}>
-            <a
-              className={styles.exportBtn}
-              href={
-                MOCK
-                  ? mockDownloadHref('csv')
-                  : `/api/jobs/export?format=csv&${queryToParams(query).toString()}`
-              }
-              download={MOCK ? 'hunt-mock-jobs.csv' : undefined}
-              title="Download current filtered results as CSV"
-            >
-              Download CSV
-            </a>
-            <a
-              className={styles.exportBtn}
-              href={
-                MOCK
-                  ? mockDownloadHref('json')
-                  : `/api/jobs/export?format=json&${queryToParams(query).toString()}`
-              }
-              download={MOCK ? 'hunt-mock-jobs.json' : undefined}
-              title="Download current filtered results as JSON"
-            >
-              Download JSON
-            </a>
-          </div>
+      {/* Bulk requeue panel */}
+      <div className={styles.bulkPanel}>
+        <div className={styles.bulkPanelHeader}>
+          <span className={styles.bulkPanelTitle}>Bulk requeue failed / blocked jobs</span>
         </div>
-      </details>
+        <p className={styles.bulkPanelDesc}>
+          Finds all jobs matching your current filters that have status <strong>failed</strong>,{' '}
+          <strong>blocked</strong>, or <strong>blocked_verified</strong>, and re-queues them to{' '}
+          <strong>pending</strong> so the enricher picks them up again. Use "Count only" first to
+          preview how many rows would be affected.
+        </p>
+        <div className={styles.bulkActions}>
+          <button
+            className={styles.bulkBtn}
+            onClick={() => runBulkRequeue(true)}
+            title="Count matching rows without making any changes"
+          >
+            Count only (dry run)
+          </button>
+          <button
+            className={`${styles.bulkBtn} ${styles.bulkBtnPrimary}`}
+            onClick={() => runBulkRequeue(false)}
+            title="Requeue all matching failed/blocked rows to pending"
+          >
+            Requeue matching rows
+          </button>
+          {bulkDryResult && (
+            <span className="muted" style={{ fontSize: '0.88rem' }}>
+              {bulkDryResult}
+            </span>
+          )}
+        </div>
+        <div className={styles.bulkExports}>
+          <span className={styles.bulkExportLabel}>Export current view:</span>
+          <a
+            className={styles.exportBtn}
+            href={
+              MOCK
+                ? mockDownloadHref('csv')
+                : `/api/jobs/export?format=csv&${queryToParams(query).toString()}`
+            }
+            download={MOCK ? 'hunt-mock-jobs.csv' : undefined}
+            title="Download current filtered results as CSV"
+          >
+            CSV ↓
+          </a>
+          <a
+            className={styles.exportBtn}
+            href={
+              MOCK
+                ? mockDownloadHref('json')
+                : `/api/jobs/export?format=json&${queryToParams(query).toString()}`
+            }
+            download={MOCK ? 'hunt-mock-jobs.json' : undefined}
+            title="Download current filtered results as JSON"
+          >
+            JSON ↓
+          </a>
+        </div>
+      </div>
 
       {/* Table */}
       <div className={styles.tableWrap}>
@@ -352,25 +413,9 @@ export function JobsPage() {
                 <Th
                   key={label}
                   label={label}
-                  sortKey={
-                    label === 'ID'
-                      ? 'id'
-                      : label === 'Company'
-                        ? 'company'
-                        : label === 'Title'
-                          ? 'title'
-                          : label === 'Enrichment'
-                            ? 'enrichment_status'
-                            : label === 'Apply type'
-                              ? 'apply_type'
-                              : label === 'Attempts'
-                                ? 'enrichment_attempts'
-                                : label === 'Added'
-                                  ? 'date_scraped'
-                                  : undefined
-                  }
-                  query={query}
-                  onChange={updateQuery}
+                  sortKey={COL_SORT_KEYS[label]}
+                  localSort={localSort}
+                  onLocalSort={setLocalSort}
                 />
               ))}
             </tr>
@@ -378,18 +423,18 @@ export function JobsPage() {
           <tbody ref={tbodyRef}>
             {isLoading ? (
               <tr>
-                <td colSpan={9} style={{ textAlign: 'center', padding: 32, color: 'var(--muted)' }}>
+                <td colSpan={8} style={{ textAlign: 'center', padding: 32, color: 'var(--muted)' }}>
                   Loading…
                 </td>
               </tr>
-            ) : jobs.length === 0 ? (
+            ) : displayJobs.length === 0 ? (
               <tr>
-                <td colSpan={9} style={{ textAlign: 'center', padding: 32, color: 'var(--muted)' }}>
+                <td colSpan={8} style={{ textAlign: 'center', padding: 32, color: 'var(--muted)' }}>
                   No jobs match this filter.
                 </td>
               </tr>
             ) : (
-              jobs.map((j, i) => renderJob(j, i))
+              displayJobs.map((j, i) => renderJob(j, i))
             )}
           </tbody>
         </table>
@@ -397,11 +442,7 @@ export function JobsPage() {
 
       <Pagination
         page={query.page ?? 1}
-        totalRows={
-          jobs.length >= (query.limit ?? 50)
-            ? (query.page ?? 1) * (query.limit ?? 50) + 1
-            : ((query.page ?? 1) - 1) * (query.limit ?? 50) + jobs.length
-        }
+        total={total}
         limit={query.limit ?? 50}
         onChange={(page) => updateQuery({ page })}
       />

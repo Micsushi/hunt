@@ -1,11 +1,11 @@
 .card {
   background: var(--panel);
   border: 1px solid var(--line);
-  border-radius: var(--radius-xl);
+  border-radius: var(--radius-md);
   padding: 16px 18px;
   box-shadow: var(--shadow);
   transition:
-    transform var(--ease),
+    border-color var(--ease),
     box-shadow var(--ease);
 }
 
@@ -14,7 +14,6 @@
 }
 
 .card.clickable:hover {
-  transform: translateY(-2px);
   box-shadow: var(--shadow-raised);
   border-color: var(--line-strong);
 }

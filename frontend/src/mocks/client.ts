@@ -23,7 +23,7 @@ import {
 
 const EXACT_GET_ROUTES: Record<string, unknown> = {
   '/auth/me': MOCK_AUTH,
-  '/api/jobs': MOCK_JOBS,
+  '/api/jobs': { items: MOCK_JOBS, total: MOCK_JOBS.length },
   '/api/jobs/count': { count: MOCK_JOBS.length },
   '/api/summary': MOCK_SUMMARY,
   '/api/logs': MOCK_LOGS,

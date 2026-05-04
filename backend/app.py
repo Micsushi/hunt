@@ -3628,6 +3628,7 @@ def api_jobs(
     tag_clean = (tag or "").strip() or None
     category_clean = (category or "").strip() or None
     ats_type_clean = (ats_type or "").strip() or None
+    source_filter = None if source == "all" else source
     rows = list_jobs_for_review(
         status=status,
         limit=safe_limit,
@@ -3636,12 +3637,18 @@ def api_jobs(
         query=q,
         sort=sort,
         direction=direction,
-        source=None if source == "all" else source,
+        source=source_filter,
         operator_tag=tag_clean,
         category=category_clean,
         ats_type=ats_type_clean,
     )
-    return JSONResponse([_job_json(row) for row in rows])
+    total = count_jobs_for_review(
+        status=status,
+        query=q,
+        source=source_filter,
+        operator_tag=tag_clean,
+    )
+    return JSONResponse({"items": [_job_json(row) for row in rows], "total": total})
 
 
 @app.get("/api/jobs/export")

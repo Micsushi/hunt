@@ -32,6 +32,13 @@ python deploy.py c1
 Starts `hunter`, `hunter-scheduler`, and `postgres` containers.
 Scheduler fires a scrape+enrich cycle every 10 minutes automatically.
 
+Open the UI at `http://localhost:18090`.
+
+Other ports (API/internal):
+- C0 backend: `http://localhost:18080`
+- C1 service: `http://localhost:18001/status`
+- Postgres: `localhost:15432`
+
 Check containers:
 ```powershell
 docker ps --filter name=hunter

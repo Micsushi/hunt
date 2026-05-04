@@ -24,7 +24,7 @@
   overflow-x: auto;
   background: var(--panel);
   border: 1px solid var(--line);
-  border-radius: var(--radius-xl);
+  border-radius: var(--radius-md);
   box-shadow: var(--shadow);
 }
 
@@ -59,6 +59,7 @@
   min-width: 0;
 }
 
+/* 8 columns: checkbox, ID, Company, Title, Links, Enrichment, Apply type, Added */
 .table th:nth-child(1) {
   width: 2.25rem;
   text-align: center;
@@ -67,25 +68,22 @@
   width: 6rem;
 }
 .table th:nth-child(3) {
-  width: 14%;
+  width: 15%;
 }
 .table th:nth-child(4) {
-  width: 28%;
+  width: 30%;
 }
 .table th:nth-child(5) {
-  width: 12%;
+  width: 13%;
 }
 .table th:nth-child(6) {
-  width: 12%;
+  width: 13%;
 }
 .table th:nth-child(7) {
-  width: 10%;
+  width: 11%;
 }
 .table th:nth-child(8) {
-  width: 6rem;
-}
-.table th:nth-child(9) {
-  width: 6.5rem;
+  width: 7rem;
 }
 
 .table tr:last-child td {
@@ -140,12 +138,6 @@
   color: var(--muted);
   white-space: nowrap;
 }
-.numCell {
-  text-align: right;
-  font-family: var(--font-mono);
-  font-size: 0.82rem;
-  color: var(--muted);
-}
 
 .priorityBadge {
   display: inline-block;
@@ -166,66 +158,100 @@
   white-space: nowrap;
 }
 
-.advanced {
+/* Bulk requeue panel — replaces old <details> element */
+.bulkPanel {
   background: var(--panel);
   border: 1px solid var(--line);
-  border-radius: var(--radius-lg);
+  border-left: 3px solid var(--accent);
+  border-radius: var(--radius-md);
+  padding: 14px 16px;
   box-shadow: var(--shadow);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
 }
 
-.advSummary {
-  cursor: pointer;
-  padding: 13px 16px;
+.bulkPanelHeader {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.bulkPanelTitle {
+  font-size: 0.78rem;
   font-weight: 700;
-  color: var(--ink);
-  font-size: 0.92rem;
-  list-style: none;
-}
-.advSummary::-webkit-details-marker {
-  display: none;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  color: var(--muted);
 }
 
-.advBody {
-  padding: 16px;
-  border-top: 1px solid var(--line);
+.bulkPanelDesc {
+  font-size: 0.875rem;
+  color: var(--muted);
+  margin: 0;
+  line-height: 1.5;
 }
 
-.advBtn {
+.bulkActions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+
+.bulkBtn {
   border: 1px solid var(--line);
-  border-radius: var(--radius-pill);
-  padding: 8px 14px;
-  font-size: 0.88rem;
+  border-radius: var(--radius-sm);
+  padding: 7px 14px;
+  font-size: 0.875rem;
   font-weight: 600;
   background: var(--panel-strong);
   color: var(--ink);
   cursor: pointer;
   transition:
     background var(--ease),
-    transform var(--ease);
+    border-color var(--ease);
 }
-.advBtn:hover {
-  transform: translateY(-1px);
+.bulkBtn:hover {
   background: var(--accent-soft);
-}
-.advBtn.advBtnPrimary {
-  background: var(--accent);
-  color: var(--accent-ink);
   border-color: var(--accent);
+}
+.bulkBtnPrimary {
+  background: var(--accent) !important;
+  color: white !important;
+  border-color: var(--accent) !important;
+}
+.bulkBtnPrimary:hover {
+  opacity: 0.85;
+}
+
+.bulkExports {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding-top: 2px;
+  border-top: 1px solid var(--line);
+}
+
+.bulkExportLabel {
+  font-size: 0.78rem;
+  color: var(--muted);
 }
 
 .exportBtn {
   border: 1px solid var(--line);
-  border-radius: var(--radius-pill);
-  padding: 6px 12px;
-  font-size: 0.83rem;
+  border-radius: var(--radius-sm);
+  padding: 5px 10px;
+  font-size: 0.82rem;
   font-weight: 600;
-  background: var(--panel);
+  background: var(--panel-strong);
   color: var(--ink);
   cursor: pointer;
   text-decoration: none;
   transition: background var(--ease);
 }
 .exportBtn:hover {
-  background: var(--panel-strong);
+  background: var(--accent-soft);
+  border-color: var(--accent);
   text-decoration: none;
 }
