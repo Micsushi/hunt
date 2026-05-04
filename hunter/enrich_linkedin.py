@@ -7,6 +7,7 @@ import time
 if __package__ is None or __package__ == "":
     sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+from hunter.c1_logging import C1Logger
 from hunter.db import (
     claim_linkedin_job_for_enrichment,
     get_job_by_id,
@@ -16,7 +17,11 @@ from hunter.db import (
     mark_linkedin_enrichment_succeeded,
     restore_linkedin_enrichment_claim,
 )
-from hunter.enrichment_policy import compute_retry_after, format_sqlite_timestamp
+from hunter.enrichment_policy import (
+    compute_retry_after,
+    format_sqlite_timestamp,
+    is_retryable_error_code,
+)
 from hunter.failure_artifacts import capture_page_artifacts
 from hunter.linkedin_session import (
     LinkedInSessionError,
@@ -1044,6 +1049,22 @@ def get_next_retry_timestamp(claimed_job, error_code, *, ui_verify=False):
     return format_sqlite_timestamp(retry_after) if retry_after else None
 
 
+def log_retry_exhausted(claimed_job, *, error_code, error_message):
+    C1Logger(discord=False).event(
+        key="hunt_last_retry_exhausted",
+        level="warn",
+        message="C1 enrichment retries exhausted.",
+        code="retry_exhausted",
+        details={
+            "job_id": claimed_job.get("id"),
+            "source": "linkedin",
+            "error_code": error_code,
+            "error_message": error_message,
+            "enrichment_attempts": claimed_job.get("enrichment_attempts"),
+        },
+    )
+
+
 def _notify_linkedin_auth_pause(claimed_job, error_message, *, relogin_result=None):
     lines = [
         "Hunt alert: LinkedIn enrichment auth is paused.",
@@ -1244,6 +1265,12 @@ def process_claimed_job(
             error_code,
             ui_verify=ui_verify,
         )
+        if not ui_verify and is_retryable_error_code(error_code) and next_retry_timestamp is None:
+            log_retry_exhausted(
+                claimed_job,
+                error_code=error_code,
+                error_message=error_message,
+            )
         mark_linkedin_enrichment_failed(
             claimed_job["id"],
             error_message,

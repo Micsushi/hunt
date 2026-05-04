@@ -140,12 +140,15 @@ def post_enrich(req: EnrichRequest, background_tasks: BackgroundTasks):
 def post_reauth(account_id: int, background_tasks: BackgroundTasks):
     from hunter.db import get_connection
 
-    with get_connection() as conn:
+    conn = get_connection()
+    try:
         cursor = conn.execute(
             "SELECT id, username, active FROM linkedin_accounts WHERE id = ?",
             (account_id,),
         )
         row = cursor.fetchone()
+    finally:
+        conn.close()
 
     if not row:
         raise HTTPException(status_code=404, detail="Account not found")

@@ -2,6 +2,7 @@ import os
 import re
 from pathlib import Path
 
+from hunter.c1_logging import C1Logger
 from hunter.enrichment_policy import utc_now
 from shared.file_utils import write_text as _write_text
 from shared.storage import write_json_artifact
@@ -52,6 +53,25 @@ def _relative(path):
     return str(path.resolve().relative_to(root)).replace("\\", "/")
 
 
+def _log_artifact_write(job, error_code, *, source, paths, metadata_path):
+    C1Logger(discord=False).event(
+        key="hunt_last_artifact_write",
+        level="info",
+        message="C1 failure artifacts written.",
+        code="artifact_written",
+        details={
+            "job_id": job.get("id"),
+            "source": source or job.get("source"),
+            "error_code": error_code,
+            "artifact_dir": paths.get("artifact_dir"),
+            "artifact_screenshot_path": paths.get("artifact_screenshot_path"),
+            "artifact_html_path": paths.get("artifact_html_path"),
+            "artifact_text_path": paths.get("artifact_text_path"),
+            "metadata_path": metadata_path,
+        },
+    )
+
+
 def capture_text_artifacts(
     job,
     error_code,
@@ -89,12 +109,20 @@ def capture_text_artifacts(
         payload.update(metadata)
     write_json_artifact(metadata_path, payload)
 
-    return {
+    result = {
         "artifact_dir": _relative(artifact_dir),
         "artifact_screenshot_path": None,
         "artifact_html_path": _relative(html_path) if html_path else None,
         "artifact_text_path": _relative(text_path) if text_path else None,
     }
+    _log_artifact_write(
+        job,
+        error_code,
+        source=source,
+        paths=result,
+        metadata_path=_relative(metadata_path),
+    )
+    return result
 
 
 def capture_page_artifacts(job, error_code, *, page, source=None, metadata=None):
@@ -137,4 +165,11 @@ def capture_page_artifacts(job, error_code, *, page, source=None, metadata=None)
     )
     if screenshot_path is not None:
         result["artifact_screenshot_path"] = _relative(screenshot_path)
+        _log_artifact_write(
+            job,
+            error_code,
+            source=source,
+            paths=result,
+            metadata_path=_relative(artifact_dir / "metadata.json"),
+        )
     return result

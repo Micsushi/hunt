@@ -279,6 +279,26 @@ def run_enrichment_round(
             aggregate["total_elapsed_seconds"] / aggregate["attempted"]
         )
     aggregate["exit_code"] = 0 if aggregate["actionable_failed"] == 0 else 1
+    C1Logger(discord=False).event(
+        key="hunt_last_enrich_summary",
+        level="info" if aggregate["exit_code"] == 0 else "warn",
+        message="C1 enrichment round finished.",
+        code="enrichment_round_summary",
+        details={
+            "limit": limit,
+            "attempted": aggregate["attempted"],
+            "ui_verified": aggregate["ui_verified"],
+            "succeeded": aggregate["succeeded"],
+            "failed": aggregate["failed"],
+            "actionable_failed": aggregate["actionable_failed"],
+            "failure_breakdown": dict(aggregate["failure_breakdown"]),
+            "stop_error_code": aggregate["stop_error_code"],
+            "by_source": aggregate["by_source"],
+            "total_elapsed_seconds": aggregate["total_elapsed_seconds"],
+            "average_seconds_per_job": aggregate["average_seconds_per_job"],
+            "exit_code": aggregate["exit_code"],
+        },
+    )
 
     if return_summary:
         return aggregate

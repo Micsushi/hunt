@@ -969,7 +969,14 @@ def test_hunter_powershell_launcher_queue_runs_standalone(tmp_path):
 @pytest.mark.skipif(sys.platform != "win32", reason="Windows-only launcher smoke")
 def test_hunter_powershell_launcher_propagates_failure_exit_code():
     result = subprocess.run(
-        ["powershell", "-ExecutionPolicy", "Bypass", "-File", "hunter.ps1", "definitely-not-a-command"],
+        [
+            "powershell",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-File",
+            "hunter.ps1",
+            "definitely-not-a-command",
+        ],
         cwd=REPO_ROOT,
         capture_output=True,
         text=True,

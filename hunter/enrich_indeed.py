@@ -17,13 +17,18 @@ from hunter.browser_runtime import (  # noqa: E402
     PlaywrightTimeoutError,
     open_browser_context,
 )
+from hunter.c1_logging import C1Logger  # noqa: E402
 from hunter.db import (  # noqa: E402
     claim_job_for_enrichment,
     get_job_by_id,
     mark_job_enrichment_failed,
     mark_job_enrichment_succeeded,
 )
-from hunter.enrichment_policy import compute_retry_after, format_sqlite_timestamp  # noqa: E402
+from hunter.enrichment_policy import (  # noqa: E402
+    compute_retry_after,
+    format_sqlite_timestamp,
+    is_retryable_error_code,  # noqa: E402
+)
 from hunter.failure_artifacts import capture_page_artifacts, capture_text_artifacts  # noqa: E402
 from hunter.url_utils import (  # noqa: E402
     detect_ats_type,
@@ -350,7 +355,7 @@ def enrich_indeed_job_in_context(context, job, *, timeout_ms=45000):
         apply_host = get_apply_host(apply_url)
         ats_type = detect_ats_type(apply_url)
         apply_type = "external_apply" if apply_url else "unknown"
-        auto_apply_eligible = 1 if apply_type == "external_apply" else None
+        auto_apply_eligible = True if apply_type == "external_apply" else None
 
         return {
             "description": description,
@@ -440,7 +445,7 @@ def enrich_indeed_job(job, *, timeout_ms=45000):
         apply_host = get_apply_host(apply_url)
         ats_type = detect_ats_type(apply_url)
         apply_type = "external_apply" if apply_url else "unknown"
-        auto_apply_eligible = 1 if apply_type == "external_apply" else None
+        auto_apply_eligible = True if apply_type == "external_apply" else None
 
         return {
             "description": description,
@@ -498,6 +503,22 @@ def _is_non_actionable_failure_code(error_code):
     return error_code == "job_removed"
 
 
+def _log_retry_exhausted(claimed_job, *, error_code, error_message):
+    C1Logger(discord=False).event(
+        key="hunt_last_retry_exhausted",
+        level="warn",
+        message="C1 enrichment retries exhausted.",
+        code="retry_exhausted",
+        details={
+            "job_id": claimed_job.get("id"),
+            "source": SOURCE,
+            "error_code": error_code,
+            "error_message": error_message,
+            "enrichment_attempts": claimed_job.get("enrichment_attempts"),
+        },
+    )
+
+
 def _process_claimed_job(claimed_job, *, timeout_ms=45000, context=None, ui_verify=False):
     started_at = time.monotonic()
     print(
@@ -543,6 +564,12 @@ def _process_claimed_job(claimed_job, *, timeout_ms=45000, context=None, ui_veri
         next_retry_at = (
             None if ui_verify else (format_sqlite_timestamp(retry_after) if retry_after else None)
         )
+        if not ui_verify and is_retryable_error_code(error_code) and retry_after is None:
+            _log_retry_exhausted(
+                claimed_job,
+                error_code=error_code,
+                error_message=error_message,
+            )
         mark_job_enrichment_failed(
             claimed_job["id"],
             error_message,

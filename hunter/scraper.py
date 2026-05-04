@@ -253,7 +253,7 @@ def run_pending_job_enrichment(
     )
 
     try:
-        from enrich_jobs import process_multi_source_batch
+        from hunter.enrich_jobs import process_multi_source_batch
 
         return process_multi_source_batch(
             limit=effective_limit,
@@ -302,6 +302,7 @@ def scrape(
     ui_verify_blocked=None,
 ):
     init_db()
+    logger = C1Logger(discord=False)
 
     if enrich_pending is None:
         enrich_pending = ENRICH_AFTER_SCRAPE
@@ -325,71 +326,101 @@ def scrape(
         for site in SITES
     ]
 
-    print(f"Starting {len(tasks)} scrape tasks with {MAX_WORKERS} workers...\n")
-
-    with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
-        futures = {
-            executor.submit(scrape_single, site, term, location, category): (
-                site,
-                term,
-                location,
-                category,
-            )
-            for site, term, location, category in tasks
-        }
-
-        for future in as_completed(futures):
-            jobs = future.result()
-            all_jobs.extend(jobs)
-
-    inserted = 0
-    refreshed = 0
-    priority_jobs = []
-    for job_data in all_jobs:
-        add_result = add_job(job_data)
-        result = add_result[0]
-        job_id = add_result[1]
-        if result == "inserted":
-            inserted += 1
-            if job_data.get("priority"):
-                priority_jobs.append(_record_priority_job(job_id, job_data))
-        elif result == "updated":
-            refreshed += 1
-            priority_changed = len(add_result) > 2 and add_result[2]
-            if priority_changed:
-                priority_jobs.append(_record_priority_job(job_id, job_data))
-
-    _notify_priority_jobs(priority_jobs)
-
-    skipped = len(all_jobs) - inserted - refreshed
-    print(
-        f"\nDone! Scraped {len(all_jobs)} total jobs, added {inserted} new to database, "
-        f"refreshed {refreshed} existing row(s), skipped {skipped} unchanged duplicate(s)"
+    logger.event(
+        key="hunt_last_scrape_start",
+        level="info",
+        message="C1 scrape started.",
+        code="scrape_started",
+        details={
+            "task_count": len(tasks),
+            "max_workers": MAX_WORKERS,
+            "enrich_pending": bool(enrich_pending),
+            "enrich_limit": enrich_limit,
+        },
     )
 
-    enrichment_exit_code = None
-    if enrich_pending:
-        enrichment_exit_code = run_pending_linkedin_enrichment(
-            limit=enrich_limit,
-            storage_state_path=storage_state_path,
-            headless=enrichment_headless,
-            slow_mo=enrichment_slow_mo,
-            timeout_ms=enrichment_timeout_ms,
-            browser_channel=enrichment_browser_channel,
-            ui_verify_blocked=ui_verify_blocked,
-        )
-        if enrichment_exit_code == 0:
-            print("[scrape] Post-scrape enrichment finished cleanly.")
-        else:
-            print("[scrape] Post-scrape enrichment finished with some unresolved failures.")
+    print(f"Starting {len(tasks)} scrape tasks with {MAX_WORKERS} workers...\n")
 
-    return {
-        "scraped_total": len(all_jobs),
-        "inserted": inserted,
-        "refreshed": refreshed,
-        "skipped": skipped,
-        "enrichment_exit_code": enrichment_exit_code,
-    }
+    try:
+        with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
+            futures = {
+                executor.submit(scrape_single, site, term, location, category): (
+                    site,
+                    term,
+                    location,
+                    category,
+                )
+                for site, term, location, category in tasks
+            }
+
+            for future in as_completed(futures):
+                jobs = future.result()
+                all_jobs.extend(jobs)
+
+        inserted = 0
+        refreshed = 0
+        priority_jobs = []
+        for job_data in all_jobs:
+            add_result = add_job(job_data)
+            result = add_result[0]
+            job_id = add_result[1]
+            if result == "inserted":
+                inserted += 1
+                if job_data.get("priority"):
+                    priority_jobs.append(_record_priority_job(job_id, job_data))
+            elif result == "updated":
+                refreshed += 1
+                priority_changed = len(add_result) > 2 and add_result[2]
+                if priority_changed:
+                    priority_jobs.append(_record_priority_job(job_id, job_data))
+
+        _notify_priority_jobs(priority_jobs)
+
+        skipped = len(all_jobs) - inserted - refreshed
+        print(
+            f"\nDone! Scraped {len(all_jobs)} total jobs, added {inserted} new to database, "
+            f"refreshed {refreshed} existing row(s), skipped {skipped} unchanged duplicate(s)"
+        )
+
+        enrichment_exit_code = None
+        if enrich_pending:
+            enrichment_exit_code = run_pending_linkedin_enrichment(
+                limit=enrich_limit,
+                storage_state_path=storage_state_path,
+                headless=enrichment_headless,
+                slow_mo=enrichment_slow_mo,
+                timeout_ms=enrichment_timeout_ms,
+                browser_channel=enrichment_browser_channel,
+                ui_verify_blocked=ui_verify_blocked,
+            )
+            if enrichment_exit_code == 0:
+                print("[scrape] Post-scrape enrichment finished cleanly.")
+            else:
+                print("[scrape] Post-scrape enrichment finished with some unresolved failures.")
+
+        summary = {
+            "scraped_total": len(all_jobs),
+            "inserted": inserted,
+            "refreshed": refreshed,
+            "skipped": skipped,
+            "enrichment_exit_code": enrichment_exit_code,
+        }
+        logger.event(
+            key="hunt_last_scrape_end",
+            level="info",
+            message="C1 scrape finished.",
+            code="scrape_finished",
+            details=summary,
+        )
+        return summary
+    except Exception as exc:
+        logger.exception(
+            key="hunt_last_scrape_end",
+            message="C1 scrape failed.",
+            exc=exc,
+            code="scrape_failed",
+        )
+        raise
 
 
 if __name__ == "__main__":

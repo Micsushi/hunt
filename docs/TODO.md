@@ -36,8 +36,8 @@ C1 scrapes LinkedIn for job listings and enriches them with full job description
 
 - [x] Validate a full production cycle on server2: scrape → enrich → write artifacts → drain queue → confirm scheduler holds steady
 - [x] Confirm the C1 CLI works standalone on both Windows and Linux without Docker (entry points exist: hunter.ps1, hunter.sh, hunter.cmd — needs a real test run on each platform)
-- [ ] Add API endpoint tests: status, queue, scrape, enrich, auth failure handling, and duplicate-run prevention (service.py has all 5 endpoints; no test coverage yet)
-- [ ] Add structured log events for scrape start/end, enrich batch summary, retry exhaustion, and artifact writes (auth pauses and rate limiting already notify via Discord/C1Logger)
+- [x] Add API endpoint tests: status, queue, scrape, enrich, auth failure handling, and duplicate-run prevention (covered in `tests/test_component1_service_api.py`)
+- [x] Add structured log events for scrape start/end, enrich batch summary, retry exhaustion, and artifact writes (auth pauses and rate limiting already notify via Discord/C1Logger)
 - [x] LinkedIn auth handling: per-account state tracking (active / blocked / cooling down) in `linkedin_session.py`; C0 LinkedIn accounts page handles reauth
 - [x] Account rotation: `rotate_linkedin_account()` finds next non-blocked account and auto-relogs; blocked accounts cool down for 7 days
 - [ ] Discord alert for high job-failure rate (auth trouble, rate limiting, and automation detection already send alerts)
