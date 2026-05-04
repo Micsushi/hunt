@@ -5,7 +5,7 @@ the same code path. Replace on v0.4 with a proper users table.
 
 Credentials from env vars:
   HUNT_ADMIN_USERNAME  (default: admin)
-  HUNT_ADMIN_PASSWORD  (required — app logs a warning if empty)
+  HUNT_ADMIN_PASSWORD  (required - app logs a warning if empty)
 """
 
 import hashlib
@@ -44,7 +44,7 @@ def init_sessions_table() -> None:
 
 
 def _unused_hash(password: str) -> str:
-    """PBKDF2 hash — kept for future use when passwords are stored hashed."""
+    """PBKDF2 hash - kept for future use when passwords are stored hashed."""
     return hashlib.pbkdf2_hmac("sha256", password.encode(), b"hunt-salt", 260_000).hex()
 
 

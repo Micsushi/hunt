@@ -198,7 +198,7 @@ async def lifespan(app):
         import warnings
 
         warnings.warn(
-            "HUNT_ADMIN_PASSWORD is not set — all auth endpoints will reject logins. "
+            "HUNT_ADMIN_PASSWORD is not set - all auth endpoints will reject logins. "
             "Set HUNT_ADMIN_PASSWORD in your environment to enable the web UI.",
             stacklevel=1,
         )
@@ -212,7 +212,7 @@ from backend.request_id import RequestIDMiddleware  # noqa: E402
 
 app.include_router(_gateway_router)
 
-# CORS — only needed during local development (Vite on :5173, FastAPI on :8000)
+# CORS - only needed during local development (Vite on :5173, FastAPI on :8000)
 _DEV_ORIGINS = [
     o.strip()
     for o in os.getenv("HUNT_CORS_ORIGINS", "http://localhost:5173").split(",")
@@ -241,7 +241,7 @@ def format_text(value):
 def _format_jd_usable_cell(value):
     """Human-readable JD usability from jobs.latest_resume_jd_usable (0/1/NULL)."""
     if value is None:
-        return "—"
+        return "-"
     try:
         v = int(value)
     except (TypeError, ValueError):
@@ -250,7 +250,7 @@ def _format_jd_usable_cell(value):
         return "yes"
     if v == 0:
         return "no"
-    return "—"
+    return "-"
 
 
 def truncate_text(value, *, max_chars=180):
@@ -1752,7 +1752,7 @@ def render_ai_summary_panel(attempts: list) -> str:
             else "Ollama backend not enabled, no mid-tier keywords, or candidate profile missing."
         )
         status_badge = '<span class="status pending" style="font-size:0.75rem;padding:2px 6px;vertical-align:middle;">not generated</span>'
-        body = f'<p class="muted" style="margin:0;font-style:italic;">Not generated — {reason}</p>'
+        body = f'<p class="muted" style="margin:0;font-style:italic;">Not generated - {reason}</p>'
 
     return f"""
     <div class="panel">
@@ -1771,11 +1771,11 @@ def render_resume_history_cards(attempts: list, job_id: int | None = None) -> st
     for attempt in attempts:
         aid = attempt.get("id")
         jid = job_id or attempt.get("job_id")
-        created = format_text(attempt.get("created_at") or "—")
-        status = attempt.get("status") or "—"
-        family = format_text(attempt.get("role_family") or "—")
-        level = format_text(attempt.get("job_level") or "—")
-        model = format_text(attempt.get("model_name") or "—")
+        created = format_text(attempt.get("created_at") or "-")
+        status = attempt.get("status") or "-"
+        family = format_text(attempt.get("role_family") or "-")
+        level = format_text(attempt.get("job_level") or "-")
+        model = format_text(attempt.get("model_name") or "-")
 
         status_cls = "done" if "done" in status else ("failed" if "fail" in status else "pending")
         selected_badge = ""
@@ -1809,7 +1809,7 @@ def render_resume_history_cards(attempts: list, job_id: int | None = None) -> st
         else:
             summary_html = '<p class="muted" style="margin:10px 0 0 0;font-size:0.85rem;">No AI summary for this attempt.</p>'
 
-        flags = format_text(attempt.get("concern_flags") or "—")
+        flags = format_text(attempt.get("concern_flags") or "-")
 
         cards.append(f"""
         <div style="background:var(--panel-strong);border:1px solid var(--line);border-radius:14px;
@@ -1835,7 +1835,7 @@ def render_resume_history_cards(attempts: list, job_id: int | None = None) -> st
     return f"""
     <div class="panel">
       <h2>Resume history</h2>
-      <p class="muted" style="margin-top:0;">Each card is one generation run. Click Download PDF to get that version. AI summaries are shown below each card — review only, not yet on the resume.</p>
+      <p class="muted" style="margin-top:0;">Each card is one generation run. Click Download PDF to get that version. AI summaries are shown below each card - review only, not yet on the resume.</p>
       {"".join(cards)}
     </div>
     """
@@ -1868,7 +1868,7 @@ def render_resume_attempts(attempts, job_id=None):
             artifact_links.append(
                 f'<a href="/api/attempts/{aid}/llm" target="_blank" rel="noreferrer" class="pill" style="padding:3px 8px;font-size:0.8rem;">LLM I/O</a>'
             )
-        links_html = " ".join(artifact_links) if artifact_links else "—"
+        links_html = " ".join(artifact_links) if artifact_links else "-"
 
         selected_badge = ""
         if attempt.get("is_selected_for_c3"):
@@ -1878,7 +1878,7 @@ def render_resume_attempts(attempts, job_id=None):
 
         jd_cell = _format_jd_usable_cell(attempt.get("jd_usable"))
         jd_note = (
-            format_text(attempt.get("jd_usable_reason")) if attempt.get("jd_usable_reason") else "—"
+            format_text(attempt.get("jd_usable_reason")) if attempt.get("jd_usable_reason") else "-"
         )
 
         rows.append(
@@ -2194,7 +2194,7 @@ def render_jobs_table(
         pri_cell = (
             '<span class="badge-priority" title="This row is flagged “run next” for enrichment (set on the job page). Not a button.">Run next</span>'
             if pri
-            else "—"
+            else "-"
         )
         enrich_label = enrichment_status_display(row.get("enrichment_status"))
         notes_cell = format_text(truncate_text(row.get("operator_notes") or "", max_chars=40))
@@ -2546,7 +2546,7 @@ def _session_username(request: Request) -> str | None:
 
 
 def require_auth(request: Request) -> str:
-    """FastAPI dependency — returns username or raises 401."""
+    """FastAPI dependency - returns username or raises 401."""
     username = _session_username(request)
     if not username:
         raise HTTPException(status_code=401, detail="Not authenticated.")
@@ -2741,7 +2741,7 @@ def auth_logout(request: Request, response: Response):
 
 @app.get("/auth/me")
 def auth_me(request: Request):
-    """Return current auth status — used by SPA on startup."""
+    """Return current auth status - used by SPA on startup."""
     username = _session_username(request)
     return JSONResponse({"authenticated": bool(username), "username": username})
 
@@ -2761,7 +2761,7 @@ def api_jobs_count(
     ats_type: str = "",
     _auth: str = Depends(require_auth),
 ):
-    """Return total row count for current filter — used for pagination."""
+    """Return total row count for current filter - used for pagination."""
     if source not in SOURCE_OPTIONS:
         raise HTTPException(status_code=400, detail=f"Unsupported source filter: {source}")
     if status not in STATUS_OPTIONS:
@@ -3177,7 +3177,7 @@ async def api_c3_fill_result(
 
 
 # ---------------------------------------------------------------------------
-# Health (unauthenticated — for monitoring scripts)
+# Health (unauthenticated - for monitoring scripts)
 # ---------------------------------------------------------------------------
 
 
@@ -3851,7 +3851,7 @@ def api_attempt_llm(attempt_id: int, _auth: str = Depends(require_auth)):
 
     body = f"""
     <section class="hero">
-      <h1>LLM I/O — Attempt {attempt_id}</h1>
+      <h1>LLM I/O - Attempt {attempt_id}</h1>
       <p>Job {job_id} &middot; {html.escape(str(attempt.get("created_at") or ""))}</p>
     </section>
     <section class="stack">
@@ -3872,7 +3872,7 @@ def api_attempt_llm(attempt_id: int, _auth: str = Depends(require_auth)):
       </div>
     </section>
     """
-    return HTMLResponse(render_layout(f"LLM I/O — Attempt {attempt_id}", body, current_path=""))
+    return HTMLResponse(render_layout(f"LLM I/O - Attempt {attempt_id}", body, current_path=""))
 
 
 def _get_attempt_row(attempt_id: int) -> dict | None:
@@ -4416,7 +4416,7 @@ def main():
 
 
 # ---------------------------------------------------------------------------
-# SPA catch-all — must be last so it does not shadow any API routes.
+# SPA catch-all - must be last so it does not shadow any API routes.
 # Serves frontend/dist/index.html for every path not matched above.
 # When the SPA is not built yet, returns a 503 with instructions.
 # ---------------------------------------------------------------------------

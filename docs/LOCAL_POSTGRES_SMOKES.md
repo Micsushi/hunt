@@ -19,7 +19,7 @@ For the default (fresh-stack) mode, local ports `18080`, `18001`, `18002`, `1800
 
 ## Commands
 
-### Local smoke — stack already running
+### Local smoke - stack already running
 
 When `docker compose up` is already active (normal dev), skip container startup and check the running stack directly:
 
@@ -29,7 +29,7 @@ python smoke.py --existing
 
 This is the default workflow during development.
 
-### Local smoke — fresh stack (CI / clean environment)
+### Local smoke - fresh stack (CI / clean environment)
 
 Spin up isolated containers, verify, then tear them down:
 

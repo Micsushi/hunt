@@ -220,7 +220,7 @@
 ### Project Entry
 
 - Entry ID: hunt_job_agent
-- Project name: Hunt — Automated Job Agent
+- Project name: Hunt - Automated Job Agent
 - URL: [https://github.com/Micsushi/hunt](https://github.com/Micsushi/hunt)
 - Role-family tags: software, pm
 - Technology tags: python, fastapi, playwright, sqlite, docker, ollama

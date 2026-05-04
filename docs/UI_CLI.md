@@ -45,4 +45,4 @@ Get help:
 
 - The frontend build requires Node/npm on `PATH`. Run `npm install` in `frontend/` before the
   first build, or let `serve` handle it automatically.
-- C0 serves the review app and control plane API. It does not run C1/C2 — start those separately.
+- C0 serves the review app and control plane API. It does not run C1/C2 - start those separately.

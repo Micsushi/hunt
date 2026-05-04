@@ -7,13 +7,13 @@ This directory is the repo home for **C2 (Fletcher)** : resume tailoring. See **
 | Version | Focus |
 |---------|--------|
 | **~v0.1 (shipped in repo)** | End-to-end pipeline, heuristic tailoring, optional Ollama for **classification + keywords only**, DB/artifacts, `fletch`, review-app structured diff + highlights, Ansible Stage 7. |
-| **v2.0 (deferred)** | Interactive editing: gap/coverage, user-selected keywords, constrained regen, scoped bullet edits — **Stages 9–12** in component2 README; tracked in **`docs/TODO.md`** (C2 v2.0). Not required for v1.0. |
+| **v2.0 (deferred)** | Interactive editing: gap/coverage, user-selected keywords, constrained regen, scoped bullet edits - **Stages 9–12** in component2 README; tracked in **`docs/TODO.md`** (C2 v2.0). Not required for v1.0. |
 
 ## v0.1 runtime (what exists today)
 
 - Parse / render **`main.tex`** (immutable OG resume), optional **family base** resumes under `fletcher/base_resumes/<family>/`.
 - **Keywords** (`fletcher/keyword_extractor.py`): tiny **draft** from the job title when the backend is `heuristic`. With **`HUNT_RESUME_MODEL_BACKEND=ollama`**, the model returns **`jd_usable`** (is the scraped JD good enough to tailor from?), **`jd_usable_reason`**, and up to **10 grounded `keywords`** taken only from the title + description (no invented terms). That list becomes `must_have_terms` / `tools_and_technologies` for scoring and the review UI.
-- **Heuristic** bullet scoring and selection (candidate profile + bullet library). Bullets are selected by relevance score — keywords are **never force-injected** into unrelated bullets.
+- **Heuristic** bullet scoring and selection (candidate profile + bullet library). Bullets are selected by relevance score - keywords are **never force-injected** into unrelated bullets.
 - **LaTeX compile**, **one-page gate** with controlled retries.
 - **SQLite**: `resume_attempts`, `resume_versions`, job latest/selected resume columns, **`get_apply_context`**.
 - **Queue batch**: `python -m fletcher.cli generate-ready` (jobs with `enrichment_status` in `done` / `done_verified`). Jobs are **skipped** when there is already a resume attempt with **`jd_usable = 0`** (model said JD not usable) **and** the job `description` text is unchanged (SHA-256 fingerprint). Re-enrich or edit the description to retry. **`fletch run generate-job <job_id>`** still forces a new attempt.
@@ -30,7 +30,7 @@ cp fletcher/templates/candidate_profile.template.md fletcher/candidate_profile.m
 # Run `fletch context` to see what Entry IDs C2 derives from your main.tex.
 ```
 
-Both files are **gitignored** — they contain personal data. See the template for full instructions on Entry ID matching, role-family tags, and bullet format.
+Both files are **gitignored** - they contain personal data. See the template for full instructions on Entry ID matching, role-family tags, and bullet format.
 
 ### Environment variables
 

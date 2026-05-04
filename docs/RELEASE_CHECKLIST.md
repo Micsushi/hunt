@@ -32,7 +32,7 @@ docker compose -f docker-compose.pipeline.yml --profile pipeline down
 ## 3. Deploy to server2
 
 ```
-# From repo root on Windows — see docs/SERVER2_DEPLOY.md for full runbook
+# From repo root on Windows - see docs/SERVER2_DEPLOY.md for full runbook
 python scripts/deploy_server2.py   # or the Ansible playbook
 ```
 

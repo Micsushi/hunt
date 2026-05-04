@@ -92,7 +92,7 @@ def migrate(sqlite_path: str, postgres_url: str, *, dry_run: bool = False) -> No
             print("\nMigration complete.")
         else:
             pg_conn.rollback()
-            print("\nDry run complete — no data written.")
+            print("\nDry run complete - no data written.")
 
     except Exception:
         pg_conn.rollback()

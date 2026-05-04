@@ -42,7 +42,7 @@ export function FletcherPage() {
     onSuccess: (blob) => {
       if (downloadUrl) URL.revokeObjectURL(downloadUrl)
       setDownloadUrl(URL.createObjectURL(blob))
-      showToast('Resume ready — click to download')
+      showToast('Resume ready - click to download')
     },
     onError: (e) => showToast(e instanceof Error ? e.message : 'Tailor failed', 'error'),
   })
@@ -76,7 +76,7 @@ export function FletcherPage() {
       <div className={styles.pageHeader}>
         <div>
           <h1 className={styles.heroTitle}>Fletcher</h1>
-          <div className={styles.heroMeta}>C2 — resume tailoring service</div>
+          <div className={styles.heroMeta}>C2 - resume tailoring service</div>
         </div>
         <div
           className={`${styles.statusPill} ${serviceOnline ? styles.statusPillOnline : styles.statusPillOffline}`}

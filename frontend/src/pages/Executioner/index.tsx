@@ -18,7 +18,7 @@ export function ExecutionerPage() {
       <div className={styles.pageHeader}>
         <div>
           <h1 className={styles.heroTitle}>Executioner</h1>
-          <div className={styles.heroMeta}>C3 — Chrome extension bridge</div>
+          <div className={styles.heroMeta}>C3 - Chrome extension bridge</div>
         </div>
         <div
           className={`${styles.statusPill} ${bridgeOnline ? styles.statusPillOnline : styles.statusPillOffline}`}
@@ -38,7 +38,7 @@ export function ExecutionerPage() {
         {isLoading ? <p className={styles.meta}>Loading…</p> : null}
         {isError ? (
           <p className={styles.meta} style={{ color: 'var(--danger)' }}>
-            Bridge unreachable — extension not connected
+            Bridge unreachable - extension not connected
           </p>
         ) : null}
         {!isLoading && !isError && fills.length === 0 ? (

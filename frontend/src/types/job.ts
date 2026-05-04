@@ -10,7 +10,7 @@ export type EnrichmentStatus =
 export type JobSource = 'linkedin' | 'indeed'
 export type ApplyType = 'external_apply' | 'easy_apply' | 'unknown'
 
-/** Row returned by GET /api/jobs (list view — no description by default) */
+/** Row returned by GET /api/jobs (list view - no description by default) */
 export interface Job {
   id: number
   title: string

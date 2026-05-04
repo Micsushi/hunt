@@ -64,7 +64,7 @@ const COL_TIPS: Record<string, string> = {
   Title: 'Job title',
   Links: 'View listing or apply page',
   Enrichment: 'Current enrichment status',
-  'Apply type': '"external_apply" = company ATS. "easy_apply" = LinkedIn — we skip those.',
+  'Apply type': '"external_apply" = company ATS. "easy_apply" = LinkedIn - we skip those.',
   Attempts: 'How many enrichment attempts on this row',
   Added: 'When this job was scraped',
 }

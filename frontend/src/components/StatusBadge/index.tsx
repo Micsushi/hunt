@@ -13,12 +13,12 @@ const LABELS: Record<string, string> = {
 
 const TOOLTIPS: Record<string, string> = {
   pending: 'Waiting to be picked up by the enrichment worker',
-  processing: 'Currently being enriched — a worker has claimed this row',
+  processing: 'Currently being enriched - a worker has claimed this row',
   done: 'Enrichment succeeded: description and apply URL resolved',
   done_verified: 'Enrichment verified by a second pass',
-  failed: 'Enrichment failed — check last_enrichment_error for the reason',
+  failed: 'Enrichment failed - check last_enrichment_error for the reason',
   blocked: 'Blocked by LinkedIn auth, rate limits, or anti-bot detection',
-  blocked_verified: 'Blocked and manually confirmed — needs operator attention',
+  blocked_verified: 'Blocked and manually confirmed - needs operator attention',
 }
 
 interface Props {

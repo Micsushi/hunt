@@ -139,7 +139,7 @@ def cmd_test_job(args):
     print(f"Status      : {r['status']}")
     print(f"Compile     : {r['compile_status']}")
     print(f"Fits 1 page : {r['fits_one_page']}")
-    print(f"PDF         : {r.get('pdf_path') or '—'}")
+    print(f"PDF         : {r.get('pdf_path') or '-'}")
 
     summary_path = r.get("summary_rewrite_path")
     if summary_path:

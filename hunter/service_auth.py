@@ -6,7 +6,7 @@ from fastapi import Header, HTTPException
 
 
 def require_service_token(authorization: str = Header(default="")) -> None:
-    """FastAPI dependency — validates HUNT_SERVICE_TOKEN bearer auth.
+    """FastAPI dependency - validates HUNT_SERVICE_TOKEN bearer auth.
 
     When HUNT_SERVICE_TOKEN is blank (dev mode), all requests pass through.
     """

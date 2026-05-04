@@ -228,7 +228,7 @@ def build_resume_review_html(
             ("developer_tools", "Tools"),
         ):
             for item in skills.get(bucket) or []:
-                parts.append(f"<li>{highlight_terms(str(item), terms)} — {html.escape(label)}</li>")
+                parts.append(f"<li>{highlight_terms(str(item), terms)} - {html.escape(label)}</li>")
         parts.append("</ul>")
 
     parts.append("</div>")
@@ -243,7 +243,7 @@ def build_resume_review_html(
 
     parts.append('<h3 class="resume-aside-h">Tune next run (manual)</h3>')
     parts.append(
-        '<p class="muted tiny">Jobright-style quick prompts — copy one and use with your own LLM or a future Fletcher API.</p>'
+        '<p class="muted tiny">Jobright-style quick prompts - copy one and use with your own LLM or a future Fletcher API.</p>'
     )
     suggestions = [
         "Use stronger action verbs in the top experience bullets.",

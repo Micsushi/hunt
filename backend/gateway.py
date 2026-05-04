@@ -1,4 +1,4 @@
-"""C0 gateway routes — proxy calls to C1/C2/C4 component services.
+"""C0 gateway routes - proxy calls to C1/C2/C4 component services.
 
 Mounted on the main FastAPI app under /api/gateway.
 All routes require the review-app session auth (require_auth).

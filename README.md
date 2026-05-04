@@ -90,7 +90,7 @@ cp hunt_user_config.example.json hunt_user_config.json
 ```
 
 **Configurable values:**
-- `watchlist` : priority company list — Discord alert fires on scrape when a match lands
+- `watchlist` : priority company list - Discord alert fires on scrape when a match lands
 - `title_blacklist` : title phrases to filter out during scrape
 - `search_terms` : search queries per lane (engineering / product / data)
 - `locations` : where to search

@@ -1016,7 +1016,7 @@ class OrchestrationService:
             raise OrchestrationError(f"Run {run_id} disappeared after review resolution.")
         if new_status == "awaiting_submit_approval":
             _notify(
-                f"Run {run_id} (job {run.job_id}) passed manual review — awaiting submit approval",
+                f"Run {run_id} (job {run.job_id}) passed manual review - awaiting submit approval",
                 db_path=self.db_path,
                 key="coordinator_last_review_passed",
             )

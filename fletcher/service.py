@@ -58,7 +58,7 @@ def _is_generate_running() -> bool:
 
 @app.post("/generate", dependencies=[Depends(require_service_token)])
 def post_generate(req: GenerateRequest):
-    """Generate resume for a single queued job (synchronous — returns result)."""
+    """Generate resume for a single queued job (synchronous - returns result)."""
     from fletcher.pipeline import generate_resume_for_job
 
     try:

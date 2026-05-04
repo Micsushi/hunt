@@ -1,5 +1,5 @@
 // Workday ATS adapter.
-// Exports createWorkdayFillFunction() — a factory that returns a self-contained
+// Exports createWorkdayFillFunction() - a factory that returns a self-contained
 // async function suitable for chrome.scripting.executeScript func:.
 // The returned function must not close over any module-scope variables because
 // Chrome serialises it via Function.prototype.toString() before injection.
@@ -184,7 +184,7 @@ export function createWorkdayFillFunction() {
         continue;
       }
 
-      // Plain text input — map descriptor to profile value.
+      // Plain text input - map descriptor to profile value.
       var profileValue = u.chooseProfileValue(desc, profile);
       if (
         profileValue &&

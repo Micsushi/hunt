@@ -2,11 +2,11 @@
 RAG index for keyword-to-bullet semantic matching.
 
 Flow:
-  1. build_index()            — embed all bullets/skills from resume + profile + library
+  1. build_index()            - embed all bullets/skills from resume + profile + library
                                 into a ChromaDB collection on disk.
-  2. is_stale()               — hash check: returns True if source files changed since
+  2. is_stale()               - hash check: returns True if source files changed since
                                 the last build.
-  3. match_keywords_to_bullets() — embed each JD keyword and each selected resume bullet
+  3. match_keywords_to_bullets() - embed each JD keyword and each selected resume bullet
                                    in-memory, then route keywords to high/mid/low tiers
                                    based on cosine similarity.
 
@@ -178,7 +178,7 @@ def _collect_documents(
                             "entry_id": eid,
                         }
                     )
-            # Immutable facts — useful context
+            # Immutable facts - useful context
             for fact in entry.get("immutable_facts", []):
                 text = (fact.get("text") or "").strip()
                 if text:
@@ -296,7 +296,7 @@ def build_index(
 
     Returns a status dict with counts and timing.
     """
-    import chromadb  # deferred import — only needed when RAG is active
+    import chromadb  # deferred import - only needed when RAG is active
 
     idx_dir = Path(index_dir or config.RAG_INDEX_DIR)
     idx_dir.mkdir(parents=True, exist_ok=True)

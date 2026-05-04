@@ -1,4 +1,4 @@
-"""Tests for the db_compat connection factory (SQLite path only — no Postgres in CI)."""
+"""Tests for the db_compat connection factory (SQLite path only - no Postgres in CI)."""
 
 import sqlite3
 

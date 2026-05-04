@@ -43,7 +43,7 @@ function DiscoveryFilters({
         <h2 className={styles.panelTitle}>Discovery filters</h2>
       </div>
       <label className={styles.field}>
-        Watchlist — priority companies (one per line)
+        Watchlist - priority companies (one per line)
         <span className={styles.fieldHint}>
           Jobs from these companies get priority=1 and trigger a Discord alert on scrape.
         </span>
@@ -55,7 +55,7 @@ function DiscoveryFilters({
         />
       </label>
       <label className={styles.field}>
-        Title blacklist — phrases to exclude (one per line)
+        Title blacklist - phrases to exclude (one per line)
         <span className={styles.fieldHint}>
           Jobs whose title contains any of these phrases are filtered out during scrape.
         </span>
@@ -113,7 +113,7 @@ function SearchConfig({
       <div className={styles.lanesGrid}>
         {laneNames.map((name) => (
           <label key={name} className={styles.field}>
-            {name.charAt(0).toUpperCase() + name.slice(1)} lane — search queries
+            {name.charAt(0).toUpperCase() + name.slice(1)} lane - search queries
             <textarea
               className={styles.textarea}
               value={lanes[name] ?? ''}
@@ -459,7 +459,7 @@ export function SettingsPage() {
       <section className={styles.hero}>
         <h1 className={styles.heroTitle}>Settings</h1>
         <p className={styles.heroMeta}>
-          C1 runtime configuration — changes persist to file on the C1 host.
+          C1 runtime configuration - changes persist to file on the C1 host.
         </p>
       </section>
 

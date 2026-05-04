@@ -263,7 +263,7 @@ def cmd_config(_args):
     if cfg:
         print(json.dumps(cfg, indent=2))
     else:
-        print("(no user config file — all defaults from config.py are active)")
+        print("(no user config file - all defaults from config.py are active)")
 
 
 def cmd_config_set(args):
@@ -432,7 +432,7 @@ def _run_npm_build():
     """Run npm install + npm run build in frontend/. Returns True on success."""
     fe = _frontend_dir()
     if not os.path.isdir(fe):
-        print("[hunter] frontend/ directory not found — skipping build.")
+        print("[hunter] frontend/ directory not found - skipping build.")
         return False
     npm = _resolve_npm()
     print("[hunter] Building frontend (npm install && npm run build)…")
@@ -453,7 +453,7 @@ def cmd_ui_build(_args):
 def cmd_ui_serve(_args):
     dist_index = os.path.join(_frontend_dir(), "dist", "index.html")
     if not os.path.isfile(dist_index):
-        print("[hunter] frontend/dist not found — running build first.")
+        print("[hunter] frontend/dist not found - running build first.")
         if not _run_npm_build():
             print("[hunter] Build failed. Starting server anyway (will show 503 for UI).")
     _run([PYTHON, "-m", "backend.app"])

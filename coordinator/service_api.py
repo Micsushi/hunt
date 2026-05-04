@@ -1,4 +1,4 @@
-"""C4 Coordinator component service API — HTTP wrapper around OrchestrationService."""
+"""C4 Coordinator component service API - HTTP wrapper around OrchestrationService."""
 
 from __future__ import annotations
 

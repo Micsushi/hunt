@@ -1,4 +1,4 @@
-/** Base fetch wrapper — sends credentials (session cookie) on every request */
+/** Base fetch wrapper - sends credentials (session cookie) on every request */
 
 import { mockDel, mockGet, mockPatch, mockPost } from '@/mocks/client'
 
@@ -16,7 +16,7 @@ export class ApiError extends Error {
 
 async function handleResponse<T>(res: Response): Promise<T> {
   if (res.status === 401) {
-    // Session expired or not logged in — redirect to login
+    // Session expired or not logged in - redirect to login
     window.location.href = '/login'
     throw new ApiError(401, 'Not authenticated')
   }

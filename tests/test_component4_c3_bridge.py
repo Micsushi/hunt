@@ -244,7 +244,7 @@ class C3BridgeTests(unittest.TestCase):
                     svc.build_apply_context(job_id)
                     fills_before = svc.get_pending_fills()
 
-                    # second job — advance to fill_requested
+                    # second job - advance to fill_requested
                     job_id2 = self.insert_job(
                         path,
                         job_url="https://www.indeed.com/viewjob?jk=9002",

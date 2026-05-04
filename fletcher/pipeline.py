@@ -236,7 +236,7 @@ def _print_trace(trace: dict) -> None:
     step3 = trace.get("step3_bullet_rewrites", [])
     section(f"STEP 3: high-score bullets -> LLM rewrite ({len(step3)} bullets)")
     if not step3:
-        print("  (no high-score matches — no bullet rewrites)")
+        print("  (no high-score matches - no bullet rewrites)")
     for r in step3:
         status = "ok" if r.get("success") else "FAILED"
         print(
@@ -369,7 +369,7 @@ def _run_pipeline(
         "rag_used": kw_match.get("rag_used", False),
     }
 
-    # Step 3: Targeted bullet rewrites — one LLM call per bullet that has high-score keywords.
+    # Step 3: Targeted bullet rewrites - one LLM call per bullet that has high-score keywords.
     bullet_rewrites: list[dict] = []
     if kw_match["bullet_matches"]:
         from collections import defaultdict

@@ -64,7 +64,7 @@ def _resolve_npm() -> str:
 def _run_npm_build() -> bool:
     frontend_dir = _frontend_dir()
     if not frontend_dir.is_dir():
-        print("[uictl] frontend/ directory not found — skipping build.")
+        print("[uictl] frontend/ directory not found - skipping build.")
         return False
     npm = _resolve_npm()
     print("[uictl] Building frontend (npm install && npm run build)…")
@@ -87,7 +87,7 @@ def cmd_serve(args) -> None:
     should_build = args.build or not dist_index.is_file()
     if should_build:
         if not dist_index.is_file():
-            print("[uictl] frontend/dist not found — running build first.")
+            print("[uictl] frontend/dist not found - running build first.")
         if not _run_npm_build():
             print("[uictl] Build failed. Start the server anyway (will show 503 for UI).")
     _run([PYTHON, "-m", "backend.app"])

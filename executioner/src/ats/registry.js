@@ -1,6 +1,6 @@
 // ATS registry: single source of truth for URL-based detection.
 // When adding a new adapter: add an entry here and a host_permissions
-// entry in manifest.json. Detection order matters — first match wins.
+// entry in manifest.json. Detection order matters - first match wins.
 export const ATS_REGISTRY = [
   {
     name: "workday",

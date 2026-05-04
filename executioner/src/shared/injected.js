@@ -1,6 +1,6 @@
 // Hunt Apply - shared fill utilities.
 // Injected into application pages via chrome.scripting.executeScript files:[].
-// Must be a plain IIFE — no ES module syntax, no imports.
+// Must be a plain IIFE - no ES module syntax, no imports.
 // Sets up window.__huntApplyUtils consumed by every ATS adapter fill function.
 (function () {
   "use strict";
