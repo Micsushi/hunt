@@ -10,6 +10,7 @@ REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, REPO_ROOT)
 
 from hunter import db  # noqa: E402
+from scripts import verify_easy_apply_filter  # noqa: E402
 
 try:
     from hunter import enrich_indeed
@@ -495,6 +496,22 @@ class Stage32Tests(unittest.TestCase):
                 enrichment_dispatch._REQUIRES_LINKEDIN_SESSION,
                 msg=f"Add {source!r} to enrichment_dispatch._REQUIRES_LINKEDIN_SESSION and _run_batch_for_source",
             )
+
+    def test_verify_easy_apply_filter_checks_stage2_and_c4(self):
+        with self.with_temp_db() as path:
+            job_id = self.insert_job(
+                path,
+                source="linkedin",
+                job_url="https://www.linkedin.com/jobs/view/777",
+                apply_type="easy_apply",
+                auto_apply_eligible=0,
+                enrichment_status="done",
+                description="Easy Apply job description",
+            )
+
+            exit_code = verify_easy_apply_filter.main(["--job-id", str(job_id), "--db-path", path])
+
+        self.assertEqual(exit_code, 0)
 
     def test_review_queue_summary_includes_source_counts(self):
         with self.with_temp_db() as path:

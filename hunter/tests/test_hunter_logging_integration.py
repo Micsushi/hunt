@@ -176,6 +176,71 @@ class HunterLoggingIntegrationTests(unittest.TestCase):
                 self.assertEqual(event["details"]["by_source"]["indeed"], batch_summary)
                 self.assertEqual(result["attempted"], 2)
 
+    def test_enrichment_round_logs_high_failure_rate_alert(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db_path = os.path.join(tmp, "hunt.db")
+            artifacts_dir = os.path.join(tmp, "artifacts")
+            os.makedirs(artifacts_dir, exist_ok=True)
+
+            batch_summary = {
+                "exit_code": 1,
+                "attempted": 5,
+                "ui_verified": 0,
+                "succeeded": 2,
+                "failed": 3,
+                "actionable_failed": 3,
+                "failure_breakdown": {"rate_limited": 2, "description_not_found": 1},
+                "total_elapsed_seconds": 20.0,
+                "average_seconds_per_job": 4.0,
+                "stop_error_code": "rate_limited",
+            }
+
+            with mock.patch.dict(
+                os.environ,
+                {
+                    "HUNT_DB_PATH": db_path,
+                    "HUNT_ARTIFACTS_DIR": artifacts_dir,
+                },
+                clear=False,
+            ):
+                old_db_path = db.DB_PATH
+                db.DB_PATH = db_path
+                self.addCleanup(setattr, db, "DB_PATH", old_db_path)
+                init_db()
+
+                def fake_ready_count(*, sources=None):
+                    if sources == ("indeed",):
+                        return 5
+                    return 0
+
+                with (
+                    mock.patch.object(
+                        enrichment_dispatch,
+                        "ENRICHMENT_ALERT_MIN_ATTEMPTS",
+                        3,
+                    ),
+                    mock.patch.object(
+                        enrichment_dispatch,
+                        "ENRICHMENT_ALERT_FAILURE_RATE_PERCENT",
+                        50,
+                    ),
+                    mock.patch.object(
+                        enrichment_dispatch,
+                        "count_ready_jobs_for_enrichment",
+                        side_effect=fake_ready_count,
+                    ),
+                    mock.patch.object(
+                        enrichment_dispatch, "_run_batch_for_source", return_value=batch_summary
+                    ),
+                ):
+                    enrichment_dispatch.run_enrichment_round(limit=5, return_summary=True)
+
+                event = self._read_runtime_state_key("hunt_last_high_failure_alert")
+                self.assertEqual(event["code"], "high_failure_rate")
+                self.assertEqual(event["details"]["attempted"], 5)
+                self.assertEqual(event["details"]["actionable_failed"], 3)
+                self.assertEqual(event["details"]["failure_rate_percent"], 60.0)
+
     def test_capture_text_artifacts_logs_artifact_write_event(self):
         with tempfile.TemporaryDirectory() as tmp:
             db_path = os.path.join(tmp, "hunt.db")

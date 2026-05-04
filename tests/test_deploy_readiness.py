@@ -32,6 +32,7 @@ def _standalone_launcher_env(tmp_path: Path) -> dict[str, str]:
     env["HUNT_DB_PATH"] = str(tmp_path / "hunt.db")
     env["HUNT_ARTIFACTS_DIR"] = str(tmp_path / "artifacts")
     env["HUNT_COORDINATOR_ROOT"] = str(tmp_path / "coordinator")
+    env["PATH"] = str(REPO_ROOT) + os.pathsep + env.get("PATH", "")
     return env
 
 
@@ -481,6 +482,18 @@ def test_server2_deploy_runbook_exists():
     assert "server2" in runbook_text
     assert "ansible_homelab" in runbook_text
     assert "python smoke.py server2-c1" in runbook_text
+
+
+def test_c1_local_runbook_exists():
+    runbook = Path("docs/C1_LOCAL_RUNBOOK.md")
+
+    assert runbook.is_file()
+
+    runbook_text = runbook.read_text(encoding="utf-8")
+    assert ".\\hunter.ps1 auth-save" in runbook_text
+    assert ".\\hunter.ps1 enrich --source linkedin --job-id 123 --ui-verify" in runbook_text
+    assert "xvfb-run -a ./hunter.sh enrich 10 --source linkedin --headful" in runbook_text
+    assert ".\\hunter.ps1 verify-easy-apply 123" in runbook_text
 
 
 def test_server2_c1_smoke_assets_exist():
@@ -989,7 +1002,7 @@ def test_hunter_powershell_launcher_propagates_failure_exit_code():
 @pytest.mark.skipif(sys.platform != "win32", reason="Windows-only launcher smoke")
 def test_hunter_cmd_launcher_queue_runs_standalone(tmp_path):
     result = subprocess.run(
-        ["cmd", "/c", "hunter.cmd queue"],
+        ["cmd", "/c", "hunter.cmd", "queue"],
         cwd=REPO_ROOT,
         env=_standalone_launcher_env(tmp_path),
         capture_output=True,
@@ -1002,9 +1015,12 @@ def test_hunter_cmd_launcher_queue_runs_standalone(tmp_path):
 
 @pytest.mark.skipif(sys.platform != "win32", reason="Windows-only launcher smoke")
 def test_hunter_cmd_launcher_propagates_failure_exit_code():
+    env = os.environ.copy()
+    env["PATH"] = str(REPO_ROOT) + os.pathsep + env.get("PATH", "")
     result = subprocess.run(
-        ["cmd", "/c", "hunter.cmd definitely-not-a-command"],
+        ["cmd", "/c", "hunter.cmd", "definitely-not-a-command"],
         cwd=REPO_ROOT,
+        env=env,
         capture_output=True,
         text=True,
     )

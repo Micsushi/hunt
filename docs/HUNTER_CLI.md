@@ -32,6 +32,7 @@ Get help:
 - `job`: show one job by id
 - `ready`, `blocked`, `failed`, `done`, `processing`, `pending`: quick status views
 - `verify`: verify one enriched LinkedIn row
+- `verify-easy-apply`: verify an Easy Apply row is still excluded from C4
 
 Examples:
 
@@ -41,6 +42,7 @@ Examples:
 .\hunter.ps1 enrich 25 --source linkedin
 .\hunter.ps1 jobs --source linkedin --status pending --limit 20
 .\hunter.ps1 job 123
+.\hunter.ps1 verify-easy-apply 123
 ```
 
 ## Command groups
@@ -65,6 +67,7 @@ Examples:
 - `job`
 - `job-linkedin`
 - `verify`
+- `verify-easy-apply`
 
 ### Scrape and enrich
 
@@ -154,3 +157,13 @@ Standalone launcher validation completed on both Windows and Linux:
 - `hunter.sh`: valid command returns `0`, invalid command returns nonzero
 
 That confirms the CLI is usable without Docker through all supported launchers.
+
+## Local operator runbook
+
+Use `docs/C1_LOCAL_RUNBOOK.md` for:
+
+- saving or checking a local LinkedIn browser session
+- switching headless and headful enrichment runs
+- running headed Linux sessions on Xvfb
+- running scrape and enrich locally on Windows with `hunter.ps1` or `hunter.cmd`
+- proving a real Easy Apply row is excluded from C4

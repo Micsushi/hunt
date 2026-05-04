@@ -13,14 +13,22 @@ worker module's `process_batch`, then append the source id to `db.ENRICHMENT_SOU
 
 from __future__ import annotations
 
+import json
 from collections.abc import Callable
+from datetime import datetime, timedelta
 from typing import Any
 
 from hunter.c1_logging import C1Logger
+from hunter.config import (
+    ENRICHMENT_ALERT_COOLDOWN_MINUTES,
+    ENRICHMENT_ALERT_FAILURE_RATE_PERCENT,
+    ENRICHMENT_ALERT_MIN_ATTEMPTS,
+)
 from hunter.db import (
     ENRICHMENT_SOURCE_PRIORITY,
     count_ready_jobs_for_enrichment,
     get_linkedin_auth_state,
+    get_runtime_state,
 )
 from hunter.linkedin_session import (
     attempt_auto_relogin,
@@ -30,6 +38,7 @@ from hunter.linkedin_session import (
 )
 
 RATE_LIMIT_BLOCK_DAYS = 1
+HIGH_FAILURE_ALERT_RUNTIME_KEY = "hunt_last_high_failure_alert"
 
 
 def _get_linkedin_process_batch() -> Callable[..., dict[str, Any]]:
@@ -163,6 +172,108 @@ def ensure_linkedin_session(
     if linkedin_auth.get("last_error"):
         print(f"[enrich] Last LinkedIn auth error: {linkedin_auth['last_error']}")
     return False
+
+
+def _round_failure_rate_percent(summary: dict[str, Any]) -> float:
+    attempted = int(summary.get("attempted") or 0)
+    actionable_failed = int(summary.get("actionable_failed") or 0)
+    if attempted <= 0:
+        return 0.0
+    return round((actionable_failed / attempted) * 100, 1)
+
+
+def _build_high_failure_alert_details(summary: dict[str, Any], *, limit: int) -> dict[str, Any]:
+    return {
+        "limit": limit,
+        "attempted": int(summary.get("attempted") or 0),
+        "actionable_failed": int(summary.get("actionable_failed") or 0),
+        "failed": int(summary.get("failed") or 0),
+        "failure_rate_percent": _round_failure_rate_percent(summary),
+        "threshold_percent": ENRICHMENT_ALERT_FAILURE_RATE_PERCENT,
+        "min_attempts": ENRICHMENT_ALERT_MIN_ATTEMPTS,
+        "stop_error_code": summary.get("stop_error_code"),
+        "failure_breakdown": dict(summary.get("failure_breakdown") or {}),
+        "by_source": dict(summary.get("by_source") or {}),
+    }
+
+
+def _should_send_high_failure_alert(summary: dict[str, Any]) -> bool:
+    attempted = int(summary.get("attempted") or 0)
+    actionable_failed = int(summary.get("actionable_failed") or 0)
+    if attempted < ENRICHMENT_ALERT_MIN_ATTEMPTS or attempted <= 0 or actionable_failed <= 0:
+        return False
+    return (actionable_failed / attempted) * 100 >= ENRICHMENT_ALERT_FAILURE_RATE_PERCENT
+
+
+def _is_high_failure_alert_in_cooldown(details: dict[str, Any]) -> bool:
+    state = get_runtime_state([HIGH_FAILURE_ALERT_RUNTIME_KEY]).get(HIGH_FAILURE_ALERT_RUNTIME_KEY)
+    if not state:
+        return False
+
+    try:
+        payload = json.loads(state["value"])
+    except Exception:
+        return False
+
+    previous_details = payload.get("details") or {}
+    fingerprint = {
+        "failure_breakdown": details.get("failure_breakdown"),
+        "stop_error_code": details.get("stop_error_code"),
+        "failure_rate_percent": details.get("failure_rate_percent"),
+    }
+    previous_fingerprint = {
+        "failure_breakdown": previous_details.get("failure_breakdown"),
+        "stop_error_code": previous_details.get("stop_error_code"),
+        "failure_rate_percent": previous_details.get("failure_rate_percent"),
+    }
+    if fingerprint != previous_fingerprint:
+        return False
+
+    updated_at = state.get("updated_at")
+    if not updated_at:
+        return False
+
+    try:
+        updated_at_dt = datetime.strptime(updated_at, "%Y-%m-%d %H:%M:%S")
+    except ValueError:
+        return False
+
+    return datetime.utcnow() - updated_at_dt < timedelta(minutes=ENRICHMENT_ALERT_COOLDOWN_MINUTES)
+
+
+def _maybe_alert_high_failure_rate(summary: dict[str, Any], *, limit: int) -> None:
+    if not _should_send_high_failure_alert(summary):
+        return
+
+    details = _build_high_failure_alert_details(summary, limit=limit)
+    if _is_high_failure_alert_in_cooldown(details):
+        return
+
+    lines = [
+        "Hunt alert: enrichment failure rate is high.",
+        f"Attempted: {details['attempted']}",
+        f"Actionable failed: {details['actionable_failed']}",
+        f"Failure rate: {details['failure_rate_percent']}%",
+    ]
+    if details.get("stop_error_code"):
+        lines.append(f"Stop error: {details['stop_error_code']}")
+    if details["failure_breakdown"]:
+        lines.append(
+            "Breakdown: "
+            + ", ".join(
+                f"{error_code}={count}"
+                for error_code, count in sorted(details["failure_breakdown"].items())
+            )
+        )
+
+    C1Logger(discord=True).event(
+        key=HIGH_FAILURE_ALERT_RUNTIME_KEY,
+        level="warn",
+        message="\n".join(lines),
+        code="high_failure_rate",
+        details=details,
+        discord=True,
+    )
 
 
 def run_enrichment_round(
@@ -299,6 +410,7 @@ def run_enrichment_round(
             "exit_code": aggregate["exit_code"],
         },
     )
+    _maybe_alert_high_failure_rate(aggregate, limit=limit)
 
     if return_summary:
         return aggregate

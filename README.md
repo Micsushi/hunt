@@ -83,6 +83,7 @@ Edit `hunter/config.py`:
 - Host-side manual recovery on server2: `python deploy.py all --mode server --env-file .env.server2 --project-name hunt-server2`
 - Deploy targets runbook: `docs/DEPLOY.md`
 - Local Postgres/container smoke tests: `docs/LOCAL_POSTGRES_SMOKES.md`
+- Local C1 browser/auth/headful/Xvfb/Windows runbook: `docs/C1_LOCAL_RUNBOOK.md`
 - Server2 deploy runbook: `docs/SERVER2_DEPLOY.md`
 - One-command local smoke runner: `python smoke.py`
 - Windows deploy wrapper for server2: `.\scripts\deploy_server2.ps1 -Stages 6`

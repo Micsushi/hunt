@@ -244,6 +244,10 @@ def cmd_verify(args):
     _run(command)
 
 
+def cmd_verify_easy_apply(args):
+    _run([PYTHON, "scripts/verify_easy_apply_filter.py", "--job-id", str(args.job_id)])
+
+
 def cmd_requeue_refresh(_args):
     _run([PYTHON, "scripts/requeue_linkedin_refresh_candidates.py"])
 
@@ -856,6 +860,13 @@ def build_parser():
     verify.add_argument("job_id", type=int)
     verify.add_argument("--expect-type", default=None)
     verify.set_defaults(func=cmd_verify)
+
+    verify_easy_apply = subparsers.add_parser(
+        "verify-easy-apply",
+        help="Verify an Easy Apply row stays excluded from the C4 queue.",
+    )
+    verify_easy_apply.add_argument("job_id", type=int)
+    verify_easy_apply.set_defaults(func=cmd_verify_easy_apply)
 
     requeue = subparsers.add_parser(
         "requeue-refresh", help="Requeue sparse historical LinkedIn rows."
