@@ -9,6 +9,72 @@ Layout under this directory:
 
 Import in code as `from hunter...` (repo root must be on `PYTHONPATH` or run from repo root).
 
+## Running C1
+
+### Local dev (UI + C1, no full stack)
+
+Starts the React UI, C0 backend, C1 hunter service, and Postgres. No C2/Ollama.
+
+```powershell
+cd frontend
+npm run dev:c1
+```
+
+UI at `http://localhost:3000`. C1 service at `http://localhost:18001`.
+Use this when you want the review UI connected to a live C1 without spinning up C2 or Ollama.
+
+### Windows local deploy (Docker, with auto-scrape)
+
+```powershell
+python deploy.py c1
+```
+
+Starts `hunter`, `hunter-scheduler`, and `postgres` containers.
+Scheduler fires a scrape+enrich cycle every 10 minutes automatically.
+
+Check containers:
+```powershell
+docker ps --filter name=hunter
+```
+
+Tail scheduler logs:
+```powershell
+docker logs -f hunt-hunter-scheduler-1
+```
+
+Stop:
+```powershell
+python deploy.py c1 --stop
+```
+
+### Server2 deploy (Ansible)
+
+From any directory on Windows:
+```powershell
+ansible.ps1 playbooks/job_agent/main.yml --tags stage6
+```
+
+Multi-tag value must be quoted (PowerShell treats bare `a,b` as an array):
+```powershell
+ansible.ps1 playbooks/job_agent/main.yml --tags "stage6,stage7"
+```
+
+`ansible.ps1` is in `ansible_homelab\` root and must be on PATH. Runs Ansible in Docker, no WSL needed.
+
+### First-run auth (LinkedIn enrichment)
+
+LinkedIn enrichment requires a saved browser session. Run once before first enrichment:
+```powershell
+.\hunter.ps1 auth-save
+```
+
+Check auth status:
+```powershell
+.\hunter.ps1 auth-check
+```
+
+---
+
 ## CLI
 
 The standalone C1 operator CLI lives in `scripts/hunterctl.py`.

@@ -22,6 +22,7 @@ LOCAL_DEPLOY_TARGETS = {
         "review",
         "frontend",
         "hunter",
+        "hunter-scheduler",
         "ollama",
         "ollama-init",
         "fletcher",
