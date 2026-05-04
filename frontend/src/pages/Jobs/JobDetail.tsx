@@ -3,7 +3,12 @@ import { useParams, useNavigate } from 'react-router-dom'
 import { useJobDetail, useResumeAttempts, useAdjacentJobs } from '@/hooks/useJobDetail'
 import { useUiStore } from '@/store/ui'
 import { requeueJob, setJobPriority, patchJob, deleteJob } from '@/api/jobs'
-import { triggerC2Generate, fetchSystemStatus } from '@/api/control'
+import {
+  triggerC2Generate,
+  fetchSystemStatus,
+  verifyEasyApply,
+  type EasyApplyVerifyResult,
+} from '@/api/control'
 import { StatusBadge } from '@/components/StatusBadge'
 import { useQueryClient, useQuery } from '@tanstack/react-query'
 import styles from './JobDetail.module.css'
@@ -187,6 +192,8 @@ export function JobDetailPage() {
   const qc = useQueryClient()
   const showToast = useUiStore((s) => s.showToast)
   const [generating, setGenerating] = useState(false)
+  const [verifying, setVerifying] = useState(false)
+  const [verifyResult, setVerifyResult] = useState<EasyApplyVerifyResult | null>(null)
 
   const { data: job, isLoading, error } = useJobDetail(jobId)
   const { data: attempts = [] } = useResumeAttempts(jobId)
@@ -264,6 +271,23 @@ export function JobDetailPage() {
       navigate('/jobs')
     } catch (e) {
       showToast(e instanceof Error ? e.message : 'Delete failed', 'error')
+    }
+  }
+
+  async function handleVerifyEasyApply() {
+    setVerifying(true)
+    setVerifyResult(null)
+    try {
+      const result = await verifyEasyApply(jobId)
+      setVerifyResult(result)
+      showToast(
+        result.pass ? 'Easy Apply: PASS' : `Easy Apply: FAIL (${result.failures.length} issue(s))`,
+        result.pass ? undefined : 'error',
+      )
+    } catch (e) {
+      showToast(e instanceof Error ? e.message : 'Verify failed', 'error')
+    } finally {
+      setVerifying(false)
     }
   }
 
@@ -464,6 +488,32 @@ export function JobDetailPage() {
               >
                 Requeue
               </button>
+              {job.apply_type === 'easy_apply' && (
+                <button
+                  className={styles.actionBtn}
+                  onClick={handleVerifyEasyApply}
+                  disabled={verifying}
+                  title="Verify this Easy Apply job is excluded from C4 automation"
+                >
+                  {verifying ? 'Verifying…' : 'Verify Easy Apply'}
+                </button>
+              )}
+              {verifyResult && (
+                <pre
+                  style={{
+                    fontSize: '0.78rem',
+                    margin: '8px 0 0',
+                    whiteSpace: 'pre-wrap',
+                    wordBreak: 'break-word',
+                  }}
+                >
+                  {verifyResult.pass ? 'PASS' : 'FAIL'}
+                  {'\n'}
+                  {verifyResult.failures.length > 0
+                    ? verifyResult.failures.map((f) => `- ${f}`).join('\n')
+                    : 'No issues found.'}
+                </pre>
+              )}
               {job.priority ? (
                 <button
                   className={`${styles.actionBtn} ${styles.actionBtnSecondary}`}

@@ -1,6 +1,8 @@
 venv/
 .venv/
 hunt_user_config.json
+.hunt-state/
+.hunt-data/
 __pycache__/
 *.pyc
 .state/

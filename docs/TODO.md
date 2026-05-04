@@ -7,7 +7,7 @@ Work in progress and polish backlog. See `docs/roadmap.md` for the status of eac
 This is your current confidence snapshot (subjective, as of 2026-05-01). The backlog is longer than this confidence view:
 
 - C0: mostly done
-- C1: about 70% done
+- C1: about 80% done
 - C2: about 30% working
 - C3: not tested end to end yet
 - C4: not really implemented end to end yet

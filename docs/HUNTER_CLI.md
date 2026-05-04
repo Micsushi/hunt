@@ -54,6 +54,27 @@ Examples:
 - `auth-auto-relogin`
 - `auth-test-discord`
 
+### Config
+
+- `config`: show current config file path and effective values
+- `config-set KEY VALUE`: set one config key (VALUE parsed as JSON, then plain string fallback)
+
+Examples:
+
+```powershell
+.\hunter.ps1 config
+.\hunter.ps1 config-set run_interval_seconds 300
+.\hunter.ps1 config-set watchlist '["shopify","stripe"]'
+```
+
+```bash
+./hunter.sh config
+./hunter.sh config-set run_interval_seconds 300
+./hunter.sh config-set watchlist '["shopify","stripe"]'
+```
+
+Config values can also be edited via the **Settings** page in the web UI (requires C1 service running).
+
 ### Queue and inspection
 
 - `queue`

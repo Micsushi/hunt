@@ -544,11 +544,12 @@ def test_server_compose_override_assets_exist():
     assert "HUNT_HUNTER_SCHEDULER_CONTAINER_NAME" in env_text
 
 
-def test_pipeline_compose_server_profile_includes_scheduler_dependencies():
+def test_pipeline_compose_scheduler_in_expected_profiles():
     compose_text = Path("docker-compose.pipeline.yml").read_text(encoding="utf-8")
 
     assert 'profiles: ["pipeline", "db", "c0", "c1", "c2", "c1c2", "all", "server"]' in compose_text
-    assert 'profiles: ["server"]' in compose_text
+    # scheduler runs in all local profiles + server (not just server-only any more)
+    assert 'profiles: ["pipeline", "c1", "c1c2", "all", "server"]' in compose_text
 
 
 def test_backfill_enrichment_metadata_uses_boolean_safe_sql():

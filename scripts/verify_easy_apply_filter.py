@@ -54,9 +54,7 @@ def _main_run(args):
     if job.get("apply_type") != "easy_apply":
         failures.append(f"expected apply_type='easy_apply', got {job.get('apply_type')!r}")
     if job.get("auto_apply_eligible") != 0:
-        failures.append(
-            f"expected auto_apply_eligible=0, got {job.get('auto_apply_eligible')!r}"
-        )
+        failures.append(f"expected auto_apply_eligible=0, got {job.get('auto_apply_eligible')!r}")
     if job.get("apply_url"):
         failures.append("easy_apply row should not keep an external apply_url")
     if job.get("enrichment_status") not in {"done", "done_verified"}:
@@ -69,9 +67,7 @@ def _main_run(args):
     if decision.ready:
         failures.append("C4 marked the job ready, but Easy Apply rows must stay excluded")
     if decision.reason != "easy_apply_excluded":
-        failures.append(
-            f"expected C4 reason='easy_apply_excluded', got {decision.reason!r}"
-        )
+        failures.append(f"expected C4 reason='easy_apply_excluded', got {decision.reason!r}")
 
     if failures:
         print("Easy Apply verification: FAIL")

@@ -6,7 +6,7 @@ Automated Hunt runtime. Today it includes **C0 (Frontend)**, **C1 (Hunter)** dis
 
 Current operator confidence snapshot (subjective, as of 2026-05-01):
 - **C0**: mostly done
-- **C1**: about 70% done
+- **C1**: about 80% done
 - **C2**: about 30% working
 - **C3**: not meaningfully tested end to end yet
 - **C4**: not really implemented end to end yet
@@ -57,50 +57,11 @@ The legacy systemd helper is still available, but current container smoke work u
 
 ## Quick commands
 
-All commands below use the `hunter` launchers (`.\hunter.ps1` on Windows, `./hunter.sh` on Linux).
-
-**Daily use**
-```
-hunter scrape              # scrape + auto-enrich
-hunter enrich              # enrich pending queue (default 25 rows)
-hunter drain               # drain entire pending queue in batches
-hunter queue               # show pending/ready counts
-hunter status              # show C1 service status
-hunter jobs                # list recent ready jobs
-```
-
-**Auth**
-```
-hunter auth-save           # open browser to save a LinkedIn session
-hunter auth-check          # verify saved session is valid
-```
-
-**Retry after failures**
-```
-hunter requeue-errors --error-code auth_expired
-hunter requeue-errors --error-code rate_limited
-hunter requeue-errors      # requeue all retryable errors
-```
-
-**Config**
-```
-hunter config              # show current config (file + effective values)
-hunter config-set run_interval_seconds 300
-hunter config-set watchlist '["shopify","stripe","google"]'
-```
-Or edit `hunt_user_config.json` directly, or use the **Settings** page in the web UI.
+**C1 (Hunter) CLI:** see `docs/HUNTER_CLI.md` for scrape, enrich, drain, queue, auth, config, and all other Hunter CLI commands. Config values can also be edited via the **Settings** page in the web UI.
 
 **Start the local UI (C0)**
 ```
 hunter ui serve            # serve the review app at http://localhost:8000
-```
-
-**Start C1 as a service**
-```
-hunter start               # Windows: run one cycle; Linux: enable+start systemd timer
-hunter auto-on             # Linux: enable auto-run on boot
-hunter svc-status          # Linux: check service status
-hunter svc-follow          # Linux: tail service logs
 ```
 
 **Deploy (Docker, server2)**

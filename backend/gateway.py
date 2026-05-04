@@ -149,6 +149,13 @@ async def c1_config_patch(request: Request, _auth: str = Depends(_require_auth))
     return await _proxy_patch(f"{HUNT_HUNTER_URL}/config", body)
 
 
+@router.post("/c1/test-discord")
+async def c1_test_discord(_auth: str = Depends(_require_auth)):
+    from hunter.config import HUNT_HUNTER_URL
+
+    return await _proxy_post(f"{HUNT_HUNTER_URL}/test-discord")
+
+
 # ---------------------------------------------------------------------------
 # C2 Fletcher routes
 # ---------------------------------------------------------------------------

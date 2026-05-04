@@ -238,6 +238,14 @@ export function OpsPage() {
           >
             Enrich 25
           </button>
+          <button
+            className={styles.btn}
+            disabled={!!loadingBtn}
+            onClick={() => runC1('drain', () => triggerC1Enrich(500))}
+            title="Enrich up to 500 pending rows in one background run"
+          >
+            Drain all
+          </button>
         </div>
         {c1Result ? <pre className={styles.apiRef}>{JSON.stringify(c1Result, null, 2)}</pre> : null}
       </div>

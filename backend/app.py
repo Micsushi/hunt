@@ -3976,6 +3976,50 @@ def api_job_priority(job_id: int, payload: dict = Body(...)):
     return JSONResponse({"status": "ok", "job_id": job_id, "run_next": run_next})
 
 
+@app.post("/api/jobs/{job_id}/verify-easy-apply", dependencies=[Depends(review_ops_dependency)])
+def api_verify_easy_apply(job_id: int):
+    from coordinator.service import OrchestrationService
+
+    job = get_job_by_id(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found.")
+
+    failures: list[str] = []
+    if job.get("source") != "linkedin":
+        failures.append(f"expected source='linkedin', got {job.get('source')!r}")
+    if job.get("apply_type") != "easy_apply":
+        failures.append(f"expected apply_type='easy_apply', got {job.get('apply_type')!r}")
+    if job.get("auto_apply_eligible") != 0:
+        failures.append(f"expected auto_apply_eligible=0, got {job.get('auto_apply_eligible')!r}")
+    if job.get("apply_url"):
+        failures.append("easy_apply row should not keep an external apply_url")
+    if job.get("enrichment_status") not in {"done", "done_verified"}:
+        failures.append(
+            f"expected enrichment_status in {{'done', 'done_verified'}}, "
+            f"got {job.get('enrichment_status')!r}"
+        )
+
+    try:
+        decision = OrchestrationService().get_ready_decision(job_id)
+        if decision.ready:
+            failures.append("C4 marked the job ready, but Easy Apply rows must stay excluded")
+        if decision.reason != "easy_apply_excluded":
+            failures.append(f"expected C4 reason='easy_apply_excluded', got {decision.reason!r}")
+    except Exception as exc:
+        failures.append(f"C4 decision check failed: {exc}")
+
+    return JSONResponse(
+        {
+            "pass": len(failures) == 0,
+            "job_id": job_id,
+            "failures": failures,
+            "apply_type": job.get("apply_type"),
+            "auto_apply_eligible": job.get("auto_apply_eligible"),
+            "enrichment_status": job.get("enrichment_status"),
+        }
+    )
+
+
 @app.post("/api/jobs/{job_id}/operator-meta", dependencies=[Depends(review_ops_dependency)])
 def api_job_operator_meta(job_id: int, payload: dict = Body(...)):
     row = get_job_by_id(job_id)

@@ -214,6 +214,20 @@ def patch_config(req: ConfigPatchRequest):
     }
 
 
+@app.post("/test-discord", dependencies=[Depends(require_service_token)])
+def post_test_discord():
+    from shared.notifications import send_discord_webhook_message
+
+    result = send_discord_webhook_message(
+        "C1 Hunter: Discord webhook test from operator UI.",
+        username="Hunt C1",
+        timeout_seconds=10,
+    )
+    if not result["sent"]:
+        raise HTTPException(status_code=502, detail=result.get("reason", "Discord send failed"))
+    return {"sent": True, "status_code": result.get("status_code")}
+
+
 @app.post("/accounts/{account_id}/reauth", dependencies=[Depends(require_service_token)])
 def post_reauth(account_id: int, background_tasks: BackgroundTasks):
     from hunter.db import get_connection

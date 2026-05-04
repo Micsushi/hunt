@@ -1,6 +1,12 @@
 import { useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { fetchC1Config, saveC1Config, type C1Config, type C1ConfigUpdates } from '@/api/control'
+import {
+  fetchC1Config,
+  saveC1Config,
+  testC1Discord,
+  type C1Config,
+  type C1ConfigUpdates,
+} from '@/api/control'
 import { useUiStore } from '@/store/ui'
 import styles from './Settings.module.css'
 
@@ -194,7 +200,9 @@ function RunSettings({
       <div className={styles.gridTwo}>
         <label className={styles.field}>
           Run interval (seconds)
-          <span className={styles.fieldHint}>How often the scrape+enrich cycle repeats (default 600).</span>
+          <span className={styles.fieldHint}>
+            How often the scrape+enrich cycle repeats (default 600).
+          </span>
           <input
             type="number"
             className={styles.input}
@@ -205,7 +213,9 @@ function RunSettings({
         </label>
         <label className={styles.field}>
           Results wanted per search
-          <span className={styles.fieldHint}>Max listings to fetch per search term (default 500).</span>
+          <span className={styles.fieldHint}>
+            Max listings to fetch per search term (default 500).
+          </span>
           <input
             type="number"
             className={styles.input}
@@ -216,7 +226,9 @@ function RunSettings({
         </label>
         <label className={styles.field}>
           Hours old (lookback window)
-          <span className={styles.fieldHint}>Only fetch jobs posted within this many hours (default 24).</span>
+          <span className={styles.fieldHint}>
+            Only fetch jobs posted within this many hours (default 24).
+          </span>
           <input
             type="number"
             className={styles.input}
@@ -372,6 +384,24 @@ export function SettingsPage() {
   const showToast = useUiStore((s) => s.showToast)
   const qc = useQueryClient()
   const [savingSection, setSavingSection] = useState<string | null>(null)
+  const [testingDiscord, setTestingDiscord] = useState(false)
+  const [discordResult, setDiscordResult] = useState<string | null>(null)
+
+  async function handleTestDiscord() {
+    setTestingDiscord(true)
+    setDiscordResult(null)
+    try {
+      await testC1Discord()
+      setDiscordResult('Webhook OK: test message sent.')
+      showToast('Discord test sent')
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : 'Test failed'
+      setDiscordResult(`Failed: ${msg}`)
+      showToast(msg, 'error')
+    } finally {
+      setTestingDiscord(false)
+    }
+  }
 
   const {
     data: cfg,
@@ -418,9 +448,7 @@ export function SettingsPage() {
           <h1 className={styles.heroTitle}>Settings</h1>
         </section>
         <div className={styles.panel}>
-          <p className={styles.errorMsg}>
-            Could not load C1 config. Is the C1 service running?
-          </p>
+          <p className={styles.errorMsg}>Could not load C1 config. Is the C1 service running?</p>
         </div>
       </div>
     )
@@ -430,7 +458,9 @@ export function SettingsPage() {
     <div className={styles.page}>
       <section className={styles.hero}>
         <h1 className={styles.heroTitle}>Settings</h1>
-        <p className={styles.heroMeta}>C1 runtime configuration — changes persist to file on the C1 host.</p>
+        <p className={styles.heroMeta}>
+          C1 runtime configuration — changes persist to file on the C1 host.
+        </p>
       </section>
 
       <div className={styles.notice}>
@@ -452,17 +482,26 @@ export function SettingsPage() {
         onSave={(u) => save('search', u)}
       />
 
-      <RunSettings
-        cfg={cfg}
-        saving={savingSection === 'run'}
-        onSave={(u) => save('run', u)}
-      />
+      <RunSettings cfg={cfg} saving={savingSection === 'run'} onSave={(u) => save('run', u)} />
 
       <AlertSettings
         cfg={cfg}
         saving={savingSection === 'alerts'}
         onSave={(u) => save('alerts', u)}
       />
+
+      <div className={styles.panel}>
+        <div className={styles.panelHeader}>
+          <h2 className={styles.panelTitle}>Integrations</h2>
+        </div>
+        <p className="muted" style={{ fontSize: '0.88rem', marginBottom: 12 }}>
+          Verify Discord webhook is configured and reachable. Sends a test message via C1.
+        </p>
+        <button className={styles.btn} disabled={testingDiscord} onClick={handleTestDiscord}>
+          {testingDiscord ? 'Sending…' : 'Test Discord webhook'}
+        </button>
+        {discordResult && <p style={{ marginTop: 8, fontSize: '0.88rem' }}>{discordResult}</p>}
+      </div>
     </div>
   )
 }

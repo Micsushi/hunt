@@ -216,3 +216,20 @@ export function fetchC1Config(): Promise<C1Config> {
 export function saveC1Config(updates: C1ConfigUpdates): Promise<ConfigSaveResult> {
   return patch<ConfigSaveResult>('/api/gateway/c1/config', updates)
 }
+
+export function testC1Discord(): Promise<{ sent: boolean; status_code?: number }> {
+  return post('/api/gateway/c1/test-discord', {})
+}
+
+export interface EasyApplyVerifyResult {
+  pass: boolean
+  job_id: number
+  failures: string[]
+  apply_type: string | null
+  auto_apply_eligible: number | null
+  enrichment_status: string | null
+}
+
+export function verifyEasyApply(jobId: number): Promise<EasyApplyVerifyResult> {
+  return post<EasyApplyVerifyResult>(`/api/jobs/${jobId}/verify-easy-apply`, {})
+}
