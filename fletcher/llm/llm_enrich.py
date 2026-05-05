@@ -5,9 +5,12 @@ import re
 import time
 import urllib.error
 import urllib.request
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from .. import config
+
+if TYPE_CHECKING:
+    from ..pipeline_logger import PipelineLogger
 
 _LOG_LLM = False  # per-call LLM noise suppressed; full trace printed by pipeline._print_trace
 
@@ -152,6 +155,7 @@ def generate_summary(
     candidate_context: str,
     job_title: str,
     keywords: list[str],
+    logger: PipelineLogger | None = None,
 ) -> dict[str, Any]:
     """Ask Ollama to generate a professional summary paragraph for this candidate + job.
 
@@ -184,6 +188,8 @@ def generate_summary(
         raw = _ollama_chat(prompt)
         result["duration_ms"] = int((time.perf_counter() - start) * 1000)
         _llm_log("call 2/3: summary [done]", prompt, raw, result["duration_ms"])
+        if logger:
+            logger.llm_call("generate_summary", prompt, raw, result["duration_ms"], success=True)
         parsed = _extract_json_object(raw)
         text = (parsed.get("summary") or "").strip()
         if text:
@@ -193,10 +199,24 @@ def generate_summary(
         result["error"] = str(exc) or exc.__class__.__name__
         result["duration_ms"] = int((time.perf_counter() - start) * 1000)
         _llm_log("call 2/3: summary [ERROR]", prompt, str(exc), result["duration_ms"])
+        if logger:
+            logger.llm_call(
+                "generate_summary",
+                prompt,
+                str(exc),
+                result["duration_ms"],
+                success=False,
+                error=result["error"],
+            )
     return result
 
 
-def rewrite_bullet_targeted(bullet: str, keywords: list[str]) -> dict[str, Any]:
+def rewrite_bullet_targeted(
+    bullet: str,
+    keywords: list[str],
+    keywords_to_preserve: list[str] | None = None,
+    logger: PipelineLogger | None = None,
+) -> dict[str, Any]:
     """Rewrite a single resume bullet to naturally include specific keywords.
 
     Only modifies vocabulary where the keywords genuinely fit - same facts, same metrics.
@@ -219,10 +239,21 @@ def rewrite_bullet_targeted(bullet: str, keywords: list[str]) -> dict[str, Any]:
         return result
 
     kw_list = ", ".join(keywords)
+    preserve_line = ""
+    if keywords_to_preserve:
+        preserve_line = (
+            f"Keywords already in this bullet that must stay: {', '.join(keywords_to_preserve)}.\n"
+        )
     prompt = (
-        f"Rewrite this resume bullet to naturally include these keywords where they genuinely fit: {kw_list}\n"
-        f"Rules: same facts, same metrics, no invented content, minimal changes, one sentence.\n"
-        f"If the keywords do not fit naturally, return the bullet unchanged.\n"
+        f"Lightly rephrase this resume bullet to naturally weave in these keywords where they fit: {kw_list}\n"
+        f"{preserve_line}"
+        f"Rules:\n"
+        f"- Preserve ALL original facts, metrics, and numbers exactly.\n"
+        f"- Keep approximately the same length and sentence structure.\n"
+        f"- Only substitute or insert a keyword where it genuinely fits the meaning.\n"
+        f"- Do NOT collapse multiple ideas into one sentence.\n"
+        f"- Do NOT remove any information.\n"
+        f"- If no keyword fits naturally, return the bullet completely unchanged.\n"
         f"Bullet: {bullet.strip()}\n"
         f'Return only: {{"bullet": "..."}}'
     )
@@ -232,6 +263,8 @@ def rewrite_bullet_targeted(bullet: str, keywords: list[str]) -> dict[str, Any]:
         raw = _ollama_chat(prompt)
         result["duration_ms"] = int((time.perf_counter() - start) * 1000)
         _llm_log(f"rewrite bullet [{kw_list[:40]}] [done]", prompt, raw, result["duration_ms"])
+        if logger:
+            logger.llm_call("rewrite_bullet", prompt, raw, result["duration_ms"], success=True)
         parsed = _extract_json_object(raw)
         text = (parsed.get("bullet") or "").strip()
         if text:
@@ -243,6 +276,15 @@ def rewrite_bullet_targeted(bullet: str, keywords: list[str]) -> dict[str, Any]:
             int((time.perf_counter() - start) * 1000) if "start" in locals() else None
         )
         _llm_log("rewrite bullet [ERROR]", prompt, str(exc), result["duration_ms"])
+        if logger:
+            logger.llm_call(
+                "rewrite_bullet",
+                prompt,
+                str(exc),
+                result["duration_ms"],
+                success=False,
+                error=result["error"],
+            )
     return result
 
 
@@ -252,6 +294,7 @@ def enrich_with_ollama_if_enabled(
     description: str,
     classification: dict,
     keywords: dict,
+    logger: PipelineLogger | None = None,
 ) -> tuple[dict, dict, dict]:
     """When backend is ollama, ask the model for jd_usable + grounded keywords.
 
@@ -275,6 +318,8 @@ def enrich_with_ollama_if_enabled(
         content = _ollama_chat(prompt)
         meta["duration_ms"] = int((time.perf_counter() - start) * 1000)
         _llm_log("call 1/3: keywords [done]", prompt, content, meta["duration_ms"])
+        if logger:
+            logger.llm_call("keyword_extract", prompt, content, meta["duration_ms"], success=True)
         if config.LOG_LLM_IO:
             limit = max(1, int(config.LOG_LLM_MAX_CHARS))
             meta["response_text"] = (content or "")[:limit]
@@ -293,6 +338,15 @@ def enrich_with_ollama_if_enabled(
                 int((time.perf_counter() - start) * 1000) if "start" in locals() else None
             )
         meta["error"] = str(exc) or exc.__class__.__name__
+        if logger:
+            logger.llm_call(
+                "keyword_extract",
+                _build_user_prompt(title, description),
+                str(exc),
+                meta["duration_ms"],
+                success=False,
+                error=meta["error"],
+            )
         return classification, keywords, meta
     except (json.JSONDecodeError, ValueError, TypeError, KeyError) as exc:
         if meta.get("duration_ms") is None:
@@ -300,4 +354,13 @@ def enrich_with_ollama_if_enabled(
                 int((time.perf_counter() - start) * 1000) if "start" in locals() else None
             )
         meta["error"] = str(exc) or exc.__class__.__name__
+        if logger:
+            logger.llm_call(
+                "keyword_extract",
+                _build_user_prompt(title, description),
+                str(exc),
+                meta["duration_ms"],
+                success=False,
+                error=meta["error"],
+            )
         return classification, keywords, meta

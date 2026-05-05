@@ -45,6 +45,7 @@ class ResumeDocument(BaseModel):
     source_path: str
     preamble: str
     header: ResumeHeader
+    summary: str = ""
     education: EducationSection
     experience: list[ExperienceEntry] = Field(default_factory=list)
     projects: list[ProjectEntry] = Field(default_factory=list)

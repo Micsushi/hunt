@@ -8,8 +8,6 @@ import { Filters } from '@/components/Filters'
 import { Pagination } from '@/components/Pagination'
 import { BulkBar } from '@/components/BulkBar'
 import { StatusBadge } from '@/components/StatusBadge'
-import { bulkRequeue } from '@/api/ops'
-import { useQueryClient } from '@tanstack/react-query'
 import styles from './Jobs.module.css'
 import type { JobsQuery, SortField, SortDirection, Job } from '@/types/job'
 
@@ -147,12 +145,9 @@ export function JobsPage() {
   const total = data?.total ?? 0
   const { data: summary } = useSummary(60_000)
   const { selectedIds, toggleSelect, selectAll, clearSelection } = useUiStore()
-  const qc = useQueryClient()
   const tbodyRef = useRef<HTMLTableSectionElement>(null)
   const [focusIdx, setFocusIdx] = useState(-1)
-  const [bulkDryResult, setBulkDryResult] = useState<string | null>(null)
   const [localSort, setLocalSort] = useState<LocalSort | null>(null)
-  const showToast = useUiStore((s) => s.showToast)
 
   // Sync URL when query changes
   useEffect(() => {
@@ -207,28 +202,6 @@ export function JobsPage() {
   const allIds = jobs.map((j) => j.id)
   const allChecked = allIds.length > 0 && allIds.every((id) => selectedIds.has(id))
   const someChecked = allIds.some((id) => selectedIds.has(id))
-
-  async function runBulkRequeue(dry: boolean) {
-    try {
-      const res = await bulkRequeue({
-        source: query.source === 'all' ? null : (query.source ?? null),
-        status: query.status ?? 'all',
-        q: query.q ?? '',
-        tag: query.tag ?? '',
-        target_statuses: ['failed', 'blocked', 'blocked_verified'],
-        dry_run: dry,
-      })
-      if (dry) {
-        setBulkDryResult(`Would requeue ${res.count} row(s)`)
-      } else {
-        showToast(`Requeued ${res.updated} row(s)`)
-        qc.invalidateQueries({ queryKey: ['jobs'] })
-        qc.invalidateQueries({ queryKey: ['summary'] })
-      }
-    } catch (e) {
-      showToast(e instanceof Error ? e.message : 'Bulk requeue failed', 'error')
-    }
-  }
 
   function renderJob(job: Job, idx: number) {
     const checked = selectedIds.has(job.id)
@@ -331,65 +304,33 @@ export function JobsPage() {
         isFetching={isFetching && !isLoading}
       />
 
-      {/* Bulk requeue panel */}
-      <div className={styles.bulkPanel}>
-        <div className={styles.bulkPanelHeader}>
-          <span className={styles.bulkPanelTitle}>Bulk requeue failed / blocked jobs</span>
-        </div>
-        <p className={styles.bulkPanelDesc}>
-          Finds all jobs matching your current filters that have status <strong>failed</strong>,{' '}
-          <strong>blocked</strong>, or <strong>blocked_verified</strong>, and re-queues them to{' '}
-          <strong>pending</strong> so the enricher picks them up again. Use "Count only" first to
-          preview how many rows would be affected.
-        </p>
-        <div className={styles.bulkActions}>
-          <button
-            className={styles.bulkBtn}
-            onClick={() => runBulkRequeue(true)}
-            title="Count matching rows without making any changes"
-          >
-            Count only (dry run)
-          </button>
-          <button
-            className={`${styles.bulkBtn} ${styles.bulkBtnPrimary}`}
-            onClick={() => runBulkRequeue(false)}
-            title="Requeue all matching failed/blocked rows to pending"
-          >
-            Requeue matching rows
-          </button>
-          {bulkDryResult && (
-            <span className="muted" style={{ fontSize: '0.88rem' }}>
-              {bulkDryResult}
-            </span>
-          )}
-        </div>
-        <div className={styles.bulkExports}>
-          <span className={styles.bulkExportLabel}>Export current view:</span>
-          <a
-            className={styles.exportBtn}
-            href={
-              MOCK
-                ? mockDownloadHref('csv')
-                : `/api/jobs/export?format=csv&${queryToParams(query).toString()}`
-            }
-            download={MOCK ? 'hunt-mock-jobs.csv' : undefined}
-            title="Download current filtered results as CSV"
-          >
-            CSV ↓
-          </a>
-          <a
-            className={styles.exportBtn}
-            href={
-              MOCK
-                ? mockDownloadHref('json')
-                : `/api/jobs/export?format=json&${queryToParams(query).toString()}`
-            }
-            download={MOCK ? 'hunt-mock-jobs.json' : undefined}
-            title="Download current filtered results as JSON"
-          >
-            JSON ↓
-          </a>
-        </div>
+      {/* Export row */}
+      <div className={styles.exportRow}>
+        <span className={styles.exportRowLabel}>Export current view</span>
+        <a
+          className={styles.exportBtn}
+          href={
+            MOCK
+              ? mockDownloadHref('csv')
+              : `/api/jobs/export?format=csv&${queryToParams(query).toString()}`
+          }
+          download={MOCK ? 'hunt-mock-jobs.csv' : undefined}
+          title="Download current filtered results as CSV"
+        >
+          CSV ↓
+        </a>
+        <a
+          className={styles.exportBtn}
+          href={
+            MOCK
+              ? mockDownloadHref('json')
+              : `/api/jobs/export?format=json&${queryToParams(query).toString()}`
+          }
+          download={MOCK ? 'hunt-mock-jobs.json' : undefined}
+          title="Download current filtered results as JSON"
+        >
+          JSON ↓
+        </a>
       </div>
 
       {/* Table */}

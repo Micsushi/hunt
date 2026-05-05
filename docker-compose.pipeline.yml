@@ -25,6 +25,8 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+      ollama-init:
+        condition: service_completed_successfully
     environment:
       HUNT_DB_URL: ${HUNT_COMPOSE_DB_URL:-postgresql://hunt:hunt@postgres:5432/hunt}
       HUNT_SERVICE_TOKEN: ${HUNT_SERVICE_TOKEN:-hunt-local-smoke-token}
@@ -34,6 +36,10 @@ services:
       HUNT_HUNTER_URL: ${HUNT_HUNTER_URL:-http://hunter:8001}
       HUNT_FLETCHER_URL: ${HUNT_FLETCHER_URL:-http://fletcher:8002}
       HUNT_COORDINATOR_URL: ${HUNT_COORDINATOR_URL:-http://coordinator:8003}
+      HUNT_RESUME_MODEL_BACKEND: ${HUNT_RESUME_MODEL_BACKEND:-ollama}
+      HUNT_OLLAMA_HOST: http://ollama:11434
+      HUNT_OLLAMA_MODEL: ${HUNT_OLLAMA_MODEL:-gemma4:e4b}
+      HUNT_OLLAMA_TIMEOUT_SEC: ${HUNT_OLLAMA_TIMEOUT_SEC:-300}
     ports:
       - "${HUNT_REVIEW_BIND_HOST:-127.0.0.1}:${HUNT_REVIEW_HOST_PORT:-18080}:8000"
 

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 import time
 from pathlib import Path
 
@@ -38,54 +39,60 @@ from .resume.source_loader import load_bullet_library, load_candidate_profile
 from .storage import build_attempt_dir, ensure_dir, file_hash, write_json, write_text
 
 
-def _trim_resume_for_page_fit(doc, structured_output: dict) -> bool:
-    if doc.projects:
-        last_project = doc.projects[-1]
-        if last_project.bullets:
-            last_project.bullets.pop()
-            for entry in reversed(structured_output.get("project_entries", [])):
-                if entry.get("entry_id") == last_project.entry_id and entry.get("bullet_plan"):
-                    entry["bullet_plan"].pop()
-                    break
-            if not last_project.bullets:
-                doc.projects.pop()
-                structured_output["project_entries"] = [
-                    entry
-                    for entry in structured_output.get("project_entries", [])
-                    if entry.get("entry_id") != last_project.entry_id
-                ]
-            return True
+def _trim_one_bullet_per_entry(doc, structured_output: dict) -> bool:
+    """Remove 1 bullet from each experience+project entry in round-robin order.
 
-    for entry in reversed(doc.experience):
+    Projects trimmed first (lower priority). Returns True if anything was removed.
+    """
+    trimmed = False
+
+    for entry in doc.projects:
         if len(entry.bullets) > 1:
             entry.bullets.pop()
-            for structured_entry in reversed(structured_output.get("experience_entries", [])):
-                if structured_entry.get("entry_id") == entry.entry_id and structured_entry.get(
-                    "bullet_plan"
-                ):
-                    structured_entry["bullet_plan"].pop()
+            for s in structured_output.get("project_entries", []):
+                if s.get("entry_id") == entry.entry_id and s.get("bullet_plan"):
+                    s["bullet_plan"].pop()
                     break
+            trimmed = True
+
+    for entry in doc.experience:
+        if len(entry.bullets) > 1:
+            entry.bullets.pop()
+            for s in structured_output.get("experience_entries", []):
+                if s.get("entry_id") == entry.entry_id and s.get("bullet_plan"):
+                    s["bullet_plan"].pop()
+                    break
+            trimmed = True
+
+    if not trimmed:
+        if doc.projects:
+            removed = doc.projects.pop()
+            structured_output["project_entries"] = [
+                e
+                for e in structured_output.get("project_entries", [])
+                if e.get("entry_id") != removed.entry_id
+            ]
+            return True
+        if len(doc.experience) > 1:
+            removed = doc.experience.pop()
+            structured_output["experience_entries"] = [
+                e
+                for e in structured_output.get("experience_entries", [])
+                if e.get("entry_id") != removed.entry_id
+            ]
             return True
 
-    if len(doc.experience) > 1:
-        removed_entry = doc.experience.pop()
-        structured_output["experience_entries"] = [
-            entry
-            for entry in structured_output.get("experience_entries", [])
-            if entry.get("entry_id") != removed_entry.entry_id
-        ]
-        return True
-
-    return False
+    return trimmed
 
 
 def _compile_with_fit_retry(
-    attempt_dir: Path, tailored_doc, structured_output: dict
+    attempt_dir: Path, tailored_doc, structured_output: dict, stem: str = "output"
 ) -> tuple[str, dict, str, list[dict]]:
+    json_name = "tailored_resume.json" if stem == "output" else f"tailored_resume_{stem}.json"
     compile_history: list[dict] = []
     while True:
-        structured_output_path = write_json(attempt_dir / "tailored_resume.json", structured_output)
-        tex_path = write_text(attempt_dir / "output.tex", render_resume_tex(tailored_doc))
+        structured_output_path = write_json(attempt_dir / json_name, structured_output)
+        tex_path = write_text(attempt_dir / f"{stem}.tex", render_resume_tex(tailored_doc))
         compile_result = compile_tex(tex_path)
         compile_history.append(
             {
@@ -100,7 +107,7 @@ def _compile_with_fit_retry(
             return structured_output_path, compile_result, tex_path, compile_history
         if compile_result["page_count"] is None or compile_result["page_count"] <= 1:
             return structured_output_path, compile_result, tex_path, compile_history
-        if not _trim_resume_for_page_fit(tailored_doc, structured_output):
+        if not _trim_one_bullet_per_entry(tailored_doc, structured_output):
             return structured_output_path, compile_result, tex_path, compile_history
 
 
@@ -525,11 +532,33 @@ def _run_pipeline(
             "bullet_library": bullet_library,
         },
     )
+    # Version 1: no summary. Deepcopy so trim loop doesn't mutate the original.
+    doc_no_summary = copy.deepcopy(tailored_doc)
+    so_no_summary = copy.deepcopy(structured_output)
     structured_output_path, compile_result, tex_path, compile_history = _compile_with_fit_retry(
         attempt_dir,
-        tailored_doc,
-        structured_output,
+        doc_no_summary,
+        so_no_summary,
+        stem="output",
     )
+
+    # Version 2: with summary (only when Ollama produced one).
+    _generated_summary = summary_rewrite_meta.get("summary", "")
+    tex_path_summary: str | None = None
+    pdf_path_summary: str | None = None
+    compile_result_summary: dict | None = None
+    if _generated_summary:
+        doc_with_summary = copy.deepcopy(tailored_doc)
+        so_with_summary = copy.deepcopy(structured_output)
+        doc_with_summary.summary = _generated_summary
+        _, compile_result_summary, tex_path_summary, _ = _compile_with_fit_retry(
+            attempt_dir,
+            doc_with_summary,
+            so_with_summary,
+            stem="output_summary",
+        )
+        pdf_path_summary = compile_result_summary.get("pdf_path")
+
     compile_log_path = write_text(attempt_dir / "compile.log", compile_result["log_text"])
     metadata = {
         "job_id": job_id,
@@ -634,6 +663,8 @@ def _run_pipeline(
         "selected_for_c3": is_selected_for_c3,
         "pdf_path": pdf_path,
         "tex_path": tex_path,
+        "pdf_path_summary": pdf_path_summary,
+        "tex_path_summary": tex_path_summary,
         "metadata_path": metadata_path,
         "summary_rewrite_path": str(attempt_dir / "summary_rewrite.json"),
         "bullet_rewrite_path": str(attempt_dir / "bullet_rewrite.json")

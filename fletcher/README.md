@@ -41,7 +41,7 @@ Both files are **gitignored** - they contain personal data. See the template for
 | `HUNT_RESUME_MODEL_BACKEND` | `heuristic` | `heuristic` (fast, no network) or `ollama`. |
 | `HUNT_RESUME_MODEL_NAME` | `deterministic-stage1` | Logged when backend is heuristic. |
 | `HUNT_OLLAMA_HOST` | `http://127.0.0.1:11434` | Ollama HTTP API base URL. |
-| `HUNT_OLLAMA_MODEL` | `gemma2:9b` | Ollama chat model (run `ollama pull gemma2:9b` first). |
+| `HUNT_OLLAMA_MODEL` | `gemma4:e4b` | Ollama chat model (run `ollama pull gemma4:e4b` first). |
 | `HUNT_OLLAMA_TIMEOUT_SEC` | `120` | Per-request timeout in seconds. |
 | `HUNT_RESUME_LOG_LLM_IO` | `1` | Write prompt + response to attempt dir (`0` to disable). |
 | `HUNT_RESUME_LOG_LLM_MAX_CHARS` | `120000` | Max chars captured from prompt/response. |

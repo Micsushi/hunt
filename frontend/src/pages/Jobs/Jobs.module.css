@@ -158,84 +158,16 @@
   white-space: nowrap;
 }
 
-/* Bulk requeue panel — replaces old <details> element */
-.bulkPanel {
-  background: var(--panel);
-  border: 1px solid var(--line);
-  border-left: 3px solid var(--accent);
-  border-radius: var(--radius-md);
-  padding: 14px 16px;
-  box-shadow: var(--shadow);
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-}
-
-.bulkPanelHeader {
+.exportRow {
   display: flex;
   align-items: center;
   gap: 8px;
 }
 
-.bulkPanelTitle {
-  font-size: 0.78rem;
-  font-weight: 700;
-  text-transform: uppercase;
-  letter-spacing: 0.07em;
-  color: var(--muted);
-}
-
-.bulkPanelDesc {
-  font-size: 0.875rem;
-  color: var(--muted);
-  margin: 0;
-  line-height: 1.5;
-}
-
-.bulkActions {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-  align-items: center;
-}
-
-.bulkBtn {
-  border: 1px solid var(--line);
-  border-radius: var(--radius-sm);
-  padding: 7px 14px;
-  font-size: 0.875rem;
-  font-weight: 600;
-  background: var(--panel-strong);
-  color: var(--ink);
-  cursor: pointer;
-  transition:
-    background var(--ease),
-    border-color var(--ease);
-}
-.bulkBtn:hover {
-  background: var(--accent-soft);
-  border-color: var(--accent);
-}
-.bulkBtnPrimary {
-  background: var(--accent) !important;
-  color: white !important;
-  border-color: var(--accent) !important;
-}
-.bulkBtnPrimary:hover {
-  opacity: 0.85;
-}
-
-.bulkExports {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding-top: 2px;
-  border-top: 1px solid var(--line);
-}
-
-.bulkExportLabel {
+.exportRowLabel {
   font-size: 0.78rem;
   color: var(--muted);
+  margin-right: 2px;
 }
 
 .exportBtn {

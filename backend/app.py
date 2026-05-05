@@ -2932,20 +2932,21 @@ def api_job_attempts(job_id: int, _auth: str = Depends(require_auth)):
 @app.post("/api/fletcher/tailor")
 async def api_fletcher_tailor(
     job_details: str = Form(...),
-    personal_details: str = Form(""),
+    personal_details: str = Form(""),  # kept for API compat, unused in new flow
     resume: UploadFile | None = File(None),
     _auth: str = Depends(require_auth),
 ):
-    """Tailor a resume to a job description and return the PDF."""
+    """Tailor a resume to a job description and return up to 3 files (no-summary PDF, with-summary PDF, log)."""
     try:
-        from fletcher.pipeline import generate_resume_for_ad_hoc  # type: ignore
+        from fletcher.ad_hoc_pipeline import run_ad_hoc_pipeline  # type: ignore
+        from fletcher.config import DEFAULT_OG_RESUME_PATH  # type: ignore
     except ModuleNotFoundError:
         raise HTTPException(status_code=503, detail="Fletcher not available in this deployment")
 
+    import base64
     import tempfile
 
     resume_tmp = None
-    profile_tmp = None
     try:
         if resume and resume.filename:
             suffix = Path(resume.filename).suffix or ".tex"
@@ -2954,36 +2955,43 @@ async def api_fletcher_tailor(
             resume_tmp.flush()
             resume_tmp.close()
 
-        if personal_details.strip():
-            profile_tmp = tempfile.NamedTemporaryFile(
-                delete=False, suffix=".md", mode="w", encoding="utf-8"
-            )
-            profile_tmp.write(personal_details)
-            profile_tmp.flush()
-            profile_tmp.close()
-
-        kwargs: dict = dict(title="", description=job_details, company="")
-        if resume_tmp:
-            kwargs["resume_path"] = resume_tmp.name
-        if profile_tmp:
-            kwargs["candidate_profile_path"] = profile_tmp.name
-
-        result = generate_resume_for_ad_hoc(**kwargs)
+        _title = next((ln.strip() for ln in job_details.splitlines() if ln.strip()), "")
+        result = run_ad_hoc_pipeline(
+            title=_title,
+            description=job_details,
+            resume_path=resume_tmp.name if resume_tmp else DEFAULT_OG_RESUME_PATH,
+        )
     finally:
-        for tmp in (resume_tmp, profile_tmp):
-            if tmp:
-                try:
-                    Path(tmp.name).unlink(missing_ok=True)
-                except Exception:
-                    pass
+        if resume_tmp:
+            try:
+                Path(resume_tmp.name).unlink(missing_ok=True)
+            except Exception:
+                pass
 
-    pdf_path = result.get("pdf_path")
-    if not pdf_path or not Path(pdf_path).exists():
+    def _b64(path: str | None) -> str | None:
+        if path and Path(path).exists():
+            return base64.b64encode(Path(path).read_bytes()).decode("ascii")
+        return None
+
+    no_summary = _b64(result.get("pdf_path"))
+    with_summary = _b64(result.get("pdf_path_summary"))
+    log_b64 = _b64(result.get("log_path"))
+
+    if not no_summary and not with_summary:
         raise HTTPException(
             status_code=500, detail=result.get("compile_status") or "PDF generation failed"
         )
 
-    return FileResponse(pdf_path, media_type="application/pdf", filename="tailored_resume.pdf")
+    return JSONResponse(
+        {
+            "no_summary": no_summary,
+            "with_summary": with_summary,
+            "log": log_b64,
+            "compile_status": result.get("compile_status"),
+            "fits_one_page": result.get("fits_one_page"),
+            "llm_error": result.get("llm_error"),
+        }
+    )
 
 
 @app.get("/api/settings")

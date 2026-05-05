@@ -119,11 +119,23 @@ export function triggerC2Generate(jobId: number): Promise<unknown> {
   return post('/api/gateway/c2/generate', { job_id: jobId })
 }
 
+export type TailorResult = {
+  noSummary: Blob | null
+  withSummary: Blob | null
+  log: Blob | null
+  llmError: string | null
+}
+
+function _b64ToBlob(b64: string): Blob {
+  const bytes = Uint8Array.from(atob(b64), (c) => c.charCodeAt(0))
+  return new Blob([bytes], { type: 'application/pdf' })
+}
+
 export function tailorResume(params: {
   jobDetails: string
   personalDetails: string
   resume?: File | null
-}): Promise<Blob> {
+}): Promise<TailorResult> {
   if (MOCK) {
     const text = [
       'Hunt mock tailored resume',
@@ -134,7 +146,8 @@ export function tailorResume(params: {
       'Personal details:',
       params.personalDetails || '(empty)',
     ].join('\n')
-    return Promise.resolve(new Blob([text], { type: 'text/plain;charset=utf-8' }))
+    const blob = new Blob([text], { type: 'text/plain;charset=utf-8' })
+    return Promise.resolve({ noSummary: blob, withSummary: null, log: null, llmError: null })
   }
 
   const form = new FormData()
@@ -147,7 +160,13 @@ export function tailorResume(params: {
         const text = await r.text().catch(() => r.statusText)
         throw new Error(text || r.statusText)
       }
-      return r.blob()
+      const json = await r.json()
+      return {
+        noSummary: json.no_summary ? _b64ToBlob(json.no_summary) : null,
+        withSummary: json.with_summary ? _b64ToBlob(json.with_summary) : null,
+        log: json.log ? new Blob([atob(json.log)], { type: 'text/plain' }) : null,
+        llmError: json.llm_error ?? null,
+      }
     },
   )
 }

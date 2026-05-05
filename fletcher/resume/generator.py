@@ -5,6 +5,7 @@ import hashlib
 import re
 
 from ..config import (
+    DEFAULT_MAX_BULLETS_PER_EXP_ENTRY,
     DEFAULT_MAX_EXPERIENCE_BULLETS,
     DEFAULT_MAX_PROJECT_BULLETS,
     DEFAULT_MAX_TOTAL_BULLETS,
@@ -14,6 +15,13 @@ from .models import ExperienceEntry, ProjectEntry, ResumeDocument
 
 def _normalize_words(text: str) -> set[str]:
     return {token.lower() for token in re.findall(r"[a-zA-Z][a-zA-Z0-9.+#/-]{1,}", text)}
+
+
+def _word_overlap(a: str, b: str) -> float:
+    wa, wb = _normalize_words(a), _normalize_words(b)
+    if not wa or not wb:
+        return 0.0
+    return len(wa & wb) / min(len(wa), len(wb))
 
 
 def _slugify(value: str) -> str:
@@ -322,18 +330,21 @@ def _build_bullet_candidates_for_entry(
                         ),
                         must_haves,
                         role_family,
-                    )
-                    + 2,
+                    ),
                 }
             )
 
+    # Sort: originals (mode=rewrite) win ties via +0.1 tiebreaker so they're
+    # preferred over library bullets with the same keyword score.
+    def _sort_key(c: dict) -> float:
+        return c["score"] + (0.1 if c["mode"] == "rewrite" else 0.0)
+
     deduped: list[dict] = []
-    seen_text: set[str] = set()
-    for candidate in sorted(candidates, key=lambda item: item["score"], reverse=True):
-        key = candidate["text"].lower()
-        if key in seen_text:
+    for candidate in sorted(candidates, key=_sort_key, reverse=True):
+        text = candidate["text"]
+        # Skip if text is >=60% word-overlap with any already-kept bullet.
+        if any(_word_overlap(text, kept["text"]) >= 0.6 for kept in deduped):
             continue
-        seen_text.add(key)
         deduped.append(candidate)
     return deduped
 
@@ -498,7 +509,7 @@ def generate_tailored_resume(
     for record in ranked_experience:
         if exp_budget_remaining <= 0:
             break
-        max_count = min(3, exp_budget_remaining)
+        max_count = min(DEFAULT_MAX_BULLETS_PER_EXP_ENTRY, exp_budget_remaining)
         chosen_bullets = _select_bullets(
             record["bullet_candidates"], max_count=max_count, min_count=1
         )

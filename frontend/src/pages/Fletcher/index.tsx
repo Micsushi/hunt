@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useRef, useState } from 'react'
-import { fetchC2Status, tailorResume, triggerC2Generate } from '@/api/control'
+import { type TailorResult, fetchC2Status, tailorResume, triggerC2Generate } from '@/api/control'
 import { useUiStore } from '@/store/ui'
 import styles from './Fletcher.module.css'
 
@@ -13,7 +13,8 @@ export function FletcherPage() {
   const [jobDetails, setJobDetails] = useState('')
   const [personalDetails, setPersonalDetails] = useState('')
   const [resumeFile, setResumeFile] = useState<File | null>(null)
-  const [downloadUrl, setDownloadUrl] = useState<string | null>(null)
+  const [tailorResult, setTailorResult] = useState<TailorResult | null>(null)
+  const [isDragging, setIsDragging] = useState(false)
   const fileRef = useRef<HTMLInputElement>(null)
 
   const {
@@ -39,13 +40,33 @@ export function FletcherPage() {
 
   const tailor = useMutation({
     mutationFn: () => tailorResume({ jobDetails, personalDetails, resume: resumeFile }),
-    onSuccess: (blob) => {
-      if (downloadUrl) URL.revokeObjectURL(downloadUrl)
-      setDownloadUrl(URL.createObjectURL(blob))
-      showToast('Resume ready - click to download')
+    onSuccess: (result) => {
+      setTailorResult(result)
+      showToast(result.withSummary ? 'Both versions ready' : 'Resume ready - click to download')
     },
     onError: (e) => showToast(e instanceof Error ? e.message : 'Tailor failed', 'error'),
   })
+
+  function handleDrop(e: React.DragEvent) {
+    e.preventDefault()
+    setIsDragging(false)
+    const file = e.dataTransfer.files?.[0]
+    if (file) setResumeFile(file)
+  }
+
+  function handleDragOver(e: React.DragEvent) {
+    e.preventDefault()
+  }
+
+  function handleDragEnter(e: React.DragEvent) {
+    e.preventDefault()
+    setIsDragging(true)
+  }
+
+  function handleDragLeave(e: React.DragEvent) {
+    e.preventDefault()
+    setIsDragging(false)
+  }
 
   function submitJobId() {
     const id = Number(jobId)
@@ -65,7 +86,7 @@ export function FletcherPage() {
       showToast('Resume file required', 'error')
       return
     }
-    setDownloadUrl(null)
+    setTailorResult(null)
     tailor.mutate()
   }
 
@@ -148,7 +169,13 @@ export function FletcherPage() {
             </label>
             <label className={styles.field}>
               Resume file
-              <div className={styles.fileRow}>
+              <div
+                className={`${styles.fileRow} ${isDragging ? styles.fileRowDragging : ''}`}
+                onDrop={handleDrop}
+                onDragOver={handleDragOver}
+                onDragEnter={handleDragEnter}
+                onDragLeave={handleDragLeave}
+              >
                 <label
                   className={`${styles.fileLabel} ${resumeFile ? styles.fileLabelActive : ''}`}
                 >
@@ -183,10 +210,42 @@ export function FletcherPage() {
               {tailor.isPending ? 'Generating…' : 'Generate PDF'}
             </button>
           </div>
-          {downloadUrl ? (
-            <a className={styles.downloadLink} href={downloadUrl} download="tailored_resume.pdf">
-              ↓ Download tailored_resume.pdf
-            </a>
+          {tailorResult ? (
+            <div className={styles.downloadGroup}>
+              {tailorResult.llmError ? (
+                <div className={styles.llmErrorBanner}>
+                  <strong>LLM unavailable</strong> - resume returned without tailoring.
+                  <span className={styles.llmErrorDetail}>{tailorResult.llmError}</span>
+                </div>
+              ) : null}
+              {tailorResult.noSummary ? (
+                <a
+                  className={styles.downloadLink}
+                  href={URL.createObjectURL(tailorResult.noSummary)}
+                  download="resume_no_summary.pdf"
+                >
+                  ↓ Download (no summary)
+                </a>
+              ) : null}
+              {tailorResult.withSummary ? (
+                <a
+                  className={styles.downloadLink}
+                  href={URL.createObjectURL(tailorResult.withSummary)}
+                  download="resume_with_summary.pdf"
+                >
+                  ↓ Download (with summary)
+                </a>
+              ) : null}
+              {tailorResult.log ? (
+                <a
+                  className={`${styles.downloadLink} ${styles.downloadLinkLog}`}
+                  href={URL.createObjectURL(tailorResult.log)}
+                  download="pipeline_log.txt"
+                >
+                  ↓ Download log
+                </a>
+              ) : null}
+            </div>
           ) : null}
         </div>
       </div>

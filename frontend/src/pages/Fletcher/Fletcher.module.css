@@ -171,6 +171,12 @@
   display: flex;
   align-items: center;
   gap: 8px;
+  border-radius: var(--radius-sm);
+  transition: outline var(--ease);
+}
+.fileRowDragging {
+  outline: 2px dashed var(--accent);
+  outline-offset: 4px;
 }
 
 .fileInput {
@@ -255,11 +261,17 @@
   overflow-y: auto;
 }
 
+.downloadGroup {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 14px;
+}
+
 .downloadLink {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  margin-top: 14px;
   padding: 9px 16px;
   border-radius: var(--radius-sm);
   background: var(--good-soft);
@@ -271,6 +283,30 @@
 }
 .downloadLink:hover {
   opacity: 0.85;
+}
+.downloadLinkLog {
+  background: var(--panel-strong);
+  color: var(--muted);
+  border-color: var(--line);
+}
+
+.llmErrorBanner {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 10px 14px;
+  border-radius: var(--radius-sm);
+  background: var(--warn-soft, #fff8e1);
+  color: var(--warn, #a07000);
+  border: 1px solid var(--warn, #a07000);
+  font-size: 0.875rem;
+}
+
+.llmErrorDetail {
+  font-size: 0.78rem;
+  opacity: 0.75;
+  font-family: monospace;
+  word-break: break-all;
 }
 
 .meta {

@@ -80,6 +80,21 @@ def _render_project_entry(entry: ProjectEntry) -> str:
     )
 
 
+def _render_summary(text: str) -> str:
+    escaped = text
+    for char in ("$", "%", "&", "#"):
+        import re
+
+        escaped = re.sub(r"(?<!\\)" + re.escape(char), "\\" + char, escaped)
+    return (
+        "    \\vspace{0.10 cm}\n"
+        "    \\section{Summary}\n\n"
+        "    \\begin{onecolentry}\n"
+        f"        {escaped}\n"
+        "    \\end{onecolentry}\n"
+    )
+
+
 def _render_skills(skills: SkillsSection) -> str:
     def onecol(label: str, values: list[str]) -> str:
         joined = ", ".join(values)
@@ -101,7 +116,10 @@ def _render_skills(skills: SkillsSection) -> str:
 
 
 def render_resume_tex(doc: ResumeDocument) -> str:
-    parts = [doc.preamble.rstrip(), "", _render_header(doc), _render_education(doc.education)]
+    parts = [doc.preamble.rstrip(), "", _render_header(doc)]
+    if doc.summary:
+        parts.append(_render_summary(doc.summary))
+    parts.append(_render_education(doc.education))
 
     parts.append("    \\vspace{0.10 cm}\n    \\section{Experience}\n")
     for idx, entry in enumerate(doc.experience):
