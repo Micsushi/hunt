@@ -364,6 +364,69 @@ def list_jobs_for_review(
         conn.close()
 
 
+def list_job_ids_for_review(
+    *,
+    status="all",
+    query=None,
+    sort="date_scraped",
+    direction="desc",
+    source=None,
+    operator_tag=None,
+    category=None,
+    ats_type=None,
+):
+    linkedin_auth_available = hunter_db.is_linkedin_auth_available()
+    frag, filter_params = _review_jobs_filter_sql_and_params(
+        status=status,
+        source=source,
+        query=query,
+        linkedin_auth_available=linkedin_auth_available,
+        operator_tag=operator_tag,
+        category=category,
+        ats_type=ats_type,
+    )
+    if frag is None:
+        return []
+    conn = hunter_db.get_connection()
+    try:
+        cursor = conn.cursor()
+        params = list(filter_params)
+        safe_direction = "ASC" if str(direction).lower() == "asc" else "DESC"
+        sortable_columns = {
+            "id": "id",
+            "source": "source",
+            "company": "company",
+            "title": "title",
+            "enrichment_status": "enrichment_status",
+            "apply_type": "apply_type",
+            "enrichment_attempts": "coalesce(enrichment_attempts, 0)",
+            "next_enrichment_retry_at": "coalesce(next_enrichment_retry_at, '')",
+            "last_enrichment_error": "coalesce(last_enrichment_error, '')",
+            "date_scraped": "date_scraped",
+            "enriched_at": "coalesce(enriched_at, '')",
+        }
+        safe_sort_sql = sortable_columns.get(sort, "date_scraped")
+        sql = "SELECT id FROM jobs WHERE 1=1" + frag
+        if status == "ready":
+            sql += f"""
+            ORDER BY CASE enrichment_status WHEN 'pending' THEN 0 ELSE 1 END,
+                     CASE
+                       WHEN enrichment_status = 'pending' AND {safe_sort_sql} IS NOT NULL THEN {safe_sort_sql}
+                     END {safe_direction},
+                     CASE
+                       WHEN enrichment_status != 'pending' AND {safe_sort_sql} IS NOT NULL THEN {safe_sort_sql}
+                     END {safe_direction},
+                     CASE WHEN enrichment_status = 'pending' THEN date_scraped END DESC,
+                     CASE WHEN enrichment_status != 'pending' THEN next_enrichment_retry_at END ASC,
+                     id DESC
+            """
+        else:
+            sql += f" ORDER BY {safe_sort_sql} {safe_direction}, id DESC"
+        return [int(row[0]) for row in cursor.execute(sql, tuple(params)).fetchall()]
+    finally:
+        conn.close()
+
+
 def count_jobs_for_review(
     *, status="all", query=None, source=None, operator_tag=None, category=None, ats_type=None
 ):

@@ -104,21 +104,28 @@ _PROCESS_TERMS = {
     "code reviews",
     "end-to-end",
     "full life cycle development",
+    "full development lifecycle",
     "git",
+    "fix defects",
+    "review and work within a large existing codebase",
     "scrum",
     "source control",
     "source repository processes",
     "testing",
     "unit",
     "unit testing",
+    "write tests",
 }
 
 _QUALITY_TERMS = {
     "analytical thinking",
     "collaboration",
     "communication",
+    "clean maintainable code",
     "customer empathy",
+    "debugging complex issues",
     "leadership",
+    "object-oriented design practices",
     "ownership",
     "proactive",
     "proactive communication",
@@ -143,6 +150,7 @@ _TOOLS = {
     "jira",
     "kubernetes",
     "mongodb",
+    "ms sql server",
     "postgresql",
     "power bi",
     "s3",
@@ -167,16 +175,30 @@ _LANGUAGES = {
 }
 
 _FRAMEWORKS = {
+    ".net",
+    "angular",
     "express.js",
     "fastapi",
     "flask",
+    "linq",
     "next.js",
     "node.js",
+    "primeng",
     "react",
     "tailwind",
     "vue.js",
     "wpf",
 }
+
+
+def _known_stack_parts(key: str) -> list[str]:
+    parts = [
+        part.strip()
+        for part in re.split(r"\b(?:and|or|/)\b|,", key)
+        if part.strip() and part.strip() not in {"similar"}
+    ]
+    known = _TOOLS | _LANGUAGES | _FRAMEWORKS
+    return [part for part in parts if part in known]
 
 
 def normalize_keyword(keyword: str) -> str:
@@ -190,7 +212,12 @@ def _contains_role_shape(key: str, job_title: str) -> bool:
     if key == normalize_keyword(job_title):
         return True
     return bool(words & _ROLE_WORDS) and (
-        "software" in words or "product" in words or "data" in words
+        "application" in words
+        or "full" in words
+        or "fullstack" in words
+        or "software" in words
+        or "product" in words
+        or "data" in words
     )
 
 
@@ -269,6 +296,14 @@ def classify_keyword_policy(
         return _policy(keyword, KeywordKind.LANGUAGE, KeywordRoute.REWRITE, reason="language")
     if key in _FRAMEWORKS:
         return _policy(keyword, KeywordKind.FRAMEWORK, KeywordRoute.REWRITE, reason="framework")
+    if _known_stack_parts(key):
+        return _policy(
+            keyword,
+            KeywordKind.TECH,
+            KeywordRoute.REWRITE,
+            allow_same_category_tool_substitution=True,
+            reason="known_stack_combo",
+        )
     if any(token in key for token in ("api", "backend", "frontend", "database", "cloud")):
         return _policy(keyword, KeywordKind.TECH, KeywordRoute.REWRITE, reason="tech_phrase")
     if any(token in key for token in ("location", "salary", "compensation", "req id")):

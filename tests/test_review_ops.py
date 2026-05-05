@@ -78,6 +78,64 @@ class ReviewOpsApiTests(unittest.TestCase):
             control_plane_api.api_ops_requeue_errors({"source": "linkedin", "error_codes": []})
         self.assertEqual(ctx.exception.status_code, 400)
 
+    def test_job_adjacent_uses_review_filters_and_sort(self):
+        from backend import app as control_plane_api
+
+        _, second_id = self.db.add_job(
+            {
+                "title": "Analyst",
+                "company": "Co",
+                "location": "CA",
+                "job_url": "https://www.linkedin.com/jobs/view/ops-test-2",
+                "apply_url": None,
+                "description": None,
+                "source": "linkedin",
+                "date_posted": "2026-04-09",
+                "is_remote": 0,
+                "level": "junior",
+                "priority": 0,
+                "category": "product",
+                "apply_type": "unknown",
+                "auto_apply_eligible": None,
+                "enrichment_status": "done",
+                "enrichment_attempts": 1,
+                "apply_host": None,
+                "ats_type": "workday",
+            }
+        )
+        _, filtered_out_id = self.db.add_job(
+            {
+                "title": "Designer",
+                "company": "Co",
+                "location": "CA",
+                "job_url": "https://www.linkedin.com/jobs/view/ops-test-3",
+                "apply_url": None,
+                "description": None,
+                "source": "linkedin",
+                "date_posted": "2026-04-10",
+                "is_remote": 0,
+                "level": "junior",
+                "priority": 0,
+                "category": "design",
+                "apply_type": "unknown",
+                "auto_apply_eligible": None,
+                "enrichment_status": "done",
+                "enrichment_attempts": 1,
+                "apply_host": None,
+                "ats_type": "workday",
+            }
+        )
+
+        response = control_plane_api.api_job_adjacent(
+            second_id,
+            category="product",
+            sort="id",
+            direction="asc",
+        )
+        data = json.loads(response.body.decode())
+        self.assertEqual(data, {"prev_id": self.job_id, "next_id": self.job_id})
+        self.assertNotIn(filtered_out_id, data.values())
+
     def test_auth_login_and_logout_return_session_cookie_headers(self):
         import asyncio
         from unittest.mock import patch

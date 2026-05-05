@@ -86,3 +86,30 @@ def test_common_stack_terms_are_rewrite_candidates():
         policy = classify_keyword_policy(keyword)
         assert policy.kind in {KeywordKind.LANGUAGE, KeywordKind.FRAMEWORK, KeywordKind.TECH}
         assert policy.route == KeywordRoute.REWRITE
+
+
+def test_full_stack_stack_terms_are_not_ignored():
+    for keyword in [".NET", "Angular", "MS SQL Server", "PrimeNG", "LINQ"]:
+        policy = classify_keyword_policy(keyword)
+        assert policy.kind in {KeywordKind.TOOL, KeywordKind.FRAMEWORK, KeywordKind.TECH}
+        assert policy.route == KeywordRoute.REWRITE
+
+
+def test_full_stack_process_terms_route_to_rewrite_or_summary():
+    for keyword in [
+        "full development lifecycle",
+        "write tests",
+        "fix defects",
+        "review and work within a large, existing codebase",
+        "clean, maintainable code",
+        "object-oriented design practices",
+        "debugging complex issues",
+    ]:
+        policy = classify_keyword_policy(keyword)
+        assert policy.route in {KeywordRoute.REWRITE, KeywordRoute.SUMMARY}
+
+
+def test_combined_known_phrase_is_not_ignored():
+    policy = classify_keyword_policy("Angular and TypeScript")
+
+    assert policy.route == KeywordRoute.REWRITE

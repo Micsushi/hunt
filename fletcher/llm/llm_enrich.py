@@ -46,10 +46,6 @@ AMBIGUOUS_VALIDATION_KEYWORDS = DOMAIN_KEYWORDS | {
     "data pipelines",
 }
 
-RELATED_VISIBLE_PHRASES = {
-    "react": ("react", "react/next.js", "next.js/react"),
-}
-
 SUMMARY_BANNED_TONE = (
     "motivated",
     "eager",
@@ -184,18 +180,12 @@ def _visible_action_phrases(keyword: str) -> tuple[str, ...]:
 
 
 def keyword_visible_in_text(keyword: str, text: str) -> bool:
-    """Return true when a requested keyword is visibly represented in text.
-
-    This intentionally accepts close grammatical variants for action phrases,
-    but it still requires the action and object to appear together. For example,
-    `Monitor data pipelines` can match `monitoring data pipelines`; scattered
-    words like `monitors` and `data pipelines` in different clauses do not count.
-    """
+    """Return true when a requested keyword is visibly represented in text."""
     key = _normalize_visible_text(keyword)
     visible = _normalize_visible_text(text)
     if not key or not visible:
         return False
-    allowed = list(RELATED_VISIBLE_PHRASES.get(key, (key,)))
+    allowed = [key]
     allowed.extend(_visible_action_phrases(key))
     return any(_normalize_visible_text(phrase) in visible for phrase in allowed)
 
@@ -209,9 +199,8 @@ def validate_claimed_keywords_present(
     """Reject model metadata when claimed used keywords do not visibly appear.
 
     This is intentionally mechanical: if the model says it used React, the text
-    must contain React or a pre-approved visible related-tech phrase like
-    React/Next.js. If metadata is inconsistent, the caller should keep the
-    original bullet and treat all requested keywords as unused.
+    must contain React. If metadata is inconsistent, the caller should keep
+    the original bullet and treat all requested keywords as unused.
     """
     requested_l = {kw.lower() for kw in requested_keywords}
     missing: list[str] = []
@@ -436,6 +425,95 @@ def validate_rewrite_with_ollama(
     }
 
 
+def repair_rewrite_with_ollama(
+    *,
+    original: str,
+    rewritten: str,
+    requested_keywords: list[str],
+    validation: dict[str, Any],
+    logger: PipelineLogger | None = None,
+) -> dict[str, Any]:
+    """Ask the model for one safer rewrite after validation feedback."""
+    result: dict[str, Any] = {
+        "bullet": original,
+        "success": False,
+        "error": None,
+        "duration_ms": None,
+        "keywords_used": [],
+        "keywords_skipped": list(requested_keywords),
+    }
+    if config.DEFAULT_MODEL_BACKEND != "ollama":
+        return result
+    rejected = validation.get("keywords_rejected") or []
+    supported = validation.get("keywords_supported") or []
+    retry_keywords = [kw for kw in requested_keywords if kw not in rejected]
+    if not retry_keywords:
+        retry_keywords = list(requested_keywords)
+    prompt = (
+        "Repair this resume bullet rewrite after validation feedback.\n"
+        f"Original bullet: {original}\n"
+        f"Rejected rewrite: {rewritten}\n"
+        f"Requested keywords: {', '.join(requested_keywords)}\n"
+        f"Supported keywords from validation: {', '.join(supported)}\n"
+        f"Rejected keywords from validation: {', '.join(rejected)}\n"
+        f"Validation reason: {validation.get('reason') or validation.get('reasons') or ''}\n"
+        "Write one truthful bullet. Use only the keywords that still fit. Skip unsupported keywords. "
+        "Do not invent facts, tools, domains, outcomes, or responsibilities.\n"
+        'Return only: {"bullet": "...", "keywords_used": [...], "keywords_skipped": [...]}'
+    )
+    start = time.perf_counter()
+    try:
+        raw = _ollama_chat(prompt)
+        result["duration_ms"] = int((time.perf_counter() - start) * 1000)
+        if logger:
+            logger.llm_call("repair_rewrite", prompt, raw, result["duration_ms"], success=True)
+        parsed = _extract_json_object(raw)
+        text = (parsed.get("bullet") or "").strip()
+        if text:
+            used = _filter_requested_keywords(
+                _dedupe_case(
+                    parsed.get("keywords_used")
+                    if isinstance(parsed.get("keywords_used"), list)
+                    else []
+                ),
+                requested_keywords,
+            )
+            skipped = _filter_requested_keywords(
+                _dedupe_case(
+                    parsed.get("keywords_skipped")
+                    if isinstance(parsed.get("keywords_skipped"), list)
+                    else []
+                ),
+                requested_keywords,
+            )
+            result.update(
+                {
+                    "bullet": text,
+                    "success": True,
+                    "keywords_used": used,
+                    "keywords_skipped": skipped
+                    or [
+                        kw
+                        for kw in requested_keywords
+                        if kw.lower() not in {u.lower() for u in used}
+                    ],
+                }
+            )
+    except Exception as exc:
+        result["duration_ms"] = int((time.perf_counter() - start) * 1000)
+        result["error"] = str(exc) or exc.__class__.__name__
+        if logger:
+            logger.llm_call(
+                "repair_rewrite",
+                prompt,
+                str(exc),
+                result["duration_ms"],
+                success=False,
+                error=result["error"],
+            )
+    return result
+
+
 def validate_summary_grounding(
     summary: str,
     candidate_context: str,
@@ -504,7 +582,21 @@ Answer two questions using only the title and description above.
 
 1) Is this posting usable for tailoring a resume? Usable means there is enough concrete content (not just "apply on company site", not empty, not a useless stub). Scrapes that lost the real JD should be marked not usable.
 
-2) List up to 20 resume-relevant signals that **appear verbatim** in the title or description (same spelling; minor case differences ok). Prefer technologies, tools, platforms, programming languages, frameworks, data tools, concrete engineering/process terms, and candidate qualities like leadership, ownership, collaboration, testing rigor, analytical thinking, or user empathy. Do not invent anything not in the text. Skip company boilerplate, compensation, executive visibility, hiring logistics, generic org labels, and language nice-to-haves unless they are central requirements. Do not include job titles merely to insert them into bullets. If the posting is not usable, return an empty keyword list.
+2) List up to 20 resume-relevant signals that **appear verbatim** in the title or description (same spelling; minor case differences ok).
+
+Only include signals that are one of:
+- concrete tech stack or data stack terms: languages, frameworks, libraries, cloud platforms, databases, developer tools, data tools
+- concrete technical methods or workflows: testing, CI/CD, code reviews, model deployment, data preprocessing, dashboards, security scanning
+- concrete candidate quality/process traits that are explicitly requested: leadership, ownership, collaboration, communication, testing rigor, analytical thinking, user empathy
+
+Fill the 20 keyword slots in this priority order:
+1. named technologies, tools, platforms, databases, frameworks, and languages
+2. concrete technical methods/workflows
+3. requested qualities/process traits
+
+Do not include job titles, employment types, program names, departments, locations, credentials, education fields, company metadata, compensation, executive visibility, hiring logistics, or spoken-language nice-to-haves unless they are central requirements.
+Skip generic deliverables and vague nouns such as reports, diagrams, flow charts, documentation, analysis, validation, interpretation, data sources, or findings unless paired with a concrete technical method/tool from the JD.
+Do not invent anything not in the text. If the posting is not usable, return an empty keyword list.
 
 Return a single JSON object with exactly these keys:
 - "jd_usable": boolean
@@ -567,6 +659,584 @@ def _apply_jd_keywords(
     new_k["tools_and_technologies"] = list(terms)
     new_k["domain_terms"] = []
     return new_c, new_k
+
+
+def classify_keyword_routes_with_ollama(
+    *,
+    keywords: list[str],
+    job_title: str,
+    resume_context: str,
+    role_family: str = "",
+    job_level: str = "",
+    logger: PipelineLogger | None = None,
+) -> dict[str, dict[str, str]]:
+    """Ask Ollama to route ambiguous resume signals.
+
+    Deterministic policy remains the fallback and safety guard. This helper is
+    only meant to rescue ambiguous terms that a static allowlist would otherwise
+    classify as unknown.
+    """
+    if config.DEFAULT_MODEL_BACKEND != "ollama" or not keywords:
+        return {}
+    valid_routes = {"rewrite", "summary", "skills_only", "ignore"}
+    valid_kinds = {kind.value for kind in KeywordKind}
+    requested_by_lower = {keyword.lower(): keyword for keyword in _dedupe_case(keywords)}
+    prompt = (
+        "Route job-description resume signals for a tailoring pipeline.\n"
+        f"Job title: {job_title or '(empty)'}\n"
+        f"Role family: {role_family or '(unknown)'}\n"
+        f"Job level: {job_level or '(unknown)'}\n"
+        f"Candidate resume context: {resume_context[:3000]}\n"
+        f"Signals to route: {json.dumps(_dedupe_case(keywords))}\n"
+        "For each signal, choose exactly one route:\n"
+        "- rewrite: concrete named tech/tool/language/framework, or a concrete process/quality signal with strong direct evidence in a specific bullet.\n"
+        "- summary: role, process, quality, PM/data positioning, or broad responsibility signal useful for summary but risky for bullets.\n"
+        "- skills_only: concrete technology/tool/database/framework that belongs only in Technical Skills.\n"
+        "- ignore: logistics, company metadata, unsupported language requirement, credential/education field, or irrelevant org phrase.\n"
+        "Prefer summary over rewrite for broad data-science, security, domain, or business concepts unless a specific bullet directly supports the exact work.\n"
+        "Prefer summary or ignore when you are less than 70 percent comfortable that the signal fits a bullet truthfully.\n"
+        "Prefer summary over ignore for useful PM/process/data signals such as project coordination, project metrics, reporting, requirements, dashboards, analysis, stakeholder communication, planning, or process improvements.\n"
+        "Never route job titles, education credentials, locations, compensation, executive names, or unsupported spoken languages to rewrite.\n"
+        "Use kind values: tech, tool, language, framework, process, quality, domain, role_title, education, logistics, org_metadata, language_requirement, ignore.\n"
+        'Return only: {"routes": [{"keyword": "...", "route": "...", "kind": "...", "reason": "..."}]}'
+    )
+    start = time.perf_counter()
+    raw = ""
+    try:
+        raw = _ollama_chat(prompt)
+        duration_ms = int((time.perf_counter() - start) * 1000)
+        parsed = _extract_json_object(raw)
+        raw_routes = parsed.get("routes", [])
+        if logger:
+            logger.llm_call("keyword_policy_route", prompt, raw, duration_ms, success=True)
+        if isinstance(raw_routes, dict):
+            raw_routes = [
+                {"keyword": keyword, **detail}
+                for keyword, detail in raw_routes.items()
+                if isinstance(detail, dict)
+            ]
+        routes: dict[str, dict[str, str]] = {}
+        if not isinstance(raw_routes, list):
+            return {}
+        for item in raw_routes:
+            if not isinstance(item, dict):
+                continue
+            keyword_key = str(item.get("keyword") or "").strip().lower()
+            original_keyword = requested_by_lower.get(keyword_key)
+            route = str(item.get("route") or "").strip().lower()
+            kind = str(item.get("kind") or "").strip().lower()
+            if not original_keyword or route not in valid_routes or kind not in valid_kinds:
+                continue
+            routes[original_keyword] = {
+                "route": route,
+                "kind": kind,
+                "reason": str(item.get("reason") or "").strip()[:240],
+            }
+        return routes
+    except Exception as exc:
+        duration_ms = int((time.perf_counter() - start) * 1000)
+        if logger:
+            logger.llm_call(
+                "keyword_policy_route",
+                prompt,
+                raw or str(exc),
+                duration_ms,
+                success=False,
+                error=str(exc) or exc.__class__.__name__,
+            )
+        return {}
+
+
+def infer_title_with_ollama(
+    *,
+    input_title: str,
+    description: str,
+    logger: PipelineLogger | None = None,
+) -> dict[str, Any]:
+    """Infer the job title when deterministic title extraction is empty or suspicious."""
+    result = {"title": "", "success": False, "error": None, "duration_ms": None}
+    if config.DEFAULT_MODEL_BACKEND != "ollama":
+        return result
+    prompt = (
+        "Extract the actual role title from this job posting. "
+        "Do not return metadata headings, locations, functions, departments, company names, or section headings. "
+        "If no real role title is present, return an empty string.\n"
+        f"Input title: {input_title or '(empty)'}\n"
+        f"Job description: {(description or '')[:3500]}\n"
+        'Return only: {"title": "..."}'
+    )
+    start = time.perf_counter()
+    try:
+        raw = _ollama_chat(prompt)
+        result["duration_ms"] = int((time.perf_counter() - start) * 1000)
+        if logger:
+            logger.llm_call("infer_title", prompt, raw, result["duration_ms"], success=True)
+        parsed = _extract_json_object(raw)
+        title = str(parsed.get("title") or "").strip()
+        if title:
+            result["title"] = title[:120]
+            result["success"] = True
+    except Exception as exc:
+        result["duration_ms"] = int((time.perf_counter() - start) * 1000)
+        result["error"] = str(exc) or exc.__class__.__name__
+        if logger:
+            logger.llm_call(
+                "infer_title",
+                prompt,
+                str(exc),
+                result["duration_ms"],
+                success=False,
+                error=result["error"],
+            )
+    return result
+
+
+def analyze_job_fit_with_ollama(
+    *,
+    input_title: str,
+    deterministic_title: str,
+    description: str,
+    logger: PipelineLogger | None = None,
+) -> dict[str, Any]:
+    """Infer title, classify role, and detect mismatch in one model judgment."""
+    result: dict[str, Any] = {
+        "success": False,
+        "title": deterministic_title or "",
+        "role_family": "",
+        "job_level": "",
+        "mismatch": False,
+        "mismatch_reason": "",
+        "error": None,
+        "duration_ms": None,
+    }
+    if config.DEFAULT_MODEL_BACKEND != "ollama":
+        return result
+    prompt = (
+        "Analyze whether this job posting matches the requested title and extract the actual role.\n"
+        f"Requested/input title: {input_title or '(empty)'}\n"
+        f"Deterministic title guess: {deterministic_title or '(empty)'}\n"
+        f"Job description: {(description or '')[:4500]}\n"
+        "Return the actual role title from the JD, role_family, job_level, and whether the JD is clearly mismatched against the requested title. "
+        "Mark mismatch true for clear wrong-role cases, such as requested software engineer but detected chief/director/VP/product manager, requested PM but detected unrelated engineering role, or an executive/chief/VP/head/C-level posting when the requested title does not explicitly ask for executive leadership. "
+        "When the requested title is empty, still mark mismatch true if the JD is clearly outside supported tailoring lanes for this resume flow: software, data, PM, firmware, or closely related technical/product roles. "
+        "Do not mark mismatch just because the title was empty or generic.\n"
+        "Allowed role_family values: software, data, pm, firmware, general.\n"
+        "Allowed job_level values: intern, new_grad, junior, mid, senior, staff, principal, manager, director, executive, unknown.\n"
+        'Return only: {"title": "...", "role_family": "...", "job_level": "...", "mismatch": boolean, "mismatch_reason": "...", "confidence": 0.0}'
+    )
+    start = time.perf_counter()
+    try:
+        raw = _ollama_chat(prompt)
+        result["duration_ms"] = int((time.perf_counter() - start) * 1000)
+        if logger:
+            logger.llm_call("analyze_job_fit", prompt, raw, result["duration_ms"], success=True)
+        parsed = _extract_json_object(raw)
+        result.update(
+            {
+                "success": True,
+                "title": str(parsed.get("title") or deterministic_title or "").strip()[:120],
+                "role_family": str(parsed.get("role_family") or "").strip().lower(),
+                "job_level": str(parsed.get("job_level") or "").strip().lower(),
+                "mismatch": bool(parsed.get("mismatch")),
+                "mismatch_reason": str(parsed.get("mismatch_reason") or "").strip()[:240],
+                "confidence": float(parsed.get("confidence") or 0.7),
+            }
+        )
+    except Exception as exc:
+        result["duration_ms"] = int((time.perf_counter() - start) * 1000)
+        result["error"] = str(exc) or exc.__class__.__name__
+        if logger:
+            logger.llm_call(
+                "analyze_job_fit",
+                prompt,
+                str(exc),
+                result["duration_ms"],
+                success=False,
+                error=result["error"],
+            )
+    return result
+
+
+def classify_job_with_ollama(
+    *,
+    title: str,
+    description: str,
+    logger: PipelineLogger | None = None,
+) -> dict[str, Any]:
+    """Classify role family and level when deterministic classification is weak."""
+    result: dict[str, Any] = {"success": False, "error": None, "duration_ms": None}
+    if config.DEFAULT_MODEL_BACKEND != "ollama":
+        return result
+    prompt = (
+        "Classify this job for resume tailoring.\n"
+        f"Title: {title or '(empty)'}\n"
+        f"Description: {(description or '')[:3500]}\n"
+        "Allowed role_family values: software, data, pm, firmware, general.\n"
+        "Allowed job_level values: intern, new_grad, junior, mid, senior, staff, principal, manager, director, executive, unknown.\n"
+        "Use executive only for chief, VP, head-of, C-level, or equivalent leadership roles.\n"
+        'Return only: {"role_family": "...", "job_level": "...", "confidence": 0.0, "reasons": ["..."]}'
+    )
+    start = time.perf_counter()
+    try:
+        raw = _ollama_chat(prompt)
+        result["duration_ms"] = int((time.perf_counter() - start) * 1000)
+        if logger:
+            logger.llm_call("classify_job", prompt, raw, result["duration_ms"], success=True)
+        parsed = _extract_json_object(raw)
+        family = str(parsed.get("role_family") or "").strip().lower()
+        level = str(parsed.get("job_level") or "").strip().lower()
+        if family and level:
+            result.update(
+                {
+                    "success": True,
+                    "role_family": family,
+                    "job_level": level,
+                    "confidence": float(parsed.get("confidence") or 0.7),
+                    "reasons": parsed.get("reasons")
+                    if isinstance(parsed.get("reasons"), list)
+                    else [],
+                }
+            )
+    except Exception as exc:
+        result["duration_ms"] = int((time.perf_counter() - start) * 1000)
+        result["error"] = str(exc) or exc.__class__.__name__
+        if logger:
+            logger.llm_call(
+                "classify_job",
+                prompt,
+                str(exc),
+                result["duration_ms"],
+                success=False,
+                error=result["error"],
+            )
+    return result
+
+
+def filter_summary_keywords_with_ollama(
+    *,
+    keywords: list[str],
+    candidate_context: str,
+    job_title: str,
+    logger: PipelineLogger | None = None,
+) -> dict[str, Any]:
+    """Choose summary keywords with model judgment instead of rigid string rules."""
+    result = {
+        "included": list(keywords),
+        "excluded": [],
+        "success": False,
+        "error": None,
+        "duration_ms": None,
+    }
+    if config.DEFAULT_MODEL_BACKEND != "ollama" or not keywords:
+        return result
+    requested_l = {keyword.lower() for keyword in _dedupe_case(keywords)}
+
+    def build_prompt(*, retry: bool = False) -> str:
+        retry_line = (
+            "Previous output used terms outside Candidate keywords. Use only exact items from Candidate keywords.\n"
+            if retry
+            else ""
+        )
+        return (
+            "Choose which job-description signals can be truthfully used in a resume summary.\n"
+            f"Job title: {job_title or '(empty)'}\n"
+            f"Candidate evidence: {(candidate_context or '')[:3000]}\n"
+            f"Candidate keywords: {json.dumps(keywords)}\n"
+            f"{retry_line}"
+            "Include only exact Candidate keywords that fit the evidence naturally. Exclude unsupported domain claims and awkward stuffing. "
+            "If a term is useful but should be phrased more generally, include the original term only if it can appear truthfully. "
+            "Do not add new keywords or synonyms.\n"
+            'Return only: {"included": [...], "excluded": [...], "reason": "..."}'
+        )
+
+    for attempt in range(2):
+        prompt = build_prompt(retry=attempt > 0)
+        start = time.perf_counter()
+        try:
+            raw = _ollama_chat(prompt)
+            result["duration_ms"] = int((time.perf_counter() - start) * 1000)
+            parsed = _extract_json_object(raw)
+            raw_values = []
+            for key in ("included", "excluded"):
+                if isinstance(parsed.get(key), list):
+                    raw_values.extend(str(value).strip() for value in parsed[key])
+            invalid = [
+                value
+                for value in _dedupe_case(raw_values)
+                if value and value.lower() not in requested_l
+            ]
+            if logger:
+                logger.llm_call(
+                    "summary_keyword_filter", prompt, raw, result["duration_ms"], success=True
+                )
+            if invalid:
+                if logger:
+                    logger.step(
+                        "summary_keyword_filter_invalid_output",
+                        invalid_terms=invalid,
+                        retry=attempt == 0,
+                    )
+                if attempt == 0:
+                    continue
+            included = _filter_requested_keywords(
+                _dedupe_case(
+                    parsed.get("included") if isinstance(parsed.get("included"), list) else []
+                ),
+                keywords,
+            )
+            excluded = _filter_requested_keywords(
+                _dedupe_case(
+                    parsed.get("excluded") if isinstance(parsed.get("excluded"), list) else []
+                ),
+                keywords,
+            )
+            if included or excluded:
+                included_l = {kw.lower() for kw in included}
+                excluded = [kw for kw in excluded if kw.lower() not in included_l]
+                result.update({"included": included, "excluded": excluded, "success": True})
+                return result
+        except Exception as exc:
+            result["duration_ms"] = int((time.perf_counter() - start) * 1000)
+            result["error"] = str(exc) or exc.__class__.__name__
+            if logger:
+                logger.llm_call(
+                    "summary_keyword_filter",
+                    prompt,
+                    str(exc),
+                    result["duration_ms"],
+                    success=False,
+                    error=result["error"],
+                )
+            if attempt == 0:
+                continue
+    return result
+
+
+def bucket_skill_keywords_with_ollama(
+    *,
+    keywords: list[str],
+    existing_skills: dict[str, list[str]],
+    logger: PipelineLogger | None = None,
+) -> dict[str, Any]:
+    """Ask the model which unused keywords belong in resume skill buckets."""
+    result = {
+        "success": False,
+        "languages": [],
+        "frameworks": [],
+        "developer_tools": [],
+        "ignored": list(keywords),
+        "error": None,
+        "duration_ms": None,
+    }
+    if config.DEFAULT_MODEL_BACKEND != "ollama" or not keywords:
+        return result
+    required_keys = ("languages", "frameworks", "developer_tools", "ignored")
+    requested_l = {keyword.lower() for keyword in _dedupe_case(keywords)}
+
+    def build_prompt(*, retry: bool = False) -> str:
+        retry_line = (
+            "Previous output was invalid. Return all four keys and use only exact Candidate keywords.\n"
+            if retry
+            else ""
+        )
+        return (
+            "Classify which keywords should be added to the resume Technical Skills section.\n"
+            f"Existing skills: {json.dumps(existing_skills)}\n"
+            f"Candidate keywords: {json.dumps(keywords)}\n"
+            f"{retry_line}"
+            "Only add a keyword if the keyword itself is a canonical named skill that belongs in a resume Technical Skills section. "
+            "Good additions are named programming languages, frameworks, libraries, platforms, developer tools, databases, cloud tools, or similar concrete named technologies. "
+            "Do not add job titles, process phrases, qualities, responsibilities, education fields, logistics, domain phrases, vague concepts, methods, or inferred skills. "
+            "Do not rewrite or generalize a phrase into a skill. If uncertain, put it in ignored. "
+            "Return all four keys: languages, frameworks, developer_tools, ignored.\n"
+            'Return only: {"languages": [...], "frameworks": [...], "developer_tools": [...], "ignored": [...]}'
+        )
+
+    for attempt in range(2):
+        prompt = build_prompt(retry=attempt > 0)
+        start = time.perf_counter()
+        try:
+            raw = _ollama_chat(prompt)
+            result["duration_ms"] = int((time.perf_counter() - start) * 1000)
+            parsed = _extract_json_object(raw)
+            missing_keys = [key for key in required_keys if not isinstance(parsed.get(key), list)]
+            raw_values = []
+            for key in required_keys:
+                if isinstance(parsed.get(key), list):
+                    raw_values.extend(str(value).strip() for value in parsed[key])
+            invalid = [
+                value
+                for value in _dedupe_case(raw_values)
+                if value and value.lower() not in requested_l
+            ]
+            if logger:
+                logger.llm_call(
+                    "bucket_skill_keywords", prompt, raw, result["duration_ms"], success=True
+                )
+            if missing_keys or invalid:
+                if logger:
+                    logger.step(
+                        "skill_bucket_invalid_output",
+                        missing_keys=missing_keys,
+                        invalid_terms=invalid,
+                        retry=attempt == 0,
+                    )
+                if attempt == 0:
+                    continue
+            for key in required_keys:
+                result[key] = _filter_requested_keywords(
+                    _dedupe_case(parsed.get(key) if isinstance(parsed.get(key), list) else []),
+                    keywords,
+                )
+            result["success"] = True
+            return result
+        except Exception as exc:
+            result["duration_ms"] = int((time.perf_counter() - start) * 1000)
+            result["error"] = str(exc) or exc.__class__.__name__
+            if logger:
+                logger.llm_call(
+                    "bucket_skill_keywords",
+                    prompt,
+                    str(exc),
+                    result["duration_ms"],
+                    success=False,
+                    error=result["error"],
+                )
+            if attempt == 0:
+                continue
+    return result
+
+
+def validate_skill_keywords_with_ollama(
+    *,
+    proposed_keywords: list[str],
+    existing_skills: dict[str, list[str]],
+    candidate_context: str,
+    logger: PipelineLogger | None = None,
+) -> dict[str, Any]:
+    """Validate proposed Technical Skills additions against candidate evidence."""
+    result = {
+        "success": False,
+        "accepted": [],
+        "rejected": list(proposed_keywords),
+        "error": None,
+        "duration_ms": None,
+    }
+    proposed = _dedupe_case(proposed_keywords)
+    if config.DEFAULT_MODEL_BACKEND != "ollama" or not proposed:
+        return result
+    prompt = (
+        "Validate proposed additions to a resume Technical Skills section.\n"
+        f"Existing skills: {json.dumps(existing_skills)}\n"
+        f"Candidate evidence: {(candidate_context or '')[:3000]}\n"
+        f"Proposed keywords: {json.dumps(proposed)}\n"
+        "Accept only exact proposed keywords that are canonical named skills and are supported by candidate evidence, existing skills, or a very close named equivalent. "
+        "Reject broad concepts, methods, responsibilities, domains, role titles, or vague data/security/product phrases even if they sound valuable. "
+        "Do not add new terms or synonyms. If uncertain, reject.\n"
+        'Return only: {"accepted": [...], "rejected": [...], "reason": "..."}'
+    )
+    start = time.perf_counter()
+    try:
+        raw = _ollama_chat(prompt)
+        result["duration_ms"] = int((time.perf_counter() - start) * 1000)
+        if logger:
+            logger.llm_call(
+                "validate_skill_keywords", prompt, raw, result["duration_ms"], success=True
+            )
+        parsed = _extract_json_object(raw)
+        accepted = _filter_requested_keywords(
+            _dedupe_case(
+                parsed.get("accepted") if isinstance(parsed.get("accepted"), list) else []
+            ),
+            proposed,
+        )
+        rejected = _filter_requested_keywords(
+            _dedupe_case(
+                parsed.get("rejected") if isinstance(parsed.get("rejected"), list) else []
+            ),
+            proposed,
+        )
+        accepted_l = {keyword.lower() for keyword in accepted}
+        rejected_l = {keyword.lower() for keyword in rejected}
+        rejected.extend(
+            keyword
+            for keyword in proposed
+            if keyword.lower() not in accepted_l and keyword.lower() not in rejected_l
+        )
+        result.update(
+            {
+                "success": bool(accepted or rejected),
+                "accepted": accepted,
+                "rejected": _dedupe_case(rejected),
+            }
+        )
+    except Exception as exc:
+        result["duration_ms"] = int((time.perf_counter() - start) * 1000)
+        result["error"] = str(exc) or exc.__class__.__name__
+        if logger:
+            logger.llm_call(
+                "validate_skill_keywords",
+                prompt,
+                str(exc),
+                result["duration_ms"],
+                success=False,
+                error=result["error"],
+            )
+    return result
+
+
+def validate_summary_with_ollama(
+    *,
+    summary: str,
+    candidate_context: str,
+    keywords: list[str],
+    logger: PipelineLogger | None = None,
+) -> dict[str, Any]:
+    """Validate summary truthfulness with the model."""
+    result = {"accepted": True, "reasons": [], "success": False, "duration_ms": None, "error": None}
+    if config.DEFAULT_MODEL_BACKEND != "ollama" or not summary:
+        return result
+    prompt = (
+        "Validate whether this resume summary is truthful and appropriately positioned.\n"
+        f"Candidate evidence: {(candidate_context or '')[:3000]}\n"
+        f"Requested keywords: {json.dumps(keywords)}\n"
+        f"Summary: {summary}\n"
+        "Classify each sentence as supported, too_broad, or unsupported using the candidate evidence. "
+        "If any sentence is unsupported, accepted must be false. "
+        "Reject the summary if it claims a domain, tool, platform, responsibility, or business context that is not supported by the candidate evidence. "
+        "Reject unsupported domain/tool claims, obvious exaggeration, or junior filler tone. "
+        "It is better to reject the summary than allow a polished unsupported claim. "
+        "Do not reject just because not every keyword is used.\n"
+        'Return only: {"accepted": boolean, "reasons": ["..."]}'
+    )
+    start = time.perf_counter()
+    try:
+        raw = _ollama_chat(prompt)
+        result["duration_ms"] = int((time.perf_counter() - start) * 1000)
+        if logger:
+            logger.llm_call("validate_summary", prompt, raw, result["duration_ms"], success=True)
+        parsed = _extract_json_object(raw)
+        reasons = parsed.get("reasons")
+        result.update(
+            {
+                "accepted": bool(parsed.get("accepted")),
+                "reasons": reasons if isinstance(reasons, list) else [],
+                "success": True,
+            }
+        )
+    except Exception as exc:
+        result["duration_ms"] = int((time.perf_counter() - start) * 1000)
+        result["error"] = str(exc) or exc.__class__.__name__
+        if logger:
+            logger.llm_call(
+                "validate_summary",
+                prompt,
+                str(exc),
+                result["duration_ms"],
+                success=False,
+                error=result["error"],
+            )
+    return result
 
 
 def generate_summary(
@@ -635,6 +1305,7 @@ def generate_summary(
         f"Write a 2-3 sentence professional summary for this candidate targeting this job. "
         f"Aim for 4-5 printed resume lines. "
         f"No invented facts. Use only the background provided. "
+        f"If the candidate background does not support a strong targeted summary, return an empty summary rather than filling space with generic or unsupported claims. "
         f"Use the keywords only when they fit the candidate background naturally. "
         f"Do not try to include every keyword. Prioritize accurate, supported technologies and role/process terms. "
         f"{role_instruction}"
@@ -745,7 +1416,7 @@ def rewrite_bullet_targeted(
         if logger:
             logger.llm_call("rewrite_bullet", prompt, raw, result["duration_ms"], success=True)
         parsed = _extract_json_object(raw)
-        text = repair_rewrite_redundancy((parsed.get("bullet") or "").strip())
+        text = (parsed.get("bullet") or "").strip()
         if text:
             model_used = parsed.get("keywords_used")
             model_skipped = parsed.get("keywords_skipped")
@@ -775,40 +1446,60 @@ def rewrite_bullet_targeted(
                 result["keywords_skipped"] = list(keywords)
                 return result
 
-            validation = validate_rewrite_grounding(
-                original=bullet,
-                rewritten=text,
-                requested_keywords=keywords,
-            )
-            if validation["accepted"]:
-                try:
-                    llm_validation = validate_rewrite_with_ollama(
-                        original=bullet,
-                        rewritten=text,
-                        requested_keywords=keywords,
-                        logger=logger,
-                    )
-                    validation = {
-                        **validation,
-                        "llm_validation": llm_validation,
-                    }
-                    if not llm_validation["accepted"]:
-                        validation["accepted"] = False
-                        validation["keywords_rejected"] = llm_validation[
-                            "keywords_rejected"
-                        ] or list(keywords)
-                        validation["keywords_supported"] = llm_validation["keywords_supported"]
-                except Exception as exc:
-                    validation = {
-                        **validation,
-                        "accepted": False,
-                        "keywords_supported": [],
-                        "keywords_rejected": list(keywords),
-                        "llm_validation_error": str(exc) or exc.__class__.__name__,
-                    }
+            try:
+                validation = validate_rewrite_with_ollama(
+                    original=bullet,
+                    rewritten=text,
+                    requested_keywords=keywords,
+                    logger=logger,
+                )
+            except Exception as exc:
+                validation = {
+                    "accepted": False,
+                    "keywords_supported": [],
+                    "keywords_rejected": list(keywords),
+                    "reason": str(exc) or exc.__class__.__name__,
+                }
             result["validation"] = validation
             if not validation["accepted"]:
-                used, skipped = _derive_keyword_outcome(
+                repair = repair_rewrite_with_ollama(
+                    original=bullet,
+                    rewritten=text,
+                    requested_keywords=keywords,
+                    validation=validation,
+                    logger=logger,
+                )
+                result["repair"] = repair
+                if repair.get("success"):
+                    repair_text = str(repair.get("bullet") or "").strip()
+                    repair_used = list(repair.get("keywords_used") or [])
+                    repair_presence = validate_claimed_keywords_present(
+                        rewritten=repair_text,
+                        requested_keywords=keywords,
+                        claimed_used=repair_used,
+                    )
+                    result["repair_claimed_keyword_presence"] = repair_presence
+                    if repair_presence["accepted"]:
+                        repair_validation = validate_rewrite_with_ollama(
+                            original=bullet,
+                            rewritten=repair_text,
+                            requested_keywords=keywords,
+                            logger=logger,
+                        )
+                        result["repair_validation"] = repair_validation
+                        if repair_validation["accepted"]:
+                            used, skipped = _derive_keyword_outcome(
+                                keywords,
+                                repair_validation.get("keywords_supported") or repair_used,
+                                repair_validation.get("keywords_rejected") or [],
+                            )
+                            if used:
+                                result["bullet"] = repair_text
+                                result["success"] = True
+                                result["keywords_used"] = used
+                                result["keywords_skipped"] = skipped
+                                return result
+                _used, skipped = _derive_keyword_outcome(
                     keywords,
                     validation.get("keywords_supported") or [],
                     validation.get("keywords_rejected") or [],
@@ -816,7 +1507,7 @@ def rewrite_bullet_targeted(
                 result["bullet"] = bullet
                 result["success"] = False
                 result["error"] = "rewrite_validation_failed"
-                result["keywords_used"] = used
+                result["keywords_used"] = []
                 result["keywords_skipped"] = skipped or list(keywords)
                 return result
 

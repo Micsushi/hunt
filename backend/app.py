@@ -54,6 +54,7 @@ from backend.db import (  # noqa: E402
     get_review_audit_entries,
     get_review_queue_summary,
     init_hunt_extras,
+    list_job_ids_for_review,
     list_jobs_for_review,
     list_runtime_state_recent,
     patch_job,
@@ -3656,6 +3657,8 @@ def api_jobs(
         query=q,
         source=source_filter,
         operator_tag=tag_clean,
+        category=category_clean,
+        ats_type=ats_type_clean,
     )
     return JSONResponse({"items": [_job_json(row) for row in rows], "total": total})
 
@@ -3727,15 +3730,33 @@ def api_delete_job(job_id: int):
 
 
 @app.get("/api/jobs/{job_id}/adjacent")
-def api_job_adjacent(job_id: int, _auth: str = Depends(require_auth)):
-    """Return prev/next job IDs by insertion order, wrapping around."""
-    conn = get_connection()
-    try:
-        cur = conn.cursor()
-        cur.execute("SELECT id FROM jobs ORDER BY id")
-        ids = [r[0] for r in cur.fetchall()]
-    finally:
-        conn.close()
+def api_job_adjacent(
+    job_id: int,
+    source: str = "all",
+    status: str = "all",
+    q: str = "",
+    tag: str = "",
+    category: str = "",
+    ats_type: str = "",
+    sort: str = "date_scraped",
+    direction: str = "desc",
+    _auth: str = Depends(require_auth),
+):
+    """Return prev/next job IDs using the same filter and sort as the review list."""
+    if source not in SOURCE_OPTIONS:
+        raise HTTPException(status_code=400, detail=f"Unsupported source filter: {source}")
+    if status not in STATUS_OPTIONS:
+        raise HTTPException(status_code=400, detail=f"Unsupported status filter: {status}")
+    ids = list_job_ids_for_review(
+        status=status,
+        query=q,
+        sort=sort,
+        direction=direction,
+        source=None if source == "all" else source,
+        operator_tag=(tag or "").strip() or None,
+        category=(category or "").strip() or None,
+        ats_type=(ats_type or "").strip() or None,
+    )
     if not ids:
         return JSONResponse({"prev_id": None, "next_id": None})
     try:

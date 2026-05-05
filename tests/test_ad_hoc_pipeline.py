@@ -60,6 +60,41 @@ def base_mocks(monkeypatch):
     monkeypatch.setattr(mod, "parse_resume_file", MagicMock(return_value=_make_parsed_doc()))
     monkeypatch.setattr(mod, "classify_job", MagicMock(return_value={}))
     monkeypatch.setattr(
+        mod,
+        "analyze_job_fit_with_ollama",
+        MagicMock(return_value={"success": False, "title": ""}),
+    )
+    monkeypatch.setattr(mod, "classify_job_with_ollama", MagicMock(return_value={"success": False}))
+    monkeypatch.setattr(mod, "classify_keyword_routes_with_ollama", MagicMock(return_value={}))
+    monkeypatch.setattr(
+        mod,
+        "filter_summary_keywords_with_ollama",
+        MagicMock(return_value={"success": False, "included": [], "excluded": []}),
+    )
+    monkeypatch.setattr(
+        mod,
+        "validate_summary_with_ollama",
+        MagicMock(return_value={"success": False, "accepted": True, "reasons": []}),
+    )
+    monkeypatch.setattr(
+        mod,
+        "bucket_skill_keywords_with_ollama",
+        MagicMock(
+            return_value={
+                "success": False,
+                "languages": [],
+                "frameworks": [],
+                "developer_tools": [],
+                "ignored": [],
+            }
+        ),
+    )
+    monkeypatch.setattr(
+        mod,
+        "validate_skill_keywords_with_ollama",
+        MagicMock(return_value={"success": False, "accepted": [], "rejected": []}),
+    )
+    monkeypatch.setattr(
         mod, "extract_keywords", MagicMock(return_value={"must_have_terms": ["Python", "MongoDB"]})
     )
     monkeypatch.setattr(
@@ -503,6 +538,276 @@ def test_keyword_policy_sends_only_rewrite_terms_to_rag(base_mocks):
 
     rag_keywords = base_mocks.match_keywords_to_bullets.call_args.args[0]
     assert rag_keywords == ["React", "A/B testing"]
+
+
+def test_llm_policy_router_can_rescue_unknown_rewrite_term(base_mocks, monkeypatch):
+    import fletcher.ad_hoc_pipeline as mod
+    from fletcher.ad_hoc_pipeline import run_ad_hoc_pipeline
+
+    base_mocks.partition_keywords.return_value = (
+        [],
+        ["component libraries"],
+        {},
+    )
+    monkeypatch.setattr(
+        mod,
+        "classify_keyword_routes_with_ollama",
+        MagicMock(
+            return_value={
+                "component libraries": {
+                    "route": "rewrite",
+                    "kind": "framework",
+                    "reason": "ui framework signal",
+                }
+            }
+        ),
+        raising=False,
+    )
+
+    run_ad_hoc_pipeline(title="Full-Stack Application Developer", description="job")
+
+    rag_keywords = base_mocks.match_keywords_to_bullets.call_args.args[0]
+    assert rag_keywords == ["component libraries"]
+
+
+def test_policy_router_batches_non_blocked_missing_keywords(base_mocks):
+    from fletcher.ad_hoc_pipeline import run_ad_hoc_pipeline
+
+    base_mocks.partition_keywords.return_value = (
+        [],
+        [
+            "project coordination",
+            "project metrics",
+            "requirements",
+            "dashboards",
+            "analysis",
+            "stakeholder communication",
+            "planning",
+            "process improvements",
+            "Mandarin",
+        ],
+        {},
+    )
+    base_mocks.classify_keyword_routes_with_ollama.side_effect = lambda **kwargs: {
+        keyword: {
+            "route": "summary",
+            "kind": "process",
+            "reason": "routed",
+        }
+        for keyword in kwargs["keywords"]
+    }
+
+    run_ad_hoc_pipeline(title="Associate Project Manager", description="job")
+
+    routed_batches = [
+        call.kwargs["keywords"]
+        for call in base_mocks.classify_keyword_routes_with_ollama.call_args_list
+    ]
+    assert routed_batches == [
+        [
+            "project coordination",
+            "project metrics",
+            "requirements",
+            "dashboards",
+            "analysis",
+            "stakeholder communication",
+        ],
+        ["planning", "process improvements"],
+    ]
+
+
+def test_policy_router_retries_failed_batch_as_singletons(base_mocks):
+    from fletcher.ad_hoc_pipeline import run_ad_hoc_pipeline
+
+    base_mocks.partition_keywords.return_value = (
+        [],
+        ["term one", "term two"],
+        {},
+    )
+    calls: list[list[str]] = []
+
+    def fake_route(**kwargs):
+        keywords = list(kwargs["keywords"])
+        calls.append(keywords)
+        if len(keywords) > 1:
+            return {}
+        return {
+            keywords[0]: {
+                "route": "summary",
+                "kind": "process",
+                "reason": "singleton retry",
+            }
+        }
+
+    base_mocks.classify_keyword_routes_with_ollama.side_effect = fake_route
+
+    run_ad_hoc_pipeline(title="Data Analyst", description="job")
+
+    assert calls == [["term one", "term two"], ["term one"], ["term two"]]
+
+
+def test_llm_policy_router_none_does_not_crash(base_mocks):
+    from fletcher.ad_hoc_pipeline import run_ad_hoc_pipeline
+
+    base_mocks.partition_keywords.return_value = (
+        [],
+        ["project coordination"],
+        {},
+    )
+    base_mocks.classify_keyword_routes_with_ollama.return_value = None
+
+    result = run_ad_hoc_pipeline(title="Associate Project Manager", description="job")
+
+    assert result["compile_status"] == "ok"
+
+
+def test_llm_job_fit_mismatch_aborts_without_fixed_role_terms(base_mocks):
+    from fletcher.ad_hoc_pipeline import run_ad_hoc_pipeline
+
+    base_mocks.analyze_job_fit_with_ollama.return_value = {
+        "success": True,
+        "title": "Chief Something Officer",
+        "role_family": "general",
+        "job_level": "executive",
+        "mismatch": True,
+        "mismatch_reason": "executive role does not match supported tailoring target",
+        "duration_ms": 1,
+    }
+
+    result = run_ad_hoc_pipeline(
+        title="",
+        description="Chief Something Officer role.",
+    )
+
+    assert result["compile_status"] == "failed"
+    assert result["error_type"] == "JobMismatchError"
+    assert base_mocks.enrich_with_ollama_if_enabled.call_count == 0
+
+
+def test_skill_bucket_requires_llm_validation(base_mocks):
+    from fletcher.ad_hoc_pipeline import _add_keywords_to_skills
+
+    doc = _make_parsed_doc()
+    base_mocks.bucket_skill_keywords_with_ollama.return_value = {
+        "success": True,
+        "languages": ["SQL", "data mining"],
+        "frameworks": [],
+        "developer_tools": ["UnknownFutureDB"],
+        "ignored": [],
+    }
+    base_mocks.validate_skill_keywords_with_ollama.return_value = {
+        "success": True,
+        "accepted": ["SQL", "UnknownFutureDB"],
+        "rejected": ["data mining"],
+    }
+
+    added = _add_keywords_to_skills(
+        doc,
+        ["SQL", "data mining", "UnknownFutureDB"],
+    )
+
+    assert added == ["SQL", "UnknownFutureDB"]
+    assert "data mining" not in doc.skills.languages
+
+
+def test_slash_stack_keywords_are_split_before_partition(base_mocks):
+    from fletcher.ad_hoc_pipeline import run_ad_hoc_pipeline
+
+    base_mocks.enrich_with_ollama_if_enabled.return_value = (
+        {},
+        {
+            "must_have_terms": [
+                "Java/Kotlin",
+                "Docker/Kubernetes",
+                "Spring Boot/Spring Cloud",
+                "A/B testing",
+            ]
+        },
+        {},
+    )
+
+    result = run_ad_hoc_pipeline(title="AI Developer Intern", description="job")
+
+    assert result["keywords"] == [
+        "Java",
+        "Kotlin",
+        "Docker",
+        "Kubernetes",
+        "Spring Boot",
+        "Spring Cloud",
+        "A/B testing",
+    ]
+    partition_keywords = base_mocks.partition_keywords.call_args.args[0]
+    assert partition_keywords == result["keywords"]
+
+
+def test_pipeline_summary_digest_logged(base_mocks):
+    from fletcher.ad_hoc_pipeline import run_ad_hoc_pipeline
+
+    base_mocks.partition_keywords.return_value = (
+        ["Python"],
+        ["MongoDB"],
+        {"Python": [0], "MongoDB": []},
+    )
+
+    run_ad_hoc_pipeline(title="SWE", description="job")
+
+    log_text = base_mocks.write_text.call_args.args[1]
+    assert "pipeline_debug_summary" in log_text
+    assert "Keywords Found" in log_text
+    assert "RAG Levels" in log_text
+    assert "Bullet Rewrites" in log_text
+    assert "Summary Keywords" in log_text
+    assert "Dropped Bullets" in log_text
+
+
+def test_pipeline_summary_digest_is_human_readable(base_mocks):
+    from fletcher.ad_hoc_pipeline import run_ad_hoc_pipeline
+
+    base_mocks.partition_keywords.return_value = (
+        ["Python"],
+        ["MongoDB"],
+        {"Python": [0], "MongoDB": []},
+    )
+
+    run_ad_hoc_pipeline(title="SWE", description="job")
+
+    log_text = base_mocks.write_text.call_args.args[1]
+    assert "== Pipeline Debug Summary ==" in log_text
+    assert "Keywords Found" in log_text
+    assert "RAG Levels" in log_text
+    assert "Bullet Rewrites" in log_text
+    assert "Summary Keywords" in log_text
+    assert "Dropped Bullets" in log_text
+    assert "  - Python" in log_text
+
+
+def test_summary_banned_tone_retries_even_when_llm_validator_accepts(base_mocks):
+    from fletcher.ad_hoc_pipeline import run_ad_hoc_pipeline
+    from fletcher.llm.llm_enrich import validate_summary_grounding
+
+    base_mocks.validate_summary_grounding.side_effect = validate_summary_grounding
+    base_mocks.generate_summary.side_effect = [
+        {
+            "summary": "Eager to apply strong development skills in an internship.",
+            "success": True,
+            "duration_ms": 1,
+        },
+        {
+            "summary": "Software developer with supported backend delivery experience.",
+            "success": True,
+            "duration_ms": 1,
+        },
+    ]
+    base_mocks.validate_summary_with_ollama.return_value = {
+        "success": True,
+        "accepted": True,
+        "reasons": [],
+    }
+
+    run_ad_hoc_pipeline(title="SWE Intern", description="job")
+
+    assert base_mocks.generate_summary.call_count >= 2
 
 
 def test_single_keyword_rewrite_failure_does_not_retry(base_mocks):

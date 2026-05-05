@@ -1218,6 +1218,47 @@ summary_meta = {"summary": "", "success": False, "error": "summary_validation_fa
 .\.venv\Scripts\python.exe -m pytest tests/test_llm_enrich_logger.py tests/test_ad_hoc_pipeline.py -q
 ```
 
+## Implemented Checkpoint: LLM-Assisted Policy Routing
+
+Implemented:
+- Added an optional Ollama policy-router call for ambiguous keywords that deterministic policy would otherwise classify as `ignore:unknown`.
+- Deterministic policy still runs first and remains the fallback, but unknown role-relevant terms can now be rescued into `rewrite`, `summary`, or `skills_only`.
+- Expanded deterministic full-stack coverage so `.NET`, `Angular`, `MS SQL Server`, `PrimeNG`, `LINQ`, `Angular and TypeScript`, full development lifecycle, write tests, fix defects, codebase review, clean maintainable code, object-oriented design, and debugging terms no longer disappear by default.
+- Kept hard safety categories as deterministic guardrails: job titles, education credentials, org metadata, logistics, and unsupported language requirements still cannot become bullet rewrites just because an LLM says so.
+
+Verification:
+- `.\.venv\Scripts\python.exe -m pytest tests\test_keyword_policy.py tests\test_ad_hoc_pipeline.py tests\test_rewrite_validation.py tests\test_llm_enrich_logger.py -q`: 83 passed.
+- `.\.venv\Scripts\python.exe ci.py c2`: passed.
+
+## Implemented Checkpoint: More LLM Judgment, Fewer Rigid Text Rules
+
+Implemented:
+- Title recovery now uses deterministic inference first, then an Ollama title extraction fallback when the title is empty or suspicious.
+- Job classification now uses deterministic classification first, then an Ollama classification fallback when role family or level is weak, general, or unknown.
+- Added explicit `JobMismatchError` result behavior when the detected role family or seniority is clearly incompatible with the submitted/requested title.
+- Summary keyword filtering now uses an Ollama judgment call first, with deterministic filtering only as fallback.
+- Summary validation now uses an Ollama judgment call first, with deterministic validation only as fallback.
+- Bullet rewrite validation now follows this shape: one LLM rewrite, one deterministic claimed-keyword visibility check, one LLM validation check, one LLM repair attempt if validation fails, then the same visibility and LLM validation checks once more. If the repair still fails, the original bullet is kept and skipped keywords move onward.
+- Removed deterministic phrasing repair from the active rewrite path. The old helper remains for existing tests but no longer changes rewrite output before validation.
+- Medium summary keywords that are skill-like can now be added to the bottom skills section. No-summary versions can use all medium skill-like keywords, while with-summary versions add skill-like summary keywords that did not visibly land in the generated summary.
+
+Verification:
+- `.\.venv\Scripts\python.exe -m pytest tests\test_keyword_policy.py tests\test_ad_hoc_pipeline.py tests\test_rewrite_validation.py tests\test_llm_enrich_logger.py -q`: 83 passed.
+- `.\.venv\Scripts\python.exe ci.py c2`: passed.
+
+## Implemented Checkpoint: Combined Job Fit Check and LLM Skill Bucketing
+
+Implemented:
+- Replaced separate suspicious-title and mismatch checks with one Ollama `analyze_job_fit` call that extracts the actual title, classifies the role, and decides whether the JD clearly mismatches the requested title.
+- Simplified claimed keyword visibility for normal terms: the normalized keyword must be visibly present in the rewritten text. Punctuation and casing are fine. Approved related-tech variants such as `Next.js` for `React` are no longer used.
+- Kept action-phrase inflection support for phrases such as `Monitor data pipelines` because it preserves the same action and object rather than using a different technology synonym.
+- Moved Technical Skills bucket assignment to Ollama with no deterministic skill-bucket fallback. If the skill bucketing LLM call fails, no extra skills are added.
+- Removed role-aware drop-score bonuses. Drop ordering now uses embedding relevance only.
+
+Verification:
+- `.\.venv\Scripts\python.exe -m pytest tests\test_keyword_policy.py tests\test_ad_hoc_pipeline.py tests\test_rewrite_validation.py tests\test_llm_enrich_logger.py -q`: 83 passed.
+- `.\.venv\Scripts\python.exe ci.py c2`: passed.
+
 ## V2.5 Keyword Policy Implementation 2026-05-05
 
 Implemented:
@@ -1229,7 +1270,7 @@ Implemented:
 - Extended title inference for `We are looking for Database Software Developer interns` and normalized plural `interns` to `Intern`.
 - Updated rewrite validation so same-category CI/CD tool phrasing can pass, while cross-vendor cloud resource conflicts, Databricks-from-Datadog substitutions, and unsupported process claims fail.
 - Added role-specific summary prompt strategy for PM, data, intern, and software roles.
-- Added role-aware drop-score bonuses for intern process bullets, PM stakeholder/UX/feedback bullets, and software/data exact keyword bullets.
+- Removed role-aware drop-score bonuses in the later combined job-fit pass. Drop ordering now uses embedding relevance only.
 - Extended Option B smoke output with `quality_notes.json`.
 
 Verification:
@@ -2446,3 +2487,110 @@ Examples:
 ```powershell
 .\.venv\Scripts\python.exe -m pytest tests/test_llm_enrich_logger.py tests/test_ad_hoc_pipeline.py -q
 ```
+
+## Implemented Checkpoint: Policy Router Fail-Closed Fix
+
+Observed issue:
+- In deployed Docker runs, the LLM keyword policy router can return `None`.
+- `_partition_missing_keywords_by_policy()` assumed the router always returned a dict and crashed with `AttributeError: 'NoneType' object has no attribute 'get'`.
+- This produced a 500 after keyword partitioning, before RAG and resume generation.
+
+Implemented:
+- Treat non-dict or `None` router responses as an empty route map.
+- Continue with deterministic policy routing when the LLM router is unavailable.
+- Log `keyword_policy_llm_unavailable` or `keyword_policy_llm_invalid` so the fallback is visible in pipeline logs.
+- Added regression coverage for `classify_keyword_routes_with_ollama()` returning `None`.
+
+Verification:
+- `.\.venv\Scripts\python.exe -m pytest tests\test_ad_hoc_pipeline.py::test_llm_policy_router_none_does_not_crash -q`
+- `.\.venv\Scripts\python.exe -m pytest tests\test_keyword_policy.py tests\test_ad_hoc_pipeline.py tests\test_rewrite_validation.py tests\test_llm_enrich_logger.py -q`
+- `.\.venv\Scripts\python.exe ci.py c2`
+
+## Implemented Checkpoint: LLM Default Routing and End-of-Log Digest
+
+Observed issue:
+- Slash-combo keywords such as `Java/Kotlin`, `Docker/Kubernetes`, and `Spring Boot/Spring Cloud` stayed bundled, which made policy, RAG, summary, and skills routing less precise.
+- The keyword policy router was intended to rescue ambiguous PM/data/process terms but was still a stub, so SAP-style terms such as `project coordination` and `project metrics` fell back to deterministic `ignore:unknown`.
+- Logs required manual reconstruction to answer basic questions about found keywords, RAG levels, rewrite before/after, summary keywords, and dropped bullets.
+- LLM summary validation could accept banned junior tone such as `Eager to apply`.
+
+Implemented:
+- Split slash-combo tech keywords before present/missing partition and before Technical Skills bucketing.
+- Preserve known slash phrases that should not split, including `A/B testing`, `CI/CD`, and `PL/SQL`.
+- Implemented `classify_keyword_routes_with_ollama()` so non-blocked missing keywords are routed by LLM by default.
+- Kept deterministic guardrails for obvious hard blocks such as empty terms, logistics, org metadata, and unsupported language requirements.
+- Prevented role-title and education terms from being upgraded to bullet rewrite even if the LLM suggests rewrite.
+- Added `pipeline_debug_summary` near the end of the log with keywords found, keyword partition, policy routes, RAG high/medium/low, successful bullet rewrites with before/after, summary keywords, dropped bullets, rewrite counts, and summary line checks.
+- Added deterministic summary grounding as a final defense after LLM summary validation so banned tone still triggers retry.
+
+Verification:
+- `.\.venv\Scripts\python.exe -m pytest tests\test_llm_enrich_logger.py tests\test_ad_hoc_pipeline.py tests\test_keyword_policy.py tests\test_rewrite_validation.py -q`
+- `.\.venv\Scripts\python.exe ci.py c2`
+
+## Implemented Checkpoint: Readable Pipeline Debug Summary
+
+Observed issue:
+- `pipeline_debug_summary` contained the right information but rendered as one large dict line.
+- It was hard to visually scan keyword levels, rewrites, summary keywords, and dropped bullets.
+
+Implemented:
+- Added special rendering in `PipelineLogger.get_log_text()` for `pipeline_debug_summary`.
+- The final digest now prints separated sections:
+  - `Keywords Found`
+  - `Keyword Partition`
+  - `Policy Routes`
+  - `RAG Levels`
+  - `Bullet Rewrites`
+  - `Summary Keywords`
+  - `Dropped Bullets`
+  - `Rewrite Attempts`
+  - `Summary Line Checks`
+- Preserved the structured step name and event ID so existing log search still works.
+
+Verification:
+- `.\.venv\Scripts\python.exe -m pytest tests\test_ad_hoc_pipeline.py tests\test_llm_enrich_logger.py -q`
+- `.\.venv\Scripts\python.exe ci.py c2`
+
+## Implemented Checkpoint: Prompt-Led Safety and Signal Quality Fixes
+
+Observed issue:
+- Some unrelated postings, such as executive/chief roles, can still pass through if the LLM job-fit call does not set `mismatch=true`.
+- Technical Skills bucketing needs clearer instructions so the model ignores soft phrases such as `analytical thinking` or vague terms such as `product databases`.
+- Invalid JSON from the keyword policy router produced two confusing LLM log entries: one success and one failure.
+- Summary generation and validation need to prefer no summary over a polished but unsupported one.
+
+Implemented:
+- Strengthened the LLM job-fit prompt so executive, chief, VP, head, C-level, and unsupported out-of-lane postings are marked as mismatches by model judgment.
+- Removed the fixed terminology mismatch override. Job mismatch is now driven by the LLM job-fit result, not a tiny hardcoded vocabulary.
+- Strengthened the Technical Skills bucketing prompt: only canonical named skills should be returned, and uncertain terms must go to `ignored`.
+- Removed the fixed Skills allowlist so future technologies are not blocked just because they are absent from a local list.
+- Changed keyword router logging so parse failures produce a single failed `keyword_policy_route` LLM event instead of an ok event followed by a failed event.
+- Strengthened summary generation and validation prompts so unsupported summaries are rejected or omitted rather than patched by fixed terminology checks.
+
+Verification:
+- `.\.venv\Scripts\python.exe -m pytest tests\test_ad_hoc_pipeline.py::test_llm_job_fit_mismatch_aborts_without_fixed_role_terms tests\test_ad_hoc_pipeline.py::test_skill_bucket_trusts_llm_bucket_output_without_fixed_allowlist tests\test_llm_enrich_logger.py::test_summary_validation_prompt_requires_rejecting_unsupported_claims tests\test_llm_enrich_logger.py::test_skill_bucket_prompt_requires_canonical_named_skills -q`: 4 passed.
+- `.\.venv\Scripts\python.exe -m pytest tests\test_ad_hoc_pipeline.py tests\test_llm_enrich_logger.py tests\test_keyword_policy.py tests\test_rewrite_validation.py -q`: 96 passed.
+- `.\.venv\Scripts\python.exe ci.py c2`: passed.
+
+## Implemented Checkpoint: LLM Signal Routing and Skill Evidence Validation
+
+Observed issue:
+- The keyword extractor could spend its first 20 terms on generic responsibilities, job titles, education fields, or soft traits instead of concrete stack and workflow signals.
+- A large or malformed policy-router response could cause all terms in a role-heavy JD to fall back to `ignore:unknown`.
+- Summary filtering and Technical Skills bucketing could accept malformed model output, off-list terms, or vague concepts.
+- Technical Skills additions needed to stay future-proof without returning to a fixed local allowlist.
+
+Implemented:
+- Strengthened keyword extraction to request resume-relevant signals in priority order: concrete stack terms first, concrete technical methods and workflows second, and concrete quality or process traits third.
+- Told keyword extraction to skip job titles, employment types, program names, departments, logistics, credentials, education fields, compensation, executive visibility, generic deliverables, and vague nouns unless paired with concrete tools or methods.
+- Batched LLM keyword policy routing in small groups and retried failed multi-keyword batches as single-keyword calls before using deterministic fallback.
+- Strengthened policy routing instructions so non-tech stack or unsupported personality traits should not become bullet rewrite targets unless the model is at least 70 percent comfortable.
+- Added one retry for summary keyword filtering when the model returns terms outside the candidate keyword list.
+- Added one retry for Technical Skills bucketing when required keys are missing or the model returns terms outside the input list.
+- Added LLM evidence validation before adding any generated keyword to the bottom Technical Skills section. Accepted skills must be canonical named skills supported by resume evidence, existing skills, or close named equivalents.
+- Strengthened summary validation to judge support sentence by sentence, so one unsupported sentence can reject the whole summary.
+
+Verification:
+- `.\.venv\Scripts\python.exe -m pytest tests\test_llm_enrich_logger.py::test_keyword_extract_prompt_prioritizes_stack_and_skips_noise tests\test_llm_enrich_logger.py::test_summary_filter_retries_unrequested_terms tests\test_llm_enrich_logger.py::test_skill_bucket_retries_missing_required_keys tests\test_llm_enrich_logger.py::test_skill_validation_rejects_concepts_not_named_skills tests\test_llm_enrich_logger.py::test_summary_validation_prompt_requires_rejecting_unsupported_claims tests\test_ad_hoc_pipeline.py::test_policy_router_batches_non_blocked_missing_keywords tests\test_ad_hoc_pipeline.py::test_policy_router_retries_failed_batch_as_singletons tests\test_ad_hoc_pipeline.py::test_skill_bucket_requires_llm_validation -q`: 8 passed.
+- `.\.venv\Scripts\python.exe -m pytest tests\test_ad_hoc_pipeline.py tests\test_llm_enrich_logger.py tests\test_keyword_policy.py tests\test_rewrite_validation.py -q`: 102 passed.
+- `.\.venv\Scripts\python.exe ci.py c2`: passed.

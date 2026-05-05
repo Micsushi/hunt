@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import copy
 import hashlib
+import re
 import shutil
 import subprocess
 import time
@@ -17,11 +18,18 @@ from .jobs.keyword_policy import KeywordRoute, classify_keyword_policy
 from .jobs.title_inference import infer_title_from_description, normalize_title_candidate
 from .keyword_check import partition_keywords
 from .llm.llm_enrich import (
+    analyze_job_fit_with_ollama,
+    bucket_skill_keywords_with_ollama,
+    classify_job_with_ollama,
+    classify_keyword_routes_with_ollama,
     enrich_with_ollama_if_enabled,
+    filter_summary_keywords_with_ollama,
     generate_summary,
     keyword_visible_in_text,
     rewrite_bullet_targeted,
+    validate_skill_keywords_with_ollama,
     validate_summary_grounding,
+    validate_summary_with_ollama,
 )
 from .llm.rag import match_keywords_to_bullets, score_bullets_for_drop
 from .pipeline import _compile_with_fit_retry
@@ -73,6 +81,36 @@ NON_REWRITE_ROLE_WORDS = {
     "manager",
     "analyst",
 }
+
+
+class JobMismatchError(Exception):
+    """Raised when the detected JD is not compatible with the requested role."""
+
+
+def _classification_needs_llm_fallback(classification: dict) -> bool:
+    return (
+        not classification
+        or classification.get("role_family") in {None, "", "general", "unknown"}
+        or classification.get("job_level") in {None, "", "unknown"}
+        or "low_confidence_match" in set(classification.get("concern_flags") or [])
+    )
+
+
+def _merge_llm_classification(base: dict, llm_result: dict) -> dict:
+    if not llm_result.get("success"):
+        return base
+    merged = dict(base)
+    merged["role_family"] = llm_result.get("role_family") or merged.get("role_family")
+    merged["job_level"] = llm_result.get("job_level") or merged.get("job_level")
+    merged["confidence"] = round(float(llm_result.get("confidence") or 0.7), 2)
+    reasons = list(merged.get("reasons") or [])
+    reasons.extend(f"llm:{reason}" for reason in llm_result.get("reasons", [])[:4])
+    merged["reasons"] = reasons[:24]
+    flags = [
+        flag for flag in list(merged.get("concern_flags") or []) if flag != "low_confidence_match"
+    ]
+    merged["concern_flags"] = flags
+    return merged
 
 
 def _text_hash(text: str) -> str:
@@ -162,48 +200,6 @@ def _remove_bucket_from_doc(doc, kind: str, entry_id: str) -> bool:
     return len(entries) != before
 
 
-def _role_score_bonus(text: str, raw_keywords: list[str], classification: dict | None) -> float:
-    role_family = str((classification or {}).get("role_family") or "").lower()
-    job_level = str((classification or {}).get("job_level") or "").lower()
-    text_l = text.lower()
-    bonus = 0.0
-    if job_level == "intern" and any(
-        token in text_l
-        for token in (
-            "agile",
-            "ci/cd",
-            "code review",
-            "collaborat",
-            "git",
-            "scrum",
-            "source",
-            "status",
-            "testing",
-        )
-    ):
-        bonus += 0.05
-    if role_family == "pm" and any(
-        token in text_l
-        for token in (
-            "bug",
-            "design",
-            "feedback",
-            "lead",
-            "present",
-            "product",
-            "stakeholder",
-            "user engagement",
-            "user experience",
-        )
-    ):
-        bonus += 0.05
-    if role_family in {"software", "data"} and any(
-        keyword_visible_in_text(keyword, text) for keyword in raw_keywords
-    ):
-        bonus += 0.05
-    return min(bonus, 0.10)
-
-
 def _score_sources(
     bullets: list[str],
     sources: list[dict],
@@ -212,15 +208,7 @@ def _score_sources(
 ) -> dict[str, float]:
     base_scores = score_bullets_for_drop(bullets, raw_keywords)
     return {
-        source["bullet_id"]: round(
-            (base_scores[idx] if idx < len(base_scores) else 0.0)
-            + _role_score_bonus(
-                bullets[idx] if idx < len(bullets) else "",
-                raw_keywords,
-                classification,
-            ),
-            4,
-        )
+        source["bullet_id"]: round((base_scores[idx] if idx < len(base_scores) else 0.0), 4)
         for idx, source in enumerate(sources)
     }
 
@@ -235,15 +223,10 @@ def _score_details(
     details: dict[str, dict[str, float]] = {}
     for idx, source in enumerate(sources):
         base = base_scores[idx] if idx < len(base_scores) else 0.0
-        bonus = _role_score_bonus(
-            bullets[idx] if idx < len(bullets) else "",
-            raw_keywords,
-            classification,
-        )
         details[source["bullet_id"]] = {
             "score_base": round(base, 4),
-            "score_bonus": round(bonus, 4),
-            "score_final": round(base + bonus, 4),
+            "score_bonus": 0.0,
+            "score_final": round(base, 4),
         }
     return details
 
@@ -254,6 +237,102 @@ def _keyword_present(keyword: str, doc) -> bool:
         + [b for entry in doc.projects for b in entry.bullets]
     )
     return keyword_visible_in_text(keyword, haystack)
+
+
+_SLASH_KEYWORDS_TO_KEEP = {"a/b testing", "ci/cd", "pl/sql"}
+
+
+def _split_slash_keyword(keyword: str) -> list[str]:
+    item = str(keyword or "").strip()
+    if "/" not in item:
+        return [item] if item else []
+    lower_item = item.lower()
+    if lower_item in _SLASH_KEYWORDS_TO_KEEP or "web/app" in lower_item:
+        return [item]
+    parts = [part.strip() for part in item.split("/") if part.strip()]
+    if len(parts) < 2:
+        return [item] if item else []
+    if not all(len(part.split()) <= 3 for part in parts):
+        return [item]
+    if not all(re.search(r"[A-Z0-9+#.]", part) for part in parts):
+        return [item]
+    return parts
+
+
+def _normalize_extracted_keywords(keywords: list[str]) -> list[str]:
+    out: list[str] = []
+    for keyword in keywords:
+        out.extend(_split_slash_keyword(keyword))
+    return _dedupe(out)
+
+
+def _skill_validation_context(doc) -> str:
+    bullets = [b for entry in doc.experience for b in entry.bullets] + [
+        b for entry in doc.projects for b in entry.bullets
+    ]
+    skill_names = (
+        list(doc.skills.languages) + list(doc.skills.frameworks) + list(doc.skills.developer_tools)
+    )
+    return " ".join(bullets[:18] + skill_names)
+
+
+def _add_keywords_to_skills(
+    doc, keywords: list[str], logger: PipelineLogger | None = None
+) -> list[str]:
+    added: list[str] = []
+    existing_skills = {
+        "languages": list(doc.skills.languages),
+        "frameworks": list(doc.skills.frameworks),
+        "developer_tools": list(doc.skills.developer_tools),
+    }
+    existing = {
+        str(value).strip().lower()
+        for value in (
+            list(doc.skills.languages)
+            + list(doc.skills.frameworks)
+            + list(doc.skills.developer_tools)
+        )
+    }
+    bucketed = bucket_skill_keywords_with_ollama(
+        keywords=_normalize_extracted_keywords(_dedupe(keywords)),
+        existing_skills=existing_skills,
+        logger=logger,
+    )
+    if not bucketed.get("success"):
+        return []
+    proposed: list[str] = []
+    for bucket in ("languages", "frameworks", "developer_tools"):
+        proposed.extend(_normalize_extracted_keywords(list(bucketed.get(bucket, []) or [])))
+    proposed = _dedupe([keyword for keyword in proposed if keyword.strip()])
+    if not proposed:
+        return []
+    skill_validation = validate_skill_keywords_with_ollama(
+        proposed_keywords=proposed,
+        existing_skills=existing_skills,
+        candidate_context=_skill_validation_context(doc),
+        logger=logger,
+    )
+    if logger:
+        logger.step(
+            "skill_keyword_validation",
+            accepted=skill_validation.get("accepted", []),
+            rejected=skill_validation.get("rejected", []),
+            success=skill_validation.get("success"),
+        )
+    if not skill_validation.get("success"):
+        return []
+    accepted = {keyword.lower() for keyword in list(skill_validation.get("accepted") or [])}
+    for bucket in ("languages", "frameworks", "developer_tools"):
+        for keyword in _normalize_extracted_keywords(list(bucketed.get(bucket, []) or [])):
+            key = str(keyword).strip().lower()
+            if not key or key in existing:
+                continue
+            if key not in accepted:
+                continue
+            getattr(doc.skills, bucket).append(str(keyword).strip())
+            existing.add(key)
+            added.append(str(keyword).strip())
+    return added
 
 
 def _dedupe(values: list[str]) -> list[str]:
@@ -532,27 +611,136 @@ def _keyword_policy_context(doc, bullets: list[str]) -> str:
     return " ".join(list(bullets) + skill_names)
 
 
+def _batched(values: list[str], size: int) -> list[list[str]]:
+    return [values[idx : idx + size] for idx in range(0, len(values), size)]
+
+
+def _classify_keyword_routes_batched(
+    *,
+    keywords: list[str],
+    title: str,
+    resume_context: str,
+    classification: dict | None,
+    logger: PipelineLogger | None,
+    batch_size: int = 6,
+) -> dict[str, dict[str, str]]:
+    routes: dict[str, dict[str, str]] = {}
+    for batch in _batched(keywords, batch_size):
+        raw_routes = classify_keyword_routes_with_ollama(
+            keywords=batch,
+            job_title=title,
+            resume_context=resume_context,
+            role_family=str((classification or {}).get("role_family") or ""),
+            job_level=str((classification or {}).get("job_level") or ""),
+            logger=logger,
+        )
+        batch_routes = raw_routes if isinstance(raw_routes, dict) else {}
+        if batch_routes or len(batch) == 1:
+            routes.update(batch_routes)
+            if not batch_routes and logger:
+                logger.step("keyword_policy_batch_failed", keywords=batch, fallback="deterministic")
+            continue
+        if logger:
+            logger.step(
+                "keyword_policy_batch_retry",
+                keywords=batch,
+                retry_mode="singletons",
+            )
+        for keyword in batch:
+            retry_raw = classify_keyword_routes_with_ollama(
+                keywords=[keyword],
+                job_title=title,
+                resume_context=resume_context,
+                role_family=str((classification or {}).get("role_family") or ""),
+                job_level=str((classification or {}).get("job_level") or ""),
+                logger=logger,
+            )
+            retry_routes = retry_raw if isinstance(retry_raw, dict) else {}
+            routes.update(retry_routes)
+            if not retry_routes and logger:
+                logger.step(
+                    "keyword_policy_batch_failed",
+                    keywords=[keyword],
+                    fallback="deterministic",
+                )
+    return routes
+
+
 def _partition_missing_keywords_by_policy(
     missing_kws: list[str],
     *,
     title: str,
     doc,
     active_bullets: list[str],
+    classification: dict | None = None,
+    logger: PipelineLogger | None = None,
 ) -> tuple[list[str], list[str], list[str], list[str], dict[str, str]]:
     resume_context = _keyword_policy_context(doc, active_bullets)
+    deterministic = {
+        keyword: classify_keyword_policy(keyword, job_title=title, resume_context=resume_context)
+        for keyword in missing_kws
+    }
+    hard_block_reasons = {"empty", "logistics", "org_metadata"}
+    hard_block_kinds = {"language_requirement"}
+    llm_candidates = []
+    for keyword, policy in deterministic.items():
+        if policy.route == KeywordRoute.IGNORE.value and (
+            policy.reason in hard_block_reasons or policy.kind.value in hard_block_kinds
+        ):
+            continue
+        llm_candidates.append(keyword)
+    llm_routes_raw = _classify_keyword_routes_batched(
+        keywords=llm_candidates,
+        title=title,
+        resume_context=resume_context,
+        classification=classification,
+        logger=logger,
+    )
+    llm_routes = llm_routes_raw if isinstance(llm_routes_raw, dict) else {}
+    if llm_candidates and llm_routes_raw is None and logger:
+        logger.step(
+            "keyword_policy_llm_unavailable",
+            candidate_count=len(llm_candidates),
+            fallback="deterministic_policy",
+        )
+    elif llm_candidates and not isinstance(llm_routes_raw, dict) and logger:
+        logger.step(
+            "keyword_policy_llm_invalid",
+            candidate_count=len(llm_candidates),
+            response_type=type(llm_routes_raw).__name__,
+            fallback="deterministic_policy",
+        )
     rewrite: list[str] = []
     summary: list[str] = []
     skills_only: list[str] = []
     ignored: list[str] = []
     reasons: dict[str, str] = {}
     for keyword in missing_kws:
-        policy = classify_keyword_policy(keyword, job_title=title, resume_context=resume_context)
-        reasons[keyword] = f"{policy.kind.value}:{policy.route}:{policy.reason}"
-        if policy.route == KeywordRoute.REWRITE.value:
+        policy = deterministic[keyword]
+        route = policy.route
+        kind = policy.kind.value
+        reason = policy.reason
+        llm_route = llm_routes.get(keyword)
+        if llm_route:
+            route = llm_route.get("route", route)
+            kind = llm_route.get("kind", kind)
+            reason = f"llm_policy:{llm_route.get('reason', '')}".rstrip(":")
+            if (
+                policy.kind.value in {"role_title", "education"}
+                and route == KeywordRoute.REWRITE.value
+            ):
+                route = KeywordRoute.SUMMARY.value
+                reason = f"{reason}:rewrite_blocked_for_{policy.kind.value}"
+            if policy.route == KeywordRoute.IGNORE.value and policy.reason in hard_block_reasons:
+                route = KeywordRoute.IGNORE.value
+                kind = policy.kind.value
+                reason = policy.reason
+        reasons[keyword] = f"{kind}:{route}:{reason}"
+        if route == KeywordRoute.REWRITE.value:
             rewrite.append(keyword)
-        elif policy.route == KeywordRoute.SUMMARY.value:
+        elif route == KeywordRoute.SUMMARY.value:
             summary.append(keyword)
-        elif policy.route == KeywordRoute.SKILLS_ONLY.value:
+        elif route == KeywordRoute.SKILLS_ONLY.value:
             skills_only.append(keyword)
         else:
             ignored.append(keyword)
@@ -593,6 +781,8 @@ def _run_iteration(
         title=title,
         doc=doc,
         active_bullets=active_bullets,
+        classification=classification,
+        logger=logger,
     )
     logger.step(
         "keyword_policy_partition",
@@ -771,18 +961,29 @@ def _run_iteration(
     skipped_to_summary = [kw for kw in _dedupe(skipped_candidates) if not _keyword_present(kw, doc)]
     candidate_context = _build_candidate_context(doc, evidence_bullets=evidence_bullets)
     base_summary_keywords = _dedupe(list(kw_match.get("summary_keywords", [])))
-    mid_keywords, excluded_summary_keywords = _filter_summary_keywords(
-        base_summary_keywords,
-        skipped_to_summary,
-        candidate_context,
-        validation_reasons,
+    summary_filter = filter_summary_keywords_with_ollama(
+        keywords=_dedupe(base_summary_keywords + skipped_to_summary),
+        candidate_context=candidate_context,
+        job_title=title or "Software Engineer",
+        logger=logger,
     )
+    if summary_filter.get("success"):
+        mid_keywords = list(summary_filter.get("included") or [])
+        excluded_summary_keywords = list(summary_filter.get("excluded") or [])
+    else:
+        mid_keywords, excluded_summary_keywords = _filter_summary_keywords(
+            base_summary_keywords,
+            skipped_to_summary,
+            candidate_context,
+            validation_reasons,
+        )
     logger.step("keywords_skipped_to_summary", keywords=skipped_to_summary)
     logger.step(
         "summary_keyword_filter",
         base_keywords=base_summary_keywords,
         included=mid_keywords,
         excluded=excluded_summary_keywords,
+        mode="llm" if summary_filter.get("success") else "deterministic_fallback",
     )
 
     summary_meta: dict = {}
@@ -805,15 +1006,11 @@ def _run_iteration(
             summary=summary_meta.get("summary", "")[:200] if summary_meta.get("success") else None,
         )
         if summary_meta.get("summary"):
-            summary_validation = validate_summary_grounding(
-                summary_meta["summary"],
-                candidate_context,
-                mid_keywords,
-            )
-            logger.step(
-                "summary_validation",
-                accepted=summary_validation.get("accepted"),
-                reasons=summary_validation.get("reasons"),
+            summary_validation, _summary_validation_mode = _validate_summary_with_defense(
+                summary=summary_meta["summary"],
+                candidate_context=candidate_context,
+                keywords=mid_keywords,
+                logger=logger,
             )
             if not summary_validation["accepted"]:
                 feedback = (
@@ -835,10 +1032,11 @@ def _run_iteration(
                     job_level=str(classification.get("job_level") or ""),
                     logger=logger,
                 )
-                retry_validation = validate_summary_grounding(
-                    retry_meta.get("summary", ""),
-                    candidate_context,
-                    mid_keywords,
+                retry_validation, retry_validation_mode = _validate_summary_with_defense(
+                    summary=retry_meta.get("summary", ""),
+                    candidate_context=candidate_context,
+                    keywords=mid_keywords,
+                    logger=logger,
                 )
                 logger.step(
                     "summary_validation_retry_done",
@@ -847,6 +1045,7 @@ def _run_iteration(
                     error=retry_meta.get("error"),
                     accepted=retry_validation.get("accepted"),
                     reasons=retry_validation.get("reasons"),
+                    mode=retry_validation_mode,
                 )
                 if retry_meta.get("summary") and retry_validation["accepted"]:
                     summary_meta = retry_meta
@@ -861,6 +1060,16 @@ def _run_iteration(
 
     doc_ns = copy.deepcopy(doc)
     doc_ns.summary = ""
+    no_summary_skill_keywords = _dedupe(base_summary_keywords + skipped_to_summary)
+    no_summary_skills_added = _add_keywords_to_skills(
+        doc_ns, no_summary_skill_keywords, logger=logger
+    )
+    if no_summary_skills_added:
+        logger.step(
+            "skills_keywords_added",
+            version="no_summary",
+            keywords=no_summary_skills_added,
+        )
     cr_ns, tex_ns, removed = _fit_to_page(
         attempt_dir, doc_ns, "output", sources_for_score, scores, logger
     )
@@ -874,6 +1083,20 @@ def _run_iteration(
     if _generated_summary:
         doc_s = copy.deepcopy(doc_ns)
         doc_s.summary = _generated_summary
+        summary_unused_keywords = [
+            keyword
+            for keyword in _dedupe(mid_keywords + excluded_summary_keywords)
+            if not keyword_visible_in_text(keyword, _generated_summary)
+        ]
+        summary_skills_added = _add_keywords_to_skills(
+            doc_s, summary_unused_keywords, logger=logger
+        )
+        if summary_skills_added:
+            logger.step(
+                "skills_keywords_added",
+                version="with_summary",
+                keywords=summary_skills_added,
+            )
         summary_bullets, summary_sources = _collect_active_bullets(doc_s, active_bucket_ids)
         summary_scores = _score_sources(
             summary_bullets, summary_sources, raw_keywords, classification
@@ -919,15 +1142,11 @@ def _run_iteration(
                 error=retry_meta.get("error"),
             )
             if retry_meta.get("summary"):
-                retry_validation = validate_summary_grounding(
-                    retry_meta["summary"],
-                    candidate_context,
-                    mid_keywords,
-                )
-                logger.step(
-                    "summary_validation",
-                    accepted=retry_validation.get("accepted"),
-                    reasons=retry_validation.get("reasons"),
+                retry_validation, _retry_validation_mode = _validate_summary_with_defense(
+                    summary=retry_meta["summary"],
+                    candidate_context=candidate_context,
+                    keywords=mid_keywords,
+                    logger=logger,
                     retry="line_count",
                 )
                 if not retry_validation["accepted"]:
@@ -1012,6 +1231,122 @@ def _collect_scores_for_doc(
     return sources, _score_sources(bullets, sources, raw_keywords, classification)
 
 
+def _latest_step_detail(logger: PipelineLogger, name: str) -> dict[str, Any]:
+    for entry in reversed(getattr(logger, "_entries", [])):
+        if entry.kind == "step" and entry.name == name:
+            return dict(entry.detail)
+    return {}
+
+
+def _all_step_details(logger: PipelineLogger, name: str) -> list[dict[str, Any]]:
+    return [
+        dict(entry.detail)
+        for entry in getattr(logger, "_entries", [])
+        if entry.kind == "step" and entry.name == name
+    ]
+
+
+def _log_pipeline_debug_summary(
+    logger: PipelineLogger,
+    *,
+    raw_keywords: list[str],
+    present_kws: list[str],
+    missing_kws: list[str],
+) -> None:
+    policy = _latest_step_detail(logger, "keyword_policy_partition")
+    rag = _latest_step_detail(logger, "rag_complete")
+    summary_filter = _latest_step_detail(logger, "summary_keyword_filter")
+    starts = {
+        detail.get("bullet_id"): detail
+        for detail in _all_step_details(logger, "bullet_rewrite_start")
+    }
+    rewrites: list[dict[str, Any]] = []
+    for detail in _all_step_details(logger, "bullet_rewrite_done"):
+        if not detail.get("success"):
+            continue
+        start = starts.get(detail.get("bullet_id"), {})
+        rewrites.append(
+            {
+                "bullet_id": detail.get("bullet_id"),
+                "keywords": detail.get("keywords_used") or [],
+                "before": start.get("original"),
+                "after": detail.get("rewritten"),
+            }
+        )
+    dropped = [
+        {
+            "bullet_id": detail.get("bullet_id"),
+            "kind": detail.get("kind"),
+            "entry_id": detail.get("entry_id"),
+            "score": detail.get("score"),
+            "stem": detail.get("stem"),
+        }
+        for detail in _all_step_details(logger, "bullet_drop")
+    ]
+    logger.step(
+        "pipeline_debug_summary",
+        keywords_found=raw_keywords,
+        keyword_partition={"present": present_kws, "missing": missing_kws},
+        policy_routes={
+            "rewrite": policy.get("rewrite", []),
+            "summary_only": policy.get("summary_only", []),
+            "skills_only": policy.get("skills_only", []),
+            "ignored": policy.get("ignored", []),
+        },
+        rag_levels={
+            "high": rag.get("high_keywords", []),
+            "medium": rag.get("mid_keywords", []),
+            "low_count": rag.get("low"),
+            "rag_used": rag.get("rag_used", False),
+        },
+        bullet_rewrites=rewrites,
+        summary_keywords_used=summary_filter.get("included", []),
+        summary_keywords_excluded=summary_filter.get("excluded", []),
+        dropped_bullets=dropped,
+        rewrite_attempts=_latest_step_detail(logger, "bullet_rewrites_summary"),
+        summary_line_checks=_all_step_details(logger, "summary_line_check"),
+    )
+
+
+def _validate_summary_with_defense(
+    *,
+    summary: str,
+    candidate_context: str,
+    keywords: list[str],
+    logger: PipelineLogger,
+    retry: str | None = None,
+) -> tuple[dict[str, Any], str]:
+    summary_validation = validate_summary_with_ollama(
+        summary=summary,
+        candidate_context=candidate_context,
+        keywords=keywords,
+        logger=logger,
+    )
+    mode = "llm"
+    grounding = validate_summary_grounding(summary, candidate_context, keywords)
+    if summary_validation.get("success"):
+        reasons = list(summary_validation.get("reasons") or [])
+        if not grounding["accepted"]:
+            reasons.extend(grounding["reasons"])
+        summary_validation = {
+            **summary_validation,
+            "accepted": bool(summary_validation.get("accepted")) and grounding["accepted"],
+            "reasons": _dedupe([str(reason) for reason in reasons]),
+        }
+    else:
+        summary_validation = grounding
+        mode = "deterministic_fallback"
+    detail = {
+        "accepted": summary_validation.get("accepted"),
+        "reasons": summary_validation.get("reasons"),
+        "mode": mode,
+    }
+    if retry:
+        detail["retry"] = retry
+    logger.step("summary_validation", **detail)
+    return summary_validation, mode
+
+
 def run_ad_hoc_pipeline(
     *,
     title: str,
@@ -1024,6 +1359,23 @@ def run_ad_hoc_pipeline(
     logger = PipelineLogger()
     t_start = time.perf_counter()
     resolved_title = _resolve_job_title(title, description)
+    job_fit = analyze_job_fit_with_ollama(
+        input_title=title,
+        deterministic_title=resolved_title,
+        description=description,
+        logger=logger,
+    )
+    if job_fit.get("success") and job_fit.get("title"):
+        resolved_title = normalize_title_candidate(str(job_fit["title"])) or str(job_fit["title"])
+        logger.step(
+            "job_fit_analyzed_with_llm",
+            title=resolved_title,
+            role_family=job_fit.get("role_family"),
+            job_level=job_fit.get("job_level"),
+            mismatch=job_fit.get("mismatch"),
+            mismatch_reason=job_fit.get("mismatch_reason"),
+            duration_ms=job_fit.get("duration_ms"),
+        )
 
     logger.step(
         "config",
@@ -1051,12 +1403,55 @@ def run_ad_hoc_pipeline(
     )
 
     classification = classify_job(title=resolved_title, description=description)
+    if job_fit.get("success"):
+        classification = _merge_llm_classification(classification, job_fit)
+    if _classification_needs_llm_fallback(classification):
+        llm_classification = classify_job_with_ollama(
+            title=resolved_title,
+            description=description,
+            logger=logger,
+        )
+        classification = _merge_llm_classification(classification, llm_classification)
+        if llm_classification.get("success"):
+            logger.step(
+                "classify_recovered_with_llm",
+                role_family=classification.get("role_family"),
+                job_level=classification.get("job_level"),
+                duration_ms=llm_classification.get("duration_ms"),
+            )
     logger.step(
         "classify_done",
         role_family=classification.get("role_family"),
         job_level=classification.get("job_level"),
         weak_description=classification.get("weak_description"),
     )
+    mismatch_reason = (
+        str(job_fit.get("mismatch_reason") or "job does not match requested role")
+        if job_fit.get("success") and job_fit.get("mismatch")
+        else None
+    )
+    if mismatch_reason:
+        logger.step("job_mismatch_error", reason=mismatch_reason)
+        ad_hoc_label = label or slugify(f"{company}_{resolved_title}") or "ad_hoc"
+        attempt_dir = ensure_dir(
+            build_attempt_dir(job_id=None, role_family="ad_hoc", ad_hoc_label=ad_hoc_label)
+        )
+        log_path = write_text(attempt_dir / "pipeline_log.txt", logger.get_log_text())
+        return {
+            "attempt_dir": str(attempt_dir),
+            "pdf_path": None,
+            "tex_path": None,
+            "pdf_path_summary": None,
+            "tex_path_summary": None,
+            "log_path": log_path,
+            "compile_status": "failed",
+            "fits_one_page": False,
+            "keywords": [],
+            "present_keywords": [],
+            "missing_keywords": [],
+            "error_type": "JobMismatchError",
+            "error": mismatch_reason,
+        }
 
     keywords_dict = extract_keywords(
         title=resolved_title, description=description, classification=classification
@@ -1080,7 +1475,10 @@ def run_ad_hoc_pipeline(
         keywords=keywords_dict,
         logger=logger,
     )
-    raw_keywords: list[str] = keywords_dict.get("must_have_terms", [])
+    raw_keywords: list[str] = _normalize_extracted_keywords(
+        keywords_dict.get("must_have_terms", [])
+    )
+    keywords_dict["must_have_terms"] = raw_keywords
     if not resolved_title:
         keyword_title = _title_from_keywords(raw_keywords)
         if keyword_title:
@@ -1227,6 +1625,12 @@ def run_ad_hoc_pipeline(
             result = None
             break
 
+    _log_pipeline_debug_summary(
+        logger,
+        raw_keywords=raw_keywords,
+        present_kws=present_kws,
+        missing_kws=missing_kws,
+    )
     total_ms = int((time.perf_counter() - t_start) * 1000)
     logger.step("done", total_ms=total_ms)
     log_path = write_text(attempt_dir / "pipeline_log.txt", logger.get_log_text())

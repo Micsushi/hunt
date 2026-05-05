@@ -1,5 +1,5 @@
-import { useRef, useState } from 'react'
-import { useParams, useNavigate } from 'react-router-dom'
+import { useMemo, useRef, useState } from 'react'
+import { useParams, useNavigate, useSearchParams } from 'react-router-dom'
 import { useJobDetail, useResumeAttempts, useAdjacentJobs } from '@/hooks/useJobDetail'
 import { useUiStore } from '@/store/ui'
 import { requeueJob, setJobPriority, patchJob, deleteJob } from '@/api/jobs'
@@ -12,6 +12,9 @@ import {
 import { StatusBadge } from '@/components/StatusBadge'
 import { useQueryClient, useQuery } from '@tanstack/react-query'
 import styles from './JobDetail.module.css'
+import type { JobsQuery, SortDirection, SortField } from '@/types/job'
+
+const REVIEW_QUERY_STORAGE_KEY = 'hunt.jobs.reviewQuery'
 
 type EditableField =
   | 'company'
@@ -24,6 +27,29 @@ type EditableField =
   | 'description_source'
   | 'operator_notes'
   | 'operator_tag'
+
+function effectiveReviewParams(p: URLSearchParams): URLSearchParams {
+  if (p.toString()) return p
+  const stored = sessionStorage.getItem(REVIEW_QUERY_STORAGE_KEY)
+  return new URLSearchParams(stored ?? '')
+}
+
+function adjacentQueryFromParams(p: URLSearchParams): JobsQuery {
+  const limit = parseInt(p.get('limit') || '', 10)
+  const page = parseInt(p.get('page') || '', 10)
+  return {
+    source: p.get('source') || 'all',
+    status: p.get('status') || 'all',
+    q: p.get('q') || '',
+    tag: p.get('tag') || '',
+    category: p.get('category') || '',
+    ats_type: p.get('ats_type') || '',
+    sort: (p.get('sort') || 'date_scraped') as SortField,
+    direction: (p.get('direction') || 'desc') as SortDirection,
+    ...(Number.isFinite(limit) ? { limit } : {}),
+    ...(Number.isFinite(page) ? { page } : {}),
+  }
+}
 
 // ── Inline field (text / textarea / select) ──────────────────────────────────
 
@@ -189,22 +215,27 @@ export function JobDetailPage() {
   const { id } = useParams<{ id: string }>()
   const jobId = parseInt(id ?? '0', 10)
   const navigate = useNavigate()
+  const [searchParams] = useSearchParams()
   const qc = useQueryClient()
   const showToast = useUiStore((s) => s.showToast)
   const [generating, setGenerating] = useState(false)
   const [verifying, setVerifying] = useState(false)
   const [verifyResult, setVerifyResult] = useState<EasyApplyVerifyResult | null>(null)
+  const effectiveParams = useMemo(() => effectiveReviewParams(searchParams), [searchParams])
+  const adjacentQuery = useMemo(() => adjacentQueryFromParams(effectiveParams), [effectiveParams])
+  const detailSearch = effectiveParams.toString() ? `?${effectiveParams.toString()}` : ''
+  const jobsListPath = `/jobs${detailSearch}`
 
   const { data: job, isLoading, error } = useJobDetail(jobId)
   const { data: attempts = [] } = useResumeAttempts(jobId)
-  const { data: adjacent } = useAdjacentJobs(jobId)
+  const { data: adjacent } = useAdjacentJobs(jobId, adjacentQuery)
 
   if (isLoading) return <div className={styles.loading}>Loading...</div>
   if (error || !job)
     return (
       <div className={styles.errorPage}>
         <p>Job not found or failed to load.</p>
-        <button className={styles.backBtn} onClick={() => navigate('/jobs')}>
+        <button className={styles.backBtn} onClick={() => navigate(jobsListPath)}>
           Back to jobs
         </button>
       </div>
@@ -268,7 +299,7 @@ export function JobDetailPage() {
     try {
       await deleteJob(jobId)
       showToast('Job deleted')
-      navigate('/jobs')
+      navigate(jobsListPath)
     } catch (e) {
       showToast(e instanceof Error ? e.message : 'Delete failed', 'error')
     }
@@ -311,14 +342,16 @@ export function JobDetailPage() {
     <div className={styles.page}>
       {/* Top menu card */}
       <div className={styles.menuCard}>
-        <button className={styles.backBtn} onClick={() => navigate(-1)}>
+        <button className={styles.backBtn} onClick={() => navigate(jobsListPath)}>
           ← Back
         </button>
         <span className={styles.headerId}>#{job.id}</span>
         <div className={styles.navBtns}>
           <button
             className={styles.navBtn}
-            onClick={() => adjacent?.prev_id != null && navigate(`/jobs/${adjacent.prev_id}`)}
+            onClick={() =>
+              adjacent?.prev_id != null && navigate(`/jobs/${adjacent.prev_id}${detailSearch}`)
+            }
             disabled={adjacent?.prev_id == null}
             title="Previous job"
           >
@@ -326,7 +359,9 @@ export function JobDetailPage() {
           </button>
           <button
             className={styles.navBtn}
-            onClick={() => adjacent?.next_id != null && navigate(`/jobs/${adjacent.next_id}`)}
+            onClick={() =>
+              adjacent?.next_id != null && navigate(`/jobs/${adjacent.next_id}${detailSearch}`)
+            }
             disabled={adjacent?.next_id == null}
             title="Next job"
           >

@@ -12,6 +12,7 @@ import styles from './Jobs.module.css'
 import type { JobsQuery, SortField, SortDirection, Job } from '@/types/job'
 
 const MOCK = import.meta.env.VITE_MOCK_BACKEND === 'true'
+const REVIEW_QUERY_STORAGE_KEY = 'hunt.jobs.reviewQuery'
 
 function queryFromParams(p: URLSearchParams): JobsQuery {
   return {
@@ -148,10 +149,16 @@ export function JobsPage() {
   const tbodyRef = useRef<HTMLTableSectionElement>(null)
   const [focusIdx, setFocusIdx] = useState(-1)
   const [localSort, setLocalSort] = useState<LocalSort | null>(null)
+  const detailSearch = useMemo(() => {
+    const value = queryToParams(query).toString()
+    return value ? `?${value}` : ''
+  }, [query])
 
   // Sync URL when query changes
   useEffect(() => {
-    setSearchParams(queryToParams(query), { replace: true })
+    const nextParams = queryToParams(query)
+    setSearchParams(nextParams, { replace: true })
+    sessionStorage.setItem(REVIEW_QUERY_STORAGE_KEY, nextParams.toString())
     clearSelection()
     setFocusIdx(-1) // eslint-disable-line react-hooks/set-state-in-effect
     setLocalSort(null) // reset page-local sort when filters change
@@ -185,12 +192,12 @@ export function JobsPage() {
       if (e.key === 'Enter' && focusIdx >= 0) {
         const row = rows[focusIdx] as HTMLElement
         const id = row.dataset.jobId
-        if (id) navigate(`/jobs/${id}`)
+        if (id) navigate(`/jobs/${id}${detailSearch}`)
       }
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [focusIdx, navigate])
+  }, [detailSearch, focusIdx, navigate])
 
   useEffect(() => {
     const rows = tbodyRef.current?.querySelectorAll('tr[data-job-id]') ?? []
@@ -210,7 +217,7 @@ export function JobsPage() {
         key={job.id}
         data-job-id={job.id}
         className={`${styles.jobRow} ${idx === focusIdx ? styles.focused : ''}`}
-        onClick={() => navigate(`/jobs/${job.id}`)}
+        onClick={() => navigate(`/jobs/${job.id}${detailSearch}`)}
       >
         <td onClick={(e) => e.stopPropagation()}>
           <input
@@ -222,10 +229,10 @@ export function JobsPage() {
         </td>
         <td className={styles.idCell}>
           <a
-            href={`/jobs/${job.id}`}
+            href={`/jobs/${job.id}${detailSearch}`}
             onClick={(e) => {
               e.preventDefault()
-              navigate(`/jobs/${job.id}`)
+              navigate(`/jobs/${job.id}${detailSearch}`)
             }}
           >
             #{job.id}

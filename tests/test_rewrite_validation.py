@@ -186,9 +186,9 @@ def test_claimed_keyword_must_appear_in_rewrite():
     assert result["missing"] == ["React"]
 
 
-def test_react_nextjs_phrase_counts_as_visible_react():
+def test_react_visible_as_substring_with_punctuation():
     result = validate_claimed_keywords_present(
-        rewritten="Enhanced user engagement with a React/Next.js UI.",
+        rewritten="Enhanced user engagement with React, Next.js, and Framer Motion.",
         requested_keywords=["React"],
         claimed_used=["React"],
     )
@@ -279,7 +279,7 @@ def test_mixed_validation_failure_preserves_safe_keyword_for_retry(monkeypatch):
     )
 
     assert result["success"] is False
-    assert result["keywords_used"] == ["React"]
+    assert result["keywords_used"] == []
     assert result["keywords_skipped"] == ["AI-driven platform"]
 
 

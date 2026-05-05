@@ -1,5 +1,6 @@
 import { useQuery } from '@tanstack/react-query'
 import { fetchJob, fetchResumeAttempts, fetchAdjacentJobs } from '@/api/jobs'
+import type { JobsQuery } from '@/types/job'
 
 export function useJobDetail(id: number) {
   return useQuery({
@@ -17,10 +18,10 @@ export function useResumeAttempts(jobId: number) {
   })
 }
 
-export function useAdjacentJobs(jobId: number) {
+export function useAdjacentJobs(jobId: number, query: JobsQuery = {}) {
   return useQuery({
-    queryKey: ['job-adjacent', jobId],
-    queryFn: () => fetchAdjacentJobs(jobId),
+    queryKey: ['job-adjacent', jobId, query],
+    queryFn: () => fetchAdjacentJobs(jobId, query),
     staleTime: 60_000,
   })
 }

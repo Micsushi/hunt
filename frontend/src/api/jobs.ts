@@ -75,8 +75,10 @@ export function patchJob(id: number, fields: PatchableJobFields): Promise<{ stat
 
 export function fetchAdjacentJobs(
   id: number,
+  q: JobsQuery = {},
 ): Promise<{ prev_id: number | null; next_id: number | null }> {
-  return get(`/api/jobs/${id}/adjacent`)
+  const params = buildParams(q)
+  return get(`/api/jobs/${id}/adjacent${params ? `?${params}` : ''}`)
 }
 
 export function deleteJob(id: number): Promise<{ status: string }> {
