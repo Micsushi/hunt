@@ -1,20 +1,571 @@
 from __future__ import annotations
 
 import copy
+import hashlib
+import shutil
+import subprocess
 import time
+from collections import defaultdict
 from pathlib import Path
+from typing import Any
 
 from . import config as _config
 from .config import DEFAULT_OG_RESUME_PATH
 from .jobs.classifier import classify_job, slugify
 from .jobs.keyword_extractor import extract_keywords
+from .jobs.title_inference import infer_title_from_description, normalize_title_candidate
 from .keyword_check import partition_keywords
 from .llm.llm_enrich import enrich_with_ollama_if_enabled, generate_summary, rewrite_bullet_targeted
-from .llm.rag import match_keywords_to_bullets
+from .llm.rag import match_keywords_to_bullets, score_bullets_for_drop
 from .pipeline import _compile_with_fit_retry
 from .pipeline_logger import PipelineLogger
+from .resume.compiler import compile_tex
 from .resume.parser import parse_resume_file
+from .resume.renderer import render_resume_tex
 from .storage import build_attempt_dir, ensure_dir, write_json, write_text
+
+BucketId = tuple[str, str]
+
+
+def _text_hash(text: str) -> str:
+    return hashlib.sha1((text or "").encode("utf-8")).hexdigest()[:12]
+
+
+def _resolve_job_title(title: str, description: str) -> str:
+    normalized = normalize_title_candidate(title)
+    if normalized:
+        return normalized
+    inferred = infer_title_from_description(description)
+    return inferred or title or ""
+
+
+def _get_entries(doc, kind: str):
+    return doc.experience if kind == "exp" else doc.projects
+
+
+def _find_entry(doc, kind: str, entry_id: str):
+    for entry in _get_entries(doc, kind):
+        if entry.entry_id == entry_id:
+            return entry
+    return None
+
+
+def _filter_doc_to_active_buckets(doc, active_bucket_ids: list[BucketId]) -> None:
+    active = set(active_bucket_ids)
+    doc.experience = [entry for entry in doc.experience if ("exp", entry.entry_id) in active]
+    doc.projects = [entry for entry in doc.projects if ("proj", entry.entry_id) in active]
+
+
+def _collect_active_bullets(doc, active_bucket_ids: list[BucketId]) -> tuple[list[str], list[dict]]:
+    active = set(active_bucket_ids)
+    bullets: list[str] = []
+    sources: list[dict] = []
+    for kind, entries in (("exp", doc.experience), ("proj", doc.projects)):
+        for entry in entries:
+            bucket = (kind, entry.entry_id)
+            if bucket not in active:
+                continue
+            for idx, bullet in enumerate(entry.bullets):
+                h = _text_hash(bullet)
+                source = {
+                    "bullet_id": f"{kind}_{entry.entry_id}_{idx}_{h}",
+                    "kind": kind,
+                    "entry_id": entry.entry_id,
+                    "original_local_idx": idx,
+                    "text_hash": h,
+                    "text": bullet,
+                }
+                bullets.append(bullet)
+                sources.append(source)
+    return bullets, sources
+
+
+def _remove_bullet_from_doc(doc, source: dict) -> bool:
+    entry = _find_entry(doc, source["kind"], source["entry_id"])
+    if entry is None:
+        return False
+
+    for idx, bullet in enumerate(entry.bullets):
+        if _text_hash(bullet) == source["text_hash"]:
+            entry.bullets.pop(idx)
+            return True
+
+    fallback_idx = int(source.get("original_local_idx") or 0)
+    if 0 <= fallback_idx < len(entry.bullets):
+        entry.bullets.pop(fallback_idx)
+        return True
+    return False
+
+
+def _remove_bucket_from_doc(doc, kind: str, entry_id: str) -> bool:
+    entries = _get_entries(doc, kind)
+    before = len(entries)
+    entries[:] = [entry for entry in entries if entry.entry_id != entry_id]
+    return len(entries) != before
+
+
+def _score_sources(
+    bullets: list[str], sources: list[dict], raw_keywords: list[str]
+) -> dict[str, float]:
+    scores = score_bullets_for_drop(bullets, raw_keywords)
+    return {
+        source["bullet_id"]: scores[idx] if idx < len(scores) else 0.0
+        for idx, source in enumerate(sources)
+    }
+
+
+def _keyword_present(keyword: str, doc) -> bool:
+    needle = keyword.lower()
+    haystack = " ".join(
+        [b for entry in doc.experience for b in entry.bullets]
+        + [b for entry in doc.projects for b in entry.bullets]
+    ).lower()
+    return needle in haystack
+
+
+def _dedupe(values: list[str]) -> list[str]:
+    result: list[str] = []
+    seen: set[str] = set()
+    for value in values:
+        key = value.lower()
+        if key and key not in seen:
+            seen.add(key)
+            result.append(value)
+    return result
+
+
+def _compile_doc(attempt_dir: Path, doc, stem: str) -> tuple[dict, str]:
+    tex_path = write_text(attempt_dir / f"{stem}.tex", render_resume_tex(doc))
+    return compile_tex(tex_path), tex_path
+
+
+def _page_needs_drop(compile_result: dict) -> bool:
+    if compile_result.get("fits_one_page"):
+        return False
+    if compile_result.get("compile_status") != "ok":
+        return False
+    page_count = compile_result.get("page_count")
+    return page_count is not None and page_count > 1
+
+
+def _fit_to_page(
+    attempt_dir: Path,
+    doc,
+    stem: str,
+    bullet_sources: list[dict],
+    scores_by_bullet_id: dict[str, float],
+    logger: PipelineLogger,
+    *,
+    floor: int = 2,
+) -> tuple[dict, str, BucketId | None]:
+    source_by_id = {source["bullet_id"]: source for source in bullet_sources}
+    source_order = {source["bullet_id"]: idx for idx, source in enumerate(bullet_sources)}
+    per_bucket: dict[BucketId, list[str]] = {}
+    for source in bullet_sources:
+        bucket = (source["kind"], source["entry_id"])
+        per_bucket.setdefault(bucket, []).append(source["bullet_id"])
+
+    flagged: list[BucketId] = []
+    while True:
+        logger.step("compile_start", stem=stem)
+        compile_result, tex_path = _compile_doc(attempt_dir, doc, stem)
+        logger.step(
+            "compile_done",
+            stem=stem,
+            status=compile_result.get("compile_status"),
+            page_count=compile_result.get("page_count"),
+            fits_one_page=compile_result.get("fits_one_page"),
+        )
+        if not _page_needs_drop(compile_result):
+            return compile_result, tex_path, None
+
+        candidates: list[str] = []
+        for bucket, bullet_ids in per_bucket.items():
+            remaining = [bid for bid in bullet_ids if bid in source_by_id]
+            per_bucket[bucket] = remaining
+            if not remaining or bucket in flagged:
+                continue
+            if len(remaining) > floor:
+                candidates.append(
+                    min(
+                        remaining,
+                        key=lambda bid: (
+                            scores_by_bullet_id.get(bid, 0.0),
+                            source_order.get(bid, 0),
+                        ),
+                    )
+                )
+            elif len(remaining) == floor:
+                flagged.append(bucket)
+                logger.step("bucket_floor_reached", stem=stem, kind=bucket[0], entry_id=bucket[1])
+
+        if not candidates:
+            if flagged:
+                bucket = flagged[0]
+                _remove_bucket_from_doc(doc, bucket[0], bucket[1])
+                logger.step("bucket_removed", stem=stem, kind=bucket[0], entry_id=bucket[1])
+                return compile_result, tex_path, bucket
+            return compile_result, tex_path, None
+
+        candidates.sort(
+            key=lambda bid: (scores_by_bullet_id.get(bid, 0.0), source_order.get(bid, 0))
+        )
+        removed_any = False
+        for bullet_id in candidates:
+            source = source_by_id.get(bullet_id)
+            if source is None:
+                continue
+            if _remove_bullet_from_doc(doc, source):
+                per_bucket[(source["kind"], source["entry_id"])].remove(bullet_id)
+                source_by_id.pop(bullet_id, None)
+                logger.step(
+                    "bullet_drop",
+                    stem=stem,
+                    bullet_id=bullet_id,
+                    kind=source["kind"],
+                    entry_id=source["entry_id"],
+                    score=scores_by_bullet_id.get(bullet_id, 0.0),
+                )
+                removed_any = True
+                break
+
+        if not removed_any:
+            if flagged:
+                bucket = flagged[0]
+                _remove_bucket_from_doc(doc, bucket[0], bucket[1])
+                logger.step("bucket_removed", stem=stem, kind=bucket[0], entry_id=bucket[1])
+                return compile_result, tex_path, bucket
+            return compile_result, tex_path, None
+
+
+def _summary_line_count(pdf_path: str | None) -> tuple[str, int | None]:
+    """Return rendered summary line check status and count.
+
+    Status values:
+    - ok: summary section was found and counted
+    - unavailable: pdftotext is not installed, so local validation cannot run
+    - missing_pdf, failed, missing_summary: validation ran or should have run but failed
+    """
+    if not pdf_path:
+        return "missing_pdf", None
+    pdftotext = shutil.which("pdftotext")
+    if not pdftotext:
+        return "unavailable", None
+    try:
+        result = subprocess.run(
+            [pdftotext, "-layout", str(pdf_path), "-"],
+            capture_output=True,
+            text=True,
+            timeout=15,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return "failed", None
+    if result.returncode != 0:
+        return "failed", None
+    lines = [line.rstrip() for line in result.stdout.splitlines()]
+    in_summary = False
+    summary_lines: list[str] = []
+    section_names = {"Education", "Experience", "Projects", "Technical Skills"}
+    for line in lines:
+        stripped = line.strip()
+        if not stripped:
+            continue
+        if stripped == "Summary":
+            in_summary = True
+            continue
+        if in_summary and stripped in section_names:
+            break
+        if in_summary:
+            summary_lines.append(stripped)
+    return ("ok", len(summary_lines)) if in_summary else ("missing_summary", None)
+
+
+def _summary_line_check_accepts(status: str, line_count: int | None) -> bool:
+    return status == "unavailable" or (status == "ok" and line_count in {4, 5})
+
+
+def _summary_line_check_retries(status: str, line_count: int | None) -> bool:
+    return status == "ok" and line_count not in {4, 5}
+
+
+def _build_candidate_context(doc) -> str:
+    parts: list[str] = []
+    if doc.summary:
+        parts.append(f"Existing resume summary: {doc.summary}")
+    exp_lines = [entry.title_company_location for entry in doc.experience[:3]]
+    if exp_lines:
+        parts.append("Experience: " + "; ".join(exp_lines))
+    skill_names = (
+        list(doc.skills.languages[:6])
+        + list(doc.skills.frameworks[:6])
+        + list(doc.skills.developer_tools[:6])
+    )
+    if skill_names:
+        parts.append("Skills: " + ", ".join(_dedupe(skill_names)[:12]))
+    return ". ".join(parts)
+
+
+def _run_iteration(
+    *,
+    parsed,
+    active_bucket_ids: list[BucketId],
+    raw_keywords: list[str],
+    present_kws: list[str],
+    missing_kws: list[str],
+    title: str,
+    attempt_dir: Path,
+    logger: PipelineLogger,
+) -> tuple[dict[str, Any] | None, BucketId | None]:
+    doc = copy.deepcopy(parsed)
+    existing_summary = doc.summary
+    _filter_doc_to_active_buckets(doc, active_bucket_ids)
+    doc.summary = ""
+
+    active_bullets, active_sources = _collect_active_bullets(doc, active_bucket_ids)
+    logger.step(
+        "active_buckets",
+        count=len(active_bucket_ids),
+        buckets=[f"{kind}:{entry_id}" for kind, entry_id in active_bucket_ids],
+    )
+
+    kw_match: dict = {
+        "bullet_matches": [],
+        "summary_keywords": list(missing_kws),
+        "ignored_keywords": [],
+        "scores": [],
+        "rag_used": False,
+    }
+    if _config.RAG_ENABLED and missing_kws and active_bullets:
+        t_rag = time.perf_counter()
+        logger.step(
+            "rag_start", missing_keyword_count=len(missing_kws), bullet_count=len(active_bullets)
+        )
+        try:
+            kw_match = match_keywords_to_bullets(missing_kws, active_bullets)
+            kw_match["rag_used"] = True
+        except Exception as exc:
+            logger.step("rag_skipped", reason=str(exc))
+        logger.step(
+            "rag_complete",
+            high=len(kw_match.get("bullet_matches", [])),
+            mid=len(kw_match.get("summary_keywords", [])),
+            low=len(kw_match.get("ignored_keywords", [])),
+            rag_used=kw_match.get("rag_used", False),
+            high_keywords=[m["keyword"] for m in kw_match.get("bullet_matches", [])],
+            mid_keywords=kw_match.get("summary_keywords", []),
+            elapsed_ms=int((time.perf_counter() - t_rag) * 1000),
+        )
+    else:
+        logger.step("rag_skipped", reason="disabled or no missing keywords")
+
+    skipped_candidates: list[str] = []
+    keywords_used: list[str] = []
+    rewrite_count = 0
+    rewrite_ok = 0
+    if kw_match.get("bullet_matches"):
+        by_bullet: dict[int, list[str]] = defaultdict(list)
+        for match in kw_match["bullet_matches"]:
+            by_bullet[match["bullet_idx"]].append(match["keyword"])
+
+        for bullet_idx, kws_to_add in sorted(by_bullet.items()):
+            if bullet_idx >= len(active_bullets):
+                continue
+            original_text = active_bullets[bullet_idx]
+            source = active_sources[bullet_idx]
+            kws_to_preserve = [k for k in present_kws if k.lower() in original_text.lower()]
+            logger.step(
+                "bullet_rewrite_start",
+                bullet_id=source["bullet_id"],
+                keywords=kws_to_add,
+                original=original_text[:120],
+            )
+            result = rewrite_bullet_targeted(
+                original_text,
+                kws_to_add,
+                keywords_to_preserve=kws_to_preserve,
+                logger=logger,
+            )
+            rewrite_count += 1
+            keywords_used.extend(result.get("keywords_used") or [])
+            skipped_candidates.extend(result.get("keywords_skipped") or [])
+            logger.step(
+                "bullet_rewrite_done",
+                bullet_id=source["bullet_id"],
+                success=result["success"],
+                duration_ms=result.get("duration_ms"),
+                error=result.get("error"),
+                validation=result.get("validation"),
+                keywords_used=result.get("keywords_used"),
+                keywords_skipped=result.get("keywords_skipped"),
+                rewritten=result["bullet"][:120] if result["success"] else None,
+            )
+            if result["success"]:
+                rewrite_ok += 1
+                entry = _find_entry(doc, source["kind"], source["entry_id"])
+                if entry is not None:
+                    for idx, bullet in enumerate(entry.bullets):
+                        if _text_hash(bullet) == source["text_hash"]:
+                            entry.bullets[idx] = result["bullet"]
+                            break
+
+    logger.step(
+        "bullet_rewrites_summary",
+        total=rewrite_count,
+        successful=rewrite_ok,
+        keywords_used=_dedupe(keywords_used),
+    )
+    logger.step("rewrite_validation_summary", rejected_keywords=_dedupe(skipped_candidates))
+
+    skipped_to_summary = [kw for kw in _dedupe(skipped_candidates) if not _keyword_present(kw, doc)]
+    mid_keywords = _dedupe(list(kw_match.get("summary_keywords", [])) + skipped_to_summary)
+    logger.step("keywords_skipped_to_summary", keywords=skipped_to_summary)
+
+    candidate_context = _build_candidate_context(doc)
+    summary_meta: dict = {}
+    if candidate_context:
+        logger.step("summary_start", keyword_count=len(mid_keywords), keywords=mid_keywords)
+        summary_meta = generate_summary(
+            candidate_context,
+            title or "Software Engineer",
+            mid_keywords,
+            existing_summary=existing_summary,
+            logger=logger,
+        )
+        logger.step(
+            "summary_done",
+            success=summary_meta.get("success"),
+            duration_ms=summary_meta.get("duration_ms"),
+            error=summary_meta.get("error"),
+            summary=summary_meta.get("summary", "")[:200] if summary_meta.get("success") else None,
+        )
+    else:
+        logger.step("summary_skipped", reason="no candidate context from parsed experience")
+
+    bullets_for_score, sources_for_score = _collect_active_bullets(doc, active_bucket_ids)
+    scores = _score_sources(bullets_for_score, sources_for_score, raw_keywords)
+    logger.step("bullet_scores", scores=scores)
+
+    doc_ns = copy.deepcopy(doc)
+    doc_ns.summary = ""
+    cr_ns, tex_ns, removed = _fit_to_page(
+        attempt_dir, doc_ns, "output", sources_for_score, scores, logger
+    )
+    if removed:
+        return None, removed
+
+    pdf_summary: str | None = None
+    tex_summary: str | None = None
+    summary_error = summary_meta.get("error")
+    _generated_summary = summary_meta.get("summary", "")
+    if _generated_summary:
+        doc_s = copy.deepcopy(doc_ns)
+        doc_s.summary = _generated_summary
+        summary_bullets, summary_sources = _collect_active_bullets(doc_s, active_bucket_ids)
+        summary_scores = _score_sources(summary_bullets, summary_sources, raw_keywords)
+        cr_s, tex_s, removed = _fit_to_page(
+            attempt_dir,
+            doc_s,
+            "output_summary",
+            summary_sources,
+            summary_scores,
+            logger,
+        )
+        if removed:
+            return None, removed
+        line_status, line_count = _summary_line_count(cr_s.get("pdf_path"))
+        logger.step(
+            "summary_line_check",
+            status=line_status,
+            line_count=line_count,
+            target_min=4,
+            target_max=5,
+        )
+        if _summary_line_check_accepts(line_status, line_count):
+            pdf_summary = cr_s.get("pdf_path")
+            tex_summary = tex_s
+        elif _summary_line_check_retries(line_status, line_count):
+            feedback = f"The current rendered summary is {line_count} lines; revise it to render as 4-5 lines."
+            logger.step("summary_retry_start", line_count=line_count, feedback=feedback)
+            retry_meta = generate_summary(
+                candidate_context,
+                title or "Software Engineer",
+                mid_keywords,
+                existing_summary=existing_summary,
+                line_feedback=feedback,
+                logger=logger,
+            )
+            logger.step(
+                "summary_retry_done",
+                success=retry_meta.get("success"),
+                duration_ms=retry_meta.get("duration_ms"),
+                error=retry_meta.get("error"),
+            )
+            if retry_meta.get("summary"):
+                doc_s.summary = retry_meta["summary"]
+                cr_s, tex_s, removed = _fit_to_page(
+                    attempt_dir,
+                    doc_s,
+                    "output_summary",
+                    *_collect_scores_for_doc(doc_s, active_bucket_ids, raw_keywords),
+                    logger,
+                )
+                if removed:
+                    return None, removed
+                line_status, line_count = _summary_line_count(cr_s.get("pdf_path"))
+                logger.step(
+                    "summary_line_check",
+                    status=line_status,
+                    line_count=line_count,
+                    target_min=4,
+                    target_max=5,
+                )
+                if _summary_line_check_accepts(line_status, line_count):
+                    pdf_summary = cr_s.get("pdf_path")
+                    tex_summary = tex_s
+                    summary_meta = retry_meta
+                elif _summary_line_check_retries(line_status, line_count):
+                    summary_error = "summary_line_count_out_of_range"
+                    logger.step(
+                        "summary_generation_error", error=summary_error, line_count=line_count
+                    )
+                else:
+                    summary_error = f"summary_line_check_{line_status}"
+                    logger.step(
+                        "summary_generation_error",
+                        error=summary_error,
+                        line_check_status=line_status,
+                    )
+            else:
+                summary_error = retry_meta.get("error") or "summary_line_count_out_of_range"
+                logger.step("summary_generation_error", error=summary_error)
+        else:
+            summary_error = f"summary_line_check_{line_status}"
+            logger.step(
+                "summary_generation_error",
+                error=summary_error,
+                line_check_status=line_status,
+            )
+    else:
+        logger.step("compile_summary_skipped", reason="no summary generated")
+
+    return (
+        {
+            "pdf_path": cr_ns.get("pdf_path"),
+            "tex_path": tex_ns,
+            "pdf_path_summary": pdf_summary,
+            "tex_path_summary": tex_summary,
+            "compile_status": cr_ns.get("compile_status"),
+            "fits_one_page": cr_ns.get("fits_one_page"),
+            "summary_error": summary_error,
+            "kw_match": kw_match,
+        },
+        None,
+    )
+
+
+def _collect_scores_for_doc(doc, active_bucket_ids: list[BucketId], raw_keywords: list[str]):
+    bullets, sources = _collect_active_bullets(doc, active_bucket_ids)
+    return sources, _score_sources(bullets, sources, raw_keywords)
 
 
 def run_ad_hoc_pipeline(
@@ -25,15 +576,11 @@ def run_ad_hoc_pipeline(
     label: str | None = None,
     resume_path: str | Path = DEFAULT_OG_RESUME_PATH,
 ) -> dict:
-    """Clean Option B pipeline: JD + resume -> keyword inject -> compile 2 versions.
-
-    No candidate_profile or bullet_library. All original bullets kept as-is.
-    Returns pdf_path, pdf_path_summary, log_path and keyword metadata.
-    """
+    """Clean Option B pipeline: JD + resume -> keyword inject -> compile 2 versions."""
     logger = PipelineLogger()
     t_start = time.perf_counter()
+    resolved_title = _resolve_job_title(title, description)
 
-    # 0. Log runtime config so logs are self-contained
     logger.step(
         "config",
         model_backend=_config.DEFAULT_MODEL_BACKEND,
@@ -41,25 +588,17 @@ def run_ad_hoc_pipeline(
         ollama_model=_config.OLLAMA_MODEL_NAME,
         ollama_timeout_sec=_config.OLLAMA_TIMEOUT_SEC,
         rag_enabled=_config.RAG_ENABLED,
-        title=title or "(empty)",
+        input_title=title or "(empty)",
+        title=resolved_title or "(empty)",
         description_len=len(description or ""),
     )
 
-    # 1. Parse resume — keep ALL bullets
     logger.step("parse_resume", path=str(resume_path))
     parsed = parse_resume_file(resume_path)
 
-    all_bullets: list[str] = []
-    bullet_sources: list[dict] = []
-    for ei, entry in enumerate(parsed.experience):
-        for bi, bullet in enumerate(entry.bullets):
-            all_bullets.append(bullet)
-            bullet_sources.append({"kind": "exp", "entry_idx": ei, "bullet_idx": bi})
-    for pi, entry in enumerate(parsed.projects):
-        for bi, bullet in enumerate(entry.bullets):
-            all_bullets.append(bullet)
-            bullet_sources.append({"kind": "proj", "entry_idx": pi, "bullet_idx": bi})
-
+    all_bullets = [b for entry in parsed.experience for b in entry.bullets] + [
+        b for entry in parsed.projects for b in entry.bullets
+    ]
     logger.step(
         "bullets_loaded",
         count=len(all_bullets),
@@ -67,8 +606,7 @@ def run_ad_hoc_pipeline(
         project_entries=len(parsed.projects),
     )
 
-    # 2. LLM: JD -> keywords
-    classification = classify_job(title=title, description=description)
+    classification = classify_job(title=resolved_title, description=description)
     logger.step(
         "classify_done",
         role_family=classification.get("role_family"),
@@ -77,7 +615,7 @@ def run_ad_hoc_pipeline(
     )
 
     keywords_dict = extract_keywords(
-        title=title, description=description, classification=classification
+        title=resolved_title, description=description, classification=classification
     )
     logger.step(
         "heuristic_keywords",
@@ -92,7 +630,7 @@ def run_ad_hoc_pipeline(
         host=_config.OLLAMA_HOST,
     )
     classification, keywords_dict, llm_meta = enrich_with_ollama_if_enabled(
-        title=title,
+        title=resolved_title,
         description=description,
         classification=classification,
         keywords=keywords_dict,
@@ -110,7 +648,11 @@ def run_ad_hoc_pipeline(
         error=llm_meta.get("error"),
     )
 
-    # If Ollama was expected but unreachable/errored, return original resume unchanged.
+    ad_hoc_label = label or slugify(f"{company}_{resolved_title}") or "ad_hoc"
+    attempt_dir = ensure_dir(
+        build_attempt_dir(job_id=None, role_family="ad_hoc", ad_hoc_label=ad_hoc_label)
+    )
+
     ollama_failed = (
         _config.DEFAULT_MODEL_BACKEND == "ollama"
         and not llm_meta.get("ollama_enriched")
@@ -123,10 +665,6 @@ def run_ad_hoc_pipeline(
             error=ollama_error_msg,
             model=_config.OLLAMA_MODEL_NAME,
             host=_config.OLLAMA_HOST,
-        )
-        ad_hoc_label = label or slugify(f"{company}_{title}") or "ad_hoc"
-        attempt_dir = ensure_dir(
-            build_attempt_dir(job_id=None, role_family="ad_hoc", ad_hoc_label=ad_hoc_label)
         )
         doc_orig = copy.deepcopy(parsed)
         doc_orig.summary = ""
@@ -160,189 +698,110 @@ def run_ad_hoc_pipeline(
             "llm_error": ollama_error_msg,
         }
 
-    # 3. Partition: present vs missing
     present_kws, missing_kws, coverage = partition_keywords(raw_keywords, all_bullets)
     logger.step(
         "keyword_partition",
         present_count=len(present_kws),
         missing_count=len(missing_kws),
-        coverage_pct=round(coverage * 100, 1) if coverage is not None else None,
+        coverage=coverage,
         present=present_kws,
         missing=missing_kws,
     )
 
-    # 4. RAG: match only MISSING keywords to bullets
-    kw_match: dict = {
-        "bullet_matches": [],
-        "summary_keywords": list(missing_kws),
-        "ignored_keywords": [],
-        "scores": [],
-        "rag_used": False,
-    }
-    if _config.RAG_ENABLED and missing_kws and all_bullets:
-        logger.step(
-            "rag_start", missing_keyword_count=len(missing_kws), bullet_count=len(all_bullets)
-        )
-        try:
-            kw_match = match_keywords_to_bullets(missing_kws, all_bullets)
-            kw_match["rag_used"] = True
-        except Exception as exc:
-            logger.step("rag_skipped", reason=str(exc))
+    active_bucket_ids: list[BucketId] = []
+    for kind, entries in (("exp", parsed.experience), ("proj", parsed.projects)):
+        for entry in entries:
+            if len(entry.bullets) < 2:
+                logger.step(
+                    "bucket_excluded_below_floor",
+                    kind=kind,
+                    entry_id=entry.entry_id,
+                    bullet_count=len(entry.bullets),
+                )
+                continue
+            active_bucket_ids.append((kind, entry.entry_id))
 
-    high_matches = kw_match.get("bullet_matches", [])
-    logger.step(
-        "rag_complete",
-        high=len(high_matches),
-        mid=len(kw_match["summary_keywords"]),
-        low=len(kw_match.get("ignored_keywords", [])),
-        rag_used=kw_match.get("rag_used", False),
-        high_keywords=[m["keyword"] for m in high_matches],
-        mid_keywords=kw_match.get("summary_keywords", []),
-    )
-
-    # 5. LLM bullet rewrites for high-tier matches
-    doc = copy.deepcopy(parsed)
-    doc.summary = ""
-
-    rewrite_count = 0
-    rewrite_ok = 0
-    if kw_match["bullet_matches"]:
-        from collections import defaultdict
-
-        by_bullet: dict[int, list[str]] = defaultdict(list)
-        for m in kw_match["bullet_matches"]:
-            by_bullet[m["bullet_idx"]].append(m["keyword"])
-
-        for bullet_idx, kws_to_add in sorted(by_bullet.items()):
-            original_text = all_bullets[bullet_idx]
-            kws_to_preserve = [k for k in present_kws if k.lower() in original_text.lower()]
-            logger.step(
-                "bullet_rewrite_start",
-                bullet_idx=bullet_idx,
-                keywords=kws_to_add,
-                original=original_text[:120],
-            )
-            result = rewrite_bullet_targeted(
-                original_text,
-                kws_to_add,
-                keywords_to_preserve=kws_to_preserve,
-                logger=logger,
-            )
-            rewrite_count += 1
-            logger.step(
-                "bullet_rewrite_done",
-                bullet_idx=bullet_idx,
-                success=result["success"],
-                duration_ms=result.get("duration_ms"),
-                error=result.get("error"),
-                rewritten=result["bullet"][:120] if result["success"] else None,
-            )
-            if result["success"]:
-                rewrite_ok += 1
-                src = bullet_sources[bullet_idx]
-                if src["kind"] == "exp":
-                    doc.experience[src["entry_idx"]].bullets[src["bullet_idx"]] = result["bullet"]
-                else:
-                    doc.projects[src["entry_idx"]].bullets[src["bullet_idx"]] = result["bullet"]
-
-    if rewrite_count:
-        logger.step("bullet_rewrites_summary", total=rewrite_count, successful=rewrite_ok)
-
-    # 6. LLM summary from mid-tier keywords
-    exp_lines = [e.title_company_location for e in doc.experience[:3]]
-    candidate_context = "; ".join(exp_lines)
-    summary_meta: dict = {}
-    if candidate_context:
-        logger.step(
-            "summary_start",
-            keyword_count=len(kw_match["summary_keywords"]),
-            keywords=kw_match["summary_keywords"],
-        )
-        summary_meta = generate_summary(
-            candidate_context,
-            title or "Software Engineer",
-            kw_match["summary_keywords"],
-            logger=logger,
-        )
-        logger.step(
-            "summary_done",
-            success=summary_meta.get("success"),
-            duration_ms=summary_meta.get("duration_ms"),
-            error=summary_meta.get("error"),
-            summary=summary_meta.get("summary", "")[:200] if summary_meta.get("success") else None,
-        )
-    else:
-        logger.step("summary_skipped", reason="no candidate context from parsed experience")
-
-    # 7. Build attempt dir
-    ad_hoc_label = label or slugify(f"{company}_{title}") or "ad_hoc"
-    attempt_dir = ensure_dir(
-        build_attempt_dir(job_id=None, role_family="ad_hoc", ad_hoc_label=ad_hoc_label)
-    )
+    if not active_bucket_ids:
+        logger.step("error", error="all_buckets_exhausted")
+        log_path = write_text(attempt_dir / "pipeline_log.txt", logger.get_log_text())
+        return {
+            "attempt_dir": str(attempt_dir),
+            "pdf_path": None,
+            "tex_path": None,
+            "pdf_path_summary": None,
+            "tex_path_summary": None,
+            "log_path": log_path,
+            "compile_status": "failed",
+            "fits_one_page": False,
+            "keywords": raw_keywords,
+            "present_keywords": present_kws,
+            "missing_keywords": missing_kws,
+            "llm_error": "all_buckets_exhausted",
+        }
 
     write_json(
         attempt_dir / "keywords.json",
-        {
-            "raw": raw_keywords,
-            "present": present_kws,
-            "missing": missing_kws,
-            "coverage": coverage,
-            "kw_match": kw_match,
-        },
+        {"raw": raw_keywords, "present": present_kws, "missing": missing_kws, "coverage": coverage},
     )
 
-    # 8. Compile no-summary version
-    logger.step("compile_start", stem="output")
-    doc_ns = copy.deepcopy(doc)
-    so_ns: dict = {"experience_entries": [], "project_entries": []}
-    _, cr_ns, tex_ns, _ = _compile_with_fit_retry(attempt_dir, doc_ns, so_ns, stem="output")
-    logger.step(
-        "compile_done",
-        stem="output",
-        status=cr_ns.get("compile_status"),
-        page_count=cr_ns.get("page_count"),
-        fits_one_page=cr_ns.get("fits_one_page"),
-    )
-
-    # 9. Compile with-summary version (if summary generated)
-    pdf_summary: str | None = None
-    tex_summary: str | None = None
-    _generated_summary = summary_meta.get("summary", "")
-    if _generated_summary:
-        logger.step("compile_start", stem="output_summary")
-        doc_s = copy.deepcopy(doc)
-        doc_s.summary = _generated_summary
-        so_s: dict = {"experience_entries": [], "project_entries": []}
-        _, cr_s, tex_s, _ = _compile_with_fit_retry(attempt_dir, doc_s, so_s, stem="output_summary")
-        logger.step(
-            "compile_done",
-            stem="output_summary",
-            status=cr_s.get("compile_status"),
-            page_count=cr_s.get("page_count"),
-            fits_one_page=cr_s.get("fits_one_page"),
+    result: dict[str, Any] | None = None
+    max_restarts = max(0, len(active_bucket_ids) - 1)
+    for restart_idx in range(max_restarts + 1):
+        iteration_result, removed = _run_iteration(
+            parsed=parsed,
+            active_bucket_ids=active_bucket_ids,
+            raw_keywords=raw_keywords,
+            present_kws=present_kws,
+            missing_kws=missing_kws,
+            title=resolved_title,
+            attempt_dir=attempt_dir,
+            logger=logger,
         )
-        pdf_summary = cr_s.get("pdf_path")
-        tex_summary = tex_s
-    else:
-        logger.step("compile_summary_skipped", reason="no summary generated")
+        if removed is None:
+            result = iteration_result
+            break
+        active_bucket_ids = [bucket for bucket in active_bucket_ids if bucket != removed]
+        logger.step(
+            "restart",
+            restart_num=restart_idx + 1,
+            removed_bucket=f"{removed[0]}:{removed[1]}",
+            remaining_buckets=[f"{kind}:{entry_id}" for kind, entry_id in active_bucket_ids],
+        )
+        if not active_bucket_ids:
+            result = None
+            break
 
-    # 10. Write log
     total_ms = int((time.perf_counter() - t_start) * 1000)
     logger.step("done", total_ms=total_ms)
-    log_text = logger.get_log_text()
-    log_path = write_text(attempt_dir / "pipeline_log.txt", log_text)
+    log_path = write_text(attempt_dir / "pipeline_log.txt", logger.get_log_text())
+
+    if result is None:
+        return {
+            "attempt_dir": str(attempt_dir),
+            "pdf_path": None,
+            "tex_path": None,
+            "pdf_path_summary": None,
+            "tex_path_summary": None,
+            "log_path": log_path,
+            "compile_status": "failed",
+            "fits_one_page": False,
+            "keywords": raw_keywords,
+            "present_keywords": present_kws,
+            "missing_keywords": missing_kws,
+            "llm_error": "all_buckets_exhausted",
+        }
 
     return {
         "attempt_dir": str(attempt_dir),
-        "pdf_path": cr_ns.get("pdf_path"),
-        "tex_path": tex_ns,
-        "pdf_path_summary": pdf_summary,
-        "tex_path_summary": tex_summary,
+        "pdf_path": result.get("pdf_path"),
+        "tex_path": result.get("tex_path"),
+        "pdf_path_summary": result.get("pdf_path_summary"),
+        "tex_path_summary": result.get("tex_path_summary"),
         "log_path": log_path,
-        "compile_status": cr_ns.get("compile_status"),
-        "fits_one_page": cr_ns.get("fits_one_page"),
+        "compile_status": result.get("compile_status"),
+        "fits_one_page": result.get("fits_one_page"),
         "keywords": raw_keywords,
         "present_keywords": present_kws,
         "missing_keywords": missing_kws,
-        "llm_error": None,
+        "llm_error": result.get("summary_error"),
     }

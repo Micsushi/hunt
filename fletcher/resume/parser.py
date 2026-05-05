@@ -142,6 +142,22 @@ def _parse_skills(section_text: str) -> SkillsSection:
     )
 
 
+def _clean_inline_latex(text: str) -> str:
+    cleaned = re.sub(r"\\textbf\{(.*?)\}", r"\1", text)
+    cleaned = re.sub(r"\\href\{.*?\}\{(.*?)\}", r"\1", cleaned)
+    cleaned = re.sub(r"\\[a-zA-Z]+\*?(?:\[[^\]]*\])?(?:\{([^{}]*)\})?", r"\1", cleaned)
+    cleaned = cleaned.replace(r"\%", "%").replace(r"\$", "$").replace(r"\&", "&")
+    return re.sub(r"\s+", " ", cleaned).strip()
+
+
+def _parse_summary(section_text: str | None) -> str:
+    if not section_text:
+        return ""
+    onecol = ONECOL_PATTERN.search(section_text)
+    body = onecol.group("body") if onecol else section_text
+    return _clean_inline_latex(body)
+
+
 def parse_resume_tex(tex: str, *, source_path: str = "<memory>") -> ResumeDocument:
     preamble, body = _split_document(tex)
     header, body_after_header = _extract_header(body)
@@ -151,6 +167,7 @@ def parse_resume_tex(tex: str, *, source_path: str = "<memory>") -> ResumeDocume
         source_path=source_path,
         preamble=preamble.rstrip(),
         header=header,
+        summary=_parse_summary(sections.get("Summary")),
         education=_parse_education(sections["Education"]),
         experience=_parse_repeated_entries(sections["Experience"], "experience"),
         projects=_parse_repeated_entries(sections["Projects"], "project"),

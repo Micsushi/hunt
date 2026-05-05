@@ -2940,6 +2940,7 @@ async def api_fletcher_tailor(
     try:
         from fletcher.ad_hoc_pipeline import run_ad_hoc_pipeline  # type: ignore
         from fletcher.config import DEFAULT_OG_RESUME_PATH  # type: ignore
+        from fletcher.jobs.title_inference import infer_title_from_description  # type: ignore
     except ModuleNotFoundError:
         raise HTTPException(status_code=503, detail="Fletcher not available in this deployment")
 
@@ -2955,7 +2956,7 @@ async def api_fletcher_tailor(
             resume_tmp.flush()
             resume_tmp.close()
 
-        _title = next((ln.strip() for ln in job_details.splitlines() if ln.strip()), "")
+        _title = infer_title_from_description(job_details)
         result = run_ad_hoc_pipeline(
             title=_title,
             description=job_details,

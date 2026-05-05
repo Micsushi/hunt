@@ -2,6 +2,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from fletcher.jobs.classifier import classify_job
 from fletcher.resume.parser import parse_resume_file, parse_resume_tex
 from fletcher.resume.renderer import render_resume_tex
 
@@ -30,10 +31,57 @@ class Component2Stage1Tests(unittest.TestCase):
         reparsed = parse_resume_tex(rendered_tex, source_path="<roundtrip>")
 
         self.assertEqual(reparsed.header, original.header)
+        self.assertEqual(reparsed.summary, original.summary)
         self.assertEqual(reparsed.education, original.education)
         self.assertEqual(reparsed.experience, original.experience)
         self.assertEqual(reparsed.projects, original.projects)
         self.assertEqual(reparsed.skills, original.skills)
+
+    def test_parse_optional_summary_section(self):
+        tex = MAIN_TEX.read_text(encoding="utf-8").replace(
+            "    \\section{Education}",
+            (
+                "    \\section{Summary}\n\n"
+                "    \\begin{onecolentry}\n"
+                "        Backend developer with Python and React experience.\n"
+                "    \\end{onecolentry}\n\n"
+                "    \\section{Education}"
+            ),
+            1,
+        )
+
+        doc = parse_resume_tex(tex, source_path="<summary>")
+
+        self.assertEqual(doc.summary, "Backend developer with Python and React experience.")
+
+    def test_renderer_omits_empty_experience_and_project_sections(self):
+        doc = parse_resume_file(MAIN_TEX)
+        doc.experience = []
+        doc.projects = []
+
+        rendered = render_resume_tex(doc)
+
+        self.assertNotIn("\\section{Experience}", rendered)
+        self.assertNotIn("\\section{Projects}", rendered)
+
+    def test_mentor_interns_does_not_make_role_intern(self):
+        result = classify_job(
+            title="Software Engineer",
+            description=(
+                "This position is for an engineer with a few years of professional experience. "
+                "You will mentor IC1 engineers and interns."
+            ),
+        )
+
+        self.assertEqual(result["job_level"], "mid")
+
+    def test_actual_intern_title_still_intern(self):
+        result = classify_job(
+            title="Software Developer Intern",
+            description="Summer internship role.",
+        )
+
+        self.assertEqual(result["job_level"], "intern")
 
     def test_cli_roundtrip_outputs_files(self):
         with tempfile.TemporaryDirectory() as tmpdir:

@@ -30,12 +30,16 @@ def test_rewrite_no_logger_when_backend_not_ollama(monkeypatch):
 
 def test_rewrite_logger_called_on_success(monkeypatch):
     monkeypatch.setattr("fletcher.llm.llm_enrich.config.DEFAULT_MODEL_BACKEND", "ollama")
-    mock_response = '{"bullet": "Rewrote with Python."}'
+    mock_response = (
+        '{"bullet": "Rewrote with Python.", "keywords_used": ["Python"], "keywords_skipped": []}'
+    )
     with patch("fletcher.llm.llm_enrich._ollama_chat", return_value=mock_response):
         logger = _make_logger()
         result = rewrite_bullet_targeted("Original bullet.", ["Python"], logger=logger)
     assert result["success"] is True
     assert result["bullet"] == "Rewrote with Python."
+    assert result["keywords_used"] == ["Python"]
+    assert result["keywords_skipped"] == []
     log = logger.get_log_text()
     assert "rewrite_bullet" in log
     assert "success=True" in log
@@ -47,7 +51,7 @@ def test_rewrite_preserve_keywords_in_prompt(monkeypatch):
 
     def fake_chat(prompt: str) -> str:
         captured_prompts.append(prompt)
-        return '{"bullet": "same"}'
+        return '{"bullet": "same", "keywords_used": [], "keywords_skipped": ["MongoDB"]}'
 
     with patch("fletcher.llm.llm_enrich._ollama_chat", fake_chat):
         rewrite_bullet_targeted("Used SQL.", ["MongoDB"], keywords_to_preserve=["SQL"], logger=None)
@@ -62,7 +66,7 @@ def test_rewrite_no_preserve_line_when_empty(monkeypatch):
 
     def fake_chat(prompt: str) -> str:
         captured.append(prompt)
-        return '{"bullet": "same"}'
+        return '{"bullet": "same", "keywords_used": [], "keywords_skipped": ["MongoDB"]}'
 
     with patch("fletcher.llm.llm_enrich._ollama_chat", fake_chat):
         rewrite_bullet_targeted("Used SQL.", ["MongoDB"], keywords_to_preserve=[], logger=None)
@@ -76,6 +80,8 @@ def test_rewrite_logger_called_on_failure(monkeypatch):
         logger = _make_logger()
         result = rewrite_bullet_targeted("bullet", ["kw"], logger=logger)
     assert result["success"] is False
+    assert result["keywords_used"] == []
+    assert result["keywords_skipped"] == ["kw"]
     log = logger.get_log_text()
     assert "success=False" in log
     assert "ERROR:" in log
@@ -104,6 +110,29 @@ def test_summary_logger_called_on_success(monkeypatch):
     log = logger.get_log_text()
     assert "generate_summary" in log
     assert "success=True" in log
+
+
+def test_summary_prompt_includes_existing_summary_and_line_feedback(monkeypatch):
+    monkeypatch.setattr("fletcher.llm.llm_enrich.config.DEFAULT_MODEL_BACKEND", "ollama")
+    captured: list[str] = []
+
+    def fake_chat(prompt: str) -> str:
+        captured.append(prompt)
+        return '{"summary": "Adjusted summary."}'
+
+    with patch("fletcher.llm.llm_enrich._ollama_chat", fake_chat):
+        result = generate_summary(
+            "context",
+            "Engineer",
+            ["Python"],
+            existing_summary="Existing summary.",
+            line_feedback="Make it longer.",
+            logger=None,
+        )
+
+    assert result["success"] is True
+    assert "Existing resume summary for context: Existing summary." in captured[0]
+    assert "Length adjustment needed: Make it longer." in captured[0]
 
 
 def test_summary_logger_on_failure(monkeypatch):

@@ -45,19 +45,10 @@ def _make_parsed_doc():
                 entry_id="proj0",
                 project_title="Side Project",
                 date_or_link_text="2023",
-                bullets=["Created React dashboard."],
+                bullets=["Created React dashboard.", "Added FastAPI backend."],
             )
         ],
         skills=SkillsSection(languages=["Python"]),
-    )
-
-
-def _compile_ok(pdf: str = "/tmp/output.pdf"):
-    return (
-        "so_path",
-        {"compile_status": "ok", "fits_one_page": True, "page_count": 1, "pdf_path": pdf},
-        "/tmp/out.tex",
-        [],
     )
 
 
@@ -98,17 +89,37 @@ def base_mocks(monkeypatch):
         mod,
         "rewrite_bullet_targeted",
         MagicMock(
-            return_value={"bullet": "Improved MongoDB queries.", "success": True, "error": None}
+            return_value={
+                "bullet": "Improved MongoDB queries.",
+                "success": True,
+                "error": None,
+                "keywords_used": ["MongoDB"],
+                "keywords_skipped": [],
+            }
         ),
     )
     monkeypatch.setattr(
         mod, "generate_summary", MagicMock(return_value={"summary": "", "success": False})
     )
-    monkeypatch.setattr(mod, "_compile_with_fit_retry", MagicMock(return_value=_compile_ok()))
+    monkeypatch.setattr(
+        mod,
+        "compile_tex",
+        MagicMock(
+            return_value={
+                "compile_status": "ok",
+                "fits_one_page": True,
+                "page_count": 1,
+                "pdf_path": "/tmp/output.pdf",
+                "log_text": "",
+            }
+        ),
+    )
+    monkeypatch.setattr(mod, "score_bullets_for_drop", MagicMock(return_value=[0.9, 0.4, 0.7, 0.6]))
+    monkeypatch.setattr(mod, "_summary_line_count", MagicMock(return_value=("ok", 4)))
     monkeypatch.setattr(mod, "ensure_dir", MagicMock(return_value=Path("/tmp/ad_hoc")))
     monkeypatch.setattr(mod, "build_attempt_dir", MagicMock(return_value=Path("/tmp/ad_hoc")))
     monkeypatch.setattr(mod, "write_json", MagicMock(return_value="/tmp/keywords.json"))
-    monkeypatch.setattr(mod, "write_text", MagicMock(return_value="/tmp/pipeline_log.txt"))
+    monkeypatch.setattr(mod, "write_text", MagicMock(side_effect=lambda path, _content: str(path)))
     monkeypatch.setattr(mod._config, "RAG_ENABLED", True)
     return mod
 
@@ -139,7 +150,7 @@ def test_log_path_set(base_mocks):
     from fletcher.ad_hoc_pipeline import run_ad_hoc_pipeline
 
     result = run_ad_hoc_pipeline(title="SWE", description="job")
-    assert result["log_path"] == "/tmp/pipeline_log.txt"
+    assert Path(result["log_path"]) == Path("/tmp/ad_hoc/pipeline_log.txt")
 
 
 def test_no_summary_pdf_when_summary_empty(base_mocks):
@@ -154,23 +165,26 @@ def test_summary_pdf_set_when_summary_generated(base_mocks):
 
     base_mocks.generate_summary.return_value = {"summary": "A great candidate.", "success": True}
 
-    call_count = [0]
-
-    def compile_side_effect(*args, **kwargs):
-        call_count[0] += 1
-        pdf = "/tmp/out_summary.pdf" if call_count[0] == 2 else "/tmp/out.pdf"
-        return (
-            "so",
-            {"compile_status": "ok", "fits_one_page": True, "page_count": 1, "pdf_path": pdf},
-            "/tmp/t.tex",
-            [],
-        )
-
-    base_mocks._compile_with_fit_retry.side_effect = compile_side_effect
+    base_mocks.compile_tex.side_effect = [
+        {
+            "compile_status": "ok",
+            "fits_one_page": True,
+            "page_count": 1,
+            "pdf_path": "/tmp/out.pdf",
+            "log_text": "",
+        },
+        {
+            "compile_status": "ok",
+            "fits_one_page": True,
+            "page_count": 1,
+            "pdf_path": "/tmp/out_summary.pdf",
+            "log_text": "",
+        },
+    ]
 
     result = run_ad_hoc_pipeline(title="SWE", description="job")
     assert result["pdf_path_summary"] == "/tmp/out_summary.pdf"
-    assert call_count[0] == 2
+    assert base_mocks.compile_tex.call_count == 2
 
 
 def test_keywords_partitioned_correctly(base_mocks):
@@ -179,6 +193,23 @@ def test_keywords_partitioned_correctly(base_mocks):
     result = run_ad_hoc_pipeline(title="SWE", description="job")
     assert result["present_keywords"] == ["Python"]
     assert result["missing_keywords"] == ["MongoDB"]
+
+
+def test_pipeline_uses_inferred_title_when_title_is_heading(base_mocks, monkeypatch):
+    import fletcher.ad_hoc_pipeline as mod
+    from fletcher.ad_hoc_pipeline import run_ad_hoc_pipeline
+
+    monkeypatch.setattr(
+        mod, "infer_title_from_description", lambda _description: "Software Engineer"
+    )
+
+    run_ad_hoc_pipeline(
+        title="**About Us**",
+        description="We are seeking a Software Engineer to join.",
+    )
+
+    assert base_mocks.classify_job.call_args.kwargs["title"] == "Software Engineer"
+    assert base_mocks.extract_keywords.call_args.kwargs["title"] == "Software Engineer"
 
 
 def test_rag_skipped_when_no_missing_keywords(base_mocks):
@@ -215,7 +246,7 @@ def test_compile_called_once_when_no_summary(base_mocks):
     from fletcher.ad_hoc_pipeline import run_ad_hoc_pipeline
 
     run_ad_hoc_pipeline(title="SWE", description="job")
-    assert base_mocks._compile_with_fit_retry.call_count == 1
+    assert base_mocks.compile_tex.call_count == 1
 
 
 def test_compile_called_twice_when_summary_present(base_mocks):
@@ -223,4 +254,160 @@ def test_compile_called_twice_when_summary_present(base_mocks):
 
     base_mocks.generate_summary.return_value = {"summary": "Great candidate.", "success": True}
     run_ad_hoc_pipeline(title="SWE", description="job")
-    assert base_mocks._compile_with_fit_retry.call_count == 2
+    assert base_mocks.compile_tex.call_count == 2
+
+
+def test_summary_pdf_skipped_when_line_retry_fails(base_mocks):
+    from fletcher.ad_hoc_pipeline import run_ad_hoc_pipeline
+
+    base_mocks.generate_summary.side_effect = [
+        {"summary": "Too short.", "success": True},
+        {"summary": "Still too short.", "success": True},
+    ]
+    base_mocks._summary_line_count.return_value = ("ok", 2)
+
+    result = run_ad_hoc_pipeline(title="SWE", description="job")
+
+    assert result["pdf_path_summary"] is None
+    assert result["llm_error"] == "summary_line_count_out_of_range"
+    assert base_mocks.generate_summary.call_count == 2
+
+
+def test_summary_pdf_accepted_when_line_check_unavailable(base_mocks):
+    from fletcher.ad_hoc_pipeline import run_ad_hoc_pipeline
+
+    base_mocks.generate_summary.return_value = {"summary": "A great candidate.", "success": True}
+    base_mocks._summary_line_count.return_value = ("unavailable", None)
+    base_mocks.compile_tex.side_effect = [
+        {
+            "compile_status": "ok",
+            "fits_one_page": True,
+            "page_count": 1,
+            "pdf_path": "/tmp/out.pdf",
+            "log_text": "",
+        },
+        {
+            "compile_status": "ok",
+            "fits_one_page": True,
+            "page_count": 1,
+            "pdf_path": "/tmp/out_summary.pdf",
+            "log_text": "",
+        },
+    ]
+
+    result = run_ad_hoc_pipeline(title="SWE", description="job")
+
+    assert result["pdf_path_summary"] == "/tmp/out_summary.pdf"
+    assert result["llm_error"] is None
+    assert base_mocks.generate_summary.call_count == 1
+
+
+def test_summary_pdf_skipped_when_line_check_fails(base_mocks):
+    from fletcher.ad_hoc_pipeline import run_ad_hoc_pipeline
+
+    base_mocks.generate_summary.return_value = {"summary": "A great candidate.", "success": True}
+    base_mocks._summary_line_count.return_value = ("failed", None)
+
+    result = run_ad_hoc_pipeline(title="SWE", description="job")
+
+    assert result["pdf_path_summary"] is None
+    assert result["llm_error"] == "summary_line_check_failed"
+    assert base_mocks.generate_summary.call_count == 1
+
+
+def test_rejected_rewrite_keyword_moves_to_summary(base_mocks):
+    from fletcher.ad_hoc_pipeline import run_ad_hoc_pipeline
+
+    base_mocks.rewrite_bullet_targeted.return_value = {
+        "bullet": "Improved SQL queries.",
+        "success": False,
+        "error": "rewrite_validation_failed",
+        "duration_ms": 10,
+        "keywords_used": [],
+        "keywords_skipped": ["real-time threat intelligence"],
+        "validation": {"accepted": False},
+    }
+    base_mocks.match_keywords_to_bullets.return_value = {
+        "bullet_matches": [
+            {"bullet_idx": 1, "keyword": "real-time threat intelligence", "score": 0.85}
+        ],
+        "summary_keywords": ["Software Engineer"],
+        "ignored_keywords": [],
+        "scores": [],
+        "rag_used": True,
+    }
+    base_mocks.generate_summary.return_value = {"summary": "Summary text.", "success": True}
+
+    run_ad_hoc_pipeline(title="Software Engineer", description="job")
+
+    assert "real-time threat intelligence" in base_mocks.generate_summary.call_args.args[2]
+
+
+def test_bucket_below_floor_excluded(base_mocks):
+    from fletcher.ad_hoc_pipeline import run_ad_hoc_pipeline
+
+    doc = _make_parsed_doc()
+    doc.projects[0].bullets = ["Only one."]
+    base_mocks.parse_resume_file.return_value = doc
+
+    run_ad_hoc_pipeline(title="SWE", description="job")
+
+    active_bullets = base_mocks.match_keywords_to_bullets.call_args.args[1]
+    assert active_bullets == ["Built Python service.", "Improved SQL queries."]
+
+
+def test_fit_to_page_drops_lowest_relevance_candidate(monkeypatch):
+    import fletcher.ad_hoc_pipeline as mod
+    from fletcher.pipeline_logger import PipelineLogger
+
+    doc = _make_parsed_doc()
+    doc.experience[0].bullets.append("Maintained CI pipeline.")
+    active = [("exp", "exp0"), ("proj", "proj0")]
+    _bullets, sources = mod._collect_active_bullets(doc, active)
+    scores = {
+        sources[0]["bullet_id"]: 0.9,
+        sources[1]["bullet_id"]: 0.1,
+        sources[2]["bullet_id"]: 0.7,
+        sources[3]["bullet_id"]: 0.2,
+        sources[4]["bullet_id"]: 0.8,
+    }
+    compile_results = [
+        ({"compile_status": "ok", "fits_one_page": False, "page_count": 2}, "/tmp/out.tex"),
+        ({"compile_status": "ok", "fits_one_page": True, "page_count": 1}, "/tmp/out.tex"),
+    ]
+    monkeypatch.setattr(mod, "_compile_doc", MagicMock(side_effect=compile_results))
+
+    cr, _tex, removed = mod._fit_to_page(
+        Path("/tmp"), doc, "output", sources, scores, PipelineLogger()
+    )
+
+    assert cr["fits_one_page"] is True
+    assert removed is None
+    assert doc.experience[0].bullets == ["Built Python service.", "Maintained CI pipeline."]
+
+
+def test_fit_to_page_removes_bucket_at_floor(monkeypatch):
+    import fletcher.ad_hoc_pipeline as mod
+    from fletcher.pipeline_logger import PipelineLogger
+
+    doc = _make_parsed_doc()
+    active = [("exp", "exp0"), ("proj", "proj0")]
+    _bullets, sources = mod._collect_active_bullets(doc, active)
+    scores = {source["bullet_id"]: 0.5 for source in sources}
+    monkeypatch.setattr(
+        mod,
+        "_compile_doc",
+        MagicMock(
+            return_value=(
+                {"compile_status": "ok", "fits_one_page": False, "page_count": 2},
+                "/tmp/out.tex",
+            )
+        ),
+    )
+
+    _cr, _tex, removed = mod._fit_to_page(
+        Path("/tmp"), doc, "output", sources, scores, PipelineLogger()
+    )
+
+    assert removed == ("exp", "exp0")
+    assert doc.experience == []

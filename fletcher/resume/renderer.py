@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import re
+
 from .models import EducationSection, ExperienceEntry, ProjectEntry, ResumeDocument, SkillsSection
 
 
@@ -17,19 +19,22 @@ def _render_header(doc: ResumeDocument) -> str:
     )
 
 
-def _escape_bullet(text: str) -> str:
-    """Escape LaTeX special characters that aren't already escaped.
-
-    Bullets from main.tex already have \\$ etc. Bullets from candidate_profile
-    or LLM rewrites may have raw $, %, & which break LaTeX compilation.
-    """
-    import re
-
+def _escape_latex(text: str) -> str:
+    """Escape LaTeX special characters that aren't already escaped."""
     # Escape each special char only when NOT already preceded by a backslash.
     result = text
     for char in ("$", "%", "&", "#"):
         result = re.sub(r"(?<!\\)" + re.escape(char), "\\" + char, result)
     return result
+
+
+def _escape_bullet(text: str) -> str:
+    """Escape LaTeX special characters in bullet text.
+
+    Bullets from main.tex already have \\$ etc. Bullets from candidate_profile
+    or LLM rewrites may have raw $, %, & which break LaTeX compilation.
+    """
+    return _escape_latex(text)
 
 
 def _render_bullets(bullets: list[str]) -> str:
@@ -81,11 +86,7 @@ def _render_project_entry(entry: ProjectEntry) -> str:
 
 
 def _render_summary(text: str) -> str:
-    escaped = text
-    for char in ("$", "%", "&", "#"):
-        import re
-
-        escaped = re.sub(r"(?<!\\)" + re.escape(char), "\\" + char, escaped)
+    escaped = _escape_latex(text)
     return (
         "    \\vspace{0.10 cm}\n"
         "    \\section{Summary}\n\n"
@@ -121,17 +122,19 @@ def render_resume_tex(doc: ResumeDocument) -> str:
         parts.append(_render_summary(doc.summary))
     parts.append(_render_education(doc.education))
 
-    parts.append("    \\vspace{0.10 cm}\n    \\section{Experience}\n")
-    for idx, entry in enumerate(doc.experience):
-        parts.append(_render_experience_entry(entry))
-        if idx != len(doc.experience) - 1:
-            parts.append("    \n    \\vspace{0.10 cm}\n")
+    if doc.experience:
+        parts.append("    \\vspace{0.10 cm}\n    \\section{Experience}\n")
+        for idx, entry in enumerate(doc.experience):
+            parts.append(_render_experience_entry(entry))
+            if idx != len(doc.experience) - 1:
+                parts.append("    \n    \\vspace{0.10 cm}\n")
 
-    parts.append("    \\vspace{0.10 cm}\n    \\section{Projects}\n")
-    for idx, entry in enumerate(doc.projects):
-        parts.append(_render_project_entry(entry))
-        if idx != len(doc.projects) - 1:
-            parts.append("    \n    \\vspace{0.10 cm}\n")
+    if doc.projects:
+        parts.append("    \\vspace{0.10 cm}\n    \\section{Projects}\n")
+        for idx, entry in enumerate(doc.projects):
+            parts.append(_render_project_entry(entry))
+            if idx != len(doc.projects) - 1:
+                parts.append("    \n    \\vspace{0.10 cm}\n")
 
     parts.append(_render_skills(doc.skills))
     parts.append("\n\\end{document}\n")

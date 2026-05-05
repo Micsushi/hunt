@@ -533,6 +533,38 @@ def match_keywords_to_bullets(
     }
 
 
+def score_bullets_for_drop(bullets: list[str], jd_keywords: list[str]) -> list[float]:
+    """Score bullets for page-fit dropping using top-3 keyword similarity."""
+    if not bullets:
+        return []
+    if not jd_keywords:
+        return [0.0 for _ in bullets]
+
+    kw_vecs: list[list[float]] = []
+    for kw in jd_keywords:
+        try:
+            kw_vecs.append(_embed(kw))
+        except Exception:
+            kw_vecs.append([])
+    valid_kw_vecs = [vec for vec in kw_vecs if vec]
+    if not valid_kw_vecs:
+        return [0.0 for _ in bullets]
+
+    scores: list[float] = []
+    for bullet in bullets:
+        try:
+            bvec = _embed(bullet)
+        except Exception:
+            bvec = []
+        if not bvec:
+            scores.append(0.0)
+            continue
+        sims = sorted((_cosine_sim(bvec, kw_vec) for kw_vec in valid_kw_vecs), reverse=True)
+        top = sims[:3]
+        scores.append(round(sum(top) / len(top), 4) if top else 0.0)
+    return scores
+
+
 # ---------------------------------------------------------------------------
 # Status
 # ---------------------------------------------------------------------------

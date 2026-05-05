@@ -47,6 +47,30 @@ LEVEL_PATTERNS = {
 WEAK_DESCRIPTION_THRESHOLD = 120
 
 
+def _detect_level(title: str, description: str) -> tuple[str, list[str]]:
+    title_text = (title or "").lower()
+    desc_text = (description or "").lower()
+
+    title_order = ("intern", "senior", "staff", "principal", "manager", "director", "junior", "mid")
+    for level in title_order:
+        if any(pattern in title_text for pattern in LEVEL_PATTERNS[level]):
+            return level, [f"level={level}:title"]
+
+    if re.search(r"\b(?:few|2|3|4)\+?\s+years?\s+of\s+professional", desc_text):
+        return "mid", ["level=mid:years_professional"]
+    if "moderate guidance" in desc_text or "own delivery" in desc_text:
+        return "mid", ["level=mid:ownership_signal"]
+    if re.search(r"\b(?:internship|co-op|coop)\b", desc_text):
+        return "intern", ["level=intern:description"]
+
+    for level, patterns in LEVEL_PATTERNS.items():
+        if level == "intern":
+            continue
+        if any(pattern in desc_text for pattern in patterns):
+            return level, [f"level={level}:description"]
+    return "unknown", []
+
+
 def classify_job(*, title: str, description: str | None) -> dict:
     text = f"{title}\n{description or ''}".lower()
     role_scores: dict[str, int] = {}
@@ -62,12 +86,8 @@ def classify_job(*, title: str, description: str | None) -> dict:
     if role_scores.get(best_family, 0) == 0:
         best_family = "general"
 
-    job_level = "unknown"
-    for level, patterns in LEVEL_PATTERNS.items():
-        if any(pattern in text for pattern in patterns):
-            job_level = level
-            reasons.append(f"level={level}")
-            break
+    job_level, level_reasons = _detect_level(title, description or "")
+    reasons.extend(level_reasons)
 
     description_text = (description or "").strip()
     weak_description = len(description_text) < WEAK_DESCRIPTION_THRESHOLD

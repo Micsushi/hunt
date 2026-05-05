@@ -22,7 +22,13 @@ const _nulls: TailorResult = {
 }
 
 // Exhaustiveness: adding an unexpected field must be a type error
-// @ts-expect-error extra field not allowed
-const _extra: TailorResult = { noSummary: null, withSummary: null, log: null, llmError: null, other: 'x' }
+const _extra: TailorResult = {
+  noSummary: null,
+  withSummary: null,
+  log: null,
+  llmError: null,
+  // @ts-expect-error extra field not allowed
+  other: 'x',
+}
 
 export { _full, _nulls, _extra }
