@@ -23,6 +23,7 @@ TITLE_TERMS = (
     "architect",
     "specialist",
     "consultant",
+    "intern",
 )
 
 
@@ -38,6 +39,18 @@ def normalize_title_candidate(text: str) -> str:
         return ""
     if candidate.lower() in SECTION_HEADINGS:
         return ""
+
+    metadata_prefixes = (
+        "function:",
+        "location:",
+        "employment status:",
+        "pay range:",
+        "req id:",
+        "job segment:",
+    )
+    if any(candidate.lower().startswith(p) for p in metadata_prefixes):
+        return ""
+
     if len(candidate.split()) > 8:
         return ""
     if not any(term in candidate.lower() for term in TITLE_TERMS):

@@ -8,6 +8,7 @@ from typing import Any
 
 @dataclass
 class _LogEntry:
+    event_id: int
     ts: float
     kind: str  # "step" | "llm"
     name: str
@@ -18,10 +19,19 @@ class PipelineLogger:
     def __init__(self) -> None:
         self._entries: list[_LogEntry] = []
         self._start = time.perf_counter()
+        self._event_id = 0
+
+    def _next_event_id(self) -> int:
+        self._event_id += 1
+        return self._event_id
 
     def step(self, name: str, **detail: Any) -> None:
+        event_id = self._next_event_id()
         ts = time.perf_counter() - self._start
-        self._entries.append(_LogEntry(ts=ts, kind="step", name=name, detail=detail))
+        detail = {"event_id": event_id, **detail}
+        self._entries.append(
+            _LogEntry(event_id=event_id, ts=ts, kind="step", name=name, detail=detail)
+        )
         parts = " | ".join(f"{k}={v}" for k, v in detail.items() if v is not None)
         print(f"[pipeline +{ts:.2f}s] {name}  {parts}", flush=True)
 
@@ -34,9 +44,11 @@ class PipelineLogger:
         success: bool = True,
         error: str | None = None,
     ) -> None:
+        event_id = self._next_event_id()
         ts = time.perf_counter() - self._start
         self._entries.append(
             _LogEntry(
+                event_id=event_id,
                 ts=ts,
                 kind="llm",
                 name=name,
@@ -50,7 +62,10 @@ class PipelineLogger:
             )
         )
         status = "ok" if success else f"FAILED error={error}"
-        print(f"[pipeline +{ts:.2f}s] llm:{name}  {status}  {duration_ms}ms", flush=True)
+        print(
+            f"[pipeline +{ts:.2f}s] llm:{name}  event_id={event_id} | {status}  {duration_ms}ms",
+            flush=True,
+        )
         if not success and error:
             print(f"[pipeline] llm error detail: {error}", file=sys.stderr, flush=True)
 
@@ -67,6 +82,7 @@ class PipelineLogger:
                 dur = e.detail["duration_ms"]
                 ok = e.detail["success"]
                 lines.append(f"[LLM   {ts}] {e.name}  success={ok}  {dur}ms")
+                lines.append(f"  event_id: {e.event_id}")
                 lines.append("  --- PROMPT ---")
                 for ln in str(e.detail["prompt"]).splitlines():
                     lines.append(f"  {ln}")

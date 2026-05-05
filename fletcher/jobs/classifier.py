@@ -60,6 +60,10 @@ def _detect_level(title: str, description: str) -> tuple[str, list[str]]:
         return "mid", ["level=mid:years_professional"]
     if "moderate guidance" in desc_text or "own delivery" in desc_text:
         return "mid", ["level=mid:ownership_signal"]
+    if "currently pursuing" in desc_text:
+        return "intern", ["level=intern:currently_pursuing"]
+    if "hourly" in desc_text and "intern" in desc_text:
+        return "intern", ["level=intern:hourly_intern"]
     if re.search(r"\b(?:internship|co-op|coop)\b", desc_text):
         return "intern", ["level=intern:description"]
 

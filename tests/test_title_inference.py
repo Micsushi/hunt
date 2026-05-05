@@ -24,3 +24,18 @@ def test_prefers_explicit_title_line():
 
 def test_empty_when_no_signal():
     assert infer_title_from_description("About Us\nReady to Join Us?") == ""
+
+
+def test_rejects_metadata_lines():
+    assert normalize_title_candidate("Function: Engineering") == ""
+    assert normalize_title_candidate("Location: **Hamilton**") == ""
+    assert normalize_title_candidate("Employment Status: Hourly Full-Time") == ""
+    assert normalize_title_candidate("Req ID: **27635**") == ""
+
+
+def test_infers_intern_title_from_first_line():
+    jd = """Software Development Intern
+Lincoln Electric is the world leader in the engineering...
+Location: Hamilton
+Function: Engineering"""
+    assert infer_title_from_description(jd) == "Software Development Intern"

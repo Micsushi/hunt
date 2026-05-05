@@ -29,6 +29,19 @@ AMBIGUOUS_VALIDATION_KEYWORDS = DOMAIN_KEYWORDS | {
     "cloud infrastructure",
 }
 
+RELATED_VISIBLE_PHRASES = {
+    "react": ("react", "react/next.js", "next.js/react"),
+}
+
+SUMMARY_BANNED_TONE = (
+    "motivated",
+    "eager",
+    "passionate",
+    "aspiring",
+    "contribute immediately",
+    "diverse programming skills",
+)
+
 
 def _llm_log(call_name: str, prompt: str, response: str, duration_ms: int | None) -> None:
     if not _LOG_LLM:
@@ -84,6 +97,69 @@ def keyword_requires_direct_support(keyword: str) -> bool:
 def _needs_ambiguous_validation(keywords: list[str]) -> bool:
     return any(
         (keyword or "").strip().lower() in AMBIGUOUS_VALIDATION_KEYWORDS for keyword in keywords
+    )
+
+
+def _derive_keyword_outcome(
+    requested_keywords: list[str],
+    supported_keywords: list[str],
+    rejected_keywords: list[str],
+) -> tuple[list[str], list[str]]:
+    rejected_l = {kw.lower() for kw in _dedupe_case(rejected_keywords)}
+    used = [kw for kw in _dedupe_case(supported_keywords) if kw.lower() not in rejected_l]
+    used_l = {kw.lower() for kw in used}
+    skipped = [
+        kw for kw in requested_keywords if kw.lower() not in used_l or kw.lower() in rejected_l
+    ]
+    return used, _dedupe_case(skipped)
+
+
+def _filter_requested_keywords(values: list[str], requested_keywords: list[str]) -> list[str]:
+    requested_by_lower = {kw.lower(): kw for kw in requested_keywords}
+    filtered: list[str] = []
+    for value in values:
+        key = (value or "").strip().lower()
+        if key in requested_by_lower:
+            filtered.append(requested_by_lower[key])
+    return _dedupe_case(filtered)
+
+
+def validate_claimed_keywords_present(
+    *,
+    rewritten: str,
+    requested_keywords: list[str],
+    claimed_used: list[str],
+) -> dict[str, Any]:
+    """Reject model metadata when claimed used keywords do not visibly appear.
+
+    This is intentionally mechanical: if the model says it used React, the text
+    must contain React or a pre-approved visible related-tech phrase like
+    React/Next.js. If metadata is inconsistent, the caller should keep the
+    original bullet and treat all requested keywords as unused.
+    """
+    rewritten_l = (rewritten or "").lower()
+    requested_l = {kw.lower() for kw in requested_keywords}
+    missing: list[str] = []
+    for keyword in claimed_used:
+        key = (keyword or "").strip().lower()
+        if not key:
+            continue
+        if key not in requested_l:
+            missing.append(keyword)
+            continue
+        allowed = RELATED_VISIBLE_PHRASES.get(key, (key,))
+        if not any(phrase in rewritten_l for phrase in allowed):
+            missing.append(keyword)
+    return {"accepted": not missing, "missing": _dedupe_case(missing)}
+
+
+def repair_rewrite_redundancy(text: str) -> str:
+    """Fix small deterministic awkward phrases before validation."""
+    return re.sub(
+        r"\bKotlin microservices and backend services\b",
+        "backend Kotlin microservices",
+        text or "",
+        flags=re.IGNORECASE,
     )
 
 
@@ -146,8 +222,19 @@ def validate_rewrite_with_ollama(
         f"Original bullet: {original}\n"
         f"Rewritten bullet: {rewritten}\n"
         f"Requested keywords: {', '.join(requested_keywords)}\n"
-        "Reject if the rewrite adds unsupported technology usage, unsupported domain "
-        "experience, or vague claims not implied by the original.\n"
+        "Judge each requested keyword independently. A rewritten bullet may be partially "
+        "supported: put supported keywords in keywords_supported and unsupported keywords "
+        "in keywords_rejected.\n"
+        "Accept reasonable generalizations only when the original supports them. Examples: "
+        "Vercel or Supabase can support cloud infrastructure phrasing; Next.js can support "
+        "React/Next.js phrasing; brainwave scoring or model accuracy can support machine "
+        "learning phrasing. Infrastructure as Code requires direct evidence such as "
+        "Terraform, CDK, Pulumi, CloudFormation, IaC, or infrastructure-as-code. "
+        "Security domain terms such as real-time threat intelligence, XDR, MDR, ITDR, "
+        "and SIEM require direct domain evidence.\n"
+        "Reject unsupported technology usage, unsupported domain experience, or vague "
+        "claims not implied by the original. Do not reject a whole rewrite only because "
+        "one keyword is unsupported if another keyword is clearly supported.\n"
         'Return only: {"accepted": boolean, "keywords_supported": [...], '
         '"keywords_rejected": [...], "reason": "..."}'
     )
@@ -159,12 +246,50 @@ def validate_rewrite_with_ollama(
     parsed = _extract_json_object(raw)
     supported = parsed.get("keywords_supported")
     rejected = parsed.get("keywords_rejected")
+    supported_list = _filter_requested_keywords(
+        _dedupe_case(supported if isinstance(supported, list) else []),
+        requested_keywords,
+    )
+    rejected_list = _filter_requested_keywords(
+        _dedupe_case(rejected if isinstance(rejected, list) else []),
+        requested_keywords,
+    )
+    if not bool(parsed.get("accepted")) and not rejected_list:
+        supported_l = {kw.lower() for kw in supported_list}
+        rejected_list = [kw for kw in requested_keywords if kw.lower() not in supported_l]
+        if not rejected_list:
+            rejected_list = list(requested_keywords)
     return {
         "accepted": bool(parsed.get("accepted")),
-        "keywords_supported": _dedupe_case(supported if isinstance(supported, list) else []),
-        "keywords_rejected": _dedupe_case(rejected if isinstance(rejected, list) else []),
+        "keywords_supported": supported_list,
+        "keywords_rejected": rejected_list,
         "reason": str(parsed.get("reason") or ""),
     }
+
+
+def validate_summary_grounding(
+    summary: str,
+    candidate_context: str,
+    keywords: list[str],
+) -> dict[str, Any]:
+    """Reject summaries with junior filler or unsupported direct domain claims."""
+    summary_l = (summary or "").lower()
+    context_l = (candidate_context or "").lower()
+    reasons: list[str] = []
+    for phrase in SUMMARY_BANNED_TONE:
+        if phrase in summary_l:
+            reasons.append(f"banned_tone:{phrase}")
+    keywords_to_check = _dedupe_case(list(keywords) + list(DOMAIN_KEYWORDS))
+    for keyword in keywords_to_check:
+        key = (keyword or "").strip().lower()
+        if (
+            key
+            and keyword_requires_direct_support(keyword)
+            and key in summary_l
+            and key not in context_l
+        ):
+            reasons.append(f"unsupported_summary_domain:{keyword}")
+    return {"accepted": not reasons, "reasons": reasons}
 
 
 def _ollama_chat(user_prompt: str) -> str:
@@ -320,6 +445,11 @@ def generate_summary(
         f"Write a 2-3 sentence professional summary for this candidate targeting this job. "
         f"Aim for 4-5 printed resume lines. "
         f"No invented facts. Use only the background provided. "
+        f"Use the keywords only when they fit the candidate background naturally. "
+        f"Do not try to include every keyword. Prioritize accurate, supported technologies and role/process terms. "
+        f"Use a grounded mid-level software engineering tone. "
+        f"Do not use junior-sounding filler such as motivated, eager, passionate, aspiring, contribute immediately, or diverse programming skills. "
+        f"Prefer concrete experience over enthusiasm. "
         f"Do not claim expertise in technologies not present in the candidate background. "
         f"Do not imply direct domain experience unless the candidate background supports it. "
         f"If an existing resume summary was provided, use it as context but rewrite it for this job rather than copying it verbatim.\n"
@@ -421,14 +551,41 @@ def rewrite_bullet_targeted(
         if logger:
             logger.llm_call("rewrite_bullet", prompt, raw, result["duration_ms"], success=True)
         parsed = _extract_json_object(raw)
-        text = (parsed.get("bullet") or "").strip()
+        text = repair_rewrite_redundancy((parsed.get("bullet") or "").strip())
         if text:
+            model_used = parsed.get("keywords_used")
+            model_skipped = parsed.get("keywords_skipped")
+            claimed_used = (
+                [str(k).strip() for k in model_used if str(k).strip()]
+                if isinstance(model_used, list)
+                else []
+            )
+            result["model_keywords_used"] = claimed_used
+            result["model_keywords_skipped"] = (
+                [str(k).strip() for k in model_skipped if str(k).strip()]
+                if isinstance(model_skipped, list)
+                else []
+            )
+            presence = validate_claimed_keywords_present(
+                rewritten=text,
+                requested_keywords=keywords,
+                claimed_used=claimed_used,
+            )
+            result["claimed_keyword_presence"] = presence
+            if not presence["accepted"]:
+                result["bullet"] = bullet
+                result["success"] = False
+                result["error"] = "claimed_keyword_missing"
+                result["keywords_used"] = []
+                result["keywords_skipped"] = list(keywords)
+                return result
+
             validation = validate_rewrite_grounding(
                 original=bullet,
                 rewritten=text,
                 requested_keywords=keywords,
             )
-            if validation["accepted"] and _needs_ambiguous_validation(keywords):
+            if validation["accepted"]:
                 try:
                     llm_validation = validate_rewrite_with_ollama(
                         original=bullet,
@@ -456,24 +613,35 @@ def rewrite_bullet_targeted(
                     }
             result["validation"] = validation
             if not validation["accepted"]:
+                used, skipped = _derive_keyword_outcome(
+                    keywords,
+                    validation.get("keywords_supported") or [],
+                    validation.get("keywords_rejected") or [],
+                )
                 result["bullet"] = bullet
                 result["success"] = False
                 result["error"] = "rewrite_validation_failed"
-                result["keywords_used"] = validation.get("keywords_supported") or []
-                result["keywords_skipped"] = validation.get("keywords_rejected") or list(keywords)
+                result["keywords_used"] = used
+                result["keywords_skipped"] = skipped or list(keywords)
+                return result
+
+            used, skipped = _derive_keyword_outcome(
+                keywords,
+                validation.get("keywords_supported") or [],
+                validation.get("keywords_rejected") or [],
+            )
+            if not used:
+                result["bullet"] = bullet
+                result["success"] = False
+                result["error"] = "rewrite_validation_failed"
+                result["keywords_used"] = []
+                result["keywords_skipped"] = skipped or list(keywords)
                 return result
 
             result["bullet"] = text
             result["success"] = True
-            used = parsed.get("keywords_used")
-            skipped = parsed.get("keywords_skipped")
-            if isinstance(used, list):
-                result["keywords_used"] = [str(k).strip() for k in used if str(k).strip()]
-            if isinstance(skipped, list):
-                result["keywords_skipped"] = [str(k).strip() for k in skipped if str(k).strip()]
-            else:
-                used_l = {k.lower() for k in result["keywords_used"]}
-                result["keywords_skipped"] = [k for k in keywords if k.lower() not in used_l]
+            result["keywords_used"] = used
+            result["keywords_skipped"] = skipped
     except Exception as exc:
         result["error"] = str(exc) or exc.__class__.__name__
         result["duration_ms"] = (

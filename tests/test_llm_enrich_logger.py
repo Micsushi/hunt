@@ -30,6 +30,15 @@ def test_rewrite_no_logger_when_backend_not_ollama(monkeypatch):
 
 def test_rewrite_logger_called_on_success(monkeypatch):
     monkeypatch.setattr("fletcher.llm.llm_enrich.config.DEFAULT_MODEL_BACKEND", "ollama")
+    monkeypatch.setattr(
+        "fletcher.llm.llm_enrich.validate_rewrite_with_ollama",
+        lambda **_kwargs: {
+            "accepted": True,
+            "keywords_supported": ["Python"],
+            "keywords_rejected": [],
+            "reason": "",
+        },
+    )
     mock_response = (
         '{"bullet": "Rewrote with Python.", "keywords_used": ["Python"], "keywords_skipped": []}'
     )
@@ -47,6 +56,15 @@ def test_rewrite_logger_called_on_success(monkeypatch):
 
 def test_rewrite_preserve_keywords_in_prompt(monkeypatch):
     monkeypatch.setattr("fletcher.llm.llm_enrich.config.DEFAULT_MODEL_BACKEND", "ollama")
+    monkeypatch.setattr(
+        "fletcher.llm.llm_enrich.validate_rewrite_with_ollama",
+        lambda **_kwargs: {
+            "accepted": False,
+            "keywords_supported": [],
+            "keywords_rejected": ["MongoDB"],
+            "reason": "",
+        },
+    )
     captured_prompts: list[str] = []
 
     def fake_chat(prompt: str) -> str:
@@ -62,6 +80,15 @@ def test_rewrite_preserve_keywords_in_prompt(monkeypatch):
 
 def test_rewrite_no_preserve_line_when_empty(monkeypatch):
     monkeypatch.setattr("fletcher.llm.llm_enrich.config.DEFAULT_MODEL_BACKEND", "ollama")
+    monkeypatch.setattr(
+        "fletcher.llm.llm_enrich.validate_rewrite_with_ollama",
+        lambda **_kwargs: {
+            "accepted": False,
+            "keywords_supported": [],
+            "keywords_rejected": ["MongoDB"],
+            "reason": "",
+        },
+    )
     captured: list[str] = []
 
     def fake_chat(prompt: str) -> str:
@@ -133,6 +160,32 @@ def test_summary_prompt_includes_existing_summary_and_line_feedback(monkeypatch)
     assert result["success"] is True
     assert "Existing resume summary for context: Existing summary." in captured[0]
     assert "Length adjustment needed: Make it longer." in captured[0]
+
+
+def test_summary_prompt_bans_junior_tone(monkeypatch):
+    monkeypatch.setattr("fletcher.llm.llm_enrich.config.DEFAULT_MODEL_BACKEND", "ollama")
+    captured: list[str] = []
+
+    def fake_chat(prompt: str) -> str:
+        captured.append(prompt)
+        return '{"summary": "Software developer with backend experience."}'
+
+    with patch("fletcher.llm.llm_enrich._ollama_chat", fake_chat):
+        generate_summary("context", "Software Engineer", ["backend services"])
+
+    assert "Do not use junior-sounding filler" in captured[0]
+    assert "motivated" in captured[0].lower()
+    assert "eager" in captured[0].lower()
+
+
+def test_pipeline_logger_event_ids_are_monotonic():
+    logger = PipelineLogger()
+    logger.step("a")
+    logger.step("b")
+    text = logger.get_log_text()
+
+    assert "event_id: 1" in text
+    assert "event_id: 2" in text
 
 
 def test_summary_logger_on_failure(monkeypatch):

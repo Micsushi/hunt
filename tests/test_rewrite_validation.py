@@ -3,7 +3,10 @@ from __future__ import annotations
 from fletcher.llm.llm_enrich import (
     categorize_keyword,
     keyword_requires_direct_support,
+    repair_rewrite_redundancy,
+    validate_claimed_keywords_present,
     validate_rewrite_grounding,
+    validate_summary_grounding,
 )
 
 
@@ -151,3 +154,163 @@ def test_ambiguous_rewrite_fails_closed_when_validator_errors(monkeypatch):
     assert result["success"] is False
     assert result["error"] == "rewrite_validation_failed"
     assert result["keywords_skipped"] == ["Infrastructure as Code"]
+
+
+def test_claimed_keyword_must_appear_in_rewrite():
+    result = validate_claimed_keywords_present(
+        rewritten="Enhanced user engagement with a Next.js UI.",
+        requested_keywords=["React"],
+        claimed_used=["React"],
+    )
+
+    assert result["accepted"] is False
+    assert result["missing"] == ["React"]
+
+
+def test_react_nextjs_phrase_counts_as_visible_react():
+    result = validate_claimed_keywords_present(
+        rewritten="Enhanced user engagement with a React/Next.js UI.",
+        requested_keywords=["React"],
+        claimed_used=["React"],
+    )
+
+    assert result["accepted"] is True
+
+
+def test_model_claimed_keyword_not_counted_if_not_in_validated_rewrite(monkeypatch):
+    import fletcher.llm.llm_enrich as mod
+
+    monkeypatch.setattr(mod.config, "DEFAULT_MODEL_BACKEND", "ollama")
+    monkeypatch.setattr(
+        mod,
+        "_ollama_chat",
+        lambda _prompt: (
+            '{"bullet": "Enhanced user engagement by building a responsive UI using Next.js.", '
+            '"keywords_used": ["React"], "keywords_skipped": []}'
+        ),
+    )
+
+    result = mod.rewrite_bullet_targeted(
+        "Enhanced user engagement by building a responsive UI using Next.js.",
+        ["React"],
+    )
+
+    assert result["success"] is False
+    assert result["error"] == "claimed_keyword_missing"
+    assert result["keywords_used"] == []
+    assert result["keywords_skipped"] == ["React"]
+
+
+def test_mixed_validation_failure_preserves_safe_keyword_for_retry(monkeypatch):
+    import fletcher.llm.llm_enrich as mod
+
+    monkeypatch.setattr(mod.config, "DEFAULT_MODEL_BACKEND", "ollama")
+    responses = iter(
+        [
+            (
+                '{"bullet": "Enhanced UI using React/Next.js for an AI-driven platform.", '
+                '"keywords_used": ["React", "AI-driven platform"], "keywords_skipped": []}'
+            ),
+            (
+                '{"accepted": false, "keywords_supported": ["React"], '
+                '"keywords_rejected": ["AI-driven platform"], "reason": "AI claim unsupported."}'
+            ),
+        ]
+    )
+    monkeypatch.setattr(mod, "_ollama_chat", lambda _prompt: next(responses))
+
+    result = mod.rewrite_bullet_targeted(
+        "Enhanced UI using Next.js based on beta tester feedback.",
+        ["React", "AI-driven platform"],
+    )
+
+    assert result["success"] is False
+    assert result["keywords_used"] == ["React"]
+    assert result["keywords_skipped"] == ["AI-driven platform"]
+
+
+def test_validator_ignores_supported_keywords_that_were_not_requested(monkeypatch):
+    import fletcher.llm.llm_enrich as mod
+
+    monkeypatch.setattr(mod.config, "DEFAULT_MODEL_BACKEND", "ollama")
+    monkeypatch.setattr(
+        mod,
+        "_ollama_chat",
+        lambda _prompt: (
+            '{"accepted": false, "keywords_supported": ["Bitbucket pipelines", "ECR"], '
+            '"keywords_rejected": ["Azure DevOps"], "reason": "unsupported"}'
+        ),
+    )
+
+    result = mod.validate_rewrite_with_ollama(
+        original="Automated CI/CD via Bitbucket pipelines and ECR.",
+        rewritten="Automated CI/CD via Azure DevOps, Bitbucket pipelines, and ECR.",
+        requested_keywords=["Azure DevOps"],
+    )
+
+    assert result["accepted"] is False
+    assert result["keywords_supported"] == []
+    assert result["keywords_rejected"] == ["Azure DevOps"]
+
+
+def test_false_validator_acceptance_rejects_requested_keyword(monkeypatch):
+    import fletcher.llm.llm_enrich as mod
+
+    monkeypatch.setattr(mod.config, "DEFAULT_MODEL_BACKEND", "ollama")
+    monkeypatch.setattr(
+        mod,
+        "_ollama_chat",
+        lambda _prompt: (
+            '{"accepted": false, "keywords_supported": ["Computer Engineering"], '
+            '"keywords_rejected": [], "reason": "unsupported"}'
+        ),
+    )
+
+    result = mod.validate_rewrite_with_ollama(
+        original="Taught Computer Science courses.",
+        rewritten="Taught Computer Science and Computer Engineering courses.",
+        requested_keywords=["Computer Engineering"],
+    )
+
+    assert result["accepted"] is False
+    assert result["keywords_supported"] == ["Computer Engineering"]
+    assert result["keywords_rejected"] == ["Computer Engineering"]
+
+
+def test_summary_rejects_unsupported_domain_claim():
+    result = validate_summary_grounding(
+        "Software Engineer with XDR and real-time threat intelligence experience.",
+        "Experience: Software Developer. Skills: Python, React, Terraform",
+        ["XDR", "real-time threat intelligence"],
+    )
+
+    assert result["accepted"] is False
+
+
+def test_summary_rejects_unprompted_unsupported_domain_claim():
+    result = validate_summary_grounding(
+        "Software Engineer with SIEM experience.",
+        "Experience: Software Developer. Skills: Python, React, Terraform",
+        [],
+    )
+
+    assert result["accepted"] is False
+
+
+def test_summary_rejects_junior_tone():
+    result = validate_summary_grounding(
+        "Motivated developer eager to contribute immediately.",
+        "Experience: Software Developer.",
+        [],
+    )
+
+    assert result["accepted"] is False
+
+
+def test_auto_repairs_microservices_backend_services_redundancy():
+    repaired = repair_rewrite_redundancy(
+        "Enhanced targeting by developing Kotlin microservices and backend services that integrated APIs."
+    )
+
+    assert "microservices and backend services" not in repaired
+    assert "backend Kotlin microservices" in repaired

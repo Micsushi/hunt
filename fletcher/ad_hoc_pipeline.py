@@ -15,7 +15,12 @@ from .jobs.classifier import classify_job, slugify
 from .jobs.keyword_extractor import extract_keywords
 from .jobs.title_inference import infer_title_from_description, normalize_title_candidate
 from .keyword_check import partition_keywords
-from .llm.llm_enrich import enrich_with_ollama_if_enabled, generate_summary, rewrite_bullet_targeted
+from .llm.llm_enrich import (
+    enrich_with_ollama_if_enabled,
+    generate_summary,
+    rewrite_bullet_targeted,
+    validate_summary_grounding,
+)
 from .llm.rag import match_keywords_to_bullets, score_bullets_for_drop
 from .pipeline import _compile_with_fit_retry
 from .pipeline_logger import PipelineLogger
@@ -25,6 +30,47 @@ from .resume.renderer import render_resume_tex
 from .storage import build_attempt_dir, ensure_dir, write_json, write_text
 
 BucketId = tuple[str, str]
+
+SUMMARY_BLOCKED_DOMAIN_KEYWORDS = {
+    "real-time threat intelligence",
+    "threat intelligence",
+    "xdr",
+    "mdr",
+    "itdr",
+    "siem",
+    "ai-driven platform",
+}
+
+SUMMARY_GENERIC_KEYWORDS = {
+    "software engineer",
+    "software development intern",
+    "unit",
+    "unit testing",
+    "integration",
+    "end-to-end",
+    "backend services",
+    "api",
+    "git",
+    "source control",
+    "source repository processes",
+    "code reviews",
+    "scrum",
+    "full life cycle development",
+}
+
+NON_REWRITE_KEYWORDS = {
+    "computer science",
+    "computer engineering",
+    "mathematics",
+}
+
+NON_REWRITE_ROLE_WORDS = {
+    "intern",
+    "engineer",
+    "developer",
+    "manager",
+    "analyst",
+}
 
 
 def _text_hash(text: str) -> str:
@@ -132,6 +178,76 @@ def _dedupe(values: list[str]) -> list[str]:
             seen.add(key)
             result.append(value)
     return result
+
+
+def _validation_reasons(result: dict[str, Any]) -> list[str]:
+    validation = result.get("validation") or {}
+    reasons = list(validation.get("reasons") or [])
+    llm_validation = validation.get("llm_validation") or {}
+    for keyword in llm_validation.get("keywords_rejected") or []:
+        reasons.append(f"llm_rejected_keyword:{keyword}")
+    return reasons
+
+
+def _summary_keyword_supported(
+    keyword: str,
+    candidate_context: str,
+    validation_reasons: list[str],
+) -> bool:
+    key = (keyword or "").strip().lower()
+    context_l = (candidate_context or "").lower()
+    if not key:
+        return False
+    for reason in validation_reasons:
+        prefix, _sep, value = str(reason).partition(":")
+        if (
+            prefix
+            in {
+                "unsupported_domain_keyword",
+                "unsupported_summary_domain",
+                "llm_rejected_keyword",
+            }
+            and value.lower() == key
+        ):
+            return False
+    if key in SUMMARY_BLOCKED_DOMAIN_KEYWORDS:
+        return key in context_l
+    if key in SUMMARY_GENERIC_KEYWORDS:
+        return True
+    if key == "cloud infrastructure":
+        return any(
+            term in context_l
+            for term in ("aws", "azure", "gcp", "vercel", "supabase", "kubernetes", "terraform")
+        )
+    return key in context_l
+
+
+def _filter_summary_keywords(
+    base_keywords: list[str],
+    skipped_keywords: list[str],
+    candidate_context: str,
+    validation_reasons: list[str],
+) -> tuple[list[str], list[str]]:
+    included: list[str] = []
+    excluded: list[str] = []
+    for keyword in list(base_keywords) + list(skipped_keywords):
+        if _summary_keyword_supported(keyword, candidate_context, validation_reasons):
+            included.append(keyword)
+        else:
+            excluded.append(keyword)
+    return _dedupe(included)[:8], _dedupe(excluded)
+
+
+def _keyword_rewrite_eligible(keyword: str) -> bool:
+    key = (keyword or "").strip().lower()
+    if not key:
+        return False
+    if key in NON_REWRITE_KEYWORDS:
+        return False
+    words = set(key.replace("-", " ").split())
+    if "software" in words and words & NON_REWRITE_ROLE_WORDS:
+        return False
+    return True
 
 
 def _compile_doc(attempt_dir: Path, doc, stem: str) -> tuple[dict, str]:
@@ -360,11 +476,22 @@ def _run_iteration(
 
     skipped_candidates: list[str] = []
     keywords_used: list[str] = []
+    validation_reasons: list[str] = []
     rewrite_count = 0
     rewrite_ok = 0
     if kw_match.get("bullet_matches"):
         by_bullet: dict[int, list[str]] = defaultdict(list)
         for match in kw_match["bullet_matches"]:
+            keyword = match["keyword"]
+            if not _keyword_rewrite_eligible(keyword):
+                kw_match.setdefault("summary_keywords", []).append(keyword)
+                logger.step(
+                    "rewrite_keyword_skipped",
+                    keyword=keyword,
+                    reason="not_rewrite_actionable",
+                    bullet_idx=match.get("bullet_idx"),
+                )
+                continue
             by_bullet[match["bullet_idx"]].append(match["keyword"])
 
         for bullet_idx, kws_to_add in sorted(by_bullet.items()):
@@ -386,6 +513,47 @@ def _run_iteration(
                 logger=logger,
             )
             rewrite_count += 1
+            validation_reasons.extend(_validation_reasons(result))
+
+            first_skipped = list(result.get("keywords_skipped") or [])
+            retry_keywords = list(result.get("keywords_used") or [])
+            retry_is_proper_subset = (
+                len(kws_to_add) > 1
+                and bool(retry_keywords)
+                and {kw.lower() for kw in retry_keywords} < {kw.lower() for kw in kws_to_add}
+            )
+            if not result["success"] and retry_is_proper_subset:
+                retry_result = rewrite_bullet_targeted(
+                    original_text,
+                    retry_keywords,
+                    keywords_to_preserve=kws_to_preserve,
+                    logger=logger,
+                )
+                validation_reasons.extend(_validation_reasons(retry_result))
+                logger.step(
+                    "bullet_rewrite_retry_done",
+                    bullet_id=source["bullet_id"],
+                    retry_keywords=retry_keywords,
+                    success=retry_result["success"],
+                    duration_ms=retry_result.get("duration_ms"),
+                    error=retry_result.get("error"),
+                    validation=retry_result.get("validation"),
+                    keywords_used=retry_result.get("keywords_used"),
+                    keywords_skipped=retry_result.get("keywords_skipped"),
+                    rewritten=retry_result["bullet"][:120] if retry_result["success"] else None,
+                )
+                if retry_result["success"]:
+                    result = retry_result
+                    skipped_candidates.extend(first_skipped)
+                else:
+                    result = {
+                        **retry_result,
+                        "keywords_used": [],
+                        "keywords_skipped": _dedupe(
+                            first_skipped + list(retry_result.get("keywords_skipped") or [])
+                        ),
+                    }
+
             keywords_used.extend(result.get("keywords_used") or [])
             skipped_candidates.extend(result.get("keywords_skipped") or [])
             logger.step(
@@ -417,10 +585,22 @@ def _run_iteration(
     logger.step("rewrite_validation_summary", rejected_keywords=_dedupe(skipped_candidates))
 
     skipped_to_summary = [kw for kw in _dedupe(skipped_candidates) if not _keyword_present(kw, doc)]
-    mid_keywords = _dedupe(list(kw_match.get("summary_keywords", [])) + skipped_to_summary)
-    logger.step("keywords_skipped_to_summary", keywords=skipped_to_summary)
-
     candidate_context = _build_candidate_context(doc)
+    base_summary_keywords = _dedupe(list(kw_match.get("summary_keywords", [])))
+    mid_keywords, excluded_summary_keywords = _filter_summary_keywords(
+        base_summary_keywords,
+        skipped_to_summary,
+        candidate_context,
+        validation_reasons,
+    )
+    logger.step("keywords_skipped_to_summary", keywords=skipped_to_summary)
+    logger.step(
+        "summary_keyword_filter",
+        base_keywords=base_summary_keywords,
+        included=mid_keywords,
+        excluded=excluded_summary_keywords,
+    )
+
     summary_meta: dict = {}
     if candidate_context:
         logger.step("summary_start", keyword_count=len(mid_keywords), keywords=mid_keywords)
@@ -438,6 +618,56 @@ def _run_iteration(
             error=summary_meta.get("error"),
             summary=summary_meta.get("summary", "")[:200] if summary_meta.get("success") else None,
         )
+        if summary_meta.get("summary"):
+            summary_validation = validate_summary_grounding(
+                summary_meta["summary"],
+                candidate_context,
+                mid_keywords,
+            )
+            logger.step(
+                "summary_validation",
+                accepted=summary_validation.get("accepted"),
+                reasons=summary_validation.get("reasons"),
+            )
+            if not summary_validation["accepted"]:
+                feedback = (
+                    "Revise to remove unsupported domain claims and junior-sounding filler. "
+                    "Use only supported role/process keywords that fit the candidate background."
+                )
+                logger.step(
+                    "summary_validation_retry_start",
+                    reasons=summary_validation.get("reasons"),
+                    feedback=feedback,
+                )
+                retry_meta = generate_summary(
+                    candidate_context,
+                    title or "Software Engineer",
+                    mid_keywords,
+                    existing_summary=existing_summary,
+                    line_feedback=feedback,
+                    logger=logger,
+                )
+                retry_validation = validate_summary_grounding(
+                    retry_meta.get("summary", ""),
+                    candidate_context,
+                    mid_keywords,
+                )
+                logger.step(
+                    "summary_validation_retry_done",
+                    success=retry_meta.get("success"),
+                    duration_ms=retry_meta.get("duration_ms"),
+                    error=retry_meta.get("error"),
+                    accepted=retry_validation.get("accepted"),
+                    reasons=retry_validation.get("reasons"),
+                )
+                if retry_meta.get("summary") and retry_validation["accepted"]:
+                    summary_meta = retry_meta
+                else:
+                    summary_meta = {
+                        "summary": "",
+                        "success": False,
+                        "error": "summary_validation_failed",
+                    }
     else:
         logger.step("summary_skipped", reason="no candidate context from parsed experience")
 
@@ -501,40 +731,59 @@ def _run_iteration(
                 error=retry_meta.get("error"),
             )
             if retry_meta.get("summary"):
-                doc_s.summary = retry_meta["summary"]
-                cr_s, tex_s, removed = _fit_to_page(
-                    attempt_dir,
-                    doc_s,
-                    "output_summary",
-                    *_collect_scores_for_doc(doc_s, active_bucket_ids, raw_keywords),
-                    logger,
+                retry_validation = validate_summary_grounding(
+                    retry_meta["summary"],
+                    candidate_context,
+                    mid_keywords,
                 )
-                if removed:
-                    return None, removed
-                line_status, line_count = _summary_line_count(cr_s.get("pdf_path"))
                 logger.step(
-                    "summary_line_check",
-                    status=line_status,
-                    line_count=line_count,
-                    target_min=4,
-                    target_max=5,
+                    "summary_validation",
+                    accepted=retry_validation.get("accepted"),
+                    reasons=retry_validation.get("reasons"),
+                    retry="line_count",
                 )
-                if _summary_line_check_accepts(line_status, line_count):
-                    pdf_summary = cr_s.get("pdf_path")
-                    tex_summary = tex_s
-                    summary_meta = retry_meta
-                elif _summary_line_check_retries(line_status, line_count):
-                    summary_error = "summary_line_count_out_of_range"
-                    logger.step(
-                        "summary_generation_error", error=summary_error, line_count=line_count
-                    )
-                else:
-                    summary_error = f"summary_line_check_{line_status}"
+                if not retry_validation["accepted"]:
+                    summary_error = "summary_validation_failed"
                     logger.step(
                         "summary_generation_error",
                         error=summary_error,
-                        line_check_status=line_status,
+                        reasons=retry_validation.get("reasons"),
                     )
+                else:
+                    doc_s.summary = retry_meta["summary"]
+                    cr_s, tex_s, removed = _fit_to_page(
+                        attempt_dir,
+                        doc_s,
+                        "output_summary",
+                        *_collect_scores_for_doc(doc_s, active_bucket_ids, raw_keywords),
+                        logger,
+                    )
+                    if removed:
+                        return None, removed
+                    line_status, line_count = _summary_line_count(cr_s.get("pdf_path"))
+                    logger.step(
+                        "summary_line_check",
+                        status=line_status,
+                        line_count=line_count,
+                        target_min=4,
+                        target_max=5,
+                    )
+                    if _summary_line_check_accepts(line_status, line_count):
+                        pdf_summary = cr_s.get("pdf_path")
+                        tex_summary = tex_s
+                        summary_meta = retry_meta
+                    elif _summary_line_check_retries(line_status, line_count):
+                        summary_error = "summary_line_count_out_of_range"
+                        logger.step(
+                            "summary_generation_error", error=summary_error, line_count=line_count
+                        )
+                    else:
+                        summary_error = f"summary_line_check_{line_status}"
+                        logger.step(
+                            "summary_generation_error",
+                            error=summary_error,
+                            line_check_status=line_status,
+                        )
             else:
                 summary_error = retry_meta.get("error") or "summary_line_count_out_of_range"
                 logger.step("summary_generation_error", error=summary_error)

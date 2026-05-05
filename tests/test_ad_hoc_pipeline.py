@@ -103,6 +103,11 @@ def base_mocks(monkeypatch):
     )
     monkeypatch.setattr(
         mod,
+        "validate_summary_grounding",
+        MagicMock(return_value={"accepted": True, "reasons": []}),
+    )
+    monkeypatch.setattr(
+        mod,
         "compile_tex",
         MagicMock(
             return_value={
@@ -315,7 +320,7 @@ def test_summary_pdf_skipped_when_line_check_fails(base_mocks):
     assert base_mocks.generate_summary.call_count == 1
 
 
-def test_rejected_rewrite_keyword_moves_to_summary(base_mocks):
+def test_rejected_unsupported_domain_keyword_stays_out_of_summary(base_mocks):
     from fletcher.ad_hoc_pipeline import run_ad_hoc_pipeline
 
     base_mocks.rewrite_bullet_targeted.return_value = {
@@ -340,7 +345,147 @@ def test_rejected_rewrite_keyword_moves_to_summary(base_mocks):
 
     run_ad_hoc_pipeline(title="Software Engineer", description="job")
 
-    assert "real-time threat intelligence" in base_mocks.generate_summary.call_args.args[2]
+    assert "real-time threat intelligence" not in base_mocks.generate_summary.call_args.args[2]
+
+
+def test_partial_rewrite_safe_keyword_gets_second_chance(base_mocks):
+    from fletcher.ad_hoc_pipeline import run_ad_hoc_pipeline
+
+    base_mocks.match_keywords_to_bullets.return_value = {
+        "bullet_matches": [
+            {"bullet_idx": 2, "keyword": "React", "score": 0.9},
+            {"bullet_idx": 2, "keyword": "AI-driven platform", "score": 0.91},
+        ],
+        "summary_keywords": [],
+        "ignored_keywords": [],
+        "scores": [],
+        "rag_used": True,
+    }
+    base_mocks.rewrite_bullet_targeted.side_effect = [
+        {
+            "bullet": "Created React dashboard.",
+            "success": False,
+            "error": "rewrite_validation_failed",
+            "duration_ms": 1,
+            "keywords_used": ["React"],
+            "keywords_skipped": ["AI-driven platform"],
+            "validation": {
+                "accepted": False,
+                "llm_validation": {"keywords_rejected": ["AI-driven platform"]},
+            },
+        },
+        {
+            "bullet": "Created a React/Next.js dashboard.",
+            "success": True,
+            "error": None,
+            "duration_ms": 1,
+            "keywords_used": ["React"],
+            "keywords_skipped": [],
+            "validation": {"accepted": True},
+        },
+    ]
+
+    run_ad_hoc_pipeline(title="Software Engineer", description="React job")
+
+    assert base_mocks.rewrite_bullet_targeted.call_count == 2
+    assert base_mocks.rewrite_bullet_targeted.call_args_list[1].args[1] == ["React"]
+
+
+def test_summary_keywords_filter_unsupported_domain_terms(base_mocks):
+    from fletcher.ad_hoc_pipeline import run_ad_hoc_pipeline
+
+    base_mocks.match_keywords_to_bullets.return_value = {
+        "bullet_matches": [
+            {"bullet_idx": 1, "keyword": "real-time threat intelligence", "score": 0.9},
+            {"bullet_idx": 2, "keyword": "AI-driven platform", "score": 0.9},
+        ],
+        "summary_keywords": [
+            "Software Engineer",
+            "unit",
+            "integration",
+            "end-to-end",
+            "backend services",
+            "XDR",
+        ],
+        "ignored_keywords": [],
+        "scores": [],
+        "rag_used": True,
+    }
+    base_mocks.rewrite_bullet_targeted.return_value = {
+        "bullet": "original",
+        "success": False,
+        "error": "rewrite_validation_failed",
+        "duration_ms": 1,
+        "keywords_used": [],
+        "keywords_skipped": ["real-time threat intelligence", "AI-driven platform"],
+        "validation": {
+            "accepted": False,
+            "reasons": [
+                "unsupported_domain_keyword:real-time threat intelligence",
+                "unsupported_domain_keyword:AI-driven platform",
+            ],
+        },
+    }
+    base_mocks.generate_summary.return_value = {"summary": "Summary text.", "success": True}
+
+    run_ad_hoc_pipeline(title="Software Engineer", description="job")
+
+    summary_keywords = base_mocks.generate_summary.call_args.args[2]
+    assert "Software Engineer" in summary_keywords
+    assert "unit" in summary_keywords
+    assert "integration" in summary_keywords
+    assert "real-time threat intelligence" not in summary_keywords
+    assert "AI-driven platform" not in summary_keywords
+    assert "XDR" not in summary_keywords
+
+
+def test_non_actionable_degree_keyword_not_rewritten(base_mocks):
+    from fletcher.ad_hoc_pipeline import run_ad_hoc_pipeline
+
+    base_mocks.match_keywords_to_bullets.return_value = {
+        "bullet_matches": [
+            {"bullet_idx": 0, "keyword": "Computer Engineering", "score": 0.9},
+        ],
+        "summary_keywords": [],
+        "ignored_keywords": [],
+        "scores": [],
+        "rag_used": True,
+    }
+    base_mocks.rewrite_bullet_targeted.reset_mock()
+
+    run_ad_hoc_pipeline(title="Software Development Intern", description="job")
+
+    base_mocks.rewrite_bullet_targeted.assert_not_called()
+
+
+def test_single_keyword_rewrite_failure_does_not_retry(base_mocks):
+    from fletcher.ad_hoc_pipeline import run_ad_hoc_pipeline
+
+    base_mocks.match_keywords_to_bullets.return_value = {
+        "bullet_matches": [
+            {"bullet_idx": 1, "keyword": "Azure DevOps", "score": 0.9},
+        ],
+        "summary_keywords": [],
+        "ignored_keywords": [],
+        "scores": [],
+        "rag_used": True,
+    }
+    base_mocks.rewrite_bullet_targeted.return_value = {
+        "bullet": "Improved SQL queries.",
+        "success": False,
+        "error": "rewrite_validation_failed",
+        "duration_ms": 1,
+        "keywords_used": ["Azure DevOps"],
+        "keywords_skipped": ["Azure DevOps"],
+        "validation": {
+            "accepted": False,
+            "llm_validation": {"keywords_rejected": ["Azure DevOps"]},
+        },
+    }
+
+    run_ad_hoc_pipeline(title="Software Development Intern", description="job")
+
+    assert base_mocks.rewrite_bullet_targeted.call_count == 1
 
 
 def test_bucket_below_floor_excluded(base_mocks):
