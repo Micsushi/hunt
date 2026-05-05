@@ -24,9 +24,25 @@ DOMAIN_KEYWORDS = {
     "ai-driven platform",
 }
 
+DIRECT_SUPPORT_KEYWORDS = DOMAIN_KEYWORDS | {
+    "real time threat intelligence",
+    "ai driven platform",
+    "data exploration",
+    "data pipeline",
+    "data pipelines",
+    "model training",
+    "modelops",
+    "productionalize",
+    "operationalize",
+    "big data technologies",
+    "monitor data performance",
+}
+
 AMBIGUOUS_VALIDATION_KEYWORDS = DOMAIN_KEYWORDS | {
     "infrastructure as code",
     "cloud infrastructure",
+    "cloud platforms",
+    "data pipelines",
 }
 
 RELATED_VISIBLE_PHRASES = {
@@ -91,7 +107,7 @@ def categorize_keyword(keyword: str) -> str:
 
 
 def keyword_requires_direct_support(keyword: str) -> bool:
-    return categorize_keyword(keyword) == "domain"
+    return _normalize_visible_text(keyword) in DIRECT_SUPPORT_KEYWORDS
 
 
 def _needs_ambiguous_validation(keywords: list[str]) -> bool:
@@ -124,6 +140,62 @@ def _filter_requested_keywords(values: list[str], requested_keywords: list[str])
     return _dedupe_case(filtered)
 
 
+def _normalize_visible_text(text: str) -> str:
+    value = re.sub(r"[^a-z0-9+#.]+", " ", (text or "").lower())
+    return re.sub(r"\s+", " ", value).strip()
+
+
+def _object_variants(object_text: str) -> list[str]:
+    normalized = _normalize_visible_text(object_text)
+    variants = [normalized]
+    if normalized.endswith("ies"):
+        variants.append(f"{normalized[:-3]}y")
+    elif normalized.endswith("s"):
+        variants.append(normalized[:-1])
+    return _dedupe_case([v for v in variants if v])
+
+
+def _visible_action_phrases(keyword: str) -> tuple[str, ...]:
+    key = _normalize_visible_text(keyword)
+    action_variants: dict[str, tuple[str, ...]] = {
+        "automate": ("automate", "automated", "automating", "automation of"),
+        "monitor": ("monitor", "monitored", "monitoring"),
+        "operationalize": ("operationalize", "operationalized", "operationalizing"),
+        "productionalize": ("productionalize", "productionalized", "productionalizing"),
+    }
+    for action, variants in action_variants.items():
+        prefix = f"{action} "
+        if not key.startswith(prefix):
+            continue
+        obj = key.removeprefix(prefix).strip()
+        phrases: list[str] = []
+        for object_variant in _object_variants(obj):
+            phrases.extend(f"{variant} {object_variant}" for variant in variants)
+            if action == "automate":
+                phrases.append(f"{object_variant} automation")
+            elif action == "monitor":
+                phrases.append(f"{object_variant} monitoring")
+        return tuple(_dedupe_case(phrases))
+    return ()
+
+
+def keyword_visible_in_text(keyword: str, text: str) -> bool:
+    """Return true when a requested keyword is visibly represented in text.
+
+    This intentionally accepts close grammatical variants for action phrases,
+    but it still requires the action and object to appear together. For example,
+    `Monitor data pipelines` can match `monitoring data pipelines`; scattered
+    words like `monitors` and `data pipelines` in different clauses do not count.
+    """
+    key = _normalize_visible_text(keyword)
+    visible = _normalize_visible_text(text)
+    if not key or not visible:
+        return False
+    allowed = list(RELATED_VISIBLE_PHRASES.get(key, (key,)))
+    allowed.extend(_visible_action_phrases(key))
+    return any(_normalize_visible_text(phrase) in visible for phrase in allowed)
+
+
 def validate_claimed_keywords_present(
     *,
     rewritten: str,
@@ -137,9 +209,9 @@ def validate_claimed_keywords_present(
     React/Next.js. If metadata is inconsistent, the caller should keep the
     original bullet and treat all requested keywords as unused.
     """
-    rewritten_l = (rewritten or "").lower()
     requested_l = {kw.lower() for kw in requested_keywords}
     missing: list[str] = []
+    present: list[str] = []
     for keyword in claimed_used:
         key = (keyword or "").strip().lower()
         if not key:
@@ -147,10 +219,15 @@ def validate_claimed_keywords_present(
         if key not in requested_l:
             missing.append(keyword)
             continue
-        allowed = RELATED_VISIBLE_PHRASES.get(key, (key,))
-        if not any(phrase in rewritten_l for phrase in allowed):
+        if not keyword_visible_in_text(keyword, rewritten):
             missing.append(keyword)
-    return {"accepted": not missing, "missing": _dedupe_case(missing)}
+        else:
+            present.append(keyword)
+    return {
+        "accepted": not missing,
+        "missing": _dedupe_case(missing),
+        "present": _dedupe_case(present),
+    }
 
 
 def repair_rewrite_redundancy(text: str) -> str:
@@ -169,7 +246,6 @@ def validate_rewrite_grounding(
     rewritten: str,
     requested_keywords: list[str],
 ) -> dict[str, Any]:
-    original_l = (original or "").lower()
     rewritten_l = (rewritten or "").lower()
     rejected: list[str] = []
     supported: list[str] = []
@@ -183,12 +259,14 @@ def validate_rewrite_grounding(
         key = (keyword or "").strip().lower()
         if not key:
             continue
-        if keyword_requires_direct_support(keyword) and key not in original_l:
-            if key in rewritten_l:
+        if keyword_requires_direct_support(keyword) and not keyword_visible_in_text(
+            keyword, original
+        ):
+            if keyword_visible_in_text(keyword, rewritten):
                 rejected.append(keyword)
                 reasons.append(f"unsupported_domain_keyword:{keyword}")
             continue
-        if key in rewritten_l:
+        if keyword_visible_in_text(keyword, rewritten):
             supported.append(keyword)
 
     rejected = _dedupe_case(rejected)
@@ -228,7 +306,13 @@ def validate_rewrite_with_ollama(
         "Accept reasonable generalizations only when the original supports them. Examples: "
         "Vercel or Supabase can support cloud infrastructure phrasing; Next.js can support "
         "React/Next.js phrasing; brainwave scoring or model accuracy can support machine "
-        "learning phrasing. Infrastructure as Code requires direct evidence such as "
+        "learning phrasing. Data-domain terms such as data pipelines, data exploration, "
+        "model training, ModelOps, Productionalize, and Operationalize require direct "
+        "evidence in the original bullet. Do not infer them from generic full-stack "
+        "architecture. Datadog metrics, monitors, logging, and alerts can support "
+        "monitoring data pipelines or services only when the rewrite explicitly keeps the "
+        "monitoring action and monitored object together. Inflected action phrases are OK, "
+        "such as automating data pipelines for Automate data pipelines. Infrastructure as Code requires direct evidence such as "
         "Terraform, CDK, Pulumi, CloudFormation, IaC, or infrastructure-as-code. "
         "Security domain terms such as real-time threat intelligence, XDR, MDR, ITDR, "
         "and SIEM require direct domain evidence.\n"
@@ -535,6 +619,10 @@ def rewrite_bullet_targeted(
         f"- Do not invent a new outcome, tool usage, product domain, customer domain, or responsibility.\n"
         f"- Do not explain what a technology does. Use technology and domain phrases as names.\n"
         f"- Do not claim a technology was used for a purpose unless the original bullet supports that purpose.\n"
+        f"- Data-domain terms such as data pipelines, data exploration, model training, ModelOps, Productionalize, and Operationalize require direct evidence in the original bullet. Do not infer them from generic full-stack architecture.\n"
+        f"- If a keyword is an action phrase, keep the action and object visibly together. For any keyword beginning with Monitor, write monitoring plus the rest of the keyword if truthful. For any keyword beginning with Automate, write automating plus the rest of the keyword if truthful. Otherwise put that keyword in keywords_skipped.\n"
+        f"- Do not count scattered words as using an action keyword. Example: monitors in one clause plus data pipelines somewhere else does not count as Monitor data pipelines.\n"
+        f"- Datadog metrics, monitors, logging, and alerts may support monitoring data pipelines or services only when the rewritten bullet explicitly says what was monitored.\n"
         f"- Prefer additive related-tech phrasing when it is more truthful than replacement, for example React/Next.js.\n"
         f"- Do not create unnatural slash pairs or false pairings. Example: do not write LLM/React.\n"
         f"- At most one new sentence total.\n"
@@ -576,6 +664,7 @@ def rewrite_bullet_targeted(
                 result["bullet"] = bullet
                 result["success"] = False
                 result["error"] = "claimed_keyword_missing"
+                result["presence_supported_keywords"] = list(presence.get("present") or [])
                 result["keywords_used"] = []
                 result["keywords_skipped"] = list(keywords)
                 return result

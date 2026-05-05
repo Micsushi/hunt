@@ -3,6 +3,7 @@ from __future__ import annotations
 from fletcher.llm.llm_enrich import (
     categorize_keyword,
     keyword_requires_direct_support,
+    keyword_visible_in_text,
     repair_rewrite_redundancy,
     validate_claimed_keywords_present,
     validate_rewrite_grounding,
@@ -62,6 +63,24 @@ def test_rejects_ai_platform_feedback_claim():
 
     assert result["accepted"] is False
     assert result["keywords_rejected"] == ["AI-driven platform"]
+
+
+def test_rejects_data_pipeline_claim_from_generic_full_stack_architecture():
+    result = validate_rewrite_grounding(
+        original=(
+            "Optimized system scalability to support 10,000+ concurrent users by "
+            "engineering a full-stack architecture on Vercel and Supabase."
+        ),
+        rewritten=(
+            "Optimized system scalability to support 10,000+ concurrent users by "
+            "engineering a full-stack architecture, including data pipelines, on "
+            "Vercel and Supabase Cloud platforms."
+        ),
+        requested_keywords=["data pipelines", "Cloud platforms"],
+    )
+
+    assert result["accepted"] is False
+    assert result["keywords_rejected"] == ["data pipelines"]
 
 
 def test_accepts_machine_learning_brainwave_processing():
@@ -175,6 +194,41 @@ def test_react_nextjs_phrase_counts_as_visible_react():
     )
 
     assert result["accepted"] is True
+
+
+def test_action_keyword_accepts_inflected_visible_phrase():
+    result = validate_claimed_keywords_present(
+        rewritten=(
+            "Improved reliability by automating data pipelines and monitoring data "
+            "pipelines with Datadog alerts."
+        ),
+        requested_keywords=["Automate data pipelines", "Monitor data pipelines"],
+        claimed_used=["Automate data pipelines", "Monitor data pipelines"],
+    )
+
+    assert result["accepted"] is True
+    assert result["present"] == ["Automate data pipelines", "Monitor data pipelines"]
+
+
+def test_action_keyword_rejects_scattered_terms():
+    result = validate_claimed_keywords_present(
+        rewritten=(
+            "Configured Datadog metrics, monitors, and centralized logging while "
+            "automating data pipelines."
+        ),
+        requested_keywords=["Monitor data pipelines"],
+        claimed_used=["Monitor data pipelines"],
+    )
+
+    assert result["accepted"] is False
+    assert result["missing"] == ["Monitor data pipelines"]
+
+
+def test_keyword_visible_helper_accepts_data_pipeline_monitoring_noun_form():
+    assert keyword_visible_in_text(
+        "Monitor data pipelines",
+        "Improved data pipeline monitoring with Datadog metrics and alerts.",
+    )
 
 
 def test_model_claimed_keyword_not_counted_if_not_in_validated_rewrite(monkeypatch):

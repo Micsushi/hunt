@@ -39,9 +39,11 @@ TEST_TARGETS = {
         "tests/test_component3_stage1.py",
     ],
     "c4": [
+        "tests/test_component4_agent_runtime.py",
         "tests/test_component4_cli.py",
         "tests/test_component4_service_api.py",
         "tests/test_component4_c3_bridge.py",
+        "tests/test_component4_worker_protocol.py",
     ],
     "shared": [
         "tests/test_db_compat.py",

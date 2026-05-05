@@ -192,6 +192,26 @@ def test_summary_pdf_set_when_summary_generated(base_mocks):
     assert base_mocks.compile_tex.call_count == 2
 
 
+def test_summary_context_includes_relevant_bullet_evidence(base_mocks):
+    from fletcher.ad_hoc_pipeline import run_ad_hoc_pipeline
+
+    base_mocks.match_keywords_to_bullets.return_value = {
+        "bullet_matches": [],
+        "summary_keywords": ["backend services"],
+        "ignored_keywords": [],
+        "scores": [],
+        "rag_used": True,
+    }
+    base_mocks.generate_summary.return_value = {"summary": "A great candidate.", "success": True}
+    base_mocks.score_bullets_for_drop.return_value = [0.1, 0.9, 0.3, 0.2]
+
+    run_ad_hoc_pipeline(title="SWE", description="job")
+
+    candidate_context = base_mocks.generate_summary.call_args.args[0]
+    assert "Relevant evidence:" in candidate_context
+    assert "Improved SQL queries." in candidate_context
+
+
 def test_keywords_partitioned_correctly(base_mocks):
     from fletcher.ad_hoc_pipeline import run_ad_hoc_pipeline
 
@@ -486,6 +506,48 @@ def test_single_keyword_rewrite_failure_does_not_retry(base_mocks):
     run_ad_hoc_pipeline(title="Software Development Intern", description="job")
 
     assert base_mocks.rewrite_bullet_targeted.call_count == 1
+
+
+def test_claimed_presence_subset_gets_retry(base_mocks):
+    from fletcher.ad_hoc_pipeline import run_ad_hoc_pipeline
+
+    base_mocks.match_keywords_to_bullets.return_value = {
+        "bullet_matches": [
+            {"bullet_idx": 1, "keyword": "data exploration", "score": 0.9},
+            {"bullet_idx": 1, "keyword": "Automate data pipelines", "score": 0.9},
+        ],
+        "summary_keywords": [],
+        "ignored_keywords": [],
+        "scores": [],
+        "rag_used": True,
+    }
+    base_mocks.rewrite_bullet_targeted.side_effect = [
+        {
+            "bullet": "Improved SQL queries.",
+            "success": False,
+            "error": "claimed_keyword_missing",
+            "duration_ms": 1,
+            "keywords_used": [],
+            "keywords_skipped": ["data exploration", "Automate data pipelines"],
+            "presence_supported_keywords": ["Automate data pipelines"],
+        },
+        {
+            "bullet": "Improved SQL queries while automating data pipelines.",
+            "success": True,
+            "error": None,
+            "duration_ms": 1,
+            "keywords_used": ["Automate data pipelines"],
+            "keywords_skipped": [],
+            "validation": {"accepted": True},
+        },
+    ]
+
+    run_ad_hoc_pipeline(title="Data Engineer Intern", description="job")
+
+    assert base_mocks.rewrite_bullet_targeted.call_count == 2
+    assert base_mocks.rewrite_bullet_targeted.call_args_list[1].args[1] == [
+        "Automate data pipelines"
+    ]
 
 
 def test_bucket_below_floor_excluded(base_mocks):

@@ -171,11 +171,89 @@ class CoordinatorServiceApiTests(unittest.TestCase):
         self.assertEqual(run["status"], "apply_prepared")
         self.assertEqual(len(runs_resp.json()["runs"]), 1)
 
+    def test_request_fill_route_moves_run_to_fill_requested(self):
+        with self.with_temp_context() as (path, _runtime):
+            with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as f:
+                f.write(b"%PDF-1.4 request-fill")
+                f.flush()
+                resume_path = f.name
+            try:
+                job_id = self.insert_ready_job(path, resume_path=resume_path)
+                client = TestClient(app, raise_server_exceptions=False)
+                run_resp = client.post("/run", headers=_auth(), json={"job_id": job_id})
+                run_id = run_resp.json()["run_id"]
+                fill_resp = client.post(f"/runs/{run_id}/request-fill", headers=_auth())
+                pending_resp = client.get("/c3/pending-fills", headers=_auth())
+            finally:
+                if os.path.exists(resume_path):
+                    os.remove(resume_path)
+
+        self.assertEqual(fill_resp.status_code, 200)
+        self.assertEqual(fill_resp.json()["run"]["status"], "fill_requested")
+        self.assertEqual(pending_resp.json()["fills"][0]["run_id"], run_id)
+
     def test_post_run_returns_400_for_unknown_job(self):
         with self.with_temp_context():
             client = TestClient(app, raise_server_exceptions=False)
             resp = client.post("/run", headers=_auth(), json={"job_id": 9999})
         self.assertEqual(resp.status_code, 400)
+
+    def test_worker_claim_heartbeat_and_result_routes(self):
+        with self.with_temp_context() as (path, runtime_root):
+            with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as f:
+                f.write(b"%PDF-1.4 worker-api")
+                f.flush()
+                resume_path = f.name
+            try:
+                job_id = self.insert_ready_job(path, resume_path=resume_path)
+                from coordinator.service import OrchestrationService
+
+                svc = OrchestrationService(db_path=path, runtime_root=runtime_root)
+                context = svc.build_apply_context(job_id)
+                svc.request_fill(context.run_id)
+
+                client = TestClient(app, raise_server_exceptions=False)
+                claim_resp = client.post(
+                    "/workers/claim",
+                    headers=_auth(),
+                    json={
+                        "runtime_name": "openclaw_isolated",
+                        "browser_lane": "isolated",
+                        "lease_seconds": 120,
+                    },
+                )
+                lease_id = claim_resp.json()["lease"]["lease_id"]
+                heartbeat_resp = client.post(f"/workers/{lease_id}/heartbeat", headers=_auth())
+                heartbeat_body_resp = client.post(
+                    f"/workers/{lease_id}/heartbeat",
+                    headers=_auth(),
+                    json={"lease_seconds": 120},
+                )
+                result_resp = client.post(
+                    f"/workers/{lease_id}/result",
+                    headers=_auth(),
+                    json={
+                        "payload": {
+                            "status": "ok",
+                            "resumeUploadOk": True,
+                            "generatedAnswersUsed": False,
+                            "finalUrl": "https://acme.wd5.myworkdayjobs.com/job/8001/review",
+                        }
+                    },
+                )
+            finally:
+                if os.path.exists(resume_path):
+                    os.remove(resume_path)
+
+        self.assertEqual(claim_resp.status_code, 200)
+        self.assertTrue(claim_resp.json()["claimed"])
+        self.assertEqual(heartbeat_resp.status_code, 200)
+        self.assertEqual(heartbeat_resp.json()["lease"]["status"], "active")
+        self.assertEqual(heartbeat_body_resp.status_code, 200)
+        self.assertEqual(heartbeat_body_resp.json()["lease"]["status"], "active")
+        self.assertEqual(result_resp.status_code, 200)
+        self.assertEqual(result_resp.json()["lease"]["status"], "completed")
+        self.assertEqual(result_resp.json()["run"]["status"], "awaiting_submit_approval")
 
     def test_c3_pending_fills_returns_empty_when_no_fills(self):
         with self.with_temp_context():

@@ -4,14 +4,14 @@ Putting in the Work so it is less Work for you to apply for Work
 
 Automated Hunt runtime. Today it includes **C0 (Frontend)**, **C1 (Hunter)** discovery/enrichment, **C2 (Fletcher)** resume generation, a local **C3 (Executioner)** browser extension, and **C4 (Coordinator)** orchestration scaffolding.
 
-Current operator confidence snapshot (subjective, as of 2026-05-01):
+Current operator confidence snapshot (subjective, as of 2026-05-05):
 - **C0**: mostly done
 - **C1**: about 80% done
-- **C2**: about 30% working
+- **C2**: about 30-35% working
 - **C3**: not meaningfully tested end to end yet
-- **C4**: not really implemented end to end yet
+- **C4**: coordinator state machine, API, CLI, worker lease protocol, stale recovery, and OpenClaw/Hermes one-shot launcher exist; live browser/agent execution is not proven yet
 
-The most solid path today is still **C0 + C1**. C2 exists in partial form. C3 and C4 both have code in the repo, but they should still be treated as unproven until live browser-backed runs are validated.
+The most solid path today is still **C0 + C1**. C2 exists in partial form with Option B smoke tooling now appearing. C4 now has a real DB-backed orchestration scaffold plus a worker lease/heartbeat/result protocol, but C3/OpenClaw/Hermes browser-backed runs are still the main unproven gap before long-running job-application agents can be trusted.
 
 C0 note: the React SPA is the primary operator UI, but `/legacy/*` server-rendered routes still exist as fallback while we retire them.
 
@@ -23,6 +23,7 @@ Current focus:
 - keep C0 stable and documented accurately
 - validate C1 (Hunter) on server2 against Postgres
 - move C2 from partial pipeline to a usable operator workflow
+- harden C4 as the durable state machine for long-running Windows/WSL2/Linux job-application agents
 - keep Easy Apply classified as `easy_apply` and excluded from downstream external-apply automation
 
 ## C1 (Hunter) v0.1 : how it runs
@@ -107,6 +108,11 @@ Priority: **env var** > **config file** > hardcoded default in `config.py`.
 ## Planning Docs
 
 - **Component IDs and code names:** `docs/NAMING.md`
+- C4 coordinator contract and commands: `docs/C4_COORDINATOR.md`
+- C4 shared worker protocol: `docs/C4_AGENT_WORKERS.md`
+- C4 OpenClaw runbook: `docs/C4_OPENCLAW_RUNBOOK.md`
+- C4 Hermes runbook: `docs/C4_HERMES_RUNBOOK.md`
+- Detailed C4 long-running agent plan: `docs/superpowers/plans/2026-05-05-c4-long-running-agent-orchestration.md`
 - CI-first planning checklist for new projects, components, and features: `docs/PLANNING.md`
 - System roadmap: `docs/roadmap.md`
 - Shared glossary: `docs/GLOSSARY.md`
@@ -185,7 +191,7 @@ Testing posture by component:
 Current local checkpoint for later components:
 - `fletcher/` : **C2 (Fletcher)** partial implementation only. Service and pipeline exist, but the operator workflow and generation quality work are still incomplete.
 - `executioner/` : **C3 (Executioner)** local extension implementation exists, but it has not been meaningfully validated end to end through the live pipeline yet.
-- `coordinator/` : **C4 (Coordinator)** scaffolding, service routes, and smoke-test pieces exist, but it should still be treated as early-stage orchestration code rather than a completed component.
+- `coordinator/` : **C4 (Coordinator)** DB-backed readiness/state-machine code, service routes, CLI commands, C3 bridge tests, and a Postgres smoke exist. It should still be treated as early-stage automation because live browser-backed workers and stale-run recovery are not proven yet.
 
 ## Legacy Helpers
 

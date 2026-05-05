@@ -7,29 +7,30 @@ Automated job application pipeline. Discover -> Enrich -> Tailor resume -> Autof
 | ID | Name | Code | Version | Status |
 |---|---|---|---|---|
 | C0 | Frontend | `frontend/` + `backend/` | 0.2 | Mostly done. React SPA, FastAPI gateway, settings/accounts, logs, jobs, and C2/C3/C4 surfaces exist. Remaining work is smoke validation, polish, and a few UX gaps. |
-| C1 | Hunter | `hunter/` | 0.1 | Roughly 70% done. Discovery/enrichment, service API, SQLite/Postgres compat, and tests exist. Biggest remaining gap is real production validation plus auth/account/runtime polish. |
-| C2 | Fletcher | `fletcher/` | 0.1 -> 1.0 | Roughly 30% working. Core service and resume pipeline exist, but the full UI workflow, real profile grounding, and stronger LLM tailoring are still incomplete. |
+| C1 | Hunter | `hunter/` | 0.1 | Roughly 80% done. Discovery/enrichment, service API, SQLite/Postgres compat, account/auth handling, settings UI, alerts, and tests exist. Remaining gap is repeated production confidence plus live Easy Apply proof. |
+| C2 | Fletcher | `fletcher/` | 0.1 -> 1.0 | Roughly 30-35% working. Core service, ad-hoc pipeline, review/diff planning, and Option B smoke tooling exist, but the full UI workflow, real profile grounding, and stronger LLM tailoring are still incomplete. |
 | C3 | Executioner | `executioner/` | 0.0 | Not meaningfully tested end to end yet. Local extension code and an initial Workday path exist, but live polling, fill, and postback validation are still pending. |
-| C4 | Coordinator | `coordinator/` | 0.0 | Early scaffold only. Some API-level and smoke-test pieces exist, but the full orchestrator flow is not implemented or validated enough to treat as real end-to-end automation. |
+| C4 | Coordinator | `coordinator/` | 0.1 scaffold | DB-backed readiness/state-machine code, service API, CLI, worker lease/heartbeat/result protocol, stale recovery, C3 bridge tests, submit approval, OpenClaw/Hermes launcher, and Postgres smoke pieces exist. It is not proven as real automation until a browser worker completes a live fill. |
 
 ## Current Operator Snapshot
 
-This is your current confidence view (subjective, as of 2026-05-01):
+This is your current confidence view (subjective, as of 2026-05-05):
 
 - C0: mostly done
-- C1: about 70% done
-- C2: about 30% working
+- C1: about 80% done
+- C2: about 30-35% working
 - C3: not tested end to end yet
-- C4: not really implemented end to end yet
+- C4: API/state-machine scaffold plus worker lease/agent launcher exists; live browser/agent execution not proven yet
 
 ## Current Priority
 
 1. Lock in C0 with local smoke coverage, doc accuracy, and UI/runtime polish
 2. Validate C1 on server2: scrape, enrich, artifacts, queue drain, steady scheduler
 3. Move C2 from partial pipeline to usable operator flow: webpage workflow, real profile, better LLM support
-4. Prove C3 basics end to end before expanding ATS support
-5. Treat C4 as early-stage scaffolding until a real browser-backed run completes end to end
-6. Keep deployment and smoke-test docs aligned with what is actually working
+4. Harden C4 as the durable state machine for long-running agents on Windows/WSL2/Linux
+5. Prove C3 basics end to end before expanding ATS support
+6. Pilot OpenClaw and Hermes as optional C4 worker runtimes through the C4 one-shot launcher
+7. Keep deployment and smoke-test docs aligned with what is actually working
 
 ## Cross-Component Interactions
 
@@ -58,7 +59,7 @@ Current gateway routes live under `/api/gateway/*`. Older planned `/api/c1/*`, `
 | + C1 | Jobs populate DB through CLI/service; this is the most real path after C0, but still needs production validation and auth/runtime polish |
 | + C2 | Service can generate, but the full operator workflow is still incomplete |
 | + C3 (local) | Extension code exists, but live pipeline polling/postback is still unproven |
-| + C4 | Some API and smoke-test scaffolding exists, but this should not yet be treated as a finished orchestration layer |
+| + C4 | DB-backed orchestration, approvals, worker leases, C3 bridge, OpenClaw/Hermes launcher, CLI, and API tests exist. This is still not a finished automation layer until a real browser worker completes a run |
 
 ## Deployment Split
 
@@ -77,7 +78,11 @@ Server2 deployment automation lives outside this repo, but Hunt now documents th
 - CAPTCHA/anti-bot bypass is allowed for this personal-use project
 - Detect CAPTCHA, bot detection, MFA, or access-control challenges and either attempt configured bypass or surface manual intervention when needed
 - Windows (local) + Linux (server2): both required
+- Long-running agents may run native on Windows only where the runtime supports it. Hermes requires WSL2/Linux on Windows machines; OpenClaw has a native Windows path but WSL2 remains the safer default.
 
 ## Component Docs
 
 Read `docs/TODO.md` for the live polish backlog by component.
+Read `docs/C4_COORDINATOR.md` for the current C4 state machine and command contract.
+Read `docs/C4_OPENCLAW_RUNBOOK.md` and `docs/C4_HERMES_RUNBOOK.md` for runtime-specific worker setup.
+Read `docs/superpowers/plans/2026-05-05-c4-long-running-agent-orchestration.md` for the detailed OpenClaw/Hermes worker plan.

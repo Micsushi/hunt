@@ -108,6 +108,21 @@ CREATE TABLE IF NOT EXISTS submit_approvals (
 )
 """
 
+ORCHESTRATION_WORKER_LEASES_TABLE_SQL = """
+CREATE TABLE IF NOT EXISTS orchestration_worker_leases (
+    id TEXT PRIMARY KEY,
+    orchestration_run_id TEXT NOT NULL,
+    runtime_name TEXT NOT NULL,
+    browser_lane TEXT,
+    status TEXT NOT NULL,
+    claimed_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    heartbeat_at TEXT,
+    expires_at TEXT NOT NULL,
+    completed_at TEXT,
+    worker_metadata_json TEXT DEFAULT '{}'
+)
+"""
+
 SUBMIT_APPROVALS_MIGRATION_COLUMNS = {
     "artifact_path": "TEXT",
 }
@@ -136,6 +151,14 @@ INDEX_STATEMENTS = (
     """
     CREATE INDEX IF NOT EXISTS idx_submit_approvals_run_created
     ON submit_approvals(orchestration_run_id, created_at DESC)
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS idx_worker_leases_run_status
+    ON orchestration_worker_leases(orchestration_run_id, status, claimed_at DESC)
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS idx_worker_leases_status_expires
+    ON orchestration_worker_leases(status, expires_at)
     """,
 )
 
@@ -192,6 +215,7 @@ def init_orchestration_db(db_path: str | Path) -> None:
         cursor.execute(ORCHESTRATION_RUNS_TABLE_SQL)
         cursor.execute(ORCHESTRATION_EVENTS_TABLE_SQL)
         cursor.execute(SUBMIT_APPROVALS_TABLE_SQL)
+        cursor.execute(ORCHESTRATION_WORKER_LEASES_TABLE_SQL)
         _ensure_columns(cursor, "orchestration_runs", ORCHESTRATION_RUNS_MIGRATION_COLUMNS)
         _ensure_columns(cursor, "submit_approvals", SUBMIT_APPROVALS_MIGRATION_COLUMNS)
         for statement in INDEX_STATEMENTS:

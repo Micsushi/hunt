@@ -487,6 +487,105 @@ class Component4CliTests(unittest.TestCase):
         self.assertEqual(payload["run"]["browser_lane"], "isolated")
         self.assertEqual(payload["apply_context"]["browser_lane"], "isolated")
 
+    def test_claim_worker_command_returns_one_active_lease(self) -> None:
+        stdout = io.StringIO()
+        with self.with_temp_db() as path:
+            with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as resume_file:
+                resume_file.write(b"%PDF-1.4 worker claim")
+                resume_file.flush()
+                resume_path = resume_file.name
+
+            try:
+                job_id = self.insert_job(
+                    path,
+                    selected_resume_version_id="resume-worker",
+                    selected_resume_pdf_path=resume_path,
+                    selected_resume_tex_path=str(REPO_ROOT / "main.tex"),
+                    selected_resume_ready_for_c3=1,
+                )
+                with self.with_temp_orchestration_root() as runtime_root:
+                    service = self.make_service(path, runtime_root)
+                    context = service.build_apply_context(job_id)
+                    service.request_fill(context.run_id)
+                    with redirect_stdout(stdout):
+                        exit_code = main(
+                            [
+                                "claim-worker",
+                                "--db-path",
+                                path,
+                                "--runtime-root",
+                                runtime_root,
+                                "--runtime-name",
+                                "openclaw_isolated",
+                                "--browser-lane",
+                                "isolated",
+                                "--lease-seconds",
+                                "120",
+                            ]
+                        )
+            finally:
+                if os.path.exists(resume_path):
+                    os.remove(resume_path)
+
+        payload = json.loads(stdout.getvalue())
+        self.assertEqual(exit_code, 0)
+        self.assertTrue(payload["claimed"])
+        self.assertEqual(payload["fill"]["run_id"], context.run_id)
+        self.assertEqual(payload["lease"]["runtime_name"], "openclaw_isolated")
+        self.assertEqual(payload["lease"]["status"], "active")
+
+    def test_reconcile_stale_command_marks_old_fill_manual_review(self) -> None:
+        stdout = io.StringIO()
+        with self.with_temp_db() as path:
+            with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as resume_file:
+                resume_file.write(b"%PDF-1.4 stale run")
+                resume_file.flush()
+                resume_path = resume_file.name
+
+            try:
+                job_id = self.insert_job(
+                    path,
+                    selected_resume_version_id="resume-stale",
+                    selected_resume_pdf_path=resume_path,
+                    selected_resume_tex_path=str(REPO_ROOT / "main.tex"),
+                    selected_resume_ready_for_c3=1,
+                )
+                with self.with_temp_orchestration_root() as runtime_root:
+                    service = self.make_service(path, runtime_root)
+                    context = service.build_apply_context(job_id)
+                    service.request_fill(context.run_id)
+                    conn = sqlite3.connect(path)
+                    try:
+                        conn.execute(
+                            "UPDATE orchestration_runs SET updated_at = ? WHERE id = ?",
+                            ("2000-01-01T00:00:00+00:00", context.run_id),
+                        )
+                        conn.commit()
+                    finally:
+                        conn.close()
+                    with redirect_stdout(stdout):
+                        exit_code = main(
+                            [
+                                "reconcile-stale",
+                                "--db-path",
+                                path,
+                                "--runtime-root",
+                                runtime_root,
+                                "--fill-timeout-minutes",
+                                "30",
+                            ]
+                        )
+                    run = service.get_run(context.run_id)
+            finally:
+                if os.path.exists(resume_path):
+                    os.remove(resume_path)
+
+        payload = json.loads(stdout.getvalue())
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(payload["runs_marked_manual_review"], [context.run_id])
+        self.assertEqual(run.status, "manual_review")
+        self.assertEqual(run.manual_review_reason, "worker_timeout")
+
     def test_hunterctl_apply_prep_passes_browser_lane_to_coordinator_cli(self) -> None:
         args = Namespace(
             job_id=42,

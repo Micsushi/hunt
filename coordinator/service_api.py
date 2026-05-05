@@ -46,6 +46,26 @@ class InlineFillResultRequest(BaseModel):
     payload: dict
 
 
+class WorkerClaimRequest(BaseModel):
+    runtime_name: str
+    browser_lane: str | None = None
+    lease_seconds: int = 900
+    worker_metadata: dict | None = None
+
+
+class WorkerHeartbeatRequest(BaseModel):
+    lease_seconds: int = 900
+
+
+class WorkerResultRequest(BaseModel):
+    payload: dict
+
+
+class ReconcileStaleRequest(BaseModel):
+    fill_timeout_minutes: int = 30
+    submit_confirm_timeout_minutes: int | None = None
+
+
 # ---------------------------------------------------------------------------
 # Endpoints
 # ---------------------------------------------------------------------------
@@ -108,6 +128,17 @@ def post_approve(run_id: str, req: ApproveRequest):
     return result
 
 
+@app.post("/runs/{run_id}/request-fill", dependencies=[Depends(require_service_token)])
+def post_request_fill(run_id: str):
+    svc = _get_service()
+    from coordinator.service import OrchestrationError
+
+    try:
+        return svc.request_fill(run_id)
+    except OrchestrationError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
 @app.post("/runs/{run_id}/fill-result", dependencies=[Depends(require_service_token)])
 def post_fill_result(run_id: str, req: FillResultRequest):
     svc = _get_service()
@@ -118,6 +149,59 @@ def post_fill_result(run_id: str, req: FillResultRequest):
     except OrchestrationError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
     return result
+
+
+# ---------------------------------------------------------------------------
+# Generic worker endpoints for C3/OpenClaw/Hermes
+# ---------------------------------------------------------------------------
+
+
+@app.post("/workers/claim", dependencies=[Depends(require_service_token)])
+def post_worker_claim(req: WorkerClaimRequest):
+    svc = _get_service()
+    from coordinator.service import OrchestrationError
+
+    try:
+        return svc.claim_next_fill(
+            runtime_name=req.runtime_name,
+            browser_lane=req.browser_lane,
+            lease_seconds=req.lease_seconds,
+            worker_metadata=req.worker_metadata,
+        )
+    except OrchestrationError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+@app.post("/workers/{lease_id}/heartbeat", dependencies=[Depends(require_service_token)])
+def post_worker_heartbeat(lease_id: str, req: WorkerHeartbeatRequest | None = None):
+    svc = _get_service()
+    from coordinator.service import OrchestrationError
+
+    lease_seconds = req.lease_seconds if req else 900
+    try:
+        return svc.heartbeat_lease(lease_id, lease_seconds=lease_seconds)
+    except OrchestrationError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+@app.post("/workers/{lease_id}/result", dependencies=[Depends(require_service_token)])
+def post_worker_result(lease_id: str, req: WorkerResultRequest):
+    svc = _get_service()
+    from coordinator.service import OrchestrationError
+
+    try:
+        return svc.complete_lease_with_result(lease_id, req.payload)
+    except OrchestrationError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+@app.post("/maintenance/reconcile-stale", dependencies=[Depends(require_service_token)])
+def post_reconcile_stale(req: ReconcileStaleRequest):
+    svc = _get_service()
+    return svc.reconcile_stale_runs(
+        fill_timeout_minutes=req.fill_timeout_minutes,
+        submit_confirm_timeout_minutes=req.submit_confirm_timeout_minutes,
+    )
 
 
 # ---------------------------------------------------------------------------

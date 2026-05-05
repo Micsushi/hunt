@@ -134,6 +134,19 @@ CREATE TABLE IF NOT EXISTS submit_approvals (
     created_at              TEXT NOT NULL DEFAULT to_char(CURRENT_TIMESTAMP, 'YYYY-MM-DD HH24:MI:SS')
 );
 
+CREATE TABLE IF NOT EXISTS orchestration_worker_leases (
+    id                          TEXT PRIMARY KEY,
+    orchestration_run_id        TEXT NOT NULL,
+    runtime_name                TEXT NOT NULL,
+    browser_lane                TEXT,
+    status                      TEXT NOT NULL,
+    claimed_at                  TEXT NOT NULL DEFAULT to_char(CURRENT_TIMESTAMP, 'YYYY-MM-DD HH24:MI:SS'),
+    heartbeat_at                TEXT,
+    expires_at                  TEXT NOT NULL,
+    completed_at                TEXT,
+    worker_metadata_json        TEXT DEFAULT '{}'
+);
+
 -- -----------------------------------------------------------------------
 -- C2 Fletcher tables
 -- -----------------------------------------------------------------------
@@ -202,3 +215,9 @@ CREATE INDEX IF NOT EXISTS idx_orchestration_events_run_created
 
 CREATE INDEX IF NOT EXISTS idx_submit_approvals_run_created
     ON submit_approvals(orchestration_run_id, created_at DESC);
+
+CREATE INDEX IF NOT EXISTS idx_worker_leases_run_status
+    ON orchestration_worker_leases(orchestration_run_id, status, claimed_at DESC);
+
+CREATE INDEX IF NOT EXISTS idx_worker_leases_status_expires
+    ON orchestration_worker_leases(status, expires_at);

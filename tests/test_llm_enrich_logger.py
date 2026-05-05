@@ -184,8 +184,10 @@ def test_pipeline_logger_event_ids_are_monotonic():
     logger.step("b")
     text = logger.get_log_text()
 
-    assert "event_id: 1" in text
-    assert "event_id: 2" in text
+    assert "event_id=1" in text
+    assert "event_id=2" in text
+    assert "------" in text
+    assert "delta=" in text
 
 
 def test_summary_logger_on_failure(monkeypatch):

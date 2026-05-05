@@ -18,6 +18,7 @@ from .keyword_check import partition_keywords
 from .llm.llm_enrich import (
     enrich_with_ollama_if_enabled,
     generate_summary,
+    keyword_visible_in_text,
     rewrite_bullet_targeted,
     validate_summary_grounding,
 )
@@ -161,12 +162,11 @@ def _score_sources(
 
 
 def _keyword_present(keyword: str, doc) -> bool:
-    needle = keyword.lower()
     haystack = " ".join(
         [b for entry in doc.experience for b in entry.bullets]
         + [b for entry in doc.projects for b in entry.bullets]
-    ).lower()
-    return needle in haystack
+    )
+    return keyword_visible_in_text(keyword, haystack)
 
 
 def _dedupe(values: list[str]) -> list[str]:
@@ -219,7 +219,7 @@ def _summary_keyword_supported(
             term in context_l
             for term in ("aws", "azure", "gcp", "vercel", "supabase", "kubernetes", "terraform")
         )
-    return key in context_l
+    return keyword_visible_in_text(keyword, candidate_context)
 
 
 def _filter_summary_keywords(
@@ -404,7 +404,22 @@ def _summary_line_check_retries(status: str, line_count: int | None) -> bool:
     return status == "ok" and line_count not in {4, 5}
 
 
-def _build_candidate_context(doc) -> str:
+def _summary_evidence_bullets(
+    bullets: list[str],
+    sources: list[dict],
+    scores: dict[str, float],
+    *,
+    limit: int = 5,
+) -> list[str]:
+    ranked = sorted(
+        zip(bullets, sources, strict=False),
+        key=lambda pair: scores.get(pair[1]["bullet_id"], 0.0),
+        reverse=True,
+    )
+    return [bullet for bullet, _source in ranked[:limit]]
+
+
+def _build_candidate_context(doc, evidence_bullets: list[str] | None = None) -> str:
     parts: list[str] = []
     if doc.summary:
         parts.append(f"Existing resume summary: {doc.summary}")
@@ -418,6 +433,8 @@ def _build_candidate_context(doc) -> str:
     )
     if skill_names:
         parts.append("Skills: " + ", ".join(_dedupe(skill_names)[:12]))
+    if evidence_bullets:
+        parts.append("Relevant evidence: " + " | ".join(evidence_bullets[:5]))
     return ". ".join(parts)
 
 
@@ -516,7 +533,9 @@ def _run_iteration(
             validation_reasons.extend(_validation_reasons(result))
 
             first_skipped = list(result.get("keywords_skipped") or [])
-            retry_keywords = list(result.get("keywords_used") or [])
+            retry_keywords = list(
+                result.get("keywords_used") or result.get("presence_supported_keywords") or []
+            )
             retry_is_proper_subset = (
                 len(kws_to_add) > 1
                 and bool(retry_keywords)
@@ -544,7 +563,12 @@ def _run_iteration(
                 )
                 if retry_result["success"]:
                     result = retry_result
-                    skipped_candidates.extend(first_skipped)
+                    retry_used_l = {
+                        kw.lower() for kw in list(retry_result.get("keywords_used") or [])
+                    }
+                    skipped_candidates.extend(
+                        [kw for kw in first_skipped if kw.lower() not in retry_used_l]
+                    )
                 else:
                     result = {
                         **retry_result,
@@ -584,8 +608,14 @@ def _run_iteration(
     )
     logger.step("rewrite_validation_summary", rejected_keywords=_dedupe(skipped_candidates))
 
+    bullets_for_score, sources_for_score = _collect_active_bullets(doc, active_bucket_ids)
+    scores = _score_sources(bullets_for_score, sources_for_score, raw_keywords)
+    logger.step("bullet_scores", scores=scores)
+    evidence_bullets = _summary_evidence_bullets(bullets_for_score, sources_for_score, scores)
+    logger.step("summary_evidence", bullets=evidence_bullets)
+
     skipped_to_summary = [kw for kw in _dedupe(skipped_candidates) if not _keyword_present(kw, doc)]
-    candidate_context = _build_candidate_context(doc)
+    candidate_context = _build_candidate_context(doc, evidence_bullets=evidence_bullets)
     base_summary_keywords = _dedupe(list(kw_match.get("summary_keywords", [])))
     mid_keywords, excluded_summary_keywords = _filter_summary_keywords(
         base_summary_keywords,
@@ -670,10 +700,6 @@ def _run_iteration(
                     }
     else:
         logger.step("summary_skipped", reason="no candidate context from parsed experience")
-
-    bullets_for_score, sources_for_score = _collect_active_bullets(doc, active_bucket_ids)
-    scores = _score_sources(bullets_for_score, sources_for_score, raw_keywords)
-    logger.step("bullet_scores", scores=scores)
 
     doc_ns = copy.deepcopy(doc)
     doc_ns.summary = ""

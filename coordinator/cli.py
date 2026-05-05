@@ -59,6 +59,41 @@ def build_parser() -> argparse.ArgumentParser:
     )
     request_fill_parser.add_argument("--run-id", required=True)
 
+    claim_worker_parser = subparsers.add_parser(
+        "claim-worker",
+        parents=[common],
+        help="Claim one pending fill for a bounded C3/OpenClaw/Hermes worker.",
+    )
+    claim_worker_parser.add_argument("--runtime-name", required=True)
+    claim_worker_parser.add_argument(
+        "--browser-lane", choices=["isolated", "attached"], default=None
+    )
+    claim_worker_parser.add_argument("--lease-seconds", type=int, default=900)
+
+    heartbeat_worker_parser = subparsers.add_parser(
+        "heartbeat-worker",
+        parents=[common],
+        help="Extend one active worker lease.",
+    )
+    heartbeat_worker_parser.add_argument("--lease-id", required=True)
+    heartbeat_worker_parser.add_argument("--lease-seconds", type=int, default=900)
+
+    complete_worker_parser = subparsers.add_parser(
+        "complete-worker",
+        parents=[common],
+        help="Complete one active worker lease with a fill result JSON object.",
+    )
+    complete_worker_parser.add_argument("--lease-id", required=True)
+    complete_worker_parser.add_argument("--result-json", required=True)
+
+    reconcile_stale_parser = subparsers.add_parser(
+        "reconcile-stale",
+        parents=[common],
+        help="Move stale worker-controlled runs into manual review.",
+    )
+    reconcile_stale_parser.add_argument("--fill-timeout-minutes", type=int, default=30)
+    reconcile_stale_parser.add_argument("--submit-confirm-timeout-minutes", type=int, default=None)
+
     record_fill_parser = subparsers.add_parser(
         "record-fill", parents=[common], help="Record a fill result for a run."
     )
@@ -171,6 +206,24 @@ def main(argv: Sequence[str] | None = None) -> int:
             ).to_dict()
         elif args.command == "request-fill":
             payload = service.request_fill(args.run_id)
+        elif args.command == "claim-worker":
+            payload = service.claim_next_fill(
+                runtime_name=args.runtime_name,
+                browser_lane=args.browser_lane,
+                lease_seconds=args.lease_seconds,
+            )
+        elif args.command == "heartbeat-worker":
+            payload = service.heartbeat_lease(args.lease_id, lease_seconds=args.lease_seconds)
+        elif args.command == "complete-worker":
+            payload = service.complete_lease_with_result(
+                args.lease_id,
+                service._load_result_json(args.result_json),
+            )
+        elif args.command == "reconcile-stale":
+            payload = service.reconcile_stale_runs(
+                fill_timeout_minutes=args.fill_timeout_minutes,
+                submit_confirm_timeout_minutes=args.submit_confirm_timeout_minutes,
+            )
         elif args.command == "record-fill":
             payload = service.record_fill_result(args.run_id, args.result_json)
         elif args.command == "resolve-review":

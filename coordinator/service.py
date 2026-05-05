@@ -4,6 +4,7 @@ import json
 import sqlite3
 import uuid
 from contextlib import contextmanager
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
@@ -28,6 +29,7 @@ from .models import (
     OrchestrationRun,
     ReadyJobDecision,
     SubmitApproval,
+    WorkerLease,
     utc_now_iso,
 )
 from .notifications import notify as _notify
@@ -49,6 +51,31 @@ def _text(value: Any) -> str:
 def _normalize_status(value: Any, *, default: str = "new") -> str:
     text = _text(value).lower()
     return text or default
+
+
+def _parse_utc(value: Any) -> datetime | None:
+    text = _text(value)
+    if not text:
+        return None
+    try:
+        parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+    except ValueError:
+        try:
+            parsed = datetime.strptime(text, "%Y-%m-%d %H:%M:%S").replace(tzinfo=UTC)
+        except ValueError:
+            return None
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=UTC)
+    return parsed.astimezone(UTC)
+
+
+def _future_utc_iso(seconds: int) -> str:
+    return (datetime.now(UTC).replace(microsecond=0) + timedelta(seconds=seconds)).isoformat()
+
+
+def _is_before_or_equal(value: Any, cutoff: datetime) -> bool:
+    parsed = _parse_utc(value)
+    return parsed is not None and parsed <= cutoff
 
 
 class OrchestrationService:
@@ -140,6 +167,27 @@ class OrchestrationService:
 
     def _get_run_row(self, conn: sqlite3.Connection, run_id: str) -> sqlite3.Row | None:
         return conn.execute("SELECT * FROM orchestration_runs WHERE id = ?", (run_id,)).fetchone()
+
+    def _get_lease_row(self, conn: sqlite3.Connection, lease_id: str) -> sqlite3.Row | None:
+        return conn.execute(
+            "SELECT * FROM orchestration_worker_leases WHERE id = ?",
+            (lease_id,),
+        ).fetchone()
+
+    def _get_active_lease_for_run(
+        self, conn: sqlite3.Connection, run_id: str
+    ) -> sqlite3.Row | None:
+        return conn.execute(
+            """
+            SELECT *
+            FROM orchestration_worker_leases
+            WHERE orchestration_run_id = ?
+              AND status = 'active'
+            ORDER BY datetime(claimed_at) DESC, id DESC
+            LIMIT 1
+            """,
+            (run_id,),
+        ).fetchone()
 
     def _get_open_run_for_job(self, conn: sqlite3.Connection, job_id: int) -> sqlite3.Row | None:
         placeholders = ", ".join("?" for _ in TERMINAL_RUN_STATUSES)
@@ -684,9 +732,347 @@ class OrchestrationService:
             raise OrchestrationError("Result JSON must be an object.")
         return payload
 
+    def _pending_fill_from_run(self, run: OrchestrationRun) -> dict[str, Any]:
+        c3_payload: dict[str, Any] = {}
+        if run.c3_apply_context_path:
+            path = Path(run.c3_apply_context_path)
+            if path.exists():
+                try:
+                    c3_payload = json.loads(path.read_text(encoding="utf-8"))
+                except (json.JSONDecodeError, OSError):
+                    pass
+        return {
+            "run_id": run.run_id,
+            "job_id": run.job_id,
+            "ats_type": run.ats_type,
+            "apply_url": run.apply_url,
+            "started_at": run.started_at,
+            "c3_payload": c3_payload,
+        }
+
+    def _expire_due_worker_leases(
+        self,
+        conn: sqlite3.Connection,
+        *,
+        mark_runs_manual_review: bool = False,
+        now: datetime | None = None,
+    ) -> list[str]:
+        now = now or datetime.now(UTC).replace(microsecond=0)
+        expired_run_ids: list[str] = []
+        rows = conn.execute(
+            """
+            SELECT *
+            FROM orchestration_worker_leases
+            WHERE status = 'active'
+            """
+        ).fetchall()
+        for row in rows:
+            if not _is_before_or_equal(row["expires_at"], now):
+                continue
+            lease = WorkerLease.from_row(row)
+            completed_at = utc_now_iso()
+            conn.execute(
+                """
+                UPDATE orchestration_worker_leases
+                SET status = 'timed_out', completed_at = ?
+                WHERE id = ?
+                """,
+                (completed_at, lease.lease_id),
+            )
+            expired_run_ids.append(lease.run_id)
+            if mark_runs_manual_review:
+                self._mark_run_manual_review(
+                    conn,
+                    run_id=lease.run_id,
+                    reason="worker_timeout",
+                    flags=["worker_timeout"],
+                )
+        return _dedupe(expired_run_ids)
+
+    def _mark_run_manual_review(
+        self,
+        conn: sqlite3.Connection,
+        *,
+        run_id: str,
+        reason: str,
+        flags: list[str] | None = None,
+    ) -> None:
+        row = self._get_run_row(conn, run_id)
+        if not row:
+            return
+        run = OrchestrationRun.from_row(row)
+        if run.status in TERMINAL_RUN_STATUSES or run.status == "manual_review":
+            return
+        review_flags = _dedupe([reason, *(flags or [])])
+        now = utc_now_iso()
+        conn.execute(
+            """
+            UPDATE orchestration_runs
+            SET status = 'manual_review',
+                manual_review_required = TRUE,
+                manual_review_reason = ?,
+                manual_review_flags_json = ?,
+                updated_at = ?,
+                completed_at = NULL
+            WHERE id = ?
+            """,
+            (reason, json.dumps(review_flags), now, run_id),
+        )
+        self._update_job_status(conn, run.job_id, "claimed")
+        self._append_event(
+            conn,
+            run_id=run_id,
+            event_type="manual_review_required",
+            step_name="worker_reconcile",
+            payload={"reason": reason, "manual_review_flags": review_flags},
+        )
+
+    def claim_next_fill(
+        self,
+        *,
+        runtime_name: str,
+        browser_lane: str | None,
+        lease_seconds: int = 900,
+        worker_metadata: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        runtime = _text(runtime_name)
+        if not runtime:
+            raise OrchestrationError("Worker runtime_name is required.")
+        if lease_seconds < 30:
+            raise OrchestrationError("Worker lease_seconds must be at least 30.")
+        metadata = worker_metadata or {}
+        if not isinstance(metadata, dict):
+            raise OrchestrationError("Worker metadata must be an object.")
+
+        with self._connect() as conn:
+            self._expire_due_worker_leases(conn)
+            rows = conn.execute(
+                """
+                SELECT *
+                FROM orchestration_runs
+                WHERE status = 'fill_requested'
+                ORDER BY datetime(started_at) ASC, id ASC
+                """
+            ).fetchall()
+            selected: OrchestrationRun | None = None
+            for row in rows:
+                run = OrchestrationRun.from_row(row)
+                if self._get_active_lease_for_run(conn, run.run_id):
+                    continue
+                selected = run
+                break
+            if selected is None:
+                conn.commit()
+                return {"claimed": False, "reason": "no_pending_fills"}
+
+            lease_id = f"lease-{uuid.uuid4().hex[:12]}"
+            claimed_at = utc_now_iso()
+            expires_at = _future_utc_iso(lease_seconds)
+            conn.execute(
+                """
+                INSERT INTO orchestration_worker_leases (
+                    id,
+                    orchestration_run_id,
+                    runtime_name,
+                    browser_lane,
+                    status,
+                    claimed_at,
+                    heartbeat_at,
+                    expires_at,
+                    worker_metadata_json
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    lease_id,
+                    selected.run_id,
+                    runtime,
+                    _text(browser_lane) or None,
+                    "active",
+                    claimed_at,
+                    claimed_at,
+                    expires_at,
+                    json.dumps(metadata, sort_keys=True),
+                ),
+            )
+            self._append_event(
+                conn,
+                run_id=selected.run_id,
+                event_type="worker_lease_claimed",
+                step_name="worker_claim",
+                payload={
+                    "lease_id": lease_id,
+                    "runtime_name": runtime,
+                    "browser_lane": _text(browser_lane) or None,
+                    "expires_at": expires_at,
+                },
+            )
+            lease_row = self._get_lease_row(conn, lease_id)
+            conn.commit()
+
+        if lease_row is None:
+            raise OrchestrationError(f"Lease {lease_id} could not be loaded after claim.")
+        return {
+            "claimed": True,
+            "lease": WorkerLease.from_row(lease_row).to_dict(),
+            "fill": self._pending_fill_from_run(selected),
+        }
+
+    def heartbeat_lease(self, lease_id: str, *, lease_seconds: int = 900) -> dict[str, Any]:
+        if lease_seconds < 30:
+            raise OrchestrationError("Worker lease_seconds must be at least 30.")
+        with self._connect() as conn:
+            row = self._get_lease_row(conn, lease_id)
+            if not row:
+                raise OrchestrationError(f"Worker lease {lease_id} was not found.")
+            lease = WorkerLease.from_row(row)
+            if lease.status != "active":
+                raise OrchestrationError(f"Worker lease {lease_id} is not active.")
+            now_dt = datetime.now(UTC).replace(microsecond=0)
+            if _is_before_or_equal(lease.expires_at, now_dt):
+                conn.execute(
+                    """
+                    UPDATE orchestration_worker_leases
+                    SET status = 'timed_out', completed_at = ?
+                    WHERE id = ?
+                    """,
+                    (utc_now_iso(), lease_id),
+                )
+                conn.commit()
+                raise OrchestrationError(f"Worker lease {lease_id} has expired.")
+            heartbeat_at = utc_now_iso()
+            expires_at = _future_utc_iso(lease_seconds)
+            conn.execute(
+                """
+                UPDATE orchestration_worker_leases
+                SET heartbeat_at = ?, expires_at = ?
+                WHERE id = ?
+                """,
+                (heartbeat_at, expires_at, lease_id),
+            )
+            updated = self._get_lease_row(conn, lease_id)
+            conn.commit()
+        if updated is None:
+            raise OrchestrationError(f"Worker lease {lease_id} disappeared after heartbeat.")
+        return {"lease": WorkerLease.from_row(updated).to_dict()}
+
+    def complete_lease_with_result(self, lease_id: str, payload: dict[str, Any]) -> dict[str, Any]:
+        if not isinstance(payload, dict):
+            raise OrchestrationError("Worker result payload must be an object.")
+        with self._connect() as conn:
+            row = self._get_lease_row(conn, lease_id)
+            if not row:
+                raise OrchestrationError(f"Worker lease {lease_id} was not found.")
+            lease = WorkerLease.from_row(row)
+            if lease.status != "active":
+                raise OrchestrationError(f"Worker lease {lease_id} is not active.")
+            now_dt = datetime.now(UTC).replace(microsecond=0)
+            if _is_before_or_equal(lease.expires_at, now_dt):
+                conn.execute(
+                    """
+                    UPDATE orchestration_worker_leases
+                    SET status = 'timed_out', completed_at = ?
+                    WHERE id = ?
+                    """,
+                    (utc_now_iso(), lease_id),
+                )
+                conn.commit()
+                raise OrchestrationError(f"Worker lease {lease_id} has expired.")
+
+        recorded = self.record_fill_result_inline(lease.run_id, payload)
+        with self._connect() as conn:
+            completed_at = utc_now_iso()
+            conn.execute(
+                """
+                UPDATE orchestration_worker_leases
+                SET status = 'completed', completed_at = ?
+                WHERE id = ?
+                """,
+                (completed_at, lease_id),
+            )
+            self._append_event(
+                conn,
+                run_id=lease.run_id,
+                event_type="worker_lease_completed",
+                step_name="worker_result",
+                payload={"lease_id": lease_id, "runtime_name": lease.runtime_name},
+            )
+            updated = self._get_lease_row(conn, lease_id)
+            conn.commit()
+        if updated is None:
+            raise OrchestrationError(f"Worker lease {lease_id} disappeared after completion.")
+        return {**recorded, "lease": WorkerLease.from_row(updated).to_dict()}
+
+    def reconcile_stale_runs(
+        self,
+        *,
+        fill_timeout_minutes: int = 30,
+        submit_confirm_timeout_minutes: int | None = None,
+    ) -> dict[str, Any]:
+        now = datetime.now(UTC).replace(microsecond=0)
+        fill_cutoff = now - timedelta(minutes=fill_timeout_minutes)
+        submit_cutoff = (
+            now - timedelta(minutes=submit_confirm_timeout_minutes)
+            if submit_confirm_timeout_minutes is not None
+            else None
+        )
+        with self._connect() as conn:
+            expired_lease_run_ids = self._expire_due_worker_leases(
+                conn, mark_runs_manual_review=True, now=now
+            )
+            runs_marked: list[str] = list(expired_lease_run_ids)
+            rows = conn.execute(
+                """
+                SELECT *
+                FROM orchestration_runs
+                WHERE status = 'fill_requested'
+                """
+            ).fetchall()
+            for row in rows:
+                run = OrchestrationRun.from_row(row)
+                if self._get_active_lease_for_run(conn, run.run_id):
+                    continue
+                last_update = _parse_utc(run.updated_at) or _parse_utc(run.started_at)
+                if last_update is None or last_update > fill_cutoff:
+                    continue
+                self._mark_run_manual_review(
+                    conn,
+                    run_id=run.run_id,
+                    reason="worker_timeout",
+                    flags=["worker_timeout"],
+                )
+                runs_marked.append(run.run_id)
+
+            submit_marked: list[str] = []
+            if submit_cutoff is not None:
+                rows = conn.execute(
+                    """
+                    SELECT *
+                    FROM orchestration_runs
+                    WHERE status = 'submit_approved'
+                    """
+                ).fetchall()
+                for row in rows:
+                    run = OrchestrationRun.from_row(row)
+                    last_update = _parse_utc(run.updated_at) or _parse_utc(run.started_at)
+                    if last_update is None or last_update > submit_cutoff:
+                        continue
+                    self._mark_run_manual_review(
+                        conn,
+                        run_id=run.run_id,
+                        reason="submit_not_confirmed",
+                        flags=["submit_not_confirmed"],
+                    )
+                    submit_marked.append(run.run_id)
+            conn.commit()
+        return {
+            "runs_marked_manual_review": _dedupe(runs_marked),
+            "submit_runs_marked_manual_review": _dedupe(submit_marked),
+        }
+
     def get_pending_fills(self, limit: int = 5) -> list[dict[str, Any]]:
         """Return runs in fill_requested status with their c3 apply payloads."""
         with self._connect() as conn:
+            self._expire_due_worker_leases(conn)
             rows = conn.execute(
                 """
                 SELECT * FROM orchestration_runs
@@ -699,24 +1085,9 @@ class OrchestrationService:
             result: list[dict[str, Any]] = []
             for row in rows:
                 run = OrchestrationRun.from_row(row)
-                c3_payload: dict[str, Any] = {}
-                if run.c3_apply_context_path:
-                    path = Path(run.c3_apply_context_path)
-                    if path.exists():
-                        try:
-                            c3_payload = json.loads(path.read_text(encoding="utf-8"))
-                        except (json.JSONDecodeError, OSError):
-                            pass
-                result.append(
-                    {
-                        "run_id": run.run_id,
-                        "job_id": run.job_id,
-                        "ats_type": run.ats_type,
-                        "apply_url": run.apply_url,
-                        "started_at": run.started_at,
-                        "c3_payload": c3_payload,
-                    }
-                )
+                if self._get_active_lease_for_run(conn, run.run_id):
+                    continue
+                result.append(self._pending_fill_from_run(run))
             return result
 
     def _derive_review_flags(

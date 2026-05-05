@@ -6,6 +6,7 @@ hunt_user_config.json
 __pycache__/
 *.pyc
 .state/
+.runtime/
 hunt.db
 .playwright-browsers/
 .env

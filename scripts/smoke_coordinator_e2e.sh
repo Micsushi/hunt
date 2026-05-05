@@ -145,12 +145,6 @@ insert_job() {
     echo "$output" | tr -d '[:space:]'
 }
 
-pg_exec() {
-    MSYS_NO_PATHCONV=1 docker exec \
-      -e PGPASSWORD="$PG_PASSWORD" "$PG_CONTAINER" \
-      psql -h 127.0.0.1 -U "$PG_USER" -d "$PG_DB" -X -q -v ON_ERROR_STOP=1 -c "$1" >/dev/null
-}
-
 # ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 # Tests
 # ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
@@ -220,8 +214,8 @@ check_contains "GET /c3/pending-fills empty for apply_prepared run" '"fills":[]'
 
 echo
 echo "--- c3 fill flow ---"
-# Simulate request_fill by forcing status to fill_requested
-pg_exec "UPDATE orchestration_runs SET status='fill_requested', updated_at=NOW() WHERE id='${RUN1}'"
+out=$(api -X POST "$BASE/runs/$RUN1/request-fill")
+check_eq "POST /request-fill -> fill_requested" "fill_requested" "$(echo "$out" | json_field "['run']['status']")"
 
 out=$(api "$BASE/c3/pending-fills")
 check_contains "GET /c3/pending-fills shows fill_requested run" "$RUN1" "$out"
@@ -258,7 +252,8 @@ out=$(api -X POST -H "Content-Type: application/json" -d "{\"job_id\": ${JOB2}}"
 RUN2=$(echo "$out" | json_field "['run_id']")
 check_eq "POST /run job2 -> apply_prepared" "apply_prepared" "$(echo "$out" | json_field "['status']")"
 
-pg_exec "UPDATE orchestration_runs SET status='fill_requested', updated_at=NOW() WHERE id='${RUN2}'"
+out=$(api -X POST "$BASE/runs/$RUN2/request-fill")
+check_eq "POST /request-fill job2 -> fill_requested" "fill_requested" "$(echo "$out" | json_field "['run']['status']")"
 
 api -X POST -H "Content-Type: application/json" \
   -d "{\"run_id\": \"${RUN2}\", \"payload\": {\"status\": \"ok\", \"resumeUploadOk\": true}}" \

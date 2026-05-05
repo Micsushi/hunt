@@ -10,6 +10,7 @@ from typing import Any
 class _LogEntry:
     event_id: int
     ts: float
+    delta: float
     kind: str  # "step" | "llm"
     name: str
     detail: dict
@@ -19,6 +20,7 @@ class PipelineLogger:
     def __init__(self) -> None:
         self._entries: list[_LogEntry] = []
         self._start = time.perf_counter()
+        self._last_ts = 0.0
         self._event_id = 0
 
     def _next_event_id(self) -> int:
@@ -28,12 +30,19 @@ class PipelineLogger:
     def step(self, name: str, **detail: Any) -> None:
         event_id = self._next_event_id()
         ts = time.perf_counter() - self._start
+        delta = ts - self._last_ts
+        self._last_ts = ts
         detail = {"event_id": event_id, **detail}
         self._entries.append(
-            _LogEntry(event_id=event_id, ts=ts, kind="step", name=name, detail=detail)
+            _LogEntry(event_id=event_id, ts=ts, delta=delta, kind="step", name=name, detail=detail)
         )
         parts = " | ".join(f"{k}={v}" for k, v in detail.items() if v is not None)
-        print(f"[pipeline +{ts:.2f}s] {name}  {parts}", flush=True)
+        print(
+            f"------ pipeline event={event_id} +{ts:.3f}s delta={delta:.3f}s step={name} ------",
+            flush=True,
+        )
+        if parts:
+            print(parts, flush=True)
 
     def llm_call(
         self,
@@ -46,10 +55,13 @@ class PipelineLogger:
     ) -> None:
         event_id = self._next_event_id()
         ts = time.perf_counter() - self._start
+        delta = ts - self._last_ts
+        self._last_ts = ts
         self._entries.append(
             _LogEntry(
                 event_id=event_id,
                 ts=ts,
+                delta=delta,
                 kind="llm",
                 name=name,
                 detail={
@@ -63,7 +75,7 @@ class PipelineLogger:
         )
         status = "ok" if success else f"FAILED error={error}"
         print(
-            f"[pipeline +{ts:.2f}s] llm:{name}  event_id={event_id} | {status}  {duration_ms}ms",
+            f"------ llm event={event_id} +{ts:.3f}s delta={delta:.3f}s call={name} status={status} duration_ms={duration_ms} ------",
             flush=True,
         )
         if not success and error:
@@ -72,17 +84,20 @@ class PipelineLogger:
     def get_log_text(self) -> str:
         lines: list[str] = ["=" * 70, "PIPELINE LOG", "=" * 70, ""]
         for e in self._entries:
-            ts = f"+{e.ts:.2f}s"
+            lines.append("------")
+            ts = f"+{e.ts:.3f}s"
+            delta = f"delta={e.delta:.3f}s"
             if e.kind == "step":
-                lines.append(f"[STEP  {ts}] {e.name}")
+                lines.append(f"[STEP  {ts} | {delta} | event_id={e.event_id}] {e.name}")
                 for k, v in e.detail.items():
                     lines.append(f"  {k}: {v}")
                 lines.append("")
             else:
                 dur = e.detail["duration_ms"]
                 ok = e.detail["success"]
-                lines.append(f"[LLM   {ts}] {e.name}  success={ok}  {dur}ms")
-                lines.append(f"  event_id: {e.event_id}")
+                lines.append(
+                    f"[LLM   {ts} | {delta} | event_id={e.event_id}] {e.name}  success={ok}  {dur}ms"
+                )
                 lines.append("  --- PROMPT ---")
                 for ln in str(e.detail["prompt"]).splitlines():
                     lines.append(f"  {ln}")

@@ -17,6 +17,13 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parent.parent
 IS_WINDOWS = os.name == "nt"
 
+try:
+    from hunter.dotenv import load_dotenv as _load_dotenv
+
+    _load_dotenv(REPO_ROOT / ".env", override=False)
+except Exception:
+    pass
+
 
 def _find_repo_python() -> str:
     candidates = []
@@ -38,13 +45,35 @@ def _find_repo_python() -> str:
 
 
 PYTHON = _find_repo_python()
+_SENSITIVE_FLAGS = {"--password", "--db-url"}
+
+
+def _display_argv(argv) -> str:
+    display: list[str] = []
+    redact_next = False
+    for part in argv:
+        text = str(part)
+        if redact_next:
+            display.append("******")
+            redact_next = False
+            continue
+        if text in _SENSITIVE_FLAGS:
+            display.append(text)
+            redact_next = True
+            continue
+        if any(text.startswith(f"{flag}=") for flag in _SENSITIVE_FLAGS):
+            flag, _sep, _value = text.partition("=")
+            display.append(f"{flag}=******")
+            continue
+        display.append(shlex.quote(text))
+    return " ".join(display)
 
 
 def _run(argv, *, env=None):
     final_env = os.environ.copy()
     if env:
         final_env.update(env)
-    print("[fletchctl] Running:", " ".join(shlex.quote(str(part)) for part in argv))
+    print("[fletchctl] Running:", _display_argv(argv))
     raise SystemExit(subprocess.run(argv, cwd=REPO_ROOT, env=final_env).returncode)
 
 
@@ -176,6 +205,44 @@ def cmd_test_job(args):
     raise SystemExit(0)
 
 
+def cmd_option_b_smoke(args):
+    command = [
+        PYTHON,
+        "scripts/option_b_smoke.py",
+        "--count",
+        str(args.count),
+        "--candidate-limit",
+        str(args.candidate_limit),
+        "--min-description-chars",
+        str(args.min_description_chars),
+        "--review-url",
+        args.review_url,
+        "--db-url",
+        args.db_url,
+        "--username",
+        args.username,
+        "--password",
+        args.password,
+        "--resume",
+        args.resume,
+        "--out-dir",
+        args.out_dir,
+        "--timeout",
+        str(args.timeout),
+        "--docker-container",
+        args.docker_container,
+        "--docker-tail",
+        str(args.docker_tail),
+    ]
+    if args.seed is not None:
+        command += ["--seed", str(args.seed)]
+    for job_id in args.job_id or []:
+        command += ["--job-id", str(job_id)]
+    if args.dry_run:
+        command.append("--dry-run")
+    _run(command)
+
+
 def cmd_index(args):
     import json
 
@@ -289,6 +356,33 @@ def build_parser() -> argparse.ArgumentParser:
     )
     test_job.add_argument("job_id", type=int)
     test_job.set_defaults(func=cmd_test_job)
+
+    option_b_smoke = sub.add_parser(
+        "option-b-smoke",
+        help="Call deployed Option B API for random enriched jobs and save artifacts.",
+    )
+    option_b_smoke.add_argument("--count", type=int, default=3)
+    option_b_smoke.add_argument("--candidate-limit", type=int, default=50)
+    option_b_smoke.add_argument("--min-description-chars", type=int, default=500)
+    option_b_smoke.add_argument("--job-id", type=int, action="append", default=None)
+    option_b_smoke.add_argument("--seed", type=int, default=None)
+    option_b_smoke.add_argument(
+        "--review-url", default=os.environ.get("HUNT_REVIEW_URL", "http://127.0.0.1:18080")
+    )
+    option_b_smoke.add_argument("--db-url", default=os.environ.get("HUNT_DB_URL", ""))
+    option_b_smoke.add_argument(
+        "--username", default=os.environ.get("HUNT_ADMIN_USERNAME", "admin")
+    )
+    option_b_smoke.add_argument(
+        "--password", default=os.environ.get("HUNT_ADMIN_PASSWORD", "hunt-local-admin")
+    )
+    option_b_smoke.add_argument("--resume", default=str(REPO_ROOT / "main.tex"))
+    option_b_smoke.add_argument("--out-dir", default=".runtime/option-b-smokes")
+    option_b_smoke.add_argument("--timeout", type=int, default=420)
+    option_b_smoke.add_argument("--docker-container", default="hunt-review-1")
+    option_b_smoke.add_argument("--docker-tail", type=int, default=300)
+    option_b_smoke.add_argument("--dry-run", action="store_true")
+    option_b_smoke.set_defaults(func=cmd_option_b_smoke)
 
     index = sub.add_parser("index", help="Manage the RAG vector index.")
     index.add_argument(

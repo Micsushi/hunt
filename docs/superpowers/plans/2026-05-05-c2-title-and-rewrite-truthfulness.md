@@ -2347,6 +2347,22 @@ Manual Sophos smoke expectations:
 - Bad domain rewrites remain rejected.
 - No-summary and with-summary PDFs still fit.
 
+## Implemented Checkpoint: Action Phrase Validation and Summary Evidence
+
+Implemented:
+- Claimed keyword validation now accepts visible action inflections, for example `Monitor data pipelines` can match `monitoring data pipelines`.
+- Claimed keyword validation still rejects scattered terms that do not keep the action and object together.
+- Rewrite and validation prompts now tell the model that Datadog monitoring is acceptable only when the monitored object is explicit.
+- Claimed-keyword failures can now trigger one narrow retry on a visibly present proper subset.
+- Data-domain keywords now require direct original-bullet evidence and cannot be inferred from generic full-stack architecture.
+- Summary generation now receives top retained bullet evidence in addition to titles and skills.
+- Pipeline logs now include `------` separators, three-decimal timestamps, and per-event delta timing.
+
+Still pending:
+- Full pre-RAG keyword policy routing in `fletcher/jobs/keyword_policy.py`.
+- Tool/process/domain support checks before rewrite calls.
+- Summary regeneration or revalidation if the drop loop later removes evidence used by the summary.
+
 ### Task 8: Improve Timing and Log Clarity
 
 Files: Modify `fletcher/pipeline_logger.py`, `fletcher/ad_hoc_pipeline.py`, `fletcher/llm/llm_enrich.py`, tests as needed.

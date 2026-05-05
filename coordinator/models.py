@@ -180,3 +180,45 @@ class SubmitApproval:
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
+
+
+@dataclass(slots=True)
+class WorkerLease:
+    lease_id: str
+    run_id: str
+    runtime_name: str
+    browser_lane: str | None = None
+    status: str = "active"
+    claimed_at: str = field(default_factory=utc_now_iso)
+    heartbeat_at: str | None = None
+    expires_at: str = field(default_factory=utc_now_iso)
+    completed_at: str | None = None
+    worker_metadata: dict[str, Any] = field(default_factory=dict)
+
+    @classmethod
+    def from_row(cls, row: Mapping[str, Any]) -> WorkerLease:
+        metadata = row["worker_metadata_json"]
+        if isinstance(metadata, str):
+            import json
+
+            try:
+                metadata = json.loads(metadata or "{}")
+            except json.JSONDecodeError:
+                metadata = {}
+        if not isinstance(metadata, dict):
+            metadata = {}
+        return cls(
+            lease_id=str(row["id"]),
+            run_id=str(row["orchestration_run_id"]),
+            runtime_name=str(row["runtime_name"]),
+            browser_lane=row["browser_lane"],
+            status=str(row["status"]),
+            claimed_at=str(row["claimed_at"]),
+            heartbeat_at=row["heartbeat_at"],
+            expires_at=str(row["expires_at"]),
+            completed_at=row["completed_at"],
+            worker_metadata=metadata,
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)

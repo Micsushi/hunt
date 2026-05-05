@@ -4,13 +4,13 @@ Work in progress and polish backlog. See `docs/roadmap.md` for the status of eac
 
 ## Current State Snapshot
 
-This is your current confidence snapshot (subjective, as of 2026-05-01). The backlog is longer than this confidence view:
+This is your current confidence snapshot (subjective, as of 2026-05-05). The backlog is longer than this confidence view:
 
 - C0: mostly done
 - C1: about 80% done
-- C2: about 30% working
+- C2: about 30-35% working
 - C3: not tested end to end yet
-- C4: not really implemented end to end yet
+- C4: API/state-machine scaffold exists; live browser/agent execution not proven yet
 
 Use that snapshot as the reality check when reading the detailed lists below.
 
@@ -35,7 +35,7 @@ C0 is the web interface and API gateway. The frontend is a React single-page app
 
 C1 scrapes LinkedIn for job listings and enriches them with full job descriptions. Runs as a service on server2 and as a CLI tool locally.
 
-- [x] Validate a full production cycle on server2: scrape → enrich → write artifacts → drain queue → confirm scheduler holds steady
+- [x] Validate a full production cycle on server2: scrape -> enrich -> write artifacts -> drain queue -> confirm scheduler holds steady
 - [x] Confirm the C1 CLI works standalone on both Windows and Linux without Docker (entry points exist: hunter.ps1, hunter.sh, hunter.cmd - needs a real test run on each platform)
 - [x] Add API endpoint tests: status, queue, scrape, enrich, auth failure handling, and duplicate-run prevention (covered in `tests/test_component1_service_api.py`)
 - [x] Add structured log events for scrape start/end, enrich batch summary, retry exhaustion, and artifact writes (auth pauses and rate limiting already notify via Discord/C1Logger)
@@ -53,7 +53,8 @@ C1 scrapes LinkedIn for job listings and enriches them with full job description
 
 C2 takes a job description and a base resume, then generates a tailored resume using an LLM. Runs as a service (Ollama-backed) and through the C0 web UI.
 
-- [ ] Confirm the web UI end-to-end: C0 page → C0 gateway → C2 service → tailored resume back in the browser
+- [ ] Before changing Fletcher review UI, PDF import/export, or LLM provider support, check `docs/superpowers/plans/2026-05-05-c2-review-workspace-pdf-llm-providers.md`
+- [ ] Confirm the web UI end-to-end: C0 page -> C0 gateway -> C2 service -> tailored resume back in the browser
 - [ ] Accept resume input as PDF, LaTeX source, or plain text (currently limited)
 - [ ] Accept a job description or a list of keywords as the tailoring target
 - [ ] Accept a candidate profile separately, or derive it from the resume if none is provided
@@ -70,33 +71,97 @@ C2 takes a job description and a base resume, then generates a tailored resume u
 - [ ] Evaluate which free OpenRouter models work best as fallbacks
 - [ ] Evaluate Google free-tier API as an option
 - [ ] Decide whether using multiple OpenRouter accounts to stay under rate limits is acceptable
-- [ ] Validate the C1 → C2 handoff on server2 using real enriched job data
+- [ ] Validate the C1 -> C2 handoff on server2 using real enriched job data
 
 ## C3 : Executioner (browser form filler)
 
-C3 is a Chrome extension that polls C4 for pending fill jobs, fills out job application forms automatically, and posts the result back. ATS = applicant tracking system (e.g. Workday, Greenhouse, Lever) - the software companies use to manage applications.
+C3 is a Chrome extension that polls C4 for pending fill jobs, fills out job application forms automatically, and posts the result back. It should also work as a generic page-aware form filler for non-job websites, account signup pages, and ordinary web forms. ATS = applicant tracking system (e.g. Workday, Greenhouse, Lever) - the software companies use to manage applications.
 
-- [ ] Restructure the extension so adding support for a new ATS is straightforward - one adapter file per ATS
-- [ ] Harden the Workday flow: handle multi-page forms, move to the next page automatically, fill fields on load, and save evidence (screenshots/HTML) for each step
-- [ ] Before filling, identify all required fields and fill anything that has a known answer from the candidate profile or resume
-- [ ] For fields with no fixed answer, use LLM generation only when it can be grounded in the profile/resume context - no hallucinating answers
-- [ ] Fallback for fields the LLM can't confidently answer: use safe deterministic defaults and flag them for manual review
-- [ ] Use the same candidate profile as Fletcher for all generated paragraph answers so answers are consistent across the pipeline
-- [ ] Support external LLM API keys for answer generation (same as C2)
-- [ ] Account creation support: extension fills the signup form, then pauses and waits for the operator to complete email/SMS verification manually before continuing
-- [ ] Phase 2 account creation: auto-retrieve verification codes from email so signup is fully unattended
-- [ ] Bot detection and CAPTCHA: use fingerprint spoofing, human-like timing, and CAPTCHA solver integration (e.g. 2captcha) where possible
-- [ ] Detect MFA prompts and account locks; surface them clearly in C0 when they can't be bypassed automatically
-- [ ] Validate live polling: extension picks up a real pending fill from the C4 queue through C0
-- [ ] Validate live postback: extension submits a real fill result and C4 updates the run state correctly
-- [ ] Package the extension for repeatable install and update (not just "load unpacked" in Chrome dev mode)
+Current gap inventory:
+- [ ] Fix C3 formatting so `python ci.py c3` can reach tests. Current known Prettier failures: `executioner/src/ats/registry.js`, `executioner/src/ats/workday/fill.js`, `executioner/src/shared/injected.js`
+- [ ] Add extension-side C0/C4 polling. Today the extension supports manual context import and manual fill, but it does not yet poll `/api/c3/pending-fills` on its own
+- [ ] Add C3 settings for backend URL, service token, polling enabled/disabled, poll interval, and one-active-run lock
+- [ ] Add MV3 `chrome.alarms` polling worker so the service worker can wake up reliably and check for pending fill requests
+- [ ] Add real extension postback to `/api/c3/fill-result` with run id, status, final URL, filled fields, missing required fields, generated answers used, resume upload status, manual-review flags, screenshots, and HTML evidence
+- [ ] Add stale-run handling: if a fill starts but the tab closes, login blocks, or the browser crashes, post a failed/manual-review result instead of leaving the C4 run stuck
+- [ ] Add C3 heartbeat/status reporting so C0 can distinguish "extension offline" from "no pending fills"
+- [ ] Expand `manifest.json` host permissions beyond Workday only when adapters are actually implemented. The registry currently lists more ATS families than the manifest can inject into
+
+Browser proof and test gaps:
+- [ ] Add a cross-platform `python smoke.py c3` entrypoint. `docs/LOCAL_POSTGRES_SMOKES.md` currently says no C3 smoke exists
+- [ ] Add Playwright persistent-context harness that loads the unpacked extension, seeds profile/settings/apply context, opens fixture pages, clicks Fill, and asserts field values
+- [ ] Add local safe fixture pages for Workday-like, Greenhouse-like, Lever-like, Ashby-like, generic HTML application forms, generic signup/account forms, and non-job profile/contact forms
+- [ ] Add fixture coverage for text inputs, selects, custom comboboxes, radio groups, checkboxes, textareas, file uploads, required-field errors, multi-page forms, and final review pages
+- [ ] Add screenshot + HTML snapshot assertions so failures produce useful artifacts instead of only "fill failed"
+- [ ] Add API-level smoke that creates a C4 run, requests fill, lets the extension poll it, fills a local fixture page, posts the result, and verifies the run reaches `awaiting_submit_approval` or `manual_review`
+
+Generic top-down fill gaps:
+- [ ] Build a page inventory pass that scans visible fields from top to bottom, including labels, placeholders, aria labels, surrounding section text, required markers, existing values, validation messages, and nearby buttons
+- [ ] Fill one field or one field group at a time, then observe the page again before continuing so dynamic validation and newly revealed fields are handled safely
+- [ ] Add an LLM field-decision step for ambiguous fields: classify the field/question, choose a value or skip action, cite the source used, and return confidence
+- [ ] Use deterministic profile/resume matching before the LLM. The LLM should decide ambiguous mapping and paragraph answers, not replace obvious mappings like name, email, phone, links, work authorization, or resume upload
+- [ ] Support paragraph-question answers such as "Why this company?" by grounding in company name, job description, candidate profile, selected resume facts, and reviewed answer history
+- [ ] Add generic account/signup support through the same filler: fill known signup/contact/profile fields, stop for email/SMS verification, CAPTCHA, MFA, account lock, payment, or final irreversible actions
+- [ ] Add required/optional policy: required fields are answered when policy and available context allow it; optional fields are skipped by default unless configured otherwise
+- [ ] Add EEO/demographic policy: optional EEO/demographic fields are skipped; required EEO/demographic fields are answered only from explicit operator-configured preferences, otherwise manual review
+- [ ] Add a confidence gate for LLM decisions: high confidence can fill, medium confidence can fill but flag review, low confidence skips or stops for manual review based on requiredness
+- [ ] Store field decisions and outcomes so repeated websites and repeated questions get faster and safer over time
+
+Adapter architecture gaps:
+- [ ] Restructure the extension around a generic top-down filler plus one adapter file per ATS for platform-specific widgets and navigation
+- [ ] Define adapter methods: detect page state, inventory fields, fill current step, detect required/missing fields, click next, detect submit/review page, collect evidence, and return normalized result
+- [ ] Treat the generic fallback adapter as the first proof target for normal HTML forms that do not need ATS-specific widgets
+- [ ] Add a canonical field registry with field ids, label synonyms, confidence score, value source, and manual-review behavior
+- [ ] Add manual mapping memory: when the operator fixes a field mapping, store host/form-signature/field-signature mapping for future runs
+- [ ] Add safe retry/stuck recovery: wait for framework hydration, retry failed field set once, detect no-progress loops, then stop and flag manual review
+- [ ] Keep adapter behavior deterministic by default. Use LLMs only for custom questions or low-confidence label interpretation after deterministic matching fails
+
+Workday gaps:
+- [ ] Harden Workday multi-page flow: fill current step, save evidence, click next, wait for the next step, repeat until the review/submit page
+- [ ] Identify all visible required fields before filling and again after each next-page click
+- [ ] Handle Workday custom widgets, including comboboxes, search/dropdown pickers, repeated forms, date pickers, checkbox groups, and validation banners
+- [ ] Avoid double-filling already completed Workday fields when autofill-on-load fires after navigation
+- [ ] Detect Workday account/login/signup pages and pause cleanly for operator action when auth is required
+- [ ] Detect final submit/review page and stop before final submission unless a later explicit allowlist says otherwise
+
+ATS coverage gaps:
+- [ ] Prove generic top-down fill on fixture websites before relying on ATS-specific expansion
+- [ ] Add Greenhouse adapter after the generic filler and Workday have browser-backed passing smokes
+- [ ] Add Lever adapter after Greenhouse
+- [ ] Add Ashby adapter after Lever
+- [ ] Add SmartRecruiters, iCIMS, Jobvite, BambooHR, Workable, Taleo/Oracle, ADP, UKG, Pinpoint, Recruitee, Dover, and JazzHR to the detection/backlog list
+- [ ] Keep `hunter/url_utils.py`, `executioner/src/ats/registry.js`, manifest host permissions, and C1 enrichment `ats_type` values in sync
+- [ ] Track support levels per target: generic-fill supported, detected only, fixture-smoked, live-smoked, multi-page supported, resume upload supported, account creation supported, custom questions supported
+
+Profile, resume, and answer gaps:
+- [ ] Use the same candidate profile as Fletcher for generated paragraph answers so C2 resumes and C3 answers stay consistent
+- [ ] Expand the profile model for C3 fields: preferred name, legal name, email, phone, address, links, work authorization, sponsorship, relocation, salary expectations, education, work history, skills, pronouns, and voluntary EEO fields where the operator chooses to store them
+- [ ] Add selected-resume context beyond the PDF upload: summary, skills, education, recent projects, and source facts that answer generation can cite
+- [ ] For fields with no fixed answer, generate answers only when grounded in profile/resume/JD context. No invented claims
+- [ ] Add confidence and source tags to every generated answer: deterministic, profile, resume, job description, LLM, manual
+- [ ] Fallback for unanswered required fields: safe deterministic answer only when policy allows it, otherwise leave blank and flag manual review
+- [ ] Support external LLM API keys for answer generation using the same provider/config direction as C2
+- [ ] Store generated-answer history by normalized question hash so repeated employer questions can reuse reviewed answers
+
+Account, auth, and manual-control gaps:
+- [ ] Account creation support: extension fills known signup fields, then pauses for the operator to complete email/SMS verification manually
+- [ ] Detect CAPTCHA, bot checks, MFA prompts, account locks, and access-control pages; stop and surface them clearly in C0
+- [ ] Keep final submit approval human-gated. C3 should fill and stop at review/submit until a narrow future allowlist exists
+- [ ] Add operator controls: pause polling, cancel active fill, retry current fill, clear active context, open evidence, and mark manual review resolved
+- [ ] Package the extension for repeatable install/update instead of relying only on Chrome "load unpacked" dev mode
 
 ## C4 : Coordinator (run orchestrator)
-Reality check: C4 has scaffolding and some smoke/API-level pieces, but it is still early. Do not treat it as a finished orchestration component yet.
+Reality check: C4 has a real DB-backed state machine, API/CLI surface, C3 bridge tests, submit approval flow, and a Postgres smoke. Do not treat it as finished automation until a real browser-backed worker completes a fill and C4 can recover stale runs.
 
 C4 manages application runs - it decides when a job is ready to apply for, requests a browser fill from C3, waits for the result, and handles the final submit approval step.
 
-- [ ] Document how C4 makes decisions: what prompts it uses, what each agent role does, and how the state machine transitions work
+- [x] Document the current C4 state machine, readiness gates, API, CLI, artifacts, and current gaps in `docs/C4_COORDINATOR.md`
+- [x] Add detailed C4 long-running agent plan with OpenClaw and Hermes research in `docs/superpowers/plans/2026-05-05-c4-long-running-agent-orchestration.md`
+- [x] Add HTTP endpoint for the service-level `request_fill` transition: `POST /runs/{run_id}/request-fill`
+- [x] Update `scripts/smoke_coordinator_e2e.sh` so it uses public C4 HTTP routes for request-fill instead of mutating `orchestration_runs` directly
+- [x] Add worker lease, heartbeat, and result routes so C3/OpenClaw/Hermes can claim exactly one fill and stale workers can be recovered
+- [x] Add stale-run reconciliation for timed-out fill workers, old leases, and submit-approved runs that were never confirmed submitted
+- [x] Add OpenClaw/Hermes one-shot launcher that claims one lease, writes bounded prompt/result artifacts, and only runs an external agent with explicit `--execute-agent`
 - [ ] C0 UI pages for C4 are already built - validate run queue, run detail, approvals, and event log against a real C4 run
 - [ ] Validate and document the fill-request HTTP flow (`/run`, `/runs`, `/c3/pending-fills`, `/c3/fill-result`) so operators can use it confidently from C0 and scripts
 - [ ] Validate the full C3 bridge with a real browser session, not just the fake API-level fill used in smoke tests
@@ -104,7 +169,10 @@ C4 manages application runs - it decides when a job is ready to apply for, reque
 - [ ] Unattended guardrails: limit to one active run at a time, cap retries, add cooldown periods, auto-recover stale runs that get stuck
 - [ ] Show a ready/not-ready explanation in C0 using C4 reason codes - operator should be able to see exactly why a job isn't being run yet
 - [ ] More tests for readiness checks and state transitions
-- [ ] Document the server2 runtime environment so C4 CLI and API behave the same way on both Windows and Linux
+- [ ] Document the server2 runtime environment so C4 CLI, API, and one-shot agent worker behave the same way on both Windows and Linux
+- [ ] Pilot OpenClaw as a Windows/WSL2/Linux C4 worker using an isolated browser profile first, then an attached user profile only after the fixture smoke passes
+- [ ] Pilot Hermes as a WSL2/Linux/server2 C4 worker. Native Windows is not supported by Hermes, so Windows machines should use WSL2 for this lane
+- [ ] Keep final submit human-gated for every runtime lane until a separate narrow submit allowlist is designed and tested
 
 ## Deployment / Server2
 
@@ -115,5 +183,5 @@ Smoke tests are quick end-to-end checks that confirm a deployment is working. Ru
 - [ ] **Server2 C1 smoke**: scrape and enrich run against production DB, scheduler stays steady
 - [ ] **Server2 C2 smoke**: generate a tailored resume using a real C1-enriched job
 - [ ] **Server2 C3 smoke**: extension polls C0, fills one safe test application page, posts the result back
-- [ ] **Server2 C4 smoke**: a real run moves through the full state machine: apply-prepared → fill-requested → awaiting-submit-approval → approved/denied
+- [ ] **Server2 C4 smoke**: a real run moves through the full state machine: apply-prepared -> fill-requested -> awaiting-submit-approval -> approved/denied
 - [ ] Ansible v2 deploy stages are tracked in a separate repo - update deployment docs here when those land
