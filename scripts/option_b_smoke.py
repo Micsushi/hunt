@@ -155,6 +155,34 @@ def summarize_pipeline_log(log_text: str) -> dict[str, Any]:
     }
 
 
+def build_quality_notes(log_text: str) -> dict[str, Any]:
+    lines = log_text.splitlines()
+    policy_lines = [
+        line.strip()
+        for line in lines
+        if any(
+            marker in line
+            for marker in (
+                "keyword_policy_partition",
+                "rewrite:",
+                "summary_only:",
+                "skills_only:",
+                "ignored:",
+                "summary_keyword_filter",
+                "bullet_drop",
+            )
+        )
+    ]
+    return {
+        "has_keyword_policy_partition": "keyword_policy_partition" in log_text,
+        "rewrite_validation_failed_count": log_text.count("rewrite_validation_failed"),
+        "claimed_keyword_missing_count": log_text.count("claimed_keyword_missing"),
+        "bullet_drop_count": log_text.count("] bullet_drop"),
+        "summary_generation_error_count": log_text.count("summary_generation_error"),
+        "policy_lines": policy_lines[:80],
+    }
+
+
 def _extract_pdf_text(pdf_path: Path, txt_path: Path) -> bool:
     pdftotext = shutil.which("pdftotext")
     if not pdftotext or not pdf_path.exists():
@@ -314,6 +342,12 @@ def run_smoke(args: argparse.Namespace) -> int:
             if has_log:
                 log_text = artifacts["pipeline_log"].read_text(encoding="utf-8", errors="replace")
                 run_summary["log_summary"] = summarize_pipeline_log(log_text)
+                quality_notes = build_quality_notes(log_text)
+                (job_dir / "quality_notes.json").write_text(
+                    json.dumps(quality_notes, indent=2),
+                    encoding="utf-8",
+                )
+                run_summary["artifacts"]["quality_notes"] = str(job_dir / "quality_notes.json")
             for pdf_key, txt_name in (
                 ("resume_no_summary_pdf", "resume_no_summary.txt"),
                 ("resume_with_summary_pdf", "resume_with_summary.txt"),

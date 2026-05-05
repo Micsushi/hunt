@@ -178,6 +178,27 @@ def test_summary_prompt_bans_junior_tone(monkeypatch):
     assert "eager" in captured[0].lower()
 
 
+def test_summary_prompt_uses_pm_positioning(monkeypatch):
+    monkeypatch.setattr("fletcher.llm.llm_enrich.config.DEFAULT_MODEL_BACKEND", "ollama")
+    captured: list[str] = []
+
+    def fake_chat(prompt: str) -> str:
+        captured.append(prompt)
+        return '{"summary": "Product-oriented summary."}'
+
+    with patch("fletcher.llm.llm_enrich._ollama_chat", fake_chat):
+        generate_summary(
+            "Relevant evidence: user feedback, bug triage, stakeholder presentations.",
+            "Product Manager",
+            [],
+            role_family="pm",
+            job_level="manager",
+        )
+
+    assert "product-adjacent strengths" in captured[0]
+    assert "Do not use a generic software-only summary" in captured[0]
+
+
 def test_pipeline_logger_event_ids_are_monotonic():
     logger = PipelineLogger()
     logger.step("a")

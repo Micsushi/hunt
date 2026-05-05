@@ -13,6 +13,7 @@ from . import config as _config
 from .config import DEFAULT_OG_RESUME_PATH
 from .jobs.classifier import classify_job, slugify
 from .jobs.keyword_extractor import extract_keywords
+from .jobs.keyword_policy import KeywordRoute, classify_keyword_policy
 from .jobs.title_inference import infer_title_from_description, normalize_title_candidate
 from .keyword_check import partition_keywords
 from .llm.llm_enrich import (
@@ -86,6 +87,16 @@ def _resolve_job_title(title: str, description: str) -> str:
     return inferred or title or ""
 
 
+def _title_from_keywords(raw_keywords: list[str]) -> str:
+    for keyword in raw_keywords:
+        policy = classify_keyword_policy(keyword)
+        if policy.kind.value == "role_title":
+            normalized = normalize_title_candidate(keyword)
+            if normalized:
+                return normalized
+    return ""
+
+
 def _get_entries(doc, kind: str):
     return doc.experience if kind == "exp" else doc.projects
 
@@ -151,14 +162,90 @@ def _remove_bucket_from_doc(doc, kind: str, entry_id: str) -> bool:
     return len(entries) != before
 
 
+def _role_score_bonus(text: str, raw_keywords: list[str], classification: dict | None) -> float:
+    role_family = str((classification or {}).get("role_family") or "").lower()
+    job_level = str((classification or {}).get("job_level") or "").lower()
+    text_l = text.lower()
+    bonus = 0.0
+    if job_level == "intern" and any(
+        token in text_l
+        for token in (
+            "agile",
+            "ci/cd",
+            "code review",
+            "collaborat",
+            "git",
+            "scrum",
+            "source",
+            "status",
+            "testing",
+        )
+    ):
+        bonus += 0.05
+    if role_family == "pm" and any(
+        token in text_l
+        for token in (
+            "bug",
+            "design",
+            "feedback",
+            "lead",
+            "present",
+            "product",
+            "stakeholder",
+            "user engagement",
+            "user experience",
+        )
+    ):
+        bonus += 0.05
+    if role_family in {"software", "data"} and any(
+        keyword_visible_in_text(keyword, text) for keyword in raw_keywords
+    ):
+        bonus += 0.05
+    return min(bonus, 0.10)
+
+
 def _score_sources(
-    bullets: list[str], sources: list[dict], raw_keywords: list[str]
+    bullets: list[str],
+    sources: list[dict],
+    raw_keywords: list[str],
+    classification: dict | None = None,
 ) -> dict[str, float]:
-    scores = score_bullets_for_drop(bullets, raw_keywords)
+    base_scores = score_bullets_for_drop(bullets, raw_keywords)
     return {
-        source["bullet_id"]: scores[idx] if idx < len(scores) else 0.0
+        source["bullet_id"]: round(
+            (base_scores[idx] if idx < len(base_scores) else 0.0)
+            + _role_score_bonus(
+                bullets[idx] if idx < len(bullets) else "",
+                raw_keywords,
+                classification,
+            ),
+            4,
+        )
         for idx, source in enumerate(sources)
     }
+
+
+def _score_details(
+    bullets: list[str],
+    sources: list[dict],
+    raw_keywords: list[str],
+    classification: dict | None = None,
+) -> dict[str, dict[str, float]]:
+    base_scores = score_bullets_for_drop(bullets, raw_keywords)
+    details: dict[str, dict[str, float]] = {}
+    for idx, source in enumerate(sources):
+        base = base_scores[idx] if idx < len(base_scores) else 0.0
+        bonus = _role_score_bonus(
+            bullets[idx] if idx < len(bullets) else "",
+            raw_keywords,
+            classification,
+        )
+        details[source["bullet_id"]] = {
+            "score_base": round(base, 4),
+            "score_bonus": round(bonus, 4),
+            "score_final": round(base + bonus, 4),
+        }
+    return details
 
 
 def _keyword_present(keyword: str, doc) -> bool:
@@ -438,6 +525,40 @@ def _build_candidate_context(doc, evidence_bullets: list[str] | None = None) -> 
     return ". ".join(parts)
 
 
+def _keyword_policy_context(doc, bullets: list[str]) -> str:
+    skill_names = (
+        list(doc.skills.languages) + list(doc.skills.frameworks) + list(doc.skills.developer_tools)
+    )
+    return " ".join(list(bullets) + skill_names)
+
+
+def _partition_missing_keywords_by_policy(
+    missing_kws: list[str],
+    *,
+    title: str,
+    doc,
+    active_bullets: list[str],
+) -> tuple[list[str], list[str], list[str], list[str], dict[str, str]]:
+    resume_context = _keyword_policy_context(doc, active_bullets)
+    rewrite: list[str] = []
+    summary: list[str] = []
+    skills_only: list[str] = []
+    ignored: list[str] = []
+    reasons: dict[str, str] = {}
+    for keyword in missing_kws:
+        policy = classify_keyword_policy(keyword, job_title=title, resume_context=resume_context)
+        reasons[keyword] = f"{policy.kind.value}:{policy.route}:{policy.reason}"
+        if policy.route == KeywordRoute.REWRITE.value:
+            rewrite.append(keyword)
+        elif policy.route == KeywordRoute.SUMMARY.value:
+            summary.append(keyword)
+        elif policy.route == KeywordRoute.SKILLS_ONLY.value:
+            skills_only.append(keyword)
+        else:
+            ignored.append(keyword)
+    return _dedupe(rewrite), _dedupe(summary), _dedupe(skills_only), _dedupe(ignored), reasons
+
+
 def _run_iteration(
     *,
     parsed,
@@ -446,6 +567,7 @@ def _run_iteration(
     present_kws: list[str],
     missing_kws: list[str],
     title: str,
+    classification: dict,
     attempt_dir: Path,
     logger: PipelineLogger,
 ) -> tuple[dict[str, Any] | None, BucketId | None]:
@@ -460,21 +582,49 @@ def _run_iteration(
         count=len(active_bucket_ids),
         buckets=[f"{kind}:{entry_id}" for kind, entry_id in active_bucket_ids],
     )
+    (
+        rewrite_missing_kws,
+        summary_only_kws,
+        skills_only_kws,
+        policy_ignored_kws,
+        policy_reasons,
+    ) = _partition_missing_keywords_by_policy(
+        missing_kws,
+        title=title,
+        doc=doc,
+        active_bullets=active_bullets,
+    )
+    logger.step(
+        "keyword_policy_partition",
+        rewrite=rewrite_missing_kws,
+        summary_only=summary_only_kws,
+        skills_only=skills_only_kws,
+        ignored=policy_ignored_kws,
+        reasons=policy_reasons,
+    )
 
     kw_match: dict = {
         "bullet_matches": [],
-        "summary_keywords": list(missing_kws),
-        "ignored_keywords": [],
+        "summary_keywords": list(summary_only_kws),
+        "ignored_keywords": list(policy_ignored_kws),
         "scores": [],
         "rag_used": False,
     }
-    if _config.RAG_ENABLED and missing_kws and active_bullets:
+    if _config.RAG_ENABLED and rewrite_missing_kws and active_bullets:
         t_rag = time.perf_counter()
         logger.step(
-            "rag_start", missing_keyword_count=len(missing_kws), bullet_count=len(active_bullets)
+            "rag_start",
+            missing_keyword_count=len(rewrite_missing_kws),
+            bullet_count=len(active_bullets),
         )
         try:
-            kw_match = match_keywords_to_bullets(missing_kws, active_bullets)
+            kw_match = match_keywords_to_bullets(rewrite_missing_kws, active_bullets)
+            kw_match["summary_keywords"] = _dedupe(
+                list(summary_only_kws) + list(kw_match.get("summary_keywords", []))
+            )
+            kw_match["ignored_keywords"] = _dedupe(
+                list(policy_ignored_kws) + list(kw_match.get("ignored_keywords", []))
+            )
             kw_match["rag_used"] = True
         except Exception as exc:
             logger.step("rag_skipped", reason=str(exc))
@@ -609,8 +759,12 @@ def _run_iteration(
     logger.step("rewrite_validation_summary", rejected_keywords=_dedupe(skipped_candidates))
 
     bullets_for_score, sources_for_score = _collect_active_bullets(doc, active_bucket_ids)
-    scores = _score_sources(bullets_for_score, sources_for_score, raw_keywords)
-    logger.step("bullet_scores", scores=scores)
+    scores = _score_sources(bullets_for_score, sources_for_score, raw_keywords, classification)
+    logger.step(
+        "bullet_scores",
+        scores=scores,
+        details=_score_details(bullets_for_score, sources_for_score, raw_keywords, classification),
+    )
     evidence_bullets = _summary_evidence_bullets(bullets_for_score, sources_for_score, scores)
     logger.step("summary_evidence", bullets=evidence_bullets)
 
@@ -639,6 +793,8 @@ def _run_iteration(
             title or "Software Engineer",
             mid_keywords,
             existing_summary=existing_summary,
+            role_family=str(classification.get("role_family") or ""),
+            job_level=str(classification.get("job_level") or ""),
             logger=logger,
         )
         logger.step(
@@ -675,6 +831,8 @@ def _run_iteration(
                     mid_keywords,
                     existing_summary=existing_summary,
                     line_feedback=feedback,
+                    role_family=str(classification.get("role_family") or ""),
+                    job_level=str(classification.get("job_level") or ""),
                     logger=logger,
                 )
                 retry_validation = validate_summary_grounding(
@@ -717,7 +875,9 @@ def _run_iteration(
         doc_s = copy.deepcopy(doc_ns)
         doc_s.summary = _generated_summary
         summary_bullets, summary_sources = _collect_active_bullets(doc_s, active_bucket_ids)
-        summary_scores = _score_sources(summary_bullets, summary_sources, raw_keywords)
+        summary_scores = _score_sources(
+            summary_bullets, summary_sources, raw_keywords, classification
+        )
         cr_s, tex_s, removed = _fit_to_page(
             attempt_dir,
             doc_s,
@@ -748,6 +908,8 @@ def _run_iteration(
                 mid_keywords,
                 existing_summary=existing_summary,
                 line_feedback=feedback,
+                role_family=str(classification.get("role_family") or ""),
+                job_level=str(classification.get("job_level") or ""),
                 logger=logger,
             )
             logger.step(
@@ -781,7 +943,9 @@ def _run_iteration(
                         attempt_dir,
                         doc_s,
                         "output_summary",
-                        *_collect_scores_for_doc(doc_s, active_bucket_ids, raw_keywords),
+                        *_collect_scores_for_doc(
+                            doc_s, active_bucket_ids, raw_keywords, classification
+                        ),
                         logger,
                     )
                     if removed:
@@ -838,9 +1002,14 @@ def _run_iteration(
     )
 
 
-def _collect_scores_for_doc(doc, active_bucket_ids: list[BucketId], raw_keywords: list[str]):
+def _collect_scores_for_doc(
+    doc,
+    active_bucket_ids: list[BucketId],
+    raw_keywords: list[str],
+    classification: dict | None = None,
+):
     bullets, sources = _collect_active_bullets(doc, active_bucket_ids)
-    return sources, _score_sources(bullets, sources, raw_keywords)
+    return sources, _score_sources(bullets, sources, raw_keywords, classification)
 
 
 def run_ad_hoc_pipeline(
@@ -912,6 +1081,17 @@ def run_ad_hoc_pipeline(
         logger=logger,
     )
     raw_keywords: list[str] = keywords_dict.get("must_have_terms", [])
+    if not resolved_title:
+        keyword_title = _title_from_keywords(raw_keywords)
+        if keyword_title:
+            resolved_title = keyword_title
+            classification = classify_job(title=resolved_title, description=description)
+            logger.step(
+                "title_recovered_from_keywords",
+                title=resolved_title,
+                role_family=classification.get("role_family"),
+                job_level=classification.get("job_level"),
+            )
     logger.step(
         "keywords_extracted",
         count=len(raw_keywords),
@@ -1029,6 +1209,7 @@ def run_ad_hoc_pipeline(
             present_kws=present_kws,
             missing_kws=missing_kws,
             title=resolved_title,
+            classification=classification,
             attempt_dir=attempt_dir,
             logger=logger,
         )

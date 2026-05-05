@@ -39,3 +39,13 @@ Lincoln Electric is the world leader in the engineering...
 Location: Hamilton
 Function: Engineering"""
     assert infer_title_from_description(jd) == "Software Development Intern"
+
+
+def test_infers_we_are_looking_for_plural_intern_title():
+    jd = """
+    Salary range: 61,500 - 76,900 About the role
+    We are looking for **Database Software Developer interns** for our growing team!
+    Required technical skills: SQL, PL/SQL, Git, Jira, Confluence.
+    """
+
+    assert infer_title_from_description(jd) == "Database Software Developer Intern"

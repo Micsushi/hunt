@@ -462,20 +462,47 @@ def test_summary_keywords_filter_unsupported_domain_terms(base_mocks):
 def test_non_actionable_degree_keyword_not_rewritten(base_mocks):
     from fletcher.ad_hoc_pipeline import run_ad_hoc_pipeline
 
-    base_mocks.match_keywords_to_bullets.return_value = {
-        "bullet_matches": [
-            {"bullet_idx": 0, "keyword": "Computer Engineering", "score": 0.9},
-        ],
-        "summary_keywords": [],
-        "ignored_keywords": [],
-        "scores": [],
-        "rag_used": True,
-    }
+    base_mocks.partition_keywords.return_value = (
+        [],
+        ["Computer Engineering"],
+        {"Computer Engineering": []},
+    )
     base_mocks.rewrite_bullet_targeted.reset_mock()
 
     run_ad_hoc_pipeline(title="Software Development Intern", description="job")
 
     base_mocks.rewrite_bullet_targeted.assert_not_called()
+    base_mocks.match_keywords_to_bullets.assert_not_called()
+
+
+def test_keyword_policy_blocks_ignored_terms_before_rag(base_mocks):
+    from fletcher.ad_hoc_pipeline import run_ad_hoc_pipeline
+
+    base_mocks.partition_keywords.return_value = (
+        [],
+        ["Product Manager", "China-based team", "CEO", "MBB", "Mandarin"],
+        {},
+    )
+    base_mocks.match_keywords_to_bullets.reset_mock()
+
+    run_ad_hoc_pipeline(title="Product Manager", description="job")
+
+    base_mocks.match_keywords_to_bullets.assert_not_called()
+
+
+def test_keyword_policy_sends_only_rewrite_terms_to_rag(base_mocks):
+    from fletcher.ad_hoc_pipeline import run_ad_hoc_pipeline
+
+    base_mocks.partition_keywords.return_value = (
+        [],
+        ["React", "Product Manager", "China-based team", "A/B testing"],
+        {},
+    )
+
+    run_ad_hoc_pipeline(title="Product Manager", description="job")
+
+    rag_keywords = base_mocks.match_keywords_to_bullets.call_args.args[0]
+    assert rag_keywords == ["React", "A/B testing"]
 
 
 def test_single_keyword_rewrite_failure_does_not_retry(base_mocks):

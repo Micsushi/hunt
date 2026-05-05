@@ -8,6 +8,7 @@ import urllib.request
 from typing import TYPE_CHECKING, Any
 
 from .. import config
+from ..jobs.keyword_policy import KeywordKind, classify_keyword_policy
 
 if TYPE_CHECKING:
     from ..pipeline_logger import PipelineLogger
@@ -100,14 +101,17 @@ def _dedupe_case(values: list[str]) -> list[str]:
 
 
 def categorize_keyword(keyword: str) -> str:
-    value = (keyword or "").strip().lower()
-    if value in DOMAIN_KEYWORDS:
+    if classify_keyword_policy(keyword).kind == KeywordKind.DOMAIN:
         return "domain"
     return "tech"
 
 
 def keyword_requires_direct_support(keyword: str) -> bool:
-    return _normalize_visible_text(keyword) in DIRECT_SUPPORT_KEYWORDS
+    policy = classify_keyword_policy(keyword)
+    return (
+        policy.requires_same_bullet_evidence
+        or _normalize_visible_text(keyword) in DIRECT_SUPPORT_KEYWORDS
+    )
 
 
 def _needs_ambiguous_validation(keywords: list[str]) -> bool:
@@ -240,6 +244,74 @@ def repair_rewrite_redundancy(text: str) -> str:
     )
 
 
+def _has_ci_cd_evidence(text: str) -> bool:
+    visible = _normalize_visible_text(text)
+    return any(
+        phrase in visible
+        for phrase in (
+            "ci cd",
+            "deployment",
+            "deployments",
+            "bitbucket pipelines",
+            "ecr",
+            "kubernetes",
+            "release",
+            "pipeline",
+            "pipelines",
+        )
+    )
+
+
+def _has_data_platform_evidence(text: str) -> bool:
+    visible = _normalize_visible_text(text)
+    return any(
+        phrase in visible
+        for phrase in (
+            "databricks",
+            "data pipeline",
+            "data pipelines",
+            "spark",
+            "snowflake",
+            "etl",
+            "warehouse",
+            "lakehouse",
+        )
+    )
+
+
+def _has_cloud_resource_conflict(original: str, rewritten: str, keyword: str) -> bool:
+    key = _normalize_visible_text(keyword)
+    original_v = _normalize_visible_text(original)
+    rewritten_v = _normalize_visible_text(rewritten)
+    if key not in {"azure", "azure cloud", "azure devops"}:
+        return False
+    if key == "azure devops" and _has_ci_cd_evidence(original):
+        return False
+    has_aws_resource = any(
+        phrase in original_v for phrase in ("aws", "s3", "ecr", "dynamodb", "aurora")
+    )
+    has_rewritten_azure = "azure" in rewritten_v
+    still_mentions_aws_resource = any(
+        phrase in rewritten_v for phrase in ("aws", "s3", "ecr", "dynamodb", "aurora")
+    )
+    return has_aws_resource and has_rewritten_azure and still_mentions_aws_resource
+
+
+def _unsupported_tool_substitution(original: str, rewritten: str, keyword: str) -> str | None:
+    key = _normalize_visible_text(keyword)
+    if _has_cloud_resource_conflict(original, rewritten, keyword):
+        return "cross_vendor_cloud_resource_conflict"
+    if key == "azure devops":
+        return None if _has_ci_cd_evidence(original) else "unsupported_tool_substitution"
+    if key == "databricks":
+        if _has_data_platform_evidence(original):
+            return None
+        return "unsupported_tool_substitution"
+    if key == "datadog":
+        return None
+    return None
+
+
 def validate_rewrite_grounding(
     *,
     original: str,
@@ -259,12 +331,23 @@ def validate_rewrite_grounding(
         key = (keyword or "").strip().lower()
         if not key:
             continue
+        policy = classify_keyword_policy(keyword)
+        tool_issue = _unsupported_tool_substitution(original, rewritten, keyword)
+        if tool_issue and keyword_visible_in_text(keyword, rewritten):
+            rejected.append(keyword)
+            reasons.append(f"{tool_issue}:{keyword}")
+            continue
         if keyword_requires_direct_support(keyword) and not keyword_visible_in_text(
             keyword, original
         ):
             if keyword_visible_in_text(keyword, rewritten):
                 rejected.append(keyword)
-                reasons.append(f"unsupported_domain_keyword:{keyword}")
+                reason_type = (
+                    "unsupported_domain_keyword"
+                    if policy.kind == KeywordKind.DOMAIN
+                    else "unsupported_policy_keyword"
+                )
+                reasons.append(f"{reason_type}:{keyword}")
             continue
         if keyword_visible_in_text(keyword, rewritten):
             supported.append(keyword)
@@ -306,7 +389,9 @@ def validate_rewrite_with_ollama(
         "Accept reasonable generalizations only when the original supports them. Examples: "
         "Vercel or Supabase can support cloud infrastructure phrasing; Next.js can support "
         "React/Next.js phrasing; brainwave scoring or model accuracy can support machine "
-        "learning phrasing. Data-domain terms such as data pipelines, data exploration, "
+        "learning phrasing; Bitbucket Pipelines, ECR, Kubernetes, deployments, or CI/CD "
+        "can support Azure DevOps-style CI/CD workflow phrasing, but not unsupported direct "
+        "Azure cloud resource claims. Data-domain terms such as data pipelines, data exploration, "
         "model training, ModelOps, Productionalize, and Operationalize require direct "
         "evidence in the original bullet. Do not infer them from generic full-stack "
         "architecture. Datadog metrics, monitors, logging, and alerts can support "
@@ -419,7 +504,7 @@ Answer two questions using only the title and description above.
 
 1) Is this posting usable for tailoring a resume? Usable means there is enough concrete content (not just "apply on company site", not empty, not a useless stub). Scrapes that lost the real JD should be marked not usable.
 
-2) List up to 20 keywords: technologies, tools, platforms, languages, cloud vendors, data tools, or clear domain phrases that **appear verbatim** in the title or description (same spelling; minor case differences ok). Do not invent anything not in the text. Skip generic filler ("team", "experience", "communication skills"). If the posting is not usable, return an empty keyword list.
+2) List up to 20 resume-relevant signals that **appear verbatim** in the title or description (same spelling; minor case differences ok). Prefer technologies, tools, platforms, programming languages, frameworks, data tools, concrete engineering/process terms, and candidate qualities like leadership, ownership, collaboration, testing rigor, analytical thinking, or user empathy. Do not invent anything not in the text. Skip company boilerplate, compensation, executive visibility, hiring logistics, generic org labels, and language nice-to-haves unless they are central requirements. Do not include job titles merely to insert them into bullets. If the posting is not usable, return an empty keyword list.
 
 Return a single JSON object with exactly these keys:
 - "jd_usable": boolean
@@ -491,6 +576,8 @@ def generate_summary(
     *,
     existing_summary: str = "",
     line_feedback: str = "",
+    role_family: str = "",
+    job_level: str = "",
     logger: PipelineLogger | None = None,
 ) -> dict[str, Any]:
     """Ask Ollama to generate a professional summary paragraph for this candidate + job.
@@ -520,6 +607,25 @@ def generate_summary(
     feedback_line = (
         f"Length adjustment needed: {line_feedback.strip()}\n" if line_feedback.strip() else ""
     )
+    role_key = (role_family or "").strip().lower()
+    if role_key == "pm":
+        role_instruction = (
+            "Use product-adjacent strengths: user experience, stakeholder communication, "
+            "bug triage, feedback synthesis, structured problem solving, and delivery ownership. "
+            "Do not use a generic software-only summary. "
+        )
+    elif role_key == "data":
+        role_instruction = (
+            "Use data/database positioning: database-backed systems, data reliability, "
+            "automation, analytical work, and supported data tools. "
+        )
+    elif job_level == "intern":
+        role_instruction = (
+            "Use intern/co-op positioning: learning velocity, collaboration, testing, "
+            "Git/process habits, and delivery support. "
+        )
+    else:
+        role_instruction = "Use a grounded software engineering tone focused on concrete delivery. "
     prompt = (
         f"Job title: {job_title}\n"
         f"{kw_line}"
@@ -531,7 +637,7 @@ def generate_summary(
         f"No invented facts. Use only the background provided. "
         f"Use the keywords only when they fit the candidate background naturally. "
         f"Do not try to include every keyword. Prioritize accurate, supported technologies and role/process terms. "
-        f"Use a grounded mid-level software engineering tone. "
+        f"{role_instruction}"
         f"Do not use junior-sounding filler such as motivated, eager, passionate, aspiring, contribute immediately, or diverse programming skills. "
         f"Prefer concrete experience over enthusiasm. "
         f"Do not claim expertise in technologies not present in the candidate background. "

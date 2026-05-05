@@ -1218,6 +1218,29 @@ summary_meta = {"summary": "", "success": False, "error": "summary_validation_fa
 .\.venv\Scripts\python.exe -m pytest tests/test_llm_enrich_logger.py tests/test_ad_hoc_pipeline.py -q
 ```
 
+## V2.5 Keyword Policy Implementation 2026-05-05
+
+Implemented:
+- Added `fletcher/jobs/keyword_policy.py` with `KeywordKind`, `KeywordRoute`, `KeywordPolicy`, and `classify_keyword_policy()`.
+- Routed missing keywords through policy before RAG. Only rewrite-eligible signals reach `match_keywords_to_bullets()`.
+- Added `keyword_policy_partition` logs with rewrite, summary-only, skills-only, ignored, and reason fields.
+- Kept job titles, org metadata, logistics, language requirements without resume support, and education/credential terms out of bullet rewrites.
+- Added deterministic title recovery from role-like extracted keywords when title inference returns empty.
+- Extended title inference for `We are looking for Database Software Developer interns` and normalized plural `interns` to `Intern`.
+- Updated rewrite validation so same-category CI/CD tool phrasing can pass, while cross-vendor cloud resource conflicts, Databricks-from-Datadog substitutions, and unsupported process claims fail.
+- Added role-specific summary prompt strategy for PM, data, intern, and software roles.
+- Added role-aware drop-score bonuses for intern process bullets, PM stakeholder/UX/feedback bullets, and software/data exact keyword bullets.
+- Extended Option B smoke output with `quality_notes.json`.
+
+Verification:
+- `.\.venv\Scripts\python.exe -m pytest tests\test_keyword_policy.py tests\test_title_inference.py tests\test_rewrite_validation.py tests\test_ad_hoc_pipeline.py tests\test_component2_stage1.py tests\test_llm_enrich_logger.py tests\test_rag_drop_scoring.py tests\test_option_b_smoke.py -q`: 98 passed.
+- `.\.venv\Scripts\python.exe ci.py c2`: passed.
+- `.\.venv\Scripts\python.exe quality.py shared`: passed.
+
+Still planned:
+- Run deployed Option B smokes across several enriched jobs and compare PDFs/logs.
+- Revalidate or regenerate summaries if the later drop loop removes evidence used by the summary.
+
 ## V2.3 Keyword Policy and Ambiguity Control Plan
 
 Goal: Make C2 stop treating every extracted JD phrase as a bullet-rewrite keyword, and instead route each keyword by type, evidence, and safe destination.

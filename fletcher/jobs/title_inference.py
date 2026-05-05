@@ -37,6 +37,7 @@ def normalize_title_candidate(text: str) -> str:
     candidate = _clean_heading(text)
     if not candidate:
         return ""
+    candidate = re.sub(r"(?i)\binterns\b$", "Intern", candidate).strip()
     if candidate.lower() in SECTION_HEADINGS:
         return ""
 
@@ -73,6 +74,8 @@ def infer_title_from_description(description: str) -> str:
                 return candidate
 
     prose_patterns = [
+        r"(?i)\bwe(?:\s+are|'re)\s+looking\s+for\s+(?:an?\s+)?(?:[*_`#]+)?([A-Z][A-Za-z0-9+/# .,&-]{2,80}?)(?:[*_`#]+)?\s+(?:for|to|on|in|at)\b",
+        r"(?i)\bwe(?:\s+are|'re)\s+hiring\s+(?:an?\s+)?(?:[*_`#]+)?([A-Z][A-Za-z0-9+/# .,&-]{2,80}?)(?:[*_`#]+)?(?:\.|,|\n|!|\s+for\b)",
         r"(?i)\bseeking\s+(?:an?\s+)?([A-Z][A-Za-z0-9+/# .,&-]{2,80}?)\s+to\s+join\b",
         r"(?i)\bjoin\s+.*?\s+as\s+(?:an?\s+)?([A-Z][A-Za-z0-9+/# .,&-]{2,80}?)(?:\.|,|\n)",
         r"(?i)\bthis position is for\s+(?:an?\s+)?([A-Z][A-Za-z0-9+/# .,&-]{2,80}?)(?:\.|,|\n)",

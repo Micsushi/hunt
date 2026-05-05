@@ -331,6 +331,71 @@ def test_false_validator_acceptance_rejects_requested_keyword(monkeypatch):
     assert result["keywords_rejected"] == ["Computer Engineering"]
 
 
+def test_allows_ci_cd_adjacent_tool_wording():
+    result = validate_rewrite_grounding(
+        original=(
+            "Accelerated deployment cycles by automating CI/CD via Bitbucket "
+            "pipelines and ECR/Kubernetes."
+        ),
+        rewritten=(
+            "Accelerated deployment cycles by automating Azure DevOps-style "
+            "CI/CD workflows using Bitbucket Pipelines and ECR/Kubernetes."
+        ),
+        requested_keywords=["Azure DevOps"],
+    )
+
+    assert result["accepted"] is True
+    assert result["keywords_supported"] == ["Azure DevOps"]
+
+
+def test_rejects_cross_vendor_cloud_resource_conflict():
+    result = validate_rewrite_grounding(
+        original=(
+            "Established S3 cost saving blueprint by implementing intelligent-tiering "
+            "and S3 life cycle policies in Terraform."
+        ),
+        rewritten=(
+            "Established Azure cloud cost saving blueprint by implementing "
+            "intelligent-tiering and S3 life cycle policies in Terraform."
+        ),
+        requested_keywords=["Azure"],
+    )
+
+    assert result["accepted"] is False
+    assert result["keywords_rejected"] == ["Azure"]
+
+
+def test_rejects_databricks_when_only_datadog_is_supported():
+    result = validate_rewrite_grounding(
+        original=(
+            "Optimized bug detection speed by configuring Datadog metrics, monitors "
+            "and centralized logging with automated alerting and error traces."
+        ),
+        rewritten=(
+            "Optimized bug detection speed by configuring Databricks metrics, "
+            "monitors and centralized logging with automated alerting and error traces."
+        ),
+        requested_keywords=["Databricks"],
+    )
+
+    assert result["accepted"] is False
+    assert result["keywords_rejected"] == ["Databricks"]
+
+
+def test_process_keyword_requires_process_evidence():
+    result = validate_rewrite_grounding(
+        original="Reduced evaluation time by developing Python automation scripts.",
+        rewritten=(
+            "Reduced evaluation time by developing Python automation scripts and "
+            "conducting code reviews."
+        ),
+        requested_keywords=["code reviews"],
+    )
+
+    assert result["accepted"] is False
+    assert result["keywords_rejected"] == ["code reviews"]
+
+
 def test_summary_rejects_unsupported_domain_claim():
     result = validate_summary_grounding(
         "Software Engineer with XDR and real-time threat intelligence experience.",
