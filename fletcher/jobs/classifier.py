@@ -26,9 +26,19 @@ ROLE_PATTERNS = {
         "frontend",
         "fullstack",
         "full-stack",
+    ),
+    "infrastructure": (
+        "cloud engineer",
         "devops",
+        "electrical engineer",
+        "traffic signal",
+        "highway lighting",
+        "infrastructure engineer",
+        "network engineer",
         "platform engineer",
+        "security engineer",
         "sre",
+        "systems engineer",
     ),
 }
 

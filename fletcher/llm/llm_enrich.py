@@ -130,6 +130,22 @@ def _derive_keyword_outcome(
     return used, _dedupe_case(skipped)
 
 
+def _clean_keyword_outcome(
+    requested_keywords: list[str],
+    used_keywords: list[str],
+    skipped_keywords: list[str],
+) -> tuple[list[str], list[str]]:
+    requested_by_lower = {kw.lower(): kw for kw in requested_keywords}
+    used = _filter_requested_keywords(_dedupe_case(used_keywords), requested_keywords)
+    used_l = {kw.lower() for kw in used}
+    skipped = [
+        requested_by_lower.get(kw.lower(), kw)
+        for kw in _dedupe_case(skipped_keywords)
+        if kw.lower() in requested_by_lower and kw.lower() not in used_l
+    ]
+    return used, _dedupe_case(skipped)
+
+
 def _filter_requested_keywords(values: list[str], requested_keywords: list[str]) -> list[str]:
     requested_by_lower = {kw.lower(): kw for kw in requested_keywords}
     filtered: list[str] = []
@@ -196,11 +212,11 @@ def validate_claimed_keywords_present(
     requested_keywords: list[str],
     claimed_used: list[str],
 ) -> dict[str, Any]:
-    """Reject model metadata when claimed used keywords do not visibly appear.
+    """Mechanically report whether claimed used keywords visibly appear.
 
-    This is intentionally mechanical: if the model says it used React, the text
-    must contain React. If metadata is inconsistent, the caller should keep
-    the original bullet and treat all requested keywords as unused.
+    This is intentionally only a diagnostic. The caller can use LLM rewrite
+    validation for conceptual matches such as full-stack architecture versus
+    full stack development.
     """
     requested_l = {kw.lower() for kw in requested_keywords}
     missing: list[str] = []
@@ -368,31 +384,30 @@ def validate_rewrite_with_ollama(
         }
 
     prompt = (
-        "Validate whether a rewritten resume bullet is fully supported by the original bullet.\n"
+        "Validate whether a rewritten resume bullet preserves the original meaning while adding useful resume keywords.\n"
         f"Original bullet: {original}\n"
         f"Rewritten bullet: {rewritten}\n"
         f"Requested keywords: {', '.join(requested_keywords)}\n"
         "Judge each requested keyword independently. A rewritten bullet may be partially "
         "supported: put supported keywords in keywords_supported and unsupported keywords "
         "in keywords_rejected.\n"
-        "Accept reasonable generalizations only when the original supports them. Examples: "
-        "Vercel or Supabase can support cloud infrastructure phrasing; Next.js can support "
-        "React/Next.js phrasing; brainwave scoring or model accuracy can support machine "
-        "learning phrasing; Bitbucket Pipelines, ECR, Kubernetes, deployments, or CI/CD "
-        "can support Azure DevOps-style CI/CD workflow phrasing, but not unsupported direct "
-        "Azure cloud resource claims. Data-domain terms such as data pipelines, data exploration, "
-        "model training, ModelOps, Productionalize, and Operationalize require direct "
-        "evidence in the original bullet. Do not infer them from generic full-stack "
-        "architecture. Datadog metrics, monitors, logging, and alerts can support "
-        "monitoring data pipelines or services only when the rewrite explicitly keeps the "
-        "monitoring action and monitored object together. Inflected action phrases are OK, "
-        "such as automating data pipelines for Automate data pipelines. Infrastructure as Code requires direct evidence such as "
-        "Terraform, CDK, Pulumi, CloudFormation, IaC, or infrastructure-as-code. "
-        "Security domain terms such as real-time threat intelligence, XDR, MDR, ITDR, "
-        "and SIEM require direct domain evidence.\n"
-        "Reject unsupported technology usage, unsupported domain experience, or vague "
-        "claims not implied by the original. Do not reject a whole rewrite only because "
-        "one keyword is unsupported if another keyword is clearly supported.\n"
+        "Accept adjacent framing when it stays in the same work context, same outcome, "
+        "and coherent technology/workflow family. The keyword does not need to appear "
+        "explicitly in the original bullet if the rewrite still describes the same kind "
+        "of work and would not mislead an interviewer about what happened.\n"
+        "Reject when the rewrite changes the meaning of the bullet, changes the project "
+        "or business domain, invents a new responsibility, claims a different outcome, "
+        "or creates an incoherent relationship between technologies, vendors, resources, "
+        "or workflows.\n"
+        "Preserve the bullet's original format and order where possible: outcome or "
+        "metric first, then action, method, tool, or scope. Reject lazy keyword stuffing "
+        "that appends a phrase without fitting the sentence naturally.\n"
+        "Reject awkward resume phrasing where a keyword is bolted on instead of integrated "
+        "naturally, including vague constructions such as 'utilizing X' or '[keyword] "
+        "stability' when the phrase would sound strange to an interviewer.\n"
+        "Do not reject solely because the keyword is not explicit in the original text. "
+        "Reject only when the new wording no longer makes sense for the original context "
+        "or materially overstates the candidate's work.\n"
         'Return only: {"accepted": boolean, "keywords_supported": [...], '
         '"keywords_rejected": [...], "reason": "..."}'
     )
@@ -457,8 +472,10 @@ def repair_rewrite_with_ollama(
         f"Supported keywords from validation: {', '.join(supported)}\n"
         f"Rejected keywords from validation: {', '.join(rejected)}\n"
         f"Validation reason: {validation.get('reason') or validation.get('reasons') or ''}\n"
-        "Write one truthful bullet. Use only the keywords that still fit. Skip unsupported keywords. "
-        "Do not invent facts, tools, domains, outcomes, or responsibilities.\n"
+        "Write one truthful bullet in the same Google XYZ-style structure as the original: "
+        "preserve outcome/metric, action, method, tools, and scope. Use only keywords "
+        "that fit the same work context. Skip keywords that would change the meaning, "
+        "invent a different domain, or create incoherent technology relationships.\n"
         'Return only: {"bullet": "...", "keywords_used": [...], "keywords_skipped": [...]}'
     )
     start = time.perf_counter()
@@ -519,23 +536,12 @@ def validate_summary_grounding(
     candidate_context: str,
     keywords: list[str],
 ) -> dict[str, Any]:
-    """Reject summaries with junior filler or unsupported direct domain claims."""
+    """Mechanically reject only banned tone; semantic grounding is an LLM check."""
     summary_l = (summary or "").lower()
-    context_l = (candidate_context or "").lower()
     reasons: list[str] = []
     for phrase in SUMMARY_BANNED_TONE:
         if phrase in summary_l:
             reasons.append(f"banned_tone:{phrase}")
-    keywords_to_check = _dedupe_case(list(keywords) + list(DOMAIN_KEYWORDS))
-    for keyword in keywords_to_check:
-        key = (keyword or "").strip().lower()
-        if (
-            key
-            and keyword_requires_direct_support(keyword)
-            and key in summary_l
-            and key not in context_l
-        ):
-            reasons.append(f"unsupported_summary_domain:{keyword}")
     return {"accepted": not reasons, "reasons": reasons}
 
 
@@ -547,13 +553,14 @@ def _ollama_chat(user_prompt: str) -> str:
         "model": model,
         "format": "json",
         "stream": False,
-        "options": {"temperature": 0.2},
+        "options": {"temperature": 0.1},
         "messages": [
             {
                 "role": "system",
                 "content": (
-                    "You read job postings for resume tailoring. "
-                    "Respond with one JSON object only, no markdown, no commentary."
+                    "You are a careful resume-tailoring assistant. "
+                    "Return strict JSON only, follow the requested schema exactly, "
+                    "and prefer skipping or rejecting unsupported claims over guessing."
                 ),
             },
             {"role": "user", "content": user_prompt},
@@ -572,6 +579,27 @@ def _ollama_chat(user_prompt: str) -> str:
     return (message.get("content") or "").strip()
 
 
+def _keyword_selection_instructions() -> str:
+    return """List 0 to 30 resume-tailoring keywords that **appear verbatim** in the title or description (same spelling; minor case differences ok).
+
+These keywords are intended to be added to resume bullets, the professional summary, or the Technical Skills section when later resume matching supports them.
+The title, role family, seniority, education, credentials, certifications, licenses, and other metadata are handled separately by the pipeline, so do not repeat them as keywords.
+
+Only include signals that are one of:
+- concrete tech stack or data stack terms: languages, frameworks, libraries, cloud platforms, databases, developer tools, data tools
+- concrete technical methods or workflows: testing, CI/CD, code reviews, model deployment, data preprocessing, dashboards, security scanning
+- concrete candidate quality/process traits that are explicitly requested: leadership, ownership, collaboration, communication, testing rigor, analytical thinking, user empathy
+
+Fill the keyword slots in this priority order:
+1. named technologies, tools, platforms, databases, frameworks, and languages
+2. concrete technical methods/workflows
+3. requested qualities/process traits
+
+Do not include job titles, role labels, seniority labels, employment types, program names, departments, locations, credentials, certifications, licenses, education fields, company metadata, compensation, executive visibility, hiring logistics, or spoken-language nice-to-haves. Examples to exclude: Software Engineer, Intermediate, Senior, Bachelor, P.Eng, AWS Certified.
+Skip generic deliverables and vague nouns such as reports, diagrams, flow charts, documentation, analysis, validation, interpretation, data sources, or findings unless paired with a concrete technical method/tool from the JD.
+Do not invent anything not in the text. If the posting is not usable, return an empty keyword list."""
+
+
 def _build_user_prompt(title: str, description: str) -> str:
     desc_truncated = (description or "")[:4000]
     return f"""Job title: {title}
@@ -582,26 +610,12 @@ Answer two questions using only the title and description above.
 
 1) Is this posting usable for tailoring a resume? Usable means there is enough concrete content (not just "apply on company site", not empty, not a useless stub). Scrapes that lost the real JD should be marked not usable.
 
-2) List up to 20 resume-relevant signals that **appear verbatim** in the title or description (same spelling; minor case differences ok).
-
-Only include signals that are one of:
-- concrete tech stack or data stack terms: languages, frameworks, libraries, cloud platforms, databases, developer tools, data tools
-- concrete technical methods or workflows: testing, CI/CD, code reviews, model deployment, data preprocessing, dashboards, security scanning
-- concrete candidate quality/process traits that are explicitly requested: leadership, ownership, collaboration, communication, testing rigor, analytical thinking, user empathy
-
-Fill the 20 keyword slots in this priority order:
-1. named technologies, tools, platforms, databases, frameworks, and languages
-2. concrete technical methods/workflows
-3. requested qualities/process traits
-
-Do not include job titles, employment types, program names, departments, locations, credentials, education fields, company metadata, compensation, executive visibility, hiring logistics, or spoken-language nice-to-haves unless they are central requirements.
-Skip generic deliverables and vague nouns such as reports, diagrams, flow charts, documentation, analysis, validation, interpretation, data sources, or findings unless paired with a concrete technical method/tool from the JD.
-Do not invent anything not in the text. If the posting is not usable, return an empty keyword list.
+2) {_keyword_selection_instructions()}
 
 Return a single JSON object with exactly these keys:
 - "jd_usable": boolean
 - "jd_usable_reason": string (one short sentence)
-- "keywords": array of 0 to 20 strings
+- "keywords": array of 0 to 30 strings
 
 No other keys."""
 
@@ -633,7 +647,7 @@ def _apply_jd_keywords(
             continue
         seen.add(s.lower())
         terms.append(s)
-        if len(terms) >= 20:
+        if len(terms) >= 30:
             break
 
     if not jd_usable:
@@ -665,38 +679,31 @@ def classify_keyword_routes_with_ollama(
     *,
     keywords: list[str],
     job_title: str,
-    resume_context: str,
+    resume_context: str = "",
     role_family: str = "",
     job_level: str = "",
     logger: PipelineLogger | None = None,
 ) -> dict[str, dict[str, str]]:
-    """Ask Ollama to route ambiguous resume signals.
-
-    Deterministic policy remains the fallback and safety guard. This helper is
-    only meant to rescue ambiguous terms that a static allowlist would otherwise
-    classify as unknown.
-    """
+    """Ask Ollama to filter JD keywords without judging candidate evidence."""
     if config.DEFAULT_MODEL_BACKEND != "ollama" or not keywords:
         return {}
     valid_routes = {"rewrite", "summary", "skills_only", "ignore"}
     valid_kinds = {kind.value for kind in KeywordKind}
     requested_by_lower = {keyword.lower(): keyword for keyword in _dedupe_case(keywords)}
     prompt = (
-        "Route job-description resume signals for a tailoring pipeline.\n"
+        "Filter job-description keywords for a resume tailoring pipeline.\n"
         f"Job title: {job_title or '(empty)'}\n"
         f"Role family: {role_family or '(unknown)'}\n"
         f"Job level: {job_level or '(unknown)'}\n"
-        f"Candidate resume context: {resume_context[:3000]}\n"
         f"Signals to route: {json.dumps(_dedupe_case(keywords))}\n"
+        "Do not use candidate resume evidence here. Only judge whether each signal is the kind of keyword we would want the later RAG step to match into bullets, summary, or skills.\n"
         "For each signal, choose exactly one route:\n"
-        "- rewrite: concrete named tech/tool/language/framework, or a concrete process/quality signal with strong direct evidence in a specific bullet.\n"
-        "- summary: role, process, quality, PM/data positioning, or broad responsibility signal useful for summary but risky for bullets.\n"
-        "- skills_only: concrete technology/tool/database/framework that belongs only in Technical Skills.\n"
-        "- ignore: logistics, company metadata, unsupported language requirement, credential/education field, or irrelevant org phrase.\n"
-        "Prefer summary over rewrite for broad data-science, security, domain, or business concepts unless a specific bullet directly supports the exact work.\n"
-        "Prefer summary or ignore when you are less than 70 percent comfortable that the signal fits a bullet truthfully.\n"
-        "Prefer summary over ignore for useful PM/process/data signals such as project coordination, project metrics, reporting, requirements, dashboards, analysis, stakeholder communication, planning, or process improvements.\n"
-        "Never route job titles, education credentials, locations, compensation, executive names, or unsupported spoken languages to rewrite.\n"
+        "- rewrite: keep for RAG matching. Use for concrete tech stack, tools, languages, frameworks, libraries, data/security/dev tools, and concrete technical methods or workflows.\n"
+        "- summary: keep out of bullet rewrite but allow summary positioning. Use for concrete personality/process traits such as communication, ownership, collaboration, leadership, analytical thinking, and stakeholder alignment.\n"
+        "- skills_only: concrete named technology/tool/database/framework that should only be considered for the Technical Skills section.\n"
+        "- ignore: job title, employment type, program name, department, location, compensation, credential, education field, company metadata, executive visibility, unsupported spoken language, generic business use case, or vague deliverable.\n"
+        "Prefer ignore for business/domain phrases that are not tech stack, technical workflow, or requested candidate trait.\n"
+        "Never decide whether the candidate has experience with the signal. RAG and validation do that later.\n"
         "Use kind values: tech, tool, language, framework, process, quality, domain, role_title, education, logistics, org_metadata, language_requirement, ignore.\n"
         'Return only: {"routes": [{"keyword": "...", "route": "...", "kind": "...", "reason": "..."}]}'
     )
@@ -806,23 +813,30 @@ def analyze_job_fit_with_ollama(
         "job_level": "",
         "mismatch": False,
         "mismatch_reason": "",
+        "jd_usable": None,
+        "jd_usable_reason": "",
+        "keywords": [],
         "error": None,
         "duration_ms": None,
     }
     if config.DEFAULT_MODEL_BACKEND != "ollama":
         return result
     prompt = (
-        "Analyze whether this job posting matches the requested title and extract the actual role.\n"
+        "Analyze this job posting for resume tailoring in one pass.\n"
         f"Requested/input title: {input_title or '(empty)'}\n"
         f"Deterministic title guess: {deterministic_title or '(empty)'}\n"
         f"Job description: {(description or '')[:4500]}\n"
-        "Return the actual role title from the JD, role_family, job_level, and whether the JD is clearly mismatched against the requested title. "
+        "Return the actual role title from the JD, role_family, job_level, whether the JD is clearly mismatched against the requested title, whether the JD is usable for tailoring, and filtered resume-tailoring keywords. "
         "Mark mismatch true for clear wrong-role cases, such as requested software engineer but detected chief/director/VP/product manager, requested PM but detected unrelated engineering role, or an executive/chief/VP/head/C-level posting when the requested title does not explicitly ask for executive leadership. "
-        "When the requested title is empty, still mark mismatch true if the JD is clearly outside supported tailoring lanes for this resume flow: software, data, PM, firmware, or closely related technical/product roles. "
+        "When the requested title is empty, treat computer-related roles as supported: software, data, PM, firmware, cloud infrastructure, network engineering, security engineering, DevOps, SRE, IT systems, platform, infrastructure, or closely related technical/product roles. "
+        "Do not mark mismatch for Network Engineer, Cloud Engineer, Infrastructure Engineer, Security Engineer, DevOps Engineer, SRE, Systems Engineer, or similar computer/IT roles just because the role_family is general. "
+        "Only mark mismatch true when the JD is clearly outside computer, IT, technical, or product work. "
         "Do not mark mismatch just because the title was empty or generic.\n"
-        "Allowed role_family values: software, data, pm, firmware, general.\n"
+        "Allowed role_family values: software, data, pm, firmware, infrastructure, general.\n"
         "Allowed job_level values: intern, new_grad, junior, mid, senior, staff, principal, manager, director, executive, unknown.\n"
-        'Return only: {"title": "...", "role_family": "...", "job_level": "...", "mismatch": boolean, "mismatch_reason": "...", "confidence": 0.0}'
+        "For jd_usable: usable means there is enough concrete content to tailor a resume from, not just an empty/stub scrape.\n"
+        f"{_keyword_selection_instructions()}\n"
+        'Return only: {"title": "...", "role_family": "...", "job_level": "...", "mismatch": boolean, "mismatch_reason": "...", "confidence": 0.0, "jd_usable": boolean, "jd_usable_reason": "...", "keywords": ["..."]}'
     )
     start = time.perf_counter()
     try:
@@ -831,6 +845,23 @@ def analyze_job_fit_with_ollama(
         if logger:
             logger.llm_call("analyze_job_fit", prompt, raw, result["duration_ms"], success=True)
         parsed = _extract_json_object(raw)
+        raw_keywords = parsed.get("keywords")
+        keywords = (
+            _dedupe_case(
+                [
+                    keyword.strip()
+                    for keyword in raw_keywords
+                    if isinstance(keyword, str) and keyword.strip()
+                ]
+            )[:30]
+            if isinstance(raw_keywords, list)
+            else []
+        )
+        jd_usable = parsed.get("jd_usable")
+        if not isinstance(jd_usable, bool):
+            jd_usable = bool((description or "").strip()) and not bool(parsed.get("mismatch"))
+        if not jd_usable:
+            keywords = []
         result.update(
             {
                 "success": True,
@@ -840,6 +871,9 @@ def analyze_job_fit_with_ollama(
                 "mismatch": bool(parsed.get("mismatch")),
                 "mismatch_reason": str(parsed.get("mismatch_reason") or "").strip()[:240],
                 "confidence": float(parsed.get("confidence") or 0.7),
+                "jd_usable": jd_usable,
+                "jd_usable_reason": str(parsed.get("jd_usable_reason") or "").strip()[:500],
+                "keywords": keywords,
             }
         )
     except Exception as exc:
@@ -871,7 +905,7 @@ def classify_job_with_ollama(
         "Classify this job for resume tailoring.\n"
         f"Title: {title or '(empty)'}\n"
         f"Description: {(description or '')[:3500]}\n"
-        "Allowed role_family values: software, data, pm, firmware, general.\n"
+        "Allowed role_family values: software, data, pm, firmware, infrastructure, general.\n"
         "Allowed job_level values: intern, new_grad, junior, mid, senior, staff, principal, manager, director, executive, unknown.\n"
         "Use executive only for chief, VP, head-of, C-level, or equivalent leadership roles.\n"
         'Return only: {"role_family": "...", "job_level": "...", "confidence": 0.0, "reasons": ["..."]}'
@@ -1044,9 +1078,9 @@ def bucket_skill_keywords_with_ollama(
             f"Existing skills: {json.dumps(existing_skills)}\n"
             f"Candidate keywords: {json.dumps(keywords)}\n"
             f"{retry_line}"
-            "Only add a keyword if the keyword itself is a canonical named skill that belongs in a resume Technical Skills section. "
-            "Good additions are named programming languages, frameworks, libraries, platforms, developer tools, databases, cloud tools, or similar concrete named technologies. "
-            "Do not add job titles, process phrases, qualities, responsibilities, education fields, logistics, domain phrases, vague concepts, methods, or inferred skills. "
+            "Only add a keyword if the keyword itself belongs in a resume Technical Skills section. "
+            "Good additions are programming languages, frameworks, libraries, platforms, developer tools, databases, cloud tools, operating-system skills, protocols, or concrete technical skill phrases such as Linux scripting. "
+            "Do not add job titles, business process phrases, qualities, responsibilities, education fields, logistics, business-domain phrases, or vague concepts. "
             "Do not rewrite or generalize a phrase into a skill. If uncertain, put it in ignored. "
             "Return all four keys: languages, frameworks, developer_tools, ignored.\n"
             'Return only: {"languages": [...], "frameworks": [...], "developer_tools": [...], "ignored": [...]}'
@@ -1073,7 +1107,7 @@ def bucket_skill_keywords_with_ollama(
                 logger.llm_call(
                     "bucket_skill_keywords", prompt, raw, result["duration_ms"], success=True
                 )
-            if missing_keys or invalid:
+            if missing_keys:
                 if logger:
                     logger.step(
                         "skill_bucket_invalid_output",
@@ -1083,6 +1117,13 @@ def bucket_skill_keywords_with_ollama(
                     )
                 if attempt == 0:
                     continue
+            elif invalid and logger:
+                logger.step(
+                    "skill_bucket_invalid_output",
+                    missing_keys=[],
+                    invalid_terms=invalid,
+                    retry=False,
+                )
             for key in required_keys:
                 result[key] = _filter_requested_keywords(
                     _dedupe_case(parsed.get(key) if isinstance(parsed.get(key), list) else []),
@@ -1104,84 +1145,6 @@ def bucket_skill_keywords_with_ollama(
                 )
             if attempt == 0:
                 continue
-    return result
-
-
-def validate_skill_keywords_with_ollama(
-    *,
-    proposed_keywords: list[str],
-    existing_skills: dict[str, list[str]],
-    candidate_context: str,
-    logger: PipelineLogger | None = None,
-) -> dict[str, Any]:
-    """Validate proposed Technical Skills additions against candidate evidence."""
-    result = {
-        "success": False,
-        "accepted": [],
-        "rejected": list(proposed_keywords),
-        "error": None,
-        "duration_ms": None,
-    }
-    proposed = _dedupe_case(proposed_keywords)
-    if config.DEFAULT_MODEL_BACKEND != "ollama" or not proposed:
-        return result
-    prompt = (
-        "Validate proposed additions to a resume Technical Skills section.\n"
-        f"Existing skills: {json.dumps(existing_skills)}\n"
-        f"Candidate evidence: {(candidate_context or '')[:3000]}\n"
-        f"Proposed keywords: {json.dumps(proposed)}\n"
-        "Accept only exact proposed keywords that are canonical named skills and are supported by candidate evidence, existing skills, or a very close named equivalent. "
-        "Reject broad concepts, methods, responsibilities, domains, role titles, or vague data/security/product phrases even if they sound valuable. "
-        "Do not add new terms or synonyms. If uncertain, reject.\n"
-        'Return only: {"accepted": [...], "rejected": [...], "reason": "..."}'
-    )
-    start = time.perf_counter()
-    try:
-        raw = _ollama_chat(prompt)
-        result["duration_ms"] = int((time.perf_counter() - start) * 1000)
-        if logger:
-            logger.llm_call(
-                "validate_skill_keywords", prompt, raw, result["duration_ms"], success=True
-            )
-        parsed = _extract_json_object(raw)
-        accepted = _filter_requested_keywords(
-            _dedupe_case(
-                parsed.get("accepted") if isinstance(parsed.get("accepted"), list) else []
-            ),
-            proposed,
-        )
-        rejected = _filter_requested_keywords(
-            _dedupe_case(
-                parsed.get("rejected") if isinstance(parsed.get("rejected"), list) else []
-            ),
-            proposed,
-        )
-        accepted_l = {keyword.lower() for keyword in accepted}
-        rejected_l = {keyword.lower() for keyword in rejected}
-        rejected.extend(
-            keyword
-            for keyword in proposed
-            if keyword.lower() not in accepted_l and keyword.lower() not in rejected_l
-        )
-        result.update(
-            {
-                "success": bool(accepted or rejected),
-                "accepted": accepted,
-                "rejected": _dedupe_case(rejected),
-            }
-        )
-    except Exception as exc:
-        result["duration_ms"] = int((time.perf_counter() - start) * 1000)
-        result["error"] = str(exc) or exc.__class__.__name__
-        if logger:
-            logger.llm_call(
-                "validate_skill_keywords",
-                prompt,
-                str(exc),
-                result["duration_ms"],
-                success=False,
-                error=result["error"],
-            )
     return result
 
 
@@ -1207,7 +1170,8 @@ def validate_summary_with_ollama(
         "Reject unsupported domain/tool claims, obvious exaggeration, or junior filler tone. "
         "It is better to reject the summary than allow a polished unsupported claim. "
         "Do not reject just because not every keyword is used.\n"
-        'Return only: {"accepted": boolean, "reasons": ["..."]}'
+        "Keep each reason under 18 words. "
+        'Return only valid compact JSON: {"accepted": boolean, "reasons": ["..."]}'
     )
     start = time.perf_counter()
     try:
@@ -1236,6 +1200,55 @@ def validate_summary_with_ollama(
                 success=False,
                 error=result["error"],
             )
+        if not isinstance(exc, (json.JSONDecodeError, ValueError, TypeError, KeyError)):
+            return result
+        retry_prompt = (
+            "Return compact valid JSON for this resume-summary validation. "
+            "No prose, no markdown, no inner quotes in reason strings. "
+            "Use at most 2 short reasons.\n"
+            f"Candidate evidence: {(candidate_context or '')[:1800]}\n"
+            f"Requested keywords: {json.dumps(keywords)}\n"
+            f"Summary: {summary}\n"
+            'Return only: {"accepted": false, "reasons": ["short reason"]} or {"accepted": true, "reasons": []}'
+        )
+        retry_start = time.perf_counter()
+        try:
+            raw = _ollama_chat(retry_prompt)
+            retry_duration_ms = int((time.perf_counter() - retry_start) * 1000)
+            if logger:
+                logger.llm_call(
+                    "validate_summary_json_retry",
+                    retry_prompt,
+                    raw,
+                    retry_duration_ms,
+                    success=True,
+                )
+            parsed = _extract_json_object(raw)
+            reasons = parsed.get("reasons")
+            result.update(
+                {
+                    "accepted": bool(parsed.get("accepted")),
+                    "reasons": reasons if isinstance(reasons, list) else [],
+                    "success": True,
+                    "error": None,
+                    "retry": "json_compact",
+                    "duration_ms": (result["duration_ms"] or 0) + retry_duration_ms,
+                }
+            )
+        except Exception as retry_exc:
+            retry_duration_ms = int((time.perf_counter() - retry_start) * 1000)
+            retry_error = str(retry_exc) or retry_exc.__class__.__name__
+            result["retry_error"] = retry_error
+            result["duration_ms"] = (result["duration_ms"] or 0) + retry_duration_ms
+            if logger:
+                logger.llm_call(
+                    "validate_summary_json_retry",
+                    retry_prompt,
+                    retry_error,
+                    retry_duration_ms,
+                    success=False,
+                    error=retry_error,
+                )
     return result
 
 
@@ -1267,8 +1280,11 @@ def generate_summary(
     if not candidate_context or not job_title:
         return result
 
-    kw_list = ", ".join(keywords[:10]) if keywords else ""
-    kw_line = f"Keywords to include naturally: {kw_list}\n" if kw_list else ""
+    summary_keywords = _dedupe_case(keywords)[:3]
+    kw_list = ", ".join(summary_keywords) if summary_keywords else ""
+    kw_line = (
+        f"Optional JD keywords, use at most 3 only if they fit: {kw_list}\n" if kw_list else ""
+    )
     existing_line = (
         f"Existing resume summary for context: {existing_summary.strip()}\n"
         if existing_summary.strip()
@@ -1289,6 +1305,11 @@ def generate_summary(
             "Use data/database positioning: database-backed systems, data reliability, "
             "automation, analytical work, and supported data tools. "
         )
+    elif role_key == "infrastructure":
+        role_instruction = (
+            "Use infrastructure positioning: cloud or network systems, reliability, "
+            "monitoring, security, automation, and supported platform tooling. "
+        )
     elif job_level == "intern":
         role_instruction = (
             "Use intern/co-op positioning: learning velocity, collaboration, testing, "
@@ -1306,7 +1327,8 @@ def generate_summary(
         f"Aim for 4-5 printed resume lines. "
         f"No invented facts. Use only the background provided. "
         f"If the candidate background does not support a strong targeted summary, return an empty summary rather than filling space with generic or unsupported claims. "
-        f"Use the keywords only when they fit the candidate background naturally. "
+        f"Start from true candidate facts, skills, and evidence before job-description wording. "
+        f"Use at most 3 requested keywords, only when they fit the candidate background naturally. "
         f"Do not try to include every keyword. Prioritize accurate, supported technologies and role/process terms. "
         f"{role_instruction}"
         f"Do not use junior-sounding filler such as motivated, eager, passionate, aspiring, contribute immediately, or diverse programming skills. "
@@ -1393,15 +1415,17 @@ def rewrite_bullet_targeted(
         f"4. STOP: Any remaining keywords that do not fit go in keywords_skipped. Do not force them.\n"
         f"Rules:\n"
         f"- Preserve all original facts, metrics, numbers, scope, and outcomes.\n"
+        f"- Preserve the original bullet's order and Google XYZ-style structure when possible: outcome or metric first, then action, method, tool, or scope.\n"
         f"- Do not invent a new outcome, tool usage, product domain, customer domain, or responsibility.\n"
+        f"- It is OK to use adjacent wording that is not explicit in the original if it stays in the same work context, same outcome, and coherent technology/workflow family.\n"
+        f"- Do not combine technologies, vendors, resources, or workflows in a way that would sound incoherent or imply a different project.\n"
         f"- Do not explain what a technology does. Use technology and domain phrases as names.\n"
-        f"- Do not claim a technology was used for a purpose unless the original bullet supports that purpose.\n"
-        f"- Data-domain terms such as data pipelines, data exploration, model training, ModelOps, Productionalize, and Operationalize require direct evidence in the original bullet. Do not infer them from generic full-stack architecture.\n"
+        f"- Do not claim a technology was used for an unrelated purpose or a different workflow than the original bullet.\n"
         f"- If a keyword is an action phrase, keep the action and object visibly together. For any keyword beginning with Monitor, write monitoring plus the rest of the keyword if truthful. For any keyword beginning with Automate, write automating plus the rest of the keyword if truthful. Otherwise put that keyword in keywords_skipped.\n"
         f"- Do not count scattered words as using an action keyword. Example: monitors in one clause plus data pipelines somewhere else does not count as Monitor data pipelines.\n"
-        f"- Datadog metrics, monitors, logging, and alerts may support monitoring data pipelines or services only when the rewritten bullet explicitly says what was monitored.\n"
         f"- Prefer additive related-tech phrasing when it is more truthful than replacement, for example React/Next.js.\n"
         f"- Do not create unnatural slash pairs or false pairings. Example: do not write LLM/React.\n"
+        f"- Avoid lazy append phrases such as leveraging X unless X naturally explains the method or context of the original work.\n"
         f"- At most one new sentence total.\n"
         f"- Keep the rewritten bullet concise. It should usually be close to the original length and never more than 20 percent longer unless needed to preserve grammar.\n"
         f"Bullet: {bullet.strip()}\n"
@@ -1431,20 +1455,19 @@ def rewrite_bullet_targeted(
                 if isinstance(model_skipped, list)
                 else []
             )
+            claimed_used, claimed_skipped = _clean_keyword_outcome(
+                keywords,
+                claimed_used,
+                result["model_keywords_skipped"],
+            )
+            result["model_keywords_used"] = claimed_used
+            result["model_keywords_skipped"] = claimed_skipped
             presence = validate_claimed_keywords_present(
                 rewritten=text,
                 requested_keywords=keywords,
                 claimed_used=claimed_used,
             )
             result["claimed_keyword_presence"] = presence
-            if not presence["accepted"]:
-                result["bullet"] = bullet
-                result["success"] = False
-                result["error"] = "claimed_keyword_missing"
-                result["presence_supported_keywords"] = list(presence.get("present") or [])
-                result["keywords_used"] = []
-                result["keywords_skipped"] = list(keywords)
-                return result
 
             try:
                 validation = validate_rewrite_with_ollama(
@@ -1461,7 +1484,10 @@ def rewrite_bullet_targeted(
                     "reason": str(exc) or exc.__class__.__name__,
                 }
             result["validation"] = validation
+            if not presence["accepted"] and validation.get("accepted"):
+                result["presence_resolved_by_llm_validation"] = True
             if not validation["accepted"]:
+                result["initial_validation"] = validation
                 repair = repair_rewrite_with_ollama(
                     original=bullet,
                     rewritten=text,
@@ -1496,6 +1522,7 @@ def rewrite_bullet_targeted(
                             if used:
                                 result["bullet"] = repair_text
                                 result["success"] = True
+                                result["validation"] = repair_validation
                                 result["keywords_used"] = used
                                 result["keywords_skipped"] = skipped
                                 return result
@@ -1506,7 +1533,11 @@ def rewrite_bullet_targeted(
                 )
                 result["bullet"] = bullet
                 result["success"] = False
-                result["error"] = "rewrite_validation_failed"
+                result["error"] = (
+                    "claimed_keyword_missing"
+                    if not presence["accepted"]
+                    else "rewrite_validation_failed"
+                )
                 result["keywords_used"] = []
                 result["keywords_skipped"] = skipped or list(keywords)
                 return result
@@ -1519,7 +1550,11 @@ def rewrite_bullet_targeted(
             if not used:
                 result["bullet"] = bullet
                 result["success"] = False
-                result["error"] = "rewrite_validation_failed"
+                result["error"] = (
+                    "claimed_keyword_missing"
+                    if not presence["accepted"]
+                    else "rewrite_validation_failed"
+                )
                 result["keywords_used"] = []
                 result["keywords_skipped"] = skipped or list(keywords)
                 return result

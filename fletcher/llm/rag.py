@@ -471,12 +471,24 @@ def match_keywords_to_bullets(
         try:
             kw_vec = _embed(kw)
             best_idx, best_score = -1, 0.0
+            candidates: list[tuple[int, float]] = []
             for i, bvec in enumerate(bullet_vecs):
                 if bvec:
                     s = _cosine_sim(kw_vec, bvec)
+                    candidates.append((i, s))
                     if s > best_score:
                         best_score, best_idx = s, i
             best_score = round(best_score, 4)
+            candidates.sort(key=lambda item: item[1], reverse=True)
+            top_candidates = [
+                {
+                    "bullet_idx": idx,
+                    "score": round(score, 4),
+                    "bullet_preview": bullets[idx][:80],
+                    "bullet_text": bullets[idx],
+                }
+                for idx, score in candidates[:5]
+            ]
 
             if best_score >= hi and best_idx >= 0:
                 tier = "high"
@@ -505,6 +517,8 @@ def match_keywords_to_bullets(
                     "tier": tier,
                     "bullet_idx": best_idx if best_idx >= 0 else None,
                     "bullet_preview": bullets[best_idx][:80] if best_idx >= 0 else "",
+                    "bullet_text": bullets[best_idx] if best_idx >= 0 else "",
+                    "candidates": top_candidates,
                 }
             )
             if verbose:

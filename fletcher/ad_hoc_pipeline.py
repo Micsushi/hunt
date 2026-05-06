@@ -14,7 +14,12 @@ from . import config as _config
 from .config import DEFAULT_OG_RESUME_PATH
 from .jobs.classifier import classify_job, slugify
 from .jobs.keyword_extractor import extract_keywords
-from .jobs.keyword_policy import KeywordRoute, classify_keyword_policy
+from .jobs.keyword_policy import (
+    KeywordKind,
+    KeywordRoute,
+    classify_keyword_policy,
+    normalize_keyword,
+)
 from .jobs.title_inference import infer_title_from_description, normalize_title_candidate
 from .keyword_check import partition_keywords
 from .llm.llm_enrich import (
@@ -27,7 +32,6 @@ from .llm.llm_enrich import (
     generate_summary,
     keyword_visible_in_text,
     rewrite_bullet_targeted,
-    validate_skill_keywords_with_ollama,
     validate_summary_grounding,
     validate_summary_with_ollama,
 )
@@ -100,7 +104,12 @@ def _merge_llm_classification(base: dict, llm_result: dict) -> dict:
     if not llm_result.get("success"):
         return base
     merged = dict(base)
-    merged["role_family"] = llm_result.get("role_family") or merged.get("role_family")
+    llm_family = llm_result.get("role_family")
+    current_family = merged.get("role_family")
+    if llm_family and not (
+        llm_family == "general" and current_family not in {None, "", "general", "unknown"}
+    ):
+        merged["role_family"] = llm_family
     merged["job_level"] = llm_result.get("job_level") or merged.get("job_level")
     merged["confidence"] = round(float(llm_result.get("confidence") or 0.7), 2)
     reasons = list(merged.get("reasons") or [])
@@ -205,12 +214,16 @@ def _score_sources(
     sources: list[dict],
     raw_keywords: list[str],
     classification: dict | None = None,
+    rag_scores: list[dict] | None = None,
 ) -> dict[str, float]:
     base_scores = score_bullets_for_drop(bullets, raw_keywords)
-    return {
-        source["bullet_id"]: round((base_scores[idx] if idx < len(base_scores) else 0.0), 4)
-        for idx, source in enumerate(sources)
-    }
+    contribution = _coverage_contribution_scores(sources, rag_scores or [])
+    scores: dict[str, float] = {}
+    for idx, source in enumerate(sources):
+        base = base_scores[idx] if idx < len(base_scores) else 0.0
+        contrib = contribution.get(source["bullet_id"], 0.0)
+        scores[source["bullet_id"]] = round(max(base, contrib), 4)
+    return scores
 
 
 def _score_details(
@@ -218,17 +231,117 @@ def _score_details(
     sources: list[dict],
     raw_keywords: list[str],
     classification: dict | None = None,
+    rag_scores: list[dict] | None = None,
 ) -> dict[str, dict[str, float]]:
     base_scores = score_bullets_for_drop(bullets, raw_keywords)
+    contribution = _coverage_contribution_scores(sources, rag_scores or [])
     details: dict[str, dict[str, float]] = {}
     for idx, source in enumerate(sources):
         base = base_scores[idx] if idx < len(base_scores) else 0.0
+        contrib = contribution.get(source["bullet_id"], 0.0)
         details[source["bullet_id"]] = {
             "score_base": round(base, 4),
-            "score_bonus": 0.0,
-            "score_final": round(base, 4),
+            "score_bonus": round(max(0.0, contrib - base), 4),
+            "score_final": round(max(base, contrib), 4),
         }
     return details
+
+
+def _coverage_contribution_scores(
+    sources: list[dict], rag_scores: list[dict] | None
+) -> dict[str, float]:
+    """Protect bullets that uniquely or strongly cover at least one keyword."""
+    if not sources or not rag_scores:
+        return {}
+    by_idx = {
+        int(source.get("rag_idx", idx)): source["bullet_id"] for idx, source in enumerate(sources)
+    }
+    by_text = {
+        str(source.get("text") or "").strip(): source["bullet_id"]
+        for source in sources
+        if str(source.get("text") or "").strip()
+    }
+    contribution: dict[str, float] = {}
+    for detail in rag_scores or []:
+        candidates = detail.get("candidates") or [
+            {
+                "bullet_idx": detail.get("bullet_idx"),
+                "bullet_text": detail.get("bullet_text"),
+                "score": detail.get("score"),
+            }
+        ]
+        for rank, candidate in enumerate(candidates[:3]):
+            bullet_id = None
+            text = str(candidate.get("bullet_text") or "").strip()
+            if text:
+                bullet_id = by_text.get(text)
+            idx = candidate.get("bullet_idx")
+            if bullet_id is None and isinstance(idx, int):
+                bullet_id = by_idx.get(idx)
+            if bullet_id is None:
+                continue
+            score = float(candidate.get("score") or 0.0)
+            if score <= 0:
+                continue
+            rank_bonus = 0.05 if rank == 0 else 0.02
+            contribution[bullet_id] = max(
+                contribution.get(bullet_id, 0.0), min(score + rank_bonus, 1.0)
+            )
+    return contribution
+
+
+def _annotate_rag_indices(sources: list[dict]) -> list[dict]:
+    for idx, source in enumerate(sources):
+        source.setdefault("rag_idx", idx)
+    return sources
+
+
+def _filter_sources_present_in_doc(doc, sources: list[dict]) -> list[dict]:
+    live_hashes: dict[tuple[str, str], set[str]] = {}
+    for kind, entries in (("exp", doc.experience), ("proj", doc.projects)):
+        for entry in entries:
+            live_hashes[(kind, entry.entry_id)] = {_text_hash(bullet) for bullet in entry.bullets}
+    return [
+        source
+        for source in sources
+        if source.get("text_hash")
+        in live_hashes.get((source.get("kind"), source.get("entry_id")), set())
+    ]
+
+
+_RAG_TIER_RANK = {"error": 0, "low": 0, "mid": 1, "high": 2}
+
+
+def _rag_keyword_tiers(match_result: dict) -> dict[str, str]:
+    tiers: dict[str, str] = {}
+
+    def remember(keyword: str, tier: str) -> None:
+        key = str(keyword or "").strip().lower()
+        if not key:
+            return
+        current = tiers.get(key)
+        if current is None or _RAG_TIER_RANK.get(tier, 0) > _RAG_TIER_RANK.get(current, 0):
+            tiers[key] = tier
+
+    for detail in match_result.get("scores") or []:
+        remember(str(detail.get("keyword") or ""), str(detail.get("tier") or "low"))
+    for match in match_result.get("bullet_matches") or []:
+        remember(str(match.get("keyword") or ""), "high")
+    for keyword in match_result.get("summary_keywords") or []:
+        remember(str(keyword or ""), "mid")
+    for keyword in match_result.get("ignored_keywords") or []:
+        remember(str(keyword or ""), "low")
+    return tiers
+
+
+def _rag_kept_keyword(keyword: str, tiers: dict[str, str]) -> bool:
+    return tiers.get(str(keyword or "").strip().lower()) in {"high", "mid"}
+
+
+def _rag_keywords_by_tier(keywords: list[str], tiers: dict[str, str], tier: str) -> list[str]:
+    return [
+        keyword for keyword in keywords if tiers.get(str(keyword or "").strip().lower()) == tier
+    ]
 
 
 def _keyword_present(keyword: str, doc) -> bool:
@@ -247,7 +360,7 @@ def _split_slash_keyword(keyword: str) -> list[str]:
     if "/" not in item:
         return [item] if item else []
     lower_item = item.lower()
-    if lower_item in _SLASH_KEYWORDS_TO_KEEP or "web/app" in lower_item:
+    if lower_item in _SLASH_KEYWORDS_TO_KEEP or "ci/cd" in lower_item or "web/app" in lower_item:
         return [item]
     parts = [part.strip() for part in item.split("/") if part.strip()]
     if len(parts) < 2:
@@ -266,6 +379,70 @@ def _normalize_extracted_keywords(keywords: list[str]) -> list[str]:
     return _dedupe(out)
 
 
+def _keyword_match_surfaces(doc, all_bullets: list[str]) -> list[str]:
+    skills = (
+        list(doc.skills.languages) + list(doc.skills.frameworks) + list(doc.skills.developer_tools)
+    )
+    return list(all_bullets) + _dedupe(
+        [str(skill).strip() for skill in skills if str(skill).strip()]
+    )
+
+
+def _keywords_from_job_fit(
+    job_fit: dict[str, Any],
+    *,
+    classification: dict,
+    keywords: dict,
+) -> tuple[dict, dict, dict] | None:
+    if not job_fit.get("success") or not isinstance(job_fit.get("jd_usable"), bool):
+        return None
+
+    jd_usable = bool(job_fit.get("jd_usable"))
+    raw_keywords = job_fit.get("keywords")
+    terms = (
+        _normalize_extracted_keywords(
+            [
+                keyword.strip()
+                for keyword in raw_keywords
+                if isinstance(keyword, str) and keyword.strip()
+            ]
+        )
+        if isinstance(raw_keywords, list)
+        else []
+    )
+    if not jd_usable:
+        terms = []
+
+    new_classification = dict(classification)
+    new_classification["weak_description"] = not jd_usable
+    flags = list(new_classification.get("concern_flags") or [])
+    if jd_usable:
+        flags = [flag for flag in flags if flag != "weak_description"]
+    elif "weak_description" not in flags:
+        flags.append("weak_description")
+    new_classification["concern_flags"] = flags
+    reason = str(job_fit.get("jd_usable_reason") or "").strip()
+    if reason:
+        reasons = list(new_classification.get("reasons") or [])
+        reasons.append(f"jd_usable_model: {reason[:200]}")
+        new_classification["reasons"] = reasons[:24]
+
+    new_keywords = dict(keywords)
+    new_keywords["must_have_terms"] = terms[:30]
+    new_keywords["nice_to_have_terms"] = []
+    new_keywords["tools_and_technologies"] = list(terms[:30])
+    new_keywords["domain_terms"] = []
+    meta = {
+        "ollama_enriched": True,
+        "source": "analyze_job_fit",
+        "jd_usable": jd_usable,
+        "jd_usable_reason": reason,
+        "duration_ms": job_fit.get("duration_ms"),
+        "error": job_fit.get("error"),
+    }
+    return new_classification, new_keywords, meta
+
+
 def _skill_validation_context(doc) -> str:
     bullets = [b for entry in doc.experience for b in entry.bullets] + [
         b for entry in doc.projects for b in entry.bullets
@@ -274,6 +451,15 @@ def _skill_validation_context(doc) -> str:
         list(doc.skills.languages) + list(doc.skills.frameworks) + list(doc.skills.developer_tools)
     )
     return " ".join(bullets[:18] + skill_names)
+
+
+def _existing_skill_keys(existing_skills: dict[str, list[str]]) -> set[str]:
+    return {
+        normalize_keyword(str(value))
+        for values in existing_skills.values()
+        for value in values
+        if normalize_keyword(str(value))
+    }
 
 
 def _add_keywords_to_skills(
@@ -285,16 +471,12 @@ def _add_keywords_to_skills(
         "frameworks": list(doc.skills.frameworks),
         "developer_tools": list(doc.skills.developer_tools),
     }
-    existing = {
-        str(value).strip().lower()
-        for value in (
-            list(doc.skills.languages)
-            + list(doc.skills.frameworks)
-            + list(doc.skills.developer_tools)
-        )
-    }
+    existing = _existing_skill_keys(existing_skills)
+    skill_candidates = _normalize_extracted_keywords(_dedupe(keywords))
+    if not skill_candidates:
+        return []
     bucketed = bucket_skill_keywords_with_ollama(
-        keywords=_normalize_extracted_keywords(_dedupe(keywords)),
+        keywords=skill_candidates,
         existing_skills=existing_skills,
         logger=logger,
     )
@@ -306,31 +488,17 @@ def _add_keywords_to_skills(
     proposed = _dedupe([keyword for keyword in proposed if keyword.strip()])
     if not proposed:
         return []
-    skill_validation = validate_skill_keywords_with_ollama(
-        proposed_keywords=proposed,
-        existing_skills=existing_skills,
-        candidate_context=_skill_validation_context(doc),
-        logger=logger,
-    )
-    if logger:
-        logger.step(
-            "skill_keyword_validation",
-            accepted=skill_validation.get("accepted", []),
-            rejected=skill_validation.get("rejected", []),
-            success=skill_validation.get("success"),
-        )
-    if not skill_validation.get("success"):
-        return []
-    accepted = {keyword.lower() for keyword in list(skill_validation.get("accepted") or [])}
+    accepted = {keyword.lower() for keyword in proposed}
     for bucket in ("languages", "frameworks", "developer_tools"):
         for keyword in _normalize_extracted_keywords(list(bucketed.get(bucket, []) or [])):
             key = str(keyword).strip().lower()
-            if not key or key in existing:
+            skill_key = normalize_keyword(keyword)
+            if not key or skill_key in existing:
                 continue
             if key not in accepted:
                 continue
             getattr(doc.skills, bucket).append(str(keyword).strip())
-            existing.add(key)
+            existing.add(skill_key)
             added.append(str(keyword).strip())
     return added
 
@@ -349,6 +517,8 @@ def _dedupe(values: list[str]) -> list[str]:
 def _validation_reasons(result: dict[str, Any]) -> list[str]:
     validation = result.get("validation") or {}
     reasons = list(validation.get("reasons") or [])
+    for keyword in validation.get("keywords_rejected") or []:
+        reasons.append(f"llm_rejected_keyword:{keyword}")
     llm_validation = validation.get("llm_validation") or {}
     for keyword in llm_validation.get("keywords_rejected") or []:
         reasons.append(f"llm_rejected_keyword:{keyword}")
@@ -394,14 +564,27 @@ def _filter_summary_keywords(
     candidate_context: str,
     validation_reasons: list[str],
 ) -> tuple[list[str], list[str]]:
-    included: list[str] = []
-    excluded: list[str] = []
-    for keyword in list(base_keywords) + list(skipped_keywords):
-        if _summary_keyword_supported(keyword, candidate_context, validation_reasons):
-            included.append(keyword)
-        else:
-            excluded.append(keyword)
-    return _dedupe(included)[:8], _dedupe(excluded)
+    # If the LLM summary-keyword filter is unavailable, keep the signals in the
+    # safer summary lane and let summary generation/validation decide support.
+    return _dedupe(list(base_keywords) + list(skipped_keywords))[:8], []
+
+
+def _keywords_rejected_by_summary_validation(
+    validation: dict[str, Any], keywords: list[str]
+) -> list[str]:
+    reasons = " ".join(str(reason) for reason in validation.get("reasons") or []).lower()
+    rejected: list[str] = []
+    for keyword in keywords:
+        key = str(keyword).strip().lower()
+        if key and key in reasons:
+            rejected.append(keyword)
+    return _dedupe(rejected)
+
+
+def _summary_filter_needs_llm(keywords: list[str]) -> bool:
+    """Use the expensive summary filter only when the keyword list needs pruning."""
+    cleaned = _dedupe([keyword for keyword in keywords if keyword.strip()])
+    return len(cleaned) > 10
 
 
 def _keyword_rewrite_eligible(keyword: str) -> bool:
@@ -414,6 +597,63 @@ def _keyword_rewrite_eligible(keyword: str) -> bool:
     if "software" in words and words & NON_REWRITE_ROLE_WORDS:
         return False
     return True
+
+
+def _select_rewrite_assignments(
+    matches: list[dict], *, max_keywords_per_bullet: int = 2
+) -> dict[int, list[str]]:
+    """Globally assign high RAG keywords while capping each bullet's rewrite load."""
+    by_keyword: dict[str, list[dict]] = {}
+    for match in matches:
+        keyword = str(match.get("keyword") or "").strip()
+        idx = match.get("bullet_idx")
+        if not keyword or not isinstance(idx, int):
+            continue
+        options: list[dict] = []
+        for candidate in match.get("candidates") or []:
+            c_idx = candidate.get("bullet_idx")
+            if isinstance(c_idx, int):
+                options.append(
+                    {
+                        **match,
+                        "bullet_idx": c_idx,
+                        "score": float(candidate.get("score") or match.get("score") or 0.0),
+                    }
+                )
+        if not options:
+            options = [match]
+        by_keyword.setdefault(keyword.lower(), []).extend(options)
+
+    candidates: list[dict] = []
+    for options in by_keyword.values():
+        options.sort(key=lambda item: float(item.get("score") or 0.0), reverse=True)
+        best_score = float(options[0].get("score") or 0.0) if options else 0.0
+        for option in options[:4]:
+            score = float(option.get("score") or 0.0)
+            candidates.append(
+                {
+                    **option,
+                    "score": score,
+                    "regret": max(0.0, best_score - score),
+                }
+            )
+
+    assigned_keywords: set[str] = set()
+    bullet_load: dict[int, int] = defaultdict(int)
+    selected: dict[int, list[str]] = defaultdict(list)
+    candidates.sort(key=lambda item: (item["score"] - item["regret"], item["score"]), reverse=True)
+    for candidate in candidates:
+        keyword = str(candidate.get("keyword") or "").strip()
+        key = keyword.lower()
+        idx = candidate.get("bullet_idx")
+        if not keyword or key in assigned_keywords or not isinstance(idx, int):
+            continue
+        if bullet_load[idx] >= max_keywords_per_bullet:
+            continue
+        selected[idx].append(keyword)
+        bullet_load[idx] += 1
+        assigned_keywords.add(key)
+    return dict(selected)
 
 
 def _compile_doc(attempt_dir: Path, doc, stem: str) -> tuple[dict, str]:
@@ -507,6 +747,7 @@ def _fit_to_page(
                     kind=source["kind"],
                     entry_id=source["entry_id"],
                     score=scores_by_bullet_id.get(bullet_id, 0.0),
+                    text=source.get("text"),
                 )
                 removed_any = True
                 break
@@ -622,7 +863,7 @@ def _classify_keyword_routes_batched(
     resume_context: str,
     classification: dict | None,
     logger: PipelineLogger | None,
-    batch_size: int = 6,
+    batch_size: int = 30,
 ) -> dict[str, dict[str, str]]:
     routes: dict[str, dict[str, str]] = {}
     for batch in _batched(keywords, batch_size):
@@ -666,6 +907,16 @@ def _classify_keyword_routes_batched(
     return routes
 
 
+def _keyword_policy_needs_llm(policy) -> bool:
+    if policy.route == KeywordRoute.IGNORE.value:
+        return policy.reason == "unknown"
+    return policy.kind.value in {
+        KeywordKind.DOMAIN.value,
+        KeywordKind.PROCESS.value,
+        KeywordKind.TECH.value,
+    }
+
+
 def _partition_missing_keywords_by_policy(
     missing_kws: list[str],
     *,
@@ -675,24 +926,25 @@ def _partition_missing_keywords_by_policy(
     classification: dict | None = None,
     logger: PipelineLogger | None = None,
 ) -> tuple[list[str], list[str], list[str], list[str], dict[str, str]]:
-    resume_context = _keyword_policy_context(doc, active_bullets)
     deterministic = {
-        keyword: classify_keyword_policy(keyword, job_title=title, resume_context=resume_context)
+        keyword: classify_keyword_policy(keyword, job_title=title, resume_context="")
         for keyword in missing_kws
     }
     hard_block_reasons = {"empty", "logistics", "org_metadata"}
-    hard_block_kinds = {"language_requirement"}
+    hard_block_kinds = {"education", "language_requirement", "role_title"}
     llm_candidates = []
     for keyword, policy in deterministic.items():
         if policy.route == KeywordRoute.IGNORE.value and (
             policy.reason in hard_block_reasons or policy.kind.value in hard_block_kinds
         ):
             continue
+        if not _keyword_policy_needs_llm(policy):
+            continue
         llm_candidates.append(keyword)
     llm_routes_raw = _classify_keyword_routes_batched(
         keywords=llm_candidates,
         title=title,
-        resume_context=resume_context,
+        resume_context="",
         classification=classification,
         logger=logger,
     )
@@ -735,6 +987,15 @@ def _partition_missing_keywords_by_policy(
                 route = KeywordRoute.IGNORE.value
                 kind = policy.kind.value
                 reason = policy.reason
+        elif policy.route == KeywordRoute.IGNORE.value and policy.reason == "unknown":
+            route = KeywordRoute.SUMMARY.value
+            reason = "llm_route_missing_summary_fallback"
+        if kind in hard_block_kinds:
+            route = KeywordRoute.IGNORE.value
+            reason = f"{reason}:blocked_metadata_keyword"
+        if kind == KeywordKind.QUALITY.value and route == KeywordRoute.REWRITE.value:
+            route = KeywordRoute.SUMMARY.value
+            reason = f"{reason}:quality_rewrite_blocked"
         reasons[keyword] = f"{kind}:{route}:{reason}"
         if route == KeywordRoute.REWRITE.value:
             rewrite.append(keyword)
@@ -800,22 +1061,52 @@ def _run_iteration(
         "scores": [],
         "rag_used": False,
     }
-    if _config.RAG_ENABLED and rewrite_missing_kws and active_bullets:
+    rag_candidate_kws = _dedupe(rewrite_missing_kws + summary_only_kws + skills_only_kws)
+    rag_tiers: dict[str, str] = {}
+    skills_only_rag_kws: list[str] = []
+    if _config.RAG_ENABLED and rag_candidate_kws and active_bullets:
         t_rag = time.perf_counter()
         logger.step(
             "rag_start",
-            missing_keyword_count=len(rewrite_missing_kws),
+            missing_keyword_count=len(rag_candidate_kws),
+            rewrite_keyword_count=len(rewrite_missing_kws),
+            summary_keyword_count=len(summary_only_kws),
+            skill_keyword_count=len(skills_only_kws),
             bullet_count=len(active_bullets),
         )
         try:
-            kw_match = match_keywords_to_bullets(rewrite_missing_kws, active_bullets)
-            kw_match["summary_keywords"] = _dedupe(
-                list(summary_only_kws) + list(kw_match.get("summary_keywords", []))
+            rag_result = match_keywords_to_bullets(rag_candidate_kws, active_bullets)
+            rag_tiers = _rag_keyword_tiers(rag_result)
+            rewrite_lookup = {keyword.lower() for keyword in rewrite_missing_kws}
+            rewrite_matches = [
+                match
+                for match in rag_result.get("bullet_matches", [])
+                if str(match.get("keyword") or "").lower() in rewrite_lookup
+            ]
+            rewrite_mid_keywords = _rag_keywords_by_tier(rewrite_missing_kws, rag_tiers, "mid")
+            summary_rag_kws = [
+                keyword for keyword in summary_only_kws if _rag_kept_keyword(keyword, rag_tiers)
+            ]
+            skills_only_rag_kws = [
+                keyword for keyword in skills_only_kws if _rag_kept_keyword(keyword, rag_tiers)
+            ]
+            low_or_error = [
+                str(detail.get("keyword") or "")
+                for detail in rag_result.get("scores", [])
+                if str(detail.get("tier") or "") in {"low", "error"}
+            ]
+            low_or_error.extend(
+                str(keyword or "") for keyword in rag_result.get("ignored_keywords", [])
             )
-            kw_match["ignored_keywords"] = _dedupe(
-                list(policy_ignored_kws) + list(kw_match.get("ignored_keywords", []))
-            )
-            kw_match["rag_used"] = True
+            kw_match = {
+                "bullet_matches": rewrite_matches,
+                "summary_keywords": _dedupe(summary_rag_kws + rewrite_mid_keywords),
+                "ignored_keywords": _dedupe(policy_ignored_kws + low_or_error),
+                "scores": list(rag_result.get("scores", [])),
+                "rag_used": True,
+            }
+            kw_match["summary_keywords"] = _dedupe(list(kw_match.get("summary_keywords", [])))
+            kw_match["ignored_keywords"] = _dedupe(list(kw_match.get("ignored_keywords", [])))
         except Exception as exc:
             logger.step("rag_skipped", reason=str(exc))
         logger.step(
@@ -826,6 +1117,7 @@ def _run_iteration(
             rag_used=kw_match.get("rag_used", False),
             high_keywords=[m["keyword"] for m in kw_match.get("bullet_matches", [])],
             mid_keywords=kw_match.get("summary_keywords", []),
+            skill_keywords=skills_only_rag_kws,
             elapsed_ms=int((time.perf_counter() - t_rag) * 1000),
         )
     else:
@@ -837,7 +1129,7 @@ def _run_iteration(
     rewrite_count = 0
     rewrite_ok = 0
     if kw_match.get("bullet_matches"):
-        by_bullet: dict[int, list[str]] = defaultdict(list)
+        rewrite_matches: list[dict] = []
         for match in kw_match["bullet_matches"]:
             keyword = match["keyword"]
             if not _keyword_rewrite_eligible(keyword):
@@ -849,8 +1141,9 @@ def _run_iteration(
                     bullet_idx=match.get("bullet_idx"),
                 )
                 continue
-            by_bullet[match["bullet_idx"]].append(match["keyword"])
+            rewrite_matches.append(match)
 
+        by_bullet = _select_rewrite_assignments(rewrite_matches, max_keywords_per_bullet=2)
         for bullet_idx, kws_to_add in sorted(by_bullet.items()):
             if bullet_idx >= len(active_bullets):
                 continue
@@ -949,24 +1242,46 @@ def _run_iteration(
     logger.step("rewrite_validation_summary", rejected_keywords=_dedupe(skipped_candidates))
 
     bullets_for_score, sources_for_score = _collect_active_bullets(doc, active_bucket_ids)
-    scores = _score_sources(bullets_for_score, sources_for_score, raw_keywords, classification)
+    _annotate_rag_indices(sources_for_score)
+    scores = _score_sources(
+        bullets_for_score,
+        sources_for_score,
+        raw_keywords,
+        classification,
+        kw_match.get("scores", []),
+    )
     logger.step(
         "bullet_scores",
         scores=scores,
-        details=_score_details(bullets_for_score, sources_for_score, raw_keywords, classification),
+        details=_score_details(
+            bullets_for_score,
+            sources_for_score,
+            raw_keywords,
+            classification,
+            kw_match.get("scores", []),
+        ),
     )
     evidence_bullets = _summary_evidence_bullets(bullets_for_score, sources_for_score, scores)
     logger.step("summary_evidence", bullets=evidence_bullets)
 
-    skipped_to_summary = [kw for kw in _dedupe(skipped_candidates) if not _keyword_present(kw, doc)]
     candidate_context = _build_candidate_context(doc, evidence_bullets=evidence_bullets)
+    skipped_to_summary = [
+        kw
+        for kw in _dedupe(skipped_candidates)
+        if not _keyword_present(kw, doc)
+        and _summary_keyword_supported(kw, candidate_context, validation_reasons)
+    ]
     base_summary_keywords = _dedupe(list(kw_match.get("summary_keywords", [])))
-    summary_filter = filter_summary_keywords_with_ollama(
-        keywords=_dedupe(base_summary_keywords + skipped_to_summary),
-        candidate_context=candidate_context,
-        job_title=title or "Software Engineer",
-        logger=logger,
-    )
+    summary_filter_candidates = _dedupe(base_summary_keywords + skipped_to_summary)
+    if _summary_filter_needs_llm(summary_filter_candidates):
+        summary_filter = filter_summary_keywords_with_ollama(
+            keywords=summary_filter_candidates,
+            candidate_context=candidate_context,
+            job_title=title or "Software Engineer",
+            logger=logger,
+        )
+    else:
+        summary_filter = {"success": False, "error": "deterministic_fast_path"}
     if summary_filter.get("success"):
         mid_keywords = list(summary_filter.get("included") or [])
         excluded_summary_keywords = list(summary_filter.get("excluded") or [])
@@ -977,13 +1292,19 @@ def _run_iteration(
             candidate_context,
             validation_reasons,
         )
+    if len(mid_keywords) > 3:
+        overflow = mid_keywords[3:]
+        mid_keywords = mid_keywords[:3]
+        excluded_summary_keywords = _dedupe(excluded_summary_keywords + overflow)
     logger.step("keywords_skipped_to_summary", keywords=skipped_to_summary)
     logger.step(
         "summary_keyword_filter",
         base_keywords=base_summary_keywords,
         included=mid_keywords,
         excluded=excluded_summary_keywords,
-        mode="llm" if summary_filter.get("success") else "deterministic_fallback",
+        mode="llm"
+        if summary_filter.get("success")
+        else str(summary_filter.get("error") or "deterministic_fallback"),
     )
 
     summary_meta: dict = {}
@@ -1017,15 +1338,24 @@ def _run_iteration(
                     "Revise to remove unsupported domain claims and junior-sounding filler. "
                     "Use only supported role/process keywords that fit the candidate background."
                 )
+                retry_keywords = [
+                    keyword
+                    for keyword in mid_keywords
+                    if keyword
+                    not in _keywords_rejected_by_summary_validation(
+                        summary_validation, mid_keywords
+                    )
+                ]
                 logger.step(
                     "summary_validation_retry_start",
                     reasons=summary_validation.get("reasons"),
                     feedback=feedback,
+                    keywords=retry_keywords,
                 )
                 retry_meta = generate_summary(
                     candidate_context,
                     title or "Software Engineer",
-                    mid_keywords,
+                    retry_keywords,
                     existing_summary=existing_summary,
                     line_feedback=feedback,
                     role_family=str(classification.get("role_family") or ""),
@@ -1035,7 +1365,7 @@ def _run_iteration(
                 retry_validation, retry_validation_mode = _validate_summary_with_defense(
                     summary=retry_meta.get("summary", ""),
                     candidate_context=candidate_context,
-                    keywords=mid_keywords,
+                    keywords=retry_keywords,
                     logger=logger,
                 )
                 logger.step(
@@ -1049,6 +1379,7 @@ def _run_iteration(
                 )
                 if retry_meta.get("summary") and retry_validation["accepted"]:
                     summary_meta = retry_meta
+                    mid_keywords = retry_keywords
                 else:
                     summary_meta = {
                         "summary": "",
@@ -1060,16 +1391,25 @@ def _run_iteration(
 
     doc_ns = copy.deepcopy(doc)
     doc_ns.summary = ""
-    no_summary_skill_keywords = _dedupe(base_summary_keywords + skipped_to_summary)
+    rag_supported_summary_skill_kws = [
+        keyword
+        for keyword in _dedupe(
+            mid_keywords
+            + excluded_summary_keywords
+            + skipped_to_summary
+            + list(kw_match.get("summary_keywords", []))
+        )
+        if _rag_kept_keyword(keyword, rag_tiers)
+    ]
+    no_summary_skill_keywords = _dedupe(list(skills_only_rag_kws) + rag_supported_summary_skill_kws)
     no_summary_skills_added = _add_keywords_to_skills(
         doc_ns, no_summary_skill_keywords, logger=logger
     )
-    if no_summary_skills_added:
-        logger.step(
-            "skills_keywords_added",
-            version="no_summary",
-            keywords=no_summary_skills_added,
-        )
+    logger.step(
+        "skills_keywords_added",
+        version="no_summary",
+        keywords=no_summary_skills_added,
+    )
     cr_ns, tex_ns, removed = _fit_to_page(
         attempt_dir, doc_ns, "output", sources_for_score, scores, logger
     )
@@ -1085,21 +1425,23 @@ def _run_iteration(
         doc_s.summary = _generated_summary
         summary_unused_keywords = [
             keyword
-            for keyword in _dedupe(mid_keywords + excluded_summary_keywords)
+            for keyword in _dedupe(mid_keywords + excluded_summary_keywords + list(skills_only_kws))
             if not keyword_visible_in_text(keyword, _generated_summary)
         ]
-        summary_skills_added = _add_keywords_to_skills(
-            doc_s, summary_unused_keywords, logger=logger
+        logger.step(
+            "skills_keyword_reuse",
+            version="with_summary",
+            candidate_count=len(summary_unused_keywords),
+            reason="summary variant inherits no-summary skill enrichment",
         )
-        if summary_skills_added:
-            logger.step(
-                "skills_keywords_added",
-                version="with_summary",
-                keywords=summary_skills_added,
-            )
-        summary_bullets, summary_sources = _collect_active_bullets(doc_s, active_bucket_ids)
+        summary_sources = _filter_sources_present_in_doc(doc_s, sources_for_score)
+        summary_bullets = [str(source.get("text") or "") for source in summary_sources]
         summary_scores = _score_sources(
-            summary_bullets, summary_sources, raw_keywords, classification
+            summary_bullets,
+            summary_sources,
+            raw_keywords,
+            classification,
+            kw_match.get("scores", []),
         )
         cr_s, tex_s, removed = _fit_to_page(
             attempt_dir,
@@ -1158,13 +1500,21 @@ def _run_iteration(
                     )
                 else:
                     doc_s.summary = retry_meta["summary"]
+                    retry_sources = _filter_sources_present_in_doc(doc_s, summary_sources)
+                    retry_bullets = [str(source.get("text") or "") for source in retry_sources]
+                    retry_scores = _score_sources(
+                        retry_bullets,
+                        retry_sources,
+                        raw_keywords,
+                        classification,
+                        kw_match.get("scores", []),
+                    )
                     cr_s, tex_s, removed = _fit_to_page(
                         attempt_dir,
                         doc_s,
                         "output_summary",
-                        *_collect_scores_for_doc(
-                            doc_s, active_bucket_ids, raw_keywords, classification
-                        ),
+                        retry_sources,
+                        retry_scores,
                         logger,
                     )
                     if removed:
@@ -1226,9 +1576,11 @@ def _collect_scores_for_doc(
     active_bucket_ids: list[BucketId],
     raw_keywords: list[str],
     classification: dict | None = None,
+    rag_scores: list[dict] | None = None,
 ):
     bullets, sources = _collect_active_bullets(doc, active_bucket_ids)
-    return sources, _score_sources(bullets, sources, raw_keywords, classification)
+    _annotate_rag_indices(sources)
+    return sources, _score_sources(bullets, sources, raw_keywords, classification, rag_scores)
 
 
 def _latest_step_detail(logger: PipelineLogger, name: str) -> dict[str, Any]:
@@ -1280,6 +1632,7 @@ def _log_pipeline_debug_summary(
             "entry_id": detail.get("entry_id"),
             "score": detail.get("score"),
             "stem": detail.get("stem"),
+            "text": detail.get("text"),
         }
         for detail in _all_step_details(logger, "bullet_drop")
     ]
@@ -1334,8 +1687,10 @@ def _validate_summary_with_defense(
             "reasons": _dedupe([str(reason) for reason in reasons]),
         }
     else:
-        summary_validation = grounding
-        mode = "deterministic_fallback"
+        reasons = list(grounding.get("reasons") or [])
+        reasons.append("summary_validation_llm_unavailable")
+        summary_validation = {"accepted": False, "reasons": _dedupe(reasons)}
+        mode = "llm_unavailable"
     detail = {
         "accepted": summary_validation.get("accepted"),
         "reasons": summary_validation.get("reasons"),
@@ -1462,19 +1817,34 @@ def run_ad_hoc_pipeline(
         keywords=keywords_dict.get("must_have_terms", []),
     )
 
-    logger.step(
-        "llm_keyword_extract_start",
-        backend=_config.DEFAULT_MODEL_BACKEND,
-        model=_config.OLLAMA_MODEL_NAME,
-        host=_config.OLLAMA_HOST,
-    )
-    classification, keywords_dict, llm_meta = enrich_with_ollama_if_enabled(
-        title=resolved_title,
-        description=description,
+    combined_keywords = _keywords_from_job_fit(
+        job_fit,
         classification=classification,
         keywords=keywords_dict,
-        logger=logger,
     )
+    if combined_keywords is not None:
+        classification, keywords_dict, llm_meta = combined_keywords
+        logger.step(
+            "llm_keyword_extract_reused_job_fit",
+            source="analyze_job_fit",
+            jd_usable=llm_meta.get("jd_usable"),
+            keyword_count=len(keywords_dict.get("must_have_terms", [])),
+            duration_ms=llm_meta.get("duration_ms"),
+        )
+    else:
+        logger.step(
+            "llm_keyword_extract_start",
+            backend=_config.DEFAULT_MODEL_BACKEND,
+            model=_config.OLLAMA_MODEL_NAME,
+            host=_config.OLLAMA_HOST,
+        )
+        classification, keywords_dict, llm_meta = enrich_with_ollama_if_enabled(
+            title=resolved_title,
+            description=description,
+            classification=classification,
+            keywords=keywords_dict,
+            logger=logger,
+        )
     raw_keywords: list[str] = _normalize_extracted_keywords(
         keywords_dict.get("must_have_terms", [])
     )
@@ -1495,6 +1865,7 @@ def run_ad_hoc_pipeline(
         count=len(raw_keywords),
         keywords=raw_keywords,
         ollama_enriched=llm_meta.get("ollama_enriched"),
+        source=llm_meta.get("source") or "keyword_extract",
         jd_usable=llm_meta.get("jd_usable"),
         jd_usable_reason=llm_meta.get("jd_usable_reason"),
         duration_ms=llm_meta.get("duration_ms"),
@@ -1551,7 +1922,8 @@ def run_ad_hoc_pipeline(
             "llm_error": ollama_error_msg,
         }
 
-    present_kws, missing_kws, coverage = partition_keywords(raw_keywords, all_bullets)
+    keyword_surfaces = _keyword_match_surfaces(parsed, all_bullets)
+    present_kws, missing_kws, coverage = partition_keywords(raw_keywords, keyword_surfaces)
     logger.step(
         "keyword_partition",
         present_count=len(present_kws),

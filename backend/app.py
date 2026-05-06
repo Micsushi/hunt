@@ -2979,6 +2979,20 @@ async def api_fletcher_tailor(
     with_summary = _b64(result.get("pdf_path_summary"))
     log_b64 = _b64(result.get("log_path"))
 
+    if result.get("error_type") == "JobMismatchError":
+        return JSONResponse(
+            {
+                "no_summary": None,
+                "with_summary": None,
+                "log": log_b64,
+                "compile_status": result.get("compile_status"),
+                "fits_one_page": result.get("fits_one_page"),
+                "llm_error": result.get("llm_error"),
+                "error_type": result.get("error_type"),
+                "error": result.get("error"),
+            }
+        )
+
     if not no_summary and not with_summary:
         raise HTTPException(
             status_code=500, detail=result.get("compile_status") or "PDF generation failed"
@@ -2992,6 +3006,8 @@ async def api_fletcher_tailor(
             "compile_status": result.get("compile_status"),
             "fits_one_page": result.get("fits_one_page"),
             "llm_error": result.get("llm_error"),
+            "error_type": result.get("error_type"),
+            "error": result.get("error"),
         }
     )
 
@@ -3733,7 +3749,7 @@ def api_delete_job(job_id: int):
 def api_job_adjacent(
     job_id: int,
     source: str = "all",
-    status: str = "all",
+    status: str | None = None,
     q: str = "",
     tag: str = "",
     category: str = "",
@@ -3745,10 +3761,14 @@ def api_job_adjacent(
     """Return prev/next job IDs using the same filter and sort as the review list."""
     if source not in SOURCE_OPTIONS:
         raise HTTPException(status_code=400, detail=f"Unsupported source filter: {source}")
-    if status not in STATUS_OPTIONS:
-        raise HTTPException(status_code=400, detail=f"Unsupported status filter: {status}")
+    status_filter = status
+    if status_filter is None:
+        row = get_job_by_id(job_id)
+        status_filter = (row or {}).get("enrichment_status") or "all"
+    if status_filter not in STATUS_OPTIONS:
+        raise HTTPException(status_code=400, detail=f"Unsupported status filter: {status_filter}")
     ids = list_job_ids_for_review(
-        status=status,
+        status=status_filter,
         query=q,
         sort=sort,
         direction=direction,
@@ -4463,7 +4483,10 @@ def main():
 def spa_shell(full_path: str):
     index = FRONTEND_DIST / "index.html"
     if index.exists():
-        return HTMLResponse(index.read_text(encoding="utf-8"))
+        return HTMLResponse(
+            index.read_text(encoding="utf-8"),
+            headers={"Cache-Control": "no-store"},
+        )
     return HTMLResponse(
         "<h1 style='font-family:sans-serif;padding:40px'>Hunt frontend not built</h1>"
         "<p style='font-family:sans-serif;padding:0 40px'>"

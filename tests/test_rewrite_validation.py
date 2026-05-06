@@ -396,24 +396,24 @@ def test_process_keyword_requires_process_evidence():
     assert result["keywords_rejected"] == ["code reviews"]
 
 
-def test_summary_rejects_unsupported_domain_claim():
+def test_summary_grounding_leaves_domain_support_to_llm():
     result = validate_summary_grounding(
         "Software Engineer with XDR and real-time threat intelligence experience.",
         "Experience: Software Developer. Skills: Python, React, Terraform",
         ["XDR", "real-time threat intelligence"],
     )
 
-    assert result["accepted"] is False
+    assert result["accepted"] is True
 
 
-def test_summary_rejects_unprompted_unsupported_domain_claim():
+def test_summary_grounding_does_not_reject_unprompted_domain_claim():
     result = validate_summary_grounding(
         "Software Engineer with SIEM experience.",
         "Experience: Software Developer. Skills: Python, React, Terraform",
         [],
     )
 
-    assert result["accepted"] is False
+    assert result["accepted"] is True
 
 
 def test_summary_rejects_junior_tone():

@@ -2594,3 +2594,126 @@ Verification:
 - `.\.venv\Scripts\python.exe -m pytest tests\test_llm_enrich_logger.py::test_keyword_extract_prompt_prioritizes_stack_and_skips_noise tests\test_llm_enrich_logger.py::test_summary_filter_retries_unrequested_terms tests\test_llm_enrich_logger.py::test_skill_bucket_retries_missing_required_keys tests\test_llm_enrich_logger.py::test_skill_validation_rejects_concepts_not_named_skills tests\test_llm_enrich_logger.py::test_summary_validation_prompt_requires_rejecting_unsupported_claims tests\test_ad_hoc_pipeline.py::test_policy_router_batches_non_blocked_missing_keywords tests\test_ad_hoc_pipeline.py::test_policy_router_retries_failed_batch_as_singletons tests\test_ad_hoc_pipeline.py::test_skill_bucket_requires_llm_validation -q`: 8 passed.
 - `.\.venv\Scripts\python.exe -m pytest tests\test_ad_hoc_pipeline.py tests\test_llm_enrich_logger.py tests\test_keyword_policy.py tests\test_rewrite_validation.py -q`: 102 passed.
 - `.\.venv\Scripts\python.exe ci.py c2`: passed.
+
+## Implemented Checkpoint: Deployed Log Follow-Up Fixes
+
+Observed issue:
+- A correctly detected `JobMismatchError` returned HTTP 500 from `/api/fletcher/tailor`, making an expected safety skip look like a backend crash.
+- The live Docker logs still printed `pipeline_debug_summary` as one giant inline dict, even though downloaded logs were readable.
+- Soft quality/personality terms such as `communication` could still be upgraded to bullet rewrite by LLM routing or deterministic fallback.
+- A successful repaired rewrite could still log the initial failed validation under `validation`, making logs appear contradictory.
+- The rewrite validator was too willing to accept security vulnerability wording from generic bug detection or app monitoring evidence.
+
+Implemented:
+- `/api/fletcher/tailor` now returns structured JSON for `JobMismatchError`, including the pipeline log, instead of raising HTTP 500.
+- Fletcher UI now displays `errorType` and `error` as a visible banner and still exposes the log download when no resume is generated.
+- `PipelineLogger.step()` now renders `pipeline_debug_summary` as readable sections in live stdout, not only in downloaded logs.
+- Quality terms are downgraded to summary-only before RAG/bullet rewrite, even if the router suggests `rewrite`.
+- Repaired rewrite success now replaces `validation` with the successful repair validation and preserves the failed first pass as `initial_validation`.
+- Rewrite validation prompt now requires direct security evidence for vulnerability/security-testing terms and rejects inferring them from generic bug/error monitoring.
+
+Verification:
+- `.\.venv\Scripts\python.exe -m pytest tests\test_llm_enrich_logger.py::test_pipeline_logger_prints_debug_summary_readably tests\test_llm_enrich_logger.py::test_rewrite_repair_success_uses_repair_validation tests\test_ad_hoc_pipeline.py::test_quality_terms_do_not_route_to_bullet_rewrite -q`: 3 passed.
+- `.\.venv\Scripts\python.exe -m pytest tests\test_ad_hoc_pipeline.py tests\test_llm_enrich_logger.py tests\test_keyword_policy.py tests\test_rewrite_validation.py -q`: 105 passed.
+- `.\.venv\Scripts\python.exe ci.py c2`: passed.
+- `npm run typecheck`: passed.
+- `npm run build`: passed.
+
+## Implemented Checkpoint: Computer Infrastructure Roles Are In Scope
+
+Observed issue:
+- A Network Engineer posting was marked as `mismatch=true` because the job-fit prompt described supported lanes too narrowly as software, data, PM, firmware, or closely related technical/product roles.
+- The user clarified that computer-related roles should be acceptable, including network engineering and cloud infrastructure roles.
+
+Implemented:
+- Widened the `analyze_job_fit` prompt so computer-related roles are treated as supported when no requested title conflicts: software, data, PM, firmware, cloud infrastructure, network engineering, security engineering, DevOps, SRE, IT systems, platform, infrastructure, and closely related technical/product roles.
+- Added `infrastructure` as an allowed LLM role family.
+- Added infrastructure summary positioning for network/cloud/security/platform roles.
+- Updated deterministic classification so `Network Engineer`, `Cloud Engineer`, `Infrastructure Engineer`, `Security Engineer`, `Systems Engineer`, DevOps, SRE, and platform engineering map to `infrastructure`.
+- Kept mismatch behavior for truly non-computer roles and executive-only postings when the requested title does not ask for executive leadership.
+
+Verification:
+- `.\.venv\Scripts\python.exe -m pytest tests\test_llm_enrich_logger.py::test_job_fit_prompt_treats_network_cloud_roles_as_supported tests\test_component2_stage1.py::Component2Stage1Tests::test_network_engineer_is_infrastructure_family -q`: 2 passed.
+- `.\.venv\Scripts\python.exe -m pytest tests\test_component2_stage1.py tests\test_llm_enrich_logger.py tests\test_ad_hoc_pipeline.py tests\test_keyword_policy.py tests\test_rewrite_validation.py -q`: 114 passed.
+- `.\.venv\Scripts\python.exe ci.py c2`: passed.
+
+## Implemented Checkpoint: D Check and L Check Split
+
+Observed issue:
+- Some deterministic checks were making semantic decisions that should belong to the model.
+- `end-to-end` was rejected as `unsupported_summary_domain:end-to-end`, even though it is a process phrase rather than a direct domain claim.
+- `REST APIs` was treated as missing even when the resume already contained `RESTful APIs`, causing no-op rewrites.
+- If LLM keyword routing omitted an unknown term, deterministic fallback could still erase useful PM/process signals as `ignore:unknown`.
+
+Implemented:
+- Kept d checks only for mechanical matching and hard safety: spelling variants, role-title and education rewrite blocks, quality rewrite downgrade, claimed-keyword visibility, and banned-tone summary guard.
+- Removed deterministic summary domain support rejection. Summary truthfulness is now an l check through sentence-level summary validation. If the summary validation LLM is unavailable, the summary is omitted rather than accepted by a semantic d fallback.
+- Improved keyword present/missing d check with lexical normalization for case, punctuation, hyphen/space, simple plural/gerund variants, and `RESTful API` versus `REST API`.
+- Changed unknown keyword policy fallback so a missing LLM route sends non-hard-blocked unknown terms to summary, not rewrite or ignore.
+- Changed summary keyword fallback so terms stay in the safer summary lane when the LLM filter is unavailable, then summary generation and validation decide support.
+- Added a stricter Ollama system message and lowered temperature from `0.2` to `0.1`. Each Ollama call is still a fresh stateless chat request, so every prompt must remain self-contained.
+
+Verification:
+- `.\.venv\Scripts\python.exe -m pytest tests\test_keyword_check.py tests\test_rewrite_validation.py tests\test_ad_hoc_pipeline.py tests\test_llm_enrich_logger.py -q`: 117 passed.
+- `.\.venv\Scripts\python.exe ci.py c2`: passed.
+
+## Implemented Checkpoint: Routing Is JD Filtering, RAG Owns Resume Fit
+
+Observed issue:
+- Keyword policy routing was using candidate resume context and making early fit judgments.
+- This duplicated RAG's job and made routing too opinionated: the router could send keywords to rewrite because it saw approximate resume evidence, or skip terms before RAG had a chance to rank them.
+- Rewrite validation was also too strict in the opposite direction, rejecting reasonable adjacent phrasing because the exact phrase was not directly stated in the original bullet.
+
+Implemented:
+- Keyword extraction now asks for 0 to 30 resume-tailoring keywords that appear in the JD and are intended for bullets, summary, or skills when later matching supports them.
+- Keyword extraction instructions emphasize named tech stack, concrete technical workflows, and requested process/personality traits while excluding job titles, logistics, credentials, metadata, and vague deliverables.
+- Keyword policy routing no longer includes candidate resume context in the prompt. It filters the JD keyword list only.
+- Routing now acts as a pre-RAG cleanup layer: keep concrete tech/workflow terms for RAG, keep concrete traits for summary, and ignore non-actionable JD noise.
+- Routing batch size is now 30, so normal 0 to 30 keyword outputs route in one LLM call. If that call fails, the existing singleton retry path still protects reliability.
+- Rewrite and repair prompts now emphasize preserving Google XYZ-style bullet order, preserving meaning, avoiding incoherent technology relationships, and allowing reasonable adjacent framing when it stays in the same work context.
+- Rewrite validation no longer asks for direct textual evidence by default. It accepts contextually coherent phrasing and rejects meaning changes, unrelated domains, invented responsibilities, changed outcomes, and incoherent technology/vendor/resource pairings.
+
+Verification:
+- `.\.venv\Scripts\python.exe -m pytest tests\test_llm_enrich_logger.py tests\test_ad_hoc_pipeline.py tests\test_rewrite_validation.py tests\test_keyword_check.py -q`: 118 passed.
+- `.\.venv\Scripts\python.exe ci.py c2`: passed.
+
+## Implemented Checkpoint: Job Fit and Keyword Extraction Share One LLM Call
+
+Observed issue:
+- Option B still ran one LLM call for job-fit/title/classification and a second LLM call for JD keyword extraction.
+- This made the pipeline slower and split one conceptual decision into two prompts.
+- The intended flow is: fetch or infer job info, extract filtered resume-tailoring keywords in that same pass, then let RAG decide which kept terms fit the resume.
+
+Implemented:
+- `analyze_job_fit_with_ollama()` now returns title, role family, job level, mismatch status, JD usability, JD usability reason, and 0 to 30 filtered resume-tailoring keywords in one JSON response.
+- The combined keyword instructions are shared with the fallback keyword-only prompt, so both paths ask for concrete tech stack, technical workflows, and explicitly requested process/personality traits while skipping job titles, logistics, credentials, metadata, and vague business noise.
+- `run_ad_hoc_pipeline()` now reuses keywords from `analyze_job_fit` when that response includes `jd_usable`; it only calls the older `keyword_extract` path as a fallback for missing/older/invalid combined responses.
+- Slash-combo tech splitting still happens before present/missing partition, so combined-call keywords like `.NET/Angular` become `.NET` and `Angular`.
+- `keywords_extracted` logs now include `source=analyze_job_fit` or `source=keyword_extract` so it is obvious which path produced the terms.
+
+Verification:
+- `.\.venv\Scripts\python.exe -m pytest tests\test_llm_enrich_logger.py tests\test_ad_hoc_pipeline.py tests\test_rewrite_validation.py tests\test_keyword_check.py -q`: 119 passed.
+
+## Implemented Checkpoint: Keyword Flow Cleanup After Combined-Call Logs
+
+Observed issue:
+- The post-combined-call logs showed the new job-fit keyword extraction path working, but downstream keyword flow still had gaps.
+- `skills_only` routed terms were visible in logs but were not being considered for the Technical Skills section.
+- Present/missing detection checked bullets but not the existing bottom skills list, so already-listed skills could still be treated as missing.
+- Phrases containing `CI/CD`, such as `CI/CD pipelines`, were split into `CI` and `CD pipelines`.
+- If a rewrite claimed a keyword but did not visibly include it, the pipeline returned `claimed_keyword_missing` immediately instead of trying the one repair pass.
+- Debug summary rendered `low_count` and `rag_used` under the Medium list and dropped bullets only showed IDs.
+
+Implemented:
+- Present/missing partition now checks both resume bullets and existing skills.
+- `skills_only` keywords are now included in the final Technical Skills candidate pool. For the no-summary version, medium/skipped/skills-only terms can be skill candidates. For the summary version, unused medium/excluded/skills-only terms can be skill candidates after summary generation.
+- Slash splitting now preserves phrases containing `CI/CD`.
+- Claimed-keyword visibility failures now run one repair attempt, then the repaired text goes through the same visibility and LLM meaning checks.
+- Bullet-drop logs now include dropped bullet text.
+- Pipeline debug summary now separates `Low Count` and `RAG Used` from the Medium keyword list and prints dropped bullet text when available.
+
+Verification:
+- `.\.venv\Scripts\python.exe -m pytest tests\test_ad_hoc_pipeline.py::test_ci_cd_phrase_is_not_split tests\test_ad_hoc_pipeline.py::test_keyword_present_partition_includes_skills tests\test_ad_hoc_pipeline.py::test_skills_only_keywords_are_considered_for_skills tests\test_llm_enrich_logger.py::test_claimed_keyword_missing_gets_repair_attempt tests\test_llm_enrich_logger.py::test_pipeline_debug_summary_separates_rag_metadata -q`: 5 passed.
+- `.\.venv\Scripts\python.exe -m pytest tests\test_llm_enrich_logger.py tests\test_ad_hoc_pipeline.py tests\test_rewrite_validation.py tests\test_keyword_check.py -q`: 124 passed.
+- `.\.venv\Scripts\python.exe -m pytest tests\test_pipeline_logger.py tests\test_option_b_smoke.py -q`: 14 passed.
+- `.\.venv\Scripts\python.exe ci.py c2`: passed.

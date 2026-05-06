@@ -41,6 +41,10 @@ class PipelineLogger:
             f"------ pipeline event={event_id} +{ts:.3f}s delta={delta:.3f}s step={name} ------",
             flush=True,
         )
+        if name == "pipeline_debug_summary":
+            for line in _format_pipeline_debug_summary(detail):
+                print(line, flush=True)
+            return
         if parts:
             print(parts, flush=True)
 
@@ -141,8 +145,8 @@ def _format_pipeline_debug_summary(detail: dict[str, Any]) -> list[str]:
     lines.append("  RAG Levels:")
     _append_list(lines, "High", rag.get("high"))
     _append_list(lines, "Medium", rag.get("medium"))
-    lines.append(f"    - low_count: {rag.get('low_count')}")
-    lines.append(f"    - rag_used: {rag.get('rag_used')}")
+    lines.append(f"  Low Count: {rag.get('low_count')}")
+    lines.append(f"  RAG Used: {rag.get('rag_used')}")
     lines.append("  Bullet Rewrites:")
     rewrites = (
         detail.get("bullet_rewrites") if isinstance(detail.get("bullet_rewrites"), list) else []
@@ -174,6 +178,8 @@ def _format_pipeline_debug_summary(detail: dict[str, Any]) -> list[str]:
             f"({drop.get('kind')}:{drop.get('entry_id')}, "
             f"score={drop.get('score')}, stem={drop.get('stem')})"
         )
+        if drop.get("text"):
+            lines.append(f"      text: {drop.get('text')}")
     attempts = detail.get("rewrite_attempts")
     lines.append(f"  Rewrite Attempts: {attempts if attempts else 'none'}")
     checks = detail.get("summary_line_checks")

@@ -42,7 +42,13 @@ export function FletcherPage() {
     mutationFn: () => tailorResume({ jobDetails, personalDetails, resume: resumeFile }),
     onSuccess: (result) => {
       setTailorResult(result)
-      showToast(result.withSummary ? 'Both versions ready' : 'Resume ready - click to download')
+      if (result.errorType) {
+        showToast(result.error ?? 'Tailoring skipped', 'error')
+      } else if (result.withSummary || result.noSummary) {
+        showToast(result.withSummary ? 'Both versions ready' : 'Resume ready - click to download')
+      } else {
+        showToast('Tailoring finished without a PDF', 'error')
+      }
     },
     onError: (e) => showToast(e instanceof Error ? e.message : 'Tailor failed', 'error'),
   })
@@ -212,6 +218,12 @@ export function FletcherPage() {
           </div>
           {tailorResult ? (
             <div className={styles.downloadGroup}>
+              {tailorResult.errorType ? (
+                <div className={styles.llmErrorBanner}>
+                  <strong>{tailorResult.errorType}</strong> - no resume was generated.
+                  <span className={styles.llmErrorDetail}>{tailorResult.error}</span>
+                </div>
+              ) : null}
               {tailorResult.llmError ? (
                 <div className={styles.llmErrorBanner}>
                   <strong>LLM unavailable</strong> - resume returned without tailoring.

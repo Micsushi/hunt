@@ -44,6 +44,13 @@ class TestKwInText:
         # "AWS" should not match "LAWN"
         assert _kw_in_text("AWS", "Used LAWN tools.") is False
 
+    def test_restful_api_matches_rest_api_keyword(self):
+        assert _kw_in_text("REST APIs", "Integrated platforms via RESTful APIs.") is True
+
+    def test_hyphen_space_and_plural_variants_match(self):
+        assert _kw_in_text("end-to-end", "Owned end to end testing.") is True
+        assert _kw_in_text("unit tests", "Improved unit testing coverage.") is True
+
 
 class TestPartitionKeywords:
     def test_basic_split(self):

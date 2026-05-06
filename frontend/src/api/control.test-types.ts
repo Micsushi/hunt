@@ -5,12 +5,14 @@
  */
 import type { TailorResult } from './control'
 
-// TailorResult must have all four fields
+// TailorResult must have all fields
 const _full: TailorResult = {
   noSummary: new Blob(),
   withSummary: new Blob(),
   log: new Blob(),
   llmError: null,
+  errorType: null,
+  error: null,
 }
 
 // All fields must accept null
@@ -19,6 +21,8 @@ const _nulls: TailorResult = {
   withSummary: null,
   log: null,
   llmError: null,
+  errorType: null,
+  error: null,
 }
 
 // Exhaustiveness: adding an unexpected field must be a type error
@@ -27,6 +31,8 @@ const _extra: TailorResult = {
   withSummary: null,
   log: null,
   llmError: null,
+  errorType: null,
+  error: null,
   // @ts-expect-error extra field not allowed
   other: 'x',
 }

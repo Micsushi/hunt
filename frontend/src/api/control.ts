@@ -124,6 +124,8 @@ export type TailorResult = {
   withSummary: Blob | null
   log: Blob | null
   llmError: string | null
+  errorType: string | null
+  error: string | null
 }
 
 function _b64ToBlob(b64: string): Blob {
@@ -147,7 +149,14 @@ export function tailorResume(params: {
       params.personalDetails || '(empty)',
     ].join('\n')
     const blob = new Blob([text], { type: 'text/plain;charset=utf-8' })
-    return Promise.resolve({ noSummary: blob, withSummary: null, log: null, llmError: null })
+    return Promise.resolve({
+      noSummary: blob,
+      withSummary: null,
+      log: null,
+      llmError: null,
+      errorType: null,
+      error: null,
+    })
   }
 
   const form = new FormData()
@@ -166,6 +175,8 @@ export function tailorResume(params: {
         withSummary: json.with_summary ? _b64ToBlob(json.with_summary) : null,
         log: json.log ? new Blob([atob(json.log)], { type: 'text/plain' }) : null,
         llmError: json.llm_error ?? null,
+        errorType: json.error_type ?? null,
+        error: json.error ?? null,
       }
     },
   )

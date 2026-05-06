@@ -128,6 +128,7 @@ class ReviewOpsApiTests(unittest.TestCase):
 
         response = control_plane_api.api_job_adjacent(
             second_id,
+            status="all",
             category="product",
             sort="id",
             direction="asc",
@@ -135,6 +136,72 @@ class ReviewOpsApiTests(unittest.TestCase):
         data = json.loads(response.body.decode())
         self.assertEqual(data, {"prev_id": self.job_id, "next_id": self.job_id})
         self.assertNotIn(filtered_out_id, data.values())
+
+    def test_job_adjacent_without_status_infers_current_job_status(self):
+        from backend import app as control_plane_api
+
+        conn = self.db.get_connection()
+        conn.execute(
+            "UPDATE jobs SET enrichment_status = 'done', date_scraped = ? WHERE id = ?",
+            ("2026-05-05 10:00:00", self.job_id),
+        )
+        conn.commit()
+        conn.close()
+        _, done_id = self.db.add_job(
+            {
+                "title": "Done peer",
+                "company": "Co",
+                "location": "CA",
+                "job_url": "https://www.linkedin.com/jobs/view/ops-test-done-peer",
+                "apply_url": None,
+                "description": None,
+                "source": "linkedin",
+                "date_posted": "2026-04-09",
+                "date_scraped": "2026-05-05 09:00:00",
+                "is_remote": 0,
+                "level": "junior",
+                "priority": 0,
+                "category": "product",
+                "apply_type": "unknown",
+                "auto_apply_eligible": None,
+                "enrichment_status": "done",
+                "enrichment_attempts": 1,
+                "apply_host": None,
+                "ats_type": "workday",
+            }
+        )
+        _, pending_id = self.db.add_job(
+            {
+                "title": "Pending newer",
+                "company": "Co",
+                "location": "CA",
+                "job_url": "https://www.linkedin.com/jobs/view/ops-test-pending-newer",
+                "apply_url": None,
+                "description": None,
+                "source": "linkedin",
+                "date_posted": "2026-04-10",
+                "date_scraped": "2026-05-05 11:00:00",
+                "is_remote": 0,
+                "level": "junior",
+                "priority": 0,
+                "category": "product",
+                "apply_type": "unknown",
+                "auto_apply_eligible": None,
+                "enrichment_status": "pending",
+                "enrichment_attempts": 1,
+                "apply_host": None,
+                "ats_type": "workday",
+            }
+        )
+
+        response = control_plane_api.api_job_adjacent(
+            self.job_id,
+            sort="date_scraped",
+            direction="desc",
+        )
+        data = json.loads(response.body.decode())
+        self.assertEqual(data, {"prev_id": done_id, "next_id": done_id})
+        self.assertNotIn(pending_id, data.values())
 
     def test_auth_login_and_logout_return_session_cookie_headers(self):
         import asyncio

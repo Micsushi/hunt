@@ -83,6 +83,22 @@ class Component2Stage1Tests(unittest.TestCase):
 
         self.assertEqual(result["job_level"], "intern")
 
+    def test_network_engineer_is_infrastructure_family(self):
+        result = classify_job(
+            title="Network Engineer",
+            description="Cloud infrastructure role with LAN/WAN, firewalls, BGP, and OSPF.",
+        )
+
+        self.assertEqual(result["role_family"], "infrastructure")
+
+    def test_electrical_traffic_signal_engineer_is_infrastructure_family(self):
+        result = classify_job(
+            title="Intermediate Electrical Engineer (Traffic Signal)",
+            description="Traffic Signal Design and Highway Lighting Design role.",
+        )
+
+        self.assertEqual(result["role_family"], "infrastructure")
+
     def test_cli_roundtrip_outputs_files(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             json_path = Path(tmpdir) / "resume.json"
