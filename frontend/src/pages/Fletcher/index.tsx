@@ -1,7 +1,18 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useRef, useState } from 'react'
-import { type TailorResult, fetchC2Status, tailorResume, triggerC2Generate } from '@/api/control'
+import {
+  type TailorResult,
+  fetchC2Status,
+  fetchSettings,
+  tailorResume,
+  triggerC2Generate,
+} from '@/api/control'
 import { useUiStore } from '@/store/ui'
+import {
+  RESUME_DONE_NOTIFICATION_KEY,
+  notifyResumeDone,
+  settingEnabled,
+} from '@/utils/notifications'
 import styles from './Fletcher.module.css'
 
 export function FletcherPage() {
@@ -28,11 +39,26 @@ export function FletcherPage() {
     retry: false,
   })
 
+  const { data: c2Settings } = useQuery({
+    queryKey: ['component-settings', 'c2'],
+    queryFn: () => fetchSettings('c2'),
+    staleTime: 30_000,
+  })
+
+  const resumeDoneNotificationsEnabled = settingEnabled(
+    c2Settings?.settings.find((s) => s.key === RESUME_DONE_NOTIFICATION_KEY)?.value,
+  )
+
   const generate = useMutation({
     mutationFn: (id: number) => triggerC2Generate(id),
     onSuccess: (res) => {
       setJobIdResult(res)
-      showToast('Generation requested')
+      showToast('Resume generation finished')
+      notifyResumeDone({
+        enabled: resumeDoneNotificationsEnabled,
+        title: 'Hunt resume ready',
+        body: `Queued job ${jobId || 'resume'} finished generating.`,
+      })
       qc.invalidateQueries({ queryKey: ['c2-status'] })
     },
     onError: (e) => showToast(e instanceof Error ? e.message : 'Generation failed', 'error'),
@@ -49,6 +75,15 @@ export function FletcherPage() {
       } else {
         showToast('Tailoring finished without a PDF', 'error')
       }
+      notifyResumeDone({
+        enabled: resumeDoneNotificationsEnabled && !result.errorType,
+        title: result.withSummary || result.noSummary ? 'Hunt resume ready' : 'Hunt tailoring finished',
+        body: result.withSummary
+          ? 'Fletcher generated both resume versions.'
+          : result.noSummary
+            ? 'Fletcher generated the no-summary resume.'
+            : 'Fletcher finished without a PDF.',
+      })
     },
     onError: (e) => showToast(e instanceof Error ? e.message : 'Tailor failed', 'error'),
   })

@@ -2,12 +2,21 @@ import { useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   fetchC1Config,
+  fetchSettings,
   saveC1Config,
+  saveSetting,
   testC1Discord,
   type C1Config,
   type C1ConfigUpdates,
+  type ComponentSetting,
 } from '@/api/control'
 import { useUiStore } from '@/store/ui'
+import {
+  RESUME_DONE_NOTIFICATION_KEY,
+  browserNotificationsSupported,
+  requestBrowserNotificationPermission,
+  settingEnabled,
+} from '@/utils/notifications'
 import styles from './Settings.module.css'
 
 // ---- helpers ---------------------------------------------------------------
@@ -378,6 +387,77 @@ function AlertSettings({
   )
 }
 
+function getSettingValue(settings: ComponentSetting[] | undefined, key: string): string | null {
+  return settings?.find((s) => s.key === key)?.value ?? null
+}
+
+function AppNotificationSettings() {
+  const showToast = useUiStore((s) => s.showToast)
+  const qc = useQueryClient()
+  const supported = browserNotificationsSupported()
+
+  const { data } = useQuery({
+    queryKey: ['component-settings', 'c2'],
+    queryFn: () => fetchSettings('c2'),
+    staleTime: 30_000,
+  })
+
+  const enabled = settingEnabled(getSettingValue(data?.settings, RESUME_DONE_NOTIFICATION_KEY))
+  const permission = supported ? Notification.permission : 'denied'
+
+  const mutation = useMutation({
+    mutationFn: saveSetting,
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['component-settings', 'c2'] })
+    },
+    onError: (e) => showToast(e instanceof Error ? e.message : 'Save failed', 'error'),
+  })
+
+  async function toggle(next: boolean) {
+    if (next) {
+      const nextPermission = await requestBrowserNotificationPermission()
+      if (nextPermission !== 'granted') {
+        showToast('Windows notification permission was not granted', 'error')
+        return
+      }
+    }
+    mutation.mutate(
+      {
+        component: 'c2',
+        key: RESUME_DONE_NOTIFICATION_KEY,
+        value: String(next),
+        value_type: 'boolean',
+        secret: false,
+      },
+      {
+        onSuccess: () => showToast(next ? 'Resume notifications enabled' : 'Resume notifications disabled'),
+      },
+    )
+  }
+
+  return (
+    <div className={styles.panel}>
+      <div className={styles.panelHeader}>
+        <h2 className={styles.panelTitle}>App notifications</h2>
+      </div>
+      <label className={styles.checkLabel}>
+        <input
+          type="checkbox"
+          checked={enabled}
+          disabled={!supported || mutation.isPending}
+          onChange={(e) => toggle(e.target.checked)}
+        />
+        Windows notification when Fletcher finishes a resume
+      </label>
+      <p className={styles.fieldHint}>
+        {supported
+          ? `Browser permission: ${permission}. Notifications fire when this Hunt tab receives the completed generation response.`
+          : 'This browser does not support desktop notifications.'}
+      </p>
+    </div>
+  )
+}
+
 // ---- main page -------------------------------------------------------------
 
 export function SettingsPage() {
@@ -489,6 +569,8 @@ export function SettingsPage() {
         saving={savingSection === 'alerts'}
         onSave={(u) => save('alerts', u)}
       />
+
+      <AppNotificationSettings />
 
       <div className={styles.panel}>
         <div className={styles.panelHeader}>

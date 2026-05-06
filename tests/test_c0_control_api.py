@@ -152,6 +152,39 @@ class C0ControlApiTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json(), {"fills": []})
 
+    def test_fletcher_tailor_returns_log_payload_when_pdf_generation_fails(self):
+        from pathlib import Path
+
+        log_path = Path(tempfile.mkdtemp()) / "pipeline_log.txt"
+        log_path.write_text("compile failed because of latex", encoding="utf-8")
+
+        with (
+            patch("fletcher.jobs.title_inference.infer_title_from_description", return_value="SWE"),
+            patch(
+                "fletcher.ad_hoc_pipeline.run_ad_hoc_pipeline",
+                return_value={
+                    "pdf_path": None,
+                    "pdf_path_summary": None,
+                    "log_path": str(log_path),
+                    "compile_status": "failed",
+                    "fits_one_page": False,
+                    "llm_error": "summary_line_check_missing_pdf",
+                },
+            ),
+        ):
+            response = self.client.post(
+                "/api/fletcher/tailor",
+                data={"job_details": "Software role", "personal_details": ""},
+            )
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertIsNone(payload["no_summary"])
+        self.assertIsNone(payload["with_summary"])
+        self.assertEqual(payload["error_type"], "PDFGenerationError")
+        self.assertEqual(payload["compile_status"], "failed")
+        self.assertIsNotNone(payload["log"])
+
 
 if __name__ == "__main__":
     unittest.main()

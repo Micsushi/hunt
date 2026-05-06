@@ -302,6 +302,35 @@ def test_rewrite_not_called_when_no_high_matches(base_mocks):
     base_mocks.rewrite_bullet_targeted.assert_not_called()
 
 
+def test_less_than_three_high_rag_matches_are_downgraded_to_summary(base_mocks):
+    from fletcher.ad_hoc_pipeline import run_ad_hoc_pipeline
+
+    base_mocks.partition_keywords.return_value = (
+        [],
+        ["Azure DevOps", "React"],
+        {"Azure DevOps": [], "React": []},
+    )
+    base_mocks.match_keywords_to_bullets.return_value = {
+        "bullet_matches": [
+            {"bullet_idx": 1, "keyword": "Azure DevOps", "score": 0.9},
+            {"bullet_idx": 2, "keyword": "React", "score": 0.88},
+        ],
+        "summary_keywords": [],
+        "ignored_keywords": [],
+        "scores": [],
+        "rag_used": True,
+    }
+    base_mocks.generate_summary.return_value = {"summary": "Summary text.", "success": True}
+
+    run_ad_hoc_pipeline(title="Software Developer", description="job")
+
+    base_mocks.rewrite_bullet_targeted.assert_not_called()
+    assert base_mocks.generate_summary.call_args.args[2] == ["Azure DevOps", "React"]
+    log_text = base_mocks.write_text.call_args.args[1]
+    assert "rag_high_downgraded" in log_text
+    assert "not_enough_high_matches_for_bullet_rewrite" in log_text
+
+
 def test_compile_called_once_when_no_summary(base_mocks):
     from fletcher.ad_hoc_pipeline import run_ad_hoc_pipeline
 
@@ -428,13 +457,14 @@ def test_partial_rewrite_safe_keyword_gets_second_chance(base_mocks):
 
     base_mocks.partition_keywords.return_value = (
         [],
-        ["React", "AI-driven platform"],
-        {"React": [], "AI-driven platform": []},
+        ["React", "AI-driven platform", "TypeScript"],
+        {"React": [], "AI-driven platform": [], "TypeScript": []},
     )
     base_mocks.match_keywords_to_bullets.return_value = {
         "bullet_matches": [
             {"bullet_idx": 2, "keyword": "React", "score": 0.9},
             {"bullet_idx": 2, "keyword": "AI-driven platform", "score": 0.91},
+            {"bullet_idx": 2, "keyword": "TypeScript", "score": 0.89},
         ],
         "summary_keywords": [],
         "ignored_keywords": [],
@@ -471,7 +501,7 @@ def test_partial_rewrite_safe_keyword_gets_second_chance(base_mocks):
     assert base_mocks.rewrite_bullet_targeted.call_args_list[1].args[1] == ["React"]
 
 
-def test_summary_keyword_fallback_caps_terms_and_excludes_rejected_domains(base_mocks):
+def test_summary_keyword_fallback_caps_to_three_and_excludes_rejected_domains(base_mocks):
     from fletcher.ad_hoc_pipeline import run_ad_hoc_pipeline
 
     base_mocks.partition_keywords.return_value = (
@@ -527,7 +557,6 @@ def test_summary_keyword_fallback_caps_terms_and_excludes_rejected_domains(base_
     assert "integration" in summary_keywords
     assert "real-time threat intelligence" not in summary_keywords
     assert "AI-driven platform" not in summary_keywords
-    assert "XDR" not in summary_keywords
     assert len(summary_keywords) == 3
 
 
@@ -805,7 +834,7 @@ def test_skill_bucket_output_drives_skill_additions(base_mocks):
     assert "data mining" not in doc.skills.languages
 
 
-def test_skill_bucket_receives_all_skill_candidates(base_mocks):
+def test_skill_bucket_receives_all_skill_candidates_and_caps_total_additions(base_mocks):
     from fletcher.ad_hoc_pipeline import _add_keywords_to_skills
 
     doc = _make_parsed_doc()
@@ -822,7 +851,7 @@ def test_skill_bucket_receives_all_skill_candidates(base_mocks):
         ["PHP", "Angular", "MySQL", "Linux scripting", "project management", "Python"],
     )
 
-    assert added == ["PHP", "Angular", "MySQL", "Linux scripting"]
+    assert added == ["PHP", "Angular", "MySQL"]
     assert base_mocks.bucket_skill_keywords_with_ollama.call_args.kwargs["keywords"] == [
         "PHP",
         "Angular",
@@ -850,6 +879,28 @@ def test_skill_add_does_not_alias_go_golang(base_mocks):
     assert added == ["Go", "Golang"]
     assert doc.skills.languages.count("Go") == 1
     assert "Golang" in doc.skills.languages
+
+
+def test_summary_validation_visible_evidence_override_for_false_negative(base_mocks):
+    from fletcher.ad_hoc_pipeline import PipelineLogger, _validate_summary_with_defense
+
+    base_mocks.validate_summary_with_ollama.return_value = {
+        "success": True,
+        "accepted": False,
+        "reasons": ["Next.js is not listed in the candidate evidence."],
+    }
+    base_mocks.validate_summary_grounding.return_value = {"accepted": True, "reasons": []}
+
+    validation, mode = _validate_summary_with_defense(
+        summary="Software developer with Next.js experience.",
+        candidate_context="Built a responsive UI using Next.js and Framer Motion.",
+        keywords=[],
+        logger=PipelineLogger(),
+    )
+
+    assert validation["accepted"] is True
+    assert mode == "llm_visible_override"
+    assert any("visible_evidence_override:Next.js" in r for r in validation["reasons"])
 
 
 def test_quality_terms_do_not_route_to_bullet_rewrite(base_mocks):
@@ -917,6 +968,22 @@ def test_ci_cd_phrase_is_not_split():
         "CI/CD pipelines",
         "A/B testing",
     ]
+
+
+def test_popular_ide_keywords_are_removed_before_partition(base_mocks):
+    from fletcher.ad_hoc_pipeline import run_ad_hoc_pipeline
+
+    base_mocks.enrich_with_ollama_if_enabled.return_value = (
+        {},
+        {"must_have_terms": ["Android Studio", "Xcode", "Swift", "Appium"]},
+        {},
+    )
+
+    result = run_ad_hoc_pipeline(title="SDET", description="mobile testing job")
+
+    partition_keywords = base_mocks.partition_keywords.call_args.args[0]
+    assert partition_keywords == ["Swift", "Appium"]
+    assert result["keywords"] == ["Swift", "Appium"]
 
 
 def test_combined_job_fit_keywords_skip_separate_keyword_extract(base_mocks):
@@ -1150,9 +1217,14 @@ def test_low_rag_named_keyword_does_not_flow_to_skills(base_mocks):
     base_mocks.bucket_skill_keywords_with_ollama.assert_not_called()
 
 
-def test_small_summary_keyword_set_skips_llm_filter(base_mocks):
+def test_small_summary_keyword_set_uses_llm_filter(base_mocks):
     from fletcher.ad_hoc_pipeline import run_ad_hoc_pipeline
 
+    base_mocks.partition_keywords.return_value = (
+        [],
+        ["collaboration", "communication"],
+        {"collaboration": [], "communication": []},
+    )
     base_mocks.match_keywords_to_bullets.return_value = {
         "bullet_matches": [],
         "summary_keywords": ["collaboration", "communication"],
@@ -1163,9 +1235,9 @@ def test_small_summary_keyword_set_skips_llm_filter(base_mocks):
 
     run_ad_hoc_pipeline(title="SWE", description="job")
 
-    assert base_mocks.filter_summary_keywords_with_ollama.call_count == 0
+    assert base_mocks.filter_summary_keywords_with_ollama.call_count == 1
     log_text = base_mocks.write_text.call_args.args[1]
-    assert "deterministic_fast_path" in log_text
+    assert "deterministic_fast_path" not in log_text
 
 
 def test_pipeline_summary_digest_logged(base_mocks):
@@ -1248,6 +1320,8 @@ def test_single_keyword_rewrite_failure_does_not_retry(base_mocks):
     base_mocks.match_keywords_to_bullets.return_value = {
         "bullet_matches": [
             {"bullet_idx": 1, "keyword": "Azure DevOps", "score": 0.9},
+            {"bullet_idx": 1, "keyword": "Azure DevOps", "score": 0.89},
+            {"bullet_idx": 1, "keyword": "Azure DevOps", "score": 0.88},
         ],
         "summary_keywords": [],
         "ignored_keywords": [],
@@ -1296,6 +1370,7 @@ def test_claimed_presence_subset_gets_retry(base_mocks):
         "bullet_matches": [
             {"bullet_idx": 1, "keyword": "data exploration", "score": 0.9},
             {"bullet_idx": 1, "keyword": "Automate data pipelines", "score": 0.9},
+            {"bullet_idx": 1, "keyword": "Automate data pipelines", "score": 0.89},
         ],
         "summary_keywords": [],
         "ignored_keywords": [],

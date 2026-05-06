@@ -78,6 +78,34 @@ NON_REWRITE_KEYWORDS = {
     "mathematics",
 }
 
+BLOCKED_IDE_KEYWORDS = {
+    "android studio",
+    "xcode",
+    "vs code",
+    "vscode",
+    "visual studio code",
+    "visual studio",
+    "intellij",
+    "intellij idea",
+    "pycharm",
+    "webstorm",
+    "phpstorm",
+    "rubymine",
+    "clion",
+    "rider",
+    "eclipse",
+    "netbeans",
+    "sublime text",
+    "atom",
+    "vim",
+    "neovim",
+    "emacs",
+}
+
+SUMMARY_KEYWORD_LIMIT = 3
+SKILL_ADDITION_LIMIT = 3
+MIN_HIGH_RAG_MATCHES_FOR_REWRITE = 3
+
 NON_REWRITE_ROLE_WORDS = {
     "intern",
     "engineer",
@@ -376,7 +404,13 @@ def _normalize_extracted_keywords(keywords: list[str]) -> list[str]:
     out: list[str] = []
     for keyword in keywords:
         out.extend(_split_slash_keyword(keyword))
-    return _dedupe(out)
+    return _dedupe(
+        [
+            keyword
+            for keyword in out
+            if normalize_keyword(keyword) not in BLOCKED_IDE_KEYWORDS
+        ]
+    )
 
 
 def _keyword_match_surfaces(doc, all_bullets: list[str]) -> list[str]:
@@ -488,7 +522,7 @@ def _add_keywords_to_skills(
     proposed = _dedupe([keyword for keyword in proposed if keyword.strip()])
     if not proposed:
         return []
-    accepted = {keyword.lower() for keyword in proposed}
+    accepted = {keyword.lower() for keyword in proposed[:SKILL_ADDITION_LIMIT]}
     for bucket in ("languages", "frameworks", "developer_tools"):
         for keyword in _normalize_extracted_keywords(list(bucketed.get(bucket, []) or [])):
             key = str(keyword).strip().lower()
@@ -497,6 +531,8 @@ def _add_keywords_to_skills(
                 continue
             if key not in accepted:
                 continue
+            if len(added) >= SKILL_ADDITION_LIMIT:
+                return added
             getattr(doc.skills, bucket).append(str(keyword).strip())
             existing.add(skill_key)
             added.append(str(keyword).strip())
@@ -566,7 +602,14 @@ def _filter_summary_keywords(
 ) -> tuple[list[str], list[str]]:
     # If the LLM summary-keyword filter is unavailable, keep the signals in the
     # safer summary lane and let summary generation/validation decide support.
-    return _dedupe(list(base_keywords) + list(skipped_keywords))[:8], []
+    included = _dedupe(list(base_keywords) + list(skipped_keywords))[:SUMMARY_KEYWORD_LIMIT]
+    included_l = {keyword.lower() for keyword in included}
+    excluded = [
+        keyword
+        for keyword in _dedupe(list(base_keywords) + list(skipped_keywords))
+        if keyword.lower() not in included_l
+    ]
+    return included, excluded
 
 
 def _keywords_rejected_by_summary_validation(
@@ -582,9 +625,9 @@ def _keywords_rejected_by_summary_validation(
 
 
 def _summary_filter_needs_llm(keywords: list[str]) -> bool:
-    """Use the expensive summary filter only when the keyword list needs pruning."""
+    """Use model judgment whenever there are summary keywords to choose from."""
     cleaned = _dedupe([keyword for keyword in keywords if keyword.strip()])
-    return len(cleaned) > 10
+    return bool(cleaned)
 
 
 def _keyword_rewrite_eligible(keyword: str) -> bool:
@@ -1105,6 +1148,23 @@ def _run_iteration(
                 "scores": list(rag_result.get("scores", [])),
                 "rag_used": True,
             }
+            high_keywords = [
+                str(match.get("keyword") or "")
+                for match in kw_match.get("bullet_matches", [])
+                if str(match.get("keyword") or "").strip()
+            ]
+            if 0 < len(high_keywords) < MIN_HIGH_RAG_MATCHES_FOR_REWRITE:
+                kw_match["summary_keywords"] = _dedupe(
+                    list(kw_match.get("summary_keywords", [])) + high_keywords
+                )
+                kw_match["bullet_matches"] = []
+                logger.step(
+                    "rag_high_downgraded",
+                    high_keyword_count=len(high_keywords),
+                    min_required=MIN_HIGH_RAG_MATCHES_FOR_REWRITE,
+                    keywords=high_keywords,
+                    reason="not_enough_high_matches_for_bullet_rewrite",
+                )
             kw_match["summary_keywords"] = _dedupe(list(kw_match.get("summary_keywords", [])))
             kw_match["ignored_keywords"] = _dedupe(list(kw_match.get("ignored_keywords", [])))
         except Exception as exc:
@@ -1281,10 +1341,19 @@ def _run_iteration(
             logger=logger,
         )
     else:
-        summary_filter = {"success": False, "error": "deterministic_fast_path"}
+        summary_filter = {"success": False, "error": "no_summary_keywords"}
     if summary_filter.get("success"):
-        mid_keywords = list(summary_filter.get("included") or [])
-        excluded_summary_keywords = list(summary_filter.get("excluded") or [])
+        mid_keywords = _dedupe(list(summary_filter.get("included") or []))[
+            :SUMMARY_KEYWORD_LIMIT
+        ]
+        included_l = {keyword.lower() for keyword in mid_keywords}
+        excluded_summary_keywords = [
+            keyword
+            for keyword in _dedupe(
+                list(summary_filter.get("excluded") or []) + summary_filter_candidates
+            )
+            if keyword.lower() not in included_l
+        ]
     else:
         mid_keywords, excluded_summary_keywords = _filter_summary_keywords(
             base_summary_keywords,
@@ -1292,10 +1361,6 @@ def _run_iteration(
             candidate_context,
             validation_reasons,
         )
-    if len(mid_keywords) > 3:
-        overflow = mid_keywords[3:]
-        mid_keywords = mid_keywords[:3]
-        excluded_summary_keywords = _dedupe(excluded_summary_keywords + overflow)
     logger.step("keywords_skipped_to_summary", keywords=skipped_to_summary)
     logger.step(
         "summary_keyword_filter",
@@ -1661,6 +1726,52 @@ def _log_pipeline_debug_summary(
     )
 
 
+def _summary_tool_terms(summary: str) -> list[str]:
+    terms: list[str] = []
+    for token in re.findall(r"\b[A-Za-z][A-Za-z0-9.+#/-]{1,}\b", summary or ""):
+        if (
+            any(ch in token for ch in ".+#/-")
+            or any(ch.isupper() for ch in token[1:])
+            or token.isupper()
+        ):
+            terms.append(token)
+    return _dedupe(terms)
+
+
+def _summary_visible_rejection_overrides(
+    *,
+    summary: str,
+    candidate_context: str,
+    reasons: list[str],
+) -> list[str]:
+    unsupported_markers = (
+        "not listed",
+        "not present",
+        "not in",
+        "not supported",
+        "unsupported",
+        "no evidence",
+    )
+    visible_terms = [
+        term
+        for term in _summary_tool_terms(summary)
+        if keyword_visible_in_text(term, candidate_context)
+    ]
+    overrides: list[str] = []
+    for reason in reasons:
+        reason_l = str(reason).lower()
+        if not any(marker in reason_l for marker in unsupported_markers):
+            continue
+        matching_terms = [
+            term
+            for term in visible_terms
+            if keyword_visible_in_text(term, reason) or term.lower() in reason_l
+        ]
+        if matching_terms:
+            overrides.append(f"visible_evidence_override:{', '.join(matching_terms)}")
+    return _dedupe(overrides)
+
+
 def _validate_summary_with_defense(
     *,
     summary: str,
@@ -1679,11 +1790,21 @@ def _validate_summary_with_defense(
     grounding = validate_summary_grounding(summary, candidate_context, keywords)
     if summary_validation.get("success"):
         reasons = list(summary_validation.get("reasons") or [])
+        llm_accepted = bool(summary_validation.get("accepted"))
+        overrides = _summary_visible_rejection_overrides(
+            summary=summary,
+            candidate_context=candidate_context,
+            reasons=[str(reason) for reason in reasons],
+        )
+        if overrides and not llm_accepted:
+            llm_accepted = True
+            mode = "llm_visible_override"
+            reasons.extend(overrides)
         if not grounding["accepted"]:
             reasons.extend(grounding["reasons"])
         summary_validation = {
             **summary_validation,
-            "accepted": bool(summary_validation.get("accepted")) and grounding["accepted"],
+            "accepted": llm_accepted and grounding["accepted"],
             "reasons": _dedupe([str(reason) for reason in reasons]),
         }
     else:
@@ -1729,6 +1850,8 @@ def run_ad_hoc_pipeline(
             job_level=job_fit.get("job_level"),
             mismatch=job_fit.get("mismatch"),
             mismatch_reason=job_fit.get("mismatch_reason"),
+            unsupported_target_role=job_fit.get("unsupported_target_role"),
+            unsupported_target_reason=job_fit.get("unsupported_target_reason"),
             duration_ms=job_fit.get("duration_ms"),
         )
 

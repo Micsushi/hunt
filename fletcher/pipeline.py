@@ -85,6 +85,118 @@ def _trim_one_bullet_per_entry(doc, structured_output: dict) -> bool:
     return trimmed
 
 
+def _record_blocked_queue_resume(
+    *,
+    title: str,
+    description: str,
+    company: str,
+    job_id: int | None,
+    db_path: str | Path | None,
+    classification: dict,
+    reason: str,
+    started_at: float,
+) -> dict:
+    desc_fingerprint = job_description_fingerprint(description)
+    model_name = OLLAMA_MODEL_NAME if DEFAULT_MODEL_BACKEND == "ollama" else DEFAULT_MODEL_NAME
+    attempt_dir = ensure_dir(
+        build_attempt_dir(job_id=job_id, role_family=classification["role_family"])
+    )
+    job_description_path = write_text(attempt_dir / "job_description.txt", description or "")
+    keywords_path = write_json(attempt_dir / "keywords.json", {"must_have_terms": []})
+    role_classification_path = write_json(attempt_dir / "role_classification.json", classification)
+    structured_output_path = write_json(
+        attempt_dir / "tailored_resume.json",
+        {"status": "blocked", "reason": reason, "title": title, "company": company},
+    )
+    tex_path = write_text(attempt_dir / "output.tex", f"% {reason}\n")
+    compile_log_path = write_text(attempt_dir / "compile.log", reason)
+    concern_flags = list(
+        dict.fromkeys(list(classification.get("concern_flags") or []) + [reason.split(":", 1)[0]])
+    )
+    metadata_path = write_json(
+        attempt_dir / "metadata.json",
+        {
+            "job_id": job_id,
+            "source_mode": "queue",
+            "title": title,
+            "company": company,
+            "classification": classification,
+            "status": "failed",
+            "concern_flags": concern_flags,
+            "job_description_hash": desc_fingerprint,
+            "block_reason": reason,
+            "role_classification_path": role_classification_path,
+        },
+    )
+    attempt_payload = {
+        "attempt_type": "queue",
+        "status": "failed",
+        "latest_result_kind": "latest_generated",
+        "role_family": classification["role_family"],
+        "job_level": classification["job_level"],
+        "base_resume_name": "blocked",
+        "source_resume_type": "family_base",
+        "source_resume_path": "",
+        "fallback_used": False,
+        "model_backend": DEFAULT_MODEL_BACKEND,
+        "model_name": model_name,
+        "prompt_version": f"{PROMPT_VERSION_TAG}_unsupported_lane",
+        "concern_flags": concern_flags,
+        "job_description_path": job_description_path,
+        "keywords_path": keywords_path,
+        "structured_output_path": structured_output_path,
+        "tex_path": tex_path,
+        "pdf_path": None,
+        "compile_log_path": compile_log_path,
+        "metadata_path": metadata_path,
+        "content_hash": file_hash(Path(tex_path)),
+        "is_latest_useful": False,
+        "is_selected_for_c3": False,
+        "clear_existing_selection": True,
+        "jd_usable": False,
+        "jd_usable_reason": reason,
+        "job_description_hash": desc_fingerprint,
+    }
+    attempt_id = None
+    version_id = None
+    if job_id is not None:
+        attempt_id, version_id = record_resume_attempt(job_id, attempt_payload, db_path)
+    result = {
+        "job_id": job_id,
+        "attempt_id": attempt_id,
+        "resume_version_id": version_id,
+        "attempt_dir": str(attempt_dir),
+        "status": "failed",
+        "compile_status": "blocked",
+        "page_count": None,
+        "fits_one_page": False,
+        "selected_for_c3": False,
+        "pdf_path": None,
+        "tex_path": tex_path,
+        "pdf_path_summary": None,
+        "tex_path_summary": None,
+        "metadata_path": metadata_path,
+        "summary_rewrite_path": None,
+        "bullet_rewrite_path": None,
+        "pipeline_trace_path": str(attempt_dir / "pipeline_trace.json"),
+        "apply_context": get_apply_context(job_id, db_path) if job_id is not None else None,
+        "error": reason,
+    }
+    write_json(
+        attempt_dir / "pipeline_trace.json",
+        {
+            "job_id": job_id,
+            "title": title,
+            "company": company,
+            "status": "failed",
+            "error": reason,
+            "total_ms": int((time.perf_counter() - started_at) * 1000),
+        },
+    )
+    write_json(attempt_dir / "result.json", result)
+    return result
+
+
 def _compile_with_fit_retry(
     attempt_dir: Path, tailored_doc, structured_output: dict, stem: str = "output"
 ) -> tuple[str, dict, str, list[dict]]:
@@ -293,6 +405,23 @@ def _run_pipeline(
     classification, keywords, llm_meta = enrich_with_ollama_if_enabled(
         title=title, description=description, classification=classification, keywords=keywords
     )
+    if source_mode == "queue" and llm_meta.get("unsupported_target_role"):
+        block_reason = (
+            str(llm_meta.get("unsupported_target_reason") or "").strip()
+            or "unsupported_target_role: outside configured target lane"
+        )
+        if not block_reason.startswith("unsupported_target_role"):
+            block_reason = f"unsupported_target_role: {block_reason}"
+        return _record_blocked_queue_resume(
+            title=title,
+            description=description,
+            company=company,
+            job_id=job_id,
+            db_path=db_path,
+            classification=classification,
+            reason=block_reason,
+            started_at=_t_pipeline_start,
+        )
     desc_fingerprint = job_description_fingerprint(description)
     llm_meta["job_description_hash"] = desc_fingerprint
     model_name = OLLAMA_MODEL_NAME if DEFAULT_MODEL_BACKEND == "ollama" else DEFAULT_MODEL_NAME

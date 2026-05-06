@@ -98,7 +98,7 @@ def _render_summary(text: str) -> str:
 
 def _render_skills(skills: SkillsSection) -> str:
     def onecol(label: str, values: list[str]) -> str:
-        joined = ", ".join(values)
+        joined = ", ".join(_escape_latex(value) for value in values)
         return (
             "    \\begin{onecolentry}\n"
             f"        \\textbf{{{label}:}} {joined}\n"

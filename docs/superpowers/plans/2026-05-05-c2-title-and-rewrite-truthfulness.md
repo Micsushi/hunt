@@ -2717,3 +2717,61 @@ Verification:
 - `.\.venv\Scripts\python.exe -m pytest tests\test_llm_enrich_logger.py tests\test_ad_hoc_pipeline.py tests\test_rewrite_validation.py tests\test_keyword_check.py -q`: 124 passed.
 - `.\.venv\Scripts\python.exe -m pytest tests\test_pipeline_logger.py tests\test_option_b_smoke.py -q`: 14 passed.
 - `.\.venv\Scripts\python.exe ci.py c2`: passed.
+
+## Implemented Checkpoint: Skill Cap, Summary Choice, and Queue Lane Block
+
+Observed issue:
+- Logs showed too many skill keywords added when several medium-tier terms were loosely plausible.
+- The summary path could fail because the validator rejected a visible skill such as `Next.js`.
+- Summary generation was being handed only the first few medium keywords instead of choosing from the full set.
+- Obvious civil/CAD/transportation roles should be blocked in the structured queue workflow, but Option B ad-hoc should still process pasted jobs.
+- Bullet staying power needs product design before code, because current Option B has no user mark/protect input.
+
+Implemented:
+- Skill keyword additions now rank candidates against existing Technical Skills with the same RAG scoring path and send only the top three to skill bucketing.
+- Summary prompts now receive the full filtered medium-keyword list and are told to pick at most three based on coherent candidate positioning, not pure tech-stack matching.
+- Summary validation now has a narrow visible-evidence override for obvious LLM validator false negatives while deterministic grounding still rejects banned tone or incoherent unsupported claims.
+- Queue-based generation now records a failed `unsupported_target_role` attempt for obvious civil/CAD/transportation-style postings before generating a resume.
+- Option B ad-hoc generation does not use the queue lane block.
+- Bullet staying power remains design-only: future full Hunt workflow can support protected bullets, important bullets, and configurable order-based bonuses, but no drop-scoring behavior was changed yet.
+
+Verification:
+- `.\.venv\Scripts\python.exe -m pytest tests\test_llm_enrich_logger.py tests\test_ad_hoc_pipeline.py tests\test_rewrite_validation.py tests\test_keyword_check.py tests\test_pipeline_logger.py tests\test_option_b_smoke.py tests\test_component2_pipeline.py -q`: 164 passed.
+- `.\.venv\Scripts\python.exe ci.py c2`: passed.
+
+## Option A Versus Option B Contract
+
+Option A: queued or existing DB job workflow
+- Runs by default from jobs already stored in the database, or for a specific existing job ID.
+- Job metadata is expected to already be populated by earlier Hunt stages: title, company, description, apply metadata, enrichment status, and other structured fields.
+- C2 should not re-fetch or re-infer every populated field. It should trust existing structured values unless a specific value is empty or unusable.
+- If a needed field is empty, C2 may run the same LLM inference prompt used by Option B, but only to fill the missing value. It should not overwrite good existing DB values just because the model offers a new guess.
+- Because Option A belongs to the full Hunt workflow, it can apply target-lane policy. If a job is clearly unrelated to the intended search lane, such as civil/CAD/transportation engineering for this software/data/product/infrastructure resume workflow, C2 should reject resume generation and mark the job or resume attempt with an irrelevant/unsupported status such as `unsupported_target_role`.
+- Option A can later support richer workflow-specific inputs such as protected bullets, important bullets, user target lanes, and per-user resume strategy settings.
+
+Option B: ad-hoc JD plus resume workflow
+- Runs when the user directly provides a job description and resume input.
+- The job description may be the only source of job information, so C2 has to infer or fetch the actual title, role family, job level, JD usability, and keywords from the pasted description.
+- The combined job-fit/keyword LLM call is appropriate here because Option B does not have earlier Hunt stages supplying structured metadata.
+- C2 should assume the provided JD and resume are intentional and accurate for the user's current request. It should still reject unusable or empty scrapes, but it should not apply the same target-lane rejection policy as Option A.
+- Option B should remain flexible for experiments, one-off tailoring, and cases where the user deliberately wants to test a resume against an unusual role.
+
+## Follow-Up Decisions: L Checks Own Cleanup
+
+Observed issue:
+- RAG-only skill ranking chose odd Technical Skills such as `dashboards`, `WaterCAD`, `AutoCAD`, `Android Studio`, or domain-specific tools because similarity alone cannot decide whether a keyword belongs in this candidate's skill section.
+- The intended cap is max 2 keywords per rewritten bullet, not a global cap on all skill candidates.
+- Keyword extraction and routing should not rely on deterministic cleanup for role labels, disciplines, IDE names, or vague deliverables.
+
+Implemented direction:
+- Remove the global top-3 RAG skill cap. Send all high/medium RAG-supported skill candidates to the skill-bucketing LLM.
+- Strengthen the skill-bucketing LLM prompt so it can add nothing when candidates do not belong beside the existing skills.
+- The skill-bucketing LLM should ignore standalone deliverables such as `dashboards`, but may keep specific technical compounds such as `AI-driven dashboard` or `Kanban dashboard`.
+- The keyword extraction and routing LLM prompts should exclude IDE/editor/dev-environment names such as `Android Studio`, `Xcode`, `VS Code`, and `IntelliJ`.
+- The post-extraction keyword router is the L-check that removes anything that is not tech stack, job-related technical terms/techniques/workflows, or explicitly requested personality/process traits.
+- Rewrite prompts should emphasize that making the bullet coherent matters more than forcing keywords. It is always acceptable to skip a keyword that cannot fit cleanly.
+- The shared job-fit prompt now returns `unsupported_target_role`. Option A may use that flag to block unrelated jobs; Option B logs it but ignores it for generation.
+
+Verification:
+- `.\.venv\Scripts\python.exe -m pytest tests\test_llm_enrich_logger.py tests\test_ad_hoc_pipeline.py tests\test_rewrite_validation.py tests\test_keyword_check.py tests\test_pipeline_logger.py tests\test_option_b_smoke.py tests\test_component2_pipeline.py -q`: 165 passed.
+- `.\.venv\Scripts\python.exe ci.py c2`: passed.

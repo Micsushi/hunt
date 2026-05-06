@@ -375,11 +375,8 @@ def test_summary_prompt_caps_jd_keywords_and_starts_from_candidate_facts(monkeyp
             ["strategy", "dashboards", "business cases", "forecasting models"],
         )
 
-    assert (
-        "Optional JD keywords, use at most 3 only if they fit: strategy, dashboards, business cases"
-        in captured[0]
-    )
-    assert "forecasting models" not in captured[0]
+    assert "Candidate JD keywords to choose from. Pick at most 3" in captured[0]
+    assert "strategy, dashboards, business cases, forecasting models" in captured[0]
     assert "Start from true candidate facts" in captured[0]
 
 
@@ -398,6 +395,8 @@ def test_keyword_extract_prompt_prioritizes_stack_and_skips_noise():
     assert "certifications" in prompt
     assert "AWS Certified" in prompt
     assert "education fields" in prompt
+    assert "unsupported_target_role" in prompt
+    assert "Android Studio" in prompt
     assert "Skip generic deliverables" in prompt
 
 
@@ -518,8 +517,8 @@ def test_skill_bucket_prompt_allows_concrete_technical_skill_phrases(monkeypatch
     def fake_chat(prompt: str) -> str:
         captured.append(prompt)
         return (
-            '{"languages": [], "frameworks": [], '
-            '"developer_tools": ["UnknownFutureDB"], "ignored": ["analytical thinking"]}'
+            '{"additions": [{"keyword": "UnknownFutureDB", "category": "developer_tools"}], '
+            '"ignored": ["analytical thinking"]}'
         )
 
     with patch("fletcher.llm.llm_enrich._ollama_chat", fake_chat):
@@ -529,8 +528,12 @@ def test_skill_bucket_prompt_allows_concrete_technical_skill_phrases(monkeypatch
         )
 
     assert "concrete technical skill phrases such as Linux scripting" in captured[0]
+    assert "makes sense beside the Existing skills" in captured[0]
+    assert "Do not add IDEs or editors" in captured[0]
+    assert "standalone deliverable nouns such as dashboards" in captured[0]
     assert "If uncertain, put it in ignored" in captured[0]
-    assert "Return all four keys" in captured[0]
+    assert "Choose at most 3 total additions" in captured[0]
+    assert '"additions"' in captured[0]
 
 
 def test_summary_filter_retries_unrequested_terms(monkeypatch):
@@ -558,7 +561,7 @@ def test_skill_bucket_retries_missing_required_keys(monkeypatch):
     monkeypatch.setattr("fletcher.llm.llm_enrich.config.DEFAULT_MODEL_BACKEND", "ollama")
     responses = [
         '{"developer_tools": ["SQL"]}',
-        '{"languages": ["SQL"], "frameworks": [], "developer_tools": [], "ignored": ["data mining"]}',
+        '{"additions": [{"keyword": "SQL", "category": "languages"}], "ignored": ["data mining"]}',
     ]
 
     with patch("fletcher.llm.llm_enrich._ollama_chat", side_effect=responses) as chat:
@@ -574,14 +577,41 @@ def test_skill_bucket_retries_missing_required_keys(monkeypatch):
     assert result["ignored"] == ["data mining"]
 
 
+def test_skill_bucket_can_ignore_standalone_dashboard_and_ide(monkeypatch):
+    monkeypatch.setattr("fletcher.llm.llm_enrich.config.DEFAULT_MODEL_BACKEND", "ollama")
+
+    with patch(
+        "fletcher.llm.llm_enrich._ollama_chat",
+        return_value=(
+            '{"additions": [{"keyword": "AI-driven dashboard", "category": "developer_tools"}], '
+            '"ignored": ["dashboards", "Android Studio"]}'
+        ),
+    ):
+        result = bucket_skill_keywords_with_ollama(
+            keywords=["dashboards", "AI-driven dashboard", "Android Studio"],
+            existing_skills={
+                "languages": ["Python"],
+                "frameworks": ["React"],
+                "developer_tools": [],
+            },
+            logger=_make_logger(),
+        )
+
+    assert result["developer_tools"] == ["AI-driven dashboard"]
+    assert result["ignored"] == ["dashboards", "Android Studio"]
+
+
 def test_skill_bucket_discards_invalid_terms_without_retry(monkeypatch):
     monkeypatch.setattr("fletcher.llm.llm_enrich.config.DEFAULT_MODEL_BACKEND", "ollama")
 
     with patch(
         "fletcher.llm.llm_enrich._ollama_chat",
         return_value=(
-            '{"languages": ["Bash"], "frameworks": ["WebSockets"], '
-            '"developer_tools": ["Linux scripting"], "ignored": []}'
+            '{"additions": ['
+            '{"keyword": "Bash", "category": "languages"}, '
+            '{"keyword": "WebSockets", "category": "frameworks"}, '
+            '{"keyword": "Linux scripting", "category": "developer_tools"}], '
+            '"ignored": []}'
         ),
     ) as chat:
         result = bucket_skill_keywords_with_ollama(
@@ -609,7 +639,8 @@ def test_job_fit_prompt_treats_network_cloud_roles_as_supported(monkeypatch):
         return (
             '{"title": "Network Engineer", "role_family": "infrastructure", '
             '"job_level": "senior", "mismatch": false, '
-            '"mismatch_reason": "", "confidence": 0.9, '
+            '"mismatch_reason": "", "unsupported_target_role": false, '
+            '"unsupported_target_reason": "", "confidence": 0.9, '
             '"jd_usable": true, "jd_usable_reason": "Detailed infrastructure role.", '
             '"keywords": ["cloud infrastructure", "BGP", "firewalls"]}'
         )
@@ -630,6 +661,85 @@ def test_job_fit_prompt_treats_network_cloud_roles_as_supported(monkeypatch):
     assert "cloud" in captured[0].lower()
     assert "computer" in captured[0].lower()
     assert "0 to 30 resume-tailoring keywords" in captured[0]
+
+
+def test_job_fit_prompt_reports_unsupported_target_role(monkeypatch):
+    from fletcher.llm.llm_enrich import analyze_job_fit_with_ollama
+
+    monkeypatch.setattr("fletcher.llm.llm_enrich.config.DEFAULT_MODEL_BACKEND", "ollama")
+
+    with patch(
+        "fletcher.llm.llm_enrich._ollama_chat",
+        return_value=(
+            '{"title": "Package Engineer", "role_family": "general", '
+            '"job_level": "mid", "mismatch": false, "mismatch_reason": "", '
+            '"unsupported_target_role": true, '
+            '"unsupported_target_reason": "Mechanical package engineering is outside the configured lane.", '
+            '"confidence": 0.9, "jd_usable": true, "jd_usable_reason": "Detailed JD.", '
+            '"keywords": ["pumps"]}'
+        ),
+    ):
+        result = analyze_job_fit_with_ollama(
+            input_title="",
+            deterministic_title="Package Engineer",
+            description="Mechanical package engineering for pumps and vessels.",
+            logger=_make_logger(),
+        )
+
+    assert result["mismatch"] is False
+    assert result["unsupported_target_role"] is True
+    assert "Mechanical package" in result["unsupported_target_reason"]
+
+
+def test_job_fit_filters_popular_ide_keywords(monkeypatch):
+    from fletcher.llm.llm_enrich import analyze_job_fit_with_ollama
+
+    monkeypatch.setattr("fletcher.llm.llm_enrich.config.DEFAULT_MODEL_BACKEND", "ollama")
+
+    with patch(
+        "fletcher.llm.llm_enrich._ollama_chat",
+        return_value=(
+            '{"title": "SDET", "role_family": "software", "job_level": "mid", '
+            '"mismatch": false, "mismatch_reason": "", '
+            '"unsupported_target_role": false, "unsupported_target_reason": "", '
+            '"confidence": 0.9, "jd_usable": true, "jd_usable_reason": "Detailed role.", '
+            '"keywords": ["Android Studio", "Xcode", "Swift", "Appium"]}'
+        ),
+    ):
+        result = analyze_job_fit_with_ollama(
+            input_title="",
+            deterministic_title="SDET",
+            description="Mobile testing role.",
+            logger=_make_logger(),
+        )
+
+    assert result["keywords"] == ["Swift", "Appium"]
+
+
+def test_job_fit_overrides_process_engineer_as_unsupported(monkeypatch):
+    from fletcher.llm.llm_enrich import analyze_job_fit_with_ollama
+
+    monkeypatch.setattr("fletcher.llm.llm_enrich.config.DEFAULT_MODEL_BACKEND", "ollama")
+
+    with patch(
+        "fletcher.llm.llm_enrich._ollama_chat",
+        return_value=(
+            '{"title": "Process Engineer", "role_family": "general", '
+            '"job_level": "mid", "mismatch": false, "mismatch_reason": "", '
+            '"unsupported_target_role": false, "unsupported_target_reason": "", '
+            '"confidence": 0.9, "jd_usable": true, "jd_usable_reason": "Detailed role.", '
+            '"keywords": ["Aspen HYSYS", "HAZOPs", "Process Simulation"]}'
+        ),
+    ):
+        result = analyze_job_fit_with_ollama(
+            input_title="highly qualified intermediate Process Engineer",
+            deterministic_title="Process Engineer",
+            description="Process Engineer role using Aspen HYSYS, P&IDs, HAZOPs, and flare sizing.",
+            logger=_make_logger(),
+        )
+
+    assert result["unsupported_target_role"] is True
+    assert "outside Hunt" in result["unsupported_target_reason"]
 
 
 def test_pipeline_logger_event_ids_are_monotonic():
@@ -683,6 +793,8 @@ def test_keyword_router_calls_llm_for_ambiguous_terms(monkeypatch):
     assert "Candidate resume context" not in captured[0]
     assert "Presented features" not in captured[0]
     assert "Do not use candidate resume evidence here" in captured[0]
+    assert "post-extraction cleanup L-check" in captured[0]
+    assert "standalone deliverables such as dashboards" in captured[0]
     assert routes["project coordination"]["route"] == "summary"
     assert routes["project metrics"]["kind"] == "process"
 

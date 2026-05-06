@@ -141,6 +141,34 @@ class Component2PipelineTests(unittest.TestCase):
         self.assertEqual(versions, 1)
         conn.close()
 
+    def test_queue_job_blocks_when_llm_marks_unsupported_target_role(self):
+        init_resume_db(self.db_path)
+        blocked_classification = {
+            "role_family": "general",
+            "job_level": "mid",
+            "confidence": 0.9,
+            "weak_description": False,
+            "recommended_base_resume": "general",
+            "reasons": ["unsupported_target_role_model: mechanical role"],
+            "concern_flags": ["unsupported_target_role"],
+        }
+        with patch(
+            "fletcher.pipeline.enrich_with_ollama_if_enabled",
+            return_value=(
+                blocked_classification,
+                {"must_have_terms": []},
+                {
+                    "ollama_enriched": True,
+                    "unsupported_target_role": True,
+                    "unsupported_target_reason": "Mechanical package engineering is outside lane.",
+                },
+            ),
+        ):
+            result = generate_resume_for_job(1, db_path=self.db_path)
+
+        self.assertEqual(result["status"], "failed")
+        self.assertIn("unsupported_target_role", result["error"])
+
     def test_generate_ad_hoc_writes_artifacts_without_db(self):
         result = generate_resume_for_ad_hoc(
             title="Associate Product Manager",

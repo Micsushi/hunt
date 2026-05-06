@@ -2994,8 +2994,21 @@ async def api_fletcher_tailor(
         )
 
     if not no_summary and not with_summary:
-        raise HTTPException(
-            status_code=500, detail=result.get("compile_status") or "PDF generation failed"
+        return JSONResponse(
+            {
+                "no_summary": None,
+                "with_summary": None,
+                "log": log_b64,
+                "compile_status": result.get("compile_status"),
+                "fits_one_page": result.get("fits_one_page"),
+                "llm_error": result.get("llm_error"),
+                "error_type": result.get("error_type") or "PDFGenerationError",
+                "error": result.get("error")
+                or result.get("llm_error")
+                or result.get("compile_status")
+                or "PDF generation failed",
+            },
+            status_code=200,
         )
 
     return JSONResponse(
