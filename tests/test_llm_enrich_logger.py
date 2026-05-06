@@ -6,7 +6,6 @@ from unittest.mock import patch
 
 from fletcher.llm.llm_enrich import (
     bucket_skill_keywords_with_ollama,
-    classify_keyword_routes_with_ollama,
     enrich_with_ollama_if_enabled,
     filter_summary_keywords_with_ollama,
     generate_summary,
@@ -207,7 +206,8 @@ def test_claimed_keyword_missing_uses_llm_validation_before_repair(monkeypatch):
     assert repair_called["value"] is False
     assert result["success"] is True
     assert result["keywords_used"] == ["full stack development"]
-    assert result["presence_resolved_by_llm_validation"] is True
+    assert "claimed_keyword_presence" not in result
+    assert "presence_resolved_by_llm_validation" not in result
 
 
 def test_rewrite_outcome_removes_used_from_skipped(monkeypatch):
@@ -311,11 +311,13 @@ def test_summary_logger_called_on_success(monkeypatch):
     monkeypatch.setattr("fletcher.llm.llm_enrich.config.DEFAULT_MODEL_BACKEND", "ollama")
     with patch(
         "fletcher.llm.llm_enrich._ollama_chat",
-        return_value='{"summary": "Great candidate."}',
-    ):
+        return_value='{"summary": "Great candidate.", "keywords_used": [], "retry_reason": ""}',
+    ) as chat:
         logger = _make_logger()
         result = generate_summary("context", "Engineer", [], logger=logger)
     assert result["success"] is True
+    chat.assert_called_once()
+    assert chat.call_args.kwargs["temperature"] == 0.0
     log = logger.get_log_text()
     assert "generate_summary" in log
     assert "success=True" in log
@@ -325,9 +327,9 @@ def test_summary_prompt_includes_existing_summary_and_line_feedback(monkeypatch)
     monkeypatch.setattr("fletcher.llm.llm_enrich.config.DEFAULT_MODEL_BACKEND", "ollama")
     captured: list[str] = []
 
-    def fake_chat(prompt: str) -> str:
+    def fake_chat(prompt: str, **_kwargs) -> str:
         captured.append(prompt)
-        return '{"summary": "Adjusted summary."}'
+        return '{"summary": "Adjusted summary.", "keywords_used": ["Python"], "retry_reason": "expanded summary"}'
 
     with patch("fletcher.llm.llm_enrich._ollama_chat", fake_chat):
         result = generate_summary(
@@ -340,22 +342,24 @@ def test_summary_prompt_includes_existing_summary_and_line_feedback(monkeypatch)
         )
 
     assert result["success"] is True
+    assert result["keywords_used"] == ["Python"]
+    assert result["retry_reason"] == "expanded summary"
     assert "Existing resume summary for context: Existing summary." in captured[0]
-    assert "Length adjustment needed: Make it longer." in captured[0]
+    assert "Retry/length feedback to address: Make it longer." in captured[0]
 
 
 def test_summary_prompt_bans_junior_tone(monkeypatch):
     monkeypatch.setattr("fletcher.llm.llm_enrich.config.DEFAULT_MODEL_BACKEND", "ollama")
     captured: list[str] = []
 
-    def fake_chat(prompt: str) -> str:
+    def fake_chat(prompt: str, **_kwargs) -> str:
         captured.append(prompt)
         return '{"summary": "Software developer with backend experience."}'
 
     with patch("fletcher.llm.llm_enrich._ollama_chat", fake_chat):
         generate_summary("context", "Software Engineer", ["backend services"])
 
-    assert "Do not use junior-sounding filler" in captured[0]
+    assert "No filler" in captured[0]
     assert "motivated" in captured[0].lower()
     assert "eager" in captured[0].lower()
 
@@ -364,9 +368,9 @@ def test_summary_prompt_caps_jd_keywords_and_starts_from_candidate_facts(monkeyp
     monkeypatch.setattr("fletcher.llm.llm_enrich.config.DEFAULT_MODEL_BACKEND", "ollama")
     captured: list[str] = []
 
-    def fake_chat(prompt: str) -> str:
+    def fake_chat(prompt: str, **_kwargs) -> str:
         captured.append(prompt)
-        return '{"summary": "Grounded summary."}'
+        return '{"summary": "Grounded summary.", "keywords_used": ["strategy"], "retry_reason": ""}'
 
     with patch("fletcher.llm.llm_enrich._ollama_chat", fake_chat):
         generate_summary(
@@ -375,9 +379,14 @@ def test_summary_prompt_caps_jd_keywords_and_starts_from_candidate_facts(monkeyp
             ["strategy", "dashboards", "business cases", "forecasting models"],
         )
 
-    assert "Candidate JD keywords to choose from. Pick at most 3" in captured[0]
+    assert "Optional JD keywords, max 3" in captured[0]
     assert "strategy, dashboards, business cases, forecasting models" in captured[0]
-    assert "Start from true candidate facts" in captured[0]
+    assert "Start with candidate facts" in captured[0]
+    assert "paraphrase candidate background instead of copying bullet wording" in captured[0]
+    assert "Bad summary example" in captured[0]
+    assert "Good summary example" in captured[0]
+    assert "keywords_used" in captured[0]
+    assert "retry_reason" in captured[0]
 
 
 def test_keyword_extract_prompt_prioritizes_stack_and_skips_noise():
@@ -389,15 +398,13 @@ def test_keyword_extract_prompt_prioritizes_stack_and_skips_noise():
     )
 
     assert "0 to 30 resume-tailoring keywords" in prompt
-    assert "added to resume bullets" in prompt
-    assert "handled separately by the pipeline" in prompt
-    assert "Do not include job titles, role labels, seniority labels" in prompt
+    assert "named tech, tools, platforms" in prompt
+    assert "job titles, role labels, seniority" in prompt
     assert "certifications" in prompt
-    assert "AWS Certified" in prompt
     assert "education fields" in prompt
     assert "unsupported_target_role" in prompt
-    assert "Android Studio" in prompt
-    assert "Skip generic deliverables" in prompt
+    assert "IDE/editor names" in prompt
+    assert "vague nouns or standalone deliverables" in prompt
 
 
 def test_summary_grounding_rejects_banned_tone():
@@ -417,7 +424,7 @@ def test_summary_prompt_uses_pm_positioning(monkeypatch):
     monkeypatch.setattr("fletcher.llm.llm_enrich.config.DEFAULT_MODEL_BACKEND", "ollama")
     captured: list[str] = []
 
-    def fake_chat(prompt: str) -> str:
+    def fake_chat(prompt: str, **_kwargs) -> str:
         captured.append(prompt)
         return '{"summary": "Product-oriented summary."}'
 
@@ -434,7 +441,7 @@ def test_summary_prompt_uses_pm_positioning(monkeypatch):
     assert "Do not use a generic software-only summary" in captured[0]
 
 
-def test_summary_validation_prompt_requires_rejecting_unsupported_claims(monkeypatch):
+def test_summary_validation_prompt_requires_rejecting_awkward_claims(monkeypatch):
     from fletcher.llm.llm_enrich import validate_summary_with_ollama
 
     monkeypatch.setattr("fletcher.llm.llm_enrich.config.DEFAULT_MODEL_BACKEND", "ollama")
@@ -442,20 +449,19 @@ def test_summary_validation_prompt_requires_rejecting_unsupported_claims(monkeyp
 
     def fake_chat(prompt: str) -> str:
         captured.append(prompt)
-        return '{"accepted": false, "reasons": ["unsupported claim"]}'
+        return '{"accepted": false, "reasons": ["awkward claim"]}'
 
     with patch("fletcher.llm.llm_enrich._ollama_chat", fake_chat):
         result = validate_summary_with_ollama(
-            summary="Summary with unsupported domain claims.",
+            summary="Summary with awkward domain claims.",
             candidate_context="Skills: Python, React",
             keywords=["signal flow diagrams"],
         )
 
     assert result["accepted"] is False
-    assert "Reject the summary if it claims a domain, tool, platform" in captured[0]
-    assert "better to reject the summary than allow a polished unsupported claim" in captured[0]
-    assert "Classify each sentence" in captured[0]
-    assert "If any sentence is unsupported" in captured[0]
+    assert "forced domain/tool claims" in captured[0]
+    assert "copied bullet phrasing" in captured[0]
+    assert "awkward keyword stuffing" in captured[0]
 
 
 def test_summary_validation_retries_compact_json_after_parse_failure(monkeypatch):
@@ -481,7 +487,7 @@ def test_summary_validation_retries_compact_json_after_parse_failure(monkeypatch
     assert result["accepted"] is False
     assert result["retry"] == "json_compact"
     assert len(calls) == 2
-    assert "compact valid JSON" in calls[1]
+    assert "Only accepted answer format" in calls[1]
 
 
 def test_rewrite_validation_prompt_allows_contextual_framing(monkeypatch):
@@ -527,12 +533,12 @@ def test_skill_bucket_prompt_allows_concrete_technical_skill_phrases(monkeypatch
             existing_skills={"languages": [], "frameworks": [], "developer_tools": []},
         )
 
-    assert "concrete technical skill phrases such as Linux scripting" in captured[0]
-    assert "makes sense beside the Existing skills" in captured[0]
-    assert "Do not add IDEs or editors" in captured[0]
-    assert "standalone deliverable nouns such as dashboards" in captured[0]
-    assert "If uncertain, put it in ignored" in captured[0]
-    assert "Choose at most 3 total additions" in captured[0]
+    assert "concrete skill phrases like Linux scripting" in captured[0]
+    assert "fits beside Existing skills" in captured[0]
+    assert "IDE/editor names" in captured[0]
+    assert "standalone dashboards/reports/docs/plans" in captured[0]
+    assert "If unsure, ignore" in captured[0]
+    assert "Choose 0 to 3 total additions" in captured[0]
     assert '"additions"' in captured[0]
 
 
@@ -661,6 +667,10 @@ def test_job_fit_prompt_treats_network_cloud_roles_as_supported(monkeypatch):
     assert "cloud" in captured[0].lower()
     assert "computer" in captured[0].lower()
     assert "0 to 30 resume-tailoring keywords" in captured[0]
+    assert "degrees, majors" in captured[0]
+    assert "Do not route keywords" in captured[0]
+    assert "Only accepted answer format" in captured[0]
+    assert "removed_keywords" not in captured[0]
 
 
 def test_job_fit_prompt_reports_unsupported_target_role(monkeypatch):
@@ -716,6 +726,62 @@ def test_job_fit_filters_popular_ide_keywords(monkeypatch):
     assert result["keywords"] == ["Swift", "Appium"]
 
 
+def test_job_fit_does_not_post_filter_titles(monkeypatch):
+    from fletcher.llm.llm_enrich import analyze_job_fit_with_ollama
+
+    monkeypatch.setattr("fletcher.llm.llm_enrich.config.DEFAULT_MODEL_BACKEND", "ollama")
+
+    with patch(
+        "fletcher.llm.llm_enrich._ollama_chat",
+        return_value=(
+            '{"title": "Backend Developer", "role_family": "software", "job_level": "mid", '
+            '"mismatch": false, "mismatch_reason": "", '
+                '"unsupported_target_role": false, "unsupported_target_reason": "", '
+                '"confidence": 0.9, "jd_usable": true, "jd_usable_reason": "Detailed role.", '
+                '"keywords": ["RabbitMQ", "Software Engineer"]}'
+            ),
+        ):
+        result = analyze_job_fit_with_ollama(
+            input_title="",
+            deterministic_title="Backend Developer",
+            description="Backend role using RabbitMQ.",
+            logger=_make_logger(),
+        )
+
+    assert result["keywords"] == ["RabbitMQ", "Software Engineer"]
+    assert "removed_keywords" not in result
+
+
+def test_job_fit_ignores_legacy_keyword_routes(monkeypatch):
+    from fletcher.llm.llm_enrich import analyze_job_fit_with_ollama
+
+    monkeypatch.setattr("fletcher.llm.llm_enrich.config.DEFAULT_MODEL_BACKEND", "ollama")
+
+    with patch(
+        "fletcher.llm.llm_enrich._ollama_chat",
+        return_value=(
+            '{"title": "AI Developer", "role_family": "software", "job_level": "mid", '
+            '"mismatch": false, "mismatch_reason": "", '
+            '"unsupported_target_role": false, "unsupported_target_reason": "", '
+            '"confidence": 0.9, "jd_usable": true, "jd_usable_reason": "Detailed role.", '
+            '"keywords": ["AI models", "complex systems integration", "analytical"], '
+            '"keyword_routes": ['
+            '{"keyword": "AI models", "route": "rewrite", "kind": "technology", "reason": "AI concept"},'
+            '{"keyword": "complex systems integration", "route": "rewrite", "kind": "workflow", "reason": "workflow"},'
+            '{"keyword": "analytical", "route": "summary", "kind": "quality_trait", "reason": "quality"}]}'
+        ),
+    ):
+        result = analyze_job_fit_with_ollama(
+            input_title="",
+            deterministic_title="AI Developer",
+            description="AI developer role.",
+            logger=_make_logger(),
+        )
+
+    assert result["keywords"] == ["AI models", "complex systems integration", "analytical"]
+    assert "keyword_routes" not in result
+
+
 def test_job_fit_overrides_process_engineer_as_unsupported(monkeypatch):
     from fletcher.llm.llm_enrich import analyze_job_fit_with_ollama
 
@@ -742,6 +808,33 @@ def test_job_fit_overrides_process_engineer_as_unsupported(monkeypatch):
     assert "outside Hunt" in result["unsupported_target_reason"]
 
 
+def test_low_rag_continue_check_can_block_outside_lane(monkeypatch):
+    from fletcher.llm.llm_enrich import should_continue_after_low_rag_with_ollama
+
+    monkeypatch.setattr("fletcher.llm.llm_enrich.config.DEFAULT_MODEL_BACKEND", "ollama")
+
+    with patch(
+        "fletcher.llm.llm_enrich._ollama_chat",
+        return_value=(
+            '{"continue_tailoring": false, "unsupported_target_role": true, '
+            '"reason": "Process engineering role is outside the target lane."}'
+        ),
+    ) as chat:
+        result = should_continue_after_low_rag_with_ollama(
+            title="Process Engineer",
+            description="Use Aspen HYSYS, P&IDs, HAZOPs, and flare sizing.",
+            keywords=["Aspen HYSYS", "P&IDs"],
+            rag_scores=[{"keyword": "Aspen HYSYS", "tier": "mid", "score": 0.64}],
+            logger=_make_logger(),
+        )
+
+    assert result["success"] is True
+    assert result["continue_tailoring"] is False
+    assert result["unsupported_target_role"] is True
+    assert "fewer than 3 high-confidence matches" in chat.call_args.args[0]
+    assert "queued jobs already stored in Hunt" in chat.call_args.args[0]
+
+
 def test_pipeline_logger_event_ids_are_monotonic():
     logger = PipelineLogger()
     logger.step("a")
@@ -764,89 +857,7 @@ def test_summary_logger_on_failure(monkeypatch):
     assert "success=False" in log
 
 
-def test_keyword_router_calls_llm_for_ambiguous_terms(monkeypatch):
-    monkeypatch.setattr("fletcher.llm.llm_enrich.config.DEFAULT_MODEL_BACKEND", "ollama")
-    captured: list[str] = []
-
-    def fake_chat(prompt: str) -> str:
-        captured.append(prompt)
-        return (
-            '{"routes": ['
-            '{"keyword": "project coordination", "route": "summary", '
-            '"kind": "process", "reason": "PM coordination signal"}, '
-            '{"keyword": "project metrics", "route": "summary", '
-            '"kind": "process", "reason": "PM reporting signal"}'
-            "]}"
-        )
-
-    with patch("fletcher.llm.llm_enrich._ollama_chat", fake_chat):
-        routes = classify_keyword_routes_with_ollama(
-            keywords=["project coordination", "project metrics"],
-            job_title="Associate Project Manager",
-            resume_context="Presented features to stakeholders and led design discussions.",
-            role_family="pm",
-            job_level="intern",
-            logger=_make_logger(),
-        )
-
-    assert "project coordination" in captured[0]
-    assert "Candidate resume context" not in captured[0]
-    assert "Presented features" not in captured[0]
-    assert "Do not use candidate resume evidence here" in captured[0]
-    assert "post-extraction cleanup L-check" in captured[0]
-    assert "standalone deliverables such as dashboards" in captured[0]
-    assert routes["project coordination"]["route"] == "summary"
-    assert routes["project metrics"]["kind"] == "process"
-
-
-def test_keyword_router_discards_malformed_routes(monkeypatch):
-    monkeypatch.setattr("fletcher.llm.llm_enrich.config.DEFAULT_MODEL_BACKEND", "ollama")
-
-    with patch(
-        "fletcher.llm.llm_enrich._ollama_chat",
-        return_value=(
-            '{"routes": ['
-            '{"keyword": "project coordination", "route": "delete", '
-            '"kind": "process", "reason": "bad route"}, '
-            '{"keyword": "project metrics", "route": "summary", '
-            '"kind": "process", "reason": "good route"}'
-            "]}"
-        ),
-    ):
-        routes = classify_keyword_routes_with_ollama(
-            keywords=["project coordination", "project metrics"],
-            job_title="Associate Project Manager",
-            resume_context="stakeholder communication",
-            role_family="pm",
-            job_level="intern",
-        )
-
-    assert "project coordination" not in routes
-    assert routes["project metrics"]["route"] == "summary"
-
-
 # ── enrich_with_ollama_if_enabled ────────────────────────────────────────────
-
-
-def test_keyword_router_parse_failure_logs_once_as_failure(monkeypatch):
-    monkeypatch.setattr("fletcher.llm.llm_enrich.config.DEFAULT_MODEL_BACKEND", "ollama")
-    logger = _make_logger()
-
-    with patch("fletcher.llm.llm_enrich._ollama_chat", return_value='{"routes": ['):
-        routes = classify_keyword_routes_with_ollama(
-            keywords=["project coordination"],
-            job_title="Associate Project Manager",
-            resume_context="stakeholder communication",
-            role_family="pm",
-            job_level="intern",
-            logger=logger,
-        )
-
-    log_text = logger.get_log_text()
-    assert routes == {}
-    assert log_text.count("keyword_policy_route") == 1
-    assert "success=False" in log_text
-    assert "success=True" not in log_text
 
 
 def test_enrich_logger_called_on_success(monkeypatch):

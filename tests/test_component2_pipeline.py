@@ -169,6 +169,57 @@ class Component2PipelineTests(unittest.TestCase):
         self.assertEqual(result["status"], "failed")
         self.assertIn("unsupported_target_role", result["error"])
 
+    def test_queue_job_blocks_when_low_rag_continue_check_rejects(self):
+        init_resume_db(self.db_path)
+        classification = {
+            "role_family": "general",
+            "job_level": "mid",
+            "confidence": 0.8,
+            "weak_description": False,
+            "recommended_base_resume": "general",
+            "reasons": [],
+            "concern_flags": [],
+        }
+        with (
+            patch(
+                "fletcher.pipeline.enrich_with_ollama_if_enabled",
+                return_value=(
+                    classification,
+                    {"must_have_terms": ["Aspen HYSYS", "P&IDs", "flare sizing"]},
+                    {
+                        "ollama_enriched": True,
+                        "jd_usable": True,
+                        "jd_usable_reason": "Detailed JD.",
+                        "unsupported_target_role": False,
+                    },
+                ),
+            ),
+            patch(
+                "fletcher.pipeline.match_keywords_to_bullets",
+                return_value={
+                    "bullet_matches": [],
+                    "summary_keywords": ["P&IDs"],
+                    "ignored_keywords": [],
+                    "scores": [{"keyword": "Aspen HYSYS", "tier": "mid", "score": 0.62}],
+                    "rag_used": True,
+                },
+            ),
+            patch(
+                "fletcher.pipeline.should_continue_after_low_rag_with_ollama",
+                return_value={
+                    "success": True,
+                    "continue_tailoring": False,
+                    "unsupported_target_role": True,
+                    "reason": "Process engineering role is outside the target lane.",
+                },
+            ) as continue_check,
+        ):
+            result = generate_resume_for_job(1, db_path=self.db_path)
+
+        self.assertEqual(result["status"], "failed")
+        self.assertIn("unsupported_target_role", result["error"])
+        continue_check.assert_called_once()
+
     def test_generate_ad_hoc_writes_artifacts_without_db(self):
         result = generate_resume_for_ad_hoc(
             title="Associate Product Manager",

@@ -2,11 +2,13 @@ from __future__ import annotations
 
 import copy
 import hashlib
+import os
 import re
 import shutil
 import subprocess
 import time
 from collections import defaultdict
+from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
 from pathlib import Path
 from typing import Any
 
@@ -16,7 +18,6 @@ from .jobs.classifier import classify_job, slugify
 from .jobs.keyword_extractor import extract_keywords
 from .jobs.keyword_policy import (
     KeywordKind,
-    KeywordRoute,
     classify_keyword_policy,
     normalize_keyword,
 )
@@ -26,7 +27,6 @@ from .llm.llm_enrich import (
     analyze_job_fit_with_ollama,
     bucket_skill_keywords_with_ollama,
     classify_job_with_ollama,
-    classify_keyword_routes_with_ollama,
     enrich_with_ollama_if_enabled,
     filter_summary_keywords_with_ollama,
     generate_summary,
@@ -104,7 +104,9 @@ BLOCKED_IDE_KEYWORDS = {
 
 SUMMARY_KEYWORD_LIMIT = 3
 SKILL_ADDITION_LIMIT = 3
-MIN_HIGH_RAG_MATCHES_FOR_REWRITE = 3
+MIN_HIGH_RAG_MATCHES_FOR_REWRITE = 2
+BULLET_ORDER_FIRST_SCORE_MULTIPLIER = 1.5
+BULLET_ORDER_LAST_SCORE_MULTIPLIER = 1.0
 
 NON_REWRITE_ROLE_WORDS = {
     "intern",
@@ -205,6 +207,7 @@ def _collect_active_bullets(doc, active_bucket_ids: list[BucketId]) -> tuple[lis
                     "kind": kind,
                     "entry_id": entry.entry_id,
                     "original_local_idx": idx,
+                    "original_bullet_count": len(entry.bullets),
                     "text_hash": h,
                     "text": bullet,
                 }
@@ -250,7 +253,8 @@ def _score_sources(
     for idx, source in enumerate(sources):
         base = base_scores[idx] if idx < len(base_scores) else 0.0
         contrib = contribution.get(source["bullet_id"], 0.0)
-        scores[source["bullet_id"]] = round(max(base, contrib), 4)
+        order_multiplier = _bullet_order_score_multiplier(source)
+        scores[source["bullet_id"]] = round(max(base, contrib) * order_multiplier, 4)
     return scores
 
 
@@ -267,12 +271,27 @@ def _score_details(
     for idx, source in enumerate(sources):
         base = base_scores[idx] if idx < len(base_scores) else 0.0
         contrib = contribution.get(source["bullet_id"], 0.0)
+        order_multiplier = _bullet_order_score_multiplier(source)
+        pre_order = max(base, contrib)
         details[source["bullet_id"]] = {
             "score_base": round(base, 4),
             "score_bonus": round(max(0.0, contrib - base), 4),
-            "score_final": round(max(base, contrib), 4),
+            "score_order_multiplier": round(order_multiplier, 4),
+            "score_final": round(pre_order * order_multiplier, 4),
         }
     return details
+
+
+def _bullet_order_score_multiplier(source: dict) -> float:
+    """Give earlier bullets a configurable retention boost within their own bucket."""
+    count = int(source.get("original_bullet_count") or 0)
+    idx = int(source.get("original_local_idx") or 0)
+    if count <= 1:
+        return BULLET_ORDER_FIRST_SCORE_MULTIPLIER
+    clamped_idx = max(0, min(idx, count - 1))
+    progress = clamped_idx / max(1, count - 1)
+    spread = BULLET_ORDER_FIRST_SCORE_MULTIPLIER - BULLET_ORDER_LAST_SCORE_MULTIPLIER
+    return BULLET_ORDER_FIRST_SCORE_MULTIPLIER - (spread * progress)
 
 
 def _coverage_contribution_scores(
@@ -405,11 +424,7 @@ def _normalize_extracted_keywords(keywords: list[str]) -> list[str]:
     for keyword in keywords:
         out.extend(_split_slash_keyword(keyword))
     return _dedupe(
-        [
-            keyword
-            for keyword in out
-            if normalize_keyword(keyword) not in BLOCKED_IDE_KEYWORDS
-        ]
+        [keyword for keyword in out if normalize_keyword(keyword) not in BLOCKED_IDE_KEYWORDS]
     )
 
 
@@ -636,6 +651,16 @@ def _keyword_rewrite_eligible(keyword: str) -> bool:
         return False
     if key in NON_REWRITE_KEYWORDS:
         return False
+    policy = classify_keyword_policy(keyword)
+    if policy.kind in {
+        KeywordKind.QUALITY,
+        KeywordKind.ROLE_TITLE,
+        KeywordKind.EDUCATION,
+        KeywordKind.LOGISTICS,
+        KeywordKind.ORG_METADATA,
+        KeywordKind.LANGUAGE_REQUIREMENT,
+    }:
+        return False
     words = set(key.replace("-", " ").split())
     if "software" in words and words & NON_REWRITE_ROLE_WORDS:
         return False
@@ -859,7 +884,7 @@ def _summary_evidence_bullets(
     sources: list[dict],
     scores: dict[str, float],
     *,
-    limit: int = 5,
+    limit: int = 3,
 ) -> list[str]:
     ranked = sorted(
         zip(bullets, sources, strict=False),
@@ -884,171 +909,238 @@ def _build_candidate_context(doc, evidence_bullets: list[str] | None = None) -> 
     if skill_names:
         parts.append("Skills: " + ", ".join(_dedupe(skill_names)[:12]))
     if evidence_bullets:
-        parts.append("Relevant evidence: " + " | ".join(evidence_bullets[:5]))
+        parts.append("Relevant evidence: " + " | ".join(evidence_bullets[:3]))
     return ". ".join(parts)
 
 
-def _keyword_policy_context(doc, bullets: list[str]) -> str:
-    skill_names = (
-        list(doc.skills.languages) + list(doc.skills.frameworks) + list(doc.skills.developer_tools)
-    )
-    return " ".join(list(bullets) + skill_names)
+def _read_int_file(paths: tuple[str, ...]) -> int | None:
+    for raw_path in paths:
+        try:
+            text = Path(raw_path).read_text(encoding="utf-8").strip()
+        except OSError:
+            continue
+        if not text or text == "max":
+            continue
+        try:
+            value = int(text)
+        except ValueError:
+            continue
+        if value > 0:
+            return value
+    return None
 
 
-def _batched(values: list[str], size: int) -> list[list[str]]:
-    return [values[idx : idx + size] for idx in range(0, len(values), size)]
+def _host_memory_bytes() -> tuple[int | None, int | None, str]:
+    if os.name == "nt":
+        try:
+            import ctypes
+
+            class MEMORYSTATUSEX(ctypes.Structure):
+                _fields_ = [
+                    ("dwLength", ctypes.c_ulong),
+                    ("dwMemoryLoad", ctypes.c_ulong),
+                    ("ullTotalPhys", ctypes.c_ulonglong),
+                    ("ullAvailPhys", ctypes.c_ulonglong),
+                    ("ullTotalPageFile", ctypes.c_ulonglong),
+                    ("ullAvailPageFile", ctypes.c_ulonglong),
+                    ("ullTotalVirtual", ctypes.c_ulonglong),
+                    ("ullAvailVirtual", ctypes.c_ulonglong),
+                    ("sullAvailExtendedVirtual", ctypes.c_ulonglong),
+                ]
+
+            status = MEMORYSTATUSEX()
+            status.dwLength = ctypes.sizeof(MEMORYSTATUSEX)
+            if ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(status)):
+                used = int(status.ullTotalPhys - status.ullAvailPhys)
+                return used, int(status.ullTotalPhys), "windows"
+        except Exception:
+            return None, None, "unknown"
+
+    try:
+        page_size = os.sysconf("SC_PAGE_SIZE")
+        phys_pages = os.sysconf("SC_PHYS_PAGES")
+        available_pages = os.sysconf("SC_AVPHYS_PAGES")
+        total = int(page_size * phys_pages)
+        available = int(page_size * available_pages)
+        return total - available, total, "host"
+    except (OSError, ValueError, AttributeError):
+        return None, None, "unknown"
 
 
-def _classify_keyword_routes_batched(
-    *,
-    keywords: list[str],
-    title: str,
-    resume_context: str,
-    classification: dict | None,
-    logger: PipelineLogger | None,
-    batch_size: int = 30,
-) -> dict[str, dict[str, str]]:
-    routes: dict[str, dict[str, str]] = {}
-    for batch in _batched(keywords, batch_size):
-        raw_routes = classify_keyword_routes_with_ollama(
-            keywords=batch,
-            job_title=title,
-            resume_context=resume_context,
-            role_family=str((classification or {}).get("role_family") or ""),
-            job_level=str((classification or {}).get("job_level") or ""),
-            logger=logger,
+def _memory_snapshot() -> dict[str, Any]:
+    used = _read_int_file(
+        (
+            "/sys/fs/cgroup/memory.current",
+            "/sys/fs/cgroup/memory/memory.usage_in_bytes",
         )
-        batch_routes = raw_routes if isinstance(raw_routes, dict) else {}
-        if batch_routes or len(batch) == 1:
-            routes.update(batch_routes)
-            if not batch_routes and logger:
-                logger.step("keyword_policy_batch_failed", keywords=batch, fallback="deterministic")
-            continue
-        if logger:
-            logger.step(
-                "keyword_policy_batch_retry",
-                keywords=batch,
-                retry_mode="singletons",
-            )
-        for keyword in batch:
-            retry_raw = classify_keyword_routes_with_ollama(
-                keywords=[keyword],
-                job_title=title,
-                resume_context=resume_context,
-                role_family=str((classification or {}).get("role_family") or ""),
-                job_level=str((classification or {}).get("job_level") or ""),
-                logger=logger,
-            )
-            retry_routes = retry_raw if isinstance(retry_raw, dict) else {}
-            routes.update(retry_routes)
-            if not retry_routes and logger:
-                logger.step(
-                    "keyword_policy_batch_failed",
-                    keywords=[keyword],
-                    fallback="deterministic",
-                )
-    return routes
-
-
-def _keyword_policy_needs_llm(policy) -> bool:
-    if policy.route == KeywordRoute.IGNORE.value:
-        return policy.reason == "unknown"
-    return policy.kind.value in {
-        KeywordKind.DOMAIN.value,
-        KeywordKind.PROCESS.value,
-        KeywordKind.TECH.value,
+    )
+    limit = _read_int_file(
+        (
+            "/sys/fs/cgroup/memory.max",
+            "/sys/fs/cgroup/memory/memory.limit_in_bytes",
+        )
+    )
+    source = "cgroup" if used is not None and limit is not None else "unknown"
+    if used is None or limit is None or limit > 1 << 60:
+        used, limit, source = _host_memory_bytes()
+    if used is None or limit is None or limit <= 0:
+        return {
+            "source": source,
+            "known": False,
+            "used_mb": None,
+            "limit_mb": None,
+            "available_mb": None,
+            "used_pct": None,
+        }
+    available = max(0, limit - used)
+    return {
+        "source": source,
+        "known": True,
+        "used_mb": round(used / 1024 / 1024, 1),
+        "limit_mb": round(limit / 1024 / 1024, 1),
+        "available_mb": round(available / 1024 / 1024, 1),
+        "used_pct": round((used / limit) * 100, 1),
     }
 
 
-def _partition_missing_keywords_by_policy(
-    missing_kws: list[str],
+def _memory_allows_parallel(snapshot: dict[str, Any]) -> tuple[bool, str]:
+    if not snapshot.get("known"):
+        return True, "memory_unknown"
+    available_mb = float(snapshot.get("available_mb") or 0)
+    used_pct = float(snapshot.get("used_pct") or 0)
+    if available_mb < _config.BULLET_REWRITE_MIN_AVAILABLE_MB:
+        return False, "low_available_memory"
+    if used_pct >= _config.BULLET_REWRITE_MAX_MEMORY_PCT:
+        return False, "high_memory_usage"
+    return True, "ok"
+
+
+def _rewrite_worker_count(task_count: int, logger: PipelineLogger) -> int:
+    requested = max(1, int(_config.BULLET_REWRITE_PARALLELISM))
+    if task_count <= 1 or requested <= 1:
+        logger.step(
+            "bullet_rewrite_parallel_config",
+            requested_workers=requested,
+            active_workers=1,
+            task_count=task_count,
+            enabled=False,
+            reason="serial_or_single_task",
+            memory=_memory_snapshot(),
+        )
+        return 1
+    snapshot = _memory_snapshot()
+    ok, reason = _memory_allows_parallel(snapshot)
+    active_workers = min(requested, task_count) if ok else 1
+    logger.step(
+        "bullet_rewrite_parallel_config",
+        requested_workers=requested,
+        active_workers=active_workers,
+        task_count=task_count,
+        enabled=active_workers > 1,
+        reason=reason,
+        memory=snapshot,
+    )
+    return active_workers
+
+
+def _rewrite_bullet_job(
     *,
-    title: str,
-    doc,
-    active_bullets: list[str],
-    classification: dict | None = None,
-    logger: PipelineLogger | None = None,
-) -> tuple[list[str], list[str], list[str], list[str], dict[str, str]]:
-    deterministic = {
-        keyword: classify_keyword_policy(keyword, job_title=title, resume_context="")
-        for keyword in missing_kws
-    }
-    hard_block_reasons = {"empty", "logistics", "org_metadata"}
-    hard_block_kinds = {"education", "language_requirement", "role_title"}
-    llm_candidates = []
-    for keyword, policy in deterministic.items():
-        if policy.route == KeywordRoute.IGNORE.value and (
-            policy.reason in hard_block_reasons or policy.kind.value in hard_block_kinds
-        ):
-            continue
-        if not _keyword_policy_needs_llm(policy):
-            continue
-        llm_candidates.append(keyword)
-    llm_routes_raw = _classify_keyword_routes_batched(
-        keywords=llm_candidates,
-        title=title,
-        resume_context="",
-        classification=classification,
+    original_text: str,
+    source: dict[str, Any],
+    kws_to_add: list[str],
+    kws_to_preserve: list[str],
+    logger: PipelineLogger,
+) -> dict[str, Any]:
+    result = rewrite_bullet_targeted(
+        original_text,
+        kws_to_add,
+        keywords_to_preserve=kws_to_preserve,
         logger=logger,
     )
-    llm_routes = llm_routes_raw if isinstance(llm_routes_raw, dict) else {}
-    if llm_candidates and llm_routes_raw is None and logger:
-        logger.step(
-            "keyword_policy_llm_unavailable",
-            candidate_count=len(llm_candidates),
-            fallback="deterministic_policy",
+    validation_reasons = _validation_reasons(result)
+    skipped_candidates: list[str] = []
+
+    first_skipped = list(result.get("keywords_skipped") or [])
+    retry_keywords = list(
+        result.get("keywords_used") or result.get("presence_supported_keywords") or []
+    )
+    retry_is_proper_subset = (
+        len(kws_to_add) > 1
+        and bool(retry_keywords)
+        and {kw.lower() for kw in retry_keywords} < {kw.lower() for kw in kws_to_add}
+    )
+    if not result["success"] and retry_is_proper_subset:
+        retry_result = rewrite_bullet_targeted(
+            original_text,
+            retry_keywords,
+            keywords_to_preserve=kws_to_preserve,
+            logger=logger,
         )
-    elif llm_candidates and not isinstance(llm_routes_raw, dict) and logger:
+        validation_reasons.extend(_validation_reasons(retry_result))
         logger.step(
-            "keyword_policy_llm_invalid",
-            candidate_count=len(llm_candidates),
-            response_type=type(llm_routes_raw).__name__,
-            fallback="deterministic_policy",
+            "bullet_rewrite_retry_done",
+            bullet_id=source["bullet_id"],
+            retry_keywords=retry_keywords,
+            success=retry_result["success"],
+            duration_ms=retry_result.get("duration_ms"),
+            error=retry_result.get("error"),
+            validation=retry_result.get("validation"),
+            keywords_used=retry_result.get("keywords_used"),
+            keywords_skipped=retry_result.get("keywords_skipped"),
+            rewritten=retry_result["bullet"][:120] if retry_result["success"] else None,
         )
-    rewrite: list[str] = []
-    summary: list[str] = []
-    skills_only: list[str] = []
-    ignored: list[str] = []
-    reasons: dict[str, str] = {}
-    for keyword in missing_kws:
-        policy = deterministic[keyword]
-        route = policy.route
-        kind = policy.kind.value
-        reason = policy.reason
-        llm_route = llm_routes.get(keyword)
-        if llm_route:
-            route = llm_route.get("route", route)
-            kind = llm_route.get("kind", kind)
-            reason = f"llm_policy:{llm_route.get('reason', '')}".rstrip(":")
-            if (
-                policy.kind.value in {"role_title", "education"}
-                and route == KeywordRoute.REWRITE.value
-            ):
-                route = KeywordRoute.SUMMARY.value
-                reason = f"{reason}:rewrite_blocked_for_{policy.kind.value}"
-            if policy.route == KeywordRoute.IGNORE.value and policy.reason in hard_block_reasons:
-                route = KeywordRoute.IGNORE.value
-                kind = policy.kind.value
-                reason = policy.reason
-        elif policy.route == KeywordRoute.IGNORE.value and policy.reason == "unknown":
-            route = KeywordRoute.SUMMARY.value
-            reason = "llm_route_missing_summary_fallback"
-        if kind in hard_block_kinds:
-            route = KeywordRoute.IGNORE.value
-            reason = f"{reason}:blocked_metadata_keyword"
-        if kind == KeywordKind.QUALITY.value and route == KeywordRoute.REWRITE.value:
-            route = KeywordRoute.SUMMARY.value
-            reason = f"{reason}:quality_rewrite_blocked"
-        reasons[keyword] = f"{kind}:{route}:{reason}"
-        if route == KeywordRoute.REWRITE.value:
-            rewrite.append(keyword)
-        elif route == KeywordRoute.SUMMARY.value:
-            summary.append(keyword)
-        elif route == KeywordRoute.SKILLS_ONLY.value:
-            skills_only.append(keyword)
+        if retry_result["success"]:
+            result = retry_result
+            retry_used_l = {kw.lower() for kw in list(retry_result.get("keywords_used") or [])}
+            skipped_candidates.extend(
+                [kw for kw in first_skipped if kw.lower() not in retry_used_l]
+            )
         else:
-            ignored.append(keyword)
-    return _dedupe(rewrite), _dedupe(summary), _dedupe(skills_only), _dedupe(ignored), reasons
+            result = {
+                **retry_result,
+                "keywords_used": [],
+                "keywords_skipped": _dedupe(
+                    first_skipped + list(retry_result.get("keywords_skipped") or [])
+                ),
+            }
+
+    return {
+        "source": source,
+        "result": result,
+        "validation_reasons": validation_reasons,
+        "skipped_candidates": skipped_candidates + list(result.get("keywords_skipped") or []),
+    }
+
+
+def _apply_rewrite_result(doc, job_result: dict[str, Any]) -> bool:
+    source = job_result["source"]
+    result = job_result["result"]
+    if not result["success"]:
+        return False
+    entry = _find_entry(doc, source["kind"], source["entry_id"])
+    if entry is None:
+        return False
+    for idx, bullet in enumerate(entry.bullets):
+        if _text_hash(bullet) == source["text_hash"]:
+            entry.bullets[idx] = result["bullet"]
+            return True
+    return False
+
+
+def _log_rewrite_done(logger: PipelineLogger, job_result: dict[str, Any]) -> None:
+    source = job_result["source"]
+    result = job_result["result"]
+    logger.step(
+        "bullet_rewrite_done",
+        bullet_id=source["bullet_id"],
+        success=result["success"],
+        duration_ms=result.get("duration_ms"),
+        error=result.get("error"),
+        validation=result.get("validation"),
+        keywords_used=result.get("keywords_used"),
+        keywords_skipped=result.get("keywords_skipped"),
+        rewritten=result["bullet"][:120] if result["success"] else None,
+    )
 
 
 def _run_iteration(
@@ -1074,65 +1166,34 @@ def _run_iteration(
         count=len(active_bucket_ids),
         buckets=[f"{kind}:{entry_id}" for kind, entry_id in active_bucket_ids],
     )
-    (
-        rewrite_missing_kws,
-        summary_only_kws,
-        skills_only_kws,
-        policy_ignored_kws,
-        policy_reasons,
-    ) = _partition_missing_keywords_by_policy(
-        missing_kws,
-        title=title,
-        doc=doc,
-        active_bullets=active_bullets,
-        classification=classification,
-        logger=logger,
-    )
-    logger.step(
-        "keyword_policy_partition",
-        rewrite=rewrite_missing_kws,
-        summary_only=summary_only_kws,
-        skills_only=skills_only_kws,
-        ignored=policy_ignored_kws,
-        reasons=policy_reasons,
-    )
+    rag_candidate_kws = _dedupe(missing_kws)
 
     kw_match: dict = {
         "bullet_matches": [],
-        "summary_keywords": list(summary_only_kws),
-        "ignored_keywords": list(policy_ignored_kws),
+        "summary_keywords": [],
+        "ignored_keywords": [],
         "scores": [],
         "rag_used": False,
     }
-    rag_candidate_kws = _dedupe(rewrite_missing_kws + summary_only_kws + skills_only_kws)
     rag_tiers: dict[str, str] = {}
-    skills_only_rag_kws: list[str] = []
     if _config.RAG_ENABLED and rag_candidate_kws and active_bullets:
         t_rag = time.perf_counter()
         logger.step(
             "rag_start",
             missing_keyword_count=len(rag_candidate_kws),
-            rewrite_keyword_count=len(rewrite_missing_kws),
-            summary_keyword_count=len(summary_only_kws),
-            skill_keyword_count=len(skills_only_kws),
+            candidate_keyword_count=len(rag_candidate_kws),
             bullet_count=len(active_bullets),
         )
         try:
             rag_result = match_keywords_to_bullets(rag_candidate_kws, active_bullets)
             rag_tiers = _rag_keyword_tiers(rag_result)
-            rewrite_lookup = {keyword.lower() for keyword in rewrite_missing_kws}
+            rag_candidate_lookup = {keyword.lower() for keyword in rag_candidate_kws}
             rewrite_matches = [
                 match
                 for match in rag_result.get("bullet_matches", [])
-                if str(match.get("keyword") or "").lower() in rewrite_lookup
+                if str(match.get("keyword") or "").strip().lower() in rag_candidate_lookup
             ]
-            rewrite_mid_keywords = _rag_keywords_by_tier(rewrite_missing_kws, rag_tiers, "mid")
-            summary_rag_kws = [
-                keyword for keyword in summary_only_kws if _rag_kept_keyword(keyword, rag_tiers)
-            ]
-            skills_only_rag_kws = [
-                keyword for keyword in skills_only_kws if _rag_kept_keyword(keyword, rag_tiers)
-            ]
+            mid_keywords = _rag_keywords_by_tier(rag_candidate_kws, rag_tiers, "mid")
             low_or_error = [
                 str(detail.get("keyword") or "")
                 for detail in rag_result.get("scores", [])
@@ -1143,8 +1204,8 @@ def _run_iteration(
             )
             kw_match = {
                 "bullet_matches": rewrite_matches,
-                "summary_keywords": _dedupe(summary_rag_kws + rewrite_mid_keywords),
-                "ignored_keywords": _dedupe(policy_ignored_kws + low_or_error),
+                "summary_keywords": _dedupe(mid_keywords),
+                "ignored_keywords": _dedupe(low_or_error),
                 "scores": list(rag_result.get("scores", [])),
                 "rag_used": True,
             }
@@ -1177,7 +1238,6 @@ def _run_iteration(
             rag_used=kw_match.get("rag_used", False),
             high_keywords=[m["keyword"] for m in kw_match.get("bullet_matches", [])],
             mid_keywords=kw_match.get("summary_keywords", []),
-            skill_keywords=skills_only_rag_kws,
             elapsed_ms=int((time.perf_counter() - t_rag) * 1000),
         )
     else:
@@ -1204,94 +1264,123 @@ def _run_iteration(
             rewrite_matches.append(match)
 
         by_bullet = _select_rewrite_assignments(rewrite_matches, max_keywords_per_bullet=2)
+        rewrite_tasks: list[dict[str, Any]] = []
         for bullet_idx, kws_to_add in sorted(by_bullet.items()):
             if bullet_idx >= len(active_bullets):
                 continue
             original_text = active_bullets[bullet_idx]
             source = active_sources[bullet_idx]
             kws_to_preserve = [k for k in present_kws if k.lower() in original_text.lower()]
-            logger.step(
-                "bullet_rewrite_start",
-                bullet_id=source["bullet_id"],
-                keywords=kws_to_add,
-                original=original_text[:120],
+            rewrite_tasks.append(
+                {
+                    "original_text": original_text,
+                    "source": source,
+                    "kws_to_add": kws_to_add,
+                    "kws_to_preserve": kws_to_preserve,
+                }
             )
-            result = rewrite_bullet_targeted(
-                original_text,
-                kws_to_add,
-                keywords_to_preserve=kws_to_preserve,
-                logger=logger,
-            )
+
+        active_workers = _rewrite_worker_count(len(rewrite_tasks), logger)
+
+        def handle_job_result(job_result: dict[str, Any]) -> None:
+            nonlocal rewrite_count, rewrite_ok
             rewrite_count += 1
-            validation_reasons.extend(_validation_reasons(result))
-
-            first_skipped = list(result.get("keywords_skipped") or [])
-            retry_keywords = list(
-                result.get("keywords_used") or result.get("presence_supported_keywords") or []
-            )
-            retry_is_proper_subset = (
-                len(kws_to_add) > 1
-                and bool(retry_keywords)
-                and {kw.lower() for kw in retry_keywords} < {kw.lower() for kw in kws_to_add}
-            )
-            if not result["success"] and retry_is_proper_subset:
-                retry_result = rewrite_bullet_targeted(
-                    original_text,
-                    retry_keywords,
-                    keywords_to_preserve=kws_to_preserve,
-                    logger=logger,
-                )
-                validation_reasons.extend(_validation_reasons(retry_result))
-                logger.step(
-                    "bullet_rewrite_retry_done",
-                    bullet_id=source["bullet_id"],
-                    retry_keywords=retry_keywords,
-                    success=retry_result["success"],
-                    duration_ms=retry_result.get("duration_ms"),
-                    error=retry_result.get("error"),
-                    validation=retry_result.get("validation"),
-                    keywords_used=retry_result.get("keywords_used"),
-                    keywords_skipped=retry_result.get("keywords_skipped"),
-                    rewritten=retry_result["bullet"][:120] if retry_result["success"] else None,
-                )
-                if retry_result["success"]:
-                    result = retry_result
-                    retry_used_l = {
-                        kw.lower() for kw in list(retry_result.get("keywords_used") or [])
-                    }
-                    skipped_candidates.extend(
-                        [kw for kw in first_skipped if kw.lower() not in retry_used_l]
-                    )
-                else:
-                    result = {
-                        **retry_result,
-                        "keywords_used": [],
-                        "keywords_skipped": _dedupe(
-                            first_skipped + list(retry_result.get("keywords_skipped") or [])
-                        ),
-                    }
-
+            result = job_result["result"]
+            validation_reasons.extend(job_result.get("validation_reasons") or [])
             keywords_used.extend(result.get("keywords_used") or [])
-            skipped_candidates.extend(result.get("keywords_skipped") or [])
-            logger.step(
-                "bullet_rewrite_done",
-                bullet_id=source["bullet_id"],
-                success=result["success"],
-                duration_ms=result.get("duration_ms"),
-                error=result.get("error"),
-                validation=result.get("validation"),
-                keywords_used=result.get("keywords_used"),
-                keywords_skipped=result.get("keywords_skipped"),
-                rewritten=result["bullet"][:120] if result["success"] else None,
-            )
-            if result["success"]:
+            skipped_candidates.extend(job_result.get("skipped_candidates") or [])
+            _log_rewrite_done(logger, job_result)
+            if _apply_rewrite_result(doc, job_result):
                 rewrite_ok += 1
-                entry = _find_entry(doc, source["kind"], source["entry_id"])
-                if entry is not None:
-                    for idx, bullet in enumerate(entry.bullets):
-                        if _text_hash(bullet) == source["text_hash"]:
-                            entry.bullets[idx] = result["bullet"]
-                            break
+
+        def run_serial(tasks: list[dict[str, Any]]) -> None:
+            for task in tasks:
+                source = task["source"]
+                logger.step(
+                    "bullet_rewrite_start",
+                    bullet_id=source["bullet_id"],
+                    keywords=task["kws_to_add"],
+                    original=task["original_text"][:120],
+                )
+                handle_job_result(_rewrite_bullet_job(logger=logger, **task))
+
+        if active_workers <= 1:
+            run_serial(rewrite_tasks)
+        else:
+            remaining_serial: list[dict[str, Any]] = []
+            next_task_idx = 0
+            active_futures: dict[Future[dict[str, Any]], dict[str, Any]] = {}
+
+            def submit_next(executor: ThreadPoolExecutor) -> bool:
+                nonlocal next_task_idx
+                if next_task_idx >= len(rewrite_tasks):
+                    return False
+                task = rewrite_tasks[next_task_idx]
+                next_task_idx += 1
+                source = task["source"]
+                logger.step(
+                    "bullet_rewrite_start",
+                    bullet_id=source["bullet_id"],
+                    keywords=task["kws_to_add"],
+                    original=task["original_text"][:120],
+                )
+                future = executor.submit(_rewrite_bullet_job, logger=logger, **task)
+                active_futures[future] = task
+                return True
+
+            with ThreadPoolExecutor(max_workers=active_workers) as executor:
+                for _ in range(active_workers):
+                    if not submit_next(executor):
+                        break
+
+                stop_submitting_parallel = False
+                while active_futures:
+                    done, _pending = wait(active_futures, return_when=FIRST_COMPLETED)
+                    for future in done:
+                        task = active_futures.pop(future)
+                        try:
+                            handle_job_result(future.result())
+                        except Exception as exc:
+                            job_result = {
+                                "source": task["source"],
+                                "result": {
+                                    "success": False,
+                                    "bullet": task["original_text"],
+                                    "keywords_used": [],
+                                    "keywords_skipped": task["kws_to_add"],
+                                    "error": str(exc),
+                                    "duration_ms": None,
+                                },
+                                "validation_reasons": [],
+                                "skipped_candidates": task["kws_to_add"],
+                            }
+                            handle_job_result(job_result)
+                        snapshot = _memory_snapshot()
+                        ok, reason = _memory_allows_parallel(snapshot)
+                        logger.step(
+                            "bullet_rewrite_parallel_memory",
+                            active_workers=len(active_futures),
+                            remaining_tasks=len(rewrite_tasks) - next_task_idx,
+                            memory=snapshot,
+                            status=reason,
+                        )
+                        if not ok:
+                            stop_submitting_parallel = True
+                    if stop_submitting_parallel:
+                        remaining_serial = rewrite_tasks[next_task_idx:]
+                        next_task_idx = len(rewrite_tasks)
+                        continue
+                    while len(active_futures) < active_workers and submit_next(executor):
+                        pass
+
+            if remaining_serial:
+                logger.step(
+                    "bullet_rewrite_parallel_fallback",
+                    remaining=len(remaining_serial),
+                    reason="memory_guard",
+                    memory=_memory_snapshot(),
+                )
+                run_serial(remaining_serial)
 
     logger.step(
         "bullet_rewrites_summary",
@@ -1343,9 +1432,7 @@ def _run_iteration(
     else:
         summary_filter = {"success": False, "error": "no_summary_keywords"}
     if summary_filter.get("success"):
-        mid_keywords = _dedupe(list(summary_filter.get("included") or []))[
-            :SUMMARY_KEYWORD_LIMIT
-        ]
+        mid_keywords = _dedupe(list(summary_filter.get("included") or []))[:SUMMARY_KEYWORD_LIMIT]
         included_l = {keyword.lower() for keyword in mid_keywords}
         excluded_summary_keywords = [
             keyword
@@ -1390,6 +1477,8 @@ def _run_iteration(
             duration_ms=summary_meta.get("duration_ms"),
             error=summary_meta.get("error"),
             summary=summary_meta.get("summary", "")[:200] if summary_meta.get("success") else None,
+            keywords_used=summary_meta.get("keywords_used") or [],
+            retry_reason=summary_meta.get("retry_reason") or "",
         )
         if summary_meta.get("summary"):
             summary_validation, _summary_validation_mode = _validate_summary_with_defense(
@@ -1400,8 +1489,8 @@ def _run_iteration(
             )
             if not summary_validation["accepted"]:
                 feedback = (
-                    "Revise to remove unsupported domain claims and junior-sounding filler. "
-                    "Use only supported role/process keywords that fit the candidate background."
+                    "Revise to remove awkward domain claims and junior-sounding filler. "
+                    "Use only role/process keywords that fit the candidate background."
                 )
                 retry_keywords = [
                     keyword
@@ -1441,6 +1530,8 @@ def _run_iteration(
                     accepted=retry_validation.get("accepted"),
                     reasons=retry_validation.get("reasons"),
                     mode=retry_validation_mode,
+                    keywords_used=retry_meta.get("keywords_used") or [],
+                    retry_reason=retry_meta.get("retry_reason") or "",
                 )
                 if retry_meta.get("summary") and retry_validation["accepted"]:
                     summary_meta = retry_meta
@@ -1466,7 +1557,7 @@ def _run_iteration(
         )
         if _rag_kept_keyword(keyword, rag_tiers)
     ]
-    no_summary_skill_keywords = _dedupe(list(skills_only_rag_kws) + rag_supported_summary_skill_kws)
+    no_summary_skill_keywords = _dedupe(rag_supported_summary_skill_kws)
     no_summary_skills_added = _add_keywords_to_skills(
         doc_ns, no_summary_skill_keywords, logger=logger
     )
@@ -1490,7 +1581,7 @@ def _run_iteration(
         doc_s.summary = _generated_summary
         summary_unused_keywords = [
             keyword
-            for keyword in _dedupe(mid_keywords + excluded_summary_keywords + list(skills_only_kws))
+            for keyword in _dedupe(mid_keywords + excluded_summary_keywords)
             if not keyword_visible_in_text(keyword, _generated_summary)
         ]
         logger.step(
@@ -1670,7 +1761,6 @@ def _log_pipeline_debug_summary(
     present_kws: list[str],
     missing_kws: list[str],
 ) -> None:
-    policy = _latest_step_detail(logger, "keyword_policy_partition")
     rag = _latest_step_detail(logger, "rag_complete")
     summary_filter = _latest_step_detail(logger, "summary_keyword_filter")
     starts = {
@@ -1705,12 +1795,6 @@ def _log_pipeline_debug_summary(
         "pipeline_debug_summary",
         keywords_found=raw_keywords,
         keyword_partition={"present": present_kws, "missing": missing_kws},
-        policy_routes={
-            "rewrite": policy.get("rewrite", []),
-            "summary_only": policy.get("summary_only", []),
-            "skills_only": policy.get("skills_only", []),
-            "ignored": policy.get("ignored", []),
-        },
         rag_levels={
             "high": rag.get("high_keywords", []),
             "medium": rag.get("mid_keywords", []),
@@ -1772,6 +1856,41 @@ def _summary_visible_rejection_overrides(
     return _dedupe(overrides)
 
 
+def _summary_validation_needs_llm(
+    *,
+    summary: str,
+    keywords: list[str],
+    grounding: dict[str, Any],
+) -> bool:
+    if not grounding.get("accepted"):
+        return False
+    if not summary.strip():
+        return False
+    if len(_dedupe([keyword for keyword in keywords if keyword.strip()])) > SUMMARY_KEYWORD_LIMIT:
+        return True
+    risky_kinds = {
+        KeywordKind.DOMAIN,
+        KeywordKind.IGNORE,
+        KeywordKind.EDUCATION,
+        KeywordKind.ROLE_TITLE,
+    }
+    for keyword in keywords:
+        policy = classify_keyword_policy(keyword)
+        if policy.kind in risky_kinds:
+            return True
+        if policy.reason == "unknown":
+            return True
+    summary_l = summary.lower()
+    risky_phrases = (
+        "expert in",
+        "specialized in",
+        "domain expertise",
+        "direct experience",
+        "extensive experience",
+    )
+    return any(phrase in summary_l for phrase in risky_phrases)
+
+
 def _validate_summary_with_defense(
     *,
     summary: str,
@@ -1780,6 +1899,22 @@ def _validate_summary_with_defense(
     logger: PipelineLogger,
     retry: str | None = None,
 ) -> tuple[dict[str, Any], str]:
+    grounding = validate_summary_grounding(summary, candidate_context, keywords)
+    if not _summary_validation_needs_llm(summary=summary, keywords=keywords, grounding=grounding):
+        summary_validation = {
+            "accepted": grounding["accepted"],
+            "reasons": _dedupe(list(grounding.get("reasons") or [])),
+        }
+        detail = {
+            "accepted": summary_validation.get("accepted"),
+            "reasons": summary_validation.get("reasons"),
+            "mode": "deterministic_fast",
+        }
+        if retry:
+            detail["retry"] = retry
+        logger.step("summary_validation", **detail)
+        return summary_validation, "deterministic_fast"
+
     summary_validation = validate_summary_with_ollama(
         summary=summary,
         candidate_context=candidate_context,
@@ -1787,7 +1922,6 @@ def _validate_summary_with_defense(
         logger=logger,
     )
     mode = "llm"
-    grounding = validate_summary_grounding(summary, candidate_context, keywords)
     if summary_validation.get("success"):
         reasons = list(summary_validation.get("reasons") or [])
         llm_accepted = bool(summary_validation.get("accepted"))

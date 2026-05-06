@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import sys
+import threading
 import time
 from dataclasses import dataclass
 from typing import Any
@@ -22,31 +23,35 @@ class PipelineLogger:
         self._start = time.perf_counter()
         self._last_ts = 0.0
         self._event_id = 0
+        self._lock = threading.Lock()
 
     def _next_event_id(self) -> int:
         self._event_id += 1
         return self._event_id
 
     def step(self, name: str, **detail: Any) -> None:
-        event_id = self._next_event_id()
-        ts = time.perf_counter() - self._start
-        delta = ts - self._last_ts
-        self._last_ts = ts
-        detail = {"event_id": event_id, **detail}
-        self._entries.append(
-            _LogEntry(event_id=event_id, ts=ts, delta=delta, kind="step", name=name, detail=detail)
-        )
-        parts = " | ".join(f"{k}={v}" for k, v in detail.items() if v is not None)
-        print(
-            f"------ pipeline event={event_id} +{ts:.3f}s delta={delta:.3f}s step={name} ------",
-            flush=True,
-        )
-        if name == "pipeline_debug_summary":
-            for line in _format_pipeline_debug_summary(detail):
-                print(line, flush=True)
-            return
-        if parts:
-            print(parts, flush=True)
+        with self._lock:
+            event_id = self._next_event_id()
+            ts = time.perf_counter() - self._start
+            delta = ts - self._last_ts
+            self._last_ts = ts
+            detail = {"event_id": event_id, **detail}
+            self._entries.append(
+                _LogEntry(
+                    event_id=event_id, ts=ts, delta=delta, kind="step", name=name, detail=detail
+                )
+            )
+            parts = " | ".join(f"{k}={v}" for k, v in detail.items() if v is not None)
+            print(
+                f"------ pipeline event={event_id} +{ts:.3f}s delta={delta:.3f}s step={name} ------",
+                flush=True,
+            )
+            if name == "pipeline_debug_summary":
+                for line in _format_pipeline_debug_summary(detail):
+                    print(line, flush=True)
+                return
+            if parts:
+                print(parts, flush=True)
 
     def llm_call(
         self,
@@ -57,37 +62,40 @@ class PipelineLogger:
         success: bool = True,
         error: str | None = None,
     ) -> None:
-        event_id = self._next_event_id()
-        ts = time.perf_counter() - self._start
-        delta = ts - self._last_ts
-        self._last_ts = ts
-        self._entries.append(
-            _LogEntry(
-                event_id=event_id,
-                ts=ts,
-                delta=delta,
-                kind="llm",
-                name=name,
-                detail={
-                    "prompt": prompt,
-                    "response": response,
-                    "duration_ms": duration_ms,
-                    "success": success,
-                    "error": error,
-                },
+        with self._lock:
+            event_id = self._next_event_id()
+            ts = time.perf_counter() - self._start
+            delta = ts - self._last_ts
+            self._last_ts = ts
+            self._entries.append(
+                _LogEntry(
+                    event_id=event_id,
+                    ts=ts,
+                    delta=delta,
+                    kind="llm",
+                    name=name,
+                    detail={
+                        "prompt": prompt,
+                        "response": response,
+                        "duration_ms": duration_ms,
+                        "success": success,
+                        "error": error,
+                    },
+                )
             )
-        )
-        status = "ok" if success else f"FAILED error={error}"
-        print(
-            f"------ llm event={event_id} +{ts:.3f}s delta={delta:.3f}s call={name} status={status} duration_ms={duration_ms} ------",
-            flush=True,
-        )
-        if not success and error:
-            print(f"[pipeline] llm error detail: {error}", file=sys.stderr, flush=True)
+            status = "ok" if success else f"FAILED error={error}"
+            print(
+                f"------ llm event={event_id} +{ts:.3f}s delta={delta:.3f}s call={name} status={status} duration_ms={duration_ms} ------",
+                flush=True,
+            )
+            if not success and error:
+                print(f"[pipeline] llm error detail: {error}", file=sys.stderr, flush=True)
 
     def get_log_text(self) -> str:
+        with self._lock:
+            entries = list(self._entries)
         lines: list[str] = ["=" * 70, "PIPELINE LOG", "=" * 70, ""]
-        for e in self._entries:
+        for e in entries:
             lines.append("------")
             ts = f"+{e.ts:.3f}s"
             delta = f"delta={e.delta:.3f}s"
@@ -137,10 +145,6 @@ def _format_pipeline_debug_summary(detail: dict[str, Any]) -> list[str]:
     lines.append("  Keyword Partition:")
     _append_list(lines, "Present", partition.get("present"))
     _append_list(lines, "Missing", partition.get("missing"))
-    routes = detail.get("policy_routes") if isinstance(detail.get("policy_routes"), dict) else {}
-    lines.append("  Policy Routes:")
-    for route_name in ("rewrite", "summary_only", "skills_only", "ignored"):
-        _append_list(lines, route_name, routes.get(route_name))
     rag = detail.get("rag_levels") if isinstance(detail.get("rag_levels"), dict) else {}
     lines.append("  RAG Levels:")
     _append_list(lines, "High", rag.get("high"))

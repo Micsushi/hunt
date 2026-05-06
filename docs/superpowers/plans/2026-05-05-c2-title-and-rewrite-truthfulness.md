@@ -2775,3 +2775,58 @@ Implemented direction:
 Verification:
 - `.\.venv\Scripts\python.exe -m pytest tests\test_llm_enrich_logger.py tests\test_ad_hoc_pipeline.py tests\test_rewrite_validation.py tests\test_keyword_check.py tests\test_pipeline_logger.py tests\test_option_b_smoke.py tests\test_component2_pipeline.py -q`: 165 passed.
 - `.\.venv\Scripts\python.exe ci.py c2`: passed.
+
+## Implemented Checkpoint: RAG Is the Only Keyword Router
+
+Observed issue:
+- The combined job-fit LLM call was returning `keyword_routes`, and the pipeline had a second pre-RAG keyword policy router that split missing terms into rewrite, summary-only, skills-only, and ignored buckets.
+- This duplicated the actual RAG high/medium/low tiering and made the pipeline harder to reason about.
+- The desired contract is simpler: the first LLM extracts and filters clean resume-tailoring keywords only. RAG is the only routing step.
+
+Implemented:
+- Removed `keyword_routes` from the active combined job-fit prompt and result.
+- Removed the old standalone keyword-route LLM helper from active code so there is no separate route-before-RAG path left.
+- Strengthened the job-fit prompt to say not to route keywords and to remove non-keywords such as job titles, role labels, seniority labels, employment types, degrees, majors, education fields, certifications, licenses, credentials, locations, compensation, company metadata, IDE/editor/dev-environment names, standalone deliverables, vague nouns, and generic role words captured elsewhere.
+- RAG high/medium/low is now the sole keyword routing system: high can become bullet rewrites, medium can feed summary and skills, low is ignored.
+- Updated pipeline debug summaries and Option B smoke quality notes to remove Policy Routes.
+
+Verification:
+- `python -m compileall fletcher\llm\llm_enrich.py fletcher\ad_hoc_pipeline.py fletcher\pipeline_logger.py`: passed.
+- `python -m pytest tests/test_ad_hoc_pipeline.py tests/test_llm_enrich_logger.py tests/test_rewrite_validation.py tests/test_component2_pipeline.py tests/test_option_b_smoke.py tests/test_pipeline_logger.py -q`: 149 passed.
+- `python ci.py c2`: passed.
+
+## Implemented Checkpoint: Removed Pre-RAG Cleanup Gate
+
+Observed issue:
+- Even after removing route decisions, `keyword_cleanup` was still a deterministic hardcoded gate that could remove job titles, degrees, metadata, and similar non-keywords after extraction.
+- The preferred behavior is for keyword extraction itself to avoid returning those items.
+
+Implemented:
+- Removed the `keyword_cleanup` pipeline step completely.
+- Removed `removed_keywords` from the combined job-fit prompt/result schema.
+- Missing keywords now go directly to RAG after normal extraction/normalization and present/missing partitioning.
+- The extraction prompt now carries the non-keyword exclusion rule: do not include job titles, role labels, seniority labels, employment types, degrees, majors, education fields, certifications, licenses, credentials, locations, compensation, company metadata, IDE/editor/dev-environment names, standalone deliverables, vague nouns, or generic role words.
+- Pipeline debug summaries and smoke quality notes no longer include Keyword Cleanup.
+
+Verification:
+- `python -m pytest tests/test_ad_hoc_pipeline.py tests/test_llm_enrich_logger.py tests/test_rewrite_validation.py tests/test_component2_pipeline.py tests/test_option_b_smoke.py tests/test_pipeline_logger.py -q`: 147 passed.
+- `python ci.py c2`: passed.
+
+## Implemented Checkpoint: LLM-Only Rewrite Validation, Bullet Order Boost, and LLM Skill Selection
+
+Observed issue:
+- Rewrite validation still had deterministic claimed-keyword presence and grounding helpers around the LLM validator.
+- Bullet drop scoring did not yet give any built-in staying power to earlier bullets inside the same job/project bucket.
+- Skill addition still had a deterministic prefilter before the skill-bucketing LLM.
+
+Implemented:
+- Removed the active deterministic rewrite validation checks and deleted the old rewrite grounding/presence helper tests. Rewrites are now accepted or rejected by the LLM validator path.
+- Added configurable bullet-order score multipliers. The first bullet in each bucket currently gets a `1.5` score multiplier, the last gets `1.0`, and bullets between them interpolate linearly. Bucket order itself is not used.
+- Removed the deterministic skill-candidate prefilter. All RAG-supported summary/skill candidates are sent to the skill-bucketing LLM.
+- Strengthened the skill-bucketing prompt to choose `0 to 3` additions and return JSON categories.
+- Kept the deterministic post-LLM skill cap: if the LLM returns more than three additions, the pipeline keeps only the first three returned additions across all categories.
+- Page-fit still runs after skill additions, so added skill lines can trigger the normal bullet-drop loop.
+
+Verification:
+- `python -m pytest tests/test_ad_hoc_pipeline.py tests/test_llm_enrich_logger.py tests/test_rewrite_validation.py tests/test_component2_pipeline.py tests/test_option_b_smoke.py tests/test_pipeline_logger.py -q`: 135 passed.
+- `python ci.py c2`: passed.

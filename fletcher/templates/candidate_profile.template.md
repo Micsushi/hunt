@@ -14,7 +14,7 @@
 
 # Rules:
 
-# - Keep everything 100% truthful. Never invent metrics, tools, or dates.
+# - Keep everything reviewed and candidate-approved. Never invent metrics, tools, or dates.
 
 # - Entry IDs must match the slugs C2 derives from your main.tex roles.
 

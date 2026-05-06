@@ -2,7 +2,7 @@
 
 Use this file as the reusable bullet and fact pool for C2 (Fletcher).
 
-The goal is to give C2 more truthful material than can fit on any one-page resume.
+The goal is to give C2 more reviewed candidate material than can fit on any one-page resume.
 
 ## Rules
 
@@ -69,7 +69,7 @@ The goal is to give C2 more truthful material than can fit on any one-page resum
 
 ## Optional Generated Drafts
 
-You can also store later generated bullet drafts here if they are still truthful and reviewed.
+You can also store later generated bullet drafts here if they are still reviewed and candidate-approved.
 
 - Draft bullet:
   - Draft ID:

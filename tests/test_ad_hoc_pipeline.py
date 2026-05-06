@@ -14,6 +14,84 @@ def test_import():
     assert callable(run_ad_hoc_pipeline)
 
 
+def test_rewrite_parallelism_respects_memory_guard(monkeypatch):
+    import fletcher.ad_hoc_pipeline as mod
+    from fletcher.pipeline_logger import PipelineLogger
+
+    monkeypatch.setattr(mod._config, "BULLET_REWRITE_PARALLELISM", 2)
+    monkeypatch.setattr(mod._config, "BULLET_REWRITE_MIN_AVAILABLE_MB", 4096)
+    monkeypatch.setattr(mod._config, "BULLET_REWRITE_MAX_MEMORY_PCT", 85)
+    monkeypatch.setattr(
+        mod,
+        "_memory_snapshot",
+        lambda: {
+            "known": True,
+            "source": "cgroup",
+            "used_mb": 7900,
+            "limit_mb": 8192,
+            "available_mb": 292,
+            "used_pct": 96.4,
+        },
+    )
+
+    assert mod._rewrite_worker_count(3, PipelineLogger()) == 1
+
+
+def test_rewrite_parallelism_allows_configured_workers(monkeypatch):
+    import fletcher.ad_hoc_pipeline as mod
+    from fletcher.pipeline_logger import PipelineLogger
+
+    monkeypatch.setattr(mod._config, "BULLET_REWRITE_PARALLELISM", 3)
+    monkeypatch.setattr(mod._config, "BULLET_REWRITE_MIN_AVAILABLE_MB", 4096)
+    monkeypatch.setattr(mod._config, "BULLET_REWRITE_MAX_MEMORY_PCT", 85)
+    monkeypatch.setattr(
+        mod,
+        "_memory_snapshot",
+        lambda: {
+            "known": True,
+            "source": "cgroup",
+            "used_mb": 2048,
+            "limit_mb": 16384,
+            "available_mb": 14336,
+            "used_pct": 12.5,
+        },
+    )
+
+    assert mod._rewrite_worker_count(2, PipelineLogger()) == 2
+
+
+def test_summary_evidence_uses_top_three_scored_bullets():
+    import fletcher.ad_hoc_pipeline as mod
+
+    bullets = ["first", "second", "third", "fourth"]
+    sources = [
+        {"bullet_id": "b1"},
+        {"bullet_id": "b2"},
+        {"bullet_id": "b3"},
+        {"bullet_id": "b4"},
+    ]
+    scores = {"b1": 0.1, "b2": 0.9, "b3": 0.8, "b4": 0.7}
+
+    assert mod._summary_evidence_bullets(bullets, sources, scores) == [
+        "second",
+        "third",
+        "fourth",
+    ]
+
+
+def test_candidate_context_keeps_three_evidence_bullets():
+    import fletcher.ad_hoc_pipeline as mod
+
+    doc = _make_parsed_doc()
+    context = mod._build_candidate_context(
+        doc,
+        evidence_bullets=["one", "two", "three", "four"],
+    )
+
+    assert "one | two | three" in context
+    assert "four" not in context
+
+
 def _make_parsed_doc():
     from fletcher.resume.models import (
         EducationEntry,
@@ -65,7 +143,6 @@ def base_mocks(monkeypatch):
         MagicMock(return_value={"success": False, "title": ""}),
     )
     monkeypatch.setattr(mod, "classify_job_with_ollama", MagicMock(return_value={"success": False}))
-    monkeypatch.setattr(mod, "classify_keyword_routes_with_ollama", MagicMock(return_value={}))
     monkeypatch.setattr(
         mod,
         "filter_summary_keywords_with_ollama",
@@ -302,7 +379,35 @@ def test_rewrite_not_called_when_no_high_matches(base_mocks):
     base_mocks.rewrite_bullet_targeted.assert_not_called()
 
 
-def test_less_than_three_high_rag_matches_are_downgraded_to_summary(base_mocks):
+def test_one_high_rag_match_is_downgraded_to_summary(base_mocks):
+    from fletcher.ad_hoc_pipeline import run_ad_hoc_pipeline
+
+    base_mocks.partition_keywords.return_value = (
+        [],
+        ["Azure DevOps", "React"],
+        {"Azure DevOps": [], "React": []},
+    )
+    base_mocks.match_keywords_to_bullets.return_value = {
+        "bullet_matches": [
+            {"bullet_idx": 1, "keyword": "Azure DevOps", "score": 0.9},
+        ],
+        "summary_keywords": [],
+        "ignored_keywords": [],
+        "scores": [],
+        "rag_used": True,
+    }
+    base_mocks.generate_summary.return_value = {"summary": "Summary text.", "success": True}
+
+    run_ad_hoc_pipeline(title="Software Developer", description="job")
+
+    base_mocks.rewrite_bullet_targeted.assert_not_called()
+    assert base_mocks.generate_summary.call_args.args[2] == ["Azure DevOps"]
+    log_text = base_mocks.write_text.call_args.args[1]
+    assert "rag_high_downgraded" in log_text
+    assert "not_enough_high_matches_for_bullet_rewrite" in log_text
+
+
+def test_two_high_rag_matches_are_rewritten(base_mocks):
     from fletcher.ad_hoc_pipeline import run_ad_hoc_pipeline
 
     base_mocks.partition_keywords.return_value = (
@@ -324,11 +429,9 @@ def test_less_than_three_high_rag_matches_are_downgraded_to_summary(base_mocks):
 
     run_ad_hoc_pipeline(title="Software Developer", description="job")
 
-    base_mocks.rewrite_bullet_targeted.assert_not_called()
-    assert base_mocks.generate_summary.call_args.args[2] == ["Azure DevOps", "React"]
+    assert base_mocks.rewrite_bullet_targeted.call_count == 2
     log_text = base_mocks.write_text.call_args.args[1]
-    assert "rag_high_downgraded" in log_text
-    assert "not_enough_high_matches_for_bullet_rewrite" in log_text
+    assert "rag_high_downgraded" not in log_text
 
 
 def test_compile_called_once_when_no_summary(base_mocks):
@@ -560,7 +663,7 @@ def test_summary_keyword_fallback_caps_to_three_and_excludes_rejected_domains(ba
     assert len(summary_keywords) == 3
 
 
-def test_non_actionable_degree_keyword_not_rewritten(base_mocks):
+def test_degree_keyword_flows_to_rag_if_extracted(base_mocks):
     from fletcher.ad_hoc_pipeline import run_ad_hoc_pipeline
 
     base_mocks.partition_keywords.return_value = (
@@ -572,11 +675,11 @@ def test_non_actionable_degree_keyword_not_rewritten(base_mocks):
 
     run_ad_hoc_pipeline(title="Software Development Intern", description="job")
 
+    assert base_mocks.match_keywords_to_bullets.call_args.args[0] == ["Computer Engineering"]
     base_mocks.rewrite_bullet_targeted.assert_not_called()
-    base_mocks.match_keywords_to_bullets.assert_not_called()
 
 
-def test_keyword_policy_blocks_ignored_terms_before_rag(base_mocks):
+def test_missing_keywords_flow_directly_to_rag(base_mocks):
     from fletcher.ad_hoc_pipeline import run_ad_hoc_pipeline
 
     base_mocks.partition_keywords.return_value = (
@@ -584,14 +687,18 @@ def test_keyword_policy_blocks_ignored_terms_before_rag(base_mocks):
         ["Product Manager", "China-based team", "CEO", "MBB", "Mandarin"],
         {},
     )
-    base_mocks.match_keywords_to_bullets.reset_mock()
-
     run_ad_hoc_pipeline(title="Product Manager", description="job")
 
-    base_mocks.match_keywords_to_bullets.assert_not_called()
+    assert base_mocks.match_keywords_to_bullets.call_args.args[0] == [
+        "Product Manager",
+        "China-based team",
+        "CEO",
+        "MBB",
+        "Mandarin",
+    ]
 
 
-def test_keyword_policy_sends_only_rewrite_terms_to_rag(base_mocks):
+def test_all_extracted_missing_keywords_go_to_rag(base_mocks):
     from fletcher.ad_hoc_pipeline import run_ad_hoc_pipeline
 
     base_mocks.partition_keywords.return_value = (
@@ -603,31 +710,16 @@ def test_keyword_policy_sends_only_rewrite_terms_to_rag(base_mocks):
     run_ad_hoc_pipeline(title="Product Manager", description="job")
 
     rag_keywords = base_mocks.match_keywords_to_bullets.call_args.args[0]
-    assert rag_keywords == ["React", "A/B testing"]
+    assert rag_keywords == ["React", "Product Manager", "China-based team", "A/B testing"]
 
 
-def test_llm_policy_router_can_rescue_unknown_rewrite_term(base_mocks, monkeypatch):
-    import fletcher.ad_hoc_pipeline as mod
+def test_unknown_keyword_flows_to_rag_without_policy_router(base_mocks):
     from fletcher.ad_hoc_pipeline import run_ad_hoc_pipeline
 
     base_mocks.partition_keywords.return_value = (
         [],
         ["component libraries"],
         {},
-    )
-    monkeypatch.setattr(
-        mod,
-        "classify_keyword_routes_with_ollama",
-        MagicMock(
-            return_value={
-                "component libraries": {
-                    "route": "rewrite",
-                    "kind": "framework",
-                    "reason": "ui framework signal",
-                }
-            }
-        ),
-        raising=False,
     )
 
     run_ad_hoc_pipeline(title="Full-Stack Application Developer", description="job")
@@ -636,7 +728,7 @@ def test_llm_policy_router_can_rescue_unknown_rewrite_term(base_mocks, monkeypat
     assert rag_keywords == ["component libraries"]
 
 
-def test_policy_router_batches_non_blocked_missing_keywords(base_mocks):
+def test_pipeline_no_longer_logs_keyword_cleanup(base_mocks):
     from fletcher.ad_hoc_pipeline import run_ad_hoc_pipeline
 
     base_mocks.partition_keywords.return_value = (
@@ -654,36 +746,15 @@ def test_policy_router_batches_non_blocked_missing_keywords(base_mocks):
         ],
         {},
     )
-    base_mocks.classify_keyword_routes_with_ollama.side_effect = lambda **kwargs: {
-        keyword: {
-            "route": "summary",
-            "kind": "process",
-            "reason": "routed",
-        }
-        for keyword in kwargs["keywords"]
-    }
 
     run_ad_hoc_pipeline(title="Associate Project Manager", description="job")
 
-    routed_batches = [
-        call.kwargs["keywords"]
-        for call in base_mocks.classify_keyword_routes_with_ollama.call_args_list
-    ]
-    assert routed_batches == [
-        [
-            "project coordination",
-            "project metrics",
-            "requirements",
-            "dashboards",
-            "analysis",
-            "stakeholder communication",
-            "planning",
-            "process improvements",
-        ],
-    ]
+    log_text = base_mocks.write_text.call_args.args[1]
+    assert "keyword_cleanup" not in log_text
+    assert "keyword_policy_partition" not in log_text
 
 
-def test_policy_router_retries_failed_batch_as_singletons(base_mocks):
+def test_unknown_terms_flow_to_rag(base_mocks):
     from fletcher.ad_hoc_pipeline import run_ad_hoc_pipeline
 
     base_mocks.partition_keywords.return_value = (
@@ -691,26 +762,10 @@ def test_policy_router_retries_failed_batch_as_singletons(base_mocks):
         ["term one", "term two"],
         {},
     )
-    calls: list[list[str]] = []
-
-    def fake_route(**kwargs):
-        keywords = list(kwargs["keywords"])
-        calls.append(keywords)
-        if len(keywords) > 1:
-            return {}
-        return {
-            keywords[0]: {
-                "route": "summary",
-                "kind": "process",
-                "reason": "singleton retry",
-            }
-        }
-
-    base_mocks.classify_keyword_routes_with_ollama.side_effect = fake_route
 
     run_ad_hoc_pipeline(title="Data Analyst", description="job")
 
-    assert calls == [["term one", "term two"], ["term one"], ["term two"]]
+    assert base_mocks.match_keywords_to_bullets.call_args.args[0] == ["term one", "term two"]
 
 
 def test_llm_policy_router_none_does_not_crash(base_mocks):
@@ -721,49 +776,10 @@ def test_llm_policy_router_none_does_not_crash(base_mocks):
         ["project coordination"],
         {},
     )
-    base_mocks.classify_keyword_routes_with_ollama.return_value = None
 
     result = run_ad_hoc_pipeline(title="Associate Project Manager", description="job")
 
     assert result["compile_status"] == "ok"
-
-
-def test_unknown_keyword_without_llm_route_falls_back_to_summary(base_mocks):
-    from fletcher.ad_hoc_pipeline import _partition_missing_keywords_by_policy
-
-    rewrite, summary, skills_only, ignored, reasons = _partition_missing_keywords_by_policy(
-        ["ambiguous delivery signal"],
-        title="Product Manager",
-        doc=_make_parsed_doc(),
-        active_bullets=["Built Python service."],
-        classification={"role_family": "pm", "job_level": "mid"},
-        logger=None,
-    )
-
-    assert rewrite == []
-    assert summary == ["ambiguous delivery signal"]
-    assert skills_only == []
-    assert ignored == []
-    assert "llm_route_missing_summary_fallback" in reasons["ambiguous delivery signal"]
-
-
-def test_named_stack_terms_route_to_skills_without_policy_llm(base_mocks):
-    from fletcher.ad_hoc_pipeline import _partition_missing_keywords_by_policy
-
-    rewrite, summary, skills_only, ignored, reasons = _partition_missing_keywords_by_policy(
-        ["Docker", "Angular", "C++"],
-        title="Software Developer",
-        doc=_make_parsed_doc(),
-        active_bullets=["Built Python service."],
-        classification={"role_family": "software", "job_level": "mid"},
-    )
-
-    assert rewrite == ["Docker", "Angular", "C++"]
-    assert summary == []
-    assert skills_only == []
-    assert ignored == []
-    assert base_mocks.classify_keyword_routes_with_ollama.call_count == 0
-    assert reasons["Docker"] == "tool:rewrite:tool"
 
 
 def test_llm_job_fit_mismatch_aborts_without_fixed_role_terms(base_mocks):
@@ -899,35 +915,14 @@ def test_summary_validation_visible_evidence_override_for_false_negative(base_mo
     )
 
     assert validation["accepted"] is True
-    assert mode == "llm_visible_override"
-    assert any("visible_evidence_override:Next.js" in r for r in validation["reasons"])
+    assert mode == "deterministic_fast"
+    base_mocks.validate_summary_with_ollama.assert_not_called()
 
 
 def test_quality_terms_do_not_route_to_bullet_rewrite(base_mocks):
-    from fletcher.ad_hoc_pipeline import _partition_missing_keywords_by_policy
+    from fletcher.ad_hoc_pipeline import _keyword_rewrite_eligible
 
-    doc = _make_parsed_doc()
-    base_mocks.classify_keyword_routes_with_ollama.return_value = {
-        "communication": {
-            "route": "rewrite",
-            "kind": "quality",
-            "reason": "requested soft skill",
-        }
-    }
-
-    rewrite, summary, skills_only, ignored, reasons = _partition_missing_keywords_by_policy(
-        ["communication"],
-        title="Security Engineer",
-        doc=doc,
-        active_bullets=["Built Python service."],
-        classification={"role_family": "software", "job_level": "mid"},
-    )
-
-    assert rewrite == []
-    assert summary == ["communication"]
-    assert skills_only == []
-    assert ignored == []
-    assert "quality_rewrite_blocked" in reasons["communication"]
+    assert _keyword_rewrite_eligible("communication") is False
 
 
 def test_slash_stack_keywords_are_split_before_partition(base_mocks):
@@ -1010,6 +1005,39 @@ def test_combined_job_fit_keywords_skip_separate_keyword_extract(base_mocks):
     assert partition_keywords == result["keywords"]
 
 
+def test_combined_job_fit_ignores_legacy_keyword_routes(base_mocks):
+    from fletcher.ad_hoc_pipeline import run_ad_hoc_pipeline
+
+    base_mocks.analyze_job_fit_with_ollama.return_value = {
+        "success": True,
+        "title": "Backend Developer",
+        "role_family": "software",
+        "job_level": "mid",
+        "mismatch": False,
+        "mismatch_reason": "",
+        "jd_usable": True,
+        "jd_usable_reason": "Detailed role.",
+        "keywords": ["RabbitMQ"],
+        "keyword_routes": {
+            "RabbitMQ": {
+                "route": "skills_only",
+                "kind": "tool",
+                "reason": "named queueing tool",
+            }
+        },
+        "duration_ms": 12,
+    }
+    base_mocks.partition_keywords.return_value = ([], ["RabbitMQ"], {"RabbitMQ": []})
+    base_mocks.match_keywords_to_bullets.return_value = {
+        "bullet_matches": [],
+        "summary_keywords": [],
+        "ignored_keywords": [],
+        "scores": [{"keyword": "RabbitMQ", "tier": "mid", "score": 0.74}],
+        "rag_used": True,
+    }
+
+    run_ad_hoc_pipeline(title="", description="job")
+
 def test_keyword_present_partition_includes_skills(base_mocks):
     from fletcher.ad_hoc_pipeline import run_ad_hoc_pipeline
 
@@ -1058,13 +1086,6 @@ def test_skills_only_keywords_are_considered_for_skills(base_mocks):
         ["RabbitMQ"],
         {"RabbitMQ": []},
     )
-    base_mocks.classify_keyword_routes_with_ollama.return_value = {
-        "RabbitMQ": {
-            "route": "skills_only",
-            "kind": "tool",
-            "reason": "named queueing tool",
-        }
-    }
     base_mocks.match_keywords_to_bullets.return_value = {
         "bullet_matches": [],
         "summary_keywords": ["RabbitMQ"],
@@ -1110,13 +1131,6 @@ def test_summary_variant_reuses_skill_enrichment(base_mocks):
         ["RabbitMQ"],
         {"RabbitMQ": []},
     )
-    base_mocks.classify_keyword_routes_with_ollama.return_value = {
-        "RabbitMQ": {
-            "route": "skills_only",
-            "kind": "tool",
-            "reason": "named queueing tool",
-        }
-    }
     base_mocks.match_keywords_to_bullets.return_value = {
         "bullet_matches": [],
         "summary_keywords": ["RabbitMQ"],
@@ -1215,6 +1229,27 @@ def test_low_rag_named_keyword_does_not_flow_to_skills(base_mocks):
     run_ad_hoc_pipeline(title="Data Engineer", description="Snowflake job")
 
     base_mocks.bucket_skill_keywords_with_ollama.assert_not_called()
+
+
+def test_non_skill_medium_keywords_are_sent_to_skill_llm_for_rejection(base_mocks):
+    from fletcher.ad_hoc_pipeline import _add_keywords_to_skills
+
+    doc = _make_parsed_doc()
+    base_mocks.bucket_skill_keywords_with_ollama.return_value = {
+        "success": True,
+        "languages": [],
+        "frameworks": [],
+        "developer_tools": [],
+        "ignored": ["project management", "collaboration"],
+    }
+
+    added = _add_keywords_to_skills(doc, ["project management", "collaboration"])
+
+    assert added == []
+    assert base_mocks.bucket_skill_keywords_with_ollama.call_args.kwargs["keywords"] == [
+        "project management",
+        "collaboration",
+    ]
 
 
 def test_small_summary_keyword_set_uses_llm_filter(base_mocks):
@@ -1354,18 +1389,6 @@ def test_claimed_presence_subset_gets_retry(base_mocks):
         ["data exploration", "Automate data pipelines"],
         {"data exploration": [], "Automate data pipelines": []},
     )
-    base_mocks.classify_keyword_routes_with_ollama.return_value = {
-        "data exploration": {
-            "route": "rewrite",
-            "kind": "process",
-            "reason": "data workflow",
-        },
-        "Automate data pipelines": {
-            "route": "rewrite",
-            "kind": "process",
-            "reason": "automation workflow",
-        },
-    }
     base_mocks.match_keywords_to_bullets.return_value = {
         "bullet_matches": [
             {"bullet_idx": 1, "keyword": "data exploration", "score": 0.9},
@@ -1510,6 +1533,32 @@ def test_fit_to_page_drops_lowest_relevance_candidate(monkeypatch):
     assert cr["fits_one_page"] is True
     assert removed is None
     assert doc.experience[0].bullets == ["Built Python service.", "Maintained CI pipeline."]
+
+
+def test_bullet_order_boost_makes_first_bullet_harder_to_drop(monkeypatch):
+    import fletcher.ad_hoc_pipeline as mod
+
+    monkeypatch.setattr(mod, "score_bullets_for_drop", lambda _bullets, _keywords: [0.4, 0.4])
+    sources = [
+        {
+            "bullet_id": "first",
+            "original_local_idx": 0,
+            "original_bullet_count": 2,
+        },
+        {
+            "bullet_id": "last",
+            "original_local_idx": 1,
+            "original_bullet_count": 2,
+        },
+    ]
+
+    scores = mod._score_sources(["First bullet.", "Last bullet."], sources, ["Python"])
+    details = mod._score_details(["First bullet.", "Last bullet."], sources, ["Python"])
+
+    assert scores["first"] == 0.6
+    assert scores["last"] == 0.4
+    assert details["first"]["score_order_multiplier"] == 1.5
+    assert details["last"]["score_order_multiplier"] == 1.0
 
 
 def test_fit_to_page_removes_bucket_at_floor(monkeypatch):

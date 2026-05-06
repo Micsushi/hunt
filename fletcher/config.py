@@ -67,6 +67,16 @@ RAG_MID_THRESHOLD = float(os.getenv("HUNT_RAG_MID_THRESHOLD", "0.35"))  # keywor
 RAG_MAX_SUMMARY_KEYWORDS = int(os.getenv("HUNT_RAG_MAX_SUMMARY_KEYWORDS", "5"))
 RAG_ENABLED = os.getenv("HUNT_RAG_ENABLED", "1").strip().lower() in {"1", "true", "yes", "on"}
 
+# Bullet rewrite LLM calls can run concurrently when explicitly enabled.
+# Keep serial by default because local Ollama memory headroom varies by machine.
+BULLET_REWRITE_PARALLELISM = max(1, int(os.getenv("HUNT_BULLET_REWRITE_PARALLELISM", "1")))
+BULLET_REWRITE_MIN_AVAILABLE_MB = max(
+    0, int(os.getenv("HUNT_BULLET_REWRITE_MIN_AVAILABLE_MB", "4096"))
+)
+BULLET_REWRITE_MAX_MEMORY_PCT = max(
+    1, min(100, int(os.getenv("HUNT_BULLET_REWRITE_MAX_MEMORY_PCT", "85")))
+)
+
 # Optional debugging: write LLM prompt/response to attempt_dir.
 # On by default for resume generation so slow runs are inspectable.
 # Disable explicitly with: HUNT_RESUME_LOG_LLM_IO=0

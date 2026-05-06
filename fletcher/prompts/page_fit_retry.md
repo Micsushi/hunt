@@ -2,7 +2,7 @@
 
 ## Goal
 
-Reduce an already generated resume so the rendered PDF fits on one page without breaking truth or the original layout contract.
+Reduce an already generated resume so the rendered PDF fits on one page without breaking coherence or the original layout contract.
 
 ## Inputs
 
@@ -24,11 +24,10 @@ Reduce an already generated resume so the rendered PDF fits on one page without 
 2. shorten bullets
 3. drop less relevant bullets
 4. reduce or remove projects
-5. remove less relevant experience entries only when still truthful and coherent
+5. remove less relevant experience entries only when the remaining resume is still coherent
 
 ## Guardrails
 
 - do not cross the one-page boundary by hiding text or breaking layout integrity
 - do not remove all experience
 - do not change immutable facts
-

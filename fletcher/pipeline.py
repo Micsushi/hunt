@@ -29,6 +29,7 @@ from .llm.llm_enrich import (
     enrich_with_ollama_if_enabled,
     generate_summary,
     rewrite_bullet_targeted,
+    should_continue_after_low_rag_with_ollama,
 )
 from .llm.rag import match_keywords_to_bullets
 from .resume.compiler import compile_tex
@@ -504,6 +505,35 @@ def _run_pipeline(
         "ignored_keywords": kw_match.get("ignored_keywords", []),
         "rag_used": kw_match.get("rag_used", False),
     }
+    high_match_count = len(kw_match.get("bullet_matches", []))
+    if source_mode == "queue" and raw_kws and kw_match.get("rag_used") and high_match_count < 3:
+        continue_check = should_continue_after_low_rag_with_ollama(
+            title=title,
+            description=description,
+            keywords=raw_kws,
+            rag_scores=kw_match.get("scores", []),
+        )
+        trace["step2_rag"]["low_rag_continue_check"] = continue_check
+        if continue_check.get("success") and (
+            bool(continue_check.get("unsupported_target_role"))
+            or not bool(continue_check.get("continue_tailoring"))
+        ):
+            block_reason = (
+                str(continue_check.get("reason") or "").strip()
+                or "low RAG match suggests unsupported target role"
+            )
+            if not block_reason.startswith("unsupported_target_role"):
+                block_reason = f"unsupported_target_role: {block_reason}"
+            return _record_blocked_queue_resume(
+                title=title,
+                description=description,
+                company=company,
+                job_id=job_id,
+                db_path=db_path,
+                classification=classification,
+                reason=block_reason,
+                started_at=_t_pipeline_start,
+            )
 
     # Step 3: Targeted bullet rewrites - one LLM call per bullet that has high-score keywords.
     bullet_rewrites: list[dict] = []

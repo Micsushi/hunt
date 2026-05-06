@@ -6,5 +6,4 @@ This family should emphasize:
 - analytics
 - experimentation
 - data tooling
-- modeling and decision support where truthful
-
+- modeling and decision support where reviewed

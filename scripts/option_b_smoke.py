@@ -124,7 +124,6 @@ def summarize_pipeline_log(log_text: str) -> dict[str, Any]:
         "config",
         "classify_done",
         "keywords_extracted",
-        "keyword_policy_partition",
         "rag_complete",
         "bullet_rewrites_summary",
         "rewrite_validation_summary",
@@ -163,10 +162,6 @@ def build_quality_notes(log_text: str) -> dict[str, Any]:
         if any(
             marker in line
             for marker in (
-                "keyword_policy_partition",
-                "rewrite:",
-                "summary_only:",
-                "skills_only:",
                 "ignored:",
                 "summary_keyword_filter",
                 "bullet_drop",
@@ -174,7 +169,6 @@ def build_quality_notes(log_text: str) -> dict[str, Any]:
         )
     ]
     return {
-        "has_keyword_policy_partition": "keyword_policy_partition" in log_text,
         "rewrite_validation_failed_count": log_text.count("rewrite_validation_failed"),
         "claimed_keyword_missing_count": log_text.count("claimed_keyword_missing"),
         "bullet_drop_count": log_text.count("] bullet_drop"),

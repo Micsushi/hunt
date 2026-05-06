@@ -68,6 +68,8 @@ export function Filters({ query, onChange, statusCounts, isFetching }: Props) {
       status: 'all',
       q: '',
       tag: '',
+      category: '',
+      ats_type: '',
       sort: 'date_scraped',
       direction: 'desc',
       page: 1,

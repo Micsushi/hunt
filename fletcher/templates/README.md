@@ -9,6 +9,5 @@ Current templates:
 
 Recommended usage:
 - copy a template to a non-template file
-- fill it with truthful data only
+- fill it with reviewed candidate data only
 - keep it versioned in git if you want change history
-

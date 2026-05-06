@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import {
   type TailorResult,
   fetchC2Status,
@@ -15,14 +15,41 @@ import {
 } from '@/utils/notifications'
 import styles from './Fletcher.module.css'
 
+const FLETCHER_FORM_STORAGE_KEY = 'hunt.fletcher.optionBForm'
+const FLETCHER_JOB_ID_STORAGE_KEY = 'hunt.fletcher.optionAJobId'
+
+function readStoredText(key: string): string {
+  try {
+    return localStorage.getItem(key) ?? ''
+  } catch {
+    return ''
+  }
+}
+
+function readStoredOptionBForm(): { jobDetails: string; personalDetails: string } {
+  try {
+    const raw = localStorage.getItem(FLETCHER_FORM_STORAGE_KEY)
+    if (!raw) return { jobDetails: '', personalDetails: '' }
+    const parsed = JSON.parse(raw) as Partial<{ jobDetails: string; personalDetails: string }>
+    return {
+      jobDetails: typeof parsed.jobDetails === 'string' ? parsed.jobDetails : '',
+      personalDetails: typeof parsed.personalDetails === 'string' ? parsed.personalDetails : '',
+    }
+  } catch {
+    return { jobDetails: '', personalDetails: '' }
+  }
+}
+
 export function FletcherPage() {
-  const [jobId, setJobId] = useState('')
+  const [jobId, setJobId] = useState(() => readStoredText(FLETCHER_JOB_ID_STORAGE_KEY))
   const [jobIdResult, setJobIdResult] = useState<unknown>(null)
   const showToast = useUiStore((s) => s.showToast)
   const qc = useQueryClient()
 
-  const [jobDetails, setJobDetails] = useState('')
-  const [personalDetails, setPersonalDetails] = useState('')
+  const [jobDetails, setJobDetails] = useState(() => readStoredOptionBForm().jobDetails)
+  const [personalDetails, setPersonalDetails] = useState(
+    () => readStoredOptionBForm().personalDetails,
+  )
   const [resumeFile, setResumeFile] = useState<File | null>(null)
   const [tailorResult, setTailorResult] = useState<TailorResult | null>(null)
   const [isDragging, setIsDragging] = useState(false)
@@ -48,6 +75,25 @@ export function FletcherPage() {
   const resumeDoneNotificationsEnabled = settingEnabled(
     c2Settings?.settings.find((s) => s.key === RESUME_DONE_NOTIFICATION_KEY)?.value,
   )
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(FLETCHER_JOB_ID_STORAGE_KEY, jobId)
+    } catch {
+      // Ignore storage failures; the form should still work.
+    }
+  }, [jobId])
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(
+        FLETCHER_FORM_STORAGE_KEY,
+        JSON.stringify({ jobDetails, personalDetails }),
+      )
+    } catch {
+      // Ignore storage failures; the form should still work.
+    }
+  }, [jobDetails, personalDetails])
 
   const generate = useMutation({
     mutationFn: (id: number) => triggerC2Generate(id),

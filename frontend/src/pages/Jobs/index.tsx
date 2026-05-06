@@ -13,6 +13,7 @@ import type { JobsQuery, SortField, SortDirection, Job } from '@/types/job'
 
 const MOCK = import.meta.env.VITE_MOCK_BACKEND === 'true'
 const REVIEW_QUERY_STORAGE_KEY = 'hunt.jobs.reviewQuery'
+const JOBS_QUERY_STORAGE_KEY = 'hunt.jobs.query'
 
 function queryFromParams(p: URLSearchParams): JobsQuery {
   return {
@@ -42,6 +43,29 @@ function queryToParams(q: JobsQuery): URLSearchParams {
   if (q.limit) p.set('limit', String(q.limit))
   if (q.page) p.set('page', String(q.page))
   return p
+}
+
+function storedJobsQueryParams(): URLSearchParams | null {
+  try {
+    const stored = localStorage.getItem(JOBS_QUERY_STORAGE_KEY)
+    return stored ? new URLSearchParams(stored) : null
+  } catch {
+    return null
+  }
+}
+
+function saveJobsQueryParams(params: URLSearchParams) {
+  try {
+    localStorage.setItem(JOBS_QUERY_STORAGE_KEY, params.toString())
+  } catch {
+    // Ignore storage failures; URL state still works.
+  }
+}
+
+function initialJobsQuery(searchParams: URLSearchParams): JobsQuery {
+  if (searchParams.toString()) return queryFromParams(searchParams)
+  const stored = storedJobsQueryParams()
+  return queryFromParams(stored ?? searchParams)
 }
 
 function mockDownloadHref(format: 'csv' | 'json'): string {
@@ -140,7 +164,7 @@ function Th({
 export function JobsPage() {
   const navigate = useNavigate()
   const [searchParams, setSearchParams] = useSearchParams()
-  const [query, setQuery] = useState<JobsQuery>(() => queryFromParams(searchParams))
+  const [query, setQuery] = useState<JobsQuery>(() => initialJobsQuery(searchParams))
   const { data, isLoading, isFetching } = useJobs(query)
   const jobs = useMemo(() => data?.items ?? [], [data])
   const total = data?.total ?? 0
@@ -158,6 +182,7 @@ export function JobsPage() {
   useEffect(() => {
     const nextParams = queryToParams(query)
     setSearchParams(nextParams, { replace: true })
+    saveJobsQueryParams(nextParams)
     sessionStorage.setItem(REVIEW_QUERY_STORAGE_KEY, nextParams.toString())
     clearSelection()
     setFocusIdx(-1) // eslint-disable-line react-hooks/set-state-in-effect

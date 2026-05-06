@@ -2,7 +2,7 @@
 
 ## Goal
 
-Produce a structured, truthful rewrite plan for the resume while preserving the original layout contract.
+Produce a structured, coherent rewrite plan for the resume while preserving the original layout contract.
 
 ## Inputs
 
@@ -30,4 +30,3 @@ Produce a structured, truthful rewrite plan for the resume while preserving the 
 - do not change education facts
 - do not add a summary section
 - do not hallucinate tools, metrics, or achievements
-

@@ -5,8 +5,6 @@ from fletcher.llm.llm_enrich import (
     keyword_requires_direct_support,
     keyword_visible_in_text,
     repair_rewrite_redundancy,
-    validate_claimed_keywords_present,
-    validate_rewrite_grounding,
     validate_summary_grounding,
 )
 
@@ -28,94 +26,6 @@ def test_common_tech_terms_do_not_require_direct_support():
     for keyword in ["React", "backend services", "API", "Terraform"]:
         assert categorize_keyword(keyword) == "tech"
         assert not keyword_requires_direct_support(keyword)
-
-
-def test_rejects_datadog_threat_intelligence_claim():
-    result = validate_rewrite_grounding(
-        original=(
-            "Optimized bug detection speed by configuring Datadog metrics, monitors and "
-            "centralized logging with automated alerting and error traces."
-        ),
-        rewritten=(
-            "Optimized bug detection speed by configuring Datadog metrics, monitors, "
-            "and centralized logging, integrating real-time threat intelligence with "
-            "automated alerting and error traces."
-        ),
-        requested_keywords=["real-time threat intelligence"],
-    )
-
-    assert result["accepted"] is False
-    assert result["keywords_rejected"] == ["real-time threat intelligence"]
-
-
-def test_rejects_ai_platform_feedback_claim():
-    result = validate_rewrite_grounding(
-        original=(
-            "Enhanced user engagement by building a responsive UI using Next.js and "
-            "Framer Motion based on beta tester feedback."
-        ),
-        rewritten=(
-            "Enhanced user engagement by building a responsive UI using Next.js and "
-            "Framer Motion, leveraging an AI-driven platform for iterative improvements."
-        ),
-        requested_keywords=["AI-driven platform"],
-    )
-
-    assert result["accepted"] is False
-    assert result["keywords_rejected"] == ["AI-driven platform"]
-
-
-def test_rejects_data_pipeline_claim_from_generic_full_stack_architecture():
-    result = validate_rewrite_grounding(
-        original=(
-            "Optimized system scalability to support 10,000+ concurrent users by "
-            "engineering a full-stack architecture on Vercel and Supabase."
-        ),
-        rewritten=(
-            "Optimized system scalability to support 10,000+ concurrent users by "
-            "engineering a full-stack architecture, including data pipelines, on "
-            "Vercel and Supabase Cloud platforms."
-        ),
-        requested_keywords=["data pipelines", "Cloud platforms"],
-    )
-
-    assert result["accepted"] is False
-    assert result["keywords_rejected"] == ["data pipelines"]
-
-
-def test_accepts_machine_learning_brainwave_processing():
-    result = validate_rewrite_grounding(
-        original=(
-            "Achieved 85% accuracy in attention scoring by developing a Python backend "
-            "for real-time brainwave processing and data optimization."
-        ),
-        rewritten=(
-            "Achieved 85% accuracy in attention scoring by developing a Python backend "
-            "for real-time brainwave processing and data optimization using machine "
-            "learning techniques."
-        ),
-        requested_keywords=["machine learning"],
-    )
-
-    assert result["accepted"] is True
-    assert result["keywords_supported"] == ["machine learning"]
-
-
-def test_flags_redundant_backend_services_phrase():
-    result = validate_rewrite_grounding(
-        original=(
-            "Enhanced real-time subscriber targeting accuracy by developing Kotlin "
-            "microservices that integrated platforms via RESTful APIs."
-        ),
-        rewritten=(
-            "Enhanced real-time subscriber targeting accuracy by developing Kotlin "
-            "microservices and backend services that integrated platforms via RESTful APIs."
-        ),
-        requested_keywords=["backend services"],
-    )
-
-    assert result["accepted"] is False
-    assert result["keywords_rejected"] == ["backend services"]
 
 
 def test_llm_validator_rejects_unsupported_claim(monkeypatch):
@@ -175,55 +85,6 @@ def test_ambiguous_rewrite_fails_closed_when_validator_errors(monkeypatch):
     assert result["keywords_skipped"] == ["Infrastructure as Code"]
 
 
-def test_claimed_keyword_must_appear_in_rewrite():
-    result = validate_claimed_keywords_present(
-        rewritten="Enhanced user engagement with a Next.js UI.",
-        requested_keywords=["React"],
-        claimed_used=["React"],
-    )
-
-    assert result["accepted"] is False
-    assert result["missing"] == ["React"]
-
-
-def test_react_visible_as_substring_with_punctuation():
-    result = validate_claimed_keywords_present(
-        rewritten="Enhanced user engagement with React, Next.js, and Framer Motion.",
-        requested_keywords=["React"],
-        claimed_used=["React"],
-    )
-
-    assert result["accepted"] is True
-
-
-def test_action_keyword_accepts_inflected_visible_phrase():
-    result = validate_claimed_keywords_present(
-        rewritten=(
-            "Improved reliability by automating data pipelines and monitoring data "
-            "pipelines with Datadog alerts."
-        ),
-        requested_keywords=["Automate data pipelines", "Monitor data pipelines"],
-        claimed_used=["Automate data pipelines", "Monitor data pipelines"],
-    )
-
-    assert result["accepted"] is True
-    assert result["present"] == ["Automate data pipelines", "Monitor data pipelines"]
-
-
-def test_action_keyword_rejects_scattered_terms():
-    result = validate_claimed_keywords_present(
-        rewritten=(
-            "Configured Datadog metrics, monitors, and centralized logging while "
-            "automating data pipelines."
-        ),
-        requested_keywords=["Monitor data pipelines"],
-        claimed_used=["Monitor data pipelines"],
-    )
-
-    assert result["accepted"] is False
-    assert result["missing"] == ["Monitor data pipelines"]
-
-
 def test_keyword_visible_helper_accepts_data_pipeline_monitoring_noun_form():
     assert keyword_visible_in_text(
         "Monitor data pipelines",
@@ -250,7 +111,7 @@ def test_model_claimed_keyword_not_counted_if_not_in_validated_rewrite(monkeypat
     )
 
     assert result["success"] is False
-    assert result["error"] == "claimed_keyword_missing"
+    assert result["error"] == "rewrite_validation_failed"
     assert result["keywords_used"] == []
     assert result["keywords_skipped"] == ["React"]
 
@@ -329,71 +190,6 @@ def test_false_validator_acceptance_rejects_requested_keyword(monkeypatch):
     assert result["accepted"] is False
     assert result["keywords_supported"] == ["Computer Engineering"]
     assert result["keywords_rejected"] == ["Computer Engineering"]
-
-
-def test_allows_ci_cd_adjacent_tool_wording():
-    result = validate_rewrite_grounding(
-        original=(
-            "Accelerated deployment cycles by automating CI/CD via Bitbucket "
-            "pipelines and ECR/Kubernetes."
-        ),
-        rewritten=(
-            "Accelerated deployment cycles by automating Azure DevOps-style "
-            "CI/CD workflows using Bitbucket Pipelines and ECR/Kubernetes."
-        ),
-        requested_keywords=["Azure DevOps"],
-    )
-
-    assert result["accepted"] is True
-    assert result["keywords_supported"] == ["Azure DevOps"]
-
-
-def test_rejects_cross_vendor_cloud_resource_conflict():
-    result = validate_rewrite_grounding(
-        original=(
-            "Established S3 cost saving blueprint by implementing intelligent-tiering "
-            "and S3 life cycle policies in Terraform."
-        ),
-        rewritten=(
-            "Established Azure cloud cost saving blueprint by implementing "
-            "intelligent-tiering and S3 life cycle policies in Terraform."
-        ),
-        requested_keywords=["Azure"],
-    )
-
-    assert result["accepted"] is False
-    assert result["keywords_rejected"] == ["Azure"]
-
-
-def test_rejects_databricks_when_only_datadog_is_supported():
-    result = validate_rewrite_grounding(
-        original=(
-            "Optimized bug detection speed by configuring Datadog metrics, monitors "
-            "and centralized logging with automated alerting and error traces."
-        ),
-        rewritten=(
-            "Optimized bug detection speed by configuring Databricks metrics, "
-            "monitors and centralized logging with automated alerting and error traces."
-        ),
-        requested_keywords=["Databricks"],
-    )
-
-    assert result["accepted"] is False
-    assert result["keywords_rejected"] == ["Databricks"]
-
-
-def test_process_keyword_requires_process_evidence():
-    result = validate_rewrite_grounding(
-        original="Reduced evaluation time by developing Python automation scripts.",
-        rewritten=(
-            "Reduced evaluation time by developing Python automation scripts and "
-            "conducting code reviews."
-        ),
-        requested_keywords=["code reviews"],
-    )
-
-    assert result["accepted"] is False
-    assert result["keywords_rejected"] == ["code reviews"]
 
 
 def test_summary_grounding_leaves_domain_support_to_llm():
