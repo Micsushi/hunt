@@ -18,6 +18,10 @@ interface UiStore {
   selectAll: (ids: number[]) => void
   clearSelection: () => void
 
+  // Fletcher Option B form state that should survive route changes
+  fletcherResumeFile: File | null
+  setFletcherResumeFile: (file: File | null) => void
+
   // Loading state
   isNavigating: boolean
   setNavigating: (v: boolean) => void
@@ -44,6 +48,9 @@ export const useUiStore = create<UiStore>((set, get) => ({
     }),
   selectAll: (ids) => set({ selectedIds: new Set(ids) }),
   clearSelection: () => set({ selectedIds: new Set() }),
+
+  fletcherResumeFile: null,
+  setFletcherResumeFile: (file) => set({ fletcherResumeFile: file }),
 
   isNavigating: false,
   setNavigating: (v) => set({ isNavigating: v }),

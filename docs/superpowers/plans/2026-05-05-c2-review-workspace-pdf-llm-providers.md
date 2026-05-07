@@ -7,6 +7,31 @@ Architecture: Treat `ResumeDocument` JSON as the source of truth. The pipeline c
 
 Tech Stack: Python 3.12, FastAPI, Pydantic, httpx, pdfminer.six, pytest, React 18, TypeScript, CSS Modules, TanStack Query, jsdiff `diff`, optional Vitest for frontend reducer tests.
 
+## Implementation Status: 2026-05-07
+
+Implemented v1 slice:
+
+- DB-backed `fletcher_jobs` queue for Option B runs with enqueue, list, get, edit, move, cancel, log view/download, and bounded history listing.
+- Backend worker-owned processing so Option B runs continue while the browser navigates away or a second tab is opened.
+- Multipart `.tex`/text `.pdf` upload persistence under the C2 runtime root; queue workers resolve persisted uploads before falling back to default `main.tex`.
+- Queue-owned log files created when a worker claims a row, plus unique attempt directories so same-second runs cannot share logs or artifacts.
+- Option B `Fletcher history` UI backed by `fletcher_jobs`, including inferred title, start/finish time, workspace, PDF, TeX, and log actions.
+- Review packages built around original/generated/current `ResumeDocument` JSON for `no_summary` and `with_summary` versions.
+- Shared review workspace for Fletcher reviews, job-selected resumes, and attempt-level reviews.
+- PDF-like review document surface with inline green additions and red deletions, segment revert, block edit, whole-version revert, compile, PDF, TeX, and log actions.
+- Text-based PDF import via `pdfminer.six`; scanned/image-only PDFs remain unsupported.
+- Provider abstraction scaffolding for heuristic, Ollama, OpenAI, OpenRouter, Anthropic, and Gemini with Pydantic validation and fail-closed cloud gating.
+- Component-tabbed Settings UI for C2 provider/runtime, redacted API keys, notifications, prompt policy, numeric limits, and rewrite/summary guardrails.
+
+Current storage decisions:
+
+- Run queue and Option B history: `fletcher_jobs` in the shared Hunt DB.
+- Review packages: runtime artifacts resolved through opaque review IDs.
+- Editable C2 settings: `component_settings` with environment variables as fallback.
+- Cloud provider keys: redacted secret settings or environment variables; never logged or returned in API reads.
+
+Verification at latest doc sync: `.\.venv\Scripts\python.exe ci.py all` passed with 535 tests passing and 6 skipped.
+
 ## Non-Negotiables
 
 - No raw PDF editing. PDF is imported into structured resume data, then exported.
@@ -17,7 +42,7 @@ Tech Stack: Python 3.12, FastAPI, Pydantic, httpx, pdfminer.six, pytest, React 1
 - Design docs must be updated before UI implementation, and Fletcher-specific UI rules must not bloat the shared Hunt design doc.
 - Cloud LLM providers must be explicit. Never silently send resume content to cloud because Ollama failed.
 - Provider responses must be schema-validated after parsing, even if the provider claims structured output support.
-- API keys must not be stored in `component_settings` until encrypted secret storage exists. V1 uses environment variables.
+- API keys may be stored in `component_settings` only as redacted secret values or supplied through environment variables. API reads must not return secret values.
 
 ## Current Repo Facts
 

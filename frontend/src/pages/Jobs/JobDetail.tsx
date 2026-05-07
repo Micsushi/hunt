@@ -2,9 +2,16 @@ import { useMemo, useRef, useState } from 'react'
 import { useParams, useNavigate, useSearchParams } from 'react-router-dom'
 import { useJobDetail, useResumeAttempts, useAdjacentJobs } from '@/hooks/useJobDetail'
 import { useUiStore } from '@/store/ui'
-import { requeueJob, setJobPriority, patchJob, deleteJob } from '@/api/jobs'
 import {
-  triggerC2Generate,
+  deleteJob,
+  openAttemptResumeReview,
+  openJobResumeReview,
+  patchJob,
+  requeueJob,
+  setJobPriority,
+} from '@/api/jobs'
+import {
+  enqueueFletcherJob,
   fetchSystemStatus,
   verifyEasyApply,
   type EasyApplyVerifyResult,
@@ -219,6 +226,7 @@ export function JobDetailPage() {
   const qc = useQueryClient()
   const showToast = useUiStore((s) => s.showToast)
   const [generating, setGenerating] = useState(false)
+  const [openingReviewId, setOpeningReviewId] = useState<number | 'selected' | null>(null)
   const [verifying, setVerifying] = useState(false)
   const [verifyResult, setVerifyResult] = useState<EasyApplyVerifyResult | null>(null)
   const effectiveParams = useMemo(() => effectiveReviewParams(searchParams), [searchParams])
@@ -325,13 +333,37 @@ export function JobDetailPage() {
   async function handleGenerate() {
     setGenerating(true)
     try {
-      await triggerC2Generate(jobId)
-      showToast('Resume generation triggered')
-      setTimeout(() => qc.invalidateQueries({ queryKey: ['resume-attempts', jobId] }), 2000)
+      await enqueueFletcherJob({ jobId })
+      showToast('Resume run queued')
+      qc.invalidateQueries({ queryKey: ['fletcher-jobs'] })
     } catch (e) {
-      showToast(e instanceof Error ? e.message : 'Generate failed', 'error')
+      showToast(e instanceof Error ? e.message : 'Queue failed', 'error')
     } finally {
       setGenerating(false)
+    }
+  }
+
+  async function handleOpenSelectedResumeReview() {
+    setOpeningReviewId('selected')
+    try {
+      const review = await openJobResumeReview(jobId)
+      navigate(`/fletcher/reviews/${review.review_id}`)
+    } catch (e) {
+      showToast(e instanceof Error ? e.message : 'Could not open resume review', 'error')
+    } finally {
+      setOpeningReviewId(null)
+    }
+  }
+
+  async function handleOpenAttemptReview(attemptId: number) {
+    setOpeningReviewId(attemptId)
+    try {
+      const review = await openAttemptResumeReview(attemptId)
+      navigate(`/fletcher/reviews/${review.review_id}`)
+    } catch (e) {
+      showToast(e instanceof Error ? e.message : 'Could not open resume review', 'error')
+    } finally {
+      setOpeningReviewId(null)
     }
   }
 
@@ -627,7 +659,14 @@ export function JobDetailPage() {
             </div>
             <div className={styles.panelActions}>
               <button className={styles.actionBtn} onClick={handleGenerate} disabled={generating}>
-                {generating ? 'Generating...' : 'Generate resume'}
+                {generating ? 'Queueing...' : 'Queue resume run'}
+              </button>
+              <button
+                className={styles.actionBtn}
+                onClick={handleOpenSelectedResumeReview}
+                disabled={attempts.length === 0 || openingReviewId !== null}
+              >
+                {openingReviewId === 'selected' ? 'Opening...' : 'Resume workspace'}
               </button>
             </div>
             {attempts.length > 0 && (
@@ -690,6 +729,15 @@ export function JobDetailPage() {
                           >
                             PDF ↗
                           </a>
+                        )}
+                        {a.tex_path && (
+                          <button
+                            className={styles.artifactBtn}
+                            onClick={() => handleOpenAttemptReview(a.id)}
+                            disabled={openingReviewId !== null}
+                          >
+                            {openingReviewId === a.id ? 'Opening...' : 'Resume workspace'}
+                          </button>
                         )}
                         {a.tex_path && (
                           <a

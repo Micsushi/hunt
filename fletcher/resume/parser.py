@@ -26,6 +26,50 @@ ITEM_PATTERN = re.compile(r"\\item\s+(.*?)(?=(?:\n\s*\\item|\n\s*\\end\{itemize\
 SKILL_LINE_PATTERN = re.compile(r"\\textbf\{(?P<label>[^:]+):\}\s*(?P<values>.+)")
 
 
+def _find_matching_brace(text: str, open_idx: int) -> int:
+    depth = 0
+    for idx in range(open_idx, len(text)):
+        char = text[idx]
+        if char == "{" and (idx == 0 or text[idx - 1] != "\\"):
+            depth += 1
+        elif char == "}" and (idx == 0 or text[idx - 1] != "\\"):
+            depth -= 1
+            if depth == 0:
+                return idx
+    raise ValueError("Could not parse balanced LaTeX braces.")
+
+
+def _twocol_entries(section_text: str) -> list[dict[str, str | int]]:
+    entries: list[dict[str, str | int]] = []
+    begin = r"\begin{twocolentry}"
+    end = r"\end{twocolentry}"
+    cursor = 0
+    while True:
+        start = section_text.find(begin, cursor)
+        if start == -1:
+            break
+        arg_start = start + len(begin)
+        while arg_start < len(section_text) and section_text[arg_start].isspace():
+            arg_start += 1
+        if arg_start >= len(section_text) or section_text[arg_start] != "{":
+            raise ValueError("Could not parse twocolentry right-hand argument.")
+        arg_end = _find_matching_brace(section_text, arg_start)
+        end_start = section_text.find(end, arg_end + 1)
+        if end_start == -1:
+            raise ValueError("Could not find twocolentry end marker.")
+        end_idx = end_start + len(end)
+        entries.append(
+            {
+                "start": start,
+                "end": end_idx,
+                "right": section_text[arg_start + 1 : arg_end],
+                "left": section_text[arg_end + 1 : end_start],
+            }
+        )
+        cursor = end_idx
+    return entries
+
+
 def _slugify(value: str) -> str:
     slug = re.sub(r"\\href\{.*?\}\{(.*?)\}", r"\1", value)
     slug = re.sub(r"\\textbf\{(.*?)\}", r"\1", slug)
@@ -77,15 +121,16 @@ def _extract_bullets(block: str) -> list[str]:
 
 
 def _parse_education(section_text: str) -> EducationSection:
-    twocol = TWOCOL_PATTERN.search(section_text)
-    if not twocol:
+    entries = _twocol_entries(section_text)
+    if not entries:
         raise ValueError("Could not parse education entry.")
-    bullets = _extract_bullets(section_text[twocol.end() :])
-    left = " ".join(line.strip() for line in twocol.group("left").splitlines() if line.strip())
+    twocol = entries[0]
+    bullets = _extract_bullets(section_text[int(twocol["end"]) :])
+    left = " ".join(line.strip() for line in str(twocol["left"]).splitlines() if line.strip())
     entry = EducationEntry(
         entry_id="edu_primary",
         institution_and_degree=left,
-        date_text=twocol.group("right").strip(),
+        date_text=str(twocol["right"]).strip(),
     )
     return EducationSection(entry=entry, bullets=bullets)
 
@@ -94,13 +139,13 @@ def _parse_repeated_entries(
     section_text: str, kind: str
 ) -> list[ExperienceEntry] | list[ProjectEntry]:
     entries = []
-    matches = list(TWOCOL_PATTERN.finditer(section_text))
+    matches = _twocol_entries(section_text)
     for idx, match in enumerate(matches):
-        start = match.end()
-        end = matches[idx + 1].start() if idx + 1 < len(matches) else len(section_text)
+        start = int(match["end"])
+        end = int(matches[idx + 1]["start"]) if idx + 1 < len(matches) else len(section_text)
         bullets = _extract_bullets(section_text[start:end])
-        left = " ".join(line.strip() for line in match.group("left").splitlines() if line.strip())
-        right = match.group("right").strip()
+        left = " ".join(line.strip() for line in str(match["left"]).splitlines() if line.strip())
+        right = str(match["right"]).strip()
         entry_id = f"{'exp' if kind == 'experience' else 'proj'}_{_slugify(left)}"
         if kind == "experience":
             entries.append(

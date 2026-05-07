@@ -4,7 +4,6 @@ from fletcher.llm.llm_enrich import (
     categorize_keyword,
     keyword_requires_direct_support,
     keyword_visible_in_text,
-    repair_rewrite_redundancy,
     validate_summary_grounding,
 )
 
@@ -116,7 +115,7 @@ def test_model_claimed_keyword_not_counted_if_not_in_validated_rewrite(monkeypat
     assert result["keywords_skipped"] == ["React"]
 
 
-def test_mixed_validation_failure_preserves_safe_keyword_for_retry(monkeypatch):
+def test_mixed_validation_failure_sends_all_attempted_keywords_to_summary(monkeypatch):
     import fletcher.llm.llm_enrich as mod
 
     monkeypatch.setattr(mod.config, "DEFAULT_MODEL_BACKEND", "ollama")
@@ -141,7 +140,7 @@ def test_mixed_validation_failure_preserves_safe_keyword_for_retry(monkeypatch):
 
     assert result["success"] is False
     assert result["keywords_used"] == []
-    assert result["keywords_skipped"] == ["AI-driven platform"]
+    assert result["keywords_skipped"] == ["React", "AI-driven platform"]
 
 
 def test_validator_ignores_supported_keywords_that_were_not_requested(monkeypatch):
@@ -220,12 +219,3 @@ def test_summary_grounding_no_longer_runs_banned_tone_d_check():
     )
 
     assert result == {"accepted": True, "reasons": []}
-
-
-def test_auto_repairs_microservices_backend_services_redundancy():
-    repaired = repair_rewrite_redundancy(
-        "Enhanced targeting by developing Kotlin microservices and backend services that integrated APIs."
-    )
-
-    assert "microservices and backend services" not in repaired
-    assert "backend Kotlin microservices" in repaired

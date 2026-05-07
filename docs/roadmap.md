@@ -8,17 +8,17 @@ Automated job application pipeline. Discover -> Enrich -> Tailor resume -> Autof
 |---|---|---|---|---|
 | C0 | Frontend | `frontend/` + `backend/` | 0.2 | Mostly done. React SPA, FastAPI gateway, settings/accounts, logs, jobs, and C2/C3/C4 surfaces exist. Remaining work is smoke validation, polish, and a few UX gaps. |
 | C1 | Hunter | `hunter/` | 0.1 | Roughly 80% done. Discovery/enrichment, service API, SQLite/Postgres compat, account/auth handling, settings UI, alerts, and tests exist. Remaining gap is repeated production confidence plus live Easy Apply proof. |
-| C2 | Fletcher | `fletcher/` | 0.1 -> 1.0 | Roughly 30-35% working. Core service, ad-hoc pipeline, review/diff planning, and Option B smoke tooling exist, but the full UI workflow, real profile grounding, and stronger LLM tailoring are still incomplete. |
+| C2 | Fletcher | `fletcher/` | 0.1 -> 1.0 | Usable Option B review workflow exists. DB-backed background queue/history, upload persistence, PDF import/export, shared review workspace, manual edits, segment revert, compile, logs, provider/settings scaffolding, and tests are in place. Remaining gaps are real C1 -> C2 server proof, generation quality, and deeper provider migration. |
 | C3 | Executioner | `executioner/` | 0.0 | Not meaningfully tested end to end yet. Local extension code and an initial Workday path exist, but live polling, fill, and postback validation are still pending. |
 | C4 | Coordinator | `coordinator/` | 0.1 scaffold | DB-backed readiness/state-machine code, service API, CLI, worker lease/heartbeat/result protocol, stale recovery, C3 bridge tests, submit approval, OpenClaw/Hermes launcher, and Postgres smoke pieces exist. It is not proven as real automation until a browser worker completes a live fill. |
 
 ## Current Operator Snapshot
 
-This is your current confidence view (subjective, as of 2026-05-05):
+This is your current confidence view (subjective, as of 2026-05-07):
 
 - C0: mostly done
 - C1: about 80% done
-- C2: about 30-35% working
+- C2: usable Option B workflow, quality/server proof still pending
 - C3: not tested end to end yet
 - C4: API/state-machine scaffold plus worker lease/agent launcher exists; live browser/agent execution not proven yet
 
@@ -26,7 +26,7 @@ This is your current confidence view (subjective, as of 2026-05-05):
 
 1. Lock in C0 with local smoke coverage, doc accuracy, and UI/runtime polish
 2. Validate C1 on server2: scrape, enrich, artifacts, queue drain, steady scheduler
-3. Move C2 from partial pipeline to usable operator flow: webpage workflow, real profile, better LLM support
+3. Validate C2 usable operator flow on real jobs: C1 handoff, profile grounding, and better LLM/provider quality
 4. Harden C4 as the durable state machine for long-running agents on Windows/WSL2/Linux
 5. Prove C3 basics end to end before expanding ATS support
 6. Pilot OpenClaw and Hermes as optional C4 worker runtimes through the C4 one-shot launcher
@@ -57,7 +57,7 @@ Current gateway routes live under `/api/gateway/*`. Older planned `/api/c1/*`, `
 |---|---|
 | C0 + DB only | Browse jobs, approve/reject, view resumes |
 | + C1 | Jobs populate DB through CLI/service; this is the most real path after C0, but still needs production validation and auth/runtime polish |
-| + C2 | Service can generate, but the full operator workflow is still incomplete |
+| + C2 | Option B queue/history and review workspace work through C0; service generation exists, but production C1 -> C2 proof and output quality still need validation |
 | + C3 (local) | Extension code exists, but live pipeline polling/postback is still unproven |
 | + C4 | DB-backed orchestration, approvals, worker leases, C3 bridge, OpenClaw/Hermes launcher, CLI, and API tests exist. This is still not a finished automation layer until a real browser worker completes a run |
 

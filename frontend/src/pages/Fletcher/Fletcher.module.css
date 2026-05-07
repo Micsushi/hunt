@@ -215,6 +215,9 @@
 }
 
 .btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   height: 36px;
   padding: 0 16px;
   border-radius: var(--radius-sm);
@@ -228,9 +231,11 @@
     background var(--ease),
     border-color var(--ease);
   white-space: nowrap;
+  text-decoration: none;
 }
 .btn:hover {
   background: var(--panel-hover);
+  text-decoration: none;
 }
 .btn:disabled {
   opacity: 0.5;
@@ -243,6 +248,13 @@
 }
 .btnPrimary:hover:not(:disabled) {
   opacity: 0.88;
+}
+.btnDanger {
+  border-color: var(--danger);
+  color: var(--danger);
+}
+.btnDanger:hover:not(:disabled) {
+  background: var(--danger-soft);
 }
 
 .pre {
@@ -309,9 +321,343 @@
   word-break: break-all;
 }
 
+.activeRunNotice {
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--panel-strong);
+  color: var(--muted);
+  font-size: 0.82rem;
+  line-height: 1.45;
+  padding: 10px 12px;
+}
+
 .meta {
   font-size: 0.85rem;
   color: var(--muted);
+}
+
+.queuePanel {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  padding: 18px;
+  box-shadow: var(--shadow);
+}
+
+.queueHeader {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.queueList {
+  display: grid;
+  gap: 10px;
+}
+
+.queueCard {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(360px, 36%);
+  align-items: center;
+  gap: 12px;
+  height: 112px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--panel-strong);
+  overflow: hidden;
+}
+
+.queueCardSelectable {
+  grid-template-columns: 28px minmax(0, 1fr) minmax(360px, 34%);
+}
+
+.historySelect {
+  display: inline-flex;
+  align-items: center;
+  height: 36px;
+  padding-top: 4px;
+}
+
+.queueTitleButton {
+  display: block;
+  width: 100%;
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  font-weight: 700;
+  font-size: 0.98rem;
+  line-height: 1.2;
+  color: var(--ink);
+  text-align: left;
+  cursor: pointer;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.queueTitleButton:hover,
+.queueTitleButton:focus-visible {
+  color: var(--accent);
+  text-decoration: underline;
+}
+
+.queueCopy {
+  display: grid;
+  gap: 5px;
+  min-width: 0;
+  flex: 1 1 auto;
+  overflow: hidden;
+}
+
+.historyMetaGrid {
+  display: flex;
+  gap: 12px;
+  flex-wrap: nowrap;
+  color: var(--muted);
+  font-size: 0.8rem;
+  overflow: hidden;
+}
+
+.historyMetaGrid span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.progressRow {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  max-width: 360px;
+}
+
+.progressTrack {
+  position: relative;
+  flex: 1 1 220px;
+  height: 8px;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-pill);
+  background: var(--panel);
+}
+
+.progressFill {
+  height: 100%;
+  border-radius: inherit;
+  background: var(--accent);
+  transition: width 220ms linear;
+  will-change: width;
+}
+
+.progressText {
+  min-width: 40px;
+  color: var(--ink);
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
+  text-align: right;
+}
+
+.queueActions {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(96px, 1fr));
+  gap: 8px;
+  margin-left: auto;
+  width: 100%;
+  min-width: 0;
+  align-items: center;
+  justify-content: stretch;
+}
+
+.queueActions .btn {
+  justify-content: center;
+  width: 100%;
+  min-height: 34px;
+  padding-inline: 10px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.batchToolbar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-bottom: 12px;
+}
+
+.historyFilterBar {
+  display: flex;
+  align-items: flex-end;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-bottom: 12px;
+}
+
+.historySearchField {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: min(420px, 100%);
+  color: var(--muted);
+  font-size: 0.78rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.batchOptions {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  border-top: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
+  padding: 12px 0;
+  margin-bottom: 12px;
+}
+
+.batchOptionGrid {
+  display: flex;
+  gap: 10px 16px;
+  flex-wrap: wrap;
+}
+
+.checkRow {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  color: var(--ink);
+  font-size: 0.84rem;
+  font-weight: 600;
+  text-transform: none;
+  letter-spacing: 0;
+}
+
+.checkRow input,
+.historySelect input {
+  width: 16px;
+  height: 16px;
+  accent-color: var(--accent);
+}
+
+.queueErrorPreview {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  word-break: normal;
+}
+
+.modalBackdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: rgba(1, 16, 10, 0.72);
+}
+
+.detailModal {
+  width: min(980px, 100%);
+  max-height: min(820px, calc(100vh - 48px));
+  overflow: auto;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: var(--panel);
+  box-shadow: var(--shadow);
+  padding: 18px;
+}
+
+.detailHeader {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 14px;
+  margin-bottom: 14px;
+}
+
+.detailHeaderCopy {
+  min-width: 0;
+}
+
+.detailTitle {
+  margin: 8px 0 0;
+  color: var(--ink);
+  font-size: 1.3rem;
+  line-height: 1.25;
+}
+
+.detailActionBar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 12px 0;
+  border-top: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
+}
+
+.detailMetaGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 10px;
+  margin: 14px 0;
+}
+
+.detailMetaGrid div {
+  min-width: 0;
+}
+
+.detailMetaGrid span {
+  display: block;
+  margin-bottom: 4px;
+  color: var(--muted);
+  font-size: 0.76rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.detailMetaGrid strong {
+  display: block;
+  min-width: 0;
+  overflow-wrap: anywhere;
+  color: var(--ink);
+  font-size: 0.9rem;
+}
+
+.detailBlock {
+  display: grid;
+  gap: 8px;
+  margin-top: 14px;
+}
+
+.detailBlock h3 {
+  margin: 0;
+  color: var(--ink);
+  font-size: 0.94rem;
+}
+
+.detailBlock pre {
+  max-height: 240px;
+  margin: 0;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--panel-strong);
+  color: var(--muted);
+  padding: 10px;
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
+  line-height: 1.45;
 }
 
 /* Responsive: stack on narrow screens */
@@ -322,5 +668,33 @@
   .orDivider {
     padding: 8px 0;
     justify-content: flex-start;
+  }
+  .queueCard {
+    grid-template-columns: 1fr;
+    align-items: stretch;
+  }
+  .queueCardSelectable {
+    grid-template-columns: 28px minmax(0, 1fr);
+  }
+  .queueCardSelectable .queueActions {
+    grid-column: 1 / -1;
+  }
+  .queueActions {
+    grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+  }
+  .batchOptions {
+    flex-direction: column;
+  }
+  .modalBackdrop {
+    padding: 12px;
+  }
+  .detailHeader {
+    flex-direction: column;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .progressFill {
+    transition: none;
   }
 }

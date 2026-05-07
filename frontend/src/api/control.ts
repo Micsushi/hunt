@@ -1,4 +1,10 @@
-import { get, patch, post } from './client'
+import { del, get, patch, post } from './client'
+import type {
+  FletcherQueueItem,
+  ResumeDocument,
+  ResumeReviewPackage,
+  ReviewVersionName,
+} from '@/pages/Fletcher/review/types'
 
 const MOCK = import.meta.env.VITE_MOCK_BACKEND === 'true'
 
@@ -120,6 +126,8 @@ export function triggerC2Generate(jobId: number): Promise<unknown> {
 }
 
 export type TailorResult = {
+  reviewId: string | null
+  review: ResumeReviewPackage | null
   noSummary: Blob | null
   withSummary: Blob | null
   log: Blob | null
@@ -150,6 +158,8 @@ export function tailorResume(params: {
     ].join('\n')
     const blob = new Blob([text], { type: 'text/plain;charset=utf-8' })
     return Promise.resolve({
+      reviewId: null,
+      review: null,
       noSummary: blob,
       withSummary: null,
       log: null,
@@ -171,6 +181,8 @@ export function tailorResume(params: {
       }
       const json = await r.json()
       return {
+        reviewId: json.review_id ?? null,
+        review: json.review ?? null,
         noSummary: json.no_summary ? _b64ToBlob(json.no_summary) : null,
         withSummary: json.with_summary ? _b64ToBlob(json.with_summary) : null,
         log: json.log ? new Blob([atob(json.log)], { type: 'text/plain' }) : null,
@@ -179,6 +191,135 @@ export function tailorResume(params: {
         error: json.error ?? null,
       }
     },
+  )
+}
+
+export function enqueueFletcherJob(payload: {
+  jobId?: number
+  title?: string
+  company?: string
+  description?: string
+  resume?: File | null
+  options?: Record<string, unknown>
+}): Promise<FletcherQueueItem> {
+  if (payload.resume) {
+    const form = new FormData()
+    form.append('description', payload.description || '')
+    if (payload.jobId) form.append('job_id', String(payload.jobId))
+    if (payload.title) form.append('title', payload.title)
+    if (payload.company) form.append('company', payload.company)
+    if (payload.options) form.append('options', JSON.stringify(payload.options))
+    form.append('resume', payload.resume)
+    return fetch('/api/fletcher/tailor/jobs', {
+      method: 'POST',
+      credentials: 'include',
+      body: form,
+    }).then(async (r) => {
+      if (!r.ok) {
+        const text = await r.text().catch(() => r.statusText)
+        throw new Error(text || r.statusText)
+      }
+      return r.json()
+    })
+  }
+  return post<FletcherQueueItem>('/api/fletcher/tailor/jobs', {
+    ...payload,
+    job_id: payload.jobId,
+  })
+}
+
+export function fetchFletcherJobs(limit = 100): Promise<{ jobs: FletcherQueueItem[] }> {
+  return get<{ jobs: FletcherQueueItem[] }>(
+    `/api/fletcher/tailor/jobs?limit=${encodeURIComponent(String(limit))}`,
+  )
+}
+
+export type FletcherBatchArtifact =
+  | 'log'
+  | 'no_summary_pdf'
+  | 'with_summary_pdf'
+  | 'no_summary_tex'
+  | 'with_summary_tex'
+
+export function batchDownloadFletcherJobs(payload: {
+  queueItemIds: string[]
+  artifacts: FletcherBatchArtifact[]
+}): Promise<Blob> {
+  return fetch('/api/fletcher/tailor/jobs/batch-download', {
+    method: 'POST',
+    credentials: 'include',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      queue_item_ids: payload.queueItemIds,
+      artifacts: payload.artifacts,
+    }),
+  }).then(async (r) => {
+    if (!r.ok) {
+      const text = await r.text().catch(() => r.statusText)
+      throw new Error(text || r.statusText)
+    }
+    return r.blob()
+  })
+}
+
+export function moveFletcherJob(
+  queueItemId: string,
+  direction: 'up' | 'down',
+): Promise<FletcherQueueItem> {
+  return post<FletcherQueueItem>(
+    `/api/fletcher/tailor/jobs/${encodeURIComponent(queueItemId)}/move`,
+    { direction },
+  )
+}
+
+export function cancelFletcherJob(queueItemId: string): Promise<FletcherQueueItem> {
+  return post<FletcherQueueItem>(
+    `/api/fletcher/tailor/jobs/${encodeURIComponent(queueItemId)}/cancel`,
+    {},
+  )
+}
+
+export function deleteFletcherJob(
+  queueItemId: string,
+): Promise<{ status: string; deleted: number }> {
+  return del<{ status: string; deleted: number }>(
+    `/api/fletcher/tailor/jobs/${encodeURIComponent(queueItemId)}`,
+  )
+}
+
+export function fetchFletcherReview(reviewId: string): Promise<ResumeReviewPackage> {
+  return get<ResumeReviewPackage>(`/api/fletcher/reviews/${encodeURIComponent(reviewId)}`)
+}
+
+export function saveFletcherReviewVersion(
+  reviewId: string,
+  version: ReviewVersionName,
+  doc: ResumeDocument,
+): Promise<ResumeReviewPackage> {
+  return patch<ResumeReviewPackage>(
+    `/api/fletcher/reviews/${encodeURIComponent(reviewId)}/versions/${version}`,
+    doc,
+  )
+}
+
+export function compileFletcherReviewVersion(
+  reviewId: string,
+  version: ReviewVersionName,
+): Promise<ResumeReviewPackage> {
+  return post<ResumeReviewPackage>(
+    `/api/fletcher/reviews/${encodeURIComponent(reviewId)}/versions/${version}/compile`,
+    {},
+  )
+}
+
+export function revertFletcherReviewVersion(
+  reviewId: string,
+  version: ReviewVersionName,
+  target: 'original' | 'generated',
+): Promise<ResumeReviewPackage> {
+  return post<ResumeReviewPackage>(
+    `/api/fletcher/reviews/${encodeURIComponent(reviewId)}/versions/${version}/revert`,
+    { target },
   )
 }
 

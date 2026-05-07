@@ -195,6 +195,22 @@ CREATE TABLE IF NOT EXISTS resume_versions (
     is_selected_for_c3      BOOLEAN DEFAULT FALSE
 );
 
+CREATE TABLE IF NOT EXISTS fletcher_jobs (
+    queue_item_id       TEXT PRIMARY KEY,
+    status              TEXT NOT NULL,
+    position            INTEGER NOT NULL,
+    revision            INTEGER NOT NULL DEFAULT 0,
+    created_at          TEXT DEFAULT to_char(CURRENT_TIMESTAMP, 'YYYY-MM-DD HH24:MI:SS'),
+    started_at          TEXT,
+    finished_at         TEXT,
+    input_json          TEXT NOT NULL,
+    progress_json       TEXT DEFAULT '{}',
+    result_json         TEXT DEFAULT '{}',
+    error               TEXT,
+    log_path            TEXT,
+    review_id           TEXT
+);
+
 -- -----------------------------------------------------------------------
 -- Indexes
 -- -----------------------------------------------------------------------
@@ -203,6 +219,8 @@ CREATE INDEX IF NOT EXISTS idx_jobs_status     ON jobs(status);
 CREATE INDEX IF NOT EXISTS idx_jobs_source     ON jobs(source);
 CREATE INDEX IF NOT EXISTS idx_jobs_enrichment ON jobs(enrichment_status);
 CREATE INDEX IF NOT EXISTS idx_sessions_expires ON review_sessions(expires_at);
+CREATE INDEX IF NOT EXISTS idx_fletcher_jobs_status_position
+    ON fletcher_jobs(status, position);
 
 CREATE INDEX IF NOT EXISTS idx_orchestration_runs_job_status
     ON orchestration_runs(job_id, status, started_at DESC);

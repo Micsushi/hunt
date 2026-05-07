@@ -1,7 +1,11 @@
 export const RESUME_DONE_NOTIFICATION_KEY = 'resume_done_windows_notification_enabled'
 
 export function settingEnabled(value: string | null | undefined): boolean {
-  return String(value ?? '').trim().toLowerCase() === 'true'
+  return (
+    String(value ?? '')
+      .trim()
+      .toLowerCase() === 'true'
+  )
 }
 
 export function browserNotificationsSupported(): boolean {

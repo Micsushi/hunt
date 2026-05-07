@@ -7,6 +7,8 @@ import type { TailorResult } from './control'
 
 // TailorResult must have all fields
 const _full: TailorResult = {
+  reviewId: 'review',
+  review: null,
   noSummary: new Blob(),
   withSummary: new Blob(),
   log: new Blob(),
@@ -17,6 +19,8 @@ const _full: TailorResult = {
 
 // All fields must accept null
 const _nulls: TailorResult = {
+  reviewId: null,
+  review: null,
   noSummary: null,
   withSummary: null,
   log: null,
@@ -27,6 +31,8 @@ const _nulls: TailorResult = {
 
 // Exhaustiveness: adding an unexpected field must be a type error
 const _extra: TailorResult = {
+  reviewId: null,
+  review: null,
   noSummary: null,
   withSummary: null,
   log: null,

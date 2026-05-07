@@ -58,8 +58,13 @@ async def _proxy_patch(url: str, body: dict | None = None) -> JSONResponse:
     return _json_response(resp, url)
 
 
-async def _proxy_post(url: str, body: dict | None = None) -> JSONResponse:
-    async with httpx.AsyncClient(timeout=30) as client:
+async def _proxy_post(
+    url: str,
+    body: dict | None = None,
+    *,
+    timeout: float = 30,
+) -> JSONResponse:
+    async with httpx.AsyncClient(timeout=timeout) as client:
         try:
             resp = await client.post(url, json=body or {}, headers=_service_headers())
         except httpx.HTTPError:
@@ -173,7 +178,7 @@ async def c2_generate(request: Request, _auth: str = Depends(_require_auth)):
     from hunter.config import HUNT_FLETCHER_URL
 
     body = await request.json()
-    return await _proxy_post(f"{HUNT_FLETCHER_URL}/generate", body)
+    return await _proxy_post(f"{HUNT_FLETCHER_URL}/generate", body, timeout=900)
 
 
 @router.post("/c2/generate-once")

@@ -4,11 +4,11 @@ Work in progress and polish backlog. See `docs/roadmap.md` for the status of eac
 
 ## Current State Snapshot
 
-This is your current confidence snapshot (subjective, as of 2026-05-05). The backlog is longer than this confidence view:
+This is your current confidence snapshot (subjective, as of 2026-05-07). The backlog is longer than this confidence view:
 
 - C0: mostly done
 - C1: about 80% done
-- C2: about 30-35% working
+- C2: usable Option B workflow exists; generation quality and server proof remain
 - C3: not tested end to end yet
 - C4: API/state-machine scaffold exists; live browser/agent execution not proven yet
 
@@ -54,24 +54,26 @@ C1 scrapes LinkedIn for job listings and enriches them with full job description
 C2 takes a job description and a base resume, then generates a tailored resume using an LLM. Runs as a service (Ollama-backed) and through the C0 web UI.
 
 - [ ] Before changing Fletcher review UI, PDF import/export, or LLM provider support, check `docs/superpowers/plans/2026-05-05-c2-review-workspace-pdf-llm-providers.md`
-- [ ] Confirm the web UI end-to-end: C0 page -> C0 gateway -> C2 service -> tailored resume back in the browser
-- [ ] Accept resume input as PDF, LaTeX source, or plain text (currently limited)
+- [x] Confirm the Option B web UI path end-to-end at the C0 API/UI level: C0 page -> queue endpoint -> background worker -> review workspace/history
+- [x] Accept resume input as PDF or LaTeX source for Option B. Text-based PDFs import through `pdfminer.six`; scanned PDFs remain unsupported
 - [ ] Accept a job description or a list of keywords as the tailoring target
 - [ ] Accept a candidate profile separately, or derive it from the resume if none is provided
-- [ ] Option to add a summary section when the base resume doesn't have one
-- [ ] Show the generated summary for review before inserting it into the resume
-- [ ] Show a full resume preview before the user accepts the generated output
-- [ ] Nice to have: show a diff between the original and tailored resume
-- [ ] Nice to have: undo changes to individual resume sections
+- [x] Option to add a summary section when the base resume doesn't have one through the `with_summary` review version
+- [x] Show the generated summary for review before accepting it through the `with_summary` review workspace
+- [x] Show a full resume preview before the user accepts the generated output
+- [x] Nice to have: show a diff between the original and tailored resume
+- [x] Nice to have: undo changes to individual resume sections through segment/block revert and whole-version reset
 - [ ] Nice to have: regenerate individual sections independently instead of the whole resume at once
 - [ ] Auto-run: automatically generate tailored resumes for jobs C1 finds and queues, without manual triggers
 - [ ] Fill in `fletcher/candidate_profile.md` with real work history and profile info - this is the grounding context the LLM uses for all generation
 - [ ] Wire actual LLM tailoring for bullet points and section rewrites (currently uses basic prompts)
-- [ ] Support external LLM API keys (e.g. OpenRouter, Google) so the service doesn't require a self-hosted Ollama instance
+- [x] Support external LLM API keys and provider selection in C2 settings/API scaffolding. Cloud use still requires explicit confirmation and quality smoke tests
 - [ ] Evaluate which free OpenRouter models work best as fallbacks
 - [ ] Evaluate Google free-tier API as an option
 - [ ] Decide whether using multiple OpenRouter accounts to stay under rate limits is acceptable
 - [ ] Validate the C1 -> C2 handoff on server2 using real enriched job data
+- [ ] Improve generated resume quality with real candidate profile grounding and live reviewed outputs
+- [ ] Add streaming or finer-grained queue progress beyond polling/coarse status
 
 ## C3 : Executioner (browser form filler)
 

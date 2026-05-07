@@ -224,6 +224,36 @@ def test_candidate_context_keeps_three_evidence_bullets():
     assert "four" not in context
 
 
+def test_apply_rewrite_result_restores_original_bold_formatting():
+    import fletcher.ad_hoc_pipeline as mod
+
+    doc = _make_parsed_doc()
+    original = "Reduced evaluation time by \\textbf{85\\%} using Python scripts."
+    doc.experience[0].bullets = [original]
+    source = {
+        "kind": "exp",
+        "entry_id": doc.experience[0].entry_id,
+        "text": original,
+        "text_hash": mod._text_hash(original),
+    }
+
+    applied = mod._apply_rewrite_result(
+        doc,
+        {
+            "source": source,
+            "result": {
+                "success": True,
+                "bullet": "Reduced evaluation time by 85% using Python automation.",
+            },
+        },
+    )
+
+    assert applied is True
+    assert doc.experience[0].bullets == [
+        "Reduced evaluation time by \\textbf{85\\%} using Python automation."
+    ]
+
+
 def _make_parsed_doc():
     from fletcher.resume.models import (
         EducationEntry,
@@ -380,6 +410,38 @@ def test_returns_expected_keys(base_mocks):
         "attempt_dir",
     ):
         assert key in result, f"missing key: {key}"
+
+
+def test_review_keyword_scores_include_present_and_rag_ranked_keywords():
+    from fletcher.ad_hoc_pipeline import _review_keyword_scores
+
+    rows = _review_keyword_scores(
+        raw_keywords=["Python", "MongoDB", "RabbitMQ"],
+        present_keywords=["Python"],
+        missing_keywords=["MongoDB", "RabbitMQ"],
+        rag_scores=[
+            {"keyword": "MongoDB", "tier": "mid", "score": 0.72, "bullet_idx": 2},
+            {"keyword": "RabbitMQ", "tier": "high", "score": 0.91, "bullet_idx": 0},
+        ],
+    )
+
+    assert rows == [
+        {"keyword": "Python", "tier": "present", "status": "present", "score": 1.0},
+        {
+            "keyword": "MongoDB",
+            "tier": "mid",
+            "score": 0.72,
+            "bullet_idx": 2,
+            "status": "missing",
+        },
+        {
+            "keyword": "RabbitMQ",
+            "tier": "high",
+            "score": 0.91,
+            "bullet_idx": 0,
+            "status": "missing",
+        },
+    ]
 
 
 def test_pdf_path_from_compile_result(base_mocks):
@@ -982,6 +1044,29 @@ def test_skill_bucket_output_drives_skill_additions(base_mocks):
 
     assert added == ["SQL", "UnknownFutureDB"]
     assert "data mining" not in doc.skills.languages
+
+
+def test_skill_additions_capitalize_lowercase_bucket_terms(base_mocks):
+    from fletcher.ad_hoc_pipeline import _add_keywords_to_skills
+
+    doc = _make_parsed_doc()
+    base_mocks.bucket_skill_keywords_with_ollama.return_value = {
+        "success": True,
+        "languages": ["perl"],
+        "frameworks": [],
+        "developer_tools": ["protocol/logic analyzers", "oscilloscopes"],
+        "ignored": [],
+    }
+
+    added = _add_keywords_to_skills(
+        doc,
+        ["perl", "protocol/logic analyzers", "oscilloscopes"],
+    )
+
+    assert added == ["Perl", "Protocol/logic analyzers", "Oscilloscopes"]
+    assert "Perl" in doc.skills.languages
+    assert "Protocol/logic analyzers" in doc.skills.developer_tools
+    assert "Oscilloscopes" in doc.skills.developer_tools
 
 
 def test_skill_bucket_receives_all_skill_candidates_and_caps_total_additions(base_mocks):

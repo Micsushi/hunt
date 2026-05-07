@@ -25,6 +25,18 @@ class Component2Stage1Tests(unittest.TestCase):
         self.assertIn("FastAPI", doc.skills.frameworks)
         self.assertIn("Docker", doc.skills.developer_tools)
 
+    def test_parse_twocolentry_preserves_nested_inline_latex(self):
+        doc = parse_resume_file(MAIN_TEX)
+
+        self.assertEqual(
+            doc.education.entry.date_text,
+            "Expected Graduation: \\textbf{Sep 2026}",
+        )
+        self.assertEqual(
+            doc.projects[0].date_or_link_text,
+            "\\href{https://github.com/NatRunners/StudyAmp}{github.com/NatRunners/StudyAmp}",
+        )
+
     def test_renderer_round_trip_preserves_parsed_structure(self):
         original = parse_resume_file(MAIN_TEX)
         rendered_tex = render_resume_tex(original)

@@ -23,9 +23,9 @@ from .db import (
     list_jobs_ready_for_resume,
     record_resume_attempt,
 )
+from .job_metadata_settings import load_c2_prompt_settings
 from .jobs.classifier import classify_job, slugify
 from .jobs.keyword_extractor import extract_keywords
-from .job_metadata_settings import load_c2_prompt_settings
 from .llm.llm_enrich import (
     analyze_job_fit_with_ollama,
     check_low_rag_unsupported_target_with_ollama,
@@ -48,7 +48,11 @@ def _queue_target_lane_policy() -> str:
 
 def _queue_unsupported_examples() -> list[str]:
     settings = load_c2_prompt_settings()
-    return [str(value).strip() for value in settings.get("unsupported_target_examples", []) if str(value).strip()]
+    return [
+        str(value).strip()
+        for value in settings.get("unsupported_target_examples", [])
+        if str(value).strip()
+    ]
 
 
 def _first_text_value(source: dict | None, keys: tuple[str, ...]) -> str:
@@ -82,7 +86,9 @@ def _merge_missing_job_metadata(
     merged = dict(classification)
     if not (merged_title or "").strip() and metadata.get("title"):
         merged_title = str(metadata["title"]).strip()
-    if merged.get("role_family") in (None, "", "general", "unknown") and metadata.get("role_family"):
+    if merged.get("role_family") in (None, "", "general", "unknown") and metadata.get(
+        "role_family"
+    ):
         merged["role_family"] = str(metadata["role_family"]).strip().lower()
     if merged.get("job_level") in (None, "", "unknown") and metadata.get("job_level"):
         merged["job_level"] = str(metadata["job_level"]).strip().lower()

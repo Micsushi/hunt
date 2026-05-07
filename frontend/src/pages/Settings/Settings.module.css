@@ -55,6 +55,52 @@
   margin-bottom: 4px;
 }
 
+.tabBar {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 8px;
+}
+
+.tabButton {
+  align-items: flex-start;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  color: var(--ink);
+  cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-height: 68px;
+  padding: 11px 12px;
+  text-align: left;
+  transition:
+    background var(--ease),
+    border-color var(--ease),
+    transform var(--ease);
+}
+
+.tabButton:hover {
+  background: var(--panel-strong);
+  transform: translateY(-1px);
+}
+
+.tabButton span {
+  font-size: 0.9rem;
+  font-weight: 750;
+}
+
+.tabButton small {
+  color: var(--muted);
+  font-size: 0.72rem;
+  line-height: 1.35;
+}
+
+.tabButtonActive {
+  background: var(--accent-soft);
+  border-color: var(--accent);
+}
+
 .gridTwo {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(340px, 1fr));

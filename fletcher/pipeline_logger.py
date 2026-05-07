@@ -3,6 +3,7 @@ from __future__ import annotations
 import sys
 import threading
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
@@ -18,12 +19,13 @@ class _LogEntry:
 
 
 class PipelineLogger:
-    def __init__(self) -> None:
+    def __init__(self, on_step: Callable[[str, dict[str, Any]], None] | None = None) -> None:
         self._entries: list[_LogEntry] = []
         self._start = time.perf_counter()
         self._last_ts = 0.0
         self._event_id = 0
         self._lock = threading.Lock()
+        self._on_step = on_step
 
     def _next_event_id(self) -> int:
         self._event_id += 1
@@ -52,6 +54,11 @@ class PipelineLogger:
                 return
             if parts:
                 print(parts, flush=True)
+        if self._on_step:
+            try:
+                self._on_step(name, dict(detail))
+            except Exception:
+                pass
 
     def llm_call(
         self,

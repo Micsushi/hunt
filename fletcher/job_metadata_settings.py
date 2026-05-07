@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 
 DEFAULT_JOB_METADATA_ROLE_FAMILIES = (
@@ -64,7 +65,7 @@ C2_KEYWORD_KEEP_POLICY = (
     "skills, tools, methods, platforms, domain-relevant work traits, and short capability phrases."
 )
 C2_KEYWORD_IGNORE_POLICY = (
-    "Ignore job titles, role labels, seniority, employment type, company names, locations, "
+    "Skip job titles, role labels, seniority, employment type, company names, locations, "
     "compensation, hiring logistics, full sentences, vague nouns, and blocked keywords."
 )
 C2_SUMMARY_KEYWORD_POLICY = (
@@ -74,8 +75,9 @@ C2_SUMMARY_KEYWORD_POLICY = (
 C2_SKILL_ADDITION_POLICY = (
     "Good additions are concrete skills that fit one existing resume skill category, such as "
     "tools, methods, platforms, libraries, databases, operating systems, protocols, or short "
-    "capability phrases. Ignore job titles, qualities, responsibilities, degrees, majors, "
-    "disciplines, logistics, business-domain phrases, vague concepts, and blocked keywords."
+    "capability phrases. "
+    "Skip job titles, qualities, responsibilities, awkward domain claims, degrees, majors, "
+    "disciplines, logistics, vague concepts, and blocked keywords."
 )
 C2_SUMMARY_GOOD_EXAMPLE = (
     "Candidate with delivery experience across production systems, automation, and "
@@ -91,8 +93,34 @@ C2_SUMMARY_BANNED_PHRASES = (
     "looking to",
     "hoping to",
 )
-C2_REWRITE_EXAMPLES = (
-    "Prefer additive related phrasing only when coherent. Avoid unnatural slash pairs or false pairings."
+C2_REWRITE_STRATEGY = (
+    "Try these strategies in order. Stop after the first strategy that produces a coherent, natural rewrite:\n"
+    "First strategy: REPLACE. If a keyword names the same type of technology, method, or concept as something already in the bullet, replace or substitute naturally.\n"
+    "Second strategy: REWORD. If replacement does not work, reword or restructure the bullet so the original work and the keyword appear together naturally. The keyword must fit the actual work described by the original bullet.\n"
+    "Third strategy: ADD SENTENCE. If one or more keywords still fit but cannot be included by replacement or rewording, add at most one new sentence anywhere in the bullet. The new sentence must be directly about the original work. Pack multiple remaining keywords into that one sentence only if they fit naturally.\n"
+    "Final strategy: STOP. Any remaining keywords that do not fit cleanly go in keywords_skipped. Do not force them."
+)
+C2_REWRITE_KEYWORD_FIT_POLICY = (
+    "- Judge each requested keyword independently. A bullet can support some keywords and reject or skip others.\n"
+    "- Accept same-work adjacent framing: same work context, same outcome, and coherent technology, method, or workflow family.\n"
+    "- The keyword does not need to appear explicitly in the original when it still describes the same kind of work.\n"
+    "- Reject or skip keywords that change the project, domain, outcome, scope, responsibility, or tool/workflow use.\n"
+    "- Prefer additive related phrasing only when coherent; avoid unnatural slash pairs or false pairings.\n"
+    "- Reject or skip incoherent term pairings, unrelated technology claims, definitions of technologies, and keyword-stuffing appendages."
+)
+C2_REWRITE_BULLET_POLICY = (
+    "- Preserve original facts, metrics, numbers, scope, outcomes, and core meaning.\n"
+    "- Preserve the original order when possible, and keep a Google XYZ-style flow: achieved x outcome, by doing y action, using z method or tool.\n"
+    "- Use at most one new sentence, and only when it is directly about the original work.\n"
+    "- Prefer natural replacement or rewording before adding text.\n"
+    "- Skip a keyword when the final bullet would be awkward, vague, less believable, or forced."
+)
+C2_REWRITE_LENGTH_POLICY = "- Keep the rewrite close to the original length, never more than {max_length_percent} percent longer unless needed for grammar."
+C2_REWRITE_ACTION_KEYWORD_POLICY = (
+    "- Keep an action keyword's action and object visibly together.\n"
+    "- Monitor keywords may become monitoring plus the same object when that fits the bullet.\n"
+    "- Automate keywords may become automating or automation plus the same object when that fits the bullet.\n"
+    "- Do not count scattered words as using an action keyword."
 )
 C2_DEFAULT_TARGET_TITLE = "Target Role"
 C2_KEYWORD_SELECTION_MAX_KEYWORDS = 30
@@ -101,6 +129,24 @@ C2_KEYWORD_SELECTION_MAX_WORDS = 3
 C2_JOB_METADATA_PROMPT_MAX_CHARS = 3000
 C2_JOB_METADATA_MIN_CONFIDENCE = 0.8
 C2_SKILL_ADDITION_LIMIT = 3
+C2_JD_EXCERPT_MIN_CHARS = 800
+C2_JD_EXCERPT_HEAD_MIN_CHARS = 350
+C2_JD_EXCERPT_TAIL_MIN_CHARS = 250
+C2_JD_EXCERPT_HEAD_DIVISOR = 3
+C2_JD_EXCERPT_TAIL_DIVISOR = 5
+C2_JD_EXCERPT_SEPARATOR_BUDGET = 80
+C2_JD_EXCERPT_MARKER_PREFIX_CHARS = 120
+C2_JD_EXCERPT_MARKER_SUFFIX_CHARS = 900
+C2_KEYWORD_EXTRACT_PROMPT_MAX_CHARS = 4500
+C2_LOW_RAG_PROMPT_MAX_CHARS = 2200
+C2_CANDIDATE_CONTEXT_PROMPT_MAX_CHARS = 3000
+C2_SUMMARY_KEYWORD_LIMIT = 3
+C2_SUMMARY_VALIDATION_REASON_MAX_CHARS = 100
+C2_SUMMARY_VALIDATION_REASON_LIMIT_TEXT = "more than one"
+C2_SUMMARY_SENTENCE_RANGE = "two to three"
+C2_SUMMARY_WORD_RANGE = "eighty to one hundred"
+C2_SUMMARY_TARGET_PRINTED_LINES = "four and a half"
+C2_REWRITE_MAX_LENGTH_INCREASE_PERCENT = 20
 
 JOB_METADATA_SETTINGS_COMPONENT = "c2"
 JOB_METADATA_ROLE_FAMILIES_KEY = "job_metadata_role_families"
@@ -114,7 +160,11 @@ C2_SUMMARY_KEYWORD_POLICY_KEY = "summary_keyword_policy"
 C2_SKILL_ADDITION_POLICY_KEY = "skill_addition_policy"
 C2_SUMMARY_GOOD_EXAMPLE_KEY = "summary_good_example"
 C2_SUMMARY_BANNED_PHRASES_KEY = "summary_banned_phrases"
-C2_REWRITE_EXAMPLES_KEY = "rewrite_examples"
+C2_REWRITE_STRATEGY_KEY = "rewrite_strategy"
+C2_REWRITE_KEYWORD_FIT_POLICY_KEY = "rewrite_keyword_fit_policy"
+C2_REWRITE_BULLET_POLICY_KEY = "rewrite_bullet_policy"
+C2_REWRITE_LENGTH_POLICY_KEY = "rewrite_length_policy"
+C2_REWRITE_ACTION_KEYWORD_POLICY_KEY = "rewrite_action_keyword_policy"
 C2_DEFAULT_TARGET_TITLE_KEY = "default_target_title"
 C2_KEYWORD_SELECTION_MAX_KEYWORDS_KEY = "keyword_selection_max_keywords"
 C2_KEYWORD_SELECTION_MIN_WORDS_KEY = "keyword_selection_min_words"
@@ -164,7 +214,9 @@ def parse_setting_int(value: str | None, default: int, *, minimum: int | None = 
     return parsed
 
 
-def parse_setting_float(value: str | None, default: float, *, minimum: float | None = None) -> float:
+def parse_setting_float(
+    value: str | None, default: float, *, minimum: float | None = None
+) -> float:
     raw = (value or "").strip()
     try:
         parsed = float(raw)
@@ -175,7 +227,9 @@ def parse_setting_float(value: str | None, default: float, *, minimum: float | N
     return parsed
 
 
-def load_job_metadata_settings(db_path: str | Path | None = None) -> dict[str, list[str]]:
+def load_job_metadata_settings(
+    db_path: str | Path | None = None,
+) -> dict[str, list[str]]:
     settings = {
         "role_families": list(DEFAULT_JOB_METADATA_ROLE_FAMILIES),
         "job_levels": list(DEFAULT_JOB_METADATA_JOB_LEVELS),
@@ -214,7 +268,11 @@ def load_job_metadata_settings(db_path: str | Path | None = None) -> dict[str, l
     return settings
 
 
-def _load_component_values(keys: tuple[str, ...], db_path: str | Path | None = None) -> dict[str, str]:
+def _load_component_values(
+    keys: tuple[str, ...], db_path: str | Path | None = None
+) -> dict[str, str]:
+    if os.getenv("PYTEST_CURRENT_TEST") and db_path is None and not os.getenv("HUNT_DB_PATH"):
+        return {}
     try:
         from .db import get_connection
 
@@ -249,7 +307,11 @@ def load_c2_prompt_settings(db_path: str | Path | None = None) -> dict[str, obje
         C2_SKILL_ADDITION_POLICY_KEY,
         C2_SUMMARY_GOOD_EXAMPLE_KEY,
         C2_SUMMARY_BANNED_PHRASES_KEY,
-        C2_REWRITE_EXAMPLES_KEY,
+        C2_REWRITE_STRATEGY_KEY,
+        C2_REWRITE_KEYWORD_FIT_POLICY_KEY,
+        C2_REWRITE_BULLET_POLICY_KEY,
+        C2_REWRITE_LENGTH_POLICY_KEY,
+        C2_REWRITE_ACTION_KEYWORD_POLICY_KEY,
         C2_DEFAULT_TARGET_TITLE_KEY,
         C2_KEYWORD_SELECTION_MAX_KEYWORDS_KEY,
         C2_KEYWORD_SELECTION_MIN_WORDS_KEY,
@@ -296,8 +358,21 @@ def load_c2_prompt_settings(db_path: str | Path | None = None) -> dict[str, obje
         "summary_banned_phrases": parse_setting_values(
             values.get(C2_SUMMARY_BANNED_PHRASES_KEY), C2_SUMMARY_BANNED_PHRASES
         ),
-        "rewrite_examples": parse_setting_text(
-            values.get(C2_REWRITE_EXAMPLES_KEY), C2_REWRITE_EXAMPLES
+        "rewrite_strategy": parse_setting_text(
+            values.get(C2_REWRITE_STRATEGY_KEY), C2_REWRITE_STRATEGY
+        ),
+        "rewrite_keyword_fit_policy": parse_setting_text(
+            values.get(C2_REWRITE_KEYWORD_FIT_POLICY_KEY), C2_REWRITE_KEYWORD_FIT_POLICY
+        ),
+        "rewrite_bullet_policy": parse_setting_text(
+            values.get(C2_REWRITE_BULLET_POLICY_KEY), C2_REWRITE_BULLET_POLICY
+        ),
+        "rewrite_length_policy": parse_setting_text(
+            values.get(C2_REWRITE_LENGTH_POLICY_KEY), C2_REWRITE_LENGTH_POLICY
+        ),
+        "rewrite_action_keyword_policy": parse_setting_text(
+            values.get(C2_REWRITE_ACTION_KEYWORD_POLICY_KEY),
+            C2_REWRITE_ACTION_KEYWORD_POLICY,
         ),
         "default_target_title": parse_setting_text(
             values.get(C2_DEFAULT_TARGET_TITLE_KEY), C2_DEFAULT_TARGET_TITLE

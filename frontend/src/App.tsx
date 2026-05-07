@@ -10,6 +10,7 @@ import { JobDetailPage } from '@/pages/Jobs/JobDetail'
 import { LogsPage } from '@/pages/Logs'
 import { OpsPage } from '@/pages/Ops'
 import { FletcherPage } from '@/pages/Fletcher'
+import { FletcherReviewPage } from '@/pages/Fletcher/ReviewPage'
 import { ExecutionerPage } from '@/pages/Executioner'
 import { CoordinatorPage } from '@/pages/Coordinator'
 import { SettingsPage } from '@/pages/Settings'
@@ -117,6 +118,15 @@ export default function App() {
           element={
             <AuthGuard username={username}>
               <FletcherPage />
+            </AuthGuard>
+          }
+        />
+
+        <Route
+          path="/fletcher/reviews/:reviewId"
+          element={
+            <AuthGuard username={username}>
+              <FletcherReviewPage />
             </AuthGuard>
           }
         />

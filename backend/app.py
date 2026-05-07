@@ -3,8 +3,13 @@ import html
 import io
 import json
 import os
+import re
 import sqlite3
 import sys
+import threading
+import time
+import uuid
+import zipfile
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -32,6 +37,7 @@ from fastapi.responses import (
     RedirectResponse,
 )
 from fastapi.staticfiles import StaticFiles
+from starlette.concurrency import run_in_threadpool
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT))
@@ -193,6 +199,13 @@ FRONTEND_DIST = Path(REPO_ROOT) / "frontend" / "dist"
 async def lifespan(app):
     init_db(maintenance=False)
     init_hunt_extras()
+    try:
+        from fletcher.db import init_fletcher_queue_db, init_resume_db  # type: ignore
+
+        init_resume_db()
+        init_fletcher_queue_db()
+    except Exception:
+        pass
     init_sessions_table()
     purge_expired_sessions()
     if not ADMIN_PASSWORD:
@@ -231,6 +244,316 @@ app.add_middleware(RequestIDMiddleware)
 # Serve built SPA assets at /assets/* if frontend/dist exists
 if (FRONTEND_DIST / "assets").exists():
     app.mount("/assets", StaticFiles(directory=FRONTEND_DIST / "assets"), name="spa-assets")
+
+
+_fletcher_worker_lock = threading.Lock()
+_fletcher_worker_started = False
+
+
+def _ensure_fletcher_worker_started() -> None:
+    global _fletcher_worker_started
+    with _fletcher_worker_lock:
+        if _fletcher_worker_started:
+            return
+        thread = threading.Thread(target=_fletcher_worker_loop, name="fletcher-queue", daemon=True)
+        thread.start()
+        _fletcher_worker_started = True
+
+
+def _queue_resume_upload_path(filename: str) -> Path:
+    from fletcher.config import AD_HOC_DIRNAME, resolve_runtime_root  # type: ignore
+
+    suffix = Path(filename or "").suffix.lower()
+    if suffix not in {".tex", ".pdf"}:
+        raise HTTPException(status_code=400, detail="resume must be a .tex or text-based .pdf file")
+    upload_dir = resolve_runtime_root() / AD_HOC_DIRNAME / "queue_uploads"
+    upload_dir.mkdir(parents=True, exist_ok=True)
+    return upload_dir / f"{uuid.uuid4().hex}{suffix}"
+
+
+def _resolve_fletcher_queue_resume_path(job_input: dict) -> str:
+    from fletcher.config import DEFAULT_OG_RESUME_PATH  # type: ignore
+
+    raw_path = str(job_input.get("resume_path") or "").strip()
+    if raw_path:
+        path = Path(raw_path)
+        if path.exists():
+            return str(path)
+        raise FileNotFoundError(f"queued resume file is missing: {path}")
+    if DEFAULT_OG_RESUME_PATH.exists():
+        return str(DEFAULT_OG_RESUME_PATH)
+    raise FileNotFoundError(
+        "queued Fletcher job has no persisted resume upload and default main.tex was not found"
+    )
+
+
+def _fletcher_queue_log_path(queue_item_id: str) -> Path:
+    from fletcher.config import AD_HOC_DIRNAME, resolve_runtime_root  # type: ignore
+
+    log_dir = resolve_runtime_root() / AD_HOC_DIRNAME / "queue_logs"
+    log_dir.mkdir(parents=True, exist_ok=True)
+    return log_dir / f"{queue_item_id}.log"
+
+
+def _write_fletcher_queue_log(path: Path, text: str, *, append: bool = False) -> str:
+    mode = "a" if append else "w"
+    with path.open(mode, encoding="utf-8") as fh:
+        fh.write(text)
+        if not text.endswith("\n"):
+            fh.write("\n")
+    return str(path)
+
+
+def _append_fletcher_queue_log(path: Path, text: str) -> str:
+    print(text, flush=True)
+    return _write_fletcher_queue_log(path, text, append=True)
+
+
+FLETCHER_BATCH_ARTIFACTS = {
+    "log",
+    "no_summary_pdf",
+    "with_summary_pdf",
+    "no_summary_tex",
+    "with_summary_tex",
+}
+
+FLETCHER_PROGRESS_BY_STEP = {
+    "starting": 3,
+    "config": 5,
+    "loading_job": 8,
+    "parse_resume": 12,
+    "bullets_loaded": 16,
+    "generating_resume": 18,
+    "job_metadata_llm_skipped": 22,
+    "job_metadata_filled_with_llm": 22,
+    "classify_done": 25,
+    "heuristic_keywords": 28,
+    "llm_keyword_extract_start": 32,
+    "keywords_extracted": 38,
+    "keyword_partition": 42,
+    "active_buckets": 45,
+    "rag_start": 50,
+    "rag_complete": 58,
+    "rag_skipped": 58,
+    "bullet_rewrite_parallel_config": 60,
+    "bullet_rewrite_start": 62,
+    "bullet_rewrite_done": 70,
+    "bullet_rewrite_parallel_memory": 72,
+    "bullet_rewrites_summary": 76,
+    "rewrite_validation_summary": 78,
+    "bullet_scores": 80,
+    "summary_evidence": 82,
+    "keywords_skipped_to_summary": 83,
+    "summary_keyword_filter": 84,
+    "summary_start": 85,
+    "summary_done": 87,
+    "summary_skipped": 87,
+    "summary_validation": 88,
+    "skills_keywords_added": 90,
+    "skills_keyword_reuse": 90,
+    "compile_start": 92,
+    "compile_done": 94,
+    "compile_summary_skipped": 96,
+    "summary_line_check": 98,
+    "bullet_drop": 95,
+    "pipeline_debug_summary": 99,
+    "packaging_review": 99,
+    "done": 100,
+}
+
+
+def _fletcher_step_percent(step: str, detail: dict | None = None) -> int:
+    percent = FLETCHER_PROGRESS_BY_STEP.get(step, 50)
+    if step == "ollama_runtime":
+        stage = str((detail or {}).get("stage") or "")
+        percent = {
+            "after_job_fit": 20,
+            "after_bullet_rewrites": 78,
+            "before_summary": 84,
+            "before_skill_bucket": 89,
+        }.get(stage, 50)
+    if step == "compile_start" and (detail or {}).get("stem") == "output_summary":
+        percent = 93
+    if step == "compile_done" and (detail or {}).get("stem") == "output_summary":
+        percent = 95
+    return max(0, min(100, int(percent)))
+
+
+def _fletcher_batch_stem(job: dict) -> str:
+    job_input = job.get("input") or {}
+    title = str(job_input.get("title") or "ad-hoc-resume").strip()
+    company = str(job_input.get("company") or "").strip()
+    raw = " ".join(part for part in [title, company, str(job.get("queue_item_id", ""))[:8]] if part)
+    safe = "".join(ch if ch.isalnum() or ch in {" ", "-", "_"} else "_" for ch in raw)
+    safe = "_".join(safe.split())
+    return safe[:96] or f"fletcher_{str(job.get('queue_item_id', 'run'))[:8]}"
+
+
+def _fletcher_log_filename(job: dict) -> str:
+    raw_time = str(job.get("finished_at") or job.get("started_at") or job.get("created_at") or "")
+    match = re.search(
+        r"(\d{4})\D+(\d{2})\D+(\d{2})\D+(\d{2})\D+(\d{2})\D+(\d{2})",
+        raw_time,
+    )
+    timestamp = (
+        f"{match.group(1)}-{match.group(2)}-{match.group(3)}_"
+        f"{match.group(4)}-{match.group(5)}-{match.group(6)}"
+        if match
+        else datetime.now(UTC).strftime("%Y-%m-%d_%H-%M-%S")
+    )
+    return f"log_resume_generation_{timestamp}.log"
+
+
+def _zip_existing_file(
+    archive: zipfile.ZipFile,
+    *,
+    path: Path | None,
+    arcname: str,
+    manifest: list[str],
+) -> bool:
+    if path and path.exists() and path.is_file():
+        archive.write(path, arcname)
+        manifest.append(f"added: {arcname}")
+        return True
+    manifest.append(f"missing: {arcname}")
+    return False
+
+
+def _process_next_fletcher_job() -> bool:
+    from fletcher.ad_hoc_pipeline import run_ad_hoc_pipeline  # type: ignore
+    from fletcher.db import (  # type: ignore
+        claim_next_fletcher_job,
+        finish_fletcher_job,
+        get_job_context,
+        list_resume_attempts,
+        set_fletcher_job_log_path,
+        update_fletcher_job_progress,
+    )
+    from fletcher.pipeline import generate_resume_for_job  # type: ignore
+    from fletcher.resume.review_from_attempt import (  # type: ignore
+        create_review_package_from_attempt,
+    )
+
+    job = claim_next_fletcher_job()
+    if not job:
+        return False
+    qid = job["queue_item_id"]
+    job_input = job.get("input") or {}
+    queue_log_path = _fletcher_queue_log_path(qid)
+    start_line = f"Fletcher queue item {qid} started at {datetime.now(UTC).isoformat()}"
+    print(start_line, flush=True)
+    _write_fletcher_queue_log(queue_log_path, start_line)
+    set_fletcher_job_log_path(qid, str(queue_log_path))
+    try:
+        options = job_input.get("options") or {}
+
+        def _record_progress(step: str, detail: dict | None = None) -> None:
+            update_fletcher_job_progress(
+                qid,
+                {
+                    "current_step": step,
+                    "event_id": (detail or {}).get("event_id"),
+                    "percent": _fletcher_step_percent(step, detail),
+                },
+            )
+
+        _record_progress("starting", {"event_id": 1})
+        job_id = job_input.get("job_id")
+        if job_id is not None:
+            numeric_job_id = int(job_id)
+            _record_progress("loading_job", {"event_id": 2})
+            _append_fletcher_queue_log(
+                queue_log_path,
+                f"Generating resume for Hunt job ID {numeric_job_id}.",
+            )
+            _record_progress("generating_resume", {"event_id": 3})
+            result = generate_resume_for_job(numeric_job_id)
+            _record_progress("packaging_review", {"event_id": 4})
+            review_id = None
+            attempts = list_resume_attempts(numeric_job_id, limit=20)
+            attempt_id = result.get("attempt_id")
+            attempt = next(
+                (
+                    item
+                    for item in attempts
+                    if attempt_id is not None and item.get("id") == attempt_id
+                ),
+                attempts[0] if attempts else None,
+            )
+            if attempt:
+                package = create_review_package_from_attempt(
+                    attempt=attempt,
+                    job=get_job_context(numeric_job_id),
+                )
+                review_id = package.review_id
+            _append_fletcher_queue_log(
+                queue_log_path,
+                f"Finished resume generation for Hunt job ID {numeric_job_id}.",
+            )
+            _record_progress("done", {"event_id": 5})
+        else:
+            result = run_ad_hoc_pipeline(
+                title=str(job_input.get("title") or ""),
+                company=str(job_input.get("company") or ""),
+                description=str(job_input.get("description") or ""),
+                resume_path=_resolve_fletcher_queue_resume_path(job_input),
+                label=f"queue_{qid[:10]}",
+                progress_callback=_record_progress,
+            )
+            review_id = result.get("review_id")
+        result_log_path = result.get("log_path")
+        if not result_log_path:
+            result_log_path = _write_fletcher_queue_log(
+                queue_log_path,
+                "Fletcher pipeline finished without producing a pipeline_log.txt.",
+                append=True,
+            )
+        finish_fletcher_job(
+            qid,
+            status="succeeded" if result.get("status") != "failed" else "failed",
+            result={
+                "review_id": review_id,
+                "pdf_url": f"/api/fletcher/reviews/{review_id}/versions/no_summary/pdf"
+                if review_id
+                else (
+                    f"/api/attempts/{result.get('attempt_id')}/pdf"
+                    if result.get("attempt_id") and result.get("pdf_path")
+                    else None
+                ),
+                "tex_url": f"/api/fletcher/reviews/{review_id}/versions/no_summary/tex"
+                if review_id
+                else (
+                    f"/api/attempts/{result.get('attempt_id')}/tex"
+                    if result.get("attempt_id") and result.get("tex_path")
+                    else None
+                ),
+                "log_url": f"/api/fletcher/reviews/{review_id}/log" if review_id else None,
+                "provider": options.get("provider"),
+                "model": options.get("model"),
+            },
+            error=str(result.get("error") or "") if result.get("status") == "failed" else None,
+            log_path=result_log_path,
+            review_id=review_id,
+        )
+    except Exception as exc:
+        _write_fletcher_queue_log(
+            queue_log_path,
+            f"Fletcher queue item {qid} failed before pipeline log was available:\n{exc}",
+            append=True,
+        )
+        finish_fletcher_job(
+            qid, status="failed", result={}, error=str(exc), log_path=str(queue_log_path)
+        )
+    return True
+
+
+def _fletcher_worker_loop() -> None:
+    while True:
+        try:
+            if not _process_next_fletcher_job():
+                time.sleep(2)
+        except Exception:
+            time.sleep(5)
 
 
 def format_text(value):
@@ -2930,6 +3253,31 @@ def api_job_attempts(job_id: int, _auth: str = Depends(require_auth)):
     return JSONResponse(attempts)
 
 
+@app.post("/api/jobs/{job_id}/resume/review")
+def api_job_resume_review(job_id: int, _auth: str = Depends(require_auth)):
+    from fletcher.resume.review_from_attempt import create_review_package_from_attempt
+    from fletcher.resume.review_models import model_to_dict
+
+    job = get_job_by_id(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found.")
+    attempts = list_resume_attempts(job_id, limit=20)
+    if not attempts:
+        raise HTTPException(status_code=404, detail="No resume attempt found for this job.")
+    selected_tex = str(job.get("selected_resume_tex_path") or "")
+    attempt = None
+    if selected_tex:
+        attempt = next(
+            (item for item in attempts if str(item.get("tex_path") or "") == selected_tex), None
+        )
+    attempt = attempt or attempts[0]
+    try:
+        package = create_review_package_from_attempt(attempt=attempt, job=job)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    return JSONResponse(model_to_dict(package))
+
+
 @app.post("/api/fletcher/tailor")
 async def api_fletcher_tailor(
     job_details: str = Form(...),
@@ -2942,6 +3290,8 @@ async def api_fletcher_tailor(
         from fletcher.ad_hoc_pipeline import run_ad_hoc_pipeline  # type: ignore
         from fletcher.config import DEFAULT_OG_RESUME_PATH  # type: ignore
         from fletcher.jobs.title_inference import infer_title_from_description  # type: ignore
+        from fletcher.resume.review_models import model_to_dict  # type: ignore
+        from fletcher.resume.review_store import load_review_package  # type: ignore
     except ModuleNotFoundError:
         raise HTTPException(status_code=503, detail="Fletcher not available in this deployment")
 
@@ -2958,7 +3308,8 @@ async def api_fletcher_tailor(
             resume_tmp.close()
 
         _title = infer_title_from_description(job_details)
-        result = run_ad_hoc_pipeline(
+        result = await run_in_threadpool(
+            run_ad_hoc_pipeline,
             title=_title,
             description=job_details,
             resume_path=resume_tmp.name if resume_tmp else DEFAULT_OG_RESUME_PATH,
@@ -2978,6 +3329,13 @@ async def api_fletcher_tailor(
     no_summary = _b64(result.get("pdf_path"))
     with_summary = _b64(result.get("pdf_path_summary"))
     log_b64 = _b64(result.get("log_path"))
+    review_id = result.get("review_id")
+    review = None
+    if review_id:
+        try:
+            review = model_to_dict(load_review_package(str(review_id)))
+        except Exception:
+            review = None
 
     if result.get("error_type") == "JobMismatchError":
         return JSONResponse(
@@ -2990,6 +3348,8 @@ async def api_fletcher_tailor(
                 "llm_error": result.get("llm_error"),
                 "error_type": result.get("error_type"),
                 "error": result.get("error"),
+                "review_id": review_id,
+                "review": review,
             }
         )
 
@@ -3007,6 +3367,8 @@ async def api_fletcher_tailor(
                 or result.get("llm_error")
                 or result.get("compile_status")
                 or "PDF generation failed",
+                "review_id": review_id,
+                "review": review,
             },
             status_code=200,
         )
@@ -3021,8 +3383,342 @@ async def api_fletcher_tailor(
             "llm_error": result.get("llm_error"),
             "error_type": result.get("error_type"),
             "error": result.get("error"),
+            "review_id": review_id,
+            "review": review,
         }
     )
+
+
+@app.post("/api/fletcher/tailor/jobs")
+async def api_fletcher_jobs_enqueue(request: Request, _auth: str = Depends(require_auth)):
+    from fletcher.db import enqueue_fletcher_job
+    from fletcher.jobs.title_inference import infer_title_from_description
+
+    content_type = request.headers.get("content-type", "")
+    resume_path = None
+    resume_filename = "main.tex"
+    if content_type.startswith("multipart/form-data"):
+        form = await request.form()
+        payload = dict(form)
+        if isinstance(payload.get("options"), str):
+            try:
+                payload["options"] = json.loads(str(payload.get("options") or "{}"))
+            except json.JSONDecodeError:
+                payload["options"] = {}
+        upload = form.get("resume")
+        if upload is not None and getattr(upload, "filename", ""):
+            resume_filename = str(getattr(upload, "filename", "") or "resume.tex")
+            resume_upload_path = _queue_resume_upload_path(resume_filename)
+            data = await upload.read()
+            resume_upload_path.write_bytes(data)
+            resume_path = str(resume_upload_path)
+    else:
+        payload = await request.json()
+        resume_path = payload.get("resume_path")
+        resume_filename = payload.get("resume_filename") or "main.tex"
+
+    raw_job_id = payload.get("job_id") or payload.get("jobId")
+    job_id = int(raw_job_id) if raw_job_id not in {None, ""} else None
+    description = str(payload.get("description") or payload.get("job_details") or "").strip()
+    job_context = get_job_by_id(job_id) if job_id is not None else None
+    if job_id is not None and not job_context:
+        raise HTTPException(status_code=404, detail=f"Job {job_id} not found")
+    if not description and job_context:
+        description = str(job_context.get("description") or "")
+    if not description and job_id is None:
+        raise HTTPException(status_code=400, detail="description or job_id is required")
+    title = str(payload.get("title") or "").strip()
+    if not title and job_context:
+        title = str(job_context.get("title") or "").strip()
+    if not title:
+        title = infer_title_from_description(description)
+    company = str(payload.get("company") or "").strip()
+    if not company and job_context:
+        company = str(job_context.get("company") or "").strip()
+    item = enqueue_fletcher_job(
+        {
+            "job_id": job_id,
+            "resume_source_id": payload.get("resume_source_id") or "default",
+            "resume_filename": resume_filename,
+            "resume_path": resume_path,
+            "title": title,
+            "company": company,
+            "description": description,
+            "options": payload.get("options") or {},
+        }
+    )
+    _ensure_fletcher_worker_started()
+    return JSONResponse(item)
+
+
+@app.get("/api/fletcher/tailor/jobs")
+def api_fletcher_jobs(limit: int = Query(100, ge=1, le=500), _auth: str = Depends(require_auth)):
+    from fletcher.db import list_fletcher_jobs
+
+    _ensure_fletcher_worker_started()
+    return JSONResponse({"jobs": list_fletcher_jobs(limit=limit)})
+
+
+@app.post("/api/fletcher/tailor/jobs/batch-download")
+def api_fletcher_jobs_batch_download(payload: dict = Body(...), _auth: str = Depends(require_auth)):
+    from fletcher.db import get_fletcher_job
+    from fletcher.resume.review_store import artifact_path_for_review
+
+    queue_item_ids = payload.get("queue_item_ids") or []
+    artifacts = payload.get("artifacts") or []
+    if not isinstance(queue_item_ids, list) or not queue_item_ids:
+        raise HTTPException(status_code=400, detail="queue_item_ids is required")
+    if len(queue_item_ids) > 100:
+        raise HTTPException(status_code=400, detail="Batch download is limited to 100 jobs")
+    if not isinstance(artifacts, list) or not artifacts:
+        raise HTTPException(status_code=400, detail="artifacts is required")
+    requested_artifacts = [str(item) for item in artifacts]
+    unsupported = sorted(set(requested_artifacts) - FLETCHER_BATCH_ARTIFACTS)
+    if unsupported:
+        raise HTTPException(
+            status_code=400, detail=f"Unsupported Fletcher artifact(s): {', '.join(unsupported)}"
+        )
+
+    buffer = io.BytesIO()
+    manifest: list[str] = []
+    added_count = 0
+    with zipfile.ZipFile(buffer, mode="w", compression=zipfile.ZIP_DEFLATED) as archive:
+        for raw_qid in queue_item_ids:
+            queue_item_id = str(raw_qid)
+            try:
+                job = get_fletcher_job(queue_item_id)
+            except KeyError:
+                manifest.append(f"missing job: {queue_item_id}")
+                continue
+            stem = _fletcher_batch_stem(job)
+            review_id = (job.get("result") or {}).get("review_id") or job.get("review_id")
+            if "log" in requested_artifacts:
+                log_path = Path(str(job.get("log_path") or "")) if job.get("log_path") else None
+                if _zip_existing_file(
+                    archive,
+                    path=log_path,
+                    arcname=f"{stem}/pipeline.log",
+                    manifest=manifest,
+                ):
+                    added_count += 1
+            for version, artifact_kind, artifact_name in [
+                ("no_summary", "pdf", "resume_no_summary.pdf"),
+                ("with_summary", "pdf", "resume_with_summary.pdf"),
+                ("no_summary", "tex", "resume_no_summary.tex"),
+                ("with_summary", "tex", "resume_with_summary.tex"),
+            ]:
+                key = f"{version}_{artifact_kind}"
+                if key not in requested_artifacts:
+                    continue
+                path = None
+                if review_id:
+                    try:
+                        path = artifact_path_for_review(str(review_id), version, artifact_kind)
+                    except (FileNotFoundError, KeyError, ValueError):
+                        path = None
+                if _zip_existing_file(
+                    archive,
+                    path=path,
+                    arcname=f"{stem}/{artifact_name}",
+                    manifest=manifest,
+                ):
+                    added_count += 1
+        archive.writestr("manifest.txt", "\n".join(manifest) + "\n")
+
+    if added_count == 0:
+        raise HTTPException(status_code=404, detail="No selected Fletcher artifacts were available")
+    headers = {"Content-Disposition": 'attachment; filename="fletcher_history_batch.zip"'}
+    return Response(content=buffer.getvalue(), media_type="application/zip", headers=headers)
+
+
+@app.get("/api/fletcher/tailor/jobs/{queue_item_id}")
+def api_fletcher_job(queue_item_id: str, _auth: str = Depends(require_auth)):
+    from fletcher.db import get_fletcher_job
+
+    try:
+        return JSONResponse(get_fletcher_job(queue_item_id))
+    except KeyError:
+        raise HTTPException(status_code=404, detail="Fletcher job not found")
+
+
+@app.patch("/api/fletcher/tailor/jobs/{queue_item_id}")
+def api_fletcher_job_patch(
+    queue_item_id: str, payload: dict = Body(...), _auth: str = Depends(require_auth)
+):
+    from fletcher.db import patch_fletcher_job_input
+
+    try:
+        return JSONResponse(patch_fletcher_job_input(queue_item_id, payload))
+    except KeyError:
+        raise HTTPException(status_code=404, detail="Fletcher job not found")
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+
+
+@app.post("/api/fletcher/tailor/jobs/{queue_item_id}/move")
+def api_fletcher_job_move(
+    queue_item_id: str, payload: dict = Body(...), _auth: str = Depends(require_auth)
+):
+    from fletcher.db import move_fletcher_job
+
+    try:
+        return JSONResponse(
+            move_fletcher_job(queue_item_id, str(payload.get("direction") or "down"))
+        )
+    except KeyError:
+        raise HTTPException(status_code=404, detail="Fletcher job not found")
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+
+
+@app.post("/api/fletcher/tailor/jobs/{queue_item_id}/cancel")
+def api_fletcher_job_cancel(queue_item_id: str, _auth: str = Depends(require_auth)):
+    from fletcher.db import cancel_fletcher_job
+
+    try:
+        return JSONResponse(cancel_fletcher_job(queue_item_id))
+    except KeyError:
+        raise HTTPException(status_code=404, detail="Fletcher job not found")
+
+
+@app.delete("/api/fletcher/tailor/jobs/{queue_item_id}")
+def api_fletcher_job_delete(queue_item_id: str, _auth: str = Depends(require_auth)):
+    from fletcher.db import delete_fletcher_job
+
+    try:
+        delete_fletcher_job(queue_item_id)
+        return JSONResponse({"status": "ok", "deleted": 1})
+    except KeyError:
+        raise HTTPException(status_code=404, detail="Fletcher job not found")
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+
+
+@app.get("/api/fletcher/tailor/jobs/{queue_item_id}/log")
+def api_fletcher_job_log(
+    queue_item_id: str,
+    download: bool = Query(False),
+    _auth: str = Depends(require_auth),
+):
+    from fletcher.db import get_fletcher_job
+
+    try:
+        job = get_fletcher_job(queue_item_id)
+    except KeyError:
+        raise HTTPException(status_code=404, detail="Fletcher job not found")
+    log_path = job.get("log_path")
+    if log_path and Path(log_path).exists():
+        filename = _fletcher_log_filename(job)
+        if download:
+            return FileResponse(
+                log_path,
+                media_type="text/plain",
+                filename=filename,
+            )
+        return PlainTextResponse(Path(log_path).read_text(encoding="utf-8", errors="replace"))
+    error = job.get("error")
+    if error:
+        return PlainTextResponse(f"No queue log file was found.\n\n{error}")
+    return PlainTextResponse("No queue log file is available yet.")
+
+
+@app.get("/api/fletcher/reviews/{review_id}")
+def api_fletcher_review(review_id: str, _auth: str = Depends(require_auth)):
+    from fletcher.resume.review_models import model_to_dict
+    from fletcher.resume.review_store import load_review_package
+
+    try:
+        return JSONResponse(model_to_dict(load_review_package(review_id)))
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail="Review not found")
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+@app.patch("/api/fletcher/reviews/{review_id}/versions/{version}")
+def api_fletcher_review_save(
+    review_id: str,
+    version: str,
+    payload: dict = Body(...),
+    _auth: str = Depends(require_auth),
+):
+    from fletcher.resume.models import ResumeDocument
+    from fletcher.resume.review_models import model_to_dict, model_validate
+    from fletcher.resume.review_store import save_current_document
+
+    try:
+        doc = model_validate(ResumeDocument, payload.get("current") or payload)
+        return JSONResponse(model_to_dict(save_current_document(review_id, version, doc)))
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail="Review not found")
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+@app.post("/api/fletcher/reviews/{review_id}/versions/{version}/compile")
+def api_fletcher_review_compile(review_id: str, version: str, _auth: str = Depends(require_auth)):
+    from fletcher.resume.review_models import model_to_dict
+    from fletcher.resume.review_store import compile_current_document
+
+    try:
+        return JSONResponse(model_to_dict(compile_current_document(review_id, version)))
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail="Review not found")
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+@app.post("/api/fletcher/reviews/{review_id}/versions/{version}/revert")
+def api_fletcher_review_revert(
+    review_id: str,
+    version: str,
+    payload: dict = Body(...),
+    _auth: str = Depends(require_auth),
+):
+    from fletcher.resume.review_models import model_to_dict
+    from fletcher.resume.review_store import revert_current_document
+
+    try:
+        return JSONResponse(
+            model_to_dict(
+                revert_current_document(
+                    review_id, version, str(payload.get("target") or "generated")
+                )
+            )
+        )
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail="Review not found")
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+@app.get("/api/fletcher/reviews/{review_id}/versions/{version}/{artifact_kind}")
+def api_fletcher_review_artifact(
+    review_id: str, version: str, artifact_kind: str, _auth: str = Depends(require_auth)
+):
+    from fletcher.resume.review_store import artifact_path_for_review
+
+    if artifact_kind not in {"pdf", "tex"}:
+        raise HTTPException(status_code=404, detail="Unsupported artifact")
+    try:
+        path = artifact_path_for_review(review_id, version, artifact_kind)
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail="Artifact not found")
+    media_type = "application/pdf" if artifact_kind == "pdf" else "text/plain"
+    return FileResponse(path, media_type=media_type, filename=path.name)
+
+
+@app.get("/api/fletcher/reviews/{review_id}/log")
+def api_fletcher_review_log(review_id: str, _auth: str = Depends(require_auth)):
+    from fletcher.resume.review_store import attempt_dir_for_review
+
+    try:
+        path = attempt_dir_for_review(review_id) / "pipeline_log.txt"
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail="Review not found")
+    if not path.exists():
+        raise HTTPException(status_code=404, detail="Log not found")
+    return PlainTextResponse(path.read_text(encoding="utf-8", errors="replace"))
 
 
 @app.get("/api/settings")
@@ -3864,6 +4560,22 @@ def api_attempt_pdf(attempt_id: int, _auth: str = Depends(require_auth)):
 @app.get("/api/attempts/{attempt_id}/tex")
 def api_attempt_tex(attempt_id: int, _auth: str = Depends(require_auth)):
     return _serve_attempt_artifact(attempt_id, "tex_path", "text/plain; charset=utf-8")
+
+
+@app.post("/api/attempts/{attempt_id}/review")
+def api_attempt_review(attempt_id: int, _auth: str = Depends(require_auth)):
+    from fletcher.resume.review_from_attempt import create_review_package_from_attempt
+    from fletcher.resume.review_models import model_to_dict
+
+    attempt = _get_attempt_row(attempt_id)
+    if not attempt:
+        raise HTTPException(status_code=404, detail="Attempt not found.")
+    job = get_job_by_id(int(attempt["job_id"])) if attempt.get("job_id") is not None else None
+    try:
+        package = create_review_package_from_attempt(attempt=attempt, job=job)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    return JSONResponse(model_to_dict(package))
 
 
 @app.get("/api/attempts/{attempt_id}/keywords")

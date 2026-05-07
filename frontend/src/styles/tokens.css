@@ -28,6 +28,17 @@
   --info: #7bc4d8;
   --info-soft: #102030;
 
+  --resume-paper: #fffdf8;
+  --resume-ink: #141813;
+  --resume-muted: #5f675d;
+  --diff-add-bg: #dff3e5;
+  --diff-add-border: #256b38;
+  --diff-del-bg: #ffe6e1;
+  --diff-del-border: #a93f31;
+  --diff-neutral-bg: #f6f1e7;
+  --cloud-warning-bg: #2d2410;
+  --cloud-warning-border: #f0b429;
+
   --shadow: 0 4px 16px rgba(0, 0, 0, 0.45);
   --shadow-raised: 0 8px 28px rgba(0, 0, 0, 0.6);
 

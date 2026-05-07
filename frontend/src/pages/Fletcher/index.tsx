@@ -1,22 +1,35 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import {
-  type TailorResult,
+  batchDownloadFletcherJobs,
+  cancelFletcherJob,
+  deleteFletcherJob,
+  enqueueFletcherJob,
+  fetchFletcherJobs,
   fetchC2Status,
-  fetchSettings,
-  tailorResume,
-  triggerC2Generate,
+  moveFletcherJob,
 } from '@/api/control'
+import type { FletcherBatchArtifact } from '@/api/control'
 import { useUiStore } from '@/store/ui'
-import {
-  RESUME_DONE_NOTIFICATION_KEY,
-  notifyResumeDone,
-  settingEnabled,
-} from '@/utils/notifications'
 import styles from './Fletcher.module.css'
+import {
+  loadPersistedFletcherResumeFile,
+  savePersistedFletcherResumeFile,
+} from './persistedResumeFile'
+import type { FletcherQueueItem } from './review/types'
 
 const FLETCHER_FORM_STORAGE_KEY = 'hunt.fletcher.optionBForm'
 const FLETCHER_JOB_ID_STORAGE_KEY = 'hunt.fletcher.optionAJobId'
+const ACTIVE_FLETCHER_STATUSES = new Set(['queued', 'running', 'cancel_requested'])
+const FLETCHER_QUEUE_ACTIVE_REFETCH_MS = 5000
+const FLETCHER_QUEUE_IDLE_REFETCH_MS = 30000
+const BATCH_ARTIFACT_OPTIONS: { id: FletcherBatchArtifact; label: string }[] = [
+  { id: 'log', label: 'Logs' },
+  { id: 'no_summary_pdf', label: 'Resume PDF : no summary' },
+  { id: 'with_summary_pdf', label: 'Resume PDF : with summary' },
+  { id: 'no_summary_tex', label: 'TeX : no summary' },
+  { id: 'with_summary_tex', label: 'TeX : with summary' },
+]
 
 function readStoredText(key: string): string {
   try {
@@ -26,18 +39,89 @@ function readStoredText(key: string): string {
   }
 }
 
-function readStoredOptionBForm(): { jobDetails: string; personalDetails: string } {
+function readStoredOptionBForm(): { jobDetails: string } {
   try {
     const raw = localStorage.getItem(FLETCHER_FORM_STORAGE_KEY)
-    if (!raw) return { jobDetails: '', personalDetails: '' }
-    const parsed = JSON.parse(raw) as Partial<{ jobDetails: string; personalDetails: string }>
+    if (!raw) return { jobDetails: '' }
+    const parsed = JSON.parse(raw) as Partial<{ jobDetails: string }>
     return {
       jobDetails: typeof parsed.jobDetails === 'string' ? parsed.jobDetails : '',
-      personalDetails: typeof parsed.personalDetails === 'string' ? parsed.personalDetails : '',
     }
   } catch {
-    return { jobDetails: '', personalDetails: '' }
+    return { jobDetails: '' }
   }
+}
+
+function formatRunTime(value: string | null | undefined): string {
+  if (!value) return 'Not started'
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return value
+  return new Intl.DateTimeFormat(undefined, {
+    month: 'short',
+    day: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
+  }).format(date)
+}
+
+function fletcherTitle(job: FletcherQueueItem): string {
+  return [job.input.title || 'Ad-hoc resume', job.input.company].filter(Boolean).join(' : ')
+}
+
+function fletcherLogFilename(job: FletcherQueueItem): string {
+  const rawTime = job.finished_at || job.started_at || job.created_at || ''
+  const match = rawTime.match(/(\d{4})\D+(\d{2})\D+(\d{2})\D+(\d{2})\D+(\d{2})\D+(\d{2})/)
+  const timestamp = match
+    ? `${match[1]}-${match[2]}-${match[3]}_${match[4]}-${match[5]}-${match[6]}`
+    : new Date().toISOString().slice(0, 19).replace('T', '_').replace(/:/g, '-')
+  return `log_resume_generation_${timestamp}.log`
+}
+
+function fletcherProgressPercent(job: FletcherQueueItem): number | null {
+  const value = job.progress.percent
+  if (typeof value !== 'number' || !Number.isFinite(value)) return null
+  return Math.max(0, Math.min(100, Math.round(value)))
+}
+
+function nextSmoothedProgress(current: number, target: number): number {
+  if (target <= current) return target
+  const gap = target - current
+  const step = Math.max(0.2, Math.min(0.8, gap * 0.04))
+  return Math.min(target, current + step)
+}
+
+function runTimeMillis(value: string | null | undefined): number {
+  if (!value) return 0
+  const time = new Date(value).getTime()
+  return Number.isNaN(time) ? 0 : time
+}
+
+function historySearchText(job: FletcherQueueItem): string {
+  return [
+    fletcherTitle(job),
+    job.status,
+    job.input.description,
+    job.input.resume_filename,
+    job.error,
+    formatRunTime(job.started_at || job.created_at),
+    formatRunTime(job.finished_at),
+  ]
+    .filter(Boolean)
+    .join(' ')
+    .toLowerCase()
+}
+
+function fletcherSourceLabel(job: FletcherQueueItem): string {
+  return job.input.job_id ? `Option A : Hunt job ${job.input.job_id}` : 'Option B : pasted JD'
+}
+
+function fletcherQueueRefetchInterval(query: {
+  state: { data?: { jobs?: FletcherQueueItem[] } }
+}): number {
+  const jobs = query.state.data?.jobs || []
+  return jobs.some((job) => ACTIVE_FLETCHER_STATUSES.has(job.status))
+    ? FLETCHER_QUEUE_ACTIVE_REFETCH_MS
+    : FLETCHER_QUEUE_IDLE_REFETCH_MS
 }
 
 export function FletcherPage() {
@@ -47,11 +131,9 @@ export function FletcherPage() {
   const qc = useQueryClient()
 
   const [jobDetails, setJobDetails] = useState(() => readStoredOptionBForm().jobDetails)
-  const [personalDetails, setPersonalDetails] = useState(
-    () => readStoredOptionBForm().personalDetails,
-  )
-  const [resumeFile, setResumeFile] = useState<File | null>(null)
-  const [tailorResult, setTailorResult] = useState<TailorResult | null>(null)
+  const resumeFile = useUiStore((s) => s.fletcherResumeFile)
+  const setResumeFile = useUiStore((s) => s.setFletcherResumeFile)
+  const [resumeStorageReady, setResumeStorageReady] = useState(false)
   const [isDragging, setIsDragging] = useState(false)
   const fileRef = useRef<HTMLInputElement>(null)
 
@@ -66,15 +148,11 @@ export function FletcherPage() {
     retry: false,
   })
 
-  const { data: c2Settings } = useQuery({
-    queryKey: ['component-settings', 'c2'],
-    queryFn: () => fetchSettings('c2'),
-    staleTime: 30_000,
+  const { data: queueData } = useQuery({
+    queryKey: ['fletcher-jobs', 100],
+    queryFn: () => fetchFletcherJobs(100),
+    refetchInterval: fletcherQueueRefetchInterval,
   })
-
-  const resumeDoneNotificationsEnabled = settingEnabled(
-    c2Settings?.settings.find((s) => s.key === RESUME_DONE_NOTIFICATION_KEY)?.value,
-  )
 
   useEffect(() => {
     try {
@@ -86,52 +164,68 @@ export function FletcherPage() {
 
   useEffect(() => {
     try {
-      localStorage.setItem(
-        FLETCHER_FORM_STORAGE_KEY,
-        JSON.stringify({ jobDetails, personalDetails }),
-      )
+      localStorage.setItem(FLETCHER_FORM_STORAGE_KEY, JSON.stringify({ jobDetails }))
     } catch {
       // Ignore storage failures; the form should still work.
     }
-  }, [jobDetails, personalDetails])
+  }, [jobDetails])
+
+  useEffect(() => {
+    let cancelled = false
+    loadPersistedFletcherResumeFile()
+      .then((file) => {
+        if (cancelled || !file) return
+        if (!useUiStore.getState().fletcherResumeFile) {
+          setResumeFile(file)
+        }
+      })
+      .catch(() => {
+        // Persistence is a convenience; the file picker still works without it.
+      })
+      .finally(() => {
+        if (!cancelled) setResumeStorageReady(true)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [setResumeFile])
+
+  useEffect(() => {
+    if (!resumeStorageReady) return
+    savePersistedFletcherResumeFile(resumeFile).catch(() => {
+      // The selected file should still work for this session if persistence is unavailable.
+    })
+  }, [resumeFile, resumeStorageReady])
 
   const generate = useMutation({
-    mutationFn: (id: number) => triggerC2Generate(id),
+    mutationFn: (id: number) => enqueueFletcherJob({ jobId: id }),
     onSuccess: (res) => {
       setJobIdResult(res)
-      showToast('Resume generation finished')
-      notifyResumeDone({
-        enabled: resumeDoneNotificationsEnabled,
-        title: 'Hunt resume ready',
-        body: `Queued job ${jobId || 'resume'} finished generating.`,
-      })
-      qc.invalidateQueries({ queryKey: ['c2-status'] })
+      showToast('Fletcher job queued')
+      qc.invalidateQueries({ queryKey: ['fletcher-jobs'] })
     },
-    onError: (e) => showToast(e instanceof Error ? e.message : 'Generation failed', 'error'),
+    onError: (e) => showToast(e instanceof Error ? e.message : 'Queue failed', 'error'),
   })
 
-  const tailor = useMutation({
-    mutationFn: () => tailorResume({ jobDetails, personalDetails, resume: resumeFile }),
-    onSuccess: (result) => {
-      setTailorResult(result)
-      if (result.errorType) {
-        showToast(result.error ?? 'Tailoring skipped', 'error')
-      } else if (result.withSummary || result.noSummary) {
-        showToast(result.withSummary ? 'Both versions ready' : 'Resume ready - click to download')
-      } else {
-        showToast('Tailoring finished without a PDF', 'error')
-      }
-      notifyResumeDone({
-        enabled: resumeDoneNotificationsEnabled && !result.errorType,
-        title: result.withSummary || result.noSummary ? 'Hunt resume ready' : 'Hunt tailoring finished',
-        body: result.withSummary
-          ? 'Fletcher generated both resume versions.'
-          : result.noSummary
-            ? 'Fletcher generated the no-summary resume.'
-            : 'Fletcher finished without a PDF.',
-      })
+  const enqueue = useMutation({
+    mutationFn: () => enqueueFletcherJob({ description: jobDetails, resume: resumeFile }),
+    onSuccess: () => {
+      showToast('Fletcher job queued')
+      setJobDetails('')
+      qc.invalidateQueries({ queryKey: ['fletcher-jobs'] })
     },
-    onError: (e) => showToast(e instanceof Error ? e.message : 'Tailor failed', 'error'),
+    onError: (e) => showToast(e instanceof Error ? e.message : 'Queue failed', 'error'),
+  })
+
+  const moveJob = useMutation({
+    mutationFn: ({ id, direction }: { id: string; direction: 'up' | 'down' }) =>
+      moveFletcherJob(id, direction),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['fletcher-jobs'] }),
+  })
+
+  const cancelJob = useMutation({
+    mutationFn: (id: string) => cancelFletcherJob(id),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['fletcher-jobs'] }),
   })
 
   function handleDrop(e: React.DragEvent) {
@@ -173,11 +267,24 @@ export function FletcherPage() {
       showToast('Resume file required', 'error')
       return
     }
-    setTailorResult(null)
-    tailor.mutate()
+    enqueue.mutate()
   }
 
   const serviceOnline = !statusError && !!statusData
+  const activeFletcherJobs = (queueData?.jobs || []).filter((job) =>
+    ACTIVE_FLETCHER_STATUSES.has(job.status),
+  )
+  const matchingActiveJob = activeFletcherJobs.find(
+    (job) => (job.input.description || '').trim() === jobDetails.trim(),
+  )
+  const optionBSubmitDisabled = enqueue.isPending || !!matchingActiveJob
+  const optionBSubmitText = enqueue.isPending
+    ? 'Queueing...'
+    : matchingActiveJob?.status === 'running'
+      ? 'Resume run in progress'
+      : matchingActiveJob
+        ? 'Resume run queued'
+        : 'Queue resume run'
 
   return (
     <div className={styles.page}>
@@ -190,7 +297,7 @@ export function FletcherPage() {
           className={`${styles.statusPill} ${serviceOnline ? styles.statusPillOnline : styles.statusPillOffline}`}
         >
           <span className={styles.statusDot} />
-          {statusLoading ? 'Checking…' : serviceOnline ? 'Service online' : 'Service offline'}
+          {statusLoading ? 'Checking...' : serviceOnline ? 'Service online' : 'Service offline'}
         </div>
       </div>
 
@@ -218,7 +325,7 @@ export function FletcherPage() {
               disabled={generate.isPending}
               onClick={submitJobId}
             >
-              {generate.isPending ? 'Requesting…' : 'Generate'}
+              {generate.isPending ? 'Queueing...' : 'Queue resume run'}
             </button>
           </div>
           {jobIdResult ? (
@@ -242,16 +349,7 @@ export function FletcherPage() {
                 className={styles.textarea}
                 value={jobDetails}
                 onChange={(e) => setJobDetails(e.target.value)}
-                placeholder="Paste the job title, company, and full description here…"
-              />
-            </label>
-            <label className={styles.field}>
-              Personal details
-              <textarea
-                className={styles.textarea}
-                value={personalDetails}
-                onChange={(e) => setPersonalDetails(e.target.value)}
-                placeholder="Your background, skills, or notes to guide the tailoring…"
+                placeholder="Paste the job title, company, and full description here..."
               />
             </label>
             <label className={styles.field}>
@@ -290,58 +388,662 @@ export function FletcherPage() {
             </label>
             <button
               className={`${styles.btn} ${styles.btnPrimary}`}
-              disabled={tailor.isPending}
+              disabled={optionBSubmitDisabled}
               onClick={submitTailor}
               style={{ alignSelf: 'flex-start' }}
             >
-              {tailor.isPending ? 'Generating…' : 'Generate PDF'}
+              {optionBSubmitText}
+            </button>
+            {matchingActiveJob ? (
+              <div className={styles.activeRunNotice}>
+                This description already has a background run. Open it from the queue below when it
+                finishes.
+              </div>
+            ) : activeFletcherJobs.length ? (
+              <div className={styles.activeRunNotice}>
+                {activeFletcherJobs.length} background run
+                {activeFletcherJobs.length === 1 ? '' : 's'} active. You can still queue a different
+                resume.
+              </div>
+            ) : null}
+          </div>
+        </div>
+      </div>
+      <FletcherQueuePanel
+        jobs={queueData?.jobs || []}
+        onMove={(id, direction) => moveJob.mutate({ id, direction })}
+        onCancel={(id) => cancelJob.mutate(id)}
+      />
+    </div>
+  )
+}
+
+function FletcherQueuePanel({
+  jobs,
+  onMove,
+  onCancel,
+}: {
+  jobs: FletcherQueueItem[]
+  onMove: (id: string, direction: 'up' | 'down') => void
+  onCancel: (id: string) => void
+}) {
+  const showToast = useUiStore((s) => s.showToast)
+  const qc = useQueryClient()
+  const activeJobs = useMemo(
+    () => jobs.filter((job) => ACTIVE_FLETCHER_STATUSES.has(job.status)),
+    [jobs],
+  )
+  const [displayedProgress, setDisplayedProgress] = useState<Record<string, number>>({})
+  const historyJobs = useMemo(
+    () =>
+      jobs
+        .filter((job) => !ACTIVE_FLETCHER_STATUSES.has(job.status))
+        .sort((a, b) => runTimeMillis(b.finished_at) - runTimeMillis(a.finished_at)),
+    [jobs],
+  )
+  const [historySearch, setHistorySearch] = useState('')
+  const [detailJob, setDetailJob] = useState<FletcherQueueItem | null>(null)
+  const [selectedHistoryIds, setSelectedHistoryIds] = useState<string[]>([])
+  const [batchOptionsOpen, setBatchOptionsOpen] = useState(false)
+  const [batchDownloading, setBatchDownloading] = useState(false)
+  const [batchArtifacts, setBatchArtifacts] = useState<Record<FletcherBatchArtifact, boolean>>({
+    log: true,
+    no_summary_pdf: true,
+    with_summary_pdf: false,
+    no_summary_tex: false,
+    with_summary_tex: false,
+  })
+  const normalizedHistorySearch = historySearch.trim().toLowerCase()
+  const visibleHistoryJobs = normalizedHistorySearch
+    ? historyJobs.filter((job) => historySearchText(job).includes(normalizedHistorySearch))
+    : historyJobs
+  const historyIdSet = new Set(visibleHistoryJobs.map((job) => job.queue_item_id))
+  const selectedHistoryIdsInView = selectedHistoryIds.filter((id) => historyIdSet.has(id))
+  const selectedHistoryIdSet = new Set(selectedHistoryIdsInView)
+  const allHistorySelected =
+    visibleHistoryJobs.length > 0 &&
+    visibleHistoryJobs.every((job) => selectedHistoryIdSet.has(job.queue_item_id))
+  const deleteHistory = useMutation({
+    mutationFn: async (queueItemIds: string[]) => {
+      await Promise.all(queueItemIds.map((id) => deleteFletcherJob(id)))
+      return queueItemIds
+    },
+    onSuccess: (queueItemIds) => {
+      setSelectedHistoryIds((current) => current.filter((id) => !queueItemIds.includes(id)))
+      setDetailJob((current) =>
+        current && queueItemIds.includes(current.queue_item_id) ? null : current,
+      )
+      qc.invalidateQueries({ queryKey: ['fletcher-jobs'] })
+      showToast(
+        `${queueItemIds.length} Fletcher histor${queueItemIds.length === 1 ? 'y entry' : 'y entries'} deleted`,
+      )
+    },
+    onError: (e) =>
+      showToast(e instanceof Error ? e.message : 'Delete Fletcher history failed', 'error'),
+  })
+
+  useEffect(() => {
+    const timer = window.setInterval(() => {
+      const activeTargets = new Map(
+        activeJobs
+          .map((job) => [job.queue_item_id, fletcherProgressPercent(job)] as const)
+          .filter((entry): entry is readonly [string, number] => entry[1] !== null),
+      )
+      if (!activeTargets.size) {
+        setDisplayedProgress((current) => (Object.keys(current).length ? {} : current))
+        return
+      }
+      setDisplayedProgress((current) => {
+        let changed = false
+        const next: Record<string, number> = {}
+        for (const [queueItemId, target] of activeTargets) {
+          const currentValue = current[queueItemId] ?? Math.min(target, 1)
+          const smoothed = nextSmoothedProgress(currentValue, target)
+          next[queueItemId] = smoothed
+          if (Math.abs(smoothed - currentValue) > 0.001) changed = true
+        }
+        if (Object.keys(current).some((queueItemId) => !activeTargets.has(queueItemId))) {
+          changed = true
+        }
+        return changed ? next : current
+      })
+    }, 200)
+    return () => window.clearInterval(timer)
+  }, [activeJobs])
+
+  function toggleHistorySelection(queueItemId: string, checked: boolean) {
+    setSelectedHistoryIds((current) => {
+      if (checked) return current.includes(queueItemId) ? current : [...current, queueItemId]
+      return current.filter((id) => id !== queueItemId)
+    })
+  }
+
+  function toggleAllHistory(checked: boolean) {
+    setSelectedHistoryIds(checked ? visibleHistoryJobs.map((job) => job.queue_item_id) : [])
+  }
+
+  function selectedBatchArtifacts(): FletcherBatchArtifact[] {
+    return BATCH_ARTIFACT_OPTIONS.filter((option) => batchArtifacts[option.id]).map(
+      (option) => option.id,
+    )
+  }
+
+  async function downloadSelectedHistory() {
+    const artifacts = selectedBatchArtifacts()
+    if (!selectedHistoryIdsInView.length) {
+      showToast('Select at least one history run', 'error')
+      return
+    }
+    if (!artifacts.length) {
+      showToast('Select at least one artifact type', 'error')
+      return
+    }
+    setBatchDownloading(true)
+    try {
+      const blob = await batchDownloadFletcherJobs({
+        queueItemIds: selectedHistoryIdsInView,
+        artifacts,
+      })
+      const url = URL.createObjectURL(blob)
+      const anchor = document.createElement('a')
+      anchor.href = url
+      anchor.download = `fletcher_history_${new Date().toISOString().slice(0, 10)}.zip`
+      document.body.appendChild(anchor)
+      anchor.click()
+      anchor.remove()
+      window.setTimeout(() => URL.revokeObjectURL(url), 1000)
+      showToast('Fletcher history download started')
+    } catch (e) {
+      showToast(e instanceof Error ? e.message : 'Batch download failed', 'error')
+    } finally {
+      setBatchDownloading(false)
+    }
+  }
+
+  function deleteSelectedHistory() {
+    if (!selectedHistoryIdsInView.length) {
+      showToast('Select at least one history run', 'error')
+      return
+    }
+    const count = selectedHistoryIdsInView.length
+    if (!window.confirm(`Delete ${count} Fletcher history entr${count === 1 ? 'y' : 'ies'}?`)) {
+      return
+    }
+    deleteHistory.mutate(selectedHistoryIdsInView)
+  }
+
+  function deleteOneHistory(queueItemId: string, title: string) {
+    if (!window.confirm(`Delete Fletcher history entry: ${title}?`)) return
+    deleteHistory.mutate([queueItemId])
+  }
+
+  return (
+    <>
+      <section className={styles.queuePanel}>
+        <div className={styles.queueHeader}>
+          <div>
+            <h2 className={styles.workflowTitle}>Fletcher queue</h2>
+            <div className={styles.workflowDesc}>Background resume runs continue across tabs.</div>
+          </div>
+          <span className={styles.meta}>
+            {activeJobs.length} active job{activeJobs.length === 1 ? '' : 's'}
+          </span>
+        </div>
+        <div className={styles.queueList}>
+          {activeJobs.length ? (
+            activeJobs.map((job) => {
+              const progressPercent = fletcherProgressPercent(job)
+              const displayedPercent =
+                progressPercent === null
+                  ? null
+                  : Math.round(displayedProgress[job.queue_item_id] ?? progressPercent)
+              return (
+                  <article className={styles.queueCard} key={job.queue_item_id}>
+                    <div className={styles.queueCopy}>
+                      <button
+                        className={styles.queueTitleButton}
+                        onClick={() => setDetailJob(job)}
+                        title={fletcherTitle(job)}
+                      >
+                        {fletcherTitle(job)}
+                      </button>
+                      <div className={styles.meta}>
+                        {job.status} : {job.progress.current_step || 'waiting'}
+                      </div>
+                      <div className={styles.meta}>Started: {formatRunTime(job.started_at)}</div>
+                      {job.status !== 'queued' && displayedPercent !== null ? (
+                        <div className={styles.progressRow}>
+                          <div
+                            className={styles.progressTrack}
+                            role="progressbar"
+                            aria-valuemin={0}
+                            aria-valuemax={100}
+                            aria-valuenow={displayedPercent}
+                            aria-label={`${fletcherTitle(job)} progress`}
+                          >
+                            <div
+                              className={styles.progressFill}
+                              style={{ width: `${displayedPercent}%` }}
+                            />
+                          </div>
+                          <span className={styles.progressText}>{displayedPercent}%</span>
+                        </div>
+                      ) : null}
+                      {job.error ? (
+                        <div className={`${styles.llmErrorDetail} ${styles.queueErrorPreview}`}>
+                          {job.error}
+                        </div>
+                      ) : null}
+                    </div>
+                    <div className={styles.queueActions}>
+                      {job.status === 'queued' ? (
+                        <>
+                          <button
+                            className={styles.btn}
+                            onClick={() => onMove(job.queue_item_id, 'up')}
+                          >
+                            Up
+                          </button>
+                          <button
+                            className={styles.btn}
+                            onClick={() => onMove(job.queue_item_id, 'down')}
+                          >
+                            Down
+                          </button>
+                          <button
+                            className={styles.btn}
+                            onClick={() => onCancel(job.queue_item_id)}
+                          >
+                            Cancel
+                          </button>
+                        </>
+                      ) : null}
+                      {job.result.review_id ? (
+                        <a
+                          className={styles.btn}
+                          href={`/fletcher/reviews/${job.result.review_id}`}
+                        >
+                          Open workspace
+                        </a>
+                      ) : null}
+                      <a
+                        className={styles.btn}
+                        href={`/api/fletcher/tailor/jobs/${job.queue_item_id}/log`}
+                        target="_blank"
+                        rel="noreferrer"
+                      >
+                        View log
+                      </a>
+                      <a
+                        className={styles.btn}
+                        href={`/api/fletcher/tailor/jobs/${job.queue_item_id}/log?download=1`}
+                        download={fletcherLogFilename(job)}
+                      >
+                        Download log
+                      </a>
+                    </div>
+                  </article>
+              )
+            })
+          ) : (
+            <div className={styles.meta}>No active Fletcher jobs.</div>
+          )}
+        </div>
+      </section>
+
+      <section className={styles.queuePanel}>
+        <div className={styles.queueHeader}>
+          <div>
+            <h2 className={styles.workflowTitle}>Fletcher history</h2>
+            <div className={styles.workflowDesc}>
+              Previous Option B runs are stored in the Hunt DB for this project.
+            </div>
+          </div>
+          <span className={styles.meta}>
+            {historyJobs.length} previous run{historyJobs.length === 1 ? '' : 's'}
+          </span>
+        </div>
+        {historyJobs.length ? (
+          <>
+            <div className={styles.historyFilterBar}>
+              <label className={styles.historySearchField}>
+                Search history
+                <input
+                  className={styles.input}
+                  value={historySearch}
+                  onChange={(e) => setHistorySearch(e.target.value)}
+                  placeholder="Search title, status, file, error, or time..."
+                />
+              </label>
+              <span className={styles.meta}>
+                Showing {visibleHistoryJobs.length} of {historyJobs.length}
+              </span>
+            </div>
+            <div className={styles.batchToolbar}>
+              <label className={styles.checkRow}>
+                <input
+                  type="checkbox"
+                  checked={allHistorySelected}
+                  onChange={(e) => toggleAllHistory(e.target.checked)}
+                />
+                Select all
+              </label>
+              <button
+                className={styles.btn}
+                disabled={!selectedHistoryIdsInView.length}
+                onClick={() => setBatchOptionsOpen((open) => !open)}
+              >
+                Download selected
+              </button>
+              <button
+                className={`${styles.btn} ${styles.btnDanger}`}
+                disabled={!selectedHistoryIdsInView.length || deleteHistory.isPending}
+                onClick={deleteSelectedHistory}
+              >
+                {deleteHistory.isPending ? 'Deleting...' : 'Delete selected'}
+              </button>
+              {selectedHistoryIdsInView.length ? (
+                <button className={styles.btn} onClick={() => setSelectedHistoryIds([])}>
+                  Clear
+                </button>
+              ) : null}
+              <span className={styles.meta}>{selectedHistoryIdsInView.length} selected</span>
+            </div>
+          </>
+        ) : null}
+        {batchOptionsOpen ? (
+          <div className={styles.batchOptions}>
+            <div className={styles.batchOptionGrid}>
+              {BATCH_ARTIFACT_OPTIONS.map((option) => (
+                <label className={styles.checkRow} key={option.id}>
+                  <input
+                    type="checkbox"
+                    checked={batchArtifacts[option.id]}
+                    onChange={(e) =>
+                      setBatchArtifacts((current) => ({
+                        ...current,
+                        [option.id]: e.target.checked,
+                      }))
+                    }
+                  />
+                  {option.label}
+                </label>
+              ))}
+            </div>
+            <button
+              className={`${styles.btn} ${styles.btnPrimary}`}
+              disabled={batchDownloading}
+              onClick={downloadSelectedHistory}
+            >
+              {batchDownloading ? 'Preparing ZIP...' : 'Download ZIP'}
             </button>
           </div>
-          {tailorResult ? (
-            <div className={styles.downloadGroup}>
-              {tailorResult.errorType ? (
-                <div className={styles.llmErrorBanner}>
-                  <strong>{tailorResult.errorType}</strong> - no resume was generated.
-                  <span className={styles.llmErrorDetail}>{tailorResult.error}</span>
-                </div>
-              ) : null}
-              {tailorResult.llmError ? (
-                <div className={styles.llmErrorBanner}>
-                  <strong>LLM unavailable</strong> - resume returned without tailoring.
-                  <span className={styles.llmErrorDetail}>{tailorResult.llmError}</span>
-                </div>
-              ) : null}
-              {tailorResult.noSummary ? (
-                <a
-                  className={styles.downloadLink}
-                  href={URL.createObjectURL(tailorResult.noSummary)}
-                  download="resume_no_summary.pdf"
+        ) : null}
+        <div className={styles.queueList}>
+          {visibleHistoryJobs.length ? (
+            visibleHistoryJobs.map((job) => {
+              const title = fletcherTitle(job)
+              const reviewId = job.result.review_id
+              const pdfUrl =
+                job.result.pdf_url ||
+                (reviewId ? `/api/fletcher/reviews/${reviewId}/versions/no_summary/pdf` : null)
+              const texUrl =
+                job.result.tex_url ||
+                (reviewId ? `/api/fletcher/reviews/${reviewId}/versions/no_summary/tex` : null)
+              const selected = selectedHistoryIdSet.has(job.queue_item_id)
+              return (
+                <article
+                  className={`${styles.queueCard} ${styles.queueCardSelectable}`}
+                  key={job.queue_item_id}
                 >
-                  ↓ Download (no summary)
-                </a>
-              ) : null}
-              {tailorResult.withSummary ? (
-                <a
-                  className={styles.downloadLink}
-                  href={URL.createObjectURL(tailorResult.withSummary)}
-                  download="resume_with_summary.pdf"
-                >
-                  ↓ Download (with summary)
-                </a>
-              ) : null}
-              {tailorResult.log ? (
-                <a
-                  className={`${styles.downloadLink} ${styles.downloadLinkLog}`}
-                  href={URL.createObjectURL(tailorResult.log)}
-                  download="pipeline_log.txt"
-                >
-                  ↓ Download log
-                </a>
-              ) : null}
+                  <label className={styles.historySelect}>
+                    <input
+                      type="checkbox"
+                      checked={selected}
+                      aria-label={`Select ${title}`}
+                      onChange={(e) => toggleHistorySelection(job.queue_item_id, e.target.checked)}
+                    />
+                  </label>
+                  <div className={styles.queueCopy}>
+                    <button
+                      className={styles.queueTitleButton}
+                      onClick={() => setDetailJob(job)}
+                      title={title}
+                    >
+                      {title}
+                    </button>
+                    <div className={styles.historyMetaGrid}>
+                      <span>Status: {job.status}</span>
+                      <span>Started: {formatRunTime(job.started_at || job.created_at)}</span>
+                      <span>Finished: {formatRunTime(job.finished_at)}</span>
+                    </div>
+                    {job.error ? (
+                      <div className={`${styles.llmErrorDetail} ${styles.queueErrorPreview}`}>
+                        {job.error}
+                      </div>
+                    ) : null}
+                  </div>
+                  <div className={styles.queueActions}>
+                    {reviewId ? (
+                      <a className={styles.btn} href={`/fletcher/reviews/${reviewId}`}>
+                        Open workspace
+                      </a>
+                    ) : null}
+                    {pdfUrl ? (
+                      <a className={styles.btn} href={pdfUrl}>
+                        PDF
+                      </a>
+                    ) : null}
+                    {texUrl ? (
+                      <a className={styles.btn} href={texUrl}>
+                        TeX
+                      </a>
+                    ) : null}
+                    <a
+                      className={styles.btn}
+                      href={`/api/fletcher/tailor/jobs/${job.queue_item_id}/log`}
+                      target="_blank"
+                      rel="noreferrer"
+                    >
+                      View log
+                    </a>
+                    <a
+                      className={styles.btn}
+                      href={`/api/fletcher/tailor/jobs/${job.queue_item_id}/log?download=1`}
+                      download={fletcherLogFilename(job)}
+                    >
+                      Download log
+                    </a>
+                    <button
+                      className={`${styles.btn} ${styles.btnDanger}`}
+                      disabled={deleteHistory.isPending}
+                      onClick={() => deleteOneHistory(job.queue_item_id, title)}
+                    >
+                      Delete
+                    </button>
+                  </div>
+                </article>
+              )
+            })
+          ) : (
+            <div className={styles.meta}>
+              {historyJobs.length
+                ? 'No Fletcher runs match this search.'
+                : 'No completed Fletcher runs yet.'}
+            </div>
+          )}
+        </div>
+      </section>
+      {detailJob ? (
+        <FletcherJobDetailModal
+          job={detailJob}
+          onClose={() => setDetailJob(null)}
+          onMove={onMove}
+          onCancel={onCancel}
+          onDelete={(jobToDelete) => deleteOneHistory(jobToDelete.queue_item_id, fletcherTitle(jobToDelete))}
+          deletePending={deleteHistory.isPending}
+        />
+      ) : null}
+    </>
+  )
+}
+
+function FletcherJobDetailModal({
+  job,
+  onClose,
+  onMove,
+  onCancel,
+  onDelete,
+  deletePending,
+}: {
+  job: FletcherQueueItem
+  onClose: () => void
+  onMove: (id: string, direction: 'up' | 'down') => void
+  onCancel: (id: string) => void
+  onDelete: (job: FletcherQueueItem) => void
+  deletePending: boolean
+}) {
+  const title = fletcherTitle(job)
+  const reviewId = job.result.review_id
+  const pdfUrl =
+    job.result.pdf_url ||
+    (reviewId ? `/api/fletcher/reviews/${reviewId}/versions/no_summary/pdf` : null)
+  const texUrl =
+    job.result.tex_url ||
+    (reviewId ? `/api/fletcher/reviews/${reviewId}/versions/no_summary/tex` : null)
+  const isActive = ACTIVE_FLETCHER_STATUSES.has(job.status)
+  const description = (job.input.description || '').trim()
+  const progressPercent = fletcherProgressPercent(job)
+
+  return (
+    <div className={styles.modalBackdrop} role="presentation" onClick={onClose}>
+      <section
+        className={styles.detailModal}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="fletcher-job-detail-title"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className={styles.detailHeader}>
+          <div className={styles.detailHeaderCopy}>
+            <div className={styles.workflowLabel}>{fletcherSourceLabel(job)}</div>
+            <h2 className={styles.detailTitle} id="fletcher-job-detail-title">
+              {title}
+            </h2>
+          </div>
+          <button className={styles.btn} onClick={onClose}>
+            Close
+          </button>
+        </div>
+
+        <div className={styles.detailActionBar}>
+          {job.status === 'queued' ? (
+            <>
+              <button className={styles.btn} onClick={() => onMove(job.queue_item_id, 'up')}>
+                Up
+              </button>
+              <button className={styles.btn} onClick={() => onMove(job.queue_item_id, 'down')}>
+                Down
+              </button>
+              <button className={styles.btn} onClick={() => onCancel(job.queue_item_id)}>
+                Cancel
+              </button>
+            </>
+          ) : null}
+          {reviewId ? (
+            <a className={styles.btn} href={`/fletcher/reviews/${reviewId}`}>
+              Open workspace
+            </a>
+          ) : null}
+          {pdfUrl ? (
+            <a className={styles.btn} href={pdfUrl}>
+              PDF
+            </a>
+          ) : null}
+          {texUrl ? (
+            <a className={styles.btn} href={texUrl}>
+              TeX
+            </a>
+          ) : null}
+          <a
+            className={styles.btn}
+            href={`/api/fletcher/tailor/jobs/${job.queue_item_id}/log`}
+            target="_blank"
+            rel="noreferrer"
+          >
+            View log
+          </a>
+          <a
+            className={styles.btn}
+            href={`/api/fletcher/tailor/jobs/${job.queue_item_id}/log?download=1`}
+            download={fletcherLogFilename(job)}
+          >
+            Download log
+          </a>
+          {!isActive ? (
+            <button
+              className={`${styles.btn} ${styles.btnDanger}`}
+              disabled={deletePending}
+              onClick={() => onDelete(job)}
+            >
+              Delete
+            </button>
+          ) : null}
+        </div>
+
+        <div className={styles.detailMetaGrid}>
+          <div>
+            <span>Status</span>
+            <strong>{job.status}</strong>
+          </div>
+          <div>
+            <span>Started</span>
+            <strong>{formatRunTime(job.started_at || job.created_at)}</strong>
+          </div>
+          <div>
+            <span>Finished</span>
+            <strong>{formatRunTime(job.finished_at)}</strong>
+          </div>
+          <div>
+            <span>Resume file</span>
+            <strong>{job.input.resume_filename || '-'}</strong>
+          </div>
+          <div>
+            <span>Queue ID</span>
+            <strong>{job.queue_item_id}</strong>
+          </div>
+          {job.input.job_id ? (
+            <div>
+              <span>Hunt job ID</span>
+              <strong>{job.input.job_id}</strong>
+            </div>
+          ) : null}
+          {progressPercent !== null ? (
+            <div>
+              <span>Progress</span>
+              <strong>{progressPercent}%</strong>
+            </div>
+          ) : null}
+          {job.progress.current_step ? (
+            <div>
+              <span>Step</span>
+              <strong>{job.progress.current_step}</strong>
             </div>
           ) : null}
         </div>
-      </div>
+
+        {job.error ? (
+          <div className={styles.detailBlock}>
+            <h3>Error</h3>
+            <pre>{job.error}</pre>
+          </div>
+        ) : null}
+
+        <div className={styles.detailBlock}>
+          <h3>{job.input.job_id ? 'Job details' : 'Job description'}</h3>
+          <pre>{description || 'No job description was stored for this run.'}</pre>
+        </div>
+      </section>
     </div>
   )
 }

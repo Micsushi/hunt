@@ -17,6 +17,7 @@ if TYPE_CHECKING:
 
 _LOG_LLM = False  # per-call LLM noise suppressed; full trace printed by pipeline._print_trace
 
+
 def _llm_log(call_name: str, prompt: str, response: str, duration_ms: int | None) -> None:
     if not _LOG_LLM:
         return
@@ -55,6 +56,15 @@ def _dedupe_case(values: list[str]) -> list[str]:
             seen.add(key)
             out.append(item)
     return out
+
+
+def capitalize_skill_phrase(value: str) -> str:
+    """Uppercase the first alphabetic character in a skill phrase."""
+    item = str(value or "").strip()
+    for idx, char in enumerate(item):
+        if char.isalpha():
+            return f"{item[:idx]}{char.upper()}{item[idx + 1 :]}"
+    return item
 
 
 def build_jd_prompt_excerpt(description: str, max_chars: int) -> str:
@@ -183,6 +193,104 @@ def _visible_action_phrases(keyword: str) -> tuple[str, ...]:
     return ()
 
 
+def _find_matching_brace(text: str, open_idx: int) -> int:
+    depth = 0
+    for idx in range(open_idx, len(text)):
+        char = text[idx]
+        escaped = idx > 0 and text[idx - 1] == "\\"
+        if char == "{" and not escaped:
+            depth += 1
+        elif char == "}" and not escaped:
+            depth -= 1
+            if depth == 0:
+                return idx
+    return -1
+
+
+def _read_braced(text: str, open_idx: int) -> tuple[str, int] | None:
+    if open_idx >= len(text) or text[open_idx] != "{":
+        return None
+    close_idx = _find_matching_brace(text, open_idx)
+    if close_idx < 0:
+        return None
+    return text[open_idx + 1 : close_idx], close_idx + 1
+
+
+def _clean_latex_visible_text(text: str) -> str:
+    cleaned = re.sub(r"\\href\{[^{}]*\}\{([^{}]*)\}", r"\1", text or "")
+    cleaned = re.sub(r"\\textbf\{([^{}]*)\}", r"\1", cleaned)
+    cleaned = re.sub(r"\\([#$%&_{}])", r"\1", cleaned)
+    cleaned = re.sub(r"\\[a-zA-Z]+\*?(?:\[[^\]]*\])?", "", cleaned)
+    return re.sub(r"\s+", " ", cleaned.replace("{", "").replace("}", "")).strip()
+
+
+def _extract_textbf_phrases(text: str) -> list[str]:
+    phrases: list[str] = []
+    cursor = 0
+    while True:
+        start = text.find(r"\textbf", cursor)
+        if start < 0:
+            break
+        content = _read_braced(text, start + len(r"\textbf"))
+        if not content:
+            cursor = start + len(r"\textbf")
+            continue
+        visible = _clean_latex_visible_text(content[0])
+        if visible:
+            phrases.append(visible)
+        cursor = content[1]
+    return _dedupe_case(phrases)
+
+
+def _textbf_spans(text: str) -> list[tuple[int, int]]:
+    spans: list[tuple[int, int]] = []
+    cursor = 0
+    while True:
+        start = text.find(r"\textbf", cursor)
+        if start < 0:
+            break
+        content = _read_braced(text, start + len(r"\textbf"))
+        if not content:
+            cursor = start + len(r"\textbf")
+            continue
+        spans.append((start, content[1]))
+        cursor = content[1]
+    return spans
+
+
+def _inside_spans(start: int, end: int, spans: list[tuple[int, int]]) -> bool:
+    return any(span_start <= start and end <= span_end for span_start, span_end in spans)
+
+
+def _phrase_pattern(phrase: str) -> re.Pattern[str]:
+    escaped = re.escape(phrase)
+    prefix = r"(?<![A-Za-z0-9])" if phrase[:1].isalnum() else ""
+    suffix = r"(?![A-Za-z0-9])" if phrase[-1:].isalnum() else ""
+    return re.compile(f"{prefix}{escaped}{suffix}", re.IGNORECASE)
+
+
+def _escape_latex_inline(text: str) -> str:
+    result = text
+    for char in ("$", "%", "&", "#"):
+        result = re.sub(r"(?<!\\)" + re.escape(char), "\\" + char, result)
+    return result
+
+
+def restore_textbf_from_original(original: str, rewritten: str) -> str:
+    """Restore first-occurrence bold spans from the original bullet after model rewrite."""
+    output = rewritten or ""
+    for phrase in _extract_textbf_phrases(original or ""):
+        spans = _textbf_spans(output)
+        pattern = _phrase_pattern(phrase)
+        for match in pattern.finditer(output):
+            if _inside_spans(match.start(), match.end(), spans):
+                continue
+            bold_text = _escape_latex_inline(match.group(0))
+            output = f"{output[: match.start()]}\\textbf{{{bold_text}}}{output[match.end() :]}"
+            break
+    return output
+
+
 def keyword_visible_in_text(keyword: str, text: str) -> bool:
     """Return true when a requested keyword is visibly represented in text."""
     key = _normalize_visible_text(keyword)
@@ -194,14 +302,22 @@ def keyword_visible_in_text(keyword: str, text: str) -> bool:
     return any(_normalize_visible_text(phrase) in visible for phrase in allowed)
 
 
-def repair_rewrite_redundancy(text: str) -> str:
-    """Fix small deterministic awkward phrases before validation."""
-    return re.sub(
-        r"\bKotlin microservices and backend services\b",
-        "backend Kotlin microservices",
-        text or "",
-        flags=re.IGNORECASE,
-    )
+def _rewrite_prompt_policy_kwargs(
+    prompt_settings: dict[str, object],
+    *,
+    include_strategy: bool = False,
+) -> dict[str, str]:
+    kwargs = {
+        "rewrite_keyword_fit_policy": str(prompt_settings.get("rewrite_keyword_fit_policy") or ""),
+        "rewrite_bullet_policy": str(prompt_settings.get("rewrite_bullet_policy") or ""),
+        "rewrite_length_policy": str(prompt_settings.get("rewrite_length_policy") or ""),
+        "rewrite_action_keyword_policy": str(
+            prompt_settings.get("rewrite_action_keyword_policy") or ""
+        ),
+    }
+    if include_strategy:
+        kwargs["rewrite_strategy"] = str(prompt_settings.get("rewrite_strategy") or "")
+    return kwargs
 
 
 def validate_rewrite_with_ollama(
@@ -211,7 +327,7 @@ def validate_rewrite_with_ollama(
     requested_keywords: list[str],
     logger: PipelineLogger | None = None,
 ) -> dict[str, Any]:
-    if config.DEFAULT_MODEL_BACKEND != "ollama":
+    if config.resume_llm_provider() != "ollama":
         return {
             "accepted": True,
             "keywords_supported": list(requested_keywords),
@@ -219,11 +335,12 @@ def validate_rewrite_with_ollama(
             "reason": "validator_disabled",
         }
 
+    prompt_settings = load_c2_prompt_settings()
     prompt = prompts.build_validate_rewrite_prompt(
         original=original,
         rewritten=rewritten,
         requested_keywords=requested_keywords,
-        rewrite_examples=str(load_c2_prompt_settings().get("rewrite_examples") or ""),
+        **_rewrite_prompt_policy_kwargs(prompt_settings),
     )
     start = time.perf_counter()
     raw = _ollama_chat(prompt)
@@ -254,85 +371,6 @@ def validate_rewrite_with_ollama(
     }
 
 
-def repair_rewrite_with_ollama(
-    *,
-    original: str,
-    rewritten: str,
-    requested_keywords: list[str],
-    validation: dict[str, Any],
-    logger: PipelineLogger | None = None,
-) -> dict[str, Any]:
-    """Ask the model for one safer rewrite after validation feedback."""
-    result: dict[str, Any] = {
-        "bullet": original,
-        "success": False,
-        "error": None,
-        "duration_ms": None,
-        "keywords_used": [],
-        "keywords_skipped": list(requested_keywords),
-    }
-    if config.DEFAULT_MODEL_BACKEND != "ollama":
-        return result
-    prompt = prompts.build_repair_rewrite_prompt(
-        original=original,
-        rewritten=rewritten,
-        requested_keywords=requested_keywords,
-        validation=validation,
-        rewrite_examples=str(load_c2_prompt_settings().get("rewrite_examples") or ""),
-    )
-    start = time.perf_counter()
-    try:
-        raw = _ollama_chat(prompt)
-        result["duration_ms"] = int((time.perf_counter() - start) * 1000)
-        if logger:
-            logger.llm_call("repair_rewrite", prompt, raw, result["duration_ms"], success=True)
-        parsed = _extract_json_object(raw)
-        text = (parsed.get("bullet") or "").strip()
-        if text:
-            used = _filter_requested_keywords(
-                _dedupe_case(
-                    parsed.get("keywords_used")
-                    if isinstance(parsed.get("keywords_used"), list)
-                    else []
-                ),
-                requested_keywords,
-            )
-            skipped = _filter_requested_keywords(
-                _dedupe_case(
-                    parsed.get("keywords_skipped")
-                    if isinstance(parsed.get("keywords_skipped"), list)
-                    else []
-                ),
-                requested_keywords,
-            )
-            result.update(
-                {
-                    "bullet": text,
-                    "success": True,
-                    "keywords_used": used,
-                    "keywords_skipped": skipped
-                    or [
-                        kw
-                        for kw in requested_keywords
-                        if kw.lower() not in {u.lower() for u in used}
-                    ],
-                }
-            )
-    except Exception as exc:
-        result["duration_ms"] = int((time.perf_counter() - start) * 1000)
-        result["error"] = str(exc) or exc.__class__.__name__
-        if logger:
-            logger.llm_call(
-                "repair_rewrite",
-                prompt,
-                str(exc),
-                result["duration_ms"],
-                success=False,
-                error=result["error"],
-            )
-    return result
-
-
 def validate_summary_grounding(
     summary: str,
     candidate_context: str,
@@ -343,9 +381,9 @@ def validate_summary_grounding(
 
 
 def _ollama_chat(user_prompt: str, *, temperature: float = 0.1) -> str:
-    host = config.OLLAMA_HOST
-    model = config.OLLAMA_MODEL_NAME
-    timeout = config.OLLAMA_TIMEOUT_SEC
+    host = config.ollama_host()
+    model = config.ollama_model_name()
+    timeout = config.ollama_timeout_sec()
     payload = {
         "model": model,
         "format": "json",
@@ -494,7 +532,7 @@ def analyze_job_fit_with_ollama(
         "error": None,
         "duration_ms": None,
     }
-    if config.DEFAULT_MODEL_BACKEND != "ollama":
+    if config.resume_llm_provider() != "ollama":
         return result
     target_lane_policy = (target_lane_policy or "").strip()
     missing_fields = missing_fields or ["title", "role_family", "job_level"]
@@ -586,7 +624,7 @@ def extract_keywords_with_ollama(
         "duration_ms": None,
         "prompt_excerpt_len": 0,
     }
-    if config.DEFAULT_MODEL_BACKEND != "ollama":
+    if config.resume_llm_provider() != "ollama":
         return result
     prompt = _build_user_prompt(
         title,
@@ -610,9 +648,7 @@ def extract_keywords_with_ollama(
                 "success": True,
                 "keywords": _clean_extracted_keywords(
                     [keyword for keyword in raw_keywords if isinstance(keyword, str)],
-                    limit=int(
-                        load_c2_prompt_settings().get("keyword_selection_max_keywords") or 0
-                    ),
+                    limit=int(load_c2_prompt_settings().get("keyword_selection_max_keywords") or 0),
                 ),
             }
         )
@@ -646,7 +682,7 @@ def filter_summary_keywords_with_ollama(
         "error": None,
         "duration_ms": None,
     }
-    if config.DEFAULT_MODEL_BACKEND != "ollama" or not keywords:
+    if config.resume_llm_provider() != "ollama" or not keywords:
         return result
     requested_l = {keyword.lower() for keyword in _dedupe_case(keywords)}
     prompt_settings = load_c2_prompt_settings()
@@ -678,7 +714,11 @@ def filter_summary_keywords_with_ollama(
             ]
             if logger:
                 logger.llm_call(
-                    "summary_keyword_filter", prompt, raw, result["duration_ms"], success=True
+                    "summary_keyword_filter",
+                    prompt,
+                    raw,
+                    result["duration_ms"],
+                    success=True,
                 )
             if invalid:
                 if logger:
@@ -743,14 +783,17 @@ def bucket_skill_keywords_with_ollama(
         "error": None,
         "duration_ms": None,
     }
-    if config.DEFAULT_MODEL_BACKEND != "ollama" or not keywords:
+    if config.resume_llm_provider() != "ollama" or not keywords:
         return result
     required_categories = ("languages", "frameworks", "developer_tools")
-    allowed_categories = tuple(
-        category
-        for category in existing_skills
-        if isinstance(category, str) and category.strip()
-    ) or required_categories
+    allowed_categories = (
+        tuple(
+            category
+            for category in existing_skills
+            if isinstance(category, str) and category.strip()
+        )
+        or required_categories
+    )
     requested_l = {keyword.lower() for keyword in _dedupe_case(keywords)}
     prompt_settings = load_c2_prompt_settings()
     skill_addition_limit = int(prompt_settings.get("skill_addition_limit") or 0)
@@ -801,7 +844,11 @@ def bucket_skill_keywords_with_ollama(
             ]
             if logger:
                 logger.llm_call(
-                    "bucket_skill_keywords", prompt, raw, result["duration_ms"], success=True
+                    "bucket_skill_keywords",
+                    prompt,
+                    raw,
+                    result["duration_ms"],
+                    success=True,
                 )
             if missing_keys:
                 if logger:
@@ -843,7 +890,8 @@ def bucket_skill_keywords_with_ollama(
                         additions.append((filtered[0], category))
             seen_additions: set[str] = set()
             for keyword, category in additions:
-                key = keyword.lower()
+                display_keyword = capitalize_skill_phrase(keyword)
+                key = display_keyword.lower()
                 if key in seen_additions:
                     continue
                 seen_additions.add(key)
@@ -854,7 +902,7 @@ def bucket_skill_keywords_with_ollama(
                     break
                 if category not in result:
                     result[category] = []
-                result[category].append(keyword)
+                result[category].append(display_keyword)
             added_l = {
                 keyword.lower()
                 for bucket in allowed_categories
@@ -908,7 +956,7 @@ def check_low_rag_unsupported_target_with_ollama(
     if not target_lane_policy:
         result.update({"success": True, "duration_ms": 0})
         return result
-    if config.DEFAULT_MODEL_BACKEND != "ollama":
+    if config.resume_llm_provider() != "ollama":
         return result
     unsupported_examples = unsupported_examples or []
 
@@ -976,16 +1024,21 @@ def validate_summary_with_ollama(
     logger: PipelineLogger | None = None,
 ) -> dict[str, Any]:
     """Validate summary positioning and coherence with the model."""
-    result = {"accepted": True, "reasons": [], "success": False, "duration_ms": None, "error": None}
-    if config.DEFAULT_MODEL_BACKEND != "ollama" or not summary:
+    result = {
+        "accepted": True,
+        "reasons": [],
+        "success": False,
+        "duration_ms": None,
+        "error": None,
+    }
+    if config.resume_llm_provider() != "ollama" or not summary:
         return result
     prompt = prompts.build_summary_validation_prompt(
         summary=summary,
         candidate_context=candidate_context,
         keywords=keywords,
         summary_banned_phrases=[
-            str(value)
-            for value in load_c2_prompt_settings().get("summary_banned_phrases", [])
+            str(value) for value in load_c2_prompt_settings().get("summary_banned_phrases", [])
         ],
     )
     start = time.perf_counter()
@@ -1049,7 +1102,7 @@ def generate_summary(
         "keyword_use_reason": "",
         "retry_reason": "",
     }
-    if config.DEFAULT_MODEL_BACKEND != "ollama":
+    if config.resume_llm_provider() != "ollama":
         return result
     if not candidate_context or not job_title:
         return result
@@ -1136,16 +1189,17 @@ def rewrite_bullet_targeted(
         "keywords_used": [],
         "keywords_skipped": list(keywords),
     }
-    if config.DEFAULT_MODEL_BACKEND != "ollama":
+    if config.resume_llm_provider() != "ollama":
         return result
     if not bullet or not keywords:
         return result
 
+    prompt_settings = load_c2_prompt_settings()
     prompt = prompts.build_rewrite_bullet_prompt(
         bullet=bullet,
         keywords=keywords,
         keywords_to_preserve=keywords_to_preserve,
-        rewrite_examples=str(load_c2_prompt_settings().get("rewrite_examples") or ""),
+        **_rewrite_prompt_policy_kwargs(prompt_settings, include_strategy=True),
     )
     start = time.perf_counter()
     try:
@@ -1196,48 +1250,11 @@ def rewrite_bullet_targeted(
                 }
             result["validation"] = validation
             if not validation["accepted"]:
-                result["initial_validation"] = validation
-                repair = repair_rewrite_with_ollama(
-                    original=bullet,
-                    rewritten=text,
-                    requested_keywords=keywords,
-                    validation=validation,
-                    logger=logger,
-                )
-                result["repair"] = repair
-                if repair.get("success"):
-                    repair_text = str(repair.get("bullet") or "").strip()
-                    repair_used = list(repair.get("keywords_used") or [])
-                    repair_validation = validate_rewrite_with_ollama(
-                        original=bullet,
-                        rewritten=repair_text,
-                        requested_keywords=keywords,
-                        logger=logger,
-                    )
-                    result["repair_validation"] = repair_validation
-                    if repair_validation["accepted"]:
-                        used, skipped = _derive_keyword_outcome(
-                            keywords,
-                            repair_validation.get("keywords_supported") or repair_used,
-                            repair_validation.get("keywords_rejected") or [],
-                        )
-                        if used:
-                            result["bullet"] = repair_text
-                            result["success"] = True
-                            result["validation"] = repair_validation
-                            result["keywords_used"] = used
-                            result["keywords_skipped"] = skipped
-                            return result
-                _used, skipped = _derive_keyword_outcome(
-                    keywords,
-                    validation.get("keywords_supported") or [],
-                    validation.get("keywords_rejected") or [],
-                )
                 result["bullet"] = bullet
                 result["success"] = False
                 result["error"] = "rewrite_validation_failed"
                 result["keywords_used"] = []
-                result["keywords_skipped"] = skipped or list(keywords)
+                result["keywords_skipped"] = list(keywords)
                 return result
 
             used, skipped = _derive_keyword_outcome(
@@ -1250,10 +1267,10 @@ def rewrite_bullet_targeted(
                 result["success"] = False
                 result["error"] = "rewrite_validation_failed"
                 result["keywords_used"] = []
-                result["keywords_skipped"] = skipped or list(keywords)
+                result["keywords_skipped"] = list(keywords)
                 return result
 
-            result["bullet"] = text
+            result["bullet"] = restore_textbf_from_original(bullet, text)
             result["success"] = True
             result["keywords_used"] = used
             result["keywords_skipped"] = skipped
@@ -1290,10 +1307,10 @@ def enrich_with_ollama_if_enabled(
     meta: dict = {
         "ollama_enriched": False,
         "error": None,
-        "model": config.OLLAMA_MODEL_NAME,
+        "model": config.ollama_model_name(),
         "duration_ms": None,
     }
-    if config.DEFAULT_MODEL_BACKEND != "ollama":
+    if config.resume_llm_provider() != "ollama":
         return classification, keywords, meta
     try:
         prompt = _build_user_prompt(

@@ -30,7 +30,7 @@ Get help:
 - `context <id>`: Print the C2 apply context for one job.
 - `parse`: Parse `main.tex` (or `--resume`) to JSON and optionally round-trip to TeX.
 - `test-job <id>`: Run the full pipeline on one job and print timing + LLM output.
-- `option-b-smoke`: Select enriched jobs, call the deployed Option B API, and save PDFs/logs for review.
+- `option-b-smoke`: Select enriched jobs, call the deployed legacy Option B compatibility API, and save PDFs/logs for review.
 - `index`: Manage the RAG vector index (`build`, `status`, `clear`, `query`).
 - `tests`: Run C2 unit tests.
 - `run`: Pass-through to `python -m fletcher.cli` with arbitrary args.
@@ -63,8 +63,9 @@ Get help:
   `/home/michael/data/hunt/resumes` on Linux).
 - The `test-job` and `ad-hoc` commands require the ollama backend for full LLM output; the
   heuristic backend works without it.
-- `option-b-smoke` is the preferred CLI path for testing the current Option B UI/API flow. It logs in to
-  the review app, posts enriched job descriptions to `/api/fletcher/tailor`, saves returned PDFs/logs under
+- `option-b-smoke` is the preferred CLI path for quick deployed PDF/log smoke tests. It logs in to
+  the review app, posts enriched job descriptions to the legacy compatibility route `/api/fletcher/tailor`, saves returned PDFs/logs under
   `.runtime/option-b-smokes/`, and captures a `docker logs hunt-review-1 --tail 300` snapshot per job.
+- The React Option B UI uses the DB-backed queue route `/api/fletcher/tailor/jobs`; queue/history behavior is covered by C0/Fletcher tests and the `/fletcher` page.
   When testing the Docker stack from the host, pass `--db-url "postgresql://hunt:hunt@127.0.0.1:15432/hunt"`
   so the smoke command selects jobs from the compose Postgres database.

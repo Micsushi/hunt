@@ -556,3 +556,9 @@ class Component2PipelineTests(unittest.TestCase):
         conn.close()
         rows2 = list_jobs_ready_for_resume(db_path=self.db_path, limit=10, only_missing=False)
         self.assertEqual([r["id"] for r in rows2], [1])
+
+    def test_record_resume_attempt_uses_postgres_safe_job_id_filters(self):
+        source = (REPO_ROOT / "fletcher" / "db.py").read_text(encoding="utf-8")
+
+        self.assertNotIn("WHERE job_id IS ?", source)
+        self.assertIn('job_filter_sql = "job_id IS NULL" if job_id is None else "job_id = ?"', source)

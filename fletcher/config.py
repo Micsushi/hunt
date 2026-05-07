@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
+from typing import Any
 
 from shared.paths import REPO_ROOT
 
@@ -48,6 +49,9 @@ SECTION_ORDER = (
 # heuristic: fast local rules only. ollama: refine classification + keywords via local Ollama (/api/chat).
 DEFAULT_MODEL_BACKEND = os.getenv("HUNT_RESUME_MODEL_BACKEND", "heuristic").strip().lower()
 DEFAULT_MODEL_NAME = os.getenv("HUNT_RESUME_MODEL_NAME", "deterministic-stage1")
+RESUME_LLM_PROVIDER = os.getenv("HUNT_RESUME_LLM_PROVIDER", DEFAULT_MODEL_BACKEND).strip().lower()
+RESUME_LLM_MODEL = os.getenv("HUNT_RESUME_LLM_MODEL", "").strip()
+RESUME_LLM_TIMEOUT_SEC = float(os.getenv("HUNT_RESUME_LLM_TIMEOUT_SEC", "300"))
 OLLAMA_HOST = os.getenv("HUNT_OLLAMA_HOST", "http://127.0.0.1:11434").rstrip("/")
 OLLAMA_TIMEOUT_SEC = float(os.getenv("HUNT_OLLAMA_TIMEOUT_SEC", "300"))
 OLLAMA_MODEL_NAME = os.getenv("HUNT_OLLAMA_MODEL", "gemma4:e4b")
@@ -60,10 +64,131 @@ PROMPT_VERSION_TAG = "c2_v0.2_jd_keywords"
 
 
 def ollama_keep_alive_payload() -> str | int:
-    value = OLLAMA_KEEP_ALIVE.strip()
+    value = resume_runtime_setting("ollama_keep_alive", "HUNT_OLLAMA_KEEP_ALIVE", OLLAMA_KEEP_ALIVE)
+    value = value.strip()
     if value in {"-1", "0"} or value.isdigit():
         return int(value)
     return value
+
+
+def _setting_value(key: str) -> str:
+    if os.getenv("PYTEST_CURRENT_TEST") and not os.getenv("HUNT_DB_PATH"):
+        return ""
+    try:
+        from .db import get_connection
+
+        conn = get_connection()
+        try:
+            row = conn.execute(
+                """
+                SELECT value
+                FROM component_settings
+                WHERE component = 'c2' AND key = ?
+                """,
+                (key,),
+            ).fetchone()
+        finally:
+            conn.close()
+    except Exception:
+        return ""
+    return str(row["value"] or "").strip() if row else ""
+
+
+def resume_runtime_setting(key: str, env_name: str, default: str = "") -> str:
+    return _setting_value(key) or os.getenv(env_name, "").strip() or default
+
+
+def resume_runtime_bool(key: str, env_name: str, default: bool = False) -> bool:
+    fallback = "1" if default else "0"
+    value = resume_runtime_setting(key, env_name, fallback).strip().lower()
+    return value in {"1", "true", "yes", "on"}
+
+
+def resume_runtime_float(key: str, env_name: str, default: float) -> float:
+    value = resume_runtime_setting(key, env_name, str(default))
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def resume_runtime_int(key: str, env_name: str, default: int, *, minimum: int = 0) -> int:
+    value = resume_runtime_setting(key, env_name, str(default))
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        return default
+    return max(minimum, parsed)
+
+
+def resume_llm_provider() -> str:
+    if os.getenv("PYTEST_CURRENT_TEST") and DEFAULT_MODEL_BACKEND in {"heuristic", "none"}:
+        return DEFAULT_MODEL_BACKEND
+    provider = resume_runtime_setting("llm_provider", "HUNT_RESUME_LLM_PROVIDER", "")
+    if provider:
+        return provider.lower()
+    legacy = resume_runtime_setting(
+        "model_backend", "HUNT_RESUME_MODEL_BACKEND", DEFAULT_MODEL_BACKEND
+    )
+    return "ollama" if legacy.lower() == "ollama" else "heuristic"
+
+
+def resume_llm_model(task_name: str | None = None) -> str:
+    if task_name:
+        value = resume_runtime_setting(
+            f"{task_name.lower()}_model",
+            f"HUNT_RESUME_{task_name.upper()}_MODEL",
+            "",
+        )
+        if value:
+            return value
+    return resume_runtime_setting("llm_model", "HUNT_RESUME_LLM_MODEL", RESUME_LLM_MODEL)
+
+
+def resume_cloud_llm_confirmed() -> bool:
+    return resume_runtime_bool("cloud_llm_confirm", "HUNT_RESUME_CLOUD_LLM_CONFIRM", False)
+
+
+def resume_provider_api_key(provider: str, env_name: str) -> str:
+    return resume_runtime_setting(f"{provider}_api_key", env_name, "")
+
+
+def ollama_host() -> str:
+    return resume_runtime_setting("ollama_host", "HUNT_OLLAMA_HOST", OLLAMA_HOST).rstrip("/")
+
+
+def ollama_model_name() -> str:
+    return resume_runtime_setting("ollama_model", "HUNT_OLLAMA_MODEL", OLLAMA_MODEL_NAME)
+
+
+def ollama_timeout_sec() -> float:
+    return resume_runtime_float("ollama_timeout_sec", "HUNT_OLLAMA_TIMEOUT_SEC", OLLAMA_TIMEOUT_SEC)
+
+
+def bullet_rewrite_runtime() -> dict[str, Any]:
+    return {
+        "parallelism": resume_runtime_int(
+            "bullet_rewrite_parallelism",
+            "HUNT_BULLET_REWRITE_PARALLELISM",
+            BULLET_REWRITE_PARALLELISM,
+            minimum=1,
+        ),
+        "min_available_mb": resume_runtime_int(
+            "bullet_rewrite_min_available_mb",
+            "HUNT_BULLET_REWRITE_MIN_AVAILABLE_MB",
+            BULLET_REWRITE_MIN_AVAILABLE_MB,
+            minimum=0,
+        ),
+        "max_memory_pct": min(
+            100,
+            resume_runtime_int(
+                "bullet_rewrite_max_memory_pct",
+                "HUNT_BULLET_REWRITE_MAX_MEMORY_PCT",
+                BULLET_REWRITE_MAX_MEMORY_PCT,
+                minimum=1,
+            ),
+        ),
+    }
 
 
 # RAG : vector index for keyword-to-bullet semantic matching.
@@ -121,4 +246,7 @@ def resolve_base_resume_path(role_family: str) -> tuple[str, Path]:
             candidate = family_dir / file_name
             if candidate.exists():
                 return normalized_family, candidate
+    general = BASE_RESUMES_ROOT / "general" / "main.tex"
+    if general.exists():
+        return "general", general
     return "original", DEFAULT_OG_RESUME_PATH

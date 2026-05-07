@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import uuid
 from pathlib import Path
 
 from shared.file_utils import write_text as _shared_write_text
@@ -13,7 +14,7 @@ from .config import AD_HOC_DIRNAME, ATTEMPTS_DIRNAME, resolve_runtime_root
 def build_attempt_dir(
     *, job_id: int | None, role_family: str, ad_hoc_label: str | None = None
 ) -> Path:
-    timestamp = utc_now_stamp()
+    timestamp = f"{utc_now_stamp()}_{uuid.uuid4().hex[:8]}"
     runtime_root = resolve_runtime_root()
     if job_id is not None:
         return runtime_root / ATTEMPTS_DIRNAME / str(job_id) / f"{timestamp}_{role_family}"

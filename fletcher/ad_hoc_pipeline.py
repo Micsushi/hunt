@@ -10,12 +10,14 @@ import subprocess
 import time
 import urllib.request
 from collections import defaultdict
+from collections.abc import Callable
 from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
 from pathlib import Path
 from typing import Any
 
 from . import config as _config
 from .config import DEFAULT_OG_RESUME_PATH
+from .job_metadata_settings import load_c2_prompt_settings
 from .jobs.classifier import classify_job, slugify
 from .jobs.keyword_extractor import extract_keywords
 from .jobs.keyword_policy import (
@@ -24,15 +26,16 @@ from .jobs.keyword_policy import (
     normalize_keyword,
 )
 from .jobs.title_inference import infer_title_from_description, normalize_title_candidate
-from .job_metadata_settings import load_c2_prompt_settings
 from .keyword_check import partition_keywords
 from .llm.llm_enrich import (
     analyze_job_fit_with_ollama,
     bucket_skill_keywords_with_ollama,
+    capitalize_skill_phrase,
     extract_keywords_with_ollama,
     filter_summary_keywords_with_ollama,
     generate_summary,
     keyword_visible_in_text,
+    restore_textbf_from_original,
     rewrite_bullet_targeted,
     validate_summary_grounding,
     validate_summary_with_ollama,
@@ -41,8 +44,19 @@ from .llm.rag import match_keywords_to_bullets, score_bullets_for_drop
 from .pipeline import _compile_with_fit_retry
 from .pipeline_logger import PipelineLogger
 from .resume.compiler import compile_tex
+from .resume.importer import ImportReport, parse_resume_upload
 from .resume.parser import parse_resume_file
 from .resume.renderer import render_resume_tex
+from .resume.review_models import (
+    ResumeReviewJobInfo,
+    ResumeReviewLlmInfo,
+    ResumeReviewPackage,
+    ResumeReviewSourceInfo,
+    ResumeReviewVersion,
+    ResumeReviewVersionName,
+    build_review_id,
+)
+from .resume.review_store import write_review_package
 from .storage import build_attempt_dir, ensure_dir, write_json, write_text
 from .text_normalize import repair_mojibake
 
@@ -56,6 +70,188 @@ BULLET_ORDER_LAST_SCORE_MULTIPLIER = 1.0
 
 class JobMismatchError(Exception):
     """Raised when the detected JD is not compatible with the requested role."""
+
+
+def _description_hash(description: str) -> str:
+    return hashlib.sha256((description or "").encode("utf-8")).hexdigest()
+
+
+def _review_url(review_id: str, version: str, kind: str) -> str:
+    return f"/api/fletcher/reviews/{review_id}/versions/{version}/{kind}"
+
+
+def _provider_cloud_flag() -> bool:
+    provider = _config.resume_llm_provider()
+    return provider in {"openai", "openrouter", "anthropic", "gemini"}
+
+
+def _make_review_package(
+    *,
+    attempt_dir: Path,
+    original_doc,
+    result: dict[str, Any],
+    title: str,
+    company: str,
+    description: str,
+    source_report: ImportReport,
+    raw_keywords: list[str],
+    present_keywords: list[str],
+    missing_keywords: list[str],
+    rag_scores: list[dict[str, Any]] | None = None,
+) -> tuple[str | None, str | None]:
+    review_id = build_review_id(attempt_dir)
+    versions: dict[ResumeReviewVersionName, ResumeReviewVersion] = {}
+
+    def parse_generated(tex_path: str | None, fallback_doc):
+        if tex_path and Path(tex_path).exists():
+            try:
+                return parse_resume_file(tex_path)
+            except Exception:
+                return copy.deepcopy(fallback_doc)
+        return copy.deepcopy(fallback_doc)
+
+    generated_no_summary = parse_generated(result.get("tex_path"), original_doc)
+    generated_no_summary.summary = ""
+    versions[ResumeReviewVersionName.NO_SUMMARY] = ResumeReviewVersion(
+        original=copy.deepcopy(original_doc),
+        generated=copy.deepcopy(generated_no_summary),
+        current=copy.deepcopy(generated_no_summary),
+        pdf_url=_review_url(review_id, "no_summary", "pdf"),
+        tex_url=_review_url(review_id, "no_summary", "tex"),
+        compile_status=result.get("compile_status"),
+    )
+    if result.get("tex_path_summary") or result.get("pdf_path_summary"):
+        generated_summary = parse_generated(result.get("tex_path_summary"), generated_no_summary)
+        versions[ResumeReviewVersionName.WITH_SUMMARY] = ResumeReviewVersion(
+            original=copy.deepcopy(original_doc),
+            generated=copy.deepcopy(generated_summary),
+            current=copy.deepcopy(generated_summary),
+            pdf_url=_review_url(review_id, "with_summary", "pdf"),
+            tex_url=_review_url(review_id, "with_summary", "tex"),
+            compile_status=result.get("compile_status"),
+        )
+
+    provider = _config.resume_llm_provider()
+    package = ResumeReviewPackage(
+        review_id=review_id,
+        source=ResumeReviewSourceInfo(
+            input_kind=source_report.input_kind,
+            input_filename=source_report.input_filename,
+            import_status=source_report.import_status,  # type: ignore[arg-type]
+            import_warnings=source_report.import_warnings,
+        ),
+        job=ResumeReviewJobInfo(
+            title=title,
+            company=company,
+            description_hash=_description_hash(description),
+        ),
+        llm=ResumeReviewLlmInfo(
+            provider=provider,
+            model=_config.resume_llm_model() or _config.ollama_model_name(),
+            cloud=_provider_cloud_flag(),
+        ),
+        keywords={
+            "raw": list(raw_keywords or []),
+            "present": list(present_keywords or []),
+            "missing": list(missing_keywords or []),
+            "rag_scores": _review_keyword_scores(
+                raw_keywords=raw_keywords,
+                present_keywords=present_keywords,
+                missing_keywords=missing_keywords,
+                rag_scores=rag_scores,
+            ),
+        },
+        versions=versions,
+        log_url=f"/api/fletcher/reviews/{review_id}/log",
+    )
+    package_path = write_review_package(attempt_dir, package)
+    return review_id, package_path
+
+
+def _attach_review_package(
+    payload: dict[str, Any],
+    *,
+    attempt_dir: Path,
+    original_doc,
+    title: str,
+    company: str,
+    description: str,
+    source_report: ImportReport,
+) -> dict[str, Any]:
+    try:
+        review_id, package_path = _make_review_package(
+            attempt_dir=attempt_dir,
+            original_doc=original_doc,
+            result=payload,
+            title=title,
+            company=company,
+            description=description,
+            source_report=source_report,
+            raw_keywords=list(payload.get("keywords") or []),
+            present_keywords=list(payload.get("present_keywords") or []),
+            missing_keywords=list(payload.get("missing_keywords") or []),
+            rag_scores=list(payload.get("rag_scores") or []),
+        )
+        payload["review_id"] = review_id
+        payload["review_url"] = f"/fletcher/reviews/{review_id}" if review_id else None
+        payload["review_package_path"] = package_path
+    except Exception as exc:
+        payload["review_error"] = str(exc)
+    return payload
+
+
+def _review_keyword_scores(
+    *,
+    raw_keywords: list[str],
+    present_keywords: list[str],
+    missing_keywords: list[str],
+    rag_scores: list[dict[str, Any]] | None = None,
+) -> list[dict[str, Any]]:
+    score_by_keyword: dict[str, dict[str, Any]] = {}
+    for detail in rag_scores or []:
+        keyword = str(detail.get("keyword") or "").strip()
+        if not keyword:
+            continue
+        key = keyword.lower()
+        score = float(detail.get("score") or 0.0)
+        existing = score_by_keyword.get(key)
+        if existing and float(existing.get("score") or 0.0) >= score:
+            continue
+        score_by_keyword[key] = {
+            "keyword": keyword,
+            "tier": str(detail.get("tier") or "unranked"),
+            "score": score,
+            "bullet_idx": detail.get("bullet_idx"),
+        }
+
+    present_l = {keyword.lower() for keyword in present_keywords}
+    missing_l = {keyword.lower() for keyword in missing_keywords}
+    rows: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for keyword in raw_keywords:
+        item = str(keyword or "").strip()
+        key = item.lower()
+        if not item or key in seen:
+            continue
+        seen.add(key)
+        row = dict(score_by_keyword.get(key) or {})
+        row["keyword"] = row.get("keyword") or item
+        if key in present_l:
+            row["tier"] = (
+                row.get("tier") if row.get("tier") not in {None, "unranked"} else "present"
+            )
+            row["status"] = "present"
+            row.setdefault("score", 1.0)
+        elif key in missing_l:
+            row["tier"] = row.get("tier") or "unranked"
+            row["status"] = "missing"
+            row.setdefault("score", 0.0)
+        else:
+            row["tier"] = row.get("tier") or "unranked"
+            row["status"] = "raw"
+            row.setdefault("score", 0.0)
+        rows.append(row)
+    return rows
 
 
 def _classification_needs_llm_fallback(classification: dict) -> bool:
@@ -488,9 +684,10 @@ def _add_keywords_to_skills(
                 continue
             if len(added) >= skill_addition_limit:
                 return added
-            getattr(doc.skills, bucket).append(str(keyword).strip())
+            display_keyword = capitalize_skill_phrase(str(keyword).strip())
+            getattr(doc.skills, bucket).append(display_keyword)
             existing.add(skill_key)
-            added.append(str(keyword).strip())
+            added.append(display_keyword)
     return added
 
 
@@ -1034,10 +1231,10 @@ def _ollama_runtime_snapshot() -> dict[str, Any]:
         "kv_cache_type": _config.OLLAMA_KV_CACHE_TYPE or None,
         "keep_alive": _config.OLLAMA_KEEP_ALIVE,
     }
-    if _config.DEFAULT_MODEL_BACKEND != "ollama":
+    if _config.resume_llm_provider() != "ollama":
         return {"enabled": False, "configured": configured}
     try:
-        req = urllib.request.Request(f"{_config.OLLAMA_HOST}/api/ps", method="GET")
+        req = urllib.request.Request(f"{_config.ollama_host()}/api/ps", method="GET")
         with urllib.request.urlopen(req, timeout=2) as resp:
             body = json.load(resp)
         raw_models = body.get("models") if isinstance(body, dict) else []
@@ -1057,14 +1254,14 @@ def _ollama_runtime_snapshot() -> dict[str, Any]:
         return {
             "enabled": True,
             "reachable": False,
-            "host": _config.OLLAMA_HOST,
+            "host": _config.ollama_host(),
             "configured": configured,
             "error": (str(exc) or exc.__class__.__name__)[:200],
         }
     return {
         "enabled": True,
         "reachable": True,
-        "host": _config.OLLAMA_HOST,
+        "host": _config.ollama_host(),
         "configured": configured,
         "loaded_count": len(models),
         "models": models,
@@ -1080,15 +1277,15 @@ def _memory_allows_parallel(snapshot: dict[str, Any]) -> tuple[bool, str]:
         return True, "memory_unknown"
     available_mb = float(snapshot.get("available_mb") or 0)
     used_pct = float(snapshot.get("used_pct") or 0)
-    if available_mb < _config.BULLET_REWRITE_MIN_AVAILABLE_MB:
+    if available_mb < _config.bullet_rewrite_runtime()["min_available_mb"]:
         return False, "low_available_memory"
-    if used_pct >= _config.BULLET_REWRITE_MAX_MEMORY_PCT:
+    if used_pct >= _config.bullet_rewrite_runtime()["max_memory_pct"]:
         return False, "high_memory_usage"
     return True, "ok"
 
 
 def _rewrite_worker_count(task_count: int, logger: PipelineLogger) -> int:
-    requested = max(1, int(_config.BULLET_REWRITE_PARALLELISM))
+    requested = max(1, int(_config.bullet_rewrite_runtime()["parallelism"]))
     if task_count <= 1 or requested <= 1:
         logger.step(
             "bullet_rewrite_parallel_config",
@@ -1196,7 +1393,9 @@ def _apply_rewrite_result(doc, job_result: dict[str, Any]) -> bool:
         return False
     for idx, bullet in enumerate(entry.bullets):
         if _text_hash(bullet) == source["text_hash"]:
-            entry.bullets[idx] = result["bullet"]
+            entry.bullets[idx] = restore_textbf_from_original(
+                source.get("text", bullet), result["bullet"]
+            )
             return True
     return False
 
@@ -2026,21 +2225,22 @@ def run_ad_hoc_pipeline(
     company: str = "",
     label: str | None = None,
     resume_path: str | Path = DEFAULT_OG_RESUME_PATH,
+    progress_callback: Callable[[str, dict[str, Any]], None] | None = None,
 ) -> dict:
     """Clean Option B pipeline: JD + resume -> keyword inject -> compile 2 versions."""
     title = repair_mojibake(title)
     description = repair_mojibake(description)
     company = repair_mojibake(company)
-    logger = PipelineLogger()
+    logger = PipelineLogger(on_step=progress_callback)
     t_start = time.perf_counter()
     resolved_title = _resolve_job_title(title, description)
 
     logger.step(
         "config",
-        model_backend=_config.DEFAULT_MODEL_BACKEND,
-        ollama_host=_config.OLLAMA_HOST,
-        ollama_model=_config.OLLAMA_MODEL_NAME,
-        ollama_timeout_sec=_config.OLLAMA_TIMEOUT_SEC,
+        model_backend=_config.resume_llm_provider(),
+        ollama_host=_config.ollama_host(),
+        ollama_model=_config.ollama_model_name(),
+        ollama_timeout_sec=_config.ollama_timeout_sec(),
         rag_enabled=_config.RAG_ENABLED,
         input_title=title or "(empty)",
         title=resolved_title or "(empty)",
@@ -2049,7 +2249,17 @@ def run_ad_hoc_pipeline(
     _log_ollama_runtime(logger, "after_job_fit")
 
     logger.step("parse_resume", path=str(resume_path))
-    parsed = parse_resume_file(resume_path)
+    if Path(resume_path).suffix.lower() == ".pdf":
+        parsed, source_report = parse_resume_upload(resume_path)
+    else:
+        parsed = parse_resume_file(resume_path)
+        source_report = ImportReport("tex", Path(resume_path).name)
+    if source_report.import_warnings:
+        logger.step(
+            "resume_import_warning",
+            status=source_report.import_status,
+            warnings=source_report.import_warnings,
+        )
 
     all_bullets = [b for entry in parsed.experience for b in entry.bullets] + [
         b for entry in parsed.projects for b in entry.bullets
@@ -2076,7 +2286,9 @@ def run_ad_hoc_pipeline(
         )
         if job_fit.get("success"):
             if not resolved_title and job_fit.get("title"):
-                resolved_title = normalize_title_candidate(str(job_fit["title"])) or str(job_fit["title"])
+                resolved_title = normalize_title_candidate(str(job_fit["title"])) or str(
+                    job_fit["title"]
+                )
             classification = _merge_llm_classification(classification, job_fit)
             logger.step(
                 "job_metadata_filled_with_llm",
@@ -2121,9 +2333,9 @@ def run_ad_hoc_pipeline(
 
     logger.step(
         "llm_keyword_extract_start",
-        backend=_config.DEFAULT_MODEL_BACKEND,
-        model=_config.OLLAMA_MODEL_NAME,
-        host=_config.OLLAMA_HOST,
+        backend=_config.resume_llm_provider(),
+        model=_config.ollama_model_name(),
+        host=_config.ollama_host(),
     )
     keyword_result = extract_keywords_with_ollama(
         title=resolved_title,
@@ -2209,7 +2421,7 @@ def run_ad_hoc_pipeline(
     )
 
     ollama_failed = (
-        _config.DEFAULT_MODEL_BACKEND == "ollama"
+        _config.resume_llm_provider() == "ollama"
         and not llm_meta.get("ollama_enriched")
         and bool(llm_meta.get("error"))
     )
@@ -2218,8 +2430,8 @@ def run_ad_hoc_pipeline(
         logger.step(
             "ollama_error",
             error=ollama_error_msg,
-            model=_config.OLLAMA_MODEL_NAME,
-            host=_config.OLLAMA_HOST,
+            model=_config.ollama_model_name(),
+            host=_config.ollama_host(),
         )
         doc_orig = copy.deepcopy(parsed)
         doc_orig.summary = ""
@@ -2238,7 +2450,7 @@ def run_ad_hoc_pipeline(
         total_ms = int((time.perf_counter() - t_start) * 1000)
         logger.step("done", total_ms=total_ms, note="original resume returned; LLM unavailable")
         log_path = write_text(attempt_dir / "pipeline_log.txt", logger.get_log_text())
-        return {
+        payload = {
             "attempt_dir": str(attempt_dir),
             "pdf_path": cr_orig.get("pdf_path"),
             "tex_path": tex_orig,
@@ -2252,6 +2464,15 @@ def run_ad_hoc_pipeline(
             "missing_keywords": [],
             "llm_error": ollama_error_msg,
         }
+        return _attach_review_package(
+            payload,
+            attempt_dir=attempt_dir,
+            original_doc=parsed,
+            title=resolved_title,
+            company=company,
+            description=description,
+            source_report=source_report,
+        )
 
     keyword_surfaces = _keyword_match_surfaces(parsed, all_bullets)
     present_kws, missing_kws, coverage = partition_keywords(raw_keywords, keyword_surfaces)
@@ -2280,7 +2501,7 @@ def run_ad_hoc_pipeline(
     if not active_bucket_ids:
         logger.step("error", error="all_buckets_exhausted")
         log_path = write_text(attempt_dir / "pipeline_log.txt", logger.get_log_text())
-        return {
+        payload = {
             "attempt_dir": str(attempt_dir),
             "pdf_path": None,
             "tex_path": None,
@@ -2294,6 +2515,15 @@ def run_ad_hoc_pipeline(
             "missing_keywords": missing_kws,
             "llm_error": "all_buckets_exhausted",
         }
+        return _attach_review_package(
+            payload,
+            attempt_dir=attempt_dir,
+            original_doc=parsed,
+            title=resolved_title,
+            company=company,
+            description=description,
+            source_report=source_report,
+        )
 
     write_json(
         attempt_dir / "keywords.json",
@@ -2339,7 +2569,7 @@ def run_ad_hoc_pipeline(
     log_path = write_text(attempt_dir / "pipeline_log.txt", logger.get_log_text())
 
     if result is None:
-        return {
+        payload = {
             "attempt_dir": str(attempt_dir),
             "pdf_path": None,
             "tex_path": None,
@@ -2353,8 +2583,17 @@ def run_ad_hoc_pipeline(
             "missing_keywords": missing_kws,
             "llm_error": "all_buckets_exhausted",
         }
+        return _attach_review_package(
+            payload,
+            attempt_dir=attempt_dir,
+            original_doc=parsed,
+            title=resolved_title,
+            company=company,
+            description=description,
+            source_report=source_report,
+        )
 
-    return {
+    payload = {
         "attempt_dir": str(attempt_dir),
         "pdf_path": result.get("pdf_path"),
         "tex_path": result.get("tex_path"),
@@ -2366,5 +2605,15 @@ def run_ad_hoc_pipeline(
         "keywords": raw_keywords,
         "present_keywords": present_kws,
         "missing_keywords": missing_kws,
+        "rag_scores": list((result.get("kw_match") or {}).get("scores") or []),
         "llm_error": result.get("summary_error"),
     }
+    return _attach_review_package(
+        payload,
+        attempt_dir=attempt_dir,
+        original_doc=parsed,
+        title=resolved_title,
+        company=company,
+        description=description,
+        source_report=source_report,
+    )

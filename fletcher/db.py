@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import sqlite3
+import uuid
 from pathlib import Path
 
 from .config import get_db_path
@@ -82,6 +83,24 @@ CREATE TABLE IF NOT EXISTS resume_versions (
 )
 """
 
+FLETCHER_JOBS_TABLE_SQL = """
+CREATE TABLE IF NOT EXISTS fletcher_jobs (
+    queue_item_id TEXT PRIMARY KEY,
+    status TEXT NOT NULL,
+    position INTEGER NOT NULL,
+    revision INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+    started_at TEXT,
+    finished_at TEXT,
+    input_json TEXT NOT NULL,
+    progress_json TEXT DEFAULT '{}',
+    result_json TEXT DEFAULT '{}',
+    error TEXT,
+    log_path TEXT,
+    review_id TEXT
+)
+"""
+
 
 def job_description_fingerprint(description: str | None) -> str:
     """SHA-256 hex of normalized job description (for skip-regeneration checks)."""
@@ -122,11 +141,317 @@ def init_resume_db(db_path: str | Path | None = None) -> None:
                 cursor.execute(f"ALTER TABLE jobs ADD COLUMN {column_name} {column_def}")
         cursor.execute(RESUME_ATTEMPTS_TABLE_SQL)
         cursor.execute(RESUME_VERSIONS_TABLE_SQL)
+        cursor.execute(FLETCHER_JOBS_TABLE_SQL)
         ra_existing = {row[1] for row in cursor.execute("PRAGMA table_info(resume_attempts)")}
         for column_name, column_def in RESUME_ATTEMPT_EXTRA_COLUMNS.items():
             if column_name not in ra_existing:
                 cursor.execute(f"ALTER TABLE resume_attempts ADD COLUMN {column_name} {column_def}")
         conn.commit()
+    finally:
+        conn.close()
+
+
+def init_fletcher_queue_db(db_path: str | Path | None = None) -> None:
+    conn = get_connection(db_path)
+    try:
+        conn.execute(FLETCHER_JOBS_TABLE_SQL)
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def _decode_json(value: str | None, default):
+    if not value:
+        return default
+    try:
+        return json.loads(value)
+    except json.JSONDecodeError:
+        return default
+
+
+def _job_row(row) -> dict:
+    data = dict(row)
+    data["input"] = _decode_json(data.pop("input_json", None), {})
+    data["progress"] = _decode_json(data.pop("progress_json", None), {})
+    data["result"] = _decode_json(data.pop("result_json", None), {})
+    return data
+
+
+def enqueue_fletcher_job(payload: dict, db_path: str | Path | None = None) -> dict:
+    init_fletcher_queue_db(db_path)
+    conn = get_connection(db_path)
+    try:
+        row = conn.execute(
+            "SELECT COALESCE(MAX(position), 0) AS max_position FROM fletcher_jobs WHERE status = ?",
+            ("queued",),
+        ).fetchone()
+        position = int(row["max_position"] if row else 0) + 1
+        queue_item_id = uuid.uuid4().hex
+        conn.execute(
+            """
+            INSERT INTO fletcher_jobs (
+                queue_item_id, status, position, input_json, progress_json, result_json
+            ) VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (
+                queue_item_id,
+                "queued",
+                position,
+                json.dumps(payload),
+                json.dumps({"current_step": "queued", "event_id": 0, "log_tail": []}),
+                json.dumps({"review_id": None, "pdf_url": None, "log_url": None}),
+            ),
+        )
+        conn.commit()
+        return get_fletcher_job(queue_item_id, db_path=db_path)
+    finally:
+        conn.close()
+
+
+def list_fletcher_jobs(db_path: str | Path | None = None, limit: int = 50) -> list[dict]:
+    init_fletcher_queue_db(db_path)
+    conn = get_connection(db_path)
+    try:
+        rows = conn.execute(
+            """
+            SELECT * FROM fletcher_jobs
+            ORDER BY
+              CASE
+                WHEN status = 'running' THEN 0
+                WHEN status = 'queued' THEN 1
+                WHEN status = 'cancel_requested' THEN 2
+                ELSE 3
+              END,
+              CASE
+                WHEN status IN ('running', 'queued', 'cancel_requested') THEN position
+                ELSE 0
+              END ASC,
+              CASE
+                WHEN status IN ('running', 'queued', 'cancel_requested') THEN created_at
+                ELSE finished_at
+              END DESC
+            LIMIT ?
+            """,
+            (max(1, limit),),
+        ).fetchall()
+        return [_job_row(row) for row in rows]
+    finally:
+        conn.close()
+
+
+def get_fletcher_job(queue_item_id: str, db_path: str | Path | None = None) -> dict:
+    init_fletcher_queue_db(db_path)
+    conn = get_connection(db_path)
+    try:
+        row = conn.execute(
+            "SELECT * FROM fletcher_jobs WHERE queue_item_id = ?",
+            (queue_item_id,),
+        ).fetchone()
+        if not row:
+            raise KeyError(queue_item_id)
+        return _job_row(row)
+    finally:
+        conn.close()
+
+
+def patch_fletcher_job_input(
+    queue_item_id: str, payload: dict, db_path: str | Path | None = None
+) -> dict:
+    job = get_fletcher_job(queue_item_id, db_path=db_path)
+    if job["status"] != "queued":
+        raise ValueError("Only queued Fletcher jobs can be edited.")
+    merged = dict(job["input"])
+    merged.update(payload)
+    conn = get_connection(db_path)
+    try:
+        conn.execute(
+            "UPDATE fletcher_jobs SET input_json = ?, revision = revision + 1 WHERE queue_item_id = ?",
+            (json.dumps(merged), queue_item_id),
+        )
+        conn.commit()
+        return get_fletcher_job(queue_item_id, db_path=db_path)
+    finally:
+        conn.close()
+
+
+def move_fletcher_job(
+    queue_item_id: str, direction: str, db_path: str | Path | None = None
+) -> dict:
+    job = get_fletcher_job(queue_item_id, db_path=db_path)
+    if job["status"] != "queued":
+        raise ValueError("Only queued Fletcher jobs can be reordered.")
+    op = "<" if direction == "up" else ">"
+    order = "DESC" if direction == "up" else "ASC"
+    conn = get_connection(db_path)
+    try:
+        other = conn.execute(
+            f"""
+            SELECT queue_item_id, position FROM fletcher_jobs
+            WHERE status = ? AND position {op} ?
+            ORDER BY position {order}
+            LIMIT 1
+            """,
+            ("queued", job["position"]),
+        ).fetchone()
+        if other:
+            conn.execute(
+                "UPDATE fletcher_jobs SET position = ? WHERE queue_item_id = ?",
+                (other["position"], queue_item_id),
+            )
+            conn.execute(
+                "UPDATE fletcher_jobs SET position = ? WHERE queue_item_id = ?",
+                (job["position"], other["queue_item_id"]),
+            )
+            conn.commit()
+        return get_fletcher_job(queue_item_id, db_path=db_path)
+    finally:
+        conn.close()
+
+
+def cancel_fletcher_job(queue_item_id: str, db_path: str | Path | None = None) -> dict:
+    job = get_fletcher_job(queue_item_id, db_path=db_path)
+    if job["status"] not in {"queued", "running"}:
+        return job
+    status = "cancelled" if job["status"] == "queued" else "cancel_requested"
+    conn = get_connection(db_path)
+    try:
+        conn.execute(
+            "UPDATE fletcher_jobs SET status = ?, finished_at = CURRENT_TIMESTAMP, revision = revision + 1 WHERE queue_item_id = ?",
+            (status, queue_item_id),
+        )
+        conn.commit()
+        return get_fletcher_job(queue_item_id, db_path=db_path)
+    finally:
+        conn.close()
+
+
+def update_fletcher_job_progress(
+    queue_item_id: str,
+    progress: dict,
+    db_path: str | Path | None = None,
+) -> dict:
+    job = get_fletcher_job(queue_item_id, db_path=db_path)
+    merged = dict(job.get("progress") or {})
+    current_percent = merged.get("percent")
+    next_percent = progress.get("percent")
+    if isinstance(current_percent, int | float) and isinstance(next_percent, int | float):
+        progress = dict(progress)
+        progress["percent"] = max(current_percent, next_percent)
+    merged.update(progress)
+    conn = get_connection(db_path)
+    try:
+        conn.execute(
+            """
+            UPDATE fletcher_jobs
+            SET progress_json = ?, revision = revision + 1
+            WHERE queue_item_id = ?
+            """,
+            (json.dumps(merged), queue_item_id),
+        )
+        conn.commit()
+        return get_fletcher_job(queue_item_id, db_path=db_path)
+    finally:
+        conn.close()
+
+
+def delete_fletcher_job(queue_item_id: str, db_path: str | Path | None = None) -> dict:
+    job = get_fletcher_job(queue_item_id, db_path=db_path)
+    if job["status"] in {"queued", "running", "cancel_requested"}:
+        raise ValueError("Only finished Fletcher jobs can be deleted.")
+    conn = get_connection(db_path)
+    try:
+        conn.execute("DELETE FROM fletcher_jobs WHERE queue_item_id = ?", (queue_item_id,))
+        conn.commit()
+        return job
+    finally:
+        conn.close()
+
+
+def claim_next_fletcher_job(db_path: str | Path | None = None) -> dict | None:
+    init_fletcher_queue_db(db_path)
+    conn = get_connection(db_path)
+    try:
+        row = conn.execute(
+            """
+            SELECT * FROM fletcher_jobs
+            WHERE status = ?
+            ORDER BY position ASC, created_at ASC
+            LIMIT 1
+            """,
+            ("queued",),
+        ).fetchone()
+        if not row:
+            return None
+        qid = row["queue_item_id"]
+        conn.execute(
+            """
+            UPDATE fletcher_jobs
+            SET status = ?, started_at = CURRENT_TIMESTAMP,
+                progress_json = ?, revision = revision + 1
+            WHERE queue_item_id = ? AND status = ?
+            """,
+            (
+                "running",
+                json.dumps({"current_step": "running", "event_id": 1, "log_tail": []}),
+                qid,
+                "queued",
+            ),
+        )
+        conn.commit()
+        return get_fletcher_job(qid, db_path=db_path)
+    finally:
+        conn.close()
+
+
+def finish_fletcher_job(
+    queue_item_id: str,
+    *,
+    status: str,
+    result: dict | None = None,
+    error: str | None = None,
+    log_path: str | None = None,
+    review_id: str | None = None,
+    db_path: str | Path | None = None,
+) -> dict:
+    conn = get_connection(db_path)
+    try:
+        conn.execute(
+            """
+            UPDATE fletcher_jobs
+            SET status = ?, finished_at = CURRENT_TIMESTAMP, result_json = ?,
+                error = ?, log_path = ?, review_id = ?, revision = revision + 1
+            WHERE queue_item_id = ?
+            """,
+            (
+                status,
+                json.dumps(result or {}),
+                error,
+                log_path,
+                review_id,
+                queue_item_id,
+            ),
+        )
+        conn.commit()
+        return get_fletcher_job(queue_item_id, db_path=db_path)
+    finally:
+        conn.close()
+
+
+def set_fletcher_job_log_path(
+    queue_item_id: str, log_path: str, db_path: str | Path | None = None
+) -> dict:
+    conn = get_connection(db_path)
+    try:
+        conn.execute(
+            """
+            UPDATE fletcher_jobs
+            SET log_path = ?, revision = revision + 1
+            WHERE queue_item_id = ?
+            """,
+            (log_path, queue_item_id),
+        )
+        conn.commit()
+        return get_fletcher_job(queue_item_id, db_path=db_path)
     finally:
         conn.close()
 
@@ -146,6 +471,9 @@ def record_resume_attempt(
     conn = get_connection(db_path)
     try:
         cursor = conn.cursor()
+        fallback_used = bool(payload["fallback_used"])
+        is_latest_useful = bool(payload["is_latest_useful"])
+        is_selected_for_c3 = bool(payload["is_selected_for_c3"])
         jd_sql = payload.get("jd_usable")
         if jd_sql is not None:
             jd_sql = 1 if jd_sql else 0
@@ -170,7 +498,7 @@ def record_resume_attempt(
                 payload["base_resume_name"],
                 payload["source_resume_type"],
                 payload["source_resume_path"],
-                int(payload["fallback_used"]),
+                fallback_used,
                 payload["model_backend"],
                 payload["model_name"],
                 payload["prompt_version"],
@@ -189,40 +517,43 @@ def record_resume_attempt(
         )
         attempt_id = int(cursor.lastrowid)
 
+        job_filter_sql = "job_id IS NULL" if job_id is None else "job_id = ?"
+        job_filter_params: tuple[object, ...] = () if job_id is None else (job_id,)
+
         cursor.execute(
-            """
+            f"""
             UPDATE resume_versions
-            SET is_latest_generated = 0
-            WHERE job_id IS ?
+            SET is_latest_generated = FALSE
+            WHERE {job_filter_sql}
             """,
-            (job_id,),
+            job_filter_params,
         )
-        if payload["is_latest_useful"]:
+        if is_latest_useful:
             cursor.execute(
-                """
+                f"""
                 UPDATE resume_versions
-                SET is_latest_useful = 0
-                WHERE job_id IS ?
+                SET is_latest_useful = FALSE
+                WHERE {job_filter_sql}
                 """,
-                (job_id,),
+                job_filter_params,
             )
-        if payload["is_selected_for_c3"]:
+        if is_selected_for_c3:
             cursor.execute(
-                """
+                f"""
                 UPDATE resume_versions
-                SET is_selected_for_c3 = 0
-                WHERE job_id IS ?
+                SET is_selected_for_c3 = FALSE
+                WHERE {job_filter_sql}
                 """,
-                (job_id,),
+                job_filter_params,
             )
         elif payload.get("clear_existing_selection"):
             cursor.execute(
-                """
+                f"""
                 UPDATE resume_versions
-                SET is_selected_for_c3 = 0
-                WHERE job_id IS ?
+                SET is_selected_for_c3 = FALSE
+                WHERE {job_filter_sql}
                 """,
-                (job_id,),
+                job_filter_params,
             )
         cursor.execute(
             """
@@ -239,9 +570,9 @@ def record_resume_attempt(
                 payload["pdf_path"],
                 payload["tex_path"],
                 payload["content_hash"],
-                1,
-                int(payload["is_latest_useful"]),
-                int(payload["is_selected_for_c3"]),
+                True,
+                is_latest_useful,
+                is_selected_for_c3,
             ),
         )
         version_id = int(cursor.lastrowid)
@@ -251,7 +582,7 @@ def record_resume_attempt(
             jdu_job = 1 if jdu_job else 0
 
         if job_id is not None:
-            if payload["is_selected_for_c3"]:
+            if is_selected_for_c3:
                 cursor.execute(
                     """
                     UPDATE jobs
@@ -288,14 +619,14 @@ def record_resume_attempt(
                         payload["role_family"],
                         payload["job_level"],
                         payload["model_name"],
-                        int(payload["fallback_used"]),
+                        fallback_used,
                         json.dumps(payload["concern_flags"]),
                         jdu_job,
                         (payload.get("jd_usable_reason") or None),
                         version_id,
                         payload["pdf_path"],
                         payload["tex_path"],
-                        1,
+                        True,
                         job_id,
                     ),
                 )
@@ -322,7 +653,7 @@ def record_resume_attempt(
                         selected_resume_pdf_path = NULL,
                         selected_resume_tex_path = NULL,
                         selected_resume_selected_at = NULL,
-                        selected_resume_ready_for_c3 = 0
+                        selected_resume_ready_for_c3 = FALSE
                     WHERE id = ?
                     """,
                     (
@@ -336,7 +667,7 @@ def record_resume_attempt(
                         payload["role_family"],
                         payload["job_level"],
                         payload["model_name"],
-                        int(payload["fallback_used"]),
+                        fallback_used,
                         json.dumps(payload["concern_flags"]),
                         jdu_job,
                         (payload.get("jd_usable_reason") or None),
@@ -375,7 +706,7 @@ def record_resume_attempt(
                         payload["role_family"],
                         payload["job_level"],
                         payload["model_name"],
-                        int(payload["fallback_used"]),
+                        fallback_used,
                         json.dumps(payload["concern_flags"]),
                         jdu_job,
                         (payload.get("jd_usable_reason") or None),

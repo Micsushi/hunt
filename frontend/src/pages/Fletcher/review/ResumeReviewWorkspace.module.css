@@ -1,0 +1,370 @@
+.workspace {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.toolbar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: var(--panel);
+}
+
+.toolbarGroup {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.segmented {
+  display: inline-flex;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+}
+
+.segmented button,
+.button,
+.buttonPrimary,
+.iconButton {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 34px;
+  min-width: 70px;
+  box-sizing: border-box;
+  border: 1px solid var(--line);
+  background: var(--panel-strong);
+  color: var(--ink);
+  padding: 0 12px;
+  border-radius: var(--radius-sm);
+  font-size: 0.86rem;
+  font-weight: 650;
+  line-height: 1;
+  cursor: pointer;
+  text-decoration: none;
+  white-space: nowrap;
+}
+
+.buttonPrimary {
+  min-width: 84px;
+}
+
+.segmented button {
+  border: 0;
+  border-radius: 0;
+}
+
+.segmented .active {
+  background: var(--accent);
+  color: var(--ink-inverse);
+}
+
+.buttonPrimary {
+  background: var(--accent);
+  color: var(--ink-inverse);
+  border-color: var(--accent);
+}
+
+.button:hover,
+.buttonPrimary:hover {
+  text-decoration: none;
+}
+
+.button:disabled,
+.buttonPrimary:disabled,
+.iconButton:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.meta {
+  color: var(--muted);
+  font-size: 0.82rem;
+}
+
+.warning {
+  padding: 10px 12px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--warning);
+  background: var(--warning-soft);
+  color: var(--warning);
+}
+
+.layout {
+  display: grid;
+  grid-template-columns: minmax(0, 8.5in) 320px;
+  gap: 24px;
+  align-items: start;
+  justify-content: center;
+}
+
+.paper {
+  background: var(--resume-paper, #fffdf8);
+  color: var(--resume-ink, #141813);
+  border: 1px solid rgba(20, 24, 19, 0.12);
+  border-radius: 4px;
+  padding: 0.55in 0.62in;
+  min-height: 11in;
+  width: min(100%, 8.5in);
+  box-sizing: border-box;
+  box-shadow:
+    0 1px 0 rgba(255, 255, 255, 0.85) inset,
+    0 20px 60px rgba(0, 0, 0, 0.24);
+  font-family: Georgia, 'Times New Roman', serif;
+  font-size: 10.2pt;
+  line-height: 1.22;
+  justify-self: center;
+}
+
+.resumeHeader {
+  text-align: center;
+  margin-bottom: 10px;
+}
+
+.resumeName {
+  font-size: 18pt;
+  font-weight: 700;
+  line-height: 1.1;
+}
+
+.resumeContact {
+  margin-top: 3px;
+  font-size: 8.5pt;
+  line-height: 1.25;
+}
+
+.resumeSection {
+  margin-top: 8px;
+}
+
+.resumeSectionTitle {
+  margin: 0 0 4px;
+  padding-bottom: 2px;
+  border-bottom: 1px solid rgba(20, 24, 19, 0.28);
+  font-family: var(--font-sans);
+  font-size: 8.2pt;
+  font-weight: 800;
+  line-height: 1.1;
+  text-transform: uppercase;
+  color: var(--resume-muted, #5f675d);
+  letter-spacing: 0.04em;
+}
+
+.summaryText {
+  margin: 0;
+  text-align: left;
+}
+
+.resumeEntry {
+  margin-top: 5px;
+}
+
+.entryHeader {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) max-content;
+  gap: 14px;
+  align-items: baseline;
+}
+
+.entryTitle {
+  font-weight: 700;
+}
+
+.entryDate {
+  text-align: right;
+  white-space: nowrap;
+}
+
+.bulletList {
+  margin: 2px 0 0 18px;
+  padding: 0;
+}
+
+.bulletList li {
+  margin: 1px 0;
+  padding-left: 2px;
+}
+
+.skillRow {
+  display: grid;
+  grid-template-columns: 102px minmax(0, 1fr);
+  gap: 8px;
+  margin-top: 2px;
+}
+
+.skillRow strong {
+  font-weight: 700;
+}
+
+.diffText {
+  display: inline;
+  border-radius: 3px;
+  cursor: pointer;
+  white-space: pre-wrap;
+}
+
+.diffText a {
+  color: inherit;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.segment {
+  border-radius: 2px;
+  padding: 0 1px;
+  cursor: pointer;
+}
+
+.segmentAdd {
+  background: rgba(67, 160, 93, 0.16);
+  border-bottom: 2px solid #257a3b;
+  text-decoration: underline;
+  text-decoration-color: #257a3b;
+  text-decoration-thickness: 1px;
+  text-underline-offset: 2px;
+}
+
+.segmentDel {
+  background: rgba(196, 66, 52, 0.13);
+  color: #8a241c;
+  border-bottom: 2px solid #a93f31;
+  text-decoration: line-through;
+  text-decoration-color: #a93f31;
+  text-decoration-thickness: 1.5px;
+}
+
+.selected {
+  outline: 2px solid var(--accent);
+}
+
+.selectedBlock {
+  box-shadow: 0 0 0 2px var(--accent);
+  background: rgba(86, 177, 112, 0.08);
+}
+
+.inspector {
+  position: sticky;
+  top: 78px;
+  border: 1px solid var(--line);
+  background: var(--panel);
+  border-radius: var(--radius-md);
+  padding: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.inspector h2 {
+  font-size: 0.9rem;
+  margin: 0;
+}
+
+.textarea {
+  width: 100%;
+  min-height: 140px;
+  resize: vertical;
+  background: var(--panel-strong);
+  color: var(--ink);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  padding: 8px;
+  font: inherit;
+}
+
+.smallStack {
+  display: grid;
+  gap: 8px;
+}
+
+.keywordPanel {
+  border-top: 1px solid var(--line);
+  margin-top: 4px;
+  padding-top: 12px;
+}
+
+.panelTitle {
+  color: var(--ink);
+  font-size: 0.82rem;
+  font-weight: 750;
+  margin-bottom: 8px;
+}
+
+.keywordList {
+  display: grid;
+  gap: 6px;
+  max-height: 360px;
+  overflow: auto;
+  padding-right: 2px;
+}
+
+.keywordItem {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: center;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--panel-strong);
+  padding: 8px;
+}
+
+.keywordName {
+  color: var(--ink);
+  font-size: 0.82rem;
+  font-weight: 700;
+  line-height: 1.2;
+}
+
+.keywordMeta {
+  color: var(--muted);
+  font-size: 0.72rem;
+  margin-top: 2px;
+}
+
+.keywordScore {
+  display: grid;
+  justify-items: end;
+  gap: 2px;
+  color: var(--muted);
+  font-size: 0.68rem;
+  text-transform: uppercase;
+}
+
+.keywordScore strong {
+  color: var(--ink);
+  font-size: 0.82rem;
+}
+
+@media (max-width: 980px) {
+  .layout {
+    grid-template-columns: 1fr;
+  }
+
+  .inspector {
+    position: static;
+  }
+
+  .paper {
+    min-height: auto;
+    padding: 28px 24px;
+    font-size: 10pt;
+  }
+
+  .entryHeader,
+  .skillRow {
+    grid-template-columns: 1fr;
+    gap: 2px;
+  }
+
+  .entryDate {
+    text-align: left;
+  }
+}

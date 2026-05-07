@@ -8,9 +8,11 @@ import pytest
 
 from fletcher.llm.llm_enrich import (
     bucket_skill_keywords_with_ollama,
+    capitalize_skill_phrase,
     enrich_with_ollama_if_enabled,
     filter_summary_keywords_with_ollama,
     generate_summary,
+    restore_textbf_from_original,
     rewrite_bullet_targeted,
 )
 from fletcher.pipeline_logger import PipelineLogger
@@ -20,6 +22,13 @@ def _make_logger() -> PipelineLogger:
     return PipelineLogger()
 
 
+def test_capitalize_skill_phrase_uppercases_first_letter_only():
+    assert capitalize_skill_phrase("protocol/logic analyzers") == "Protocol/logic analyzers"
+    assert capitalize_skill_phrase("oscilloscopes") == "Oscilloscopes"
+    assert capitalize_skill_phrase("  perl") == "Perl"
+    assert capitalize_skill_phrase("C++") == "C++"
+
+
 def test_pipeline_logger_prints_debug_summary_readably(capsys):
     logger = PipelineLogger()
 
@@ -27,7 +36,12 @@ def test_pipeline_logger_prints_debug_summary_readably(capsys):
         "pipeline_debug_summary",
         keywords_found=["Python"],
         keyword_partition={"present": [], "missing": ["Python"]},
-        policy_routes={"rewrite": ["Python"], "summary_only": [], "skills_only": [], "ignored": []},
+        policy_routes={
+            "rewrite": ["Python"],
+            "summary_only": [],
+            "skills_only": [],
+            "ignored": [],
+        },
         rag_levels={"high": ["Python"], "medium": [], "low_count": 0, "rag_used": True},
         bullet_rewrites=[],
         summary_keywords_used=[],
@@ -50,7 +64,12 @@ def test_pipeline_debug_summary_separates_rag_metadata(capsys):
         "pipeline_debug_summary",
         keywords_found=["Python"],
         keyword_partition={"present": [], "missing": ["Python"]},
-        policy_routes={"rewrite": ["Python"], "summary_only": [], "skills_only": [], "ignored": []},
+        policy_routes={
+            "rewrite": ["Python"],
+            "summary_only": [],
+            "skills_only": [],
+            "ignored": [],
+        },
         rag_levels={"high": [], "medium": ["Python"], "low_count": 2, "rag_used": True},
         bullet_rewrites=[],
         summary_keywords_used=[],
@@ -117,35 +136,54 @@ def test_rewrite_logger_called_on_success(monkeypatch):
     assert "success=True" in log
 
 
-def test_rewrite_repair_success_uses_repair_validation(monkeypatch):
+def test_restore_textbf_from_original_wraps_first_surviving_phrase_only():
+    original = "Reduced evaluation time by \\textbf{85\\%} and built \\textbf{Python} automation."
+    rewritten = "Reduced evaluation time by 85% with Python-based automation and Python scripts."
+
+    result = restore_textbf_from_original(original, rewritten)
+
+    assert result == (
+        "Reduced evaluation time by \\textbf{85\\%} with \\textbf{Python}-based automation "
+        "and Python scripts."
+    )
+
+
+def test_rewrite_restores_original_textbf_after_model_returns_plain_text(monkeypatch):
     monkeypatch.setattr("fletcher.llm.llm_enrich.config.DEFAULT_MODEL_BACKEND", "ollama")
-    validations = [
-        {
+    monkeypatch.setattr(
+        "fletcher.llm.llm_enrich.validate_rewrite_with_ollama",
+        lambda **_kwargs: {
+            "accepted": True,
+            "keywords_supported": ["automation"],
+            "keywords_rejected": [],
+            "reason": "",
+        },
+    )
+    with patch(
+        "fletcher.llm.llm_enrich._ollama_chat",
+        return_value=(
+            '{"bullet": "Reduced evaluation time by 85% using Python automation.", '
+            '"keywords_used": ["automation"], "keywords_skipped": []}'
+        ),
+    ):
+        result = rewrite_bullet_targeted(
+            "Reduced evaluation time by \\textbf{85\\%} using Python scripts.",
+            ["automation"],
+        )
+
+    assert result["success"] is True
+    assert result["bullet"] == "Reduced evaluation time by \\textbf{85\\%} using Python automation."
+
+
+def test_rewrite_validation_failure_keeps_original_and_skips_keywords(monkeypatch):
+    monkeypatch.setattr("fletcher.llm.llm_enrich.config.DEFAULT_MODEL_BACKEND", "ollama")
+    monkeypatch.setattr(
+        "fletcher.llm.llm_enrich.validate_rewrite_with_ollama",
+        lambda **_kwargs: {
             "accepted": False,
             "keywords_supported": [],
             "keywords_rejected": ["cloud platforms"],
             "reason": "too broad",
-        },
-        {
-            "accepted": True,
-            "keywords_supported": ["cloud platforms"],
-            "keywords_rejected": [],
-            "reason": "supported",
-        },
-    ]
-
-    monkeypatch.setattr(
-        "fletcher.llm.llm_enrich.validate_rewrite_with_ollama",
-        lambda **_kwargs: validations.pop(0),
-    )
-    monkeypatch.setattr(
-        "fletcher.llm.llm_enrich.repair_rewrite_with_ollama",
-        lambda **_kwargs: {
-            "success": True,
-            "bullet": "Built on cloud platforms using Vercel and Supabase.",
-            "keywords_used": ["cloud platforms"],
-            "keywords_skipped": [],
-            "duration_ms": 1,
         },
     )
 
@@ -162,28 +200,16 @@ def test_rewrite_repair_success_uses_repair_validation(monkeypatch):
             logger=_make_logger(),
         )
 
-    assert result["success"] is True
-    assert result["initial_validation"]["accepted"] is False
-    assert result["validation"]["accepted"] is True
+    assert result["success"] is False
+    assert result["bullet"] == "Built on Vercel and Supabase."
+    assert result["error"] == "rewrite_validation_failed"
+    assert result["keywords_used"] == []
+    assert result["keywords_skipped"] == ["cloud platforms"]
+    assert result["validation"]["accepted"] is False
 
 
-def test_claimed_keyword_missing_uses_llm_validation_before_repair(monkeypatch):
+def test_claimed_keyword_missing_uses_llm_validation(monkeypatch):
     monkeypatch.setattr("fletcher.llm.llm_enrich.config.DEFAULT_MODEL_BACKEND", "ollama")
-    repair_called = {"value": False}
-
-    monkeypatch.setattr(
-        "fletcher.llm.llm_enrich.repair_rewrite_with_ollama",
-        lambda **_kwargs: (
-            repair_called.update(value=True)
-            or {
-                "success": True,
-                "bullet": "Optimized full stack development scalability for 10,000+ concurrent users by engineering a full-stack architecture on Vercel and Supabase.",
-                "keywords_used": ["full stack development"],
-                "keywords_skipped": [],
-                "duration_ms": 1,
-            }
-        ),
-    )
     monkeypatch.setattr(
         "fletcher.llm.llm_enrich.validate_rewrite_with_ollama",
         lambda **_kwargs: {
@@ -207,7 +233,6 @@ def test_claimed_keyword_missing_uses_llm_validation_before_repair(monkeypatch):
             logger=_make_logger(),
         )
 
-    assert repair_called["value"] is False
     assert result["success"] is True
     assert result["keywords_used"] == ["full stack development"]
     assert "claimed_keyword_presence" not in result
@@ -287,9 +312,52 @@ def test_rewrite_no_preserve_line_when_empty(monkeypatch):
     assert "must stay" not in captured[0]
 
 
+def test_rewrite_uses_configured_strategy(monkeypatch):
+    monkeypatch.setattr("fletcher.llm.llm_enrich.config.DEFAULT_MODEL_BACKEND", "ollama")
+    monkeypatch.setattr(
+        "fletcher.llm.llm_enrich.load_c2_prompt_settings",
+        lambda: {
+            "rewrite_strategy": "Configured strategy: try replacement, then stop.",
+            "rewrite_keyword_fit_policy": "- Configured keyword fit policy.",
+            "rewrite_bullet_policy": "- Configured bullet policy.",
+            "rewrite_length_policy": "- Configured length policy {max_length_percent}.",
+            "rewrite_action_keyword_policy": "- Configured action keyword policy.",
+        },
+    )
+    monkeypatch.setattr(
+        "fletcher.llm.llm_enrich.validate_rewrite_with_ollama",
+        lambda **_kwargs: {
+            "accepted": True,
+            "keywords_supported": ["Python"],
+            "keywords_rejected": [],
+            "reason": "supported",
+        },
+    )
+    captured: list[str] = []
+
+    def fake_chat(prompt: str) -> str:
+        captured.append(prompt)
+        return (
+            '{"bullet": "Built with Python.", "keywords_used": ["Python"], "keywords_skipped": []}'
+        )
+
+    with patch("fletcher.llm.llm_enrich._ollama_chat", fake_chat):
+        result = rewrite_bullet_targeted("Built services.", ["Python"], logger=None)
+
+    assert result["success"] is True
+    assert "Rewrite strategy:\nConfigured strategy: try replacement, then stop." in captured[0]
+    assert "Configured keyword fit policy." in captured[0]
+    assert "Configured bullet policy." in captured[0]
+    assert "Configured length policy 20." in captured[0]
+    assert "Configured action keyword policy." in captured[0]
+
+
 def test_rewrite_logger_called_on_failure(monkeypatch):
     monkeypatch.setattr("fletcher.llm.llm_enrich.config.DEFAULT_MODEL_BACKEND", "ollama")
-    with patch("fletcher.llm.llm_enrich._ollama_chat", side_effect=ConnectionRefusedError("down")):
+    with patch(
+        "fletcher.llm.llm_enrich._ollama_chat",
+        side_effect=ConnectionRefusedError("down"),
+    ):
         logger = _make_logger()
         result = rewrite_bullet_targeted("bullet", ["kw"], logger=logger)
     assert result["success"] is False
@@ -479,7 +547,9 @@ def test_summary_prompt_uses_pm_positioning(monkeypatch):
     assert "Target role context" in captured[0]
 
 
-def test_summary_prompt_uses_generic_role_context_without_hardcoded_special_cases(monkeypatch):
+def test_summary_prompt_uses_generic_role_context_without_hardcoded_special_cases(
+    monkeypatch,
+):
     monkeypatch.setattr("fletcher.llm.llm_enrich.config.DEFAULT_MODEL_BACKEND", "ollama")
     captured: list[str] = []
 
@@ -595,7 +665,10 @@ def test_skill_bucket_prompt_allows_concrete_technical_skill_phrases(monkeypatch
     assert "Skill addition policy:" in captured[0]
     assert "one specific Existing skills category" in captured[0]
     assert "blocked keywords" in captured[0]
-    assert "Category must be exactly one of the existing categories: languages, frameworks, developer_tools" in captured[0]
+    assert (
+        "Category must be exactly one of the existing categories: languages, frameworks, developer_tools"
+        in captured[0]
+    )
     assert "Choose 0 to 3 total additions" in captured[0]
     assert '{"additions": {"keyword one": "category", "keyword two": "category"}' in captured[0]
     assert "keyword-to-category pairs" in captured[0]
@@ -668,12 +741,18 @@ def test_skill_bucket_can_ignore_standalone_dashboard_and_ide(monkeypatch):
     with patch(
         "fletcher.llm.llm_enrich._ollama_chat",
         return_value=(
-            '{"additions": {"AI-driven dashboard": "developer_tools"}, '
+            '{"additions": {"ai-driven dashboard": "developer_tools", '
+            '"protocol/logic analyzers": "developer_tools"}, '
             '"ignored": ["dashboards", "Android Studio"]}'
         ),
     ):
         result = bucket_skill_keywords_with_ollama(
-            keywords=["dashboards", "AI-driven dashboard", "Android Studio"],
+            keywords=[
+                "dashboards",
+                "AI-driven dashboard",
+                "protocol/logic analyzers",
+                "Android Studio",
+            ],
             existing_skills={
                 "languages": ["Python"],
                 "frameworks": ["React"],
@@ -682,7 +761,7 @@ def test_skill_bucket_can_ignore_standalone_dashboard_and_ide(monkeypatch):
             logger=_make_logger(),
         )
 
-    assert result["developer_tools"] == ["AI-driven dashboard"]
+    assert result["developer_tools"] == ["AI-driven dashboard", "Protocol/logic analyzers"]
     assert result["ignored"] == ["dashboards", "Android Studio"]
 
 
@@ -701,7 +780,11 @@ def test_skill_bucket_discards_invalid_terms_without_retry(monkeypatch):
     ) as chat:
         result = bucket_skill_keywords_with_ollama(
             keywords=["WebSockets", "Linux scripting"],
-            existing_skills={"languages": ["Bash"], "frameworks": [], "developer_tools": []},
+            existing_skills={
+                "languages": ["Bash"],
+                "frameworks": [],
+                "developer_tools": [],
+            },
             logger=_make_logger(),
         )
 
@@ -1044,7 +1127,11 @@ def test_extract_keywords_ignores_legacy_keyword_routes(monkeypatch):
             logger=_make_logger(),
         )
 
-    assert result["keywords"] == ["AI models", "complex systems integration", "analytical"]
+    assert result["keywords"] == [
+        "AI models",
+        "complex systems integration",
+        "analytical",
+    ]
     assert "keyword_routes" not in result
 
 
@@ -1172,7 +1259,11 @@ def test_enrich_logger_called_on_success(monkeypatch):
     with patch("fletcher.llm.llm_enrich._ollama_chat", return_value=resp):
         logger = _make_logger()
         _, kw, meta = enrich_with_ollama_if_enabled(
-            title="SWE", description="Python job", classification={}, keywords={}, logger=logger
+            title="SWE",
+            description="Python job",
+            classification={},
+            keywords={},
+            logger=logger,
         )
     assert meta["ollama_enriched"] is True
     assert "Python" in kw.get("must_have_terms", [])
@@ -1191,7 +1282,11 @@ def test_enrich_logger_on_failure(monkeypatch):
     ):
         logger = _make_logger()
         _, _, meta = enrich_with_ollama_if_enabled(
-            title="SWE", description="job", classification={}, keywords={}, logger=logger
+            title="SWE",
+            description="job",
+            classification={},
+            keywords={},
+            logger=logger,
         )
     assert meta["ollama_enriched"] is False
     log = logger.get_log_text()

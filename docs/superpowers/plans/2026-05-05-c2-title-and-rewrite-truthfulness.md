@@ -1238,8 +1238,8 @@ Implemented:
 - Added explicit `JobMismatchError` result behavior when the detected role family or seniority is clearly incompatible with the submitted/requested title.
 - Summary keyword filtering now uses an Ollama judgment call first, with deterministic filtering only as fallback.
 - Summary validation now uses an Ollama judgment call first, with deterministic validation only as fallback.
-- Bullet rewrite validation now follows this shape: one LLM rewrite, one deterministic claimed-keyword visibility check, one LLM validation check, one LLM repair attempt if validation fails, then the same visibility and LLM validation checks once more. If the repair still fails, the original bullet is kept and skipped keywords move onward.
-- Removed deterministic phrasing repair from the active rewrite path. The old helper remains for existing tests but no longer changes rewrite output before validation.
+- Bullet rewrite validation now follows this shape: one LLM rewrite, one deterministic claimed-keyword visibility check, and one LLM validation check. If validation fails, the original bullet is kept and all attempted rewrite keywords move onward.
+- Removed deterministic phrasing cleanup from the active rewrite path and deleted the old helper/test.
 - Medium summary keywords that are skill-like can now be added to the bottom skills section. No-summary versions can use all medium skill-like keywords, while with-summary versions add skill-like summary keywords that did not visibly land in the generated summary.
 
 Verification:
@@ -2378,22 +2378,19 @@ Files: Modify `fletcher/llm/llm_enrich.py`, `tests/test_rewrite_validation.py`.
 - [ ] Step 1: Add test.
 
 ```python
-def test_auto_repairs_microservices_backend_services_redundancy():
-    repaired = repair_rewrite_redundancy(
-        "Enhanced targeting by developing Kotlin microservices and backend services that integrated APIs."
-    )
-    assert "microservices and backend services" not in repaired
-    assert "backend Kotlin microservices" in repaired
+def test_rewrite_validation_failure_keeps_original_and_skips_keywords():
+    ...
 ```
 
-- [ ] Step 2: Implement small deterministic repair.
+- [ ] Step 2: Implement validation failure fallback.
 
 ```python
-def repair_rewrite_redundancy(text: str) -> str:
-    return re.sub(r"Kotlin microservices and backend services", "backend Kotlin microservices", text)
+result["bullet"] = original
+result["keywords_used"] = []
+result["keywords_skipped"] = list(requested_keywords)
 ```
 
-- [ ] Step 3: Apply before validation.
+- [ ] Step 3: Send skipped keywords onward.
 
 This is lower priority than correct keyword accounting and summary validation.
 
@@ -2601,7 +2598,7 @@ Observed issue:
 - A correctly detected `JobMismatchError` returned HTTP 500 from `/api/fletcher/tailor`, making an expected safety skip look like a backend crash.
 - The live Docker logs still printed `pipeline_debug_summary` as one giant inline dict, even though downloaded logs were readable.
 - Soft quality/personality terms such as `communication` could still be upgraded to bullet rewrite by LLM routing or deterministic fallback.
-- A successful repaired rewrite could still log the initial failed validation under `validation`, making logs appear contradictory.
+- A successful second-pass rewrite could still log the initial failed validation under `validation`, making logs appear contradictory.
 - The rewrite validator was too willing to accept security vulnerability wording from generic bug detection or app monitoring evidence.
 
 Implemented:
@@ -2609,11 +2606,11 @@ Implemented:
 - Fletcher UI now displays `errorType` and `error` as a visible banner and still exposes the log download when no resume is generated.
 - `PipelineLogger.step()` now renders `pipeline_debug_summary` as readable sections in live stdout, not only in downloaded logs.
 - Quality terms are downgraded to summary-only before RAG/bullet rewrite, even if the router suggests `rewrite`.
-- Repaired rewrite success now replaces `validation` with the successful repair validation and preserves the failed first pass as `initial_validation`.
+- The active rewrite flow no longer runs second-pass rewrites; failed validation keeps the original bullet and records skipped keywords for downstream summary handling.
 - Rewrite validation prompt now requires direct security evidence for vulnerability/security-testing terms and rejects inferring them from generic bug/error monitoring.
 
 Verification:
-- `.\.venv\Scripts\python.exe -m pytest tests\test_llm_enrich_logger.py::test_pipeline_logger_prints_debug_summary_readably tests\test_llm_enrich_logger.py::test_rewrite_repair_success_uses_repair_validation tests\test_ad_hoc_pipeline.py::test_quality_terms_do_not_route_to_bullet_rewrite -q`: 3 passed.
+- `.\.venv\Scripts\python.exe -m pytest tests\test_llm_enrich_logger.py::test_pipeline_logger_prints_debug_summary_readably tests\test_llm_enrich_logger.py::test_rewrite_validation_failure_keeps_original_and_skips_keywords tests\test_ad_hoc_pipeline.py::test_quality_terms_do_not_route_to_bullet_rewrite -q`: 3 passed.
 - `.\.venv\Scripts\python.exe -m pytest tests\test_ad_hoc_pipeline.py tests\test_llm_enrich_logger.py tests\test_keyword_policy.py tests\test_rewrite_validation.py -q`: 105 passed.
 - `.\.venv\Scripts\python.exe ci.py c2`: passed.
 - `npm run typecheck`: passed.
@@ -2670,7 +2667,7 @@ Implemented:
 - Keyword policy routing no longer includes candidate resume context in the prompt. It filters the JD keyword list only.
 - Routing now acts as a pre-RAG cleanup layer: keep concrete tech/workflow terms for RAG, keep concrete traits for summary, and ignore non-actionable JD noise.
 - Routing batch size is now 30, so normal 0 to 30 keyword outputs route in one LLM call. If that call fails, the existing singleton retry path still protects reliability.
-- Rewrite and repair prompts now emphasize preserving Google XYZ-style bullet order, preserving meaning, avoiding incoherent technology relationships, and allowing reasonable adjacent framing when it stays in the same work context.
+- Rewrite and validation prompts now emphasize preserving Google XYZ-style bullet order, preserving meaning, avoiding incoherent technology relationships, and allowing reasonable adjacent framing when it stays in the same work context.
 - Rewrite validation no longer asks for direct textual evidence by default. It accepts contextually coherent phrasing and rejects meaning changes, unrelated domains, invented responsibilities, changed outcomes, and incoherent technology/vendor/resource pairings.
 
 Verification:
@@ -2708,7 +2705,7 @@ Implemented:
 - Present/missing partition now checks both resume bullets and existing skills.
 - `skills_only` keywords are now included in the final Technical Skills candidate pool. For the no-summary version, medium/skipped/skills-only terms can be skill candidates. For the summary version, unused medium/excluded/skills-only terms can be skill candidates after summary generation.
 - Slash splitting now preserves phrases containing `CI/CD`.
-- Claimed-keyword visibility failures now run one repair attempt, then the repaired text goes through the same visibility and LLM meaning checks.
+- Claimed-keyword visibility failures now keep the original bullet and move attempted keywords onward.
 - Bullet-drop logs now include dropped bullet text.
 - Pipeline debug summary now separates `Low Count` and `RAG Used` from the Medium keyword list and prints dropped bullet text when available.
 

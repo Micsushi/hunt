@@ -1,5 +1,6 @@
 import { get, patch, post, del } from './client'
 import type { JobDetail, JobsQuery, JobsResponse, ResumeAttempt } from '@/types/job'
+import type { ResumeReviewPackage } from '@/pages/Fletcher/review/types'
 
 function buildParams(q: JobsQuery): string {
   const p = new URLSearchParams()
@@ -39,6 +40,14 @@ export function fetchJob(id: number): Promise<JobDetail> {
 
 export function fetchResumeAttempts(jobId: number): Promise<ResumeAttempt[]> {
   return get<ResumeAttempt[]>(`/api/jobs/${jobId}/attempts`)
+}
+
+export function openJobResumeReview(jobId: number): Promise<ResumeReviewPackage> {
+  return post<ResumeReviewPackage>(`/api/jobs/${jobId}/resume/review`, {})
+}
+
+export function openAttemptResumeReview(attemptId: number): Promise<ResumeReviewPackage> {
+  return post<ResumeReviewPackage>(`/api/attempts/${attemptId}/review`, {})
 }
 
 export function requeueJob(id: number): Promise<{ status: string }> {
