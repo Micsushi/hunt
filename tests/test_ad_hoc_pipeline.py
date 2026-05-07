@@ -279,7 +279,6 @@ def base_mocks(monkeypatch):
         "extract_keywords_with_ollama",
         MagicMock(return_value={"success": False, "keywords": []}),
     )
-    monkeypatch.setattr(mod, "classify_job_with_ollama", MagicMock(return_value={"success": False}))
     monkeypatch.setattr(
         mod,
         "filter_summary_keywords_with_ollama",
@@ -1030,6 +1029,19 @@ def test_skill_add_does_not_alias_go_golang(base_mocks):
     assert added == ["Go", "Golang"]
     assert doc.skills.languages.count("Go") == 1
     assert "Golang" in doc.skills.languages
+
+
+def test_skill_bucket_skips_when_resume_has_no_existing_skills(base_mocks):
+    from fletcher.ad_hoc_pipeline import _add_keywords_to_skills
+    from fletcher.resume.models import SkillsSection
+
+    doc = _make_parsed_doc()
+    doc.skills = SkillsSection()
+
+    added = _add_keywords_to_skills(doc, ["Snowflake", "Python"])
+
+    assert added == []
+    base_mocks.bucket_skill_keywords_with_ollama.assert_not_called()
 
 
 def test_summary_validation_visible_evidence_override_for_false_negative(base_mocks):

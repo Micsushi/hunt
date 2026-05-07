@@ -4,18 +4,26 @@ import json
 import re
 from typing import Any
 
+from ..job_metadata_settings import (
+    C2_JOB_METADATA_MIN_CONFIDENCE,
+    C2_JOB_METADATA_PROMPT_MAX_CHARS,
+    C2_KEYWORD_IGNORE_POLICY,
+    C2_KEYWORD_KEEP_POLICY,
+    C2_KEYWORD_SELECTION_MAX_KEYWORDS,
+    C2_KEYWORD_SELECTION_MAX_WORDS,
+    C2_KEYWORD_SELECTION_MIN_WORDS,
+    C2_REWRITE_EXAMPLES,
+    C2_SKILL_ADDITION_POLICY,
+    C2_SUMMARY_BANNED_PHRASES,
+    C2_SUMMARY_GOOD_EXAMPLE,
+    C2_SUMMARY_KEYWORD_POLICY,
+)
+
 OLLAMA_SYSTEM_PROMPT = (
     "You are a careful resume-tailoring assistant. "
     "Return strict JSON only, follow the requested schema exactly, "
-    "and prefer skipping awkward or incoherent additions over guessing."
+    "skip awkward or incoherent additions over guessing."
 )
-
-KEYWORD_SELECTION_MAX_KEYWORDS = 30
-KEYWORD_SELECTION_MIN_WORDS = 1
-KEYWORD_SELECTION_MAX_WORDS = 3
-JOB_METADATA_PROMPT_MAX_CHARS = 3000
-JOB_METADATA_MIN_CONFIDENCE = 0.8
-
 
 def join_values(values: list[str]) -> str:
     return ", ".join(str(value).strip() for value in values if str(value).strip())
@@ -60,26 +68,24 @@ def build_jd_prompt_excerpt(description: str, max_chars: int) -> str:
 
 def keyword_selection_prompt(
     *,
-    max_keywords: int = KEYWORD_SELECTION_MAX_KEYWORDS,
-    min_words: int = KEYWORD_SELECTION_MIN_WORDS,
-    max_words: int = KEYWORD_SELECTION_MAX_WORDS,
+    max_keywords: int = C2_KEYWORD_SELECTION_MAX_KEYWORDS,
+    min_words: int = C2_KEYWORD_SELECTION_MIN_WORDS,
+    max_words: int = C2_KEYWORD_SELECTION_MAX_WORDS,
+    min_confidence: float = C2_JOB_METADATA_MIN_CONFIDENCE,
+    keep_policy: str = C2_KEYWORD_KEEP_POLICY,
+    ignore_policy: str = C2_KEYWORD_IGNORE_POLICY,
 ) -> str:
     return f"""Extract 0 to {max_keywords} resume bullet keywords that appear in the description.
 
-Keep:
-- tech stack terms, e.g.: named languages, frameworks, libraries, tools, platforms, databases, cloud tools
-- trait terms: personality or work traits such as analytical, collaborative, hardworking, backend engineering or web-based development
+Keep policy:
+{keep_policy}
 
-Do not keep things that cannot be used in resume bullet rewrites like:
-- job titles, role labels, seniority, employment type
-- degrees, majors, certifications, licenses
-- company, location, compensation, hiring logistics
-- IDE/editor names
-- full sentences and vague nouns
+Ignore policy:
+{ignore_policy}
 
 Never return the actual job title, role title, seniority label, employment type, degree, or major as a keyword.
-Every keyword must be {min_words} to {max_words} words. If you are not highly confident a term is a tech stack term or usable trait, skip it. Quality over quantity.
-Use exact job description wording. Do not invent terms. If description is unusable, keywords must be []."""
+Every keyword must be {min_words} to {max_words} words. If you are not {min_confidence:g} confident a term fits the keep policy, skip it. Quality over quantity.
+Use exact job description wording. Do not invent terms. If description is unusable, i.e. no usable keywords for the job title then keywords must be []."""
 
 
 def build_keyword_extract_prompt(
@@ -88,6 +94,12 @@ def build_keyword_extract_prompt(
     *,
     role_family: str = "",
     job_level: str = "",
+    max_keywords: int = C2_KEYWORD_SELECTION_MAX_KEYWORDS,
+    min_words: int = C2_KEYWORD_SELECTION_MIN_WORDS,
+    max_words: int = C2_KEYWORD_SELECTION_MAX_WORDS,
+    min_confidence: float = C2_JOB_METADATA_MIN_CONFIDENCE,
+    keep_policy: str = C2_KEYWORD_KEEP_POLICY,
+    ignore_policy: str = C2_KEYWORD_IGNORE_POLICY,
 ) -> str:
     excerpt = build_jd_prompt_excerpt(description, 4500)
     role_context = ""
@@ -101,7 +113,7 @@ def build_keyword_extract_prompt(
         f"Job title: {title or '(empty)'}\n"
         f"{role_context}"
         f"Job description excerpt:\n{excerpt or '(empty)'}\n\n"
-        f"{keyword_selection_prompt()}\n\n"
+        f"{keyword_selection_prompt(max_keywords=max_keywords, min_words=min_words, max_words=max_words, min_confidence=min_confidence, keep_policy=keep_policy, ignore_policy=ignore_policy)}\n\n"
         'Only accepted answer format: {"keywords": ["..."]}. No markdown. No prose. No extra keys.'
     )
 
@@ -111,12 +123,16 @@ def build_job_metadata_prompt(
     input_title: str,
     description: str,
     missing_fields: list[str],
+    role_family_values: list[str],
+    job_level_values: list[str],
+    max_chars: int = C2_JOB_METADATA_PROMPT_MAX_CHARS,
+    min_confidence: float = C2_JOB_METADATA_MIN_CONFIDENCE,
     target_lane_policy: str = "",
     unsupported_examples: list[str] | None = None,
 ) -> str:
     target_lane_policy = (target_lane_policy or "").strip()
     unsupported_examples = unsupported_examples or []
-    description_excerpt = (description or "").strip()[:JOB_METADATA_PROMPT_MAX_CHARS]
+    description_excerpt = (description or "").strip()[:max_chars]
     lane_line = (
         f"Target-lane policy: {target_lane_policy}\n"
         if target_lane_policy
@@ -130,102 +146,15 @@ def build_job_metadata_prompt(
         f"Missing fields to fill: {join_values(missing_fields) or '(none)'}\n"
         f"Job description excerpt:\n{description_excerpt or '(empty)'}\n"
         f"{lane_line}"
-        f"Only fill a field when you are at least {JOB_METADATA_MIN_CONFIDENCE:.1f} confident. "
+        f"Only fill a field when you are at least {min_confidence:g} confident. "
         "If not at least that confident, return an empty string for text fields and false for unsupported_target_role. "
         "Do not invent a title, role family, or level from vague text. "
-        "Use concise role_family labels such as software, data, pm, infrastructure, firmware, general, or unknown. "
-        "Use concise job_level labels such as intern, new_grad, junior, mid, senior, staff, principal, manager, director, executive, or unknown. "
+        f"Use only these role_family values: {join_values(role_family_values)}. "
+        f"Use only these job_level values: {join_values(job_level_values)}. "
         "Set jd_usable=false only when the description is empty, a stub, or lacks enough concrete content for tailoring. "
         "Set mismatch=true only for a clear conflict between the input title and the actual job title. "
         "Set unsupported_target_role=true only when a target-lane policy is supplied and the job clearly violates it.\n"
         'Only accepted answer format: {"title": "...", "role_family": "...", "job_level": "...", "mismatch": boolean, "mismatch_reason": "...", "unsupported_target_role": boolean, "unsupported_target_reason": "...", "confidence": 0.0, "jd_usable": boolean, "jd_usable_reason": "..."}. No markdown. No prose. No extra keys.'
-    )
-
-
-def build_infer_title_prompt(input_title: str, description: str) -> str:
-    return (
-        "Extract the actual role title from this job posting. "
-        "Do not return metadata headings, locations, functions, departments, company names, or section headings. "
-        "If no real role title is present, return an empty string.\n"
-        f"Input title: {input_title or '(empty)'}\n"
-        f"Job description excerpt:\n{build_jd_prompt_excerpt(description, 3500) or '(empty)'}\n"
-        'Return only: {"title": "..."}'
-    )
-
-
-def build_job_fit_prompt(
-    *,
-    input_title: str,
-    deterministic_title: str,
-    description: str,
-    target_lane_policy: str = "",
-    unsupported_examples: list[str] | None = None,
-    allowed_role_families: list[str] | None = None,
-    allowed_job_levels: list[str] | None = None,
-) -> str:
-    target_lane_policy = (target_lane_policy or "").strip()
-    unsupported_examples = unsupported_examples or []
-    family_line = (
-        f"Allowed role_family values: {join_values(allowed_role_families or [])}.\n"
-        if allowed_role_families
-        else "No fixed role_family values were supplied; choose a concise label that fits the job description.\n"
-    )
-    level_line = (
-        f"Allowed job_level values: {join_values(allowed_job_levels or [])}.\n"
-        if allowed_job_levels
-        else "No fixed job_level values were supplied; choose a concise level label that fits the job description, or unknown.\n"
-    )
-    if target_lane_policy:
-        lane_line = f"Target-lane policy: {target_lane_policy}\n"
-        if unsupported_examples:
-            lane_line += (
-                f"Unsupported examples from workflow policy: {join_values(unsupported_examples)}.\n"
-            )
-        unsupported_instruction = "Set unsupported_target_role=true only when the job description clearly violates the supplied target-lane policy.\n"
-    else:
-        lane_line = "No target-lane policy was supplied. Do not judge whether this job belongs to a configured search lane.\n"
-        unsupported_instruction = 'Return unsupported_target_role=false and unsupported_target_reason="" when no target-lane policy is supplied.\n'
-    excerpt = build_jd_prompt_excerpt(description, 4500)
-    return (
-        "Analyze job description for resume tailoring.\n"
-        f"Requested/input title: {input_title or '(empty)'}\n"
-        f"Deterministic title guess: {deterministic_title or '(empty)'}\n"
-        f"Job description excerpt:\n{excerpt or '(empty)'}\n"
-        "Return actual job description title, role_family, job_level, mismatch, unsupported_target_role, and jd_usable.\n"
-        "mismatch=true only for clear requested-title conflict between the requested/input title and actual job description title. Empty/generic requested title is not mismatch.\n"
-        f"{lane_line}"
-        f"{unsupported_instruction}"
-        f"{family_line}"
-        f"{level_line}"
-        "jd_usable=true when job description has enough concrete content for tailoring. Empty/stub scrape=false.\n"
-        'Only accepted answer format: {"title": "...", "role_family": "...", "job_level": "...", "mismatch": boolean, "mismatch_reason": "...", "unsupported_target_role": boolean, "unsupported_target_reason": "...", "confidence": 0.0, "jd_usable": boolean, "jd_usable_reason": "..."}. No markdown. No prose. No extra keys.'
-    )
-
-
-def build_classify_job_prompt(
-    *,
-    title: str,
-    description: str,
-    allowed_role_families: list[str] | None = None,
-    allowed_job_levels: list[str] | None = None,
-) -> str:
-    family_line = (
-        f"Allowed role_family values: {join_values(allowed_role_families or [])}.\n"
-        if allowed_role_families
-        else "No fixed role_family values were supplied; choose a concise label that fits the job description.\n"
-    )
-    level_line = (
-        f"Allowed job_level values: {join_values(allowed_job_levels or [])}.\n"
-        if allowed_job_levels
-        else "No fixed job_level values were supplied; choose a concise level label that fits the job description, or unknown.\n"
-    )
-    return (
-        "Classify this job for resume tailoring.\n"
-        f"Title: {title or '(empty)'}\n"
-        f"Description excerpt:\n{build_jd_prompt_excerpt(description, 3500) or '(empty)'}\n"
-        f"{family_line}"
-        f"{level_line}"
-        'Return only: {"role_family": "...", "job_level": "...", "confidence": 0.0, "reasons": ["..."]}'
     )
 
 
@@ -234,6 +163,7 @@ def build_summary_keyword_filter_prompt(
     keywords: list[str],
     candidate_context: str,
     job_title: str,
+    summary_keyword_policy: str = C2_SUMMARY_KEYWORD_POLICY,
     retry: bool = False,
 ) -> str:
     retry_line = (
@@ -242,15 +172,14 @@ def build_summary_keyword_filter_prompt(
         else ""
     )
     return (
-        "Pick summary keywords.\n"
+        "Pick keywords to add to resume summary.\n"
         f"Job title: {job_title or '(empty)'}\n"
         f"Candidate evidence: {(candidate_context or '')[:3000]}\n"
         f"Candidate keywords: {json.dumps(keywords)}\n"
         f"{retry_line}"
-        "Include 0 to 3 exact Candidate keywords. Pick only terms that improve resume-level positioning. "
-        "Never include a job title or role label in included. The title is already given separately. "
-        "Exclude job titles, degrees, majors, role labels, awkward domain claims, pure stuffing, and terms that only repeat bullet wording. "
-        "Fewer is better when extra keywords make summary worse. Do not add synonyms or new terms.\n"
+        f"Summary keyword policy: {summary_keyword_policy} "
+        "Include 0 to 3 exact Candidate keywords. "
+        "Fewer is better when extra keywords make summary worse. Do not create synonyms or new terms that is not in the Candidate keywords.\n"
         'Only accepted answer format: {"included": ["..."], "excluded": ["..."], "reason": "..."}. No markdown. No prose. No extra keys.'
     )
 
@@ -260,28 +189,34 @@ def build_skill_bucket_prompt(
     keywords: list[str],
     existing_skills: dict[str, list[str]],
     skill_addition_limit: int,
+    job_title: str = "",
+    min_confidence: float = C2_JOB_METADATA_MIN_CONFIDENCE,
+    skill_addition_policy: str = C2_SKILL_ADDITION_POLICY,
     retry: bool = False,
 ) -> str:
+    categories = [str(category).strip() for category in existing_skills if str(category).strip()]
+    category_list = join_values(categories)
     retry_line = (
-        "Previous output was invalid. Return additions and ignored, and use only exact Candidate keywords.\n"
+        "Previous output was invalid. Return additions as an object and ignored as an array, and use only exact Candidate keywords.\n"
         if retry
         else ""
     )
     return (
-        "Pick Technical Skills additions.\n"
+        "Pick skills to add to my resume Technical Skills.\n"
+        f"Job title: {job_title or '(empty)'}\n"
         f"Existing skills: {json.dumps(existing_skills)}\n"
         f"Candidate keywords: {json.dumps(keywords)}\n"
         f"{retry_line}"
-        f"Choose 0 to {skill_addition_limit} total additions. Add only exact Candidate keywords. "
-        "Good additions: languages, frameworks, libraries, platforms, developer tools, databases, cloud tools, OS skills, protocols, concrete skill phrases like Linux scripting. "
-        "Named tech can be added even when not already visible if it fits beside Existing skills. "
-        "Ignore: IDE/editor names unless role builds IDE tooling, job titles, qualities, responsibilities, degrees, majors, disciplines, logistics, business-domain phrases, vague concepts, standalone dashboards/reports/docs/plans. "
-        "If unsure, ignore. Category must be exactly one of: languages, frameworks, developer_tools.\n"
-        'Only accepted answer format: {"additions": [{"keyword": "...", "category": "..."}], "ignored": ["..."]}. No markdown. No prose. No extra keys.'
+        f"Choose 0 to {skill_addition_limit} total additions. Pick only from Candidate keywords. "
+        "Only add a keyword if it is relevant to one specific Existing skills category and is not effectively the same as an existing skill. "
+        f"Skill addition policy: {skill_addition_policy} "
+        f"If not {min_confidence:g} sure, ignore the keyword. "
+        f"Category must be exactly one of the existing categories: {category_list}.\n"
+        'Only accepted answer format: {"additions": {"keyword one": "category", "keyword two": "category"}, "ignored": ["..."]}. Additions is an object of keyword-to-category pairs. No markdown. No prose. No extra keys.'
     )
 
 
-def build_low_rag_continue_prompt(
+def build_low_rag_unsupported_target_prompt(
     *,
     title: str,
     description: str,
@@ -291,61 +226,46 @@ def build_low_rag_continue_prompt(
     unsupported_examples: list[str] | None = None,
 ) -> str:
     target_lane_policy = (target_lane_policy or "").strip()
+    if not target_lane_policy:
+        raise ValueError("target_lane_policy is required for low-RAG unsupported-target prompt")
     unsupported_examples = unsupported_examples or []
-    if target_lane_policy:
-        lane_line = f"Target-lane policy: {target_lane_policy}\n"
-        if unsupported_examples:
-            lane_line += (
-                f"Unsupported examples from workflow policy: {join_values(unsupported_examples)}.\n"
-            )
-        continue_line = (
-            "Continue unless the posting clearly violates the supplied target-lane policy.\n"
-        )
-    else:
-        lane_line = "No target-lane policy was supplied. Continue tailoring and do not make a target-lane rejection.\n"
-        continue_line = 'Return continue_tailoring=true, unsupported_target_role=false, and reason="" when no policy is supplied.\n'
+    lane_line = f"Target-lane policy: {target_lane_policy}\n"
+    if unsupported_examples:
+        lane_line += f"Unsupported examples from workflow policy: {join_values(unsupported_examples)}.\n"
+    policy_line = "Set unsupported_target_role=true only when the posting clearly violates the supplied target-lane policy.\n"
 
     return (
-        "Decide whether to continue queued resume tailoring after RAG found fewer than 3 high-confidence matches between the job description keywords and the stored resume.\n"
-        "This check is only for queued jobs already stored in the workflow. It should apply supplied workflow policy, not judge whether every keyword is visibly proven by the resume.\n"
+        "Check whether a queued job is outside the target lane after RAG found very few high-confidence matches between the job description keywords and the stored resume.\n"
+        "This check is only for queued jobs already stored in the workflow. Apply supplied workflow policy only; do not decide whether tailoring should continue and do not judge whether every keyword is visibly proven by the resume.\n"
         f"{lane_line}"
-        f"{continue_line}"
+        f"{policy_line}"
         f"Job title: {title or '(empty)'}\n"
         f"Job description excerpt: {build_jd_prompt_excerpt(description, 2200) or '(empty)'}\n"
         f"Extracted keywords: {json.dumps(keywords)}\n"
         f"RAG keyword tiers: {json.dumps(compact_scores)}\n"
-        'Return only: {"continue_tailoring": boolean, "unsupported_target_role": boolean, "reason": "..."}'
+        'Return only: {"unsupported_target_role": boolean, "reason": "..."}'
     )
 
 
 def build_summary_validation_prompt(
-    *, summary: str, candidate_context: str, keywords: list[str]
+    *,
+    summary: str,
+    candidate_context: str,
+    keywords: list[str],
+    summary_banned_phrases: list[str] | None = None,
 ) -> str:
+    summary_banned_phrases = summary_banned_phrases or list(C2_SUMMARY_BANNED_PHRASES)
     return (
         "Validate resume summary fit.\n"
         f"Candidate evidence: {(candidate_context or '')[:3000]}\n"
         f"Requested keywords: {json.dumps(keywords)}\n"
         f"Summary: {summary}\n"
         "Accept only if summary is coherent, polished, and positioned for this candidate. "
-        "Reject awkward keyword stuffing, copied bullet phrasing, forced domain/tool claims, obvious exaggeration, or junior filler tone. "
-        "Do not reject because unused keywords exist. Keep each reason under 18 words.\n"
+        "Reject awkward keyword stuffing, copied bullet phrasing, forced domain/tool claims, obvious exaggeration, or banned filler tone. "
+        f"Banned phrases: {join_values(summary_banned_phrases)}. "
+        "Do not reject because unused keywords exist. Keep each reason under 100 characters.\n"
         'Only accepted answer format: {"accepted": boolean, "reasons": ["..."]}. No markdown. No prose. No extra keys.'
     )
-
-
-def build_summary_validation_retry_prompt(
-    *, summary: str, candidate_context: str, keywords: list[str]
-) -> str:
-    return (
-        "Return valid JSON for resume-summary validation. "
-        "No prose. No markdown. No inner quotes in reason strings. "
-        "Use at most 2 short reasons.\n"
-        f"Candidate evidence: {(candidate_context or '')[:1800]}\n"
-        f"Requested keywords: {json.dumps(keywords)}\n"
-        f"Summary: {summary}\n"
-        'Only accepted answer format: {"accepted": boolean, "reasons": ["short reason"]}. No extra keys.'
-    )
-
 
 def build_summary_generation_prompt(
     *,
@@ -356,7 +276,10 @@ def build_summary_generation_prompt(
     line_feedback: str = "",
     role_family: str = "",
     job_level: str = "",
+    summary_good_example: str = C2_SUMMARY_GOOD_EXAMPLE,
+    summary_banned_phrases: list[str] | None = None,
 ) -> str:
+    summary_banned_phrases = summary_banned_phrases or list(C2_SUMMARY_BANNED_PHRASES)
     summary_keywords = []
     seen: set[str] = set()
     for keyword in keywords:
@@ -366,14 +289,18 @@ def build_summary_generation_prompt(
             seen.add(key)
             summary_keywords.append(item)
     kw_list = ", ".join(summary_keywords) if summary_keywords else ""
-    kw_line = f"Optional job description keywords, max 3 if natural: {kw_list}\n" if kw_list else ""
+    kw_line = (
+        f"Optional job description keywords, max 3 if natural:\n{kw_list}\n"
+        if kw_list
+        else ""
+    )
     existing_line = (
-        f"Existing resume summary for context: {existing_summary.strip()}\n"
+        f"Existing resume summary for context:\n{existing_summary.strip()}\n"
         if existing_summary.strip()
         else ""
     )
     feedback_line = (
-        f"Retry/length feedback to address: {line_feedback.strip()}\n"
+        f"Retry/length feedback to address:\n{line_feedback.strip()}\n"
         if line_feedback.strip()
         else ""
     )
@@ -384,18 +311,6 @@ def build_summary_generation_prompt(
         "Position the candidate for the exact job title and level. "
         "Tailor positioning to that context without claiming unsupported domain experience. "
     )
-    title_l = (job_title or "").lower()
-    if role_key == "data" and any(
-        marker in title_l for marker in ("analyst", "pricing", "strategy", "business")
-    ):
-        role_instruction += (
-            "For data analyst, pricing, strategy, or business titles, position as a "
-            "technical analyst or data-focused analyst. "
-        )
-    if level_key == "intern":
-        role_instruction += (
-            "For intern level, use student or intern-level framing without eager language. "
-        )
     return (
         f"Job title: {job_title}\n"
         f"Role family: {role_key}\n"
@@ -404,17 +319,15 @@ def build_summary_generation_prompt(
         f"{existing_line}"
         f"{feedback_line}"
         f"Candidate background: {candidate_context}\n"
-        "Bad summary example: Built scalable full-stack architecture supporting 10,000+ users using Vercel and Supabase.\n"
-        "Good summary example: Software developer with full-stack delivery experience across scalable web systems, automation, and cross-functional feedback loops.\n"
+        "Do not copy word for word from Candidate background.\n"
+        f"Good summary example: {summary_good_example}\n"
         "Write 2-3 sentence resume summary, 80-100 words, aiming near 4.5 printed lines. "
-        "Summary should add resume-level positioning; paraphrase candidate background instead of copying bullet wording, metrics, or phrase order. "
+        "Summary should paraphrase candidate background and add in keywords where we can instead of only copying it"
         "Start with candidate facts and skills, then job fit. "
-        "Use optional keywords only when natural. Skip awkward keywords. "
         f"{role_instruction}"
-        "No filler: motivated, eager, passionate, aspiring, seeking to apply, excited to, contribute immediately, diverse programming skills. "
-        "Do not use phrases like eager to, seeking to, excited to, looking to, passionate about, motivated to, or hoping to. State what the candidate does, not what they want. "
-        "Do not present tech as core specialty unless it fits candidate background. "
-        "Do not imply direct domain experience unless it fits positioning. "
+        f"No fillers and dont use bloat like: {join_values(summary_banned_phrases)}. "
+        "Do not use banned phrases or variants. State what the candidate does, not what they want. "
+        "Do not imply direct domain experience unless it fits the job, we aim for good flow over truthfulness of the candidate's abilities. "
         "If strong targeted summary does not fit, return empty summary.\n"
         'Only accepted answer format: {"summary": "...", "keywords_used": ["..."], "keyword_use_reason": "...", "retry_reason": "..."}. '
         "keywords_used must list exact optional job description keywords used in summary. "
@@ -425,7 +338,11 @@ def build_summary_generation_prompt(
 
 
 def build_validate_rewrite_prompt(
-    *, original: str, rewritten: str, requested_keywords: list[str]
+    *,
+    original: str,
+    rewritten: str,
+    requested_keywords: list[str],
+    rewrite_examples: str = C2_REWRITE_EXAMPLES,
 ) -> str:
     return (
         "Validate whether a rewritten resume bullet preserves the original meaning while adding resume keywords that still make sense.\n"
@@ -437,24 +354,18 @@ def build_validate_rewrite_prompt(
         "in keywords_rejected.\n"
         "Accept adjacent framing when it stays in the same work context, same outcome, "
         "and coherent technology/workflow family. The keyword does not need to appear "
-        "explicitly in the original bullet if the rewrite still describes the same kind "
-        "of work and would not mislead an interviewer about what happened.\n"
-        "Reject when the rewrite changes the meaning of the bullet, changes the project "
+        "explicitly in the original bullet if it still describes the same kind of work.\n"
+        "Reject when the rewrite changes the meaning of the bullet completely, changes the project "
         "or business domain, invents a new responsibility, claims a different outcome, "
-        "or creates an incoherent relationship between technologies, vendors, resources, "
-        "or workflows.\n"
+        "or creates an incoherent relationship between terms.\n"
+        f"Rewrite examples/policy: {rewrite_examples}\n"
         "The rewrite does not need to be stronger than the original. It only needs to "
         "include supported keywords while still reading naturally and making sense in "
         "the original context.\n"
         "Preserve the bullet's original format and order where possible: outcome or "
-        "metric first, then action, method, tool, or scope. Reject lazy keyword stuffing "
+        "metric first, then action, method, tool, or scope (the google xyz resume method). Reject lazy keyword stuffing "
         "that appends a phrase without fitting the sentence naturally.\n"
-        "Reject awkward resume phrasing where a keyword is bolted on instead of integrated "
-        "naturally, including vague constructions such as 'utilizing X' or '[keyword] "
-        "stability' when the phrase would sound strange to an interviewer.\n"
         "Do not reject solely because the keyword is not explicit in the original text. "
-        "Reject only when the new wording no longer makes sense for the original context "
-        "or materially overstates the candidate's work.\n"
         'Return only: {"accepted": boolean, "keywords_supported": [...], '
         '"keywords_rejected": [...], "reason": "..."}'
     )
@@ -466,6 +377,7 @@ def build_repair_rewrite_prompt(
     rewritten: str,
     requested_keywords: list[str],
     validation: dict[str, Any],
+    rewrite_examples: str = C2_REWRITE_EXAMPLES,
 ) -> str:
     rejected = validation.get("keywords_rejected") or []
     supported = validation.get("keywords_supported") or []
@@ -480,7 +392,8 @@ def build_repair_rewrite_prompt(
         "Write one coherent bullet in the same Google XYZ-style structure as the original: "
         "preserve outcome/metric, action, method, tools, and scope. Use only keywords "
         "that fit the same work context. Skip keywords that would change the meaning, "
-        "invent a different domain, or create incoherent technology relationships.\n"
+        "invent a different domain, or create incoherent relationships between terms.\n"
+        f"Rewrite examples/policy: {rewrite_examples}\n"
         'Return only: {"bullet": "...", "keywords_used": [...], "keywords_skipped": [...]}'
     )
 
@@ -490,6 +403,7 @@ def build_rewrite_bullet_prompt(
     bullet: str,
     keywords: list[str],
     keywords_to_preserve: list[str] | None = None,
+    rewrite_examples: str = C2_REWRITE_EXAMPLES,
 ) -> str:
     kw_list = ", ".join(keywords)
     preserve_line = ""
@@ -517,8 +431,7 @@ def build_rewrite_bullet_prompt(
         "- Reject your own rewrite by skipping the keyword if the final bullet would sound like keyword stuffing.\n"
         "- If a keyword is an action phrase, keep the action and object visibly together. For any keyword beginning with Monitor, write monitoring plus the rest of the keyword if it fits the bullet. For any keyword beginning with Automate, write automating plus the rest of the keyword if it fits the bullet. Otherwise put that keyword in keywords_skipped.\n"
         "- Do not count scattered words as using an action keyword. Example: monitors in one clause plus data pipelines somewhere else does not count as Monitor data pipelines.\n"
-        "- Prefer additive related-tech phrasing when it is more coherent than replacement, for example React/Next.js.\n"
-        "- Do not create unnatural slash pairs or false pairings. Example: do not write LLM/React.\n"
+        f"- Rewrite examples/policy: {rewrite_examples}\n"
         "- Avoid lazy append phrases such as utilizing X or leveraging X unless X naturally explains the method or context of the original work.\n"
         "- At most one new sentence total.\n"
         "- Keep the rewritten bullet concise. It should usually be close to the original length and never more than 20 percent longer unless needed to preserve grammar.\n"

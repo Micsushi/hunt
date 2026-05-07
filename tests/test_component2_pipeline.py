@@ -169,7 +169,7 @@ class Component2PipelineTests(unittest.TestCase):
         self.assertEqual(result["status"], "failed")
         self.assertIn("unsupported_target_role", result["error"])
 
-    def test_queue_job_blocks_when_low_rag_continue_check_rejects(self):
+    def test_queue_job_blocks_when_low_rag_unsupported_target_check_flags_role(self):
         init_resume_db(self.db_path)
         classification = {
             "role_family": "general",
@@ -205,20 +205,19 @@ class Component2PipelineTests(unittest.TestCase):
                 },
             ),
             patch(
-                "fletcher.pipeline.should_continue_after_low_rag_with_ollama",
+                "fletcher.pipeline.check_low_rag_unsupported_target_with_ollama",
                 return_value={
                     "success": True,
-                    "continue_tailoring": False,
                     "unsupported_target_role": True,
                     "reason": "Process engineering role is outside the target lane.",
                 },
-            ) as continue_check,
+            ) as unsupported_check,
         ):
             result = generate_resume_for_job(1, db_path=self.db_path)
 
         self.assertEqual(result["status"], "failed")
         self.assertIn("unsupported_target_role", result["error"])
-        continue_check.assert_called_once()
+        unsupported_check.assert_called_once()
 
     def test_generate_ad_hoc_writes_artifacts_without_db(self):
         result = generate_resume_for_ad_hoc(

@@ -8,6 +8,7 @@ import urllib.request
 from typing import TYPE_CHECKING, Any
 
 from .. import config
+from ..job_metadata_settings import load_c2_prompt_settings, load_job_metadata_settings
 from ..jobs.keyword_policy import KeywordKind, classify_keyword_policy
 from . import prompt_templates as prompts
 
@@ -15,33 +16,6 @@ if TYPE_CHECKING:
     from ..pipeline_logger import PipelineLogger
 
 _LOG_LLM = False  # per-call LLM noise suppressed; full trace printed by pipeline._print_trace
-
-BLOCKED_IDE_KEYWORDS = {
-    "android studio",
-    "xcode",
-    "vs code",
-    "vscode",
-    "visual studio code",
-    "visual studio",
-    "intellij",
-    "intellij idea",
-    "pycharm",
-    "webstorm",
-    "phpstorm",
-    "rubymine",
-    "clion",
-    "rider",
-    "eclipse",
-    "netbeans",
-    "sublime text",
-    "atom",
-    "vim",
-    "neovim",
-    "emacs",
-}
-
-SKILL_ADDITION_LIMIT = 3
-
 
 def _llm_log(call_name: str, prompt: str, response: str, duration_ms: int | None) -> None:
     if not _LOG_LLM:
@@ -143,14 +117,24 @@ def _normalize_visible_text(text: str) -> str:
 
 
 def _is_blocked_ide_keyword(keyword: str) -> bool:
-    return _normalize_visible_text(keyword) in BLOCKED_IDE_KEYWORDS
+    settings = load_c2_prompt_settings()
+    blocked = {
+        _normalize_visible_text(str(value))
+        for value in settings.get("blocked_keywords", [])
+        if str(value).strip()
+    }
+    return _normalize_visible_text(keyword) in blocked
 
 
 def _clean_extracted_keywords(
     values: list[str],
     *,
-    limit: int = prompts.KEYWORD_SELECTION_MAX_KEYWORDS,
+    limit: int | None = None,
 ) -> list[str]:
+    if limit is None:
+        limit = int(load_c2_prompt_settings().get("keyword_selection_max_keywords") or 0)
+    if limit <= 0:
+        return []
     cleaned: list[str] = []
     seen: set[str] = set()
     for value in values:
@@ -239,6 +223,7 @@ def validate_rewrite_with_ollama(
         original=original,
         rewritten=rewritten,
         requested_keywords=requested_keywords,
+        rewrite_examples=str(load_c2_prompt_settings().get("rewrite_examples") or ""),
     )
     start = time.perf_counter()
     raw = _ollama_chat(prompt)
@@ -293,6 +278,7 @@ def repair_rewrite_with_ollama(
         rewritten=rewritten,
         requested_keywords=requested_keywords,
         validation=validation,
+        rewrite_examples=str(load_c2_prompt_settings().get("rewrite_examples") or ""),
     )
     start = time.perf_counter()
     try:
@@ -388,7 +374,15 @@ def _ollama_chat(user_prompt: str, *, temperature: float = 0.1) -> str:
 
 
 def _keyword_selection_prompt() -> str:
-    return prompts.keyword_selection_prompt()
+    prompt_settings = load_c2_prompt_settings()
+    return prompts.keyword_selection_prompt(
+        max_keywords=int(prompt_settings.get("keyword_selection_max_keywords") or 0),
+        min_words=int(prompt_settings.get("keyword_selection_min_words") or 0),
+        max_words=int(prompt_settings.get("keyword_selection_max_words") or 0),
+        min_confidence=float(prompt_settings.get("job_metadata_min_confidence") or 0.0),
+        keep_policy=str(prompt_settings.get("keyword_keep_policy") or ""),
+        ignore_policy=str(prompt_settings.get("keyword_ignore_policy") or ""),
+    )
 
 
 def _build_user_prompt(
@@ -398,11 +392,18 @@ def _build_user_prompt(
     role_family: str = "",
     job_level: str = "",
 ) -> str:
+    prompt_settings = load_c2_prompt_settings()
     return prompts.build_keyword_extract_prompt(
         title,
         description,
         role_family=role_family,
         job_level=job_level,
+        max_keywords=int(prompt_settings.get("keyword_selection_max_keywords") or 0),
+        min_words=int(prompt_settings.get("keyword_selection_min_words") or 0),
+        max_words=int(prompt_settings.get("keyword_selection_max_words") or 0),
+        min_confidence=float(prompt_settings.get("job_metadata_min_confidence") or 0.0),
+        keep_policy=str(prompt_settings.get("keyword_keep_policy") or ""),
+        ignore_policy=str(prompt_settings.get("keyword_ignore_policy") or ""),
     )
 
 
@@ -466,43 +467,6 @@ def _apply_jd_keywords(
     return new_c, new_k
 
 
-def infer_title_with_ollama(
-    *,
-    input_title: str,
-    description: str,
-    logger: PipelineLogger | None = None,
-) -> dict[str, Any]:
-    """Infer the job title when deterministic title extraction is empty or suspicious."""
-    result = {"title": "", "success": False, "error": None, "duration_ms": None}
-    if config.DEFAULT_MODEL_BACKEND != "ollama":
-        return result
-    prompt = prompts.build_infer_title_prompt(input_title, description)
-    start = time.perf_counter()
-    try:
-        raw = _ollama_chat(prompt)
-        result["duration_ms"] = int((time.perf_counter() - start) * 1000)
-        if logger:
-            logger.llm_call("infer_title", prompt, raw, result["duration_ms"], success=True)
-        parsed = _extract_json_object(raw)
-        title = str(parsed.get("title") or "").strip()
-        if title:
-            result["title"] = title[:120]
-            result["success"] = True
-    except Exception as exc:
-        result["duration_ms"] = int((time.perf_counter() - start) * 1000)
-        result["error"] = str(exc) or exc.__class__.__name__
-        if logger:
-            logger.llm_call(
-                "infer_title",
-                prompt,
-                str(exc),
-                result["duration_ms"],
-                success=False,
-                error=result["error"],
-            )
-    return result
-
-
 def analyze_job_fit_with_ollama(
     *,
     input_title: str,
@@ -511,8 +475,8 @@ def analyze_job_fit_with_ollama(
     missing_fields: list[str] | None = None,
     target_lane_policy: str = "",
     unsupported_examples: list[str] | None = None,
-    allowed_role_families: list[str] | None = None,
-    allowed_job_levels: list[str] | None = None,
+    role_family_values: list[str] | None = None,
+    job_level_values: list[str] | None = None,
     logger: PipelineLogger | None = None,
 ) -> dict[str, Any]:
     """Fill missing job metadata in one model judgment."""
@@ -534,10 +498,18 @@ def analyze_job_fit_with_ollama(
         return result
     target_lane_policy = (target_lane_policy or "").strip()
     missing_fields = missing_fields or ["title", "role_family", "job_level"]
+    metadata_settings = load_job_metadata_settings()
+    prompt_settings = load_c2_prompt_settings()
+    allowed_role_families = role_family_values or metadata_settings["role_families"]
+    allowed_job_levels = job_level_values or metadata_settings["job_levels"]
     prompt = prompts.build_job_metadata_prompt(
         input_title=input_title or deterministic_title,
         description=description,
         missing_fields=missing_fields,
+        role_family_values=allowed_role_families,
+        job_level_values=allowed_job_levels,
+        max_chars=int(prompt_settings.get("job_metadata_prompt_max_chars") or 0),
+        min_confidence=float(prompt_settings.get("job_metadata_min_confidence") or 0.0),
         target_lane_policy=target_lane_policy,
         unsupported_examples=unsupported_examples,
     )
@@ -560,7 +532,11 @@ def analyze_job_fit_with_ollama(
         title_value = str(parsed.get("title") or deterministic_title or "").strip()[:120]
         family_value = str(parsed.get("role_family") or "").strip().lower()
         level_value = str(parsed.get("job_level") or "").strip().lower()
-        if confidence < prompts.JOB_METADATA_MIN_CONFIDENCE:
+        if family_value and family_value not in {value.lower() for value in allowed_role_families}:
+            family_value = ""
+        if level_value and level_value not in {value.lower() for value in allowed_job_levels}:
+            level_value = ""
+        if confidence < float(prompt_settings.get("job_metadata_min_confidence") or 0.0):
             title_value = deterministic_title or ""
             family_value = ""
             level_value = ""
@@ -634,7 +610,9 @@ def extract_keywords_with_ollama(
                 "success": True,
                 "keywords": _clean_extracted_keywords(
                     [keyword for keyword in raw_keywords if isinstance(keyword, str)],
-                    limit=prompts.KEYWORD_SELECTION_MAX_KEYWORDS,
+                    limit=int(
+                        load_c2_prompt_settings().get("keyword_selection_max_keywords") or 0
+                    ),
                 ),
             }
         )
@@ -644,60 +622,6 @@ def extract_keywords_with_ollama(
         if logger:
             logger.llm_call(
                 "keyword_extract",
-                prompt,
-                str(exc),
-                result["duration_ms"],
-                success=False,
-                error=result["error"],
-            )
-    return result
-
-
-def classify_job_with_ollama(
-    *,
-    title: str,
-    description: str,
-    allowed_role_families: list[str] | None = None,
-    allowed_job_levels: list[str] | None = None,
-    logger: PipelineLogger | None = None,
-) -> dict[str, Any]:
-    """Classify role family and level when deterministic classification is weak."""
-    result: dict[str, Any] = {"success": False, "error": None, "duration_ms": None}
-    if config.DEFAULT_MODEL_BACKEND != "ollama":
-        return result
-    prompt = prompts.build_classify_job_prompt(
-        title=title,
-        description=description,
-        allowed_role_families=allowed_role_families,
-        allowed_job_levels=allowed_job_levels,
-    )
-    start = time.perf_counter()
-    try:
-        raw = _ollama_chat(prompt)
-        result["duration_ms"] = int((time.perf_counter() - start) * 1000)
-        if logger:
-            logger.llm_call("classify_job", prompt, raw, result["duration_ms"], success=True)
-        parsed = _extract_json_object(raw)
-        family = str(parsed.get("role_family") or "").strip().lower()
-        level = str(parsed.get("job_level") or "").strip().lower()
-        if family and level:
-            result.update(
-                {
-                    "success": True,
-                    "role_family": family,
-                    "job_level": level,
-                    "confidence": float(parsed.get("confidence") or 0.7),
-                    "reasons": parsed.get("reasons")
-                    if isinstance(parsed.get("reasons"), list)
-                    else [],
-                }
-            )
-    except Exception as exc:
-        result["duration_ms"] = int((time.perf_counter() - start) * 1000)
-        result["error"] = str(exc) or exc.__class__.__name__
-        if logger:
-            logger.llm_call(
-                "classify_job",
                 prompt,
                 str(exc),
                 result["duration_ms"],
@@ -725,12 +649,14 @@ def filter_summary_keywords_with_ollama(
     if config.DEFAULT_MODEL_BACKEND != "ollama" or not keywords:
         return result
     requested_l = {keyword.lower() for keyword in _dedupe_case(keywords)}
+    prompt_settings = load_c2_prompt_settings()
 
     def build_prompt(*, retry: bool = False) -> str:
         return prompts.build_summary_keyword_filter_prompt(
             keywords=keywords,
             candidate_context=candidate_context,
             job_title=job_title,
+            summary_keyword_policy=str(prompt_settings.get("summary_keyword_policy") or ""),
             retry=retry,
         )
 
@@ -804,6 +730,7 @@ def bucket_skill_keywords_with_ollama(
     *,
     keywords: list[str],
     existing_skills: dict[str, list[str]],
+    job_title: str = "",
     logger: PipelineLogger | None = None,
 ) -> dict[str, Any]:
     """Ask the model which unused keywords belong in resume skill buckets."""
@@ -819,13 +746,26 @@ def bucket_skill_keywords_with_ollama(
     if config.DEFAULT_MODEL_BACKEND != "ollama" or not keywords:
         return result
     required_categories = ("languages", "frameworks", "developer_tools")
+    allowed_categories = tuple(
+        category
+        for category in existing_skills
+        if isinstance(category, str) and category.strip()
+    ) or required_categories
     requested_l = {keyword.lower() for keyword in _dedupe_case(keywords)}
+    prompt_settings = load_c2_prompt_settings()
+    skill_addition_limit = int(prompt_settings.get("skill_addition_limit") or 0)
+    if skill_addition_limit <= 0:
+        result["success"] = True
+        return result
 
     def build_prompt(*, retry: bool = False) -> str:
         return prompts.build_skill_bucket_prompt(
             keywords=keywords,
             existing_skills=existing_skills,
-            skill_addition_limit=SKILL_ADDITION_LIMIT,
+            skill_addition_limit=skill_addition_limit,
+            job_title=job_title,
+            min_confidence=float(prompt_settings.get("job_metadata_min_confidence") or 0.0),
+            skill_addition_policy=str(prompt_settings.get("skill_addition_policy") or ""),
             retry=retry,
         )
 
@@ -838,13 +778,15 @@ def bucket_skill_keywords_with_ollama(
             parsed = _extract_json_object(raw)
             additions_raw = parsed.get("additions")
             ignored_raw = parsed.get("ignored")
-            missing_keys = [
-                key
-                for key, value in (("additions", additions_raw), ("ignored", ignored_raw))
-                if not isinstance(value, list)
-            ]
+            missing_keys = []
+            if not isinstance(additions_raw, (dict, list)):
+                missing_keys.append("additions")
+            if not isinstance(ignored_raw, list):
+                missing_keys.append("ignored")
             raw_values = []
-            if isinstance(additions_raw, list):
+            if isinstance(additions_raw, dict):
+                raw_values.extend(str(keyword).strip() for keyword in additions_raw)
+            elif isinstance(additions_raw, list):
                 for item in additions_raw:
                     if isinstance(item, dict):
                         raw_values.append(str(item.get("keyword") or "").strip())
@@ -879,13 +821,22 @@ def bucket_skill_keywords_with_ollama(
                     retry=False,
                 )
             additions: list[tuple[str, str]] = []
-            if isinstance(additions_raw, list):
+            if isinstance(additions_raw, dict):
+                for raw_keyword, raw_category in additions_raw.items():
+                    keyword = str(raw_keyword or "").strip()
+                    category = str(raw_category or "").strip()
+                    if category not in allowed_categories:
+                        continue
+                    filtered = _filter_requested_keywords([keyword], keywords)
+                    if filtered:
+                        additions.append((filtered[0], category))
+            elif isinstance(additions_raw, list):
                 for item in additions_raw:
                     if not isinstance(item, dict):
                         continue
                     keyword = str(item.get("keyword") or "").strip()
                     category = str(item.get("category") or "").strip()
-                    if category not in required_categories:
+                    if category not in allowed_categories:
                         continue
                     filtered = _filter_requested_keywords([keyword], keywords)
                     if filtered:
@@ -897,13 +848,17 @@ def bucket_skill_keywords_with_ollama(
                     continue
                 seen_additions.add(key)
                 if (
-                    sum(len(result[bucket]) for bucket in required_categories)
-                    >= SKILL_ADDITION_LIMIT
+                    sum(len(result.get(bucket, [])) for bucket in allowed_categories)
+                    >= skill_addition_limit
                 ):
                     break
+                if category not in result:
+                    result[category] = []
                 result[category].append(keyword)
             added_l = {
-                keyword.lower() for bucket in required_categories for keyword in result[bucket]
+                keyword.lower()
+                for bucket in allowed_categories
+                for keyword in result.get(bucket, [])
             }
             ignored = _filter_requested_keywords(
                 _dedupe_case(ignored_raw if isinstance(ignored_raw, list) else []),
@@ -931,7 +886,7 @@ def bucket_skill_keywords_with_ollama(
     return result
 
 
-def should_continue_after_low_rag_with_ollama(
+def check_low_rag_unsupported_target_with_ollama(
     *,
     title: str,
     description: str,
@@ -941,18 +896,20 @@ def should_continue_after_low_rag_with_ollama(
     unsupported_examples: list[str] | None = None,
     logger: PipelineLogger | None = None,
 ) -> dict[str, Any]:
-    """For queued jobs, decide whether weak RAG means the role is outside target lane."""
+    """For queued jobs, check whether weak RAG indicates an outside-lane role."""
     result: dict[str, Any] = {
-        "continue_tailoring": True,
         "unsupported_target_role": False,
         "reason": "",
         "success": False,
         "error": None,
         "duration_ms": None,
     }
+    target_lane_policy = (target_lane_policy or "").strip()
+    if not target_lane_policy:
+        result.update({"success": True, "duration_ms": 0})
+        return result
     if config.DEFAULT_MODEL_BACKEND != "ollama":
         return result
-    target_lane_policy = (target_lane_policy or "").strip()
     unsupported_examples = unsupported_examples or []
 
     compact_scores = [
@@ -964,7 +921,7 @@ def should_continue_after_low_rag_with_ollama(
         for score in rag_scores[:40]
         if isinstance(score, dict)
     ]
-    prompt = prompts.build_low_rag_continue_prompt(
+    prompt = prompts.build_low_rag_unsupported_target_prompt(
         title=title,
         description=description,
         keywords=_dedupe_case(keywords),
@@ -977,18 +934,12 @@ def should_continue_after_low_rag_with_ollama(
         raw = _ollama_chat(prompt)
         result["duration_ms"] = int((time.perf_counter() - start) * 1000)
         parsed = _extract_json_object(raw)
-        continue_tailoring = parsed.get("continue_tailoring")
         unsupported = parsed.get("unsupported_target_role")
-        if not isinstance(continue_tailoring, bool) or not isinstance(unsupported, bool):
-            raise ValueError("continue_tailoring and unsupported_target_role must be booleans")
+        if not isinstance(unsupported, bool):
+            raise ValueError("unsupported_target_role must be boolean")
         reason = str(parsed.get("reason") or "").strip()[:500]
-        if not target_lane_policy:
-            continue_tailoring = True
-            unsupported = False
-            reason = ""
         result.update(
             {
-                "continue_tailoring": continue_tailoring,
                 "unsupported_target_role": unsupported,
                 "reason": reason,
                 "success": True,
@@ -996,14 +947,18 @@ def should_continue_after_low_rag_with_ollama(
         )
         if logger:
             logger.llm_call(
-                "low_rag_continue_check", prompt, raw, result["duration_ms"], success=True
+                "low_rag_unsupported_target_check",
+                prompt,
+                raw,
+                result["duration_ms"],
+                success=True,
             )
     except Exception as exc:
         result["duration_ms"] = int((time.perf_counter() - start) * 1000)
         result["error"] = str(exc) or exc.__class__.__name__
         if logger:
             logger.llm_call(
-                "low_rag_continue_check",
+                "low_rag_unsupported_target_check",
                 prompt,
                 str(exc),
                 result["duration_ms"],
@@ -1028,6 +983,10 @@ def validate_summary_with_ollama(
         summary=summary,
         candidate_context=candidate_context,
         keywords=keywords,
+        summary_banned_phrases=[
+            str(value)
+            for value in load_c2_prompt_settings().get("summary_banned_phrases", [])
+        ],
     )
     start = time.perf_counter()
     try:
@@ -1056,51 +1015,6 @@ def validate_summary_with_ollama(
                 success=False,
                 error=result["error"],
             )
-        if not isinstance(exc, (json.JSONDecodeError, ValueError, TypeError, KeyError)):
-            return result
-        retry_prompt = prompts.build_summary_validation_retry_prompt(
-            summary=summary,
-            candidate_context=candidate_context,
-            keywords=keywords,
-        )
-        retry_start = time.perf_counter()
-        try:
-            raw = _ollama_chat(retry_prompt)
-            retry_duration_ms = int((time.perf_counter() - retry_start) * 1000)
-            if logger:
-                logger.llm_call(
-                    "validate_summary_json_retry",
-                    retry_prompt,
-                    raw,
-                    retry_duration_ms,
-                    success=True,
-                )
-            parsed = _extract_json_object(raw)
-            reasons = parsed.get("reasons")
-            result.update(
-                {
-                    "accepted": bool(parsed.get("accepted")),
-                    "reasons": reasons if isinstance(reasons, list) else [],
-                    "success": True,
-                    "error": None,
-                    "retry": "json_compact",
-                    "duration_ms": (result["duration_ms"] or 0) + retry_duration_ms,
-                }
-            )
-        except Exception as retry_exc:
-            retry_duration_ms = int((time.perf_counter() - retry_start) * 1000)
-            retry_error = str(retry_exc) or retry_exc.__class__.__name__
-            result["retry_error"] = retry_error
-            result["duration_ms"] = (result["duration_ms"] or 0) + retry_duration_ms
-            if logger:
-                logger.llm_call(
-                    "validate_summary_json_retry",
-                    retry_prompt,
-                    retry_error,
-                    retry_duration_ms,
-                    success=False,
-                    error=retry_error,
-                )
     return result
 
 
@@ -1141,6 +1055,7 @@ def generate_summary(
         return result
 
     summary_keywords = _dedupe_case(keywords)
+    prompt_settings = load_c2_prompt_settings()
     prompt = prompts.build_summary_generation_prompt(
         candidate_context=candidate_context,
         job_title=job_title,
@@ -1149,6 +1064,10 @@ def generate_summary(
         line_feedback=line_feedback,
         role_family=role_family,
         job_level=job_level,
+        summary_good_example=str(prompt_settings.get("summary_good_example") or ""),
+        summary_banned_phrases=[
+            str(value) for value in prompt_settings.get("summary_banned_phrases", [])
+        ],
     )
     start = time.perf_counter()
     try:
@@ -1226,6 +1145,7 @@ def rewrite_bullet_targeted(
         bullet=bullet,
         keywords=keywords,
         keywords_to_preserve=keywords_to_preserve,
+        rewrite_examples=str(load_c2_prompt_settings().get("rewrite_examples") or ""),
     )
     start = time.perf_counter()
     try:

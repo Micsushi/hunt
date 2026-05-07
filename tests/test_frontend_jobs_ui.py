@@ -71,6 +71,31 @@ def test_settings_exposes_resume_done_windows_notification_toggle():
     assert "resume_done_windows_notification_enabled" in notifications
 
 
+def test_settings_exposes_c2_job_metadata_values():
+    settings = read("frontend/src/pages/Settings/index.tsx")
+
+    assert "C2 job metadata" in settings
+    assert "job_metadata_role_families" in settings
+    assert "job_metadata_job_levels" in settings
+    assert "target_lane_policy" in settings
+    assert "unsupported_target_examples" in settings
+    assert "blocked_keywords" in settings
+    assert "keyword_keep_policy" in settings
+    assert "keyword_ignore_policy" in settings
+    assert "summary_keyword_policy" in settings
+    assert "skill_addition_policy" in settings
+    assert "summary_good_example" in settings
+    assert "summary_banned_phrases" in settings
+    assert "rewrite_examples" in settings
+    assert "default_target_title" in settings
+    assert "keyword_selection_max_keywords" in settings
+    assert "keyword_selection_min_words" in settings
+    assert "keyword_selection_max_words" in settings
+    assert "job_metadata_prompt_max_chars" in settings
+    assert "job_metadata_min_confidence" in settings
+    assert "skill_addition_limit" in settings
+
+
 def test_fletcher_notifies_when_generation_finishes():
     fletcher = read("frontend/src/pages/Fletcher/index.tsx")
 

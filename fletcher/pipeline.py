@@ -25,12 +25,13 @@ from .db import (
 )
 from .jobs.classifier import classify_job, slugify
 from .jobs.keyword_extractor import extract_keywords
+from .job_metadata_settings import load_c2_prompt_settings
 from .llm.llm_enrich import (
     analyze_job_fit_with_ollama,
+    check_low_rag_unsupported_target_with_ollama,
     enrich_with_ollama_if_enabled,
     generate_summary,
     rewrite_bullet_targeted,
-    should_continue_after_low_rag_with_ollama,
 )
 from .llm.rag import match_keywords_to_bullets
 from .resume.compiler import compile_tex
@@ -42,20 +43,12 @@ from .storage import build_attempt_dir, ensure_dir, file_hash, write_json, write
 
 
 def _queue_target_lane_policy() -> str:
-    return (
-        "Continue for jobs that match the configured resume/search lane. "
-        "Reject only when the posting is clearly outside that lane."
-    )
+    return str(load_c2_prompt_settings().get("target_lane_policy") or "").strip()
 
 
 def _queue_unsupported_examples() -> list[str]:
-    return [
-        "non-computer civil engineering",
-        "non-computer mechanical engineering",
-        "non-computer chemical or process engineering",
-        "municipal infrastructure",
-        "CAD drafting",
-    ]
+    settings = load_c2_prompt_settings()
+    return [str(value).strip() for value in settings.get("unsupported_target_examples", []) if str(value).strip()]
 
 
 def _first_text_value(source: dict | None, keys: tuple[str, ...]) -> str:
@@ -647,7 +640,7 @@ def _run_pipeline(
     }
     high_match_count = len(kw_match.get("bullet_matches", []))
     if source_mode == "queue" and raw_kws and kw_match.get("rag_used") and high_match_count < 3:
-        continue_check = should_continue_after_low_rag_with_ollama(
+        unsupported_check = check_low_rag_unsupported_target_with_ollama(
             title=title,
             description=description,
             keywords=raw_kws,
@@ -655,13 +648,12 @@ def _run_pipeline(
             target_lane_policy=_queue_target_lane_policy(),
             unsupported_examples=_queue_unsupported_examples(),
         )
-        trace["step2_rag"]["low_rag_continue_check"] = continue_check
-        if continue_check.get("success") and (
-            bool(continue_check.get("unsupported_target_role"))
-            or not bool(continue_check.get("continue_tailoring"))
+        trace["step2_rag"]["low_rag_unsupported_target_check"] = unsupported_check
+        if unsupported_check.get("success") and bool(
+            unsupported_check.get("unsupported_target_role")
         ):
             block_reason = (
-                str(continue_check.get("reason") or "").strip()
+                str(unsupported_check.get("reason") or "").strip()
                 or "low RAG match suggests unsupported target role"
             )
             if not block_reason.startswith("unsupported_target_role"):

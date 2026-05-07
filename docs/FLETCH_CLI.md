@@ -57,6 +57,8 @@ Get help:
 ## Notes
 
 - C2 reads from and writes to the same SQLite DB as C1. Point both at the same `HUNT_DB_PATH`.
+- Fletcher prompt policy and numeric prompt limits are edited in the Settings tab and persisted in
+  `component_settings`; see `docs/C2_SETTINGS.md`.
 - Resume artifacts land in `HUNT_RESUME_ARTIFACTS_DIR` (defaults to `.runtime/resumes/` on Windows,
   `/home/michael/data/hunt/resumes` on Linux).
 - The `test-job` and `ad-hoc` commands require the ollama backend for full LLM output; the

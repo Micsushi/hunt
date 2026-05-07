@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   fetchC1Config,
@@ -30,6 +30,28 @@ function textToList(text: string): string[] {
     .split('\n')
     .map((s) => s.trim())
     .filter(Boolean)
+}
+
+function settingListValue(
+  settings: ComponentSetting[] | undefined,
+  key: string,
+  defaults: string[],
+): string {
+  const raw = getSettingValue(settings, key)
+  if (!raw) return listToText(defaults)
+  try {
+    const parsed = JSON.parse(raw)
+    if (Array.isArray(parsed)) return listToText(parsed.map(String).filter(Boolean))
+  } catch {
+    // Older/manual settings may be newline or comma separated.
+  }
+  return listToText(
+    raw
+      .replaceAll(',', '\n')
+      .split('\n')
+      .map((s) => s.trim())
+      .filter(Boolean),
+  )
 }
 
 // ---- sub-panels ------------------------------------------------------------
@@ -458,6 +480,533 @@ function AppNotificationSettings() {
   )
 }
 
+const JOB_METADATA_ROLE_FAMILIES_KEY = 'job_metadata_role_families'
+const JOB_METADATA_JOB_LEVELS_KEY = 'job_metadata_job_levels'
+const C2_TARGET_LANE_POLICY_KEY = 'target_lane_policy'
+const C2_UNSUPPORTED_TARGET_EXAMPLES_KEY = 'unsupported_target_examples'
+const C2_BLOCKED_KEYWORDS_KEY = 'blocked_keywords'
+const C2_KEYWORD_KEEP_POLICY_KEY = 'keyword_keep_policy'
+const C2_KEYWORD_IGNORE_POLICY_KEY = 'keyword_ignore_policy'
+const C2_SUMMARY_KEYWORD_POLICY_KEY = 'summary_keyword_policy'
+const C2_SKILL_ADDITION_POLICY_KEY = 'skill_addition_policy'
+const C2_SUMMARY_GOOD_EXAMPLE_KEY = 'summary_good_example'
+const C2_SUMMARY_BANNED_PHRASES_KEY = 'summary_banned_phrases'
+const C2_REWRITE_EXAMPLES_KEY = 'rewrite_examples'
+const C2_DEFAULT_TARGET_TITLE_KEY = 'default_target_title'
+const C2_KEYWORD_SELECTION_MAX_KEYWORDS_KEY = 'keyword_selection_max_keywords'
+const C2_KEYWORD_SELECTION_MIN_WORDS_KEY = 'keyword_selection_min_words'
+const C2_KEYWORD_SELECTION_MAX_WORDS_KEY = 'keyword_selection_max_words'
+const C2_JOB_METADATA_PROMPT_MAX_CHARS_KEY = 'job_metadata_prompt_max_chars'
+const C2_JOB_METADATA_MIN_CONFIDENCE_KEY = 'job_metadata_min_confidence'
+const C2_SKILL_ADDITION_LIMIT_KEY = 'skill_addition_limit'
+const DEFAULT_JOB_METADATA_ROLE_FAMILIES = [
+  'software',
+  'data',
+  'pm',
+  'infrastructure',
+  'firmware',
+  'general',
+  'unknown',
+]
+const DEFAULT_JOB_METADATA_JOB_LEVELS = [
+  'intern',
+  'new_grad',
+  'junior',
+  'mid',
+  'senior',
+  'staff',
+  'principal',
+  'manager',
+  'director',
+  'executive',
+  'unknown',
+]
+const C2_TARGET_LANE_POLICY =
+  'Continue for jobs that match the configured resume/search lane. Reject only when the posting is clearly outside that lane.'
+const C2_UNSUPPORTED_TARGET_EXAMPLES = [
+  'non-computer civil engineering',
+  'non-computer mechanical engineering',
+  'non-computer chemical or process engineering',
+  'municipal infrastructure',
+  'CAD drafting',
+]
+const C2_BLOCKED_KEYWORDS = [
+  'android studio',
+  'xcode',
+  'vs code',
+  'vscode',
+  'visual studio code',
+  'visual studio',
+  'intellij',
+  'intellij idea',
+  'pycharm',
+  'webstorm',
+  'phpstorm',
+  'rubymine',
+  'clion',
+  'rider',
+  'eclipse',
+  'netbeans',
+  'sublime text',
+  'atom',
+  'vim',
+  'neovim',
+  'emacs',
+]
+const C2_KEYWORD_KEEP_POLICY =
+  'Keep role-relevant resume bullet keywords from the job description, including concrete skills, tools, methods, platforms, domain-relevant work traits, and short capability phrases.'
+const C2_KEYWORD_IGNORE_POLICY =
+  'Ignore job titles, role labels, seniority, employment type, company names, locations, compensation, hiring logistics, full sentences, vague nouns, and blocked keywords.'
+const C2_SUMMARY_KEYWORD_POLICY =
+  'Pick only exact candidate keywords that improve resume-level positioning for this job. Skip job titles, degrees, majors, role labels, awkward domain claims, and pure stuffing.'
+const C2_SKILL_ADDITION_POLICY =
+  'Good additions are concrete skills that fit one existing resume skill category, such as tools, methods, platforms, libraries, databases, operating systems, protocols, or short capability phrases. Ignore job titles, qualities, responsibilities, degrees, majors, disciplines, logistics, business-domain phrases, vague concepts, and blocked keywords.'
+const C2_SUMMARY_GOOD_EXAMPLE =
+  'Candidate with delivery experience across production systems, automation, and cross-functional feedback loops.'
+const C2_SUMMARY_BANNED_PHRASES = [
+  'motivated',
+  'eager',
+  'passionate',
+  'aspiring',
+  'seeking to apply',
+  'excited to',
+  'looking to',
+  'hoping to',
+]
+const C2_REWRITE_EXAMPLES =
+  'Prefer additive related phrasing only when coherent. Avoid unnatural slash pairs or false pairings.'
+const C2_DEFAULT_TARGET_TITLE = 'Target Role'
+const C2_KEYWORD_SELECTION_MAX_KEYWORDS = '30'
+const C2_KEYWORD_SELECTION_MIN_WORDS = '1'
+const C2_KEYWORD_SELECTION_MAX_WORDS = '3'
+const C2_JOB_METADATA_PROMPT_MAX_CHARS = '3000'
+const C2_JOB_METADATA_MIN_CONFIDENCE = '0.8'
+const C2_SKILL_ADDITION_LIMIT = '3'
+
+function JobMetadataSettings() {
+  const showToast = useUiStore((s) => s.showToast)
+  const qc = useQueryClient()
+
+  const { data } = useQuery({
+    queryKey: ['component-settings', 'c2', 'job-metadata'],
+    queryFn: () => fetchSettings('c2'),
+    staleTime: 30_000,
+  })
+  const [roleFamilies, setRoleFamilies] = useState('')
+  const [jobLevels, setJobLevels] = useState('')
+  const [targetLanePolicy, setTargetLanePolicy] = useState('')
+  const [unsupportedExamples, setUnsupportedExamples] = useState('')
+  const [blockedKeywords, setBlockedKeywords] = useState('')
+  const [keywordKeepPolicy, setKeywordKeepPolicy] = useState('')
+  const [keywordIgnorePolicy, setKeywordIgnorePolicy] = useState('')
+  const [summaryKeywordPolicy, setSummaryKeywordPolicy] = useState('')
+  const [skillAdditionPolicy, setSkillAdditionPolicy] = useState('')
+  const [summaryGoodExample, setSummaryGoodExample] = useState('')
+  const [summaryBannedPhrases, setSummaryBannedPhrases] = useState('')
+  const [rewriteExamples, setRewriteExamples] = useState('')
+  const [defaultTargetTitle, setDefaultTargetTitle] = useState('')
+  const [keywordSelectionMaxKeywords, setKeywordSelectionMaxKeywords] = useState('')
+  const [keywordSelectionMinWords, setKeywordSelectionMinWords] = useState('')
+  const [keywordSelectionMaxWords, setKeywordSelectionMaxWords] = useState('')
+  const [jobMetadataPromptMaxChars, setJobMetadataPromptMaxChars] = useState('')
+  const [jobMetadataMinConfidence, setJobMetadataMinConfidence] = useState('')
+  const [skillAdditionLimit, setSkillAdditionLimit] = useState('')
+
+  const roleFamilyText = settingListValue(
+    data?.settings,
+    JOB_METADATA_ROLE_FAMILIES_KEY,
+    DEFAULT_JOB_METADATA_ROLE_FAMILIES,
+  )
+  const jobLevelText = settingListValue(
+    data?.settings,
+    JOB_METADATA_JOB_LEVELS_KEY,
+    DEFAULT_JOB_METADATA_JOB_LEVELS,
+  )
+  const targetLanePolicyText =
+    getSettingValue(data?.settings, C2_TARGET_LANE_POLICY_KEY) ?? C2_TARGET_LANE_POLICY
+  const unsupportedExamplesText = settingListValue(
+    data?.settings,
+    C2_UNSUPPORTED_TARGET_EXAMPLES_KEY,
+    C2_UNSUPPORTED_TARGET_EXAMPLES,
+  )
+  const blockedKeywordText = settingListValue(
+    data?.settings,
+    C2_BLOCKED_KEYWORDS_KEY,
+    C2_BLOCKED_KEYWORDS,
+  )
+  const keywordKeepPolicyText =
+    getSettingValue(data?.settings, C2_KEYWORD_KEEP_POLICY_KEY) ?? C2_KEYWORD_KEEP_POLICY
+  const keywordIgnorePolicyText =
+    getSettingValue(data?.settings, C2_KEYWORD_IGNORE_POLICY_KEY) ?? C2_KEYWORD_IGNORE_POLICY
+  const summaryKeywordPolicyText =
+    getSettingValue(data?.settings, C2_SUMMARY_KEYWORD_POLICY_KEY) ??
+    C2_SUMMARY_KEYWORD_POLICY
+  const skillAdditionPolicyText =
+    getSettingValue(data?.settings, C2_SKILL_ADDITION_POLICY_KEY) ??
+    C2_SKILL_ADDITION_POLICY
+  const summaryGoodExampleText =
+    getSettingValue(data?.settings, C2_SUMMARY_GOOD_EXAMPLE_KEY) ??
+    C2_SUMMARY_GOOD_EXAMPLE
+  const summaryBannedPhraseText = settingListValue(
+    data?.settings,
+    C2_SUMMARY_BANNED_PHRASES_KEY,
+    C2_SUMMARY_BANNED_PHRASES,
+  )
+  const rewriteExamplesText =
+    getSettingValue(data?.settings, C2_REWRITE_EXAMPLES_KEY) ?? C2_REWRITE_EXAMPLES
+  const defaultTargetTitleText =
+    getSettingValue(data?.settings, C2_DEFAULT_TARGET_TITLE_KEY) ??
+    C2_DEFAULT_TARGET_TITLE
+  const keywordSelectionMaxKeywordsText =
+    getSettingValue(data?.settings, C2_KEYWORD_SELECTION_MAX_KEYWORDS_KEY) ??
+    C2_KEYWORD_SELECTION_MAX_KEYWORDS
+  const keywordSelectionMinWordsText =
+    getSettingValue(data?.settings, C2_KEYWORD_SELECTION_MIN_WORDS_KEY) ??
+    C2_KEYWORD_SELECTION_MIN_WORDS
+  const keywordSelectionMaxWordsText =
+    getSettingValue(data?.settings, C2_KEYWORD_SELECTION_MAX_WORDS_KEY) ??
+    C2_KEYWORD_SELECTION_MAX_WORDS
+  const jobMetadataPromptMaxCharsText =
+    getSettingValue(data?.settings, C2_JOB_METADATA_PROMPT_MAX_CHARS_KEY) ??
+    C2_JOB_METADATA_PROMPT_MAX_CHARS
+  const jobMetadataMinConfidenceText =
+    getSettingValue(data?.settings, C2_JOB_METADATA_MIN_CONFIDENCE_KEY) ??
+    C2_JOB_METADATA_MIN_CONFIDENCE
+  const skillAdditionLimitText =
+    getSettingValue(data?.settings, C2_SKILL_ADDITION_LIMIT_KEY) ??
+    C2_SKILL_ADDITION_LIMIT
+
+  useEffect(() => {
+    setRoleFamilies(roleFamilyText)
+    setJobLevels(jobLevelText)
+    setTargetLanePolicy(targetLanePolicyText)
+    setUnsupportedExamples(unsupportedExamplesText)
+    setBlockedKeywords(blockedKeywordText)
+    setKeywordKeepPolicy(keywordKeepPolicyText)
+    setKeywordIgnorePolicy(keywordIgnorePolicyText)
+    setSummaryKeywordPolicy(summaryKeywordPolicyText)
+    setSkillAdditionPolicy(skillAdditionPolicyText)
+    setSummaryGoodExample(summaryGoodExampleText)
+    setSummaryBannedPhrases(summaryBannedPhraseText)
+    setRewriteExamples(rewriteExamplesText)
+    setDefaultTargetTitle(defaultTargetTitleText)
+    setKeywordSelectionMaxKeywords(keywordSelectionMaxKeywordsText)
+    setKeywordSelectionMinWords(keywordSelectionMinWordsText)
+    setKeywordSelectionMaxWords(keywordSelectionMaxWordsText)
+    setJobMetadataPromptMaxChars(jobMetadataPromptMaxCharsText)
+    setJobMetadataMinConfidence(jobMetadataMinConfidenceText)
+    setSkillAdditionLimit(skillAdditionLimitText)
+  }, [
+    roleFamilyText,
+    jobLevelText,
+    targetLanePolicyText,
+    unsupportedExamplesText,
+    blockedKeywordText,
+    keywordKeepPolicyText,
+    keywordIgnorePolicyText,
+    summaryKeywordPolicyText,
+    skillAdditionPolicyText,
+    summaryGoodExampleText,
+    summaryBannedPhraseText,
+    rewriteExamplesText,
+    defaultTargetTitleText,
+    keywordSelectionMaxKeywordsText,
+    keywordSelectionMinWordsText,
+    keywordSelectionMaxWordsText,
+    jobMetadataPromptMaxCharsText,
+    jobMetadataMinConfidenceText,
+    skillAdditionLimitText,
+  ])
+
+  const mutation = useMutation({
+    mutationFn: async () => {
+      await saveSetting({
+        component: 'c2',
+        key: JOB_METADATA_ROLE_FAMILIES_KEY,
+        value: JSON.stringify(textToList(roleFamilies)),
+        value_type: 'json',
+        secret: false,
+      })
+      await saveSetting({
+        component: 'c2',
+        key: JOB_METADATA_JOB_LEVELS_KEY,
+        value: JSON.stringify(textToList(jobLevels)),
+        value_type: 'json',
+        secret: false,
+      })
+      const textSettings = [
+        [C2_TARGET_LANE_POLICY_KEY, targetLanePolicy],
+        [C2_KEYWORD_KEEP_POLICY_KEY, keywordKeepPolicy],
+        [C2_KEYWORD_IGNORE_POLICY_KEY, keywordIgnorePolicy],
+        [C2_SUMMARY_KEYWORD_POLICY_KEY, summaryKeywordPolicy],
+        [C2_SKILL_ADDITION_POLICY_KEY, skillAdditionPolicy],
+        [C2_SUMMARY_GOOD_EXAMPLE_KEY, summaryGoodExample],
+        [C2_REWRITE_EXAMPLES_KEY, rewriteExamples],
+        [C2_DEFAULT_TARGET_TITLE_KEY, defaultTargetTitle],
+        [C2_KEYWORD_SELECTION_MAX_KEYWORDS_KEY, keywordSelectionMaxKeywords],
+        [C2_KEYWORD_SELECTION_MIN_WORDS_KEY, keywordSelectionMinWords],
+        [C2_KEYWORD_SELECTION_MAX_WORDS_KEY, keywordSelectionMaxWords],
+        [C2_JOB_METADATA_PROMPT_MAX_CHARS_KEY, jobMetadataPromptMaxChars],
+        [C2_JOB_METADATA_MIN_CONFIDENCE_KEY, jobMetadataMinConfidence],
+        [C2_SKILL_ADDITION_LIMIT_KEY, skillAdditionLimit],
+      ] as const
+      for (const [key, value] of textSettings) {
+        await saveSetting({
+          component: 'c2',
+          key,
+          value,
+          value_type: 'text',
+          secret: false,
+        })
+      }
+      const listSettings = [
+        [C2_UNSUPPORTED_TARGET_EXAMPLES_KEY, unsupportedExamples],
+        [C2_BLOCKED_KEYWORDS_KEY, blockedKeywords],
+        [C2_SUMMARY_BANNED_PHRASES_KEY, summaryBannedPhrases],
+      ] as const
+      for (const [key, value] of listSettings) {
+        await saveSetting({
+          component: 'c2',
+          key,
+          value: JSON.stringify(textToList(value)),
+          value_type: 'json',
+          secret: false,
+        })
+      }
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['component-settings', 'c2'] })
+      qc.invalidateQueries({ queryKey: ['component-settings', 'c2', 'job-metadata'] })
+      showToast('Saved C2 job metadata values')
+    },
+    onError: (e) => showToast(e instanceof Error ? e.message : 'Save failed', 'error'),
+  })
+
+  return (
+    <div className={styles.panel}>
+      <div className={styles.panelHeader}>
+        <h2 className={styles.panelTitle}>C2 job metadata</h2>
+      </div>
+      <div className={styles.gridTwo}>
+        <label className={styles.field}>
+          Role family values
+          <span className={styles.fieldHint}>
+            Allowed JSON labels for Fletcher metadata prompts and resume routing.
+          </span>
+          <textarea
+            className={styles.textarea}
+            value={roleFamilies}
+            onChange={(e) => setRoleFamilies(e.target.value)}
+            rows={8}
+          />
+        </label>
+        <label className={styles.field}>
+          Job level values
+          <span className={styles.fieldHint}>
+            Allowed level labels shared by metadata prompts and downstream C2 records.
+          </span>
+          <textarea
+            className={styles.textarea}
+            value={jobLevels}
+            onChange={(e) => setJobLevels(e.target.value)}
+            rows={8}
+          />
+        </label>
+      </div>
+      <div className={styles.gridTwo}>
+        <label className={styles.field}>
+          Default target title
+          <span className={styles.fieldHint}>
+            Used when Option B has no usable title. Avoid role-specific hardcoded fallbacks.
+          </span>
+          <input
+            className={styles.input}
+            value={defaultTargetTitle}
+            onChange={(e) => setDefaultTargetTitle(e.target.value)}
+          />
+        </label>
+        <label className={styles.field}>
+          Unsupported target examples
+          <span className={styles.fieldHint}>
+            One per line. Used with the target-lane policy for queued jobs.
+          </span>
+          <textarea
+            className={styles.textarea}
+            value={unsupportedExamples}
+            onChange={(e) => setUnsupportedExamples(e.target.value)}
+            rows={6}
+          />
+        </label>
+      </div>
+      <div className={styles.gridTwo}>
+        <label className={styles.field}>
+          Keyword max count
+          <span className={styles.fieldHint}>Maximum keywords returned by extraction.</span>
+          <input
+            type="number"
+            className={styles.input}
+            value={keywordSelectionMaxKeywords}
+            onChange={(e) => setKeywordSelectionMaxKeywords(e.target.value)}
+            min={0}
+          />
+        </label>
+        <label className={styles.field}>
+          Keyword min words
+          <span className={styles.fieldHint}>Minimum words per extracted keyword.</span>
+          <input
+            type="number"
+            className={styles.input}
+            value={keywordSelectionMinWords}
+            onChange={(e) => setKeywordSelectionMinWords(e.target.value)}
+            min={0}
+          />
+        </label>
+        <label className={styles.field}>
+          Keyword max words
+          <span className={styles.fieldHint}>Maximum words per extracted keyword.</span>
+          <input
+            type="number"
+            className={styles.input}
+            value={keywordSelectionMaxWords}
+            onChange={(e) => setKeywordSelectionMaxWords(e.target.value)}
+            min={1}
+          />
+        </label>
+        <label className={styles.field}>
+          Metadata prompt max chars
+          <span className={styles.fieldHint}>First job-description characters used for metadata fill.</span>
+          <input
+            type="number"
+            className={styles.input}
+            value={jobMetadataPromptMaxChars}
+            onChange={(e) => setJobMetadataPromptMaxChars(e.target.value)}
+            min={1}
+          />
+        </label>
+        <label className={styles.field}>
+          Minimum confidence
+          <span className={styles.fieldHint}>Confidence threshold used in metadata and prompt policy.</span>
+          <input
+            type="number"
+            className={styles.input}
+            value={jobMetadataMinConfidence}
+            onChange={(e) => setJobMetadataMinConfidence(e.target.value)}
+            min={0}
+            max={1}
+            step={0.1}
+          />
+        </label>
+        <label className={styles.field}>
+          Skill addition limit
+          <span className={styles.fieldHint}>Maximum Technical Skills additions per resume.</span>
+          <input
+            type="number"
+            className={styles.input}
+            value={skillAdditionLimit}
+            onChange={(e) => setSkillAdditionLimit(e.target.value)}
+            min={0}
+          />
+        </label>
+      </div>
+      <label className={styles.field}>
+        Target-lane policy
+        <span className={styles.fieldHint}>
+          Queue-only policy for deciding whether weak-RAG jobs are outside the configured lane.
+        </span>
+        <textarea
+          className={styles.textarea}
+          value={targetLanePolicy}
+          onChange={(e) => setTargetLanePolicy(e.target.value)}
+          rows={4}
+        />
+      </label>
+      <label className={styles.field}>
+        Keyword keep policy
+        <textarea
+          className={styles.textarea}
+          value={keywordKeepPolicy}
+          onChange={(e) => setKeywordKeepPolicy(e.target.value)}
+          rows={4}
+        />
+      </label>
+      <label className={styles.field}>
+        Keyword ignore policy
+        <textarea
+          className={styles.textarea}
+          value={keywordIgnorePolicy}
+          onChange={(e) => setKeywordIgnorePolicy(e.target.value)}
+          rows={4}
+        />
+      </label>
+      <label className={styles.field}>
+        Summary keyword policy
+        <textarea
+          className={styles.textarea}
+          value={summaryKeywordPolicy}
+          onChange={(e) => setSummaryKeywordPolicy(e.target.value)}
+          rows={4}
+        />
+      </label>
+      <label className={styles.field}>
+        Skill addition policy
+        <textarea
+          className={styles.textarea}
+          value={skillAdditionPolicy}
+          onChange={(e) => setSkillAdditionPolicy(e.target.value)}
+          rows={4}
+        />
+      </label>
+      <label className={styles.field}>
+        Summary good example
+        <textarea
+          className={styles.textarea}
+          value={summaryGoodExample}
+          onChange={(e) => setSummaryGoodExample(e.target.value)}
+          rows={3}
+        />
+      </label>
+      <div className={styles.gridTwo}>
+        <label className={styles.field}>
+          Summary banned phrases
+          <textarea
+            className={styles.textarea}
+            value={summaryBannedPhrases}
+            onChange={(e) => setSummaryBannedPhrases(e.target.value)}
+            rows={6}
+          />
+        </label>
+        <label className={styles.field}>
+          Blocked keywords
+          <textarea
+            className={styles.textarea}
+            value={blockedKeywords}
+            onChange={(e) => setBlockedKeywords(e.target.value)}
+            rows={6}
+          />
+        </label>
+      </div>
+      <label className={styles.field}>
+        Rewrite examples and policy
+        <textarea
+          className={styles.textarea}
+          value={rewriteExamples}
+          onChange={(e) => setRewriteExamples(e.target.value)}
+          rows={3}
+        />
+      </label>
+      <div className={styles.footer}>
+        <button
+          className={`${styles.btn} ${styles.btnPrimary}`}
+          disabled={mutation.isPending}
+          onClick={() => mutation.mutate()}
+        >
+          {mutation.isPending ? 'Saving...' : 'Save metadata values'}
+        </button>
+      </div>
+    </div>
+  )
+}
+
 // ---- main page -------------------------------------------------------------
 
 export function SettingsPage() {
@@ -571,6 +1120,8 @@ export function SettingsPage() {
       />
 
       <AppNotificationSettings />
+
+      <JobMetadataSettings />
 
       <div className={styles.panel}>
         <div className={styles.panelHeader}>

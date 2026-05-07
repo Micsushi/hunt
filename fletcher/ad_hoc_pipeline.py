@@ -24,11 +24,11 @@ from .jobs.keyword_policy import (
     normalize_keyword,
 )
 from .jobs.title_inference import infer_title_from_description, normalize_title_candidate
+from .job_metadata_settings import load_c2_prompt_settings
 from .keyword_check import partition_keywords
 from .llm.llm_enrich import (
     analyze_job_fit_with_ollama,
     bucket_skill_keywords_with_ollama,
-    classify_job_with_ollama,
     extract_keywords_with_ollama,
     filter_summary_keywords_with_ollama,
     generate_summary,
@@ -48,32 +48,7 @@ from .text_normalize import repair_mojibake
 
 BucketId = tuple[str, str]
 
-BLOCKED_IDE_KEYWORDS = {
-    "android studio",
-    "xcode",
-    "vs code",
-    "vscode",
-    "visual studio code",
-    "visual studio",
-    "intellij",
-    "intellij idea",
-    "pycharm",
-    "webstorm",
-    "phpstorm",
-    "rubymine",
-    "clion",
-    "rider",
-    "eclipse",
-    "netbeans",
-    "sublime text",
-    "atom",
-    "vim",
-    "neovim",
-    "emacs",
-}
-
 SUMMARY_KEYWORD_LIMIT = 3
-SKILL_ADDITION_LIMIT = 3
 MIN_HIGH_RAG_MATCHES_FOR_REWRITE = 2
 BULLET_ORDER_FIRST_SCORE_MULTIPLIER = 1.5
 BULLET_ORDER_LAST_SCORE_MULTIPLIER = 1.0
@@ -90,6 +65,14 @@ def _classification_needs_llm_fallback(classification: dict) -> bool:
         or classification.get("job_level") in {None, "", "unknown"}
         or "low_confidence_match" in set(classification.get("concern_flags") or [])
     )
+
+
+def _default_target_title() -> str:
+    return str(load_c2_prompt_settings().get("default_target_title") or "Target Role").strip()
+
+
+def _skill_addition_limit() -> int:
+    return int(load_c2_prompt_settings().get("skill_addition_limit") or 0)
 
 
 def _missing_job_metadata_fields(title: str, classification: dict) -> list[str]:
@@ -405,8 +388,14 @@ def _normalize_extracted_keywords(keywords: list[str]) -> list[str]:
     out: list[str] = []
     for keyword in keywords:
         out.extend(_split_slash_keyword(keyword))
+    settings = load_c2_prompt_settings()
+    blocked_keywords = {
+        normalize_keyword(str(keyword))
+        for keyword in settings.get("blocked_keywords", [])
+        if str(keyword).strip()
+    }
     return _dedupe(
-        [keyword for keyword in out if normalize_keyword(keyword) not in BLOCKED_IDE_KEYWORDS]
+        [keyword for keyword in out if normalize_keyword(keyword) not in blocked_keywords]
     )
 
 
@@ -438,10 +427,26 @@ def _existing_skill_keys(existing_skills: dict[str, list[str]]) -> set[str]:
     }
 
 
+def _has_existing_skills_section_values(doc) -> bool:
+    return bool(
+        list(doc.skills.languages)
+        or list(doc.skills.frameworks)
+        or list(doc.skills.developer_tools)
+    )
+
+
 def _add_keywords_to_skills(
-    doc, keywords: list[str], logger: PipelineLogger | None = None
+    doc,
+    keywords: list[str],
+    *,
+    job_title: str = "",
+    logger: PipelineLogger | None = None,
 ) -> list[str]:
     added: list[str] = []
+    if not _has_existing_skills_section_values(doc):
+        if logger:
+            logger.step("skill_bucket_skipped", reason="no_existing_skills_section_values")
+        return []
     existing_skills = {
         "languages": list(doc.skills.languages),
         "frameworks": list(doc.skills.frameworks),
@@ -451,11 +456,17 @@ def _add_keywords_to_skills(
     skill_candidates = _normalize_extracted_keywords(_dedupe(keywords))
     if not skill_candidates:
         return []
+    skill_addition_limit = _skill_addition_limit()
+    if skill_addition_limit <= 0:
+        if logger:
+            logger.step("skill_bucket_skipped", reason="skill_addition_limit_zero")
+        return []
     if logger:
         _log_ollama_runtime(logger, "before_skill_bucket")
     bucketed = bucket_skill_keywords_with_ollama(
         keywords=skill_candidates,
         existing_skills=existing_skills,
+        job_title=job_title,
         logger=logger,
     )
     if not bucketed.get("success"):
@@ -466,7 +477,7 @@ def _add_keywords_to_skills(
     proposed = _dedupe([keyword for keyword in proposed if keyword.strip()])
     if not proposed:
         return []
-    accepted = {keyword.lower() for keyword in proposed[:SKILL_ADDITION_LIMIT]}
+    accepted = {keyword.lower() for keyword in proposed[:skill_addition_limit]}
     for bucket in ("languages", "frameworks", "developer_tools"):
         for keyword in _normalize_extracted_keywords(list(bucketed.get(bucket, []) or [])):
             key = str(keyword).strip().lower()
@@ -475,7 +486,7 @@ def _add_keywords_to_skills(
                 continue
             if key not in accepted:
                 continue
-            if len(added) >= SKILL_ADDITION_LIMIT:
+            if len(added) >= skill_addition_limit:
                 return added
             getattr(doc.skills, bucket).append(str(keyword).strip())
             existing.add(skill_key)
@@ -1493,7 +1504,7 @@ def _run_iteration(
         summary_filter = filter_summary_keywords_with_ollama(
             keywords=summary_filter_candidates,
             candidate_context=candidate_context,
-            job_title=title or "Software Engineer",
+            job_title=title or _default_target_title(),
             logger=logger,
         )
     else:
@@ -1532,7 +1543,7 @@ def _run_iteration(
         logger.step("summary_start", keyword_count=len(mid_keywords), keywords=mid_keywords)
         summary_meta = generate_summary(
             candidate_context,
-            title or "Software Engineer",
+            title or _default_target_title(),
             mid_keywords,
             existing_summary=existing_summary,
             role_family=str(classification.get("role_family") or ""),
@@ -1576,7 +1587,7 @@ def _run_iteration(
                 )
                 retry_meta = generate_summary(
                     candidate_context,
-                    title or "Software Engineer",
+                    title or _default_target_title(),
                     retry_keywords,
                     existing_summary=existing_summary,
                     line_feedback=feedback,
@@ -1630,7 +1641,10 @@ def _run_iteration(
     ]
     no_summary_skill_keywords = _dedupe(rag_supported_summary_skill_kws)
     no_summary_skills_added = _add_keywords_to_skills(
-        doc_ns, no_summary_skill_keywords, logger=logger
+        doc_ns,
+        no_summary_skill_keywords,
+        job_title=title or _default_target_title(),
+        logger=logger,
     )
     logger.step(
         "skills_keywords_added",
@@ -1697,7 +1711,7 @@ def _run_iteration(
             logger.step("summary_retry_start", line_count=line_count, feedback=feedback)
             retry_meta = generate_summary(
                 candidate_context,
-                title or "Software Engineer",
+                title or _default_target_title(),
                 mid_keywords,
                 existing_summary=existing_summary,
                 line_feedback=feedback,
