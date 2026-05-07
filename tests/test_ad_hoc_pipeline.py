@@ -60,6 +60,138 @@ def test_rewrite_parallelism_allows_configured_workers(monkeypatch):
     assert mod._rewrite_worker_count(2, PipelineLogger()) == 2
 
 
+def test_linux_meminfo_counts_cache_as_available(tmp_path):
+    import fletcher.ad_hoc_pipeline as mod
+
+    meminfo = tmp_path / "meminfo"
+    meminfo.write_text(
+        "\n".join(
+            [
+                "MemTotal:       16384000 kB",
+                "MemFree:          300000 kB",
+                "Buffers:          200000 kB",
+                "Cached:         10000000 kB",
+                "MemAvailable:   13200000 kB",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    used, total, source = mod._linux_meminfo_bytes(str(meminfo))
+
+    assert source == "meminfo"
+    assert round(total / 1024 / 1024, 1) == 16000.0
+    assert round(used / 1024 / 1024, 1) == 3109.4
+
+
+def test_repair_mojibake_fixes_double_encoded_french():
+    from fletcher.text_normalize import repair_mojibake
+
+    assert repair_mojibake("stratÃƒÂ©gies") == "stratégies"
+    assert repair_mojibake("donnÃƒÂ©es") == "données"
+    assert repair_mojibake("tables de dÃƒÂ©cision") == "tables de décision"
+    assert repair_mojibake("lÃ¢\x80\x99interface") == "l’interface"
+
+
+def test_cgroup_memory_subtracts_inactive_file(monkeypatch):
+    import fletcher.ad_hoc_pipeline as mod
+
+    def fake_read_int_file(paths):
+        if "/sys/fs/cgroup/memory.current" in paths:
+            return 12 * 1024 * 1024 * 1024
+        if "/sys/fs/cgroup/memory.max" in paths:
+            return 16 * 1024 * 1024 * 1024
+        return None
+
+    monkeypatch.setattr(mod, "_read_int_file", fake_read_int_file)
+    monkeypatch.setattr(
+        mod,
+        "_read_cgroup_stat_value",
+        lambda paths, key: 10 * 1024 * 1024 * 1024 if key == "inactive_file" else None,
+    )
+
+    snapshot = mod._memory_snapshot()
+
+    assert snapshot["source"] == "cgroup_working_set"
+    assert snapshot["used_mb"] == 2048.0
+    assert snapshot["available_mb"] == 14336.0
+
+
+def test_ollama_runtime_snapshot_reports_loaded_models(monkeypatch):
+    import io
+
+    import fletcher.ad_hoc_pipeline as mod
+
+    class FakeResponse(io.StringIO):
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            self.close()
+            return False
+
+    monkeypatch.setattr(mod._config, "DEFAULT_MODEL_BACKEND", "ollama")
+    monkeypatch.setattr(mod._config, "OLLAMA_HOST", "http://ollama:11434")
+    monkeypatch.setattr(mod._config, "OLLAMA_NUM_PARALLEL", "5")
+    monkeypatch.setattr(mod._config, "OLLAMA_CONTEXT_LENGTH", "8192")
+    monkeypatch.setattr(mod._config, "OLLAMA_FLASH_ATTENTION", "1")
+    monkeypatch.setattr(mod._config, "OLLAMA_KV_CACHE_TYPE", "q8_0")
+    monkeypatch.setattr(mod._config, "OLLAMA_KEEP_ALIVE", "-1")
+    monkeypatch.setattr(
+        mod.urllib.request,
+        "urlopen",
+        lambda req, timeout: FakeResponse(
+            '{"models":[{"name":"gemma4:e4b","processor":"100% GPU",'
+            '"size":10485760,"size_vram":8388608}]}'
+        ),
+    )
+
+    snapshot = mod._ollama_runtime_snapshot()
+
+    assert snapshot["reachable"] is True
+    assert snapshot["loaded_count"] == 1
+    assert snapshot["models"][0]["processor"] == "100% GPU"
+    assert snapshot["models"][0]["size_mb"] == 10.0
+    assert snapshot["models"][0]["size_vram_mb"] == 8.0
+    assert snapshot["configured"] == {
+        "num_parallel": "5",
+        "context_length": "8192",
+        "flash_attention": "1",
+        "kv_cache_type": "q8_0",
+        "keep_alive": "-1",
+    }
+
+
+def test_ollama_runtime_snapshot_tolerates_unexpected_model_shape(monkeypatch):
+    import io
+
+    import fletcher.ad_hoc_pipeline as mod
+
+    class FakeResponse(io.StringIO):
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            self.close()
+            return False
+
+    monkeypatch.setattr(mod._config, "DEFAULT_MODEL_BACKEND", "ollama")
+    monkeypatch.setattr(
+        mod.urllib.request,
+        "urlopen",
+        lambda req, timeout: FakeResponse(
+            '{"models":[{"model":"odd","processor":"CPU","size":"not-a-number"}, "bad"]}'
+        ),
+    )
+
+    snapshot = mod._ollama_runtime_snapshot()
+
+    assert snapshot["reachable"] is True
+    assert snapshot["loaded_count"] == 1
+    assert snapshot["models"][0]["name"] == "odd"
+    assert snapshot["models"][0]["size_mb"] is None
+
+
 def test_summary_evidence_uses_top_three_scored_bullets():
     import fletcher.ad_hoc_pipeline as mod
 
@@ -142,6 +274,11 @@ def base_mocks(monkeypatch):
         "analyze_job_fit_with_ollama",
         MagicMock(return_value={"success": False, "title": ""}),
     )
+    monkeypatch.setattr(
+        mod,
+        "extract_keywords_with_ollama",
+        MagicMock(return_value={"success": False, "keywords": []}),
+    )
     monkeypatch.setattr(mod, "classify_job_with_ollama", MagicMock(return_value={"success": False}))
     monkeypatch.setattr(
         mod,
@@ -168,11 +305,6 @@ def base_mocks(monkeypatch):
     )
     monkeypatch.setattr(
         mod, "extract_keywords", MagicMock(return_value={"must_have_terms": ["Python", "MongoDB"]})
-    )
-    monkeypatch.setattr(
-        mod,
-        "enrich_with_ollama_if_enabled",
-        MagicMock(return_value=({}, {"must_have_terms": ["Python", "MongoDB"]}, {})),
     )
     monkeypatch.setattr(
         mod,
@@ -782,7 +914,7 @@ def test_llm_policy_router_none_does_not_crash(base_mocks):
     assert result["compile_status"] == "ok"
 
 
-def test_llm_job_fit_mismatch_aborts_without_fixed_role_terms(base_mocks):
+def test_llm_job_fit_mismatch_is_logged_but_option_b_continues(base_mocks):
     from fletcher.ad_hoc_pipeline import run_ad_hoc_pipeline
 
     base_mocks.analyze_job_fit_with_ollama.return_value = {
@@ -800,9 +932,12 @@ def test_llm_job_fit_mismatch_aborts_without_fixed_role_terms(base_mocks):
         description="Chief Something Officer role.",
     )
 
-    assert result["compile_status"] == "failed"
-    assert result["error_type"] == "JobMismatchError"
-    assert base_mocks.enrich_with_ollama_if_enabled.call_count == 0
+    assert result["compile_status"] == "ok"
+    assert "error_type" not in result
+    assert base_mocks.extract_keywords_with_ollama.call_count == 1
+    log_text = base_mocks.write_text.call_args.args[1]
+    assert "job_mismatch_ignored_for_option_b" in log_text
+    assert "job_mismatch_error" not in log_text
 
 
 def test_llm_general_family_does_not_overwrite_specific_classification():
@@ -915,8 +1050,8 @@ def test_summary_validation_visible_evidence_override_for_false_negative(base_mo
     )
 
     assert validation["accepted"] is True
-    assert mode == "deterministic_fast"
-    base_mocks.validate_summary_with_ollama.assert_not_called()
+    assert mode == "llm_visible_override"
+    base_mocks.validate_summary_with_ollama.assert_called_once()
 
 
 def test_quality_terms_do_not_route_to_bullet_rewrite(base_mocks):
@@ -928,18 +1063,16 @@ def test_quality_terms_do_not_route_to_bullet_rewrite(base_mocks):
 def test_slash_stack_keywords_are_split_before_partition(base_mocks):
     from fletcher.ad_hoc_pipeline import run_ad_hoc_pipeline
 
-    base_mocks.enrich_with_ollama_if_enabled.return_value = (
-        {},
-        {
-            "must_have_terms": [
-                "Java/Kotlin",
-                "Docker/Kubernetes",
-                "Spring Boot/Spring Cloud",
-                "A/B testing",
-            ]
-        },
-        {},
-    )
+    base_mocks.extract_keywords_with_ollama.return_value = {
+        "success": True,
+        "keywords": [
+            "Java/Kotlin",
+            "Docker/Kubernetes",
+            "Spring Boot/Spring Cloud",
+            "A/B testing",
+        ],
+        "duration_ms": 7,
+    }
 
     result = run_ad_hoc_pipeline(title="AI Developer Intern", description="job")
 
@@ -968,11 +1101,11 @@ def test_ci_cd_phrase_is_not_split():
 def test_popular_ide_keywords_are_removed_before_partition(base_mocks):
     from fletcher.ad_hoc_pipeline import run_ad_hoc_pipeline
 
-    base_mocks.enrich_with_ollama_if_enabled.return_value = (
-        {},
-        {"must_have_terms": ["Android Studio", "Xcode", "Swift", "Appium"]},
-        {},
-    )
+    base_mocks.extract_keywords_with_ollama.return_value = {
+        "success": True,
+        "keywords": ["Android Studio", "Xcode", "Swift", "Appium"],
+        "duration_ms": 7,
+    }
 
     result = run_ad_hoc_pipeline(title="SDET", description="mobile testing job")
 
@@ -981,7 +1114,7 @@ def test_popular_ide_keywords_are_removed_before_partition(base_mocks):
     assert result["keywords"] == ["Swift", "Appium"]
 
 
-def test_combined_job_fit_keywords_skip_separate_keyword_extract(base_mocks):
+def test_job_fit_and_keyword_extract_run_as_separate_calls(base_mocks):
     from fletcher.ad_hoc_pipeline import run_ad_hoc_pipeline
 
     base_mocks.analyze_job_fit_with_ollama.return_value = {
@@ -993,19 +1126,25 @@ def test_combined_job_fit_keywords_skip_separate_keyword_extract(base_mocks):
         "mismatch_reason": "",
         "jd_usable": True,
         "jd_usable_reason": "Detailed software role.",
-        "keywords": ["C#", ".NET/Angular", "code reviews"],
         "duration_ms": 12,
+    }
+    base_mocks.extract_keywords_with_ollama.return_value = {
+        "success": True,
+        "keywords": ["C#", ".NET/Angular", "code reviews"],
+        "duration_ms": 7,
+        "prompt_excerpt_len": 120,
     }
 
     result = run_ad_hoc_pipeline(title="", description="job")
 
     assert result["keywords"] == ["C#", ".NET", "Angular", "code reviews"]
-    assert base_mocks.enrich_with_ollama_if_enabled.call_count == 0
+    assert base_mocks.analyze_job_fit_with_ollama.call_count == 1
+    assert base_mocks.extract_keywords_with_ollama.call_count == 1
     partition_keywords = base_mocks.partition_keywords.call_args.args[0]
     assert partition_keywords == result["keywords"]
 
 
-def test_combined_job_fit_ignores_legacy_keyword_routes(base_mocks):
+def test_separate_keyword_extract_ignores_legacy_job_fit_keyword_routes(base_mocks):
     from fletcher.ad_hoc_pipeline import run_ad_hoc_pipeline
 
     base_mocks.analyze_job_fit_with_ollama.return_value = {
@@ -1017,7 +1156,6 @@ def test_combined_job_fit_ignores_legacy_keyword_routes(base_mocks):
         "mismatch_reason": "",
         "jd_usable": True,
         "jd_usable_reason": "Detailed role.",
-        "keywords": ["RabbitMQ"],
         "keyword_routes": {
             "RabbitMQ": {
                 "route": "skills_only",
@@ -1026,6 +1164,11 @@ def test_combined_job_fit_ignores_legacy_keyword_routes(base_mocks):
             }
         },
         "duration_ms": 12,
+    }
+    base_mocks.extract_keywords_with_ollama.return_value = {
+        "success": True,
+        "keywords": ["RabbitMQ"],
+        "duration_ms": 7,
     }
     base_mocks.partition_keywords.return_value = ([], ["RabbitMQ"], {"RabbitMQ": []})
     base_mocks.match_keywords_to_bullets.return_value = {
@@ -1037,6 +1180,7 @@ def test_combined_job_fit_ignores_legacy_keyword_routes(base_mocks):
     }
 
     run_ad_hoc_pipeline(title="", description="job")
+
 
 def test_keyword_present_partition_includes_skills(base_mocks):
     from fletcher.ad_hoc_pipeline import run_ad_hoc_pipeline
@@ -1053,8 +1197,12 @@ def test_keyword_present_partition_includes_skills(base_mocks):
         "mismatch_reason": "",
         "jd_usable": True,
         "jd_usable_reason": "Detailed role.",
-        "keywords": ["Rust"],
         "duration_ms": 12,
+    }
+    base_mocks.extract_keywords_with_ollama.return_value = {
+        "success": True,
+        "keywords": ["Rust"],
+        "duration_ms": 7,
     }
 
     run_ad_hoc_pipeline(title="", description="job")
@@ -1078,8 +1226,12 @@ def test_skills_only_keywords_are_considered_for_skills(base_mocks):
         "mismatch_reason": "",
         "jd_usable": True,
         "jd_usable_reason": "Detailed role.",
-        "keywords": ["RabbitMQ"],
         "duration_ms": 12,
+    }
+    base_mocks.extract_keywords_with_ollama.return_value = {
+        "success": True,
+        "keywords": ["RabbitMQ"],
+        "duration_ms": 7,
     }
     base_mocks.partition_keywords.return_value = (
         [],
@@ -1123,8 +1275,12 @@ def test_summary_variant_reuses_skill_enrichment(base_mocks):
         "mismatch_reason": "",
         "jd_usable": True,
         "jd_usable_reason": "Detailed role.",
-        "keywords": ["RabbitMQ"],
         "duration_ms": 12,
+    }
+    base_mocks.extract_keywords_with_ollama.return_value = {
+        "success": True,
+        "keywords": ["RabbitMQ"],
+        "duration_ms": 7,
     }
     base_mocks.partition_keywords.return_value = (
         [],
@@ -1165,11 +1321,11 @@ def test_summary_variant_reuses_skill_enrichment(base_mocks):
 def test_medium_rag_named_keyword_can_flow_to_skills(base_mocks):
     from fletcher.ad_hoc_pipeline import run_ad_hoc_pipeline
 
-    base_mocks.enrich_with_ollama_if_enabled.return_value = (
-        {},
-        {"must_have_terms": ["Angular"]},
-        {},
-    )
+    base_mocks.extract_keywords_with_ollama.return_value = {
+        "success": True,
+        "keywords": ["Angular"],
+        "duration_ms": 7,
+    }
     base_mocks.partition_keywords.return_value = (
         [],
         ["Angular"],
@@ -1201,11 +1357,11 @@ def test_medium_rag_named_keyword_can_flow_to_skills(base_mocks):
 def test_low_rag_named_keyword_does_not_flow_to_skills(base_mocks):
     from fletcher.ad_hoc_pipeline import run_ad_hoc_pipeline
 
-    base_mocks.enrich_with_ollama_if_enabled.return_value = (
-        {},
-        {"must_have_terms": ["Snowflake"]},
-        {},
-    )
+    base_mocks.extract_keywords_with_ollama.return_value = {
+        "success": True,
+        "keywords": ["Snowflake"],
+        "duration_ms": 7,
+    }
     base_mocks.partition_keywords.return_value = (
         [],
         ["Snowflake"],
@@ -1316,7 +1472,7 @@ def test_pipeline_summary_digest_is_human_readable(base_mocks):
     assert "  - Python" in log_text
 
 
-def test_summary_banned_tone_retries_even_when_llm_validator_accepts(base_mocks):
+def test_summary_banned_tone_d_check_does_not_retry_when_llm_validator_accepts(base_mocks):
     from fletcher.ad_hoc_pipeline import run_ad_hoc_pipeline
     from fletcher.llm.llm_enrich import validate_summary_grounding
 
@@ -1341,7 +1497,41 @@ def test_summary_banned_tone_retries_even_when_llm_validator_accepts(base_mocks)
 
     run_ad_hoc_pipeline(title="SWE Intern", description="job")
 
-    assert base_mocks.generate_summary.call_count >= 2
+    assert base_mocks.generate_summary.call_count == 1
+
+
+def test_summary_style_retry_feedback_comes_from_llm_validator(base_mocks):
+    from fletcher.ad_hoc_pipeline import run_ad_hoc_pipeline
+    from fletcher.llm.llm_enrich import validate_summary_grounding
+
+    base_mocks.validate_summary_grounding.side_effect = validate_summary_grounding
+    base_mocks.generate_summary.side_effect = [
+        {
+            "summary": "Eager to apply strong development skills in an internship.",
+            "success": True,
+            "duration_ms": 1,
+            "retry_reason": "",
+        },
+        {
+            "summary": "Software developer with supported backend delivery experience.",
+            "success": True,
+            "duration_ms": 1,
+            "retry_reason": "",
+        },
+    ]
+    base_mocks.validate_summary_with_ollama.return_value = {
+        "success": True,
+        "accepted": False,
+        "reasons": ["banned_tone:eager"],
+    }
+
+    run_ad_hoc_pipeline(title="SWE Intern", description="job")
+
+    retry_feedback = base_mocks.generate_summary.call_args_list[1].kwargs["line_feedback"]
+    assert "Remove banned tone: eager." in retry_feedback
+    assert "Do not use seeking/apply/excited/eager/motivated phrasing." in retry_feedback
+    log_text = base_mocks.write_text.call_args.args[1]
+    assert "retry_reason: Remove banned tone: eager." in log_text
 
 
 def test_single_keyword_rewrite_failure_does_not_retry(base_mocks):
@@ -1559,6 +1749,42 @@ def test_bullet_order_boost_makes_first_bullet_harder_to_drop(monkeypatch):
     assert scores["last"] == 0.4
     assert details["first"]["score_order_multiplier"] == 1.5
     assert details["last"]["score_order_multiplier"] == 1.0
+    assert details["first"]["score_title_bonus"] == 0.0
+
+
+def test_job_title_similarity_adds_small_drop_score_bonus(monkeypatch):
+    import fletcher.ad_hoc_pipeline as mod
+
+    calls: list[list[str]] = []
+
+    def fake_score(_bullets, keywords):
+        calls.append(list(keywords))
+        if keywords == ["Python"]:
+            return [0.4, 0.4]
+        if keywords == ["Data Analyst"]:
+            return [0.5, 0.0]
+        return [0.0, 0.0]
+
+    monkeypatch.setattr(mod, "score_bullets_for_drop", fake_score)
+    sources = [{"bullet_id": "b1"}, {"bullet_id": "b2"}]
+
+    scores = mod._score_sources(
+        ["Built analyst dashboard.", "Built API."],
+        sources,
+        ["Python"],
+        job_title="Data Analyst",
+    )
+    details = mod._score_details(
+        ["Built analyst dashboard.", "Built API."],
+        sources,
+        ["Python"],
+        job_title="Data Analyst",
+    )
+
+    assert calls == [["Python"], ["Data Analyst"], ["Python"], ["Data Analyst"]]
+    assert scores["b1"] == 0.69
+    assert scores["b2"] == 0.6
+    assert details["b1"]["score_title_bonus"] == 0.06
 
 
 def test_fit_to_page_removes_bucket_at_floor(monkeypatch):

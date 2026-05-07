@@ -26,6 +26,7 @@ from .db import (
 from .jobs.classifier import classify_job, slugify
 from .jobs.keyword_extractor import extract_keywords
 from .llm.llm_enrich import (
+    analyze_job_fit_with_ollama,
     enrich_with_ollama_if_enabled,
     generate_summary,
     rewrite_bullet_targeted,
@@ -38,6 +39,73 @@ from .resume.parser import parse_resume_file
 from .resume.renderer import render_resume_tex
 from .resume.source_loader import load_bullet_library, load_candidate_profile
 from .storage import build_attempt_dir, ensure_dir, file_hash, write_json, write_text
+
+
+def _queue_target_lane_policy() -> str:
+    return (
+        "Continue for jobs that match the configured resume/search lane. "
+        "Reject only when the posting is clearly outside that lane."
+    )
+
+
+def _queue_unsupported_examples() -> list[str]:
+    return [
+        "non-computer civil engineering",
+        "non-computer mechanical engineering",
+        "non-computer chemical or process engineering",
+        "municipal infrastructure",
+        "CAD drafting",
+    ]
+
+
+def _first_text_value(source: dict | None, keys: tuple[str, ...]) -> str:
+    if not source:
+        return ""
+    for key in keys:
+        value = source.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return ""
+
+
+def _missing_job_metadata_fields(title: str, classification: dict) -> list[str]:
+    missing = []
+    if not (title or "").strip():
+        missing.append("title")
+    if classification.get("role_family") in (None, "", "general", "unknown"):
+        missing.append("role_family")
+    if classification.get("job_level") in (None, "", "unknown"):
+        missing.append("job_level")
+    return missing
+
+
+def _merge_missing_job_metadata(
+    *,
+    title: str,
+    classification: dict,
+    metadata: dict,
+) -> tuple[str, dict]:
+    merged_title = title
+    merged = dict(classification)
+    if not (merged_title or "").strip() and metadata.get("title"):
+        merged_title = str(metadata["title"]).strip()
+    if merged.get("role_family") in (None, "", "general", "unknown") and metadata.get("role_family"):
+        merged["role_family"] = str(metadata["role_family"]).strip().lower()
+    if merged.get("job_level") in (None, "", "unknown") and metadata.get("job_level"):
+        merged["job_level"] = str(metadata["job_level"]).strip().lower()
+    if isinstance(metadata.get("jd_usable"), bool):
+        merged["weak_description"] = not metadata["jd_usable"]
+        flags = list(merged.get("concern_flags") or [])
+        if metadata["jd_usable"]:
+            flags = [flag for flag in flags if flag != "weak_description"]
+        elif "weak_description" not in flags:
+            flags.append("weak_description")
+        merged["concern_flags"] = flags
+    if metadata.get("jd_usable_reason"):
+        reasons = list(merged.get("reasons") or [])
+        reasons.append(f"jd_usable_model: {str(metadata['jd_usable_reason'])[:200]}")
+        merged["reasons"] = reasons[:24]
+    return merged_title, merged
 
 
 def _trim_one_bullet_per_entry(doc, structured_output: dict) -> bool:
@@ -245,6 +313,14 @@ def generate_resume_for_job(
         job_id=job_id,
         db_path=db_path,
         allow_downstream_selection=_job_is_ready_for_c3(job),
+        db_role_family=_first_text_value(
+            job,
+            ("role_family", "job_role_family", "latest_resume_role_family"),
+        ),
+        db_job_level=_first_text_value(
+            job,
+            ("job_level", "level", "latest_resume_job_level"),
+        ),
         resume_path=resume_path,
         candidate_profile_path=candidate_profile_path,
         bullet_library_path=bullet_library_path,
@@ -396,16 +472,79 @@ def _run_pipeline(
     db_path: str | Path | None = None,
     ad_hoc_label: str | None = None,
     allow_downstream_selection: bool = False,
+    db_role_family: str = "",
+    db_job_level: str = "",
     resume_path: str | Path,
     candidate_profile_path: str | Path,
     bullet_library_path: str | Path,
 ) -> dict:
     _t_pipeline_start = time.perf_counter()
     classification = classify_job(title=title, description=description)
+    if db_role_family:
+        classification["role_family"] = db_role_family
+    if db_job_level:
+        classification["job_level"] = db_job_level
+    job_metadata = {"success": False, "skipped": False, "missing_fields": []}
+    missing_metadata = _missing_job_metadata_fields(title, classification)
+    if missing_metadata:
+        job_metadata = analyze_job_fit_with_ollama(
+            input_title=title,
+            deterministic_title=title,
+            description=description,
+            missing_fields=missing_metadata,
+            target_lane_policy=_queue_target_lane_policy() if source_mode == "queue" else "",
+            unsupported_examples=_queue_unsupported_examples() if source_mode == "queue" else [],
+        )
+        job_metadata["missing_fields"] = missing_metadata
+        if job_metadata.get("success"):
+            title, classification = _merge_missing_job_metadata(
+                title=title,
+                classification=classification,
+                metadata=job_metadata,
+            )
+    else:
+        job_metadata = {"success": False, "skipped": True, "missing_fields": []}
     keywords = extract_keywords(title=title, description=description, classification=classification)
     classification, keywords, llm_meta = enrich_with_ollama_if_enabled(
         title=title, description=description, classification=classification, keywords=keywords
     )
+    if job_metadata.get("success"):
+        llm_meta["job_metadata"] = {
+            key: job_metadata.get(key)
+            for key in (
+                "title",
+                "role_family",
+                "job_level",
+                "mismatch",
+                "mismatch_reason",
+                "unsupported_target_role",
+                "unsupported_target_reason",
+                "confidence",
+                "jd_usable",
+                "jd_usable_reason",
+                "duration_ms",
+                "missing_fields",
+            )
+        }
+    elif job_metadata.get("skipped"):
+        llm_meta["job_metadata"] = {"skipped": True, "missing_fields": []}
+    if source_mode == "queue" and job_metadata.get("unsupported_target_role"):
+        block_reason = (
+            str(job_metadata.get("unsupported_target_reason") or "").strip()
+            or "unsupported_target_role: outside configured target lane"
+        )
+        if not block_reason.startswith("unsupported_target_role"):
+            block_reason = f"unsupported_target_role: {block_reason}"
+        return _record_blocked_queue_resume(
+            title=title,
+            description=description,
+            company=company,
+            job_id=job_id,
+            db_path=db_path,
+            classification=classification,
+            reason=block_reason,
+            started_at=_t_pipeline_start,
+        )
     if source_mode == "queue" and llm_meta.get("unsupported_target_role"):
         block_reason = (
             str(llm_meta.get("unsupported_target_reason") or "").strip()
@@ -465,6 +604,7 @@ def _run_pipeline(
         "step1_keywords": {
             "title_sent": title,
             "description_sent": (description or "")[:500],
+            "job_metadata": job_metadata,
             "jd_usable": llm_meta.get("jd_usable"),
             "jd_usable_reason": llm_meta.get("jd_usable_reason", ""),
             "keywords_returned": raw_kws,
@@ -512,6 +652,8 @@ def _run_pipeline(
             description=description,
             keywords=raw_kws,
             rag_scores=kw_match.get("scores", []),
+            target_lane_policy=_queue_target_lane_policy(),
+            unsupported_examples=_queue_unsupported_examples(),
         )
         trace["step2_rag"]["low_rag_continue_check"] = continue_check
         if continue_check.get("success") and (

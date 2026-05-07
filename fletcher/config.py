@@ -51,7 +51,20 @@ DEFAULT_MODEL_NAME = os.getenv("HUNT_RESUME_MODEL_NAME", "deterministic-stage1")
 OLLAMA_HOST = os.getenv("HUNT_OLLAMA_HOST", "http://127.0.0.1:11434").rstrip("/")
 OLLAMA_TIMEOUT_SEC = float(os.getenv("HUNT_OLLAMA_TIMEOUT_SEC", "300"))
 OLLAMA_MODEL_NAME = os.getenv("HUNT_OLLAMA_MODEL", "gemma4:e4b")
+OLLAMA_KEEP_ALIVE = os.getenv("HUNT_OLLAMA_KEEP_ALIVE", "-1")
+OLLAMA_NUM_PARALLEL = os.getenv("HUNT_OLLAMA_NUM_PARALLEL", "")
+OLLAMA_CONTEXT_LENGTH = os.getenv("HUNT_OLLAMA_CONTEXT_LENGTH", "")
+OLLAMA_FLASH_ATTENTION = os.getenv("HUNT_OLLAMA_FLASH_ATTENTION", "")
+OLLAMA_KV_CACHE_TYPE = os.getenv("HUNT_OLLAMA_KV_CACHE_TYPE", "")
 PROMPT_VERSION_TAG = "c2_v0.2_jd_keywords"
+
+
+def ollama_keep_alive_payload() -> str | int:
+    value = OLLAMA_KEEP_ALIVE.strip()
+    if value in {"-1", "0"} or value.isdigit():
+        return int(value)
+    return value
+
 
 # RAG : vector index for keyword-to-bullet semantic matching.
 OLLAMA_EMBED_MODEL = os.getenv("HUNT_OLLAMA_EMBED_MODEL", "mxbai-embed-large")
@@ -67,9 +80,8 @@ RAG_MID_THRESHOLD = float(os.getenv("HUNT_RAG_MID_THRESHOLD", "0.35"))  # keywor
 RAG_MAX_SUMMARY_KEYWORDS = int(os.getenv("HUNT_RAG_MAX_SUMMARY_KEYWORDS", "5"))
 RAG_ENABLED = os.getenv("HUNT_RAG_ENABLED", "1").strip().lower() in {"1", "true", "yes", "on"}
 
-# Bullet rewrite LLM calls can run concurrently when explicitly enabled.
-# Keep serial by default because local Ollama memory headroom varies by machine.
-BULLET_REWRITE_PARALLELISM = max(1, int(os.getenv("HUNT_BULLET_REWRITE_PARALLELISM", "1")))
+# Bullet rewrite LLM calls can run concurrently when memory guard allows it.
+BULLET_REWRITE_PARALLELISM = max(1, int(os.getenv("HUNT_BULLET_REWRITE_PARALLELISM", "5")))
 BULLET_REWRITE_MIN_AVAILABLE_MB = max(
     0, int(os.getenv("HUNT_BULLET_REWRITE_MIN_AVAILABLE_MB", "4096"))
 )

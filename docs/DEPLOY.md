@@ -54,6 +54,48 @@ python deploy.py c1 --stop
 python deploy.py c4 --restart
 python deploy.py all --logs
 python deploy.py all --ps
+python deploy.py c2 --resource-profile fast
+```
+
+## C2 resource profiles
+
+Deploys that include C2 automatically choose an Ollama/Fletcher resource profile.
+The deploy runner checks NVIDIA VRAM with `nvidia-smi` when `--resource-profile auto` is used.
+
+| Profile | Intended hardware | Main settings |
+|---|---|---|
+| `fast` | 16GB+ VRAM | 5 Ollama parallel requests, 8192 context, keep models loaded |
+| `balanced` | 10-15GB VRAM | 3 parallel requests, 8192 context, 30m keep-alive |
+| `safe` | 6-9GB VRAM | serial C2 rewrites, 4096 context, 30m keep-alive |
+| `cpu` | below 6GB or CPU fallback | serial C2 rewrites, 2048 context |
+
+`auto` is the default. If GPU detection fails, it chooses `safe`.
+
+Useful commands:
+
+```bash
+python deploy.py c2 --dry-run
+python deploy.py c2 --resource-profile fast
+python deploy.py c2 --resource-profile safe
+```
+
+The deploy log prints the selected profile and env values, for example:
+
+```text
+[deploy] resource_profile: fast
+[deploy] gpu_vram_mb: 16311
+[deploy] OLLAMA_NUM_PARALLEL=5
+[deploy] OLLAMA_CONTEXT_LENGTH=8192
+[deploy] HUNT_BULLET_REWRITE_PARALLELISM=5
+```
+
+For profiles that keep Ollama loaded forever, such as `fast`, deploy also prewarms the chat and embedding models after Docker Compose starts.
+This means the first resume run should not pay the full Ollama cold-load cost.
+
+Skip prewarm when needed:
+
+```bash
+python deploy.py c2 --resource-profile fast --no-prewarm
 ```
 
 ## What was wrong before

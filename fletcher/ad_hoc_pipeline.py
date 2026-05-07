@@ -2,11 +2,13 @@ from __future__ import annotations
 
 import copy
 import hashlib
+import json
 import os
 import re
 import shutil
 import subprocess
 import time
+import urllib.request
 from collections import defaultdict
 from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
 from pathlib import Path
@@ -27,7 +29,7 @@ from .llm.llm_enrich import (
     analyze_job_fit_with_ollama,
     bucket_skill_keywords_with_ollama,
     classify_job_with_ollama,
-    enrich_with_ollama_if_enabled,
+    extract_keywords_with_ollama,
     filter_summary_keywords_with_ollama,
     generate_summary,
     keyword_visible_in_text,
@@ -42,41 +44,9 @@ from .resume.compiler import compile_tex
 from .resume.parser import parse_resume_file
 from .resume.renderer import render_resume_tex
 from .storage import build_attempt_dir, ensure_dir, write_json, write_text
+from .text_normalize import repair_mojibake
 
 BucketId = tuple[str, str]
-
-SUMMARY_BLOCKED_DOMAIN_KEYWORDS = {
-    "real-time threat intelligence",
-    "threat intelligence",
-    "xdr",
-    "mdr",
-    "itdr",
-    "siem",
-    "ai-driven platform",
-}
-
-SUMMARY_GENERIC_KEYWORDS = {
-    "software engineer",
-    "software development intern",
-    "unit",
-    "unit testing",
-    "integration",
-    "end-to-end",
-    "backend services",
-    "api",
-    "git",
-    "source control",
-    "source repository processes",
-    "code reviews",
-    "scrum",
-    "full life cycle development",
-}
-
-NON_REWRITE_KEYWORDS = {
-    "computer science",
-    "computer engineering",
-    "mathematics",
-}
 
 BLOCKED_IDE_KEYWORDS = {
     "android studio",
@@ -108,14 +78,6 @@ MIN_HIGH_RAG_MATCHES_FOR_REWRITE = 2
 BULLET_ORDER_FIRST_SCORE_MULTIPLIER = 1.5
 BULLET_ORDER_LAST_SCORE_MULTIPLIER = 1.0
 
-NON_REWRITE_ROLE_WORDS = {
-    "intern",
-    "engineer",
-    "developer",
-    "manager",
-    "analyst",
-}
-
 
 class JobMismatchError(Exception):
     """Raised when the detected JD is not compatible with the requested role."""
@@ -128,6 +90,17 @@ def _classification_needs_llm_fallback(classification: dict) -> bool:
         or classification.get("job_level") in {None, "", "unknown"}
         or "low_confidence_match" in set(classification.get("concern_flags") or [])
     )
+
+
+def _missing_job_metadata_fields(title: str, classification: dict) -> list[str]:
+    missing = []
+    if not (title or "").strip():
+        missing.append("title")
+    if classification.get("role_family") in (None, "", "general", "unknown"):
+        missing.append("role_family")
+    if classification.get("job_level") in (None, "", "unknown"):
+        missing.append("job_level")
+    return missing
 
 
 def _merge_llm_classification(base: dict, llm_result: dict) -> dict:
@@ -246,15 +219,20 @@ def _score_sources(
     raw_keywords: list[str],
     classification: dict | None = None,
     rag_scores: list[dict] | None = None,
+    job_title: str = "",
 ) -> dict[str, float]:
     base_scores = score_bullets_for_drop(bullets, raw_keywords)
+    title_scores = score_bullets_for_drop(bullets, [job_title]) if job_title.strip() else []
     contribution = _coverage_contribution_scores(sources, rag_scores or [])
     scores: dict[str, float] = {}
     for idx, source in enumerate(sources):
         base = base_scores[idx] if idx < len(base_scores) else 0.0
         contrib = contribution.get(source["bullet_id"], 0.0)
+        title_bonus = (title_scores[idx] * 0.12) if idx < len(title_scores) else 0.0
         order_multiplier = _bullet_order_score_multiplier(source)
-        scores[source["bullet_id"]] = round(max(base, contrib) * order_multiplier, 4)
+        scores[source["bullet_id"]] = round(
+            min(max(base, contrib) + title_bonus, 1.0) * order_multiplier, 4
+        )
     return scores
 
 
@@ -264,18 +242,22 @@ def _score_details(
     raw_keywords: list[str],
     classification: dict | None = None,
     rag_scores: list[dict] | None = None,
+    job_title: str = "",
 ) -> dict[str, dict[str, float]]:
     base_scores = score_bullets_for_drop(bullets, raw_keywords)
+    title_scores = score_bullets_for_drop(bullets, [job_title]) if job_title.strip() else []
     contribution = _coverage_contribution_scores(sources, rag_scores or [])
     details: dict[str, dict[str, float]] = {}
     for idx, source in enumerate(sources):
         base = base_scores[idx] if idx < len(base_scores) else 0.0
         contrib = contribution.get(source["bullet_id"], 0.0)
+        title_bonus = (title_scores[idx] * 0.12) if idx < len(title_scores) else 0.0
         order_multiplier = _bullet_order_score_multiplier(source)
-        pre_order = max(base, contrib)
+        pre_order = min(max(base, contrib) + title_bonus, 1.0)
         details[source["bullet_id"]] = {
             "score_base": round(base, 4),
             "score_bonus": round(max(0.0, contrib - base), 4),
+            "score_title_bonus": round(title_bonus, 4),
             "score_order_multiplier": round(order_multiplier, 4),
             "score_final": round(pre_order * order_multiplier, 4),
         }
@@ -437,61 +419,6 @@ def _keyword_match_surfaces(doc, all_bullets: list[str]) -> list[str]:
     )
 
 
-def _keywords_from_job_fit(
-    job_fit: dict[str, Any],
-    *,
-    classification: dict,
-    keywords: dict,
-) -> tuple[dict, dict, dict] | None:
-    if not job_fit.get("success") or not isinstance(job_fit.get("jd_usable"), bool):
-        return None
-
-    jd_usable = bool(job_fit.get("jd_usable"))
-    raw_keywords = job_fit.get("keywords")
-    terms = (
-        _normalize_extracted_keywords(
-            [
-                keyword.strip()
-                for keyword in raw_keywords
-                if isinstance(keyword, str) and keyword.strip()
-            ]
-        )
-        if isinstance(raw_keywords, list)
-        else []
-    )
-    if not jd_usable:
-        terms = []
-
-    new_classification = dict(classification)
-    new_classification["weak_description"] = not jd_usable
-    flags = list(new_classification.get("concern_flags") or [])
-    if jd_usable:
-        flags = [flag for flag in flags if flag != "weak_description"]
-    elif "weak_description" not in flags:
-        flags.append("weak_description")
-    new_classification["concern_flags"] = flags
-    reason = str(job_fit.get("jd_usable_reason") or "").strip()
-    if reason:
-        reasons = list(new_classification.get("reasons") or [])
-        reasons.append(f"jd_usable_model: {reason[:200]}")
-        new_classification["reasons"] = reasons[:24]
-
-    new_keywords = dict(keywords)
-    new_keywords["must_have_terms"] = terms[:30]
-    new_keywords["nice_to_have_terms"] = []
-    new_keywords["tools_and_technologies"] = list(terms[:30])
-    new_keywords["domain_terms"] = []
-    meta = {
-        "ollama_enriched": True,
-        "source": "analyze_job_fit",
-        "jd_usable": jd_usable,
-        "jd_usable_reason": reason,
-        "duration_ms": job_fit.get("duration_ms"),
-        "error": job_fit.get("error"),
-    }
-    return new_classification, new_keywords, meta
-
-
 def _skill_validation_context(doc) -> str:
     bullets = [b for entry in doc.experience for b in entry.bullets] + [
         b for entry in doc.projects for b in entry.bullets
@@ -524,6 +451,8 @@ def _add_keywords_to_skills(
     skill_candidates = _normalize_extracted_keywords(_dedupe(keywords))
     if not skill_candidates:
         return []
+    if logger:
+        _log_ollama_runtime(logger, "before_skill_bucket")
     bucketed = bucket_skill_keywords_with_ollama(
         keywords=skill_candidates,
         existing_skills=existing_skills,
@@ -582,7 +511,6 @@ def _summary_keyword_supported(
     validation_reasons: list[str],
 ) -> bool:
     key = (keyword or "").strip().lower()
-    context_l = (candidate_context or "").lower()
     if not key:
         return False
     for reason in validation_reasons:
@@ -597,15 +525,6 @@ def _summary_keyword_supported(
             and value.lower() == key
         ):
             return False
-    if key in SUMMARY_BLOCKED_DOMAIN_KEYWORDS:
-        return key in context_l
-    if key in SUMMARY_GENERIC_KEYWORDS:
-        return True
-    if key == "cloud infrastructure":
-        return any(
-            term in context_l
-            for term in ("aws", "azure", "gcp", "vercel", "supabase", "kubernetes", "terraform")
-        )
     return keyword_visible_in_text(keyword, candidate_context)
 
 
@@ -639,6 +558,30 @@ def _keywords_rejected_by_summary_validation(
     return _dedupe(rejected)
 
 
+def _summary_validation_retry_feedback(validation: dict[str, Any]) -> tuple[str, str]:
+    reasons = [str(reason) for reason in validation.get("reasons") or []]
+    banned = []
+    for reason in reasons:
+        if reason.startswith("banned_tone:"):
+            phrase = reason.split(":", maxsplit=1)[1].strip()
+            if phrase:
+                banned.append(phrase)
+    if banned:
+        unique_banned = _dedupe(banned)
+        banned_text = ", ".join(unique_banned)
+        feedback = (
+            f"Remove banned tone: {banned_text}. "
+            "Do not use seeking/apply/excited/eager/motivated phrasing. "
+            "State capability directly."
+        )
+        return feedback, f"Remove banned tone: {banned_text}."
+    return (
+        "Revise to remove awkward domain claims and junior-sounding filler. "
+        "Use only role/process keywords that fit the candidate background.",
+        "",
+    )
+
+
 def _summary_filter_needs_llm(keywords: list[str]) -> bool:
     """Use model judgment whenever there are summary keywords to choose from."""
     cleaned = _dedupe([keyword for keyword in keywords if keyword.strip()])
@@ -649,8 +592,6 @@ def _keyword_rewrite_eligible(keyword: str) -> bool:
     key = (keyword or "").strip().lower()
     if not key:
         return False
-    if key in NON_REWRITE_KEYWORDS:
-        return False
     policy = classify_keyword_policy(keyword)
     if policy.kind in {
         KeywordKind.QUALITY,
@@ -660,9 +601,6 @@ def _keyword_rewrite_eligible(keyword: str) -> bool:
         KeywordKind.ORG_METADATA,
         KeywordKind.LANGUAGE_REQUIREMENT,
     }:
-        return False
-    words = set(key.replace("-", " ").split())
-    if "software" in words and words & NON_REWRITE_ROLE_WORDS:
         return False
     return True
 
@@ -815,6 +753,7 @@ def _fit_to_page(
                     kind=source["kind"],
                     entry_id=source["entry_id"],
                     score=scores_by_bullet_id.get(bullet_id, 0.0),
+                    reason="page_fit_lowest_score",
                     text=source.get("text"),
                 )
                 removed_any = True
@@ -930,6 +869,80 @@ def _read_int_file(paths: tuple[str, ...]) -> int | None:
     return None
 
 
+def _linux_meminfo_bytes(path: str = "/proc/meminfo") -> tuple[int | None, int | None, str]:
+    try:
+        text = Path(path).read_text(encoding="utf-8")
+    except OSError:
+        return None, None, "unknown"
+    values: dict[str, int] = {}
+    for line in text.splitlines():
+        if ":" not in line:
+            continue
+        key, raw_value = line.split(":", 1)
+        parts = raw_value.strip().split()
+        if not parts:
+            continue
+        try:
+            kb = int(parts[0])
+        except ValueError:
+            continue
+        values[key] = kb * 1024
+    total = values.get("MemTotal")
+    available = values.get("MemAvailable")
+    if total is None or available is None:
+        return None, None, "unknown"
+    return max(0, total - available), total, "meminfo"
+
+
+def _read_cgroup_stat_value(paths: tuple[str, ...], key: str) -> int | None:
+    for raw_path in paths:
+        try:
+            text = Path(raw_path).read_text(encoding="utf-8")
+        except OSError:
+            continue
+        for line in text.splitlines():
+            parts = line.split()
+            if len(parts) != 2 or parts[0] != key:
+                continue
+            try:
+                value = int(parts[1])
+            except ValueError:
+                continue
+            if value >= 0:
+                return value
+    return None
+
+
+def _cgroup_memory_bytes() -> tuple[int | None, int | None, str]:
+    current = _read_int_file(
+        (
+            "/sys/fs/cgroup/memory.current",
+            "/sys/fs/cgroup/memory/memory.usage_in_bytes",
+        )
+    )
+    limit = _read_int_file(
+        (
+            "/sys/fs/cgroup/memory.max",
+            "/sys/fs/cgroup/memory/memory.limit_in_bytes",
+        )
+    )
+    if current is None or limit is None or limit <= 0 or limit > 1 << 60:
+        return None, None, "unknown"
+    inactive_file = _read_cgroup_stat_value(
+        (
+            "/sys/fs/cgroup/memory.stat",
+            "/sys/fs/cgroup/memory/memory.stat",
+        ),
+        "inactive_file",
+    )
+    used = current
+    source = "cgroup"
+    if inactive_file is not None:
+        used = max(0, current - inactive_file)
+        source = "cgroup_working_set"
+    return used, limit, source
+
+
 def _host_memory_bytes() -> tuple[int | None, int | None, str]:
     if os.name == "nt":
         try:
@@ -956,6 +969,10 @@ def _host_memory_bytes() -> tuple[int | None, int | None, str]:
         except Exception:
             return None, None, "unknown"
 
+    used, total, source = _linux_meminfo_bytes()
+    if used is not None and total is not None:
+        return used, total, source
+
     try:
         page_size = os.sysconf("SC_PAGE_SIZE")
         phys_pages = os.sysconf("SC_PHYS_PAGES")
@@ -968,20 +985,8 @@ def _host_memory_bytes() -> tuple[int | None, int | None, str]:
 
 
 def _memory_snapshot() -> dict[str, Any]:
-    used = _read_int_file(
-        (
-            "/sys/fs/cgroup/memory.current",
-            "/sys/fs/cgroup/memory/memory.usage_in_bytes",
-        )
-    )
-    limit = _read_int_file(
-        (
-            "/sys/fs/cgroup/memory.max",
-            "/sys/fs/cgroup/memory/memory.limit_in_bytes",
-        )
-    )
-    source = "cgroup" if used is not None and limit is not None else "unknown"
-    if used is None or limit is None or limit > 1 << 60:
+    used, limit, source = _cgroup_memory_bytes()
+    if used is None or limit is None:
         used, limit, source = _host_memory_bytes()
     if used is None or limit is None or limit <= 0:
         return {
@@ -1001,6 +1006,62 @@ def _memory_snapshot() -> dict[str, Any]:
         "available_mb": round(available / 1024 / 1024, 1),
         "used_pct": round((used / limit) * 100, 1),
     }
+
+
+def _safe_ollama_mb(value: Any) -> float | None:
+    try:
+        return round(float(value) / 1024 / 1024, 1)
+    except (TypeError, ValueError):
+        return None
+
+
+def _ollama_runtime_snapshot() -> dict[str, Any]:
+    configured = {
+        "num_parallel": _config.OLLAMA_NUM_PARALLEL or None,
+        "context_length": _config.OLLAMA_CONTEXT_LENGTH or None,
+        "flash_attention": _config.OLLAMA_FLASH_ATTENTION or None,
+        "kv_cache_type": _config.OLLAMA_KV_CACHE_TYPE or None,
+        "keep_alive": _config.OLLAMA_KEEP_ALIVE,
+    }
+    if _config.DEFAULT_MODEL_BACKEND != "ollama":
+        return {"enabled": False, "configured": configured}
+    try:
+        req = urllib.request.Request(f"{_config.OLLAMA_HOST}/api/ps", method="GET")
+        with urllib.request.urlopen(req, timeout=2) as resp:
+            body = json.load(resp)
+        raw_models = body.get("models") if isinstance(body, dict) else []
+        models = []
+        for item in raw_models or []:
+            if not isinstance(item, dict):
+                continue
+            models.append(
+                {
+                    "name": item.get("name") or item.get("model"),
+                    "processor": item.get("processor"),
+                    "size_mb": _safe_ollama_mb(item.get("size")),
+                    "size_vram_mb": _safe_ollama_mb(item.get("size_vram")),
+                }
+            )
+    except Exception as exc:
+        return {
+            "enabled": True,
+            "reachable": False,
+            "host": _config.OLLAMA_HOST,
+            "configured": configured,
+            "error": (str(exc) or exc.__class__.__name__)[:200],
+        }
+    return {
+        "enabled": True,
+        "reachable": True,
+        "host": _config.OLLAMA_HOST,
+        "configured": configured,
+        "loaded_count": len(models),
+        "models": models,
+    }
+
+
+def _log_ollama_runtime(logger: PipelineLogger, stage: str) -> None:
+    logger.step("ollama_runtime", stage=stage, ollama=_ollama_runtime_snapshot())
 
 
 def _memory_allows_parallel(snapshot: dict[str, Any]) -> tuple[bool, str]:
@@ -1026,6 +1087,7 @@ def _rewrite_worker_count(task_count: int, logger: PipelineLogger) -> int:
             enabled=False,
             reason="serial_or_single_task",
             memory=_memory_snapshot(),
+            ollama=_ollama_runtime_snapshot(),
         )
         return 1
     snapshot = _memory_snapshot()
@@ -1039,6 +1101,7 @@ def _rewrite_worker_count(task_count: int, logger: PipelineLogger) -> int:
         enabled=active_workers > 1,
         reason=reason,
         memory=snapshot,
+        ollama=_ollama_runtime_snapshot(),
     )
     return active_workers
 
@@ -1362,6 +1425,7 @@ def _run_iteration(
                             active_workers=len(active_futures),
                             remaining_tasks=len(rewrite_tasks) - next_task_idx,
                             memory=snapshot,
+                            ollama=_ollama_runtime_snapshot(),
                             status=reason,
                         )
                         if not ok:
@@ -1388,6 +1452,7 @@ def _run_iteration(
         successful=rewrite_ok,
         keywords_used=_dedupe(keywords_used),
     )
+    _log_ollama_runtime(logger, "after_bullet_rewrites")
     logger.step("rewrite_validation_summary", rejected_keywords=_dedupe(skipped_candidates))
 
     bullets_for_score, sources_for_score = _collect_active_bullets(doc, active_bucket_ids)
@@ -1398,6 +1463,7 @@ def _run_iteration(
         raw_keywords,
         classification,
         kw_match.get("scores", []),
+        job_title=title,
     )
     logger.step(
         "bullet_scores",
@@ -1408,6 +1474,7 @@ def _run_iteration(
             raw_keywords,
             classification,
             kw_match.get("scores", []),
+            job_title=title,
         ),
     )
     evidence_bullets = _summary_evidence_bullets(bullets_for_score, sources_for_score, scores)
@@ -1461,6 +1528,7 @@ def _run_iteration(
 
     summary_meta: dict = {}
     if candidate_context:
+        _log_ollama_runtime(logger, "before_summary")
         logger.step("summary_start", keyword_count=len(mid_keywords), keywords=mid_keywords)
         summary_meta = generate_summary(
             candidate_context,
@@ -1479,6 +1547,7 @@ def _run_iteration(
             summary=summary_meta.get("summary", "")[:200] if summary_meta.get("success") else None,
             keywords_used=summary_meta.get("keywords_used") or [],
             retry_reason=summary_meta.get("retry_reason") or "",
+            keyword_use_reason=summary_meta.get("keyword_use_reason") or "",
         )
         if summary_meta.get("summary"):
             summary_validation, _summary_validation_mode = _validate_summary_with_defense(
@@ -1488,9 +1557,8 @@ def _run_iteration(
                 logger=logger,
             )
             if not summary_validation["accepted"]:
-                feedback = (
-                    "Revise to remove awkward domain claims and junior-sounding filler. "
-                    "Use only role/process keywords that fit the candidate background."
+                feedback, retry_reason_fallback = _summary_validation_retry_feedback(
+                    summary_validation
                 )
                 retry_keywords = [
                     keyword
@@ -1516,6 +1584,8 @@ def _run_iteration(
                     job_level=str(classification.get("job_level") or ""),
                     logger=logger,
                 )
+                if retry_reason_fallback and not retry_meta.get("retry_reason"):
+                    retry_meta["retry_reason"] = retry_reason_fallback
                 retry_validation, retry_validation_mode = _validate_summary_with_defense(
                     summary=retry_meta.get("summary", ""),
                     candidate_context=candidate_context,
@@ -1532,6 +1602,7 @@ def _run_iteration(
                     mode=retry_validation_mode,
                     keywords_used=retry_meta.get("keywords_used") or [],
                     retry_reason=retry_meta.get("retry_reason") or "",
+                    keyword_use_reason=retry_meta.get("keyword_use_reason") or "",
                 )
                 if retry_meta.get("summary") and retry_validation["accepted"]:
                     summary_meta = retry_meta
@@ -1598,6 +1669,7 @@ def _run_iteration(
             raw_keywords,
             classification,
             kw_match.get("scores", []),
+            job_title=title,
         )
         cr_s, tex_s, removed = _fit_to_page(
             attempt_dir,
@@ -1664,6 +1736,7 @@ def _run_iteration(
                         raw_keywords,
                         classification,
                         kw_match.get("scores", []),
+                        job_title=title,
                     )
                     cr_s, tex_s, removed = _fit_to_page(
                         attempt_dir,
@@ -1787,6 +1860,7 @@ def _log_pipeline_debug_summary(
             "entry_id": detail.get("entry_id"),
             "score": detail.get("score"),
             "stem": detail.get("stem"),
+            "reason": detail.get("reason"),
             "text": detail.get("text"),
         }
         for detail in _all_step_details(logger, "bullet_drop")
@@ -1862,33 +1936,7 @@ def _summary_validation_needs_llm(
     keywords: list[str],
     grounding: dict[str, Any],
 ) -> bool:
-    if not grounding.get("accepted"):
-        return False
-    if not summary.strip():
-        return False
-    if len(_dedupe([keyword for keyword in keywords if keyword.strip()])) > SUMMARY_KEYWORD_LIMIT:
-        return True
-    risky_kinds = {
-        KeywordKind.DOMAIN,
-        KeywordKind.IGNORE,
-        KeywordKind.EDUCATION,
-        KeywordKind.ROLE_TITLE,
-    }
-    for keyword in keywords:
-        policy = classify_keyword_policy(keyword)
-        if policy.kind in risky_kinds:
-            return True
-        if policy.reason == "unknown":
-            return True
-    summary_l = summary.lower()
-    risky_phrases = (
-        "expert in",
-        "specialized in",
-        "domain expertise",
-        "direct experience",
-        "extensive experience",
-    )
-    return any(phrase in summary_l for phrase in risky_phrases)
+    return bool(summary.strip()) and bool(grounding.get("accepted"))
 
 
 def _validate_summary_with_defense(
@@ -1966,28 +2014,12 @@ def run_ad_hoc_pipeline(
     resume_path: str | Path = DEFAULT_OG_RESUME_PATH,
 ) -> dict:
     """Clean Option B pipeline: JD + resume -> keyword inject -> compile 2 versions."""
+    title = repair_mojibake(title)
+    description = repair_mojibake(description)
+    company = repair_mojibake(company)
     logger = PipelineLogger()
     t_start = time.perf_counter()
     resolved_title = _resolve_job_title(title, description)
-    job_fit = analyze_job_fit_with_ollama(
-        input_title=title,
-        deterministic_title=resolved_title,
-        description=description,
-        logger=logger,
-    )
-    if job_fit.get("success") and job_fit.get("title"):
-        resolved_title = normalize_title_candidate(str(job_fit["title"])) or str(job_fit["title"])
-        logger.step(
-            "job_fit_analyzed_with_llm",
-            title=resolved_title,
-            role_family=job_fit.get("role_family"),
-            job_level=job_fit.get("job_level"),
-            mismatch=job_fit.get("mismatch"),
-            mismatch_reason=job_fit.get("mismatch_reason"),
-            unsupported_target_role=job_fit.get("unsupported_target_role"),
-            unsupported_target_reason=job_fit.get("unsupported_target_reason"),
-            duration_ms=job_fit.get("duration_ms"),
-        )
 
     logger.step(
         "config",
@@ -2000,6 +2032,7 @@ def run_ad_hoc_pipeline(
         title=resolved_title or "(empty)",
         description_len=len(description or ""),
     )
+    _log_ollama_runtime(logger, "after_job_fit")
 
     logger.step("parse_resume", path=str(resume_path))
     parsed = parse_resume_file(resume_path)
@@ -2015,22 +2048,36 @@ def run_ad_hoc_pipeline(
     )
 
     classification = classify_job(title=resolved_title, description=description)
-    if job_fit.get("success"):
-        classification = _merge_llm_classification(classification, job_fit)
-    if _classification_needs_llm_fallback(classification):
-        llm_classification = classify_job_with_ollama(
-            title=resolved_title,
+    missing_metadata = _missing_job_metadata_fields(resolved_title, classification)
+    job_fit = {"success": False, "skipped": not bool(missing_metadata)}
+    if missing_metadata:
+        job_fit = analyze_job_fit_with_ollama(
+            input_title=title,
+            deterministic_title=resolved_title,
             description=description,
+            missing_fields=missing_metadata,
+            target_lane_policy="",
+            unsupported_examples=[],
             logger=logger,
         )
-        classification = _merge_llm_classification(classification, llm_classification)
-        if llm_classification.get("success"):
+        if job_fit.get("success"):
+            if not resolved_title and job_fit.get("title"):
+                resolved_title = normalize_title_candidate(str(job_fit["title"])) or str(job_fit["title"])
+            classification = _merge_llm_classification(classification, job_fit)
             logger.step(
-                "classify_recovered_with_llm",
+                "job_metadata_filled_with_llm",
+                missing_fields=missing_metadata,
+                title=resolved_title,
                 role_family=classification.get("role_family"),
                 job_level=classification.get("job_level"),
-                duration_ms=llm_classification.get("duration_ms"),
+                mismatch=job_fit.get("mismatch"),
+                mismatch_reason=job_fit.get("mismatch_reason"),
+                unsupported_target_role=job_fit.get("unsupported_target_role"),
+                unsupported_target_reason=job_fit.get("unsupported_target_reason"),
+                duration_ms=job_fit.get("duration_ms"),
             )
+    else:
+        logger.step("job_metadata_llm_skipped", reason="title_role_family_job_level_present")
     logger.step(
         "classify_done",
         role_family=classification.get("role_family"),
@@ -2043,27 +2090,11 @@ def run_ad_hoc_pipeline(
         else None
     )
     if mismatch_reason:
-        logger.step("job_mismatch_error", reason=mismatch_reason)
-        ad_hoc_label = label or slugify(f"{company}_{resolved_title}") or "ad_hoc"
-        attempt_dir = ensure_dir(
-            build_attempt_dir(job_id=None, role_family="ad_hoc", ad_hoc_label=ad_hoc_label)
+        logger.step(
+            "job_mismatch_ignored_for_option_b",
+            reason=mismatch_reason,
+            behavior="continue_tailoring_user_provided_jd",
         )
-        log_path = write_text(attempt_dir / "pipeline_log.txt", logger.get_log_text())
-        return {
-            "attempt_dir": str(attempt_dir),
-            "pdf_path": None,
-            "tex_path": None,
-            "pdf_path_summary": None,
-            "tex_path_summary": None,
-            "log_path": log_path,
-            "compile_status": "failed",
-            "fits_one_page": False,
-            "keywords": [],
-            "present_keywords": [],
-            "missing_keywords": [],
-            "error_type": "JobMismatchError",
-            "error": mismatch_reason,
-        }
 
     keywords_dict = extract_keywords(
         title=resolved_title, description=description, classification=classification
@@ -2074,34 +2105,63 @@ def run_ad_hoc_pipeline(
         keywords=keywords_dict.get("must_have_terms", []),
     )
 
-    combined_keywords = _keywords_from_job_fit(
-        job_fit,
-        classification=classification,
-        keywords=keywords_dict,
+    logger.step(
+        "llm_keyword_extract_start",
+        backend=_config.DEFAULT_MODEL_BACKEND,
+        model=_config.OLLAMA_MODEL_NAME,
+        host=_config.OLLAMA_HOST,
     )
-    if combined_keywords is not None:
-        classification, keywords_dict, llm_meta = combined_keywords
-        logger.step(
-            "llm_keyword_extract_reused_job_fit",
-            source="analyze_job_fit",
-            jd_usable=llm_meta.get("jd_usable"),
-            keyword_count=len(keywords_dict.get("must_have_terms", [])),
-            duration_ms=llm_meta.get("duration_ms"),
-        )
+    keyword_result = extract_keywords_with_ollama(
+        title=resolved_title,
+        description=description,
+        role_family=str(classification.get("role_family") or ""),
+        job_level=str(classification.get("job_level") or ""),
+        logger=logger,
+    )
+    if keyword_result.get("success"):
+        jd_usable = job_fit.get("jd_usable") if isinstance(job_fit.get("jd_usable"), bool) else True
+        terms = list(keyword_result.get("keywords") or []) if jd_usable else []
+        keywords_dict = dict(keywords_dict)
+        keywords_dict["must_have_terms"] = terms
+        keywords_dict["nice_to_have_terms"] = []
+        keywords_dict["tools_and_technologies"] = list(terms)
+        keywords_dict["domain_terms"] = []
+        classification = dict(classification)
+        classification["weak_description"] = not jd_usable
+        flags = list(classification.get("concern_flags") or [])
+        if jd_usable:
+            flags = [flag for flag in flags if flag != "weak_description"]
+        elif "weak_description" not in flags:
+            flags.append("weak_description")
+        classification["concern_flags"] = flags
+        reason = str(job_fit.get("jd_usable_reason") or "").strip()
+        if reason:
+            reasons = list(classification.get("reasons") or [])
+            reasons.append(f"jd_usable_model: {reason[:200]}")
+            classification["reasons"] = reasons[:24]
+        llm_meta = {
+            "ollama_enriched": True,
+            "source": "keyword_extract",
+            "jd_usable": jd_usable,
+            "jd_usable_reason": reason,
+            "duration_ms": keyword_result.get("duration_ms"),
+            "error": keyword_result.get("error"),
+            "description_len": len(description or ""),
+            "prompt_excerpt_len": keyword_result.get("prompt_excerpt_len"),
+        }
     else:
-        logger.step(
-            "llm_keyword_extract_start",
-            backend=_config.DEFAULT_MODEL_BACKEND,
-            model=_config.OLLAMA_MODEL_NAME,
-            host=_config.OLLAMA_HOST,
-        )
-        classification, keywords_dict, llm_meta = enrich_with_ollama_if_enabled(
-            title=resolved_title,
-            description=description,
-            classification=classification,
-            keywords=keywords_dict,
-            logger=logger,
-        )
+        llm_meta = {
+            "ollama_enriched": False,
+            "source": "keyword_extract",
+            "jd_usable": job_fit.get("jd_usable")
+            if isinstance(job_fit.get("jd_usable"), bool)
+            else None,
+            "jd_usable_reason": str(job_fit.get("jd_usable_reason") or "").strip(),
+            "duration_ms": keyword_result.get("duration_ms"),
+            "error": keyword_result.get("error"),
+            "description_len": len(description or ""),
+            "prompt_excerpt_len": keyword_result.get("prompt_excerpt_len"),
+        }
     raw_keywords: list[str] = _normalize_extracted_keywords(
         keywords_dict.get("must_have_terms", [])
     )

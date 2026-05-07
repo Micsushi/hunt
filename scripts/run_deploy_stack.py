@@ -4,9 +4,16 @@
 from __future__ import annotations
 
 import argparse
+import json
+import os
 import subprocess
 import sys
+import time
+import urllib.error
+import urllib.request
 from pathlib import Path
+
+from scripts.resource_profiles import select_resource_profile
 
 ROOT = Path(__file__).resolve().parent.parent
 COMPOSE_FILE = ROOT / "docker-compose.pipeline.yml"
@@ -117,6 +124,17 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
         action="store_true",
         help="Show container status for the project instead of starting it.",
     )
+    parser.add_argument(
+        "--resource-profile",
+        choices=("auto", "fast", "balanced", "safe", "cpu"),
+        default="auto",
+        help="C2/Ollama resource profile. auto detects GPU VRAM. Default: auto.",
+    )
+    parser.add_argument(
+        "--no-prewarm",
+        action="store_true",
+        help="Skip deploy-time Ollama prewarm for keep-alive C2 profiles.",
+    )
     return parser.parse_args(argv)
 
 
@@ -179,6 +197,70 @@ def _build_command(
     return command
 
 
+def _needs_c2_resources(services: tuple[str, ...]) -> bool:
+    return bool({"ollama", "ollama-init", "fletcher"} & set(services))
+
+
+def _has_local_ollama(services: tuple[str, ...]) -> bool:
+    return "ollama" in services
+
+
+def _ollama_keep_alive_payload(value: str) -> str | int:
+    value = (value or "").strip()
+    if value in {"-1", "0"} or value.isdigit():
+        return int(value)
+    return value
+
+
+def _post_json(url: str, payload: dict[str, object], *, timeout: float) -> dict[str, object]:
+    req = urllib.request.Request(
+        url,
+        data=json.dumps(payload).encode("utf-8"),
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    with urllib.request.urlopen(req, timeout=timeout) as resp:
+        body = json.load(resp)
+    return body if isinstance(body, dict) else {}
+
+
+def _prewarm_ollama(deploy_env: dict[str, str]) -> bool:
+    host = deploy_env.get("HUNT_OLLAMA_PREWARM_HOST", "http://127.0.0.1:11435").rstrip("/")
+    chat_model = deploy_env.get("HUNT_OLLAMA_MODEL", "gemma4:e4b")
+    embed_model = deploy_env.get("HUNT_OLLAMA_EMBED_MODEL", "mxbai-embed-large")
+    keep_alive = _ollama_keep_alive_payload(deploy_env.get("HUNT_OLLAMA_KEEP_ALIVE", "-1"))
+    chat_payload = {
+        "model": chat_model,
+        "format": "json",
+        "stream": False,
+        "keep_alive": keep_alive,
+        "messages": [
+            {"role": "system", "content": "Return JSON only."},
+            {"role": "user", "content": 'Return {"ok": true}.'},
+        ],
+    }
+    embed_payload = {
+        "model": embed_model,
+        "prompt": "warmup",
+        "keep_alive": keep_alive,
+    }
+
+    last_error = ""
+    for attempt in range(1, 13):
+        try:
+            print(f"[deploy] prewarm_ollama: attempt={attempt} host={host}")
+            _post_json(f"{host}/api/chat", chat_payload, timeout=180)
+            _post_json(f"{host}/api/embeddings", embed_payload, timeout=60)
+            print(f"[deploy] prewarm_ollama: ok chat_model={chat_model} embed_model={embed_model}")
+            return True
+        except (OSError, TimeoutError, urllib.error.URLError, urllib.error.HTTPError) as exc:
+            last_error = str(exc) or exc.__class__.__name__
+            print(f"[deploy] prewarm_ollama: waiting error={last_error[:200]}")
+            time.sleep(min(5, attempt))
+    print(f"[deploy] prewarm_ollama: failed error={last_error[:200]}", file=sys.stderr)
+    return False
+
+
 def main() -> int:
     args = _parse_args(sys.argv[1:])
 
@@ -203,14 +285,47 @@ def main() -> int:
     print("[deploy] target:", target)
     print("[deploy] action:", action)
     print("[deploy] services:", ", ".join(services))
+
+    deploy_env = None
+    selection = None
+    if _needs_c2_resources(services):
+        selection = select_resource_profile(args.resource_profile)
+        deploy_env = {**os.environ, **selection.env}
+        print("[deploy] resource_profile_requested:", selection.requested)
+        print("[deploy] resource_profile:", selection.selected)
+        print("[deploy] resource_profile_reason:", selection.reason)
+        print(
+            "[deploy] gpu_vram_mb:",
+            selection.gpu_vram_mb if selection.gpu_vram_mb is not None else "unknown",
+        )
+        for key in sorted(selection.env):
+            print(f"[deploy] {key}={selection.env[key]}")
+    else:
+        print("[deploy] resource_profile: not_applicable")
     print("[deploy] command:", " ".join(command))
 
     if args.dry_run:
         print("[deploy] dry-run complete")
         return 0
 
-    result = subprocess.run(command, cwd=ROOT)
-    return result.returncode
+    result = subprocess.run(command, cwd=ROOT, env=deploy_env)
+    if result.returncode != 0:
+        return result.returncode
+
+    should_prewarm = (
+        selection is not None
+        and not args.no_prewarm
+        and action in {"up", "restart"}
+        and args.mode == "local"
+        and _has_local_ollama(services)
+        and (deploy_env or {}).get("HUNT_OLLAMA_KEEP_ALIVE") == "-1"
+    )
+    if should_prewarm:
+        if not _prewarm_ollama(deploy_env or os.environ.copy()):
+            return 1
+    elif selection is not None:
+        print("[deploy] prewarm_ollama: skipped")
+    return 0
 
 
 if __name__ == "__main__":

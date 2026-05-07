@@ -40,6 +40,7 @@ def _embed(text: str) -> list[float]:
         {
             "model": config.OLLAMA_EMBED_MODEL,
             "prompt": text.strip()[:2000],
+            "keep_alive": config.ollama_keep_alive_payload(),
         }
     ).encode("utf-8")
     req = urllib.request.Request(

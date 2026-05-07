@@ -43,6 +43,11 @@ Both files are **gitignored** - they contain personal data. See the template for
 | `HUNT_OLLAMA_HOST` | `http://127.0.0.1:11434` | Ollama HTTP API base URL. |
 | `HUNT_OLLAMA_MODEL` | `gemma4:e4b` | Ollama chat model (run `ollama pull gemma4:e4b` first). |
 | `HUNT_OLLAMA_TIMEOUT_SEC` | `120` | Per-request timeout in seconds. |
+| `HUNT_OLLAMA_KEEP_ALIVE` | `-1` | How long Ollama should keep chat and embedding models loaded after a request (`-1` keeps them loaded until the container stops). |
+| `HUNT_OLLAMA_NUM_PARALLEL` | unset | Expected Ollama request parallelism value to include in C2 runtime logs. |
+| `HUNT_OLLAMA_CONTEXT_LENGTH` | unset | Expected Ollama context length value to include in C2 runtime logs. |
+| `HUNT_OLLAMA_FLASH_ATTENTION` | unset | Expected Ollama flash-attention setting to include in C2 runtime logs. |
+| `HUNT_OLLAMA_KV_CACHE_TYPE` | unset | Expected Ollama KV-cache type to include in C2 runtime logs. |
 | `HUNT_RESUME_LOG_LLM_IO` | `1` | Write prompt + response to attempt dir (`0` to disable). |
 | `HUNT_RESUME_LOG_LLM_MAX_CHARS` | `120000` | Max chars captured from prompt/response. |
 

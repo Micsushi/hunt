@@ -17,6 +17,7 @@ from backend import gateway
 from hunter import db as hunter_db
 from scripts import migrate_sqlite_to_postgres as migration
 from scripts import (
+    resource_profiles,
     run_component_checks,
     run_component_ci,
     run_component_tests,
@@ -573,7 +574,7 @@ def test_backfill_enrichment_metadata_uses_boolean_safe_sql():
 def test_deploy_runner_target_mapping(monkeypatch):
     calls = []
 
-    def fake_run(command, cwd):
+    def fake_run(command, cwd, env=None):
         calls.append((command, cwd))
         return types.SimpleNamespace(returncode=0)
 
@@ -605,11 +606,22 @@ def test_deploy_runner_target_mapping(monkeypatch):
 def test_deploy_runner_server_mode_mapping(monkeypatch):
     calls = []
 
-    def fake_run(command, cwd):
-        calls.append((command, cwd))
+    def fake_run(command, cwd, env=None):
+        calls.append((command, cwd, env))
         return types.SimpleNamespace(returncode=0)
 
     monkeypatch.setattr(run_deploy_stack.subprocess, "run", fake_run)
+    monkeypatch.setattr(
+        run_deploy_stack,
+        "select_resource_profile",
+        lambda _requested: types.SimpleNamespace(
+            requested="auto",
+            selected="safe",
+            gpu_vram_mb=6144,
+            reason="gpu_vram_at_least_6gb",
+            env={"OLLAMA_NUM_PARALLEL": "1", "HUNT_BULLET_REWRITE_PARALLELISM": "1"},
+        ),
+    )
     monkeypatch.setattr(
         run_deploy_stack.sys,
         "argv",
@@ -649,6 +661,7 @@ def test_deploy_runner_server_mode_mapping(monkeypatch):
                 "coordinator",
             ],
             run_deploy_stack.ROOT,
+            {**os.environ, "OLLAMA_NUM_PARALLEL": "1", "HUNT_BULLET_REWRITE_PARALLELISM": "1"},
         )
     ]
 
@@ -656,11 +669,22 @@ def test_deploy_runner_server_mode_mapping(monkeypatch):
 def test_deploy_runner_stop_mapping(monkeypatch):
     calls = []
 
-    def fake_run(command, cwd):
-        calls.append((command, cwd))
+    def fake_run(command, cwd, env=None):
+        calls.append((command, cwd, env))
         return types.SimpleNamespace(returncode=0)
 
     monkeypatch.setattr(run_deploy_stack.subprocess, "run", fake_run)
+    monkeypatch.setattr(
+        run_deploy_stack,
+        "select_resource_profile",
+        lambda _requested: types.SimpleNamespace(
+            requested="auto",
+            selected="fast",
+            gpu_vram_mb=16311,
+            reason="gpu_vram_at_least_15gb",
+            env={"OLLAMA_NUM_PARALLEL": "5"},
+        ),
+    )
     monkeypatch.setattr(run_deploy_stack.sys, "argv", ["run_deploy_stack.py", "c2", "--stop"])
 
     assert run_deploy_stack.main() == 0
@@ -674,10 +698,21 @@ def test_deploy_runner_stop_mapping(monkeypatch):
 
 
 def test_deploy_runner_dry_run_skips_subprocess(monkeypatch, capsys):
-    def fail_run(_command, _cwd):
+    def fail_run(_command, _cwd, env=None):
         raise AssertionError("subprocess.run should not be called in dry-run mode")
 
     monkeypatch.setattr(run_deploy_stack.subprocess, "run", fail_run)
+    monkeypatch.setattr(
+        run_deploy_stack,
+        "select_resource_profile",
+        lambda _requested: types.SimpleNamespace(
+            requested="auto",
+            selected="fast",
+            gpu_vram_mb=16311,
+            reason="gpu_vram_at_least_15gb",
+            env={"OLLAMA_NUM_PARALLEL": "5"},
+        ),
+    )
     monkeypatch.setattr(run_deploy_stack.sys, "argv", ["run_deploy_stack.py", "all", "--dry-run"])
 
     assert run_deploy_stack.main() == 0
@@ -685,6 +720,45 @@ def test_deploy_runner_dry_run_skips_subprocess(monkeypatch, capsys):
     output = capsys.readouterr().out
     assert "docker compose" in output
     assert "coordinator" in output
+    assert "resource_profile: fast" in output
+
+
+def test_resource_profile_auto_thresholds(monkeypatch):
+    assert resource_profiles.select_resource_profile("auto", gpu_vram_mb=16311).selected == "fast"
+    assert (
+        resource_profiles.select_resource_profile("auto", gpu_vram_mb=12000).selected == "balanced"
+    )
+    assert resource_profiles.select_resource_profile("auto", gpu_vram_mb=6144).selected == "safe"
+    assert resource_profiles.select_resource_profile("auto", gpu_vram_mb=4096).selected == "cpu"
+
+    monkeypatch.setattr(resource_profiles, "detect_gpu_vram_mb", lambda: None)
+    assert resource_profiles.select_resource_profile("auto").selected == "safe"
+
+
+def test_deploy_runner_c2_fast_profile_sets_compose_env(monkeypatch, capsys):
+    calls = []
+
+    def fake_run(command, cwd, env=None):
+        calls.append((command, cwd, env))
+        return types.SimpleNamespace(returncode=0)
+
+    monkeypatch.setattr(run_deploy_stack.subprocess, "run", fake_run)
+    monkeypatch.setattr(
+        run_deploy_stack.sys,
+        "argv",
+        ["run_deploy_stack.py", "c2", "--resource-profile", "fast", "--no-build"],
+    )
+
+    assert run_deploy_stack.main() == 0
+
+    env = calls[0][2]
+    assert env["OLLAMA_NUM_PARALLEL"] == "5"
+    assert env["OLLAMA_CONTEXT_LENGTH"] == "8192"
+    assert env["HUNT_BULLET_REWRITE_PARALLELISM"] == "5"
+    assert env["HUNT_OLLAMA_KEEP_ALIVE"] == "-1"
+    output = capsys.readouterr().out
+    assert "resource_profile_requested: fast" in output
+    assert "resource_profile: fast" in output
 
 
 def test_deploy_runner_unknown_target_returns_error(monkeypatch, capsys):

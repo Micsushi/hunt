@@ -180,7 +180,8 @@ def _format_pipeline_debug_summary(detail: dict[str, Any]) -> list[str]:
             "    - "
             f"{drop.get('bullet_id')} "
             f"({drop.get('kind')}:{drop.get('entry_id')}, "
-            f"score={drop.get('score')}, stem={drop.get('stem')})"
+            f"score={drop.get('score')}, stem={drop.get('stem')}, "
+            f"reason={drop.get('reason') or 'unknown'})"
         )
         if drop.get("text"):
             lines.append(f"      text: {drop.get('text')}")

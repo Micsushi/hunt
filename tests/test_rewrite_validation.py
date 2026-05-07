@@ -9,7 +9,7 @@ from fletcher.llm.llm_enrich import (
 )
 
 
-def test_security_domain_terms_require_direct_support():
+def test_domain_terms_do_not_get_extra_hardcoded_direct_support():
     for keyword in [
         "real-time threat intelligence",
         "SIEM",
@@ -19,7 +19,7 @@ def test_security_domain_terms_require_direct_support():
         "AI-driven platform",
     ]:
         assert categorize_keyword(keyword) == "domain"
-        assert keyword_requires_direct_support(keyword)
+        assert not keyword_requires_direct_support(keyword)
 
 
 def test_common_tech_terms_do_not_require_direct_support():
@@ -212,14 +212,14 @@ def test_summary_grounding_does_not_reject_unprompted_domain_claim():
     assert result["accepted"] is True
 
 
-def test_summary_rejects_junior_tone():
+def test_summary_grounding_no_longer_runs_banned_tone_d_check():
     result = validate_summary_grounding(
         "Motivated developer eager to contribute immediately.",
         "Experience: Software Developer.",
         [],
     )
 
-    assert result["accepted"] is False
+    assert result == {"accepted": True, "reasons": []}
 
 
 def test_auto_repairs_microservices_backend_services_redundancy():

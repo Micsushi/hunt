@@ -3,10 +3,61 @@ import unittest
 from unittest.mock import patch
 
 from fletcher import config
+from fletcher.llm import llm_enrich, rag
 from fletcher.llm.llm_enrich import enrich_with_ollama_if_enabled
 
 
+class _JsonResponse:
+    def __init__(self, payload):
+        self._payload = json.dumps(payload).encode("utf-8")
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_args):
+        return False
+
+    def read(self):
+        return self._payload
+
+
 class Component2OllamaTests(unittest.TestCase):
+    def test_ollama_chat_sends_keep_alive(self):
+        captured = {}
+
+        def fake_urlopen(req, timeout):
+            captured["payload"] = json.loads(req.data.decode("utf-8"))
+            captured["timeout"] = timeout
+            return _JsonResponse({"message": {"content": '{"ok": true}'}})
+
+        with patch.object(config, "OLLAMA_KEEP_ALIVE", "-1"):
+            with patch("fletcher.llm.llm_enrich.urllib.request.urlopen", fake_urlopen):
+                result = llm_enrich._ollama_chat('Return {"ok": true}.')
+
+        self.assertEqual(result, '{"ok": true}')
+        self.assertEqual(captured["payload"]["keep_alive"], -1)
+        self.assertEqual(captured["payload"]["model"], config.OLLAMA_MODEL_NAME)
+
+    def test_ollama_embedding_sends_keep_alive(self):
+        captured = {}
+
+        def fake_urlopen(req, timeout):
+            captured["payload"] = json.loads(req.data.decode("utf-8"))
+            captured["timeout"] = timeout
+            return _JsonResponse({"embedding": [0.1, 0.2, 0.3]})
+
+        with patch.object(config, "OLLAMA_KEEP_ALIVE", "-1"):
+            with patch("fletcher.llm.rag.urllib.request.urlopen", fake_urlopen):
+                result = rag._embed("Python services")
+
+        self.assertEqual(result, [0.1, 0.2, 0.3])
+        self.assertEqual(captured["payload"]["keep_alive"], -1)
+        self.assertEqual(captured["payload"]["model"], config.OLLAMA_EMBED_MODEL)
+
+    def test_ollama_keep_alive_duration_stays_string(self):
+        with patch.object(config, "OLLAMA_KEEP_ALIVE", "30m"):
+            self.assertEqual(config.ollama_keep_alive_payload(), "30m")
+
     def test_heuristic_backend_skips_network(self):
         with patch.object(config, "DEFAULT_MODEL_BACKEND", "heuristic"):
             with patch("fletcher.llm.llm_enrich._ollama_chat") as mock_chat:

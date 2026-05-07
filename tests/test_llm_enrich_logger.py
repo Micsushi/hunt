@@ -60,6 +60,7 @@ def test_pipeline_debug_summary_separates_rag_metadata(capsys):
                 "entry_id": "e1",
                 "score": 0.42,
                 "stem": "output_summary",
+                "reason": "page_fit_lowest_score",
                 "text": "Dropped bullet text.",
             }
         ],
@@ -72,6 +73,7 @@ def test_pipeline_debug_summary_separates_rag_metadata(capsys):
     assert "low_count" not in medium_section
     assert "  Low Count: 2" in out
     assert "  RAG Used: True" in out
+    assert "reason=page_fit_lowest_score" in out
     assert "text: Dropped bullet text." in out
 
 
@@ -362,6 +364,8 @@ def test_summary_prompt_bans_junior_tone(monkeypatch):
     assert "No filler" in captured[0]
     assert "motivated" in captured[0].lower()
     assert "eager" in captured[0].lower()
+    assert "Do not use phrases like eager to" in captured[0]
+    assert "State what the candidate does, not what they want" in captured[0]
 
 
 def test_summary_prompt_caps_jd_keywords_and_starts_from_candidate_facts(monkeypatch):
@@ -379,13 +383,14 @@ def test_summary_prompt_caps_jd_keywords_and_starts_from_candidate_facts(monkeyp
             ["strategy", "dashboards", "business cases", "forecasting models"],
         )
 
-    assert "Optional JD keywords, max 3" in captured[0]
+    assert "Optional job description keywords, max 3" in captured[0]
     assert "strategy, dashboards, business cases, forecasting models" in captured[0]
     assert "Start with candidate facts" in captured[0]
     assert "paraphrase candidate background instead of copying bullet wording" in captured[0]
     assert "Bad summary example" in captured[0]
     assert "Good summary example" in captured[0]
     assert "keywords_used" in captured[0]
+    assert "keyword_use_reason" in captured[0]
     assert "retry_reason" in captured[0]
 
 
@@ -397,17 +402,50 @@ def test_keyword_extract_prompt_prioritizes_stack_and_skips_noise():
         "Use SQL and Python. Co-op role with reports and dashboards.",
     )
 
-    assert "0 to 30 resume-tailoring keywords" in prompt
-    assert "named tech, tools, platforms" in prompt
+    assert "0 to 30 resume bullet keywords" in prompt
+    assert "tech stack terms" in prompt
+    assert "trait terms" in prompt
+    assert "Every keyword must be 1 to 3 words" in prompt
     assert "job titles, role labels, seniority" in prompt
     assert "certifications" in prompt
-    assert "education fields" in prompt
-    assert "unsupported_target_role" in prompt
+    assert "unsupported_target_role" not in prompt
     assert "IDE/editor names" in prompt
-    assert "vague nouns or standalone deliverables" in prompt
+    assert "vague nouns" in prompt
 
 
-def test_summary_grounding_rejects_banned_tone():
+def test_keyword_extract_prompt_hard_bans_actual_titles_and_labels():
+    from fletcher.llm.llm_enrich import _build_user_prompt
+
+    prompt = _build_user_prompt(
+        "Full Stack Developer Intern",
+        "Full Stack Developer role using backend engineering and web-based development.",
+    )
+
+    assert (
+        "Never return the actual job title, role title, seniority label, employment type, "
+        "degree, or major as a keyword."
+    ) in prompt
+    assert "backend engineering" in prompt
+    assert "web-based development" in prompt
+
+
+def test_jd_prompt_excerpt_includes_late_requirement_sections():
+    from fletcher.llm.llm_enrich import build_jd_prompt_excerpt
+
+    description = (
+        "Company overview. " * 400
+        + "\nRequirements\nLate requirement: medication administration and charting.\n"
+        + "Closing details. " * 80
+    )
+
+    excerpt = build_jd_prompt_excerpt(description, 1800)
+
+    assert "Company overview" in excerpt
+    assert "Late requirement: medication administration and charting" in excerpt
+    assert len(excerpt) <= 1800
+
+
+def test_summary_grounding_is_prompt_validation_compatibility_wrapper():
     from fletcher.llm.llm_enrich import validate_summary_grounding
 
     result = validate_summary_grounding(
@@ -416,8 +454,7 @@ def test_summary_grounding_rejects_banned_tone():
         [],
     )
 
-    assert result["accepted"] is False
-    assert "banned_tone:eager" in result["reasons"]
+    assert result == {"accepted": True, "reasons": []}
 
 
 def test_summary_prompt_uses_pm_positioning(monkeypatch):
@@ -437,8 +474,33 @@ def test_summary_prompt_uses_pm_positioning(monkeypatch):
             job_level="manager",
         )
 
-    assert "product-adjacent strengths" in captured[0]
-    assert "Do not use a generic software-only summary" in captured[0]
+    assert "Role family: pm" in captured[0]
+    assert "Job level: manager" in captured[0]
+    assert "Target role context" in captured[0]
+
+
+def test_summary_prompt_positions_data_analyst_intern_context(monkeypatch):
+    monkeypatch.setattr("fletcher.llm.llm_enrich.config.DEFAULT_MODEL_BACKEND", "ollama")
+    captured: list[str] = []
+
+    def fake_chat(prompt: str, **_kwargs) -> str:
+        captured.append(prompt)
+        return '{"summary": "Data-focused analyst summary."}'
+
+    with patch("fletcher.llm.llm_enrich._ollama_chat", fake_chat):
+        generate_summary(
+            "Relevant evidence: SQL dashboards, Python analysis, stakeholder reports.",
+            "Pricing Strategy Analyst Intern",
+            ["SQL", "forecasting"],
+            role_family="data",
+            job_level="intern",
+        )
+
+    prompt = captured[0]
+    assert "Position the candidate for the exact job title and level." in prompt
+    assert "technical analyst or data-focused analyst" in prompt
+    assert "student or intern-level framing" in prompt
+    assert "without eager language" in prompt
 
 
 def test_summary_validation_prompt_requires_rejecting_awkward_claims(monkeypatch):
@@ -563,6 +625,26 @@ def test_summary_filter_retries_unrequested_terms(monkeypatch):
     assert result["excluded"] == ["predictive modeling"]
 
 
+def test_summary_filter_prompt_never_includes_role_titles(monkeypatch):
+    monkeypatch.setattr("fletcher.llm.llm_enrich.config.DEFAULT_MODEL_BACKEND", "ollama")
+    captured: list[str] = []
+
+    def fake_chat(prompt: str) -> str:
+        captured.append(prompt)
+        return '{"included": ["Python"], "excluded": ["Full Stack Developer"], "reason": "ok"}'
+
+    with patch("fletcher.llm.llm_enrich._ollama_chat", fake_chat):
+        filter_summary_keywords_with_ollama(
+            keywords=["Full Stack Developer", "Python"],
+            candidate_context="Built Python services.",
+            job_title="Full Stack Developer",
+            logger=_make_logger(),
+        )
+
+    assert "Never include a job title or role label in included." in captured[0]
+    assert "The title is already given separately." in captured[0]
+
+
 def test_skill_bucket_retries_missing_required_keys(monkeypatch):
     monkeypatch.setattr("fletcher.llm.llm_enrich.config.DEFAULT_MODEL_BACKEND", "ollama")
     responses = [
@@ -634,7 +716,7 @@ def test_skill_bucket_discards_invalid_terms_without_retry(monkeypatch):
     assert result["ignored"] == []
 
 
-def test_job_fit_prompt_treats_network_cloud_roles_as_supported(monkeypatch):
+def test_job_fit_prompt_is_generic_without_target_lane_policy(monkeypatch):
     from fletcher.llm.llm_enrich import analyze_job_fit_with_ollama
 
     monkeypatch.setattr("fletcher.llm.llm_enrich.config.DEFAULT_MODEL_BACKEND", "ollama")
@@ -643,65 +725,95 @@ def test_job_fit_prompt_treats_network_cloud_roles_as_supported(monkeypatch):
     def fake_chat(prompt: str) -> str:
         captured.append(prompt)
         return (
-            '{"title": "Network Engineer", "role_family": "infrastructure", '
-            '"job_level": "senior", "mismatch": false, '
+            '{"title": "Registered Nurse", "role_family": "healthcare", '
+            '"job_level": "mid", "mismatch": false, '
             '"mismatch_reason": "", "unsupported_target_role": false, '
             '"unsupported_target_reason": "", "confidence": 0.9, '
-            '"jd_usable": true, "jd_usable_reason": "Detailed infrastructure role.", '
-            '"keywords": ["cloud infrastructure", "BGP", "firewalls"]}'
+            '"jd_usable": true, "jd_usable_reason": "Detailed role."}'
         )
 
     with patch("fletcher.llm.llm_enrich._ollama_chat", fake_chat):
         result = analyze_job_fit_with_ollama(
             input_title="",
-            deterministic_title="Network Engineer",
-            description="Cloud infrastructure role with LAN/WAN, firewalls, BGP, and OSPF.",
+            deterministic_title="Registered Nurse",
+            description="Patient care role with triage, charting, and care coordination.",
             logger=_make_logger(),
         )
 
     assert result["mismatch"] is False
-    assert result["role_family"] == "infrastructure"
-    assert result["keywords"] == ["cloud infrastructure", "BGP", "firewalls"]
+    assert result["role_family"] == "healthcare"
     assert result["jd_usable"] is True
-    assert "network" in captured[0].lower()
-    assert "cloud" in captured[0].lower()
-    assert "computer" in captured[0].lower()
-    assert "0 to 30 resume-tailoring keywords" in captured[0]
-    assert "degrees, majors" in captured[0]
-    assert "Do not route keywords" in captured[0]
+    assert "no target-lane policy was supplied" in captured[0].lower()
+    assert "civil" not in captured[0].lower()
+    assert "mechanical" not in captured[0].lower()
+    assert "0 to 30" not in captured[0]
     assert "Only accepted answer format" in captured[0]
-    assert "removed_keywords" not in captured[0]
 
 
-def test_job_fit_prompt_reports_unsupported_target_role(monkeypatch):
+def test_job_fit_prompt_uses_injected_target_lane_policy(monkeypatch):
     from fletcher.llm.llm_enrich import analyze_job_fit_with_ollama
 
     monkeypatch.setattr("fletcher.llm.llm_enrich.config.DEFAULT_MODEL_BACKEND", "ollama")
+    captured: list[str] = []
 
-    with patch(
-        "fletcher.llm.llm_enrich._ollama_chat",
-        return_value=(
+    def fake_chat(prompt: str) -> str:
+        captured.append(prompt)
+        return (
             '{"title": "Package Engineer", "role_family": "general", '
             '"job_level": "mid", "mismatch": false, "mismatch_reason": "", '
             '"unsupported_target_role": true, '
-            '"unsupported_target_reason": "Mechanical package engineering is outside the configured lane.", '
-            '"confidence": 0.9, "jd_usable": true, "jd_usable_reason": "Detailed JD.", '
-            '"keywords": ["pumps"]}'
-        ),
-    ):
+            '"unsupported_target_reason": "Outside supplied lane.", '
+            '"confidence": 0.9, "jd_usable": true, "jd_usable_reason": "Detailed JD."}'
+        )
+
+    with patch("fletcher.llm.llm_enrich._ollama_chat", fake_chat):
         result = analyze_job_fit_with_ollama(
             input_title="",
             deterministic_title="Package Engineer",
             description="Mechanical package engineering for pumps and vessels.",
+            target_lane_policy="Configured queue lane only.",
+            unsupported_examples=["example outside lane"],
             logger=_make_logger(),
         )
 
     assert result["mismatch"] is False
     assert result["unsupported_target_role"] is True
-    assert "Mechanical package" in result["unsupported_target_reason"]
+    assert "Outside supplied lane" in result["unsupported_target_reason"]
+    assert "Configured queue lane only" in captured[0]
+    assert "example outside lane" in captured[0]
 
 
-def test_job_fit_filters_popular_ide_keywords(monkeypatch):
+def test_job_metadata_prompt_uses_3000_char_excerpt(monkeypatch):
+    from fletcher.llm.llm_enrich import analyze_job_fit_with_ollama
+
+    monkeypatch.setattr("fletcher.llm.llm_enrich.config.DEFAULT_MODEL_BACKEND", "ollama")
+    captured: list[str] = []
+
+    def fake_chat(prompt: str) -> str:
+        captured.append(prompt)
+        return (
+            '{"title": "Software Engineer", "role_family": "software", '
+            '"job_level": "mid", "mismatch": false, "mismatch_reason": "", '
+            '"unsupported_target_role": false, "unsupported_target_reason": "", '
+            '"confidence": 0.9, "jd_usable": true, "jd_usable_reason": ""}'
+        )
+
+    with patch("fletcher.llm.llm_enrich._ollama_chat", fake_chat):
+        analyze_job_fit_with_ollama(
+            input_title="",
+            deterministic_title="",
+            description=("A" * 3000) + "TAIL_SHOULD_NOT_APPEAR",
+            missing_fields=["title", "role_family", "job_level"],
+            logger=_make_logger(),
+        )
+
+    assert "Fill missing job metadata" in captured[0]
+    excerpt = captured[0].split("Job description excerpt:\n", 1)[1].split("\nNo target-lane", 1)[0]
+    assert len(excerpt) == 3000
+    assert "TAIL_SHOULD_NOT_APPEAR" not in captured[0]
+
+
+def test_job_metadata_ignores_low_confidence_fields(monkeypatch):
     from fletcher.llm.llm_enrich import analyze_job_fit_with_ollama
 
     monkeypatch.setattr("fletcher.llm.llm_enrich.config.DEFAULT_MODEL_BACKEND", "ollama")
@@ -709,16 +821,37 @@ def test_job_fit_filters_popular_ide_keywords(monkeypatch):
     with patch(
         "fletcher.llm.llm_enrich._ollama_chat",
         return_value=(
-            '{"title": "SDET", "role_family": "software", "job_level": "mid", '
+            '{"title": "Guess", "role_family": "software", "job_level": "senior", '
             '"mismatch": false, "mismatch_reason": "", '
             '"unsupported_target_role": false, "unsupported_target_reason": "", '
-            '"confidence": 0.9, "jd_usable": true, "jd_usable_reason": "Detailed role.", '
-            '"keywords": ["Android Studio", "Xcode", "Swift", "Appium"]}'
+            '"confidence": 0.7, "jd_usable": true, "jd_usable_reason": ""}'
         ),
     ):
         result = analyze_job_fit_with_ollama(
             input_title="",
-            deterministic_title="SDET",
+            deterministic_title="",
+            description="Vague posting.",
+            missing_fields=["title", "role_family", "job_level"],
+            logger=_make_logger(),
+        )
+
+    assert result["confidence"] == 0.7
+    assert result["title"] == ""
+    assert result["role_family"] == ""
+    assert result["job_level"] == ""
+
+
+def test_extract_keywords_filters_popular_ide_keywords(monkeypatch):
+    from fletcher.llm.llm_enrich import extract_keywords_with_ollama
+
+    monkeypatch.setattr("fletcher.llm.llm_enrich.config.DEFAULT_MODEL_BACKEND", "ollama")
+
+    with patch(
+        "fletcher.llm.llm_enrich._ollama_chat",
+        return_value='{"keywords": ["Android Studio", "Xcode", "Swift", "Appium"]}',
+    ):
+        result = extract_keywords_with_ollama(
+            title="SDET",
             description="Mobile testing role.",
             logger=_make_logger(),
         )
@@ -726,24 +859,17 @@ def test_job_fit_filters_popular_ide_keywords(monkeypatch):
     assert result["keywords"] == ["Swift", "Appium"]
 
 
-def test_job_fit_does_not_post_filter_titles(monkeypatch):
-    from fletcher.llm.llm_enrich import analyze_job_fit_with_ollama
+def test_extract_keywords_does_not_post_filter_titles(monkeypatch):
+    from fletcher.llm.llm_enrich import extract_keywords_with_ollama
 
     monkeypatch.setattr("fletcher.llm.llm_enrich.config.DEFAULT_MODEL_BACKEND", "ollama")
 
     with patch(
         "fletcher.llm.llm_enrich._ollama_chat",
-        return_value=(
-            '{"title": "Backend Developer", "role_family": "software", "job_level": "mid", '
-            '"mismatch": false, "mismatch_reason": "", '
-                '"unsupported_target_role": false, "unsupported_target_reason": "", '
-                '"confidence": 0.9, "jd_usable": true, "jd_usable_reason": "Detailed role.", '
-                '"keywords": ["RabbitMQ", "Software Engineer"]}'
-            ),
-        ):
-        result = analyze_job_fit_with_ollama(
-            input_title="",
-            deterministic_title="Backend Developer",
+        return_value='{"keywords": ["RabbitMQ", "Software Engineer"]}',
+    ):
+        result = extract_keywords_with_ollama(
+            title="Backend Developer",
             description="Backend role using RabbitMQ.",
             logger=_make_logger(),
         )
@@ -752,18 +878,15 @@ def test_job_fit_does_not_post_filter_titles(monkeypatch):
     assert "removed_keywords" not in result
 
 
-def test_job_fit_ignores_legacy_keyword_routes(monkeypatch):
-    from fletcher.llm.llm_enrich import analyze_job_fit_with_ollama
+def test_extract_keywords_ignores_legacy_keyword_routes(monkeypatch):
+    from fletcher.llm.llm_enrich import extract_keywords_with_ollama
 
     monkeypatch.setattr("fletcher.llm.llm_enrich.config.DEFAULT_MODEL_BACKEND", "ollama")
 
     with patch(
         "fletcher.llm.llm_enrich._ollama_chat",
         return_value=(
-            '{"title": "AI Developer", "role_family": "software", "job_level": "mid", '
-            '"mismatch": false, "mismatch_reason": "", '
-            '"unsupported_target_role": false, "unsupported_target_reason": "", '
-            '"confidence": 0.9, "jd_usable": true, "jd_usable_reason": "Detailed role.", '
+            "{"
             '"keywords": ["AI models", "complex systems integration", "analytical"], '
             '"keyword_routes": ['
             '{"keyword": "AI models", "route": "rewrite", "kind": "technology", "reason": "AI concept"},'
@@ -771,9 +894,8 @@ def test_job_fit_ignores_legacy_keyword_routes(monkeypatch):
             '{"keyword": "analytical", "route": "summary", "kind": "quality_trait", "reason": "quality"}]}'
         ),
     ):
-        result = analyze_job_fit_with_ollama(
-            input_title="",
-            deterministic_title="AI Developer",
+        result = extract_keywords_with_ollama(
+            title="AI Developer",
             description="AI developer role.",
             logger=_make_logger(),
         )
@@ -782,7 +904,7 @@ def test_job_fit_ignores_legacy_keyword_routes(monkeypatch):
     assert "keyword_routes" not in result
 
 
-def test_job_fit_overrides_process_engineer_as_unsupported(monkeypatch):
+def test_job_fit_without_policy_forces_unsupported_false(monkeypatch):
     from fletcher.llm.llm_enrich import analyze_job_fit_with_ollama
 
     monkeypatch.setattr("fletcher.llm.llm_enrich.config.DEFAULT_MODEL_BACKEND", "ollama")
@@ -792,9 +914,8 @@ def test_job_fit_overrides_process_engineer_as_unsupported(monkeypatch):
         return_value=(
             '{"title": "Process Engineer", "role_family": "general", '
             '"job_level": "mid", "mismatch": false, "mismatch_reason": "", '
-            '"unsupported_target_role": false, "unsupported_target_reason": "", '
-            '"confidence": 0.9, "jd_usable": true, "jd_usable_reason": "Detailed role.", '
-            '"keywords": ["Aspen HYSYS", "HAZOPs", "Process Simulation"]}'
+            '"unsupported_target_role": true, "unsupported_target_reason": "Model tried to apply a lane.", '
+            '"confidence": 0.9, "jd_usable": true, "jd_usable_reason": "Detailed role."}'
         ),
     ):
         result = analyze_job_fit_with_ollama(
@@ -804,8 +925,8 @@ def test_job_fit_overrides_process_engineer_as_unsupported(monkeypatch):
             logger=_make_logger(),
         )
 
-    assert result["unsupported_target_role"] is True
-    assert "outside Hunt" in result["unsupported_target_reason"]
+    assert result["unsupported_target_role"] is False
+    assert result["unsupported_target_reason"] == ""
 
 
 def test_low_rag_continue_check_can_block_outside_lane(monkeypatch):
@@ -825,6 +946,8 @@ def test_low_rag_continue_check_can_block_outside_lane(monkeypatch):
             description="Use Aspen HYSYS, P&IDs, HAZOPs, and flare sizing.",
             keywords=["Aspen HYSYS", "P&IDs"],
             rag_scores=[{"keyword": "Aspen HYSYS", "tier": "mid", "score": 0.64}],
+            target_lane_policy="Configured queue lane.",
+            unsupported_examples=["process engineering"],
             logger=_make_logger(),
         )
 
@@ -832,7 +955,8 @@ def test_low_rag_continue_check_can_block_outside_lane(monkeypatch):
     assert result["continue_tailoring"] is False
     assert result["unsupported_target_role"] is True
     assert "fewer than 3 high-confidence matches" in chat.call_args.args[0]
-    assert "queued jobs already stored in Hunt" in chat.call_args.args[0]
+    assert "queued jobs already stored in the workflow" in chat.call_args.args[0]
+    assert "Configured queue lane" in chat.call_args.args[0]
 
 
 def test_pipeline_logger_event_ids_are_monotonic():
