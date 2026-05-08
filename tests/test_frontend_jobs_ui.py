@@ -141,6 +141,9 @@ def test_fletcher_option_b_history_actions_are_visible():
     assert "Open workspace" in fletcher
     assert "Starting PDF" in fletcher
     assert "Starting TeX" in fletcher
+    assert "moreMenu" in fletcher
+    assert "moreMenuPanel" in fletcher
+    assert "More actions for" in fletcher
     assert "PDF" in fletcher
     assert "TeX" in fletcher
     assert "Download log" in fletcher
@@ -148,14 +151,22 @@ def test_fletcher_option_b_history_actions_are_visible():
     assert "Delete" in fletcher
     assert "FletcherJobDetailModal" in fletcher
     assert 'role="dialog"' in fletcher
+    assert "detailBody" in fletcher
+    assert "detailMetaPanel" in fletcher
+    assert "detailContentPanel" in fletcher
     assert "fletcherSourceLabel" in fletcher
     assert "Job description" in fletcher
     assert "Job details" in fletcher
     assert "queueTitleButton" in styles
     assert "text-overflow: ellipsis" in styles
     assert "height: 112px" in styles
+    assert "height: 78px" in styles
     assert "grid-template-columns: repeat(3" in styles
+    assert "historyActions" in styles
+    assert ".moreMenu" in styles
     assert "modalBackdrop" in styles
+    assert "width: min(1500px, calc(100vw - 56px))" in styles
+    assert "grid-template-columns: minmax(250px, 0.28fr) minmax(0, 1fr)" in styles
 
 
 def test_fletcher_active_queue_shows_progress_bar_and_percent():
@@ -164,18 +175,64 @@ def test_fletcher_active_queue_shows_progress_bar_and_percent():
     types = read("frontend/src/pages/Fletcher/review/types.ts")
 
     assert "fletcherProgressPercent" in fletcher
+    assert "Untitled pasted JD" in fletcher
+    assert "Ad-hoc resume" not in fletcher
     assert 'role="progressbar"' in fletcher
     assert "{progressPercent}%" in fletcher
     assert "displayedProgress" in fletcher
+    assert "fletcherStepProgressTarget" in fletcher
+    assert "easeOutCubic" not in fletcher
+    assert "FLETCHER_FAST_RAMP_MS" not in fletcher
+    assert "FLETCHER_DISPLAY_PROGRESS_STORAGE_KEY" in fletcher
+    assert "readDisplayedProgress" in fletcher
+    assert "localStorage.setItem(FLETCHER_DISPLAY_PROGRESS_STORAGE_KEY" in fletcher
+    assert "upsertFletcherJob" in fletcher
+    assert "qc.setQueriesData<FletcherJobsCache>" in fletcher
+    assert "FLETCHER_PROGRESS_CRUISE_STEP_MS = 500" in fletcher
+    assert "FLETCHER_PROGRESS_FINAL_STEP_MS = 200" in fletcher
+    assert "FLETCHER_PROGRESS_SLOW_DELAY_MULTIPLIER = 1.5" in fletcher
+    assert "FLETCHER_PROGRESS_VERY_SLOW_DELAY_MULTIPLIER = 2" in fletcher
+    assert "FLETCHER_PROGRESS_VERY_SLOW_AT = 95" in fletcher
+    assert "FLETCHER_PROGRESS_CAP_MIN = 80" in fletcher
+    assert "FLETCHER_PROGRESS_CAP_MAX = 90" in fletcher
+    assert "FLETCHER_COMPLETION_HOLD_MS = 500" in fletcher
+    assert "lastTickAt" in fletcher
+    assert "currentTarget" in fletcher
+    assert "nextDelayMs" in fletcher
+    assert "preCompleteCap" in fletcher
+    assert "progressBlockedByFinishingJob" in fletcher
+    assert "completingProgressJobIds" in fletcher
+    assert "historyBlockedJobIds" in fletcher
+    assert "activeInCurrentView" in fletcher
+    assert "aCompleting" in fletcher
+    assert "bCompleting" in fletcher
+    assert "return aCompleting ? -1 : 1" in fletcher
+    assert "showProgressBar" in fletcher
+    assert "const localProgress = displayedProgress[job.queue_item_id]?.value" in fletcher
+    assert "typeof localProgress === 'number'" in fletcher
+    assert "current + 1" in fletcher
+    assert "const initialValue = existing ? existing.value : 1" in fletcher
+    assert "job.status === 'queued' ? progressPercent : 1" in fletcher
+    assert "value: initialValue" in fletcher
+    assert "Math.min(initialValue, 1)" not in fletcher
+    assert "displayedProgressJobIds" in fletcher
+    assert "ACTIVE_FLETCHER_STATUSES.has(job.status)" in fletcher
+    assert "displayedProgressJobIds.has(job.queue_item_id)" in fletcher
+    assert "displayedProgress[job.queue_item_id]?.activeInCurrentView" in fletcher
+    assert "target >= 100 || smoothed < currentProgress.preCompleteCap" in fletcher
+    assert "fletcherProgressDelayMultiplier" in fletcher
+    assert "currentProgress.nextDelayMs * fletcherProgressDelayMultiplier(smoothed)" in fletcher
     assert "nextSmoothedProgress" in fletcher
     assert "window.setInterval" in fletcher
-    assert "200)" in fletcher
+    assert "FLETCHER_PROGRESS_TICK_MS = 50" in fletcher
     assert "FLETCHER_QUEUE_ACTIVE_REFETCH_MS = 5000" in fletcher
     assert "FLETCHER_QUEUE_IDLE_REFETCH_MS = 30000" in fletcher
     assert "fletcherQueueRefetchInterval" in fletcher
     assert "progressRow" in styles
     assert "progressTrack" in styles
     assert "progressFill" in styles
+    assert "queueListScrollable" in styles
+    assert "overflow-y: auto" in styles
     assert "transition: width 220ms linear" in styles
     assert "prefers-reduced-motion" in styles
     assert "percent?: number" in types
@@ -245,7 +302,8 @@ def test_fletcher_review_workspace_has_keyword_panel_and_block_selection():
 
     assert "KeywordPanel" in workspace
     assert "normalizeKeywordScores" in workspace
-    assert "Best bullet" in workspace
+    assert "Best resume bullet" in workspace
+    assert "contextLabel" in workspace
     assert "onClick={() => onSelect({ block })}" in workspace
     assert "selectedBlock" in workspace
     assert "selected?.segment?.id" in workspace
@@ -356,3 +414,150 @@ console.log(JSON.stringify({
         }
     ]
     assert payload["human"] == "github.com/NatRunners/StudyAmp"
+
+
+def test_fletcher_workspace_handles_flexible_skill_categories():
+    script = r"""
+const fs = require('fs');
+const vm = require('vm');
+const ts = require('typescript');
+const source = fs.readFileSync('src/pages/Fletcher/review/documentBlocks.ts', 'utf8');
+const compiled = ts.transpileModule(source, {
+  compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2020 },
+});
+const moduleObj = { exports: {} };
+vm.runInNewContext(compiled.outputText, {
+  require,
+  module: moduleObj,
+  exports: moduleObj.exports,
+  encodeURIComponent,
+  decodeURIComponent,
+});
+const { buildReviewBlocks, setBlockText, skillRowsForDoc } = moduleObj.exports;
+const doc = {
+  source_path: 'test',
+  preamble: '',
+  header: { name: 'A', contact_line: 'a@example.com' },
+  summary: '',
+  education: { entry: { entry_id: 'edu', institution_and_degree: 'School', date_text: '2026' }, bullets: [] },
+  experience: [],
+  projects: [],
+  skills: {
+    languages: ['Python'],
+    frameworks: ['FastAPI'],
+    developer_tools: ['Git'],
+    categories: {
+      Languages: ['Python'],
+      'Cloud & Data': ['AWS', 'PostgreSQL'],
+      'Developer Tools': ['Git'],
+    },
+  },
+};
+const rows = skillRowsForDoc(doc);
+const blocks = buildReviewBlocks(doc, doc, doc);
+const cloudBlock = blocks.find((block) => block.label === 'Cloud & Data');
+const updated = setBlockText(doc, cloudBlock.blockId, 'AWS, DynamoDB');
+const updatedLanguage = setBlockText(doc, 'skills.categories.Languages', 'Python, TypeScript');
+console.log(JSON.stringify({
+  rowLabels: rows.map((row) => row.label),
+  cloudCurrent: cloudBlock.current,
+  updatedCloud: updated.skills.categories['Cloud & Data'],
+  updatedLanguageCategory: updatedLanguage.skills.categories.Languages,
+  updatedLanguageLegacy: updatedLanguage.skills.languages,
+}));
+"""
+    result = subprocess.run(
+        ["node", "-e", script],
+        cwd=ROOT / "frontend",
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    payload = json.loads(result.stdout)
+
+    assert payload["rowLabels"] == ["Languages", "Cloud & Data", "Developer Tools"]
+    assert payload["cloudCurrent"] == "AWS, PostgreSQL"
+    assert payload["updatedCloud"] == ["AWS", "DynamoDB"]
+    assert payload["updatedLanguageCategory"] == ["Python", "TypeScript"]
+    assert payload["updatedLanguageLegacy"] == ["Python", "TypeScript"]
+
+
+def test_fletcher_workspace_uses_resume_global_bullet_numbers():
+    script = r"""
+const fs = require('fs');
+const vm = require('vm');
+const ts = require('typescript');
+const source = fs.readFileSync('src/pages/Fletcher/review/documentBlocks.ts', 'utf8');
+const compiled = ts.transpileModule(source, {
+  compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2020 },
+});
+const moduleObj = { exports: {} };
+vm.runInNewContext(compiled.outputText, {
+  require,
+  module: moduleObj,
+  exports: moduleObj.exports,
+  encodeURIComponent,
+  decodeURIComponent,
+});
+const { buildReviewBlocks } = moduleObj.exports;
+const doc = {
+  source_path: 'test',
+  preamble: '',
+  header: { name: 'A', contact_line: 'a@example.com' },
+  summary: '',
+  education: { entry: { entry_id: 'edu', institution_and_degree: 'School', date_text: '2026' }, bullets: ['Dean list'] },
+  experience: [
+    { entry_id: 'exp1', title_company_location: 'Developer, Acme', date_text: '2025', bullets: ['A', 'B'] },
+    { entry_id: 'exp2', title_company_location: 'Intern, Acme', date_text: '2024', bullets: ['C'] },
+  ],
+  projects: [
+    { entry_id: 'proj1', project_title: 'Tool', date_or_link_text: 'github', bullets: ['D', 'E'] },
+  ],
+  skills: { languages: [], frameworks: [], developer_tools: [] },
+};
+const blocks = buildReviewBlocks(doc, doc, doc).filter((block) =>
+  block.blockId.includes('.bullet.'),
+);
+console.log(JSON.stringify(blocks.map((block) => ({
+  id: block.blockId,
+  label: block.label,
+  context: block.contextLabel || '',
+}))));
+"""
+    result = subprocess.run(
+        ["node", "-e", script],
+        cwd=ROOT / "frontend",
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    payload = json.loads(result.stdout)
+
+    assert payload == [
+        {"id": "education.edu.bullet.0", "label": "Education bullet 1", "context": ""},
+        {
+            "id": "experience.exp1.bullet.0",
+            "label": "Resume bullet 1",
+            "context": "Developer, Acme bullet 1",
+        },
+        {
+            "id": "experience.exp1.bullet.1",
+            "label": "Resume bullet 2",
+            "context": "Developer, Acme bullet 2",
+        },
+        {
+            "id": "experience.exp2.bullet.0",
+            "label": "Resume bullet 3",
+            "context": "Intern, Acme bullet 1",
+        },
+        {
+            "id": "projects.proj1.bullet.0",
+            "label": "Resume bullet 4",
+            "context": "Tool bullet 1",
+        },
+        {
+            "id": "projects.proj1.bullet.1",
+            "label": "Resume bullet 5",
+            "context": "Tool bullet 2",
+        },
+    ]

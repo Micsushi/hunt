@@ -52,6 +52,7 @@ SECTION_ORDER = (
 
 # heuristic: fast local rules only. ollama: refine classification + keywords via local Ollama (/api/chat).
 DEFAULT_MODEL_BACKEND = os.getenv("HUNT_RESUME_MODEL_BACKEND", "heuristic").strip().lower()
+_INITIAL_DEFAULT_MODEL_BACKEND = DEFAULT_MODEL_BACKEND
 DEFAULT_MODEL_NAME = os.getenv("HUNT_RESUME_MODEL_NAME", "deterministic-stage1")
 RESUME_LLM_PROVIDER = os.getenv("HUNT_RESUME_LLM_PROVIDER", DEFAULT_MODEL_BACKEND).strip().lower()
 RESUME_LLM_MODEL = os.getenv("HUNT_RESUME_LLM_MODEL", "").strip()
@@ -126,7 +127,11 @@ def resume_runtime_int(key: str, env_name: str, default: int, *, minimum: int = 
 
 
 def resume_llm_provider() -> str:
-    if os.getenv("PYTEST_CURRENT_TEST") and DEFAULT_MODEL_BACKEND in {"heuristic", "none"}:
+    if (
+        os.getenv("PYTEST_CURRENT_TEST")
+        and DEFAULT_MODEL_BACKEND != _INITIAL_DEFAULT_MODEL_BACKEND
+        and DEFAULT_MODEL_BACKEND in {"heuristic", "none"}
+    ):
         return DEFAULT_MODEL_BACKEND
     provider = resume_runtime_setting("llm_provider", "HUNT_RESUME_LLM_PROVIDER", "")
     if provider:

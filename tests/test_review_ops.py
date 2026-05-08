@@ -19,6 +19,8 @@ class ReviewOpsApiTests(unittest.TestCase):
         from hunter import db
 
         self.db = db
+        self._old_db_path = db.DB_PATH
+        db.DB_PATH = self.path
         db.init_db()
         _, job_id = db.add_job(
             {
@@ -52,6 +54,7 @@ class ReviewOpsApiTests(unittest.TestCase):
         conn.close()
 
     def tearDown(self):
+        self.db.DB_PATH = self._old_db_path
         self._env.stop()
         if os.path.exists(self.path):
             os.remove(self.path)
@@ -77,6 +80,48 @@ class ReviewOpsApiTests(unittest.TestCase):
         with self.assertRaises(HTTPException) as ctx:
             control_plane_api.api_ops_requeue_errors({"source": "linkedin", "error_codes": []})
         self.assertEqual(ctx.exception.status_code, 400)
+
+    def test_api_delete_job_translates_postgres_fk_violation(self):
+        from fastapi import HTTPException
+
+        from backend import app as control_plane_api
+
+        class FakeForeignKeyViolation(Exception):
+            pgcode = "23503"
+
+        with patch.object(
+            control_plane_api,
+            "delete_jobs_by_ids",
+            side_effect=FakeForeignKeyViolation("job still referenced"),
+        ):
+            with self.assertRaises(HTTPException) as ctx:
+                control_plane_api.api_delete_job(self.job_id)
+        self.assertEqual(ctx.exception.status_code, 409)
+        self.assertIn("Database rejected the change", ctx.exception.detail)
+
+    def test_bulk_delete_translates_postgres_fk_violation(self):
+        from fastapi import HTTPException
+
+        from backend import app as control_plane_api
+
+        class FakeForeignKeyViolation(Exception):
+            pgcode = "23503"
+
+        with patch.object(
+            control_plane_api,
+            "delete_jobs_by_ids",
+            side_effect=FakeForeignKeyViolation("job still referenced"),
+        ):
+            with self.assertRaises(HTTPException) as ctx:
+                control_plane_api.api_jobs_bulk_selection(
+                    {
+                        "action": "delete",
+                        "job_ids": [self.job_id],
+                        "confirm_delete": True,
+                    }
+                )
+        self.assertEqual(ctx.exception.status_code, 409)
+        self.assertIn("Database rejected the change", ctx.exception.detail)
 
     def test_job_adjacent_uses_review_filters_and_sort(self):
         from backend import app as control_plane_api

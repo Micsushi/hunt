@@ -4,7 +4,6 @@ import io
 import json
 import os
 import re
-import sqlite3
 import sys
 import threading
 import time
@@ -92,6 +91,7 @@ from hunter.db import (  # noqa: E402
 from hunter.db import (  # noqa: E402
     requeue_job as requeue_review_job,
 )
+from hunter.db_compat import is_integrity_error  # noqa: E402
 from hunter.failure_artifacts import resolve_artifact_path  # noqa: E402
 
 try:  # noqa: E402
@@ -121,6 +121,13 @@ SOURCE_OPTIONS = (
     "linkedin",
     "indeed",
 )
+
+
+def _raise_integrity_conflict(exc: BaseException) -> None:
+    raise HTTPException(
+        status_code=409,
+        detail=f"Database rejected the change (likely a linked record): {exc}",
+    ) from exc
 
 # Human-readable labels for enrichment values and filter chips.
 ENRICHMENT_STATUS_LABELS = {
@@ -255,6 +262,26 @@ def _ensure_fletcher_worker_started() -> None:
     with _fletcher_worker_lock:
         if _fletcher_worker_started:
             return
+        try:
+            from fletcher.db import (  # type: ignore
+                backfill_completed_fletcher_queue_resume_attempts,
+                recover_interrupted_fletcher_jobs,
+            )
+
+            recovered = recover_interrupted_fletcher_jobs()
+            if recovered:
+                print(
+                    f"Recovered {len(recovered)} interrupted Fletcher queue job(s) after backend restart.",
+                    flush=True,
+                )
+            backfilled = backfill_completed_fletcher_queue_resume_attempts()
+            if backfilled:
+                print(
+                    f"Backfilled {len(backfilled)} completed Fletcher queue resume attempt(s).",
+                    flush=True,
+                )
+        except Exception as exc:
+            print(f"Fletcher queue recovery skipped: {exc}", flush=True)
         thread = threading.Thread(target=_fletcher_worker_loop, name="fletcher-queue", daemon=True)
         thread.start()
         _fletcher_worker_started = True
@@ -319,67 +346,86 @@ FLETCHER_BATCH_ARTIFACTS = {
     "with_summary_tex",
 }
 
-FLETCHER_PROGRESS_BY_STEP = {
-    "starting": 3,
-    "config": 5,
-    "loading_job": 8,
-    "selecting_master_resume": 10,
-    "parse_resume": 12,
-    "bullets_loaded": 16,
-    "generating_resume": 18,
-    "job_metadata_llm_skipped": 22,
-    "job_metadata_filled_with_llm": 22,
-    "classify_done": 25,
-    "heuristic_keywords": 28,
-    "llm_keyword_extract_start": 32,
-    "keywords_extracted": 38,
-    "keyword_partition": 42,
-    "active_buckets": 45,
-    "rag_start": 50,
-    "rag_complete": 58,
-    "rag_skipped": 58,
-    "bullet_rewrite_parallel_config": 60,
-    "bullet_rewrite_start": 62,
-    "bullet_rewrite_done": 70,
-    "bullet_rewrite_parallel_memory": 72,
-    "bullet_rewrites_summary": 76,
-    "rewrite_validation_summary": 78,
-    "bullet_scores": 80,
-    "summary_evidence": 82,
-    "keywords_skipped_to_summary": 83,
-    "summary_keyword_filter": 84,
-    "summary_start": 85,
-    "summary_done": 87,
-    "summary_skipped": 87,
-    "summary_validation": 88,
-    "skills_keywords_added": 90,
-    "skills_keyword_reuse": 90,
-    "compile_start": 92,
-    "compile_done": 94,
-    "compile_summary_skipped": 96,
-    "summary_line_check": 98,
-    "bullet_drop": 95,
-    "pipeline_debug_summary": 99,
-    "packaging_review": 99,
-    "done": 100,
-}
+FLETCHER_OPTION_A_PROGRESS_MILESTONES: list[tuple[str, ...]] = [
+    ("starting",),
+    ("loading_job",),
+    ("selecting_master_resume",),
+    ("generating_resume",),
+]
+
+FLETCHER_PIPELINE_PROGRESS_MILESTONES: list[tuple[str, ...]] = [
+    ("config",),
+    ("parse_resume",),
+    ("bullets_loaded",),
+    ("resume_structure",),
+    ("classify_done",),
+    ("heuristic_keywords",),
+    ("llm_keyword_extract_start",),
+    ("keywords_extracted",),
+    ("starting_resume_compiled",),
+    ("keyword_partition",),
+    ("active_buckets",),
+    ("rag_complete", "rag_skipped"),
+    ("bullet_rewrite_parallel_config",),
+    ("bullet_rewrites_summary",),
+    ("rewrite_validation_summary",),
+    ("bullet_scores",),
+    ("summary_evidence",),
+    ("keywords_skipped_to_summary",),
+    ("summary_keyword_filter",),
+    ("summary_start", "summary_skipped"),
+    (
+        "summary_done",
+        "summary_generation_error",
+        "summary_validation",
+        "summary_validation_retry_done",
+        "summary_skipped",
+    ),
+    ("skills_keywords_added", "skills_keyword_reuse", "skill_bucket_skipped"),
+    ("compile_done",),
+    ("summary_line_check", "compile_summary_skipped", "pipeline_debug_summary", "packaging_review"),
+    ("done",),
+]
 
 
-def _fletcher_step_percent(step: str, detail: dict | None = None) -> int:
-    percent = FLETCHER_PROGRESS_BY_STEP.get(step, 50)
-    if step == "ollama_runtime":
-        stage = str((detail or {}).get("stage") or "")
-        percent = {
-            "after_job_fit": 20,
-            "after_bullet_rewrites": 78,
-            "before_summary": 84,
-            "before_skill_bucket": 89,
-        }.get(stage, 50)
-    if step == "compile_start" and (detail or {}).get("stem") == "output_summary":
-        percent = 93
-    if step == "compile_done" and (detail or {}).get("stem") == "output_summary":
-        percent = 95
-    return max(0, min(100, int(percent)))
+def _fletcher_progress_milestones(is_option_a: bool = False) -> list[tuple[str, ...]]:
+    if is_option_a:
+        return FLETCHER_OPTION_A_PROGRESS_MILESTONES + FLETCHER_PIPELINE_PROGRESS_MILESTONES
+    return FLETCHER_PIPELINE_PROGRESS_MILESTONES
+
+
+class _FletcherProgressTracker:
+    def __init__(self, *, is_option_a: bool = False):
+        self.milestones = _fletcher_progress_milestones(is_option_a)
+        self.total = len(self.milestones)
+        self.current = 0
+        self._step_indices: dict[str, int] = {}
+        for index, names in enumerate(self.milestones):
+            for name in names:
+                self._step_indices.setdefault(name, index)
+
+    def record(self, step: str, detail: dict | None = None) -> dict:
+        del detail
+        if step == "done":
+            self.current = self.total
+        else:
+            index = self._step_indices.get(step)
+            if index is not None:
+                self.current = max(self.current, index + 1)
+        percent = 100 if self.current >= self.total else int((self.current / self.total) * 99)
+        return {
+            "percent": max(0, min(100, percent)),
+            "milestone_current": self.current,
+            "milestone_total": self.total,
+            "milestone_name": step if step in self._step_indices or step == "done" else None,
+        }
+
+
+def _fletcher_step_percent(
+    step: str, detail: dict | None = None, *, is_option_a: bool = False
+) -> int:
+    tracker = _FletcherProgressTracker(is_option_a=is_option_a)
+    return int(tracker.record(step, detail)["percent"])
 
 
 def _fletcher_batch_stem(job: dict) -> str:
@@ -428,6 +474,7 @@ def _process_next_fletcher_job() -> bool:
         claim_next_fletcher_job,
         finish_fletcher_job,
         get_job_context,
+        record_fletcher_queue_resume_attempt,
         set_fletcher_job_log_path,
         update_fletcher_job_progress,
     )
@@ -446,19 +493,21 @@ def _process_next_fletcher_job() -> bool:
     set_fletcher_job_log_path(qid, str(queue_log_path))
     try:
         options = job_input.get("options") or {}
+        job_id = job_input.get("job_id")
+        progress_tracker = _FletcherProgressTracker(is_option_a=job_id is not None)
 
         def _record_progress(step: str, detail: dict | None = None) -> None:
+            progress_update = progress_tracker.record(step, detail)
             update_fletcher_job_progress(
                 qid,
                 {
                     "current_step": step,
                     "event_id": (detail or {}).get("event_id"),
-                    "percent": _fletcher_step_percent(step, detail),
+                    **progress_update,
                 },
             )
 
         _record_progress("starting", {"event_id": 1})
-        job_id = job_input.get("job_id")
         if job_id is not None:
             numeric_job_id = int(job_id)
             _record_progress("loading_job", {"event_id": 2})
@@ -494,27 +543,19 @@ def _process_next_fletcher_job() -> bool:
                 ),
             )
             _record_progress("generating_resume", {"event_id": 4})
-            try:
-                result = run_ad_hoc_pipeline(
-                    title=str(job_context.get("title") or selection_report.get("title") or ""),
-                    company=str(job_context.get("company") or ""),
-                    description=str(job_context.get("description") or ""),
-                    resume_path=resume_path,
-                    label=f"job_{numeric_job_id}_master",
-                    progress_callback=_record_progress,
-                )
-            finally:
-                try:
-                    Path(resume_path).unlink(missing_ok=True)
-                    Path(resume_path).with_suffix(".selection.json").unlink(missing_ok=True)
-                except Exception:
-                    pass
+            result = run_ad_hoc_pipeline(
+                title=str(job_context.get("title") or selection_report.get("title") or ""),
+                company=str(job_context.get("company") or ""),
+                description=str(job_context.get("description") or ""),
+                resume_path=resume_path,
+                label=f"job_{numeric_job_id}_master",
+                progress_callback=_record_progress,
+            )
             review_id = result.get("review_id")
             _append_fletcher_queue_log(
                 queue_log_path,
                 f"Finished resume generation for Hunt job ID {numeric_job_id}.",
             )
-            _record_progress("done", {"event_id": 5})
         else:
             result = run_ad_hoc_pipeline(
                 title=str(job_input.get("title") or ""),
@@ -532,20 +573,49 @@ def _process_next_fletcher_job() -> bool:
                 "Fletcher pipeline finished without producing a pipeline_log.txt.",
                 append=True,
             )
+        no_summary_pdf_ready = bool(result.get("pdf_path") and Path(result["pdf_path"]).exists())
+        no_summary_tex_ready = bool(result.get("tex_path") and Path(result["tex_path"]).exists())
+        pipeline_failed = result.get("status") == "failed" or not no_summary_pdf_ready
+        pipeline_error = (
+            result.get("error")
+            or result.get("llm_error")
+            or (result.get("compile_status") if pipeline_failed else None)
+            or ("PDF generation failed" if pipeline_failed else None)
+        )
+        if not pipeline_failed:
+            _record_progress("done")
+        recorded_attempt = None
+        if job_id is not None and result.get("tex_path"):
+            recorded_attempt = record_fletcher_queue_resume_attempt(
+                job_id=int(job_id),
+                result=result,
+                source_resume_path=resume_path if "resume_path" in locals() else None,
+                queue_item_id=qid,
+                selection_report=selection_report if "selection_report" in locals() else None,
+                model_backend=str(options.get("provider") or ""),
+                model_name=str(options.get("model") or ""),
+            )
+            try:
+                Path(resume_path).unlink(missing_ok=True)
+                Path(resume_path).with_suffix(".selection.json").unlink(missing_ok=True)
+            except Exception:
+                pass
         finish_fletcher_job(
             qid,
-            status="succeeded" if result.get("status") != "failed" else "failed",
+            status="failed" if pipeline_failed else "succeeded",
             result={
+                "attempt_id": recorded_attempt[0] if recorded_attempt else None,
+                "resume_version_id": recorded_attempt[1] if recorded_attempt else None,
                 "review_id": review_id,
                 "pdf_url": f"/api/fletcher/reviews/{review_id}/versions/no_summary/pdf"
-                if review_id
+                if review_id and no_summary_pdf_ready
                 else (
                     f"/api/attempts/{result.get('attempt_id')}/pdf"
                     if result.get("attempt_id") and result.get("pdf_path")
                     else None
                 ),
                 "tex_url": f"/api/fletcher/reviews/{review_id}/versions/no_summary/tex"
-                if review_id
+                if review_id and no_summary_tex_ready
                 else (
                     f"/api/attempts/{result.get('attempt_id')}/tex"
                     if result.get("attempt_id") and result.get("tex_path")
@@ -554,8 +624,12 @@ def _process_next_fletcher_job() -> bool:
                 "log_url": f"/api/fletcher/reviews/{review_id}/log" if review_id else None,
                 "provider": options.get("provider"),
                 "model": options.get("model"),
+                "compile_status": result.get("compile_status"),
+                "fits_one_page": result.get("fits_one_page"),
+                "role_family": result.get("role_family"),
+                "job_level": result.get("job_level"),
             },
-            error=str(result.get("error") or "") if result.get("status") == "failed" else None,
+            error=str(pipeline_error or "") if pipeline_failed else None,
             log_path=result_log_path,
             review_id=review_id,
         )
@@ -3620,6 +3694,20 @@ def api_fletcher_job_delete(queue_item_id: str, _auth: str = Depends(require_aut
         raise HTTPException(status_code=409, detail=str(exc))
 
 
+@app.post("/api/fletcher/resumes/clear")
+def api_fletcher_resumes_clear(payload: dict = Body({}), _auth: str = Depends(require_auth)):
+    from fletcher.db import clear_generated_resumes
+
+    include_ad_hoc = bool((payload or {}).get("include_ad_hoc", False))
+    delete_artifacts = bool((payload or {}).get("delete_artifacts", True))
+    return JSONResponse(
+        clear_generated_resumes(
+            include_ad_hoc=include_ad_hoc,
+            delete_artifacts=delete_artifacts,
+        )
+    )
+
+
 @app.get("/api/fletcher/tailor/jobs/{queue_item_id}/log")
 def api_fletcher_job_log(
     queue_item_id: str,
@@ -3722,7 +3810,7 @@ def api_fletcher_review_revert(
 def api_fletcher_review_artifact(
     review_id: str, version: str, artifact_kind: str, _auth: str = Depends(require_auth)
 ):
-    from fletcher.resume.review_store import artifact_path_for_review
+    from fletcher.resume.review_store import artifact_download_filename, artifact_path_for_review
 
     if artifact_kind not in {"pdf", "tex"}:
         raise HTTPException(status_code=404, detail="Unsupported artifact")
@@ -3731,7 +3819,11 @@ def api_fletcher_review_artifact(
     except FileNotFoundError:
         raise HTTPException(status_code=404, detail="Artifact not found")
     media_type = "application/pdf" if artifact_kind == "pdf" else "text/plain"
-    return FileResponse(path, media_type=media_type, filename=path.name)
+    return FileResponse(
+        path,
+        media_type=media_type,
+        filename=artifact_download_filename(review_id, version, artifact_kind, path=path),
+    )
 
 
 @app.get("/api/fletcher/reviews/{review_id}/log")
@@ -4496,7 +4588,12 @@ def api_delete_job(job_id: int):
     row = get_job_by_id(job_id)
     if not row:
         raise HTTPException(status_code=404, detail="Job not found.")
-    deleted = delete_jobs_by_ids([job_id])
+    try:
+        deleted = delete_jobs_by_ids([job_id])
+    except Exception as exc:
+        if is_integrity_error(exc):
+            _raise_integrity_conflict(exc)
+        raise
     return JSONResponse({"status": "ok", "deleted": deleted})
 
 
@@ -4904,11 +5001,10 @@ def api_jobs_bulk_selection(payload: dict = Body(...)):
             updated = delete_jobs_by_ids(raw_ids)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    except sqlite3.IntegrityError as exc:
-        raise HTTPException(
-            status_code=409,
-            detail=f"Database rejected the change (likely a linked record): {exc}",
-        ) from exc
+    except Exception as exc:
+        if is_integrity_error(exc):
+            _raise_integrity_conflict(exc)
+        raise
     try:
         append_review_audit_entry(
             "bulk_selection",

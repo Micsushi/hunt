@@ -7,7 +7,12 @@ import {
 } from '@/api/control'
 import { useUiStore } from '@/store/ui'
 import { applySegmentRevert, buildDiffSegments, type DiffSegment } from './diff'
-import { buildReviewBlocks, setBlockText, type ReviewBlock } from './documentBlocks'
+import {
+  buildReviewBlocks,
+  setBlockText,
+  skillRowsForDoc,
+  type ReviewBlock,
+} from './documentBlocks'
 import { humanizeLatex, latexInlineParts } from './latexInline'
 import type { KeywordScore, ResumeDocument, ResumeReviewPackage, ReviewVersionName } from './types'
 import styles from './ResumeReviewWorkspace.module.css'
@@ -58,9 +63,14 @@ export function ResumeReviewWorkspace({ reviewId }: { reviewId: string }) {
 
   const compileMutation = useMutation({
     mutationFn: (version: ReviewVersionName) => compileFletcherReviewVersion(reviewId, version),
-    onSuccess: (review) => {
+    onSuccess: (review, compiledVersion) => {
       qc.setQueryData(['fletcher-review', reviewId], review)
-      showToast('Resume compiled')
+      const status = review.versions[compiledVersion]?.compile_status
+      if (status && status !== 'ok') {
+        showToast(`Compile failed: ${status}`, 'error')
+      } else {
+        showToast('Resume compiled')
+      }
     },
     onError: (e) => showToast(e instanceof Error ? e.message : 'Compile failed', 'error'),
   })
@@ -285,6 +295,9 @@ export function ResumeReviewWorkspace({ reviewId }: { reviewId: string }) {
           {selected ? (
             <div className={styles.smallStack}>
               <div className={styles.meta}>{selected.block.label}</div>
+              {selected.block.contextLabel ? (
+                <div className={styles.meta}>{selected.block.contextLabel}</div>
+              ) : null}
               {selected.segment ? (
                 <button className={styles.buttonPrimary} onClick={revertSelectedSegment}>
                   Revert segment
@@ -326,10 +339,63 @@ export function ResumeReviewWorkspace({ reviewId }: { reviewId: string }) {
   )
 }
 
-function normalizeKeywordScores(review: ResumeReviewPackage): KeywordScore[] {
+interface KeywordPanelItem extends KeywordScore {
+  candidates: NonNullable<KeywordScore['candidates']>
+}
+
+type KeywordGroupKind = 'supported' | 'rewrite' | 'other'
+
+function normalizeKeywordText(value: string | undefined): string {
+  return humanizeLatex(value || '')
+    .toLowerCase()
+    .replace(/[^a-z0-9+#./]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+}
+
+function keywordVisibleInText(keyword: string, text: string | undefined): boolean {
+  const key = normalizeKeywordText(keyword)
+  const visible = normalizeKeywordText(text)
+  return !!key && !!visible && visible.includes(key)
+}
+
+function resumeBullets(doc: ResumeDocument | undefined): string[] {
+  if (!doc) return []
+  return [
+    ...doc.experience.flatMap((entry) => entry.bullets),
+    ...doc.projects.flatMap((entry) => entry.bullets),
+  ]
+}
+
+function inferLegacySupportKind(
+  keyword: string,
+  usedItem: { bullet_idx?: number | null; support_kind?: string } | undefined,
+  originalBullets: string[],
+  generatedBullets: string[],
+): string | undefined {
+  if (!usedItem || usedItem.support_kind) return usedItem?.support_kind
+  const bulletIdx = usedItem.bullet_idx
+  if (bulletIdx === null || bulletIdx === undefined) return undefined
+  const original = originalBullets[bulletIdx]
+  const generated = generatedBullets[bulletIdx]
+  if (keywordVisibleInText(keyword, generated) && !keywordVisibleInText(keyword, original)) {
+    return 'rewrite_added'
+  }
+  return 'legacy_supported'
+}
+
+function normalizeKeywordScores(review: ResumeReviewPackage): KeywordPanelItem[] {
   const raw = review.keywords.raw || []
+  const comparisonVersion = review.versions.no_summary || review.versions.with_summary || review.versions.starting
+  const originalBullets = resumeBullets(comparisonVersion?.original)
+  const generatedBullets = resumeBullets(comparisonVersion?.generated)
   const present = new Set((review.keywords.present || []).map((item) => item.toLowerCase()))
   const missing = new Set((review.keywords.missing || []).map((item) => item.toLowerCase()))
+  const used = new Map(
+    (review.keywords.used || [])
+      .filter((item) => item.keyword)
+      .map((item) => [item.keyword.toLowerCase(), item]),
+  )
   const scored = new Map<string, KeywordScore>()
   for (const item of review.keywords.rag_scores || []) {
     if (!item.keyword) continue
@@ -343,14 +409,50 @@ function normalizeKeywordScores(review: ResumeReviewPackage): KeywordScore[] {
     .map((keyword) => {
       const key = keyword.toLowerCase()
       const item = scored.get(key) || { keyword }
+      const usedItem = used.get(key)
+      const supportKind = inferLegacySupportKind(keyword, usedItem, originalBullets, generatedBullets)
+      const fallbackStatus =
+        supportKind === 'rewrite_added'
+          ? 'rewrite_used'
+          : usedItem
+            ? 'supported'
+            : present.has(key)
+              ? 'present'
+              : missing.has(key)
+                ? 'missing'
+                : 'raw'
+      const rawStatus = item.status || fallbackStatus
       const status =
-        item.status || (present.has(key) ? 'present' : missing.has(key) ? 'missing' : 'raw')
+        rawStatus === 'used'
+          ? supportKind === 'rewrite_added'
+            ? 'rewrite_used'
+            : 'supported'
+          : rawStatus
+      const usedBulletIdx =
+        item.used_bullet_idx ??
+        (usedItem?.bullet_idx === undefined ? undefined : usedItem.bullet_idx)
+      const fallbackBulletIdx = usedBulletIdx ?? item.bullet_idx
+      const candidates = [...(item.candidates || [])]
+      if (
+        fallbackBulletIdx !== null &&
+        fallbackBulletIdx !== undefined &&
+        !candidates.some((candidate) => candidate.bullet_idx === fallbackBulletIdx)
+      ) {
+        candidates.unshift({
+          bullet_idx: fallbackBulletIdx,
+          score: item.score,
+          bullet_text: usedItem?.bullet_text,
+        })
+      }
       return {
         ...item,
         keyword: item.keyword || keyword,
         status,
         tier: item.tier || status,
         score: typeof item.score === 'number' ? item.score : status === 'present' ? 1 : 0,
+        used_bullet_idx: usedBulletIdx,
+        support_kind: item.support_kind || supportKind,
+        candidates,
       }
     })
     .filter((item) => {
@@ -360,7 +462,16 @@ function normalizeKeywordScores(review: ResumeReviewPackage): KeywordScore[] {
       return true
     })
     .sort((a, b) => {
-      const tierRank: Record<string, number> = { high: 4, mid: 3, low: 2, present: 1, error: 0 }
+      const tierRank: Record<string, number> = {
+        rewrite_used: 6,
+        supported: 5,
+        used: 5,
+        high: 4,
+        mid: 3,
+        low: 2,
+        present: 1,
+        error: 0,
+      }
       const aRank = tierRank[String(a.tier || a.status)] ?? 0
       const bRank = tierRank[String(b.tier || b.status)] ?? 0
       if (aRank !== bRank) return bRank - aRank
@@ -370,32 +481,142 @@ function normalizeKeywordScores(review: ResumeReviewPackage): KeywordScore[] {
 
 function KeywordPanel({ review }: { review: ResumeReviewPackage }) {
   const keywords = useMemo(() => normalizeKeywordScores(review), [review])
+  const supportedKeywords = keywords.filter((item) => item.status === 'present' || item.status === 'supported')
+  const rewriteKeywords = keywords.filter((item) => item.status === 'rewrite_used')
+  const otherKeywords = keywords.filter((item) => {
+    const tier = String(item.tier || '').toLowerCase()
+    return item.status === 'missing' && (tier === 'high' || tier === 'mid')
+  })
   return (
     <section className={styles.keywordPanel}>
       <div className={styles.panelTitle}>Keywords</div>
       {keywords.length ? (
-        <div className={styles.keywordList}>
-          {keywords.map((item) => (
-            <div className={styles.keywordItem} key={item.keyword}>
-              <div>
-                <div className={styles.keywordName}>{item.keyword}</div>
-                <div className={styles.keywordMeta}>
-                  {item.bullet_idx === null || item.bullet_idx === undefined
-                    ? 'No matched bullet'
-                    : `Best bullet ${Number(item.bullet_idx) + 1}`}
-                </div>
-              </div>
-              <div className={styles.keywordScore}>
-                <span>{item.tier || item.status || 'raw'}</span>
-                <strong>{Math.round((item.score || 0) * 100)}</strong>
-              </div>
-            </div>
-          ))}
-        </div>
+        <>
+          <KeywordGroup
+            title="Already supported"
+            emptyText="No extracted keywords were already supported."
+            keywords={supportedKeywords}
+            kind="supported"
+          />
+          <KeywordGroup
+            title="Added by rewrite"
+            emptyText="No keyword was newly added to a bullet."
+            keywords={rewriteKeywords}
+            kind="rewrite"
+          />
+          <KeywordGroup
+            title="Other keywords"
+            emptyText="No unused high or medium keyword candidates."
+            keywords={otherKeywords}
+            kind="other"
+          />
+        </>
       ) : (
         <div className={styles.meta}>No extracted keywords found.</div>
       )}
     </section>
+  )
+}
+
+function KeywordGroup({
+  title,
+  emptyText,
+  keywords,
+  kind,
+}: {
+  title: string
+  emptyText: string
+  keywords: KeywordPanelItem[]
+  kind: KeywordGroupKind
+}) {
+  return (
+    <div className={styles.keywordGroup}>
+      <div className={styles.keywordGroupTitle}>{title}</div>
+      {keywords.length ? (
+        <div className={styles.keywordList}>
+          {keywords.map((item) => (
+            <KeywordCard item={item} key={item.keyword} kind={kind} />
+          ))}
+        </div>
+      ) : (
+        <div className={styles.keywordEmpty}>{emptyText}</div>
+      )}
+    </div>
+  )
+}
+
+function KeywordCard({ item, kind }: { item: KeywordPanelItem; kind: KeywordGroupKind }) {
+  const usedBulletIdx = item.used_bullet_idx ?? item.bullet_idx
+  const hasHighMatch = String(item.tier || '').toLowerCase() === 'high'
+  const otherCandidates =
+    !hasHighMatch || usedBulletIdx === null || usedBulletIdx === undefined
+      ? item.candidates
+      : item.candidates.filter((candidate) => candidate.bullet_idx !== usedBulletIdx)
+  const visibleCandidates =
+    kind === 'rewrite' && hasHighMatch ? otherCandidates : kind === 'other' && hasHighMatch ? item.candidates : []
+  const supportIdx = usedBulletIdx ?? item.candidates[0]?.bullet_idx
+  const meta =
+    kind === 'rewrite'
+      ? supportIdx === null || supportIdx === undefined
+        ? 'Added in an unmatched bullet'
+        : `Added in bullet ${Number(supportIdx) + 1}`
+      : kind === 'supported'
+        ? supportIdx === null || supportIdx === undefined
+          ? 'Supported in resume'
+          : `Supported by bullet ${Number(supportIdx) + 1}`
+        : visibleCandidates.length
+          ? 'Candidate resume bullets'
+          : String(item.tier || '').toLowerCase() === 'mid'
+            ? 'Medium match, not used'
+            : 'No high-match bullet candidates'
+  return (
+    <div className={styles.keywordItem}>
+      <div>
+        <div className={styles.keywordName}>{item.keyword}</div>
+        <div className={styles.keywordMeta}>{meta}</div>
+        <CandidateList candidates={visibleCandidates} kind={kind} showEmptyHint={hasHighMatch} />
+      </div>
+      <div className={styles.keywordScore}>
+        <span>{item.tier || item.status || 'raw'}</span>
+        <strong>{Math.round((item.score || 0) * 100)}%</strong>
+      </div>
+    </div>
+  )
+}
+
+function CandidateList({
+  candidates,
+  kind,
+  showEmptyHint,
+}: {
+  candidates: NonNullable<KeywordScore['candidates']>
+  kind: KeywordGroupKind
+  showEmptyHint: boolean
+}) {
+  if (!candidates.length) {
+    return kind === 'rewrite' && showEmptyHint ? (
+      <div className={styles.keywordCandidateHint}>No alternate bullet candidates.</div>
+    ) : null
+  }
+  return (
+    <div
+      className={styles.keywordCandidates}
+      aria-label={kind === 'rewrite' ? 'Alternative candidate bullets' : 'Possible bullets'}
+    >
+      {kind === 'rewrite' ? <span className={styles.keywordCandidateLabel}>Alternative candidates</span> : null}
+      {candidates.map((candidate, idx) => (
+        <span
+          className={styles.keywordCandidate}
+          title={candidate.bullet_text || candidate.bullet_preview}
+          key={`${candidate.bullet_idx ?? 'none'}:${idx}`}
+        >
+          {candidate.bullet_idx === null || candidate.bullet_idx === undefined
+            ? 'No bullet'
+            : `Bullet ${Number(candidate.bullet_idx) + 1}`}
+          {typeof candidate.score === 'number' ? ` (${Math.round(candidate.score * 100)}% match)` : ''}
+        </span>
+      ))}
+    </div>
   )
 }
 
@@ -435,6 +656,17 @@ function ReviewToolbar({
   onOpenLink: (href: string | undefined) => void
 }) {
   const version = review.versions[versionName]
+  const compileFailed = !!version?.compile_status && version.compile_status !== 'ok'
+  const pdfUnavailable = compileFailed && !version?.compiled_revision
+  const statusSuffix = dirty
+    ? ' : unsaved draft'
+    : version?.dirty
+      ? ' : uncompiled edits'
+      : pdfUnavailable
+        ? ' : PDF compile failed'
+        : compileFailed
+          ? ' : latest compile failed'
+          : ''
   return (
     <div className={styles.toolbar}>
       <div className={styles.toolbarGroup}>
@@ -455,7 +687,7 @@ function ReviewToolbar({
         </div>
         <span className={styles.meta}>
           {changedCount} changed block{changedCount === 1 ? '' : 's'}
-          {dirty ? ' : unsaved draft' : version?.dirty ? ' : uncompiled edits' : ''}
+          {statusSuffix}
         </span>
       </div>
       <div className={styles.toolbarGroup}>
@@ -474,10 +706,19 @@ function ReviewToolbar({
         <button className={styles.buttonPrimary} disabled={compiling} onClick={onCompile}>
           {compiling ? 'Compiling...' : 'Compile'}
         </button>
-        <button className={styles.button} onClick={() => onOpenLink(version?.pdf_url)}>
+        <button
+          className={styles.button}
+          disabled={!version?.pdf_url || pdfUnavailable}
+          title={pdfUnavailable ? 'Compile this version before opening its PDF.' : undefined}
+          onClick={() => onOpenLink(version?.pdf_url)}
+        >
           PDF
         </button>
-        <button className={styles.button} onClick={() => onOpenLink(version?.tex_url)}>
+        <button
+          className={styles.button}
+          disabled={!version?.tex_url}
+          onClick={() => onOpenLink(version?.tex_url)}
+        >
           TeX
         </button>
         <button className={styles.button} onClick={() => onOpenLink(review.log_url)}>
@@ -597,18 +838,12 @@ function ResumeDiffDocument({
 
       <section className={styles.resumeSection}>
         <h2 className={styles.resumeSectionTitle}>Technical Skills</h2>
-        <div className={styles.skillRow}>
-          <strong>Languages:</strong>
-          <span>{renderBlock('skills.languages')}</span>
-        </div>
-        <div className={styles.skillRow}>
-          <strong>Frameworks:</strong>
-          <span>{renderBlock('skills.frameworks')}</span>
-        </div>
-        <div className={styles.skillRow}>
-          <strong>Developer Tools:</strong>
-          <span>{renderBlock('skills.developer_tools')}</span>
-        </div>
+        {skillRowsForDoc(doc).map((row) => (
+          <div className={styles.skillRow} key={row.blockId}>
+            <strong>{row.label}:</strong>
+            <span>{renderBlock(row.blockId)}</span>
+          </div>
+        ))}
       </section>
     </main>
   )

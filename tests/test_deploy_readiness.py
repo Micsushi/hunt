@@ -40,9 +40,11 @@ def _standalone_launcher_env(tmp_path: Path) -> dict[str, str]:
 class FakeCursor:
     def __init__(self):
         self.statements: list[str] = []
+        self.params: list[tuple | None] = []
 
     def execute(self, statement: str, params=None):
         self.statements.append(statement)
+        self.params.append(params)
 
 
 class FakePgConn:
@@ -84,6 +86,22 @@ def test_migration_does_not_disable_postgres_triggers(monkeypatch, tmp_path):
     assert "DISABLE TRIGGER" not in statements
     assert "ENABLE TRIGGER" not in statements
     assert inserted["records"] == [(1, "Engineer")]
+
+
+def test_postgres_delete_cascade_migration_updates_existing_constraints(monkeypatch):
+    monkeypatch.setenv("HUNT_DB_URL", "postgresql://example")
+    cursor = FakeCursor()
+
+    hunter_db._ensure_postgres_delete_cascade_constraints(cursor)
+
+    statements = "\n".join(cursor.statements).upper()
+    assert "ON DELETE CASCADE" in statements
+    assert "DROP CONSTRAINT" in statements
+    assert "%%I" in statements
+    assert "%I" not in statements.replace("%%I", "")
+    assert ("orchestration_runs", "orchestration_runs_job_id_fkey") in [
+        tuple(params[:2]) for params in cursor.params if params
+    ]
 
 
 def test_migration_coerces_sqlite_booleans_for_postgres():
@@ -192,6 +210,18 @@ def test_fletcher_container_smoke_assets_exist():
     smoke_text = smoke_script.read_text(encoding="utf-8")
     assert "Dockerfile.fletcher" in smoke_text
     assert "/status" in smoke_text
+
+
+def test_pipeline_compose_shares_resume_artifacts_between_review_and_fletcher():
+    compose_text = Path("docker-compose.pipeline.yml").read_text(encoding="utf-8")
+
+    assert (
+        "HUNT_RESUME_ARTIFACTS_DIR: ${HUNT_RESUME_ARTIFACTS_DIR:-/tmp/hunt-resumes}" in compose_text
+    )
+    assert (
+        compose_text.count("- ${HUNT_RESUME_STORAGE:-pipeline_resume_data}:/tmp/hunt-resumes") == 2
+    )
+    assert "pipeline_resume_data:" in compose_text
 
 
 def test_coordinator_container_smoke_assets_exist():
@@ -746,7 +776,14 @@ def test_deploy_runner_c2_fast_profile_sets_compose_env(monkeypatch, capsys):
     monkeypatch.setattr(
         run_deploy_stack.sys,
         "argv",
-        ["run_deploy_stack.py", "c2", "--resource-profile", "fast", "--no-build"],
+        [
+            "run_deploy_stack.py",
+            "c2",
+            "--resource-profile",
+            "fast",
+            "--no-build",
+            "--no-prewarm",
+        ],
     )
 
     assert run_deploy_stack.main() == 0

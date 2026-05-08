@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import os
+from datetime import UTC, datetime
+
 from fletcher.config import resolve_base_resume_path
 from fletcher.db import (
     cancel_fletcher_job,
@@ -28,11 +31,20 @@ from fletcher.resume.models import (
 from fletcher.resume.renderer import render_resume_tex
 from fletcher.resume.review_from_attempt import create_review_package_from_attempt
 from fletcher.resume.review_models import (
+    ResumeReviewJobInfo,
+    ResumeReviewPackage,
+    ResumeReviewVersion,
     ResumeReviewVersionName,
     build_review_id,
     document_to_review_blocks,
 )
-from fletcher.resume.review_store import artifact_path_for_review, register_review
+from fletcher.resume.review_store import (
+    artifact_download_filename,
+    artifact_path_for_review,
+    compile_current_document,
+    register_review,
+    write_review_package,
+)
 from fletcher.storage import build_attempt_dir
 
 
@@ -272,6 +284,90 @@ def test_create_review_package_uses_attempt_source_resume(tmp_path, monkeypatch)
     version = package.versions[ResumeReviewVersionName.NO_SUMMARY]
     assert version.original.header.name == "Source Resume"
     assert version.generated.header.name == "Generated Resume"
+
+
+def test_compile_failure_does_not_promote_missing_revision(tmp_path, monkeypatch):
+    from fletcher.resume import review_store
+
+    runtime = tmp_path / "runtime"
+    monkeypatch.setenv("HUNT_RESUME_ARTIFACTS_DIR", str(runtime))
+    attempt_dir = runtime / "ad_hoc" / "compile-failure"
+    attempt_dir.mkdir(parents=True)
+    doc = _doc()
+    (attempt_dir / "output.tex").write_text(render_resume_tex(doc), encoding="utf-8")
+    (attempt_dir / "output.pdf").write_bytes(b"%PDF previous")
+    review_id = build_review_id(attempt_dir)
+    package = ResumeReviewPackage(
+        review_id=review_id,
+        log_url=f"/api/fletcher/reviews/{review_id}/log",
+        versions={
+            ResumeReviewVersionName.NO_SUMMARY: ResumeReviewVersion(
+                original=doc,
+                generated=doc,
+                current=doc,
+                pdf_url=f"/api/fletcher/reviews/{review_id}/versions/no_summary/pdf",
+                tex_url=f"/api/fletcher/reviews/{review_id}/versions/no_summary/tex",
+                compile_status="ok",
+            )
+        },
+    )
+    write_review_package(attempt_dir, package)
+
+    monkeypatch.setattr(
+        review_store,
+        "compile_tex",
+        lambda _tex_path: {"compile_status": "failed", "pdf_path": None},
+    )
+
+    updated = compile_current_document(review_id, "no_summary")
+    version = updated.versions[ResumeReviewVersionName.NO_SUMMARY]
+
+    assert version.compiled_revision == 0
+    assert version.compile_status == "failed"
+    assert artifact_path_for_review(review_id, "no_summary", "pdf") == attempt_dir / "output.pdf"
+
+
+def test_artifact_download_filename_uses_version_family_and_timestamp(tmp_path, monkeypatch):
+    runtime = tmp_path / "runtime"
+    monkeypatch.setenv("HUNT_RESUME_ARTIFACTS_DIR", str(runtime))
+    attempt_dir = runtime / "ad_hoc" / "download-name"
+    attempt_dir.mkdir(parents=True)
+    doc = _doc()
+    pdf_path = attempt_dir / "output_summary.pdf"
+    pdf_path.write_bytes(b"%PDF summary")
+    stamp = datetime(2026, 5, 8, 3, 4, 5, tzinfo=UTC).timestamp()
+    os.utime(pdf_path, (stamp, stamp))
+    review_id = build_review_id(attempt_dir)
+    package = ResumeReviewPackage(
+        review_id=review_id,
+        job=ResumeReviewJobInfo(role_family="Software Engineering"),
+        log_url=f"/api/fletcher/reviews/{review_id}/log",
+        versions={
+            ResumeReviewVersionName.WITH_SUMMARY: ResumeReviewVersion(
+                original=doc,
+                generated=doc,
+                current=doc,
+                pdf_url=f"/api/fletcher/reviews/{review_id}/versions/with_summary/pdf",
+                tex_url=f"/api/fletcher/reviews/{review_id}/versions/with_summary/tex",
+                compile_status="ok",
+            )
+        },
+    )
+    write_review_package(attempt_dir, package)
+
+    assert (
+        artifact_download_filename(review_id, "with_summary", "pdf", path=pdf_path)
+        == "resume_summary_software_engineering_20260508_030405.pdf"
+    )
+
+    package.job.role_family = ""
+    package.job.title = "Software Engineer"
+    write_review_package(attempt_dir, package)
+
+    assert (
+        artifact_download_filename(review_id, "with_summary", "pdf", path=pdf_path)
+        == "resume_summary_software_20260508_030405.pdf"
+    )
 
 
 def test_provider_defaults_fail_closed(monkeypatch, tmp_path):

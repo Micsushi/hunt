@@ -45,6 +45,9 @@ services:
       HUNT_OLLAMA_CONTEXT_LENGTH: ${OLLAMA_CONTEXT_LENGTH:-8192}
       HUNT_OLLAMA_FLASH_ATTENTION: ${OLLAMA_FLASH_ATTENTION:-1}
       HUNT_OLLAMA_KV_CACHE_TYPE: ${OLLAMA_KV_CACHE_TYPE:-q8_0}
+      HUNT_RESUME_ARTIFACTS_DIR: ${HUNT_RESUME_ARTIFACTS_DIR:-/tmp/hunt-resumes}
+    volumes:
+      - ${HUNT_RESUME_STORAGE:-pipeline_resume_data}:/tmp/hunt-resumes
     ports:
       - "${HUNT_REVIEW_BIND_HOST:-127.0.0.1}:${HUNT_REVIEW_HOST_PORT:-18080}:8000"
 
@@ -172,6 +175,8 @@ services:
       HUNT_OLLAMA_CONTEXT_LENGTH: ${OLLAMA_CONTEXT_LENGTH:-8192}
       HUNT_OLLAMA_FLASH_ATTENTION: ${OLLAMA_FLASH_ATTENTION:-1}
       HUNT_OLLAMA_KV_CACHE_TYPE: ${OLLAMA_KV_CACHE_TYPE:-q8_0}
+    volumes:
+      - ${HUNT_RESUME_STORAGE:-pipeline_resume_data}:/tmp/hunt-resumes
     ports:
       - "${HUNT_FLETCHER_BIND_HOST:-127.0.0.1}:${HUNT_FLETCHER_HOST_PORT:-18002}:8002"
 
@@ -207,3 +212,4 @@ services:
 volumes:
   pipeline_pg_data:
   ollama_data:
+  pipeline_resume_data:

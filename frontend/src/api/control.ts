@@ -289,6 +289,27 @@ export function deleteFletcherJob(
   )
 }
 
+export interface ClearGeneratedResumesResult {
+  resume_attempts_deleted: number
+  fletcher_jobs_deleted: number
+  review_index_entries_deleted: number
+  artifact_dirs_removed: number
+  artifact_errors: string[]
+  active_fletcher_jobs_skipped: number
+  include_ad_hoc: boolean
+  delete_artifacts: boolean
+}
+
+export function clearGeneratedResumes(payload: {
+  includeAdHoc?: boolean
+  deleteArtifacts?: boolean
+}): Promise<ClearGeneratedResumesResult> {
+  return post<ClearGeneratedResumesResult>('/api/fletcher/resumes/clear', {
+    include_ad_hoc: payload.includeAdHoc ?? false,
+    delete_artifacts: payload.deleteArtifacts ?? true,
+  })
+}
+
 export function fetchFletcherReview(reviewId: string): Promise<ResumeReviewPackage> {
   return get<ResumeReviewPackage>(`/api/fletcher/reviews/${encodeURIComponent(reviewId)}`)
 }

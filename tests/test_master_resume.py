@@ -38,6 +38,8 @@ skills:
     )
 
     assert data["header"]["name"] == "Michael Shi"
+    assert data["education"]["institution_and_degree"] == r"\textbf{University}, BSc"
+    assert data["education"]["bullets"] == [r"\textbf{Awards:} Dean's Honor Roll"]
     assert data["experience"][0]["bullets"][0]["text"].endswith(r"\textbf{85\%}.")
     assert data["skills"]["Languages"] == ["Python"]
 
@@ -163,3 +165,41 @@ def test_master_selector_keeps_all_master_skills(monkeypatch):
     )
 
     assert doc.skills.categories["Languages"] == ["Python", "Kotlin", "TypeScript"]
+
+
+def test_master_resume_file_renders_clean_latex_commands():
+    tex = render_resume_tex(
+        build_master_resume_document(
+            parse_master_yaml(
+                r"""
+header:
+  name: "Michael Shi"
+  contact: "Edmonton | \\href{mailto:test@example.com}{test@example.com}"
+education:
+  institution_and_degree: "\\textbf{University of Alberta}, BSc"
+  date_text: "Expected Graduation: \\textbf{Sep 2026}"
+  bullets:
+    - "\\textbf{Awards:} Dean's Honor Roll"
+selection:
+  min_experience: 0
+  max_experience: 0
+  min_projects: 0
+  max_projects: 0
+experience: []
+projects: []
+skills:
+  Languages:
+    - Python
+"""
+            ),
+            title="Software Engineer",
+            keywords=[],
+            role_family="software",
+        )[0]
+    )
+
+    assert r"\textbf{University of Alberta}, BSc" in tex
+    assert r"\begin{twocolentry}{Expected Graduation: \textbf{Sep 2026}}" in tex
+    assert r"\item \textbf{Awards:} Dean's Honor Roll" in tex
+    assert "\\\\textbf" not in tex
+    assert "{'\"" not in tex

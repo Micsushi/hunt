@@ -3,6 +3,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import {
   batchDownloadFletcherJobs,
   cancelFletcherJob,
+  clearGeneratedResumes,
   deleteFletcherJob,
   enqueueFletcherJob,
   fetchFletcherJobs,
@@ -20,9 +21,19 @@ import type { FletcherQueueItem } from './review/types'
 
 const FLETCHER_FORM_STORAGE_KEY = 'hunt.fletcher.optionBForm'
 const FLETCHER_JOB_ID_STORAGE_KEY = 'hunt.fletcher.optionAJobId'
+const FLETCHER_DISPLAY_PROGRESS_STORAGE_KEY = 'hunt.fletcher.displayedProgress'
 const ACTIVE_FLETCHER_STATUSES = new Set(['queued', 'running', 'cancel_requested'])
 const FLETCHER_QUEUE_ACTIVE_REFETCH_MS = 5000
 const FLETCHER_QUEUE_IDLE_REFETCH_MS = 30000
+const FLETCHER_PROGRESS_TICK_MS = 50
+const FLETCHER_PROGRESS_CRUISE_STEP_MS = 500
+const FLETCHER_PROGRESS_FINAL_STEP_MS = 200
+const FLETCHER_PROGRESS_SLOW_DELAY_MULTIPLIER = 1.5
+const FLETCHER_PROGRESS_VERY_SLOW_DELAY_MULTIPLIER = 2
+const FLETCHER_PROGRESS_VERY_SLOW_AT = 95
+const FLETCHER_PROGRESS_CAP_MIN = 80
+const FLETCHER_PROGRESS_CAP_MAX = 90
+const FLETCHER_COMPLETION_HOLD_MS = 500
 const BATCH_ARTIFACT_OPTIONS: { id: FletcherBatchArtifact; label: string }[] = [
   { id: 'log', label: 'Logs' },
   { id: 'starting_pdf', label: 'Starting PDF' },
@@ -32,6 +43,8 @@ const BATCH_ARTIFACT_OPTIONS: { id: FletcherBatchArtifact; label: string }[] = [
   { id: 'no_summary_tex', label: 'TeX : no summary' },
   { id: 'with_summary_tex', label: 'TeX : with summary' },
 ]
+
+type FletcherJobsCache = { jobs: FletcherQueueItem[] }
 
 function readStoredText(key: string): string {
   try {
@@ -67,7 +80,7 @@ function formatRunTime(value: string | null | undefined): string {
 }
 
 function fletcherTitle(job: FletcherQueueItem): string {
-  return [job.input.title || 'Ad-hoc resume', job.input.company].filter(Boolean).join(' : ')
+  return [job.input.title || 'Untitled pasted JD', job.input.company].filter(Boolean).join(' : ')
 }
 
 function fletcherLogFilename(job: FletcherQueueItem): string {
@@ -85,17 +98,94 @@ function fletcherProgressPercent(job: FletcherQueueItem): number | null {
   return Math.max(0, Math.min(100, Math.round(value)))
 }
 
-function nextSmoothedProgress(current: number, target: number): number {
-  if (target <= current) return target
-  const gap = target - current
-  const step = Math.max(0.2, Math.min(0.8, gap * 0.04))
-  return Math.min(target, current + step)
+interface DisplayedProgress {
+  value: number
+  lastTickAt: number
+  currentTarget: number
+  nextDelayMs: number
+  preCompleteCap: number
+  completedAt?: number
+  activeInCurrentView?: boolean
+}
+
+function fletcherStepProgressTarget(job: FletcherQueueItem, progress: DisplayedProgress): number {
+  const reportedPercent = fletcherProgressPercent(job) ?? 0
+  if (job.status === 'succeeded' || reportedPercent >= 100) return 100
+  if (job.status === 'failed' || job.status === 'cancelled') return progress.value
+  if (progress.value < progress.preCompleteCap) return progress.preCompleteCap
+  return Math.min(99, progress.value + 1)
+}
+
+function nextSmoothedProgress(progress: DisplayedProgress, target: number, now: number): number {
+  const current = progress.value
+  if (target <= current) return current
+  if (now - progress.lastTickAt < progress.nextDelayMs) return current
+  return Math.min(target, current + 1)
+}
+
+function fletcherProgressDelayMultiplier(value: number): number {
+  return value >= FLETCHER_PROGRESS_VERY_SLOW_AT
+    ? FLETCHER_PROGRESS_VERY_SLOW_DELAY_MULTIPLIER
+    : FLETCHER_PROGRESS_SLOW_DELAY_MULTIPLIER
 }
 
 function runTimeMillis(value: string | null | undefined): number {
   if (!value) return 0
   const time = new Date(value).getTime()
   return Number.isNaN(time) ? 0 : time
+}
+
+function fletcherPreCompleteCap(queueItemId: string): number {
+  let hash = 0
+  for (let i = 0; i < queueItemId.length; i += 1) {
+    hash = (hash * 31 + queueItemId.charCodeAt(i)) >>> 0
+  }
+  return FLETCHER_PROGRESS_CAP_MIN + (hash % (FLETCHER_PROGRESS_CAP_MAX - FLETCHER_PROGRESS_CAP_MIN + 1))
+}
+
+function readDisplayedProgress(): Record<string, DisplayedProgress> {
+  try {
+    const raw = localStorage.getItem(FLETCHER_DISPLAY_PROGRESS_STORAGE_KEY)
+    if (!raw) return {}
+    const parsed = JSON.parse(raw) as Record<string, Partial<DisplayedProgress>>
+    const now = Date.now()
+    return Object.fromEntries(
+      Object.entries(parsed).flatMap(([queueItemId, value]) => {
+        const storedValue = typeof value.value === 'number' && Number.isFinite(value.value)
+          ? Math.max(0, Math.min(100, Math.round(value.value)))
+          : null
+        if (storedValue === null) return []
+        const preCompleteCap =
+          typeof value.preCompleteCap === 'number' && Number.isFinite(value.preCompleteCap)
+            ? Math.max(FLETCHER_PROGRESS_CAP_MIN, Math.min(FLETCHER_PROGRESS_CAP_MAX, Math.round(value.preCompleteCap)))
+            : fletcherPreCompleteCap(queueItemId)
+        return [
+          [
+            queueItemId,
+            {
+              value: storedValue,
+              lastTickAt: now,
+              currentTarget:
+                typeof value.currentTarget === 'number' && Number.isFinite(value.currentTarget)
+                  ? Math.max(0, Math.min(100, Math.round(value.currentTarget)))
+                  : storedValue,
+              nextDelayMs:
+                typeof value.nextDelayMs === 'number' && Number.isFinite(value.nextDelayMs)
+                  ? Math.max(FLETCHER_PROGRESS_FINAL_STEP_MS, value.nextDelayMs)
+                  : FLETCHER_PROGRESS_CRUISE_STEP_MS,
+              preCompleteCap,
+              completedAt:
+                typeof value.completedAt === 'number' && Number.isFinite(value.completedAt)
+                  ? value.completedAt
+                  : undefined,
+            },
+          ],
+        ]
+      }),
+    )
+  } catch {
+    return {}
+  }
 }
 
 function historySearchText(job: FletcherQueueItem): string {
@@ -124,6 +214,17 @@ function fletcherQueueRefetchInterval(query: {
   return jobs.some((job) => ACTIVE_FLETCHER_STATUSES.has(job.status))
     ? FLETCHER_QUEUE_ACTIVE_REFETCH_MS
     : FLETCHER_QUEUE_IDLE_REFETCH_MS
+}
+
+function upsertFletcherJob(cache: FletcherJobsCache | undefined, job: FletcherQueueItem) {
+  const jobs = cache?.jobs || []
+  const existingIndex = jobs.findIndex((item) => item.queue_item_id === job.queue_item_id)
+  if (existingIndex >= 0) {
+    return {
+      jobs: jobs.map((item, index) => (index === existingIndex ? job : item)),
+    }
+  }
+  return { jobs: [job, ...jobs] }
 }
 
 export function FletcherPage() {
@@ -204,6 +305,9 @@ export function FletcherPage() {
     onSuccess: (res) => {
       setJobIdResult(res)
       showToast('Fletcher job queued')
+      qc.setQueriesData<FletcherJobsCache>({ queryKey: ['fletcher-jobs'] }, (cache) =>
+        upsertFletcherJob(cache, res),
+      )
       qc.invalidateQueries({ queryKey: ['fletcher-jobs'] })
     },
     onError: (e) => showToast(e instanceof Error ? e.message : 'Queue failed', 'error'),
@@ -211,9 +315,12 @@ export function FletcherPage() {
 
   const enqueue = useMutation({
     mutationFn: () => enqueueFletcherJob({ description: jobDetails, resume: resumeFile }),
-    onSuccess: () => {
+    onSuccess: (res) => {
       showToast('Fletcher job queued')
       setJobDetails('')
+      qc.setQueriesData<FletcherJobsCache>({ queryKey: ['fletcher-jobs'] }, (cache) =>
+        upsertFletcherJob(cache, res),
+      )
       qc.invalidateQueries({ queryKey: ['fletcher-jobs'] })
     },
     onError: (e) => showToast(e instanceof Error ? e.message : 'Queue failed', 'error'),
@@ -431,17 +538,64 @@ function FletcherQueuePanel({
 }) {
   const showToast = useUiStore((s) => s.showToast)
   const qc = useQueryClient()
-  const activeJobs = useMemo(
-    () => jobs.filter((job) => ACTIVE_FLETCHER_STATUSES.has(job.status)),
-    [jobs],
+  const [displayedProgress, setDisplayedProgress] = useState<Record<string, DisplayedProgress>>(
+    () => readDisplayedProgress(),
   )
-  const [displayedProgress, setDisplayedProgress] = useState<Record<string, number>>({})
+  const displayedProgressJobIds = useMemo(
+    () => new Set(Object.keys(displayedProgress)),
+    [displayedProgress],
+  )
+  const activeJobs = useMemo(() => {
+    return jobs
+      .filter(
+        (job) => {
+          if (ACTIVE_FLETCHER_STATUSES.has(job.status)) return true
+          return (
+            job.status === 'succeeded' &&
+            displayedProgressJobIds.has(job.queue_item_id) &&
+            displayedProgress[job.queue_item_id]?.activeInCurrentView
+          )
+        },
+      )
+      .sort((a, b) => {
+        const aCompleting =
+          a.status === 'succeeded' &&
+          displayedProgressJobIds.has(a.queue_item_id) &&
+          displayedProgress[a.queue_item_id]?.activeInCurrentView
+        const bCompleting =
+          b.status === 'succeeded' &&
+          displayedProgressJobIds.has(b.queue_item_id) &&
+          displayedProgress[b.queue_item_id]?.activeInCurrentView
+        if (aCompleting !== bCompleting) return aCompleting ? -1 : 1
+        return 0
+      })
+  }, [displayedProgress, displayedProgressJobIds, jobs])
+  const completingProgressJobIds = useMemo(
+    () =>
+      new Set(
+        jobs
+          .filter(
+            (job) =>
+              job.status === 'succeeded' &&
+              displayedProgressJobIds.has(job.queue_item_id) &&
+              displayedProgress[job.queue_item_id]?.activeInCurrentView,
+          )
+          .map((job) => job.queue_item_id),
+      ),
+    [displayedProgress, displayedProgressJobIds, jobs],
+  )
+  const progressBlockedByFinishingJob = completingProgressJobIds.size > 0
+  const historyBlockedJobIds = completingProgressJobIds
   const historyJobs = useMemo(
     () =>
       jobs
-        .filter((job) => !ACTIVE_FLETCHER_STATUSES.has(job.status))
+        .filter(
+          (job) =>
+            !ACTIVE_FLETCHER_STATUSES.has(job.status) &&
+            !historyBlockedJobIds.has(job.queue_item_id),
+        )
         .sort((a, b) => runTimeMillis(b.finished_at) - runTimeMillis(a.finished_at)),
-    [jobs],
+    [historyBlockedJobIds, jobs],
   )
   const [historySearch, setHistorySearch] = useState('')
   const [detailJob, setDetailJob] = useState<FletcherQueueItem | null>(null)
@@ -485,35 +639,149 @@ function FletcherQueuePanel({
     onError: (e) =>
       showToast(e instanceof Error ? e.message : 'Delete Fletcher history failed', 'error'),
   })
+  const clearResumes = useMutation({
+    mutationFn: () => clearGeneratedResumes({ includeAdHoc: false, deleteArtifacts: true }),
+    onSuccess: (result) => {
+      setSelectedHistoryIds([])
+      setDetailJob(null)
+      qc.invalidateQueries({ queryKey: ['fletcher-jobs'] })
+      showToast(
+        `Cleared ${result.resume_attempts_deleted} resume attempt${
+          result.resume_attempts_deleted === 1 ? '' : 's'
+        } and ${result.fletcher_jobs_deleted} history run${
+          result.fletcher_jobs_deleted === 1 ? '' : 's'
+        }`,
+      )
+    },
+    onError: (e) =>
+      showToast(e instanceof Error ? e.message : 'Clear generated resumes failed', 'error'),
+  })
+
+  useEffect(() => {
+    try {
+      const compact = Object.fromEntries(
+        Object.entries(displayedProgress).map(([queueItemId, progress]) => [
+          queueItemId,
+          {
+            value: progress.value,
+            currentTarget: progress.currentTarget,
+            nextDelayMs: progress.nextDelayMs,
+            preCompleteCap: progress.preCompleteCap,
+            completedAt: progress.completedAt,
+          },
+        ]),
+      )
+      if (Object.keys(compact).length) {
+        localStorage.setItem(FLETCHER_DISPLAY_PROGRESS_STORAGE_KEY, JSON.stringify(compact))
+      } else {
+        localStorage.removeItem(FLETCHER_DISPLAY_PROGRESS_STORAGE_KEY)
+      }
+    } catch {
+      // Ignore private-mode or quota failures. Progress smoothing is cosmetic.
+    }
+  }, [displayedProgress])
 
   useEffect(() => {
     const timer = window.setInterval(() => {
-      const activeTargets = new Map(
-        activeJobs
-          .map((job) => [job.queue_item_id, fletcherProgressPercent(job)] as const)
-          .filter((entry): entry is readonly [string, number] => entry[1] !== null),
+      const now = Date.now()
+      const completingJobIds = new Set(
+        jobs
+          .filter(
+            (job) =>
+              job.status === 'succeeded' &&
+              displayedProgress[job.queue_item_id] &&
+              displayedProgress[job.queue_item_id]?.activeInCurrentView,
+          )
+          .map((job) => job.queue_item_id),
       )
-      if (!activeTargets.size) {
+      const progressJobs = jobs.filter((job) => {
+        if (job.status === 'queued') return false
+        if (completingJobIds.size && !completingJobIds.has(job.queue_item_id)) return false
+        if (ACTIVE_FLETCHER_STATUSES.has(job.status)) return true
+        return job.status === 'succeeded'
+      })
+      if (!progressJobs.length) {
         setDisplayedProgress((current) => (Object.keys(current).length ? {} : current))
         return
       }
       setDisplayedProgress((current) => {
         let changed = false
-        const next: Record<string, number> = {}
-        for (const [queueItemId, target] of activeTargets) {
-          const currentValue = current[queueItemId] ?? Math.min(target, 1)
-          const smoothed = nextSmoothedProgress(currentValue, target)
-          next[queueItemId] = smoothed
-          if (Math.abs(smoothed - currentValue) > 0.001) changed = true
+        const next: Record<string, DisplayedProgress> = {}
+        const progressJobIds = new Set(progressJobs.map((job) => job.queue_item_id))
+        for (const job of progressJobs) {
+          const queueItemId = job.queue_item_id
+          const existing = current[queueItemId]
+          if (
+            job.status === 'succeeded' &&
+            (!existing || !existing.activeInCurrentView)
+          ) {
+            continue
+          }
+          const preCompleteCap = existing?.preCompleteCap ?? fletcherPreCompleteCap(queueItemId)
+          const initialValue = existing ? existing.value : 1
+          const initialProgress: DisplayedProgress = existing ?? {
+            value: initialValue,
+            lastTickAt: now,
+            currentTarget: initialValue,
+            nextDelayMs: FLETCHER_PROGRESS_CRUISE_STEP_MS,
+            preCompleteCap,
+            activeInCurrentView: ACTIVE_FLETCHER_STATUSES.has(job.status),
+          }
+          const target = fletcherStepProgressTarget(job, initialProgress)
+          const currentProgress =
+            target > initialProgress.currentTarget
+              ? {
+                  ...initialProgress,
+                  currentTarget: target,
+                  nextDelayMs:
+                    target >= 100
+                      ? FLETCHER_PROGRESS_FINAL_STEP_MS
+                      : initialProgress.value < initialProgress.preCompleteCap
+                        ? FLETCHER_PROGRESS_CRUISE_STEP_MS
+                        : initialProgress.nextDelayMs,
+                }
+              : initialProgress
+          const smoothed = nextSmoothedProgress(currentProgress, target, now)
+          const ticked = smoothed !== currentProgress.value
+          const completedAt =
+            smoothed >= 100 ? (currentProgress.completedAt ?? now) : currentProgress.completedAt
+          if (completedAt && now - completedAt > FLETCHER_COMPLETION_HOLD_MS) {
+            changed = true
+            continue
+          }
+          const nextDelayMs = ticked
+            ? target >= 100 || smoothed < currentProgress.preCompleteCap
+              ? target >= 100
+                ? FLETCHER_PROGRESS_FINAL_STEP_MS
+                : FLETCHER_PROGRESS_CRUISE_STEP_MS
+              : currentProgress.nextDelayMs * fletcherProgressDelayMultiplier(smoothed)
+            : currentProgress.nextDelayMs
+          next[queueItemId] = {
+            ...currentProgress,
+            value: smoothed,
+            lastTickAt: ticked ? now : currentProgress.lastTickAt,
+            nextDelayMs,
+            completedAt,
+            activeInCurrentView:
+              currentProgress.activeInCurrentView || ACTIVE_FLETCHER_STATUSES.has(job.status),
+          }
+          if (
+            ticked ||
+            completedAt !== currentProgress.completedAt ||
+            currentProgress.currentTarget !== initialProgress.currentTarget ||
+            currentProgress.nextDelayMs !== initialProgress.nextDelayMs
+          ) {
+            changed = true
+          }
         }
-        if (Object.keys(current).some((queueItemId) => !activeTargets.has(queueItemId))) {
+        if (Object.keys(current).some((queueItemId) => !progressJobIds.has(queueItemId))) {
           changed = true
         }
         return changed ? next : current
       })
-    }, 200)
+    }, FLETCHER_PROGRESS_TICK_MS)
     return () => window.clearInterval(timer)
-  }, [activeJobs])
+  }, [displayedProgress, jobs])
 
   function toggleHistorySelection(queueItemId: string, checked: boolean) {
     setSelectedHistoryIds((current) => {
@@ -581,6 +849,17 @@ function FletcherQueuePanel({
     deleteHistory.mutate([queueItemId])
   }
 
+  function clearGeneratedJobResumes() {
+    if (
+      !window.confirm(
+        'Clear all generated job resumes and Fletcher history for job-linked runs? Active runs will be skipped.',
+      )
+    ) {
+      return
+    }
+    clearResumes.mutate()
+  }
+
   return (
     <>
       <section className={styles.queuePanel}>
@@ -593,14 +872,22 @@ function FletcherQueuePanel({
             {activeJobs.length} active job{activeJobs.length === 1 ? '' : 's'}
           </span>
         </div>
-        <div className={styles.queueList}>
+        <div className={`${styles.queueList} ${styles.queueListScrollable}`}>
           {activeJobs.length ? (
             activeJobs.map((job) => {
               const progressPercent = fletcherProgressPercent(job)
+              const localProgress = displayedProgress[job.queue_item_id]?.value
+              const hasDisplayedProgress = typeof localProgress === 'number'
               const displayedPercent =
-                progressPercent === null
-                  ? null
-                  : Math.round(displayedProgress[job.queue_item_id] ?? progressPercent)
+                typeof localProgress === 'number'
+                  ? Math.round(localProgress)
+                  : progressPercent === null
+                    ? null
+                    : Math.round(job.status === 'queued' ? progressPercent : 1)
+              const showProgressBar =
+                job.status !== 'queued' &&
+                displayedPercent !== null &&
+                (!progressBlockedByFinishingJob || hasDisplayedProgress)
               return (
                 <article className={styles.queueCard} key={job.queue_item_id}>
                   <div className={styles.queueCopy}>
@@ -615,7 +902,7 @@ function FletcherQueuePanel({
                       {job.status} : {job.progress.current_step || 'waiting'}
                     </div>
                     <div className={styles.meta}>Started: {formatRunTime(job.started_at)}</div>
-                    {job.status !== 'queued' && displayedPercent !== null ? (
+                    {showProgressBar ? (
                       <div className={styles.progressRow}>
                         <div
                           className={styles.progressTrack}
@@ -700,6 +987,13 @@ function FletcherQueuePanel({
           <span className={styles.meta}>
             {historyJobs.length} previous run{historyJobs.length === 1 ? '' : 's'}
           </span>
+          <button
+            className={`${styles.btn} ${styles.btnDanger}`}
+            disabled={clearResumes.isPending}
+            onClick={clearGeneratedJobResumes}
+          >
+            {clearResumes.isPending ? 'Clearing...' : 'Clear generated resumes'}
+          </button>
         </div>
         {historyJobs.length ? (
           <>
@@ -777,7 +1071,7 @@ function FletcherQueuePanel({
             </button>
           </div>
         ) : null}
-        <div className={styles.queueList}>
+        <div className={`${styles.queueList} ${styles.queueListScrollable}`}>
           {visibleHistoryJobs.length ? (
             visibleHistoryJobs.map((job) => {
               const title = fletcherTitle(job)
@@ -788,9 +1082,14 @@ function FletcherQueuePanel({
               const startingTexUrl = reviewId
                 ? `/api/fletcher/reviews/${reviewId}/versions/starting/tex`
                 : null
+              const noSummaryPdfUnavailable =
+                (!!job.result.compile_status && job.result.compile_status !== 'ok') ||
+                (job.status === 'failed' && !job.result.pdf_url)
               const pdfUrl =
                 job.result.pdf_url ||
-                (reviewId ? `/api/fletcher/reviews/${reviewId}/versions/no_summary/pdf` : null)
+                (!noSummaryPdfUnavailable && reviewId
+                  ? `/api/fletcher/reviews/${reviewId}/versions/no_summary/pdf`
+                  : null)
               const texUrl =
                 job.result.tex_url ||
                 (reviewId ? `/api/fletcher/reviews/${reviewId}/versions/no_summary/tex` : null)
@@ -827,40 +1126,12 @@ function FletcherQueuePanel({
                       </div>
                     ) : null}
                   </div>
-                  <div className={styles.queueActions}>
+                  <div className={`${styles.queueActions} ${styles.historyActions}`}>
                     {reviewId ? (
                       <a className={styles.btn} href={`/fletcher/reviews/${reviewId}`}>
                         Open workspace
                       </a>
                     ) : null}
-                    {startingPdfUrl ? (
-                      <a className={styles.btn} href={startingPdfUrl}>
-                        Starting PDF
-                      </a>
-                    ) : null}
-                    {startingTexUrl ? (
-                      <a className={styles.btn} href={startingTexUrl}>
-                        Starting TeX
-                      </a>
-                    ) : null}
-                    {pdfUrl ? (
-                      <a className={styles.btn} href={pdfUrl}>
-                        PDF
-                      </a>
-                    ) : null}
-                    {texUrl ? (
-                      <a className={styles.btn} href={texUrl}>
-                        TeX
-                      </a>
-                    ) : null}
-                    <a
-                      className={styles.btn}
-                      href={`/api/fletcher/tailor/jobs/${job.queue_item_id}/log`}
-                      target="_blank"
-                      rel="noreferrer"
-                    >
-                      View log
-                    </a>
                     <a
                       className={styles.btn}
                       href={`/api/fletcher/tailor/jobs/${job.queue_item_id}/log?download=1`}
@@ -875,6 +1146,22 @@ function FletcherQueuePanel({
                     >
                       Delete
                     </button>
+                    <details className={styles.moreMenu}>
+                      <summary aria-label={`More actions for ${title}`}>⋮</summary>
+                      <div className={styles.moreMenuPanel}>
+                        {startingPdfUrl ? <a href={startingPdfUrl}>Starting PDF</a> : null}
+                        {startingTexUrl ? <a href={startingTexUrl}>Starting TeX</a> : null}
+                        {pdfUrl ? <a href={pdfUrl}>PDF</a> : null}
+                        {texUrl ? <a href={texUrl}>TeX</a> : null}
+                        <a
+                          href={`/api/fletcher/tailor/jobs/${job.queue_item_id}/log`}
+                          target="_blank"
+                          rel="noreferrer"
+                        >
+                          View log
+                        </a>
+                      </div>
+                    </details>
                   </div>
                 </article>
               )
@@ -923,9 +1210,14 @@ function FletcherJobDetailModal({
   const reviewId = job.result.review_id
   const startingPdfUrl = reviewId ? `/api/fletcher/reviews/${reviewId}/versions/starting/pdf` : null
   const startingTexUrl = reviewId ? `/api/fletcher/reviews/${reviewId}/versions/starting/tex` : null
+  const noSummaryPdfUnavailable =
+    (!!job.result.compile_status && job.result.compile_status !== 'ok') ||
+    (job.status === 'failed' && !job.result.pdf_url)
   const pdfUrl =
     job.result.pdf_url ||
-    (reviewId ? `/api/fletcher/reviews/${reviewId}/versions/no_summary/pdf` : null)
+    (!noSummaryPdfUnavailable && reviewId
+      ? `/api/fletcher/reviews/${reviewId}/versions/no_summary/pdf`
+      : null)
   const texUrl =
     job.result.tex_url ||
     (reviewId ? `/api/fletcher/reviews/${reviewId}/versions/no_summary/tex` : null)
@@ -1019,57 +1311,64 @@ function FletcherJobDetailModal({
           ) : null}
         </div>
 
-        <div className={styles.detailMetaGrid}>
-          <div>
-            <span>Status</span>
-            <strong>{job.status}</strong>
-          </div>
-          <div>
-            <span>Started</span>
-            <strong>{formatRunTime(job.started_at || job.created_at)}</strong>
-          </div>
-          <div>
-            <span>Finished</span>
-            <strong>{formatRunTime(job.finished_at)}</strong>
-          </div>
-          <div>
-            <span>Resume file</span>
-            <strong>{job.input.resume_filename || '-'}</strong>
-          </div>
-          <div>
-            <span>Queue ID</span>
-            <strong>{job.queue_item_id}</strong>
-          </div>
-          {job.input.job_id ? (
-            <div>
-              <span>Hunt job ID</span>
-              <strong>{job.input.job_id}</strong>
+        <div className={styles.detailBody}>
+          <aside className={styles.detailMetaPanel}>
+            <h3>Run Details</h3>
+            <div className={styles.detailMetaGrid}>
+              <div>
+                <span>Status</span>
+                <strong>{job.status}</strong>
+              </div>
+              <div>
+                <span>Started</span>
+                <strong>{formatRunTime(job.started_at || job.created_at)}</strong>
+              </div>
+              <div>
+                <span>Finished</span>
+                <strong>{formatRunTime(job.finished_at)}</strong>
+              </div>
+              <div>
+                <span>Resume file</span>
+                <strong>{job.input.resume_filename || '-'}</strong>
+              </div>
+              <div>
+                <span>Queue ID</span>
+                <strong>{job.queue_item_id}</strong>
+              </div>
+              {job.input.job_id ? (
+                <div>
+                  <span>Hunt job ID</span>
+                  <strong>{job.input.job_id}</strong>
+                </div>
+              ) : null}
+              {progressPercent !== null ? (
+                <div>
+                  <span>Progress</span>
+                  <strong>{progressPercent}%</strong>
+                </div>
+              ) : null}
+              {job.progress.current_step ? (
+                <div>
+                  <span>Step</span>
+                  <strong>{job.progress.current_step}</strong>
+                </div>
+              ) : null}
             </div>
-          ) : null}
-          {progressPercent !== null ? (
-            <div>
-              <span>Progress</span>
-              <strong>{progressPercent}%</strong>
-            </div>
-          ) : null}
-          {job.progress.current_step ? (
-            <div>
-              <span>Step</span>
-              <strong>{job.progress.current_step}</strong>
-            </div>
-          ) : null}
-        </div>
+          </aside>
 
-        {job.error ? (
-          <div className={styles.detailBlock}>
-            <h3>Error</h3>
-            <pre>{job.error}</pre>
-          </div>
-        ) : null}
+          <div className={styles.detailContentPanel}>
+            {job.error ? (
+              <div className={styles.detailBlock}>
+                <h3>Error</h3>
+                <pre>{job.error}</pre>
+              </div>
+            ) : null}
 
-        <div className={styles.detailBlock}>
-          <h3>{job.input.job_id ? 'Job details' : 'Job description'}</h3>
-          <pre>{description || 'No job description was stored for this run.'}</pre>
+            <div className={`${styles.detailBlock} ${styles.detailDescriptionBlock}`}>
+              <h3>{job.input.job_id ? 'Job details' : 'Job description'}</h3>
+              <pre>{description || 'No job description was stored for this run.'}</pre>
+            </div>
+          </div>
         </div>
       </section>
     </div>

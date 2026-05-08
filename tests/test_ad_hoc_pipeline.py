@@ -446,6 +446,89 @@ def test_review_keyword_scores_include_present_and_rag_ranked_keywords():
     ]
 
 
+def test_review_keyword_scores_include_candidates_and_used_bullet():
+    from fletcher.ad_hoc_pipeline import _review_keyword_scores
+
+    rows = _review_keyword_scores(
+        raw_keywords=["MongoDB", "RabbitMQ"],
+        present_keywords=[],
+        missing_keywords=["MongoDB", "RabbitMQ"],
+        rag_scores=[
+            {
+                "keyword": "MongoDB",
+                "tier": "high",
+                "score": 0.91,
+                "bullet_idx": 0,
+                "candidates": [
+                    {"bullet_idx": 0, "score": 0.91},
+                    {"bullet_idx": 2, "score": 0.86},
+                ],
+            },
+            {
+                "keyword": "RabbitMQ",
+                "tier": "mid",
+                "score": 0.72,
+                "bullet_idx": 4,
+                "candidates": [{"bullet_idx": 4, "score": 0.72}],
+            },
+        ],
+        used_keywords=[{"keyword": "MongoDB", "bullet_idx": 2, "support_kind": "rewrite_added"}],
+        high_threshold=0.8,
+    )
+
+    assert rows[0]["status"] == "rewrite_used"
+    assert rows[0]["used_bullet_idx"] == 2
+    assert [candidate["bullet_idx"] for candidate in rows[0]["candidates"]] == [0, 2]
+    assert rows[1]["status"] == "missing"
+    assert "candidates" not in rows[1]
+
+
+def test_review_keyword_scores_separate_present_supported_and_rewrite_added():
+    from fletcher.ad_hoc_pipeline import _review_keyword_scores
+
+    rows = _review_keyword_scores(
+        raw_keywords=["Python", "microservices architecture", "CI/CD pipelines"],
+        present_keywords=["Python"],
+        missing_keywords=["microservices architecture", "CI/CD pipelines"],
+        present_coverage={"Python": [0, 2]},
+        rag_scores=[
+            {
+                "keyword": "microservices architecture",
+                "tier": "high",
+                "score": 0.66,
+                "bullet_idx": 0,
+            },
+            {
+                "keyword": "CI/CD pipelines",
+                "tier": "high",
+                "score": 0.73,
+                "bullet_idx": 3,
+            },
+        ],
+        used_keywords=[
+            {
+                "keyword": "microservices architecture",
+                "bullet_idx": 0,
+                "support_kind": "semantic_supported",
+            },
+            {
+                "keyword": "CI/CD pipelines",
+                "bullet_idx": 3,
+                "support_kind": "rewrite_added",
+            },
+        ],
+        high_threshold=0.6,
+    )
+
+    assert rows[0]["status"] == "present"
+    assert rows[0]["score"] == 1.0
+    assert [candidate["bullet_idx"] for candidate in rows[0]["candidates"]] == [0, 2]
+    assert rows[1]["status"] == "supported"
+    assert rows[1]["tier"] == "supported"
+    assert rows[1]["score"] == 0.66
+    assert rows[2]["status"] == "rewrite_used"
+
+
 def test_pdf_path_from_compile_result(base_mocks):
     from fletcher.ad_hoc_pipeline import run_ad_hoc_pipeline
 
@@ -1834,6 +1917,65 @@ def test_rewrite_assignment_caps_keywords_and_uses_alternate_bullets():
     assert assigned[1] == ["gamma"]
 
 
+def test_rewrite_assignment_ignores_alternate_candidates_below_high_threshold():
+    from fletcher.ad_hoc_pipeline import _select_rewrite_assignments
+
+    matches = [
+        {
+            "keyword": "alpha",
+            "bullet_idx": 0,
+            "score": 0.95,
+            "candidates": [{"bullet_idx": 0, "score": 0.95}],
+        },
+        {
+            "keyword": "beta",
+            "bullet_idx": 0,
+            "score": 0.94,
+            "candidates": [{"bullet_idx": 0, "score": 0.94}],
+        },
+        {
+            "keyword": "gamma",
+            "bullet_idx": 0,
+            "score": 0.93,
+            "candidates": [{"bullet_idx": 0, "score": 0.93}, {"bullet_idx": 1, "score": 0.59}],
+        },
+    ]
+
+    assigned = _select_rewrite_assignments(
+        matches,
+        max_keywords_per_bullet=2,
+        high_threshold=0.6,
+    )
+
+    assert assigned == {0: ["alpha", "beta"]}
+
+
+def test_rag_high_matches_include_alternate_candidates(monkeypatch):
+    import fletcher.llm.rag as rag
+
+    vectors = {
+        "backend development": [1.0, 0.0],
+        "frontend work": [0.0, 1.0],
+        "Built a Python backend service.": [0.99, 0.01],
+        "Built a responsive UI.": [0.98, 0.02],
+    }
+
+    monkeypatch.setattr(rag, "_embed", lambda text: vectors[text])
+    monkeypatch.setattr(rag, "_cosine_sim", lambda left, right: sum(a * b for a, b in zip(left, right)))
+
+    result = rag.match_keywords_to_bullets(
+        ["backend development"],
+        ["Built a Python backend service.", "Built a responsive UI."],
+        high_threshold=0.9,
+        mid_threshold=0.4,
+    )
+
+    match = result["bullet_matches"][0]
+    assert match["keyword"] == "backend development"
+    assert match["candidates"] == result["scores"][0]["candidates"]
+    assert [candidate["bullet_idx"] for candidate in match["candidates"]] == [0, 1]
+
+
 def test_summary_retry_removes_keywords_named_in_validation_reasons(base_mocks):
     from fletcher.ad_hoc_pipeline import run_ad_hoc_pipeline
 
@@ -1935,6 +2077,62 @@ def test_bullet_order_boost_makes_first_bullet_harder_to_drop(monkeypatch):
     assert details["first"]["score_order_multiplier"] == 1.5
     assert details["last"]["score_order_multiplier"] == 1.0
     assert details["first"]["score_title_bonus"] == 0.0
+
+
+def test_visible_keyword_doubles_drop_score(monkeypatch):
+    import fletcher.ad_hoc_pipeline as mod
+
+    monkeypatch.setattr(mod, "score_bullets_for_drop", lambda _bullets, _keywords: [0.4, 0.4])
+    sources = [
+        {"bullet_id": "with_keyword", "kind": "exp", "entry_id": "exp0", "original_local_idx": 0},
+        {"bullet_id": "without_keyword", "kind": "exp", "entry_id": "exp0", "original_local_idx": 1},
+    ]
+
+    scores = mod._score_sources(
+        ["Built Python service.", "Built API."],
+        sources,
+        ["Python"],
+    )
+    details = mod._score_details(
+        ["Built Python service.", "Built API."],
+        sources,
+        ["Python"],
+    )
+
+    assert scores["with_keyword"] == 1.2
+    assert scores["without_keyword"] == 0.6
+    assert details["with_keyword"]["score_keyword_retention_multiplier"] == 2.0
+    assert details["with_keyword"]["score_keyword_retention_reasons"] == ["visible_keyword"]
+    assert details["without_keyword"]["score_keyword_retention_multiplier"] == 1.0
+
+
+def test_successful_rewrite_doubles_drop_score(monkeypatch):
+    import fletcher.ad_hoc_pipeline as mod
+
+    monkeypatch.setattr(mod, "score_bullets_for_drop", lambda _bullets, _keywords: [0.4, 0.4])
+    sources = [
+        {"bullet_id": "original", "kind": "exp", "entry_id": "exp0", "original_local_idx": 0},
+        {"bullet_id": "rewritten", "kind": "exp", "entry_id": "exp0", "original_local_idx": 1},
+    ]
+    rewritten_refs = {("exp", "exp0", 1)}
+
+    scores = mod._score_sources(
+        ["Built API.", "Built service."],
+        sources,
+        ["Python"],
+        rewritten_refs=rewritten_refs,
+    )
+    details = mod._score_details(
+        ["Built API.", "Built service."],
+        sources,
+        ["Python"],
+        rewritten_refs=rewritten_refs,
+    )
+
+    assert scores["original"] == 0.6
+    assert scores["rewritten"] == 1.2
+    assert details["rewritten"]["score_keyword_retention_multiplier"] == 2.0
+    assert details["rewritten"]["score_keyword_retention_reasons"] == ["rewritten"]
 
 
 def test_job_title_similarity_adds_small_drop_score_bonus(monkeypatch):

@@ -109,7 +109,9 @@ CREATE TABLE IF NOT EXISTS orchestration_runs (
     submit_approval_id          TEXT,
     started_at                  TEXT NOT NULL DEFAULT to_char(CURRENT_TIMESTAMP, 'YYYY-MM-DD HH24:MI:SS'),
     updated_at                  TEXT NOT NULL DEFAULT to_char(CURRENT_TIMESTAMP, 'YYYY-MM-DD HH24:MI:SS'),
-    completed_at                TEXT
+    completed_at                TEXT,
+    CONSTRAINT orchestration_runs_job_id_fkey
+        FOREIGN KEY (job_id) REFERENCES jobs(id) ON DELETE CASCADE
 );
 
 CREATE TABLE IF NOT EXISTS orchestration_events (
@@ -119,7 +121,9 @@ CREATE TABLE IF NOT EXISTS orchestration_events (
     step_name               TEXT NOT NULL,
     payload_json            TEXT,
     payload_path            TEXT,
-    created_at              TEXT NOT NULL DEFAULT to_char(CURRENT_TIMESTAMP, 'YYYY-MM-DD HH24:MI:SS')
+    created_at              TEXT NOT NULL DEFAULT to_char(CURRENT_TIMESTAMP, 'YYYY-MM-DD HH24:MI:SS'),
+    CONSTRAINT orchestration_events_orchestration_run_id_fkey
+        FOREIGN KEY (orchestration_run_id) REFERENCES orchestration_runs(id) ON DELETE CASCADE
 );
 
 CREATE TABLE IF NOT EXISTS submit_approvals (
@@ -131,7 +135,11 @@ CREATE TABLE IF NOT EXISTS submit_approvals (
     decision                TEXT NOT NULL,
     reason                  TEXT,
     artifact_path           TEXT,
-    created_at              TEXT NOT NULL DEFAULT to_char(CURRENT_TIMESTAMP, 'YYYY-MM-DD HH24:MI:SS')
+    created_at              TEXT NOT NULL DEFAULT to_char(CURRENT_TIMESTAMP, 'YYYY-MM-DD HH24:MI:SS'),
+    CONSTRAINT submit_approvals_job_id_fkey
+        FOREIGN KEY (job_id) REFERENCES jobs(id) ON DELETE CASCADE,
+    CONSTRAINT submit_approvals_orchestration_run_id_fkey
+        FOREIGN KEY (orchestration_run_id) REFERENCES orchestration_runs(id) ON DELETE CASCADE
 );
 
 CREATE TABLE IF NOT EXISTS orchestration_worker_leases (
@@ -144,7 +152,9 @@ CREATE TABLE IF NOT EXISTS orchestration_worker_leases (
     heartbeat_at                TEXT,
     expires_at                  TEXT NOT NULL,
     completed_at                TEXT,
-    worker_metadata_json        TEXT DEFAULT '{}'
+    worker_metadata_json        TEXT DEFAULT '{}',
+    CONSTRAINT orchestration_worker_leases_orchestration_run_id_fkey
+        FOREIGN KEY (orchestration_run_id) REFERENCES orchestration_runs(id) ON DELETE CASCADE
 );
 
 -- -----------------------------------------------------------------------

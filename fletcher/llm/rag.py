@@ -499,6 +499,7 @@ def match_keywords_to_bullets(
                         "score": best_score,
                         "bullet_idx": best_idx,
                         "bullet_text": bullets[best_idx],
+                        "candidates": top_candidates,
                     }
                 )
             elif best_score >= mid:

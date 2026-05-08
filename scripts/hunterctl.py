@@ -608,6 +608,16 @@ def cmd_c4_events(args):
     _run(_coordinator_command("events", "--run-id", args.run_id))
 
 
+def cmd_gh_import(args):
+    """Interactive GitHub project importer: fetch repos, generate bullets, update master_resume.yaml."""
+    command = [PYTHON, "-m", "fletcher.github_import"]
+    if getattr(args, "master", None):
+        command.extend(["--master", args.master])
+    if getattr(args, "provider", None):
+        command.extend(["--provider", args.provider])
+    _run(command)
+
+
 def cmd_tests(args):
     suites = {
         "1": ["test_stage1.py"],
@@ -1211,6 +1221,19 @@ def build_parser():
         nargs="?",
     )
     tests.set_defaults(func=cmd_tests)
+
+    gh_import = subparsers.add_parser(
+        "gh-import",
+        help="Interactive GitHub project importer: fetch repos, generate bullets, update master_resume.yaml.",
+    )
+    gh_import.add_argument("--master", default=None, help="Override path to master_resume.yaml.")
+    gh_import.add_argument(
+        "--provider",
+        choices=["ollama", "claude-code"],
+        default="ollama",
+        help="LLM backend: 'ollama' (local, default) or 'claude-code' (uses `claude` CLI).",
+    )
+    gh_import.set_defaults(func=cmd_gh_import)
 
     runner = subparsers.add_parser("runner", help="Run the continuous local runner.")
     runner.set_defaults(func=cmd_runner)

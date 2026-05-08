@@ -354,7 +354,14 @@
 
 .queueList {
   display: grid;
-  gap: 10px;
+  gap: 8px;
+}
+
+.queueListScrollable {
+  max-height: min(48vh, 520px);
+  overflow-y: auto;
+  padding-right: 4px;
+  scrollbar-gutter: stable;
 }
 
 .queueCard {
@@ -372,13 +379,17 @@
 
 .queueCardSelectable {
   grid-template-columns: 28px minmax(0, 1fr) minmax(360px, 34%);
+  position: relative;
+  height: 78px;
+  padding: 8px 12px;
+  overflow: visible;
 }
 
 .historySelect {
   display: inline-flex;
   align-items: center;
-  height: 36px;
-  padding-top: 4px;
+  justify-content: center;
+  height: 100%;
 }
 
 .queueTitleButton {
@@ -483,6 +494,81 @@
   white-space: nowrap;
 }
 
+.historyActions {
+  grid-template-columns: minmax(116px, 1fr) minmax(108px, 1fr) minmax(72px, 0.8fr) 40px;
+  overflow: visible;
+}
+
+.moreMenu {
+  position: relative;
+  justify-self: stretch;
+  width: 100%;
+  z-index: 2;
+}
+
+.moreMenu[open] {
+  z-index: 30;
+}
+
+.moreMenu summary {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  min-height: 34px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--panel-strong);
+  color: var(--ink);
+  cursor: pointer;
+  font-size: 1.18rem;
+  font-weight: 800;
+  line-height: 1;
+  list-style: none;
+  transition:
+    background var(--ease),
+    border-color var(--ease);
+}
+
+.moreMenu summary::-webkit-details-marker {
+  display: none;
+}
+
+.moreMenu summary:hover,
+.moreMenu[open] summary {
+  background: var(--panel-hover);
+  border-color: var(--accent);
+}
+
+.moreMenuPanel {
+  position: absolute;
+  right: 0;
+  top: calc(100% + 6px);
+  z-index: 20;
+  display: grid;
+  min-width: 164px;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--panel);
+  box-shadow: var(--shadow);
+}
+
+.moreMenuPanel a {
+  display: block;
+  padding: 9px 12px;
+  color: var(--ink);
+  font-size: 0.84rem;
+  font-weight: 650;
+  text-decoration: none;
+  white-space: nowrap;
+}
+
+.moreMenuPanel a:hover {
+  background: var(--panel-hover);
+  text-decoration: none;
+}
+
 .batchToolbar {
   display: flex;
   align-items: center;
@@ -560,19 +646,21 @@
   z-index: 50;
   display: grid;
   place-items: center;
-  padding: 24px;
+  padding: 28px;
   background: rgba(1, 16, 10, 0.72);
 }
 
 .detailModal {
-  width: min(980px, 100%);
-  max-height: min(820px, calc(100vh - 48px));
-  overflow: auto;
+  display: flex;
+  flex-direction: column;
+  width: min(1500px, calc(100vw - 56px));
+  max-height: calc(100vh - 56px);
+  overflow: hidden;
   border: 1px solid var(--line);
   border-radius: var(--radius-md);
   background: var(--panel);
   box-shadow: var(--shadow);
-  padding: 18px;
+  padding: 20px 22px 22px;
 }
 
 .detailHeader {
@@ -580,7 +668,8 @@
   align-items: flex-start;
   justify-content: space-between;
   gap: 14px;
-  margin-bottom: 14px;
+  padding-bottom: 16px;
+  border-bottom: 1px solid var(--line);
 }
 
 .detailHeaderCopy {
@@ -590,28 +679,72 @@
 .detailTitle {
   margin: 8px 0 0;
   color: var(--ink);
-  font-size: 1.3rem;
-  line-height: 1.25;
+  font-size: clamp(1.3rem, 1.8vw, 1.9rem);
+  line-height: 1.18;
 }
 
 .detailActionBar {
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
-  padding: 12px 0;
-  border-top: 1px solid var(--line);
+  padding: 14px 0;
   border-bottom: 1px solid var(--line);
+}
+
+.detailActionBar .btn {
+  min-width: 86px;
+}
+
+.detailActionBar .btn:first-of-type {
+  min-width: 150px;
+}
+
+.detailBody {
+  display: grid;
+  grid-template-columns: minmax(250px, 0.28fr) minmax(0, 1fr);
+  gap: 18px;
+  min-height: 0;
+  padding-top: 16px;
+  overflow: hidden;
+}
+
+.detailMetaPanel,
+.detailContentPanel {
+  min-width: 0;
+}
+
+.detailMetaPanel {
+  align-self: stretch;
+  overflow: auto;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--panel-strong);
+  padding: 14px;
+}
+
+.detailMetaPanel h3,
+.detailBlock h3 {
+  margin: 0;
+  color: var(--ink);
+  font-size: 0.94rem;
 }
 
 .detailMetaGrid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
-  gap: 10px;
-  margin: 14px 0;
+  grid-template-columns: 1fr;
+  gap: 12px;
+  margin-top: 12px;
 }
 
 .detailMetaGrid div {
   min-width: 0;
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--line);
+}
+
+.detailMetaGrid div:last-child {
+  padding-bottom: 0;
+  border-bottom: 0;
 }
 
 .detailMetaGrid span {
@@ -629,23 +762,17 @@
   min-width: 0;
   overflow-wrap: anywhere;
   color: var(--ink);
-  font-size: 0.9rem;
+  font-size: 1rem;
 }
 
 .detailBlock {
   display: grid;
   gap: 8px;
-  margin-top: 14px;
-}
-
-.detailBlock h3 {
-  margin: 0;
-  color: var(--ink);
-  font-size: 0.94rem;
+  min-height: 0;
 }
 
 .detailBlock pre {
-  max-height: 240px;
+  max-height: min(58vh, 620px);
   margin: 0;
   overflow: auto;
   white-space: pre-wrap;
@@ -658,6 +785,22 @@
   font-family: var(--font-mono);
   font-size: 0.78rem;
   line-height: 1.45;
+}
+
+.detailContentPanel {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  gap: 14px;
+  overflow: hidden;
+}
+
+.detailDescriptionBlock {
+  grid-template-rows: auto minmax(0, 1fr);
+}
+
+.detailDescriptionBlock pre {
+  max-height: none;
+  min-height: min(460px, 52vh);
 }
 
 /* Responsive: stack on narrow screens */
@@ -675,6 +818,8 @@
   }
   .queueCardSelectable {
     grid-template-columns: 28px minmax(0, 1fr);
+    height: auto;
+    min-height: 92px;
   }
   .queueCardSelectable .queueActions {
     grid-column: 1 / -1;
@@ -690,6 +835,24 @@
   }
   .detailHeader {
     flex-direction: column;
+  }
+  .detailModal {
+    width: min(100%, calc(100vw - 24px));
+    max-height: calc(100vh - 24px);
+    padding: 16px;
+  }
+  .detailBody {
+    grid-template-columns: 1fr;
+    overflow: auto;
+  }
+  .detailMetaPanel {
+    overflow: visible;
+  }
+  .detailContentPanel {
+    overflow: visible;
+  }
+  .detailDescriptionBlock pre {
+    min-height: 320px;
   }
 }
 

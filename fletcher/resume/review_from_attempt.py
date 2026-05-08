@@ -77,6 +77,8 @@ def create_review_package_from_attempt(
             attempt_id=int(attempt["id"]) if attempt.get("id") is not None else None,
             title=str((job or {}).get("title") or ""),
             company=str((job or {}).get("company") or ""),
+            role_family=str(attempt.get("role_family") or ""),
+            job_level=str(attempt.get("job_level") or ""),
             description_hash=_description_hash((job or {}).get("description")),
         ),
         llm=ResumeReviewLlmInfo(

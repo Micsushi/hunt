@@ -115,6 +115,38 @@ def test_model_claimed_keyword_not_counted_if_not_in_validated_rewrite(monkeypat
     assert result["keywords_skipped"] == ["React"]
 
 
+def test_rewrite_with_no_used_keywords_keeps_original_without_validation(monkeypatch):
+    import fletcher.llm.llm_enrich as mod
+
+    monkeypatch.setattr(mod.config, "DEFAULT_MODEL_BACKEND", "ollama")
+    monkeypatch.setattr(
+        mod,
+        "_ollama_chat",
+        lambda _prompt: (
+            '{"bullet": "Enhanced user engagement by building a responsive UI using Next.js '
+            'and Framer Motion, improving the overall user experience.", '
+            '"keywords_used": [], "keywords_skipped": ["backend development", "Go ecosystem"]}'
+        ),
+    )
+
+    def fail_validation(**_kwargs):
+        raise AssertionError("validator should not rescue a zero-keyword rewrite")
+
+    monkeypatch.setattr(mod, "validate_rewrite_with_ollama", fail_validation)
+
+    original = (
+        "Enhanced user engagement by building a responsive UI using Next.js and "
+        "Framer Motion based on beta tester feedback."
+    )
+    result = mod.rewrite_bullet_targeted(original, ["backend development", "Go ecosystem"])
+
+    assert result["success"] is False
+    assert result["error"] == "rewrite_no_keywords_used"
+    assert result["bullet"] == original
+    assert result["keywords_used"] == []
+    assert result["keywords_skipped"] == ["backend development", "Go ecosystem"]
+
+
 def test_mixed_validation_failure_sends_all_attempted_keywords_to_summary(monkeypatch):
     import fletcher.llm.llm_enrich as mod
 

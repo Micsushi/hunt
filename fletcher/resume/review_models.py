@@ -28,6 +28,8 @@ class ResumeReviewJobInfo(BaseModel):
     attempt_id: int | None = None
     title: str = ""
     company: str = ""
+    role_family: str = ""
+    job_level: str = ""
     description_hash: str = ""
 
 

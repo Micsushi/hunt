@@ -2,11 +2,12 @@ from __future__ import annotations
 
 import hashlib
 import json
+import shutil
 import sqlite3
 import uuid
 from pathlib import Path
 
-from .config import get_db_path
+from .config import get_db_path, resolve_runtime_root
 
 JOB_COLUMNS = {
     "resume_status": "TEXT",
@@ -158,6 +159,58 @@ def init_fletcher_queue_db(db_path: str | Path | None = None) -> None:
         conn.commit()
     finally:
         conn.close()
+
+
+def recover_interrupted_fletcher_jobs(db_path: str | Path | None = None) -> list[dict]:
+    """Requeue Fletcher jobs left running by a previous backend process.
+
+    Fletcher queue execution is owned by an in-process backend worker thread. If the
+    container restarts mid-run, persisted `running` rows no longer have a live
+    worker and must be made claimable again.
+    """
+    init_fletcher_queue_db(db_path)
+    conn = get_connection(db_path)
+    recovered_ids: list[str] = []
+    try:
+        rows = conn.execute(
+            """
+            SELECT queue_item_id, progress_json
+            FROM fletcher_jobs
+            WHERE status = ?
+            ORDER BY started_at ASC, created_at ASC
+            """,
+            ("running",),
+        ).fetchall()
+        for row in rows:
+            progress = _decode_json(row["progress_json"], {})
+            previous_step = str(progress.get("current_step") or "running")
+            conn.execute(
+                """
+                UPDATE fletcher_jobs
+                SET status = ?, started_at = NULL, progress_json = ?,
+                    error = NULL, revision = revision + 1
+                WHERE queue_item_id = ? AND status = ?
+                """,
+                (
+                    "queued",
+                    json.dumps(
+                        {
+                            "current_step": "requeued_after_worker_restart",
+                            "event_id": progress.get("event_id"),
+                            "previous_step": previous_step,
+                            "log_tail": progress.get("log_tail", []),
+                            "recovered": True,
+                        }
+                    ),
+                    row["queue_item_id"],
+                    "running",
+                ),
+            )
+            recovered_ids.append(row["queue_item_id"])
+        conn.commit()
+    finally:
+        conn.close()
+    return [get_fletcher_job(qid, db_path=db_path) for qid in recovered_ids]
 
 
 def _decode_json(value: str | None, default):
@@ -367,6 +420,186 @@ def delete_fletcher_job(queue_item_id: str, db_path: str | Path | None = None) -
         conn.close()
 
 
+def _runtime_child_dir(path_value: str | None, runtime_root: Path) -> Path | None:
+    if not path_value:
+        return None
+    try:
+        path = Path(path_value).resolve()
+        root = runtime_root.resolve()
+    except (OSError, RuntimeError):
+        return None
+    if path == root or root not in path.parents:
+        return None
+    return path if path.is_dir() else path.parent
+
+
+def _remove_runtime_dirs(paths: set[Path]) -> tuple[int, list[str]]:
+    removed = 0
+    errors: list[str] = []
+    for path in sorted(paths, key=lambda item: len(item.parts), reverse=True):
+        if not path.exists():
+            continue
+        try:
+            shutil.rmtree(path)
+            removed += 1
+        except OSError as exc:
+            errors.append(f"{path}: {exc}")
+    return removed, errors
+
+
+def clear_generated_resumes(
+    *,
+    include_ad_hoc: bool = False,
+    delete_artifacts: bool = True,
+    db_path: str | Path | None = None,
+) -> dict:
+    """Clear generated resume DB state and artifacts.
+
+    By default this clears job-linked resume attempts/versions and Option A
+    Fletcher history. Ad-hoc Option B runs are kept unless include_ad_hoc is
+    true. Queued/running/cancel-requested rows are never removed.
+    """
+    init_resume_db(db_path)
+    init_fletcher_queue_db(db_path)
+    runtime_root = resolve_runtime_root()
+    dirs_to_delete: set[Path] = set()
+    active_skipped = 0
+
+    conn = get_connection(db_path)
+    try:
+        attempt_where = "1 = 1" if include_ad_hoc else "job_id IS NOT NULL"
+        attempt_rows = conn.execute(
+            f"""
+            SELECT id, job_id, job_description_path, keywords_path, structured_output_path,
+                   tex_path, pdf_path, compile_log_path, metadata_path
+            FROM resume_attempts
+            WHERE {attempt_where}
+            """
+        ).fetchall()
+        attempt_ids = [int(row["id"]) for row in attempt_rows]
+        for row in attempt_rows:
+            for field in (
+                "job_description_path",
+                "keywords_path",
+                "structured_output_path",
+                "tex_path",
+                "pdf_path",
+                "compile_log_path",
+                "metadata_path",
+            ):
+                path = _runtime_child_dir(row[field], runtime_root)
+                if path is not None:
+                    dirs_to_delete.add(path)
+
+        job_rows = conn.execute("SELECT * FROM fletcher_jobs").fetchall()
+        fletcher_ids: list[str] = []
+        review_ids: set[str] = set()
+        for row in job_rows:
+            status = str(row["status"] or "")
+            if status in {"queued", "running", "cancel_requested"}:
+                active_skipped += 1
+                continue
+            input_payload = _decode_json(row["input_json"], {})
+            has_job_id = (
+                input_payload.get("job_id") is not None or input_payload.get("jobId") is not None
+            )
+            if not include_ad_hoc and not has_job_id:
+                continue
+            qid = str(row["queue_item_id"])
+            fletcher_ids.append(qid)
+            if row["review_id"]:
+                review_ids.add(str(row["review_id"]))
+            result_payload = _decode_json(row["result_json"], {})
+            if result_payload.get("review_id"):
+                review_ids.add(str(result_payload["review_id"]))
+            log_dir = _runtime_child_dir(row["log_path"], runtime_root)
+            if log_dir is not None:
+                dirs_to_delete.add(log_dir)
+
+        if attempt_ids:
+            placeholders = ", ".join("?" for _ in attempt_ids)
+            conn.execute(
+                f"DELETE FROM resume_versions WHERE resume_attempt_id IN ({placeholders})",
+                tuple(attempt_ids),
+            )
+            conn.execute(
+                f"DELETE FROM resume_attempts WHERE id IN ({placeholders})",
+                tuple(attempt_ids),
+            )
+        if include_ad_hoc:
+            conn.execute("DELETE FROM resume_versions")
+        else:
+            conn.execute("DELETE FROM resume_versions WHERE job_id IS NOT NULL")
+
+        if fletcher_ids:
+            placeholders = ", ".join("?" for _ in fletcher_ids)
+            conn.execute(
+                f"DELETE FROM fletcher_jobs WHERE queue_item_id IN ({placeholders})",
+                tuple(fletcher_ids),
+            )
+
+        conn.execute(
+            """
+            UPDATE jobs
+            SET resume_status = NULL,
+                latest_resume_attempt_id = NULL,
+                latest_resume_version_id = NULL,
+                latest_resume_pdf_path = NULL,
+                latest_resume_tex_path = NULL,
+                latest_resume_keywords_path = NULL,
+                latest_resume_job_description_path = NULL,
+                latest_resume_family = NULL,
+                latest_resume_job_level = NULL,
+                latest_resume_model = NULL,
+                latest_resume_generated_at = NULL,
+                latest_resume_fallback_used = NULL,
+                latest_resume_flags = NULL,
+                latest_resume_jd_usable = NULL,
+                latest_resume_jd_usable_reason = NULL,
+                selected_resume_version_id = NULL,
+                selected_resume_pdf_path = NULL,
+                selected_resume_tex_path = NULL,
+                selected_resume_selected_at = NULL,
+                selected_resume_ready_for_c3 = FALSE
+            """
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    review_index_removed = 0
+    index_path = runtime_root / "review_index.json"
+    if review_ids and index_path.exists():
+        try:
+            index = json.loads(index_path.read_text(encoding="utf-8"))
+            if isinstance(index, dict):
+                for rid in list(review_ids):
+                    raw = index.pop(rid, None)
+                    path = _runtime_child_dir(raw, runtime_root)
+                    if path is not None:
+                        dirs_to_delete.add(path)
+                        review_index_removed += 1
+                index_path.write_text(json.dumps(index, indent=2, sort_keys=True), encoding="utf-8")
+        except (OSError, json.JSONDecodeError):
+            pass
+
+    artifact_dirs_removed = 0
+    artifact_errors: list[str] = []
+    if delete_artifacts:
+        artifact_dirs_removed, artifact_errors = _remove_runtime_dirs(dirs_to_delete)
+
+    return {
+        "resume_attempts_deleted": len(attempt_ids),
+        "fletcher_jobs_deleted": len(fletcher_ids),
+        "review_index_entries_deleted": review_index_removed,
+        "artifact_dirs_removed": artifact_dirs_removed,
+        "artifact_errors": artifact_errors,
+        "active_fletcher_jobs_skipped": active_skipped,
+        "include_ad_hoc": include_ad_hoc,
+        "delete_artifacts": delete_artifacts,
+    }
+
+
 def claim_next_fletcher_job(db_path: str | Path | None = None) -> dict | None:
     init_fletcher_queue_db(db_path)
     conn = get_connection(db_path)
@@ -463,6 +696,207 @@ def get_job_context(job_id: int, db_path: str | Path | None = None) -> dict | No
         return dict(row) if row else None
     finally:
         conn.close()
+
+
+def _job_is_ready_for_c3(job: dict) -> bool:
+    enrichment_status = str(job.get("enrichment_status") or "").strip().lower()
+    apply_type = str(job.get("apply_type") or "").strip().lower()
+    apply_url = str(job.get("apply_url") or "").strip()
+    priority = int(job.get("priority") or 0)
+    auto_apply_eligible = int(job.get("auto_apply_eligible") or 0)
+    return (
+        enrichment_status in {"done", "done_verified"}
+        and apply_type == "external_apply"
+        and auto_apply_eligible == 1
+        and priority == 0
+        and bool(apply_url)
+    )
+
+
+def record_fletcher_queue_resume_attempt(
+    *,
+    job_id: int,
+    result: dict,
+    source_resume_path: str | Path | None,
+    queue_item_id: str = "",
+    selection_report: dict | None = None,
+    model_backend: str = "",
+    model_name: str = "",
+    db_path: str | Path | None = None,
+) -> tuple[int, int] | None:
+    """Promote a completed Fletcher queue result into job-linked resume tables."""
+    tex_path_raw = result.get("tex_path")
+    if not tex_path_raw:
+        return None
+    tex_path = Path(str(tex_path_raw))
+    if not tex_path.exists():
+        return None
+    attempt_dir = Path(str(result.get("attempt_dir") or tex_path.parent))
+    attempt_dir.mkdir(parents=True, exist_ok=True)
+
+    source_path = Path(str(source_resume_path)) if source_resume_path else None
+    persisted_source_path = source_path
+    if source_path and source_path.exists():
+        target = attempt_dir / "selected_master_source.tex"
+        if source_path.resolve() != target.resolve():
+            shutil.copyfile(source_path, target)
+        persisted_source_path = target
+
+    job = get_job_context(job_id, db_path=db_path) or {}
+    job_description_path = attempt_dir / "queue_job_description.txt"
+    job_description_path.write_text(str(job.get("description") or ""), encoding="utf-8")
+    metadata_path = attempt_dir / "queue_resume_metadata.json"
+    metadata_path.write_text(
+        json.dumps(
+            {
+                "job_id": job_id,
+                "queue_item_id": queue_item_id,
+                "review_id": result.get("review_id"),
+                "selection_report": selection_report or {},
+                "compile_status": result.get("compile_status"),
+                "fits_one_page": result.get("fits_one_page"),
+            },
+            indent=2,
+            sort_keys=True,
+        ),
+        encoding="utf-8",
+    )
+    keywords_path = attempt_dir / "keywords.json"
+    if not keywords_path.exists():
+        keywords_path.write_text(json.dumps({"raw": result.get("keywords") or []}), encoding="utf-8")
+    structured_output_path = Path(str(result.get("review_package_path") or ""))
+    if not structured_output_path.exists():
+        structured_output_path = metadata_path
+
+    pdf_path = str(result.get("pdf_path") or "")
+    compile_ok = str(result.get("compile_status") or "") == "ok"
+    fits_one_page = bool(result.get("fits_one_page"))
+    is_latest_useful = bool(pdf_path and Path(pdf_path).exists() and compile_ok and fits_one_page)
+    is_selected_for_c3 = is_latest_useful and _job_is_ready_for_c3(job)
+    status = "done" if is_latest_useful else "failed"
+    concern_flags: list[str] = []
+    if not is_latest_useful:
+        concern_flags.append(str(result.get("compile_status") or "resume_generation_failed"))
+
+    return record_resume_attempt(
+        job_id,
+        {
+            "attempt_type": "queue",
+            "status": status,
+            "latest_result_kind": "latest_useful" if is_latest_useful else "latest_generated",
+            "role_family": str(result.get("role_family") or ""),
+            "job_level": str(result.get("job_level") or ""),
+            "base_resume_name": "option_a_master",
+            "source_resume_type": "master_selection",
+            "source_resume_path": str(persisted_source_path or ""),
+            "fallback_used": False,
+            "model_backend": model_backend,
+            "model_name": model_name,
+            "prompt_version": "ad_hoc_pipeline",
+            "concern_flags": concern_flags,
+            "job_description_path": str(job_description_path),
+            "keywords_path": str(keywords_path),
+            "structured_output_path": str(structured_output_path),
+            "tex_path": str(tex_path),
+            "pdf_path": pdf_path,
+            "compile_log_path": str(result.get("log_path") or ""),
+            "metadata_path": str(metadata_path),
+            "content_hash": hashlib.sha256(tex_path.read_bytes()).hexdigest(),
+            "is_latest_useful": is_latest_useful,
+            "is_selected_for_c3": is_selected_for_c3,
+            "clear_existing_selection": not is_selected_for_c3,
+            "jd_usable": None,
+            "jd_usable_reason": None,
+            "job_description_hash": job_description_fingerprint(str(job.get("description") or "")),
+        },
+        db_path,
+    )
+
+
+def backfill_completed_fletcher_queue_resume_attempts(
+    db_path: str | Path | None = None,
+) -> list[tuple[str, int, int]]:
+    """Record job-linked attempts for older completed Fletcher queue rows."""
+    init_resume_db(db_path)
+    init_fletcher_queue_db(db_path)
+    conn = get_connection(db_path)
+    candidates: list[tuple[str, int, dict, dict, str | None]] = []
+    try:
+        rows = conn.execute(
+            """
+            SELECT queue_item_id, input_json, result_json, review_id, log_path
+            FROM fletcher_jobs
+            WHERE status = ?
+            ORDER BY finished_at ASC, created_at ASC
+            """,
+            ("succeeded",),
+        ).fetchall()
+        for row in rows:
+            job_input = _decode_json(row["input_json"], {})
+            result = _decode_json(row["result_json"], {})
+            if result.get("attempt_id"):
+                continue
+            raw_job_id = job_input.get("job_id")
+            if raw_job_id is None:
+                continue
+            try:
+                job_id = int(raw_job_id)
+            except (TypeError, ValueError):
+                continue
+            candidates.append((str(row["queue_item_id"]), job_id, job_input, result, row["log_path"]))
+    finally:
+        conn.close()
+
+    recorded: list[tuple[str, int, int]] = []
+    for queue_item_id, job_id, job_input, result, log_path in candidates:
+        review_id = str(result.get("review_id") or "")
+        if not review_id:
+            continue
+        try:
+            from .resume.review_store import artifact_path_for_review, attempt_dir_for_review
+
+            attempt_dir = attempt_dir_for_review(review_id)
+            tex_path = artifact_path_for_review(review_id, "no_summary", "tex")
+            pdf_path = artifact_path_for_review(review_id, "no_summary", "pdf")
+        except Exception:
+            continue
+        promoted_result = {
+            **result,
+            "attempt_dir": str(attempt_dir),
+            "tex_path": str(tex_path),
+            "pdf_path": str(pdf_path),
+            "log_path": log_path or str(attempt_dir / "pipeline_log.txt"),
+            "compile_status": result.get("compile_status") or "ok",
+            "fits_one_page": result.get("fits_one_page") if result.get("fits_one_page") is not None else True,
+        }
+        attempt = record_fletcher_queue_resume_attempt(
+            job_id=job_id,
+            result=promoted_result,
+            source_resume_path=None,
+            queue_item_id=queue_item_id,
+            selection_report={},
+            model_backend=str(result.get("provider") or ""),
+            model_name=str(result.get("model") or ""),
+            db_path=db_path,
+        )
+        if not attempt:
+            continue
+        conn = get_connection(db_path)
+        try:
+            updated_result = {**result, "attempt_id": attempt[0], "resume_version_id": attempt[1]}
+            conn.execute(
+                """
+                UPDATE fletcher_jobs
+                SET result_json = ?, revision = revision + 1
+                WHERE queue_item_id = ?
+                """,
+                (json.dumps(updated_result), queue_item_id),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+        recorded.append((queue_item_id, attempt[0], attempt[1]))
+    return recorded
 
 
 def record_resume_attempt(

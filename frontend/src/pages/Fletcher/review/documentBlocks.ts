@@ -4,13 +4,66 @@ export interface ReviewBlock {
   blockId: string
   section: string
   label: string
+  contextLabel?: string
   original: string
   generated: string
   current: string
 }
 
+const DEFAULT_SKILL_CATEGORIES = [
+  { label: 'Languages', field: 'languages' },
+  { label: 'Frameworks', field: 'frameworks' },
+  { label: 'Developer Tools', field: 'developer_tools' },
+] as const
+
+type DefaultSkillField = (typeof DEFAULT_SKILL_CATEGORIES)[number]['field']
+
 function cloneDoc(doc: ResumeDocument): ResumeDocument {
   return JSON.parse(JSON.stringify(doc)) as ResumeDocument
+}
+
+function encodeSkillLabel(label: string): string {
+  return encodeURIComponent(label).replace(/\./g, '%2E')
+}
+
+function decodeSkillLabel(encoded: string): string {
+  return decodeURIComponent(encoded)
+}
+
+function skillBlockId(label: string): string {
+  return `skills.categories.${encodeSkillLabel(label)}`
+}
+
+function hasCategory(doc: ResumeDocument, label: string): boolean {
+  return Object.prototype.hasOwnProperty.call(doc.skills.categories || {}, label)
+}
+
+function defaultSkillField(label: string): DefaultSkillField | null {
+  return DEFAULT_SKILL_CATEGORIES.find((item) => item.label === label)?.field || null
+}
+
+function skillCategoryValues(doc: ResumeDocument, label: string): string[] {
+  if (hasCategory(doc, label)) return doc.skills.categories?.[label] || []
+  const field = defaultSkillField(label)
+  return field ? doc.skills[field] : []
+}
+
+export function skillRowsForDoc(doc: ResumeDocument): { label: string; blockId: string }[] {
+  const categoryEntries = Object.entries(doc.skills.categories || {}).filter(
+    ([, values]) => values.length,
+  )
+  if (categoryEntries.length) {
+    return categoryEntries.map(([label]) => ({ label, blockId: skillBlockId(label) }))
+  }
+  return DEFAULT_SKILL_CATEGORIES.filter(({ field }) => doc.skills[field].length).map(
+    ({ label, field }) => ({ label, blockId: `skills.${field}` }),
+  )
+}
+
+function setSkillCategory(doc: ResumeDocument, label: string, values: string[]) {
+  doc.skills.categories = { ...(doc.skills.categories || {}), [label]: values }
+  const field = defaultSkillField(label)
+  if (field) doc.skills[field] = values
 }
 
 function getById(doc: ResumeDocument, blockId: string): string {
@@ -40,6 +93,9 @@ function getById(doc: ResumeDocument, blockId: string): string {
   if (blockId === 'skills.languages') return doc.skills.languages.join(', ')
   if (blockId === 'skills.frameworks') return doc.skills.frameworks.join(', ')
   if (blockId === 'skills.developer_tools') return doc.skills.developer_tools.join(', ')
+  if (parts[0] === 'skills' && parts[1] === 'categories') {
+    return skillCategoryValues(doc, decodeSkillLabel(parts.slice(2).join('.'))).join(', ')
+  }
   return ''
 }
 
@@ -66,6 +122,16 @@ export function setBlockText(doc: ResumeDocument, blockId: string, value: string
   } else if (blockId === 'skills.languages') next.skills.languages = splitList(value)
   else if (blockId === 'skills.frameworks') next.skills.frameworks = splitList(value)
   else if (blockId === 'skills.developer_tools') next.skills.developer_tools = splitList(value)
+  else if (parts[0] === 'skills' && parts[1] === 'categories') {
+    setSkillCategory(next, decodeSkillLabel(parts.slice(2).join('.')), splitList(value))
+  }
+  if (blockId === 'skills.languages' && next.skills.categories) {
+    setSkillCategory(next, 'Languages', next.skills.languages)
+  } else if (blockId === 'skills.frameworks' && next.skills.categories) {
+    setSkillCategory(next, 'Frameworks', next.skills.frameworks)
+  } else if (blockId === 'skills.developer_tools' && next.skills.categories) {
+    setSkillCategory(next, 'Developer Tools', next.skills.developer_tools)
+  }
   return next
 }
 
@@ -84,11 +150,13 @@ function pushBlock(
   original: ResumeDocument,
   generated: ResumeDocument,
   current: ResumeDocument,
+  contextLabel?: string,
 ) {
   blocks.push({
     blockId,
     section,
     label,
+    contextLabel,
     original: getById(original, blockId),
     generated: getById(generated, blockId),
     current: getById(current, blockId),
@@ -133,6 +201,7 @@ export function buildReviewBlocks(
       current,
     ),
   )
+  let resumeBulletNumber = 1
   current.experience.forEach((entry) => {
     pushBlock(
       blocks,
@@ -152,17 +221,19 @@ export function buildReviewBlocks(
       generated,
       current,
     )
-    entry.bullets.forEach((_bullet, idx) =>
+    entry.bullets.forEach((_bullet, idx) => {
       pushBlock(
         blocks,
         'Experience',
-        `Bullet ${idx + 1}`,
+        `Resume bullet ${resumeBulletNumber}`,
         `experience.${entry.entry_id}.bullet.${idx}`,
         original,
         generated,
         current,
-      ),
-    )
+        `${entry.title_company_location} bullet ${idx + 1}`,
+      )
+      resumeBulletNumber += 1
+    })
   })
   current.projects.forEach((entry) => {
     pushBlock(
@@ -183,44 +254,22 @@ export function buildReviewBlocks(
       generated,
       current,
     )
-    entry.bullets.forEach((_bullet, idx) =>
+    entry.bullets.forEach((_bullet, idx) => {
       pushBlock(
         blocks,
         'Projects',
-        `Bullet ${idx + 1}`,
+        `Resume bullet ${resumeBulletNumber}`,
         `projects.${entry.entry_id}.bullet.${idx}`,
         original,
         generated,
         current,
-      ),
-    )
+        `${entry.project_title} bullet ${idx + 1}`,
+      )
+      resumeBulletNumber += 1
+    })
   })
-  pushBlock(
-    blocks,
-    'Technical Skills',
-    'Languages',
-    'skills.languages',
-    original,
-    generated,
-    current,
-  )
-  pushBlock(
-    blocks,
-    'Technical Skills',
-    'Frameworks',
-    'skills.frameworks',
-    original,
-    generated,
-    current,
-  )
-  pushBlock(
-    blocks,
-    'Technical Skills',
-    'Developer Tools',
-    'skills.developer_tools',
-    original,
-    generated,
-    current,
+  skillRowsForDoc(current).forEach((row) =>
+    pushBlock(blocks, 'Technical Skills', row.label, row.blockId, original, generated, current),
   )
   return blocks.filter((block) => block.original || block.generated || block.current)
 }

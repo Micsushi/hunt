@@ -54,21 +54,34 @@ class C0ControlApiTests(unittest.TestCase):
             os.remove(self.path)
         shutil.rmtree(self.runtime_dir, ignore_errors=True)
 
-    def test_fletcher_progress_mapping_reaches_90_only_after_main_llm_work(self):
-        from backend.app import _fletcher_step_percent
-
-        self.assertLess(_fletcher_step_percent("starting"), 10)
-        self.assertLess(_fletcher_step_percent("rag_complete"), 70)
-        self.assertLess(_fletcher_step_percent("bullet_rewrite_start"), 70)
-        self.assertLess(_fletcher_step_percent("bullet_rewrites_summary"), 80)
-        self.assertLess(_fletcher_step_percent("summary_start"), 90)
-        self.assertEqual(_fletcher_step_percent("skills_keywords_added"), 90)
-        self.assertEqual(_fletcher_step_percent("summary_line_check"), 98)
-        self.assertEqual(_fletcher_step_percent("done"), 100)
-        self.assertLess(
-            _fletcher_step_percent("ollama_runtime", {"stage": "before_skill_bucket"}),
-            90,
+    def test_fletcher_progress_mapping_uses_milestone_order(self):
+        from backend.app import (
+            _fletcher_step_percent,
+            _FletcherProgressTracker,
         )
+
+        self.assertLess(_fletcher_step_percent("starting", is_option_a=True), 5)
+        self.assertLessEqual(_fletcher_step_percent("selecting_master_resume", is_option_a=True), 10)
+        self.assertLess(_fletcher_step_percent("generating_resume", is_option_a=True), 15)
+        self.assertEqual(_fletcher_step_percent("unknown_future_step"), 0)
+        self.assertLess(_fletcher_step_percent("rag_complete"), 70)
+        self.assertEqual(_fletcher_step_percent("bullet_rewrite_start"), 0)
+        self.assertLess(_fletcher_step_percent("bullet_rewrites_summary"), 80)
+        self.assertLess(_fletcher_step_percent("bullet_scores"), 80)
+        self.assertLess(_fletcher_step_percent("summary_keyword_filter"), 80)
+        self.assertGreater(_fletcher_step_percent("summary_start"), 70)
+        self.assertGreater(_fletcher_step_percent("skills_keywords_added"), 80)
+        self.assertGreater(_fletcher_step_percent("summary_line_check"), 90)
+        self.assertEqual(_fletcher_step_percent("done"), 100)
+        self.assertEqual(_fletcher_step_percent("ollama_runtime", {"stage": "before_skill_bucket"}), 0)
+
+        tracker = _FletcherProgressTracker(is_option_a=True)
+        starting = tracker.record("starting")
+        unknown = tracker.record("retry_or_optional_step")
+        self.assertEqual(unknown["percent"], starting["percent"])
+        done = tracker.record("done")
+        self.assertEqual(done["percent"], 100)
+        self.assertEqual(done["milestone_current"], done["milestone_total"])
 
     def test_component_settings_round_trip_redacts_secret_values(self):
         response = self.client.post(
@@ -237,6 +250,136 @@ class C0ControlApiTests(unittest.TestCase):
             manifest = archive.read("manifest.txt").decode("utf-8")
         self.assertIn("resume_no_summary.pdf", manifest)
 
+    def test_clear_generated_resumes_removes_job_resume_state_and_artifacts(self):
+        from pathlib import Path
+
+        from backend import app as backend_app
+        from fletcher.db import (
+            enqueue_fletcher_job,
+            finish_fletcher_job,
+            get_connection,
+            init_resume_db,
+        )
+
+        init_resume_db()
+        conn = get_connection()
+        try:
+            conn.execute(
+                """
+                INSERT INTO jobs (
+                    id, title, company, description, source, enrichment_status, job_url,
+                    latest_resume_attempt_id,
+                    latest_resume_pdf_path, selected_resume_pdf_path,
+                    selected_resume_ready_for_c3
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    14410,
+                    "Firmware Engineer",
+                    "Acme",
+                    "Build firmware.",
+                    "linkedin",
+                    "done",
+                    "https://example.com/jobs/14410",
+                    1,
+                    "old.pdf",
+                    "old.pdf",
+                    1,
+                ),
+            )
+            artifact_dir = Path(self.runtime_dir) / "attempts" / "clear-test"
+            artifact_dir.mkdir(parents=True)
+            pdf_path = artifact_dir / "output.pdf"
+            tex_path = artifact_dir / "output.tex"
+            log_path = artifact_dir / "pipeline_log.txt"
+            pdf_path.write_bytes(b"%PDF clear")
+            tex_path.write_text("tex", encoding="utf-8")
+            log_path.write_text("log", encoding="utf-8")
+            conn.execute(
+                """
+                INSERT INTO resume_attempts (
+                    id, job_id, attempt_type, status, latest_result_kind,
+                    role_family, job_level, base_resume_name, source_resume_type,
+                    source_resume_path, fallback_used, model_backend, model_name,
+                    prompt_version, concern_flags, job_description_path, keywords_path,
+                    structured_output_path, tex_path, pdf_path, compile_log_path,
+                    metadata_path
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    1,
+                    14410,
+                    "job",
+                    "done",
+                    "tailored",
+                    "software",
+                    "mid",
+                    "master",
+                    "tex",
+                    str(tex_path),
+                    0,
+                    "heuristic",
+                    "deterministic",
+                    "test",
+                    "[]",
+                    str(artifact_dir / "jd.txt"),
+                    str(artifact_dir / "keywords.json"),
+                    str(artifact_dir / "structured.json"),
+                    str(tex_path),
+                    str(pdf_path),
+                    str(log_path),
+                    str(artifact_dir / "metadata.json"),
+                ),
+            )
+            conn.execute(
+                """
+                INSERT INTO resume_versions (
+                    job_id, resume_attempt_id, source_type, label, pdf_path,
+                    tex_path, content_hash, is_latest_generated,
+                    is_latest_useful, is_selected_for_c3
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (14410, 1, "tex", "master", str(pdf_path), str(tex_path), "abc", 1, 1, 1),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+        with patch.object(backend_app, "_ensure_fletcher_worker_started"):
+            queued = enqueue_fletcher_job({"job_id": 14410})
+        review_id = "review_clear_test"
+        (Path(self.runtime_dir) / "review_index.json").write_text(
+            json.dumps({review_id: str(artifact_dir)}), encoding="utf-8"
+        )
+        finish_fletcher_job(
+            queued["queue_item_id"],
+            status="succeeded",
+            result={"review_id": review_id},
+            log_path=str(log_path),
+            review_id=review_id,
+        )
+
+        response = self.client.post("/api/fletcher/resumes/clear", json={})
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(payload["resume_attempts_deleted"], 1)
+        self.assertEqual(payload["fletcher_jobs_deleted"], 1)
+        self.assertEqual(payload["artifact_dirs_removed"], 1)
+        self.assertFalse(artifact_dir.exists())
+
+        conn = get_connection()
+        try:
+            self.assertEqual(conn.execute("SELECT COUNT(*) FROM resume_attempts").fetchone()[0], 0)
+            self.assertEqual(conn.execute("SELECT COUNT(*) FROM resume_versions").fetchone()[0], 0)
+            self.assertEqual(conn.execute("SELECT COUNT(*) FROM fletcher_jobs").fetchone()[0], 0)
+            job = conn.execute("SELECT * FROM jobs WHERE id = ?", (14410,)).fetchone()
+            self.assertIsNone(job["latest_resume_attempt_id"])
+            self.assertIsNone(job["selected_resume_pdf_path"])
+            self.assertFalse(bool(job["selected_resume_ready_for_c3"]))
+        finally:
+            conn.close()
+
     def test_fletcher_queue_infers_history_title(self):
         from backend import app as backend_app
 
@@ -374,6 +517,132 @@ class C0ControlApiTests(unittest.TestCase):
             updated["result"]["tex_url"], "/api/fletcher/reviews/review-123/versions/no_summary/tex"
         )
         self.assertEqual(updated["log_path"], str(log_path))
+
+    def test_fletcher_worker_marks_option_a_pdf_compile_failure_failed(self):
+        from pathlib import Path
+
+        from backend import app as backend_app
+        from fletcher.db import get_fletcher_job
+
+        conn = self.db.get_connection()
+        try:
+            conn.execute(
+                """
+                INSERT INTO jobs (
+                    id, title, company, description, source, enrichment_status, job_url
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    14407,
+                    "Firmware Systems Design Engineer",
+                    "Acme",
+                    "Build embedded systems.",
+                    "linkedin",
+                    "done",
+                    "https://example.com/jobs/14407",
+                ),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+        with patch.object(backend_app, "_ensure_fletcher_worker_started"):
+            response = self.client.post("/api/fletcher/tailor/jobs", json={"job_id": 14407})
+        self.assertEqual(response.status_code, 200)
+        item = response.json()
+        attempt_dir = Path(self.runtime_dir) / "option-a-worker-failed"
+        attempt_dir.mkdir(parents=True)
+        tex_path = attempt_dir / "output.tex"
+        log_path = attempt_dir / "pipeline_log.txt"
+        tex_path.write_text("resume tex", encoding="utf-8")
+        log_path.write_text("compile failed", encoding="utf-8")
+        selected_resume = attempt_dir / "selected_master.tex"
+        selected_resume.write_text("selected resume tex", encoding="utf-8")
+
+        with (
+            patch(
+                "fletcher.option_a_master.prepare_option_a_master_resume_source",
+                return_value=(
+                    str(selected_resume),
+                    {
+                        "selection": {"experience": [], "projects": []},
+                        "title": "Firmware Systems Design Engineer",
+                    },
+                ),
+            ),
+            patch(
+                "fletcher.ad_hoc_pipeline.run_ad_hoc_pipeline",
+                return_value={
+                    "status": "done",
+                    "review_id": "review-failed",
+                    "pdf_path": None,
+                    "tex_path": str(tex_path),
+                    "log_path": str(log_path),
+                    "compile_status": "failed",
+                },
+            ),
+        ):
+            processed = backend_app._process_next_fletcher_job()
+
+        self.assertTrue(processed)
+        updated = get_fletcher_job(item["queue_item_id"])
+        self.assertEqual(updated["status"], "failed")
+        self.assertIsNone(updated["result"]["pdf_url"])
+        self.assertEqual(
+            updated["result"]["tex_url"],
+            "/api/fletcher/reviews/review-failed/versions/no_summary/tex",
+        )
+        self.assertEqual(updated["result"]["compile_status"], "failed")
+        self.assertEqual(updated["error"], "failed")
+
+    def test_fletcher_recovery_requeues_interrupted_running_job(self):
+        from fletcher.db import (
+            claim_next_fletcher_job,
+            enqueue_fletcher_job,
+            recover_interrupted_fletcher_jobs,
+        )
+
+        item = enqueue_fletcher_job(
+            {"title": "Azure Full Stack Developer", "description": "Build APIs."}
+        )
+        claimed = claim_next_fletcher_job()
+        self.assertEqual(claimed["queue_item_id"], item["queue_item_id"])
+        self.assertEqual(claimed["status"], "running")
+
+        recovered = recover_interrupted_fletcher_jobs()
+
+        self.assertEqual([row["queue_item_id"] for row in recovered], [item["queue_item_id"]])
+        self.assertEqual(recovered[0]["status"], "queued")
+        self.assertIsNone(recovered[0]["started_at"])
+        self.assertEqual(
+            recovered[0]["progress"]["current_step"], "requeued_after_worker_restart"
+        )
+        self.assertEqual(recovered[0]["progress"]["previous_step"], "running")
+
+        reclaimed = claim_next_fletcher_job()
+        self.assertEqual(reclaimed["queue_item_id"], item["queue_item_id"])
+        self.assertEqual(reclaimed["status"], "running")
+
+    def test_fletcher_worker_start_recovers_interrupted_jobs_before_claiming(self):
+        from backend import app as backend_app
+        from fletcher.db import claim_next_fletcher_job, enqueue_fletcher_job, get_fletcher_job
+
+        item = enqueue_fletcher_job(
+            {"title": "Azure Full Stack Developer", "description": "Build APIs."}
+        )
+        claimed = claim_next_fletcher_job()
+        self.assertEqual(claimed["status"], "running")
+
+        backend_app._fletcher_worker_started = False
+        with patch.object(backend_app.threading.Thread, "start"):
+            backend_app._ensure_fletcher_worker_started()
+
+        recovered = get_fletcher_job(item["queue_item_id"])
+        self.assertEqual(recovered["status"], "queued")
+        self.assertEqual(
+            recovered["progress"]["current_step"], "requeued_after_worker_restart"
+        )
 
     def test_option_a_setting_syncs_master_resume_yaml_selection(self):
         from pathlib import Path

@@ -1,3 +1,4 @@
+import os
 import sqlite3
 from datetime import timedelta
 
@@ -275,6 +276,84 @@ def _migrate_jobs_table(cursor):
             cursor.execute(f"ALTER TABLE jobs ADD COLUMN {column_name} {column_def}")
 
 
+POSTGRES_CASCADE_FK_MIGRATIONS = (
+    (
+        "orchestration_runs",
+        "orchestration_runs_job_id_fkey",
+        "job_id",
+        "jobs",
+        "id",
+    ),
+    (
+        "submit_approvals",
+        "submit_approvals_job_id_fkey",
+        "job_id",
+        "jobs",
+        "id",
+    ),
+    (
+        "orchestration_events",
+        "orchestration_events_orchestration_run_id_fkey",
+        "orchestration_run_id",
+        "orchestration_runs",
+        "id",
+    ),
+    (
+        "submit_approvals",
+        "submit_approvals_orchestration_run_id_fkey",
+        "orchestration_run_id",
+        "orchestration_runs",
+        "id",
+    ),
+    (
+        "orchestration_worker_leases",
+        "orchestration_worker_leases_orchestration_run_id_fkey",
+        "orchestration_run_id",
+        "orchestration_runs",
+        "id",
+    ),
+)
+
+
+def _ensure_postgres_delete_cascade_constraints(cursor):
+    if not (os.environ.get("HUNT_DB_URL") or "").strip():
+        return
+    for table_name, constraint_name, column_name, parent_table, parent_column in (
+        POSTGRES_CASCADE_FK_MIGRATIONS
+    ):
+        cursor.execute(
+            """
+            DO $$
+            BEGIN
+                IF EXISTS (
+                    SELECT 1
+                    FROM information_schema.table_constraints
+                    WHERE constraint_schema = current_schema()
+                      AND table_name = %s
+                      AND constraint_name = %s
+                ) THEN
+                    EXECUTE format('ALTER TABLE %%I DROP CONSTRAINT %%I', %s, %s);
+                    EXECUTE format(
+                        'ALTER TABLE %%I ADD CONSTRAINT %%I FOREIGN KEY (%%I) REFERENCES %%I(%%I) ON DELETE CASCADE',
+                        %s, %s, %s, %s, %s
+                    );
+                END IF;
+            END $$;
+            """,
+            (
+                table_name,
+                constraint_name,
+                table_name,
+                constraint_name,
+                table_name,
+                constraint_name,
+                column_name,
+                parent_table,
+                parent_column,
+            ),
+        )
+
+
 def _backfill_enrichment_metadata(cursor):
     cursor.execute(
         """
@@ -541,6 +620,7 @@ def init_db(*, maintenance=True):
         cursor.execute(COMPONENT_SETTINGS_TABLE_SQL)
         cursor.execute(LINKEDIN_ACCOUNTS_TABLE_SQL)
         _migrate_jobs_table(cursor)
+        _ensure_postgres_delete_cascade_constraints(cursor)
         if maintenance:
             _backfill_enrichment_metadata(cursor)
             _backfill_retry_schedule(cursor)

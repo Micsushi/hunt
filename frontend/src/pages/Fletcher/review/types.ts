@@ -34,6 +34,7 @@ export interface SkillsSection {
   languages: string[]
   frameworks: string[]
   developer_tools: string[]
+  categories?: Record<string, string[]>
 }
 
 export interface ResumeDocument {
@@ -70,6 +71,8 @@ export interface ResumeReviewPackage {
   job: {
     title: string
     company: string
+    role_family?: string
+    job_level?: string
     description_hash: string
   }
   llm?: {
@@ -81,6 +84,7 @@ export interface ResumeReviewPackage {
     raw?: string[]
     present?: string[]
     missing?: string[]
+    used?: UsedKeyword[]
     rag_scores?: KeywordScore[]
   }
   versions: Partial<Record<ReviewVersionName, ResumeReviewVersion>>
@@ -93,6 +97,24 @@ export interface KeywordScore {
   status?: string
   score?: number
   bullet_idx?: number | null
+  used_bullet_idx?: number | null
+  support_kind?: string
+  candidates?: KeywordCandidate[]
+}
+
+export interface KeywordCandidate {
+  bullet_idx?: number | null
+  score?: number
+  bullet_preview?: string
+  bullet_text?: string
+}
+
+export interface UsedKeyword {
+  keyword: string
+  bullet_idx?: number | null
+  bullet_id?: string
+  bullet_text?: string
+  support_kind?: string
 }
 
 export interface FletcherQueueItem {
@@ -115,6 +137,9 @@ export interface FletcherQueueItem {
     current_step?: string
     event_id?: number
     percent?: number
+    milestone_current?: number
+    milestone_total?: number
+    milestone_name?: string | null
     log_tail?: string[]
   }
   result: {
@@ -122,6 +147,10 @@ export interface FletcherQueueItem {
     pdf_url?: string | null
     tex_url?: string | null
     log_url?: string | null
+    compile_status?: string | null
+    fits_one_page?: boolean | null
+    role_family?: string | null
+    job_level?: string | null
   }
   error: string | null
 }

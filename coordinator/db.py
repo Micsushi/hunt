@@ -218,6 +218,9 @@ def init_orchestration_db(db_path: str | Path) -> None:
         cursor.execute(ORCHESTRATION_WORKER_LEASES_TABLE_SQL)
         _ensure_columns(cursor, "orchestration_runs", ORCHESTRATION_RUNS_MIGRATION_COLUMNS)
         _ensure_columns(cursor, "submit_approvals", SUBMIT_APPROVALS_MIGRATION_COLUMNS)
+        from hunter.db import _ensure_postgres_delete_cascade_constraints
+
+        _ensure_postgres_delete_cascade_constraints(cursor)
         for statement in INDEX_STATEMENTS:
             cursor.execute(statement)
         conn.commit()

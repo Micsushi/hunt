@@ -1233,6 +1233,13 @@ def rewrite_bullet_targeted(
             )
             result["model_keywords_used"] = claimed_used
             result["model_keywords_skipped"] = claimed_skipped
+            if not claimed_used:
+                result["bullet"] = bullet
+                result["success"] = False
+                result["error"] = "rewrite_no_keywords_used"
+                result["keywords_used"] = []
+                result["keywords_skipped"] = list(keywords)
+                return result
 
             try:
                 validation = validate_rewrite_with_ollama(

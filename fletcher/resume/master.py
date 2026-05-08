@@ -62,8 +62,11 @@ def _parse_scalar(value: str) -> Any:
         if not inner:
             return []
         return [_parse_scalar(part.strip()) for part in inner.split(",")]
-    if value[0:1] in {"'", '"'} and value[-1:] == value[0]:
-        return value[1:-1]
+    if _is_quoted(value):
+        inner = value[1:-1]
+        if value[0] == '"':
+            inner = inner.replace("\\\\", "\\")
+        return inner
     if value.lower() in {"true", "false"}:
         return value.lower() == "true"
     try:
@@ -74,6 +77,10 @@ def _parse_scalar(value: str) -> Any:
         return float(value)
     except ValueError:
         return value
+
+
+def _is_quoted(value: str) -> bool:
+    return len(value) >= 2 and value[0] in {"'", '"'} and value[-1] == value[0]
 
 
 def _yaml_lines(text: str) -> list[tuple[int, str]]:
@@ -127,7 +134,7 @@ def _parse_list(lines: list[tuple[int, str]], index: int, indent: int) -> tuple[
             break
         raw = text[2:].strip()
         index += 1
-        if raw and ":" in raw:
+        if raw and ":" in raw and not _is_quoted(raw):
             key, value = raw.split(":", 1)
             item: dict[str, Any] = {key.strip(): _parse_scalar(value.strip())}
             if index < len(lines) and lines[index][0] > indent:

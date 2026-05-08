@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import re
+from datetime import UTC, datetime
 from pathlib import Path
 
 from ..config import resolve_runtime_root
@@ -17,6 +19,11 @@ from .review_models import (
 )
 
 INDEX_NAME = "review_index.json"
+VERSION_FILENAME_PARTS = {
+    ResumeReviewVersionName.STARTING: "starting",
+    ResumeReviewVersionName.NO_SUMMARY: "no_summary",
+    ResumeReviewVersionName.WITH_SUMMARY: "summary",
+}
 
 
 def _runtime_root() -> Path:
@@ -149,9 +156,9 @@ def compile_current_document(
     tex_path = rev_dir / "output.tex"
     tex_path.write_text(render_resume_tex(doc), encoding="utf-8")
     result = compile_tex(tex_path)
-    version_state.compiled_revision = next_revision
     version_state.compile_status = str(result.get("compile_status") or "")
     if result.get("compile_status") == "ok":
+        version_state.compiled_revision = next_revision
         version_state.dirty = False
         version_state.pdf_url = f"/api/fletcher/reviews/{review_id}/versions/{vname.value}/pdf"
         version_state.tex_url = f"/api/fletcher/reviews/{review_id}/versions/{vname.value}/tex"
@@ -215,9 +222,10 @@ def artifact_path_for_review(
     vdir = _version_dir(review_id, vname)
     rev = int(state.compiled_revision or 0)
     if rev > 0:
-        candidate = vdir / "revisions" / f"{rev:04d}" / f"output.{artifact_kind}"
-        if candidate.exists():
-            return candidate
+        for candidate_rev in range(rev, 0, -1):
+            candidate = vdir / "revisions" / f"{candidate_rev:04d}" / f"output.{artifact_kind}"
+            if candidate.exists():
+                return candidate
     url_path = state.pdf_url if artifact_kind == "pdf" else state.tex_url
     # Initial artifacts live outside versions/ and are referenced by URL only,
     # so fall back to conventional output names in the attempt dir.
@@ -234,3 +242,37 @@ def artifact_path_for_review(
     raise FileNotFoundError(
         f"{artifact_kind} artifact missing for {review_id}/{vname.value}: {url_path}"
     )
+
+
+def artifact_download_filename(
+    review_id: str,
+    version: str | ResumeReviewVersionName,
+    artifact_kind: str,
+    *,
+    path: Path | None = None,
+) -> str:
+    vname = _version_name(version)
+    package = load_review_package(review_id)
+    family = _filename_part(
+        package.job.role_family or _family_from_title(package.job.title), default="general"
+    )
+    variant = VERSION_FILENAME_PARTS.get(vname, _filename_part(vname.value, default="resume"))
+    artifact_path = path or artifact_path_for_review(review_id, vname, artifact_kind)
+    timestamp = datetime.fromtimestamp(artifact_path.stat().st_mtime, UTC).strftime("%Y%m%d_%H%M%S")
+    return f"resume_{variant}_{family}_{timestamp}.{artifact_kind}"
+
+
+def _filename_part(value: str | None, *, default: str) -> str:
+    cleaned = re.sub(r"[^a-z0-9]+", "_", str(value or "").strip().lower()).strip("_")
+    return cleaned or default
+
+
+def _family_from_title(title: str | None) -> str:
+    if not str(title or "").strip():
+        return ""
+    try:
+        from fletcher.jobs.classifier import classify_job
+
+        return str(classify_job(title=str(title or ""), description="").get("role_family") or "")
+    except Exception:
+        return ""

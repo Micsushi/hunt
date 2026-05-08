@@ -27,6 +27,20 @@ def get_connection(db_path: str | Path | None = None):
     return _sqlite_connect(db_path)
 
 
+def is_integrity_error(exc: BaseException) -> bool:
+    """Return True for SQLite/Postgres constraint errors."""
+    if isinstance(exc, sqlite3.IntegrityError):
+        return True
+    try:
+        import psycopg2
+    except ModuleNotFoundError:
+        psycopg2 = None
+    if psycopg2 is not None and isinstance(exc, psycopg2.IntegrityError):
+        return True
+    pgcode = getattr(exc, "pgcode", None)
+    return isinstance(pgcode, str) and pgcode.startswith("23")
+
+
 # ---------------------------------------------------------------------------
 # SQLite path
 # ---------------------------------------------------------------------------

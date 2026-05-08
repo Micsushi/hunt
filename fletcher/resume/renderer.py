@@ -9,11 +9,11 @@ def _render_header(doc: ResumeDocument) -> str:
     return (
         "\\begin{document}\n"
         "    \\begin{center}\n"
-        f"        {{\\fontsize{{24pt}}{{24pt}}\\selectfont\\textbf{{{doc.header.name}}}}}\n"
+        f"        {{\\fontsize{{24pt}}{{24pt}}\\selectfont\\textbf{{{_escape_latex(doc.header.name)}}}}}\n"
         "        \n"
         "        \\vspace{0.2cm}\n"
         "        \n"
-        f"        {doc.header.contact_line}\n"
+        f"        {_escape_latex(doc.header.contact_line)}\n"
         "    \\end{center}\n"
         "    \n"
     )
@@ -63,8 +63,8 @@ def _render_education(section: EducationSection) -> str:
     return (
         "    \\vspace{0.10 cm}\n"
         "    \\section{Education}\n\n"
-        f"    \\begin{{twocolentry}}{{{section.entry.date_text}}}\n"
-        f"        {section.entry.institution_and_degree}\n"
+        f"    \\begin{{twocolentry}}{{{_escape_latex(section.entry.date_text)}}}\n"
+        f"        {_escape_latex(section.entry.institution_and_degree)}\n"
         "    \\end{twocolentry}\n\n"
         "    \\vspace{0.10 cm}\n"
         f"{_render_bullets(section.bullets)}\n"
@@ -73,8 +73,8 @@ def _render_education(section: EducationSection) -> str:
 
 def _render_experience_entry(entry: ExperienceEntry) -> str:
     return (
-        f"    \\begin{{twocolentry}}{{{entry.date_text}}}\n"
-        f"        {entry.title_company_location}\n"
+        f"    \\begin{{twocolentry}}{{{_escape_latex(entry.date_text)}}}\n"
+        f"        {_escape_latex(entry.title_company_location)}\n"
         "    \\end{twocolentry}\n\n"
         "    \\vspace{0.10 cm}\n"
         f"{_render_bullets(entry.bullets)}\n"
@@ -83,8 +83,8 @@ def _render_experience_entry(entry: ExperienceEntry) -> str:
 
 def _render_project_entry(entry: ProjectEntry) -> str:
     return (
-        f"    \\begin{{twocolentry}}{{{entry.date_or_link_text}}}\n"
-        f"        {entry.project_title}\n"
+        f"    \\begin{{twocolentry}}{{{_escape_latex(entry.date_or_link_text)}}}\n"
+        f"        {_escape_latex(entry.project_title)}\n"
         "    \\end{twocolentry}\n\n"
         "    \\vspace{0.10 cm}\n"
         f"{_render_bullets(entry.bullets)}\n"
@@ -104,10 +104,11 @@ def _render_summary(text: str) -> str:
 
 def _render_skills(skills: SkillsSection) -> str:
     def onecol(label: str, values: list[str]) -> str:
+        escaped_label = _escape_latex(label)
         joined = ", ".join(_escape_latex(value) for value in values)
         return (
             "    \\begin{onecolentry}\n"
-            f"        \\textbf{{{label}:}} {joined}\n"
+            f"        \\textbf{{{escaped_label}:}} {joined}\n"
             "    \\end{onecolentry}"
         )
 

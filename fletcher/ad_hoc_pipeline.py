@@ -66,6 +66,7 @@ SUMMARY_KEYWORD_LIMIT = 3
 MIN_HIGH_RAG_MATCHES_FOR_REWRITE = 2
 BULLET_ORDER_FIRST_SCORE_MULTIPLIER = 1.5
 BULLET_ORDER_LAST_SCORE_MULTIPLIER = 1.0
+BULLET_KEYWORD_RETENTION_MULTIPLIER = 2.0
 
 
 class JobMismatchError(Exception):
@@ -111,7 +112,9 @@ def _make_review_package(
     raw_keywords: list[str],
     present_keywords: list[str],
     missing_keywords: list[str],
+    present_coverage: dict[str, list[int]] | None = None,
     rag_scores: list[dict[str, Any]] | None = None,
+    used_keywords: list[dict[str, Any]] | None = None,
 ) -> tuple[str | None, str | None]:
     review_id = build_review_id(attempt_dir)
     versions: dict[ResumeReviewVersionName, ResumeReviewVersion] = {}
@@ -166,6 +169,8 @@ def _make_review_package(
         job=ResumeReviewJobInfo(
             title=title,
             company=company,
+            role_family=str(result.get("role_family") or ""),
+            job_level=str(result.get("job_level") or ""),
             description_hash=_description_hash(description),
         ),
         llm=ResumeReviewLlmInfo(
@@ -177,11 +182,15 @@ def _make_review_package(
             "raw": list(raw_keywords or []),
             "present": list(present_keywords or []),
             "missing": list(missing_keywords or []),
+            "used": list(used_keywords or []),
             "rag_scores": _review_keyword_scores(
                 raw_keywords=raw_keywords,
                 present_keywords=present_keywords,
                 missing_keywords=missing_keywords,
+                present_coverage=present_coverage,
                 rag_scores=rag_scores,
+                used_keywords=used_keywords,
+                high_threshold=_config.RAG_HIGH_THRESHOLD,
             ),
         },
         versions=versions,
@@ -213,7 +222,9 @@ def _attach_review_package(
             raw_keywords=list(payload.get("keywords") or []),
             present_keywords=list(payload.get("present_keywords") or []),
             missing_keywords=list(payload.get("missing_keywords") or []),
+            present_coverage=dict(payload.get("present_coverage") or {}),
             rag_scores=list(payload.get("rag_scores") or []),
+            used_keywords=list(payload.get("used_keywords") or []),
         )
         payload["review_id"] = review_id
         payload["review_url"] = f"/fletcher/reviews/{review_id}" if review_id else None
@@ -228,8 +239,12 @@ def _review_keyword_scores(
     raw_keywords: list[str],
     present_keywords: list[str],
     missing_keywords: list[str],
+    present_coverage: dict[str, list[int]] | None = None,
     rag_scores: list[dict[str, Any]] | None = None,
+    used_keywords: list[dict[str, Any]] | None = None,
+    high_threshold: float | None = None,
 ) -> list[dict[str, Any]]:
+    min_score = _config.RAG_HIGH_THRESHOLD if high_threshold is None else high_threshold
     score_by_keyword: dict[str, dict[str, Any]] = {}
     for detail in rag_scores or []:
         keyword = str(detail.get("keyword") or "").strip()
@@ -240,14 +255,34 @@ def _review_keyword_scores(
         existing = score_by_keyword.get(key)
         if existing and float(existing.get("score") or 0.0) >= score:
             continue
-        score_by_keyword[key] = {
+        row = {
             "keyword": keyword,
             "tier": str(detail.get("tier") or "unranked"),
             "score": score,
             "bullet_idx": detail.get("bullet_idx"),
         }
+        candidates = [
+            candidate
+            for candidate in list(detail.get("candidates") or [])
+            if str(detail.get("tier") or "").lower() == "high"
+            and float(candidate.get("score") or 0.0) >= min_score
+        ]
+        if candidates:
+            row["candidates"] = candidates
+        score_by_keyword[key] = row
+
+    used_by_keyword: dict[str, dict[str, Any]] = {}
+    for detail in used_keywords or []:
+        keyword = str(detail.get("keyword") or "").strip()
+        if not keyword:
+            continue
+        used_by_keyword[keyword.lower()] = dict(detail)
 
     present_l = {keyword.lower() for keyword in present_keywords}
+    present_hits_by_keyword = {
+        str(keyword).lower(): list(indices or [])
+        for keyword, indices in (present_coverage or {}).items()
+    }
     missing_l = {keyword.lower() for keyword in missing_keywords}
     rows: list[dict[str, Any]] = []
     seen: set[str] = set()
@@ -258,13 +293,31 @@ def _review_keyword_scores(
             continue
         seen.add(key)
         row = dict(score_by_keyword.get(key) or {})
+        used = used_by_keyword.get(key)
         row["keyword"] = row.get("keyword") or item
-        if key in present_l:
+        if used:
+            row["tier"] = row.get("tier") or "used"
+            support_kind = str(used.get("support_kind") or "")
+            row["status"] = "rewrite_used" if support_kind == "rewrite_added" else "supported"
+            row["support_kind"] = support_kind or row["status"]
+            row["used_bullet_idx"] = used.get("bullet_idx")
+            row.setdefault("bullet_idx", used.get("bullet_idx"))
+            row.setdefault("score", used.get("score", 1.0))
+            if row["status"] == "supported":
+                row["tier"] = "supported"
+        elif key in present_l:
             row["tier"] = (
                 row.get("tier") if row.get("tier") not in {None, "unranked"} else "present"
             )
             row["status"] = "present"
             row.setdefault("score", 1.0)
+            candidates = [
+                {"bullet_idx": idx, "score": 1.0}
+                for idx in present_hits_by_keyword.get(key, [])
+                if isinstance(idx, int)
+            ]
+            if candidates:
+                row["candidates"] = candidates
         elif key in missing_l:
             row["tier"] = row.get("tier") or "unranked"
             row["status"] = "missing"
@@ -391,6 +444,14 @@ def _collect_active_bullets(doc, active_bucket_ids: list[BucketId]) -> tuple[lis
     return bullets, sources
 
 
+def _source_ref(source: dict) -> tuple[str, str, int]:
+    return (
+        str(source.get("kind") or ""),
+        str(source.get("entry_id") or ""),
+        int(source.get("original_local_idx") or 0),
+    )
+
+
 def _remove_bullet_from_doc(doc, source: dict) -> bool:
     entry = _find_entry(doc, source["kind"], source["entry_id"])
     if entry is None:
@@ -422,6 +483,7 @@ def _score_sources(
     classification: dict | None = None,
     rag_scores: list[dict] | None = None,
     job_title: str = "",
+    rewritten_refs: set[tuple[str, str, int]] | None = None,
 ) -> dict[str, float]:
     base_scores = score_bullets_for_drop(bullets, raw_keywords)
     title_scores = score_bullets_for_drop(bullets, [job_title]) if job_title.strip() else []
@@ -432,8 +494,15 @@ def _score_sources(
         contrib = contribution.get(source["bullet_id"], 0.0)
         title_bonus = (title_scores[idx] * 0.12) if idx < len(title_scores) else 0.0
         order_multiplier = _bullet_order_score_multiplier(source)
+        retention_multiplier = _keyword_retention_score_multiplier(
+            bullets[idx] if idx < len(bullets) else source.get("text", ""),
+            source,
+            raw_keywords,
+            rewritten_refs,
+        )
         scores[source["bullet_id"]] = round(
-            min(max(base, contrib) + title_bonus, 1.0) * order_multiplier, 4
+            min(max(base, contrib) + title_bonus, 1.0) * order_multiplier * retention_multiplier,
+            4,
         )
     return scores
 
@@ -445,25 +514,70 @@ def _score_details(
     classification: dict | None = None,
     rag_scores: list[dict] | None = None,
     job_title: str = "",
-) -> dict[str, dict[str, float]]:
+    rewritten_refs: set[tuple[str, str, int]] | None = None,
+) -> dict[str, dict[str, Any]]:
     base_scores = score_bullets_for_drop(bullets, raw_keywords)
     title_scores = score_bullets_for_drop(bullets, [job_title]) if job_title.strip() else []
     contribution = _coverage_contribution_scores(sources, rag_scores or [])
-    details: dict[str, dict[str, float]] = {}
+    details: dict[str, dict[str, Any]] = {}
     for idx, source in enumerate(sources):
         base = base_scores[idx] if idx < len(base_scores) else 0.0
         contrib = contribution.get(source["bullet_id"], 0.0)
         title_bonus = (title_scores[idx] * 0.12) if idx < len(title_scores) else 0.0
         order_multiplier = _bullet_order_score_multiplier(source)
         pre_order = min(max(base, contrib) + title_bonus, 1.0)
+        text = bullets[idx] if idx < len(bullets) else source.get("text", "")
+        retention_multiplier = _keyword_retention_score_multiplier(
+            text,
+            source,
+            raw_keywords,
+            rewritten_refs,
+        )
         details[source["bullet_id"]] = {
             "score_base": round(base, 4),
             "score_bonus": round(max(0.0, contrib - base), 4),
             "score_title_bonus": round(title_bonus, 4),
             "score_order_multiplier": round(order_multiplier, 4),
-            "score_final": round(pre_order * order_multiplier, 4),
+            "score_keyword_retention_multiplier": round(retention_multiplier, 4),
+            "score_keyword_retention_reasons": _keyword_retention_reasons(
+                text,
+                source,
+                raw_keywords,
+                rewritten_refs,
+            ),
+            "score_final": round(pre_order * order_multiplier * retention_multiplier, 4),
         }
     return details
+
+
+def _keyword_retention_reasons(
+    bullet: str,
+    source: dict,
+    raw_keywords: list[str],
+    rewritten_refs: set[tuple[str, str, int]] | None = None,
+) -> list[str]:
+    reasons: list[str] = []
+    if rewritten_refs and _source_ref(source) in rewritten_refs:
+        reasons.append("rewritten")
+    matched = [
+        keyword
+        for keyword in _dedupe([str(keyword).strip() for keyword in raw_keywords])
+        if keyword and keyword_visible_in_text(keyword, bullet)
+    ]
+    if matched:
+        reasons.append("visible_keyword")
+    return reasons
+
+
+def _keyword_retention_score_multiplier(
+    bullet: str,
+    source: dict,
+    raw_keywords: list[str],
+    rewritten_refs: set[tuple[str, str, int]] | None = None,
+) -> float:
+    if _keyword_retention_reasons(bullet, source, raw_keywords, rewritten_refs):
+        return BULLET_KEYWORD_RETENTION_MULTIPLIER
+    return 1.0
 
 
 def _bullet_order_score_multiplier(source: dict) -> float:
@@ -837,9 +951,13 @@ def _keyword_rewrite_eligible(keyword: str) -> bool:
 
 
 def _select_rewrite_assignments(
-    matches: list[dict], *, max_keywords_per_bullet: int = 2
+    matches: list[dict],
+    *,
+    max_keywords_per_bullet: int = 2,
+    high_threshold: float | None = None,
 ) -> dict[int, list[str]]:
     """Globally assign high RAG keywords while capping each bullet's rewrite load."""
+    min_score = _config.RAG_HIGH_THRESHOLD if high_threshold is None else high_threshold
     by_keyword: dict[str, list[dict]] = {}
     for match in matches:
         keyword = str(match.get("keyword") or "").strip()
@@ -849,17 +967,19 @@ def _select_rewrite_assignments(
         options: list[dict] = []
         for candidate in match.get("candidates") or []:
             c_idx = candidate.get("bullet_idx")
-            if isinstance(c_idx, int):
+            score = float(candidate.get("score") or 0.0)
+            if isinstance(c_idx, int) and score >= min_score:
                 options.append(
                     {
                         **match,
                         "bullet_idx": c_idx,
-                        "score": float(candidate.get("score") or match.get("score") or 0.0),
+                        "score": score,
                     }
                 )
-        if not options:
+        if not options and float(match.get("score") or 0.0) >= min_score:
             options = [match]
-        by_keyword.setdefault(keyword.lower(), []).extend(options)
+        if options:
+            by_keyword.setdefault(keyword.lower(), []).extend(options)
 
     candidates: list[dict] = []
     for options in by_keyword.values():
@@ -1457,6 +1577,7 @@ def _run_iteration(
     doc.summary = ""
 
     active_bullets, active_sources = _collect_active_bullets(doc, active_bucket_ids)
+    _annotate_rag_indices(active_sources)
     logger.step(
         "active_buckets",
         count=len(active_bucket_ids),
@@ -1541,6 +1662,8 @@ def _run_iteration(
 
     skipped_candidates: list[str] = []
     keywords_used: list[str] = []
+    used_keyword_matches: list[dict[str, Any]] = []
+    rewritten_refs: set[tuple[str, str, int]] = set()
     validation_reasons: list[str] = []
     rewrite_count = 0
     rewrite_ok = 0
@@ -1559,7 +1682,11 @@ def _run_iteration(
                 continue
             rewrite_matches.append(match)
 
-        by_bullet = _select_rewrite_assignments(rewrite_matches, max_keywords_per_bullet=2)
+        by_bullet = _select_rewrite_assignments(
+            rewrite_matches,
+            max_keywords_per_bullet=2,
+            high_threshold=_config.RAG_HIGH_THRESHOLD,
+        )
         rewrite_tasks: list[dict[str, Any]] = []
         for bullet_idx, kws_to_add in sorted(by_bullet.items()):
             if bullet_idx >= len(active_bullets):
@@ -1584,9 +1711,32 @@ def _run_iteration(
             result = job_result["result"]
             validation_reasons.extend(job_result.get("validation_reasons") or [])
             keywords_used.extend(result.get("keywords_used") or [])
+            source = job_result["source"]
+            for keyword in result.get("keywords_used") or []:
+                original_text = str(source.get("text") or "")
+                rewritten_text = str(result.get("bullet") or source.get("text") or "")
+                originally_visible = keyword_visible_in_text(keyword, original_text)
+                rewritten_visible = keyword_visible_in_text(keyword, rewritten_text)
+                support_kind = (
+                    "rewrite_added"
+                    if rewritten_visible and not originally_visible
+                    else "already_supported"
+                    if originally_visible
+                    else "semantic_supported"
+                )
+                used_keyword_matches.append(
+                    {
+                        "keyword": keyword,
+                        "bullet_idx": source.get("rag_idx"),
+                        "bullet_id": source.get("bullet_id"),
+                        "bullet_text": rewritten_text,
+                        "support_kind": support_kind,
+                    }
+                )
             skipped_candidates.extend(job_result.get("skipped_candidates") or [])
             _log_rewrite_done(logger, job_result)
             if _apply_rewrite_result(doc, job_result):
+                rewritten_refs.add(_source_ref(source))
                 rewrite_ok += 1
 
         def run_serial(tasks: list[dict[str, Any]]) -> None:
@@ -1684,6 +1834,7 @@ def _run_iteration(
         total=rewrite_count,
         successful=rewrite_ok,
         keywords_used=_dedupe(keywords_used),
+        used_keyword_matches=used_keyword_matches,
     )
     _log_ollama_runtime(logger, "after_bullet_rewrites")
     logger.step("rewrite_validation_summary", rejected_keywords=_dedupe(skipped_candidates))
@@ -1697,6 +1848,7 @@ def _run_iteration(
         classification,
         kw_match.get("scores", []),
         job_title=title,
+        rewritten_refs=rewritten_refs,
     )
     logger.step(
         "bullet_scores",
@@ -1708,6 +1860,7 @@ def _run_iteration(
             classification,
             kw_match.get("scores", []),
             job_title=title,
+            rewritten_refs=rewritten_refs,
         ),
     )
     evidence_bullets = _summary_evidence_bullets(bullets_for_score, sources_for_score, scores)
@@ -1906,6 +2059,7 @@ def _run_iteration(
             classification,
             kw_match.get("scores", []),
             job_title=title,
+            rewritten_refs=rewritten_refs,
         )
         cr_s, tex_s, removed = _fit_to_page(
             attempt_dir,
@@ -1973,6 +2127,7 @@ def _run_iteration(
                         classification,
                         kw_match.get("scores", []),
                         job_title=title,
+                        rewritten_refs=rewritten_refs,
                     )
                     cr_s, tex_s, removed = _fit_to_page(
                         attempt_dir,
@@ -2031,6 +2186,7 @@ def _run_iteration(
             "fits_one_page": cr_ns.get("fits_one_page"),
             "summary_error": summary_error,
             "kw_match": kw_match,
+            "used_keywords": used_keyword_matches,
         },
         None,
     )
@@ -2516,6 +2672,8 @@ def run_ad_hoc_pipeline(
             "log_path": log_path,
             "compile_status": cr_orig.get("compile_status"),
             "fits_one_page": cr_orig.get("fits_one_page"),
+            "role_family": classification.get("role_family"),
+            "job_level": classification.get("job_level"),
             "keywords": [],
             "present_keywords": [],
             "missing_keywords": [],
@@ -2568,6 +2726,8 @@ def run_ad_hoc_pipeline(
             "log_path": log_path,
             "compile_status": "failed",
             "fits_one_page": False,
+            "role_family": classification.get("role_family"),
+            "job_level": classification.get("job_level"),
             "keywords": raw_keywords,
             "present_keywords": present_kws,
             "missing_keywords": missing_kws,
@@ -2637,6 +2797,8 @@ def run_ad_hoc_pipeline(
             "log_path": log_path,
             "compile_status": "failed",
             "fits_one_page": False,
+            "role_family": classification.get("role_family"),
+            "job_level": classification.get("job_level"),
             "keywords": raw_keywords,
             "present_keywords": present_kws,
             "missing_keywords": missing_kws,
@@ -2662,10 +2824,14 @@ def run_ad_hoc_pipeline(
         "log_path": log_path,
         "compile_status": result.get("compile_status"),
         "fits_one_page": result.get("fits_one_page"),
+        "role_family": classification.get("role_family"),
+        "job_level": classification.get("job_level"),
         "keywords": raw_keywords,
         "present_keywords": present_kws,
         "missing_keywords": missing_kws,
+        "present_coverage": coverage,
         "rag_scores": list((result.get("kw_match") or {}).get("scores") or []),
+        "used_keywords": list(result.get("used_keywords") or []),
         "llm_error": result.get("summary_error"),
         **starting_artifacts,
     }
