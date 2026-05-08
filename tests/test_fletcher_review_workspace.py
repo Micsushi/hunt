@@ -32,7 +32,7 @@ from fletcher.resume.review_models import (
     build_review_id,
     document_to_review_blocks,
 )
-from fletcher.resume.review_store import register_review
+from fletcher.resume.review_store import artifact_path_for_review, register_review
 from fletcher.storage import build_attempt_dir
 
 
@@ -76,6 +76,7 @@ def test_document_to_review_blocks_has_stable_ids():
     assert "summary" in ids
     assert "experience.exp_acme.bullet.0" in ids
     assert "skills.languages" in ids
+    assert ResumeReviewVersionName.STARTING.value == "starting"
     assert ResumeReviewVersionName.NO_SUMMARY.value == "no_summary"
 
 
@@ -232,8 +233,11 @@ def test_create_review_package_from_attempt_reuses_shared_contract(tmp_path, mon
     )
     assert package.job.job_id == 7
     assert package.job.attempt_id == 42
+    assert ResumeReviewVersionName.STARTING in package.versions
     assert ResumeReviewVersionName.NO_SUMMARY in package.versions
+    assert package.versions[ResumeReviewVersionName.STARTING].current.header.name == "Michael Shi"
     assert package.versions[ResumeReviewVersionName.NO_SUMMARY].current.header.name == "Michael Shi"
+    assert artifact_path_for_review(package.review_id, "starting", "tex").name == "starting.tex"
 
 
 def test_create_review_package_uses_attempt_source_resume(tmp_path, monkeypatch):

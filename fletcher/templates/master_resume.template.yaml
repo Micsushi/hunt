@@ -1,0 +1,71 @@
+# Fletcher master resume source.
+# Edit this file's copy at fletcher/master_resume.yaml. The renderer owns LaTeX layout.
+
+selection:
+  min_experience: 2
+  max_experience: 4
+  min_projects: 1
+  max_projects: 3
+  max_bullets_per_experience: 6
+  max_bullets_per_project: 4
+  experience_position_bonus: 0.12
+  project_position_bonus: 0.08
+  bullet_position_bonus: 0.08
+
+header:
+  name: "Your Name"
+  contact: "City, Region | \\href{mailto:you@example.com}{you@example.com} | \\href{https://example.com}{example.com}"
+
+summaries:
+  software: "Software developer with experience building production systems, automation, and user-facing tools across backend, frontend, and cloud environments."
+  pm: "Product-minded builder with experience translating user needs, technical constraints, and delivery feedback into shipped systems."
+  data: "Technical candidate with experience applying Python, SQL, and analytics workflows to product and operational problems."
+  general: "Technical candidate with experience delivering practical systems, collaborating across stakeholders, and improving workflows with automation."
+
+education:
+  institution_and_degree: "\\textbf{University Name}, Degree and Program"
+  date_text: "Expected Graduation: \\textbf{YYYY}"
+  bullets:
+    - "\\textbf{Awards:} Add awards, scholarships, or academic highlights."
+
+experience:
+  - id: "job1_company"
+    title: "Current Role"
+    company: "Company"
+    location: "City, Region"
+    dates: "May 2025 - Present"
+    bullets:
+      - text: "Built and maintained a production service used by internal teams."
+      - text: "Improved reliability by adding monitoring, tests, and deployment checks."
+
+  - id: "job2_company"
+    title: "Previous Role"
+    company: "Company"
+    location: "City, Region"
+    dates: "May 2024 - May 2025"
+    bullets:
+      - text: "Reduced manual work by automating a repeated operational workflow."
+      - text: "Collaborated with cross-functional partners to ship product improvements."
+
+projects:
+  - id: "proj1_name"
+    name: "Project One"
+    url: "https://github.com/yourhandle/project-one"
+    bullets:
+      - text: "Designed and built a full-stack application using Python and TypeScript."
+      - text: "Added review and monitoring workflows to improve iteration speed."
+
+skills:
+  Languages:
+    - Python
+    - TypeScript
+    - SQL
+  Frameworks:
+    - FastAPI
+    - React
+  Cloud & Data:
+    - AWS
+    - PostgreSQL
+  Developer Tools:
+    - Git
+    - Docker

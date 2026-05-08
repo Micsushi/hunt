@@ -129,6 +129,15 @@ C2_KEYWORD_SELECTION_MAX_WORDS = 3
 C2_JOB_METADATA_PROMPT_MAX_CHARS = 3000
 C2_JOB_METADATA_MIN_CONFIDENCE = 0.8
 C2_SKILL_ADDITION_LIMIT = 3
+C2_OPTION_A_MIN_EXPERIENCE = 2
+C2_OPTION_A_MAX_EXPERIENCE = 4
+C2_OPTION_A_MIN_PROJECTS = 1
+C2_OPTION_A_MAX_PROJECTS = 3
+C2_OPTION_A_MAX_EXPERIENCE_BULLETS = 6
+C2_OPTION_A_MAX_PROJECT_BULLETS = 4
+C2_OPTION_A_EXPERIENCE_POSITION_BONUS = 0.12
+C2_OPTION_A_PROJECT_POSITION_BONUS = 0.08
+C2_OPTION_A_BULLET_POSITION_BONUS = 0.08
 C2_JD_EXCERPT_MIN_CHARS = 800
 C2_JD_EXCERPT_HEAD_MIN_CHARS = 350
 C2_JD_EXCERPT_TAIL_MIN_CHARS = 250
@@ -172,6 +181,15 @@ C2_KEYWORD_SELECTION_MAX_WORDS_KEY = "keyword_selection_max_words"
 C2_JOB_METADATA_PROMPT_MAX_CHARS_KEY = "job_metadata_prompt_max_chars"
 C2_JOB_METADATA_MIN_CONFIDENCE_KEY = "job_metadata_min_confidence"
 C2_SKILL_ADDITION_LIMIT_KEY = "skill_addition_limit"
+C2_OPTION_A_MIN_EXPERIENCE_KEY = "option_a_min_experience"
+C2_OPTION_A_MAX_EXPERIENCE_KEY = "option_a_max_experience"
+C2_OPTION_A_MIN_PROJECTS_KEY = "option_a_min_projects"
+C2_OPTION_A_MAX_PROJECTS_KEY = "option_a_max_projects"
+C2_OPTION_A_MAX_EXPERIENCE_BULLETS_KEY = "option_a_max_experience_bullets"
+C2_OPTION_A_MAX_PROJECT_BULLETS_KEY = "option_a_max_project_bullets"
+C2_OPTION_A_EXPERIENCE_POSITION_BONUS_KEY = "option_a_experience_position_bonus"
+C2_OPTION_A_PROJECT_POSITION_BONUS_KEY = "option_a_project_position_bonus"
+C2_OPTION_A_BULLET_POSITION_BONUS_KEY = "option_a_bullet_position_bonus"
 
 
 def _clean_values(values: list[str], defaults: tuple[str, ...]) -> list[str]:
@@ -319,6 +337,15 @@ def load_c2_prompt_settings(db_path: str | Path | None = None) -> dict[str, obje
         C2_JOB_METADATA_PROMPT_MAX_CHARS_KEY,
         C2_JOB_METADATA_MIN_CONFIDENCE_KEY,
         C2_SKILL_ADDITION_LIMIT_KEY,
+        C2_OPTION_A_MIN_EXPERIENCE_KEY,
+        C2_OPTION_A_MAX_EXPERIENCE_KEY,
+        C2_OPTION_A_MIN_PROJECTS_KEY,
+        C2_OPTION_A_MAX_PROJECTS_KEY,
+        C2_OPTION_A_MAX_EXPERIENCE_BULLETS_KEY,
+        C2_OPTION_A_MAX_PROJECT_BULLETS_KEY,
+        C2_OPTION_A_EXPERIENCE_POSITION_BONUS_KEY,
+        C2_OPTION_A_PROJECT_POSITION_BONUS_KEY,
+        C2_OPTION_A_BULLET_POSITION_BONUS_KEY,
     )
     values = _load_component_values(keys, db_path)
     return {
@@ -406,5 +433,42 @@ def load_c2_prompt_settings(db_path: str | Path | None = None) -> dict[str, obje
             values.get(C2_SKILL_ADDITION_LIMIT_KEY),
             C2_SKILL_ADDITION_LIMIT,
             minimum=0,
+        ),
+        "option_a_min_experience": parse_setting_int(
+            values.get(C2_OPTION_A_MIN_EXPERIENCE_KEY), C2_OPTION_A_MIN_EXPERIENCE, minimum=0
+        ),
+        "option_a_max_experience": parse_setting_int(
+            values.get(C2_OPTION_A_MAX_EXPERIENCE_KEY), C2_OPTION_A_MAX_EXPERIENCE, minimum=0
+        ),
+        "option_a_min_projects": parse_setting_int(
+            values.get(C2_OPTION_A_MIN_PROJECTS_KEY), C2_OPTION_A_MIN_PROJECTS, minimum=0
+        ),
+        "option_a_max_projects": parse_setting_int(
+            values.get(C2_OPTION_A_MAX_PROJECTS_KEY), C2_OPTION_A_MAX_PROJECTS, minimum=0
+        ),
+        "option_a_max_experience_bullets": parse_setting_int(
+            values.get(C2_OPTION_A_MAX_EXPERIENCE_BULLETS_KEY),
+            C2_OPTION_A_MAX_EXPERIENCE_BULLETS,
+            minimum=1,
+        ),
+        "option_a_max_project_bullets": parse_setting_int(
+            values.get(C2_OPTION_A_MAX_PROJECT_BULLETS_KEY),
+            C2_OPTION_A_MAX_PROJECT_BULLETS,
+            minimum=1,
+        ),
+        "option_a_experience_position_bonus": parse_setting_float(
+            values.get(C2_OPTION_A_EXPERIENCE_POSITION_BONUS_KEY),
+            C2_OPTION_A_EXPERIENCE_POSITION_BONUS,
+            minimum=0.0,
+        ),
+        "option_a_project_position_bonus": parse_setting_float(
+            values.get(C2_OPTION_A_PROJECT_POSITION_BONUS_KEY),
+            C2_OPTION_A_PROJECT_POSITION_BONUS,
+            minimum=0.0,
+        ),
+        "option_a_bullet_position_bonus": parse_setting_float(
+            values.get(C2_OPTION_A_BULLET_POSITION_BONUS_KEY),
+            C2_OPTION_A_BULLET_POSITION_BONUS,
+            minimum=0.0,
         ),
     }

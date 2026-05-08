@@ -76,6 +76,63 @@ class Component2Stage1Tests(unittest.TestCase):
         self.assertNotIn("\\section{Experience}", rendered)
         self.assertNotIn("\\section{Projects}", rendered)
 
+    def test_parse_resume_accepts_missing_projects_and_skills(self):
+        tex = MAIN_TEX.read_text(encoding="utf-8")
+        tex = tex.replace(
+            tex[
+                tex.index("    \\section{Projects}") : tex.index("    \\section{Technical Skills}")
+            ],
+            "",
+        )
+        tex = tex.replace(
+            tex[tex.index("    \\section{Technical Skills}") : tex.index("\\end{document}")],
+            "",
+        )
+
+        doc = parse_resume_tex(tex, source_path="<work-only>")
+        rendered = render_resume_tex(doc)
+
+        self.assertGreater(len(doc.experience), 0)
+        self.assertEqual(doc.projects, [])
+        self.assertEqual(doc.skills.categories, {})
+        self.assertNotIn("\\section{Projects}", rendered)
+        self.assertNotIn("\\section{Technical Skills}", rendered)
+
+    def test_parse_resume_accepts_project_only_and_section_aliases(self):
+        tex = MAIN_TEX.read_text(encoding="utf-8")
+        experience_start = tex.index("    \\section{Experience}")
+        projects_start = tex.index("    \\section{Projects}")
+        skills_start = tex.index("    \\section{Technical Skills}")
+        tex = tex[:experience_start] + tex[projects_start:skills_start] + tex[skills_start:]
+        tex = tex.replace("\\section{Projects}", "\\section{Selected Projects}", 1)
+        tex = tex.replace("\\section{Technical Skills}", "\\section{Skills}", 1)
+
+        doc = parse_resume_tex(tex, source_path="<projects-only>")
+
+        self.assertEqual(doc.experience, [])
+        self.assertGreater(len(doc.projects), 0)
+        self.assertIn("Python", doc.skills.languages)
+
+    def test_parse_resume_accepts_professional_summary_alias_and_no_education(self):
+        tex = MAIN_TEX.read_text(encoding="utf-8")
+        education_start = tex.index("    \\section{Education}")
+        experience_start = tex.index("    \\section{Experience}")
+        tex = (
+            tex[:education_start]
+            + "    \\section{Professional Summary}\n\n"
+            + "    \\begin{onecolentry}\n"
+            + "        Builder with Python systems experience.\n"
+            + "    \\end{onecolentry}\n\n"
+            + tex[experience_start:]
+        )
+
+        doc = parse_resume_tex(tex, source_path="<summary-no-education>")
+        rendered = render_resume_tex(doc)
+
+        self.assertEqual(doc.summary, "Builder with Python systems experience.")
+        self.assertEqual(doc.education.entry.institution_and_degree, "")
+        self.assertIn("\\section{Summary}", rendered)
+
     def test_mentor_interns_does_not_make_role_intern(self):
         result = classify_job(
             title="Software Engineer",

@@ -1,4 +1,4 @@
-export type ReviewVersionName = 'no_summary' | 'with_summary'
+export type ReviewVersionName = 'starting' | 'no_summary' | 'with_summary'
 
 export interface ResumeHeader {
   name: string

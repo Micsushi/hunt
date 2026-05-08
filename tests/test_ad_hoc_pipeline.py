@@ -408,6 +408,8 @@ def test_returns_expected_keys(base_mocks):
         "present_keywords",
         "missing_keywords",
         "attempt_dir",
+        "starting_tex_path",
+        "starting_pdf_path",
     ):
         assert key in result, f"missing key: {key}"
 
@@ -480,6 +482,13 @@ def test_summary_pdf_set_when_summary_generated(base_mocks):
             "compile_status": "ok",
             "fits_one_page": True,
             "page_count": 1,
+            "pdf_path": "/tmp/starting.pdf",
+            "log_text": "",
+        },
+        {
+            "compile_status": "ok",
+            "fits_one_page": True,
+            "page_count": 1,
             "pdf_path": "/tmp/out.pdf",
             "log_text": "",
         },
@@ -494,7 +503,8 @@ def test_summary_pdf_set_when_summary_generated(base_mocks):
 
     result = run_ad_hoc_pipeline(title="SWE", description="job")
     assert result["pdf_path_summary"] == "/tmp/out_summary.pdf"
-    assert base_mocks.compile_tex.call_count == 2
+    assert result["starting_pdf_path"] == "/tmp/starting.pdf"
+    assert base_mocks.compile_tex.call_count == 3
 
 
 def test_summary_context_includes_relevant_bullet_evidence(base_mocks):
@@ -631,7 +641,7 @@ def test_compile_called_once_when_no_summary(base_mocks):
     from fletcher.ad_hoc_pipeline import run_ad_hoc_pipeline
 
     run_ad_hoc_pipeline(title="SWE", description="job")
-    assert base_mocks.compile_tex.call_count == 1
+    assert base_mocks.compile_tex.call_count == 2
 
 
 def test_compile_called_twice_when_summary_present(base_mocks):
@@ -644,7 +654,7 @@ def test_compile_called_twice_when_summary_present(base_mocks):
         "reasons": [],
     }
     run_ad_hoc_pipeline(title="SWE", description="job")
-    assert base_mocks.compile_tex.call_count == 2
+    assert base_mocks.compile_tex.call_count == 3
 
 
 def test_summary_pdf_skipped_when_line_retry_fails(base_mocks):
@@ -679,6 +689,13 @@ def test_summary_pdf_accepted_when_line_check_unavailable(base_mocks):
     }
     base_mocks._summary_line_count.return_value = ("unavailable", None)
     base_mocks.compile_tex.side_effect = [
+        {
+            "compile_status": "ok",
+            "fits_one_page": True,
+            "page_count": 1,
+            "pdf_path": "/tmp/starting.pdf",
+            "log_text": "",
+        },
         {
             "compile_status": "ok",
             "fits_one_page": True,
@@ -973,6 +990,77 @@ def test_llm_policy_router_none_does_not_crash(base_mocks):
     result = run_ad_hoc_pipeline(title="Associate Project Manager", description="job")
 
     assert result["compile_status"] == "ok"
+
+
+def test_option_b_projects_only_resume_runs_without_skills_section(base_mocks):
+    from fletcher.resume.models import SkillsSection
+
+    parsed = _make_parsed_doc()
+    parsed.experience = []
+    parsed.skills = SkillsSection()
+    base_mocks.parse_resume_file.return_value = parsed
+    base_mocks.partition_keywords.return_value = (
+        ["Python"],
+        ["FastAPI"],
+        {"Python": [], "FastAPI": [0]},
+    )
+    base_mocks.match_keywords_to_bullets.return_value = {
+        "bullet_matches": [{"bullet_idx": 1, "keyword": "FastAPI", "score": 0.85}],
+        "summary_keywords": [],
+        "ignored_keywords": [],
+        "scores": [],
+        "rag_used": True,
+    }
+
+    events = []
+    result = base_mocks.run_ad_hoc_pipeline(
+        title="SWE",
+        description="Python FastAPI job",
+        progress_callback=lambda step, detail: events.append((step, detail)),
+    )
+
+    assert result["compile_status"] == "ok"
+    structure = next(detail for step, detail in events if step == "resume_structure")
+    assert "Experience" in structure["missing_optional_sections"]
+    assert "Technical Skills" in structure["missing_optional_sections"]
+
+
+def test_no_summary_variant_removes_existing_resume_summary(base_mocks, monkeypatch):
+    captured: dict[str, str] = {}
+    parsed = _make_parsed_doc()
+    parsed.summary = "Existing resume summary."
+    base_mocks.parse_resume_file.return_value = parsed
+    base_mocks.generate_summary.return_value = {
+        "summary": "Generated replacement summary.",
+        "success": True,
+    }
+    base_mocks.validate_summary_with_ollama.return_value = {
+        "success": True,
+        "accepted": True,
+        "reasons": [],
+    }
+
+    def fake_fit(_attempt_dir, doc, stem, _sources, _scores, _logger):
+        captured[stem] = doc.summary
+        return (
+            {
+                "compile_status": "ok",
+                "fits_one_page": True,
+                "page_count": 1,
+                "pdf_path": f"/tmp/{stem}.pdf",
+                "log_text": "",
+            },
+            f"/tmp/{stem}.tex",
+            None,
+        )
+
+    monkeypatch.setattr(base_mocks, "_fit_to_page", MagicMock(side_effect=fake_fit))
+
+    result = base_mocks.run_ad_hoc_pipeline(title="SWE", description="Python MongoDB job")
+
+    assert result["compile_status"] == "ok"
+    assert captured["output"] == ""
+    assert captured["output_summary"] == "Generated replacement summary."
 
 
 def test_llm_job_fit_mismatch_is_logged_but_option_b_continues(base_mocks):

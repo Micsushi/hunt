@@ -39,6 +39,7 @@ class SkillsSection(BaseModel):
     languages: list[str] = Field(default_factory=list)
     frameworks: list[str] = Field(default_factory=list)
     developer_tools: list[str] = Field(default_factory=list)
+    categories: dict[str, list[str]] = Field(default_factory=dict)
 
 
 class ResumeDocument(BaseModel):

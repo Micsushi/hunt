@@ -85,6 +85,20 @@ def _provider_cloud_flag() -> bool:
     return provider in {"openai", "openrouter", "anthropic", "gemini"}
 
 
+def _write_starting_resume_artifacts(attempt_dir: Path, doc) -> dict[str, Any]:
+    attempt_dir.mkdir(parents=True, exist_ok=True)
+    tex_path = attempt_dir / "starting.tex"
+    tex_path.write_text(render_resume_tex(doc), encoding="utf-8")
+    compile_result = compile_tex(tex_path)
+    return {
+        "starting_tex_path": str(tex_path),
+        "starting_pdf_path": compile_result.get("pdf_path"),
+        "starting_compile_status": compile_result.get("compile_status"),
+        "starting_fits_one_page": compile_result.get("fits_one_page"),
+        "starting_page_count": compile_result.get("page_count"),
+    }
+
+
 def _make_review_package(
     *,
     attempt_dir: Path,
@@ -110,6 +124,15 @@ def _make_review_package(
                 return copy.deepcopy(fallback_doc)
         return copy.deepcopy(fallback_doc)
 
+    starting_doc = parse_generated(result.get("starting_tex_path"), original_doc)
+    versions[ResumeReviewVersionName.STARTING] = ResumeReviewVersion(
+        original=copy.deepcopy(starting_doc),
+        generated=copy.deepcopy(starting_doc),
+        current=copy.deepcopy(starting_doc),
+        pdf_url=_review_url(review_id, "starting", "pdf"),
+        tex_url=_review_url(review_id, "starting", "tex"),
+        compile_status=result.get("starting_compile_status"),
+    )
     generated_no_summary = parse_generated(result.get("tex_path"), original_doc)
     generated_no_summary.summary = ""
     versions[ResumeReviewVersionName.NO_SUMMARY] = ResumeReviewVersion(
@@ -2270,6 +2293,33 @@ def run_ad_hoc_pipeline(
         exp_entries=len(parsed.experience),
         project_entries=len(parsed.projects),
     )
+    skill_categories = [
+        label
+        for label, values in (
+            parsed.skills.categories
+            or {
+                "Languages": parsed.skills.languages,
+                "Frameworks": parsed.skills.frameworks,
+                "Developer Tools": parsed.skills.developer_tools,
+            }
+        ).items()
+        if values
+    ]
+    missing_optional_sections = []
+    if not parsed.experience:
+        missing_optional_sections.append("Experience")
+    if not parsed.projects:
+        missing_optional_sections.append("Projects")
+    if not skill_categories:
+        missing_optional_sections.append("Technical Skills")
+    logger.step(
+        "resume_structure",
+        summary_present=bool(parsed.summary.strip()),
+        experience_entries=len(parsed.experience),
+        project_entries=len(parsed.projects),
+        skill_categories=skill_categories,
+        missing_optional_sections=missing_optional_sections,
+    )
 
     classification = classify_job(title=resolved_title, description=description)
     missing_metadata = _missing_job_metadata_fields(resolved_title, classification)
@@ -2419,6 +2469,13 @@ def run_ad_hoc_pipeline(
     attempt_dir = ensure_dir(
         build_attempt_dir(job_id=None, role_family="ad_hoc", ad_hoc_label=ad_hoc_label)
     )
+    starting_artifacts = _write_starting_resume_artifacts(attempt_dir, parsed)
+    logger.step(
+        "starting_resume_compiled",
+        status=starting_artifacts.get("starting_compile_status"),
+        page_count=starting_artifacts.get("starting_page_count"),
+        fits_one_page=starting_artifacts.get("starting_fits_one_page"),
+    )
 
     ollama_failed = (
         _config.resume_llm_provider() == "ollama"
@@ -2463,6 +2520,7 @@ def run_ad_hoc_pipeline(
             "present_keywords": [],
             "missing_keywords": [],
             "llm_error": ollama_error_msg,
+            **starting_artifacts,
         }
         return _attach_review_package(
             payload,
@@ -2514,6 +2572,7 @@ def run_ad_hoc_pipeline(
             "present_keywords": present_kws,
             "missing_keywords": missing_kws,
             "llm_error": "all_buckets_exhausted",
+            **starting_artifacts,
         }
         return _attach_review_package(
             payload,
@@ -2582,6 +2641,7 @@ def run_ad_hoc_pipeline(
             "present_keywords": present_kws,
             "missing_keywords": missing_kws,
             "llm_error": "all_buckets_exhausted",
+            **starting_artifacts,
         }
         return _attach_review_package(
             payload,
@@ -2607,6 +2667,7 @@ def run_ad_hoc_pipeline(
         "missing_keywords": missing_kws,
         "rag_scores": list((result.get("kw_match") or {}).get("scores") or []),
         "llm_error": result.get("summary_error"),
+        **starting_artifacts,
     }
     return _attach_review_package(
         payload,

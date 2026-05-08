@@ -311,8 +311,10 @@ def _append_fletcher_queue_log(path: Path, text: str) -> str:
 
 FLETCHER_BATCH_ARTIFACTS = {
     "log",
+    "starting_pdf",
     "no_summary_pdf",
     "with_summary_pdf",
+    "starting_tex",
     "no_summary_tex",
     "with_summary_tex",
 }
@@ -321,6 +323,7 @@ FLETCHER_PROGRESS_BY_STEP = {
     "starting": 3,
     "config": 5,
     "loading_job": 8,
+    "selecting_master_resume": 10,
     "parse_resume": 12,
     "bullets_loaded": 16,
     "generating_resume": 18,
@@ -425,14 +428,11 @@ def _process_next_fletcher_job() -> bool:
         claim_next_fletcher_job,
         finish_fletcher_job,
         get_job_context,
-        list_resume_attempts,
         set_fletcher_job_log_path,
         update_fletcher_job_progress,
     )
-    from fletcher.pipeline import generate_resume_for_job  # type: ignore
-    from fletcher.resume.review_from_attempt import (  # type: ignore
-        create_review_package_from_attempt,
-    )
+    from fletcher.job_metadata_settings import load_c2_prompt_settings  # type: ignore
+    from fletcher.option_a_master import prepare_option_a_master_resume_source  # type: ignore
 
     job = claim_next_fletcher_job()
     if not job:
@@ -466,26 +466,50 @@ def _process_next_fletcher_job() -> bool:
                 queue_log_path,
                 f"Generating resume for Hunt job ID {numeric_job_id}.",
             )
-            _record_progress("generating_resume", {"event_id": 3})
-            result = generate_resume_for_job(numeric_job_id)
-            _record_progress("packaging_review", {"event_id": 4})
-            review_id = None
-            attempts = list_resume_attempts(numeric_job_id, limit=20)
-            attempt_id = result.get("attempt_id")
-            attempt = next(
-                (
-                    item
-                    for item in attempts
-                    if attempt_id is not None and item.get("id") == attempt_id
-                ),
-                attempts[0] if attempts else None,
+            job_context = get_job_context(numeric_job_id) or {}
+            _record_progress("selecting_master_resume", {"event_id": 3})
+            settings = load_c2_prompt_settings()
+            resume_path, selection_report = prepare_option_a_master_resume_source(
+                job_context,
+                selection_overrides={
+                    "min_experience": settings.get("option_a_min_experience"),
+                    "max_experience": settings.get("option_a_max_experience"),
+                    "min_projects": settings.get("option_a_min_projects"),
+                    "max_projects": settings.get("option_a_max_projects"),
+                    "max_bullets_per_experience": settings.get("option_a_max_experience_bullets"),
+                    "max_bullets_per_project": settings.get("option_a_max_project_bullets"),
+                    "experience_position_bonus": settings.get("option_a_experience_position_bonus"),
+                    "project_position_bonus": settings.get("option_a_project_position_bonus"),
+                    "bullet_position_bonus": settings.get("option_a_bullet_position_bonus"),
+                },
             )
-            if attempt:
-                package = create_review_package_from_attempt(
-                    attempt=attempt,
-                    job=get_job_context(numeric_job_id),
+            _append_fletcher_queue_log(
+                queue_log_path,
+                "Selected master resume buckets: "
+                + json.dumps(
+                    {
+                        "experience": selection_report.get("experience", []),
+                        "projects": selection_report.get("projects", []),
+                    }
+                ),
+            )
+            _record_progress("generating_resume", {"event_id": 4})
+            try:
+                result = run_ad_hoc_pipeline(
+                    title=str(job_context.get("title") or selection_report.get("title") or ""),
+                    company=str(job_context.get("company") or ""),
+                    description=str(job_context.get("description") or ""),
+                    resume_path=resume_path,
+                    label=f"job_{numeric_job_id}_master",
+                    progress_callback=_record_progress,
                 )
-                review_id = package.review_id
+            finally:
+                try:
+                    Path(resume_path).unlink(missing_ok=True)
+                    Path(resume_path).with_suffix(".selection.json").unlink(missing_ok=True)
+                except Exception:
+                    pass
+            review_id = result.get("review_id")
             _append_fletcher_queue_log(
                 queue_log_path,
                 f"Finished resume generation for Hunt job ID {numeric_job_id}.",
@@ -3502,8 +3526,10 @@ def api_fletcher_jobs_batch_download(payload: dict = Body(...), _auth: str = Dep
                 ):
                     added_count += 1
             for version, artifact_kind, artifact_name in [
+                ("starting", "pdf", "resume_starting.pdf"),
                 ("no_summary", "pdf", "resume_no_summary.pdf"),
                 ("with_summary", "pdf", "resume_with_summary.pdf"),
+                ("starting", "tex", "resume_starting.tex"),
                 ("no_summary", "tex", "resume_no_summary.tex"),
                 ("with_summary", "tex", "resume_with_summary.tex"),
             ]:
@@ -3788,6 +3814,26 @@ def api_settings_upsert(payload: dict = Body(...), _auth: str = Depends(require_
         )
     except Exception:
         pass
+    if component == "c2" and key.startswith("option_a_"):
+        try:
+            from fletcher.resume.master import sync_master_selection_config
+
+            setting_to_yaml = {
+                "option_a_min_experience": "min_experience",
+                "option_a_max_experience": "max_experience",
+                "option_a_min_projects": "min_projects",
+                "option_a_max_projects": "max_projects",
+                "option_a_max_experience_bullets": "max_bullets_per_experience",
+                "option_a_max_project_bullets": "max_bullets_per_project",
+                "option_a_experience_position_bonus": "experience_position_bonus",
+                "option_a_project_position_bonus": "project_position_bonus",
+                "option_a_bullet_position_bonus": "bullet_position_bonus",
+            }
+            yaml_key = setting_to_yaml.get(key)
+            if yaml_key:
+                sync_master_selection_config({yaml_key: value})
+        except Exception:
+            pass
     return JSONResponse({"setting": _setting_row(row)})
 
 

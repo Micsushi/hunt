@@ -163,6 +163,8 @@ def compile_current_document(
 def _update_job_selected_resume(
     package: ResumeReviewPackage, review_id: str, version: ResumeReviewVersionName
 ) -> None:
+    if version == ResumeReviewVersionName.STARTING:
+        return
     job_id = package.job.job_id
     if job_id is None:
         return
@@ -220,7 +222,12 @@ def artifact_path_for_review(
     # Initial artifacts live outside versions/ and are referenced by URL only,
     # so fall back to conventional output names in the attempt dir.
     attempt = attempt_dir_for_review(review_id)
-    stem = "output_summary" if vname == ResumeReviewVersionName.WITH_SUMMARY else "output"
+    if vname == ResumeReviewVersionName.STARTING:
+        stem = "starting"
+    elif vname == ResumeReviewVersionName.WITH_SUMMARY:
+        stem = "output_summary"
+    else:
+        stem = "output"
     candidate = attempt / f"{stem}.{artifact_kind}"
     if candidate.exists():
         return candidate

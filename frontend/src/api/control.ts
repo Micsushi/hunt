@@ -236,8 +236,10 @@ export function fetchFletcherJobs(limit = 100): Promise<{ jobs: FletcherQueueIte
 
 export type FletcherBatchArtifact =
   | 'log'
+  | 'starting_pdf'
   | 'no_summary_pdf'
   | 'with_summary_pdf'
+  | 'starting_tex'
   | 'no_summary_tex'
   | 'with_summary_tex'
 

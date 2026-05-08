@@ -25,8 +25,10 @@ const FLETCHER_QUEUE_ACTIVE_REFETCH_MS = 5000
 const FLETCHER_QUEUE_IDLE_REFETCH_MS = 30000
 const BATCH_ARTIFACT_OPTIONS: { id: FletcherBatchArtifact; label: string }[] = [
   { id: 'log', label: 'Logs' },
+  { id: 'starting_pdf', label: 'Starting PDF' },
   { id: 'no_summary_pdf', label: 'Resume PDF : no summary' },
   { id: 'with_summary_pdf', label: 'Resume PDF : with summary' },
+  { id: 'starting_tex', label: 'Starting TeX' },
   { id: 'no_summary_tex', label: 'TeX : no summary' },
   { id: 'with_summary_tex', label: 'TeX : with summary' },
 ]
@@ -448,8 +450,10 @@ function FletcherQueuePanel({
   const [batchDownloading, setBatchDownloading] = useState(false)
   const [batchArtifacts, setBatchArtifacts] = useState<Record<FletcherBatchArtifact, boolean>>({
     log: true,
+    starting_pdf: false,
     no_summary_pdf: true,
     with_summary_pdf: false,
+    starting_tex: false,
     no_summary_tex: false,
     with_summary_tex: false,
   })
@@ -598,91 +602,85 @@ function FletcherQueuePanel({
                   ? null
                   : Math.round(displayedProgress[job.queue_item_id] ?? progressPercent)
               return (
-                  <article className={styles.queueCard} key={job.queue_item_id}>
-                    <div className={styles.queueCopy}>
-                      <button
-                        className={styles.queueTitleButton}
-                        onClick={() => setDetailJob(job)}
-                        title={fletcherTitle(job)}
-                      >
-                        {fletcherTitle(job)}
-                      </button>
-                      <div className={styles.meta}>
-                        {job.status} : {job.progress.current_step || 'waiting'}
-                      </div>
-                      <div className={styles.meta}>Started: {formatRunTime(job.started_at)}</div>
-                      {job.status !== 'queued' && displayedPercent !== null ? (
-                        <div className={styles.progressRow}>
-                          <div
-                            className={styles.progressTrack}
-                            role="progressbar"
-                            aria-valuemin={0}
-                            aria-valuemax={100}
-                            aria-valuenow={displayedPercent}
-                            aria-label={`${fletcherTitle(job)} progress`}
-                          >
-                            <div
-                              className={styles.progressFill}
-                              style={{ width: `${displayedPercent}%` }}
-                            />
-                          </div>
-                          <span className={styles.progressText}>{displayedPercent}%</span>
-                        </div>
-                      ) : null}
-                      {job.error ? (
-                        <div className={`${styles.llmErrorDetail} ${styles.queueErrorPreview}`}>
-                          {job.error}
-                        </div>
-                      ) : null}
+                <article className={styles.queueCard} key={job.queue_item_id}>
+                  <div className={styles.queueCopy}>
+                    <button
+                      className={styles.queueTitleButton}
+                      onClick={() => setDetailJob(job)}
+                      title={fletcherTitle(job)}
+                    >
+                      {fletcherTitle(job)}
+                    </button>
+                    <div className={styles.meta}>
+                      {job.status} : {job.progress.current_step || 'waiting'}
                     </div>
-                    <div className={styles.queueActions}>
-                      {job.status === 'queued' ? (
-                        <>
-                          <button
-                            className={styles.btn}
-                            onClick={() => onMove(job.queue_item_id, 'up')}
-                          >
-                            Up
-                          </button>
-                          <button
-                            className={styles.btn}
-                            onClick={() => onMove(job.queue_item_id, 'down')}
-                          >
-                            Down
-                          </button>
-                          <button
-                            className={styles.btn}
-                            onClick={() => onCancel(job.queue_item_id)}
-                          >
-                            Cancel
-                          </button>
-                        </>
-                      ) : null}
-                      {job.result.review_id ? (
-                        <a
-                          className={styles.btn}
-                          href={`/fletcher/reviews/${job.result.review_id}`}
+                    <div className={styles.meta}>Started: {formatRunTime(job.started_at)}</div>
+                    {job.status !== 'queued' && displayedPercent !== null ? (
+                      <div className={styles.progressRow}>
+                        <div
+                          className={styles.progressTrack}
+                          role="progressbar"
+                          aria-valuemin={0}
+                          aria-valuemax={100}
+                          aria-valuenow={displayedPercent}
+                          aria-label={`${fletcherTitle(job)} progress`}
                         >
-                          Open workspace
-                        </a>
-                      ) : null}
-                      <a
-                        className={styles.btn}
-                        href={`/api/fletcher/tailor/jobs/${job.queue_item_id}/log`}
-                        target="_blank"
-                        rel="noreferrer"
-                      >
-                        View log
+                          <div
+                            className={styles.progressFill}
+                            style={{ width: `${displayedPercent}%` }}
+                          />
+                        </div>
+                        <span className={styles.progressText}>{displayedPercent}%</span>
+                      </div>
+                    ) : null}
+                    {job.error ? (
+                      <div className={`${styles.llmErrorDetail} ${styles.queueErrorPreview}`}>
+                        {job.error}
+                      </div>
+                    ) : null}
+                  </div>
+                  <div className={styles.queueActions}>
+                    {job.status === 'queued' ? (
+                      <>
+                        <button
+                          className={styles.btn}
+                          onClick={() => onMove(job.queue_item_id, 'up')}
+                        >
+                          Up
+                        </button>
+                        <button
+                          className={styles.btn}
+                          onClick={() => onMove(job.queue_item_id, 'down')}
+                        >
+                          Down
+                        </button>
+                        <button className={styles.btn} onClick={() => onCancel(job.queue_item_id)}>
+                          Cancel
+                        </button>
+                      </>
+                    ) : null}
+                    {job.result.review_id ? (
+                      <a className={styles.btn} href={`/fletcher/reviews/${job.result.review_id}`}>
+                        Open workspace
                       </a>
-                      <a
-                        className={styles.btn}
-                        href={`/api/fletcher/tailor/jobs/${job.queue_item_id}/log?download=1`}
-                        download={fletcherLogFilename(job)}
-                      >
-                        Download log
-                      </a>
-                    </div>
-                  </article>
+                    ) : null}
+                    <a
+                      className={styles.btn}
+                      href={`/api/fletcher/tailor/jobs/${job.queue_item_id}/log`}
+                      target="_blank"
+                      rel="noreferrer"
+                    >
+                      View log
+                    </a>
+                    <a
+                      className={styles.btn}
+                      href={`/api/fletcher/tailor/jobs/${job.queue_item_id}/log?download=1`}
+                      download={fletcherLogFilename(job)}
+                    >
+                      Download log
+                    </a>
+                  </div>
+                </article>
               )
             })
           ) : (
@@ -784,6 +782,12 @@ function FletcherQueuePanel({
             visibleHistoryJobs.map((job) => {
               const title = fletcherTitle(job)
               const reviewId = job.result.review_id
+              const startingPdfUrl = reviewId
+                ? `/api/fletcher/reviews/${reviewId}/versions/starting/pdf`
+                : null
+              const startingTexUrl = reviewId
+                ? `/api/fletcher/reviews/${reviewId}/versions/starting/tex`
+                : null
               const pdfUrl =
                 job.result.pdf_url ||
                 (reviewId ? `/api/fletcher/reviews/${reviewId}/versions/no_summary/pdf` : null)
@@ -827,6 +831,16 @@ function FletcherQueuePanel({
                     {reviewId ? (
                       <a className={styles.btn} href={`/fletcher/reviews/${reviewId}`}>
                         Open workspace
+                      </a>
+                    ) : null}
+                    {startingPdfUrl ? (
+                      <a className={styles.btn} href={startingPdfUrl}>
+                        Starting PDF
+                      </a>
+                    ) : null}
+                    {startingTexUrl ? (
+                      <a className={styles.btn} href={startingTexUrl}>
+                        Starting TeX
                       </a>
                     ) : null}
                     {pdfUrl ? (
@@ -880,7 +894,9 @@ function FletcherQueuePanel({
           onClose={() => setDetailJob(null)}
           onMove={onMove}
           onCancel={onCancel}
-          onDelete={(jobToDelete) => deleteOneHistory(jobToDelete.queue_item_id, fletcherTitle(jobToDelete))}
+          onDelete={(jobToDelete) =>
+            deleteOneHistory(jobToDelete.queue_item_id, fletcherTitle(jobToDelete))
+          }
           deletePending={deleteHistory.isPending}
         />
       ) : null}
@@ -905,6 +921,8 @@ function FletcherJobDetailModal({
 }) {
   const title = fletcherTitle(job)
   const reviewId = job.result.review_id
+  const startingPdfUrl = reviewId ? `/api/fletcher/reviews/${reviewId}/versions/starting/pdf` : null
+  const startingTexUrl = reviewId ? `/api/fletcher/reviews/${reviewId}/versions/starting/tex` : null
   const pdfUrl =
     job.result.pdf_url ||
     (reviewId ? `/api/fletcher/reviews/${reviewId}/versions/no_summary/pdf` : null)
@@ -953,6 +971,16 @@ function FletcherJobDetailModal({
           {reviewId ? (
             <a className={styles.btn} href={`/fletcher/reviews/${reviewId}`}>
               Open workspace
+            </a>
+          ) : null}
+          {startingPdfUrl ? (
+            <a className={styles.btn} href={startingPdfUrl}>
+              Starting PDF
+            </a>
+          ) : null}
+          {startingTexUrl ? (
+            <a className={styles.btn} href={startingTexUrl}>
+              Starting TeX
             </a>
           ) : null}
           {pdfUrl ? (

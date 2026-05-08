@@ -54,6 +54,12 @@ def _render_bullets(bullets: list[str]) -> str:
 
 
 def _render_education(section: EducationSection) -> str:
+    if (
+        not section.entry.institution_and_degree
+        and not section.entry.date_text
+        and not section.bullets
+    ):
+        return ""
     return (
         "    \\vspace{0.10 cm}\n"
         "    \\section{Education}\n\n"
@@ -105,15 +111,20 @@ def _render_skills(skills: SkillsSection) -> str:
             "    \\end{onecolentry}"
         )
 
-    return (
-        "    \\vspace{0.10 cm}\n"
-        "    \\section{Technical Skills}\n\n"
-        f"{onecol('Languages', skills.languages)}\n\n"
-        "    \\vspace{0.1 cm}\n\n"
-        f"{onecol('Frameworks', skills.frameworks)}\n\n"
-        "    \\vspace{0.1 cm}\n\n"
-        f"{onecol('Developer Tools', skills.developer_tools)}\n"
-    )
+    categories = skills.categories or {
+        "Languages": skills.languages,
+        "Frameworks": skills.frameworks,
+        "Developer Tools": skills.developer_tools,
+    }
+    categories = {label: values for label, values in categories.items() if values}
+    if not categories:
+        return ""
+    rendered = ["    \\vspace{0.10 cm}\n    \\section{Technical Skills}\n"]
+    for idx, (label, values) in enumerate(categories.items()):
+        if idx:
+            rendered.append("    \\vspace{0.1 cm}\n")
+        rendered.append(onecol(label, values))
+    return "\n\n".join(rendered) + "\n"
 
 
 def render_resume_tex(doc: ResumeDocument) -> str:

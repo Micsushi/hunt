@@ -884,6 +884,24 @@ const C2_KEYWORD_SELECTION_MAX_WORDS = '3'
 const C2_JOB_METADATA_PROMPT_MAX_CHARS = '3000'
 const C2_JOB_METADATA_MIN_CONFIDENCE = '0.8'
 const C2_SKILL_ADDITION_LIMIT = '3'
+const C2_OPTION_A_MIN_EXPERIENCE_KEY = 'option_a_min_experience'
+const C2_OPTION_A_MAX_EXPERIENCE_KEY = 'option_a_max_experience'
+const C2_OPTION_A_MIN_PROJECTS_KEY = 'option_a_min_projects'
+const C2_OPTION_A_MAX_PROJECTS_KEY = 'option_a_max_projects'
+const C2_OPTION_A_MAX_EXPERIENCE_BULLETS_KEY = 'option_a_max_experience_bullets'
+const C2_OPTION_A_MAX_PROJECT_BULLETS_KEY = 'option_a_max_project_bullets'
+const C2_OPTION_A_EXPERIENCE_POSITION_BONUS_KEY = 'option_a_experience_position_bonus'
+const C2_OPTION_A_PROJECT_POSITION_BONUS_KEY = 'option_a_project_position_bonus'
+const C2_OPTION_A_BULLET_POSITION_BONUS_KEY = 'option_a_bullet_position_bonus'
+const C2_OPTION_A_MIN_EXPERIENCE = '2'
+const C2_OPTION_A_MAX_EXPERIENCE = '4'
+const C2_OPTION_A_MIN_PROJECTS = '1'
+const C2_OPTION_A_MAX_PROJECTS = '3'
+const C2_OPTION_A_MAX_EXPERIENCE_BULLETS = '6'
+const C2_OPTION_A_MAX_PROJECT_BULLETS = '4'
+const C2_OPTION_A_EXPERIENCE_POSITION_BONUS = '0.12'
+const C2_OPTION_A_PROJECT_POSITION_BONUS = '0.08'
+const C2_OPTION_A_BULLET_POSITION_BONUS = '0.08'
 
 function JobMetadataSettings() {
   const showToast = useUiStore((s) => s.showToast)
@@ -917,6 +935,15 @@ function JobMetadataSettings() {
   const [jobMetadataPromptMaxChars, setJobMetadataPromptMaxChars] = useState('')
   const [jobMetadataMinConfidence, setJobMetadataMinConfidence] = useState('')
   const [skillAdditionLimit, setSkillAdditionLimit] = useState('')
+  const [optionAMinExperience, setOptionAMinExperience] = useState('')
+  const [optionAMaxExperience, setOptionAMaxExperience] = useState('')
+  const [optionAMinProjects, setOptionAMinProjects] = useState('')
+  const [optionAMaxProjects, setOptionAMaxProjects] = useState('')
+  const [optionAMaxExperienceBullets, setOptionAMaxExperienceBullets] = useState('')
+  const [optionAMaxProjectBullets, setOptionAMaxProjectBullets] = useState('')
+  const [optionAExperiencePositionBonus, setOptionAExperiencePositionBonus] = useState('')
+  const [optionAProjectPositionBonus, setOptionAProjectPositionBonus] = useState('')
+  const [optionABulletPositionBonus, setOptionABulletPositionBonus] = useState('')
 
   const roleFamilyText = settingListValue(
     data?.settings,
@@ -986,6 +1013,29 @@ function JobMetadataSettings() {
     C2_JOB_METADATA_MIN_CONFIDENCE
   const skillAdditionLimitText =
     getSettingValue(data?.settings, C2_SKILL_ADDITION_LIMIT_KEY) ?? C2_SKILL_ADDITION_LIMIT
+  const optionAMinExperienceText =
+    getSettingValue(data?.settings, C2_OPTION_A_MIN_EXPERIENCE_KEY) ?? C2_OPTION_A_MIN_EXPERIENCE
+  const optionAMaxExperienceText =
+    getSettingValue(data?.settings, C2_OPTION_A_MAX_EXPERIENCE_KEY) ?? C2_OPTION_A_MAX_EXPERIENCE
+  const optionAMinProjectsText =
+    getSettingValue(data?.settings, C2_OPTION_A_MIN_PROJECTS_KEY) ?? C2_OPTION_A_MIN_PROJECTS
+  const optionAMaxProjectsText =
+    getSettingValue(data?.settings, C2_OPTION_A_MAX_PROJECTS_KEY) ?? C2_OPTION_A_MAX_PROJECTS
+  const optionAMaxExperienceBulletsText =
+    getSettingValue(data?.settings, C2_OPTION_A_MAX_EXPERIENCE_BULLETS_KEY) ??
+    C2_OPTION_A_MAX_EXPERIENCE_BULLETS
+  const optionAMaxProjectBulletsText =
+    getSettingValue(data?.settings, C2_OPTION_A_MAX_PROJECT_BULLETS_KEY) ??
+    C2_OPTION_A_MAX_PROJECT_BULLETS
+  const optionAExperiencePositionBonusText =
+    getSettingValue(data?.settings, C2_OPTION_A_EXPERIENCE_POSITION_BONUS_KEY) ??
+    C2_OPTION_A_EXPERIENCE_POSITION_BONUS
+  const optionAProjectPositionBonusText =
+    getSettingValue(data?.settings, C2_OPTION_A_PROJECT_POSITION_BONUS_KEY) ??
+    C2_OPTION_A_PROJECT_POSITION_BONUS
+  const optionABulletPositionBonusText =
+    getSettingValue(data?.settings, C2_OPTION_A_BULLET_POSITION_BONUS_KEY) ??
+    C2_OPTION_A_BULLET_POSITION_BONUS
 
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect
@@ -1012,6 +1062,15 @@ function JobMetadataSettings() {
     setJobMetadataPromptMaxChars(jobMetadataPromptMaxCharsText)
     setJobMetadataMinConfidence(jobMetadataMinConfidenceText)
     setSkillAdditionLimit(skillAdditionLimitText)
+    setOptionAMinExperience(optionAMinExperienceText)
+    setOptionAMaxExperience(optionAMaxExperienceText)
+    setOptionAMinProjects(optionAMinProjectsText)
+    setOptionAMaxProjects(optionAMaxProjectsText)
+    setOptionAMaxExperienceBullets(optionAMaxExperienceBulletsText)
+    setOptionAMaxProjectBullets(optionAMaxProjectBulletsText)
+    setOptionAExperiencePositionBonus(optionAExperiencePositionBonusText)
+    setOptionAProjectPositionBonus(optionAProjectPositionBonusText)
+    setOptionABulletPositionBonus(optionABulletPositionBonusText)
   }, [
     roleFamilyText,
     jobLevelText,
@@ -1036,6 +1095,15 @@ function JobMetadataSettings() {
     jobMetadataPromptMaxCharsText,
     jobMetadataMinConfidenceText,
     skillAdditionLimitText,
+    optionAMinExperienceText,
+    optionAMaxExperienceText,
+    optionAMinProjectsText,
+    optionAMaxProjectsText,
+    optionAMaxExperienceBulletsText,
+    optionAMaxProjectBulletsText,
+    optionAExperiencePositionBonusText,
+    optionAProjectPositionBonusText,
+    optionABulletPositionBonusText,
   ])
 
   const mutation = useMutation({
@@ -1073,6 +1141,15 @@ function JobMetadataSettings() {
         [C2_JOB_METADATA_PROMPT_MAX_CHARS_KEY, jobMetadataPromptMaxChars],
         [C2_JOB_METADATA_MIN_CONFIDENCE_KEY, jobMetadataMinConfidence],
         [C2_SKILL_ADDITION_LIMIT_KEY, skillAdditionLimit],
+        [C2_OPTION_A_MIN_EXPERIENCE_KEY, optionAMinExperience],
+        [C2_OPTION_A_MAX_EXPERIENCE_KEY, optionAMaxExperience],
+        [C2_OPTION_A_MIN_PROJECTS_KEY, optionAMinProjects],
+        [C2_OPTION_A_MAX_PROJECTS_KEY, optionAMaxProjects],
+        [C2_OPTION_A_MAX_EXPERIENCE_BULLETS_KEY, optionAMaxExperienceBullets],
+        [C2_OPTION_A_MAX_PROJECT_BULLETS_KEY, optionAMaxProjectBullets],
+        [C2_OPTION_A_EXPERIENCE_POSITION_BONUS_KEY, optionAExperiencePositionBonus],
+        [C2_OPTION_A_PROJECT_POSITION_BONUS_KEY, optionAProjectPositionBonus],
+        [C2_OPTION_A_BULLET_POSITION_BONUS_KEY, optionABulletPositionBonus],
       ] as const
       for (const [key, value] of textSettings) {
         await saveSetting({
@@ -1233,6 +1310,114 @@ function JobMetadataSettings() {
             value={skillAdditionLimit}
             onChange={(e) => setSkillAdditionLimit(e.target.value)}
             min={0}
+          />
+        </label>
+      </div>
+      <div className={styles.gridTwo}>
+        <label className={styles.field}>
+          Option A min jobs
+          <span className={styles.fieldHint}>Lower bound for master resume job buckets.</span>
+          <input
+            type="number"
+            className={styles.input}
+            value={optionAMinExperience}
+            onChange={(e) => setOptionAMinExperience(e.target.value)}
+            min={0}
+            max={4}
+          />
+        </label>
+        <label className={styles.field}>
+          Option A max jobs
+          <span className={styles.fieldHint}>Upper bound before compile fitting.</span>
+          <input
+            type="number"
+            className={styles.input}
+            value={optionAMaxExperience}
+            onChange={(e) => setOptionAMaxExperience(e.target.value)}
+            min={0}
+            max={4}
+          />
+        </label>
+        <label className={styles.field}>
+          Option A min projects
+          <span className={styles.fieldHint}>Lower bound for master resume project buckets.</span>
+          <input
+            type="number"
+            className={styles.input}
+            value={optionAMinProjects}
+            onChange={(e) => setOptionAMinProjects(e.target.value)}
+            min={0}
+            max={3}
+          />
+        </label>
+        <label className={styles.field}>
+          Option A max projects
+          <span className={styles.fieldHint}>Upper bound before compile fitting.</span>
+          <input
+            type="number"
+            className={styles.input}
+            value={optionAMaxProjects}
+            onChange={(e) => setOptionAMaxProjects(e.target.value)}
+            min={0}
+            max={3}
+          />
+        </label>
+        <label className={styles.field}>
+          Job bullet cap
+          <span className={styles.fieldHint}>Max selected bullets per experience bucket.</span>
+          <input
+            type="number"
+            className={styles.input}
+            value={optionAMaxExperienceBullets}
+            onChange={(e) => setOptionAMaxExperienceBullets(e.target.value)}
+            min={1}
+          />
+        </label>
+        <label className={styles.field}>
+          Project bullet cap
+          <span className={styles.fieldHint}>Max selected bullets per project bucket.</span>
+          <input
+            type="number"
+            className={styles.input}
+            value={optionAMaxProjectBullets}
+            onChange={(e) => setOptionAMaxProjectBullets(e.target.value)}
+            min={1}
+          />
+        </label>
+        <label className={styles.field}>
+          Job position bonus
+          <span className={styles.fieldHint}>Retention boost for earlier jobs.</span>
+          <input
+            type="number"
+            className={styles.input}
+            value={optionAExperiencePositionBonus}
+            onChange={(e) => setOptionAExperiencePositionBonus(e.target.value)}
+            min={0}
+            step={0.01}
+          />
+        </label>
+        <label className={styles.field}>
+          Bullet position bonus
+          <span className={styles.fieldHint}>Retention boost for earlier bullets in a bucket.</span>
+          <input
+            type="number"
+            className={styles.input}
+            value={optionABulletPositionBonus}
+            onChange={(e) => setOptionABulletPositionBonus(e.target.value)}
+            min={0}
+            step={0.01}
+          />
+        </label>
+        <label className={styles.field}>
+          Project position bonus
+          <span className={styles.fieldHint}>Retention boost for earlier projects.</span>
+          <input
+            type="number"
+            className={styles.input}
+            value={optionAProjectPositionBonus}
+            onChange={(e) => setOptionAProjectPositionBonus(e.target.value)}
+            min={0}
+            step={0.01}
           />
         </label>
       </div>

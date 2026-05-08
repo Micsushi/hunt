@@ -561,4 +561,6 @@ class Component2PipelineTests(unittest.TestCase):
         source = (REPO_ROOT / "fletcher" / "db.py").read_text(encoding="utf-8")
 
         self.assertNotIn("WHERE job_id IS ?", source)
-        self.assertIn('job_filter_sql = "job_id IS NULL" if job_id is None else "job_id = ?"', source)
+        self.assertIn(
+            'job_filter_sql = "job_id IS NULL" if job_id is None else "job_id = ?"', source
+        )

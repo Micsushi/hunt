@@ -445,7 +445,11 @@ function ReviewToolbar({
               className={item === versionName ? styles.active : ''}
               onClick={() => onVersion(item)}
             >
-              {item === 'with_summary' ? 'With summary' : 'No summary'}
+              {item === 'starting'
+                ? 'Starting'
+                : item === 'with_summary'
+                  ? 'With summary'
+                  : 'No summary'}
             </button>
           ))}
         </div>

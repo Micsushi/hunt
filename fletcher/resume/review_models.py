@@ -11,6 +11,7 @@ from .models import ResumeDocument
 
 
 class ResumeReviewVersionName(StrEnum):
+    STARTING = "starting"
     NO_SUMMARY = "no_summary"
     WITH_SUMMARY = "with_summary"
 

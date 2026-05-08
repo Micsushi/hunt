@@ -1,0 +1,127 @@
+# Fletcher master resume source.
+# This is the single default source for Option A job-ID resume generation.
+
+selection:
+  min_experience: 2
+  max_experience: 4
+  min_projects: 1
+  max_projects: 3
+  max_bullets_per_experience: 6
+  max_bullets_per_project: 4
+  experience_position_bonus: 0.12
+  project_position_bonus: 0.08
+  bullet_position_bonus: 0.08
+
+header:
+  name: "Michael Shi"
+  contact: "Edmonton, AB | \\href{mailto:wenjian2@ualberta.ca}{wenjian2@ualberta.ca} | \\href{https://mshi.ca}{mshi.ca} | \\href{https://linkedin.com/in/wjshi}{linkedin.com/in/wjshi} | \\href{https://github.com/micsushi}{github.com/micsushi}"
+
+summaries:
+  software: ""
+  pm: ""
+  data: ""
+  infrastructure: ""
+  firmware: ""
+  general: ""
+
+education:
+  institution_and_degree: "\\textbf{University of Alberta}, BSc in Computer Science with Specialization"
+  date_text: "Expected Graduation: \\textbf{Sep 2026}"
+  bullets:
+    - "\\textbf{Awards:} Undergraduate Leadership Award, 4x Faculty of Science Scholarship, Dean's Honor Roll"
+
+experience:
+  - id: "job1_invidi"
+    title: "Junior Software Developer (Part-time)"
+    company: "INVIDI Technologies"
+    location: "Edmonton, AB"
+    dates: "May 2025 - Feb 2026"
+    bullets:
+      - text: "Enhanced real-time subscriber targeting accuracy by developing Kotlin microservices that integrated external marketing, forecasting, and analytics platforms via RESTful APIs."
+      - text: "Established S3 cost-saving blueprint for \\textbf{100+} developers, achieving a \\textbf{74\\% (\\$18,000) reduction} by implementing intelligent-tiering and lifecycle policies in Terraform."
+      - text: "Accelerated deployment cycles and saved 2 hours of weekly developer time by automating CI/CD via Bitbucket pipelines and ECR/Kubernetes."
+      - text: "Improved observability and incident response time by configuring Datadog APM, custom metrics, monitors, and centralized logging with automated alerting."
+      - text: "Drove technical alignment by presenting completed features to stakeholders and leading design discussion meetings."
+      - text: "Minimized product downtime by resolving critical production node failures during on-call incident management."
+
+  - id: "job2_invidi"
+    title: "Software Developer Intern"
+    company: "INVIDI Technologies"
+    location: "Edmonton, AB"
+    dates: "May 2024 - May 2025"
+    bullets:
+      - text: "Slashed backend operational costs by \\textbf{89\\% (\\$38,000)} and eliminated false-positive alerts by migrating the database from Apache Ignite to AWS Aurora PostgreSQL."
+      - text: "Boosted authentication performance by \\textbf{30\\%} by decoupling OAuth permissions into SPA and M2M clients across TypeScript/Vue.js and Kotlin services."
+      - text: "Maintained consistent team velocity during a leadership transition by assuming Scrum Master duties and facilitating Agile ceremonies and sprint planning."
+      - text: "Improved system performance and reduced API costs by implementing forecast caching in sync services using DynamoDB, eliminating redundant external calls."
+
+  - id: "job3_uofa"
+    title: "Undergraduate Teaching Assistant"
+    company: "University of Alberta"
+    location: "Edmonton, AB"
+    dates: "Sep 2023 - Present"
+    bullets:
+      - text: "Mentored \\textbf{500+} students in technical best practices, ensuring a \\textbf{95\\% project success rate} through Agile workflow facilitation."
+      - text: "Reduced evaluation time by \\textbf{85\\%} by developing Python-based automation scripts for grading workflows."
+      - text: "Scaled technical mentorship to \\textbf{500+} students by building Python tooling that automated grading and freed instructor time for direct student support."
+      - text: "Taught multiple upper-level Computer Science courses, providing instructional support and mentoring students in advanced programming concepts."
+
+projects:
+  
+  - id: "proj1_studyamp"
+    name: "StudyAmp: NatHacks 1st Place"
+    url: "https://github.com/NatRunners/StudyAmp"
+    bullets:
+      - text: "Secured \\textbf{\\$4,000} in research funding by leading a team of 5 to develop an EEG-based attention monitoring web app during a hackathon."
+      - text: "Enhanced user engagement by building a responsive UI using Next.js and Framer Motion based on beta tester feedback."
+      - text: "Optimized system scalability to support \\textbf{10,000+} concurrent users by engineering a full-stack architecture on Vercel and Supabase."
+      - text: "Achieved \\textbf{85\\% accuracy} in attention scoring by developing a Python backend for real-time brainwave processing."
+      - text: "Slashed recording review time by \\textbf{80\\%} by integrating Gemini AI to automatically summarize audio content during detected attention drops."
+
+  - id: "proj2_hunt"
+    name: "Hunt - Automated Job Application Agent"
+    url: "https://github.com/micsushi/hunt"
+    bullets:
+      - text: "Designed and built a multi-agent job pipeline (scraping, enrichment, AI resume tailoring) using Python, FastAPI, Playwright, and a locally-hosted LLM via Ollama."
+      - text: "Built an end-to-end job application pipeline in Python that scrapes LinkedIn/Indeed, enriches postings with Playwright, and generates tailored resumes using a locally-hosted LLM."
+      - text: "Built a FastAPI review webapp with job queue management, resume diff view, and keyword analysis panels for monitoring the pipeline."
+
+skills:
+  Languages:
+    - Python
+    - TypeScript
+    - JavaScript
+    - Kotlin
+    - Java
+    - Bash
+    - SQL
+  Frameworks:
+    - FastAPI
+    - React
+    - Next.js
+    - Vue.js
+    - Framer Motion
+    - pytest
+  Cloud & Data:
+    - AWS
+    - Amazon S3
+    - Amazon ECR
+    - AWS Aurora PostgreSQL
+    - PostgreSQL
+    - Apache Ignite
+    - DynamoDB
+    - Supabase
+    - Vercel
+  Developer Tools:
+    - Git
+    - Docker
+    - Terraform
+    - Kubernetes
+    - Pipelines
+    - Datadog
+    - Playwright
+    - Ollama
+    - RESTful APIs
+    - CI/CD
+    - OAuth
+

@@ -16,6 +16,10 @@ if _load_dotenv is not None:
     except Exception:
         pass
 DEFAULT_OG_RESUME_PATH = REPO_ROOT / "main.tex"
+DEFAULT_MASTER_RESUME_PATH = REPO_ROOT / "fletcher" / "master_resume.yaml"
+DEFAULT_MASTER_RESUME_TEMPLATE_PATH = (
+    REPO_ROOT / "fletcher" / "templates" / "master_resume.template.yaml"
+)
 
 _candidate_profile_real = REPO_ROOT / "fletcher" / "candidate_profile.md"
 _candidate_profile_template = REPO_ROOT / "fletcher" / "templates" / "candidate_profile.template.md"

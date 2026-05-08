@@ -24,6 +24,31 @@ ONECOL_PATTERN = re.compile(
 )
 ITEM_PATTERN = re.compile(r"\\item\s+(.*?)(?=(?:\n\s*\\item|\n\s*\\end\{itemize\}))", re.DOTALL)
 SKILL_LINE_PATTERN = re.compile(r"\\textbf\{(?P<label>[^:]+):\}\s*(?P<values>.+)")
+SECTION_ALIASES = {
+    "summary": "Summary",
+    "professional summary": "Summary",
+    "profile": "Summary",
+    "objective": "Summary",
+    "education": "Education",
+    "academic background": "Education",
+    "experience": "Experience",
+    "work experience": "Experience",
+    "professional experience": "Experience",
+    "employment": "Experience",
+    "employment history": "Experience",
+    "work history": "Experience",
+    "projects": "Projects",
+    "project": "Projects",
+    "selected projects": "Projects",
+    "project experience": "Projects",
+    "personal projects": "Projects",
+    "technical projects": "Projects",
+    "technical skills": "Technical Skills",
+    "skills": "Technical Skills",
+    "technologies": "Technical Skills",
+    "core skills": "Technical Skills",
+    "tools": "Technical Skills",
+}
 
 
 def _find_matching_brace(text: str, open_idx: int) -> int:
@@ -112,8 +137,18 @@ def _split_sections(body_after_header: str) -> dict[str, str]:
     for idx, match in enumerate(matches):
         start = match.end()
         end = matches[idx + 1].start() if idx + 1 < len(matches) else len(body_after_header)
-        sections[match.group("name")] = body_after_header[start:end].strip()
+        section_name = _canonical_section_name(match.group("name"))
+        section_text = body_after_header[start:end].strip()
+        if section_name in sections:
+            sections[section_name] = f"{sections[section_name]}\n\n{section_text}".strip()
+        else:
+            sections[section_name] = section_text
     return sections
+
+
+def _canonical_section_name(name: str) -> str:
+    normalized = re.sub(r"[^a-z0-9]+", " ", name.lower()).strip()
+    return SECTION_ALIASES.get(normalized, name.strip())
 
 
 def _extract_bullets(block: str) -> list[str]:
@@ -123,7 +158,10 @@ def _extract_bullets(block: str) -> list[str]:
 def _parse_education(section_text: str) -> EducationSection:
     entries = _twocol_entries(section_text)
     if not entries:
-        raise ValueError("Could not parse education entry.")
+        return EducationSection(
+            entry=EducationEntry(entry_id="edu_primary", institution_and_degree="", date_text=""),
+            bullets=[],
+        )
     twocol = entries[0]
     bullets = _extract_bullets(section_text[int(twocol["end"]) :])
     left = " ".join(line.strip() for line in str(twocol["left"]).splitlines() if line.strip())
@@ -170,6 +208,7 @@ def _parse_repeated_entries(
 
 def _parse_skills(section_text: str) -> SkillsSection:
     buckets: dict[str, list[str]] = {"Languages": [], "Frameworks": [], "Developer Tools": []}
+    categories: dict[str, list[str]] = {}
     for block in ONECOL_PATTERN.findall(section_text):
         flattened = " ".join(line.strip() for line in block.splitlines() if line.strip())
         match = SKILL_LINE_PATTERN.search(flattened)
@@ -177,6 +216,7 @@ def _parse_skills(section_text: str) -> SkillsSection:
             continue
         label = match.group("label").strip()
         values = [item.strip() for item in match.group("values").split(",") if item.strip()]
+        categories[label] = values
         if label in buckets:
             buckets[label] = values
 
@@ -184,6 +224,7 @@ def _parse_skills(section_text: str) -> SkillsSection:
         languages=buckets["Languages"],
         frameworks=buckets["Frameworks"],
         developer_tools=buckets["Developer Tools"],
+        categories=categories,
     )
 
 
@@ -213,10 +254,10 @@ def parse_resume_tex(tex: str, *, source_path: str = "<memory>") -> ResumeDocume
         preamble=preamble.rstrip(),
         header=header,
         summary=_parse_summary(sections.get("Summary")),
-        education=_parse_education(sections["Education"]),
-        experience=_parse_repeated_entries(sections["Experience"], "experience"),
-        projects=_parse_repeated_entries(sections["Projects"], "project"),
-        skills=_parse_skills(sections["Technical Skills"]),
+        education=_parse_education(sections.get("Education", "")),
+        experience=_parse_repeated_entries(sections.get("Experience", ""), "experience"),
+        projects=_parse_repeated_entries(sections.get("Projects", ""), "project"),
+        skills=_parse_skills(sections.get("Technical Skills", "")),
     )
 
 

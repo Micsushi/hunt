@@ -331,31 +331,75 @@ class C0ControlApiTests(unittest.TestCase):
         pdf_path.write_bytes(b"%PDF option a")
         tex_path.write_text("resume tex", encoding="utf-8")
         log_path.write_text("pipeline ok", encoding="utf-8")
+        selected_resume = attempt_dir / "selected_master.tex"
+        selected_resume.write_text("selected resume tex", encoding="utf-8")
 
         with (
             patch(
-                "fletcher.pipeline.generate_resume_for_job",
+                "fletcher.option_a_master.prepare_option_a_master_resume_source",
+                return_value=(
+                    str(selected_resume),
+                    {
+                        "selection": {"experience": [], "projects": []},
+                        "title": "Firmware Systems Design Engineer",
+                    },
+                ),
+            ) as prepare,
+            patch(
+                "fletcher.ad_hoc_pipeline.run_ad_hoc_pipeline",
                 return_value={
                     "status": "done",
-                    "attempt_id": 777,
+                    "review_id": "review-123",
                     "pdf_path": str(pdf_path),
                     "tex_path": str(tex_path),
                     "log_path": str(log_path),
                 },
-            ) as generate,
-            patch("fletcher.db.list_resume_attempts", return_value=[]),
+            ) as run_pipeline,
         ):
             processed = backend_app._process_next_fletcher_job()
 
         self.assertTrue(processed)
-        generate.assert_called_once_with(14406)
+        prepare.assert_called_once()
+        self.assertEqual(prepare.call_args.args[0]["id"], 14406)
+        run_pipeline.assert_called_once()
+        self.assertEqual(run_pipeline.call_args.kwargs["resume_path"], str(selected_resume))
         updated = get_fletcher_job(item["queue_item_id"])
         self.assertEqual(updated["status"], "succeeded")
         self.assertEqual(updated["progress"]["current_step"], "done")
         self.assertEqual(updated["progress"]["percent"], 100)
-        self.assertEqual(updated["result"]["pdf_url"], "/api/attempts/777/pdf")
-        self.assertEqual(updated["result"]["tex_url"], "/api/attempts/777/tex")
+        self.assertEqual(
+            updated["result"]["pdf_url"], "/api/fletcher/reviews/review-123/versions/no_summary/pdf"
+        )
+        self.assertEqual(
+            updated["result"]["tex_url"], "/api/fletcher/reviews/review-123/versions/no_summary/tex"
+        )
         self.assertEqual(updated["log_path"], str(log_path))
+
+    def test_option_a_setting_syncs_master_resume_yaml_selection(self):
+        from pathlib import Path
+
+        master_path = Path(self.runtime_dir) / "master_resume.yaml"
+        master_path.write_text(
+            "selection:\n  min_experience: 2\n  max_experience: 4\nheader:\n  name: Test\n",
+            encoding="utf-8",
+        )
+
+        with patch("fletcher.config.DEFAULT_MASTER_RESUME_PATH", master_path):
+            response = self.client.post(
+                "/api/settings",
+                json={
+                    "component": "c2",
+                    "key": "option_a_min_experience",
+                    "value": "3",
+                    "value_type": "text",
+                    "secret": False,
+                },
+            )
+
+        self.assertEqual(response.status_code, 200)
+        text = master_path.read_text(encoding="utf-8")
+        self.assertIn("  min_experience: 3", text)
+        self.assertIn("  max_experience: 4", text)
 
     def test_fletcher_jobs_history_limit_parameter(self):
         from backend import app as backend_app
@@ -492,7 +536,10 @@ class C0ControlApiTests(unittest.TestCase):
                 calls["headers"] = headers or {}
                 return FakeResponse()
 
-        with patch("backend.gateway.httpx.AsyncClient", FakeAsyncClient):
+        with (
+            patch("backend.gateway.httpx.AsyncClient", FakeAsyncClient),
+            patch("hunter.config.HUNT_SERVICE_TOKEN", "service-secret"),
+        ):
             response = self.client.post("/api/gateway/c2/generate", json={"job_id": 123})
 
         self.assertEqual(response.status_code, 200)

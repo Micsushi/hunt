@@ -7,7 +7,9 @@ from typing import Any
 
 from fletcher.config import DEFAULT_OG_RESUME_PATH
 
+from .compiler import compile_tex
 from .parser import parse_resume_file
+from .renderer import render_resume_tex
 from .review_models import (
     ResumeReviewJobInfo,
     ResumeReviewLlmInfo,
@@ -56,6 +58,9 @@ def create_review_package_from_attempt(
         source_resume_path = tex_path
     original = parse_resume_file(source_resume_path)
     generated = parse_resume_file(tex_path)
+    starting_tex = attempt_dir / "starting.tex"
+    starting_tex.write_text(render_resume_tex(original), encoding="utf-8")
+    starting_compile = compile_tex(starting_tex)
     keywords = _read_json(attempt.get("keywords_path"))
     raw_keywords = keywords.get("must_have_terms") or keywords.get("raw") or []
     provider = str(attempt.get("model_backend") or "heuristic")
@@ -63,9 +68,7 @@ def create_review_package_from_attempt(
         review_id=review_id,
         source=ResumeReviewSourceInfo(
             input_kind=str(attempt.get("source_resume_type") or "tex"),
-            input_filename=Path(
-                str(attempt.get("source_resume_path") or source_resume_path)
-            ).name,
+            input_filename=Path(str(attempt.get("source_resume_path") or source_resume_path)).name,
             import_status="ok",
             import_warnings=[],
         ),
@@ -87,6 +90,16 @@ def create_review_package_from_attempt(
             "missing": [],
         },
         versions={
+            ResumeReviewVersionName.STARTING: ResumeReviewVersion(
+                original=original,
+                generated=original,
+                current=original,
+                pdf_url=_version_url(review_id, "starting", "pdf"),
+                tex_url=_version_url(review_id, "starting", "tex"),
+                dirty=False,
+                compiled_revision=0,
+                compile_status=str(starting_compile.get("compile_status") or ""),
+            ),
             ResumeReviewVersionName.NO_SUMMARY: ResumeReviewVersion(
                 original=original,
                 generated=generated,
@@ -96,7 +109,7 @@ def create_review_package_from_attempt(
                 dirty=False,
                 compiled_revision=0,
                 compile_status=str(attempt.get("status") or ""),
-            )
+            ),
         },
         log_url=f"/api/fletcher/reviews/{review_id}/log",
     )

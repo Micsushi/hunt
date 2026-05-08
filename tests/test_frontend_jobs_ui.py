@@ -139,13 +139,15 @@ def test_fletcher_option_b_history_actions_are_visible():
     assert "historyFilterBar" in styles
     assert "Started" in fletcher
     assert "Open workspace" in fletcher
+    assert "Starting PDF" in fletcher
+    assert "Starting TeX" in fletcher
     assert "PDF" in fletcher
     assert "TeX" in fletcher
     assert "Download log" in fletcher
     assert "Delete selected" in fletcher
     assert "Delete" in fletcher
     assert "FletcherJobDetailModal" in fletcher
-    assert "role=\"dialog\"" in fletcher
+    assert 'role="dialog"' in fletcher
     assert "fletcherSourceLabel" in fletcher
     assert "Job description" in fletcher
     assert "Job details" in fletcher
@@ -199,6 +201,9 @@ def test_fletcher_option_b_clears_jd_and_keeps_batch_download_controls():
     assert "personalDetails" not in fletcher
     assert "fletcherResumeFile" in store
     assert "Download selected" in fletcher
+    assert "Starting PDF" in fletcher
+    assert "starting_pdf" in control
+    assert "starting_tex" in control
     assert "Resume PDF : no summary" in fletcher
     assert "batchDownloadFletcherJobs" in fletcher
     assert "deleteFletcherJob" in fletcher
