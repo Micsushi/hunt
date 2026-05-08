@@ -21,9 +21,10 @@ import hashlib
 import json
 import math
 import time
-import urllib.request
 from pathlib import Path
 from typing import Any
+
+from shared.llm import ollama as shared_ollama
 
 from .. import config
 from ..resume.parser import parse_resume_file
@@ -36,22 +37,13 @@ from ..resume.source_loader import load_bullet_library, load_candidate_profile
 
 def _embed(text: str) -> list[float]:
     """Return embedding vector for text via Ollama mxbai-embed-large."""
-    payload = json.dumps(
-        {
-            "model": config.OLLAMA_EMBED_MODEL,
-            "prompt": text.strip()[:2000],
-            "keep_alive": config.ollama_keep_alive_payload(),
-        }
-    ).encode("utf-8")
-    req = urllib.request.Request(
-        f"{config.OLLAMA_HOST}/api/embeddings",
-        data=payload,
-        headers={"Content-Type": "application/json"},
-        method="POST",
+    return shared_ollama.embed_text(
+        host=config.ollama_host(),
+        model=config.OLLAMA_EMBED_MODEL,
+        text=text,
+        timeout_sec=60,
+        keep_alive=config.ollama_keep_alive_payload(),
     )
-    with urllib.request.urlopen(req, timeout=60) as resp:
-        body = json.load(resp)
-    return body["embedding"]
 
 
 # ---------------------------------------------------------------------------

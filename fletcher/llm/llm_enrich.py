@@ -4,8 +4,9 @@ import json
 import re
 import time
 import urllib.error
-import urllib.request
 from typing import TYPE_CHECKING, Any
+
+from shared.llm import ollama as shared_ollama
 
 from .. import config
 from ..job_metadata_settings import load_c2_prompt_settings, load_job_metadata_settings
@@ -381,34 +382,15 @@ def validate_summary_grounding(
 
 
 def _ollama_chat(user_prompt: str, *, temperature: float = 0.1) -> str:
-    host = config.ollama_host()
-    model = config.ollama_model_name()
-    timeout = config.ollama_timeout_sec()
-    payload = {
-        "model": model,
-        "format": "json",
-        "stream": False,
-        "keep_alive": config.ollama_keep_alive_payload(),
-        "options": {"temperature": temperature},
-        "messages": [
-            {
-                "role": "system",
-                "content": prompts.OLLAMA_SYSTEM_PROMPT,
-            },
-            {"role": "user", "content": user_prompt},
-        ],
-    }
-    data = json.dumps(payload).encode("utf-8")
-    req = urllib.request.Request(
-        f"{host}/api/chat",
-        data=data,
-        headers={"Content-Type": "application/json"},
-        method="POST",
+    return shared_ollama.chat_content(
+        host=config.ollama_host(),
+        model=config.ollama_model_name(),
+        system=prompts.OLLAMA_SYSTEM_PROMPT,
+        user=user_prompt,
+        timeout_sec=config.ollama_timeout_sec(),
+        keep_alive=config.ollama_keep_alive_payload(),
+        temperature=temperature,
     )
-    with urllib.request.urlopen(req, timeout=timeout) as resp:
-        body = json.load(resp)
-    message = body.get("message") or {}
-    return (message.get("content") or "").strip()
 
 
 def _keyword_selection_prompt() -> str:

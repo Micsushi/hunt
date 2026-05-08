@@ -25,8 +25,6 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
-      ollama-init:
-        condition: service_completed_successfully
     environment:
       HUNT_DB_URL: ${HUNT_COMPOSE_DB_URL:-postgresql://hunt:hunt@postgres:5432/hunt}
       HUNT_SERVICE_TOKEN: ${HUNT_SERVICE_TOKEN:-hunt-local-smoke-token}

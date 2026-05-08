@@ -24,6 +24,7 @@ This directory is the repo home for **C2 (Fletcher)** : resume tailoring. See **
 - **Review app**: per-attempt PDF/TeX/Keywords/LLM I/O links, keyword pills panel, LLM I/O viewer page at `/api/attempts/{id}/llm`, and Fletcher review workspace at `/fletcher/reviews/{review_id}`.
 - **Review workspace**: `review_package.json` preserves original, generated, and current editable `ResumeDocument` JSON for `no_summary` and `with_summary` versions. The UI shows a PDF-like resume surface with PR-style inline diffs, segment revert, block edit, draft undo/redo, undo-all, explicit save, compile, logs, keyword/RAG score inspection, and PDF/TeX downloads. Inline LaTeX formatting such as `\textbf{...}` and `\href{...}{...}` is rendered as bold text and links in the workspace.
 - **PDF upload import**: text-based PDFs are imported through `pdfminer.six` into the canonical Hunt resume template. Scanned/image-only PDFs are not supported.
+- **Master resume import**: `import-master` converts a template-compatible `main.tex` into the structured `master_resume.yaml` format for review before replacing the Option A source.
 - **Provider abstraction**: `fletcher/llm/client.py` and `fletcher/llm/providers/*` normalize heuristic, Ollama, OpenAI, OpenRouter, Anthropic, and Gemini JSON calls. Cloud providers fail closed unless explicitly configured and confirmed.
 
 ### Candidate profile and bullet library
@@ -68,6 +69,7 @@ The Settings page also exposes C2 component settings for provider, model, cloud 
 - `fletch run ...` delegates to `python -m fletcher.cli ...`.
   - Example: `fletch run generate-job 123`
 - Direct: `python -m fletcher.cli init-db`, `generate-job`, `generate-ready`, `generate-ad-hoc`, `apply-context`, `parse-resume`.
+  - Example import: `python -m fletcher.cli import-master --resume path/to/main.tex --output .runtime/imported_master_resume.yaml`
 
 ### Review webapp (per-attempt)
 

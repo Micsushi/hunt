@@ -11,6 +11,7 @@ from .pipeline import (
     generate_resume_for_job,
     generate_resumes_for_ready_jobs,
 )
+from .resume.master_importer import import_master_resume_yaml
 from .resume.parser import parse_resume_file
 from .resume.renderer import render_resume_tex
 
@@ -24,6 +25,15 @@ def cmd_parse(args: argparse.Namespace) -> int:
 
     if args.roundtrip_tex:
         Path(args.roundtrip_tex).write_text(render_resume_tex(doc), encoding="utf-8")
+    return 0
+
+
+def cmd_import_master(args: argparse.Namespace) -> int:
+    yaml_text = import_master_resume_yaml(args.resume)
+    if args.output:
+        Path(args.output).write_text(yaml_text, encoding="utf-8")
+    else:
+        print(yaml_text, end="")
     return 0
 
 
@@ -83,6 +93,14 @@ def build_parser() -> argparse.ArgumentParser:
     parse_cmd.add_argument("--output-json", default=None)
     parse_cmd.add_argument("--roundtrip-tex", default=None)
     parse_cmd.set_defaults(func=cmd_parse)
+
+    import_master = subparsers.add_parser(
+        "import-master",
+        help="Convert a template-compatible main.tex into Fletcher master resume YAML.",
+    )
+    import_master.add_argument("--resume", default=str(DEFAULT_OG_RESUME_PATH))
+    import_master.add_argument("--output", default=None)
+    import_master.set_defaults(func=cmd_import_master)
 
     init_cmd = subparsers.add_parser(
         "init-db", help="Add C2 (Fletcher) tables/columns to the Hunt DB."

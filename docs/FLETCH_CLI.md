@@ -29,6 +29,7 @@ Get help:
 - `ad-hoc`: Generate a resume from a pasted job description (no DB job required).
 - `context <id>`: Print the C2 apply context for one job.
 - `parse`: Parse `main.tex` (or `--resume`) to JSON and optionally round-trip to TeX.
+- `import-master`: Convert a template-compatible `main.tex` into `master_resume.yaml` format.
 - `test-job <id>`: Run the full pipeline on one job and print timing + LLM output.
 - `option-b-smoke`: Select enriched jobs, call the deployed legacy Option B compatibility API, and save PDFs/logs for review.
 - `index`: Manage the RAG vector index (`build`, `status`, `clear`, `query`).
@@ -42,6 +43,7 @@ Get help:
 .\fletch.ps1 job 123
 .\fletch.ps1 ready --limit 10
 .\fletch.ps1 ad-hoc --title "SWE" --company "Acme" --jd-file jd.txt
+.\fletch.ps1 import-master --resume path\to\main.tex --output .runtime\imported_master_resume.yaml
 .\fletch.ps1 option-b-smoke --count 3 --db-url "postgresql://hunt:hunt@127.0.0.1:15432/hunt"
 .\fletch.ps1 index status
 .\fletch.ps1 index build

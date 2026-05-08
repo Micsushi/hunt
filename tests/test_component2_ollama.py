@@ -5,6 +5,7 @@ from unittest.mock import patch
 from fletcher import config
 from fletcher.llm import llm_enrich, rag
 from fletcher.llm.llm_enrich import enrich_with_ollama_if_enabled
+from fletcher.llm.providers.ollama import OllamaProvider
 
 
 class _JsonResponse:
@@ -31,7 +32,7 @@ class Component2OllamaTests(unittest.TestCase):
             return _JsonResponse({"message": {"content": '{"ok": true}'}})
 
         with patch.object(config, "OLLAMA_KEEP_ALIVE", "-1"):
-            with patch("fletcher.llm.llm_enrich.urllib.request.urlopen", fake_urlopen):
+            with patch("shared.llm.ollama.urllib.request.urlopen", fake_urlopen):
                 result = llm_enrich._ollama_chat('Return {"ok": true}.')
 
         self.assertEqual(result, '{"ok": true}')
@@ -47,7 +48,7 @@ class Component2OllamaTests(unittest.TestCase):
             return _JsonResponse({"embedding": [0.1, 0.2, 0.3]})
 
         with patch.object(config, "OLLAMA_KEEP_ALIVE", "-1"):
-            with patch("fletcher.llm.rag.urllib.request.urlopen", fake_urlopen):
+            with patch("shared.llm.ollama.urllib.request.urlopen", fake_urlopen):
                 result = rag._embed("Python services")
 
         self.assertEqual(result, [0.1, 0.2, 0.3])
@@ -57,6 +58,31 @@ class Component2OllamaTests(unittest.TestCase):
     def test_ollama_keep_alive_duration_stays_string(self):
         with patch.object(config, "OLLAMA_KEEP_ALIVE", "30m"):
             self.assertEqual(config.ollama_keep_alive_payload(), "30m")
+
+    def test_ollama_provider_uses_shared_transport(self):
+        captured = {}
+
+        def fake_urlopen(req, timeout):
+            captured["payload"] = json.loads(req.data.decode("utf-8"))
+            captured["timeout"] = timeout
+            return _JsonResponse({"message": {"content": '{"ok": true}'}})
+
+        with patch.object(config, "OLLAMA_KEEP_ALIVE", "30m"):
+            with patch("shared.llm.ollama.urllib.request.urlopen", fake_urlopen):
+                result = OllamaProvider().generate_json(
+                    task_name="test",
+                    system="Return JSON.",
+                    user='Return {"ok": true}.',
+                    schema={},
+                    model="gemma4:e4b",
+                    timeout_sec=45,
+                )
+
+        self.assertTrue(result.success)
+        self.assertEqual(result.parsed, {"ok": True})
+        self.assertEqual(captured["payload"]["keep_alive"], "30m")
+        self.assertEqual(captured["payload"]["model"], "gemma4:e4b")
+        self.assertEqual(captured["timeout"], 45)
 
     def test_heuristic_backend_skips_network(self):
         with patch.object(config, "DEFAULT_MODEL_BACKEND", "heuristic"):
@@ -191,7 +217,7 @@ class Component2OllamaTests(unittest.TestCase):
         import urllib.error
 
         with patch.object(config, "DEFAULT_MODEL_BACKEND", "ollama"):
-            with patch("fletcher.llm.llm_enrich.urllib.request.urlopen") as mock_open:
+            with patch("shared.llm.ollama.urllib.request.urlopen") as mock_open:
                 mock_open.side_effect = urllib.error.URLError("refused")
                 base_c = {
                     "role_family": "general",

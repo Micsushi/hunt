@@ -4,9 +4,8 @@ import json
 import time
 from typing import Any
 
-import httpx
-
 from fletcher import config as _config
+from shared.llm import ollama as shared_ollama
 
 from .base import LLMJsonResult, LLMProvider
 
@@ -41,13 +40,11 @@ class OllamaProvider(LLMProvider):
             "keep_alive": _config.ollama_keep_alive_payload(),
         }
         try:
-            response = httpx.post(
+            raw = shared_ollama.post_json(
                 f"{_config.ollama_host()}/api/chat",
-                json=payload,
-                timeout=timeout_sec or _config.ollama_timeout_sec(),
+                payload,
+                timeout_sec=timeout_sec or _config.ollama_timeout_sec(),
             )
-            response.raise_for_status()
-            raw = response.json()
             content = str((raw.get("message") or {}).get("content") or "")
             parsed = json.loads(content)
             return LLMJsonResult(

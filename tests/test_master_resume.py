@@ -1,7 +1,15 @@
 from __future__ import annotations
 
+import subprocess
+import sys
+from pathlib import Path
+
 from fletcher.resume.master import build_master_resume_document, parse_master_yaml
+from fletcher.resume.master_importer import import_master_resume_yaml
 from fletcher.resume.renderer import render_resume_tex
+
+REPO_ROOT = Path(__file__).resolve().parent.parent
+MAIN_TEX = REPO_ROOT / "main.tex"
 
 
 def test_master_yaml_loader_parses_resume_content_and_inline_latex():
@@ -203,3 +211,53 @@ skills:
     assert r"\item \textbf{Awards:} Dean's Honor Roll" in tex
     assert "\\\\textbf" not in tex
     assert "{'\"" not in tex
+
+
+def test_import_master_resume_yaml_from_template_tex_is_loadable():
+    yaml_text = import_master_resume_yaml(MAIN_TEX)
+    data = parse_master_yaml(yaml_text)
+
+    assert data["header"]["name"] == "Michael Shi"
+    assert data["education"]["date_text"] == r"Expected Graduation: \textbf{Sep 2026}"
+    assert data["experience"][0]["id"] == "job1_invidi_technologies"
+    assert data["experience"][0]["title"] == "Junior Software Developer (Part-time)"
+    assert data["experience"][0]["company"] == "INVIDI Technologies"
+    assert data["experience"][0]["location"] == "Edmonton, AB"
+    assert data["projects"][0]["url"] == "https://github.com/NatRunners/StudyAmp"
+    assert "Python" in data["skills"]["Languages"]
+
+    doc, _ = build_master_resume_document(
+        data,
+        title="Software Engineer",
+        keywords=["Python", "FastAPI"],
+        role_family="software",
+    )
+    tex = render_resume_tex(doc)
+
+    assert r"\section{Experience}" in tex
+    assert "Junior Software Developer (Part-time), INVIDI Technologies -- Edmonton, AB" in tex
+
+
+def test_import_master_cli_writes_yaml(tmp_path):
+    output = tmp_path / "master_resume.yaml"
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "fletcher.cli",
+            "import-master",
+            "--resume",
+            str(MAIN_TEX),
+            "--output",
+            str(output),
+        ],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+    data = parse_master_yaml(output.read_text(encoding="utf-8"))
+    assert data["header"]["name"] == "Michael Shi"
+    assert data["projects"][0]["id"] == "proj1_studyamp_nathacks_1st_place"

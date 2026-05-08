@@ -151,6 +151,15 @@ def cmd_parse_resume(args):
     _run_fletcher_cli(argv)
 
 
+def cmd_import_master(args):
+    argv = ["import-master"]
+    if args.resume:
+        argv += ["--resume", args.resume]
+    if args.output:
+        argv += ["--output", args.output]
+    _run_fletcher_cli(argv)
+
+
 def cmd_test_job(args):
     import json
     import time
@@ -350,6 +359,14 @@ def build_parser() -> argparse.ArgumentParser:
     parse.add_argument("--output-json", default=None, dest="output_json")
     parse.add_argument("--roundtrip-tex", default=None, dest="roundtrip_tex")
     parse.set_defaults(func=cmd_parse_resume)
+
+    import_master = sub.add_parser(
+        "import-master",
+        help="Convert a template-compatible main.tex into master resume YAML.",
+    )
+    import_master.add_argument("--resume", default=None)
+    import_master.add_argument("--output", default=None)
+    import_master.set_defaults(func=cmd_import_master)
 
     test_job = sub.add_parser(
         "test-job", help="Run pipeline on one job and print timing + LLM output."

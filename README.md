@@ -7,7 +7,7 @@ Automated Hunt runtime. Today it includes **C0 (Frontend)**, **C1 (Hunter)** dis
 Current operator confidence snapshot (subjective, as of 2026-05-08):
 - **C0**: mostly done
 - **C1 / Hunter**: about 95% done
-- **C2 / Fletcher**: about 90% done
+- **C2 / Fletcher**: about 80% done
 - **C3**: not meaningfully tested end to end yet
 - **C4**: coordinator state machine, API, CLI, worker lease protocol, stale recovery, and OpenClaw/Hermes one-shot launcher exist; live browser/agent execution is not proven yet
 
