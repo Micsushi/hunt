@@ -61,7 +61,9 @@ class C0ControlApiTests(unittest.TestCase):
         )
 
         self.assertLess(_fletcher_step_percent("starting", is_option_a=True), 5)
-        self.assertLessEqual(_fletcher_step_percent("selecting_master_resume", is_option_a=True), 10)
+        self.assertLessEqual(
+            _fletcher_step_percent("selecting_master_resume", is_option_a=True), 10
+        )
         self.assertLess(_fletcher_step_percent("generating_resume", is_option_a=True), 15)
         self.assertEqual(_fletcher_step_percent("unknown_future_step"), 0)
         self.assertLess(_fletcher_step_percent("rag_complete"), 70)
@@ -73,7 +75,9 @@ class C0ControlApiTests(unittest.TestCase):
         self.assertGreater(_fletcher_step_percent("skills_keywords_added"), 80)
         self.assertGreater(_fletcher_step_percent("summary_line_check"), 90)
         self.assertEqual(_fletcher_step_percent("done"), 100)
-        self.assertEqual(_fletcher_step_percent("ollama_runtime", {"stage": "before_skill_bucket"}), 0)
+        self.assertEqual(
+            _fletcher_step_percent("ollama_runtime", {"stage": "before_skill_bucket"}), 0
+        )
 
         tracker = _FletcherProgressTracker(is_option_a=True)
         starting = tracker.record("starting")
@@ -615,9 +619,7 @@ class C0ControlApiTests(unittest.TestCase):
         self.assertEqual([row["queue_item_id"] for row in recovered], [item["queue_item_id"]])
         self.assertEqual(recovered[0]["status"], "queued")
         self.assertIsNone(recovered[0]["started_at"])
-        self.assertEqual(
-            recovered[0]["progress"]["current_step"], "requeued_after_worker_restart"
-        )
+        self.assertEqual(recovered[0]["progress"]["current_step"], "requeued_after_worker_restart")
         self.assertEqual(recovered[0]["progress"]["previous_step"], "running")
 
         reclaimed = claim_next_fletcher_job()
@@ -640,9 +642,7 @@ class C0ControlApiTests(unittest.TestCase):
 
         recovered = get_fletcher_job(item["queue_item_id"])
         self.assertEqual(recovered["status"], "queued")
-        self.assertEqual(
-            recovered["progress"]["current_step"], "requeued_after_worker_restart"
-        )
+        self.assertEqual(recovered["progress"]["current_step"], "requeued_after_worker_restart")
 
     def test_option_a_setting_syncs_master_resume_yaml_selection(self):
         from pathlib import Path

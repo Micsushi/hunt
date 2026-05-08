@@ -129,6 +129,7 @@ def _raise_integrity_conflict(exc: BaseException) -> None:
         detail=f"Database rejected the change (likely a linked record): {exc}",
     ) from exc
 
+
 # Human-readable labels for enrichment values and filter chips.
 ENRICHMENT_STATUS_LABELS = {
     "pending": "Pending enrichment",

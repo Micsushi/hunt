@@ -4,14 +4,14 @@ Putting in the Work so it is less Work for you to apply for Work
 
 Automated Hunt runtime. Today it includes **C0 (Frontend)**, **C1 (Hunter)** discovery/enrichment, **C2 (Fletcher)** resume generation, a local **C3 (Executioner)** browser extension, and **C4 (Coordinator)** orchestration scaffolding.
 
-Current operator confidence snapshot (subjective, as of 2026-05-07):
+Current operator confidence snapshot (subjective, as of 2026-05-08):
 - **C0**: mostly done
-- **C1**: about 80% done
-- **C2**: usable Option B review workflow exists; generation quality and production smoke confidence still need work
+- **C1 / Hunter**: about 95% done
+- **C2 / Fletcher**: about 90% done
 - **C3**: not meaningfully tested end to end yet
 - **C4**: coordinator state machine, API, CLI, worker lease protocol, stale recovery, and OpenClaw/Hermes one-shot launcher exist; live browser/agent execution is not proven yet
 
-The most solid path today is still **C0 + C1**. C2 now has a usable Option B operator flow: DB-backed background queue, persistent run history, PDF/TeX upload and export, full review workspace, manual edits, segment revert, compile, logs, and multi-provider LLM configuration. C4 has a real DB-backed orchestration scaffold plus a worker lease/heartbeat/result protocol, but C3/OpenClaw/Hermes browser-backed runs are still the main unproven gap before long-running job-application agents can be trusted.
+The most solid path today is **C0 + C1**, with Hunter now mostly down to live Easy Apply proof. C2 has grown into a strong operator workflow: Option B pasted-JD queue/history, Option A job-linked master-resume generation, persistent artifacts, PDF/TeX upload and export, full review workspace, manual edits, segment revert, compile, progress recovery, keyword inspection, logs, and multi-provider LLM configuration. C4 has a real DB-backed orchestration scaffold plus a worker lease/heartbeat/result protocol, but C3/OpenClaw/Hermes browser-backed runs are still the main unproven gap before long-running job-application agents can be trusted.
 
 C0 note: the React SPA is the primary operator UI, but `/legacy/*` server-rendered routes still exist as fallback while we retire them.
 
@@ -21,8 +21,8 @@ Component rule: build each component so it can run and be tested on its own. Tod
 
 Current focus:
 - keep C0 stable and documented accurately
-- validate C1 (Hunter) on server2 against Postgres
-- validate C2's usable operator workflow against real jobs and improve generation quality
+- finish C1's last live proof: verify Easy Apply filtering on a real matching row
+- validate C2's Option A/Option B workflows against real server2 jobs and keep improving generation quality
 - harden C4 as the durable state machine for long-running Windows/WSL2/Linux job-application agents
 - keep Easy Apply classified as `easy_apply` and excluded from downstream external-apply automation
 
@@ -196,7 +196,7 @@ Testing posture by component:
 - C4: depends on upstream/downstream component outputs by design
 
 Current local checkpoint for later components:
-- `fletcher/` : **C2 (Fletcher)** has a usable Option B operator workflow, shared review workspace, and provider/settings scaffolding. Treat generation quality, live C1 -> C2 server proof, and deeper provider migration as the remaining risks.
+- `fletcher/` : **C2 (Fletcher)** has usable Option B pasted-JD and Option A job-linked workflows, a shared review workspace, provider/settings scaffolding, progress/restart recovery, and job-linked resume persistence. Treat generation quality, live C1 -> C2 server proof, keyword-list-only targeting, section-level regeneration, and provider model evaluation as the remaining risks.
 - `executioner/` : **C3 (Executioner)** local extension implementation exists, but it has not been meaningfully validated end to end through the live pipeline yet.
 - `coordinator/` : **C4 (Coordinator)** DB-backed readiness/state-machine code, service routes, CLI commands, C3 bridge tests, and a Postgres smoke exist. It should still be treated as early-stage automation because live browser-backed workers and stale-run recovery are not proven yet.
 

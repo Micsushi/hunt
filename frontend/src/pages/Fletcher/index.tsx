@@ -140,7 +140,9 @@ function fletcherPreCompleteCap(queueItemId: string): number {
   for (let i = 0; i < queueItemId.length; i += 1) {
     hash = (hash * 31 + queueItemId.charCodeAt(i)) >>> 0
   }
-  return FLETCHER_PROGRESS_CAP_MIN + (hash % (FLETCHER_PROGRESS_CAP_MAX - FLETCHER_PROGRESS_CAP_MIN + 1))
+  return (
+    FLETCHER_PROGRESS_CAP_MIN + (hash % (FLETCHER_PROGRESS_CAP_MAX - FLETCHER_PROGRESS_CAP_MIN + 1))
+  )
 }
 
 function readDisplayedProgress(): Record<string, DisplayedProgress> {
@@ -151,13 +153,17 @@ function readDisplayedProgress(): Record<string, DisplayedProgress> {
     const now = Date.now()
     return Object.fromEntries(
       Object.entries(parsed).flatMap(([queueItemId, value]) => {
-        const storedValue = typeof value.value === 'number' && Number.isFinite(value.value)
-          ? Math.max(0, Math.min(100, Math.round(value.value)))
-          : null
+        const storedValue =
+          typeof value.value === 'number' && Number.isFinite(value.value)
+            ? Math.max(0, Math.min(100, Math.round(value.value)))
+            : null
         if (storedValue === null) return []
         const preCompleteCap =
           typeof value.preCompleteCap === 'number' && Number.isFinite(value.preCompleteCap)
-            ? Math.max(FLETCHER_PROGRESS_CAP_MIN, Math.min(FLETCHER_PROGRESS_CAP_MAX, Math.round(value.preCompleteCap)))
+            ? Math.max(
+                FLETCHER_PROGRESS_CAP_MIN,
+                Math.min(FLETCHER_PROGRESS_CAP_MAX, Math.round(value.preCompleteCap)),
+              )
             : fletcherPreCompleteCap(queueItemId)
         return [
           [
@@ -547,16 +553,14 @@ function FletcherQueuePanel({
   )
   const activeJobs = useMemo(() => {
     return jobs
-      .filter(
-        (job) => {
-          if (ACTIVE_FLETCHER_STATUSES.has(job.status)) return true
-          return (
-            job.status === 'succeeded' &&
-            displayedProgressJobIds.has(job.queue_item_id) &&
-            displayedProgress[job.queue_item_id]?.activeInCurrentView
-          )
-        },
-      )
+      .filter((job) => {
+        if (ACTIVE_FLETCHER_STATUSES.has(job.status)) return true
+        return (
+          job.status === 'succeeded' &&
+          displayedProgressJobIds.has(job.queue_item_id) &&
+          displayedProgress[job.queue_item_id]?.activeInCurrentView
+        )
+      })
       .sort((a, b) => {
         const aCompleting =
           a.status === 'succeeded' &&
@@ -711,10 +715,7 @@ function FletcherQueuePanel({
         for (const job of progressJobs) {
           const queueItemId = job.queue_item_id
           const existing = current[queueItemId]
-          if (
-            job.status === 'succeeded' &&
-            (!existing || !existing.activeInCurrentView)
-          ) {
+          if (job.status === 'succeeded' && (!existing || !existing.activeInCurrentView)) {
             continue
           }
           const preCompleteCap = existing?.preCompleteCap ?? fletcherPreCompleteCap(queueItemId)

@@ -4,11 +4,11 @@ Work in progress and polish backlog. See `docs/roadmap.md` for the status of eac
 
 ## Current State Snapshot
 
-This is your current confidence snapshot (subjective, as of 2026-05-07). The backlog is longer than this confidence view:
+This is your current confidence snapshot (subjective, as of 2026-05-08). The backlog is longer than this confidence view:
 
 - C0: mostly done
-- C1: about 80% done
-- C2: usable Option B workflow exists; generation quality and server proof remain
+- C1 / Hunter: about 95% done
+- C2 / Fletcher: about 90% done
 - C3: not tested end to end yet
 - C4: API/state-machine scaffold exists; live browser/agent execution not proven yet
 
@@ -48,6 +48,8 @@ C1 scrapes LinkedIn for job listings and enriches them with full job description
 - [x] Hunter CLI: status, auth, scrape, enrich, requeue, smoke test, and 60+ other operator commands all implemented in hunterctl.py
 - [x] Move watchlist, title blacklist, and search terms out of `config.py` into a user-editable config file (JSON/TOML); C1 reads from file at runtime so changes via settings UI take effect without code deploys
 - [x] README: clear, short commands for every key operator action - deploy C0+C1 with Docker, run locally without containers, run tests, start services; add CLI entry points to PATH where needed so commands are one-liners
+- [x] Persist local Docker auth state and artifacts through `.hunt-state/` and `.hunt-data/` mounts so local C1 restarts do not lose the saved browser session
+- [x] Cover browser-useful C1 operations in the UI: drain, requeue/retry, config edits, Easy Apply verification, and Discord webhook test
 
 ## C2 : Fletcher (resume tailor)
 
@@ -56,8 +58,10 @@ C2 takes a job description and a base resume, then generates a tailored resume u
 - [ ] Before changing Fletcher review UI, PDF import/export, or LLM provider support, check `docs/superpowers/plans/2026-05-05-c2-review-workspace-pdf-llm-providers.md`
 - [x] Confirm the Option B web UI path end-to-end at the C0 API/UI level: C0 page -> queue endpoint -> background worker -> review workspace/history
 - [x] Accept resume input as PDF or LaTeX source for Option B. Text-based PDFs import through `pdfminer.six`; scanned PDFs remain unsupported
-- [ ] Accept a job description or a list of keywords as the tailoring target
+- [x] Accept a job description as the tailoring target for Option B pasted-JD runs and Option A job-linked runs
+- [ ] Accept a raw list of keywords as the tailoring target without a job description
 - [ ] Accept a candidate profile separately, or derive it from the resume if none is provided
+- [x] Option A master resume YAML path: select a role-family/base resume from `fletcher/master_resume.yaml`, generate from C1 job data, and reuse the ad-hoc pipeline
 - [x] Option to add a summary section when the base resume doesn't have one through the `with_summary` review version
 - [x] Show the generated summary for review before accepting it through the `with_summary` review workspace
 - [x] Show a full resume preview before the user accepts the generated output
@@ -66,14 +70,20 @@ C2 takes a job description and a base resume, then generates a tailored resume u
 - [ ] Nice to have: regenerate individual sections independently instead of the whole resume at once
 - [ ] Auto-run: automatically generate tailored resumes for jobs C1 finds and queues, without manual triggers
 - [ ] Fill in `fletcher/candidate_profile.md` with real work history and profile info - this is the grounding context the LLM uses for all generation
-- [ ] Wire actual LLM tailoring for bullet points and section rewrites (currently uses basic prompts)
+- [x] Wire actual LLM tailoring for bullet points, keyword extraction, summaries, rewrite validation, and provider-routed JSON calls. Quality tuning remains ongoing
 - [x] Support external LLM API keys and provider selection in C2 settings/API scaffolding. Cloud use still requires explicit confirmation and quality smoke tests
 - [ ] Evaluate which free OpenRouter models work best as fallbacks
 - [ ] Evaluate Google free-tier API as an option
 - [ ] Decide whether using multiple OpenRouter accounts to stay under rate limits is acceptable
 - [ ] Validate the C1 -> C2 handoff on server2 using real enriched job data
 - [ ] Improve generated resume quality with real candidate profile grounding and live reviewed outputs
-- [ ] Add streaming or finer-grained queue progress beyond polling/coarse status
+- [x] Add finer-grained queue progress beyond coarse status: backend milestone groups, persisted visible progress, restart recovery, and completion drain/hold
+- [x] Persist Option A completions into job-linked resume attempts/versions and update job latest/selected resume columns for C3 handoff
+- [x] Add starting resume artifacts (`starting.pdf` / `starting.tex`) to runs, history rows, detail modal, and batch ZIP downloads
+- [x] Add Fletcher history search, newest-finished ordering, compact rows, selectable batch ZIP downloads, and delete finished history rows
+- [x] Add queue recovery for backend/container restarts: interrupted running rows requeue with previous-step metadata
+- [x] Add clear-generated-resumes operator action that removes generated job-linked attempts/history/artifacts while skipping active runs
+- [x] Expand review inspector from one best keyword match to supported, rewrite-added, and other keyword groups with high-confidence candidate chips
 
 ## C3 : Executioner (browser form filler)
 

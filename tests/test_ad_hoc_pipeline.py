@@ -1961,7 +1961,9 @@ def test_rag_high_matches_include_alternate_candidates(monkeypatch):
     }
 
     monkeypatch.setattr(rag, "_embed", lambda text: vectors[text])
-    monkeypatch.setattr(rag, "_cosine_sim", lambda left, right: sum(a * b for a, b in zip(left, right)))
+    monkeypatch.setattr(
+        rag, "_cosine_sim", lambda left, right: sum(a * b for a, b in zip(left, right))
+    )
 
     result = rag.match_keywords_to_bullets(
         ["backend development"],
@@ -2085,7 +2087,12 @@ def test_visible_keyword_doubles_drop_score(monkeypatch):
     monkeypatch.setattr(mod, "score_bullets_for_drop", lambda _bullets, _keywords: [0.4, 0.4])
     sources = [
         {"bullet_id": "with_keyword", "kind": "exp", "entry_id": "exp0", "original_local_idx": 0},
-        {"bullet_id": "without_keyword", "kind": "exp", "entry_id": "exp0", "original_local_idx": 1},
+        {
+            "bullet_id": "without_keyword",
+            "kind": "exp",
+            "entry_id": "exp0",
+            "original_local_idx": 1,
+        },
     ]
 
     scores = mod._score_sources(

@@ -129,7 +129,9 @@ def test_fletcher_queue_result_records_job_resume_attempt(monkeypatch, tmp_path)
     assert recorded == (1, 1)
     conn = get_connection(db_path)
     try:
-        attempt = conn.execute("SELECT * FROM resume_attempts WHERE job_id = ?", (14350,)).fetchone()
+        attempt = conn.execute(
+            "SELECT * FROM resume_attempts WHERE job_id = ?", (14350,)
+        ).fetchone()
         assert attempt is not None
         assert attempt["pdf_path"] == str(pdf_path)
         assert Path(attempt["source_resume_path"]).name == "selected_master_source.tex"
@@ -223,9 +225,9 @@ def test_backfills_completed_queue_job_without_resume_attempt(monkeypatch, tmp_p
     monkeypatch.setattr(
         review_store,
         "artifact_path_for_review",
-        lambda _review_id, _version, artifact_kind: pdf_path
-        if artifact_kind == "pdf"
-        else tex_path,
+        lambda _review_id, _version, artifact_kind: (
+            pdf_path if artifact_kind == "pdf" else tex_path
+        ),
     )
 
     backfilled = backfill_completed_fletcher_queue_resume_attempts(db_path=db_path)

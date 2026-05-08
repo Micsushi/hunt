@@ -731,6 +731,7 @@ def record_fletcher_queue_resume_attempt(
     tex_path = Path(str(tex_path_raw))
     if not tex_path.exists():
         return None
+    init_resume_db(db_path)
     attempt_dir = Path(str(result.get("attempt_dir") or tex_path.parent))
     attempt_dir.mkdir(parents=True, exist_ok=True)
 
@@ -763,7 +764,9 @@ def record_fletcher_queue_resume_attempt(
     )
     keywords_path = attempt_dir / "keywords.json"
     if not keywords_path.exists():
-        keywords_path.write_text(json.dumps({"raw": result.get("keywords") or []}), encoding="utf-8")
+        keywords_path.write_text(
+            json.dumps({"raw": result.get("keywords") or []}), encoding="utf-8"
+        )
     structured_output_path = Path(str(result.get("review_package_path") or ""))
     if not structured_output_path.exists():
         structured_output_path = metadata_path
@@ -843,7 +846,9 @@ def backfill_completed_fletcher_queue_resume_attempts(
                 job_id = int(raw_job_id)
             except (TypeError, ValueError):
                 continue
-            candidates.append((str(row["queue_item_id"]), job_id, job_input, result, row["log_path"]))
+            candidates.append(
+                (str(row["queue_item_id"]), job_id, job_input, result, row["log_path"])
+            )
     finally:
         conn.close()
 
@@ -867,7 +872,9 @@ def backfill_completed_fletcher_queue_resume_attempts(
             "pdf_path": str(pdf_path),
             "log_path": log_path or str(attempt_dir / "pipeline_log.txt"),
             "compile_status": result.get("compile_status") or "ok",
-            "fits_one_page": result.get("fits_one_page") if result.get("fits_one_page") is not None else True,
+            "fits_one_page": result.get("fits_one_page")
+            if result.get("fits_one_page") is not None
+            else True,
         }
         attempt = record_fletcher_queue_resume_attempt(
             job_id=job_id,

@@ -386,7 +386,8 @@ function inferLegacySupportKind(
 
 function normalizeKeywordScores(review: ResumeReviewPackage): KeywordPanelItem[] {
   const raw = review.keywords.raw || []
-  const comparisonVersion = review.versions.no_summary || review.versions.with_summary || review.versions.starting
+  const comparisonVersion =
+    review.versions.no_summary || review.versions.with_summary || review.versions.starting
   const originalBullets = resumeBullets(comparisonVersion?.original)
   const generatedBullets = resumeBullets(comparisonVersion?.generated)
   const present = new Set((review.keywords.present || []).map((item) => item.toLowerCase()))
@@ -410,7 +411,12 @@ function normalizeKeywordScores(review: ResumeReviewPackage): KeywordPanelItem[]
       const key = keyword.toLowerCase()
       const item = scored.get(key) || { keyword }
       const usedItem = used.get(key)
-      const supportKind = inferLegacySupportKind(keyword, usedItem, originalBullets, generatedBullets)
+      const supportKind = inferLegacySupportKind(
+        keyword,
+        usedItem,
+        originalBullets,
+        generatedBullets,
+      )
       const fallbackStatus =
         supportKind === 'rewrite_added'
           ? 'rewrite_used'
@@ -481,7 +487,9 @@ function normalizeKeywordScores(review: ResumeReviewPackage): KeywordPanelItem[]
 
 function KeywordPanel({ review }: { review: ResumeReviewPackage }) {
   const keywords = useMemo(() => normalizeKeywordScores(review), [review])
-  const supportedKeywords = keywords.filter((item) => item.status === 'present' || item.status === 'supported')
+  const supportedKeywords = keywords.filter(
+    (item) => item.status === 'present' || item.status === 'supported',
+  )
   const rewriteKeywords = keywords.filter((item) => item.status === 'rewrite_used')
   const otherKeywords = keywords.filter((item) => {
     const tier = String(item.tier || '').toLowerCase()
@@ -553,7 +561,11 @@ function KeywordCard({ item, kind }: { item: KeywordPanelItem; kind: KeywordGrou
       ? item.candidates
       : item.candidates.filter((candidate) => candidate.bullet_idx !== usedBulletIdx)
   const visibleCandidates =
-    kind === 'rewrite' && hasHighMatch ? otherCandidates : kind === 'other' && hasHighMatch ? item.candidates : []
+    kind === 'rewrite' && hasHighMatch
+      ? otherCandidates
+      : kind === 'other' && hasHighMatch
+        ? item.candidates
+        : []
   const supportIdx = usedBulletIdx ?? item.candidates[0]?.bullet_idx
   const meta =
     kind === 'rewrite'
@@ -565,7 +577,7 @@ function KeywordCard({ item, kind }: { item: KeywordPanelItem; kind: KeywordGrou
           ? 'Supported in resume'
           : `Supported by bullet ${Number(supportIdx) + 1}`
         : visibleCandidates.length
-          ? 'Candidate resume bullets'
+          ? 'Best resume bullet'
           : String(item.tier || '').toLowerCase() === 'mid'
             ? 'Medium match, not used'
             : 'No high-match bullet candidates'
@@ -603,7 +615,9 @@ function CandidateList({
       className={styles.keywordCandidates}
       aria-label={kind === 'rewrite' ? 'Alternative candidate bullets' : 'Possible bullets'}
     >
-      {kind === 'rewrite' ? <span className={styles.keywordCandidateLabel}>Alternative candidates</span> : null}
+      {kind === 'rewrite' ? (
+        <span className={styles.keywordCandidateLabel}>Alternative candidates</span>
+      ) : null}
       {candidates.map((candidate, idx) => (
         <span
           className={styles.keywordCandidate}
@@ -613,7 +627,9 @@ function CandidateList({
           {candidate.bullet_idx === null || candidate.bullet_idx === undefined
             ? 'No bullet'
             : `Bullet ${Number(candidate.bullet_idx) + 1}`}
-          {typeof candidate.score === 'number' ? ` (${Math.round(candidate.score * 100)}% match)` : ''}
+          {typeof candidate.score === 'number'
+            ? ` (${Math.round(candidate.score * 100)}% match)`
+            : ''}
         </span>
       ))}
     </div>

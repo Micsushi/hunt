@@ -318,9 +318,13 @@ POSTGRES_CASCADE_FK_MIGRATIONS = (
 def _ensure_postgres_delete_cascade_constraints(cursor):
     if not (os.environ.get("HUNT_DB_URL") or "").strip():
         return
-    for table_name, constraint_name, column_name, parent_table, parent_column in (
-        POSTGRES_CASCADE_FK_MIGRATIONS
-    ):
+    for (
+        table_name,
+        constraint_name,
+        column_name,
+        parent_table,
+        parent_column,
+    ) in POSTGRES_CASCADE_FK_MIGRATIONS:
         cursor.execute(
             """
             DO $$
