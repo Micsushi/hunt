@@ -23,7 +23,7 @@ Current focus:
 - keep C0 stable and documented accurately
 - finish C1's last live proof: verify Easy Apply filtering on a real matching row
 - validate C2's Option A/Option B workflows against real server2 jobs and keep improving generation quality
-- prove C3 standalone generic fill on safe fixture pages before trusting live job pages
+- prove C3 `filler` on safe ordinary pages before trusting live job pages
 - harden C4 as the durable state machine for long-running Windows/WSL2/Linux job-application agents
 - keep Easy Apply classified as `easy_apply` and excluded from downstream external-apply automation
 
@@ -172,6 +172,8 @@ C3 extension quality:
 - `.\hunter.ps1 c3-lint`: JS syntax lint only
 - `.\hunter.ps1 c3-format-check`: Prettier check only
 - `.\hunter.ps1 c3-format`: Prettier write
+- `.\hunter.ps1 c3-package`: create an unpacked extension folder and zip in `dist/c3/`
+- `.\hunter.ps1 c3-store-deploy`: package and upload C3 to an existing Chrome Web Store item
 
 Quick CI aliases:
 - `python ci.py all`: full quality checks plus full Python test suite

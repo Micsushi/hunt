@@ -335,32 +335,32 @@ class Component3Stage1Tests(unittest.TestCase):
             import {{ selectFillRoute }} from {json.dumps(route_path.as_uri())};
             const availableAdapters = ["generic", "workday"];
             const routes = {{
-                standaloneGeneric: selectFillRoute({{
+                filler: selectFillRoute({{
                     activeApplyContext: {{}},
                     detectedAtsType: "unknown",
                     availableAdapters,
                 }}),
-                standaloneAts: selectFillRoute({{
+                atsFiller: selectFillRoute({{
                     activeApplyContext: {{}},
                     detectedAtsType: "workday",
                     availableAdapters,
                 }}),
-                dbGeneric: selectFillRoute({{
+                dbFiller: selectFillRoute({{
                     activeApplyContext: {{ jobId: "123", sourceMode: "db", atsType: "greenhouse" }},
                     detectedAtsType: "greenhouse",
                     availableAdapters,
                 }}),
-                dbAts: selectFillRoute({{
+                dbAtsFiller: selectFillRoute({{
                     activeApplyContext: {{ jobId: "123", sourceMode: "db", atsType: "workday" }},
                     detectedAtsType: "workday",
                     availableAdapters,
                 }}),
-                c4Generic: selectFillRoute({{
+                c4Filler: selectFillRoute({{
                     activeApplyContext: {{ jobId: "123", sourceMode: "c4", atsType: "lever" }},
                     detectedAtsType: "lever",
                     availableAdapters,
                 }}),
-                c4Ats: selectFillRoute({{
+                c4AtsFiller: selectFillRoute({{
                     activeApplyContext: {{ jobId: "123", sourceMode: "c4", atsType: "workday" }},
                     detectedAtsType: "workday",
                     availableAdapters,
@@ -380,14 +380,14 @@ class Component3Stage1Tests(unittest.TestCase):
             self.skipTest("node is required to test the C3 fill router")
 
         routes = json.loads(result.stdout)
-        self.assertEqual(routes["standaloneGeneric"]["routeName"], "standalone_generic")
-        self.assertEqual(routes["standaloneAts"]["routeName"], "standalone_ats_specific")
-        self.assertEqual(routes["dbGeneric"]["routeName"], "db_generic")
-        self.assertTrue(routes["dbGeneric"]["usedGenericFallback"])
-        self.assertEqual(routes["dbAts"]["routeName"], "db_ats_specific")
-        self.assertEqual(routes["c4Generic"]["routeName"], "c4_generic")
-        self.assertTrue(routes["c4Generic"]["usedGenericFallback"])
-        self.assertEqual(routes["c4Ats"]["routeName"], "c4_ats_specific")
+        self.assertEqual(routes["filler"]["routeName"], "filler")
+        self.assertEqual(routes["atsFiller"]["routeName"], "ats_filler")
+        self.assertEqual(routes["dbFiller"]["routeName"], "db_filler")
+        self.assertTrue(routes["dbFiller"]["usedGenericFallback"])
+        self.assertEqual(routes["dbAtsFiller"]["routeName"], "db_ats_filler")
+        self.assertEqual(routes["c4Filler"]["routeName"], "c4_filler")
+        self.assertTrue(routes["c4Filler"]["usedGenericFallback"])
+        self.assertEqual(routes["c4AtsFiller"]["routeName"], "c4_ats_filler")
 
     def test_devtools_target_picker_finds_c3_options_page(self):
         target = find_c3_target(

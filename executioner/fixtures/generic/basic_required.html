@@ -1,0 +1,104 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>C3 Generic Required Form Fixture</title>
+    <style>
+      body {
+        font-family: system-ui, sans-serif;
+        margin: 32px;
+        max-width: 760px;
+      }
+
+      label,
+      fieldset {
+        display: block;
+        margin: 14px 0;
+      }
+
+      input,
+      select,
+      textarea {
+        display: block;
+        margin-top: 4px;
+        min-width: 320px;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>Generic Required Form Fixture</h1>
+    <form>
+      <label>
+        First name *
+        <input id="first-name" name="firstName" required />
+      </label>
+
+      <label>
+        Surname
+        <input id="surname" name="surname" aria-required="true" />
+      </label>
+
+      <label>
+        Preferred name
+        <input id="preferred-name" name="preferredName" />
+      </label>
+
+      <label>
+        Email address *
+        <input id="email" name="email" type="email" required />
+      </label>
+
+      <label>
+        Mobile number *
+        <input id="phone" name="mobile" type="tel" required />
+      </label>
+
+      <label>
+        Company name *
+        <input id="company" name="companyName" required />
+      </label>
+
+      <label>
+        Position applied for *
+        <input id="position" name="positionAppliedFor" required />
+      </label>
+
+      <label>
+        Resume upload *
+        <input
+          id="resume"
+          name="resume"
+          type="file"
+          accept="application/pdf"
+          required
+        />
+      </label>
+
+      <label>
+        Are you legally authorized to work? *
+        <select id="authorized" name="authorized" required>
+          <option value="">Select one</option>
+          <option value="yes">Yes</option>
+          <option value="no">No</option>
+        </select>
+      </label>
+
+      <fieldset>
+        <legend>Are you willing to relocate? *</legend>
+        <label>
+          <input id="relocate-yes" type="radio" name="relocate" required />
+          Yes
+        </label>
+        <label>
+          <input id="relocate-no" type="radio" name="relocate" required />
+          No
+        </label>
+      </fieldset>
+
+      <label>
+        Why are you interested?
+        <textarea id="optional-question" name="why"></textarea>
+      </label>
+    </form>
+  </body>
+</html>

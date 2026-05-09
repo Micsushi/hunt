@@ -242,6 +242,45 @@ def test_c3_extension_quality_helper_exists():
     assert '"style-fix"' in hunterctl
 
 
+def test_c3_extension_package_helper_exists():
+    helper = Path("scripts/package_c3_extension.py")
+    hunterctl = Path("scripts/hunterctl.py").read_text(encoding="utf-8")
+    readme = Path("executioner/README.md").read_text(encoding="utf-8")
+    root_readme = Path("README.md").read_text(encoding="utf-8")
+    gitignore = Path(".gitignore").read_text(encoding="utf-8")
+
+    helper_text = helper.read_text(encoding="utf-8")
+    assert helper.is_file()
+    assert "dist" in helper_text
+    assert "manifest.json" in helper_text
+    assert "zipfile" in helper_text
+    assert "INCLUDE_PATHS" in helper_text
+    assert "c3-package" in hunterctl
+    assert "package_c3_extension.py" in hunterctl
+    assert ".\\hunter.ps1 c3-package" in readme
+    assert ".\\hunter.ps1 c3-package" in root_readme
+    assert "dist/" in gitignore
+
+
+def test_c3_extension_store_deploy_helper_exists():
+    helper = Path("scripts/deploy_c3_store.py")
+    hunterctl = Path("scripts/hunterctl.py").read_text(encoding="utf-8")
+    runbook = Path("docs/C3_TESTING_RUNBOOK.md").read_text(encoding="utf-8")
+
+    helper_text = helper.read_text(encoding="utf-8")
+    assert helper.is_file()
+    assert "chromewebstore.googleapis.com" in helper_text
+    assert "upload/v2/publishers" in helper_text
+    assert ":publish" in helper_text
+    assert "CWS_PUBLISHER_ID" in helper_text
+    assert "CWS_EXTENSION_ID" in helper_text
+    assert "CWS_ACCESS_TOKEN" in helper_text
+    assert "package_extension" in helper_text
+    assert "c3-store-deploy" in hunterctl
+    assert "deploy_c3_store.py" in hunterctl
+    assert ".\\hunter.ps1 c3-store-deploy --publish --status" in runbook
+
+
 def test_c3_extension_has_standalone_manual_fill_path():
     fill_runner = Path("executioner/src/background/fill-runner.js").read_text(encoding="utf-8")
     generic_fill = Path("executioner/src/ats/generic/fill.js").read_text(encoding="utf-8")

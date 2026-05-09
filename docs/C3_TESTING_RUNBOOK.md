@@ -18,6 +18,7 @@ Run from the repo root:
 Expected coverage:
 
 - `test.py c3`: C3 apply-context prep, resume parser, and fill-route naming.
+- `test_component3_generic_fill.py`: browser-backed generic required-field fixture.
 - `test_component4_c3_bridge.py`: C4 pending-fill and fill-result bridge.
 - `ci.py c3`: Executioner JS syntax lint, Prettier check, and C3 tests.
 
@@ -46,13 +47,14 @@ Profile shortcut: in Options, use Import profile from TeX resume, choose
 `main.tex`, then click Import Profile From TeX. The extension parses the resume
 header into profile fields and reports any fields still missing.
 
-Standalone route names:
+First-stage route names:
 
-- `standalone_generic`: extension-local profile/resume, generic required-field fill
-- `standalone_ats_specific`: extension-local profile/resume, ATS adapter
+- `filler`: extension-local profile/resume, generic required-field fill for ordinary pages
+- `ats_filler`: extension-local profile/resume, ATS adapter
 
-The generic route fills only obvious required fields, one field or field group at
-a time. It skips optional fields and unknown custom fields.
+The `filler` route is not job-site-only. It fills obvious required fields such as
+name, email, phone, links, and resume upload on ordinary pages too, one field or
+field group at a time. It skips optional fields and unknown custom fields.
 
 ## First Standalone Browser Test
 
@@ -103,10 +105,10 @@ Success means C4 has created a run and written a C3-compatible
 
 DB/C4 route names:
 
-- `db_generic`: DB/job context plus generic required-field fill
-- `db_ats_specific`: DB/job context plus ATS adapter
-- `c4_generic`: C4 fill request plus generic fallback
-- `c4_ats_specific`: C4 fill request plus ATS adapter
+- `db_filler`: DB/job context plus generic required-field fill
+- `db_ats_filler`: DB/job context plus ATS adapter
+- `c4_filler`: C4 fill request plus generic fallback
+- `c4_ats_filler`: C4 fill request plus ATS adapter
 
 ## Test The Bridge Before The Browser
 
@@ -156,9 +158,55 @@ Extension quality commands:
 .\hunter.ps1 c3-lint
 .\hunter.ps1 c3-format-check
 .\hunter.ps1 c3-format
+.\hunter.ps1 c3-package
+.\hunter.ps1 c3-store-deploy
 ```
 
 `quality.py c3` now runs extension JS syntax lint plus Prettier style checks.
+
+## Package For Download
+
+After `.\hunter.ps1 c3-ci` passes, package C3:
+
+```powershell
+.\hunter.ps1 c3-package
+```
+
+This creates:
+
+- `dist/c3/hunt-apply-extension-v<version>/`: unpacked folder for Chrome Load unpacked
+- `dist/c3/hunt-apply-extension-v<version>.zip`: downloadable/shareable archive
+
+For another user, send the zip. They unzip it, open `chrome://extensions`,
+enable Developer Mode, click Load unpacked, and select the unpacked folder.
+
+## Upload To Chrome Web Store
+
+Use this only after you have created a Chrome Web Store developer account and a
+new item in the Developer Dashboard.
+
+Required environment:
+
+```powershell
+$env:CWS_PUBLISHER_ID = "<publisher-id>"
+$env:CWS_EXTENSION_ID = "<extension-id>"
+$env:CWS_ACCESS_TOKEN = "<oauth-access-token>"
+```
+
+Upload the package to the existing item:
+
+```powershell
+.\hunter.ps1 c3-store-deploy --status
+```
+
+Upload and submit for review:
+
+```powershell
+.\hunter.ps1 c3-store-deploy --publish --status
+```
+
+The Chrome Web Store listing and privacy tabs must still be completed in the
+Developer Dashboard before a first publish can succeed.
 
 ## First ATS Browser Test
 

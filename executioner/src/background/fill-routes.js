@@ -1,10 +1,10 @@
 export const FILL_ROUTE_NAMES = {
-  standaloneGeneric: "standalone_generic",
-  standaloneAtsSpecific: "standalone_ats_specific",
-  dbGeneric: "db_generic",
-  dbAtsSpecific: "db_ats_specific",
-  c4Generic: "c4_generic",
-  c4AtsSpecific: "c4_ats_specific",
+  filler: "filler",
+  atsFiller: "ats_filler",
+  dbFiller: "db_filler",
+  dbAtsFiller: "db_ats_filler",
+  c4Filler: "c4_filler",
+  c4AtsFiller: "c4_ats_filler",
 };
 
 export function classifyFillSource(activeApplyContext = {}) {
@@ -37,10 +37,13 @@ export function selectFillRoute({
     availableAdapters.includes(requestedAtsType);
   const adapterName = hasAtsAdapter ? requestedAtsType : "generic";
   const strategy = hasAtsAdapter ? "ats_specific" : "generic";
-  const routeName =
-    FILL_ROUTE_NAMES[
-      `${fillSource}${hasAtsAdapter ? "AtsSpecific" : "Generic"}`
-    ];
+  const routeKey =
+    fillSource === "standalone"
+      ? hasAtsAdapter
+        ? "atsFiller"
+        : "filler"
+      : `${fillSource}${hasAtsAdapter ? "AtsFiller" : "Filler"}`;
+  const routeName = FILL_ROUTE_NAMES[routeKey];
 
   return {
     routeName,

@@ -37,6 +37,7 @@ TEST_TARGETS = {
     ],
     "c3": [
         "tests/test_component3_stage1.py",
+        "tests/test_component3_generic_fill.py",
     ],
     "c4": [
         "tests/test_component4_agent_runtime.py",

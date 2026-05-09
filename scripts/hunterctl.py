@@ -269,6 +269,28 @@ def cmd_executioner_quality(args):
     _run(command)
 
 
+def cmd_c3_package(args):
+    command = [PYTHON, "scripts/package_c3_extension.py"]
+    if args.dry_run:
+        command.append("--dry-run")
+    _run(command)
+
+
+def cmd_c3_store_deploy(args):
+    command = [PYTHON, "scripts/deploy_c3_store.py"]
+    if args.publisher_id:
+        command.extend(["--publisher-id", args.publisher_id])
+    if args.extension_id:
+        command.extend(["--extension-id", args.extension_id])
+    if args.publish:
+        command.append("--publish")
+    if args.status:
+        command.append("--status")
+    if args.dry_run:
+        command.append("--dry-run")
+    _run(command)
+
+
 def cmd_config(_args):
     import json
     import sys
@@ -972,6 +994,24 @@ def build_parser():
             executioner_command=executioner_command,
         )
         c3_quality.add_argument("--dry-run", action="store_true")
+
+    c3_package = subparsers.add_parser(
+        "c3-package",
+        help="Package the C3 Chrome extension into dist/c3.",
+    )
+    c3_package.add_argument("--dry-run", action="store_true")
+    c3_package.set_defaults(func=cmd_c3_package)
+
+    c3_store_deploy = subparsers.add_parser(
+        "c3-store-deploy",
+        help="Package and upload C3 to an existing Chrome Web Store item.",
+    )
+    c3_store_deploy.add_argument("--publisher-id", default=None)
+    c3_store_deploy.add_argument("--extension-id", default=None)
+    c3_store_deploy.add_argument("--publish", action="store_true")
+    c3_store_deploy.add_argument("--status", action="store_true")
+    c3_store_deploy.add_argument("--dry-run", action="store_true")
+    c3_store_deploy.set_defaults(func=cmd_c3_store_deploy)
 
     config_cmd = subparsers.add_parser(
         "config",

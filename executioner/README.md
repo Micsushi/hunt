@@ -24,12 +24,12 @@ Design goals:
 
 Fill routes:
 
-- `standalone_generic`: extension-local profile/resume, generic required-field fill
-- `standalone_ats_specific`: extension-local profile/resume, ATS adapter
-- `db_generic`: DB/job context plus generic required-field fill
-- `db_ats_specific`: DB/job context plus ATS adapter
-- `c4_generic`: C4 fill request plus generic fallback
-- `c4_ats_specific`: C4 fill request plus ATS adapter
+- `filler`: extension-local profile/resume, generic required-field fill for ordinary pages
+- `ats_filler`: extension-local profile/resume, ATS adapter
+- `db_filler`: DB/job context plus generic required-field fill
+- `db_ats_filler`: DB/job context plus ATS adapter
+- `c4_filler`: C4 fill request plus generic fallback
+- `c4_ats_filler`: C4 fill request plus ATS adapter
 
 Planned source layout:
 
@@ -41,6 +41,7 @@ Planned source layout:
 - `src/options/`
 - `src/popup/`
 - `src/shared/`
+- `fixtures/generic/`
 - `fixtures/workday/`
 
 Implementation notes:
@@ -48,3 +49,39 @@ Implementation notes:
 - favor plain JavaScript until the extension behavior is stable
 - isolate DOM selectors and field-mapping heuristics by ATS family
 - keep generated-answer sanitization in shared utilities so every caller uses the same rules
+
+Packaging:
+
+```powershell
+.\hunter.ps1 c3-ci
+.\hunter.ps1 c3-package
+```
+
+The package command writes:
+
+- `dist/c3/hunt-apply-extension-v<version>/` for Load unpacked
+- `dist/c3/hunt-apply-extension-v<version>.zip` for sharing or later store upload
+
+For another user, send the zip or unpacked folder. They can unzip it, open
+`chrome://extensions`, enable Developer Mode, choose Load unpacked, and select
+the unpacked extension folder.
+
+Chrome Web Store deploy:
+
+After you have created the developer account and item in the Chrome Developer
+Dashboard, set:
+
+```powershell
+$env:CWS_PUBLISHER_ID = "<publisher-id>"
+$env:CWS_EXTENSION_ID = "<extension-id>"
+$env:CWS_ACCESS_TOKEN = "<oauth-access-token>"
+```
+
+Then run:
+
+```powershell
+.\hunter.ps1 c3-ci
+.\hunter.ps1 c3-store-deploy --status
+```
+
+To submit the uploaded version for review, add `--publish`.

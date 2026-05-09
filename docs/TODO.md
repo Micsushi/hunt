@@ -94,9 +94,11 @@ Current gap inventory:
 - [x] Verify C3 formatting and tests with `python ci.py c3` on 2026-05-09
 - [x] Add C3 Options import from TeX resume to prefill profile basics and report remaining blanks
 - [x] Add C3 Activity Log for extension state changes and fill attempts, with JSON export and clear controls
-- [x] Add standalone generic required-field fill route that uses only extension-local profile/default resume storage
-- [x] Add named fill routes: `standalone_generic`, `standalone_ats_specific`, `db_generic`, `db_ats_specific`, `c4_generic`, `c4_ats_specific`
+- [x] Add `filler` route that uses only extension-local profile/default resume storage for ordinary pages
+- [x] Add named fill routes: `filler`, `ats_filler`, `db_filler`, `db_ats_filler`, `c4_filler`, `c4_ats_filler`
 - [x] Add generic field-rule lists for profile fields, job-context fields, resume upload phrases, required markers, and exclusions
+- [x] Add `hunter.ps1 c3-package` to create a downloadable zip and unpacked extension folder under `dist/c3/`
+- [x] Add `hunter.ps1 c3-store-deploy` to upload an existing C3 item through the Chrome Web Store API v2
 - [ ] Add extension-side C0/C4 polling. Today the extension supports manual context import and manual fill, but it does not yet poll `/api/c3/pending-fills` on its own
 - [ ] Add C3 settings for backend URL, service token, polling enabled/disabled, poll interval, and one-active-run lock
 - [ ] Add MV3 `chrome.alarms` polling worker so the service worker can wake up reliably and check for pending fill requests
@@ -109,6 +111,7 @@ Browser proof and test gaps:
 - [ ] Add a cross-platform `python smoke.py c3` entrypoint. `docs/LOCAL_POSTGRES_SMOKES.md` currently says no C3 smoke exists
 - [ ] Add Playwright persistent-context harness that loads the unpacked extension, seeds profile/settings/apply context, opens fixture pages, clicks Fill, and asserts field values
 - [ ] Add local safe fixture pages for Workday-like, Greenhouse-like, Lever-like, Ashby-like, generic HTML application forms, generic signup/account forms, and non-job profile/contact forms
+- [x] Add first browser-backed generic required-field fixture and test
 - [ ] Add fixture coverage for text inputs, selects, custom comboboxes, radio groups, checkboxes, textareas, file uploads, required-field errors, multi-page forms, and final review pages
 - [ ] Add screenshot + HTML snapshot assertions so failures produce useful artifacts instead of only "fill failed"
 - [ ] Add API-level smoke that creates a C4 run, requests fill, lets the extension poll it, fills a local fixture page, posts the result, and verifies the run reaches `awaiting_submit_approval` or `manual_review`
@@ -169,7 +172,7 @@ Account, auth, and manual-control gaps:
 - [ ] Detect CAPTCHA, bot checks, MFA prompts, account locks, and access-control pages; stop and surface them clearly in C0
 - [ ] Keep final submit approval human-gated. C3 should fill and stop at review/submit until a narrow future allowlist exists
 - [ ] Add operator controls: pause polling, cancel active fill, retry current fill, clear active context, open evidence, and mark manual review resolved
-- [ ] Package the extension for repeatable install/update instead of relying only on Chrome "load unpacked" dev mode
+- [ ] Add signed Chrome Web Store/release-channel packaging after the standalone fixture smoke is passing
 
 ## C4 : Coordinator (run orchestrator)
 Reality check: C4 has a real DB-backed state machine, API/CLI surface, C3 bridge tests, submit approval flow, and a Postgres smoke. Do not treat it as finished automation until a real browser-backed worker completes a fill and C4 can recover stale runs.
