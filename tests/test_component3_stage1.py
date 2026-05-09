@@ -1,6 +1,8 @@
 import base64
+import json
 import os
 import sqlite3
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -12,6 +14,7 @@ if str(REPO_ROOT) not in sys.path:
 
 from hunter import db  # noqa: E402
 from scripts import c3_apply_prep  # noqa: E402
+from scripts.reload_c3_extension import find_c3_target  # noqa: E402
 
 
 class Component3Stage1Tests(unittest.TestCase):
@@ -290,6 +293,61 @@ class Component3Stage1Tests(unittest.TestCase):
             self.assertEqual(error.exception.job_id, job_id)
             self.assertEqual(error.exception.reason, "not_external_apply")
             self.assertIn("not_external_apply", error.exception.flags)
+
+    def test_resume_tex_parser_extracts_profile_from_main_tex(self):
+        parser_path = REPO_ROOT / "executioner" / "src" / "options" / "resume-parser.js"
+        main_tex_path = REPO_ROOT / "main.tex"
+        script = f"""
+            import {{ readFileSync }} from 'node:fs';
+            import {{ parseResumeTex, listMissingProfileFields }} from {json.dumps(parser_path.as_uri())};
+            const tex = readFileSync({json.dumps(str(main_tex_path))}, 'utf8');
+            const profile = parseResumeTex(tex);
+            console.log(JSON.stringify({{
+                profile,
+                missing: listMissingProfileFields(profile),
+            }}));
+        """
+
+        try:
+            result = subprocess.run(
+                ["node", "--input-type=module", "-e", script],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+        except FileNotFoundError:
+            self.skipTest("node is required to test the C3 TeX parser")
+
+        payload = json.loads(result.stdout)
+        profile = payload["profile"]
+
+        self.assertEqual(profile["fullName"], "Michael Shi")
+        self.assertEqual(profile["email"], "wenjian2@ualberta.ca")
+        self.assertEqual(profile["location"], "Edmonton, AB")
+        self.assertEqual(profile["websiteUrl"], "https://mshi.ca")
+        self.assertEqual(profile["linkedinUrl"], "https://linkedin.com/in/wjshi")
+        self.assertEqual(profile["githubUrl"], "https://github.com/micsushi")
+        self.assertIn("Phone", payload["missing"])
+
+    def test_devtools_target_picker_finds_c3_options_page(self):
+        target = find_c3_target(
+            [
+                {
+                    "id": "page-1",
+                    "type": "page",
+                    "title": "Other",
+                    "url": "https://example.com",
+                },
+                {
+                    "id": "extension-options",
+                    "type": "page",
+                    "title": "Hunt Apply Options",
+                    "url": "chrome-extension://abc/src/options/options.html",
+                },
+            ]
+        )
+
+        self.assertEqual(target["id"], "extension-options")
 
 
 if __name__ == "__main__":

@@ -161,6 +161,7 @@ export async function ensureStageOneState() {
     STORAGE_KEYS.activeApplyContext,
     STORAGE_KEYS.attempts,
     STORAGE_KEYS.questionAnswers,
+    STORAGE_KEYS.activityLog,
   ]);
 
   const settings = syncState[STORAGE_KEYS.settings]
@@ -183,6 +184,9 @@ export async function ensureStageOneState() {
   )
     ? localState[STORAGE_KEYS.questionAnswers].map(sanitizeQuestionAnswer)
     : [];
+  const activityLog = Array.isArray(localState[STORAGE_KEYS.activityLog])
+    ? localState[STORAGE_KEYS.activityLog].map(sanitizeActivityLogEntry)
+    : [];
 
   await setInSyncStorage({ [STORAGE_KEYS.settings]: settings });
   await setInLocalStorage({
@@ -191,6 +195,7 @@ export async function ensureStageOneState() {
     [STORAGE_KEYS.activeApplyContext]: activeApplyContext,
     [STORAGE_KEYS.attempts]: attempts,
     [STORAGE_KEYS.questionAnswers]: questionAnswers,
+    [STORAGE_KEYS.activityLog]: activityLog,
   });
 
   return {
@@ -200,6 +205,7 @@ export async function ensureStageOneState() {
     activeApplyContext,
     attempts,
     questionAnswers,
+    activityLog,
   };
 }
 
@@ -254,4 +260,59 @@ export async function appendQuestionAnswers(entries) {
   );
   await setInLocalStorage({ [STORAGE_KEYS.questionAnswers]: questionAnswers });
   return sanitizedEntries;
+}
+
+export function sanitizeActivityLogEntry(entry = {}) {
+  return {
+    id: sanitizeText(entry.id || crypto.randomUUID()),
+    createdAt: sanitizeText(entry.createdAt || new Date().toISOString()),
+    action: sanitizeText(entry.action),
+    status: sanitizeText(entry.status || "ok"),
+    summary: sanitizeText(entry.summary),
+    details: sanitizeActivityDetails(entry.details),
+  };
+}
+
+function sanitizeActivityDetails(details = {}) {
+  if (!details || typeof details !== "object" || Array.isArray(details)) {
+    return {};
+  }
+  return Object.fromEntries(
+    Object.entries(details)
+      .slice(0, 30)
+      .map(([key, value]) => [
+        sanitizeText(String(key)),
+        sanitizeDetailValue(value),
+      ])
+      .filter(([key]) => key),
+  );
+}
+
+function sanitizeDetailValue(value) {
+  if (typeof value === "boolean") {
+    return value;
+  }
+  if (Number.isFinite(Number(value)) && value !== "") {
+    return Number(value);
+  }
+  if (Array.isArray(value)) {
+    return value
+      .map((item) => sanitizeText(String(item)))
+      .filter(Boolean)
+      .slice(0, 20);
+  }
+  return sanitizeText(String(value ?? ""));
+}
+
+export async function appendActivityLog(entry) {
+  const state = await ensureStageOneState();
+  const nextEntry = sanitizeActivityLogEntry(entry);
+  const activityLog = clampList([...state.activityLog, nextEntry], 200);
+  await setInLocalStorage({ [STORAGE_KEYS.activityLog]: activityLog });
+  return nextEntry;
+}
+
+export async function clearActivityLog() {
+  await setInLocalStorage({ [STORAGE_KEYS.activityLog]: [] });
+  return [];
 }

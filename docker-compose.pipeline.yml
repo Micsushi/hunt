@@ -20,7 +20,7 @@ services:
   review:
     build:
       context: .
-      dockerfile: Dockerfile.review
+      dockerfile: docker/Dockerfile.review
     profiles: ["pipeline", "c0", "c1", "c2", "c1c2", "all"]
     depends_on:
       postgres:
@@ -52,7 +52,7 @@ services:
   hunter:
     build:
       context: .
-      dockerfile: Dockerfile.hunter
+      dockerfile: docker/Dockerfile.hunter
     profiles: ["pipeline", "c1", "c1c2", "all"]
     depends_on:
       postgres:
@@ -78,7 +78,7 @@ services:
   hunter-scheduler:
     build:
       context: .
-      dockerfile: Dockerfile.hunter
+      dockerfile: docker/Dockerfile.hunter
     profiles: ["pipeline", "c1", "c1c2", "all", "server"]
     depends_on:
       postgres:
@@ -152,7 +152,7 @@ services:
   fletcher:
     build:
       context: .
-      dockerfile: Dockerfile.fletcher
+      dockerfile: docker/Dockerfile.fletcher
     profiles: ["pipeline", "c2", "c1c2", "all"]
     depends_on:
       postgres:
@@ -179,7 +179,7 @@ services:
   coordinator:
     build:
       context: .
-      dockerfile: Dockerfile.coordinator
+      dockerfile: docker/Dockerfile.coordinator
     profiles: ["pipeline"]
     depends_on:
       postgres:
@@ -195,7 +195,7 @@ services:
   frontend:
     build:
       context: .
-      dockerfile: Dockerfile.frontend
+      dockerfile: docker/Dockerfile.frontend
     profiles: ["pipeline"]
     depends_on:
       - review

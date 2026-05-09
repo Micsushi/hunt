@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Smoke test: Dockerfile.frontend (nginx + SPA + backend proxy)
+# Smoke test: docker/Dockerfile.frontend (nginx + SPA + backend proxy)
 # Requires the full pipeline compose stack to be running (review + frontend).
 set -euo pipefail
 

@@ -196,8 +196,74 @@ def test_form_parser_declared_in_runtime_requirements():
     assert "python-multipart" in requirements
 
 
+def test_c3_extension_reload_dev_helper_exists():
+    helper = Path("scripts/reload_c3_extension.py")
+    hunterctl = Path("scripts/hunterctl.py").read_text(encoding="utf-8")
+    options_html = Path("executioner/src/options/options.html").read_text(encoding="utf-8")
+    options_js = Path("executioner/src/options/options.js").read_text(encoding="utf-8")
+
+    assert helper.is_file()
+    assert "c3-reload" in hunterctl
+    assert "reload-extension" in options_html
+    assert "chrome.runtime.reload()" in options_js
+
+
+def test_c3_extension_activity_log_hooks_exist():
+    settings_js = Path("executioner/src/shared/settings.js").read_text(encoding="utf-8")
+    storage_js = Path("executioner/src/shared/storage.js").read_text(encoding="utf-8")
+    background_js = Path("executioner/src/background/index.js").read_text(encoding="utf-8")
+    options_html = Path("executioner/src/options/options.html").read_text(encoding="utf-8")
+    options_js = Path("executioner/src/options/options.js").read_text(encoding="utf-8")
+
+    assert "activityLog" in settings_js
+    assert "appendActivityLog" in storage_js
+    assert "hunt.apply.log_activity" in background_js
+    assert "hunt.apply.clear_activity_log" in background_js
+    assert "activity-log" in options_html
+    assert "Export JSON" in options_html
+    assert "renderActivityLog" in options_js
+
+
+def test_c3_extension_quality_helper_exists():
+    helper = Path("scripts/executioner_quality.py")
+    checks = Path("scripts/run_component_checks.py").read_text(encoding="utf-8")
+    hunterctl = Path("scripts/hunterctl.py").read_text(encoding="utf-8")
+
+    helper_text = helper.read_text(encoding="utf-8")
+    assert helper.is_file()
+    assert "node" in helper_text
+    assert "--check" in helper_text
+    assert "prettier" in helper_text
+    assert "test.py" in helper_text
+    assert "executioner_quality.py" in checks
+    assert '"quality"' in hunterctl
+    assert 'f"c3-{command_name}"' in hunterctl
+    assert '"format"' in hunterctl
+    assert '"style-fix"' in hunterctl
+
+
+def test_repo_root_does_not_keep_dev_probe_files():
+    root_probe_files = [
+        "test_exit.ps1",
+        "test_exit2.ps1",
+        "test_path_exit.ps1",
+        "test_preference.ps1",
+        "test_preference2.ps1",
+        "test_startproc.ps1",
+        "test_stderr.ps1",
+        "linkedin_relogin_windows.log",
+        "hunt-local-test.db",
+    ]
+
+    for file_name in root_probe_files:
+        assert not Path(file_name).exists()
+
+    assert Path("tools/dev-probes/README.md").is_file()
+    assert Path("tests/fixtures/databases/README.md").is_file()
+
+
 def test_fletcher_container_smoke_assets_exist():
-    dockerfile = Path("Dockerfile.fletcher")
+    dockerfile = Path("docker/Dockerfile.fletcher")
     smoke_script = Path("scripts/smoke_fletcher_container.sh")
 
     assert dockerfile.is_file()
@@ -208,7 +274,7 @@ def test_fletcher_container_smoke_assets_exist():
     assert "EXPOSE 8002" in dockerfile_text
 
     smoke_text = smoke_script.read_text(encoding="utf-8")
-    assert "Dockerfile.fletcher" in smoke_text
+    assert "docker/Dockerfile.fletcher" in smoke_text
     assert "/status" in smoke_text
 
 
@@ -225,7 +291,7 @@ def test_pipeline_compose_shares_resume_artifacts_between_review_and_fletcher():
 
 
 def test_coordinator_container_smoke_assets_exist():
-    dockerfile = Path("Dockerfile.coordinator")
+    dockerfile = Path("docker/Dockerfile.coordinator")
     smoke_script = Path("scripts/smoke_coordinator_container.sh")
 
     assert dockerfile.is_file()
@@ -236,12 +302,12 @@ def test_coordinator_container_smoke_assets_exist():
     assert "EXPOSE 8003" in dockerfile_text
 
     smoke_text = smoke_script.read_text(encoding="utf-8")
-    assert "Dockerfile.coordinator" in smoke_text
+    assert "docker/Dockerfile.coordinator" in smoke_text
     assert "/status" in smoke_text
 
 
 def test_hunter_container_smoke_assets_exist():
-    dockerfile = Path("Dockerfile.hunter")
+    dockerfile = Path("docker/Dockerfile.hunter")
     smoke_script = Path("scripts/smoke_hunter_container.sh")
 
     assert dockerfile.is_file()
@@ -253,7 +319,7 @@ def test_hunter_container_smoke_assets_exist():
     assert "EXPOSE 8001" in dockerfile_text
 
     smoke_text = smoke_script.read_text(encoding="utf-8")
-    assert "Dockerfile.hunter" in smoke_text
+    assert "docker/Dockerfile.hunter" in smoke_text
     assert "/status" in smoke_text
 
 
@@ -265,10 +331,10 @@ def test_pipeline_compose_smoke_assets_exist():
     assert smoke_script.is_file()
 
     compose_text = compose_file.read_text(encoding="utf-8")
-    assert "Dockerfile.review" in compose_text
-    assert "Dockerfile.hunter" in compose_text
-    assert "Dockerfile.fletcher" in compose_text
-    assert "Dockerfile.coordinator" in compose_text
+    assert "docker/Dockerfile.review" in compose_text
+    assert "docker/Dockerfile.hunter" in compose_text
+    assert "docker/Dockerfile.fletcher" in compose_text
+    assert "docker/Dockerfile.coordinator" in compose_text
     assert "postgres:16" in compose_text
 
     smoke_text = smoke_script.read_text(encoding="utf-8")

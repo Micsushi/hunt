@@ -35,7 +35,7 @@ trap dump_logs ERR
 
 cd "$ROOT"
 
-docker build -f Dockerfile.review -t "$IMAGE" .
+docker build -f docker/Dockerfile.review -t "$IMAGE" .
 docker network create "$NETWORK" >/dev/null
 
 docker run -d \

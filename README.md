@@ -116,6 +116,7 @@ numeric guardrail keys.
 - C4 coordinator contract and commands: `docs/C4_COORDINATOR.md`
 - C2 Fletcher runtime, queue/history, and review workspace: `fletcher/README.md`
 - C2 settings and provider/runtime controls: `docs/C2_SETTINGS.md`
+- C3 safe testing runbook: `docs/C3_TESTING_RUNBOOK.md`
 - C4 shared worker protocol: `docs/C4_AGENT_WORKERS.md`
 - C4 OpenClaw runbook: `docs/C4_OPENCLAW_RUNBOOK.md`
 - C4 Hermes runbook: `docs/C4_HERMES_RUNBOOK.md`
@@ -137,6 +138,7 @@ numeric guardrail keys.
 - Short test groups: `python test.py c0`, `python test.py c1`, `python test.py c2`, `python test.py c3`, `python test.py c4`
 - Short quality checks: `python quality.py c0`, `python quality.py c1`, `python quality.py c2`, `python quality.py c3`, `python quality.py c4`
 - Full CI entrypoints: `python ci.py` and `python ci.py c0|c1|c2|c3|c4|shared|frontend`
+- Root hygiene: keep service Dockerfiles under `docker/`, one-off probes under `tools/dev-probes/`, and checked-in database fixtures under `tests/fixtures/databases/`.
 - Live fix tracker: `docs/TODO.md`
 
 Quick test aliases:
@@ -149,13 +151,26 @@ Quick test aliases:
 - `python test.py shared`: DB/runtime/deploy-readiness shared tests
 
 Quick quality aliases:
-- `python quality.py all`: Python Ruff + frontend lint/typecheck + Prettier checks + C3 Prettier check
+- `python quality.py all`: Python Ruff + frontend lint/typecheck + Prettier checks + C3 extension quality
 - `python quality.py c0`: backend Ruff + frontend lint/typecheck/Prettier
 - `python quality.py c1`: Hunter Ruff checks
 - `python quality.py c2`: Fletcher Ruff checks
-- `python quality.py c3`: Executioner Prettier check
+- `python quality.py c3`: Executioner JS syntax lint + Prettier check
 - `python quality.py c4`: Coordinator Ruff checks
 - `python quality.py shared`: scripts/tests Ruff checks
+
+C3 extension dev reload:
+- Options page button: `Reload Extension`
+- Terminal helper: `.\hunter.ps1 c3-reload`
+- Requires Chrome launched with `--remote-debugging-port=9222` for terminal reload.
+
+C3 extension quality:
+- `.\hunter.ps1 c3-quality`: lint + format check
+- `.\hunter.ps1 c3-test`: C3 pytest target
+- `.\hunter.ps1 c3-ci`: quality + tests
+- `.\hunter.ps1 c3-lint`: JS syntax lint only
+- `.\hunter.ps1 c3-format-check`: Prettier check only
+- `.\hunter.ps1 c3-format`: Prettier write
 
 Quick CI aliases:
 - `python ci.py all`: full quality checks plus full Python test suite

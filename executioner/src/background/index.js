@@ -1,5 +1,7 @@
 import {
+  appendActivityLog,
   clearActiveApplyContext,
+  clearActivityLog,
   ensureStageOneState,
   getExtensionState,
   saveActiveApplyContext,
@@ -10,6 +12,15 @@ import {
 import { detectAtsFromUrl } from "../ats/registry.js";
 import { runFillForTab } from "./fill-runner.js";
 
+async function logActivity(action, summary, details = {}, status = "ok") {
+  return appendActivityLog({
+    action,
+    summary,
+    details,
+    status,
+  });
+}
+
 async function handleMessage(message) {
   switch (message?.type) {
     case "hunt.apply.ping":
@@ -18,38 +29,109 @@ async function handleMessage(message) {
     case "hunt.apply.get_state":
       return { ok: true, ...(await getExtensionState()) };
 
-    case "hunt.apply.save_settings":
-      return { ok: true, settings: await saveSettings(message.payload || {}) };
+    case "hunt.apply.save_settings": {
+      const settings = await saveSettings(message.payload || {});
+      await logActivity("settings.save", "Behavior settings saved.", {
+        autofillOnLoad: settings.autofillOnLoad,
+        manualFillEnabled: settings.manualFillEnabled,
+        allowGeneratedAnswers: settings.allowGeneratedAnswers,
+      });
+      return { ok: true, settings };
+    }
 
-    case "hunt.apply.save_profile":
-      return { ok: true, profile: await saveProfile(message.payload || {}) };
+    case "hunt.apply.save_profile": {
+      const profile = await saveProfile(message.payload || {});
+      await logActivity("profile.save", "Candidate profile saved.", {
+        fullName: profile.fullName,
+        email: profile.email,
+        hasPhone: Boolean(profile.phone),
+        location: profile.location,
+      });
+      return { ok: true, profile };
+    }
 
-    case "hunt.apply.save_default_resume":
+    case "hunt.apply.save_default_resume": {
+      const defaultResume = await saveDefaultResume(message.payload || {});
+      await logActivity("resume.save", "Default resume saved.", {
+        label: defaultResume.label,
+        sourceType: defaultResume.sourceType,
+        pdfFileName: defaultResume.pdfFileName,
+        hasPdfData: Boolean(defaultResume.pdfDataUrl),
+      });
       return {
         ok: true,
-        defaultResume: await saveDefaultResume(message.payload || {}),
+        defaultResume,
       };
+    }
 
-    case "hunt.apply.set_apply_context":
+    case "hunt.apply.set_apply_context": {
+      const activeApplyContext = await saveActiveApplyContext(
+        message.payload || {},
+      );
+      await logActivity("context.import", "Active apply context imported.", {
+        jobId: activeApplyContext.jobId,
+        applyUrl: activeApplyContext.applyUrl,
+        atsType: activeApplyContext.atsType,
+        selectedResumeName: activeApplyContext.selectedResumeName,
+      });
       return {
         ok: true,
-        activeApplyContext: await saveActiveApplyContext(message.payload || {}),
+        activeApplyContext,
       };
+    }
 
-    case "hunt.apply.clear_apply_context":
-      return { ok: true, activeApplyContext: await clearActiveApplyContext() };
+    case "hunt.apply.clear_apply_context": {
+      const activeApplyContext = await clearActiveApplyContext();
+      await logActivity("context.clear", "Active apply context cleared.");
+      return { ok: true, activeApplyContext };
+    }
 
     case "hunt.apply.fill_current_page": {
       const state = await getExtensionState();
       if (!state.settings.manualFillEnabled) {
+        await logActivity(
+          "fill.skip",
+          "Manual fill skipped because manual fill is disabled.",
+          {},
+          "blocked",
+        );
         return {
           ok: false,
           reason: "manual_fill_disabled",
           message: "Manual fill is currently disabled in extension settings.",
         };
       }
-      return runFillForTab(message.payload?.tabId, state);
+      const result = await runFillForTab(message.payload?.tabId, state);
+      await logActivity(
+        result.ok ? "fill.complete" : "fill.failed",
+        result.message || (result.ok ? "Fill completed." : "Fill failed."),
+        {
+          jobId: state.activeApplyContext.jobId,
+          applyUrl:
+            result.attempt?.applyUrl || state.activeApplyContext.applyUrl,
+          atsType: result.attempt?.atsType,
+          filledFieldCount: result.attempt?.filledFieldCount,
+          manualReviewRequired: result.attempt?.manualReviewRequired,
+        },
+        result.ok ? "ok" : "failed",
+      );
+      return result;
     }
+
+    case "hunt.apply.clear_activity_log":
+      await clearActivityLog();
+      return { ok: true, activityLog: [] };
+
+    case "hunt.apply.log_activity":
+      return {
+        ok: true,
+        activity: await logActivity(
+          message.payload?.action || "extension.event",
+          message.payload?.summary || "Extension event.",
+          message.payload?.details || {},
+          message.payload?.status || "ok",
+        ),
+      };
 
     default:
       return {

@@ -39,7 +39,7 @@ CHECK_TARGETS = {
         (_frontend_command("lint"), ROOT / "frontend"),
         (_frontend_command("typecheck"), ROOT / "frontend"),
         (_npx_command("prettier", "--check", "src"), ROOT / "frontend"),
-        (_npx_command("prettier", "--check", "../executioner/src"), ROOT / "frontend"),
+        ([PYTHON, "scripts/executioner_quality.py", "quality"], ROOT),
     ],
     "c0": [
         ([PYTHON, "-m", "ruff", "check", "backend", "control_plane_api.py"], ROOT),
@@ -57,7 +57,7 @@ CHECK_TARGETS = {
         ([PYTHON, "-m", "ruff", "format", "--check", "fletcher"], ROOT),
     ],
     "c3": [
-        (_npx_command("prettier", "--check", "../executioner/src"), ROOT / "frontend"),
+        ([PYTHON, "scripts/executioner_quality.py", "quality"], ROOT),
     ],
     "c4": [
         ([PYTHON, "-m", "ruff", "check", "coordinator"], ROOT),

@@ -34,7 +34,7 @@ trap dump_logs ERR
 
 cd "$ROOT"
 
-docker build -f Dockerfile.coordinator -t "$IMAGE" .
+docker build -f docker/Dockerfile.coordinator -t "$IMAGE" .
 docker network create "$NETWORK" >/dev/null
 
 docker run -d \

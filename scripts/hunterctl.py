@@ -249,6 +249,26 @@ def cmd_verify_easy_apply(args):
     _run([PYTHON, "scripts/verify_easy_apply_filter.py", "--job-id", str(args.job_id)])
 
 
+def cmd_c3_reload(args):
+    _run(
+        [
+            PYTHON,
+            "scripts/reload_c3_extension.py",
+            "--host",
+            args.host,
+            "--port",
+            str(args.port),
+        ]
+    )
+
+
+def cmd_executioner_quality(args):
+    command = [PYTHON, "scripts/executioner_quality.py", args.executioner_command]
+    if args.dry_run:
+        command.append("--dry-run")
+    _run(command)
+
+
 def cmd_config(_args):
     import json
     import sys
@@ -922,6 +942,36 @@ def build_parser():
     )
     verify_easy_apply.add_argument("job_id", type=int)
     verify_easy_apply.set_defaults(func=cmd_verify_easy_apply)
+
+    c3_reload = subparsers.add_parser(
+        "c3-reload",
+        help="Reload the unpacked C3 Chrome extension through Chrome DevTools.",
+    )
+    c3_reload.add_argument("--host", default="127.0.0.1")
+    c3_reload.add_argument("--port", type=int, default=9222)
+    c3_reload.set_defaults(func=cmd_c3_reload)
+
+    c3_quality_commands = {
+        "quality": "quality",
+        "lint": "lint",
+        "format-check": "format-check",
+        "format": "format",
+        "test": "test",
+        "ci": "ci",
+        # Backwards-compatible aliases from the first C3 helper pass.
+        "style": "format-check",
+        "style-fix": "format",
+    }
+    for command_name, executioner_command in c3_quality_commands.items():
+        c3_quality = subparsers.add_parser(
+            f"c3-{command_name}",
+            help=f"Run C3 extension {command_name}.",
+        )
+        c3_quality.set_defaults(
+            func=cmd_executioner_quality,
+            executioner_command=executioner_command,
+        )
+        c3_quality.add_argument("--dry-run", action="store_true")
 
     config_cmd = subparsers.add_parser(
         "config",

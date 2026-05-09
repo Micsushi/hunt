@@ -90,7 +90,10 @@ C2 takes a job description and a base resume, then generates a tailored resume u
 C3 is a Chrome extension that polls C4 for pending fill jobs, fills out job application forms automatically, and posts the result back. It should also work as a generic page-aware form filler for non-job websites, account signup pages, and ordinary web forms. ATS = applicant tracking system (e.g. Workday, Greenhouse, Lever) - the software companies use to manage applications.
 
 Current gap inventory:
-- [ ] Fix C3 formatting so `python ci.py c3` can reach tests. Current known Prettier failures: `executioner/src/ats/registry.js`, `executioner/src/ats/workday/fill.js`, `executioner/src/shared/injected.js`
+- [x] Add safe layered C3 test runbook in `docs/C3_TESTING_RUNBOOK.md`
+- [x] Verify C3 formatting and tests with `python ci.py c3` on 2026-05-09
+- [x] Add C3 Options import from TeX resume to prefill profile basics and report remaining blanks
+- [x] Add C3 Activity Log for extension state changes and fill attempts, with JSON export and clear controls
 - [ ] Add extension-side C0/C4 polling. Today the extension supports manual context import and manual fill, but it does not yet poll `/api/c3/pending-fills` on its own
 - [ ] Add C3 settings for backend URL, service token, polling enabled/disabled, poll interval, and one-active-run lock
 - [ ] Add MV3 `chrome.alarms` polling worker so the service worker can wake up reliably and check for pending fill requests

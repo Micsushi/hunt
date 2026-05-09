@@ -5,6 +5,7 @@ export const STORAGE_KEYS = {
   activeApplyContext: "hunt.apply.activeApplyContext",
   attempts: "hunt.apply.attempts",
   questionAnswers: "hunt.apply.questionAnswers",
+  activityLog: "hunt.apply.activityLog",
 };
 
 export const DEFAULT_SETTINGS = {
