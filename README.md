@@ -8,10 +8,10 @@ Current operator confidence snapshot (subjective, as of 2026-05-08):
 - **C0**: mostly done
 - **C1 / Hunter**: about 95% done
 - **C2 / Fletcher**: about 80% done
-- **C3**: not meaningfully tested end to end yet
+- **C3**: standalone extension lane exists, but not meaningfully live-proven yet
 - **C4**: coordinator state machine, API, CLI, worker lease protocol, stale recovery, and OpenClaw/Hermes one-shot launcher exist; live browser/agent execution is not proven yet
 
-The most solid path today is **C0 + C1**, with Hunter now mostly down to live Easy Apply proof. C2 has grown into a strong operator workflow: Option B pasted-JD queue/history, Option A job-linked master-resume generation, persistent artifacts, PDF/TeX upload and export, full review workspace, manual edits, segment revert, compile, progress recovery, keyword inspection, logs, and multi-provider LLM configuration. C4 has a real DB-backed orchestration scaffold plus a worker lease/heartbeat/result protocol, but C3/OpenClaw/Hermes browser-backed runs are still the main unproven gap before long-running job-application agents can be trusted.
+The most solid path today is **C0 + C1**, with Hunter now mostly down to live Easy Apply proof. C2 has grown into a strong operator workflow: Option B pasted-JD queue/history, Option A job-linked master-resume generation, persistent artifacts, PDF/TeX upload and export, full review workspace, manual edits, segment revert, compile, progress recovery, keyword inspection, logs, and multi-provider LLM configuration. C3 now has a standalone extension lane for extension-local profile/resume fill plus a route vocabulary for generic, ATS-specific, DB-backed, and C4-backed fills. C4 has a real DB-backed orchestration scaffold plus a worker lease/heartbeat/result protocol, but C3/OpenClaw/Hermes browser-backed runs are still the main unproven gap before long-running job-application agents can be trusted.
 
 C0 note: the React SPA is the primary operator UI, but `/legacy/*` server-rendered routes still exist as fallback while we retire them.
 
@@ -23,6 +23,7 @@ Current focus:
 - keep C0 stable and documented accurately
 - finish C1's last live proof: verify Easy Apply filtering on a real matching row
 - validate C2's Option A/Option B workflows against real server2 jobs and keep improving generation quality
+- prove C3 standalone generic fill on safe fixture pages before trusting live job pages
 - harden C4 as the durable state machine for long-running Windows/WSL2/Linux job-application agents
 - keep Easy Apply classified as `easy_apply` and excluded from downstream external-apply automation
 
@@ -212,7 +213,7 @@ Testing posture by component:
 
 Current local checkpoint for later components:
 - `fletcher/` : **C2 (Fletcher)** has usable Option B pasted-JD and Option A job-linked workflows, a shared review workspace, provider/settings scaffolding, progress/restart recovery, and job-linked resume persistence. Treat generation quality, live C1 -> C2 server proof, keyword-list-only targeting, section-level regeneration, and provider model evaluation as the remaining risks.
-- `executioner/` : **C3 (Executioner)** local extension implementation exists, but it has not been meaningfully validated end to end through the live pipeline yet.
+- `executioner/` : **C3 (Executioner)** has standalone profile/resume storage, generic required-field fill, Workday-specific fill, activity logging, extension reload helpers, and named fill routes. It still needs browser-backed fixture proof and live ATS proof before it should be trusted on real applications.
 - `coordinator/` : **C4 (Coordinator)** DB-backed readiness/state-machine code, service routes, CLI commands, C3 bridge tests, and a Postgres smoke exist. It should still be treated as early-stage automation because live browser-backed workers and stale-run recovery are not proven yet.
 
 ## Legacy Helpers

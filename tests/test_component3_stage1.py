@@ -329,6 +329,66 @@ class Component3Stage1Tests(unittest.TestCase):
         self.assertEqual(profile["githubUrl"], "https://github.com/micsushi")
         self.assertIn("Phone", payload["missing"])
 
+    def test_fill_route_names_cover_standalone_db_and_c4_modes(self):
+        route_path = REPO_ROOT / "executioner" / "src" / "background" / "fill-routes.js"
+        script = f"""
+            import {{ selectFillRoute }} from {json.dumps(route_path.as_uri())};
+            const availableAdapters = ["generic", "workday"];
+            const routes = {{
+                standaloneGeneric: selectFillRoute({{
+                    activeApplyContext: {{}},
+                    detectedAtsType: "unknown",
+                    availableAdapters,
+                }}),
+                standaloneAts: selectFillRoute({{
+                    activeApplyContext: {{}},
+                    detectedAtsType: "workday",
+                    availableAdapters,
+                }}),
+                dbGeneric: selectFillRoute({{
+                    activeApplyContext: {{ jobId: "123", sourceMode: "db", atsType: "greenhouse" }},
+                    detectedAtsType: "greenhouse",
+                    availableAdapters,
+                }}),
+                dbAts: selectFillRoute({{
+                    activeApplyContext: {{ jobId: "123", sourceMode: "db", atsType: "workday" }},
+                    detectedAtsType: "workday",
+                    availableAdapters,
+                }}),
+                c4Generic: selectFillRoute({{
+                    activeApplyContext: {{ jobId: "123", sourceMode: "c4", atsType: "lever" }},
+                    detectedAtsType: "lever",
+                    availableAdapters,
+                }}),
+                c4Ats: selectFillRoute({{
+                    activeApplyContext: {{ jobId: "123", sourceMode: "c4", atsType: "workday" }},
+                    detectedAtsType: "workday",
+                    availableAdapters,
+                }}),
+            }};
+            console.log(JSON.stringify(routes));
+        """
+
+        try:
+            result = subprocess.run(
+                ["node", "--input-type=module", "-e", script],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+        except FileNotFoundError:
+            self.skipTest("node is required to test the C3 fill router")
+
+        routes = json.loads(result.stdout)
+        self.assertEqual(routes["standaloneGeneric"]["routeName"], "standalone_generic")
+        self.assertEqual(routes["standaloneAts"]["routeName"], "standalone_ats_specific")
+        self.assertEqual(routes["dbGeneric"]["routeName"], "db_generic")
+        self.assertTrue(routes["dbGeneric"]["usedGenericFallback"])
+        self.assertEqual(routes["dbAts"]["routeName"], "db_ats_specific")
+        self.assertEqual(routes["c4Generic"]["routeName"], "c4_generic")
+        self.assertTrue(routes["c4Generic"]["usedGenericFallback"])
+        self.assertEqual(routes["c4Ats"]["routeName"], "c4_ats_specific")
+
     def test_devtools_target_picker_finds_c3_options_page(self):
         target = find_c3_target(
             [

@@ -242,6 +242,37 @@ def test_c3_extension_quality_helper_exists():
     assert '"style-fix"' in hunterctl
 
 
+def test_c3_extension_has_standalone_manual_fill_path():
+    fill_runner = Path("executioner/src/background/fill-runner.js").read_text(encoding="utf-8")
+    generic_fill = Path("executioner/src/ats/generic/fill.js").read_text(encoding="utf-8")
+    generic_rules = Path("executioner/src/ats/generic/field-rules.js").read_text(encoding="utf-8")
+    popup_html = Path("executioner/src/popup/popup.html").read_text(encoding="utf-8")
+    popup_js = Path("executioner/src/popup/popup.js").read_text(encoding="utf-8")
+
+    assert "GENERIC_FIELD_RULES" in fill_runner
+    assert "selectFillRoute" in fill_runner
+    assert "fillRoute: route.routeName" in fill_runner
+    assert "createGenericFillFunction" in fill_runner
+    assert "detectedAtsType" in fill_runner
+    assert "sourceMode: extensionState.activeApplyContext.jobId" in fill_runner
+    assert "activeApplyContext.selectedResumePath ||" in fill_runner
+    assert "extensionState.defaultResume.pdfFileName" in fill_runner
+    assert "Generic form adapter for standalone manual fills" in generic_fill
+    assert 'atsType: "generic"' in generic_fill
+    assert "isRequired" in generic_fill
+    assert "chooseRequiredKnownValue" in generic_fill
+    assert "u.attachResumeToFileInput" in generic_fill
+    assert "generatedAnswerCount: 0" in generic_fill
+    assert "maiden name" in generic_rules
+    assert "preferred name" in generic_rules
+    assert "jobContextFields" in generic_rules
+    assert "position applied for" in generic_rules
+    assert "excludedPhrases" in generic_rules
+    assert 'id="fill-mode"' in popup_html
+    assert '"Standalone"' in popup_js
+    assert '"Job Context"' in popup_js
+
+
 def test_repo_root_does_not_keep_dev_probe_files():
     root_probe_files = [
         "test_exit.ps1",

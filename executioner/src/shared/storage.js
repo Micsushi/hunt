@@ -120,6 +120,7 @@ export function sanitizeAttempt(attempt = {}) {
     jobId: sanitizeText(String(attempt.jobId ?? "")),
     applyUrl: sanitizeUrl(attempt.applyUrl),
     atsType: sanitizeText(attempt.atsType || "workday"),
+    fillRoute: sanitizeText(attempt.fillRoute),
     status: sanitizeText(attempt.status || "filled"),
     authState: sanitizeText(attempt.authState || "unknown"),
     selectedResumeVersionId: sanitizeText(attempt.selectedResumeVersionId),

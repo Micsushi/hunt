@@ -15,6 +15,19 @@ function setStatus(message, tone = "info") {
   element.textContent = message;
 }
 
+function summarizeResume(resume = {}) {
+  return (
+    resume.label ||
+    resume.pdfFileName ||
+    resume.pdfPath ||
+    (resume.pdfDataUrl ? "Cached PDF" : "")
+  );
+}
+
+function summarizeMode(activeApplyContext = {}) {
+  return activeApplyContext.jobId ? "Job Context" : "Standalone";
+}
+
 async function loadState() {
   const response = await chrome.runtime.sendMessage({
     type: "hunt.apply.get_state",
@@ -28,10 +41,16 @@ async function loadState() {
   setText("active-apply-url", response.activeApplyContext.applyUrl || "None");
   setText(
     "active-resume-path",
-    response.activeApplyContext.selectedResumePath || "None",
+    response.activeApplyContext.selectedResumePath ||
+      response.activeApplyContext.selectedResumeName ||
+      "None",
   );
+  setText("fill-mode", summarizeMode(response.activeApplyContext));
   setText("profile-name", response.profile.fullName || "Not set");
-  setText("default-resume-path", response.defaultResume.pdfPath || "Not set");
+  setText(
+    "default-resume-path",
+    summarizeResume(response.defaultResume) || "Not set",
+  );
   setText(
     "autofill-on-load",
     response.settings.autofillOnLoad ? "Enabled" : "Disabled",
@@ -43,7 +62,12 @@ async function loadState() {
     latestAttempt?.resultSummary || "No attempts logged.",
   );
 
-  setStatus("Stage 1 state loaded.", "info");
+  setStatus(
+    response.activeApplyContext.jobId
+      ? "Job context mode loaded."
+      : "Standalone mode loaded.",
+    "info",
+  );
 }
 
 document.getElementById("fill-now")?.addEventListener("click", async () => {

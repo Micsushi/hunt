@@ -87,13 +87,16 @@ C2 takes a job description and a base resume, then generates a tailored resume u
 
 ## C3 : Executioner (browser form filler)
 
-C3 is a Chrome extension that polls C4 for pending fill jobs, fills out job application forms automatically, and posts the result back. It should also work as a generic page-aware form filler for non-job websites, account signup pages, and ordinary web forms. ATS = applicant tracking system (e.g. Workday, Greenhouse, Lever) - the software companies use to manage applications.
+C3 is a Chrome extension for browser-side form filling. Its first usable mode is standalone: it uses profile and resume data stored inside the extension and can fill obvious required fields on ordinary web forms without C0-C4 running. The later DB/C4 modes add job-specific context and generated C2 resumes, then post results back to the pipeline. ATS = applicant tracking system (for example Workday, Greenhouse, Lever) - the software companies use to manage applications.
 
 Current gap inventory:
 - [x] Add safe layered C3 test runbook in `docs/C3_TESTING_RUNBOOK.md`
 - [x] Verify C3 formatting and tests with `python ci.py c3` on 2026-05-09
 - [x] Add C3 Options import from TeX resume to prefill profile basics and report remaining blanks
 - [x] Add C3 Activity Log for extension state changes and fill attempts, with JSON export and clear controls
+- [x] Add standalone generic required-field fill route that uses only extension-local profile/default resume storage
+- [x] Add named fill routes: `standalone_generic`, `standalone_ats_specific`, `db_generic`, `db_ats_specific`, `c4_generic`, `c4_ats_specific`
+- [x] Add generic field-rule lists for profile fields, job-context fields, resume upload phrases, required markers, and exclusions
 - [ ] Add extension-side C0/C4 polling. Today the extension supports manual context import and manual fill, but it does not yet poll `/api/c3/pending-fills` on its own
 - [ ] Add C3 settings for backend URL, service token, polling enabled/disabled, poll interval, and one-active-run lock
 - [ ] Add MV3 `chrome.alarms` polling worker so the service worker can wake up reliably and check for pending fill requests
@@ -111,10 +114,12 @@ Browser proof and test gaps:
 - [ ] Add API-level smoke that creates a C4 run, requests fill, lets the extension poll it, fills a local fixture page, posts the result, and verifies the run reaches `awaiting_submit_approval` or `manual_review`
 
 Generic top-down fill gaps:
-- [ ] Build a page inventory pass that scans visible fields from top to bottom, including labels, placeholders, aria labels, surrounding section text, required markers, existing values, validation messages, and nearby buttons
-- [ ] Fill one field or one field group at a time, then observe the page again before continuing so dynamic validation and newly revealed fields are handled safely
+- [x] Add first generic required-field pass for normal HTML inputs/selects/radio groups/file inputs using labels, placeholders, aria labels, surrounding text, and required markers
+- [x] Fill matched generic fields one field or one field group at a time with a short delay
+- [ ] Add a fuller page inventory object that records field signatures, nearby section text, validation messages, existing values, and nearby navigation buttons
+- [ ] Re-observe the page after each generic field write so dynamic validation and newly revealed fields are handled safely
 - [ ] Add an LLM field-decision step for ambiguous fields: classify the field/question, choose a value or skip action, cite the source used, and return confidence
-- [ ] Use deterministic profile/resume matching before the LLM. The LLM should decide ambiguous mapping and paragraph answers, not replace obvious mappings like name, email, phone, links, work authorization, or resume upload
+- [x] Use deterministic profile/job-context matching before any LLM path for obvious fields like name, email, phone, links, job title, company, job URL, apply URL, and resume upload
 - [ ] Support paragraph-question answers such as "Why this company?" by grounding in company name, job description, candidate profile, selected resume facts, and reviewed answer history
 - [ ] Add generic account/signup support through the same filler: fill known signup/contact/profile fields, stop for email/SMS verification, CAPTCHA, MFA, account lock, payment, or final irreversible actions
 - [ ] Add required/optional policy: required fields are answered when policy and available context allow it; optional fields are skipped by default unless configured otherwise
@@ -123,9 +128,10 @@ Generic top-down fill gaps:
 - [ ] Store field decisions and outcomes so repeated websites and repeated questions get faster and safer over time
 
 Adapter architecture gaps:
-- [ ] Restructure the extension around a generic top-down filler plus one adapter file per ATS for platform-specific widgets and navigation
+- [x] Start restructuring around a generic filler plus ATS-specific adapters
 - [ ] Define adapter methods: detect page state, inventory fields, fill current step, detect required/missing fields, click next, detect submit/review page, collect evidence, and return normalized result
-- [ ] Treat the generic fallback adapter as the first proof target for normal HTML forms that do not need ATS-specific widgets
+- [x] Treat the generic fallback adapter as the first proof target for normal HTML forms that do not need ATS-specific widgets
+- [x] Add a route classifier so generic fill can be standalone, DB-backed, or C4-backed, and ATS-specific fill can use the same source split
 - [ ] Add a canonical field registry with field ids, label synonyms, confidence score, value source, and manual-review behavior
 - [ ] Add manual mapping memory: when the operator fixes a field mapping, store host/form-signature/field-signature mapping for future runs
 - [ ] Add safe retry/stuck recovery: wait for framework hydration, retry failed field set once, detect no-progress loops, then stop and flag manual review

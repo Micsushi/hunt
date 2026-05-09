@@ -3,13 +3,17 @@
 // the adapter fill function, then logs the attempt.
 // Adding a new ATS: import its createXxxFillFunction, add it to FILL_ADAPTERS.
 import { detectAtsFromUrl } from "../ats/registry.js";
+import { GENERIC_FIELD_RULES } from "../ats/generic/field-rules.js";
+import { createGenericFillFunction } from "../ats/generic/fill.js";
 import { createWorkdayFillFunction } from "../ats/workday/fill.js";
 import { appendAttempt, appendQuestionAnswers } from "../shared/storage.js";
+import { selectFillRoute } from "./fill-routes.js";
 
 // Map of ATS name → fill-function factory.
 // Each factory must return a self-contained async function (no outer references)
 // because Chrome serialises it via Function.prototype.toString() for injection.
 const FILL_ADAPTERS = {
+  generic: createGenericFillFunction,
   workday: createWorkdayFillFunction,
   // greenhouse: createGreenhouseFillFunction,
   // lever:      createLeverFillFunction,
@@ -38,9 +42,13 @@ export async function runFillForTab(tabId, extensionState) {
   const tabInfo = await chrome.tabs.get(activeTabId);
   const pageUrl = tabInfo.url || "";
 
-  // Prefer atsType already resolved by C1 enrichment; fall back to URL detection.
-  const atsType =
-    extensionState.activeApplyContext.atsType || detectAtsFromUrl(pageUrl);
+  const detectedAtsType = detectAtsFromUrl(pageUrl);
+  const route = selectFillRoute({
+    activeApplyContext: extensionState.activeApplyContext,
+    detectedAtsType,
+    availableAdapters: Object.keys(FILL_ADAPTERS),
+  });
+  const atsType = route.adapterName;
 
   const adapterFactory = FILL_ADAPTERS[atsType];
   if (!adapterFactory) {
@@ -69,6 +77,8 @@ export async function runFillForTab(tabId, extensionState) {
         settings: extensionState.settings,
         activeApplyContext: extensionState.activeApplyContext,
         defaultResume: extensionState.defaultResume,
+        fieldRules: GENERIC_FIELD_RULES,
+        fillRoute: route,
       },
     ],
   });
@@ -90,6 +100,7 @@ export async function runFillForTab(tabId, extensionState) {
     jobId: extensionState.activeApplyContext.jobId,
     applyUrl: extensionState.activeApplyContext.applyUrl || pageUrl,
     atsType: result.atsType || atsType,
+    fillRoute: route.routeName,
     status: result.ok ? "filled" : "failed",
     authState: result.authState || "unknown",
     selectedResumeVersionId:
@@ -97,7 +108,8 @@ export async function runFillForTab(tabId, extensionState) {
       extensionState.defaultResume.versionId,
     selectedResumePath:
       extensionState.activeApplyContext.selectedResumePath ||
-      extensionState.defaultResume.pdfPath,
+      extensionState.defaultResume.pdfPath ||
+      extensionState.defaultResume.pdfFileName,
     filledFieldCount: result.filledFieldCount || 0,
     generatedAnswerCount: result.generatedAnswerCount || 0,
     manualReviewRequired: Boolean(result.manualReviewRequired),
@@ -105,7 +117,7 @@ export async function runFillForTab(tabId, extensionState) {
     htmlSnapshot: result.htmlSnapshot || "",
     screenshotDataUrl,
     resultSummary: result.ok
-      ? `Filled ${result.filledFieldCount || 0} fields on a ${atsType} page.`
+      ? `Filled ${result.filledFieldCount || 0} fields via ${route.routeName}.`
       : result.message || result.reason || "Fill failed.",
   });
 
@@ -129,6 +141,7 @@ export async function runFillForTab(tabId, extensionState) {
       : result.message || "Fill failed.",
     attempt,
     generatedAnswers: answerEntries,
+    route,
     result,
   };
 }

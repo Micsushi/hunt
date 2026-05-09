@@ -9,7 +9,7 @@ Automated job application pipeline. Discover -> Enrich -> Tailor resume -> Autof
 | C0 | Frontend | `frontend/` + `backend/` | 0.2 | Mostly done. React SPA, FastAPI gateway, settings/accounts, logs, jobs, and C2/C3/C4 surfaces exist. Remaining work is smoke validation, polish, and a few UX gaps. |
 | C1 | Hunter | `hunter/` | 0.1 | About 95% done. Discovery/enrichment, service API, SQLite/Postgres compat, account/auth handling, settings UI, alerts, local Docker persistence, CLI, UI controls, server2 production cycle validation, and tests exist. Main remaining gap is live Easy Apply proof on a real matching row. |
 | C2 | Fletcher | `fletcher/` | 0.1 -> 1.0 | About 90% done. Option B review workflow and Option A master-resume/job-linked workflow exist with DB-backed queue/history, upload persistence, PDF import/export, shared review workspace, manual edits, segment revert, compile, logs, provider/settings support, milestone progress, restart recovery, job-linked resume persistence, starting artifacts, keyword inspector, and tests. Remaining gaps are real server2 C1 -> C2 proof, final generation-quality tuning, keyword-list-only targeting, section-level regeneration, and provider model evaluation. |
-| C3 | Executioner | `executioner/` | 0.0 | Not meaningfully tested end to end yet. Local extension code and an initial Workday path exist, but live polling, fill, and postback validation are still pending. |
+| C3 | Executioner | `executioner/` | 0.1 local | Standalone extension lane exists with profile/resume storage, generic required-field fill, Workday-specific fill, activity logging, reload helper, and route names for standalone/DB/C4 generic or ATS-specific fills. Browser-backed fixture proof, live ATS proof, polling, and postback validation are still pending. |
 | C4 | Coordinator | `coordinator/` | 0.1 scaffold | DB-backed readiness/state-machine code, service API, CLI, worker lease/heartbeat/result protocol, stale recovery, C3 bridge tests, submit approval, OpenClaw/Hermes launcher, and Postgres smoke pieces exist. It is not proven as real automation until a browser worker completes a live fill. |
 
 ## Current Operator Snapshot
@@ -19,7 +19,7 @@ This is your current confidence view (subjective, as of 2026-05-08):
 - C0: mostly done
 - C1 / Hunter: about 95% done
 - C2 / Fletcher: about 90% done
-- C3: not tested end to end yet
+- C3: standalone lane exists, but not live-proven end to end yet
 - C4: API/state-machine scaffold plus worker lease/agent launcher exists; live browser/agent execution not proven yet
 
 ## Current Priority
@@ -28,7 +28,7 @@ This is your current confidence view (subjective, as of 2026-05-08):
 2. Validate C1 on server2: scrape, enrich, artifacts, queue drain, steady scheduler
 3. Validate C2 usable operator flow on real jobs: C1 handoff, profile grounding, and better LLM/provider quality
 4. Harden C4 as the durable state machine for long-running agents on Windows/WSL2/Linux
-5. Prove C3 basics end to end before expanding ATS support
+5. Prove C3 standalone generic fill on safe fixtures before expanding ATS support
 6. Pilot OpenClaw and Hermes as optional C4 worker runtimes through the C4 one-shot launcher
 7. Keep deployment and smoke-test docs aligned with what is actually working
 
