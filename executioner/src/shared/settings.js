@@ -9,8 +9,20 @@ export const STORAGE_KEYS = {
 };
 
 export const DEFAULT_SETTINGS = {
+  settingsVersion: 3,
   autofillOnLoad: false,
   manualFillEnabled: true,
+  autoPromptEnabled: true,
+  fillRequiredOnly: true,
+  autoExportLogs: false,
+  autoExportLogPrefix: "hunt-c3-logs",
+  debugLogSinkEnabled: true,
+  c4PollingEnabled: false,
+  backendUrl: "http://127.0.0.1:8000",
+  serviceToken: "",
+  pollIntervalSeconds: 60,
+  heartbeatIntervalSeconds: 120,
+  oneActiveRunLock: true,
   allowGeneratedAnswers: true,
   flagLowConfidenceAnswers: true,
   stripLongDash: true,
@@ -29,6 +41,11 @@ export const DEFAULT_PROFILE = {
   willingToRelocate: true,
   openToAnyLocation: true,
   salaryFlexible: true,
+  coOpTermsCompleted: "",
+  availableSummer2026: "",
+  availableInterviewWindow: "",
+  expectedGraduationYear: "",
+  previousEmployers: "",
   notes: "",
 };
 

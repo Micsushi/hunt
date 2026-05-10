@@ -28,6 +28,55 @@ async function captureScreenshot() {
   }
 }
 
+function chooseBestFrameResult(frameResults = []) {
+  const usableResults = frameResults
+    .map((entry) => ({
+      frameId: entry.frameId,
+      result: entry.result || {},
+    }))
+    .filter((entry) => entry.result && entry.result.ok !== false);
+  if (!usableResults.length) {
+    return (
+      frameResults[0]?.result || {
+        ok: false,
+        reason: "missing_result",
+        message: "No fill result was returned.",
+      }
+    );
+  }
+  usableResults.sort((a, b) => {
+    const aFilled = Number(a.result.filledFieldCount || 0);
+    const bFilled = Number(b.result.filledFieldCount || 0);
+    if (aFilled !== bFilled) {
+      return bFilled - aFilled;
+    }
+    const aInventory = Array.isArray(a.result.fieldInventory)
+      ? a.result.fieldInventory.length
+      : 0;
+    const bInventory = Array.isArray(b.result.fieldInventory)
+      ? b.result.fieldInventory.length
+      : 0;
+    if (aInventory !== bInventory) {
+      return bInventory - aInventory;
+    }
+    return Number(a.frameId || 0) - Number(b.frameId || 0);
+  });
+  return {
+    ...usableResults[0].result,
+    frameId: usableResults[0].frameId,
+    frameResults: usableResults.map((entry) => ({
+      frameId: entry.frameId,
+      atsType: entry.result.atsType || "unknown",
+      filledFieldCount: entry.result.filledFieldCount || 0,
+      fieldInventoryCount: Array.isArray(entry.result.fieldInventory)
+        ? entry.result.fieldInventory.length
+        : 0,
+      manualReviewRequired: Boolean(entry.result.manualReviewRequired),
+      manualReviewReasons: entry.result.manualReviewReasons || [],
+    })),
+  };
+}
+
 export async function runFillForTab(tabId, extensionState) {
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
   const activeTabId = tabId || tab?.id;
@@ -63,13 +112,13 @@ export async function runFillForTab(tabId, extensionState) {
 
   // Step 1: inject shared utilities into the page.
   await chrome.scripting.executeScript({
-    target: { tabId: activeTabId },
+    target: { tabId: activeTabId, allFrames: true },
     files: ["src/shared/injected.js"],
   });
 
   // Step 2: inject and run the ATS-specific fill function.
-  const [injectionResult] = await chrome.scripting.executeScript({
-    target: { tabId: activeTabId },
+  const injectionResults = await chrome.scripting.executeScript({
+    target: { tabId: activeTabId, allFrames: true },
     func: adapterFactory(),
     args: [
       {
@@ -83,14 +132,11 @@ export async function runFillForTab(tabId, extensionState) {
     ],
   });
 
-  const result = injectionResult?.result || {
-    ok: false,
-    reason: "missing_result",
-    message: "No fill result was returned.",
-  };
+  const result = chooseBestFrameResult(injectionResults);
 
   const screenshotDataUrl = await captureScreenshot();
   const attemptId = crypto.randomUUID();
+  const manualReviewRequired = Boolean(result.manualReviewRequired);
 
   const attempt = await appendAttempt({
     id: attemptId,
@@ -101,7 +147,11 @@ export async function runFillForTab(tabId, extensionState) {
     applyUrl: extensionState.activeApplyContext.applyUrl || pageUrl,
     atsType: result.atsType || atsType,
     fillRoute: route.routeName,
-    status: result.ok ? "filled" : "failed",
+    status: result.ok
+      ? manualReviewRequired
+        ? "manual_review"
+        : "filled"
+      : "failed",
     authState: result.authState || "unknown",
     selectedResumeVersionId:
       extensionState.activeApplyContext.selectedResumeVersionId ||
@@ -112,12 +162,15 @@ export async function runFillForTab(tabId, extensionState) {
       extensionState.defaultResume.pdfFileName,
     filledFieldCount: result.filledFieldCount || 0,
     generatedAnswerCount: result.generatedAnswerCount || 0,
-    manualReviewRequired: Boolean(result.manualReviewRequired),
+    manualReviewRequired,
     manualReviewReasons: result.manualReviewReasons || [],
+    fieldInventory: result.fieldInventory || [],
     htmlSnapshot: result.htmlSnapshot || "",
     screenshotDataUrl,
     resultSummary: result.ok
-      ? `Filled ${result.filledFieldCount || 0} fields via ${route.routeName}.`
+      ? manualReviewRequired
+        ? `Filled ${result.filledFieldCount || 0} fields via ${route.routeName}; manual review needed.`
+        : `Filled ${result.filledFieldCount || 0} fields via ${route.routeName}.`
       : result.message || result.reason || "Fill failed.",
   });
 
@@ -137,7 +190,9 @@ export async function runFillForTab(tabId, extensionState) {
   return {
     ok: result.ok,
     message: result.ok
-      ? `Filled ${result.filledFieldCount || 0} fields and logged ${result.generatedAnswerCount || 0} generated answers.`
+      ? manualReviewRequired
+        ? `Filled ${result.filledFieldCount || 0} fields; manual review needed.`
+        : `Filled ${result.filledFieldCount || 0} fields and logged ${result.generatedAnswerCount || 0} generated answers.`
       : result.message || "Fill failed.",
     attempt,
     generatedAnswers: answerEntries,

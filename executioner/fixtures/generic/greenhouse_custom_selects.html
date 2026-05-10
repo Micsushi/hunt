@@ -1,0 +1,256 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>C3 Generic Greenhouse Custom Select Fixture</title>
+    <style>
+      body {
+        font-family: system-ui, sans-serif;
+        margin: 32px;
+        max-width: 760px;
+      }
+
+      .application-field {
+        border: 1px solid #d7d7d7;
+        border-radius: 6px;
+        margin: 18px 0;
+        padding: 14px 18px;
+      }
+
+      .field-label {
+        font-weight: 700;
+        margin-bottom: 10px;
+      }
+
+      .required {
+        color: #c12525;
+      }
+
+      .select__control {
+        border: 1px solid #c8c8c8;
+        border-radius: 4px;
+        padding: 8px;
+      }
+
+      input[role="combobox"] {
+        border: 0;
+        font: inherit;
+        outline: 0;
+        width: 100%;
+      }
+
+      .options {
+        border: 1px solid #c8c8c8;
+        display: none;
+        margin-top: 4px;
+      }
+
+      .option {
+        padding: 7px 8px;
+      }
+
+      .option:hover {
+        background: #eaf1ff;
+      }
+
+      .open .options {
+        display: block;
+      }
+    </style>
+  </head>
+  <body>
+    <form>
+      <div class="application-field custom-select" id="city-field">
+        <div id="city-label" class="field-label">
+          What City, Province are you located in?
+          <span class="required">*</span>
+        </div>
+        <div class="select__control">
+          <input
+            id="city-combo"
+            role="combobox"
+            aria-autocomplete="list"
+            aria-labelledby="city-label"
+            aria-required="true"
+            placeholder="Select..."
+          />
+        </div>
+        <div class="options">
+          <div class="option" role="option">Vancouver, British Columbia</div>
+          <div class="option" role="option">Toronto, Ontario</div>
+          <div class="option" role="option">Elsewhere in Canada</div>
+          <div class="option" role="option">Elsewhere in USA</div>
+          <div class="option" role="option">Other</div>
+        </div>
+      </div>
+
+      <div class="application-field custom-select" id="legal-field">
+        <div id="legal-label" class="field-label">
+          Are you legally eligible to work in the location you are applying for?
+          <span class="required">*</span>
+        </div>
+        <div class="select__control">
+          <input
+            id="legal-combo"
+            role="combobox"
+            aria-autocomplete="list"
+            aria-labelledby="legal-label"
+            aria-required="true"
+            placeholder="Select..."
+          />
+        </div>
+        <div class="options">
+          <div class="option" role="option">Yes</div>
+          <div class="option" role="option">No</div>
+        </div>
+      </div>
+
+      <div class="application-field custom-select" id="salary-field">
+        <div id="salary-label" class="field-label">
+          Are you comfortable with the following salary for your work term?
+          <span class="required">*</span>
+        </div>
+        <div class="select__control">
+          <input
+            id="salary-combo"
+            role="combobox"
+            aria-autocomplete="list"
+            aria-labelledby="salary-label"
+            aria-required="true"
+            placeholder="Select..."
+          />
+        </div>
+        <div class="options">
+          <div class="option" role="option">Yes</div>
+          <div class="option" role="option">No</div>
+        </div>
+      </div>
+
+      <div class="application-field custom-select" id="coop-field">
+        <div id="coop-label" class="field-label">
+          How many co-op terms have you completed to date?
+          <span class="required">*</span>
+        </div>
+        <div class="select__control">
+          <input
+            id="coop-combo"
+            role="combobox"
+            aria-autocomplete="list"
+            aria-labelledby="coop-label"
+            aria-required="true"
+            placeholder="Select..."
+          />
+        </div>
+        <div class="options">
+          <div class="option" role="option">
+            0 terms completed, this will be my 1st term
+          </div>
+          <div class="option" role="option">
+            1 term completed, this will be my 2nd term
+          </div>
+        </div>
+      </div>
+
+      <div class="application-field custom-select" id="term-field">
+        <div id="term-label" class="field-label">
+          Please confirm you are available for the Summer 2026 term.
+          <span class="required">*</span>
+        </div>
+        <div class="select__control">
+          <input
+            id="term-combo"
+            role="combobox"
+            aria-autocomplete="list"
+            aria-labelledby="term-label"
+            aria-required="true"
+            placeholder="Select..."
+          />
+        </div>
+        <div class="options">
+          <div class="option" role="option">Yes</div>
+          <div class="option" role="option">No</div>
+        </div>
+      </div>
+
+      <div class="application-field custom-select" id="interview-field">
+        <div id="interview-label" class="field-label">
+          Are you available to interview from April 14-24?
+          <span class="required">*</span>
+        </div>
+        <div class="select__control">
+          <input
+            id="interview-combo"
+            role="combobox"
+            aria-autocomplete="list"
+            aria-labelledby="interview-label"
+            aria-required="true"
+            placeholder="Select..."
+          />
+        </div>
+        <div class="options">
+          <div class="option" role="option">Yes</div>
+          <div class="option" role="option">No</div>
+        </div>
+      </div>
+
+      <div class="application-field custom-select" id="graduation-field">
+        <div id="graduation-label" class="field-label">
+          When is your expected graduation date?
+          <span class="required">*</span>
+        </div>
+        <div class="select__control">
+          <input
+            id="graduation-combo"
+            role="combobox"
+            aria-autocomplete="list"
+            aria-labelledby="graduation-label"
+            aria-required="true"
+            placeholder="Select..."
+          />
+        </div>
+        <div class="options">
+          <div class="option" role="option">2025</div>
+          <div class="option" role="option">2026</div>
+        </div>
+      </div>
+
+      <div class="application-field custom-select" id="previous-field">
+        <div id="previous-label" class="field-label">
+          Have you previously worked at Hootsuite?
+          <span class="required">*</span>
+        </div>
+        <div class="select__control">
+          <input
+            id="previous-combo"
+            role="combobox"
+            aria-autocomplete="list"
+            aria-labelledby="previous-label"
+            aria-required="true"
+            placeholder="Select..."
+          />
+        </div>
+        <div class="options">
+          <div class="option" role="option">Yes</div>
+          <div class="option" role="option">No</div>
+        </div>
+      </div>
+    </form>
+
+    <script>
+      document.querySelectorAll(".custom-select").forEach((field) => {
+        const input = field.querySelector("input");
+        input.addEventListener("focus", () => field.classList.add("open"));
+        input.addEventListener("click", () => field.classList.add("open"));
+        field.querySelectorAll('[role="option"]').forEach((option) => {
+          option.addEventListener("click", () => {
+            input.value = option.textContent.trim();
+            field.dataset.selected = input.value;
+            field.classList.remove("open");
+            input.dispatchEvent(new Event("input", { bubbles: true }));
+            input.dispatchEvent(new Event("change", { bubbles: true }));
+          });
+        });
+      });
+    </script>
+  </body>
+</html>

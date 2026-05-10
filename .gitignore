@@ -18,6 +18,7 @@ fletcher/bullet_library.md
 frontend/dist/
 frontend/node_modules/
 dist/
+logs/
 
 # Local agent context (private, not for repo)
 CLAUDE.md

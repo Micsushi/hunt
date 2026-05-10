@@ -45,8 +45,10 @@
         color: var(--ink);
         font-family: var(--font-sans);
         margin: 0;
-        min-width: 340px;
-        padding: 10px;
+        min-width: 390px;
+        overflow: hidden;
+        padding: 8px;
+        width: 390px;
       }
 
       h1,
@@ -56,26 +58,26 @@
       }
 
       h1 {
-        font-size: 18px;
+        font-size: 17px;
         letter-spacing: 0;
       }
 
       h2 {
-        font-size: 11px;
+        font-size: 10px;
         letter-spacing: 0.08em;
         text-transform: uppercase;
       }
 
       .stack {
         display: grid;
-        gap: 8px;
+        gap: 6px;
       }
 
       .card {
         background: var(--panel);
         border: 1px solid var(--line);
-        border-radius: var(--radius-md);
-        padding: 9px 10px;
+        border-radius: var(--radius-sm);
+        padding: 7px 8px;
       }
 
       .summary-card {
@@ -91,9 +93,9 @@
 
       .summary-grid {
         display: grid;
-        gap: 6px 8px;
+        gap: 5px 10px;
         grid-template-columns: 1fr 1fr;
-        margin-top: 7px;
+        margin-top: 6px;
       }
 
       .span-all {
@@ -103,31 +105,49 @@
       .label {
         color: var(--muted);
         display: block;
-        font-size: 9px;
+        font-size: 8px;
         font-weight: 800;
         letter-spacing: 0.08em;
-        margin-bottom: 2px;
+        margin-bottom: 1px;
         text-transform: uppercase;
       }
 
       .value {
-        font-size: 12px;
+        font-size: 11px;
         font-weight: 650;
-        line-height: 1.18;
-        word-break: break-word;
+        line-height: 1.1;
+        max-width: 100%;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
       }
 
       .compact-row {
         align-items: start;
         display: grid;
-        gap: 7px;
+        gap: 5px;
+        grid-template-columns: 82px minmax(0, 1fr);
+      }
+
+      .detail-grid {
+        display: grid;
+        gap: 6px 10px;
+        grid-template-columns: 1fr 1fr;
+        margin-top: 6px;
+      }
+
+      .detail-grid .compact-row {
         grid-template-columns: 78px minmax(0, 1fr);
       }
 
+      .detail-grid .span-all {
+        grid-column: 1 / -1;
+      }
+
       .actions {
-        display: flex;
-        flex-wrap: wrap;
-        gap: 8px;
+        display: grid;
+        gap: 6px;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
       }
 
       button {
@@ -136,12 +156,14 @@
         border-radius: var(--radius-sm);
         color: var(--ink);
         cursor: pointer;
-        flex: 1 1 auto;
         font: inherit;
-        font-size: 12px;
+        font-size: 11px;
         font-weight: 750;
-        min-height: 32px;
-        padding: 6px 9px;
+        min-height: 30px;
+        overflow: hidden;
+        padding: 5px 7px;
+        text-overflow: ellipsis;
+        white-space: nowrap;
         transition:
           background 160ms ease-out,
           border-color 160ms ease-out,
@@ -170,15 +192,19 @@
 
       .muted {
         color: var(--muted);
-        font-size: 11px;
+        font-size: 10px;
       }
 
       .status {
         border: 1px solid var(--line);
         border-radius: var(--radius-sm);
-        font-size: 11px;
+        font-size: 10px;
         font-weight: 500;
-        padding: 7px 8px;
+        line-height: 1.25;
+        max-height: 31px;
+        overflow: hidden;
+        padding: 5px 7px;
+        text-overflow: ellipsis;
       }
 
       .status.info {
@@ -196,7 +222,7 @@
       .header {
         align-items: center;
         display: flex;
-        gap: 8px;
+        gap: 7px;
       }
 
       .mark {
@@ -206,9 +232,13 @@
         color: var(--accent-ink);
         display: grid;
         font-weight: 850;
-        height: 30px;
+        height: 28px;
         place-items: center;
-        width: 30px;
+        width: 28px;
+      }
+
+      #clear-page {
+        grid-column: 1 / -1;
       }
     </style>
   </head>
@@ -250,7 +280,7 @@
 
       <section class="card">
         <h2>Defaults</h2>
-        <div class="stack" style="margin-top: 10px">
+        <div class="detail-grid">
           <div class="compact-row">
             <span class="label">Profile</span>
             <div id="profile-name" class="value">Not set</div>
@@ -263,17 +293,33 @@
             <span class="label">Autofill On Load</span>
             <div id="autofill-on-load" class="value">Disabled</div>
           </div>
+          <div class="compact-row">
+            <span class="label">Auto Prompt</span>
+            <div id="auto-prompt" class="value">Enabled</div>
+          </div>
+          <div class="compact-row">
+            <span class="label">Required Only</span>
+            <div id="required-only" class="value">Enabled</div>
+          </div>
+          <div class="compact-row">
+            <span class="label">Auto Export</span>
+            <div id="auto-export-logs" class="value">Disabled</div>
+          </div>
+          <div class="compact-row">
+            <span class="label">Local Logs</span>
+            <div id="debug-log-sink" class="value">Enabled</div>
+          </div>
         </div>
       </section>
 
       <section class="card">
         <h2>Latest Attempt</h2>
-        <div class="stack" style="margin-top: 10px">
+        <div class="detail-grid">
           <div class="compact-row">
             <span class="label">Status</span>
             <div id="latest-attempt-status" class="value">None</div>
           </div>
-          <div class="compact-row">
+          <div class="compact-row span-all">
             <span class="label">Summary</span>
             <div id="latest-attempt-summary" class="value">
               No attempts logged.
@@ -287,8 +333,8 @@
         <button id="open-options" class="secondary" type="button">
           Open Options
         </button>
-        <button id="clear-context" class="secondary" type="button">
-          Clear Context
+        <button id="clear-page" class="secondary" type="button">
+          Clear Current Page
         </button>
       </div>
     </div>

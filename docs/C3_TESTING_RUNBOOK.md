@@ -18,11 +18,16 @@ Run from the repo root:
 Expected coverage:
 
 - `test.py c3`: C3 apply-context prep, resume parser, and fill-route naming.
-- `test_component3_generic_fill.py`: browser-backed generic required-field fixture.
+- `test_component3_generic_fill.py`: browser-backed generic required-field fixtures, including basic HTML and Greenhouse-like hosted careers markup.
 - `test_component4_c3_bridge.py`: C4 pending-fill and fill-result bridge.
 - `ci.py c3`: Executioner JS syntax lint, Prettier check, and C3 tests.
 
 Do not call C3 locally green unless `ci.py c3` passes.
+
+Current local baseline: `.\.venv\Scripts\python.exe ci.py c3` passed on
+2026-05-10. This proves formatting, JS syntax, route/profile stage tests, and
+the basic and Greenhouse-like browser-backed generic filler fixtures. It does not prove the unpacked
+Chrome extension UI, C4 polling/postback, or live ATS behavior.
 
 ## Standalone Extension Setup
 
@@ -41,7 +46,12 @@ Then open C3 Options and configure:
 - candidate profile
 - default resume PDF
 - manual fill enabled
+- prompt on signup/ATS pages enabled for prompt testing, disabled if it gets noisy
+- fill required fields only enabled for first tests; disable it later to test filling optional known fields
+- local debug log sink enabled for C3 testing so logs stream into the repo while the backend is running
+- download JSON logs after fills disabled by default; enable only when you want a Downloads backup
 - autofill on load disabled for early testing
+- C4 polling disabled until the standalone fixture tests pass
 
 Profile shortcut: in Options, use Import profile from TeX resume, choose
 `main.tex`, then click Import Profile From TeX. The extension parses the resume
@@ -61,6 +71,29 @@ field group at a time. It skips optional fields and unknown custom fields.
 Start with a safe local/static form or a throwaway page. Do not start with a real
 irreversible application.
 
+Recommended first target:
+`c:\Users\sushi\Documents\Github\hunt\executioner\fixtures\generic\basic_required.html`.
+This mirrors the automated generic filler fixture but exercises the real loaded
+extension path.
+
+Additional manual fixtures:
+
+- `executioner\fixtures\generic\signup_account.html`: confirms generic filler skips username/password while filling known required contact fields.
+- `executioner\fixtures\generic\two_step_application.html`: confirms the current-step-only behavior. C3 should not click Next or Review yet; after manually moving to step two, trigger Fill again.
+- `executioner\fixtures\generic\greenhouse_like.html`: confirms Greenhouse-style sibling labels, required stars, contenteditable links, and hidden resume file inputs behind Attach-style controls.
+
+Real hosted careers pages may embed the actual application form in an iframe.
+Hootsuite does this: the top page is `careers.hootsuite.com`, while the form is
+loaded from `job-boards.greenhouse.io/embed/job_app`. Popup/manual fill now
+injects into all same-tab frames and keeps the frame result with the most filled
+fields.
+
+Detected-page prompt: the extension now injects a Hunt prompt on all ordinary
+URLs when it detects likely ATS, signup, or application form signals. Chrome
+does not reliably allow extensions to force-open the toolbar popup on arbitrary
+web pages, so the prompt is an in-page extension banner with Fill known fields
+and Not now buttons.
+
 Operator checklist:
 
 - Open a safe form page.
@@ -74,11 +107,41 @@ Operator checklist:
 Success criteria:
 
 - Correct identity/contact fields are filled.
-- Resume is attached when a required file input exists and a default resume is saved.
+- Resume is attached when a resume/CV file input exists and a default resume is saved, including hidden file inputs behind Attach-style controls.
 - Optional fields are skipped.
 - Unknown required fields remain for manual review instead of being guessed.
 - No final submit click occurs.
 - The Activity Log and latest attempt record the fill.
+- Latest attempt includes field inventory: field id/name/descriptor, required flag, skip reason, and value source.
+
+Descriptor matching currently uses deterministic phrase matching. It considers
+input type, autocomplete, data-testid, data-automation-id, name, id, aria-label,
+placeholder, nearby label/container text, sibling label text, and wrapper text.
+Value setting uses native browser setters so React-style controlled inputs can
+observe the change. Shared profile matching chooses the earliest strong field
+identity in the descriptor, so `last name ... first name` resolves to last name
+and `email ... first name` resolves to email. Workday inventory logs exact value
+sources such as `profile:firstName` or `profile:lastName`. There is no LLM field
+decisioner in the generic filler yet.
+
+Fill required fields only: enabled by default. When disabled, C3 still does not
+guess unknown fields, but it may fill optional fields that match known safe
+profile/job-context rules.
+
+Local debug log sink: Options has Local debug log sink and Test Log Sink. When
+enabled, extension activity and fill results post to the local backend endpoint
+`/api/c3/debug-log`; the backend appends JSONL entries to
+`logs/c3_extension_debug.jsonl` in the repo. This is the preferred testing path
+because Codex can read the file directly without a manual download. The sink
+requires the backend URL to point at the running local backend and, if the
+backend is using `HUNT_SERVICE_TOKEN`, the same service token must be saved in
+C3 Options.
+
+Manual log export: Options still has Download JSON logs after fills and Export
+Logs Now. Download JSON logs after fills is disabled by default. When enabled,
+Chrome saves JSON through the Downloads API under the folder prefix in
+Auto-export folder, default `hunt-c3-logs/`. Use this only as backup evidence if
+the local backend sink is unavailable.
 
 ## Pick A Safe Job For DB/C4 Context
 
@@ -139,15 +202,20 @@ Dev reload shortcuts:
 - Terminal reload requires Chrome to be running with remote debugging enabled,
   for example `chrome.exe --remote-debugging-port=9222`.
 
-Current limitation: `manifest.json` still only grants Workday host permissions
-plus active-tab/manual-click access. Generic fill can run on the current tab
-after a manual extension click, but non-Workday automatic injection needs
-manifest host permissions added deliberately.
+Current manifest scope: `manifest.json` grants `<all_urls>` for the testing
+build so generic prompt detection and manual fill can run on ordinary sites.
+Keep prompt-noise testing conservative before treating this as release-ready.
 
 Activity logging: C3 Options includes an Activity Log panel. It records extension
 state changes such as settings/profile/resume saves, TeX profile import, apply
 context import/clear, fill attempts, and reload requests. Use Export JSON to
 download the log or Clear Log to reset it.
+
+C4 polling scaffold: Options now exposes backend URL, service token, polling
+enabled, poll interval, heartbeat interval, one-active-run lock, and Poll C4
+Once. Treat this as unproven until a loaded-extension smoke shows the extension
+polling `/api/c3/pending-fills`, opening the claimed apply URL, filling the page,
+and posting `/api/c3/fill-result`.
 
 Extension quality commands:
 
@@ -212,6 +280,14 @@ Developer Dashboard before a first publish can succeed.
 
 Start with a local fixture or copied static Workday-like page when possible. If
 using a real Workday page, stop before submit.
+
+Before testing Workday resume upload, open Options and save a Default Resume PDF.
+The popup must show Default Resume as a filename or Cached PDF, not Not set.
+If C3 reaches a Workday resume page without cached resume data, latest attempt
+should become manual_review with `resume_upload:missing_resume_data`.
+Options should show a top-right toast after Save Default Resume. If no PDF is
+cached or selected, it should show a warning toast. During page fills, warnings
+such as missing default resume should appear as top-right page toasts.
 
 Operator checklist:
 

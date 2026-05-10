@@ -55,6 +55,26 @@ async function loadState() {
     "autofill-on-load",
     response.settings.autofillOnLoad ? "Enabled" : "Disabled",
   );
+  setText(
+    "auto-prompt",
+    response.settings.autoPromptEnabled ? "Enabled" : "Disabled",
+  );
+  setText(
+    "required-only",
+    response.settings.fillRequiredOnly ? "Enabled" : "Disabled",
+  );
+  setText(
+    "auto-export-logs",
+    response.settings.autoExportLogs ? "Enabled" : "Disabled",
+  );
+  setText(
+    "debug-log-sink",
+    response.settings.debugLogSinkEnabled ? "Enabled" : "Disabled",
+  );
+  setText(
+    "c4-polling",
+    response.settings.c4PollingEnabled ? "Enabled" : "Disabled",
+  );
   const latestAttempt = response.attempts?.[response.attempts.length - 1];
   setText("latest-attempt-status", latestAttempt?.status || "None");
   setText(
@@ -87,21 +107,18 @@ document.getElementById("open-options")?.addEventListener("click", async () => {
   await chrome.runtime.openOptionsPage();
 });
 
-document
-  .getElementById("clear-context")
-  ?.addEventListener("click", async () => {
-    const response = await chrome.runtime.sendMessage({
-      type: "hunt.apply.clear_apply_context",
-    });
-
-    if (!response?.ok) {
-      setStatus(response?.message || "Failed to clear active context.", "warn");
-      return;
-    }
-
-    await loadState();
-    setStatus("Active apply context cleared.", "info");
+document.getElementById("clear-page")?.addEventListener("click", async () => {
+  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+  const response = await chrome.runtime.sendMessage({
+    type: "hunt.apply.clear_current_page",
+    payload: { tabId: tab?.id || null },
   });
+
+  setStatus(
+    response?.message || "Failed to clear the current page.",
+    response?.ok ? "info" : "warn",
+  );
+});
 
 loadState().catch((error) => {
   setStatus(error instanceof Error ? error.message : String(error), "warn");

@@ -7,10 +7,15 @@
     "storage",
     "unlimitedStorage",
     "activeTab",
+    "alarms",
+    "downloads",
     "scripting",
     "tabs"
   ],
   "host_permissions": [
+    "<all_urls>",
+    "http://127.0.0.1/*",
+    "http://localhost/*",
     "https://*.myworkdayjobs.com/*",
     "https://*.workday.com/*"
   ],
@@ -26,8 +31,7 @@
   "content_scripts": [
     {
       "matches": [
-        "https://*.myworkdayjobs.com/*",
-        "https://*.workday.com/*"
+        "<all_urls>"
       ],
       "js": [
         "src/content/bootstrap.js"

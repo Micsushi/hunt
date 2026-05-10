@@ -15,15 +15,19 @@ export const GENERIC_FIELD_RULES = {
   ],
   excludedPhrases: [
     "account name",
+    "address line",
+    "cover letter",
     "current company",
     "emergency contact",
     "file name",
+    "postal code",
     "manager name",
     "password",
     "school name",
     "supervisor name",
     "team name",
     "username",
+    "zip code",
   ],
   profileFields: [
     {
@@ -94,7 +98,7 @@ export const GENERIC_FIELD_RULES = {
     {
       key: "location",
       valueKey: "location",
-      phrases: ["location", "city", "current city", "home city", "address"],
+      phrases: ["location", "city", "current city", "home city"],
     },
     {
       key: "linkedinUrl",

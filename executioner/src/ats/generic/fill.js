@@ -28,6 +28,7 @@ export function createGenericFillFunction() {
       });
     };
     var stripLongDash = settings.stripLongDash !== false;
+    var fillRequiredOnly = settings.fillRequiredOnly !== false;
     var containerSelectors = [
       "label",
       "fieldset",
@@ -37,6 +38,12 @@ export function createGenericFillFunction() {
       ".field",
       ".form-field",
       ".input-group",
+      ".application-field",
+      ".application-question",
+      '[class*="field"]',
+      '[class*="Field"]',
+      '[data-qa*="field"]',
+      '[data-testid*="field"]',
     ];
     var getDescriptor = function (el) {
       return u.getDescriptor(el, containerSelectors);
@@ -60,6 +67,7 @@ export function createGenericFillFunction() {
           el.getAttribute("placeholder"),
           el.getAttribute("data-required"),
           el.getAttribute("data-automation-id"),
+          getDescriptor(el),
           u.getContainerText(el, containerSelectors),
         ]
           .filter(Boolean)
@@ -115,9 +123,18 @@ export function createGenericFillFunction() {
       if (!descriptor || hasExcludedPhrase(descriptor)) {
         return null;
       }
+      var normalizedDescriptor = normalize(descriptor);
+      var isLegalWorkQuestion =
+        normalizedDescriptor.includes("legally") ||
+        normalizedDescriptor.includes("authorized") ||
+        normalizedDescriptor.includes("eligible to work") ||
+        normalizedDescriptor.includes("work authorization");
       var profileFields = rules.profileFields || [];
       for (var i = 0; i < profileFields.length; i++) {
         var rule = profileFields[i];
+        if (rule.key === "location" && isLegalWorkQuestion) {
+          continue;
+        }
         var value = profileValueForRule(rule);
         if (value && phraseMatches(descriptor, rule.phrases)) {
           return {
@@ -141,23 +158,63 @@ export function createGenericFillFunction() {
     };
     var isRequiredResumeInput = function (el, descriptor) {
       return (
-        isRequired(el) &&
         !hasExcludedPhrase(descriptor) &&
         (phraseMatches(descriptor, rules.resumePhrases || []) ||
-          el.accept.toLowerCase().includes("pdf") ||
           el.name.toLowerCase().includes("resume"))
       );
     };
 
     var filledFields = [];
     var manualReviewReasons = [];
+    var fieldInventory = [];
+    var resumeUploadDone = false;
+
+    var rectSummary = function (rect) {
+      return {
+        top: Math.round(rect.top),
+        left: Math.round(rect.left),
+        width: Math.round(rect.width),
+        height: Math.round(rect.height),
+      };
+    };
+    var inventoryEntry = function (candidate, descriptor, required, extra) {
+      var el =
+        candidate.kind === "radioGroup"
+          ? candidate.radios[0]
+          : candidate.element;
+      return Object.assign(
+        {
+          kind: candidate.kind,
+          tagName: el?.tagName || "",
+          type: el?.type || "",
+          name: el?.name || "",
+          id: el?.id || "",
+          descriptor: descriptor || "",
+          required: Boolean(required),
+          filled: false,
+          skippedReason: "",
+          valueSource: "",
+          rect: rectSummary(candidate.rect),
+        },
+        extra || {},
+      );
+    };
 
     var textInputs = u.getVisibleElements(
       'input:not([type="hidden"]):not([type="file"])',
     );
     var textareas = u.getVisibleElements("textarea");
     var selects = u.getVisibleElements("select");
-    var fileInputs = u.getVisibleElements('input[type="file"]');
+    var editableTextboxes = u
+      .getVisibleElements('[contenteditable="true"], [role="textbox"]')
+      .filter(function (el) {
+        return !["INPUT", "TEXTAREA"].includes(el.tagName);
+      });
+    var fileInputs = Array.from(
+      document.querySelectorAll('input[type="file"]'),
+    ).filter(function (el) {
+      return !el.disabled;
+    });
     var radios = u.getVisibleElements('input[type="radio"]');
 
     var radiosByName = new Map();
@@ -171,7 +228,12 @@ export function createGenericFillFunction() {
     }
 
     var candidates = [];
-    var flatEls = textInputs.concat(textareas, selects, fileInputs);
+    var flatEls = textInputs.concat(
+      textareas,
+      editableTextboxes,
+      selects,
+      fileInputs,
+    );
     for (var j = 0; j < flatEls.length; j++) {
       var el = flatEls[j];
       candidates.push({
@@ -203,11 +265,22 @@ export function createGenericFillFunction() {
           })
           .join(" ")
           .toLowerCase();
-        if (!candidate.radios.some(isRequired)) {
+        var radioRequired = candidate.radios.some(isRequired);
+        var radioInventory = inventoryEntry(
+          candidate,
+          radioDescriptor,
+          radioRequired,
+        );
+        fieldInventory.push(radioInventory);
+        if (fillRequiredOnly && !radioRequired) {
+          radioInventory.skippedReason = "not_required";
+          continue;
+        }
+        if (hasExcludedPhrase(radioDescriptor)) {
+          radioInventory.skippedReason = "excluded_phrase";
           continue;
         }
         if (
-          !hasExcludedPhrase(radioDescriptor) &&
           u.fillRadioGroup(
             candidate.radios,
             radioDescriptor,
@@ -215,34 +288,36 @@ export function createGenericFillFunction() {
             containerSelectors,
           )
         ) {
+          radioInventory.filled = true;
+          radioInventory.valueSource = "radio_rule";
           filledFields.push({
             field: radioDescriptor,
             valueSource: "radio_rule",
           });
           await sleep(perFieldDelayMs);
+        } else {
+          radioInventory.skippedReason = "no_known_match";
         }
         continue;
       }
 
       var elem = candidate.element;
       var desc = getDescriptor(elem);
-      if (!desc || !isRequired(elem)) {
-        continue;
-      }
-
-      if (elem.tagName === "SELECT") {
-        if (
-          !hasExcludedPhrase(desc) &&
-          u.fillSelectElement(elem, desc, profile, stripLongDash)
-        ) {
-          filledFields.push({ field: desc, valueSource: "select_rule" });
-          await sleep(perFieldDelayMs);
-        }
+      var required = isRequired(elem);
+      var elementInventory = inventoryEntry(candidate, desc, required);
+      fieldInventory.push(elementInventory);
+      if (!desc) {
+        elementInventory.skippedReason = "missing_descriptor";
         continue;
       }
 
       if (elem.tagName === "INPUT" && elem.type === "file") {
+        if (resumeUploadDone) {
+          elementInventory.skippedReason = "resume_already_uploaded";
+          continue;
+        }
         if (!isRequiredResumeInput(elem, desc)) {
+          elementInventory.skippedReason = "not_resume_input";
           continue;
         }
         var attachment = await u.attachResumeToFileInput(
@@ -251,25 +326,102 @@ export function createGenericFillFunction() {
           defaultResume,
         );
         if (attachment.attached) {
+          elementInventory.filled = true;
+          elementInventory.valueSource = "resume_upload";
+          resumeUploadDone = true;
           filledFields.push({
             field: desc || "resume_upload",
             valueSource: "resume_upload",
           });
           await sleep(perUploadDelayMs);
         } else {
+          elementInventory.skippedReason = "resume_upload:" + attachment.reason;
           manualReviewReasons.push("resume_upload:" + attachment.reason);
+        }
+        continue;
+      }
+
+      if (fillRequiredOnly && !required) {
+        elementInventory.skippedReason = "not_required";
+        continue;
+      }
+
+      if (elem.tagName === "SELECT") {
+        if (hasExcludedPhrase(desc)) {
+          elementInventory.skippedReason = "excluded_phrase";
+          continue;
+        }
+        var selectResult = u.fillSelectElement(
+          elem,
+          desc,
+          profile,
+          stripLongDash,
+        );
+        if (selectResult.filled) {
+          elementInventory.filled = true;
+          elementInventory.valueSource =
+            selectResult.valueSource || "select_rule";
+          filledFields.push({
+            field: desc,
+            valueSource: elementInventory.valueSource,
+          });
+          await sleep(perFieldDelayMs);
+        } else {
+          elementInventory.skippedReason =
+            selectResult.reason || "no_known_match";
+        }
+        continue;
+      }
+
+      if (
+        elem.getAttribute("role") === "combobox" ||
+        elem.getAttribute("aria-autocomplete") === "list" ||
+        elem.closest(".select__container")
+      ) {
+        if (hasExcludedPhrase(desc)) {
+          elementInventory.skippedReason = "excluded_phrase";
+          continue;
+        }
+        var comboResult = await u.fillComboboxElement(
+          elem,
+          desc,
+          profile,
+          stripLongDash,
+        );
+        if (comboResult.filled) {
+          elementInventory.filled = true;
+          elementInventory.valueSource =
+            comboResult.valueSource || "combobox_rule";
+          filledFields.push({
+            field: desc,
+            valueSource: elementInventory.valueSource,
+          });
+          await sleep(perFieldDelayMs);
+        } else {
+          elementInventory.skippedReason =
+            comboResult.reason || "no_known_match";
         }
         continue;
       }
 
       var match = chooseRequiredKnownValue(desc);
       if (match && u.setElementValue(elem, match.value, stripLongDash)) {
+        elementInventory.filled = true;
+        elementInventory.valueSource = match.key;
         filledFields.push({
           field: desc,
           valueSource: match.key,
         });
         await sleep(perFieldDelayMs);
+      } else {
+        elementInventory.skippedReason = hasExcludedPhrase(desc)
+          ? "excluded_phrase"
+          : "no_known_match";
       }
+    }
+
+    if (sorted.length > 0 && filledFields.length === 0) {
+      manualReviewReasons.push("no_known_fields_filled");
     }
 
     return {
@@ -281,6 +433,7 @@ export function createGenericFillFunction() {
       manualReviewRequired: manualReviewReasons.length > 0,
       manualReviewReasons: manualReviewReasons,
       filledFields: filledFields,
+      fieldInventory: fieldInventory,
       generatedAnswers: [],
       htmlSnapshot: document.documentElement.outerHTML.slice(0, 200000),
     };

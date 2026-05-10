@@ -9,7 +9,7 @@ This is your current confidence snapshot (subjective, as of 2026-05-08). The bac
 - C0: mostly done
 - C1 / Hunter: about 95% done
 - C2 / Fletcher: about 90% done
-- C3: not tested end to end yet
+- C3: generic `filler` exists and passes basic plus Greenhouse-like browser-backed fixture tests; the loaded Chrome extension, C4 bridge, and live ATS paths are not tested end to end yet
 - C4: API/state-machine scaffold exists; live browser/agent execution not proven yet
 
 Use that snapshot as the reality check when reading the detailed lists below.
@@ -91,33 +91,66 @@ C3 is a Chrome extension for browser-side form filling. Its first usable mode is
 
 Current gap inventory:
 - [x] Add safe layered C3 test runbook in `docs/C3_TESTING_RUNBOOK.md`
-- [x] Verify C3 formatting and tests with `python ci.py c3` on 2026-05-09
+- [x] Verify C3 formatting and tests with `python ci.py c3` on 2026-05-10
 - [x] Add C3 Options import from TeX resume to prefill profile basics and report remaining blanks
 - [x] Add C3 Activity Log for extension state changes and fill attempts, with JSON export and clear controls
 - [x] Add `filler` route that uses only extension-local profile/default resume storage for ordinary pages
 - [x] Add named fill routes: `filler`, `ats_filler`, `db_filler`, `db_ats_filler`, `c4_filler`, `c4_ats_filler`
 - [x] Add generic field-rule lists for profile fields, job-context fields, resume upload phrases, required markers, and exclusions
+- [x] Add generic descriptor matching over input type, autocomplete, data-testid, data-automation-id, name, id, aria-label, placeholder, and nearby label/container text
+- [x] Harden generic descriptor matching for Greenhouse-like hosted career pages: sibling label text, wrapper text, contenteditable textboxes, React-safe value setting, and hidden resume file inputs behind Attach buttons
+- [x] Harden shared profile matching so contaminated descriptors like `last name ... first name` choose `profile:lastName`, and Workday inventory logs exact profile value sources instead of generic `profile`
+- [x] Make popup/manual fills run inside same-tab iframes and choose the best frame result. This covers custom Greenhouse embeds such as Hootsuite, where the visible application form lives in a `job-boards.greenhouse.io` iframe inside a Webflow parent page
+- [x] Compact C3 popup layout so added status notifications do not create a full popup scrollbar. Popup now uses a wider fixed body, clipped status text, denser two-column detail grids, ellipsized values, and compact action buttons
+- [x] Add first safety guardrails from live screenshots: do not upload resume into cover-letter inputs, stop after one resume upload per fill run, skip Workday address-line/postal/work-history/education profile fills, and skip generated answers for Workday work-history/education textareas
+- [x] Replace popup `Clear Context` with `Clear Current Page`, which clears form fields/selections/files on the active tab across frames without clearing saved job context/profile/resume. Remove `Poll C4 Once` from the popup; C4 polling remains in Options
+- [x] Add Fill required fields only setting. Default is on; when off, generic filler fills optional fields it can confidently match and still skips unknown/dangerous fields
+- [x] Log generic field inventory on fill attempts: kind, tag/type, name, id, descriptor text, required flag, filled status, value source, skip reason, and screen rectangle
+- [x] Add local backend debug log sink for C3 testing. Extension activity/fill results can post to `/api/c3/debug-log`; backend appends JSONL to `logs/c3_extension_debug.jsonl`, which Codex can inspect directly
+- [x] Disable automatic log downloads by default. Keep Download JSON logs after fills and Export Logs Now as manual backup paths
+- [x] Add generic support for Greenhouse/React-style combobox selects. City/location, legal work authorization, sponsorship/relocation, and salary-comfort questions now commit a dropdown option instead of only typing into the internal input
+- [x] Prevent generic profile-location matching from answering legal/work-authorization questions just because the label contains the word `location`
+- [x] Improve Clear Current Page for uploaded file cards by clicking visible remove/delete controls near uploaded file/resume/cover-letter rows, not only clearing file inputs
+- [x] Add C3 profile fields for reusable application answers: co-op terms completed, Summer 2026 availability, interview-window availability, expected graduation year, and previous employers
+- [x] Fill Hootsuite/Greenhouse-style custom dropdowns from those structured profile fields when saved; leave them manual when the fact is unknown
+- [ ] Validate detected-page prompt on likely signup/application/ATS pages. Code scaffold injects a Hunt prompt on all URLs when page text/form signals look relevant, but this still needs loaded-extension testing
 - [x] Add `hunter.ps1 c3-package` to create a downloadable zip and unpacked extension folder under `dist/c3/`
 - [x] Add `hunter.ps1 c3-store-deploy` to upload an existing C3 item through the Chrome Web Store API v2
-- [ ] Add extension-side C0/C4 polling. Today the extension supports manual context import and manual fill, but it does not yet poll `/api/c3/pending-fills` on its own
-- [ ] Add C3 settings for backend URL, service token, polling enabled/disabled, poll interval, and one-active-run lock
-- [ ] Add MV3 `chrome.alarms` polling worker so the service worker can wake up reliably and check for pending fill requests
-- [ ] Add real extension postback to `/api/c3/fill-result` with run id, status, final URL, filled fields, missing required fields, generated answers used, resume upload status, manual-review flags, screenshots, and HTML evidence
+- [ ] Validate extension-side C0/C4 polling in a real loaded Chrome extension. Code scaffold exists for polling `/api/c3/pending-fills`, opening one apply URL, filling, and posting back, but it has not been browser-smoked
+- [ ] Validate C3 settings for backend URL, service token, polling enabled/disabled, poll interval, heartbeat interval, and one-active-run lock in real Options UI
+- [ ] Validate MV3 `chrome.alarms` polling worker wakeups in a real loaded extension session
+- [ ] Validate real extension postback to `/api/c3/fill-result` with run id, status, final URL, filled fields, missing required fields, generated answers used, resume upload status, manual-review flags, screenshots, and HTML evidence
 - [ ] Add stale-run handling: if a fill starts but the tab closes, login blocks, or the browser crashes, post a failed/manual-review result instead of leaving the C4 run stuck
-- [ ] Add C3 heartbeat/status reporting so C0 can distinguish "extension offline" from "no pending fills"
-- [ ] Expand `manifest.json` host permissions beyond Workday only when adapters are actually implemented. The registry currently lists more ATS families than the manifest can inject into
+- [ ] Validate C3 heartbeat/status reporting. Code scaffold posts `/api/c3/status`, but C0 does not yet show extension online/offline clearly
+- [ ] Validate `<all_urls>` manifest scope for C3 testing. It enables prompt detection/manual fill on ordinary sites, but prompt noise and privacy posture still need review before release packaging
 
 Browser proof and test gaps:
 - [ ] Add a cross-platform `python smoke.py c3` entrypoint. `docs/LOCAL_POSTGRES_SMOKES.md` currently says no C3 smoke exists
 - [ ] Add Playwright persistent-context harness that loads the unpacked extension, seeds profile/settings/apply context, opens fixture pages, clicks Fill, and asserts field values
-- [ ] Add local safe fixture pages for Workday-like, Greenhouse-like, Lever-like, Ashby-like, generic HTML application forms, generic signup/account forms, and non-job profile/contact forms
+- [ ] Add local safe fixture pages for Workday-like, Lever-like, Ashby-like, non-job profile/contact forms, and richer custom-widget cases. Basic generic application, Greenhouse-like hosted careers, generic signup/account, and simple two-step fixtures exist
 - [x] Add first browser-backed generic required-field fixture and test
+- [x] Add browser-backed Greenhouse-like generic fixture and test for sibling labels, required stars, contenteditable links, and hidden resume upload input
+- [ ] Manually load the unpacked Chrome extension, import `main.tex`, add missing phone, run `filler` against `executioner/fixtures/generic/basic_required.html`, inspect fields, and export Activity Log evidence
+- [ ] Manually retest `filler` on `careers.hootsuite.com` or another Greenhouse-style hosted careers page after reloading the unpacked extension. Confirm First Name, Last Name, Email, LinkedIn if present, and Resume/CV fill; confirm Preferred First Name and Phone follow the required-only setting
+- [ ] After iframe patch, confirm Hootsuite popup fill records a nonzero frame result and latest attempt field inventory comes from the Greenhouse iframe rather than the parent Webflow page
+- [ ] Manually test Fill required fields only on/off. Confirm optional known fields fill only when off, and unknown optional questions stay blank
+- [ ] Manually inspect exported Activity Log/latest attempt data and confirm field inventory includes labels/descriptors, ids, required flags, skip reasons, and filled value sources
+- [ ] Manually test Local debug log sink from C3 Options: start backend, save Backend URL/service token, click Test Log Sink, and confirm `logs/c3_extension_debug.jsonl` receives an entry
+- [ ] Manually run one fixture or live safe fill with Local debug log sink enabled and confirm the JSONL includes activity, detection, field inventory, fill result, and selected route
+- [ ] Manually retest Hootsuite custom select questions after 2026-05-10 structured answer patch. Expected: city/province selects `Elsewhere in Canada` for an Edmonton profile when exact Edmonton is unavailable; legal eligibility selects `Yes`; salary comfort selects `Yes`; co-op terms, term availability, interview availability, graduation year, and previous employer fill only after their profile fields are saved
+- [ ] Manually retest Clear Current Page on Hootsuite/Greenhouse after 2026-05-10 uploaded-file clear patch. Expected: uploaded resume/cover-letter file cards are removed when the page exposes visible remove/delete buttons
+- [ ] Manually test Download JSON logs after fills as an optional backup: enable it, run one fixture fill, and confirm a JSON file appears under the Chrome Downloads folder prefix, default `hunt-c3-logs/`
+- [x] Replace C3 log export blob URL with a service-worker-safe JSON data URL and add export success/failure feedback. Retest loaded extension: expected folder is Chrome Downloads `hunt-c3-logs/`
+- [ ] Manually test `filler` against `executioner/fixtures/generic/signup_account.html`; confirm known contact fields fill and username/password stay empty
+- [ ] Manually test `filler` against `executioner/fixtures/generic/two_step_application.html`; confirm current-step fields fill, no automatic next/review click happens, and second-step fields require a second manual fill after navigation
+- [ ] Manually test the auto prompt: open signup/account, generic application, and ATS-like pages and confirm the prompt appears only on relevant pages, dismiss works, and Fill known fields uses the current tab
 - [ ] Add fixture coverage for text inputs, selects, custom comboboxes, radio groups, checkboxes, textareas, file uploads, required-field errors, multi-page forms, and final review pages
 - [ ] Add screenshot + HTML snapshot assertions so failures produce useful artifacts instead of only "fill failed"
 - [ ] Add API-level smoke that creates a C4 run, requests fill, lets the extension poll it, fills a local fixture page, posts the result, and verifies the run reaches `awaiting_submit_approval` or `manual_review`
 
 Generic top-down fill gaps:
 - [x] Add first generic required-field pass for normal HTML inputs/selects/radio groups/file inputs using labels, placeholders, aria labels, surrounding text, and required markers
+- [x] Support generic sibling/wrapper labels and hidden resume file inputs common on hosted careers pages
 - [x] Fill matched generic fields one field or one field group at a time with a short delay
 - [ ] Add a fuller page inventory object that records field signatures, nearby section text, validation messages, existing values, and nearby navigation buttons
 - [ ] Re-observe the page after each generic field write so dynamic validation and newly revealed fields are handled safely
@@ -143,7 +176,13 @@ Adapter architecture gaps:
 Workday gaps:
 - [ ] Harden Workday multi-page flow: fill current step, save evidence, click next, wait for the next step, repeat until the review/submit page
 - [ ] Identify all visible required fields before filling and again after each next-page click
-- [ ] Handle Workday custom widgets, including comboboxes, search/dropdown pickers, repeated forms, date pickers, checkbox groups, and validation banners
+- [ ] Validate Workday resume upload after 2026-05-10 patch: default resume must be saved in Options; adapter now scans hidden enabled file inputs and logs `resume_upload:missing_resume_data` when no PDF is cached
+- [ ] Retest Workday My Information after 2026-05-10 profile matcher patch. Previously popup `Fill Current Page` used `ats_filler` and could fill Last Name as `Michael` because nearby descriptor text also contained First Name
+- [ ] Retest Workday after 2026-05-10 safety guardrails. Previous screenshot showed `Edmonton, AB` incorrectly placed in address lines, postal code, job title, company, and work location; role description got a generic generated answer; resume uploaded multiple times
+- [ ] Add explicit C3 profile fields for street address, city, province/state, postal code, phone number, phone device type, school, degree, field of study, graduation date, work history, and cover letter before enabling those fill targets
+- [ ] Validate Options resume save after 2026-05-10 patch: saving now writes the PDF directly to extension storage, preserves cached PDF on metadata edits, and shows top-right toast success/failure
+- [ ] Validate extension toasts: Options save/warning toasts appear top-right, and page-level missing-resume/fill-result toasts appear top-right on ATS pages
+- [ ] Handle Workday custom widgets, including comboboxes, search/dropdown pickers, repeated forms, date pickers, checkbox groups, file-drop upload zones without file inputs, and validation banners
 - [ ] Avoid double-filling already completed Workday fields when autofill-on-load fires after navigation
 - [ ] Detect Workday account/login/signup pages and pause cleanly for operator action when auth is required
 - [ ] Detect final submit/review page and stop before final submission unless a later explicit allowlist says otherwise
@@ -165,6 +204,11 @@ Profile, resume, and answer gaps:
 - [ ] Add confidence and source tags to every generated answer: deterministic, profile, resume, job description, LLM, manual
 - [ ] Fallback for unanswered required fields: safe deterministic answer only when policy allows it, otherwise leave blank and flag manual review
 - [ ] Support external LLM API keys for answer generation using the same provider/config direction as C2
+- [ ] Add C3 answer-decision backend route so the extension sends unresolved required questions to backend instead of calling models directly
+- [ ] Reuse `fletcher.llm.client.generate_json` for C3 fixed-choice and paragraph-answer decisions, with deterministic validators after every model response
+- [ ] Add C3 LLM provider status endpoint that reports selected provider, Ollama reachability, and cloud blocked/ready state without exposing secrets
+- [ ] Add C3 answer prompt cases: profile fact to option, yes/no policy, location option resolver, generated paragraph, sensitive/optional skip, and site memory
+- [ ] Add C3 answer settings: enable LLM fallback, allow cloud providers for C3, allow generated paragraphs, confidence threshold, and medium-confidence review behavior
 - [ ] Store generated-answer history by normalized question hash so repeated employer questions can reuse reviewed answers
 
 Account, auth, and manual-control gaps:

@@ -389,6 +389,151 @@ class Component3Stage1Tests(unittest.TestCase):
         self.assertTrue(routes["c4Filler"]["usedGenericFallback"])
         self.assertEqual(routes["c4AtsFiller"]["routeName"], "c4_ats_filler")
 
+    def test_extension_has_c4_polling_scaffold(self):
+        backend_app = (REPO_ROOT / "backend" / "app.py").read_text(encoding="utf-8")
+        manifest = json.loads((REPO_ROOT / "executioner" / "manifest.json").read_text())
+        settings = (REPO_ROOT / "executioner" / "src" / "shared" / "settings.js").read_text(
+            encoding="utf-8"
+        )
+        storage = (REPO_ROOT / "executioner" / "src" / "shared" / "storage.js").read_text(
+            encoding="utf-8"
+        )
+        api = (REPO_ROOT / "executioner" / "src" / "shared" / "api.js").read_text(
+            encoding="utf-8"
+        )
+        background = (
+            REPO_ROOT / "executioner" / "src" / "background" / "index.js"
+        ).read_text(encoding="utf-8")
+        options = (REPO_ROOT / "executioner" / "src" / "options" / "options.html").read_text(
+            encoding="utf-8"
+        )
+
+        self.assertIn("alarms", manifest["permissions"])
+        self.assertIn("downloads", manifest["permissions"])
+        self.assertIn("<all_urls>", manifest["host_permissions"])
+        self.assertEqual(manifest["content_scripts"][0]["matches"], ["<all_urls>"])
+        self.assertIn("http://127.0.0.1/*", manifest["host_permissions"])
+        self.assertIn("c4PollingEnabled", settings)
+        self.assertIn("autoPromptEnabled", settings)
+        self.assertIn("fillRequiredOnly", settings)
+        self.assertIn("settingsVersion", settings)
+        self.assertIn("autoExportLogs", settings)
+        self.assertIn("debugLogSinkEnabled", settings)
+        self.assertIn("coOpTermsCompleted", settings)
+        self.assertIn("autoExportLogPrefix", settings)
+        self.assertIn("backendUrl", settings)
+        self.assertIn("serviceToken", settings)
+        self.assertIn("pollIntervalSeconds", storage)
+        self.assertIn("fetchPendingFills", api)
+        self.assertIn("/api/c3/pending-fills", api)
+        self.assertIn("/api/c3/fill-result", api)
+        self.assertIn("/api/c3/debug-log", api)
+        self.assertIn("chrome.alarms.onAlarm", background)
+        self.assertIn("hunt.apply.poll_c4_once", background)
+        self.assertIn('id="c4-polling-enabled"', options)
+        self.assertIn('id="poll-c4-once"', options)
+        self.assertIn('id="auto-prompt-enabled"', options)
+        self.assertIn('id="fill-required-only"', options)
+        self.assertIn('id="auto-export-logs"', options)
+        self.assertIn('id="debug-log-sink-enabled"', options)
+        self.assertIn('id="auto-export-log-prefix"', options)
+        self.assertIn('id="export-logs-now"', options)
+        self.assertIn('id="test-debug-log-sink"', options)
+        self.assertIn('id="activity-log-count"', options)
+        self.assertIn("max-height: min(420px, 52vh)", options)
+        self.assertIn("hunt.apply.export_logs", background)
+        self.assertIn("hunt.apply.test_debug_log_sink", background)
+        self.assertIn("chrome.downloads.download", background)
+        self.assertIn("data:application/json;base64", background)
+        self.assertIn("utf8Base64", background)
+        self.assertNotIn("URL.createObjectURL", background)
+        self.assertIn("showPageToast", background)
+        self.assertIn("looksLikeUploadedFile", background)
+        self.assertIn("sendDebugLog", background)
+        self.assertIn("postDebugLog", background)
+        self.assertIn("fill_result", background)
+        self.assertIn("No default resume is saved", background)
+        self.assertIn('@app.post("/api/c3/debug-log")', backend_app)
+        self.assertIn("c3_extension_debug.jsonl", backend_app)
+
+    def test_extension_has_detected_page_prompt_for_signup_and_ats_pages(self):
+        content = (REPO_ROOT / "executioner" / "src" / "content" / "bootstrap.js").read_text(
+            encoding="utf-8"
+        )
+        popup = (REPO_ROOT / "executioner" / "src" / "popup" / "popup.html").read_text(
+            encoding="utf-8"
+        )
+        background = (
+            REPO_ROOT / "executioner" / "src" / "background" / "index.js"
+        ).read_text(encoding="utf-8")
+
+        self.assertIn("detectPageKind", content)
+        self.assertIn("ATS_HOST_PATTERNS", content)
+        self.assertIn("SIGNUP_TERMS", content)
+        self.assertIn("hunt.apply.fill_current_page", content)
+        self.assertIn("hunt.apply.show_toast", content)
+        self.assertIn("hunt-apply-page-toasts", content)
+        self.assertIn("detected_page_prompt", content)
+        self.assertIn("Prompt on signup/ATS pages", (REPO_ROOT / "executioner" / "src" / "options" / "options.html").read_text(encoding="utf-8"))
+        self.assertIn('id="auto-prompt"', popup)
+        self.assertIn('id="clear-page"', popup)
+        self.assertNotIn('id="poll-c4-once"', popup)
+        self.assertNotIn('id="clear-context"', popup)
+        self.assertIn("sender.tab?.id", background)
+        self.assertIn("hunt.apply.clear_current_page", background)
+        self.assertIn("page.clear", background)
+        self.assertIn("allFrames: true", background)
+
+    def test_options_resume_save_uses_direct_storage_and_toasts(self):
+        options = (REPO_ROOT / "executioner" / "src" / "options" / "options.js").read_text(
+            encoding="utf-8"
+        )
+
+        self.assertIn("saveDefaultResumeDirect", options)
+        self.assertIn("showToast", options)
+        self.assertIn("Choose a PDF resume before saving.", options)
+        self.assertIn("Default resume saved:", options)
+        self.assertIn("currentDefaultResume", options)
+
+    def test_generic_manual_fixture_pages_exist_for_next_smokes(self):
+        fixture_dir = REPO_ROOT / "executioner" / "fixtures" / "generic"
+        signup = (fixture_dir / "signup_account.html").read_text(encoding="utf-8")
+        two_step = (fixture_dir / "two_step_application.html").read_text(encoding="utf-8")
+        custom_selects = (fixture_dir / "greenhouse_custom_selects.html").read_text(
+            encoding="utf-8"
+        )
+
+        self.assertIn("Username", signup)
+        self.assertIn("Password", signup)
+        self.assertIn("Position applied for", two_step)
+        self.assertIn("Why are you interested?", two_step)
+        self.assertIn('role="combobox"', custom_selects)
+        self.assertIn("legally eligible to work", custom_selects)
+        self.assertIn("expected graduation date", custom_selects)
+
+    def test_workday_adapter_handles_hidden_file_inputs_and_missing_resume_logging(self):
+        workday = (REPO_ROOT / "executioner" / "src" / "ats" / "workday" / "fill.js").read_text(
+            encoding="utf-8"
+        )
+        fill_runner = (
+            REPO_ROOT / "executioner" / "src" / "background" / "fill-runner.js"
+        ).read_text(encoding="utf-8")
+
+        self.assertIn("document.querySelectorAll('input[type=\"file\"]')", workday)
+        self.assertIn("resume_upload:missing_resume_data", workday)
+        self.assertIn("pageLooksLikeResumeUpload", workday)
+        self.assertIn("fieldInventory", workday)
+        self.assertIn('"manual_review"', fill_runner)
+        self.assertIn("manual review needed", fill_runner)
+        self.assertIn("allFrames: true", fill_runner)
+        self.assertIn("chooseBestFrameResult", fill_runner)
+        self.assertIn("frameResults", fill_runner)
+        self.assertIn("shouldSkipProfileFill", workday)
+        self.assertIn("unsafe_profile_context", workday)
+        self.assertIn("unsafe_generated_answer_context", workday)
+        self.assertIn("resume_already_uploaded", workday)
+        self.assertIn("not_resume_input", workday)
+
     def test_devtools_target_picker_finds_c3_options_page(self):
         target = find_c3_target(
             [

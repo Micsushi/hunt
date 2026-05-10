@@ -4050,6 +4050,41 @@ async def api_c3_fill_result(
     return await _proxy_post(f"{HUNT_COORDINATOR_URL}/c3/fill-result", body)
 
 
+@app.post("/api/c3/status")
+async def api_c3_status(
+    request: Request, _auth: str = Depends(require_session_or_service_token)
+):
+    body = await request.json()
+    return {
+        "ok": True,
+        "received_at": datetime.now(UTC).isoformat(),
+        "status": body,
+    }
+
+
+@app.post("/api/c3/debug-log")
+async def api_c3_debug_log(
+    request: Request, _auth: str = Depends(require_session_or_service_token)
+):
+    body = await request.json()
+    log_dir = REPO_ROOT / "logs"
+    log_dir.mkdir(parents=True, exist_ok=True)
+    log_path = log_dir / "c3_extension_debug.jsonl"
+    entry = {
+        "received_at": datetime.now(UTC).isoformat(),
+        "source": "c3_extension",
+        "payload": body,
+    }
+    with log_path.open("a", encoding="utf-8") as fh:
+        fh.write(json.dumps(entry, ensure_ascii=False, default=str))
+        fh.write("\n")
+    return {
+        "ok": True,
+        "path": str(log_path),
+        "received_at": entry["received_at"],
+    }
+
+
 # ---------------------------------------------------------------------------
 # Health (unauthenticated - for monitoring scripts)
 # ---------------------------------------------------------------------------

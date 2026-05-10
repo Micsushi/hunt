@@ -215,7 +215,7 @@ Testing posture by component:
 
 Current local checkpoint for later components:
 - `fletcher/` : **C2 (Fletcher)** has usable Option B pasted-JD and Option A job-linked workflows, a shared review workspace, provider/settings scaffolding, progress/restart recovery, and job-linked resume persistence. Treat generation quality, live C1 -> C2 server proof, keyword-list-only targeting, section-level regeneration, and provider model evaluation as the remaining risks.
-- `executioner/` : **C3 (Executioner)** has standalone profile/resume storage, generic required-field fill, Workday-specific fill, activity logging, extension reload helpers, and named fill routes. It still needs browser-backed fixture proof and live ATS proof before it should be trusted on real applications.
+- `executioner/` : **C3 (Executioner)** has standalone profile/resume storage, generic required-field fill, a browser-backed basic generic fixture test, Workday-specific fill, activity logging, extension reload helpers, named fill routes, detected-page prompt scaffold, and C4 polling/postback scaffold. It still needs a manual loaded-extension fixture proof, prompt-noise validation, C4 polling/postback proof, broader fixture coverage, and live ATS proof before it should be trusted on real applications.
 - `coordinator/` : **C4 (Coordinator)** DB-backed readiness/state-machine code, service routes, CLI commands, C3 bridge tests, and a Postgres smoke exist. It should still be treated as early-stage automation because live browser-backed workers and stale-run recovery are not proven yet.
 
 ## Legacy Helpers

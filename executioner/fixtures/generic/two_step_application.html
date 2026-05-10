@@ -1,0 +1,73 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>C3 Two Step Application Fixture</title>
+    <style>
+      body {
+        font-family: system-ui, sans-serif;
+        margin: 32px;
+        max-width: 760px;
+      }
+      form,
+      section {
+        display: grid;
+        gap: 12px;
+      }
+      label {
+        display: grid;
+        gap: 4px;
+      }
+      input,
+      textarea {
+        min-height: 32px;
+      }
+      [hidden] {
+        display: none;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>Two Step Application Fixture</h1>
+    <form>
+      <section id="step-one">
+        <h2>Contact</h2>
+        <label>
+          First name *
+          <input id="first-name" required />
+        </label>
+        <label>
+          Last name *
+          <input id="last-name" required />
+        </label>
+        <label>
+          Email *
+          <input id="email" type="email" required />
+        </label>
+        <button id="next" type="button">Next</button>
+      </section>
+      <section id="step-two" hidden>
+        <h2>Role</h2>
+        <label>
+          Position applied for *
+          <input id="position" required />
+        </label>
+        <label>
+          LinkedIn profile *
+          <input id="linkedin" required />
+        </label>
+        <label>
+          Why are you interested?
+          <textarea id="why-company"></textarea>
+        </label>
+        <button type="button">Review</button>
+      </section>
+    </form>
+    <script>
+      document.getElementById("next").addEventListener("click", () => {
+        document.getElementById("step-one").hidden = true;
+        document.getElementById("step-two").hidden = false;
+      });
+    </script>
+  </body>
+</html>

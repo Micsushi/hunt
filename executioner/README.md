@@ -11,6 +11,16 @@ Current scope:
 Current implementation:
 - local profile, resume, settings, and apply-context storage
 - standalone generic fill for obvious required identity/contact/job-context fields
+- generic descriptor matching over type/autocomplete/data attributes/name/id/labels/placeholders/nearby text
+- Fill required fields only setting, with optional-known-field fill when disabled
+- field inventory logging on fill attempts for detected descriptors, requiredness, skip reasons, and value sources
+- automatic JSON log export through Chrome Downloads after fill attempts, enabled by default for C3 testing
+- Workday resume upload now scans enabled file inputs even when hidden behind the upload/drop zone and logs missing resume data as manual review
+- Options saves default resume PDFs directly to extension storage and shows top-right success/warning toasts
+- Content pages can show top-right Hunt toasts for fill results and missing-resume warnings
+- browser-backed basic generic fixture test for the standalone `filler` path
+- C4 polling/postback scaffold: settings, `chrome.alarms`, one-shot poll, result postback, and lightweight status heartbeat
+- detected-page consent prompt for likely signup, application, and ATS pages; manual Fill Current Page remains available on any active tab
 - Workday form fill, resume upload, and generated-answer support
 - route names for standalone, DB-backed, and C4-backed generic or ATS-specific fills
 - append-only attempt logging and generated-answer history
@@ -49,6 +59,8 @@ Implementation notes:
 - favor plain JavaScript until the extension behavior is stable
 - isolate DOM selectors and field-mapping heuristics by ATS family
 - keep generated-answer sanitization in shared utilities so every caller uses the same rules
+- treat C4 polling/postback as incomplete until a loaded-extension browser smoke proves it
+- treat broad all-site prompt detection as incomplete until noisy-site and fixture testing proves the signal is acceptable
 
 Packaging:
 

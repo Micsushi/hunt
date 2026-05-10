@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>C3 Generic Signup Fixture</title>
+    <style>
+      body {
+        font-family: system-ui, sans-serif;
+        margin: 32px;
+        max-width: 720px;
+      }
+      form,
+      .field {
+        display: grid;
+        gap: 12px;
+      }
+      label {
+        display: grid;
+        gap: 4px;
+      }
+      input {
+        min-height: 32px;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>Signup Fixture</h1>
+    <form>
+      <label>
+        Full name *
+        <input id="full-name" required autocomplete="name" />
+      </label>
+      <label>
+        Email address *
+        <input id="email" type="email" required autocomplete="email" />
+      </label>
+      <label>
+        Phone number *
+        <input id="phone" required autocomplete="tel" />
+      </label>
+      <label>
+        Username *
+        <input id="username" required autocomplete="username" />
+      </label>
+      <label>
+        Password *
+        <input id="password" type="password" required autocomplete="new-password" />
+      </label>
+      <label>
+        Optional notes
+        <input id="notes" />
+      </label>
+      <button type="button">Create Account</button>
+    </form>
+  </body>
+</html>

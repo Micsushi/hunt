@@ -39,16 +39,106 @@ export function createWorkdayFillFunction() {
     var getDescriptor = function (el) {
       return u.getDescriptor(el, containerSelectors);
     };
+    var descriptorHasAny = function (descriptor, phrases) {
+      var desc = u.normalizeText(descriptor).toLowerCase();
+      return phrases.some(function (phrase) {
+        return desc.includes(phrase);
+      });
+    };
+    var shouldSkipProfileFill = function (descriptor) {
+      return descriptorHasAny(descriptor, [
+        "address line",
+        "postal code",
+        "zip code",
+        "work experience",
+        "job title",
+        "company",
+        "role description",
+        "education",
+        "school or university",
+        "degree",
+        "field of study",
+        "overall result",
+        "gpa",
+      ]);
+    };
+    var shouldSkipGeneratedAnswer = function (descriptor) {
+      return descriptorHasAny(descriptor, [
+        "work experience",
+        "role description",
+        "education",
+        "school or university",
+        "cover letter",
+      ]);
+    };
+    var isResumeFileInput = function (descriptor) {
+      return (
+        !descriptorHasAny(descriptor, ["cover letter"]) &&
+        descriptorHasAny(descriptor, ["resume", "cv", "curriculum vitae"])
+      );
+    };
 
     var filledFields = [];
     var generatedAnswers = [];
     var manualReviewReasons = [];
+    var fieldInventory = [];
+    var resumeUploadDone = false;
+    var rectSummary = function (rect) {
+      return {
+        top: Math.round(rect.top),
+        left: Math.round(rect.left),
+        width: Math.round(rect.width),
+        height: Math.round(rect.height),
+      };
+    };
+    var inventoryEntry = function (candidate, descriptor, extra) {
+      var el =
+        candidate.kind === "radioGroup"
+          ? candidate.radios[0]
+          : candidate.element;
+      return Object.assign(
+        {
+          kind: candidate.kind,
+          tagName: el?.tagName || "",
+          type: el?.type || "",
+          name: el?.name || "",
+          id: el?.id || "",
+          descriptor: descriptor || "",
+          required: Boolean(
+            el?.required || el?.getAttribute("aria-required") === "true",
+          ),
+          filled: false,
+          skippedReason: "",
+          valueSource: "",
+          rect: rectSummary(candidate.rect),
+        },
+        extra || {},
+      );
+    };
+    var hasResumeData = Boolean(
+      activeApplyContext.selectedResumeDataUrl || defaultResume.pdfDataUrl,
+    );
+    var pageLooksLikeResumeUpload = function () {
+      var text = u
+        .normalizeText(document.body ? document.body.innerText : "")
+        .toLowerCase();
+      return (
+        text.includes("resume") ||
+        text.includes("cv") ||
+        text.includes("drop file") ||
+        text.includes("select file") ||
+        text.includes("upload")
+      );
+    };
 
     if (
       activeApplyContext.jobId &&
       activeApplyContext.selectedResumeReadyForC3 === false
     ) {
       manualReviewReasons.push("resume_not_ready_for_c3");
+    }
+    if (!hasResumeData && pageLooksLikeResumeUpload()) {
+      manualReviewReasons.push("resume_upload:missing_resume_data");
     }
 
     // Collect every visible fillable element on the current step.
@@ -57,7 +147,11 @@ export function createWorkdayFillFunction() {
     );
     var textareas = u.getVisibleElements("textarea");
     var selects = u.getVisibleElements("select");
-    var fileInputs = u.getVisibleElements('input[type="file"]');
+    var fileInputs = Array.from(
+      document.querySelectorAll('input[type="file"]'),
+    ).filter(function (el) {
+      return !el.disabled;
+    });
     var radios = u.getVisibleElements('input[type="radio"]');
 
     // Group radios by name so yes/no pairs are handled together.
@@ -105,6 +199,8 @@ export function createWorkdayFillFunction() {
           })
           .join(" ")
           .toLowerCase();
+        var radioInventory = inventoryEntry(candidate, descriptor);
+        fieldInventory.push(radioInventory);
         if (
           u.fillRadioGroup(
             candidate.radios,
@@ -113,21 +209,35 @@ export function createWorkdayFillFunction() {
             containerSelectors,
           )
         ) {
+          radioInventory.filled = true;
+          radioInventory.valueSource = "radio_rule";
           filledFields.push({ field: descriptor, valueSource: "radio_rule" });
           await sleep(perFieldDelayMs);
+        } else {
+          radioInventory.skippedReason = "no_known_match";
         }
         continue;
       }
 
       var elem = candidate.element;
       var desc = getDescriptor(elem);
+      var elementInventory = inventoryEntry(candidate, desc);
+      fieldInventory.push(elementInventory);
       if (!desc) {
+        elementInventory.skippedReason = "missing_descriptor";
         continue;
       }
 
       if (elem.tagName === "TEXTAREA") {
+        if (shouldSkipGeneratedAnswer(desc)) {
+          elementInventory.skippedReason = "unsafe_generated_answer_context";
+          continue;
+        }
         // Skip already-filled or generation-disabled.
         if (elem.value || settings.allowGeneratedAnswers === false) {
+          elementInventory.skippedReason = elem.value
+            ? "already_filled"
+            : "generated_answers_disabled";
           continue;
         }
         var answer = u.generateAnswer(
@@ -137,6 +247,8 @@ export function createWorkdayFillFunction() {
           stripLongDash,
         );
         if (u.setElementValue(elem, answer.answerText, stripLongDash)) {
+          elementInventory.filled = true;
+          elementInventory.valueSource = "generated_answer";
           var qHash = u.buildQuestionHash(desc);
           generatedAnswers.push({
             questionHash: qHash,
@@ -159,39 +271,84 @@ export function createWorkdayFillFunction() {
       }
 
       if (elem.tagName === "SELECT") {
-        if (u.fillSelectElement(elem, desc, profile, stripLongDash)) {
-          filledFields.push({ field: desc, valueSource: "select_rule" });
+        var selectResult = u.fillSelectElement(
+          elem,
+          desc,
+          profile,
+          stripLongDash,
+        );
+        if (selectResult.filled) {
+          elementInventory.filled = true;
+          elementInventory.valueSource =
+            selectResult.valueSource || "select_rule";
+          filledFields.push({
+            field: desc,
+            valueSource: elementInventory.valueSource,
+          });
           await sleep(perFieldDelayMs);
+        } else {
+          elementInventory.skippedReason =
+            selectResult.reason || "no_known_match";
         }
         continue;
       }
 
       if (elem.tagName === "INPUT" && elem.type === "file") {
+        if (resumeUploadDone) {
+          elementInventory.skippedReason = "resume_already_uploaded";
+          continue;
+        }
+        if (!isResumeFileInput(desc)) {
+          elementInventory.skippedReason = "not_resume_input";
+          continue;
+        }
         var attachment = await u.attachResumeToFileInput(
           elem,
           activeApplyContext,
           defaultResume,
         );
         if (attachment.attached) {
+          elementInventory.filled = true;
+          elementInventory.valueSource = "resume_upload";
+          resumeUploadDone = true;
           filledFields.push({
             field: getDescriptor(elem) || "resume_upload",
             valueSource: "resume_upload",
           });
           await sleep(perUploadDelayMs);
         } else {
+          elementInventory.skippedReason = "resume_upload:" + attachment.reason;
           manualReviewReasons.push("resume_upload:" + attachment.reason);
         }
         continue;
       }
 
       // Plain text input - map descriptor to profile value.
-      var profileValue = u.chooseProfileValue(desc, profile);
+      if (shouldSkipProfileFill(desc)) {
+        elementInventory.skippedReason = "unsafe_profile_context";
+        continue;
+      }
+      var profileMatch = u.chooseProfileMatch
+        ? u.chooseProfileMatch(desc, profile)
+        : null;
+      var profileValue = profileMatch
+        ? profileMatch.value
+        : u.chooseProfileValue(desc, profile);
       if (
         profileValue &&
         u.setElementValue(elem, profileValue, stripLongDash)
       ) {
-        filledFields.push({ field: desc, valueSource: "profile" });
+        elementInventory.filled = true;
+        elementInventory.valueSource = profileMatch
+          ? profileMatch.key
+          : "profile";
+        filledFields.push({
+          field: desc,
+          valueSource: elementInventory.valueSource,
+        });
         await sleep(perFieldDelayMs);
+      } else {
+        elementInventory.skippedReason = "no_known_match";
       }
     }
 
@@ -204,6 +361,7 @@ export function createWorkdayFillFunction() {
       manualReviewRequired: manualReviewReasons.length > 0,
       manualReviewReasons: manualReviewReasons,
       filledFields: filledFields,
+      fieldInventory: fieldInventory,
       generatedAnswers: generatedAnswers,
       htmlSnapshot: document.documentElement.outerHTML.slice(0, 200000),
     };

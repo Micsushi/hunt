@@ -37,9 +37,36 @@ export async function setInLocalStorage(values) {
 }
 
 export function sanitizeSettings(settings = {}) {
+  const pollIntervalSeconds = Number(settings.pollIntervalSeconds);
+  const heartbeatIntervalSeconds = Number(settings.heartbeatIntervalSeconds);
+  const settingsVersion = Number(settings.settingsVersion);
+  const hasCurrentSettingsVersion =
+    settingsVersion >= DEFAULT_SETTINGS.settingsVersion;
   return {
+    settingsVersion: DEFAULT_SETTINGS.settingsVersion,
     autofillOnLoad: sanitizeBoolean(settings.autofillOnLoad),
     manualFillEnabled: sanitizeBoolean(settings.manualFillEnabled ?? true),
+    autoPromptEnabled: sanitizeBoolean(settings.autoPromptEnabled ?? true),
+    fillRequiredOnly: sanitizeBoolean(settings.fillRequiredOnly ?? true),
+    autoExportLogs: hasCurrentSettingsVersion
+      ? sanitizeBoolean(settings.autoExportLogs)
+      : DEFAULT_SETTINGS.autoExportLogs,
+    autoExportLogPrefix:
+      sanitizeText(settings.autoExportLogPrefix) ||
+      DEFAULT_SETTINGS.autoExportLogPrefix,
+    debugLogSinkEnabled: hasCurrentSettingsVersion
+      ? sanitizeBoolean(settings.debugLogSinkEnabled ?? true)
+      : true,
+    c4PollingEnabled: sanitizeBoolean(settings.c4PollingEnabled),
+    backendUrl: sanitizeUrl(settings.backendUrl || DEFAULT_SETTINGS.backendUrl),
+    serviceToken: sanitizeText(settings.serviceToken),
+    pollIntervalSeconds: Number.isFinite(pollIntervalSeconds)
+      ? Math.min(Math.max(Math.round(pollIntervalSeconds), 30), 3600)
+      : DEFAULT_SETTINGS.pollIntervalSeconds,
+    heartbeatIntervalSeconds: Number.isFinite(heartbeatIntervalSeconds)
+      ? Math.min(Math.max(Math.round(heartbeatIntervalSeconds), 30), 3600)
+      : DEFAULT_SETTINGS.heartbeatIntervalSeconds,
+    oneActiveRunLock: sanitizeBoolean(settings.oneActiveRunLock ?? true),
     allowGeneratedAnswers: sanitizeBoolean(
       settings.allowGeneratedAnswers ?? true,
     ),
@@ -64,6 +91,11 @@ export function sanitizeProfile(profile = {}) {
     willingToRelocate: sanitizeBoolean(profile.willingToRelocate ?? true),
     openToAnyLocation: sanitizeBoolean(profile.openToAnyLocation ?? true),
     salaryFlexible: sanitizeBoolean(profile.salaryFlexible ?? true),
+    coOpTermsCompleted: sanitizeText(profile.coOpTermsCompleted),
+    availableSummer2026: sanitizeText(profile.availableSummer2026),
+    availableInterviewWindow: sanitizeText(profile.availableInterviewWindow),
+    expectedGraduationYear: sanitizeText(profile.expectedGraduationYear),
+    previousEmployers: sanitizeText(profile.previousEmployers),
     notes: sanitizeText(profile.notes),
   };
 }
@@ -133,10 +165,43 @@ export function sanitizeAttempt(attempt = {}) {
       : 0,
     manualReviewRequired: sanitizeBoolean(attempt.manualReviewRequired),
     manualReviewReasons: sanitizeStringArray(attempt.manualReviewReasons),
+    fieldInventory: sanitizeFieldInventory(attempt.fieldInventory),
     htmlSnapshot: sanitizeText(attempt.htmlSnapshot),
     screenshotDataUrl: sanitizeText(attempt.screenshotDataUrl),
     resultSummary: sanitizeText(attempt.resultSummary),
   };
+}
+
+function sanitizeFieldInventory(entries = []) {
+  if (!Array.isArray(entries)) {
+    return [];
+  }
+  return entries.slice(0, 200).map((entry) => ({
+    kind: sanitizeText(entry.kind),
+    tagName: sanitizeText(entry.tagName),
+    type: sanitizeText(entry.type),
+    name: sanitizeText(entry.name),
+    id: sanitizeText(entry.id),
+    descriptor: sanitizeText(entry.descriptor),
+    required: sanitizeBoolean(entry.required),
+    skippedReason: sanitizeText(entry.skippedReason),
+    valueSource: sanitizeText(entry.valueSource),
+    filled: sanitizeBoolean(entry.filled),
+    rect: {
+      top: Number.isFinite(Number(entry.rect?.top))
+        ? Number(entry.rect.top)
+        : 0,
+      left: Number.isFinite(Number(entry.rect?.left))
+        ? Number(entry.rect.left)
+        : 0,
+      width: Number.isFinite(Number(entry.rect?.width))
+        ? Number(entry.rect.width)
+        : 0,
+      height: Number.isFinite(Number(entry.rect?.height))
+        ? Number(entry.rect.height)
+        : 0,
+    },
+  }));
 }
 
 export function sanitizeQuestionAnswer(entry = {}) {

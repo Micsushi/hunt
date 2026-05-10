@@ -246,9 +246,48 @@
       }
 
       .log-list {
+        background: #101a11;
+        border: 1px solid var(--line);
+        border-radius: var(--radius-sm);
         display: grid;
-        gap: 6px;
-        margin-top: 10px;
+        gap: 4px;
+        margin-top: 8px;
+        max-height: min(420px, 52vh);
+        overflow-y: auto;
+        padding: 6px;
+        scrollbar-color: var(--line-strong) #101a11;
+        scrollbar-width: thin;
+      }
+
+      .log-list::-webkit-scrollbar {
+        width: 10px;
+      }
+
+      .log-list::-webkit-scrollbar-thumb {
+        background: var(--line-strong);
+        border: 2px solid #101a11;
+        border-radius: var(--radius-pill);
+      }
+
+      .log-list::-webkit-scrollbar-track {
+        background: #101a11;
+      }
+
+      .log-toolbar {
+        align-items: center;
+        display: flex;
+        gap: 12px;
+        justify-content: space-between;
+      }
+
+      .log-toolbar .actions {
+        gap: 8px;
+      }
+
+      .log-count {
+        color: var(--muted);
+        font-family: var(--font-mono);
+        font-size: 0.72rem;
       }
 
       .log-entry {
@@ -257,15 +296,16 @@
         border: 1px solid var(--line);
         border-radius: var(--radius-sm);
         display: grid;
-        gap: 8px;
-        grid-template-columns: 135px 140px minmax(0, 1fr);
-        padding: 7px 9px;
+        gap: 10px;
+        grid-template-columns: 170px 190px minmax(0, 1fr);
+        min-height: 34px;
+        padding: 7px 10px;
       }
 
       .log-time,
       .log-action,
       .log-summary {
-        font-size: 0.76rem;
+        font-size: 0.75rem;
         line-height: 1.3;
       }
 
@@ -273,16 +313,20 @@
       .log-action {
         color: var(--muted);
         font-family: var(--font-mono);
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
       }
 
       .log-summary {
         color: var(--ink);
+        overflow-wrap: anywhere;
       }
 
       .empty-log {
         color: var(--muted);
         font-size: 0.8rem;
-        margin-top: 10px;
+        padding: 8px;
       }
 
       @media (max-width: 720px) {
@@ -294,6 +338,15 @@
         .file-row {
           align-items: stretch;
           display: grid;
+        }
+
+        .log-toolbar {
+          align-items: stretch;
+          display: grid;
+        }
+
+        .log-entry {
+          grid-template-columns: 1fr;
         }
       }
     </style>
@@ -337,6 +390,54 @@
             </label>
             <label class="checkbox">
               <input
+                id="auto-prompt-enabled"
+                name="autoPromptEnabled"
+                type="checkbox"
+              />
+              <span>Prompt on signup/ATS pages</span>
+            </label>
+            <label class="checkbox">
+              <input
+                id="fill-required-only"
+                name="fillRequiredOnly"
+                type="checkbox"
+              />
+              <span>Fill required fields only</span>
+            </label>
+            <label class="checkbox">
+              <input
+                id="auto-export-logs"
+                name="autoExportLogs"
+                type="checkbox"
+              />
+              <span>Download JSON logs after fills</span>
+            </label>
+            <label class="checkbox">
+              <input
+                id="debug-log-sink-enabled"
+                name="debugLogSinkEnabled"
+                type="checkbox"
+              />
+              <span>Local debug log sink</span>
+            </label>
+            <label class="checkbox">
+              <input
+                id="c4-polling-enabled"
+                name="c4PollingEnabled"
+                type="checkbox"
+              />
+              <span>C4 polling enabled</span>
+            </label>
+            <label class="checkbox">
+              <input
+                id="one-active-run-lock"
+                name="oneActiveRunLock"
+                type="checkbox"
+              />
+              <span>One active run lock</span>
+            </label>
+            <label class="checkbox">
+              <input
                 id="allow-generated-answers"
                 name="allowGeneratedAnswers"
                 type="checkbox"
@@ -360,8 +461,51 @@
               <span>Strip long-dash punctuation</span>
             </label>
           </div>
+          <div class="grid">
+            <label>
+              Backend URL
+              <input id="backend-url" name="backendUrl" type="url" />
+            </label>
+            <label>
+              Service token
+              <input id="service-token" name="serviceToken" type="password" />
+            </label>
+            <label>
+              Poll interval seconds
+              <input
+                id="poll-interval-seconds"
+                name="pollIntervalSeconds"
+                min="30"
+                max="3600"
+                type="number"
+              />
+            </label>
+            <label>
+              Heartbeat interval seconds
+              <input
+                id="heartbeat-interval-seconds"
+                name="heartbeatIntervalSeconds"
+                min="30"
+                max="3600"
+                type="number"
+              />
+            </label>
+            <label>
+              Auto-export folder
+              <input
+                id="auto-export-log-prefix"
+                name="autoExportLogPrefix"
+                type="text"
+              />
+            </label>
+          </div>
           <div class="actions">
             <button type="submit">Save Settings</button>
+            <button id="poll-c4-once" type="button">Poll C4 Once</button>
+            <button id="test-debug-log-sink" type="button">
+              Test Log Sink
+            </button>
+            <button id="export-logs-now" type="button">Export Logs Now</button>
           </div>
         </form>
       </section>
@@ -397,6 +541,56 @@
             <label>
               Website URL
               <input id="profile-website-url" name="websiteUrl" type="url" />
+            </label>
+            <label>
+              Co-op terms completed
+              <input
+                id="profile-coop-terms-completed"
+                name="coOpTermsCompleted"
+                min="0"
+                max="9"
+                type="number"
+              />
+            </label>
+            <label>
+              Expected graduation year
+              <input
+                id="profile-expected-graduation-year"
+                name="expectedGraduationYear"
+                min="2020"
+                max="2040"
+                type="number"
+              />
+            </label>
+            <label>
+              Available Summer 2026
+              <select
+                id="profile-available-summer-2026"
+                name="availableSummer2026"
+              >
+                <option value="">Manual</option>
+                <option value="yes">Yes</option>
+                <option value="no">No</option>
+              </select>
+            </label>
+            <label>
+              Available interview window
+              <select
+                id="profile-available-interview-window"
+                name="availableInterviewWindow"
+              >
+                <option value="">Manual</option>
+                <option value="yes">Yes</option>
+                <option value="no">No</option>
+              </select>
+            </label>
+            <label>
+              Previous employers
+              <input
+                id="profile-previous-employers"
+                name="previousEmployers"
+                type="text"
+              />
             </label>
           </div>
           <div class="checkboxes">
@@ -531,13 +725,18 @@
         </form>
       </section>
 
-      <section class="panel">
-        <h2>Activity Log</h2>
-        <div id="activity-log" class="log-list"></div>
-        <div class="actions" style="margin-top: 10px">
-          <button id="export-activity-log" type="button">Export JSON</button>
-          <button id="clear-activity-log" type="button">Clear Log</button>
+      <section class="panel activity-panel">
+        <div class="log-toolbar">
+          <div>
+            <h2>Activity Log</h2>
+            <div id="activity-log-count" class="log-count">0 entries</div>
+          </div>
+          <div class="actions">
+            <button id="export-activity-log" type="button">Export JSON</button>
+            <button id="clear-activity-log" type="button">Clear Log</button>
+          </div>
         </div>
+        <div id="activity-log" class="log-list"></div>
       </section>
     </div>
     <script type="module" src="options.js"></script>
