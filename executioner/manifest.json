@@ -13,11 +13,7 @@
     "tabs"
   ],
   "host_permissions": [
-    "<all_urls>",
-    "http://127.0.0.1/*",
-    "http://localhost/*",
-    "https://*.myworkdayjobs.com/*",
-    "https://*.workday.com/*"
+    "<all_urls>"
   ],
   "background": {
     "service_worker": "src/background/index.js",

@@ -6,6 +6,7 @@ import {
 import { saveDefaultResume as saveDefaultResumeDirect } from "../shared/storage.js";
 
 let currentDefaultResume = {};
+const AUTOSAVE_DELAY_MS = 650;
 
 function showToast(message, tone = "info") {
   let container = document.getElementById("hunt-options-toasts");
@@ -143,6 +144,20 @@ function formatLogTime(value) {
   return date.toLocaleString();
 }
 
+function formatLogDetails(entry) {
+  const details =
+    entry.details && Object.keys(entry.details).length ? entry.details : {};
+  return JSON.stringify(
+    {
+      id: entry.id,
+      status: entry.status,
+      details,
+    },
+    null,
+    2,
+  );
+}
+
 function renderActivityLog(entries = []) {
   currentActivityLog = entries;
   const container = document.getElementById("activity-log");
@@ -179,7 +194,19 @@ function renderActivityLog(entries = []) {
     summary.className = "log-summary";
     summary.textContent = entry.summary || "";
 
-    row.append(time, action, summary);
+    const toggle = document.createElement("div");
+    toggle.className = "log-toggle";
+    toggle.textContent = "details";
+
+    const details = document.createElement("pre");
+    details.className = "log-details";
+    details.textContent = formatLogDetails(entry);
+
+    row.addEventListener("click", () => {
+      row.classList.toggle("expanded");
+    });
+
+    row.append(time, action, summary, toggle, details);
     container.appendChild(row);
   }
 }
@@ -199,11 +226,97 @@ function readFullProfileForm() {
   };
 }
 
+function readSettingsForm() {
+  return {
+    autofillOnLoad: document.getElementById("autofill-on-load")?.checked,
+    manualFillEnabled: document.getElementById("manual-fill-enabled")?.checked,
+    autoPromptEnabled: document.getElementById("auto-prompt-enabled")?.checked,
+    fillRequiredOnly: document.getElementById("fill-required-only")?.checked,
+    autoExportLogs: document.getElementById("auto-export-logs")?.checked,
+    debugLogSinkEnabled: document.getElementById("debug-log-sink-enabled")
+      ?.checked,
+    autoExportLogPrefix: document.getElementById("auto-export-log-prefix")
+      ?.value,
+    c4PollingEnabled: document.getElementById("c4-polling-enabled")?.checked,
+    oneActiveRunLock: document.getElementById("one-active-run-lock")?.checked,
+    backendUrl: document.getElementById("backend-url")?.value,
+    serviceToken: document.getElementById("service-token")?.value,
+    pollIntervalSeconds: document.getElementById("poll-interval-seconds")
+      ?.value,
+    heartbeatIntervalSeconds: document.getElementById(
+      "heartbeat-interval-seconds",
+    )?.value,
+    allowGeneratedAnswers: document.getElementById("allow-generated-answers")
+      ?.checked,
+    flagLowConfidenceAnswers: document.getElementById(
+      "flag-low-confidence-answers",
+    )?.checked,
+    stripLongDash: document.getElementById("strip-long-dash")?.checked,
+  };
+}
+
+async function saveSettings(payload) {
+  return chrome.runtime.sendMessage({
+    type: "hunt.apply.save_settings",
+    payload,
+  });
+}
+
 async function saveProfile(payload) {
   return chrome.runtime.sendMessage({
     type: "hunt.apply.save_profile",
     payload,
   });
+}
+
+function installAutosave(formId, saveCurrentForm, savedMessage, failedMessage) {
+  const form = document.getElementById(formId);
+  if (!form) {
+    return;
+  }
+
+  let timeoutId = 0;
+  let saving = false;
+  let saveAgain = false;
+
+  const runSave = async () => {
+    if (saving) {
+      saveAgain = true;
+      return;
+    }
+
+    saving = true;
+    let response;
+    try {
+      response = await saveCurrentForm();
+    } catch (error) {
+      response = {
+        ok: false,
+        message: error instanceof Error ? error.message : String(error),
+      };
+    } finally {
+      saving = false;
+    }
+
+    if (saveAgain) {
+      saveAgain = false;
+      timeoutId = setTimeout(runSave, AUTOSAVE_DELAY_MS);
+      return;
+    }
+
+    setStatus(
+      response?.ok ? savedMessage : response?.message || failedMessage,
+      response?.ok ? "info" : "warn",
+    );
+  };
+
+  const scheduleSave = () => {
+    clearTimeout(timeoutId);
+    timeoutId = setTimeout(runSave, AUTOSAVE_DELAY_MS);
+  };
+
+  form.addEventListener("input", scheduleSave);
+  form.addEventListener("change", scheduleSave);
 }
 
 async function loadState() {
@@ -314,41 +427,7 @@ document
   ?.addEventListener("submit", async (event) => {
     event.preventDefault();
 
-    const response = await chrome.runtime.sendMessage({
-      type: "hunt.apply.save_settings",
-      payload: {
-        autofillOnLoad: document.getElementById("autofill-on-load")?.checked,
-        manualFillEnabled: document.getElementById("manual-fill-enabled")
-          ?.checked,
-        autoPromptEnabled: document.getElementById("auto-prompt-enabled")
-          ?.checked,
-        fillRequiredOnly:
-          document.getElementById("fill-required-only")?.checked,
-        autoExportLogs: document.getElementById("auto-export-logs")?.checked,
-        debugLogSinkEnabled: document.getElementById("debug-log-sink-enabled")
-          ?.checked,
-        autoExportLogPrefix: document.getElementById("auto-export-log-prefix")
-          ?.value,
-        c4PollingEnabled:
-          document.getElementById("c4-polling-enabled")?.checked,
-        oneActiveRunLock: document.getElementById("one-active-run-lock")
-          ?.checked,
-        backendUrl: document.getElementById("backend-url")?.value,
-        serviceToken: document.getElementById("service-token")?.value,
-        pollIntervalSeconds: document.getElementById("poll-interval-seconds")
-          ?.value,
-        heartbeatIntervalSeconds: document.getElementById(
-          "heartbeat-interval-seconds",
-        )?.value,
-        allowGeneratedAnswers: document.getElementById(
-          "allow-generated-answers",
-        )?.checked,
-        flagLowConfidenceAnswers: document.getElementById(
-          "flag-low-confidence-answers",
-        )?.checked,
-        stripLongDash: document.getElementById("strip-long-dash")?.checked,
-      },
-    });
+    const response = await saveSettings(readSettingsForm());
 
     setStatus(
       response?.ok
@@ -422,6 +501,20 @@ document
       response?.ok ? "info" : "warn",
     );
   });
+
+installAutosave(
+  "settings-form",
+  () => saveSettings(readSettingsForm()),
+  "Settings autosaved.",
+  "Failed to autosave settings.",
+);
+
+installAutosave(
+  "profile-form",
+  () => saveProfile(readFullProfileForm()),
+  "Profile autosaved.",
+  "Failed to autosave profile.",
+);
 
 document
   .getElementById("import-profile-tex")

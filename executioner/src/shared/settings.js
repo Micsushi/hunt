@@ -25,6 +25,7 @@ export const DEFAULT_SETTINGS = {
   oneActiveRunLock: true,
   allowGeneratedAnswers: true,
   flagLowConfidenceAnswers: true,
+  llmAnswerFallbackEnabled: true,
   stripLongDash: true,
 };
 

@@ -3,16 +3,38 @@
 // the background so manual popup fill and detected-page fill share one path.
 (async () => {
   const PROMPT_ID = "hunt-apply-detected-page-prompt";
+  const LLM_PROMPT_ID = "hunt-apply-llm-fill-prompt";
   const ATS_HOST_PATTERNS = [
     "workday.com",
     "myworkdayjobs.com",
     "boards.greenhouse.io",
+    "job-boards.greenhouse.io",
     "app.greenhouse.io",
     "jobs.lever.co",
     "jobs.ashbyhq.com",
+    "ashbyhq.com",
     "jobs.smartrecruiters.com",
+    "apply.workable.com",
+    "workable.com",
     "icims.com",
     "bamboohr.com",
+    "jobvite.com",
+    "taleo.net",
+    "oraclecloud.com",
+    "workforcenow.adp.com",
+    "ultipro.com",
+    "ukg.com",
+    "breezy.hr",
+    "applytojob.com",
+    "jazzhr.com",
+    "recruitee.com",
+    "pinpointhq.com",
+  ];
+  const EMBEDDED_ATS_SELECTORS = [
+    "#grnhse_app",
+    'iframe[src*="greenhouse.io"]',
+    'iframe[src*="ashbyhq.com"]',
+    'iframe[src*="jobs.lever.co"]',
   ];
   const SIGNUP_TERMS = [
     "create account",
@@ -76,11 +98,14 @@
     const text = pageText();
     const inputCount = visibleInputCount();
     const isAts = ATS_HOST_PATTERNS.some((pattern) => host.includes(pattern));
+    const hasEmbeddedAts = EMBEDDED_ATS_SELECTORS.some((selector) =>
+      document.querySelector(selector),
+    );
     const hasSignupSignal = SIGNUP_TERMS.some((term) => text.includes(term));
     const hasApplicationSignal = APPLICATION_TERMS.some((term) =>
       text.includes(term),
     );
-    if (isAts) {
+    if (isAts || hasEmbeddedAts) {
       return { kind: "ats", inputCount };
     }
     if (inputCount >= 2 && hasSignupSignal) {
@@ -104,6 +129,10 @@
 
   function removePrompt() {
     document.getElementById(PROMPT_ID)?.remove();
+  }
+
+  function removeLlmPrompt() {
+    document.getElementById(LLM_PROMPT_ID)?.remove();
   }
 
   function showExtensionToast(message, tone) {
@@ -240,12 +269,113 @@
     document.documentElement.appendChild(host);
   }
 
+  function showLlmPrompt({ fieldCount, filledFieldCount }) {
+    removeLlmPrompt();
+    const host = document.createElement("div");
+    host.id = LLM_PROMPT_ID;
+    host.style.position = "fixed";
+    host.style.right = "18px";
+    host.style.bottom = "18px";
+    host.style.zIndex = "2147483647";
+    host.style.maxWidth = "390px";
+    host.style.fontFamily = "Segoe UI, system-ui, sans-serif";
+    host.attachShadow({ mode: "open" });
+    host.shadowRoot.innerHTML = `
+      <style>
+        .card {
+          background: #172212;
+          border: 1px solid #3a5a3a;
+          border-radius: 8px;
+          box-shadow: 0 8px 28px rgba(0, 0, 0, 0.35);
+          color: #d4f0dc;
+          overflow: hidden;
+        }
+        .body {
+          display: grid;
+          gap: 8px;
+          padding: 12px;
+        }
+        .title {
+          font-size: 13px;
+          font-weight: 750;
+          line-height: 1.3;
+        }
+        .meta {
+          color: #9bb69f;
+          font-size: 11px;
+          line-height: 1.35;
+        }
+        .actions {
+          display: flex;
+          gap: 8px;
+          padding: 0 12px 12px;
+        }
+        button {
+          background: #1d2b18;
+          border: 1px solid #2a3f2a;
+          border-radius: 6px;
+          color: #d4f0dc;
+          cursor: pointer;
+          flex: 1;
+          font: inherit;
+          font-size: 12px;
+          font-weight: 700;
+          min-height: 30px;
+          padding: 6px 8px;
+        }
+        button.primary {
+          background: #59a96a;
+          color: #07100a;
+        }
+      </style>
+      <div class="card">
+        <div class="body">
+          <div class="title">Use LLM help for the remaining questions?</div>
+          <div class="meta">Hunt filled ${Number(filledFieldCount || 0)} deterministic field${Number(filledFieldCount || 0) === 1 ? "" : "s"}.</div>
+          <div class="meta">${Number(fieldCount || 0)} required question${Number(fieldCount || 0) === 1 ? "" : "s"} still need judgement. Hunt will send only those normalized questions/options plus profile context to the local backend.</div>
+        </div>
+        <div class="actions">
+          <button class="primary" id="use-llm" type="button">Use LLM</button>
+          <button id="dismiss" type="button">Leave blank</button>
+        </div>
+      </div>
+    `;
+    host.shadowRoot
+      .getElementById("dismiss")
+      .addEventListener("click", removeLlmPrompt);
+    host.shadowRoot
+      .getElementById("use-llm")
+      .addEventListener("click", async () => {
+        const button = host.shadowRoot.getElementById("use-llm");
+        button.textContent = "Thinking...";
+        button.disabled = true;
+        const response = await chrome.runtime.sendMessage({
+          type: "hunt.apply.fill_remaining_with_llm",
+          payload: { triggeredBy: "llm_prompt" },
+        });
+        button.textContent = response?.ok ? "Filled" : "Needs review";
+        showExtensionToast(
+          response?.message ||
+            (response?.ok ? "LLM fill completed." : "LLM fill needs review."),
+          response?.ok ? "info" : "warn",
+        );
+        setTimeout(removeLlmPrompt, 1400);
+      });
+    document.documentElement.appendChild(host);
+  }
+
   chrome.runtime.onMessage.addListener((message) => {
     if (message?.type === "hunt.apply.show_toast") {
       showExtensionToast(
         message.message || "Hunt Apply update.",
         message.tone || "info",
       );
+    }
+    if (message?.type === "hunt.apply.show_llm_prompt") {
+      showLlmPrompt({
+        fieldCount: message.fieldCount || 0,
+        filledFieldCount: message.filledFieldCount || 0,
+      });
     }
   });
 

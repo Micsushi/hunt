@@ -29,6 +29,40 @@ Current local baseline: `.\.venv\Scripts\python.exe ci.py c3` passed on
 the basic and Greenhouse-like browser-backed generic filler fixtures. It does not prove the unpacked
 Chrome extension UI, C4 polling/postback, or live ATS behavior.
 
+## Codex-Controlled Browser Setup
+
+For C3 debugging with Codex, use the dedicated controlled browser first:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\launch_c3_chrome.ps1
+```
+
+This starts Playwright Chromium with the unpacked Hunt extension loaded from
+`executioner`, a dedicated profile, and a DevTools endpoint at
+`http://127.0.0.1:9222`.
+
+Codex MCP entries:
+
+- `playwright_c3`: connects to the dedicated browser through
+  `--cdp-endpoint=http://127.0.0.1:9222`.
+- `playwright_live`: connects through Playwright MCP extension mode for the
+  user's normal Chrome session.
+
+Status on 2026-05-11:
+
+- `playwright_c3` is configured and the dedicated browser path is verified.
+- A local Greenhouse-like fixture showed the Hunt detected-page prompt in the
+  controlled browser, proving the unpacked extension content script is active.
+- `playwright_live` is configured but requires a Codex restart plus the
+  Playwright browser extension attached to the target Chrome tab before it is
+  fully verified.
+
+Use `playwright_c3` for repeatable extension reloads, fixture smokes, DOM/iframe
+inspection, screenshots, and Hootsuite-style debugging. Use `playwright_live`
+only when the bug depends on the user's existing logged-in Chrome state.
+
+Detailed change history: `docs\C3_CHANGES_SO_FAR.md`.
+
 ## Standalone Extension Setup
 
 The first practical C3 mode does not need C0, C1, C2, or C4. It uses the

@@ -163,6 +163,22 @@ class Stage2Tests(unittest.TestCase):
         self.assertEqual(url_utils.get_apply_host(redirect_url), "boards.greenhouse.io")
         self.assertEqual(url_utils.detect_ats_type(redirect_url), "greenhouse")
 
+    def test_detect_ats_type_covers_popular_apply_hosts(self):
+        examples = {
+            "https://apply.workable.com/acme/j/123": "workable",
+            "https://acme.taleo.net/careersection/jobdetail.ftl": "taleo",
+            "https://workforcenow.adp.com/mascsr/default/mdf/recruitment": "adp",
+            "https://acme.ultipro.com/candidates/job-board": "ukg",
+            "https://acme.breezy.hr/p/123": "breezy",
+            "https://jobs.applytojob.com/apply/123": "jazzhr",
+            "https://acme.recruitee.com/o/software-engineer": "recruitee",
+            "https://acme.pinpointhq.com/postings/123": "pinpoint",
+        }
+
+        for url, ats_type in examples.items():
+            with self.subTest(url=url):
+                self.assertEqual(url_utils.detect_ats_type(url), ats_type)
+
     def test_claim_linkedin_job_marks_row_processing_and_increments_attempts(self):
         with self.with_temp_db() as path:
             job_id = self.insert_linkedin_job(path)

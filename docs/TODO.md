@@ -178,6 +178,7 @@ Workday gaps:
 - [ ] Identify all visible required fields before filling and again after each next-page click
 - [ ] Validate Workday resume upload after 2026-05-10 patch: default resume must be saved in Options; adapter now scans hidden enabled file inputs and logs `resume_upload:missing_resume_data` when no PDF is cached
 - [ ] Retest Workday My Information after 2026-05-10 profile matcher patch. Previously popup `Fill Current Page` used `ats_filler` and could fill Last Name as `Michael` because nearby descriptor text also contained First Name
+- [ ] Retest Workday My Information after 2026-05-10 dropdown patch. Expected: `How Did You Hear About Us?` chooses LinkedIn from apply URL/source context, City fills from profile location, Province/Territory chooses Alberta from `Edmonton, AB`, and Phone Device Type chooses Mobile/default or saved profile value
 - [ ] Retest Workday after 2026-05-10 safety guardrails. Previous screenshot showed `Edmonton, AB` incorrectly placed in address lines, postal code, job title, company, and work location; role description got a generic generated answer; resume uploaded multiple times
 - [ ] Add explicit C3 profile fields for street address, city, province/state, postal code, phone number, phone device type, school, degree, field of study, graduation date, work history, and cover letter before enabling those fill targets
 - [ ] Validate Options resume save after 2026-05-10 patch: saving now writes the PDF directly to extension storage, preserves cached PDF on metadata edits, and shows top-right toast success/failure
@@ -204,10 +205,11 @@ Profile, resume, and answer gaps:
 - [ ] Add confidence and source tags to every generated answer: deterministic, profile, resume, job description, LLM, manual
 - [ ] Fallback for unanswered required fields: safe deterministic answer only when policy allows it, otherwise leave blank and flag manual review
 - [ ] Support external LLM API keys for answer generation using the same provider/config direction as C2
-- [ ] Add C3 answer-decision backend route so the extension sends unresolved required questions to backend instead of calling models directly
-- [ ] Reuse `fletcher.llm.client.generate_json` for C3 fixed-choice and paragraph-answer decisions, with deterministic validators after every model response
-- [ ] Add C3 LLM provider status endpoint that reports selected provider, Ollama reachability, and cloud blocked/ready state without exposing secrets
-- [ ] Add C3 answer prompt cases: profile fact to option, yes/no policy, location option resolver, generated paragraph, sensitive/optional skip, and site memory
+- [x] Add C3 answer-decision backend route so the extension sends unresolved required questions to backend instead of calling models directly
+- [x] Reuse `fletcher.llm.client.generate_json` for C3 fixed-choice and paragraph-answer decisions, with deterministic validators after every model response
+- [x] Add C3 LLM provider status endpoint that reports selected provider, Ollama reachability, and cloud blocked/ready state without exposing secrets
+- [x] Add first C3 answer prompt cases: profile fact to option, yes/no policy, location option resolver, preference/pro-hiring choice, and previous-company/referral default-no. Generated paragraph, sensitive/optional skip, and site memory still need full implementation
+- [x] Replace the popup browser-native LLM confirmation with a Hunt-styled in-popup confirmation panel. It appears after deterministic fill when unanswered required questions can use LLM help
 - [ ] Add C3 answer settings: enable LLM fallback, allow cloud providers for C3, allow generated paragraphs, confidence threshold, and medium-confidence review behavior
 - [ ] Store generated-answer history by normalized question hash so repeated employer questions can reuse reviewed answers
 

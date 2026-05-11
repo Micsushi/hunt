@@ -8,6 +8,7 @@ export function createGenericFillFunction() {
     activeApplyContext,
     defaultResume,
     fieldRules,
+    fillRoute,
   }) {
     var u = window.__huntApplyUtils;
     if (!u) {
@@ -29,6 +30,10 @@ export function createGenericFillFunction() {
     };
     var stripLongDash = settings.stripLongDash !== false;
     var fillRequiredOnly = settings.fillRequiredOnly !== false;
+    var reportedAtsType =
+      fillRoute?.adapterName && fillRoute.adapterName !== "generic"
+        ? fillRoute.adapterName
+        : "generic";
     var containerSelectors = [
       "label",
       "fieldset",
@@ -190,10 +195,12 @@ export function createGenericFillFunction() {
           name: el?.name || "",
           id: el?.id || "",
           descriptor: descriptor || "",
+          questionHash: u.buildQuestionHash(descriptor || ""),
           required: Boolean(required),
           filled: false,
           skippedReason: "",
           valueSource: "",
+          options: [],
           rect: rectSummary(candidate.rect),
         },
         extra || {},
@@ -271,6 +278,11 @@ export function createGenericFillFunction() {
           radioDescriptor,
           radioRequired,
         );
+        radioInventory.options = candidate.radios
+          .map(function (r) {
+            return u.getDescriptor(r, containerSelectors);
+          })
+          .filter(Boolean);
         fieldInventory.push(radioInventory);
         if (fillRequiredOnly && !radioRequired) {
           radioInventory.skippedReason = "not_required";
@@ -305,6 +317,7 @@ export function createGenericFillFunction() {
       var desc = getDescriptor(elem);
       var required = isRequired(elem);
       var elementInventory = inventoryEntry(candidate, desc, required);
+      elementInventory.options = u.getCandidateOptions(elem);
       fieldInventory.push(elementInventory);
       if (!desc) {
         elementInventory.skippedReason = "missing_descriptor";
@@ -357,6 +370,7 @@ export function createGenericFillFunction() {
           profile,
           stripLongDash,
         );
+        elementInventory.options = u.getCandidateOptions(elem);
         if (selectResult.filled) {
           elementInventory.filled = true;
           elementInventory.valueSource =
@@ -388,6 +402,7 @@ export function createGenericFillFunction() {
           profile,
           stripLongDash,
         );
+        elementInventory.options = u.getCandidateOptions(elem);
         if (comboResult.filled) {
           elementInventory.filled = true;
           elementInventory.valueSource =
@@ -420,13 +435,31 @@ export function createGenericFillFunction() {
       }
     }
 
+    document
+      .querySelectorAll(
+        '[role="combobox"][aria-expanded="true"], [aria-autocomplete="list"][aria-expanded="true"]',
+      )
+      .forEach(function (el) {
+        el.dispatchEvent(
+          new KeyboardEvent("keydown", { key: "Escape", bubbles: true }),
+        );
+        el.dispatchEvent(
+          new KeyboardEvent("keyup", { key: "Escape", bubbles: true }),
+        );
+        if (typeof el.blur === "function") {
+          el.blur();
+        }
+      });
+
     if (sorted.length > 0 && filledFields.length === 0) {
       manualReviewReasons.push("no_known_fields_filled");
     }
 
     return {
       ok: true,
-      atsType: "generic",
+      atsType: reportedAtsType,
+      adapterBackedByGeneric: reportedAtsType !== "generic",
+      frameUrl: window.location.href,
       authState: u.detectAuthState(),
       filledFieldCount: filledFields.length,
       generatedAnswerCount: 0,

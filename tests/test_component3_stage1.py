@@ -333,7 +333,7 @@ class Component3Stage1Tests(unittest.TestCase):
         route_path = REPO_ROOT / "executioner" / "src" / "background" / "fill-routes.js"
         script = f"""
             import {{ selectFillRoute }} from {json.dumps(route_path.as_uri())};
-            const availableAdapters = ["generic", "workday"];
+            const availableAdapters = ["generic", "workday", "greenhouse", "lever"];
             const routes = {{
                 filler: selectFillRoute({{
                     activeApplyContext: {{}},
@@ -346,6 +346,11 @@ class Component3Stage1Tests(unittest.TestCase):
                     availableAdapters,
                 }}),
                 dbFiller: selectFillRoute({{
+                    activeApplyContext: {{ jobId: "123", sourceMode: "db", atsType: "icims" }},
+                    detectedAtsType: "icims",
+                    availableAdapters,
+                }}),
+                dbGreenhouse: selectFillRoute({{
                     activeApplyContext: {{ jobId: "123", sourceMode: "db", atsType: "greenhouse" }},
                     detectedAtsType: "greenhouse",
                     availableAdapters,
@@ -356,6 +361,11 @@ class Component3Stage1Tests(unittest.TestCase):
                     availableAdapters,
                 }}),
                 c4Filler: selectFillRoute({{
+                    activeApplyContext: {{ jobId: "123", sourceMode: "c4", atsType: "taleo" }},
+                    detectedAtsType: "taleo",
+                    availableAdapters,
+                }}),
+                c4Lever: selectFillRoute({{
                     activeApplyContext: {{ jobId: "123", sourceMode: "c4", atsType: "lever" }},
                     detectedAtsType: "lever",
                     availableAdapters,
@@ -384,10 +394,54 @@ class Component3Stage1Tests(unittest.TestCase):
         self.assertEqual(routes["atsFiller"]["routeName"], "ats_filler")
         self.assertEqual(routes["dbFiller"]["routeName"], "db_filler")
         self.assertTrue(routes["dbFiller"]["usedGenericFallback"])
+        self.assertEqual(routes["dbGreenhouse"]["routeName"], "db_ats_filler")
+        self.assertFalse(routes["dbGreenhouse"]["usedGenericFallback"])
         self.assertEqual(routes["dbAtsFiller"]["routeName"], "db_ats_filler")
         self.assertEqual(routes["c4Filler"]["routeName"], "c4_filler")
         self.assertTrue(routes["c4Filler"]["usedGenericFallback"])
+        self.assertEqual(routes["c4Lever"]["routeName"], "c4_ats_filler")
         self.assertEqual(routes["c4AtsFiller"]["routeName"], "c4_ats_filler")
+
+    def test_ats_registry_detects_embedded_greenhouse_and_popular_backlog(self):
+        registry_path = REPO_ROOT / "executioner" / "src" / "ats" / "registry.js"
+        matrix_path = REPO_ROOT / "executioner" / "src" / "ats" / "support-matrix.js"
+        script = f"""
+            import {{ ATS_REGISTRY, chooseDetectedAtsType, detectAtsFromUrl }} from {json.dumps(registry_path.as_uri())};
+            import {{ genericBackedAtsNames }} from {json.dumps(matrix_path.as_uri())};
+            const result = {{
+                greenhouseFrame: detectAtsFromUrl("https://job-boards.greenhouse.io/embed/job_app?for=hootsuite"),
+                hootsuiteEmbedded: chooseDetectedAtsType({{
+                    pageUrl: "https://careers.hootsuite.com/job/123",
+                    frameUrls: ["https://job-boards.greenhouse.io/embed/job_app?for=hootsuite"],
+                    embeddedAtsTypes: [],
+                    availableAdapters: ["generic", "workday", "greenhouse"],
+                }}),
+                workable: detectAtsFromUrl("https://apply.workable.com/acme/j/123"),
+                taleo: detectAtsFromUrl("https://acme.taleo.net/careersection/jobdetail.ftl"),
+                genericBacked: genericBackedAtsNames(),
+                names: ATS_REGISTRY.map((entry) => entry.name),
+            }};
+            console.log(JSON.stringify(result));
+        """
+
+        try:
+            result = subprocess.run(
+                ["node", "--input-type=module", "-e", script],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+        except FileNotFoundError:
+            self.skipTest("node is required to test the C3 ATS registry")
+
+        payload = json.loads(result.stdout)
+        self.assertEqual(payload["greenhouseFrame"], "greenhouse")
+        self.assertEqual(payload["hootsuiteEmbedded"], "greenhouse")
+        self.assertEqual(payload["workable"], "workable")
+        self.assertEqual(payload["taleo"], "taleo")
+        self.assertIn("greenhouse", payload["genericBacked"])
+        self.assertIn("lever", payload["genericBacked"])
+        self.assertIn("icims", payload["names"])
 
     def test_extension_has_c4_polling_scaffold(self):
         backend_app = (REPO_ROOT / "backend" / "app.py").read_text(encoding="utf-8")
@@ -398,21 +452,27 @@ class Component3Stage1Tests(unittest.TestCase):
         storage = (REPO_ROOT / "executioner" / "src" / "shared" / "storage.js").read_text(
             encoding="utf-8"
         )
-        api = (REPO_ROOT / "executioner" / "src" / "shared" / "api.js").read_text(
+        api = (REPO_ROOT / "executioner" / "src" / "shared" / "api.js").read_text(encoding="utf-8")
+        shared_utils = (REPO_ROOT / "executioner" / "src" / "shared" / "injected.js").read_text(
             encoding="utf-8"
         )
-        background = (
-            REPO_ROOT / "executioner" / "src" / "background" / "index.js"
+        background = (REPO_ROOT / "executioner" / "src" / "background" / "index.js").read_text(
+            encoding="utf-8"
+        )
+        fill_runner = (
+            REPO_ROOT / "executioner" / "src" / "background" / "fill-runner.js"
         ).read_text(encoding="utf-8")
+        popup_js = (REPO_ROOT / "executioner" / "src" / "popup" / "popup.js").read_text(
+            encoding="utf-8"
+        )
         options = (REPO_ROOT / "executioner" / "src" / "options" / "options.html").read_text(
             encoding="utf-8"
         )
 
         self.assertIn("alarms", manifest["permissions"])
         self.assertIn("downloads", manifest["permissions"])
-        self.assertIn("<all_urls>", manifest["host_permissions"])
+        self.assertEqual(manifest["host_permissions"], ["<all_urls>"])
         self.assertEqual(manifest["content_scripts"][0]["matches"], ["<all_urls>"])
-        self.assertIn("http://127.0.0.1/*", manifest["host_permissions"])
         self.assertIn("c4PollingEnabled", settings)
         self.assertIn("autoPromptEnabled", settings)
         self.assertIn("fillRequiredOnly", settings)
@@ -420,6 +480,7 @@ class Component3Stage1Tests(unittest.TestCase):
         self.assertIn("autoExportLogs", settings)
         self.assertIn("debugLogSinkEnabled", settings)
         self.assertIn("coOpTermsCompleted", settings)
+        self.assertIn("llmAnswerFallbackEnabled", settings)
         self.assertIn("autoExportLogPrefix", settings)
         self.assertIn("backendUrl", settings)
         self.assertIn("serviceToken", settings)
@@ -428,6 +489,8 @@ class Component3Stage1Tests(unittest.TestCase):
         self.assertIn("/api/c3/pending-fills", api)
         self.assertIn("/api/c3/fill-result", api)
         self.assertIn("/api/c3/debug-log", api)
+        self.assertIn("postAnswerDecision", api)
+        self.assertIn("/api/c3/answer-decision", api)
         self.assertIn("chrome.alarms.onAlarm", background)
         self.assertIn("hunt.apply.poll_c4_once", background)
         self.assertIn('id="c4-polling-enabled"', options)
@@ -450,10 +513,45 @@ class Component3Stage1Tests(unittest.TestCase):
         self.assertIn("showPageToast", background)
         self.assertIn("looksLikeUploadedFile", background)
         self.assertIn("sendDebugLog", background)
+        self.assertIn("requestBackendAnswerDecisions", fill_runner)
+        self.assertIn("createApplyAnswerDecisionsFunction", fill_runner)
+        self.assertIn("genericBackedAtsNames", fill_runner)
+        self.assertIn("detectAtsTypeForTab", fill_runner)
+        self.assertIn("collectFrameSignals", fill_runner)
+        self.assertIn("attachPendingLlmSummary", fill_runner)
+        self.assertIn("markInventoryFilledByDecision", fill_runner)
+        self.assertIn("pendingLlmFields", fill_runner)
+        self.assertIn("realisticOptionClick", fill_runner)
+        self.assertIn("pointerdown", fill_runner)
+        self.assertIn('keyOn(el, "Enter")', fill_runner)
+        self.assertIn("answerDecisionDiagnostics", background)
+        self.assertIn("extensionState = null", fill_runner)
+        self.assertIn("runFillForTab(activeTabId, extensionState", fill_runner)
+        self.assertIn(
+            "No unanswered required questions are available for LLM help on this tab.",
+            fill_runner,
+        )
+        self.assertIn("llm.prompt.show", background)
+        self.assertIn("hunt.apply.fill_remaining_with_llm", popup_js)
+        self.assertIn("const state = await getExtensionState();", background)
+        self.assertIn("runPendingLlmFillForTab(", background)
+        self.assertIn("showLlmConfirm", popup_js)
+        generic_fill = (
+            REPO_ROOT / "executioner" / "src" / "ats" / "generic" / "fill.js"
+        ).read_text(encoding="utf-8")
+        self.assertIn('[role="combobox"][aria-expanded="true"]', generic_fill)
+        self.assertIn('key: "Escape"', generic_fill)
+        self.assertIn("realisticOptionClick", shared_utils)
+        self.assertIn("pointerdown", shared_utils)
+        self.assertIn('key("Enter")', shared_utils)
+        self.assertIn('state.source === "input"', shared_utils)
+        self.assertNotIn("window.confirm", popup_js)
         self.assertIn("postDebugLog", background)
         self.assertIn("fill_result", background)
         self.assertIn("No default resume is saved", background)
         self.assertIn('@app.post("/api/c3/debug-log")', backend_app)
+        self.assertIn('@app.post("/api/c3/answer-decision")', backend_app)
+        self.assertIn('@app.get("/api/c3/llm-status")', backend_app)
         self.assertIn("c3_extension_debug.jsonl", backend_app)
 
     def test_extension_has_detected_page_prompt_for_signup_and_ats_pages(self):
@@ -463,19 +561,30 @@ class Component3Stage1Tests(unittest.TestCase):
         popup = (REPO_ROOT / "executioner" / "src" / "popup" / "popup.html").read_text(
             encoding="utf-8"
         )
-        background = (
-            REPO_ROOT / "executioner" / "src" / "background" / "index.js"
-        ).read_text(encoding="utf-8")
+        background = (REPO_ROOT / "executioner" / "src" / "background" / "index.js").read_text(
+            encoding="utf-8"
+        )
 
         self.assertIn("detectPageKind", content)
         self.assertIn("ATS_HOST_PATTERNS", content)
+        self.assertIn("job-boards.greenhouse.io", content)
+        self.assertIn("EMBEDDED_ATS_SELECTORS", content)
+        self.assertIn("#grnhse_app", content)
         self.assertIn("SIGNUP_TERMS", content)
         self.assertIn("hunt.apply.fill_current_page", content)
         self.assertIn("hunt.apply.show_toast", content)
         self.assertIn("hunt-apply-page-toasts", content)
         self.assertIn("detected_page_prompt", content)
-        self.assertIn("Prompt on signup/ATS pages", (REPO_ROOT / "executioner" / "src" / "options" / "options.html").read_text(encoding="utf-8"))
+        self.assertIn(
+            "Prompt on signup/ATS pages",
+            (REPO_ROOT / "executioner" / "src" / "options" / "options.html").read_text(
+                encoding="utf-8"
+            ),
+        )
         self.assertIn('id="auto-prompt"', popup)
+        self.assertIn('id="llm-confirm"', popup)
+        self.assertIn('id="llm-use"', popup)
+        self.assertIn('id="llm-skip"', popup)
         self.assertIn('id="clear-page"', popup)
         self.assertNotIn('id="poll-c4-once"', popup)
         self.assertNotIn('id="clear-context"', popup)
@@ -483,6 +592,33 @@ class Component3Stage1Tests(unittest.TestCase):
         self.assertIn("hunt.apply.clear_current_page", background)
         self.assertIn("page.clear", background)
         self.assertIn("allFrames: true", background)
+        self.assertIn('[role="combobox"], [aria-autocomplete="list"]', background)
+        self.assertIn("clearDatasetSelection", background)
+        self.assertIn("select__single-value", background)
+        self.assertIn("select__indicators button", background)
+        self.assertIn("clickSelectClearIndicators", background)
+        self.assertIn(".select__indicators > *", background)
+        self.assertIn("clickableIndicators.slice(0, -1)", background)
+        self.assertIn("isDropdownToggleLabel", background)
+        self.assertIn("closeOpenDropdowns", background)
+        self.assertIn("closedDropdowns", background)
+        self.assertIn("remainingOpenDropdowns", background)
+        self.assertIn("remainingFilledControls", background)
+        self.assertIn("clearIndicatorClicks", background)
+        self.assertIn("hiddenDropdownMenus", background)
+        self.assertIn("hideTransientDropdownMenus", background)
+        self.assertIn("clickClearControl", background)
+        self.assertIn("fieldHasSelectedValue", background)
+        self.assertIn("realisticClick", background)
+        self.assertIn("setNativeValue", background)
+        self.assertIn('[aria-expanded="true"]', background)
+        self.assertIn('el.setAttribute("aria-expanded", "false")', background)
+        self.assertIn("select__menu--is-open", background)
+        self.assertIn("buttons.length > 1 && index === 0", background)
+        self.assertIn("input[aria-hidden='true'], input[tabindex='-1']", background)
+        self.assertIn("aria-activedescendant", background)
+        self.assertIn(".select__container, .select-shell", background)
+        self.assertNotIn("[class*='select'], [role='group']", background)
 
     def test_options_resume_save_uses_direct_storage_and_toasts(self):
         options = (REPO_ROOT / "executioner" / "src" / "options" / "options.js").read_text(
@@ -494,6 +630,43 @@ class Component3Stage1Tests(unittest.TestCase):
         self.assertIn("Choose a PDF resume before saving.", options)
         self.assertIn("Default resume saved:", options)
         self.assertIn("currentDefaultResume", options)
+
+    def test_options_settings_and_profile_autosave_changes(self):
+        options = (REPO_ROOT / "executioner" / "src" / "options" / "options.js").read_text(
+            encoding="utf-8"
+        )
+        options_html = (REPO_ROOT / "executioner" / "src" / "options" / "options.html").read_text(
+            encoding="utf-8"
+        )
+
+        self.assertIn("const AUTOSAVE_DELAY_MS", options)
+        self.assertIn("function installAutosave", options)
+        self.assertIn('form.addEventListener("input", scheduleSave)', options)
+        self.assertIn('form.addEventListener("change", scheduleSave)', options)
+        self.assertIn("readSettingsForm", options)
+        self.assertIn('type: "hunt.apply.save_settings"', options)
+        self.assertIn('type: "hunt.apply.save_profile"', options)
+        self.assertIn('"settings-form"', options)
+        self.assertIn('"profile-form"', options)
+        self.assertIn("Settings autosaved.", options)
+        self.assertIn("Profile autosaved.", options)
+        self.assertNotIn("Save Settings", options_html)
+        self.assertNotIn("Save Profile", options_html)
+
+    def test_options_activity_log_rows_expand_details(self):
+        options = (REPO_ROOT / "executioner" / "src" / "options" / "options.js").read_text(
+            encoding="utf-8"
+        )
+        options_html = (REPO_ROOT / "executioner" / "src" / "options" / "options.html").read_text(
+            encoding="utf-8"
+        )
+
+        self.assertIn("function formatLogDetails", options)
+        self.assertIn('toggle.textContent = "details"', options)
+        self.assertIn('details.className = "log-details"', options)
+        self.assertIn('row.classList.toggle("expanded")', options)
+        self.assertIn(".log-entry.expanded .log-details", options_html)
+        self.assertIn("grid-column: 1 / -1", options_html)
 
     def test_generic_manual_fixture_pages_exist_for_next_smokes(self):
         fixture_dir = REPO_ROOT / "executioner" / "fixtures" / "generic"
@@ -515,6 +688,9 @@ class Component3Stage1Tests(unittest.TestCase):
         workday = (REPO_ROOT / "executioner" / "src" / "ats" / "workday" / "fill.js").read_text(
             encoding="utf-8"
         )
+        shared_utils = (REPO_ROOT / "executioner" / "src" / "shared" / "injected.js").read_text(
+            encoding="utf-8"
+        )
         fill_runner = (
             REPO_ROOT / "executioner" / "src" / "background" / "fill-runner.js"
         ).read_text(encoding="utf-8")
@@ -528,9 +704,17 @@ class Component3Stage1Tests(unittest.TestCase):
         self.assertIn("allFrames: true", fill_runner)
         self.assertIn("chooseBestFrameResult", fill_runner)
         self.assertIn("frameResults", fill_runner)
+        self.assertIn("frameUrl", fill_runner)
         self.assertIn("shouldSkipProfileFill", workday)
         self.assertIn("unsafe_profile_context", workday)
         self.assertIn("unsafe_generated_answer_context", workday)
+        self.assertIn("isExactCityField", workday)
+        self.assertIn("isExactProvinceField", workday)
+        self.assertIn("applicationSource", workday)
+        self.assertIn("fillComboboxElement", workday)
+        self.assertIn("phone device type", shared_utils)
+        self.assertIn("how did you hear", shared_utils)
+        self.assertIn("knownProvinces", shared_utils)
         self.assertIn("resume_already_uploaded", workday)
         self.assertIn("not_resume_input", workday)
 

@@ -219,6 +219,48 @@
         color: var(--warning);
       }
 
+      .hidden {
+        display: none !important;
+      }
+
+      .llm-confirm {
+        background: #201d10;
+        border-color: var(--warning);
+        box-shadow: inset 4px 0 0 var(--warning);
+        display: grid;
+        gap: 7px;
+      }
+
+      .llm-confirm h2 {
+        color: var(--warning);
+      }
+
+      .llm-confirm p {
+        color: var(--ink);
+        font-size: 10px;
+        line-height: 1.35;
+      }
+
+      .llm-actions {
+        display: grid;
+        gap: 6px;
+        grid-template-columns: 1fr 1fr;
+      }
+
+      .llm-actions button {
+        min-height: 28px;
+      }
+
+      #llm-use {
+        background: var(--warning);
+        border-color: var(--warning);
+        color: var(--ink-inverse);
+      }
+
+      #llm-use:hover {
+        background: #f6c24a;
+      }
+
       .header {
         align-items: center;
         display: flex;
@@ -255,6 +297,23 @@
       <div id="popup-status" class="status info">
         Loading extension state...
       </div>
+
+      <section
+        id="llm-confirm"
+        class="card llm-confirm hidden"
+        aria-live="polite"
+      >
+        <h2>LLM Help Available</h2>
+        <p id="llm-confirm-copy">
+          Hunt filled what it could deterministically.
+        </p>
+        <div class="llm-actions">
+          <button id="llm-use" type="button">Use LLM</button>
+          <button id="llm-skip" class="secondary" type="button">
+            Leave Blank
+          </button>
+        </div>
+      </section>
 
       <section class="card summary-card">
         <h2>Active Context</h2>

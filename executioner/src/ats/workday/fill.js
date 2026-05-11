@@ -45,7 +45,44 @@ export function createWorkdayFillFunction() {
         return desc.includes(phrase);
       });
     };
-    var shouldSkipProfileFill = function (descriptor) {
+    var isExactCityField = function (el, descriptor) {
+      var key = u
+        .normalizeText(
+          [el?.name, el?.id, el?.getAttribute?.("aria-label")]
+            .filter(Boolean)
+            .join(" "),
+        )
+        .toLowerCase();
+      var desc = u.normalizeText(descriptor).toLowerCase();
+      return (
+        key === "city" ||
+        key.endsWith("--city") ||
+        key.includes(" address--city") ||
+        (desc.includes("city*") && !desc.includes("postal code"))
+      );
+    };
+    var isExactProvinceField = function (el, descriptor) {
+      var key = u
+        .normalizeText(
+          [el?.name, el?.id, el?.getAttribute?.("aria-label")]
+            .filter(Boolean)
+            .join(" "),
+        )
+        .toLowerCase();
+      var desc = u.normalizeText(descriptor).toLowerCase();
+      return (
+        key.includes("province") ||
+        key.includes("territory") ||
+        desc.includes("province or territory")
+      );
+    };
+    var shouldSkipProfileFill = function (el, descriptor) {
+      if (
+        isExactCityField(el, descriptor) ||
+        isExactProvinceField(el, descriptor)
+      ) {
+        return false;
+      }
       return descriptorHasAny(descriptor, [
         "address line",
         "postal code",
@@ -77,6 +114,25 @@ export function createWorkdayFillFunction() {
         descriptorHasAny(descriptor, ["resume", "cv", "curriculum vitae"])
       );
     };
+    var getApplicationSource = function () {
+      var explicitSource = u.normalizeText(activeApplyContext.source);
+      if (explicitSource) {
+        return explicitSource;
+      }
+      var url = new URL(window.location.href);
+      var source = u.normalizeText(url.searchParams.get("source"));
+      if (source) {
+        return source;
+      }
+      var src = u.normalizeText(url.searchParams.get("src"));
+      if (src) {
+        return src;
+      }
+      return "";
+    };
+    var profileWithContext = Object.assign({}, profile, {
+      applicationSource: getApplicationSource(),
+    });
 
     var filledFields = [];
     var generatedAnswers = [];
@@ -104,12 +160,14 @@ export function createWorkdayFillFunction() {
           name: el?.name || "",
           id: el?.id || "",
           descriptor: descriptor || "",
+          questionHash: u.buildQuestionHash(descriptor || ""),
           required: Boolean(
             el?.required || el?.getAttribute("aria-required") === "true",
           ),
           filled: false,
           skippedReason: "",
           valueSource: "",
+          options: [],
           rect: rectSummary(candidate.rect),
         },
         extra || {},
@@ -228,6 +286,11 @@ export function createWorkdayFillFunction() {
         continue;
       }
 
+      if (elem.tagName === "INPUT" && elem.type === "checkbox") {
+        elementInventory.skippedReason = "unsupported_checkbox";
+        continue;
+      }
+
       if (elem.tagName === "TEXTAREA") {
         if (shouldSkipGeneratedAnswer(desc)) {
           elementInventory.skippedReason = "unsafe_generated_answer_context";
@@ -274,7 +337,7 @@ export function createWorkdayFillFunction() {
         var selectResult = u.fillSelectElement(
           elem,
           desc,
-          profile,
+          profileWithContext,
           stripLongDash,
         );
         if (selectResult.filled) {
@@ -289,6 +352,34 @@ export function createWorkdayFillFunction() {
         } else {
           elementInventory.skippedReason =
             selectResult.reason || "no_known_match";
+        }
+        continue;
+      }
+
+      if (
+        elem.getAttribute("role") === "combobox" ||
+        elem.getAttribute("aria-haspopup") === "listbox" ||
+        elem.getAttribute("aria-autocomplete") === "list" ||
+        elem.closest(".select__container")
+      ) {
+        var comboResult = await u.fillComboboxElement(
+          elem,
+          desc,
+          profileWithContext,
+          stripLongDash,
+        );
+        if (comboResult.filled) {
+          elementInventory.filled = true;
+          elementInventory.valueSource =
+            comboResult.valueSource || "combobox_rule";
+          filledFields.push({
+            field: desc,
+            valueSource: elementInventory.valueSource,
+          });
+          await sleep(perFieldDelayMs);
+        } else {
+          elementInventory.skippedReason =
+            comboResult.reason || "no_known_match";
         }
         continue;
       }
@@ -324,9 +415,22 @@ export function createWorkdayFillFunction() {
       }
 
       // Plain text input - map descriptor to profile value.
-      if (shouldSkipProfileFill(desc)) {
+      if (shouldSkipProfileFill(elem, desc)) {
         elementInventory.skippedReason = "unsafe_profile_context";
         continue;
+      }
+      if (isExactCityField(elem, desc) && profile.location) {
+        var cityValue = u.normalizeText(profile.location).split(",")[0].trim();
+        if (cityValue && u.setElementValue(elem, cityValue, stripLongDash)) {
+          elementInventory.filled = true;
+          elementInventory.valueSource = "profile:location";
+          filledFields.push({
+            field: desc,
+            valueSource: elementInventory.valueSource,
+          });
+          await sleep(perFieldDelayMs);
+          continue;
+        }
       }
       var profileMatch = u.chooseProfileMatch
         ? u.chooseProfileMatch(desc, profile)
@@ -355,6 +459,7 @@ export function createWorkdayFillFunction() {
     return {
       ok: true,
       atsType: "workday",
+      frameUrl: window.location.href,
       authState: u.detectAuthState(),
       filledFieldCount: filledFields.length,
       generatedAnswerCount: generatedAnswers.length,

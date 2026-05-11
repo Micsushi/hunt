@@ -216,6 +216,73 @@
     });
   };
 
+  u.getCandidateOptions = function (el) {
+    if (!el) {
+      return [];
+    }
+    var seen = new Set();
+    var options = [];
+    var add = function (value) {
+      var text = u.normalizeText(value);
+      var key = text.toLowerCase();
+      if (key === "no options" || key === "no results") {
+        return;
+      }
+      if (text && !seen.has(key)) {
+        seen.add(key);
+        options.push(text);
+      }
+    };
+    if (el.tagName === "SELECT") {
+      Array.from(el.options || []).forEach(function (option) {
+        add(option.text || option.value);
+      });
+      return options;
+    }
+    var controls = el.getAttribute("aria-controls") || "";
+    var controlledListbox = controls ? document.getElementById(controls) : null;
+    if (controlledListbox) {
+      Array.from(
+        controlledListbox.querySelectorAll(
+          '[role="option"], option, .option, .select__option, [class*="__option"], [class*="-option"]',
+        ),
+      ).forEach(function (option) {
+        add(option.innerText || option.textContent || option.value);
+      });
+      return options.slice(0, 80);
+    }
+    var containers = [
+      el.closest(".custom-select"),
+      el.closest(".application-field"),
+      el.closest(".select__container"),
+      el.closest('[role="group"]'),
+      el.parentElement,
+    ].filter(Boolean);
+    containers.forEach(function (container) {
+      Array.from(
+        container.querySelectorAll(
+          '[role="option"], option, .option, .select__option, [class*="__option"], [class*="-option"]',
+        ),
+      ).forEach(function (option) {
+        add(option.innerText || option.textContent || option.value);
+      });
+    });
+    if (el.getAttribute("aria-expanded") !== "true") {
+      return options.slice(0, 80);
+    }
+    Array.from(
+      document.querySelectorAll(
+        '[role="option"], .select__option, [class*="__option"], [class*="-option"]',
+      ),
+    ).forEach(function (option) {
+      var rect = option.getBoundingClientRect();
+      if (rect.width > 0 && rect.height > 0) {
+        add(option.innerText || option.textContent || option.value);
+      }
+    });
+    return options.slice(0, 80);
+  };
+
   // --- profile mapping -----------------------------------------------------
 
   function phraseInDescriptor(descriptor, phrase) {
@@ -223,6 +290,87 @@
     return new RegExp("(^|[^a-z0-9])" + escaped + "([^a-z0-9]|$)").test(
       descriptor,
     );
+  }
+
+  function locationParts(location) {
+    var raw = u.normalizeText(location);
+    var lowered = raw.toLowerCase();
+    var provinceMap = {
+      ab: "Alberta",
+      alberta: "Alberta",
+      bc: "British Columbia",
+      "b.c.": "British Columbia",
+      "british columbia": "British Columbia",
+      mb: "Manitoba",
+      manitoba: "Manitoba",
+      nb: "New Brunswick",
+      "new brunswick": "New Brunswick",
+      nl: "Newfoundland and Labrador",
+      "newfoundland and labrador": "Newfoundland and Labrador",
+      ns: "Nova Scotia",
+      "nova scotia": "Nova Scotia",
+      nt: "Northwest Territories",
+      "northwest territories": "Northwest Territories",
+      nu: "Nunavut",
+      nunavut: "Nunavut",
+      on: "Ontario",
+      ontario: "Ontario",
+      pe: "Prince Edward Island",
+      pei: "Prince Edward Island",
+      "prince edward island": "Prince Edward Island",
+      qc: "Quebec",
+      quebec: "Quebec",
+      sk: "Saskatchewan",
+      saskatchewan: "Saskatchewan",
+      yt: "Yukon",
+      yukon: "Yukon",
+    };
+    var pieces = lowered
+      .split(/[,\s/]+/)
+      .map(function (piece) {
+        return piece.trim();
+      })
+      .filter(Boolean);
+    var province = "";
+    pieces.forEach(function (piece) {
+      if (!province && provinceMap[piece]) {
+        province = provinceMap[piece];
+      }
+    });
+    return {
+      full: raw,
+      city: raw.split(",")[0].trim(),
+      province: province,
+      country: raw ? "Canada" : "",
+    };
+  }
+
+  function locationTextForDescriptor(descriptor, profile, stripLongDash) {
+    var lowered = u.normalizeText(descriptor).toLowerCase();
+    var parts = locationParts(profile.location);
+    if (!parts.full) {
+      return "";
+    }
+    var asksProvince =
+      lowered.includes("province") || lowered.includes("territory");
+    var asksCity = lowered.includes("city");
+    if (asksCity && asksProvince) {
+      return parts.full;
+    }
+    if (asksProvince && parts.province) {
+      return parts.province;
+    }
+    if (asksCity && parts.city) {
+      return parts.city;
+    }
+    if (
+      lowered.includes("located in") ||
+      lowered.includes("current location") ||
+      phraseInDescriptor(lowered, "location")
+    ) {
+      return parts.full;
+    }
+    return "";
   }
 
   // Map a field descriptor to the right profile value.
@@ -238,6 +386,12 @@
     var nameParts = fullName.split(" ").filter(Boolean);
     var firstName = nameParts[0] || "";
     var lastName = nameParts.slice(1).join(" ");
+    var locationText = isLegalWorkQuestion
+      ? ""
+      : locationTextForDescriptor(desc, profile, true);
+    if (locationText) {
+      return { value: locationText, key: "profile:location" };
+    }
     var mapping = [
       [["email", "e-mail"], profile.email, "profile:email", 10],
       [
@@ -533,6 +687,38 @@
     return aliases;
   }
 
+  function locationOptionLayers(location) {
+    var parts = locationParts(location);
+    var layers = [];
+    if (parts.city) {
+      layers.push({ kind: "city", terms: [parts.city], score: 120 });
+    }
+    if (parts.province) {
+      var provinceTerms = [parts.province];
+      var rawPieces = u
+        .normalizeText(location)
+        .split(/[,\s/]+/)
+        .map(function (piece) {
+          return piece.trim();
+        })
+        .filter(Boolean);
+      rawPieces.forEach(function (piece) {
+        if (
+          piece.length <= 3 &&
+          u.normalizeText(piece).toLowerCase() !==
+            u.normalizeText(parts.city).toLowerCase()
+        ) {
+          provinceTerms.push(piece);
+        }
+      });
+      layers.push({ kind: "province", terms: provinceTerms, score: 100 });
+    }
+    if (parts.country) {
+      layers.push({ kind: "country", terms: [parts.country], score: 80 });
+    }
+    return layers;
+  }
+
   function chooseStructuredChoice(descriptor, profile, stripLongDash) {
     var lowered = u.normalizeText(descriptor).toLowerCase();
     var isLegalWorkQuestion =
@@ -579,6 +765,79 @@
       };
     }
     if (
+      lowered.includes("how did you hear") ||
+      lowered.includes("where did you hear") ||
+      lowered.includes("source")
+    ) {
+      var applicationSource = u.normalizeText(profile.applicationSource);
+      if (applicationSource) {
+        return {
+          text: applicationSource,
+          source: "profile:applicationSource",
+          aliases: [
+            applicationSource,
+            applicationSource.toLowerCase() === "linkedin"
+              ? "LinkedIn"
+              : applicationSource,
+          ],
+        };
+      }
+    }
+    if (lowered.includes("phone device type")) {
+      return {
+        text: profile.phoneDeviceType || "Mobile",
+        source: profile.phoneDeviceType
+          ? "profile:phoneDeviceType"
+          : "default:phoneDeviceType",
+      };
+    }
+    if (
+      !isLegalWorkQuestion &&
+      lowered.includes("city") &&
+      (lowered.includes("province") || lowered.includes("territory"))
+    ) {
+      var combinedLocation = u.normalizeText(profile.location, stripLongDash);
+      if (combinedLocation) {
+        return {
+          text: combinedLocation,
+          source: "profile:location",
+          aliases: Array.from(locationAliases(combinedLocation)),
+          locationLayers: locationOptionLayers(combinedLocation),
+          requireOptionMatch: true,
+        };
+      }
+    }
+    if (lowered.includes("province") || lowered.includes("territory")) {
+      var provinceAliases = locationAliases(profile.location);
+      var knownProvinces = [
+        "alberta",
+        "british columbia",
+        "manitoba",
+        "new brunswick",
+        "newfoundland and labrador",
+        "nova scotia",
+        "northwest territories",
+        "nunavut",
+        "ontario",
+        "prince edward island",
+        "quebec",
+        "saskatchewan",
+        "yukon",
+      ];
+      var provinceText = knownProvinces.find(function (province) {
+        return provinceAliases.has(province);
+      });
+      if (provinceText) {
+        return {
+          text: provinceText,
+          source: "profile:location",
+          aliases: Array.from(provinceAliases),
+          locationLayers: locationOptionLayers(profile.location),
+          requireOptionMatch: true,
+        };
+      }
+    }
+    if (
       !isLegalWorkQuestion &&
       (lowered.includes("city") ||
         lowered.includes("located in") ||
@@ -590,6 +849,8 @@
           text: location,
           source: "profile:location",
           aliases: Array.from(locationAliases(location)),
+          locationLayers: locationOptionLayers(location),
+          requireOptionMatch: true,
         };
       }
     }
@@ -635,7 +896,7 @@
       var match = lowered.match(/worked at ([a-z0-9 .&'-]+)/);
       var employer = match ? u.normalizeText(match[1]).toLowerCase() : "";
       var previous = u.normalizeText(profile.previousEmployers).toLowerCase();
-      if (previous) {
+      if (employer || previous) {
         return {
           text: employer && previous.includes(employer) ? "Yes" : "No",
           source: "profile:previousEmployers",
@@ -663,6 +924,37 @@
     }
     if (target === "yes" || target === "no") {
       return option === target || option.startsWith(target + " ") ? 100 : 0;
+    }
+    if (choice.locationLayers) {
+      if (/(^|[^a-z0-9])not([^a-z0-9]|$)/.test(option)) {
+        return 0;
+      }
+      for (
+        var layerIndex = 0;
+        layerIndex < choice.locationLayers.length;
+        layerIndex++
+      ) {
+        var layer = choice.locationLayers[layerIndex];
+        var terms = layer.terms || (layer.text ? [layer.text] : []);
+        for (var termIndex = 0; termIndex < terms.length; termIndex++) {
+          var layerText = u
+            .normalizeText(terms[termIndex], stripLongDash)
+            .toLowerCase();
+          if (!layerText) {
+            continue;
+          }
+          if (layer.kind === "other") {
+            if (option === layerText) {
+              return layer.score;
+            }
+            continue;
+          }
+          if (option.includes(layerText)) {
+            return layer.score;
+          }
+        }
+      }
+      return 0;
     }
     if (option === target) {
       return 100;
@@ -739,28 +1031,176 @@
     if (!targetText) {
       return { filled: false, reason: "empty_choice" };
     }
+    var requireOptionMatch =
+      choice.requireOptionMatch ||
+      el.getAttribute("role") === "combobox" ||
+      el.getAttribute("aria-autocomplete") === "list" ||
+      Boolean(el.closest(".select__container"));
 
     var sleep = function (ms) {
       return new Promise(function (resolve) {
         setTimeout(resolve, ms);
       });
     };
-    var optionMatches = function (option) {
+    var optionScore = function (option) {
       var text = u.normalizeText(
         option.innerText || option.textContent,
         stripLongDash,
       );
-      return optionScoreForChoice(text, "", choice, stripLongDash) > 0;
+      if (["no options", "no results"].includes(text.toLowerCase())) {
+        return 0;
+      }
+      return optionScoreForChoice(text, "", choice, stripLongDash);
+    };
+    var keyDetails = function (keyName) {
+      var map = {
+        Enter: { code: "Enter", keyCode: 13 },
+        Escape: { code: "Escape", keyCode: 27 },
+        Tab: { code: "Tab", keyCode: 9 },
+        ArrowDown: { code: "ArrowDown", keyCode: 40 },
+        ArrowUp: { code: "ArrowUp", keyCode: 38 },
+      };
+      return map[keyName] || { code: keyName, keyCode: 0 };
+    };
+    var keyOn = function (target, keyName) {
+      var details = keyDetails(keyName);
+      target.dispatchEvent(
+        new KeyboardEvent("keydown", {
+          key: keyName,
+          code: details.code,
+          keyCode: details.keyCode,
+          which: details.keyCode,
+          bubbles: true,
+          cancelable: true,
+        }),
+      );
+      target.dispatchEvent(
+        new KeyboardEvent("keyup", {
+          key: keyName,
+          code: details.code,
+          keyCode: details.keyCode,
+          which: details.keyCode,
+          bubbles: true,
+          cancelable: true,
+        }),
+      );
     };
     var key = function (keyName) {
-      el.dispatchEvent(
-        new KeyboardEvent("keydown", { key: keyName, bubbles: true }),
-      );
-      el.dispatchEvent(
-        new KeyboardEvent("keyup", { key: keyName, bubbles: true }),
+      keyOn(el, keyName);
+    };
+    var optionTextFor = function (option) {
+      return u.normalizeText(
+        option ? option.innerText || option.textContent : "",
+        stripLongDash,
       );
     };
-    var looksCommitted = function () {
+    var committedState = function () {
+      var container = el.closest(".select__container") || el.parentElement;
+      var field = el.closest(".custom-select, .application-field");
+      var datasetSelected = u.normalizeText(
+        field?.dataset?.selected || el.dataset?.selected || "",
+        stripLongDash,
+      );
+      if (datasetSelected) {
+        return { text: datasetSelected, source: "dataset" };
+      }
+      var selected = container?.querySelector(
+        '.select__single-value, [class*="single-value"]',
+      );
+      var selectedText = u.normalizeText(
+        selected ? selected.innerText || selected.textContent : "",
+        stripLongDash,
+      );
+      if (selectedText) {
+        return { text: selectedText, source: "single_value" };
+      }
+      var inputText = u.normalizeText(el.value, stripLongDash);
+      return { text: inputText, source: inputText ? "input" : "" };
+    };
+    var committedText = function () {
+      return committedState().text;
+    };
+    var optionLooksSelected = function (option) {
+      if (!option) {
+        return false;
+      }
+      var selectedAttr = u
+        .normalizeText(
+          [
+            option.getAttribute("aria-selected"),
+            option.getAttribute("data-selected"),
+            option.getAttribute("data-state"),
+          ]
+            .filter(Boolean)
+            .join(" "),
+        )
+        .toLowerCase();
+      var className = u.normalizeText(option.className || "").toLowerCase();
+      return (
+        selectedAttr.includes("true") ||
+        selectedAttr.includes("selected") ||
+        className.includes("selected") ||
+        className.includes("is-focused")
+      );
+    };
+    var trackNativeCommitEvents = function () {
+      var changed = false;
+      var mark = function () {
+        changed = true;
+      };
+      el.addEventListener("change", mark, true);
+      el.addEventListener("input", mark, true);
+      return {
+        changed: function () {
+          return changed;
+        },
+        stop: function () {
+          el.removeEventListener("change", mark, true);
+          el.removeEventListener("input", mark, true);
+        },
+      };
+    };
+    var looksCommitted = function (
+      clickedOption,
+      beforeCommit,
+      changedByClick,
+    ) {
+      var clickedText = optionTextFor(clickedOption);
+      var state = committedState();
+      var committed = state.text;
+      var beforeState =
+        typeof beforeCommit === "string"
+          ? { text: beforeCommit, source: "" }
+          : beforeCommit || { text: "", source: "" };
+      if (clickedText && committed === clickedText) {
+        if (!beforeState.text || committed !== beforeState.text) {
+          return true;
+        }
+        if (
+          state.source &&
+          state.source !== beforeState.source &&
+          state.source !== "input"
+        ) {
+          return true;
+        }
+        if (changedByClick || optionLooksSelected(clickedOption)) {
+          return true;
+        }
+        return false;
+      }
+      if (
+        beforeState.text &&
+        committed === beforeState.text &&
+        state.source === beforeState.source
+      ) {
+        return false;
+      }
+      if (
+        committed &&
+        optionScoreForChoice(committed, "", choice, stripLongDash) > 0
+      ) {
+        return true;
+      }
       var container = el.closest(".select__container") || el.parentElement;
       var text = u
         .normalizeText(container ? container.innerText : "", stripLongDash)
@@ -769,42 +1209,306 @@
       var inputValue = u.normalizeText(el.value, stripLongDash).toLowerCase();
       return inputValue === target && text.includes(target);
     };
-    var findVisibleOption = function () {
+    var currentCommitMatchesChoice = function () {
+      var state = committedState();
+      var committed = state.text;
+      if (requireOptionMatch && state.source === "input") {
+        return false;
+      }
+      return (
+        committed &&
+        optionScoreForChoice(committed, "", choice, stripLongDash) > 0
+      );
+    };
+    var optionScope = function (option) {
+      var container = el.closest(".select__container, .custom-select");
+      if (container && container.contains(option)) {
+        return 4;
+      }
+      var controls = el.getAttribute("aria-controls") || "";
+      var listbox = controls
+        ? option.closest("#" + CSS.escape(controls))
+        : null;
+      if (listbox) {
+        return 5;
+      }
+      if (el.id && option.id && option.id.includes(el.id)) {
+        return 5;
+      }
+      return 1;
+    };
+    var candidateOptionElements = function () {
+      var controls = el.getAttribute("aria-controls") || "";
+      var listbox = controls ? document.getElementById(controls) : null;
+      if (listbox) {
+        return Array.from(
+          listbox.querySelectorAll(
+            '[role="option"], [id*="-option-"], .select__option, [class*="__option"], [class*="-option"]',
+          ),
+        );
+      }
       return Array.from(
         document.querySelectorAll(
           '[role="option"], [id*="-option-"], .select__option, [class*="__option"], [class*="-option"]',
         ),
-      ).find(function (option) {
-        var style = window.getComputedStyle(option);
-        var rect = option.getBoundingClientRect();
-        return (
-          style.display !== "none" &&
-          style.visibility !== "hidden" &&
-          rect.width > 0 &&
-          rect.height > 0 &&
-          optionMatches(option)
+      );
+    };
+    var findVisibleOption = function () {
+      var candidates = candidateOptionElements()
+        .map(function (option) {
+          var style = window.getComputedStyle(option);
+          var rect = option.getBoundingClientRect();
+          var visible =
+            style.display !== "none" &&
+            style.visibility !== "hidden" &&
+            rect.width > 0 &&
+            rect.height > 0;
+          return {
+            option: option,
+            scope: visible ? optionScope(option) : 0,
+            score: visible ? optionScore(option) : 0,
+          };
+        })
+        .filter(function (candidate) {
+          return candidate.score > 0;
+        });
+      var bestScope = candidates.reduce(function (best, candidate) {
+        return Math.max(best, candidate.scope);
+      }, 0);
+      return (
+        candidates
+          .filter(function (candidate) {
+            return candidate.scope === bestScope;
+          })
+          .sort(function (a, b) {
+            return b.score - a.score;
+          })[0]?.option || null
+      );
+    };
+    var setSearchValue = function (value) {
+      el.focus();
+      var proto =
+        el instanceof HTMLInputElement ? HTMLInputElement.prototype : null;
+      var setter = proto
+        ? Object.getOwnPropertyDescriptor(proto, "value")?.set
+        : null;
+      if (setter) {
+        setter.call(el, u.normalizeText(value, stripLongDash));
+      } else {
+        el.value = u.normalizeText(value, stripLongDash);
+      }
+      el.dispatchEvent(new Event("input", { bubbles: true }));
+    };
+    var clearTypedSearch = function () {
+      setSearchValue("");
+      key("Escape");
+    };
+    var pointerEvent = function (target, type, rect) {
+      var init = {
+        bubbles: true,
+        cancelable: true,
+        view: window,
+        button: 0,
+        buttons: type.includes("down") ? 1 : 0,
+        clientX: Math.round(rect.left + rect.width / 2),
+        clientY: Math.round(rect.top + rect.height / 2),
+      };
+      var EventCtor =
+        window.PointerEvent && type.startsWith("pointer")
+          ? window.PointerEvent
+          : MouseEvent;
+      target.dispatchEvent(new EventCtor(type, init));
+    };
+    var realisticOptionClick = function (option) {
+      if (!option) {
+        return;
+      }
+      if (typeof option.scrollIntoView === "function") {
+        option.scrollIntoView({ block: "nearest", inline: "nearest" });
+      }
+      var rect = option.getBoundingClientRect();
+      [
+        "mouseover",
+        "mousemove",
+        "pointerdown",
+        "mousedown",
+        "pointerup",
+        "mouseup",
+        "click",
+      ].forEach(function (type) {
+        pointerEvent(option, type, rect);
+      });
+    };
+    var clickOutsideMenu = function () {
+      var target = document.body || document.documentElement;
+      if (!target) {
+        return;
+      }
+      ["pointerdown", "mousedown", "mouseup", "click"].forEach(function (type) {
+        target.dispatchEvent(
+          new MouseEvent(type, {
+            bubbles: true,
+            cancelable: true,
+            view: window,
+          }),
         );
       });
     };
+    var closeOpenMenus = async function () {
+      var active = document.activeElement;
+      if (active) {
+        keyOn(active, "Escape");
+      }
+      if (document.body) {
+        keyOn(document.body, "Escape");
+      }
+      keyOn(document, "Escape");
+      keyOn(window, "Escape");
+      clickOutsideMenu();
+      await sleep(80);
+    };
+    var closeMenu = async function () {
+      var control = el.closest(".select__control") || el;
+      key("Escape");
+      if (control && control !== el) {
+        keyOn(control, "Escape");
+      }
+      if (document.body) {
+        keyOn(document.body, "Escape");
+      }
+      keyOn(document, "Escape");
+      keyOn(window, "Escape");
+      el.blur();
+      clickOutsideMenu();
+      await sleep(80);
+      keyOn(document, "Escape");
+      keyOn(window, "Escape");
+    };
+    var openMenu = async function () {
+      var control = el.closest(".select__control") || el;
+      var toggle = el
+        .closest(".select__container")
+        ?.querySelector(
+          '.select__indicators button[aria-label*="Toggle"], .select__indicators button',
+        );
+      el.focus();
+      control.click();
+      await sleep(180);
+      var option = findVisibleOption();
+      if (option) {
+        return option;
+      }
+      if (toggle) {
+        toggle.click();
+        await sleep(180);
+        option = findVisibleOption();
+        if (option) {
+          return option;
+        }
+      }
+      key("ArrowDown");
+      await sleep(180);
+      return findVisibleOption();
+    };
+    var searchTerms = function () {
+      if (choice.locationLayers) {
+        return choice.locationLayers
+          .filter(function (layer) {
+            return layer.kind !== "other";
+          })
+          .flatMap(function (layer) {
+            return (layer.terms || [])
+              .map(function (term) {
+                return u.normalizeText(term, stripLongDash);
+              })
+              .filter(Boolean);
+          });
+      }
+      return [targetText];
+    };
+    var findOptionBySearching = async function () {
+      var terms = searchTerms();
+      for (var i = 0; i < terms.length; i++) {
+        setSearchValue(terms[i]);
+        await sleep(450);
+        var option = findVisibleOption();
+        if (option) {
+          return option;
+        }
+      }
+      clearTypedSearch();
+      await sleep(120);
+      return null;
+    };
+    var commitOption = async function (option, beforeCommit) {
+      var clickTracker = trackNativeCommitEvents();
+      realisticOptionClick(option);
+      await sleep(180);
+      var changedByClick = clickTracker.changed();
+      clickTracker.stop();
+      u.dispatchInputEvents(el);
+      if (looksCommitted(option, beforeCommit, changedByClick)) {
+        await closeMenu();
+        return true;
+      }
 
-    el.focus();
-    (el.closest(".select__control") || el).click();
-    await sleep(120);
+      var beforeEnterCommit = committedState();
+      var enterTracker = trackNativeCommitEvents();
+      key("Enter");
+      await sleep(180);
+      var changedByEnter = enterTracker.changed();
+      enterTracker.stop();
+      u.dispatchInputEvents(el);
+      if (
+        looksCommitted(option, beforeEnterCommit, changedByEnter) ||
+        looksCommitted(option, beforeCommit, changedByEnter)
+      ) {
+        await closeMenu();
+        return true;
+      }
+      return false;
+    };
+
+    await closeOpenMenus();
+    if (currentCommitMatchesChoice()) {
+      await closeMenu();
+      return { filled: true, valueSource: choice.source };
+    }
+    var option = await openMenu();
+    if (option) {
+      var beforeCommit = committedState();
+      if (await commitOption(option, beforeCommit)) {
+        return { filled: true, valueSource: choice.source };
+      }
+    }
+
+    if (requireOptionMatch) {
+      option = await findOptionBySearching();
+      if (option) {
+        var beforeSearchCommit = committedState();
+        if (await commitOption(option, beforeSearchCommit)) {
+          return { filled: true, valueSource: choice.source };
+        }
+      }
+      clearTypedSearch();
+      return { filled: false, reason: "no_matching_option" };
+    }
+
     u.setElementValue(el, targetText, stripLongDash);
     key(targetText.length === 1 ? targetText : targetText[0] || "");
     await sleep(450);
 
-    var option = findVisibleOption();
+    option = findVisibleOption();
     if (!option) {
       key("ArrowDown");
       await sleep(120);
       option = findVisibleOption();
     }
     if (option) {
-      option.click();
-      await sleep(120);
-      u.dispatchInputEvents(el);
-      return { filled: true, valueSource: choice.source };
+      var beforeFallbackCommit = committedState();
+      if (await commitOption(option, beforeFallbackCommit)) {
+        return { filled: true, valueSource: choice.source };
+      }
     }
 
     key("Enter");
@@ -812,7 +1516,8 @@
     key("Tab");
     await sleep(120);
     u.dispatchInputEvents(el);
-    if (looksCommitted()) {
+    if (looksCommitted(null, "")) {
+      await closeMenu();
       return { filled: true, valueSource: choice.source };
     }
     return { filled: false, reason: "no_matching_option" };

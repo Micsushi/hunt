@@ -243,6 +243,7 @@ _DEV_ORIGINS = [
 app.add_middleware(
     CORSMiddleware,
     allow_origins=_DEV_ORIGINS,
+    allow_origin_regex=r"chrome-extension://.*",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -4060,6 +4061,60 @@ async def api_c3_status(
         "received_at": datetime.now(UTC).isoformat(),
         "status": body,
     }
+
+
+@app.get("/api/c3/llm-status")
+async def api_c3_llm_status(_auth: str = Depends(require_session_or_service_token)):
+    from c3_answering.pipeline import provider_status
+
+    status = provider_status()
+    return {
+        "ok": True,
+        "provider": status.provider,
+        "model": status.model,
+        "cloud": status.cloud,
+        "cloud_confirmed": status.cloud_confirmed,
+        "ready": status.ready,
+        "reason": status.reason,
+    }
+
+
+@app.post("/api/c3/answer-decision")
+async def api_c3_answer_decision(
+    payload: dict = Body(...), _auth: str = Depends(require_session_or_service_token)
+):
+    from c3_answering.pipeline import decide_answer
+    from c3_answering.schemas import C3AnswerRequest
+
+    try:
+        if hasattr(C3AnswerRequest, "model_validate"):
+            request_model = C3AnswerRequest.model_validate(payload)  # type: ignore[attr-defined]
+        else:
+            request_model = C3AnswerRequest.parse_obj(payload)
+    except Exception as exc:
+        raise HTTPException(status_code=422, detail=f"Invalid C3 answer request: {exc}") from exc
+
+    decision = decide_answer(request_model)
+    body = decision.model_dump(mode="json") if hasattr(decision, "model_dump") else decision.dict()
+    log_dir = REPO_ROOT / "logs"
+    log_dir.mkdir(parents=True, exist_ok=True)
+    with (log_dir / "c3_answer_decisions.jsonl").open("a", encoding="utf-8") as fh:
+        fh.write(
+            json.dumps(
+                {
+                    "received_at": datetime.now(UTC).isoformat(),
+                    "host": request_model.host,
+                    "ats": request_model.ats,
+                    "question_hash": request_model.field.question_hash,
+                    "normalized_question": decision.normalized_question,
+                    "decision": body,
+                },
+                ensure_ascii=False,
+                default=str,
+            )
+        )
+        fh.write("\n")
+    return {"ok": True, "decision": body}
 
 
 @app.post("/api/c3/debug-log")

@@ -77,3 +77,13 @@ export async function postDebugLog(settings, payload) {
     body: payload,
   });
 }
+
+export async function postAnswerDecision(settings, payload) {
+  return requestJson({
+    baseUrl: settings.backendUrl,
+    serviceToken: settings.serviceToken,
+    path: "/api/c3/answer-decision",
+    method: "POST",
+    body: payload,
+  });
+}

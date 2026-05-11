@@ -292,12 +292,14 @@ def test_c3_extension_has_standalone_manual_fill_path():
     assert "selectFillRoute" in fill_runner
     assert "fillRoute: route.routeName" in fill_runner
     assert "createGenericFillFunction" in fill_runner
+    assert "genericBackedAtsNames" in fill_runner
     assert "detectedAtsType" in fill_runner
     assert "sourceMode: extensionState.activeApplyContext.jobId" in fill_runner
     assert "activeApplyContext.selectedResumePath ||" in fill_runner
     assert "extensionState.defaultResume.pdfFileName" in fill_runner
     assert "Generic form adapter for standalone manual fills" in generic_fill
-    assert 'atsType: "generic"' in generic_fill
+    assert "reportedAtsType" in generic_fill
+    assert "adapterBackedByGeneric" in generic_fill
     assert "isRequired" in generic_fill
     assert "chooseRequiredKnownValue" in generic_fill
     assert "u.attachResumeToFileInput" in generic_fill

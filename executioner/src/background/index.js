@@ -15,7 +15,7 @@ import {
   postExtensionStatus,
   postFillResult,
 } from "../shared/api.js";
-import { runFillForTab } from "./fill-runner.js";
+import { runFillForTab, runPendingLlmFillForTab } from "./fill-runner.js";
 
 const C4_POLL_ALARM = "hunt.apply.c4.poll";
 const C4_HEARTBEAT_ALARM = "hunt.apply.c4.heartbeat";
@@ -141,6 +141,34 @@ async function showPageToast(tabId, message, tone = "info") {
   }
 }
 
+async function showLlmPrompt(tabId, payload = {}) {
+  if (!tabId) {
+    return;
+  }
+  let sent = false;
+  try {
+    await chrome.tabs.sendMessage(tabId, {
+      type: "hunt.apply.show_llm_prompt",
+      ...payload,
+    });
+    sent = true;
+  } catch (_error) {
+    // Some pages cannot receive content-script messages.
+  }
+  await logActivity(
+    sent ? "llm.prompt.show" : "llm.prompt.show_failed",
+    sent
+      ? "Asked whether to use LLM help for remaining fields."
+      : "Could not show in-page LLM prompt; popup confirmation remains available.",
+    {
+      tabId,
+      fieldCount: payload.fieldCount || 0,
+      filledFieldCount: payload.filledFieldCount || 0,
+    },
+    sent ? "ok" : "warn",
+  );
+}
+
 async function clearCurrentPage(tabId) {
   if (!tabId) {
     return {
@@ -152,7 +180,11 @@ async function clearCurrentPage(tabId) {
 
   const results = await chrome.scripting.executeScript({
     target: { tabId, allFrames: true },
-    func: () => {
+    func: async () => {
+      function sleep(ms) {
+        return new Promise((resolve) => setTimeout(resolve, ms));
+      }
+
       function isVisibleEnabled(el) {
         const style = window.getComputedStyle(el);
         const rect = el.getBoundingClientRect();
@@ -171,7 +203,414 @@ async function clearCurrentPage(tabId) {
         el.dispatchEvent(new Event("blur", { bubbles: true }));
       }
 
+      function setNativeValue(el, value) {
+        const proto =
+          el instanceof HTMLTextAreaElement
+            ? HTMLTextAreaElement.prototype
+            : el instanceof HTMLSelectElement
+              ? HTMLSelectElement.prototype
+              : HTMLInputElement.prototype;
+        const descriptor = Object.getOwnPropertyDescriptor(proto, "value");
+        if (descriptor?.set) {
+          descriptor.set.call(el, value);
+        } else {
+          el.value = value;
+        }
+      }
+
+      function setNativeChecked(el, checked) {
+        const descriptor = Object.getOwnPropertyDescriptor(
+          HTMLInputElement.prototype,
+          "checked",
+        );
+        if (descriptor?.set) {
+          descriptor.set.call(el, checked);
+        } else {
+          el.checked = checked;
+        }
+      }
+
+      function realisticClick(el) {
+        if (!el || typeof el.dispatchEvent !== "function") {
+          return;
+        }
+        if (typeof el.focus === "function" && isVisibleEnabled(el)) {
+          try {
+            el.focus({ preventScroll: true });
+          } catch (_error) {
+            el.focus();
+          }
+        }
+        [
+          "mouseover",
+          "mousemove",
+          "pointerdown",
+          "mousedown",
+          "pointerup",
+          "mouseup",
+          "click",
+        ].forEach((type) => {
+          const event =
+            type.startsWith("pointer") && typeof PointerEvent !== "undefined"
+              ? new PointerEvent(type, {
+                  bubbles: true,
+                  cancelable: true,
+                  pointerType: "mouse",
+                  isPrimary: true,
+                  view: window,
+                })
+              : new MouseEvent(type, {
+                  bubbles: true,
+                  cancelable: true,
+                  view: window,
+                });
+          el.dispatchEvent(event);
+        });
+      }
+
+      const clickedClearControls = new WeakSet();
+
+      function clickClearControl(el) {
+        if (!el || clickedClearControls.has(el)) {
+          return false;
+        }
+        clickedClearControls.add(el);
+        realisticClick(el);
+        return true;
+      }
+
+      function clearDatasetSelection(el) {
+        let changed = false;
+        ["selected", "selectedValue", "value"].forEach((key) => {
+          if (Object.prototype.hasOwnProperty.call(el.dataset || {}, key)) {
+            delete el.dataset[key];
+            changed = true;
+          }
+        });
+        return changed;
+      }
+
+      function keyOn(target, keyName) {
+        if (!target || typeof target.dispatchEvent !== "function") {
+          return;
+        }
+        target.dispatchEvent(
+          new KeyboardEvent("keydown", { key: keyName, bubbles: true }),
+        );
+        target.dispatchEvent(
+          new KeyboardEvent("keyup", { key: keyName, bubbles: true }),
+        );
+      }
+
+      function clickOutsideDropdowns() {
+        const target = document.body || document.documentElement;
+        if (!target) {
+          return;
+        }
+        ["pointerdown", "mousedown", "mouseup", "click"].forEach((type) => {
+          target.dispatchEvent(
+            new MouseEvent(type, {
+              bubbles: true,
+              cancelable: true,
+              view: window,
+            }),
+          );
+        });
+      }
+
+      function closeOpenDropdowns() {
+        let closed = 0;
+        const targets = new Set();
+        [
+          '[aria-expanded="true"]',
+          '[role="combobox"]',
+          '[aria-autocomplete="list"]',
+          '[aria-haspopup="listbox"]',
+          '[role="listbox"]',
+          "[id^='react-select-'][id*='-listbox']",
+          ".select__container",
+          ".select__control",
+          ".select__menu",
+          ".select__menu-list",
+          ".select-shell",
+          ".custom-select",
+        ].forEach((selector) => {
+          document.querySelectorAll(selector).forEach((el) => targets.add(el));
+        });
+
+        targets.forEach((el) => {
+          const beforeExpanded = el.getAttribute("aria-expanded") === "true";
+          const beforeOpenClass =
+            el.classList?.contains("open") ||
+            el.classList?.contains("is-open") ||
+            el.classList?.contains("select__menu--is-open");
+          if (typeof el.focus === "function" && isVisibleEnabled(el)) {
+            try {
+              el.focus({ preventScroll: true });
+            } catch (_error) {
+              el.focus();
+            }
+          }
+          keyOn(el, "Escape");
+          const field = el.closest?.(
+            ".select__container, .select-shell, .custom-select, .application-field, [role='group']",
+          );
+          if (field && field !== el) {
+            keyOn(field, "Escape");
+          }
+          if (el.hasAttribute?.("aria-expanded")) {
+            el.setAttribute("aria-expanded", "false");
+          }
+          if (el.classList) {
+            el.classList.remove("open", "is-open", "select__menu--is-open");
+          }
+          if (field?.classList) {
+            field.classList.remove("open", "is-open", "select__menu--is-open");
+          }
+          if (typeof el.blur === "function") {
+            el.blur();
+          }
+          if (beforeExpanded || beforeOpenClass) {
+            closed += 1;
+          }
+        });
+
+        keyOn(document.activeElement, "Escape");
+        keyOn(document.body, "Escape");
+        keyOn(document, "Escape");
+        keyOn(window, "Escape");
+        clickOutsideDropdowns();
+        if (document.activeElement?.blur) {
+          document.activeElement.blur();
+        }
+        return closed;
+      }
+
+      function countOpenDropdowns() {
+        return Array.from(
+          document.querySelectorAll(
+            [
+              '[aria-expanded="true"]',
+              '[role="listbox"]',
+              "[id^='react-select-'][id*='-listbox']",
+              ".select__menu",
+              ".select__menu-list",
+            ].join(", "),
+          ),
+        ).filter(isVisibleEnabled).length;
+      }
+
+      function hideTransientDropdownMenus() {
+        let hidden = 0;
+        Array.from(
+          document.querySelectorAll(
+            [
+              '[aria-expanded="true"]',
+              '[role="combobox"][aria-expanded]',
+              '[aria-autocomplete="list"][aria-expanded]',
+            ].join(", "),
+          ),
+        ).forEach((el) => {
+          if (el.getAttribute("aria-expanded") === "true") {
+            hidden += 1;
+          }
+          el.setAttribute("aria-expanded", "false");
+          keyOn(el, "Escape");
+          if (typeof el.blur === "function") {
+            el.blur();
+          }
+        });
+
+        Array.from(
+          document.querySelectorAll(
+            [
+              ".select__menu",
+              ".select__menu-list",
+              "[id^='react-select-'][id*='-listbox']",
+              "[role='listbox']",
+            ].join(", "),
+          ),
+        ).forEach((menu) => {
+          const wasAlreadyHidden =
+            menu.hidden ||
+            menu.getAttribute("aria-hidden") === "true" ||
+            menu.style.display === "none" ||
+            menu.style.visibility === "hidden";
+          if (!wasAlreadyHidden) {
+            hidden += 1;
+          }
+          menu.setAttribute("aria-hidden", "true");
+          menu.hidden = true;
+          menu.style.display = "none";
+          menu.style.visibility = "hidden";
+          menu.style.pointerEvents = "none";
+          if (
+            menu.classList?.contains("select__menu") ||
+            menu.classList?.contains("select__menu-list") ||
+            String(menu.id || "").startsWith("react-select-")
+          ) {
+            menu.remove();
+          }
+        });
+        clickOutsideDropdowns();
+        return hidden;
+      }
+
+      function countRemainingFilledControls() {
+        let remaining = 0;
+        Array.from(document.querySelectorAll("input")).forEach((el) => {
+          const type = String(el.type || "text").toLowerCase();
+          if (["button", "hidden", "image", "reset", "submit"].includes(type)) {
+            return;
+          }
+          if (!isVisibleEnabled(el) && type !== "file") {
+            return;
+          }
+          if (["checkbox", "radio"].includes(type)) {
+            if (el.checked) {
+              remaining += 1;
+            }
+            return;
+          }
+          if (type !== "file" && el.value) {
+            remaining += 1;
+          }
+        });
+        Array.from(document.querySelectorAll("textarea"))
+          .filter(isVisibleEnabled)
+          .forEach((el) => {
+            if (el.value) {
+              remaining += 1;
+            }
+          });
+        Array.from(document.querySelectorAll("select"))
+          .filter(isVisibleEnabled)
+          .forEach((el) => {
+            const selectedOptions = Array.from(el.options || []).filter(
+              (option) => option.selected,
+            );
+            if (
+              el.multiple
+                ? selectedOptions.some((option) => option.value)
+                : Boolean(el.value)
+            ) {
+              remaining += 1;
+            }
+          });
+        Array.from(
+          document.querySelectorAll(
+            ".select__single-value, .select__multi-value, [class*='singleValue'], [class*='multiValue']",
+          ),
+        )
+          .filter(isVisibleEnabled)
+          .forEach((el) => {
+            if ((el.textContent || "").trim()) {
+              remaining += 1;
+            }
+          });
+        return remaining;
+      }
+
+      function controlLabel(el) {
+        return [
+          el.getAttribute?.("aria-label"),
+          el.getAttribute?.("title"),
+          el.innerText,
+          el.textContent,
+          el.className?.baseVal || el.className,
+          ...Array.from(el.querySelectorAll?.("[aria-label], [title]") || [])
+            .map(
+              (child) =>
+                child.getAttribute?.("aria-label") ||
+                child.getAttribute?.("title"),
+            )
+            .filter(Boolean),
+        ]
+          .filter(Boolean)
+          .join(" ")
+          .trim()
+          .toLowerCase();
+      }
+
+      function isClearControlLabel(label) {
+        return (
+          label.includes("clear") ||
+          label.includes("remove") ||
+          label.includes("close") ||
+          label === "x" ||
+          label === "Ã—" ||
+          label === "Ãƒâ€”"
+        );
+      }
+
+      function isDropdownToggleLabel(label) {
+        return (
+          label.includes("toggle") ||
+          label.includes("dropdown") ||
+          label.includes("drop-down") ||
+          label.includes("chevron") ||
+          label.includes("arrow") ||
+          label.includes("menu") ||
+          label.includes("indicator-separator") ||
+          label.includes("separator")
+        );
+      }
+
+      function fieldHasSelectedValue(field) {
+        if (!field) {
+          return false;
+        }
+        if (
+          ["selected", "selectedValue", "value"].some((key) =>
+            Boolean(field.dataset?.[key]),
+          )
+        ) {
+          return true;
+        }
+        return Array.from(
+          field.querySelectorAll(
+            ".select__single-value, .select__multi-value, [class*='singleValue'], [class*='multiValue']",
+          ),
+        ).some((el) => (el.textContent || "").trim());
+      }
+
+      function clickSelectClearIndicators(field) {
+        const indicators = Array.from(
+          field.querySelectorAll(
+            "[data-testid='clear-selection'], .select__clear-indicator, .select__indicators button, .select__indicators [role='button'], .select__indicators > *, [class*='indicators'] button, [class*='Indicators'] button, [class*='indicators'] [role='button'], [class*='Indicators'] [role='button'], [class*='indicators'] > *, [class*='Indicators'] > *",
+          ),
+        ).filter(isVisibleEnabled);
+        const clickableIndicators = indicators.filter((indicator) => {
+          const label = controlLabel(indicator);
+          return !label.includes("indicator-separator");
+        });
+        const toClick = new Set(
+          clickableIndicators.filter((indicator) =>
+            isClearControlLabel(controlLabel(indicator)),
+          ),
+        );
+        if (toClick.size === 0 && fieldHasSelectedValue(field)) {
+          clickableIndicators.slice(0, -1).forEach((indicator) => {
+            const label = controlLabel(indicator);
+            if (!isDropdownToggleLabel(label)) {
+              toClick.add(indicator);
+            }
+          });
+        }
+        let clicked = 0;
+        toClick.forEach((indicator) => {
+          if (clickClearControl(indicator)) {
+            clicked += 1;
+          }
+        });
+        return clicked;
+      }
+
       let cleared = 0;
+      let clearIndicatorClicks = 0;
+      const openDropdownsBefore = countOpenDropdowns();
+      const preClosedDropdowns = closeOpenDropdowns();
+      await sleep(80);
       const inputs = Array.from(document.querySelectorAll("input")).filter(
         (el) => !el.disabled,
       );
@@ -183,7 +622,7 @@ async function clearCurrentPage(tabId) {
         }
         if (type === "file") {
           if (el.files?.length) {
-            el.value = "";
+            setNativeValue(el, "");
             dispatch(el);
             cleared += 1;
           }
@@ -194,18 +633,145 @@ async function clearCurrentPage(tabId) {
         }
         if (["checkbox", "radio"].includes(type)) {
           if (el.checked) {
-            el.checked = false;
+            setNativeChecked(el, false);
             dispatch(el);
             cleared += 1;
           }
           return;
         }
         if (el.value) {
-          el.value = "";
+          setNativeValue(el, "");
           dispatch(el);
           cleared += 1;
         }
       });
+
+      Array.from(
+        document.querySelectorAll(
+          '[role="combobox"], [aria-autocomplete="list"], .select__container input, [class*="select"] input',
+        ),
+      )
+        .filter(isVisibleEnabled)
+        .forEach((el) => {
+          let changed = false;
+          if (el.value) {
+            setNativeValue(el, "");
+            changed = true;
+          }
+          [
+            "aria-activedescendant",
+            "aria-controls",
+            "data-selected",
+            "data-value",
+          ].forEach((attr) => {
+            if (el.hasAttribute(attr)) {
+              el.removeAttribute(attr);
+              changed = true;
+            }
+          });
+          const field = el.closest(
+            ".select__container, .select-shell, .custom-select, .application-field, [role='group']",
+          );
+          if (field && clearDatasetSelection(field)) {
+            changed = true;
+          }
+          if (field) {
+            const indicatorClicks = clickSelectClearIndicators(field);
+            if (indicatorClicks > 0) {
+              clearIndicatorClicks += indicatorClicks;
+              changed = true;
+            }
+            Array.from(
+              field.querySelectorAll(
+                ".select__indicators button, .select__indicators [role='button']",
+              ),
+            )
+              .filter(isVisibleEnabled)
+              .forEach((button, index, buttons) => {
+                const label = [
+                  button.getAttribute("aria-label"),
+                  button.getAttribute("title"),
+                  button.innerText,
+                  button.textContent,
+                ]
+                  .filter(Boolean)
+                  .join(" ")
+                  .trim()
+                  .toLowerCase();
+                const isToggle = label.includes("toggle");
+                const isClear =
+                  label.includes("clear") ||
+                  label.includes("remove") ||
+                  label === "x" ||
+                  label === "×" ||
+                  label === "Ã—";
+                if (
+                  isClear ||
+                  (!isToggle && buttons.length > 1 && index === 0)
+                ) {
+                  if (clickClearControl(button)) {
+                    clearIndicatorClicks += 1;
+                  }
+                  changed = true;
+                }
+              });
+            Array.from(
+              field.querySelectorAll(
+                "input[aria-hidden='true'], input[tabindex='-1']",
+              ),
+            ).forEach((hiddenInput) => {
+              if (hiddenInput.value) {
+                setNativeValue(hiddenInput, "");
+                dispatch(hiddenInput);
+                changed = true;
+              }
+            });
+            Array.from(
+              field.querySelectorAll(
+                ".select__single-value, .select__multi-value, [class*='singleValue'], [class*='multiValue'], [class*='placeholder']",
+              ),
+            ).forEach((valueEl) => {
+              if ((valueEl.textContent || "").trim()) {
+                valueEl.textContent = "";
+                changed = true;
+              }
+            });
+            Array.from(
+              field.querySelectorAll(
+                'button, [role="button"], [aria-label], [class*="clear"], [class*="remove"]',
+              ),
+            )
+              .filter(isVisibleEnabled)
+              .forEach((button) => {
+                const label = [
+                  button.getAttribute("aria-label"),
+                  button.getAttribute("title"),
+                  button.innerText,
+                  button.textContent,
+                ]
+                  .filter(Boolean)
+                  .join(" ")
+                  .trim()
+                  .toLowerCase();
+                if (
+                  label.includes("clear") ||
+                  label.includes("remove") ||
+                  label === "x" ||
+                  label === "×" ||
+                  label === "Ã—"
+                ) {
+                  if (clickClearControl(button)) {
+                    clearIndicatorClicks += 1;
+                  }
+                  changed = true;
+                }
+              });
+          }
+          if (changed) {
+            dispatch(el);
+            cleared += 1;
+          }
+        });
 
       Array.from(
         document.querySelectorAll('button, [role="button"], a[aria-label]'),
@@ -243,8 +809,9 @@ async function clearCurrentPage(tabId) {
             nearby.includes("cv") ||
             nearby.includes("cover letter");
           if (looksLikeRemove && looksLikeUploadedFile) {
-            el.click();
-            cleared += 1;
+            if (clickClearControl(el)) {
+              cleared += 1;
+            }
           }
         });
 
@@ -252,7 +819,7 @@ async function clearCurrentPage(tabId) {
         .filter(isVisibleEnabled)
         .forEach((el) => {
           if (el.value) {
-            el.value = "";
+            setNativeValue(el, "");
             dispatch(el);
             cleared += 1;
           }
@@ -269,7 +836,7 @@ async function clearCurrentPage(tabId) {
               option.selected = false;
             });
           } else if (Array.from(el.options || []).some((o) => o.value === "")) {
-            el.value = "";
+            setNativeValue(el, "");
           } else {
             el.selectedIndex = -1;
           }
@@ -292,7 +859,25 @@ async function clearCurrentPage(tabId) {
           }
         });
 
-      return { cleared };
+      await sleep(120);
+      const closedDropdowns = preClosedDropdowns + closeOpenDropdowns();
+      await sleep(120);
+      const finalClosedDropdowns = closeOpenDropdowns();
+      await sleep(80);
+      const hiddenDropdownMenus = hideTransientDropdownMenus();
+      await sleep(80);
+      const remainingOpenDropdowns = countOpenDropdowns();
+      const remainingFilledControls = countRemainingFilledControls();
+
+      return {
+        cleared,
+        closedDropdowns: closedDropdowns + finalClosedDropdowns,
+        hiddenDropdownMenus,
+        openDropdownsBefore,
+        remainingOpenDropdowns,
+        remainingFilledControls,
+        clearIndicatorClicks,
+      };
     },
   });
 
@@ -300,20 +885,72 @@ async function clearCurrentPage(tabId) {
     (total, result) => total + Number(result.result?.cleared || 0),
     0,
   );
-  await logActivity("page.clear", "Current page fields cleared.", {
-    tabId,
-    cleared,
-    frameCount: results.length,
-  });
+  const closedDropdowns = results.reduce(
+    (total, result) => total + Number(result.result?.closedDropdowns || 0),
+    0,
+  );
+  const hiddenDropdownMenus = results.reduce(
+    (total, result) => total + Number(result.result?.hiddenDropdownMenus || 0),
+    0,
+  );
+  const openDropdownsBefore = results.reduce(
+    (total, result) => total + Number(result.result?.openDropdownsBefore || 0),
+    0,
+  );
+  const remainingOpenDropdowns = results.reduce(
+    (total, result) =>
+      total + Number(result.result?.remainingOpenDropdowns || 0),
+    0,
+  );
+  const remainingFilledControls = results.reduce(
+    (total, result) =>
+      total + Number(result.result?.remainingFilledControls || 0),
+    0,
+  );
+  const clearIndicatorClicks = results.reduce(
+    (total, result) => total + Number(result.result?.clearIndicatorClicks || 0),
+    0,
+  );
+  const needsReview = remainingOpenDropdowns > 0 || remainingFilledControls > 0;
+  await logActivity(
+    "page.clear",
+    needsReview
+      ? "Current page clear needs review."
+      : "Current page fields cleared.",
+    {
+      tabId,
+      cleared,
+      closedDropdowns,
+      hiddenDropdownMenus,
+      openDropdownsBefore,
+      remainingOpenDropdowns,
+      remainingFilledControls,
+      clearIndicatorClicks,
+      frameCount: results.length,
+    },
+    needsReview ? "warn" : "ok",
+  );
   await showPageToast(
     tabId,
-    `Cleared ${cleared} field${cleared === 1 ? "" : "s"}.`,
+    needsReview
+      ? `Cleared ${cleared} field${cleared === 1 ? "" : "s"}, but ${remainingOpenDropdowns} dropdown${remainingOpenDropdowns === 1 ? "" : "s"} and ${remainingFilledControls} control${remainingFilledControls === 1 ? "" : "s"} may still need review.`
+      : `Cleared ${cleared} field${cleared === 1 ? "" : "s"} and closed ${closedDropdowns} dropdown${closedDropdowns === 1 ? "" : "s"}.`,
+    needsReview ? "warn" : "info",
   );
   return {
-    ok: true,
+    ok: !needsReview,
+    reason: needsReview ? "clear_needs_review" : "",
     cleared,
+    closedDropdowns,
+    hiddenDropdownMenus,
+    openDropdownsBefore,
+    remainingOpenDropdowns,
+    remainingFilledControls,
+    clearIndicatorClicks,
     frameCount: results.length,
-    message: `Cleared ${cleared} field${cleared === 1 ? "" : "s"} on the current page.`,
+    message: needsReview
+      ? `Cleared ${cleared} field${cleared === 1 ? "" : "s"}, but ${remainingOpenDropdowns} dropdown${remainingOpenDropdowns === 1 ? "" : "s"} and ${remainingFilledControls} control${remainingFilledControls === 1 ? "" : "s"} may still need review.`
+      : `Cleared ${cleared} field${cleared === 1 ? "" : "s"} and closed ${closedDropdowns} dropdown${closedDropdowns === 1 ? "" : "s"} on the current page.`,
   };
 }
 
@@ -645,6 +1282,11 @@ async function handleMessage(message, sender = {}) {
             result.attempt?.applyUrl || state.activeApplyContext.applyUrl,
           atsType: result.attempt?.atsType,
           filledFieldCount: result.attempt?.filledFieldCount,
+          pendingLlmFieldCount: result.result?.pendingLlmFieldCount || 0,
+          pendingLlmFields: (result.result?.pendingLlmFields || []).slice(
+            0,
+            10,
+          ),
           manualReviewRequired: result.attempt?.manualReviewRequired,
         },
         result.ok ? "ok" : "failed",
@@ -676,6 +1318,49 @@ async function handleMessage(message, sender = {}) {
           result.attempt?.manualReviewRequired
           ? "warn"
           : "info",
+      );
+      if (result.ok && result.result?.pendingLlmFieldCount > 0) {
+        await showLlmPrompt(message.payload?.tabId || sender.tab?.id, {
+          fieldCount: result.result.pendingLlmFieldCount,
+          filledFieldCount: result.result.filledFieldCount || 0,
+        });
+      }
+      return result;
+    }
+
+    case "hunt.apply.fill_remaining_with_llm": {
+      const state = await getExtensionState();
+      const result = await runPendingLlmFillForTab(
+        message.payload?.tabId || sender.tab?.id,
+        state,
+      );
+      await sendDebugLog("llm_fill_result", {
+        ok: result.ok,
+        message: result.message,
+        route: result.route,
+        attempt: result.attempt,
+        result: result.result,
+        generatedAnswers: result.generatedAnswers,
+      });
+      await logActivity(
+        result.ok ? "llm_fill.complete" : "llm_fill.failed",
+        result.message ||
+          (result.ok ? "LLM fill completed." : "LLM fill failed."),
+        {
+          filledFieldCount: result.attempt?.filledFieldCount,
+          generatedAnswerCount: result.attempt?.generatedAnswerCount,
+          pendingLlmFieldCount: result.result?.pendingLlmFieldCount || 0,
+          answerDecisionDiagnostics: (
+            result.result?.answerDecisionDiagnostics || []
+          ).slice(0, 20),
+        },
+        result.ok ? "ok" : "failed",
+      );
+      await showPageToast(
+        message.payload?.tabId || sender.tab?.id,
+        result.message ||
+          (result.ok ? "LLM fill completed." : "LLM fill failed."),
+        result.ok ? "info" : "warn",
       );
       return result;
     }

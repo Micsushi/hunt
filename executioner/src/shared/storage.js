@@ -73,6 +73,9 @@ export function sanitizeSettings(settings = {}) {
     flagLowConfidenceAnswers: sanitizeBoolean(
       settings.flagLowConfidenceAnswers ?? true,
     ),
+    llmAnswerFallbackEnabled: sanitizeBoolean(
+      settings.llmAnswerFallbackEnabled ?? true,
+    ),
     stripLongDash: sanitizeBoolean(settings.stripLongDash ?? true),
   };
 }
@@ -183,6 +186,10 @@ function sanitizeFieldInventory(entries = []) {
     name: sanitizeText(entry.name),
     id: sanitizeText(entry.id),
     descriptor: sanitizeText(entry.descriptor),
+    questionHash: sanitizeText(entry.questionHash),
+    options: Array.isArray(entry.options)
+      ? entry.options.map((option) => sanitizeText(option)).slice(0, 80)
+      : [],
     required: sanitizeBoolean(entry.required),
     skippedReason: sanitizeText(entry.skippedReason),
     valueSource: sanitizeText(entry.valueSource),

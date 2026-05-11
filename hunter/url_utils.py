@@ -7,9 +7,18 @@ ATS_HOST_SUFFIXES = {
     "workday": ("myworkdayjobs.com", "workday.com"),
     "ashby": ("ashbyhq.com",),
     "smartrecruiters": ("smartrecruiters.com",),
+    "workable": ("workable.com",),
     "jobvite": ("jobvite.com",),
     "icims": ("icims.com",),
     "bamboohr": ("bamboohr.com",),
+    "taleo": ("taleo.net",),
+    "oracle": ("oraclecloud.com",),
+    "adp": ("workforcenow.adp.com",),
+    "ukg": ("ultipro.com", "ukg.com"),
+    "breezy": ("breezy.hr",),
+    "jazzhr": ("applytojob.com", "jazzhr.com"),
+    "recruitee": ("recruitee.com",),
+    "pinpoint": ("pinpointhq.com",),
 }
 
 LINKEDIN_REDIRECT_QUERY_KEYS = (

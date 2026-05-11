@@ -213,12 +213,13 @@ Rules:
 
 ## Implementation Order
 
-1. Add backend answer schemas and deterministic-only pipeline.
-2. Add `/api/c3/answer-decision` and unit tests.
-3. Add provider status route and Ollama reachability check.
-4. Add prompt templates and LLM fallback through `fletcher.llm.client.generate_json`.
-5. Add validators and retry-on-invalid-output once.
-6. Wire extension only for required unanswered fields.
+1. Add backend answer schemas and deterministic-only pipeline. Done 2026-05-10.
+2. Add `/api/c3/answer-decision` and unit tests. Done 2026-05-10.
+3. Add provider status route and Ollama reachability check. Done 2026-05-10.
+4. Add prompt templates and LLM fallback through `fletcher.llm.client.generate_json`. Done 2026-05-10.
+5. Add validators and retry-on-invalid-output once. Exact-option validation done 2026-05-10; repair retry still open.
+6. Wire extension only for required unanswered fields. Done 2026-05-10 for fixed-choice fields with visible/collectable options.
+   - Updated flow: first fill pass is deterministic only. If unanswered required fixed-choice fields remain, C3 shows an in-page prompt asking whether to use LLM help. The backend/LLM pass runs only after the operator clicks `Use LLM`.
 7. Add Options toggles: enable C3 LLM fallback, allow cloud provider, allow generated paragraphs.
 8. Add logs and UI evidence for every answer decision.
 9. Add manual mapping memory after live testing shows stable signatures.

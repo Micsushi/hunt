@@ -295,22 +295,25 @@
         background: var(--panel-strong);
         border: 1px solid var(--line);
         border-radius: var(--radius-sm);
+        cursor: pointer;
         display: grid;
         gap: 10px;
-        grid-template-columns: 170px 190px minmax(0, 1fr);
+        grid-template-columns: 170px 190px minmax(0, 1fr) auto;
         min-height: 34px;
         padding: 7px 10px;
       }
 
       .log-time,
       .log-action,
-      .log-summary {
+      .log-summary,
+      .log-toggle {
         font-size: 0.75rem;
         line-height: 1.3;
       }
 
       .log-time,
-      .log-action {
+      .log-action,
+      .log-toggle {
         color: var(--muted);
         font-family: var(--font-mono);
         overflow: hidden;
@@ -321,6 +324,33 @@
       .log-summary {
         color: var(--ink);
         overflow-wrap: anywhere;
+      }
+
+      .log-toggle {
+        border: 0;
+        min-height: 0;
+        padding: 0;
+      }
+
+      .log-details {
+        background: #101a11;
+        border: 1px solid var(--line);
+        border-radius: var(--radius-sm);
+        color: var(--ink);
+        display: none;
+        font-family: var(--font-mono);
+        font-size: 0.72rem;
+        grid-column: 1 / -1;
+        line-height: 1.45;
+        margin-top: 2px;
+        max-height: 220px;
+        overflow: auto;
+        padding: 8px;
+        white-space: pre-wrap;
+      }
+
+      .log-entry.expanded .log-details {
+        display: block;
       }
 
       .empty-log {
@@ -500,7 +530,6 @@
             </label>
           </div>
           <div class="actions">
-            <button type="submit">Save Settings</button>
             <button id="poll-c4-once" type="button">Poll C4 Once</button>
             <button id="test-debug-log-sink" type="button">
               Test Log Sink
@@ -652,9 +681,6 @@
             <button id="import-profile-tex" type="button">
               Import Profile From TeX
             </button>
-          </div>
-          <div class="actions">
-            <button type="submit">Save Profile</button>
           </div>
         </form>
       </section>
