@@ -38,8 +38,9 @@ Fixes now in this batch:
   Delete/Backspace.
 - Clear does stabilization passes so late Workday dependent values are cleared
   before the result is counted.
-- Fill Current Page has bounded in-page progress/toast, Safe Next probe, auto
-  log export, and fill-run timeouts so the popup does not look stuck forever.
+- Fill Current Page has bounded in-page progress/toast, Safe Next probe,
+  optional auto log export, and fill-run timeouts so the popup does not look
+  stuck forever.
 - The shared input setter now simulates character-by-character typed input for
   native inputs/textareas so Workday validation sees committed text values.
 - The live smoke seeder now writes profile/resume context after the Options page
@@ -51,10 +52,12 @@ Verification:
 - Live controlled Chrome page-1 verify-clear smoke: clear returned no Workday
   buttons, no selected pills, and no native values; refill restored source,
   country, province, phone type, name, city, email, and phone.
-- Normal live Workday smoke now gets past My Information into later steps when
-  the page is hydrated before fill. A timing-only smoke that fills too early can
-  still hit Workday validation errors, so live operators should wait for the
-  page fields to finish rendering before clicking Fill Current Page.
+- A controlled page-1 verify-clear smoke confirms the clear/refill behavior.
+  The later full fill-only artifact is not a clean Review proof: its first fill
+  ran before Workday finished hydrating the dependent fields, and the retry
+  filled values while Workday still kept required-field validation errors. Live
+  operators should wait for the page fields to finish rendering before clicking
+  Fill Current Page.
 
 Still open:
 
@@ -62,6 +65,8 @@ Still open:
   Add-button finder to include focusable Workday controls. The synthetic and
   static guards pass, but the latest full live run did not conclusively verify
   work and education insertion.
+- A fresh full live Workday pass to Review is still needed after the
+  2026-05-12 clear/commit and My Experience Add-control changes.
 
 ## 2026-05-12 Step Prompt Refresh
 
@@ -371,8 +376,9 @@ Status:
 - Verification is much stronger than before.
 - Live Hootsuite retest confirmed text fields stayed committed after fill:
   first name, last name, email, and LinkedIn were present in the real iframe DOM.
-- Live Workday testing now drives every `Next` page until Review and stops
-  before Submit.
+- 2026-05-11 live Workday smoke drove every `Next` page until Review and
+  stopped before Submit. The 2026-05-12 follow-up artifacts reconfirm page-1
+  clear/refill behavior but do not replace that earlier full Review proof.
 
 ## Step 11: Ask For LLM Help
 
@@ -460,7 +466,7 @@ Status:
 
 ## What Is Verified
 
-- C3 CI passes with 23 tests passed and 19 skipped.
+- `python ci.py c3` passes with 23 tests passed and 19 skipped.
 - The dedicated controlled browser endpoint works.
 - The unpacked extension loads in the controlled browser.
 - A local Greenhouse-like fixture shows the Hunt prompt.
@@ -468,12 +474,16 @@ Status:
   leaves manual review only for missing default resume data.
 - Live Hootsuite Clear Current Page clears the same real form back to empty
   state and closes React Select open-state classes.
-- Live Workday `Autofill with Resume` on Jonas Software Canada reaches step 6 of
-  6, Review, with Submit visible and no page errors.
-- Live Workday `Apply Manually` on the same posting reaches step 5 of 5, Review,
-  with Submit visible and no page errors.
-- The Workday review text shows committed identity, source, location, email,
-  phone `+1 7800000000 (Mobile)`, and `main.pdf` resume attachment.
+- 2026-05-11 live Workday `Autofill with Resume` on Jonas Software Canada
+  reached step 6 of 6, Review, with Submit visible and no page errors.
+- 2026-05-11 live Workday `Apply Manually` on the same posting reached step 5 of
+  5, Review, with Submit visible and no page errors.
+- The 2026-05-11 Workday review text showed committed identity, source,
+  location, email, phone `+1 7800000000 (Mobile)`, and `main.pdf` resume
+  attachment.
+- The 2026-05-12 controlled page-1 verify-clear smoke cleared Workday button
+  dropdowns, selected pills, and native field values, then refill restored
+  source, country, province, phone type, legal name, city, email, and phone.
 - Gap report tests pass.
 - Clear Page synthetic Chrome smoke clears custom dropdown state correctly.
 - Route selection, ATS registry, and generic-backed adapter behavior have test
@@ -499,6 +509,9 @@ Status:
   the safer verification path after code changes.
 - C4 polling and fill-result postback as a full end-to-end browser flow.
 - Workday across many live Workday variants.
+- Fresh full live Workday Review pass after the 2026-05-12 clear/commit and My
+  Experience Add-control fixes.
+- Safe Next after-fill live ATS/browser smoke.
 - Greenhouse, Lever, Ashby, Workable, and SmartRecruiters as mature dedicated
   adapters.
 - Detected-only ATSs such as iCIMS, Taleo, ADP, UKG, Jobvite, and BambooHR.
