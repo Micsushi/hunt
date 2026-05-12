@@ -51,7 +51,29 @@ if (-not (Test-Path -LiteralPath (Join-Path $extension "manifest.json"))) {
 
 New-Item -ItemType Directory -Force -Path $profile | Out-Null
 
-$existingEndpoint = Get-NetTCPConnection -LocalPort 9222 -ErrorAction SilentlyContinue
+$windowPosition = $env:HUNT_C3_CHROME_WINDOW_POSITION
+$windowSize = $env:HUNT_C3_CHROME_WINDOW_SIZE
+if (-not $windowSize) {
+    $windowSize = "1400,1000"
+}
+if (-not $windowPosition) {
+    try {
+        Add-Type -AssemblyName System.Windows.Forms
+        $secondaryScreen = [System.Windows.Forms.Screen]::AllScreens |
+            Where-Object { -not $_.Primary } |
+            Sort-Object { $_.Bounds.X }, { $_.Bounds.Y } |
+            Select-Object -First 1
+        if ($secondaryScreen) {
+            $x = $secondaryScreen.WorkingArea.X + 40
+            $y = $secondaryScreen.WorkingArea.Y + 40
+            $windowPosition = "$x,$y"
+        }
+    } catch {
+        Write-Warning "Could not detect secondary monitors for C3 Chrome window placement: $($_.Exception.Message)"
+    }
+}
+
+$existingEndpoint = Get-NetTCPConnection -LocalPort 9222 -State Listen -ErrorAction SilentlyContinue
 if ($existingEndpoint) {
     $owners = $existingEndpoint |
         Select-Object -ExpandProperty OwningProcess -Unique |
@@ -76,12 +98,18 @@ $arguments = @(
     "--disable-extensions-except=$extension",
     "--load-extension=$extension",
     "--no-first-run",
-    "--no-default-browser-check"
+    "--no-default-browser-check",
+    "--window-size=$windowSize"
 )
+if ($windowPosition) {
+    $arguments += "--window-position=$windowPosition"
+}
 
 Start-Process -FilePath $chrome -ArgumentList $arguments
 Write-Host "Started C3 Chrome DevTools endpoint: http://127.0.0.1:9222"
 Write-Host "Browser kind: $browserKind"
 Write-Host "Browser: $chrome"
 Write-Host "Profile: $profile"
+Write-Host "Window position: $($windowPosition -or 'default')"
+Write-Host "Window size: $windowSize"
 Write-Host "Extension: $extension"

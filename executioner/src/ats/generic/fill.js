@@ -173,6 +173,7 @@ export function createGenericFillFunction() {
     var manualReviewReasons = [];
     var fieldInventory = [];
     var resumeUploadDone = false;
+    var pendingTextVerifications = [];
 
     var rectSummary = function (rect) {
       return {
@@ -205,6 +206,50 @@ export function createGenericFillFunction() {
         },
         extra || {},
       );
+    };
+    var committedTextValue = function (el) {
+      if (!el) {
+        return "";
+      }
+      if (el.isContentEditable || el.getAttribute("role") === "textbox") {
+        return u.normalizeText(el.textContent || "", stripLongDash);
+      }
+      return u.normalizeText(el.value || "", stripLongDash);
+    };
+    var textValueMatches = function (el, expected) {
+      return (
+        committedTextValue(el).toLowerCase() ===
+        u.normalizeText(expected, stripLongDash).toLowerCase()
+      );
+    };
+    var verifyPendingTextFills = async function () {
+      for (var i = 0; i < pendingTextVerifications.length; i++) {
+        var pending = pendingTextVerifications[i];
+        if (!textValueMatches(pending.element, pending.expectedValue)) {
+          u.setElementValue(
+            pending.element,
+            pending.expectedValue,
+            stripLongDash,
+          );
+          await sleep(perFieldDelayMs + 80);
+        }
+        if (textValueMatches(pending.element, pending.expectedValue)) {
+          pending.inventory.filled = true;
+          pending.inventory.skippedReason = "";
+          pending.inventory.valueSource = pending.valueSource;
+          filledFields.push({
+            field: pending.descriptor,
+            valueSource: pending.valueSource,
+          });
+        } else {
+          pending.inventory.filled = false;
+          pending.inventory.skippedReason = "commit_lost";
+          pending.inventory.valueSource = "";
+          if (pending.inventory.required) {
+            manualReviewReasons.push("field_commit_lost");
+          }
+        }
+      }
     };
 
     var textInputs = u.getVisibleElements(
@@ -423,9 +468,12 @@ export function createGenericFillFunction() {
       if (match && u.setElementValue(elem, match.value, stripLongDash)) {
         elementInventory.filled = true;
         elementInventory.valueSource = match.key;
-        filledFields.push({
-          field: desc,
+        pendingTextVerifications.push({
+          element: elem,
+          expectedValue: match.value,
+          descriptor: desc,
           valueSource: match.key,
+          inventory: elementInventory,
         });
         await sleep(perFieldDelayMs);
       } else {
@@ -450,6 +498,8 @@ export function createGenericFillFunction() {
           el.blur();
         }
       });
+
+    await verifyPendingTextFills();
 
     if (sorted.length > 0 && filledFields.length === 0) {
       manualReviewReasons.push("no_known_fields_filled");

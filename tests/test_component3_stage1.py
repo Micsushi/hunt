@@ -327,6 +327,14 @@ class Component3Stage1Tests(unittest.TestCase):
         self.assertEqual(profile["websiteUrl"], "https://mshi.ca")
         self.assertEqual(profile["linkedinUrl"], "https://linkedin.com/in/wjshi")
         self.assertEqual(profile["githubUrl"], "https://github.com/micsushi")
+        self.assertEqual(profile["education"][0]["school"], "University of Alberta")
+        self.assertIn("Computer Science", profile["education"][0]["degree"])
+        self.assertEqual(profile["education"][0]["endYear"], "2026")
+        self.assertEqual(profile["workExperience"][0]["company"], "INVIDI Technologies")
+        self.assertEqual(profile["workExperience"][0]["jobTitle"], "Junior Software Developer (Part-time)")
+        self.assertIn("Kotlin microservices", profile["workExperience"][0]["description"])
+        self.assertIn("Python", profile["skills"])
+        self.assertIn("Kubernetes", profile["skills"])
         self.assertIn("Phone", payload["missing"])
 
     def test_fill_route_names_cover_standalone_db_and_c4_modes(self):
@@ -475,16 +483,21 @@ class Component3Stage1Tests(unittest.TestCase):
         self.assertEqual(manifest["content_scripts"][0]["matches"], ["<all_urls>"])
         self.assertIn("c4PollingEnabled", settings)
         self.assertIn("autoPromptEnabled", settings)
+        self.assertIn("autoClickNextAfterFill", settings)
         self.assertIn("fillRequiredOnly", settings)
         self.assertIn("settingsVersion", settings)
         self.assertIn("autoExportLogs", settings)
         self.assertIn("debugLogSinkEnabled", settings)
         self.assertIn("coOpTermsCompleted", settings)
+        self.assertIn("workExperience", settings)
+        self.assertIn("education", settings)
+        self.assertIn("skills", settings)
         self.assertIn("llmAnswerFallbackEnabled", settings)
         self.assertIn("autoExportLogPrefix", settings)
         self.assertIn("backendUrl", settings)
         self.assertIn("serviceToken", settings)
         self.assertIn("pollIntervalSeconds", storage)
+        self.assertIn("autoClickNextAfterFill", storage)
         self.assertIn("fetchPendingFills", api)
         self.assertIn("/api/c3/pending-fills", api)
         self.assertIn("/api/c3/fill-result", api)
@@ -493,9 +506,12 @@ class Component3Stage1Tests(unittest.TestCase):
         self.assertIn("/api/c3/answer-decision", api)
         self.assertIn("chrome.alarms.onAlarm", background)
         self.assertIn("hunt.apply.poll_c4_once", background)
+        self.assertIn("hunt.apply.click_next_after_fill", background)
+        self.assertIn("createSafeNextFunction", background)
         self.assertIn('id="c4-polling-enabled"', options)
         self.assertIn('id="poll-c4-once"', options)
         self.assertIn('id="auto-prompt-enabled"', options)
+        self.assertIn('id="auto-click-next-after-fill"', options)
         self.assertIn('id="fill-required-only"', options)
         self.assertIn('id="auto-export-logs"', options)
         self.assertIn('id="debug-log-sink-enabled"', options)
@@ -503,7 +519,16 @@ class Component3Stage1Tests(unittest.TestCase):
         self.assertIn('id="export-logs-now"', options)
         self.assertIn('id="test-debug-log-sink"', options)
         self.assertIn('id="activity-log-count"', options)
+        self.assertIn('data-tab-target="experience"', options)
+        self.assertIn('id="work-experience-list"', options)
+        self.assertIn('id="education-list"', options)
+        self.assertIn('id="profile-skills"', options)
         self.assertIn("max-height: min(420px, 52vh)", options)
+        options_js = (
+            REPO_ROOT / "executioner" / "src" / "options" / "options.js"
+        ).read_text(encoding="utf-8")
+        self.assertIn("const currentProfile = readFullProfileForm()", options_js)
+        self.assertIn("mergeProfileFromResume(currentProfile, parsedProfile)", options_js)
         self.assertIn("hunt.apply.export_logs", background)
         self.assertIn("hunt.apply.test_debug_log_sink", background)
         self.assertIn("chrome.downloads.download", background)
@@ -518,6 +543,49 @@ class Component3Stage1Tests(unittest.TestCase):
         self.assertIn("genericBackedAtsNames", fill_runner)
         self.assertIn("detectAtsTypeForTab", fill_runner)
         self.assertIn("collectFrameSignals", fill_runner)
+        self.assertIn("class C3AutofillPipeline", fill_runner)
+        self.assertIn("class C3AutofillPipelineContext", fill_runner)
+        self.assertIn("class ResolveActiveTabStep", fill_runner)
+        self.assertIn("class DetectAtsStep", fill_runner)
+        self.assertIn("class SelectFillRouteStep", fill_runner)
+        self.assertIn("class ResolveFillAdapterStep", fill_runner)
+        self.assertIn("class InjectSharedUtilitiesStep", fill_runner)
+        self.assertIn("class RunAdapterFillStep", fill_runner)
+        self.assertIn("class PrepareLlmHelpStep", fill_runner)
+        self.assertIn("class PersistFillAttemptStep", fill_runner)
+        self.assertIn("class BuildFillResponseStep", fill_runner)
+        self.assertLess(
+            fill_runner.index("new ResolveActiveTabStep()"),
+            fill_runner.index("new DetectAtsStep()"),
+        )
+        self.assertLess(
+            fill_runner.index("new DetectAtsStep()"),
+            fill_runner.index("new SelectFillRouteStep()"),
+        )
+        self.assertLess(
+            fill_runner.index("new SelectFillRouteStep()"),
+            fill_runner.index("new ResolveFillAdapterStep()"),
+        )
+        self.assertLess(
+            fill_runner.index("new ResolveFillAdapterStep()"),
+            fill_runner.index("new InjectSharedUtilitiesStep()"),
+        )
+        self.assertLess(
+            fill_runner.index("new InjectSharedUtilitiesStep()"),
+            fill_runner.index("new RunAdapterFillStep()"),
+        )
+        self.assertLess(
+            fill_runner.index("new RunAdapterFillStep()"),
+            fill_runner.index("new PrepareLlmHelpStep()"),
+        )
+        self.assertLess(
+            fill_runner.index("new PrepareLlmHelpStep()"),
+            fill_runner.index("new PersistFillAttemptStep()"),
+        )
+        self.assertLess(
+            fill_runner.index("new PersistFillAttemptStep()"),
+            fill_runner.index("new BuildFillResponseStep()"),
+        )
         self.assertIn("attachPendingLlmSummary", fill_runner)
         self.assertIn("markInventoryFilledByDecision", fill_runner)
         self.assertIn("pendingLlmFields", fill_runner)
@@ -533,6 +601,8 @@ class Component3Stage1Tests(unittest.TestCase):
         )
         self.assertIn("llm.prompt.show", background)
         self.assertIn("hunt.apply.fill_remaining_with_llm", popup_js)
+        self.assertIn("showNextConfirm", popup_js)
+        self.assertIn("hunt.apply.click_next_after_fill", popup_js)
         self.assertIn("const state = await getExtensionState();", background)
         self.assertIn("runPendingLlmFillForTab(", background)
         self.assertIn("showLlmConfirm", popup_js)
@@ -561,7 +631,13 @@ class Component3Stage1Tests(unittest.TestCase):
         popup = (REPO_ROOT / "executioner" / "src" / "popup" / "popup.html").read_text(
             encoding="utf-8"
         )
+        popup_js = (REPO_ROOT / "executioner" / "src" / "popup" / "popup.js").read_text(
+            encoding="utf-8"
+        )
         background = (REPO_ROOT / "executioner" / "src" / "background" / "index.js").read_text(
+            encoding="utf-8"
+        )
+        injected = (REPO_ROOT / "executioner" / "src" / "shared" / "injected.js").read_text(
             encoding="utf-8"
         )
 
@@ -574,6 +650,16 @@ class Component3Stage1Tests(unittest.TestCase):
         self.assertIn("hunt.apply.fill_current_page", content)
         self.assertIn("hunt.apply.show_toast", content)
         self.assertIn("hunt-apply-page-toasts", content)
+        self.assertIn("hunt.apply.show_fill_progress", content)
+        self.assertIn("hunt.apply.hide_fill_progress", content)
+        self.assertIn("hunt.apply.dismiss_transient_ui", content)
+        self.assertIn("MutationObserver", content)
+        self.assertIn("schedulePromptCheck", content)
+        self.assertIn("navigation_click", content)
+        self.assertIn("dom_change", content)
+        self.assertIn("dismissedPromptSignatures", content)
+        self.assertIn("hunt-apply-fill-progress-spinner", content)
+        self.assertIn("Filling page", content)
         self.assertIn("detected_page_prompt", content)
         self.assertIn(
             "Prompt on signup/ATS pages",
@@ -585,11 +671,22 @@ class Component3Stage1Tests(unittest.TestCase):
         self.assertIn('id="llm-confirm"', popup)
         self.assertIn('id="llm-use"', popup)
         self.assertIn('id="llm-skip"', popup)
+        self.assertIn('id="next-confirm"', popup)
+        self.assertIn('id="next-go"', popup)
+        self.assertIn('id="next-always"', popup)
         self.assertIn('id="clear-page"', popup)
         self.assertNotIn('id="poll-c4-once"', popup)
         self.assertNotIn('id="clear-context"', popup)
         self.assertIn("sender.tab?.id", background)
         self.assertIn("hunt.apply.clear_current_page", background)
+        self.assertIn("showFillProgress", background)
+        self.assertIn("hideFillProgress", background)
+        self.assertIn("dismissPageTransientUi", background)
+        self.assertIn("await dismissPageTransientUi(tabId)", background)
+        self.assertIn("await showFillProgress(tabId", background)
+        self.assertIn("await hideFillProgress(tabId)", background)
+        self.assertIn('triggeredBy: "popup_fill_current_page"', popup_js)
+        self.assertIn("window.close()", popup_js)
         self.assertIn("page.clear", background)
         self.assertIn("allFrames: true", background)
         self.assertIn('[role="combobox"], [aria-autocomplete="list"]', background)
@@ -606,11 +703,27 @@ class Component3Stage1Tests(unittest.TestCase):
         self.assertIn("remainingFilledControls", background)
         self.assertIn("clearIndicatorClicks", background)
         self.assertIn("hiddenDropdownMenus", background)
+        self.assertIn("withTimeout", background)
+        self.assertIn("safe_next_probe_timeout", background)
+        self.assertIn("Safe Next check timed out.", background)
+        self.assertIn("Fill timed out before the page responded.", background)
+        self.assertIn("fill_timeout", background)
         self.assertIn("hideTransientDropdownMenus", background)
+        self.assertIn("clearWorkdayButtonDropdowns", background)
+        self.assertIn("clearWorkdayMultiselects", background)
+        self.assertIn("countRemainingWorkdayButtonValues", background)
+        self.assertIn("countRemainingWorkdayMultiselectValues", background)
+        self.assertIn('button[aria-haspopup="listbox"]', background)
+        self.assertIn("press delete to clear value", background)
+        self.assertIn("workdaySelectedItems", background)
+        self.assertIn("workdayButtonClears", background)
+        self.assertIn("workdayMultiselectClears", background)
         self.assertIn("clickClearControl", background)
         self.assertIn("fieldHasSelectedValue", background)
         self.assertIn("realisticClick", background)
         self.assertIn("setNativeValue", background)
+        self.assertIn('new InputEvent("input"', injected)
+        self.assertIn('new InputEvent("beforeinput"', injected)
         self.assertIn('[aria-expanded="true"]', background)
         self.assertIn('el.setAttribute("aria-expanded", "false")', background)
         self.assertIn("select__menu--is-open", background)
@@ -694,11 +807,25 @@ class Component3Stage1Tests(unittest.TestCase):
         fill_runner = (
             REPO_ROOT / "executioner" / "src" / "background" / "fill-runner.js"
         ).read_text(encoding="utf-8")
+        storage = (REPO_ROOT / "executioner" / "src" / "shared" / "storage.js").read_text(
+            encoding="utf-8"
+        )
 
         self.assertIn("document.querySelectorAll('input[type=\"file\"]')", workday)
         self.assertIn("resume_upload:missing_resume_data", workday)
         self.assertIn("pageLooksLikeResumeUpload", workday)
         self.assertIn("fieldInventory", workday)
+        self.assertIn("interactionTrace", workday)
+        self.assertIn('traceInteraction("hover"', workday)
+        self.assertIn('traceInteraction("click"', workday)
+        self.assertIn('traceInteraction("already_filled"', workday)
+        self.assertIn("u.traceInteraction = traceInteraction", workday)
+        self.assertIn("traceHoverAndClick", shared_utils)
+        self.assertIn("select_radio_option", shared_utils)
+        self.assertIn("select_combobox_option", shared_utils)
+        self.assertIn("sanitizeInteractionTrace", storage)
+        self.assertIn("sanitizeWorkExperience", storage)
+        self.assertIn("sanitizeEducation", storage)
         self.assertIn('"manual_review"', fill_runner)
         self.assertIn("manual review needed", fill_runner)
         self.assertIn("allFrames: true", fill_runner)
@@ -712,11 +839,77 @@ class Component3Stage1Tests(unittest.TestCase):
         self.assertIn("isExactProvinceField", workday)
         self.assertIn("applicationSource", workday)
         self.assertIn("fillComboboxElement", workday)
+        self.assertIn('button[aria-haspopup="listbox"]', workday)
+        self.assertIn("fillWorkdayButtonDropdown", workday)
+        self.assertIn("buttonValueMatchesChoice", workday)
+        self.assertIn("forceSetWorkdayButtonChoice", workday)
+        self.assertIn("workday_button_force_commit_after_click", workday)
+        self.assertIn("clearWorkdayButtonSelection", workday)
+        self.assertIn('[role="listbox"]', workday)
+        self.assertIn('el.style.pointerEvents = "none"', workday)
+        self.assertIn("primeCountryDependentFields", workday)
+        self.assertIn("isPhoneCountryCodeField", workday)
+        self.assertIn("countryCodeLooksCorrect", workday)
+        self.assertIn("scrollAttempt", workday)
+        self.assertIn('[id^="pill-"]', workday)
+        self.assertIn("press delete to clear value", workday)
+        self.assertIn("clearCountryCodeSelection", workday)
+        self.assertIn("required_terms_checkbox", workday)
+        self.assertIn("addWorkExperienceEntries", workday)
+        self.assertIn("addEducationEntries", workday)
+        self.assertIn("fillWorkdaySkills", workday)
+        self.assertIn("addWebsiteEntries", workday)
+        self.assertIn("processMyExperienceSections", workday)
+        self.assertIn("chooseStructuredChoice", shared_utils)
+        self.assertIn("optionScoreForChoice", shared_utils)
         self.assertIn("phone device type", shared_utils)
+        self.assertIn("countryParts.country", shared_utils)
         self.assertIn("how did you hear", shared_utils)
         self.assertIn("knownProvinces", shared_utils)
         self.assertIn("resume_already_uploaded", workday)
         self.assertIn("not_resume_input", workday)
+        self.assertIn('"drop file"', workday)
+        self.assertIn('"file-upload"', workday)
+
+    def test_workday_review_fixes_have_regression_guards(self):
+        workday = (REPO_ROOT / "executioner" / "src" / "ats" / "workday" / "fill.js").read_text(
+            encoding="utf-8"
+        )
+        fill_runner = (
+            REPO_ROOT / "executioner" / "src" / "background" / "fill-runner.js"
+        ).read_text(encoding="utf-8")
+        storage = (REPO_ROOT / "executioner" / "src" / "shared" / "storage.js").read_text(
+            encoding="utf-8"
+        )
+
+        self.assertIn("try {", workday)
+        self.assertIn("finally {", workday)
+        self.assertIn("traceTruncated", workday)
+        self.assertIn("finalizeRequiredFieldReview", workday)
+        self.assertIn('buttonResult.reason === "already_filled"', workday)
+        self.assertIn('phoneCountryResult.reason === "already_filled"', workday)
+        self.assertIn('"required_field_unresolved:"', workday)
+        self.assertIn("clear_failed", workday)
+        self.assertIn("traceTruncated", fill_runner)
+        self.assertIn("traceTruncated", storage)
+
+    def test_workday_my_experience_live_regression_guards(self):
+        workday = (REPO_ROOT / "executioner" / "src" / "ats" / "workday" / "fill.js").read_text(
+            encoding="utf-8"
+        )
+
+        self.assertIn("isWorkdayAddButtonLabel", workday)
+        self.assertIn("add another", workday)
+        self.assertIn("visibleInSection", workday)
+        self.assertIn("waitForSectionFieldCountIncrease", workday)
+        self.assertIn("emptyUrlInputs", workday)
+        self.assertIn("hasExistingResumeUpload", workday)
+        self.assertIn("resume_upload_existing", workday)
+        self.assertIn("existing_resume_upload_detected", workday)
+        self.assertIn('button, [role="button"], a, [tabindex]', workday)
+        self.assertIn("missing_profile_entries", workday)
+        self.assertIn("workday_my_experience_profile_counts", workday)
+        self.assertIn("visibleStepHeadings", workday)
 
     def test_devtools_target_picker_finds_c3_options_page(self):
         target = find_c3_target(

@@ -16,6 +16,7 @@ function setStatus(message, tone = "info") {
 }
 
 let pendingLlmFill = null;
+let pendingNextAfterFill = null;
 
 function pluralizeQuestion(count) {
   return `question${count === 1 ? "" : "s"}`;
@@ -44,6 +45,56 @@ function showLlmConfirm({ tabId, fieldCount, filledFieldCount }) {
 function hideLlmConfirm() {
   document.getElementById("llm-confirm")?.classList.add("hidden");
   pendingLlmFill = null;
+}
+
+function showNextConfirm({ tabId, nextAction }) {
+  const panel = document.getElementById("next-confirm");
+  const copy = document.getElementById("next-confirm-copy");
+  if (!panel || !copy) {
+    return;
+  }
+
+  pendingNextAfterFill = {
+    tabId,
+  };
+  const label = nextAction?.candidate?.label || "Next";
+  copy.textContent = `Hunt found a safe ${label} control after filling this page. Go next now, or remember this choice for future filled pages. Final submit and apply buttons stay blocked.`;
+  panel.classList.remove("hidden");
+}
+
+function hideNextConfirm() {
+  document.getElementById("next-confirm")?.classList.add("hidden");
+  pendingNextAfterFill = null;
+}
+
+function showPostFillPrompts(response, tabId) {
+  const pendingCount = Number(response?.result?.pendingLlmFieldCount || 0);
+  if (response?.ok && pendingCount > 0) {
+    hideNextConfirm();
+    showLlmConfirm({
+      tabId,
+      fieldCount: pendingCount,
+      filledFieldCount: Number(response?.result?.filledFieldCount || 0),
+    });
+    return;
+  }
+  if (response?.ok && response?.nextAction?.promptAvailable) {
+    hideLlmConfirm();
+    showNextConfirm({
+      tabId,
+      nextAction: response.nextAction,
+    });
+    return;
+  }
+  hideNextConfirm();
+}
+
+function fillStatusMessage(response, fallback) {
+  const message = response?.message || fallback;
+  if (response?.nextAction?.clicked) {
+    return `${message} ${response.nextAction.message || "Clicked Next."}`;
+  }
+  return message;
 }
 
 function summarizeResume(resume = {}) {
@@ -91,6 +142,10 @@ async function loadState() {
     response.settings.autoPromptEnabled ? "Enabled" : "Disabled",
   );
   setText(
+    "auto-next-after-fill",
+    response.settings.autoClickNextAfterFill ? "Enabled" : "Disabled",
+  );
+  setText(
     "required-only",
     response.settings.fillRequiredOnly ? "Enabled" : "Disabled",
   );
@@ -123,25 +178,27 @@ async function loadState() {
 
 document.getElementById("fill-now")?.addEventListener("click", async () => {
   hideLlmConfirm();
+  hideNextConfirm();
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-  const response = await chrome.runtime.sendMessage({
+  setStatus("Filling page...", "info");
+  const responsePromise = chrome.runtime.sendMessage({
     type: "hunt.apply.fill_current_page",
-    payload: { tabId: tab?.id || null },
+    payload: {
+      tabId: tab?.id || null,
+      triggeredBy: "popup_fill_current_page",
+    },
   });
+  setTimeout(() => {
+    window.close();
+  }, 120);
+  const response = await responsePromise;
 
   setStatus(
-    response?.message || "Fill action is not implemented yet.",
+    fillStatusMessage(response, "Fill action is not implemented yet."),
     response?.ok ? "info" : "warn",
   );
 
-  const pendingCount = Number(response?.result?.pendingLlmFieldCount || 0);
-  if (response?.ok && pendingCount > 0) {
-    showLlmConfirm({
-      tabId: tab?.id || null,
-      fieldCount: pendingCount,
-      filledFieldCount: Number(response?.result?.filledFieldCount || 0),
-    });
-  }
+  showPostFillPrompts(response, tab?.id || null);
 });
 
 document.getElementById("llm-use")?.addEventListener("click", async () => {
@@ -158,17 +215,10 @@ document.getElementById("llm-use")?.addEventListener("click", async () => {
     payload: { tabId: pending.tabId, triggeredBy: "popup_panel" },
   });
   setStatus(
-    llmResponse?.message || "LLM fill finished.",
+    fillStatusMessage(llmResponse, "LLM fill finished."),
     llmResponse?.ok ? "info" : "warn",
   );
-  const pendingCount = Number(llmResponse?.result?.pendingLlmFieldCount || 0);
-  if (llmResponse?.ok && pendingCount > 0) {
-    showLlmConfirm({
-      tabId: pending.tabId,
-      fieldCount: pendingCount,
-      filledFieldCount: Number(llmResponse?.result?.filledFieldCount || 0),
-    });
-  }
+  showPostFillPrompts(llmResponse, pending.tabId);
 });
 
 document.getElementById("llm-skip")?.addEventListener("click", () => {
@@ -182,11 +232,52 @@ document.getElementById("llm-skip")?.addEventListener("click", () => {
   );
 });
 
+async function clickNextAfterFill(remember) {
+  const pending = pendingNextAfterFill;
+  hideNextConfirm();
+  if (!pending) {
+    setStatus("No pending Next action is available for this tab.", "warn");
+    return;
+  }
+
+  setStatus("Clicking safe Next...", "info");
+  const response = await chrome.runtime.sendMessage({
+    type: "hunt.apply.click_next_after_fill",
+    payload: {
+      tabId: pending.tabId,
+      remember,
+      triggeredBy: remember ? "popup_next_remember" : "popup_next",
+    },
+  });
+  if (remember) {
+    setText("auto-next-after-fill", "Enabled");
+  }
+  setStatus(
+    response?.message || "No safe Next button was clicked.",
+    response?.clicked ? "info" : "warn",
+  );
+}
+
+document.getElementById("next-go")?.addEventListener("click", () => {
+  clickNextAfterFill(false);
+});
+
+document.getElementById("next-always")?.addEventListener("click", () => {
+  clickNextAfterFill(true);
+});
+
+document.getElementById("next-skip")?.addEventListener("click", () => {
+  hideNextConfirm();
+  setStatus("Stayed on the current page.", "info");
+});
+
 document.getElementById("open-options")?.addEventListener("click", async () => {
   await chrome.runtime.openOptionsPage();
 });
 
 document.getElementById("clear-page")?.addEventListener("click", async () => {
+  hideLlmConfirm();
+  hideNextConfirm();
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
   const response = await chrome.runtime.sendMessage({
     type: "hunt.apply.clear_current_page",

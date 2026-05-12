@@ -47,6 +47,7 @@ export function sanitizeSettings(settings = {}) {
     autofillOnLoad: sanitizeBoolean(settings.autofillOnLoad),
     manualFillEnabled: sanitizeBoolean(settings.manualFillEnabled ?? true),
     autoPromptEnabled: sanitizeBoolean(settings.autoPromptEnabled ?? true),
+    autoClickNextAfterFill: sanitizeBoolean(settings.autoClickNextAfterFill),
     fillRequiredOnly: sanitizeBoolean(settings.fillRequiredOnly ?? true),
     autoExportLogs: hasCurrentSettingsVersion
       ? sanitizeBoolean(settings.autoExportLogs)
@@ -99,8 +100,77 @@ export function sanitizeProfile(profile = {}) {
     availableInterviewWindow: sanitizeText(profile.availableInterviewWindow),
     expectedGraduationYear: sanitizeText(profile.expectedGraduationYear),
     previousEmployers: sanitizeText(profile.previousEmployers),
+    skills: sanitizeTextList(profile.skills, 80),
+    workExperience: sanitizeWorkExperience(profile.workExperience),
+    education: sanitizeEducation(profile.education),
     notes: sanitizeText(profile.notes),
   };
+}
+
+function sanitizeTextList(value, maxItems = 50) {
+  const rawItems = Array.isArray(value)
+    ? value
+    : String(value || "")
+        .split(/[\n,;]+/)
+        .map((item) => item.trim());
+  const seen = new Set();
+  const items = [];
+  for (const item of rawItems) {
+    const text = sanitizeText(item);
+    const key = text.toLowerCase();
+    if (!text || seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    items.push(text);
+    if (items.length >= maxItems) {
+      break;
+    }
+  }
+  return items;
+}
+
+function sanitizeWorkExperience(entries = []) {
+  if (!Array.isArray(entries)) {
+    return [];
+  }
+  return entries
+    .slice(0, 20)
+    .map((entry) => ({
+      jobTitle: sanitizeText(entry.jobTitle),
+      company: sanitizeText(entry.company),
+      location: sanitizeText(entry.location),
+      startMonth: sanitizeText(entry.startMonth),
+      startYear: sanitizeText(entry.startYear),
+      endMonth: sanitizeText(entry.endMonth),
+      endYear: sanitizeText(entry.endYear),
+      current: sanitizeBoolean(entry.current),
+      description: sanitizeText(entry.description),
+    }))
+    .filter((entry) =>
+      Object.entries(entry).some(
+        ([key, value]) => key !== "current" && Boolean(value),
+      ),
+    );
+}
+
+function sanitizeEducation(entries = []) {
+  if (!Array.isArray(entries)) {
+    return [];
+  }
+  return entries
+    .slice(0, 20)
+    .map((entry) => ({
+      school: sanitizeText(entry.school),
+      degree: sanitizeText(entry.degree),
+      fieldOfStudy: sanitizeText(entry.fieldOfStudy),
+      startMonth: sanitizeText(entry.startMonth),
+      startYear: sanitizeText(entry.startYear),
+      endMonth: sanitizeText(entry.endMonth),
+      endYear: sanitizeText(entry.endYear),
+      overallResult: sanitizeText(entry.overallResult),
+    }))
+    .filter((entry) => Object.values(entry).some(Boolean));
 }
 
 export function sanitizeResume(resume = {}) {
@@ -169,6 +239,8 @@ export function sanitizeAttempt(attempt = {}) {
     manualReviewRequired: sanitizeBoolean(attempt.manualReviewRequired),
     manualReviewReasons: sanitizeStringArray(attempt.manualReviewReasons),
     fieldInventory: sanitizeFieldInventory(attempt.fieldInventory),
+    interactionTrace: sanitizeInteractionTrace(attempt.interactionTrace),
+    traceTruncated: sanitizeBoolean(attempt.traceTruncated),
     htmlSnapshot: sanitizeText(attempt.htmlSnapshot),
     screenshotDataUrl: sanitizeText(attempt.screenshotDataUrl),
     resultSummary: sanitizeText(attempt.resultSummary),
@@ -207,6 +279,42 @@ function sanitizeFieldInventory(entries = []) {
       height: Number.isFinite(Number(entry.rect?.height))
         ? Number(entry.rect.height)
         : 0,
+    },
+  }));
+}
+
+function sanitizeInteractionTrace(entries = []) {
+  if (!Array.isArray(entries)) {
+    return [];
+  }
+  return entries.slice(0, 250).map((entry) => ({
+    index: Number.isFinite(Number(entry.index)) ? Number(entry.index) : 0,
+    action: sanitizeText(entry.action),
+    reason: sanitizeText(entry.reason),
+    key: sanitizeText(entry.key),
+    currentValue: sanitizeText(entry.currentValue),
+    intendedValue: sanitizeText(entry.intendedValue),
+    target: {
+      tagName: sanitizeText(entry.target?.tagName),
+      type: sanitizeText(entry.target?.type),
+      name: sanitizeText(entry.target?.name),
+      id: sanitizeText(entry.target?.id),
+      text: sanitizeText(entry.target?.text),
+      ariaLabel: sanitizeText(entry.target?.ariaLabel),
+      rect: {
+        top: Number.isFinite(Number(entry.target?.rect?.top))
+          ? Number(entry.target.rect.top)
+          : 0,
+        left: Number.isFinite(Number(entry.target?.rect?.left))
+          ? Number(entry.target.rect.left)
+          : 0,
+        width: Number.isFinite(Number(entry.target?.rect?.width))
+          ? Number(entry.target.rect.width)
+          : 0,
+        height: Number.isFinite(Number(entry.target?.rect?.height))
+          ? Number(entry.target.rect.height)
+          : 0,
+      },
     },
   }));
 }

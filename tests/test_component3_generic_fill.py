@@ -22,6 +22,122 @@ def _module_to_browser_script(source: str) -> str:
     return source.replace("export function", "function").replace("export const", "const")
 
 
+def test_safe_next_clicks_next_controls_only():
+    if sync_playwright is None:
+        pytest.skip("playwright is required for the safe next fixture")
+
+    safe_next_js = _module_to_browser_script(
+        _load_script(REPO_ROOT / "executioner/src/background/safe-next.js")
+    )
+
+    with sync_playwright() as playwright:
+        try:
+            browser = playwright.chromium.launch()
+        except PlaywrightError as error:
+            pytest.skip(f"playwright chromium is unavailable: {error}")
+
+        page = browser.new_page()
+        page.set_content(
+            """
+            <html>
+              <body>
+                <form>
+                  <input id="email" value="candidate@example.test" />
+                  <button id="next" type="submit">Next</button>
+                </form>
+                <script>
+                  document.querySelector("#next").addEventListener("click", (event) => {
+                    event.preventDefault();
+                    document.body.dataset.nextClicked = "1";
+                  });
+                </script>
+              </body>
+            </html>
+            """
+        )
+        page.add_script_tag(content=safe_next_js)
+        result = page.evaluate(
+            """
+            () => {
+              const safeNext = createSafeNextFunction();
+              return safeNext({ click: true });
+            }
+            """
+        )
+        values = page.evaluate(
+            """
+            () => ({
+              nextClicked: document.body.dataset.nextClicked || "",
+              url: window.location.href,
+            })
+            """
+        )
+        browser.close()
+
+    assert result["ok"] is True
+    assert result["clicked"] is True
+    assert result["candidate"]["label"] == "Next"
+    assert values["nextClicked"] == "1"
+
+
+def test_safe_next_blocks_final_submit_controls():
+    if sync_playwright is None:
+        pytest.skip("playwright is required for the safe next fixture")
+
+    safe_next_js = _module_to_browser_script(
+        _load_script(REPO_ROOT / "executioner/src/background/safe-next.js")
+    )
+
+    with sync_playwright() as playwright:
+        try:
+            browser = playwright.chromium.launch()
+        except PlaywrightError as error:
+            pytest.skip(f"playwright chromium is unavailable: {error}")
+
+        page = browser.new_page()
+        page.set_content(
+            """
+            <html>
+              <body>
+                <button id="submit" type="submit">Submit application</button>
+                <button id="apply" type="button">Apply now</button>
+                <script>
+                  document.querySelector("#submit").addEventListener("click", () => {
+                    document.body.dataset.submitted = "1";
+                  });
+                  document.querySelector("#apply").addEventListener("click", () => {
+                    document.body.dataset.applied = "1";
+                  });
+                </script>
+              </body>
+            </html>
+            """
+        )
+        page.add_script_tag(content=safe_next_js)
+        result = page.evaluate(
+            """
+            () => {
+              const safeNext = createSafeNextFunction();
+              return safeNext({ click: true });
+            }
+            """
+        )
+        values = page.evaluate(
+            """
+            () => ({
+              submitted: document.body.dataset.submitted || "",
+              applied: document.body.dataset.applied || "",
+            })
+            """
+        )
+        browser.close()
+
+    assert result["ok"] is False
+    assert result["clicked"] is False
+    assert result["reason"] == "final_submit_visible"
+    assert values == {"submitted": "", "applied": ""}
+
+
 def test_generic_fill_populates_required_fields_only():
     if sync_playwright is None:
         pytest.skip("playwright is required for the generic C3 fill fixture")
@@ -139,6 +255,90 @@ def test_generic_fill_populates_required_fields_only():
     }
 
 
+def test_generic_fill_retries_text_fields_that_lose_committed_value():
+    if sync_playwright is None:
+        pytest.skip("playwright is required for the generic C3 fill fixture")
+
+    injected_js = _load_script(REPO_ROOT / "executioner/src/shared/injected.js")
+    fill_js = _module_to_browser_script(
+        _load_script(REPO_ROOT / "executioner/src/ats/generic/fill.js")
+    )
+    rules_js = _module_to_browser_script(
+        _load_script(REPO_ROOT / "executioner/src/ats/generic/field-rules.js")
+    )
+
+    with sync_playwright() as playwright:
+        try:
+            browser = playwright.chromium.launch()
+        except PlaywrightError as error:
+            pytest.skip(f"playwright chromium is unavailable: {error}")
+
+        page = browser.new_page()
+        page.set_content(
+            """
+            <html>
+              <body>
+                <label>First Name* <input id="first-name" autocomplete="given-name" required /></label>
+                <label>Last Name* <input id="last-name" autocomplete="family-name" required /></label>
+                <script>
+                  const first = document.querySelector("#first-name");
+                  first.addEventListener("input", () => {
+                    if (first.dataset.clearedOnce) return;
+                    first.dataset.clearedOnce = "1";
+                    setTimeout(() => { first.value = ""; }, 180);
+                  });
+                </script>
+              </body>
+            </html>
+            """
+        )
+        page.add_script_tag(content=injected_js)
+        page.add_script_tag(content=rules_js)
+        page.add_script_tag(content=fill_js)
+
+        result = page.evaluate(
+            """
+            async () => {
+              const fill = createGenericFillFunction();
+              return await fill({
+                profile: {
+                  fullName: "Michael Shi",
+                  email: "",
+                  phone: "",
+                  location: "",
+                  linkedinUrl: "",
+                  githubUrl: "",
+                  websiteUrl: "",
+                },
+                settings: {
+                  stripLongDash: true,
+                  fillRequiredOnly: true,
+                },
+                activeApplyContext: {},
+                defaultResume: {},
+                fieldRules: GENERIC_FIELD_RULES,
+              });
+            }
+            """
+        )
+        values = page.evaluate(
+            """
+            () => ({
+              firstName: document.querySelector("#first-name").value,
+              lastName: document.querySelector("#last-name").value,
+            })
+            """
+        )
+        browser.close()
+
+    assert result["ok"] is True
+    assert result["filledFieldCount"] == 2
+    assert values == {"firstName": "Michael", "lastName": "Shi"}
+    first = [entry for entry in result["fieldInventory"] if entry["id"] == "first-name"][0]
+    assert first["filled"] is True
+    assert first["skippedReason"] == ""
+
+
 def test_generic_fill_can_fill_optional_known_fields_when_required_only_is_off():
     if sync_playwright is None:
         pytest.skip("playwright is required for the generic C3 fill fixture")
@@ -182,7 +382,7 @@ def test_generic_fill_can_fill_optional_known_fields_when_required_only_is_off()
                   willingToRelocate: true,
                   openToAnyLocation: true,
                   salaryFlexible: true,
-                  coOpTermsCompleted: "0",
+                  coOpTermsCompleted: "2",
                   availableSummer2026: "yes",
                   availableInterviewWindow: "yes",
                   expectedGraduationYear: "2026",
@@ -430,7 +630,7 @@ def test_generic_fill_commits_greenhouse_style_custom_selects():
         "city": "Elsewhere in Canada",
         "legal": "Yes",
         "salary": "Yes",
-        "coop": "0 terms completed, this will be my 1st term",
+        "coop": "2 terms completed, this will be my 3rd term",
         "term": "Yes",
         "interview": "Yes",
         "graduation": "2026",

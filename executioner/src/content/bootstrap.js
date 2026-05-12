@@ -4,6 +4,8 @@
 (async () => {
   const PROMPT_ID = "hunt-apply-detected-page-prompt";
   const LLM_PROMPT_ID = "hunt-apply-llm-fill-prompt";
+  const FILL_PROGRESS_ID = "hunt-apply-fill-progress";
+  const TOAST_CONTAINER_ID = "hunt-apply-page-toasts";
   const ATS_HOST_PATTERNS = [
     "workday.com",
     "myworkdayjobs.com",
@@ -131,15 +133,106 @@
     document.getElementById(PROMPT_ID)?.remove();
   }
 
+  function removeToasts() {
+    document.getElementById(TOAST_CONTAINER_ID)?.remove();
+  }
+
   function removeLlmPrompt() {
     document.getElementById(LLM_PROMPT_ID)?.remove();
   }
 
+  function hideFillProgress() {
+    document.getElementById(FILL_PROGRESS_ID)?.remove();
+  }
+
+  function dismissTransientUi() {
+    removePrompt();
+    removeLlmPrompt();
+    removeToasts();
+    hideFillProgress();
+  }
+
+  function showFillProgress({ message } = {}) {
+    var existing = document.getElementById(FILL_PROGRESS_ID);
+    if (existing?.shadowRoot) {
+      var existingText = existing.shadowRoot.getElementById(
+        "hunt-apply-fill-progress-message",
+      );
+      if (existingText) {
+        existingText.textContent = message || "Filling page";
+      }
+      return;
+    }
+    const host = document.createElement("div");
+    host.id = FILL_PROGRESS_ID;
+    host.style.position = "fixed";
+    host.style.right = "18px";
+    host.style.top = "18px";
+    host.style.zIndex = "2147483647";
+    host.style.maxWidth = "360px";
+    host.style.fontFamily = "Segoe UI, system-ui, sans-serif";
+    host.attachShadow({ mode: "open" });
+    host.shadowRoot.innerHTML = `
+      <style>
+        @keyframes huntApplySpin {
+          to { transform: rotate(360deg); }
+        }
+        .panel {
+          align-items: center;
+          background: #111b17;
+          border: 1px solid #31583d;
+          border-left: 4px solid #59a96a;
+          border-radius: 8px;
+          box-shadow: 0 10px 30px rgba(0, 0, 0, 0.34);
+          color: #d4f0dc;
+          display: flex;
+          gap: 10px;
+          min-width: 230px;
+          padding: 10px 12px;
+        }
+        #hunt-apply-fill-progress-spinner {
+          animation: huntApplySpin 760ms linear infinite;
+          border: 2px solid rgba(212, 240, 220, 0.24);
+          border-radius: 999px;
+          border-top-color: #7ad987;
+          box-sizing: border-box;
+          flex: 0 0 auto;
+          height: 18px;
+          width: 18px;
+        }
+        .copy {
+          display: grid;
+          gap: 2px;
+          min-width: 0;
+        }
+        .title {
+          font-size: 13px;
+          font-weight: 750;
+          line-height: 1.2;
+        }
+        .meta {
+          color: #9bb69f;
+          font-size: 11px;
+          font-weight: 600;
+          line-height: 1.25;
+        }
+      </style>
+      <div class="panel" role="status" aria-live="polite">
+        <div id="hunt-apply-fill-progress-spinner" aria-hidden="true"></div>
+        <div class="copy">
+          <div class="title" id="hunt-apply-fill-progress-message">${message || "Filling page"}</div>
+          <div class="meta">Hunt is working through the visible fields.</div>
+        </div>
+      </div>
+    `;
+    document.documentElement.appendChild(host);
+  }
+
   function showExtensionToast(message, tone) {
-    var container = document.getElementById("hunt-apply-page-toasts");
+    var container = document.getElementById(TOAST_CONTAINER_ID);
     if (!container) {
       container = document.createElement("div");
-      container.id = "hunt-apply-page-toasts";
+      container.id = TOAST_CONTAINER_ID;
       container.style.position = "fixed";
       container.style.right = "18px";
       container.style.top = "18px";
@@ -246,6 +339,7 @@
       </div>
     `;
     host.shadowRoot.getElementById("dismiss").addEventListener("click", () => {
+      dismissedPromptSignatures.add(promptSignature({ kind, inputCount }));
       removePrompt();
     });
     host.shadowRoot
@@ -254,6 +348,7 @@
         const button = host.shadowRoot.getElementById("fill");
         button.textContent = "Filling...";
         button.disabled = true;
+        removeToasts();
         const response = await chrome.runtime.sendMessage({
           type: "hunt.apply.fill_current_page",
           payload: { pageKind: kind, triggeredBy: "detected_page_prompt" },
@@ -365,11 +460,22 @@
   }
 
   chrome.runtime.onMessage.addListener((message) => {
+    if (message?.type === "hunt.apply.dismiss_transient_ui") {
+      dismissTransientUi();
+    }
     if (message?.type === "hunt.apply.show_toast") {
       showExtensionToast(
         message.message || "Hunt Apply update.",
         message.tone || "info",
       );
+    }
+    if (message?.type === "hunt.apply.show_fill_progress") {
+      showFillProgress({
+        message: message.message || "Filling page",
+      });
+    }
+    if (message?.type === "hunt.apply.hide_fill_progress") {
+      hideFillProgress();
     }
     if (message?.type === "hunt.apply.show_llm_prompt") {
       showLlmPrompt({
@@ -382,6 +488,74 @@
   const stateResponse = await chrome.runtime.sendMessage({
     type: "hunt.apply.get_state",
   });
+  let lastPromptSignature = "";
+  const dismissedPromptSignatures = new Set();
+  let promptCheckTimer = null;
+  let cachedStateResponse = stateResponse;
+
+  function currentStepText() {
+    const text = document.body?.innerText || "";
+    const match = text.match(/current step\s+\d+\s+of\s+\d+\s*\n([^\n]+)/i);
+    return (match?.[1] || document.title || "").trim();
+  }
+
+  function promptSignature(detection) {
+    return [
+      window.location.href,
+      currentStepText(),
+      detection.kind,
+      detection.inputCount,
+    ].join("|");
+  }
+
+  function canPrompt(response, detection) {
+    return (
+      response?.ok &&
+      response?.settings?.autoPromptEnabled &&
+      response?.settings?.manualFillEnabled &&
+      ["ats", "signup", "application"].includes(detection.kind)
+    );
+  }
+
+  async function maybeShowPrompt(reason) {
+    const detection = detectPageKind();
+    if (!canPrompt(cachedStateResponse, detection)) {
+      return;
+    }
+    const signature = promptSignature(detection);
+    if (
+      signature === lastPromptSignature ||
+      dismissedPromptSignatures.has(signature) ||
+      document.getElementById(PROMPT_ID) ||
+      document.getElementById(FILL_PROGRESS_ID)
+    ) {
+      return;
+    }
+    lastPromptSignature = signature;
+    showPrompt(detection);
+    await chrome.runtime.sendMessage({
+      type: "hunt.apply.log_activity",
+      payload: {
+        action: "detect.prompt",
+        summary: `Detected ${detection.kind} page and showed fill prompt.`,
+        details: {
+          url: window.location.href,
+          kind: detection.kind,
+          inputCount: detection.inputCount,
+          step: currentStepText(),
+          reason,
+        },
+      },
+    });
+  }
+
+  function schedulePromptCheck(reason) {
+    clearTimeout(promptCheckTimer);
+    promptCheckTimer = setTimeout(() => {
+      maybeShowPrompt(reason).catch(() => {});
+    }, 800);
+  }
+
   const detection = detectPageKind();
 
   console.log("Hunt Apply content bootstrap loaded.", {
@@ -393,26 +567,42 @@
     activeJobId: stateResponse?.activeApplyContext?.jobId || "",
   });
 
-  if (
-    stateResponse?.ok &&
-    stateResponse?.settings?.autoPromptEnabled &&
-    stateResponse?.settings?.manualFillEnabled &&
-    ["ats", "signup", "application"].includes(detection.kind)
-  ) {
-    showPrompt(detection);
-    await chrome.runtime.sendMessage({
-      type: "hunt.apply.log_activity",
-      payload: {
-        action: "detect.prompt",
-        summary: `Detected ${detection.kind} page and showed fill prompt.`,
-        details: {
-          url: window.location.href,
-          kind: detection.kind,
-          inputCount: detection.inputCount,
-        },
-      },
-    });
-  }
+  await maybeShowPrompt("initial_load");
+
+  document.addEventListener(
+    "click",
+    (event) => {
+      const path = event.composedPath?.() || [];
+      if (
+        path.some(
+          (node) =>
+            node?.id === PROMPT_ID ||
+            node?.id === LLM_PROMPT_ID ||
+            node?.id === TOAST_CONTAINER_ID,
+        )
+      ) {
+        return;
+      }
+      const text = String(
+        event.target?.innerText || event.target?.textContent || "",
+      )
+        .replace(/\s+/g, " ")
+        .trim()
+        .toLowerCase();
+      if (["next", "continue", "review", "back", "previous"].includes(text)) {
+        schedulePromptCheck("navigation_click");
+      }
+    },
+    true,
+  );
+
+  const observer = new MutationObserver(() => {
+    schedulePromptCheck("dom_change");
+  });
+  observer.observe(document.documentElement, {
+    childList: true,
+    subtree: true,
+  });
 
   if (
     stateResponse?.ok &&

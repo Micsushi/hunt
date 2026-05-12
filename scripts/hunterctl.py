@@ -84,7 +84,12 @@ def _run(command, *, env=None):
         final_env.setdefault(key, value)
 
     print("[hunterctl] Running:", " ".join(shlex.quote(str(part)) for part in command))
-    raise SystemExit(subprocess.run(command, cwd=REPO_ROOT, env=final_env).returncode)
+    try:
+        return_code = subprocess.run(command, cwd=REPO_ROOT, env=final_env).returncode
+    except KeyboardInterrupt:
+        print("\n[hunterctl] Interrupted. Child process stopped.")
+        raise SystemExit(130) from None
+    raise SystemExit(return_code)
 
 
 def _require_linux(command_name: str):

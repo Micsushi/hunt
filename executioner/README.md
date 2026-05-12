@@ -21,14 +21,18 @@ Current implementation:
 - browser-backed basic generic fixture test for the standalone `filler` path
 - C4 polling/postback scaffold: settings, `chrome.alarms`, one-shot poll, result postback, and lightweight status heartbeat
 - detected-page consent prompt for likely signup, application, and ATS pages; manual Fill Current Page remains available on any active tab
+- same-application step detection so Workday/ATS pages can re-prompt after Next/Continue without a full reload
+- popup Fill Current Page and Clear Current Page dismiss existing Hunt in-page prompts/toasts before running
 - Workday form fill, resume upload, and generated-answer support
 - ATS detection and support matrix for Greenhouse, Workday, Lever, Ashby, Workable, SmartRecruiters, and enterprise ATS backlog systems
 - Hootsuite-style embedded Greenhouse routing through frame URL and embedded selector signals
 - React Select-style dropdown commit verification, realistic pointer/key event sequences, stale menu closing, and Clear Current Page cleanup
 - LLM help flow for unresolved required fixed-choice fields with recomputed pending counts after verified browser commits
 - C3 gap report command for local JSONL logs: `python scripts\c3_gap_report.py --limit 3 --include-fields`
-- Codex-controlled browser launcher: `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\launch_c3_chrome.ps1`
+- controlled browser launcher for local extension testing: `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\launch_c3_chrome.ps1`
+- controlled browser placement override: `HUNT_C3_CHROME_WINDOW_POSITION=x,y` and `HUNT_C3_CHROME_WINDOW_SIZE=width,height`; by default it tries a non-primary monitor
 - route names for standalone, DB-backed, and C4-backed generic or ATS-specific fills
+- step-class autofill pipeline in `src/background/fill-runner.js` for tab resolution, ATS detection, route selection, adapter fill, LLM staging, persistence, and response building
 - append-only attempt logging and generated-answer history
 - explicit per-job apply-context priming for C2 and C4 handoff
 
@@ -106,6 +110,5 @@ To submit the uploaded version for review, add `--publish`.
 
 Change summary:
 
-See `docs\C3_CHANGES_SO_FAR.md` for the current branch summary, browser-control
-status, Hootsuite/Greenhouse fixes, measurement changes, verification commands,
-and known limits.
+See `docs\C3_CHANGES_SO_FAR.md` for the human-readable C3 autofill process,
+current status, verification commands, and known limits.

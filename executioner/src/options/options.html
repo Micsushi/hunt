@@ -208,6 +208,107 @@
         color: var(--warning);
       }
 
+      .tabbar {
+        background: var(--panel);
+        border: 1px solid var(--line);
+        border-radius: var(--radius-md);
+        box-shadow: var(--shadow);
+        display: flex;
+        gap: 6px;
+        overflow-x: auto;
+        padding: 6px;
+        scrollbar-width: thin;
+      }
+
+      .tab {
+        background: transparent;
+        border-color: transparent;
+        color: var(--muted);
+        flex: 0 0 auto;
+        min-height: 32px;
+      }
+
+      .tab:hover {
+        background: var(--panel-strong);
+      }
+
+      .tab.active {
+        background: var(--accent);
+        border-color: var(--accent);
+        color: var(--accent-ink);
+      }
+
+      .tab-panel {
+        display: none;
+      }
+
+      .tab-panel.active {
+        display: block;
+      }
+
+      .section-header {
+        align-items: center;
+        display: flex;
+        gap: 10px;
+        justify-content: space-between;
+        margin-bottom: 8px;
+      }
+
+      .section-header + .section-header {
+        border-top: 1px solid var(--line);
+        margin-top: 14px;
+        padding-top: 12px;
+      }
+
+      .section-note {
+        color: var(--muted);
+        font-size: 0.78rem;
+        margin-top: 3px;
+      }
+
+      .wide {
+        grid-column: 1 / -1;
+      }
+
+      .entry-list {
+        display: grid;
+        gap: 8px;
+      }
+
+      .entry-card {
+        background: var(--panel-strong);
+        border: 1px solid var(--line);
+        border-radius: var(--radius-sm);
+        display: grid;
+        gap: 8px;
+        padding: 10px;
+      }
+
+      .entry-card-header {
+        align-items: center;
+        display: flex;
+        gap: 10px;
+        justify-content: space-between;
+      }
+
+      .entry-title {
+        color: var(--ink);
+        font-size: 0.82rem;
+        font-weight: 700;
+      }
+
+      .entry-meta {
+        color: var(--muted);
+        font-family: var(--font-mono);
+        font-size: 0.7rem;
+      }
+
+      .remove-entry {
+        background: transparent;
+        min-height: 26px;
+        padding: 3px 8px;
+      }
+
       .hero {
         align-items: end;
         display: flex;
@@ -375,6 +476,12 @@
           display: grid;
         }
 
+        .tabbar {
+          display: grid;
+          grid-template-columns: repeat(2, minmax(0, 1fr));
+          overflow-x: visible;
+        }
+
         .log-entry {
           grid-template-columns: 1fr;
         }
@@ -398,7 +505,55 @@
         Loading extension state...
       </div>
 
-      <section class="panel">
+      <nav class="tabbar" role="tablist" aria-label="Options sections">
+        <button
+          class="tab active"
+          type="button"
+          role="tab"
+          aria-selected="true"
+          data-tab-target="settings"
+        >
+          Settings
+        </button>
+        <button
+          class="tab"
+          type="button"
+          role="tab"
+          aria-selected="false"
+          data-tab-target="profile"
+        >
+          Profile
+        </button>
+        <button
+          class="tab"
+          type="button"
+          role="tab"
+          aria-selected="false"
+          data-tab-target="experience"
+        >
+          Experience
+        </button>
+        <button
+          class="tab"
+          type="button"
+          role="tab"
+          aria-selected="false"
+          data-tab-target="documents"
+        >
+          Documents
+        </button>
+        <button
+          class="tab"
+          type="button"
+          role="tab"
+          aria-selected="false"
+          data-tab-target="activity"
+        >
+          Activity
+        </button>
+      </nav>
+
+      <section class="panel tab-panel active" data-tab-panel="settings">
         <h2>Behavior Settings</h2>
         <form id="settings-form">
           <div class="checkboxes">
@@ -425,6 +580,14 @@
                 type="checkbox"
               />
               <span>Prompt on signup/ATS pages</span>
+            </label>
+            <label class="checkbox">
+              <input
+                id="auto-click-next-after-fill"
+                name="autoClickNextAfterFill"
+                type="checkbox"
+              />
+              <span>Click safe Next after fill</span>
             </label>
             <label class="checkbox">
               <input
@@ -539,7 +702,7 @@
         </form>
       </section>
 
-      <section class="panel">
+      <section class="panel tab-panel" data-tab-panel="profile">
         <h2>Candidate Profile</h2>
         <form id="profile-form">
           <div class="grid">
@@ -685,7 +848,48 @@
         </form>
       </section>
 
-      <section class="panel">
+      <section class="panel tab-panel" data-tab-panel="experience">
+        <form id="experience-form">
+          <div class="section-header">
+            <div>
+              <h2>Work Experience</h2>
+              <p class="section-note">
+                Saved jobs are added through Workday section Add buttons.
+              </p>
+            </div>
+            <button id="add-work-experience" type="button">Add Job</button>
+          </div>
+          <div id="work-experience-list" class="entry-list"></div>
+
+          <div class="section-header">
+            <div>
+              <h2>Education</h2>
+              <p class="section-note">
+                School, degree, field, dates, and result for Workday education.
+              </p>
+            </div>
+            <button id="add-education" type="button">Add Education</button>
+          </div>
+          <div id="education-list" class="entry-list"></div>
+
+          <div class="section-header">
+            <div>
+              <h2>Skills</h2>
+              <p class="section-note">One skill per line or comma separated.</p>
+            </div>
+          </div>
+          <label>
+            Skills list
+            <textarea
+              id="profile-skills"
+              name="skills"
+              placeholder="Python, TypeScript, React"
+            ></textarea>
+          </label>
+        </form>
+      </section>
+
+      <section class="panel tab-panel" data-tab-panel="documents">
         <h2>Default Resume</h2>
         <form id="resume-form">
           <div class="grid">
@@ -732,7 +936,7 @@
         </form>
       </section>
 
-      <section class="panel">
+      <section class="panel tab-panel" data-tab-panel="documents">
         <h2>Apply Context Import</h2>
         <form id="apply-context-form">
           <label>
@@ -751,7 +955,7 @@
         </form>
       </section>
 
-      <section class="panel activity-panel">
+      <section class="panel activity-panel tab-panel" data-tab-panel="activity">
         <div class="log-toolbar">
           <div>
             <h2>Activity Log</h2>

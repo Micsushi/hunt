@@ -208,6 +208,21 @@ def test_text_report_includes_latest_standard_counts(tmp_path):
     assert "remaining_filled=3" in text
 
 
+def test_build_report_surfaces_trace_truncation(tmp_path):
+    log_path = tmp_path / "c3_extension_debug.jsonl"
+    event = _fill_event([])
+    event["payload"]["payload"]["attempt"]["traceTruncated"] = True
+    event["payload"]["payload"]["result"]["traceTruncated"] = True
+    _write_jsonl(log_path, [event])
+
+    report = build_report(log_path)
+    text = format_text_report(report)
+
+    assert report["latestAttempt"]["traceTruncated"] is True
+    assert report["totals"]["traceTruncatedCount"] == 1
+    assert "trace_truncated: yes" in text
+
+
 def test_build_report_summarizes_clear_page_activity(tmp_path):
     log_path = tmp_path / "c3_extension_debug.jsonl"
     _write_jsonl(log_path, [_clear_event()])

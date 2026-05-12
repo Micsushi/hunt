@@ -64,6 +64,212 @@ function setCheckboxValue(id, value) {
 }
 
 let currentActivityLog = [];
+let workExperienceEntries = [];
+let educationEntries = [];
+
+const WORK_EXPERIENCE_FIELDS = [
+  ["jobTitle", "Job title", "text"],
+  ["company", "Company", "text"],
+  ["location", "Location", "text"],
+  ["startMonth", "Start month", "text"],
+  ["startYear", "Start year", "number"],
+  ["endMonth", "End month", "text"],
+  ["endYear", "End year", "number"],
+];
+
+const EDUCATION_FIELDS = [
+  ["school", "School or university", "text"],
+  ["degree", "Degree", "text"],
+  ["fieldOfStudy", "Field of study", "text"],
+  ["startMonth", "Start month", "text"],
+  ["startYear", "Start year", "number"],
+  ["endMonth", "End month", "text"],
+  ["endYear", "End year", "number"],
+  ["overallResult", "Overall result", "text"],
+];
+
+function splitListText(value) {
+  const seen = new Set();
+  return String(value || "")
+    .split(/[\n,;]+/)
+    .map((item) => item.trim())
+    .filter((item) => {
+      const key = item.toLowerCase();
+      if (!key || seen.has(key)) {
+        return false;
+      }
+      seen.add(key);
+      return true;
+    });
+}
+
+function formatListText(items) {
+  return Array.isArray(items) ? items.join("\n") : "";
+}
+
+function emptyWorkExperienceEntry() {
+  return {
+    jobTitle: "",
+    company: "",
+    location: "",
+    startMonth: "",
+    startYear: "",
+    endMonth: "",
+    endYear: "",
+    current: false,
+    description: "",
+  };
+}
+
+function emptyEducationEntry() {
+  return {
+    school: "",
+    degree: "",
+    fieldOfStudy: "",
+    startMonth: "",
+    startYear: "",
+    endMonth: "",
+    endYear: "",
+    overallResult: "",
+  };
+}
+
+function entryTitle(entry, fallback) {
+  return (
+    entry.jobTitle || entry.school || entry.company || entry.degree || fallback
+  );
+}
+
+function entryMeta(entry) {
+  return [entry.company, entry.location, entry.degree, entry.fieldOfStudy]
+    .filter(Boolean)
+    .join(" : ");
+}
+
+function createEntryInput(kind, index, field, label, type, value) {
+  const wrapper = document.createElement("label");
+  wrapper.textContent = label;
+  const input = document.createElement("input");
+  input.dataset.entryKind = kind;
+  input.dataset.entryIndex = String(index);
+  input.dataset.entryField = field;
+  input.name = `${kind}-${index}-${field}`;
+  input.type = type;
+  input.value = value || "";
+  wrapper.appendChild(input);
+  return wrapper;
+}
+
+function renderEntryList(kind, entries, fieldDefs, emptyFactory) {
+  const container = document.getElementById(`${kind}-list`);
+  if (!container) {
+    return;
+  }
+  container.innerHTML = "";
+  if (!entries.length) {
+    const empty = document.createElement("div");
+    empty.className = "empty-log";
+    empty.textContent =
+      kind === "work-experience"
+        ? "No work experience saved yet."
+        : "No education saved yet.";
+    container.appendChild(empty);
+    return;
+  }
+
+  entries.forEach((entry, index) => {
+    const card = document.createElement("div");
+    card.className = "entry-card";
+    card.dataset.entryKind = kind;
+    card.dataset.entryIndex = String(index);
+
+    const header = document.createElement("div");
+    header.className = "entry-card-header";
+    const titleBox = document.createElement("div");
+    const title = document.createElement("div");
+    title.className = "entry-title";
+    title.textContent = entryTitle(entry, `Entry ${index + 1}`);
+    const meta = document.createElement("div");
+    meta.className = "entry-meta";
+    meta.textContent = entryMeta(entry) || "Ready for Workday Add";
+    titleBox.append(title, meta);
+
+    const remove = document.createElement("button");
+    remove.className = "remove-entry";
+    remove.type = "button";
+    remove.dataset.removeEntryKind = kind;
+    remove.dataset.removeEntryIndex = String(index);
+    remove.textContent = "Remove";
+    header.append(titleBox, remove);
+
+    const grid = document.createElement("div");
+    grid.className = "grid";
+    fieldDefs.forEach(([field, label, type]) => {
+      grid.appendChild(
+        createEntryInput(kind, index, field, label, type, entry[field]),
+      );
+    });
+
+    if (kind === "work-experience") {
+      const current = document.createElement("label");
+      current.className = "checkbox";
+      const checkbox = document.createElement("input");
+      checkbox.type = "checkbox";
+      checkbox.dataset.entryKind = kind;
+      checkbox.dataset.entryIndex = String(index);
+      checkbox.dataset.entryField = "current";
+      checkbox.checked = Boolean(entry.current);
+      const span = document.createElement("span");
+      span.textContent = "Currently work here";
+      current.append(checkbox, span);
+      grid.appendChild(current);
+
+      const description = document.createElement("label");
+      description.className = "wide";
+      description.textContent = "Role description";
+      const textarea = document.createElement("textarea");
+      textarea.dataset.entryKind = kind;
+      textarea.dataset.entryIndex = String(index);
+      textarea.dataset.entryField = "description";
+      textarea.name = `${kind}-${index}-description`;
+      textarea.value = entry.description || "";
+      description.appendChild(textarea);
+      grid.appendChild(description);
+    }
+
+    card.append(header, grid);
+    container.appendChild(card);
+  });
+
+  if (!entries.length && emptyFactory) {
+    entries.push(emptyFactory());
+  }
+}
+
+function readEntryCollection(kind, emptyFactory) {
+  const cards = Array.from(
+    document.querySelectorAll(`[data-entry-kind="${kind}"]`),
+  ).filter((element) => element.classList.contains("entry-card"));
+  return cards.map((card) => {
+    const entry = emptyFactory();
+    card.querySelectorAll("[data-entry-field]").forEach((fieldElement) => {
+      const field = fieldElement.dataset.entryField;
+      entry[field] =
+        fieldElement.type === "checkbox"
+          ? fieldElement.checked
+          : fieldElement.value;
+    });
+    return entry;
+  });
+}
+
+function refreshEntryTitles() {
+  workExperienceEntries = readEntryCollection(
+    "work-experience",
+    emptyWorkExperienceEntry,
+  );
+  educationEntries = readEntryCollection("education", emptyEducationEntry);
+}
 
 async function readFileAsDataUrl(file) {
   if (!file) {
@@ -109,6 +315,7 @@ function readProfileForm() {
     )?.value,
     previousEmployers: document.getElementById("profile-previous-employers")
       ?.value,
+    skills: splitListText(document.getElementById("profile-skills")?.value),
   };
 }
 
@@ -131,6 +338,23 @@ function writeProfileFields(profile) {
     profile.availableInterviewWindow,
   );
   setInputValue("profile-previous-employers", profile.previousEmployers);
+  setInputValue("profile-skills", formatListText(profile.skills));
+  workExperienceEntries = Array.isArray(profile.workExperience)
+    ? profile.workExperience
+    : [];
+  educationEntries = Array.isArray(profile.education) ? profile.education : [];
+  renderEntryList(
+    "work-experience",
+    workExperienceEntries,
+    WORK_EXPERIENCE_FIELDS,
+    emptyWorkExperienceEntry,
+  );
+  renderEntryList(
+    "education",
+    educationEntries,
+    EDUCATION_FIELDS,
+    emptyEducationEntry,
+  );
 }
 
 function formatLogTime(value) {
@@ -212,6 +436,7 @@ function renderActivityLog(entries = []) {
 }
 
 function readFullProfileForm() {
+  refreshEntryTitles();
   return {
     ...readProfileForm(),
     workAuthorized: document.getElementById("profile-work-authorized")?.checked,
@@ -222,6 +447,8 @@ function readFullProfileForm() {
     openToAnyLocation: document.getElementById("profile-open-to-any-location")
       ?.checked,
     salaryFlexible: document.getElementById("profile-salary-flexible")?.checked,
+    workExperience: workExperienceEntries,
+    education: educationEntries,
     notes: document.getElementById("profile-notes")?.value,
   };
 }
@@ -231,6 +458,9 @@ function readSettingsForm() {
     autofillOnLoad: document.getElementById("autofill-on-load")?.checked,
     manualFillEnabled: document.getElementById("manual-fill-enabled")?.checked,
     autoPromptEnabled: document.getElementById("auto-prompt-enabled")?.checked,
+    autoClickNextAfterFill: document.getElementById(
+      "auto-click-next-after-fill",
+    )?.checked,
     fillRequiredOnly: document.getElementById("fill-required-only")?.checked,
     autoExportLogs: document.getElementById("auto-export-logs")?.checked,
     debugLogSinkEnabled: document.getElementById("debug-log-sink-enabled")
@@ -331,6 +561,10 @@ async function loadState() {
   setCheckboxValue("autofill-on-load", response.settings.autofillOnLoad);
   setCheckboxValue("manual-fill-enabled", response.settings.manualFillEnabled);
   setCheckboxValue("auto-prompt-enabled", response.settings.autoPromptEnabled);
+  setCheckboxValue(
+    "auto-click-next-after-fill",
+    response.settings.autoClickNextAfterFill,
+  );
   setCheckboxValue("fill-required-only", response.settings.fillRequiredOnly);
   setCheckboxValue("auto-export-logs", response.settings.autoExportLogs);
   setCheckboxValue(
@@ -360,33 +594,7 @@ async function loadState() {
   );
   setCheckboxValue("strip-long-dash", response.settings.stripLongDash);
 
-  setInputValue("profile-full-name", response.profile.fullName);
-  setInputValue("profile-email", response.profile.email);
-  setInputValue("profile-phone", response.profile.phone);
-  setInputValue("profile-location", response.profile.location);
-  setInputValue("profile-linkedin-url", response.profile.linkedinUrl);
-  setInputValue("profile-github-url", response.profile.githubUrl);
-  setInputValue("profile-website-url", response.profile.websiteUrl);
-  setInputValue(
-    "profile-coop-terms-completed",
-    response.profile.coOpTermsCompleted,
-  );
-  setInputValue(
-    "profile-expected-graduation-year",
-    response.profile.expectedGraduationYear,
-  );
-  setInputValue(
-    "profile-available-summer-2026",
-    response.profile.availableSummer2026,
-  );
-  setInputValue(
-    "profile-available-interview-window",
-    response.profile.availableInterviewWindow,
-  );
-  setInputValue(
-    "profile-previous-employers",
-    response.profile.previousEmployers,
-  );
+  writeProfileFields(response.profile);
   setCheckboxValue("profile-work-authorized", response.profile.workAuthorized);
   setCheckboxValue(
     "profile-sponsorship-required",
@@ -516,6 +724,93 @@ installAutosave(
   "Failed to autosave profile.",
 );
 
+installAutosave(
+  "experience-form",
+  () => saveProfile(readFullProfileForm()),
+  "Experience autosaved.",
+  "Failed to autosave experience.",
+);
+
+function selectTab(tabId) {
+  document.querySelectorAll("[data-tab-target]").forEach((button) => {
+    const active = button.dataset.tabTarget === tabId;
+    button.classList.toggle("active", active);
+    button.setAttribute("aria-selected", active ? "true" : "false");
+  });
+  document.querySelectorAll("[data-tab-panel]").forEach((panel) => {
+    panel.classList.toggle("active", panel.dataset.tabPanel === tabId);
+  });
+}
+
+document.querySelectorAll("[data-tab-target]").forEach((button) => {
+  button.addEventListener("click", () => {
+    selectTab(button.dataset.tabTarget || "settings");
+  });
+});
+
+document
+  .getElementById("add-work-experience")
+  ?.addEventListener("click", () => {
+    refreshEntryTitles();
+    workExperienceEntries.push(emptyWorkExperienceEntry());
+    renderEntryList(
+      "work-experience",
+      workExperienceEntries,
+      WORK_EXPERIENCE_FIELDS,
+      emptyWorkExperienceEntry,
+    );
+  });
+
+document.getElementById("add-education")?.addEventListener("click", () => {
+  refreshEntryTitles();
+  educationEntries.push(emptyEducationEntry());
+  renderEntryList(
+    "education",
+    educationEntries,
+    EDUCATION_FIELDS,
+    emptyEducationEntry,
+  );
+});
+
+document
+  .getElementById("experience-form")
+  ?.addEventListener("click", async (event) => {
+    const target = event.target;
+    if (!(target instanceof HTMLElement)) {
+      return;
+    }
+    const kind = target.dataset.removeEntryKind;
+    const index = Number(target.dataset.removeEntryIndex);
+    if (!kind || !Number.isFinite(index)) {
+      return;
+    }
+    refreshEntryTitles();
+    if (kind === "work-experience") {
+      workExperienceEntries.splice(index, 1);
+      renderEntryList(
+        "work-experience",
+        workExperienceEntries,
+        WORK_EXPERIENCE_FIELDS,
+        emptyWorkExperienceEntry,
+      );
+    } else if (kind === "education") {
+      educationEntries.splice(index, 1);
+      renderEntryList(
+        "education",
+        educationEntries,
+        EDUCATION_FIELDS,
+        emptyEducationEntry,
+      );
+    }
+    const response = await saveProfile(readFullProfileForm());
+    setStatus(
+      response?.ok
+        ? "Experience updated."
+        : response?.message || "Failed to update experience.",
+      response?.ok ? "info" : "warn",
+    );
+  });
+
 document
   .getElementById("import-profile-tex")
   ?.addEventListener("click", async () => {
@@ -528,9 +823,10 @@ document
 
       const tex = await readFileAsText(file);
       const parsedProfile = parseResumeTex(tex);
+      const currentProfile = readFullProfileForm();
       const nextProfile = {
-        ...readFullProfileForm(),
-        ...mergeProfileFromResume(readProfileForm(), parsedProfile),
+        ...currentProfile,
+        ...mergeProfileFromResume(currentProfile, parsedProfile),
       };
 
       writeProfileFields(nextProfile);

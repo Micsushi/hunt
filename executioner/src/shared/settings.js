@@ -13,6 +13,7 @@ export const DEFAULT_SETTINGS = {
   autofillOnLoad: false,
   manualFillEnabled: true,
   autoPromptEnabled: true,
+  autoClickNextAfterFill: false,
   fillRequiredOnly: true,
   autoExportLogs: false,
   autoExportLogPrefix: "hunt-c3-logs",
@@ -47,6 +48,9 @@ export const DEFAULT_PROFILE = {
   availableInterviewWindow: "",
   expectedGraduationYear: "",
   previousEmployers: "",
+  skills: [],
+  workExperience: [],
+  education: [],
   notes: "",
 };
 

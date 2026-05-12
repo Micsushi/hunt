@@ -38,6 +38,7 @@ TEST_TARGETS = {
     "c3": [
         "tests/test_component3_stage1.py",
         "tests/test_component3_generic_fill.py",
+        "tests/test_component3_workday_fill.py",
         "tests/test_component3_gap_report.py",
     ],
     "c4": [

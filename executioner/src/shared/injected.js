@@ -50,10 +50,47 @@
 
   // Fire the events frameworks listen for to pick up programmatic value changes.
   u.dispatchInputEvents = function (el) {
+    try {
+      el.dispatchEvent(
+        new InputEvent("beforeinput", {
+          bubbles: true,
+          cancelable: true,
+          inputType: "insertText",
+          data: " ",
+        }),
+      );
+    } catch (_error) {
+      // Older pages may not support constructable InputEvent.
+    }
     el.dispatchEvent(new Event("input", { bubbles: true }));
+    try {
+      el.dispatchEvent(
+        new InputEvent("input", {
+          bubbles: true,
+          cancelable: true,
+          inputType: "insertText",
+          data: "",
+        }),
+      );
+    } catch (_error) {
+      // Plain input/change events above still cover older pages.
+    }
     el.dispatchEvent(new Event("change", { bubbles: true }));
     el.dispatchEvent(new Event("blur", { bubbles: true }));
   };
+
+  u.traceInteraction = function () {};
+
+  function traceInteraction(action, target, detail) {
+    if (typeof u.traceInteraction === "function") {
+      u.traceInteraction(action, target, detail || {});
+    }
+  }
+
+  function traceHoverAndClick(target, reason) {
+    traceInteraction("hover", target, { reason: reason || "" });
+    traceInteraction("click", target, { reason: reason || "" });
+  }
 
   // Set a field value and fire framework events.
   // stripLongDash: pass true/false explicitly from caller settings.
@@ -76,7 +113,39 @@
         ? Object.getOwnPropertyDescriptor(proto, "value")?.set
         : null;
       if (setter) {
-        setter.call(el, normalized);
+        setter.call(el, "");
+        u.dispatchInputEvents(el);
+        var nextValue = "";
+        normalized.split("").forEach(function (char) {
+          nextValue += char;
+          el.dispatchEvent(
+            new KeyboardEvent("keydown", {
+              key: char,
+              bubbles: true,
+              cancelable: true,
+            }),
+          );
+          setter.call(el, nextValue);
+          try {
+            el.dispatchEvent(
+              new InputEvent("input", {
+                bubbles: true,
+                cancelable: true,
+                inputType: "insertText",
+                data: char,
+              }),
+            );
+          } catch (_error) {
+            el.dispatchEvent(new Event("input", { bubbles: true }));
+          }
+          el.dispatchEvent(
+            new KeyboardEvent("keyup", {
+              key: char,
+              bubbles: true,
+              cancelable: true,
+            }),
+          );
+        });
       } else {
         el.value = normalized;
       }
@@ -793,6 +862,24 @@
     }
     if (
       !isLegalWorkQuestion &&
+      lowered.includes("country") &&
+      !lowered.includes("province") &&
+      !lowered.includes("territory") &&
+      !lowered.includes("countryregion") &&
+      !lowered.includes("phone")
+    ) {
+      var countryParts = locationParts(profile.location);
+      if (countryParts.country) {
+        return {
+          text: countryParts.country,
+          source: "profile:location",
+          aliases: [countryParts.country],
+          requireOptionMatch: true,
+        };
+      }
+    }
+    if (
+      !isLegalWorkQuestion &&
       lowered.includes("city") &&
       (lowered.includes("province") || lowered.includes("territory"))
     ) {
@@ -857,10 +944,21 @@
     if (lowered.includes("co-op") || lowered.includes("coop")) {
       var terms = u.normalizeText(profile.coOpTermsCompleted);
       if (terms) {
+        var numericTerms = terms.match(/^\d+$/) ? terms : "";
+        var completedTermsText = numericTerms
+          ? numericTerms +
+            (numericTerms === "1" ? " term completed" : " terms completed")
+          : terms;
         return {
-          text: terms,
+          text: completedTermsText,
           source: "profile:coOpTermsCompleted",
-          aliases: [terms + " terms", terms + " term"],
+          aliases: numericTerms
+            ? [
+                numericTerms + " terms",
+                numericTerms + " term",
+                completedTermsText,
+              ]
+            : [terms + " terms", terms + " term"],
         };
       }
     }
@@ -988,6 +1086,9 @@
     return 0;
   }
 
+  u.chooseStructuredChoice = chooseStructuredChoice;
+  u.optionScoreForChoice = optionScoreForChoice;
+
   u.fillSelectElement = function (el, descriptor, profile, stripLongDash) {
     var options = Array.from(el.options || []);
     var choice = chooseStructuredChoice(descriptor, profile, stripLongDash);
@@ -1011,6 +1112,11 @@
     if (!selectedOption) {
       return { filled: false, reason: "no_matching_option" };
     }
+    traceInteraction("set_value", el, {
+      reason: "select_native_option",
+      intendedValue: choice.text || "",
+      currentValue: selectedOption.text || selectedOption.value || "",
+    });
     el.value = selectedOption.value;
     u.dispatchInputEvents(el);
     return { filled: true, valueSource: choice.source };
@@ -1327,6 +1433,7 @@
         option.scrollIntoView({ block: "nearest", inline: "nearest" });
       }
       var rect = option.getBoundingClientRect();
+      traceHoverAndClick(option, "select_combobox_option");
       [
         "mouseover",
         "mousemove",
@@ -1392,6 +1499,7 @@
           '.select__indicators button[aria-label*="Toggle"], .select__indicators button',
         );
       el.focus();
+      traceHoverAndClick(control, "open_combobox_menu");
       control.click();
       await sleep(180);
       var option = findVisibleOption();
@@ -1399,6 +1507,7 @@
         return option;
       }
       if (toggle) {
+        traceHoverAndClick(toggle, "toggle_combobox_menu");
         toggle.click();
         await sleep(180);
         option = findVisibleOption();
@@ -1471,6 +1580,11 @@
 
     await closeOpenMenus();
     if (currentCommitMatchesChoice()) {
+      traceInteraction("already_filled", el, {
+        reason: "combobox_matches_choice",
+        currentValue: committedText(),
+        intendedValue: targetText,
+      });
       await closeMenu();
       return { filled: true, valueSource: choice.source };
     }
@@ -1551,6 +1665,7 @@
     if (!target) {
       return false;
     }
+    traceHoverAndClick(target, "select_radio_option");
     target.click();
     u.dispatchInputEvents(target);
     return true;

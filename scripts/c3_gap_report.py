@@ -41,6 +41,12 @@ UNSUPPORTED_REASONS = {
 }
 
 COMMIT_FAILURE_REASONS = {
+    "checkbox_commit_failed",
+    "clear_failed",
+    "clear_failed_commit_not_verified",
+    "clear_failed_no_matching_option",
+    "commit_lost",
+    "commit_not_verified",
     "decision_not_committed_to_page",
     "commit_failed",
     "option_not_committed",
@@ -137,6 +143,9 @@ def _failure_bucket(reason: str, *, field_status: str | None = None) -> str:
     reason = _text(reason).strip()
     if field_status in STANDARD_FIELD_STATUSES:
         return field_status
+    if reason.startswith("required_field_unresolved:"):
+        inner_reason = reason.split(":", 1)[1]
+        return _failure_bucket(inner_reason) if inner_reason else "manual_required"
     if reason.startswith("resume_upload:"):
         return "resume_issue"
     if reason in SAFE_SKIP_REASONS:
@@ -268,6 +277,7 @@ def _extract_attempt(
     unresolved_fields = [
         field for field in field_summaries if field["required"] and not field["filled"]
     ]
+    trace_truncated = bool(result.get("traceTruncated") or attempt.get("traceTruncated"))
 
     inventory_total = len(field_summaries)
     required_total = sum(1 for field in field_summaries if field["required"])
@@ -318,6 +328,7 @@ def _extract_attempt(
         "skippedReasonCounts": _count(skipped_reason_counts),
         "widgetCounts": _count(widget_counts),
         "manualReviewReasons": [_text(reason) for reason in manual_reasons],
+        "traceTruncated": trace_truncated,
         "frameResults": result.get("frameResults") or [],
         "unresolvedFields": unresolved_fields[:max_unresolved_fields],
     }
@@ -425,10 +436,13 @@ def build_report(
         "widgetCounts": Counter(),
     }
     count_totals = Counter()
+    trace_truncated_count = 0
     clear_status_counts: Counter[str] = Counter()
     clear_count_totals: Counter[str] = Counter()
 
     for attempt in attempts:
+        if attempt.get("traceTruncated"):
+            trace_truncated_count += 1
         aggregate_counters["byHost"][attempt["host"]] += 1
         aggregate_counters["byAts"][attempt["atsType"]] += 1
         aggregate_counters["bySupportLevel"][attempt["supportLevel"]] += 1
@@ -460,6 +474,7 @@ def build_report(
 
     totals.update({name: _count(counter) for name, counter in aggregate_counters.items()})
     totals["countTotals"] = _count(count_totals)
+    totals["traceTruncatedCount"] = trace_truncated_count
     totals["clearStatusCounts"] = _count(clear_status_counts)
     totals["clearCountTotals"] = _count(clear_count_totals)
 
@@ -523,6 +538,7 @@ def format_text_report(report: dict[str, Any]) -> str:
                     f"pending_llm={counts['pendingLlmFieldCount']}, "
                     f"manual_reasons={counts['manualReviewReasonCount']}"
                 ),
+                f"trace_truncated: {'yes' if latest.get('traceTruncated') else 'no'}",
             ]
         )
         if latest.get("manualReviewReasons"):

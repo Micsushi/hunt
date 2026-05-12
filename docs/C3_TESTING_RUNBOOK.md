@@ -24,14 +24,19 @@ Expected coverage:
 
 Do not call C3 locally green unless `ci.py c3` passes.
 
-Current local baseline: `.\.venv\Scripts\python.exe ci.py c3` passed on
-2026-05-10. This proves formatting, JS syntax, route/profile stage tests, and
-the basic and Greenhouse-like browser-backed generic filler fixtures. It does not prove the unpacked
-Chrome extension UI, C4 polling/postback, or live ATS behavior.
+Current local baseline: `python ci.py c3` passed on 2026-05-11. This proves
+formatting, JS syntax, route/profile stage tests, and the browser-backed generic
+filler fixtures. It does not prove the unpacked Chrome extension UI or C4
+polling/postback.
 
-## Codex-Controlled Browser Setup
+Current live ATS baseline: Jonas Software Canada Workday passed both
+`Autofill with Resume` and `Apply Manually` on 2026-05-11 in the controlled
+browser. Both paths reached Review with Submit visible and no page errors. The
+smoke did not click Submit.
 
-For C3 debugging with Codex, use the dedicated controlled browser first:
+## Controlled Browser Setup
+
+For repeatable C3 extension testing, use the dedicated controlled browser first:
 
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\launch_c3_chrome.ps1
@@ -41,25 +46,34 @@ This starts Playwright Chromium with the unpacked Hunt extension loaded from
 `executioner`, a dedicated profile, and a DevTools endpoint at
 `http://127.0.0.1:9222`.
 
-Codex MCP entries:
+The launcher tries to place the test browser on a non-primary monitor so it
+does not cover the main working screen. Override placement when needed:
 
-- `playwright_c3`: connects to the dedicated browser through
-  `--cdp-endpoint=http://127.0.0.1:9222`.
-- `playwright_live`: connects through Playwright MCP extension mode for the
-  user's normal Chrome session.
+```powershell
+$env:HUNT_C3_CHROME_WINDOW_POSITION = "2000,80"
+$env:HUNT_C3_CHROME_WINDOW_SIZE = "1400,1000"
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\launch_c3_chrome.ps1
+```
+
+Unset those variables to return to automatic placement.
 
 Status on 2026-05-11:
 
-- `playwright_c3` is configured and the dedicated browser path is verified.
 - A local Greenhouse-like fixture showed the Hunt detected-page prompt in the
   controlled browser, proving the unpacked extension content script is active.
-- `playwright_live` is configured but requires a Codex restart plus the
-  Playwright browser extension attached to the target Chrome tab before it is
-  fully verified.
+- The dedicated browser path is verified.
+- The dedicated browser path also drove the Jonas Workday live smoke through
+  every `Next` page on both resume-upload and manual entry paths.
+- Regular Chrome can expose the debug endpoint while ignoring unpacked extension
+  loading, so the launcher prefers Playwright Chromium.
 
-Use `playwright_c3` for repeatable extension reloads, fixture smokes, DOM/iframe
-inspection, screenshots, and Hootsuite-style debugging. Use `playwright_live`
-only when the bug depends on the user's existing logged-in Chrome state.
+Use this browser for repeatable extension reloads, fixture smokes, DOM/iframe
+inspection, screenshots, and Hootsuite-style debugging.
+
+After navigating to a new step in the same application, C3 should re-run page
+detection and show the in-page fill prompt again if the new step has visible
+fillable controls. Fill Current Page and Clear Current Page from the popup
+dismiss existing Hunt prompts/toasts before running.
 
 Detailed change history: `docs\C3_CHANGES_SO_FAR.md`.
 
@@ -166,7 +180,7 @@ Local debug log sink: Options has Local debug log sink and Test Log Sink. When
 enabled, extension activity and fill results post to the local backend endpoint
 `/api/c3/debug-log`; the backend appends JSONL entries to
 `logs/c3_extension_debug.jsonl` in the repo. This is the preferred testing path
-because Codex can read the file directly without a manual download. The sink
+because logs stay in the repo without a manual download. The sink
 requires the backend URL to point at the running local backend and, if the
 backend is using `HUNT_SERVICE_TOKEN`, the same service token must be saved in
 C3 Options.
@@ -216,12 +230,6 @@ Request a fill only after the run is in `apply_prepared`:
 .\.venv\Scripts\python.exe -m pytest tests\test_component4_c3_bridge.py -q
 ```
 
-For a protocol-only worker check without launching a browser:
-
-```powershell
-.\.venv\Scripts\python.exe -m coordinator.agent_worker --runtime openclaw_isolated --mock-result
-```
-
 Expected state behavior:
 
 - `apply_prepared` moves to `fill_requested`.
@@ -235,6 +243,10 @@ Dev reload shortcuts:
 - From the terminal, run `.\hunter.ps1 c3-reload` or `.\hunt.ps1 c3-reload`.
 - Terminal reload requires Chrome to be running with remote debugging enabled,
   for example `chrome.exe --remote-debugging-port=9222`.
+- Live Hootsuite testing found that runtime reload can leave the unpacked
+  extension disabled in a test profile. When verifying code changes, the safer
+  path is to restart the dedicated browser or use a fresh
+  `HUNT_C3_CHROME_PROFILE`.
 
 Current manifest scope: `manifest.json` grants `<all_urls>` for the testing
 build so generic prompt detection and manual fill can run on ordinary sites.
@@ -342,6 +354,55 @@ Success criteria:
 - Unknown required fields are flagged instead of guessed.
 - No final submit click occurs.
 - Evidence is captured or manually noted.
+
+## Workday Live Smoke
+
+Use a fresh dedicated browser profile after extension source edits. The smoke
+script seeds the extension profile and `main.pdf`, navigates to the selected
+Workday path, sends `hunt.apply.fill_current_page`, clicks only `Next`, and
+stops at Review when Submit is visible.
+
+Resume-upload path:
+
+```powershell
+node scripts\c3_workday_live_smoke.js --mode resume --resume main.pdf
+```
+
+Manual path:
+
+```powershell
+node scripts\c3_workday_live_smoke.js --mode manual --resume main.pdf
+```
+
+Expected result for the Jonas Software Canada posting:
+
+- Resume path: final step 6 of 6, `Review`, `hasSubmit: true`, no page errors.
+- Manual path: final step 5 of 5, `Review`, `hasSubmit: true`, no page errors.
+- Review text includes `How Did You Hear About Us? Linkedin`, `Edmonton, AB
+  Canada`, `Phone +1 7800000000 (Mobile)`, and `main.pdf`.
+
+Workday details that matter:
+
+- `Apply Manually` initially exposes a Country dropdown before the rest of the
+  form. C3 primes Country first, then fills the dependent fields.
+- Workday button dropdown commits can be delayed. C3 polls committed button text
+  before treating a selection as saved.
+- Workday phone country code is a separate search control. It must select
+  `Canada (+1)` and must not receive the raw phone number. If it is already
+  selected, the trace should show `phone_country_code_precheck` followed by
+  `phone_country_code_matches_choice`, with no
+  `open_phone_country_code_picker` click.
+- Required terms and consent checkboxes are filled only for narrow required
+  terms/agreement descriptors.
+
+Diagnostic repeated fill without clicking Next:
+
+```powershell
+node scripts\c3_workday_live_smoke.js --mode manual --resume main.pdf --max-pages 1 --fills-per-page 3 --stop-after-fill
+```
+
+Use this when checking idempotency. It should show already-correct controls as
+`already_filled` on repeated fills.
 
 ## First Live ATS Pilot
 

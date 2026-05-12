@@ -261,6 +261,48 @@
         background: #f6c24a;
       }
 
+      .next-confirm {
+        background: var(--panel-strong);
+        border-color: var(--line-strong);
+        box-shadow: inset 4px 0 0 var(--accent);
+        display: grid;
+        gap: 7px;
+      }
+
+      .next-confirm h2 {
+        color: var(--accent);
+      }
+
+      .next-confirm p {
+        color: var(--ink);
+        font-size: 10px;
+        line-height: 1.35;
+      }
+
+      .next-actions {
+        display: grid;
+        gap: 6px;
+        grid-template-columns: 1fr 1fr;
+      }
+
+      .next-actions button {
+        min-height: 28px;
+      }
+
+      #next-go {
+        background: var(--accent);
+        border-color: var(--accent);
+        color: var(--accent-ink);
+      }
+
+      #next-go:hover {
+        background: var(--good);
+      }
+
+      #next-skip {
+        grid-column: 1 / -1;
+      }
+
       .header {
         align-items: center;
         display: flex;
@@ -315,6 +357,24 @@
         </div>
       </section>
 
+      <section
+        id="next-confirm"
+        class="card next-confirm hidden"
+        aria-live="polite"
+      >
+        <h2>Next Available</h2>
+        <p id="next-confirm-copy">
+          Hunt found a safe Next control after filling this page.
+        </p>
+        <div class="next-actions">
+          <button id="next-go" type="button">Go Next</button>
+          <button id="next-always" class="secondary" type="button">
+            Always Next
+          </button>
+          <button id="next-skip" class="secondary" type="button">Stay</button>
+        </div>
+      </section>
+
       <section class="card summary-card">
         <h2>Active Context</h2>
         <div class="summary-grid">
@@ -355,6 +415,10 @@
           <div class="compact-row">
             <span class="label">Auto Prompt</span>
             <div id="auto-prompt" class="value">Enabled</div>
+          </div>
+          <div class="compact-row">
+            <span class="label">Auto Next</span>
+            <div id="auto-next-after-fill" class="value">Disabled</div>
           </div>
           <div class="compact-row">
             <span class="label">Required Only</span>

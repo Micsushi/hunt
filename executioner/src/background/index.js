@@ -16,10 +16,34 @@ import {
   postFillResult,
 } from "../shared/api.js";
 import { runFillForTab, runPendingLlmFillForTab } from "./fill-runner.js";
+import {
+  canOfferSafeNextAfterFill,
+  chooseBestSafeNextFrame,
+  createSafeNextFunction,
+  summarizeSafeNextResult,
+} from "./safe-next.js";
 
 const C4_POLL_ALARM = "hunt.apply.c4.poll";
 const C4_HEARTBEAT_ALARM = "hunt.apply.c4.heartbeat";
 let activeRunId = "";
+
+function withTimeout(promise, timeoutMs, fallbackFactory) {
+  let timer = null;
+  const timeout = new Promise((resolve) => {
+    timer = setTimeout(() => {
+      resolve(
+        typeof fallbackFactory === "function"
+          ? fallbackFactory()
+          : fallbackFactory,
+      );
+    }, timeoutMs);
+  });
+  return Promise.race([promise, timeout]).finally(() => {
+    if (timer) {
+      clearTimeout(timer);
+    }
+  });
+}
 
 async function sendDebugLog(eventType, payload = {}) {
   try {
@@ -83,6 +107,7 @@ async function autoExportLogs(reason) {
       autoPromptEnabled: state.settings.autoPromptEnabled,
       fillRequiredOnly: state.settings.fillRequiredOnly,
       c4PollingEnabled: state.settings.c4PollingEnabled,
+      autoClickNextAfterFill: state.settings.autoClickNextAfterFill,
     },
     activeApplyContext: state.activeApplyContext,
     attempts: state.attempts,
@@ -131,11 +156,67 @@ async function showPageToast(tabId, message, tone = "info") {
     return;
   }
   try {
-    await chrome.tabs.sendMessage(tabId, {
-      type: "hunt.apply.show_toast",
-      message,
-      tone,
-    });
+    await withTimeout(
+      chrome.tabs.sendMessage(tabId, {
+        type: "hunt.apply.show_toast",
+        message,
+        tone,
+      }),
+      2500,
+      () => null,
+    );
+  } catch (_error) {
+    // Some pages cannot receive content-script messages.
+  }
+}
+
+async function showFillProgress(tabId, message = "Filling page") {
+  if (!tabId) {
+    return;
+  }
+  try {
+    await withTimeout(
+      chrome.tabs.sendMessage(tabId, {
+        type: "hunt.apply.show_fill_progress",
+        message,
+      }),
+      2500,
+      () => null,
+    );
+  } catch (_error) {
+    // Some pages cannot receive content-script messages.
+  }
+}
+
+async function hideFillProgress(tabId) {
+  if (!tabId) {
+    return;
+  }
+  try {
+    await withTimeout(
+      chrome.tabs.sendMessage(tabId, {
+        type: "hunt.apply.hide_fill_progress",
+      }),
+      2500,
+      () => null,
+    );
+  } catch (_error) {
+    // Some pages cannot receive content-script messages.
+  }
+}
+
+async function dismissPageTransientUi(tabId) {
+  if (!tabId) {
+    return;
+  }
+  try {
+    await withTimeout(
+      chrome.tabs.sendMessage(tabId, {
+        type: "hunt.apply.dismiss_transient_ui",
+      }),
+      2500,
+      () => null,
+    );
   } catch (_error) {
     // Some pages cannot receive content-script messages.
   }
@@ -147,10 +228,14 @@ async function showLlmPrompt(tabId, payload = {}) {
   }
   let sent = false;
   try {
-    await chrome.tabs.sendMessage(tabId, {
-      type: "hunt.apply.show_llm_prompt",
-      ...payload,
-    });
+    await withTimeout(
+      chrome.tabs.sendMessage(tabId, {
+        type: "hunt.apply.show_llm_prompt",
+        ...payload,
+      }),
+      2500,
+      () => null,
+    );
     sent = true;
   } catch (_error) {
     // Some pages cannot receive content-script messages.
@@ -167,6 +252,164 @@ async function showLlmPrompt(tabId, payload = {}) {
     },
     sent ? "ok" : "warn",
   );
+}
+
+async function probeSafeNextForTab(tabId) {
+  if (!tabId) {
+    return {
+      ok: false,
+      available: false,
+      reason: "missing_tab",
+      message: "No active tab is available for Next.",
+    };
+  }
+  try {
+    const results = await withTimeout(
+      chrome.scripting.executeScript({
+        target: { tabId, allFrames: true },
+        func: createSafeNextFunction(),
+        args: [{ click: false }],
+      }),
+      5000,
+      () => null,
+    );
+    if (!results) {
+      return {
+        ok: false,
+        available: false,
+        reason: "safe_next_probe_timeout",
+        message: "Safe Next check timed out.",
+      };
+    }
+    return chooseBestSafeNextFrame(results);
+  } catch (error) {
+    return {
+      ok: false,
+      available: false,
+      reason: "safe_next_probe_failed",
+      message: error instanceof Error ? error.message : String(error),
+    };
+  }
+}
+
+async function clickSafeNextForTab(tabId, details = {}) {
+  const probe = await probeSafeNextForTab(tabId);
+  if (!probe.available) {
+    await logActivity(
+      "next.blocked",
+      summarizeSafeNextResult(probe),
+      {
+        tabId,
+        reason: probe.reason,
+        triggeredBy: details.triggeredBy || "",
+        blockedFinalSubmitLabels: probe.blockedFinalSubmitLabels || [],
+      },
+      probe.reason === "no_safe_next_button" ? "warn" : "blocked",
+    );
+    await showPageToast(tabId, summarizeSafeNextResult(probe), "warn");
+    return {
+      ...probe,
+      clicked: false,
+      auto: Boolean(details.auto),
+    };
+  }
+
+  let clickResult;
+  try {
+    const results = await withTimeout(
+      chrome.scripting.executeScript({
+        target: { tabId, frameIds: [probe.frameId] },
+        func: createSafeNextFunction(),
+        args: [{ click: true }],
+      }),
+      5000,
+      () => null,
+    );
+    if (!results) {
+      throw new Error("Safe Next click timed out.");
+    }
+    clickResult = {
+      frameId: probe.frameId,
+      ...(results[0]?.result || {}),
+    };
+  } catch (error) {
+    clickResult = {
+      ok: false,
+      clicked: false,
+      frameId: probe.frameId,
+      reason: "safe_next_click_failed",
+      message: error instanceof Error ? error.message : String(error),
+      candidate: probe.candidate,
+    };
+  }
+
+  const summary = summarizeSafeNextResult(clickResult);
+  await logActivity(
+    clickResult.clicked ? "next.click" : "next.blocked",
+    summary,
+    {
+      tabId,
+      frameId: probe.frameId,
+      triggeredBy: details.triggeredBy || "",
+      candidate: clickResult.candidate || probe.candidate || {},
+      reason: clickResult.reason || "",
+      auto: Boolean(details.auto),
+    },
+    clickResult.clicked ? "ok" : "warn",
+  );
+  await showPageToast(tabId, summary, clickResult.clicked ? "info" : "warn");
+  return {
+    ...clickResult,
+    available: Boolean(clickResult.ok && clickResult.found),
+    auto: Boolean(details.auto),
+  };
+}
+
+async function maybeHandleSafeNextAfterFill({
+  tabId,
+  fillResponse,
+  settings,
+  triggeredBy,
+}) {
+  if (!canOfferSafeNextAfterFill(fillResponse)) {
+    return {
+      ok: false,
+      available: false,
+      promptAvailable: false,
+      clicked: false,
+      skipped: true,
+      reason: "fill_not_ready_for_next",
+      message: "Next skipped because fill still needs review.",
+    };
+  }
+
+  if (settings.autoClickNextAfterFill) {
+    return clickSafeNextForTab(tabId, {
+      auto: true,
+      triggeredBy: triggeredBy || "auto_after_fill",
+    });
+  }
+
+  const probe = await probeSafeNextForTab(tabId);
+  if (probe.available) {
+    await logActivity("next.prompt.available", "Safe Next is available.", {
+      tabId,
+      triggeredBy: triggeredBy || "",
+      candidate: probe.candidate || {},
+    });
+    return {
+      ...probe,
+      promptAvailable: true,
+      clicked: false,
+      auto: false,
+    };
+  }
+  return {
+    ...probe,
+    promptAvailable: false,
+    clicked: false,
+    auto: false,
+  };
 }
 
 async function clearCurrentPage(tabId) {
@@ -318,6 +561,34 @@ async function clearCurrentPage(tabId) {
         });
       }
 
+      function hasMenuOpenClass(el) {
+        return Array.from(el?.classList || []).some(
+          (className) =>
+            className === "open" ||
+            className === "is-open" ||
+            className === "select__menu--is-open" ||
+            className === "select__control--menu-is-open" ||
+            className.includes("menu-is-open"),
+        );
+      }
+
+      function removeMenuOpenClasses(el) {
+        if (!el?.classList) {
+          return;
+        }
+        el.classList.remove(
+          "open",
+          "is-open",
+          "select__menu--is-open",
+          "select__control--menu-is-open",
+        );
+        Array.from(el.classList).forEach((className) => {
+          if (className.includes("menu-is-open")) {
+            el.classList.remove(className);
+          }
+        });
+      }
+
       function closeOpenDropdowns() {
         let closed = 0;
         const targets = new Set();
@@ -328,6 +599,8 @@ async function clearCurrentPage(tabId) {
           '[aria-haspopup="listbox"]',
           '[role="listbox"]',
           "[id^='react-select-'][id*='-listbox']",
+          "[class*='menu-is-open']",
+          ".select__control--menu-is-open",
           ".select__container",
           ".select__control",
           ".select__menu",
@@ -340,10 +613,7 @@ async function clearCurrentPage(tabId) {
 
         targets.forEach((el) => {
           const beforeExpanded = el.getAttribute("aria-expanded") === "true";
-          const beforeOpenClass =
-            el.classList?.contains("open") ||
-            el.classList?.contains("is-open") ||
-            el.classList?.contains("select__menu--is-open");
+          const beforeOpenClass = hasMenuOpenClass(el);
           if (typeof el.focus === "function" && isVisibleEnabled(el)) {
             try {
               el.focus({ preventScroll: true });
@@ -361,12 +631,11 @@ async function clearCurrentPage(tabId) {
           if (el.hasAttribute?.("aria-expanded")) {
             el.setAttribute("aria-expanded", "false");
           }
-          if (el.classList) {
-            el.classList.remove("open", "is-open", "select__menu--is-open");
-          }
-          if (field?.classList) {
-            field.classList.remove("open", "is-open", "select__menu--is-open");
-          }
+          removeMenuOpenClasses(el);
+          removeMenuOpenClasses(field);
+          field
+            ?.querySelectorAll?.("[class*='menu-is-open']")
+            .forEach(removeMenuOpenClasses);
           if (typeof el.blur === "function") {
             el.blur();
           }
@@ -393,6 +662,8 @@ async function clearCurrentPage(tabId) {
               '[aria-expanded="true"]',
               '[role="listbox"]',
               "[id^='react-select-'][id*='-listbox']",
+              "[class*='menu-is-open']",
+              ".select__control--menu-is-open",
               ".select__menu",
               ".select__menu-list",
             ].join(", "),
@@ -452,6 +723,9 @@ async function clearCurrentPage(tabId) {
             menu.remove();
           }
         });
+        Array.from(
+          document.querySelectorAll("[class*='menu-is-open']"),
+        ).forEach(removeMenuOpenClasses);
         clickOutsideDropdowns();
         return hidden;
       }
@@ -604,6 +878,244 @@ async function clearCurrentPage(tabId) {
           }
         });
         return clicked;
+      }
+
+      function normalizeText(value) {
+        return String(value || "")
+          .replace(/\s+/g, " ")
+          .trim();
+      }
+
+      function isPlaceholderText(value) {
+        const text = normalizeText(value).toLowerCase();
+        return (
+          !text ||
+          text === "select one" ||
+          text === "select..." ||
+          text === "select" ||
+          text === "none"
+        );
+      }
+
+      function buttonValueText(button) {
+        return normalizeText(
+          button.innerText ||
+            button.textContent ||
+            button.getAttribute("aria-label") ||
+            button.getAttribute("value") ||
+            "",
+        );
+      }
+
+      function forceClearWorkdayButton(button) {
+        const current = buttonValueText(button);
+        button.value = "";
+        button.removeAttribute("value");
+        if (current) {
+          button.setAttribute(
+            "aria-label",
+            normalizeText(
+              (button.getAttribute("aria-label") || current).replace(
+                current,
+                "Select One",
+              ),
+            ),
+          );
+        }
+        button.textContent = "Select One";
+        dispatch(button);
+        return isPlaceholderText(buttonValueText(button));
+      }
+
+      function visibleOptions() {
+        return Array.from(document.querySelectorAll('[role="option"]')).filter(
+          isVisibleEnabled,
+        );
+      }
+
+      async function clearWorkdayButtonDropdowns() {
+        let clearedButtons = 0;
+        const buttons = Array.from(
+          document.querySelectorAll('button[aria-haspopup="listbox"]'),
+        ).filter(isVisibleEnabled);
+        for (const button of buttons) {
+          const before = buttonValueText(button);
+          if (isPlaceholderText(before)) {
+            continue;
+          }
+          realisticClick(button);
+          await sleep(220);
+          const placeholder = visibleOptions().find((option) =>
+            isPlaceholderText(option.innerText || option.textContent || ""),
+          );
+          const placeholderDisabled =
+            !placeholder ||
+            placeholder.getAttribute("aria-disabled") === "true" ||
+            placeholder.hasAttribute("disabled");
+          if (!placeholder || placeholderDisabled) {
+            if (forceClearWorkdayButton(button)) {
+              clearedButtons += 1;
+            }
+            keyOn(button, "Escape");
+            continue;
+          }
+          realisticClick(placeholder);
+          await sleep(220);
+          dispatch(button);
+          keyOn(button, "Escape");
+          if (
+            isPlaceholderText(buttonValueText(button)) ||
+            forceClearWorkdayButton(button)
+          ) {
+            clearedButtons += 1;
+          }
+        }
+        return clearedButtons;
+      }
+
+      function workdayMultiselectContainers() {
+        const containers = new Set();
+        document
+          .querySelectorAll(
+            [
+              '[data-automation-id="multiSelectContainer"]',
+              '[data-automation-id="multiselectInputContainer"]',
+              '[data-uxi-widget-type="multiselect"]',
+              "[data-uxi-multiselect-id]",
+            ].join(", "),
+          )
+          .forEach((el) => {
+            const id = el.getAttribute("data-uxi-multiselect-id");
+            const root = id ? document.getElementById(id) : null;
+            containers.add(
+              root ||
+                el.closest(
+                  [
+                    '[data-automation-id="multiSelectContainer"]',
+                    '[data-automation-id="multiselectInputContainer"]',
+                    '[data-uxi-widget-type="multiselect"]',
+                    '[data-automation-id="formField"]',
+                  ].join(", "),
+                ) ||
+                el,
+            );
+          });
+        return Array.from(containers).filter(Boolean);
+      }
+
+      function containerHasWorkdaySelection(container) {
+        return Array.from(
+          container.querySelectorAll(
+            [
+              '[data-automation-id="selectedItem"]',
+              '[role="option"][aria-selected="true"]',
+              '[id^="pill-"]',
+              '[aria-label*="press delete to clear value"]',
+            ].join(", "),
+          ),
+        ).some((el) =>
+          normalizeText(
+            el.innerText || el.textContent || el.getAttribute("aria-label"),
+          ),
+        );
+      }
+
+      function workdaySelectedItems(container) {
+        return Array.from(
+          container.querySelectorAll(
+            [
+              '[data-automation-id="selectedItem"]',
+              '[id^="pill-"][aria-label*="press delete to clear value"]',
+            ].join(", "),
+          ),
+        ).filter((el) =>
+          normalizeText(
+            el.innerText || el.textContent || el.getAttribute("aria-label"),
+          ),
+        );
+      }
+
+      async function clearWorkdayMultiselects() {
+        let clearedMultiselects = 0;
+        for (const container of workdayMultiselectContainers()) {
+          if (!containerHasWorkdaySelection(container)) {
+            continue;
+          }
+          let changed = false;
+          for (const selectedItem of workdaySelectedItems(container)) {
+            try {
+              selectedItem.focus({ preventScroll: true });
+            } catch (_error) {
+              selectedItem.focus?.();
+            }
+            keyOn(selectedItem, "Delete");
+            keyOn(selectedItem, "Backspace");
+            changed = true;
+          }
+          Array.from(
+            container.querySelectorAll(
+              'button, [role="button"], [aria-label], [data-automation-id]',
+            ),
+          )
+            .filter(isVisibleEnabled)
+            .forEach((candidate) => {
+              const label = normalizeText(
+                [
+                  candidate.getAttribute("aria-label"),
+                  candidate.getAttribute("data-automation-id"),
+                  candidate.innerText,
+                  candidate.textContent,
+                ]
+                  .filter(Boolean)
+                  .join(" "),
+              ).toLowerCase();
+              if (
+                label.includes("remove") ||
+                label.includes("delete") ||
+                label.includes("clear") ||
+                label.includes("press delete to clear value")
+              ) {
+                if (clickClearControl(candidate)) {
+                  changed = true;
+                }
+              }
+            });
+          const input =
+            container.querySelector("input:not([type='hidden'])") ||
+            container.querySelector("[role='combobox']");
+          if (input) {
+            try {
+              input.focus({ preventScroll: true });
+            } catch (_error) {
+              input.focus?.();
+            }
+            keyOn(input, "Backspace");
+            keyOn(input, "Delete");
+            setNativeValue(input, "");
+            dispatch(input);
+            changed = true;
+          }
+          await sleep(180);
+          if (changed && !containerHasWorkdaySelection(container)) {
+            clearedMultiselects += 1;
+          }
+        }
+        return clearedMultiselects;
+      }
+
+      function countRemainingWorkdayButtonValues() {
+        return Array.from(
+          document.querySelectorAll('button[aria-haspopup="listbox"]'),
+        )
+          .filter(isVisibleEnabled)
+          .filter((button) => !isPlaceholderText(buttonValueText(button)))
+          .length;
+      }
+
+      function countRemainingWorkdayMultiselectValues() {
+        return workdayMultiselectContainers().filter(
+          containerHasWorkdaySelection,
+        ).length;
       }
 
       let cleared = 0;
@@ -859,7 +1371,26 @@ async function clearCurrentPage(tabId) {
           }
         });
 
-      await sleep(120);
+      let workdayButtonClears = await clearWorkdayButtonDropdowns();
+      cleared += workdayButtonClears;
+      let workdayMultiselectClears = await clearWorkdayMultiselects();
+      cleared += workdayMultiselectClears;
+
+      await sleep(650);
+      const stabilizedWorkdayButtonClears = await clearWorkdayButtonDropdowns();
+      const stabilizedWorkdayMultiselectClears =
+        await clearWorkdayMultiselects();
+      workdayButtonClears += stabilizedWorkdayButtonClears;
+      workdayMultiselectClears += stabilizedWorkdayMultiselectClears;
+      cleared +=
+        stabilizedWorkdayButtonClears + stabilizedWorkdayMultiselectClears;
+
+      await sleep(1000);
+      const lateWorkdayMultiselectClears = await clearWorkdayMultiselects();
+      workdayMultiselectClears += lateWorkdayMultiselectClears;
+      cleared += lateWorkdayMultiselectClears;
+
+      await sleep(300);
       const closedDropdowns = preClosedDropdowns + closeOpenDropdowns();
       await sleep(120);
       const finalClosedDropdowns = closeOpenDropdowns();
@@ -867,7 +1398,10 @@ async function clearCurrentPage(tabId) {
       const hiddenDropdownMenus = hideTransientDropdownMenus();
       await sleep(80);
       const remainingOpenDropdowns = countOpenDropdowns();
-      const remainingFilledControls = countRemainingFilledControls();
+      const remainingFilledControls =
+        countRemainingFilledControls() +
+        countRemainingWorkdayButtonValues() +
+        countRemainingWorkdayMultiselectValues();
 
       return {
         cleared,
@@ -877,6 +1411,8 @@ async function clearCurrentPage(tabId) {
         remainingOpenDropdowns,
         remainingFilledControls,
         clearIndicatorClicks,
+        workdayButtonClears,
+        workdayMultiselectClears,
       };
     },
   });
@@ -911,6 +1447,15 @@ async function clearCurrentPage(tabId) {
     (total, result) => total + Number(result.result?.clearIndicatorClicks || 0),
     0,
   );
+  const workdayButtonClears = results.reduce(
+    (total, result) => total + Number(result.result?.workdayButtonClears || 0),
+    0,
+  );
+  const workdayMultiselectClears = results.reduce(
+    (total, result) =>
+      total + Number(result.result?.workdayMultiselectClears || 0),
+    0,
+  );
   const needsReview = remainingOpenDropdowns > 0 || remainingFilledControls > 0;
   await logActivity(
     "page.clear",
@@ -926,6 +1471,8 @@ async function clearCurrentPage(tabId) {
       remainingOpenDropdowns,
       remainingFilledControls,
       clearIndicatorClicks,
+      workdayButtonClears,
+      workdayMultiselectClears,
       frameCount: results.length,
     },
     needsReview ? "warn" : "ok",
@@ -1019,6 +1566,8 @@ function resultPayloadFromFill(runId, fillResult, attempt) {
     filledFields: result.filledFields || [],
     filledFieldCount: attempt?.filledFieldCount || 0,
     fieldInventory: result.fieldInventory || attempt?.fieldInventory || [],
+    interactionTrace:
+      result.interactionTrace || attempt?.interactionTrace || [],
     generatedAnswersUsed: (attempt?.generatedAnswerCount || 0) > 0,
     generatedAnswers: fillResult?.generatedAnswers || [],
     missingRequiredFields: result.missingRequiredFields || [],
@@ -1192,6 +1741,7 @@ async function handleMessage(message, sender = {}) {
         manualFillEnabled: settings.manualFillEnabled,
         autoPromptEnabled: settings.autoPromptEnabled,
         autoExportLogs: settings.autoExportLogs,
+        autoClickNextAfterFill: settings.autoClickNextAfterFill,
         allowGeneratedAnswers: settings.allowGeneratedAnswers,
         c4PollingEnabled: settings.c4PollingEnabled,
         pollIntervalSeconds: settings.pollIntervalSeconds,
@@ -1247,6 +1797,7 @@ async function handleMessage(message, sender = {}) {
     }
 
     case "hunt.apply.fill_current_page": {
+      const tabId = message.payload?.tabId || sender.tab?.id;
       const state = await getExtensionState();
       if (!state.settings.manualFillEnabled) {
         await logActivity(
@@ -1261,10 +1812,39 @@ async function handleMessage(message, sender = {}) {
           message: "Manual fill is currently disabled in extension settings.",
         };
       }
-      const result = await runFillForTab(
-        message.payload?.tabId || sender.tab?.id,
-        state,
-      );
+      let result;
+      await dismissPageTransientUi(tabId);
+      await showFillProgress(tabId, "Filling page");
+      try {
+        result = await withTimeout(runFillForTab(tabId, state), 45000, () => ({
+          ok: false,
+          message: "Fill timed out before the page responded.",
+          route: {
+            routeName: "timeout",
+            fillSource: state.activeApplyContext.sourceMode || "manual",
+            strategy: "timeout",
+            adapterName: "",
+            requestedAtsType: state.activeApplyContext.atsType || "",
+            detectedAtsType: "",
+            usedGenericFallback: false,
+            adapterBackedByGeneric: false,
+          },
+          attempt: {
+            applyUrl: state.activeApplyContext.applyUrl,
+            atsType: state.activeApplyContext.atsType,
+            filledFieldCount: 0,
+            manualReviewRequired: true,
+            manualReviewReasons: ["fill_timeout"],
+          },
+          result: {
+            pendingLlmFieldCount: 0,
+            manualReviewReasons: ["fill_timeout"],
+          },
+          generatedAnswers: [],
+        }));
+      } finally {
+        await hideFillProgress(tabId);
+      }
       await sendDebugLog("fill_result", {
         ok: result.ok,
         message: result.message,
@@ -1287,6 +1867,10 @@ async function handleMessage(message, sender = {}) {
             0,
             10,
           ),
+          interactionTrace: (result.result?.interactionTrace || []).slice(
+            0,
+            80,
+          ),
           manualReviewRequired: result.attempt?.manualReviewRequired,
         },
         result.ok ? "ok" : "failed",
@@ -1299,11 +1883,15 @@ async function handleMessage(message, sender = {}) {
         String(reason).includes("missing_resume_data"),
       );
       const filledNothing = result.ok && !result.attempt?.filledFieldCount;
-      const exportResult = await maybeAutoExportLogs(
-        result.ok ? "fill-complete" : "fill-failed",
-      );
+      const exportResult = state.settings.autoExportLogs
+        ? await withTimeout(
+            maybeAutoExportLogs(result.ok ? "fill-complete" : "fill-failed"),
+            5000,
+            () => ({ exported: false, reason: "auto_export_timeout" }),
+          )
+        : { exported: false, reason: "disabled" };
       await showPageToast(
-        message.payload?.tabId || sender.tab?.id,
+        tabId,
         missingResume
           ? "No default resume is saved. Open Hunt Apply Options and save a PDF resume."
           : filledNothing
@@ -1320,20 +1908,24 @@ async function handleMessage(message, sender = {}) {
           : "info",
       );
       if (result.ok && result.result?.pendingLlmFieldCount > 0) {
-        await showLlmPrompt(message.payload?.tabId || sender.tab?.id, {
+        await showLlmPrompt(tabId, {
           fieldCount: result.result.pendingLlmFieldCount,
           filledFieldCount: result.result.filledFieldCount || 0,
         });
       }
+      result.nextAction = await maybeHandleSafeNextAfterFill({
+        tabId,
+        fillResponse: result,
+        settings: state.settings,
+        triggeredBy: message.payload?.triggeredBy || "fill_current_page",
+      });
       return result;
     }
 
     case "hunt.apply.fill_remaining_with_llm": {
+      const tabId = message.payload?.tabId || sender.tab?.id;
       const state = await getExtensionState();
-      const result = await runPendingLlmFillForTab(
-        message.payload?.tabId || sender.tab?.id,
-        state,
-      );
+      const result = await runPendingLlmFillForTab(tabId, state);
       await sendDebugLog("llm_fill_result", {
         ok: result.ok,
         message: result.message,
@@ -1357,16 +1949,44 @@ async function handleMessage(message, sender = {}) {
         result.ok ? "ok" : "failed",
       );
       await showPageToast(
-        message.payload?.tabId || sender.tab?.id,
+        tabId,
         result.message ||
           (result.ok ? "LLM fill completed." : "LLM fill failed."),
         result.ok ? "info" : "warn",
       );
+      result.nextAction = await maybeHandleSafeNextAfterFill({
+        tabId,
+        fillResponse: result,
+        settings: state.settings,
+        triggeredBy: message.payload?.triggeredBy || "fill_remaining_with_llm",
+      });
       return result;
     }
 
-    case "hunt.apply.clear_current_page":
-      return clearCurrentPage(message.payload?.tabId || sender.tab?.id);
+    case "hunt.apply.click_next_after_fill": {
+      const tabId = message.payload?.tabId || sender.tab?.id;
+      if (message.payload?.remember) {
+        const state = await getExtensionState();
+        const settings = await saveSettings({
+          ...state.settings,
+          autoClickNextAfterFill: true,
+        });
+        await refreshPollingAlarms(settings);
+        await logActivity("settings.save", "Behavior settings saved.", {
+          autoClickNextAfterFill: true,
+          reason: "next_prompt_remember",
+        });
+      }
+      return clickSafeNextForTab(tabId, {
+        triggeredBy: message.payload?.triggeredBy || "popup_next_prompt",
+      });
+    }
+
+    case "hunt.apply.clear_current_page": {
+      const tabId = message.payload?.tabId || sender.tab?.id;
+      await dismissPageTransientUi(tabId);
+      return clearCurrentPage(tabId);
+    }
 
     case "hunt.apply.clear_activity_log":
       await clearActivityLog();
@@ -1456,7 +2076,21 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
     ) {
       return;
     }
-    await runFillForTab(tabId, state);
+    const result = await runFillForTab(tabId, state);
+    if (result.ok && result.result?.pendingLlmFieldCount > 0) {
+      await showLlmPrompt(tabId, {
+        fieldCount: result.result.pendingLlmFieldCount,
+        filledFieldCount: result.result.filledFieldCount || 0,
+      });
+    }
+    if (state.settings.autoClickNextAfterFill) {
+      await maybeHandleSafeNextAfterFill({
+        tabId,
+        fillResponse: result,
+        settings: state.settings,
+        triggeredBy: "autofill_on_load",
+      });
+    }
   })().catch((error) => {
     console.error("Autofill on load failed:", error);
   });

@@ -636,6 +636,16 @@ class Component4CliTests(unittest.TestCase):
             ],
         )
 
+    def test_hunterctl_run_handles_keyboard_interrupt_cleanly(self) -> None:
+        with patch("scripts.hunterctl.subprocess.run", side_effect=KeyboardInterrupt):
+            stdout = io.StringIO()
+            with redirect_stdout(stdout):
+                with self.assertRaises(SystemExit) as exc:
+                    hunterctl._run([hunterctl.PYTHON, "-m", "backend.app"])
+
+        self.assertEqual(exc.exception.code, 130)
+        self.assertIn("Interrupted", stdout.getvalue())
+
 
 if __name__ == "__main__":
     unittest.main()

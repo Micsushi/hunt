@@ -11,7 +11,7 @@ import { createWorkdayFillFunction } from "../ats/workday/fill.js";
 import { appendAttempt, appendQuestionAnswers } from "../shared/storage.js";
 import { selectFillRoute } from "./fill-routes.js";
 
-// Map of ATS name → fill-function factory.
+// Map of ATS name to fill-function factory.
 // Each factory must return a self-contained async function (no outer references)
 // because Chrome serialises it via Function.prototype.toString() for injection.
 const GENERIC_BACKED_ATS_NAMES = genericBackedAtsNames();
@@ -748,6 +748,201 @@ function createApplyAnswerDecisionsFunction() {
   };
 }
 
+class C3AutofillPipelineContext {
+  constructor({ tabId, extensionState, options }) {
+    this.requestedTabId = tabId;
+    this.extensionState = extensionState;
+    this.options = options || {};
+    this.availableAdapters = Object.keys(FILL_ADAPTERS);
+    this.response = null;
+  }
+
+  stop(response) {
+    this.response = response;
+  }
+
+  get stopped() {
+    return Boolean(this.response);
+  }
+}
+
+class ResolveActiveTabStep {
+  async run(context) {
+    const [tab] = await chrome.tabs.query({
+      active: true,
+      currentWindow: true,
+    });
+    context.activeTabId = context.requestedTabId || tab?.id;
+    if (!context.activeTabId) {
+      context.stop({
+        ok: false,
+        reason: "missing_tab",
+        message: "No active tab is available for fill.",
+      });
+      return;
+    }
+
+    context.tabInfo = await chrome.tabs.get(context.activeTabId);
+    context.pageUrl = context.tabInfo.url || "";
+  }
+}
+
+class DetectAtsStep {
+  async run(context) {
+    context.detectedAtsType = await detectAtsTypeForTab(
+      context.activeTabId,
+      context.pageUrl,
+      context.availableAdapters,
+    );
+  }
+}
+
+class SelectFillRouteStep {
+  run(context) {
+    context.route = selectFillRoute({
+      activeApplyContext: context.extensionState.activeApplyContext,
+      detectedAtsType: context.detectedAtsType,
+      availableAdapters: context.availableAdapters,
+    });
+    context.route.adapterBackedByGeneric = GENERIC_BACKED_ATS_NAMES.includes(
+      context.route.adapterName,
+    );
+    context.atsType = context.route.adapterName;
+  }
+}
+
+class ResolveFillAdapterStep {
+  run(context) {
+    context.adapterFactory = FILL_ADAPTERS[context.atsType];
+    if (context.adapterFactory) {
+      return;
+    }
+
+    const supported = Object.keys(FILL_ADAPTERS).join(", ");
+    context.stop({
+      ok: false,
+      reason: "unsupported_ats",
+      atsType: context.atsType,
+      message: `ATS "${context.atsType}" is not yet supported. Supported: ${supported}.`,
+    });
+  }
+}
+
+class InjectSharedUtilitiesStep {
+  async run(context) {
+    await chrome.scripting.executeScript({
+      target: { tabId: context.activeTabId, allFrames: true },
+      files: ["src/shared/injected.js"],
+    });
+  }
+}
+
+class RunAdapterFillStep {
+  async run(context) {
+    const injectionResults = await chrome.scripting.executeScript({
+      target: { tabId: context.activeTabId, allFrames: true },
+      func: context.adapterFactory(),
+      args: [
+        {
+          profile: context.extensionState.profile,
+          settings: context.extensionState.settings,
+          activeApplyContext: context.extensionState.activeApplyContext,
+          defaultResume: context.extensionState.defaultResume,
+          fieldRules: GENERIC_FIELD_RULES,
+          fillRoute: context.route,
+        },
+      ],
+    });
+
+    context.result = chooseBestFrameResult(injectionResults);
+  }
+}
+
+class PrepareLlmHelpStep {
+  async run(context) {
+    const backendAnswerFields = attachPendingLlmSummary(context.result);
+
+    if (backendAnswerFields.length > 0 && !context.options.allowLlmAnswers) {
+      pendingLlmFillByTab.set(context.activeTabId, {
+        extensionState: context.extensionState,
+        pageUrl: context.pageUrl,
+        atsType: context.result.atsType || context.atsType,
+        route: context.route,
+        result: context.result,
+        createdAt: Date.now(),
+      });
+    }
+
+    if (backendAnswerFields.length > 0 && context.options.allowLlmAnswers) {
+      await applyBackendAnswerDecisions({
+        activeTabId: context.activeTabId,
+        extensionState: context.extensionState,
+        pageUrl: context.pageUrl,
+        atsType: context.result.atsType || context.atsType,
+        result: context.result,
+      });
+      attachPendingLlmSummary(context.result);
+      pendingLlmFillByTab.delete(context.activeTabId);
+    }
+  }
+}
+
+class PersistFillAttemptStep {
+  async run(context) {
+    const { attempt, answerEntries } = await persistFillAttempt({
+      extensionState: context.extensionState,
+      pageUrl: context.pageUrl,
+      atsType: context.result.atsType || context.atsType,
+      route: context.route,
+      result: context.result,
+    });
+    context.attempt = attempt;
+    context.answerEntries = answerEntries;
+  }
+}
+
+class BuildFillResponseStep {
+  run(context) {
+    context.stop(
+      buildFillResponse({
+        result: context.result,
+        attempt: context.attempt,
+        answerEntries: context.answerEntries,
+        route: context.route,
+      }),
+    );
+  }
+}
+
+class C3AutofillPipeline {
+  constructor(
+    steps = [
+      new ResolveActiveTabStep(),
+      new DetectAtsStep(),
+      new SelectFillRouteStep(),
+      new ResolveFillAdapterStep(),
+      new InjectSharedUtilitiesStep(),
+      new RunAdapterFillStep(),
+      new PrepareLlmHelpStep(),
+      new PersistFillAttemptStep(),
+      new BuildFillResponseStep(),
+    ],
+  ) {
+    this.steps = steps;
+  }
+
+  async run(input) {
+    const context = new C3AutofillPipelineContext(input);
+    for (const step of this.steps) {
+      if (context.stopped) {
+        break;
+      }
+      await step.run(context);
+    }
+    return context.response;
+  }
+}
+
 function buildFillResponse({ result, attempt, answerEntries, route }) {
   const manualReviewRequired = Boolean(attempt?.manualReviewRequired);
   const filledLabel = result.answerDecisions
@@ -807,6 +1002,8 @@ async function persistFillAttempt({
     manualReviewRequired,
     manualReviewReasons: result.manualReviewReasons || [],
     fieldInventory: result.fieldInventory || [],
+    interactionTrace: result.interactionTrace || [],
+    traceTruncated: Boolean(result.traceTruncated),
     htmlSnapshot: result.htmlSnapshot || "",
     screenshotDataUrl,
     resultSummary: result.ok
@@ -832,107 +1029,10 @@ async function persistFillAttempt({
 }
 
 export async function runFillForTab(tabId, extensionState, options = {}) {
-  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-  const activeTabId = tabId || tab?.id;
-  if (!activeTabId) {
-    return {
-      ok: false,
-      reason: "missing_tab",
-      message: "No active tab is available for fill.",
-    };
-  }
-
-  const tabInfo = await chrome.tabs.get(activeTabId);
-  const pageUrl = tabInfo.url || "";
-
-  const availableAdapters = Object.keys(FILL_ADAPTERS);
-  const detectedAtsType = await detectAtsTypeForTab(
-    activeTabId,
-    pageUrl,
-    availableAdapters,
-  );
-  const route = selectFillRoute({
-    activeApplyContext: extensionState.activeApplyContext,
-    detectedAtsType,
-    availableAdapters,
-  });
-  route.adapterBackedByGeneric = GENERIC_BACKED_ATS_NAMES.includes(
-    route.adapterName,
-  );
-  const atsType = route.adapterName;
-
-  const adapterFactory = FILL_ADAPTERS[atsType];
-  if (!adapterFactory) {
-    const supported = Object.keys(FILL_ADAPTERS).join(", ");
-    return {
-      ok: false,
-      reason: "unsupported_ats",
-      atsType,
-      message: `ATS "${atsType}" is not yet supported. Supported: ${supported}.`,
-    };
-  }
-
-  // Step 1: inject shared utilities into the page.
-  await chrome.scripting.executeScript({
-    target: { tabId: activeTabId, allFrames: true },
-    files: ["src/shared/injected.js"],
-  });
-
-  // Step 2: inject and run the ATS-specific fill function.
-  const injectionResults = await chrome.scripting.executeScript({
-    target: { tabId: activeTabId, allFrames: true },
-    func: adapterFactory(),
-    args: [
-      {
-        profile: extensionState.profile,
-        settings: extensionState.settings,
-        activeApplyContext: extensionState.activeApplyContext,
-        defaultResume: extensionState.defaultResume,
-        fieldRules: GENERIC_FIELD_RULES,
-        fillRoute: route,
-      },
-    ],
-  });
-
-  const result = chooseBestFrameResult(injectionResults);
-
-  const backendAnswerFields = attachPendingLlmSummary(result);
-
-  if (backendAnswerFields.length > 0 && !options.allowLlmAnswers) {
-    pendingLlmFillByTab.set(activeTabId, {
-      extensionState,
-      pageUrl,
-      atsType: result.atsType || atsType,
-      route,
-      result,
-      createdAt: Date.now(),
-    });
-  }
-
-  if (backendAnswerFields.length > 0 && options.allowLlmAnswers) {
-    await applyBackendAnswerDecisions({
-      activeTabId,
-      extensionState,
-      pageUrl,
-      atsType: result.atsType || atsType,
-      result,
-    });
-    attachPendingLlmSummary(result);
-    pendingLlmFillByTab.delete(activeTabId);
-  }
-
-  const { attempt, answerEntries } = await persistFillAttempt({
+  return new C3AutofillPipeline().run({
+    tabId,
     extensionState,
-    pageUrl,
-    atsType: result.atsType || atsType,
-    route,
-    result,
-  });
-  return buildFillResponse({
-    result,
-    attempt,
-    answerEntries,
-    route,
+    options,
   });
 }
 
