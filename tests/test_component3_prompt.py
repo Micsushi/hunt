@@ -114,6 +114,26 @@ def test_fill_commit_failure_can_refresh_and_retry_once():
     assert "refreshRetry: result.refreshRetry || null" in background
 
 
+def test_workday_runtime_error_can_refresh_and_retry_once():
+    background = _load_script(REPO_ROOT / "executioner/src/background/index.js")
+    runner = _load_script(REPO_ROOT / "executioner/src/background/fill-runner.js")
+    safe_next = _load_script(REPO_ROOT / "executioner/src/background/safe-next.js")
+    runtime = _load_script(REPO_ROOT / "executioner/src/background/workday-runtime.js")
+    live_smoke = _load_script(REPO_ROOT / "scripts/c3_workday_live_smoke.js")
+
+    assert "Something went wrong" in runtime or "something went wrong" in runtime
+    assert "please refresh the page and then try again" in runtime
+    assert "chrome.tabs.reload(tabId)" in runtime
+    assert "allFrames: true" in runtime
+    assert "workday_runtime_error" in runtime
+    assert "RecoverWorkdayRuntimeErrorStep" in runner
+    assert "workdayRuntimeRecovery" in runner
+    assert "recoverWorkdayRuntimeErrorForTab" in background
+    assert "clicked_safe_next_recovered_workday_runtime_error" in background
+    assert "clicked_safe_next_recovered_workday_runtime_error" in safe_next
+    assert "workdayRuntimeError" in live_smoke
+
+
 def test_fill_progress_can_request_cancel():
     content = _load_script(REPO_ROOT / "executioner/src/content/bootstrap.js")
     background = _load_script(REPO_ROOT / "executioner/src/background/index.js")
@@ -150,6 +170,11 @@ def test_clear_page_shows_progress_and_scrolls_while_clearing():
     assert 'traceClear("dropdown_select_attempt"' in background
     assert "selectAlternateWorkdayOptionBeforeForceClear" in background
     assert "select_alternate_before_force_clear" in background
+    assert "clearUploadedFileControls" in background
+    assert "uploaded_file_clear_scan" in background
+    assert "uploaded_file_delete_attempt" in background
+    assert "uploaded_file_delete_success" in background
+    assert "uploadedFileClears" in background
     assert "clearTraceTruncated" in background
     assert 'behavior: "smooth"' in background
     assert "await sleep(250)" in background
@@ -183,7 +208,8 @@ def test_workday_already_filled_text_inputs_do_not_count_as_changed():
     assert 'reason: "text_input_matches_value"' in workday
     city_branch = workday[
         workday.index("if (isExactCityField(elem, desc) && profile.location)") : workday.index(
-            "var profileMatch = u.chooseProfileMatch", workday.index("if (isExactCityField")
+            "var exactProfileMatch = chooseExactWorkdayTextProfileMatch",
+            workday.index("if (isExactCityField"),
         )
     ]
     profile_branch = workday[
@@ -220,7 +246,16 @@ def test_workday_logs_field_and_dropdown_actions():
     assert '"phone_country_code_select_attempt"' in workday
     assert '"phone_country_code_select_failed"' in workday
     assert "keyboard_commit_phone_country_code_option" in workday
-    assert "force_commit_diagnostic_only" in workday
+    assert "country_dependent_wait" in workday
+    assert "stableReadyCount" in workday
+    assert "readyCount >= 4" in workday
+    assert "prime_country_dependency" in workday
+    assert 'checkboxKey.includes("currentlyworkhere")' in workday
+    assert 'checkboxKey.includes("preferredcheck")' in workday
+    assert "return false;" in workday[
+        workday.index("var structuredGroupHasUserValue")
+        : workday.index("var structuredGroupHasFillableControl")
+    ]
     assert "reacquireBestVisibleOption" in workday
     assert "cycleWorkdayButtonChoice" in workday
     assert "select_alternate_before_correct_workday_button_option" in workday
@@ -254,10 +289,16 @@ def test_workday_step_change_clears_post_fill_prompt_cooldown():
 
 def test_detected_page_prompt_auto_dismisses_and_clears_on_spa_navigation():
     content = _load_script(REPO_ROOT / "executioner/src/content/bootstrap.js")
+    signature_fn = content[
+        content.index("function promptSignature")
+        : content.index("function pageContextKey")
+    ]
 
-    assert "PROMPT_AUTO_DISMISS_MS = 10000" in content
+    assert "PROMPT_AUTO_DISMISS_MS = 5000" in content
     assert "promptAutoDismissTimer" in content
     assert "ui.detect_prompt.auto_dismiss" in content
+    assert "detection.inputCount" not in signature_fn
+    assert "dismissedPromptSignatures.add(promptSignature({ kind, inputCount }))" in content
     assert "function handlePageContextChange" in content
     assert "ui.transient.dismiss_on_page_change" in content
     assert '["pushState", "replaceState"]' in content
@@ -266,14 +307,30 @@ def test_detected_page_prompt_auto_dismisses_and_clears_on_spa_navigation():
     assert 'lastPromptSignature = ""' in content
 
 
-def test_prompt_fill_results_use_background_toast_only():
+def test_fill_progress_dismisses_detected_page_prompt():
+    content = _load_script(REPO_ROOT / "executioner/src/content/bootstrap.js")
+
+    show_fill_progress = content[
+        content.index("function showFillProgress")
+        : content.index("function showExtensionToast")
+    ]
+
+    assert "removePrompt();" in show_fill_progress
+
+
+def test_prompt_fill_click_cannot_leave_prompt_stuck_filling():
     content = _load_script(REPO_ROOT / "executioner/src/content/bootstrap.js")
 
     fill_message = 'type: "hunt.apply.fill_current_page"'
     llm_message = 'type: "hunt.apply.fill_remaining_with_llm"'
     show_toast = "showExtensionToast("
+    fill_click_start = content.rindex(
+        'showFillProgress({ message: "Filling page" });',
+        0,
+        content.index(fill_message),
+    )
     fill_handler = content[
-        content.index(fill_message) : content.index(
+        fill_click_start : content.index(
             "setTimeout(removePrompt", content.index(fill_message)
         )
     ]
@@ -283,9 +340,41 @@ def test_prompt_fill_results_use_background_toast_only():
         )
     ]
 
+    assert "PROMPT_FILL_REQUEST_TIMEOUT_MS = 65000" in content
+    assert "runtimeMessageWithTimeout" in content
+    assert "try {\n      runtimeMessage = chrome.runtime.sendMessage(message);" in content
+    assert "try {\n      chrome.runtime" in content
+    assert "detected_prompt_fill_timeout" in fill_handler
+    assert 'showFillProgress({ message: "Filling page" });' in fill_handler
+    assert fill_handler.index('showFillProgress({ message: "Filling page" });') < fill_handler.index(
+        "ui.detect_prompt.fill_click"
+    )
+    assert "ui.detect_prompt.fill_response" in fill_handler
+    assert "Still waiting for fill result" in fill_handler
     assert content.index(fill_message) > content.rindex(show_toast, 0, content.index(fill_message))
-    assert show_toast not in fill_handler
+    assert show_toast in fill_handler
     assert show_toast not in llm_handler
+
+
+def test_detected_prompt_cleanup_runs_before_logging():
+    content = _load_script(REPO_ROOT / "executioner/src/content/bootstrap.js")
+
+    dismiss_handler = content[
+        content.index('getElementById("dismiss").addEventListener')
+        : content.index("host.shadowRoot", content.index('getElementById("dismiss").addEventListener'))
+    ]
+    auto_dismiss_handler = content[
+        content.index("promptAutoDismissTimer = setTimeout")
+        : content.index("logPageUiEvent(\"ui.detect_prompt.show\"")
+    ]
+
+    assert dismiss_handler.index("removePrompt();") < dismiss_handler.index("ui.detect_prompt.dismiss")
+    assert auto_dismiss_handler.index("dismissedPromptSignatures.add") < auto_dismiss_handler.index(
+        "removePrompt();"
+    )
+    assert auto_dismiss_handler.index("removePrompt();") < auto_dismiss_handler.index(
+        "ui.detect_prompt.auto_dismiss"
+    )
 
 
 def test_detected_page_prompt_skips_zero_visible_controls():

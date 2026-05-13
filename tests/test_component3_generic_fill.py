@@ -138,6 +138,104 @@ def test_safe_next_blocks_final_submit_controls():
     assert values == {"submitted": "", "applied": ""}
 
 
+def test_shared_radio_group_selects_no_with_workday_true_false_values():
+    if sync_playwright is None:
+        pytest.skip("playwright is required for the injected utility fixture")
+
+    injected_js = _load_script(REPO_ROOT / "executioner/src/shared/injected.js")
+
+    with sync_playwright() as playwright:
+        try:
+            browser = playwright.chromium.launch()
+        except PlaywrightError as error:
+            pytest.skip(f"playwright chromium is unavailable: {error}")
+
+        page = browser.new_page()
+        page.set_content(
+            """
+            <html>
+              <body>
+                <fieldset role="group">
+                  <legend>
+                    Have you previously been employed or a student at UBC? If yes,
+                    please provide details.
+                  </legend>
+                  <input id="previous-yes" name="candidateIsPreviousWorker" type="radio" value="true" />
+                  <label for="previous-yes">Yes</label>
+                  <input id="previous-no" name="candidateIsPreviousWorker" type="radio" value="false" />
+                  <label for="previous-no">No</label>
+                </fieldset>
+              </body>
+            </html>
+            """
+        )
+        page.add_script_tag(content=injected_js)
+        result = page.evaluate(
+            """
+            () => {
+              const radios = [...document.querySelectorAll("input[type='radio']")];
+              const descriptor = radios.map((radio) => window.__huntApplyUtils.getDescriptor(radio, ["label", "[role='group']")).join(" ");
+              return {
+                filled: window.__huntApplyUtils.fillRadioGroup(
+                  radios,
+                  descriptor,
+                  { previousEmployers: "" },
+                  ["label", "[role='group']"]
+                ),
+                yes: document.querySelector("#previous-yes").checked,
+                no: document.querySelector("#previous-no").checked,
+              };
+            }
+            """
+        )
+        browser.close()
+
+    assert result == {"filled": True, "yes": False, "no": True}
+
+
+def test_shared_structured_choice_handles_workday_missing_s_equity_text():
+    if sync_playwright is None:
+        pytest.skip("playwright is required for the injected utility fixture")
+
+    injected_js = _load_script(REPO_ROOT / "executioner/src/shared/injected.js")
+
+    with sync_playwright() as playwright:
+        try:
+            browser = playwright.chromium.launch()
+        except PlaywrightError as error:
+            pytest.skip(f"playwright chromium is unavailable: {error}")
+
+        page = browser.new_page()
+        page.set_content("<html><body></body></html>")
+        page.add_script_tag(content=injected_js)
+        result = page.evaluate(
+            """
+            () => {
+              const u = window.__huntApplyUtils;
+              const descriptors = [
+                "Do you identify your elf a an Indigenou per on of Canada?",
+                "Do you identify a omeone who i racialized, a vi ible minority, per on of colour?",
+                "Referring to the definition above, do you identify a a Di abled Per on?",
+              ];
+              return descriptors.map((descriptor) => {
+                const choice = u.chooseStructuredChoice(descriptor, {}, true);
+                return {
+                  text: choice && choice.text,
+                  score: u.optionScoreForChoice("I choo e not to di clo e", "", choice || {}, true),
+                };
+              });
+            }
+            """
+        )
+        browser.close()
+
+    assert result == [
+        {"text": "I choose not to disclose", "score": 90},
+        {"text": "I choose not to disclose", "score": 90},
+        {"text": "I choose not to disclose", "score": 90},
+    ]
+
+
 def test_generic_fill_populates_required_fields_only():
     if sync_playwright is None:
         pytest.skip("playwright is required for the generic C3 fill fixture")

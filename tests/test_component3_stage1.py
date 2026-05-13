@@ -366,14 +366,62 @@ Technical Skills
 Languages: Python, TypeScript
 Tools: React, Kubernetes
 """
+        long_bullet_resume_text = """
+Michael Shi
+Edmonton, AB | wenjian2@ualberta.ca | https://mshi.ca
+
+Experience
+Junior Software Developer, INVIDI Technologies -- Edmonton, AB | May 2025 - Present
+Enhanced real-time subscriber targeting accuracy by developing Kotlin microservices that integrated external marketing, forecasting, and analytics platforms via RESTful APIs.
+Established S3 cost saving blueprint for 100+ developers, resulting in a 74% (\\$18,000) reduction by implementing intelligent-tiering and S3 life cycle policies in our Terraform architecture.
+Accelerated deployment cycles and saved 2 hours of weekly developer time by automating CI/CD via Bitbucket pipelines and ECR/Kubernetes.
+Optimized bug detection speed by configuring Datadog metrics, monitors and centralized logging with automated alerting and error traces.
+Drove technical alignment by presenting completed features to stakeholders and leading design discussion meetings to gather feedback and refine system architecture.
+Minimized product downtime by resolving critical production node failures and bugs during on-call incident management.
+
+Education
+University of Alberta, BSc in Computer Science with Specialization
+Expected Graduation: Sep 2026
+"""
+        inline_bullet_resume_text = """
+Michael Shi
+Edmonton, AB | wenjian2@ualberta.ca | https://mshi.ca
+
+Experience
+Teaching Assistant, University of Alberta -- Edmonton, AB | Sep 2023 - Apr 2024
+- Taught multiple upper-level Computer Science courses, providing instructional support and mentoring students in advanced programming concepts. - Mentored 500+ students in technical best practices, ensuring a 95% project success rate in attaining A/A+ grades through Agile workflow facilitation. - Reduced evaluation time by 85% and ensured grading consistency by developing Python-based automation scripts for grading workflows.
+
+Education
+University of Alberta, BSc in Computer Science with Specialization
+Expected Graduation: Sep 2026
+"""
+        def pdf_literal(line):
+            return (
+                line.replace("\\", "\\\\")
+                .replace("(", "\\(")
+                .replace(")", "\\)")
+            )
+
         pdf_source = "%PDF-1.4\n" + "\n".join(
-            f"({line}) Tj" for line in resume_text.splitlines()
+            f"({pdf_literal(line)}) Tj" for line in resume_text.splitlines()
+        )
+        long_bullet_pdf_source = "%PDF-1.4\n" + "\n".join(
+            f"({pdf_literal(line)}) Tj"
+            for line in long_bullet_resume_text.splitlines()
+        )
+        inline_bullet_pdf_source = "%PDF-1.4\n" + "\n".join(
+            f"({pdf_literal(line)}) Tj"
+            for line in inline_bullet_resume_text.splitlines()
         )
         script = f"""
             import {{ parseResumeText, parseResumePdfBytes }} from {json.dumps(parser_path.as_uri())};
             const textProfile = parseResumeText({json.dumps(resume_text)});
             const pdfProfile = parseResumePdfBytes(new TextEncoder().encode({json.dumps(pdf_source)}));
-            console.log(JSON.stringify({{ textProfile, pdfProfile }}));
+            const longTextProfile = parseResumeText({json.dumps(long_bullet_resume_text)});
+            const longPdfProfile = parseResumePdfBytes(new TextEncoder().encode({json.dumps(long_bullet_pdf_source)}));
+            const inlineTextProfile = parseResumeText({json.dumps(inline_bullet_resume_text)});
+            const inlinePdfProfile = parseResumePdfBytes(new TextEncoder().encode({json.dumps(inline_bullet_pdf_source)}));
+            console.log(JSON.stringify({{ textProfile, pdfProfile, longTextProfile, longPdfProfile, inlineTextProfile, inlinePdfProfile }}));
         """
 
         try:
@@ -403,6 +451,21 @@ Tools: React, Kubernetes
             self.assertTrue(profile["workExperience"][0]["description"].startswith("- "))
             self.assertIn("Python", profile["skills"])
             self.assertIn("Kubernetes", profile["skills"])
+
+        for profile_key in ["longTextProfile", "longPdfProfile"]:
+            description = payload[profile_key]["workExperience"][0]["description"]
+            self.assertEqual(description.count("\n- "), 5)
+            self.assertTrue(description.startswith("- Enhanced real-time"))
+            self.assertIn("- Established S3 cost saving blueprint", description)
+            self.assertIn("($18,000)", description)
+            self.assertIn("- Minimized product downtime", description)
+
+        for profile_key in ["inlineTextProfile", "inlinePdfProfile"]:
+            description = payload[profile_key]["workExperience"][0]["description"]
+            self.assertEqual(description.count("\n- "), 2)
+            self.assertTrue(description.startswith("- Taught multiple upper-level"))
+            self.assertIn("\n- Mentored 500+ students", description)
+            self.assertIn("\n- Reduced evaluation time", description)
 
     def test_fill_route_names_cover_standalone_db_and_c4_modes(self):
         route_path = REPO_ROOT / "executioner" / "src" / "background" / "fill-routes.js"
@@ -550,6 +613,9 @@ Tools: React, Kubernetes
         self.assertEqual(manifest["content_scripts"][0]["matches"], ["<all_urls>"])
         self.assertIn("c4PollingEnabled", settings)
         self.assertIn("autoPromptEnabled", settings)
+        self.assertIn("autoAccountSignupLoginEnabled", settings)
+        self.assertIn("autoEmailVerificationEnabled", settings)
+        self.assertIn("emailVerificationTimeoutSeconds", settings)
         self.assertIn("autoClickNextAfterFill", settings)
         self.assertIn("fillRequiredOnly", settings)
         self.assertIn("settingsVersion", settings)
@@ -591,6 +657,9 @@ Tools: React, Kubernetes
         self.assertIn('id="c4-polling-enabled"', options)
         self.assertIn('id="poll-c4-once"', options)
         self.assertIn('id="auto-prompt-enabled"', options)
+        self.assertIn('id="auto-account-signup-login-enabled"', options)
+        self.assertIn('id="auto-email-verification-enabled"', options)
+        self.assertIn('id="email-verification-timeout-seconds"', options)
         self.assertIn('id="auto-click-next-after-fill"', options)
         self.assertIn('id="fill-required-only"', options)
         self.assertIn('id="auto-export-logs"', options)
@@ -733,6 +802,12 @@ Tools: React, Kubernetes
         injected = (REPO_ROOT / "executioner" / "src" / "shared" / "injected.js").read_text(
             encoding="utf-8"
         )
+        safe_next = (
+            REPO_ROOT / "executioner" / "src" / "background" / "safe-next.js"
+        ).read_text(encoding="utf-8")
+        workday = (
+            REPO_ROOT / "executioner" / "src" / "ats" / "workday" / "fill.js"
+        ).read_text(encoding="utf-8")
 
         self.assertIn("detectPageKind", content)
         self.assertIn("ATS_HOST_PATTERNS", content)
@@ -761,6 +836,10 @@ Tools: React, Kubernetes
             ),
         )
         self.assertIn('id="auto-prompt"', popup)
+        self.assertIn('id="auto-account-signup-login"', popup)
+        self.assertIn('id="auto-email-verification"', popup)
+        self.assertIn("autoAccountSignupLoginEnabled", popup_js)
+        self.assertIn("autoEmailVerificationEnabled", popup_js)
         self.assertIn('id="llm-confirm"', popup)
         self.assertIn('id="llm-use"', popup)
         self.assertIn('id="llm-skip"', popup)
@@ -799,6 +878,16 @@ Tools: React, Kubernetes
         self.assertIn("withTimeout", background)
         self.assertIn("safe_next_probe_timeout", background)
         self.assertIn("Safe Next check timed out.", background)
+        self.assertIn("visible_validation_errors", safe_next)
+        self.assertIn("exactFieldKey", workday)
+        self.assertIn("preferredcheck", workday)
+        self.assertIn("phonenumber--extension", workday)
+        self.assertNotIn('fieldKey.includes("preferred name")', workday)
+        self.assertIn('reason: "skills_not_committed"', workday)
+        self.assertNotIn('pushManualReviewReason("skills:skills_not_committed")', workday)
+        self.assertIn("checkboxGroupHasSelection", workday)
+        self.assertIn('input[type="checkbox"][id$="', workday)
+        self.assertIn("checkbox_group_selected", workday)
         self.assertIn("Fill timed out before the page responded.", background)
         self.assertIn("fill_timeout", background)
         self.assertIn("hideTransientDropdownMenus", background)
@@ -811,6 +900,9 @@ Tools: React, Kubernetes
         self.assertIn("workdaySelectedItems", background)
         self.assertIn("workdayButtonClears", background)
         self.assertIn("workdayMultiselectClears", background)
+        self.assertIn("clearUploadedFileControls", background)
+        self.assertIn("uploadedFileClears", background)
+        self.assertIn("successfully uploaded", background)
         self.assertIn("clickClearControl", background)
         self.assertIn("fieldHasSelectedValue", background)
         self.assertIn("realisticClick", background)
@@ -850,12 +942,18 @@ Tools: React, Kubernetes
         self.assertIn('form.addEventListener("input", scheduleSave)', options)
         self.assertIn('form.addEventListener("change", scheduleSave)', options)
         self.assertIn("readSettingsForm", options)
+        self.assertIn("autoAccountSignupLoginEnabled", options)
+        self.assertIn("autoEmailVerificationEnabled", options)
+        self.assertIn("emailVerificationTimeoutSeconds", options)
         self.assertIn('type: "hunt.apply.save_settings"', options)
         self.assertIn('type: "hunt.apply.save_profile"', options)
         self.assertIn('"settings-form"', options)
         self.assertIn('"profile-form"', options)
         self.assertIn("Settings autosaved.", options)
         self.assertIn("Profile autosaved.", options)
+        self.assertIn("languageEntries", options)
+        self.assertIn('id="add-language"', options_html)
+        self.assertIn('id="language-list"', options_html)
         self.assertNotIn("Save Settings", options_html)
         self.assertNotIn("Save Profile", options_html)
 
@@ -877,6 +975,10 @@ Tools: React, Kubernetes
     def test_generic_manual_fixture_pages_exist_for_next_smokes(self):
         fixture_dir = REPO_ROOT / "executioner" / "fixtures" / "generic"
         signup = (fixture_dir / "signup_account.html").read_text(encoding="utf-8")
+        signup_email = (fixture_dir / "signup_email_verification.html").read_text(
+            encoding="utf-8"
+        )
+        email_verified = (fixture_dir / "email_verified.html").read_text(encoding="utf-8")
         two_step = (fixture_dir / "two_step_application.html").read_text(encoding="utf-8")
         custom_selects = (fixture_dir / "greenhouse_custom_selects.html").read_text(
             encoding="utf-8"
@@ -884,11 +986,68 @@ Tools: React, Kubernetes
 
         self.assertIn("Username", signup)
         self.assertIn("Password", signup)
+        self.assertIn("Confirm password", signup_email)
+        self.assertIn("Email verification needed", signup_email)
+        self.assertIn('data-email-verified="true"', email_verified)
         self.assertIn("Position applied for", two_step)
         self.assertIn("Why are you interested?", two_step)
         self.assertIn('role="combobox"', custom_selects)
         self.assertIn("legally eligible to work", custom_selects)
         self.assertIn("expected graduation date", custom_selects)
+
+    def test_c3_email_verification_bridge_and_smoke_exist(self):
+        bridge = (REPO_ROOT / "scripts" / "c3_mail_verify_bridge.js").read_text(
+            encoding="utf-8"
+        )
+        smoke = (REPO_ROOT / "scripts" / "c3_email_verification_smoke.js").read_text(
+            encoding="utf-8"
+        )
+        fresh_apply = (
+            REPO_ROOT / "scripts" / "c3_workday_fresh_apply_smoke.js"
+        ).read_text(encoding="utf-8")
+        live_smoke = (
+            REPO_ROOT / "scripts" / "c3_workday_live_smoke.js"
+        ).read_text(encoding="utf-8")
+        background = (
+            REPO_ROOT / "executioner" / "src" / "background" / "index.js"
+        ).read_text(encoding="utf-8")
+
+        self.assertIn("POST /verify-email", bridge)
+        self.assertIn("HUNT_C3_MAIL_PROVIDER", bridge)
+        self.assertIn("HUNT_C3_MAIL_IMAP_HOST", bridge)
+        self.assertIn("--check-auth", bridge)
+        self.assertIn("checkMailAuth", bridge)
+        self.assertIn("safeVerificationLinks", bridge)
+        self.assertIn("unsubscribe", bridge)
+        self.assertIn("verifyEmail", bridge)
+        self.assertIn("signup_email_verification.html", smoke)
+        self.assertIn("email_verified.html", smoke)
+        self.assertIn("HUNT_C3_TEST_WORKDAY_URL", smoke)
+        self.assertIn("loadDotEnv", smoke)
+        self.assertIn("checkMailAuth", smoke)
+        self.assertIn("clickSafeAccountAction", smoke)
+        self.assertIn("--reset-site-data", smoke)
+        self.assertIn("resetBrowserSiteData", smoke)
+        self.assertIn("clickSignInAction", smoke)
+        self.assertIn("signup_account_exists_signin_succeeded", smoke)
+        self.assertIn("hunt.apply.fill_current_page", smoke)
+        self.assertIn("confirmMatches", smoke)
+        self.assertIn("c3_email_verification_smoke.js", fresh_apply)
+        self.assertIn("c3_workday_live_smoke.js", fresh_apply)
+        self.assertIn("--extension-auto-next", fresh_apply)
+        self.assertIn("--reset-site-data", fresh_apply)
+        self.assertIn("--clear-before-fill", fresh_apply)
+        self.assertIn("--keep-existing-workday-tabs", fresh_apply)
+        self.assertIn("visibleValidationErrors", live_smoke)
+        self.assertIn("visible_validation_errors", live_smoke)
+        self.assertIn("7804923111", live_smoke)
+        self.assertIn("hunt.apply.await_email_verification", background)
+        self.assertIn("emailVerificationBridgeUrl", background)
+        self.assertIn("autoEmailVerificationEnabled", background)
+        self.assertIn("email_verification_disabled", background)
+        self.assertIn("emailVerificationTimeoutSeconds", background)
+        self.assertIn("Waiting for verification email", background)
+        self.assertIn("http://127.0.0.1:8765/verify-email", background)
 
     def test_workday_adapter_handles_hidden_file_inputs_and_missing_resume_logging(self):
         workday = (REPO_ROOT / "executioner" / "src" / "ats" / "workday" / "fill.js").read_text(
@@ -919,6 +1078,7 @@ Tools: React, Kubernetes
         self.assertIn("sanitizeInteractionTrace", storage)
         self.assertIn("sanitizeWorkExperience", storage)
         self.assertIn("sanitizeEducation", storage)
+        self.assertIn("sanitizeLanguages", storage)
         self.assertIn('"manual_review"', fill_runner)
         self.assertIn("manual review needed", fill_runner)
         self.assertIn("allFrames: true", fill_runner)
@@ -1014,6 +1174,33 @@ Tools: React, Kubernetes
         self.assertIn("visibleInSection", workday)
         self.assertIn("waitForSectionFieldCountIncrease", workday)
         self.assertIn("emptyUrlInputs", workday)
+        self.assertIn("emptyStructuredControlGroupsForSection", workday)
+        self.assertIn("structuredGroupHasFillableControl", workday)
+        self.assertIn("section_reuse_empty_row", workday)
+        self.assertIn("workday_structured_entry_reused_empty_row", workday)
+        self.assertIn("section_fill_inline_new_row", workday)
+        self.assertIn("workday_structured_entry_inline_row", workday)
+        self.assertIn("targetControls", workday)
+        self.assertIn("fill_one_new_workday_repeatable_row", workday)
+        self.assertIn("fillWebsiteDialog(url, true)", workday)
+        self.assertIn("removeSurplusEmptyStructuredRows", workday)
+        self.assertIn("removeDuplicateStructuredRows", workday)
+        self.assertIn("profileLanguages", workday)
+        self.assertIn("addLanguageEntries", workday)
+        self.assertIn('"Languages"', workday)
+        self.assertIn('"profile:languages"', workday)
+        self.assertIn("removed_surplus_empty_repeatable_rows_without_profile", workday)
+        self.assertIn("section_no_profile_entries", workday)
+        self.assertIn("section_remove_duplicate_row", workday)
+        self.assertIn("remove_duplicate_workday_repeatable_row", workday)
+        self.assertIn("section_remove_empty_row", workday)
+        self.assertIn("removeSurplusEmptyWebsiteRows", workday)
+        self.assertIn("workday_websites_removed_empty_rows", workday)
+        self.assertIn("normalizeStructuredMultilineText", workday)
+        self.assertIn("splitInlineDashBullets", workday)
+        self.assertIn('split(/\\s+(?=(?:[-*]|\\u2022)\\s+[A-Z0-9])/', workday)
+        self.assertIn('String(el.id || "").includes("secondaryQuestionnaire--")', workday)
+        self.assertIn('[data-automation-id="formField"]', workday)
         self.assertIn("hasExistingResumeUpload", workday)
         self.assertIn("resume_upload_existing", workday)
         self.assertIn("existing_resume_upload_detected", workday)
@@ -1022,6 +1209,10 @@ Tools: React, Kubernetes
         self.assertIn("workday_my_experience_profile_counts", workday)
         self.assertIn("visibleStepHeadings", workday)
         self.assertIn("select_workday_skill_checkbox", workday)
+        self.assertIn("findWorkdaySkillCheckbox", workday)
+        self.assertIn("select_workday_skill_checkbox_failed", workday)
+        self.assertIn("select_workday_skill_checkbox_space", workday)
+        self.assertIn("aria-checked", workday)
         self.assertIn("open_workday_skill_results_with_enter", workday)
         self.assertIn("choose not to disclose", workday)
 

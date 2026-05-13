@@ -138,6 +138,8 @@ extension path.
 Additional manual fixtures:
 
 - `executioner\fixtures\generic\signup_account.html`: confirms generic filler skips username/password while filling known required contact fields.
+- `executioner\fixtures\generic\signup_email_verification.html`: confirms signup email, password, and confirm-password fill before an email verification handoff.
+- `executioner\fixtures\generic\email_verified.html`: target page for the fake verification link smoke.
 - `executioner\fixtures\generic\two_step_application.html`: confirms the current-step-only behavior. C3 should not click Next or Review yet; after manually moving to step two, trigger Fill again.
 - `executioner\fixtures\generic\greenhouse_like.html`: confirms Greenhouse-style sibling labels, required stars, contenteditable links, and hidden resume file inputs behind Attach-style controls.
 
@@ -162,6 +164,64 @@ Operator checklist:
 - Confirm only required identity/contact/job-context/resume fields were filled.
 - Confirm optional fields and unknown custom questions were left alone.
 - Stop before any final submit.
+
+Email verification smoke:
+
+```powershell
+node scripts\c3_email_verification_smoke.js --provider fake --cdp-port 9222
+```
+
+Fresh Workday account plus application walk:
+
+```powershell
+node scripts\c3_workday_fresh_apply_smoke.js --provider imap --cdp-port 9222 --reset-site-data
+```
+
+This uses the general mail bridge for verification, then the Workday-specific
+account/bootstrap flow for Workday login, signup, already-existing-account
+fallback, and post-login application detection. It then enables C3's own `Click
+safe Next after fill` setting and fills/advances each Workday page until Review
+or final Submit is visible. It does not click the final Submit button.
+
+Extension settings:
+
+- `Auto account signup/sign-in`: allows C3 fills to use the saved Login email and Login password profile fields on account pages. When off, those saved account credentials are withheld from page fills.
+- `Auto email verification bridge`: allows the extension background message `hunt.apply.await_email_verification` to call the local mail bridge and open the extracted verification link.
+- `Email verification timeout seconds`: wait window for the local bridge call.
+
+Mailbox auth preflight:
+
+```powershell
+node scripts\c3_mail_verify_bridge.js --check-auth --provider imap
+```
+
+For a throwaway real mailbox, set `HUNT_C3_MAIL_PROVIDER=imap`,
+`HUNT_C3_MAIL_EMAIL`, `HUNT_C3_MAIL_PASSWORD`, `HUNT_C3_MAIL_IMAP_HOST`, and
+`HUNT_C3_TEST_WORKDAY_URL`, then run:
+
+```powershell
+node scripts\c3_email_verification_smoke.js --provider imap --cdp-port 9222 --workday-url $env:HUNT_C3_TEST_WORKDAY_URL
+```
+
+The IMAP smoke first runs the mailbox auth preflight. It will not open Workday
+or click account buttons unless mailbox login succeeds.
+Use `--reset-site-data` when you need a fully logged-out browser attempt. That
+clears browser cookies and the target Workday origin storage before opening the
+apply URL.
+
+For Gmail IMAP, the bridge defaults verification lookup to `[Gmail]/All Mail`
+because Workday tenant verification mail may not appear through plain `INBOX`.
+Override with `HUNT_C3_MAIL_IMAP_MAILBOX` only when testing a different mailbox.
+
+The local bridge endpoint is:
+
+```powershell
+node scripts\c3_mail_verify_bridge.js --serve --provider imap
+```
+
+C3 can call the bridge through the background message
+`hunt.apply.await_email_verification`. It opens only the extracted verification
+link and does not submit the final application.
 
 Success criteria:
 

@@ -896,6 +896,7 @@
 
   function chooseStructuredChoice(descriptor, profile, stripLongDash) {
     var lowered = u.normalizeText(descriptor).toLowerCase();
+    var loweredCompacted = lowered.replace(/\s+/g, "");
     var isLegalWorkQuestion =
       lowered.includes("legally") ||
       lowered.includes("authorized") ||
@@ -920,12 +921,17 @@
         source: source || "default:notDisclosed",
         aliases: [
           "I choose not to disclose",
+          "I choo e not to di clo e",
           "Choose not to disclose",
+          "Choo e not to di clo e",
           "Prefer not to disclose",
+          "Prefer not to di clo e",
           "Prefer not to answer",
           "Do not wish to disclose",
+          "Do not wi h to di clo e",
           "Decline to answer",
           "Not disclosed",
+          "Not di clo ed",
         ],
       };
     };
@@ -1043,6 +1049,33 @@
           ? "profile:phoneDeviceType"
           : "default:phoneDeviceType",
       };
+    }
+    if (
+      lowered.includes("gender") ||
+      lowered.includes("trans experience") ||
+      lowered.includes("sexual orientation") ||
+      lowered.includes("lesbian") ||
+      lowered.includes("gay") ||
+      lowered.includes("bisexual") ||
+      lowered.includes("queer") ||
+      lowered.includes("disabil") ||
+      lowered.includes("di abil") ||
+      loweredCompacted.includes("disabledperson") ||
+      lowered.includes("visible minorit") ||
+      lowered.includes("vi ible minorit") ||
+      lowered.includes("racial") ||
+      lowered.includes("ethnic") ||
+      lowered.includes("indigenous") ||
+      lowered.includes("indigenou") ||
+      lowered.includes("aboriginal") ||
+      lowered.includes("veteran") ||
+      lowered.includes("diversity") ||
+      lowered.includes("self-identif") ||
+      lowered.includes("designated group") ||
+      lowered.includes("not to disclose") ||
+      lowered.includes("prefer not")
+    ) {
+      return nonDisclosureChoice("default:notDisclosed");
     }
     if (
       !isLegalWorkQuestion &&
@@ -1247,10 +1280,14 @@
       lowered.includes("bisexual") ||
       lowered.includes("queer") ||
       lowered.includes("disabil") ||
+      lowered.includes("di abil") ||
+      loweredCompacted.includes("disabledperson") ||
       lowered.includes("visible minorit") ||
+      lowered.includes("vi ible minorit") ||
       lowered.includes("racial") ||
       lowered.includes("ethnic") ||
       lowered.includes("indigenous") ||
+      lowered.includes("indigenou") ||
       lowered.includes("aboriginal") ||
       lowered.includes("veteran") ||
       lowered.includes("diversity") ||
@@ -1345,7 +1382,7 @@
     }
     var aliases = choice.aliases || [];
     for (var i = 0; i < aliases.length; i++) {
-      var alias = aliases[i];
+      var alias = u.normalizeText(aliases[i], stripLongDash).toLowerCase();
       if (!alias) {
         continue;
       }
@@ -1937,6 +1974,12 @@
       /^(yes|no)$/i.test(u.normalizeText(structuredChoice.text))
     ) {
       choice = u.normalizeText(structuredChoice.text).toLowerCase();
+    } else if (
+      lowered.includes("candidateispreviousworker") ||
+      lowered.includes("previously been employed") ||
+      (lowered.includes("student at") && lowered.includes("previous"))
+    ) {
+      choice = "no";
     } else if (lowered.includes("sponsor")) {
       choice = profile.sponsorshipRequired ? "yes" : "no";
     } else if (lowered.includes("authorized") || lowered.includes("legally")) {
@@ -1948,9 +1991,50 @@
     if (!choice) {
       return false;
     }
-    var target = radios.find(function (r) {
-      return u.getDescriptor(r, containerSelectors).includes(choice);
-    });
+    var radioChoiceScore = function (radio) {
+      var directText = u
+        .normalizeText(
+          [
+            radio.value,
+            radio.getAttribute("aria-label"),
+            radio.id
+              ? document.querySelector(
+                  'label[for="' + CSS.escape(radio.id) + '"]',
+                )?.innerText
+              : "",
+            radio.closest("label")?.innerText,
+          ]
+            .filter(Boolean)
+            .join(" "),
+        )
+        .toLowerCase();
+      if (choice === "yes" && /\b(true|yes)\b/.test(directText)) {
+        return 100;
+      }
+      if (choice === "no" && /\b(false|no)\b/.test(directText)) {
+        return 100;
+      }
+      var radioDescriptor = u
+        .normalizeText(u.getDescriptor(radio, containerSelectors))
+        .toLowerCase();
+      if (radioDescriptor === choice) {
+        return 80;
+      }
+      if (new RegExp("\\b" + choice + "\\b").test(radioDescriptor)) {
+        return 40;
+      }
+      return 0;
+    };
+    var target = radios
+      .map(function (radio) {
+        return { radio: radio, score: radioChoiceScore(radio) };
+      })
+      .filter(function (candidate) {
+        return candidate.score > 0;
+      })
+      .sort(function (a, b) {
+        return b.score - a.score;
+      })[0]?.radio;
     if (!target) {
       return false;
     }

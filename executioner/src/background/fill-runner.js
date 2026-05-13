@@ -10,6 +10,10 @@ import { postAnswerDecision } from "../shared/api.js";
 import { createWorkdayFillFunction } from "../ats/workday/fill.js";
 import { appendAttempt, appendQuestionAnswers } from "../shared/storage.js";
 import { selectFillRoute } from "./fill-routes.js";
+import {
+  WORKDAY_RUNTIME_ERROR_REASON,
+  recoverWorkdayRuntimeErrorForTab,
+} from "./workday-runtime.js";
 
 // Map of ATS name to fill-function factory.
 // Each factory must return a self-contained async function (no outer references)
@@ -814,6 +818,49 @@ function buildCancelledPipelineResponse(context) {
   };
 }
 
+function buildWorkdayRuntimeErrorResponse(context, recovery) {
+  const route = context.route || {
+    routeName: "workday_runtime_error",
+    fillSource:
+      context.extensionState?.activeApplyContext?.sourceMode || "manual",
+    strategy: "workday_runtime_error",
+    adapterName: context.atsType || "workday",
+    requestedAtsType: context.extensionState?.activeApplyContext?.atsType || "",
+    detectedAtsType: context.detectedAtsType || "workday",
+    usedGenericFallback: false,
+    adapterBackedByGeneric: false,
+  };
+  return {
+    ok: false,
+    reason: WORKDAY_RUNTIME_ERROR_REASON,
+    message:
+      "Workday showed its refresh-required error page and did not recover after one refresh.",
+    route,
+    attempt: {
+      applyUrl:
+        context.pageUrl ||
+        context.extensionState?.activeApplyContext?.applyUrl ||
+        "",
+      atsType: "workday",
+      filledFieldCount: 0,
+      manualReviewRequired: true,
+      manualReviewReasons: [WORKDAY_RUNTIME_ERROR_REASON],
+    },
+    result: {
+      ok: false,
+      filledFieldCount: 0,
+      pendingLlmFieldCount: 0,
+      manualReviewRequired: true,
+      manualReviewReasons: [WORKDAY_RUNTIME_ERROR_REASON],
+      filledFields: [],
+      fieldInventory: [],
+      generatedAnswers: [],
+      workdayRuntimeRecovery: recovery,
+    },
+    generatedAnswers: [],
+  };
+}
+
 class ResolveActiveTabStep {
   async run(context) {
     const [tab] = await chrome.tabs.query({
@@ -876,6 +923,27 @@ class ResolveFillAdapterStep {
   }
 }
 
+class RecoverWorkdayRuntimeErrorStep {
+  async run(context) {
+    if (context.atsType !== "workday") {
+      return;
+    }
+    const recovery = await recoverWorkdayRuntimeErrorForTab(
+      context.activeTabId,
+    );
+    if (!recovery.attempted) {
+      return;
+    }
+    context.workdayRuntimeRecovery = recovery;
+    if (!recovery.ok) {
+      context.stop(buildWorkdayRuntimeErrorResponse(context, recovery));
+      return;
+    }
+    context.tabInfo = await chrome.tabs.get(context.activeTabId);
+    context.pageUrl = context.tabInfo.url || context.pageUrl || "";
+  }
+}
+
 class InjectSharedUtilitiesStep {
   async run(context) {
     await chrome.scripting.executeScript({
@@ -887,12 +955,20 @@ class InjectSharedUtilitiesStep {
 
 class RunAdapterFillStep {
   async run(context) {
+    const adapterProfile = context.extensionState.settings
+      .autoAccountSignupLoginEnabled
+      ? context.extensionState.profile
+      : {
+          ...context.extensionState.profile,
+          accountEmail: "",
+          accountPassword: "",
+        };
     const injectionResults = await chrome.scripting.executeScript({
       target: { tabId: context.activeTabId, allFrames: true },
       func: context.adapterFactory(),
       args: [
         {
-          profile: context.extensionState.profile,
+          profile: adapterProfile,
           settings: context.extensionState.settings,
           activeApplyContext: context.extensionState.activeApplyContext,
           defaultResume: context.extensionState.defaultResume,
@@ -904,6 +980,9 @@ class RunAdapterFillStep {
     });
 
     context.result = chooseBestFrameResult(injectionResults);
+    if (context.workdayRuntimeRecovery) {
+      context.result.workdayRuntimeRecovery = context.workdayRuntimeRecovery;
+    }
   }
 }
 
@@ -970,6 +1049,7 @@ class C3AutofillPipeline {
       new DetectAtsStep(),
       new SelectFillRouteStep(),
       new ResolveFillAdapterStep(),
+      new RecoverWorkdayRuntimeErrorStep(),
       new InjectSharedUtilitiesStep(),
       new RunAdapterFillStep(),
       new PrepareLlmHelpStep(),

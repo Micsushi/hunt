@@ -281,12 +281,21 @@ function extractBullets(block) {
     .filter(Boolean);
 }
 
+function splitInlineBulletLine(line) {
+  const normalized = normalizeWhitespace(stripLatex(line || ""));
+  if (!normalized) {
+    return [];
+  }
+  return normalized
+    .split(/\s+(?=(?:[-*]|\u2022)\s+[A-Z0-9])/)
+    .map((part) => part.replace(/^(?:[-*]|\u2022)\s*/, ""))
+    .map(normalizeWhitespace)
+    .filter(Boolean);
+}
+
 function formatBulletDescription(lines) {
   return (lines || [])
-    .map(stripLatex)
-    .map((line) => line.replace(/^\u2022\s*/, ""))
-    .map((line) => line.replace(/^[*-]\s*/, ""))
-    .map(normalizeWhitespace)
+    .flatMap(splitInlineBulletLine)
     .filter(Boolean)
     .map((line) => `- ${line}`)
     .join("\n");
@@ -456,11 +465,25 @@ function parsePlainEducation(text) {
 }
 
 function looksLikePlainWorkHeader(line) {
+  const cleaned = normalizeWhitespace(line).replace(/^[*-]\s*/, "");
+  if (!cleaned || /^[*-]\s*/.test(line)) {
+    return false;
+  }
+  const inlineDateRange = parseInlineDateRange(cleaned).rangeText;
+  if (inlineDateRange) {
+    return true;
+  }
+  if (/[.!?]$/.test(cleaned) && cleaned.length > 80) {
+    return false;
+  }
   return (
-    parseInlineDateRange(line).rangeText ||
     /\b(intern|developer|engineer|analyst|manager|designer|consultant|assistant|researcher|coordinator|lead)\b/i.test(
-      line,
-    )
+      cleaned,
+    ) &&
+    (cleaned.includes("--") ||
+      cleaned.includes("|") ||
+      cleaned.split(/\s*,\s*/).length >= 2) &&
+    cleaned.length <= 180
   );
 }
 

@@ -22,6 +22,7 @@ import {
   createSafeNextFunction,
   summarizeSafeNextResult,
 } from "./safe-next.js";
+import { recoverWorkdayRuntimeErrorForTab } from "./workday-runtime.js";
 
 const C4_POLL_ALARM = "hunt.apply.c4.poll";
 const C4_HEARTBEAT_ALARM = "hunt.apply.c4.heartbeat";
@@ -255,6 +256,175 @@ async function showPageToast(tabId, message, tone = "info") {
   });
 }
 
+function emailVerificationBridgeUrl() {
+  return "http://127.0.0.1:8765/verify-email";
+}
+
+function hostsFromEmailVerificationPayload(payload = {}, tabUrl = "") {
+  const hosts = new Set();
+  const addHost = (value) => {
+    if (!value) {
+      return;
+    }
+    try {
+      hosts.add(new URL(value).hostname);
+    } catch {
+      String(value)
+        .split(",")
+        .map((item) => item.trim())
+        .filter(Boolean)
+        .forEach((item) => hosts.add(item));
+    }
+  };
+  (payload.expectedDomains || []).forEach(addHost);
+  addHost(payload.jobUrl);
+  addHost(tabUrl);
+  return Array.from(hosts).filter(Boolean);
+}
+
+async function awaitEmailVerification(payload = {}, sender = {}) {
+  const tabId = payload.tabId || sender.tab?.id;
+  const tab = tabId ? await chrome.tabs.get(tabId).catch(() => null) : null;
+  const state = await getExtensionState();
+  if (!state.settings.autoEmailVerificationEnabled && payload.force !== true) {
+    await showPageToast(
+      tabId,
+      "Manual email verification required: auto email verification is disabled.",
+      "warn",
+    );
+    await logActivity(
+      "email_verification.disabled",
+      "Email verification bridge is disabled in extension settings.",
+      { tabId },
+      "blocked",
+    );
+    return {
+      ok: false,
+      reason: "email_verification_disabled",
+      message: "Auto email verification is disabled in extension settings.",
+    };
+  }
+  const email =
+    payload.email || state.profile.accountEmail || state.profile.email || "";
+  const signupStartedAt =
+    payload.signupStartedAt ||
+    payload.since ||
+    new Date(Date.now() - 5 * 60 * 1000).toISOString();
+  const expectedDomains = hostsFromEmailVerificationPayload(
+    payload,
+    tab?.url || state.activeApplyContext.applyUrl || "",
+  );
+  if (!email) {
+    await showPageToast(
+      tabId,
+      "Manual email verification required: no account email is saved.",
+      "warn",
+    );
+    await logActivity(
+      "email_verification.blocked",
+      "Email verification skipped because no account email is saved.",
+      { tabId, expectedDomains },
+      "blocked",
+    );
+    return {
+      ok: false,
+      reason: "missing_email",
+      message: "No account email is saved.",
+    };
+  }
+  await showFillProgress(tabId, "Waiting for verification email");
+  await logActivity(
+    "email_verification.wait",
+    "Waiting for verification email.",
+    {
+      tabId,
+      email,
+      expectedDomains,
+      signupStartedAt,
+      bridgeUrl: emailVerificationBridgeUrl(),
+    },
+  );
+  try {
+    const response = await fetch(emailVerificationBridgeUrl(), {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        email,
+        expectedDomains,
+        since: signupStartedAt,
+        timeoutSeconds:
+          payload.timeoutSeconds ||
+          state.settings.emailVerificationTimeoutSeconds ||
+          90,
+        jobUrl: payload.jobUrl || tab?.url || state.activeApplyContext.applyUrl,
+      }),
+    });
+    const result = await response.json().catch(() => ({
+      ok: false,
+      reason: "bad_bridge_response",
+    }));
+    if (!response.ok || !result.ok || !result.link) {
+      await showPageToast(
+        tabId,
+        result.message || "Manual email verification required.",
+        "warn",
+      );
+      await logActivity(
+        "email_verification.failed",
+        result.message || "Email verification bridge did not return a link.",
+        { tabId, result },
+        "blocked",
+      );
+      return {
+        ok: false,
+        reason: result.reason || "bridge_failed",
+        message: result.message || "Manual email verification required.",
+        bridgeResult: result,
+      };
+    }
+    await chrome.tabs.update(tabId, { url: result.link, active: true });
+    await logActivity(
+      "email_verification.open_link",
+      "Opened email verification link.",
+      {
+        tabId,
+        source: result.source,
+        subject: result.subject,
+        receivedAt: result.receivedAt,
+        linkHost: new URL(result.link).hostname,
+      },
+    );
+    await showPageToast(tabId, "Verification link opened.", "info");
+    return {
+      ok: true,
+      link: result.link,
+      source: result.source,
+      subject: result.subject,
+      receivedAt: result.receivedAt,
+    };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    await showPageToast(
+      tabId,
+      "Manual email verification required: local mail bridge is not available.",
+      "warn",
+    );
+    await logActivity(
+      "email_verification.bridge_unavailable",
+      message,
+      { tabId, bridgeUrl: emailVerificationBridgeUrl() },
+      "blocked",
+    );
+    return {
+      ok: false,
+      reason: "bridge_unavailable",
+      message,
+    };
+  } finally {
+    await hideFillProgress(tabId);
+  }
+}
+
 async function showFillProgress(
   tabId,
   message = "Filling page",
@@ -446,6 +616,38 @@ async function clickSafeNextForTab(tabId, details = {}) {
       message: error instanceof Error ? error.message : String(error),
       candidate: probe.candidate,
     };
+  }
+
+  if (clickResult.clicked) {
+    await new Promise((resolve) => setTimeout(resolve, 1800));
+    const runtimeRecovery = await recoverWorkdayRuntimeErrorForTab(tabId, {
+      reason: "safe_next_workday_runtime_error",
+      settleMs: 1800,
+    });
+    if (runtimeRecovery.attempted) {
+      clickResult.runtimeRecovery = runtimeRecovery;
+      clickResult.reason = runtimeRecovery.ok
+        ? "clicked_safe_next_recovered_workday_runtime_error"
+        : "clicked_safe_next_workday_runtime_error_unrecovered";
+      clickResult.message = runtimeRecovery.ok
+        ? "Clicked Next, then refreshed after Workday showed its refresh-required error page."
+        : "Clicked Next, but Workday showed its refresh-required error page and did not recover after one refresh.";
+      await logActivity(
+        runtimeRecovery.ok
+          ? "next.workday_runtime_recovered"
+          : "next.workday_runtime_unrecovered",
+        clickResult.message,
+        {
+          tabId,
+          frameId: probe.frameId,
+          triggeredBy: details.triggeredBy || "",
+          reason: runtimeRecovery.reason,
+          before: runtimeRecovery.before || {},
+          after: runtimeRecovery.after || {},
+        },
+        runtimeRecovery.ok ? "ok" : "warn",
+      );
+    }
   }
 
   const summary = summarizeSafeNextResult(clickResult);
@@ -1369,6 +1571,271 @@ async function clearCurrentPage(tabId) {
         return clearedMultiselects;
       }
 
+      function containsUploadText(text) {
+        const normalized = normalizeText(text).toLowerCase();
+        return (
+          normalized.includes("upload") ||
+          normalized.includes("drop files") ||
+          normalized.includes("select files") ||
+          normalized.includes("application documents") ||
+          normalized.includes("resume") ||
+          normalized.includes("cv") ||
+          normalized.includes("cover letter") ||
+          normalized.includes("successfully uploaded")
+        );
+      }
+
+      function containsUploadedFileText(text) {
+        const normalized = normalizeText(text).toLowerCase();
+        return (
+          normalized.includes("successfully uploaded") ||
+          normalized.includes(".pdf") ||
+          normalized.includes(".doc") ||
+          normalized.includes(".docx") ||
+          normalized.includes(".rtf") ||
+          normalized.includes(".txt")
+        );
+      }
+
+      function nearestHeadingText(el) {
+        const rect = el?.getBoundingClientRect?.();
+        if (!rect) {
+          return "";
+        }
+        return (
+          Array.from(
+            document.querySelectorAll(
+              "h1, h2, h3, h4, h5, h6, [role='heading']",
+            ),
+          )
+            .filter(isVisibleEnabled)
+            .map((heading) => ({
+              heading,
+              text: normalizeText(
+                heading.innerText || heading.textContent || "",
+              ),
+              rect: heading.getBoundingClientRect(),
+            }))
+            .filter((item) => item.text && item.rect.top <= rect.top + 8)
+            .sort((a, b) => b.rect.top - a.rect.top)[0]?.text || ""
+        );
+      }
+
+      function nearestUploadedFileText(el) {
+        const rect = el?.getBoundingClientRect?.();
+        if (!rect) {
+          return "";
+        }
+        return (
+          Array.from(document.querySelectorAll("body *"))
+            .filter(isVisibleEnabled)
+            .map((node) => ({
+              node,
+              text: normalizeText(node.innerText || node.textContent || ""),
+              rect: node.getBoundingClientRect(),
+            }))
+            .filter((item) => {
+              if (!containsUploadedFileText(item.text)) {
+                return false;
+              }
+              const verticalDistance = Math.abs(
+                item.rect.top +
+                  item.rect.height / 2 -
+                  (rect.top + rect.height / 2),
+              );
+              const horizontalDistance =
+                item.rect.left > rect.right
+                  ? item.rect.left - rect.right
+                  : rect.left > item.rect.right
+                    ? rect.left - item.rect.right
+                    : 0;
+              return verticalDistance <= 160 && horizontalDistance <= 1200;
+            })
+            .sort((a, b) => {
+              const aDistance = Math.abs(a.rect.top - rect.top);
+              const bDistance = Math.abs(b.rect.top - rect.top);
+              return aDistance - bDistance;
+            })[0]?.text || ""
+        );
+      }
+
+      function uploadedFileContextFor(el) {
+        const parts = [
+          el.getAttribute?.("aria-label"),
+          el.getAttribute?.("title"),
+          el.getAttribute?.("data-automation-id"),
+          el.innerText,
+          el.textContent,
+          nearestHeadingText(el),
+          nearestUploadedFileText(el),
+        ];
+        let node = el;
+        let depth = 0;
+        while (node && node !== document.body && depth < 8) {
+          const nodeText = normalizeText(
+            node.innerText || node.textContent || "",
+          );
+          if (nodeText.length <= 1500 || containsUploadedFileText(nodeText)) {
+            parts.push(nodeText);
+          }
+          parts.push(node.className);
+          node = node.parentElement;
+          depth += 1;
+        }
+        return normalizeText(parts.filter(Boolean).join(" "));
+      }
+
+      function isUploadedFileDeleteControl(el) {
+        const label = normalizeText(
+          [
+            el.getAttribute?.("aria-label"),
+            el.getAttribute?.("title"),
+            el.getAttribute?.("data-automation-id"),
+            el.innerText,
+            el.textContent,
+            el.className?.baseVal || el.className,
+            ...Array.from(el.querySelectorAll?.("[aria-label], [title]") || [])
+              .map(
+                (child) =>
+                  child.getAttribute?.("aria-label") ||
+                  child.getAttribute?.("title"),
+              )
+              .filter(Boolean),
+          ]
+            .filter(Boolean)
+            .join(" "),
+        ).toLowerCase();
+        const iconLikeDelete =
+          label.includes("trash") ||
+          label.includes("delete") ||
+          label.includes("remove") ||
+          label.includes("clear") ||
+          el.querySelector?.("svg, [data-icon*='trash'], [class*='trash']");
+        if (!iconLikeDelete) {
+          return false;
+        }
+        const context = uploadedFileContextFor(el);
+        const heading = nearestHeadingText(el).toLowerCase();
+        if (
+          (heading.includes("work experience") ||
+            heading.includes("education")) &&
+          !containsUploadText(heading)
+        ) {
+          return false;
+        }
+        return containsUploadText(context) && containsUploadedFileText(context);
+      }
+
+      async function clickVisibleUploadConfirmButton() {
+        const dialog = Array.from(
+          document.querySelectorAll(
+            [
+              "[role='dialog']",
+              "[aria-modal='true']",
+              "[data-automation-id*='modal']",
+              "[data-automation-id*='popup']",
+              ".modal",
+            ].join(", "),
+          ),
+        ).find(isVisibleEnabled);
+        if (!dialog) {
+          return false;
+        }
+        const confirm = Array.from(
+          dialog.querySelectorAll('button, [role="button"]'),
+        )
+          .filter(isVisibleEnabled)
+          .find((button) => {
+            const text = normalizeText(
+              [
+                button.getAttribute?.("aria-label"),
+                button.getAttribute?.("title"),
+                button.innerText,
+                button.textContent,
+              ]
+                .filter(Boolean)
+                .join(" "),
+            ).toLowerCase();
+            return (
+              text === "delete" ||
+              text === "remove" ||
+              text === "yes" ||
+              text === "ok" ||
+              text === "confirm"
+            );
+          });
+        if (!confirm) {
+          return false;
+        }
+        traceClear("uploaded_file_confirm_clicked", confirm, {
+          label: controlLabel(confirm),
+        });
+        realisticClick(confirm);
+        if (typeof confirm.click === "function") {
+          confirm.click();
+        }
+        await sleep(180);
+        return true;
+      }
+
+      async function clearUploadedFileControls() {
+        let clearedFiles = 0;
+        const candidates = Array.from(
+          document.querySelectorAll(
+            [
+              "button",
+              "[role='button']",
+              "a[aria-label]",
+              "[data-automation-id*='delete']",
+              "[data-automation-id*='remove']",
+              "[class*='delete']",
+              "[class*='remove']",
+              "[class*='trash']",
+            ].join(", "),
+          ),
+        )
+          .filter(isVisibleEnabled)
+          .filter(isUploadedFileDeleteControl);
+
+        traceClear("uploaded_file_clear_scan", document.body, {
+          candidateCount: candidates.length,
+        });
+
+        for (const candidate of candidates) {
+          const beforeUploadedText = nearestUploadedFileText(candidate);
+          if (!beforeUploadedText) {
+            continue;
+          }
+          traceClear("uploaded_file_delete_attempt", candidate, {
+            label: controlLabel(candidate),
+            nearby: beforeUploadedText.slice(0, 240),
+          });
+          if (!clickClearControl(candidate)) {
+            continue;
+          }
+          if (typeof candidate.click === "function") {
+            candidate.click();
+          }
+          await sleep(240);
+          await clickVisibleUploadConfirmButton();
+          await sleep(360);
+          const afterUploadedText = nearestUploadedFileText(candidate);
+          if (!afterUploadedText || afterUploadedText !== beforeUploadedText) {
+            traceClear("uploaded_file_delete_success", candidate, {
+              previousValue: beforeUploadedText.slice(0, 240),
+              currentValue: afterUploadedText.slice(0, 240),
+            });
+            clearedFiles += 1;
+          } else {
+            traceClear("uploaded_file_delete_pending", candidate, {
+              previousValue: beforeUploadedText.slice(0, 240),
+              currentValue: afterUploadedText.slice(0, 240),
+            });
+          }
+        }
+        return clearedFiles;
+      }
+
       function countRemainingWorkdayButtonValues() {
         return Array.from(
           document.querySelectorAll('button[aria-haspopup="listbox"]'),
@@ -1685,20 +2152,28 @@ async function clearCurrentPage(tabId) {
       cleared += workdayButtonClears;
       let workdayMultiselectClears = await clearWorkdayMultiselects();
       cleared += workdayMultiselectClears;
+      let uploadedFileClears = await clearUploadedFileControls();
+      cleared += uploadedFileClears;
 
       await sleep(250);
       const stabilizedWorkdayButtonClears = await clearWorkdayButtonDropdowns();
       const stabilizedWorkdayMultiselectClears =
         await clearWorkdayMultiselects();
+      const stabilizedUploadedFileClears = await clearUploadedFileControls();
       workdayButtonClears += stabilizedWorkdayButtonClears;
       workdayMultiselectClears += stabilizedWorkdayMultiselectClears;
+      uploadedFileClears += stabilizedUploadedFileClears;
       cleared +=
-        stabilizedWorkdayButtonClears + stabilizedWorkdayMultiselectClears;
+        stabilizedWorkdayButtonClears +
+        stabilizedWorkdayMultiselectClears +
+        stabilizedUploadedFileClears;
 
       await sleep(400);
       const lateWorkdayMultiselectClears = await clearWorkdayMultiselects();
+      const lateUploadedFileClears = await clearUploadedFileControls();
       workdayMultiselectClears += lateWorkdayMultiselectClears;
-      cleared += lateWorkdayMultiselectClears;
+      uploadedFileClears += lateUploadedFileClears;
+      cleared += lateWorkdayMultiselectClears + lateUploadedFileClears;
 
       await sleep(150);
       const closedDropdowns = preClosedDropdowns + closeOpenDropdowns();
@@ -1723,6 +2198,7 @@ async function clearCurrentPage(tabId) {
         clearIndicatorClicks,
         workdayButtonClears,
         workdayMultiselectClears,
+        uploadedFileClears,
         clearTrace,
         clearTraceLimit,
         clearTraceTruncated,
@@ -1769,6 +2245,10 @@ async function clearCurrentPage(tabId) {
       total + Number(result.result?.workdayMultiselectClears || 0),
     0,
   );
+  const uploadedFileClears = results.reduce(
+    (total, result) => total + Number(result.result?.uploadedFileClears || 0),
+    0,
+  );
   const clearTrace = results
     .flatMap((result) => result.result?.clearTrace || [])
     .slice(0, 1000);
@@ -1792,6 +2272,7 @@ async function clearCurrentPage(tabId) {
       clearIndicatorClicks,
       workdayButtonClears,
       workdayMultiselectClears,
+      uploadedFileClears,
       clearTrace,
       clearTraceTruncated,
       frameCount: results.length,
@@ -1816,6 +2297,9 @@ async function clearCurrentPage(tabId) {
     remainingOpenDropdowns,
     remainingFilledControls,
     clearIndicatorClicks,
+    workdayButtonClears,
+    workdayMultiselectClears,
+    uploadedFileClears,
     clearTrace,
     clearTraceTruncated,
     frameCount: results.length,
@@ -2297,6 +2781,9 @@ async function handleMessage(message, sender = {}) {
       return { ok: cancelled, cancelled, fillRunId };
     }
 
+    case "hunt.apply.await_email_verification":
+      return awaitEmailVerification(message.payload || {}, sender);
+
     case "hunt.apply.save_settings": {
       const settings = await saveSettings(message.payload || {});
       await refreshPollingAlarms(settings);
@@ -2304,6 +2791,10 @@ async function handleMessage(message, sender = {}) {
         autofillOnLoad: settings.autofillOnLoad,
         manualFillEnabled: settings.manualFillEnabled,
         autoPromptEnabled: settings.autoPromptEnabled,
+        autoAccountSignupLoginEnabled: settings.autoAccountSignupLoginEnabled,
+        autoEmailVerificationEnabled: settings.autoEmailVerificationEnabled,
+        emailVerificationTimeoutSeconds:
+          settings.emailVerificationTimeoutSeconds,
         autoExportLogs: settings.autoExportLogs,
         autoClickNextAfterFill: settings.autoClickNextAfterFill,
         allowGeneratedAnswers: settings.allowGeneratedAnswers,

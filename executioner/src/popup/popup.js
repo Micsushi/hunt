@@ -142,6 +142,14 @@ async function loadState() {
     response.settings.autoPromptEnabled ? "Enabled" : "Disabled",
   );
   setText(
+    "auto-account-signup-login",
+    response.settings.autoAccountSignupLoginEnabled ? "Enabled" : "Disabled",
+  );
+  setText(
+    "auto-email-verification",
+    response.settings.autoEmailVerificationEnabled ? "Enabled" : "Disabled",
+  );
+  setText(
     "auto-next-after-fill",
     response.settings.autoClickNextAfterFill ? "Enabled" : "Disabled",
   );

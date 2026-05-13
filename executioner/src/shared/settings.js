@@ -9,10 +9,13 @@ export const STORAGE_KEYS = {
 };
 
 export const DEFAULT_SETTINGS = {
-  settingsVersion: 3,
+  settingsVersion: 4,
   autofillOnLoad: false,
   manualFillEnabled: true,
   autoPromptEnabled: true,
+  autoAccountSignupLoginEnabled: false,
+  autoEmailVerificationEnabled: false,
+  emailVerificationTimeoutSeconds: 90,
   autoClickNextAfterFill: false,
   fillRequiredOnly: true,
   autoExportLogs: false,
@@ -62,6 +65,7 @@ export const DEFAULT_PROFILE = {
   expectedGraduationYear: "",
   previousEmployers: "",
   skills: [],
+  languages: [],
   workExperience: [],
   education: [],
   notes: "",

@@ -609,6 +609,22 @@
             </label>
             <label class="checkbox">
               <input
+                id="auto-account-signup-login-enabled"
+                name="autoAccountSignupLoginEnabled"
+                type="checkbox"
+              />
+              <span>Auto account signup/sign-in</span>
+            </label>
+            <label class="checkbox">
+              <input
+                id="auto-email-verification-enabled"
+                name="autoEmailVerificationEnabled"
+                type="checkbox"
+              />
+              <span>Auto email verification bridge</span>
+            </label>
+            <label class="checkbox">
+              <input
                 id="auto-click-next-after-fill"
                 name="autoClickNextAfterFill"
                 type="checkbox"
@@ -696,6 +712,16 @@
                 name="pollIntervalSeconds"
                 min="30"
                 max="3600"
+                type="number"
+              />
+            </label>
+            <label>
+              Email verification timeout seconds
+              <input
+                id="email-verification-timeout-seconds"
+                name="emailVerificationTimeoutSeconds"
+                min="15"
+                max="600"
                 type="number"
               />
             </label>
@@ -1039,6 +1065,17 @@
             <button id="add-education" type="button">Add Education</button>
           </div>
           <div id="education-list" class="entry-list"></div>
+
+          <div class="section-header">
+            <div>
+              <h2>Languages</h2>
+              <p class="section-note">
+                Language and proficiency for Workday language sections.
+              </p>
+            </div>
+            <button id="add-language" type="button">Add Language</button>
+          </div>
+          <div id="language-list" class="entry-list"></div>
 
           <div class="section-header">
             <div>

@@ -79,6 +79,7 @@ function setCheckboxValue(id, value) {
 let currentActivityLog = [];
 let workExperienceEntries = [];
 let educationEntries = [];
+let languageEntries = [];
 
 const WORK_EXPERIENCE_FIELDS = [
   ["jobTitle", "Job title", "text"],
@@ -100,6 +101,11 @@ const EDUCATION_FIELDS = [
   ["endMonth", "End month", "text"],
   ["endYear", "End year", "number"],
   ["overallResult", "GPA", "text"],
+];
+
+const LANGUAGE_FIELDS = [
+  ["language", "Language", "text"],
+  ["proficiency", "Proficiency", "text"],
 ];
 
 const DEGREE_LEVEL_OPTIONS = [
@@ -159,14 +165,32 @@ function emptyEducationEntry() {
   };
 }
 
+function emptyLanguageEntry() {
+  return {
+    language: "",
+    proficiency: "",
+  };
+}
+
 function entryTitle(entry, fallback) {
   return (
-    entry.jobTitle || entry.school || entry.company || entry.degree || fallback
+    entry.jobTitle ||
+    entry.school ||
+    entry.language ||
+    entry.company ||
+    entry.degree ||
+    fallback
   );
 }
 
 function entryMeta(entry) {
-  return [entry.company, entry.location, entry.degree, entry.fieldOfStudy]
+  return [
+    entry.company,
+    entry.location,
+    entry.degree,
+    entry.fieldOfStudy,
+    entry.proficiency,
+  ]
     .filter(Boolean)
     .join(" : ");
 }
@@ -206,7 +230,9 @@ function renderEntryList(kind, entries, fieldDefs, emptyFactory) {
     empty.textContent =
       kind === "work-experience"
         ? "No work experience saved yet."
-        : "No education saved yet.";
+        : kind === "education"
+          ? "No education saved yet."
+          : "No languages saved yet.";
     container.appendChild(empty);
     return;
   }
@@ -303,6 +329,7 @@ function refreshEntryTitles() {
     emptyWorkExperienceEntry,
   );
   educationEntries = readEntryCollection("education", emptyEducationEntry);
+  languageEntries = readEntryCollection("language", emptyLanguageEntry);
 }
 
 async function readFileAsDataUrl(file) {
@@ -441,6 +468,7 @@ function writeProfileFields(profile) {
     ? profile.workExperience
     : [];
   educationEntries = Array.isArray(profile.education) ? profile.education : [];
+  languageEntries = Array.isArray(profile.languages) ? profile.languages : [];
   renderEntryList(
     "work-experience",
     workExperienceEntries,
@@ -452,6 +480,12 @@ function writeProfileFields(profile) {
     educationEntries,
     EDUCATION_FIELDS,
     emptyEducationEntry,
+  );
+  renderEntryList(
+    "language",
+    languageEntries,
+    LANGUAGE_FIELDS,
+    emptyLanguageEntry,
   );
 }
 
@@ -547,6 +581,7 @@ function readFullProfileForm() {
     salaryFlexible: document.getElementById("profile-salary-flexible")?.checked,
     workExperience: workExperienceEntries,
     education: educationEntries,
+    languages: languageEntries,
     notes: document.getElementById("profile-notes")?.value,
   };
 }
@@ -556,6 +591,12 @@ function readSettingsForm() {
     autofillOnLoad: document.getElementById("autofill-on-load")?.checked,
     manualFillEnabled: document.getElementById("manual-fill-enabled")?.checked,
     autoPromptEnabled: document.getElementById("auto-prompt-enabled")?.checked,
+    autoAccountSignupLoginEnabled: document.getElementById(
+      "auto-account-signup-login-enabled",
+    )?.checked,
+    autoEmailVerificationEnabled: document.getElementById(
+      "auto-email-verification-enabled",
+    )?.checked,
     autoClickNextAfterFill: document.getElementById(
       "auto-click-next-after-fill",
     )?.checked,
@@ -573,6 +614,9 @@ function readSettingsForm() {
       ?.value,
     heartbeatIntervalSeconds: document.getElementById(
       "heartbeat-interval-seconds",
+    )?.value,
+    emailVerificationTimeoutSeconds: document.getElementById(
+      "email-verification-timeout-seconds",
     )?.value,
     allowGeneratedAnswers: document.getElementById("allow-generated-answers")
       ?.checked,
@@ -660,6 +704,14 @@ async function loadState() {
   setCheckboxValue("manual-fill-enabled", response.settings.manualFillEnabled);
   setCheckboxValue("auto-prompt-enabled", response.settings.autoPromptEnabled);
   setCheckboxValue(
+    "auto-account-signup-login-enabled",
+    response.settings.autoAccountSignupLoginEnabled,
+  );
+  setCheckboxValue(
+    "auto-email-verification-enabled",
+    response.settings.autoEmailVerificationEnabled,
+  );
+  setCheckboxValue(
     "auto-click-next-after-fill",
     response.settings.autoClickNextAfterFill,
   );
@@ -681,6 +733,10 @@ async function loadState() {
   setInputValue(
     "heartbeat-interval-seconds",
     response.settings.heartbeatIntervalSeconds,
+  );
+  setInputValue(
+    "email-verification-timeout-seconds",
+    response.settings.emailVerificationTimeoutSeconds,
   );
   setCheckboxValue(
     "allow-generated-answers",
@@ -870,6 +926,17 @@ document.getElementById("add-education")?.addEventListener("click", () => {
   );
 });
 
+document.getElementById("add-language")?.addEventListener("click", () => {
+  refreshEntryTitles();
+  languageEntries.push(emptyLanguageEntry());
+  renderEntryList(
+    "language",
+    languageEntries,
+    LANGUAGE_FIELDS,
+    emptyLanguageEntry,
+  );
+});
+
 document
   .getElementById("experience-form")
   ?.addEventListener("click", async (event) => {
@@ -898,6 +965,14 @@ document
         educationEntries,
         EDUCATION_FIELDS,
         emptyEducationEntry,
+      );
+    } else if (kind === "language") {
+      languageEntries.splice(index, 1);
+      renderEntryList(
+        "language",
+        languageEntries,
+        LANGUAGE_FIELDS,
+        emptyLanguageEntry,
       );
     }
     const response = await saveProfile(readFullProfileForm());

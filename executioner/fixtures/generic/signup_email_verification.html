@@ -1,0 +1,87 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>C3 Signup Email Verification Fixture</title>
+    <style>
+      body {
+        font-family: system-ui, sans-serif;
+        margin: 32px;
+        max-width: 720px;
+      }
+      form,
+      .field {
+        display: grid;
+        gap: 12px;
+      }
+      label {
+        display: grid;
+        gap: 4px;
+      }
+      input {
+        min-height: 32px;
+      }
+      #verification-needed {
+        border: 1px solid #b7791f;
+        background: #fff8e6;
+        margin-top: 18px;
+        padding: 14px;
+      }
+      [hidden] {
+        display: none !important;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>Signup Fixture</h1>
+    <form id="signup-form">
+      <label>
+        Full name *
+        <input id="full-name" required autocomplete="name" />
+      </label>
+      <label>
+        Email address *
+        <input id="email" type="email" required autocomplete="email" />
+      </label>
+      <label>
+        Username *
+        <input id="username" required autocomplete="username" />
+      </label>
+      <label>
+        Password *
+        <input
+          id="password"
+          type="password"
+          required
+          autocomplete="new-password"
+        />
+      </label>
+      <label>
+        Confirm password *
+        <input
+          id="confirm-password"
+          type="password"
+          required
+          autocomplete="new-password"
+        />
+      </label>
+      <button id="create-account" type="submit">Create Account</button>
+    </form>
+    <section id="verification-needed" role="status" hidden>
+      <h2>Email verification needed</h2>
+      <p>
+        Check your inbox and verify your email address to continue this
+        application.
+      </p>
+    </section>
+    <script>
+      document
+        .getElementById("signup-form")
+        .addEventListener("submit", (event) => {
+          event.preventDefault();
+          document.getElementById("verification-needed").hidden = false;
+          document.body.dataset.signupSubmittedAt = new Date().toISOString();
+        });
+    </script>
+  </body>
+</html>

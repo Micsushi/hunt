@@ -5,10 +5,12 @@ export function canOfferSafeNextAfterFill(fillResponse = {}) {
   const filledFieldCount = Number(
     attempt.filledFieldCount ?? result.filledFieldCount ?? 0,
   );
+  const cleanAlreadyFilled =
+    attempt.status === "filled" || result.status === "filled";
   return Boolean(
     fillResponse.ok &&
     pendingLlmFieldCount === 0 &&
-    filledFieldCount > 0 &&
+    (filledFieldCount > 0 || cleanAlreadyFilled) &&
     !attempt.manualReviewRequired &&
     !result.manualReviewRequired,
   );
@@ -65,6 +67,12 @@ export function chooseBestSafeNextFrame(scriptResults = []) {
 }
 
 export function summarizeSafeNextResult(result = {}) {
+  if (
+    result.reason === "clicked_safe_next_recovered_workday_runtime_error" ||
+    result.reason === "clicked_safe_next_workday_runtime_error_unrecovered"
+  ) {
+    return result.message || "Clicked Next and handled a Workday page error.";
+  }
   if (result.clicked) {
     return `Clicked ${result.candidate?.label || "Next"}.`;
   }
@@ -248,6 +256,40 @@ export function createSafeNextFunction() {
       ).filter(isVisibleEnabled).length;
     }
 
+    function visibleValidationErrors() {
+      return Array.from(
+        document.querySelectorAll(
+          [
+            '[role="alert"]',
+            '[data-automation-id*="error"]',
+            '[id*="error"]',
+            ".css-1iucqxd",
+          ].join(", "),
+        ),
+      )
+        .filter(function (el) {
+          if (!el || !el.getBoundingClientRect) {
+            return false;
+          }
+          var style = window.getComputedStyle(el);
+          var rect = el.getBoundingClientRect();
+          var text = normalizeText(el.innerText || el.textContent || "");
+          return (
+            text &&
+            style.display !== "none" &&
+            style.visibility !== "hidden" &&
+            rect.width > 0 &&
+            rect.height > 0
+          );
+        })
+        .map(function (el) {
+          return normalizeText(el.innerText || el.textContent || "").slice(
+            0,
+            160,
+          );
+        });
+    }
+
     function findBestCandidate() {
       var elements = Array.from(
         document.querySelectorAll(
@@ -361,6 +403,20 @@ export function createSafeNextFunction() {
 
     var found = findBestCandidate();
     var count = inputCount();
+    var errors = visibleValidationErrors();
+    if (errors.length) {
+      return {
+        ok: false,
+        found: false,
+        clicked: false,
+        reason: "visible_validation_errors",
+        message: "Next skipped because visible validation errors are present.",
+        candidateCount: found.candidateCount,
+        blockedFinalSubmitLabels: found.blockedFinalSubmitLabels,
+        visibleValidationErrors: errors.slice(0, 8),
+        inputCount: count,
+      };
+    }
     if (!found.candidate) {
       var reason = found.blockedFinalSubmitLabels.length
         ? "final_submit_visible"

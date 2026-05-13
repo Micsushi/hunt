@@ -39,6 +39,9 @@ export async function setInLocalStorage(values) {
 export function sanitizeSettings(settings = {}) {
   const pollIntervalSeconds = Number(settings.pollIntervalSeconds);
   const heartbeatIntervalSeconds = Number(settings.heartbeatIntervalSeconds);
+  const emailVerificationTimeoutSeconds = Number(
+    settings.emailVerificationTimeoutSeconds,
+  );
   const settingsVersion = Number(settings.settingsVersion);
   const hasCurrentSettingsVersion =
     settingsVersion >= DEFAULT_SETTINGS.settingsVersion;
@@ -47,6 +50,17 @@ export function sanitizeSettings(settings = {}) {
     autofillOnLoad: sanitizeBoolean(settings.autofillOnLoad),
     manualFillEnabled: sanitizeBoolean(settings.manualFillEnabled ?? true),
     autoPromptEnabled: sanitizeBoolean(settings.autoPromptEnabled ?? true),
+    autoAccountSignupLoginEnabled: sanitizeBoolean(
+      settings.autoAccountSignupLoginEnabled,
+    ),
+    autoEmailVerificationEnabled: sanitizeBoolean(
+      settings.autoEmailVerificationEnabled,
+    ),
+    emailVerificationTimeoutSeconds: Number.isFinite(
+      emailVerificationTimeoutSeconds,
+    )
+      ? Math.min(Math.max(Math.round(emailVerificationTimeoutSeconds), 15), 600)
+      : DEFAULT_SETTINGS.emailVerificationTimeoutSeconds,
     autoClickNextAfterFill: sanitizeBoolean(settings.autoClickNextAfterFill),
     fillRequiredOnly: sanitizeBoolean(settings.fillRequiredOnly ?? true),
     autoExportLogs: hasCurrentSettingsVersion
@@ -123,6 +137,7 @@ export function sanitizeProfile(profile = {}) {
     expectedGraduationYear: sanitizeText(profile.expectedGraduationYear),
     previousEmployers: sanitizeText(profile.previousEmployers),
     skills: sanitizeTextList(profile.skills, 80),
+    languages: sanitizeLanguages(profile.languages),
     workExperience: sanitizeWorkExperience(profile.workExperience),
     education: sanitizeEducation(profile.education),
     notes: sanitizeText(profile.notes),
@@ -192,6 +207,19 @@ function sanitizeEducation(entries = []) {
       endMonth: sanitizeText(entry.endMonth),
       endYear: sanitizeText(entry.endYear),
       overallResult: sanitizeText(entry.overallResult),
+    }))
+    .filter((entry) => Object.values(entry).some(Boolean));
+}
+
+function sanitizeLanguages(entries = []) {
+  if (!Array.isArray(entries)) {
+    return [];
+  }
+  return entries
+    .slice(0, 20)
+    .map((entry) => ({
+      language: sanitizeText(entry.language || entry.name),
+      proficiency: sanitizeText(entry.proficiency || entry.level),
     }))
     .filter((entry) => Object.values(entry).some(Boolean));
 }

@@ -7,7 +7,8 @@
   const FILL_PROGRESS_ID = "hunt-apply-fill-progress";
   const TOAST_CONTAINER_ID = "hunt-apply-page-toasts";
   const PROMPT_SUPPRESS_AFTER_FILL_MS = 45000;
-  const PROMPT_AUTO_DISMISS_MS = 10000;
+  const PROMPT_AUTO_DISMISS_MS = 5000;
+  const PROMPT_FILL_REQUEST_TIMEOUT_MS = 65000;
   let lastPromptSignature = "";
   const dismissedPromptSignatures = new Set();
   let promptCheckTimer = null;
@@ -165,21 +166,64 @@
   }
 
   function logPageUiEvent(action, summary, details = {}, status = "ok") {
-    chrome.runtime
-      .sendMessage({
-        type: "hunt.apply.log_activity",
-        payload: {
-          action,
-          summary,
-          status,
-          details: {
-            url: window.location.href,
-            title: document.title,
-            ...details,
+    try {
+      chrome.runtime
+        .sendMessage({
+          type: "hunt.apply.log_activity",
+          payload: {
+            action,
+            summary,
+            status,
+            details: {
+              url: window.location.href,
+              title: document.title,
+              ...details,
+            },
           },
-        },
-      })
-      .catch(() => {});
+        })
+        .catch(() => {});
+    } catch {
+      // Extension reloads can invalidate chrome.runtime in existing page handlers.
+    }
+  }
+
+  function runtimeMessageWithTimeout(message, timeoutMs, timeoutReason) {
+    let timer = null;
+    const timeout = new Promise((resolve) => {
+      timer = setTimeout(() => {
+        resolve({
+          ok: false,
+          timedOut: true,
+          reason: timeoutReason,
+          message:
+            "Hunt is still waiting for the fill result. Open the popup and use Fill Current Page if the page does not change.",
+        });
+      }, timeoutMs);
+    });
+    let runtimeMessage = null;
+    try {
+      runtimeMessage = chrome.runtime.sendMessage(message);
+    } catch (error) {
+      if (timer) {
+        clearTimeout(timer);
+      }
+      return Promise.resolve({
+        ok: false,
+        reason: "runtime_message_failed",
+        message: error instanceof Error ? error.message : String(error),
+      });
+    }
+    return Promise.race([runtimeMessage, timeout])
+      .catch((error) => ({
+        ok: false,
+        reason: "runtime_message_failed",
+        message: error instanceof Error ? error.message : String(error),
+      }))
+      .finally(() => {
+        if (timer) {
+          clearTimeout(timer);
+        }
+      });
   }
 
   function dismissTransientUi() {
@@ -196,6 +240,7 @@
   }
 
   function showFillProgress({ message, fillRunId } = {}) {
+    removePrompt();
     var existing = document.getElementById(FILL_PROGRESS_ID);
     if (existing?.shadowRoot) {
       var existingText = existing.shadowRoot.getElementById(
@@ -447,6 +492,7 @@
     `;
     host.shadowRoot.getElementById("dismiss").addEventListener("click", () => {
       dismissedPromptSignatures.add(promptSignature({ kind, inputCount }));
+      removePrompt();
       logPageUiEvent(
         "ui.detect_prompt.dismiss",
         "Dismissed detected-page prompt.",
@@ -455,7 +501,6 @@
           inputCount,
         },
       );
-      removePrompt();
     });
     host.shadowRoot
       .getElementById("fill")
@@ -468,6 +513,7 @@
         button.textContent = "Filling...";
         button.disabled = true;
         removeToasts();
+        showFillProgress({ message: "Filling page" });
         logPageUiEvent(
           "ui.detect_prompt.fill_click",
           "Clicked detected-page fill.",
@@ -476,10 +522,42 @@
             inputCount,
           },
         );
-        const response = await chrome.runtime.sendMessage({
-          type: "hunt.apply.fill_current_page",
-          payload: { pageKind: kind, triggeredBy: "detected_page_prompt" },
-        });
+        const response = await runtimeMessageWithTimeout(
+          {
+            type: "hunt.apply.fill_current_page",
+            payload: { pageKind: kind, triggeredBy: "detected_page_prompt" },
+          },
+          PROMPT_FILL_REQUEST_TIMEOUT_MS,
+          "detected_prompt_fill_timeout",
+        );
+        logPageUiEvent(
+          "ui.detect_prompt.fill_response",
+          response?.ok
+            ? "Detected-page fill returned."
+            : "Detected-page fill did not return a successful response.",
+          {
+            kind,
+            inputCount,
+            ok: Boolean(response?.ok),
+            reason: response?.reason || "",
+            timedOut: Boolean(response?.timedOut),
+            message: response?.message || "",
+          },
+          response?.ok ? "ok" : "warn",
+        );
+        if (response?.timedOut) {
+          showFillProgress({ message: "Still waiting for fill result" });
+          showExtensionToast(response.message, "warn");
+          return;
+        }
+        hideFillProgress();
+        if (!response?.ok) {
+          showExtensionToast(
+            response?.message ||
+              "Fill did not start. Open the popup and try Fill Current Page.",
+            "warn",
+          );
+        }
         button.textContent = response?.ok ? "Filled" : "Needs review";
         setTimeout(removePrompt, 1400);
       });
@@ -488,6 +566,8 @@
       if (!host.isConnected) {
         return;
       }
+      dismissedPromptSignatures.add(promptSignature({ kind, inputCount }));
+      removePrompt();
       logPageUiEvent(
         "ui.detect_prompt.auto_dismiss",
         "Auto-dismissed detected-page prompt.",
@@ -497,7 +577,6 @@
           timeoutMs: PROMPT_AUTO_DISMISS_MS,
         },
       );
-      removePrompt();
     }, PROMPT_AUTO_DISMISS_MS);
     logPageUiEvent("ui.detect_prompt.show", "Showed detected-page prompt.", {
       kind,
@@ -661,12 +740,7 @@
   }
 
   function promptSignature(detection) {
-    return [
-      window.location.href,
-      currentStepText(),
-      detection.kind,
-      detection.inputCount,
-    ].join("|");
+    return [window.location.href, currentStepText(), detection.kind].join("|");
   }
 
   function pageContextKey() {
