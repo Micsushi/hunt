@@ -1,0 +1,208 @@
+- generic [ref=e4]:
+  - link "Skip to main content" [ref=e5] [cursor=pointer]:
+    - /url: ""
+  - banner [ref=e8]:
+    - generic [ref=e10]:
+      - generic [ref=e11]:
+        - heading [level=1]
+      - generic [ref=e13]:
+        - button "Sign In" [ref=e15] [cursor=pointer]:
+          - generic [ref=e20]: Sign In
+        - navigation [ref=e21]:
+          - button "Search for Jobs" [ref=e22] [cursor=pointer]
+  - main [ref=e59]:
+    - generic [ref=e60]:
+      - generic [ref=e61]:
+        - link "Back to Job Posting" [ref=e63] [cursor=pointer]:
+          - generic [ref=e67]: Back to Job Posting
+        - heading "Junior AI Software Engineer" [level=2] [ref=e68]
+      - generic "Application Progress" [ref=e69]:
+        - list [ref=e70]:
+          - listitem [ref=e71]:
+            - generic: current step 1 of 5
+            - generic [ref=e77]: My Information
+          - listitem [ref=e78]:
+            - generic: step 2 of 5
+            - generic [ref=e84]: My Experience
+          - listitem [ref=e85]:
+            - generic: step 3 of 5
+            - generic [ref=e91]: Application Questions
+          - listitem [ref=e92]:
+            - generic: step 4 of 5
+            - generic [ref=e98]: Voluntary Disclosures
+          - listitem [ref=e99]:
+            - generic: step 5 of 5
+            - generic [ref=e105]: Review
+      - generic [ref=e106]:
+        - generic [ref=e107]:
+          - heading "My Information" [level=3] [ref=e108]
+          - generic [ref=e109]: "* Indicates a required field"
+          - generic [ref=e244]:
+            - heading "Errors Found" [level=3] [ref=e245]:
+              - button "Errors Found" [expanded] [active] [ref=e246] [cursor=pointer]:
+                - generic [ref=e247]: Errors Found
+            - list [ref=e258]:
+              - listitem [ref=e259]:
+                - generic [ref=e260]:
+                  - button "Error How Did You Hear About Us?" [ref=e261] [cursor=pointer]:
+                    - text: Error
+                    - generic [ref=e262]: "-"
+                    - text: How Did You Hear About Us?
+                  - generic [ref=e263]: The field How Did You Hear About Us? is required and must have a value.
+              - listitem [ref=e264]:
+                - generic [ref=e265]:
+                  - button "Error First Name" [ref=e266] [cursor=pointer]:
+                    - text: Error
+                    - generic [ref=e267]: "-"
+                    - text: First Name
+                  - generic [ref=e268]: The field First Name is required and must have a value.
+              - listitem [ref=e269]:
+                - generic [ref=e270]:
+                  - button "Error Last Name" [ref=e271] [cursor=pointer]:
+                    - text: Error
+                    - generic [ref=e272]: "-"
+                    - text: Last Name
+                  - generic [ref=e273]: The field Last Name is required and must have a value.
+              - listitem [ref=e274]:
+                - generic [ref=e275]:
+                  - button "Error City" [ref=e276] [cursor=pointer]:
+                    - text: Error
+                    - generic [ref=e277]: "-"
+                    - text: City
+                  - generic [ref=e278]: The field City is required and must have a value.
+              - listitem [ref=e279]:
+                - generic [ref=e280]:
+                  - button "Error Province or Territory" [ref=e281] [cursor=pointer]:
+                    - text: Error
+                    - generic [ref=e282]: "-"
+                    - text: Province or Territory
+                  - generic [ref=e283]: The field Province or Territory is required and must have a value.
+              - listitem [ref=e284]:
+                - generic [ref=e285]:
+                  - button "Error Email" [ref=e286] [cursor=pointer]:
+                    - text: Error
+                    - generic [ref=e287]: "-"
+                    - text: Email
+                  - generic [ref=e288]: The field Email is required and must have a value.
+              - listitem [ref=e289]:
+                - generic [ref=e290]:
+                  - button "Error Phone Device Type" [ref=e291] [cursor=pointer]:
+                    - text: Error
+                    - generic [ref=e292]: "-"
+                    - text: Phone Device Type
+                  - generic [ref=e293]: The field Phone Device Type is required and must have a value.
+              - listitem [ref=e294]:
+                - generic [ref=e295]:
+                  - button "Error Phone Number" [ref=e296] [cursor=pointer]:
+                    - text: Error
+                    - generic [ref=e297]: "-"
+                    - text: Phone Number
+                  - generic [ref=e298]: The field Phone Number is required and must have a value.
+          - generic [ref=e116]:
+            - group [ref=e117]:
+              - generic [ref=e119]:
+                - generic [ref=e121]: How Did You Hear About Us?*
+                - generic [ref=e122]:
+                  - button "How Did You Hear About Us? Select One Required" [ref=e125]: Select One
+                  - paragraph [ref=e300]:
+                    - generic [ref=e301]: "Error:"
+                    - text: The field How Did You Hear About Us? is required and must have a value.
+            - group [ref=e126]:
+              - generic [ref=e128]:
+                - generic [ref=e130]: Country*
+                - button "Country Canada Required" [ref=e134]: Canada
+            - group "Legal Name" [ref=e136]:
+              - heading "Legal Name" [level=4] [ref=e137]
+              - generic [ref=e138]:
+                - generic [ref=e139]:
+                  - generic [ref=e141]: First Name*
+                  - generic [ref=e142]:
+                    - textbox "First Name" [ref=e144]
+                    - paragraph [ref=e303]:
+                      - generic [ref=e304]: "Error:"
+                      - text: The field First Name is required and must have a value.
+                - generic [ref=e145]:
+                  - generic [ref=e147]: Last Name*
+                  - generic [ref=e148]:
+                    - textbox "Last Name" [ref=e150]
+                    - paragraph [ref=e306]:
+                      - generic [ref=e307]: "Error:"
+                      - text: The field Last Name is required and must have a value.
+                - generic [ref=e151]:
+                  - generic [ref=e152]: I have a preferred name
+                  - checkbox "I have a preferred name" [ref=e157] [cursor=pointer]
+            - group "Address" [ref=e159]:
+              - heading "Address" [level=4] [ref=e160]
+              - generic [ref=e161]:
+                - generic [ref=e162]:
+                  - generic [ref=e163]: Address Line 1
+                  - textbox "Address Line 1" [ref=e166]
+                - generic [ref=e167]:
+                  - generic [ref=e168]: Address Line 2
+                  - textbox "Address Line 2" [ref=e171]
+                - generic [ref=e172]:
+                  - generic [ref=e174]: City*
+                  - generic [ref=e175]:
+                    - textbox "City" [ref=e177]
+                    - paragraph [ref=e309]:
+                      - generic [ref=e310]: "Error:"
+                      - text: The field City is required and must have a value.
+                - generic [ref=e178]:
+                  - generic [ref=e180]: Province or Territory*
+                  - generic [ref=e181]:
+                    - button "Province or Territory Select One Required" [ref=e184]: Select One
+                    - paragraph [ref=e312]:
+                      - generic [ref=e313]: "Error:"
+                      - text: The field Province or Territory is required and must have a value.
+                - generic [ref=e185]:
+                  - generic [ref=e186]: Postal Code
+                  - textbox "Postal Code" [ref=e189]
+            - group "Email Address" [ref=e191]:
+              - heading "Email Address" [level=4] [ref=e192]
+              - generic [ref=e194]:
+                - generic [ref=e196]: Email*
+                - generic [ref=e197]:
+                  - textbox "Email" [ref=e199]
+                  - paragraph [ref=e315]:
+                    - generic [ref=e316]: "Error:"
+                    - text: The field Email is required and must have a value.
+            - group "Phone" [ref=e201]:
+              - heading "Phone" [level=4] [ref=e202]
+              - generic [ref=e203]:
+                - generic [ref=e204]:
+                  - generic [ref=e206]: Phone Device Type*
+                  - generic [ref=e207]:
+                    - button "Phone Device Type Select One Required" [ref=e210]: Select One
+                    - paragraph [ref=e318]:
+                      - generic [ref=e319]: "Error:"
+                      - text: The field Phone Device Type is required and must have a value.
+                - generic [ref=e211]:
+                  - generic [ref=e213]: Country Phone Code*
+                  - generic [ref=e218] [cursor=pointer]:
+                    - generic:
+                      - textbox "Country Phone Code" [ref=e219]:
+                        - /placeholder: Search
+                      - generic [ref=e220]: 1 item selected, Canada (+1)
+                    - listbox "items selected" [ref=e222]:
+                      - option "Canada (+1), press delete to clear value." [ref=e223]:
+                        - paragraph [ref=e228]: Canada (+1)
+                - generic [ref=e232]:
+                  - generic [ref=e234]: Phone Number*
+                  - generic [ref=e235]:
+                    - textbox "Phone Number" [ref=e237]
+                    - paragraph [ref=e321]:
+                      - generic [ref=e322]: "Error:"
+                      - text: The field Phone Number is required and must have a value.
+                - generic [ref=e238]:
+                  - generic [ref=e239]: Phone Extension
+                  - textbox "Phone Extension" [ref=e242]
+        - button "Next" [ref=e115] [cursor=pointer]
+  - generic [ref=e26]:
+    - generic [ref=e27]: Follow Us
+    - list [ref=e28]:
+      - listitem [ref=e29] [cursor=pointer]:
+        - link "LinkedIn" [ref=e30]:
+          - /url: https://www.linkedin.com/company/36177?trk=vsrp_companies_res_name&trkInfo=VSRPsearchId%3A4001333991468438417069%2CVSRPtargetId%3A36177%2CVSRPcmpt%3Aprimary
+    - generic [ref=e34]:
+      - img [ref=e38]
+      - generic [ref=e58]: © 2026 Workday, Inc. All rights reserved.

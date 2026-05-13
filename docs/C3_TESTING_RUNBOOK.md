@@ -36,7 +36,9 @@ smoke did not click Submit.
 
 ## Controlled Browser Setup
 
-For repeatable C3 extension testing, use the dedicated controlled browser first:
+For repeatable C3 extension testing, use the dedicated controlled browser first.
+In C3 notes and chat, `p chrome` means this controlled Playwright Chrome
+instance:
 
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\launch_c3_chrome.ps1
@@ -67,8 +69,17 @@ Status on 2026-05-11:
 - Regular Chrome can expose the debug endpoint while ignoring unpacked extension
   loading, so the launcher prefers Playwright Chromium.
 
-Use this browser for repeatable extension reloads, fixture smokes, DOM/iframe
-inspection, screenshots, and Hootsuite-style debugging.
+Use `p chrome` for repeatable extension reloads, fixture smokes, DOM/iframe
+inspection, screenshots, Workday debugging, and Hootsuite-style debugging.
+
+Detailed `p chrome` operating notes and job fast paths live in the vault, not in
+repo docs. Before using `p chrome`, read:
+
+```text
+C:\Users\sushi\Documents\agentsvault\Wiki\Projects\Hunt\p-chrome\_index.md
+```
+
+Keep repo scripts here; keep job/browser memory in vault child pages.
 
 After navigating to a new step in the same application, C3 should re-run page
 detection and show the in-page fill prompt again if the new step has visible
@@ -362,6 +373,12 @@ script seeds the extension profile and `main.pdf`, navigates to the selected
 Workday path, sends `hunt.apply.fill_current_page`, clicks only `Next`, and
 stops at Review when Submit is visible.
 
+For interactive debugging, do not default to a fresh profile or browser restart.
+Use the existing controlled Chrome if it is still healthy, because preserving the
+current Workday step is usually faster than replaying the application from the
+posting. Restart only when verifying extension-install/setup, stale code, or
+fresh-state behavior.
+
 Resume-upload path:
 
 ```powershell
@@ -374,24 +391,49 @@ Manual path:
 node scripts\c3_workday_live_smoke.js --mode manual --resume main.pdf
 ```
 
+Get the controlled browser to Jonas Workday `My Experience` without filling
+that target step:
+
+```powershell
+node scripts\c3_workday_live_smoke.js --mode manual --resume main.pdf --target-step "My Experience" --stop-at-target --max-pages 3
+```
+
+Fill only the current page in the already-open `p chrome` Workday tab:
+
+```powershell
+node scripts\c3_workday_live_smoke.js --mode manual --resume main.pdf --preserve-current --stop-after-fill --max-pages 1
+```
+
+Fill the already-open `p chrome` tab only for a one-page My Experience test,
+then stop:
+
+```powershell
+node scripts\c3_workday_live_smoke.js --mode manual --resume main.pdf --preserve-current --target-step "My Experience" --require-target --stop-after-fill --max-pages 1
+```
+
 Expected result for the Jonas Software Canada posting:
 
 - Resume path: final step 6 of 6, `Review`, `hasSubmit: true`, no page errors.
 - Manual path: final step 5 of 5, `Review`, `hasSubmit: true`, no page errors.
-- Review text includes `How Did You Hear About Us? Linkedin`, `Edmonton, AB
-  Canada`, `Phone +1 7800000000 (Mobile)`, and `main.pdf`.
+- Review text includes source `Linkedin`, location `Edmonton, AB Canada`, phone
+  `+1 7800000000 (Mobile)`, and `main.pdf`.
 
 Workday details that matter:
 
 - `Apply Manually` initially exposes a Country dropdown before the rest of the
   form. C3 primes Country first, then fills the dependent fields.
-- Workday button dropdown commits can be delayed. C3 polls committed button text
-  before treating a selection as saved.
+- Workday button dropdowns are custom ARIA listbox/combobox controls, not native
+  `<select>` elements. C3 should prefer the keyboard path: focus the owning
+  button, open the listbox, use typeahead/active-option navigation, press Enter
+  on the owner/listbox, and only then fall back to pointer selection. It polls
+  committed button text before treating a selection as saved.
 - Workday phone country code is a separate search control. It must select
   `Canada (+1)` and must not receive the raw phone number. If it is already
   selected, the trace should show `phone_country_code_precheck` followed by
   `phone_country_code_matches_choice`, with no
-  `open_phone_country_code_picker` click.
+  `open_phone_country_code_picker` click. If it needs selection, C3 types
+  `Canada`, waits for the option list to update, commits through keyboard/Enter,
+  and closes the picker on failure.
 - Required terms and consent checkboxes are filled only for narrow required
   terms/agreement descriptors.
 
@@ -403,6 +445,12 @@ node scripts\c3_workday_live_smoke.js --mode manual --resume main.pdf --max-page
 
 Use this when checking idempotency. It should show already-correct controls as
 `already_filled` on repeated fills.
+
+Job-specific fast paths live in the vault:
+
+```text
+C:\Users\sushi\Documents\agentsvault\Wiki\Projects\Hunt\p-chrome\jobs\
+```
 
 ## First Live ATS Pilot
 

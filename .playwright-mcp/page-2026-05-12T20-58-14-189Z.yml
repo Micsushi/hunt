@@ -1,0 +1,85 @@
+- generic [ref=e4]:
+  - link "Skip to main content" [ref=e5] [cursor=pointer]:
+    - /url: ""
+  - banner [ref=e8]:
+    - generic [ref=e10]:
+      - generic [ref=e11]:
+        - heading [level=1]
+      - generic [ref=e13]:
+        - button "Sign In" [ref=e15] [cursor=pointer]:
+          - generic [ref=e20]: Sign In
+        - navigation [ref=e21]:
+          - button "Search for Jobs" [ref=e22] [cursor=pointer]
+  - main [ref=e59]:
+    - generic [ref=e60]:
+      - generic [ref=e61]:
+        - link "Back to Job Posting" [ref=e63] [cursor=pointer]:
+          - generic [ref=e67]: Back to Job Posting
+        - heading "Junior AI Software Engineer" [level=2] [ref=e68]
+      - generic "Application Progress" [ref=e69]:
+        - list [ref=e70]:
+          - listitem [ref=e71]:
+            - generic: completed step 1 of 5
+            - generic [ref=e77]: My Information
+          - listitem [ref=e78]:
+            - generic: current step 2 of 5
+            - generic [ref=e84]: My Experience
+          - listitem [ref=e85]:
+            - generic: step 3 of 5
+            - generic [ref=e91]: Application Questions
+          - listitem [ref=e92]:
+            - generic: step 4 of 5
+            - generic [ref=e98]: Voluntary Disclosures
+          - listitem [ref=e99]:
+            - generic: step 5 of 5
+            - generic [ref=e105]: Review
+      - generic [ref=e106]:
+        - generic [ref=e107]:
+          - heading "My Experience" [active] [level=3] [ref=e336]
+          - generic [ref=e109]: "* Indicates a required field"
+          - generic [ref=e337]:
+            - group "Work Experience" [ref=e338]:
+              - heading "Work Experience" [level=4] [ref=e339]
+              - button "Add" [ref=e343] [cursor=pointer]
+            - group "Education" [ref=e345]:
+              - heading "Education" [level=4] [ref=e346]
+              - button "Add" [ref=e350] [cursor=pointer]
+            - group "Languages" [ref=e352]:
+              - heading "Languages" [level=4] [ref=e353]
+              - button "Add" [ref=e357] [cursor=pointer]
+            - group "Skills" [ref=e359]:
+              - heading "Skills" [level=4] [ref=e360]
+              - generic [ref=e362]:
+                - generic [ref=e363]: Type to Add Skills
+                - generic [ref=e369] [cursor=pointer]:
+                  - textbox "Type to Add Skills" [ref=e370]:
+                    - /placeholder: Search
+                  - generic [ref=e371]: 0 items selected
+            - group "Resume/CV" [ref=e376]:
+              - heading "Resume/CV" [level=4] [ref=e377]
+              - paragraph [ref=e379]:
+                - generic [ref=e380]:
+                  - generic [ref=e382]: Upload a file (5MB max)*
+                  - generic "Upload a file (5MB max)" [ref=e385]:
+                    - generic [ref=e387] [cursor=pointer]:
+                      - generic [ref=e393]: Drop files here
+                      - generic [ref=e394]:
+                        - generic [ref=e395]: or
+                        - button "Select files" [ref=e396]:
+                          - generic [ref=e397]: Select files
+            - group "Websites" [ref=e399]:
+              - heading "Websites" [level=4] [ref=e400]
+              - generic [ref=e401]: Add any relevant websites.
+              - button "Add" [ref=e405] [cursor=pointer]
+        - generic [ref=e112]:
+          - button "Back" [ref=e408] [cursor=pointer]
+          - button "Next" [ref=e115] [cursor=pointer]
+  - generic [ref=e26]:
+    - generic [ref=e27]: Follow Us
+    - list [ref=e28]:
+      - listitem [ref=e29] [cursor=pointer]:
+        - link "LinkedIn" [ref=e30]:
+          - /url: https://www.linkedin.com/company/36177?trk=vsrp_companies_res_name&trkInfo=VSRPsearchId%3A4001333991468438417069%2CVSRPtargetId%3A36177%2CVSRPcmpt%3Aprimary
+    - generic [ref=e34]:
+      - img [ref=e38]
+      - generic [ref=e58]: © 2026 Workday, Inc. All rights reserved.

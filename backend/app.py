@@ -4052,9 +4052,7 @@ async def api_c3_fill_result(
 
 
 @app.post("/api/c3/status")
-async def api_c3_status(
-    request: Request, _auth: str = Depends(require_session_or_service_token)
-):
+async def api_c3_status(request: Request, _auth: str = Depends(require_session_or_service_token)):
     body = await request.json()
     return {
         "ok": True,

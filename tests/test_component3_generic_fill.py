@@ -234,9 +234,7 @@ def test_generic_fill_populates_required_fields_only():
     assert result["generatedAnswerCount"] == 0
     assert result["filledFieldCount"] == 9, json.dumps(result["filledFields"], indent=2)
     assert result["fieldInventory"]
-    email_inventory = [
-        entry for entry in result["fieldInventory"] if entry["id"] == "email"
-    ][0]
+    email_inventory = [entry for entry in result["fieldInventory"] if entry["id"] == "email"][0]
     assert "email" in email_inventory["descriptor"]
     assert email_inventory["required"] is True
     assert email_inventory["filled"] is True
@@ -411,9 +409,7 @@ def test_generic_fill_can_fill_optional_known_fields_when_required_only_is_off()
             }
             """
         )
-        preferred_name = page.evaluate(
-            """() => document.querySelector("#preferred-name").value"""
-        )
+        preferred_name = page.evaluate("""() => document.querySelector("#preferred-name").value""")
         optional_question = page.evaluate(
             """() => document.querySelector("#optional-question").value"""
         )
@@ -528,9 +524,7 @@ def test_generic_fill_reads_sibling_labels_and_hidden_resume_inputs():
         "resumeFileName": "resume.pdf",
         "coverLetterFileName": "",
     }
-    hidden_resume = [
-        entry for entry in result["fieldInventory"] if entry["id"] == "resume-file"
-    ][0]
+    hidden_resume = [entry for entry in result["fieldInventory"] if entry["id"] == "resume-file"][0]
     assert hidden_resume["filled"] is True
     assert hidden_resume["valueSource"] == "resume_upload"
     cover_letter = [
@@ -630,20 +624,16 @@ def test_generic_fill_commits_greenhouse_style_custom_selects():
         "city": "Elsewhere in Canada",
         "legal": "Yes",
         "salary": "Yes",
-        "coop": "2 terms completed, this will be my 3rd term",
+        "coop": "0 terms completed, this will be my 1st term",
         "term": "Yes",
         "interview": "Yes",
         "graduation": "2026",
         "previous": "No",
         "cityInput": "Elsewhere in Canada",
     }
-    city = [entry for entry in result["fieldInventory"] if entry["id"] == "city-combo"][
-        0
-    ]
+    city = [entry for entry in result["fieldInventory"] if entry["id"] == "city-combo"][0]
     assert city["valueSource"] == "profile:location"
-    legal = [entry for entry in result["fieldInventory"] if entry["id"] == "legal-combo"][
-        0
-    ]
+    legal = [entry for entry in result["fieldInventory"] if entry["id"] == "legal-combo"][0]
     assert legal["valueSource"] == "profile:workAuthorized"
 
 

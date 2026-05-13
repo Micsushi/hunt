@@ -1,0 +1,12 @@
+[-8399302ms] [INFO] Slow network is detected. See https://www.chromestatus.com/feature/5636954674692096 for more details. Fallback font will be used while loading: https://wd3.myworkdaycdn.com/wday/asset/candidate-experience-jobs/fonts/Roboto400.woff2 @ https://wd3.myworkdaycdn.com/wday/asset/candidate-experience-jobs/cx-jobs.min.js:258
+[-8399301ms] [INFO] Slow network is detected. See https://www.chromestatus.com/feature/5636954674692096 for more details. Fallback font will be used while loading: https://wd3.myworkdaycdn.com/wday/asset/candidate-experience-jobs/fonts/Roboto500.woff2 @ https://wd3.myworkdaycdn.com/wday/asset/candidate-experience-jobs/cx-jobs.min.js:258
+[-8399301ms] [INFO] Slow network is detected. See https://www.chromestatus.com/feature/5636954674692096 for more details. Fallback font will be used while loading: https://wd3.myworkdaycdn.com/wday/asset/candidate-experience-jobs/fonts/Roboto700.woff2 @ https://wd3.myworkdaycdn.com/wday/asset/candidate-experience-jobs/cx-jobs.min.js:258
+[-8400289ms] [LOG] Hunt Apply content bootstrap loaded. Object @ chrome-extension://cbdmkibihimaedoihjhpidclolglnncc/src/content/bootstrap.js:765
+[       6ms] Error: Extension context invalidated.
+    at logPageUiEvent (chrome-extension://cbdmkibihimaedoihjhpidclolglnncc/src/content/bootstrap.js:168:8)
+    at chrome-extension://cbdmkibihimaedoihjhpidclolglnncc/src/content/bootstrap.js:438:7
+[       6ms] Error: Extension context invalidated.
+    at logPageUiEvent (chrome-extension://cbdmkibihimaedoihjhpidclolglnncc/src/content/bootstrap.js:168:8)
+    at handlePageContextChange (chrome-extension://cbdmkibihimaedoihjhpidclolglnncc/src/content/bootstrap.js:637:7)
+    at schedulePromptCheck (chrome-extension://cbdmkibihimaedoihjhpidclolglnncc/src/content/bootstrap.js:701:5)
+    at MutationObserver.<anonymous> (chrome-extension://cbdmkibihimaedoihjhpidclolglnncc/src/content/bootstrap.js:809:5)

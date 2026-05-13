@@ -14,15 +14,25 @@ function normalizeWhitespace(value) {
     .trim();
 }
 
+function normalizeLines(value) {
+  return String(value || "")
+    .replace(/\r\n?/g, "\n")
+    .split("\n")
+    .map(normalizeWhitespace)
+    .filter(Boolean);
+}
+
 function stripLatex(value) {
   return normalizeWhitespace(
     String(value || "")
       .replace(/\\textbf\{([^{}]*)\}/g, "$1")
       .replace(/\\fontsize\{[^{}]*\}\{[^{}]*\}\\selectfont/g, "")
-      .replace(/\\[a-zA-Z]+\*?(?:\[[^\]]*\])?/g, "")
       .replace(/[{}]/g, "")
       .replace(/\\&/g, "&")
-      .replace(/\\%/g, "%"),
+      .replace(/\\%/g, "%")
+      .replace(/\\\$/g, "$")
+      .replace(/\\([#_])/g, "$1")
+      .replace(/\\[a-zA-Z]+\*?(?:\[[^\]]*\])?/g, ""),
   );
 }
 
@@ -191,6 +201,25 @@ function parseMonthYear(text) {
   return { month: match[1], year: match[2] };
 }
 
+function monthNumber(value) {
+  const text = normalizeWhitespace(value).toLowerCase().slice(0, 3);
+  const months = {
+    jan: "01",
+    feb: "02",
+    mar: "03",
+    apr: "04",
+    may: "05",
+    jun: "06",
+    jul: "07",
+    aug: "08",
+    sep: "09",
+    oct: "10",
+    nov: "11",
+    dec: "12",
+  };
+  return months[text] || value || "";
+}
+
 function parseDateRange(text) {
   const cleaned = stripLatex(text).replace(/\s+[-–—]\s+/g, " - ");
   const parts = cleaned.split(/\s+-\s+/);
@@ -198,12 +227,48 @@ function parseDateRange(text) {
   const endText = parts[1] || cleaned;
   const end = parseMonthYear(endText);
   return {
-    startMonth: start.month,
+    startMonth: monthNumber(start.month),
     startYear: start.year,
-    endMonth: /present/i.test(endText) ? "" : end.month,
+    endMonth: /present/i.test(endText) ? "" : monthNumber(end.month),
     endYear: /present/i.test(endText) ? "" : end.year,
     current: /present/i.test(endText),
   };
+}
+
+function parseInlineDateRange(line) {
+  const match = normalizeWhitespace(line).match(
+    /\b((?:Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|Jun(?:e)?|Jul(?:y)?|Aug(?:ust)?|Sep(?:t(?:ember)?)?|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?)\.?\s+\d{4})\s*(?:-|–|—|to)\s*((?:Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|Jun(?:e)?|Jul(?:y)?|Aug(?:ust)?|Sep(?:t(?:ember)?)?|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?)\.?\s+\d{4}|Present|Current)\b/i,
+  );
+  if (!match) {
+    return { rangeText: "", dates: parseDateRange("") };
+  }
+  return { rangeText: match[0], dates: parseDateRange(match[0]) };
+}
+
+function inferDegreeLevel(value) {
+  const text = normalizeWhitespace(value).toLowerCase();
+  if (!text) {
+    return "";
+  }
+  if (/\b(phd|doctor|doctorate)\b/.test(text)) {
+    return "Doctorate";
+  }
+  if (/\b(masters?|m\.?sc|m\.?a|mba)\b/.test(text)) {
+    return "Masters";
+  }
+  if (/\b(bachelors?|bachelor|bsc|b\.?sc|ba|b\.?a)\b/.test(text)) {
+    return "Bachelors";
+  }
+  if (/\b(associate|associates)\b/.test(text)) {
+    return "Associates";
+  }
+  if (/\b(high school)\b/.test(text)) {
+    return "High School Diploma";
+  }
+  if (/\b(diploma)\b/.test(text)) {
+    return "Diploma";
+  }
+  return "";
 }
 
 function extractBullets(block) {
@@ -214,6 +279,17 @@ function extractBullets(block) {
   ]
     .map((match) => stripLatex(match[1]))
     .filter(Boolean);
+}
+
+function formatBulletDescription(lines) {
+  return (lines || [])
+    .map(stripLatex)
+    .map((line) => line.replace(/^\u2022\s*/, ""))
+    .map((line) => line.replace(/^[*-]\s*/, ""))
+    .map(normalizeWhitespace)
+    .filter(Boolean)
+    .map((line) => `- ${line}`)
+    .join("\n");
 }
 
 function parseEducation(tex) {
@@ -229,12 +305,17 @@ function parseEducation(tex) {
     {
       school: normalizeWhitespace(school),
       degree: normalizeWhitespace(degreeParts.join(",")),
-      fieldOfStudy: "",
+      degreeLevel: inferDegreeLevel(degreeParts.join(",")),
+      fieldOfStudy: /computer science/i.test(degreeParts.join(","))
+        ? "Computer Science"
+        : "",
       startMonth: "",
       startYear: "",
       endMonth: dates.endMonth || dates.startMonth,
       endYear: dates.endYear || dates.startYear,
-      overallResult: extractBullets(block).join("\n"),
+      overallResult: extractBullets(block)
+        .filter((line) => /\b(gpa|grade point|average)\b/i.test(line))
+        .join("\n"),
     },
   ].filter((item) => item.school || item.degree);
 }
@@ -263,7 +344,7 @@ function parseWorkExperience(tex) {
         endMonth: dates.endMonth,
         endYear: dates.endYear,
         current: dates.current,
-        description: extractBullets(detailBlock).join("\n"),
+        description: formatBulletDescription(extractBullets(detailBlock)),
       };
     })
     .filter((item) => item.jobTitle || item.company);
@@ -289,6 +370,285 @@ function parseSkills(tex) {
       }
     });
   return skills;
+}
+
+function splitSectionText(text, names) {
+  const lines = normalizeLines(text);
+  const wanted = names.map((name) => name.toLowerCase());
+  const startIndex = lines.findIndex((line) =>
+    wanted.includes(line.toLowerCase().replace(/:$/, "")),
+  );
+  if (startIndex === -1) {
+    return "";
+  }
+  const nextIndex = lines.findIndex(
+    (line, index) =>
+      index > startIndex &&
+      /^(education|experience|work experience|employment|employment history|professional experience|projects|technical skills|skills|certifications|awards)$/i.test(
+        line.replace(/:$/, ""),
+      ),
+  );
+  return lines
+    .slice(startIndex + 1, nextIndex === -1 ? lines.length : nextIndex)
+    .join("\n");
+}
+
+function parsePlainSkills(text) {
+  const block = splitSectionText(text, ["Technical Skills", "Skills"]);
+  const seen = new Set();
+  const skills = [];
+  normalizeLines(block)
+    .map((line) => line.replace(/^[^:]{1,60}:\s*/, ""))
+    .flatMap((line) => line.split(/[,;|]/))
+    .map(normalizeWhitespace)
+    .filter(Boolean)
+    .forEach((skill) => {
+      const key = skill.toLowerCase();
+      if (!seen.has(key)) {
+        seen.add(key);
+        skills.push(skill);
+      }
+    });
+  return skills;
+}
+
+function parsePlainEducation(text) {
+  const block = splitSectionText(text, ["Education"]);
+  const lines = normalizeLines(block);
+  if (!lines.length) {
+    return [];
+  }
+  const dateLine = lines.find((line) => parseInlineDateRange(line).rangeText);
+  const { rangeText, dates: rangeDates } = parseInlineDateRange(
+    dateLine || lines.join(" "),
+  );
+  const singleDate = parseMonthYear(lines.join(" "));
+  const dates = rangeText
+    ? rangeDates
+    : {
+        startMonth: "",
+        startYear: "",
+        endMonth: monthNumber(singleDate.month),
+        endYear: singleDate.year,
+      };
+  const header = normalizeWhitespace(
+    lines.slice(0, 3).join(", ").replace(rangeText, ""),
+  );
+  const [school = "", ...degreeParts] = header.split(/\s*,\s*/);
+  const degree = normalizeWhitespace(degreeParts.join(", "));
+  return [
+    {
+      school,
+      degree,
+      degreeLevel: inferDegreeLevel(degree),
+      fieldOfStudy: /computer science/i.test(degree) ? "Computer Science" : "",
+      startMonth: dates.startMonth,
+      startYear: dates.startYear,
+      endMonth: dates.endMonth || dates.startMonth,
+      endYear: dates.endYear || dates.startYear,
+      overallResult: lines
+        .slice(1)
+        .filter((line) => line !== dateLine)
+        .filter((line) => /\b(gpa|grade point|average)\b/i.test(line))
+        .join("\n"),
+    },
+  ].filter((entry) => entry.school || entry.degree);
+}
+
+function looksLikePlainWorkHeader(line) {
+  return (
+    parseInlineDateRange(line).rangeText ||
+    /\b(intern|developer|engineer|analyst|manager|designer|consultant|assistant|researcher|coordinator|lead)\b/i.test(
+      line,
+    )
+  );
+}
+
+function parsePlainWorkExperience(text) {
+  const block = splitSectionText(text, [
+    "Experience",
+    "Work Experience",
+    "Employment",
+    "Employment History",
+    "Professional Experience",
+  ]);
+  const lines = normalizeLines(block);
+  const entries = [];
+  let current = null;
+
+  const flush = () => {
+    if (current && (current.jobTitle || current.company)) {
+      current.description = formatBulletDescription(current.descriptionLines);
+      delete current.descriptionLines;
+      entries.push(current);
+    }
+  };
+
+  for (const line of lines) {
+    if (
+      looksLikePlainWorkHeader(line) &&
+      (!current || current.descriptionLines.length)
+    ) {
+      flush();
+      const { rangeText, dates } = parseInlineDateRange(line);
+      const header = normalizeWhitespace(line.replace(rangeText, ""));
+      const [titlePart = "", rest = ""] = header.split(
+        /\s+[-–—]{2,}\s+|\s+\|\s+/,
+        2,
+      );
+      const [jobTitle = "", companyPart = ""] = titlePart.split(/\s*,\s*/, 2);
+      const [fallbackCompany = "", fallbackLocation = ""] = String(rest).split(
+        /\s*,\s*/,
+        2,
+      );
+      current = {
+        jobTitle: normalizeWhitespace(jobTitle || titlePart),
+        company: normalizeWhitespace(companyPart || fallbackCompany),
+        location: normalizeWhitespace(companyPart ? rest : fallbackLocation),
+        startMonth: dates.startMonth,
+        startYear: dates.startYear,
+        endMonth: dates.endMonth,
+        endYear: dates.endYear,
+        current: dates.current,
+        descriptionLines: [],
+      };
+      continue;
+    }
+    if (current) {
+      current.descriptionLines.push(line);
+    }
+  }
+  flush();
+  return entries.slice(0, 20);
+}
+
+function parsePlainHeader(text) {
+  const lines = normalizeLines(text).slice(0, 12);
+  const hrefs = findHrefTargets(text);
+  const email =
+    (String(text || "").match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i) ||
+      [])[0] || "";
+  const urlMatches = [
+    ...String(text || "").matchAll(
+      /\b(?:https?:\/\/)?(?:www\.)?[a-z0-9.-]+\.[a-z]{2,}(?:\/[^\s|]*)?/gi,
+    ),
+  ]
+    .map((match) => match[0])
+    .filter((url) => !email.toLowerCase().includes(url.toLowerCase()));
+  const urls = [...hrefs.map((href) => href.target), ...urlMatches];
+  const fullName =
+    lines.find(
+      (line) =>
+        !line.includes("@") &&
+        !/\d/.test(line) &&
+        line.split(/\s+/).length <= 4 &&
+        !/^(education|experience|skills)$/i.test(line),
+    ) || "";
+  const location =
+    lines.find(
+      (line) =>
+        !line.includes("@") &&
+        !/github|linkedin|https?:\/\//i.test(line) &&
+        /,\s*[A-Z]{2}\b|remote/i.test(line),
+    ) || "";
+  return {
+    fullName,
+    email,
+    phone: parsePhone(text),
+    location,
+    linkedinUrl: normalizeUrl(
+      urls.find((url) => /linkedin\.com/i.test(url)) || "",
+    ),
+    githubUrl: normalizeUrl(urls.find((url) => /github\.com/i.test(url)) || ""),
+    websiteUrl: normalizeUrl(
+      urls.find((url) => !/linkedin\.com|github\.com|mailto:/i.test(url)) || "",
+    ),
+  };
+}
+
+export function parseResumeText(text) {
+  return {
+    ...parsePlainHeader(text),
+    workExperience: parsePlainWorkExperience(text),
+    education: parsePlainEducation(text),
+    skills: parsePlainSkills(text),
+  };
+}
+
+function decodePdfLiteral(value) {
+  return String(value || "")
+    .replace(/\\([nrtbf()\\])/g, (_match, char) => {
+      const replacements = {
+        n: "\n",
+        r: "\r",
+        t: "\t",
+        b: "",
+        f: "",
+        "(": "(",
+        ")": ")",
+        "\\": "\\",
+      };
+      return replacements[char] ?? char;
+    })
+    .replace(/\\\d{1,3}/g, " ");
+}
+
+function decodePdfHex(value) {
+  const clean = String(value || "").replace(/[^0-9a-f]/gi, "");
+  const bytes = [];
+  for (let index = 0; index + 1 < clean.length; index += 2) {
+    bytes.push(parseInt(clean.slice(index, index + 2), 16));
+  }
+  return new TextDecoder("utf-8", { fatal: false }).decode(
+    new Uint8Array(bytes),
+  );
+}
+
+function extractPdfText(pdfSource) {
+  const source = String(pdfSource || "");
+  const chunks = [];
+  for (const match of source.matchAll(/\(((?:\\.|[^\\)])*)\)\s*Tj/g)) {
+    chunks.push(decodePdfLiteral(match[1]));
+  }
+  for (const match of source.matchAll(
+    /\[((?:\s*(?:\((?:\\.|[^\\)])*\)|<[\da-fA-F\s]+>|-?\d+)\s*)+)\]\s*TJ/g,
+  )) {
+    for (const literal of match[1].matchAll(
+      /\(((?:\\.|[^\\)])*)\)|<([\da-fA-F\s]+)>/g,
+    )) {
+      chunks.push(
+        literal[1] ? decodePdfLiteral(literal[1]) : decodePdfHex(literal[2]),
+      );
+    }
+    chunks.push("\n");
+  }
+  if (!chunks.length) {
+    for (const match of source.matchAll(/\(([^)]{2,120})\)/g)) {
+      chunks.push(decodePdfLiteral(match[1]));
+    }
+  }
+  return chunks.join("\n");
+}
+
+export function parseResumePdfBytes(buffer) {
+  const bytes = buffer instanceof ArrayBuffer ? new Uint8Array(buffer) : buffer;
+  const source = new TextDecoder("latin1", { fatal: false }).decode(bytes);
+  return parseResumeText(extractPdfText(source));
+}
+
+export async function parseResumeFile(file) {
+  const name = String(file?.name || "").toLowerCase();
+  const type = String(file?.type || "").toLowerCase();
+  if (name.endsWith(".pdf") || type.includes("pdf")) {
+    return parseResumePdfBytes(await file.arrayBuffer());
+  }
+  if (typeof file?.text === "function") {
+    const text = await file.text();
+    return name.endsWith(".tex") || /\\section\{|\\begin\{/.test(text)
+      ? parseResumeTex(text)
+      : parseResumeText(text);
+  }
+  return parseResumeText("");
 }
 
 export function parseResumeTex(tex) {

@@ -61,12 +61,51 @@ Verification:
 
 Still open:
 
-- My Experience live fill still needs a fresh live retest after broadening the
-  Add-button finder to include focusable Workday controls. The synthetic and
-  static guards pass, but the latest full live run did not conclusively verify
-  work and education insertion.
+- My Experience live fill now adds Work Experience, Education, and Websites in
+  `p chrome` after an extension reload. Remaining live gaps are Skills commit,
+  degree dropdown commit, missing field-of-study/GPA profile facts, and date
+  month completeness.
 - A fresh full live Workday pass to Review is still needed after the
   2026-05-12 clear/commit and My Experience Add-control changes.
+
+## 2026-05-12 Workday My Experience Alias Fill
+
+Live logs on the Jonas Workday manual path showed C3 reaching My Experience but
+reporting `work=0; education=0; skills=0; websites=3`. Work Experience,
+Education, and Skills were skipped as missing profile entries, while Websites
+started an Add flow and then reported `add_button_not_found` after the first
+website attempt left the page in an open or partially opened entry state.
+
+Fixes now in this batch:
+
+- Workday My Experience normalizes reusable profile facts from alias shapes such
+  as `experience`, `pastJobs`, `employmentHistory`, `educationHistory`,
+  `skillList`, `technicalSkills`, `websites`, `links`, and `portfolioLinks`.
+- Work and education entries map alternate field names such as `title`,
+  `employer`, `university`, and `credential` into the canonical Workday fill
+  shape.
+- The My Experience section fill still runs before the generic required-only
+  field loop, so Work Experience, Education, Skills, and Websites are attempted
+  even when `Fill required fields only` is enabled and the site marks those
+  sections optional.
+- Website entry failure now records `website_fill_failed` and stops that section
+  instead of continuing into a misleading later `add_button_not_found`.
+
+Verification:
+
+- `python ci.py c3`: passed with 23 passed and 20 skipped.
+- Added a Workday fixture for optional My Experience sections using alias profile
+  keys. It is covered when Python Playwright is installed; in this environment
+  the fixture was skipped with the other Python Playwright browser tests.
+
+Still open:
+
+- Live `p chrome` retest after reloading the extension verified Work Experience,
+  Education, and Websites are added and populated. The extension options page
+  issue was fixed by enabling Developer mode and reloading the unpacked Hunt
+  Apply Extension from `chrome://extensions`.
+- Skills commit, degree dropdown, field of study/GPA, and date month completeness
+  still need focused follow-up.
 
 ## 2026-05-12 Step Prompt Refresh
 
@@ -84,6 +123,46 @@ Verification:
 
 - `python ci.py c3`: passed with 23 passed and 19 skipped.
 
+## 2026-05-12 Workday Dropdown Finding
+
+Recent live Workday logs showed two separate dropdown failures:
+
+- Workday button dropdowns such as Country, Source, Province, and Phone Device
+  Type could find and click the right visible option, but the selected value did
+  not always commit into Workday's React state.
+- Workday phone country code is a separate searchable multiselect. After Clear
+  Current Page, the picker could stay open on the unfiltered country list and
+  fail to select `Canada (+1)`.
+
+The likely root cause is that these controls are custom ARIA combobox/listbox
+components, not native `<select>` elements. Playwright's `selectOption()` works
+for native selects only; custom dropdowns need the control opened and the option
+chosen through the component's own interaction model. ARIA combobox guidance also
+allows focus to remain on the combobox while `aria-activedescendant` identifies
+the active option, then `Enter` accepts that active option. That means focusing
+the option node directly and pressing Enter can be the wrong event target for
+some implementations.
+
+References checked:
+
+- Playwright input docs: `selectOption()` is for `<select>` elements:
+  `https://playwright.dev/docs/input`
+- WAI-ARIA combobox pattern: editable and select-only comboboxes use popup
+  listboxes, active descendants, and Enter-to-accept behavior:
+  `https://wai-aria-practices.netlify.app/aria-practices/`
+- MDN `aria-activedescendant`: combobox focus can remain on the combobox while
+  the active option is referenced by id:
+  `https://developer.mozilla.org/en-US/docs/Web/Accessibility/ARIA/Reference/Attributes/aria-activedescendant`
+
+Implementation direction: try a keyboard-first Workday path before treating a
+clicked option as committed. For button dropdowns, focus the owning button, open
+with keyboard, use typeahead and Enter on the owner/listbox, then verify committed
+button text. For phone country code, type `Canada` through key events, wait for
+the option list to update, use keyboard Enter as the primary commit path, and
+always close the picker on failure. DOM force-commit should remain diagnostic
+only for Workday dependency fields because it can make text look correct without
+updating Workday's internal state.
+
 ## 2026-05-12 Test Browser Placement
 
 The C3 test Chrome launcher now tries to open on a non-primary monitor by
@@ -99,6 +178,32 @@ Controls:
 Verification:
 
 - `scripts\launch_c3_chrome.ps1` parses successfully as PowerShell.
+
+## 2026-05-12 Playwright Chrome Session Reuse
+
+C3 live debugging should keep the controlled Playwright Chrome instance open
+across related attempts. Do not close and reopen the browser unless stale
+extension code, a broken extension load, a corrupted page state, or a
+fresh-profile test makes that necessary. The goal is to resume from the current
+Workday step instead of replaying the whole application path.
+
+Per-job fast paths should be documented in the vault as C3 tests expand. The
+Jonas Workday path is recorded under
+`C:\Users\sushi\Documents\agentsvault\Wiki\Projects\Hunt\p-chrome\jobs\`.
+
+Before using `p chrome`, read the vault p chrome index:
+
+```text
+C:\Users\sushi\Documents\agentsvault\Wiki\Projects\Hunt\p-chrome\_index.md
+```
+
+Scripted shortcuts reduce p chrome back-and-forth:
+
+```powershell
+node scripts\c3_workday_live_smoke.js --mode manual --resume main.pdf --target-step "My Experience" --stop-at-target --max-pages 3
+node scripts\c3_workday_live_smoke.js --mode manual --resume main.pdf --preserve-current --stop-after-fill --max-pages 1
+node scripts\c3_workday_live_smoke.js --mode manual --resume main.pdf --preserve-current --target-step "My Experience" --require-target --stop-after-fill --max-pages 1
+```
 
 ## Code Structure
 

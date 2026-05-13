@@ -764,6 +764,54 @@ class C3AutofillPipelineContext {
   get stopped() {
     return Boolean(this.response);
   }
+
+  get cancelled() {
+    return Boolean(
+      typeof this.options.isCancelled === "function" &&
+      this.options.isCancelled(),
+    );
+  }
+}
+
+function buildCancelledPipelineResponse(context) {
+  const route = context.route || {
+    routeName: "cancelled",
+    fillSource:
+      context.extensionState?.activeApplyContext?.sourceMode || "manual",
+    strategy: "cancelled",
+    adapterName: context.atsType || "",
+    requestedAtsType: context.extensionState?.activeApplyContext?.atsType || "",
+    detectedAtsType: context.detectedAtsType || "",
+    usedGenericFallback: false,
+    adapterBackedByGeneric: false,
+  };
+  return {
+    ok: false,
+    cancelled: true,
+    reason: "user_cancelled",
+    message: "Fill canceled.",
+    route,
+    attempt: {
+      applyUrl:
+        context.pageUrl ||
+        context.extensionState?.activeApplyContext?.applyUrl ||
+        "",
+      atsType: context.atsType || context.detectedAtsType || "",
+      filledFieldCount: 0,
+      manualReviewRequired: true,
+      manualReviewReasons: ["user_cancelled"],
+    },
+    result: {
+      ok: false,
+      filledFieldCount: 0,
+      pendingLlmFieldCount: 0,
+      manualReviewReasons: ["user_cancelled"],
+      filledFields: [],
+      fieldInventory: [],
+      generatedAnswers: [],
+    },
+    generatedAnswers: [],
+  };
 }
 
 class ResolveActiveTabStep {
@@ -850,6 +898,7 @@ class RunAdapterFillStep {
           defaultResume: context.extensionState.defaultResume,
           fieldRules: GENERIC_FIELD_RULES,
           fillRoute: context.route,
+          fillRunId: context.options.fillRunId || "",
         },
       ],
     });
@@ -937,7 +986,15 @@ class C3AutofillPipeline {
       if (context.stopped) {
         break;
       }
+      if (context.cancelled) {
+        context.stop(buildCancelledPipelineResponse(context));
+        break;
+      }
       await step.run(context);
+      if (!context.stopped && context.cancelled) {
+        context.stop(buildCancelledPipelineResponse(context));
+        break;
+      }
     }
     return context.response;
   }

@@ -1,0 +1,74 @@
+- generic [ref=e2]:
+  - generic [ref=e3]:
+    - generic [ref=e4]:
+      - generic [ref=e5]: C3 Executioner
+      - heading "Hunt Apply Options" [level=1] [ref=e6]
+      - paragraph [ref=e7]: Profile, resume, and apply context for browser fills.
+    - button "Reload Extension" [ref=e8] [cursor=pointer]
+  - generic [ref=e9]: Loading extension state...
+  - tablist "Options sections" [ref=e10]:
+    - tab "Settings" [selected] [ref=e11] [cursor=pointer]
+    - tab "Profile" [ref=e12] [cursor=pointer]
+    - tab "Experience" [ref=e13] [cursor=pointer]
+    - tab "Documents" [ref=e14] [cursor=pointer]
+    - tab "Activity" [ref=e15] [cursor=pointer]
+  - generic [ref=e16]:
+    - heading "Behavior Settings" [level=2] [ref=e17]
+    - generic [ref=e18]:
+      - generic [ref=e19]:
+        - generic [ref=e20]:
+          - checkbox "Autofill on page load" [ref=e21]
+          - generic [ref=e22]: Autofill on page load
+        - generic [ref=e23]:
+          - checkbox "Manual fill enabled" [ref=e24]
+          - generic [ref=e25]: Manual fill enabled
+        - generic [ref=e26]:
+          - checkbox "Prompt on signup/ATS pages" [ref=e27]
+          - generic [ref=e28]: Prompt on signup/ATS pages
+        - generic [ref=e29]:
+          - checkbox "Click safe Next after fill" [ref=e30]
+          - generic [ref=e31]: Click safe Next after fill
+        - generic [ref=e32]:
+          - checkbox "Fill required fields only" [ref=e33]
+          - generic [ref=e34]: Fill required fields only
+        - generic [ref=e35]:
+          - checkbox "Download JSON logs after fills" [ref=e36]
+          - generic [ref=e37]: Download JSON logs after fills
+        - generic [ref=e38]:
+          - checkbox "Local debug log sink" [ref=e39]
+          - generic [ref=e40]: Local debug log sink
+        - generic [ref=e41]:
+          - checkbox "C4 polling enabled" [ref=e42]
+          - generic [ref=e43]: C4 polling enabled
+        - generic [ref=e44]:
+          - checkbox "One active run lock" [ref=e45]
+          - generic [ref=e46]: One active run lock
+        - generic [ref=e47]:
+          - checkbox "Allow generated answers" [ref=e48]
+          - generic [ref=e49]: Allow generated answers
+        - generic [ref=e50]:
+          - checkbox "Flag low-confidence answers" [ref=e51]
+          - generic [ref=e52]: Flag low-confidence answers
+        - generic [ref=e53]:
+          - checkbox "Strip long-dash punctuation" [ref=e54]
+          - generic [ref=e55]: Strip long-dash punctuation
+      - generic [ref=e56]:
+        - generic [ref=e57]:
+          - text: Backend URL
+          - textbox "Backend URL" [ref=e58]
+        - generic [ref=e59]:
+          - text: Service token
+          - textbox "Service token" [ref=e60]
+        - generic [ref=e61]:
+          - text: Poll interval seconds
+          - spinbutton "Poll interval seconds" [ref=e62]
+        - generic [ref=e63]:
+          - text: Heartbeat interval seconds
+          - spinbutton "Heartbeat interval seconds" [ref=e64]
+        - generic [ref=e65]:
+          - text: Auto-export folder
+          - textbox "Auto-export folder" [ref=e66]
+      - generic [ref=e67]:
+        - button "Poll C4 Once" [ref=e68] [cursor=pointer]
+        - button "Test Log Sink" [ref=e69] [cursor=pointer]
+        - button "Export Logs Now" [ref=e70] [cursor=pointer]

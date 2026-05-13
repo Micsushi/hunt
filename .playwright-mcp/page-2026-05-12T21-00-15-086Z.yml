@@ -1,0 +1,81 @@
+- generic [ref=e2]:
+  - banner [ref=e3]:
+    - generic [ref=e4]:
+      - heading "Extensions" [level=1] [ref=e9]
+      - generic [ref=e12]:
+        - button [ref=e13] [cursor=pointer]
+        - generic [ref=e16]:
+          - generic [ref=e17]: Search extensions
+          - searchbox "Search extensions" [ref=e18]
+      - generic [ref=e21]:
+        - generic [ref=e22]: Developer mode
+        - button "Developer mode" [pressed] [ref=e23] [cursor=pointer]
+    - generic [ref=e27]:
+      - button "Load unpacked" [ref=e28] [cursor=pointer]:
+        - generic [ref=e29]:
+          - generic: Load unpacked
+      - button "Pack extension" [ref=e30] [cursor=pointer]:
+        - generic [ref=e31]:
+          - generic: Pack extension
+      - button "Update" [ref=e32] [cursor=pointer]:
+        - generic [ref=e33]:
+          - generic: Update
+  - generic [ref=e34]:
+    - navigation [ref=e36]:
+      - menu [ref=e37]:
+        - generic:
+          - menuitem "My extensions" [ref=e38] [cursor=pointer]:
+            - generic:
+              - img
+            - text: My extensions
+          - menuitem "Site permissions" [ref=e39] [cursor=pointer]:
+            - generic:
+              - img
+            - text: Site permissions
+          - menuitem "Keyboard shortcuts" [ref=e40] [cursor=pointer]:
+            - generic:
+              - img
+            - text: Keyboard shortcuts
+      - generic [ref=e43]:
+        - text: Developing extensions? Stay up to date on
+        - link "What's New" [ref=e44] [cursor=pointer]:
+          - /url: https://developer.chrome.com/docs/extensions/whats-new?utm_source=ext_sidebar&hl=en-US
+        - text: with Chrome Extension developer documentation.
+      - generic [ref=e46]:
+        - generic:
+          - img
+        - generic [ref=e47]:
+          - text: Discover more extensions and themes on the
+          - link "Chrome Web Store" [ref=e48] [cursor=pointer]:
+            - /url: https://chromewebstore.google.com/category/extensions?utm_source=ext_sidebar&hl=en-US
+    - main [ref=e49]:
+      - generic [ref=e53]:
+        - heading "All Extensions" [level=2] [ref=e54]
+        - generic [ref=e57]:
+          - generic [ref=e58]:
+            - generic [ref=e59]:
+              - img [ref=e60]
+              - img "Unpacked extension" [ref=e62]:
+                - generic [ref=e63]:
+                  - img
+            - generic [ref=e64]:
+              - generic [ref=e66]:
+                - heading "Hunt Apply Extension" [level=3] [ref=e67]
+                - generic [ref=e68]: 0.1.0
+              - generic [ref=e69]: C3 (Executioner) Chrome extension scaffold for Workday autofill.
+              - generic [ref=e70]: "ID: cbdmkibihimaedoihjhpidclolglnncc"
+              - generic [ref=e89]:
+                - generic [ref=e90]: Inspect views
+                - link "service worker" [ref=e91] [cursor=pointer]
+          - generic [ref=e76]:
+            - generic [ref=e77]:
+              - button "Details" [ref=e78] [cursor=pointer]:
+                - generic [ref=e79]:
+                  - generic: Details
+              - button "Remove" [ref=e80] [cursor=pointer]:
+                - generic [ref=e81]:
+                  - generic: Remove
+            - button "Reload" [ref=e92] [cursor=pointer]
+            - button "On, extension enabled" [pressed] [ref=e85] [cursor=pointer]
+  - alert [ref=e95]:
+    - generic [ref=e96]: Reloaded

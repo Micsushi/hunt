@@ -9,6 +9,7 @@ export function createGenericFillFunction() {
     defaultResume,
     fieldRules,
     fillRoute,
+    fillRunId,
   }) {
     var u = window.__huntApplyUtils;
     if (!u) {
@@ -27,6 +28,32 @@ export function createGenericFillFunction() {
       return new Promise(function (r) {
         setTimeout(r, ms);
       });
+    };
+    var fillCancelled = function () {
+      return Boolean(
+        window.__huntApplyCancelAllFills ||
+        (fillRunId && window.__huntApplyCancelFillRunId === fillRunId),
+      );
+    };
+    var cancelledResult = function () {
+      return {
+        ok: false,
+        cancelled: true,
+        reason: "user_cancelled",
+        message: "Fill canceled.",
+        atsType: reportedAtsType,
+        adapterBackedByGeneric: reportedAtsType !== "generic",
+        frameUrl: window.location.href,
+        authState: u.detectAuthState(),
+        filledFieldCount: filledFields.length,
+        generatedAnswerCount: 0,
+        manualReviewRequired: true,
+        manualReviewReasons: ["user_cancelled"],
+        filledFields: filledFields,
+        fieldInventory: fieldInventory,
+        generatedAnswers: [],
+        htmlSnapshot: document.documentElement.outerHTML.slice(0, 200000),
+      };
     };
     var stripLongDash = settings.stripLongDash !== false;
     var fillRequiredOnly = settings.fillRequiredOnly !== false;
@@ -125,7 +152,20 @@ export function createGenericFillFunction() {
       return u.normalizeText(valueMap[rule.valueKey] || "", stripLongDash);
     };
     var chooseRequiredKnownValue = function (descriptor) {
-      if (!descriptor || hasExcludedPhrase(descriptor)) {
+      if (!descriptor) {
+        return null;
+      }
+      var credentialMatch = u.chooseProfileMatch
+        ? u.chooseProfileMatch(descriptor, profile)
+        : null;
+      if (
+        credentialMatch &&
+        (credentialMatch.key === "profile:accountPassword" ||
+          credentialMatch.key === "profile:accountEmail")
+      ) {
+        return credentialMatch;
+      }
+      if (hasExcludedPhrase(descriptor)) {
         return null;
       }
       var normalizedDescriptor = normalize(descriptor);
@@ -308,6 +348,9 @@ export function createGenericFillFunction() {
     var sorted = u.sortCandidatesByPosition(candidates);
 
     for (var k = 0; k < sorted.length; k++) {
+      if (fillCancelled()) {
+        return cancelledResult();
+      }
       var candidate = sorted[k];
 
       if (candidate.kind === "radioGroup") {
@@ -500,6 +543,9 @@ export function createGenericFillFunction() {
       });
 
     await verifyPendingTextFills();
+    if (fillCancelled()) {
+      return cancelledResult();
+    }
 
     if (sorted.length > 0 && filledFields.length === 0) {
       manualReviewReasons.push("no_known_fields_filled");

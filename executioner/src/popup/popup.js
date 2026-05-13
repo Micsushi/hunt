@@ -279,10 +279,18 @@ document.getElementById("clear-page")?.addEventListener("click", async () => {
   hideLlmConfirm();
   hideNextConfirm();
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-  const response = await chrome.runtime.sendMessage({
+  setStatus("Clearing page...", "info");
+  const responsePromise = chrome.runtime.sendMessage({
     type: "hunt.apply.clear_current_page",
-    payload: { tabId: tab?.id || null },
+    payload: {
+      tabId: tab?.id || null,
+      triggeredBy: "popup_clear_current_page",
+    },
   });
+  setTimeout(() => {
+    window.close();
+  }, 120);
+  const response = await responsePromise;
 
   setStatus(
     response?.message || "Failed to clear the current page.",

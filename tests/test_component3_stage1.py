@@ -329,13 +329,80 @@ class Component3Stage1Tests(unittest.TestCase):
         self.assertEqual(profile["githubUrl"], "https://github.com/micsushi")
         self.assertEqual(profile["education"][0]["school"], "University of Alberta")
         self.assertIn("Computer Science", profile["education"][0]["degree"])
+        self.assertEqual(profile["education"][0]["degreeLevel"], "Bachelors")
+        self.assertEqual(profile["education"][0]["fieldOfStudy"], "Computer Science")
+        self.assertNotIn("Awards", profile["education"][0]["overallResult"])
         self.assertEqual(profile["education"][0]["endYear"], "2026")
         self.assertEqual(profile["workExperience"][0]["company"], "INVIDI Technologies")
-        self.assertEqual(profile["workExperience"][0]["jobTitle"], "Junior Software Developer (Part-time)")
+        self.assertEqual(
+            profile["workExperience"][0]["jobTitle"], "Junior Software Developer (Part-time)"
+        )
         self.assertIn("Kotlin microservices", profile["workExperience"][0]["description"])
+        self.assertTrue(profile["workExperience"][0]["description"].startswith("- "))
+        self.assertIn("($38,000)", profile["workExperience"][1]["description"])
+        self.assertNotIn(r"\$", profile["workExperience"][1]["description"])
         self.assertIn("Python", profile["skills"])
         self.assertIn("Kubernetes", profile["skills"])
         self.assertIn("Phone", payload["missing"])
+
+    def test_resume_text_and_pdf_parser_extract_experience_sections(self):
+        parser_path = REPO_ROOT / "executioner" / "src" / "options" / "resume-parser.js"
+        resume_text = """
+Michael Shi
+Edmonton, AB | wenjian2@ualberta.ca | https://mshi.ca | https://linkedin.com/in/wjshi | https://github.com/micsushi
+
+Education
+University of Alberta, BSc in Computer Science with Specialization
+Expected Graduation: Sep 2026
+
+Experience
+Junior Software Developer, INVIDI Technologies -- Edmonton, AB | May 2025 - Feb 2026
+- Built Kotlin microservices and browser automation.
+
+Software Developer Intern, INVIDI Technologies -- Edmonton, AB | May 2024 - May 2025
+- Built production tooling.
+
+Technical Skills
+Languages: Python, TypeScript
+Tools: React, Kubernetes
+"""
+        pdf_source = "%PDF-1.4\n" + "\n".join(
+            f"({line}) Tj" for line in resume_text.splitlines()
+        )
+        script = f"""
+            import {{ parseResumeText, parseResumePdfBytes }} from {json.dumps(parser_path.as_uri())};
+            const textProfile = parseResumeText({json.dumps(resume_text)});
+            const pdfProfile = parseResumePdfBytes(new TextEncoder().encode({json.dumps(pdf_source)}));
+            console.log(JSON.stringify({{ textProfile, pdfProfile }}));
+        """
+
+        try:
+            result = subprocess.run(
+                ["node", "--input-type=module", "-e", script],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+        except FileNotFoundError:
+            self.skipTest("node is required to test the C3 resume parser")
+
+        payload = json.loads(result.stdout)
+        for profile_key in ["textProfile", "pdfProfile"]:
+            profile = payload[profile_key]
+            self.assertEqual(profile["fullName"], "Michael Shi")
+            self.assertEqual(profile["email"], "wenjian2@ualberta.ca")
+            self.assertEqual(profile["education"][0]["school"], "University of Alberta")
+            self.assertEqual(profile["education"][0]["degreeLevel"], "Bachelors")
+            self.assertEqual(profile["education"][0]["fieldOfStudy"], "Computer Science")
+            self.assertEqual(profile["education"][0]["overallResult"], "")
+            self.assertEqual(profile["education"][0]["endYear"], "2026")
+            self.assertEqual(len(profile["workExperience"]), 2)
+            self.assertEqual(profile["workExperience"][0]["company"], "INVIDI Technologies")
+            self.assertEqual(profile["workExperience"][0]["startMonth"], "05")
+            self.assertEqual(profile["workExperience"][0]["endYear"], "2026")
+            self.assertTrue(profile["workExperience"][0]["description"].startswith("- "))
+            self.assertIn("Python", profile["skills"])
+            self.assertIn("Kubernetes", profile["skills"])
 
     def test_fill_route_names_cover_standalone_db_and_c4_modes(self):
         route_path = REPO_ROOT / "executioner" / "src" / "background" / "fill-routes.js"
@@ -488,10 +555,23 @@ class Component3Stage1Tests(unittest.TestCase):
         self.assertIn("settingsVersion", settings)
         self.assertIn("autoExportLogs", settings)
         self.assertIn("debugLogSinkEnabled", settings)
+        self.assertIn("accountEmail", settings)
+        self.assertIn("accountPassword", settings)
         self.assertIn("coOpTermsCompleted", settings)
         self.assertIn("workExperience", settings)
         self.assertIn("education", settings)
         self.assertIn("skills", settings)
+        self.assertIn("canadianCitizenOrPermanentResident", settings)
+        self.assertIn("sinStartsWithNine", settings)
+        self.assertIn("sinExpiryDate", settings)
+        self.assertIn("interestedTemporaryShortContract", settings)
+        self.assertIn("disclosureGender", settings)
+        self.assertIn("disclosureTransExperience", settings)
+        self.assertIn("disclosureLgbqIdentity", settings)
+        self.assertIn("disclosureDisability", settings)
+        self.assertIn("disclosureIndigenousIdentity", settings)
+        self.assertIn("disclosureVisibleMinority", settings)
+        self.assertIn("disclosureVeteranStatus", settings)
         self.assertIn("llmAnswerFallbackEnabled", settings)
         self.assertIn("autoExportLogPrefix", settings)
         self.assertIn("backendUrl", settings)
@@ -516,6 +596,8 @@ class Component3Stage1Tests(unittest.TestCase):
         self.assertIn('id="auto-export-logs"', options)
         self.assertIn('id="debug-log-sink-enabled"', options)
         self.assertIn('id="auto-export-log-prefix"', options)
+        self.assertIn('id="profile-account-email"', options)
+        self.assertIn('id="profile-account-password"', options)
         self.assertIn('id="export-logs-now"', options)
         self.assertIn('id="test-debug-log-sink"', options)
         self.assertIn('id="activity-log-count"', options)
@@ -523,10 +605,21 @@ class Component3Stage1Tests(unittest.TestCase):
         self.assertIn('id="work-experience-list"', options)
         self.assertIn('id="education-list"', options)
         self.assertIn('id="profile-skills"', options)
+        self.assertIn('id="profile-canadian-citizen-pr"', options)
+        self.assertIn('id="profile-sin-starts-with-nine"', options)
+        self.assertIn('id="profile-sin-expiry-date"', options)
+        self.assertIn('id="profile-temporary-short-contract"', options)
+        self.assertIn('id="profile-disclosure-gender"', options)
+        self.assertIn('id="profile-disclosure-trans-experience"', options)
+        self.assertIn('id="profile-disclosure-lgbq"', options)
+        self.assertIn('id="profile-disclosure-disability"', options)
+        self.assertIn('id="profile-disclosure-indigenous"', options)
+        self.assertIn('id="profile-disclosure-visible-minority"', options)
+        self.assertIn('id="profile-disclosure-veteran"', options)
         self.assertIn("max-height: min(420px, 52vh)", options)
-        options_js = (
-            REPO_ROOT / "executioner" / "src" / "options" / "options.js"
-        ).read_text(encoding="utf-8")
+        options_js = (REPO_ROOT / "executioner" / "src" / "options" / "options.js").read_text(
+            encoding="utf-8"
+        )
         self.assertIn("const currentProfile = readFullProfileForm()", options_js)
         self.assertIn("mergeProfileFromResume(currentProfile, parsedProfile)", options_js)
         self.assertIn("hunt.apply.export_logs", background)
@@ -866,6 +959,22 @@ class Component3Stage1Tests(unittest.TestCase):
         self.assertIn("countryParts.country", shared_utils)
         self.assertIn("how did you hear", shared_utils)
         self.assertIn("knownProvinces", shared_utils)
+        self.assertIn("default:noPreviousInstitution", shared_utils)
+        self.assertIn("profile:canadianCitizenOrPermanentResident", shared_utils)
+        self.assertIn("profile:sinStartsWithNine", shared_utils)
+        self.assertIn("profile:sinExpiryDate", shared_utils)
+        self.assertIn("profile:interestedTemporaryShortContract", shared_utils)
+        self.assertIn("profile:disclosureGender", shared_utils)
+        self.assertIn("profile:disclosureTransExperience", shared_utils)
+        self.assertIn("profile:disclosureLgbqIdentity", shared_utils)
+        self.assertIn("profile:disclosureDisability", shared_utils)
+        self.assertIn("profile:disclosureIndigenousIdentity", shared_utils)
+        self.assertIn("profile:disclosureVisibleMinority", shared_utils)
+        self.assertIn("profile:disclosureVeteranStatus", shared_utils)
+        self.assertIn("profile:accountEmail", shared_utils)
+        self.assertIn("profile:accountPassword", shared_utils)
+        self.assertIn("current password", shared_utils)
+        self.assertIn("I choose not to disclose", shared_utils)
         self.assertIn("resume_already_uploaded", workday)
         self.assertIn("not_resume_input", workday)
         self.assertIn('"drop file"', workday)
@@ -899,6 +1008,8 @@ class Component3Stage1Tests(unittest.TestCase):
         )
 
         self.assertIn("isWorkdayAddButtonLabel", workday)
+        self.assertIn("isWorkdayAddAnotherButtonLabel", workday)
+        self.assertIn("findSectionAddButton(section, idx > 0)", workday)
         self.assertIn("add another", workday)
         self.assertIn("visibleInSection", workday)
         self.assertIn("waitForSectionFieldCountIncrease", workday)
@@ -910,6 +1021,9 @@ class Component3Stage1Tests(unittest.TestCase):
         self.assertIn("missing_profile_entries", workday)
         self.assertIn("workday_my_experience_profile_counts", workday)
         self.assertIn("visibleStepHeadings", workday)
+        self.assertIn("select_workday_skill_checkbox", workday)
+        self.assertIn("open_workday_skill_results_with_enter", workday)
+        self.assertIn("choose not to disclose", workday)
 
     def test_devtools_target_picker_finds_c3_options_page(self):
         target = find_c3_target(

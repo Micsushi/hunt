@@ -19,6 +19,11 @@ function parseArgs(argv) {
     maxPages: 8,
     fillsPerPage: 1,
     stopAfterFill: false,
+    preserveCurrent: false,
+    targetStep: "",
+    requireTarget: false,
+    stopAtTarget: false,
+    clearRepeatableSections: false,
     verifyClear: false,
   };
   for (let i = 2; i < argv.length; i += 1) {
@@ -47,6 +52,17 @@ function parseArgs(argv) {
       i += 1;
     } else if (arg === "--stop-after-fill") {
       args.stopAfterFill = true;
+    } else if (arg === "--preserve-current") {
+      args.preserveCurrent = true;
+    } else if (arg === "--target-step" && next) {
+      args.targetStep = next;
+      i += 1;
+    } else if (arg === "--require-target") {
+      args.requireTarget = true;
+    } else if (arg === "--stop-at-target") {
+      args.stopAtTarget = true;
+    } else if (arg === "--clear-repeatable-sections") {
+      args.clearRepeatableSections = true;
     } else if (arg === "--verify-clear") {
       args.verifyClear = true;
     } else if (arg === "--help") {
@@ -73,6 +89,11 @@ function usage() {
     "  --max-pages <n>    Safety cap for Next clicks, default 8",
     "  --fills-per-page <n> Fill the same page n times before Next",
     "  --stop-after-fill  Do not click Next after the fill step",
+    "  --preserve-current Do not navigate the Workday tab before running",
+    "  --target-step <name> Stop logic can target a Workday step title",
+    "  --require-target Fail before fill unless current step matches target",
+    "  --stop-at-target   Stop before filling when current step matches target",
+    "  --clear-repeatable-sections Delete Workday repeatable rows before fill",
     "  --verify-clear     Fill, clear, verify empty, then refill before Next",
   ].join("\n");
 }
@@ -225,10 +246,17 @@ function makeSeedPayload(resumePath, applyUrl) {
     email: "wenjian2@ualberta.ca",
     phone: "7800000000",
     location: "Edmonton, Alberta, Canada",
+    addressLine1: "10180 101 Street NW",
+    addressLine2: "",
+    postalCode: "T5J 3S4",
     linkedinUrl: "https://linkedin.com/in/wjshi",
     githubUrl: "https://github.com/micsushi",
     websiteUrl: "https://mshi.ca",
     workAuthorized: true,
+    canadianCitizenOrPermanentResident: "yes",
+    sinStartsWithNine: "no",
+    sinExpiryDate: "",
+    interestedTemporaryShortContract: "yes",
     sponsorshipRequired: false,
     willingToRelocate: true,
     openToAnyLocation: true,
@@ -238,31 +266,82 @@ function makeSeedPayload(resumePath, applyUrl) {
     availableInterviewWindow: "Yes",
     expectedGraduationYear: "2026",
     previousEmployers: "",
-    skills: ["Python", "JavaScript", "React", "PostgreSQL"],
+    skills: ["Python", "React"],
+    skillList: ["Python", "React"],
     workExperience: [
       {
         jobTitle: "Software Developer Intern",
-        company: "Hunt Test Company",
+        company: "INVIDI Technologies",
         location: "Edmonton, Alberta, Canada",
-        startMonth: "May",
+        startMonth: "05",
         startYear: "2025",
-        endMonth: "August",
+        endMonth: "08",
         endYear: "2025",
         current: false,
-        description: "Built browser automation and data tooling.",
+        description:
+          "Built browser automation, data tooling, and production software features.",
+      },
+    ],
+    pastJobs: [
+      {
+        title: "Software Developer Intern",
+        employer: "INVIDI Technologies",
+        location: "Edmonton, Alberta, Canada",
+        startMonth: "05",
+        startYear: "2025",
+        endMonth: "08",
+        endYear: "2025",
+        current: false,
+        description:
+          "Built browser automation, data tooling, and production software features.",
+      },
+    ],
+    employmentHistory: [
+      {
+        position: "Software Developer Intern",
+        companyName: "INVIDI Technologies",
+        location: "Edmonton, Alberta, Canada",
+        fromMonth: "05",
+        fromYear: "2025",
+        toMonth: "08",
+        toYear: "2025",
+        description:
+          "Built browser automation, data tooling, and production software features.",
       },
     ],
     education: [
       {
         school: "University of Alberta",
-        degree: "Bachelor of Science",
+        degree: "Bachelor's Degree",
         fieldOfStudy: "Computer Science",
-        startMonth: "September",
+        startMonth: "09",
         startYear: "2021",
-        endMonth: "April",
+        endMonth: "04",
         endYear: "2026",
-        overallResult: "",
+        overallResult: "3.7",
       },
+    ],
+    educationHistory: [
+      {
+        university: "University of Alberta",
+        credential: "Bachelor's Degree",
+        fieldOfStudy: "Computer Science",
+        startMonth: "09",
+        startYear: "2021",
+        endMonth: "04",
+        endYear: "2026",
+        overallResult: "3.7",
+      },
+    ],
+    websites: [
+      "https://mshi.ca",
+      "https://linkedin.com/in/wjshi",
+      "https://github.com/micsushi",
+    ],
+    links: [
+      "https://mshi.ca",
+      "https://linkedin.com/in/wjshi",
+      "https://github.com/micsushi",
     ],
     notes: "",
   };
@@ -413,6 +492,21 @@ async function navigate(pageClient, applyUrl) {
   await pageClient.send("Page.enable");
   await pageClient.send("Page.navigate", { url: applyUrl });
   await sleep(4500);
+}
+
+function stepMatches(summary, targetStep) {
+  if (!targetStep) {
+    return false;
+  }
+  const current = String(summary?.currentStep?.title || "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .toLowerCase();
+  const target = String(targetStep || "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .toLowerCase();
+  return Boolean(current && target && current === target);
 }
 
 function pageSummaryExpression() {
@@ -619,6 +713,64 @@ async function clickNext(pageClient) {
   );
 }
 
+async function clearRepeatableWorkdaySections(pageClient) {
+  return pageClient.evaluate(
+    `(async () => {
+      const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+      const visible = (el) => {
+        const style = getComputedStyle(el);
+        const rect = el.getBoundingClientRect();
+        return style.display !== "none" && style.visibility !== "hidden" && rect.width > 0 && rect.height > 0;
+      };
+      const textOf = (el) => (el.innerText || el.textContent || "").replace(/\\s+/g, " ").trim();
+      const clickReal = (target) => {
+        target.scrollIntoView({ block: "center", inline: "center" });
+        const rect = target.getBoundingClientRect();
+        const init = {
+          bubbles: true,
+          cancelable: true,
+          view: window,
+          button: 0,
+          buttons: 1,
+          clientX: Math.round(rect.left + rect.width / 2),
+          clientY: Math.round(rect.top + rect.height / 2)
+        };
+        ["mouseover", "mousemove", "pointerdown", "mousedown"].forEach((type) => target.dispatchEvent(new PointerEvent(type, init)));
+        target.dispatchEvent(new PointerEvent("pointerup", { ...init, buttons: 0 }));
+        target.dispatchEvent(new MouseEvent("mouseup", { ...init, buttons: 0 }));
+        target.dispatchEvent(new MouseEvent("click", { ...init, buttons: 0 }));
+      };
+      const deleted = [];
+      for (let pass = 0; pass < 20; pass += 1) {
+        const buttons = [...document.querySelectorAll("button")]
+          .filter(visible)
+          .filter((button) => /^delete$/i.test(textOf(button)))
+          .filter((button) => !/\\.pdf/i.test(button.getAttribute("aria-label") || ""));
+        if (!buttons.length) {
+          break;
+        }
+        const button = buttons[buttons.length - 1];
+        deleted.push({
+          pass,
+          text: textOf(button),
+          ariaLabel: button.getAttribute("aria-label") || "",
+          top: Math.round(button.getBoundingClientRect().top)
+        });
+        clickReal(button);
+        await sleep(500);
+      }
+      return {
+        deleted,
+        remainingDeleteButtons: [...document.querySelectorAll("button")]
+          .filter(visible)
+          .filter((button) => /^delete$/i.test(textOf(button)))
+          .filter((button) => !/\\.pdf/i.test(button.getAttribute("aria-label") || "")).length
+      };
+    })()`,
+    30000,
+  );
+}
+
 function summarizeFill(fill) {
   const interactionTrace = fill.interactionTrace || [];
   const componentTrace = interactionTrace.filter((entry) =>
@@ -680,11 +832,39 @@ async function run() {
   try {
     const seedPayload = makeSeedPayload(args.resumePath, applyUrl);
     await seedExtension(optionsClient, seedPayload);
-    await navigate(pageClient, applyUrl);
+    if (!args.preserveCurrent) {
+      await navigate(pageClient, applyUrl);
+    }
 
     const timeline = [];
     for (let i = 0; i < args.maxPages; i += 1) {
       const before = await inspectPage(pageClient);
+      if (args.requireTarget && !stepMatches(before, args.targetStep)) {
+        throw new Error(
+          `Current Workday step ${
+            before.currentStep?.title || "<unknown>"
+          } does not match required target ${args.targetStep || "<empty>"}`,
+        );
+      }
+      if (args.stopAtTarget && stepMatches(before, args.targetStep)) {
+        timeline.push({
+          pageIndex: i + 1,
+          stoppedAtTarget: true,
+          before: {
+            href: before.href,
+            currentStep: before.currentStep,
+            hasNext: before.hasNext,
+            hasSubmit: before.hasSubmit,
+            errors: before.errors,
+            fields: before.fields,
+            remainingValues: before.remainingValues,
+          },
+        });
+        break;
+      }
+      const prefillClear = args.clearRepeatableSections
+        ? await clearRepeatableWorkdaySections(pageClient)
+        : null;
       const fills = [];
       let afterFill = before;
       for (let fillIndex = 0; fillIndex < args.fillsPerPage; fillIndex += 1) {
@@ -744,6 +924,7 @@ async function run() {
           errors: before.errors,
         },
         fill: fills[0]?.fill || null,
+        prefillClear,
         fills,
         afterFill: {
           href: afterFill.href,
@@ -757,6 +938,9 @@ async function run() {
       });
 
       if (args.stopAfterFill) {
+        break;
+      }
+      if (args.targetStep && stepMatches(afterFill, args.targetStep)) {
         break;
       }
       if (

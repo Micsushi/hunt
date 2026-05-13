@@ -6,7 +6,6 @@ from typing import Any
 
 from .schemas import C3AnswerRequest
 
-
 SYSTEM_PROMPT = (
     "You are Hunt's C3 application-answer router. Return strict JSON only. "
     "Choose answers that are truthful enough for a job application and useful for getting hired. "
@@ -97,4 +96,3 @@ def build_answer_prompt(request: C3AnswerRequest) -> tuple[str, str]:
         },
     }
     return SYSTEM_PROMPT, json.dumps(payload, ensure_ascii=False, indent=2)
-

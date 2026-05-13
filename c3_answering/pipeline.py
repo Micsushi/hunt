@@ -44,7 +44,10 @@ def _matching_option(options: list[str], target: str, aliases: list[str] | None 
             if normalized_option == normalized_candidate:
                 return original
         for normalized_option, original in normalized_options:
-            if normalized_candidate in normalized_option or normalized_option in normalized_candidate:
+            if (
+                normalized_candidate in normalized_option
+                or normalized_option in normalized_candidate
+            ):
                 return original
     return ""
 
@@ -78,7 +81,9 @@ def _source_decision(
     )
 
 
-def _manual(request: C3AnswerRequest, reason: str, provider: str = "deterministic") -> C3AnswerDecision:
+def _manual(
+    request: C3AnswerRequest, reason: str, provider: str = "deterministic"
+) -> C3AnswerDecision:
     return C3AnswerDecision(
         status="manual_review",
         action="manual_review",
@@ -402,7 +407,10 @@ class ProviderStatus:
 
 def provider_status() -> ProviderStatus:
     provider = fletcher_config.resume_llm_provider()
-    model = fletcher_config.resume_llm_model("c3_answer_decision") or fletcher_config.ollama_model_name()
+    model = (
+        fletcher_config.resume_llm_model("c3_answer_decision")
+        or fletcher_config.ollama_model_name()
+    )
     cloud = provider in {"openai", "openrouter", "anthropic", "gemini"}
     cloud_confirmed = fletcher_config.resume_cloud_llm_confirmed()
     if cloud and not cloud_confirmed:

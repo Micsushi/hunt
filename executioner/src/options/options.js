@@ -1,12 +1,14 @@
 import {
   listMissingProfileFields,
   mergeProfileFromResume,
+  parseResumeFile,
   parseResumeTex,
 } from "./resume-parser.js";
 import { saveDefaultResume as saveDefaultResumeDirect } from "../shared/storage.js";
 
 let currentDefaultResume = {};
 const AUTOSAVE_DELAY_MS = 650;
+let statusHideTimer = null;
 
 function showToast(message, tone = "info") {
   let container = document.getElementById("hunt-options-toasts");
@@ -14,29 +16,31 @@ function showToast(message, tone = "info") {
     container = document.createElement("div");
     container.id = "hunt-options-toasts";
     container.style.position = "fixed";
-    container.style.right = "18px";
-    container.style.top = "18px";
+    container.style.left = "50%";
+    container.style.top = "20px";
+    container.style.transform = "translateX(-50%)";
     container.style.zIndex = "2147483647";
     container.style.display = "grid";
-    container.style.gap = "8px";
-    container.style.maxWidth = "380px";
+    container.style.gap = "10px";
+    container.style.maxWidth = "720px";
+    container.style.width = "min(720px, calc(100vw - 32px))";
     document.body.appendChild(container);
   }
   const toast = document.createElement("div");
   toast.textContent = message;
-  toast.style.background = tone === "warn" ? "#2d2410" : "#172212";
+  toast.style.background = tone === "warn" ? "#3a2508" : "#d7f8df";
   toast.style.border =
-    tone === "warn" ? "1px solid #f0b429" : "1px solid #3a5a3a";
+    tone === "warn" ? "1px solid #f0b429" : "1px solid #7bd28d";
   toast.style.borderLeft =
-    tone === "warn" ? "4px solid #f0b429" : "4px solid #59a96a";
-  toast.style.borderRadius = "8px";
-  toast.style.boxShadow = "0 8px 28px rgba(0, 0, 0, 0.35)";
-  toast.style.color = tone === "warn" ? "#f0b429" : "#d4f0dc";
-  toast.style.font = "600 13px Segoe UI, system-ui, sans-serif";
+    tone === "warn" ? "8px solid #f0b429" : "8px solid #35b45a";
+  toast.style.borderRadius = "10px";
+  toast.style.boxShadow = "0 18px 48px rgba(0, 0, 0, 0.55)";
+  toast.style.color = tone === "warn" ? "#f8d98a" : "#07100a";
+  toast.style.font = "750 15px Segoe UI, system-ui, sans-serif";
   toast.style.lineHeight = "1.35";
-  toast.style.padding = "10px 12px";
+  toast.style.padding = "14px 16px";
   container.appendChild(toast);
-  setTimeout(() => toast.remove(), tone === "warn" ? 7000 : 4200);
+  setTimeout(() => toast.remove(), tone === "warn" ? 9000 : 6000);
 }
 
 function setStatus(message, tone = "info") {
@@ -45,8 +49,17 @@ function setStatus(message, tone = "info") {
     return;
   }
 
+  if (statusHideTimer) {
+    clearTimeout(statusHideTimer);
+  }
   element.className = `status ${tone}`;
   element.textContent = message;
+  statusHideTimer = setTimeout(
+    () => {
+      element.classList.add("status-hidden");
+    },
+    tone === "warn" ? 9000 : 6000,
+  );
 }
 
 function setInputValue(id, value) {
@@ -80,12 +93,23 @@ const WORK_EXPERIENCE_FIELDS = [
 const EDUCATION_FIELDS = [
   ["school", "School or university", "text"],
   ["degree", "Degree", "text"],
+  ["degreeLevel", "Degree level", "select"],
   ["fieldOfStudy", "Field of study", "text"],
   ["startMonth", "Start month", "text"],
   ["startYear", "Start year", "number"],
   ["endMonth", "End month", "text"],
   ["endYear", "End year", "number"],
-  ["overallResult", "Overall result", "text"],
+  ["overallResult", "GPA", "text"],
+];
+
+const DEGREE_LEVEL_OPTIONS = [
+  "",
+  "High School Diploma",
+  "Associates",
+  "Diploma",
+  "Bachelors",
+  "Masters",
+  "Doctorate",
 ];
 
 function splitListText(value) {
@@ -125,6 +149,7 @@ function emptyEducationEntry() {
   return {
     school: "",
     degree: "",
+    degreeLevel: "",
     fieldOfStudy: "",
     startMonth: "",
     startYear: "",
@@ -149,12 +174,21 @@ function entryMeta(entry) {
 function createEntryInput(kind, index, field, label, type, value) {
   const wrapper = document.createElement("label");
   wrapper.textContent = label;
-  const input = document.createElement("input");
+  const input = document.createElement(type === "select" ? "select" : "input");
   input.dataset.entryKind = kind;
   input.dataset.entryIndex = String(index);
   input.dataset.entryField = field;
   input.name = `${kind}-${index}-${field}`;
-  input.type = type;
+  if (type === "select") {
+    DEGREE_LEVEL_OPTIONS.forEach((optionValue) => {
+      const option = document.createElement("option");
+      option.value = optionValue;
+      option.textContent = optionValue || "Select degree level";
+      input.appendChild(option);
+    });
+  } else {
+    input.type = type;
+  }
   input.value = value || "";
   wrapper.appendChild(input);
   return wrapper;
@@ -297,8 +331,13 @@ function readProfileForm() {
   return {
     fullName: document.getElementById("profile-full-name")?.value,
     email: document.getElementById("profile-email")?.value,
+    accountEmail: document.getElementById("profile-account-email")?.value,
+    accountPassword: document.getElementById("profile-account-password")?.value,
     phone: document.getElementById("profile-phone")?.value,
     location: document.getElementById("profile-location")?.value,
+    addressLine1: document.getElementById("profile-address-line-1")?.value,
+    addressLine2: document.getElementById("profile-address-line-2")?.value,
+    postalCode: document.getElementById("profile-postal-code")?.value,
     linkedinUrl: document.getElementById("profile-linkedin-url")?.value,
     githubUrl: document.getElementById("profile-github-url")?.value,
     websiteUrl: document.getElementById("profile-website-url")?.value,
@@ -313,6 +352,34 @@ function readProfileForm() {
     availableInterviewWindow: document.getElementById(
       "profile-available-interview-window",
     )?.value,
+    canadianCitizenOrPermanentResident: document.getElementById(
+      "profile-canadian-citizen-pr",
+    )?.value,
+    sinStartsWithNine: document.getElementById("profile-sin-starts-with-nine")
+      ?.value,
+    sinExpiryDate: document.getElementById("profile-sin-expiry-date")?.value,
+    interestedTemporaryShortContract: document.getElementById(
+      "profile-temporary-short-contract",
+    )?.value,
+    disclosureGender: document.getElementById("profile-disclosure-gender")
+      ?.value,
+    disclosureTransExperience: document.getElementById(
+      "profile-disclosure-trans-experience",
+    )?.value,
+    disclosureLgbqIdentity: document.getElementById("profile-disclosure-lgbq")
+      ?.value,
+    disclosureDisability: document.getElementById(
+      "profile-disclosure-disability",
+    )?.value,
+    disclosureIndigenousIdentity: document.getElementById(
+      "profile-disclosure-indigenous",
+    )?.value,
+    disclosureVisibleMinority: document.getElementById(
+      "profile-disclosure-visible-minority",
+    )?.value,
+    disclosureVeteranStatus: document.getElementById(
+      "profile-disclosure-veteran",
+    )?.value,
     previousEmployers: document.getElementById("profile-previous-employers")
       ?.value,
     skills: splitListText(document.getElementById("profile-skills")?.value),
@@ -322,8 +389,13 @@ function readProfileForm() {
 function writeProfileFields(profile) {
   setInputValue("profile-full-name", profile.fullName);
   setInputValue("profile-email", profile.email);
+  setInputValue("profile-account-email", profile.accountEmail);
+  setInputValue("profile-account-password", profile.accountPassword);
   setInputValue("profile-phone", profile.phone);
   setInputValue("profile-location", profile.location);
+  setInputValue("profile-address-line-1", profile.addressLine1);
+  setInputValue("profile-address-line-2", profile.addressLine2);
+  setInputValue("profile-postal-code", profile.postalCode);
   setInputValue("profile-linkedin-url", profile.linkedinUrl);
   setInputValue("profile-github-url", profile.githubUrl);
   setInputValue("profile-website-url", profile.websiteUrl);
@@ -337,6 +409,32 @@ function writeProfileFields(profile) {
     "profile-available-interview-window",
     profile.availableInterviewWindow,
   );
+  setInputValue(
+    "profile-canadian-citizen-pr",
+    profile.canadianCitizenOrPermanentResident,
+  );
+  setInputValue("profile-sin-starts-with-nine", profile.sinStartsWithNine);
+  setInputValue("profile-sin-expiry-date", profile.sinExpiryDate);
+  setInputValue(
+    "profile-temporary-short-contract",
+    profile.interestedTemporaryShortContract || "yes",
+  );
+  setInputValue("profile-disclosure-gender", profile.disclosureGender);
+  setInputValue(
+    "profile-disclosure-trans-experience",
+    profile.disclosureTransExperience,
+  );
+  setInputValue("profile-disclosure-lgbq", profile.disclosureLgbqIdentity);
+  setInputValue("profile-disclosure-disability", profile.disclosureDisability);
+  setInputValue(
+    "profile-disclosure-indigenous",
+    profile.disclosureIndigenousIdentity,
+  );
+  setInputValue(
+    "profile-disclosure-visible-minority",
+    profile.disclosureVisibleMinority,
+  );
+  setInputValue("profile-disclosure-veteran", profile.disclosureVeteranStatus);
   setInputValue("profile-previous-employers", profile.previousEmployers);
   setInputValue("profile-skills", formatListText(profile.skills));
   workExperienceEntries = Array.isArray(profile.workExperience)
@@ -817,12 +915,11 @@ document
     try {
       const file = document.getElementById("profile-tex-file")?.files?.[0];
       if (!file) {
-        setStatus("Choose a TeX resume first.", "warn");
+        setStatus("Choose a TeX or PDF resume first.", "warn");
         return;
       }
 
-      const tex = await readFileAsText(file);
-      const parsedProfile = parseResumeTex(tex);
+      const parsedProfile = await parseResumeFile(file);
       const currentProfile = readFullProfileForm();
       const nextProfile = {
         ...currentProfile,
@@ -837,9 +934,12 @@ document
           type: "hunt.apply.log_activity",
           payload: {
             action: "profile.import_tex",
-            summary: `Imported profile fields from ${file.name}.`,
+            summary: `Imported profile, experience, education, and skills from ${file.name}.`,
             details: {
               fileName: file.name,
+              workExperienceCount: nextProfile.workExperience?.length || 0,
+              educationCount: nextProfile.education?.length || 0,
+              skillsCount: nextProfile.skills?.length || 0,
               missingFields,
             },
           },
@@ -847,16 +947,18 @@ document
         await loadState();
       }
 
-      setStatus(
-        response?.ok
-          ? missingFields.length
-            ? `Imported profile from ${file.name}. Please fill: ${missingFields.join(", ")}.`
-            : `Imported and saved profile from ${file.name}.`
-          : response?.message || "Failed to save imported profile.",
-        response?.ok ? "info" : "warn",
-      );
+      const message = response?.ok
+        ? missingFields.length
+          ? `Imported profile, experience, education, and skills from ${file.name}. Please fill: ${missingFields.join(", ")}.`
+          : `Imported and saved profile, experience, education, and skills from ${file.name}.`
+        : response?.message || "Failed to save imported profile.";
+      const tone = response?.ok ? "info" : "warn";
+      setStatus(message, tone);
+      showToast(message, tone);
     } catch (error) {
-      setStatus(error instanceof Error ? error.message : String(error), "warn");
+      const message = error instanceof Error ? error.message : String(error);
+      setStatus(message, "warn");
+      showToast(message, "warn");
     }
   });
 

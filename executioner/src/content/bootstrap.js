@@ -6,6 +6,17 @@
   const LLM_PROMPT_ID = "hunt-apply-llm-fill-prompt";
   const FILL_PROGRESS_ID = "hunt-apply-fill-progress";
   const TOAST_CONTAINER_ID = "hunt-apply-page-toasts";
+  const PROMPT_SUPPRESS_AFTER_FILL_MS = 45000;
+  const PROMPT_AUTO_DISMISS_MS = 10000;
+  let lastPromptSignature = "";
+  const dismissedPromptSignatures = new Set();
+  let promptCheckTimer = null;
+  let promptAutoDismissTimer = null;
+  let cachedStateResponse = null;
+  let lastFillCompletedAt = 0;
+  let lastFillCompletedUrl = "";
+  let lastFillCompletedStep = "";
+  let lastPageContextKey = "";
   const ATS_HOST_PATTERNS = [
     "workday.com",
     "myworkdayjobs.com",
@@ -130,6 +141,10 @@
   }
 
   function removePrompt() {
+    if (promptAutoDismissTimer) {
+      clearTimeout(promptAutoDismissTimer);
+      promptAutoDismissTimer = null;
+    }
     document.getElementById(PROMPT_ID)?.remove();
   }
 
@@ -142,17 +157,45 @@
   }
 
   function hideFillProgress() {
-    document.getElementById(FILL_PROGRESS_ID)?.remove();
+    const existing = document.getElementById(FILL_PROGRESS_ID);
+    if (existing) {
+      logPageUiEvent("ui.fill_progress.hide", "Hid fill progress indicator.");
+      existing.remove();
+    }
+  }
+
+  function logPageUiEvent(action, summary, details = {}, status = "ok") {
+    chrome.runtime
+      .sendMessage({
+        type: "hunt.apply.log_activity",
+        payload: {
+          action,
+          summary,
+          status,
+          details: {
+            url: window.location.href,
+            title: document.title,
+            ...details,
+          },
+        },
+      })
+      .catch(() => {});
   }
 
   function dismissTransientUi() {
+    logPageUiEvent("ui.transient.dismiss", "Dismissed transient page UI.", {
+      hadDetectedPrompt: Boolean(document.getElementById(PROMPT_ID)),
+      hadLlmPrompt: Boolean(document.getElementById(LLM_PROMPT_ID)),
+      hadToasts: Boolean(document.getElementById(TOAST_CONTAINER_ID)),
+      hadFillProgress: Boolean(document.getElementById(FILL_PROGRESS_ID)),
+    });
     removePrompt();
     removeLlmPrompt();
     removeToasts();
     hideFillProgress();
   }
 
-  function showFillProgress({ message } = {}) {
+  function showFillProgress({ message, fillRunId } = {}) {
     var existing = document.getElementById(FILL_PROGRESS_ID);
     if (existing?.shadowRoot) {
       var existingText = existing.shadowRoot.getElementById(
@@ -160,9 +203,15 @@
       );
       if (existingText) {
         existingText.textContent = message || "Filling page";
+        logPageUiEvent(
+          "ui.fill_progress.update",
+          "Updated fill progress indicator.",
+          { message: message || "Filling page" },
+        );
       }
       return;
     }
+    fillRunId = fillRunId || "";
     const host = document.createElement("div");
     host.id = FILL_PROGRESS_ID;
     host.style.position = "fixed";
@@ -216,6 +265,21 @@
           font-weight: 600;
           line-height: 1.25;
         }
+        .cancel {
+          background: #2d2410;
+          border: 1px solid #f0b429;
+          border-radius: 6px;
+          color: #f8d98a;
+          cursor: pointer;
+          flex: 0 0 auto;
+          font: 750 12px Segoe UI, system-ui, sans-serif;
+          min-height: 28px;
+          padding: 5px 9px;
+        }
+        .cancel:disabled {
+          cursor: default;
+          opacity: 0.72;
+        }
       </style>
       <div class="panel" role="status" aria-live="polite">
         <div id="hunt-apply-fill-progress-spinner" aria-hidden="true"></div>
@@ -223,9 +287,48 @@
           <div class="title" id="hunt-apply-fill-progress-message">${message || "Filling page"}</div>
           <div class="meta">Hunt is working through the visible fields.</div>
         </div>
+        <button class="cancel" id="hunt-apply-fill-progress-cancel" type="button">Cancel</button>
       </div>
     `;
     document.documentElement.appendChild(host);
+    host.shadowRoot
+      .getElementById("hunt-apply-fill-progress-cancel")
+      ?.addEventListener("click", () => {
+        window.__huntApplyCancelAllFills = true;
+        if (fillRunId) {
+          window.__huntApplyCancelFillRunId = fillRunId;
+        }
+        const button = host.shadowRoot.getElementById(
+          "hunt-apply-fill-progress-cancel",
+        );
+        const text = host.shadowRoot.getElementById(
+          "hunt-apply-fill-progress-message",
+        );
+        if (button) {
+          button.disabled = true;
+          button.textContent = "Canceling";
+        }
+        if (text) {
+          text.textContent = "Canceling fill";
+        }
+        logPageUiEvent(
+          "ui.fill_progress.cancel_click",
+          "Cancel fill clicked.",
+          {
+            fillRunId,
+          },
+        );
+        chrome.runtime
+          .sendMessage({
+            type: "hunt.apply.cancel_fill",
+            payload: { fillRunId },
+          })
+          .catch(() => {});
+      });
+    logPageUiEvent("ui.fill_progress.show", "Showed fill progress indicator.", {
+      message: message || "Filling page",
+      fillRunId,
+    });
   }
 
   function showExtensionToast(message, tone) {
@@ -257,6 +360,10 @@
     toast.style.lineHeight = "1.35";
     toast.style.padding = "10px 12px";
     container.appendChild(toast);
+    logPageUiEvent("ui.toast.show", "Showed page toast.", {
+      message,
+      tone: tone || "info",
+    });
     setTimeout(
       function () {
         toast.remove();
@@ -340,28 +447,63 @@
     `;
     host.shadowRoot.getElementById("dismiss").addEventListener("click", () => {
       dismissedPromptSignatures.add(promptSignature({ kind, inputCount }));
+      logPageUiEvent(
+        "ui.detect_prompt.dismiss",
+        "Dismissed detected-page prompt.",
+        {
+          kind,
+          inputCount,
+        },
+      );
       removePrompt();
     });
     host.shadowRoot
       .getElementById("fill")
       .addEventListener("click", async () => {
+        if (promptAutoDismissTimer) {
+          clearTimeout(promptAutoDismissTimer);
+          promptAutoDismissTimer = null;
+        }
         const button = host.shadowRoot.getElementById("fill");
         button.textContent = "Filling...";
         button.disabled = true;
         removeToasts();
+        logPageUiEvent(
+          "ui.detect_prompt.fill_click",
+          "Clicked detected-page fill.",
+          {
+            kind,
+            inputCount,
+          },
+        );
         const response = await chrome.runtime.sendMessage({
           type: "hunt.apply.fill_current_page",
           payload: { pageKind: kind, triggeredBy: "detected_page_prompt" },
         });
         button.textContent = response?.ok ? "Filled" : "Needs review";
-        showExtensionToast(
-          response?.message ||
-            (response?.ok ? "Fill completed." : "Fill needs review."),
-          response?.ok ? "info" : "warn",
-        );
         setTimeout(removePrompt, 1400);
       });
     document.documentElement.appendChild(host);
+    promptAutoDismissTimer = setTimeout(() => {
+      if (!host.isConnected) {
+        return;
+      }
+      logPageUiEvent(
+        "ui.detect_prompt.auto_dismiss",
+        "Auto-dismissed detected-page prompt.",
+        {
+          kind,
+          inputCount,
+          timeoutMs: PROMPT_AUTO_DISMISS_MS,
+        },
+      );
+      removePrompt();
+    }, PROMPT_AUTO_DISMISS_MS);
+    logPageUiEvent("ui.detect_prompt.show", "Showed detected-page prompt.", {
+      kind,
+      inputCount,
+      step: currentStepText(),
+    });
   }
 
   function showLlmPrompt({ fieldCount, filledFieldCount }) {
@@ -435,28 +577,35 @@
         </div>
       </div>
     `;
-    host.shadowRoot
-      .getElementById("dismiss")
-      .addEventListener("click", removeLlmPrompt);
+    host.shadowRoot.getElementById("dismiss").addEventListener("click", () => {
+      logPageUiEvent("ui.llm_prompt.dismiss", "Dismissed LLM prompt.", {
+        fieldCount: Number(fieldCount || 0),
+        filledFieldCount: Number(filledFieldCount || 0),
+      });
+      removeLlmPrompt();
+    });
     host.shadowRoot
       .getElementById("use-llm")
       .addEventListener("click", async () => {
         const button = host.shadowRoot.getElementById("use-llm");
         button.textContent = "Thinking...";
         button.disabled = true;
+        logPageUiEvent("ui.llm_prompt.use_click", "Clicked LLM prompt.", {
+          fieldCount: Number(fieldCount || 0),
+          filledFieldCount: Number(filledFieldCount || 0),
+        });
         const response = await chrome.runtime.sendMessage({
           type: "hunt.apply.fill_remaining_with_llm",
           payload: { triggeredBy: "llm_prompt" },
         });
         button.textContent = response?.ok ? "Filled" : "Needs review";
-        showExtensionToast(
-          response?.message ||
-            (response?.ok ? "LLM fill completed." : "LLM fill needs review."),
-          response?.ok ? "info" : "warn",
-        );
         setTimeout(removeLlmPrompt, 1400);
       });
     document.documentElement.appendChild(host);
+    logPageUiEvent("ui.llm_prompt.show", "Showed LLM prompt.", {
+      fieldCount: Number(fieldCount || 0),
+      filledFieldCount: Number(filledFieldCount || 0),
+    });
   }
 
   chrome.runtime.onMessage.addListener((message) => {
@@ -472,10 +621,25 @@
     if (message?.type === "hunt.apply.show_fill_progress") {
       showFillProgress({
         message: message.message || "Filling page",
+        fillRunId: message.fillRunId || "",
       });
     }
     if (message?.type === "hunt.apply.hide_fill_progress") {
       hideFillProgress();
+    }
+    if (message?.type === "hunt.apply.note_fill_completed") {
+      lastFillCompletedAt = Date.now();
+      lastFillCompletedUrl = window.location.href;
+      lastFillCompletedStep = currentStepText();
+      logPageUiEvent(
+        "ui.fill_completed_note.receive",
+        "Started post-fill prompt cooldown.",
+        {
+          trigger: message.triggeredBy || "",
+          cooldownMs: PROMPT_SUPPRESS_AFTER_FILL_MS,
+          step: lastFillCompletedStep,
+        },
+      );
     }
     if (message?.type === "hunt.apply.show_llm_prompt") {
       showLlmPrompt({
@@ -488,10 +652,7 @@
   const stateResponse = await chrome.runtime.sendMessage({
     type: "hunt.apply.get_state",
   });
-  let lastPromptSignature = "";
-  const dismissedPromptSignatures = new Set();
-  let promptCheckTimer = null;
-  let cachedStateResponse = stateResponse;
+  cachedStateResponse = stateResponse;
 
   function currentStepText() {
     const text = document.body?.innerText || "";
@@ -508,16 +669,63 @@
     ].join("|");
   }
 
+  function pageContextKey() {
+    return [window.location.href, currentStepText()].join("|");
+  }
+
+  function handlePageContextChange(reason) {
+    const nextKey = pageContextKey();
+    if (!lastPageContextKey) {
+      lastPageContextKey = nextKey;
+      return false;
+    }
+    if (nextKey === lastPageContextKey) {
+      return false;
+    }
+    const previousKey = lastPageContextKey;
+    lastPageContextKey = nextKey;
+    lastPromptSignature = "";
+    if (currentStepText() !== lastFillCompletedStep) {
+      lastFillCompletedAt = 0;
+    }
+    if (
+      document.getElementById(PROMPT_ID) ||
+      document.getElementById(LLM_PROMPT_ID) ||
+      document.getElementById(TOAST_CONTAINER_ID)
+    ) {
+      logPageUiEvent(
+        "ui.transient.dismiss_on_page_change",
+        "Dismissed transient page UI after same-tab navigation.",
+        {
+          reason,
+          previousKey,
+          nextKey,
+        },
+      );
+    }
+    removePrompt();
+    removeLlmPrompt();
+    removeToasts();
+    return true;
+  }
+
   function canPrompt(response, detection) {
+    const fillCooldownActive =
+      lastFillCompletedUrl === window.location.href &&
+      lastFillCompletedStep === currentStepText() &&
+      Date.now() - lastFillCompletedAt < PROMPT_SUPPRESS_AFTER_FILL_MS;
     return (
       response?.ok &&
       response?.settings?.autoPromptEnabled &&
       response?.settings?.manualFillEnabled &&
+      detection.inputCount > 0 &&
+      !fillCooldownActive &&
       ["ats", "signup", "application"].includes(detection.kind)
     );
   }
 
   async function maybeShowPrompt(reason) {
+    handlePageContextChange(reason);
     const detection = detectPageKind();
     if (!canPrompt(cachedStateResponse, detection)) {
       return;
@@ -550,10 +758,67 @@
   }
 
   function schedulePromptCheck(reason) {
+    handlePageContextChange(reason);
     clearTimeout(promptCheckTimer);
     promptCheckTimer = setTimeout(() => {
       maybeShowPrompt(reason).catch(() => {});
     }, 800);
+  }
+
+  function scheduleSettledPromptCheck(reason, delayMs) {
+    setTimeout(() => {
+      handlePageContextChange(reason);
+      maybeShowPrompt(reason).catch(() => {});
+    }, delayMs);
+  }
+
+  function installNavigationWatchers() {
+    ["pushState", "replaceState"].forEach((methodName) => {
+      const original = history[methodName];
+      if (typeof original !== "function") {
+        return;
+      }
+      history[methodName] = function (...args) {
+        const result = original.apply(this, args);
+        schedulePromptCheck(`history_${methodName}`);
+        scheduleSettledPromptCheck(`history_${methodName}_settled`, 1200);
+        return result;
+      };
+    });
+    window.addEventListener("popstate", () => {
+      schedulePromptCheck("popstate");
+      scheduleSettledPromptCheck("popstate_settled", 1200);
+    });
+    window.addEventListener("hashchange", () => {
+      schedulePromptCheck("hashchange");
+      scheduleSettledPromptCheck("hashchange_settled", 1200);
+    });
+  }
+
+  function watchPageReadinessForPrompt() {
+    if (document.readyState === "loading") {
+      document.addEventListener(
+        "DOMContentLoaded",
+        () => schedulePromptCheck("dom_content_loaded"),
+        { once: true },
+      );
+    } else {
+      schedulePromptCheck(`ready_state_${document.readyState}`);
+    }
+    document.addEventListener("readystatechange", () => {
+      if (["interactive", "complete"].includes(document.readyState)) {
+        schedulePromptCheck(`ready_state_${document.readyState}`);
+      }
+    });
+    window.addEventListener("load", () => schedulePromptCheck("window_load"), {
+      once: true,
+    });
+    window.addEventListener("pageshow", () => schedulePromptCheck("pageshow"), {
+      once: true,
+    });
+    scheduleSettledPromptCheck("post_bootstrap_soon", 1200);
+    scheduleSettledPromptCheck("post_bootstrap_late", 3000);
+    scheduleSettledPromptCheck("post_bootstrap_settled", 6000);
   }
 
   const detection = detectPageKind();
@@ -568,6 +833,8 @@
   });
 
   await maybeShowPrompt("initial_load");
+  installNavigationWatchers();
+  watchPageReadinessForPrompt();
 
   document.addEventListener(
     "click",
@@ -590,7 +857,9 @@
         .trim()
         .toLowerCase();
       if (["next", "continue", "review", "back", "previous"].includes(text)) {
+        handlePageContextChange("navigation_click");
         schedulePromptCheck("navigation_click");
+        scheduleSettledPromptCheck("navigation_click_settled", 1200);
       }
     },
     true,

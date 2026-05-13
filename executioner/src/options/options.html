@@ -189,23 +189,49 @@
       }
 
       .status {
-        border: 1px solid var(--line);
-        border-radius: var(--radius-sm);
-        font-size: 0.78rem;
-        font-weight: 500;
-        padding: 7px 9px;
+        border: 1px solid var(--line-strong);
+        border-radius: var(--radius-md);
+        box-shadow:
+          0 12px 34px rgba(0, 0, 0, 0.42),
+          inset 0 1px 0 rgba(255, 255, 255, 0.05);
+        font-size: 0.95rem;
+        font-weight: 750;
+        line-height: 1.35;
+        min-height: 48px;
+        opacity: 1;
+        padding: 13px 16px;
+        transform: translateY(0);
+        transition:
+          opacity 220ms ease-out,
+          transform 220ms ease-out,
+          min-height 220ms ease-out,
+          padding 220ms ease-out,
+          margin 220ms ease-out;
       }
 
       .status.info {
-        background: var(--panel-strong);
-        border-left: 4px solid var(--accent);
-        color: var(--muted);
+        background: #d7f8df;
+        border-color: #7bd28d;
+        border-left: 8px solid #35b45a;
+        color: #07100a;
       }
 
       .status.warn {
-        background: var(--warning-soft);
+        background: #3a2508;
         border-color: var(--warning);
+        border-left: 8px solid var(--warning);
         color: var(--warning);
+      }
+
+      .status.status-hidden {
+        margin: 0;
+        min-height: 0;
+        opacity: 0;
+        overflow: hidden;
+        padding-bottom: 0;
+        padding-top: 0;
+        pointer-events: none;
+        transform: translateY(-6px);
       }
 
       .tabbar {
@@ -715,12 +741,49 @@
               <input id="profile-email" name="email" type="email" />
             </label>
             <label>
+              Login email
+              <input
+                id="profile-account-email"
+                name="accountEmail"
+                placeholder="Uses Email if blank"
+                type="email"
+              />
+            </label>
+            <label>
+              Login password
+              <input
+                id="profile-account-password"
+                name="accountPassword"
+                type="password"
+              />
+            </label>
+            <label>
               Phone
               <input id="profile-phone" name="phone" type="text" />
             </label>
             <label>
               Location
               <input id="profile-location" name="location" type="text" />
+            </label>
+            <label>
+              Address line 1
+              <input
+                id="profile-address-line-1"
+                name="addressLine1"
+                type="text"
+              />
+            </label>
+            <label>
+              Address line 2
+              <input
+                id="profile-address-line-2"
+                name="addressLine2"
+                type="text"
+              />
+            </label>
+            <label>
+              Postal code
+              <input id="profile-postal-code" name="postalCode" type="text" />
             </label>
             <label>
               LinkedIn URL
@@ -775,6 +838,111 @@
                 <option value="yes">Yes</option>
                 <option value="no">No</option>
               </select>
+            </label>
+            <label>
+              Canadian citizen or permanent resident
+              <select
+                id="profile-canadian-citizen-pr"
+                name="canadianCitizenOrPermanentResident"
+              >
+                <option value="">Manual</option>
+                <option value="yes">Yes</option>
+                <option value="no">No</option>
+              </select>
+            </label>
+            <label>
+              SIN starts with 9
+              <select
+                id="profile-sin-starts-with-nine"
+                name="sinStartsWithNine"
+              >
+                <option value="">Manual</option>
+                <option value="yes">Yes</option>
+                <option value="no">No</option>
+              </select>
+            </label>
+            <label>
+              SIN expiry date
+              <input
+                id="profile-sin-expiry-date"
+                name="sinExpiryDate"
+                placeholder="MM/DD/YYYY"
+                type="text"
+              />
+            </label>
+            <label>
+              Temporary or short-contract work
+              <select
+                id="profile-temporary-short-contract"
+                name="interestedTemporaryShortContract"
+              >
+                <option value="yes">Yes</option>
+                <option value="no">No</option>
+                <option value="">Manual</option>
+              </select>
+            </label>
+            <label>
+              Disclosure gender
+              <input
+                id="profile-disclosure-gender"
+                name="disclosureGender"
+                placeholder="I choose not to disclose"
+                type="text"
+              />
+            </label>
+            <label>
+              Disclosure trans experience
+              <input
+                id="profile-disclosure-trans-experience"
+                name="disclosureTransExperience"
+                placeholder="I choose not to disclose"
+                type="text"
+              />
+            </label>
+            <label>
+              Disclosure LGBTQ+
+              <input
+                id="profile-disclosure-lgbq"
+                name="disclosureLgbqIdentity"
+                placeholder="I choose not to disclose"
+                type="text"
+              />
+            </label>
+            <label>
+              Disclosure disability
+              <input
+                id="profile-disclosure-disability"
+                name="disclosureDisability"
+                placeholder="I choose not to disclose"
+                type="text"
+              />
+            </label>
+            <label>
+              Disclosure Indigenous identity
+              <input
+                id="profile-disclosure-indigenous"
+                name="disclosureIndigenousIdentity"
+                placeholder="I choose not to disclose"
+                type="text"
+              />
+            </label>
+            <label>
+              Disclosure visible minority
+              <input
+                id="profile-disclosure-visible-minority"
+                name="disclosureVisibleMinority"
+                placeholder="I choose not to disclose"
+                type="text"
+              />
+            </label>
+            <label>
+              Disclosure veteran status
+              <input
+                id="profile-disclosure-veteran"
+                name="disclosureVeteranStatus"
+                placeholder="I choose not to disclose"
+                type="text"
+              />
             </label>
             <label>
               Previous employers
@@ -833,16 +1001,16 @@
           </label>
           <div class="file-row">
             <label>
-              Import profile from TeX resume
+              Import profile from TeX or PDF resume
               <input
                 id="profile-tex-file"
                 name="profileTexFile"
                 type="file"
-                accept=".tex,text/x-tex,text/plain"
+                accept=".tex,.pdf,text/x-tex,text/plain,application/pdf"
               />
             </label>
             <button id="import-profile-tex" type="button">
-              Import Profile From TeX
+              Import Profile From Resume
             </button>
           </div>
         </form>

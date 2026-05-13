@@ -25,7 +25,39 @@ import {
 
 const C4_POLL_ALARM = "hunt.apply.c4.poll";
 const C4_HEARTBEAT_ALARM = "hunt.apply.c4.heartbeat";
+const FILL_TIMEOUT_MS = 45000;
 let activeRunId = "";
+const activeFillRuns = new Map();
+
+function createFillRunId() {
+  return `fill_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
+}
+
+function isFillRunCancelled(fillRunId) {
+  return Boolean(fillRunId && activeFillRuns.get(fillRunId)?.cancelled);
+}
+
+function cancelFillRun(fillRunId) {
+  if (!fillRunId) {
+    return false;
+  }
+  const run = activeFillRuns.get(fillRunId);
+  if (!run) {
+    return false;
+  }
+  run.cancelled = true;
+  run.cancelledAt = new Date().toISOString();
+  return true;
+}
+
+function compactApplyContextForLog(context = {}) {
+  return {
+    ...context,
+    selectedResumeDataUrl: context.selectedResumeDataUrl
+      ? "[omitted:data-url]"
+      : "",
+  };
+}
 
 function withTimeout(promise, timeoutMs, fallbackFactory) {
   let timer = null;
@@ -54,7 +86,7 @@ async function sendDebugLog(eventType, payload = {}) {
     return await postDebugLog(state.settings, {
       eventType,
       extensionTime: new Date().toISOString(),
-      activeApplyContext: state.activeApplyContext,
+      activeApplyContext: compactApplyContextForLog(state.activeApplyContext),
       payload,
     });
   } catch (error) {
@@ -75,6 +107,60 @@ async function logActivity(action, summary, details = {}, status = "ok") {
   });
   await sendDebugLog("activity", { activity });
   return activity;
+}
+
+async function logUiEvent(action, summary, details = {}, status = "ok") {
+  await sendDebugLog("ui_event", {
+    action,
+    summary,
+    status,
+    details,
+  });
+}
+
+async function sendPageUiMessage({
+  tabId,
+  message,
+  action,
+  failedAction,
+  summary,
+  failedSummary,
+  skippedAction,
+  skippedSummary,
+  details = {},
+  timeoutMs = 2500,
+}) {
+  if (!tabId) {
+    await logUiEvent(
+      skippedAction || `${action}.skipped`,
+      skippedSummary || "Skipped page UI message because no tab was available.",
+      details,
+      "warn",
+    );
+    return false;
+  }
+  let sent = false;
+  let errorMessage = "";
+  try {
+    await withTimeout(
+      chrome.tabs.sendMessage(tabId, message),
+      timeoutMs,
+      () => null,
+    );
+    sent = true;
+  } catch (error) {
+    errorMessage = error instanceof Error ? error.message : String(error);
+  }
+  await logUiEvent(
+    sent ? action : failedAction || `${action}_failed`,
+    sent
+      ? summary
+      : failedSummary ||
+          `Could not ${summary.charAt(0).toLowerCase()}${summary.slice(1)}`,
+    { tabId, ...details, error: errorMessage },
+    sent ? "ok" : "warn",
+  );
+  return sent;
 }
 
 function safeFilePart(value) {
@@ -152,94 +238,113 @@ async function maybeAutoExportLogs(reason) {
 }
 
 async function showPageToast(tabId, message, tone = "info") {
-  if (!tabId) {
-    return;
-  }
-  try {
-    await withTimeout(
-      chrome.tabs.sendMessage(tabId, {
-        type: "hunt.apply.show_toast",
-        message,
-        tone,
-      }),
-      2500,
-      () => null,
-    );
-  } catch (_error) {
-    // Some pages cannot receive content-script messages.
-  }
+  await sendPageUiMessage({
+    tabId,
+    message: {
+      type: "hunt.apply.show_toast",
+      message,
+      tone,
+    },
+    action: "ui.toast.requested",
+    failedAction: "ui.toast.request_failed",
+    summary: "Requested page toast.",
+    failedSummary: "Could not request page toast.",
+    skippedAction: "ui.toast.skipped",
+    skippedSummary: "Skipped toast because no tab was available.",
+    details: { message, tone },
+  });
 }
 
-async function showFillProgress(tabId, message = "Filling page") {
-  if (!tabId) {
-    return;
-  }
-  try {
-    await withTimeout(
-      chrome.tabs.sendMessage(tabId, {
-        type: "hunt.apply.show_fill_progress",
-        message,
-      }),
-      2500,
-      () => null,
-    );
-  } catch (_error) {
-    // Some pages cannot receive content-script messages.
-  }
+async function showFillProgress(
+  tabId,
+  message = "Filling page",
+  fillRunId = "",
+) {
+  await sendPageUiMessage({
+    tabId,
+    message: {
+      type: "hunt.apply.show_fill_progress",
+      message,
+      fillRunId,
+    },
+    action: "ui.fill_progress.show_requested",
+    failedAction: "ui.fill_progress.show_request_failed",
+    summary: "Requested fill progress indicator.",
+    failedSummary: "Could not request fill progress indicator.",
+    skippedAction: "ui.fill_progress.skipped",
+    skippedSummary: "Skipped fill progress because no tab was available.",
+    details: { message, fillRunId },
+  });
 }
 
 async function hideFillProgress(tabId) {
-  if (!tabId) {
-    return;
-  }
-  try {
-    await withTimeout(
-      chrome.tabs.sendMessage(tabId, {
-        type: "hunt.apply.hide_fill_progress",
-      }),
-      2500,
-      () => null,
-    );
-  } catch (_error) {
-    // Some pages cannot receive content-script messages.
-  }
+  await sendPageUiMessage({
+    tabId,
+    message: {
+      type: "hunt.apply.hide_fill_progress",
+    },
+    action: "ui.fill_progress.hide_requested",
+    failedAction: "ui.fill_progress.hide_request_failed",
+    summary: "Requested fill progress indicator hide.",
+    failedSummary: "Could not request fill progress indicator hide.",
+    skippedAction: "ui.fill_progress.hide_skipped",
+    skippedSummary:
+      "Skipped hiding fill progress because no tab was available.",
+  });
 }
 
 async function dismissPageTransientUi(tabId) {
-  if (!tabId) {
-    return;
-  }
-  try {
-    await withTimeout(
-      chrome.tabs.sendMessage(tabId, {
-        type: "hunt.apply.dismiss_transient_ui",
-      }),
-      2500,
-      () => null,
-    );
-  } catch (_error) {
-    // Some pages cannot receive content-script messages.
-  }
+  await sendPageUiMessage({
+    tabId,
+    message: {
+      type: "hunt.apply.dismiss_transient_ui",
+    },
+    action: "ui.transient.dismiss_requested",
+    failedAction: "ui.transient.dismiss_request_failed",
+    summary: "Requested transient UI dismissal.",
+    failedSummary: "Could not dismiss transient UI.",
+    skippedAction: "ui.transient.dismiss_skipped",
+    skippedSummary:
+      "Skipped transient UI dismissal because no tab was available.",
+  });
+}
+
+async function notePageFillCompleted(tabId, payload = {}) {
+  await sendPageUiMessage({
+    tabId,
+    message: {
+      type: "hunt.apply.note_fill_completed",
+      ...payload,
+    },
+    action: "ui.fill_completed_note.requested",
+    failedAction: "ui.fill_completed_note.request_failed",
+    summary: "Requested post-fill prompt cooldown.",
+    failedSummary: "Could not request post-fill prompt cooldown.",
+    skippedAction: "ui.fill_completed_note.skipped",
+    skippedSummary:
+      "Skipped post-fill prompt cooldown because no tab was available.",
+    details: payload,
+  });
 }
 
 async function showLlmPrompt(tabId, payload = {}) {
-  if (!tabId) {
-    return;
-  }
-  let sent = false;
-  try {
-    await withTimeout(
-      chrome.tabs.sendMessage(tabId, {
-        type: "hunt.apply.show_llm_prompt",
-        ...payload,
-      }),
-      2500,
-      () => null,
-    );
-    sent = true;
-  } catch (_error) {
-    // Some pages cannot receive content-script messages.
-  }
+  const sent = await sendPageUiMessage({
+    tabId,
+    message: {
+      type: "hunt.apply.show_llm_prompt",
+      ...payload,
+    },
+    action: "ui.llm_prompt.requested",
+    failedAction: "ui.llm_prompt.request_failed",
+    summary: "Requested LLM prompt.",
+    failedSummary: "Could not request LLM prompt.",
+    skippedAction: "ui.llm_prompt.skipped",
+    skippedSummary: "Skipped LLM prompt because no tab was available.",
+    details: {
+      fieldCount: payload.fieldCount || 0,
+      filledFieldCount: payload.filledFieldCount || 0,
+    },
+  });
   await logActivity(
     sent ? "llm.prompt.show" : "llm.prompt.show_failed",
     sent
@@ -440,10 +545,79 @@ async function clearCurrentPage(tabId) {
         );
       }
 
+      const clearTrace = [];
+      const clearTraceLimit = 1000;
+      let clearTraceTruncated = false;
+
+      function elementSummary(el) {
+        if (!el?.getBoundingClientRect) {
+          return {
+            tagName: "",
+            type: "",
+            id: "",
+            name: "",
+            text: "",
+            ariaLabel: "",
+            rect: { top: 0, left: 0, width: 0, height: 0 },
+          };
+        }
+        const rect = el.getBoundingClientRect();
+        return {
+          tagName: el.tagName || "",
+          type: el.type || "",
+          id: el.id || "",
+          name: el.name || "",
+          text: normalizeText(el.innerText || el.textContent || "").slice(
+            0,
+            160,
+          ),
+          ariaLabel: normalizeText(el.getAttribute?.("aria-label") || "").slice(
+            0,
+            160,
+          ),
+          rect: {
+            top: Math.round(rect.top),
+            left: Math.round(rect.left),
+            width: Math.round(rect.width),
+            height: Math.round(rect.height),
+          },
+        };
+      }
+
+      function traceClear(action, el, detail = {}) {
+        if (clearTrace.length >= clearTraceLimit) {
+          clearTraceTruncated = true;
+          return;
+        }
+        clearTrace.push({
+          index: clearTrace.length + 1,
+          action,
+          target: elementSummary(el),
+          ...detail,
+        });
+      }
+
       function dispatch(el) {
+        scrollToClearingTarget(el);
+        traceClear("clear_dispatch", el);
         el.dispatchEvent(new Event("input", { bubbles: true }));
         el.dispatchEvent(new Event("change", { bubbles: true }));
         el.dispatchEvent(new Event("blur", { bubbles: true }));
+      }
+
+      function scrollToClearingTarget(el) {
+        if (!el || typeof el.scrollIntoView !== "function") {
+          return;
+        }
+        try {
+          el.scrollIntoView({
+            behavior: "smooth",
+            block: "center",
+            inline: "nearest",
+          });
+        } catch (_error) {
+          el.scrollIntoView();
+        }
       }
 
       function setNativeValue(el, value) {
@@ -477,6 +651,8 @@ async function clearCurrentPage(tabId) {
         if (!el || typeof el.dispatchEvent !== "function") {
           return;
         }
+        scrollToClearingTarget(el);
+        traceClear("clear_click", el);
         if (typeof el.focus === "function" && isVisibleEnabled(el)) {
           try {
             el.focus({ preventScroll: true });
@@ -527,6 +703,7 @@ async function clearCurrentPage(tabId) {
         ["selected", "selectedValue", "value"].forEach((key) => {
           if (Object.prototype.hasOwnProperty.call(el.dataset || {}, key)) {
             delete el.dataset[key];
+            traceClear("clear_dataset_value", el, { key });
             changed = true;
           }
         });
@@ -537,6 +714,7 @@ async function clearCurrentPage(tabId) {
         if (!target || typeof target.dispatchEvent !== "function") {
           return;
         }
+        traceClear("clear_key", target, { key: keyName });
         target.dispatchEvent(
           new KeyboardEvent("keydown", { key: keyName, bubbles: true }),
         );
@@ -611,9 +789,16 @@ async function clearCurrentPage(tabId) {
           document.querySelectorAll(selector).forEach((el) => targets.add(el));
         });
 
+        traceClear("dropdown_close_start", document.activeElement, {
+          openMenuCount: targets.size,
+        });
         targets.forEach((el) => {
           const beforeExpanded = el.getAttribute("aria-expanded") === "true";
           const beforeOpenClass = hasMenuOpenClass(el);
+          traceClear("dropdown_close_attempt", el, {
+            beforeExpanded,
+            beforeOpenClass,
+          });
           if (typeof el.focus === "function" && isVisibleEnabled(el)) {
             try {
               el.focus({ preventScroll: true });
@@ -652,6 +837,9 @@ async function clearCurrentPage(tabId) {
         if (document.activeElement?.blur) {
           document.activeElement.blur();
         }
+        traceClear("dropdown_close_end", document.activeElement, {
+          closedDropdowns: closed,
+        });
         return closed;
       }
 
@@ -933,6 +1121,45 @@ async function clearCurrentPage(tabId) {
         );
       }
 
+      async function selectAlternateWorkdayOptionBeforeForceClear(
+        button,
+        before,
+      ) {
+        const normalizedBefore = normalizeText(before).toLowerCase();
+        const alternate = visibleOptions().find((option) => {
+          const text = normalizeText(option.innerText || option.textContent);
+          return (
+            text &&
+            !isPlaceholderText(text) &&
+            text.toLowerCase() !== normalizedBefore &&
+            option.getAttribute("aria-disabled") !== "true" &&
+            !option.hasAttribute("disabled")
+          );
+        });
+        if (!alternate) {
+          traceClear("dropdown_select_failed", button, {
+            reason: "no_alternate_option_before_force_clear",
+            currentValue: before,
+            optionCount: visibleOptions().length,
+          });
+          return false;
+        }
+        traceClear("dropdown_select_attempt", alternate, {
+          reason: "select_alternate_before_force_clear",
+          currentValue: before,
+          optionText: normalizeText(
+            alternate.innerText || alternate.textContent || "",
+          ).slice(0, 160),
+        });
+        realisticClick(alternate);
+        if (typeof alternate.click === "function") {
+          alternate.click();
+        }
+        await sleep(160);
+        dispatch(button);
+        return true;
+      }
+
       async function clearWorkdayButtonDropdowns() {
         let clearedButtons = 0;
         const buttons = Array.from(
@@ -943,8 +1170,12 @@ async function clearCurrentPage(tabId) {
           if (isPlaceholderText(before)) {
             continue;
           }
+          traceClear("dropdown_open_attempt", button, {
+            reason: "clear_workday_button_dropdown",
+            currentValue: before,
+          });
           realisticClick(button);
-          await sleep(220);
+          await sleep(120);
           const placeholder = visibleOptions().find((option) =>
             isPlaceholderText(option.innerText || option.textContent || ""),
           );
@@ -953,20 +1184,48 @@ async function clearCurrentPage(tabId) {
             placeholder.getAttribute("aria-disabled") === "true" ||
             placeholder.hasAttribute("disabled");
           if (!placeholder || placeholderDisabled) {
+            traceClear("dropdown_select_failed", button, {
+              reason: "placeholder_not_available_for_clear",
+              currentValue: before,
+              optionCount: visibleOptions().length,
+            });
+            await selectAlternateWorkdayOptionBeforeForceClear(button, before);
             if (forceClearWorkdayButton(button)) {
+              traceClear("dropdown_force_clear", button, {
+                reason: "workday_button_force_clear",
+                currentValue: before,
+              });
               clearedButtons += 1;
             }
             keyOn(button, "Escape");
             continue;
           }
+          traceClear("dropdown_select_attempt", placeholder, {
+            reason: "select_placeholder_to_clear",
+            currentValue: before,
+            optionText: normalizeText(
+              placeholder.innerText || placeholder.textContent || "",
+            ).slice(0, 160),
+          });
           realisticClick(placeholder);
-          await sleep(220);
+          if (typeof placeholder.click === "function") {
+            placeholder.click();
+          }
+          await sleep(120);
           dispatch(button);
           keyOn(button, "Escape");
+          if (!isPlaceholderText(buttonValueText(button))) {
+            await selectAlternateWorkdayOptionBeforeForceClear(button, before);
+          }
           if (
             isPlaceholderText(buttonValueText(button)) ||
             forceClearWorkdayButton(button)
           ) {
+            traceClear("dropdown_clear_success", button, {
+              reason: "workday_button_cleared",
+              previousValue: before,
+              currentValue: buttonValueText(button),
+            });
             clearedButtons += 1;
           }
         }
@@ -1041,6 +1300,7 @@ async function clearCurrentPage(tabId) {
           if (!containerHasWorkdaySelection(container)) {
             continue;
           }
+          traceClear("multiselect_clear_start", container);
           let changed = false;
           for (const selectedItem of workdaySelectedItems(container)) {
             try {
@@ -1048,6 +1308,7 @@ async function clearCurrentPage(tabId) {
             } catch (_error) {
               selectedItem.focus?.();
             }
+            traceClear("multiselect_selected_item_clear_attempt", selectedItem);
             keyOn(selectedItem, "Delete");
             keyOn(selectedItem, "Backspace");
             changed = true;
@@ -1076,6 +1337,9 @@ async function clearCurrentPage(tabId) {
                 label.includes("press delete to clear value")
               ) {
                 if (clickClearControl(candidate)) {
+                  traceClear("multiselect_clear_control_clicked", candidate, {
+                    label,
+                  });
                   changed = true;
                 }
               }
@@ -1091,12 +1355,14 @@ async function clearCurrentPage(tabId) {
             }
             keyOn(input, "Backspace");
             keyOn(input, "Delete");
+            traceClear("multiselect_input_clear", input);
             setNativeValue(input, "");
             dispatch(input);
             changed = true;
           }
-          await sleep(180);
+          await sleep(100);
           if (changed && !containerHasWorkdaySelection(container)) {
+            traceClear("multiselect_clear_success", container);
             clearedMultiselects += 1;
           }
         }
@@ -1134,6 +1400,10 @@ async function clearCurrentPage(tabId) {
         }
         if (type === "file") {
           if (el.files?.length) {
+            traceClear("field_clear", el, {
+              fieldType: "file",
+              previousValue: String(el.files.length),
+            });
             setNativeValue(el, "");
             dispatch(el);
             cleared += 1;
@@ -1145,6 +1415,10 @@ async function clearCurrentPage(tabId) {
         }
         if (["checkbox", "radio"].includes(type)) {
           if (el.checked) {
+            traceClear("field_clear", el, {
+              fieldType: type,
+              previousValue: "checked",
+            });
             setNativeChecked(el, false);
             dispatch(el);
             cleared += 1;
@@ -1152,6 +1426,10 @@ async function clearCurrentPage(tabId) {
           return;
         }
         if (el.value) {
+          traceClear("field_clear", el, {
+            fieldType: type,
+            previousValue: el.value,
+          });
           setNativeValue(el, "");
           dispatch(el);
           cleared += 1;
@@ -1167,6 +1445,10 @@ async function clearCurrentPage(tabId) {
         .forEach((el) => {
           let changed = false;
           if (el.value) {
+            traceClear("field_clear", el, {
+              fieldType: "combobox",
+              previousValue: el.value,
+            });
             setNativeValue(el, "");
             changed = true;
           }
@@ -1190,6 +1472,9 @@ async function clearCurrentPage(tabId) {
           if (field) {
             const indicatorClicks = clickSelectClearIndicators(field);
             if (indicatorClicks > 0) {
+              traceClear("clear_indicator_clicked", field, {
+                clickCount: indicatorClicks,
+              });
               clearIndicatorClicks += indicatorClicks;
               changed = true;
             }
@@ -1222,6 +1507,7 @@ async function clearCurrentPage(tabId) {
                   (!isToggle && buttons.length > 1 && index === 0)
                 ) {
                   if (clickClearControl(button)) {
+                    traceClear("clear_indicator_clicked", button, { label });
                     clearIndicatorClicks += 1;
                   }
                   changed = true;
@@ -1233,6 +1519,10 @@ async function clearCurrentPage(tabId) {
               ),
             ).forEach((hiddenInput) => {
               if (hiddenInput.value) {
+                traceClear("field_clear", hiddenInput, {
+                  fieldType: "hidden_select_input",
+                  previousValue: hiddenInput.value,
+                });
                 setNativeValue(hiddenInput, "");
                 dispatch(hiddenInput);
                 changed = true;
@@ -1244,6 +1534,10 @@ async function clearCurrentPage(tabId) {
               ),
             ).forEach((valueEl) => {
               if ((valueEl.textContent || "").trim()) {
+                traceClear("field_clear", valueEl, {
+                  fieldType: "select_value_label",
+                  previousValue: valueEl.textContent || "",
+                });
                 valueEl.textContent = "";
                 changed = true;
               }
@@ -1273,6 +1567,7 @@ async function clearCurrentPage(tabId) {
                   label === "Ã—"
                 ) {
                   if (clickClearControl(button)) {
+                    traceClear("clear_control_clicked", button, { label });
                     clearIndicatorClicks += 1;
                   }
                   changed = true;
@@ -1322,6 +1617,7 @@ async function clearCurrentPage(tabId) {
             nearby.includes("cover letter");
           if (looksLikeRemove && looksLikeUploadedFile) {
             if (clickClearControl(el)) {
+              traceClear("file_remove_control_clicked", el, { label, nearby });
               cleared += 1;
             }
           }
@@ -1331,6 +1627,10 @@ async function clearCurrentPage(tabId) {
         .filter(isVisibleEnabled)
         .forEach((el) => {
           if (el.value) {
+            traceClear("field_clear", el, {
+              fieldType: "textarea",
+              previousValue: el.value,
+            });
             setNativeValue(el, "");
             dispatch(el);
             cleared += 1;
@@ -1343,6 +1643,12 @@ async function clearCurrentPage(tabId) {
           const hadSelection = Array.from(el.options || []).some(
             (option) => option.selected,
           );
+          if (hadSelection) {
+            traceClear("field_clear", el, {
+              fieldType: "select",
+              previousValue: el.value,
+            });
+          }
           if (el.multiple) {
             Array.from(el.options || []).forEach((option) => {
               option.selected = false;
@@ -1365,6 +1671,10 @@ async function clearCurrentPage(tabId) {
         .filter(isVisibleEnabled)
         .forEach((el) => {
           if ((el.textContent || "").trim()) {
+            traceClear("field_clear", el, {
+              fieldType: "contenteditable",
+              previousValue: el.textContent || "",
+            });
             el.textContent = "";
             dispatch(el);
             cleared += 1;
@@ -1376,7 +1686,7 @@ async function clearCurrentPage(tabId) {
       let workdayMultiselectClears = await clearWorkdayMultiselects();
       cleared += workdayMultiselectClears;
 
-      await sleep(650);
+      await sleep(250);
       const stabilizedWorkdayButtonClears = await clearWorkdayButtonDropdowns();
       const stabilizedWorkdayMultiselectClears =
         await clearWorkdayMultiselects();
@@ -1385,18 +1695,18 @@ async function clearCurrentPage(tabId) {
       cleared +=
         stabilizedWorkdayButtonClears + stabilizedWorkdayMultiselectClears;
 
-      await sleep(1000);
+      await sleep(400);
       const lateWorkdayMultiselectClears = await clearWorkdayMultiselects();
       workdayMultiselectClears += lateWorkdayMultiselectClears;
       cleared += lateWorkdayMultiselectClears;
 
-      await sleep(300);
+      await sleep(150);
       const closedDropdowns = preClosedDropdowns + closeOpenDropdowns();
-      await sleep(120);
+      await sleep(60);
       const finalClosedDropdowns = closeOpenDropdowns();
-      await sleep(80);
+      await sleep(40);
       const hiddenDropdownMenus = hideTransientDropdownMenus();
-      await sleep(80);
+      await sleep(40);
       const remainingOpenDropdowns = countOpenDropdowns();
       const remainingFilledControls =
         countRemainingFilledControls() +
@@ -1413,6 +1723,9 @@ async function clearCurrentPage(tabId) {
         clearIndicatorClicks,
         workdayButtonClears,
         workdayMultiselectClears,
+        clearTrace,
+        clearTraceLimit,
+        clearTraceTruncated,
       };
     },
   });
@@ -1456,6 +1769,12 @@ async function clearCurrentPage(tabId) {
       total + Number(result.result?.workdayMultiselectClears || 0),
     0,
   );
+  const clearTrace = results
+    .flatMap((result) => result.result?.clearTrace || [])
+    .slice(0, 1000);
+  const clearTraceTruncated =
+    clearTrace.length >= 1000 ||
+    results.some((result) => result.result?.clearTraceTruncated);
   const needsReview = remainingOpenDropdowns > 0 || remainingFilledControls > 0;
   await logActivity(
     "page.clear",
@@ -1473,10 +1792,13 @@ async function clearCurrentPage(tabId) {
       clearIndicatorClicks,
       workdayButtonClears,
       workdayMultiselectClears,
+      clearTrace,
+      clearTraceTruncated,
       frameCount: results.length,
     },
     needsReview ? "warn" : "ok",
   );
+  await hideFillProgress(tabId);
   await showPageToast(
     tabId,
     needsReview
@@ -1494,6 +1816,8 @@ async function clearCurrentPage(tabId) {
     remainingOpenDropdowns,
     remainingFilledControls,
     clearIndicatorClicks,
+    clearTrace,
+    clearTraceTruncated,
     frameCount: results.length,
     message: needsReview
       ? `Cleared ${cleared} field${cleared === 1 ? "" : "s"}, but ${remainingOpenDropdowns} dropdown${remainingOpenDropdowns === 1 ? "" : "s"} and ${remainingFilledControls} control${remainingFilledControls === 1 ? "" : "s"} may still need review.`
@@ -1725,6 +2049,229 @@ async function sendHeartbeat() {
   });
 }
 
+function fillNeedsRefreshRetry(result) {
+  const reasons = [
+    ...(result?.attempt?.manualReviewReasons || []),
+    ...(result?.result?.manualReviewReasons || []),
+  ].map((reason) => String(reason || ""));
+  return reasons.some((reason) => reason.includes("commit_not_verified"));
+}
+
+async function waitForTabReloadComplete(tabId, timeoutMs = 12000) {
+  if (!tabId) {
+    return { ok: false, reason: "missing_tab" };
+  }
+  return new Promise((resolve) => {
+    let settled = false;
+    const timer = setTimeout(() => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      chrome.tabs.onUpdated.removeListener(listener);
+      resolve({ ok: false, reason: "reload_timeout" });
+    }, timeoutMs);
+    const listener = (updatedTabId, changeInfo) => {
+      if (updatedTabId !== tabId || changeInfo.status !== "complete") {
+        return;
+      }
+      if (settled) {
+        return;
+      }
+      settled = true;
+      clearTimeout(timer);
+      chrome.tabs.onUpdated.removeListener(listener);
+      resolve({ ok: true });
+    };
+    chrome.tabs.onUpdated.addListener(listener);
+  });
+}
+
+async function markPageFillCancelled(tabId, fillRunId, cancelled = true) {
+  if (!tabId) {
+    return;
+  }
+  try {
+    await chrome.scripting.executeScript({
+      target: { tabId, allFrames: true },
+      args: [fillRunId || "", Boolean(cancelled)],
+      func: (runId, isCancelled) => {
+        window.__huntApplyCancelAllFills = isCancelled;
+        if (runId && isCancelled) {
+          window.__huntApplyCancelFillRunId = runId;
+        } else if (!isCancelled) {
+          window.__huntApplyCancelFillRunId = "";
+        }
+      },
+    });
+  } catch {
+    // The active page may have navigated or may not allow script injection.
+  }
+}
+
+function fillCancelledResponse(state, reason = "user_cancelled") {
+  return {
+    ok: false,
+    reason,
+    message: "Fill canceled.",
+    route: {
+      routeName: "cancelled",
+      fillSource: state.activeApplyContext.sourceMode || "manual",
+      strategy: "cancelled",
+      adapterName: "",
+      requestedAtsType: state.activeApplyContext.atsType || "",
+      detectedAtsType: "",
+      usedGenericFallback: false,
+      adapterBackedByGeneric: false,
+    },
+    attempt: {
+      applyUrl: state.activeApplyContext.applyUrl,
+      atsType: state.activeApplyContext.atsType,
+      filledFieldCount: 0,
+      manualReviewRequired: true,
+      manualReviewReasons: [reason],
+    },
+    result: {
+      ok: false,
+      pendingLlmFieldCount: 0,
+      manualReviewReasons: [reason],
+      filledFieldCount: 0,
+      filledFields: [],
+      fieldInventory: [],
+      generatedAnswers: [],
+    },
+    generatedAnswers: [],
+    cancelled: true,
+  };
+}
+
+async function runFillWithOneRefreshRetry(
+  tabId,
+  state,
+  triggeredBy,
+  fillRunId,
+) {
+  let result = await withTimeout(
+    runFillForTab(tabId, state, {
+      fillRunId,
+      isCancelled: () => isFillRunCancelled(fillRunId),
+    }),
+    FILL_TIMEOUT_MS,
+    () => ({
+      ok: false,
+      message: "Fill timed out before the page responded.",
+      route: {
+        routeName: "timeout",
+        fillSource: state.activeApplyContext.sourceMode || "manual",
+        strategy: "timeout",
+        adapterName: "",
+        requestedAtsType: state.activeApplyContext.atsType || "",
+        detectedAtsType: "",
+        usedGenericFallback: false,
+        adapterBackedByGeneric: false,
+      },
+      attempt: {
+        applyUrl: state.activeApplyContext.applyUrl,
+        atsType: state.activeApplyContext.atsType,
+        filledFieldCount: 0,
+        manualReviewRequired: true,
+        manualReviewReasons: ["fill_timeout"],
+      },
+      result: {
+        pendingLlmFieldCount: 0,
+        manualReviewReasons: ["fill_timeout"],
+      },
+      generatedAnswers: [],
+    }),
+  );
+  if (isFillRunCancelled(fillRunId)) {
+    return fillCancelledResponse(state);
+  }
+  if (!fillNeedsRefreshRetry(result)) {
+    return result;
+  }
+  await logActivity(
+    "fill.refresh_retry",
+    "Refreshing page once before retrying fill after commit verification failure.",
+    {
+      tabId,
+      triggeredBy: triggeredBy || "",
+      manualReviewReasons:
+        result.attempt?.manualReviewReasons ||
+        result.result?.manualReviewReasons ||
+        [],
+      maxRefreshRetries: 1,
+    },
+    "warn",
+  );
+  await showFillProgress(tabId, "Refreshing page before retry", fillRunId);
+  if (isFillRunCancelled(fillRunId)) {
+    return fillCancelledResponse(state);
+  }
+  await chrome.tabs.reload(tabId);
+  const reloadResult = await waitForTabReloadComplete(tabId);
+  if (!reloadResult.ok) {
+    result.refreshRetry = {
+      attempted: true,
+      ok: false,
+      reason: reloadResult.reason || "reload_failed",
+      maxRefreshRetries: 1,
+    };
+    return result;
+  }
+  await new Promise((resolve) => setTimeout(resolve, 1200));
+  await dismissPageTransientUi(tabId);
+  await showFillProgress(tabId, "Retrying fill after refresh", fillRunId);
+  const retryResult = await withTimeout(
+    runFillForTab(tabId, state, {
+      fillRunId,
+      isCancelled: () => isFillRunCancelled(fillRunId),
+    }),
+    FILL_TIMEOUT_MS,
+    () => ({
+      ok: false,
+      message: "Fill retry timed out after page refresh.",
+      route: {
+        routeName: "timeout",
+        fillSource: state.activeApplyContext.sourceMode || "manual",
+        strategy: "timeout",
+        adapterName: "",
+        requestedAtsType: state.activeApplyContext.atsType || "",
+        detectedAtsType: "",
+        usedGenericFallback: false,
+        adapterBackedByGeneric: false,
+      },
+      attempt: {
+        applyUrl: state.activeApplyContext.applyUrl,
+        atsType: state.activeApplyContext.atsType,
+        filledFieldCount: 0,
+        manualReviewRequired: true,
+        manualReviewReasons: ["fill_retry_timeout"],
+      },
+      result: {
+        pendingLlmFieldCount: 0,
+        manualReviewReasons: ["fill_retry_timeout"],
+      },
+      generatedAnswers: [],
+    }),
+  );
+  if (isFillRunCancelled(fillRunId)) {
+    return fillCancelledResponse(state);
+  }
+  retryResult.refreshRetry = {
+    attempted: true,
+    ok: true,
+    reason: "commit_not_verified",
+    maxRefreshRetries: 1,
+    previousMessage: result.message || "",
+    previousManualReviewReasons:
+      result.attempt?.manualReviewReasons ||
+      result.result?.manualReviewReasons ||
+      [],
+  };
+  return retryResult;
+}
+
 async function handleMessage(message, sender = {}) {
   switch (message?.type) {
     case "hunt.apply.ping":
@@ -1732,6 +2279,23 @@ async function handleMessage(message, sender = {}) {
 
     case "hunt.apply.get_state":
       return { ok: true, ...(await getExtensionState()) };
+
+    case "hunt.apply.cancel_fill": {
+      const fillRunId = message.payload?.fillRunId || "";
+      const tabId = message.payload?.tabId || sender.tab?.id;
+      const cancelled = cancelFillRun(fillRunId);
+      await markPageFillCancelled(tabId, fillRunId);
+      await logActivity(
+        cancelled ? "fill.cancel_requested" : "fill.cancel_missing",
+        cancelled
+          ? "Requested cancellation for the current fill."
+          : "Tried to cancel fill, but no active fill run matched.",
+        { fillRunId, tabId },
+        cancelled ? "warn" : "blocked",
+      );
+      await showFillProgress(tabId, "Canceling fill", fillRunId);
+      return { ok: cancelled, cancelled, fillRunId };
+    }
 
     case "hunt.apply.save_settings": {
       const settings = await saveSettings(message.payload || {});
@@ -1813,38 +2377,32 @@ async function handleMessage(message, sender = {}) {
         };
       }
       let result;
+      const fillRunId = createFillRunId();
+      activeFillRuns.set(fillRunId, {
+        tabId,
+        triggeredBy: message.payload?.triggeredBy || "fill_current_page",
+        startedAt: new Date().toISOString(),
+        cancelled: false,
+      });
       await dismissPageTransientUi(tabId);
-      await showFillProgress(tabId, "Filling page");
+      await markPageFillCancelled(tabId, fillRunId, false);
+      await showFillProgress(tabId, "Filling page", fillRunId);
       try {
-        result = await withTimeout(runFillForTab(tabId, state), 45000, () => ({
-          ok: false,
-          message: "Fill timed out before the page responded.",
-          route: {
-            routeName: "timeout",
-            fillSource: state.activeApplyContext.sourceMode || "manual",
-            strategy: "timeout",
-            adapterName: "",
-            requestedAtsType: state.activeApplyContext.atsType || "",
-            detectedAtsType: "",
-            usedGenericFallback: false,
-            adapterBackedByGeneric: false,
-          },
-          attempt: {
-            applyUrl: state.activeApplyContext.applyUrl,
-            atsType: state.activeApplyContext.atsType,
-            filledFieldCount: 0,
-            manualReviewRequired: true,
-            manualReviewReasons: ["fill_timeout"],
-          },
-          result: {
-            pendingLlmFieldCount: 0,
-            manualReviewReasons: ["fill_timeout"],
-          },
-          generatedAnswers: [],
-        }));
+        result = await runFillWithOneRefreshRetry(
+          tabId,
+          state,
+          message.payload?.triggeredBy || "fill_current_page",
+          fillRunId,
+        );
       } finally {
+        activeFillRuns.delete(fillRunId);
         await hideFillProgress(tabId);
       }
+      await notePageFillCompleted(tabId, {
+        triggeredBy: message.payload?.triggeredBy || "fill_current_page",
+        ok: Boolean(result?.ok),
+        filledFieldCount: Number(result?.attempt?.filledFieldCount || 0),
+      });
       await sendDebugLog("fill_result", {
         ok: result.ok,
         message: result.message,
@@ -1852,11 +2410,17 @@ async function handleMessage(message, sender = {}) {
         attempt: result.attempt,
         result: result.result,
         generatedAnswers: result.generatedAnswers,
+        refreshRetry: result.refreshRetry || null,
       });
       await logActivity(
-        result.ok ? "fill.complete" : "fill.failed",
+        result.cancelled
+          ? "fill.cancelled"
+          : result.ok
+            ? "fill.complete"
+            : "fill.failed",
         result.message || (result.ok ? "Fill completed." : "Fill failed."),
         {
+          fillRunId,
           jobId: state.activeApplyContext.jobId,
           applyUrl:
             result.attempt?.applyUrl || state.activeApplyContext.applyUrl,
@@ -1871,6 +2435,7 @@ async function handleMessage(message, sender = {}) {
             0,
             80,
           ),
+          refreshRetry: result.refreshRetry || null,
           manualReviewRequired: result.attempt?.manualReviewRequired,
         },
         result.ok ? "ok" : "failed",
@@ -1892,15 +2457,18 @@ async function handleMessage(message, sender = {}) {
         : { exported: false, reason: "disabled" };
       await showPageToast(
         tabId,
-        missingResume
-          ? "No default resume is saved. Open Hunt Apply Options and save a PDF resume."
-          : filledNothing
-            ? "No fields were filled. Hunt logged the detected fields for review."
-            : exportResult.exported
-              ? `${result.message || (result.ok ? "Fill completed." : "Fill failed.")} Logs exported to ${exportResult.filename}.`
-              : result.message ||
-                (result.ok ? "Fill completed." : "Fill failed."),
-        missingResume ||
+        result.cancelled
+          ? "Fill canceled."
+          : missingResume
+            ? "No default resume is saved. Open Hunt Apply Options and save a PDF resume."
+            : filledNothing
+              ? "No fields were filled. Hunt logged the detected fields for review."
+              : exportResult.exported
+                ? `${result.message || (result.ok ? "Fill completed." : "Fill failed.")} Logs exported to ${exportResult.filename}.`
+                : result.message ||
+                  (result.ok ? "Fill completed." : "Fill failed."),
+        result.cancelled ||
+          missingResume ||
           filledNothing ||
           !result.ok ||
           result.attempt?.manualReviewRequired
@@ -1913,12 +2481,14 @@ async function handleMessage(message, sender = {}) {
           filledFieldCount: result.result.filledFieldCount || 0,
         });
       }
-      result.nextAction = await maybeHandleSafeNextAfterFill({
-        tabId,
-        fillResponse: result,
-        settings: state.settings,
-        triggeredBy: message.payload?.triggeredBy || "fill_current_page",
-      });
+      if (!result.cancelled) {
+        result.nextAction = await maybeHandleSafeNextAfterFill({
+          tabId,
+          fillResponse: result,
+          settings: state.settings,
+          triggeredBy: message.payload?.triggeredBy || "fill_current_page",
+        });
+      }
       return result;
     }
 
@@ -1954,6 +2524,11 @@ async function handleMessage(message, sender = {}) {
           (result.ok ? "LLM fill completed." : "LLM fill failed."),
         result.ok ? "info" : "warn",
       );
+      await notePageFillCompleted(tabId, {
+        triggeredBy: message.payload?.triggeredBy || "fill_remaining_with_llm",
+        ok: Boolean(result?.ok),
+        filledFieldCount: Number(result?.attempt?.filledFieldCount || 0),
+      });
       result.nextAction = await maybeHandleSafeNextAfterFill({
         tabId,
         fillResponse: result,
@@ -1985,7 +2560,12 @@ async function handleMessage(message, sender = {}) {
     case "hunt.apply.clear_current_page": {
       const tabId = message.payload?.tabId || sender.tab?.id;
       await dismissPageTransientUi(tabId);
-      return clearCurrentPage(tabId);
+      await showFillProgress(tabId, "Clearing page");
+      try {
+        return await clearCurrentPage(tabId);
+      } finally {
+        await hideFillProgress(tabId);
+      }
     }
 
     case "hunt.apply.clear_activity_log":

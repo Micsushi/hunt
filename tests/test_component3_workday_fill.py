@@ -140,3 +140,187 @@ def test_workday_required_only_skips_optional_generated_textareas():
     assert inventory["referred-how"]["skippedReason"] == "not_required"
     assert inventory["conditional-required"]["required"] is True
     assert inventory["conditional-required"]["skippedReason"] == "unsafe_generated_answer_context"
+
+
+def test_workday_required_only_still_adds_my_experience_sections_from_aliases():
+    if sync_playwright is None:
+        pytest.skip("playwright is required for the Workday C3 fill fixture")
+
+    injected_js = _load_script(REPO_ROOT / "executioner/src/shared/injected.js")
+    fill_js = _module_to_browser_script(
+        _load_script(REPO_ROOT / "executioner/src/ats/workday/fill.js")
+    )
+
+    with sync_playwright() as playwright:
+        try:
+            browser = playwright.chromium.launch()
+        except PlaywrightError as error:
+            pytest.skip(f"playwright chromium is unavailable: {error}")
+
+        page = browser.new_page()
+        page.set_content(
+            """
+            <html>
+              <head>
+                <style>
+                  body { font-family: system-ui, sans-serif; margin: 24px; }
+                  section { border-top: 1px solid #ddd; padding: 16px 0; }
+                  input { display: block; margin: 8px 0; width: 320px; }
+                </style>
+              </head>
+              <body>
+                <h3>My Experience</h3>
+                <section id="work">
+                  <h4>Work Experience</h4>
+                  <button type="button" data-automation-id="add-button" onclick="addWork()">Add</button>
+                </section>
+                <section id="education">
+                  <h4>Education</h4>
+                  <button type="button" data-automation-id="add-button" onclick="addEducation()">Add</button>
+                </section>
+                <section id="skills">
+                  <h4>Skills</h4>
+                  <label>Type to Add Skills<input id="skill-input"></label>
+                  <div id="skill-values"></div>
+                </section>
+                <section id="websites">
+                  <h4>Websites</h4>
+                  <button type="button" data-automation-id="add-button" onclick="addWebsite()">Add</button>
+                </section>
+                <script>
+                  function addWork() {
+                    const count = document.querySelectorAll("#work input[id$='--jobTitle']").length + 1;
+                    document.querySelector("#work").insertAdjacentHTML(
+                      "beforeend",
+                      '<label>Job Title<input id="workExperience-' + count + '--jobTitle"></label>' +
+                      '<label>Company<input id="workExperience-' + count + '--companyName"></label>'
+                    );
+                    document.querySelector("#work button").textContent = "Add Another";
+                  }
+                  function addEducation() {
+                    const count = document.querySelectorAll("#education input[id$='--schoolName']").length + 1;
+                    document.querySelector("#education").insertAdjacentHTML(
+                      "beforeend",
+                      '<label>School or University<input id="education-' + count + '--schoolName"></label>' +
+                      '<label>Degree<input id="education-' + count + '--degree"></label>'
+                    );
+                  }
+                  function addWebsite() {
+                    const count = document.querySelectorAll("#websites input").length + 1;
+                    document.querySelector("#websites").insertAdjacentHTML(
+                      "beforeend",
+                      '<label>URL<input id="website-' + count + '"></label>'
+                    );
+                  }
+                  document.querySelector("#skill-input").addEventListener("keyup", (event) => {
+                    if (event.key === "Enter" && event.target.value) {
+                      document.querySelector("#skill-values").insertAdjacentHTML(
+                        "beforeend",
+                        "<span>" + event.target.value + "</span>"
+                      );
+                      event.target.value = "";
+                    }
+                  });
+                </script>
+              </body>
+            </html>
+            """
+        )
+        page.add_script_tag(content=injected_js)
+        page.add_script_tag(content=fill_js)
+
+        result = page.evaluate(
+            """
+            async () => {
+              const fill = createWorkdayFillFunction();
+              const payload = {
+                profile: {
+                  fullName: "Michael Shi",
+                  email: "wenjian2@ualberta.ca",
+                  pastJobs: [
+                    {
+                      title: "Software Developer Intern",
+                      employer: "INVIDI Technologies",
+                    },
+                    {
+                      title: "Research Assistant",
+                      employer: "University of Alberta",
+                    },
+                  ],
+                  educationHistory: [
+                    {
+                      university: "University of Alberta",
+                      credential: "Bachelor of Science",
+                    },
+                  ],
+                  skillList: ["Python"],
+                  websites: ["https://mshi.ca"],
+                },
+                settings: {
+                  stripLongDash: true,
+                  fillRequiredOnly: true,
+                  allowGeneratedAnswers: true,
+                  flagLowConfidenceAnswers: true,
+                },
+                activeApplyContext: {},
+                defaultResume: {},
+              };
+              const first = await fill(payload);
+              const second = await fill(payload);
+              return { first, second };
+            }
+            """
+        )
+        values = page.evaluate(
+            """
+            () => ({
+              workRowCount: document.querySelectorAll("#work input[id$='--jobTitle']").length,
+              educationRowCount: document.querySelectorAll("#education input[id$='--schoolName']").length,
+              jobTitle1: document.querySelector("#workExperience-1--jobTitle")?.value || "",
+              company1: document.querySelector("#workExperience-1--companyName")?.value || "",
+              jobTitle2: document.querySelector("#workExperience-2--jobTitle")?.value || "",
+              company2: document.querySelector("#workExperience-2--companyName")?.value || "",
+              addButtonText: document.querySelector("#work button")?.innerText || "",
+              school: document.querySelector("#education-1--schoolName")?.value || "",
+              degree: document.querySelector("#education-1--degree")?.value || "",
+              skills: document.querySelector("#skill-values")?.innerText || "",
+              website: document.querySelector("#website-1")?.value || "",
+              websiteRowCount: document.querySelectorAll("#websites input").length,
+            })
+            """
+        )
+        browser.close()
+
+    sections = {
+        entry["name"]: entry
+        for entry in result["first"]["fieldInventory"]
+        if entry["kind"] == "workdaySection"
+    }
+    second_sections = {
+        entry["name"]: entry
+        for entry in result["second"]["fieldInventory"]
+        if entry["kind"] == "workdaySection"
+    }
+
+    assert result["first"]["ok"] is True
+    assert result["second"]["ok"] is True
+    assert values == {
+        "workRowCount": 2,
+        "educationRowCount": 1,
+        "jobTitle1": "Software Developer Intern",
+        "company1": "INVIDI Technologies",
+        "jobTitle2": "Research Assistant",
+        "company2": "University of Alberta",
+        "addButtonText": "Add Another",
+        "school": "University of Alberta",
+        "degree": "Bachelors",
+        "skills": "Python",
+        "website": "https://mshi.ca",
+        "websiteRowCount": 1,
+    }
+    assert sections["Work Experience"]["filled"] is True
+    assert sections["Education"]["filled"] is True
+    assert sections["Skills"]["filled"] is True
+    assert sections["Websites"]["filled"] is True
+    assert second_sections["Work Experience"]["skippedReason"] == "already_filled"
+    assert second_sections["Education"]["skippedReason"] == "already_filled"

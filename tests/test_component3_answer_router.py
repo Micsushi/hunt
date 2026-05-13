@@ -45,9 +45,7 @@ def test_preference_question_defaults_to_positive_pro_hiring_answer():
 
 
 def test_referral_and_previous_company_questions_default_to_no():
-    referral = decide_answer(
-        make_request("Do you know anyone at Hootsuite?", ["Yes", "No"])
-    )
+    referral = decide_answer(make_request("Do you know anyone at Hootsuite?", ["Yes", "No"]))
     previous = decide_answer(
         make_request("Have you previously worked at Hootsuite?", ["Yes", "No"])
     )
@@ -118,4 +116,3 @@ def test_llm_option_not_on_page_fails_validation(monkeypatch):
 
     assert decision.status == "validation_failed"
     assert decision.requires_review is True
-

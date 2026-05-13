@@ -455,6 +455,82 @@
     var nameParts = fullName.split(" ").filter(Boolean);
     var firstName = nameParts[0] || "";
     var lastName = nameParts.slice(1).join(" ");
+    var accountEmail =
+      u.normalizeText(profile.accountEmail) || u.normalizeText(profile.email);
+    var accountPassword = u.normalizeText(profile.accountPassword);
+    var isUnsafePasswordField =
+      desc.includes("current password") ||
+      desc.includes("old password") ||
+      desc.includes("existing password") ||
+      desc.includes("temporary password");
+    if (
+      accountPassword &&
+      desc.includes("password") &&
+      !isUnsafePasswordField
+    ) {
+      return {
+        value: accountPassword,
+        key: "profile:accountPassword",
+      };
+    }
+    if (
+      accountEmail &&
+      (phraseInDescriptor(desc, "username") ||
+        phraseInDescriptor(desc, "user name") ||
+        phraseInDescriptor(desc, "user id") ||
+        phraseInDescriptor(desc, "login id") ||
+        phraseInDescriptor(desc, "login email") ||
+        phraseInDescriptor(desc, "account email"))
+    ) {
+      return {
+        value: accountEmail,
+        key: "profile:accountEmail",
+      };
+    }
+    if (
+      (desc.includes("addressline1") ||
+        desc.includes("address line 1") ||
+        desc.includes("street address")) &&
+      u.normalizeText(profile.addressLine1)
+    ) {
+      return {
+        value: u.normalizeText(profile.addressLine1),
+        key: "profile:addressLine1",
+      };
+    }
+    if (
+      (desc.includes("addressline2") ||
+        desc.includes("address line 2") ||
+        desc.includes("apartment") ||
+        desc.includes("suite")) &&
+      u.normalizeText(profile.addressLine2)
+    ) {
+      return {
+        value: u.normalizeText(profile.addressLine2),
+        key: "profile:addressLine2",
+      };
+    }
+    if (
+      (desc.includes("postal code") ||
+        desc.includes("postalcode") ||
+        desc.includes("zip code") ||
+        desc.includes("zip")) &&
+      u.normalizeText(profile.postalCode)
+    ) {
+      return {
+        value: u.normalizeText(profile.postalCode),
+        key: "profile:postalCode",
+      };
+    }
+    if (
+      (desc.includes("expiry date") || desc.includes("expiration date")) &&
+      u.normalizeText(profile.sinExpiryDate)
+    ) {
+      return {
+        value: u.normalizeText(profile.sinExpiryDate),
+        key: "profile:sinExpiryDate",
+      };
+    }
     var locationText = isLegalWorkQuestion
       ? ""
       : locationTextForDescriptor(desc, profile, true);
@@ -462,11 +538,41 @@
       return { value: locationText, key: "profile:location" };
     }
     var mapping = [
+      [
+        ["login email", "account email"],
+        accountEmail,
+        "profile:accountEmail",
+        5,
+      ],
       [["email", "e-mail"], profile.email, "profile:email", 10],
       [
         ["phone", "phone number", "mobile", "telephone"],
         profile.phone,
         "profile:phone",
+        10,
+      ],
+      [
+        ["address line 1", "addressline1", "street address"],
+        profile.addressLine1,
+        "profile:addressLine1",
+        10,
+      ],
+      [
+        ["address line 2", "addressline2", "apartment", "suite"],
+        profile.addressLine2,
+        "profile:addressLine2",
+        10,
+      ],
+      [
+        ["postal code", "postalcode", "zip code", "zip"],
+        profile.postalCode,
+        "profile:postalCode",
+        10,
+      ],
+      [
+        ["expiry date", "expiration date"],
+        profile.sinExpiryDate,
+        "profile:sinExpiryDate",
         10,
       ],
       [["linkedin"], profile.linkedinUrl, "profile:linkedinUrl", 10],
@@ -808,6 +914,21 @@
       }
       return null;
     };
+    var nonDisclosureChoice = function (source) {
+      return {
+        text: "I choose not to disclose",
+        source: source || "default:notDisclosed",
+        aliases: [
+          "I choose not to disclose",
+          "Choose not to disclose",
+          "Prefer not to disclose",
+          "Prefer not to answer",
+          "Do not wish to disclose",
+          "Decline to answer",
+          "Not disclosed",
+        ],
+      };
+    };
 
     if (lowered.includes("sponsor")) {
       return {
@@ -815,11 +936,74 @@
         source: "profile:sponsorshipRequired",
       };
     }
+    if (
+      lowered.includes("previously been employed") ||
+      lowered.includes("previously worked") ||
+      (lowered.includes("student at") && lowered.includes("previous"))
+    ) {
+      return {
+        text: "No",
+        source: "default:noPreviousInstitution",
+      };
+    }
+    if (
+      lowered.includes("canadian citizen") ||
+      lowered.includes("permanent resident")
+    ) {
+      return yesNoChoice(
+        profile.canadianCitizenOrPermanentResident,
+        "profile:canadianCitizenOrPermanentResident",
+      );
+    }
     if (isLegalWorkQuestion) {
       return {
         text: profile.workAuthorized ? "Yes" : "No",
         source: "profile:workAuthorized",
       };
+    }
+    if (
+      lowered.includes("social insurance number") ||
+      lowered.includes(" sin ") ||
+      lowered.includes("(sin)")
+    ) {
+      if (lowered.includes("begins with") || lowered.includes("starts with")) {
+        return yesNoChoice(
+          profile.sinStartsWithNine,
+          "profile:sinStartsWithNine",
+        );
+      }
+      var sinExpiry = u.normalizeText(profile.sinExpiryDate);
+      if (
+        sinExpiry &&
+        (lowered.includes("expiry") || lowered.includes("expiration"))
+      ) {
+        return {
+          text: sinExpiry,
+          source: "profile:sinExpiryDate",
+        };
+      }
+    }
+    if (
+      lowered.includes("expiry date") ||
+      lowered.includes("expiration date")
+    ) {
+      var expiryDate = u.normalizeText(profile.sinExpiryDate);
+      if (expiryDate) {
+        return {
+          text: expiryDate,
+          source: "profile:sinExpiryDate",
+        };
+      }
+    }
+    if (
+      lowered.includes("temporary") ||
+      lowered.includes("short-contract") ||
+      lowered.includes("short contract")
+    ) {
+      return yesNoChoice(
+        profile.interestedTemporaryShortContract || "yes",
+        "profile:interestedTemporaryShortContract",
+      );
     }
     if (lowered.includes("relocat")) {
       return {
@@ -881,6 +1065,7 @@
     if (
       !isLegalWorkQuestion &&
       lowered.includes("city") &&
+      !lowered.includes("countryregion") &&
       (lowered.includes("province") || lowered.includes("territory"))
     ) {
       var combinedLocation = u.normalizeText(profile.location, stripLongDash);
@@ -977,6 +1162,104 @@
         profile.availableInterviewWindow,
         "profile:availableInterviewWindow",
       );
+    }
+    if (lowered.includes("gender")) {
+      var disclosureGender = u.normalizeText(profile.disclosureGender);
+      if (disclosureGender) {
+        return {
+          text: disclosureGender,
+          source: "profile:disclosureGender",
+        };
+      }
+    }
+    if (lowered.includes("trans experience")) {
+      var disclosureTransExperience = u.normalizeText(
+        profile.disclosureTransExperience,
+      );
+      if (disclosureTransExperience) {
+        return {
+          text: disclosureTransExperience,
+          source: "profile:disclosureTransExperience",
+        };
+      }
+    }
+    if (
+      lowered.includes("lesbian") ||
+      lowered.includes("gay") ||
+      lowered.includes("bisexual") ||
+      lowered.includes("queer") ||
+      lowered.includes("sexual orientation")
+    ) {
+      var disclosureLgbq = u.normalizeText(profile.disclosureLgbqIdentity);
+      if (disclosureLgbq) {
+        return {
+          text: disclosureLgbq,
+          source: "profile:disclosureLgbqIdentity",
+        };
+      }
+    }
+    if (lowered.includes("disabil")) {
+      var disclosureDisability = u.normalizeText(profile.disclosureDisability);
+      if (disclosureDisability) {
+        return {
+          text: disclosureDisability,
+          source: "profile:disclosureDisability",
+        };
+      }
+    }
+    if (lowered.includes("indigenous") || lowered.includes("aboriginal")) {
+      var disclosureIndigenous = u.normalizeText(
+        profile.disclosureIndigenousIdentity,
+      );
+      if (disclosureIndigenous) {
+        return {
+          text: disclosureIndigenous,
+          source: "profile:disclosureIndigenousIdentity",
+        };
+      }
+    }
+    if (lowered.includes("visible minorit")) {
+      var disclosureVisibleMinority = u.normalizeText(
+        profile.disclosureVisibleMinority,
+      );
+      if (disclosureVisibleMinority) {
+        return {
+          text: disclosureVisibleMinority,
+          source: "profile:disclosureVisibleMinority",
+        };
+      }
+    }
+    if (lowered.includes("veteran")) {
+      var disclosureVeteran = u.normalizeText(profile.disclosureVeteranStatus);
+      if (disclosureVeteran) {
+        return {
+          text: disclosureVeteran,
+          source: "profile:disclosureVeteranStatus",
+        };
+      }
+    }
+    if (
+      lowered.includes("gender") ||
+      lowered.includes("trans experience") ||
+      lowered.includes("sexual orientation") ||
+      lowered.includes("lesbian") ||
+      lowered.includes("gay") ||
+      lowered.includes("bisexual") ||
+      lowered.includes("queer") ||
+      lowered.includes("disabil") ||
+      lowered.includes("visible minorit") ||
+      lowered.includes("racial") ||
+      lowered.includes("ethnic") ||
+      lowered.includes("indigenous") ||
+      lowered.includes("aboriginal") ||
+      lowered.includes("veteran") ||
+      lowered.includes("diversity") ||
+      lowered.includes("self-identif") ||
+      lowered.includes("designated group") ||
+      lowered.includes("not to disclose") ||
+      lowered.includes("prefer not")
+    ) {
+      return nonDisclosureChoice("default:notDisclosed");
     }
     if (lowered.includes("graduation")) {
       var graduationYear = u.normalizeText(profile.expectedGraduationYear);
@@ -1648,7 +1931,13 @@
     var lowered = descriptor.toLowerCase();
     var choice = null;
 
-    if (lowered.includes("sponsor")) {
+    var structuredChoice = chooseStructuredChoice(descriptor, profile, false);
+    if (
+      structuredChoice &&
+      /^(yes|no)$/i.test(u.normalizeText(structuredChoice.text))
+    ) {
+      choice = u.normalizeText(structuredChoice.text).toLowerCase();
+    } else if (lowered.includes("sponsor")) {
       choice = profile.sponsorshipRequired ? "yes" : "no";
     } else if (lowered.includes("authorized") || lowered.includes("legally")) {
       choice = profile.workAuthorized ? "yes" : "no";

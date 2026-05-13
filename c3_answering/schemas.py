@@ -76,4 +76,3 @@ def schema_for(model: type[BaseModel]) -> dict[str, Any]:
     if hasattr(model, "model_json_schema"):
         return model.model_json_schema()  # type: ignore[attr-defined,no-any-return]
     return model.schema()  # type: ignore[no-any-return]
-

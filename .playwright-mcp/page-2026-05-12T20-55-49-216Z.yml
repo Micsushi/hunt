@@ -1,0 +1,60 @@
+- generic [active] [ref=e2]:
+  - banner [ref=e3]:
+    - generic [ref=e4]:
+      - heading "Extensions" [level=1] [ref=e9]
+      - generic [ref=e12]:
+        - button [ref=e13] [cursor=pointer]
+        - generic [ref=e16]:
+          - generic [ref=e17]: Search extensions
+          - searchbox "Search extensions" [ref=e18]
+      - generic [ref=e21]:
+        - generic [ref=e22]: Developer mode
+        - button "Developer mode" [ref=e23] [cursor=pointer]
+  - generic [ref=e26]:
+    - navigation [ref=e28]:
+      - menu [ref=e29]:
+        - generic:
+          - menuitem "My extensions" [ref=e30] [cursor=pointer]:
+            - generic:
+              - img
+            - text: My extensions
+          - menuitem "Site permissions" [ref=e31] [cursor=pointer]:
+            - generic:
+              - img
+            - text: Site permissions
+          - menuitem "Keyboard shortcuts" [ref=e32] [cursor=pointer]:
+            - generic:
+              - img
+            - text: Keyboard shortcuts
+      - generic [ref=e34]:
+        - generic:
+          - img
+        - generic [ref=e35]:
+          - text: Discover more extensions and themes on the
+          - link "Chrome Web Store" [ref=e36] [cursor=pointer]:
+            - /url: https://chromewebstore.google.com/category/extensions?utm_source=ext_sidebar&hl=en-US
+    - main [ref=e37]:
+      - generic [ref=e41]:
+        - heading "All Extensions" [level=2] [ref=e42]
+        - generic [ref=e45]:
+          - generic [ref=e46]:
+            - generic [ref=e47]:
+              - img [ref=e48]
+              - img "Unpacked extension" [ref=e50]:
+                - generic [ref=e51]:
+                  - img
+            - generic [ref=e52]:
+              - heading "Hunt Apply Extension" [level=3] [ref=e55]
+              - generic [ref=e56]:
+                - generic [ref=e57]:
+                  - img
+                - generic [ref=e58]: Turn on developer mode to use this extension, which can't be reviewed by the Chrome Web Store.
+          - generic [ref=e59]:
+            - generic [ref=e60]:
+              - button "Details" [ref=e61] [cursor=pointer]:
+                - generic [ref=e62]:
+                  - generic: Details
+              - button "Remove" [ref=e63] [cursor=pointer]:
+                - generic [ref=e64]:
+                  - generic: Remove
+            - button "Off" [disabled]
