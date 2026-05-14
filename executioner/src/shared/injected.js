@@ -77,6 +77,11 @@
     }
     el.dispatchEvent(new Event("change", { bubbles: true }));
     el.dispatchEvent(new Event("blur", { bubbles: true }));
+    try {
+      el.dispatchEvent(new FocusEvent("focusout", { bubbles: true }));
+    } catch (_error) {
+      el.dispatchEvent(new Event("focusout", { bubbles: true }));
+    }
   };
 
   u.traceInteraction = function () {};
@@ -455,6 +460,7 @@
     var nameParts = fullName.split(" ").filter(Boolean);
     var firstName = nameParts[0] || "";
     var lastName = nameParts.slice(1).join(" ");
+    var middleName = u.normalizeText(profile.middleName);
     var accountEmail =
       u.normalizeText(profile.accountEmail) || u.normalizeText(profile.email);
     var accountPassword = u.normalizeText(profile.accountPassword);
@@ -463,6 +469,14 @@
       desc.includes("old password") ||
       desc.includes("existing password") ||
       desc.includes("temporary password");
+    if (
+      phraseInDescriptor(desc, "middle name") ||
+      desc.includes("middlename")
+    ) {
+      return middleName
+        ? { value: middleName, key: "profile:middleName" }
+        : null;
+    }
     if (
       accountPassword &&
       desc.includes("password") &&
@@ -530,6 +544,41 @@
         value: u.normalizeText(profile.sinExpiryDate),
         key: "profile:sinExpiryDate",
       };
+    }
+    if (desc.includes("salary") || desc.includes("compensation")) {
+      var asksAnnualAmount =
+        desc.includes("annual") ||
+        desc.includes("yearly") ||
+        desc.includes("amount") ||
+        /\be\.g\.\s*\d+/i.test(desc);
+      var salaryText = u.normalizeText(
+        asksAnnualAmount
+          ? profile.salaryExpectation
+          : profile.salaryExpectation || profile.salaryExpectationRange,
+      );
+      if (salaryText) {
+        return {
+          value: salaryText,
+          key: profile.salaryExpectation
+            ? "profile:salaryExpectation"
+            : "profile:salaryExpectationRange",
+        };
+      }
+      return { value: "95000", key: "default:salaryExpectation" };
+    }
+    if (
+      desc.includes("desired start date") ||
+      desc.includes("available start date") ||
+      desc.includes("start date")
+    ) {
+      var desiredStartDate = u.normalizeText(profile.desiredStartDate);
+      if (desiredStartDate) {
+        return {
+          value: desiredStartDate,
+          key: "profile:desiredStartDate",
+        };
+      }
+      return { value: "2026-05-25", key: "default:desiredStartDate" };
     }
     var locationText = isLegalWorkQuestion
       ? ""
@@ -720,6 +769,47 @@
     var weakContext = (applyContext.concernFlags || []).includes(
       "weak_description",
     );
+    var initialsFromProfile = function () {
+      var fullName = u.normalizeText(profile.fullName || profile.name);
+      var initials = fullName
+        .split(/\s+/)
+        .filter(Boolean)
+        .map(function (part) {
+          return part.charAt(0).toUpperCase();
+        })
+        .join("");
+      return initials || "MS";
+    };
+
+    var inferWorkdayLocationFromApplyContext = function () {
+      var rawUrl =
+        applyContext.jobUrl || applyContext.applyUrl || applyContext.url || "";
+      try {
+        var parsed = new URL(rawUrl);
+        var parts = parsed.pathname
+          .split("/")
+          .map(function (part) {
+            try {
+              return decodeURIComponent(part);
+            } catch (_error) {
+              return part;
+            }
+          })
+          .filter(Boolean);
+        var jobIndex = parts.indexOf("job");
+        if (jobIndex >= 0 && parts[jobIndex + 1]) {
+          return parts[jobIndex + 1]
+            .replace(/---/g, " - ")
+            .replace(/--/g, ", ")
+            .replace(/-/g, " ")
+            .replace(/\s+/g, " ")
+            .trim();
+        }
+      } catch (_error) {
+        return "";
+      }
+      return "";
+    };
 
     if (q.includes("sponsor")) {
       return {
@@ -737,13 +827,40 @@
       };
     }
 
-    if (q.includes("salary")) {
+    if (q.includes("salary") || q.includes("compensation")) {
+      var expectedCompensation = u.normalizeText(
+        profile.salaryExpectationRange || profile.salaryExpectation,
+      );
       return {
-        answerText: profile.salaryFlexible
-          ? "I am flexible and open to discussing compensation based on the role and overall package."
-          : "I am open to discussing compensation based on the role and overall package.",
+        answerText:
+          expectedCompensation ||
+          (profile.salaryFlexible
+            ? "I am flexible and open to discussing compensation based on the role and overall package."
+            : "I am open to discussing compensation based on the role and overall package."),
         confidence: "medium",
         manualReviewRequired: false,
+      };
+    }
+
+    if (q.includes("initials")) {
+      return {
+        answerText: initialsFromProfile(),
+        confidence: "medium",
+        manualReviewRequired: false,
+      };
+    }
+
+    if (
+      q.includes("location") &&
+      (q.includes("preference") || q.includes("preferred") || q.includes("top"))
+    ) {
+      var inferredLocation = inferWorkdayLocationFromApplyContext();
+      var preferredLocation =
+        inferredLocation || u.normalizeText(profile.location, stripLongDash);
+      return {
+        answerText: preferredLocation,
+        confidence: inferredLocation ? "medium" : "low",
+        manualReviewRequired: !preferredLocation,
       };
     }
 
@@ -924,23 +1041,116 @@
           "I choo e not to di clo e",
           "Choose not to disclose",
           "Choo e not to di clo e",
+          "I prefer not to respond",
+          "I prefer not to re pond",
+          "Prefer not to respond",
+          "Prefer not to re pond",
+          "I prefer not to disclose",
           "Prefer not to disclose",
           "Prefer not to di clo e",
+          "I prefer not to answer",
           "Prefer not to answer",
+          "I'd rather not say",
+          "I'd rather not answer",
           "Do not wish to disclose",
           "Do not wi h to di clo e",
+          "I do not wish to self-identify",
+          "I do not wi h to self-identify",
+          "I do not wi h to elf-identify",
+          "I do not wish to identify",
+          "Do not wish to self-identify",
           "Decline to answer",
+          "Decline to identify",
+          "Decline to self-identify",
           "Not disclosed",
           "Not di clo ed",
         ],
       };
     };
 
-    if (lowered.includes("sponsor")) {
+    if (lowered.includes("salary")) {
+      var salaryExpectation = u.normalizeText(
+        profile.salaryExpectationRange || profile.salaryExpectation,
+      );
+      var salaryPoint = u.normalizeText(profile.salaryExpectation);
+      var salaryAliases = [
+        salaryExpectation,
+        salaryPoint,
+        salaryPoint ? "$" + salaryPoint : "",
+        salaryPoint
+          ? "$" + salaryPoint.replace(/(\d)(?=(\d{3})+$)/g, "$1,")
+          : "",
+        "90,000 - 105,000",
+        "90000 - 105000",
+        "90k - 105k",
+        "$95000 - $105000",
+        "$95,000 - $105,000",
+        "95000 - 105000",
+        "95,000 - 105,000",
+      ].filter(Boolean);
+      if (salaryExpectation) {
+        return {
+          text: salaryExpectation,
+          source: profile.salaryExpectationRange
+            ? "profile:salaryExpectationRange"
+            : "profile:salaryExpectation",
+          aliases: salaryAliases,
+        };
+      }
+      return {
+        text: "90,000 - 105,000",
+        source: "default:salaryExpectationRange",
+        aliases: salaryAliases,
+      };
+    }
+
+    if (
+      lowered.includes("background security check") ||
+      lowered.includes("criminal record and references") ||
+      lowered.includes("reference check")
+    ) {
+      return {
+        text: "Yes",
+        source: "default:backgroundSecurityCheckConsent",
+      };
+    }
+
+    if (
+      lowered.includes("artificial intelligence enabled tools") ||
+      lowered.includes("ai-enabled tools") ||
+      lowered.includes("use of ai")
+    ) {
+      return {
+        text: "Yes",
+        source: "default:aiRecruitingToolsConsent",
+      };
+    }
+
+    if (!isLegalWorkQuestion && lowered.includes("sponsor")) {
       return {
         text: profile.sponsorshipRequired ? "Yes" : "No",
         source: "profile:sponsorshipRequired",
       };
+    }
+    if (
+      lowered.includes("criminal offence") ||
+      lowered.includes("criminal offense") ||
+      lowered.includes("convicted")
+    ) {
+      return yesNoChoice(
+        profile.criminalConvictionUnpardoned || "no",
+        profile.criminalConvictionUnpardoned
+          ? "profile:criminalConvictionUnpardoned"
+          : "default:noUnpardonedCriminalConviction",
+      );
+    }
+    if (lowered.includes("open work permit")) {
+      return yesNoChoice(
+        profile.openWorkPermit || "no",
+        profile.openWorkPermit
+          ? "profile:openWorkPermit"
+          : "default:noOpenWorkPermit",
+      );
     }
     if (
       lowered.includes("previously been employed") ||
@@ -953,6 +1163,35 @@
       };
     }
     if (
+      lowered.includes("relatives currently employed") ||
+      lowered.includes("relative currently employed") ||
+      lowered.includes("domestic partner") ||
+      lowered.includes("family member employed") ||
+      lowered.includes("relative of") ||
+      lowered.includes("are you a relative") ||
+      lowered.includes("family member")
+    ) {
+      var familyMemberAtCompany =
+        u.normalizeText(profile.familyMemberAtCompany) || "No";
+      return {
+        text: familyMemberAtCompany,
+        source: profile.familyMemberAtCompany
+          ? "profile:familyMemberAtCompany"
+          : "default:noRelativesAtCompany",
+        aliases: [familyMemberAtCompany, "No"],
+      };
+    }
+    if (
+      lowered.includes("citizenship status") ||
+      lowered.includes("citizenshipstatus")
+    ) {
+      return {
+        text: "Canada",
+        source: "profile:canadianCitizenOrPermanentResident",
+        aliases: ["Canada", "Canadian"],
+      };
+    }
+    if (
       lowered.includes("canadian citizen") ||
       lowered.includes("permanent resident")
     ) {
@@ -962,9 +1201,103 @@
       );
     }
     if (isLegalWorkQuestion) {
+      if (
+        lowered.includes("all employers") ||
+        lowered.includes("current employer")
+      ) {
+        return {
+          text: profile.workAuthorized
+            ? "All Canada Employers"
+            : "Current Employer Only",
+          source: "profile:workAuthorized",
+          aliases: profile.workAuthorized
+            ? [
+                "All Canada Employers",
+                "All Employers",
+                "All Canadian Employers",
+              ]
+            : ["Current Employer Only"],
+        };
+      }
+      if (lowered.includes("canada")) {
+        var canadaStatus = u
+          .normalizeText(profile.canadianCitizenOrPermanentResident)
+          .toLowerCase();
+        if (["yes", "true", "1"].includes(canadaStatus)) {
+          return {
+            text: "Yes, I am a citizen or permanent resident of Canada",
+            source: "profile:canadianCitizenOrPermanentResident",
+            aliases: [
+              "Yes, I am a citizen or permanent resident of Canada",
+              "citizen or permanent resident of Canada",
+              "permanent resident of Canada",
+            ],
+          };
+        }
+        if (profile.workAuthorized) {
+          return {
+            text: "Yes, I possess a temporary work permit",
+            source: "profile:workAuthorized",
+            aliases: [
+              "Yes, I possess a temporary work permit",
+              "temporary work permit",
+            ],
+          };
+        }
+      }
       return {
         text: profile.workAuthorized ? "Yes" : "No",
         source: "profile:workAuthorized",
+      };
+    }
+    if (
+      lowered.includes("reliability status clearance") ||
+      lowered.includes("lived or traveled outside") ||
+      lowered.includes("lived or travelled outside") ||
+      lowered.includes("6-consecutive months") ||
+      lowered.includes("6 consecutive months")
+    ) {
+      var reliabilityStatusClearance =
+        u.normalizeText(profile.reliabilityStatusClearance) ||
+        "Yes, I meet the requirements to obtain Reliability Status Clearance.";
+      return {
+        text: reliabilityStatusClearance,
+        source: profile.reliabilityStatusClearance
+          ? "profile:reliabilityStatusClearance"
+          : "default:reliabilityStatusClearance",
+        aliases: [
+          reliabilityStatusClearance,
+          "Yes, I meet the requirements",
+          "Yes",
+        ],
+      };
+    }
+    if (
+      lowered.includes("ernst & young") ||
+      lowered.includes("ernst and young") ||
+      lowered.includes("deloitte")
+    ) {
+      var previousDeloitteErnstYoung =
+        u.normalizeText(profile.previousDeloitteErnstYoung) ||
+        u.normalizeText(profile.previousEyDeloitteEmployment);
+      if (
+        ["", "no", "false", "0"].includes(
+          previousDeloitteErnstYoung.toLowerCase(),
+        )
+      ) {
+        previousDeloitteErnstYoung =
+          "No, I have not worked at either Deloitte LLP or Ernst & Young.";
+      }
+      return {
+        text: previousDeloitteErnstYoung,
+        source: profile.previousDeloitteErnstYoung
+          ? "profile:previousDeloitteErnstYoung"
+          : "default:noDeloitteErnstYoung",
+        aliases: [
+          previousDeloitteErnstYoung,
+          "No, I have not worked at either Deloitte LLP or Ernst & Young.",
+          "No",
+        ],
       };
     }
     if (
@@ -1011,16 +1344,57 @@
         "profile:interestedTemporaryShortContract",
       );
     }
+    if (
+      lowered.includes("employment status desired") ||
+      lowered.includes("desired employment status")
+    ) {
+      return {
+        text: "Temporary",
+        source: "default:employmentStatusDesired",
+        aliases: ["Temporary", "Intern", "Internship", "Student"],
+      };
+    }
     if (lowered.includes("relocat")) {
       return {
         text: profile.willingToRelocate ? "Yes" : "No",
         source: "profile:willingToRelocate",
       };
     }
-    if (lowered.includes("salary")) {
+    if (
+      lowered.includes("language skills") ||
+      lowered.includes("describes your language") ||
+      lowered.includes("describe your language") ||
+      lowered.includes("professional proficiency") ||
+      (lowered.includes("fluent") && lowered.includes("both languages"))
+    ) {
+      var languageSkill = u.normalizeText(
+        profile.languageSkillsStatement || profile.languageSkillStatement,
+      );
       return {
-        text: profile.salaryFlexible ? "Yes" : "No",
-        source: "profile:salaryFlexible",
+        text: languageSkill || "English only",
+        source: languageSkill
+          ? "profile:languageSkillsStatement"
+          : "default:languageSkillsStatement",
+        aliases: [
+          languageSkill,
+          "English only",
+          "Fluent in English only",
+          "English",
+          "I am fluent in English",
+          "I am fluent in English only",
+        ],
+      };
+    }
+    if (lowered.includes("preferred language")) {
+      var preferredLanguage = u.normalizeText(
+        profile.preferredLanguage || profile.languagePreference,
+      );
+      return {
+        text: preferredLanguage || "English",
+        source: preferredLanguage
+          ? "profile:preferredLanguage"
+          : "default:preferredLanguage",
+        aliases: [preferredLanguage, "English", "Engli h"].filter(Boolean),
       };
     }
     if (
@@ -1029,15 +1403,33 @@
       lowered.includes("source")
     ) {
       var applicationSource = u.normalizeText(profile.applicationSource);
+      var normalizedApplicationSource = applicationSource
+        .toLowerCase()
+        .replace(/[_-]+/g, " ");
+      var isLinkedInSource =
+        /\blinked\s*in\b/.test(normalizedApplicationSource) ||
+        /\blinkedin\b/.test(normalizedApplicationSource);
+      var applicationSourceCategory = u.normalizeText(
+        profile.applicationSourceCategory,
+      );
+      var applicationSourceDetail = u.normalizeText(
+        profile.applicationSourceDetail,
+      );
       if (applicationSource) {
+        var sourceText =
+          applicationSourceCategory ||
+          (isLinkedInSource ? "Job Board" : applicationSource);
         return {
-          text: applicationSource,
+          text: sourceText,
           source: "profile:applicationSource",
           aliases: [
+            sourceText,
             applicationSource,
-            applicationSource.toLowerCase() === "linkedin"
-              ? "LinkedIn"
-              : applicationSource,
+            applicationSourceCategory,
+            applicationSourceDetail,
+            isLinkedInSource ? "LinkedIn" : applicationSource,
+            isLinkedInSource ? "Job Board" : "",
+            isLinkedInSource ? "Social Media" : "",
           ],
         };
       }
@@ -1341,7 +1733,11 @@
       return 0;
     }
     if (target === "yes" || target === "no") {
-      return option === target || option.startsWith(target + " ") ? 100 : 0;
+      return option === target ||
+        option.startsWith(target + " ") ||
+        option.startsWith(target + ",")
+        ? 100
+        : 0;
     }
     if (choice.locationLayers) {
       if (/(^|[^a-z0-9])not([^a-z0-9]|$)/.test(option)) {
@@ -1413,7 +1809,36 @@
     var options = Array.from(el.options || []);
     var choice = chooseStructuredChoice(descriptor, profile, stripLongDash);
     if (!choice) {
-      return { filled: false, reason: "no_known_choice" };
+      var fallbackOption = options.find(function (option) {
+        var text = u.normalizeText(option.text || option.value, stripLongDash);
+        return (
+          text &&
+          !["select one", "select", "choose", "choose one"].includes(
+            text.toLowerCase(),
+          ) &&
+          !/^[-*]+$/.test(text)
+        );
+      });
+      if (!fallbackOption) {
+        return { filled: false, reason: "no_known_choice" };
+      }
+      traceInteraction("set_value", el, {
+        reason: "select_native_best_effort_no_choice",
+        currentValue: fallbackOption.text || fallbackOption.value || "",
+      });
+      el.value = fallbackOption.value;
+      u.dispatchInputEvents(el);
+      return {
+        filled: true,
+        valueSource: "best_effort:default_option",
+        bestEffortWarning:
+          "best_effort_default:no_known_choice:" +
+          u.normalizeText(descriptor || "").slice(0, 160) +
+          " -> " +
+          u
+            .normalizeText(fallbackOption.text || fallbackOption.value)
+            .slice(0, 120),
+      };
     }
     var selectedOption = options
       .map(function (o) {
@@ -1430,7 +1855,39 @@
       })[0]?.option;
 
     if (!selectedOption) {
-      return { filled: false, reason: "no_matching_option" };
+      var defaultOption = options.find(function (option) {
+        var text = u.normalizeText(option.text || option.value, stripLongDash);
+        return (
+          text &&
+          !["select one", "select", "choose", "choose one"].includes(
+            text.toLowerCase(),
+          ) &&
+          !/^[-*]+$/.test(text)
+        );
+      });
+      if (!defaultOption) {
+        return { filled: false, reason: "no_matching_option" };
+      }
+      traceInteraction("set_value", el, {
+        reason: "select_native_best_effort_no_match",
+        intendedValue: choice.text || "",
+        currentValue: defaultOption.text || defaultOption.value || "",
+      });
+      el.value = defaultOption.value;
+      u.dispatchInputEvents(el);
+      return {
+        filled: true,
+        valueSource: "best_effort:default_option",
+        bestEffortWarning:
+          "best_effort_default:no_matching_option:" +
+          u.normalizeText(descriptor || "").slice(0, 160) +
+          " intended " +
+          u.normalizeText(choice.text || "").slice(0, 80) +
+          " -> " +
+          u
+            .normalizeText(defaultOption.text || defaultOption.value)
+            .slice(0, 120),
+      };
     }
     traceInteraction("set_value", el, {
       reason: "select_native_option",

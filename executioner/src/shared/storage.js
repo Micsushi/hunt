@@ -102,6 +102,7 @@ export function sanitizeProfile(profile = {}) {
     accountEmail: sanitizeText(profile.accountEmail),
     accountPassword: sanitizeText(profile.accountPassword),
     phone: sanitizeText(profile.phone),
+    phoneDeviceType: sanitizeText(profile.phoneDeviceType),
     location: sanitizeText(profile.location),
     addressLine1: sanitizeText(profile.addressLine1),
     addressLine2: sanitizeText(profile.addressLine2),
@@ -109,6 +110,9 @@ export function sanitizeProfile(profile = {}) {
     linkedinUrl: sanitizeUrl(profile.linkedinUrl),
     githubUrl: sanitizeUrl(profile.githubUrl),
     websiteUrl: sanitizeUrl(profile.websiteUrl),
+    applicationSource: sanitizeText(profile.applicationSource),
+    applicationSourceCategory: sanitizeText(profile.applicationSourceCategory),
+    applicationSourceDetail: sanitizeText(profile.applicationSourceDetail),
     workAuthorized: sanitizeBoolean(profile.workAuthorized ?? true),
     canadianCitizenOrPermanentResident: sanitizeText(
       profile.canadianCitizenOrPermanentResident,
@@ -131,6 +135,15 @@ export function sanitizeProfile(profile = {}) {
     willingToRelocate: sanitizeBoolean(profile.willingToRelocate ?? true),
     openToAnyLocation: sanitizeBoolean(profile.openToAnyLocation ?? true),
     salaryFlexible: sanitizeBoolean(profile.salaryFlexible ?? true),
+    familyMemberAtCompany: sanitizeText(profile.familyMemberAtCompany),
+    reliabilityStatusClearance: sanitizeText(
+      profile.reliabilityStatusClearance,
+    ),
+    previousDeloitteErnstYoung: sanitizeText(
+      profile.previousDeloitteErnstYoung,
+    ),
+    languageSkillsStatement: sanitizeText(profile.languageSkillsStatement),
+    salaryExpectationRange: sanitizeText(profile.salaryExpectationRange),
     coOpTermsCompleted: sanitizeText(profile.coOpTermsCompleted),
     availableSummer2026: sanitizeText(profile.availableSummer2026),
     availableInterviewWindow: sanitizeText(profile.availableInterviewWindow),
@@ -289,6 +302,7 @@ export function sanitizeAttempt(attempt = {}) {
       : 0,
     manualReviewRequired: sanitizeBoolean(attempt.manualReviewRequired),
     manualReviewReasons: sanitizeStringArray(attempt.manualReviewReasons),
+    bestEffortWarnings: sanitizeStringArray(attempt.bestEffortWarnings),
     fieldInventory: sanitizeFieldInventory(attempt.fieldInventory),
     interactionTrace: sanitizeInteractionTrace(attempt.interactionTrace),
     traceTruncated: sanitizeBoolean(attempt.traceTruncated),
@@ -316,6 +330,7 @@ function sanitizeFieldInventory(entries = []) {
     required: sanitizeBoolean(entry.required),
     skippedReason: sanitizeText(entry.skippedReason),
     valueSource: sanitizeText(entry.valueSource),
+    bestEffortWarning: sanitizeText(entry.bestEffortWarning),
     filled: sanitizeBoolean(entry.filled),
     rect: {
       top: Number.isFinite(Number(entry.rect?.top))

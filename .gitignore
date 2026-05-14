@@ -11,6 +11,11 @@ hunt.db
 .playwright-browsers/
 .env
 .env.server2-smoke
+secrets/
+client_secret_*.json
+*oauth-client*.json
+*gmail*credentials*.json
+*gmail*token*.json
 # Personal candidate data — copy from fletcher/templates/candidate_profile.template.md
 fletcher/candidate_profile.md
 fletcher/bullet_library.md

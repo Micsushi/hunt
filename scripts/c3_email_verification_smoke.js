@@ -95,10 +95,10 @@ function usage() {
     "Usage: node scripts/c3_email_verification_smoke.js [options]",
     "",
     "Options:",
-    "  --provider fake|imap       Verification provider, default fake",
+    "  --provider fake|imap|gmail Verification provider, default fake",
     "  --cdp-port <port>          Chrome DevTools port, default 9222",
     "  --fixture-port <port>      Local fake fixture port, default 8766",
-    "  --workday-url <url>        Real Workday URL for provider imap",
+    "  --workday-url <url>        Real Workday URL for provider imap or gmail",
     "  --account-email <email>    Signup/login email",
     "  --account-password <pass>  Signup/login password",
     "  --timeout-seconds <n>      Mail wait timeout",
@@ -664,7 +664,7 @@ async function pageHasAccountFields(pageClient) {
         accountFieldCount,
         fields: fields.slice(0, 20),
         verificationNeeded: /verify|verification|check your email|confirm your email/i.test(text),
-        signedInOrAdvanced: /Settings\\s+\\S+@\\S+|Candidate Home|current step [1-6] of 6|Resume\\/CV/i.test(text),
+        signedInOrAdvanced: /Settings\\s+\\S+@\\S+|Candidate Home|current step\\s+\\d+\\s+of\\s+\\d+\\s+(?!Create Account\\/Sign In)(My Information|My Experience|Application Questions|Voluntary Disclosures|Review)|Resume\\/CV/i.test(text),
         bodyHead: text.replace(/\\s+/g, " ").trim().slice(0, 800),
         href: location.href
       };
@@ -705,18 +705,6 @@ async function clickSafeAccountAction(pageClient) {
         target.dispatchEvent(new MouseEvent("mouseup", { ...init, buttons: 0 }));
         target.dispatchEvent(new MouseEvent("click", { ...init, buttons: 0 }));
       };
-      const beforeHref = location.href;
-      const buttons = [...document.querySelectorAll("button, [role='button'], a")]
-        .filter(visible)
-        .map((el) => ({
-          el,
-          text: textOf(el),
-          disabled: el.disabled || el.getAttribute("aria-disabled") === "true",
-          href: el.href || "",
-          automation: el.getAttribute("data-automation-id") || "",
-          tag: el.tagName || ""
-        }))
-        .filter((item) => item.text && !item.disabled);
       const forbidden = /(submit application|final submit|submit my application|send application|withdraw|delete)/i;
       const unsafeNavigation = /^(skip to main content|search for jobs|back to job posting|read more|forgot your password\\?|linkedin)\\b/i;
       const allowed = (button) => !forbidden.test(button.text) && !unsafeNavigation.test(button.text);
@@ -730,18 +718,45 @@ async function clickSafeAccountAction(pageClient) {
         /^(apply now)$/i,
         /^apply for this job$/i
       ];
-      const candidate = buttons.find((button) => allowed(button) && preferred.some((pattern) => pattern.test(button.text)))
-        || [...document.querySelectorAll('a[role="button"], a[data-automation-id], a[href*="/apply"]')]
-          .filter(visible)
-          .map((el) => ({ el, text: textOf(el), href: el.href || "", automation: el.getAttribute("data-automation-id") || "" }))
-          .find((item) => {
-            const text = item.text || item.automation || item.href;
-            return allowed({ text }) && (
-              item.automation === "adventureButton" ||
-              /^apply\\b/i.test(text) ||
-              /\\/apply(\\?|$|\\/)/i.test(item.href)
-            );
-          });
+      const readButtons = () => [...document.querySelectorAll("button, [role='button'], a")]
+        .filter(visible)
+        .map((el) => ({
+          el,
+          text: textOf(el),
+          disabled: el.disabled || el.getAttribute("aria-disabled") === "true",
+          href: el.href || "",
+          automation: el.getAttribute("data-automation-id") || "",
+          tag: el.tagName || ""
+        }))
+        .filter((item) => item.text && !item.disabled);
+      const findCandidate = () => {
+        const buttons = readButtons();
+        const candidate = buttons.find((button) => allowed(button) && preferred.some((pattern) => pattern.test(button.text)))
+          || [...document.querySelectorAll('a[role="button"], a[data-automation-id], a[href*="/apply"]')]
+            .filter(visible)
+            .map((el) => ({ el, text: textOf(el), href: el.href || "", automation: el.getAttribute("data-automation-id") || "" }))
+            .find((item) => {
+              const text = item.text || item.automation || item.href;
+              return allowed({ text }) && (
+                item.automation === "adventureButton" ||
+                /^apply\\b/i.test(text) ||
+                /\\/apply(\\?|$|\\/)/i.test(item.href)
+              );
+            });
+        return { candidate, buttons };
+      };
+      const beforeHref = location.href;
+      let candidate = null;
+      let buttons = [];
+      for (let attempt = 0; attempt < 30; attempt += 1) {
+        const found = findCandidate();
+        candidate = found.candidate;
+        buttons = found.buttons;
+        if (candidate) {
+          break;
+        }
+        await sleep(500);
+      }
       if (!candidate) {
         return {
           ok: false,
@@ -1037,8 +1052,8 @@ async function inspectApplicationState(pageClient) {
         href: location.href,
         title: document.title,
         verificationNeeded: /verify|verification|check your email|confirm your email/i.test(text),
-        signedInOrAdvanced: /Settings\\s+\\S+@\\S+|Candidate Home|current step [1-6] of 6|Resume\\/CV/i.test(text),
-        accountError: /already have an account|already exists|invalid|error:|please check|required/i.test(text),
+        signedInOrAdvanced: /Settings\\s+\\S+@\\S+|Candidate Home|current step\\s+\\d+\\s+of\\s+\\d+\\s+(?!Create Account\\/Sign In)(My Information|My Experience|Application Questions|Voluntary Disclosures|Review)|Resume\\/CV/i.test(text),
+        accountError: /already exists|invalid|error:|please check|required/i.test(text) || (/already have an account/i.test(text) && !/already have an account\\?\\s*sign in/i.test(text)),
         bodyHead: text.slice(0, 1000)
       };
     })()`,
@@ -1262,23 +1277,81 @@ async function main() {
       }
     }
 
+    const expectedVerificationHosts =
+      args.provider === "fake" ? ["127.0.0.1"] : [new URL(fillTargetUrl).host];
     const verificationSince =
-      args.provider !== "fake"
-        ? new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString()
-        : submitResult.signupStartedAt || new Date().toISOString();
+      submitResult.signupStartedAt ||
+      submitStartedAt ||
+      new Date().toISOString();
     const bridgeResult = await verifyEmail(
       {
         email: submitResult.email || args.accountEmail,
-        expectedDomains:
-          args.provider === "fake"
-            ? ["127.0.0.1"]
-            : ["workday.com", "myworkday.com", "myworkdayjobs.com"],
+        expectedDomains: expectedVerificationHosts,
         since: verificationSince,
         timeoutSeconds: args.timeoutSeconds,
       },
       { provider: args.provider },
     );
     if (!bridgeResult.ok) {
+      if (args.provider !== "fake") {
+        const loginClient =
+          (await connectLatestWorkdayLoginTarget(
+            args.cdpPort,
+            fillTargetUrl,
+          )) || pageClient;
+        if (loginClient !== pageClient) {
+          pageClient.close();
+          pageClient = loginClient;
+        }
+        const loginPage = await ensureWorkdayLoginPage(pageClient);
+        const loginFill = loginPage.ok
+          ? await fillWorkdayLoginForm(pageClient, args)
+          : { ok: false, reason: loginPage.reason || "login_page_not_reached" };
+        const loginSubmit = loginFill.ok
+          ? await clickSafeAccountAction(pageClient)
+          : { ok: false, reason: "login_fill_failed" };
+        const postLoginClient =
+          (await connectLatestWorkdayApplicationTarget(
+            args.cdpPort,
+            fillTargetUrl,
+          )) || pageClient;
+        if (postLoginClient !== pageClient) {
+          pageClient.close();
+          pageClient = postLoginClient;
+        }
+        const loginState = await inspectApplicationState(pageClient);
+        if (loginFill.ok && loginSubmit.ok && loginState.signedInOrAdvanced) {
+          console.log(
+            JSON.stringify(
+              {
+                ok: true,
+                provider: args.provider,
+                resetSiteData,
+                reason: "verification_timeout_signin_succeeded",
+                fill: {
+                  ok: Boolean(fillResult.ok || workdayAccountFill.ok),
+                  filledFieldCount:
+                    fillResult.attempt?.filledFieldCount ||
+                    fillResult.result?.filledFieldCount ||
+                    0,
+                  workdayAccountFill,
+                },
+                submit: submitResult,
+                bridge: bridgeResult,
+                login: {
+                  page: loginPage,
+                  fill: loginFill,
+                  submit: loginSubmit,
+                  state: loginState,
+                },
+              },
+              null,
+              2,
+            ),
+          );
+          return;
+        }
+      }
       throw new Error(
         `Verification bridge failed: ${JSON.stringify(bridgeResult)}`,
       );

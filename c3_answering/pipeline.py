@@ -21,6 +21,110 @@ def _norm(value: Any) -> str:
     return re.sub(r"\s+", " ", str(value or "")).strip().lower()
 
 
+def _norm_option(value: Any) -> str:
+    text = _norm(value)
+    return re.sub(r"[^a-z0-9]+", " ", text).strip()
+
+
+PLACEHOLDER_OPTIONS = {
+    "",
+    "select",
+    "select one",
+    "select an option",
+    "choose",
+    "choose one",
+    "choose an option",
+    "please select",
+    "please select one",
+    "none selected",
+}
+
+
+NEUTRAL_OPTION_PATTERNS = (
+    "prefer not to disclose",
+    "i choose not to disclose",
+    "choose not to disclose",
+    "do not wish to disclose",
+    "do not wish to self identify",
+    "do not wi h to self identify",
+    "do not wi h to elf identify",
+    "decline to answer",
+    "decline to self identify",
+    "prefer not to answer",
+    "prefer not to respond",
+    "prefer not to re pond",
+    "not disclosed",
+    "not applicable",
+    "n/a",
+    "none of the above",
+)
+
+
+SENSITIVE_DISCLOSURE_PATTERNS = (
+    "gender",
+    "sexual orientation",
+    "trans experience",
+    "lesbian",
+    "gay",
+    "bisexual",
+    "queer",
+    "disabil",
+    "visible minorit",
+    "racial",
+    "ethnic",
+    "indigenous",
+    "aboriginal",
+    "veteran",
+    "diversity",
+    "self-identif",
+    "designated group",
+    "demographic",
+)
+
+
+def _is_placeholder_option(option: str) -> bool:
+    normalized = _norm_option(option)
+    return normalized in PLACEHOLDER_OPTIONS
+
+
+def _real_options(options: list[str]) -> list[str]:
+    seen: set[str] = set()
+    real: list[str] = []
+    for option in options:
+        text = re.sub(r"\s+", " ", str(option or "")).strip()
+        key = _norm_option(text)
+        if not text or _is_placeholder_option(text) or key in seen:
+            continue
+        seen.add(key)
+        real.append(text)
+    return real
+
+
+def _exact_option(options: list[str], selected: str) -> str:
+    target = _norm_option(selected)
+    if not target:
+        return ""
+    for option in _real_options(options):
+        if _norm_option(option) == target:
+            return option
+    return ""
+
+
+def _neutral_option(options: list[str]) -> str:
+    real_options = _real_options(options)
+    for pattern in NEUTRAL_OPTION_PATTERNS:
+        pattern_norm = _norm_option(pattern)
+        for option in real_options:
+            option_norm = _norm_option(option)
+            if option_norm == pattern_norm or pattern_norm in option_norm:
+                return option
+    return ""
+
+
+def _question_has_any(question: str, patterns: tuple[str, ...]) -> bool:
+    return any(pattern in question for pattern in patterns)
+
+
 def _truthy(value: Any) -> bool | None:
     if isinstance(value, bool):
         return value
@@ -35,7 +139,7 @@ def _truthy(value: Any) -> bool | None:
 def _matching_option(options: list[str], target: str, aliases: list[str] | None = None) -> str:
     aliases = aliases or []
     candidates = [target, *aliases]
-    normalized_options = [(_norm(option), option) for option in options]
+    normalized_options = [(_norm(option), option) for option in _real_options(options)]
     for candidate in candidates:
         normalized_candidate = _norm(candidate)
         if not normalized_candidate:
@@ -66,6 +170,7 @@ def _source_decision(
     source_field: str,
     reason: str,
     confidence: float = 0.95,
+    camp: str = "",
 ) -> C3AnswerDecision:
     normalized_question = build_standard_question(request.field.label, request.field.options)
     return C3AnswerDecision(
@@ -73,6 +178,7 @@ def _source_decision(
         action="select_option",
         canonical_field=canonical_field,
         selected_option=option,
+        camp=camp,
         confidence=confidence,
         source_fields=[source_field],
         provider="deterministic",
@@ -121,21 +227,42 @@ def _location_aliases(location: str) -> list[str]:
 
 def deterministic_decision(request: C3AnswerRequest) -> C3AnswerDecision | None:
     question = normalize_question_text(request.field.label)
-    options = request.field.options
+    options = _real_options(request.field.options)
     profile = request.profile
     if not options:
         return None
+
+    if _question_has_any(question, SENSITIVE_DISCLOSURE_PATTERNS):
+        option = _neutral_option(options)
+        if option:
+            return _source_decision(
+                request,
+                canonical_field="voluntary_disclosure",
+                option=option,
+                source_field="policy.neutral_disclosure",
+                reason="Sensitive disclosure question with a neutral option: choose non-disclosure before LLM fallback.",
+                camp="non_disclosure",
+            )
 
     previous_company_question = (
         "previously worked at" in question
         or "worked at this company" in question
         or "worked at " in question
+        or "previously been employed" in question
+        or "previously employed" in question
+        or "previous employment" in question
     )
     referral_question = (
         "know anyone" in question
         or "referral" in question
         or "referred by" in question
         or "employee referral" in question
+        or "family member" in question
+        or "relative" in question
+        or "domestic partner" in question
+        or "ernst & young" in question
+        or "ernst and young" in question
+        or "deloitte" in question
     )
     if previous_company_question or referral_question:
         previous = _norm(profile.get("previousEmployers"))
@@ -149,23 +276,16 @@ def deterministic_decision(request: C3AnswerRequest) -> C3AnswerDecision | None:
                 option=option,
                 source_field="profile.previousEmployers",
                 reason="Company/referral questions default to No unless explicit profile evidence says Yes.",
+                camp="negative_conflict",
             )
 
-    if "sponsor" in question:
-        option = _yes_no(options, _truthy(profile.get("sponsorshipRequired")))
-        if option:
-            return _source_decision(
-                request,
-                canonical_field="sponsorship_required",
-                option=option,
-                source_field="profile.sponsorshipRequired",
-                reason="Question asks about sponsorship and profile has a sponsorship setting.",
-            )
     if (
         "legally" in question
         or "eligible to work" in question
         or "authorized" in question
         or "work authorization" in question
+        or "legal right to work" in question
+        or "proof of your legal right to work" in question
     ):
         option = _yes_no(options, _truthy(profile.get("workAuthorized")))
         if option:
@@ -175,6 +295,18 @@ def deterministic_decision(request: C3AnswerRequest) -> C3AnswerDecision | None:
                 option=option,
                 source_field="profile.workAuthorized",
                 reason="Question asks work authorization and profile has a work authorization setting.",
+                camp="opportunity_positive",
+            )
+    if "sponsor" in question or "visa support" in question or "work permit sponsorship" in question:
+        option = _yes_no(options, _truthy(profile.get("sponsorshipRequired")))
+        if option:
+            return _source_decision(
+                request,
+                canonical_field="sponsorship_required",
+                option=option,
+                source_field="profile.sponsorshipRequired",
+                reason="Question asks about sponsorship and profile has a sponsorship setting.",
+                camp="negative_need",
             )
     if "relocat" in question:
         option = _yes_no(options, _truthy(profile.get("willingToRelocate")))
@@ -185,6 +317,7 @@ def deterministic_decision(request: C3AnswerRequest) -> C3AnswerDecision | None:
                 option=option,
                 source_field="profile.willingToRelocate",
                 reason="Question asks relocation and profile has a relocation setting.",
+                camp="profile_value",
             )
     if "salary" in question or "compensation" in question:
         option = _yes_no(options, _truthy(profile.get("salaryFlexible")))
@@ -195,6 +328,7 @@ def deterministic_decision(request: C3AnswerRequest) -> C3AnswerDecision | None:
                 option=option,
                 source_field="profile.salaryFlexible",
                 reason="Question asks salary comfort and profile has a salary flexibility setting.",
+                camp="profile_value",
             )
     if "co-op" in question or "coop" in question:
         terms = str(profile.get("coOpTermsCompleted") or "").strip()
@@ -206,6 +340,7 @@ def deterministic_decision(request: C3AnswerRequest) -> C3AnswerDecision | None:
                 option=option,
                 source_field="profile.coOpTermsCompleted",
                 reason="Question asks co-op terms and profile has the completed term count.",
+                camp="profile_value",
             )
     if "graduation" in question:
         year = str(profile.get("expectedGraduationYear") or "").strip()
@@ -217,6 +352,7 @@ def deterministic_decision(request: C3AnswerRequest) -> C3AnswerDecision | None:
                 option=option,
                 source_field="profile.expectedGraduationYear",
                 reason="Question asks graduation and profile has expected graduation year.",
+                camp="profile_value",
             )
     if "interview" in question and "available" in question:
         option = _yes_no(options, _truthy(profile.get("availableInterviewWindow")))
@@ -227,6 +363,7 @@ def deterministic_decision(request: C3AnswerRequest) -> C3AnswerDecision | None:
                 option=option,
                 source_field="profile.availableInterviewWindow",
                 reason="Question asks interview availability and profile has that availability setting.",
+                camp="profile_value",
             )
     if "summer 2026" in question or "available for the summer" in question:
         option = _yes_no(options, _truthy(profile.get("availableSummer2026")))
@@ -237,6 +374,7 @@ def deterministic_decision(request: C3AnswerRequest) -> C3AnswerDecision | None:
                 option=option,
                 source_field="profile.availableSummer2026",
                 reason="Question asks Summer 2026 availability and profile has that availability setting.",
+                camp="profile_value",
             )
     if ("city" in question or "located" in question or "location" in question) and not (
         "eligible to work" in question or "authorized" in question
@@ -250,6 +388,42 @@ def deterministic_decision(request: C3AnswerRequest) -> C3AnswerDecision | None:
                 option=option,
                 source_field="profile.location",
                 reason="Question asks location and profile has a location.",
+                camp="profile_value",
+            )
+
+    opportunity_positive_question = any(
+        phrase in question
+        for phrase in (
+            "are you willing",
+            "would you be willing",
+            "are you able",
+            "can you",
+            "could you",
+            "comfortable with",
+            "agree to",
+            "consent to",
+            "comply with",
+            "background check",
+            "background screening",
+            "criminal record check",
+            "credit check",
+            "obtain clearance",
+            "obtain security clearance",
+            "meet the requirements",
+            "available to",
+        )
+    )
+    if opportunity_positive_question:
+        option = _yes_no(options, True)
+        if option:
+            return _source_decision(
+                request,
+                canonical_field="opportunity_positive",
+                option=option,
+                source_field="policy.pro_applicant_default",
+                reason="Opportunity-positive question: choose Yes for willingness, ability, availability, consent, or screening when no conflict pattern applies.",
+                confidence=0.82,
+                camp="opportunity_positive",
             )
 
     preference_question = any(
@@ -273,6 +447,7 @@ def deterministic_decision(request: C3AnswerRequest) -> C3AnswerDecision | None:
                 source_field="policy.pro_hiring_preference",
                 reason="Preference question: choose the positive pro-hiring answer when it does not invent a hard fact.",
                 confidence=0.78,
+                camp="opportunity_positive",
             )
 
     return None
@@ -296,7 +471,7 @@ def _validate_decision(
 
     normalized_question = build_standard_question(request.field.label, request.field.options)
     if response.action == "select_option":
-        option = _matching_option(request.field.options, response.selected_option)
+        option = _exact_option(request.field.options, response.selected_option)
         if not option:
             return C3AnswerDecision(
                 status="validation_failed",
@@ -304,9 +479,10 @@ def _validate_decision(
                 canonical_field=response.canonical_field,
                 confidence=response.confidence,
                 source_fields=response.source_fields,
+                camp=response.camp,
                 provider=provider,
                 model=model,
-                reason="LLM selected option did not exactly match available page options.",
+                reason="LLM selected option did not exactly match one non-placeholder page option.",
                 requires_review=True,
                 normalized_question=normalized_question,
             )
@@ -316,6 +492,7 @@ def _validate_decision(
                 action="manual_review",
                 canonical_field=response.canonical_field,
                 selected_option=option,
+                camp=response.camp,
                 confidence=response.confidence,
                 source_fields=response.source_fields,
                 provider=provider,
@@ -329,6 +506,7 @@ def _validate_decision(
             action="select_option",
             canonical_field=response.canonical_field,
             selected_option=option,
+            camp=response.camp,
             confidence=response.confidence,
             source_fields=response.source_fields,
             provider=provider,
@@ -342,6 +520,7 @@ def _validate_decision(
             action="fill_text",
             canonical_field=response.canonical_field,
             answer_text=response.answer_text,
+            camp=response.camp,
             confidence=response.confidence,
             source_fields=response.source_fields,
             provider=provider,

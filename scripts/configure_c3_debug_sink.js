@@ -2,6 +2,11 @@
 const fs = require("fs");
 const http = require("http");
 const path = require("path");
+const {
+  makeWorkdayProfileDefaults,
+  withWorkdayProfileAliases,
+  workdayProfileCounts,
+} = require("./c3_p_chrome_defaults");
 
 const DEFAULT_PORT = 9222;
 const DEFAULT_EXTENSION_ID = "cbdmkibihimaedoihjhpidclolglnncc";
@@ -216,67 +221,6 @@ function js(value) {
   return JSON.stringify(value);
 }
 
-function workdayProfileDefaults() {
-  const workEntry = {
-    jobTitle: "Software Developer Intern",
-    company: "INVIDI Technologies",
-    location: "Edmonton, Alberta, Canada",
-    startMonth: "05",
-    startYear: "2025",
-    endMonth: "08",
-    endYear: "2025",
-    current: false,
-    description:
-      "Built browser automation, data tooling, and production software features.",
-  };
-  return {
-    fullName: "Michael Shi",
-    email: "wenjian2@ualberta.ca",
-    phone: "7800000000",
-    location: "Edmonton, Alberta, Canada",
-    addressLine1: "10180 101 Street NW",
-    addressLine2: "",
-    postalCode: "T5J 3S4",
-    linkedinUrl: "https://linkedin.com/in/wjshi",
-    githubUrl: "https://github.com/micsushi",
-    websiteUrl: "https://mshi.ca",
-    workAuthorized: true,
-    canadianCitizenOrPermanentResident: "yes",
-    sinStartsWithNine: "no",
-    sinExpiryDate: "",
-    interestedTemporaryShortContract: "yes",
-    sponsorshipRequired: false,
-    willingToRelocate: true,
-    openToAnyLocation: true,
-    salaryFlexible: true,
-    coOpTermsCompleted: "2",
-    availableSummer2026: "Yes",
-    availableInterviewWindow: "Yes",
-    expectedGraduationYear: "2026",
-    previousEmployers: "",
-    skills: ["Python", "React"],
-    workExperience: [workEntry],
-    education: [
-      {
-        school: "University of Alberta",
-        degree: "Bachelor's Degree",
-        fieldOfStudy: "Computer Science",
-        startMonth: "09",
-        startYear: "2021",
-        endMonth: "04",
-        endYear: "2026",
-        overallResult: "3.7",
-      },
-    ],
-    websites: [
-      "https://mshi.ca",
-      "https://linkedin.com/in/wjshi",
-      "https://github.com/micsushi",
-    ],
-    notes: "",
-  };
-}
-
 function findExtensionPage(targets) {
   return targets.find((target) =>
     String(target.url || "").includes("/src/options/options.html"),
@@ -334,7 +278,9 @@ async function main() {
         const backendUrl = ${js(args.backendUrl)};
         const serviceToken = ${js(token)};
         const seedProfile = ${js(args.seedWorkdayProfile)};
-        const workdayProfileDefaults = ${js(workdayProfileDefaults())};
+        const workdayProfileDefaults = ${js(
+          withWorkdayProfileAliases(makeWorkdayProfileDefaults()),
+        )};
         const existing = await chrome.storage.sync.get([${js(SETTINGS_KEY)}]);
         const current = existing[${js(SETTINGS_KEY)}] || {};
         const next = {
@@ -361,25 +307,16 @@ async function main() {
           debugLogSinkEnabled: true
         };
         await chrome.storage.sync.set({ [${js(SETTINGS_KEY)}]: next });
-        const profileCountsFor = (profile) => ({
-          workExperience: Array.isArray(profile.workExperience) ? profile.workExperience.length : 0,
-          education: Array.isArray(profile.education) ? profile.education.length : 0,
-          skills: Array.isArray(profile.skills) ? profile.skills.length : 0,
-          websites: Array.isArray(profile.websites)
-            ? profile.websites.length
-            : [
-                profile.websiteUrl,
-                profile.linkedinUrl,
-                profile.githubUrl
-              ].filter(Boolean).length
-        });
+        const profileCountsFor = ${workdayProfileCounts.toString()};
         let profileCounts = null;
         if (seedProfile) {
           const storedProfile = await chrome.storage.local.get([${js(PROFILE_KEY)}]);
           const currentProfile = storedProfile[${js(PROFILE_KEY)}] || {};
           const mergedProfile = {
-            ...workdayProfileDefaults,
             ...currentProfile,
+            ...workdayProfileDefaults,
+            accountEmail: currentProfile.accountEmail || workdayProfileDefaults.accountEmail,
+            accountPassword: currentProfile.accountPassword || workdayProfileDefaults.accountPassword,
             skills: Array.isArray(currentProfile.skills) && currentProfile.skills.length
               ? currentProfile.skills
               : workdayProfileDefaults.skills,

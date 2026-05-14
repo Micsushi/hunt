@@ -361,6 +361,8 @@ function readProfileForm() {
     accountEmail: document.getElementById("profile-account-email")?.value,
     accountPassword: document.getElementById("profile-account-password")?.value,
     phone: document.getElementById("profile-phone")?.value,
+    phoneDeviceType: document.getElementById("profile-phone-device-type")
+      ?.value,
     location: document.getElementById("profile-location")?.value,
     addressLine1: document.getElementById("profile-address-line-1")?.value,
     addressLine2: document.getElementById("profile-address-line-2")?.value,
@@ -368,6 +370,29 @@ function readProfileForm() {
     linkedinUrl: document.getElementById("profile-linkedin-url")?.value,
     githubUrl: document.getElementById("profile-github-url")?.value,
     websiteUrl: document.getElementById("profile-website-url")?.value,
+    applicationSource: document.getElementById("profile-application-source")
+      ?.value,
+    applicationSourceCategory: document.getElementById(
+      "profile-application-source-category",
+    )?.value,
+    applicationSourceDetail: document.getElementById(
+      "profile-application-source-detail",
+    )?.value,
+    familyMemberAtCompany: document.getElementById(
+      "profile-family-member-at-company",
+    )?.value,
+    reliabilityStatusClearance: document.getElementById(
+      "profile-reliability-status-clearance",
+    )?.value,
+    previousDeloitteErnstYoung: document.getElementById(
+      "profile-previous-deloitte-ernst-young",
+    )?.value,
+    languageSkillsStatement: document.getElementById(
+      "profile-language-skills-statement",
+    )?.value,
+    salaryExpectationRange: document.getElementById(
+      "profile-salary-expectation-range",
+    )?.value,
     coOpTermsCompleted: document.getElementById("profile-coop-terms-completed")
       ?.value,
     expectedGraduationYear: document.getElementById(
@@ -419,6 +444,7 @@ function writeProfileFields(profile) {
   setInputValue("profile-account-email", profile.accountEmail);
   setInputValue("profile-account-password", profile.accountPassword);
   setInputValue("profile-phone", profile.phone);
+  setInputValue("profile-phone-device-type", profile.phoneDeviceType);
   setInputValue("profile-location", profile.location);
   setInputValue("profile-address-line-1", profile.addressLine1);
   setInputValue("profile-address-line-2", profile.addressLine2);
@@ -426,6 +452,35 @@ function writeProfileFields(profile) {
   setInputValue("profile-linkedin-url", profile.linkedinUrl);
   setInputValue("profile-github-url", profile.githubUrl);
   setInputValue("profile-website-url", profile.websiteUrl);
+  setInputValue("profile-application-source", profile.applicationSource);
+  setInputValue(
+    "profile-application-source-category",
+    profile.applicationSourceCategory,
+  );
+  setInputValue(
+    "profile-application-source-detail",
+    profile.applicationSourceDetail,
+  );
+  setInputValue(
+    "profile-family-member-at-company",
+    profile.familyMemberAtCompany,
+  );
+  setInputValue(
+    "profile-reliability-status-clearance",
+    profile.reliabilityStatusClearance,
+  );
+  setInputValue(
+    "profile-previous-deloitte-ernst-young",
+    profile.previousDeloitteErnstYoung,
+  );
+  setInputValue(
+    "profile-language-skills-statement",
+    profile.languageSkillsStatement,
+  );
+  setInputValue(
+    "profile-salary-expectation-range",
+    profile.salaryExpectationRange,
+  );
   setInputValue("profile-coop-terms-completed", profile.coOpTermsCompleted);
   setInputValue(
     "profile-expected-graduation-year",

@@ -4,10 +4,18 @@
 const fs = require("node:fs");
 const http = require("node:http");
 const path = require("node:path");
+const {
+  makeWorkdayProfileDefaults,
+  withWorkdayProfileAliases,
+} = require("./c3_p_chrome_defaults");
 
 const DEFAULT_JOB_URL =
   "https://talentmanagementsolution.wd3.myworkdayjobs.com/en-US/JonasSoftwareCanada/job/Remote---Canada/Junior-AI-Software-Engineer_R50805-1?source=LinkedIn";
 const DEFAULT_EXTENSION_ID = "cbdmkibihimaedoihjhpidclolglnncc";
+
+function auditTimestamp() {
+  return new Date().toISOString().replace(/[:.]/g, "-");
+}
 
 function parseArgs(argv) {
   const args = {
@@ -28,7 +36,11 @@ function parseArgs(argv) {
     verifyClear: false,
     clearBeforeFill: false,
     extensionAutoNext: false,
+    cdpRepairPhoneCountry: false,
+    llmAnswers: true,
     accountEmail: process.env.HUNT_C3_TEST_ACCOUNT_EMAIL || "",
+    auditJson: process.env.HUNT_C3_AUDIT_JSON || "",
+    noAuditJson: false,
   };
   for (let i = 2; i < argv.length; i += 1) {
     const arg = argv[i];
@@ -76,9 +88,18 @@ function parseArgs(argv) {
       args.clearBeforeFill = true;
     } else if (arg === "--extension-auto-next") {
       args.extensionAutoNext = true;
+    } else if (arg === "--cdp-repair-phone-country") {
+      args.cdpRepairPhoneCountry = true;
+    } else if (arg === "--no-llm-answers") {
+      args.llmAnswers = false;
     } else if (arg === "--account-email" && next) {
       args.accountEmail = next;
       i += 1;
+    } else if (arg === "--audit-json" && next) {
+      args.auditJson = path.resolve(process.cwd(), next);
+      i += 1;
+    } else if (arg === "--no-audit-json") {
+      args.noAuditJson = true;
     } else if (arg === "--help") {
       args.help = true;
     } else {
@@ -87,6 +108,13 @@ function parseArgs(argv) {
   }
   if (!["resume", "manual"].includes(args.mode)) {
     throw new Error("--mode must be resume or manual");
+  }
+  if (!args.noAuditJson && !args.auditJson) {
+    args.auditJson = path.resolve(
+      process.cwd(),
+      "logs",
+      `c3_workday_audit_${auditTimestamp()}.json`,
+    );
   }
   return args;
 }
@@ -112,7 +140,11 @@ function usage() {
     "  --clear-before-fill Clear the current Workday page before each fill",
     "  --verify-clear     Fill, clear, verify empty, then refill before Next",
     "  --extension-auto-next Enable C3's own safe Next-after-fill setting",
+    "  --cdp-repair-phone-country Diagnostic only: patch phone country via CDP if extension fill fails",
+    "  --no-llm-answers Do not auto-apply backend answer-router decisions during fill",
     "  --account-email <email> Optional account/profile email override",
+    "  --audit-json <path> Write full page/retry/value audit JSON, default logs/c3_workday_audit_<timestamp>.json",
+    "  --no-audit-json Disable audit JSON file writing",
   ].join("\n");
 }
 
@@ -255,116 +287,57 @@ function deriveApplyUrl(jobUrl, mode) {
   return url.toString();
 }
 
+function workdaySlugToText(slug) {
+  return String(slug || "")
+    .replace(/_[A-Z]{1,4}\d[\w-]*$/i, "")
+    .replace(/---/g, " - ")
+    .replace(/--/g, ", ")
+    .replace(/-/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function inferWorkdayContext(applyUrl) {
+  const url = new URL(applyUrl);
+  const parts = url.pathname
+    .split("/")
+    .map((part) => {
+      try {
+        return decodeURIComponent(part);
+      } catch (_error) {
+        return part;
+      }
+    })
+    .filter(Boolean);
+  const jobIndex = parts.indexOf("job");
+  const detailsIndex = parts.indexOf("details");
+  const titleSlug =
+    (jobIndex >= 0 && parts[jobIndex + 2]) ||
+    (detailsIndex >= 0 && parts[detailsIndex + 1]) ||
+    "";
+  const locationSlug = jobIndex >= 0 ? parts[jobIndex + 1] || "" : "";
+  const tenant = url.hostname.split(".")[0] || "";
+  const company =
+    tenant.toLowerCase() === "bdo"
+      ? "BDO"
+      : tenant.toLowerCase() === "sunlife"
+        ? "Sun Life"
+        : workdaySlugToText(tenant) || "Workday employer";
+  return {
+    title: workdaySlugToText(titleSlug) || "Workday application",
+    company,
+    location: workdaySlugToText(locationSlug),
+  };
+}
+
 function makeSeedPayload(resumePath, applyUrl, args = {}) {
   const pdf = fs.readFileSync(resumePath);
   const pdfFileName = path.basename(resumePath);
   const pdfDataUrl = `data:application/pdf;base64,${pdf.toString("base64")}`;
-  const profileEmail = args.accountEmail || "wenjian2@ualberta.ca";
-  const profile = {
-    fullName: "Michael Shi",
-    email: profileEmail,
-    accountEmail: profileEmail,
-    phone: "7804923111",
-    location: "Edmonton, Alberta, Canada",
-    addressLine1: "10180 101 Street NW",
-    addressLine2: "",
-    postalCode: "T5J 3S4",
-    linkedinUrl: "https://linkedin.com/in/wjshi",
-    githubUrl: "https://github.com/micsushi",
-    websiteUrl: "https://mshi.ca",
-    workAuthorized: true,
-    canadianCitizenOrPermanentResident: "yes",
-    sinStartsWithNine: "no",
-    sinExpiryDate: "",
-    interestedTemporaryShortContract: "yes",
-    sponsorshipRequired: false,
-    willingToRelocate: true,
-    openToAnyLocation: true,
-    salaryFlexible: true,
-    coOpTermsCompleted: "2",
-    availableSummer2026: "Yes",
-    availableInterviewWindow: "Yes",
-    expectedGraduationYear: "2026",
-    previousEmployers: "",
-    skills: ["Python", "React"],
-    skillList: ["Python", "React"],
-    workExperience: [
-      {
-        jobTitle: "Software Developer Intern",
-        company: "INVIDI Technologies",
-        location: "Edmonton, Alberta, Canada",
-        startMonth: "05",
-        startYear: "2025",
-        endMonth: "08",
-        endYear: "2025",
-        current: false,
-        description:
-          "Built browser automation, data tooling, and production software features.",
-      },
-    ],
-    pastJobs: [
-      {
-        title: "Software Developer Intern",
-        employer: "INVIDI Technologies",
-        location: "Edmonton, Alberta, Canada",
-        startMonth: "05",
-        startYear: "2025",
-        endMonth: "08",
-        endYear: "2025",
-        current: false,
-        description:
-          "Built browser automation, data tooling, and production software features.",
-      },
-    ],
-    employmentHistory: [
-      {
-        position: "Software Developer Intern",
-        companyName: "INVIDI Technologies",
-        location: "Edmonton, Alberta, Canada",
-        fromMonth: "05",
-        fromYear: "2025",
-        toMonth: "08",
-        toYear: "2025",
-        description:
-          "Built browser automation, data tooling, and production software features.",
-      },
-    ],
-    education: [
-      {
-        school: "University of Alberta",
-        degree: "Bachelor's Degree",
-        fieldOfStudy: "Computer Science",
-        startMonth: "09",
-        startYear: "2021",
-        endMonth: "04",
-        endYear: "2026",
-        overallResult: "3.7",
-      },
-    ],
-    educationHistory: [
-      {
-        university: "University of Alberta",
-        credential: "Bachelor's Degree",
-        fieldOfStudy: "Computer Science",
-        startMonth: "09",
-        startYear: "2021",
-        endMonth: "04",
-        endYear: "2026",
-        overallResult: "3.7",
-      },
-    ],
-    websites: [
-      "https://mshi.ca",
-      "https://linkedin.com/in/wjshi",
-      "https://github.com/micsushi",
-    ],
-    links: [
-      "https://mshi.ca",
-      "https://linkedin.com/in/wjshi",
-      "https://github.com/micsushi",
-    ],
-    notes: "",
-  };
+  const profile = withWorkdayProfileAliases(
+    makeWorkdayProfileDefaults({ accountEmail: args.accountEmail }),
+  );
+  const inferredContext = inferWorkdayContext(applyUrl);
   const defaultResume = {
     label: pdfFileName,
     sourceType: "local_pdf",
@@ -378,8 +351,9 @@ function makeSeedPayload(resumePath, applyUrl, args = {}) {
   };
   const activeApplyContext = {
     jobId: "",
-    title: "Junior AI Software Engineer",
-    company: "Jonas Software Canada",
+    title: inferredContext.title,
+    company: inferredContext.company,
+    location: inferredContext.location,
     source: "LinkedIn",
     sourceMode: "manual",
     atsType: "workday",
@@ -453,11 +427,22 @@ async function ensureOptionsTarget(port, fallbackExtensionId) {
 async function ensurePageTarget(port, applyUrl) {
   const applyHost = new URL(applyUrl).host;
   const applyBase = applyUrl.split("?")[0];
+  const applyPath = normalizeWorkdayPathname(new URL(applyBase).pathname);
   const isUsableApplyTarget = (item) => {
     const url = String(item.url || "");
     const title = String(item.title || "");
+    let parsed = null;
+    try {
+      parsed = new URL(url);
+    } catch (_e) {
+      parsed = null;
+    }
     return (
-      url.startsWith(applyBase) &&
+      parsed &&
+      parsed.host === applyHost &&
+      (url.startsWith(applyBase) ||
+        normalizeWorkdayPathname(parsed.pathname) === applyPath ||
+        normalizeWorkdayPathname(parsed.pathname).includes(`${applyPath}/`)) &&
       !/create account|sign in|error|ok/i.test(title)
     );
   };
@@ -469,7 +454,7 @@ async function ensurePageTarget(port, applyUrl) {
       .find(
         (item) =>
           String(item.url || "").includes(applyHost) &&
-          String(item.url || "").includes("/apply/") &&
+          /\/apply(?:\/|\?|$)/.test(String(item.url || "")) &&
           !/create account|sign in|error|ok/i.test(String(item.title || "")),
       );
   if (!target) {
@@ -492,6 +477,12 @@ function sleep(ms) {
   return new Promise((resolve) => {
     setTimeout(resolve, ms);
   });
+}
+
+function normalizeWorkdayPathname(pathname) {
+  return String(pathname || "")
+    .replace(/^\/[a-z]{2}-[A-Z]{2}(?=\/)/, "")
+    .replace(/\/$/, "");
 }
 
 async function connectTarget(target) {
@@ -630,6 +621,7 @@ function pageSummaryExpression() {
       .filter(visible)
       .map((el) => (el.innerText || el.textContent || "").replace(/\\s+/g, " ").trim())
       .filter(Boolean)
+      .filter((text) => !/successfully uploaded/i.test(text))
       .slice(0, 30);
     return {
       href: location.href,
@@ -778,17 +770,387 @@ async function clickWorkdayStep(pageClient, stepName) {
   };
 }
 
-async function fillCurrentPage(optionsClient, applyUrl) {
+async function cdpClick(client, x, y) {
+  await client.send("Input.dispatchMouseEvent", {
+    type: "mouseMoved",
+    x,
+    y,
+    button: "none",
+  });
+  await new Promise((r) => setTimeout(r, 40));
+  await client.send("Input.dispatchMouseEvent", {
+    type: "mousePressed",
+    x,
+    y,
+    button: "left",
+    clickCount: 1,
+  });
+  await new Promise((r) => setTimeout(r, 60));
+  await client.send("Input.dispatchMouseEvent", {
+    type: "mouseReleased",
+    x,
+    y,
+    button: "left",
+    clickCount: 1,
+  });
+}
+
+async function cdpArrowDownEnter(client, presses) {
+  for (let i = 0; i < presses; i++) {
+    await client.send("Input.dispatchKeyEvent", {
+      type: "keyDown",
+      key: "ArrowDown",
+      code: "ArrowDown",
+      windowsVirtualKeyCode: 40,
+    });
+    await client.send("Input.dispatchKeyEvent", {
+      type: "keyUp",
+      key: "ArrowDown",
+      code: "ArrowDown",
+      windowsVirtualKeyCode: 40,
+    });
+    await new Promise((r) => setTimeout(r, 25));
+  }
+  await new Promise((r) => setTimeout(r, 200));
+  await client.send("Input.dispatchKeyEvent", {
+    type: "keyDown",
+    key: "Enter",
+    code: "Enter",
+    windowsVirtualKeyCode: 13,
+  });
+  await client.send("Input.dispatchKeyEvent", {
+    type: "keyUp",
+    key: "Enter",
+    code: "Enter",
+    windowsVirtualKeyCode: 13,
+  });
+}
+
+async function cdpKey(client, key, code, virtualKeyCode, modifiers = 0) {
+  await client.send("Input.dispatchKeyEvent", {
+    type: "keyDown",
+    key,
+    code,
+    windowsVirtualKeyCode: virtualKeyCode,
+    nativeVirtualKeyCode: virtualKeyCode,
+    modifiers,
+  });
+  await client.send("Input.dispatchKeyEvent", {
+    type: "keyUp",
+    key,
+    code,
+    windowsVirtualKeyCode: virtualKeyCode,
+    nativeVirtualKeyCode: virtualKeyCode,
+    modifiers,
+  });
+}
+
+async function cdpTypeText(client, text) {
+  await client.send("Input.insertText", { text: String(text || "") });
+}
+
+async function checkPhoneCountryCommitted(pageClient) {
+  return pageClient.evaluate(
+    `(() => {
+      function hasCanada(el) {
+        var t = ((el && (el.innerText || el.textContent)) || "").toLowerCase().replace(/\\s+/g, " ");
+        return t.includes("canada") && (t.includes("+1") || t.includes("(+1)"));
+      }
+      var input = document.getElementById("phoneNumber--countryPhoneCode");
+      if (input) {
+        var node = input;
+        for (var i = 0; i < 10 && node; i++) {
+          node = node.parentElement;
+          if (node && hasCanada(node)) return true;
+        }
+      }
+      var checked = document.querySelector('[aria-label*="Canada"][aria-checked="true"], [aria-label*="Canada"][aria-selected="true"]');
+      if (checked) return true;
+      var chips = Array.from(document.querySelectorAll('[data-automation-id*="country"], [class*="chip"], [class*="tag"], [class*="pill"]'));
+      if (chips.some(hasCanada)) return true;
+      return false;
+    })()`,
+    5000,
+  );
+}
+
+async function tryFixPhoneCountryCodeViaCdp(pageClient) {
+  try {
+    // Get the country code input's viewport coords to open the dropdown.
+    const inputCoords = await pageClient.evaluate(
+      `(() => {
+        var input = document.getElementById("phoneNumber--countryPhoneCode");
+        if (!input) return null;
+        var rect = input.getBoundingClientRect();
+        if (!rect || rect.width === 0) return null;
+        return { x: Math.round(rect.left + rect.width / 2), y: Math.round(rect.top + rect.height / 2) };
+      })()`,
+      3000,
+    );
+    if (!inputCoords || !inputCoords.x) {
+      process.stderr.write("[phoneCountryFix] input not found\n");
+      return false;
+    }
+
+    // Attempt 1: CDP click to open, ArrowDown 40 times, Enter.
+    // Canada is ~38-42nd alphabetically; 40 presses reliably lands on it.
+    await cdpClick(pageClient, inputCoords.x, inputCoords.y);
+    await new Promise((r) => setTimeout(r, 1000));
+    const listboxPresent = await pageClient.evaluate(
+      `(() => { var lb = document.querySelector('[role="listbox"]'); return lb && lb.querySelectorAll('[role="option"]').length > 0; })()`,
+      2000,
+    );
+    if (listboxPresent) {
+      await cdpArrowDownEnter(pageClient, 40);
+      await new Promise((r) => setTimeout(r, 700));
+      if (await checkPhoneCountryCommitted(pageClient)) {
+        process.stderr.write(
+          "[phoneCountryFix] committed via ArrowDown×40+Enter\n",
+        );
+        return true;
+      }
+      // Might have landed 1-2 off — try ArrowUp back to exact position.
+      for (let back = 1; back <= 3; back++) {
+        await pageClient.send("Input.dispatchKeyEvent", {
+          type: "keyDown",
+          key: "ArrowUp",
+          code: "ArrowUp",
+          windowsVirtualKeyCode: 38,
+        });
+        await pageClient.send("Input.dispatchKeyEvent", {
+          type: "keyUp",
+          key: "ArrowUp",
+          code: "ArrowUp",
+          windowsVirtualKeyCode: 38,
+        });
+        await new Promise((r) => setTimeout(r, 25));
+      }
+      await pageClient.send("Input.dispatchKeyEvent", {
+        type: "keyDown",
+        key: "Enter",
+        code: "Enter",
+        windowsVirtualKeyCode: 13,
+      });
+      await pageClient.send("Input.dispatchKeyEvent", {
+        type: "keyUp",
+        key: "Enter",
+        code: "Enter",
+        windowsVirtualKeyCode: 13,
+      });
+      await new Promise((r) => setTimeout(r, 700));
+      if (await checkPhoneCountryCommitted(pageClient)) {
+        process.stderr.write(
+          "[phoneCountryFix] committed via ArrowDown×40 ArrowUp×3+Enter\n",
+        );
+        return true;
+      }
+    }
+
+    // Attempt 2: Reload the page — Workday often pre-fills the country code on reload.
+    process.stderr.write(
+      "[phoneCountryFix] ArrowDown attempt failed; reloading page\n",
+    );
+    await pageClient.send("Page.reload", { ignoreCache: false });
+    await new Promise((r) => setTimeout(r, 4000));
+    if (await checkPhoneCountryCommitted(pageClient)) {
+      process.stderr.write("[phoneCountryFix] committed after page reload\n");
+      return true;
+    }
+
+    process.stderr.write("[phoneCountryFix] all attempts failed\n");
+    return false;
+  } catch (_e) {
+    process.stderr.write("[phoneCountryFix] error: " + String(_e) + "\n");
+    return false;
+  }
+}
+
+async function tryFixWorkdayDateSectionsViaCdp(pageClient) {
+  const fields = await pageClient.evaluate(
+    `(() => {
+      const visible = (el) => {
+        if (!el) return false;
+        const style = getComputedStyle(el);
+        const rect = el.getBoundingClientRect();
+        return style.display !== "none" && style.visibility !== "hidden" && rect.width > 0 && rect.height > 0 && !el.disabled;
+      };
+      const controls = [...document.querySelectorAll('input[id*="dateSectionMonth"], input[id*="dateSectionDay"], input[id*="dateSectionYear"]')]
+        .filter(visible)
+        .map((input) => {
+          input.scrollIntoView({ block: "center", inline: "center" });
+          const rect = input.getBoundingClientRect();
+          const id = input.id || "";
+          let value = input.value || "";
+          if (/dateSectionMonth/i.test(id)) value = value || "5";
+          if (/dateSectionDay/i.test(id)) value = value || "25";
+          if (/dateSectionYear/i.test(id)) value = value || "2026";
+          return {
+            id,
+            label: input.getAttribute("aria-label") || "",
+            value,
+            beforeValue: input.value || "",
+            x: Math.round(rect.left + rect.width / 2),
+            y: Math.round(rect.top + rect.height / 2)
+          };
+        });
+      return controls;
+    })()`,
+    10000,
+  );
+  if (!Array.isArray(fields) || fields.length === 0) {
+    return { ok: false, reason: "date_section_fields_not_found" };
+  }
+  const attempts = [];
+  for (const field of fields) {
+    await cdpClick(pageClient, field.x, field.y);
+    await sleep(80);
+    await cdpKey(pageClient, "a", "KeyA", 65, 2);
+    await sleep(40);
+    await pageClient.send("Input.dispatchKeyEvent", {
+      type: "keyDown",
+      key: "Backspace",
+      code: "Backspace",
+      windowsVirtualKeyCode: 8,
+      nativeVirtualKeyCode: 8,
+    });
+    await pageClient.send("Input.dispatchKeyEvent", {
+      type: "keyUp",
+      key: "Backspace",
+      code: "Backspace",
+      windowsVirtualKeyCode: 8,
+      nativeVirtualKeyCode: 8,
+    });
+    await sleep(80);
+    await cdpTypeText(pageClient, field.value);
+    await sleep(80);
+    await cdpKey(pageClient, "Tab", "Tab", 9);
+    await sleep(180);
+    const after = await pageClient.evaluate(
+      `(() => {
+        const input = document.getElementById(${JSON.stringify(field.id)});
+        return input ? {
+          id: input.id || "",
+          value: input.value || "",
+          invalid: input.getAttribute("aria-invalid") || ""
+        } : null;
+      })()`,
+      5000,
+    );
+    attempts.push({ ...field, after });
+  }
+  await sleep(700);
+  const state = await pageClient.evaluate(
+    `(() => {
+      const visible = (el) => {
+        if (!el) return false;
+        const style = getComputedStyle(el);
+        const rect = el.getBoundingClientRect();
+        return style.display !== "none" && style.visibility !== "hidden" && rect.width > 0 && rect.height > 0;
+      };
+      const errors = [...document.querySelectorAll('[role="alert"], [data-automation-id*="error"], [id*="error"], .css-1iucqxd')]
+        .filter(visible)
+        .map((el) => (el.innerText || el.textContent || "").replace(/\\s+/g, " ").trim())
+        .filter(Boolean)
+        .slice(0, 10);
+      const values = [...document.querySelectorAll('input[id*="dateSectionMonth"], input[id*="dateSectionDay"], input[id*="dateSectionYear"]')]
+        .filter(visible)
+        .map((input) => ({ id: input.id || "", value: input.value || "", invalid: input.getAttribute("aria-invalid") || "" }));
+      return { errors, values };
+    })()`,
+    10000,
+  );
+  const hasDateError = (state.errors || []).some((error) =>
+    /desired start date|required and must have a value/i.test(error),
+  );
+  return {
+    ok: !hasDateError,
+    reason: hasDateError
+      ? "date_section_still_has_validation_error"
+      : "date_section_keyboard_committed",
+    attempts,
+    state,
+  };
+}
+
+async function suppressStaleWorkdayDateErrors(summary) {
+  const errors = Array.isArray(summary?.errors) ? summary.errors : [];
+  if (
+    !errors.some((error) =>
+      /desired start date|required and must have a value/i.test(error),
+    )
+  ) {
+    return summary;
+  }
+  const fields = Array.isArray(summary?.fields) ? summary.fields : [];
+  const dateValues = fields
+    .filter((field) => /dateSection(Month|Day|Year)/i.test(field.id || ""))
+    .map((field) => ({
+      id: field.id || "",
+      value: String(field.value || "").trim(),
+      invalid: field.invalid || "",
+    }));
+  const hasMonth = dateValues.some(
+    (field) => /dateSectionMonth/i.test(field.id) && field.value,
+  );
+  const hasDay = dateValues.some(
+    (field) => /dateSectionDay/i.test(field.id) && field.value,
+  );
+  const hasYear = dateValues.some(
+    (field) => /dateSectionYear/i.test(field.id) && field.value,
+  );
+  const anyInvalid = dateValues.some((field) => field.invalid === "true");
+  if (!hasMonth || !hasDay || !hasYear || anyInvalid) {
+    return summary;
+  }
+  return {
+    ...summary,
+    errors: errors.filter(
+      (error) =>
+        !/desired start date|required and must have a value/i.test(error),
+    ),
+    suppressedErrors: [
+      ...(summary.suppressedErrors || []),
+      {
+        reason: "stale_date_section_validation_error",
+        errors: errors.filter((error) =>
+          /desired start date|required and must have a value/i.test(error),
+        ),
+        dateValues,
+      },
+    ],
+  };
+}
+
+async function fillCurrentPage(optionsClient, applyUrl, args) {
   return optionsClient.evaluate(
     `(async () => {
       const tabs = await new Promise((resolve) => chrome.tabs.query({}, resolve));
       const applyUrl = ${JSON.stringify(applyUrl)};
-      const applyHost = new URL(applyUrl).host;
+      const parsedApplyUrl = new URL(applyUrl);
+      const applyHost = parsedApplyUrl.host;
       const applyBase = applyUrl.split("?")[0];
+      const normalizeWorkdayPathname = (pathname) => String(pathname || "")
+        .replace(/^\\/[a-z]{2}-[A-Z]{2}(?=\\/)/, "")
+        .replace(/\\/$/, "");
+      const jobPathBase = normalizeWorkdayPathname(parsedApplyUrl.pathname)
+        .replace(/\\/apply\\/applyManually\\/?$/i, "")
+        .replace(/\\/apply\\/?$/i, "");
       const usable = (item) => String(item.url || "").startsWith(applyBase)
         && !/create account|sign in|error|ok/i.test(String(item.title || ""));
+      const sameWorkdayApply = (item) => {
+        try {
+          const url = new URL(item.url || "");
+          const itemPath = normalizeWorkdayPathname(url.pathname);
+          return url.host === applyHost
+            && itemPath.startsWith(jobPathBase)
+            && /\\/apply(?:\\/|$)/i.test(itemPath)
+            && !/create account|sign in|error|ok/i.test(String(item.title || ""));
+        } catch (_error) {
+          return false;
+        }
+      };
       const candidates = tabs.filter(usable)
-        .concat(tabs.filter((item) => String(item.url || "").includes(applyHost) && String(item.url || "").includes("/apply/") && !/create account|sign in|error|ok/i.test(String(item.title || ""))));
+        .concat(tabs.filter(sameWorkdayApply));
       const deduped = [...new Map(candidates.map((item) => [item.id, item])).values()];
       const tab = deduped.find((item) => item.active)
         || deduped.sort((a, b) => Number(b.id || 0) - Number(a.id || 0))[0];
@@ -797,7 +1159,7 @@ async function fillCurrentPage(optionsClient, applyUrl) {
       }
       const wrapped = await new Promise((resolve) => {
         chrome.runtime.sendMessage(
-          { type: "hunt.apply.fill_current_page", payload: { tabId: tab.id } },
+          { type: "hunt.apply.fill_current_page", payload: { tabId: tab.id, allowLlmAnswers: ${JSON.stringify(args.llmAnswers)} } },
           (messageResponse) => resolve({
             messageResponse,
             lastError: chrome.runtime.lastError && chrome.runtime.lastError.message
@@ -816,8 +1178,11 @@ async function fillCurrentPage(optionsClient, applyUrl) {
         summary: attempt.summary || "",
         filledFieldCount: attempt.filledFieldCount || result.filledFieldCount || 0,
         manualReviewReasons: attempt.manualReviewReasons || result.manualReviewReasons || [],
+        bestEffortWarnings: attempt.bestEffortWarnings || result.bestEffortWarnings || [],
         pendingLlmFieldCount: result.pendingLlmFieldCount || 0,
-        interactionTrace: (result.interactionTrace || []).slice(0, 120),
+        generatedAnswers: result.generatedAnswers || [],
+        filledFields: result.filledFields || [],
+        interactionTrace: result.interactionTrace || [],
         fieldInventory: (result.fieldInventory || []).map((field) => ({
           kind: field.kind || "",
           tagName: field.tagName || "",
@@ -828,12 +1193,432 @@ async function fillCurrentPage(optionsClient, applyUrl) {
           required: Boolean(field.required),
           filled: Boolean(field.filled),
           skippedReason: field.skippedReason || "",
-          valueSource: field.valueSource || ""
-        })).slice(0, 120)
+          valueSource: field.valueSource || "",
+          bestEffortWarning: field.bestEffortWarning || "",
+          options: Array.isArray(field.options) ? field.options : []
+        }))
       };
     })()`,
     120000,
   );
+}
+
+async function tryFixWorkdaySourceViaKeyboard(pageClient) {
+  const target = await pageClient.evaluate(
+    `(async () => {
+      const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+      const visible = (el) => {
+        if (!el) return false;
+        const style = getComputedStyle(el);
+        const rect = el.getBoundingClientRect();
+        return style.display !== "none" && style.visibility !== "hidden" && rect.width > 0 && rect.height > 0 && !el.disabled;
+      };
+      const textOf = (el) => (el?.innerText || el?.textContent || "").replace(/\\s+/g, " ").trim();
+      const hasAnySelection = (input) => {
+        const container = input.closest('[data-automation-id="formField"], [data-automation-id="formField-source"]') || input.parentElement;
+        const text = textOf(container);
+        const selected = [...(container?.querySelectorAll?.('[data-automation-id="selectedItem"], [data-automation-id="promptSelectionLabel"], [aria-label*="press delete"]') || [])]
+          .map((el) => [el.getAttribute("aria-label"), textOf(el)].filter(Boolean).join(" "))
+          .join(" ")
+          .replace(/\\s+/g, " ")
+          .trim();
+        return /\\b[1-9]\\d*\\s+items?\\s+selected\\b/i.test(text) || (selected && !/^expanded$/i.test(selected) && !/^search$/i.test(selected));
+      };
+      const input = document.getElementById("source--source") || [...document.querySelectorAll('input[data-automation-id="searchBox"], input[data-uxi-widget-type="selectinput"]')]
+        .find((candidate) => /how did you hear about us|source/i.test(textOf(candidate.closest('[data-automation-id*="formField"], [role="group"]') || candidate.parentElement)));
+      if (!input || !visible(input)) {
+        return { ok: false, reason: "source_input_not_found" };
+      }
+      if (hasAnySelection(input)) {
+        return { ok: true, reason: "source_already_selected" };
+      }
+      input.scrollIntoView({ block: "center", inline: "center" });
+      await sleep(250);
+      const rect = input.getBoundingClientRect();
+      return {
+        ok: true,
+        reason: "source_keyboard_target",
+        x: Math.round(rect.left + rect.width / 2),
+        y: Math.round(rect.top + rect.height / 2)
+      };
+    })()`,
+    20000,
+  );
+  if (!target?.ok || target.reason === "source_already_selected") {
+    return target;
+  }
+  await pageClient.send("Input.dispatchMouseEvent", {
+    type: "mouseMoved",
+    x: target.x,
+    y: target.y,
+  });
+  await pageClient.send("Input.dispatchMouseEvent", {
+    type: "mousePressed",
+    x: target.x,
+    y: target.y,
+    button: "left",
+    clickCount: 1,
+  });
+  await pageClient.send("Input.dispatchMouseEvent", {
+    type: "mouseReleased",
+    x: target.x,
+    y: target.y,
+    button: "left",
+    clickCount: 1,
+  });
+  await sleep(350);
+  const attempts = [];
+  for (let attempt = 0; attempt < 6; attempt += 1) {
+    await pageClient.send("Input.dispatchKeyEvent", {
+      type: "keyDown",
+      key: "ArrowDown",
+      code: "ArrowDown",
+      windowsVirtualKeyCode: 40,
+      nativeVirtualKeyCode: 40,
+    });
+    await pageClient.send("Input.dispatchKeyEvent", {
+      type: "keyUp",
+      key: "ArrowDown",
+      code: "ArrowDown",
+      windowsVirtualKeyCode: 40,
+      nativeVirtualKeyCode: 40,
+    });
+    await sleep(100);
+    await pageClient.send("Input.dispatchKeyEvent", {
+      type: "keyDown",
+      key: "Enter",
+      code: "Enter",
+      windowsVirtualKeyCode: 13,
+      nativeVirtualKeyCode: 13,
+    });
+    await pageClient.send("Input.dispatchKeyEvent", {
+      type: "keyUp",
+      key: "Enter",
+      code: "Enter",
+      windowsVirtualKeyCode: 13,
+      nativeVirtualKeyCode: 13,
+    });
+    await sleep(500);
+    const state = await pageClient.evaluate(
+      `(() => {
+        const textOf = (el) => (el?.innerText || el?.textContent || "").replace(/\\s+/g, " ").trim();
+        const input = document.getElementById("source--source") || document.querySelector('input[data-uxi-widget-type="selectinput"]');
+        const container = input?.closest?.('[data-automation-id="formField"], [data-automation-id="formField-source"]') || input?.parentElement;
+        const text = textOf(container);
+        const options = [...document.querySelectorAll('[role="option"], [data-automation-id="promptLeafNode"]')]
+          .filter((el) => {
+            const style = getComputedStyle(el);
+            const rect = el.getBoundingClientRect();
+            return style.display !== "none" && style.visibility !== "hidden" && rect.width > 0 && rect.height > 0;
+          })
+          .map((el) => textOf(el))
+          .filter(Boolean)
+          .slice(0, 30);
+        const selected = [...(container?.querySelectorAll?.('[data-automation-id="selectedItem"], [data-automation-id="promptSelectionLabel"], [aria-label*="press delete"]') || [])]
+          .map((el) => [el.getAttribute("aria-label"), textOf(el)].filter(Boolean).join(" "))
+          .join(" ")
+          .replace(/\\s+/g, " ")
+          .trim();
+        const selectedByCount = /\\b[1-9]\\d*\\s+items?\\s+selected\\b/i.test(text);
+        const selectedByLabel = selected && !/^expanded$/i.test(selected) && !/^search$/i.test(selected);
+        return {
+          text,
+          selected,
+          selectedOk: Boolean(selectedByCount || selectedByLabel),
+          options
+        };
+      })()`,
+      20000,
+    );
+    attempts.push({ attempt: attempt + 1, ...state });
+    if (state.selectedOk) {
+      return {
+        ok: true,
+        reason: "source_keyboard_selected",
+        attempts,
+      };
+    }
+  }
+  return {
+    ok: false,
+    reason: "source_keyboard_not_selected",
+    attempts,
+  };
+}
+
+async function tryFixWorkdayRequiredSearchInputsViaKeyboard(
+  pageClient,
+  fields,
+) {
+  const requestedFields = (fields || [])
+    .map((field) => ({
+      id: field.id || "",
+      name: field.name || "",
+      descriptor: field.descriptor || "",
+    }))
+    .filter((field) => field.id || field.name || field.descriptor);
+  if (!requestedFields.length) {
+    return { ok: true, skipped: true, reason: "no_required_search_inputs" };
+  }
+  const repairs = [];
+  for (const field of requestedFields) {
+    const fieldText = [field.id, field.name, field.descriptor]
+      .filter(Boolean)
+      .join(" ");
+    const isCitizenshipField = /citizenship/i.test(fieldText);
+    const isPhoneCountryCodeField =
+      /country\s*phone\s*code/i.test(fieldText) ||
+      /countryphonecode/i.test(fieldText);
+    const desiredSearchText = isPhoneCountryCodeField ? "Canada" : "";
+    const target = await pageClient.evaluate(
+      `(() => {
+        const wanted = ${JSON.stringify(field)};
+        const desiredSearchText = ${JSON.stringify(desiredSearchText)};
+        const visible = (el) => {
+          if (!el) return false;
+          const style = getComputedStyle(el);
+          const rect = el.getBoundingClientRect();
+          return style.display !== "none" && style.visibility !== "hidden" && rect.width > 0 && rect.height > 0 && !el.disabled;
+        };
+        const textOf = (el) => (el?.innerText || el?.textContent || "").replace(/\\s+/g, " ").trim();
+        const isSearchInput = (el) => el?.tagName === "INPUT"
+          && (el.getAttribute("data-automation-id") === "searchBox"
+            || /selectinput|multiselect/i.test(el.getAttribute("data-uxi-widget-type") || "")
+            || el.getAttribute("role") === "combobox"
+            || el.getAttribute("aria-autocomplete") === "list");
+        const hasAnySelection = (input) => {
+          const container = input.closest('[data-automation-id="formField"], [data-automation-id*="formField"], [role="group"]') || input.parentElement;
+          const text = textOf(container);
+          const selected = [...(container?.querySelectorAll?.('[data-automation-id="selectedItem"], [data-automation-id="promptSelectionLabel"], [aria-label*="press delete"]') || [])]
+            .map((el) => [el.getAttribute("aria-label"), textOf(el)].filter(Boolean).join(" "))
+            .join(" ")
+            .replace(/\\s+/g, " ")
+            .trim();
+          const selectedText = [text, selected, input.value].filter(Boolean).join(" ").toLowerCase();
+          if (desiredSearchText && !selectedText.includes(desiredSearchText.toLowerCase())) {
+            return false;
+          }
+          return /\\b[1-9]\\d*\\s+items?\\s+selected\\b/i.test(text)
+            || (selected && !/^expanded$/i.test(selected) && !/^search$/i.test(selected))
+            || Boolean(String(input.value || "").trim());
+        };
+        const wantedText = [wanted.id, wanted.name, wanted.descriptor].filter(Boolean).join(" ").toLowerCase();
+        const candidates = [...document.querySelectorAll("input")]
+          .filter((input) => visible(input) && isSearchInput(input))
+          .map((input) => {
+            const container = input.closest('[data-automation-id="formField"], [data-automation-id*="formField"], [role="group"]') || input.parentElement;
+            const haystack = [
+              input.id,
+              input.name,
+              input.getAttribute("aria-label"),
+              input.getAttribute("placeholder"),
+              textOf(container)
+            ].filter(Boolean).join(" ").toLowerCase();
+            let score = 0;
+            if (wanted.id && input.id === wanted.id) score += 1000;
+            if (wanted.name && input.name === wanted.name) score += 700;
+            wantedText.split(/\\s+/).filter((piece) => piece.length > 3).forEach((piece) => {
+              if (haystack.includes(piece)) score += 5;
+            });
+            return { input, score, haystack };
+          })
+          .filter((item) => item.score > 0)
+          .sort((a, b) => b.score - a.score);
+        const item = candidates[0];
+        if (!item) {
+          return { ok: false, reason: "required_search_input_not_found", field: wanted };
+        }
+        if (hasAnySelection(item.input)) {
+          return { ok: true, reason: "required_search_input_already_selected", field: wanted };
+        }
+        item.input.scrollIntoView({ block: "center", inline: "center" });
+        const rect = item.input.getBoundingClientRect();
+        return {
+          ok: true,
+          reason: "required_search_input_keyboard_target",
+          field: wanted,
+          id: item.input.id || "",
+          score: item.score,
+          x: Math.round(rect.left + rect.width / 2),
+          y: Math.round(rect.top + rect.height / 2)
+        };
+      })()`,
+      20000,
+    );
+    if (
+      !target?.ok ||
+      target.reason === "required_search_input_already_selected"
+    ) {
+      repairs.push(target);
+      continue;
+    }
+    if (isCitizenshipField || isPhoneCountryCodeField) {
+      await pageClient.evaluate(
+        `(() => {
+          const input = document.getElementById(${JSON.stringify(field.id)});
+          if (!input) return false;
+          input.focus();
+          try {
+            input.setSelectionRange(0, String(input.value || "").length);
+          } catch (_error) {}
+          return true;
+        })()`,
+        5000,
+      );
+      await cdpKey(pageClient, "Backspace", "Backspace", 8);
+      await sleep(250);
+    }
+    await cdpClick(pageClient, target.x, target.y);
+    await sleep(350);
+    if (desiredSearchText) {
+      await cdpKey(pageClient, "a", "KeyA", 65, 2);
+      await cdpKey(pageClient, "Backspace", "Backspace", 8);
+      await sleep(100);
+      await cdpTypeText(pageClient, desiredSearchText);
+      await sleep(500);
+    }
+    if (isPhoneCountryCodeField) {
+      const canadaOption = await pageClient.evaluate(
+        `(() => {
+          const input = document.getElementById(${JSON.stringify(target.id)});
+          if (input) {
+            input.focus();
+            const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set;
+            if (setter) setter.call(input, "Canada");
+            else input.value = "Canada";
+            input.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertText", data: "Canada" }));
+            input.dispatchEvent(new Event("change", { bubbles: true }));
+          }
+          const visible = (el) => {
+            if (!el) return false;
+            const style = getComputedStyle(el);
+            const rect = el.getBoundingClientRect();
+            return style.display !== "none" && style.visibility !== "hidden" && rect.width > 0 && rect.height > 0;
+          };
+          const textOf = (el) => (el?.innerText || el?.textContent || el?.getAttribute?.("aria-label") || "").replace(/\\s+/g, " ").trim();
+          const options = [...document.querySelectorAll('[role="option"], [data-automation-id="promptLeafNode"], [data-automation-id="promptOption"]')]
+            .filter(visible)
+            .map((el) => ({ el, text: textOf(el) }))
+            .filter((item) => /canada/i.test(item.text) && /(\\+1|\\(\\+1\\))/.test(item.text));
+          const item = options[0];
+          if (!item) {
+            return { ok: false, reason: "canada_option_not_found" };
+          }
+          item.el.scrollIntoView({ block: "center", inline: "center" });
+          const rect = item.el.getBoundingClientRect();
+          return {
+            ok: true,
+            reason: "canada_option_found",
+            text: item.text,
+            x: Math.round(rect.left + rect.width / 2),
+            y: Math.round(rect.top + rect.height / 2)
+          };
+        })()`,
+        10000,
+      );
+      if (canadaOption?.ok) {
+        await cdpClick(pageClient, canadaOption.x, canadaOption.y);
+        await sleep(700);
+        const committed = await checkPhoneCountryCommitted(pageClient);
+        if (committed?.ok) {
+          repairs.push({
+            ok: true,
+            reason: "required_search_input_keyboard_selected",
+            target,
+            attempts: [
+              {
+                attempt: 1,
+                selectedOk: true,
+                desiredOk: true,
+                selected: committed.reason,
+                options: [canadaOption.text],
+              },
+            ],
+          });
+          continue;
+        }
+      }
+    }
+    const attempts = [];
+    const attemptCount = isCitizenshipField ? 1 : 8;
+    for (let attempt = 0; attempt < attemptCount; attempt += 1) {
+      if (isCitizenshipField) {
+        await cdpArrowDownEnter(pageClient, 43);
+      } else {
+        await cdpKey(pageClient, "ArrowDown", "ArrowDown", 40);
+        await sleep(100);
+        await cdpKey(pageClient, "Enter", "Enter", 13);
+      }
+      await sleep(100);
+      await sleep(550);
+      const state = await pageClient.evaluate(
+        `(() => {
+          const input = document.getElementById(${JSON.stringify(target.id)});
+          const visible = (el) => {
+            if (!el) return false;
+            const style = getComputedStyle(el);
+            const rect = el.getBoundingClientRect();
+            return style.display !== "none" && style.visibility !== "hidden" && rect.width > 0 && rect.height > 0;
+          };
+          const textOf = (el) => (el?.innerText || el?.textContent || "").replace(/\\s+/g, " ").trim();
+          const container = input?.closest?.('[data-automation-id="formField"], [data-automation-id*="formField"], [role="group"]') || input?.parentElement;
+          const text = textOf(container);
+          const selected = [...(container?.querySelectorAll?.('[data-automation-id="selectedItem"], [data-automation-id="promptSelectionLabel"], [aria-label*="press delete"]') || [])]
+            .map((el) => [el.getAttribute("aria-label"), textOf(el)].filter(Boolean).join(" "))
+            .join(" ")
+            .replace(/\\s+/g, " ")
+            .trim();
+          const options = [...document.querySelectorAll('[role="option"], [data-automation-id="promptLeafNode"]')]
+            .filter(visible)
+            .map((el) => textOf(el))
+            .filter(Boolean)
+            .slice(0, 40);
+          const selectedOk = /\\b[1-9]\\d*\\s+items?\\s+selected\\b/i.test(text)
+            || (selected && !/^expanded$/i.test(selected) && !/^search$/i.test(selected))
+            || Boolean(String(input?.value || "").trim());
+          const desiredOk = ${JSON.stringify(
+            desiredSearchText,
+          )} ? [text, selected, input?.value || ""].join(" ").toLowerCase().includes(${JSON.stringify(
+            desiredSearchText.toLowerCase(),
+          )}) : true;
+          return {
+            text,
+            inputValue: input?.value || "",
+            selected,
+            selectedOk: Boolean(selectedOk && desiredOk),
+            desiredOk: Boolean(desiredOk),
+            options
+          };
+        })()`,
+        20000,
+      );
+      attempts.push({ attempt: attempt + 1, ...state });
+      if (state.selectedOk) {
+        repairs.push({
+          ok: true,
+          reason: "required_search_input_keyboard_selected",
+          target,
+          attempts,
+        });
+        break;
+      }
+    }
+    if (!repairs.at(-1)?.ok || repairs.at(-1)?.target?.id !== target.id) {
+      repairs.push({
+        ok: false,
+        reason: "required_search_input_keyboard_not_selected",
+        target,
+        attempts,
+      });
+    }
+  }
+  return {
+    ok: repairs.some((repair) => repair?.ok),
+    reason: repairs.some((repair) => repair?.ok)
+      ? "required_search_keyboard_selected"
+      : "required_search_keyboard_not_selected",
+    repairs,
+  };
 }
 
 async function clearCurrentPage(optionsClient, applyUrl) {
@@ -841,12 +1626,31 @@ async function clearCurrentPage(optionsClient, applyUrl) {
     `(async () => {
       const tabs = await new Promise((resolve) => chrome.tabs.query({}, resolve));
       const applyUrl = ${JSON.stringify(applyUrl)};
-      const applyHost = new URL(applyUrl).host;
+      const parsedApplyUrl = new URL(applyUrl);
+      const applyHost = parsedApplyUrl.host;
       const applyBase = applyUrl.split("?")[0];
+      const normalizeWorkdayPathname = (pathname) => String(pathname || "")
+        .replace(/^\\/[a-z]{2}-[A-Z]{2}(?=\\/)/, "")
+        .replace(/\\/$/, "");
+      const jobPathBase = normalizeWorkdayPathname(parsedApplyUrl.pathname)
+        .replace(/\\/apply\\/applyManually\\/?$/i, "")
+        .replace(/\\/apply\\/?$/i, "");
       const usable = (item) => String(item.url || "").startsWith(applyBase)
         && !/create account|sign in|error|ok/i.test(String(item.title || ""));
+      const sameWorkdayApply = (item) => {
+        try {
+          const url = new URL(item.url || "");
+          const itemPath = normalizeWorkdayPathname(url.pathname);
+          return url.host === applyHost
+            && itemPath.startsWith(jobPathBase)
+            && /\\/apply(?:\\/|$)/i.test(itemPath)
+            && !/create account|sign in|error|ok/i.test(String(item.title || ""));
+        } catch (_error) {
+          return false;
+        }
+      };
       const candidates = tabs.filter(usable)
-        .concat(tabs.filter((item) => String(item.url || "").includes(applyHost) && String(item.url || "").includes("/apply/") && !/create account|sign in|error|ok/i.test(String(item.title || ""))));
+        .concat(tabs.filter(sameWorkdayApply));
       const deduped = [...new Map(candidates.map((item) => [item.id, item])).values()];
       const tab = deduped.find((item) => item.active)
         || deduped.sort((a, b) => Number(b.id || 0) - Number(a.id || 0))[0];
@@ -956,15 +1760,41 @@ async function clickNext(pageClient) {
         .filter(visible)
         .map((node) => (node.innerText || node.textContent || "").replace(/\\s+/g, " ").trim())
         .filter(Boolean)
+        .filter((text) => !/successfully uploaded/i.test(text))
         .filter((text, index, all) => all.indexOf(text) === index);
+      const dateSectionLooksFilled = () => {
+        const values = [...document.querySelectorAll('input[id*="dateSectionMonth"], input[id*="dateSectionDay"], input[id*="dateSectionYear"]')]
+          .filter(visible)
+          .map((input) => ({
+            id: input.id || "",
+            value: String(input.value || "").trim(),
+            invalid: input.getAttribute("aria-invalid") || ""
+          }));
+        return values.some((field) => /dateSectionMonth/i.test(field.id) && field.value)
+          && values.some((field) => /dateSectionDay/i.test(field.id) && field.value)
+          && values.some((field) => /dateSectionYear/i.test(field.id) && field.value)
+          && !values.some((field) => field.invalid === "true");
+      };
       const beforeHref = location.href;
-      const errors = visibleValidationErrors();
+      let errors = visibleValidationErrors();
+      const suppressedErrors = [];
+      if (dateSectionLooksFilled()) {
+        const staleDateErrors = errors.filter((error) => /desired start date|required and must have a value/i.test(error));
+        if (staleDateErrors.length) {
+          suppressedErrors.push({
+            reason: "stale_date_section_validation_error",
+            errors: staleDateErrors
+          });
+          errors = errors.filter((error) => !/desired start date|required and must have a value/i.test(error));
+        }
+      }
       if (errors.length) {
         return {
           clicked: false,
           reason: "visible_validation_errors",
           href: beforeHref,
-          errors: errors.slice(0, 10)
+          errors: errors.slice(0, 10),
+          suppressedErrors
         };
       }
       const button = [...document.querySelectorAll("button")]
@@ -982,6 +1812,7 @@ async function clickNext(pageClient) {
         beforeHref,
         href: location.href,
         currentStep: stepMatch ? { current: Number(stepMatch[1]), total: Number(stepMatch[2]), title: stepMatch[3].trim() } : null,
+        suppressedErrors,
         bodyHead: body.replace(/\\s+/g, " ").trim().slice(0, 600)
       };
     })()`,
@@ -1049,6 +1880,9 @@ async function clearRepeatableWorkdaySections(pageClient) {
 
 function summarizeFill(fill) {
   const interactionTrace = fill.interactionTrace || [];
+  const fieldInventory = Array.isArray(fill.fieldInventory)
+    ? fill.fieldInventory
+    : [];
   const componentTrace = interactionTrace.filter((entry) =>
     ["hover", "click", "already_filled", "set_value"].includes(entry.action),
   );
@@ -1069,9 +1903,44 @@ function summarizeFill(fill) {
     summary: fill.summary,
     filledFieldCount: fill.filledFieldCount,
     pendingLlmFieldCount: fill.pendingLlmFieldCount,
-    manualReviewReasons: fill.manualReviewReasons,
+    manualReviewReasons: fill.manualReviewReasons || [],
+    bestEffortWarnings: fill.bestEffortWarnings || [],
+    filledFields: (fill.filledFields || []).map((field) => ({
+      field: field.field || "",
+      descriptor: field.descriptor || field.field || "",
+      id: field.id || "",
+      name: field.name || "",
+      tagName: field.tagName || "",
+      type: field.type || "",
+      value: field.value || "",
+      selectedOption: field.selectedOption || "",
+      valueSource: field.valueSource || "",
+      bestEffortWarning: field.bestEffortWarning || "",
+    })),
+    generatedAnswers: (fill.generatedAnswers || []).map((answer) => ({
+      questionHash: answer.questionHash || "",
+      questionText: answer.questionText || "",
+      answerText: answer.answerText || "",
+      answerSource: answer.answerSource || "",
+      confidence: answer.confidence || "",
+      manualReviewRequired: Boolean(answer.manualReviewRequired),
+    })),
+    fieldInventory: fieldInventory.map((field) => ({
+      kind: field.kind || "",
+      tagName: field.tagName || "",
+      type: field.type || "",
+      id: field.id || "",
+      name: field.name || "",
+      descriptor: field.descriptor || "",
+      required: Boolean(field.required),
+      filled: Boolean(field.filled),
+      skippedReason: field.skippedReason || "",
+      valueSource: field.valueSource || "",
+      bestEffortWarning: field.bestEffortWarning || "",
+      options: field.options || [],
+    })),
     nextAction: fill.nextAction || null,
-    unfilledRequired: fill.fieldInventory
+    unfilledRequired: fieldInventory
       .filter((field) => field.required && !field.filled)
       .map((field) => ({
         tagName: field.tagName,
@@ -1085,6 +1954,86 @@ function summarizeFill(fill) {
     phoneCountryCodeTrace,
     interactionTrace: componentTrace.slice(0, 120),
   };
+}
+
+function buildFieldAudit(fillSummary) {
+  const filledByKey = new Map();
+  for (const field of fillSummary.filledFields || []) {
+    const keys = [
+      field.id && `id:${field.id}`,
+      field.name && `name:${field.name}`,
+      field.descriptor && `descriptor:${field.descriptor}`,
+      field.field && `descriptor:${field.field}`,
+    ].filter(Boolean);
+    for (const key of keys) {
+      if (!filledByKey.has(key)) {
+        filledByKey.set(key, field);
+      }
+    }
+  }
+  return (fillSummary.fieldInventory || []).map((field) => {
+    const filled =
+      (field.id && filledByKey.get(`id:${field.id}`)) ||
+      (field.name && filledByKey.get(`name:${field.name}`)) ||
+      (field.descriptor && filledByKey.get(`descriptor:${field.descriptor}`)) ||
+      null;
+    return {
+      id: field.id || "",
+      name: field.name || "",
+      tagName: field.tagName || "",
+      type: field.type || "",
+      kind: field.kind || "",
+      descriptor: field.descriptor || filled?.descriptor || "",
+      required: Boolean(field.required),
+      filled: Boolean(field.filled),
+      skippedReason: field.skippedReason || "",
+      options: field.options || [],
+      valuePut: filled?.value || "",
+      selectedOption: filled?.selectedOption || filled?.value || "",
+      valueSource: filled?.valueSource || field.valueSource || "",
+      bestEffortWarning:
+        filled?.bestEffortWarning || field.bestEffortWarning || "",
+    };
+  });
+}
+
+function buildFillAudit({
+  pageIndex,
+  fillIndex,
+  before,
+  afterFill,
+  fillSummary,
+}) {
+  return {
+    pageIndex,
+    retryIndex: fillIndex,
+    stepBefore: before.currentStep || null,
+    stepAfter: afterFill.currentStep || null,
+    hrefBefore: before.href || "",
+    hrefAfter: afterFill.href || "",
+    status: fillSummary.status || "",
+    ok: Boolean(fillSummary.ok),
+    filledFieldCount: fillSummary.filledFieldCount || 0,
+    pendingLlmFieldCount: fillSummary.pendingLlmFieldCount || 0,
+    manualReviewReasons: fillSummary.manualReviewReasons || [],
+    bestEffortWarnings: fillSummary.bestEffortWarnings || [],
+    fields: buildFieldAudit(fillSummary),
+    generatedAnswers: fillSummary.generatedAnswers || [],
+    filledFields: fillSummary.filledFields || [],
+    afterErrors: afterFill.errors || [],
+    suppressedErrors: afterFill.suppressedErrors || [],
+    remainingValues: afterFill.remainingValues || {},
+    nextAction: fillSummary.nextAction || null,
+  };
+}
+
+function writeAuditJson(auditPath, audit) {
+  if (!auditPath) {
+    return null;
+  }
+  fs.mkdirSync(path.dirname(auditPath), { recursive: true });
+  fs.writeFileSync(auditPath, JSON.stringify(audit, null, 2), "utf-8");
+  return auditPath;
 }
 
 async function run() {
@@ -1115,6 +2064,15 @@ async function run() {
     const startStep = await clickWorkdayStep(pageClient, args.startStep);
 
     const timeline = [];
+    const audit = {
+      ok: false,
+      mode: args.mode,
+      jobUrl: args.jobUrl,
+      applyUrl,
+      resumePath: args.resumePath,
+      startedAt: new Date().toISOString(),
+      pages: [],
+    };
     for (let i = 0; i < args.maxPages; i += 1) {
       const before = await inspectPage(pageClient);
       if (args.requireTarget && !stepMatches(before, args.targetStep)) {
@@ -1158,7 +2116,130 @@ async function run() {
             fillIndex === args.fillsPerPage - 1,
           );
         }
-        const fill = await fillCurrentPage(optionsClient, applyUrl);
+        const fill = await fillCurrentPage(optionsClient, applyUrl, args);
+        const fillSummary = summarizeFill(fill);
+        const phoneCountryUnfilled = fillSummary.unfilledRequired.some(
+          (field) =>
+            /phonecountrycode|country\s*phone\s*code/i.test(
+              [field.id, field.name, field.descriptor]
+                .filter(Boolean)
+                .join(" "),
+            ),
+        );
+        if (
+          args.cdpRepairPhoneCountry &&
+          (fillSummary.manualReviewReasons.includes(
+            "required_field_unresolved:phone_country_code_commit_failed",
+          ) ||
+            (phoneCountryUnfilled &&
+              fillSummary.manualReviewReasons.some((reason) =>
+                /required_field_unresolved:(no_matching_option|no_known_match|commit_not_verified)/.test(
+                  reason,
+                ),
+              )))
+        ) {
+          const cdpFixed = await tryFixPhoneCountryCodeViaCdp(pageClient);
+          if (cdpFixed) {
+            fillSummary.manualReviewReasons =
+              fillSummary.manualReviewReasons.filter(
+                (r) =>
+                  r !==
+                    "required_field_unresolved:phone_country_code_commit_failed" &&
+                  !(
+                    phoneCountryUnfilled &&
+                    /required_field_unresolved:(no_matching_option|no_known_match|commit_not_verified)/.test(
+                      r,
+                    )
+                  ),
+              );
+            fillSummary.unfilledRequired = fillSummary.unfilledRequired.filter(
+              (field) =>
+                !/phonecountrycode|country\s*phone\s*code/i.test(
+                  [field.id, field.name, field.descriptor]
+                    .filter(Boolean)
+                    .join(" "),
+                ),
+            );
+            fillSummary.status =
+              fillSummary.manualReviewReasons.length === 0
+                ? "filled"
+                : fillSummary.status;
+            fillSummary.cdpPhoneCodeFixed = true;
+          }
+        }
+        const sourceNeedsKeyboard =
+          fillSummary.manualReviewReasons.some((reason) =>
+            /required_field_unresolved:commit_not_verified/.test(reason),
+          ) &&
+          fillSummary.unfilledRequired.some((field) =>
+            /source--source|how did you hear about us/i.test(
+              [field.id, field.name, field.descriptor]
+                .filter(Boolean)
+                .join(" "),
+            ),
+          );
+        if (sourceNeedsKeyboard) {
+          const cdpSourceKeyboard =
+            await tryFixWorkdaySourceViaKeyboard(pageClient);
+          fillSummary.cdpSourceKeyboard = cdpSourceKeyboard;
+          if (cdpSourceKeyboard?.ok) {
+            fillSummary.manualReviewReasons =
+              fillSummary.manualReviewReasons.filter(
+                (reason) =>
+                  !/required_field_unresolved:commit_not_verified/.test(reason),
+              );
+            fillSummary.unfilledRequired = fillSummary.unfilledRequired.filter(
+              (field) =>
+                !/source--source|how did you hear about us/i.test(
+                  [field.id, field.name, field.descriptor]
+                    .filter(Boolean)
+                    .join(" "),
+                ),
+            );
+            fillSummary.status =
+              fillSummary.manualReviewReasons.length === 0
+                ? "filled"
+                : fillSummary.status;
+          }
+        }
+        const requiredSearchNeedsKeyboard = fillSummary.unfilledRequired.filter(
+          (field) => {
+            const fieldKey = [field.id, field.name, field.descriptor]
+              .filter(Boolean)
+              .join(" ");
+            return (
+              field.tagName === "INPUT" &&
+              /required_field_unresolved:(no_known_match|no_matching_option|commit_not_verified)/.test(
+                fillSummary.manualReviewReasons.join(" "),
+              ) &&
+              !/source--source|how did you hear about us|phonecountrycode|datesection/i.test(
+                fieldKey,
+              )
+            );
+          },
+        );
+        if (requiredSearchNeedsKeyboard.length) {
+          fillSummary.cdpRequiredSearchKeyboard =
+            await tryFixWorkdayRequiredSearchInputsViaKeyboard(
+              pageClient,
+              requiredSearchNeedsKeyboard,
+            );
+          if (fillSummary.cdpRequiredSearchKeyboard?.ok) {
+            const repairedIds = new Set(
+              (fillSummary.cdpRequiredSearchKeyboard.repairs || [])
+                .filter((repair) => repair?.ok)
+                .map((repair) => repair?.target?.field?.id || repair?.field?.id)
+                .filter(Boolean),
+            );
+            fillSummary.unfilledRequired = fillSummary.unfilledRequired.filter(
+              (field) => !repairedIds.has(field.id),
+            );
+            if (fillSummary.unfilledRequired.length === 0) {
+              fillSummary.manualReviewReasons = [];
+              fillSummary.status = "filled";
+            }
+          }
+        }
         await sleep(
           args.extensionAutoNext
             ? 7500
@@ -1167,24 +2248,49 @@ async function run() {
               : 1200,
         );
         afterFill = await inspectPage(pageClient);
+        const dateSectionNeedsKeyboard =
+          afterFill.errors?.some((error) =>
+            /desired start date|required and must have a value/i.test(error),
+          ) &&
+          afterFill.fields?.some((field) =>
+            /dateSection(Month|Day|Year)/i.test(field.id || ""),
+          );
+        if (dateSectionNeedsKeyboard) {
+          fillSummary.cdpDateSection =
+            await tryFixWorkdayDateSectionsViaCdp(pageClient);
+          if (fillSummary.cdpDateSection?.ok) {
+            afterFill = await inspectPage(pageClient);
+          }
+        }
+        afterFill = await suppressStaleWorkdayDateErrors(afterFill);
         fills.push({
           fillIndex: fillIndex + 1,
-          fill: summarizeFill(fill),
+          fill: fillSummary,
           afterFill: {
             href: afterFill.href,
             currentStep: afterFill.currentStep,
             hasNext: afterFill.hasNext,
             hasSubmit: afterFill.hasSubmit,
             errors: afterFill.errors,
+            suppressedErrors: afterFill.suppressedErrors || [],
             fields: afterFill.fields,
             remainingValues: afterFill.remainingValues,
           },
         });
+        audit.pages.push(
+          buildFillAudit({
+            pageIndex: i + 1,
+            fillIndex: fillIndex + 1,
+            before,
+            afterFill,
+            fillSummary,
+          }),
+        );
         if (args.verifyClear) {
           const clear = await clearCurrentPage(optionsClient, applyUrl);
           await sleep(1800);
           const afterClear = await inspectPage(pageClient);
-          const refill = await fillCurrentPage(optionsClient, applyUrl);
+          const refill = await fillCurrentPage(optionsClient, applyUrl, args);
           await sleep(1800);
           afterFill = await inspectPage(pageClient);
           fills[fills.length - 1].clear = clear;
@@ -1204,6 +2310,15 @@ async function run() {
             fields: afterFill.fields,
             remainingValues: afterFill.remainingValues,
           };
+          audit.pages.push(
+            buildFillAudit({
+              pageIndex: i + 1,
+              fillIndex: `${fillIndex + 1}.refill`,
+              before: afterClear,
+              afterFill,
+              fillSummary: fills[fills.length - 1].refill,
+            }),
+          );
         }
       }
       timeline.push({
@@ -1226,6 +2341,7 @@ async function run() {
           hasNext: afterFill.hasNext,
           hasSubmit: afterFill.hasSubmit,
           errors: afterFill.errors,
+          suppressedErrors: afterFill.suppressedErrors || [],
           fields: afterFill.fields,
           remainingValues: afterFill.remainingValues,
         },
@@ -1265,7 +2381,25 @@ async function run() {
             "C3 extension safe auto-next handled this page.",
         };
         if (!fills.at(-1)?.fill?.nextAction?.clicked && afterFill.hasNext) {
-          break;
+          const fillNeedsReview =
+            fills.at(-1)?.fill?.manualReviewReasons?.length > 0;
+          if (!fillNeedsReview || afterFill.errors?.length) {
+            break;
+          }
+          const next = await clickNext(pageClient);
+          timeline[timeline.length - 1].next = {
+            ...next,
+            auto: true,
+            reason: next.clicked
+              ? "forced_next_after_no_visible_errors"
+              : next.reason || "fill_not_ready_for_next",
+            message: next.clicked
+              ? "Clicked Next despite fill manual-review status because Workday showed no visible validation errors. Review JSON warnings for correctness."
+              : next.message || "Next remained unavailable.",
+          };
+          if (!next.clicked) {
+            break;
+          }
         }
         await sleep(1200);
         continue;
@@ -1282,12 +2416,23 @@ async function run() {
     }
 
     const finalPage = await inspectPage(pageClient);
+    audit.ok = true;
+    audit.finishedAt = new Date().toISOString();
+    audit.final = {
+      href: finalPage.href,
+      currentStep: finalPage.currentStep,
+      hasSubmit: finalPage.hasSubmit,
+      hasNext: finalPage.hasNext,
+      errors: finalPage.errors,
+    };
+    const auditPath = writeAuditJson(args.auditJson, audit);
     console.log(
       JSON.stringify(
         {
           ok: true,
           mode: args.mode,
           applyUrl,
+          auditJson: auditPath,
           final: {
             href: finalPage.href,
             currentStep: finalPage.currentStep,

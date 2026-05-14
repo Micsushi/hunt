@@ -53,6 +53,7 @@ class C3AnswerDecision(StrictModel):
     canonical_field: str = ""
     selected_option: str = ""
     answer_text: str = ""
+    camp: str = ""
     confidence: float = 0.0
     source_fields: list[str] = Field(default_factory=list)
     provider: str = "deterministic"
@@ -67,6 +68,7 @@ class C3LlmAnswerResponse(StrictModel):
     canonical_field: str = ""
     selected_option: str = ""
     answer_text: str = ""
+    camp: str = ""
     confidence: float = 0.0
     source_fields: list[str] = Field(default_factory=list)
     reason: str = ""

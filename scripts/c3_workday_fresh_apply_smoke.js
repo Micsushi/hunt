@@ -103,7 +103,7 @@ function usage() {
     "The final application Submit button is never clicked.",
     "",
     "Options:",
-    "  --provider fake|imap          Mail provider, default env or imap",
+    "  --provider fake|imap|gmail    Mail provider, default env or imap",
     "  --cdp-port <port>             Chrome DevTools port, default 9222",
     "  --workday-url <url>           Workday job/apply URL",
     "  --account-email <email>       Optional test account email override",

@@ -8,11 +8,11 @@ from .schemas import C3AnswerRequest
 
 SYSTEM_PROMPT = (
     "You are Hunt's C3 application-answer router. Return strict JSON only. "
-    "Choose answers that are truthful enough for a job application and useful for getting hired. "
+    "Choose answers that are useful for getting hired while staying within the applicant profile and page options. "
     "Do not invent hard facts like past employment, referrals, credentials, legal status, education, or dates. "
-    "For preference questions such as liking, enjoying, being interested in, or being comfortable with a tool or topic, "
-    "choose the pro-hiring positive option when it is reasonable and not a hard factual claim. "
+    "For opportunity-positive questions about willingness, ability, availability, consent, screening, or general comfort, choose the pro-hiring positive option when it is reasonable and not contradicted by the profile. "
     "If the question asks whether the candidate knows someone at the company, has a referral, or has worked at the company before, answer No unless explicit profile evidence says otherwise. "
+    "If the question is a voluntary demographic or sensitive disclosure question and a neutral option is present, prefer the neutral option. "
     "If no safe answer exists, return manual_review."
 )
 
@@ -59,8 +59,14 @@ def compact_profile(profile: dict[str, Any]) -> dict[str, Any]:
 
 
 def build_answer_prompt(request: C3AnswerRequest) -> tuple[str, str]:
-    normalized_question = build_standard_question(request.field.label, request.field.options)
+    normalized_options = [normalize_space(option) for option in request.field.options if normalize_space(option)]
+    normalized_question = build_standard_question(request.field.label, normalized_options)
+    question_packet = {
+        "question": normalize_question_text(request.field.label),
+        "answer_options": normalized_options,
+    }
     payload = {
+        "question_packet": question_packet,
         "normalized_field": normalized_question,
         "field_kind": request.field.kind,
         "required": request.field.required,
@@ -78,10 +84,11 @@ def build_answer_prompt(request: C3AnswerRequest) -> tuple[str, str]:
         },
         "instructions": [
             "Classify the question into a canonical field when possible.",
-            "For fixed-choice fields, selected_option must be exactly one item from options.",
-            "For yes/no preference questions about liking, interest, comfort, willingness, or general enthusiasm, choose the answer most likely to help the application unless it conflicts with profile facts.",
+            "For fixed-choice fields, selected_option must be exactly one item from question_packet.answer_options.",
+            "For yes/no opportunity-positive questions about willingness, ability, availability, consent, screening, interest, comfort, or general enthusiasm, choose the answer most likely to help the application unless it conflicts with profile facts.",
             "For referral, knowing someone, or previously worked at the company, choose No unless profile.previousEmployers or explicit notes prove Yes.",
             "For legal eligibility, sponsorship, relocation, salary, availability, co-op terms, graduation, and location, use profile facts only.",
+            "For voluntary demographic, diversity, disability, veteran, or self-identification fields, choose the neutral or non-disclosure option when present.",
             "For text generation, only answer when allow_generated_paragraphs is true and source_fields cite profile/job/resume context.",
             "If evidence is missing for a hard factual claim, return manual_review.",
         ],
@@ -90,6 +97,7 @@ def build_answer_prompt(request: C3AnswerRequest) -> tuple[str, str]:
             "canonical_field": "short snake_case field id",
             "selected_option": "exact option label or empty",
             "answer_text": "text answer or empty",
+            "camp": "opportunity_positive | negative_conflict | negative_need | profile_value | non_disclosure | manual_review",
             "confidence": "0.0 to 1.0",
             "source_fields": ["profile.fieldName or job.fieldName"],
             "reason": "short explanation",

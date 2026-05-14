@@ -22,6 +22,81 @@ def _module_to_browser_script(source: str) -> str:
     return source.replace("export function", "function").replace("export const", "const")
 
 
+def test_workday_bdo_questionnaire_defaults_and_location_answer():
+    if sync_playwright is None:
+        pytest.skip("playwright is required for the Workday C3 fill fixture")
+
+    injected_js = _load_script(REPO_ROOT / "executioner/src/shared/injected.js")
+
+    with sync_playwright() as playwright:
+        try:
+            browser = playwright.chromium.launch()
+        except PlaywrightError as error:
+            pytest.skip(f"playwright chromium is unavailable: {error}")
+
+        page = browser.new_page()
+        page.set_content("<html><body></body></html>")
+        page.add_script_tag(content=injected_js)
+        result = page.evaluate(
+            """
+            () => {
+              const u = window.__huntApplyUtils;
+              const profile = {
+                location: "Edmonton, AB, Canada",
+                salaryExpectation: "95000",
+                salaryExpectationRange: "90,000 - 105,000",
+                preferredLanguage: "English",
+              };
+              const salary = u.chooseStructuredChoice(
+                "What is your target salary range?*",
+                profile,
+                true
+              );
+              return {
+                salary,
+                salaryScores: {
+                  lower: u.optionScoreForChoice("$85000 - $95000", "", salary, true),
+                  target: u.optionScoreForChoice("$95000 - $105000", "", salary, true),
+                },
+                background: u.chooseStructuredChoice(
+                  "Would you be willing to complete a background security check, including criminal record and references?*",
+                  profile,
+                  true
+                ),
+                aiConsent: u.chooseStructuredChoice(
+                  "BDO Canada may use artificial intelligence enabled tools to support certain aspects of the recruitment process. Do you consent to the use of AI-enabled tools as described above?*",
+                  profile,
+                  true
+                ),
+                preferredLanguage: u.chooseStructuredChoice(
+                  "What is your preferred language?*",
+                  profile,
+                  true
+                ),
+                locationAnswer: u.generateAnswer(
+                  "Please indicate your top BDO location(s) (minimum 1, maximum 3) in order of preference.",
+                  profile,
+                  {
+                    title: "Business Analyst, Data & Analytics - New Grad",
+                    company: "BDO",
+                    jobUrl: "https://bdo.wd3.myworkdayjobs.com/en-US/BDO/job/Toronto---Bay-St/Business-Analyst--Data---Analytics---New-Grad--May-2026-_JR5658-1/apply/applyManually?source=LinkedIn",
+                  },
+                  true
+                ),
+              };
+            }
+            """
+        )
+        browser.close()
+
+    assert result["salaryScores"]["target"] > result["salaryScores"]["lower"]
+    assert result["background"]["text"] == "Yes"
+    assert result["aiConsent"]["text"] == "Yes"
+    assert result["preferredLanguage"]["text"] == "English"
+    assert result["locationAnswer"]["answerText"] == "Toronto - Bay St"
+    assert "Junior AI" not in result["locationAnswer"]["answerText"]
+
+
 def test_workday_required_only_skips_optional_generated_textareas():
     if sync_playwright is None:
         pytest.skip("playwright is required for the Workday C3 fill fixture")
@@ -125,13 +200,13 @@ def test_workday_required_only_skips_optional_generated_textareas():
     inventory = {entry["id"]: entry for entry in result["fieldInventory"]}
 
     assert result["ok"] is True
-    assert result["filledFieldCount"] == 1, json.dumps(result["fieldInventory"], indent=2)
+    assert result["filledFieldCount"] == 2, json.dumps(result["fieldInventory"], indent=2)
     assert values["salary"] == (
         "I am flexible and open to discussing compensation based on the role and overall package."
     )
     assert values["priorCompany"] == ""
     assert values["referredHow"] == ""
-    assert values["conditionalRequired"] == ""
+    assert values["conditionalRequired"] == "Not applicable."
     assert inventory["salary-range"]["required"] is True
     assert inventory["salary-range"]["filled"] is True
     assert inventory["prior-company"]["required"] is False
@@ -139,7 +214,10 @@ def test_workday_required_only_skips_optional_generated_textareas():
     assert inventory["referred-how"]["required"] is False
     assert inventory["referred-how"]["skippedReason"] == "not_required"
     assert inventory["conditional-required"]["required"] is True
-    assert inventory["conditional-required"]["skippedReason"] == "unsafe_generated_answer_context"
+    assert inventory["conditional-required"]["filled"] is True
+    assert inventory["conditional-required"]["valueSource"] == "best_effort:default_text"
+    assert result["manualReviewRequired"] is False
+    assert result["bestEffortWarnings"]
 
 
 def test_workday_required_only_still_adds_my_experience_sections_from_aliases():

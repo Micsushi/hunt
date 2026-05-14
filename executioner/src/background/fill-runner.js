@@ -147,10 +147,16 @@ async function detectAtsTypeForTab(tabId, pageUrl, availableAdapters) {
 
 function answerableFieldInventory(result) {
   return (result.fieldInventory || []).filter((entry) => {
-    if (!entry.required || entry.filled) {
+    if (!entry.required) {
       return false;
     }
     if (!Array.isArray(entry.options) || entry.options.length === 0) {
+      return false;
+    }
+    if (entry.filled && entry.bestEffortWarning) {
+      return true;
+    }
+    if (entry.filled) {
       return false;
     }
     return [
@@ -361,6 +367,10 @@ async function requestBackendAnswerDecisions({
       decisions.push({
         questionHash: field.questionHash,
         descriptor: field.descriptor,
+        id: field.id || "",
+        name: field.name || "",
+        kind: field.kind || "",
+        tagName: field.tagName || "",
         options: field.options || [],
         decision: response?.decision || {
           status: "provider_unavailable",
@@ -373,6 +383,10 @@ async function requestBackendAnswerDecisions({
       decisions.push({
         questionHash: field.questionHash,
         descriptor: field.descriptor,
+        id: field.id || "",
+        name: field.name || "",
+        kind: field.kind || "",
+        tagName: field.tagName || "",
         options: field.options || [],
         decision: {
           status: "provider_unavailable",
@@ -414,12 +428,21 @@ function createApplyAnswerDecisionsFunction() {
       '[data-testid*="field"]',
     ];
     var decisionByHash = new Map();
+    var decisionById = new Map();
+    var decisionByName = new Map();
     (decisions || []).forEach(function (entry) {
       if (entry.questionHash && entry.decision?.status === "fillable") {
         decisionByHash.set(entry.questionHash, entry.decision);
       }
+      if (entry.id && entry.decision?.status === "fillable") {
+        decisionById.set(entry.id, entry.decision);
+      }
+      if (entry.name && entry.decision?.status === "fillable") {
+        decisionByName.set(entry.name, entry.decision);
+      }
     });
     var fields = u.getVisibleElements("select").concat(
+      u.getVisibleElements('button[aria-haspopup="listbox"]'),
       u
         .getVisibleElements(
           'input[role="combobox"], input[aria-autocomplete="list"], textarea, input:not([type="hidden"]):not([type="file"])',
@@ -688,12 +711,57 @@ function createApplyAnswerDecisionsFunction() {
       await closeMenu(el);
       return exactOptionText(committedState(el).text, selected);
     };
+    var fillWorkdayButton = async function (button, selected) {
+      button.scrollIntoView({ block: "center", inline: "nearest" });
+      realisticOptionClick(button);
+      await sleep(200);
+      var options = Array.from(document.querySelectorAll('[role="option"]'));
+      var visible = options.filter(function (option) {
+        var style = window.getComputedStyle(option);
+        var rect = option.getBoundingClientRect();
+        return (
+          option.getAttribute("aria-disabled") !== "true" &&
+          style.display !== "none" &&
+          style.visibility !== "hidden" &&
+          rect.width > 0 &&
+          rect.height > 0
+        );
+      });
+      var option = visible.find(function (candidate) {
+        return exactOptionText(
+          candidate.innerText || candidate.textContent || "",
+          selected,
+        );
+      });
+      if (!option) {
+        await closeMenu(button);
+        return false;
+      }
+      realisticOptionClick(option);
+      if (typeof option.click === "function") {
+        option.click();
+      }
+      await sleep(250);
+      u.dispatchInputEvents(button);
+      var current = u.normalizeText(
+        button.innerText ||
+          button.textContent ||
+          button.getAttribute("aria-label") ||
+          "",
+        stripLongDash,
+      );
+      await closeMenu(button);
+      return exactOptionText(current, selected);
+    };
 
     for (var i = 0; i < fields.length; i++) {
       var el = fields[i];
       var descriptor = u.getDescriptor(el, containerSelectors);
       var questionHash = u.buildQuestionHash(descriptor || "");
-      var decision = decisionByHash.get(questionHash);
+      var decision =
+        decisionByHash.get(questionHash) ||
+        (el.id ? decisionById.get(el.id) : null) ||
+        (el.name ? decisionByName.get(el.name) : null);
       if (!decision) {
         continue;
       }
@@ -714,6 +782,19 @@ function createApplyAnswerDecisionsFunction() {
           diagnostic.before = el.value || "";
           ok = fillSelect(el, decision.selected_option);
           diagnostic.after = el.value || "";
+        } else if (
+          el.tagName === "BUTTON" &&
+          el.getAttribute("aria-haspopup") === "listbox"
+        ) {
+          diagnostic.before = u.normalizeText(
+            el.innerText || el.textContent || "",
+            stripLongDash,
+          );
+          ok = await fillWorkdayButton(el, decision.selected_option);
+          diagnostic.after = u.normalizeText(
+            el.innerText || el.textContent || "",
+            stripLongDash,
+          );
         } else if (
           el.getAttribute("role") === "combobox" ||
           el.getAttribute("aria-autocomplete") === "list" ||
@@ -1082,6 +1163,7 @@ class C3AutofillPipeline {
 
 function buildFillResponse({ result, attempt, answerEntries, route }) {
   const manualReviewRequired = Boolean(attempt?.manualReviewRequired);
+  const bestEffortWarningCount = Number(result.bestEffortWarnings?.length || 0);
   const filledLabel = result.answerDecisions
     ? "fields"
     : "deterministic fields";
@@ -1092,7 +1174,9 @@ function buildFillResponse({ result, attempt, answerEntries, route }) {
         ? `Filled ${result.filledFieldCount || 0} ${filledLabel}. ${result.pendingLlmFieldCount} unanswered required question${result.pendingLlmFieldCount === 1 ? "" : "s"} can use LLM help.`
         : manualReviewRequired
           ? `Filled ${result.filledFieldCount || 0} fields; manual review needed.`
-          : `Filled ${result.filledFieldCount || 0} fields and logged ${result.generatedAnswerCount || 0} generated answers.`
+          : bestEffortWarningCount
+            ? `Filled ${result.filledFieldCount || 0} fields and used ${bestEffortWarningCount} best-effort default${bestEffortWarningCount === 1 ? "" : "s"} to keep moving. Review flagged answers before submitting.`
+            : `Filled ${result.filledFieldCount || 0} fields and logged ${result.generatedAnswerCount || 0} generated answers.`
       : result.message || "Fill failed.",
     attempt,
     generatedAnswers: answerEntries,
@@ -1138,6 +1222,7 @@ async function persistFillAttempt({
     generatedAnswerCount: result.generatedAnswerCount || 0,
     manualReviewRequired,
     manualReviewReasons: result.manualReviewReasons || [],
+    bestEffortWarnings: result.bestEffortWarnings || [],
     fieldInventory: result.fieldInventory || [],
     interactionTrace: result.interactionTrace || [],
     traceTruncated: Boolean(result.traceTruncated),

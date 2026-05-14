@@ -209,9 +209,86 @@ Use `--reset-site-data` when you need a fully logged-out browser attempt. That
 clears browser cookies and the target Workday origin storage before opening the
 apply URL.
 
+P chrome Workday defaults:
+
+- The shared seed profile lives in `scripts\c3_p_chrome_defaults.js`.
+- `scripts\configure_c3_debug_sink.js --seed-workday-profile` and
+  `scripts\c3_workday_live_smoke.js` both use that same list.
+- The defaults cover the basic identity/contact fields, address, source,
+  phone device type, legal/work-authorization answers, Work Experience,
+  Education, Skills, and Websites.
+- The default phone is `7804923111`; Workday fill formats it before writing the
+  page and dispatches `input`, `change`, `blur`, and `focusout` events so
+  Workday validation can commit the value.
+
 For Gmail IMAP, the bridge defaults verification lookup to `[Gmail]/All Mail`
 because Workday tenant verification mail may not appear through plain `INBOX`.
 Override with `HUNT_C3_MAIL_IMAP_MAILBOX` only when testing a different mailbox.
+
+Planned Gmail API/OAuth provider env sample:
+
+```dotenv
+# Keep IMAP active unless explicitly testing Gmail OAuth.
+HUNT_C3_MAIL_PROVIDER=imap
+
+# Gmail provider values. Do not commit these files.
+HUNT_C3_GMAIL_CREDENTIALS_PATH=secrets/hunt-gmail-oauth-client.json
+HUNT_C3_GMAIL_TOKEN_DIR=secrets/gmail-tokens
+HUNT_C3_GMAIL_SCOPES=https://www.googleapis.com/auth/gmail.readonly
+HUNT_C3_GMAIL_ACCOUNT_EMAIL=testing-account@gmail.com
+```
+
+Use one token per Gmail mailbox. The same OAuth client JSON can authorize
+multiple Gmail accounts, but each mailbox must be added as a test user in the
+Google Auth Platform while the app is in Testing and must complete its own
+consent flow. Keep the current IMAP env vars in place until explicitly testing
+the Gmail provider.
+
+Gmail bridge auth preflight:
+
+```powershell
+node scripts\c3_mail_verify_bridge.js --check-auth --provider gmail
+```
+
+Gmail one-shot verification poll:
+
+```powershell
+$request = @{
+  email = $env:HUNT_C3_GMAIL_ACCOUNT_EMAIL
+  expectedDomains = @("myworkdayjobs.com", "myworkday.com")
+  since = (Get-Date).ToUniversalTime().AddMinutes(-5).ToString("o")
+  timeoutSeconds = 30
+} | ConvertTo-Json
+
+$request | node scripts\c3_mail_verify_bridge.js --once --provider gmail
+```
+
+Run the local bridge with Gmail only in a dedicated shell:
+
+```powershell
+$env:HUNT_C3_MAIL_PROVIDER="gmail"
+node scripts\c3_mail_verify_bridge.js --serve --provider gmail
+```
+
+Do not switch the shared `.env` to `HUNT_C3_MAIL_PROVIDER=gmail` while IMAP
+testing is active in another shell or agent.
+
+Standalone Gmail OAuth smoke:
+
+```powershell
+$env:HUNT_C3_GMAIL_CREDENTIALS_PATH="client_secret_711578661491-17cntncasu0hlsacuf2sdvanegpp4orl.apps.googleusercontent.com.json"
+$env:HUNT_C3_GMAIL_TOKEN_DIR="secrets\gmail-tokens"
+$env:HUNT_C3_GMAIL_SCOPES="https://www.googleapis.com/auth/gmail.readonly"
+$env:HUNT_C3_GMAIL_ACCOUNT_EMAIL="hunt.executioner.test@gmail.com"
+
+node scripts\c3_gmail_oauth_smoke.js --account $env:HUNT_C3_GMAIL_ACCOUNT_EMAIL
+node scripts\c3_gmail_oauth_smoke.js --account $env:HUNT_C3_GMAIL_ACCOUNT_EMAIL --use-saved-token
+```
+
+Verified on 2026-05-14: OAuth consent succeeded for
+`hunt.executioner.test@gmail.com`, token saved under ignored
+`secrets\gmail-tokens`, saved-token refresh succeeded, and
+`messages.list` returned one visible message.
 
 The local bridge endpoint is:
 

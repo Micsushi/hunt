@@ -395,23 +395,18 @@ Education
 University of Alberta, BSc in Computer Science with Specialization
 Expected Graduation: Sep 2026
 """
+
         def pdf_literal(line):
-            return (
-                line.replace("\\", "\\\\")
-                .replace("(", "\\(")
-                .replace(")", "\\)")
-            )
+            return line.replace("\\", "\\\\").replace("(", "\\(").replace(")", "\\)")
 
         pdf_source = "%PDF-1.4\n" + "\n".join(
             f"({pdf_literal(line)}) Tj" for line in resume_text.splitlines()
         )
         long_bullet_pdf_source = "%PDF-1.4\n" + "\n".join(
-            f"({pdf_literal(line)}) Tj"
-            for line in long_bullet_resume_text.splitlines()
+            f"({pdf_literal(line)}) Tj" for line in long_bullet_resume_text.splitlines()
         )
         inline_bullet_pdf_source = "%PDF-1.4\n" + "\n".join(
-            f"({pdf_literal(line)}) Tj"
-            for line in inline_bullet_resume_text.splitlines()
+            f"({pdf_literal(line)}) Tj" for line in inline_bullet_resume_text.splitlines()
         )
         script = f"""
             import {{ parseResumeText, parseResumePdfBytes }} from {json.dumps(parser_path.as_uri())};
@@ -590,6 +585,9 @@ Expected Graduation: Sep 2026
         storage = (REPO_ROOT / "executioner" / "src" / "shared" / "storage.js").read_text(
             encoding="utf-8"
         )
+        background = (REPO_ROOT / "executioner" / "src" / "background" / "index.js").read_text(
+            encoding="utf-8"
+        )
         api = (REPO_ROOT / "executioner" / "src" / "shared" / "api.js").read_text(encoding="utf-8")
         shared_utils = (REPO_ROOT / "executioner" / "src" / "shared" / "injected.js").read_text(
             encoding="utf-8"
@@ -623,6 +621,12 @@ Expected Graduation: Sep 2026
         self.assertIn("debugLogSinkEnabled", settings)
         self.assertIn("accountEmail", settings)
         self.assertIn("accountPassword", settings)
+        self.assertIn("phoneDeviceType", settings)
+        self.assertIn("applicationSource", settings)
+        self.assertIn("applicationSourceCategory", settings)
+        self.assertIn("applicationSourceDetail", settings)
+        self.assertIn("profile-phone-device-type", options)
+        self.assertIn("profile-application-source-category", options)
         self.assertIn("coOpTermsCompleted", settings)
         self.assertIn("workExperience", settings)
         self.assertIn("education", settings)
@@ -751,7 +755,11 @@ Expected Graduation: Sep 2026
         self.assertIn("attachPendingLlmSummary", fill_runner)
         self.assertIn("markInventoryFilledByDecision", fill_runner)
         self.assertIn("pendingLlmFields", fill_runner)
+        self.assertIn("entry.filled && entry.bestEffortWarning", fill_runner)
         self.assertIn("realisticOptionClick", fill_runner)
+        self.assertIn('button[aria-haspopup="listbox"]', fill_runner)
+        self.assertIn("decisionById", fill_runner)
+        self.assertIn("fillWorkdayButton", fill_runner)
         self.assertIn("pointerdown", fill_runner)
         self.assertIn('keyOn(el, "Enter")', fill_runner)
         self.assertIn("answerDecisionDiagnostics", background)
@@ -767,6 +775,8 @@ Expected Graduation: Sep 2026
         self.assertIn("hunt.apply.click_next_after_fill", popup_js)
         self.assertIn("const state = await getExtensionState();", background)
         self.assertIn("runPendingLlmFillForTab(", background)
+        self.assertIn("state.settings.llmAnswerFallbackEnabled === true", background)
+        self.assertIn("message.payload?.allowLlmAnswers !== false", background)
         self.assertIn("showLlmConfirm", popup_js)
         generic_fill = (
             REPO_ROOT / "executioner" / "src" / "ats" / "generic" / "fill.js"
@@ -802,12 +812,12 @@ Expected Graduation: Sep 2026
         injected = (REPO_ROOT / "executioner" / "src" / "shared" / "injected.js").read_text(
             encoding="utf-8"
         )
-        safe_next = (
-            REPO_ROOT / "executioner" / "src" / "background" / "safe-next.js"
-        ).read_text(encoding="utf-8")
-        workday = (
-            REPO_ROOT / "executioner" / "src" / "ats" / "workday" / "fill.js"
-        ).read_text(encoding="utf-8")
+        safe_next = (REPO_ROOT / "executioner" / "src" / "background" / "safe-next.js").read_text(
+            encoding="utf-8"
+        )
+        workday = (REPO_ROOT / "executioner" / "src" / "ats" / "workday" / "fill.js").read_text(
+            encoding="utf-8"
+        )
 
         self.assertIn("detectPageKind", content)
         self.assertIn("ATS_HOST_PATTERNS", content)
@@ -975,9 +985,7 @@ Expected Graduation: Sep 2026
     def test_generic_manual_fixture_pages_exist_for_next_smokes(self):
         fixture_dir = REPO_ROOT / "executioner" / "fixtures" / "generic"
         signup = (fixture_dir / "signup_account.html").read_text(encoding="utf-8")
-        signup_email = (fixture_dir / "signup_email_verification.html").read_text(
-            encoding="utf-8"
-        )
+        signup_email = (fixture_dir / "signup_email_verification.html").read_text(encoding="utf-8")
         email_verified = (fixture_dir / "email_verified.html").read_text(encoding="utf-8")
         two_step = (fixture_dir / "two_step_application.html").read_text(encoding="utf-8")
         custom_selects = (fixture_dir / "greenhouse_custom_selects.html").read_text(
@@ -996,25 +1004,33 @@ Expected Graduation: Sep 2026
         self.assertIn("expected graduation date", custom_selects)
 
     def test_c3_email_verification_bridge_and_smoke_exist(self):
-        bridge = (REPO_ROOT / "scripts" / "c3_mail_verify_bridge.js").read_text(
-            encoding="utf-8"
-        )
+        bridge = (REPO_ROOT / "scripts" / "c3_mail_verify_bridge.js").read_text(encoding="utf-8")
         smoke = (REPO_ROOT / "scripts" / "c3_email_verification_smoke.js").read_text(
             encoding="utf-8"
         )
-        fresh_apply = (
-            REPO_ROOT / "scripts" / "c3_workday_fresh_apply_smoke.js"
-        ).read_text(encoding="utf-8")
-        live_smoke = (
-            REPO_ROOT / "scripts" / "c3_workday_live_smoke.js"
-        ).read_text(encoding="utf-8")
-        background = (
-            REPO_ROOT / "executioner" / "src" / "background" / "index.js"
-        ).read_text(encoding="utf-8")
+        fresh_apply = (REPO_ROOT / "scripts" / "c3_workday_fresh_apply_smoke.js").read_text(
+            encoding="utf-8"
+        )
+        live_smoke = (REPO_ROOT / "scripts" / "c3_workday_live_smoke.js").read_text(
+            encoding="utf-8"
+        )
+        configure_sink = (REPO_ROOT / "scripts" / "configure_c3_debug_sink.js").read_text(
+            encoding="utf-8"
+        )
+        p_chrome_defaults = (REPO_ROOT / "scripts" / "c3_p_chrome_defaults.js").read_text(
+            encoding="utf-8"
+        )
+        background = (REPO_ROOT / "executioner" / "src" / "background" / "index.js").read_text(
+            encoding="utf-8"
+        )
 
         self.assertIn("POST /verify-email", bridge)
         self.assertIn("HUNT_C3_MAIL_PROVIDER", bridge)
         self.assertIn("HUNT_C3_MAIL_IMAP_HOST", bridge)
+        self.assertIn("HUNT_C3_GMAIL_CREDENTIALS_PATH", bridge)
+        self.assertIn("HUNT_C3_GMAIL_TOKEN_DIR", bridge)
+        self.assertIn("checkGmailAuth", bridge)
+        self.assertIn("verifyGmail", bridge)
         self.assertIn("--check-auth", bridge)
         self.assertIn("checkMailAuth", bridge)
         self.assertIn("safeVerificationLinks", bridge)
@@ -1039,8 +1055,21 @@ Expected Graduation: Sep 2026
         self.assertIn("--clear-before-fill", fresh_apply)
         self.assertIn("--keep-existing-workday-tabs", fresh_apply)
         self.assertIn("visibleValidationErrors", live_smoke)
+        self.assertIn("allowLlmAnswers", live_smoke)
+        self.assertIn("--no-llm-answers", live_smoke)
+        self.assertIn("--audit-json", live_smoke)
+        self.assertIn("buildFillAudit", live_smoke)
+        self.assertIn("writeAuditJson", live_smoke)
+        self.assertIn("valuePut", live_smoke)
         self.assertIn("visible_validation_errors", live_smoke)
-        self.assertIn("7804923111", live_smoke)
+        self.assertIn("makeWorkdayProfileDefaults", live_smoke)
+        self.assertIn("makeWorkdayProfileDefaults", configure_sink)
+        self.assertIn("withWorkdayProfileAliases", live_smoke)
+        self.assertIn("7804923111", p_chrome_defaults)
+        self.assertIn("phoneDeviceType", p_chrome_defaults)
+        self.assertIn("applicationSource", p_chrome_defaults)
+        self.assertIn("applicationSourceCategory", p_chrome_defaults)
+        self.assertIn("Job Board", p_chrome_defaults)
         self.assertIn("hunt.apply.await_email_verification", background)
         self.assertIn("emailVerificationBridgeUrl", background)
         self.assertIn("autoEmailVerificationEnabled", background)
@@ -1062,12 +1091,18 @@ Expected Graduation: Sep 2026
         storage = (REPO_ROOT / "executioner" / "src" / "shared" / "storage.js").read_text(
             encoding="utf-8"
         )
+        background = (REPO_ROOT / "executioner" / "src" / "background" / "index.js").read_text(
+            encoding="utf-8"
+        )
 
         self.assertIn("document.querySelectorAll('input[type=\"file\"]')", workday)
         self.assertIn("resume_upload:missing_resume_data", workday)
         self.assertIn("pageLooksLikeResumeUpload", workday)
         self.assertIn("fieldInventory", workday)
         self.assertIn("interactionTrace", workday)
+        self.assertIn('new FocusEvent("focusout"', shared_utils)
+        self.assertIn("setWorkdayTextValue", workday)
+        self.assertIn("phone_number_commit_events", workday)
         self.assertIn('traceInteraction("hover"', workday)
         self.assertIn('traceInteraction("click"', workday)
         self.assertIn('traceInteraction("already_filled"', workday)
@@ -1079,6 +1114,8 @@ Expected Graduation: Sep 2026
         self.assertIn("sanitizeWorkExperience", storage)
         self.assertIn("sanitizeEducation", storage)
         self.assertIn("sanitizeLanguages", storage)
+        self.assertIn("isWorkdayApplicationButtonDropdown", background)
+        self.assertIn("utilityMenuButton", background)
         self.assertIn('"manual_review"', fill_runner)
         self.assertIn("manual review needed", fill_runner)
         self.assertIn("allFrames: true", fill_runner)
@@ -1095,6 +1132,12 @@ Expected Graduation: Sep 2026
         self.assertIn('button[aria-haspopup="listbox"]', workday)
         self.assertIn("fillWorkdayButtonDropdown", workday)
         self.assertIn("buttonValueMatchesChoice", workday)
+        self.assertIn("aria-invalid", workday)
+        self.assertIn("bestEffortWarnings", workday)
+        self.assertIn("chooseBestEffortOption", workday)
+        self.assertIn("best_effort:default_text", workday)
+        self.assertIn("currentValueForTarget", workday)
+        self.assertIn("selectedOption", workday)
         self.assertIn("forceSetWorkdayButtonChoice", workday)
         self.assertIn("workday_button_force_commit_after_click", workday)
         self.assertIn("clearWorkdayButtonSelection", workday)
@@ -1117,6 +1160,25 @@ Expected Graduation: Sep 2026
         self.assertIn("optionScoreForChoice", shared_utils)
         self.assertIn("phone device type", shared_utils)
         self.assertIn("countryParts.country", shared_utils)
+        self.assertIn("primaryQuestionnaire--", workday)
+        self.assertIn("family member employed", shared_utils)
+        self.assertIn("lived or traveled outside", shared_utils)
+        self.assertIn("lived or travelled outside", shared_utils)
+        self.assertIn("ernst & young", shared_utils)
+        self.assertIn("deloitte", shared_utils)
+        self.assertIn("language skills", shared_utils)
+        self.assertIn("preferred language", shared_utils)
+        self.assertIn("background security check", shared_utils)
+        self.assertIn("artificial intelligence enabled tools", shared_utils)
+        self.assertIn("inferWorkdayLocationFromApplyContext", shared_utils)
+        self.assertIn("All Canada Employers", shared_utils)
+        self.assertIn("initialsFromProfile", shared_utils)
+        self.assertIn("salaryExpectationRange", shared_utils)
+        self.assertIn("best_effort:default_option", shared_utils)
+        self.assertIn("best_effort_default:no_matching_option", shared_utils)
+        self.assertIn("$95000 - $105000", shared_utils)
+        self.assertIn("Yes, I am a citizen or permanent resident of Canada", shared_utils)
+        self.assertIn('option.startsWith(target + ",")', shared_utils)
         self.assertIn("how did you hear", shared_utils)
         self.assertIn("knownProvinces", shared_utils)
         self.assertIn("default:noPreviousInstitution", shared_utils)
@@ -1134,9 +1196,13 @@ Expected Graduation: Sep 2026
         self.assertIn("profile:accountEmail", shared_utils)
         self.assertIn("profile:accountPassword", shared_utils)
         self.assertIn("current password", shared_utils)
+        self.assertIn("profile:middleName", shared_utils)
+        self.assertIn('desc.includes("middlename")', shared_utils)
         self.assertIn("I choose not to disclose", shared_utils)
         self.assertIn("resume_already_uploaded", workday)
         self.assertIn("not_resume_input", workday)
+        self.assertIn("resume/cv", workday)
+        self.assertIn("!isPhoneCountryCodeField(elem, desc)", workday)
         self.assertIn('"drop file"', workday)
         self.assertIn('"file-upload"', workday)
 
@@ -1198,7 +1264,7 @@ Expected Graduation: Sep 2026
         self.assertIn("workday_websites_removed_empty_rows", workday)
         self.assertIn("normalizeStructuredMultilineText", workday)
         self.assertIn("splitInlineDashBullets", workday)
-        self.assertIn('split(/\\s+(?=(?:[-*]|\\u2022)\\s+[A-Z0-9])/', workday)
+        self.assertIn("split(/\\s+(?=(?:[-*]|\\u2022)\\s+[A-Z0-9])/", workday)
         self.assertIn('String(el.id || "").includes("secondaryQuestionnaire--")', workday)
         self.assertIn('[data-automation-id="formField"]', workday)
         self.assertIn("hasExistingResumeUpload", workday)

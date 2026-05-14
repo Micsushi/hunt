@@ -1297,6 +1297,28 @@ async function clearCurrentPage(tabId) {
         );
       }
 
+      function isWorkdayApplicationButtonDropdown(button) {
+        const automationId = button.getAttribute("data-automation-id") || "";
+        const id = button.id || "";
+        if (
+          automationId === "utilityMenuButton" ||
+          id === "languageSelectorButton" ||
+          id === "settingsSelectorButton"
+        ) {
+          return false;
+        }
+        return Boolean(
+          button.closest(
+            [
+              '[data-automation-id="formField"]',
+              "main",
+              "form",
+              '[role="main"]',
+            ].join(", "),
+          ),
+        );
+      }
+
       function forceClearWorkdayButton(button) {
         const current = buttonValueText(button);
         button.value = "";
@@ -1366,7 +1388,11 @@ async function clearCurrentPage(tabId) {
         let clearedButtons = 0;
         const buttons = Array.from(
           document.querySelectorAll('button[aria-haspopup="listbox"]'),
-        ).filter(isVisibleEnabled);
+        ).filter(
+          (button) =>
+            isVisibleEnabled(button) &&
+            isWorkdayApplicationButtonDropdown(button),
+        );
         for (const button of buttons) {
           const before = buttonValueText(button);
           if (isPlaceholderText(before)) {
@@ -2634,11 +2660,13 @@ async function runFillWithOneRefreshRetry(
   state,
   triggeredBy,
   fillRunId,
+  options = {},
 ) {
   let result = await withTimeout(
     runFillForTab(tabId, state, {
       fillRunId,
       isCancelled: () => isFillRunCancelled(fillRunId),
+      allowLlmAnswers: options.allowLlmAnswers === true,
     }),
     FILL_TIMEOUT_MS,
     () => ({
@@ -2710,6 +2738,7 @@ async function runFillWithOneRefreshRetry(
     runFillForTab(tabId, state, {
       fillRunId,
       isCancelled: () => isFillRunCancelled(fillRunId),
+      allowLlmAnswers: options.allowLlmAnswers === true,
     }),
     FILL_TIMEOUT_MS,
     () => ({
@@ -2884,6 +2913,11 @@ async function handleMessage(message, sender = {}) {
           state,
           message.payload?.triggeredBy || "fill_current_page",
           fillRunId,
+          {
+            allowLlmAnswers:
+              state.settings.llmAnswerFallbackEnabled === true &&
+              message.payload?.allowLlmAnswers !== false,
+          },
         );
       } finally {
         activeFillRuns.delete(fillRunId);
