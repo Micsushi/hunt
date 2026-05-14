@@ -59,7 +59,9 @@ def compact_profile(profile: dict[str, Any]) -> dict[str, Any]:
 
 
 def build_answer_prompt(request: C3AnswerRequest) -> tuple[str, str]:
-    normalized_options = [normalize_space(option) for option in request.field.options if normalize_space(option)]
+    normalized_options = [
+        normalize_space(option) for option in request.field.options if normalize_space(option)
+    ]
     normalized_question = build_standard_question(request.field.label, normalized_options)
     question_packet = {
         "question": normalize_question_text(request.field.label),

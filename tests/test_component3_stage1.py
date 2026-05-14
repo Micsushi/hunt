@@ -1019,12 +1019,10 @@ Expected Graduation: Sep 2026
         gmail_oauth_smoke = (REPO_ROOT / "scripts" / "c3_gmail_oauth_smoke.js").read_text(
             encoding="utf-8"
         )
-        cdp_lib = (REPO_ROOT / "scripts" / "lib" / "c3_cdp.js").read_text(
+        cdp_lib = (REPO_ROOT / "scripts" / "lib" / "c3_cdp.js").read_text(encoding="utf-8")
+        gmail_oauth_lib = (REPO_ROOT / "scripts" / "lib" / "c3_gmail_oauth.js").read_text(
             encoding="utf-8"
         )
-        gmail_oauth_lib = (
-            REPO_ROOT / "scripts" / "lib" / "c3_gmail_oauth.js"
-        ).read_text(encoding="utf-8")
         fresh_apply = (REPO_ROOT / "scripts" / "c3_workday_fresh_apply_smoke.js").read_text(
             encoding="utf-8"
         )

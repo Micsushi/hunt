@@ -212,10 +212,9 @@ def test_workday_already_filled_text_inputs_do_not_count_as_changed():
             workday.index("if (isExactCityField"),
         )
     ]
+    profile_branch_start = workday.index("var profileValue = profileMatch")
     profile_branch = workday[
-        workday.index("var profileValue = profileMatch") : workday.index(
-            "u.setElementValue(elem, profileValue"
-        )
+        profile_branch_start : workday.index("await setWorkdayTextValue", profile_branch_start)
     ]
     assert "markTextInputAlreadyFilled" in city_branch
     assert "filledFields.push" not in city_branch[: city_branch.index("u.setElementValue")]
@@ -245,17 +244,23 @@ def test_workday_logs_field_and_dropdown_actions():
     assert '"phone_country_code_fill_start"' in workday
     assert '"phone_country_code_select_attempt"' in workday
     assert '"phone_country_code_select_failed"' in workday
-    assert "keyboard_commit_phone_country_code_option" in workday
+    assert "pointer_select_phone_country_code_option" in workday
+    assert "select_phone_country_code_option" in workday
+    assert "phone_country_code_post_click_state" in workday
     assert "country_dependent_wait" in workday
     assert "stableReadyCount" in workday
     assert "readyCount >= 4" in workday
     assert "prime_country_dependency" in workday
     assert 'checkboxKey.includes("currentlyworkhere")' in workday
     assert 'checkboxKey.includes("preferredcheck")' in workday
-    assert "return false;" in workday[
-        workday.index("var structuredGroupHasUserValue")
-        : workday.index("var structuredGroupHasFillableControl")
-    ]
+    assert (
+        "return false;"
+        in workday[
+            workday.index("var structuredGroupHasUserValue") : workday.index(
+                "var structuredGroupHasFillableControl"
+            )
+        ]
+    )
     assert "reacquireBestVisibleOption" in workday
     assert "cycleWorkdayButtonChoice" in workday
     assert "select_alternate_before_correct_workday_button_option" in workday
@@ -279,9 +284,7 @@ def test_workday_step_change_clears_post_fill_prompt_cooldown():
     content = _load_script(REPO_ROOT / "executioner/src/content/bootstrap.js")
 
     context_change = content[
-        content.index("function handlePageContextChange") : content.index(
-            "function canPrompt"
-        )
+        content.index("function handlePageContextChange") : content.index("function canPrompt")
     ]
     assert "currentStepText() !== lastFillCompletedStep" in context_change
     assert "lastFillCompletedAt = 0" in context_change
@@ -290,8 +293,7 @@ def test_workday_step_change_clears_post_fill_prompt_cooldown():
 def test_detected_page_prompt_auto_dismisses_and_clears_on_spa_navigation():
     content = _load_script(REPO_ROOT / "executioner/src/content/bootstrap.js")
     signature_fn = content[
-        content.index("function promptSignature")
-        : content.index("function pageContextKey")
+        content.index("function promptSignature") : content.index("function pageContextKey")
     ]
 
     assert "PROMPT_AUTO_DISMISS_MS = 5000" in content
@@ -311,8 +313,7 @@ def test_fill_progress_dismisses_detected_page_prompt():
     content = _load_script(REPO_ROOT / "executioner/src/content/bootstrap.js")
 
     show_fill_progress = content[
-        content.index("function showFillProgress")
-        : content.index("function showExtensionToast")
+        content.index("function showFillProgress") : content.index("function showExtensionToast")
     ]
 
     assert "removePrompt();" in show_fill_progress
@@ -330,9 +331,7 @@ def test_prompt_fill_click_cannot_leave_prompt_stuck_filling():
         content.index(fill_message),
     )
     fill_handler = content[
-        fill_click_start : content.index(
-            "setTimeout(removePrompt", content.index(fill_message)
-        )
+        fill_click_start : content.index("setTimeout(removePrompt", content.index(fill_message))
     ]
     llm_handler = content[
         content.index(llm_message) : content.index(
@@ -346,9 +345,9 @@ def test_prompt_fill_click_cannot_leave_prompt_stuck_filling():
     assert "try {\n      chrome.runtime" in content
     assert "detected_prompt_fill_timeout" in fill_handler
     assert 'showFillProgress({ message: "Filling page" });' in fill_handler
-    assert fill_handler.index('showFillProgress({ message: "Filling page" });') < fill_handler.index(
-        "ui.detect_prompt.fill_click"
-    )
+    assert fill_handler.index(
+        'showFillProgress({ message: "Filling page" });'
+    ) < fill_handler.index("ui.detect_prompt.fill_click")
     assert "ui.detect_prompt.fill_response" in fill_handler
     assert "Still waiting for fill result" in fill_handler
     assert content.index(fill_message) > content.rindex(show_toast, 0, content.index(fill_message))
@@ -360,15 +359,19 @@ def test_detected_prompt_cleanup_runs_before_logging():
     content = _load_script(REPO_ROOT / "executioner/src/content/bootstrap.js")
 
     dismiss_handler = content[
-        content.index('getElementById("dismiss").addEventListener')
-        : content.index("host.shadowRoot", content.index('getElementById("dismiss").addEventListener'))
+        content.index('getElementById("dismiss").addEventListener') : content.index(
+            "host.shadowRoot", content.index('getElementById("dismiss").addEventListener')
+        )
     ]
     auto_dismiss_handler = content[
-        content.index("promptAutoDismissTimer = setTimeout")
-        : content.index("logPageUiEvent(\"ui.detect_prompt.show\"")
+        content.index("promptAutoDismissTimer = setTimeout") : content.index(
+            'logPageUiEvent("ui.detect_prompt.show"'
+        )
     ]
 
-    assert dismiss_handler.index("removePrompt();") < dismiss_handler.index("ui.detect_prompt.dismiss")
+    assert dismiss_handler.index("removePrompt();") < dismiss_handler.index(
+        "ui.detect_prompt.dismiss"
+    )
     assert auto_dismiss_handler.index("dismissedPromptSignatures.add") < auto_dismiss_handler.index(
         "removePrompt();"
     )
