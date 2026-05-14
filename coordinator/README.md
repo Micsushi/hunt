@@ -3,11 +3,13 @@
 This directory is the repo home for C4 (Coordinator).
 
 Current scope:
+
 - orchestration and submit-control source for C4 (Coordinator)
 - long-running C3/OpenClaw/Hermes worker integration planning
 - shared contract surfaces for C1/C2/C3 coordination
 
 Current checkpoint:
+
 - `config.py` resolves the Hunt DB path and the runtime artifact root
 - `db.py` creates and migrates:
   - `orchestration_runs`
@@ -35,9 +37,9 @@ Current checkpoint:
 - `docs/C4_COORDINATOR.md` documents the current state machine, API, CLI, artifacts, and gaps
 - `docs/C4_AGENT_WORKERS.md` documents the shared C3/OpenClaw/Hermes worker protocol, payloads, guardrails, and troubleshooting
 - `docs/C4_OPENCLAW_RUNBOOK.md` and `docs/C4_HERMES_RUNBOOK.md` document runtime-specific setup notes
-- `docs/superpowers/plans/2026-05-05-c4-long-running-agent-orchestration.md` is the detailed plan for C4 long-running agent workers on Windows/WSL2/Linux
 
 Important notes:
+
 - this folder is for source files and interface definitions, not runtime artifacts
 - runtime state should live outside the repo checkout on `server2`
 - C4 (Coordinator) should consume C1, C2, and C3 contracts rather than re-implementing them
@@ -45,6 +47,7 @@ Important notes:
 - OpenClaw/Hermes tests stop at prompt/artifact/mock-result level unless `--execute-agent` is explicitly passed
 
 Current CLI surface:
+
 - `python -m coordinator.cli init-db`
 - `python -m coordinator.cli ready --job-id <ID>`
 - `python -m coordinator.cli ready-list`
@@ -69,5 +72,6 @@ Current CLI surface:
 - `python -m coordinator.agent_worker --runtime hermes_local`
 
 Current `hunterctl` pass-throughs:
+
 - shared seam: `hunter apply-prep <ID>`
 - prefixed C4 helpers: `hunter c4-ready`, `hunter c4-ready-list`, `hunter c4-summary`, `hunter c4-run-status`, `hunter c4-runs`, `hunter c4-run-once`, and related `c4-*` review/submit commands

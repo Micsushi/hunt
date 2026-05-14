@@ -673,6 +673,9 @@ function readSettingsForm() {
     emailVerificationTimeoutSeconds: document.getElementById(
       "email-verification-timeout-seconds",
     )?.value,
+    emailVerificationBridgeUrl: document.getElementById(
+      "email-verification-bridge-url",
+    )?.value,
     allowGeneratedAnswers: document.getElementById("allow-generated-answers")
       ?.checked,
     flagLowConfidenceAnswers: document.getElementById(
@@ -792,6 +795,10 @@ async function loadState() {
   setInputValue(
     "email-verification-timeout-seconds",
     response.settings.emailVerificationTimeoutSeconds,
+  );
+  setInputValue(
+    "email-verification-bridge-url",
+    response.settings.emailVerificationBridgeUrl,
   );
   setCheckboxValue(
     "allow-generated-answers",

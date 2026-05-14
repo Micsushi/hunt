@@ -256,8 +256,10 @@ async function showPageToast(tabId, message, tone = "info") {
   });
 }
 
-function emailVerificationBridgeUrl() {
-  return "http://127.0.0.1:8765/verify-email";
+function emailVerificationBridgeUrl(settings = {}) {
+  return (
+    settings.emailVerificationBridgeUrl || "http://127.0.0.1:8765/verify-email"
+  );
 }
 
 function hostsFromEmailVerificationPayload(payload = {}, tabUrl = "") {
@@ -333,6 +335,7 @@ async function awaitEmailVerification(payload = {}, sender = {}) {
     };
   }
   await showFillProgress(tabId, "Waiting for verification email");
+  const bridgeUrl = emailVerificationBridgeUrl(state.settings);
   await logActivity(
     "email_verification.wait",
     "Waiting for verification email.",
@@ -341,11 +344,11 @@ async function awaitEmailVerification(payload = {}, sender = {}) {
       email,
       expectedDomains,
       signupStartedAt,
-      bridgeUrl: emailVerificationBridgeUrl(),
+      bridgeUrl,
     },
   );
   try {
-    const response = await fetch(emailVerificationBridgeUrl(), {
+    const response = await fetch(bridgeUrl, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
@@ -412,7 +415,7 @@ async function awaitEmailVerification(payload = {}, sender = {}) {
     await logActivity(
       "email_verification.bridge_unavailable",
       message,
-      { tabId, bridgeUrl: emailVerificationBridgeUrl() },
+      { tabId, bridgeUrl },
       "blocked",
     );
     return {

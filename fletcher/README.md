@@ -4,11 +4,11 @@ This directory is the repo home for **C2 (Fletcher)** : resume tailoring. See **
 
 ## Version targets
 
-| Version | Focus |
-|---------|--------|
-| **~v0.1 (shipped in repo)** | End-to-end pipeline, heuristic tailoring, optional Ollama for classification, keywords, rewrite/summary checks, DB/artifacts, `fletch`, review-app structured diff + highlights, Ansible Stage 7. |
+| Version                           | Focus                                                                                                                                                                                                      |
+| --------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **~v0.1 (shipped in repo)**       | End-to-end pipeline, heuristic tailoring, optional Ollama for classification, keywords, rewrite/summary checks, DB/artifacts, `fletch`, review-app structured diff + highlights, Ansible Stage 7.          |
 | **v1 review workspace (current)** | DB-backed Option B queue, persistent run history, PDF/TeX import/export, full review workspace, structured resume editing, segment revert, manual block edit, compile, and shared job/attempt review flow. |
-| **v2.0 (deferred)** | Rich interactive tailoring: gap/coverage, user-selected keywords, constrained regen, scoped AI edits, and deeper provider routing. Tracked in **`docs/TODO.md`** (C2 v2.0). |
+| **v2.0 (deferred)**               | Rich interactive tailoring: gap/coverage, user-selected keywords, constrained regen, scoped AI edits, and deeper provider routing.                                                                         |
 
 ## Runtime (what exists today)
 
@@ -41,26 +41,26 @@ Both files are **gitignored**. They contain personal data. See the template for 
 
 ### Environment variables
 
-| Variable | Default | Purpose |
-|----------|---------|---------|
-| `HUNT_DB_PATH` | `<repo>/hunt.db` | Hunt SQLite DB (same as C1). |
-| `HUNT_RESUME_ARTIFACTS_DIR` | `/home/michael/data/hunt/resumes` | Artifact root (attempts, PDFs, metadata, queue uploads, queue logs, review packages). |
-| `HUNT_RESUME_MODEL_BACKEND` | `heuristic` | Backward-compatible selector: `heuristic` or `ollama`. |
-| `HUNT_RESUME_LLM_PROVIDER` | `HUNT_RESUME_MODEL_BACKEND` | Provider abstraction value: `heuristic`, `ollama`, `openai`, `openrouter`, `anthropic`, or `gemini`. |
-| `HUNT_RESUME_LLM_MODEL` | unset | Generic provider model override. |
-| `HUNT_RESUME_CLOUD_LLM_CONFIRM` | unset | Must be `1` before cloud providers send resume content off-machine. |
-| `HUNT_OPENAI_API_KEY` / `HUNT_OPENROUTER_API_KEY` / `HUNT_ANTHROPIC_API_KEY` / `HUNT_GEMINI_API_KEY` | unset | Cloud provider credentials. These can also be stored as redacted C2 secret settings from the Settings page. |
-| `HUNT_RESUME_MODEL_NAME` | `deterministic-stage1` | Logged when backend is heuristic. |
-| `HUNT_OLLAMA_HOST` | `http://127.0.0.1:11434` | Ollama HTTP API base URL. |
-| `HUNT_OLLAMA_MODEL` | `gemma4:e4b` | Ollama chat model. |
-| `HUNT_OLLAMA_TIMEOUT_SEC` | `120` | Per-request timeout in seconds. |
-| `HUNT_OLLAMA_KEEP_ALIVE` | `-1` | How long Ollama should keep chat and embedding models loaded after a request (`-1` keeps them loaded until the container stops). |
-| `HUNT_OLLAMA_NUM_PARALLEL` | unset | Expected Ollama request parallelism value to include in C2 runtime logs. |
-| `HUNT_OLLAMA_CONTEXT_LENGTH` | unset | Expected Ollama context length value to include in C2 runtime logs. |
-| `HUNT_OLLAMA_FLASH_ATTENTION` | unset | Expected Ollama flash-attention setting to include in C2 runtime logs. |
-| `HUNT_OLLAMA_KV_CACHE_TYPE` | unset | Expected Ollama KV-cache type to include in C2 runtime logs. |
-| `HUNT_RESUME_LOG_LLM_IO` | `1` | Write prompt + response to attempt dir (`0` to disable). |
-| `HUNT_RESUME_LOG_LLM_MAX_CHARS` | `120000` | Max chars captured from prompt/response. |
+| Variable                                                                                             | Default                           | Purpose                                                                                                                          |
+| ---------------------------------------------------------------------------------------------------- | --------------------------------- | -------------------------------------------------------------------------------------------------------------------------------- |
+| `HUNT_DB_PATH`                                                                                       | `<repo>/hunt.db`                  | Hunt SQLite DB (same as C1).                                                                                                     |
+| `HUNT_RESUME_ARTIFACTS_DIR`                                                                          | `/home/michael/data/hunt/resumes` | Artifact root (attempts, PDFs, metadata, queue uploads, queue logs, review packages).                                            |
+| `HUNT_RESUME_MODEL_BACKEND`                                                                          | `heuristic`                       | Backward-compatible selector: `heuristic` or `ollama`.                                                                           |
+| `HUNT_RESUME_LLM_PROVIDER`                                                                           | `HUNT_RESUME_MODEL_BACKEND`       | Provider abstraction value: `heuristic`, `ollama`, `openai`, `openrouter`, `anthropic`, or `gemini`.                             |
+| `HUNT_RESUME_LLM_MODEL`                                                                              | unset                             | Generic provider model override.                                                                                                 |
+| `HUNT_RESUME_CLOUD_LLM_CONFIRM`                                                                      | unset                             | Must be `1` before cloud providers send resume content off-machine.                                                              |
+| `HUNT_OPENAI_API_KEY` / `HUNT_OPENROUTER_API_KEY` / `HUNT_ANTHROPIC_API_KEY` / `HUNT_GEMINI_API_KEY` | unset                             | Cloud provider credentials. These can also be stored as redacted C2 secret settings from the Settings page.                      |
+| `HUNT_RESUME_MODEL_NAME`                                                                             | `deterministic-stage1`            | Logged when backend is heuristic.                                                                                                |
+| `HUNT_OLLAMA_HOST`                                                                                   | `http://127.0.0.1:11434`          | Ollama HTTP API base URL.                                                                                                        |
+| `HUNT_OLLAMA_MODEL`                                                                                  | `gemma4:e4b`                      | Ollama chat model.                                                                                                               |
+| `HUNT_OLLAMA_TIMEOUT_SEC`                                                                            | `120`                             | Per-request timeout in seconds.                                                                                                  |
+| `HUNT_OLLAMA_KEEP_ALIVE`                                                                             | `-1`                              | How long Ollama should keep chat and embedding models loaded after a request (`-1` keeps them loaded until the container stops). |
+| `HUNT_OLLAMA_NUM_PARALLEL`                                                                           | unset                             | Expected Ollama request parallelism value to include in C2 runtime logs.                                                         |
+| `HUNT_OLLAMA_CONTEXT_LENGTH`                                                                         | unset                             | Expected Ollama context length value to include in C2 runtime logs.                                                              |
+| `HUNT_OLLAMA_FLASH_ATTENTION`                                                                        | unset                             | Expected Ollama flash-attention setting to include in C2 runtime logs.                                                           |
+| `HUNT_OLLAMA_KV_CACHE_TYPE`                                                                          | unset                             | Expected Ollama KV-cache type to include in C2 runtime logs.                                                                     |
+| `HUNT_RESUME_LOG_LLM_IO`                                                                             | `1`                               | Write prompt + response to attempt dir (`0` to disable).                                                                         |
+| `HUNT_RESUME_LOG_LLM_MAX_CHARS`                                                                      | `120000`                          | Max chars captured from prompt/response.                                                                                         |
 
 The Settings page also exposes C2 component settings for provider, model, cloud confirmation, redacted provider API keys, Ollama host/model/timeout/keep-alive, rewrite parallelism/memory guards, prompt policy, keyword limits, and summary/rewrite guardrails. UI settings override environment fallbacks through `component_settings`.
 
@@ -75,13 +75,13 @@ The Settings page also exposes C2 component settings for provider, model, cloud 
 
 Each attempt row in the job detail page now has direct links:
 
-| Link | What it shows |
-|------|---------------|
-| **PDF** | The compiled one-page resume PDF for that attempt |
-| **TeX** | The raw LaTeX source for that attempt |
-| **Keywords** | The `keywords.json` extracted for that job |
-| **LLM I/O** | Full prompt + raw response + timing metadata |
-| **Review** | Shared review workspace backed by `review_package.json` |
+| Link         | What it shows                                           |
+| ------------ | ------------------------------------------------------- |
+| **PDF**      | The compiled one-page resume PDF for that attempt       |
+| **TeX**      | The raw LaTeX source for that attempt                   |
+| **Keywords** | The `keywords.json` extracted for that job              |
+| **LLM I/O**  | Full prompt + raw response + timing metadata            |
+| **Review**   | Shared review workspace backed by `review_package.json` |
 
 ### Fletcher review workspace
 

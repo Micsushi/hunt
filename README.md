@@ -5,6 +5,7 @@ Putting in the Work so it is less Work for you to apply for Work
 Automated Hunt runtime. Today it includes **C0 (Frontend)**, **C1 (Hunter)** discovery/enrichment, **C2 (Fletcher)** resume generation, a local **C3 (Executioner)** browser extension, and **C4 (Coordinator)** orchestration scaffolding.
 
 Current operator confidence snapshot (subjective, as of 2026-05-08):
+
 - **C0**: mostly done
 - **C1 / Hunter**: about 95% done
 - **C2 / Fletcher**: about 80% done
@@ -20,6 +21,7 @@ Component rule: build each component so it can run and be tested on its own. Tod
 **Names and folders:** see **`docs/NAMING.md`** (C1 code is the **`hunter`** package; **`hunter/scraper.py`** is the discovery script name only).
 
 Current focus:
+
 - keep C0 stable and documented accurately
 - finish C1's last live proof: verify Easy Apply filtering on a real matching row
 - validate C2's Option A/Option B workflows against real server2 jobs and keep improving generation quality
@@ -62,17 +64,20 @@ The legacy systemd helper is still available, but current container smoke work u
 **C1 (Hunter) CLI:** see `docs/HUNTER_CLI.md` for scrape, enrich, drain, queue, auth, config, and all other Hunter CLI commands. Config values can also be edited via the **Settings** page in the web UI.
 
 **Start the local UI (C0)**
+
 ```
 hunter ui serve            # serve the review app at http://localhost:8000
 ```
 
 **Deploy (Docker, server2)**
+
 ```
 python deploy.py all
 python deploy.py all --mode server --env-file .env.server2
 ```
 
 **Tests and CI**
+
 ```
 python ci.py c1            # C1 checks + tests
 python ci.py               # full repo CI
@@ -92,6 +97,7 @@ cp hunt_user_config.example.json hunt_user_config.json
 ```
 
 **Configurable values:**
+
 - `watchlist` : priority company list - Discord alert fires on scrape when a match lands
 - `title_blacklist` : title phrases to filter out during scrape
 - `search_terms` : search queries per lane (engineering / product / data)
@@ -121,8 +127,6 @@ numeric guardrail keys.
 - C4 shared worker protocol: `docs/C4_AGENT_WORKERS.md`
 - C4 OpenClaw runbook: `docs/C4_OPENCLAW_RUNBOOK.md`
 - C4 Hermes runbook: `docs/C4_HERMES_RUNBOOK.md`
-- Detailed C4 long-running agent plan: `docs/superpowers/plans/2026-05-05-c4-long-running-agent-orchestration.md`
-- CI-first planning checklist for new projects, components, and features: `docs/PLANNING.md`
 - System roadmap: `docs/roadmap.md`
 - Shared glossary: `docs/GLOSSARY.md`
 - Repo-native deploy command: `python deploy.py all`
@@ -140,9 +144,8 @@ numeric guardrail keys.
 - Short quality checks: `python quality.py c0`, `python quality.py c1`, `python quality.py c2`, `python quality.py c3`, `python quality.py c4`
 - Full CI entrypoints: `python ci.py` and `python ci.py c0|c1|c2|c3|c4|shared|frontend`
 - Root hygiene: keep service Dockerfiles under `docker/`, one-off probes under `tools/dev-probes/`, and checked-in database fixtures under `tests/fixtures/databases/`.
-- Live fix tracker: `docs/TODO.md`
+  Quick test aliases:
 
-Quick test aliases:
 - `python test.py all`: all repo Python tests
 - `python test.py c0`: C0/backend and related UI-facing backend tests
 - `python test.py c1`: C1/Hunter tests
@@ -152,6 +155,7 @@ Quick test aliases:
 - `python test.py shared`: DB/runtime/deploy-readiness shared tests
 
 Quick quality aliases:
+
 - `python quality.py all`: Python Ruff + frontend lint/typecheck + Prettier checks + C3 extension quality
 - `python quality.py c0`: backend Ruff + frontend lint/typecheck/Prettier
 - `python quality.py c1`: Hunter Ruff checks
@@ -161,11 +165,13 @@ Quick quality aliases:
 - `python quality.py shared`: scripts/tests Ruff checks
 
 C3 extension dev reload:
+
 - Options page button: `Reload Extension`
 - Terminal helper: `.\hunter.ps1 c3-reload`
 - Requires Chrome launched with `--remote-debugging-port=9222` for terminal reload.
 
 C3 extension quality:
+
 - `.\hunter.ps1 c3-quality`: lint + format check
 - `.\hunter.ps1 c3-test`: C3 pytest target
 - `.\hunter.ps1 c3-ci`: quality + tests
@@ -176,6 +182,7 @@ C3 extension quality:
 - `.\hunter.ps1 c3-store-deploy`: package and upload C3 to an existing Chrome Web Store item
 
 Quick CI aliases:
+
 - `python ci.py all`: full quality checks plus full Python test suite
 - `python ci.py c0`: C0 checks plus C0 tests
 - `python ci.py c1`: C1 checks plus C1 tests
@@ -184,11 +191,13 @@ Quick CI aliases:
 - `python ci.py c4`: C4 checks plus C4 tests
 
 Compatibility alias:
+
 - `python check.py ...` still works, but `python quality.py ...` is now the preferred name.
 
 ## Definition Of Done
 
 Before saying work is done:
+
 - run the relevant verification command for the change you made
 - prefer the smallest matching CI target first: `python ci.py c0`, `python ci.py c1`, `python ci.py c2`, `python ci.py c3`, `python ci.py c4`, `python ci.py shared`, or `python ci.py frontend`
 - run `python ci.py` when the change crosses component boundaries or when you are unsure which component owns the impact
@@ -196,12 +205,14 @@ Before saying work is done:
 - if a required verification command cannot be run, say exactly what was not run and why
 
 For every feature or bug fix:
+
 - add or update tests when the behavior can be checked automatically
 - for bug fixes: add a regression test that fails before the fix and passes after it when feasible
 - for new features: add tests that prove the intended behavior, not just happy-path wiring
 - if automated coverage is not practical, say what manual validation is still required and why
 
 Repo homes by component:
+
 - `frontend/` + `backend/` : **C0 (Frontend)** UI and control-plane backend
 - `hunter/` : **C1 (Hunter)** runtime package
 - `fletcher/` : **C2 (Fletcher)** source and contracts
@@ -209,11 +220,13 @@ Repo homes by component:
 - `coordinator/` : **C4 (Coordinator)** source and contracts
 
 Testing posture by component:
+
 - `backend/app.py` / C0: browse and inspect DB-backed state without requiring live C1/C2/C3/C4 services
 - C1/C2/C3: runnable from terminal without C0
 - C4: depends on upstream/downstream component outputs by design
 
 Current local checkpoint for later components:
+
 - `fletcher/` : **C2 (Fletcher)** has usable Option B pasted-JD and Option A job-linked workflows, a shared review workspace, provider/settings scaffolding, progress/restart recovery, and job-linked resume persistence. Treat generation quality, live C1 -> C2 server proof, keyword-list-only targeting, section-level regeneration, and provider model evaluation as the remaining risks.
 - `executioner/` : **C3 (Executioner)** has standalone profile/resume storage, generic required-field fill, a browser-backed basic generic fixture test, Workday-specific fill, activity logging, extension reload helpers, named fill routes, detected-page prompt scaffold, and C4 polling/postback scaffold. It still needs a manual loaded-extension fixture proof, prompt-noise validation, C4 polling/postback proof, broader fixture coverage, and live ATS proof before it should be trusted on real applications.
 - `coordinator/` : **C4 (Coordinator)** DB-backed readiness/state-machine code, service routes, CLI commands, C3 bridge tests, and a Postgres smoke exist. It should still be treated as early-stage automation because live browser-backed workers and stale-run recovery are not proven yet.
@@ -221,6 +234,7 @@ Current local checkpoint for later components:
 ## Legacy Helpers
 
 Older one-off setup and run helpers now live under:
+
 - `tools/legacy/run.bat`
 - `tools/legacy/run.sh`
 - `tools/legacy/run_scheduled.bat`
@@ -228,6 +242,7 @@ Older one-off setup and run helpers now live under:
 - `tools/legacy/hunt.service`
 
 The preferred modern entrypoints are **C1 (Hunter)** scoped:
+
 - `.\hunter.ps1` (Windows PowerShell)
 - `hunter.cmd` (Windows cmd)
 - `./hunter.sh` (POSIX)

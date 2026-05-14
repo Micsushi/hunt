@@ -2,12 +2,12 @@
 "use strict";
 
 const fs = require("node:fs");
-const http = require("node:http");
 const path = require("node:path");
 const {
   makeWorkdayProfileDefaults,
   withWorkdayProfileAliases,
 } = require("./c3_p_chrome_defaults");
+const { CdpClient, httpJson, httpText, js, sleep } = require("./lib/c3_cdp");
 
 const DEFAULT_JOB_URL =
   "https://talentmanagementsolution.wd3.myworkdayjobs.com/en-US/JonasSoftwareCanada/job/Remote---Canada/Junior-AI-Software-Engineer_R50805-1?source=LinkedIn";
@@ -146,133 +146,6 @@ function usage() {
     "  --audit-json <path> Write full page/retry/value audit JSON, default logs/c3_workday_audit_<timestamp>.json",
     "  --no-audit-json Disable audit JSON file writing",
   ].join("\n");
-}
-
-function httpJson(port, requestPath) {
-  return new Promise((resolve, reject) => {
-    http
-      .get({ host: "127.0.0.1", port, path: requestPath }, (res) => {
-        let body = "";
-        res.on("data", (chunk) => {
-          body += chunk;
-        });
-        res.on("end", () => {
-          try {
-            resolve(JSON.parse(body));
-          } catch (error) {
-            reject(
-              new Error(`Invalid JSON from ${requestPath}: ${error.message}`),
-            );
-          }
-        });
-      })
-      .on("error", reject);
-  });
-}
-
-function httpText(port, requestPath, method = "GET") {
-  return new Promise((resolve, reject) => {
-    const req = http.request(
-      { host: "127.0.0.1", port, path: requestPath, method },
-      (res) => {
-        let body = "";
-        res.on("data", (chunk) => {
-          body += chunk;
-        });
-        res.on("end", () => resolve(body));
-      },
-    );
-    req.on("error", reject);
-    req.end();
-  });
-}
-
-class CdpClient {
-  constructor(webSocketDebuggerUrl) {
-    this.webSocketDebuggerUrl = webSocketDebuggerUrl;
-    this.nextId = 1;
-    this.pending = new Map();
-    this.ws = null;
-  }
-
-  async connect() {
-    this.ws = new WebSocket(this.webSocketDebuggerUrl);
-    await new Promise((resolve, reject) => {
-      const timer = setTimeout(
-        () => reject(new Error("CDP connect timeout")),
-        10000,
-      );
-      this.ws.addEventListener("open", () => {
-        clearTimeout(timer);
-        resolve();
-      });
-      this.ws.addEventListener("error", (event) => {
-        clearTimeout(timer);
-        reject(event.error || new Error("CDP websocket error"));
-      });
-    });
-    this.ws.addEventListener("message", (event) => {
-      const message = JSON.parse(event.data);
-      if (message.id && this.pending.has(message.id)) {
-        const { resolve, reject, timer } = this.pending.get(message.id);
-        clearTimeout(timer);
-        this.pending.delete(message.id);
-        if (message.error) {
-          reject(
-            new Error(message.error.message || JSON.stringify(message.error)),
-          );
-        } else {
-          resolve(message.result);
-        }
-      }
-    });
-    return this;
-  }
-
-  send(method, params = {}, timeoutMs = 60000) {
-    const id = this.nextId;
-    this.nextId += 1;
-    const payload = JSON.stringify({ id, method, params });
-    return new Promise((resolve, reject) => {
-      const timer = setTimeout(() => {
-        this.pending.delete(id);
-        reject(new Error(`CDP timeout: ${method}`));
-      }, timeoutMs);
-      this.pending.set(id, { resolve, reject, timer });
-      this.ws.send(payload);
-    });
-  }
-
-  async evaluate(expression, timeoutMs = 60000) {
-    const result = await this.send(
-      "Runtime.evaluate",
-      {
-        expression,
-        awaitPromise: true,
-        returnByValue: true,
-        userGesture: true,
-      },
-      timeoutMs,
-    );
-    if (result.exceptionDetails) {
-      throw new Error(
-        result.exceptionDetails.text ||
-          result.exceptionDetails.exception?.description ||
-          "Runtime.evaluate failed",
-      );
-    }
-    return result.result?.value;
-  }
-
-  close() {
-    if (this.ws) {
-      this.ws.close();
-    }
-  }
-}
-
-function js(value) {
-  return JSON.stringify(value);
 }
 
 function deriveApplyUrl(jobUrl, mode) {
@@ -471,12 +344,6 @@ async function ensurePageTarget(port, applyUrl) {
     throw new Error("Could not open Workday page target");
   }
   return target;
-}
-
-function sleep(ms) {
-  return new Promise((resolve) => {
-    setTimeout(resolve, ms);
-  });
 }
 
 function normalizeWorkdayPathname(pathname) {

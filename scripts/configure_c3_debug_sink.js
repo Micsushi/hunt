@@ -284,12 +284,13 @@ async function main() {
         const existing = await chrome.storage.sync.get([${js(SETTINGS_KEY)}]);
         const current = existing[${js(SETTINGS_KEY)}] || {};
         const next = {
-          settingsVersion: 3,
+          settingsVersion: 4,
           autofillOnLoad: false,
           manualFillEnabled: true,
           autoPromptEnabled: true,
           autoClickNextAfterFill: false,
           fillRequiredOnly: true,
+          emailVerificationBridgeUrl: "http://127.0.0.1:8765/verify-email",
           autoExportLogs: false,
           autoExportLogPrefix: "hunt-c3-logs",
           debugLogSinkEnabled: true,

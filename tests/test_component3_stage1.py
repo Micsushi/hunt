@@ -613,6 +613,7 @@ Expected Graduation: Sep 2026
         self.assertIn("autoPromptEnabled", settings)
         self.assertIn("autoAccountSignupLoginEnabled", settings)
         self.assertIn("autoEmailVerificationEnabled", settings)
+        self.assertIn("emailVerificationBridgeUrl", settings)
         self.assertIn("emailVerificationTimeoutSeconds", settings)
         self.assertIn("autoClickNextAfterFill", settings)
         self.assertIn("fillRequiredOnly", settings)
@@ -622,6 +623,10 @@ Expected Graduation: Sep 2026
         self.assertIn("accountEmail", settings)
         self.assertIn("accountPassword", settings)
         self.assertIn("phoneDeviceType", settings)
+        self.assertIn("middleName", settings)
+        self.assertIn("addressLine1", settings)
+        self.assertIn("addressLine2", settings)
+        self.assertIn("postalCode", settings)
         self.assertIn("applicationSource", settings)
         self.assertIn("applicationSourceCategory", settings)
         self.assertIn("applicationSourceDetail", settings)
@@ -647,6 +652,8 @@ Expected Graduation: Sep 2026
         self.assertIn("backendUrl", settings)
         self.assertIn("serviceToken", settings)
         self.assertIn("pollIntervalSeconds", storage)
+        self.assertIn("emailVerificationBridgeUrl", storage)
+        self.assertIn("sanitizeText(profile.middleName)", storage)
         self.assertIn("autoClickNextAfterFill", storage)
         self.assertIn("fetchPendingFills", api)
         self.assertIn("/api/c3/pending-fills", api)
@@ -664,6 +671,7 @@ Expected Graduation: Sep 2026
         self.assertIn('id="auto-account-signup-login-enabled"', options)
         self.assertIn('id="auto-email-verification-enabled"', options)
         self.assertIn('id="email-verification-timeout-seconds"', options)
+        self.assertIn('id="email-verification-bridge-url"', options)
         self.assertIn('id="auto-click-next-after-fill"', options)
         self.assertIn('id="fill-required-only"', options)
         self.assertIn('id="auto-export-logs"', options)
@@ -1008,6 +1016,15 @@ Expected Graduation: Sep 2026
         smoke = (REPO_ROOT / "scripts" / "c3_email_verification_smoke.js").read_text(
             encoding="utf-8"
         )
+        gmail_oauth_smoke = (REPO_ROOT / "scripts" / "c3_gmail_oauth_smoke.js").read_text(
+            encoding="utf-8"
+        )
+        cdp_lib = (REPO_ROOT / "scripts" / "lib" / "c3_cdp.js").read_text(
+            encoding="utf-8"
+        )
+        gmail_oauth_lib = (
+            REPO_ROOT / "scripts" / "lib" / "c3_gmail_oauth.js"
+        ).read_text(encoding="utf-8")
         fresh_apply = (REPO_ROOT / "scripts" / "c3_workday_fresh_apply_smoke.js").read_text(
             encoding="utf-8"
         )
@@ -1027,8 +1044,8 @@ Expected Graduation: Sep 2026
         self.assertIn("POST /verify-email", bridge)
         self.assertIn("HUNT_C3_MAIL_PROVIDER", bridge)
         self.assertIn("HUNT_C3_MAIL_IMAP_HOST", bridge)
-        self.assertIn("HUNT_C3_GMAIL_CREDENTIALS_PATH", bridge)
-        self.assertIn("HUNT_C3_GMAIL_TOKEN_DIR", bridge)
+        self.assertIn("HUNT_C3_GMAIL_CREDENTIALS_PATH", gmail_oauth_lib)
+        self.assertIn("HUNT_C3_GMAIL_TOKEN_DIR", gmail_oauth_lib)
         self.assertIn("checkGmailAuth", bridge)
         self.assertIn("verifyGmail", bridge)
         self.assertIn("--check-auth", bridge)
@@ -1048,6 +1065,8 @@ Expected Graduation: Sep 2026
         self.assertIn("signup_account_exists_signin_succeeded", smoke)
         self.assertIn("hunt.apply.fill_current_page", smoke)
         self.assertIn("confirmMatches", smoke)
+        self.assertIn('require("./lib/c3_cdp")', smoke)
+        self.assertNotIn("class CdpClient", smoke)
         self.assertIn("c3_email_verification_smoke.js", fresh_apply)
         self.assertIn("c3_workday_live_smoke.js", fresh_apply)
         self.assertIn("--extension-auto-next", fresh_apply)
@@ -1056,6 +1075,8 @@ Expected Graduation: Sep 2026
         self.assertIn("--keep-existing-workday-tabs", fresh_apply)
         self.assertIn("visibleValidationErrors", live_smoke)
         self.assertIn("allowLlmAnswers", live_smoke)
+        self.assertIn('require("./lib/c3_cdp")', live_smoke)
+        self.assertNotIn("class CdpClient", live_smoke)
         self.assertIn("--no-llm-answers", live_smoke)
         self.assertIn("--audit-json", live_smoke)
         self.assertIn("buildFillAudit", live_smoke)
@@ -1072,11 +1093,19 @@ Expected Graduation: Sep 2026
         self.assertIn("Job Board", p_chrome_defaults)
         self.assertIn("hunt.apply.await_email_verification", background)
         self.assertIn("emailVerificationBridgeUrl", background)
+        self.assertIn("settings.emailVerificationBridgeUrl", background)
         self.assertIn("autoEmailVerificationEnabled", background)
         self.assertIn("email_verification_disabled", background)
         self.assertIn("emailVerificationTimeoutSeconds", background)
         self.assertIn("Waiting for verification email", background)
         self.assertIn("http://127.0.0.1:8765/verify-email", background)
+        self.assertIn('require("./lib/c3_gmail_oauth")', bridge)
+        self.assertIn('require("./lib/c3_gmail_oauth")', gmail_oauth_smoke)
+        self.assertIn("settingsVersion: 4", configure_sink)
+        self.assertIn("class CdpClient", cdp_lib)
+        self.assertIn("function httpJson", cdp_lib)
+        self.assertIn("function tokenPathFor", gmail_oauth_lib)
+        self.assertIn("async function gmailAuthorizedToken", gmail_oauth_lib)
 
     def test_workday_adapter_handles_hidden_file_inputs_and_missing_resume_logging(self):
         workday = (REPO_ROOT / "executioner" / "src" / "ats" / "workday" / "fill.js").read_text(

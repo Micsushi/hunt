@@ -56,6 +56,9 @@ export function sanitizeSettings(settings = {}) {
     autoEmailVerificationEnabled: sanitizeBoolean(
       settings.autoEmailVerificationEnabled,
     ),
+    emailVerificationBridgeUrl:
+      sanitizeUrl(settings.emailVerificationBridgeUrl) ||
+      DEFAULT_SETTINGS.emailVerificationBridgeUrl,
     emailVerificationTimeoutSeconds: Number.isFinite(
       emailVerificationTimeoutSeconds,
     )
@@ -104,6 +107,7 @@ export function sanitizeProfile(profile = {}) {
     phone: sanitizeText(profile.phone),
     phoneDeviceType: sanitizeText(profile.phoneDeviceType),
     location: sanitizeText(profile.location),
+    middleName: sanitizeText(profile.middleName),
     addressLine1: sanitizeText(profile.addressLine1),
     addressLine2: sanitizeText(profile.addressLine2),
     postalCode: sanitizeText(profile.postalCode),
