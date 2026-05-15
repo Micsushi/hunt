@@ -158,7 +158,8 @@
           kind: "default_answer_used",
           severity: "warn",
           failedStep: "answer.resolve",
-          reason: "Used salary default because profile salary fields were blank.",
+          reason:
+            "Used salary default because profile salary fields were blank.",
           questionType: question.type,
         });
       }

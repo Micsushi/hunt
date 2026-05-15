@@ -576,6 +576,7 @@ async function pageHasAccountFields(pageClient) {
         fields: fields.slice(0, 20),
         verificationNeeded: /verify|verification|check your email|confirm your email/i.test(text),
         signedInOrAdvanced: /Settings\\s+\\S+@\\S+|Candidate Home|current step\\s+\\d+\\s+of\\s+\\d+\\s+(?!Create Account\\/Sign In)(My Information|My Experience|Application Questions|Voluntary Disclosures|Review)|Resume\\/CV/i.test(text),
+        signedInEmail: (text.match(/Settings\\s+(\\S+@\\S+)/i) || [])[1] || "",
         bodyHead: text.replace(/\\s+/g, " ").trim().slice(0, 800),
         href: location.href
       };
@@ -754,83 +755,51 @@ async function clickSafeAccountAction(pageClient, intent = "auto") {
 
 async function clickSignInAction(pageClient) {
   await bringToFront(pageClient);
-  const result = await pageClient.evaluate(
-    `(async () => {
-      const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
-      const visible = (el) => {
-        const style = getComputedStyle(el);
-        const rect = el.getBoundingClientRect();
-        return style.display !== "none" && style.visibility !== "hidden" && rect.width > 0 && rect.height > 0;
-      };
+  const pos = await pageClient.evaluate(
+    `(() => {
       const textOf = (el) => [
         el.getAttribute("aria-label"),
         el.getAttribute("title"),
         el.innerText,
         el.textContent
       ].filter(Boolean).join(" ").replace(/\\s+/g, " ").trim();
-      const clickReal = (target) => {
-        target.scrollIntoView({ block: "center", inline: "center" });
-        const rect = target.getBoundingClientRect();
-        const init = {
-          bubbles: true,
-          cancelable: true,
-          view: window,
-          button: 0,
-          buttons: 1,
-          clientX: Math.round(rect.left + rect.width / 2),
-          clientY: Math.round(rect.top + rect.height / 2)
-        };
-        ["mouseover", "mousemove", "pointerdown", "mousedown"].forEach((type) => target.dispatchEvent(new PointerEvent(type, init)));
-        target.dispatchEvent(new PointerEvent("pointerup", { ...init, buttons: 0 }));
-        target.dispatchEvent(new MouseEvent("mouseup", { ...init, buttons: 0 }));
-        target.dispatchEvent(new MouseEvent("click", { ...init, buttons: 0 }));
-      };
-      const candidates = [...document.querySelectorAll("button, [role='button'], a")]
-        .filter(visible)
-        .map((el) => ({
-          el,
-          text: textOf(el),
-          href: el.href || "",
-          disabled: el.disabled || el.getAttribute("aria-disabled") === "true"
-        }))
-        .filter((item) => item.text && !item.disabled);
-      const candidate = candidates.find((item) => /^(sign in|log in|login)$/i.test(item.text))
-        || candidates.find((item) => /already have an account|sign in|log in|login/i.test(item.text));
-      if (!candidate) {
-        return {
-          ok: false,
-          clicked: false,
-          reason: "sign_in_action_not_found",
-          buttons: candidates.map((item) => item.text).slice(0, 20),
-          href: location.href
-        };
-      }
-      if (candidate.href) {
-        return {
-          ok: true,
-          clicked: true,
-          label: candidate.text,
-          navigateTo: candidate.href,
-          href: location.href
-        };
-      }
-      clickReal(candidate.el);
-      await sleep(800);
-      return {
-        ok: true,
-        clicked: true,
-        label: candidate.text,
-        href: location.href
-      };
+      const allEls = [...document.querySelectorAll("button, [role='button'], a")];
+      const candidates = allEls
+        .filter((el) => {
+          const text = textOf(el);
+          return (
+            /^(sign in|log in|login)$/i.test(text) ||
+            /already have an account|sign in|log in|login/i.test(text)
+          ) && !el.disabled && el.getAttribute("aria-disabled") !== "true";
+        })
+        .map((el) => {
+          const rect = el.getBoundingClientRect();
+          return {
+            text: textOf(el),
+            href: el.href || "",
+            x: rect.left + rect.width / 2,
+            y: rect.top + rect.height / 2,
+            visible: rect.width > 0 && rect.height > 0
+          };
+        });
+      const visible = candidates.find((c) => c.visible && c.href);
+      if (visible) return { navigateTo: visible.href, label: visible.text };
+      const clickable = candidates.find((c) => c.visible && c.x > 0 && c.y > 0);
+      if (clickable) return { x: Math.round(clickable.x), y: Math.round(clickable.y), label: clickable.text };
+      return { ok: false, reason: "sign_in_action_not_found", buttons: candidates.map((c) => c.text) };
     })()`,
-    30000,
   );
-  if (result?.navigateTo) {
-    await navigate(pageClient, result.navigateTo);
-    return { ...result, href: result.navigateTo, navigatedByCdp: true };
+  if (pos?.navigateTo) {
+    await navigate(pageClient, pos.navigateTo);
+    return { ok: true, clicked: true, label: pos.label, href: pos.navigateTo, navigatedByCdp: true };
   }
-  await sleep(2500);
-  return result;
+  if (pos?.x != null) {
+    await pageClient.send("Input.dispatchMouseEvent", { type: "mousePressed", x: pos.x, y: pos.y, button: "left", clickCount: 1 });
+    await pageClient.send("Input.dispatchMouseEvent", { type: "mouseReleased", x: pos.x, y: pos.y, button: "left", clickCount: 1 });
+    await sleep(2500);
+    return { ok: true, clicked: true, label: pos.label, href: "" };
+  }
+  return { ok: false, clicked: false, reason: pos?.reason || "sign_in_action_not_found", buttons: pos?.buttons || [] };
 }
 
 async function signInFromCurrentAccountState(pageClient, args, referenceUrl) {
@@ -1080,6 +1049,25 @@ async function navigate(pageClient, url) {
   await sleep(1200);
 }
 
+async function signOutWorkday(pageClient) {
+  await bringToFront(pageClient);
+  const result = await pageClient.evaluate(
+    `(async () => {
+      const btn = document.querySelector('[data-automation-id="utilityMenuButton"]');
+      if (!btn) return { ok: false, reason: "settings_button_not_found" };
+      btn.click();
+      await new Promise(r => setTimeout(r, 800));
+      const items = [...document.querySelectorAll('[data-automation-id="menuItem"], [class*="menuItem"], [role="menuitem"]')];
+      const signOut = items.find(el => /sign out|log out/i.test(el.innerText || el.textContent));
+      if (!signOut) return { ok: false, reason: "sign_out_item_not_found", items: items.map(e => e.innerText).slice(0,10) };
+      signOut.click();
+      return { ok: true };
+    })()`,
+  );
+  await sleep(2000);
+  return result;
+}
+
 async function resetBrowserSiteData(pageClient, targetUrl) {
   const origin = new URL(targetUrl).origin;
   await pageClient.send("Network.enable").catch(() => null);
@@ -1122,7 +1110,7 @@ async function inspectApplicationState(pageClient) {
         title: document.title,
         verificationNeeded: /verify|verification|check your email|confirm your email/i.test(text),
         signedInOrAdvanced: /Settings\\s+\\S+@\\S+|Candidate Home|current step\\s+\\d+\\s+of\\s+\\d+\\s+(?!Create Account\\/Sign In)(My Information|My Experience|Application Questions|Voluntary Disclosures|Review)|Resume\\/CV/i.test(text),
-        accountError: /already exists|invalid|error:|please check|required/i.test(text) || (/already have an account/i.test(text) && !/already have an account\\?\\s*sign in/i.test(text)),
+        accountError: /already exists|invalid credential|error:|please check/i.test(text) || (/already have an account/i.test(text) && !/already have an account\\?\\s*sign in/i.test(text)),
         bodyHead: text.slice(0, 1000)
       };
     })()`,
@@ -1235,7 +1223,13 @@ async function main() {
       );
     }
     const fillTargetUrl = reachResult.state?.href || targetUrl;
-    if (args.provider !== "fake" && reachResult.state?.signedInOrAdvanced) {
+    const reachSignedInEmail = (reachResult.state?.signedInEmail || "").toLowerCase();
+    const wantEmail = (args.accountEmail || "").toLowerCase();
+    const wrongAccount =
+      reachSignedInEmail &&
+      wantEmail &&
+      reachSignedInEmail !== wantEmail;
+    if (args.provider !== "fake" && reachResult.state?.signedInOrAdvanced && !wrongAccount) {
       const applicationState = await inspectApplicationState(pageClient);
       console.log(
         JSON.stringify(
@@ -1272,6 +1266,42 @@ async function main() {
         ),
       );
       return;
+    }
+    if (wrongAccount) {
+      await signOutWorkday(pageClient);
+      await navigate(pageClient, targetUrl);
+      await sleep(2000);
+      const signInResult = await signInFromCurrentAccountState(
+        pageClient,
+        args,
+        targetUrl,
+      );
+      const postSignInState = signInResult.client
+        ? await inspectApplicationState(signInResult.client)
+        : await inspectApplicationState(pageClient);
+      if (signInResult.ok) {
+        console.log(
+          JSON.stringify(
+            {
+              ok: true,
+              provider: args.provider,
+              resetSiteData,
+              reason: "wrong_account_signout_signin_succeeded",
+              fill: { ok: false, skipped: true, reason: "signin_handled" },
+              submit: { ok: true, skipped: true, reason: "signed_in_as_correct_account", email: args.accountEmail },
+              bridge: { ok: true, skipped: true, reason: "already_verified_or_session_active" },
+              verified: postSignInState,
+              login: { ok: true, skipped: false, state: postSignInState },
+            },
+            null,
+            2,
+          ),
+        );
+        return;
+      }
+      throw new Error(
+        `Wrong-account sign-out + sign-in failed: ${JSON.stringify(signInResult)}`,
+      );
     }
     const fillResult =
       args.provider === "fake"

@@ -904,9 +904,9 @@ Expected Graduation: Sep 2026
         self.assertIn('@app.post("/api/c3/answer-decision")', backend_app)
         self.assertIn('@app.get("/api/c3/llm-status")', backend_app)
         self.assertIn("c3_extension_debug.jsonl", backend_app)
-        configure_debug = (
-            REPO_ROOT / "scripts" / "configure_c3_debug_sink.js"
-        ).read_text(encoding="utf-8")
+        configure_debug = (REPO_ROOT / "scripts" / "configure_c3_debug_sink.js").read_text(
+            encoding="utf-8"
+        )
         self.assertIn('const BROWSER_CONTEXT_KEY = "hunt.apply.browserContext"', configure_debug)
         self.assertIn('name: "p_chrome"', configure_debug)
         self.assertIn('pipelineVersion: next.useFieldPipelineV2 ? "v2" : "v1"', configure_debug)
@@ -917,9 +917,7 @@ Expected Graduation: Sep 2026
         identifier_path = (
             REPO_ROOT / "executioner" / "src" / "shared" / "v2" / "question-identifier.js"
         )
-        resolver_path = (
-            REPO_ROOT / "executioner" / "src" / "shared" / "v2" / "answer-resolver.js"
-        )
+        resolver_path = REPO_ROOT / "executioner" / "src" / "shared" / "v2" / "answer-resolver.js"
         script = f"""
             const fs = require("node:fs");
             const vm = require("node:vm");
@@ -1258,7 +1256,9 @@ Expected Graduation: Sep 2026
         self.assertIn("Safe Next check timed out.", background)
         self.assertIn("visible_validation_errors", safe_next)
         self.assertIn("visibleValidationErrors: probe.visibleValidationErrors || []", background)
-        self.assertIn("visibleValidationErrors: nextAction.visibleValidationErrors || []", background)
+        self.assertIn(
+            "visibleValidationErrors: nextAction.visibleValidationErrors || []", background
+        )
         self.assertIn("exactFieldKey", workday)
         self.assertIn("preferredcheck", workday)
         self.assertIn("phonenumber--extension", workday)

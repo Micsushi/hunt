@@ -37,11 +37,11 @@ export function createWorkdayFillFunction() {
         : [];
       return Boolean(
         window.__huntApplyCancelAllFills ||
-          (fillRunId && window.__huntApplyCancelFillRunId === fillRunId) ||
-          (fillRunId &&
-            window.__huntApplyActiveFillRunId &&
-            window.__huntApplyActiveFillRunId !== fillRunId) ||
-          (fillRunId && cancelledIds.includes(fillRunId)),
+        (fillRunId && window.__huntApplyCancelFillRunId === fillRunId) ||
+        (fillRunId &&
+          window.__huntApplyActiveFillRunId &&
+          window.__huntApplyActiveFillRunId !== fillRunId) ||
+        (fillRunId && cancelledIds.includes(fillRunId)),
       );
     };
     var fillBudgetExceeded = function () {
@@ -2036,11 +2036,15 @@ export function createWorkdayFillFunction() {
               normalized,
               parentKeyboard.optionIds || [],
             );
-            traceInteraction("search_input_keyboard_final_enter_skipped", input, {
-              reason: "no_exact_active_option_for_final_enter",
-              intendedValue: normalized,
-              childSelected: Boolean(childKeyboard.selected),
-            });
+            traceInteraction(
+              "search_input_keyboard_final_enter_skipped",
+              input,
+              {
+                reason: "no_exact_active_option_for_final_enter",
+                intendedValue: normalized,
+                childSelected: Boolean(childKeyboard.selected),
+              },
+            );
           }
         }
         if (
@@ -2073,12 +2077,16 @@ export function createWorkdayFillFunction() {
               keyOn(input, "Enter", "keyboard_any_source_enter");
               await sleep(350);
               if (searchInputHasAnySelection(input)) {
-                traceInteraction("search_input_any_selection_committed", input, {
-                  reason: "keyboard_any_source_selection_committed",
-                  intendedValue: normalized,
-                  currentValue: input.value || "",
-                  valueSource: choice.source,
-                });
+                traceInteraction(
+                  "search_input_any_selection_committed",
+                  input,
+                  {
+                    reason: "keyboard_any_source_selection_committed",
+                    intendedValue: normalized,
+                    currentValue: input.value || "",
+                    valueSource: choice.source,
+                  },
+                );
                 await closeOpenMenus();
                 return {
                   filled: true,
@@ -3515,7 +3523,10 @@ export function createWorkdayFillFunction() {
             commitTarget?.getAttribute?.("data-automation-id") || "",
           candidateRect: window.__huntPhoneCodeCandidateRect,
         });
-        workdayClickOptionCommitTarget(best, "select_phone_country_code_option");
+        workdayClickOptionCommitTarget(
+          best,
+          "select_phone_country_code_option",
+        );
         await sleep(100);
         traceInteraction("inspect", best, {
           reason: "phone_country_code_post_click_state",

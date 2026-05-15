@@ -53,15 +53,15 @@
       clientX: Math.round(rect.left + rect.width / 2),
       clientY: Math.round(rect.top + rect.height / 2),
     };
-    ["mouseover", "mousemove", "pointerdown", "mousedown"].forEach(function (
-      type,
-    ) {
-      var Ctor =
-        window.PointerEvent && type.startsWith("pointer")
-          ? window.PointerEvent
-          : MouseEvent;
-      el.dispatchEvent(new Ctor(type, init));
-    });
+    ["mouseover", "mousemove", "pointerdown", "mousedown"].forEach(
+      function (type) {
+        var Ctor =
+          window.PointerEvent && type.startsWith("pointer")
+            ? window.PointerEvent
+            : MouseEvent;
+        el.dispatchEvent(new Ctor(type, init));
+      },
+    );
     el.dispatchEvent(
       new (window.PointerEvent || MouseEvent)("pointerup", {
         ...init,
@@ -257,11 +257,20 @@
     ) {
       return true;
     }
-    return ["Work Experience", "Education", "Websites"].some(function (
-      section,
+    // Radio buttons and grouped form controls are section-level questions,
+    // not repeatable row controls. Never filter them out.
+    if (
+      el.type === "radio" ||
+      el.closest?.('[role="radiogroup"]') ||
+      el.closest?.('[role="group"][aria-labelledby]')
     ) {
-      return inBounds(el, sectionBounds(section));
-    });
+      return false;
+    }
+    return ["Work Experience", "Education", "Websites"].some(
+      function (section) {
+        return inBounds(el, sectionBounds(section));
+      },
+    );
   }
 
   function activeDialog() {
@@ -509,7 +518,9 @@
     await sleep(220);
     var option = optionElements().find(function (candidate) {
       var label = norm(textOf(candidate));
-      return label === target || label.includes(target) || target.includes(label);
+      return (
+        label === target || label.includes(target) || target.includes(label)
+      );
     });
     if (!option) {
       return false;
@@ -1117,7 +1128,8 @@
 
   function isChoiceControl(control) {
     return (
-      control?.tagName === "BUTTON" || control?.getAttribute?.("role") === "combobox"
+      control?.tagName === "BUTTON" ||
+      control?.getAttribute?.("role") === "combobox"
     );
   }
 
@@ -1209,7 +1221,11 @@
       })
       .filter(Boolean);
     var filled = 0;
-    for (var index = 0; index < entries.length && index < inputs.length; index++) {
+    for (
+      var index = 0;
+      index < entries.length && index < inputs.length;
+      index++
+    ) {
       var input = inputs[index];
       var value = entries[index].url;
       if (!value) {
@@ -1358,7 +1374,10 @@
         return clean(node.innerText || node.textContent || "");
       })
       .filter(function (text) {
-        return /\.(pdf|docx?|rtf|txt)\b/i.test(text) || /successfully uploaded/i.test(text);
+        return (
+          /\.(pdf|docx?|rtf|txt)\b/i.test(text) ||
+          /successfully uploaded/i.test(text)
+        );
       });
     return nodes[0] || "";
   }
@@ -1367,8 +1386,10 @@
     if (!resumeUploadedText()) {
       return 0;
     }
-    var buttons = visibleInSection("Resume/CV", "button,[role='button'],a,[tabindex]")
-      .filter(isDeleteButton);
+    var buttons = visibleInSection(
+      "Resume/CV",
+      "button,[role='button'],a,[tabindex]",
+    ).filter(isDeleteButton);
     var cleared = 0;
     for (var i = buttons.length - 1; i >= 0; i--) {
       if (!resumeUploadedText()) {
@@ -1451,9 +1472,14 @@
     return base;
   }
 
-  if (root.fieldPipeline?.runHuntV2Fill && !root.fieldPipeline._workdayRepeatablesWrapped) {
+  if (
+    root.fieldPipeline?.runHuntV2Fill &&
+    !root.fieldPipeline._workdayRepeatablesWrapped
+  ) {
     var baseRunFill = root.fieldPipeline.runHuntV2Fill;
-    root.fieldPipeline.runHuntV2Fill = async function workdayRepeatableFill(context) {
+    root.fieldPipeline.runHuntV2Fill = async function workdayRepeatableFill(
+      context,
+    ) {
       var base = await baseRunFill(context);
       if ((context?.atsType || "") !== "workday") {
         return base;
@@ -1464,9 +1490,14 @@
     root.fieldPipeline._workdayRepeatablesWrapped = true;
   }
 
-  if (root.clearPipeline?.runHuntV2Clear && !root.clearPipeline._workdayRepeatablesWrapped) {
+  if (
+    root.clearPipeline?.runHuntV2Clear &&
+    !root.clearPipeline._workdayRepeatablesWrapped
+  ) {
     var baseRunClear = root.clearPipeline.runHuntV2Clear;
-    root.clearPipeline.runHuntV2Clear = async function workdayRepeatableClear(context) {
+    root.clearPipeline.runHuntV2Clear = async function workdayRepeatableClear(
+      context,
+    ) {
       var base = await baseRunClear(context);
       if ((context?.atsType || "") !== "workday") {
         return base;
@@ -1477,13 +1508,17 @@
     root.clearPipeline._workdayRepeatablesWrapped = true;
   }
 
-  if (root.uiInspector?.collectCandidates && !root.uiInspector._workdayRepeatablesCandidateWrapped) {
+  if (
+    root.uiInspector?.collectCandidates &&
+    !root.uiInspector._workdayRepeatablesCandidateWrapped
+  ) {
     var baseCollectCandidates = root.uiInspector.collectCandidates;
-    root.uiInspector.collectCandidates = function collectNonRepeatableWorkdayCandidates() {
-      return baseCollectCandidates().filter(function (field) {
-        return !isRepeatableElement(field.element || field.anchor);
-      });
-    };
+    root.uiInspector.collectCandidates =
+      function collectNonRepeatableWorkdayCandidates() {
+        return baseCollectCandidates().filter(function (field) {
+          return !isRepeatableElement(field.element || field.anchor);
+        });
+      };
     root.uiInspector._workdayRepeatablesCandidateWrapped = true;
   }
 

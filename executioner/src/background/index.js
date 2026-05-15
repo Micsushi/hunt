@@ -749,13 +749,21 @@ function pageNumberFromSnapshot(snapshot = {}, fallback = 1) {
 function compactStopDetails(details = {}) {
   const validationErrors = Array.isArray(details.visibleValidationErrors)
     ? details.visibleValidationErrors
-        .map((error) => String(error || "").replace(/\s+/g, " ").trim())
+        .map((error) =>
+          String(error || "")
+            .replace(/\s+/g, " ")
+            .trim(),
+        )
         .filter(Boolean)
         .slice(0, 3)
     : [];
   const reviewReasons = Array.isArray(details.reviewReasons)
     ? details.reviewReasons
-        .map((reason) => String(reason || "").replace(/\s+/g, " ").trim())
+        .map((reason) =>
+          String(reason || "")
+            .replace(/\s+/g, " ")
+            .trim(),
+        )
         .filter(Boolean)
         .slice(0, 3)
     : [];
@@ -1243,7 +1251,9 @@ async function runV2PageWalkAfterFill({
     await dismissPageTransientUi(tabId);
     await new Promise((resolve) => setTimeout(resolve, 650));
     let afterNextSnapshot = await getPageSnapshot(tabId);
-    const beforeStepNumber = Number(beforeNextSnapshot.currentStep?.current || 0);
+    const beforeStepNumber = Number(
+      beforeNextSnapshot.currentStep?.current || 0,
+    );
     let afterStepNumber = Number(afterNextSnapshot.currentStep?.current || 0);
     if (
       beforeStepNumber &&
@@ -3395,7 +3405,9 @@ async function markPageFillCancelled(tabId, fillRunId, cancelled = true) {
       target: { tabId, allFrames: true },
       args: [fillRunId || "", Boolean(cancelled)],
       func: (runId, isCancelled) => {
-        const cancelledIds = Array.isArray(window.__huntApplyCancelledFillRunIds)
+        const cancelledIds = Array.isArray(
+          window.__huntApplyCancelledFillRunIds,
+        )
           ? window.__huntApplyCancelledFillRunIds
           : [];
         window.__huntApplyCancelAllFills = isCancelled && !runId;
@@ -3760,7 +3772,8 @@ async function handleMessage(message, sender = {}) {
               : `V2 filled ${result.pageWalk.pagesFilled} page${result.pageWalk.pagesFilled === 1 ? "" : "s"}; page walk stopped: ${result.pageWalk.stoppedReason}.`;
           if (!result.pageWalk.ok) {
             result.ok = false;
-            result.reason = result.pageWalk.stoppedReason || "page_walk_stopped";
+            result.reason =
+              result.pageWalk.stoppedReason || "page_walk_stopped";
             if (result.attempt) {
               result.attempt.status = "manual_review";
               result.attempt.manualReviewRequired = true;

@@ -657,8 +657,7 @@ class ProviderStatus:
 def provider_status() -> ProviderStatus:
     provider = fletcher_config.c3_llm_provider()
     model = (
-        fletcher_config.c3_llm_model("c3_answer_decision")
-        or fletcher_config.ollama_model_name()
+        fletcher_config.c3_llm_model("c3_answer_decision") or fletcher_config.ollama_model_name()
     )
     cloud = provider in {"openai", "openrouter", "anthropic", "gemini", "codex"}
     cloud_confirmed = fletcher_config.c3_cloud_llm_confirmed()

@@ -2,9 +2,8 @@ from __future__ import annotations
 
 import os
 import shlex
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Callable
-
 
 PROVIDER_ALIASES = {
     "": "",
@@ -76,7 +75,10 @@ def choose_provider(
 
     component_name = component.strip().upper()
     candidates: list[tuple[str, str]] = [
-        (component_env(component_name, "LLM_PROVIDER"), _env(component_env(component_name, "LLM_PROVIDER"))),
+        (
+            component_env(component_name, "LLM_PROVIDER"),
+            _env(component_env(component_name, "LLM_PROVIDER")),
+        ),
         ("HUNT_LLM_PROVIDER", _env("HUNT_LLM_PROVIDER")),
     ]
     if setting_lookup is not None:

@@ -35,11 +35,11 @@ export function createGenericFillFunction() {
         : [];
       return Boolean(
         window.__huntApplyCancelAllFills ||
-          (fillRunId && window.__huntApplyCancelFillRunId === fillRunId) ||
-          (fillRunId &&
-            window.__huntApplyActiveFillRunId &&
-            window.__huntApplyActiveFillRunId !== fillRunId) ||
-          (fillRunId && cancelledIds.includes(fillRunId)),
+        (fillRunId && window.__huntApplyCancelFillRunId === fillRunId) ||
+        (fillRunId &&
+          window.__huntApplyActiveFillRunId &&
+          window.__huntApplyActiveFillRunId !== fillRunId) ||
+        (fillRunId && cancelledIds.includes(fillRunId)),
       );
     };
     var cancelledResult = function () {

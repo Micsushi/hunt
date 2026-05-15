@@ -52,11 +52,20 @@
       };
     }
     if (field.uiModel === "button_listbox") {
+      var rawValue = clean(el.innerText || el.textContent || "");
+      var lowerValue = rawValue.toLowerCase();
+      var isPlaceholder =
+        !rawValue ||
+        lowerValue === "select" ||
+        lowerValue === "select one" ||
+        lowerValue === "none" ||
+        lowerValue.startsWith("0 items") ||
+        lowerValue.startsWith("select ");
       return {
-        rawValue: clean(el.innerText || el.textContent || ""),
-        text: clean(el.innerText || el.textContent || ""),
+        rawValue: rawValue,
+        text: rawValue,
         checked: false,
-        selected: true,
+        selected: !isPlaceholder,
       };
     }
     if (field.uiModel === "combobox") {

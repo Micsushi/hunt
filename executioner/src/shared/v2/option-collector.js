@@ -32,12 +32,31 @@
     }
     if (field.uiModel === "radio_group") {
       return (field.radios || []).map(function (radio) {
-        var label = window.__huntApplyUtils?.getDescriptor
+        var ariaLabel = radio.getAttribute?.("aria-label") || "";
+        var siblingLabel = (function () {
+          var parent = radio.parentElement;
+          if (!parent) return "";
+          var labelEl =
+            parent.querySelector?.(
+              "label, [data-automation-id*='label'], [data-automation-id*='Label']",
+            ) || (parent.tagName === "LABEL" ? parent : null);
+          return labelEl && labelEl !== radio
+            ? (labelEl.innerText || labelEl.textContent || "").trim()
+            : "";
+        })();
+        var descriptorLabel = window.__huntApplyUtils?.getDescriptor
           ? window.__huntApplyUtils.getDescriptor(
               radio,
               root.uiInspector?.containerSelectors || [],
             )
           : radio.value || radio.id || "";
+        var label =
+          ariaLabel ||
+          siblingLabel ||
+          descriptorLabel ||
+          radio.value ||
+          radio.id ||
+          "";
         return {
           label: root.audit?.normalizeText(label || radio.value || radio.id),
           value: radio.value,

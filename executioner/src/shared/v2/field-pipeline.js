@@ -46,15 +46,21 @@
       : [];
     return Boolean(
       window.__huntApplyCancelAllFills ||
-        (fillRunId && window.__huntApplyCancelFillRunId === fillRunId) ||
-        (fillRunId &&
-          window.__huntApplyActiveFillRunId &&
-          window.__huntApplyActiveFillRunId !== fillRunId) ||
-        (fillRunId && cancelledIds.includes(fillRunId)),
+      (fillRunId && window.__huntApplyCancelFillRunId === fillRunId) ||
+      (fillRunId &&
+        window.__huntApplyActiveFillRunId &&
+        window.__huntApplyActiveFillRunId !== fillRunId) ||
+      (fillRunId && cancelledIds.includes(fillRunId)),
     );
   }
 
-  function cancelledResult(context, audit, filledFields, fieldInventory, generatedAnswers) {
+  function cancelledResult(
+    context,
+    audit,
+    filledFields,
+    fieldInventory,
+    generatedAnswers,
+  ) {
     root.audit.pushEvent(audit, {
       action: "v2_fill_cancelled",
       step: "run.cancel",

@@ -470,6 +470,25 @@
     if (!el) {
       return false;
     }
+    var container = root.workdayUi?.nearestWorkdayField(el);
+    var siblingInput =
+      el.tagName === "BUTTON" && container
+        ? container.querySelector(
+            'input[type="text"]:not([type="hidden"]), input[role="combobox"], input[data-automation-id]',
+          )
+        : null;
+    if (siblingInput && searchText) {
+      try {
+        siblingInput.focus({ preventScroll: true });
+      } catch (_error) {
+        siblingInput.focus?.();
+      }
+      clickLikeUser(siblingInput);
+      await sleep(80);
+      setValue(siblingInput, searchText);
+      await sleep(260);
+      return true;
+    }
     try {
       el.focus({ preventScroll: true });
     } catch (_error) {
@@ -622,7 +641,9 @@
         return scorePhoneCountryOption(candidate, answerText);
       })
       .filter(function (candidate) {
-        return candidate.score >= 100 && norm(candidate.label).includes("canada");
+        return (
+          candidate.score >= 100 && norm(candidate.label).includes("canada")
+        );
       })
       .sort(function (a, b) {
         return b.score - a.score;
@@ -655,6 +676,17 @@
         text: selectedText,
         selected: true,
       };
+    }
+    if (field.element?.tagName === "BUTTON" && container) {
+      var siblingInput = container.querySelector(
+        'input[type="text"]:not([type="hidden"]), input[role="combobox"], input[data-automation-id]',
+      );
+      if (siblingInput) {
+        var inputVal = clean(siblingInput.value);
+        if (inputVal) {
+          return { rawValue: inputVal, text: inputVal, selected: true };
+        }
+      }
     }
     return state;
   }
@@ -698,6 +730,21 @@
       target = preferredWorkdayOption(options, option, answer);
     }
     if (!target) {
+      var postPopupState = workdayCommittedState(field);
+      var postPopupLabel = clean(
+        postPopupState.text || postPopupState.rawValue || "",
+      );
+      if (postPopupState.selected && postPopupLabel) {
+        await closePopup(field);
+        return {
+          ok: true,
+          reason: "popup_empty_already_committed",
+          afterState: postPopupState,
+          selectedOption: postPopupLabel,
+          valueSource: fieldAudit?.valueSource || answer?.source || "",
+          answerText: postPopupLabel,
+        };
+      }
       root.audit?.pushIssue(audit, fieldAudit, {
         kind: "workday_popup_options_missing",
         severity: field.required ? "warn" : "info",
