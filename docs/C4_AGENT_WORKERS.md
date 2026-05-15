@@ -26,10 +26,10 @@ Use these runtime names in C4:
 - `c3_extension`: Chrome extension bridge.
 - `openclaw_isolated`: OpenClaw with an isolated browser profile. Use this first.
 - `openclaw_attached`: OpenClaw attached to a signed-in user browser. Use only after isolated proof.
-- `hermes_local`: Hermes on Linux or WSL2.
+- `hermes_local`: Hermes on Linux or WSL2. Native Windows exists as early beta, but WSL2 remains safer for Hunt proof work.
 - `hermes_server`: Hermes on server2/Linux, preferably with Docker or SSH backend.
 
-Hermes is not a native Windows lane. On Windows, use WSL2 for Hermes.
+For Windows operators, prefer WSL2 for Hermes unless intentionally testing the native Windows beta.
 
 ## Safe Worker Lifecycle
 
@@ -170,6 +170,16 @@ External agent execution:
 python -m coordinator.agent_worker --runtime openclaw_isolated --execute-agent
 ```
 
+Hermes LLM provider selection:
+
+```powershell
+$env:HUNT_LLM_PROVIDER = "ollama"
+$env:HUNT_C4_LLM_PROVIDER = "codex_oauth"
+python -m coordinator.agent_worker --runtime hermes_local --execute-agent
+```
+
+Provider precedence is command flag, component env, shared env, then local Ollama. For Hermes, Hunt maps `ollama` to Hermes `custom` for the local Ollama OpenAI-compatible endpoint, and maps `codex_oauth` to `openai-codex`; `anthropic`, `gemini`, and `openrouter` use their Hermes/API-key provider setup. If Hermes is not on PATH, set `HUNT_HERMES_COMMAND` or use the default local Windows install path under `%LOCALAPPDATA%\hermes\hermes-agent\venv\Scripts\hermes.exe`.
+
 ## Wrapper Commands
 
 OpenClaw:
@@ -205,7 +215,7 @@ RUNTIME=hermes_local ./scripts/c4_hermes_worker.sh --execute-agent
 
 `openclaw` or `hermes` command not found: install the runtime or run without `--execute-agent` to inspect artifacts only.
 
-Native Windows plus Hermes: use WSL2. Hermes is not documented as native Windows-supported.
+Native Windows plus Hermes: native Windows is early beta. Prefer WSL2 for Hunt until the beta path has its own fixture proof.
 
 ## Verification
 

@@ -1,0 +1,383 @@
+(function () {
+  var root = (window.__huntV2 = window.__huntV2 || {});
+
+  function optionsNeeded(field) {
+    return [
+      "select",
+      "radio_group",
+      "checkbox",
+      "combobox",
+      "button_listbox",
+    ].includes(field.uiModel);
+  }
+
+  function inventoryEntry(field, fieldAudit) {
+    return {
+      kind: field.kind,
+      tagName: field.element?.tagName || "",
+      type: field.element?.type || "",
+      name: field.element?.name || "",
+      id: field.element?.id || "",
+      descriptor: field.descriptor || "",
+      questionHash: field.questionHash || "",
+      required: Boolean(field.required),
+      filled: Boolean(fieldAudit.filled),
+      skippedReason: fieldAudit.filled
+        ? ""
+        : fieldAudit.afterState?.reason || "",
+      valueSource: fieldAudit.valueSource || "",
+      bestEffortWarning: fieldAudit.issues
+        .map(function (issue) {
+          return issue.kind + ":" + issue.reason;
+        })
+        .join(" | ")
+        .slice(0, 500),
+      options: (field.options || []).map(function (option) {
+        return option.label;
+      }),
+      rect: field.rect || {},
+    };
+  }
+
+  function fillCancelled(context) {
+    var fillRunId = context.fillRunId || "";
+    var cancelledIds = Array.isArray(window.__huntApplyCancelledFillRunIds)
+      ? window.__huntApplyCancelledFillRunIds
+      : [];
+    return Boolean(
+      window.__huntApplyCancelAllFills ||
+        (fillRunId && window.__huntApplyCancelFillRunId === fillRunId) ||
+        (fillRunId &&
+          window.__huntApplyActiveFillRunId &&
+          window.__huntApplyActiveFillRunId !== fillRunId) ||
+        (fillRunId && cancelledIds.includes(fillRunId)),
+    );
+  }
+
+  function cancelledResult(context, audit, filledFields, fieldInventory, generatedAnswers) {
+    root.audit.pushEvent(audit, {
+      action: "v2_fill_cancelled",
+      step: "run.cancel",
+      status: "warn",
+      reason: "user_cancelled",
+      detail: {
+        fillRunId: context.fillRunId || "",
+        activeFillRunId: window.__huntApplyActiveFillRunId || "",
+      },
+    });
+    root.audit.complete(audit);
+    return {
+      ok: false,
+      cancelled: true,
+      reason: "user_cancelled",
+      message: "Fill canceled.",
+      atsType: context.atsType || context.fillRoute?.adapterName || "generic",
+      adapterBackedByGeneric:
+        context.fillRoute?.adapterBackedByGeneric || false,
+      frameUrl: window.location.href,
+      authState: window.__huntApplyUtils?.detectAuthState
+        ? window.__huntApplyUtils.detectAuthState()
+        : "unknown",
+      filledFieldCount: filledFields.length,
+      generatedAnswerCount: generatedAnswers.length,
+      manualReviewRequired: true,
+      manualReviewReasons: ["user_cancelled"],
+      bestEffortWarnings: audit.permanentIssues.map(function (issue) {
+        return issue.kind + ":" + issue.reason;
+      }),
+      filledFields: filledFields,
+      fieldInventory: fieldInventory,
+      generatedAnswers: generatedAnswers,
+      htmlSnapshot: document.documentElement.outerHTML.slice(0, 200000),
+      interactionTrace: audit.events,
+      traceTruncated: false,
+      v2Audit: audit,
+    };
+  }
+
+  async function runField({
+    field,
+    profile,
+    settings,
+    audit,
+    activeApplyContext,
+    defaultResume,
+  }) {
+    var fieldAudit = root.audit.createFieldAudit(audit, field);
+    fieldAudit.beforeState = root.fieldState.readFieldState(field);
+    root.audit.pushFieldStep(audit, fieldAudit, {
+      action: "field_start",
+      step: "field.start",
+      status: "info",
+      uiModel: field.uiModel,
+      element: root.audit.summarizeElement(field.element || field.anchor),
+    });
+
+    var question = root.questionIdentifier.identifyQuestion(
+      field,
+      audit,
+      fieldAudit,
+    );
+    fieldAudit.questionType = question.type;
+    var answer = root.answerResolver.resolveAnswer({
+      question: question,
+      field: field,
+      profile: profile,
+      audit: audit,
+      fieldAudit: fieldAudit,
+    });
+    fieldAudit.valueSource = answer.source || "";
+    fieldAudit.answerPreview = String(answer.value ?? "").slice(0, 160);
+    root.audit.pushFieldStep(audit, fieldAudit, {
+      action: "answer_resolved",
+      step: "answer.resolve",
+      status: answer.value || answer.needsGeneratedText ? "ok" : "warn",
+      valueSource: answer.source,
+      reason: answer.value ? "answer_available" : "missing_answer",
+      detail: {
+        answerType: answer.answerType,
+        confidence: answer.confidence,
+        answerPreview: fieldAudit.answerPreview,
+      },
+    });
+
+    var option = null;
+    if (optionsNeeded(field)) {
+      field.options = await root.optionCollector.collectOptions(field, {
+        answer: answer,
+        audit: audit,
+        fieldAudit: fieldAudit,
+      });
+      root.audit.pushFieldStep(audit, fieldAudit, {
+        action: "options_collected",
+        step: "option.collect",
+        status: field.options.length ? "ok" : "warn",
+        reason: field.options.length ? "options_available" : "no_options",
+        detail: {
+          optionCount: field.options.length,
+          options: field.options.map(function (candidate) {
+            return candidate.label;
+          }),
+        },
+      });
+      var match = root.optionMatcher.matchOption({
+        options: field.options,
+        answer: answer,
+        audit: audit,
+        fieldAudit: fieldAudit,
+        field: field,
+      });
+      option = match.option;
+      fieldAudit.selectedOption = option?.label || "";
+      fieldAudit.valueSource = match.fallback
+        ? "fallback:" + match.source
+        : answer.source || match.source;
+      root.audit.pushFieldStep(audit, fieldAudit, {
+        action: "option_resolved",
+        step: "option.match",
+        status: option ? "ok" : "warn",
+        selectedOption: option?.label || "",
+        valueSource: fieldAudit.valueSource,
+        reason: match.source,
+      });
+      if (!option) {
+        root.audit.pushIssue(audit, fieldAudit, {
+          kind: "unsupported_or_empty_option_set",
+          severity: field.required ? "warn" : "info",
+          failedStep: "option.match",
+          reason: "No selectable option was available.",
+        });
+      }
+    }
+
+    if (
+      optionsNeeded(field) &&
+      !option &&
+      field.workday?.kind !== "phone_country_code"
+    ) {
+      fieldAudit.afterState = root.fieldState.readFieldState(field);
+      return { filled: false, fieldAudit: fieldAudit };
+    }
+
+    var fillResult = await root.fieldDrivers.fillField({
+      field: field,
+      answer: answer,
+      option: option,
+      audit: audit,
+      fieldAudit: fieldAudit,
+      activeApplyContext: activeApplyContext || {},
+      defaultResume: defaultResume || {},
+    });
+    fieldAudit.afterState =
+      fillResult.afterState || root.fieldState.readFieldState(field);
+    fieldAudit.filled = Boolean(fillResult.ok);
+    if (fillResult.valueSource) {
+      fieldAudit.valueSource = fillResult.valueSource;
+    }
+    if (fillResult.answerText) {
+      fieldAudit.answerPreview = String(fillResult.answerText).slice(0, 160);
+    }
+    root.audit.pushFieldStep(audit, fieldAudit, {
+      action: "field_fill_result",
+      step: "driver.fill",
+      status: fillResult.ok ? "ok" : "warn",
+      reason:
+        fillResult.reason ||
+        (fillResult.ok ? "commit_verified" : "commit_failed"),
+      selectedOption: fieldAudit.selectedOption,
+      valueSource: fieldAudit.valueSource,
+      detail: {
+        afterText: fieldAudit.afterState.text,
+        afterRawValue: fieldAudit.afterState.rawValue,
+      },
+    });
+    if (!fillResult.ok) {
+      root.audit.pushIssue(audit, fieldAudit, {
+        kind: "field_fill_failed",
+        severity: field.required ? "warn" : "info",
+        failedStep: "driver.fill",
+        reason: fillResult.reason || "commit_failed",
+      });
+    }
+    return { filled: fieldAudit.filled, fieldAudit: fieldAudit };
+  }
+
+  async function runHuntV2Fill(context) {
+    var audit = root.audit.createRunAudit({
+      fillRunId: context.fillRunId,
+      atsType: context.atsType || context.fillRoute?.adapterName || "generic",
+      mode: "fill",
+    });
+    root.audit.pushEvent(audit, {
+      action: "v2_fill_start",
+      step: "run.start",
+      status: "info",
+      reason: "field_pipeline_v2",
+      detail: {
+        href: window.location.href,
+        fillRunId: context.fillRunId || "",
+      },
+    });
+
+    var fields = root.uiInspector.collectCandidates();
+    audit.page = root.uiInspector.describePage
+      ? root.uiInspector.describePage(fields)
+      : {};
+    root.audit.pushEvent(audit, {
+      action: "page_profiled",
+      step: "page.profile",
+      status: "info",
+      reason: audit.page?.signature || "page_signature_unavailable",
+      detail: audit.page || {},
+    });
+    var filledFields = [];
+    var fieldInventory = [];
+    var generatedAnswers = [];
+    if (fillCancelled(context)) {
+      return cancelledResult(
+        context,
+        audit,
+        filledFields,
+        fieldInventory,
+        generatedAnswers,
+      );
+    }
+    for (var i = 0; i < fields.length; i++) {
+      if (fillCancelled(context)) {
+        return cancelledResult(
+          context,
+          audit,
+          filledFields,
+          fieldInventory,
+          generatedAnswers,
+        );
+      }
+      var field = fields[i];
+      if (context.settings?.fillRequiredOnly !== false && !field.required) {
+        root.audit.pushEvent(audit, {
+          action: "field_skipped",
+          step: "field.required_filter",
+          status: "info",
+          reason: "not_required",
+          fieldId: field.fieldId,
+          questionHash: field.questionHash,
+          uiModel: field.uiModel,
+        });
+        continue;
+      }
+      var result = await runField({
+        field: field,
+        profile: context.profile || {},
+        settings: context.settings || {},
+        audit: audit,
+        activeApplyContext: context.activeApplyContext || {},
+        defaultResume: context.defaultResume || {},
+      });
+      if (fillCancelled(context)) {
+        return cancelledResult(
+          context,
+          audit,
+          filledFields,
+          fieldInventory,
+          generatedAnswers,
+        );
+      }
+      fieldInventory.push(inventoryEntry(field, result.fieldAudit));
+      if (result.filled) {
+        filledFields.push({
+          field: field.descriptor,
+          valueSource: result.fieldAudit.valueSource,
+          questionHash: field.questionHash,
+        });
+      }
+      if (
+        result.fieldAudit.valueSource &&
+        result.fieldAudit.valueSource.startsWith("fallback:")
+      ) {
+        generatedAnswers.push({
+          questionHash: field.questionHash,
+          questionText: field.descriptor,
+          answerText: result.fieldAudit.answerPreview,
+          answerSource: result.fieldAudit.valueSource,
+          confidence: "low",
+          manualReviewRequired: true,
+        });
+      }
+    }
+    root.audit.complete(audit);
+    var manualReviewRequired = audit.permanentIssues.some(function (issue) {
+      return ["warn", "blocked", "error"].includes(issue.severity);
+    });
+    return {
+      ok: true,
+      atsType: context.atsType || context.fillRoute?.adapterName || "generic",
+      adapterBackedByGeneric:
+        context.fillRoute?.adapterBackedByGeneric || false,
+      frameUrl: window.location.href,
+      authState: window.__huntApplyUtils?.detectAuthState
+        ? window.__huntApplyUtils.detectAuthState()
+        : "unknown",
+      filledFieldCount: filledFields.length,
+      generatedAnswerCount: generatedAnswers.length,
+      manualReviewRequired: manualReviewRequired,
+      manualReviewReasons: manualReviewRequired
+        ? ["c3_v2_permanent_issues"]
+        : [],
+      bestEffortWarnings: audit.permanentIssues.map(function (issue) {
+        return issue.kind + ":" + issue.reason;
+      }),
+      filledFields: filledFields,
+      fieldInventory: fieldInventory,
+      generatedAnswers: generatedAnswers,
+      htmlSnapshot: document.documentElement.outerHTML.slice(0, 200000),
+      interactionTrace: audit.events,
+      traceTruncated: false,
+      v2Audit: audit,
+    };
+  }
+
+  root.fieldPipeline = {
+    runField: runField,
+    runHuntV2Fill: runHuntV2Fill,
+  };
+})();

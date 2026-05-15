@@ -310,6 +310,8 @@ def test_c3_extension_has_standalone_manual_fill_path():
     assert "position applied for" in generic_rules
     assert "excludedPhrases" in generic_rules
     assert 'id="fill-mode"' in popup_html
+    assert 'id="reload-extension"' in popup_html
+    assert "chrome.runtime.reload()" in popup_js
     assert '"Standalone"' in popup_js
     assert '"Job Context"' in popup_js
 

@@ -513,7 +513,7 @@ function C2ProviderRuntimeSettings() {
     staleTime: 30_000,
   })
 
-  const [provider, setProvider] = useState('heuristic')
+  const [provider, setProvider] = useState('ollama')
   const [model, setModel] = useState('')
   const [timeoutSec, setTimeoutSec] = useState('300')
   const [cloudConfirm, setCloudConfirm] = useState(false)
@@ -537,7 +537,7 @@ function C2ProviderRuntimeSettings() {
 
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect
-    setProvider(getSettingValue(settings, C2_LLM_PROVIDER_KEY) ?? 'heuristic')
+    setProvider(getSettingValue(settings, C2_LLM_PROVIDER_KEY) ?? 'ollama')
     setModel(getSettingValue(settings, C2_LLM_MODEL_KEY) ?? '')
     setTimeoutSec(getSettingValue(settings, C2_LLM_TIMEOUT_SEC_KEY) ?? '300')
     setCloudConfirm(settingEnabled(getSettingValue(settings, C2_CLOUD_CONFIRM_KEY)))
@@ -615,6 +615,7 @@ function C2ProviderRuntimeSettings() {
           >
             <option value="heuristic">heuristic</option>
             <option value="ollama">ollama</option>
+            <option value="codex">codex oauth</option>
             <option value="openai">openai</option>
             <option value="openrouter">openrouter</option>
             <option value="anthropic">anthropic</option>

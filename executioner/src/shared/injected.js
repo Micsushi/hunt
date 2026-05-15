@@ -421,6 +421,9 @@
 
   function locationTextForDescriptor(descriptor, profile, stripLongDash) {
     var lowered = u.normalizeText(descriptor).toLowerCase();
+    if (/\b(phone|telephone|mobile)\b/.test(lowered)) {
+      return "";
+    }
     var parts = locationParts(profile.location);
     if (!parts.full) {
       return "";

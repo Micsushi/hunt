@@ -363,7 +363,12 @@ function readProfileForm() {
     phone: document.getElementById("profile-phone")?.value,
     phoneDeviceType: document.getElementById("profile-phone-device-type")
       ?.value,
+    phoneCountryCode: document.getElementById("profile-phone-country-code")
+      ?.value,
     location: document.getElementById("profile-location")?.value,
+    city: document.getElementById("profile-city")?.value,
+    province: document.getElementById("profile-province")?.value,
+    country: document.getElementById("profile-country")?.value,
     addressLine1: document.getElementById("profile-address-line-1")?.value,
     addressLine2: document.getElementById("profile-address-line-2")?.value,
     postalCode: document.getElementById("profile-postal-code")?.value,
@@ -397,6 +402,12 @@ function readProfileForm() {
       ?.value,
     expectedGraduationYear: document.getElementById(
       "profile-expected-graduation-year",
+    )?.value,
+    degreeLevel: document.getElementById("profile-degree-level")?.value,
+    highestEducation: document.getElementById("profile-highest-education")
+      ?.value,
+    preferredEducationIndex: document.getElementById(
+      "profile-preferred-education-index",
     )?.value,
     availableSummer2026: document.getElementById(
       "profile-available-summer-2026",
@@ -445,7 +456,11 @@ function writeProfileFields(profile) {
   setInputValue("profile-account-password", profile.accountPassword);
   setInputValue("profile-phone", profile.phone);
   setInputValue("profile-phone-device-type", profile.phoneDeviceType);
+  setInputValue("profile-phone-country-code", profile.phoneCountryCode);
   setInputValue("profile-location", profile.location);
+  setInputValue("profile-city", profile.city);
+  setInputValue("profile-province", profile.province);
+  setInputValue("profile-country", profile.country);
   setInputValue("profile-address-line-1", profile.addressLine1);
   setInputValue("profile-address-line-2", profile.addressLine2);
   setInputValue("profile-postal-code", profile.postalCode);
@@ -485,6 +500,12 @@ function writeProfileFields(profile) {
   setInputValue(
     "profile-expected-graduation-year",
     profile.expectedGraduationYear,
+  );
+  setInputValue("profile-degree-level", profile.degreeLevel);
+  setInputValue("profile-highest-education", profile.highestEducation);
+  setInputValue(
+    "profile-preferred-education-index",
+    profile.preferredEducationIndex,
   );
   setInputValue("profile-available-summer-2026", profile.availableSummer2026);
   setInputValue(
@@ -681,6 +702,8 @@ function readSettingsForm() {
     flagLowConfidenceAnswers: document.getElementById(
       "flag-low-confidence-answers",
     )?.checked,
+    useFieldPipelineV2: document.getElementById("use-field-pipeline-v2")
+      ?.checked,
     stripLongDash: document.getElementById("strip-long-dash")?.checked,
   };
 }
@@ -807,6 +830,10 @@ async function loadState() {
   setCheckboxValue(
     "flag-low-confidence-answers",
     response.settings.flagLowConfidenceAnswers,
+  );
+  setCheckboxValue(
+    "use-field-pipeline-v2",
+    response.settings.useFieldPipelineV2,
   );
   setCheckboxValue("strip-long-dash", response.settings.stripLongDash);
 

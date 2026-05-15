@@ -187,6 +187,31 @@ def _source_decision(
     )
 
 
+def _text_decision(
+    request: C3AnswerRequest,
+    *,
+    canonical_field: str,
+    answer_text: str,
+    source_field: str,
+    reason: str,
+    confidence: float = 0.95,
+    camp: str = "",
+) -> C3AnswerDecision:
+    normalized_question = build_standard_question(request.field.label, request.field.options)
+    return C3AnswerDecision(
+        status="fillable",
+        action="fill_text",
+        canonical_field=canonical_field,
+        answer_text=answer_text,
+        camp=camp,
+        confidence=confidence,
+        source_fields=[source_field],
+        provider="deterministic",
+        reason=reason,
+        normalized_question=normalized_question,
+    )
+
+
 def _manual(
     request: C3AnswerRequest, reason: str, provider: str = "deterministic"
 ) -> C3AnswerDecision:
@@ -229,6 +254,50 @@ def deterministic_decision(request: C3AnswerRequest) -> C3AnswerDecision | None:
     question = normalize_question_text(request.field.label)
     options = _real_options(request.field.options)
     profile = request.profile
+    if ("salary" in question or "compensation" in question) and not options:
+        salary_range = str(profile.get("salaryExpectationRange") or "").strip()
+        salary_point = str(profile.get("salaryExpectation") or "").strip()
+        asks_annual_amount = (
+            "annual" in question
+            or "yearly" in question
+            or "amount" in question
+            or bool(re.search(r"\be\.g\.\s*\d+", question))
+        )
+        if asks_annual_amount and salary_point:
+            return _text_decision(
+                request,
+                canonical_field="salary_expectation",
+                answer_text=salary_point,
+                source_field="profile.salaryExpectation",
+                reason="Question asks for a salary amount and profile has a salary expectation.",
+                camp="profile_value",
+            )
+        if salary_range or salary_point:
+            return _text_decision(
+                request,
+                canonical_field="salary_expectation",
+                answer_text=salary_range or salary_point,
+                source_field=(
+                    "profile.salaryExpectationRange"
+                    if salary_range
+                    else "profile.salaryExpectation"
+                ),
+                reason="Question asks for salary expectation and profile has a salary value.",
+                camp="profile_value",
+            )
+        return _text_decision(
+            request,
+            canonical_field="salary_expectation",
+            answer_text="95000" if asks_annual_amount else "90,000 - 105,000",
+            source_field=(
+                "default.salaryExpectation"
+                if asks_annual_amount
+                else "default.salaryExpectationRange"
+            ),
+            reason="Question asks for salary expectation and profile salary fields are blank: use the C3 salary default.",
+            confidence=0.72,
+            camp="profile_value",
+        )
     if not options:
         return None
 
@@ -539,6 +608,7 @@ def decide_answer(request: C3AnswerRequest) -> C3AnswerDecision:
     system, user = build_answer_prompt(request)
     try:
         result = generate_json(
+            component="c3",
             task_name="c3_answer_decision",
             system=system,
             user=user,
@@ -551,7 +621,7 @@ def decide_answer(request: C3AnswerRequest) -> C3AnswerDecision:
         return C3AnswerDecision(
             status="provider_unavailable",
             action="manual_review",
-            provider=fletcher_config.resume_llm_provider(),
+            provider=fletcher_config.c3_llm_provider(),
             reason=str(exc),
             requires_review=True,
             normalized_question=build_standard_question(request.field.label, request.field.options),
@@ -585,13 +655,13 @@ class ProviderStatus:
 
 
 def provider_status() -> ProviderStatus:
-    provider = fletcher_config.resume_llm_provider()
+    provider = fletcher_config.c3_llm_provider()
     model = (
-        fletcher_config.resume_llm_model("c3_answer_decision")
+        fletcher_config.c3_llm_model("c3_answer_decision")
         or fletcher_config.ollama_model_name()
     )
-    cloud = provider in {"openai", "openrouter", "anthropic", "gemini"}
-    cloud_confirmed = fletcher_config.resume_cloud_llm_confirmed()
+    cloud = provider in {"openai", "openrouter", "anthropic", "gemini", "codex"}
+    cloud_confirmed = fletcher_config.c3_cloud_llm_confirmed()
     if cloud and not cloud_confirmed:
         return ProviderStatus(
             provider=provider,

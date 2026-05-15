@@ -22,6 +22,112 @@ def _module_to_browser_script(source: str) -> str:
     return source.replace("export function", "function").replace("export const", "const")
 
 
+def _load_v2_scripts(page):
+    for path in [
+        "executioner/src/shared/injected.js",
+        "executioner/src/shared/v2/audit.js",
+        "executioner/src/shared/v2/field-catalog.js",
+        "executioner/src/shared/v2/ui-inspector.js",
+        "executioner/src/shared/v2/field-state.js",
+        "executioner/src/shared/v2/option-collector.js",
+        "executioner/src/shared/v2/option-matcher.js",
+        "executioner/src/shared/v2/question-identifier.js",
+        "executioner/src/shared/v2/answer-resolver.js",
+        "executioner/src/shared/v2/field-drivers.js",
+        "executioner/src/shared/v2/field-pipeline.js",
+        "executioner/src/shared/v2/clear-pipeline.js",
+    ]:
+        page.add_script_tag(content=_load_script(REPO_ROOT / path))
+
+
+def test_generic_v2_fill_logs_profile_defaults_and_text_fallbacks():
+    if sync_playwright is None:
+        pytest.skip("playwright is required for the generic C3 V2 fixture")
+
+    fill_v2_js = _module_to_browser_script(
+        _load_script(REPO_ROOT / "executioner/src/ats/generic/fill-v2.js")
+    )
+
+    with sync_playwright() as playwright:
+        try:
+            browser = playwright.chromium.launch()
+        except PlaywrightError as error:
+            pytest.skip(f"playwright chromium is unavailable: {error}")
+
+        page = browser.new_page()
+        page.set_content(
+            """
+            <html>
+              <body>
+                <form>
+                  <label>First name * <input id="first-name" required /></label>
+                  <label>
+                    Gender *
+                    <select id="gender" required>
+                      <option value="">Select One</option>
+                      <option value="woman">Woman</option>
+                      <option value="not_disclose">I choose not to disclose</option>
+                    </select>
+                  </label>
+                  <label>
+                    Explain your operating mode *
+                    <input id="unknown-text" required />
+                  </label>
+                </form>
+              </body>
+            </html>
+            """
+        )
+        _load_v2_scripts(page)
+        page.add_script_tag(content=fill_v2_js)
+
+        result = page.evaluate(
+            """
+            async () => {
+              const fill = createGenericFillV2Function();
+              return await fill({
+                profile: {
+                  fullName: "Michael Shi",
+                  email: "michael@example.test",
+                  location: "Edmonton, AB, Canada",
+                },
+                settings: {
+                  fillRequiredOnly: true,
+                  useFieldPipelineV2: true,
+                  allowGeneratedAnswers: true,
+                  llmAnswerFallbackEnabled: true,
+                },
+                activeApplyContext: {},
+                defaultResume: {},
+                fillRoute: { adapterName: "generic" },
+                fillRunId: "test_v2",
+              });
+            }
+            """
+        )
+        values = page.evaluate(
+            """
+            () => ({
+              firstName: document.querySelector("#first-name").value,
+              gender: document.querySelector("#gender").value,
+              unknownRaw: document.querySelector("#unknown-text").value,
+            })
+            """
+        )
+        browser.close()
+
+    assert result["ok"] is True
+    assert values["firstName"] == "Michael"
+    assert values["gender"] == "not_disclose"
+    assert values["unknownRaw"] == " "
+    assert result["manualReviewRequired"] is True
+    assert result["v2Audit"]["schemaVersion"] == "c3-v2-audit-1"
+    issue_kinds = {issue["kind"] for issue in result["v2Audit"]["permanentIssues"]}
+    assert "derived_profile_pairing" in issue_kinds
+    assert "neutral_disclosure_default" in issue_kinds
+    assert "generated_or_placeholder_text_fallback" in issue_kinds
+
+
 def test_safe_next_clicks_next_controls_only():
     if sync_playwright is None:
         pytest.skip("playwright is required for the safe next fixture")
@@ -78,6 +184,54 @@ def test_safe_next_clicks_next_controls_only():
     assert result["clicked"] is True
     assert result["candidate"]["label"] == "Next"
     assert values["nextClicked"] == "1"
+
+
+def test_safe_next_ignores_workday_upload_success_alerts():
+    if sync_playwright is None:
+        pytest.skip("playwright is required for the safe next fixture")
+
+    safe_next_js = _module_to_browser_script(
+        _load_script(REPO_ROOT / "executioner/src/background/safe-next.js")
+    )
+
+    with sync_playwright() as playwright:
+        try:
+            browser = playwright.chromium.launch()
+        except PlaywrightError as error:
+            pytest.skip(f"playwright chromium is unavailable: {error}")
+
+        page = browser.new_page()
+        page.set_content(
+            """
+            <html>
+              <body>
+                <div role="alert">main.pdf successfully uploaded</div>
+                <button id="next" type="button">Next</button>
+                <script>
+                  document.querySelector("#next").addEventListener("click", () => {
+                    document.body.dataset.nextClicked = "1";
+                  });
+                </script>
+              </body>
+            </html>
+            """
+        )
+        page.add_script_tag(content=safe_next_js)
+        result = page.evaluate(
+            """
+            () => {
+              const safeNext = createSafeNextFunction();
+              return safeNext({ click: true });
+            }
+            """
+        )
+        next_clicked = page.evaluate('document.body.dataset.nextClicked || ""')
+        browser.close()
+
+    assert result["ok"] is True
+    assert result["clicked"] is True
+    assert result["candidate"]["label"] == "Next"
+    assert next_clicked == "1"
 
 
 def test_safe_next_blocks_final_submit_controls():
@@ -818,6 +972,48 @@ def test_location_text_fields_use_requested_location_shape():
     assert result["city"] == {"value": "Edmonton", "key": "profile:location"}
     assert result["province"] == {"value": "Alberta", "key": "profile:location"}
     assert result["location"] == {"value": "Edmonton, AB", "key": "profile:location"}
+
+
+def test_phone_fields_do_not_receive_location_values():
+    if sync_playwright is None:
+        pytest.skip("playwright is required for the injected utility fixture")
+
+    injected_js = _load_script(REPO_ROOT / "executioner/src/shared/injected.js")
+
+    with sync_playwright() as playwright:
+        try:
+            browser = playwright.chromium.launch()
+        except PlaywrightError as error:
+            pytest.skip(f"playwright chromium is unavailable: {error}")
+
+        page = browser.new_page()
+        page.set_content("<html><body></body></html>")
+        page.add_script_tag(content=injected_js)
+        result = page.evaluate(
+            """
+            () => {
+              const profile = {
+                phone: "7800000000",
+                location: "Edmonton, AB, Canada",
+              };
+              const u = window.__huntApplyUtils;
+              return {
+                phone: u.chooseProfileMatch("Phone Number", profile),
+                phoneWithTerritory: u.chooseProfileMatch(
+                  "Phone Phone Device Type Mobile Country / Territory Phone Code 0 items selected Phone Number",
+                  profile,
+                ),
+              };
+            }
+            """
+        )
+        browser.close()
+
+    assert result["phone"] == {"value": "7800000000", "key": "profile:phone"}
+    assert result["phoneWithTerritory"] == {
+        "value": "7800000000",
+        "key": "profile:phone",
+    }
 
 
 def test_location_dropdowns_rank_city_province_country_then_other():

@@ -32,9 +32,16 @@ export function createWorkdayFillFunction() {
     var fillStartedAt = Date.now();
     var fillBudgetMs = 30000;
     var fillCancelled = function () {
+      var cancelledIds = Array.isArray(window.__huntApplyCancelledFillRunIds)
+        ? window.__huntApplyCancelledFillRunIds
+        : [];
       return Boolean(
         window.__huntApplyCancelAllFills ||
-        (fillRunId && window.__huntApplyCancelFillRunId === fillRunId),
+          (fillRunId && window.__huntApplyCancelFillRunId === fillRunId) ||
+          (fillRunId &&
+            window.__huntApplyActiveFillRunId &&
+            window.__huntApplyActiveFillRunId !== fillRunId) ||
+          (fillRunId && cancelledIds.includes(fillRunId)),
       );
     };
     var fillBudgetExceeded = function () {
@@ -889,15 +896,144 @@ export function createWorkdayFillFunction() {
           function (option) {
             var style = window.getComputedStyle(option);
             var rect = option.getBoundingClientRect();
+            var listbox = option.closest?.('[role="listbox"]');
+            var listRect = listbox?.getBoundingClientRect?.();
+            var intersectsListbox =
+              !listbox ||
+              !listRect ||
+              listRect.width <= 0 ||
+              listRect.height <= 0 ||
+              (rect.bottom > listRect.top &&
+                rect.top < listRect.bottom &&
+                rect.right > listRect.left &&
+                rect.left < listRect.right);
             return (
               option.getAttribute("aria-disabled") !== "true" &&
               style.display !== "none" &&
               style.visibility !== "hidden" &&
               rect.width > 0 &&
-              rect.height > 0
+              rect.height > 0 &&
+              intersectsListbox
             );
           },
         );
+      };
+      var workdayActiveListboxFor = function (input) {
+        var multiSelectId =
+          input?.getAttribute?.("data-uxi-multiselect-id") || "";
+        var visibleListboxes = Array.from(
+          document.querySelectorAll(
+            [
+              '[data-automation-id="activeListContainer"]',
+              '[data-automation-id="promptSearchResultList"]',
+              '[data-uxi-widget-type="multiselectlist"]',
+              '[role="listbox"]',
+            ].join(", "),
+          ),
+        )
+          .filter(function (listbox) {
+            var style = window.getComputedStyle(listbox);
+            var rect = listbox.getBoundingClientRect();
+            return (
+              style.display !== "none" &&
+              style.visibility !== "hidden" &&
+              rect.width > 0 &&
+              rect.height > 0
+            );
+          })
+          .sort(function (a, b) {
+            var aScrollable = Math.max(0, a.scrollHeight - a.clientHeight);
+            var bScrollable = Math.max(0, b.scrollHeight - b.clientHeight);
+            var aAssoc =
+              multiSelectId &&
+              [
+                a.id,
+                a.getAttribute("aria-labelledby"),
+                a.getAttribute("data-uxi-multiselect-id"),
+                a.getAttribute("data-automation-id"),
+              ]
+                .join(" ")
+                .includes(multiSelectId)
+                ? 100000
+                : 0;
+            var bAssoc =
+              multiSelectId &&
+              [
+                b.id,
+                b.getAttribute("aria-labelledby"),
+                b.getAttribute("data-uxi-multiselect-id"),
+                b.getAttribute("data-automation-id"),
+              ]
+                .join(" ")
+                .includes(multiSelectId)
+                ? 100000
+                : 0;
+            return (
+              bAssoc - aAssoc ||
+              bScrollable - aScrollable ||
+              b.getBoundingClientRect().height -
+                a.getBoundingClientRect().height
+            );
+          });
+        return visibleListboxes[0] || null;
+      };
+      var optionIntersectsListbox = function (option, listbox) {
+        if (!option || !listbox) {
+          return true;
+        }
+        var optionRect = option.getBoundingClientRect();
+        var listRect = listbox.getBoundingClientRect();
+        return (
+          optionRect.bottom > listRect.top &&
+          optionRect.top < listRect.bottom &&
+          optionRect.right > listRect.left &&
+          optionRect.left < listRect.right
+        );
+      };
+      var workdayOptionRadioTarget = function (option) {
+        return (
+          option?.querySelector?.(
+            [
+              'input[data-automation-id="radioBtn"]',
+              'input[type="radio"]',
+              '[role="radio"]',
+              '[data-automation-id="checkboxPanel"]',
+            ].join(", "),
+          ) || option
+        );
+      };
+      var workdayClickOptionCommitTarget = function (option, reason) {
+        var target = workdayOptionRadioTarget(option);
+        realisticClick(target || option, reason);
+        if (target !== option) {
+          realisticClick(option, reason + "_row");
+        }
+        triggerReactClickDeep(target || option);
+        if (target !== option) {
+          triggerReactClickDeep(option);
+        }
+      };
+      var scrollWorkdayListboxUntil = async function (
+        input,
+        findMatch,
+        maxAttempts,
+      ) {
+        var listbox = workdayActiveListboxFor(input);
+        var attempts = 0;
+        var match = findMatch();
+        while (
+          !match &&
+          listbox &&
+          attempts < (maxAttempts || 80) &&
+          listbox.scrollHeight > listbox.clientHeight + 2
+        ) {
+          attempts += 1;
+          listbox.scrollTop += 260;
+          listbox.dispatchEvent(new Event("scroll", { bubbles: true }));
+          await sleep(60);
+          match = findMatch();
+        }
+        return { match: match, listbox: listbox, attempts: attempts };
       };
       var optionTextList = function (options) {
         return (options || [])
@@ -1104,7 +1240,7 @@ export function createWorkdayFillFunction() {
         }
         // Latin-script legal name fields (Sun Life and other Workday tenants).
         // These have IDs like "name--legalName--firstName--latinFirstName" or
-        // aria-label "Given Name(s) - Latin Script" — the container label may
+        // aria-label "Given Name(s) - Latin Script": the container label may
         // not be captured by getContainerText so match on the element key.
         var nameParts = u
           .normalizeText(profileWithContext.fullName || "")
@@ -1112,6 +1248,22 @@ export function createWorkdayFillFunction() {
           .filter(Boolean);
         var profileFirstName = nameParts[0] || "";
         var profileLastName = nameParts.slice(1).join(" ") || "";
+        var idKey = u.normalizeText(elem?.id || "").toLowerCase();
+        var nameKey = u.normalizeText(elem?.name || "").toLowerCase();
+        if (
+          profileFirstName &&
+          (idKey.includes("legalname--firstname") ||
+            nameKey.includes("legalname--firstname"))
+        ) {
+          return { value: profileFirstName, key: "profile:firstName" };
+        }
+        if (
+          profileLastName &&
+          (idKey.includes("legalname--lastname") ||
+            nameKey.includes("legalname--lastname"))
+        ) {
+          return { value: profileLastName, key: "profile:lastName" };
+        }
         if (
           profileFirstName &&
           !key.includes("lastname") &&
@@ -1602,34 +1754,7 @@ export function createWorkdayFillFunction() {
           );
         };
         var activeListboxForInput = function () {
-          var multiSelectId =
-            input.getAttribute?.("data-uxi-multiselect-id") || "";
-          var listboxes = visibleOptionCandidates()
-            .map(function (option) {
-              return option.closest?.('[role="listbox"]') || null;
-            })
-            .filter(Boolean);
-          for (var li = 0; li < listboxes.length; li++) {
-            var listbox = listboxes[li];
-            var associatedWidget =
-              listbox.closest?.("[data-associated-widget]") ||
-              listbox.parentElement;
-            if (
-              !multiSelectId ||
-              listbox.innerText ||
-              associatedWidget?.getAttribute?.("data-associated-widget") ===
-                multiSelectId
-            ) {
-              return listbox;
-            }
-          }
-          return (
-            document.querySelector(
-              '[data-automation-id="activeListContainer"]',
-            ) ||
-            document.querySelector('[role="listbox"]') ||
-            input
-          );
+          return workdayActiveListboxFor(input) || input;
         };
         var keyboardSelectScoredOption = async function (
           stage,
@@ -1706,6 +1831,33 @@ export function createWorkdayFillFunction() {
             optionText: bestKeyboard.text,
             optionId: bestKeyboard.optionId,
             optionIds: stageOptions.map(optionElementId).filter(Boolean),
+          };
+        };
+        var activeScoredOption = function (stage) {
+          var listbox = activeListboxForInput();
+          var active =
+            getActiveDescendantOption(input) ||
+            Array.from(
+              listbox?.querySelectorAll?.('[role="option"]') || [],
+            ).find(function (option) {
+              return (
+                option.getAttribute("aria-selected") === "true" ||
+                option.getAttribute("data-automation-selected") === "true"
+              );
+            });
+          if (!active) {
+            return null;
+          }
+          var activeText = u.normalizeText(
+            active.innerText || active.textContent || "",
+            stripLongDash,
+          );
+          var score = searchInputOptionScore(activeText, stage || "parent");
+          return {
+            option: active,
+            text: activeText,
+            score: score,
+            listbox: listbox,
           };
         };
         traceInteraction("search_input_fill_start", input, {
@@ -1786,8 +1938,10 @@ export function createWorkdayFillFunction() {
             options: optionTextList(options),
           };
         }
-        realisticClick(best, "select_workday_search_input_option");
-        triggerReactClickDeep(best);
+        workdayClickOptionCommitTarget(
+          best,
+          "select_workday_search_input_option",
+        );
         await sleep(250);
         if (
           !searchInputValueMatchesChoice(input, choice) &&
@@ -1826,11 +1980,10 @@ export function createWorkdayFillFunction() {
             var childInput =
               childBest.querySelector?.('input[type="checkbox"], input') ||
               childBest;
-            realisticClick(
-              childInput,
+            workdayClickOptionCommitTarget(
+              childBest,
               "select_workday_search_input_child_option",
             );
-            triggerReactClickDeep(childInput);
             if (
               childInput !== childBest &&
               typeof childInput.click === "function"
@@ -1845,8 +1998,17 @@ export function createWorkdayFillFunction() {
           !searchInputValueMatchesChoice(input, choice) &&
           !searchInputValueMatchesChoice(input, childChoice)
         ) {
-          keyOn(input, "Enter", "commit_workday_search_input_option");
-          await sleep(250);
+          var activeCandidate = activeScoredOption("parent");
+          traceInteraction("search_input_active_option_before_enter", input, {
+            reason: "verify_active_option_before_enter",
+            intendedValue: normalized,
+            activeText: activeCandidate?.text || "",
+            activeScore: activeCandidate?.score || 0,
+          });
+          if (activeCandidate?.score > 0) {
+            keyOn(input, "Enter", "commit_workday_search_input_option");
+            await sleep(250);
+          }
         }
         if (
           !searchInputValueMatchesChoice(input, choice) &&
@@ -1874,10 +2036,11 @@ export function createWorkdayFillFunction() {
               normalized,
               parentKeyboard.optionIds || [],
             );
-            if (!childKeyboard.selected) {
-              keyOn(input, "Enter", "keyboard_fallback_final_enter");
-              await sleep(250);
-            }
+            traceInteraction("search_input_keyboard_final_enter_skipped", input, {
+              reason: "no_exact_active_option_for_final_enter",
+              intendedValue: normalized,
+              childSelected: Boolean(childKeyboard.selected),
+            });
           }
         }
         if (
@@ -1887,28 +2050,41 @@ export function createWorkdayFillFunction() {
           await closeOpenMenus();
           u.setElementValue(input, "", stripLongDash);
           u.dispatchInputEvents(input);
-          realisticClick(input, "keyboard_any_source_open_search_input");
-          if (typeof input.focus === "function") {
-            input.focus();
+          var allowAnySourceFallback =
+            /activeApplyContext:source|application.*source|workday_search_input/i.test(
+              choice.source || "",
+            ) && /linked\s*in|source|how did you hear/i.test(descriptor || "");
+          if (!allowAnySourceFallback) {
+            traceInteraction("search_input_any_selection_skipped", input, {
+              reason: "not_application_source_field",
+              intendedValue: normalized,
+              valueSource: choice.source,
+            });
           }
-          await sleep(150);
-          for (var anyAttempt = 0; anyAttempt < 3; anyAttempt++) {
-            keyOn(input, "ArrowDown", "keyboard_any_source_arrow_down");
-            await sleep(90);
-            keyOn(input, "Enter", "keyboard_any_source_enter");
-            await sleep(350);
-            if (searchInputHasAnySelection(input)) {
-              traceInteraction("search_input_any_selection_committed", input, {
-                reason: "keyboard_any_source_selection_committed",
-                intendedValue: normalized,
-                currentValue: input.value || "",
-                valueSource: choice.source,
-              });
-              await closeOpenMenus();
-              return {
-                filled: true,
-                valueSource: choice.source + ":keyboard_any_selection",
-              };
+          if (allowAnySourceFallback) {
+            realisticClick(input, "keyboard_any_source_open_search_input");
+            if (typeof input.focus === "function") {
+              input.focus();
+            }
+            await sleep(150);
+            for (var anyAttempt = 0; anyAttempt < 3; anyAttempt++) {
+              keyOn(input, "ArrowDown", "keyboard_any_source_arrow_down");
+              await sleep(90);
+              keyOn(input, "Enter", "keyboard_any_source_enter");
+              await sleep(350);
+              if (searchInputHasAnySelection(input)) {
+                traceInteraction("search_input_any_selection_committed", input, {
+                  reason: "keyboard_any_source_selection_committed",
+                  intendedValue: normalized,
+                  currentValue: input.value || "",
+                  valueSource: choice.source,
+                });
+                await closeOpenMenus();
+                return {
+                  filled: true,
+                  valueSource: choice.source + ":keyboard_any_selection",
+                };
+              }
             }
           }
         }
@@ -3263,25 +3439,29 @@ export function createWorkdayFillFunction() {
           }
           await sleep(100);
         }
-        var listbox = document.querySelector('[role="listbox"]');
-        var scrollAttemptCount = 0;
-        for (
-          var scrollAttempt = 0;
-          !scored.length && listbox && scrollAttempt < 80;
-          scrollAttempt++
-        ) {
-          scrollAttemptCount = scrollAttempt + 1;
-          listbox.scrollTop += 260;
-          listbox.dispatchEvent(new Event("scroll", { bubbles: true }));
-          await sleep(50);
-          scored = scorePhoneCountryOptions();
+        var scrollResult = { attempts: 0, match: scored[0] || null };
+        if (!scored.length) {
+          scrollResult = await scrollWorkdayListboxUntil(
+            input,
+            function () {
+              scored = scorePhoneCountryOptions();
+              return scored[0] || null;
+            },
+            80,
+          );
         }
+        var listbox = scrollResult.listbox || workdayActiveListboxFor(input);
+        var scrollAttemptCount = scrollResult.attempts || 0;
         traceInteraction("phone_country_code_options_scored", input, {
           reason: "score_phone_country_code_options",
           descriptor: descriptor || "",
           optionCount: visibleOptionCandidates().length,
           matchingOptionCount: scored.length,
           scrollAttemptCount: scrollAttemptCount,
+          listboxScrollTop: listbox ? Math.round(listbox.scrollTop || 0) : 0,
+          listboxScrollHeight: listbox
+            ? Math.round(listbox.scrollHeight || 0)
+            : 0,
           topOptionText: u
             .normalizeText(
               scored[0]?.option?.innerText ||
@@ -3305,7 +3485,8 @@ export function createWorkdayFillFunction() {
           await closeOpenMenus();
           return { filled: false, reason: "no_matching_country_code" };
         }
-        var bestRect = best.getBoundingClientRect();
+        var commitTarget = workdayOptionRadioTarget(best);
+        var bestRect = (commitTarget || best).getBoundingClientRect();
         window.__huntPhoneCodeCandidateRect = {
           x: Math.round(bestRect.left + bestRect.width / 2),
           y: Math.round(bestRect.top + bestRect.height / 2),
@@ -3314,6 +3495,8 @@ export function createWorkdayFillFunction() {
           width: Math.round(bestRect.width),
           height: Math.round(bestRect.height),
           optionId: best.id || "",
+          commitTargetAutomationId:
+            commitTarget?.getAttribute?.("data-automation-id") || "",
           ready: true,
         };
         traceInteraction("phone_country_code_select_attempt", best, {
@@ -3327,10 +3510,12 @@ export function createWorkdayFillFunction() {
             )
             .slice(0, 160),
           score: scored[0]?.score || 0,
-          method: "pointer",
+          method: "radio_or_option_pointer",
+          commitTargetAutomationId:
+            commitTarget?.getAttribute?.("data-automation-id") || "",
           candidateRect: window.__huntPhoneCodeCandidateRect,
         });
-        realisticClick(best, "select_phone_country_code_option");
+        workdayClickOptionCommitTarget(best, "select_phone_country_code_option");
         await sleep(100);
         traceInteraction("inspect", best, {
           reason: "phone_country_code_post_click_state",
@@ -6659,6 +6844,17 @@ export function createWorkdayFillFunction() {
         var profileValue = profileMatch
           ? profileMatch.value
           : u.chooseProfileValue(desc, profile);
+        if (
+          isWorkdayPhoneTextField(elem, desc) &&
+          profileMatch &&
+          profileMatch.key !== "profile:phone"
+        ) {
+          profileMatch = {
+            value: u.normalizeText(profile.phone),
+            key: "profile:phone",
+          };
+          profileValue = profileMatch.value;
+        }
         profileValue = workdayPhoneTextValue(elem, desc, profileValue);
         profileValue = workdayDatePartValue(elem, desc, profileValue);
         if (

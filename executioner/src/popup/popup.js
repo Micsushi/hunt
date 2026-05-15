@@ -306,6 +306,24 @@ document.getElementById("clear-page")?.addEventListener("click", async () => {
   );
 });
 
+document
+  .getElementById("reload-extension")
+  ?.addEventListener("click", async () => {
+    setStatus("Reloading extension...", "info");
+    try {
+      await chrome.runtime.sendMessage({
+        type: "hunt.apply.log_activity",
+        payload: {
+          action: "extension.reload",
+          summary: "Extension reload requested from popup.",
+        },
+      });
+    } catch (_error) {
+      // Reload still works if the service worker is already stale.
+    }
+    chrome.runtime.reload();
+  });
+
 loadState().catch((error) => {
   setStatus(error instanceof Error ? error.message : String(error), "warn");
 });

@@ -6,7 +6,13 @@ from c3_answering.schemas import C3AnswerRequest
 from fletcher.llm.providers.base import LLMJsonResult
 
 
-def make_request(question: str, options: list[str], profile: dict | None = None):
+def make_request(
+    question: str,
+    options: list[str],
+    profile: dict | None = None,
+    *,
+    kind: str = "combobox",
+):
     return C3AnswerRequest(
         url="https://careers.example.test/apply",
         host="careers.example.test",
@@ -16,7 +22,7 @@ def make_request(question: str, options: list[str], profile: dict | None = None)
             "label": question,
             "question_hash": "q_test",
             "required": True,
-            "kind": "combobox",
+            "kind": kind,
             "options": options,
         },
         profile={
@@ -90,6 +96,50 @@ def test_neutral_disclosure_handles_workday_self_identify_text(monkeypatch):
     assert decision.status == "fillable"
     assert decision.selected_option == "I do not wi h to elf-identify"
     assert decision.camp == "non_disclosure"
+
+
+def test_salary_text_question_uses_profile_range_without_llm(monkeypatch):
+    def fail_generate_json(**_kwargs):
+        raise AssertionError("profile salary text should not call LLM")
+
+    monkeypatch.setattr("c3_answering.pipeline.generate_json", fail_generate_json)
+
+    decision = decide_answer(
+        make_request(
+            "Please indicate your desired salary range.",
+            [],
+            {"salaryExpectationRange": "90,000 - 105,000"},
+            kind="textarea",
+        )
+    )
+
+    assert decision.status == "fillable"
+    assert decision.action == "fill_text"
+    assert decision.answer_text == "90,000 - 105,000"
+    assert decision.canonical_field == "salary_expectation"
+    assert decision.source_fields == ["profile.salaryExpectationRange"]
+
+
+def test_salary_text_question_uses_default_without_llm(monkeypatch):
+    def fail_generate_json(**_kwargs):
+        raise AssertionError("salary default should not call LLM")
+
+    monkeypatch.setattr("c3_answering.pipeline.generate_json", fail_generate_json)
+
+    decision = decide_answer(
+        make_request(
+            "Please indicate your desired salary range.",
+            [],
+            {"salaryExpectationRange": "", "salaryExpectation": ""},
+            kind="textarea",
+        )
+    )
+
+    assert decision.status == "fillable"
+    assert decision.action == "fill_text"
+    assert decision.answer_text == "90,000 - 105,000"
+    assert decision.source_fields == ["default.salaryExpectationRange"]
+    assert decision.confidence == 0.72
 
 
 def test_disclosure_other_is_not_treated_as_neutral(monkeypatch):

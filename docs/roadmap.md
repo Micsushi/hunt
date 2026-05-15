@@ -78,7 +78,7 @@ Server2 deployment automation lives outside this repo, but Hunt now documents th
 - CAPTCHA/anti-bot bypass is allowed for this personal-use project
 - Detect CAPTCHA, bot detection, MFA, or access-control challenges and either attempt configured bypass or surface manual intervention when needed
 - Windows (local) + Linux (server2): both required
-- Long-running agents may run native on Windows only where the runtime supports it. Hermes requires WSL2/Linux on Windows machines; OpenClaw has a native Windows path but WSL2 remains the safer default.
+- Long-running agents may run native on Windows only where the runtime supports it. Hermes native Windows support is early beta, so WSL2/Linux remains the safer Hunt path; OpenClaw has a native Windows path but WSL2 remains a safe default.
 
 ## Component Docs
 

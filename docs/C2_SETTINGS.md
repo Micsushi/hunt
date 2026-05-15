@@ -11,10 +11,13 @@ policy.
 
 - UI-edited values are stored in the shared `component_settings` table with
   `component='c2'`.
-- Environment variables remain fallback values for local scripts, deploys, and
-  first boot.
-- Runtime helpers read Settings first where the value is supported, then fall
-  back to env/defaults.
+- Provider environment variables can set a shared default across components:
+  `HUNT_LLM_PROVIDER`, `HUNT_LLM_MODEL`, and `HUNT_CLOUD_LLM_CONFIRM`.
+- Component environment variables override the shared default:
+  `HUNT_C2_LLM_PROVIDER`, `HUNT_C2_LLM_MODEL`, and `HUNT_C2_CLOUD_LLM_CONFIRM`.
+- Runtime helpers read component env, shared env, Settings, legacy env, then
+  defaults. This lets one deploy default everyone to local LLM while overriding
+  a single component.
 - Secret settings are write-only/redacted in the Settings API. The UI can store
   provider keys, but read responses return `value: null` and `has_value: true`.
 - Tests should set `HUNT_DB_PATH` explicitly when they need settings so a
@@ -28,11 +31,12 @@ file.
 
 These settings control C2 model routing and local runtime behavior:
 
-- `llm_provider`: `heuristic`, `ollama`, `openai`, `openrouter`, `anthropic`, or `gemini`.
+- `llm_provider`: `heuristic`, `ollama`, `codex`, `openai`, `openrouter`, `anthropic`, or `gemini`.
 - `llm_model`: generic provider model override.
 - `llm_timeout_sec`: generic timeout for provider abstraction calls.
 - `cloud_llm_confirm`: must be enabled before cloud providers send resume/JD text off-machine.
 - `openai_api_key`, `openrouter_api_key`, `anthropic_api_key`, `gemini_api_key`: secret values stored redacted by the settings API.
+- `codex_command`, `codex_args`, `codex_model`: optional Codex CLI override settings for the `codex` provider. Defaults expect a signed-in Codex CLI and use read-only/no-approval execution.
 - `ollama_host`
 - `ollama_model`
 - `ollama_timeout_sec`
@@ -41,15 +45,22 @@ These settings control C2 model routing and local runtime behavior:
 - `bullet_rewrite_min_available_mb`
 - `bullet_rewrite_max_memory_pct`
 
-Environment variables remain supported as fallback. UI settings take precedence for
-the dynamic runtime helpers.
+Provider env precedence:
+
+1. `HUNT_C2_LLM_PROVIDER`
+2. `HUNT_LLM_PROVIDER`
+3. C2 `component_settings.llm_provider`
+4. Legacy `HUNT_RESUME_LLM_PROVIDER` / `HUNT_RESUME_MODEL_BACKEND`
+5. Default `ollama`
 
 Provider routing remains fail-closed:
 
-- Local/default: `heuristic` or `ollama`.
-- Cloud providers: `openai`, `openrouter`, `anthropic`, and `gemini`.
+- Local/default: `ollama`; `heuristic` remains available for deterministic-only runs.
+- Cloud/subscription-backed providers: `codex`, `openai`, `openrouter`, `anthropic`, and `gemini`.
 - Cloud providers require both a key and explicit `cloud_llm_confirm` before
-  resume/JD text can leave the machine.
+  resume/JD text can leave the machine. `codex` uses Codex CLI OAuth instead of
+  an API key, but still requires cloud confirmation because content leaves the
+  machine.
 - Fletcher never silently replaces a local provider with a cloud provider.
 
 ## Prompt Policy

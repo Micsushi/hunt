@@ -5,6 +5,7 @@
   const PROMPT_ID = "hunt-apply-detected-page-prompt";
   const LLM_PROMPT_ID = "hunt-apply-llm-fill-prompt";
   const FILL_PROGRESS_ID = "hunt-apply-fill-progress";
+  const FILL_SUMMARY_ID = "hunt-apply-fill-summary";
   const TOAST_CONTAINER_ID = "hunt-apply-page-toasts";
   const PROMPT_SUPPRESS_AFTER_FILL_MS = 45000;
   const PROMPT_AUTO_DISMISS_MS = 5000;
@@ -18,6 +19,7 @@
   let lastFillCompletedUrl = "";
   let lastFillCompletedStep = "";
   let lastPageContextKey = "";
+  let activeFillRequestId = "";
   const ATS_HOST_PATTERNS = [
     "workday.com",
     "myworkdayjobs.com",
@@ -157,6 +159,10 @@
     document.getElementById(LLM_PROMPT_ID)?.remove();
   }
 
+  function removeFillSummary() {
+    document.getElementById(FILL_SUMMARY_ID)?.remove();
+  }
+
   function hideFillProgress() {
     const existing = document.getElementById(FILL_PROGRESS_ID);
     if (existing) {
@@ -235,12 +241,237 @@
     });
     removePrompt();
     removeLlmPrompt();
+    removeFillSummary();
     removeToasts();
     hideFillProgress();
   }
 
+  function escapeHtml(value) {
+    return String(value ?? "")
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;")
+      .replace(/'/g, "&#39;");
+  }
+
+  function summaryStatusLabel(status) {
+    if (status === "success") {
+      return "Success";
+    }
+    if (status === "review") {
+      return "Review";
+    }
+    if (status === "failed") {
+      return "Failed";
+    }
+    return "Stopped";
+  }
+
+  function summaryRow(label, value) {
+    if (value === undefined || value === null || value === "" || value === 0) {
+      return "";
+    }
+    return `<div class="row"><span>${escapeHtml(label)}</span><strong>${escapeHtml(value)}</strong></div>`;
+  }
+
+  function showFillSummary(payload) {
+    removeFillSummary();
+    const status = String(payload?.status || "stopped");
+    const failedPageNumber = Number(payload?.failedPageNumber || 0);
+    const successfulPageCount = Number(payload?.successfulPageCount || 0);
+    const lastPageNumber = Number(payload?.lastPageNumber || 0);
+    const reviewIssueCount = Number(payload?.reviewIssueCount || 0);
+    const issueLabels = Array.isArray(payload?.reviewIssueLabels)
+      ? payload.reviewIssueLabels.slice(0, 3)
+      : [];
+    const host = document.createElement("div");
+    host.id = FILL_SUMMARY_ID;
+    host.style.position = "fixed";
+    host.style.right = "18px";
+    host.style.bottom = "18px";
+    host.style.zIndex = "2147483647";
+    host.style.maxWidth = "430px";
+    host.style.fontFamily = "Segoe UI, system-ui, sans-serif";
+    host.attachShadow({ mode: "open" });
+    host.shadowRoot.innerHTML = `
+      <style>
+        .card {
+          background: #0b1510;
+          border: 1px solid #3a5a3a;
+          border-left: 4px solid #59a96a;
+          border-radius: 10px;
+          box-shadow: 0 10px 34px rgba(0, 0, 0, 0.42);
+          color: #d4f0dc;
+          overflow: hidden;
+          min-width: 310px;
+        }
+        .card.failed,
+        .card.stopped {
+          border-color: #7a4b22;
+          border-left-color: #f0b429;
+        }
+        .head {
+          align-items: flex-start;
+          display: flex;
+          gap: 12px;
+          justify-content: space-between;
+          padding: 13px 14px 8px;
+        }
+        .copy {
+          display: grid;
+          gap: 5px;
+          min-width: 0;
+        }
+        .eyebrow {
+          color: #9bdeac;
+          font-size: 10px;
+          font-weight: 800;
+          letter-spacing: 0.08em;
+          text-transform: uppercase;
+        }
+        .title {
+          color: #f2fff5;
+          font-size: 15px;
+          font-weight: 800;
+          line-height: 1.25;
+        }
+        .badge {
+          background: #1e3a26;
+          border: 1px solid #59a96a;
+          border-radius: 999px;
+          color: #b4e7ce;
+          flex: 0 0 auto;
+          font-size: 11px;
+          font-weight: 800;
+          line-height: 1;
+          padding: 5px 8px;
+        }
+        .badge.failed,
+        .badge.stopped {
+          background: #2d2410;
+          border-color: #f0b429;
+          color: #f8d98a;
+        }
+        .body {
+          display: grid;
+          gap: 10px;
+          padding: 0 14px 14px;
+        }
+        .message {
+          color: #d4f0dc;
+          font-size: 13px;
+          font-weight: 650;
+          line-height: 1.4;
+        }
+        .grid {
+          display: grid;
+          gap: 6px;
+        }
+        .row {
+          align-items: baseline;
+          background: #122118;
+          border: 1px solid #263c2a;
+          border-radius: 7px;
+          display: flex;
+          gap: 12px;
+          justify-content: space-between;
+          padding: 7px 9px;
+        }
+        .row span {
+          color: #9bb69f;
+          font-size: 11px;
+          font-weight: 750;
+          letter-spacing: 0.04em;
+          text-transform: uppercase;
+        }
+        .row strong {
+          color: #f2fff5;
+          font-size: 13px;
+          font-weight: 800;
+          max-width: 240px;
+          overflow-wrap: anywhere;
+          text-align: right;
+        }
+        .issues {
+          color: #9bb69f;
+          display: grid;
+          font-size: 12px;
+          gap: 4px;
+          line-height: 1.35;
+        }
+        .actions {
+          border-top: 1px solid #263c2a;
+          display: flex;
+          justify-content: flex-end;
+          padding: 10px 14px;
+        }
+        button {
+          background: #59a96a;
+          border: 1px solid #6fc77d;
+          border-radius: 7px;
+          color: #07100a;
+          cursor: pointer;
+          font: 800 12px Segoe UI, system-ui, sans-serif;
+          min-height: 30px;
+          min-width: 86px;
+          padding: 6px 10px;
+        }
+      </style>
+      <div class="card ${escapeHtml(status)}" role="dialog" aria-live="polite" aria-label="Hunt fill summary">
+        <div class="head">
+          <div class="copy">
+            <div class="eyebrow">Fill summary</div>
+            <div class="title">${escapeHtml(payload?.title || "Fill summary")}</div>
+          </div>
+          <div class="badge ${escapeHtml(status)}">${escapeHtml(summaryStatusLabel(status))}</div>
+        </div>
+        <div class="body">
+          <div class="message">${escapeHtml(payload?.message || "Fill finished.")}</div>
+          <div class="grid">
+            ${summaryRow("Failed page", failedPageNumber)}
+            ${summaryRow("Pages completed", successfulPageCount)}
+            ${summaryRow("Last page", lastPageNumber)}
+            ${summaryRow("Stop reason", payload?.stoppedReason || "")}
+            ${summaryRow("Review items", reviewIssueCount)}
+          </div>
+          ${
+            issueLabels.length
+              ? `<div class="issues">${issueLabels
+                  .map((issue) => `<div>${escapeHtml(issue)}</div>`)
+                  .join("")}</div>`
+              : ""
+          }
+        </div>
+        <div class="actions">
+          <button id="hunt-apply-fill-summary-close" type="button">Done</button>
+        </div>
+      </div>
+    `;
+    host.shadowRoot
+      .getElementById("hunt-apply-fill-summary-close")
+      ?.addEventListener("click", () => {
+        removeFillSummary();
+        logPageUiEvent(
+          "ui.fill_summary.dismiss",
+          "Dismissed fill summary popup.",
+          { status },
+        );
+      });
+    document.documentElement.appendChild(host);
+    logPageUiEvent("ui.fill_summary.show", "Showed fill summary popup.", {
+      status,
+      failedPageNumber,
+      successfulPageCount,
+      lastPageNumber,
+      stoppedReason: payload?.stoppedReason || "",
+      reviewIssueCount,
+    });
+  }
+
   function showFillProgress({ message, fillRunId } = {}) {
     removePrompt();
+    removeFillSummary();
     var existing = document.getElementById(FILL_PROGRESS_ID);
     if (existing?.shadowRoot) {
       var existingText = existing.shadowRoot.getElementById(
@@ -512,6 +743,10 @@
         const button = host.shadowRoot.getElementById("fill");
         button.textContent = "Filling...";
         button.disabled = true;
+        const fillRequestId = `detected_${Date.now()}_${Math.random()
+          .toString(36)
+          .slice(2, 8)}`;
+        activeFillRequestId = fillRequestId;
         removeToasts();
         showFillProgress({ message: "Filling page" });
         logPageUiEvent(
@@ -525,11 +760,29 @@
         const response = await runtimeMessageWithTimeout(
           {
             type: "hunt.apply.fill_current_page",
-            payload: { pageKind: kind, triggeredBy: "detected_page_prompt" },
+            payload: {
+              pageKind: kind,
+              triggeredBy: "detected_page_prompt",
+              fillRequestId,
+            },
           },
           PROMPT_FILL_REQUEST_TIMEOUT_MS,
           "detected_prompt_fill_timeout",
         );
+        if (activeFillRequestId !== fillRequestId) {
+          logPageUiEvent(
+            "ui.detect_prompt.stale_fill_response",
+            "Ignored stale detected-page fill response.",
+            {
+              kind,
+              inputCount,
+              fillRequestId,
+              activeFillRequestId,
+            },
+            "warn",
+          );
+          return;
+        }
         logPageUiEvent(
           "ui.detect_prompt.fill_response",
           response?.ok
@@ -705,6 +958,9 @@
     }
     if (message?.type === "hunt.apply.hide_fill_progress") {
       hideFillProgress();
+    }
+    if (message?.type === "hunt.apply.show_fill_summary") {
+      showFillSummary(message);
     }
     if (message?.type === "hunt.apply.note_fill_completed") {
       lastFillCompletedAt = Date.now();

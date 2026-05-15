@@ -236,7 +236,7 @@ Current runtime research checked on 2026-05-05:
 - OpenClaw CLI docs show `openclaw agent --agent ops --message "Run locally" --local`, plus `--json` and gateway/local behavior: https://docs.openclaw.ai/cli/agent
 - OpenClaw sandbox docs describe Docker, SSH, and OpenShell sandbox runtimes plus `openclaw sandbox explain/list/recreate`: https://docs.openclaw.ai/cli/sandbox
 - Hermes CLI docs show non-interactive mode as `hermes chat -q "Hello"` and toolset selection with `--toolsets`: https://hermes-agent.nousresearch.com/docs/user-guide/cli
-- Hermes README states native Windows is not supported and recommends WSL2 for Windows users: https://github.com/NousResearch/hermes-agent
+- Hermes native Windows support is early beta; WSL2 remains the safer path for Hunt proof work: https://hermes-agent.nousresearch.com/docs/user-guide/windows-native
 - Hermes browser docs describe local Chrome/CDP, local `agent-browser`, and Browserbase/Browser Use/Firecrawl/Camofox options: https://hermes-agent.nousresearch.com/docs/user-guide/features/browser
 
 ## Verification

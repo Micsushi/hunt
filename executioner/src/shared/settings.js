@@ -6,10 +6,11 @@ export const STORAGE_KEYS = {
   attempts: "hunt.apply.attempts",
   questionAnswers: "hunt.apply.questionAnswers",
   activityLog: "hunt.apply.activityLog",
+  browserContext: "hunt.apply.browserContext",
 };
 
 export const DEFAULT_SETTINGS = {
-  settingsVersion: 4,
+  settingsVersion: 6,
   autofillOnLoad: false,
   manualFillEnabled: true,
   autoPromptEnabled: true,
@@ -17,7 +18,7 @@ export const DEFAULT_SETTINGS = {
   autoEmailVerificationEnabled: false,
   emailVerificationBridgeUrl: "http://127.0.0.1:8765/verify-email",
   emailVerificationTimeoutSeconds: 90,
-  autoClickNextAfterFill: false,
+  autoClickNextAfterFill: true,
   fillRequiredOnly: true,
   autoExportLogs: false,
   autoExportLogPrefix: "hunt-c3-logs",
@@ -31,7 +32,14 @@ export const DEFAULT_SETTINGS = {
   allowGeneratedAnswers: true,
   flagLowConfidenceAnswers: true,
   llmAnswerFallbackEnabled: true,
+  useFieldPipelineV2: true,
   stripLongDash: true,
+};
+
+export const DEFAULT_BROWSER_CONTEXT = {
+  name: "normal_chrome",
+  configuredBy: "extension_default",
+  configuredAt: "",
 };
 
 export const DEFAULT_PROFILE = {
@@ -41,7 +49,11 @@ export const DEFAULT_PROFILE = {
   accountPassword: "",
   phone: "",
   phoneDeviceType: "",
+  phoneCountryCode: "",
   location: "",
+  city: "",
+  province: "",
+  country: "",
   middleName: "",
   addressLine1: "",
   addressLine2: "",
@@ -77,6 +89,9 @@ export const DEFAULT_PROFILE = {
   availableSummer2026: "",
   availableInterviewWindow: "",
   expectedGraduationYear: "",
+  degreeLevel: "",
+  highestEducation: "",
+  preferredEducationIndex: "",
   previousEmployers: "",
   skills: [],
   languages: [],

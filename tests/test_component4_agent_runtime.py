@@ -91,7 +91,11 @@ class Component4AgentRuntimeTests(unittest.TestCase):
         hermes = build_runtime_command(runtime_name="hermes_local", prompt="hello")
         self.assertEqual(openclaw[:2], ["openclaw", "agent"])
         self.assertIn("--local", openclaw)
-        self.assertEqual(hermes[:3], ["hermes", "chat", "-q"])
+        self.assertTrue(str(hermes[0]).endswith("hermes") or str(hermes[0]).endswith("hermes.exe"))
+        self.assertEqual(hermes[1:3], ["chat", "-q"])
+        self.assertIn("--quiet", hermes)
+        self.assertIn("--ignore-rules", hermes)
+        self.assertIn("--max-turns", hermes)
         self.assertIn("--toolsets", hermes)
 
     def test_agent_worker_claims_one_lease_and_does_not_execute_by_default(self) -> None:
@@ -126,7 +130,8 @@ class Component4AgentRuntimeTests(unittest.TestCase):
             self.assertTrue(prompt_exists)
             self.assertTrue(claim_exists)
             self.assertTrue(template_exists)
-            self.assertIn("hermes chat", result["artifacts"]["command_preview"]["bash"])
+            self.assertIn("hermes", result["artifacts"]["command_preview"]["bash"])
+            self.assertIn("chat -q", result["artifacts"]["command_preview"]["bash"])
             self.assertNotIn("super-secret-token", prompt_text)
             run_mock.assert_not_called()
 

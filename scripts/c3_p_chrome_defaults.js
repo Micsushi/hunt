@@ -39,6 +39,7 @@ function makeWorkdayProfileDefaults(options = {}) {
     accountEmail,
     phone: "7804923111",
     phoneDeviceType: "Mobile",
+    phoneCountryCode: "Canada (+1)",
     location: "Edmonton, Alberta, Canada",
     addressLine1: "10180 101 Street NW",
     addressLine2: "",

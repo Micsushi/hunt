@@ -689,6 +689,14 @@
             </label>
             <label class="checkbox">
               <input
+                id="use-field-pipeline-v2"
+                name="useFieldPipelineV2"
+                type="checkbox"
+              />
+              <span>Use field pipeline V2</span>
+            </label>
+            <label class="checkbox">
+              <input
                 id="strip-long-dash"
                 name="stripLongDash"
                 type="checkbox"
@@ -805,8 +813,29 @@
               />
             </label>
             <label>
+              Phone country code
+              <input
+                id="profile-phone-country-code"
+                name="phoneCountryCode"
+                placeholder="Canada (+1)"
+                type="text"
+              />
+            </label>
+            <label>
               Location
               <input id="profile-location" name="location" type="text" />
+            </label>
+            <label>
+              City
+              <input id="profile-city" name="city" type="text" />
+            </label>
+            <label>
+              Province
+              <input id="profile-province" name="province" type="text" />
+            </label>
+            <label>
+              Country
+              <input id="profile-country" name="country" type="text" />
             </label>
             <label>
               Address line 1
@@ -929,6 +958,34 @@
                 name="expectedGraduationYear"
                 min="2020"
                 max="2040"
+                type="number"
+              />
+            </label>
+            <label>
+              Degree level
+              <input
+                id="profile-degree-level"
+                name="degreeLevel"
+                placeholder="Bachelors"
+                type="text"
+              />
+            </label>
+            <label>
+              Highest education
+              <input
+                id="profile-highest-education"
+                name="highestEducation"
+                placeholder="BSc Computer Science"
+                type="text"
+              />
+            </label>
+            <label>
+              Preferred education index
+              <input
+                id="profile-preferred-education-index"
+                name="preferredEducationIndex"
+                min="0"
+                max="19"
                 type="number"
               />
             </label>

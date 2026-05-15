@@ -5,6 +5,10 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from shared.llm.config import normalize_provider
+
+from . import config as coordinator_config
+
 
 @dataclass(frozen=True)
 class AgentRuntimeSpec:
@@ -42,7 +46,7 @@ RUNTIME_SPECS: dict[str, AgentRuntimeSpec] = {
         engine="hermes",
         default_browser_lane="isolated",
         default_toolsets="web,terminal,skills",
-        platform_note="Hermes native Windows is unsupported; use WSL2 on Windows.",
+        platform_note="Hermes native Windows is early beta; use WSL2 on Windows for first proof work.",
     ),
     "hermes_server": AgentRuntimeSpec(
         name="hermes_server",
@@ -64,6 +68,15 @@ RUNTIME_ALIASES = {
     "hermes-server": "hermes_server",
 }
 
+HERMES_PROVIDER_ALIASES = {
+    "ollama": "custom",
+    "codex": "openai-codex",
+    "openai": "openai",
+    "openrouter": "openrouter",
+    "anthropic": "anthropic",
+    "gemini": "gemini",
+}
+
 
 class AgentRuntimeError(ValueError):
     pass
@@ -81,6 +94,11 @@ def normalize_runtime_choice(value: str) -> AgentRuntimeSpec:
 
 def runtime_choices() -> list[str]:
     return sorted(RUNTIME_SPECS)
+
+
+def hermes_provider_name(provider: str | None) -> str:
+    normalized = normalize_provider(provider)
+    return HERMES_PROVIDER_ALIASES.get(normalized, normalized)
 
 
 def _json_for_prompt(payload: Any) -> str:
@@ -194,6 +212,8 @@ def build_runtime_command(
     prompt: str,
     agent_name: str | None = None,
     toolsets: str | None = None,
+    llm_provider: str | None = None,
+    llm_model: str | None = None,
 ) -> list[str]:
     spec = normalize_runtime_choice(runtime_name)
     if spec.engine == "openclaw":
@@ -207,7 +227,21 @@ def build_runtime_command(
             "--local",
         ]
     if spec.engine == "hermes":
-        command = ["hermes", "chat", "-q", prompt]
+        command = [
+            coordinator_config.hermes_command(),
+            "chat",
+            "-q",
+            prompt,
+            "--quiet",
+            "--ignore-rules",
+            "--max-turns",
+            coordinator_config.hermes_max_turns(),
+        ]
+        selected_provider = hermes_provider_name(llm_provider)
+        if selected_provider:
+            command.extend(["--provider", selected_provider])
+        if llm_model:
+            command.extend(["--model", llm_model])
         selected_toolsets = toolsets or spec.default_toolsets
         if selected_toolsets:
             command.extend(["--toolsets", selected_toolsets])
@@ -221,6 +255,8 @@ def build_command_preview(
     prompt_path: str | Path,
     agent_name: str | None = None,
     toolsets: str | None = None,
+    llm_provider: str | None = None,
+    llm_model: str | None = None,
 ) -> dict[str, str]:
     spec = normalize_runtime_choice(runtime_name)
     prompt = str(prompt_path)
@@ -232,8 +268,16 @@ def build_command_preview(
         }
     if spec.engine == "hermes":
         selected_toolsets = toolsets or spec.default_toolsets or "web,terminal,skills"
+        hermes = coordinator_config.hermes_command()
+        max_turns = coordinator_config.hermes_max_turns()
+        provider_args = ""
+        selected_provider = hermes_provider_name(llm_provider)
+        if selected_provider:
+            provider_args += f' --provider "{selected_provider}"'
+        if llm_model:
+            provider_args += f' --model "{llm_model}"'
         return {
-            "powershell": f'hermes chat -q (Get-Content -Raw "{prompt}") --toolsets "{selected_toolsets}"',
-            "bash": f'hermes chat -q "$(cat \'{prompt}\')" --toolsets "{selected_toolsets}"',
+            "powershell": f'& "{hermes}" chat -q (Get-Content -Raw "{prompt}") --quiet --ignore-rules --max-turns {max_turns}{provider_args} --toolsets "{selected_toolsets}"',
+            "bash": f'"{hermes}" chat -q "$(cat \'{prompt}\')" --quiet --ignore-rules --max-turns {max_turns}{provider_args} --toolsets "{selected_toolsets}"',
         }
     raise AgentRuntimeError(f"Runtime `{spec.name}` has no command preview.")

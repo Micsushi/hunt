@@ -36,6 +36,7 @@ function parseArgs(argv) {
     verifyClear: false,
     clearBeforeFill: false,
     extensionAutoNext: false,
+    fillMessageTimeoutMs: 0,
     cdpRepairPhoneCountry: false,
     llmAnswers: true,
     accountEmail: process.env.HUNT_C3_TEST_ACCOUNT_EMAIL || "",
@@ -88,6 +89,9 @@ function parseArgs(argv) {
       args.clearBeforeFill = true;
     } else if (arg === "--extension-auto-next") {
       args.extensionAutoNext = true;
+    } else if (arg === "--fill-message-timeout-ms" && next) {
+      args.fillMessageTimeoutMs = Number(next);
+      i += 1;
     } else if (arg === "--cdp-repair-phone-country") {
       args.cdpRepairPhoneCountry = true;
     } else if (arg === "--no-llm-answers") {
@@ -140,6 +144,7 @@ function usage() {
     "  --clear-before-fill Clear the current Workday page before each fill",
     "  --verify-clear     Fill, clear, verify empty, then refill before Next",
     "  --extension-auto-next Enable C3's own safe Next-after-fill setting",
+    "  --fill-message-timeout-ms <ms> Override extension fill message timeout",
     "  --cdp-repair-phone-country Diagnostic only: patch phone country via CDP if extension fill fails",
     "  --no-llm-answers Do not auto-apply backend answer-router decisions during fill",
     "  --account-email <email> Optional account/profile email override",
@@ -514,6 +519,31 @@ async function inspectPage(pageClient) {
   return pageClient.evaluate(pageSummaryExpression());
 }
 
+async function recoverWorkdayRuntimeError(
+  pageClient,
+  reason = "workday_runtime_error",
+) {
+  const before = await inspectPage(pageClient);
+  if (!before.workdayRuntimeError) {
+    return {
+      attempted: false,
+      ok: true,
+      reason: "not_present",
+      before,
+    };
+  }
+  await pageClient.send("Page.reload", { ignoreCache: false });
+  await sleep(7000);
+  const after = await inspectPage(pageClient);
+  return {
+    attempted: true,
+    ok: !after.workdayRuntimeError,
+    reason,
+    before,
+    after,
+  };
+}
+
 async function clickWorkdayStep(pageClient, stepName) {
   if (!stepName) {
     return { ok: true, skipped: true };
@@ -548,6 +578,8 @@ async function clickWorkdayStep(pageClient, stepName) {
         targetEl.dispatchEvent(new MouseEvent("click", { ...init, buttons: 0 }));
       };
       const bodyText = document.body ? document.body.innerText : "";
+      const workdayRuntimeError = bodyText.toLowerCase().includes("something went wrong")
+        && bodyText.toLowerCase().includes("please refresh the page and then try again");
       const stepMatch = bodyText.match(/current step\\s+(\\d+)\\s+of\\s+(\\d+)\\s*\\n([^\\n]+)/i);
       const currentStep = stepMatch ? { current: Number(stepMatch[1]), total: Number(stepMatch[2]), title: normalize(stepMatch[3]) } : null;
       if (currentStep && currentStep.title.toLowerCase() === targetLower) {
@@ -556,7 +588,8 @@ async function clickWorkdayStep(pageClient, stepName) {
           reached: true,
           target,
           currentStep,
-          href: location.href
+          href: location.href,
+          workdayRuntimeError
         };
       }
       const candidates = [...document.querySelectorAll("button, a, [role='button'], [role='link']")]
@@ -572,18 +605,22 @@ async function clickWorkdayStep(pageClient, stepName) {
       if (candidate) {
         clickReal(candidate.el);
         await new Promise((resolve) => setTimeout(resolve, 5000));
+        const afterText = document.body ? document.body.innerText : "";
         return {
           ok: true,
           clicked: true,
           target,
           label: candidate.text,
-          href: location.href
+          href: location.href,
+          workdayRuntimeError: afterText.toLowerCase().includes("something went wrong")
+            && afterText.toLowerCase().includes("please refresh the page and then try again")
         };
       }
       const back = candidates.find((item) => /^back(\\s+back)?$/i.test(item.text));
       if (back) {
         clickReal(back.el);
         await new Promise((resolve) => setTimeout(resolve, 8000));
+        const afterText = document.body ? document.body.innerText : "";
         return {
           ok: false,
           clickedBack: true,
@@ -592,6 +629,8 @@ async function clickWorkdayStep(pageClient, stepName) {
           currentStep,
           label: back.text,
           href: location.href,
+          workdayRuntimeError: afterText.toLowerCase().includes("something went wrong")
+            && afterText.toLowerCase().includes("please refresh the page and then try again"),
           candidates: candidates.map((item) => item.text).slice(0, 30)
         };
       }
@@ -617,6 +656,18 @@ async function clickWorkdayStep(pageClient, stepName) {
       30000,
     );
     attempts.push(result);
+    if (result.workdayRuntimeError) {
+      const runtimeRecovery = await recoverWorkdayRuntimeError(
+        pageClient,
+        "start_step_workday_runtime_error",
+      );
+      attempts[attempts.length - 1].runtimeRecovery = runtimeRecovery;
+      if (runtimeRecovery.ok) {
+        await sleep(800);
+        continue;
+      }
+      return { ...result, attempts };
+    }
     if (result.ok) {
       return { ...result, attempts };
     }
@@ -650,6 +701,7 @@ async function cdpClick(client, x, y) {
     x,
     y,
     button: "left",
+    buttons: 1,
     clickCount: 1,
   });
   await new Promise((r) => setTimeout(r, 60));
@@ -658,6 +710,7 @@ async function cdpClick(client, x, y) {
     x,
     y,
     button: "left",
+    buttons: 0,
     clickCount: 1,
   });
 }
@@ -743,6 +796,7 @@ async function checkPhoneCountryCommitted(pageClient) {
 
 async function tryFixPhoneCountryCodeViaCdp(pageClient) {
   try {
+    await pageClient.send("Page.bringToFront", {});
     // Get the country code input's viewport coords to open the dropdown.
     const inputCoords = await pageClient.evaluate(
       `(() => {
@@ -759,63 +813,83 @@ async function tryFixPhoneCountryCodeViaCdp(pageClient) {
       return false;
     }
 
-    // Attempt 1: CDP click to open, ArrowDown 40 times, Enter.
-    // Canada is ~38-42nd alphabetically; 40 presses reliably lands on it.
+    // Attempt 1: CDP click to open, scroll to exact Canada, then click
+    // the row radio. Plain ArrowDown/Enter can commit the wrong country.
     await cdpClick(pageClient, inputCoords.x, inputCoords.y);
-    await new Promise((r) => setTimeout(r, 1000));
-    const listboxPresent = await pageClient.evaluate(
-      `(() => { var lb = document.querySelector('[role="listbox"]'); return lb && lb.querySelectorAll('[role="option"]').length > 0; })()`,
-      2000,
+    await sleep(500);
+    const canadaTarget = await pageClient.evaluate(
+      `(async () => {
+        const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+        const visible = (el) => {
+          if (!el) return false;
+          const style = getComputedStyle(el);
+          const rect = el.getBoundingClientRect();
+          return style.display !== "none" && style.visibility !== "hidden" && rect.width > 0 && rect.height > 0;
+        };
+        const textOf = (el) => (el?.innerText || el?.textContent || el?.getAttribute?.("aria-label") || "").replace(/\\s+/g, " ").trim();
+        const input = document.getElementById("phoneNumber--countryPhoneCode");
+        if (!input) return { ok: false, reason: "phone_input_not_found" };
+        input.focus();
+        const listboxForOptions = () => [...document.querySelectorAll('[data-automation-id="activeListContainer"], [data-automation-id="promptSearchResultList"], [role="listbox"]')]
+          .filter(visible)
+          .sort((a, b) => Math.max(0, b.scrollHeight - b.clientHeight) - Math.max(0, a.scrollHeight - a.clientHeight))[0] || null;
+        const inListViewport = (option, listbox) => {
+          if (!option || !listbox) return true;
+          const rect = option.getBoundingClientRect();
+          const listRect = listbox.getBoundingClientRect();
+          return rect.bottom > listRect.top && rect.top < listRect.bottom && rect.right > listRect.left && rect.left < listRect.right;
+        };
+        const canadaOption = () => {
+          const listbox = listboxForOptions();
+          const options = [...document.querySelectorAll('[role="option"]')]
+            .filter(visible)
+            .filter((option) => inListViewport(option, listbox))
+            .map((option) => ({ option, text: textOf(option) }));
+          const match = options.find((item) => /canada/i.test(item.text) && /(\\+1|\\(\\+1\\))/.test(item.text));
+          return { match, listbox, options: options.slice(0, 12).map((item) => item.text) };
+        };
+        let state = canadaOption();
+        let attempts = 0;
+        while (!state.match && state.listbox && attempts < 80 && state.listbox.scrollHeight > state.listbox.clientHeight + 2) {
+          attempts += 1;
+          state.listbox.scrollTop += 260;
+          state.listbox.dispatchEvent(new Event("scroll", { bubbles: true }));
+          await sleep(70);
+          state = canadaOption();
+        }
+        if (!state.match) {
+          return { ok: false, reason: "canada_option_not_found", attempts, options: state.options || [] };
+        }
+        const option = state.match.option;
+        const radio = option.querySelector('input[data-automation-id="radioBtn"], input[type="radio"], [role="radio"]');
+        const target = radio && visible(radio) ? radio : option;
+        const rect = target.getBoundingClientRect();
+        return {
+          ok: true,
+          reason: "canada_radio_target_found",
+          attempts,
+          text: state.match.text,
+          x: Math.round(rect.left + rect.width / 2),
+          y: Math.round(rect.top + rect.height / 2),
+          targetAutomationId: target.getAttribute("data-automation-id") || "",
+          options: state.options || []
+        };
+      })()`,
+      15000,
     );
-    if (listboxPresent) {
-      await cdpArrowDownEnter(pageClient, 40);
-      await new Promise((r) => setTimeout(r, 700));
+    if (canadaTarget?.ok) {
+      await cdpClick(pageClient, canadaTarget.x, canadaTarget.y);
+      await sleep(900);
       if (await checkPhoneCountryCommitted(pageClient)) {
         process.stderr.write(
-          "[phoneCountryFix] committed via ArrowDown×40+Enter\n",
-        );
-        return true;
-      }
-      // Might have landed 1-2 off — try ArrowUp back to exact position.
-      for (let back = 1; back <= 3; back++) {
-        await pageClient.send("Input.dispatchKeyEvent", {
-          type: "keyDown",
-          key: "ArrowUp",
-          code: "ArrowUp",
-          windowsVirtualKeyCode: 38,
-        });
-        await pageClient.send("Input.dispatchKeyEvent", {
-          type: "keyUp",
-          key: "ArrowUp",
-          code: "ArrowUp",
-          windowsVirtualKeyCode: 38,
-        });
-        await new Promise((r) => setTimeout(r, 25));
-      }
-      await pageClient.send("Input.dispatchKeyEvent", {
-        type: "keyDown",
-        key: "Enter",
-        code: "Enter",
-        windowsVirtualKeyCode: 13,
-      });
-      await pageClient.send("Input.dispatchKeyEvent", {
-        type: "keyUp",
-        key: "Enter",
-        code: "Enter",
-        windowsVirtualKeyCode: 13,
-      });
-      await new Promise((r) => setTimeout(r, 700));
-      if (await checkPhoneCountryCommitted(pageClient)) {
-        process.stderr.write(
-          "[phoneCountryFix] committed via ArrowDown×40 ArrowUp×3+Enter\n",
+          "[phoneCountryFix] committed via exact Canada radio click\n",
         );
         return true;
       }
     }
-
-    // Attempt 2: Reload the page — Workday often pre-fills the country code on reload.
+    // Attempt 2: reload the page. Workday often pre-fills the country code on reload.
     process.stderr.write(
-      "[phoneCountryFix] ArrowDown attempt failed; reloading page\n",
+      "[phoneCountryFix] exact Canada radio attempt failed; reloading page\n",
     );
     await pageClient.send("Page.reload", { ignoreCache: false });
     await new Promise((r) => setTimeout(r, 4000));
@@ -988,6 +1062,16 @@ async function suppressStaleWorkdayDateErrors(summary) {
   };
 }
 
+function fillMessageTimeoutMs(args) {
+  if (Number.isFinite(args.fillMessageTimeoutMs) && args.fillMessageTimeoutMs > 0) {
+    return args.fillMessageTimeoutMs;
+  }
+  if (args.extensionAutoNext) {
+    return 300000;
+  }
+  return 120000;
+}
+
 async function fillCurrentPage(optionsClient, applyUrl, args) {
   return optionsClient.evaluate(
     `(async () => {
@@ -1066,7 +1150,7 @@ async function fillCurrentPage(optionsClient, applyUrl, args) {
         }))
       };
     })()`,
-    120000,
+    fillMessageTimeoutMs(args),
   );
 }
 
@@ -1673,12 +1757,15 @@ async function clickNext(pageClient) {
       clickReal(button);
       await sleep(6500);
       const body = document.body ? document.body.innerText : "";
+      const workdayRuntimeError = body.toLowerCase().includes("something went wrong")
+        && body.toLowerCase().includes("please refresh the page and then try again");
       const stepMatch = body.match(/current step\\s+(\\d+)\\s+of\\s+(\\d+)\\s*\\n([^\\n]+)/i);
       return {
         clicked: true,
         beforeHref,
         href: location.href,
         currentStep: stepMatch ? { current: Number(stepMatch[1]), total: Number(stepMatch[2]), title: stepMatch[3].trim() } : null,
+        workdayRuntimeError,
         suppressedErrors,
         bodyHead: body.replace(/\\s+/g, " ").trim().slice(0, 600)
       };
@@ -1941,7 +2028,18 @@ async function run() {
       pages: [],
     };
     for (let i = 0; i < args.maxPages; i += 1) {
-      const before = await inspectPage(pageClient);
+      let before = await inspectPage(pageClient);
+      if (before.workdayRuntimeError) {
+        const runtimeRecovery = await recoverWorkdayRuntimeError(
+          pageClient,
+          "prefill_workday_runtime_error",
+        );
+        before.runtimeRecovery = runtimeRecovery;
+        if (!runtimeRecovery.ok) {
+          throw new Error("Workday runtime error did not recover after reload");
+        }
+        before = await inspectPage(pageClient);
+      }
       if (args.requireTarget && !stepMatches(before, args.targetStep)) {
         throw new Error(
           `Current Workday step ${
@@ -2115,6 +2213,15 @@ async function run() {
               : 1200,
         );
         afterFill = await inspectPage(pageClient);
+        if (afterFill.workdayRuntimeError) {
+          fillSummary.runtimeRecovery = await recoverWorkdayRuntimeError(
+            pageClient,
+            "after_fill_workday_runtime_error",
+          );
+          if (fillSummary.runtimeRecovery.ok) {
+            afterFill = await inspectPage(pageClient);
+          }
+        }
         const dateSectionNeedsKeyboard =
           afterFill.errors?.some((error) =>
             /desired start date|required and must have a value/i.test(error),
@@ -2254,6 +2361,12 @@ async function run() {
             break;
           }
           const next = await clickNext(pageClient);
+          if (next.workdayRuntimeError) {
+            next.runtimeRecovery = await recoverWorkdayRuntimeError(
+              pageClient,
+              "forced_next_workday_runtime_error",
+            );
+          }
           timeline[timeline.length - 1].next = {
             ...next,
             auto: true,
@@ -2275,6 +2388,12 @@ async function run() {
         break;
       }
       const next = await clickNext(pageClient);
+      if (next.workdayRuntimeError) {
+        next.runtimeRecovery = await recoverWorkdayRuntimeError(
+          pageClient,
+          "next_workday_runtime_error",
+        );
+      }
       timeline[timeline.length - 1].next = next;
       if (!next.clicked) {
         break;

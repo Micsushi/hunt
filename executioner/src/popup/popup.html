@@ -12,23 +12,25 @@
         --panel-strong: #1d2b18;
         --panel-hover: #223320;
         --ink: #d4f0dc;
+        --ink-bright: #f2fff5;
         --muted: #9bb69f;
+        --label: #b4e7ce;
         --ink-inverse: #07100a;
         --line: #2a3f2a;
         --line-strong: #3a5a3a;
         --accent: #59a96a;
+        --accent-dim: #4f965f;
         --accent-soft: #1e3a26;
-        --accent-ink: #07100a;
+        --accent-ink: #04110c;
         --good: #9bdeac;
         --good-soft: #1a2e1e;
         --warning: #f0b429;
         --warning-soft: #2d2410;
+        --danger: #f05252;
+        --danger-soft: #2d1414;
         --font-sans: "Segoe UI", system-ui, -apple-system, sans-serif;
         --font-mono: Consolas, "SFMono-Regular", "SF Mono", monospace;
         --radius-sm: 6px;
-        --radius-md: 10px;
-        --radius-lg: 14px;
-        --radius-pill: 999px;
         --ease: 140ms ease;
       }
 
@@ -58,31 +60,40 @@
       }
 
       h1 {
+        color: var(--ink-bright);
         font-size: 17px;
         letter-spacing: 0;
+        line-height: 1.05;
       }
 
       h2 {
-        font-size: 10px;
+        color: var(--label);
+        font-size: 9px;
         letter-spacing: 0.08em;
+        line-height: 1;
         text-transform: uppercase;
       }
 
       .stack {
         display: grid;
         gap: 6px;
+        max-width: 100%;
+        min-width: 0;
+        width: 100%;
       }
 
       .card {
         background: var(--panel);
         border: 1px solid var(--line);
         border-radius: var(--radius-sm);
-        padding: 7px 8px;
+        max-width: 100%;
+        min-width: 0;
+        padding: 8px 9px;
       }
 
       .summary-card {
         background: var(--panel-strong);
-        border-color: var(--line);
+        border-color: var(--line-strong);
         color: var(--ink);
       }
 
@@ -93,9 +104,15 @@
 
       .summary-grid {
         display: grid;
-        gap: 5px 10px;
+        gap: 6px 10px;
         grid-template-columns: 1fr 1fr;
-        margin-top: 6px;
+        margin-top: 7px;
+        min-width: 0;
+      }
+
+      .summary-grid > div,
+      .detail-grid > div {
+        min-width: 0;
       }
 
       .span-all {
@@ -103,19 +120,20 @@
       }
 
       .label {
-        color: var(--muted);
+        color: var(--label);
         display: block;
         font-size: 8px;
         font-weight: 800;
-        letter-spacing: 0.08em;
-        margin-bottom: 1px;
+        letter-spacing: 0.07em;
+        margin-bottom: 2px;
         text-transform: uppercase;
       }
 
       .value {
+        color: var(--ink-bright);
         font-size: 11px;
-        font-weight: 650;
-        line-height: 1.1;
+        font-weight: 750;
+        line-height: 1.12;
         max-width: 100%;
         overflow: hidden;
         text-overflow: ellipsis;
@@ -126,18 +144,24 @@
         align-items: start;
         display: grid;
         gap: 5px;
-        grid-template-columns: 82px minmax(0, 1fr);
+        grid-template-columns: 66px minmax(0, 1fr);
+        min-width: 0;
+      }
+
+      .compact-row > * {
+        min-width: 0;
       }
 
       .detail-grid {
         display: grid;
-        gap: 6px 10px;
+        gap: 7px 10px;
         grid-template-columns: 1fr 1fr;
-        margin-top: 6px;
+        margin-top: 7px;
+        min-width: 0;
       }
 
       .detail-grid .compact-row {
-        grid-template-columns: 78px minmax(0, 1fr);
+        grid-template-columns: 62px minmax(0, 1fr);
       }
 
       .detail-grid .span-all {
@@ -147,7 +171,12 @@
       .actions {
         display: grid;
         gap: 6px;
-        grid-template-columns: repeat(2, minmax(0, 1fr));
+        grid-template-columns: minmax(0, 1fr);
+        min-width: 0;
+      }
+
+      .actions button {
+        width: 100%;
       }
 
       button {
@@ -158,25 +187,27 @@
         cursor: pointer;
         font: inherit;
         font-size: 11px;
-        font-weight: 750;
+        font-weight: 800;
         min-height: 30px;
         overflow: hidden;
-        padding: 5px 7px;
+        padding: 6px 8px;
         text-overflow: ellipsis;
         white-space: nowrap;
         transition:
           background 160ms ease-out,
           border-color 160ms ease-out,
+          box-shadow 160ms ease-out,
           transform 160ms ease-out;
       }
 
       button.secondary {
-        background: transparent;
+        background: #101a11;
+        border-color: var(--line-strong);
         color: var(--ink);
       }
 
       button:hover {
-        background: var(--accent-soft);
+        background: var(--panel-hover);
         border-color: var(--line-strong);
         color: var(--ink);
       }
@@ -196,21 +227,24 @@
       }
 
       .status {
-        border: 1px solid var(--line);
+        border: 1px solid var(--line-strong);
         border-radius: var(--radius-sm);
         font-size: 10px;
-        font-weight: 500;
-        line-height: 1.25;
-        max-height: 31px;
+        font-weight: 700;
+        line-height: 1.15;
+        max-height: 28px;
+        max-width: 100%;
+        min-width: 0;
         overflow: hidden;
-        padding: 5px 7px;
+        padding: 5px 8px;
         text-overflow: ellipsis;
+        white-space: nowrap;
       }
 
       .status.info {
-        background: var(--panel-strong);
+        background: var(--accent-soft);
         border-left: 4px solid var(--accent);
-        color: var(--muted);
+        color: var(--ink-bright);
       }
 
       .status.warn {
@@ -224,11 +258,13 @@
       }
 
       .llm-confirm {
-        background: #201d10;
+        background: var(--warning-soft);
         border-color: var(--warning);
-        box-shadow: inset 4px 0 0 var(--warning);
         display: grid;
         gap: 7px;
+        inset: 8px;
+        position: fixed;
+        z-index: 20;
       }
 
       .llm-confirm h2 {
@@ -264,9 +300,11 @@
       .next-confirm {
         background: var(--panel-strong);
         border-color: var(--line-strong);
-        box-shadow: inset 4px 0 0 var(--accent);
         display: grid;
         gap: 7px;
+        inset: 8px;
+        position: fixed;
+        z-index: 20;
       }
 
       .next-confirm h2 {
@@ -306,7 +344,13 @@
       .header {
         align-items: center;
         display: flex;
-        gap: 7px;
+        gap: 9px;
+        min-width: 0;
+        padding: 0;
+      }
+
+      .header > div {
+        min-width: 0;
       }
 
       .mark {
@@ -316,12 +360,34 @@
         color: var(--accent-ink);
         display: grid;
         font-weight: 850;
-        height: 28px;
+        height: 31px;
         place-items: center;
-        width: 28px;
+        width: 31px;
+      }
+
+      #fill-now {
+        background: var(--accent);
+        border-color: var(--accent);
+        color: var(--accent-ink);
+      }
+
+      #fill-now:hover {
+        background: var(--accent-dim);
+      }
+
+      #open-options {
+        border-color: var(--accent);
+        color: var(--ink-bright);
       }
 
       #clear-page {
+        border-color: var(--line-strong);
+        grid-column: 1 / -1;
+      }
+
+      #reload-extension {
+        border-color: var(--warning);
+        color: #ffe7a7;
         grid-column: 1 / -1;
       }
     </style>
@@ -405,39 +471,39 @@
             <div id="profile-name" class="value">Not set</div>
           </div>
           <div class="compact-row">
-            <span class="label">Default Resume</span>
+            <span class="label">Resume</span>
             <div id="default-resume-path" class="value">Not set</div>
           </div>
           <div class="compact-row">
-            <span class="label">Autofill On Load</span>
+            <span class="label">On Load</span>
             <div id="autofill-on-load" class="value">Disabled</div>
           </div>
           <div class="compact-row">
-            <span class="label">Auto Prompt</span>
+            <span class="label">Prompt</span>
             <div id="auto-prompt" class="value">Enabled</div>
           </div>
           <div class="compact-row">
-            <span class="label">Account Auto</span>
+            <span class="label">Account</span>
             <div id="auto-account-signup-login" class="value">Disabled</div>
           </div>
           <div class="compact-row">
-            <span class="label">Email Verify</span>
+            <span class="label">Email</span>
             <div id="auto-email-verification" class="value">Disabled</div>
           </div>
           <div class="compact-row">
-            <span class="label">Auto Next</span>
+            <span class="label">Next</span>
             <div id="auto-next-after-fill" class="value">Disabled</div>
           </div>
           <div class="compact-row">
-            <span class="label">Required Only</span>
+            <span class="label">Required</span>
             <div id="required-only" class="value">Enabled</div>
           </div>
           <div class="compact-row">
-            <span class="label">Auto Export</span>
+            <span class="label">Export</span>
             <div id="auto-export-logs" class="value">Disabled</div>
           </div>
           <div class="compact-row">
-            <span class="label">Local Logs</span>
+            <span class="label">Logs</span>
             <div id="debug-log-sink" class="value">Enabled</div>
           </div>
         </div>
@@ -466,6 +532,9 @@
         </button>
         <button id="clear-page" class="secondary" type="button">
           Clear Current Page
+        </button>
+        <button id="reload-extension" class="secondary" type="button">
+          Reload Extension
         </button>
       </div>
     </div>

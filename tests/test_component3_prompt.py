@@ -82,12 +82,14 @@ def test_page_ui_actions_are_logged():
     assert "ui.detect_prompt.dismiss" in content
     assert "ui.toast.show" in content
     assert "ui.fill_progress.show" in content
+    assert "ui.fill_summary.show" in content
     assert "ui.fill_progress.hide" in content
     assert "ui.llm_prompt.show" in content
     assert "ui.llm_prompt.use_click" in content
     assert "logUiEvent" in background
     assert "ui.toast.requested" in background
     assert "ui.fill_progress.show_requested" in background
+    assert "ui.fill_summary.requested" in background
     assert "ui.transient.dismiss_requested" in background
     assert "ui.llm_prompt.requested" in background
 
@@ -132,6 +134,9 @@ def test_workday_runtime_error_can_refresh_and_retry_once():
     assert "clicked_safe_next_recovered_workday_runtime_error" in background
     assert "clicked_safe_next_recovered_workday_runtime_error" in safe_next
     assert "workdayRuntimeError" in live_smoke
+    assert "recoverWorkdayRuntimeError" in live_smoke
+    assert "start_step_workday_runtime_error" in live_smoke
+    assert "prefill_workday_runtime_error" in live_smoke
 
 
 def test_fill_progress_can_request_cancel():
@@ -146,6 +151,10 @@ def test_fill_progress_can_request_cancel():
     assert "ui.fill_progress.cancel_click" in content
     assert 'case "hunt.apply.cancel_fill"' in background
     assert "activeFillRuns" in background
+    assert "activeFillRunByTab" in background
+    assert "cancelActiveFillRunsForTab" in background
+    assert "fill.supersede_previous" in background
+    assert "superseded_by_new_fill" in background
     assert "markPageFillCancelled" in background
     assert "isCancelled" in background
     assert "buildCancelledPipelineResponse" in runner
@@ -153,8 +162,34 @@ def test_fill_progress_can_request_cancel():
     assert "fillRunId: context.options.fillRunId" in runner
     assert "__huntApplyCancelAllFills" in generic
     assert "__huntApplyCancelAllFills" in workday
+    assert "__huntApplyActiveFillRunId" in generic
+    assert "__huntApplyActiveFillRunId" in workday
+    assert "__huntApplyActiveFillRunId" in background
+    assert "__huntApplyCancelledFillRunIds" in background
+    assert "__huntApplyCancelledFillRunIds" in generic
+    assert "__huntApplyCancelledFillRunIds" in workday
+    assert "activeFillRequestId" in content
+    assert "ui.detect_prompt.stale_fill_response" in content
     assert "user_cancelled" in generic
     assert "user_cancelled" in workday
+
+
+def test_v2_page_walk_counts_successful_pages_and_shows_summary():
+    content = _load_script(REPO_ROOT / "executioner/src/content/bootstrap.js")
+    background = _load_script(REPO_ROOT / "executioner/src/background/index.js")
+
+    assert "hunt.apply.show_fill_summary" in content
+    assert "hunt-apply-fill-summary" in content
+    assert "ui.fill_summary.show" in content
+    assert "async function showFillSummary" in background
+    assert "function buildFillSummaryPayload" in background
+    assert "async function getPageSnapshot" in background
+    assert "successfulPageCount += 1" in background
+    assert "failedPageNumber" in background
+    assert "visible_validation_errors_after_next" in background
+    assert "page_did_not_advance_after_next" in background
+    assert "`Filling page ${pageIndex + 1}`" not in background
+    assert "`Filling page ${nextPageNumber}`" in background
 
 
 def test_clear_page_shows_progress_and_scrolls_while_clearing():
@@ -221,6 +256,16 @@ def test_workday_already_filled_text_inputs_do_not_count_as_changed():
     assert "markTextInputAlreadyFilled" in profile_branch
 
 
+def test_workday_phone_and_legal_name_specific_guards():
+    workday = _load_script(REPO_ROOT / "executioner/src/ats/workday/fill.js")
+
+    assert 'profileMatch.key !== "profile:phone"' in workday
+    assert "value: u.normalizeText(profile.phone)" in workday
+    assert 'key: "profile:phone"' in workday
+    assert 'idKey.includes("legalname--firstname")' in workday
+    assert 'idKey.includes("legalname--lastname")' in workday
+
+
 def test_workday_logs_field_and_dropdown_actions():
     workday = _load_script(REPO_ROOT / "executioner/src/ats/workday/fill.js")
 
@@ -247,6 +292,11 @@ def test_workday_logs_field_and_dropdown_actions():
     assert "pointer_select_phone_country_code_option" in workday
     assert "select_phone_country_code_option" in workday
     assert "phone_country_code_post_click_state" in workday
+    assert "workdayActiveListboxFor" in workday
+    assert "workdayClickOptionCommitTarget" in workday
+    assert "workdayOptionRadioTarget" in workday
+    assert "search_input_keyboard_final_enter_skipped" in workday
+    assert "allowAnySourceFallback" in workday
     assert "country_dependent_wait" in workday
     assert "stableReadyCount" in workday
     assert "readyCount >= 4" in workday

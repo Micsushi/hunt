@@ -6,6 +6,7 @@ const http = require("node:http");
 const path = require("node:path");
 const { checkMailAuth, verifyEmail } = require("./c3_mail_verify_bridge.js");
 const { CdpClient, httpJson, httpText, js, sleep } = require("./lib/c3_cdp");
+const { GoogleSignInManager } = require("./lib/c3_google_signin");
 
 const DEFAULT_EXTENSION_ID = "cbdmkibihimaedoihjhpidclolglnncc";
 
@@ -49,6 +50,7 @@ function parseArgs(argv) {
       process.env.HUNT_C3_TEST_ACCOUNT_PASSWORD ||
       process.env.HUNT_C3_MAIL_PASSWORD ||
       "C3TestPassword!23",
+    accountMethod: process.env.HUNT_C3_ACCOUNT_METHOD || "email",
     timeoutSeconds: Number(process.env.HUNT_C3_MAIL_MAX_WAIT_SECONDS || 90),
     resetSiteData: false,
     help: false,
@@ -77,6 +79,9 @@ function parseArgs(argv) {
     } else if (arg === "--account-password" && next) {
       args.accountPassword = next;
       i += 1;
+    } else if (arg === "--account-method" && next) {
+      args.accountMethod = next;
+      i += 1;
     } else if (arg === "--timeout-seconds" && next) {
       args.timeoutSeconds = Number(next);
       i += 1;
@@ -102,6 +107,7 @@ function usage() {
     "  --workday-url <url>        Real Workday URL for provider imap or gmail",
     "  --account-email <email>    Signup/login email",
     "  --account-password <pass>  Signup/login password",
+    "  --account-method <method>  email or google, default env or email",
     "  --timeout-seconds <n>      Mail wait timeout",
     "  --reset-site-data          Clear browser cookies and target origin storage first",
   ].join("\n");
@@ -286,6 +292,18 @@ async function connectLatestWorkdayLoginTarget(port, referenceUrl) {
   return connectTarget(preferred);
 }
 
+async function connectLatestGoogleTarget(port) {
+  const targets = await getTargets(port);
+  const googleTargets = targets.filter((target) =>
+    /accounts\.google\.com|\/signin\/oauth/i.test(String(target.url || "")),
+  );
+  const preferred = googleTargets[0];
+  if (!preferred) {
+    return null;
+  }
+  return connectTarget(preferred);
+}
+
 async function seedExtension(optionsClient, args, applyUrl) {
   return optionsClient.evaluate(
     `(async () => {
@@ -420,8 +438,9 @@ async function fillWorkdayAccountForm(pageClient, args) {
         checkbox.dispatchEvent(new Event("change", { bubbles: true }));
       }
       await sleep(500);
+      const confirmRequired = passwordInputs.length > 1;
       return {
-        ok: Boolean(textInputs[0]?.value && passwordInputs[0]?.value && passwordInputs[1]?.value && (!checkbox || checkbox.checked)),
+        ok: Boolean(textInputs[0]?.value && passwordInputs[0]?.value && (!confirmRequired || passwordInputs[1]?.value) && (!checkbox || checkbox.checked)),
         emailFilled: Boolean(textInputs[0]?.value),
         passwordFilled: Boolean(passwordInputs[0]?.value),
         confirmFilled: Boolean(passwordInputs[1]?.value),
@@ -529,10 +548,31 @@ async function pageHasAccountFields(pageClient) {
       }));
       const text = document.body ? document.body.innerText : "";
       const accountFieldCount = fields.filter((field) => /email|username|user|password/i.test([field.id, field.name, field.type, field.autocomplete, field.placeholder, field.label].join(" "))).length;
+      const passwordCount = fields.filter((field) => field.type === "password").length;
+      const hasEmailField = fields.some((field) => /email|username|user/i.test([field.id, field.name, field.type, field.autocomplete, field.placeholder, field.label].join(" ")));
+      const buttons = [...document.querySelectorAll("button, [role='button'], a")]
+        .filter((el) => {
+          const style = getComputedStyle(el);
+          const rect = el.getBoundingClientRect();
+          return style.display !== "none" && style.visibility !== "hidden" && rect.width > 0 && rect.height > 0;
+        })
+        .map((el) => [
+          el.getAttribute("aria-label"),
+          el.getAttribute("title"),
+          el.innerText,
+          el.textContent
+        ].filter(Boolean).join(" ").replace(/\\s+/g, " ").trim())
+        .filter(Boolean);
       return {
         ok: accountFieldCount > 0,
         fieldCount: fields.length,
         accountFieldCount,
+        isSignupForm: hasEmailField && passwordCount > 1,
+        isLoginForm: hasEmailField && passwordCount === 1,
+        hasCreateAccountAction: buttons.some((label) => /^(create account|sign up|signup|register)\\b/i.test(label)),
+        hasSignInWithEmailAction: buttons.some((label) => /^sign in with email\\b|^sign in using email\\b|^email sign in\\b/i.test(label)),
+        hasGoogleAction: buttons.some((label) => /sign\\s*in\\s*with\\s*google|continue\\s*with\\s*google|google/i.test(label)),
+        buttons: buttons.slice(0, 20),
         fields: fields.slice(0, 20),
         verificationNeeded: /verify|verification|check your email|confirm your email/i.test(text),
         signedInOrAdvanced: /Settings\\s+\\S+@\\S+|Candidate Home|current step\\s+\\d+\\s+of\\s+\\d+\\s+(?!Create Account\\/Sign In)(My Information|My Experience|Application Questions|Voluntary Disclosures|Review)|Resume\\/CV/i.test(text),
@@ -543,10 +583,11 @@ async function pageHasAccountFields(pageClient) {
   );
 }
 
-async function clickSafeAccountAction(pageClient) {
+async function clickSafeAccountAction(pageClient, intent = "auto") {
   await bringToFront(pageClient);
   const clickResult = await pageClient.evaluate(
     `(async () => {
+      const intent = ${js(intent)};
       const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
       const visible = (el) => {
         const style = getComputedStyle(el);
@@ -579,16 +620,26 @@ async function clickSafeAccountAction(pageClient) {
       const forbidden = /(submit application|final submit|submit my application|send application|withdraw|delete)/i;
       const unsafeNavigation = /^(skip to main content|search for jobs|back to job posting|read more|forgot your password\\?|linkedin)\\b/i;
       const allowed = (button) => !forbidden.test(button.text) && !unsafeNavigation.test(button.text);
-      const preferred = [
-        /^(create account|sign up|signup|register)$/i,
-        /^(sign in|log in|login)$/i,
-        /^(continue|next)$/i,
-        /^(verify email|send verification|resend verification)$/i,
-        /^(apply manually)$/i,
-        /^apply\\b/i,
-        /^(apply now)$/i,
-        /^apply for this job$/i
-      ];
+      const preferredByIntent = {
+        "apply": [/^(apply manually)$/i, /^(apply now)$/i, /^apply for this job$/i, /^apply\\b/i],
+        "email": [/^sign in with email\\b/i, /^sign in using email\\b/i, /^email sign in\\b/i],
+        "create": [/^(create account|sign up|signup|register)\\b/i],
+        "submit": [/^(continue|next)\\b/i, /^(verify email|send verification|resend verification)\\b/i, /^(sign in|log in|login)\\b/i],
+        "auto": [
+          /^(apply manually)$/i,
+          /^sign in with email\\b/i,
+          /^sign in using email\\b/i,
+          /^email sign in\\b/i,
+          /^(create account|sign up|signup|register)\\b/i,
+          /^(continue|next)\\b/i,
+          /^(verify email|send verification|resend verification)\\b/i,
+          /^(sign in|log in|login)\\b/i,
+          /^apply\\b/i,
+          /^(apply now)$/i,
+          /^apply for this job$/i
+        ]
+      };
+      const preferred = preferredByIntent[intent] || preferredByIntent.auto;
       const readButtons = () => [...document.querySelectorAll("button, [role='button'], a")]
         .filter(visible)
         .map((el) => ({
@@ -602,7 +653,22 @@ async function clickSafeAccountAction(pageClient) {
         .filter((item) => item.text && !item.disabled);
       const findCandidate = () => {
         const buttons = readButtons();
-        const candidate = buttons.find((button) => allowed(button) && preferred.some((pattern) => pattern.test(button.text)))
+        const preferredButtons = buttons
+          .map((button, index) => ({
+            button,
+            index,
+            preferredIndex: preferred.findIndex((pattern) =>
+              pattern.test(button.text),
+            ),
+          }))
+          .filter(
+            (item) => allowed(item.button) && item.preferredIndex >= 0,
+          )
+          .sort(
+            (a, b) =>
+              a.preferredIndex - b.preferredIndex || a.index - b.index,
+          );
+        const candidate = preferredButtons[0]?.button
           || [...document.querySelectorAll('a[role="button"], a[data-automation-id], a[href*="/apply"]')]
             .filter(visible)
             .map((el) => ({ el, text: textOf(el), href: el.href || "", automation: el.getAttribute("data-automation-id") || "" }))
@@ -620,6 +686,13 @@ async function clickSafeAccountAction(pageClient) {
       let candidate = null;
       let buttons = [];
       for (let attempt = 0; attempt < 30; attempt += 1) {
+        if (attempt > 0 && attempt % 4 === 0) {
+          window.scrollTo({
+            top: Math.round(document.body.scrollHeight * Math.min(0.8, attempt / 30)),
+            behavior: "instant"
+          });
+          await sleep(250);
+        }
         const found = findCandidate();
         candidate = found.candidate;
         buttons = found.buttons;
@@ -633,6 +706,7 @@ async function clickSafeAccountAction(pageClient) {
           ok: false,
           clicked: false,
           reason: "safe_account_action_not_found",
+          intent,
           href: beforeHref,
           buttons: buttons.map((button) => button.text).slice(0, 20)
         };
@@ -642,6 +716,7 @@ async function clickSafeAccountAction(pageClient) {
           ok: true,
           clicked: true,
           label: candidate.text,
+          intent,
           beforeHref,
           href: beforeHref,
           navigateTo: candidate.href,
@@ -655,6 +730,7 @@ async function clickSafeAccountAction(pageClient) {
         ok: true,
         clicked: true,
         label: candidate.text,
+        intent,
         beforeHref,
         href: beforeHref,
         verificationNeeded: false,
@@ -801,10 +877,39 @@ async function reachAccountForm(pageClient, maxSteps = 6) {
       href: state.href,
       fieldCount: state.fieldCount,
       hasAccountFields: state.ok,
+      isSignupForm: state.isSignupForm,
+      isLoginForm: state.isLoginForm,
+      hasCreateAccountAction: state.hasCreateAccountAction,
+      hasSignInWithEmailAction: state.hasSignInWithEmailAction,
+      hasGoogleAction: state.hasGoogleAction,
       verificationNeeded: state.verificationNeeded,
       signedInOrAdvanced: state.signedInOrAdvanced,
     });
-    if (state.ok || state.verificationNeeded || state.signedInOrAdvanced) {
+    if (state.ok && state.isLoginForm && state.hasCreateAccountAction) {
+      const click = await clickSafeAccountAction(pageClient, "create");
+      steps.push({
+        step: i,
+        clicked: click.clicked,
+        label: click.label || "",
+        reason: click.reason || "",
+        intent: click.intent || "create",
+        href: click.href || "",
+      });
+      if (!click.ok || !click.clicked) {
+        return {
+          ok: false,
+          reason: click.reason || "create_account_action_failed",
+          steps,
+          state,
+        };
+      }
+      continue;
+    }
+    if (
+      (state.ok && !state.isLoginForm) ||
+      state.verificationNeeded ||
+      state.signedInOrAdvanced
+    ) {
       return {
         ok: true,
         reason: state.signedInOrAdvanced
@@ -816,12 +921,19 @@ async function reachAccountForm(pageClient, maxSteps = 6) {
         state,
       };
     }
-    const click = await clickSafeAccountAction(pageClient);
+    const clickIntent =
+      i === 0 && !state.ok && !state.hasSignInWithEmailAction
+        ? "apply"
+        : state.hasSignInWithEmailAction
+          ? "email"
+          : "auto";
+    const click = await clickSafeAccountAction(pageClient, clickIntent);
     steps.push({
       step: i,
       clicked: click.clicked,
       label: click.label || "",
       reason: click.reason || "",
+      intent: click.intent || clickIntent,
       href: click.href || "",
     });
     if (!click.ok || !click.clicked) {
@@ -845,6 +957,92 @@ async function reachAccountForm(pageClient, maxSteps = 6) {
         : "max_steps_reached",
     steps,
     state,
+  };
+}
+
+async function startGoogleAccountFlow(pageClient, args, referenceUrl) {
+  const steps = [];
+  for (let i = 0; i < 4; i += 1) {
+    const state = await pageHasAccountFields(pageClient);
+    steps.push({
+      step: i,
+      href: state.href,
+      hasGoogleAction: state.hasGoogleAction,
+      hasSignInWithEmailAction: state.hasSignInWithEmailAction,
+      signedInOrAdvanced: state.signedInOrAdvanced,
+      buttons: state.buttons || [],
+    });
+    if (state.signedInOrAdvanced) {
+      return { ok: true, reason: "already_signed_in_or_advanced", steps };
+    }
+    if (state.hasGoogleAction) {
+      break;
+    }
+    const intent =
+      i === 0 && !state.hasSignInWithEmailAction ? "apply" : "auto";
+    const click = await clickSafeAccountAction(pageClient, intent);
+    steps.push({
+      step: i,
+      clicked: click.clicked,
+      label: click.label || "",
+      reason: click.reason || "",
+      intent: click.intent || intent,
+      href: click.href || "",
+    });
+    if (!click.ok || !click.clicked) {
+      return {
+        ok: false,
+        reason: click.reason || "google_gateway_not_reached",
+        steps,
+      };
+    }
+  }
+
+  const google = new GoogleSignInManager({
+    cdpPort: args.cdpPort,
+    email: args.accountEmail,
+    password: args.accountPassword,
+  });
+  const entry = await google.clickGoogleEntry(pageClient);
+  if (!entry.ok) {
+    return { ok: false, reason: entry.reason || "google_entry_failed", entry, steps };
+  }
+  const googleClient =
+    (await connectLatestGoogleTarget(args.cdpPort)) || pageClient;
+  const fills = [];
+  let postGoogleClient = pageClient;
+  let state = { signedInOrAdvanced: false };
+  try {
+    for (let i = 0; i < 3 && !state.signedInOrAdvanced; i += 1) {
+      const fill = await google.fillGoogleAccountPage(googleClient);
+      fills.push(fill);
+      await sleep(2000);
+      postGoogleClient =
+        (await connectLatestWorkdayApplicationTarget(
+          args.cdpPort,
+          referenceUrl,
+        )) || pageClient;
+      state = await inspectApplicationStateFast(postGoogleClient);
+      if (fill.manualRequired || !fill.ok) {
+        break;
+      }
+    }
+  } finally {
+    if (googleClient !== pageClient && googleClient !== postGoogleClient) {
+      googleClient.close();
+    }
+  }
+  return {
+    ok: Boolean(state.signedInOrAdvanced),
+    reason: state.signedInOrAdvanced
+      ? "google_signin_advanced"
+      : "google_signin_needs_manual_or_more_steps",
+    entry,
+    fills,
+    state,
+    steps,
+    client: postGoogleClient,
+    switchedClient: postGoogleClient !== pageClient,
   };
 }
 
@@ -931,6 +1129,23 @@ async function inspectApplicationState(pageClient) {
   );
 }
 
+async function inspectApplicationStateFast(pageClient) {
+  await bringToFront(pageClient);
+  return pageClient.evaluate(
+    `(() => {
+      const text = document.body ? document.body.innerText.replace(/\\s+/g, " ").trim() : "";
+      return {
+        href: location.href,
+        title: document.title,
+        verificationNeeded: /verify|verification|check your email|confirm your email/i.test(text),
+        signedInOrAdvanced: /Settings\\s+\\S+@\\S+|Candidate Home|current step\\s+\\d+\\s+of\\s+\\d+\\s+(?!Create Account\\/Sign In)(My Information|My Experience|Application Questions|Voluntary Disclosures|Review)|Resume\\/CV/i.test(text),
+        bodyHead: text.slice(0, 500)
+      };
+    })()`,
+    10000,
+  );
+}
+
 async function main() {
   loadDotEnv();
   const args = parseArgs(process.argv);
@@ -974,6 +1189,41 @@ async function main() {
       ? await resetBrowserSiteData(pageClient, targetUrl)
       : null;
     await navigate(pageClient, targetUrl);
+
+    if (args.provider !== "fake" && args.accountMethod === "google") {
+      const googleResult = await startGoogleAccountFlow(
+        pageClient,
+        args,
+        targetUrl,
+      );
+      if (googleResult.client && googleResult.client !== pageClient) {
+        pageClient.close();
+        pageClient = googleResult.client;
+      }
+      console.log(
+        JSON.stringify(
+          {
+            ok: googleResult.ok,
+            provider: args.provider,
+            accountMethod: args.accountMethod,
+            resetSiteData,
+            google: {
+              reason: googleResult.reason,
+              entry: googleResult.entry,
+              fills: googleResult.fills,
+              state: googleResult.state,
+              steps: googleResult.steps,
+            },
+          },
+          null,
+          2,
+        ),
+      );
+      if (!googleResult.ok) {
+        process.exitCode = 1;
+      }
+      return;
+    }
 
     const reachResult =
       args.provider === "fake"

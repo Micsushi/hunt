@@ -27,8 +27,24 @@ import { recoverWorkdayRuntimeErrorForTab } from "./workday-runtime.js";
 const C4_POLL_ALARM = "hunt.apply.c4.poll";
 const C4_HEARTBEAT_ALARM = "hunt.apply.c4.heartbeat";
 const FILL_TIMEOUT_MS = 45000;
+const V2_PAGE_WALK_MAX_PAGES = 12;
+const V2_SHARED_SCRIPT_FILES = [
+  "src/shared/injected.js",
+  "src/shared/v2/audit.js",
+  "src/shared/v2/field-catalog.js",
+  "src/shared/v2/ui-inspector.js",
+  "src/shared/v2/field-state.js",
+  "src/shared/v2/option-collector.js",
+  "src/shared/v2/option-matcher.js",
+  "src/shared/v2/question-identifier.js",
+  "src/shared/v2/answer-resolver.js",
+  "src/shared/v2/field-drivers.js",
+  "src/shared/v2/field-pipeline.js",
+  "src/shared/v2/clear-pipeline.js",
+];
 let activeRunId = "";
 const activeFillRuns = new Map();
+const activeFillRunByTab = new Map();
 
 function createFillRunId() {
   return `fill_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
@@ -36,6 +52,14 @@ function createFillRunId() {
 
 function isFillRunCancelled(fillRunId) {
   return Boolean(fillRunId && activeFillRuns.get(fillRunId)?.cancelled);
+}
+
+function fillRunCancelReason(fillRunId) {
+  return (
+    activeFillRuns.get(fillRunId)?.cancelReason ||
+    activeFillRuns.get(fillRunId)?.reason ||
+    "user_cancelled"
+  );
 }
 
 function cancelFillRun(fillRunId) {
@@ -48,7 +72,25 @@ function cancelFillRun(fillRunId) {
   }
   run.cancelled = true;
   run.cancelledAt = new Date().toISOString();
+  run.cancelReason = "user_cancelled";
   return true;
+}
+
+function cancelActiveFillRunsForTab(tabId, reason = "superseded_by_new_fill") {
+  if (!tabId) {
+    return [];
+  }
+  const cancelled = [];
+  for (const [fillRunId, run] of activeFillRuns.entries()) {
+    if (run.tabId !== tabId || run.cancelled) {
+      continue;
+    }
+    run.cancelled = true;
+    run.cancelledAt = new Date().toISOString();
+    run.cancelReason = reason;
+    cancelled.push(fillRunId);
+  }
+  return cancelled;
 }
 
 function compactApplyContextForLog(context = {}) {
@@ -58,6 +100,47 @@ function compactApplyContextForLog(context = {}) {
       ? "[omitted:data-url]"
       : "",
   };
+}
+
+function debugIdentityForState(state = {}) {
+  const settings = state.settings || {};
+  const browserContext = state.browserContext || {};
+  let manifest = {};
+  try {
+    manifest = chrome.runtime.getManifest();
+  } catch (_error) {
+    manifest = {};
+  }
+  return {
+    browserContext: browserContext.name || "normal_chrome",
+    browserContextConfiguredBy: browserContext.configuredBy || "",
+    browserContextConfiguredAt: browserContext.configuredAt || "",
+    browserContextDevtoolsPort: browserContext.devtoolsPort || "",
+    pipelineVersion: settings.useFieldPipelineV2 ? "v2" : "v1",
+    useFieldPipelineV2: Boolean(settings.useFieldPipelineV2),
+    settingsVersion: Number(settings.settingsVersion || 0),
+    extensionVersion: manifest.version || "",
+    extensionId: chrome.runtime.id || "",
+  };
+}
+
+function v2ScriptFilesForAts(atsType = "") {
+  const files = [...V2_SHARED_SCRIPT_FILES];
+  if (atsType === "workday") {
+    files.push(
+      "src/ats/workday/workday-ui-v2.js",
+      "src/ats/workday/workday-drivers-v2.js",
+      "src/ats/workday/workday-repeatables-v2.js",
+    );
+  }
+  return files;
+}
+
+async function injectV2ScriptsForTab(tabId, atsType = "") {
+  await chrome.scripting.executeScript({
+    target: { tabId, allFrames: true },
+    files: v2ScriptFilesForAts(atsType),
+  });
 }
 
 function withTimeout(promise, timeoutMs, fallbackFactory) {
@@ -87,6 +170,7 @@ async function sendDebugLog(eventType, payload = {}) {
     return await postDebugLog(state.settings, {
       eventType,
       extensionTime: new Date().toISOString(),
+      ...debugIdentityForState(state),
       activeApplyContext: compactApplyContextForLog(state.activeApplyContext),
       payload,
     });
@@ -100,12 +184,30 @@ async function sendDebugLog(eventType, payload = {}) {
 }
 
 async function logActivity(action, summary, details = {}, status = "ok") {
-  const activity = await appendActivityLog({
-    action,
-    summary,
-    details,
-    status,
-  });
+  let activity = null;
+  try {
+    activity = await appendActivityLog({
+      action,
+      summary,
+      details,
+      status,
+    });
+  } catch (error) {
+    activity = {
+      id: crypto.randomUUID(),
+      createdAt: new Date().toISOString(),
+      action,
+      summary,
+      details: {
+        ...details,
+        localActivityLogSkipped: true,
+        localActivityLogError:
+          error instanceof Error ? error.message : String(error),
+      },
+      status,
+    };
+    console.warn("C3 activity log storage failed:", error);
+  }
   await sendDebugLog("activity", { activity });
   return activity;
 }
@@ -500,6 +602,263 @@ async function notePageFillCompleted(tabId, payload = {}) {
   });
 }
 
+async function showFillSummary(tabId, payload = {}) {
+  await sendPageUiMessage({
+    tabId,
+    message: {
+      type: "hunt.apply.show_fill_summary",
+      ...payload,
+    },
+    action: "ui.fill_summary.requested",
+    failedAction: "ui.fill_summary.request_failed",
+    summary: "Requested fill summary popup.",
+    failedSummary: "Could not request fill summary popup.",
+    skippedAction: "ui.fill_summary.skipped",
+    skippedSummary: "Skipped fill summary because no tab was available.",
+    details: {
+      status: payload.status || "",
+      title: payload.title || "",
+      failedPageNumber: payload.failedPageNumber || 0,
+      stoppedReason: payload.stoppedReason || "",
+      successfulPageCount: payload.successfulPageCount || 0,
+      lastPageNumber: payload.lastPageNumber || 0,
+      reviewIssueCount: payload.reviewIssueCount || 0,
+    },
+  });
+}
+
+function createPageSnapshotFunction() {
+  return function pageSnapshotForHuntApply() {
+    function normalizeText(value) {
+      return String(value || "")
+        .replace(/\s+/g, " ")
+        .trim();
+    }
+
+    function visible(el) {
+      if (!el) {
+        return false;
+      }
+      var style = window.getComputedStyle(el);
+      var rect = el.getBoundingClientRect();
+      return (
+        style.display !== "none" &&
+        style.visibility !== "hidden" &&
+        rect.width > 0 &&
+        rect.height > 0
+      );
+    }
+
+    var bodyText = document.body?.innerText || "";
+    var stepMatch = bodyText.match(
+      /current step\s+(\d+)\s+of\s+(\d+)\s*\n([^\n]+)/i,
+    );
+    var errorNodes = Array.from(
+      document.querySelectorAll(
+        '[role="alert"], [aria-invalid="true"], [data-automation-id*="error"], .css-1f0n2jl, .css-1b3i8od',
+      ),
+    )
+      .filter(visible)
+      .map(function (el) {
+        return normalizeText(el.innerText || el.textContent || el.value || "");
+      })
+      .filter(function (text) {
+        return text && /error|required|must have a value/i.test(text);
+      });
+    var seen = {};
+    var visibleValidationErrors = errorNodes.filter(function (text) {
+      var key = text.toLowerCase();
+      if (seen[key]) {
+        return false;
+      }
+      seen[key] = true;
+      return true;
+    });
+    return {
+      href: window.location.href,
+      title: document.title,
+      currentStep: stepMatch
+        ? {
+            current: Number(stepMatch[1]),
+            total: Number(stepMatch[2]),
+            title: normalizeText(stepMatch[3]),
+          }
+        : null,
+      visibleValidationErrors: visibleValidationErrors.slice(0, 8),
+    };
+  };
+}
+
+function chooseBestPageSnapshot(results = []) {
+  const snapshots = results.map((entry) => ({
+    frameId: entry.frameId,
+    snapshot: entry.result || {},
+  }));
+  const withStep = snapshots.find((entry) => entry.snapshot?.currentStep);
+  if (withStep) {
+    return {
+      frameId: withStep.frameId,
+      ...withStep.snapshot,
+    };
+  }
+  const withErrors = snapshots.find(
+    (entry) => (entry.snapshot?.visibleValidationErrors || []).length,
+  );
+  if (withErrors) {
+    return {
+      frameId: withErrors.frameId,
+      ...withErrors.snapshot,
+    };
+  }
+  return {
+    frameId: snapshots[0]?.frameId || 0,
+    ...(snapshots[0]?.snapshot || {}),
+  };
+}
+
+async function getPageSnapshot(tabId) {
+  if (!tabId) {
+    return {};
+  }
+  try {
+    const results = await withTimeout(
+      chrome.scripting.executeScript({
+        target: { tabId, allFrames: true },
+        func: createPageSnapshotFunction(),
+      }),
+      3000,
+      () => null,
+    );
+    return results ? chooseBestPageSnapshot(results) : {};
+  } catch (_error) {
+    return {};
+  }
+}
+
+function pageNumberFromSnapshot(snapshot = {}, fallback = 1) {
+  const stepNumber = Number(snapshot.currentStep?.current || 0);
+  if (Number.isFinite(stepNumber) && stepNumber > 0) {
+    return stepNumber;
+  }
+  const fallbackNumber = Number(fallback || 1);
+  return Number.isFinite(fallbackNumber) && fallbackNumber > 0
+    ? fallbackNumber
+    : 1;
+}
+
+function compactStopDetails(details = {}) {
+  const validationErrors = Array.isArray(details.visibleValidationErrors)
+    ? details.visibleValidationErrors
+        .map((error) => String(error || "").replace(/\s+/g, " ").trim())
+        .filter(Boolean)
+        .slice(0, 3)
+    : [];
+  const reviewReasons = Array.isArray(details.reviewReasons)
+    ? details.reviewReasons
+        .map((reason) => String(reason || "").replace(/\s+/g, " ").trim())
+        .filter(Boolean)
+        .slice(0, 3)
+    : [];
+  return {
+    ...details,
+    visibleValidationErrors: validationErrors,
+    reviewReasons,
+  };
+}
+
+function describePageWalkStop(reason = "", details = {}) {
+  const compact = compactStopDetails(details);
+  if (reason === "final_submit_visible") {
+    return "Stopped before final submit.";
+  }
+  if (
+    reason === "visible_validation_errors" ||
+    reason === "visible_validation_errors_after_next"
+  ) {
+    return compact.visibleValidationErrors.length
+      ? compact.visibleValidationErrors.join(" ")
+      : "Workday showed visible validation errors after Next.";
+  }
+  if (reason === "page_did_not_advance_after_next") {
+    return "Clicked Next, but Workday stayed on the same page.";
+  }
+  if (reason === "fill_failed") {
+    return (
+      compact.message ||
+      compact.reviewReasons.join(", ") ||
+      "The page fill did not complete."
+    );
+  }
+  if (reason === "user_cancelled") {
+    return "Fill was canceled.";
+  }
+  if (reason === "max_pages_reached") {
+    return "Stopped after reaching the page-walk limit.";
+  }
+  return compact.message || reason || "Page walk stopped.";
+}
+
+function pageWalkStopIsOk(reason = "") {
+  return reason === "final_submit_visible";
+}
+
+function buildFillSummaryPayload(result = {}) {
+  const pageWalk = result.pageWalk || {};
+  if (!pageWalk.enabled) {
+    return null;
+  }
+  const stoppedReason = pageWalk.stoppedReason || result.reason || "";
+  const reachedFinalSubmit = stoppedReason === "final_submit_visible";
+  const stoppedDetails = pageWalk.stopDetails || {};
+  const failedPageNumber = reachedFinalSubmit
+    ? 0
+    : Number(
+        pageWalk.failedPageNumber ||
+          pageWalk.currentPageNumber ||
+          pageWalk.lastPageNumber ||
+          pageWalk.successfulPageCount ||
+          1,
+      );
+  const successfulPageCount = Number(
+    pageWalk.successfulPageCount || pageWalk.pagesFilled || 0,
+  );
+  const lastPageNumber = Number(
+    pageWalk.lastPageNumber || pageWalk.currentPageNumber || 0,
+  );
+  const reviewIssueCount = Number(pageWalk.reviewIssueCount || 0);
+  const status = reachedFinalSubmit
+    ? reviewIssueCount > 0
+      ? "review"
+      : "success"
+    : result.ok
+      ? "stopped"
+      : "failed";
+  const reason = describePageWalkStop(stoppedReason, stoppedDetails);
+  return {
+    status,
+    title: reachedFinalSubmit
+      ? "Fill reached review"
+      : `Fill stopped on page ${failedPageNumber || "unknown"}`,
+    message: reachedFinalSubmit
+      ? "Reached the final review page and stopped before Submit."
+      : reason,
+    failedPageNumber,
+    stoppedReason,
+    stopReasonLabel: reason,
+    successfulPageCount,
+    lastPageNumber,
+    reviewIssueCount,
+    reviewIssueLabels: (pageWalk.reviewIssues || [])
+      .map((issue) =>
+        String(issue.fieldName || issue.reason || issue.kind || "")
+          .replace(/\s+/g, " ")
+          .trim(),
+      )
+      .filter(Boolean)
+      .slice(0, 3),
+  };
+}
+
 async function showLlmPrompt(tabId, payload = {}) {
   const sent = await sendPageUiMessage({
     tabId,
@@ -581,6 +940,9 @@ async function clickSafeNextForTab(tabId, details = {}) {
         reason: probe.reason,
         triggeredBy: details.triggeredBy || "",
         blockedFinalSubmitLabels: probe.blockedFinalSubmitLabels || [],
+        visibleValidationErrors: probe.visibleValidationErrors || [],
+        inputCount: probe.inputCount || 0,
+        candidateCount: probe.candidateCount || 0,
       },
       probe.reason === "no_safe_next_button" ? "warn" : "blocked",
     );
@@ -663,6 +1025,10 @@ async function clickSafeNextForTab(tabId, details = {}) {
       triggeredBy: details.triggeredBy || "",
       candidate: clickResult.candidate || probe.candidate || {},
       reason: clickResult.reason || "",
+      visibleValidationErrors: clickResult.visibleValidationErrors || [],
+      blockedFinalSubmitLabels: clickResult.blockedFinalSubmitLabels || [],
+      inputCount: clickResult.inputCount || probe.inputCount || 0,
+      candidateCount: clickResult.candidateCount || probe.candidateCount || 0,
       auto: Boolean(details.auto),
     },
     clickResult.clicked ? "ok" : "warn",
@@ -722,6 +1088,421 @@ async function maybeHandleSafeNextAfterFill({
   };
 }
 
+function v2PermanentIssues(fillResponse = {}) {
+  return (
+    fillResponse.result?.v2Audit?.permanentIssues ||
+    fillResponse.attempt?.v2Audit?.permanentIssues ||
+    []
+  );
+}
+
+function v2ReviewIssues(fillResponse = {}) {
+  return v2PermanentIssues(fillResponse).filter((issue) =>
+    ["warn", "blocked", "error"].includes(issue.severity || ""),
+  );
+}
+
+function summarizeV2Issues(issues = [], limit = 12) {
+  return issues.slice(0, limit).map((issue) => ({
+    kind: issue.kind || "",
+    severity: issue.severity || "",
+    failedStep: issue.failedStep || "",
+    reason: issue.reason || "",
+    descriptor: String(issue.descriptor || "").slice(0, 240),
+    questionType: issue.questionType || "",
+    uiModel: issue.uiModel || "",
+    fieldName: issue.fieldName || "",
+    elementType: issue.elementType || "",
+    selectorPath: String(issue.selectorPath || "").slice(0, 320),
+    options: Array.isArray(issue.options) ? issue.options.slice(0, 20) : [],
+  }));
+}
+
+function shouldRunV2PageWalk(settings = {}, fillResponse = {}, payload = {}) {
+  return Boolean(
+    settings.useFieldPipelineV2 &&
+    settings.autoClickNextAfterFill &&
+    payload.pageWalk !== false &&
+    fillResponse.ok &&
+    !fillResponse.cancelled,
+  );
+}
+
+function pageWalkFillSummary(fillResponse = {}) {
+  const issues = v2ReviewIssues(fillResponse);
+  return {
+    ok: Boolean(fillResponse.ok),
+    message: fillResponse.message || "",
+    filledFieldCount:
+      fillResponse.attempt?.filledFieldCount ||
+      fillResponse.result?.filledFieldCount ||
+      0,
+    generatedAnswerCount:
+      fillResponse.attempt?.generatedAnswerCount ||
+      fillResponse.result?.generatedAnswerCount ||
+      0,
+    manualReviewRequired: Boolean(
+      fillResponse.attempt?.manualReviewRequired ||
+      fillResponse.result?.manualReviewRequired,
+    ),
+    reviewIssueCount: issues.length,
+    reviewIssues: summarizeV2Issues(issues, 10),
+  };
+}
+
+async function runV2PageWalkAfterFill({
+  tabId,
+  state,
+  initialResult,
+  fillRunId,
+  triggeredBy,
+  allowLlmAnswers,
+}) {
+  const steps = [];
+  let currentFill = initialResult;
+  let stoppedReason = "";
+  let stopDetails = {};
+  let failedPageNumber = 0;
+  let lastNextAction = null;
+  let successfulPageCount = 0;
+  let currentPageSnapshot = await getPageSnapshot(tabId);
+  let lastPageNumber = pageNumberFromSnapshot(
+    currentPageSnapshot,
+    successfulPageCount || 1,
+  );
+
+  for (let pageIndex = 1; pageIndex <= V2_PAGE_WALK_MAX_PAGES; pageIndex += 1) {
+    if (isFillRunCancelled(fillRunId)) {
+      stoppedReason = "user_cancelled";
+      failedPageNumber = lastPageNumber;
+      stopDetails = { message: fillRunCancelReason(fillRunId) };
+      break;
+    }
+    const beforeNextSnapshot = await getPageSnapshot(tabId);
+    const beforePageNumber = pageNumberFromSnapshot(
+      beforeNextSnapshot,
+      lastPageNumber || successfulPageCount || pageIndex,
+    );
+    currentPageSnapshot = beforeNextSnapshot;
+    lastPageNumber = beforePageNumber;
+    const nextAction = await clickSafeNextForTab(tabId, {
+      auto: true,
+      triggeredBy: `${triggeredBy || "fill_current_page"}:v2_page_walk:${pageIndex}`,
+    });
+    lastNextAction = nextAction;
+    steps.push({
+      step: steps.length + 1,
+      kind: "safe_next",
+      pageIndex: beforePageNumber,
+      attemptIndex: pageIndex,
+      pageTitle: beforeNextSnapshot.currentStep?.title || "",
+      clicked: Boolean(nextAction.clicked),
+      reason: nextAction.reason || "",
+      message: nextAction.message || summarizeSafeNextResult(nextAction),
+      candidate: nextAction.candidate || {},
+      visibleValidationErrors: nextAction.visibleValidationErrors || [],
+      blockedFinalSubmitLabels: nextAction.blockedFinalSubmitLabels || [],
+      inputCount: nextAction.inputCount || 0,
+      candidateCount: nextAction.candidateCount || 0,
+      fillBeforeClick: pageWalkFillSummary(currentFill),
+    });
+    if (!nextAction.clicked) {
+      stoppedReason = nextAction.reason || "safe_next_stopped";
+      if (stoppedReason === "final_submit_visible" && currentFill?.ok) {
+        successfulPageCount += 1;
+      }
+      failedPageNumber =
+        stoppedReason === "final_submit_visible" ? 0 : beforePageNumber;
+      stopDetails = {
+        message: nextAction.message || summarizeSafeNextResult(nextAction),
+        visibleValidationErrors: nextAction.visibleValidationErrors || [],
+        blockedFinalSubmitLabels: nextAction.blockedFinalSubmitLabels || [],
+        pageTitle: beforeNextSnapshot.currentStep?.title || "",
+      };
+      break;
+    }
+    if (
+      nextAction.reason ===
+      "clicked_safe_next_workday_runtime_error_unrecovered"
+    ) {
+      stoppedReason = nextAction.reason;
+      failedPageNumber = beforePageNumber;
+      stopDetails = {
+        message: nextAction.message || summarizeSafeNextResult(nextAction),
+        pageTitle: beforeNextSnapshot.currentStep?.title || "",
+      };
+      break;
+    }
+
+    if (isFillRunCancelled(fillRunId)) {
+      stoppedReason = "user_cancelled";
+      failedPageNumber = beforePageNumber;
+      stopDetails = { message: fillRunCancelReason(fillRunId) };
+      break;
+    }
+    await dismissPageTransientUi(tabId);
+    await new Promise((resolve) => setTimeout(resolve, 650));
+    let afterNextSnapshot = await getPageSnapshot(tabId);
+    const beforeStepNumber = Number(beforeNextSnapshot.currentStep?.current || 0);
+    let afterStepNumber = Number(afterNextSnapshot.currentStep?.current || 0);
+    if (
+      beforeStepNumber &&
+      afterStepNumber &&
+      afterStepNumber <= beforeStepNumber
+    ) {
+      await new Promise((resolve) => setTimeout(resolve, 900));
+      afterNextSnapshot = await getPageSnapshot(tabId);
+      afterStepNumber = Number(afterNextSnapshot.currentStep?.current || 0);
+    }
+    const afterNextErrors = afterNextSnapshot.visibleValidationErrors || [];
+    if (
+      beforeStepNumber &&
+      afterStepNumber &&
+      afterStepNumber <= beforeStepNumber
+    ) {
+      stoppedReason = afterNextErrors.length
+        ? "visible_validation_errors_after_next"
+        : "page_did_not_advance_after_next";
+      failedPageNumber = beforePageNumber;
+      stopDetails = {
+        message: describePageWalkStop(stoppedReason, {
+          visibleValidationErrors: afterNextErrors,
+        }),
+        visibleValidationErrors: afterNextErrors,
+        pageTitle: beforeNextSnapshot.currentStep?.title || "",
+      };
+      steps.push({
+        step: steps.length + 1,
+        kind: "page_advance_check",
+        pageIndex: beforePageNumber,
+        attemptIndex: pageIndex,
+        ok: false,
+        stoppedReason,
+        visibleValidationErrors: afterNextErrors,
+        beforeStep: beforeNextSnapshot.currentStep || null,
+        afterStep: afterNextSnapshot.currentStep || null,
+      });
+      break;
+    }
+    const nextPageNumber = pageNumberFromSnapshot(
+      afterNextSnapshot,
+      beforePageNumber + 1,
+    );
+    successfulPageCount += 1;
+    lastPageNumber = nextPageNumber;
+    currentPageSnapshot = afterNextSnapshot;
+    await showFillProgress(tabId, `Filling page ${nextPageNumber}`, fillRunId);
+    const pageState = await getExtensionState();
+    currentFill = await runFillWithOneRefreshRetry(
+      tabId,
+      pageState,
+      `${triggeredBy || "fill_current_page"}:v2_page_walk`,
+      fillRunId,
+      { allowLlmAnswers },
+    );
+    await notePageFillCompleted(tabId, {
+      triggeredBy: `${triggeredBy || "fill_current_page"}:v2_page_walk`,
+      ok: Boolean(currentFill?.ok),
+      filledFieldCount: Number(currentFill?.attempt?.filledFieldCount || 0),
+    });
+    steps.push({
+      step: steps.length + 1,
+      kind: "fill",
+      pageIndex: nextPageNumber,
+      attemptIndex: pageIndex,
+      pageTitle: afterNextSnapshot.currentStep?.title || "",
+      ...pageWalkFillSummary(currentFill),
+    });
+    if (!currentFill.ok || currentFill.cancelled) {
+      stoppedReason = currentFill.cancelled ? "user_cancelled" : "fill_failed";
+      failedPageNumber = nextPageNumber;
+      stopDetails = {
+        message: currentFill.message || "",
+        reviewReasons:
+          currentFill.attempt?.manualReviewReasons ||
+          currentFill.result?.manualReviewReasons ||
+          [],
+        pageTitle: afterNextSnapshot.currentStep?.title || "",
+      };
+      break;
+    }
+  }
+
+  if (!stoppedReason) {
+    stoppedReason = "max_pages_reached";
+    failedPageNumber = lastPageNumber;
+    stopDetails = { message: describePageWalkStop(stoppedReason) };
+  }
+  const reviewIssues = steps.flatMap((step) =>
+    (step.reviewIssues || []).concat(step.fillBeforeClick?.reviewIssues || []),
+  );
+  const pageWalk = {
+    ok: pageWalkStopIsOk(stoppedReason),
+    enabled: true,
+    maxPages: V2_PAGE_WALK_MAX_PAGES,
+    pagesFilled: successfulPageCount,
+    successfulPageCount,
+    currentPageNumber: lastPageNumber,
+    lastPageNumber,
+    failedPageNumber,
+    stopDetails: compactStopDetails(stopDetails),
+    stoppedReason,
+    manualReviewRequired: reviewIssues.length > 0,
+    reviewIssueCount: reviewIssues.length,
+    reviewIssues,
+    steps,
+    lastNextAction,
+  };
+  await sendDebugLog("c3_v2_page_walk", {
+    tabId,
+    fillRunId,
+    stoppedReason,
+    pagesFilled: successfulPageCount,
+    successfulPageCount,
+    lastPageNumber,
+    failedPageNumber,
+    stopDetails: compactStopDetails(stopDetails),
+    reviewIssueCount: reviewIssues.length,
+    steps,
+  });
+  await logActivity(
+    "next.v2_page_walk",
+    stoppedReason === "final_submit_visible"
+      ? "V2 filled pages and stopped before final submit."
+      : `V2 page walk stopped: ${stoppedReason || "unknown"}.`,
+    {
+      tabId,
+      fillRunId,
+      pagesFilled: successfulPageCount,
+      successfulPageCount,
+      lastPageNumber,
+      failedPageNumber,
+      stopDetails: compactStopDetails(stopDetails),
+      stoppedReason,
+      reviewIssueCount: reviewIssues.length,
+      reviewIssues,
+      steps,
+    },
+    stoppedReason === "final_submit_visible" || pageWalk.ok ? "ok" : "warn",
+  );
+  return pageWalk;
+}
+
+function chooseBestV2ClearFrame(results = []) {
+  const candidates = results
+    .map((entry) => ({
+      frameId: entry.frameId,
+      result: entry.result || {},
+    }))
+    .filter((entry) => entry.result && entry.result.ok !== false);
+  if (!candidates.length) {
+    return (
+      results[0]?.result || {
+        ok: false,
+        reason: "missing_clear_result",
+        message: "No V2 clear result was returned.",
+      }
+    );
+  }
+  candidates.sort((a, b) => {
+    const aCleared = Number(a.result.clearedFieldCount || 0);
+    const bCleared = Number(b.result.clearedFieldCount || 0);
+    if (aCleared !== bCleared) {
+      return bCleared - aCleared;
+    }
+    const aFields = Number(a.result.v2Audit?.summary?.fieldCount || 0);
+    const bFields = Number(b.result.v2Audit?.summary?.fieldCount || 0);
+    if (aFields !== bFields) {
+      return bFields - aFields;
+    }
+    return Number(a.frameId || 0) - Number(b.frameId || 0);
+  });
+  return {
+    ...candidates[0].result,
+    frameId: candidates[0].frameId,
+    frameResults: candidates.map((entry) => ({
+      frameId: entry.frameId,
+      clearedFieldCount: entry.result.clearedFieldCount || 0,
+      issueCount: entry.result.v2Audit?.permanentIssues?.length || 0,
+      fieldCount: entry.result.v2Audit?.summary?.fieldCount || 0,
+    })),
+  };
+}
+
+async function clearCurrentPageV2(tabId, state) {
+  const atsType = state.activeApplyContext.atsType || "generic";
+  const clearRunId = `clear_${Date.now()}_${Math.random()
+    .toString(36)
+    .slice(2, 10)}`;
+  await injectV2ScriptsForTab(tabId, atsType);
+  const results = await chrome.scripting.executeScript({
+    target: { tabId, allFrames: true },
+    args: [
+      {
+        fillRunId: clearRunId,
+        atsType,
+      },
+    ],
+    func: async (context) => {
+      if (!window.__huntV2?.clearPipeline) {
+        return {
+          ok: false,
+          reason: "missing_v2_clear_pipeline",
+          message: "C3 V2 clear pipeline scripts were not injected.",
+        };
+      }
+      return window.__huntV2.clearPipeline.runHuntV2Clear(context);
+    },
+  });
+  const result = chooseBestV2ClearFrame(results);
+  const issues = result.v2Audit?.permanentIssues || [];
+  await sendDebugLog("c3_v2_clear_audit", {
+    tabId,
+    clearRunId,
+    atsType,
+    result,
+    audit: result.v2Audit || {},
+  });
+  await logActivity(
+    "page.clear.v2",
+    issues.length
+      ? "V2 clear completed with review items."
+      : "V2 clear completed.",
+    {
+      tabId,
+      clearRunId,
+      atsType,
+      clearedFieldCount: result.clearedFieldCount || 0,
+      issueCount: issues.length,
+      reviewIssues: summarizeV2Issues(issues, 20),
+      frameResults: result.frameResults || [],
+      v2Audit: result.v2Audit || {},
+    },
+    issues.length ? "warn" : result.ok ? "ok" : "failed",
+  );
+  await showPageToast(
+    tabId,
+    issues.length
+      ? `V2 cleared ${result.clearedFieldCount || 0} field${result.clearedFieldCount === 1 ? "" : "s"} with ${issues.length} review item${issues.length === 1 ? "" : "s"}.`
+      : `V2 cleared ${result.clearedFieldCount || 0} field${result.clearedFieldCount === 1 ? "" : "s"}.`,
+    issues.length ? "warn" : "info",
+  );
+  return {
+    ok: Boolean(result.ok && issues.length === 0),
+    reason: issues.length ? "v2_clear_needs_review" : result.reason || "",
+    message: issues.length
+      ? "V2 clear completed with review items."
+      : result.message ||
+        `V2 cleared ${result.clearedFieldCount || 0} fields on the current page.`,
+    cleared: result.clearedFieldCount || 0,
+    clearedFields: result.clearedFields || [],
+    reviewIssueCount: issues.length,
+    reviewIssues: summarizeV2Issues(issues, 30),
+    v2Audit: result.v2Audit || {},
+    frameResults: result.frameResults || [],
+  };
+}
+
 async function clearCurrentPage(tabId) {
   if (!tabId) {
     return {
@@ -729,6 +1510,11 @@ async function clearCurrentPage(tabId) {
       reason: "missing_tab",
       message: "No active tab is available to clear.",
     };
+  }
+
+  const state = await getExtensionState();
+  if (state.settings.useFieldPipelineV2) {
+    return clearCurrentPageV2(tabId, state);
   }
 
   const results = await chrome.scripting.executeScript({
@@ -2609,11 +3395,28 @@ async function markPageFillCancelled(tabId, fillRunId, cancelled = true) {
       target: { tabId, allFrames: true },
       args: [fillRunId || "", Boolean(cancelled)],
       func: (runId, isCancelled) => {
-        window.__huntApplyCancelAllFills = isCancelled;
+        const cancelledIds = Array.isArray(window.__huntApplyCancelledFillRunIds)
+          ? window.__huntApplyCancelledFillRunIds
+          : [];
+        window.__huntApplyCancelAllFills = isCancelled && !runId;
         if (runId && isCancelled) {
           window.__huntApplyCancelFillRunId = runId;
+          if (!cancelledIds.includes(runId)) {
+            cancelledIds.push(runId);
+          }
+          window.__huntApplyCancelledFillRunIds = cancelledIds.slice(-25);
         } else if (!isCancelled) {
-          window.__huntApplyCancelFillRunId = "";
+          if (runId) {
+            window.__huntApplyActiveFillRunId = runId;
+            window.__huntApplyCancelledFillRunIds = cancelledIds
+              .filter((id) => id !== runId)
+              .slice(-25);
+            if (window.__huntApplyCancelFillRunId === runId) {
+              window.__huntApplyCancelFillRunId = "";
+            }
+          } else {
+            window.__huntApplyCancelFillRunId = "";
+          }
         }
       },
     });
@@ -2700,7 +3503,7 @@ async function runFillWithOneRefreshRetry(
     }),
   );
   if (isFillRunCancelled(fillRunId)) {
-    return fillCancelledResponse(state);
+    return fillCancelledResponse(state, fillRunCancelReason(fillRunId));
   }
   if (!fillNeedsRefreshRetry(result)) {
     return result;
@@ -2721,7 +3524,7 @@ async function runFillWithOneRefreshRetry(
   );
   await showFillProgress(tabId, "Refreshing page before retry", fillRunId);
   if (isFillRunCancelled(fillRunId)) {
-    return fillCancelledResponse(state);
+    return fillCancelledResponse(state, fillRunCancelReason(fillRunId));
   }
   await chrome.tabs.reload(tabId);
   const reloadResult = await waitForTabReloadComplete(tabId);
@@ -2772,7 +3575,7 @@ async function runFillWithOneRefreshRetry(
     }),
   );
   if (isFillRunCancelled(fillRunId)) {
-    return fillCancelledResponse(state);
+    return fillCancelledResponse(state, fillRunCancelReason(fillRunId));
   }
   retryResult.refreshRetry = {
     attempted: true,
@@ -2901,30 +3704,118 @@ async function handleMessage(message, sender = {}) {
       }
       let result;
       const fillRunId = createFillRunId();
+      const supersededFillRunIds = cancelActiveFillRunsForTab(tabId);
+      activeFillRunByTab.set(tabId, fillRunId);
       activeFillRuns.set(fillRunId, {
         tabId,
         triggeredBy: message.payload?.triggeredBy || "fill_current_page",
         startedAt: new Date().toISOString(),
         cancelled: false,
+        supersededFillRunIds,
       });
+      for (const supersededFillRunId of supersededFillRunIds) {
+        await markPageFillCancelled(tabId, supersededFillRunId, true);
+      }
+      if (supersededFillRunIds.length) {
+        await logActivity(
+          "fill.supersede_previous",
+          "Started a new fill and canceled previous active fill run(s) on this tab.",
+          {
+            tabId,
+            fillRunId,
+            supersededFillRunIds,
+            triggeredBy: message.payload?.triggeredBy || "fill_current_page",
+          },
+          "warn",
+        );
+      }
       await dismissPageTransientUi(tabId);
       await markPageFillCancelled(tabId, fillRunId, false);
       await showFillProgress(tabId, "Filling page", fillRunId);
+      const allowLlmAnswers =
+        state.settings.llmAnswerFallbackEnabled === true &&
+        message.payload?.allowLlmAnswers !== false;
       try {
         result = await runFillWithOneRefreshRetry(
           tabId,
           state,
           message.payload?.triggeredBy || "fill_current_page",
           fillRunId,
-          {
-            allowLlmAnswers:
-              state.settings.llmAnswerFallbackEnabled === true &&
-              message.payload?.allowLlmAnswers !== false,
-          },
+          { allowLlmAnswers },
         );
+        if (
+          shouldRunV2PageWalk(state.settings, result, message.payload || {})
+        ) {
+          result.pageWalk = await runV2PageWalkAfterFill({
+            tabId,
+            state,
+            initialResult: result,
+            fillRunId,
+            triggeredBy: message.payload?.triggeredBy || "fill_current_page",
+            allowLlmAnswers,
+          });
+          result.message =
+            result.pageWalk.stoppedReason === "final_submit_visible"
+              ? `V2 filled ${result.pageWalk.pagesFilled} page${result.pageWalk.pagesFilled === 1 ? "" : "s"} and stopped before final submit.`
+              : `V2 filled ${result.pageWalk.pagesFilled} page${result.pageWalk.pagesFilled === 1 ? "" : "s"}; page walk stopped: ${result.pageWalk.stoppedReason}.`;
+          if (!result.pageWalk.ok) {
+            result.ok = false;
+            result.reason = result.pageWalk.stoppedReason || "page_walk_stopped";
+            if (result.attempt) {
+              result.attempt.status = "manual_review";
+              result.attempt.manualReviewRequired = true;
+              result.attempt.manualReviewReasons = Array.from(
+                new Set([
+                  ...(result.attempt.manualReviewReasons || []),
+                  `page_walk:${result.reason}`,
+                ]),
+              );
+            }
+          }
+          if (result.pageWalk.manualReviewRequired && result.attempt) {
+            result.attempt.manualReviewRequired = true;
+            result.attempt.manualReviewReasons = Array.from(
+              new Set([
+                ...(result.attempt.manualReviewReasons || []),
+                "c3_v2_page_walk_review_items",
+              ]),
+            );
+          }
+        }
       } finally {
+        const stillOwnsPageUi = activeFillRunByTab.get(tabId) === fillRunId;
         activeFillRuns.delete(fillRunId);
-        await hideFillProgress(tabId);
+        if (stillOwnsPageUi) {
+          activeFillRunByTab.delete(tabId);
+          await hideFillProgress(tabId);
+        } else if (result) {
+          result.superseded = true;
+        }
+      }
+      if (result?.superseded || result?.reason === "superseded_by_new_fill") {
+        await sendDebugLog("fill_result", {
+          ok: result.ok,
+          message: result.message,
+          route: result.route,
+          attempt: result.attempt,
+          result: result.result,
+          generatedAnswers: result.generatedAnswers,
+          refreshRetry: result.refreshRetry || null,
+          pageWalk: result.pageWalk || null,
+          superseded: true,
+        });
+        await logActivity(
+          "fill.superseded",
+          "Ignored stale fill result because a newer fill owns this tab.",
+          {
+            fillRunId,
+            tabId,
+            reason: result.reason || "",
+            newerFillRunId: activeFillRunByTab.get(tabId) || "",
+          },
+          "warn",
+        );
+        return result;
       }
       await notePageFillCompleted(tabId, {
         triggeredBy: message.payload?.triggeredBy || "fill_current_page",
@@ -2939,6 +3830,7 @@ async function handleMessage(message, sender = {}) {
         result: result.result,
         generatedAnswers: result.generatedAnswers,
         refreshRetry: result.refreshRetry || null,
+        pageWalk: result.pageWalk || null,
       });
       await logActivity(
         result.cancelled
@@ -2964,6 +3856,8 @@ async function handleMessage(message, sender = {}) {
             80,
           ),
           refreshRetry: result.refreshRetry || null,
+          pageWalk: result.pageWalk || null,
+          v2PermanentIssues: summarizeV2Issues(v2PermanentIssues(result), 20),
           manualReviewRequired: result.attempt?.manualReviewRequired,
         },
         result.ok ? "ok" : "failed",
@@ -2983,6 +3877,10 @@ async function handleMessage(message, sender = {}) {
             () => ({ exported: false, reason: "auto_export_timeout" }),
           )
         : { exported: false, reason: "disabled" };
+      const fillSummaryPayload = buildFillSummaryPayload(result);
+      if (fillSummaryPayload) {
+        await showFillSummary(tabId, fillSummaryPayload);
+      }
       await showPageToast(
         tabId,
         result.cancelled
@@ -3010,12 +3908,16 @@ async function handleMessage(message, sender = {}) {
         });
       }
       if (!result.cancelled) {
-        result.nextAction = await maybeHandleSafeNextAfterFill({
-          tabId,
-          fillResponse: result,
-          settings: state.settings,
-          triggeredBy: message.payload?.triggeredBy || "fill_current_page",
-        });
+        if (result.pageWalk?.enabled) {
+          result.nextAction = result.pageWalk.lastNextAction || null;
+        } else {
+          result.nextAction = await maybeHandleSafeNextAfterFill({
+            tabId,
+            fillResponse: result,
+            settings: state.settings,
+            triggeredBy: message.payload?.triggeredBy || "fill_current_page",
+          });
+        }
       }
       return result;
     }

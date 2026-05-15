@@ -1,5 +1,6 @@
 import {
   createEmptyApplyContext,
+  DEFAULT_BROWSER_CONTEXT,
   DEFAULT_PROFILE,
   DEFAULT_RESUME,
   DEFAULT_SETTINGS,
@@ -18,6 +19,10 @@ function clone(value) {
 
 function clampList(items, maxItems) {
   return items.slice(Math.max(0, items.length - maxItems));
+}
+
+function sameJson(left, right) {
+  return JSON.stringify(left || {}) === JSON.stringify(right || {});
 }
 
 export async function getFromSyncStorage(keys) {
@@ -64,7 +69,9 @@ export function sanitizeSettings(settings = {}) {
     )
       ? Math.min(Math.max(Math.round(emailVerificationTimeoutSeconds), 15), 600)
       : DEFAULT_SETTINGS.emailVerificationTimeoutSeconds,
-    autoClickNextAfterFill: sanitizeBoolean(settings.autoClickNextAfterFill),
+    autoClickNextAfterFill: hasCurrentSettingsVersion
+      ? sanitizeBoolean(settings.autoClickNextAfterFill ?? true)
+      : DEFAULT_SETTINGS.autoClickNextAfterFill,
     fillRequiredOnly: sanitizeBoolean(settings.fillRequiredOnly ?? true),
     autoExportLogs: hasCurrentSettingsVersion
       ? sanitizeBoolean(settings.autoExportLogs)
@@ -94,7 +101,22 @@ export function sanitizeSettings(settings = {}) {
     llmAnswerFallbackEnabled: sanitizeBoolean(
       settings.llmAnswerFallbackEnabled ?? true,
     ),
+    useFieldPipelineV2: hasCurrentSettingsVersion
+      ? sanitizeBoolean(settings.useFieldPipelineV2 ?? true)
+      : DEFAULT_SETTINGS.useFieldPipelineV2,
     stripLongDash: sanitizeBoolean(settings.stripLongDash ?? true),
+  };
+}
+
+export function sanitizeBrowserContext(context = {}) {
+  const name = sanitizeText(context.name) || DEFAULT_BROWSER_CONTEXT.name;
+  return {
+    name,
+    configuredBy:
+      sanitizeText(context.configuredBy) ||
+      DEFAULT_BROWSER_CONTEXT.configuredBy,
+    configuredAt: sanitizeText(context.configuredAt),
+    devtoolsPort: sanitizeText(String(context.devtoolsPort || "")),
   };
 }
 
@@ -106,7 +128,11 @@ export function sanitizeProfile(profile = {}) {
     accountPassword: sanitizeText(profile.accountPassword),
     phone: sanitizeText(profile.phone),
     phoneDeviceType: sanitizeText(profile.phoneDeviceType),
+    phoneCountryCode: sanitizeText(profile.phoneCountryCode),
     location: sanitizeText(profile.location),
+    city: sanitizeText(profile.city),
+    province: sanitizeText(profile.province),
+    country: sanitizeText(profile.country),
     middleName: sanitizeText(profile.middleName),
     addressLine1: sanitizeText(profile.addressLine1),
     addressLine2: sanitizeText(profile.addressLine2),
@@ -152,6 +178,9 @@ export function sanitizeProfile(profile = {}) {
     availableSummer2026: sanitizeText(profile.availableSummer2026),
     availableInterviewWindow: sanitizeText(profile.availableInterviewWindow),
     expectedGraduationYear: sanitizeText(profile.expectedGraduationYear),
+    degreeLevel: sanitizeText(profile.degreeLevel),
+    highestEducation: sanitizeText(profile.highestEducation),
+    preferredEducationIndex: sanitizeText(profile.preferredEducationIndex),
     previousEmployers: sanitizeText(profile.previousEmployers),
     skills: sanitizeTextList(profile.skills, 80),
     languages: sanitizeLanguages(profile.languages),
@@ -309,10 +338,125 @@ export function sanitizeAttempt(attempt = {}) {
     bestEffortWarnings: sanitizeStringArray(attempt.bestEffortWarnings),
     fieldInventory: sanitizeFieldInventory(attempt.fieldInventory),
     interactionTrace: sanitizeInteractionTrace(attempt.interactionTrace),
+    v2Audit: sanitizeV2Audit(attempt.v2Audit),
     traceTruncated: sanitizeBoolean(attempt.traceTruncated),
     htmlSnapshot: sanitizeText(attempt.htmlSnapshot),
     screenshotDataUrl: sanitizeText(attempt.screenshotDataUrl),
     resultSummary: sanitizeText(attempt.resultSummary),
+  };
+}
+
+function sanitizeV2Audit(audit = {}) {
+  if (!audit || typeof audit !== "object" || Array.isArray(audit)) {
+    return {};
+  }
+  return {
+    schemaVersion: sanitizeText(audit.schemaVersion || "c3-v2-audit-1"),
+    runId: sanitizeText(audit.runId),
+    startedAt: sanitizeText(audit.startedAt),
+    completedAt: sanitizeText(audit.completedAt),
+    atsType: sanitizeText(audit.atsType),
+    pageUrl: sanitizeText(audit.pageUrl),
+    mode: sanitizeText(audit.mode),
+    summary: sanitizeActivityDetails(audit.summary || {}),
+    permanentIssues: Array.isArray(audit.permanentIssues)
+      ? audit.permanentIssues.slice(0, 200).map(sanitizeV2Issue)
+      : [],
+    fields: Array.isArray(audit.fields)
+      ? audit.fields.slice(0, 300).map(sanitizeV2FieldAudit)
+      : [],
+    events: Array.isArray(audit.events)
+      ? audit.events.slice(0, 1000).map(sanitizeV2Event)
+      : [],
+  };
+}
+
+function sanitizeV2Issue(issue = {}) {
+  return {
+    kind: sanitizeText(issue.kind),
+    severity: sanitizeText(issue.severity || "info"),
+    questionHash: sanitizeText(issue.questionHash),
+    questionType: sanitizeText(issue.questionType),
+    uiModel: sanitizeText(issue.uiModel),
+    failedStep: sanitizeText(issue.failedStep),
+    reason: sanitizeText(issue.reason),
+    selectorPath: sanitizeText(issue.selectorPath),
+    fieldName: sanitizeText(issue.fieldName),
+    elementType: sanitizeText(issue.elementType),
+    descriptor: sanitizeText(issue.descriptor),
+    options: Array.isArray(issue.options)
+      ? issue.options.map((option) => sanitizeText(option)).slice(0, 80)
+      : [],
+    rect: sanitizeRect(issue.rect),
+    htmlClip: sanitizeText(issue.htmlClip),
+  };
+}
+
+function sanitizeV2FieldAudit(field = {}) {
+  return {
+    fieldId: sanitizeText(field.fieldId),
+    questionHash: sanitizeText(field.questionHash),
+    descriptor: sanitizeText(field.descriptor),
+    questionType: sanitizeText(field.questionType),
+    uiModel: sanitizeText(field.uiModel),
+    element: sanitizeV2Element(field.element),
+    required: sanitizeBoolean(field.required),
+    filled: sanitizeBoolean(field.filled),
+    cleared: sanitizeBoolean(field.cleared),
+    valueSource: sanitizeText(field.valueSource),
+    selectedOption: sanitizeText(field.selectedOption),
+    answerPreview: sanitizeText(field.answerPreview),
+    beforeState: sanitizeActivityDetails(field.beforeState || {}),
+    afterState: sanitizeActivityDetails(field.afterState || {}),
+    steps: Array.isArray(field.steps)
+      ? field.steps.slice(0, 80).map(sanitizeV2Event)
+      : [],
+    issues: Array.isArray(field.issues)
+      ? field.issues.slice(0, 20).map(sanitizeV2Issue)
+      : [],
+  };
+}
+
+function sanitizeV2Event(event = {}) {
+  return {
+    index: Number.isFinite(Number(event.index)) ? Number(event.index) : 0,
+    at: sanitizeText(event.at),
+    action: sanitizeText(event.action),
+    step: sanitizeText(event.step),
+    status: sanitizeText(event.status),
+    reason: sanitizeText(event.reason),
+    fieldId: sanitizeText(event.fieldId),
+    questionHash: sanitizeText(event.questionHash),
+    questionType: sanitizeText(event.questionType),
+    uiModel: sanitizeText(event.uiModel),
+    valueSource: sanitizeText(event.valueSource),
+    selectedOption: sanitizeText(event.selectedOption),
+    detail: sanitizeActivityDetails(event.detail || {}),
+    element: sanitizeV2Element(event.element),
+  };
+}
+
+function sanitizeV2Element(element = {}) {
+  return {
+    tagName: sanitizeText(element.tagName),
+    type: sanitizeText(element.type),
+    id: sanitizeText(element.id),
+    name: sanitizeText(element.name),
+    role: sanitizeText(element.role),
+    ariaLabel: sanitizeText(element.ariaLabel),
+    text: sanitizeText(element.text),
+    selectorPath: sanitizeText(element.selectorPath),
+    rect: sanitizeRect(element.rect),
+    htmlClip: sanitizeText(element.htmlClip),
+  };
+}
+
+function sanitizeRect(rect = {}) {
+  return {
+    top: Number.isFinite(Number(rect?.top)) ? Number(rect.top) : 0,
+    left: Number.isFinite(Number(rect?.left)) ? Number(rect.left) : 0,
+    width: Number.isFinite(Number(rect?.width)) ? Number(rect.width) : 0,
+    height: Number.isFinite(Number(rect?.height)) ? Number(rect.height) : 0,
   };
 }
 
@@ -413,41 +557,71 @@ export async function ensureStageOneState() {
     STORAGE_KEYS.attempts,
     STORAGE_KEYS.questionAnswers,
     STORAGE_KEYS.activityLog,
+    STORAGE_KEYS.browserContext,
   ]);
 
-  const settings = syncState[STORAGE_KEYS.settings]
-    ? sanitizeSettings(syncState[STORAGE_KEYS.settings])
-    : clone(DEFAULT_SETTINGS);
-  const profile = localState[STORAGE_KEYS.profile]
-    ? sanitizeProfile(localState[STORAGE_KEYS.profile])
-    : clone(DEFAULT_PROFILE);
-  const defaultResume = localState[STORAGE_KEYS.defaultResume]
-    ? sanitizeResume(localState[STORAGE_KEYS.defaultResume])
-    : clone(DEFAULT_RESUME);
-  const activeApplyContext = localState[STORAGE_KEYS.activeApplyContext]
-    ? sanitizeApplyContext(localState[STORAGE_KEYS.activeApplyContext])
-    : createEmptyApplyContext();
-  const attempts = Array.isArray(localState[STORAGE_KEYS.attempts])
-    ? localState[STORAGE_KEYS.attempts].map(sanitizeAttempt)
-    : [];
-  const questionAnswers = Array.isArray(
-    localState[STORAGE_KEYS.questionAnswers],
-  )
-    ? localState[STORAGE_KEYS.questionAnswers].map(sanitizeQuestionAnswer)
-    : [];
-  const activityLog = Array.isArray(localState[STORAGE_KEYS.activityLog])
-    ? localState[STORAGE_KEYS.activityLog].map(sanitizeActivityLogEntry)
-    : [];
+  const rawSettings = syncState[STORAGE_KEYS.settings];
+  const rawProfile = localState[STORAGE_KEYS.profile];
+  const rawDefaultResume = localState[STORAGE_KEYS.defaultResume];
+  const rawActiveApplyContext = localState[STORAGE_KEYS.activeApplyContext];
+  const rawAttempts = localState[STORAGE_KEYS.attempts];
+  const rawQuestionAnswers = localState[STORAGE_KEYS.questionAnswers];
+  const rawActivityLog = localState[STORAGE_KEYS.activityLog];
+  const rawBrowserContext = localState[STORAGE_KEYS.browserContext];
 
-  await setInSyncStorage({ [STORAGE_KEYS.settings]: settings });
-  await setInLocalStorage({
-    [STORAGE_KEYS.profile]: profile,
-    [STORAGE_KEYS.defaultResume]: defaultResume,
-    [STORAGE_KEYS.activeApplyContext]: activeApplyContext,
-    [STORAGE_KEYS.attempts]: attempts,
-    [STORAGE_KEYS.questionAnswers]: questionAnswers,
-    [STORAGE_KEYS.activityLog]: activityLog,
-  });
+  const settings = rawSettings
+    ? sanitizeSettings(rawSettings)
+    : clone(DEFAULT_SETTINGS);
+  const profile = rawProfile
+    ? sanitizeProfile(rawProfile)
+    : clone(DEFAULT_PROFILE);
+  const defaultResume = rawDefaultResume
+    ? sanitizeResume(rawDefaultResume)
+    : clone(DEFAULT_RESUME);
+  const activeApplyContext = rawActiveApplyContext
+    ? sanitizeApplyContext(rawActiveApplyContext)
+    : createEmptyApplyContext();
+  const attempts = Array.isArray(rawAttempts)
+    ? rawAttempts.map(sanitizeAttempt)
+    : [];
+  const questionAnswers = Array.isArray(rawQuestionAnswers)
+    ? rawQuestionAnswers.map(sanitizeQuestionAnswer)
+    : [];
+  const activityLog = Array.isArray(rawActivityLog)
+    ? rawActivityLog.map(sanitizeActivityLogEntry)
+    : [];
+  const browserContext = rawBrowserContext
+    ? sanitizeBrowserContext(rawBrowserContext)
+    : clone(DEFAULT_BROWSER_CONTEXT);
+
+  if (!sameJson(rawSettings, settings)) {
+    await setInSyncStorage({ [STORAGE_KEYS.settings]: settings });
+  }
+  const localPatch = {};
+  if (!sameJson(rawProfile, profile)) {
+    localPatch[STORAGE_KEYS.profile] = profile;
+  }
+  if (!sameJson(rawDefaultResume, defaultResume)) {
+    localPatch[STORAGE_KEYS.defaultResume] = defaultResume;
+  }
+  if (!sameJson(rawActiveApplyContext, activeApplyContext)) {
+    localPatch[STORAGE_KEYS.activeApplyContext] = activeApplyContext;
+  }
+  if (!sameJson(rawAttempts, attempts)) {
+    localPatch[STORAGE_KEYS.attempts] = attempts;
+  }
+  if (!sameJson(rawQuestionAnswers, questionAnswers)) {
+    localPatch[STORAGE_KEYS.questionAnswers] = questionAnswers;
+  }
+  if (!sameJson(rawActivityLog, activityLog)) {
+    localPatch[STORAGE_KEYS.activityLog] = activityLog;
+  }
+  if (!sameJson(rawBrowserContext, browserContext)) {
+    localPatch[STORAGE_KEYS.browserContext] = browserContext;
+  }
+  if (Object.keys(localPatch).length) {
+    await setInLocalStorage(localPatch);
+  }
 
   return {
     settings,
@@ -457,6 +631,7 @@ export async function ensureStageOneState() {
     attempts,
     questionAnswers,
     activityLog,
+    browserContext,
   };
 }
 

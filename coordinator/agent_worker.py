@@ -15,6 +15,7 @@ from urllib.request import Request, urlopen
 
 from shared.storage import write_json_artifact
 
+from . import config as coordinator_config
 from .agent_runtime import (
     AgentRuntimeError,
     build_command_preview,
@@ -132,6 +133,8 @@ def write_worker_artifacts(
     token_env_var: str = "HUNT_SERVICE_TOKEN",
     agent_name: str | None = None,
     toolsets: str | None = None,
+    llm_provider: str | None = None,
+    llm_model: str | None = None,
 ) -> dict[str, Any]:
     lease = claim.get("lease") or {}
     lease_id = lease.get("lease_id")
@@ -157,6 +160,8 @@ def write_worker_artifacts(
         prompt_path=prompt_path,
         agent_name=agent_name,
         toolsets=toolsets,
+        llm_provider=llm_provider,
+        llm_model=llm_model,
     )
     return {
         "artifact_dir": str(root),
@@ -200,7 +205,10 @@ def run_external_agent_with_heartbeat(
     error: str | None = None
     exit_code: int | None = None
     try:
-        completed = subprocess.run(command, check=False)
+        env = os.environ.copy()
+        env.setdefault("HERMES_DISABLE_WINDOWS_UTF8", "1")
+        env.setdefault("TERM", "xterm-256color")
+        completed = subprocess.run(command, check=False, env=env)
         exit_code = completed.returncode
     except FileNotFoundError as exc:
         error = str(exc)
@@ -252,6 +260,16 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--agent-name", default=None, help="OpenClaw agent id override.")
     parser.add_argument("--toolsets", default=None, help="Hermes toolsets override.")
     parser.add_argument(
+        "--llm-provider",
+        default=None,
+        help="LLM provider override for the runtime. Defaults to HUNT_C4_LLM_PROVIDER, then HUNT_LLM_PROVIDER, then local Ollama.",
+    )
+    parser.add_argument(
+        "--llm-model",
+        default=None,
+        help="LLM model override for the runtime. Defaults to HUNT_C4_LLM_MODEL, then HUNT_LLM_MODEL.",
+    )
+    parser.add_argument(
         "--execute-agent",
         action="store_true",
         help="Actually launch the selected external agent for this one prompt.",
@@ -273,12 +291,16 @@ def run_once(args: argparse.Namespace) -> dict[str, Any]:
         raise AgentWorkerError(str(exc)) from exc
 
     browser_lane = args.browser_lane or spec.default_browser_lane
+    llm_provider = getattr(args, "llm_provider", None) or coordinator_config.c4_llm_provider()
+    llm_model = getattr(args, "llm_model", None) or coordinator_config.c4_llm_model()
     metadata = {
         "launcher": "coordinator.agent_worker",
         "platform": platform.platform(),
         "python": platform.python_version(),
         "execute_agent": bool(args.execute_agent),
         "mock_result": bool(args.mock_result),
+        "llm_provider": llm_provider,
+        "llm_model": llm_model,
     }
     claim = claim_next_fill_http(
         base_url=args.base_url,
@@ -303,6 +325,8 @@ def run_once(args: argparse.Namespace) -> dict[str, Any]:
         token_env_var=args.service_token_env,
         agent_name=args.agent_name,
         toolsets=args.toolsets,
+        llm_provider=llm_provider,
+        llm_model=llm_model,
     )
     lease_id = claim["lease"]["lease_id"]
     result: dict[str, Any] = {
@@ -313,6 +337,8 @@ def run_once(args: argparse.Namespace) -> dict[str, Any]:
         "fill": claim["fill"],
         "artifacts": artifacts,
         "platform_note": spec.platform_note,
+        "llm_provider": llm_provider,
+        "llm_model": llm_model,
         "agent_executed": False,
     }
 
@@ -334,6 +360,8 @@ def run_once(args: argparse.Namespace) -> dict[str, Any]:
             prompt=prompt,
             agent_name=args.agent_name,
             toolsets=args.toolsets,
+            llm_provider=llm_provider,
+            llm_model=llm_model,
         )
         redacted_command = list(command)
         for index, part in enumerate(redacted_command[:-1]):

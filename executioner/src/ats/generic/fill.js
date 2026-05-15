@@ -30,9 +30,16 @@ export function createGenericFillFunction() {
       });
     };
     var fillCancelled = function () {
+      var cancelledIds = Array.isArray(window.__huntApplyCancelledFillRunIds)
+        ? window.__huntApplyCancelledFillRunIds
+        : [];
       return Boolean(
         window.__huntApplyCancelAllFills ||
-        (fillRunId && window.__huntApplyCancelFillRunId === fillRunId),
+          (fillRunId && window.__huntApplyCancelFillRunId === fillRunId) ||
+          (fillRunId &&
+            window.__huntApplyActiveFillRunId &&
+            window.__huntApplyActiveFillRunId !== fillRunId) ||
+          (fillRunId && cancelledIds.includes(fillRunId)),
       );
     };
     var cancelledResult = function () {

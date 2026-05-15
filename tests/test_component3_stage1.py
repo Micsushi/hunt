@@ -616,14 +616,21 @@ Expected Graduation: Sep 2026
         self.assertIn("emailVerificationBridgeUrl", settings)
         self.assertIn("emailVerificationTimeoutSeconds", settings)
         self.assertIn("autoClickNextAfterFill", settings)
+        self.assertIn("autoClickNextAfterFill: true", settings)
         self.assertIn("fillRequiredOnly", settings)
-        self.assertIn("settingsVersion", settings)
+        self.assertIn("settingsVersion: 6", settings)
+        self.assertIn("browserContext", settings)
+        self.assertIn("DEFAULT_BROWSER_CONTEXT", settings)
         self.assertIn("autoExportLogs", settings)
         self.assertIn("debugLogSinkEnabled", settings)
         self.assertIn("accountEmail", settings)
         self.assertIn("accountPassword", settings)
         self.assertIn("phoneDeviceType", settings)
+        self.assertIn("phoneCountryCode", settings)
         self.assertIn("middleName", settings)
+        self.assertIn("city", settings)
+        self.assertIn("province", settings)
+        self.assertIn("country", settings)
         self.assertIn("addressLine1", settings)
         self.assertIn("addressLine2", settings)
         self.assertIn("postalCode", settings)
@@ -631,6 +638,10 @@ Expected Graduation: Sep 2026
         self.assertIn("applicationSourceCategory", settings)
         self.assertIn("applicationSourceDetail", settings)
         self.assertIn("profile-phone-device-type", options)
+        self.assertIn("profile-phone-country-code", options)
+        self.assertIn("profile-city", options)
+        self.assertIn("profile-province", options)
+        self.assertIn("profile-country", options)
         self.assertIn("profile-application-source-category", options)
         self.assertIn("coOpTermsCompleted", settings)
         self.assertIn("workExperience", settings)
@@ -648,13 +659,25 @@ Expected Graduation: Sep 2026
         self.assertIn("disclosureVisibleMinority", settings)
         self.assertIn("disclosureVeteranStatus", settings)
         self.assertIn("llmAnswerFallbackEnabled", settings)
+        self.assertIn("useFieldPipelineV2", settings)
+        self.assertIn("useFieldPipelineV2: true", settings)
+        self.assertIn("degreeLevel", settings)
+        self.assertIn("highestEducation", settings)
+        self.assertIn("preferredEducationIndex", settings)
         self.assertIn("autoExportLogPrefix", settings)
         self.assertIn("backendUrl", settings)
         self.assertIn("serviceToken", settings)
         self.assertIn("pollIntervalSeconds", storage)
         self.assertIn("emailVerificationBridgeUrl", storage)
         self.assertIn("sanitizeText(profile.middleName)", storage)
+        self.assertIn("sanitizeText(profile.phoneCountryCode)", storage)
+        self.assertIn("sanitizeV2Audit", storage)
+        self.assertIn("sanitizeBrowserContext", storage)
+        self.assertIn("STORAGE_KEYS.browserContext", storage)
         self.assertIn("autoClickNextAfterFill", storage)
+        self.assertIn("function sameJson", storage)
+        self.assertIn("const localPatch = {}", storage)
+        self.assertIn("if (Object.keys(localPatch).length)", storage)
         self.assertIn("fetchPendingFills", api)
         self.assertIn("/api/c3/pending-fills", api)
         self.assertIn("/api/c3/fill-result", api)
@@ -665,6 +688,13 @@ Expected Graduation: Sep 2026
         self.assertIn("hunt.apply.poll_c4_once", background)
         self.assertIn("hunt.apply.click_next_after_fill", background)
         self.assertIn("createSafeNextFunction", background)
+        self.assertIn("V2_PAGE_WALK_MAX_PAGES", background)
+        self.assertIn("runV2PageWalkAfterFill", background)
+        self.assertIn("c3_v2_page_walk", background)
+        self.assertIn("c3_v2_clear_audit", background)
+        self.assertIn("function v2ReviewIssues", background)
+        self.assertIn('"warn", "blocked", "error"', background)
+        self.assertIn("clearCurrentPageV2", background)
         self.assertIn('id="c4-polling-enabled"', options)
         self.assertIn('id="poll-c4-once"', options)
         self.assertIn('id="auto-prompt-enabled"', options)
@@ -676,6 +706,7 @@ Expected Graduation: Sep 2026
         self.assertIn('id="fill-required-only"', options)
         self.assertIn('id="auto-export-logs"', options)
         self.assertIn('id="debug-log-sink-enabled"', options)
+        self.assertIn('id="use-field-pipeline-v2"', options)
         self.assertIn('id="auto-export-log-prefix"', options)
         self.assertIn('id="profile-account-email"', options)
         self.assertIn('id="profile-account-password"', options)
@@ -697,6 +728,9 @@ Expected Graduation: Sep 2026
         self.assertIn('id="profile-disclosure-indigenous"', options)
         self.assertIn('id="profile-disclosure-visible-minority"', options)
         self.assertIn('id="profile-disclosure-veteran"', options)
+        self.assertIn('id="profile-degree-level"', options)
+        self.assertIn('id="profile-highest-education"', options)
+        self.assertIn('id="profile-preferred-education-index"', options)
         self.assertIn("max-height: min(420px, 52vh)", options)
         options_js = (REPO_ROOT / "executioner" / "src" / "options" / "options.js").read_text(
             encoding="utf-8"
@@ -710,6 +744,50 @@ Expected Graduation: Sep 2026
         self.assertIn("utf8Base64", background)
         self.assertNotIn("URL.createObjectURL", background)
         self.assertIn("showPageToast", background)
+        self.assertIn("debugIdentityForState", background)
+        self.assertIn('pipelineVersion: settings.useFieldPipelineV2 ? "v2" : "v1"', background)
+        self.assertIn('browserContext: browserContext.name || "normal_chrome"', background)
+        fill_runner = (
+            REPO_ROOT / "executioner" / "src" / "background" / "fill-runner.js"
+        ).read_text(encoding="utf-8")
+        self.assertIn("workday-ui-v2.js", fill_runner)
+        self.assertIn("workday-drivers-v2.js", fill_runner)
+        self.assertIn("workday-repeatables-v2.js", fill_runner)
+        self.assertIn("workday-repeatables-v2.js", background)
+        workday_ui_v2 = (
+            REPO_ROOT / "executioner" / "src" / "ats" / "workday" / "workday-ui-v2.js"
+        ).read_text(encoding="utf-8")
+        workday_drivers_v2 = (
+            REPO_ROOT / "executioner" / "src" / "ats" / "workday" / "workday-drivers-v2.js"
+        ).read_text(encoding="utf-8")
+        workday_repeatables_v2 = (
+            REPO_ROOT / "executioner" / "src" / "ats" / "workday" / "workday-repeatables-v2.js"
+        ).read_text(encoding="utf-8")
+        field_pipeline_v2 = (
+            REPO_ROOT / "executioner" / "src" / "shared" / "v2" / "field-pipeline.js"
+        ).read_text(encoding="utf-8")
+        self.assertIn("phone_country_code", workday_ui_v2)
+        self.assertIn("workday_search_select", workday_ui_v2)
+        self.assertIn("workday_popup_options_missing", workday_drivers_v2)
+        self.assertIn("workday_commit_not_verified", workday_drivers_v2)
+        self.assertIn("workday_selected_item_clear", workday_drivers_v2)
+        self.assertIn("fillWorkdayRepeatables", workday_repeatables_v2)
+        self.assertIn("clearWorkdayRepeatables", workday_repeatables_v2)
+        self.assertIn("workday_repeatables_fill", workday_repeatables_v2)
+        self.assertIn("workday_repeatables_clear", workday_repeatables_v2)
+        self.assertIn("clearResumeUpload", workday_repeatables_v2)
+        self.assertIn("deleteAllRows", workday_repeatables_v2)
+        self.assertIn("collectNonRepeatableWorkdayCandidates", workday_repeatables_v2)
+        self.assertIn("isRepeatableElement", workday_repeatables_v2)
+        self.assertIn("fillDatePairs", workday_repeatables_v2)
+        self.assertIn("commitValue(control)", workday_repeatables_v2)
+        self.assertIn("entry.job_title", workday_repeatables_v2)
+        self.assertIn("entry.company_name", workday_repeatables_v2)
+        self.assertIn("activeApplyContext,\n    defaultResume", field_pipeline_v2)
+        self.assertIn("activeApplyContext: activeApplyContext || {}", field_pipeline_v2)
+        self.assertIn("defaultResume: defaultResume || {}", field_pipeline_v2)
+        self.assertIn("activeApplyContext: context.activeApplyContext || {}", field_pipeline_v2)
+        self.assertIn("defaultResume: context.defaultResume || {}", field_pipeline_v2)
         self.assertIn("looksLikeUploadedFile", background)
         self.assertIn("sendDebugLog", background)
         self.assertIn("requestBackendAnswerDecisions", fill_runner)
@@ -763,7 +841,28 @@ Expected Graduation: Sep 2026
         self.assertIn("attachPendingLlmSummary", fill_runner)
         self.assertIn("markInventoryFilledByDecision", fill_runner)
         self.assertIn("pendingLlmFields", fill_runner)
-        self.assertIn("entry.filled && entry.bestEffortWarning", fill_runner)
+        self.assertIn("SCREENSHOT_CAPTURE_TIMEOUT_MS", fill_runner)
+        self.assertIn("Promise.race", fill_runner)
+        self.assertIn("chrome.tabs.captureVisibleTab", fill_runner)
+        self.assertIn("capture_visible_tab_timeout", fill_runner)
+        self.assertIn("persistenceDiagnostics", fill_runner)
+        self.assertIn("debugIdentityForState(context.extensionState)", fill_runner)
+        self.assertIn("FILL_ADAPTERS_V2", fill_runner)
+        self.assertIn("v2_fill_cancelled", field_pipeline_v2)
+        self.assertIn("__huntApplyActiveFillRunId", field_pipeline_v2)
+        self.assertIn("__huntApplyCancelledFillRunIds", field_pipeline_v2)
+        self.assertIn("src/shared/v2/audit.js", fill_runner)
+        self.assertIn("c3_v2_audit", fill_runner)
+        self.assertIn("v2Audit", fill_runner)
+        self.assertIn("filledTextNeedsBackendRepair", fill_runner)
+        self.assertIn("generated_or_placeholder_text_fallback", fill_runner)
+        self.assertIn("filled required unknown textbox with fallback text", fill_runner)
+        self.assertNotIn("Boolean(warning) ||", fill_runner)
+        self.assertIn("entry.filled && isFallbackFill", fill_runner)
+        self.assertIn('valueSource.startsWith("fallback:")', fill_runner)
+        self.assertIn('tagName === "TEXTAREA"', fill_runner)
+        self.assertIn("bestEffortWarning", fill_runner)
+        self.assertIn("c3_backend_answer_inventory", fill_runner)
         self.assertIn("realisticOptionClick", fill_runner)
         self.assertIn('button[aria-haspopup="listbox"]', fill_runner)
         self.assertIn("decisionById", fill_runner)
@@ -797,12 +896,268 @@ Expected Graduation: Sep 2026
         self.assertIn('state.source === "input"', shared_utils)
         self.assertNotIn("window.confirm", popup_js)
         self.assertIn("postDebugLog", background)
+        self.assertIn("localActivityLogSkipped", background)
+        self.assertIn("C3 activity log storage failed", background)
         self.assertIn("fill_result", background)
         self.assertIn("No default resume is saved", background)
         self.assertIn('@app.post("/api/c3/debug-log")', backend_app)
         self.assertIn('@app.post("/api/c3/answer-decision")', backend_app)
         self.assertIn('@app.get("/api/c3/llm-status")', backend_app)
         self.assertIn("c3_extension_debug.jsonl", backend_app)
+        configure_debug = (
+            REPO_ROOT / "scripts" / "configure_c3_debug_sink.js"
+        ).read_text(encoding="utf-8")
+        self.assertIn('const BROWSER_CONTEXT_KEY = "hunt.apply.browserContext"', configure_debug)
+        self.assertIn('name: "p_chrome"', configure_debug)
+        self.assertIn('pipelineVersion: next.useFieldPipelineV2 ? "v2" : "v1"', configure_debug)
+        self.assertIn("browserContext: result.browserContext", configure_debug)
+
+    def test_v2_question_identifier_prefers_work_authorization_over_country(self):
+        catalog_path = REPO_ROOT / "executioner" / "src" / "shared" / "v2" / "field-catalog.js"
+        identifier_path = (
+            REPO_ROOT / "executioner" / "src" / "shared" / "v2" / "question-identifier.js"
+        )
+        resolver_path = (
+            REPO_ROOT / "executioner" / "src" / "shared" / "v2" / "answer-resolver.js"
+        )
+        script = f"""
+            const fs = require("node:fs");
+            const vm = require("node:vm");
+            const context = {{ window: {{ __huntV2: {{}} }} }};
+            vm.createContext(context);
+            vm.runInContext(fs.readFileSync({json.dumps(str(catalog_path))}, "utf8"), context);
+            vm.runInContext(fs.readFileSync({json.dumps(str(identifier_path))}, "utf8"), context);
+            vm.runInContext(fs.readFileSync({json.dumps(str(resolver_path))}, "utf8"), context);
+            const root = context.window.__huntV2;
+            const field = {{
+              workday: {{
+                fieldLabel: "Are you legally entitled to work in the country the job is located in ?*"
+              }},
+              fieldId: "primaryQuestionnaire--workAuth",
+              descriptor: "Are you legally entitled to work in the country the job is located in ?* Select One"
+            }};
+            const question = root.questionIdentifier.identifyQuestion(field, null, null);
+            const answer = root.answerResolver.resolveAnswer({{
+              question,
+              field,
+              profile: {{ workAuthorized: true }},
+              audit: null,
+              fieldAudit: null
+            }});
+            console.log(JSON.stringify({{
+              type: question.type,
+              source: question.source,
+              value: answer.value,
+              valueSource: answer.source
+            }}));
+        """
+        try:
+            result = subprocess.run(
+                ["node", "-e", script],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+        except FileNotFoundError:
+            self.skipTest("node is required to test the C3 V2 question identifier")
+
+        self.assertEqual(
+            json.loads(result.stdout),
+            {
+                "type": "work_authorized",
+                "source": "alias",
+                "value": "Yes",
+                "valueSource": "profile:workAuthorized",
+            },
+        )
+
+    def test_v2_terms_checkbox_is_deterministic_affirmative(self):
+        paths = [
+            REPO_ROOT / "executioner" / "src" / "shared" / "v2" / "field-catalog.js",
+            REPO_ROOT / "executioner" / "src" / "shared" / "v2" / "question-identifier.js",
+            REPO_ROOT / "executioner" / "src" / "shared" / "v2" / "answer-resolver.js",
+            REPO_ROOT / "executioner" / "src" / "shared" / "v2" / "option-matcher.js",
+        ]
+        script = f"""
+            const fs = require("node:fs");
+            const vm = require("node:vm");
+            const context = {{ window: {{ __huntV2: {{}} }} }};
+            vm.createContext(context);
+            for (const path of {json.dumps([str(path) for path in paths])}) {{
+              vm.runInContext(fs.readFileSync(path, "utf8"), context);
+            }}
+            const root = context.window.__huntV2;
+            const field = {{
+              workday: {{
+                fieldLabel: "Yes, I have read and consent to the terms and conditions*"
+              }},
+              fieldId: "termsAndConditions--acceptTermsAndAgreements",
+              descriptor: "Yes, I have read and consent to the terms and conditions*",
+              uiModel: "checkbox"
+            }};
+            const question = root.questionIdentifier.identifyQuestion(field, null, null);
+            const answer = root.answerResolver.resolveAnswer({{
+              question,
+              field,
+              profile: {{}},
+              audit: null,
+              fieldAudit: null
+            }});
+            const match = root.optionMatcher.matchOption({{
+              options: [{{ label: field.descriptor, value: field.descriptor }}],
+              answer,
+              field,
+              audit: null,
+              fieldAudit: null
+            }});
+            console.log(JSON.stringify({{
+              type: question.type,
+              answer: answer.value,
+              valueSource: answer.source,
+              optionSource: match.source,
+              fallback: match.fallback
+            }}));
+        """
+        try:
+            result = subprocess.run(
+                ["node", "-e", script],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+        except FileNotFoundError:
+            self.skipTest("node is required to test the C3 V2 checkbox matcher")
+
+        self.assertEqual(
+            json.loads(result.stdout),
+            {
+                "type": "terms_acceptance",
+                "answer": "Yes",
+                "valueSource": "default:terms_acceptance",
+                "optionSource": "affirmative_checkbox",
+                "fallback": False,
+            },
+        )
+
+    def test_v2_salary_textarea_uses_profile_range_before_fallback(self):
+        paths = [
+            REPO_ROOT / "executioner" / "src" / "shared" / "v2" / "field-catalog.js",
+            REPO_ROOT / "executioner" / "src" / "shared" / "v2" / "question-identifier.js",
+            REPO_ROOT / "executioner" / "src" / "shared" / "v2" / "answer-resolver.js",
+        ]
+        script = f"""
+            const fs = require("node:fs");
+            const vm = require("node:vm");
+            const context = {{ window: {{ __huntV2: {{}} }} }};
+            vm.createContext(context);
+            for (const path of {json.dumps([str(path) for path in paths])}) {{
+              vm.runInContext(fs.readFileSync(path, "utf8"), context);
+            }}
+            const root = context.window.__huntV2;
+            const field = {{
+              workday: {{
+                fieldLabel: "Please indicate your desired salary range.*"
+              }},
+              fieldId: "primaryQuestionnaire--salary",
+              descriptor: "Please indicate your desired salary range.*",
+              tagName: "TEXTAREA",
+              uiModel: "textarea",
+              required: true
+            }};
+            const question = root.questionIdentifier.identifyQuestion(field, null, null);
+            const answer = root.answerResolver.resolveAnswer({{
+              question,
+              field,
+              profile: {{ salaryExpectationRange: "90,000 - 105,000" }},
+              audit: null,
+              fieldAudit: null
+            }});
+            console.log(JSON.stringify({{
+              type: question.type,
+              source: question.source,
+              value: answer.value,
+              valueSource: answer.source
+            }}));
+        """
+        try:
+            result = subprocess.run(
+                ["node", "-e", script],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+        except FileNotFoundError:
+            self.skipTest("node is required to test the C3 V2 salary resolver")
+
+        self.assertEqual(
+            json.loads(result.stdout),
+            {
+                "type": "salary_expectation",
+                "source": "alias",
+                "value": "90,000 - 105,000",
+                "valueSource": "profile:salaryExpectationRange",
+            },
+        )
+
+    def test_v2_salary_textarea_has_default_when_profile_is_blank(self):
+        paths = [
+            REPO_ROOT / "executioner" / "src" / "shared" / "v2" / "field-catalog.js",
+            REPO_ROOT / "executioner" / "src" / "shared" / "v2" / "question-identifier.js",
+            REPO_ROOT / "executioner" / "src" / "shared" / "v2" / "answer-resolver.js",
+        ]
+        script = f"""
+            const fs = require("node:fs");
+            const vm = require("node:vm");
+            const context = {{ window: {{ __huntV2: {{}} }} }};
+            vm.createContext(context);
+            for (const path of {json.dumps([str(path) for path in paths])}) {{
+              vm.runInContext(fs.readFileSync(path, "utf8"), context);
+            }}
+            const root = context.window.__huntV2;
+            const field = {{
+              workday: {{
+                fieldLabel: "Please indicate your desired salary range.*"
+              }},
+              fieldId: "primaryQuestionnaire--salary",
+              descriptor: "Please indicate your desired salary range.*",
+              tagName: "TEXTAREA",
+              uiModel: "textarea",
+              required: true
+            }};
+            const question = root.questionIdentifier.identifyQuestion(field, null, null);
+            const answer = root.answerResolver.resolveAnswer({{
+              question,
+              field,
+              profile: {{}},
+              audit: null,
+              fieldAudit: null
+            }});
+            console.log(JSON.stringify({{
+              type: question.type,
+              value: answer.value,
+              valueSource: answer.source,
+              confidence: answer.confidence
+            }}));
+        """
+        try:
+            result = subprocess.run(
+                ["node", "-e", script],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+        except FileNotFoundError:
+            self.skipTest("node is required to test the C3 V2 salary resolver")
+
+        self.assertEqual(
+            json.loads(result.stdout),
+            {
+                "type": "salary_expectation",
+                "value": "90,000 - 105,000",
+                "valueSource": "default:salaryExpectationRange",
+                "confidence": 0.72,
+            },
+        )
 
     def test_extension_has_detected_page_prompt_for_signup_and_ats_pages(self):
         content = (REPO_ROOT / "executioner" / "src" / "content" / "bootstrap.js").read_text(
@@ -837,6 +1192,8 @@ Expected Graduation: Sep 2026
         self.assertIn("hunt.apply.show_toast", content)
         self.assertIn("hunt-apply-page-toasts", content)
         self.assertIn("hunt.apply.show_fill_progress", content)
+        self.assertIn("hunt.apply.show_fill_summary", content)
+        self.assertIn("hunt-apply-fill-summary", content)
         self.assertIn("hunt.apply.hide_fill_progress", content)
         self.assertIn("hunt.apply.dismiss_transient_ui", content)
         self.assertIn("MutationObserver", content)
@@ -865,6 +1222,7 @@ Expected Graduation: Sep 2026
         self.assertIn('id="next-go"', popup)
         self.assertIn('id="next-always"', popup)
         self.assertIn('id="clear-page"', popup)
+        self.assertIn('id="reload-extension"', popup)
         self.assertNotIn('id="poll-c4-once"', popup)
         self.assertNotIn('id="clear-context"', popup)
         self.assertIn("sender.tab?.id", background)
@@ -876,6 +1234,8 @@ Expected Graduation: Sep 2026
         self.assertIn("await showFillProgress(tabId", background)
         self.assertIn("await hideFillProgress(tabId)", background)
         self.assertIn('triggeredBy: "popup_fill_current_page"', popup_js)
+        self.assertIn("Extension reload requested from popup.", popup_js)
+        self.assertIn("chrome.runtime.reload()", popup_js)
         self.assertIn("window.close()", popup_js)
         self.assertIn("page.clear", background)
         self.assertIn("allFrames: true", background)
@@ -897,6 +1257,8 @@ Expected Graduation: Sep 2026
         self.assertIn("safe_next_probe_timeout", background)
         self.assertIn("Safe Next check timed out.", background)
         self.assertIn("visible_validation_errors", safe_next)
+        self.assertIn("visibleValidationErrors: probe.visibleValidationErrors || []", background)
+        self.assertIn("visibleValidationErrors: nextAction.visibleValidationErrors || []", background)
         self.assertIn("exactFieldKey", workday)
         self.assertIn("preferredcheck", workday)
         self.assertIn("phonenumber--extension", workday)
@@ -1099,7 +1461,7 @@ Expected Graduation: Sep 2026
         self.assertIn("http://127.0.0.1:8765/verify-email", background)
         self.assertIn('require("./lib/c3_gmail_oauth")', bridge)
         self.assertIn('require("./lib/c3_gmail_oauth")', gmail_oauth_smoke)
-        self.assertIn("settingsVersion: 4", configure_sink)
+        self.assertIn("settingsVersion: 6", configure_sink)
         self.assertIn("class CdpClient", cdp_lib)
         self.assertIn("function httpJson", cdp_lib)
         self.assertIn("function tokenPathFor", gmail_oauth_lib)

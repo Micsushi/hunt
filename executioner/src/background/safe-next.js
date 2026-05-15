@@ -58,6 +58,19 @@ export function chooseBestSafeNextFrame(scriptResults = []) {
     };
   }
 
+  const stopped = frameResults.find(
+    (entry) =>
+      entry.result?.reason && entry.result.reason !== "no_safe_next_button",
+  );
+  if (stopped) {
+    return {
+      ok: false,
+      available: false,
+      frameId: stopped.frameId,
+      ...stopped.result,
+    };
+  }
+
   return {
     ok: false,
     available: false,
@@ -276,6 +289,7 @@ export function createSafeNextFunction() {
           var text = normalizeText(el.innerText || el.textContent || "");
           return (
             text &&
+            !/successfully uploaded/i.test(text) &&
             style.display !== "none" &&
             style.visibility !== "hidden" &&
             rect.width > 0 &&

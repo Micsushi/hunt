@@ -4,6 +4,7 @@ import os
 from pathlib import Path
 from typing import Any
 
+from shared.llm import config as llm_config
 from shared.paths import REPO_ROOT
 
 try:
@@ -51,10 +52,14 @@ SECTION_ORDER = (
 )
 
 # heuristic: fast local rules only. ollama: refine classification + keywords via local Ollama (/api/chat).
-DEFAULT_MODEL_BACKEND = os.getenv("HUNT_RESUME_MODEL_BACKEND", "heuristic").strip().lower()
+DEFAULT_MODEL_BACKEND = llm_config.normalize_provider(
+    os.getenv("HUNT_RESUME_MODEL_BACKEND") or os.getenv("HUNT_LLM_PROVIDER") or "ollama"
+)
 _INITIAL_DEFAULT_MODEL_BACKEND = DEFAULT_MODEL_BACKEND
 DEFAULT_MODEL_NAME = os.getenv("HUNT_RESUME_MODEL_NAME", "deterministic-stage1")
-RESUME_LLM_PROVIDER = os.getenv("HUNT_RESUME_LLM_PROVIDER", DEFAULT_MODEL_BACKEND).strip().lower()
+RESUME_LLM_PROVIDER = llm_config.normalize_provider(
+    os.getenv("HUNT_RESUME_LLM_PROVIDER") or DEFAULT_MODEL_BACKEND
+)
 RESUME_LLM_MODEL = os.getenv("HUNT_RESUME_LLM_MODEL", "").strip()
 RESUME_LLM_TIMEOUT_SEC = float(os.getenv("HUNT_RESUME_LLM_TIMEOUT_SEC", "300"))
 OLLAMA_HOST = os.getenv("HUNT_OLLAMA_HOST", "http://127.0.0.1:11434").rstrip("/")
@@ -133,29 +138,69 @@ def resume_llm_provider() -> str:
         and DEFAULT_MODEL_BACKEND in {"heuristic", "none"}
     ):
         return DEFAULT_MODEL_BACKEND
-    provider = resume_runtime_setting("llm_provider", "HUNT_RESUME_LLM_PROVIDER", "")
-    if provider:
-        return provider.lower()
-    legacy = resume_runtime_setting(
-        "model_backend", "HUNT_RESUME_MODEL_BACKEND", DEFAULT_MODEL_BACKEND
+    choice = llm_config.choose_provider(
+        component="c2",
+        setting_lookup=_setting_value,
+        setting_key="llm_provider",
+        legacy_env_names=("HUNT_RESUME_LLM_PROVIDER", "HUNT_RESUME_MODEL_BACKEND"),
+        legacy_default=DEFAULT_MODEL_BACKEND,
+        default="ollama",
     )
-    return "ollama" if legacy.lower() == "ollama" else "heuristic"
+    if choice.source in {"HUNT_RESUME_MODEL_BACKEND", "legacy_default"}:
+        return "ollama" if choice.provider == "ollama" else "heuristic"
+    return choice.provider
+
+
+def c3_llm_provider() -> str:
+    choice = llm_config.choose_provider(
+        component="c3",
+        setting_lookup=None,
+        legacy_env_names=("HUNT_C3_ANSWER_LLM_PROVIDER",),
+        legacy_default="",
+        default=resume_llm_provider(),
+    )
+    return choice.provider
 
 
 def resume_llm_model(task_name: str | None = None) -> str:
-    if task_name:
-        value = resume_runtime_setting(
-            f"{task_name.lower()}_model",
-            f"HUNT_RESUME_{task_name.upper()}_MODEL",
-            "",
-        )
-        if value:
-            return value
-    return resume_runtime_setting("llm_model", "HUNT_RESUME_LLM_MODEL", RESUME_LLM_MODEL)
+    return llm_config.choose_model(
+        component="c2",
+        task_name=task_name,
+        setting_lookup=_setting_value,
+        setting_key="llm_model",
+        legacy_env_names=(
+            *((f"HUNT_RESUME_{task_name.upper()}_MODEL",) if task_name else ()),
+            "HUNT_RESUME_LLM_MODEL",
+        ),
+        default=RESUME_LLM_MODEL,
+    )
+
+
+def c3_llm_model(task_name: str | None = None) -> str:
+    return llm_config.choose_model(
+        component="c3",
+        task_name=task_name,
+        legacy_env_names=("HUNT_C3_ANSWER_LLM_MODEL",),
+        default=resume_llm_model(task_name),
+    )
 
 
 def resume_cloud_llm_confirmed() -> bool:
-    return resume_runtime_bool("cloud_llm_confirm", "HUNT_RESUME_CLOUD_LLM_CONFIRM", False)
+    return llm_config.cloud_confirmed(
+        component="c2",
+        setting_lookup=_setting_value,
+        setting_key="cloud_llm_confirm",
+        legacy_env_names=("HUNT_RESUME_CLOUD_LLM_CONFIRM",),
+        default=False,
+    )
+
+
+def c3_cloud_llm_confirmed() -> bool:
+    return llm_config.cloud_confirmed(
+        component="c3",
+        legacy_env_names=("HUNT_C3_ANSWER_CLOUD_LLM_CONFIRM",),
+        default=resume_cloud_llm_confirmed(),
+    )
 
 
 def resume_provider_api_key(provider: str, env_name: str) -> str:

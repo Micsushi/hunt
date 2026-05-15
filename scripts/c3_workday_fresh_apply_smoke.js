@@ -38,6 +38,7 @@ function parseArgs(argv) {
     workdayUrl: process.env.HUNT_C3_TEST_WORKDAY_URL || "",
     accountEmail: process.env.HUNT_C3_TEST_ACCOUNT_EMAIL || "",
     accountPassword: process.env.HUNT_C3_TEST_ACCOUNT_PASSWORD || "",
+    accountMethod: process.env.HUNT_C3_ACCOUNT_METHOD || "email",
     resumePath: path.resolve(process.cwd(), "main.pdf"),
     maxPages: 8,
     fillsPerPage: 2,
@@ -65,6 +66,9 @@ function parseArgs(argv) {
       i += 1;
     } else if (arg === "--account-password" && next) {
       args.accountPassword = next;
+      i += 1;
+    } else if (arg === "--account-method" && next) {
+      args.accountMethod = next;
       i += 1;
     } else if (arg === "--resume" && next) {
       args.resumePath = path.resolve(process.cwd(), next);
@@ -108,6 +112,7 @@ function usage() {
     "  --workday-url <url>           Workday job/apply URL",
     "  --account-email <email>       Optional test account email override",
     "  --account-password <pass>     Optional test account password override",
+    "  --account-method <method>     email or google, default env or email",
     "  --resume <path>               PDF resume, default main.pdf",
     "  --max-pages <n>               Page cap for application walk, default 8",
     "  --fills-per-page <n>          Fill passes per page, default 2",
@@ -234,6 +239,8 @@ async function main() {
       String(args.cdpPort),
       "--workday-url",
       args.workdayUrl,
+      "--account-method",
+      args.accountMethod,
     ];
     if (args.accountEmail) {
       bootstrapArgs.push("--account-email", args.accountEmail);

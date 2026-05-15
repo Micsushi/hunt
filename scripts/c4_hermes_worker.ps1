@@ -2,6 +2,8 @@ param(
     [string]$Runtime = "hermes_local",
     [string]$BaseUrl = $(if ($env:HUNT_COORDINATOR_BASE_URL) { $env:HUNT_COORDINATOR_BASE_URL } else { "http://127.0.0.1:8003" }),
     [string]$BrowserLane = "",
+    [string]$LlmProvider = "",
+    [string]$LlmModel = "",
     [int]$LeaseSeconds = 900,
     [switch]$ExecuteAgent,
     [switch]$MockResult
@@ -16,6 +18,12 @@ $argsList = @(
 )
 if ($BrowserLane) {
     $argsList += @("--browser-lane", $BrowserLane)
+}
+if ($LlmProvider) {
+    $argsList += @("--llm-provider", $LlmProvider)
+}
+if ($LlmModel) {
+    $argsList += @("--llm-model", $LlmModel)
 }
 if ($ExecuteAgent) {
     $argsList += "--execute-agent"

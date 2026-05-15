@@ -12,6 +12,7 @@ const DEFAULT_PORT = 9222;
 const DEFAULT_EXTENSION_ID = "cbdmkibihimaedoihjhpidclolglnncc";
 const SETTINGS_KEY = "hunt.apply.settings";
 const PROFILE_KEY = "hunt.apply.profile";
+const BROWSER_CONTEXT_KEY = "hunt.apply.browserContext";
 
 function parseArgs(argv) {
   const args = {
@@ -20,6 +21,7 @@ function parseArgs(argv) {
     extensionId: process.env.HUNT_C3_EXTENSION_ID || DEFAULT_EXTENSION_ID,
     envFile: ".env",
     seedWorkdayProfile: false,
+    autoNext: false,
     test: true,
   };
   for (let idx = 0; idx < argv.length; idx += 1) {
@@ -34,6 +36,10 @@ function parseArgs(argv) {
       args.envFile = argv[++idx] || args.envFile;
     } else if (arg === "--seed-workday-profile") {
       args.seedWorkdayProfile = true;
+    } else if (arg === "--auto-next") {
+      args.autoNext = true;
+    } else if (arg === "--no-auto-next") {
+      args.autoNext = false;
     } else if (arg === "--no-test") {
       args.test = false;
     } else if (arg === "--help" || arg === "-h") {
@@ -59,6 +65,8 @@ function usage() {
       "  --env-file <path>    Env file fallback. Default: .env",
       "  --port <port>        Chrome DevTools port. Default: 9222",
       "  --seed-workday-profile Seed p chrome profile defaults for Workday testing",
+      "  --auto-next         Enable extension auto-next/page walk for full-flow testing",
+      "  --no-auto-next      Keep fill on the current page for direct debugging. Default",
       "  --no-test            Do not post a test debug-log entry",
     ].join("\n"),
   );
@@ -221,13 +229,27 @@ function js(value) {
   return JSON.stringify(value);
 }
 
-function findExtensionPage(targets) {
+function findExtensionPage(targets, extensionId) {
   return targets.find((target) =>
-    String(target.url || "").includes("/src/options/options.html"),
+    String(target.url || "").startsWith(
+      `chrome-extension://${extensionId}/src/options/options.html`,
+    ),
   );
 }
 
 function findExtensionId(targets, fallbackExtensionId) {
+  const huntWorker = targets.find((target) =>
+    String(target.url || "").includes("/src/background/index.js"),
+  );
+  const huntMatch = String(huntWorker?.url || "").match(
+    /^chrome-extension:\/\/([^/]+)/,
+  );
+  if (huntMatch) {
+    return huntMatch[1];
+  }
+  if (fallbackExtensionId) {
+    return fallbackExtensionId;
+  }
   for (const target of targets) {
     const match = String(target.url || "").match(
       /^chrome-extension:\/\/([^/]+)/,
@@ -240,15 +262,15 @@ function findExtensionId(targets, fallbackExtensionId) {
 }
 
 async function ensureExtensionPage(port, targets, fallbackExtensionId) {
-  const existing = findExtensionPage(targets);
+  const extensionId = findExtensionId(targets, fallbackExtensionId);
+  const existing = findExtensionPage(targets, extensionId);
   if (existing?.webSocketDebuggerUrl) {
     return existing;
   }
-  const extensionId = findExtensionId(targets, fallbackExtensionId);
   const url = `chrome-extension://${extensionId}/src/options/options.html`;
   await httpText(port, `/json/new?${encodeURIComponent(url)}`, "PUT");
   const refreshed = await httpJson(port, "/json/list");
-  const opened = findExtensionPage(refreshed);
+  const opened = findExtensionPage(refreshed, extensionId);
   if (!opened?.webSocketDebuggerUrl) {
     throw new Error("Could not open the Hunt Apply Options page in p chrome.");
   }
@@ -278,17 +300,24 @@ async function main() {
         const backendUrl = ${js(args.backendUrl)};
         const serviceToken = ${js(token)};
         const seedProfile = ${js(args.seedWorkdayProfile)};
+        const autoNext = ${js(args.autoNext)};
+        const browserContext = {
+          name: "p_chrome",
+          configuredBy: "scripts/configure_c3_debug_sink.js",
+          configuredAt: new Date().toISOString(),
+          devtoolsPort: String(${js(args.port)})
+        };
         const workdayProfileDefaults = ${js(
           withWorkdayProfileAliases(makeWorkdayProfileDefaults()),
         )};
         const existing = await chrome.storage.sync.get([${js(SETTINGS_KEY)}]);
         const current = existing[${js(SETTINGS_KEY)}] || {};
         const next = {
-          settingsVersion: 4,
+          settingsVersion: 6,
           autofillOnLoad: false,
           manualFillEnabled: true,
           autoPromptEnabled: true,
-          autoClickNextAfterFill: false,
+          autoClickNextAfterFill: autoNext,
           fillRequiredOnly: true,
           emailVerificationBridgeUrl: "http://127.0.0.1:8765/verify-email",
           autoExportLogs: false,
@@ -301,13 +330,18 @@ async function main() {
           allowGeneratedAnswers: true,
           flagLowConfidenceAnswers: true,
           llmAnswerFallbackEnabled: true,
+          useFieldPipelineV2: true,
           stripLongDash: true,
           ...current,
+          settingsVersion: 6,
+          autoClickNextAfterFill: autoNext,
+          useFieldPipelineV2: true,
           backendUrl,
           serviceToken,
           debugLogSinkEnabled: true
         };
         await chrome.storage.sync.set({ [${js(SETTINGS_KEY)}]: next });
+        await chrome.storage.local.set({ [${js(BROWSER_CONTEXT_KEY)}]: browserContext });
         const profileCountsFor = ${workdayProfileCounts.toString()};
         let profileCounts = null;
         if (seedProfile) {
@@ -350,6 +384,13 @@ async function main() {
             body: JSON.stringify({
               eventType: "p_chrome.debug_sink_configured",
               extensionTime: new Date().toISOString(),
+              browserContext: browserContext.name,
+              browserContextConfiguredBy: browserContext.configuredBy,
+              browserContextConfiguredAt: browserContext.configuredAt,
+              browserContextDevtoolsPort: browserContext.devtoolsPort,
+              pipelineVersion: next.useFieldPipelineV2 ? "v2" : "v1",
+              useFieldPipelineV2: next.useFieldPipelineV2,
+              settingsVersion: next.settingsVersion,
               payload: { source: "scripts/configure_c3_debug_sink.js" }
             })
           });
@@ -361,9 +402,12 @@ async function main() {
         }
         return {
           backendUrl: next.backendUrl,
+          browserContext: browserContext.name,
           debugLogSinkEnabled: next.debugLogSinkEnabled,
           hasServiceToken: Boolean(next.serviceToken),
           profileCounts,
+          useFieldPipelineV2: next.useFieldPipelineV2,
+          autoClickNextAfterFill: next.autoClickNextAfterFill,
           testResult
         };
       })()`,
@@ -374,7 +418,10 @@ async function main() {
         {
           ok: true,
           backendUrl: result.backendUrl,
+          browserContext: result.browserContext,
           debugLogSinkEnabled: result.debugLogSinkEnabled,
+          useFieldPipelineV2: result.useFieldPipelineV2,
+          autoClickNextAfterFill: result.autoClickNextAfterFill,
           hasServiceToken: result.hasServiceToken,
           profileCounts: result.profileCounts || null,
           tokenSource: source ? "found" : "missing",

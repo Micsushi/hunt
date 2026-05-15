@@ -8,6 +8,7 @@ from fletcher import config as _config
 
 from .providers.anthropic_provider import AnthropicProvider
 from .providers.base import LLMJsonResult, LLMProvider
+from .providers.codex_cli import CodexCliProvider
 from .providers.gemini import GeminiProvider
 from .providers.heuristic import HeuristicProvider
 from .providers.ollama import OllamaProvider
@@ -21,26 +22,38 @@ PROVIDERS: dict[str, type[LLMProvider]] = {
     "openrouter": OpenRouterProvider,
     "anthropic": AnthropicProvider,
     "gemini": GeminiProvider,
+    "codex": CodexCliProvider,
 }
 
 
-def configured_provider_name() -> str:
+def configured_provider_name(component: str = "c2") -> str:
+    if component == "c3":
+        return _config.c3_llm_provider()
     return _config.resume_llm_provider()
 
 
-def configured_model(task_name: str | None = None) -> str:
+def configured_model(task_name: str | None = None, component: str = "c2") -> str:
+    if component == "c3":
+        return _config.c3_llm_model(task_name)
     return _config.resume_llm_model(task_name)
 
 
-def get_provider(name: str | None = None) -> LLMProvider:
-    provider_name = (name or configured_provider_name()).lower()
+def _cloud_confirmed(component: str) -> bool:
+    if component == "c3":
+        return _config.c3_cloud_llm_confirmed()
+    return _config.resume_cloud_llm_confirmed()
+
+
+def get_provider(name: str | None = None, *, component: str = "c2") -> LLMProvider:
+    provider_name = (name or configured_provider_name(component)).lower()
     cls = PROVIDERS.get(provider_name)
     if cls is None:
         raise ValueError(f"Unsupported Fletcher LLM provider: {provider_name}")
     provider = cls()
-    if provider.cloud and not _config.resume_cloud_llm_confirmed():
+    if provider.cloud and not _cloud_confirmed(component):
         raise ValueError(
-            f"HUNT_RESUME_CLOUD_LLM_CONFIRM=1 is required before using {provider_name}."
+            f"HUNT_{component.upper()}_CLOUD_LLM_CONFIRM=1 or HUNT_CLOUD_LLM_CONFIRM=1 "
+            f"is required before using {provider_name}."
         )
     return provider
 
@@ -75,8 +88,9 @@ def generate_json(
     timeout_sec: float | None = None,
     model: str | None = None,
     logger=None,
+    component: str = "c2",
 ) -> LLMJsonResult:
-    provider = get_provider()
+    provider = get_provider(component=component)
     result = provider.generate_json(
         task_name=task_name,
         system=system,
@@ -84,7 +98,7 @@ def generate_json(
         schema=schema,
         temperature=temperature,
         timeout_sec=timeout_sec,
-        model=model or configured_model(task_name),
+        model=model or configured_model(task_name, component),
         logger=logger,
     )
     ok, parsed, error = _validate_payload(schema_model, result.parsed)

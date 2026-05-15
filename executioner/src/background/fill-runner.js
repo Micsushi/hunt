@@ -5,9 +5,11 @@
 import { chooseDetectedAtsType } from "../ats/registry.js";
 import { GENERIC_FIELD_RULES } from "../ats/generic/field-rules.js";
 import { createGenericFillFunction } from "../ats/generic/fill.js";
+import { createGenericFillV2Function } from "../ats/generic/fill-v2.js";
 import { genericBackedAtsNames } from "../ats/support-matrix.js";
-import { postAnswerDecision } from "../shared/api.js";
+import { postAnswerDecision, postDebugLog } from "../shared/api.js";
 import { createWorkdayFillFunction } from "../ats/workday/fill.js";
+import { createWorkdayFillV2Function } from "../ats/workday/fill-v2.js";
 import { appendAttempt, appendQuestionAnswers } from "../shared/storage.js";
 import { selectFillRoute } from "./fill-routes.js";
 import {
@@ -25,17 +27,82 @@ const FILL_ADAPTERS = {
   workday: createWorkdayFillFunction,
 };
 
+const FILL_ADAPTERS_V2 = {
+  generic: createGenericFillV2Function,
+  workday: createWorkdayFillV2Function,
+};
+
 for (const atsName of GENERIC_BACKED_ATS_NAMES) {
   FILL_ADAPTERS[atsName] = createGenericFillFunction;
+  FILL_ADAPTERS_V2[atsName] = createGenericFillV2Function;
 }
 
 const pendingLlmFillByTab = new Map();
+const SCREENSHOT_CAPTURE_TIMEOUT_MS = 1500;
 
-async function captureScreenshot() {
+function filledTextNeedsBackendRepair(entry, isTextual) {
+  if (!isTextual) {
+    return false;
+  }
+  const valueSource = String(entry.valueSource || "").toLowerCase();
+  const warning = String(entry.bestEffortWarning || "").toLowerCase();
+  const isRequiredTextboxFallback =
+    valueSource.startsWith("fallback:") &&
+    [
+      "fallback:space",
+      "fallback:zero_width_space",
+      "fallback:not_applicable",
+    ].includes(valueSource);
+  return (
+    isRequiredTextboxFallback ||
+    warning.includes("generated_or_placeholder_text_fallback") ||
+    warning.includes("filled required unknown textbox with fallback text")
+  );
+}
+
+function debugIdentityForState(extensionState = {}) {
+  const settings = extensionState.settings || {};
+  const browserContext = extensionState.browserContext || {};
+  let manifest = {};
   try {
-    return await chrome.tabs.captureVisibleTab(undefined, { format: "png" });
+    manifest = chrome.runtime.getManifest();
   } catch (_error) {
-    return "";
+    manifest = {};
+  }
+  return {
+    browserContext: browserContext.name || "normal_chrome",
+    browserContextConfiguredBy: browserContext.configuredBy || "",
+    browserContextConfiguredAt: browserContext.configuredAt || "",
+    browserContextDevtoolsPort: browserContext.devtoolsPort || "",
+    pipelineVersion: settings.useFieldPipelineV2 ? "v2" : "v1",
+    useFieldPipelineV2: Boolean(settings.useFieldPipelineV2),
+    settingsVersion: Number(settings.settingsVersion || 0),
+    extensionVersion: manifest.version || "",
+    extensionId: chrome.runtime.id || "",
+  };
+}
+
+async function captureScreenshot(timeoutMs = SCREENSHOT_CAPTURE_TIMEOUT_MS) {
+  let timedOut = false;
+  try {
+    const dataUrl = await Promise.race([
+      chrome.tabs.captureVisibleTab(undefined, { format: "png" }),
+      new Promise((resolve) => {
+        setTimeout(() => {
+          timedOut = true;
+          resolve("");
+        }, timeoutMs);
+      }),
+    ]);
+    return {
+      dataUrl: typeof dataUrl === "string" ? dataUrl : "",
+      reason: timedOut ? "capture_visible_tab_timeout" : "",
+    };
+  } catch (_error) {
+    return {
+      dataUrl: "",
+      reason: "capture_visible_tab_failed",
+    };
   }
 }
 
@@ -150,21 +217,33 @@ function answerableFieldInventory(result) {
     if (!entry.required) {
       return false;
     }
-    if (!Array.isArray(entry.options) || entry.options.length === 0) {
-      return false;
-    }
-    if (entry.filled && entry.bestEffortWarning) {
+    const hasOptions = Array.isArray(entry.options) && entry.options.length > 0;
+    const tagName = String(entry.tagName || "").toUpperCase();
+    const type = String(entry.type || "").toLowerCase();
+    const kind = String(entry.kind || "").toLowerCase();
+    const isTextual =
+      kind.includes("text") ||
+      kind === "textarea" ||
+      tagName === "TEXTAREA" ||
+      (tagName === "INPUT" &&
+        ["", "text", "email", "tel", "url", "search", "number"].includes(type));
+    const isFallbackFill = filledTextNeedsBackendRepair(entry, isTextual);
+    if (entry.filled && isFallbackFill) {
       return true;
     }
     if (entry.filled) {
       return false;
     }
-    return [
+    const needsAnswer = [
       "no_known_choice",
       "no_matching_option",
       "no_known_match",
       "no_known_fields_filled",
     ].includes(entry.skippedReason);
+    if (hasOptions) {
+      return needsAnswer;
+    }
+    return isTextual && needsAnswer;
   });
 }
 
@@ -177,7 +256,10 @@ function summarizeAnswerableField(entry) {
     type: entry.type || "",
     id: entry.id || "",
     name: entry.name || "",
+    filled: Boolean(entry.filled),
     skippedReason: entry.skippedReason || "",
+    valueSource: entry.valueSource || "",
+    bestEffortWarning: entry.bestEffortWarning || "",
     optionCount: Array.isArray(entry.options) ? entry.options.length : 0,
     options: Array.isArray(entry.options) ? entry.options.slice(0, 20) : [],
     rect: entry.rect || {},
@@ -223,6 +305,16 @@ async function applyBackendAnswerDecisions({
   result,
 }) {
   const backendAnswerFields = answerableFieldInventory(result);
+  postDebugLog(extensionState.settings, {
+    eventType: "c3_backend_answer_inventory",
+    ...debugIdentityForState(extensionState),
+    payload: {
+      atsType: result.atsType || atsType,
+      pageUrl,
+      fieldCount: backendAnswerFields.length,
+      fields: backendAnswerFields.map(summarizeAnswerableField),
+    },
+  }).catch(() => {});
   if (backendAnswerFields.length === 0) {
     return {
       answerDecisions: [],
@@ -989,7 +1081,13 @@ class SelectFillRouteStep {
 
 class ResolveFillAdapterStep {
   run(context) {
-    context.adapterFactory = FILL_ADAPTERS[context.atsType];
+    context.useFieldPipelineV2 = Boolean(
+      context.extensionState.settings.useFieldPipelineV2,
+    );
+    const adapters = context.useFieldPipelineV2
+      ? FILL_ADAPTERS_V2
+      : FILL_ADAPTERS;
+    context.adapterFactory = adapters[context.atsType];
     if (context.adapterFactory) {
       return;
     }
@@ -1027,9 +1125,32 @@ class RecoverWorkdayRuntimeErrorStep {
 
 class InjectSharedUtilitiesStep {
   async run(context) {
+    const files = ["src/shared/injected.js"];
+    if (context.useFieldPipelineV2) {
+      files.push(
+        "src/shared/v2/audit.js",
+        "src/shared/v2/field-catalog.js",
+        "src/shared/v2/ui-inspector.js",
+        "src/shared/v2/field-state.js",
+        "src/shared/v2/option-collector.js",
+        "src/shared/v2/option-matcher.js",
+        "src/shared/v2/question-identifier.js",
+        "src/shared/v2/answer-resolver.js",
+        "src/shared/v2/field-drivers.js",
+        "src/shared/v2/field-pipeline.js",
+        "src/shared/v2/clear-pipeline.js",
+      );
+      if (context.atsType === "workday") {
+        files.push(
+          "src/ats/workday/workday-ui-v2.js",
+          "src/ats/workday/workday-drivers-v2.js",
+          "src/ats/workday/workday-repeatables-v2.js",
+        );
+      }
+    }
     await chrome.scripting.executeScript({
       target: { tabId: context.activeTabId, allFrames: true },
-      files: ["src/shared/injected.js"],
+      files,
     });
   }
 }
@@ -1063,6 +1184,23 @@ class RunAdapterFillStep {
     context.result = chooseBestFrameResult(injectionResults);
     if (context.workdayRuntimeRecovery) {
       context.result.workdayRuntimeRecovery = context.workdayRuntimeRecovery;
+    }
+    if (context.result.v2Audit) {
+      try {
+        await postDebugLog(context.extensionState.settings, {
+          eventType: "c3_v2_audit",
+          extensionTime: new Date().toISOString(),
+          ...debugIdentityForState(context.extensionState),
+          payload: {
+            pageUrl: context.pageUrl,
+            atsType: context.result.atsType || context.atsType,
+            route: context.route,
+            audit: context.result.v2Audit,
+          },
+        });
+      } catch (_error) {
+        context.result.v2AuditBackendLogFailed = true;
+      }
     }
   }
 }
@@ -1164,6 +1302,7 @@ class C3AutofillPipeline {
 function buildFillResponse({ result, attempt, answerEntries, route }) {
   const manualReviewRequired = Boolean(attempt?.manualReviewRequired);
   const bestEffortWarningCount = Number(result.bestEffortWarnings?.length || 0);
+  const v2IssueCount = Number(result.v2Audit?.permanentIssues?.length || 0);
   const filledLabel = result.answerDecisions
     ? "fields"
     : "deterministic fields";
@@ -1173,7 +1312,7 @@ function buildFillResponse({ result, attempt, answerEntries, route }) {
       ? result.pendingLlmFieldCount
         ? `Filled ${result.filledFieldCount || 0} ${filledLabel}. ${result.pendingLlmFieldCount} unanswered required question${result.pendingLlmFieldCount === 1 ? "" : "s"} can use LLM help.`
         : manualReviewRequired
-          ? `Filled ${result.filledFieldCount || 0} fields; manual review needed.`
+          ? `Filled ${result.filledFieldCount || 0} fields; manual review needed${v2IssueCount ? ` for ${v2IssueCount} V2 issue${v2IssueCount === 1 ? "" : "s"}` : ""}.`
           : bestEffortWarningCount
             ? `Filled ${result.filledFieldCount || 0} fields and used ${bestEffortWarningCount} best-effort default${bestEffortWarningCount === 1 ? "" : "s"} to keep moving. Review flagged answers before submitting.`
             : `Filled ${result.filledFieldCount || 0} fields and logged ${result.generatedAnswerCount || 0} generated answers.`
@@ -1192,7 +1331,16 @@ async function persistFillAttempt({
   route,
   result,
 }) {
-  const screenshotDataUrl = await captureScreenshot();
+  const screenshot = await captureScreenshot();
+  if (screenshot.reason) {
+    result.persistenceDiagnostics = {
+      ...(result.persistenceDiagnostics || {}),
+      screenshotCapture: {
+        reason: screenshot.reason,
+        timeoutMs: SCREENSHOT_CAPTURE_TIMEOUT_MS,
+      },
+    };
+  }
   const attemptId = crypto.randomUUID();
   const manualReviewRequired = Boolean(result.manualReviewRequired);
 
@@ -1225,9 +1373,10 @@ async function persistFillAttempt({
     bestEffortWarnings: result.bestEffortWarnings || [],
     fieldInventory: result.fieldInventory || [],
     interactionTrace: result.interactionTrace || [],
+    v2Audit: result.v2Audit || {},
     traceTruncated: Boolean(result.traceTruncated),
     htmlSnapshot: result.htmlSnapshot || "",
-    screenshotDataUrl,
+    screenshotDataUrl: screenshot.dataUrl,
     resultSummary: result.ok
       ? manualReviewRequired
         ? `Filled ${result.filledFieldCount || 0} fields via ${route.routeName}; manual review needed.`
