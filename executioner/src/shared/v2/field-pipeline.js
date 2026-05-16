@@ -1,5 +1,11 @@
 (function () {
   var root = (window.__huntV2 = window.__huntV2 || {});
+  window.__huntC3Logs = [];
+  function _huntLog(tag, data) {
+    var entry = Object.assign({ _tag: tag, _ts: Date.now() }, data);
+    window.__huntC3Logs.push(entry);
+    console.log("[HUNT:C3] " + tag, data);
+  }
 
   function optionsNeeded(field) {
     return [
@@ -262,6 +268,17 @@
       }
     }
 
+    _huntLog("field_decision", {
+      descriptor: String(field.descriptor || "").slice(0, 120),
+      fieldId: field.fieldId || "",
+      uiModel: field.uiModel || "",
+      workdayKind: field.workday?.kind || "",
+      answerValue: String(answer.value ?? "").slice(0, 80),
+      optionLabel: option?.label || null,
+      optionsCount: (field.options || []).length,
+      siteError: Boolean(root.audit?.siteState?.()?.workdayRuntimeError),
+    });
+
     if (
       optionsNeeded(field) &&
       !option &&
@@ -270,6 +287,11 @@
         ["combobox", "button_listbox"].includes(field.uiModel)
       )
     ) {
+      _huntLog("field_skipped_no_option", {
+        descriptor: String(field.descriptor || "").slice(0, 120),
+        uiModel: field.uiModel || "",
+        workdayKind: field.workday?.kind || "",
+      });
       fieldAudit.afterState = root.fieldState.readFieldState(field);
       return { filled: false, fieldAudit: fieldAudit };
     }
@@ -314,10 +336,19 @@
         reason: fillResult.reason || "commit_failed",
       });
     }
+    var _siteAfter = root.audit.siteState();
+    _huntLog("field_done", {
+      descriptor: String(field.descriptor || "").slice(0, 120),
+      uiModel: field.uiModel || "",
+      workdayKind: field.workday?.kind || "",
+      fillOk: Boolean(fillResult.ok),
+      fillReason: fillResult.reason || "",
+      siteError: Boolean(_siteAfter.workdayRuntimeError),
+    });
     root.audit.pushFieldStep(audit, fieldAudit, {
       action: "site_state_after_field",
       step: "site.after_field",
-      status: root.audit.siteState().workdayRuntimeError ? "error" : "info",
+      status: _siteAfter.workdayRuntimeError ? "error" : "info",
       reason: "after_field_action",
       detail: root.audit.siteState({
         fieldId: field.fieldId || "",

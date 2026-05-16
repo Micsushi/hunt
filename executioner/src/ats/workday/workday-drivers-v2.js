@@ -1,5 +1,10 @@
 (function () {
   var root = (window.__huntV2 = window.__huntV2 || {});
+  function _huntLog(tag, data) {
+    var entry = Object.assign({ _tag: tag, _ts: Date.now() }, data);
+    (window.__huntC3Logs = window.__huntC3Logs || []).push(entry);
+    console.log("[HUNT:C3] " + tag, data);
+  }
 
   function sleep(ms) {
     return new Promise(function (resolve) {
@@ -481,6 +486,14 @@
 
   async function openPopup(field, searchText) {
     var el = field.element;
+    _huntLog("openPopup", {
+      descriptor: String(field.descriptor || "").slice(0, 120),
+      uiModel: field.uiModel || "",
+      workdayKind: field.workday?.kind || "",
+      searchText: String(searchText || "").slice(0, 80),
+      elTag: el?.tagName || "none",
+      elId: el?.id || el?.getAttribute?.("data-automation-id") || "",
+    });
     if (!el) {
       return false;
     }
@@ -564,14 +577,31 @@
         },
       ];
     }
+    // For phone_country_code we need to type to filter the long country-dial list.
+    // For all other combobox/button_listbox fields, typing the answer text into
+    // Workday's live-search input triggers external API calls (e.g.
+    // namedefinition?country=Canada) that can return 500 and crash the page.
+    // Open the popup without typing and match against whatever options appear.
     var searchText =
       field.workday?.kind === "phone_country_code"
         ? answer.value || "Canada (+1)"
-        : answer.value || "";
+        : "";
+    _huntLog("collectWorkdayOptions_start", {
+      descriptor: String(field.descriptor || "").slice(0, 120),
+      uiModel: field.uiModel || "",
+      workdayKind: field.workday?.kind || "",
+      searchText: String(searchText || "").slice(0, 80),
+    });
     await closePopup(field);
     await sleep(40);
     await openPopup(field, searchText);
     var options = visibleWorkdayOptions();
+    _huntLog("collectWorkdayOptions_after_popup", {
+      descriptor: String(field.descriptor || "").slice(0, 120),
+      optionCount: options.length,
+      options: options.slice(0, 8).map(function (o) { return o.label; }),
+      siteError: Boolean(document.body?.innerText?.toLowerCase().includes("something went wrong")),
+    });
     root.audit?.pushFieldStep(context?.audit, context?.fieldAudit, {
       action: "workday_options_collected",
       step: "workday.option.collect",
@@ -730,6 +760,13 @@
     audit,
     fieldAudit,
   }) {
+    _huntLog("fillWorkdayPopup_entry", {
+      descriptor: String(field.descriptor || "").slice(0, 120),
+      uiModel: field.uiModel || "",
+      workdayKind: field.workday?.kind || "",
+      answerValue: String(answer?.value ?? "").slice(0, 80),
+      optionLabel: option?.label || null,
+    });
     var committedState = workdayCommittedState(field);
     var committedLabel = clean(
       committedState.text || committedState.rawValue || "",

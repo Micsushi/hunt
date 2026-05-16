@@ -22,7 +22,10 @@ import {
   createSafeNextFunction,
   summarizeSafeNextResult,
 } from "./safe-next.js";
-import { recoverWorkdayRuntimeErrorForTab } from "./workday-runtime.js";
+import {
+  detectWorkdayRuntimeErrorForTab,
+  recoverWorkdayRuntimeErrorForTab,
+} from "./workday-runtime.js";
 
 const C4_POLL_ALARM = "hunt.apply.c4.poll";
 const C4_HEARTBEAT_ALARM = "hunt.apply.c4.heartbeat";
@@ -310,6 +313,43 @@ function fillHasManualReviewReason(result, wantedReason) {
   return fillManualReviewReasons(result).includes(wantedReason);
 }
 
+function fillHasWorkdayRuntimeError(result) {
+  const siteActions = [
+    ...(result?.siteActions || []),
+    ...(result?.attempt?.siteActions || []),
+    ...(result?.result?.siteActions || []),
+  ];
+  return siteActions.some((action) =>
+    Boolean(action?.siteState?.workdayRuntimeError),
+  );
+}
+
+function markWorkdayRuntimeErrorFill(result, siteState, reason) {
+  if (!result) {
+    return result;
+  }
+  const reviewReason = reason || "workday_runtime_error_after_fill";
+  result.ok = false;
+  result.reason = reviewReason;
+  result.message =
+    "Workday showed its refresh-required error page during fill. C3 stopped before clicking Next.";
+  result.workdayRuntimeError = true;
+  result.workdayRuntimeSiteState = siteState || {};
+  if (result.attempt) {
+    result.attempt.status = "manual_review";
+    result.attempt.manualReviewRequired = true;
+    result.attempt.manualReviewReasons = Array.from(
+      new Set([...(result.attempt.manualReviewReasons || []), reviewReason]),
+    );
+  }
+  if (result.result) {
+    result.result.manualReviewRequired = true;
+    result.result.manualReviewReasons = Array.from(
+      new Set([...(result.result.manualReviewReasons || []), reviewReason]),
+    );
+  }
+  return result;
+}
 function startFillSiteActionMonitor(tabId, fillRunId) {
   if (!tabId) {
     return { stop: () => {}, events: [] };
@@ -1601,6 +1641,31 @@ async function probeSafeNextForTab(tabId) {
 }
 
 async function clickSafeNextForTab(tabId, details = {}) {
+  const runtimeBeforeProbe = await detectWorkdayRuntimeErrorForTab(tabId);
+  if (runtimeBeforeProbe.found) {
+    const blocked = {
+      ok: false,
+      available: false,
+      clicked: false,
+      auto: Boolean(details.auto),
+      reason: "safe_next_workday_runtime_error",
+      message:
+        "Workday showed its refresh-required error page. C3 stopped before clicking Next.",
+      runtimeError: runtimeBeforeProbe,
+    };
+    await logActivity(
+      "next.workday_runtime_blocked",
+      blocked.message,
+      {
+        tabId,
+        triggeredBy: details.triggeredBy || "",
+        runtimeError: runtimeBeforeProbe,
+      },
+      "blocked",
+    );
+    await showPageToast(tabId, blocked.message, "warn");
+    return blocked;
+  }
   const probe = await probeSafeNextForTab(tabId);
   if (!probe.available) {
     if (
@@ -1838,7 +1903,8 @@ function shouldRunV2PageWalk(settings = {}, fillResponse = {}, payload = {}) {
     settings.autoClickNextAfterFill &&
     payload.pageWalk !== false &&
     fillResponse.ok &&
-    !fillResponse.cancelled,
+    !fillResponse.cancelled &&
+    !fillHasWorkdayRuntimeError(fillResponse),
   );
 }
 
@@ -4239,6 +4305,17 @@ async function runFillWithOneRefreshRetry(
       },
       beforeSiteState.workdayRuntimeError ? "blocked" : "info",
     );
+    if (beforeSiteState.workdayRuntimeError) {
+      return markWorkdayRuntimeErrorFill(
+        workflowBlockedResponse(
+          state,
+          null,
+          "workday_runtime_error_before_fill",
+        ),
+        beforeSiteState,
+        "workday_runtime_error_before_fill",
+      );
+    }
     let result = await withTimeout(
       runFillForTab(tabId, state, {
         fillRunId,
@@ -4305,6 +4382,14 @@ async function runFillWithOneRefreshRetry(
       },
       afterInitialSiteState.workdayRuntimeError ? "blocked" : "info",
     );
+    if (afterInitialSiteState.workdayRuntimeError) {
+      appendMonitorSiteActionsToFillResult(result, siteMonitor);
+      return markWorkdayRuntimeErrorFill(
+        result,
+        afterInitialSiteState,
+        "workday_runtime_error_after_fill",
+      );
+    }
     if (!fillNeedsRefreshRetry(result)) {
       return result;
     }
@@ -4414,6 +4499,14 @@ async function runFillWithOneRefreshRetry(
       },
       afterRetrySiteState.workdayRuntimeError ? "blocked" : "info",
     );
+    if (afterRetrySiteState.workdayRuntimeError) {
+      appendMonitorSiteActionsToFillResult(retryResult, siteMonitor);
+      return markWorkdayRuntimeErrorFill(
+        retryResult,
+        afterRetrySiteState,
+        "workday_runtime_error_after_retry_fill",
+      );
+    }
     retryResult.refreshRetry = {
       attempted: true,
       ok: true,

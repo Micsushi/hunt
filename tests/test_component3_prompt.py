@@ -116,7 +116,7 @@ def test_fill_commit_failure_can_refresh_and_retry_once():
     assert "refreshRetry: result.refreshRetry || null" in background
 
 
-def test_workday_runtime_error_can_refresh_and_retry_once():
+def test_workday_runtime_error_recovery_stops_before_safe_next_click():
     background = _load_script(REPO_ROOT / "executioner/src/background/index.js")
     runner = _load_script(REPO_ROOT / "executioner/src/background/fill-runner.js")
     safe_next = _load_script(REPO_ROOT / "executioner/src/background/safe-next.js")
@@ -133,6 +133,12 @@ def test_workday_runtime_error_can_refresh_and_retry_once():
     assert "recoverWorkdayRuntimeErrorForTab" in background
     assert "safe_next_probe_workday_runtime_error" in background
     assert "next.workday_runtime_recovered_before_probe" in background
+    assert "detectWorkdayRuntimeErrorForTab" in background
+    assert "safe_next_workday_runtime_error" in background
+    assert "next.workday_runtime_blocked" in background
+    assert "C3 stopped before clicking Next" in background
+    assert "workday_runtime_error_after_fill" in background
+    assert "markWorkdayRuntimeErrorFill" in background
     assert "clicked_safe_next_recovered_workday_runtime_error" in background
     assert "clicked_safe_next_recovered_workday_runtime_error" in safe_next
     assert "workdayRuntimeError" in live_smoke
@@ -270,6 +276,9 @@ def test_workday_phone_and_legal_name_specific_guards():
 
 def test_workday_logs_field_and_dropdown_actions():
     workday = _load_script(REPO_ROOT / "executioner/src/ats/workday/fill.js")
+    workday_v2_drivers = _load_script(
+        REPO_ROOT / "executioner/src/ats/workday/workday-drivers-v2.js"
+    )
 
     assert "traceInteractionLimit = 1000" in workday
     assert '"field_consider"' in workday
@@ -298,6 +307,9 @@ def test_workday_logs_field_and_dropdown_actions():
     assert "workdayClickOptionCommitTarget" in workday
     assert "workdayOptionRadioTarget" in workday
     assert "search_input_keyboard_final_enter_skipped" in workday
+    assert "isApplicationSourceField" in workday_v2_drivers
+    assert "safeOpenOnly" in workday_v2_drivers
+    assert "source--source" in workday_v2_drivers
     assert "allowAnySourceFallback" in workday
     assert "country_dependent_wait" in workday
     assert "stableReadyCount" in workday
