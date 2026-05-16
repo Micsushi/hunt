@@ -599,8 +599,14 @@
     _huntLog("collectWorkdayOptions_after_popup", {
       descriptor: String(field.descriptor || "").slice(0, 120),
       optionCount: options.length,
-      options: options.slice(0, 8).map(function (o) { return o.label; }),
-      siteError: Boolean(document.body?.innerText?.toLowerCase().includes("something went wrong")),
+      options: options.slice(0, 8).map(function (o) {
+        return o.label;
+      }),
+      siteError: Boolean(
+        document.body?.innerText
+          ?.toLowerCase()
+          .includes("something went wrong"),
+      ),
     });
     root.audit?.pushFieldStep(context?.audit, context?.fieldAudit, {
       action: "workday_options_collected",
