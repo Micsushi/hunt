@@ -205,17 +205,95 @@ function safeVerificationLinks(text, request, { allowInsecure = false } = {}) {
   return candidates;
 }
 
+function verificationCodeCandidates(text) {
+  const decoded = String(text || "").replace(/=\r?\n/g, "");
+  const candidates = [];
+  const patterns = [
+    /(?:verification|verify|identity|one[-\s]?time|pass\s*code|passcode|otp|security)\D{0,80}\b(\d[\d\s-]{3,14}\d)\b/gi,
+    /\b(\d[\d\s-]{3,14}\d)\b\D{0,80}(?:verification|verify|identity|one[-\s]?time|pass\s*code|passcode|otp|security)/gi,
+  ];
+  for (const pattern of patterns) {
+    let match;
+    while ((match = pattern.exec(decoded))) {
+      const code = String(match[1] || "").replace(/\D/g, "");
+      if (code.length >= 4 && code.length <= 8) {
+        candidates.push(code);
+      }
+    }
+  }
+  return [...new Set(candidates)];
+}
+
+function verificationResultFromMessage({
+  decoded,
+  request,
+  source,
+  receivedAt,
+}) {
+  const links = safeVerificationLinks(decoded, request);
+  const subjectMatch = String(decoded || "").match(/^Subject:\s*(.+)$/im);
+  const subject = subjectMatch ? subjectMatch[1].trim() : "";
+  if (links.length === 1) {
+    return {
+      ok: true,
+      method: "link",
+      link: links[0],
+      source,
+      subject,
+      receivedAt: receivedAt.toISOString(),
+    };
+  }
+  if (links.length > 1) {
+    return {
+      ok: false,
+      reason: "ambiguous",
+      message: "Multiple safe verification links matched.",
+    };
+  }
+  const codes = verificationCodeCandidates(decoded);
+  if (codes.length === 1) {
+    return {
+      ok: true,
+      method: "code",
+      code: codes[0],
+      source,
+      subject,
+      receivedAt: receivedAt.toISOString(),
+    };
+  }
+  if (codes.length > 1) {
+    return {
+      ok: false,
+      reason: "ambiguous",
+      message: "Multiple verification codes matched.",
+    };
+  }
+  return null;
+}
+
 async function verifyFake(request) {
   const link =
     process.env.HUNT_C3_FAKE_VERIFY_LINK ||
     request.fakeVerifyLink ||
     "http://127.0.0.1:8766/email_verified.html";
+  const code = process.env.HUNT_C3_FAKE_VERIFY_CODE || request.fakeVerifyCode;
+  if (code) {
+    return {
+      ok: true,
+      method: "code",
+      code: String(code).replace(/\D/g, ""),
+      source: "fake",
+      subject: "Verification Code",
+      receivedAt: new Date().toISOString(),
+    };
+  }
   const url = new URL(link);
   if (request.email && !url.searchParams.has("email")) {
     url.searchParams.set("email", request.email);
   }
   return {
     ok: true,
+    method: "link",
     link: url.toString(),
     source: "fake",
     subject: "Verify your email",
@@ -474,26 +552,17 @@ async function verifyImap(request) {
           );
         const raw = await imapFetchBody(socket, id);
         const decoded = decodeQuotedPrintable(raw);
-        const links = safeVerificationLinks(decoded, request);
-        if (!senderAllowed && links.length === 0) {
+        const verification = verificationResultFromMessage({
+          decoded,
+          request,
+          source: "imap",
+          receivedAt,
+        });
+        if (!senderAllowed && !verification) {
           continue;
         }
-        if (links.length === 1) {
-          const subjectMatch = decoded.match(/^Subject:\s*(.+)$/im);
-          return {
-            ok: true,
-            link: links[0],
-            source: "imap",
-            subject: subjectMatch ? subjectMatch[1].trim() : "",
-            receivedAt: receivedAt.toISOString(),
-          };
-        }
-        if (links.length > 1) {
-          return {
-            ok: false,
-            reason: "ambiguous",
-            message: "Multiple safe verification links matched.",
-          };
+        if (verification) {
+          return verification;
         }
       }
     } catch (error) {
@@ -650,26 +719,17 @@ async function verifyGmail(request) {
             fromMatch[2].toLowerCase().includes(hostPart),
           );
         const decoded = decodeQuotedPrintable(raw);
-        const links = safeVerificationLinks(decoded, request);
-        if (!senderAllowed && links.length === 0) {
+        const verification = verificationResultFromMessage({
+          decoded,
+          request,
+          source: "gmail",
+          receivedAt,
+        });
+        if (!senderAllowed && !verification) {
           continue;
         }
-        if (links.length === 1) {
-          const subjectMatch = decoded.match(/^Subject:\s*(.+)$/im);
-          return {
-            ok: true,
-            link: links[0],
-            source: "gmail",
-            subject: subjectMatch ? subjectMatch[1].trim() : "",
-            receivedAt: receivedAt.toISOString(),
-          };
-        }
-        if (links.length > 1) {
-          return {
-            ok: false,
-            reason: "ambiguous",
-            message: "Multiple safe verification links matched.",
-          };
+        if (verification) {
+          return verification;
         }
       }
     } catch (error) {
@@ -879,5 +939,6 @@ if (require.main === module) {
 module.exports = {
   checkMailAuth,
   safeVerificationLinks,
+  verificationCodeCandidates,
   verifyEmail,
 };

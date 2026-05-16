@@ -33,21 +33,26 @@ function makeDefaultEducation() {
 
 function makeWorkdayProfileDefaults(options = {}) {
   const accountEmail = options.accountEmail || DEFAULT_ACCOUNT_EMAIL;
+  const accountPassword = options.accountPassword || process.env.HUNT_C3_TEST_ACCOUNT_PASSWORD || "";
   return {
     fullName: "Michael Shi",
     email: accountEmail,
     accountEmail,
+    accountPassword,
     phone: "7804923111",
     phoneDeviceType: "Mobile",
     phoneCountryCode: "Canada (+1)",
     location: "Edmonton, Alberta, Canada",
+    city: "Edmonton",
+    province: "Alberta",
+    country: "Canada",
     addressLine1: "10180 101 Street NW",
     addressLine2: "",
     postalCode: "T5J 3S4",
     linkedinUrl: "https://linkedin.com/in/wjshi",
     githubUrl: "https://github.com/micsushi",
     websiteUrl: "https://mshi.ca",
-    applicationSource: "LinkedIn",
+    applicationSource: "Job Board",
     applicationSourceCategory: "Job Board",
     applicationSourceDetail: "LinkedIn",
     workAuthorized: true,

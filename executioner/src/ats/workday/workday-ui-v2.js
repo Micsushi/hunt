@@ -131,6 +131,13 @@
       return "workday_search_select";
     }
     if (
+      ownText.includes("how did you hear about us") ||
+      ownText.includes("how did you hear") ||
+      ownText.includes("source")
+    ) {
+      return "workday_search_select";
+    }
+    if (
       widgetType.includes("multiselect") ||
       automationId.includes("multiselect") ||
       ownText.includes("press delete to clear value")

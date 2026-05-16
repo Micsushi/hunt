@@ -60,7 +60,19 @@ def _new_prompt_page(playwright, body_html: str):
 def test_detected_page_prompt_gate_requires_visible_controls():
     content = _load_script(REPO_ROOT / "executioner/src/content/bootstrap.js")
 
-    assert "detection.inputCount > 0" in content
+    assert "detection.inputCount > 0 || detection.kind === \"apply_entry\"" in content
+
+
+def test_career_apply_button_pages_can_prompt_without_visible_fields():
+    content = _load_script(REPO_ROOT / "executioner/src/content/bootstrap.js")
+    background = _load_script(REPO_ROOT / "executioner/src/background/index.js")
+
+    assert "CAREER_APPLY_TERMS" in content
+    assert "hasCareerApplyEntry" in content
+    assert "\"apply_entry\"" in content
+    assert "Open application" in content
+    assert "genericApplyEntry" in background
+    assert "generic_apply_navigation_started" in background
 
 
 def test_detected_page_prompt_rechecks_after_page_readiness():
@@ -178,6 +190,7 @@ def test_fill_progress_can_request_cancel():
     assert "__huntApplyCancelledFillRunIds" in workday
     assert "activeFillRequestId" in content
     assert "ui.detect_prompt.stale_fill_response" in content
+    assert "Fill did not start. Open the popup and try Fill Current Page." not in content
     assert "user_cancelled" in generic
     assert "user_cancelled" in workday
 

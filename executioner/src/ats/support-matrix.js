@@ -82,9 +82,10 @@ export const ATS_SUPPORT_MATRIX = [
   {
     name: "oracle",
     hostPatterns: ["oraclecloud.com"],
-    supportLevel: "detected_only",
-    adapter: "",
-    notes: "Oracle Recruiting Cloud detection only.",
+    supportLevel: "generic_backed_adapter",
+    adapter: "oracle",
+    notes:
+      "Generic-backed adapter for Oracle Recruiting / Candidate Experience flows such as email auth and profile forms.",
   },
   {
     name: "adp",

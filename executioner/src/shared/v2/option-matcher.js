@@ -19,6 +19,14 @@
       .trim();
   }
 
+  function normOptionLabel(value) {
+    return norm(value)
+      .replace(/\bnot checked\b/g, " ")
+      .replace(/\bchecked\b/g, " ")
+      .replace(/\s+/g, " ")
+      .trim();
+  }
+
   function isPlaceholder(option) {
     return option.placeholder || PLACEHOLDERS.has(norm(option.label));
   }
@@ -38,6 +46,33 @@
       }
     });
     return aliases;
+  }
+
+  function isStrictAliasMatch(option, alias) {
+    var label = norm(option.label);
+    var value = norm(option.value);
+    if (alias.length <= 3) {
+      return label === alias || value === alias;
+    }
+    return label === alias || value === alias || label.includes(alias);
+  }
+
+  function isProvinceField(field) {
+    var el = field?.element || field?.anchor;
+    var text = norm(
+      [
+        field?.fieldId,
+        field?.descriptor,
+        el?.id,
+        el?.name,
+        el?.getAttribute?.("aria-label"),
+      ].join(" "),
+    );
+    return (
+      text.includes("province") ||
+      text.includes("territory") ||
+      text.includes("region3")
+    );
   }
 
   function neutralOption(options) {
@@ -65,7 +100,9 @@
       return { option: null, source: "no_options", fallback: false };
     }
     var exact = real.find(function (option) {
-      return norm(option.label) === target || norm(option.value) === target;
+      var label = normOptionLabel(option.label);
+      var value = normOptionLabel(option.value);
+      return label === target || value === target;
     });
     if (exact) {
       return { option: exact, source: "exact", fallback: false };
@@ -86,14 +123,42 @@
     for (var i = 0; i < aliases.length; i++) {
       var alias = norm(aliases[i]);
       var aliasMatch = real.find(function (option) {
-        var label = norm(option.label);
-        return (
-          label === alias || label.includes(alias) || alias.includes(label)
-        );
+        return isStrictAliasMatch(option, alias);
       });
       if (aliasMatch) {
         return { option: aliasMatch, source: "alias", fallback: false };
       }
+    }
+    if (isProvinceField(field)) {
+      return {
+        option: null,
+        source: "strict_province_no_match",
+        fallback: false,
+      };
+    }
+    var boundary = real.find(function (option) {
+      var label = normOptionLabel(option.label);
+      var value = normOptionLabel(option.value);
+      return (
+        target.length >= 4 &&
+        (label.startsWith(target + " ") ||
+          label.startsWith(target + ",") ||
+          value.startsWith(target + " ") ||
+          value.startsWith(target + ","))
+      );
+    });
+    if (boundary) {
+      return { option: boundary, source: "boundary", fallback: false };
+    }
+    var partial = real.find(function (option) {
+      var label = normOptionLabel(option.label);
+      var value = normOptionLabel(option.value);
+      return (
+        target.length >= 4 && (label.includes(target) || value.includes(target))
+      );
+    });
+    if (partial) {
+      return { option: partial, source: "partial", fallback: false };
     }
     if (
       answer.answerType === "non_disclosure" ||
@@ -130,6 +195,23 @@
         }),
       });
       return { option: other, source: "other_fallback", fallback: true };
+    }
+    var noOption = real.find(function (option) {
+      var label = normOptionLabel(option.label);
+      var value = normOptionLabel(option.value);
+      return label === "no" || value === "no";
+    });
+    if (noOption) {
+      root.audit?.pushIssue(audit, fieldAudit, {
+        kind: "max_progress_no_option",
+        severity: "warn",
+        failedStep: "option.match",
+        reason: "Selected No fallback before first real option.",
+        options: real.map(function (option) {
+          return option.label;
+        }),
+      });
+      return { option: noOption, source: "no_fallback", fallback: true };
     }
     root.audit?.pushIssue(audit, fieldAudit, {
       kind: "max_progress_first_real_option",

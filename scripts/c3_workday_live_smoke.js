@@ -9,6 +9,23 @@ const {
 } = require("./c3_p_chrome_defaults");
 const { CdpClient, httpJson, httpText, js, sleep } = require("./lib/c3_cdp");
 
+function loadDotEnv(filePath = ".env") {
+  if (!fs.existsSync(filePath)) return;
+  const lines = fs.readFileSync(filePath, "utf8").split(/\r?\n/);
+  for (const raw of lines) {
+    const trimmed = raw.trim();
+    if (!trimmed || trimmed.startsWith("#") || !trimmed.includes("=")) continue;
+    const index = trimmed.indexOf("=");
+    const key = trimmed.slice(0, index).trim();
+    let value = trimmed.slice(index + 1).trim();
+    if ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'"))) {
+      value = value.slice(1, -1);
+    }
+    if (key && process.env[key] === undefined) process.env[key] = value;
+  }
+}
+loadDotEnv();
+
 const DEFAULT_JOB_URL =
   "https://talentmanagementsolution.wd3.myworkdayjobs.com/en-US/JonasSoftwareCanada/job/Remote---Canada/Junior-AI-Software-Engineer_R50805-1?source=LinkedIn";
 const DEFAULT_EXTENSION_ID = "cbdmkibihimaedoihjhpidclolglnncc";
@@ -40,6 +57,7 @@ function parseArgs(argv) {
     cdpRepairPhoneCountry: false,
     llmAnswers: true,
     accountEmail: process.env.HUNT_C3_TEST_ACCOUNT_EMAIL || "",
+    accountPassword: process.env.HUNT_C3_TEST_ACCOUNT_PASSWORD || "",
     auditJson: process.env.HUNT_C3_AUDIT_JSON || "",
     noAuditJson: false,
   };
@@ -98,6 +116,9 @@ function parseArgs(argv) {
       args.llmAnswers = false;
     } else if (arg === "--account-email" && next) {
       args.accountEmail = next;
+      i += 1;
+    } else if (arg === "--account-password" && next) {
+      args.accountPassword = next;
       i += 1;
     } else if (arg === "--audit-json" && next) {
       args.auditJson = path.resolve(process.cwd(), next);
@@ -220,7 +241,7 @@ function makeSeedPayload(resumePath, applyUrl, args = {}) {
   const pdfFileName = path.basename(resumePath);
   const pdfDataUrl = `data:application/pdf;base64,${pdf.toString("base64")}`;
   const profile = withWorkdayProfileAliases(
-    makeWorkdayProfileDefaults({ accountEmail: args.accountEmail }),
+    makeWorkdayProfileDefaults({ accountEmail: args.accountEmail, accountPassword: args.accountPassword }),
   );
   const inferredContext = inferWorkdayContext(applyUrl);
   const defaultResume = {

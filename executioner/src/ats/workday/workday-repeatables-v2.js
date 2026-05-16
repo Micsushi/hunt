@@ -509,18 +509,36 @@
     ).filter(visible);
   }
 
+  function choiceKey(value) {
+    return norm(value)
+      .replace(/\bbachelor s\b/g, "bachelors")
+      .replace(/\bmaster s\b/g, "masters")
+      .replace(/\bdoctor s\b/g, "doctors")
+      .replace(/\s+/g, " ")
+      .trim();
+  }
+
+  function choiceMatches(label, target) {
+    var labelKey = choiceKey(label);
+    var targetKey = choiceKey(target);
+    if (!labelKey || !targetKey) {
+      return false;
+    }
+    return (
+      labelKey === targetKey ||
+      labelKey.includes(targetKey) ||
+      targetKey.includes(labelKey)
+    );
+  }
+
   async function fillButtonChoice(button, value) {
     if (!button || !value) {
       return false;
     }
-    var target = norm(value);
     clickLikeUser(button);
     await sleep(220);
     var option = optionElements().find(function (candidate) {
-      var label = norm(textOf(candidate));
-      return (
-        label === target || label.includes(target) || target.includes(label)
-      );
+      return choiceMatches(textOf(candidate), value);
     });
     if (!option) {
       return false;
@@ -530,7 +548,7 @@
       option.click();
     }
     await sleep(240);
-    return norm(textOf(button)).includes(target) || Boolean(button.value);
+    return choiceMatches(textOf(button), value) || Boolean(button.value);
   }
 
   function firstText(values) {
@@ -1060,7 +1078,7 @@
         return entry.school;
       }
       if (own.includes("degree") || own.includes("education level")) {
-        return entry.degreeLevel || entry.degree;
+        return entry.degree || entry.degreeLevel;
       }
       if (
         own.includes("fieldofstudy") ||
@@ -1111,7 +1129,7 @@
         return entry.school;
       }
       if (desc.includes("degree") || desc.includes("education level")) {
-        return entry.degreeLevel || entry.degree;
+        return entry.degree || entry.degreeLevel;
       }
     }
     return "";

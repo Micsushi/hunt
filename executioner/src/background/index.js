@@ -508,6 +508,7 @@ function createC3WorkflowDetectionFunction() {
 
     var bodyText = document.body ? document.body.innerText || "" : "";
     var lowerText = bodyText.toLowerCase();
+    var path = location.pathname.toLowerCase();
     var inputs = Array.from(
       document.querySelectorAll("input, textarea, select"),
     ).filter(visible);
@@ -549,12 +550,25 @@ function createC3WorkflowDetectionFunction() {
         /^apply manually$/i.test(label) || /\/apply\/applyManually/i.test(label)
       );
     });
+    var genericApplyEntry =
+      (location.hostname.toLowerCase().includes("career") ||
+        location.hostname.toLowerCase().includes("jobs") ||
+        path.includes("career") ||
+        path.includes("job")) &&
+      buttons.some(function (label) {
+        return (
+          /(^|\s)apply now(\s|$)/i.test(label) ||
+          /apply for this job/i.test(label) ||
+          /apply to this job/i.test(label) ||
+          /start application/i.test(label)
+        );
+      });
     var hasCreateAccount =
-      /create account|verify new password|password requirements/i.test(
+      /create account|join today|verify new password|password requirements/i.test(
         lowerText,
       ) ||
       buttons.some(function (label) {
-        return /create account|sign up|register/i.test(label);
+        return /create account|join today|sign up|register/i.test(label);
       });
     var hasSignIn =
       /already have an account|sign in|log in|login/i.test(lowerText) ||
@@ -567,12 +581,12 @@ function createC3WorkflowDetectionFunction() {
     if (currentStep) {
       phase = "job_fill";
       priority = 40;
-    } else if (startApplication || applyManually) {
+    } else if (startApplication || applyManually || genericApplyEntry) {
       phase = "apply_entry";
       priority = 50;
     } else if (
       passwordCount ||
-      (emailCount && (hasCreateAccount || hasSignIn))
+      (emailCount && (hasCreateAccount || hasSignIn) && !genericApplyEntry)
     ) {
       phase = "auth";
       priority = 60;
@@ -599,6 +613,7 @@ function createC3WorkflowDetectionFunction() {
       hasSignIn: hasSignIn,
       startApplication: startApplication,
       applyManually: applyManually,
+      genericApplyEntry: genericApplyEntry,
       currentStep: currentStep
         ? {
             current: Number(currentStep[1]),
@@ -633,6 +648,35 @@ function createClickWorkdayApplyManuallyFunction() {
       );
     }
 
+    function isOracleEmailGate(text) {
+      var url = location.href || "";
+      var hasEmailInput = Array.from(
+        document.querySelectorAll("input[type='email'], input"),
+      )
+        .filter(visible)
+        .some(function (input) {
+          var descriptor = normalize(
+            [
+              input.type,
+              input.name,
+              input.id,
+              input.getAttribute("aria-label"),
+              input.getAttribute("placeholder"),
+            ]
+              .filter(Boolean)
+              .join(" "),
+          );
+          return /email/i.test(descriptor);
+        });
+      return (
+        /\/apply\/email(?:$|[/?#])/i.test(url) ||
+        (hasEmailInput &&
+          /you don't need to have an account|using your email|email address/i.test(
+            text || "",
+          ))
+      );
+    }
+
     var bodyText = document.body ? document.body.innerText || "" : "";
     if (/current step\s+\d+\s+of\s+\d+/i.test(bodyText)) {
       return {
@@ -642,7 +686,30 @@ function createClickWorkdayApplyManuallyFunction() {
         href: location.href,
       };
     }
-    if (!/Start Your Application/i.test(bodyText)) {
+    var hasGenericApplyEntry = Array.from(
+      document.querySelectorAll("a, button, [role='button']"),
+    )
+      .filter(visible)
+      .some(function (el) {
+        var label = normalize(
+          [
+            el.getAttribute("aria-label"),
+            el.getAttribute("title"),
+            el.innerText,
+            el.textContent,
+            el.href,
+          ]
+            .filter(Boolean)
+            .join(" "),
+        );
+        return (
+          /(^|\s)apply now(\s|$)/i.test(label) ||
+          /apply for this job/i.test(label) ||
+          /apply to this job/i.test(label) ||
+          /start application/i.test(label)
+        );
+      });
+    if (!/Start Your Application/i.test(bodyText) && !hasGenericApplyEntry) {
       return {
         ok: true,
         skipped: true,
@@ -671,6 +738,14 @@ function createClickWorkdayApplyManuallyFunction() {
       }) ||
       candidates.find(function (item) {
         return /\/apply\/applyManually/i.test(item.href);
+      }) ||
+      candidates.find(function (item) {
+        return (
+          /(^|\s)apply now(\s|$)/i.test(item.text) ||
+          /apply for this job/i.test(item.text) ||
+          /apply to this job/i.test(item.text) ||
+          /start application/i.test(item.text)
+        );
       });
     if (!candidate) {
       return {
@@ -691,8 +766,10 @@ function createClickWorkdayApplyManuallyFunction() {
         ok: true,
         clicked: true,
         navigationStarted: true,
-        label: candidate.text || "Apply Manually",
-        reason: "apply_manually_navigation_started",
+        label: candidate.text || "Apply",
+        reason: /apply manually/i.test(candidate.text || "")
+          ? "apply_manually_navigation_started"
+          : "generic_apply_navigation_started",
         href: candidate.href,
       };
     } else {
@@ -706,13 +783,16 @@ function createClickWorkdayApplyManuallyFunction() {
     var stepMatch = afterText.match(
       /current step\s+(\d+)\s+of\s+(\d+)\s*\n([^\n]+)/i,
     );
+    var emailGateReached = isOracleEmailGate(afterText);
     return {
-      ok: Boolean(stepMatch),
+      ok: Boolean(stepMatch) || emailGateReached,
       clicked: true,
-      label: candidate.text || "Apply Manually",
+      label: candidate.text || "Apply",
       reason: stepMatch
         ? "apply_manually_clicked"
-        : "application_step_not_reached",
+        : emailGateReached
+          ? "oracle_email_gate_reached"
+          : "application_step_not_reached",
       href: location.href,
       currentStep: stepMatch
         ? {
@@ -822,15 +902,12 @@ class C3ApplyEntryWorkflow extends C3WorkflowSection {
       };
     }
     await this.notify("Opening application form");
-    await this.log(
-      "detect",
-      "Detected Workday apply-entry gate before job fill.",
-      {
-        href: detection.href || "",
-        startApplication: Boolean(detection.startApplication),
-        applyManually: Boolean(detection.applyManually),
-      },
-    );
+    await this.log("detect", "Detected apply-entry gate before job fill.", {
+      href: detection.href || "",
+      startApplication: Boolean(detection.startApplication),
+      applyManually: Boolean(detection.applyManually),
+      genericApplyEntry: Boolean(detection.genericApplyEntry),
+    });
     const results = await chrome.scripting.executeScript({
       target: { tabId: this.tabId, allFrames: true },
       func: createClickWorkdayApplyManuallyFunction(),
@@ -1089,9 +1166,166 @@ function hostsFromEmailVerificationPayload(payload = {}, tabUrl = "") {
   return Array.from(hosts).filter(Boolean);
 }
 
+async function enterEmailVerificationCode(tabId, code) {
+  if (!tabId || !code) {
+    return { ok: false, reason: "missing_tab_or_code" };
+  }
+  const results = await chrome.scripting.executeScript({
+    target: { tabId, allFrames: true },
+    args: [String(code).replace(/\D/g, "")],
+    func: async (verificationCode) => {
+      const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+      const normalize = (value) =>
+        String(value || "")
+          .replace(/\s+/g, " ")
+          .trim();
+      const visible = (el) => {
+        if (
+          !el ||
+          el.disabled ||
+          el.getAttribute?.("aria-disabled") === "true"
+        ) {
+          return false;
+        }
+        const style = getComputedStyle(el);
+        const rect = el.getBoundingClientRect();
+        return (
+          style.display !== "none" &&
+          style.visibility !== "hidden" &&
+          rect.width > 0 &&
+          rect.height > 0
+        );
+      };
+      const textOf = (el) =>
+        normalize(
+          [
+            el?.getAttribute?.("aria-label"),
+            el?.getAttribute?.("title"),
+            el?.getAttribute?.("placeholder"),
+            el?.innerText,
+            el?.textContent,
+            el?.value,
+          ]
+            .filter(Boolean)
+            .join(" "),
+        );
+      const setValue = (input, value) => {
+        const setter = Object.getOwnPropertyDescriptor(
+          HTMLInputElement.prototype,
+          "value",
+        )?.set;
+        if (setter) {
+          setter.call(input, value);
+        } else {
+          input.value = value;
+        }
+        input.dispatchEvent(new Event("input", { bubbles: true }));
+        input.dispatchEvent(new Event("change", { bubbles: true }));
+      };
+      const keyOn = (input, key) => {
+        input.dispatchEvent(
+          new KeyboardEvent("keydown", { bubbles: true, key }),
+        );
+        input.dispatchEvent(new KeyboardEvent("keyup", { bubbles: true, key }));
+      };
+      const inputs = [...document.querySelectorAll("input")]
+        .filter(visible)
+        .filter((input) => {
+          const type = String(input.type || "text").toLowerCase();
+          const text = textOf(input).toLowerCase();
+          return (
+            ![
+              "hidden",
+              "checkbox",
+              "radio",
+              "password",
+              "file",
+              "submit",
+            ].includes(type) &&
+            (["text", "tel", "number", "search", ""].includes(type) ||
+              /code|otp|verification|passcode|one-time|security/i.test(text))
+          );
+        });
+      if (!inputs.length) {
+        return {
+          ok: false,
+          reason: "verification_code_inputs_not_found",
+          href: location.href,
+        };
+      }
+      const digitBoxes = inputs.filter((input) => {
+        const max = Number(
+          input.maxLength || input.getAttribute("maxlength") || 0,
+        );
+        const width = input.getBoundingClientRect().width;
+        return max === 1 || width <= 80;
+      });
+      if (digitBoxes.length >= verificationCode.length) {
+        digitBoxes.slice(0, verificationCode.length).forEach((input, index) => {
+          input.focus();
+          setValue(input, verificationCode[index]);
+          keyOn(input, verificationCode[index]);
+        });
+      } else {
+        const scored = inputs
+          .map((input, index) => {
+            const text = textOf(input).toLowerCase();
+            const score =
+              (/code|otp|verification|passcode|one-time|security/.test(text)
+                ? 10
+                : 0) - index;
+            return { input, score };
+          })
+          .sort((a, b) => b.score - a.score);
+        const input = scored[0].input;
+        input.focus();
+        setValue(input, verificationCode);
+      }
+      await sleep(300);
+      const forbidden =
+        /(submit application|final submit|submit my application|withdraw|delete)/i;
+      const submit = [
+        ...document.querySelectorAll(
+          "button, [role='button'], input[type='submit']",
+        ),
+      ]
+        .filter(visible)
+        .map((el) => ({ el, text: textOf(el) }))
+        .find(
+          (item) =>
+            !forbidden.test(item.text) &&
+            /^(verify|continue|next|submit|confirm)\b/i.test(item.text),
+        );
+      if (submit) {
+        submit.el.scrollIntoView({ block: "center", inline: "nearest" });
+        submit.el.click();
+      }
+      await sleep(700);
+      return {
+        ok: true,
+        method:
+          digitBoxes.length >= verificationCode.length
+            ? "digit_boxes"
+            : "single_input",
+        clickedSubmit: Boolean(submit),
+        href: location.href,
+      };
+    },
+  });
+  return (
+    results.find((entry) => entry.frameId === 0 && entry.result?.ok)?.result ||
+    results.find((entry) => entry.result?.ok)?.result ||
+    results.find((entry) => entry.result)?.result || {
+      ok: false,
+      reason: "verification_code_entry_failed",
+    }
+  );
+}
+
 async function awaitEmailVerification(payload = {}, sender = {}) {
   const tabId = payload.tabId || sender.tab?.id;
   const tab = tabId ? await chrome.tabs.get(tabId).catch(() => null) : null;
+  const fillRunId = payload.fillRunId || "";
   const state = await getExtensionState();
   if (!state.settings.autoEmailVerificationEnabled && payload.force !== true) {
     await showPageToast(
@@ -1139,7 +1373,11 @@ async function awaitEmailVerification(payload = {}, sender = {}) {
       message: "No account email is saved.",
     };
   }
-  await showFillProgress(tabId, "Waiting for verification email");
+  await showFillProgress(
+    tabId,
+    `Checking ${email} for a verification code`,
+    fillRunId,
+  );
   const bridgeUrl = emailVerificationBridgeUrl(state.settings);
   await logActivity(
     "email_verification.wait",
@@ -1171,7 +1409,7 @@ async function awaitEmailVerification(payload = {}, sender = {}) {
       ok: false,
       reason: "bad_bridge_response",
     }));
-    if (!response.ok || !result.ok || !result.link) {
+    if (!response.ok || !result.ok || (!result.link && !result.code)) {
       await showPageToast(
         tabId,
         result.message || "Manual email verification required.",
@@ -1190,6 +1428,58 @@ async function awaitEmailVerification(payload = {}, sender = {}) {
         bridgeResult: result,
       };
     }
+    if (result.code) {
+      await showFillProgress(
+        tabId,
+        "Verification code found. Entering code",
+        fillRunId,
+      );
+      const codeEntry = await enterEmailVerificationCode(tabId, result.code);
+      await logActivity(
+        codeEntry.ok
+          ? "email_verification.enter_code"
+          : "email_verification.enter_code_failed",
+        codeEntry.ok
+          ? "Entered email verification code."
+          : "Could not enter email verification code.",
+        {
+          tabId,
+          source: result.source,
+          subject: result.subject,
+          receivedAt: result.receivedAt,
+          codeLength: String(result.code || "").length,
+          codeEntry,
+        },
+        codeEntry.ok ? "ok" : "blocked",
+      );
+      if (!codeEntry.ok) {
+        await showPageToast(
+          tabId,
+          "Verification code found, but it could not be entered automatically.",
+          "warn",
+        );
+        return {
+          ok: false,
+          reason: codeEntry.reason || "code_entry_failed",
+          bridgeResult: result,
+          codeEntry,
+        };
+      }
+      await showPageToast(tabId, "Verification code entered.", "info");
+      return {
+        ok: true,
+        method: "code",
+        source: result.source,
+        subject: result.subject,
+        receivedAt: result.receivedAt,
+        codeEntry,
+      };
+    }
+    await showFillProgress(
+      tabId,
+      "Verification link found. Opening link",
+      fillRunId,
+    );
     await chrome.tabs.update(tabId, { url: result.link, active: true });
     await logActivity(
       "email_verification.open_link",
@@ -1205,6 +1495,7 @@ async function awaitEmailVerification(payload = {}, sender = {}) {
     await showPageToast(tabId, "Verification link opened.", "info");
     return {
       ok: true,
+      method: "link",
       link: result.link,
       source: result.source,
       subject: result.subject,
@@ -1436,6 +1727,171 @@ async function getPageSnapshot(tabId) {
   } catch (_error) {
     return {};
   }
+}
+
+async function detectEmailVerificationCodePage(tabId) {
+  if (!tabId) {
+    return { ok: false, reason: "missing_tab_id" };
+  }
+  try {
+    const results = await withTimeout(
+      chrome.scripting.executeScript({
+        target: { tabId, allFrames: true },
+        func: () => {
+          const visible = (el) => {
+            if (!el) {
+              return false;
+            }
+            const style = window.getComputedStyle(el);
+            if (
+              style.display === "none" ||
+              style.visibility === "hidden" ||
+              style.opacity === "0"
+            ) {
+              return false;
+            }
+            const rect = el.getBoundingClientRect();
+            return rect.width > 0 && rect.height > 0;
+          };
+          const textOf = (el) =>
+            String(el?.innerText || el?.textContent || el?.value || "")
+              .replace(/\s+/g, " ")
+              .trim();
+          const bodyText = textOf(document.body);
+          const codePageText =
+            /(confirm your identity|verification code|one[-\s]?time pass ?code|type the code|enter (?:the )?(?:verification|security|one[-\s]?time|pass) ?code|otp|passcode)/i.test(
+              bodyText,
+            );
+          const inputs = [...document.querySelectorAll("input")]
+            .filter(visible)
+            .map((input) => {
+              const descriptor = [
+                input.type,
+                input.name,
+                input.id,
+                input.className,
+                input.getAttribute("aria-label"),
+                input.getAttribute("placeholder"),
+                input.getAttribute("autocomplete"),
+              ]
+                .join(" ")
+                .toLowerCase();
+              const maxLength = Number(input.getAttribute("maxlength") || 0);
+              return {
+                descriptor,
+                type: String(input.type || "").toLowerCase(),
+                maxLength,
+                valueLength: String(input.value || "").length,
+              };
+            });
+          const codeInputs = inputs.filter(
+            (input) =>
+              /(pin-code|verification code|otp|passcode|one-time|security code|digit \d+ of)/i.test(
+                input.descriptor,
+              ) ||
+              (codePageText &&
+                ["number", "tel", "text"].includes(input.type) &&
+                input.maxLength === 1),
+          );
+          const buttons = [
+            ...document.querySelectorAll(
+              "button, [role='button'], input[type='button'], input[type='submit']",
+            ),
+          ]
+            .filter(visible)
+            .map(textOf)
+            .filter(Boolean);
+          const hasVerifyButton = buttons.some((text) =>
+            /^(verify|confirm|continue|next)\b/i.test(text),
+          );
+          const emailMatch = bodyText.match(
+            /\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/i,
+          );
+          const ok = codePageText && codeInputs.length >= 4 && hasVerifyButton;
+          return {
+            ok,
+            reason: ok ? "" : "not_email_verification_code_page",
+            href: location.href,
+            email: emailMatch?.[0] || "",
+            inputCount: codeInputs.length,
+            buttonLabels: buttons.slice(0, 8),
+            bodyHead: bodyText.slice(0, 280),
+          };
+        },
+      }),
+      3000,
+      () => null,
+    );
+    const detections = Array.isArray(results)
+      ? results.map((entry) => ({
+          frameId: entry.frameId,
+          ...(entry.result || {}),
+        }))
+      : [];
+    return (
+      detections.find((entry) => entry.frameId === 0 && entry.ok) ||
+      detections.find((entry) => entry.ok) ||
+      detections[0] || {
+        ok: false,
+        reason: "no_detection_result",
+      }
+    );
+  } catch (error) {
+    return {
+      ok: false,
+      reason: "email_verification_detection_failed",
+      message: String(error?.message || error),
+    };
+  }
+}
+
+async function maybeHandleEmailVerificationGate({
+  tabId,
+  state,
+  fillRunId,
+  triggeredBy,
+  pageIndex,
+}) {
+  const detection = await detectEmailVerificationCodePage(tabId);
+  if (!detection.ok) {
+    return { handled: false, detection };
+  }
+  const tab = await chrome.tabs.get(tabId).catch(() => null);
+  await showFillProgress(
+    tabId,
+    "Verification code required. Checking email",
+    fillRunId,
+  );
+  await sendDebugLog("c3_email_verification_code_gate", {
+    tabId,
+    fillRunId,
+    triggeredBy,
+    pageIndex,
+    detection,
+  });
+  await logActivity(
+    "email_verification.code_gate",
+    "Detected email verification code gate during page walk.",
+    { tabId, fillRunId, pageIndex, detection },
+  );
+  const result = await awaitEmailVerification(
+    {
+      tabId,
+      force: true,
+      email:
+        detection.email ||
+        state?.profile?.accountEmail ||
+        state?.profile?.email ||
+        "",
+      jobUrl: tab?.url || state?.activeApplyContext?.applyUrl || "",
+      since: new Date(Date.now() - 10 * 60 * 1000).toISOString(),
+      timeoutSeconds: state?.settings?.emailVerificationTimeoutSeconds || 90,
+      fillRunId,
+    },
+    { tab: { id: tabId } },
+  );
+  await new Promise((resolve) => setTimeout(resolve, 1200));
+  return { handled: true, detection, result };
 }
 
 function pageNumberFromSnapshot(snapshot = {}, fallback = 1) {
@@ -1930,6 +2386,17 @@ function pageWalkFillSummary(fillResponse = {}) {
   };
 }
 
+function shouldRepairPageWalkValidation(nextAction = {}, snapshot = {}) {
+  const reason = nextAction.reason || "";
+  if (reason === "visible_validation_errors") {
+    return true;
+  }
+  if (reason !== "final_submit_visible") {
+    return false;
+  }
+  return Boolean((snapshot.visibleValidationErrors || []).length);
+}
+
 async function runV2PageWalkAfterFill({
   tabId,
   state,
@@ -1950,6 +2417,7 @@ async function runV2PageWalkAfterFill({
     currentPageSnapshot,
     successfulPageCount || 1,
   );
+  const validationRepairKeys = new Set();
 
   for (let pageIndex = 1; pageIndex <= V2_PAGE_WALK_MAX_PAGES; pageIndex += 1) {
     if (isFillRunCancelled(fillRunId)) {
@@ -1965,6 +2433,43 @@ async function runV2PageWalkAfterFill({
     );
     currentPageSnapshot = beforeNextSnapshot;
     lastPageNumber = beforePageNumber;
+    const beforeVerificationGate = await maybeHandleEmailVerificationGate({
+      tabId,
+      state,
+      fillRunId,
+      triggeredBy,
+      pageIndex,
+    });
+    if (beforeVerificationGate.handled) {
+      steps.push({
+        step: steps.length + 1,
+        kind: "email_verification_code_gate",
+        pageIndex: beforePageNumber,
+        attemptIndex: pageIndex,
+        ok: Boolean(beforeVerificationGate.result?.ok),
+        method: beforeVerificationGate.result?.method || "",
+        reason: beforeVerificationGate.result?.reason || "",
+        detection: beforeVerificationGate.detection || {},
+      });
+      if (!beforeVerificationGate.result?.ok) {
+        stoppedReason =
+          beforeVerificationGate.result?.reason || "email_verification_failed";
+        failedPageNumber = beforePageNumber;
+        stopDetails = {
+          message:
+            beforeVerificationGate.result?.message ||
+            "Email verification could not be completed automatically.",
+          pageTitle: beforeNextSnapshot.currentStep?.title || "",
+        };
+        break;
+      }
+      currentPageSnapshot = await getPageSnapshot(tabId);
+      lastPageNumber = pageNumberFromSnapshot(
+        currentPageSnapshot,
+        beforePageNumber,
+      );
+      continue;
+    }
     const nextAction = await clickSafeNextForTab(tabId, {
       auto: true,
       triggeredBy: `${triggeredBy || "fill_current_page"}:v2_page_walk:${pageIndex}`,
@@ -1987,6 +2492,43 @@ async function runV2PageWalkAfterFill({
       fillBeforeClick: pageWalkFillSummary(currentFill),
     });
     if (!nextAction.clicked) {
+      const repairKey = `${beforePageNumber}:${beforeNextSnapshot.href || ""}`;
+      if (
+        shouldRepairPageWalkValidation(nextAction, beforeNextSnapshot) &&
+        !validationRepairKeys.has(repairKey)
+      ) {
+        validationRepairKeys.add(repairKey);
+        await showFillProgress(
+          tabId,
+          `Repairing page ${beforePageNumber} validation`,
+          fillRunId,
+        );
+        const repairState = await getExtensionState();
+        const repairFill = await runFillWithOneRefreshRetry(
+          tabId,
+          repairState,
+          `${triggeredBy || "fill_current_page"}:v2_page_walk_validation_repair`,
+          fillRunId,
+          { allowLlmAnswers },
+        );
+        currentFill = repairFill;
+        steps.push({
+          step: steps.length + 1,
+          kind: "fill_validation_repair",
+          pageIndex: beforePageNumber,
+          attemptIndex: pageIndex,
+          pageTitle: beforeNextSnapshot.currentStep?.title || "",
+          stoppedReason: nextAction.reason || "",
+          ...pageWalkFillSummary(repairFill),
+        });
+        if (
+          repairFill?.ok &&
+          !repairFill.cancelled &&
+          pageWalkFillSummary(repairFill).filledFieldCount > 0
+        ) {
+          continue;
+        }
+      }
       stoppedReason = nextAction.reason || "safe_next_stopped";
       if (stoppedReason === "final_submit_visible" && currentFill?.ok) {
         successfulPageCount += 1;
@@ -2073,6 +2615,43 @@ async function runV2PageWalkAfterFill({
     successfulPageCount += 1;
     lastPageNumber = nextPageNumber;
     currentPageSnapshot = afterNextSnapshot;
+    const afterVerificationGate = await maybeHandleEmailVerificationGate({
+      tabId,
+      state,
+      fillRunId,
+      triggeredBy,
+      pageIndex,
+    });
+    if (afterVerificationGate.handled) {
+      steps.push({
+        step: steps.length + 1,
+        kind: "email_verification_code_gate",
+        pageIndex: nextPageNumber,
+        attemptIndex: pageIndex,
+        ok: Boolean(afterVerificationGate.result?.ok),
+        method: afterVerificationGate.result?.method || "",
+        reason: afterVerificationGate.result?.reason || "",
+        detection: afterVerificationGate.detection || {},
+      });
+      if (!afterVerificationGate.result?.ok) {
+        stoppedReason =
+          afterVerificationGate.result?.reason || "email_verification_failed";
+        failedPageNumber = nextPageNumber;
+        stopDetails = {
+          message:
+            afterVerificationGate.result?.message ||
+            "Email verification could not be completed automatically.",
+          pageTitle: afterNextSnapshot.currentStep?.title || "",
+        };
+        break;
+      }
+      currentPageSnapshot = await getPageSnapshot(tabId);
+      lastPageNumber = pageNumberFromSnapshot(
+        currentPageSnapshot,
+        nextPageNumber,
+      );
+      continue;
+    }
     await showFillProgress(tabId, `Filling page ${nextPageNumber}`, fillRunId);
     const pageState = await getExtensionState();
     currentFill = await runFillWithOneRefreshRetry(
@@ -4695,29 +5274,85 @@ async function handleMessage(message, sender = {}) {
         message.payload?.allowLlmAnswers !== false;
       let workflow = null;
       try {
-        workflow = await new C3CombinedFillWorkflow({
+        const directVerificationGate = await maybeHandleEmailVerificationGate({
           tabId,
-          fillRunId,
           state,
+          fillRunId,
           triggeredBy: message.payload?.triggeredBy || "fill_current_page",
-        }).prepare();
-        if (!workflow.applyEntry?.ok) {
-          result = workflowBlockedResponse(
-            state,
-            workflow,
-            workflow.applyEntry?.reason || "apply_entry_failed",
-          );
+          pageIndex: 0,
+        });
+        if (
+          directVerificationGate.handled &&
+          !directVerificationGate.result?.ok
+        ) {
+          result = {
+            ok: false,
+            reason:
+              directVerificationGate.result?.reason ||
+              "email_verification_failed",
+            message:
+              directVerificationGate.result?.message ||
+              "Email verification could not be completed automatically.",
+            route: {
+              routeName: "email_verification",
+              fillSource: state.activeApplyContext.sourceMode || "manual",
+              strategy: "email_verification",
+              adapterName: state.activeApplyContext.atsType || "",
+              requestedAtsType: state.activeApplyContext.atsType || "",
+              detectedAtsType: "email_verification",
+              usedGenericFallback: false,
+              adapterBackedByGeneric: false,
+            },
+            attempt: {
+              applyUrl: state.activeApplyContext.applyUrl,
+              atsType: state.activeApplyContext.atsType,
+              filledFieldCount: 0,
+              manualReviewRequired: true,
+              manualReviewReasons: [
+                directVerificationGate.result?.reason ||
+                  "email_verification_failed",
+              ],
+            },
+            result: {
+              ok: false,
+              pendingLlmFieldCount: 0,
+              manualReviewReasons: [
+                directVerificationGate.result?.reason ||
+                  "email_verification_failed",
+              ],
+              filledFieldCount: 0,
+              filledFields: [],
+              fieldInventory: [],
+              generatedAnswers: [],
+              emailVerification: directVerificationGate,
+            },
+            generatedAnswers: [],
+          };
         } else {
-          result = await runFillWithOneRefreshRetry(
+          workflow = await new C3CombinedFillWorkflow({
             tabId,
-            state,
-            message.payload?.triggeredBy || "fill_current_page",
             fillRunId,
-            { allowLlmAnswers },
-          );
-          result.workflow = workflow;
-          if (result.result) {
-            result.result.workflow = workflow;
+            state,
+            triggeredBy: message.payload?.triggeredBy || "fill_current_page",
+          }).prepare();
+          if (!workflow.applyEntry?.ok) {
+            result = workflowBlockedResponse(
+              state,
+              workflow,
+              workflow.applyEntry?.reason || "apply_entry_failed",
+            );
+          } else {
+            result = await runFillWithOneRefreshRetry(
+              tabId,
+              state,
+              message.payload?.triggeredBy || "fill_current_page",
+              fillRunId,
+              { allowLlmAnswers },
+            );
+            result.workflow = workflow;
+            if (result.result) {
+              result.result.workflow = workflow;
+            }
           }
         }
         if (

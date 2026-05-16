@@ -550,6 +550,7 @@ Expected Graduation: Sep 2026
                     availableAdapters: ["generic", "workday", "greenhouse"],
                 }}),
                 workable: detectAtsFromUrl("https://apply.workable.com/acme/j/123"),
+                oracle: detectAtsFromUrl("https://eezy.fa.ca2.oraclecloud.com/hcmUI/CandidateExperience/en/sites/CX/job/19347/apply/email"),
                 taleo: detectAtsFromUrl("https://acme.taleo.net/careersection/jobdetail.ftl"),
                 genericBacked: genericBackedAtsNames(),
                 names: ATS_REGISTRY.map((entry) => entry.name),
@@ -571,9 +572,11 @@ Expected Graduation: Sep 2026
         self.assertEqual(payload["greenhouseFrame"], "greenhouse")
         self.assertEqual(payload["hootsuiteEmbedded"], "greenhouse")
         self.assertEqual(payload["workable"], "workable")
+        self.assertEqual(payload["oracle"], "oracle")
         self.assertEqual(payload["taleo"], "taleo")
         self.assertIn("greenhouse", payload["genericBacked"])
         self.assertIn("lever", payload["genericBacked"])
+        self.assertIn("oracle", payload["genericBacked"])
         self.assertIn("icims", payload["names"])
 
     def test_extension_has_c4_polling_scaffold(self):
@@ -599,6 +602,9 @@ Expected Graduation: Sep 2026
             REPO_ROOT / "executioner" / "src" / "background" / "fill-runner.js"
         ).read_text(encoding="utf-8")
         popup_js = (REPO_ROOT / "executioner" / "src" / "popup" / "popup.js").read_text(
+            encoding="utf-8"
+        )
+        popup_html = (REPO_ROOT / "executioner" / "src" / "popup" / "popup.html").read_text(
             encoding="utf-8"
         )
         options = (REPO_ROOT / "executioner" / "src" / "options" / "options.html").read_text(
@@ -718,6 +724,9 @@ Expected Graduation: Sep 2026
         self.assertIn('id="debug-log-sink-enabled"', options)
         self.assertIn('id="use-field-pipeline-v2"', options)
         self.assertIn('id="auto-export-log-prefix"', options)
+        self.assertIn('id="backend-url-status"', popup_js + popup_html)
+        self.assertIn('id="service-token-status"', popup_js + popup_html)
+        self.assertIn("summarizeBackendUrl", popup_js)
         self.assertIn('id="profile-account-email"', options)
         self.assertIn('id="profile-account-password"', options)
         self.assertIn('id="export-logs-now"', options)
@@ -856,6 +865,8 @@ Expected Graduation: Sep 2026
         self.assertIn("chrome.tabs.captureVisibleTab", fill_runner)
         self.assertIn("capture_visible_tab_timeout", fill_runner)
         self.assertIn("persistenceDiagnostics", fill_runner)
+        self.assertIn("sanitizeAttempt", fill_runner)
+        self.assertIn("let attempt = sanitizeAttempt(attemptPayload)", fill_runner)
         self.assertIn("debugIdentityForState(context.extensionState)", fill_runner)
         self.assertIn("FILL_ADAPTERS_V2", fill_runner)
         self.assertIn("v2_fill_cancelled", field_pipeline_v2)
@@ -1448,14 +1459,23 @@ Expected Graduation: Sep 2026
         self.assertIn("--check-auth", bridge)
         self.assertIn("checkMailAuth", bridge)
         self.assertIn("safeVerificationLinks", bridge)
+        self.assertIn("verificationCodeCandidates", bridge)
+        self.assertIn("code.length >= 4 && code.length <= 8", bridge)
+        self.assertIn("Multiple verification codes matched", bridge)
+        self.assertIn('method: "code"', bridge)
+        self.assertIn("code: codes[0]", bridge)
         self.assertIn("unsubscribe", bridge)
         self.assertIn("verifyEmail", bridge)
         self.assertIn("signup_email_verification.html", smoke)
         self.assertIn("email_verified.html", smoke)
+        self.assertIn("enterVerificationCode", smoke)
+        self.assertIn("Email verification code found", smoke)
+        self.assertIn("codeEntry", smoke)
         self.assertIn("HUNT_C3_TEST_WORKDAY_URL", smoke)
         self.assertIn("loadDotEnv", smoke)
         self.assertIn("checkMailAuth", smoke)
         self.assertIn("clickSafeAccountAction", smoke)
+        self.assertNotIn("clickedInPage", smoke)
         self.assertIn("--reset-site-data", smoke)
         self.assertIn("resetBrowserSiteData", smoke)
         self.assertIn("clickSignInAction", smoke)
@@ -1513,7 +1533,23 @@ Expected Graduation: Sep 2026
         self.assertIn("autoEmailVerificationEnabled", background)
         self.assertIn("email_verification_disabled", background)
         self.assertIn("emailVerificationTimeoutSeconds", background)
-        self.assertIn("Waiting for verification email", background)
+        self.assertIn("Verification code required. Checking email", background)
+        self.assertIn("Checking ${email} for a verification code", background)
+        self.assertIn("enterEmailVerificationCode", background)
+        self.assertIn("Verification code found. Entering code", background)
+        self.assertIn("Verification link found. Opening link", background)
+        self.assertIn("email_verification.enter_code", background)
+        self.assertIn("detectEmailVerificationCodePage", background)
+        self.assertIn("maybeHandleEmailVerificationGate", background)
+        self.assertIn("c3_email_verification_code_gate", background)
+        self.assertIn("email_verification.code_gate", background)
+        self.assertIn("directVerificationGate", background)
+        self.assertIn("routeName: \"email_verification\"", background)
+        self.assertIn("pin-code", background)
+        self.assertIn("confirm your identity", background)
+        self.assertIn("enter (?:the )?(?:verification|security|one", background)
+        self.assertIn("isOracleEmailGate", background)
+        self.assertIn("oracle_email_gate_reached", background)
         self.assertIn("http://127.0.0.1:8765/verify-email", background)
         self.assertIn('require("./lib/c3_gmail_oauth")', bridge)
         self.assertIn('require("./lib/c3_gmail_oauth")', gmail_oauth_smoke)

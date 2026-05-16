@@ -110,6 +110,15 @@ function summarizeMode(activeApplyContext = {}) {
   return activeApplyContext.jobId ? "Job Context" : "Standalone";
 }
 
+function summarizeBackendUrl(url = "") {
+  try {
+    const parsed = new URL(url);
+    return parsed.host || url;
+  } catch (_error) {
+    return url || "Not set";
+  }
+}
+
 async function loadState() {
   const response = await chrome.runtime.sendMessage({
     type: "hunt.apply.get_state",
@@ -166,6 +175,14 @@ async function loadState() {
     response.settings.debugLogSinkEnabled ? "Enabled" : "Disabled",
   );
   setText(
+    "backend-url-status",
+    summarizeBackendUrl(response.settings.backendUrl),
+  );
+  setText(
+    "service-token-status",
+    response.settings.serviceToken ? "Set" : "Missing",
+  );
+  setText(
     "c4-polling",
     response.settings.c4PollingEnabled ? "Enabled" : "Disabled",
   );
@@ -176,12 +193,19 @@ async function loadState() {
     latestAttempt?.resultSummary || "No attempts logged.",
   );
 
-  setStatus(
-    response.activeApplyContext.jobId
-      ? "Job context mode loaded."
-      : "Standalone mode loaded.",
-    "info",
-  );
+  if (
+    response.settings.debugLogSinkEnabled &&
+    !response.settings.serviceToken
+  ) {
+    setStatus("Debug logs need the service token in Options.", "warn");
+  } else {
+    setStatus(
+      response.activeApplyContext.jobId
+        ? "Job context mode loaded."
+        : "Standalone mode loaded.",
+      "info",
+    );
+  }
 }
 
 document.getElementById("fill-now")?.addEventListener("click", async () => {

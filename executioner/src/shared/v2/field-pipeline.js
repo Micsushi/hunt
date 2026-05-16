@@ -11,6 +11,7 @@
     return [
       "select",
       "radio_group",
+      "segmented_button_group",
       "checkbox",
       "combobox",
       "button_listbox",
@@ -80,6 +81,43 @@
         window.__huntApplyActiveFillRunId !== fillRunId) ||
       (fillRunId && cancelledIds.includes(fillRunId)),
     );
+  }
+
+  function isPostSubmitSignatureRisk(field) {
+    var descriptor = String(field?.descriptor || "").toLowerCase();
+    var name = String(field?.element?.name || field?.element?.id || "")
+      .toLowerCase()
+      .replace(/[_-]/g, " ");
+    var looksLikeSignature =
+      descriptor.includes("e-signature") ||
+      descriptor.includes("signature") ||
+      name.includes("full name") ||
+      name.includes("fullname");
+    if (!looksLikeSignature) {
+      return false;
+    }
+    var body = String(document.body?.innerText || "").toLowerCase();
+    var hasSubmitValidationBanner =
+      body.includes("before submitting your job application") ||
+      body.includes("need to add or modify") ||
+      body.includes("issues that need to be fixed");
+    if (!hasSubmitValidationBanner) {
+      return false;
+    }
+    return Array.from(
+      document.querySelectorAll(
+        "button, [role='button'], input[type='submit']",
+      ),
+    ).some(function (button) {
+      var text = String(
+        button.innerText || button.textContent || button.value || "",
+      )
+        .replace(/\s+/g, " ")
+        .trim()
+        .toLowerCase();
+      var rect = button.getBoundingClientRect?.();
+      return text === "submit" && rect && rect.width > 0 && rect.height > 0;
+    });
   }
 
   function emitSiteAction(context, payload) {
@@ -409,6 +447,7 @@
     var filledFields = [];
     var fieldInventory = [];
     var generatedAnswers = [];
+    var processedQuestionHashes = new Set();
     if (fillCancelled(context)) {
       return cancelledResult(
         context,
@@ -418,79 +457,130 @@
         generatedAnswers,
       );
     }
-    for (var i = 0; i < fields.length; i++) {
-      if (fillCancelled(context)) {
-        return cancelledResult(
-          context,
-          audit,
-          filledFields,
-          fieldInventory,
-          generatedAnswers,
-        );
-      }
-      var field = fields[i];
-      if (context.settings?.fillRequiredOnly !== false && !field.required) {
+    for (var pass = 1; pass <= 3; pass++) {
+      var passFilledCount = 0;
+      if (pass > 1) {
+        fields = root.uiInspector.collectCandidates();
         root.audit.pushEvent(audit, {
-          action: "field_skipped",
-          step: "field.required_filter",
+          action: "page_rescanned",
+          step: "page.rescan",
           status: "info",
-          reason: "not_required",
-          fieldId: field.fieldId,
-          questionHash: field.questionHash,
-          uiModel: field.uiModel,
-        });
-        continue;
-      }
-      if (shouldSkipPasswordField(field, context)) {
-        root.audit.pushEvent(audit, {
-          action: "field_skipped",
-          step: "field.password_filter",
-          status: "info",
-          reason: "password_field_skipped",
-          fieldId: field.fieldId,
-          questionHash: field.questionHash,
-          uiModel: field.uiModel,
-        });
-        continue;
-      }
-      var result = await runField({
-        field: field,
-        profile: context.profile || {},
-        settings: context.settings || {},
-        audit: audit,
-        activeApplyContext: context.activeApplyContext || {},
-        defaultResume: context.defaultResume || {},
-        fillRunId: context.fillRunId || "",
-      });
-      if (fillCancelled(context)) {
-        return cancelledResult(
-          context,
-          audit,
-          filledFields,
-          fieldInventory,
-          generatedAnswers,
-        );
-      }
-      fieldInventory.push(inventoryEntry(field, result.fieldAudit));
-      if (result.filled) {
-        filledFields.push({
-          field: field.descriptor,
-          valueSource: result.fieldAudit.valueSource,
-          questionHash: field.questionHash,
+          reason: "conditional_fields_check",
+          detail: {
+            pass: pass,
+            fieldCount: fields.length,
+            pendingCount: fields.filter(function (field) {
+              return (
+                field.required &&
+                !processedQuestionHashes.has(field.questionHash)
+              );
+            }).length,
+          },
         });
       }
-      if (
-        result.fieldAudit.valueSource &&
-        result.fieldAudit.valueSource.startsWith("fallback:")
-      ) {
-        generatedAnswers.push({
-          questionHash: field.questionHash,
-          questionText: field.descriptor,
-          answerText: result.fieldAudit.answerPreview,
-          answerSource: result.fieldAudit.valueSource,
-          confidence: "low",
-          manualReviewRequired: true,
+      for (var i = 0; i < fields.length; i++) {
+        if (fillCancelled(context)) {
+          return cancelledResult(
+            context,
+            audit,
+            filledFields,
+            fieldInventory,
+            generatedAnswers,
+          );
+        }
+        var field = fields[i];
+        if (processedQuestionHashes.has(field.questionHash)) {
+          continue;
+        }
+        if (context.settings?.fillRequiredOnly !== false && !field.required) {
+          root.audit.pushEvent(audit, {
+            action: "field_skipped",
+            step: "field.required_filter",
+            status: "info",
+            reason: "not_required",
+            fieldId: field.fieldId,
+            questionHash: field.questionHash,
+            uiModel: field.uiModel,
+          });
+          continue;
+        }
+        if (shouldSkipPasswordField(field, context)) {
+          root.audit.pushEvent(audit, {
+            action: "field_skipped",
+            step: "field.password_filter",
+            status: "info",
+            reason: "password_field_skipped",
+            fieldId: field.fieldId,
+            questionHash: field.questionHash,
+            uiModel: field.uiModel,
+          });
+          continue;
+        }
+        if (isPostSubmitSignatureRisk(field)) {
+          root.audit.pushEvent(audit, {
+            action: "field_skipped",
+            step: "field.post_submit_signature_guard",
+            status: "warn",
+            reason: "post_submit_validation_signature_guard",
+            fieldId: field.fieldId,
+            questionHash: field.questionHash,
+            uiModel: field.uiModel,
+          });
+          root.audit.pushIssue(audit, null, {
+            kind: "post_submit_signature_guard",
+            severity: "warn",
+            failedStep: "field.post_submit_signature_guard",
+            reason:
+              "Skipped final signature field because the page is already in post-submit validation mode.",
+            descriptor: field.descriptor || "",
+            uiModel: field.uiModel || "",
+          });
+          continue;
+        }
+        var result = await runField({
+          field: field,
+          profile: context.profile || {},
+          settings: context.settings || {},
+          audit: audit,
+          activeApplyContext: context.activeApplyContext || {},
+          defaultResume: context.defaultResume || {},
+          fillRunId: context.fillRunId || "",
         });
+        if (fillCancelled(context)) {
+          return cancelledResult(
+            context,
+            audit,
+            filledFields,
+            fieldInventory,
+            generatedAnswers,
+          );
+        }
+        fieldInventory.push(inventoryEntry(field, result.fieldAudit));
+        if (result.filled) {
+          processedQuestionHashes.add(field.questionHash);
+          passFilledCount += 1;
+          filledFields.push({
+            field: field.descriptor,
+            valueSource: result.fieldAudit.valueSource,
+            questionHash: field.questionHash,
+          });
+        }
+        if (
+          result.fieldAudit.valueSource &&
+          result.fieldAudit.valueSource.startsWith("fallback:")
+        ) {
+          generatedAnswers.push({
+            questionHash: field.questionHash,
+            questionText: field.descriptor,
+            answerText: result.fieldAudit.answerPreview,
+            answerSource: result.fieldAudit.valueSource,
+            confidence: "low",
+            manualReviewRequired: true,
+          });
+        }
+      }
+      if (!passFilledCount) {
+        break;
       }
     }
     root.audit.complete(audit);

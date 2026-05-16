@@ -327,12 +327,22 @@ async function seedExtension(optionsClient, args, applyUrl) {
   return optionsClient.evaluate(
     `(async () => {
       const profile = {
-        fullName: "C3 Smoke Tester",
+        fullName: "Michael Shi",
+        firstName: "Michael",
+        lastName: "Shi",
         email: ${js(args.accountEmail)},
         accountEmail: ${js(args.accountEmail)},
         accountPassword: ${js(args.accountPassword)},
-        phone: "7800000000",
-        location: "Edmonton, Alberta, Canada"
+        phone: "7809876543",
+        location: "Edmonton, Alberta, Canada",
+        city: "Edmonton",
+        province: "Alberta",
+        country: "Canada",
+        addressLine1: "123 Main Street NW",
+        postalCode: "T6G 2R3",
+        applicationSource: "Job Board",
+        yearsOfExperience: "5",
+        linkedinUrl: "https://www.linkedin.com/in/michaelshi"
       };
       const activeApplyContext = {
         jobId: "c3-email-verification-smoke",
@@ -413,7 +423,24 @@ async function submitSignup(pageClient) {
   );
 }
 
+async function dismissCookieConsent(pageClient) {
+  await bringToFront(pageClient);
+  return pageClient.evaluate(
+    `(async () => {
+      const acceptBtn = [...document.querySelectorAll("button, a, [role='button']")].find((el) => {
+        const t = (el.innerText || el.textContent || "").trim().toLowerCase();
+        return /^accept cookies?$/i.test(t) || /^accept all$/i.test(t);
+      });
+      if (!acceptBtn) return { ok: false, reason: "no_cookie_consent_button" };
+      acceptBtn.click();
+      await new Promise((resolve) => setTimeout(resolve, 600));
+      return { ok: true };
+    })()`,
+  );
+}
+
 async function fillWorkdayAccountForm(pageClient, args) {
+  await dismissCookieConsent(pageClient).catch(() => {});
   await bringToFront(pageClient);
   return pageClient.evaluate(
     `(async () => {
@@ -471,6 +498,7 @@ async function fillWorkdayAccountForm(pageClient, args) {
 }
 
 async function fillWorkdayLoginForm(pageClient, args) {
+  await dismissCookieConsent(pageClient).catch(() => {});
   await bringToFront(pageClient);
   return pageClient.evaluate(
     `(async () => {
@@ -514,6 +542,81 @@ async function fillWorkdayLoginForm(pageClient, args) {
   );
 }
 
+async function enterVerificationCode(pageClient, code) {
+  await bringToFront(pageClient);
+  return pageClient.evaluate(
+    `(async () => {
+      const verificationCode = ${js(String(code || "").replace(/\D/g, ""))};
+      const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+      const normalize = (value) => String(value || "").replace(/\\s+/g, " ").trim();
+      const visible = (el) => {
+        if (!el || el.disabled || el.getAttribute?.("aria-disabled") === "true") return false;
+        const style = getComputedStyle(el);
+        const rect = el.getBoundingClientRect();
+        return style.display !== "none" && style.visibility !== "hidden" && rect.width > 0 && rect.height > 0;
+      };
+      const textOf = (el) => normalize([
+        el?.getAttribute?.("aria-label"),
+        el?.getAttribute?.("title"),
+        el?.getAttribute?.("placeholder"),
+        el?.innerText,
+        el?.textContent,
+        el?.value
+      ].filter(Boolean).join(" "));
+      const setValue = (input, value) => {
+        const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set;
+        if (setter) setter.call(input, value);
+        else input.value = value;
+        input.dispatchEvent(new Event("input", { bubbles: true }));
+        input.dispatchEvent(new Event("change", { bubbles: true }));
+      };
+      const inputs = [...document.querySelectorAll("input")]
+        .filter(visible)
+        .filter((input) => {
+          const type = String(input.type || "text").toLowerCase();
+          const text = textOf(input);
+          return !["hidden", "checkbox", "radio", "password", "file", "submit"].includes(type) &&
+            (["text", "tel", "number", "search", ""].includes(type) || /code|otp|verification|passcode|one-time|security/i.test(text));
+        });
+      if (!verificationCode || !inputs.length) {
+        return { ok: false, reason: "verification_code_inputs_not_found", fieldCount: inputs.length, href: location.href };
+      }
+      const digitBoxes = inputs.filter((input) => Number(input.maxLength || input.getAttribute("maxlength") || 0) === 1 || input.getBoundingClientRect().width <= 80);
+      if (digitBoxes.length >= verificationCode.length) {
+        digitBoxes.slice(0, verificationCode.length).forEach((input, index) => {
+          input.focus();
+          setValue(input, verificationCode[index]);
+        });
+      } else {
+        const input = inputs
+          .map((candidate, index) => ({
+            candidate,
+            score: (/code|otp|verification|passcode|one-time|security/i.test(textOf(candidate)) ? 10 : 0) - index
+          }))
+          .sort((a, b) => b.score - a.score)[0].candidate;
+        input.focus();
+        setValue(input, verificationCode);
+      }
+      await sleep(300);
+      const submit = [...document.querySelectorAll("button, [role='button'], input[type='submit']")]
+        .filter(visible)
+        .map((el) => ({ el, text: textOf(el) }))
+        .find((item) => !/(submit application|final submit|submit my application|withdraw|delete)/i.test(item.text) && /^(verify|continue|next|submit|confirm)\\b/i.test(item.text));
+      if (submit) {
+        submit.el.scrollIntoView({ block: "center", inline: "nearest" });
+        submit.el.click();
+      }
+      await sleep(800);
+      return {
+        ok: true,
+        method: digitBoxes.length >= verificationCode.length ? "digit_boxes" : "single_input",
+        clickedSubmit: Boolean(submit),
+        href: location.href
+      };
+    })()`,
+  );
+}
+
 async function ensureWorkdayLoginPage(pageClient) {
   await bringToFront(pageClient);
   const state = await pageClient.evaluate(
@@ -526,11 +629,13 @@ async function ensureWorkdayLoginPage(pageClient) {
       const fields = [...document.querySelectorAll("input")]
         .filter((input) => input.type !== "hidden" && input.name !== "website" && visible(input))
         .map((input) => input.type);
+      const passwordCount = fields.filter((type) => type === "password").length;
       const href = location.href;
       const text = document.body ? document.body.innerText.replace(/\\s+/g, " ").trim() : "";
       return {
         href,
-        hasLoginFields: fields.some((type) => type === "password") && fields.some((type) => type === "text" || type === "email"),
+        hasLoginFields: passwordCount === 1 && fields.some((type) => type === "text" || type === "email"),
+        passwordCount,
         invalidToken: /invalid token|login\\/error/i.test([href, text].join(" "))
       };
     })()`,
@@ -782,29 +887,51 @@ async function clickSignInAction(pageClient) {
         el.innerText,
         el.textContent
       ].filter(Boolean).join(" ").replace(/\\s+/g, " ").trim();
+      const normalizedTextOf = (el) => {
+        const parts = textOf(el)
+          .split(/\\s+/)
+          .filter(Boolean);
+        if (parts.length === 4 && parts[0].toLowerCase() === parts[2].toLowerCase() && parts[1].toLowerCase() === parts[3].toLowerCase()) {
+          return parts[0] + " " + parts[1];
+        }
+        return parts.join(" ");
+      };
       const allEls = [...document.querySelectorAll("button, [role='button'], a")];
       const candidates = allEls
         .filter((el) => {
-          const text = textOf(el);
+          const text = normalizedTextOf(el);
+          const rect = el.getBoundingClientRect();
           return (
             /^(sign in|log in|login)$/i.test(text) ||
             /already have an account|sign in|log in|login/i.test(text)
-          ) && !el.disabled && el.getAttribute("aria-disabled") !== "true";
+          ) && !el.disabled && el.getAttribute("aria-disabled") !== "true" && rect.width <= 420 && rect.height <= 120;
         })
         .map((el) => {
           const rect = el.getBoundingClientRect();
           return {
-            text: textOf(el),
+            el,
+            text: normalizedTextOf(el),
             href: el.href || "",
             x: rect.left + rect.width / 2,
             y: rect.top + rect.height / 2,
             visible: rect.width > 0 && rect.height > 0
           };
         });
+      const asClickTarget = (candidate) => {
+        candidate.el.scrollIntoView({ block: "center", inline: "center" });
+        const rect = candidate.el.getBoundingClientRect();
+        return {
+          x: Math.round(rect.left + rect.width / 2),
+          y: Math.round(rect.top + rect.height / 2),
+          label: candidate.text,
+        };
+      };
+      const exact = candidates.find((c) => c.visible && /^(sign in|log in|login)$/i.test(c.text) && c.x > 0 && c.y > 0);
+      if (exact) return asClickTarget(exact);
       const visible = candidates.find((c) => c.visible && c.href);
       if (visible) return { navigateTo: visible.href, label: visible.text };
       const clickable = candidates.find((c) => c.visible && c.x > 0 && c.y > 0);
-      if (clickable) return { x: Math.round(clickable.x), y: Math.round(clickable.y), label: clickable.text };
+      if (clickable) return asClickTarget(clickable);
       return { ok: false, reason: "sign_in_action_not_found", buttons: candidates.map((c) => c.text) };
     })()`,
   );
@@ -946,8 +1073,16 @@ async function signInFromCurrentAccountState(pageClient, args, referenceUrl) {
 
 async function reachAccountForm(pageClient, maxSteps = 6) {
   const steps = [];
+  let spaWaitAttempts = 0;
   for (let i = 0; i < maxSteps; i += 1) {
+    await dismissCookieConsent(pageClient).catch(() => {});
     const state = await pageHasAccountFields(pageClient);
+    if (state.fieldCount === 0 && !state.hasCreateAccountAction && !state.signedInOrAdvanced && !state.verificationNeeded && spaWaitAttempts < 6) {
+      spaWaitAttempts += 1;
+      i -= 1;
+      await sleep(1500);
+      continue;
+    }
     steps.push({
       step: i,
       href: state.href,
@@ -1272,6 +1407,10 @@ async function main() {
       ? await resetBrowserSiteData(pageClient, targetUrl)
       : null;
     await navigate(pageClient, targetUrl);
+    if (args.provider !== "fake") {
+      await dismissCookieConsent(pageClient).catch(() => {});
+      await sleep(3000);
+    }
 
     if (args.provider !== "fake" && args.accountMethod === "google") {
       const googleResult = await startGoogleAccountFlow(
@@ -1654,11 +1793,14 @@ async function main() {
       "email_verification",
       bridgeResult.ok ? "ok" : "failed",
       bridgeResult.ok
-        ? "Email verification link found."
-        : "Email verification link was not found before timeout.",
+        ? bridgeResult.code
+          ? "Email verification code found."
+          : "Email verification link found."
+        : "Email verification was not found before timeout.",
       {
         reason: bridgeResult.reason || "",
         source: bridgeResult.source || "",
+        method: bridgeResult.method || (bridgeResult.code ? "code" : "link"),
       },
     );
     if (!bridgeResult.ok) {
@@ -1726,47 +1868,60 @@ async function main() {
       );
     }
 
-    await navigate(pageClient, bridgeResult.link);
-    const verified = await inspectVerified(pageClient);
-    const loginPage =
-      args.provider === "fake"
-        ? { ok: true, skipped: true }
-        : await ensureWorkdayLoginPage(pageClient);
-    if (args.provider !== "fake") {
-      const loginClient =
-        (await connectLatestWorkdayLoginTarget(args.cdpPort, fillTargetUrl)) ||
-        pageClient;
-      if (loginClient !== pageClient) {
-        pageClient.close();
-        pageClient = loginClient;
+    let verified = { verified: false, skipped: true };
+    let loginPage = { ok: true, skipped: true };
+    let loginFill = { ok: true, skipped: true };
+    let loginSubmit = { ok: true, skipped: true };
+    let loginState = { ok: true, skipped: true };
+    let codeEntry = { ok: true, skipped: true };
+    if (bridgeResult.code) {
+      codeEntry = await enterVerificationCode(pageClient, bridgeResult.code);
+      await waitForPageSettled(pageClient, 2500).catch(() => {});
+      loginState = await inspectApplicationState(pageClient);
+    } else {
+      await navigate(pageClient, bridgeResult.link);
+      verified = await inspectVerified(pageClient);
+      loginPage =
+        args.provider === "fake"
+          ? { ok: true, skipped: true }
+          : await ensureWorkdayLoginPage(pageClient);
+      if (args.provider !== "fake") {
+        const loginClient =
+          (await connectLatestWorkdayLoginTarget(args.cdpPort, fillTargetUrl)) ||
+          pageClient;
+        if (loginClient !== pageClient) {
+          pageClient.close();
+          pageClient = loginClient;
+        }
       }
+      loginFill =
+        args.provider === "fake"
+          ? { ok: true, skipped: true }
+          : await fillWorkdayLoginForm(pageClient, args);
+      loginSubmit =
+        args.provider === "fake"
+          ? { ok: true, skipped: true }
+          : await clickSafeAccountAction(pageClient);
+      const postLoginClient =
+        args.provider === "fake"
+          ? pageClient
+          : (await connectLatestWorkdayApplicationTarget(
+              args.cdpPort,
+              fillTargetUrl,
+            )) || pageClient;
+      if (postLoginClient !== pageClient) {
+        pageClient.close();
+        pageClient = postLoginClient;
+      }
+      loginState =
+        args.provider === "fake"
+          ? { ok: true, skipped: true }
+          : await inspectApplicationState(pageClient);
     }
-    const loginFill =
-      args.provider === "fake"
-        ? { ok: true, skipped: true }
-        : await fillWorkdayLoginForm(pageClient, args);
-    const loginSubmit =
-      args.provider === "fake"
-        ? { ok: true, skipped: true }
-        : await clickSafeAccountAction(pageClient);
-    const postLoginClient =
-      args.provider === "fake"
-        ? pageClient
-        : (await connectLatestWorkdayApplicationTarget(
-            args.cdpPort,
-            fillTargetUrl,
-          )) || pageClient;
-    if (postLoginClient !== pageClient) {
-      pageClient.close();
-      pageClient = postLoginClient;
-    }
-    const loginState =
-      args.provider === "fake"
-        ? { ok: true, skipped: true }
-        : await inspectApplicationState(pageClient);
     const result = {
       ok: Boolean(
         verified.verified ||
+        (bridgeResult.code && codeEntry.ok && loginState.signedInOrAdvanced) ||
         (args.provider !== "fake" &&
           loginFill.ok &&
           loginSubmit.ok &&
@@ -1777,6 +1932,9 @@ async function main() {
           phase: "auth",
           status:
             verified.verified ||
+            (bridgeResult.code &&
+              codeEntry.ok &&
+              loginState.signedInOrAdvanced) ||
             (args.provider !== "fake" &&
               loginFill.ok &&
               loginSubmit.ok &&
@@ -1800,10 +1958,13 @@ async function main() {
       submit: submitResult,
       bridge: {
         ok: bridgeResult.ok,
+        method: bridgeResult.method || (bridgeResult.code ? "code" : "link"),
         source: bridgeResult.source,
         subject: bridgeResult.subject,
-        linkHost: new URL(bridgeResult.link).host,
+        linkHost: bridgeResult.link ? new URL(bridgeResult.link).host : "",
+        codeLength: bridgeResult.code ? String(bridgeResult.code).length : 0,
       },
+      codeEntry,
       verified,
       login: {
         page: loginPage,

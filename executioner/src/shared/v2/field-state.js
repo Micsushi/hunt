@@ -34,6 +34,18 @@
         selected: Boolean(checked),
       };
     }
+    if (field.uiModel === "segmented_button_group") {
+      var selected = root.uiInspector?.selectedChoiceButtons
+        ? root.uiInspector.selectedChoiceButtons(el, field.buttons || [])[0]
+        : null;
+      var text = clean(selected?.innerText || selected?.textContent || "");
+      return {
+        rawValue: text,
+        text: text,
+        checked: false,
+        selected: Boolean(selected),
+      };
+    }
     if (field.uiModel === "checkbox") {
       return {
         rawValue: el.checked ? "checked" : "",

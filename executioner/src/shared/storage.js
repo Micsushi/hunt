@@ -56,7 +56,7 @@ export function sanitizeSettings(settings = {}) {
     manualFillEnabled: sanitizeBoolean(settings.manualFillEnabled ?? true),
     autoPromptEnabled: sanitizeBoolean(settings.autoPromptEnabled ?? true),
     autoAccountSignupLoginEnabled: sanitizeBoolean(
-      settings.autoAccountSignupLoginEnabled,
+      settings.autoAccountSignupLoginEnabled ?? true,
     ),
     autoEmailVerificationEnabled: sanitizeBoolean(
       settings.autoEmailVerificationEnabled,

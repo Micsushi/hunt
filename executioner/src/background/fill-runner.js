@@ -10,7 +10,11 @@ import { genericBackedAtsNames } from "../ats/support-matrix.js";
 import { postAnswerDecision, postDebugLog } from "../shared/api.js";
 import { createWorkdayFillFunction } from "../ats/workday/fill.js";
 import { createWorkdayFillV2Function } from "../ats/workday/fill-v2.js";
-import { appendAttempt, appendQuestionAnswers } from "../shared/storage.js";
+import {
+  appendAttempt,
+  appendQuestionAnswers,
+  sanitizeAttempt,
+} from "../shared/storage.js";
 import { selectFillRoute } from "./fill-routes.js";
 import {
   WORKDAY_RUNTIME_ERROR_REASON,
@@ -1392,7 +1396,7 @@ async function persistFillAttempt({
   const attemptId = crypto.randomUUID();
   const manualReviewRequired = Boolean(result.manualReviewRequired);
 
-  const attempt = await appendAttempt({
+  const attemptPayload = {
     id: attemptId,
     sourceMode: extensionState.activeApplyContext.jobId
       ? "c4_or_queue"
@@ -1430,7 +1434,19 @@ async function persistFillAttempt({
         ? `Filled ${result.filledFieldCount || 0} fields via ${route.routeName}; manual review needed.`
         : `Filled ${result.filledFieldCount || 0} fields via ${route.routeName}.`
       : result.message || result.reason || "Fill failed.",
-  });
+  };
+  let attempt = sanitizeAttempt(attemptPayload);
+  try {
+    attempt = await appendAttempt(attemptPayload);
+  } catch (error) {
+    result.persistenceDiagnostics = {
+      ...(result.persistenceDiagnostics || {}),
+      attemptStorage: {
+        reason: "append_attempt_failed",
+        message: error instanceof Error ? error.message : String(error),
+      },
+    };
+  }
 
   const answerEntries = (result.generatedAnswers || []).map((entry) => ({
     id: crypto.randomUUID(),
@@ -1443,7 +1459,17 @@ async function persistFillAttempt({
     confidence: entry.confidence,
     manualReviewRequired: entry.manualReviewRequired,
   }));
-  await appendQuestionAnswers(answerEntries);
+  try {
+    await appendQuestionAnswers(answerEntries);
+  } catch (error) {
+    result.persistenceDiagnostics = {
+      ...(result.persistenceDiagnostics || {}),
+      answerStorage: {
+        reason: "append_question_answers_failed",
+        message: error instanceof Error ? error.message : String(error),
+      },
+    };
+  }
   return { attempt, answerEntries };
 }
 

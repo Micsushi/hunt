@@ -32,6 +32,90 @@
     );
   }
 
+  function labelFor(el) {
+    if (!el?.id) {
+      return null;
+    }
+    try {
+      return document.querySelector('label[for="' + CSS.escape(el.id) + '"]');
+    } catch (_error) {
+      return null;
+    }
+  }
+
+  function visibleOrFillable(el) {
+    if (visible(el)) {
+      return true;
+    }
+    var type = String(el?.type || "").toLowerCase();
+    if (!["checkbox", "radio", "file"].includes(type)) {
+      return false;
+    }
+    var label = labelFor(el) || el.closest?.("label");
+    if (label && visible(label)) {
+      return true;
+    }
+    var labelledBy = el.getAttribute?.("aria-labelledby") || "";
+    if (labelledBy) {
+      var labelled = labelledBy
+        .split(/\s+/)
+        .map(function (id) {
+          try {
+            return document.getElementById(id);
+          } catch (_error) {
+            return null;
+          }
+        })
+        .filter(Boolean)
+        .some(visible);
+      if (labelled) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  function isHoneypot(el, descriptor) {
+    var text = [
+      el?.id,
+      el?.name,
+      el?.getAttribute?.("aria-label"),
+      el?.getAttribute?.("placeholder"),
+      descriptor,
+    ]
+      .filter(Boolean)
+      .join(" ")
+      .toLowerCase();
+    return /\bhoney[-_\s]?pot\b/.test(text);
+  }
+
+  function isAuxiliaryComboInput(el) {
+    if (String(el?.tagName || "").toUpperCase() !== "INPUT") {
+      return false;
+    }
+    if (String(el.type || "").toLowerCase() !== "text") {
+      return false;
+    }
+    var key = [
+      el.id,
+      el.name,
+      el.getAttribute?.("aria-label"),
+      el.getAttribute?.("placeholder"),
+    ]
+      .filter(Boolean)
+      .join(" ")
+      .trim();
+    if (key) {
+      return false;
+    }
+    var group = el.closest?.('[role="group"], fieldset, .select__container');
+    return Boolean(
+      group?.querySelector?.(
+        'input[role="combobox"], input[aria-autocomplete="list"], [role="combobox"] input',
+      ),
+    );
+  }
+
   function requiredText(el, descriptor) {
     return [
       el.required ? "required" : "",
@@ -53,6 +137,46 @@
     return (
       el.required ||
       el.getAttribute?.("aria-required") === "true" ||
+      text.includes("*") ||
+      text.includes("required") ||
+      text.includes("mandatory")
+    );
+  }
+
+  function isSegmentedGroupRequired(container, descriptor) {
+    if (isRequired(container, descriptor)) {
+      return true;
+    }
+    var wrapper = container.closest?.(
+      [
+        ".application-field",
+        ".application-question",
+        ".input-row",
+        "[class*='question']",
+        "[class*='Question']",
+        "[class*='field']",
+        "[class*='Field']",
+        "[aria-required]",
+      ].join(", "),
+    );
+    if (!wrapper || wrapper === container) {
+      return false;
+    }
+    if (wrapper.getAttribute?.("aria-required") === "false") {
+      return false;
+    }
+    var text = [
+      requiredText(wrapper, descriptor),
+      wrapper.innerText || wrapper.textContent || "",
+      wrapper.querySelector?.('[role="alert"], [class*="error"]')?.innerText ||
+        "",
+      wrapper.className || "",
+    ]
+      .filter(Boolean)
+      .join(" ")
+      .toLowerCase();
+    return (
+      wrapper.getAttribute?.("aria-required") === "true" ||
       text.includes("*") ||
       text.includes("required") ||
       text.includes("mandatory")
@@ -103,6 +227,124 @@
     return el.id || el.name || "field_" + index;
   }
 
+  function buttonText(el) {
+    return (
+      root.audit?.normalizeText(el?.innerText || el?.textContent || "") || ""
+    );
+  }
+
+  function isChoiceButton(el) {
+    if (
+      !visible(el) ||
+      el.disabled ||
+      el.getAttribute?.("aria-disabled") === "true"
+    ) {
+      return false;
+    }
+    var text = buttonText(el);
+    if (!text || text.length > 80) {
+      return false;
+    }
+    return !/^(next|back|cancel|apply|submit|verify|send new code|copy link|view more jobs)$/i.test(
+      text,
+    );
+  }
+
+  function selectedChoiceButtons(container, buttons) {
+    return (buttons || []).filter(function (button) {
+      var className = String(
+        button.className?.baseVal || button.className || "",
+      )
+        .toLowerCase()
+        .replace(/[_-]/g, " ");
+      return (
+        button.getAttribute?.("aria-pressed") === "true" ||
+        button.getAttribute?.("aria-checked") === "true" ||
+        button.getAttribute?.("data-selected") === "true" ||
+        className.includes("selected") ||
+        className.includes("active") ||
+        container.getAttribute?.("data-selected") === buttonText(button)
+      );
+    });
+  }
+
+  function collectSegmentedButtonGroups(existingElements) {
+    var existing = new Set(existingElements || []);
+    var groups = [];
+    var seen = new Set();
+    function collectFromContainer(container) {
+      if (seen.has(container)) {
+        return;
+      }
+      var buttons = Array.from(container.querySelectorAll("button"))
+        .filter(function (button) {
+          return !existing.has(button) && isChoiceButton(button);
+        })
+        .slice(0, 8);
+      if (buttons.length < 2 || buttons.length > 6) {
+        return;
+      }
+      var labels = buttons.map(buttonText);
+      var uniqueLabels = new Set(
+        labels.map(function (label) {
+          return label.toLowerCase();
+        }),
+      );
+      var yesNoLike =
+        uniqueLabels.has("yes") ||
+        uniqueLabels.has("no") ||
+        uniqueLabels.has("true") ||
+        uniqueLabels.has("false");
+      if (!yesNoLike || uniqueLabels.size !== labels.length) {
+        return;
+      }
+      if (
+        groups.some(function (group) {
+          return (
+            group.container.contains(container) ||
+            container.contains(group.container)
+          );
+        })
+      ) {
+        return;
+      }
+      seen.add(container);
+      groups.push({
+        container: container,
+        buttons: buttons,
+        labels: labels,
+      });
+    }
+    Array.from(
+      document.querySelectorAll(
+        [
+          "ul.cx-select-pills-container",
+          "[aria-label].cx-select-pills-container",
+          "[aria-label][class*='select-pills']",
+        ].join(", "),
+      ),
+    )
+      .filter(visible)
+      .forEach(collectFromContainer);
+    Array.from(
+      document.querySelectorAll(
+        [
+          "fieldset",
+          '[role="group"]',
+          ".field-wrapper",
+          ".application-field",
+          "[class*='question']",
+          "[class*='field']",
+          "section",
+          "div",
+        ].join(", "),
+      ),
+    )
+      .filter(visible)
+      .forEach(collectFromContainer);
+    return groups;
+  }
+
   function collectCandidates() {
     var u = window.__huntApplyUtils;
     var elements = Array.from(
@@ -118,7 +360,7 @@
           "[aria-autocomplete='list']",
         ].join(","),
       ),
-    ).filter(visible);
+    ).filter(visibleOrFillable);
 
     var radios = elements.filter(function (el) {
       return el.type === "radio";
@@ -154,6 +396,12 @@
           required: isRequired(el, descriptor),
           rect: root.audit?.rectSummary(el) || {},
         };
+      })
+      .filter(function (field) {
+        return (
+          !isHoneypot(field.element, field.descriptor) &&
+          !isAuxiliaryComboInput(field.element)
+        );
       });
 
     radioGroups.forEach(function (group, key) {
@@ -179,6 +427,33 @@
           return isRequired(radio, descriptor);
         }),
         rect: root.audit?.rectSummary(group[0]) || {},
+      });
+    });
+
+    collectSegmentedButtonGroups(elements).forEach(function (group, index) {
+      var descriptor = u?.getDescriptor
+        ? u.getDescriptor(group.container, CONTAINER_SELECTORS)
+        : root.audit?.normalizeText(group.container.innerText || "");
+      var ariaLabel = group.container.getAttribute?.("aria-label") || "";
+      descriptor = root.audit?.normalizeText(
+        [ariaLabel, descriptor].filter(Boolean).join(" "),
+      );
+      candidates.push({
+        kind: "segmentedButtonGroup",
+        element: group.container,
+        anchor: group.container,
+        buttons: group.buttons,
+        fieldId:
+          group.container.id ||
+          group.container.getAttribute?.("data-testid") ||
+          "segmented_button_group_" + index,
+        descriptor: descriptor || group.labels.join(" "),
+        questionHash: u?.buildQuestionHash
+          ? u.buildQuestionHash(descriptor || group.labels.join(" "))
+          : "segmented_button_group_" + index,
+        uiModel: "segmented_button_group",
+        required: isSegmentedGroupRequired(group.container, descriptor),
+        rect: root.audit?.rectSummary(group.container) || {},
       });
     });
 
@@ -230,5 +505,6 @@
     isTextual: isTextual,
     describePage: describePage,
     containerSelectors: CONTAINER_SELECTORS,
+    selectedChoiceButtons: selectedChoiceButtons,
   };
 })();

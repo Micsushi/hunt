@@ -111,6 +111,71 @@ def test_generic_v2_radio_options_use_associated_labels_before_group_text():
     }
 
 
+def test_generic_v2_unknown_option_fallback_prefers_no_before_first_real():
+    if sync_playwright is None:
+        pytest.skip("playwright is required for the generic C3 V2 fixture")
+
+    with sync_playwright() as playwright:
+        try:
+            browser = playwright.chromium.launch()
+        except PlaywrightError as error:
+            pytest.skip(f"playwright chromium is unavailable: {error}")
+
+        page = browser.new_page()
+        page.set_content("<html><body></body></html>")
+        _load_v2_scripts(page)
+        result = page.evaluate(
+            """
+            () => {
+              const root = window.__huntV2;
+              const firstReal = root.optionMatcher.matchOption({
+                options: [
+                  { label: "Yes", value: "Yes" },
+                  { label: "No", value: "No" },
+                ],
+                answer: { value: "", answerType: "unknown" },
+                field: {},
+                audit: null,
+                fieldAudit: null,
+              });
+              const neutralWins = root.optionMatcher.matchOption({
+                options: [
+                  { label: "Yes", value: "Yes" },
+                  { label: "Prefer not to disclose", value: "Prefer not to disclose" },
+                  { label: "No", value: "No" },
+                ],
+                answer: { value: "", answerType: "unknown" },
+                field: {},
+                audit: null,
+                fieldAudit: null,
+              });
+              return {
+                firstRealLabel: firstReal.option && firstReal.option.label,
+                firstRealSource: firstReal.source,
+                neutralLabel: neutralWins.option && neutralWins.option.label,
+                neutralSource: neutralWins.source,
+              };
+            }
+            """
+        )
+        browser.close()
+
+    assert result == {
+        "firstRealLabel": "No",
+        "firstRealSource": "no_fallback",
+        "neutralLabel": "Prefer not to disclose",
+        "neutralSource": "neutral_fallback",
+    }
+
+
+def test_generic_v2_option_matcher_keeps_checkbox_guard_before_aliases():
+    option_matcher = _load_script(REPO_ROOT / "executioner/src/shared/v2/option-matcher.js")
+
+    assert option_matcher.index('source: "affirmative_checkbox"') < option_matcher.index(
+        "var aliases = optionAliases(answer);"
+    )
+
+
 def test_generic_v2_fill_logs_profile_defaults_and_text_fallbacks():
     if sync_playwright is None:
         pytest.skip("playwright is required for the generic C3 V2 fixture")
@@ -197,6 +262,549 @@ def test_generic_v2_fill_logs_profile_defaults_and_text_fallbacks():
     assert "derived_profile_pairing" in issue_kinds
     assert "neutral_disclosure_default" in issue_kinds
     assert "generated_or_placeholder_text_fallback" in issue_kinds
+
+
+def test_generic_v2_fills_oracle_email_and_hidden_terms_checkbox():
+    if sync_playwright is None:
+        pytest.skip("playwright is required for the generic C3 V2 fixture")
+
+    fill_v2_js = _module_to_browser_script(
+        _load_script(REPO_ROOT / "executioner/src/ats/generic/fill-v2.js")
+    )
+
+    with sync_playwright() as playwright:
+        try:
+            browser = playwright.chromium.launch()
+        except PlaywrightError as error:
+            pytest.skip(f"playwright chromium is unavailable: {error}")
+
+        page = browser.new_page()
+        page.set_content(
+            """
+            <html>
+              <body>
+                <form>
+                  <label class="input-row__label input-row__label--required" for="primary-email-0">
+                    Email Address
+                  </label>
+                  <input id="primary-email-0" name="primary-email" type="email" required />
+                  <label for="honey-pot-1">honeypot</label>
+                  <input id="honey-pot-1" name="honey-pot" />
+                  <label class="input-row legal-disclaimer-container" for="legal-disclaimer-checkbox">
+                    <input
+                      id="legal-disclaimer-checkbox"
+                      class="input-row__hidden-control"
+                      type="checkbox"
+                      required
+                      style="width:0;height:0;position:absolute;"
+                    />
+                    <span>I agree with the terms and conditions</span>
+                  </label>
+                </form>
+              </body>
+            </html>
+            """
+        )
+        _load_v2_scripts(page)
+        page.add_script_tag(content=fill_v2_js)
+
+        result = page.evaluate(
+            """
+            async () => {
+              const fill = createGenericFillV2Function();
+              return await fill({
+                profile: {
+                  email: "michael@example.test",
+                },
+                settings: {
+                  fillRequiredOnly: true,
+                  useFieldPipelineV2: true,
+                },
+                activeApplyContext: {},
+                defaultResume: {},
+                fillRoute: { adapterName: "oracle" },
+                fillRunId: "test_oracle_v2",
+              });
+            }
+            """
+        )
+        values = page.evaluate(
+            """
+            () => ({
+              email: document.querySelector("#primary-email-0").value,
+              honeypot: document.querySelector("#honey-pot-1").value,
+              terms: document.querySelector("#legal-disclaimer-checkbox").checked,
+            })
+            """
+        )
+        browser.close()
+
+    assert result["ok"] is True
+    assert values == {
+        "email": "michael@example.test",
+        "honeypot": "",
+        "terms": True,
+    }
+    ids = {entry["id"]: entry for entry in result["fieldInventory"]}
+    assert "honey-pot-1" not in ids
+    assert ids["legal-disclaimer-checkbox"]["filled"] is True
+    assert ids["legal-disclaimer-checkbox"]["valueSource"] == "profile:terms_acceptance"
+
+
+def test_generic_v2_does_not_upload_resume_to_cover_letter():
+    if sync_playwright is None:
+        pytest.skip("playwright is required for the generic C3 V2 fixture")
+
+    fill_v2_js = _module_to_browser_script(
+        _load_script(REPO_ROOT / "executioner/src/ats/generic/fill-v2.js")
+    )
+
+    with sync_playwright() as playwright:
+        try:
+            browser = playwright.chromium.launch()
+        except PlaywrightError as error:
+            pytest.skip(f"playwright chromium is unavailable: {error}")
+
+        page = browser.new_page()
+        page.set_content(
+            """
+            <html>
+              <body>
+                <form>
+                  <label for="resume-file">Resume/CV *</label>
+                  <input id="resume-file" type="file" required />
+                  <label for="cover-letter-file">Cover Letter *</label>
+                  <input id="cover-letter-file" type="file" required />
+                </form>
+              </body>
+            </html>
+            """
+        )
+        _load_v2_scripts(page)
+        page.add_script_tag(content=fill_v2_js)
+
+        result = page.evaluate(
+            """
+            async () => {
+              const fill = createGenericFillV2Function();
+              return await fill({
+                profile: {},
+                settings: { fillRequiredOnly: true },
+                activeApplyContext: {},
+                defaultResume: {
+                  pdfFileName: "main.pdf",
+                  pdfMimeType: "application/pdf",
+                  pdfDataUrl: "data:application/pdf;base64,JVBERi0xLjQK",
+                },
+              });
+            }
+            """
+        )
+        values = page.evaluate(
+            """
+            () => ({
+              resumeFileName: document.querySelector("#resume-file").files[0]?.name || "",
+              coverLetterFileName: document.querySelector("#cover-letter-file").files[0]?.name || "",
+            })
+            """
+        )
+        browser.close()
+
+    assert values == {
+        "resumeFileName": "main.pdf",
+        "coverLetterFileName": "",
+    }
+    resume = [entry for entry in result["fieldInventory"] if entry["id"] == "resume-file"][0]
+    cover_letter = [
+        entry for entry in result["fieldInventory"] if entry["id"] == "cover-letter-file"
+    ][0]
+    assert resume["filled"] is True
+    assert resume["valueSource"] == "resume_upload"
+    assert cover_letter["filled"] is False
+    assert cover_letter["skippedReason"] == "not_resume_input"
+    assert result["manualReviewRequired"] is True
+
+
+def test_generic_v2_file_driver_requires_resume_upload_answer():
+    field_drivers = _load_script(REPO_ROOT / "executioner/src/shared/v2/field-drivers.js")
+
+    assert 'answer?.answerType !== "file"' in field_drivers
+    assert 'String(answer?.value || "") !== "resume_upload"' in field_drivers
+    assert 'reason: "not_resume_input"' in field_drivers
+
+
+def test_generic_v2_oracle_grid_combobox_guards():
+    option_collector = _load_script(
+        REPO_ROOT / "executioner/src/shared/v2/option-collector.js"
+    )
+    option_matcher = _load_script(REPO_ROOT / "executioner/src/shared/v2/option-matcher.js")
+    field_catalog = _load_script(REPO_ROOT / "executioner/src/shared/v2/field-catalog.js")
+
+    assert 'document.execCommand("insertText"' in option_collector
+    assert '[role="gridcell"]' in option_collector
+    assert ".cx-select__list-item" in option_collector
+    assert "hasOptionMatch(options, answerText)" in option_collector
+    assert 'label.startsWith(target + ",")' in option_matcher
+    assert 'source: "boundary"' in option_matcher
+    assert "strict_province_no_match" in option_matcher
+    assert "isStrictAliasMatch" in option_matcher
+    assert "stateSatisfiesAnswer" in _load_script(
+        REPO_ROOT / "executioner/src/shared/v2/field-drivers.js"
+    )
+    assert "Alberta: [\"AB\"]" in field_catalog
+
+
+def test_generic_v2_clear_removes_oracle_uploaded_attachment_card():
+    if sync_playwright is None:
+        pytest.skip("playwright is required for the generic C3 V2 fixture")
+
+    with sync_playwright() as playwright:
+        try:
+            browser = playwright.chromium.launch()
+        except PlaywrightError as error:
+            pytest.skip(f"playwright chromium is unavailable: {error}")
+
+        page = browser.new_page()
+        page.set_content(
+            """
+            <html>
+              <body>
+                <section class="apply-flow-block apply-flow-block--file-upload">
+                  <h2>Supporting Documents and URLs</h2>
+                  <div class="file-upload-wrapper__section">
+                    <div
+                      role="application"
+                      class="attachment-upload-button attachment-upload-button--filled"
+                    >
+                      <span>main.pdf</span>
+                      <button
+                        class="attachment-upload-button__bottom-button"
+                        aria-label="Remove attachment: main.pdf"
+                        title="Remove attachment: main.pdf"
+                      >
+                        REMOVE
+                      </button>
+                    </div>
+                  </div>
+                  <div
+                    role="application"
+                    class="attachment-upload-button attachment-upload-button--waiting"
+                  >
+                    Drop Cover Letter Here or Upload Cover Letter
+                  </div>
+                  <label>Link 1 <input id="link-1" /></label>
+                </section>
+                <script>
+                  document
+                    .querySelector(".attachment-upload-button__bottom-button")
+                    .addEventListener("click", (event) => {
+                      event
+                        .target
+                        .closest(".attachment-upload-button--filled")
+                        .remove();
+                    });
+                </script>
+              </body>
+            </html>
+            """
+        )
+        _load_v2_scripts(page)
+        result = page.evaluate(
+            """
+            async () => {
+              return await window.__huntV2.clearPipeline.runHuntV2Clear({
+                fillRunId: "oracle_upload_clear",
+                atsType: "oracle",
+              });
+            }
+            """
+        )
+        remaining = page.evaluate(
+            """
+            () => ({
+              pdfText: document.body.innerText.includes("main.pdf"),
+              coverUpload: document.body.innerText.includes("Upload Cover Letter"),
+            })
+            """
+        )
+        browser.close()
+
+    assert result["uploadedFileClears"] == 1
+    assert remaining == {"pdfText": False, "coverUpload": True}
+
+
+def test_generic_v2_clear_clicks_custom_select_x_and_trash_icons():
+    if sync_playwright is None:
+        pytest.skip("playwright is required for the generic C3 V2 fixture")
+
+    with sync_playwright() as playwright:
+        try:
+            browser = playwright.chromium.launch()
+        except PlaywrightError as error:
+            pytest.skip(f"playwright chromium is unavailable: {error}")
+
+        page = browser.new_page()
+        page.set_content(
+            """
+            <html>
+              <body>
+                <section class="application-field">
+                  <label for="legal-combo">Are you legally allowed to work in Canada? *</label>
+                  <div id="legal-combo" class="cx-select" role="combobox" aria-haspopup="listbox">
+                    <span class="cx-select__value">Yes</span>
+                    <button
+                      class="cx-select__clear-icon"
+                      aria-label="Clear selected value"
+                      type="button"
+                    >
+                      x
+                    </button>
+                    <button class="cx-select__toggle" aria-label="Open options" type="button">
+                      v
+                    </button>
+                  </div>
+                </section>
+                <section class="application-field">
+                  <label>Website</label>
+                  <div class="selected-row">
+                    <span class="selected-row__value">https://example.test</span>
+                    <button
+                      class="selected-row__trash"
+                      aria-label="Delete website row"
+                      type="button"
+                    >
+                      trash
+                    </button>
+                  </div>
+                </section>
+                <script>
+                  document.querySelector(".cx-select__clear-icon").addEventListener("click", () => {
+                    document.querySelector(".cx-select__value").textContent = "";
+                  });
+                  document.querySelector(".selected-row__trash").addEventListener("click", (event) => {
+                    event.target.closest(".selected-row").remove();
+                  });
+                </script>
+              </body>
+            </html>
+            """
+        )
+        _load_v2_scripts(page)
+        result = page.evaluate(
+            """
+            async () => {
+              return await window.__huntV2.clearPipeline.runHuntV2Clear({
+                fillRunId: "oracle_select_clear",
+                atsType: "oracle",
+              });
+            }
+            """
+        )
+        remaining = page.evaluate(
+            """
+            () => ({
+              legalValue: document.querySelector(".cx-select__value").textContent,
+              websiteRow: Boolean(document.querySelector(".selected-row")),
+            })
+            """
+        )
+        browser.close()
+
+    assert result["genericIconClears"] >= 2
+    assert remaining == {"legalValue": "", "websiteRow": False}
+
+
+def test_generic_v2_fills_oracle_segmented_yes_no_buttons():
+    if sync_playwright is None:
+        pytest.skip("playwright is required for the generic C3 V2 fixture")
+
+    fill_v2_js = _module_to_browser_script(
+        _load_script(REPO_ROOT / "executioner/src/ats/generic/fill-v2.js")
+    )
+
+    with sync_playwright() as playwright:
+        try:
+            browser = playwright.chromium.launch()
+        except PlaywrightError as error:
+            pytest.skip(f"playwright chromium is unavailable: {error}")
+
+        page = browser.new_page()
+        page.set_content(
+            """
+            <html>
+              <body>
+                <form>
+                  <div class="application-field" aria-required="true">
+                    <div>
+                      Are you able to legally work, within the country and
+                      state/province/territory in which you are applying, for an
+                      extended period of time?<span>*</span>
+                    </div>
+                    <ul
+                      class="cx-select-pills-container"
+                      aria-label="Are you able to legally work, within the country and state/province/territory in which you are applying, for an extended period of time?"
+                    >
+                      <li><button class="cx-select-pill-section" type="button" aria-pressed="false">No</button></li>
+                      <li><button class="cx-select-pill-section" type="button" aria-pressed="false">Yes</button></li>
+                    </ul>
+                    <div role="alert">This info is required.</div>
+                  </div>
+                  <div class="application-field" aria-required="true">
+                    <div>Are you a current ATCO Employee? <span>*</span></div>
+                    <ul
+                      class="cx-select-pills-container"
+                      aria-label="Are you a current ATCO Employee?"
+                    >
+                      <li><button class="cx-select-pill-section" type="button" aria-pressed="false">Yes</button></li>
+                      <li><button class="cx-select-pill-section" type="button" aria-pressed="false">No</button></li>
+                    </ul>
+                    <div role="alert">This info is required.</div>
+                  </div>
+                  <div class="application-field" aria-required="true" id="previous-atco-field" hidden>
+                    <div>
+                      Have you ever worked for ATCO as either an employee or as
+                      a contractor? <span>*</span>
+                    </div>
+                    <ul
+                      class="cx-select-pills-container"
+                      aria-label="Have you ever worked for ATCO as either an employee or as a contractor?"
+                    >
+                      <li><button class="cx-select-pill-section" type="button" aria-pressed="false">Yes</button></li>
+                      <li><button class="cx-select-pill-section" type="button" aria-pressed="false">No</button></li>
+                    </ul>
+                    <div role="alert">This info is required.</div>
+                  </div>
+                  <div class="application-field" aria-required="true">
+                    <div>Are you a member of CEWA? <span>*</span></div>
+                    <ul
+                      class="cx-select-pills-container"
+                      aria-label="Are you a member of CEWA?"
+                    >
+                      <li><button class="cx-select-pill-section" type="button" aria-pressed="false">No</button></li>
+                      <li><button class="cx-select-pill-section" type="button" aria-pressed="false">Yes</button></li>
+                    </ul>
+                    <div role="alert">This info is required.</div>
+                  </div>
+                </form>
+                <script>
+                  document.querySelectorAll(".cx-select-pills-container").forEach((field) => {
+                    field.querySelectorAll("button").forEach((button) => {
+                      button.addEventListener("click", () => {
+                        field.querySelectorAll("button").forEach((other) => {
+                          other.classList.remove("cx-select-pill-section--selected");
+                          other.setAttribute("aria-pressed", "false");
+                        });
+                        button.classList.add("cx-select-pill-section--selected");
+                        button.setAttribute("aria-pressed", "true");
+                        field.dataset.selected = button.textContent.trim();
+                        if (
+                          field.getAttribute("aria-label") ===
+                            "Are you a current ATCO Employee?" &&
+                          button.textContent.trim() === "No"
+                        ) {
+                          document.querySelector("#previous-atco-field").hidden = false;
+                        }
+                      });
+                    });
+                  });
+                </script>
+              </body>
+            </html>
+            """
+        )
+        _load_v2_scripts(page)
+        page.add_script_tag(content=fill_v2_js)
+        result = page.evaluate(
+            """
+            async () => {
+              const fill = createGenericFillV2Function();
+              return await fill({
+                profile: {
+                  workAuthorized: true,
+                  previousEmployers: "",
+                },
+                settings: { fillRequiredOnly: true, useFieldPipelineV2: true },
+                activeApplyContext: { company: "ATCO" },
+                defaultResume: {},
+                fillRoute: { adapterName: "oracle" },
+                fillRunId: "oracle_segmented_buttons",
+              });
+            }
+            """
+        )
+        values = page.evaluate(
+            """
+            () => [...document.querySelectorAll(".cx-select-pills-container")]
+              .map((field) => field.dataset.selected || "")
+            """
+        )
+        browser.close()
+
+    assert result["ok"] is True
+    assert values == ["Yes", "No", "No", "No"]
+    segmented = [
+        entry
+        for entry in result["fieldInventory"]
+        if entry["kind"] == "segmentedButtonGroup"
+    ]
+    assert len(segmented) == 4
+    assert all(entry["filled"] for entry in segmented)
+    cewa = next(entry for entry in segmented if "CEWA" in entry["descriptor"])
+    assert cewa["questionType"] == "union_membership"
+    issue_descriptors = [
+        issue.get("descriptor", "") for issue in result["v2Audit"]["permanentIssues"]
+    ]
+    assert not any("CEWA" in descriptor for descriptor in issue_descriptors)
+
+
+def test_generic_v2_clear_has_uploaded_file_card_guard():
+    clear_pipeline = _load_script(
+        REPO_ROOT / "executioner/src/shared/v2/clear-pipeline.js"
+    )
+
+    assert "collectUploadedFileNodes" in clear_pipeline
+    assert "clearUploadedFileControls" in clear_pipeline
+    assert "clearGenericIconControls" in clear_pipeline
+    assert "remove attachment:" in clear_pipeline
+    assert ".attachment-upload-button__bottom-button" in clear_pipeline
+    assert "cx-select" in clear_pipeline
+    assert "containsUploadedFileText" in clear_pipeline
+    assert clear_pipeline.count("await clearGenericIconControls(audit)") == 1
+
+
+def test_generic_v2_segmented_button_guards():
+    ui_inspector = _load_script(REPO_ROOT / "executioner/src/shared/v2/ui-inspector.js")
+    option_collector = _load_script(
+        REPO_ROOT / "executioner/src/shared/v2/option-collector.js"
+    )
+    field_drivers = _load_script(REPO_ROOT / "executioner/src/shared/v2/field-drivers.js")
+
+    assert "segmented_button_group" in ui_inspector
+    assert "collectSegmentedButtonGroups" in ui_inspector
+    assert "selectedChoiceButtons" in ui_inspector
+    assert "ul.cx-select-pills-container" in ui_inspector
+    assert "[aria-label][class*='select-pills']" in ui_inspector
+    assert "segmented_button_group" in option_collector
+    assert "fillSegmentedButtonGroup" in field_drivers
+
+
+def test_generic_v2_segmented_pill_groups_are_collected_before_broad_parents():
+    ui_inspector = _load_script(REPO_ROOT / "executioner/src/shared/v2/ui-inspector.js")
+    collector = ui_inspector[ui_inspector.index("function collectSegmentedButtonGroups") :]
+    explicit_pill_index = collector.index("ul.cx-select-pills-container")
+    broad_parent_index = collector.index('"fieldset"')
+
+    assert explicit_pill_index < broad_parent_index
+    assert ui_inspector.count(".filter(visible)\n      .forEach(collectFromContainer)") >= 2
+    assert "container.contains(group.container)" in ui_inspector
+    assert "isSegmentedGroupRequired" in ui_inspector
+    assert ".input-row" in ui_inspector
+    field_pipeline = _load_script(
+        REPO_ROOT / "executioner/src/shared/v2/field-pipeline.js"
+    )
+    assert "page_rescanned" in field_pipeline
+    assert "conditional_fields_check" in field_pipeline
+    assert "post_submit_validation_signature_guard" in field_pipeline
 
 
 def test_safe_next_clicks_next_controls_only():

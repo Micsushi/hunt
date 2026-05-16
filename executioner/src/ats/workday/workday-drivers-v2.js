@@ -252,6 +252,26 @@
     );
   }
 
+  function isApplicationSourceField(el, descriptor) {
+    var key = [
+      el?.id,
+      el?.name,
+      el?.getAttribute?.("aria-label"),
+      el?.getAttribute?.("placeholder"),
+      descriptor,
+    ]
+      .filter(Boolean)
+      .join(" ")
+      .toLowerCase()
+      .replace(/\s+/g, " ")
+      .trim();
+    return (
+      key.includes("how did you hear about us") ||
+      key.includes("source--source") ||
+      /\bsource\b/.test(key)
+    );
+  }
+
   function visibleWorkdayOptions() {
     var options = [];
     var seen = new Set();
@@ -484,8 +504,24 @@
     );
   }
 
+  function insertTextOrSet(input, text) {
+    setValue(input, "");
+    var inserted = false;
+    if (document.execCommand) {
+      try {
+        inserted = document.execCommand("insertText", false, text);
+      } catch (_error) {
+        inserted = false;
+      }
+    }
+    if (!inserted || clean(input.value) !== clean(text)) {
+      setValue(input, text);
+    }
+  }
+
   async function openPopup(field, searchText) {
     var el = field.element;
+    var sourceField = isApplicationSourceField(el, field.descriptor);
     _huntLog("openPopup", {
       descriptor: String(field.descriptor || "").slice(0, 120),
       uiModel: field.uiModel || "",
@@ -512,7 +548,11 @@
       }
       clickLikeUser(siblingInput);
       await sleep(80);
-      setValue(siblingInput, searchText);
+      if (sourceField) {
+        insertTextOrSet(siblingInput, searchText);
+      } else {
+        setValue(siblingInput, searchText);
+      }
       await sleep(260);
       return true;
     }
@@ -524,7 +564,11 @@
     clickLikeUser(el.closest?.('[role="combobox"]') || el);
     await sleep(120);
     if (searchText && field.uiModel === "combobox") {
-      setValue(el, searchText);
+      if (sourceField) {
+        insertTextOrSet(el, searchText);
+      } else {
+        setValue(el, searchText);
+      }
       await sleep(220);
     } else {
       keyOn(el, "ArrowDown");
@@ -582,10 +626,10 @@
     // Workday's live-search input triggers external API calls (e.g.
     // namedefinition?country=Canada) that can return 500 and crash the page.
     // Open the popup without typing and match against whatever options appear.
-    var searchText =
-      field.workday?.kind === "phone_country_code"
-        ? answer.value || "Canada (+1)"
-        : "";
+    var sourceField = isApplicationSourceField(field.element, field.descriptor);
+    var safeOpenOnly =
+      field.workday?.kind !== "phone_country_code" && !sourceField;
+    var searchText = safeOpenOnly ? "" : answer.value || "Canada (+1)";
     _huntLog("collectWorkdayOptions_start", {
       descriptor: String(field.descriptor || "").slice(0, 120),
       uiModel: field.uiModel || "",

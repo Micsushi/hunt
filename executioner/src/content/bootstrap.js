@@ -54,6 +54,7 @@
   ];
   const SIGNUP_TERMS = [
     "create account",
+    "join today",
     "sign up",
     "signup",
     "register",
@@ -79,6 +80,12 @@
     "cover letter",
     "work authorization",
     "sponsorship",
+  ];
+  const CAREER_APPLY_TERMS = [
+    "apply now",
+    "apply for this job",
+    "apply to this job",
+    "start application",
   ];
 
   function visibleFormControls() {
@@ -120,6 +127,7 @@
 
   function detectPageKind() {
     const host = window.location.hostname.toLowerCase();
+    const path = window.location.pathname.toLowerCase();
     const text = pageText();
     const controls = visibleFormControls();
     const inputCount = controls.length;
@@ -148,11 +156,49 @@
     const hasApplicationSignal = APPLICATION_TERMS.some((term) =>
       text.includes(term),
     );
+    const buttonTexts = Array.from(
+      document.querySelectorAll("a, button, [role='button']"),
+    )
+      .filter((element) => {
+        const rect = element.getBoundingClientRect();
+        const style = window.getComputedStyle(element);
+        return (
+          rect.width > 0 &&
+          rect.height > 0 &&
+          style.visibility !== "hidden" &&
+          style.display !== "none"
+        );
+      })
+      .map((element) =>
+        [
+          element.getAttribute("aria-label"),
+          element.getAttribute("title"),
+          element.innerText,
+          element.textContent,
+          element.href,
+        ]
+          .filter(Boolean)
+          .join(" ")
+          .toLowerCase()
+          .replace(/\s+/g, " ")
+          .trim(),
+      );
+    const hasCareerApplyEntry =
+      (host.includes("career") ||
+        host.includes("jobs") ||
+        path.includes("career") ||
+        path.includes("job")) &&
+      buttonTexts.some((label) =>
+        CAREER_APPLY_TERMS.some((term) => label.includes(term)),
+      );
     if (inputCount >= 2 && hasSignupSignal && passwordCount >= 2) {
       return { kind: "signup", inputCount };
     }
     if (inputCount >= 2 && hasSigninSignal && passwordCount >= 1) {
       return { kind: "signin", inputCount };
+    }
+    if (hasCareerApplyEntry) {
+      return { kind: "apply_entry", inputCount };
     }
     if (isAts || hasEmbeddedAts) {
       return { kind: "ats", inputCount };
@@ -173,6 +219,9 @@
     if (kind === "signin") {
       return "Hunt detected an account sign-in form.";
     }
+    if (kind === "apply_entry") {
+      return "Hunt detected an apply button.";
+    }
     return "Hunt detected a form it may be able to fill.";
   }
 
@@ -189,6 +238,12 @@
         `${inputCount} visible account controls found.`,
       ];
     }
+    if (kind === "apply_entry") {
+      return [
+        "Open the employer application form, then fill the visible fields.",
+        "No application fields are visible on this page yet.",
+      ];
+    }
     return [
       "Fill only known fields from your Hunt profile/resume. Unknown and optional fields stay for review.",
       `${inputCount} visible form controls found.`,
@@ -198,6 +253,9 @@
   function promptFillButtonLabel(kind) {
     if (kind === "signup" || kind === "signin") {
       return "Fill account fields";
+    }
+    if (kind === "apply_entry") {
+      return "Open application";
     }
     return "Fill known fields";
   }
@@ -863,13 +921,6 @@
           return;
         }
         hideFillProgress();
-        if (!response?.ok) {
-          showExtensionToast(
-            response?.message ||
-              "Fill did not start. Open the popup and try Fill Current Page.",
-            "warn",
-          );
-        }
         button.textContent = response?.ok ? "Filled" : "Needs review";
         setTimeout(removePrompt, 1400);
       });
@@ -1107,9 +1158,11 @@
       response?.ok &&
       response?.settings?.autoPromptEnabled &&
       response?.settings?.manualFillEnabled &&
-      detection.inputCount > 0 &&
+      (detection.inputCount > 0 || detection.kind === "apply_entry") &&
       !fillCooldownActive &&
-      ["ats", "signup", "signin", "application"].includes(detection.kind)
+      ["ats", "signup", "signin", "application", "apply_entry"].includes(
+        detection.kind,
+      )
     );
   }
 

@@ -137,14 +137,48 @@
     );
   }
 
+  function answerAliases(answer) {
+    var aliases = [];
+    var map = answer?.optionAliases || {};
+    Object.keys(map).forEach(function (key) {
+      if (matchesText(key, answer?.value)) {
+        aliases = aliases.concat(map[key] || []);
+      }
+    });
+    return aliases;
+  }
+
+  function stateSatisfiesAnswer(state, answer) {
+    var current = state?.rawValue || state?.text || "";
+    if (!current || answer?.value === undefined || answer?.value === null) {
+      return false;
+    }
+    if (matchesText(current, answer.value)) {
+      return true;
+    }
+    return answerAliases(answer).some(function (alias) {
+      return matchesText(current, alias);
+    });
+  }
+
   async function fillText(field, value) {
     var el = field.element;
     var ok = setValue(el, value);
     await sleep(350);
     var state = root.fieldState.readFieldState(field);
+    var expected = String(value);
+    var committed = String(state.rawValue || state.text || "");
+    var type = String(el?.type || "").toLowerCase();
+    var digitMatch =
+      type === "tel" &&
+      expected.replace(/\D+/g, "") &&
+      expected.replace(/\D+/g, "") === committed.replace(/\D+/g, "");
     return {
       ok:
-        ok && (state.rawValue === value || state.text === String(value).trim()),
+        ok &&
+        (state.rawValue === value ||
+          state.text === expected.trim() ||
+          digitMatch),
       afterState: state,
       reason: ok ? "" : "set_value_failed",
     };
@@ -248,6 +282,38 @@
     };
   }
 
+  async function fillSegmentedButtonGroup(field, option) {
+    var target =
+      option?.element && (field.buttons || []).includes(option.element)
+        ? option.element
+        : null;
+    target =
+      target ||
+      (field.buttons || []).find(function (button) {
+        var label = button.innerText || button.textContent || "";
+        return (
+          matchesText(label, option.label) || matchesText(label, option.value)
+        );
+      });
+    if (!target) {
+      return { ok: false, reason: "segmented_button_not_found" };
+    }
+    clickLikeUser(target);
+    await sleep(160);
+    var state = root.fieldState.readFieldState(field);
+    var ok =
+      matchesText(state.text, option.label) ||
+      state.selected ||
+      target.getAttribute?.("aria-pressed") === "true" ||
+      target.getAttribute?.("aria-checked") === "true";
+    return {
+      ok: Boolean(ok),
+      afterState: state,
+      selectedOption: option.label,
+      reason: "",
+    };
+  }
+
   async function fillCheckbox(field, option) {
     var el = field.element;
     if (!el.checked) {
@@ -301,6 +367,7 @@
 
   async function fillFileField({
     field,
+    answer,
     activeApplyContext,
     defaultResume,
     audit,
@@ -319,6 +386,16 @@
       return {
         ok: false,
         reason: "resume_upload_helper_missing",
+        afterState: root.fieldState.readFieldState(field),
+      };
+    }
+    if (
+      answer?.answerType !== "file" ||
+      String(answer?.value || "") !== "resume_upload"
+    ) {
+      return {
+        ok: false,
+        reason: "not_resume_input",
         afterState: root.fieldState.readFieldState(field),
       };
     }
@@ -365,6 +442,14 @@
 
   async function clearField(field) {
     var el = field.element;
+    var beforeState = root.fieldState.readFieldState(field);
+    if (root.fieldState.isEmptyState(beforeState)) {
+      return {
+        ok: true,
+        reason: "already_clear",
+        afterState: beforeState,
+      };
+    }
     if (["text", "textarea", "combobox"].includes(field.uiModel)) {
       setValue(el, "");
       await sleep(80);
@@ -404,6 +489,20 @@
         afterState: root.fieldState.readFieldState(field),
       };
     }
+    if (field.uiModel === "button_listbox") {
+      return {
+        ok: root.fieldState.isEmptyState(root.fieldState.readFieldState(field)),
+        reason: "button_listbox_clear_icon_required",
+        afterState: root.fieldState.readFieldState(field),
+      };
+    }
+    if (field.uiModel === "segmented_button_group") {
+      return {
+        ok: root.fieldState.isEmptyState(root.fieldState.readFieldState(field)),
+        reason: "segmented_button_clear_not_supported",
+        afterState: root.fieldState.readFieldState(field),
+      };
+    }
     return {
       ok: false,
       reason: "unsupported_clear_ui",
@@ -435,15 +534,28 @@
     if (field.uiModel === "radio_group") {
       return await fillRadioGroup(field, option);
     }
+    if (field.uiModel === "segmented_button_group") {
+      return await fillSegmentedButtonGroup(field, option);
+    }
     if (field.uiModel === "checkbox") {
       return await fillCheckbox(field, option);
     }
     if (["combobox", "button_listbox"].includes(field.uiModel)) {
+      var currentState = root.fieldState.readFieldState(field);
+      if (stateSatisfiesAnswer(currentState, answer)) {
+        return {
+          ok: true,
+          reason: "already_filled",
+          afterState: currentState,
+          selectedOption: currentState.text || currentState.rawValue,
+        };
+      }
       return await fillPopupOption(field, option);
     }
     if (field.uiModel === "file") {
       return await fillFileField({
         field: field,
+        answer: answer,
         activeApplyContext: activeApplyContext,
         defaultResume: defaultResume,
         audit: audit,
