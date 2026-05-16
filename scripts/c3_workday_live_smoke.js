@@ -1224,8 +1224,26 @@ async function fillCurrentPage(optionsClient, applyUrl, args) {
       const candidates = tabs.filter(usable)
         .concat(tabs.filter(sameWorkdayApply));
       const deduped = [...new Map(candidates.map((item) => [item.id, item])).values()];
-      const tab = deduped.find((item) => item.active)
+      let tab = deduped.find((item) => item.active)
         || deduped.sort((a, b) => Number(b.id || 0) - Number(a.id || 0))[0];
+      if (!tab) {
+        // Auth-gate fallback: tab title is "Create Account/Sign In" (excluded above).
+        // Accept any tab on the same host + apply path regardless of title.
+        const authCandidates = tabs.filter((item) => {
+          try {
+            const url = new URL(item.url || "");
+            const itemPath = normalizeWorkdayPathname(url.pathname);
+            return url.host === applyHost
+              && itemPath.startsWith(jobPathBase)
+              && /\\/apply(?:\\/|$)/i.test(itemPath);
+          } catch (_error) {
+            return false;
+          }
+        });
+        const dedupedAuth = [...new Map(authCandidates.map((item) => [item.id, item])).values()];
+        tab = dedupedAuth.find((item) => item.active)
+          || dedupedAuth.sort((a, b) => Number(b.id || 0) - Number(a.id || 0))[0];
+      }
       if (!tab) {
         return { ok: false, error: "workday_tab_not_found" };
       }
@@ -1726,8 +1744,26 @@ async function clearCurrentPage(optionsClient, applyUrl) {
       const candidates = tabs.filter(usable)
         .concat(tabs.filter(sameWorkdayApply));
       const deduped = [...new Map(candidates.map((item) => [item.id, item])).values()];
-      const tab = deduped.find((item) => item.active)
+      let tab = deduped.find((item) => item.active)
         || deduped.sort((a, b) => Number(b.id || 0) - Number(a.id || 0))[0];
+      if (!tab) {
+        // Auth-gate fallback: tab title is "Create Account/Sign In" (excluded above).
+        // Accept any tab on the same host + apply path regardless of title.
+        const authCandidates = tabs.filter((item) => {
+          try {
+            const url = new URL(item.url || "");
+            const itemPath = normalizeWorkdayPathname(url.pathname);
+            return url.host === applyHost
+              && itemPath.startsWith(jobPathBase)
+              && /\\/apply(?:\\/|$)/i.test(itemPath);
+          } catch (_error) {
+            return false;
+          }
+        });
+        const dedupedAuth = [...new Map(authCandidates.map((item) => [item.id, item])).values()];
+        tab = dedupedAuth.find((item) => item.active)
+          || dedupedAuth.sort((a, b) => Number(b.id || 0) - Number(a.id || 0))[0];
+      }
       if (!tab) {
         return { ok: false, error: "workday_tab_not_found" };
       }
