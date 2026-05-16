@@ -39,6 +39,7 @@ for (const atsName of GENERIC_BACKED_ATS_NAMES) {
 
 const pendingLlmFillByTab = new Map();
 const SCREENSHOT_CAPTURE_TIMEOUT_MS = 1500;
+const BACKEND_ANSWER_DECISION_TIMEOUT_MS = 8000;
 
 function filledTextNeedsBackendRepair(entry, isTextual) {
   if (!isTextual) {
@@ -303,6 +304,8 @@ async function applyBackendAnswerDecisions({
   pageUrl,
   atsType,
   result,
+  abortSignal,
+  isCancelled,
 }) {
   const backendAnswerFields = answerableFieldInventory(result);
   postDebugLog(extensionState.settings, {
@@ -323,6 +326,18 @@ async function applyBackendAnswerDecisions({
       diagnostics: [],
     };
   }
+  if (abortSignal?.aborted || isCancelled?.()) {
+    result.answerDecisions = [];
+    result.answerDecisionDiagnostics = [];
+    attachPendingLlmSummary(result);
+    return {
+      answerDecisions: [],
+      filledFieldCount: 0,
+      generatedAnswers: [],
+      diagnostics: [],
+      cancelled: true,
+    };
+  }
   const answerDecisions = await requestBackendAnswerDecisions({
     settings: extensionState.settings,
     profile: extensionState.profile,
@@ -330,7 +345,21 @@ async function applyBackendAnswerDecisions({
     atsType: result.atsType || atsType,
     pageUrl,
     fields: backendAnswerFields,
+    abortSignal,
+    isCancelled,
   });
+  if (abortSignal?.aborted || isCancelled?.()) {
+    result.answerDecisions = answerDecisions;
+    result.answerDecisionDiagnostics = [];
+    attachPendingLlmSummary(result);
+    return {
+      answerDecisions,
+      filledFieldCount: 0,
+      generatedAnswers: [],
+      diagnostics: [],
+      cancelled: true,
+    };
+  }
   const fillableDecisions = answerDecisions.filter(
     (entry) => entry.decision?.status === "fillable",
   );
@@ -419,6 +448,8 @@ async function requestBackendAnswerDecisions({
   atsType,
   pageUrl,
   fields,
+  abortSignal,
+  isCancelled,
 }) {
   if (!settings.llmAnswerFallbackEnabled || !settings.backendUrl) {
     return [];
@@ -426,36 +457,48 @@ async function requestBackendAnswerDecisions({
   const url = new URL(pageUrl || "https://unknown.invalid");
   const decisions = [];
   for (const field of fields.slice(0, 12)) {
+    if (abortSignal?.aborted || isCancelled?.()) {
+      break;
+    }
     try {
-      const response = await postAnswerDecision(settings, {
-        url: pageUrl,
-        host: url.host,
-        ats: atsType,
-        job: {
-          title: activeApplyContext.title || "",
-          company: activeApplyContext.company || "",
-          description_excerpt: (activeApplyContext.description || "").slice(
-            0,
-            2500,
-          ),
+      const response = await postAnswerDecision(
+        settings,
+        {
+          url: pageUrl,
+          host: url.host,
+          ats: atsType,
+          job: {
+            title: activeApplyContext.title || "",
+            company: activeApplyContext.company || "",
+            description_excerpt: (activeApplyContext.description || "").slice(
+              0,
+              2500,
+            ),
+          },
+          field: {
+            label: field.descriptor || "",
+            question_hash: field.questionHash || "",
+            required: Boolean(field.required),
+            kind: field.kind || "",
+            options: field.options || [],
+          },
+          profile,
+          policy: {
+            required_only: settings.fillRequiredOnly !== false,
+            allow_generated_paragraphs:
+              settings.allowGeneratedAnswers === true &&
+              settings.llmGeneratedParagraphsEnabled === true,
+            allow_cloud: settings.allowCloudLlmForC3 === true,
+            confidence_threshold: settings.flagLowConfidenceAnswers
+              ? 0.72
+              : 0.5,
+          },
         },
-        field: {
-          label: field.descriptor || "",
-          question_hash: field.questionHash || "",
-          required: Boolean(field.required),
-          kind: field.kind || "",
-          options: field.options || [],
+        {
+          signal: abortSignal,
+          timeoutMs: BACKEND_ANSWER_DECISION_TIMEOUT_MS,
         },
-        profile,
-        policy: {
-          required_only: settings.fillRequiredOnly !== false,
-          allow_generated_paragraphs:
-            settings.allowGeneratedAnswers === true &&
-            settings.llmGeneratedParagraphsEnabled === true,
-          allow_cloud: settings.allowCloudLlmForC3 === true,
-          confidence_threshold: settings.flagLowConfidenceAnswers ? 0.72 : 0.5,
-        },
-      });
+      );
       decisions.push({
         questionHash: field.questionHash,
         descriptor: field.descriptor,
@@ -472,6 +515,9 @@ async function requestBackendAnswerDecisions({
         },
       });
     } catch (error) {
+      if (abortSignal?.aborted || isCancelled?.()) {
+        break;
+      }
       decisions.push({
         questionHash: field.questionHash,
         descriptor: field.descriptor,
@@ -1227,6 +1273,8 @@ class PrepareLlmHelpStep {
         pageUrl: context.pageUrl,
         atsType: context.result.atsType || context.atsType,
         result: context.result,
+        abortSignal: context.options.abortSignal,
+        isCancelled: () => context.cancelled,
       });
       attachPendingLlmSummary(context.result);
       pendingLlmFillByTab.delete(context.activeTabId);

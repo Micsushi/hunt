@@ -39,6 +39,28 @@
     };
   }
 
+  function shouldSkipPasswordField(field, context) {
+    if (field.element?.type !== "password") {
+      return false;
+    }
+    var settings = context.settings || {};
+    var profile = context.profile || {};
+    var descriptor = String(field.descriptor || "").toLowerCase();
+    var canUseAccountPassword =
+      settings.autoAccountSignupLoginEnabled === true &&
+      Boolean(profile.accountPassword) &&
+      descriptor.includes("password") &&
+      ![
+        "current password",
+        "old password",
+        "existing password",
+        "temporary password",
+      ].some(function (term) {
+        return descriptor.includes(term);
+      });
+    return !canUseAccountPassword;
+  }
+
   function fillCancelled(context) {
     var fillRunId = context.fillRunId || "";
     var cancelledIds = Array.isArray(window.__huntApplyCancelledFillRunIds)
@@ -52,6 +74,27 @@
         window.__huntApplyActiveFillRunId !== fillRunId) ||
       (fillRunId && cancelledIds.includes(fillRunId)),
     );
+  }
+
+  function emitSiteAction(context, payload) {
+    try {
+      if (
+        typeof chrome === "undefined" ||
+        !chrome.runtime ||
+        !chrome.runtime.sendMessage
+      ) {
+        return;
+      }
+      chrome.runtime.sendMessage({
+        type: "hunt.apply.site_action_log",
+        payload: {
+          fillRunId: context.fillRunId || "",
+          ...payload,
+        },
+      });
+    } catch (_error) {
+      // Best-effort live logging only. The returned V2 audit remains primary.
+    }
   }
 
   function cancelledResult(
@@ -108,6 +151,7 @@
     audit,
     activeApplyContext,
     defaultResume,
+    fillRunId,
   }) {
     var fieldAudit = root.audit.createFieldAudit(audit, field);
     fieldAudit.beforeState = root.fieldState.readFieldState(field);
@@ -118,6 +162,28 @@
       uiModel: field.uiModel,
       element: root.audit.summarizeElement(field.element || field.anchor),
     });
+    root.audit.pushFieldStep(audit, fieldAudit, {
+      action: "site_state_before_field",
+      step: "site.before_field",
+      status: "info",
+      reason: "before_field_action",
+      detail: root.audit.siteState({
+        fieldId: field.fieldId || "",
+        descriptor: String(field.descriptor || "").slice(0, 240),
+      }),
+    });
+    emitSiteAction(
+      { fillRunId: fillRunId || "" },
+      {
+        action: "site_state_before_field",
+        status: "info",
+        reason: "before_field_action",
+        fieldId: field.fieldId || "",
+        descriptor: String(field.descriptor || "").slice(0, 240),
+        uiModel: field.uiModel || "",
+        siteState: root.audit.siteState(),
+      },
+    );
 
     var question = root.questionIdentifier.identifyQuestion(
       field,
@@ -199,7 +265,10 @@
     if (
       optionsNeeded(field) &&
       !option &&
-      field.workday?.kind !== "phone_country_code"
+      !(
+        field.workday?.kind &&
+        ["combobox", "button_listbox"].includes(field.uiModel)
+      )
     ) {
       fieldAudit.afterState = root.fieldState.readFieldState(field);
       return { filled: false, fieldAudit: fieldAudit };
@@ -245,6 +314,36 @@
         reason: fillResult.reason || "commit_failed",
       });
     }
+    root.audit.pushFieldStep(audit, fieldAudit, {
+      action: "site_state_after_field",
+      step: "site.after_field",
+      status: root.audit.siteState().workdayRuntimeError ? "error" : "info",
+      reason: "after_field_action",
+      detail: root.audit.siteState({
+        fieldId: field.fieldId || "",
+        descriptor: String(field.descriptor || "").slice(0, 240),
+        filled: Boolean(fillResult.ok),
+        fillReason: fillResult.reason || "",
+        afterText: fieldAudit.afterState.text || "",
+        afterRawValue: fieldAudit.afterState.rawValue || "",
+      }),
+    });
+    emitSiteAction(
+      { fillRunId: fillRunId || "" },
+      {
+        action: "site_state_after_field",
+        status: root.audit.siteState().workdayRuntimeError ? "blocked" : "info",
+        reason: "after_field_action",
+        fieldId: field.fieldId || "",
+        descriptor: String(field.descriptor || "").slice(0, 240),
+        uiModel: field.uiModel || "",
+        filled: Boolean(fillResult.ok),
+        fillReason: fillResult.reason || "",
+        afterText: fieldAudit.afterState.text || "",
+        afterRawValue: fieldAudit.afterState.rawValue || "",
+        siteState: root.audit.siteState(),
+      },
+    );
     return { filled: fieldAudit.filled, fieldAudit: fieldAudit };
   }
 
@@ -311,6 +410,18 @@
         });
         continue;
       }
+      if (shouldSkipPasswordField(field, context)) {
+        root.audit.pushEvent(audit, {
+          action: "field_skipped",
+          step: "field.password_filter",
+          status: "info",
+          reason: "password_field_skipped",
+          fieldId: field.fieldId,
+          questionHash: field.questionHash,
+          uiModel: field.uiModel,
+        });
+        continue;
+      }
       var result = await runField({
         field: field,
         profile: context.profile || {},
@@ -318,6 +429,7 @@
         audit: audit,
         activeApplyContext: context.activeApplyContext || {},
         defaultResume: context.defaultResume || {},
+        fillRunId: context.fillRunId || "",
       });
       if (fillCancelled(context)) {
         return cancelledResult(

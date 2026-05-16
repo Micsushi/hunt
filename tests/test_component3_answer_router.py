@@ -142,6 +142,28 @@ def test_salary_text_question_uses_default_without_llm(monkeypatch):
     assert decision.confidence == 0.72
 
 
+def test_desired_start_date_text_question_uses_profile_without_llm(monkeypatch):
+    def fail_generate_json(**_kwargs):
+        raise AssertionError("desired start date should not call LLM")
+
+    monkeypatch.setattr("c3_answering.pipeline.generate_json", fail_generate_json)
+
+    decision = decide_answer(
+        make_request(
+            "What date are you available to start work?",
+            [],
+            {"desiredStartDate": "2026-05-25"},
+            kind="text",
+        )
+    )
+
+    assert decision.status == "fillable"
+    assert decision.action == "fill_text"
+    assert decision.answer_text == "05/25/2026"
+    assert decision.canonical_field == "desired_start_date"
+    assert decision.source_fields == ["profile.desiredStartDate"]
+
+
 def test_disclosure_other_is_not_treated_as_neutral(monkeypatch):
     def fake_generate_json(**_kwargs):
         return LLMJsonResult(

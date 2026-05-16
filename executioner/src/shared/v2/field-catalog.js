@@ -50,6 +50,21 @@
       aliases: ["email", "e-mail", "email address", "contact email"],
       profilePaths: ["email"],
     }),
+    entry("account_password", {
+      aliases: [
+        "password",
+        "new password",
+        "verify new password",
+        "confirm password",
+      ],
+      excludeKeywords: [
+        "current password",
+        "old password",
+        "existing password",
+        "temporary password",
+      ],
+      profilePaths: ["accountPassword"],
+    }),
     entry("phone", {
       aliases: ["phone", "phone number", "mobile", "cell", "telephone"],
       profilePaths: ["phone"],
@@ -200,6 +215,18 @@
     entry("expected_graduation_year", {
       aliases: ["graduation year", "expected graduation"],
       profilePaths: ["expectedGraduationYear"],
+    }),
+    entry("desired_start_date", {
+      aliases: [
+        "desired start date",
+        "available start date",
+        "available to start",
+        "available to start work",
+        "date are you available to start work",
+        "start work date",
+      ],
+      profilePaths: ["desiredStartDate"],
+      defaultValue: "2026-05-25",
     }),
     entry("salary_expectation", {
       aliases: ["salary", "compensation", "pay expectation"],

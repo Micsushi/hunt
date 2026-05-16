@@ -19,22 +19,51 @@ async function requestJson({
   path,
   method = "GET",
   body,
+  signal,
+  timeoutMs = 0,
 }) {
-  const response = await fetch(joinUrl(baseUrl, path), {
-    method,
-    headers: buildHeaders(serviceToken),
-    body: body === undefined ? undefined : JSON.stringify(body),
-  });
-  const text = await response.text();
-  const payload = text ? JSON.parse(text) : {};
-  if (!response.ok) {
-    const message =
-      payload?.detail ||
-      payload?.message ||
-      `${method} ${path} failed with ${response.status}`;
-    throw new Error(message);
+  const controller = timeoutMs > 0 || signal ? new AbortController() : null;
+  const requestSignal = controller?.signal;
+  let timeoutId = null;
+  const abortFromCaller = () => controller?.abort(signal?.reason || "aborted");
+  if (signal) {
+    if (signal.aborted) {
+      abortFromCaller();
+    } else {
+      signal.addEventListener("abort", abortFromCaller, { once: true });
+    }
   }
-  return payload;
+  if (controller && timeoutMs > 0) {
+    timeoutId = setTimeout(
+      () => controller.abort("request_timeout"),
+      timeoutMs,
+    );
+  }
+  try {
+    const response = await fetch(joinUrl(baseUrl, path), {
+      method,
+      headers: buildHeaders(serviceToken),
+      body: body === undefined ? undefined : JSON.stringify(body),
+      signal: requestSignal,
+    });
+    const text = await response.text();
+    const payload = text ? JSON.parse(text) : {};
+    if (!response.ok) {
+      const message =
+        payload?.detail ||
+        payload?.message ||
+        `${method} ${path} failed with ${response.status}`;
+      throw new Error(message);
+    }
+    return payload;
+  } finally {
+    if (timeoutId) {
+      clearTimeout(timeoutId);
+    }
+    if (signal) {
+      signal.removeEventListener("abort", abortFromCaller);
+    }
+  }
 }
 
 export async function fetchPendingFills(settings, limit = 1) {
@@ -78,12 +107,14 @@ export async function postDebugLog(settings, payload) {
   });
 }
 
-export async function postAnswerDecision(settings, payload) {
+export async function postAnswerDecision(settings, payload, options = {}) {
   return requestJson({
     baseUrl: settings.backendUrl,
     serviceToken: settings.serviceToken,
     path: "/api/c3/answer-decision",
     method: "POST",
     body: payload,
+    signal: options.signal,
+    timeoutMs: options.timeoutMs,
   });
 }

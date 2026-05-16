@@ -425,12 +425,14 @@
       !match &&
       listbox &&
       attempts < (maxAttempts || 80) &&
-      listbox.scrollHeight > listbox.clientHeight + 2
+      listbox.scrollHeight > listbox.clientHeight + 2 &&
+      !window.__huntApplyCancelAllFills &&
+      !window.__huntApplyCancelFillRunId
     ) {
       attempts += 1;
       listbox.scrollTop += 260;
       listbox.dispatchEvent(new Event("scroll", { bubbles: true }));
-      await sleep(60);
+      await sleep(30);
       match = findMatch();
     }
     return { match: match, listbox: listbox, attempts: attempts };
@@ -452,6 +454,18 @@
       target.includes(label) ||
       (target.includes("+1") && label.includes("canada")) ||
       (target.includes("canada") && label.includes("+1"))
+    );
+  }
+
+  function committedStateMatches(state, answer, option) {
+    var label = clean(state?.text || state?.rawValue || "");
+    if (!state?.selected || !label) {
+      return false;
+    }
+    return (
+      option?.committed ||
+      optionMatches({ label: label }, answer?.value) ||
+      optionMatches({ label: label }, option?.label)
     );
   }
 
@@ -573,6 +587,24 @@
         }),
       },
     });
+    if (!options.length) {
+      var postPopupState = workdayCommittedState(field);
+      var postPopupLabel = clean(
+        postPopupState.text || postPopupState.rawValue || "",
+      );
+      if (committedStateMatches(postPopupState, answer, null)) {
+        return [
+          {
+            label: postPopupLabel,
+            value: postPopupLabel,
+            element: field.element,
+            placeholder: false,
+            committed: true,
+            committedReason: "popup_empty_already_committed",
+          },
+        ];
+      }
+    }
     return options;
   }
 
@@ -704,13 +736,11 @@
     );
     if (
       committedLabel &&
-      (option?.committed ||
-        optionMatches({ label: committedLabel }, answer?.value) ||
-        optionMatches({ label: committedLabel }, option?.label))
+      committedStateMatches(committedState, answer, option)
     ) {
       return {
         ok: true,
-        reason: "committed_workday_selection",
+        reason: option?.committedReason || "committed_workday_selection",
         afterState: committedState,
         selectedOption: committedLabel,
         valueSource: fieldAudit?.valueSource || answer?.source || "",
@@ -734,7 +764,7 @@
       var postPopupLabel = clean(
         postPopupState.text || postPopupState.rawValue || "",
       );
-      if (postPopupState.selected && postPopupLabel) {
+      if (committedStateMatches(postPopupState, answer, option)) {
         await closePopup(field);
         return {
           ok: true,
@@ -840,12 +870,12 @@
       await sleep(120);
     }
     var best = null;
-    for (var attempt = 0; attempt < 5; attempt++) {
+    for (var attempt = 0; attempt < 3; attempt++) {
       best = bestVisiblePhoneCountryOption(answerText);
       if (best) {
         break;
       }
-      await sleep(120);
+      await sleep(60);
     }
     if (!best) {
       var searchText = norm(answerText).includes("canada")

@@ -110,6 +110,107 @@
     };
   }
 
+  function datePartName(field) {
+    var el = field.element || field.anchor;
+    var text = clean(
+      [
+        field.fieldId,
+        el?.id,
+        el?.name,
+        el?.getAttribute?.("data-automation-id"),
+        el?.getAttribute?.("aria-label"),
+        field.descriptor,
+      ].join(" "),
+    ).toLowerCase();
+    if (
+      text.includes("datesectionmonth") ||
+      text.includes("date section month") ||
+      /\bmonth\b/.test(text)
+    ) {
+      return "month";
+    }
+    if (
+      text.includes("datesectionday") ||
+      text.includes("date section day") ||
+      /\bday\b/.test(text)
+    ) {
+      return "day";
+    }
+    if (
+      text.includes("datesectionyear") ||
+      text.includes("date section year") ||
+      /\byear\b/.test(text)
+    ) {
+      return "year";
+    }
+    return "";
+  }
+
+  function parseIsoLikeDate(value) {
+    var text = clean(value);
+    var iso = text.match(/^(\d{4})-(\d{1,2})-(\d{1,2})$/);
+    if (iso) {
+      return {
+        year: iso[1],
+        month: iso[2].padStart(2, "0"),
+        day: iso[3].padStart(2, "0"),
+      };
+    }
+    var slash = text.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+    if (slash) {
+      return {
+        month: slash[1].padStart(2, "0"),
+        day: slash[2].padStart(2, "0"),
+        year: slash[3],
+      };
+    }
+    return null;
+  }
+
+  function dateAnswerForEntry(entry, field, profile) {
+    var raw = "";
+    for (var i = 0; i < (entry.profilePaths || []).length; i++) {
+      raw = clean(profile[entry.profilePaths[i]]);
+      if (raw) {
+        break;
+      }
+    }
+    raw = raw || clean(entry.defaultValue);
+    var parts = parseIsoLikeDate(raw);
+    var part = datePartName(field);
+    if (parts && part) {
+      return {
+        value: parts[part],
+        source:
+          raw === clean(entry.defaultValue)
+            ? "default:" + entry.id + ":" + part
+            : "profile:" + (entry.profilePaths || [entry.id])[0] + ":" + part,
+        answerType: "text",
+        confidence: raw === clean(entry.defaultValue) ? 0.72 : 0.96,
+      };
+    }
+    if (parts) {
+      return {
+        value: parts.month + "/" + parts.day + "/" + parts.year,
+        source:
+          raw === clean(entry.defaultValue)
+            ? "default:" + entry.id
+            : "profile:" + (entry.profilePaths || [entry.id])[0],
+        answerType: "text",
+        confidence: raw === clean(entry.defaultValue) ? 0.72 : 0.96,
+      };
+    }
+    return {
+      value: raw,
+      source:
+        raw === clean(entry.defaultValue)
+          ? "default:" + entry.id
+          : "profile:" + (entry.profilePaths || [entry.id])[0],
+      answerType: "text",
+      confidence: raw === clean(entry.defaultValue) ? 0.72 : 0.96,
+    };
+  }
+
   function resolveAnswer({ question, field, profile, audit, fieldAudit }) {
     var entry = question.entry;
     if (!entry) {
@@ -170,6 +271,21 @@
         confidence: salaryAnswer.confidence,
         optionAliases: entry.optionAliases || {},
       };
+    }
+
+    if (entry.id === "desired_start_date") {
+      var dateAnswer = dateAnswerForEntry(entry, field, profile);
+      if (dateAnswer.source.startsWith("default:")) {
+        root.audit?.pushIssue(audit, fieldAudit, {
+          kind: "default_answer_used",
+          severity: "warn",
+          failedStep: "answer.resolve",
+          reason:
+            "Used desired start date default because profile desiredStartDate was blank.",
+          questionType: question.type,
+        });
+      }
+      return dateAnswer;
     }
 
     for (var i = 0; i < (entry.profilePaths || []).length; i++) {

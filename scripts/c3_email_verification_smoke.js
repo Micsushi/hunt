@@ -113,6 +113,25 @@ function usage() {
   ].join("\n");
 }
 
+const workflowEvents = [];
+
+function recordWorkflowEvent(phase, action, status, summary, details = {}) {
+  const event = {
+    phase,
+    action,
+    status,
+    summary,
+    details,
+    at: new Date().toISOString(),
+  };
+  workflowEvents.push(event);
+  const detailText = Object.keys(details).length
+    ? ` ${JSON.stringify(details)}`
+    : "";
+  console.error(`[c3][${phase}][${status}] ${summary}${detailText}`);
+  return event;
+}
+
 function startFixtureServer(port) {
   const fixtureDir = path.resolve(
     process.cwd(),
@@ -802,11 +821,99 @@ async function clickSignInAction(pageClient) {
   return { ok: false, clicked: false, reason: pos?.reason || "sign_in_action_not_found", buttons: pos?.buttons || [] };
 }
 
+async function clickWorkdayLoginSubmit(pageClient) {
+  await bringToFront(pageClient);
+  const pos = await pageClient.evaluate(
+    `(() => {
+      const visible = (el) => {
+        const style = getComputedStyle(el);
+        const rect = el.getBoundingClientRect();
+        return style.display !== "none" && style.visibility !== "hidden" && rect.width > 0 && rect.height > 0;
+      };
+      const textOf = (el) => [
+        el.getAttribute("aria-label"),
+        el.getAttribute("title"),
+        el.innerText,
+        el.textContent
+      ].filter(Boolean).join(" ").replace(/\\s+/g, " ").trim();
+      const password = [...document.querySelectorAll("input[type='password']")]
+        .filter(visible)
+        .sort((a, b) => a.getBoundingClientRect().top - b.getBoundingClientRect().top)[0];
+      if (!password) {
+        return { ok: false, reason: "password_field_not_found" };
+      }
+      const passwordRect = password.getBoundingClientRect();
+      const buttons = [...document.querySelectorAll("button, [role='button']")]
+        .filter(visible)
+        .map((el) => {
+          const rect = el.getBoundingClientRect();
+          return {
+            text: textOf(el),
+            disabled: el.disabled || el.getAttribute("aria-disabled") === "true",
+            x: rect.left + rect.width / 2,
+            y: rect.top + rect.height / 2,
+            top: rect.top,
+            width: rect.width,
+            height: rect.height,
+          };
+        })
+        .filter((button) => /^sign in$/i.test(button.text) && !button.disabled);
+      const belowPassword = buttons
+        .filter((button) => button.top > passwordRect.top)
+        .sort((a, b) => a.top - b.top)[0];
+      const candidate = belowPassword || buttons[buttons.length - 1];
+      if (!candidate) {
+        return { ok: false, reason: "login_submit_not_found", buttons: buttons.map((button) => button.text) };
+      }
+      return {
+        ok: true,
+        label: candidate.text,
+        x: Math.round(candidate.x),
+        y: Math.round(candidate.y),
+      };
+    })()`,
+  );
+  if (!pos?.ok || pos.x == null || pos.y == null) {
+    return {
+      ok: false,
+      clicked: false,
+      reason: pos?.reason || "login_submit_not_found",
+      buttons: pos?.buttons || [],
+    };
+  }
+  await pageClient.send("Input.dispatchMouseEvent", {
+    type: "mouseMoved",
+    x: pos.x,
+    y: pos.y,
+    button: "left",
+  });
+  await pageClient.send("Input.dispatchMouseEvent", {
+    type: "mousePressed",
+    x: pos.x,
+    y: pos.y,
+    button: "left",
+    clickCount: 1,
+  });
+  await pageClient.send("Input.dispatchMouseEvent", {
+    type: "mouseReleased",
+    x: pos.x,
+    y: pos.y,
+    button: "left",
+    clickCount: 1,
+  });
+  await sleep(5500);
+  return { ok: true, clicked: true, label: pos.label || "Sign In" };
+}
+
 async function signInFromCurrentAccountState(pageClient, args, referenceUrl) {
-  const signInClick = await clickSignInAction(pageClient);
-  const loginPage = signInClick.ok
-    ? await ensureWorkdayLoginPage(pageClient)
-    : { ok: false, reason: signInClick.reason || "sign_in_action_failed" };
+  let signInClick = { ok: true, skipped: true, reason: "already_on_login_page" };
+  let loginPage = await ensureWorkdayLoginPage(pageClient);
+  if (!loginPage.ok) {
+    signInClick = await clickSignInAction(pageClient);
+    loginPage = signInClick.ok
+      ? await ensureWorkdayLoginPage(pageClient)
+      : { ok: false, reason: signInClick.reason || "sign_in_action_failed" };
+  }
   if (!loginPage.ok) {
     return {
       ok: false,
@@ -817,7 +924,7 @@ async function signInFromCurrentAccountState(pageClient, args, referenceUrl) {
   }
   const loginFill = await fillWorkdayLoginForm(pageClient, args);
   const loginSubmit = loginFill.ok
-    ? await clickSafeAccountAction(pageClient)
+    ? await clickWorkdayLoginSubmit(pageClient)
     : { ok: false, reason: "login_fill_failed" };
   const postLoginClient =
     (await connectLatestWorkdayApplicationTarget(args.cdpPort, referenceUrl)) ||
@@ -854,25 +961,13 @@ async function reachAccountForm(pageClient, maxSteps = 6) {
       verificationNeeded: state.verificationNeeded,
       signedInOrAdvanced: state.signedInOrAdvanced,
     });
-    if (state.ok && state.isLoginForm && state.hasCreateAccountAction) {
-      const click = await clickSafeAccountAction(pageClient, "create");
-      steps.push({
-        step: i,
-        clicked: click.clicked,
-        label: click.label || "",
-        reason: click.reason || "",
-        intent: click.intent || "create",
-        href: click.href || "",
-      });
-      if (!click.ok || !click.clicked) {
-        return {
-          ok: false,
-          reason: click.reason || "create_account_action_failed",
-          steps,
-          state,
-        };
-      }
-      continue;
+    if (state.ok && state.isLoginForm) {
+      return {
+        ok: true,
+        reason: "account_login_fields_found",
+        steps,
+        state,
+      };
     }
     if (
       (state.ok && !state.isLoginForm) ||
@@ -1217,6 +1312,21 @@ async function main() {
       args.provider === "fake"
         ? { ok: true, reason: "fake_fixture" }
         : await reachAccountForm(pageClient);
+    recordWorkflowEvent(
+      "auth",
+      "detect_account_state",
+      reachResult.ok ? "ok" : "failed",
+      reachResult.ok
+        ? `Detected Workday account state: ${reachResult.reason || "unknown"}.`
+        : "Could not reach a Workday account state.",
+      {
+        reason: reachResult.reason || "",
+        signedInOrAdvanced: Boolean(reachResult.state?.signedInOrAdvanced),
+        isLoginForm: Boolean(reachResult.state?.isLoginForm),
+        isSignupForm: Boolean(reachResult.state?.isSignupForm),
+        verificationNeeded: Boolean(reachResult.state?.verificationNeeded),
+      },
+    );
     if (!reachResult.ok) {
       throw new Error(
         `Could not reach account form: ${JSON.stringify(reachResult)}`,
@@ -1231,10 +1341,27 @@ async function main() {
       reachSignedInEmail !== wantEmail;
     if (args.provider !== "fake" && reachResult.state?.signedInOrAdvanced && !wrongAccount) {
       const applicationState = await inspectApplicationState(pageClient);
+      recordWorkflowEvent(
+        "auth",
+        "session_detected",
+        "ok",
+        "Existing signed-in Workday session detected; skipping login, signup, and email verification.",
+        {
+          email: reachResult.state?.signedInEmail || args.accountEmail || "",
+        },
+      );
       console.log(
         JSON.stringify(
           {
             ok: true,
+            workflow: {
+              auth: {
+                phase: "auth",
+                status: "ok",
+                reason: "already_signed_in_or_advanced",
+                events: workflowEvents.filter((event) => event.phase === "auth"),
+              },
+            },
             provider: args.provider,
             resetSiteData,
             reason: "already_signed_in_or_advanced",
@@ -1303,6 +1430,85 @@ async function main() {
         `Wrong-account sign-out + sign-in failed: ${JSON.stringify(signInResult)}`,
       );
     }
+    const loginFirstResult =
+      args.provider === "fake"
+        ? { ok: false, skipped: true, reason: "fake_fixture_signup_first" }
+        : await signInFromCurrentAccountState(pageClient, args, fillTargetUrl);
+    recordWorkflowEvent(
+      "auth",
+      "login_first",
+      loginFirstResult.ok ? "ok" : "failed",
+      loginFirstResult.ok
+        ? "Existing Workday account login succeeded; skipping signup and email verification."
+        : "Existing Workday account login did not advance; signup/verification may be needed.",
+      {
+        reason: loginFirstResult.reason || loginFirstResult.loginPage?.reason || "",
+        loginFilled: Boolean(loginFirstResult.loginFill?.ok),
+        loginSubmitted: Boolean(loginFirstResult.loginSubmit?.ok),
+        signedInOrAdvanced: Boolean(loginFirstResult.loginState?.signedInOrAdvanced),
+      },
+    );
+    if (loginFirstResult.switchedClient && loginFirstResult.client) {
+      pageClient.close();
+      pageClient = loginFirstResult.client;
+    }
+    if (loginFirstResult.ok) {
+      const applicationState = await inspectApplicationState(pageClient);
+      console.log(
+        JSON.stringify(
+          {
+            ok: true,
+            workflow: {
+              auth: {
+                phase: "auth",
+                status: "ok",
+                reason: "login_first_succeeded",
+                events: workflowEvents.filter((event) => event.phase === "auth"),
+              },
+            },
+            provider: args.provider,
+            resetSiteData,
+            reason: "login_first_succeeded",
+            fill: {
+              ok: false,
+              skipped: true,
+              reason: "signup_not_needed",
+            },
+            submit: {
+              ok: true,
+              skipped: true,
+              reason: "signed_in_before_signup",
+              email: args.accountEmail,
+            },
+            bridge: {
+              ok: true,
+              skipped: true,
+              reason: "login_first_no_verification_needed",
+            },
+            login: loginFirstResult,
+            verified: applicationState,
+          },
+          null,
+          2,
+        ),
+      );
+      return;
+    }
+    if (loginFirstResult.client && loginFirstResult.client !== pageClient) {
+      pageClient.close();
+      pageClient = loginFirstResult.client;
+    }
+    await navigate(pageClient, fillTargetUrl);
+    await sleep(1500);
+    recordWorkflowEvent(
+      "auth",
+      "signup_start",
+      "info",
+      "Login-first did not succeed; trying signup and email verification path.",
+      {
+        href: fillTargetUrl,
+      },
+    );
     const fillResult =
       args.provider === "fake"
         ? await fillCurrentPage(optionsClient, fillTargetUrl)
@@ -1443,6 +1649,18 @@ async function main() {
       },
       { provider: args.provider },
     );
+    recordWorkflowEvent(
+      "auth",
+      "email_verification",
+      bridgeResult.ok ? "ok" : "failed",
+      bridgeResult.ok
+        ? "Email verification link found."
+        : "Email verification link was not found before timeout.",
+      {
+        reason: bridgeResult.reason || "",
+        source: bridgeResult.source || "",
+      },
+    );
     if (!bridgeResult.ok) {
       if (args.provider !== "fake") {
         const loginClient =
@@ -1554,6 +1772,21 @@ async function main() {
           loginSubmit.ok &&
           loginState.signedInOrAdvanced),
       ),
+      workflow: {
+        auth: {
+          phase: "auth",
+          status:
+            verified.verified ||
+            (args.provider !== "fake" &&
+              loginFill.ok &&
+              loginSubmit.ok &&
+              loginState.signedInOrAdvanced)
+              ? "ok"
+              : "failed",
+          reason: "signup_email_verification",
+          events: workflowEvents.filter((event) => event.phase === "auth"),
+        },
+      },
       provider: args.provider,
       resetSiteData,
       fill: {

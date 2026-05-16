@@ -33,14 +33,39 @@
     if (field.uiModel === "radio_group") {
       return (field.radios || []).map(function (radio) {
         var ariaLabel = radio.getAttribute?.("aria-label") || "";
+        var associatedLabel = (function () {
+          if (!radio.id) {
+            return "";
+          }
+          try {
+            var label = document.querySelector(
+              'label[for="' + CSS.escape(radio.id) + '"]',
+            );
+            return label
+              ? (label.innerText || label.textContent || "").trim()
+              : "";
+          } catch (_error) {
+            return "";
+          }
+        })();
+        var closestLabel = (function () {
+          var label = radio.closest?.("label");
+          return label
+            ? (label.innerText || label.textContent || "").trim()
+            : "";
+        })();
         var siblingLabel = (function () {
-          var parent = radio.parentElement;
-          if (!parent) return "";
-          var labelEl =
-            parent.querySelector?.(
+          var labelEl = radio.nextElementSibling;
+          if (
+            !labelEl?.matches?.(
               "label, [data-automation-id*='label'], [data-automation-id*='Label']",
-            ) || (parent.tagName === "LABEL" ? parent : null);
-          return labelEl && labelEl !== radio
+            )
+          ) {
+            labelEl = radio.previousElementSibling;
+          }
+          return labelEl?.matches?.(
+            "label, [data-automation-id*='label'], [data-automation-id*='Label']",
+          )
             ? (labelEl.innerText || labelEl.textContent || "").trim()
             : "";
         })();
@@ -52,6 +77,8 @@
           : radio.value || radio.id || "";
         var label =
           ariaLabel ||
+          associatedLabel ||
+          closestLabel ||
           siblingLabel ||
           descriptorLabel ||
           radio.value ||

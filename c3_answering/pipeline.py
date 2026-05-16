@@ -250,10 +250,51 @@ def _location_aliases(location: str) -> list[str]:
     return aliases
 
 
+def _date_value(profile: dict[str, Any], key: str, default: str) -> tuple[str, str, float]:
+    raw = str(profile.get(key) or "").strip()
+    source = f"profile.{key}"
+    confidence = 0.95
+    if not raw:
+        raw = default
+        source = f"default.{key}"
+        confidence = 0.72
+    iso = re.match(r"^(\d{4})-(\d{1,2})-(\d{1,2})$", raw)
+    if iso:
+        return (
+            f"{iso.group(2).zfill(2)}/{iso.group(3).zfill(2)}/{iso.group(1)}",
+            source,
+            confidence,
+        )
+    slash = re.match(r"^(\d{1,2})/(\d{1,2})/(\d{4})$", raw)
+    if slash:
+        return (
+            f"{slash.group(1).zfill(2)}/{slash.group(2).zfill(2)}/{slash.group(3)}",
+            source,
+            confidence,
+        )
+    return raw, source, confidence
+
+
 def deterministic_decision(request: C3AnswerRequest) -> C3AnswerDecision | None:
     question = normalize_question_text(request.field.label)
     options = _real_options(request.field.options)
     profile = request.profile
+    if not options and (
+        "available to start" in question
+        or "available start date" in question
+        or "desired start date" in question
+        or "date are you available to start work" in question
+    ):
+        answer, source, confidence = _date_value(profile, "desiredStartDate", "2026-05-25")
+        return _text_decision(
+            request,
+            canonical_field="desired_start_date",
+            answer_text=answer,
+            source_field=source,
+            reason="Question asks for desired start date and C3 has a profile/default date.",
+            confidence=confidence,
+            camp="profile_value",
+        )
     if ("salary" in question or "compensation" in question) and not options:
         salary_range = str(profile.get("salaryExpectationRange") or "").strip()
         salary_point = str(profile.get("salaryExpectation") or "").strip()

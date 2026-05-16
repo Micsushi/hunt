@@ -203,6 +203,13 @@ function runNode(args, label) {
   return result.stdout || "";
 }
 
+function logWorkflowPhase(phase, status, summary, details = {}) {
+  const detailText = Object.keys(details).length
+    ? ` ${JSON.stringify(details)}`
+    : "";
+  console.error(`[c3][${phase}][${status}] ${summary}${detailText}`);
+}
+
 async function main() {
   loadDotEnv();
   const args = parseArgs(process.argv);
@@ -231,6 +238,15 @@ async function main() {
   }
 
   if (!args.skipAccountBootstrap) {
+    logWorkflowPhase(
+      "auth",
+      "start",
+      "Detecting existing Workday session or login form before signup.",
+      {
+        provider: args.provider,
+        accountMethod: args.accountMethod,
+      },
+    );
     const bootstrapArgs = [
       "scripts/c3_email_verification_smoke.js",
       "--provider",
@@ -257,8 +273,18 @@ async function main() {
         ? "Fresh account bootstrap with site-data reset"
         : "Account bootstrap",
     );
+    logWorkflowPhase(
+      "auth",
+      "ok",
+      "Auth phase completed; signup/email verification was skipped or completed.",
+    );
   }
 
+  logWorkflowPhase(
+    "apply_entry",
+    "start",
+    "Detecting signed-in Workday start page and Apply Manually entry point.",
+  );
   runNode(
     [
       "scripts/c3_workday_live_smoke.js",

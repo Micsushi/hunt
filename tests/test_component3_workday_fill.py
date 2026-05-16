@@ -43,6 +43,130 @@ def _load_v2_workday_scripts(page):
         page.add_script_tag(content=_load_script(REPO_ROOT / path))
 
 
+def test_workday_v2_empty_popup_accepts_matching_committed_button_value():
+    if sync_playwright is None:
+        pytest.skip("playwright is required for the Workday C3 fill fixture")
+
+    fill_v2_js = _module_to_browser_script(
+        _load_script(REPO_ROOT / "executioner/src/ats/workday/fill-v2.js")
+    )
+
+    with sync_playwright() as playwright:
+        try:
+            browser = playwright.chromium.launch()
+        except PlaywrightError as error:
+            pytest.skip(f"playwright chromium is unavailable: {error}")
+
+        page = browser.new_page()
+        page.set_content(
+            """
+            <html>
+              <body>
+                <div data-automation-id="applyFlowMyInfoPage">
+                  <div data-automation-id="formField-phoneType">
+                    Phone Device Type*
+                    <button id="phoneNumber--phoneType" name="phoneType" type="button" aria-haspopup="listbox" aria-label="Phone Device Type Select One Required">Mobile</button>
+                  </div>
+                </div>
+              </body>
+            </html>
+            """
+        )
+        _load_v2_workday_scripts(page)
+        page.add_script_tag(content=fill_v2_js)
+        result = page.evaluate(
+            """
+            async () => {
+              const fill = createWorkdayFillV2Function();
+              return await fill({
+                profile: { phoneDeviceType: "Mobile" },
+                settings: { fillRequiredOnly: true, useFieldPipelineV2: true },
+                activeApplyContext: {},
+                defaultResume: {},
+                fillRunId: "workday_empty_popup_committed_match",
+              });
+            }
+            """
+        )
+        browser.close()
+
+    fields = {entry["fieldId"]: entry for entry in result["v2Audit"]["fields"]}
+    phone_type = fields["phoneNumber--phoneType"]
+    fill_steps = [
+        event
+        for event in result["v2Audit"]["events"]
+        if event.get("fieldId") == "phoneNumber--phoneType"
+        and event.get("action") == "field_fill_result"
+    ]
+
+    assert phone_type["filled"] is True
+    assert phone_type["valueSource"] == "profile:phoneDeviceType"
+    assert fill_steps[-1]["reason"] in {
+        "committed_workday_selection",
+        "popup_empty_already_committed",
+    }
+
+
+def test_workday_v2_empty_popup_rejects_wrong_committed_button_value():
+    if sync_playwright is None:
+        pytest.skip("playwright is required for the Workday C3 fill fixture")
+
+    fill_v2_js = _module_to_browser_script(
+        _load_script(REPO_ROOT / "executioner/src/ats/workday/fill-v2.js")
+    )
+
+    with sync_playwright() as playwright:
+        try:
+            browser = playwright.chromium.launch()
+        except PlaywrightError as error:
+            pytest.skip(f"playwright chromium is unavailable: {error}")
+
+        page = browser.new_page()
+        page.set_content(
+            """
+            <html>
+              <body>
+                <div data-automation-id="applyFlowMyInfoPage">
+                  <div data-automation-id="formField-phoneType">
+                    Phone Device Type*
+                    <button id="phoneNumber--phoneType" name="phoneType" type="button" aria-haspopup="listbox" aria-label="Phone Device Type Select One Required">Fax</button>
+                  </div>
+                </div>
+              </body>
+            </html>
+            """
+        )
+        _load_v2_workday_scripts(page)
+        page.add_script_tag(content=fill_v2_js)
+        result = page.evaluate(
+            """
+            async () => {
+              const fill = createWorkdayFillV2Function();
+              return await fill({
+                profile: { phoneDeviceType: "Mobile" },
+                settings: { fillRequiredOnly: true, useFieldPipelineV2: true },
+                activeApplyContext: {},
+                defaultResume: {},
+                fillRunId: "workday_empty_popup_committed_mismatch",
+              });
+            }
+            """
+        )
+        browser.close()
+
+    fields = {entry["fieldId"]: entry for entry in result["v2Audit"]["fields"]}
+    phone_type = fields["phoneNumber--phoneType"]
+    fill_steps = [
+        event
+        for event in result["v2Audit"]["events"]
+        if event.get("fieldId") == "phoneNumber--phoneType"
+        and event.get("action") == "field_fill_result"
+    ]
+
+    assert phone_type["filled"] is False
+    assert fill_steps[-1]["reason"] == "workday_popup_options_missing"
+
+
 def test_workday_v2_uses_specific_identity_for_grouped_my_info_fields():
     if sync_playwright is None:
         pytest.skip("playwright is required for the Workday C3 fill fixture")

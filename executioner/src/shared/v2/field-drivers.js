@@ -213,19 +213,25 @@
   }
 
   async function fillRadioGroup(field, option) {
-    var target = (field.radios || []).find(function (radio) {
-      var descriptor = window.__huntApplyUtils?.getDescriptor
-        ? window.__huntApplyUtils.getDescriptor(
-            radio,
-            root.uiInspector?.containerSelectors || [],
-          )
-        : radio.value || radio.id || "";
-      return (
-        matchesText(descriptor, option.label) ||
-        matchesText(radio.value, option.value) ||
-        descriptor.toLowerCase().includes(String(option.label).toLowerCase())
-      );
-    });
+    var target =
+      option?.element && (field.radios || []).includes(option.element)
+        ? option.element
+        : null;
+    target =
+      target ||
+      (field.radios || []).find(function (radio) {
+        var descriptor = window.__huntApplyUtils?.getDescriptor
+          ? window.__huntApplyUtils.getDescriptor(
+              radio,
+              root.uiInspector?.containerSelectors || [],
+            )
+          : radio.value || radio.id || "";
+        return (
+          matchesText(descriptor, option.label) ||
+          matchesText(radio.value, option.value) ||
+          descriptor.toLowerCase().includes(String(option.label).toLowerCase())
+        );
+      });
     if (!target) {
       return { ok: false, reason: "radio_not_found" };
     }

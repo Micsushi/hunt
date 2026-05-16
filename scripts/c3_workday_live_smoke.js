@@ -153,6 +153,13 @@ function usage() {
   ].join("\n");
 }
 
+function logWorkflowPhase(phase, status, summary, details = {}) {
+  const detailText = Object.keys(details).length
+    ? ` ${JSON.stringify(details)}`
+    : "";
+  console.error(`[c3][${phase}][${status}] ${summary}${detailText}`);
+}
+
 function deriveApplyUrl(jobUrl, mode) {
   const url = new URL(jobUrl);
   const source = url.searchParams.get("source") || "LinkedIn";
@@ -688,6 +695,117 @@ async function clickWorkdayStep(pageClient, stepName) {
   };
 }
 
+async function clickApplyManuallyEntry(pageClient) {
+  const result = await pageClient.evaluate(
+    `(async () => {
+      const normalize = (value) => String(value || "").replace(/\\s+/g, " ").trim();
+      const visible = (el) => {
+        const style = getComputedStyle(el);
+        const rect = el.getBoundingClientRect();
+        return style.display !== "none" && style.visibility !== "hidden" && rect.width > 0 && rect.height > 0;
+      };
+      const bodyText = document.body ? document.body.innerText : "";
+      const currentStep = bodyText.match(/current step\\s+\\d+\\s+of\\s+\\d+/i);
+      if (currentStep) {
+        return {
+          ok: true,
+          skipped: true,
+          phase: "apply_entry",
+          reason: "already_on_application_step",
+          href: location.href,
+        };
+      }
+      if (!/Start Your Application/i.test(bodyText)) {
+        return {
+          ok: true,
+          skipped: true,
+          phase: "apply_entry",
+          reason: "not_on_start_application_page",
+          href: location.href,
+        };
+      }
+      const candidates = [...document.querySelectorAll("a, button, [role='button']")]
+        .filter(visible)
+        .map((el) => {
+          const rect = el.getBoundingClientRect();
+          return {
+            el,
+            text: normalize([el.getAttribute("aria-label"), el.innerText, el.textContent].filter(Boolean).join(" ")),
+            href: el.href || "",
+            x: Math.round(rect.left + rect.width / 2),
+            y: Math.round(rect.top + rect.height / 2),
+          };
+        });
+      const candidate = candidates.find((item) => /^Apply Manually$/i.test(item.text))
+        || candidates.find((item) => /\\/apply\\/applyManually/i.test(item.href));
+      if (!candidate) {
+        return {
+          ok: false,
+          phase: "apply_entry",
+          reason: "apply_manually_not_found",
+          href: location.href,
+          candidates: candidates.map((item) => item.text || item.href).filter(Boolean).slice(0, 30),
+        };
+      }
+      return {
+        ok: true,
+        phase: "apply_entry",
+        clicked: true,
+        label: candidate.text || "Apply Manually",
+        href: candidate.href || "",
+        x: candidate.x,
+        y: candidate.y,
+        reason: candidate.href ? "apply_manually_href_found" : "apply_manually_button_found",
+      };
+    })()`,
+    30000,
+  );
+  if (result?.ok) {
+    if (!result.skipped && result.href) {
+      await navigate(pageClient, result.href);
+      await sleep(6000);
+    } else if (!result.skipped && result.x != null && result.y != null) {
+      await cdpClick(pageClient, result.x, result.y);
+      await sleep(6000);
+    }
+    if (result.skipped) {
+      return result;
+    }
+    const after = await pageClient.evaluate(
+      `(() => {
+        const normalize = (value) => String(value || "").replace(/\\s+/g, " ").trim();
+        const text = document.body ? document.body.innerText : "";
+        const stepMatch = text.match(/current step\\s+(\\d+)\\s+of\\s+(\\d+)\\s*\\n([^\\n]+)/i);
+        return {
+          href: location.href,
+          currentStep: stepMatch ? {
+            current: Number(stepMatch[1]),
+            total: Number(stepMatch[2]),
+            title: normalize(stepMatch[3]),
+          } : null,
+        };
+      })()`,
+      10000,
+    );
+    return {
+      ...result,
+      ok: Boolean(after?.currentStep),
+      href: after?.href || result.href || "",
+      currentStep: after?.currentStep || null,
+      reason: after?.currentStep
+        ? "apply_manually_clicked"
+        : "application_step_not_reached",
+    };
+  }
+  return (
+    result || {
+      ok: false,
+      phase: "apply_entry",
+      reason: "apply_entry_detection_failed",
+    }
+  );
+}
+
 async function cdpClick(client, x, y) {
   await client.send("Input.dispatchMouseEvent", {
     type: "mouseMoved",
@@ -1063,7 +1181,10 @@ async function suppressStaleWorkdayDateErrors(summary) {
 }
 
 function fillMessageTimeoutMs(args) {
-  if (Number.isFinite(args.fillMessageTimeoutMs) && args.fillMessageTimeoutMs > 0) {
+  if (
+    Number.isFinite(args.fillMessageTimeoutMs) &&
+    args.fillMessageTimeoutMs > 0
+  ) {
     return args.fillMessageTimeoutMs;
   }
   if (args.extensionAutoNext) {
@@ -1134,6 +1255,8 @@ async function fillCurrentPage(optionsClient, applyUrl, args) {
         generatedAnswers: result.generatedAnswers || [],
         filledFields: result.filledFields || [],
         interactionTrace: result.interactionTrace || [],
+        v2Audit: result.v2Audit || attempt.v2Audit || null,
+        siteActions: result.siteActions || attempt.siteActions || response.siteActions || [],
         fieldInventory: (result.fieldInventory || []).map((field) => ({
           kind: field.kind || "",
           tagName: field.tagName || "",
@@ -1837,6 +1960,43 @@ function summarizeFill(fill) {
   const fieldInventory = Array.isArray(fill.fieldInventory)
     ? fill.fieldInventory
     : [];
+  const v2Audit = fill.v2Audit || null;
+  const v2SiteActions = Array.isArray(v2Audit?.events)
+    ? v2Audit.events
+        .filter((entry) =>
+          [
+            "site_state_before_field",
+            "site_state_after_field",
+            "workday_options_collected",
+            "workday_option_click",
+            "field_fill_result",
+            "permanent_issue",
+          ].includes(entry.action),
+        )
+        .map((entry) => ({
+          index: entry.index,
+          at: entry.at,
+          action: entry.action,
+          step: entry.step,
+          status: entry.status,
+          reason: entry.reason,
+          fieldId: entry.fieldId || "",
+          questionType: entry.questionType || "",
+          uiModel: entry.uiModel || "",
+          selectedOption: entry.selectedOption || "",
+          detail: entry.detail || {},
+        }))
+    : [];
+  const backgroundSiteActions = Array.isArray(fill.siteActions)
+    ? fill.siteActions.map((entry) => ({
+        at: entry.at || "",
+        action: entry.action || "",
+        status: entry.status || "",
+        reason: entry.reason || "",
+        siteState: entry.siteState || {},
+      }))
+    : [];
+  const siteActions = [...backgroundSiteActions, ...v2SiteActions];
   const componentTrace = interactionTrace.filter((entry) =>
     ["hover", "click", "already_filled", "set_value"].includes(entry.action),
   );
@@ -1894,6 +2054,15 @@ function summarizeFill(fill) {
       options: field.options || [],
     })),
     nextAction: fill.nextAction || null,
+    siteActions,
+    v2AuditSummary: v2Audit
+      ? {
+          runId: v2Audit.runId || "",
+          page: v2Audit.page || {},
+          summary: v2Audit.summary || {},
+          permanentIssues: v2Audit.permanentIssues || [],
+        }
+      : null,
     unfilledRequired: fieldInventory
       .filter((field) => field.required && !field.filled)
       .map((field) => ({
@@ -2015,12 +2184,45 @@ async function run() {
     if (!args.preserveCurrent) {
       await navigate(pageClient, applyUrl);
     }
+    const applyEntry = await clickApplyManuallyEntry(pageClient);
+    logWorkflowPhase(
+      "apply_entry",
+      applyEntry.ok ? "ok" : "failed",
+      applyEntry.skipped
+        ? `Apply entry skipped: ${applyEntry.reason || "not needed"}.`
+        : applyEntry.clicked
+          ? "Detected start-application page and clicked Apply Manually."
+          : "Apply entry detection did not reach the application form.",
+      {
+        reason: applyEntry.reason || "",
+        href: applyEntry.href || "",
+        currentStep: applyEntry.currentStep?.title || "",
+      },
+    );
+    if (!applyEntry.ok) {
+      throw new Error(
+        `Apply entry phase failed: ${JSON.stringify(applyEntry)}`,
+      );
+    }
     const startStep = await clickWorkdayStep(pageClient, args.startStep);
 
     const timeline = [];
     const audit = {
       ok: false,
       mode: args.mode,
+      workflow: {
+        auth: {
+          phase: "auth",
+          skipped: true,
+          reason: "handled_outside_live_smoke",
+        },
+        applyEntry,
+        jobFill: {
+          phase: "job_fill",
+          started: true,
+          notification: "Starting actual Workday job form fill.",
+        },
+      },
       jobUrl: args.jobUrl,
       applyUrl,
       resumePath: args.resumePath,
@@ -2297,7 +2499,9 @@ async function run() {
       }
       timeline.push({
         pageIndex: i + 1,
+        workflowPhase: "job_fill",
         startStep: i === 0 && !startStep.skipped ? startStep : null,
+        applyEntry: i === 0 && !applyEntry.skipped ? applyEntry : null,
         before: {
           href: before.href,
           currentStep: before.currentStep,

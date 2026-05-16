@@ -90,6 +90,55 @@
     };
   }
 
+  function visibleValidationErrors() {
+    var seen = {};
+    return Array.from(
+      document.querySelectorAll(
+        [
+          '[role="alert"]',
+          '[data-automation-id*="error" i]',
+          '[id*="error" i]',
+          '[aria-invalid="true"]',
+        ].join(", "),
+      ),
+    )
+      .map(function (element) {
+        return normalizeText(element.innerText || element.textContent || "");
+      })
+      .filter(function (text) {
+        var key = text.toLowerCase();
+        if (!text || seen[key]) {
+          return false;
+        }
+        seen[key] = true;
+        return true;
+      })
+      .slice(0, 20);
+  }
+
+  function detectWorkdayRuntimeError() {
+    var bodyText = normalizeText(document.body?.innerText || "");
+    var lower = bodyText.toLowerCase();
+    return (
+      lower.includes("something went wrong") &&
+      lower.includes("please refresh the page and then try again")
+    );
+  }
+
+  function siteState(extra) {
+    return Object.assign(
+      {
+        href: window.location.href,
+        title: document.title || "",
+        readyState: document.readyState || "",
+        workdayRuntimeError: detectWorkdayRuntimeError(),
+        validationErrors: visibleValidationErrors(),
+        bodyHead: normalizeText(document.body?.innerText || "").slice(0, 500),
+      },
+      extra || {},
+    );
+  }
+
   function createRunAudit(context) {
     var runId =
       context.fillRunId ||
@@ -251,5 +300,6 @@
     rectSummary: rectSummary,
     htmlClip: htmlClip,
     normalizeText: normalizeText,
+    siteState: siteState,
   };
 })();

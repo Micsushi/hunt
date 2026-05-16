@@ -131,6 +131,8 @@ def test_workday_runtime_error_can_refresh_and_retry_once():
     assert "RecoverWorkdayRuntimeErrorStep" in runner
     assert "workdayRuntimeRecovery" in runner
     assert "recoverWorkdayRuntimeErrorForTab" in background
+    assert "safe_next_probe_workday_runtime_error" in background
+    assert "next.workday_runtime_recovered_before_probe" in background
     assert "clicked_safe_next_recovered_workday_runtime_error" in background
     assert "clicked_safe_next_recovered_workday_runtime_error" in safe_next
     assert "workdayRuntimeError" in live_smoke

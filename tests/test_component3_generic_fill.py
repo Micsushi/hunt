@@ -40,6 +40,77 @@ def _load_v2_scripts(page):
         page.add_script_tag(content=_load_script(REPO_ROOT / path))
 
 
+def test_generic_v2_radio_options_use_associated_labels_before_group_text():
+    if sync_playwright is None:
+        pytest.skip("playwright is required for the generic C3 V2 fixture")
+
+    with sync_playwright() as playwright:
+        try:
+            browser = playwright.chromium.launch()
+        except PlaywrightError as error:
+            pytest.skip(f"playwright chromium is unavailable: {error}")
+
+        page = browser.new_page()
+        page.set_content(
+            """
+            <html>
+              <body>
+                <fieldset role="group">
+                  <legend>Have you previously worked for this organization?</legend>
+                  <input id="previous-yes" name="candidateIsPreviousWorker" type="radio" value="true" />
+                  <label for="previous-yes">Yes</label>
+                  <input id="previous-no" name="candidateIsPreviousWorker" type="radio" value="false" />
+                  <label for="previous-no">No</label>
+                </fieldset>
+              </body>
+            </html>
+            """
+        )
+        _load_v2_scripts(page)
+        result = page.evaluate(
+            """
+            async () => {
+              const root = window.__huntV2;
+              const field = root.uiInspector.collectCandidates()
+                .find((candidate) => candidate.fieldId === "candidateIsPreviousWorker");
+              const options = await root.optionCollector.collectOptions(field, {});
+              const match = root.optionMatcher.matchOption({
+                options,
+                answer: { value: "No", answerType: "yes_no" },
+                field,
+                audit: null,
+                fieldAudit: null,
+              });
+              const fill = await root.fieldDrivers.fillField({
+                field,
+                answer: { value: "No", answerType: "yes_no" },
+                option: match.option,
+                audit: null,
+                fieldAudit: null,
+              });
+              return {
+                labels: options.map((option) => option.label),
+                optionSource: match.source,
+                selectedOption: match.option && match.option.label,
+                filled: fill.ok,
+                yes: document.querySelector("#previous-yes").checked,
+                no: document.querySelector("#previous-no").checked,
+              };
+            }
+            """
+        )
+        browser.close()
+
+    assert result == {
+        "labels": ["Yes", "No"],
+        "optionSource": "exact",
+        "selectedOption": "No",
+        "filled": True,
+        "yes": False,
+        "no": True,
+    }
+
+
 def test_generic_v2_fill_logs_profile_defaults_and_text_fallbacks():
     if sync_playwright is None:
         pytest.skip("playwright is required for the generic C3 V2 fixture")

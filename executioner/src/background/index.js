@@ -73,6 +73,11 @@ function cancelFillRun(fillRunId) {
   run.cancelled = true;
   run.cancelledAt = new Date().toISOString();
   run.cancelReason = "user_cancelled";
+  try {
+    run.abortController?.abort("user_cancelled");
+  } catch (_error) {
+    // AbortController abort is best-effort; the page-side cancel flag is still set.
+  }
   return true;
 }
 
@@ -88,6 +93,11 @@ function cancelActiveFillRunsForTab(tabId, reason = "superseded_by_new_fill") {
     run.cancelled = true;
     run.cancelledAt = new Date().toISOString();
     run.cancelReason = reason;
+    try {
+      run.abortController?.abort(reason);
+    } catch (_error) {
+      // Best-effort abort for any in-flight backend request.
+    }
     cancelled.push(fillRunId);
   }
   return cancelled;
@@ -141,6 +151,215 @@ async function injectV2ScriptsForTab(tabId, atsType = "") {
     target: { tabId, allFrames: true },
     files: v2ScriptFilesForAts(atsType),
   });
+}
+
+function choosePrimarySiteState(results = []) {
+  const entries = Array.isArray(results) ? results : [];
+  return (
+    entries.find((entry) => entry.frameId === 0 && entry.result)?.result ||
+    entries.find((entry) => entry.result?.workdayRuntimeError)?.result ||
+    entries.find((entry) => entry.result)?.result ||
+    null
+  );
+}
+
+async function collectTabSiteState(tabId, label = "") {
+  if (!tabId) {
+    return { ok: false, reason: "missing_tab", label };
+  }
+  try {
+    const results = await chrome.scripting.executeScript({
+      target: { tabId, allFrames: true },
+      args: [label],
+      func: (snapshotLabel) => {
+        const normalize = (value) =>
+          String(value || "")
+            .replace(/\s+/g, " ")
+            .trim();
+        const visible = (element) => {
+          if (!element) {
+            return false;
+          }
+          const style = getComputedStyle(element);
+          const rect = element.getBoundingClientRect();
+          return (
+            style.display !== "none" &&
+            style.visibility !== "hidden" &&
+            rect.width > 0 &&
+            rect.height > 0
+          );
+        };
+        const textOf = (element) =>
+          normalize(
+            [
+              element?.getAttribute?.("aria-label"),
+              element?.innerText,
+              element?.textContent,
+              element?.value,
+            ]
+              .filter(Boolean)
+              .join(" "),
+          );
+        const bodyText = normalize(document.body?.innerText || "");
+        const lowerBody = bodyText.toLowerCase();
+        const validationErrors = [
+          ...document.querySelectorAll(
+            [
+              '[role="alert"]',
+              '[data-automation-id*="error" i]',
+              '[id*="error" i]',
+              '[aria-invalid="true"]',
+            ].join(", "),
+          ),
+        ]
+          .filter(visible)
+          .map(textOf)
+          .filter(Boolean);
+        const dedupedErrors = [...new Set(validationErrors)].slice(0, 20);
+        const buttons = [
+          ...document.querySelectorAll("button, [role='button']"),
+        ]
+          .filter(visible)
+          .map(textOf)
+          .filter(Boolean)
+          .slice(0, 30);
+        const controls = [
+          ...document.querySelectorAll(
+            "input, textarea, select, [role='combobox'], [role='listbox']",
+          ),
+        ].filter(visible);
+        const navEntry =
+          performance.getEntriesByType("navigation")?.[0] || null;
+        return {
+          ok: true,
+          label: snapshotLabel || "",
+          href: location.href,
+          title: document.title || "",
+          readyState: document.readyState || "",
+          navigationType: navEntry?.type || "",
+          navigationStart: Math.round(navEntry?.startTime || 0),
+          workdayRuntimeError:
+            lowerBody.includes("something went wrong") &&
+            lowerBody.includes("please refresh the page and then try again"),
+          validationErrors: dedupedErrors,
+          visibleControlCount: controls.length,
+          hasSafeNextButton: buttons.some((text) =>
+            /^(next|continue|save and continue)$/i.test(text),
+          ),
+          hasSubmitButton: buttons.some((text) =>
+            /^(submit|submit application)$/i.test(text),
+          ),
+          visibleButtons: buttons,
+          bodyHead: bodyText.slice(0, 500),
+        };
+      },
+    });
+    return (
+      choosePrimarySiteState(results) || {
+        ok: false,
+        reason: "empty_snapshot",
+        label,
+      }
+    );
+  } catch (error) {
+    return {
+      ok: false,
+      reason: "snapshot_failed",
+      label,
+      error: error instanceof Error ? error.message : String(error),
+    };
+  }
+}
+
+function appendSiteActionToFillResult(result, siteAction) {
+  if (!result || !siteAction) {
+    return result;
+  }
+  const action = {
+    at: new Date().toISOString(),
+    ...siteAction,
+  };
+  result.siteActions = [...(result.siteActions || []), action];
+  if (result.result) {
+    result.result.siteActions = [...(result.result.siteActions || []), action];
+  }
+  if (result.attempt) {
+    result.attempt.siteActions = [
+      ...(result.attempt.siteActions || []),
+      action,
+    ];
+  }
+  return result;
+}
+
+function appendMonitorSiteActionsToFillResult(result, monitor) {
+  for (const event of monitor?.events || []) {
+    appendSiteActionToFillResult(result, event);
+  }
+  return result;
+}
+
+function fillManualReviewReasons(result) {
+  return [
+    ...(result?.attempt?.manualReviewReasons || []),
+    ...(result?.result?.manualReviewReasons || []),
+  ].map((reason) => String(reason || ""));
+}
+
+function fillHasManualReviewReason(result, wantedReason) {
+  return fillManualReviewReasons(result).includes(wantedReason);
+}
+
+function startFillSiteActionMonitor(tabId, fillRunId) {
+  if (!tabId) {
+    return { stop: () => {}, events: [] };
+  }
+  const events = [];
+  const listener = (updatedTabId, changeInfo) => {
+    if (updatedTabId !== tabId) {
+      return;
+    }
+    const status = changeInfo.status || "";
+    const url = changeInfo.url || "";
+    if (!status && !url) {
+      return;
+    }
+    const action =
+      status === "loading" || url ? "site.navigation_started" : "site.loaded";
+    const summary =
+      action === "site.navigation_started"
+        ? "Site navigation started during fill."
+        : "Site finished loading during fill.";
+    Promise.resolve(
+      collectTabSiteState(tabId, action).then((siteState) => {
+        const event = {
+          action,
+          status: siteState.workdayRuntimeError ? "blocked" : "info",
+          reason: status || (url ? "url_changed" : ""),
+          changeInfo,
+          siteState,
+        };
+        events.push(event);
+        return logActivity(
+          action,
+          summary,
+          { tabId, fillRunId, changeInfo, siteState },
+          event.status,
+        );
+      }),
+    ).catch(() => {});
+  };
+  chrome.tabs.onUpdated.addListener(listener);
+  return {
+    events,
+    stop: () => {
+      try {
+        chrome.tabs.onUpdated.removeListener(listener);
+      } catch (_error) {
+        // Best-effort cleanup only.
+      }
+    },
+  };
 }
 
 function withTimeout(promise, timeoutMs, fallbackFactory) {
@@ -210,6 +429,450 @@ async function logActivity(action, summary, details = {}, status = "ok") {
   }
   await sendDebugLog("activity", { activity });
   return activity;
+}
+
+function chooseBestWorkflowDetection(results = []) {
+  const detections = (results || []).map((entry) => ({
+    frameId: entry.frameId,
+    result: entry.result || {},
+  }));
+  const ranked = detections
+    .filter((entry) => entry.result?.ok)
+    .sort(
+      (a, b) => Number(b.result.priority || 0) - Number(a.result.priority || 0),
+    );
+  return ranked[0]?.result || detections[0]?.result || { ok: false };
+}
+
+function createC3WorkflowDetectionFunction() {
+  return function detectC3WorkflowPage() {
+    function normalize(value) {
+      return String(value || "")
+        .replace(/\s+/g, " ")
+        .trim();
+    }
+
+    function visible(el) {
+      if (!el || typeof el.getBoundingClientRect !== "function") {
+        return false;
+      }
+      var style = window.getComputedStyle(el);
+      var rect = el.getBoundingClientRect();
+      return (
+        style.display !== "none" &&
+        style.visibility !== "hidden" &&
+        rect.width > 0 &&
+        rect.height > 0
+      );
+    }
+
+    var bodyText = document.body ? document.body.innerText || "" : "";
+    var lowerText = bodyText.toLowerCase();
+    var inputs = Array.from(
+      document.querySelectorAll("input, textarea, select"),
+    ).filter(visible);
+    var passwordCount = inputs.filter(function (el) {
+      return String(el.type || "").toLowerCase() === "password";
+    }).length;
+    var emailCount = inputs.filter(function (el) {
+      return /email/i.test(
+        [el.type, el.name, el.id, el.placeholder, el.getAttribute("aria-label")]
+          .filter(Boolean)
+          .join(" "),
+      );
+    }).length;
+    var buttons = Array.from(
+      document.querySelectorAll("a, button, [role='button']"),
+    )
+      .filter(visible)
+      .map(function (el) {
+        return normalize(
+          [
+            el.getAttribute("aria-label"),
+            el.getAttribute("title"),
+            el.innerText,
+            el.textContent,
+            el.href,
+          ]
+            .filter(Boolean)
+            .join(" "),
+        );
+      })
+      .filter(Boolean)
+      .slice(0, 40);
+    var currentStep = bodyText.match(
+      /current step\s+(\d+)\s+of\s+(\d+)\s*\n([^\n]+)/i,
+    );
+    var startApplication = /start your application/i.test(bodyText);
+    var applyManually = buttons.some(function (label) {
+      return (
+        /^apply manually$/i.test(label) || /\/apply\/applyManually/i.test(label)
+      );
+    });
+    var hasCreateAccount =
+      /create account|verify new password|password requirements/i.test(
+        lowerText,
+      ) ||
+      buttons.some(function (label) {
+        return /create account|sign up|register/i.test(label);
+      });
+    var hasSignIn =
+      /already have an account|sign in|log in|login/i.test(lowerText) ||
+      buttons.some(function (label) {
+        return /sign in|log in|login/i.test(label);
+      });
+    var authState = "unknown";
+    var phase = "job_fill";
+    var priority = 10;
+    if (currentStep) {
+      phase = "job_fill";
+      priority = 40;
+    } else if (startApplication || applyManually) {
+      phase = "apply_entry";
+      priority = 50;
+    } else if (
+      passwordCount ||
+      (emailCount && (hasCreateAccount || hasSignIn))
+    ) {
+      phase = "auth";
+      priority = 60;
+      if (hasCreateAccount && passwordCount >= 2) {
+        authState = "signup";
+      } else if (hasSignIn || passwordCount) {
+        authState = "login";
+      }
+    }
+    return {
+      ok: true,
+      href: location.href,
+      title: document.title,
+      phase: phase,
+      priority: priority,
+      authState: authState,
+      isAuthPage: phase === "auth",
+      isApplyEntryPage: phase === "apply_entry",
+      isJobFillPage: phase === "job_fill",
+      inputCount: inputs.length,
+      passwordCount: passwordCount,
+      emailCount: emailCount,
+      hasCreateAccount: hasCreateAccount,
+      hasSignIn: hasSignIn,
+      startApplication: startApplication,
+      applyManually: applyManually,
+      currentStep: currentStep
+        ? {
+            current: Number(currentStep[1]),
+            total: Number(currentStep[2]),
+            title: normalize(currentStep[3]),
+          }
+        : null,
+      buttons: buttons,
+    };
+  };
+}
+
+function createClickWorkdayApplyManuallyFunction() {
+  return async function clickWorkdayApplyManuallyForC3() {
+    function normalize(value) {
+      return String(value || "")
+        .replace(/\s+/g, " ")
+        .trim();
+    }
+
+    function visible(el) {
+      if (!el || typeof el.getBoundingClientRect !== "function") {
+        return false;
+      }
+      var style = window.getComputedStyle(el);
+      var rect = el.getBoundingClientRect();
+      return (
+        style.display !== "none" &&
+        style.visibility !== "hidden" &&
+        rect.width > 0 &&
+        rect.height > 0
+      );
+    }
+
+    var bodyText = document.body ? document.body.innerText || "" : "";
+    if (/current step\s+\d+\s+of\s+\d+/i.test(bodyText)) {
+      return {
+        ok: true,
+        skipped: true,
+        reason: "already_on_application_step",
+        href: location.href,
+      };
+    }
+    if (!/Start Your Application/i.test(bodyText)) {
+      return {
+        ok: true,
+        skipped: true,
+        reason: "not_on_start_application_page",
+        href: location.href,
+      };
+    }
+    var candidates = Array.from(
+      document.querySelectorAll("a, button, [role='button']"),
+    )
+      .filter(visible)
+      .map(function (el) {
+        return {
+          el: el,
+          text: normalize(
+            [el.getAttribute("aria-label"), el.innerText, el.textContent]
+              .filter(Boolean)
+              .join(" "),
+          ),
+          href: el.href || "",
+        };
+      });
+    var candidate =
+      candidates.find(function (item) {
+        return /^Apply Manually$/i.test(item.text);
+      }) ||
+      candidates.find(function (item) {
+        return /\/apply\/applyManually/i.test(item.href);
+      });
+    if (!candidate) {
+      return {
+        ok: false,
+        reason: "apply_manually_not_found",
+        href: location.href,
+        candidates: candidates
+          .map(function (item) {
+            return item.text || item.href || "";
+          })
+          .filter(Boolean)
+          .slice(0, 30),
+      };
+    }
+    if (candidate.href) {
+      location.href = candidate.href;
+      return {
+        ok: true,
+        clicked: true,
+        navigationStarted: true,
+        label: candidate.text || "Apply Manually",
+        reason: "apply_manually_navigation_started",
+        href: candidate.href,
+      };
+    } else {
+      candidate.el.scrollIntoView({ block: "center", inline: "center" });
+      candidate.el.click();
+    }
+    await new Promise(function (resolve) {
+      setTimeout(resolve, 4500);
+    });
+    var afterText = document.body ? document.body.innerText || "" : "";
+    var stepMatch = afterText.match(
+      /current step\s+(\d+)\s+of\s+(\d+)\s*\n([^\n]+)/i,
+    );
+    return {
+      ok: Boolean(stepMatch),
+      clicked: true,
+      label: candidate.text || "Apply Manually",
+      reason: stepMatch
+        ? "apply_manually_clicked"
+        : "application_step_not_reached",
+      href: location.href,
+      currentStep: stepMatch
+        ? {
+            current: Number(stepMatch[1]),
+            total: Number(stepMatch[2]),
+            title: normalize(stepMatch[3]),
+          }
+        : null,
+    };
+  };
+}
+
+class C3WorkflowSection {
+  constructor({ name, tabId, fillRunId, state, triggeredBy }) {
+    this.name = name;
+    this.tabId = tabId;
+    this.fillRunId = fillRunId;
+    this.state = state;
+    this.triggeredBy = triggeredBy || "fill_current_page";
+  }
+
+  async notify(message) {
+    await showFillProgress(this.tabId, message, this.fillRunId);
+  }
+
+  async log(action, summary, details = {}, status = "ok") {
+    const payload = {
+      phase: this.name,
+      fillRunId: this.fillRunId,
+      triggeredBy: this.triggeredBy,
+      ...details,
+    };
+    await logActivity(
+      `workflow.${this.name}.${action}`,
+      summary,
+      payload,
+      status,
+    );
+    await sendDebugLog("c3_workflow_phase", {
+      phase: this.name,
+      action,
+      summary,
+      status,
+      details: payload,
+    });
+  }
+}
+
+class C3AuthWorkflow extends C3WorkflowSection {
+  constructor(input) {
+    super({ ...input, name: "auth" });
+  }
+
+  async run(detection) {
+    if (!detection?.isAuthPage) {
+      await this.log(
+        "skip",
+        "Auth workflow skipped because no account gate was detected.",
+        {
+          detectedPhase: detection?.phase || "unknown",
+          href: detection?.href || "",
+        },
+      );
+      return { ok: true, skipped: true, reason: "no_auth_gate", detection };
+    }
+    const label =
+      detection.authState === "signup"
+        ? "Filling account signup fields"
+        : "Filling account sign-in fields";
+    await this.notify(label);
+    await this.log("detect", "Detected Workday account gate before job fill.", {
+      authState: detection.authState || "unknown",
+      inputCount: detection.inputCount || 0,
+      passwordCount: detection.passwordCount || 0,
+      emailCount: detection.emailCount || 0,
+      hasCreateAccount: Boolean(detection.hasCreateAccount),
+      hasSignIn: Boolean(detection.hasSignIn),
+      href: detection.href || "",
+    });
+    return { ok: true, phase: "auth", detection };
+  }
+}
+
+class C3ApplyEntryWorkflow extends C3WorkflowSection {
+  constructor(input) {
+    super({ ...input, name: "apply_entry" });
+  }
+
+  async run(detection) {
+    if (!detection?.isApplyEntryPage) {
+      await this.log(
+        "skip",
+        detection?.currentStep
+          ? "Apply-entry workflow skipped because the application form is already open."
+          : "Apply-entry workflow skipped because no start-application gate was detected.",
+        {
+          detectedPhase: detection?.phase || "unknown",
+          href: detection?.href || "",
+          currentStep: detection?.currentStep || null,
+        },
+      );
+      return {
+        ok: true,
+        skipped: true,
+        reason: "no_apply_entry_gate",
+        detection,
+      };
+    }
+    await this.notify("Opening application form");
+    await this.log(
+      "detect",
+      "Detected Workday apply-entry gate before job fill.",
+      {
+        href: detection.href || "",
+        startApplication: Boolean(detection.startApplication),
+        applyManually: Boolean(detection.applyManually),
+      },
+    );
+    const results = await chrome.scripting.executeScript({
+      target: { tabId: this.tabId, allFrames: true },
+      func: createClickWorkdayApplyManuallyFunction(),
+    });
+    const result = chooseBestWorkflowDetection(results);
+    if (result.ok && result.clicked && !result.skipped) {
+      await new Promise((resolve) => {
+        setTimeout(resolve, result.navigationStarted ? 5000 : 2500);
+      });
+    }
+    await this.log(
+      result.ok ? "complete" : "failed",
+      result.ok
+        ? result.skipped
+          ? `Apply-entry skipped: ${result.reason || "not needed"}.`
+          : "Apply-entry completed before job fill."
+        : "Apply-entry failed before job fill.",
+      {
+        result,
+      },
+      result.ok ? "ok" : "failed",
+    );
+    return { ...result, phase: "apply_entry", detection };
+  }
+}
+
+class C3JobFillWorkflow extends C3WorkflowSection {
+  constructor(input) {
+    super({ ...input, name: "job_fill" });
+  }
+
+  async run(detection) {
+    const hasJobFillSignal =
+      Boolean(detection?.currentStep?.title) || detection?.phase === "job_fill";
+    const message = hasJobFillSignal
+      ? `Filling ${detection?.currentStep?.title || "job application page"}`
+      : "Filling page";
+    await this.notify(message);
+    await this.log("start", "Starting actual C3 job-fill section.", {
+      detectedPhase: detection?.phase || "unknown",
+      currentStep: detection?.currentStep || null,
+      href: detection?.href || "",
+    });
+    return { ok: true, phase: "job_fill", detection };
+  }
+}
+
+class C3CombinedFillWorkflow {
+  constructor({ tabId, fillRunId, state, triggeredBy }) {
+    this.tabId = tabId;
+    this.fillRunId = fillRunId;
+    this.state = state;
+    this.triggeredBy = triggeredBy || "fill_current_page";
+  }
+
+  async detect() {
+    const results = await chrome.scripting.executeScript({
+      target: { tabId: this.tabId, allFrames: true },
+      func: createC3WorkflowDetectionFunction(),
+    });
+    return chooseBestWorkflowDetection(results);
+  }
+
+  async prepare() {
+    const initialDetection = await this.detect();
+    const auth = await new C3AuthWorkflow(this).run(initialDetection);
+    const applyEntry = await new C3ApplyEntryWorkflow(this).run(
+      initialDetection,
+    );
+    const detection =
+      applyEntry?.ok && !applyEntry?.skipped
+        ? await this.detect()
+        : initialDetection;
+    const jobFill = await new C3JobFillWorkflow(this).run(detection);
+    return {
+      auth,
+      applyEntry,
+      jobFill,
+      initialDetection,
+      detection,
+    };
+  }
 }
 
 async function logUiEvent(action, summary, details = {}, status = "ok") {
@@ -940,6 +1603,49 @@ async function probeSafeNextForTab(tabId) {
 async function clickSafeNextForTab(tabId, details = {}) {
   const probe = await probeSafeNextForTab(tabId);
   if (!probe.available) {
+    if (
+      probe.reason === "no_safe_next_button" &&
+      !details.workdayRuntimeRecoveryAttempted
+    ) {
+      const runtimeRecovery = await recoverWorkdayRuntimeErrorForTab(tabId, {
+        reason: "safe_next_probe_workday_runtime_error",
+        settleMs: 1800,
+      });
+      if (runtimeRecovery.attempted) {
+        const recovered = runtimeRecovery.ok;
+        await logActivity(
+          recovered
+            ? "next.workday_runtime_recovered_before_probe"
+            : "next.workday_runtime_unrecovered_before_probe",
+          recovered
+            ? "Refreshed after Workday showed its refresh-required error page before Next was available."
+            : "Workday showed its refresh-required error page before Next was available and did not recover after one refresh.",
+          {
+            tabId,
+            triggeredBy: details.triggeredBy || "",
+            reason: runtimeRecovery.reason,
+            before: runtimeRecovery.before || {},
+            after: runtimeRecovery.after || {},
+          },
+          recovered ? "ok" : "warn",
+        );
+        if (recovered) {
+          return clickSafeNextForTab(tabId, {
+            ...details,
+            workdayRuntimeRecoveryAttempted: true,
+          });
+        }
+        return {
+          ...probe,
+          clicked: false,
+          auto: Boolean(details.auto),
+          reason: "safe_next_workday_runtime_error_unrecovered",
+          message:
+            "Workday showed its refresh-required error page and did not recover after one refresh.",
+          runtimeRecovery,
+        };
+      }
+    }
     await logActivity(
       "next.blocked",
       summarizeSafeNextResult(probe),
@@ -3473,6 +4179,45 @@ function fillCancelledResponse(state, reason = "user_cancelled") {
   };
 }
 
+function workflowBlockedResponse(state, workflow, reason = "workflow_blocked") {
+  return {
+    ok: false,
+    reason,
+    message:
+      workflow?.applyEntry?.message ||
+      "C3 stopped before job fill because an earlier workflow section failed.",
+    route: {
+      routeName: "workflow_blocked",
+      fillSource: state.activeApplyContext.sourceMode || "manual",
+      strategy: "workflow_blocked",
+      adapterName: state.activeApplyContext.atsType || "",
+      requestedAtsType: state.activeApplyContext.atsType || "",
+      detectedAtsType: workflow?.detection?.phase || "",
+      usedGenericFallback: false,
+      adapterBackedByGeneric: false,
+    },
+    attempt: {
+      applyUrl: state.activeApplyContext.applyUrl,
+      atsType: state.activeApplyContext.atsType,
+      filledFieldCount: 0,
+      manualReviewRequired: true,
+      manualReviewReasons: [reason],
+    },
+    result: {
+      ok: false,
+      pendingLlmFieldCount: 0,
+      manualReviewReasons: [reason],
+      filledFieldCount: 0,
+      filledFields: [],
+      fieldInventory: [],
+      generatedAnswers: [],
+      workflow,
+    },
+    generatedAnswers: [],
+    workflow,
+  };
+}
+
 async function runFillWithOneRefreshRetry(
   tabId,
   state,
@@ -3480,127 +4225,207 @@ async function runFillWithOneRefreshRetry(
   fillRunId,
   options = {},
 ) {
-  let result = await withTimeout(
-    runFillForTab(tabId, state, {
-      fillRunId,
-      isCancelled: () => isFillRunCancelled(fillRunId),
-      allowLlmAnswers: options.allowLlmAnswers === true,
-    }),
-    FILL_TIMEOUT_MS,
-    () => ({
-      ok: false,
-      message: "Fill timed out before the page responded.",
-      route: {
-        routeName: "timeout",
-        fillSource: state.activeApplyContext.sourceMode || "manual",
-        strategy: "timeout",
-        adapterName: "",
-        requestedAtsType: state.activeApplyContext.atsType || "",
-        detectedAtsType: "",
-        usedGenericFallback: false,
-        adapterBackedByGeneric: false,
+  const siteMonitor = startFillSiteActionMonitor(tabId, fillRunId);
+  try {
+    const beforeSiteState = await collectTabSiteState(tabId, "before_fill");
+    await logActivity(
+      "fill.site_state.before",
+      "Captured site state before fill.",
+      {
+        tabId,
+        fillRunId,
+        triggeredBy: triggeredBy || "",
+        siteState: beforeSiteState,
       },
-      attempt: {
-        applyUrl: state.activeApplyContext.applyUrl,
-        atsType: state.activeApplyContext.atsType,
-        filledFieldCount: 0,
-        manualReviewRequired: true,
-        manualReviewReasons: ["fill_timeout"],
-      },
-      result: {
-        pendingLlmFieldCount: 0,
-        manualReviewReasons: ["fill_timeout"],
-      },
-      generatedAnswers: [],
-    }),
-  );
-  if (isFillRunCancelled(fillRunId)) {
-    return fillCancelledResponse(state, fillRunCancelReason(fillRunId));
-  }
-  if (!fillNeedsRefreshRetry(result)) {
-    return result;
-  }
-  await logActivity(
-    "fill.refresh_retry",
-    "Refreshing page once before retrying fill after commit verification failure.",
-    {
+      beforeSiteState.workdayRuntimeError ? "blocked" : "info",
+    );
+    let result = await withTimeout(
+      runFillForTab(tabId, state, {
+        fillRunId,
+        isCancelled: () => isFillRunCancelled(fillRunId),
+        allowLlmAnswers: options.allowLlmAnswers === true,
+        abortSignal: activeFillRuns.get(fillRunId)?.abortController?.signal,
+      }),
+      FILL_TIMEOUT_MS,
+      () => ({
+        ok: false,
+        message: "Fill timed out before the page responded.",
+        route: {
+          routeName: "timeout",
+          fillSource: state.activeApplyContext.sourceMode || "manual",
+          strategy: "timeout",
+          adapterName: "",
+          requestedAtsType: state.activeApplyContext.atsType || "",
+          detectedAtsType: "",
+          usedGenericFallback: false,
+          adapterBackedByGeneric: false,
+        },
+        attempt: {
+          applyUrl: state.activeApplyContext.applyUrl,
+          atsType: state.activeApplyContext.atsType,
+          filledFieldCount: 0,
+          manualReviewRequired: true,
+          manualReviewReasons: ["fill_timeout"],
+        },
+        result: {
+          pendingLlmFieldCount: 0,
+          manualReviewReasons: ["fill_timeout"],
+        },
+        generatedAnswers: [],
+      }),
+    );
+    if (isFillRunCancelled(fillRunId)) {
+      return fillCancelledResponse(state, fillRunCancelReason(fillRunId));
+    }
+    const afterInitialSiteState = await collectTabSiteState(
       tabId,
-      triggeredBy: triggeredBy || "",
-      manualReviewReasons:
-        result.attempt?.manualReviewReasons ||
-        result.result?.manualReviewReasons ||
-        [],
-      maxRefreshRetries: 1,
-    },
-    "warn",
-  );
-  await showFillProgress(tabId, "Refreshing page before retry", fillRunId);
-  if (isFillRunCancelled(fillRunId)) {
-    return fillCancelledResponse(state, fillRunCancelReason(fillRunId));
-  }
-  await chrome.tabs.reload(tabId);
-  const reloadResult = await waitForTabReloadComplete(tabId);
-  if (!reloadResult.ok) {
-    result.refreshRetry = {
+      fillHasManualReviewReason(result, "fill_timeout")
+        ? "fill_timeout"
+        : "after_fill",
+    );
+    const afterInitialAction = fillHasManualReviewReason(result, "fill_timeout")
+      ? "fill.site_state.timeout"
+      : "fill.site_state.after";
+    appendSiteActionToFillResult(result, {
+      action: afterInitialAction,
+      status: afterInitialSiteState.workdayRuntimeError ? "blocked" : "info",
+      siteState: afterInitialSiteState,
+    });
+    appendMonitorSiteActionsToFillResult(result, siteMonitor);
+    await logActivity(
+      afterInitialAction,
+      fillHasManualReviewReason(result, "fill_timeout")
+        ? "Captured site state after fill timeout."
+        : "Captured site state after fill.",
+      {
+        tabId,
+        fillRunId,
+        triggeredBy: triggeredBy || "",
+        siteState: afterInitialSiteState,
+      },
+      afterInitialSiteState.workdayRuntimeError ? "blocked" : "info",
+    );
+    if (!fillNeedsRefreshRetry(result)) {
+      return result;
+    }
+    await logActivity(
+      "fill.refresh_retry",
+      "Refreshing page once before retrying fill after commit verification failure.",
+      {
+        tabId,
+        triggeredBy: triggeredBy || "",
+        manualReviewReasons: fillManualReviewReasons(result),
+        maxRefreshRetries: 1,
+      },
+      "warn",
+    );
+    await showFillProgress(tabId, "Refreshing page before retry", fillRunId);
+    if (isFillRunCancelled(fillRunId)) {
+      return fillCancelledResponse(state, fillRunCancelReason(fillRunId));
+    }
+    await chrome.tabs.reload(tabId);
+    const reloadResult = await waitForTabReloadComplete(tabId);
+    if (!reloadResult.ok) {
+      result.refreshRetry = {
+        attempted: true,
+        ok: false,
+        reason: reloadResult.reason || "reload_failed",
+        maxRefreshRetries: 1,
+      };
+      const reloadSiteState = await collectTabSiteState(
+        tabId,
+        "refresh_retry_reload_failed",
+      );
+      appendSiteActionToFillResult(result, {
+        action: "fill.site_state.refresh_retry_reload_failed",
+        status: "warn",
+        siteState: reloadSiteState,
+      });
+      appendMonitorSiteActionsToFillResult(result, siteMonitor);
+      return result;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 1200));
+    await dismissPageTransientUi(tabId);
+    await showFillProgress(tabId, "Retrying fill after refresh", fillRunId);
+    const retryResult = await withTimeout(
+      runFillForTab(tabId, state, {
+        fillRunId,
+        isCancelled: () => isFillRunCancelled(fillRunId),
+        allowLlmAnswers: options.allowLlmAnswers === true,
+        abortSignal: activeFillRuns.get(fillRunId)?.abortController?.signal,
+      }),
+      FILL_TIMEOUT_MS,
+      () => ({
+        ok: false,
+        message: "Fill retry timed out after page refresh.",
+        route: {
+          routeName: "timeout",
+          fillSource: state.activeApplyContext.sourceMode || "manual",
+          strategy: "timeout",
+          adapterName: "",
+          requestedAtsType: state.activeApplyContext.atsType || "",
+          detectedAtsType: "",
+          usedGenericFallback: false,
+          adapterBackedByGeneric: false,
+        },
+        attempt: {
+          applyUrl: state.activeApplyContext.applyUrl,
+          atsType: state.activeApplyContext.atsType,
+          filledFieldCount: 0,
+          manualReviewRequired: true,
+          manualReviewReasons: ["fill_retry_timeout"],
+        },
+        result: {
+          pendingLlmFieldCount: 0,
+          manualReviewReasons: ["fill_retry_timeout"],
+        },
+        generatedAnswers: [],
+      }),
+    );
+    if (isFillRunCancelled(fillRunId)) {
+      return fillCancelledResponse(state, fillRunCancelReason(fillRunId));
+    }
+    const afterRetrySiteState = await collectTabSiteState(
+      tabId,
+      fillHasManualReviewReason(retryResult, "fill_retry_timeout")
+        ? "fill_retry_timeout"
+        : "after_retry_fill",
+    );
+    appendSiteActionToFillResult(retryResult, {
+      action: fillHasManualReviewReason(retryResult, "fill_retry_timeout")
+        ? "fill.site_state.retry_timeout"
+        : "fill.site_state.after_retry",
+      status: afterRetrySiteState.workdayRuntimeError ? "blocked" : "info",
+      siteState: afterRetrySiteState,
+    });
+    appendMonitorSiteActionsToFillResult(retryResult, siteMonitor);
+    await logActivity(
+      fillHasManualReviewReason(retryResult, "fill_retry_timeout")
+        ? "fill.site_state.retry_timeout"
+        : "fill.site_state.after_retry",
+      fillHasManualReviewReason(retryResult, "fill_retry_timeout")
+        ? "Captured site state after retry timeout."
+        : "Captured site state after retry fill.",
+      {
+        tabId,
+        fillRunId,
+        triggeredBy: triggeredBy || "",
+        siteState: afterRetrySiteState,
+      },
+      afterRetrySiteState.workdayRuntimeError ? "blocked" : "info",
+    );
+    retryResult.refreshRetry = {
       attempted: true,
-      ok: false,
-      reason: reloadResult.reason || "reload_failed",
+      ok: true,
+      reason: "commit_not_verified",
       maxRefreshRetries: 1,
+      previousMessage: result.message || "",
+      previousManualReviewReasons: fillManualReviewReasons(result),
     };
-    return result;
+    return retryResult;
+  } finally {
+    siteMonitor.stop();
   }
-  await new Promise((resolve) => setTimeout(resolve, 1200));
-  await dismissPageTransientUi(tabId);
-  await showFillProgress(tabId, "Retrying fill after refresh", fillRunId);
-  const retryResult = await withTimeout(
-    runFillForTab(tabId, state, {
-      fillRunId,
-      isCancelled: () => isFillRunCancelled(fillRunId),
-      allowLlmAnswers: options.allowLlmAnswers === true,
-    }),
-    FILL_TIMEOUT_MS,
-    () => ({
-      ok: false,
-      message: "Fill retry timed out after page refresh.",
-      route: {
-        routeName: "timeout",
-        fillSource: state.activeApplyContext.sourceMode || "manual",
-        strategy: "timeout",
-        adapterName: "",
-        requestedAtsType: state.activeApplyContext.atsType || "",
-        detectedAtsType: "",
-        usedGenericFallback: false,
-        adapterBackedByGeneric: false,
-      },
-      attempt: {
-        applyUrl: state.activeApplyContext.applyUrl,
-        atsType: state.activeApplyContext.atsType,
-        filledFieldCount: 0,
-        manualReviewRequired: true,
-        manualReviewReasons: ["fill_retry_timeout"],
-      },
-      result: {
-        pendingLlmFieldCount: 0,
-        manualReviewReasons: ["fill_retry_timeout"],
-      },
-      generatedAnswers: [],
-    }),
-  );
-  if (isFillRunCancelled(fillRunId)) {
-    return fillCancelledResponse(state, fillRunCancelReason(fillRunId));
-  }
-  retryResult.refreshRetry = {
-    attempted: true,
-    ok: true,
-    reason: "commit_not_verified",
-    maxRefreshRetries: 1,
-    previousMessage: result.message || "",
-    previousManualReviewReasons:
-      result.attempt?.manualReviewReasons ||
-      result.result?.manualReviewReasons ||
-      [],
-  };
-  return retryResult;
 }
 
 async function handleMessage(message, sender = {}) {
@@ -3615,17 +4440,44 @@ async function handleMessage(message, sender = {}) {
       const fillRunId = message.payload?.fillRunId || "";
       const tabId = message.payload?.tabId || sender.tab?.id;
       const cancelled = cancelFillRun(fillRunId);
-      await markPageFillCancelled(tabId, fillRunId);
-      await logActivity(
-        cancelled ? "fill.cancel_requested" : "fill.cancel_missing",
-        cancelled
-          ? "Requested cancellation for the current fill."
-          : "Tried to cancel fill, but no active fill run matched.",
-        { fillRunId, tabId },
-        cancelled ? "warn" : "blocked",
-      );
-      await showFillProgress(tabId, "Canceling fill", fillRunId);
+      Promise.allSettled([
+        markPageFillCancelled(tabId, fillRunId),
+        logActivity(
+          cancelled ? "fill.cancel_requested" : "fill.cancel_missing",
+          cancelled
+            ? "Requested cancellation for the current fill."
+            : "Tried to cancel fill, but no active fill run matched.",
+          { fillRunId, tabId },
+          cancelled ? "warn" : "blocked",
+        ),
+        showFillProgress(tabId, "Canceling fill", fillRunId),
+      ]).catch(() => {});
       return { ok: cancelled, cancelled, fillRunId };
+    }
+
+    case "hunt.apply.site_action_log": {
+      const payload = message.payload || {};
+      const status = payload.status === "blocked" ? "blocked" : "info";
+      await logActivity(
+        `fill.site_action.${payload.action || "unknown"}`,
+        payload.action === "site_state_after_field"
+          ? "Captured site state after a field action."
+          : "Captured site state before a field action.",
+        {
+          tabId: sender.tab?.id || 0,
+          frameId: sender.frameId ?? 0,
+          fillRunId: payload.fillRunId || "",
+          fieldId: payload.fieldId || "",
+          descriptor: payload.descriptor || "",
+          uiModel: payload.uiModel || "",
+          filled: Boolean(payload.filled),
+          fillReason: payload.fillReason || "",
+          reason: payload.reason || "",
+          siteState: payload.siteState || {},
+        },
+        status,
+      );
+      return { ok: true };
     }
 
     case "hunt.apply.await_email_verification":
@@ -3716,6 +4568,7 @@ async function handleMessage(message, sender = {}) {
       }
       let result;
       const fillRunId = createFillRunId();
+      const abortController = new AbortController();
       const supersededFillRunIds = cancelActiveFillRunsForTab(tabId);
       activeFillRunByTab.set(tabId, fillRunId);
       activeFillRuns.set(fillRunId, {
@@ -3723,6 +4576,7 @@ async function handleMessage(message, sender = {}) {
         triggeredBy: message.payload?.triggeredBy || "fill_current_page",
         startedAt: new Date().toISOString(),
         cancelled: false,
+        abortController,
         supersededFillRunIds,
       });
       for (const supersededFillRunId of supersededFillRunIds) {
@@ -3743,18 +4597,36 @@ async function handleMessage(message, sender = {}) {
       }
       await dismissPageTransientUi(tabId);
       await markPageFillCancelled(tabId, fillRunId, false);
-      await showFillProgress(tabId, "Filling page", fillRunId);
       const allowLlmAnswers =
         state.settings.llmAnswerFallbackEnabled === true &&
         message.payload?.allowLlmAnswers !== false;
+      let workflow = null;
       try {
-        result = await runFillWithOneRefreshRetry(
+        workflow = await new C3CombinedFillWorkflow({
           tabId,
-          state,
-          message.payload?.triggeredBy || "fill_current_page",
           fillRunId,
-          { allowLlmAnswers },
-        );
+          state,
+          triggeredBy: message.payload?.triggeredBy || "fill_current_page",
+        }).prepare();
+        if (!workflow.applyEntry?.ok) {
+          result = workflowBlockedResponse(
+            state,
+            workflow,
+            workflow.applyEntry?.reason || "apply_entry_failed",
+          );
+        } else {
+          result = await runFillWithOneRefreshRetry(
+            tabId,
+            state,
+            message.payload?.triggeredBy || "fill_current_page",
+            fillRunId,
+            { allowLlmAnswers },
+          );
+          result.workflow = workflow;
+          if (result.result) {
+            result.result.workflow = workflow;
+          }
+        }
         if (
           shouldRunV2PageWalk(state.settings, result, message.payload || {})
         ) {
@@ -3795,6 +4667,12 @@ async function handleMessage(message, sender = {}) {
             );
           }
         }
+        if (result && workflow && !result.workflow) {
+          result.workflow = workflow;
+          if (result.result) {
+            result.result.workflow = workflow;
+          }
+        }
       } finally {
         const stillOwnsPageUi = activeFillRunByTab.get(tabId) === fillRunId;
         activeFillRuns.delete(fillRunId);
@@ -3815,6 +4693,7 @@ async function handleMessage(message, sender = {}) {
           generatedAnswers: result.generatedAnswers,
           refreshRetry: result.refreshRetry || null,
           pageWalk: result.pageWalk || null,
+          workflow: result.workflow || null,
           superseded: true,
         });
         await logActivity(
@@ -3844,6 +4723,7 @@ async function handleMessage(message, sender = {}) {
         generatedAnswers: result.generatedAnswers,
         refreshRetry: result.refreshRetry || null,
         pageWalk: result.pageWalk || null,
+        workflow: result.workflow || null,
       });
       await logActivity(
         result.cancelled
@@ -3870,6 +4750,7 @@ async function handleMessage(message, sender = {}) {
           ),
           refreshRetry: result.refreshRetry || null,
           pageWalk: result.pageWalk || null,
+          workflow: result.workflow || null,
           v2PermanentIssues: summarizeV2Issues(v2PermanentIssues(result), 20),
           manualReviewRequired: result.attempt?.manualReviewRequired,
         },

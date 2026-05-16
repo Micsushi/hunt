@@ -59,6 +59,15 @@
     "register",
     "registration",
     "email verification",
+    "verify new password",
+    "password requirements",
+  ];
+  const SIGNIN_TERMS = [
+    "sign in",
+    "log in",
+    "login",
+    "already have an account",
+    "email address",
   ];
   const APPLICATION_TERMS = [
     "apply",
@@ -72,7 +81,7 @@
     "sponsorship",
   ];
 
-  function visibleInputCount() {
+  function visibleFormControls() {
     return Array.from(
       document.querySelectorAll("input, textarea, select"),
     ).filter((element) => {
@@ -84,7 +93,7 @@
         style.visibility !== "hidden" &&
         style.display !== "none"
       );
-    }).length;
+    });
   }
 
   function pageText() {
@@ -112,20 +121,41 @@
   function detectPageKind() {
     const host = window.location.hostname.toLowerCase();
     const text = pageText();
-    const inputCount = visibleInputCount();
+    const controls = visibleFormControls();
+    const inputCount = controls.length;
+    const passwordCount = controls.filter(
+      (element) => String(element.type || "").toLowerCase() === "password",
+    ).length;
+    const emailCount = controls.filter((element) =>
+      [
+        element.type,
+        element.name,
+        element.id,
+        element.placeholder,
+        element.getAttribute("aria-label"),
+      ]
+        .filter(Boolean)
+        .join(" ")
+        .toLowerCase()
+        .includes("email"),
+    ).length;
     const isAts = ATS_HOST_PATTERNS.some((pattern) => host.includes(pattern));
     const hasEmbeddedAts = EMBEDDED_ATS_SELECTORS.some((selector) =>
       document.querySelector(selector),
     );
     const hasSignupSignal = SIGNUP_TERMS.some((term) => text.includes(term));
+    const hasSigninSignal = SIGNIN_TERMS.some((term) => text.includes(term));
     const hasApplicationSignal = APPLICATION_TERMS.some((term) =>
       text.includes(term),
     );
+    if (inputCount >= 2 && hasSignupSignal && passwordCount >= 2) {
+      return { kind: "signup", inputCount };
+    }
+    if (inputCount >= 2 && hasSigninSignal && passwordCount >= 1) {
+      return { kind: "signin", inputCount };
+    }
     if (isAts || hasEmbeddedAts) {
       return { kind: "ats", inputCount };
-    }
-    if (inputCount >= 2 && hasSignupSignal) {
-      return { kind: "signup", inputCount };
     }
     if (inputCount >= 3 && hasApplicationSignal) {
       return { kind: "application", inputCount };
@@ -138,9 +168,38 @@
       return "Hunt detected an application page.";
     }
     if (kind === "signup") {
-      return "Hunt detected a signup form.";
+      return "Hunt detected an account signup form.";
+    }
+    if (kind === "signin") {
+      return "Hunt detected an account sign-in form.";
     }
     return "Hunt detected a form it may be able to fill.";
+  }
+
+  function promptMeta(kind, inputCount) {
+    if (kind === "signup") {
+      return [
+        "Fill saved account email and password fields first. Hunt will handle verification only if signup requires it.",
+        `${inputCount} visible account controls found.`,
+      ];
+    }
+    if (kind === "signin") {
+      return [
+        "Fill saved account email and password fields first. Signup is only used if sign-in fails.",
+        `${inputCount} visible account controls found.`,
+      ];
+    }
+    return [
+      "Fill only known fields from your Hunt profile/resume. Unknown and optional fields stay for review.",
+      `${inputCount} visible form controls found.`,
+    ];
+  }
+
+  function promptFillButtonLabel(kind) {
+    if (kind === "signup" || kind === "signin") {
+      return "Fill account fields";
+    }
+    return "Fill known fields";
   }
 
   function removePrompt() {
@@ -652,6 +711,7 @@
     if (document.getElementById(PROMPT_ID)) {
       return;
     }
+    const metaLines = promptMeta(kind, inputCount);
     const host = document.createElement("div");
     host.id = PROMPT_ID;
     host.style.position = "fixed";
@@ -712,11 +772,10 @@
       <div class="card">
         <div class="body">
           <div class="title">${promptTitle(kind)}</div>
-          <div class="meta">Fill only known fields from your Hunt profile/resume. Unknown and optional fields stay for review.</div>
-          <div class="meta">${inputCount} visible form controls found.</div>
+          <div class="meta">${metaLines.map(escapeHtml).join('</div><div class="meta">')}</div>
         </div>
         <div class="actions">
-          <button class="primary" id="fill" type="button">Fill known fields</button>
+          <button class="primary" id="fill" type="button">${escapeHtml(promptFillButtonLabel(kind))}</button>
           <button id="dismiss" type="button">Not now</button>
         </div>
       </div>
@@ -1050,7 +1109,7 @@
       response?.settings?.manualFillEnabled &&
       detection.inputCount > 0 &&
       !fillCooldownActive &&
-      ["ats", "signup", "application"].includes(detection.kind)
+      ["ats", "signup", "signin", "application"].includes(detection.kind)
     );
   }
 
