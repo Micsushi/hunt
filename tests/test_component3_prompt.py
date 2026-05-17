@@ -60,7 +60,7 @@ def _new_prompt_page(playwright, body_html: str):
 def test_detected_page_prompt_gate_requires_visible_controls():
     content = _load_script(REPO_ROOT / "executioner/src/content/bootstrap.js")
 
-    assert "detection.inputCount > 0 || detection.kind === \"apply_entry\"" in content
+    assert 'detection.inputCount > 0 || detection.kind === "apply_entry"' in content
 
 
 def test_career_apply_button_pages_can_prompt_without_visible_fields():
@@ -69,7 +69,7 @@ def test_career_apply_button_pages_can_prompt_without_visible_fields():
 
     assert "CAREER_APPLY_TERMS" in content
     assert "hasCareerApplyEntry" in content
-    assert "\"apply_entry\"" in content
+    assert '"apply_entry"' in content
     assert "Open application" in content
     assert "genericApplyEntry" in background
     assert "generic_apply_navigation_started" in background
@@ -204,6 +204,9 @@ def test_v2_page_walk_counts_successful_pages_and_shows_summary():
     assert "ui.fill_summary.show" in content
     assert "async function showFillSummary" in background
     assert "function buildFillSummaryPayload" in background
+    assert "function uniqueReviewIssues" in background
+    assert "pagesAdvancedThisRun" in background
+    assert "Math.max(lastPageNumber, successfulPageCount)" in background
     assert "async function getPageSnapshot" in background
     assert "successfulPageCount += 1" in background
     assert "failedPageNumber" in background
@@ -323,6 +326,19 @@ def test_workday_logs_field_and_dropdown_actions():
     assert "isApplicationSourceField" in workday_v2_drivers
     assert "safeOpenOnly" in workday_v2_drivers
     assert "source--source" in workday_v2_drivers
+    assert "sourceOptionFailureKind" in workday_v2_drivers
+    assert "workday_source_options_unavailable" in workday_v2_drivers
+    assert "findHierarchicalWorkdayOption" in workday_v2_drivers
+    assert "workday_prompt_category_open" in workday_v2_drivers
+    assert "workday_prompt_category_options" in workday_v2_drivers
+    assert "waitForWorkdayOptions" in workday_v2_drivers
+    assert "sourceCategoryScore" in workday_v2_drivers
+    assert "var options = await collectWorkdayOptions" in workday_v2_drivers
+    assert "field.options || []" not in workday_v2_drivers[
+        workday_v2_drivers.index("async function fillWorkdayPopup") : workday_v2_drivers.index(
+            "async function fillPhoneCountryCode"
+        )
+    ]
     assert "allowAnySourceFallback" in workday
     assert "country_dependent_wait" in workday
     assert "stableReadyCount" in workday
@@ -394,6 +410,32 @@ def test_fill_progress_dismisses_detected_page_prompt():
     ]
 
     assert "removePrompt();" in show_fill_progress
+
+
+def test_page_walk_transient_dismissal_can_preserve_fill_progress():
+    background = _load_script(REPO_ROOT / "executioner/src/background/index.js")
+    content = _load_script(REPO_ROOT / "executioner/src/content/bootstrap.js")
+
+    dismiss_fn = content[
+        content.index("function dismissTransientUi") : content.index("function escapeHtml")
+    ]
+    dismiss_message = content[
+        content.index('message?.type === "hunt.apply.dismiss_transient_ui"') : content.index(
+            'message?.type === "hunt.apply.show_toast"'
+        )
+    ]
+    page_walk = background[
+        background.index("async function runV2PageWalkAfterFill") : background.index(
+            "function chooseBestV2ClearFrame"
+        )
+    ]
+
+    assert "preserveFillProgress = false" in dismiss_fn
+    assert "if (!preserveFillProgress)" in dismiss_fn
+    assert "hideFillProgress();" in dismiss_fn
+    assert "preserveFillProgress: Boolean(message.preserveFillProgress)" in dismiss_message
+    assert "dismissPageTransientUi(tabId, { preserveFillProgress: true })" in page_walk
+    assert "page_walk.advance_observed" in page_walk
 
 
 def test_prompt_fill_click_cannot_leave_prompt_stuck_filling():

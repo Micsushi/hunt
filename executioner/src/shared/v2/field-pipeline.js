@@ -46,6 +46,20 @@
     };
   }
 
+  function fieldIdentityKey(field) {
+    return [
+      field.fieldId || "",
+      field.name || "",
+      field.element?.id || "",
+      field.element?.name || "",
+      field.element?.getAttribute?.("data-automation-id") || "",
+      field.selectorPath || "",
+      field.uiModel || "",
+    ]
+      .filter(Boolean)
+      .join("|");
+  }
+
   function shouldSkipPasswordField(field, context) {
     if (field.element?.type !== "password") {
       return false;
@@ -448,6 +462,7 @@
     var fieldInventory = [];
     var generatedAnswers = [];
     var processedQuestionHashes = new Set();
+    var processedFieldKeys = new Set();
     if (fillCancelled(context)) {
       return cancelledResult(
         context,
@@ -489,10 +504,27 @@
           );
         }
         var field = fields[i];
+        var fieldKey = fieldIdentityKey(field);
         if (processedQuestionHashes.has(field.questionHash)) {
           continue;
         }
-        if (context.settings?.fillRequiredOnly !== false && !field.required) {
+        if (fieldKey && processedFieldKeys.has(fieldKey)) {
+          root.audit.pushEvent(audit, {
+            action: "field_skipped",
+            step: "field.identity_filter",
+            status: "info",
+            reason: "already_processed_field_identity",
+            fieldId: field.fieldId,
+            questionHash: field.questionHash,
+            uiModel: field.uiModel,
+          });
+          continue;
+        }
+        if (
+          context.settings?.fillRequiredOnly !== false &&
+          !field.required &&
+          field.uiModel !== "file"
+        ) {
           root.audit.pushEvent(audit, {
             action: "field_skipped",
             step: "field.required_filter",
@@ -558,6 +590,9 @@
         fieldInventory.push(inventoryEntry(field, result.fieldAudit));
         if (result.filled) {
           processedQuestionHashes.add(field.questionHash);
+          if (fieldKey) {
+            processedFieldKeys.add(fieldKey);
+          }
           passFilledCount += 1;
           filledFields.push({
             field: field.descriptor,

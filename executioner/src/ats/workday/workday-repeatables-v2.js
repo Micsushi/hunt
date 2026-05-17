@@ -533,7 +533,10 @@
 
   async function fillButtonChoice(button, value) {
     if (!button || !value) {
-      return false;
+      return { ok: false, reason: "missing_button_or_value" };
+    }
+    if (choiceMatches(textOf(button), value)) {
+      return { ok: true, alreadyFilled: true };
     }
     clickLikeUser(button);
     await sleep(220);
@@ -541,14 +544,20 @@
       return choiceMatches(textOf(candidate), value);
     });
     if (!option) {
-      return false;
+      return { ok: false, reason: "option_not_found" };
     }
     clickLikeUser(option);
     if (typeof option.click === "function") {
       option.click();
     }
     await sleep(240);
-    return choiceMatches(textOf(button), value) || Boolean(button.value);
+    var committed =
+      choiceMatches(textOf(button), value) || Boolean(button.value);
+    return {
+      ok: committed,
+      alreadyFilled: false,
+      reason: committed ? "" : "choice_not_committed",
+    };
   }
 
   function firstText(values) {
@@ -1078,7 +1087,7 @@
         return entry.school;
       }
       if (own.includes("degree") || own.includes("education level")) {
-        return entry.degree || entry.degreeLevel;
+        return entry.degreeLevel || entry.degree;
       }
       if (
         own.includes("fieldofstudy") ||
@@ -1129,10 +1138,47 @@
         return entry.school;
       }
       if (desc.includes("degree") || desc.includes("education level")) {
-        return entry.degree || entry.degreeLevel;
+        return entry.degreeLevel || entry.degree;
       }
     }
     return "";
+  }
+
+  function controlLooksFilled(control) {
+    if (!control) {
+      return false;
+    }
+    if (control.type === "checkbox") {
+      return Boolean(control.checked);
+    }
+    if (isChoiceControl(control)) {
+      var text = norm(textOf(control));
+      return Boolean(text && !text.includes("select one"));
+    }
+    return Boolean(clean(control.value || textOf(control)));
+  }
+
+  function controlLooksRequired(control) {
+    if (!control) {
+      return false;
+    }
+    var own = norm(ownControlKey(control));
+    var desc = norm(descriptorFor(control));
+    return (
+      control.required ||
+      control.getAttribute?.("aria-required") === "true" ||
+      own.includes("required") ||
+      desc.includes("required") ||
+      /\*/.test(descriptorFor(control))
+    );
+  }
+
+  function sectionHasMissingRequiredControls(section) {
+    return controlGroups(section).some(function (group) {
+      return group.controls.some(function (control) {
+        return controlLooksRequired(control) && !controlLooksFilled(control);
+      });
+    });
   }
 
   function liveControl(control) {
@@ -1177,7 +1223,8 @@
         continue;
       }
       if (choice) {
-        if (await fillButtonChoice(control, value)) {
+        var choiceResult = await fillButtonChoice(control, value);
+        if (choiceResult.ok) {
           filled += 1;
         }
         continue;
@@ -1324,7 +1371,9 @@
     }
     inventory.filled = filledCount > 0 || deletedCount > 0;
     if (!inventory.filled && entries.length) {
-      inventory.skippedReason = "already_filled_or_unavailable";
+      inventory.skippedReason = sectionHasMissingRequiredControls(section)
+        ? "missing_required_controls"
+        : "already_filled";
     }
     return {
       filledFieldCount: inventory.filled ? 1 : 0,

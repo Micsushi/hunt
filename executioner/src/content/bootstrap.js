@@ -349,18 +349,21 @@
       });
   }
 
-  function dismissTransientUi() {
+  function dismissTransientUi({ preserveFillProgress = false } = {}) {
     logPageUiEvent("ui.transient.dismiss", "Dismissed transient page UI.", {
       hadDetectedPrompt: Boolean(document.getElementById(PROMPT_ID)),
       hadLlmPrompt: Boolean(document.getElementById(LLM_PROMPT_ID)),
       hadToasts: Boolean(document.getElementById(TOAST_CONTAINER_ID)),
       hadFillProgress: Boolean(document.getElementById(FILL_PROGRESS_ID)),
+      preserveFillProgress,
     });
     removePrompt();
     removeLlmPrompt();
     removeFillSummary();
     removeToasts();
-    hideFillProgress();
+    if (!preserveFillProgress) {
+      hideFillProgress();
+    }
   }
 
   function escapeHtml(value) {
@@ -1052,7 +1055,9 @@
 
   chrome.runtime.onMessage.addListener((message) => {
     if (message?.type === "hunt.apply.dismiss_transient_ui") {
-      dismissTransientUi();
+      dismissTransientUi({
+        preserveFillProgress: Boolean(message.preserveFillProgress),
+      });
     }
     if (message?.type === "hunt.apply.show_toast") {
       showExtensionToast(

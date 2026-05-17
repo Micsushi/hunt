@@ -288,6 +288,63 @@
       return dateAnswer;
     }
 
+    if (entry.id === "application_source") {
+      var sourceCategory = clean(profile.applicationSourceCategory);
+      var source = clean(profile.applicationSource);
+      var sourceDetail = clean(profile.applicationSourceDetail);
+      var sourceValue =
+        sourceCategory || source || sourceDetail || clean(entry.defaultValue);
+      var sourceAliases = [
+        source,
+        sourceDetail,
+        sourceCategory,
+        source && source.toLowerCase().includes("linkedin") ? "LinkedIn" : "",
+        source && source.toLowerCase().includes("linkedin")
+          ? "Social Media"
+          : "",
+        sourceCategory &&
+        sourceCategory.toLowerCase().includes("job") &&
+        sourceCategory.toLowerCase().includes("board")
+          ? "Job Sites"
+          : "",
+        sourceCategory &&
+        sourceCategory.toLowerCase().includes("job") &&
+        sourceCategory.toLowerCase().includes("board")
+          ? "Career Websites"
+          : "",
+      ].filter(Boolean);
+      var sourceAliasMap = {};
+      sourceAliasMap[sourceValue] = Array.from(new Set(sourceAliases));
+      if (!sourceCategory && !source && !sourceDetail) {
+        root.audit?.pushIssue(audit, fieldAudit, {
+          kind: "default_answer_used",
+          severity: "warn",
+          failedStep: "answer.resolve",
+          reason:
+            "Used application source default because profile source fields were blank.",
+          questionType: question.type,
+        });
+      }
+      return {
+        value: sourceValue,
+        source:
+          sourceValue === sourceCategory
+            ? "profile:applicationSourceCategory"
+            : sourceValue === source
+              ? "profile:applicationSource"
+              : sourceValue === sourceDetail
+                ? "profile:applicationSourceDetail"
+                : "default:" + entry.id,
+        answerType: entry.answerType || "text",
+        confidence: sourceValue === clean(entry.defaultValue) ? 0.72 : 0.96,
+        optionAliases: Object.assign(
+          {},
+          entry.optionAliases || {},
+          sourceAliasMap,
+        ),
+      };
+    }
+
     for (var i = 0; i < (entry.profilePaths || []).length; i++) {
       var path = entry.profilePaths[i];
       var result = profileValue(profile, path);

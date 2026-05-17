@@ -205,6 +205,10 @@ function safeVerificationLinks(text, request, { allowInsecure = false } = {}) {
   return candidates;
 }
 
+function isLikelyPhoneNumber(digits) {
+  return /^1?[2-9]\d{9}$/.test(digits) || /^(\d)\1{3,}$/.test(digits);
+}
+
 function verificationCodeCandidates(text) {
   const decoded = String(text || "").replace(/=\r?\n/g, "");
   const candidates = [];
@@ -216,7 +220,7 @@ function verificationCodeCandidates(text) {
     let match;
     while ((match = pattern.exec(decoded))) {
       const code = String(match[1] || "").replace(/\D/g, "");
-      if (code.length >= 4 && code.length <= 8) {
+      if (code.length >= 4 && code.length <= 8 && !isLikelyPhoneNumber(code)) {
         candidates.push(code);
       }
     }
@@ -230,7 +234,7 @@ function verificationResultFromMessage({
   source,
   receivedAt,
 }) {
-  const links = safeVerificationLinks(decoded, request);
+  const links = [...new Set(safeVerificationLinks(decoded, request))];
   const subjectMatch = String(decoded || "").match(/^Subject:\s*(.+)$/im);
   const subject = subjectMatch ? subjectMatch[1].trim() : "";
   if (links.length === 1) {

@@ -29,7 +29,7 @@ import {
 
 const C4_POLL_ALARM = "hunt.apply.c4.poll";
 const C4_HEARTBEAT_ALARM = "hunt.apply.c4.heartbeat";
-const FILL_TIMEOUT_MS = 45000;
+const FILL_TIMEOUT_MS = 120000;
 const V2_PAGE_WALK_MAX_PAGES = 12;
 const V2_SHARED_SCRIPT_FILES = [
   "src/shared/injected.js",
@@ -578,7 +578,14 @@ function createC3WorkflowDetectionFunction() {
     var authState = "unknown";
     var phase = "job_fill";
     var priority = 10;
-    if (currentStep) {
+    var currentStepTitle = currentStep ? normalize(currentStep[3]) : "";
+    var currentStepIsAuth =
+      currentStepTitle &&
+      /create account|sign in|log in|login|register|sign up/i.test(
+        currentStepTitle,
+      ) &&
+      (passwordCount || emailCount || hasCreateAccount || hasSignIn);
+    if (currentStep && !currentStepIsAuth) {
       phase = "job_fill";
       priority = 40;
     } else if (startApplication || applyManually || genericApplyEntry) {
@@ -618,12 +625,409 @@ function createC3WorkflowDetectionFunction() {
         ? {
             current: Number(currentStep[1]),
             total: Number(currentStep[2]),
-            title: normalize(currentStep[3]),
+            title: currentStepTitle,
           }
         : null,
       buttons: buttons,
     };
   };
+}
+
+function createClickAuthPrimaryActionFunction() {
+  return function clickAuthPrimaryActionForC3(options) {
+    var authState = String((options && options.authState) || "").toLowerCase();
+    var click = Boolean(options && options.click);
+
+    function normalize(value) {
+      return String(value || "")
+        .replace(/\s+/g, " ")
+        .trim();
+    }
+
+    function lower(value) {
+      return normalize(value).toLowerCase();
+    }
+
+    function visible(el) {
+      if (!el || typeof el.getBoundingClientRect !== "function") {
+        return false;
+      }
+      if (
+        el.disabled ||
+        el.getAttribute("disabled") !== null ||
+        el.getAttribute("aria-disabled") === "true"
+      ) {
+        return false;
+      }
+      var style = window.getComputedStyle(el);
+      var rect = el.getBoundingClientRect();
+      return (
+        style.display !== "none" &&
+        style.visibility !== "hidden" &&
+        style.pointerEvents !== "none" &&
+        rect.width > 0 &&
+        rect.height > 0
+      );
+    }
+
+    function labelFor(el) {
+      var tagName = String(el.tagName || "").toLowerCase();
+      return normalize(
+        [
+          el.getAttribute("aria-label"),
+          el.getAttribute("title"),
+          tagName === "input" ? el.value : "",
+          el.innerText,
+          el.textContent,
+        ]
+          .filter(Boolean)
+          .join(" "),
+      );
+    }
+
+    function metadataFor(el) {
+      return normalize(
+        [
+          el.id,
+          el.getAttribute("name"),
+          el.getAttribute("type"),
+          el.getAttribute("data-automation-id"),
+          el.getAttribute("data-testid"),
+          el.getAttribute("class"),
+        ]
+          .filter(Boolean)
+          .join(" "),
+      );
+    }
+
+    function describeElement(el) {
+      var parts = [String(el.tagName || "").toLowerCase()];
+      if (el.id) {
+        parts.push("#" + el.id);
+      }
+      var name = el.getAttribute("name");
+      if (name) {
+        parts.push("[name='" + name.slice(0, 60) + "']");
+      }
+      var type = el.getAttribute("type");
+      if (type) {
+        parts.push("[type='" + type.slice(0, 40) + "']");
+      }
+      var automationId = el.getAttribute("data-automation-id");
+      if (automationId) {
+        parts.push("[data-automation-id='" + automationId.slice(0, 60) + "']");
+      }
+      return parts.join("");
+    }
+
+    function authScore(label, metadata, el) {
+      var text = lower([label, metadata].filter(Boolean).join(" "));
+      var visibleText = lower(label);
+      var wantsSignup = authState === "signup";
+      var wantsSignin = authState === "login" || authState === "signin";
+      var exactSignup =
+        /^(create account|sign up|signup|register|join today)$/.test(
+          visibleText,
+        );
+      var exactSignin = /^(sign in|log in|login)$/.test(visibleText);
+      var looseSignup =
+        /(^|\b)(create account|sign up|signup|register|join today)(\b|$)/i.test(
+          text,
+        );
+      var looseSignin = /(^|\b)(sign in|log in|login)(\b|$)/i.test(text);
+      var score = 0;
+
+      if (wantsSignup) {
+        if (exactSignup) {
+          score = 120;
+        } else if (looseSignup) {
+          score = 95;
+        }
+      } else if (wantsSignin) {
+        if (exactSignin) {
+          score = 120;
+        } else if (looseSignin) {
+          score = 95;
+        }
+      } else if (exactSignup || exactSignin) {
+        score = 80;
+      } else if (looseSignup || looseSignin) {
+        score = 60;
+      }
+
+      if (!score) {
+        return 0;
+      }
+      var tagName = String(el.tagName || "").toLowerCase();
+      var type = String(el.getAttribute("type") || "").toLowerCase();
+      if (tagName === "button" || type === "submit") {
+        score += 18;
+      }
+      if (el.closest("form")) {
+        score += 8;
+      }
+      if (
+        tagName !== "button" &&
+        type !== "submit" &&
+        el.getAttribute("role") !== "button"
+      ) {
+        score -= 35;
+      }
+      if (/click_filter/i.test(metadata)) {
+        score -= 25;
+      }
+      if (tagName === "a") {
+        score -= 35;
+      }
+      return score;
+    }
+
+    function pointerEvent(target, type, rect) {
+      var init = {
+        bubbles: true,
+        cancelable: true,
+        view: window,
+        button: 0,
+        buttons: type.includes("down") ? 1 : 0,
+        clientX: Math.round(rect.left + rect.width / 2),
+        clientY: Math.round(rect.top + rect.height / 2),
+      };
+      var EventCtor =
+        window.PointerEvent && type.startsWith("pointer")
+          ? window.PointerEvent
+          : MouseEvent;
+      target.dispatchEvent(new EventCtor(type, init));
+    }
+
+    function realisticClick(el) {
+      if (typeof el.scrollIntoView === "function") {
+        el.scrollIntoView({ block: "center", inline: "center" });
+      }
+      if (typeof el.focus === "function") {
+        try {
+          el.focus({ preventScroll: true });
+        } catch (_error) {
+          el.focus();
+        }
+      }
+      var rect = el.getBoundingClientRect();
+      [
+        "mouseover",
+        "mousemove",
+        "pointerdown",
+        "mousedown",
+        "pointerup",
+        "mouseup",
+        "click",
+      ].forEach(function (type) {
+        pointerEvent(el, type, rect);
+      });
+      if (typeof el.click === "function") {
+        el.click();
+      }
+      var form = el.closest && el.closest("form");
+      if (form && typeof form.requestSubmit === "function") {
+        form.requestSubmit(el);
+      }
+    }
+
+    var candidates = Array.from(
+      document.querySelectorAll(
+        [
+          "button",
+          "[role='button']",
+          "input[type='button']",
+          "input[type='submit']",
+          "a[href]",
+        ].join(", "),
+      ),
+    )
+      .filter(visible)
+      .map(function (el) {
+        var label = labelFor(el);
+        var metadata = metadataFor(el);
+        var rect = el.getBoundingClientRect();
+        return {
+          element: el,
+          label: (label || metadata || "account action").slice(0, 120),
+          metadata: metadata.slice(0, 160),
+          selector: describeElement(el),
+          score: authScore(label, metadata, el),
+          rect: {
+            top: Math.round(rect.top),
+            left: Math.round(rect.left),
+            width: Math.round(rect.width),
+            height: Math.round(rect.height),
+          },
+        };
+      })
+      .filter(function (candidate) {
+        return candidate.score > 0;
+      })
+      .sort(function (a, b) {
+        if (a.score !== b.score) {
+          return b.score - a.score;
+        }
+        return b.rect.top - a.rect.top;
+      });
+
+    var candidate = candidates[0] || null;
+    if (!candidate) {
+      return {
+        ok: false,
+        found: false,
+        clicked: false,
+        reason: "auth_primary_action_not_found",
+        message: "No safe account sign-in or create-account button was found.",
+        authState: authState || "unknown",
+        candidateCount: 0,
+      };
+    }
+
+    if (click) {
+      realisticClick(candidate.element);
+    }
+    return {
+      ok: true,
+      found: true,
+      clicked: click,
+      reason: click
+        ? "clicked_auth_primary_action"
+        : "auth_primary_action_available",
+      message: click
+        ? `Clicked ${candidate.label}.`
+        : `${candidate.label} is available.`,
+      authState: authState || "unknown",
+      candidate: {
+        label: candidate.label,
+        metadata: candidate.metadata,
+        selector: candidate.selector,
+        score: candidate.score,
+        rect: candidate.rect,
+      },
+      candidateCount: candidates.length,
+    };
+  };
+}
+
+function createAuthPageProbeFunction() {
+  return function probeC3AuthPage() {
+    function normalize(value) {
+      return String(value || "")
+        .replace(/\s+/g, " ")
+        .trim();
+    }
+
+    function visible(el) {
+      if (!el || typeof el.getBoundingClientRect !== "function") {
+        return false;
+      }
+      var style = window.getComputedStyle(el);
+      var rect = el.getBoundingClientRect();
+      return (
+        style.display !== "none" &&
+        style.visibility !== "hidden" &&
+        rect.width > 0 &&
+        rect.height > 0
+      );
+    }
+
+    var bodyText = document.body ? document.body.innerText || "" : "";
+    var lowerText = bodyText.toLowerCase();
+    var inputs = Array.from(
+      document.querySelectorAll("input, textarea, select"),
+    ).filter(visible);
+    var passwordCount = inputs.filter(function (el) {
+      return String(el.type || "").toLowerCase() === "password";
+    }).length;
+    var emailCount = inputs.filter(function (el) {
+      return /email/i.test(
+        [el.type, el.name, el.id, el.placeholder, el.getAttribute("aria-label")]
+          .filter(Boolean)
+          .join(" "),
+      );
+    }).length;
+    var buttons = Array.from(
+      document.querySelectorAll(
+        "button, [role='button'], input[type='submit']",
+      ),
+    )
+      .filter(visible)
+      .map(function (el) {
+        return normalize(
+          [
+            el.getAttribute("aria-label"),
+            el.getAttribute("title"),
+            String(el.tagName || "").toLowerCase() === "input" ? el.value : "",
+            el.innerText,
+            el.textContent,
+          ]
+            .filter(Boolean)
+            .join(" "),
+        );
+      })
+      .filter(Boolean);
+    var hasCreateAccount =
+      /create account|join today|verify new password|password requirements/i.test(
+        lowerText,
+      ) ||
+      buttons.some(function (label) {
+        return /create account|join today|sign up|register/i.test(label);
+      });
+    var hasSignIn =
+      /already have an account|sign in|log in|login/i.test(lowerText) ||
+      buttons.some(function (label) {
+        return /sign in|log in|login/i.test(label);
+      });
+    var authState =
+      hasCreateAccount && passwordCount >= 2
+        ? "signup"
+        : hasSignIn || passwordCount
+          ? "login"
+          : "unknown";
+    var isAuthPage = Boolean(
+      passwordCount ||
+      (emailCount && (hasCreateAccount || hasSignIn)) ||
+      (/current step\s+\d+\s+of\s+\d+[\s\S]{0,80}(create account|sign in|log in|login|register|sign up)/i.test(
+        bodyText,
+      ) &&
+        (hasCreateAccount || hasSignIn)),
+    );
+    return {
+      ok: true,
+      href: location.href,
+      title: document.title,
+      isAuthPage,
+      authState,
+      inputCount: inputs.length,
+      passwordCount,
+      emailCount,
+      hasCreateAccount,
+      hasSignIn,
+      buttons: buttons.slice(0, 20),
+    };
+  };
+}
+
+function chooseBestAuthPageProbe(results = []) {
+  const probes = (results || []).map((entry) => ({
+    frameId: entry.frameId,
+    result: entry.result || {},
+  }));
+  const ranked = probes
+    .filter((entry) => entry.result?.ok && entry.result?.isAuthPage)
+    .sort((a, b) => {
+      const passwordDelta =
+        Number(b.result.passwordCount || 0) -
+        Number(a.result.passwordCount || 0);
+      if (passwordDelta) {
+        return passwordDelta;
+      }
+      return (
+        Number(b.result.inputCount || 0) - Number(a.result.inputCount || 0)
+      );
+    });
+  return ranked[0] || null;
 }
 
 function createClickWorkdayApplyManuallyFunction() {
@@ -1562,11 +1966,13 @@ async function hideFillProgress(tabId) {
   });
 }
 
-async function dismissPageTransientUi(tabId) {
+async function dismissPageTransientUi(tabId, options = {}) {
+  const preserveFillProgress = Boolean(options.preserveFillProgress);
   await sendPageUiMessage({
     tabId,
     message: {
       type: "hunt.apply.dismiss_transient_ui",
+      preserveFillProgress,
     },
     action: "ui.transient.dismiss_requested",
     failedAction: "ui.transient.dismiss_request_failed",
@@ -1575,6 +1981,7 @@ async function dismissPageTransientUi(tabId) {
     skippedAction: "ui.transient.dismiss_skipped",
     skippedSummary:
       "Skipped transient UI dismissal because no tab was available.",
+    details: { preserveFillProgress },
   });
 }
 
@@ -1773,6 +2180,8 @@ async function detectEmailVerificationCodePage(tabId) {
                 input.getAttribute("aria-label"),
                 input.getAttribute("placeholder"),
                 input.getAttribute("autocomplete"),
+                input.getAttribute("inputmode"),
+                input.getAttribute("pattern"),
               ]
                 .join(" ")
                 .toLowerCase();
@@ -1793,6 +2202,19 @@ async function detectEmailVerificationCodePage(tabId) {
                 ["number", "tel", "text"].includes(input.type) &&
                 input.maxLength === 1),
           );
+          const singleInputOtp =
+            codePageText &&
+            codeInputs.length === 0 &&
+            inputs.filter(
+              (input) =>
+                ["number", "tel", "text"].includes(input.type) &&
+                input.type !== "password" &&
+                input.type !== "search" &&
+                (input.maxLength >= 4 ||
+                  /(verification code|otp|passcode|one-time|security code|one-time-code|numeric|digit|\\d)/i.test(
+                    input.descriptor,
+                  )),
+            ).length === 1;
           const buttons = [
             ...document.querySelectorAll(
               "button, [role='button'], input[type='button'], input[type='submit']",
@@ -1807,7 +2229,10 @@ async function detectEmailVerificationCodePage(tabId) {
           const emailMatch = bodyText.match(
             /\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/i,
           );
-          const ok = codePageText && codeInputs.length >= 4 && hasVerifyButton;
+          const ok =
+            codePageText &&
+            (codeInputs.length >= 4 || singleInputOtp) &&
+            hasVerifyButton;
           return {
             ok,
             reason: ok ? "" : "not_email_verification_code_page",
@@ -1949,6 +2374,12 @@ function describePageWalkStop(reason = "", details = {}) {
   if (reason === "page_did_not_advance_after_next") {
     return "Clicked Next, but Workday stayed on the same page.";
   }
+  if (reason === "auth_action_did_not_advance") {
+    return "Clicked the account action, but the account page did not advance.";
+  }
+  if (reason === "auth_primary_action_not_found") {
+    return "No safe account sign-in or create-account button was found.";
+  }
   if (reason === "fill_failed") {
     return (
       compact.message ||
@@ -1967,6 +2398,33 @@ function describePageWalkStop(reason = "", details = {}) {
 
 function pageWalkStopIsOk(reason = "") {
   return reason === "final_submit_visible";
+}
+
+function issueSummaryKey(issue = {}) {
+  return [
+    issue.kind || "",
+    issue.reason || "",
+    issue.fieldName || "",
+    issue.selectorPath || "",
+    issue.questionType || "",
+  ]
+    .filter(Boolean)
+    .join("|")
+    .toLowerCase();
+}
+
+function uniqueReviewIssues(issues = []) {
+  const seen = new Set();
+  const unique = [];
+  for (const issue of issues) {
+    const key = issueSummaryKey(issue) || JSON.stringify(issue || {});
+    if (seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    unique.push(issue);
+  }
+  return unique;
 }
 
 function buildFillSummaryPayload(result = {}) {
@@ -1992,7 +2450,13 @@ function buildFillSummaryPayload(result = {}) {
   const lastPageNumber = Number(
     pageWalk.lastPageNumber || pageWalk.currentPageNumber || 0,
   );
-  const reviewIssueCount = Number(pageWalk.reviewIssueCount || 0);
+  const completedPageCount = reachedFinalSubmit
+    ? Math.max(lastPageNumber, successfulPageCount)
+    : successfulPageCount;
+  const summaryReviewIssues = uniqueReviewIssues(pageWalk.reviewIssues || []);
+  const reviewIssueCount = Number(
+    summaryReviewIssues.length || pageWalk.reviewIssueCount || 0,
+  );
   const status = reachedFinalSubmit
     ? reviewIssueCount > 0
       ? "review"
@@ -2012,10 +2476,11 @@ function buildFillSummaryPayload(result = {}) {
     failedPageNumber,
     stoppedReason,
     stopReasonLabel: reason,
-    successfulPageCount,
+    successfulPageCount: completedPageCount,
+    pagesAdvancedThisRun: successfulPageCount,
     lastPageNumber,
     reviewIssueCount,
-    reviewIssueLabels: (pageWalk.reviewIssues || [])
+    reviewIssueLabels: summaryReviewIssues
       .map((issue) =>
         String(issue.fieldName || issue.reason || issue.kind || "")
           .replace(/\s+/g, " ")
@@ -2096,6 +2561,235 @@ async function probeSafeNextForTab(tabId) {
   }
 }
 
+async function detectWorkflowForTab(tabId) {
+  if (!tabId) {
+    return { ok: false, reason: "missing_tab" };
+  }
+  try {
+    const results = await withTimeout(
+      chrome.scripting.executeScript({
+        target: { tabId, allFrames: true },
+        func: createC3WorkflowDetectionFunction(),
+      }),
+      5000,
+      () => null,
+    );
+    if (!results) {
+      return { ok: false, reason: "workflow_detection_timeout" };
+    }
+    return chooseBestWorkflowDetection(results);
+  } catch (error) {
+    return {
+      ok: false,
+      reason: "workflow_detection_failed",
+      message: error instanceof Error ? error.message : String(error),
+    };
+  }
+}
+
+async function probeAuthPageForTab(tabId) {
+  let results;
+  try {
+    results = await withTimeout(
+      chrome.scripting.executeScript({
+        target: { tabId, allFrames: true },
+        func: createAuthPageProbeFunction(),
+      }),
+      5000,
+      () => null,
+    );
+  } catch (error) {
+    return {
+      ok: false,
+      isAuthPage: false,
+      reason: "auth_page_probe_failed",
+      message: error instanceof Error ? error.message : String(error),
+    };
+  }
+  if (!results) {
+    return {
+      ok: false,
+      isAuthPage: false,
+      reason: "auth_page_probe_timeout",
+      message: "Auth page probe timed out.",
+    };
+  }
+  const best = chooseBestAuthPageProbe(results);
+  if (!best) {
+    return {
+      ok: true,
+      isAuthPage: false,
+      reason: "not_auth_page",
+    };
+  }
+  return {
+    ...best.result,
+    frameId: best.frameId,
+    phase: "auth",
+  };
+}
+
+async function clickAuthPrimaryActionForTab(
+  tabId,
+  detection = {},
+  details = {},
+) {
+  if (!tabId) {
+    return {
+      ok: false,
+      available: false,
+      clicked: false,
+      reason: "missing_tab",
+      message: "No active tab is available for the account action.",
+    };
+  }
+  const authState = detection.authState || "unknown";
+  let probe;
+  try {
+    const probeResults = await withTimeout(
+      chrome.scripting.executeScript({
+        target: { tabId, allFrames: true },
+        func: createClickAuthPrimaryActionFunction(),
+        args: [{ authState, click: false }],
+      }),
+      5000,
+      () => null,
+    );
+    if (!probeResults) {
+      probe = {
+        ok: false,
+        found: false,
+        clicked: false,
+        reason: "auth_primary_action_probe_timeout",
+        message: "Account action check timed out.",
+      };
+    } else {
+      const candidates = probeResults
+        .map((entry) => ({
+          frameId: entry.frameId,
+          result: entry.result || {},
+        }))
+        .filter((entry) => entry.result?.ok && entry.result?.found)
+        .sort((a, b) => {
+          const aScore = Number(a.result.candidate?.score || 0);
+          const bScore = Number(b.result.candidate?.score || 0);
+          if (aScore !== bScore) {
+            return bScore - aScore;
+          }
+          return Number(a.frameId || 0) - Number(b.frameId || 0);
+        });
+      probe =
+        candidates.length > 0
+          ? { ...candidates[0].result, frameId: candidates[0].frameId }
+          : {
+              ok: false,
+              found: false,
+              clicked: false,
+              reason: "auth_primary_action_not_found",
+              message:
+                "No safe account sign-in or create-account button was found.",
+              authState,
+            };
+    }
+  } catch (error) {
+    probe = {
+      ok: false,
+      found: false,
+      clicked: false,
+      reason: "auth_primary_action_probe_failed",
+      message: error instanceof Error ? error.message : String(error),
+      authState,
+    };
+  }
+
+  if (!probe.ok || !probe.found) {
+    await logActivity(
+      "auth.primary_action_blocked",
+      probe.message || "No account action button was found.",
+      {
+        tabId,
+        authState,
+        triggeredBy: details.triggeredBy || "",
+        reason: probe.reason || "",
+      },
+      "blocked",
+    );
+    await showPageToast(
+      tabId,
+      probe.message || "No account action button was found.",
+      "warn",
+    );
+    return {
+      ...probe,
+      available: false,
+      clicked: false,
+      auto: Boolean(details.auto),
+    };
+  }
+
+  let clickResult;
+  try {
+    const clickResults = await withTimeout(
+      chrome.scripting.executeScript({
+        target: { tabId, frameIds: [probe.frameId] },
+        func: createClickAuthPrimaryActionFunction(),
+        args: [{ authState, click: true }],
+      }),
+      5000,
+      () => null,
+    );
+    if (!clickResults) {
+      throw new Error("Account action click timed out.");
+    }
+    clickResult = {
+      frameId: probe.frameId,
+      ...(clickResults[0]?.result || {}),
+    };
+  } catch (error) {
+    clickResult = {
+      ok: false,
+      found: true,
+      clicked: false,
+      frameId: probe.frameId,
+      reason: "auth_primary_action_click_failed",
+      message: error instanceof Error ? error.message : String(error),
+      authState,
+      candidate: probe.candidate,
+    };
+  }
+
+  await logActivity(
+    clickResult.clicked
+      ? "auth.primary_action_click"
+      : "auth.primary_action_blocked",
+    clickResult.message ||
+      (clickResult.clicked
+        ? "Clicked account action."
+        : "Account action was not clicked."),
+    {
+      tabId,
+      frameId: probe.frameId,
+      authState,
+      triggeredBy: details.triggeredBy || "",
+      candidate: clickResult.candidate || probe.candidate || {},
+      reason: clickResult.reason || "",
+    },
+    clickResult.clicked ? "ok" : "warn",
+  );
+  if (!clickResult.clicked) {
+    await showPageToast(
+      tabId,
+      clickResult.message || "Account action was not clicked.",
+      "warn",
+    );
+  }
+  return {
+    ...clickResult,
+    available: Boolean(clickResult.ok && clickResult.found),
+    auto: Boolean(details.auto),
+  };
+}
+
 async function clickSafeNextForTab(tabId, details = {}) {
   const runtimeBeforeProbe = await detectWorkdayRuntimeErrorForTab(tabId);
   if (runtimeBeforeProbe.found) {
@@ -2124,6 +2818,34 @@ async function clickSafeNextForTab(tabId, details = {}) {
   }
   const probe = await probeSafeNextForTab(tabId);
   if (!probe.available) {
+    if (probe.reason === "no_safe_next_button") {
+      const workflowDetection = await detectWorkflowForTab(tabId);
+      if (workflowDetection?.isAuthPage) {
+        return clickAuthPrimaryActionForTab(tabId, workflowDetection, {
+          auto: Boolean(details.auto),
+          triggeredBy: details.triggeredBy || "",
+        });
+      }
+      const authProbe = await probeAuthPageForTab(tabId);
+      if (authProbe?.isAuthPage) {
+        await logActivity(
+          "next.auth_page_probe_detected",
+          "No Next button was visible, but an account action page was detected.",
+          {
+            tabId,
+            triggeredBy: details.triggeredBy || "",
+            authState: authProbe.authState || "unknown",
+            inputCount: authProbe.inputCount || 0,
+            passwordCount: authProbe.passwordCount || 0,
+          },
+          "info",
+        );
+        return clickAuthPrimaryActionForTab(tabId, authProbe, {
+          auto: Boolean(details.auto),
+          triggeredBy: details.triggeredBy || "",
+        });
+      }
+    }
     if (
       probe.reason === "no_safe_next_button" &&
       !details.workdayRuntimeRecoveryAttempted
@@ -2388,7 +3110,10 @@ function pageWalkFillSummary(fillResponse = {}) {
 
 function shouldRepairPageWalkValidation(nextAction = {}, snapshot = {}) {
   const reason = nextAction.reason || "";
-  if (reason === "visible_validation_errors") {
+  if (
+    reason === "visible_validation_errors" ||
+    reason === "visible_validation_errors_after_next"
+  ) {
     return true;
   }
   if (reason !== "final_submit_visible") {
@@ -2468,6 +3193,147 @@ async function runV2PageWalkAfterFill({
         currentPageSnapshot,
         beforePageNumber,
       );
+      continue;
+    }
+    const workflowDetection = await detectWorkflowForTab(tabId);
+    if (workflowDetection?.isAuthPage) {
+      const authAction = await clickAuthPrimaryActionForTab(
+        tabId,
+        workflowDetection,
+        {
+          auto: true,
+          triggeredBy: `${triggeredBy || "fill_current_page"}:v2_page_walk:${pageIndex}`,
+        },
+      );
+      steps.push({
+        step: steps.length + 1,
+        kind: "auth_primary_action",
+        pageIndex: beforePageNumber,
+        attemptIndex: pageIndex,
+        pageTitle: beforeNextSnapshot.currentStep?.title || "",
+        clicked: Boolean(authAction.clicked),
+        reason: authAction.reason || "",
+        message: authAction.message || "",
+        authState: workflowDetection.authState || "unknown",
+        candidate: authAction.candidate || {},
+        inputCount: workflowDetection.inputCount || 0,
+        fillBeforeClick: pageWalkFillSummary(currentFill),
+      });
+      if (!authAction.clicked) {
+        stoppedReason = authAction.reason || "auth_primary_action_not_found";
+        failedPageNumber = beforePageNumber;
+        stopDetails = {
+          message: authAction.message || "Account action was not clicked.",
+          pageTitle: beforeNextSnapshot.currentStep?.title || "",
+        };
+        break;
+      }
+
+      await dismissPageTransientUi(tabId, { preserveFillProgress: true });
+      await new Promise((resolve) => setTimeout(resolve, 1800));
+      currentPageSnapshot = await getPageSnapshot(tabId);
+      lastPageNumber = pageNumberFromSnapshot(
+        currentPageSnapshot,
+        beforePageNumber,
+      );
+      const afterAuthVerificationGate = await maybeHandleEmailVerificationGate({
+        tabId,
+        state,
+        fillRunId,
+        triggeredBy,
+        pageIndex,
+      });
+      if (afterAuthVerificationGate.handled) {
+        steps.push({
+          step: steps.length + 1,
+          kind: "email_verification_code_gate",
+          pageIndex: lastPageNumber,
+          attemptIndex: pageIndex,
+          ok: Boolean(afterAuthVerificationGate.result?.ok),
+          method: afterAuthVerificationGate.result?.method || "",
+          reason: afterAuthVerificationGate.result?.reason || "",
+          detection: afterAuthVerificationGate.detection || {},
+        });
+        if (!afterAuthVerificationGate.result?.ok) {
+          stoppedReason =
+            afterAuthVerificationGate.result?.reason ||
+            "email_verification_failed";
+          failedPageNumber = lastPageNumber;
+          stopDetails = {
+            message:
+              afterAuthVerificationGate.result?.message ||
+              "Email verification could not be completed automatically.",
+            pageTitle: currentPageSnapshot.currentStep?.title || "",
+          };
+          break;
+        }
+        currentPageSnapshot = await getPageSnapshot(tabId);
+        lastPageNumber = pageNumberFromSnapshot(
+          currentPageSnapshot,
+          lastPageNumber,
+        );
+        continue;
+      }
+
+      const afterAuthDetection = await detectWorkflowForTab(tabId);
+      if (
+        afterAuthDetection?.isAuthPage &&
+        afterAuthDetection.authState === workflowDetection.authState &&
+        afterAuthDetection.href === workflowDetection.href
+      ) {
+        stoppedReason = "auth_action_did_not_advance";
+        failedPageNumber = beforePageNumber;
+        stopDetails = {
+          message:
+            "Clicked the account action, but the account page did not advance.",
+          visibleValidationErrors:
+            currentPageSnapshot.visibleValidationErrors || [],
+          pageTitle: currentPageSnapshot.currentStep?.title || "",
+        };
+        break;
+      }
+
+      await showFillProgress(
+        tabId,
+        "Filling page after account action",
+        fillRunId,
+      );
+      const pageState = await getExtensionState();
+      currentFill = await runFillWithOneRefreshRetry(
+        tabId,
+        pageState,
+        `${triggeredBy || "fill_current_page"}:v2_page_walk_auth_followup`,
+        fillRunId,
+        { allowLlmAnswers },
+      );
+      await notePageFillCompleted(tabId, {
+        triggeredBy: `${triggeredBy || "fill_current_page"}:v2_page_walk_auth_followup`,
+        ok: Boolean(currentFill?.ok),
+        filledFieldCount: Number(currentFill?.attempt?.filledFieldCount || 0),
+      });
+      steps.push({
+        step: steps.length + 1,
+        kind: "fill_after_auth_action",
+        pageIndex: lastPageNumber,
+        attemptIndex: pageIndex,
+        pageTitle: currentPageSnapshot.currentStep?.title || "",
+        ...pageWalkFillSummary(currentFill),
+      });
+      if (!currentFill.ok || currentFill.cancelled) {
+        stoppedReason = currentFill.cancelled
+          ? "user_cancelled"
+          : "fill_failed";
+        failedPageNumber = lastPageNumber;
+        stopDetails = {
+          message: currentFill.message || "",
+          reviewReasons:
+            currentFill.attempt?.manualReviewReasons ||
+            currentFill.result?.manualReviewReasons ||
+            [],
+          pageTitle: currentPageSnapshot.currentStep?.title || "",
+        };
+        break;
+      }
       continue;
     }
     const nextAction = await clickSafeNextForTab(tabId, {
@@ -2562,7 +3428,7 @@ async function runV2PageWalkAfterFill({
       stopDetails = { message: fillRunCancelReason(fillRunId) };
       break;
     }
-    await dismissPageTransientUi(tabId);
+    await dismissPageTransientUi(tabId, { preserveFillProgress: true });
     await new Promise((resolve) => setTimeout(resolve, 650));
     let afterNextSnapshot = await getPageSnapshot(tabId);
     const beforeStepNumber = Number(
@@ -2606,6 +3472,52 @@ async function runV2PageWalkAfterFill({
         beforeStep: beforeNextSnapshot.currentStep || null,
         afterStep: afterNextSnapshot.currentStep || null,
       });
+      const repairKey = `${beforePageNumber}:${beforeNextSnapshot.href || ""}:after_next`;
+      if (
+        stoppedReason === "visible_validation_errors_after_next" &&
+        shouldRepairPageWalkValidation(
+          { reason: stoppedReason, visibleValidationErrors: afterNextErrors },
+          afterNextSnapshot,
+        ) &&
+        !validationRepairKeys.has(repairKey)
+      ) {
+        validationRepairKeys.add(repairKey);
+        await showFillProgress(
+          tabId,
+          `Repairing page ${beforePageNumber} validation`,
+          fillRunId,
+        );
+        const repairState = await getExtensionState();
+        const repairFill = await runFillWithOneRefreshRetry(
+          tabId,
+          repairState,
+          `${triggeredBy || "fill_current_page"}:v2_page_walk_after_next_validation_repair`,
+          fillRunId,
+          { allowLlmAnswers },
+        );
+        currentFill = repairFill;
+        steps.push({
+          step: steps.length + 1,
+          kind: "after_next_validation_repair",
+          pageIndex: beforePageNumber,
+          attemptIndex: pageIndex,
+          pageTitle: afterNextSnapshot.currentStep?.title || "",
+          stoppedReason,
+          ...pageWalkFillSummary(repairFill),
+        });
+        if (
+          repairFill?.ok &&
+          !repairFill.cancelled &&
+          pageWalkFillSummary(repairFill).filledFieldCount > 0
+        ) {
+          currentPageSnapshot = await getPageSnapshot(tabId);
+          lastPageNumber = pageNumberFromSnapshot(
+            currentPageSnapshot,
+            beforePageNumber,
+          );
+          continue;
+        }
+      }
       break;
     }
     const nextPageNumber = pageNumberFromSnapshot(
@@ -2615,6 +3527,18 @@ async function runV2PageWalkAfterFill({
     successfulPageCount += 1;
     lastPageNumber = nextPageNumber;
     currentPageSnapshot = afterNextSnapshot;
+    await logActivity(
+      "page_walk.advance_observed",
+      "Observed Workday advance to the next page.",
+      {
+        tabId,
+        fillRunId,
+        beforePageNumber,
+        nextPageNumber,
+        beforeStep: beforeNextSnapshot.currentStep || null,
+        afterStep: afterNextSnapshot.currentStep || null,
+      },
+    );
     const afterVerificationGate = await maybeHandleEmailVerificationGate({
       tabId,
       state,
@@ -2694,8 +3618,12 @@ async function runV2PageWalkAfterFill({
     failedPageNumber = lastPageNumber;
     stopDetails = { message: describePageWalkStop(stoppedReason) };
   }
-  const reviewIssues = steps.flatMap((step) =>
-    (step.reviewIssues || []).concat(step.fillBeforeClick?.reviewIssues || []),
+  const reviewIssues = uniqueReviewIssues(
+    steps.flatMap((step) =>
+      (step.reviewIssues || []).concat(
+        step.fillBeforeClick?.reviewIssues || [],
+      ),
+    ),
   );
   const pageWalk = {
     ok: pageWalkStopIsOk(stoppedReason),

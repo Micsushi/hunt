@@ -108,19 +108,21 @@ def _json_for_prompt(payload: Any) -> str:
 def build_result_template(claim: dict[str, Any]) -> dict[str, Any]:
     fill = claim.get("fill") or {}
     return {
-        "status": "ok",
-        "resumeUploadOk": None,
-        "generatedAnswersUsed": False,
-        "finalUrl": fill.get("apply_url"),
-        "missingRequiredFields": [],
-        "lowConfidenceAnswers": [],
-        "manualReviewFlags": [],
-        "evidence": {
-            "notes": "",
-            "screenshots": [],
-            "htmlSnapshots": [],
-            "stoppedBeforeSubmit": True,
+        "status": "complete",
+        "failure_code_confirmed": fill.get("failure_code", ""),
+        "page_observed": fill.get("apply_url", ""),
+        "widget_details": {
+            "selector": "",
+            "role": "",
+            "label": "",
+            "html_excerpt": "",
+            "framework_hints": "",
         },
+        "agent_findings": "",
+        "suggested_fix_area": "",
+        "screenshots": [],
+        "html_snapshot": "",
+        "notes": "",
     }
 
 
@@ -168,9 +170,9 @@ def build_worker_prompt(
     result_endpoint = f"{base_url.rstrip('/')}/workers/{lease_id}/result"
     heartbeat_endpoint = f"{base_url.rstrip('/')}/workers/{lease_id}/heartbeat"
 
-    return f"""# Hunt C4 Bounded Fill Worker
+    return f"""# Hunt C4 Investigation Worker
 
-You are operating exactly one Hunt C4 worker lease. C4 is the source of truth; you are the browser/runtime worker for this lease only.
+You are operating exactly one Hunt C4 investigation lease. A C3 automated fill attempt failed on this page. Your job is to observe what blocked it and produce a structured investigation report. You do not fill forms or submit applications.
 
 Lease summary:
 ```json
@@ -182,27 +184,36 @@ Inputs:
 - Result template: {result_ref}
 - Service token: read the bearer token from environment variable `{token_env_var}`. Do not print, store, or reveal the token.
 
-Allowed actions:
-- Use the browser/runtime tools needed to open only the claimed `apply_url`.
-- Fill application fields using the claim payload, selected resume, candidate/profile context already present in the payload, and grounded facts only.
-- Upload the selected resume when possible.
-- Heartbeat while working by POSTing JSON to `{heartbeat_endpoint}` with body `{{"lease_seconds": 900}}`.
-- Finish by POSTing JSON to `{result_endpoint}` with body `{{"payload": <result object>}}`.
+Your task:
+1. Open only the claimed `apply_url` in your browser.
+2. Navigate to the page state where C3 failed if possible. The claim payload includes the failure code and any widget details C3 captured.
+3. Observe the blocking element: its selector, ARIA role, visible label, HTML structure, and any JavaScript framework indicators (React, Vue, Workday, Oracle, etc.).
+4. Take at least one screenshot of the blocking element or page state.
+5. Capture an HTML snapshot of the relevant section.
+6. Write `agent_findings`: freetext description of what you observed and why C3 likely failed.
+7. Write `suggested_fix_area`: which part of the C3 codebase would need a new driver or fix (e.g. "generic V2 option collection", "Workday listbox driver", "Oracle segmented button group").
+8. Heartbeat while working by POSTing JSON to `{heartbeat_endpoint}` with body `{{"lease_seconds": 600}}`.
+9. Finish by POSTing JSON to `{result_endpoint}` with body `{{"payload": <result object>}}`.
+10. Stop.
 
 Hard stops:
-- Do not click any final submit/apply/complete button.
-- Stop on a review page, final submit page, payment page, CAPTCHA, MFA, OTP, account lock, login problem, hostname drift, or any unsupported destructive action.
-- Do not inspect or modify Hunt's database.
-- Do not browse unrelated jobs, search for other openings, send messages, email anyone, or modify files outside the worker artifact folder.
-- Do not invent claims about the candidate. If a required answer is missing or low confidence, leave it unresolved and add a manual review flag.
+- Do not fill any application field.
+- Do not click any submit, apply, next, or complete button.
+- Do not interact with Hunt's database.
+- Do not browse unrelated pages, search for other jobs, send messages, or email anyone.
+- Do not invent findings. If the page state cannot be reached, set `status` to `inconclusive` and explain why in `agent_findings`.
 
 Result requirements:
-- Use `status` = `ok` only when the form is filled as far as safely possible and you stopped before final submit.
-- Use `manual_review` when the operator needs to intervene.
-- Use `failed` for unrecoverable worker/runtime errors.
-- Always include `finalUrl`, `resumeUploadOk`, `generatedAnswersUsed`, `missingRequiredFields`, `lowConfidenceAnswers`, `manualReviewFlags`, and `evidence.stoppedBeforeSubmit`.
+- `status`: `complete` when you observed the page and produced findings; `inconclusive` when the page state could not be reached; `access_blocked` when login/MFA/CAPTCHA blocked access; `captcha_blocked` for CAPTCHA specifically.
+- `failure_code_confirmed`: confirm or correct the failure code from the claim.
+- `page_observed`: the URL of the page where you found the issue.
+- `widget_details`: selector, role, label, html_excerpt, framework_hints.
+- `agent_findings`: freetext of what you saw.
+- `suggested_fix_area`: which C3 component to fix.
+- `screenshots`: list of screenshot file paths.
+- `html_snapshot`: path to HTML snapshot file.
 
-After posting the result, stop. Do not continue to another job or claim another lease.
+After posting the result, stop. Do not claim another lease or continue to another job.
 {claim_block}{template_block}"""
 
 

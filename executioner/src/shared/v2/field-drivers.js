@@ -406,6 +406,33 @@
         afterState: root.fieldState.readFieldState(field),
       };
     }
+    var container =
+      el?.closest?.(
+        '[data-automation-id^="formField"], [role="group"], form',
+      ) || document.body;
+    var uploadedText = String(
+      container.innerText || container.textContent || "",
+    )
+      .replace(/\s+/g, " ")
+      .trim();
+    if (
+      uploadedText.toLowerCase().includes("successfully uploaded") ||
+      (uploadedText.toLowerCase().includes(".pdf") &&
+        uploadedText.toLowerCase().includes("uploaded"))
+    ) {
+      return {
+        ok: true,
+        reason: "resume_already_uploaded",
+        afterState: {
+          rawValue: "uploaded",
+          text: "uploaded",
+          checked: false,
+          selected: true,
+        },
+        valueSource: "resume_upload",
+        answerText: "resume_already_uploaded",
+      };
+    }
     root.audit?.pushFieldStep(audit, fieldAudit, {
       action: "resume_file_input_selected",
       step: "driver.file.input",

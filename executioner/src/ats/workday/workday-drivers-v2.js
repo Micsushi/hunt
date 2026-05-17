@@ -252,6 +252,26 @@
     );
   }
 
+  function answerTexts(answer, option) {
+    var texts = [answer?.value, option?.label, option?.value];
+    var aliases = answer?.optionAliases || {};
+    Object.keys(aliases).forEach(function (key) {
+      if (!answer?.value || optionMatches({ label: key }, answer.value)) {
+        texts = texts.concat(aliases[key] || []);
+      }
+    });
+    return Array.from(
+      new Set(
+        texts
+          .map(clean)
+          .filter(Boolean)
+          .filter(function (text) {
+            return text.toLowerCase() !== "select one";
+          }),
+      ),
+    );
+  }
+
   function isApplicationSourceField(el, descriptor) {
     var key = [
       el?.id,
@@ -320,9 +340,49 @@
           value: label,
           element: target,
           placeholder: false,
+          isCategory: isPromptCategoryOption(target),
         });
       });
     return options;
+  }
+
+  function isPromptCategoryOption(option) {
+    if (!option) {
+      return false;
+    }
+    if (
+      option.querySelector?.(
+        [
+          'input[type="radio"]',
+          'input[type="checkbox"]',
+          '[role="radio"]',
+          '[role="checkbox"]',
+          '[data-automation-id="radioBtn"]',
+          '[data-automation-id="checkboxPanel"]',
+        ].join(", "),
+      )
+    ) {
+      return false;
+    }
+    var label = norm(optionLabel(option));
+    if (!label || lowerPressDelete(label)) {
+      return false;
+    }
+    return Boolean(
+      option.getAttribute?.("aria-haspopup") ||
+      option.getAttribute?.("aria-expanded") ||
+      option.querySelector?.("svg") ||
+      option.querySelector?.('[data-automation-id*="chevron"]') ||
+      option.querySelector?.('[data-automation-id*="drill"]') ||
+      option.getAttribute?.("data-hunt-prompt-category") === "true",
+    );
+  }
+
+  function sourceOptionFailureKind(field) {
+    if (isApplicationSourceField(field?.element, field?.descriptor)) {
+      return "workday_source_options_unavailable";
+    }
+    return "workday_popup_options_missing";
   }
 
   function visibleOptionCandidates() {
@@ -482,6 +542,70 @@
     );
   }
 
+  function optionMatchesAny(option, texts) {
+    return (texts || []).some(function (text) {
+      return optionMatches(option, text);
+    });
+  }
+
+  async function waitForWorkdayOptions(previousLabels, timeoutMs) {
+    var start = Date.now();
+    var attempts = 0;
+    var previousKey = (previousLabels || []).map(norm).join("|");
+    var options = visibleWorkdayOptions();
+    while (
+      Date.now() - start < (timeoutMs || 2200) &&
+      !window.__huntApplyCancelAllFills &&
+      !window.__huntApplyCancelFillRunId
+    ) {
+      attempts += 1;
+      options = visibleWorkdayOptions();
+      var key = options
+        .map(function (option) {
+          return norm(option.label);
+        })
+        .join("|");
+      if (options.length && key !== previousKey) {
+        return {
+          options: options,
+          attempts: attempts,
+          waitedMs: Date.now() - start,
+        };
+      }
+      await sleep(120);
+    }
+    return {
+      options: options,
+      attempts: attempts,
+      waitedMs: Date.now() - start,
+    };
+  }
+
+  function sourceCategoryScore(option, texts) {
+    var label = norm(option?.label);
+    var combined = norm((texts || []).join(" "));
+    if (!label) {
+      return 0;
+    }
+    var score = 1;
+    if (optionMatchesAny(option, texts)) {
+      score += 100;
+    }
+    if (/linkedin|social/.test(combined) && label.includes("social media")) {
+      score += 80;
+    }
+    if (
+      /linkedin|job board|job site|job/.test(combined) &&
+      (label.includes("job sites") || label.includes("career websites"))
+    ) {
+      score += 60;
+    }
+    if (label.includes("other")) {
+      score += 5;
+    }
+    return score;
+  }
+
   function committedStateMatches(state, answer, option) {
     var label = clean(state?.text || state?.rawValue || "");
     if (!state?.selected || !label) {
@@ -622,13 +746,11 @@
       ];
     }
     // For phone_country_code we need to type to filter the long country-dial list.
-    // For all other combobox/button_listbox fields, typing the answer text into
-    // Workday's live-search input triggers external API calls (e.g.
-    // namedefinition?country=Canada) that can return 500 and crash the page.
-    // Open the popup without typing and match against whatever options appear.
-    var sourceField = isApplicationSourceField(field.element, field.descriptor);
-    var safeOpenOnly =
-      field.workday?.kind !== "phone_country_code" && !sourceField;
+    // For all other combobox/button_listbox fields (including source fields), typing
+    // into Workday's live-search input triggers input handlers that can crash the page
+    // (e.g. "undefined is not iterable" in cx-applyflow.min.js when Workday's internal
+    // store isn't ready). Open the popup without typing and match whatever options appear.
+    var safeOpenOnly = field.workday?.kind !== "phone_country_code";
     var searchText = safeOpenOnly ? "" : answer.value || "Canada (+1)";
     _huntLog("collectWorkdayOptions_start", {
       descriptor: String(field.descriptor || "").slice(0, 120),
@@ -639,10 +761,13 @@
     await closePopup(field);
     await sleep(40);
     await openPopup(field, searchText);
-    var options = visibleWorkdayOptions();
+    var waitResult = await waitForWorkdayOptions([], 2200);
+    var options = waitResult.options;
     _huntLog("collectWorkdayOptions_after_popup", {
       descriptor: String(field.descriptor || "").slice(0, 120),
       optionCount: options.length,
+      waitAttempts: waitResult.attempts,
+      waitedMs: waitResult.waitedMs,
       options: options.slice(0, 8).map(function (o) {
         return o.label;
       }),
@@ -662,6 +787,8 @@
       detail: {
         workdayKind: field.workday?.kind || "",
         optionCount: options.length,
+        waitAttempts: waitResult.attempts,
+        waitedMs: waitResult.waitedMs,
         options: options.map(function (option) {
           return option.label;
         }),
@@ -686,6 +813,74 @@
       }
     }
     return options;
+  }
+
+  async function findHierarchicalWorkdayOption(
+    field,
+    answer,
+    option,
+    options,
+    audit,
+    fieldAudit,
+  ) {
+    var texts = answerTexts(answer, option);
+    var categories = (options || [])
+      .filter(function (candidate) {
+        return candidate.isCategory;
+      })
+      .sort(function (a, b) {
+        return sourceCategoryScore(b, texts) - sourceCategoryScore(a, texts);
+      });
+    if (!categories.length) {
+      return null;
+    }
+    for (var idx = 0; idx < categories.length; idx++) {
+      var category = categories[idx];
+      var beforeLabels = visibleWorkdayOptions().map(function (candidate) {
+        return candidate.label;
+      });
+      root.audit?.pushFieldStep(audit, fieldAudit, {
+        action: "workday_prompt_category_open",
+        step: "workday.driver.fill",
+        status: "info",
+        reason: "open_prompt_category",
+        selectedOption: category.label,
+        detail: {
+          categoryIndex: idx,
+          categoryScore: sourceCategoryScore(category, texts),
+        },
+      });
+      await clickWorkdayOption(category);
+      var waitResult = await waitForWorkdayOptions(beforeLabels, 2600);
+      var childOptions = waitResult.options.filter(function (candidate) {
+        return !candidate.isCategory;
+      });
+      root.audit?.pushFieldStep(audit, fieldAudit, {
+        action: "workday_prompt_category_options",
+        step: "workday.driver.fill",
+        status: childOptions.length ? "ok" : "warn",
+        reason: childOptions.length
+          ? "prompt_category_children_visible"
+          : "prompt_category_children_missing",
+        selectedOption: category.label,
+        detail: {
+          waitAttempts: waitResult.attempts,
+          waitedMs: waitResult.waitedMs,
+          options: childOptions.map(function (candidate) {
+            return candidate.label;
+          }),
+        },
+      });
+      var target = preferredWorkdayOption(childOptions, option, answer);
+      if (target) {
+        return target;
+      }
+      await closePopup(field);
+      await sleep(80);
+      await openPopup(field, "");
+      await waitForWorkdayOptions([], 1600);
+    }
+    return null;
   }
 
   function preferredWorkdayOption(options, option, answer) {
@@ -834,17 +1029,24 @@
         answerText: committedLabel,
       };
     }
-    var options = (field.options || []).filter(function (candidate) {
-      return visible(candidate.element);
+    var options = await collectWorkdayOptions(field, {
+      answer: answer,
+      audit: audit,
+      fieldAudit: fieldAudit,
     });
-    var target = preferredWorkdayOption(options, option, answer);
+    var flatOptions = options.filter(function (candidate) {
+      return !candidate.isCategory;
+    });
+    var target = preferredWorkdayOption(flatOptions, option, answer);
     if (!target) {
-      options = await collectWorkdayOptions(field, {
-        answer: answer,
-        audit: audit,
-        fieldAudit: fieldAudit,
-      });
-      target = preferredWorkdayOption(options, option, answer);
+      target = await findHierarchicalWorkdayOption(
+        field,
+        answer,
+        option,
+        options,
+        audit,
+        fieldAudit,
+      );
     }
     if (!target) {
       var postPopupState = workdayCommittedState(field);
@@ -862,17 +1064,21 @@
           answerText: postPopupLabel,
         };
       }
+      var missingKind = sourceOptionFailureKind(field);
       root.audit?.pushIssue(audit, fieldAudit, {
-        kind: "workday_popup_options_missing",
+        kind: missingKind,
         severity: field.required ? "warn" : "info",
         failedStep: "workday.driver.fill",
-        reason: "Workday popup opened but no selectable option was visible.",
+        reason:
+          missingKind === "workday_source_options_unavailable"
+            ? "Workday Source popup opened but no source options were visible to choose."
+            : "Workday popup opened but no selectable option was visible.",
         options: [],
       });
       await closePopup(field);
       return {
         ok: false,
-        reason: "workday_popup_options_missing",
+        reason: missingKind,
         afterState: workdayCommittedState(field),
       };
     }

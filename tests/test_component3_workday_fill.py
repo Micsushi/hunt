@@ -167,6 +167,120 @@ def test_workday_v2_empty_popup_rejects_wrong_committed_button_value():
     assert fill_steps[-1]["reason"] == "workday_popup_options_missing"
 
 
+def test_workday_v2_source_prompt_drills_into_category_and_selects_leaf():
+    if sync_playwright is None:
+        pytest.skip("playwright is required for the Workday C3 fill fixture")
+
+    fill_v2_js = _module_to_browser_script(
+        _load_script(REPO_ROOT / "executioner/src/ats/workday/fill-v2.js")
+    )
+
+    with sync_playwright() as playwright:
+        try:
+            browser = playwright.chromium.launch()
+        except PlaywrightError as error:
+            pytest.skip(f"playwright chromium is unavailable: {error}")
+
+        page = browser.new_page()
+        page.set_content(
+            """
+            <html>
+              <body>
+                <div data-automation-id="applyFlowMyInfoPage">
+                  <div data-automation-id="formField-source" data-fkit-id="source--source">
+                    <label for="source--source">How Did You Hear About Us?*</label>
+                    <div data-automation-id="multiSelectContainer" data-uxi-widget-type="multiselect">
+                      <div data-automation-id="multiselectInputContainer">
+                        <input id="source--source" placeholder="Search" aria-required="true" data-uxi-widget-type="selectinput" data-uxi-multiselect-id="source-list" />
+                        <button type="button" data-automation-id="promptSearchButton">List</button>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+                <script>
+                  const container = document.querySelector("[data-automation-id='multiSelectContainer']");
+                  function showCategories() {
+                    if (document.querySelector("#source-menu")) return;
+                    setTimeout(() => {
+                      if (document.querySelector("#source-menu")) return;
+                      document.body.insertAdjacentHTML(
+                        "beforeend",
+                        `<div id="source-menu" role="listbox" data-automation-id="activeListContainer">
+                          <div role="option" data-automation-id="promptOption" data-hunt-prompt-category="true" onclick="showSourceChildren('Alumni Portal')">Alumni Portal <svg></svg></div>
+                          <div role="option" data-automation-id="promptOption" data-hunt-prompt-category="true" onclick="showSourceChildren('Job Sites')">Job Sites <svg></svg></div>
+                          <div role="option" data-automation-id="promptOption" data-hunt-prompt-category="true" onclick="showSourceChildren('Social Media')">Social Media <svg></svg></div>
+                        </div>`
+                      );
+                    }, 420);
+                  }
+                  window.showSourceChildren = (category) => {
+                    const menu = document.querySelector("#source-menu");
+                    menu.innerHTML = `<button type="button" data-automation-id="promptBackButton">Back</button><h4>${category}</h4>`;
+                    setTimeout(() => {
+                      const leaf = category === "Social Media" ? "LinkedIn" : `${category} Generic`;
+                      menu.insertAdjacentHTML(
+                        "beforeend",
+                        `<div role="option" data-automation-id="promptOption" onclick="selectSource('${leaf}')">
+                          <input type="radio" data-automation-id="radioBtn" /> ${leaf}
+                        </div>`
+                      );
+                    }, 380);
+                  };
+                  window.selectSource = (leaf) => {
+                    container.insertAdjacentHTML(
+                      "beforeend",
+                      `<div role="option" data-automation-id="selectedItem" aria-label="${leaf}, press delete to clear value.">${leaf}</div>`
+                    );
+                    document.querySelector("#source-menu")?.remove();
+                  };
+                  document.querySelector("#source--source").addEventListener("click", showCategories);
+                  document.querySelector("[data-automation-id='promptSearchButton']").addEventListener("click", showCategories);
+                </script>
+              </body>
+            </html>
+            """
+        )
+        _load_v2_workday_scripts(page)
+        page.add_script_tag(content=fill_v2_js)
+        result = page.evaluate(
+            """
+            async () => {
+              const fill = createWorkdayFillV2Function();
+              return await fill({
+                profile: {
+                  applicationSourceCategory: "Job Board",
+                  applicationSource: "LinkedIn",
+                },
+                settings: { fillRequiredOnly: true, useFieldPipelineV2: true },
+                activeApplyContext: {},
+                defaultResume: {},
+                fillRunId: "workday_source_tree",
+              });
+            }
+            """
+        )
+        selected = page.evaluate(
+            """
+            () => document.querySelector("[data-automation-id='selectedItem']")?.textContent.trim() || ""
+            """
+        )
+        browser.close()
+
+    fields = {entry["fieldId"]: entry for entry in result["v2Audit"]["fields"]}
+    source = fields["source--source"]
+    category_events = [
+        event
+        for event in result["v2Audit"]["events"]
+        if event.get("action") == "workday_prompt_category_options"
+    ]
+
+    assert result["ok"] is True
+    assert selected == "LinkedIn"
+    assert source["filled"] is True
+    assert category_events
+    assert any("LinkedIn" in event["detail"]["options"] for event in category_events)
+
+
 def test_workday_v2_uses_specific_identity_for_grouped_my_info_fields():
     if sync_playwright is None:
         pytest.skip("playwright is required for the Workday C3 fill fixture")
@@ -633,6 +747,109 @@ def test_workday_v2_repeatables_match_profile_and_clear_deletes_rows_and_resume(
     assert result["clearResult"]["clearedFieldCount"] >= 6
     assert clear_events
     assert clear_events[-1]["detail"]["deletedResume"] == 1
+
+
+def test_workday_v2_repeatables_repairs_missing_degree_choice_on_dirty_row():
+    if sync_playwright is None:
+        pytest.skip("playwright is required for the Workday C3 fill fixture")
+
+    fill_v2_js = _module_to_browser_script(
+        _load_script(REPO_ROOT / "executioner/src/ats/workday/fill-v2.js")
+    )
+
+    with sync_playwright() as playwright:
+        try:
+            browser = playwright.chromium.launch()
+        except PlaywrightError as error:
+            pytest.skip(f"playwright chromium is unavailable: {error}")
+
+        page = browser.new_page()
+        page.set_content(
+            """
+            <html>
+              <body>
+                <h2>My Experience</h2>
+                <section id="education">
+                  <h3>Education</h3>
+                  <div class="row" data-kind="education">
+                    <h4>Education 1</h4>
+                    <label>School or University*<input id="education-38--schoolName" value="University of Alberta"></label>
+                    <label>Degree*
+                      <button id="education-38--degree" type="button" aria-haspopup="listbox" aria-label="Degree Select One Required">Select One</button>
+                    </label>
+                    <label>Overall Result (GPA)<input id="education-38--gradeAverage" value="3.7"></label>
+                  </div>
+                  <button id="education-add" type="button" data-automation-id="add-button">Add Another</button>
+                </section>
+                <script>
+                  document.querySelector("#education-38--degree").addEventListener("click", () => {
+                    if (document.querySelector("#degree-options")) return;
+                    document.body.insertAdjacentHTML(
+                      "beforeend",
+                      `<div id="degree-options" role="listbox">
+                        <div role="option" onclick="document.querySelector('#education-38--degree').textContent='Bachelors'; this.closest('#degree-options').remove()">Bachelors</div>
+                        <div role="option" onclick="document.querySelector('#education-38--degree').textContent='Masters'; this.closest('#degree-options').remove()">Masters</div>
+                      </div>`
+                    );
+                  });
+                </script>
+              </body>
+            </html>
+            """
+        )
+        _load_v2_workday_scripts(page)
+        page.add_script_tag(content=fill_v2_js)
+        result = page.evaluate(
+            """
+            async () => {
+              const fill = createWorkdayFillV2Function();
+              return await fill({
+                profile: {
+                  educationHistory: [
+                    {
+                      university: "University of Alberta",
+                      degree: "Bachelor's Degree",
+                      degreeLevel: "Bachelors",
+                      gpa: "3.7",
+                    },
+                  ],
+                },
+                settings: {
+                  fillRequiredOnly: true,
+                  useFieldPipelineV2: true,
+                },
+                activeApplyContext: {},
+                defaultResume: {},
+                fillRunId: "workday_degree_repair",
+              });
+            }
+            """
+        )
+        values = page.evaluate(
+            """
+            () => ({
+              school: document.querySelector("#education-38--schoolName").value,
+              degree: document.querySelector("#education-38--degree").textContent.trim(),
+              gpa: document.querySelector("#education-38--gradeAverage").value,
+            })
+            """
+        )
+        browser.close()
+
+    sections = {
+        entry["name"]: entry
+        for entry in result["fieldInventory"]
+        if entry["kind"] == "workdaySection"
+    }
+
+    assert result["ok"] is True
+    assert values == {
+        "school": "University of Alberta",
+        "degree": "Bachelors",
+        "gpa": "3.7",
+    }
+    assert sections["Education"]["filled"] is True
+    assert sections["Education"]["skippedReason"] == ""
 
 
 def test_workday_bdo_questionnaire_defaults_and_location_answer():

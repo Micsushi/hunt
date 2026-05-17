@@ -1,69 +1,92 @@
 # C4 Agent Workers
 
-This is the operator contract for C3, OpenClaw, and Hermes workers.
+C4 uses agent workers (Hermes, OpenClaw) for two bounded tasks: investigating novel ATS failures that C3 cannot handle, and attempting CAPTCHA fallback when no extension is available. Agents do not fill application forms. C3 owns all fill work.
 
-C4 owns the job/run state, leases, evidence, manual-review routing, and final submit gate. Workers own exactly one browser fill attempt at a time.
+## When Agents Are Triggered
 
-## Proven vs Not Proven
+**Investigation trigger:** C3 returns `unknown_widget` or a novel failure code that C4 does not have a hardcoded handler for. C4 queues the run for investigation.
 
-Proven:
+**CAPTCHA fallback trigger:** C3 reports a CAPTCHA failure code and no CAPTCHA extension is available or the extension failed. Agent attempts to solve it. If the agent fails, C4 escalates to Telegram.
 
-- C4 can create a run, request fill, lease the fill to one worker, receive heartbeats, record a result, recover stale leases, and keep submit human-gated.
-- `python test.py c4` covers the worker lease API and the OpenClaw/Hermes prompt launcher.
-- `python smoke.py c4` covers the Postgres-backed C4 API flow without direct DB mutation.
+Agents are never triggered for normal fill work. If C3 fills successfully, no agent is involved.
 
-Not proven yet:
+## Investigation Worker Contract
 
-- Live C3 extension polling and filling a browser page.
-- Live OpenClaw browser fill.
-- Live Hermes browser fill.
-- Live ATS proof with screenshot/HTML evidence.
+The agent receives a bounded investigation prompt containing:
+
+- Job details: company, title, apply URL.
+- C3 failure context: failure code, unknown widget details (selector, role, label, HTML excerpt).
+- Instructions to observe the page and produce a structured report.
+- The result endpoint to POST to when done.
+
+The agent must:
+
+1. Open only the claimed `apply_url`.
+2. Navigate to the page state where C3 failed if possible.
+3. Observe the blocking element: selector, role, label, HTML, framework hints.
+4. Take at least one screenshot.
+5. Capture an HTML snapshot of the relevant section.
+6. Write `agent_findings` (freetext: what it observed) and `suggested_fix_area` (which part of C3 code would fix it).
+7. POST the investigation result to C4.
+8. Stop.
+
+The agent must not:
+
+- Fill any application field.
+- Click any submit, apply, or complete button.
+- Interact with Hunt's database.
+- Browse unrelated pages, search for jobs, send messages, or email anyone.
+- Invent findings. If the page state cannot be reached, report `inconclusive`.
+
+## Investigation Result Schema
+
+```json
+{
+  "status": "complete | inconclusive | access_blocked | captcha_blocked",
+  "failure_code_confirmed": "unknown_widget | captcha_hcaptcha | ...",
+  "page_observed": "URL of the page where the issue was found",
+  "widget_details": {
+    "selector": "CSS or ARIA selector",
+    "role": "ARIA role or element type",
+    "label": "visible label text",
+    "html_excerpt": "relevant HTML snippet",
+    "framework_hints": "React, Vue, Workday, Oracle, etc."
+  },
+  "agent_findings": "freetext: what the agent saw and why C3 likely failed",
+  "suggested_fix_area": "e.g. generic V2 option collection, Workday listbox driver",
+  "screenshots": ["path/to/screenshot.png"],
+  "html_snapshot": "path/to/snapshot.html",
+  "notes": ""
+}
+```
+
+C4 merges these fields into the run's `failure_report.json` and appends to `logs/failures.jsonl`.
+
+## CAPTCHA Worker Contract
+
+The agent receives a CAPTCHA-specific prompt containing:
+
+- The apply URL.
+- CAPTCHA type (hCaptcha, reCAPTCHA, Cloudflare, unknown).
+- A screenshot of the CAPTCHA if available.
+- Instructions to attempt solving only the CAPTCHA and report result.
+
+The agent must not fill any other fields or navigate beyond the CAPTCHA page.
+
+If the agent cannot solve the CAPTCHA, it returns `status: failed` and C4 escalates to the operator via Telegram.
 
 ## Worker Lanes
 
-Use these runtime names in C4:
-
-- `c3_extension`: Chrome extension bridge.
-- `openclaw_isolated`: OpenClaw with an isolated browser profile. Use this first.
-- `openclaw_attached`: OpenClaw attached to a signed-in user browser. Use only after isolated proof.
-- `hermes_local`: Hermes on Linux or WSL2. Native Windows exists as early beta, but WSL2 remains safer for Hunt proof work.
-- `hermes_server`: Hermes on server2/Linux, preferably with Docker or SSH backend.
-
-For Windows operators, prefer WSL2 for Hermes unless intentionally testing the native Windows beta.
-
-## Safe Worker Lifecycle
-
-```text
-run is apply_prepared
-  -> operator or scheduler requests fill
-  -> worker claims exactly one fill
-  -> worker opens only the claimed apply URL
-  -> worker heartbeats while active
-  -> worker fills only grounded fields
-  -> worker stops before final submit
-  -> worker posts one normalized result
-  -> C4 decides awaiting_submit_approval, manual_review, or failed
-```
-
-Hard rules:
-
-- No worker gets DB credentials.
-- No worker claims a second lease after finishing one result.
-- No worker clicks final submit.
-- No worker browses unrelated jobs, messages people, sends email, or edits Hunt data outside the worker artifact folder.
-- CAPTCHA, MFA, OTP, login trouble, account lock, hostname drift, unsupported page state, low-confidence required answers, and missing required fields become manual review.
+- `openclaw_isolated`: OpenClaw isolated browser profile. First choice for investigation on Windows.
+- `openclaw_attached`: OpenClaw attached user browser. Only after isolated proof.
+- `hermes_local`: Hermes local or WSL2. Use for Linux/server2 investigation.
+- `hermes_server`: Hermes server2/Linux worker.
 
 ## HTTP Contract
 
-All routes require `Authorization: Bearer $HUNT_SERVICE_TOKEN` when `HUNT_SERVICE_TOKEN` is configured.
+All routes require `Authorization: Bearer $HUNT_SERVICE_TOKEN` when configured.
 
-Request fill:
-
-```http
-POST /runs/{run_id}/request-fill
-```
-
-Claim one fill:
+Claim one investigation lease:
 
 ```http
 POST /workers/claim
@@ -72,9 +95,10 @@ Content-Type: application/json
 {
   "runtime_name": "openclaw_isolated",
   "browser_lane": "isolated",
-  "lease_seconds": 900,
+  "lease_seconds": 600,
   "worker_metadata": {
-    "launcher": "coordinator.agent_worker"
+    "launcher": "coordinator.agent_worker",
+    "task": "investigation"
   }
 }
 ```
@@ -85,12 +109,10 @@ Heartbeat:
 POST /workers/{lease_id}/heartbeat
 Content-Type: application/json
 
-{
-  "lease_seconds": 900
-}
+{ "lease_seconds": 600 }
 ```
 
-Complete with result:
+Post investigation result:
 
 ```http
 POST /workers/{lease_id}/result
@@ -98,59 +120,35 @@ Content-Type: application/json
 
 {
   "payload": {
-    "status": "ok",
-    "resumeUploadOk": true,
-    "generatedAnswersUsed": false,
-    "finalUrl": "https://example.com/apply/review",
-    "missingRequiredFields": [],
-    "lowConfidenceAnswers": [],
-    "manualReviewFlags": [],
-    "evidence": {
-      "stoppedBeforeSubmit": true,
-      "notes": "",
-      "screenshots": [],
-      "htmlSnapshots": []
-    }
+    "status": "complete",
+    "failure_code_confirmed": "unknown_widget",
+    "page_observed": "https://example.com/apply/step2",
+    "widget_details": { ... },
+    "agent_findings": "...",
+    "suggested_fix_area": "...",
+    "screenshots": [],
+    "html_snapshot": ""
   }
 }
 ```
 
-Reconcile stale work:
+Reconcile stale:
 
 ```http
 POST /maintenance/reconcile-stale
 Content-Type: application/json
 
-{
-  "fill_timeout_minutes": 30,
-  "submit_confirm_timeout_minutes": 120
-}
+{ "fill_timeout_minutes": 30 }
 ```
 
-## Result Statuses
-
-Use `ok` when the fill reached a safe review/submit page or went as far as safely possible without intervention.
-
-Use `manual_review` when the operator must intervene, including login, CAPTCHA, MFA, missing required fields, unsupported widgets, hostname drift, or low-confidence required answers.
-
-Use `failed` for runtime or browser failures that cannot be recovered by the worker.
-
-C4 will route:
-
-- `ok` with no review flags: `awaiting_submit_approval`
-- `manual_review` or any review flags: `manual_review`
-- `failed`: `failed`
-
 ## One-Shot Launcher
-
-The launcher claims one lease and writes artifacts. It does not launch OpenClaw or Hermes unless `--execute-agent` is present.
 
 ```powershell
 python -m coordinator.agent_worker --runtime openclaw_isolated
 python -m coordinator.agent_worker --runtime hermes_local
 ```
 
-Artifacts:
+Artifacts written under:
 
 ```text
 .runtime/c4-agent/<runtime>/<lease_id>/claim.json
@@ -158,27 +156,34 @@ Artifacts:
 .runtime/c4-agent/<runtime>/<lease_id>/result_template.json
 ```
 
-Safe protocol-only completion:
+Protocol-only test without launching a browser:
 
 ```powershell
 python -m coordinator.agent_worker --runtime openclaw_isolated --mock-result
 ```
 
-External agent execution:
+Execute with agent:
 
 ```powershell
 python -m coordinator.agent_worker --runtime openclaw_isolated --execute-agent
-```
-
-Hermes LLM provider selection:
-
-```powershell
-$env:HUNT_LLM_PROVIDER = "ollama"
-$env:HUNT_C4_LLM_PROVIDER = "codex_oauth"
 python -m coordinator.agent_worker --runtime hermes_local --execute-agent
 ```
 
-Provider precedence is command flag, component env, shared env, then local Ollama. For Hermes, Hunt maps `ollama` to Hermes `custom` for the local Ollama OpenAI-compatible endpoint, and maps `codex_oauth` to `openai-codex`; `anthropic`, `gemini`, and `openrouter` use their Hermes/API-key provider setup. If Hermes is not on PATH, set `HUNT_HERMES_COMMAND` or use the default local Windows install path under `%LOCALAPPDATA%\hermes\hermes-agent\venv\Scripts\hermes.exe`.
+## Model Requirements
+
+Investigation and CAPTCHA work requires a capable model. Local small models (under 30B) are not reliable for:
+
+- Multi-step page navigation with state tracking.
+- Accurate structural observation and reporting.
+- Recognizing when to stop vs continue.
+
+Recommended: GPT-4o via ChatGPT/Codex OAuth (no API billing with ChatGPT Plus subscription).
+
+```powershell
+$env:HUNT_C4_LLM_PROVIDER = "codex_oauth"
+```
+
+Local Ollama is suitable for testing the lease/heartbeat/result protocol only.
 
 ## Wrapper Commands
 
@@ -207,30 +212,17 @@ RUNTIME=hermes_local ./scripts/c4_hermes_worker.sh --execute-agent
 
 ## Troubleshooting
 
-`no_pending_fills`: create or pick a run, then call `request-fill`.
+`no_pending_fills`: no investigation is queued. Trigger one manually with `POST /runs/{run_id}/investigate` or queue a test run.
 
 `401`: export the same `HUNT_SERVICE_TOKEN` used by the C4 service.
 
-`Worker lease has expired`: do not reuse the old prompt. Reconcile stale work and claim again.
+`Worker lease has expired`: reconcile stale and claim again.
 
-`openclaw` or `hermes` command not found: install the runtime or run without `--execute-agent` to inspect artifacts only.
-
-Native Windows plus Hermes: native Windows is early beta. Prefer WSL2 for Hunt until the beta path has its own fixture proof.
+`openclaw` or `hermes` not found: install the runtime or run without `--execute-agent` to inspect artifacts only.
 
 ## Verification
 
-Code-level verification:
-
 ```powershell
 python test.py c4
-python quality.py c4
-python quality.py shared
-```
-
-Postgres/API smoke:
-
-```powershell
 python smoke.py c4
 ```
-
-The smoke does not launch OpenClaw, Hermes, or a browser worker.

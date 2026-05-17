@@ -434,9 +434,7 @@ def test_generic_v2_file_driver_requires_resume_upload_answer():
 
 
 def test_generic_v2_oracle_grid_combobox_guards():
-    option_collector = _load_script(
-        REPO_ROOT / "executioner/src/shared/v2/option-collector.js"
-    )
+    option_collector = _load_script(REPO_ROOT / "executioner/src/shared/v2/option-collector.js")
     option_matcher = _load_script(REPO_ROOT / "executioner/src/shared/v2/option-matcher.js")
     field_catalog = _load_script(REPO_ROOT / "executioner/src/shared/v2/field-catalog.js")
 
@@ -451,7 +449,7 @@ def test_generic_v2_oracle_grid_combobox_guards():
     assert "stateSatisfiesAnswer" in _load_script(
         REPO_ROOT / "executioner/src/shared/v2/field-drivers.js"
     )
-    assert "Alberta: [\"AB\"]" in field_catalog
+    assert 'Alberta: ["AB"]' in field_catalog
 
 
 def test_generic_v2_clear_removes_oracle_uploaded_attachment_card():
@@ -743,9 +741,7 @@ def test_generic_v2_fills_oracle_segmented_yes_no_buttons():
     assert result["ok"] is True
     assert values == ["Yes", "No", "No", "No"]
     segmented = [
-        entry
-        for entry in result["fieldInventory"]
-        if entry["kind"] == "segmentedButtonGroup"
+        entry for entry in result["fieldInventory"] if entry["kind"] == "segmentedButtonGroup"
     ]
     assert len(segmented) == 4
     assert all(entry["filled"] for entry in segmented)
@@ -758,9 +754,7 @@ def test_generic_v2_fills_oracle_segmented_yes_no_buttons():
 
 
 def test_generic_v2_clear_has_uploaded_file_card_guard():
-    clear_pipeline = _load_script(
-        REPO_ROOT / "executioner/src/shared/v2/clear-pipeline.js"
-    )
+    clear_pipeline = _load_script(REPO_ROOT / "executioner/src/shared/v2/clear-pipeline.js")
 
     assert "collectUploadedFileNodes" in clear_pipeline
     assert "clearUploadedFileControls" in clear_pipeline
@@ -774,9 +768,7 @@ def test_generic_v2_clear_has_uploaded_file_card_guard():
 
 def test_generic_v2_segmented_button_guards():
     ui_inspector = _load_script(REPO_ROOT / "executioner/src/shared/v2/ui-inspector.js")
-    option_collector = _load_script(
-        REPO_ROOT / "executioner/src/shared/v2/option-collector.js"
-    )
+    option_collector = _load_script(REPO_ROOT / "executioner/src/shared/v2/option-collector.js")
     field_drivers = _load_script(REPO_ROOT / "executioner/src/shared/v2/field-drivers.js")
 
     assert "segmented_button_group" in ui_inspector
@@ -799,9 +791,7 @@ def test_generic_v2_segmented_pill_groups_are_collected_before_broad_parents():
     assert "container.contains(group.container)" in ui_inspector
     assert "isSegmentedGroupRequired" in ui_inspector
     assert ".input-row" in ui_inspector
-    field_pipeline = _load_script(
-        REPO_ROOT / "executioner/src/shared/v2/field-pipeline.js"
-    )
+    field_pipeline = _load_script(REPO_ROOT / "executioner/src/shared/v2/field-pipeline.js")
     assert "page_rescanned" in field_pipeline
     assert "conditional_fields_check" in field_pipeline
     assert "post_submit_validation_signature_guard" in field_pipeline

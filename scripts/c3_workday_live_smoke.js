@@ -18,7 +18,10 @@ function loadDotEnv(filePath = ".env") {
     const index = trimmed.indexOf("=");
     const key = trimmed.slice(0, index).trim();
     let value = trimmed.slice(index + 1).trim();
-    if ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'"))) {
+    if (
+      (value.startsWith('"') && value.endsWith('"')) ||
+      (value.startsWith("'") && value.endsWith("'"))
+    ) {
       value = value.slice(1, -1);
     }
     if (key && process.env[key] === undefined) process.env[key] = value;
@@ -36,7 +39,7 @@ function auditTimestamp() {
 
 function parseArgs(argv) {
   const args = {
-    mode: "resume",
+    mode: "manual",
     cdpPort: 9222,
     jobUrl: DEFAULT_JOB_URL,
     resumePath: path.resolve(process.cwd(), "main.pdf"),
@@ -60,6 +63,7 @@ function parseArgs(argv) {
     accountPassword: process.env.HUNT_C3_TEST_ACCOUNT_PASSWORD || "",
     auditJson: process.env.HUNT_C3_AUDIT_JSON || "",
     noAuditJson: false,
+    closeOtherWorkdayTabs: false,
   };
   for (let i = 2; i < argv.length; i += 1) {
     const arg = argv[i];
@@ -125,6 +129,8 @@ function parseArgs(argv) {
       i += 1;
     } else if (arg === "--no-audit-json") {
       args.noAuditJson = true;
+    } else if (arg === "--close-other-workday-tabs") {
+      args.closeOtherWorkdayTabs = true;
     } else if (arg === "--help") {
       args.help = true;
     } else {
@@ -171,6 +177,7 @@ function usage() {
     "  --account-email <email> Optional account/profile email override",
     "  --audit-json <path> Write full page/retry/value audit JSON, default logs/c3_workday_audit_<timestamp>.json",
     "  --no-audit-json Disable audit JSON file writing",
+    "  --close-other-workday-tabs Close other Workday apply tabs before filling this site",
   ].join("\n");
 }
 
@@ -241,7 +248,10 @@ function makeSeedPayload(resumePath, applyUrl, args = {}) {
   const pdfFileName = path.basename(resumePath);
   const pdfDataUrl = `data:application/pdf;base64,${pdf.toString("base64")}`;
   const profile = withWorkdayProfileAliases(
-    makeWorkdayProfileDefaults({ accountEmail: args.accountEmail, accountPassword: args.accountPassword }),
+    makeWorkdayProfileDefaults({
+      accountEmail: args.accountEmail,
+      accountPassword: args.accountPassword,
+    }),
   );
   const inferredContext = inferWorkdayContext(applyUrl);
   const defaultResume = {
@@ -349,7 +359,7 @@ async function ensurePageTarget(port, applyUrl) {
       (url.startsWith(applyBase) ||
         normalizeWorkdayPathname(parsed.pathname) === applyPath ||
         normalizeWorkdayPathname(parsed.pathname).includes(`${applyPath}/`)) &&
-      !/create account|sign in|error|ok/i.test(title)
+      !/error|ok/i.test(title)
     );
   };
   let targets = await getTargets(port);
@@ -361,7 +371,7 @@ async function ensurePageTarget(port, applyUrl) {
         (item) =>
           String(item.url || "").includes(applyHost) &&
           /\/apply(?:\/|\?|$)/.test(String(item.url || "")) &&
-          !/create account|sign in|error|ok/i.test(String(item.title || "")),
+          !/error|ok/i.test(String(item.title || "")),
       );
   if (!target) {
     await httpText(port, `/json/new?${encodeURIComponent(applyUrl)}`, "PUT");
@@ -385,6 +395,36 @@ function normalizeWorkdayPathname(pathname) {
     .replace(/\/$/, "");
 }
 
+function isWorkdayApplyTarget(target) {
+  try {
+    const url = new URL(String(target?.url || ""));
+    return (
+      /\.wd\d+\.myworkdayjobs\.com$/i.test(url.hostname) &&
+      /\/apply(?:\/|$)/i.test(normalizeWorkdayPathname(url.pathname))
+    );
+  } catch (_error) {
+    return false;
+  }
+}
+
+async function closeOtherWorkdayTabs(port, keepTarget) {
+  const targets = await getTargets(port);
+  const keepId = String(keepTarget?.id || "");
+  const closed = [];
+  for (const target of targets) {
+    if (String(target.id || "") === keepId || !isWorkdayApplyTarget(target)) {
+      continue;
+    }
+    await httpText(port, `/json/close/${encodeURIComponent(target.id)}`);
+    closed.push({
+      id: target.id,
+      title: target.title || "",
+      url: target.url || "",
+    });
+  }
+  return closed;
+}
+
 async function connectTarget(target) {
   return new CdpClient(target.webSocketDebuggerUrl).connect();
 }
@@ -393,28 +433,36 @@ async function seedExtension(optionsClient, seedPayload, args = {}) {
   return optionsClient.evaluate(
     `(async () => {
       const payload = ${js(seedPayload)};
+      const sameJson = (a, b) => JSON.stringify(a || null) === JSON.stringify(b || null);
       const storedSettings = await chrome.storage.sync.get("hunt.apply.settings");
-      await chrome.storage.sync.set({
-        "hunt.apply.settings": {
-          ...(storedSettings["hunt.apply.settings"] || {}),
-          settingsVersion: 4,
-          autoClickNextAfterFill: ${Boolean(args.extensionAutoNext)},
-          autoAccountSignupLoginEnabled: true,
-          autoEmailVerificationEnabled: true
-        }
-      });
-      await new Promise((resolve) => setTimeout(resolve, 500));
-      await chrome.storage.local.set({
-        "hunt.apply.profile": payload.profile,
-        "hunt.apply.defaultResume": payload.defaultResume,
-        "hunt.apply.activeApplyContext": payload.activeApplyContext
-      });
-      await new Promise((resolve) => setTimeout(resolve, 500));
-      await chrome.storage.local.set({
-        "hunt.apply.profile": payload.profile,
-        "hunt.apply.defaultResume": payload.defaultResume,
-        "hunt.apply.activeApplyContext": payload.activeApplyContext
-      });
+      const nextSettings = {
+        ...(storedSettings["hunt.apply.settings"] || {}),
+        settingsVersion: 4,
+        autoClickNextAfterFill: ${Boolean(args.extensionAutoNext)},
+        autoAccountSignupLoginEnabled: true,
+        autoEmailVerificationEnabled: true
+      };
+      if (!sameJson(storedSettings["hunt.apply.settings"], nextSettings)) {
+        await chrome.storage.sync.set({ "hunt.apply.settings": nextSettings });
+      }
+      const storedLocal = await chrome.storage.local.get([
+        "hunt.apply.profile",
+        "hunt.apply.defaultResume",
+        "hunt.apply.activeApplyContext"
+      ]);
+      const localPatch = {};
+      if (!sameJson(storedLocal["hunt.apply.profile"], payload.profile)) {
+        localPatch["hunt.apply.profile"] = payload.profile;
+      }
+      if (!sameJson(storedLocal["hunt.apply.defaultResume"], payload.defaultResume)) {
+        localPatch["hunt.apply.defaultResume"] = payload.defaultResume;
+      }
+      if (!sameJson(storedLocal["hunt.apply.activeApplyContext"], payload.activeApplyContext)) {
+        localPatch["hunt.apply.activeApplyContext"] = payload.activeApplyContext;
+      }
+      if (Object.keys(localPatch).length) {
+        await chrome.storage.local.set(localPatch);
+      }
       return await chrome.storage.local.get([
         "hunt.apply.profile",
         "hunt.apply.defaultResume",
@@ -428,12 +476,15 @@ async function setExtensionAutoNext(optionsClient, enabled) {
   return optionsClient.evaluate(
     `(async () => {
       const storedSettings = await chrome.storage.sync.get("hunt.apply.settings");
-      await chrome.storage.sync.set({
-        "hunt.apply.settings": {
-          ...(storedSettings["hunt.apply.settings"] || {}),
-          autoClickNextAfterFill: ${Boolean(enabled)}
-        }
-      });
+      const current = storedSettings["hunt.apply.settings"] || {};
+      if (Boolean(current.autoClickNextAfterFill) !== ${Boolean(enabled)}) {
+        await chrome.storage.sync.set({
+          "hunt.apply.settings": {
+            ...current,
+            autoClickNextAfterFill: ${Boolean(enabled)}
+          }
+        });
+      }
       return { ok: true, autoClickNextAfterFill: ${Boolean(enabled)} };
     })()`,
   );
@@ -2232,14 +2283,19 @@ async function run() {
     args.extensionId,
   );
   const pageTarget = await ensurePageTarget(args.cdpPort, applyUrl);
+  const closedWorkdayTabs = args.closeOtherWorkdayTabs
+    ? await closeOtherWorkdayTabs(args.cdpPort, pageTarget)
+    : [];
   const optionsClient = await connectTarget(optionsTarget);
   const pageClient = await connectTarget(pageTarget);
 
   try {
     const seedPayload = makeSeedPayload(args.resumePath, applyUrl, args);
     await seedExtension(optionsClient, seedPayload, args);
+    await pageClient.send("Page.bringToFront");
     if (!args.preserveCurrent) {
       await navigate(pageClient, applyUrl);
+      await pageClient.send("Page.bringToFront");
     }
     const applyEntry = await clickApplyManuallyEntry(pageClient);
     logWorkflowPhase(
@@ -2268,6 +2324,11 @@ async function run() {
       ok: false,
       mode: args.mode,
       workflow: {
+        cleanup: {
+          phase: "cleanup",
+          closedWorkdayTabCount: closedWorkdayTabs.length,
+          closedWorkdayTabs,
+        },
         auth: {
           phase: "auth",
           skipped: true,
@@ -2342,6 +2403,23 @@ async function run() {
         }
         const fill = await fillCurrentPage(optionsClient, applyUrl, args);
         const fillSummary = summarizeFill(fill);
+        if (fillSummary.manualReviewReasons.includes("fill_timeout")) {
+          fills.push({
+            fillIndex: fillIndex + 1,
+            fill: fillSummary,
+            afterFill: before,
+          });
+          audit.pages.push(
+            buildFillAudit({
+              pageIndex: i + 1,
+              fillIndex: fillIndex + 1,
+              before,
+              afterFill: before,
+              fillSummary,
+            }),
+          );
+          break;
+        }
         const phoneCountryUnfilled = fillSummary.unfilledRequired.some(
           (field) =>
             /phonecountrycode|country\s*phone\s*code/i.test(
@@ -2582,6 +2660,11 @@ async function run() {
         },
       });
 
+      if (
+        fills.some((f) => f.fill?.manualReviewReasons?.includes("fill_timeout"))
+      ) {
+        break;
+      }
       if (args.stopAfterFill) {
         break;
       }
@@ -2648,6 +2731,22 @@ async function run() {
       if (!afterFill.hasNext) {
         break;
       }
+      // If the fill's own nextAction already advanced the page (e.g. Autofill with Resume
+      // clicks Next internally, landing on My Information), skip the outer Next click so
+      // the next loop iteration fills the intermediate page instead of skipping it.
+      const fillAdvancedPage =
+        (afterFill.currentStep?.current ?? 0) >
+        (before.currentStep?.current ?? 0);
+      if (fillAdvancedPage) {
+        timeline[timeline.length - 1].next = {
+          clicked: false,
+          auto: false,
+          reason: "fill_already_advanced_page",
+          message: `Fill already advanced from step ${before.currentStep?.current} to step ${afterFill.currentStep?.current}; skipping outer Next click.`,
+        };
+        await sleep(1200);
+        continue;
+      }
       const next = await clickNext(pageClient);
       if (next.workdayRuntimeError) {
         next.runtimeRecovery = await recoverWorkdayRuntimeError(
@@ -2700,6 +2799,15 @@ async function run() {
 }
 
 run().catch((error) => {
-  console.error(error.stack || error.message);
+  const message = error?.stack || error?.message || String(error);
+  console.error(message);
+  if (/MAX_WRITE_OPERATIONS_PER_MINUTE/i.test(message)) {
+    console.error(
+      [
+        "[c3][storage_quota][blocked] Chrome extension storage write quota was hit.",
+        "Run one site at a time, avoid repeated setup writes, wait about a minute, and use --close-other-workday-tabs to remove stale Workday apply tabs before retrying.",
+      ].join(" "),
+    );
+  }
   process.exit(1);
 });

@@ -226,10 +226,9 @@ def run_external_agent_with_heartbeat(
 
 def _mock_result_payload(claim: dict[str, Any]) -> dict[str, Any]:
     payload = build_result_template(claim)
-    payload["status"] = "ok"
-    payload["resumeUploadOk"] = True
-    payload["evidence"]["notes"] = "C4 agent worker mock result; no browser was launched."
-    payload["evidence"]["mock"] = True
+    payload["status"] = "complete"
+    payload["agent_findings"] = "C4 agent worker mock result; no browser was launched."
+    payload["notes"] = "mock"
     return payload
 
 
