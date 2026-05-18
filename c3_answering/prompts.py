@@ -28,8 +28,33 @@ def normalize_question_text(value: str) -> str:
     return normalize_space(text)
 
 
+def clean_question_label(value: str) -> str:
+    text = normalize_space(value)
+    text = re.sub(
+        r"\bError:\s*The field\s+(.+?)\s+is required and must have a value\.?",
+        " ",
+        text,
+        flags=re.IGNORECASE,
+    )
+    text = re.sub(r"\bError:\s*[^.]+\.?", " ", text, flags=re.IGNORECASE)
+    text = re.sub(r"\bprimaryquestionnaire--[a-z0-9-]+\b", " ", text, flags=re.IGNORECASE)
+    text = re.sub(r"\bworkexperience-\d+--[a-z0-9-]+\b", " ", text, flags=re.IGNORECASE)
+    text = re.sub(r"\beducation-\d+--[a-z0-9-]+\b", " ", text, flags=re.IGNORECASE)
+    text = re.sub(r"\b[a-z]+--[a-z0-9-]+\b", " ", text, flags=re.IGNORECASE)
+    text = re.sub(r"\b(textarea|textbox|button|combobox|checkbox|required)\b", " ", text, flags=re.IGNORECASE)
+    pieces = []
+    seen = set()
+    for piece in re.split(r"(?<=[.?])\s+|\s{2,}", text):
+        clean_piece = normalize_space(piece)
+        key = clean_piece.lower()
+        if clean_piece and key not in seen:
+            pieces.append(clean_piece)
+            seen.add(key)
+    return normalize_space(" ".join(pieces)) or normalize_space(value)
+
+
 def build_standard_question(field_label: str, options: list[str]) -> str:
-    question = normalize_question_text(field_label)
+    question = normalize_question_text(clean_question_label(field_label))
     normalized_options = [normalize_space(option) for option in options if normalize_space(option)]
     return f"question: {question}\noptions: {json.dumps(normalized_options, ensure_ascii=False)}"
 
@@ -55,7 +80,33 @@ def compact_profile(profile: dict[str, Any]) -> dict[str, Any]:
         "previousEmployers",
         "notes",
     ]
-    return {key: profile.get(key) for key in allowed if profile.get(key) not in (None, "")}
+    compact = {key: profile.get(key) for key in allowed if profile.get(key) not in (None, "")}
+    skills = profile.get("skills")
+    if isinstance(skills, list):
+        compact["skills"] = [normalize_space(item) for item in skills[:12] if normalize_space(item)]
+    work_experience = profile.get("workExperience")
+    if isinstance(work_experience, list):
+        compact["workExperience"] = [
+            {
+                key: normalize_space(entry.get(key))
+                for key in ("jobTitle", "company", "description")
+                if isinstance(entry, dict) and normalize_space(entry.get(key))
+            }
+            for entry in work_experience[:3]
+            if isinstance(entry, dict)
+        ]
+    education = profile.get("education")
+    if isinstance(education, list):
+        compact["education"] = [
+            {
+                key: normalize_space(entry.get(key))
+                for key in ("school", "degree", "fieldOfStudy")
+                if isinstance(entry, dict) and normalize_space(entry.get(key))
+            }
+            for entry in education[:2]
+            if isinstance(entry, dict)
+        ]
+    return compact
 
 
 def build_answer_prompt(request: C3AnswerRequest) -> tuple[str, str]:
@@ -64,7 +115,7 @@ def build_answer_prompt(request: C3AnswerRequest) -> tuple[str, str]:
     ]
     normalized_question = build_standard_question(request.field.label, normalized_options)
     question_packet = {
-        "question": normalize_question_text(request.field.label),
+        "question": normalize_question_text(clean_question_label(request.field.label)),
         "answer_options": normalized_options,
     }
     payload = {

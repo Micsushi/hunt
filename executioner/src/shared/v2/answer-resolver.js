@@ -167,6 +167,15 @@
     return null;
   }
 
+  function todayDateParts() {
+    var now = new Date();
+    return {
+      year: String(now.getFullYear()),
+      month: String(now.getMonth() + 1).padStart(2, "0"),
+      day: String(now.getDate()).padStart(2, "0"),
+    };
+  }
+
   function dateAnswerForEntry(entry, field, profile) {
     var raw = "";
     for (var i = 0; i < (entry.profilePaths || []).length; i++) {
@@ -208,6 +217,25 @@
           : "profile:" + (entry.profilePaths || [entry.id])[0],
       answerType: "text",
       confidence: raw === clean(entry.defaultValue) ? 0.72 : 0.96,
+    };
+  }
+
+  function currentDateAnswerForEntry(entry, field) {
+    var parts = todayDateParts();
+    var part = datePartName(field);
+    if (part) {
+      return {
+        value: parts[part],
+        source: "default:" + entry.id + ":" + part,
+        answerType: "text",
+        confidence: 0.96,
+      };
+    }
+    return {
+      value: parts.month + "/" + parts.day + "/" + parts.year,
+      source: "default:" + entry.id,
+      answerType: "text",
+      confidence: 0.96,
     };
   }
 
@@ -288,6 +316,28 @@
       return dateAnswer;
     }
 
+    if (entry.id === "current_date") {
+      return currentDateAnswerForEntry(entry, field);
+    }
+
+    if (entry.id === "address_line_2" && field.required) {
+      root.audit?.pushIssue(audit, fieldAudit, {
+        kind: "default_answer_used",
+        severity: "warn",
+        failedStep: "answer.resolve",
+        reason:
+          "Used N/A for required address line 2 because profile addressLine2 was blank.",
+        questionType: question.type,
+      });
+      return {
+        value: "N/A",
+        source: "default:required_address_line_2",
+        answerType: entry.answerType || "text",
+        confidence: 0.72,
+        optionAliases: entry.optionAliases || {},
+      };
+    }
+
     if (entry.id === "application_source") {
       var sourceCategory = clean(profile.applicationSourceCategory);
       var source = clean(profile.applicationSource);
@@ -348,6 +398,11 @@
     for (var i = 0; i < (entry.profilePaths || []).length; i++) {
       var path = entry.profilePaths[i];
       var result = profileValue(profile, path);
+      var allValues = null;
+      if (entry.id === "technical_skills" && Array.isArray(result.value)) {
+        allValues = result.value.map(clean).filter(Boolean);
+        result.value = allValues[0] || "";
+      }
       if (
         result.value !== undefined &&
         result.value !== null &&
@@ -368,6 +423,7 @@
           answerType: entry.answerType || "text",
           confidence: result.derived ? 0.8 : 0.96,
           optionAliases: entry.optionAliases || {},
+          allValues: allValues || undefined,
         };
       }
     }

@@ -168,6 +168,37 @@ def build_parser() -> argparse.ArgumentParser:
     )
     events_parser.add_argument("--run-id", required=True)
 
+    subparsers.add_parser(
+        "scheduler-tick",
+        parents=[common],
+        help="Run one scheduler pass: pick the next ready job and request fill.",
+    )
+
+    investigate_parser = subparsers.add_parser(
+        "investigate",
+        parents=[common],
+        help="Manually queue a run for agent investigation.",
+    )
+    investigate_parser.add_argument("--run-id", required=True)
+
+    failure_log_parser = subparsers.add_parser(
+        "failure-log",
+        parents=[common],
+        help="Read the last N entries from the failure perma-log.",
+    )
+    failure_log_parser.add_argument("--limit", type=int, default=50)
+
+    claim_investigation_parser = subparsers.add_parser(
+        "claim-investigation",
+        parents=[common],
+        help="Claim one pending investigation lease for an agent worker.",
+    )
+    claim_investigation_parser.add_argument("--runtime-name", required=True)
+    claim_investigation_parser.add_argument(
+        "--browser-lane", choices=["isolated", "attached"], default=None
+    )
+    claim_investigation_parser.add_argument("--lease-seconds", type=int, default=900)
+
     return parser
 
 
@@ -271,6 +302,21 @@ def main(argv: Sequence[str] | None = None) -> int:
             }
         elif args.command == "events":
             payload = {"items": [item.to_dict() for item in service.list_events(args.run_id)]}
+        elif args.command == "scheduler-tick":
+            from .scheduler import get_scheduler
+
+            payload = get_scheduler(service).tick()
+        elif args.command == "investigate":
+            payload = service.queue_investigation(args.run_id)
+        elif args.command == "failure-log":
+            payload = {"items": service.get_failure_log(limit=args.limit)}
+        elif args.command == "claim-investigation":
+            payload = service.claim_next_fill(
+                runtime_name=args.runtime_name,
+                browser_lane=args.browser_lane,
+                lease_seconds=args.lease_seconds,
+                task_type="investigation",
+            )
         else:
             parser.error(f"unknown command: {args.command}")
             return 2

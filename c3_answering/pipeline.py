@@ -668,15 +668,43 @@ def decide_answer(request: C3AnswerRequest) -> C3AnswerDecision:
             normalized_question=build_standard_question(request.field.label, request.field.options),
         )
     if not result.success or not result.parsed:
-        return C3AnswerDecision(
-            status="provider_unavailable",
-            action="manual_review",
-            provider=result.provider,
-            model=result.model,
-            reason=result.error or "LLM provider returned no parsed JSON.",
-            requires_review=True,
-            normalized_question=build_standard_question(request.field.label, request.field.options),
+        repair_user = (
+            user
+            + "\n\nPrevious model output was not parseable as the required JSON schema. "
+            + "Return exactly one JSON object matching output_contract. No markdown, no prose."
         )
+        try:
+            repaired = generate_json(
+                component="c3",
+                task_name="c3_answer_decision_repair",
+                system=system,
+                user=repair_user,
+                schema=schema_for(C3LlmAnswerResponse),
+                schema_model=C3LlmAnswerResponse,
+                temperature=0,
+                timeout_sec=30,
+            )
+        except Exception as exc:
+            return C3AnswerDecision(
+                status="provider_unavailable",
+                action="manual_review",
+                provider=result.provider or fletcher_config.c3_llm_provider(),
+                model=result.model,
+                reason=str(exc),
+                requires_review=True,
+                normalized_question=build_standard_question(request.field.label, request.field.options),
+            )
+        if not repaired.success or not repaired.parsed:
+            return C3AnswerDecision(
+                status="provider_unavailable",
+                action="manual_review",
+                provider=repaired.provider or result.provider,
+                model=repaired.model or result.model,
+                reason=repaired.error or result.error or "LLM provider returned no parsed JSON.",
+                requires_review=True,
+                normalized_question=build_standard_question(request.field.label, request.field.options),
+            )
+        result = repaired
     return _validate_decision(
         request,
         result.parsed,

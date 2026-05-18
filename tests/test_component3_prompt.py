@@ -60,7 +60,10 @@ def _new_prompt_page(playwright, body_html: str):
 def test_detected_page_prompt_gate_requires_visible_controls():
     content = _load_script(REPO_ROOT / "executioner/src/content/bootstrap.js")
 
-    assert 'detection.inputCount > 0 || detection.kind === "apply_entry"' in content
+    assert 'detection.inputCount > 0 ||' in content
+    assert 'detection.kind === "apply_entry"' in content
+    assert 'detection.kind === "signin"' in content
+    assert 'detection.kind === "signup"' in content
 
 
 def test_career_apply_button_pages_can_prompt_without_visible_fields():
@@ -140,6 +143,8 @@ def test_workday_runtime_error_recovery_stops_before_safe_next_click():
     assert "chrome.tabs.reload(tabId)" in runtime
     assert "allFrames: true" in runtime
     assert "workday_runtime_error" in runtime
+    assert "workday_application_shell_empty" in runtime
+    assert "signedInShell" in runtime
     assert "RecoverWorkdayRuntimeErrorStep" in runner
     assert "workdayRuntimeRecovery" in runner
     assert "recoverWorkdayRuntimeErrorForTab" in background
@@ -195,6 +200,41 @@ def test_fill_progress_can_request_cancel():
     assert "user_cancelled" in workday
 
 
+def test_fill_run_cancels_when_user_reloads_same_page():
+    background = _load_script(REPO_ROOT / "executioner/src/background/index.js")
+
+    assert "cancelFillRunForUserReload" in background
+    assert 'changeInfo.status === "loading"' in background
+    assert 'cancelActiveFillRunsForTab(tabId, "page_reloaded")' in background
+    assert "normalizeComparableUrl" in background
+    assert "expectedReloads" in background
+    assert "markFillRunExpectedReload(fillRunId)" in background
+    assert "fill.cancel_page_reload" in background
+    assert "fill_cancelled_page_reload" in background
+
+
+def test_apply_entry_progress_uses_start_application_language():
+    content = _load_script(REPO_ROOT / "executioner/src/content/bootstrap.js")
+    background = _load_script(REPO_ROOT / "executioner/src/background/index.js")
+
+    assert "Trying to start application" in content
+    assert "Trying to start application" in background
+    assert "Filling application page: attempt 1" in background
+    assert "Filling current page: attempt 1" in background
+    assert "chooseBestWorkflowActionResult" in background
+
+
+def test_workday_apply_detection_checks_all_visible_buttons_before_log_cap():
+    content = _load_script(REPO_ROOT / "executioner/src/content/bootstrap.js")
+    background = _load_script(REPO_ROOT / "executioner/src/background/index.js")
+
+    assert "var buttonLabels = Array.from" in background
+    assert "var buttons = buttonLabels.slice(0, 80)" in background
+    assert "buttonLabels.some(function (label)" in background
+    assert "/^apply(?:\\s+apply)?$/i.test(label)" in content
+    assert "/^apply\\b/i.test(label) && /\\/apply(?:$|[/?#\\s])/i.test(label)" in content
+
+
 def test_v2_page_walk_counts_successful_pages_and_shows_summary():
     content = _load_script(REPO_ROOT / "executioner/src/content/bootstrap.js")
     background = _load_script(REPO_ROOT / "executioner/src/background/index.js")
@@ -213,7 +253,8 @@ def test_v2_page_walk_counts_successful_pages_and_shows_summary():
     assert "visible_validation_errors_after_next" in background
     assert "page_did_not_advance_after_next" in background
     assert "`Filling page ${pageIndex + 1}`" not in background
-    assert "`Filling page ${nextPageNumber}`" in background
+    assert "describePageWalkAttempt(" in background
+    assert '"Filling"' in background
 
 
 def test_clear_page_shows_progress_and_scrolls_while_clearing():
@@ -295,6 +336,9 @@ def test_workday_logs_field_and_dropdown_actions():
     workday_v2_drivers = _load_script(
         REPO_ROOT / "executioner/src/ats/workday/workday-drivers-v2.js"
     )
+    workday_repeatables = _load_script(
+        REPO_ROOT / "executioner/src/ats/workday/workday-repeatables-v2.js"
+    )
 
     assert "traceInteractionLimit = 1000" in workday
     assert '"field_consider"' in workday
@@ -333,7 +377,27 @@ def test_workday_logs_field_and_dropdown_actions():
     assert "workday_prompt_category_options" in workday_v2_drivers
     assert "waitForWorkdayOptions" in workday_v2_drivers
     assert "sourceCategoryScore" in workday_v2_drivers
+    assert "data-uxi-multiselectlistitem-hassidecharm" in workday_v2_drivers
+    assert "data-uxi-multiselectlistitem-type" in workday_v2_drivers
+    assert "var aliasTexts = answerTexts(answer, option)" in workday_v2_drivers
+    assert "optionMatchesAny(candidate, aliasTexts)" in workday_v2_drivers
+    assert "preferredSourceFallbackOption" in workday_v2_drivers
+    assert "isReferralSourceOption" in workday_v2_drivers
+    assert "isSalaryField(field, answer)" in workday_v2_drivers
+    assert "preferredWorkdayOption(flatOptions, option, answer, field)" in workday_v2_drivers
+    assert "await clearWorkdayField(field, audit, fieldAudit)" in workday_v2_drivers
+    assert 'label.includes("linkedin")' in workday_v2_drivers
+    assert 'label.includes("employee referral")' in workday_v2_drivers
+    assert "document.elementFromPoint" in workday_v2_drivers
     assert "var options = await collectWorkdayOptions" in workday_v2_drivers
+    assert "isSelectInputPrompt" in workday_repeatables
+    assert "fillSelectInputPrompt" in workday_repeatables
+    assert "waitForPromptTarget" in workday_repeatables
+    assert "promptOptionCommitTarget" in workday_repeatables
+    assert "clickPromptOption" in workday_repeatables
+    assert 'input[data-automation-id="radioBtn"]' in workday_repeatables
+    assert "data-uxi-widget-type" in workday_repeatables
+    assert "data-uxi-multiselect-id" in workday_repeatables
     assert "field.options || []" not in workday_v2_drivers[
         workday_v2_drivers.index("async function fillWorkdayPopup") : workday_v2_drivers.index(
             "async function fillPhoneCountryCode"
@@ -445,7 +509,7 @@ def test_prompt_fill_click_cannot_leave_prompt_stuck_filling():
     llm_message = 'type: "hunt.apply.fill_remaining_with_llm"'
     show_toast = "showExtensionToast("
     fill_click_start = content.rindex(
-        'showFillProgress({ message: "Filling page" });',
+        "showFillProgress({ message: promptProgressMessage(kind) });",
         0,
         content.index(fill_message),
     )
@@ -463,9 +527,9 @@ def test_prompt_fill_click_cannot_leave_prompt_stuck_filling():
     assert "try {\n      runtimeMessage = chrome.runtime.sendMessage(message);" in content
     assert "try {\n      chrome.runtime" in content
     assert "detected_prompt_fill_timeout" in fill_handler
-    assert 'showFillProgress({ message: "Filling page" });' in fill_handler
+    assert "promptProgressMessage(kind)" in fill_handler
     assert fill_handler.index(
-        'showFillProgress({ message: "Filling page" });'
+        "showFillProgress({ message: promptProgressMessage(kind) });"
     ) < fill_handler.index("ui.detect_prompt.fill_click")
     assert "ui.detect_prompt.fill_response" in fill_handler
     assert "Still waiting for fill result" in fill_handler

@@ -675,6 +675,9 @@ Expected Graduation: Sep 2026
         self.assertIn("serviceToken", settings)
         self.assertIn("pollIntervalSeconds", storage)
         self.assertIn("emailVerificationBridgeUrl", storage)
+        self.assertIn("function sanitizeBackendUrl", storage)
+        self.assertIn('"http://127.0.0.1:8000"', storage)
+        self.assertIn("DEFAULT_SETTINGS.backendUrl", storage)
         self.assertIn("sanitizeText(profile.middleName)", storage)
         self.assertIn("sanitizeText(profile.phoneCountryCode)", storage)
         self.assertIn("sanitizeV2Audit", storage)
@@ -714,8 +717,21 @@ Expected Graduation: Sep 2026
         self.assertIn("clickAuthPrimaryActionForTab", background)
         self.assertIn('kind: "auth_primary_action"', background)
         self.assertIn("clicked_auth_primary_action", background)
+        self.assertIn("checkVisibleAuthConsentBoxes", background)
+        self.assertIn("checkedConsentBoxes", background)
         self.assertIn("auth_action_did_not_advance", background)
+        self.assertIn("currentStepIsAuth ||", background)
+        self.assertIn('var wantsLandingChoice = authUiState === "landing_choice"', background)
+        self.assertIn("exactEmailSignin", background)
+        self.assertIn("\\bsign in with email\\b", background)
+        self.assertIn("score = 135", background)
+        self.assertIn("(startApplication && /\\/apply\\/applyManually/i.test(label))", background)
         self.assertIn("createClickWorkdayApplyManuallyFunction", background)
+        self.assertIn("isWorkdayDetailsApplyLabel", background)
+        self.assertIn("isPlainWorkdayApplyCandidate", background)
+        self.assertIn("isApplyManuallyCandidate", background)
+        self.assertIn("function currentWorkdayStep()", background)
+        self.assertIn("preferClick: isPlainApplyFirstClick", background)
         self.assertIn("function v2ReviewIssues", background)
         self.assertIn('"warn", "blocked", "error"', background)
         self.assertIn("clearCurrentPageV2", background)
@@ -723,6 +739,7 @@ Expected Graduation: Sep 2026
         self.assertIn('id="poll-c4-once"', options)
         self.assertIn('id="auto-prompt-enabled"', options)
         self.assertIn('id="auto-account-signup-login-enabled"', options)
+
         self.assertIn('id="auto-email-verification-enabled"', options)
         self.assertIn('id="email-verification-timeout-seconds"', options)
         self.assertIn('id="email-verification-bridge-url"', options)
@@ -797,13 +814,19 @@ Expected Graduation: Sep 2026
         self.assertIn("workday_search_select", workday_ui_v2)
         self.assertIn("workday_popup_options_missing", workday_drivers_v2)
         self.assertIn("workday_commit_not_verified", workday_drivers_v2)
+        self.assertIn("!option &&", workday_drivers_v2)
+        self.assertIn('"non_disclosure"', workday_drivers_v2)
+        self.assertNotIn("Boolean(state.selected && clean", workday_drivers_v2)
+        self.assertIn("hasHumanText(buttonText)", workday_drivers_v2)
+        self.assertIn("hasHumanText(inputVal)", workday_drivers_v2)
         self.assertIn("workday_selected_item_clear", workday_drivers_v2)
         self.assertIn("fillWorkdayRepeatables", workday_repeatables_v2)
         self.assertIn("clearWorkdayRepeatables", workday_repeatables_v2)
         self.assertIn("workday_repeatables_fill", workday_repeatables_v2)
         self.assertIn("workday_repeatables_clear", workday_repeatables_v2)
         self.assertIn("sectionHasMissingRequiredControls", workday_repeatables_v2)
-        self.assertIn("degreeLevel || entry.degree", workday_repeatables_v2)
+        self.assertIn("educationDegreeAnswer(entry)", workday_repeatables_v2)
+        self.assertIn('"Bachelor of Science"', workday_repeatables_v2)
         self.assertIn("clearResumeUpload", workday_repeatables_v2)
         self.assertIn("deleteAllRows", workday_repeatables_v2)
         self.assertIn("collectNonRepeatableWorkdayCandidates", workday_repeatables_v2)
@@ -814,6 +837,8 @@ Expected Graduation: Sep 2026
         self.assertIn("entry.company_name", workday_repeatables_v2)
         self.assertIn("processedFieldKeys", field_pipeline_v2)
         self.assertIn("fieldIdentityKey", field_pipeline_v2)
+        self.assertIn("shouldFillOptionalProfileCorrection", field_pipeline_v2)
+        self.assertIn("address--countryregion", field_pipeline_v2)
         self.assertIn("activeApplyContext,\n    defaultResume", field_pipeline_v2)
         self.assertIn("activeApplyContext: activeApplyContext || {}", field_pipeline_v2)
         self.assertIn("defaultResume: defaultResume || {}", field_pipeline_v2)
@@ -957,6 +982,14 @@ Expected Graduation: Sep 2026
         self.assertIn('pipelineVersion: next.useFieldPipelineV2 ? "v2" : "v1"', configure_debug)
         self.assertIn("browserContext: result.browserContext", configure_debug)
 
+    def test_v2_invalid_controls_are_treated_as_required_for_repair(self):
+        inspector = (
+            REPO_ROOT / "executioner" / "src" / "shared" / "v2" / "ui-inspector.js"
+        ).read_text(encoding="utf-8")
+        self.assertIn("hasRequiredValidation", inspector)
+        self.assertIn('el?.getAttribute?.("aria-invalid") === "true"', inspector)
+        self.assertIn("check the box", inspector)
+
     def test_v2_question_identifier_prefers_work_authorization_over_country(self):
         catalog_path = REPO_ROOT / "executioner" / "src" / "shared" / "v2" / "field-catalog.js"
         identifier_path = (
@@ -1014,7 +1047,349 @@ Expected Graduation: Sep 2026
             },
         )
 
-    def test_v2_terms_checkbox_is_deterministic_affirmative(self):
+    def test_v2_required_address_line_2_uses_nonblank_default(self):
+        paths = [
+            REPO_ROOT / "executioner" / "src" / "shared" / "v2" / "field-catalog.js",
+            REPO_ROOT / "executioner" / "src" / "shared" / "v2" / "question-identifier.js",
+            REPO_ROOT / "executioner" / "src" / "shared" / "v2" / "answer-resolver.js",
+        ]
+        script = f"""
+            const fs = require("node:fs");
+            const vm = require("node:vm");
+            const context = {{ window: {{ __huntV2: {{}} }} }};
+            vm.createContext(context);
+            for (const path of {json.dumps([str(path) for path in paths])}) {{
+              vm.runInContext(fs.readFileSync(path, "utf8"), context);
+            }}
+            const root = context.window.__huntV2;
+            const field = {{
+              workday: {{
+                fieldLabel: "Address Line 2*"
+              }},
+              fieldId: "address--addressLine2",
+              descriptor: "Address Line 2* Error: The field Address Line 2 is required and must have a value.",
+              required: true,
+              uiModel: "textbox"
+            }};
+            const question = root.questionIdentifier.identifyQuestion(field, null, null);
+            const answer = root.answerResolver.resolveAnswer({{
+              question,
+              field,
+              profile: {{}},
+              audit: null,
+              fieldAudit: null
+            }});
+            console.log(JSON.stringify({{
+              type: question.type,
+              value: answer.value,
+              valueSource: answer.source
+            }}));
+        """
+        try:
+            result = subprocess.run(
+                ["node", "-e", script],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+        except FileNotFoundError:
+            self.skipTest("node is required to test the C3 V2 address default")
+
+        self.assertEqual(
+            json.loads(result.stdout),
+            {
+                "type": "address_line_2",
+                "value": "N/A",
+                "valueSource": "default:required_address_line_2",
+            },
+        )
+
+    def test_v2_identity_verification_upon_hire_is_yes(self):
+        paths = [
+            REPO_ROOT / "executioner" / "src" / "shared" / "v2" / "field-catalog.js",
+            REPO_ROOT / "executioner" / "src" / "shared" / "v2" / "question-identifier.js",
+            REPO_ROOT / "executioner" / "src" / "shared" / "v2" / "answer-resolver.js",
+            REPO_ROOT / "executioner" / "src" / "shared" / "v2" / "option-matcher.js",
+        ]
+        script = f"""
+            const fs = require("node:fs");
+            const vm = require("node:vm");
+            const context = {{ window: {{ __huntV2: {{}} }} }};
+            vm.createContext(context);
+            for (const path of {json.dumps([str(path) for path in paths])}) {{
+              vm.runInContext(fs.readFileSync(path, "utf8"), context);
+            }}
+            const root = context.window.__huntV2;
+            const field = {{
+              workday: {{ fieldLabel: "Can you provide verification of your identify upon hire?*" }},
+              fieldId: "primaryQuestionnaire--identity",
+              descriptor: "Can you provide verification of your identify upon hire?* Select One",
+              required: true,
+              uiModel: "button_listbox"
+            }};
+            const question = root.questionIdentifier.identifyQuestion(field, null, null);
+            const answer = root.answerResolver.resolveAnswer({{
+              question,
+              field,
+              profile: {{}},
+              audit: null,
+              fieldAudit: null
+            }});
+            const match = root.optionMatcher.matchOption({{
+              options: [
+                {{ label: "Select One", placeholder: true }},
+                {{ label: "Yes" }},
+                {{ label: "No" }}
+              ],
+              answer,
+              field,
+              audit: null,
+              fieldAudit: null
+            }});
+            console.log(JSON.stringify({{
+              type: question.type,
+              value: answer.value,
+              valueSource: answer.source,
+              option: match.option && match.option.label,
+              source: match.source,
+              fallback: match.fallback
+            }}));
+        """
+        try:
+            result = subprocess.run(
+                ["node", "-e", script],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+        except FileNotFoundError:
+            self.skipTest("node is required to test the C3 V2 identity answer")
+
+        self.assertEqual(
+            json.loads(result.stdout),
+            {
+                "type": "identity_verification_upon_hire",
+                "value": "Yes",
+                "valueSource": "default:identity_verification_upon_hire",
+                "option": "Yes",
+                "source": "exact",
+                "fallback": False,
+            },
+        )
+
+    def test_v2_visa_sms_and_ai_consent_dropdowns_opt_out(self):
+        paths = [
+            REPO_ROOT / "executioner" / "src" / "shared" / "v2" / "field-catalog.js",
+            REPO_ROOT / "executioner" / "src" / "shared" / "v2" / "question-identifier.js",
+            REPO_ROOT / "executioner" / "src" / "shared" / "v2" / "answer-resolver.js",
+            REPO_ROOT / "executioner" / "src" / "shared" / "v2" / "option-matcher.js",
+        ]
+        script = f"""
+            const fs = require("node:fs");
+            const vm = require("node:vm");
+            const context = {{ window: {{ __huntV2: {{}} }} }};
+            vm.createContext(context);
+            for (const path of {json.dumps([str(path) for path in paths])}) {{
+              vm.runInContext(fs.readFileSync(path, "utf8"), context);
+            }}
+            const root = context.window.__huntV2;
+            function resolve(label) {{
+              const field = {{
+                workday: {{ fieldLabel: label }},
+                fieldId: label.includes("SMS") ? "smsConsent" : "aiProcessingConsent",
+                descriptor: `${{label}} Select One`,
+                required: true,
+                uiModel: "button_listbox"
+              }};
+              const question = root.questionIdentifier.identifyQuestion(field, null, null);
+              const answer = root.answerResolver.resolveAnswer({{
+                question,
+                field,
+                profile: {{}},
+                audit: null,
+                fieldAudit: null
+              }});
+              const match = root.optionMatcher.matchOption({{
+                options: [
+                  {{ label: "Select One", placeholder: true }},
+                  {{ label: "Opt-In" }},
+                  {{ label: "Opt-Out" }}
+                ],
+                answer,
+                field,
+                audit: null,
+                fieldAudit: null
+              }});
+              return {{
+                type: question.type,
+                value: answer.value,
+                valueSource: answer.source,
+                option: match.option && match.option.label,
+                source: match.source,
+                fallback: match.fallback
+              }};
+            }}
+            console.log(JSON.stringify([
+              resolve("I agree that Visa may reach out to me via SMS regarding my application and candidate experience. Message and data rates may apply. I can opt-out at any time.*"),
+              resolve("Visa may use automated tools such as AI to support review of your application for this role, and if applicable, match you with relevant existing and future open roles. If you prefer not to have your application processed by these tools, you can opt-out. Opting out will not impact your eligibility for this role or to apply for relevant open roles.*")
+            ]));
+        """
+        try:
+            result = subprocess.run(
+                ["node", "-e", script],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+        except FileNotFoundError:
+            self.skipTest("node is required to test the C3 V2 consent answers")
+
+        self.assertEqual(
+            json.loads(result.stdout),
+            [
+                {
+                    "type": "sms_application_contact_opt_out",
+                    "value": "Opt-Out",
+                    "valueSource": "default:sms_application_contact_opt_out",
+                    "option": "Opt-Out",
+                    "source": "exact",
+                    "fallback": False,
+                },
+                {
+                    "type": "automated_ai_processing_opt_out",
+                    "value": "Opt-Out",
+                    "valueSource": "default:automated_ai_processing_opt_out",
+                    "option": "Opt-Out",
+                    "source": "exact",
+                    "fallback": False,
+                },
+            ],
+        )
+
+    def test_v2_gender_not_declared_matches_non_disclosure(self):
+        paths = [
+            REPO_ROOT / "executioner" / "src" / "shared" / "v2" / "field-catalog.js",
+            REPO_ROOT / "executioner" / "src" / "shared" / "v2" / "question-identifier.js",
+            REPO_ROOT / "executioner" / "src" / "shared" / "v2" / "answer-resolver.js",
+            REPO_ROOT / "executioner" / "src" / "shared" / "v2" / "option-matcher.js",
+        ]
+        script = f"""
+            const fs = require("node:fs");
+            const vm = require("node:vm");
+            const context = {{ window: {{ __huntV2: {{}} }} }};
+            vm.createContext(context);
+            for (const path of {json.dumps([str(path) for path in paths])}) {{
+              vm.runInContext(fs.readFileSync(path, "utf8"), context);
+            }}
+            const root = context.window.__huntV2;
+            const field = {{
+              workday: {{ fieldLabel: "What is your gender?*" }},
+              fieldId: "personalInfoPerson--gender",
+              descriptor: "What is your gender?* Select One",
+              required: true,
+              uiModel: "button_listbox"
+            }};
+            const question = root.questionIdentifier.identifyQuestion(field, null, null);
+            const answer = root.answerResolver.resolveAnswer({{
+              question,
+              field,
+              profile: {{}},
+              audit: null,
+              fieldAudit: null
+            }});
+            const match = root.optionMatcher.matchOption({{
+              options: [
+                {{ label: "Select One", placeholder: true }},
+                {{ label: "Female" }},
+                {{ label: "Male" }},
+                {{ label: "Not Declared" }}
+              ],
+              answer,
+              field,
+              audit: null,
+              fieldAudit: null
+            }});
+            console.log(JSON.stringify({{
+              type: question.type,
+              option: match.option && match.option.label,
+              source: match.source,
+              fallback: match.fallback
+            }}));
+        """
+        try:
+            result = subprocess.run(
+                ["node", "-e", script],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+        except FileNotFoundError:
+            self.skipTest("node is required to test the C3 V2 gender answer")
+
+        self.assertEqual(
+            json.loads(result.stdout),
+            {
+                "type": "disclosure_neutral",
+                "option": "Not Declared",
+                "source": "alias",
+                "fallback": False,
+            },
+        )
+
+    def test_v2_unknown_yes_no_has_no_safe_option(self):
+        paths = [
+            REPO_ROOT / "executioner" / "src" / "shared" / "v2" / "field-catalog.js",
+            REPO_ROOT / "executioner" / "src" / "shared" / "v2" / "option-matcher.js",
+        ]
+        script = f"""
+            const fs = require("node:fs");
+            const vm = require("node:vm");
+            const context = {{ window: {{ __huntV2: {{}} }} }};
+            vm.createContext(context);
+            for (const path of {json.dumps([str(path) for path in paths])}) {{
+              vm.runInContext(fs.readFileSync(path, "utf8"), context);
+            }}
+            const root = context.window.__huntV2;
+            const match = root.optionMatcher.matchOption({{
+              options: [{{ label: "Yes" }}, {{ label: "No" }}],
+              answer: {{ value: "", answerType: "unknown" }},
+              field: {{ required: true, uiModel: "button_listbox" }},
+              audit: null,
+              fieldAudit: null
+            }});
+            console.log(JSON.stringify({{
+              option: match.option && match.option.label,
+              source: match.source,
+              fallback: match.fallback
+            }}));
+        """
+        try:
+            result = subprocess.run(
+                ["node", "-e", script],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+        except FileNotFoundError:
+            self.skipTest("node is required to test the C3 V2 option matcher")
+
+        self.assertEqual(
+            json.loads(result.stdout),
+            {
+                "option": None,
+                "source": "unknown_no_safe_option",
+                "fallback": False,
+            },
+        )
+
+    def test_v2_unknown_text_fallback_does_not_use_space(self):
+        driver_path = REPO_ROOT / "executioner" / "src" / "shared" / "v2" / "field-drivers.js"
+        driver_source = driver_path.read_text(encoding="utf-8")
+        self.assertIn('"fallback:not_applicable"', driver_source)
+        self.assertIn('"fallback:na"', driver_source)
+        self.assertNotIn('"fallback:space"', driver_source)
+
+    def test_v2_background_check_consent_is_yes(self):
         paths = [
             REPO_ROOT / "executioner" / "src" / "shared" / "v2" / "field-catalog.js",
             REPO_ROOT / "executioner" / "src" / "shared" / "v2" / "question-identifier.js",
@@ -1032,11 +1407,12 @@ Expected Graduation: Sep 2026
             const root = context.window.__huntV2;
             const field = {{
               workday: {{
-                fieldLabel: "Yes, I have read and consent to the terms and conditions*"
+                fieldLabel: "Would you be willing to complete a background security check, including criminal record and references?*"
               }},
-              fieldId: "termsAndConditions--acceptTermsAndAgreements",
-              descriptor: "Yes, I have read and consent to the terms and conditions*",
-              uiModel: "checkbox"
+              fieldId: "primaryQuestionnaire--backgroundCheck",
+              descriptor: "Would you be willing to complete a background security check, including criminal record and references?* Select One",
+              uiModel: "button_listbox",
+              required: true
             }};
             const question = root.questionIdentifier.identifyQuestion(field, null, null);
             const answer = root.answerResolver.resolveAnswer({{
@@ -1047,7 +1423,10 @@ Expected Graduation: Sep 2026
               fieldAudit: null
             }});
             const match = root.optionMatcher.matchOption({{
-              options: [{{ label: field.descriptor, value: field.descriptor }}],
+              options: [
+                {{ label: "No", value: "No" }},
+                {{ label: "Yes", value: "Yes" }}
+              ],
               answer,
               field,
               audit: null,
@@ -1055,11 +1434,267 @@ Expected Graduation: Sep 2026
             }});
             console.log(JSON.stringify({{
               type: question.type,
-              answer: answer.value,
+              value: answer.value,
               valueSource: answer.source,
+              selectedOption: match.option && match.option.label,
               optionSource: match.source,
               fallback: match.fallback
             }}));
+        """
+        try:
+            result = subprocess.run(
+                ["node", "-e", script],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+        except FileNotFoundError:
+            self.skipTest("node is required to test the C3 V2 background check answer")
+
+        self.assertEqual(
+            json.loads(result.stdout),
+            {
+                "type": "background_check_consent",
+                "value": "Yes",
+                "valueSource": "default:background_check_consent",
+                "selectedOption": "Yes",
+                "optionSource": "exact",
+                "fallback": False,
+            },
+        )
+
+    def test_v2_workday_application_questions_do_not_match_province(self):
+        paths = [
+            REPO_ROOT / "executioner" / "src" / "shared" / "v2" / "field-catalog.js",
+            REPO_ROOT / "executioner" / "src" / "shared" / "v2" / "question-identifier.js",
+            REPO_ROOT / "executioner" / "src" / "shared" / "v2" / "answer-resolver.js",
+            REPO_ROOT / "executioner" / "src" / "shared" / "v2" / "option-matcher.js",
+        ]
+        script = f"""
+            const fs = require("node:fs");
+            const vm = require("node:vm");
+            const context = {{ window: {{ __huntV2: {{}} }} }};
+            vm.createContext(context);
+            for (const path of {json.dumps([str(path) for path in paths])}) {{
+              vm.runInContext(fs.readFileSync(path, "utf8"), context);
+            }}
+            const root = context.window.__huntV2;
+            function resolve(fieldLabel, options, descriptorSuffix = " Country/Region Select One") {{
+              const field = {{
+                workday: {{ fieldLabel }},
+                fieldId: "primaryQuestionnaire--workday",
+                descriptor: fieldLabel + descriptorSuffix,
+                uiModel: "button_listbox",
+                required: true
+              }};
+              const question = root.questionIdentifier.identifyQuestion(field, null, null);
+              const answer = root.answerResolver.resolveAnswer({{
+                question,
+                field,
+                profile: {{ province: "Alberta" }},
+                audit: null,
+                fieldAudit: null
+              }});
+              const match = root.optionMatcher.matchOption({{
+                options,
+                answer,
+                field,
+                audit: null,
+                fieldAudit: null
+              }});
+              return {{
+                type: question.type,
+                value: answer.value,
+                selectedOption: match.option && match.option.label,
+                fallback: match.fallback
+              }};
+            }}
+            console.log(JSON.stringify({{
+              usage: resolve("In your current job, do you use or work on the Workday system?", [
+                {{ label: "Yes, I work for Workday", value: "Yes, I work for Workday" }},
+                {{ label: "Yes, I work for a partner implementing or supporting Workday projects", value: "Yes, I work for a partner implementing or supporting Workday projects" }},
+                {{ label: "No, I do not use the Workday system in my current job", value: "No, I do not use the Workday system in my current job" }}
+              ]),
+              written: resolve("Describe your interactions with the Workday system.", [], ""),
+              acknowledgement: resolve("Please enter yes if you acknowledge that you have read and answered all questions truthfully and accurately.", [
+                {{ label: "Yes", value: "Yes" }},
+                {{ label: "No", value: "No" }}
+              ])
+            }}));
+        """
+        try:
+            result = subprocess.run(
+                ["node", "-e", script],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+        except FileNotFoundError:
+            self.skipTest("node is required to test the C3 V2 question identifier")
+
+        self.assertEqual(
+            json.loads(result.stdout),
+            {
+                "usage": {
+                    "type": "workday_system_usage",
+                    "value": "No, I do not use the Workday system in my current job",
+                    "selectedOption": "No, I do not use the Workday system in my current job",
+                    "fallback": False,
+                },
+                "written": {
+                    "type": "unknown",
+                    "value": "",
+                    "selectedOption": None,
+                    "fallback": False,
+                },
+                "acknowledgement": {
+                    "type": "truthful_application_acknowledgement",
+                    "value": "Yes",
+                    "selectedOption": "Yes",
+                    "fallback": False,
+                },
+            },
+        )
+
+    def test_v2_country_territory_is_country_not_province(self):
+        paths = [
+            REPO_ROOT / "executioner" / "src" / "shared" / "v2" / "field-catalog.js",
+            REPO_ROOT / "executioner" / "src" / "shared" / "v2" / "question-identifier.js",
+            REPO_ROOT / "executioner" / "src" / "shared" / "v2" / "answer-resolver.js",
+            REPO_ROOT / "executioner" / "src" / "shared" / "v2" / "option-matcher.js",
+        ]
+        script = f"""
+            const fs = require("node:fs");
+            const vm = require("node:vm");
+            const context = {{ window: {{ __huntV2: {{}} }} }};
+            vm.createContext(context);
+            for (const path of {json.dumps([str(path) for path in paths])}) {{
+              vm.runInContext(fs.readFileSync(path, "utf8"), context);
+            }}
+            const root = context.window.__huntV2;
+            const field = {{
+              workday: {{ fieldLabel: "Country / Territory*" }},
+              fieldId: "country--country",
+              descriptor: "Country / Territory* Canada",
+              uiModel: "button_listbox",
+              required: true
+            }};
+            const question = root.questionIdentifier.identifyQuestion(field, null, null);
+            const answer = root.answerResolver.resolveAnswer({{
+              question,
+              field,
+              profile: {{ country: "Canada", province: "Alberta" }},
+              audit: null,
+              fieldAudit: null
+            }});
+            const match = root.optionMatcher.matchOption({{
+              options: [
+                {{ label: "Bonaire, Sint Eustatius, and Saba" }},
+                {{ label: "Canada" }}
+              ],
+              answer,
+              field,
+              audit: null,
+              fieldAudit: null
+            }});
+            console.log(JSON.stringify({{
+              type: question.type,
+              value: answer.value,
+              source: answer.source,
+              selectedOption: match.option && match.option.label,
+              matchSource: match.source,
+              fallback: match.fallback
+            }}));
+        """
+        try:
+            result = subprocess.run(
+                ["node", "-e", script],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+        except FileNotFoundError:
+            self.skipTest("node is required to test the C3 V2 country matcher")
+
+        self.assertEqual(
+            json.loads(result.stdout),
+            {
+                "type": "country",
+                "value": "Canada",
+                "source": "profile:country",
+                "selectedOption": "Canada",
+                "matchSource": "exact",
+                "fallback": False,
+            },
+        )
+
+    def test_v2_terms_checkbox_is_deterministic_affirmative(self):
+        paths = [
+            REPO_ROOT / "executioner" / "src" / "shared" / "v2" / "field-catalog.js",
+            REPO_ROOT / "executioner" / "src" / "shared" / "v2" / "question-identifier.js",
+            REPO_ROOT / "executioner" / "src" / "shared" / "v2" / "answer-resolver.js",
+            REPO_ROOT / "executioner" / "src" / "shared" / "v2" / "option-matcher.js",
+        ]
+        script = f"""
+            const fs = require("node:fs");
+            const vm = require("node:vm");
+            const context = {{ window: {{ __huntV2: {{}} }} }};
+            vm.createContext(context);
+            for (const path of {json.dumps([str(path) for path in paths])}) {{
+              vm.runInContext(fs.readFileSync(path, "utf8"), context);
+            }}
+            const root = context.window.__huntV2;
+            const cases = [
+              {{
+                workday: {{
+                  fieldLabel: "Yes, I have read and consent to the terms and conditions*"
+                }},
+                fieldId: "termsAndConditions--acceptTermsAndAgreements",
+                descriptor: "Yes, I have read and consent to the terms and conditions*",
+                uiModel: "checkbox"
+              }},
+              {{
+                workday: {{
+                  fieldLabel: "I agree to creating this account to allow me to apply for positions with Workday."
+                }},
+                fieldId: "input-39",
+                descriptor: "I agree to creating this account to allow me to apply for positions with Workday.",
+                uiModel: "checkbox"
+              }},
+              {{
+                workday: {{
+                  fieldLabel: "By continuing, you agree to the above Career Privacy Notice"
+                }},
+                fieldId: "input-9",
+                descriptor: "By continuing, you agree to the above Career Privacy Notice",
+                uiModel: "checkbox"
+              }}
+            ];
+            const results = cases.map((field) => {{
+              const question = root.questionIdentifier.identifyQuestion(field, null, null);
+              const answer = root.answerResolver.resolveAnswer({{
+                question,
+                field,
+                profile: {{}},
+                audit: null,
+                fieldAudit: null
+              }});
+              const match = root.optionMatcher.matchOption({{
+                options: [{{ label: field.descriptor, value: field.descriptor }}],
+                answer,
+                field,
+                audit: null,
+                fieldAudit: null
+              }});
+              return {{
+                type: question.type,
+                answer: answer.value,
+                valueSource: answer.source,
+                optionSource: match.source,
+                fallback: match.fallback
+              }};
+            }});
+            console.log(JSON.stringify(results));
         """
         try:
             result = subprocess.run(
@@ -1073,11 +1708,219 @@ Expected Graduation: Sep 2026
 
         self.assertEqual(
             json.loads(result.stdout),
-            {
+            [
+                {
+                    "type": "terms_acceptance",
+                    "answer": "Yes",
+                    "valueSource": "default:terms_acceptance",
+                    "optionSource": "affirmative_checkbox",
+                    "fallback": False,
+                },
+                {
                 "type": "terms_acceptance",
                 "answer": "Yes",
                 "valueSource": "default:terms_acceptance",
                 "optionSource": "affirmative_checkbox",
+                "fallback": False,
+                },
+                {
+                    "type": "terms_acceptance",
+                    "answer": "Yes",
+                    "valueSource": "default:terms_acceptance",
+                    "optionSource": "affirmative_checkbox",
+                    "fallback": False,
+                },
+            ],
+        )
+
+    def test_v2_workday_signature_and_current_date_prompts(self):
+        paths = [
+            REPO_ROOT / "executioner" / "src" / "shared" / "v2" / "field-catalog.js",
+            REPO_ROOT / "executioner" / "src" / "shared" / "v2" / "question-identifier.js",
+            REPO_ROOT / "executioner" / "src" / "shared" / "v2" / "answer-resolver.js",
+            REPO_ROOT / "executioner" / "src" / "shared" / "v2" / "option-matcher.js",
+        ]
+        script = f"""
+            const fs = require("node:fs");
+            const vm = require("node:vm");
+            const context = {{ window: {{ __huntV2: {{}} }} }};
+            vm.createContext(context);
+            for (const path of {json.dumps([str(path) for path in paths])}) {{
+              vm.runInContext(fs.readFileSync(path, "utf8"), context);
+            }}
+            const root = context.window.__huntV2;
+            function resolve(field, profile = {{}}) {{
+              const question = root.questionIdentifier.identifyQuestion(field, null, null);
+              const answer = root.answerResolver.resolveAnswer({{
+                question,
+                field,
+                profile,
+                audit: null,
+                fieldAudit: null
+              }});
+              return {{
+                type: question.type,
+                value: answer.value,
+                source: answer.source
+              }};
+            }}
+            const nameField = {{
+              workday: {{ fieldLabel: "Please enter your name:" }},
+              fieldId: "secondaryQuestionnaire--signature",
+              descriptor: "Please enter your name:*",
+              uiModel: "textarea",
+              required: true
+            }};
+            const monthField = {{
+              workday: {{ fieldLabel: "Please enter today's date:" }},
+              fieldId: "secondaryQuestionnaire--date-dateSectionMonth-input",
+              descriptor: "Please enter today's date:* Month",
+              uiModel: "text",
+              required: true,
+              element: {{
+                getAttribute: (name) => name === "aria-label" ? "Month" : name === "data-automation-id" ? "dateSectionMonth-input" : "",
+                id: "secondaryQuestionnaire--date-dateSectionMonth-input",
+                name: ""
+              }}
+            }};
+            const dayField = {{
+              workday: {{ fieldLabel: "Please enter today's date:" }},
+              fieldId: "secondaryQuestionnaire--date-dateSectionDay-input",
+              descriptor: "Please enter today's date:* Day",
+              uiModel: "text",
+              required: true,
+              element: {{
+                getAttribute: (name) => name === "aria-label" ? "Day" : name === "data-automation-id" ? "dateSectionDay-input" : "",
+                id: "secondaryQuestionnaire--date-dateSectionDay-input",
+                name: ""
+              }}
+            }};
+            const yearField = {{
+              workday: {{ fieldLabel: "Please enter today's date:" }},
+              fieldId: "secondaryQuestionnaire--date-dateSectionYear-input",
+              descriptor: "Please enter today's date:* Year",
+              uiModel: "text",
+              required: true,
+              element: {{
+                getAttribute: (name) => name === "aria-label" ? "Year" : name === "data-automation-id" ? "dateSectionYear-input" : "",
+                id: "secondaryQuestionnaire--date-dateSectionYear-input",
+                name: ""
+              }}
+            }};
+            const disabilityNameField = {{
+              workday: {{ fieldLabel: "Name" }},
+              fieldId: "selfIdentifiedDisabilityData--name",
+              descriptor: "Name* Voluntary Self-Identification of Disability",
+              uiModel: "text",
+              required: true
+            }};
+            const disabilityDateField = {{
+              workday: {{ fieldLabel: "Date" }},
+              fieldId: "selfIdentifiedDisabilityData--dateSignedOn-dateSectionYear-input",
+              descriptor: "Date* Year",
+              uiModel: "text",
+              required: true,
+              element: {{
+                getAttribute: (name) => name === "aria-label" ? "Year" : name === "data-automation-id" ? "dateSectionYear-input" : "",
+                id: "selfIdentifiedDisabilityData--dateSignedOn-dateSectionYear-input",
+                name: ""
+              }}
+            }};
+            const agreementField = {{
+              workday: {{ fieldLabel: "Have you read and agree to the Non Disclosure Agreement?" }},
+              fieldId: "secondaryQuestionnaire--nda",
+              descriptor: "Have you read and agree to the Non Disclosure Agreement?* Select One",
+              uiModel: "button_listbox",
+              required: true
+            }};
+            const desiredStartMonthField = {{
+              workday: {{ fieldLabel: "If you receive and accept a job offer, what is the earliest date that you could start work?" }},
+              fieldId: "primaryQuestionnaire--desiredStart-dateSectionMonth-input",
+              descriptor: "If you receive and accept a job offer, what is the earliest date that you could start work?* Month",
+              uiModel: "text",
+              required: true,
+              element: {{
+                getAttribute: (name) => name === "aria-label" ? "Month" : name === "data-automation-id" ? "dateSectionMonth-input" : "",
+                id: "primaryQuestionnaire--desiredStart-dateSectionMonth-input",
+                name: ""
+              }}
+            }};
+            const agreementQuestion = root.questionIdentifier.identifyQuestion(agreementField, null, null);
+            const agreementAnswer = root.answerResolver.resolveAnswer({{
+              question: agreementQuestion,
+              field: agreementField,
+              profile: {{}},
+              audit: null,
+              fieldAudit: null
+            }});
+            const agreementMatch = root.optionMatcher.matchOption({{
+              options: [
+                {{ label: "I have read and agree to the Non Disclosure Agreement" }},
+                {{ label: "I have read and DO NOT agree to the Non Disclosure Agreement" }}
+              ],
+              answer: agreementAnswer,
+              field: agreementField,
+              audit: null,
+              fieldAudit: null
+            }});
+            console.log(JSON.stringify({{
+              name: resolve(nameField, {{ fullName: "Hunt Test" }}),
+              month: resolve(monthField),
+              day: resolve(dayField),
+              year: resolve(yearField),
+              disabilityName: resolve(disabilityNameField, {{ fullName: "Hunt Test" }}),
+              disabilityDate: resolve(disabilityDateField),
+              desiredStartMonth: resolve(desiredStartMonthField, {{ desiredStartDate: "2026-06-15" }}),
+              agreement: {{
+                type: agreementQuestion.type,
+                answer: agreementAnswer.value,
+                selectedOption: agreementMatch.option && agreementMatch.option.label,
+                optionSource: agreementMatch.source,
+                fallback: agreementMatch.fallback
+              }}
+            }}));
+        """
+        try:
+            result = subprocess.run(
+                ["node", "-e", script],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+        except FileNotFoundError:
+            self.skipTest("node is required to test the C3 V2 Workday date answers")
+
+        parsed = json.loads(result.stdout)
+        self.assertEqual(
+            parsed["name"],
+            {"type": "full_name", "value": "Hunt Test", "source": "profile:fullName"},
+        )
+        self.assertRegex(parsed["month"]["value"], r"^\d{2}$")
+        self.assertRegex(parsed["day"]["value"], r"^\d{2}$")
+        self.assertRegex(parsed["year"]["value"], r"^\d{4}$")
+        self.assertEqual(parsed["month"]["source"], "default:current_date:month")
+        self.assertEqual(parsed["day"]["source"], "default:current_date:day")
+        self.assertEqual(parsed["year"]["source"], "default:current_date:year")
+        self.assertEqual(
+            parsed["disabilityName"],
+            {"type": "full_name", "value": "Hunt Test", "source": "profile:fullName"},
+        )
+        self.assertEqual(parsed["disabilityDate"]["source"], "default:current_date:year")
+        self.assertEqual(
+            parsed["desiredStartMonth"],
+            {
+                "type": "desired_start_date",
+                "value": "06",
+                "source": "profile:desiredStartDate:month",
+            },
+        )
+        self.assertEqual(
+            parsed["agreement"],
+            {
+                "type": "terms_acceptance",
+                "answer": "Yes",
+                "selectedOption": "I have read and agree to the Non Disclosure Agreement",
+                "optionSource": "affirmative_agreement",
                 "fallback": False,
             },
         )
@@ -1202,6 +2045,154 @@ Expected Graduation: Sep 2026
             },
         )
 
+    def test_v2_salary_dropdown_refuses_unsafe_option_fallback(self):
+        paths = [
+            REPO_ROOT / "executioner" / "src" / "shared" / "v2" / "field-catalog.js",
+            REPO_ROOT / "executioner" / "src" / "shared" / "v2" / "question-identifier.js",
+            REPO_ROOT / "executioner" / "src" / "shared" / "v2" / "answer-resolver.js",
+            REPO_ROOT / "executioner" / "src" / "shared" / "v2" / "option-matcher.js",
+        ]
+        script = f"""
+            const fs = require("node:fs");
+            const vm = require("node:vm");
+            const issues = [];
+            const context = {{
+              window: {{
+                __huntV2: {{
+                  audit: {{
+                    pushIssue: (_audit, _fieldAudit, issue) => issues.push(issue),
+                    pushFieldStep: () => undefined
+                  }}
+                }}
+              }}
+            }};
+            vm.createContext(context);
+            for (const path of {json.dumps([str(path) for path in paths])}) {{
+              vm.runInContext(fs.readFileSync(path, "utf8"), context);
+            }}
+            const root = context.window.__huntV2;
+            const field = {{
+              workday: {{ fieldLabel: "What is your target salary range?*" }},
+              fieldId: "primaryQuestionnaire--salary",
+              descriptor: "What is your target salary range?* $30000 - $35000",
+              uiModel: "button_listbox",
+              required: true
+            }};
+            const question = root.questionIdentifier.identifyQuestion(field, null, null);
+            const answer = root.answerResolver.resolveAnswer({{
+              question,
+              field,
+              profile: {{ salaryExpectationRange: "90,000 - 105,000" }},
+              audit: null,
+              fieldAudit: null
+            }});
+            const match = root.optionMatcher.matchOption({{
+              options: [
+                {{ label: "$30000 - $35000", value: "$30000 - $35000" }},
+                {{ label: "$35000 - $40000", value: "$35000 - $40000" }}
+              ],
+              answer,
+              field,
+              audit: null,
+              fieldAudit: null
+            }});
+            console.log(JSON.stringify({{
+              type: question.type,
+              valueSource: answer.source,
+              option: match.option ? match.option.label : "",
+              source: match.source,
+              fallback: match.fallback,
+              issueKind: issues[0] && issues[0].kind
+            }}));
+        """
+        try:
+            result = subprocess.run(
+                ["node", "-e", script],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+        except FileNotFoundError:
+            self.skipTest("node is required to test the C3 V2 salary matcher")
+
+        self.assertEqual(
+            json.loads(result.stdout),
+            {
+                "type": "salary_expectation",
+                "valueSource": "profile:salaryExpectationRange",
+                "option": "",
+                "source": "salary_no_safe_match",
+                "fallback": False,
+                "issueKind": "salary_option_no_safe_match",
+            },
+        )
+
+    def test_v2_salary_dropdown_matches_same_numeric_range(self):
+        paths = [
+            REPO_ROOT / "executioner" / "src" / "shared" / "v2" / "field-catalog.js",
+            REPO_ROOT / "executioner" / "src" / "shared" / "v2" / "question-identifier.js",
+            REPO_ROOT / "executioner" / "src" / "shared" / "v2" / "answer-resolver.js",
+            REPO_ROOT / "executioner" / "src" / "shared" / "v2" / "option-matcher.js",
+        ]
+        script = f"""
+            const fs = require("node:fs");
+            const vm = require("node:vm");
+            const context = {{ window: {{ __huntV2: {{}} }} }};
+            vm.createContext(context);
+            for (const path of {json.dumps([str(path) for path in paths])}) {{
+              vm.runInContext(fs.readFileSync(path, "utf8"), context);
+            }}
+            const root = context.window.__huntV2;
+            const field = {{
+              workday: {{ fieldLabel: "What is your target salary range?*" }},
+              fieldId: "primaryQuestionnaire--salary",
+              descriptor: "What is your target salary range?*",
+              uiModel: "button_listbox",
+              required: true
+            }};
+            const question = root.questionIdentifier.identifyQuestion(field, null, null);
+            const answer = root.answerResolver.resolveAnswer({{
+              question,
+              field,
+              profile: {{ salaryExpectationRange: "90,000 - 105,000" }},
+              audit: null,
+              fieldAudit: null
+            }});
+            const match = root.optionMatcher.matchOption({{
+              options: [
+                {{ label: "$30000 - $35000", value: "$30000 - $35000" }},
+                {{ label: "$90000 - $105000", value: "$90000 - $105000" }}
+              ],
+              answer,
+              field,
+              audit: null,
+              fieldAudit: null
+            }});
+            console.log(JSON.stringify({{
+              option: match.option ? match.option.label : "",
+              source: match.source,
+              fallback: match.fallback
+            }}));
+        """
+        try:
+            result = subprocess.run(
+                ["node", "-e", script],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+        except FileNotFoundError:
+            self.skipTest("node is required to test the C3 V2 salary matcher")
+
+        self.assertEqual(
+            json.loads(result.stdout),
+            {
+                "option": "$90000 - $105000",
+                "source": "salary_numeric_match",
+                "fallback": False,
+            },
+        )
+
     def test_extension_has_detected_page_prompt_for_signup_and_ats_pages(self):
         content = (REPO_ROOT / "executioner" / "src" / "content" / "bootstrap.js").read_text(
             encoding="utf-8"
@@ -1233,19 +2224,32 @@ Expected Graduation: Sep 2026
         self.assertIn("SIGNUP_TERMS", content)
         self.assertIn("SIGNIN_TERMS", content)
         self.assertIn("visibleFormControls", content)
-        self.assertIn('return { kind: "signup", inputCount }', content)
-        self.assertIn('return { kind: "signin", inputCount }', content)
+        self.assertIn('atsType === "workday"', content)
+        self.assertIn("hasWorkdaySigninChoice", content)
+        self.assertIn("hasWorkdayLoginChoice", content)
+        self.assertIn("hasSignInWithEmailAction", content)
+        self.assertIn("\\bsign in with email\\b", content)
+        self.assertIn('return { kind: "signup", inputCount, atsType }', content)
+        self.assertIn('return { kind: "signin", inputCount, atsType }', content)
         self.assertLess(
-            content.index('return { kind: "signup", inputCount }'),
-            content.index('return { kind: "ats", inputCount }'),
+            content.index('return { kind: "signup", inputCount, atsType }'),
+            content.index('return { kind: "ats", inputCount, atsType }'),
         )
         self.assertLess(
-            content.index('return { kind: "signin", inputCount }'),
-            content.index('return { kind: "ats", inputCount }'),
+            content.index("hasWorkdaySigninChoice"),
+            content.index('return { kind: "ats", inputCount, atsType }'),
         )
-        self.assertIn("Hunt detected an account signup form.", content)
-        self.assertIn("Hunt detected an account sign-in form.", content)
-        self.assertIn("Fill account fields", content)
+        self.assertIn('detection.kind === "signin"', content)
+        self.assertIn("atsType,", content)
+        self.assertIn("Detected job site with Apply", content)
+        self.assertIn("Detected sign-in page", content)
+        self.assertIn("Detected signup page", content)
+        self.assertIn("Detected job application", content)
+        self.assertIn("Open the email sign-in choice before filling credentials.", content)
+        self.assertIn("No credential fields are visible yet.", content)
+        self.assertIn("Hunt is moving through the account sign-in step.", content)
+        self.assertIn("Create account", content)
+        self.assertIn("Fill application", content)
         self.assertIn("hunt.apply.fill_current_page", content)
         self.assertIn("hunt.apply.show_toast", content)
         self.assertIn("hunt-apply-page-toasts", content)
@@ -1260,6 +2264,10 @@ Expected Graduation: Sep 2026
         self.assertIn("dom_change", content)
         self.assertIn("dismissedPromptSignatures", content)
         self.assertIn("hunt-apply-fill-progress-spinner", content)
+        self.assertIn("function fillProgressTitle", content)
+        self.assertIn("attempt\\u00a0$1", content)
+        self.assertIn("white-space: nowrap", content)
+        self.assertIn("text-overflow: ellipsis", content)
         self.assertIn("Filling page", content)
         self.assertIn("detected_page_prompt", content)
         self.assertIn(
@@ -1496,9 +2504,16 @@ Expected Graduation: Sep 2026
         self.assertIn("clickSignInAction", smoke)
         self.assertIn("recordWorkflowEvent", smoke)
         self.assertIn("detect_account_state", smoke)
+        self.assertIn("workdayPageKindExpression", smoke)
+        self.assertIn("waitForWorkdayPageReady", smoke)
+        self.assertIn("signin_choice", smoke)
+        self.assertIn("application_step", smoke)
+        self.assertIn("workday_page_still_loading", smoke)
         self.assertIn("session_detected", smoke)
         self.assertIn("clickWorkdayLoginSubmit", smoke)
         self.assertIn("login_submit_not_found", smoke)
+        self.assertIn("normalizedTextOf", smoke)
+        self.assertIn("left === right", smoke)
         self.assertIn("already_on_login_page", smoke)
         self.assertIn("account_login_fields_found", smoke)
         self.assertIn("login_first_succeeded", smoke)
@@ -1519,9 +2534,19 @@ Expected Graduation: Sep 2026
         self.assertIn("--clear-before-fill", fresh_apply)
         self.assertIn("--keep-existing-workday-tabs", fresh_apply)
         self.assertIn("visibleValidationErrors", live_smoke)
+        self.assertIn('progressBarActiveStep', live_smoke)
+        self.assertIn("workday_catalog_after_auth", background)
+        self.assertIn("detectWorkdayCatalogPageForTab", background)
+        self.assertIn("hasVisibleAuthChoice", background)
+        self.assertIn("isWorkdayLoginPath", background)
+        self.assertIn("auth_landing_choice_clicked", background)
+        self.assertIn("auth_landing_choice_not_clicked", background)
+        self.assertIn("Opening email sign-in choice", background)
         self.assertIn('mode: "manual"', live_smoke)
         self.assertIn("clickApplyManuallyEntry", live_smoke)
         self.assertIn("logWorkflowPhase", live_smoke)
+        self.assertIn("waitForWorkdayPageReady", live_smoke)
+        self.assertIn("Workday page reached a classified state", live_smoke)
         self.assertIn("Detected start-application page and clicked Apply Manually", live_smoke)
         self.assertIn('phase: "apply_entry"', live_smoke)
         self.assertIn('phase: "job_fill"', live_smoke)
@@ -1548,6 +2573,7 @@ Expected Graduation: Sep 2026
         self.assertIn("Social Media", answer_resolver)
         self.assertIn("Job Sites", answer_resolver)
         self.assertIn("hunt.apply.await_email_verification", background)
+        self.assertIn('progressBarActiveStep', background)
         self.assertIn("emailVerificationBridgeUrl", background)
         self.assertIn("settings.emailVerificationBridgeUrl", background)
         self.assertIn("autoEmailVerificationEnabled", background)

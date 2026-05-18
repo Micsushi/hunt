@@ -325,6 +325,74 @@ class Stage4Tests(unittest.TestCase):
                 str(runtime_dir / "coordinator"),
             )
 
+    def test_hunterctl_selects_fallback_ui_port_when_default_is_busy(self):
+        def fake_available(_host, port):
+            return port == 8005
+
+        with patch.object(hunterctl, "_tcp_port_available", side_effect=fake_available):
+            port, used_fallback = hunterctl._select_review_app_port(
+                host="127.0.0.1",
+                preferred_port=8000,
+                fallback_start=8004,
+                max_port=8006,
+            )
+
+        self.assertEqual(port, 8005)
+        self.assertTrue(used_fallback)
+
+    def test_hunterctl_ui_serve_defaults_to_non_legacy_port(self):
+        captured = {}
+
+        def fake_run(command, *, env=None):
+            captured["command"] = command
+            captured["env"] = env
+            raise SystemExit(0)
+
+        with (
+            patch.object(hunterctl, "_run_npm_build", return_value=True),
+            patch.object(hunterctl, "_tcp_port_available", return_value=True),
+            patch.object(hunterctl, "_run", side_effect=fake_run),
+            patch.object(hunterctl, "_frontend_dir", return_value=str(REPO_ROOT)),
+            patch.dict(os.environ, {}, clear=True),
+        ):
+            with self.assertRaises(SystemExit) as ctx:
+                hunterctl.cmd_ui_serve(object())
+
+        self.assertEqual(ctx.exception.code, 0)
+        self.assertEqual(captured["command"], [hunterctl.PYTHON, "-m", "backend.app"])
+        self.assertEqual(captured["env"]["REVIEW_APP_HOST"], "127.0.0.1")
+        self.assertEqual(captured["env"]["REVIEW_APP_PORT"], "8004")
+
+    def test_hunterctl_ui_serve_uses_fallback_when_requested_port_is_busy(self):
+        captured = {}
+
+        def fake_run(command, *, env=None):
+            captured["command"] = command
+            captured["env"] = env
+            raise SystemExit(0)
+
+        def fake_available(_host, port):
+            return port != 8000
+
+        with (
+            patch.object(hunterctl, "_run_npm_build", return_value=True),
+            patch.object(hunterctl, "_tcp_port_available", side_effect=fake_available),
+            patch.object(hunterctl, "_run", side_effect=fake_run),
+            patch.object(hunterctl, "_frontend_dir", return_value=str(REPO_ROOT)),
+            patch.dict(os.environ, {"REVIEW_APP_PORT": "8000"}, clear=True),
+        ):
+            stdout = io.StringIO()
+            with redirect_stdout(stdout):
+                with self.assertRaises(SystemExit) as ctx:
+                    hunterctl.cmd_ui_serve(object())
+
+        self.assertEqual(ctx.exception.code, 0)
+        self.assertEqual(captured["command"], [hunterctl.PYTHON, "-m", "backend.app"])
+        self.assertEqual(captured["env"]["REVIEW_APP_HOST"], "127.0.0.1")
+        self.assertEqual(captured["env"]["REVIEW_APP_PORT"], "8004")
+        self.assertIn("restart the existing instance", stdout.getvalue())
+        self.assertIn("http://127.0.0.1:8004", stdout.getvalue())
+
     def test_submit_login_form_clicks_account_chooser_before_form_fill(self):
         page = self.FakePage(
             {

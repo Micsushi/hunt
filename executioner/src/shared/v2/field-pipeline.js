@@ -82,6 +82,63 @@
     return !canUseAccountPassword;
   }
 
+  function hasValidationState(field) {
+    var el = field.element || field.anchor;
+    if (!el) {
+      return false;
+    }
+    if (el.getAttribute?.("aria-invalid") === "true") {
+      return true;
+    }
+    var describedBy = String(el.getAttribute?.("aria-describedby") || "");
+    if (
+      describedBy &&
+      describedBy.split(/\s+/).some(function (id) {
+        var node = id ? document.getElementById(id) : null;
+        return /error|required|invalid/i.test(
+          String(node?.innerText || node?.textContent || ""),
+        );
+      })
+    ) {
+      return true;
+    }
+    var container = el.closest?.(
+      '[data-automation-id^="formField"], [role="group"], fieldset, form',
+    );
+    return Boolean(
+      container &&
+      /error|required|invalid/i.test(
+        String(container.innerText || container.textContent || ""),
+      ) &&
+      container.querySelector?.(
+        '[aria-invalid="true"], [data-automation-id="inputAlert"]',
+      ),
+    );
+  }
+
+  function shouldFillOptionalProfileCorrection(field, context) {
+    var profile = context.profile || {};
+    if (!profile.country) {
+      return false;
+    }
+    var el = field.element || field.anchor;
+    var signal = [
+      field.fieldId,
+      field.name,
+      field.descriptor,
+      field.workday?.fieldLabel,
+      el?.id,
+      el?.name,
+      el?.getAttribute?.("aria-label"),
+    ]
+      .join(" ")
+      .toLowerCase();
+    return (
+      signal.includes("address--countryregion") ||
+      signal.includes("country region")
+    );
+  }
+
   function fillCancelled(context) {
     var fillRunId = context.fillRunId || "";
     var cancelledIds = Array.isArray(window.__huntApplyCancelledFillRunIds)
@@ -249,6 +306,16 @@
       fieldAudit,
     );
     fieldAudit.questionType = question.type;
+    if (question.type === "unknown") {
+      root.audit.pushIssue(audit, fieldAudit, {
+        kind: "unknown_question_unresolved",
+        severity: field.required ? "warn" : "info",
+        failedStep: "question.identify",
+        reason:
+          "C3 did not recognize this question. Add a catalog entry or profile mapping before trusting an automatic answer.",
+        questionType: "unknown",
+      });
+    }
     var answer = root.answerResolver.resolveAnswer({
       question: question,
       field: field,
@@ -523,7 +590,9 @@
         if (
           context.settings?.fillRequiredOnly !== false &&
           !field.required &&
-          field.uiModel !== "file"
+          field.uiModel !== "file" &&
+          !hasValidationState(field) &&
+          !shouldFillOptionalProfileCorrection(field, context)
         ) {
           root.audit.pushEvent(audit, {
             action: "field_skipped",

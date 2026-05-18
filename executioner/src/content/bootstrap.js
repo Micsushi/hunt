@@ -83,6 +83,7 @@
   ];
   const CAREER_APPLY_TERMS = [
     "apply now",
+    "apply",
     "apply for this job",
     "apply to this job",
     "start application",
@@ -148,6 +149,14 @@
         .includes("email"),
     ).length;
     const isAts = ATS_HOST_PATTERNS.some((pattern) => host.includes(pattern));
+    const atsType = host.includes("myworkdayjobs.com")
+      ? "workday"
+      : host.includes("greenhouse.io")
+        ? "greenhouse"
+        : host.includes("lever.co")
+          ? "lever"
+          : "";
+    const isWorkday = atsType === "workday";
     const hasEmbeddedAts = EMBEDDED_ATS_SELECTORS.some((selector) =>
       document.querySelector(selector),
     );
@@ -183,6 +192,33 @@
           .replace(/\s+/g, " ")
           .trim(),
       );
+    const activeStepText =
+      (
+        document.querySelector('[data-automation-id="progressBarActiveStep"]')
+          ?.innerText || ""
+      )
+        .replace(/\s+/g, " ")
+        .trim()
+        .toLowerCase() || "";
+    const hasWorkdayAuthStep =
+      isWorkday &&
+      /create account|sign in|log in|login|register|sign up/.test(
+        activeStepText,
+      );
+    const hasSignInWithEmailAction = buttonTexts.some((label) =>
+      /\bsign in with email\b|\bsign in using email\b|\bemail sign in\b/i.test(
+        label,
+      ),
+    );
+    const hasSocialSignInAction = buttonTexts.some((label) =>
+      /sign\s*in\s*with\s*(google|apple)/i.test(label),
+    );
+    const hasWorkdaySigninChoice =
+      hasWorkdayAuthStep && (hasSignInWithEmailAction || hasSocialSignInAction);
+    const hasWorkdayLoginChoice =
+      isWorkday &&
+      /\/login\/?$/i.test(window.location.pathname || "") &&
+      (hasSignInWithEmailAction || hasSocialSignInAction);
     const hasCareerApplyEntry =
       (host.includes("career") ||
         host.includes("jobs") ||
@@ -191,73 +227,155 @@
       buttonTexts.some((label) =>
         CAREER_APPLY_TERMS.some((term) => label.includes(term)),
       );
+    const hasWorkdayDetailsApply =
+      isWorkday &&
+      path.includes("/details/") &&
+      buttonTexts.some(
+        (label) =>
+          /^apply(?:\s+apply)?$/i.test(label) ||
+          (/^apply\b/i.test(label) && /\/apply(?:$|[/?#\s])/i.test(label)),
+      );
     if (inputCount >= 2 && hasSignupSignal && passwordCount >= 2) {
-      return { kind: "signup", inputCount };
+      return { kind: "signup", inputCount, atsType };
+    }
+    if (hasWorkdaySigninChoice || hasWorkdayLoginChoice) {
+      return { kind: "signin", inputCount, atsType };
     }
     if (inputCount >= 2 && hasSigninSignal && passwordCount >= 1) {
-      return { kind: "signin", inputCount };
+      return { kind: "signin", inputCount, atsType };
     }
-    if (hasCareerApplyEntry) {
-      return { kind: "apply_entry", inputCount };
+    if (hasWorkdayDetailsApply || hasCareerApplyEntry) {
+      return { kind: "apply_entry", inputCount, atsType };
     }
     if (isAts || hasEmbeddedAts) {
-      return { kind: "ats", inputCount };
+      return { kind: "ats", inputCount, atsType };
     }
     if (inputCount >= 3 && hasApplicationSignal) {
-      return { kind: "application", inputCount };
+      return { kind: "application", inputCount, atsType };
     }
-    return { kind: "ordinary", inputCount };
+    return { kind: "ordinary", inputCount, atsType };
   }
 
   function promptTitle(kind) {
-    if (kind === "ats") {
-      return "Hunt detected an application page.";
+    if (kind === "ats" || kind === "application") {
+      return "Detected job application";
     }
     if (kind === "signup") {
-      return "Hunt detected an account signup form.";
+      return "Detected signup page";
     }
     if (kind === "signin") {
-      return "Hunt detected an account sign-in form.";
+      return "Detected sign-in page";
     }
     if (kind === "apply_entry") {
-      return "Hunt detected an apply button.";
+      return "Detected job site with Apply";
     }
-    return "Hunt detected a form it may be able to fill.";
+    return "Detected fillable form";
+  }
+
+  function promptEyebrow(kind) {
+    if (kind === "apply_entry") {
+      return "Job site";
+    }
+    if (kind === "signin") {
+      return "Sign in";
+    }
+    if (kind === "signup") {
+      return "Signup";
+    }
+    if (kind === "ats" || kind === "application") {
+      return "Job application";
+    }
+    return "Form";
   }
 
   function promptMeta(kind, inputCount) {
     if (kind === "signup") {
       return [
-        "Fill saved account email and password fields first. Hunt will handle verification only if signup requires it.",
+        "Use the saved account email and password to create the applicant account.",
         `${inputCount} visible account controls found.`,
       ];
     }
     if (kind === "signin") {
       return [
-        "Fill saved account email and password fields first. Signup is only used if sign-in fails.",
-        `${inputCount} visible account controls found.`,
+        inputCount > 0
+          ? "Use the saved account email and password to sign in."
+          : "Open the email sign-in choice before filling credentials.",
+        inputCount > 0
+          ? `${inputCount} visible sign-in controls found.`
+          : "No credential fields are visible yet.",
       ];
     }
     if (kind === "apply_entry") {
       return [
-        "Open the employer application form, then fill the visible fields.",
-        "No application fields are visible on this page yet.",
+        "Click through to the employer application flow.",
+        "The page has an Apply action, but no application fields yet.",
+      ];
+    }
+    if (kind === "ats" || kind === "application") {
+      return [
+        "Fill only known job application fields from your Hunt profile/resume.",
+        `${inputCount} visible application controls found.`,
       ];
     }
     return [
-      "Fill only known fields from your Hunt profile/resume. Unknown and optional fields stay for review.",
+      "Fill only known fields from your Hunt profile/resume.",
       `${inputCount} visible form controls found.`,
     ];
   }
 
   function promptFillButtonLabel(kind) {
-    if (kind === "signup" || kind === "signin") {
-      return "Fill account fields";
+    if (kind === "signup") {
+      return "Create account";
+    }
+    if (kind === "signin") {
+      return "Sign in";
     }
     if (kind === "apply_entry") {
       return "Open application";
     }
+    if (kind === "ats" || kind === "application") {
+      return "Fill application";
+    }
     return "Fill known fields";
+  }
+
+  function promptProgressMessage(kind) {
+    if (kind === "apply_entry") {
+      return "Trying to start application";
+    }
+    if (kind === "signin") {
+      return "Signing in";
+    }
+    if (kind === "signup") {
+      return "Creating account";
+    }
+    if (kind === "ats" || kind === "application") {
+      return "Filling application";
+    }
+    return "Filling page";
+  }
+
+  function fillProgressMeta(message) {
+    if (/signing in|email sign-in|account sign-in/i.test(message || "")) {
+      return "Hunt is moving through the account sign-in step.";
+    }
+    if (/creating account|signup/i.test(message || "")) {
+      return "Hunt is moving through the account signup step.";
+    }
+    if (/opening application|trying to start application/i.test(message || "")) {
+      return "Hunt is opening the employer application flow.";
+    }
+    if (/filling application/i.test(message || "")) {
+      return "Hunt is working through the job application fields.";
+    }
+    return "Hunt is working through the visible fields.";
+  }
+
+  function fillProgressTitle(message) {
+    return String(message || "Filling page").replace(
+      /\battempt\s+(\d+)\b/gi,
+      "attempt\u00a0$1",
+    );
   }
 
   function removePrompt() {
@@ -597,8 +715,16 @@
       var existingText = existing.shadowRoot.getElementById(
         "hunt-apply-fill-progress-message",
       );
+      var existingMeta = existing.shadowRoot.getElementById(
+        "hunt-apply-fill-progress-meta",
+      );
       if (existingText) {
-        existingText.textContent = message || "Filling page";
+        existingText.textContent = fillProgressTitle(message);
+        if (existingMeta) {
+          existingMeta.textContent = fillProgressMeta(
+            message || "Filling page",
+          );
+        }
         logPageUiEvent(
           "ui.fill_progress.update",
           "Updated fill progress indicator.",
@@ -614,7 +740,7 @@
     host.style.right = "18px";
     host.style.top = "18px";
     host.style.zIndex = "2147483647";
-    host.style.maxWidth = "360px";
+    host.style.maxWidth = "min(560px, calc(100vw - 36px))";
     host.style.fontFamily = "Segoe UI, system-ui, sans-serif";
     host.attachShadow({ mode: "open" });
     host.shadowRoot.innerHTML = `
@@ -632,7 +758,7 @@
           color: #d4f0dc;
           display: flex;
           gap: 10px;
-          min-width: 230px;
+          min-width: 330px;
           padding: 10px 12px;
         }
         #hunt-apply-fill-progress-spinner {
@@ -647,6 +773,7 @@
         }
         .copy {
           display: grid;
+          flex: 1 1 auto;
           gap: 2px;
           min-width: 0;
         }
@@ -654,6 +781,9 @@
           font-size: 13px;
           font-weight: 750;
           line-height: 1.2;
+          overflow: hidden;
+          text-overflow: ellipsis;
+          white-space: nowrap;
         }
         .meta {
           color: #9bb69f;
@@ -680,8 +810,8 @@
       <div class="panel" role="status" aria-live="polite">
         <div id="hunt-apply-fill-progress-spinner" aria-hidden="true"></div>
         <div class="copy">
-          <div class="title" id="hunt-apply-fill-progress-message">${message || "Filling page"}</div>
-          <div class="meta">Hunt is working through the visible fields.</div>
+          <div class="title" id="hunt-apply-fill-progress-message">${escapeHtml(fillProgressTitle(message))}</div>
+          <div class="meta" id="hunt-apply-fill-progress-meta">${escapeHtml(fillProgressMeta(message || "Filling page"))}</div>
         </div>
         <button class="cancel" id="hunt-apply-fill-progress-cancel" type="button">Cancel</button>
       </div>
@@ -768,7 +898,7 @@
     );
   }
 
-  function showPrompt({ kind, inputCount }) {
+  function showPrompt({ kind, inputCount, atsType }) {
     if (document.getElementById(PROMPT_ID)) {
       return;
     }
@@ -794,8 +924,16 @@
         }
         .body {
           display: grid;
-          gap: 8px;
+          gap: 7px;
           padding: 12px;
+        }
+        .eyebrow {
+          color: #9bdeac;
+          font-size: 10px;
+          font-weight: 800;
+          letter-spacing: 0.08em;
+          line-height: 1.2;
+          text-transform: uppercase;
         }
         .title {
           font-size: 13px;
@@ -829,10 +967,24 @@
           background: #59a96a;
           color: #07100a;
         }
+        .card.apply_entry {
+          border-left: 4px solid #6ca8ff;
+        }
+        .card.signin {
+          border-left: 4px solid #f0b429;
+        }
+        .card.signup {
+          border-left: 4px solid #b68cff;
+        }
+        .card.ats,
+        .card.application {
+          border-left: 4px solid #59a96a;
+        }
       </style>
-      <div class="card">
+      <div class="card ${escapeHtml(kind)}">
         <div class="body">
-          <div class="title">${promptTitle(kind)}</div>
+          <div class="eyebrow">${escapeHtml(promptEyebrow(kind))}</div>
+          <div class="title">${escapeHtml(promptTitle(kind))}</div>
           <div class="meta">${metaLines.map(escapeHtml).join('</div><div class="meta">')}</div>
         </div>
         <div class="actions">
@@ -850,6 +1002,7 @@
         {
           kind,
           inputCount,
+          atsType,
         },
       );
     });
@@ -861,20 +1014,21 @@
           promptAutoDismissTimer = null;
         }
         const button = host.shadowRoot.getElementById("fill");
-        button.textContent = "Filling...";
+        button.textContent = `${promptProgressMessage(kind)}...`;
         button.disabled = true;
         const fillRequestId = `detected_${Date.now()}_${Math.random()
           .toString(36)
           .slice(2, 8)}`;
         activeFillRequestId = fillRequestId;
         removeToasts();
-        showFillProgress({ message: "Filling page" });
+        showFillProgress({ message: promptProgressMessage(kind) });
         logPageUiEvent(
           "ui.detect_prompt.fill_click",
           "Clicked detected-page fill.",
           {
             kind,
             inputCount,
+            atsType,
           },
         );
         const response = await runtimeMessageWithTimeout(
@@ -882,6 +1036,7 @@
             type: "hunt.apply.fill_current_page",
             payload: {
               pageKind: kind,
+              atsType,
               triggeredBy: "detected_page_prompt",
               fillRequestId,
             },
@@ -896,6 +1051,7 @@
             {
               kind,
               inputCount,
+              atsType,
               fillRequestId,
               activeFillRequestId,
             },
@@ -911,6 +1067,7 @@
           {
             kind,
             inputCount,
+            atsType,
             ok: Boolean(response?.ok),
             reason: response?.reason || "",
             timedOut: Boolean(response?.timedOut),
@@ -940,6 +1097,7 @@
         {
           kind,
           inputCount,
+          atsType,
           timeoutMs: PROMPT_AUTO_DISMISS_MS,
         },
       );
@@ -947,6 +1105,7 @@
     logPageUiEvent("ui.detect_prompt.show", "Showed detected-page prompt.", {
       kind,
       inputCount,
+      atsType,
       step: currentStepText(),
     });
   }
@@ -1105,8 +1264,31 @@
   cachedStateResponse = stateResponse;
 
   function currentStepText() {
+    const activeStep = document.querySelector(
+      '[data-automation-id="progressBarActiveStep"]',
+    );
+    if (activeStep) {
+      const labels = [...activeStep.querySelectorAll("label")]
+        .map((label) => (label.innerText || label.textContent || "").trim())
+        .filter(Boolean);
+      const title =
+        labels.at(-1) ||
+        (activeStep.innerText || activeStep.textContent || "")
+          .split(/\n/)
+          .map((line) => line.trim())
+          .filter(Boolean)
+          .at(-1);
+      if (title) return title;
+    }
     const text = document.body?.innerText || "";
-    const match = text.match(/current step\s+\d+\s+of\s+\d+\s*\n([^\n]+)/i);
+    const match =
+      text.match(/current\s+s?tep\s+\d+\s+of\s+\d+\s*\n([^\n]+)/i) ||
+      text
+        .replace(/\s+/g, " ")
+        .trim()
+        .match(
+          /current\s+s?tep\s+\d+\s+of\s+\d+\s+(.+?)(?:\s+s?tep\s+\d+\s+of\s+\d+|$)/i,
+        );
     return (match?.[1] || document.title || "").trim();
   }
 
@@ -1163,7 +1345,10 @@
       response?.ok &&
       response?.settings?.autoPromptEnabled &&
       response?.settings?.manualFillEnabled &&
-      (detection.inputCount > 0 || detection.kind === "apply_entry") &&
+      (detection.inputCount > 0 ||
+        detection.kind === "apply_entry" ||
+        detection.kind === "signin" ||
+        detection.kind === "signup") &&
       !fillCooldownActive &&
       ["ats", "signup", "signin", "application", "apply_entry"].includes(
         detection.kind,

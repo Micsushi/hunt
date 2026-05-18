@@ -47,6 +47,7 @@ TEST_TARGETS = {
         "tests/test_component4_service_api.py",
         "tests/test_component4_c3_bridge.py",
         "tests/test_component4_worker_protocol.py",
+        "tests/test_component4_new_features.py",
     ],
     "shared": [
         "tests/test_db_compat.py",

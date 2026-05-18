@@ -119,6 +119,12 @@ Config values can also be edited via the **Settings** page in the web UI (requir
 - `review`: legacy alias for `ui serve`
 - `build-ui`: legacy alias for `ui build`
 
+`ui serve` uses `REVIEW_APP_HOST` and `REVIEW_APP_PORT` when set, defaulting to
+`127.0.0.1:8004` so it does not claim the legacy `8000` port by default. If the
+requested port is already in use, the launcher prints a restart hint for the
+existing instance and starts the new UI server on the first free fallback port
+beginning at `8004`.
+
 ### Local and server control
 
 - `start`

@@ -25,12 +25,31 @@ function sameJson(left, right) {
   return JSON.stringify(left || {}) === JSON.stringify(right || {});
 }
 
+function sanitizeBackendUrl(value) {
+  const backendUrl = sanitizeUrl(value || DEFAULT_SETTINGS.backendUrl);
+  if (
+    backendUrl === "http://127.0.0.1:8000" ||
+    backendUrl === "http://localhost:8000"
+  ) {
+    return DEFAULT_SETTINGS.backendUrl;
+  }
+  return backendUrl;
+}
+
 export async function getFromSyncStorage(keys) {
   return chrome.storage.sync.get(keys);
 }
 
 export async function setInSyncStorage(values) {
-  return chrome.storage.sync.set(values);
+  try {
+    return await chrome.storage.sync.set(values);
+  } catch (error) {
+    if (/MAX_WRITE_OPERATIONS_PER_(MINUTE|HOUR)|quota/i.test(String(error))) {
+      console.warn("C3 sync storage write skipped:", error);
+      return false;
+    }
+    throw error;
+  }
 }
 
 export async function getFromLocalStorage(keys) {
@@ -38,7 +57,15 @@ export async function getFromLocalStorage(keys) {
 }
 
 export async function setInLocalStorage(values) {
-  return chrome.storage.local.set(values);
+  try {
+    return await chrome.storage.local.set(values);
+  } catch (error) {
+    if (/MAX_WRITE_OPERATIONS_PER_(MINUTE|HOUR)|quota/i.test(String(error))) {
+      console.warn("C3 local storage write skipped:", error);
+      return false;
+    }
+    throw error;
+  }
 }
 
 export function sanitizeSettings(settings = {}) {
@@ -83,7 +110,7 @@ export function sanitizeSettings(settings = {}) {
       ? sanitizeBoolean(settings.debugLogSinkEnabled ?? true)
       : true,
     c4PollingEnabled: sanitizeBoolean(settings.c4PollingEnabled),
-    backendUrl: sanitizeUrl(settings.backendUrl || DEFAULT_SETTINGS.backendUrl),
+    backendUrl: sanitizeBackendUrl(settings.backendUrl),
     serviceToken: sanitizeText(settings.serviceToken),
     pollIntervalSeconds: Number.isFinite(pollIntervalSeconds)
       ? Math.min(Math.max(Math.round(pollIntervalSeconds), 30), 3600)

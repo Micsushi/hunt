@@ -10,6 +10,7 @@
     "I do not wish to self-identify",
     "Decline to answer",
     "Not disclosed",
+    "Not declared",
   ];
 
   function entry(id, config) {
@@ -43,7 +44,15 @@
       profilePaths: ["lastName"],
     }),
     entry("full_name", {
-      aliases: ["full name", "legal name", "candidate name", "applicant name"],
+      exactLabels: ["name"],
+      aliases: [
+        "full name",
+        "legal name",
+        "candidate name",
+        "applicant name",
+        "enter your name",
+        "please enter your name",
+      ],
       profilePaths: ["fullName"],
     }),
     entry("email", {
@@ -84,12 +93,90 @@
       defaultValue: "Canada (+1)",
       optionAliases: { "Canada (+1)": ["Canada", "+1", "CA +1"] },
     }),
+    entry("workday_system_usage", {
+      aliases: [
+        "use or work on the workday system",
+        "work on the workday system",
+        "current job do you use or work",
+      ],
+      excludeKeywords: ["describe your interactions", "describe interactions"],
+      defaultValue: "No, I do not use the Workday system in my current job",
+    }),
+    entry("truthful_application_acknowledgement", {
+      aliases: [
+        "please enter yes if you acknowledge",
+        "acknowledge that you have read",
+        "acknowledge that you understand",
+        "truthfully and accurately",
+        "information is true",
+      ],
+      defaultValue: true,
+      answerType: "yes_no",
+    }),
+    entry("identity_verification_upon_hire", {
+      aliases: [
+        "provide verification of your identity upon hire",
+        "provide verification of your identify upon hire",
+        "provide proof of identity upon hire",
+        "verify your identity upon hire",
+        "identity verification upon hire",
+      ],
+      defaultValue: true,
+      answerType: "yes_no",
+    }),
+    entry("relocation_consideration", {
+      aliases: ["would you consider relocating for this role"],
+      profilePaths: ["relocationPreference", "willingToRelocate"],
+      defaultValue: "I am local to where the job is posted",
+    }),
+    entry("non_compete_restriction", {
+      aliases: [
+        "non-compete or non-solicitation restrictions",
+        "non compete or non solicitation restrictions",
+      ],
+      defaultValue: false,
+      answerType: "yes_no",
+    }),
+    entry("us_government_employee", {
+      aliases: [
+        "current or former employee of the united states government",
+        "former employee of the united states government",
+      ],
+      defaultValue: false,
+      answerType: "yes_no",
+    }),
+    entry("export_control_restricted_region", {
+      aliases: [
+        "export control laws",
+        "current citizen, national or resident",
+        "current citizen national or resident",
+      ],
+      defaultValue: false,
+      answerType: "yes_no",
+    }),
+    entry("related_current_employee", {
+      aliases: [
+        "related to a current workday employee",
+        "related to a current employee",
+      ],
+      defaultValue: false,
+      answerType: "yes_no",
+    }),
+    entry("related_customer_or_government_official", {
+      aliases: [
+        "direct business interactions with workday",
+        "related to an employee of a customer",
+        "related to a government official",
+      ],
+      defaultValue: false,
+      answerType: "yes_no",
+    }),
     entry("city", {
       aliases: ["city", "current city", "home city"],
       profilePaths: ["city"],
     }),
     entry("province", {
-      aliases: ["province", "state", "territory", "region"],
+      aliases: ["province", "state", "province territory", "region"],
       profilePaths: ["province"],
       optionAliases: {
         Alberta: ["AB"],
@@ -108,7 +195,12 @@
       },
     }),
     entry("country", {
-      aliases: ["country", "current country"],
+      aliases: [
+        "country",
+        "current country",
+        "country territory",
+        "country region",
+      ],
       profilePaths: ["country"],
       defaultValue: "Canada",
     }),
@@ -139,6 +231,15 @@
     entry("website", {
       aliases: ["website", "portfolio", "personal site"],
       profilePaths: ["websiteUrl"],
+    }),
+    entry("technical_skills", {
+      aliases: [
+        "type to add skills",
+        "add skills",
+        "skills describe your knowledge",
+        "skills",
+      ],
+      profilePaths: ["skills", "skillList", "technicalSkills"],
     }),
     entry("resume_upload", {
       aliases: [
@@ -171,10 +272,63 @@
         "consent to the terms",
         "agree with the terms",
         "agree with the terms and conditions",
+        "career privacy notice",
+        "privacy notice",
+        "agree to the above career privacy notice",
+        "by continuing, you agree",
+        "check the box to continue",
+        "agree to creating this account",
+        "creating this account",
+        "allow me to apply",
+        "account to allow me to apply",
         "accepttermsandagreements",
+        "non disclosure agreement",
+        "non-disclosure agreement",
+        "arbitration agreement",
+        "mutual arbitration agreement",
       ],
       defaultValue: true,
       answerType: "yes_no",
+    }),
+    entry("sms_application_contact_opt_out", {
+      aliases: [
+        "reach out to me via sms",
+        "sms regarding my application",
+        "sms regarding my application and candidate experience",
+        "message and data rates may apply",
+        "i can opt-out at any time",
+      ],
+      defaultValue: "Opt-Out",
+      optionAliases: {
+        "Opt-Out": ["Opt-Out", "Opt Out", "OptOut"],
+      },
+    }),
+    entry("automated_ai_processing_opt_out", {
+      aliases: [
+        "automated tools such as ai",
+        "support review of your application",
+        "match you with relevant existing and future open roles",
+        "prefer not to have your application processed by these tools",
+        "opting out will not impact your eligibility",
+      ],
+      defaultValue: "Opt-Out",
+      optionAliases: {
+        "Opt-Out": ["Opt-Out", "Opt Out", "OptOut"],
+      },
+    }),
+    entry("current_date", {
+      aliases: [
+        "today's date",
+        "todays date",
+        "enter today's date",
+        "enter todays date",
+        "please enter today's date",
+        "please enter todays date",
+        "date signed",
+        "date signed on",
+        "signed on",
+      ],
+      defaultValue: "today",
     }),
     entry("work_authorized", {
       aliases: [
@@ -235,6 +389,22 @@
       defaultValue: false,
       answerType: "yes_no",
     }),
+    entry("background_check_consent", {
+      aliases: [
+        "willing to complete a background",
+        "willing to complete a background security check",
+        "willing to complete a criminal background check",
+        "able to clear a criminal background check",
+        "complete a background security check",
+        "complete a background check",
+        "clear a criminal background check",
+        "criminal record and references",
+        "reference check",
+      ],
+      excludeKeywords: ["convicted", "criminal offence", "criminal offense"],
+      defaultValue: true,
+      answerType: "yes_no",
+    }),
     entry("union_membership", {
       aliases: [
         "member of cewa",
@@ -266,6 +436,10 @@
         "available to start",
         "available to start work",
         "date are you available to start work",
+        "earliest date that you could start work",
+        "earliest date you could start work",
+        "could start work",
+        "accept a job offer",
         "start work date",
       ],
       profilePaths: ["desiredStartDate"],

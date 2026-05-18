@@ -75,6 +75,74 @@
     );
   }
 
+  function isSalaryField(field, answer) {
+    var el = field?.element || field?.anchor;
+    var text = norm(
+      [
+        field?.fieldId,
+        field?.descriptor,
+        field?.workday?.fieldLabel,
+        el?.id,
+        el?.name,
+        el?.getAttribute?.("aria-label"),
+        answer?.source,
+      ].join(" "),
+    );
+    return (
+      text.includes("salary") ||
+      text.includes("compensation") ||
+      text.includes("pay expectation") ||
+      text.includes("salaryexpectation")
+    );
+  }
+
+  function salaryNumbers(value) {
+    var matches = String(value || "").match(/\d[\d,]*/g) || [];
+    var numbers = matches
+      .map(function (match) {
+        return match.replace(/,/g, "");
+      })
+      .filter(function (match) {
+        return match.length >= 4;
+      });
+    if (
+      numbers.length % 2 === 0 &&
+      numbers.slice(0, numbers.length / 2).every(function (value, idx) {
+        return value === numbers[idx + numbers.length / 2];
+      })
+    ) {
+      return numbers.slice(0, numbers.length / 2);
+    }
+    return numbers;
+  }
+
+  function salaryNumericMatch(option, answer) {
+    var targetNumbers = salaryNumbers(answer.value);
+    if (!targetNumbers.length) {
+      return false;
+    }
+    var optionNumbers = salaryNumbers(
+      [option.label, option.value].filter(Boolean).join(" "),
+    );
+    if (!optionNumbers.length) {
+      return false;
+    }
+    if (
+      targetNumbers.length === optionNumbers.length &&
+      targetNumbers.every(function (value, idx) {
+        return value === optionNumbers[idx];
+      })
+    ) {
+      return true;
+    }
+    return (
+      targetNumbers.length === 1 &&
+      optionNumbers.length >= 2 &&
+      Number(optionNumbers[0]) <= Number(targetNumbers[0]) &&
+      Number(targetNumbers[0]) <= Number(optionNumbers[1])
+    );
+  }
+
   function neutralOption(options) {
     var aliases = root.fieldCatalog?.nonDisclosureAliases || [];
     var real = realOptions(options);
@@ -82,9 +150,10 @@
       var alias = norm(aliases[i]);
       var found = real.find(function (option) {
         var label = norm(option.label);
-        return (
-          label === alias || label.includes(alias) || alias.includes(label)
-        );
+        if (label.length <= 3 || alias.length <= 3) {
+          return label === alias;
+        }
+        return label === alias || label.includes(alias) || alias.includes(label);
       });
       if (found) {
         return found;
@@ -102,7 +171,7 @@
     var exact = real.find(function (option) {
       var label = normOptionLabel(option.label);
       var value = normOptionLabel(option.value);
-      return label === target || value === target;
+      return target && (label === target || value === target);
     });
     if (exact) {
       return { option: exact, source: "exact", fallback: false };
@@ -118,6 +187,35 @@
         source: "affirmative_checkbox",
         fallback: false,
       };
+    }
+    if (
+      [
+        "button_listbox",
+        "combobox",
+        "select",
+        "segmented_button_group",
+      ].includes(field?.uiModel) &&
+      answer.answerType === "yes_no" &&
+      target === "yes"
+    ) {
+      var affirmativeAgreement = real.find(function (option) {
+        var label = normOptionLabel(option.label);
+        return (
+          (label.includes("agree") ||
+            label.includes("accept") ||
+            label.includes("consent")) &&
+          !label.includes("do not") &&
+          !label.includes("don t") &&
+          !label.includes("decline")
+        );
+      });
+      if (affirmativeAgreement) {
+        return {
+          option: affirmativeAgreement,
+          source: "affirmative_agreement",
+          fallback: false,
+        };
+      }
     }
     var aliases = optionAliases(answer);
     for (var i = 0; i < aliases.length; i++) {
@@ -160,6 +258,33 @@
     if (partial) {
       return { option: partial, source: "partial", fallback: false };
     }
+    if (isSalaryField(field, answer)) {
+      var salaryMatch = real.find(function (option) {
+        return salaryNumericMatch(option, answer);
+      });
+      if (salaryMatch) {
+        return {
+          option: salaryMatch,
+          source: "salary_numeric_match",
+          fallback: false,
+        };
+      }
+      root.audit?.pushIssue(audit, fieldAudit, {
+        kind: "salary_option_no_safe_match",
+        severity: field?.required ? "warn" : "info",
+        failedStep: "option.match",
+        reason:
+          "Salary option did not match the profile salary value, so no fallback option was selected.",
+        options: real.map(function (option) {
+          return option.label;
+        }),
+      });
+      return {
+        option: null,
+        source: "salary_no_safe_match",
+        fallback: false,
+      };
+    }
     if (
       answer.answerType === "non_disclosure" ||
       answer.answerType === "unknown"
@@ -195,6 +320,23 @@
         }),
       });
       return { option: other, source: "other_fallback", fallback: true };
+    }
+    if (answer.answerType === "unknown") {
+      root.audit?.pushIssue(audit, fieldAudit, {
+        kind: "unknown_question_no_safe_option",
+        severity: field?.required ? "warn" : "info",
+        failedStep: "option.match",
+        reason:
+          "Question was not recognized, so C3 did not choose No or the first available option.",
+        options: real.map(function (option) {
+          return option.label;
+        }),
+      });
+      return {
+        option: null,
+        source: "unknown_no_safe_option",
+        fallback: false,
+      };
     }
     var noOption = real.find(function (option) {
       var label = normOptionLabel(option.label);

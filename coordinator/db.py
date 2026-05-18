@@ -11,6 +11,8 @@ ACTIVE_RUN_STATUSES = frozenset(
         "awaiting_submit_approval",
         "submit_approved",
         "manual_review",
+        "investigation_queued",
+        "investigation_complete",
     }
 )
 EXECUTING_RUN_STATUSES = frozenset(
@@ -19,6 +21,7 @@ EXECUTING_RUN_STATUSES = frozenset(
         "fill_requested",
         "awaiting_submit_approval",
         "submit_approved",
+        "investigation_queued",
     }
 )
 GLOBAL_HOLD_REASONS = frozenset(
@@ -58,6 +61,8 @@ CREATE TABLE IF NOT EXISTS orchestration_runs (
     manual_review_flags_json TEXT DEFAULT '[]',
     submit_allowed BOOLEAN NOT NULL DEFAULT 0,
     submit_approval_id TEXT,
+    failure_code TEXT,
+    failure_report_path TEXT,
     started_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
     completed_at TEXT
@@ -80,6 +85,8 @@ ORCHESTRATION_RUNS_MIGRATION_COLUMNS = {
     "submit_allowed": "BOOLEAN NOT NULL DEFAULT 0",
     "submit_approval_id": "TEXT",
     "updated_at": "TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP",
+    "failure_code": "TEXT",
+    "failure_report_path": "TEXT",
 }
 
 ORCHESTRATION_EVENTS_TABLE_SQL = """

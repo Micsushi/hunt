@@ -190,6 +190,49 @@
       var text = norm(item.text);
       return text === target || text.startsWith(target + " ");
     });
+    if (!heading && target === "skills") {
+      var skillInput = Array.from(
+        document.querySelectorAll(
+          [
+            "input[id*='skills' i]",
+            "input[name*='skills' i]",
+            "input[data-uxi-multiselect-id]",
+            "input[data-uxi-widget-type='selectinput']",
+          ].join(","),
+        ),
+      )
+        .filter(visible)
+        .find(function (input) {
+          return norm(descriptorFor(input)).includes("skills");
+        });
+      var group =
+        skillInput?.closest?.("[data-automation-id='formField-skills']") ||
+        null;
+      var node = skillInput?.parentElement || null;
+      while (!group && node && node !== document.body) {
+        if (
+          visible(node) &&
+          (node.getAttribute?.("role") === "group" ||
+            ["SECTION", "ARTICLE"].includes(node.tagName)) &&
+          norm(textOf(node)).startsWith("skills ")
+        ) {
+          group = node;
+          break;
+        }
+        node = node.parentElement;
+      }
+      if (group && visible(group)) {
+        var groupRect = group.getBoundingClientRect();
+        return {
+          name: name,
+          element: group,
+          heading: group,
+          top: groupRect.top - 6,
+          bottom: groupRect.bottom + 6,
+          rect: groupRect,
+        };
+      }
+    }
     if (!heading) {
       return null;
     }
@@ -509,6 +552,375 @@
     ).filter(visible);
   }
 
+  function keyOn(el, key) {
+    if (!el) {
+      return;
+    }
+    var code = key === "Enter" ? "Enter" : key;
+    var keyCode = key === "Enter" ? 13 : 0;
+    ["keydown", "keyup"].forEach(function (type) {
+      el.dispatchEvent(
+        new KeyboardEvent(type, {
+          bubbles: true,
+          cancelable: true,
+          key: key,
+          code: code,
+          keyCode: keyCode,
+          which: keyCode,
+        }),
+      );
+    });
+  }
+
+  function isSelectInputPrompt(control) {
+    return (
+      control?.getAttribute?.("data-uxi-widget-type") === "selectinput" ||
+      Boolean(control?.getAttribute?.("data-uxi-multiselect-id"))
+    );
+  }
+
+  function promptSelectedText(control) {
+    var multiSelectId =
+      control?.getAttribute?.("data-uxi-multiselect-id") || "";
+    var container =
+      (multiSelectId &&
+        Array.from(document.querySelectorAll("[data-uxi-multiselect-id]")).find(
+          function (candidate) {
+            return (
+              candidate !== control &&
+              candidate.getAttribute("data-uxi-multiselect-id") ===
+                multiSelectId &&
+              visible(candidate)
+            );
+          },
+        )) ||
+      control?.closest?.("[data-automation-id='formField'], [role='group']");
+    return clean(
+      Array.from(
+        (container || document).querySelectorAll?.(
+          "[data-automation-id='selectedItem'], [data-automation-id='promptSelectionLabel']",
+        ) || [],
+      )
+        .map(textOf)
+        .filter(Boolean)
+        .join(" "),
+    );
+  }
+
+  function setSearchText(control, value) {
+    if (!control) {
+      return;
+    }
+    if (typeof control.scrollIntoView === "function") {
+      control.scrollIntoView({ block: "center", inline: "nearest" });
+    }
+    control.focus?.();
+    var setter = Object.getOwnPropertyDescriptor(
+      HTMLInputElement.prototype,
+      "value",
+    )?.set;
+    if (setter) {
+      setter.call(control, "");
+    } else {
+      control.value = "";
+    }
+    control.dispatchEvent(new Event("input", { bubbles: true }));
+    if (document.execCommand) {
+      try {
+        document.execCommand("insertText", false, value);
+      } catch (_error) {
+        // Fall back below.
+      }
+    }
+    if (!choiceMatches(control.value, value)) {
+      if (setter) {
+        setter.call(control, value);
+      } else {
+        control.value = value;
+      }
+      control.dispatchEvent(
+        new InputEvent("input", {
+          bubbles: true,
+          cancelable: true,
+          inputType: "insertText",
+          data: value,
+        }),
+      );
+    }
+  }
+
+  async function typeSearchTextLikeUser(control, value) {
+    if (!control) {
+      return;
+    }
+    setSearchText(control, "");
+    var text = String(value || "");
+    var current = "";
+    for (var index = 0; index < text.length; index++) {
+      var char = text[index];
+      control.dispatchEvent(
+        new KeyboardEvent("keydown", {
+          bubbles: true,
+          cancelable: true,
+          key: char,
+          code: "Key" + char.toUpperCase(),
+        }),
+      );
+      control.dispatchEvent(
+        new InputEvent("beforeinput", {
+          bubbles: true,
+          cancelable: true,
+          inputType: "insertText",
+          data: char,
+        }),
+      );
+      current += char;
+      setSearchText(control, current);
+      control.dispatchEvent(
+        new KeyboardEvent("keyup", {
+          bubbles: true,
+          cancelable: true,
+          key: char,
+          code: "Key" + char.toUpperCase(),
+        }),
+      );
+      await sleep(25);
+    }
+  }
+
+  async function waitForPromptTarget(previousLabels, value, timeoutMs) {
+    var previousKey = (previousLabels || []).map(norm).join("|");
+    var start = Date.now();
+    var latestOptions = [];
+    while (Date.now() - start < (timeoutMs || 4600)) {
+      latestOptions = optionElements().filter(function (option) {
+        return !option.closest?.("[data-automation-id='selectedItemList']");
+      });
+      var exactTarget = latestOptions.find(function (candidate) {
+        return choiceMatches(textOf(candidate), value);
+      });
+      if (exactTarget) {
+        return { target: exactTarget, expectedValue: value };
+      }
+      var key = latestOptions.map(textOf).map(norm).join("|");
+      if (latestOptions.length && key !== previousKey) {
+        await sleep(180);
+      } else {
+        await sleep(120);
+      }
+    }
+    var otherTarget = latestOptions.find(function (candidate) {
+      return choiceMatches(textOf(candidate), "Other");
+    });
+    return otherTarget
+      ? { target: otherTarget, expectedValue: "Other" }
+      : { target: null, expectedValue: "" };
+  }
+
+  function promptOptionCommitTarget(option) {
+    return (
+      option?.querySelector?.(
+        [
+          'input[data-automation-id="radioBtn"]',
+          'input[type="radio"]',
+          'input[type="checkbox"]',
+          '[role="radio"]',
+          '[role="checkbox"]',
+        ].join(", "),
+      ) || option
+    );
+  }
+
+  async function clickPromptOption(option) {
+    if (!option) {
+      return;
+    }
+    var target = promptOptionCommitTarget(option);
+    clickLikeUser(target || option);
+    if (typeof (target || option).click === "function") {
+      (target || option).click();
+    }
+    await sleep(600);
+  }
+
+  async function waitForPromptSelection(control, expectedValue, timeoutMs) {
+    var start = Date.now();
+    while (Date.now() - start < (timeoutMs || 1800)) {
+      var selected = promptSelectedText(control);
+      if (selected && choiceMatches(selected, expectedValue)) {
+        return true;
+      }
+      await sleep(120);
+    }
+    return false;
+  }
+
+  async function fillSelectInputPrompt(control, value) {
+    if (!control || !value) {
+      return false;
+    }
+    if (choiceMatches(promptSelectedText(control), value)) {
+      return true;
+    }
+    clickLikeUser(control);
+    await sleep(160);
+    var previousLabels = optionElements().map(textOf);
+    setSearchText(control, value);
+    keyOn(control, "Enter");
+    var targetResult = await waitForPromptTarget(previousLabels, value, 4600);
+    var target = targetResult.target;
+    if (!target) {
+      return false;
+    }
+    await clickPromptOption(target);
+    return await waitForPromptSelection(control, targetResult.expectedValue);
+  }
+
+  function skillSelectedText() {
+    var bounds = sectionBounds("Skills");
+    var scope = bounds?.element || bounds?.heading?.parentElement || document;
+    return clean(
+      Array.from(
+        scope.querySelectorAll(
+          "[data-automation-id='selectedItem'], [data-automation-id='promptSelectionLabel']",
+        ),
+      )
+        .map(textOf)
+        .filter(Boolean)
+        .join(" "),
+    );
+  }
+
+  function hasSelectedSkill(skills) {
+    var selected = skillSelectedText();
+    return (skills || []).some(function (skill) {
+      return choiceMatches(selected, skill);
+    });
+  }
+
+  function findSkillInput() {
+    return visibleInSection(
+      "Skills",
+      [
+        "input[data-uxi-widget-type='selectinput']",
+        "input[data-uxi-multiselect-id]",
+        "input[data-automation-id='searchBox']",
+        "input:not([type='hidden']):not([type='file'])",
+      ].join(","),
+    ).find(function (input) {
+      var descriptor = norm(descriptorFor(input));
+      var own = ownControlKey(input);
+      return (
+        own.includes("skills") ||
+        descriptor.includes("type to add skills") ||
+        descriptor.includes("skills")
+      );
+    });
+  }
+
+  function skillOptions() {
+    return optionElements().filter(function (option) {
+      return !option.closest?.("[data-automation-id='selectedItemList']");
+    });
+  }
+
+  function skillOptionIsChecked(option) {
+    var aria = norm(option?.getAttribute?.("aria-label"));
+    return (
+      (aria.includes("checked") && !aria.includes("not checked")) ||
+      Boolean(
+        option?.querySelector?.(
+          "input[type='checkbox']:checked, input[data-automation-id='checkboxPanel']:checked",
+        ),
+      )
+    );
+  }
+
+  function skillOptionCommitTarget(option) {
+    return (
+      option?.querySelector?.(
+        [
+          "input[data-automation-id='checkboxPanel']",
+          "input[type='checkbox']",
+          "[role='checkbox']",
+          "[data-automation-id='checkbox']",
+        ].join(","),
+      ) || option
+    );
+  }
+
+  function scoreSkillOption(option, skill) {
+    var labelKey = choiceKey(textOf(option));
+    var skillKey = choiceKey(skill);
+    if (!labelKey || !skillKey || skillOptionIsChecked(option)) {
+      return 0;
+    }
+    if (labelKey === skillKey) {
+      return 100;
+    }
+    if (labelKey === skillKey + " programming language") {
+      return 96;
+    }
+    if (labelKey.startsWith(skillKey + " ")) {
+      return 90;
+    }
+    if (labelKey.includes(skillKey)) {
+      return 70;
+    }
+    return 0;
+  }
+
+  async function waitForSkillOption(skill, timeoutMs) {
+    var start = Date.now();
+    while (Date.now() - start < (timeoutMs || 5200)) {
+      var best = skillOptions()
+        .map(function (option) {
+          return { option: option, score: scoreSkillOption(option, skill) };
+        })
+        .filter(function (entry) {
+          return entry.score > 0;
+        })
+        .sort(function (a, b) {
+          return b.score - a.score;
+        })[0]?.option;
+      if (best) {
+        return best;
+      }
+      await sleep(150);
+    }
+    return null;
+  }
+
+  async function fillSkill(input, skill) {
+    if (!input || !skill) {
+      return false;
+    }
+    if (choiceMatches(skillSelectedText(), skill)) {
+      return true;
+    }
+    clickLikeUser(input);
+    await sleep(140);
+    await typeSearchTextLikeUser(input, skill);
+    keyOn(input, "Enter");
+    var option = await waitForSkillOption(skill, 5200);
+    if (!option) {
+      return false;
+    }
+    var target = skillOptionCommitTarget(option);
+    clickLikeUser(target || option);
+    if (typeof (target || option).click === "function") {
+      (target || option).click();
+    }
+    var start = Date.now();
+    while (Date.now() - start < 2200) {
+      if (choiceMatches(skillSelectedText(), skill)) {
+        return true;
+      }
+      await sleep(120);
+    }
+    return choiceMatches(skillSelectedText(), skill);
+  }
+
   function choiceKey(value) {
     return norm(value)
       .replace(/\bbachelor s\b/g, "bachelors")
@@ -531,17 +943,73 @@
     );
   }
 
+  function choiceTargets(target) {
+    var values = [target];
+    var targetKey = choiceKey(target);
+    if (
+      /\bbachelor of (science|engineering|commerce|arts|business management)\b/.test(
+        targetKey,
+      )
+    ) {
+      values.push("Bachelors", "Bachelor's Degree");
+      if (targetKey.includes("science")) {
+        values.push("BS", "BSc");
+      }
+      if (targetKey.includes("arts")) {
+        values.push("BA");
+      }
+      if (targetKey.includes("engineering")) {
+        values.push("BEng", "BE");
+      }
+      if (
+        targetKey.includes("commerce") ||
+        targetKey.includes("business management")
+      ) {
+        values.push("BCom", "BComm", "BBA");
+      }
+    } else if (targetKey === "bachelors" || targetKey === "bachelor degree") {
+      values.push(
+        "Bachelor of Science",
+        "Bachelor of Engineering",
+        "Bachelor of Commerce",
+        "Bachelor of Arts",
+        "BS",
+        "BA",
+      );
+    } else if (targetKey === "masters" || targetKey === "master degree") {
+      values.push("Master of Science", "MS", "MA");
+    } else if (targetKey === "master of science") {
+      values.push("Masters", "MS");
+    } else if (targetKey === "master of arts") {
+      values.push("Masters", "MA");
+    } else if (targetKey === "master of business administration") {
+      values.push("Masters", "MBA");
+    } else if (targetKey === "doctorate" || targetKey === "phd") {
+      values.push("Doctorate", "PhD");
+    }
+    return values.filter(function (value, index) {
+      return value && values.indexOf(value) === index;
+    });
+  }
+
   async function fillButtonChoice(button, value) {
     if (!button || !value) {
       return { ok: false, reason: "missing_button_or_value" };
     }
-    if (choiceMatches(textOf(button), value)) {
+    var targets = choiceTargets(value);
+    if (
+      targets.some(function (target) {
+        return choiceMatches(textOf(button), target);
+      })
+    ) {
       return { ok: true, alreadyFilled: true };
     }
     clickLikeUser(button);
     await sleep(220);
     var option = optionElements().find(function (candidate) {
-      return choiceMatches(textOf(candidate), value);
+      return targets.some(function (target) {
+        return choiceMatches(textOf(candidate), target);
+      });
     });
     if (!option) {
       return { ok: false, reason: "option_not_found" };
@@ -552,7 +1020,9 @@
     }
     await sleep(240);
     var committed =
-      choiceMatches(textOf(button), value) || Boolean(button.value);
+      targets.some(function (target) {
+        return choiceMatches(textOf(button), target);
+      }) || Boolean(button.value);
     return {
       ok: committed,
       alreadyFilled: false,
@@ -571,6 +1041,36 @@
       }
     }
     return "";
+  }
+
+  function educationDegreeAnswer(entry) {
+    var rawDegree = firstText([entry.degreeLevel, entry.degree]);
+    var degreeText = norm([entry.degreeLevel, entry.degree].join(" "));
+    var studyText = norm(entry.fieldOfStudy);
+    var broadBachelor =
+      /\bbachelor/.test(degreeText) &&
+      !/\bbachelor of\b|\bbsc\b|\bba\b|\bbcomm\b|\bbeng\b|\bbs\b/.test(
+        degreeText,
+      );
+    if (!broadBachelor) {
+      return rawDegree;
+    }
+    if (/\bengineer/.test(studyText)) {
+      return "Bachelor of Engineering";
+    }
+    if (
+      /\bbusiness\b|\bcommerce\b|\baccount|\bfinance|\bmarketing/.test(
+        studyText,
+      )
+    ) {
+      return "Bachelor of Commerce";
+    }
+    if (
+      /\bcomputer\b|\bdata\b|\bscience\b|\bmath|\bstatistic/.test(studyText)
+    ) {
+      return "Bachelor of Science";
+    }
+    return rawDegree;
   }
 
   function boolValue(value) {
@@ -839,7 +1339,24 @@
         return entry.url;
       },
     );
-    return { work, education, websites };
+    var skills = profileAliasList(profile, [
+      "skills",
+      "skillList",
+      "technicalSkills",
+      "technical_skills",
+    ])
+      .map(clean)
+      .filter(Boolean)
+      .filter(function (skill, index, list) {
+        var key = norm(skill);
+        return (
+          key &&
+          list.findIndex(function (entry) {
+            return norm(entry) === key;
+          }) === index
+        );
+      });
+    return { work, education, websites, skills };
   }
 
   function websiteType(url) {
@@ -1087,7 +1604,7 @@
         return entry.school;
       }
       if (own.includes("degree") || own.includes("education level")) {
-        return entry.degreeLevel || entry.degree;
+        return educationDegreeAnswer(entry);
       }
       if (
         own.includes("fieldofstudy") ||
@@ -1138,7 +1655,7 @@
         return entry.school;
       }
       if (desc.includes("degree") || desc.includes("education level")) {
-        return entry.degreeLevel || entry.degree;
+        return educationDegreeAnswer(entry);
       }
     }
     return "";
@@ -1218,6 +1735,12 @@
       if (control.type === "checkbox") {
         if (Boolean(value) !== Boolean(control.checked)) {
           clickLikeUser(control);
+          filled += 1;
+        }
+        continue;
+      }
+      if (isSelectInputPrompt(control)) {
+        if (await fillSelectInputPrompt(control, value)) {
           filled += 1;
         }
         continue;
@@ -1304,6 +1827,54 @@
     return filled;
   }
 
+  function groupUrlValue(group) {
+    var control = (group?.controls || []).find(function (candidate) {
+      return (
+        candidate.tagName !== "BUTTON" &&
+        ownControlKey(candidate).includes("url")
+      );
+    });
+    return clean(control?.value || "");
+  }
+
+  function groupHasInvalidUrl(group) {
+    return (group?.controls || []).some(function (candidate) {
+      return (
+        candidate.tagName !== "BUTTON" &&
+        ownControlKey(candidate).includes("url") &&
+        candidate.getAttribute?.("aria-invalid") === "true"
+      );
+    });
+  }
+
+  async function deleteInvalidWebsiteRows() {
+    var deleted = 0;
+    for (var pass = 0; pass < 5; pass++) {
+      var seen = new Set();
+      var groups = controlGroups("Websites");
+      var target = null;
+      for (var index = groups.length - 1; index >= 0; index--) {
+        var group = groups[index];
+        var url = groupUrlValue(group);
+        var key = norm(url);
+        var duplicate = Boolean(key && seen.has(key));
+        if (key) {
+          seen.add(key);
+        }
+        if (duplicate || groupHasInvalidUrl(group)) {
+          target = group;
+          break;
+        }
+      }
+      if (!target || !(await deleteGroup("Websites", target))) {
+        break;
+      }
+      deleted += 1;
+      await sleep(220);
+    }
+    return deleted;
+  }
+
   async function syncSection(section, kind, entries) {
     var inventory = {
       kind: "workdaySection",
@@ -1359,6 +1930,7 @@
     }
     if (kind === "website") {
       filledCount += await fillWebsiteUrlInputs(entries);
+      deletedCount += await deleteInvalidWebsiteRows();
     }
     var finalGroups = controlGroups(section);
     for (var extra = finalGroups.length - 1; extra >= entries.length; extra--) {
@@ -1369,11 +1941,15 @@
     if (!entries.length && finalGroups.length) {
       inventory.skippedReason = deletedCount ? "" : "missing_profile_entries";
     }
-    inventory.filled = filledCount > 0 || deletedCount > 0;
+    var missingRequiredControls = sectionHasMissingRequiredControls(section);
+    inventory.filled =
+      (filledCount > 0 || deletedCount > 0) && !missingRequiredControls;
     if (!inventory.filled && entries.length) {
-      inventory.skippedReason = sectionHasMissingRequiredControls(section)
+      inventory.skippedReason = missingRequiredControls
         ? "missing_required_controls"
-        : "already_filled";
+        : filledCount > 0 || deletedCount > 0
+          ? "partial_fill_uncommitted_required_controls"
+          : "already_filled";
     }
     return {
       filledFieldCount: inventory.filled ? 1 : 0,
@@ -1389,11 +1965,85 @@
     };
   }
 
+  async function syncSkills(skills) {
+    var inventory = {
+      kind: "workdaySection",
+      tagName: "SECTION",
+      type: "",
+      name: "Skills",
+      id: "",
+      descriptor: "skills",
+      questionHash: window.__huntApplyUtils?.buildQuestionHash
+        ? window.__huntApplyUtils.buildQuestionHash("Skills")
+        : "skills",
+      required: false,
+      filled: false,
+      skippedReason: "",
+      valueSource: "profile:skills",
+      options: [],
+      rect: root.audit?.rectSummary(sectionBounds("Skills")?.heading) || {},
+    };
+    if (!sectionBounds("Skills")) {
+      inventory.skippedReason = "section_not_present";
+      return { filledFieldCount: 0, deletedRowCount: 0, inventory: inventory };
+    }
+    if (!skills.length) {
+      inventory.skippedReason = skillSelectedText()
+        ? "already_filled"
+        : "missing_profile_entries";
+      return { filledFieldCount: 0, deletedRowCount: 0, inventory: inventory };
+    }
+    var input = findSkillInput();
+    if (!input) {
+      inventory.skippedReason = "skills_input_not_found";
+      return { filledFieldCount: 0, deletedRowCount: 0, inventory: inventory };
+    }
+    var added = 0;
+    var satisfied = 0;
+    for (var index = 0; index < skills.length; index++) {
+      var skill = skills[index];
+      if (choiceMatches(skillSelectedText(), skill)) {
+        satisfied += 1;
+        continue;
+      }
+      if (await fillSkill(input, skill)) {
+        added += 1;
+        satisfied += 1;
+        await sleep(180);
+      }
+    }
+    var missingRequired =
+      controlLooksRequired(input) &&
+      !hasSelectedSkill(skills) &&
+      !clean(input.value || "");
+    inventory.filled = satisfied > 0 && !missingRequired;
+    if (!inventory.filled) {
+      inventory.skippedReason = missingRequired
+        ? "missing_required_controls"
+        : added > 0
+          ? "skills_not_committed"
+          : "already_filled";
+    }
+    return {
+      filledFieldCount: inventory.filled ? 1 : 0,
+      deletedRowCount: 0,
+      inventory: inventory,
+      filledField: inventory.filled
+        ? {
+            field: "Skills",
+            valueSource: inventory.valueSource,
+            questionHash: inventory.questionHash,
+          }
+        : null,
+    };
+  }
+
   async function fillWorkdayRepeatables(context) {
     var lists = profileLists(context?.profile || {});
     var sections = [
       await syncSection("Work Experience", "work", lists.work),
       await syncSection("Education", "education", lists.education),
+      await syncSkills(lists.skills),
       await syncSection("Websites", "website", lists.websites),
     ];
     return {

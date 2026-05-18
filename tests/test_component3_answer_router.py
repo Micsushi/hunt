@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 from c3_answering.pipeline import decide_answer
-from c3_answering.prompts import build_standard_question
-from c3_answering.schemas import C3AnswerRequest
+from c3_answering.prompts import build_standard_question, clean_question_label
+from c3_answering.schemas import C3AnswerPolicy, C3AnswerRequest
 from fletcher.llm.providers.base import LLMJsonResult
 
 
@@ -38,6 +38,20 @@ def make_request(
 def test_standard_question_format_is_stable():
     assert build_standard_question("  Do you like Python? * ", [" Yes ", "No"]) == (
         'question: do you like python?\noptions: ["Yes", "No"]'
+    )
+
+
+def test_standard_question_strips_workday_validation_noise():
+    label = (
+        "Describe your interactions with the Workday system.* "
+        "Error: The field Describe your interactions with the Workday system. "
+        "is required and must have a value. "
+        "primaryQuestionnaire--abb0ca13b2d2100029b6ff2864450002 textarea required"
+    )
+
+    assert clean_question_label(label) == "Describe your interactions with the Workday system.*"
+    assert build_standard_question(label, []) == (
+        "question: describe your interactions with the workday system.\noptions: []"
     )
 
 
@@ -162,6 +176,86 @@ def test_desired_start_date_text_question_uses_profile_without_llm(monkeypatch):
     assert decision.answer_text == "05/25/2026"
     assert decision.canonical_field == "desired_start_date"
     assert decision.source_fields == ["profile.desiredStartDate"]
+
+
+def test_required_written_question_can_use_llm_when_generation_allowed(monkeypatch):
+    def fake_generate_json(**_kwargs):
+        return LLMJsonResult(
+            provider="ollama",
+            model="gemma-test",
+            success=True,
+            parsed={
+                "action": "fill_text",
+                "canonical_field": "workday_system_interaction",
+                "selected_option": "",
+                "answer_text": "I have used Workday as an applicant and am comfortable navigating Workday workflows, forms, and related business-system interactions.",
+                "camp": "profile_value",
+                "confidence": 0.78,
+                "source_fields": ["profile.skills", "job.title"],
+                "reason": "The written question asks for a short free-response answer and generation is allowed.",
+            },
+        )
+
+    monkeypatch.setattr("c3_answering.pipeline.generate_json", fake_generate_json)
+
+    request = make_request(
+        "Describe your interactions with the Workday system.",
+        [],
+        {"skills": ["Python", "React"]},
+        kind="textarea",
+    )
+    request.policy = C3AnswerPolicy(allow_generated_paragraphs=True)
+    decision = decide_answer(request)
+
+    assert decision.status == "fillable"
+    assert decision.action == "fill_text"
+    assert "Workday" in decision.answer_text
+    assert decision.provider == "ollama"
+
+
+def test_written_question_repairs_unparsed_llm_response(monkeypatch):
+    calls = []
+
+    def fake_generate_json(**kwargs):
+        calls.append(kwargs["task_name"])
+        if len(calls) == 1:
+            return LLMJsonResult(
+                provider="ollama",
+                model="gemma-test",
+                success=False,
+                parsed=None,
+                error="provider returned no parsed JSON",
+            )
+        return LLMJsonResult(
+            provider="ollama",
+            model="gemma-test",
+            success=True,
+            parsed={
+                "action": "fill_text",
+                "canonical_field": "workday_system_interaction",
+                "selected_option": "",
+                "answer_text": "I have used Workday as an applicant and can navigate Workday forms and workflows confidently.",
+                "camp": "profile_value",
+                "confidence": 0.78,
+                "source_fields": ["profile.skills", "job.title"],
+                "reason": "Repair returned valid JSON for the written question.",
+            },
+        )
+
+    monkeypatch.setattr("c3_answering.pipeline.generate_json", fake_generate_json)
+
+    request = make_request(
+        "Describe your interactions with the Workday system.",
+        [],
+        {"skills": ["React"]},
+        kind="textarea",
+    )
+    request.policy = C3AnswerPolicy(allow_generated_paragraphs=True)
+    decision = decide_answer(request)
+
+    assert calls == ["c3_answer_decision", "c3_answer_decision_repair"]
+    assert decision.status == "fillable"
+    assert decision.action == "fill_text"
 
 
 def test_disclosure_other_is_not_treated_as_neutral(monkeypatch):

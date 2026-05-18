@@ -54,9 +54,9 @@ function filledTextNeedsBackendRepair(entry, isTextual) {
   const isRequiredTextboxFallback =
     valueSource.startsWith("fallback:") &&
     [
-      "fallback:space",
       "fallback:zero_width_space",
       "fallback:not_applicable",
+      "fallback:na",
     ].includes(valueSource);
   return (
     isRequiredTextboxFallback ||
@@ -489,9 +489,7 @@ async function requestBackendAnswerDecisions({
           profile,
           policy: {
             required_only: settings.fillRequiredOnly !== false,
-            allow_generated_paragraphs:
-              settings.allowGeneratedAnswers === true &&
-              settings.llmGeneratedParagraphsEnabled === true,
+            allow_generated_paragraphs: settings.allowGeneratedAnswers === true,
             allow_cloud: settings.allowCloudLlmForC3 === true,
             confidence_threshold: settings.flagLowConfidenceAnswers
               ? 0.72

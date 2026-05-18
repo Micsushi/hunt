@@ -129,9 +129,58 @@
       .toLowerCase();
   }
 
+  function validationText(el) {
+    var describedBy = String(el?.getAttribute?.("aria-describedby") || "")
+      .split(/\s+/)
+      .map(function (id) {
+        return id ? document.getElementById(id) : null;
+      })
+      .filter(Boolean)
+      .map(function (node) {
+        return node.innerText || node.textContent || "";
+      });
+    var container = el?.closest?.(
+      [
+        '[data-automation-id^="formField"]',
+        '[data-automation-id*="checkbox" i]',
+        ".application-field",
+        ".application-question",
+        ".input-row",
+        "[role='group']",
+        "fieldset",
+        "label",
+      ].join(", "),
+    );
+    var alerts = container
+      ? Array.from(
+          container.querySelectorAll(
+            '[role="alert"], [aria-invalid="true"], [data-automation-id="inputAlert"], [data-automation-id*="error" i], [id*="error" i]',
+          ),
+        ).map(function (node) {
+          return (
+            node.innerText ||
+            node.textContent ||
+            node.getAttribute("aria-label") ||
+            ""
+          );
+        })
+      : [];
+    return describedBy.concat(alerts).filter(Boolean).join(" ").toLowerCase();
+  }
+
+  function hasRequiredValidation(el) {
+    if (el?.getAttribute?.("aria-invalid") === "true") {
+      return true;
+    }
+    var text = validationText(el);
+    return /required|must have a value|check the box|please select|please enter|cannot be blank|is invalid|error/i.test(
+      text,
+    );
+  }
+
   function isRequired(el, descriptor) {
     if (el.getAttribute?.("aria-required") === "false" && !el.required) {
-      return false;
+      return hasRequiredValidation(el);
     }
     var text = requiredText(el, descriptor);
     return (
@@ -139,7 +188,8 @@
       el.getAttribute?.("aria-required") === "true" ||
       text.includes("*") ||
       text.includes("required") ||
-      text.includes("mandatory")
+      text.includes("mandatory") ||
+      hasRequiredValidation(el)
     );
   }
 

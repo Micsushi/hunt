@@ -23,6 +23,14 @@ from .db import (
     get_connection,
     init_orchestration_db,
 )
+from .failure_log import (
+    INVESTIGATION_TRIGGER_CODES,
+    append_perma_log,
+    derive_failure_code,
+    merge_investigation_result,
+    read_failure_log,
+    write_failure_report,
+)
 from .models import (
     ApplyContext,
     OrchestrationEvent,
@@ -698,6 +706,7 @@ class OrchestrationService:
                     "job_id": run.job_id,
                     "apply_context_path": run.apply_context_path,
                     "c3_apply_context_path": run.c3_apply_context_path,
+                    "allow_submit": run.submit_allowed,
                     "requested_at": requested_at,
                 },
             )
@@ -741,12 +750,23 @@ class OrchestrationService:
                     c3_payload = json.loads(path.read_text(encoding="utf-8"))
                 except (json.JSONDecodeError, OSError):
                     pass
+        failure_report: dict[str, Any] = {}
+        if run.failure_report_path:
+            path = Path(run.failure_report_path)
+            if path.exists():
+                try:
+                    failure_report = json.loads(path.read_text(encoding="utf-8"))
+                except (json.JSONDecodeError, OSError):
+                    pass
         return {
             "run_id": run.run_id,
             "job_id": run.job_id,
             "ats_type": run.ats_type,
             "apply_url": run.apply_url,
             "started_at": run.started_at,
+            "allow_submit": run.submit_allowed,
+            "failure_code": run.failure_code,
+            "failure_report": failure_report or None,
             "c3_payload": c3_payload,
         }
 
@@ -834,25 +854,26 @@ class OrchestrationService:
         browser_lane: str | None,
         lease_seconds: int = 900,
         worker_metadata: dict[str, Any] | None = None,
+        task_type: str = "fill",
     ) -> dict[str, Any]:
         runtime = _text(runtime_name)
         if not runtime:
             raise OrchestrationError("Worker runtime_name is required.")
         if lease_seconds < 30:
             raise OrchestrationError("Worker lease_seconds must be at least 30.")
+        if task_type not in {"fill", "investigation"}:
+            raise OrchestrationError("task_type must be 'fill' or 'investigation'.")
         metadata = worker_metadata or {}
         if not isinstance(metadata, dict):
             raise OrchestrationError("Worker metadata must be an object.")
 
+        claim_status = "fill_requested" if task_type == "fill" else "investigation_queued"
+
         with self._connect() as conn:
             self._expire_due_worker_leases(conn)
             rows = conn.execute(
-                """
-                SELECT *
-                FROM orchestration_runs
-                WHERE status = 'fill_requested'
-                ORDER BY datetime(started_at) ASC, id ASC
-                """
+                "SELECT * FROM orchestration_runs WHERE status = ? ORDER BY datetime(started_at) ASC, id ASC",
+                (claim_status,),
             ).fetchall()
             selected: OrchestrationRun | None = None
             for row in rows:
@@ -978,7 +999,12 @@ class OrchestrationService:
                 conn.commit()
                 raise OrchestrationError(f"Worker lease {lease_id} has expired.")
 
-        recorded = self.record_fill_result_inline(lease.run_id, payload)
+        # Route to the correct handler based on current run status
+        run_check = self.get_run(lease.run_id)
+        if run_check and run_check.status == "investigation_queued":
+            recorded = self.record_investigation_result(lease.run_id, payload)
+        else:
+            recorded = self.record_fill_result_inline(lease.run_id, payload)
         with self._connect() as conn:
             completed_at = utc_now_iso()
             conn.execute(
@@ -1101,11 +1127,20 @@ class OrchestrationService:
                 _text(fill_result.get("reason")),
                 _text(fill_result.get("pageStatus")),
                 _text(fill_result.get("page_status")),
+                _text(fill_result.get("failure_code")),
+                _text(fill_result.get("failureCode")),
             ]
         ).lower()
 
         for field_name in ("manual_review_flags", "manualReviewFlags", "issues", "flags"):
             flags.extend(_normalize_list(fill_result.get(field_name)))
+
+        # Structured C3 failure codes map directly to flags
+        explicit_code = _text(fill_result.get("failure_code") or fill_result.get("failureCode"))
+        if explicit_code == "unknown_widget":
+            flags.append("unknown_widget")
+        elif explicit_code.startswith("captcha_"):
+            flags.append("captcha_challenge")
 
         if any(token in text_chunks for token in ("auth", "reauth")):
             flags.append("auth_required")
@@ -1209,7 +1244,16 @@ class OrchestrationService:
             )
 
             normalized_status = _normalize_status(raw_result.get("status"), default="unknown")
-            if review_flags:
+            failure_code = derive_failure_code(raw_result, review_flags)
+            is_investigation_trigger = failure_code in INVESTIGATION_TRIGGER_CODES
+
+            if is_investigation_trigger:
+                new_status = "investigation_queued"
+                completed_at = None
+                manual_review_required = False
+                manual_review_reason = None
+                job_status = "claimed"
+            elif review_flags:
                 new_status = "manual_review"
                 completed_at = None
                 manual_review_required = True
@@ -1226,13 +1270,32 @@ class OrchestrationService:
                 completed_at = None
                 manual_review_required = False
                 manual_review_reason = None
+                failure_code = ""
                 job_status = "claimed"
+
+            # Write structured failure report for all non-ok outcomes
+            failure_report_path_str: str | None = None
+            if new_status not in {"awaiting_submit_approval"}:
+                inv_status = "pending" if is_investigation_trigger else "skipped"
+                fr_path, fr_data = write_failure_report(
+                    run_dir,
+                    run_id=run_id,
+                    job_id=run.job_id,
+                    ats_type=run.ats_type,
+                    apply_url=run.apply_url,
+                    failure_code=failure_code,
+                    fill_result=raw_result,
+                    investigation_status=inv_status,
+                )
+                failure_report_path_str = str(fr_path)
+                append_perma_log(self.runtime_root / "logs", fr_data)
 
             decision_payload = {
                 "run_id": run_id,
                 "job_id": run.job_id,
                 "previous_status": run.status,
                 "new_status": new_status,
+                "failure_code": failure_code or None,
                 "manual_review_required": bool(manual_review_required),
                 "manual_review_reason": manual_review_reason,
                 "manual_review_flags": review_flags,
@@ -1244,6 +1307,7 @@ class OrchestrationService:
                 UPDATE orchestration_runs
                 SET status = ?, fill_result_path = ?, browser_summary_path = ?, decision_path = ?,
                     manual_review_required = ?, manual_review_reason = ?, manual_review_flags_json = ?,
+                    failure_code = ?, failure_report_path = ?,
                     updated_at = ?, completed_at = ?
                 WHERE id = ?
                 """,
@@ -1255,6 +1319,8 @@ class OrchestrationService:
                     manual_review_required,
                     manual_review_reason,
                     json.dumps(review_flags),
+                    failure_code or None,
+                    failure_report_path_str,
                     now,
                     completed_at,
                     run_id,
@@ -1300,12 +1366,158 @@ class OrchestrationService:
                 db_path=self.db_path,
                 key="coordinator_last_fill_failed",
             )
+        if new_status == "investigation_queued":
+            _notify(
+                f"Run {run_id} (job {run.job_id}) queued for investigation: {failure_code}",
+                db_path=self.db_path,
+                key="coordinator_last_investigation_queued",
+            )
         return {
             "run": updated_run.to_dict(),
             "manual_review_flags": review_flags,
+            "failure_code": failure_code or None,
+            "failure_report_path": failure_report_path_str,
             "browser_summary_path": browser_summary_path,
             "decision_path": decision_path,
         }
+
+    def queue_investigation(self, run_id: str) -> dict[str, Any]:
+        """Manually move a run to investigation_queued (operator-triggered)."""
+        with self._connect() as conn:
+            row = self._get_run_row(conn, run_id)
+            if not row:
+                raise OrchestrationError(f"Run {run_id} was not found.")
+            run = OrchestrationRun.from_row(row)
+            if run.status not in {"manual_review", "failed", "fill_requested", "apply_prepared"}:
+                raise OrchestrationError(
+                    f"Run {run_id} in status '{run.status}' cannot be queued for investigation."
+                )
+            now = utc_now_iso()
+            conn.execute(
+                "UPDATE orchestration_runs SET status = 'investigation_queued', updated_at = ? WHERE id = ?",
+                (now, run_id),
+            )
+            self._append_event(
+                conn,
+                run_id=run_id,
+                event_type="investigation_queued",
+                step_name="manual_queue",
+                payload={"queued_by": "operator", "previous_status": run.status},
+            )
+            conn.commit()
+        updated = self.get_run(run_id)
+        if updated is None:
+            raise OrchestrationError(f"Run {run_id} disappeared after queueing investigation.")
+        return {"run": updated.to_dict()}
+
+    def record_investigation_result(self, run_id: str, payload: dict[str, Any]) -> dict[str, Any]:
+        """Record an agent investigation result for a run in investigation_queued status."""
+        if not isinstance(payload, dict):
+            raise OrchestrationError("Investigation result payload must be an object.")
+        with self._connect() as conn:
+            row = self._get_run_row(conn, run_id)
+            if not row:
+                raise OrchestrationError(f"Run {run_id} was not found.")
+            run = OrchestrationRun.from_row(row)
+            if run.status != "investigation_queued":
+                raise OrchestrationError(
+                    f"Run {run_id} must be in investigation_queued to record investigation result."
+                )
+            run_dir = self._run_dir(run_id)
+            investigation_dir = run_dir / "investigation"
+            investigation_dir.mkdir(parents=True, exist_ok=True)
+            result_path = write_json_artifact(investigation_dir / "result.json", payload)
+
+            # Merge into existing failure report or create one
+            fr_path = Path(run.failure_report_path) if run.failure_report_path else None
+            if fr_path and fr_path.exists():
+                fr_data = merge_investigation_result(fr_path, payload)
+            else:
+                fr_path, fr_data = write_failure_report(
+                    run_dir,
+                    run_id=run_id,
+                    job_id=run.job_id,
+                    ats_type=run.ats_type,
+                    apply_url=run.apply_url,
+                    failure_code=str(
+                        payload.get("failure_code_confirmed") or run.failure_code or "unknown"
+                    ),
+                    fill_result=payload,
+                    investigation_status="complete",
+                )
+            append_perma_log(self.runtime_root / "logs", fr_data)
+
+            now = utc_now_iso()
+            conn.execute(
+                """
+                UPDATE orchestration_runs
+                SET status = 'investigation_complete', failure_report_path = ?, updated_at = ?
+                WHERE id = ?
+                """,
+                (str(fr_path), now, run_id),
+            )
+            self._update_job_status(conn, run.job_id, "failed")
+            self._append_event(
+                conn,
+                run_id=run_id,
+                event_type="investigation_complete",
+                step_name="investigation_result",
+                payload={
+                    "agent_status": payload.get("status"),
+                    "failure_code_confirmed": payload.get("failure_code_confirmed"),
+                    "suggested_fix_area": payload.get("suggested_fix_area"),
+                },
+                payload_path=result_path,
+            )
+            final_status_path = write_json_artifact(
+                run_dir / "final_status.json",
+                {
+                    "run_id": run_id,
+                    "job_id": run.job_id,
+                    "status": "investigation_complete",
+                    "recorded_at": now,
+                    "failure_code": fr_data.get("failure_code"),
+                    "suggested_fix_area": payload.get("suggested_fix_area"),
+                },
+            )
+            conn.execute(
+                "UPDATE orchestration_runs SET final_status_path = ? WHERE id = ?",
+                (final_status_path, run_id),
+            )
+            conn.commit()
+
+        updated_run = self.get_run(run_id)
+        if updated_run is None:
+            raise OrchestrationError(f"Run {run_id} disappeared after investigation result.")
+        agent_status = str(payload.get("status") or "").lower()
+        try:
+            from .telegram import notify_captcha, notify_investigation_complete
+
+            if "captcha" in agent_status:
+                confirmed_code = str(
+                    payload.get("failure_code_confirmed")
+                    or fr_data.get("failure_code")
+                    or "captcha_unknown"
+                )
+                notify_captcha(run_id, run.job_id, confirmed_code)
+            else:
+                notify_investigation_complete(run_id, run.job_id, payload.get("suggested_fix_area"))
+        except Exception:
+            pass
+        _notify(
+            f"Run {run_id} (job {run.job_id}) investigation complete: {payload.get('suggested_fix_area') or 'see report'}",
+            db_path=self.db_path,
+            key="coordinator_last_investigation_complete",
+        )
+        return {
+            "run": updated_run.to_dict(),
+            "investigation_result_path": result_path,
+            "failure_report_path": str(fr_path),
+        }
+
+    def get_failure_log(self, *, limit: int = 100) -> list[dict[str, Any]]:
+        """Read the last `limit` entries from the perma-log."""
+        return read_failure_log(self.runtime_root / "logs", limit=limit)
 
     def resolve_review(
         self, run_id: str, *, decision: str, approved_by: str, reason: str = ""

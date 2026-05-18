@@ -1,6 +1,8 @@
 "use strict";
 
-const DEFAULT_ACCOUNT_EMAIL = "wenjian2@ualberta.ca";
+const DEFAULT_ACCOUNT_EMAIL = "hunt.executioner.test@gmail.com";
+const DEFAULT_ACCOUNT_PASSWORD =
+  process.env.HUNT_C3_TEST_ACCOUNT_PASSWORD || "Hunt12345678!";
 
 function makeDefaultWorkExperience() {
   return {
@@ -33,7 +35,7 @@ function makeDefaultEducation() {
 
 function makeWorkdayProfileDefaults(options = {}) {
   const accountEmail = options.accountEmail || DEFAULT_ACCOUNT_EMAIL;
-  const accountPassword = options.accountPassword || process.env.HUNT_C3_TEST_ACCOUNT_PASSWORD || "";
+  const accountPassword = options.accountPassword || DEFAULT_ACCOUNT_PASSWORD;
   return {
     fullName: "Michael Shi",
     email: accountEmail,
@@ -166,6 +168,7 @@ function workdayProfileCounts(profile) {
 
 module.exports = {
   DEFAULT_ACCOUNT_EMAIL,
+  DEFAULT_ACCOUNT_PASSWORD,
   makeWorkdayProfileDefaults,
   withWorkdayProfileAliases,
   workdayProfileCounts,

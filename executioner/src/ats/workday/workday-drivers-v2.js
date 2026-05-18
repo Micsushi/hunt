@@ -292,6 +292,162 @@
     );
   }
 
+  function isNoItemsOption(label) {
+    return norm(label) === "no items";
+  }
+
+  function isTechnicalSkillsField(field, answer) {
+    var el = field?.element;
+    var key = [
+      field?.descriptor,
+      field?.questionType,
+      field?.fieldId,
+      field?.workday?.kind,
+      field?.uiModel,
+      answer?.source,
+      answer?.profilePath,
+      el?.id,
+      el?.name,
+      el?.getAttribute?.("aria-label"),
+      el?.getAttribute?.("placeholder"),
+      el?.getAttribute?.("data-uxi-multiselect-id"),
+      el?.closest?.('[data-automation-id="formField-skills"]')
+        ?.getAttribute?.("data-automation-id"),
+    ]
+      .filter(Boolean)
+      .join(" ");
+    key = norm(key);
+    return (
+      key.includes("technical skills") ||
+      key.includes("type to add skills") ||
+      key.includes("profile skills") ||
+      key.includes("formfield skills") ||
+      key.includes("skills skills")
+    );
+  }
+
+  function selectedTechnicalSkillLabels(field) {
+    var el = field?.element;
+    var container =
+      el?.closest?.('[data-automation-id="formField-skills"]') ||
+      root.workdayUi?.nearestWorkdayField?.(el) ||
+      null;
+    if (!container) {
+      return [];
+    }
+    return Array.from(
+      container.querySelectorAll(
+        [
+          '[data-automation-id="selectedItem"]',
+          '[data-automation-id="selectedItemList"] [role="listitem"]',
+          '[data-automation-id="selectedItemList"] button',
+        ].join(", "),
+      ),
+    )
+      .filter(visible)
+      .map(optionLabel)
+      .filter(Boolean);
+  }
+
+  function selectedTechnicalSkillMatches(field, target, answer) {
+    var texts = answerTexts(answer, target);
+    return selectedTechnicalSkillLabels(field).some(function (label) {
+      return optionMatchesAny({ label: label }, texts);
+    });
+  }
+
+  async function fillTechnicalSkills({
+    field,
+    answer,
+    option,
+    audit,
+    fieldAudit,
+  }) {
+    var skills = Array.isArray(answer?.allValues)
+      ? answer.allValues
+      : [answer?.value || option?.label || ""];
+    skills = skills.map(clean).filter(Boolean);
+    if (!skills.length) {
+      return {
+        ok: false,
+        reason: "technical_skills_missing_answer",
+        afterState: workdayCommittedState(field),
+      };
+    }
+    var selected = [];
+    var missing = [];
+    for (var index = 0; index < skills.length; index++) {
+      var skill = skills[index];
+      var skillAnswer = Object.assign({}, answer, { value: skill });
+      if (selectedTechnicalSkillMatches(field, null, skillAnswer)) {
+        selected.push(skill);
+        continue;
+      }
+      var options = await collectWorkdayOptions(field, {
+        answer: skillAnswer,
+        audit: audit,
+        fieldAudit: fieldAudit,
+      });
+      var flatOptions = options.filter(function (candidate) {
+        return !candidate.isCategory;
+      });
+      var target =
+        flatOptions.find(function (candidate) {
+          return optionMatchesAny(candidate, answerTexts(skillAnswer, null));
+        }) || null;
+      if (!target) {
+        missing.push(skill);
+        continue;
+      }
+      root.audit?.pushFieldStep(audit, fieldAudit, {
+        action: "workday_skill_checkbox_click",
+        step: "workday.driver.fill",
+        status: "info",
+        reason: "click_matching_skill_checkbox",
+        selectedOption: target.label,
+        detail: {
+          requestedSkill: skill,
+          selectedPillsBefore: selectedTechnicalSkillLabels(field),
+          optionElement: root.audit?.summarizeElement(target.element) || {},
+        },
+      });
+      await clickWorkdayOption(target);
+      var start = Date.now();
+      while (
+        Date.now() - start < 2600 &&
+        !selectedTechnicalSkillMatches(field, target, skillAnswer)
+      ) {
+        await sleep(120);
+      }
+      if (selectedTechnicalSkillMatches(field, target, skillAnswer)) {
+        selected.push(skill);
+      } else {
+        missing.push(skill);
+      }
+      await closePopup(field);
+      await sleep(120);
+    }
+    var state = workdayCommittedState(field);
+    var ok = selected.length > 0 && !missing.length;
+    if (!ok) {
+      root.audit?.pushIssue(audit, fieldAudit, {
+        kind: "workday_skill_checkbox_not_verified",
+        severity: field.required ? "warn" : "info",
+        failedStep: "workday.driver.verify",
+        reason: "One or more searched skills did not appear as selected pills.",
+        options: selectedTechnicalSkillLabels(field),
+      });
+    }
+    return {
+      ok: ok,
+      reason: ok ? "technical_skills_selected" : "workday_skill_checkbox_not_verified",
+      afterState: state,
+      selectedOption: selectedTechnicalSkillLabels(field).join("; "),
+      valueSource: fieldAudit?.valueSource || answer?.source || "",
+      answerText: selected.join("; "),
+    };
+  }
+
   function visibleWorkdayOptions() {
     var options = [];
     var seen = new Set();
@@ -322,7 +478,7 @@
           return;
         }
         var label = optionLabel(target);
-        if (lowerPressDelete(label)) {
+        if (lowerPressDelete(label) || isNoItemsOption(label)) {
           return;
         }
         var key =
@@ -365,12 +521,19 @@
       return false;
     }
     var label = norm(optionLabel(option));
-    if (!label || lowerPressDelete(label)) {
+    if (!label || lowerPressDelete(label) || isNoItemsOption(label)) {
       return false;
     }
+    var promptLeaf = option.matches?.('[data-automation-id="promptLeafNode"]')
+      ? option
+      : option.querySelector?.('[data-automation-id="promptLeafNode"]');
     return Boolean(
       option.getAttribute?.("aria-haspopup") ||
       option.getAttribute?.("aria-expanded") ||
+      promptLeaf?.getAttribute?.(
+        "data-uxi-multiselectlistitem-hassidecharm",
+      ) === "true" ||
+      promptLeaf?.getAttribute?.("data-uxi-multiselectlistitem-type") === "2" ||
       option.querySelector?.("svg") ||
       option.querySelector?.('[data-automation-id*="chevron"]') ||
       option.querySelector?.('[data-automation-id*="drill"]') ||
@@ -548,6 +711,26 @@
     });
   }
 
+  function isSalaryField(field, answer) {
+    var text = norm(
+      [
+        field?.fieldId,
+        field?.descriptor,
+        field?.workday?.fieldLabel,
+        field?.element?.id,
+        field?.element?.name,
+        field?.element?.getAttribute?.("aria-label"),
+        answer?.source,
+      ].join(" "),
+    );
+    return (
+      text.includes("salary") ||
+      text.includes("compensation") ||
+      text.includes("pay expectation") ||
+      text.includes("salaryexpectation")
+    );
+  }
+
   async function waitForWorkdayOptions(previousLabels, timeoutMs) {
     var start = Date.now();
     var attempts = 0;
@@ -606,6 +789,66 @@
     return score;
   }
 
+  function isReferralSourceOption(option) {
+    var label = norm(option?.label);
+    return (
+      label.includes("employee referral") ||
+      label.includes("referred") ||
+      label.includes("referral")
+    );
+  }
+
+  function sourceFallbackScore(option, texts) {
+    var label = norm(option?.label);
+    if (!label || isReferralSourceOption(option)) {
+      return -1000;
+    }
+    var combined = norm((texts || []).join(" "));
+    var score = 1;
+    if (optionMatchesAny(option, texts)) {
+      score += 100;
+    }
+    if (label.includes("linkedin")) {
+      score += 95;
+    }
+    if (label.includes("social media") || label.includes("social")) {
+      score += 85;
+    }
+    if (label.includes("job sites") || label.includes("job board")) {
+      score += 70;
+    }
+    if (label.includes("career websites") || label.includes("career site")) {
+      score += 65;
+    }
+    if (/linkedin|social/.test(combined) && label.includes("facebook")) {
+      score += 40;
+    }
+    if (/linkedin|social/.test(combined) && label.includes("instagram")) {
+      score += 35;
+    }
+    if (/linkedin|social/.test(combined) && label.includes("twitter")) {
+      score += 30;
+    }
+    if (label.includes("other")) {
+      score += 5;
+    }
+    return score;
+  }
+
+  function preferredSourceFallbackOption(options, texts) {
+    return (
+      (options || [])
+        .filter(function (candidate) {
+          return (
+            candidate?.label && sourceFallbackScore(candidate, texts) > -1000
+          );
+        })
+        .sort(function (a, b) {
+          return sourceFallbackScore(b, texts) - sourceFallbackScore(a, texts);
+        })[0] || null
+    );
+  }
+
   function committedStateMatches(state, answer, option) {
     var label = clean(state?.text || state?.rawValue || "");
     if (!state?.selected || !label) {
@@ -643,6 +886,42 @@
     }
   }
 
+  async function typeSearchTextLikeUser(input, text) {
+    setValue(input, "");
+    await sleep(40);
+    var value = "";
+    for (var index = 0; index < String(text || "").length; index++) {
+      var char = String(text)[index];
+      input.dispatchEvent(
+        new KeyboardEvent("keydown", {
+          key: char,
+          code: "Key" + char.toUpperCase(),
+          bubbles: true,
+          cancelable: true,
+        }),
+      );
+      input.dispatchEvent(
+        new InputEvent("beforeinput", {
+          bubbles: true,
+          cancelable: true,
+          inputType: "insertText",
+          data: char,
+        }),
+      );
+      value += char;
+      setValue(input, value);
+      input.dispatchEvent(
+        new KeyboardEvent("keyup", {
+          key: char,
+          code: "Key" + char.toUpperCase(),
+          bubbles: true,
+          cancelable: true,
+        }),
+      );
+      await sleep(25);
+    }
+  }
+
   async function openPopup(field, searchText) {
     var el = field.element;
     var sourceField = isApplicationSourceField(el, field.descriptor);
@@ -664,6 +943,7 @@
             'input[type="text"]:not([type="hidden"]), input[role="combobox"], input[data-automation-id]',
           )
         : null;
+    var skillSearch = isTechnicalSkillsField(field, { value: searchText });
     if (siblingInput && searchText) {
       try {
         siblingInput.focus({ preventScroll: true });
@@ -672,7 +952,9 @@
       }
       clickLikeUser(siblingInput);
       await sleep(80);
-      if (sourceField) {
+      if (skillSearch) {
+        await typeSearchTextLikeUser(siblingInput, searchText);
+      } else if (sourceField) {
         insertTextOrSet(siblingInput, searchText);
       } else {
         setValue(siblingInput, searchText);
@@ -688,7 +970,9 @@
     clickLikeUser(el.closest?.('[role="combobox"]') || el);
     await sleep(120);
     if (searchText && field.uiModel === "combobox") {
-      if (sourceField) {
+      if (skillSearch) {
+        await typeSearchTextLikeUser(el, searchText);
+      } else if (sourceField) {
         insertTextOrSet(el, searchText);
       } else {
         setValue(el, searchText);
@@ -745,13 +1029,15 @@
         },
       ];
     }
-    // For phone_country_code we need to type to filter the long country-dial list.
-    // For all other combobox/button_listbox fields (including source fields), typing
-    // into Workday's live-search input triggers input handlers that can crash the page
-    // (e.g. "undefined is not iterable" in cx-applyflow.min.js when Workday's internal
-    // store isn't ready). Open the popup without typing and match whatever options appear.
-    var safeOpenOnly = field.workday?.kind !== "phone_country_code";
-    var searchText = safeOpenOnly ? "" : answer.value || "Canada (+1)";
+    // Most Workday combobox/listbox fields should be opened without typing because
+    // source-style live search can crash Workday before its internal store is ready.
+    // Skills multiselects are search-backed: opening them empty only yields "No Items."
+    var shouldTypeSearch =
+      field.workday?.kind === "phone_country_code" ||
+      isTechnicalSkillsField(field, answer);
+    var searchText = shouldTypeSearch
+      ? answer.value || (field.workday?.kind === "phone_country_code" ? "Canada (+1)" : "")
+      : "";
     _huntLog("collectWorkdayOptions_start", {
       descriptor: String(field.descriptor || "").slice(0, 120),
       uiModel: field.uiModel || "",
@@ -760,9 +1046,23 @@
     });
     await closePopup(field);
     await sleep(40);
+    var previousLabels = searchText
+      ? visibleWorkdayOptions().map(function (option) {
+          return option.label;
+        })
+      : [];
     await openPopup(field, searchText);
-    var waitResult = await waitForWorkdayOptions([], 2200);
+    var waitResult = await waitForWorkdayOptions(
+      previousLabels,
+      searchText ? 3400 : 2200,
+    );
     var options = waitResult.options;
+    if (!options.length && searchText && isTechnicalSkillsField(field, answer)) {
+      keyOn(field.element, "Enter");
+      await sleep(180);
+      waitResult = await waitForWorkdayOptions([], 2600);
+      options = waitResult.options;
+    }
     _huntLog("collectWorkdayOptions_after_popup", {
       descriptor: String(field.descriptor || "").slice(0, 120),
       optionCount: options.length,
@@ -871,7 +1171,7 @@
           }),
         },
       });
-      var target = preferredWorkdayOption(childOptions, option, answer);
+      var target = preferredWorkdayOption(childOptions, option, answer, field);
       if (target) {
         return target;
       }
@@ -883,7 +1183,7 @@
     return null;
   }
 
-  function preferredWorkdayOption(options, option, answer) {
+  function preferredWorkdayOption(options, option, answer, field) {
     if (option) {
       var exact = options.find(function (candidate) {
         return optionMatches(candidate, option.label);
@@ -892,6 +1192,13 @@
         return exact;
       }
     }
+    var aliasTexts = answerTexts(answer, option);
+    var aliasMatch = options.find(function (candidate) {
+      return optionMatchesAny(candidate, aliasTexts);
+    });
+    if (aliasMatch) {
+      return aliasMatch;
+    }
     var answerText = answer?.value || "";
     var answerMatch = options.find(function (candidate) {
       return optionMatches(candidate, answerText);
@@ -899,13 +1206,46 @@
     if (answerMatch) {
       return answerMatch;
     }
-    return firstRealOption(options);
+    if (isSalaryField(field, answer)) {
+      return null;
+    }
+    if (
+      !option &&
+      answer?.answerType &&
+      !["unknown", "non_disclosure"].includes(answer.answerType)
+    ) {
+      return null;
+    }
+    if (
+      !option &&
+      ["unknown", "non_disclosure"].includes(answer?.answerType || "")
+    ) {
+      return null;
+    }
+    return (
+      preferredSourceFallbackOption(options, aliasTexts) ||
+      firstRealOption(options)
+    );
   }
 
   async function clickWorkdayOption(option) {
     var el = option?.element;
     if (!el) {
       return false;
+    }
+    if (option?.isCategory) {
+      var rect = el.getBoundingClientRect?.();
+      var sideTarget =
+        rect && rect.width > 0 && rect.height > 0
+          ? document.elementFromPoint(
+              Math.max(rect.left + 1, rect.right - 24),
+              rect.top + rect.height / 2,
+            )
+          : null;
+      if (sideTarget && (sideTarget === el || el.contains(sideTarget))) {
+        clickLikeUser(sideTarget);
+        triggerReactClickDeep(sideTarget);
+      }
     }
     var nested =
       el.querySelector?.(
@@ -960,6 +1300,14 @@
   function workdayCommittedState(field) {
     var state = root.fieldState.readFieldState(field);
     var container = root.workdayUi?.nearestWorkdayField(field.element);
+    function hasHumanText(candidate) {
+      var value = clean(candidate);
+      return Boolean(
+        value &&
+        !/^[a-f0-9]{16,}$/i.test(value) &&
+        !/^[-a-z0-9]{24,}$/i.test(value),
+      );
+    }
     var selectedText = clean(
       Array.from(
         container?.querySelectorAll?.(
@@ -985,12 +1333,20 @@
       };
     }
     if (field.element?.tagName === "BUTTON" && container) {
+      var buttonText = clean(optionLabel(field.element) || state?.text);
+      if (hasHumanText(buttonText)) {
+        return {
+          rawValue: buttonText,
+          text: buttonText,
+          selected: true,
+        };
+      }
       var siblingInput = container.querySelector(
         'input[type="text"]:not([type="hidden"]), input[role="combobox"], input[data-automation-id]',
       );
       if (siblingInput) {
         var inputVal = clean(siblingInput.value);
-        if (inputVal) {
+        if (hasHumanText(inputVal)) {
           return { rawValue: inputVal, text: inputVal, selected: true };
         }
       }
@@ -1012,6 +1368,9 @@
       answerValue: String(answer?.value ?? "").slice(0, 80),
       optionLabel: option?.label || null,
     });
+    if (isTechnicalSkillsField(field, answer)) {
+      return fillTechnicalSkills({ field, answer, option, audit, fieldAudit });
+    }
     var committedState = workdayCommittedState(field);
     var committedLabel = clean(
       committedState.text || committedState.rawValue || "",
@@ -1037,8 +1396,13 @@
     var flatOptions = options.filter(function (candidate) {
       return !candidate.isCategory;
     });
-    var target = preferredWorkdayOption(flatOptions, option, answer);
-    if (!target) {
+    var skillField = isTechnicalSkillsField(field, answer);
+    var target = skillField
+      ? flatOptions.find(function (candidate) {
+          return optionMatchesAny(candidate, answerTexts(answer, null));
+        }) || null
+      : preferredWorkdayOption(flatOptions, option, answer, field);
+    if (!target && !skillField) {
       target = await findHierarchicalWorkdayOption(
         field,
         answer,
@@ -1049,6 +1413,9 @@
       );
     }
     if (!target) {
+      if (isSalaryField(field, answer) && committedLabel) {
+        await clearWorkdayField(field, audit, fieldAudit);
+      }
       var postPopupState = workdayCommittedState(field);
       var postPopupLabel = clean(
         postPopupState.text || postPopupState.rawValue || "",
@@ -1095,10 +1462,10 @@
     });
     await clickWorkdayOption(target);
     var state = workdayCommittedState(field);
-    var ok =
-      optionMatches({ label: state.text }, target.label) ||
-      optionMatches({ label: state.rawValue }, target.label) ||
-      Boolean(state.selected && clean(state.text || state.rawValue));
+    var ok = skillField
+      ? selectedTechnicalSkillMatches(field, target, answer)
+      : optionMatches({ label: state.text }, target.label) ||
+        optionMatches({ label: state.rawValue }, target.label);
     await closePopup(field);
     if (!ok) {
       root.audit?.pushIssue(audit, fieldAudit, {
@@ -1228,8 +1595,7 @@
     var state = workdayCommittedState(field);
     var ok =
       optionMatches({ label: state.text }, best.label) ||
-      optionMatches({ label: state.rawValue }, best.label) ||
-      Boolean(state.selected && clean(state.text || state.rawValue));
+      optionMatches({ label: state.rawValue }, best.label);
     await closePopup(field);
     if (!ok) {
       root.audit?.pushIssue(audit, fieldAudit, {

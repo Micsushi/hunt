@@ -13,12 +13,16 @@ import argparse
 import os
 import shlex
 import shutil
+import socket
 import subprocess
 import sys
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 IS_WINDOWS = os.name == "nt"
+DEFAULT_REVIEW_APP_HOST = "127.0.0.1"
+DEFAULT_REVIEW_APP_PORT = 8004
+DEFAULT_REVIEW_FALLBACK_PORT = 8004
 
 
 def _find_repo_python() -> str:
@@ -90,6 +94,47 @@ def _run(command, *, env=None):
         print("\n[hunterctl] Interrupted. Child process stopped.")
         raise SystemExit(130) from None
     raise SystemExit(return_code)
+
+
+def _parse_int_env(name: str, default: int) -> int:
+    raw = os.environ.get(name)
+    if raw is None or raw == "":
+        return default
+    try:
+        return int(raw)
+    except ValueError:
+        raise SystemExit(f"{name} must be an integer, got {raw!r}.") from None
+
+
+def _tcp_port_available(host: str, port: int) -> bool:
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        try:
+            sock.bind((host, port))
+        except OSError:
+            return False
+    return True
+
+
+def _select_review_app_port(
+    *,
+    host: str,
+    preferred_port: int,
+    fallback_start: int = DEFAULT_REVIEW_FALLBACK_PORT,
+    max_port: int = 8999,
+) -> tuple[int, bool]:
+    if _tcp_port_available(host, preferred_port):
+        return preferred_port, False
+
+    for port in range(fallback_start, max_port + 1):
+        if port == preferred_port:
+            continue
+        if _tcp_port_available(host, port):
+            return port, True
+
+    raise SystemExit(
+        f"No free local UI port found for {host} from {fallback_start} through {max_port}."
+    )
 
 
 def _require_linux(command_name: str):
@@ -503,7 +548,20 @@ def cmd_ui_serve(_args):
         print("[hunter] frontend/dist not found - running build first.")
         if not _run_npm_build():
             print("[hunter] Build failed. Starting server anyway (will show 503 for UI).")
-    _run([PYTHON, "-m", "backend.app"])
+    host = os.environ.get("REVIEW_APP_HOST") or DEFAULT_REVIEW_APP_HOST
+    requested_port = _parse_int_env("REVIEW_APP_PORT", DEFAULT_REVIEW_APP_PORT)
+    selected_port, used_fallback = _select_review_app_port(
+        host=host,
+        preferred_port=requested_port,
+    )
+    env = {"REVIEW_APP_HOST": host, "REVIEW_APP_PORT": str(selected_port)}
+    if used_fallback:
+        print(
+            f"[hunter] UI port {host}:{requested_port} is already in use. "
+            "If you meant to replace that server, restart the existing instance first."
+        )
+        print(f"[hunter] Starting this UI instance on http://{host}:{selected_port}.")
+    _run([PYTHON, "-m", "backend.app"], env=env)
 
 
 def cmd_build_ui(args):

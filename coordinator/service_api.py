@@ -20,6 +20,74 @@ def _get_service():
     return svc
 
 
+@app.on_event("startup")
+def _startup() -> None:
+    from coordinator import telegram as tg
+
+    svc = _get_service()
+
+    def _approve(args: list[str]) -> str:
+        if not args:
+            return "Usage: approve <run_id>"
+        try:
+            svc.approve_submit(args[0], decision="approve", approved_by="telegram")
+            return f"Approved submit for {args[0]}"
+        except Exception as exc:
+            return f"Error: {exc}"
+
+    def _deny(args: list[str]) -> str:
+        if not args:
+            return "Usage: deny <run_id>"
+        try:
+            svc.approve_submit(args[0], decision="deny", approved_by="telegram")
+            return f"Denied submit for {args[0]}"
+        except Exception as exc:
+            return f"Error: {exc}"
+
+    def _skip(args: list[str]) -> str:
+        if not args:
+            return "Usage: skip <job_id>"
+        try:
+            conn = svc._connect().__enter__()  # type: ignore[attr-defined]
+            conn.execute("UPDATE jobs SET status = 'skipped' WHERE id = ?", (int(args[0]),))
+            conn.commit()
+            conn.close()
+            return f"Job {args[0]} marked skipped"
+        except Exception as exc:
+            return f"Error: {exc}"
+
+    def _investigate(args: list[str]) -> str:
+        if not args:
+            return "Usage: investigate <run_id>"
+        try:
+            svc.queue_investigation(args[0])
+            return f"Investigation queued for {args[0]}"
+        except Exception as exc:
+            return f"Error: {exc}"
+
+    def _status(_args: list[str]) -> str:
+        try:
+            from coordinator.scheduler import get_scheduler
+
+            summary = svc.get_readiness_summary(sample_limit=3)
+            sched = get_scheduler(svc).status()
+            return (
+                f"Ready: {summary['ready_count']} / {summary['total_jobs']} jobs\n"
+                f"Scheduler: {'running' if sched['running'] else 'stopped'} "
+                f"(ticks: {sched['tick_count']})\n"
+                f"Global hold: {summary['global_hold']['blocked']}"
+            )
+        except Exception as exc:
+            return f"Error: {exc}"
+
+    tg.register_handler("approve", _approve)
+    tg.register_handler("deny", _deny)
+    tg.register_handler("skip", _skip)
+    tg.register_handler("investigate", _investigate)
+    tg.register_handler("status", _status)
+    tg.start_polling()
+
+
 # ---------------------------------------------------------------------------
 # Models
 # ---------------------------------------------------------------------------
@@ -64,6 +132,11 @@ class WorkerResultRequest(BaseModel):
 class ReconcileStaleRequest(BaseModel):
     fill_timeout_minutes: int = 30
     submit_confirm_timeout_minutes: int | None = None
+
+
+class SchedulerStartRequest(BaseModel):
+    interval_seconds: int = 60
+    browser_lane: str | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -172,6 +245,23 @@ def post_worker_claim(req: WorkerClaimRequest):
         raise HTTPException(status_code=400, detail=str(exc))
 
 
+@app.post("/workers/claim-investigation", dependencies=[Depends(require_service_token)])
+def post_investigation_claim(req: WorkerClaimRequest):
+    svc = _get_service()
+    from coordinator.service import OrchestrationError
+
+    try:
+        return svc.claim_next_fill(
+            runtime_name=req.runtime_name,
+            browser_lane=req.browser_lane,
+            lease_seconds=req.lease_seconds,
+            worker_metadata=req.worker_metadata,
+            task_type="investigation",
+        )
+    except OrchestrationError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
 @app.post("/workers/{lease_id}/heartbeat", dependencies=[Depends(require_service_token)])
 def post_worker_heartbeat(lease_id: str, req: WorkerHeartbeatRequest | None = None):
     svc = _get_service()
@@ -225,3 +315,93 @@ def post_fill_result_inline(req: InlineFillResultRequest):
     except OrchestrationError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
     return result
+
+
+# ---------------------------------------------------------------------------
+# Investigation routes
+# ---------------------------------------------------------------------------
+
+
+@app.post("/runs/{run_id}/investigate", dependencies=[Depends(require_service_token)])
+def post_queue_investigation(run_id: str):
+    svc = _get_service()
+    from coordinator.service import OrchestrationError
+
+    try:
+        return svc.queue_investigation(run_id)
+    except OrchestrationError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+# ---------------------------------------------------------------------------
+# Failure log
+# ---------------------------------------------------------------------------
+
+
+@app.get("/failures", dependencies=[Depends(require_service_token)])
+def get_failures(limit: int = 100):
+    svc = _get_service()
+    return {"failures": svc.get_failure_log(limit=limit)}
+
+
+@app.get("/runs/{run_id}/failure-report", dependencies=[Depends(require_service_token)])
+def get_failure_report(run_id: str):
+    import json
+    from pathlib import Path
+
+    svc = _get_service()
+    run = svc.get_run(run_id)
+    if not run:
+        raise HTTPException(status_code=404, detail="Run not found")
+    if not run.failure_report_path:
+        raise HTTPException(status_code=404, detail="No failure report for this run")
+    path = Path(run.failure_report_path)
+    if not path.exists():
+        raise HTTPException(status_code=404, detail="Failure report file missing")
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
+
+
+# ---------------------------------------------------------------------------
+# Scheduler
+# ---------------------------------------------------------------------------
+
+
+def _get_scheduler():
+    from coordinator.scheduler import get_scheduler
+
+    svc = _get_service()
+    return get_scheduler(svc)
+
+
+@app.get("/scheduler/status", dependencies=[Depends(require_service_token)])
+def get_scheduler_status():
+    return _get_scheduler().status()
+
+
+@app.post("/scheduler/tick", dependencies=[Depends(require_service_token)])
+def post_scheduler_tick():
+    from coordinator.service import OrchestrationError
+
+    try:
+        return _get_scheduler().tick()
+    except OrchestrationError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+@app.post("/scheduler/start", dependencies=[Depends(require_service_token)])
+def post_scheduler_start(req: SchedulerStartRequest):
+    sched = _get_scheduler()
+    sched.interval = req.interval_seconds
+    if req.browser_lane is not None:
+        sched.browser_lane = req.browser_lane
+    sched.start()
+    return sched.status()
+
+
+@app.post("/scheduler/stop", dependencies=[Depends(require_service_token)])
+def post_scheduler_stop():
+    _get_scheduler().stop()
+    return _get_scheduler().status()

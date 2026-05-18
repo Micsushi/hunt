@@ -787,7 +787,7 @@ def test_workday_v2_repeatables_repairs_missing_degree_choice_on_dirty_row():
                     document.body.insertAdjacentHTML(
                       "beforeend",
                       `<div id="degree-options" role="listbox">
-                        <div role="option" onclick="document.querySelector('#education-38--degree').textContent='Bachelors'; this.closest('#degree-options').remove()">Bachelors</div>
+                        <div role="option" onclick="document.querySelector('#education-38--degree').textContent='BS'; this.closest('#degree-options').remove()">BS</div>
                         <div role="option" onclick="document.querySelector('#education-38--degree').textContent='Masters'; this.closest('#degree-options').remove()">Masters</div>
                       </div>`
                     );
@@ -810,6 +810,7 @@ def test_workday_v2_repeatables_repairs_missing_degree_choice_on_dirty_row():
                       university: "University of Alberta",
                       degree: "Bachelor's Degree",
                       degreeLevel: "Bachelors",
+                      fieldOfStudy: "Computer Science",
                       gpa: "3.7",
                     },
                   ],
@@ -845,7 +846,7 @@ def test_workday_v2_repeatables_repairs_missing_degree_choice_on_dirty_row():
     assert result["ok"] is True
     assert values == {
         "school": "University of Alberta",
-        "degree": "Bachelors",
+        "degree": "BS",
         "gpa": "3.7",
     }
     assert sections["Education"]["filled"] is True

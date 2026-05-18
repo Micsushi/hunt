@@ -9,30 +9,36 @@ C3 owns all browser interaction and field filling. C4 owns what happens between 
 Implemented:
 
 - DB-backed state machine in `coordinator/service.py`.
-- Tables and migrations for `orchestration_runs`, `orchestration_events`, and `submit_approvals`.
+- Tables and migrations for `orchestration_runs`, `orchestration_events`, `submit_approvals`, `orchestration_worker_leases`. Columns: `failure_code`, `failure_report_path`. Statuses: `investigation_queued`, `investigation_complete`.
 - Readiness decisions for missing jobs, manual-only jobs, Easy Apply exclusion, unsupported apply types, enrichment wait, missing resume, active runs, and manual-review holds.
 - Apply context artifacts under the C4 runtime root.
 - C3-compatible apply payloads with embedded PDF data URLs.
-- CLI commands in `coordinator/cli.py`.
-- `hunter` pass-through commands for common C4 operations.
+- `allowSubmit` flag in fill requests: off by default, pass-through from `run.submit_allowed` into `fill_request.json` and `/c3/pending-fills` response.
+- Structured failure report writer (`coordinator/failure_log.py`): per-run `failure_report.json` + append-only `logs/failures.jsonl`.
+- `derive_failure_code`: maps C3 fill result + review flags to typed failure codes (`unknown_widget`, `captcha_*`, `login_required`, etc.).
+- Investigation routing: C3 results with `unknown_widget` or `captcha_*` failure codes route to `investigation_queued` instead of `manual_review`.
+- `queue_investigation()`, `record_investigation_result()`, `get_failure_log()` in service.
+- Investigation result merges agent findings into `failure_report.json` and appends updated entry to `logs/failures.jsonl`.
+- CAPTCHA escalation to Telegram when investigation result returns `captcha_blocked`.
+- Pipeline scheduler (`coordinator/scheduler.py`): `SchedulerLoop` with tick/start/stop/status. Module-level singleton via `get_scheduler()`.
+- Telegram bot (`coordinator/telegram.py`): push notifications (fill complete, manual review, investigation queued/complete, CAPTCHA), long-poll command handler, `register_handler` API. Silent no-op if not configured.
+- Telegram command handlers wired in service API startup: `approve`, `deny`, `skip`, `investigate`, `status`.
+- CLI commands in `coordinator/cli.py`: all existing commands plus `scheduler-tick`, `investigate`, `failure-log`, `claim-investigation`.
 - FastAPI wrapper in `coordinator/service_api.py`.
 - C3 bridge endpoints: pending fills and inline fill-result postback.
-- Public HTTP request-fill route: `POST /runs/{run_id}/request-fill`.
-- Generic worker lease protocol: claim, heartbeat, result, and stale-run recovery.
+- Worker lease routes: `/workers/claim`, `/workers/claim-investigation`, heartbeat, result, reconcile-stale.
+- Scheduler routes: `GET /scheduler/status`, `POST /scheduler/tick`, `POST /scheduler/start`, `POST /scheduler/stop`.
+- Investigation routes: `POST /runs/{run_id}/investigate`.
+- Failure log routes: `GET /failures`, `GET /runs/{run_id}/failure-report`.
 - One-shot OpenClaw/Hermes investigation launcher in `coordinator/agent_worker.py`.
-- Investigation prompt/result builders in `coordinator/agent_runtime.py`.
+- Investigation prompt/result builders in `coordinator/agent_runtime.py` (investigation schema).
 - PowerShell and Bash wrappers under `scripts/c4_*_worker.*`.
-- API and CLI tests plus a Postgres-backed C4 smoke.
+- API, CLI, agent runtime, worker protocol, and C3 bridge tests.
 
 Not yet built:
 
-- Pipeline scheduler (hardcoded loop over ready jobs calling C3 automatically).
-- Enhanced structured failure log (per-run report in fixed schema).
-- Investigation queue (trigger when C3 returns novel failure).
-- CAPTCHA handler (extension-first, agent fallback, Telegram escalate).
-- C3 submit flag pass-through (`allowSubmit` off by default).
-- Telegram bot (bidirectional: C4 pushes status/approvals, you reply with commands).
-- C0 UI: run detail, event log, artifacts, manual-review resolution, approval controls, investigation report viewer.
+- CAPTCHA browser extension check (code path to detect if extension is loaded and pass to it first).
+- C0 UI: run detail, event log, artifacts, manual-review resolution, approval controls, investigation report viewer, scheduler status panel.
 
 ## Architecture
 

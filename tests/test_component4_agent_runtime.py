@@ -66,8 +66,8 @@ class Component4AgentRuntimeTests(unittest.TestCase):
         )
         self.assertIn("lease-test", prompt)
         self.assertIn("/workers/lease-test/result", prompt)
-        self.assertIn("Do not click any final submit", prompt)
-        self.assertIn("Do not browse unrelated jobs", prompt)
+        self.assertIn("Do not click any submit", prompt)
+        self.assertIn("Do not browse unrelated pages", prompt)
         self.assertIn("HUNT_SERVICE_TOKEN", prompt)
         self.assertNotIn("super-secret-token", prompt)
 
@@ -75,16 +75,18 @@ class Component4AgentRuntimeTests(unittest.TestCase):
         template = build_result_template(_claim())
         for key in (
             "status",
-            "resumeUploadOk",
-            "generatedAnswersUsed",
-            "finalUrl",
-            "missingRequiredFields",
-            "lowConfidenceAnswers",
-            "manualReviewFlags",
-            "evidence",
+            "failure_code_confirmed",
+            "page_observed",
+            "widget_details",
+            "agent_findings",
+            "suggested_fix_area",
+            "screenshots",
+            "html_snapshot",
+            "notes",
         ):
             self.assertIn(key, template)
-        self.assertTrue(template["evidence"]["stoppedBeforeSubmit"])
+        self.assertIsInstance(template["widget_details"], dict)
+        self.assertIsInstance(template["screenshots"], list)
 
     def test_runtime_commands_match_current_cli_entrypoints(self) -> None:
         openclaw = build_runtime_command(runtime_name="openclaw_isolated", prompt="hello")
@@ -162,7 +164,8 @@ class Component4AgentRuntimeTests(unittest.TestCase):
         self.assertTrue(result["mock_result_posted"])
         self.assertEqual(result["mock_result_status"], "awaiting_submit_approval")
         posted_payload = post_mock.call_args.kwargs["payload"]
-        self.assertTrue(posted_payload["evidence"]["mock"])
+        self.assertEqual(posted_payload["status"], "complete")
+        self.assertEqual(posted_payload["notes"], "mock")
         run_mock.assert_not_called()
 
 

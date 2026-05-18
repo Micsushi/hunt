@@ -111,7 +111,7 @@ def test_generic_v2_radio_options_use_associated_labels_before_group_text():
     }
 
 
-def test_generic_v2_unknown_option_fallback_prefers_no_before_first_real():
+def test_generic_v2_unknown_option_does_not_guess_no_or_first_real():
     if sync_playwright is None:
         pytest.skip("playwright is required for the generic C3 V2 fixture")
 
@@ -161,8 +161,8 @@ def test_generic_v2_unknown_option_fallback_prefers_no_before_first_real():
         browser.close()
 
     assert result == {
-        "firstRealLabel": "No",
-        "firstRealSource": "no_fallback",
+        "firstRealLabel": None,
+        "firstRealSource": "unknown_no_safe_option",
         "neutralLabel": "Prefer not to disclose",
         "neutralSource": "neutral_fallback",
     }

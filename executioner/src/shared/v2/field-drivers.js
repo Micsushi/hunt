@@ -185,7 +185,7 @@
   }
 
   async function fillTextWithFallbacks(field, audit, fieldAudit) {
-    var candidates = [" ", "\u200b", "Not applicable."];
+    var candidates = ["Not applicable.", "N/A", "\u200b"];
     for (var i = 0; i < candidates.length; i++) {
       var value = candidates[i];
       var result = await fillText(field, value);
@@ -206,10 +206,10 @@
         return Object.assign(result, {
           valueSource:
             i === 0
-              ? "fallback:space"
+              ? "fallback:not_applicable"
               : i === 1
-                ? "fallback:zero_width_space"
-                : "fallback:not_applicable",
+                ? "fallback:na"
+                : "fallback:zero_width_space",
           answerText: value,
           manualReviewRequired: true,
         });

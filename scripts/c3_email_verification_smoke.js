@@ -441,6 +441,18 @@ async function dismissCookieConsent(pageClient) {
 
 async function fillWorkdayAccountForm(pageClient, args) {
   await dismissCookieConsent(pageClient).catch(() => {});
+  const readyState = await waitForWorkdayPageReady(pageClient);
+  if (readyState.stillLoading || readyState.pageKind === "loading") {
+    return {
+      ok: false,
+      reason: "workday_page_still_loading",
+      readyState,
+    };
+  }
+  if (readyState.pageKind === "signin_choice") {
+    await clickSafeAccountAction(pageClient, "email");
+    await waitForWorkdayPageReady(pageClient);
+  }
   await bringToFront(pageClient);
   return pageClient.evaluate(
     `(async () => {
@@ -499,6 +511,14 @@ async function fillWorkdayAccountForm(pageClient, args) {
 
 async function fillWorkdayLoginForm(pageClient, args) {
   await dismissCookieConsent(pageClient).catch(() => {});
+  const readyState = await waitForWorkdayPageReady(pageClient);
+  if (readyState.stillLoading || readyState.pageKind === "loading") {
+    return {
+      ok: false,
+      reason: "workday_page_still_loading",
+      readyState,
+    };
+  }
   await bringToFront(pageClient);
   return pageClient.evaluate(
     `(async () => {
@@ -618,6 +638,19 @@ async function enterVerificationCode(pageClient, code) {
 }
 
 async function ensureWorkdayLoginPage(pageClient) {
+  const readyState = await waitForWorkdayPageReady(pageClient);
+  if (
+    readyState.pageKind === "signin_choice" ||
+    readyState.pageKind === "apply_choice" ||
+    readyState.pageKind === "job_posting"
+  ) {
+    return {
+      ok: false,
+      href: readyState.href,
+      reason: `${readyState.pageKind}_not_login_form`,
+      pageKind: readyState.pageKind,
+    };
+  }
   await bringToFront(pageClient);
   const state = await pageClient.evaluate(
     `(() => {
@@ -634,6 +667,7 @@ async function ensureWorkdayLoginPage(pageClient) {
       const text = document.body ? document.body.innerText.replace(/\\s+/g, " ").trim() : "";
       return {
         href,
+        pageKind: ${js(readyState.pageKind)},
         hasLoginFields: passwordCount === 1 && fields.some((type) => type === "text" || type === "email"),
         passwordCount,
         invalidToken: /invalid token|login\\/error/i.test([href, text].join(" "))
@@ -652,8 +686,9 @@ async function ensureWorkdayLoginPage(pageClient) {
 }
 
 async function pageHasAccountFields(pageClient) {
+  const readyState = await waitForWorkdayPageReady(pageClient);
   await bringToFront(pageClient);
-  return pageClient.evaluate(
+  const accountState = await pageClient.evaluate(
     `(() => {
       const visible = (el) => {
         const style = getComputedStyle(el);
@@ -706,6 +741,14 @@ async function pageHasAccountFields(pageClient) {
       };
     })()`,
   );
+  return {
+    ...accountState,
+    pageKind: readyState.pageKind,
+    stillLoading: readyState.stillLoading,
+    pageReadyTimedOut: Boolean(readyState.timedOut),
+    pageReadyWaitedMs: readyState.waitedMs || 0,
+    loadingNodeCount: readyState.loadingNodeCount || 0,
+  };
 }
 
 async function clickSafeAccountAction(pageClient, intent = "auto") {
@@ -963,6 +1006,20 @@ async function clickWorkdayLoginSubmit(pageClient) {
         el.innerText,
         el.textContent
       ].filter(Boolean).join(" ").replace(/\\s+/g, " ").trim();
+      const normalizedTextOf = (el) => {
+        const parts = textOf(el)
+          .split(/\\s+/)
+          .filter(Boolean);
+        if (parts.length % 2 === 0) {
+          const half = parts.length / 2;
+          const left = parts.slice(0, half).join(" ").toLowerCase();
+          const right = parts.slice(half).join(" ").toLowerCase();
+          if (left === right) {
+            return parts.slice(0, half).join(" ");
+          }
+        }
+        return parts.join(" ");
+      };
       const password = [...document.querySelectorAll("input[type='password']")]
         .filter(visible)
         .sort((a, b) => a.getBoundingClientRect().top - b.getBoundingClientRect().top)[0];
@@ -975,7 +1032,7 @@ async function clickWorkdayLoginSubmit(pageClient) {
         .map((el) => {
           const rect = el.getBoundingClientRect();
           return {
-            text: textOf(el),
+            text: normalizedTextOf(el),
             disabled: el.disabled || el.getAttribute("aria-disabled") === "true",
             x: rect.left + rect.width / 2,
             y: rect.top + rect.height / 2,
@@ -1086,6 +1143,8 @@ async function reachAccountForm(pageClient, maxSteps = 6) {
     steps.push({
       step: i,
       href: state.href,
+      pageKind: state.pageKind || "unknown",
+      pageReadyTimedOut: Boolean(state.pageReadyTimedOut),
       fieldCount: state.fieldCount,
       hasAccountFields: state.ok,
       isSignupForm: state.isSignupForm,
@@ -1096,6 +1155,14 @@ async function reachAccountForm(pageClient, maxSteps = 6) {
       verificationNeeded: state.verificationNeeded,
       signedInOrAdvanced: state.signedInOrAdvanced,
     });
+    if (state.stillLoading || state.pageKind === "loading") {
+      return {
+        ok: false,
+        reason: "workday_page_still_loading",
+        steps,
+        state,
+      };
+    }
     if (state.ok && state.isLoginForm) {
       return {
         ok: true,
@@ -1121,11 +1188,13 @@ async function reachAccountForm(pageClient, maxSteps = 6) {
       };
     }
     const clickIntent =
-      i === 0 && !state.ok && !state.hasSignInWithEmailAction
+      state.pageKind === "signin_choice" || state.hasSignInWithEmailAction
+        ? "email"
+        : state.pageKind === "job_posting" ||
+            state.pageKind === "apply_choice" ||
+            (i === 0 && !state.ok && !state.hasSignInWithEmailAction)
         ? "apply"
-        : state.hasSignInWithEmailAction
-          ? "email"
-          : "auto";
+        : "auto";
     const click = await clickSafeAccountAction(pageClient, clickIntent);
     steps.push({
       step: i,
@@ -1277,6 +1346,124 @@ async function navigate(pageClient, url) {
   await pageClient.send("Page.navigate", { url });
   await bringToFront(pageClient);
   await sleep(1200);
+}
+
+function workdayPageKindExpression() {
+  return `(() => {
+    const normalize = (value) => String(value || "").replace(/\\s+/g, " ").trim();
+    const visible = (el) => {
+      if (!el) return false;
+      const style = getComputedStyle(el);
+      const rect = el.getBoundingClientRect();
+      return style.display !== "none" && style.visibility !== "hidden" && rect.width > 0 && rect.height > 0;
+    };
+    const textOf = (el) => normalize([
+      el?.getAttribute?.("aria-label"),
+      el?.getAttribute?.("title"),
+      el?.innerText,
+      el?.textContent
+    ].filter(Boolean).join(" "));
+    const text = document.body ? document.body.innerText : "";
+    const normalizedText = normalize(text);
+    const lowerText = normalizedText.toLowerCase();
+    const buttons = [...document.querySelectorAll("button, [role='button'], a")]
+      .filter(visible)
+      .map((el) => textOf(el))
+      .filter(Boolean);
+    const fields = [...document.querySelectorAll("input:not([type='hidden']), textarea, select")]
+      .filter((el) => el.name !== "website" && visible(el))
+      .map((el) => ({
+        id: el.id || "",
+        name: el.name || "",
+        type: el.type || "",
+        autocomplete: el.autocomplete || "",
+        placeholder: el.placeholder || "",
+        label: el.getAttribute("aria-label") || ""
+      }));
+    const fieldText = (field) => [field.id, field.name, field.type, field.autocomplete, field.placeholder, field.label].join(" ");
+    const hasEmailField = fields.some((field) => /email|username|user/i.test(fieldText(field)));
+    const passwordCount = fields.filter((field) => field.type === "password").length;
+    const currentStepNode = document.querySelector('[data-automation-id="progressBarActiveStep"]');
+    const currentStepText = normalize(currentStepNode?.innerText || currentStepNode?.textContent || "");
+    const hasButton = (pattern) => buttons.some((label) => pattern.test(label));
+    const loadingNodes = [...document.querySelectorAll('[aria-busy="true"], [role="progressbar"], [data-automation-id*="loading" i], [class*="loading" i], [class*="spinner" i]')]
+      .filter(visible);
+    const hasClassificationSignal =
+      buttons.length > 0 || fields.length > 0 || Boolean(currentStepText) || normalizedText.length > 80;
+    const stillLoading =
+      document.readyState !== "complete" ||
+      (!hasClassificationSignal && normalizedText.length < 20) ||
+      (loadingNodes.length > 0 && fields.length === 0 && !currentStepText);
+    let pageKind = "unknown";
+    if (stillLoading) {
+      pageKind = "loading";
+    } else if (/workday is currently unavailable|service interruption/i.test(normalizedText)) {
+      pageKind = "maintenance";
+    } else if (/something went wrong/i.test(normalizedText) && /please refresh/i.test(normalizedText)) {
+      pageKind = "runtime_error";
+    } else if (hasEmailField && passwordCount > 1) {
+      pageKind = "signup_form";
+    } else if (hasEmailField && passwordCount === 1) {
+      pageKind = "signin_form";
+    } else if (hasButton(/^sign in with email\\b/i) || hasButton(/sign\\s*in\\s*with\\s*(google|apple)/i)) {
+      pageKind = "signin_choice";
+    } else if (/start your application/i.test(normalizedText) || hasButton(/^apply manually$/i) || hasButton(/^autofill with resume$/i)) {
+      pageKind = "apply_choice";
+    } else if (currentStepText && !/create account|sign in/i.test(currentStepText)) {
+      pageKind = "application_step";
+    } else if (/resume\\/cv|my information|my experience|application questions|voluntary disclosures|self identify|review/i.test(normalizedText)) {
+      pageKind = "application_step";
+    } else if (hasButton(/^apply\\b/i) || /job requisition id|posted on/i.test(normalizedText)) {
+      pageKind = "job_posting";
+    }
+    return {
+      href: location.href,
+      title: document.title,
+      readyState: document.readyState,
+      pageKind,
+      stillLoading,
+      fieldCount: fields.length,
+      passwordCount,
+      hasEmailField,
+      buttonCount: buttons.length,
+      buttons: buttons.slice(0, 20),
+      currentStepText,
+      loadingNodeCount: loadingNodes.length,
+      bodyHead: normalizedText.slice(0, 800)
+    };
+  })()`;
+}
+
+async function inspectWorkdayPageKind(pageClient) {
+  await bringToFront(pageClient);
+  return pageClient.evaluate(workdayPageKindExpression(), 30000);
+}
+
+async function waitForWorkdayPageReady(pageClient, timeoutMs = 45000) {
+  const started = Date.now();
+  let last = null;
+  let stableSince = 0;
+  while (Date.now() - started < timeoutMs) {
+    const state = await inspectWorkdayPageKind(pageClient);
+    const key = `${state.href}|${state.pageKind}|${state.fieldCount}|${state.buttonCount}`;
+    if (!state.stillLoading && state.pageKind !== "loading") {
+      if (key === last?.key) {
+        if (!stableSince) stableSince = Date.now();
+        if (Date.now() - stableSince >= 700) {
+          return { ...state, waitedMs: Date.now() - started };
+        }
+      } else {
+        stableSince = Date.now();
+      }
+    }
+    last = { key, state };
+    await sleep(500);
+  }
+  return {
+    ...(last?.state || { pageKind: "unknown", stillLoading: true }),
+    timedOut: true,
+    waitedMs: Date.now() - started,
+  };
 }
 
 async function signOutWorkday(pageClient) {

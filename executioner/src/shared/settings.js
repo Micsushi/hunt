@@ -24,7 +24,7 @@ export const DEFAULT_SETTINGS = {
   autoExportLogPrefix: "hunt-c3-logs",
   debugLogSinkEnabled: true,
   c4PollingEnabled: false,
-  backendUrl: "http://127.0.0.1:8000",
+  backendUrl: "http://127.0.0.1:8004",
   serviceToken: "",
   pollIntervalSeconds: 60,
   heartbeatIntervalSeconds: 120,

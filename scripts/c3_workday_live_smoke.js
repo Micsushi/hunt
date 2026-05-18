@@ -56,6 +56,7 @@ function parseArgs(argv) {
     verifyClear: false,
     clearBeforeFill: false,
     extensionAutoNext: false,
+    noSeedExtension: false,
     fillMessageTimeoutMs: 0,
     cdpRepairPhoneCountry: false,
     llmAnswers: true,
@@ -111,6 +112,8 @@ function parseArgs(argv) {
       args.clearBeforeFill = true;
     } else if (arg === "--extension-auto-next") {
       args.extensionAutoNext = true;
+    } else if (arg === "--no-seed-extension") {
+      args.noSeedExtension = true;
     } else if (arg === "--fill-message-timeout-ms" && next) {
       args.fillMessageTimeoutMs = Number(next);
       i += 1;
@@ -171,6 +174,7 @@ function usage() {
     "  --clear-before-fill Clear the current Workday page before each fill",
     "  --verify-clear     Fill, clear, verify empty, then refill before Next",
     "  --extension-auto-next Enable C3's own safe Next-after-fill setting",
+    "  --no-seed-extension Skip Chrome storage seeding for repeat p chrome runs",
     "  --fill-message-timeout-ms <ms> Override extension fill message timeout",
     "  --cdp-repair-phone-country Diagnostic only: patch phone country via CDP if extension fill fails",
     "  --no-llm-answers Do not auto-apply backend answer-router decisions during fill",
@@ -429,6 +433,110 @@ async function connectTarget(target) {
   return new CdpClient(target.webSocketDebuggerUrl).connect();
 }
 
+function workdayPageKindExpression() {
+  return `(() => {
+    const normalize = (value) => String(value || "").replace(/\\s+/g, " ").trim();
+    const visible = (el) => {
+      if (!el) return false;
+      const style = getComputedStyle(el);
+      const rect = el.getBoundingClientRect();
+      return style.display !== "none" && style.visibility !== "hidden" && rect.width > 0 && rect.height > 0;
+    };
+    const textOf = (el) => normalize([
+      el?.getAttribute?.("aria-label"),
+      el?.getAttribute?.("title"),
+      el?.innerText,
+      el?.textContent
+    ].filter(Boolean).join(" "));
+    const text = document.body ? document.body.innerText : "";
+    const normalizedText = normalize(text);
+    const buttons = [...document.querySelectorAll("button, [role='button'], a")]
+      .filter(visible)
+      .map((el) => textOf(el))
+      .filter(Boolean);
+    const fields = [...document.querySelectorAll("input:not([type='hidden']), textarea, select")]
+      .filter((el) => el.name !== "website" && visible(el))
+      .map((el) => ({
+        id: el.id || "",
+        name: el.name || "",
+        type: el.type || "",
+        autocomplete: el.autocomplete || "",
+        placeholder: el.placeholder || "",
+        label: el.getAttribute("aria-label") || ""
+      }));
+    const fieldText = (field) => [field.id, field.name, field.type, field.autocomplete, field.placeholder, field.label].join(" ");
+    const hasEmailField = fields.some((field) => /email|username|user/i.test(fieldText(field)));
+    const passwordCount = fields.filter((field) => field.type === "password").length;
+    const currentStepNode = document.querySelector('[data-automation-id="progressBarActiveStep"]');
+    const currentStepText = normalize(currentStepNode?.innerText || currentStepNode?.textContent || "");
+    const hasButton = (pattern) => buttons.some((label) => pattern.test(label));
+    const loadingNodes = [...document.querySelectorAll('[aria-busy="true"], [role="progressbar"], [data-automation-id*="loading" i], [class*="loading" i], [class*="spinner" i]')]
+      .filter(visible);
+    const hasClassificationSignal =
+      buttons.length > 0 || fields.length > 0 || Boolean(currentStepText) || normalizedText.length > 80;
+    const stillLoading =
+      document.readyState !== "complete" ||
+      (!hasClassificationSignal && normalizedText.length < 20) ||
+      (loadingNodes.length > 0 && fields.length === 0 && !currentStepText);
+    let pageKind = "unknown";
+    if (stillLoading) pageKind = "loading";
+    else if (/workday is currently unavailable|service interruption/i.test(normalizedText)) pageKind = "maintenance";
+    else if (/something went wrong/i.test(normalizedText) && /please refresh/i.test(normalizedText)) pageKind = "runtime_error";
+    else if (hasEmailField && passwordCount > 1) pageKind = "signup_form";
+    else if (hasEmailField && passwordCount === 1) pageKind = "signin_form";
+    else if (hasButton(/^sign in with email\\b/i) || hasButton(/sign\\s*in\\s*with\\s*(google|apple)/i)) pageKind = "signin_choice";
+    else if (/start your application/i.test(normalizedText) || hasButton(/^apply manually$/i) || hasButton(/^autofill with resume$/i)) pageKind = "apply_choice";
+    else if (currentStepText && !/create account|sign in/i.test(currentStepText)) pageKind = "application_step";
+    else if (/resume\\/cv|my information|my experience|application questions|voluntary disclosures|self identify|review/i.test(normalizedText)) pageKind = "application_step";
+    else if (hasButton(/^apply\\b/i) || /job requisition id|posted on/i.test(normalizedText)) pageKind = "job_posting";
+    return {
+      href: location.href,
+      title: document.title,
+      readyState: document.readyState,
+      pageKind,
+      stillLoading,
+      fieldCount: fields.length,
+      passwordCount,
+      hasEmailField,
+      buttonCount: buttons.length,
+      currentStepText,
+      loadingNodeCount: loadingNodes.length,
+      bodyHead: normalizedText.slice(0, 800)
+    };
+  })()`;
+}
+
+async function inspectWorkdayPageKind(pageClient) {
+  return pageClient.evaluate(workdayPageKindExpression(), 30000);
+}
+
+async function waitForWorkdayPageReady(pageClient, timeoutMs = 45000) {
+  const started = Date.now();
+  let last = null;
+  let stableSince = 0;
+  while (Date.now() - started < timeoutMs) {
+    const state = await inspectWorkdayPageKind(pageClient);
+    const key = `${state.href}|${state.pageKind}|${state.fieldCount}|${state.buttonCount}`;
+    if (!state.stillLoading && state.pageKind !== "loading") {
+      if (key === last?.key) {
+        if (!stableSince) stableSince = Date.now();
+        if (Date.now() - stableSince >= 700) {
+          return { ...state, waitedMs: Date.now() - started };
+        }
+      } else {
+        stableSince = Date.now();
+      }
+    }
+    last = { key, state };
+    await sleep(500);
+  }
+  return {
+    ...(last?.state || { pageKind: "unknown", stillLoading: true }),
+    timedOut: true,
+    waitedMs: Date.now() - started,
+  };
+}
+
 async function seedExtension(optionsClient, seedPayload, args = {}) {
   return optionsClient.evaluate(
     `(async () => {
@@ -493,7 +601,18 @@ async function setExtensionAutoNext(optionsClient, enabled) {
 async function navigate(pageClient, applyUrl) {
   await pageClient.send("Page.enable");
   await pageClient.send("Page.navigate", { url: applyUrl });
-  await sleep(4500);
+  const readyState = await waitForWorkdayPageReady(pageClient);
+  logWorkflowPhase(
+    "site",
+    readyState.timedOut ? "blocked" : "ok",
+    "Workday page reached a classified state after navigation.",
+    {
+      pageKind: readyState.pageKind,
+      stillLoading: Boolean(readyState.stillLoading),
+      waitedMs: readyState.waitedMs || 0,
+      href: readyState.href || "",
+    },
+  );
 }
 
 function stepMatches(summary, targetStep) {
@@ -514,6 +633,7 @@ function stepMatches(summary, targetStep) {
 function pageSummaryExpression() {
   return `(() => {
     const isSafeNextText = (value) => /^(next|next step|go next|continue|save and continue|save & continue)$/i.test(String(value || "").replace(/\\s+/g, " ").trim());
+    const normalize = (value) => String(value || "").replace(/\\s+/g, " ").trim();
     const visible = (el) => {
       const style = getComputedStyle(el);
       const rect = el.getBoundingClientRect();
@@ -522,8 +642,32 @@ function pageSummaryExpression() {
     const text = document.body ? document.body.innerText : "";
     const normalizedText = text.replace(/\s+/g, " ").trim().toLowerCase();
     const workdayRuntimeError = normalizedText.includes("something went wrong")
-      && normalizedText.includes("please refresh the page and then try again");
-    const stepMatch = text.match(/current step\\s+(\\d+)\\s+of\\s+(\\d+)\\s*\\n([^\\n]+)/i);
+      && (normalizedText.includes("please refresh the page and then try again")
+        || normalizedText.includes("plea e refre h the page and then try again")
+        || (normalizedText.includes("refre") && normalizedText.includes("try again")));
+    const readCurrentStep = () => {
+      const activeStep = document.querySelector('[data-automation-id="progressBarActiveStep"]');
+      if (activeStep) {
+        const steps = [...document.querySelectorAll('[data-automation-id^="progressBar"]')];
+        const labels = [...activeStep.querySelectorAll("label")]
+          .map((label) => normalize(label.innerText || label.textContent || ""))
+          .filter(Boolean);
+        const title = labels.at(-1)
+          || normalize(activeStep.innerText || activeStep.textContent || "").split(/\\n/).map(normalize).filter(Boolean).at(-1)
+          || "";
+        if (title) {
+          return {
+            current: Math.max(steps.indexOf(activeStep) + 1, 1),
+            total: steps.length || 1,
+            title
+          };
+        }
+      }
+      const stepMatch = text.match(/current\\s+s?tep\\s+(\\d+)\\s+of\\s+(\\d+)\\s*\\n([^\\n]+)/i)
+        || normalize(text).match(/current\\s+s?tep\\s+(\\d+)\\s+of\\s+(\\d+)\\s+(.+?)(?:\\s+s?tep\\s+\\d+\\s+of\\s+\\d+|$)/i);
+      return stepMatch ? { current: Number(stepMatch[1]), total: Number(stepMatch[2]), title: normalize(stepMatch[3]) } : null;
+    };
+    const currentStep = readCurrentStep();
     const buttons = [...document.querySelectorAll("button")].filter(visible).map((button) => ({
       text: (button.innerText || button.textContent || "").replace(/\\s+/g, " ").trim(),
       automationId: button.getAttribute("data-automation-id") || "",
@@ -577,7 +721,7 @@ function pageSummaryExpression() {
     return {
       href: location.href,
       title: document.title,
-      currentStep: stepMatch ? { current: Number(stepMatch[1]), total: Number(stepMatch[2]), title: stepMatch[3].trim() } : null,
+      currentStep,
       hasSubmit: buttons.some((button) => /^submit$/i.test(button.text)),
       hasNext: buttons.some((button) => isSafeNextText(button.text) && !button.disabled),
       buttons,
@@ -657,10 +801,34 @@ async function clickWorkdayStep(pageClient, stepName) {
         targetEl.dispatchEvent(new MouseEvent("click", { ...init, buttons: 0 }));
       };
       const bodyText = document.body ? document.body.innerText : "";
-      const workdayRuntimeError = bodyText.toLowerCase().includes("something went wrong")
-        && bodyText.toLowerCase().includes("please refresh the page and then try again");
-      const stepMatch = bodyText.match(/current step\\s+(\\d+)\\s+of\\s+(\\d+)\\s*\\n([^\\n]+)/i);
-      const currentStep = stepMatch ? { current: Number(stepMatch[1]), total: Number(stepMatch[2]), title: normalize(stepMatch[3]) } : null;
+      const normalizedBodyText = bodyText.toLowerCase();
+      const workdayRuntimeError = normalizedBodyText.includes("something went wrong")
+        && (normalizedBodyText.includes("please refresh the page and then try again")
+          || normalizedBodyText.includes("plea e refre h the page and then try again")
+          || (normalizedBodyText.includes("refre") && normalizedBodyText.includes("try again")));
+      const readCurrentStep = () => {
+        const activeStep = document.querySelector('[data-automation-id="progressBarActiveStep"]');
+        if (activeStep) {
+          const steps = [...document.querySelectorAll('[data-automation-id^="progressBar"]')];
+          const labels = [...activeStep.querySelectorAll("label")]
+            .map((label) => normalize(label.innerText || label.textContent || ""))
+            .filter(Boolean);
+          const title = labels.at(-1)
+            || normalize(activeStep.innerText || activeStep.textContent || "").split(/\\n/).map(normalize).filter(Boolean).at(-1)
+            || "";
+          if (title) {
+            return {
+              current: Math.max(steps.indexOf(activeStep) + 1, 1),
+              total: steps.length || 1,
+              title
+            };
+          }
+        }
+        const stepMatch = bodyText.match(/current\\s+s?tep\\s+(\\d+)\\s+of\\s+(\\d+)\\s*\\n([^\\n]+)/i)
+          || normalize(bodyText).match(/current\\s+s?tep\\s+(\\d+)\\s+of\\s+(\\d+)\\s+(.+?)(?:\\s+s?tep\\s+\\d+\\s+of\\s+\\d+|$)/i);
+        return stepMatch ? { current: Number(stepMatch[1]), total: Number(stepMatch[2]), title: normalize(stepMatch[3]) } : null;
+      };
+      const currentStep = readCurrentStep();
       if (currentStep && currentStep.title.toLowerCase() === targetLower) {
         return {
           ok: true,
@@ -692,7 +860,9 @@ async function clickWorkdayStep(pageClient, stepName) {
           label: candidate.text,
           href: location.href,
           workdayRuntimeError: afterText.toLowerCase().includes("something went wrong")
-            && afterText.toLowerCase().includes("please refresh the page and then try again")
+            && (afterText.toLowerCase().includes("please refresh the page and then try again")
+              || afterText.toLowerCase().includes("plea e refre h the page and then try again")
+              || (afterText.toLowerCase().includes("refre") && afterText.toLowerCase().includes("try again")))
         };
       }
       const back = candidates.find((item) => /^back(\\s+back)?$/i.test(item.text));
@@ -709,7 +879,9 @@ async function clickWorkdayStep(pageClient, stepName) {
           label: back.text,
           href: location.href,
           workdayRuntimeError: afterText.toLowerCase().includes("something went wrong")
-            && afterText.toLowerCase().includes("please refresh the page and then try again"),
+            && (afterText.toLowerCase().includes("please refresh the page and then try again")
+              || afterText.toLowerCase().includes("plea e refre h the page and then try again")
+              || (afterText.toLowerCase().includes("refre") && afterText.toLowerCase().includes("try again"))),
           candidates: candidates.map((item) => item.text).slice(0, 30)
         };
       }
@@ -768,6 +940,15 @@ async function clickWorkdayStep(pageClient, stepName) {
 }
 
 async function clickApplyManuallyEntry(pageClient) {
+  const readyState = await waitForWorkdayPageReady(pageClient);
+  if (readyState.stillLoading || readyState.pageKind === "loading") {
+    return {
+      ok: false,
+      phase: "apply_entry",
+      reason: "workday_page_still_loading",
+      readyState,
+    };
+  }
   const result = await pageClient.evaluate(
     `(async () => {
       const normalize = (value) => String(value || "").replace(/\\s+/g, " ").trim();
@@ -777,14 +958,26 @@ async function clickApplyManuallyEntry(pageClient) {
         return style.display !== "none" && style.visibility !== "hidden" && rect.width > 0 && rect.height > 0;
       };
       const bodyText = document.body ? document.body.innerText : "";
-      const currentStep = bodyText.match(/current step\\s+\\d+\\s+of\\s+\\d+/i);
-      if (currentStep) {
+      const currentStep = document.querySelector('[data-automation-id="progressBarActiveStep"]')
+        || bodyText.match(/current\\s+s?tep\\s+\\d+\\s+of\\s+\\d+[^\\n]*/i);
+      const currentStepText = normalize(currentStep?.innerText || currentStep?.textContent || currentStep?.[0] || "");
+      if (currentStep && !/create account|sign in|log in|login|register|sign up/i.test(currentStepText)) {
         return {
           ok: true,
           skipped: true,
           phase: "apply_entry",
           reason: "already_on_application_step",
           href: location.href,
+        };
+      }
+      if (currentStep) {
+        return {
+          ok: true,
+          skipped: true,
+          phase: "apply_entry",
+          reason: "already_on_auth_step",
+          href: location.href,
+          currentStep: currentStepText,
         };
       }
       if (!/Start Your Application/i.test(bodyText)) {
@@ -835,10 +1028,9 @@ async function clickApplyManuallyEntry(pageClient) {
   if (result?.ok) {
     if (!result.skipped && result.href) {
       await navigate(pageClient, result.href);
-      await sleep(6000);
     } else if (!result.skipped && result.x != null && result.y != null) {
       await cdpClick(pageClient, result.x, result.y);
-      await sleep(6000);
+      await waitForWorkdayPageReady(pageClient);
     }
     if (result.skipped) {
       return result;
@@ -847,14 +1039,32 @@ async function clickApplyManuallyEntry(pageClient) {
       `(() => {
         const normalize = (value) => String(value || "").replace(/\\s+/g, " ").trim();
         const text = document.body ? document.body.innerText : "";
-        const stepMatch = text.match(/current step\\s+(\\d+)\\s+of\\s+(\\d+)\\s*\\n([^\\n]+)/i);
+        const readCurrentStep = () => {
+          const activeStep = document.querySelector('[data-automation-id="progressBarActiveStep"]');
+          if (activeStep) {
+            const steps = [...document.querySelectorAll('[data-automation-id^="progressBar"]')];
+            const labels = [...activeStep.querySelectorAll("label")]
+              .map((label) => normalize(label.innerText || label.textContent || ""))
+              .filter(Boolean);
+            const title = labels.at(-1)
+              || normalize(activeStep.innerText || activeStep.textContent || "").split(/\\n/).map(normalize).filter(Boolean).at(-1)
+              || "";
+            if (title) {
+              return {
+                current: Math.max(steps.indexOf(activeStep) + 1, 1),
+                total: steps.length || 1,
+                title
+              };
+            }
+          }
+          const stepMatch = text.match(/current\\s+s?tep\\s+(\\d+)\\s+of\\s+(\\d+)\\s*\\n([^\\n]+)/i)
+            || normalize(text).match(/current\\s+s?tep\\s+(\\d+)\\s+of\\s+(\\d+)\\s+(.+?)(?:\\s+s?tep\\s+\\d+\\s+of\\s+\\d+|$)/i);
+          return stepMatch ? { current: Number(stepMatch[1]), total: Number(stepMatch[2]), title: normalize(stepMatch[3]) } : null;
+        };
+        const currentStep = readCurrentStep();
         return {
           href: location.href,
-          currentStep: stepMatch ? {
-            current: Number(stepMatch[1]),
-            total: Number(stepMatch[2]),
-            title: normalize(stepMatch[3]),
-          } : null,
+          currentStep,
         };
       })()`,
       10000,
@@ -1279,8 +1489,8 @@ async function fillCurrentPage(optionsClient, applyUrl, args) {
       const jobPathBase = normalizeWorkdayPathname(parsedApplyUrl.pathname)
         .replace(/\\/apply\\/applyManually\\/?$/i, "")
         .replace(/\\/apply\\/?$/i, "");
-      const usable = (item) => String(item.url || "").startsWith(applyBase)
-        && !/create account|sign in|error|ok/i.test(String(item.title || ""));
+      const exactApplyManually = (item) => String(item.url || "").startsWith(applyBase)
+        && !/error|ok/i.test(String(item.title || ""));
       const sameWorkdayApply = (item) => {
         try {
           const url = new URL(item.url || "");
@@ -1293,11 +1503,16 @@ async function fillCurrentPage(optionsClient, applyUrl, args) {
           return false;
         }
       };
-      const candidates = tabs.filter(usable)
-        .concat(tabs.filter(sameWorkdayApply));
+      const exactCandidates = tabs.filter(exactApplyManually);
+      const broadCandidates = tabs.filter(sameWorkdayApply);
+      const candidates = exactCandidates.concat(broadCandidates);
       const deduped = [...new Map(candidates.map((item) => [item.id, item])).values()];
-      let tab = deduped.find((item) => item.active)
-        || deduped.sort((a, b) => Number(b.id || 0) - Number(a.id || 0))[0];
+      const sortedExact = exactCandidates.sort((a, b) => Number(b.id || 0) - Number(a.id || 0));
+      const sortedBroad = deduped.sort((a, b) => Number(b.id || 0) - Number(a.id || 0));
+      let tab = sortedExact.find((item) => item.active)
+        || sortedExact[0]
+        || sortedBroad.find((item) => item.active)
+        || sortedBroad[0];
       if (!tab) {
         // Auth-gate fallback: tab title is "Create Account/Sign In" (excluded above).
         // Accept any tab on the same host + apply path regardless of title.
@@ -1319,9 +1534,13 @@ async function fillCurrentPage(optionsClient, applyUrl, args) {
       if (!tab) {
         return { ok: false, error: "workday_tab_not_found" };
       }
+      await chrome.tabs.update(tab.id, { active: true });
+      if (tab.windowId) {
+        await chrome.windows.update(tab.windowId, { focused: true }).catch(() => null);
+      }
       const wrapped = await new Promise((resolve) => {
         chrome.runtime.sendMessage(
-          { type: "hunt.apply.fill_current_page", payload: { tabId: tab.id, allowLlmAnswers: ${JSON.stringify(args.llmAnswers)} } },
+          { type: "hunt.apply.fill_current_page", payload: { tabId: tab.id, allowLlmAnswers: ${JSON.stringify(args.llmAnswers)}, triggeredBy: "c3_workday_live_smoke:fill_current_page" } },
           (messageResponse) => resolve({
             messageResponse,
             lastError: chrome.runtime.lastError && chrome.runtime.lastError.message
@@ -1799,8 +2018,8 @@ async function clearCurrentPage(optionsClient, applyUrl) {
       const jobPathBase = normalizeWorkdayPathname(parsedApplyUrl.pathname)
         .replace(/\\/apply\\/applyManually\\/?$/i, "")
         .replace(/\\/apply\\/?$/i, "");
-      const usable = (item) => String(item.url || "").startsWith(applyBase)
-        && !/create account|sign in|error|ok/i.test(String(item.title || ""));
+      const exactApplyManually = (item) => String(item.url || "").startsWith(applyBase)
+        && !/error|ok/i.test(String(item.title || ""));
       const sameWorkdayApply = (item) => {
         try {
           const url = new URL(item.url || "");
@@ -1813,11 +2032,16 @@ async function clearCurrentPage(optionsClient, applyUrl) {
           return false;
         }
       };
-      const candidates = tabs.filter(usable)
-        .concat(tabs.filter(sameWorkdayApply));
+      const exactCandidates = tabs.filter(exactApplyManually);
+      const broadCandidates = tabs.filter(sameWorkdayApply);
+      const candidates = exactCandidates.concat(broadCandidates);
       const deduped = [...new Map(candidates.map((item) => [item.id, item])).values()];
-      let tab = deduped.find((item) => item.active)
-        || deduped.sort((a, b) => Number(b.id || 0) - Number(a.id || 0))[0];
+      const sortedExact = exactCandidates.sort((a, b) => Number(b.id || 0) - Number(a.id || 0));
+      const sortedBroad = deduped.sort((a, b) => Number(b.id || 0) - Number(a.id || 0));
+      let tab = sortedExact.find((item) => item.active)
+        || sortedExact[0]
+        || sortedBroad.find((item) => item.active)
+        || sortedBroad[0];
       if (!tab) {
         // Auth-gate fallback: tab title is "Create Account/Sign In" (excluded above).
         // Accept any tab on the same host + apply path regardless of title.
@@ -1838,6 +2062,10 @@ async function clearCurrentPage(optionsClient, applyUrl) {
       }
       if (!tab) {
         return { ok: false, error: "workday_tab_not_found" };
+      }
+      await chrome.tabs.update(tab.id, { active: true });
+      if (tab.windowId) {
+        await chrome.windows.update(tab.windowId, { focused: true }).catch(() => null);
       }
       const wrapped = await new Promise((resolve) => {
         chrome.runtime.sendMessage(
@@ -1904,6 +2132,132 @@ async function clearPageUntilStable(optionsClient, pageClient, applyUrl) {
     attempts,
     final: attempts.at(-1) || null,
   };
+}
+
+async function clickAuthPrimary(pageClient) {
+  const result = await pageClient.evaluate(
+    `(async () => {
+      const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+      const normalize = (value) => String(value || "").replace(/\\s+/g, " ").trim();
+      const visible = (el) => {
+        if (!el) return false;
+        const style = getComputedStyle(el);
+        const rect = el.getBoundingClientRect();
+        return style.display !== "none" && style.visibility !== "hidden" && rect.width > 0 && rect.height > 0 && !el.disabled;
+      };
+      const clickReal = (target) => {
+        target.scrollIntoView({ block: "center", inline: "center" });
+        try { target.focus?.(); } catch (_error) {}
+        const rect = target.getBoundingClientRect();
+        const init = {
+          bubbles: true,
+          cancelable: true,
+          view: window,
+          button: 0,
+          buttons: 1,
+          clientX: Math.round(rect.left + rect.width / 2),
+          clientY: Math.round(rect.top + rect.height / 2)
+        };
+        const PointerCtor = window.PointerEvent || MouseEvent;
+        ["mouseover", "mousemove", "pointerdown", "mousedown"].forEach((type) => target.dispatchEvent(new PointerCtor(type, init)));
+        target.dispatchEvent(new PointerCtor("pointerup", { ...init, buttons: 0 }));
+        target.dispatchEvent(new MouseEvent("mouseup", { ...init, buttons: 0 }));
+        target.dispatchEvent(new MouseEvent("click", { ...init, buttons: 0 }));
+      };
+      const labelFor = (el) => normalize([
+        el.getAttribute("aria-label"),
+        el.getAttribute("title"),
+        el.value,
+        el.innerText,
+        el.textContent,
+      ].filter(Boolean).join(" "));
+      const metadataFor = (el) => normalize([
+        el.id,
+        el.name,
+        el.type,
+        el.getAttribute("data-automation-id"),
+        el.getAttribute("data-testid"),
+        el.className,
+      ].filter(Boolean).join(" "));
+      const bodyText = normalize(document.body?.innerText || "");
+      const currentStepNode = document.querySelector('[data-automation-id="progressBarActiveStep"]');
+      const currentStepText = normalize(currentStepNode?.innerText || currentStepNode?.textContent || bodyText.match(/current\\s+s?tep\\s+\\d+\\s+of\\s+\\d+[^\\n]*/i)?.[0] || "");
+      const isAuthStep = /create account|sign in|log in|login|register|sign up/i.test(currentStepText)
+        || /create account|verify new password|already have an account|career privacy notice/i.test(bodyText);
+      if (!isAuthStep) {
+        return { clicked: false, reason: "not_auth_step", currentStepText };
+      }
+      const checkboxCandidates = [...document.querySelectorAll('input[type="checkbox"]')]
+        .filter(visible)
+        .filter((checkbox) => {
+          const text = normalize([
+            labelFor(checkbox),
+            metadataFor(checkbox),
+            checkbox.closest("label")?.innerText,
+            checkbox.closest('[data-automation-id], section, div')?.innerText,
+          ].filter(Boolean).join(" "));
+          return /privacy notice|terms|condition|consent|agree|continuing|create account/i.test(text);
+        });
+      const checked = [];
+      for (const checkbox of checkboxCandidates) {
+        if (!checkbox.checked) {
+          clickReal(checkbox);
+          await sleep(250);
+          if (!checkbox.checked) {
+            checkbox.checked = true;
+            checkbox.dispatchEvent(new Event("input", { bubbles: true }));
+            checkbox.dispatchEvent(new Event("change", { bubbles: true }));
+            await sleep(120);
+          }
+        }
+        checked.push({
+          id: checkbox.id || "",
+          automationId: checkbox.getAttribute("data-automation-id") || "",
+          checked: Boolean(checkbox.checked),
+        });
+      }
+      const controls = [...document.querySelectorAll('button, [role="button"]')]
+        .filter(visible)
+        .map((el) => {
+          const label = labelFor(el);
+          const metadata = metadataFor(el);
+          const tag = String(el.tagName || "").toLowerCase();
+          const type = String(el.getAttribute("type") || "").toLowerCase();
+          let score = 0;
+          if (/^create account(?: create account)?$/i.test(label)) score += 140;
+          else if (/^sign in(?: sign in)?$/i.test(label)) score += 120;
+          else if (/^submit$/i.test(label)) score += 110;
+          else if (/create account|sign up|register|sign in|log in|login/i.test(label + " " + metadata)) score += 80;
+          if (tag === "button" || type === "submit") score += 30;
+          if (/submitbutton/i.test(metadata)) score += 25;
+          if (/click_filter/i.test(metadata)) score -= 20;
+          if (/utility|navigation|search for jobs|backtojobposting|forgotpassword/i.test(metadata)) score -= 80;
+          return { el, label, metadata, score };
+        })
+        .filter((entry) => entry.score > 0)
+        .sort((a, b) => b.score - a.score);
+      if (!controls.length) {
+        return { clicked: false, reason: "auth_primary_not_found", checked, currentStepText };
+      }
+      const target = controls[0];
+      clickReal(target.el);
+      await sleep(5500);
+      return {
+        clicked: true,
+        reason: "auth_primary_clicked",
+        label: target.label,
+        metadata: target.metadata,
+        checked,
+        href: location.href,
+        title: document.title,
+        bodyHead: normalize(document.body?.innerText || "").slice(0, 800),
+      };
+    })()`,
+    30000,
+  );
+  await sleep(1200);
+  const after = await inspectPage(pageClient);
+  return { ...result, after };
 }
 
 async function clickNext(pageClient) {
@@ -1988,14 +2342,39 @@ async function clickNext(pageClient) {
       clickReal(button);
       await sleep(6500);
       const body = document.body ? document.body.innerText : "";
-      const workdayRuntimeError = body.toLowerCase().includes("something went wrong")
-        && body.toLowerCase().includes("please refresh the page and then try again");
-      const stepMatch = body.match(/current step\\s+(\\d+)\\s+of\\s+(\\d+)\\s*\\n([^\\n]+)/i);
+      const normalizedBody = body.toLowerCase();
+      const workdayRuntimeError = normalizedBody.includes("something went wrong")
+        && (normalizedBody.includes("please refresh the page and then try again")
+          || normalizedBody.includes("plea e refre h the page and then try again")
+          || (normalizedBody.includes("refre") && normalizedBody.includes("try again")));
+      const normalize = (value) => String(value || "").replace(/\\s+/g, " ").trim();
+      const readCurrentStep = () => {
+        const activeStep = document.querySelector('[data-automation-id="progressBarActiveStep"]');
+        if (activeStep) {
+          const steps = [...document.querySelectorAll('[data-automation-id^="progressBar"]')];
+          const labels = [...activeStep.querySelectorAll("label")]
+            .map((label) => normalize(label.innerText || label.textContent || ""))
+            .filter(Boolean);
+          const title = labels.at(-1)
+            || normalize(activeStep.innerText || activeStep.textContent || "").split(/\\n/).map(normalize).filter(Boolean).at(-1)
+            || "";
+          if (title) {
+            return {
+              current: Math.max(steps.indexOf(activeStep) + 1, 1),
+              total: steps.length || 1,
+              title
+            };
+          }
+        }
+        const stepMatch = body.match(/current\\s+s?tep\\s+(\\d+)\\s+of\\s+(\\d+)\\s*\\n([^\\n]+)/i)
+          || normalize(body).match(/current\\s+s?tep\\s+(\\d+)\\s+of\\s+(\\d+)\\s+(.+?)(?:\\s+s?tep\\s+\\d+\\s+of\\s+\\d+|$)/i);
+        return stepMatch ? { current: Number(stepMatch[1]), total: Number(stepMatch[2]), title: normalize(stepMatch[3]) } : null;
+      };
       return {
         clicked: true,
         beforeHref,
         href: location.href,
-        currentStep: stepMatch ? { current: Number(stepMatch[1]), total: Number(stepMatch[2]), title: stepMatch[3].trim() } : null,
+        currentStep: readCurrentStep(),
         workdayRuntimeError,
         suppressedErrors,
         bodyHead: body.replace(/\\s+/g, " ").trim().slice(0, 600)
@@ -2290,12 +2669,53 @@ async function run() {
   const pageClient = await connectTarget(pageTarget);
 
   try {
-    const seedPayload = makeSeedPayload(args.resumePath, applyUrl, args);
-    await seedExtension(optionsClient, seedPayload, args);
+    if (args.noSeedExtension) {
+      logWorkflowPhase(
+        "extension_seed",
+        "skipped",
+        "Skipped extension seed by request; continuing with persisted settings.",
+      );
+    } else {
+      const seedPayload = makeSeedPayload(args.resumePath, applyUrl, args);
+      try {
+        await seedExtension(optionsClient, seedPayload, args);
+      } catch (error) {
+        const message = String(error?.message || error || "");
+        if (
+          /MAX_WRITE_OPERATIONS_PER_HOUR|MAX_WRITE_OPERATIONS_PER_MINUTE|quota/i.test(
+            message,
+          )
+        ) {
+          logWorkflowPhase(
+            "extension_seed",
+            "warn",
+            "Skipped extension seed because Chrome storage write quota was exhausted; continuing with persisted settings.",
+            {
+              error: message,
+            },
+          );
+        } else {
+          throw error;
+        }
+      }
+    }
     await pageClient.send("Page.bringToFront");
     if (!args.preserveCurrent) {
       await navigate(pageClient, applyUrl);
       await pageClient.send("Page.bringToFront");
+    } else {
+      const readyState = await waitForWorkdayPageReady(pageClient);
+      logWorkflowPhase(
+        "site",
+        readyState.timedOut ? "blocked" : "ok",
+        "Workday page reached a classified state before apply-entry detection.",
+        {
+          pageKind: readyState.pageKind,
+          stillLoading: Boolean(readyState.stillLoading),
+          waitedMs: readyState.waitedMs || 0,
+          href: readyState.href || "",
+        },
+      );
     }
     const applyEntry = await clickApplyManuallyEntry(pageClient);
     logWorkflowPhase(
@@ -2676,6 +3096,19 @@ async function run() {
         /review/i.test(afterFill.currentStep?.title || "")
       ) {
         break;
+      }
+      if (
+        /create account|sign in|log in|login|register|sign up/i.test(
+          afterFill.currentStep?.title || "",
+        )
+      ) {
+        const authNext = await clickAuthPrimary(pageClient);
+        timeline[timeline.length - 1].authNext = authNext;
+        if (!authNext.clicked) {
+          break;
+        }
+        await sleep(1800);
+        continue;
       }
       if (args.extensionAutoNext) {
         if (afterFill.errors?.length) {

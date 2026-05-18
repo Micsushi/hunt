@@ -81,6 +81,8 @@ class OrchestrationRun:
     browser_summary_path: str | None = None
     decision_path: str | None = None
     final_status_path: str | None = None
+    failure_code: str | None = None
+    failure_report_path: str | None = None
     manual_review_required: bool = False
     manual_review_reason: str | None = None
     manual_review_flags: list[str] = field(default_factory=list)
@@ -112,6 +114,8 @@ class OrchestrationRun:
             browser_summary_path=row["browser_summary_path"],
             decision_path=row["decision_path"],
             final_status_path=row["final_status_path"],
+            failure_code=row["failure_code"],
+            failure_report_path=row["failure_report_path"],
             manual_review_required=_bool(row["manual_review_required"]),
             manual_review_reason=row["manual_review_reason"],
             manual_review_flags=_json_list(row["manual_review_flags_json"]),

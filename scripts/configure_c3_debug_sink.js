@@ -3,6 +3,7 @@ const fs = require("fs");
 const http = require("http");
 const path = require("path");
 const {
+  DEFAULT_ACCOUNT_PASSWORD,
   makeWorkdayProfileDefaults,
   withWorkdayProfileAliases,
   workdayProfileCounts,
@@ -17,12 +18,13 @@ const BROWSER_CONTEXT_KEY = "hunt.apply.browserContext";
 function parseArgs(argv) {
   const args = {
     port: DEFAULT_PORT,
-    backendUrl: process.env.HUNT_BACKEND_URL || "http://127.0.0.1:8000",
+    backendUrl: process.env.HUNT_BACKEND_URL || "http://127.0.0.1:8004",
     extensionId: process.env.HUNT_C3_EXTENSION_ID || DEFAULT_EXTENSION_ID,
     envFile: ".env",
     seedWorkdayProfile: false,
     autoNext: false,
     test: true,
+    inspectOnly: false,
   };
   for (let idx = 0; idx < argv.length; idx += 1) {
     const arg = argv[idx];
@@ -42,6 +44,9 @@ function parseArgs(argv) {
       args.autoNext = false;
     } else if (arg === "--no-test") {
       args.test = false;
+    } else if (arg === "--inspect-only") {
+      args.inspectOnly = true;
+      args.test = false;
     } else if (arg === "--help" || arg === "-h") {
       args.help = true;
     } else {
@@ -60,7 +65,7 @@ function usage() {
       "The token is read from HUNT_SERVICE_TOKEN or --env-file and is never printed.",
       "",
       "Options:",
-      "  --backend-url <url>  Backend URL. Default: http://127.0.0.1:8000",
+      "  --backend-url <url>  Backend URL. Default: http://127.0.0.1:8004",
       "  --extension-id <id> Unpacked C3 extension ID",
       "  --env-file <path>    Env file fallback. Default: .env",
       "  --port <port>        Chrome DevTools port. Default: 9222",
@@ -68,6 +73,7 @@ function usage() {
       "  --auto-next         Enable extension auto-next/page walk for full-flow testing",
       "  --no-auto-next      Keep fill on the current page for direct debugging. Default",
       "  --no-test            Do not post a test debug-log entry",
+      "  --inspect-only       Read p chrome C3 settings without writing storage",
     ].join("\n"),
   );
 }
@@ -301,10 +307,11 @@ async function main() {
         const serviceToken = ${js(token)};
         const seedProfile = ${js(args.seedWorkdayProfile)};
         const autoNext = ${js(args.autoNext)};
+        const inspectOnly = ${js(args.inspectOnly)};
+        const sameJson = (a, b) => JSON.stringify(a || null) === JSON.stringify(b || null);
         const browserContext = {
           name: "p_chrome",
           configuredBy: "scripts/configure_c3_debug_sink.js",
-          configuredAt: new Date().toISOString(),
           devtoolsPort: String(${js(args.port)})
         };
         const workdayProfileDefaults = ${js(
@@ -312,6 +319,11 @@ async function main() {
         )};
         const existing = await chrome.storage.sync.get([${js(SETTINGS_KEY)}]);
         const current = existing[${js(SETTINGS_KEY)}] || {};
+        const existingLocal = await chrome.storage.local.get([
+          ${js(BROWSER_CONTEXT_KEY)},
+          ${js(PROFILE_KEY)}
+        ]);
+        const currentBrowserContext = existingLocal[${js(BROWSER_CONTEXT_KEY)}] || {};
         const next = {
           settingsVersion: 6,
           autofillOnLoad: false,
@@ -340,18 +352,61 @@ async function main() {
           serviceToken,
           debugLogSinkEnabled: true
         };
-        await chrome.storage.sync.set({ [${js(SETTINGS_KEY)}]: next });
-        await chrome.storage.local.set({ [${js(BROWSER_CONTEXT_KEY)}]: browserContext });
+        const writes = {
+          settings: false,
+          browserContext: false,
+          profile: false
+        };
+        if (inspectOnly) {
+          const profileCountsFor = ${workdayProfileCounts.toString()};
+          const profileCounts = profileCountsFor(existingLocal[${js(PROFILE_KEY)}] || {});
+          return {
+            backendUrl: current.backendUrl || "",
+            browserContext: currentBrowserContext.name || "",
+            debugLogSinkEnabled: Boolean(current.debugLogSinkEnabled),
+            hasServiceToken: Boolean(current.serviceToken),
+            profileCounts,
+            useFieldPipelineV2: Boolean(current.useFieldPipelineV2),
+            autoClickNextAfterFill: Boolean(current.autoClickNextAfterFill),
+            testResult: { skipped: true },
+            writes,
+            inspectOnly: true
+          };
+        }
+        if (!sameJson(current, next)) {
+          await chrome.storage.sync.set({ [${js(SETTINGS_KEY)}]: next });
+          writes.settings = true;
+        }
+        const nextBrowserContext = {
+          ...browserContext,
+          configuredAt: sameJson(
+            {
+              name: currentBrowserContext.name,
+              configuredBy: currentBrowserContext.configuredBy,
+              devtoolsPort: currentBrowserContext.devtoolsPort
+            },
+            browserContext
+          )
+            ? currentBrowserContext.configuredAt
+            : new Date().toISOString()
+        };
+        if (!sameJson(currentBrowserContext, nextBrowserContext)) {
+          await chrome.storage.local.set({ [${js(BROWSER_CONTEXT_KEY)}]: nextBrowserContext });
+          writes.browserContext = true;
+        }
         const profileCountsFor = ${workdayProfileCounts.toString()};
         let profileCounts = null;
         if (seedProfile) {
-          const storedProfile = await chrome.storage.local.get([${js(PROFILE_KEY)}]);
-          const currentProfile = storedProfile[${js(PROFILE_KEY)}] || {};
+          const currentProfile = existingLocal[${js(PROFILE_KEY)}] || {};
           const mergedProfile = {
             ...currentProfile,
             ...workdayProfileDefaults,
-            accountEmail: currentProfile.accountEmail || workdayProfileDefaults.accountEmail,
-            accountPassword: currentProfile.accountPassword || workdayProfileDefaults.accountPassword,
+            email: workdayProfileDefaults.email,
+            accountEmail: workdayProfileDefaults.accountEmail,
+            accountPassword:
+              !currentProfile.accountPassword || currentProfile.accountPassword === "Hunt123456!"
+                ? workdayProfileDefaults.accountPassword || ${js(DEFAULT_ACCOUNT_PASSWORD)}
+                : currentProfile.accountPassword,
             skills: Array.isArray(currentProfile.skills) && currentProfile.skills.length
               ? currentProfile.skills
               : workdayProfileDefaults.skills,
@@ -365,12 +420,16 @@ async function main() {
               ? currentProfile.websites
               : workdayProfileDefaults.websites
           };
-          await chrome.storage.local.set({ [${js(PROFILE_KEY)}]: mergedProfile });
+          if (!sameJson(currentProfile, mergedProfile)) {
+            await chrome.storage.local.set({ [${js(PROFILE_KEY)}]: mergedProfile });
+            writes.profile = true;
+          }
           profileCounts = profileCountsFor(mergedProfile);
-          setTimeout(() => window.location.reload(), 100);
+          if (writes.profile) {
+            setTimeout(() => window.location.reload(), 100);
+          }
         } else {
-          const storedProfile = await chrome.storage.local.get([${js(PROFILE_KEY)}]);
-          profileCounts = profileCountsFor(storedProfile[${js(PROFILE_KEY)}] || {});
+          profileCounts = profileCountsFor(existingLocal[${js(PROFILE_KEY)}] || {});
         }
         let testResult = { skipped: true };
         if (${js(args.test)}) {
@@ -384,10 +443,10 @@ async function main() {
             body: JSON.stringify({
               eventType: "p_chrome.debug_sink_configured",
               extensionTime: new Date().toISOString(),
-              browserContext: browserContext.name,
-              browserContextConfiguredBy: browserContext.configuredBy,
-              browserContextConfiguredAt: browserContext.configuredAt,
-              browserContextDevtoolsPort: browserContext.devtoolsPort,
+              browserContext: nextBrowserContext.name,
+              browserContextConfiguredBy: nextBrowserContext.configuredBy,
+              browserContextConfiguredAt: nextBrowserContext.configuredAt,
+              browserContextDevtoolsPort: nextBrowserContext.devtoolsPort,
               pipelineVersion: next.useFieldPipelineV2 ? "v2" : "v1",
               useFieldPipelineV2: next.useFieldPipelineV2,
               settingsVersion: next.settingsVersion,
@@ -402,13 +461,15 @@ async function main() {
         }
         return {
           backendUrl: next.backendUrl,
-          browserContext: browserContext.name,
+          browserContext: nextBrowserContext.name,
           debugLogSinkEnabled: next.debugLogSinkEnabled,
           hasServiceToken: Boolean(next.serviceToken),
           profileCounts,
           useFieldPipelineV2: next.useFieldPipelineV2,
           autoClickNextAfterFill: next.autoClickNextAfterFill,
-          testResult
+          testResult,
+          writes,
+          inspectOnly: false
         };
       })()`,
       45000,
@@ -427,6 +488,8 @@ async function main() {
           tokenSource: source ? "found" : "missing",
           testOk: result.testResult?.ok === true,
           testStatus: result.testResult?.status || null,
+          writes: result.writes || null,
+          inspectOnly: Boolean(result.inspectOnly),
         },
         null,
         2,
