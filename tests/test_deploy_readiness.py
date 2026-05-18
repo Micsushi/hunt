@@ -283,27 +283,36 @@ def test_c3_extension_store_deploy_helper_exists():
 
 def test_c3_extension_has_standalone_manual_fill_path():
     fill_runner = Path("executioner/src/background/fill-runner.js").read_text(encoding="utf-8")
-    generic_fill = Path("executioner/src/ats/generic/fill.js").read_text(encoding="utf-8")
+    generic_fill = Path("executioner/src/ats/generic/fill-v2.js").read_text(encoding="utf-8")
     generic_rules = Path("executioner/src/ats/generic/field-rules.js").read_text(encoding="utf-8")
+    field_pipeline = Path("executioner/src/shared/v2/field-pipeline.js").read_text(
+        encoding="utf-8"
+    )
+    ui_inspector = Path("executioner/src/shared/v2/ui-inspector.js").read_text(
+        encoding="utf-8"
+    )
+    field_drivers = Path("executioner/src/shared/v2/field-drivers.js").read_text(
+        encoding="utf-8"
+    )
     popup_html = Path("executioner/src/popup/popup.html").read_text(encoding="utf-8")
     popup_js = Path("executioner/src/popup/popup.js").read_text(encoding="utf-8")
 
     assert "GENERIC_FIELD_RULES" in fill_runner
     assert "selectFillRoute" in fill_runner
     assert "fillRoute: route.routeName" in fill_runner
-    assert "createGenericFillFunction" in fill_runner
+    assert "createGenericFillV2Function" in fill_runner
+    assert "createGenericFillFunction" not in fill_runner
     assert "genericBackedAtsNames" in fill_runner
     assert "detectedAtsType" in fill_runner
     assert "sourceMode: extensionState.activeApplyContext.jobId" in fill_runner
     assert "activeApplyContext.selectedResumePath ||" in fill_runner
     assert "extensionState.defaultResume.pdfFileName" in fill_runner
-    assert "Generic form adapter for standalone manual fills" in generic_fill
-    assert "reportedAtsType" in generic_fill
-    assert "adapterBackedByGeneric" in generic_fill
-    assert "isRequired" in generic_fill
-    assert "chooseRequiredKnownValue" in generic_fill
-    assert "u.attachResumeToFileInput" in generic_fill
-    assert "generatedAnswerCount: 0" in generic_fill
+    assert "Generic V2 adapter" in generic_fill
+    assert "runHuntV2Fill" in generic_fill
+    assert "adapterBackedByGeneric" in field_pipeline
+    assert "isRequired" in ui_inspector
+    assert "u.attachResumeToFileInput" in field_drivers
+    assert "generatedAnswerCount" in field_pipeline
     assert "maiden name" in generic_rules
     assert "preferred name" in generic_rules
     assert "jobContextFields" in generic_rules

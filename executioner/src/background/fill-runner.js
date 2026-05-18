@@ -1,14 +1,12 @@
 // fill-runner.js
 // Resolves the correct ATS adapter for a tab, injects shared utilities and
 // the adapter fill function, then logs the attempt.
-// Adding a new ATS: import its createXxxFillFunction, add it to FILL_ADAPTERS.
+// Adding a new ATS: import its V2 createXxxFillFunction, add it to FILL_ADAPTERS.
 import { chooseDetectedAtsType } from "../ats/registry.js";
 import { GENERIC_FIELD_RULES } from "../ats/generic/field-rules.js";
-import { createGenericFillFunction } from "../ats/generic/fill.js";
 import { createGenericFillV2Function } from "../ats/generic/fill-v2.js";
 import { genericBackedAtsNames } from "../ats/support-matrix.js";
 import { postAnswerDecision, postDebugLog } from "../shared/api.js";
-import { createWorkdayFillFunction } from "../ats/workday/fill.js";
 import { createWorkdayFillV2Function } from "../ats/workday/fill-v2.js";
 import {
   appendAttempt,
@@ -27,18 +25,12 @@ import {
 const GENERIC_BACKED_ATS_NAMES = genericBackedAtsNames();
 
 const FILL_ADAPTERS = {
-  generic: createGenericFillFunction,
-  workday: createWorkdayFillFunction,
-};
-
-const FILL_ADAPTERS_V2 = {
   generic: createGenericFillV2Function,
   workday: createWorkdayFillV2Function,
 };
 
 for (const atsName of GENERIC_BACKED_ATS_NAMES) {
-  FILL_ADAPTERS[atsName] = createGenericFillFunction;
-  FILL_ADAPTERS_V2[atsName] = createGenericFillV2Function;
+  FILL_ADAPTERS[atsName] = createGenericFillV2Function;
 }
 
 const pendingLlmFillByTab = new Map();
@@ -79,8 +71,8 @@ function debugIdentityForState(extensionState = {}) {
     browserContextConfiguredBy: browserContext.configuredBy || "",
     browserContextConfiguredAt: browserContext.configuredAt || "",
     browserContextDevtoolsPort: browserContext.devtoolsPort || "",
-    pipelineVersion: settings.useFieldPipelineV2 ? "v2" : "v1",
-    useFieldPipelineV2: Boolean(settings.useFieldPipelineV2),
+    pipelineVersion: "v2",
+    useFieldPipelineV2: true,
     settingsVersion: Number(settings.settingsVersion || 0),
     extensionVersion: manifest.version || "",
     extensionId: chrome.runtime.id || "",
@@ -1129,13 +1121,8 @@ class SelectFillRouteStep {
 
 class ResolveFillAdapterStep {
   run(context) {
-    context.useFieldPipelineV2 = Boolean(
-      context.extensionState.settings.useFieldPipelineV2,
-    );
-    const adapters = context.useFieldPipelineV2
-      ? FILL_ADAPTERS_V2
-      : FILL_ADAPTERS;
-    context.adapterFactory = adapters[context.atsType];
+    context.useFieldPipelineV2 = true;
+    context.adapterFactory = FILL_ADAPTERS[context.atsType];
     if (context.adapterFactory) {
       return;
     }
@@ -1174,27 +1161,25 @@ class RecoverWorkdayRuntimeErrorStep {
 class InjectSharedUtilitiesStep {
   async run(context) {
     const files = ["src/shared/injected.js"];
-    if (context.useFieldPipelineV2) {
+    files.push(
+      "src/shared/v2/audit.js",
+      "src/shared/v2/field-catalog.js",
+      "src/shared/v2/ui-inspector.js",
+      "src/shared/v2/field-state.js",
+      "src/shared/v2/option-collector.js",
+      "src/shared/v2/option-matcher.js",
+      "src/shared/v2/question-identifier.js",
+      "src/shared/v2/answer-resolver.js",
+      "src/shared/v2/field-drivers.js",
+      "src/shared/v2/field-pipeline.js",
+      "src/shared/v2/clear-pipeline.js",
+    );
+    if (context.atsType === "workday") {
       files.push(
-        "src/shared/v2/audit.js",
-        "src/shared/v2/field-catalog.js",
-        "src/shared/v2/ui-inspector.js",
-        "src/shared/v2/field-state.js",
-        "src/shared/v2/option-collector.js",
-        "src/shared/v2/option-matcher.js",
-        "src/shared/v2/question-identifier.js",
-        "src/shared/v2/answer-resolver.js",
-        "src/shared/v2/field-drivers.js",
-        "src/shared/v2/field-pipeline.js",
-        "src/shared/v2/clear-pipeline.js",
+        "src/ats/workday/workday-ui-v2.js",
+        "src/ats/workday/workday-drivers-v2.js",
+        "src/ats/workday/workday-repeatables-v2.js",
       );
-      if (context.atsType === "workday") {
-        files.push(
-          "src/ats/workday/workday-ui-v2.js",
-          "src/ats/workday/workday-drivers-v2.js",
-          "src/ats/workday/workday-repeatables-v2.js",
-        );
-      }
     }
     await chrome.scripting.executeScript({
       target: { tabId: context.activeTabId, allFrames: true },

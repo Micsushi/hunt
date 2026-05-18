@@ -168,8 +168,7 @@ def test_fill_progress_can_request_cancel():
     content = _load_script(REPO_ROOT / "executioner/src/content/bootstrap.js")
     background = _load_script(REPO_ROOT / "executioner/src/background/index.js")
     runner = _load_script(REPO_ROOT / "executioner/src/background/fill-runner.js")
-    generic = _load_script(REPO_ROOT / "executioner/src/ats/generic/fill.js")
-    workday = _load_script(REPO_ROOT / "executioner/src/ats/workday/fill.js")
+    field_pipeline = _load_script(REPO_ROOT / "executioner/src/shared/v2/field-pipeline.js")
 
     assert "hunt-apply-fill-progress-cancel" in content
     assert 'type: "hunt.apply.cancel_fill"' in content
@@ -185,19 +184,15 @@ def test_fill_progress_can_request_cancel():
     assert "buildCancelledPipelineResponse" in runner
     assert "context.cancelled" in runner
     assert "fillRunId: context.options.fillRunId" in runner
-    assert "__huntApplyCancelAllFills" in generic
-    assert "__huntApplyCancelAllFills" in workday
-    assert "__huntApplyActiveFillRunId" in generic
-    assert "__huntApplyActiveFillRunId" in workday
+    assert "__huntApplyCancelAllFills" in field_pipeline
+    assert "__huntApplyActiveFillRunId" in field_pipeline
     assert "__huntApplyActiveFillRunId" in background
     assert "__huntApplyCancelledFillRunIds" in background
-    assert "__huntApplyCancelledFillRunIds" in generic
-    assert "__huntApplyCancelledFillRunIds" in workday
+    assert "__huntApplyCancelledFillRunIds" in field_pipeline
     assert "activeFillRequestId" in content
     assert "ui.detect_prompt.stale_fill_response" in content
     assert "Fill did not start. Open the popup and try Fill Current Page." not in content
-    assert "user_cancelled" in generic
-    assert "user_cancelled" in workday
+    assert "user_cancelled" in field_pipeline
 
 
 def test_fill_run_cancels_when_user_reloads_same_page():
@@ -222,6 +217,17 @@ def test_apply_entry_progress_uses_start_application_language():
     assert "Filling application page: attempt 1" in background
     assert "Filling current page: attempt 1" in background
     assert "chooseBestWorkflowActionResult" in background
+
+
+def test_apply_entry_prompt_click_suppresses_transition_reprompts():
+    content = _load_script(REPO_ROOT / "executioner/src/content/bootstrap.js")
+
+    assert "PROMPT_SUPPRESS_AFTER_APPLY_ENTRY_MS" in content
+    assert "function suppressDetectedPrompts" in content
+    assert '"apply_entry_transition"' in content
+    assert 'kind === "apply_entry"' in content
+    assert "Date.now() < detectedPromptSuppressedUntil" in content
+    assert "!transitionCooldownActive" in content
 
 
 def test_workday_apply_detection_checks_all_visible_buttons_before_log_cap():
@@ -259,26 +265,22 @@ def test_v2_page_walk_counts_successful_pages_and_shows_summary():
 
 def test_clear_page_shows_progress_and_scrolls_while_clearing():
     background = _load_script(REPO_ROOT / "executioner/src/background/index.js")
+    clear_pipeline = _load_script(REPO_ROOT / "executioner/src/shared/v2/clear-pipeline.js")
+    field_drivers = _load_script(REPO_ROOT / "executioner/src/shared/v2/field-drivers.js")
 
     assert 'await showFillProgress(tabId, "Clearing page")' in background
-    assert "function scrollToClearingTarget" in background
-    assert "const clearTrace = []" in background
-    assert 'traceClear("field_clear"' in background
-    assert 'traceClear("clear_click"' in background
-    assert 'traceClear("clear_key"' in background
-    assert 'traceClear("dropdown_close_start"' in background
-    assert 'traceClear("dropdown_select_attempt"' in background
-    assert "selectAlternateWorkdayOptionBeforeForceClear" in background
-    assert "select_alternate_before_force_clear" in background
-    assert "clearUploadedFileControls" in background
-    assert "uploaded_file_clear_scan" in background
-    assert "uploaded_file_delete_attempt" in background
-    assert "uploaded_file_delete_success" in background
-    assert "uploadedFileClears" in background
-    assert "clearTraceTruncated" in background
-    assert 'behavior: "smooth"' in background
-    assert "await sleep(250)" in background
-    assert "await sleep(400)" in background
+    assert "return clearCurrentPageV2(tabId, state)" in background
+    assert "runHuntV2Clear" in background
+    assert "clearGenericIconControls" in clear_pipeline
+    assert "clearUploadedFileControls" in clear_pipeline
+    assert "fieldDrivers.clearField" in clear_pipeline
+    assert "field_clear_failed" in clear_pipeline
+    assert "uploaded_file_clear_result" in clear_pipeline
+    assert "uploadedFileClears" in clear_pipeline
+    assert "genericIconClears" in clear_pipeline
+    assert "async function clearField" in field_drivers
+    assert "await sleep(250)" in clear_pipeline
+    assert "await sleep(420)" in clear_pipeline
     assert (
         "await sleep(1000)"
         not in background[
@@ -301,38 +303,29 @@ def test_popup_clear_dispatches_then_closes_menu():
     assert "window.close()" in handler
 
 
-def test_workday_already_filled_text_inputs_do_not_count_as_changed():
-    workday = _load_script(REPO_ROOT / "executioner/src/ats/workday/fill.js")
+def test_v2_already_filled_text_inputs_do_not_count_as_changed():
+    field_state = _load_script(REPO_ROOT / "executioner/src/shared/v2/field-state.js")
+    field_pipeline = _load_script(REPO_ROOT / "executioner/src/shared/v2/field-pipeline.js")
 
-    assert "markTextInputAlreadyFilled" in workday
-    assert 'reason: "text_input_matches_value"' in workday
-    city_branch = workday[
-        workday.index("if (isExactCityField(elem, desc) && profile.location)") : workday.index(
-            "var exactProfileMatch = chooseExactWorkdayTextProfileMatch",
-            workday.index("if (isExactCityField"),
-        )
-    ]
-    profile_branch_start = workday.index("var profileValue = profileMatch")
-    profile_branch = workday[
-        profile_branch_start : workday.index("await setWorkdayTextValue", profile_branch_start)
-    ]
-    assert "markTextInputAlreadyFilled" in city_branch
-    assert "filledFields.push" not in city_branch[: city_branch.index("u.setElementValue")]
-    assert "markTextInputAlreadyFilled" in profile_branch
+    assert "readFieldState" in field_state
+    assert "isEmptyState" in field_state
+    assert "field_fill_result" in field_pipeline
 
 
-def test_workday_phone_and_legal_name_specific_guards():
-    workday = _load_script(REPO_ROOT / "executioner/src/ats/workday/fill.js")
+def test_v2_phone_and_legal_name_specific_guards():
+    catalog = _load_script(REPO_ROOT / "executioner/src/shared/v2/field-catalog.js")
+    workday_ui = _load_script(REPO_ROOT / "executioner/src/ats/workday/workday-ui-v2.js")
 
-    assert 'profileMatch.key !== "profile:phone"' in workday
-    assert "value: u.normalizeText(profile.phone)" in workday
-    assert 'key: "profile:phone"' in workday
-    assert 'idKey.includes("legalname--firstname")' in workday
-    assert 'idKey.includes("legalname--lastname")' in workday
+    assert '"phone"' in catalog
+    assert '"phone_country_code"' in catalog
+    assert "legal name" in workday_ui
+    assert "first name" in workday_ui
+    assert "last name" in workday_ui
 
 
 def test_workday_logs_field_and_dropdown_actions():
-    workday = _load_script(REPO_ROOT / "executioner/src/ats/workday/fill.js")
+    field_pipeline = _load_script(REPO_ROOT / "executioner/src/shared/v2/field-pipeline.js")
+    field_drivers = _load_script(REPO_ROOT / "executioner/src/shared/v2/field-drivers.js")
     workday_v2_drivers = _load_script(
         REPO_ROOT / "executioner/src/ats/workday/workday-drivers-v2.js"
     )
@@ -340,35 +333,18 @@ def test_workday_logs_field_and_dropdown_actions():
         REPO_ROOT / "executioner/src/ats/workday/workday-repeatables-v2.js"
     )
 
-    assert "traceInteractionLimit = 1000" in workday
-    assert '"field_consider"' in workday
-    assert '"field_filled"' in workday
-    assert '"field_already_filled"' in workday
-    assert '"field_skipped"' in workday
-    assert '"field_count_recorded"' in workday
-    assert '"dropdown_fill_start"' in workday
-    assert '"dropdown_open_attempt"' in workday
-    assert '"dropdown_options_scored"' in workday
-    assert '"dropdown_keyboard_select_attempt"' in workday
-    assert '"dropdown_keyboard_active_option"' in workday
-    assert '"dropdown_keyboard_select_failed"' in workday
-    assert '"dropdown_select_attempt"' in workday
-    assert '"dropdown_select_fallback_enter"' in workday
-    assert '"dropdown_select_failed"' in workday
-    assert '"dropdown_close_start"' in workday
-    assert '"dropdown_close_end"' in workday
-    assert '"phone_country_code_fill_start"' in workday
-    assert '"phone_country_code_select_attempt"' in workday
-    assert '"phone_country_code_select_failed"' in workday
-    assert "pointer_select_phone_country_code_option" in workday
-    assert "select_phone_country_code_option" in workday
-    assert "phone_country_code_post_click_state" in workday
-    assert "workdayActiveListboxFor" in workday
-    assert "workdayClickOptionCommitTarget" in workday
-    assert "workdayOptionRadioTarget" in workday
-    assert "search_input_keyboard_final_enter_skipped" in workday
+    assert "field_start" in field_pipeline
+    assert "field_fill_result" in field_pipeline
+    assert "field_skipped" in field_pipeline
+    assert "fillField" in field_drivers
+    assert "workday_phone_country_code_option" in workday_v2_drivers
+    assert "workday_phone_country_code_missing" in workday_v2_drivers
+    assert "workday_phone_country_code_commit_failed" in workday_v2_drivers
+    assert "select_virtualized_phone_country_code" in workday_v2_drivers
+    assert "workdayActiveListboxFor" in workday_v2_drivers
+    assert "workdayClickOptionCommitTarget" in workday_v2_drivers
+    assert "workdayOptionRadioTarget" in workday_v2_drivers
     assert "isApplicationSourceField" in workday_v2_drivers
-    assert "safeOpenOnly" in workday_v2_drivers
     assert "source--source" in workday_v2_drivers
     assert "sourceOptionFailureKind" in workday_v2_drivers
     assert "workday_source_options_unavailable" in workday_v2_drivers
@@ -403,26 +379,7 @@ def test_workday_logs_field_and_dropdown_actions():
             "async function fillPhoneCountryCode"
         )
     ]
-    assert "allowAnySourceFallback" in workday
-    assert "country_dependent_wait" in workday
-    assert "stableReadyCount" in workday
-    assert "readyCount >= 4" in workday
-    assert "prime_country_dependency" in workday
-    assert 'checkboxKey.includes("currentlyworkhere")' in workday
-    assert 'checkboxKey.includes("preferredcheck")' in workday
-    assert (
-        "return false;"
-        in workday[
-            workday.index("var structuredGroupHasUserValue") : workday.index(
-                "var structuredGroupHasFillableControl"
-            )
-        ]
-    )
-    assert "reacquireBestVisibleOption" in workday
-    assert "cycleWorkdayButtonChoice" in workday
-    assert "select_alternate_before_correct_workday_button_option" in workday
-    assert "candidate.score >= 100" in workday
-    assert "traceInteractionLimit: traceInteractionLimit" in workday
+    assert "preferredSourceFallbackOption" in workday_v2_drivers
 
 
 def test_post_fill_prompt_cooldown_blocks_detected_prompt():

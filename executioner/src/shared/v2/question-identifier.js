@@ -18,6 +18,13 @@
     });
   }
 
+  function includesPhrase(text, phraseNorm) {
+    if (!phraseNorm) {
+      return false;
+    }
+    return (" " + text + " ").includes(" " + phraseNorm + " ");
+  }
+
   function hasExcluded(text, entry) {
     return (entry.excludeKeywords || []).some(function (term) {
       return text.includes(norm(term));
@@ -74,7 +81,7 @@
         }
         (entry.aliases || []).forEach(function (phrase) {
           var phraseNorm = norm(phrase);
-          if (!phraseNorm || !text.includes(phraseNorm)) {
+          if (!includesPhrase(text, phraseNorm)) {
             return;
           }
           var score = phraseNorm.length;

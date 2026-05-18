@@ -6,7 +6,7 @@ C3 owns all browser interaction and field filling. C4 owns what happens between 
 
 ## Current Status
 
-Implemented:
+### Built (complete)
 
 - DB-backed state machine in `coordinator/service.py`.
 - Tables and migrations for `orchestration_runs`, `orchestration_events`, `submit_approvals`, `orchestration_worker_leases`. Columns: `failure_code`, `failure_report_path`. Statuses: `investigation_queued`, `investigation_complete`.
@@ -21,24 +21,40 @@ Implemented:
 - Investigation result merges agent findings into `failure_report.json` and appends updated entry to `logs/failures.jsonl`.
 - CAPTCHA escalation to Telegram when investigation result returns `captcha_blocked`.
 - Pipeline scheduler (`coordinator/scheduler.py`): `SchedulerLoop` with tick/start/stop/status. Module-level singleton via `get_scheduler()`.
-- Telegram bot (`coordinator/telegram.py`): push notifications (fill complete, manual review, investigation queued/complete, CAPTCHA), long-poll command handler, `register_handler` API. Silent no-op if not configured.
+- Telegram bot (`coordinator/telegram.py`): push notifications, long-poll command handler, `register_handler` API. Silent no-op if not configured.
 - Telegram command handlers wired in service API startup: `approve`, `deny`, `skip`, `investigate`, `status`.
-- CLI commands in `coordinator/cli.py`: all existing commands plus `scheduler-tick`, `investigate`, `failure-log`, `claim-investigation`.
-- FastAPI wrapper in `coordinator/service_api.py`.
-- C3 bridge endpoints: pending fills and inline fill-result postback.
-- Worker lease routes: `/workers/claim`, `/workers/claim-investigation`, heartbeat, result, reconcile-stale.
-- Scheduler routes: `GET /scheduler/status`, `POST /scheduler/tick`, `POST /scheduler/start`, `POST /scheduler/stop`.
-- Investigation routes: `POST /runs/{run_id}/investigate`.
-- Failure log routes: `GET /failures`, `GET /runs/{run_id}/failure-report`.
+- Worker lease protocol: claim/heartbeat/result, `task_type="investigation"` path for agent workers.
 - One-shot OpenClaw/Hermes investigation launcher in `coordinator/agent_worker.py`.
-- Investigation prompt/result builders in `coordinator/agent_runtime.py` (investigation schema).
+- Investigation prompt/result builders in `coordinator/agent_runtime.py`.
+- CLI commands: all state-machine commands plus `scheduler-tick`, `investigate`, `failure-log`, `claim-investigation`.
+- FastAPI wrapper in `coordinator/service_api.py` with all routes.
+- C3 bridge endpoints: pending fills and inline fill-result postback.
 - PowerShell and Bash wrappers under `scripts/c4_*_worker.*`.
-- API, CLI, agent runtime, worker protocol, and C3 bridge tests.
+- Full test suite: API, CLI, agent runtime, worker protocol, C3 bridge, failure log, scheduler, investigation routing.
 
-Not yet built:
+### Not built — C4-only, could build now
 
-- CAPTCHA browser extension check (code path to detect if extension is loaded and pass to it first).
-- C0 UI: run detail, event log, artifacts, manual-review resolution, approval controls, investigation report viewer, scheduler status panel.
+- `allow-submit` Telegram command: wire in service_api startup alongside `approve`/`deny`. Calls `approve_submit` with `decision="approve"`.
+- Telegram push on state transitions: `notify_fill_complete` (on `awaiting_submit_approval`), `notify_manual_review` (on `manual_review`), `notify_investigation_queued` (on `investigation_queued`). Push functions exist in `telegram.py`; service.py does not call them yet.
+- CAPTCHA agent prompt: `agent_runtime.py` only has investigation prompts. CAPTCHA-specific prompt and result schema not written.
+
+### Not built — requires C3 changes
+
+- CAPTCHA browser extension check: detecting whether a solver extension is loaded in the active browser profile before routing to agent fallback. C3 controls the browser; C4 has no visibility into extension state without C3 reporting it.
+- C3 emitting `unknown_widget` failure code: C4 handles it when it arrives; C3 does not yet emit it with `selector/role/label/html_excerpt`.
+- C3 structured failure payload: all C3 failure and manual_review results need a structured `failure_code`, field identifier, and HTML context. Currently C3 sends unstructured status strings.
+- C3 gating final submit on `allowSubmit` flag: C4 sends the flag in every fill request; C3 ignores it currently.
+
+### Not built — waiting on another component
+
+- C0 UI: run list, run detail, event log, failure report viewer, investigation status, approval queue, scheduler status panel. C4 API is complete; the frontend does not exist yet.
+
+### Belongs to Hermes/OpenClaw agent (outside this repo)
+
+- Agent navigates to ATS page, observes blocking element, takes screenshot, captures HTML snapshot.
+- Agent posts structured investigation result to C4's `/workers/{lease_id}/result`.
+- Agent solves CAPTCHA (with capable model).
+- C4's side is complete: it writes the prompt, issues the lease, and handles the result.
 
 ## Architecture
 
@@ -48,7 +64,7 @@ C4 is a mixture of hardcoded pipeline logic and bounded agent work.
 - Scheduler: iterate ready jobs, request C3 fill, record result, move on.
 - State machine transitions.
 - Failure log writes.
-- CAPTCHA extension pass-through.
+- CAPTCHA extension pass-through (not yet built — needs C3).
 - Submit control flag.
 - Telegram command handling.
 - Investigation queue management.
@@ -83,7 +99,7 @@ Investigation branch:
 
 ```text
 fill_requested
-  -> investigation_queued       (C3 returns unknown_widget or novel failure)
+  -> investigation_queued       (C3 returns unknown_widget or captcha_*)
   -> investigation_complete     (agent posts report)
   -> failed                     (logged for code fix later)
 ```
@@ -115,11 +131,11 @@ The scheduler is hardcoded Python, no LLM. It runs as a loop or cron tick:
 1. Query all ready jobs.
 2. For each: check no active run, create run, request C3 fill.
 3. Wait for C3 result postback.
-4. Route result: ok → awaiting_submit_approval, manual_review → manual_review, unknown_widget/novel → investigation_queued, failed → failed.
+4. Route result: ok → awaiting_submit_approval, manual_review → manual_review, unknown_widget/captcha_* → investigation_queued, failed → failed.
 5. Write failure log entry for any non-ok result.
 6. Move to next job.
 
-Not yet built. See `coordinator/service.py` for state transitions to hook into.
+Implemented in `coordinator/scheduler.py`. Use `GET /scheduler/status`, `POST /scheduler/tick`, `POST /scheduler/start`, `POST /scheduler/stop`.
 
 ## Failure Logging
 
@@ -131,7 +147,7 @@ Every non-ok fill result writes a structured failure report. Format:
   "job_id": "...",
   "ats_type": "...",
   "apply_url": "...",
-  "failure_code": "unknown_widget | captcha | login_required | missing_field | ...",
+  "failure_code": "unknown_widget | captcha_* | login_required | missing_field | ...",
   "unknown_widget": {
     "selector": "...",
     "role": "...",
@@ -159,50 +175,53 @@ All failure reports are also appended to a perma-log:
 <HUNT_COORDINATOR_ROOT>/logs/failures.jsonl
 ```
 
-Not yet built. Report schema is defined; writer and perma-log not implemented.
+Implemented in `coordinator/failure_log.py`.
 
 ## CAPTCHA Handling
 
 Order of operations (all hardcoded except fallback):
 
-1. Check if a CAPTCHA extension is loaded in the active browser profile. If yes, pass to it and wait for result.
-2. If no extension or extension fails: launch investigation agent with CAPTCHA-specific prompt.
-3. If agent fails: push Telegram prompt to operator. Operator replies with solve or skip.
+1. Check if a CAPTCHA extension is loaded in the active browser profile. **Not yet built — requires C3 to report extension state.**
+2. If no extension or extension fails: launch investigation agent with CAPTCHA-specific prompt. **Agent prompt not yet written.**
+3. If agent fails: push Telegram prompt to operator. Operator replies with solve or skip. **Telegram escalation built** (`notify_captcha` fires when investigation result returns `captcha_blocked`).
 
 CAPTCHA type is classified by C3 and included in the failure code: `captcha_hcaptcha`, `captcha_recaptcha`, `captcha_cloudflare`, `captcha_unknown`.
 
-Not yet built.
-
 ## Submit Control
 
-C3 will not click final submit unless `allowSubmit: true` is included in the fill payload. This is off by default.
+C3 will not click final submit unless `allowSubmit: true` is included in the fill payload. Off by default.
 
-C4 controls this flag per-run. Operator can enable it through:
-- Telegram command: `allow-submit <run_id>`
+C4 sends `allow_submit` in every fill request (`fill_request.json` and `/c3/pending-fills` response), derived from `run.submit_allowed`.
+
+C4 enables per-run via:
 - CLI: `python -m coordinator.cli approve-submit --run-id <id> --decision approve`
-- C0 UI approval action.
+- API: `POST /runs/{run_id}/approve`
+- Telegram command: `allow-submit <run_id>` — **not yet wired, could build now**
+- C0 UI approval action — **not yet built**
 
-C3 submit flag pass-through not yet built.
+C3 must check `allowSubmit` before clicking final submit — **not yet built in C3**.
 
 ## Telegram Interface
 
 Bidirectional. C4 pushes events; operator replies with commands.
 
-C4 pushes:
-- Fill complete, awaiting approval (with summary and approve/deny buttons).
-- Manual review required (with reason and investigate/skip options).
-- CAPTCHA challenge (with screenshot and solve/skip options).
-- Investigation report ready (link to report).
-- Scheduler status on request.
+**Built (push functions exist, wired for CAPTCHA escalation):**
+- CAPTCHA challenge: fires when investigation result returns `captcha_blocked`.
 
-Operator commands:
+**Push functions exist but not yet wired to state transitions:**
+- Fill complete, awaiting approval — `notify_fill_complete` in `telegram.py`, not called from service.
+- Manual review required — `notify_manual_review` in `telegram.py`, not called from `_mark_run_manual_review`.
+- Investigation queued — `notify_investigation_queued` in `telegram.py`, not called from `queue_investigation`.
+- Investigation report ready — `notify_investigation_complete` fires from `record_investigation_result`.
+
+**Wired commands (service_api startup):**
 - `approve <run_id>` / `deny <run_id>`
 - `skip <job_id>`
-- `status` — pending approvals, active fills, manual review queue
-- `investigate <run_id>` — manually trigger investigation agent
-- `allow-submit <run_id>` — enable C3 submit for this run
+- `investigate <run_id>`
+- `status`
 
-Not yet built.
+**Not yet wired:**
+- `allow-submit <run_id>`
 
 ## Investigation Agent
 
@@ -216,13 +235,15 @@ When C4 queues a run for investigation, it launches an agent (Hermes or OpenClaw
 6. Posts the result back to C4.
 7. Stops. Does not fill, submit, or modify any application data.
 
+C4's side is complete: prompt written, lease issued, result received and merged into `failure_report.json`. The actual agent execution is Hermes or OpenClaw running as a separate process.
+
 Reports accumulate in `logs/failures.jsonl`. Operator reviews them periodically and hands batches to another agent to write C3 fixes.
 
 See `docs/C4_AGENT_WORKERS.md` for the investigation worker contract.
 
 ## C0 UI Requirements
 
-The C0 coordinator page needs:
+The C0 coordinator page needs (not yet built):
 
 - Run list with status, ATS type, company, title, timestamp.
 - Run detail: state history, event log, artifacts panel.
@@ -232,8 +253,6 @@ The C0 coordinator page needs:
 - Approval queue: approve / deny with confirmation.
 - Submit control toggle per run.
 - Scheduler status: running / paused / last tick / jobs queued.
-
-Not yet built.
 
 ## Artifacts
 
@@ -247,7 +266,7 @@ Files:
 
 - `apply_context.json`: C4 context.
 - `c3_apply_context.json`: C3/browser payload.
-- `fill_request.json`: fill request metadata.
+- `fill_request.json`: fill request metadata (includes `allow_submit` flag).
 - `fill_result.json`: raw C3 result.
 - `failure_report.json`: structured failure report (when non-ok).
 - `investigation/prompt.md`: agent investigation prompt.
@@ -260,31 +279,31 @@ Files:
 
 ## API
 
-Current routes:
-
-- `GET /status`
-- `POST /run`
-- `GET /runs`
-- `GET /runs/{run_id}`
-- `POST /runs/{run_id}/request-fill`
-- `POST /runs/{run_id}/approve`
-- `POST /runs/{run_id}/fill-result`
-- `GET /c3/pending-fills`
-- `POST /c3/fill-result`
-- `POST /workers/claim`
-- `POST /workers/{lease_id}/heartbeat`
-- `POST /workers/{lease_id}/result`
-- `POST /maintenance/reconcile-stale`
-
-Planned additions:
-
-- `POST /scheduler/tick` — run one scheduler pass.
-- `POST /scheduler/start` / `POST /scheduler/stop` — start/stop scheduler loop.
-- `GET /failures` — query failure log.
-- `POST /runs/{run_id}/investigate` — manually trigger investigation agent.
-- `POST /telegram/webhook` — Telegram bot webhook.
-
 All routes require `Authorization: Bearer $HUNT_SERVICE_TOKEN` when configured.
+
+```
+GET  /status
+POST /run
+GET  /runs
+GET  /runs/{run_id}
+POST /runs/{run_id}/request-fill
+POST /runs/{run_id}/approve
+POST /runs/{run_id}/fill-result
+POST /runs/{run_id}/investigate
+GET  /runs/{run_id}/failure-report
+GET  /c3/pending-fills
+POST /c3/fill-result
+POST /workers/claim
+POST /workers/claim-investigation
+POST /workers/{lease_id}/heartbeat
+POST /workers/{lease_id}/result
+POST /maintenance/reconcile-stale
+GET  /failures
+GET  /scheduler/status
+POST /scheduler/tick
+POST /scheduler/start
+POST /scheduler/stop
+```
 
 ## CLI
 
@@ -299,6 +318,10 @@ python -m coordinator.cli run-status --run-id run-123-abc
 python -m coordinator.cli approve-submit --run-id run-123-abc --decision approve --approved-by operator
 python -m coordinator.cli mark-submitted --run-id run-123-abc
 python -m coordinator.cli reconcile-stale --fill-timeout-minutes 30
+python -m coordinator.cli scheduler-tick
+python -m coordinator.cli investigate --run-id run-123-abc
+python -m coordinator.cli failure-log --limit 50
+python -m coordinator.cli claim-investigation --runtime-name hermes_local
 ```
 
 Hunter pass-through examples:

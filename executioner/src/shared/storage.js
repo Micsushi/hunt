@@ -128,9 +128,7 @@ export function sanitizeSettings(settings = {}) {
     llmAnswerFallbackEnabled: sanitizeBoolean(
       settings.llmAnswerFallbackEnabled ?? true,
     ),
-    useFieldPipelineV2: hasCurrentSettingsVersion
-      ? sanitizeBoolean(settings.useFieldPipelineV2 ?? true)
-      : DEFAULT_SETTINGS.useFieldPipelineV2,
+    useFieldPipelineV2: true,
     stripLongDash: sanitizeBoolean(settings.stripLongDash ?? true),
   };
 }

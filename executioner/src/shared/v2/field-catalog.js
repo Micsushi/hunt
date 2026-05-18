@@ -124,6 +124,15 @@
       defaultValue: true,
       answerType: "yes_no",
     }),
+    entry("relocation_willingness", {
+      aliases: [
+        "are you willing to relocate",
+        "are you willing to relocate if needed",
+      ],
+      profilePaths: ["willingToRelocate"],
+      defaultValue: true,
+      answerType: "yes_no",
+    }),
     entry("relocation_consideration", {
       aliases: ["would you consider relocating for this role"],
       profilePaths: ["relocationPreference", "willingToRelocate"],
@@ -133,8 +142,57 @@
       aliases: [
         "non-compete or non-solicitation restrictions",
         "non compete or non solicitation restrictions",
+        "bound by a continuing confidentiality or patent agreement",
+        "agreements that contain a restrictive covenant",
+        "non-compete, non-solicitation or non-disclosure",
       ],
       defaultValue: false,
+      answerType: "yes_no",
+    }),
+    entry("current_company_employee", {
+      aliases: [
+        "do you currently work at",
+        "currently work at cvs health",
+        "current employee of cvs health",
+      ],
+      profilePaths: ["currentEmployers"],
+      defaultValue: false,
+      answerType: "yes_no",
+    }),
+    entry("government_exclusion_or_debarment", {
+      aliases: [
+        "excluded, debarred, suspended",
+        "excluded debarred suspended",
+        "ineligible from participation in any federal or state healthcare program",
+      ],
+      defaultValue: false,
+      answerType: "yes_no",
+    }),
+    entry("foreign_pharmacist_licensure_hours", {
+      aliases: [
+        "pharmacist from another country needing hours towards licensure",
+        "another country needing hours towards licensure",
+      ],
+      defaultValue: false,
+      answerType: "yes_no",
+    }),
+    entry("sms_communication_authorization", {
+      aliases: [
+        "authorize cvs health to communicate with me via text",
+        "communicate with me via text",
+        "standard message rates may apply",
+      ],
+      defaultValue: false,
+      answerType: "yes_no",
+    }),
+    entry("proof_of_us_work_authorization", {
+      aliases: [
+        "provide proof that you are legally able to work in the united states",
+        "legally able to work in the united states",
+        "verify identity and eligibility to work in the united states",
+      ],
+      profilePaths: ["workAuthorized"],
+      defaultValue: true,
       answerType: "yes_no",
     }),
     entry("us_government_employee", {
@@ -170,6 +228,59 @@
       ],
       defaultValue: false,
       answerType: "yes_no",
+    }),
+    entry("gender_disclosure_neutral", {
+      aliases: [
+        "please select your gender",
+        "gender identity",
+        "gender expression",
+      ],
+      defaultValue: "Not Declared",
+      answerType: "non_disclosure",
+      optionAliases: {
+        "Not Declared": [
+          "Not Declared",
+          "I choose not to disclose",
+          "I do not want to answer",
+          "Prefer not to answer",
+        ],
+      },
+    }),
+    entry("ethnicity_disclosure_neutral", {
+      aliases: [
+        "ethnicity which most accurately describes",
+        "please select the ethnicity",
+        "race/ethnicity",
+        "race ethnicity",
+      ],
+      defaultValue: "I decline to disclose",
+      answerType: "non_disclosure",
+      optionAliases: {
+        "I decline to disclose": [
+          "I decline to disclose",
+          "I choose not to disclose",
+          "I do not want to answer",
+          "I do not want to answer (United States of America)",
+          "Prefer not to answer",
+          "Not Declared",
+        ],
+      },
+    }),
+    entry("veteran_disclosure_neutral", {
+      aliases: [
+        "please provide your current veteran status",
+        "current veteran status",
+        "protected veteran",
+      ],
+      defaultValue: "I CHOOSE NOT TO SELF-IDENTIFY",
+      answerType: "non_disclosure",
+      optionAliases: {
+        "I CHOOSE NOT TO SELF-IDENTIFY": [
+          "I CHOOSE NOT TO SELF-IDENTIFY",
+          "I choose not to disclose",
+          "Not Declared",
+        ],
+      },
     }),
     entry("city", {
       aliases: ["city", "current city", "home city"],
@@ -303,6 +414,29 @@
         "Opt-Out": ["Opt-Out", "Opt Out", "OptOut"],
       },
     }),
+    entry("preferred_communication_channel", {
+      aliases: [
+        "preferred communication channel",
+        "please select your preferred communication channel",
+      ],
+      profilePaths: ["preferredCommunicationChannel"],
+      defaultValue: "Email",
+      answerType: "option",
+      optionAliases: {
+        Email: ["E-mail", "Email Address"],
+      },
+    }),
+    entry("aedt_processing_opt_out_request", {
+      aliases: [
+        "request to opt-out of the use of an aedts",
+        "request to opt out of the use of an aedts",
+        "opt-out of the use of an aedts in the recruitment process",
+        "opt out of the use of an aedts in the recruitment process",
+      ],
+      profilePaths: ["automatedDecisionToolOptOut"],
+      defaultValue: false,
+      answerType: "yes_no",
+    }),
     entry("automated_ai_processing_opt_out", {
       aliases: [
         "automated tools such as ai",
@@ -349,7 +483,13 @@
       answerType: "yes_no",
     }),
     entry("sponsorship_required", {
-      aliases: ["sponsor", "sponsorship", "visa support"],
+      aliases: [
+        "sponsor",
+        "sponsorship",
+        "visa support",
+        "employer-provided visa sponsorship",
+        "immigration support",
+      ],
       profilePaths: ["sponsorshipRequired"],
       defaultValue: false,
       answerType: "yes_no",
@@ -365,6 +505,9 @@
         "previously employed",
         "previously been employed",
         "previously employed by",
+        "employed in the past",
+        "employed by",
+        "have you been employed by",
         "ever worked for",
         "worked for",
         "worked at",
@@ -436,6 +579,8 @@
         "available to start",
         "available to start work",
         "date are you available to start work",
+        "earliest availability to start this new position",
+        "when is your earliest availability to start this new position",
         "earliest date that you could start work",
         "earliest date you could start work",
         "could start work",
@@ -445,10 +590,105 @@
       profilePaths: ["desiredStartDate"],
       defaultValue: "2026-05-25",
     }),
+    entry("shift_availability", {
+      aliases: [
+        "shift availability",
+        "what is your shift availability",
+        "select all that apply",
+      ],
+      profilePaths: ["shiftAvailability"],
+      defaultValue: true,
+      answerType: "yes_no",
+    }),
+    entry("full_time_part_time_preference", {
+      aliases: [
+        "interested in a full time or part time position",
+        "full time or part time position",
+      ],
+      profilePaths: ["employmentTypePreference"],
+      defaultValue: "Full Time",
+      answerType: "option",
+      optionAliases: {
+        "Full Time": ["Full Time", "Full-Time"],
+      },
+    }),
+    entry("military_spouse_partner", {
+      aliases: [
+        "spouse or partner of someone who serves",
+        "spouse or partner of someone who served",
+        "serves/served in the u.s. military",
+      ],
+      profilePaths: ["militarySpouseOrPartner"],
+      defaultValue: false,
+      answerType: "yes_no",
+    }),
+    entry("age_at_least_18", {
+      aliases: [
+        "are you at least 18 years old",
+        "at least 18 years old",
+      ],
+      profilePaths: ["atLeast18"],
+      defaultValue: true,
+      answerType: "yes_no",
+    }),
+    entry("professional_license_discipline", {
+      aliases: [
+        "disciplinary action taken on your professional license",
+        "disciplinary action taken on your professional license, certification, or credentials",
+        "anticipate receiving any disciplinary action",
+      ],
+      defaultValue: false,
+      answerType: "yes_no",
+    }),
+    entry("hourly_pay_expectation", {
+      aliases: [
+        "hourly pay expectation",
+        "hourly pay expectation for this position",
+      ],
+      profilePaths: ["hourlyPayExpectation"],
+      defaultValue: "Decline to Answer",
+      answerType: "option",
+      optionAliases: {
+        "Decline to Answer": ["Decline to Answer", "Prefer not to answer"],
+      },
+    }),
     entry("salary_expectation", {
       aliases: ["salary", "compensation", "pay expectation"],
       profilePaths: ["salaryExpectationRange", "salaryExpectation"],
       defaultValue: "90,000 - 105,000",
+    }),
+    entry("english_language_proficiency", {
+      aliases: [
+        "english level",
+        "level of english",
+        "nível de inglês",
+        "nivel de ingles",
+        "qual e o seu nivel de ingles",
+        "qual é o seu nível de inglês",
+      ],
+      profilePaths: ["englishProficiency", "englishLevel"],
+      defaultValue: "Fluente",
+      answerType: "option",
+      optionAliases: {
+        Fluente: ["Fluent", "Native", "Nativo/Native", "Advanced", "Avançado"],
+      },
+    }),
+    entry("portuguese_language_proficiency", {
+      aliases: [
+        "portuguese level",
+        "level of portuguese",
+        "nivel de portugues",
+        "nível de português",
+        "nivel de portugués",
+        "cuál es tu nivel de portugués",
+        "qual é o seu nível de português",
+      ],
+      profilePaths: ["portugueseProficiency", "portugueseLevel"],
+      defaultValue: "Básico/Basic",
+      answerType: "option",
+      optionAliases: {
+        "Básico/Basic": ["Basic", "Básico", "Basico"],
+      },
     }),
     entry("disclosure_neutral", {
       aliases: [

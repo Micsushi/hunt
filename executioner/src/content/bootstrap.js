@@ -8,6 +8,7 @@
   const FILL_SUMMARY_ID = "hunt-apply-fill-summary";
   const TOAST_CONTAINER_ID = "hunt-apply-page-toasts";
   const PROMPT_SUPPRESS_AFTER_FILL_MS = 45000;
+  const PROMPT_SUPPRESS_AFTER_APPLY_ENTRY_MS = 30000;
   const PROMPT_AUTO_DISMISS_MS = 5000;
   const PROMPT_FILL_REQUEST_TIMEOUT_MS = 65000;
   let lastPromptSignature = "";
@@ -20,6 +21,8 @@
   let lastFillCompletedStep = "";
   let lastPageContextKey = "";
   let activeFillRequestId = "";
+  let detectedPromptSuppressedUntil = 0;
+  let detectedPromptSuppressedReason = "";
   const ATS_HOST_PATTERNS = [
     "workday.com",
     "myworkdayjobs.com",
@@ -384,6 +387,22 @@
       promptAutoDismissTimer = null;
     }
     document.getElementById(PROMPT_ID)?.remove();
+  }
+
+  function suppressDetectedPrompts(reason, durationMs) {
+    detectedPromptSuppressedUntil = Math.max(
+      detectedPromptSuppressedUntil,
+      Date.now() + durationMs,
+    );
+    detectedPromptSuppressedReason = reason || "workflow_transition";
+    logPageUiEvent(
+      "ui.detect_prompt.suppress",
+      "Suppressed detected-page prompts during workflow transition.",
+      {
+        reason: detectedPromptSuppressedReason,
+        durationMs,
+      },
+    );
   }
 
   function removeToasts() {
@@ -1020,6 +1039,12 @@
           .toString(36)
           .slice(2, 8)}`;
         activeFillRequestId = fillRequestId;
+        if (kind === "apply_entry") {
+          suppressDetectedPrompts(
+            "apply_entry_transition",
+            PROMPT_SUPPRESS_AFTER_APPLY_ENTRY_MS,
+          );
+        }
         removeToasts();
         showFillProgress({ message: promptProgressMessage(kind) });
         logPageUiEvent(
@@ -1341,6 +1366,8 @@
       lastFillCompletedUrl === window.location.href &&
       lastFillCompletedStep === currentStepText() &&
       Date.now() - lastFillCompletedAt < PROMPT_SUPPRESS_AFTER_FILL_MS;
+    const transitionCooldownActive =
+      Date.now() < detectedPromptSuppressedUntil;
     return (
       response?.ok &&
       response?.settings?.autoPromptEnabled &&
@@ -1350,6 +1377,7 @@
         detection.kind === "signin" ||
         detection.kind === "signup") &&
       !fillCooldownActive &&
+      !transitionCooldownActive &&
       ["ats", "signup", "signin", "application", "apply_entry"].includes(
         detection.kind,
       )

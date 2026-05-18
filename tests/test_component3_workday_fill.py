@@ -934,7 +934,7 @@ def test_workday_required_only_skips_optional_generated_textareas():
 
     injected_js = _load_script(REPO_ROOT / "executioner/src/shared/injected.js")
     fill_js = _module_to_browser_script(
-        _load_script(REPO_ROOT / "executioner/src/ats/workday/fill.js")
+        _load_script(REPO_ROOT / "executioner/src/ats/workday/fill-v2.js")
     )
 
     with sync_playwright() as playwright:
@@ -975,13 +975,13 @@ def test_workday_required_only_skips_optional_generated_textareas():
             </html>
             """
         )
-        page.add_script_tag(content=injected_js)
+        _load_v2_workday_scripts(page)
         page.add_script_tag(content=fill_js)
 
         result = page.evaluate(
             """
             async () => {
-              const fill = createWorkdayFillFunction();
+              const fill = createWorkdayFillV2Function();
               return await fill({
                 profile: {
                   fullName: "Michael Shi",
@@ -1057,7 +1057,7 @@ def test_workday_required_only_still_adds_my_experience_sections_from_aliases():
 
     injected_js = _load_script(REPO_ROOT / "executioner/src/shared/injected.js")
     fill_js = _module_to_browser_script(
-        _load_script(REPO_ROOT / "executioner/src/ats/workday/fill.js")
+        _load_script(REPO_ROOT / "executioner/src/ats/workday/fill-v2.js")
     )
 
     with sync_playwright() as playwright:
@@ -1135,13 +1135,13 @@ def test_workday_required_only_still_adds_my_experience_sections_from_aliases():
             </html>
             """
         )
-        page.add_script_tag(content=injected_js)
+        _load_v2_workday_scripts(page)
         page.add_script_tag(content=fill_js)
 
         result = page.evaluate(
             """
             async () => {
-              const fill = createWorkdayFillFunction();
+              const fill = createWorkdayFillV2Function();
               const payload = {
                 profile: {
                   fullName: "Michael Shi",

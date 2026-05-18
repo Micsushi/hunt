@@ -275,7 +275,8 @@ export function createSafeNextFunction() {
           [
             '[role="alert"]',
             '[data-automation-id*="error"]',
-            '[id*="error"]',
+            '[id^="Error-"]',
+            '[id^="error-"]',
             ".css-1iucqxd",
           ].join(", "),
         ),

@@ -2091,12 +2091,9 @@ function summarizeClear(clear) {
     status: clear?.attempt?.status || clear?.status || "",
     message: clear?.message || "",
     clearedFieldCount: clear?.clearedFieldCount || clear?.cleared || 0,
-    remainingOpenDropdowns: clear?.remainingOpenDropdowns || 0,
-    remainingFilledControls: clear?.remainingFilledControls || 0,
-    uploadedFileClears: clear?.uploadedFileClears || 0,
-    manualReviewRequired: Boolean(clear?.manualReviewRequired),
-    manualReviewReasons: clear?.manualReviewReasons || [],
-    clearTrace: (clear?.clearTrace || []).slice(0, 80),
+    reviewIssueCount: clear?.reviewIssueCount || 0,
+    reviewIssues: clear?.reviewIssues || [],
+    v2AuditEvents: (clear?.v2Audit?.events || []).slice(0, 80),
   };
 }
 
@@ -2107,9 +2104,7 @@ async function clearPageUntilStable(optionsClient, pageClient, applyUrl) {
     const clear = await clearCurrentPage(optionsClient, applyUrl);
     await sleep(2200);
     const afterClear = await inspectPage(pageClient);
-    const remaining =
-      Number(clear?.remainingFilledControls || 0) +
-      Number(clear?.remainingOpenDropdowns || 0);
+    const remaining = Number(clear?.reviewIssueCount || 0);
     attempts.push({
       index: index + 1,
       clear: summarizeClear(clear),
@@ -2137,7 +2132,6 @@ async function clearPageUntilStable(optionsClient, pageClient, applyUrl) {
 async function clickAuthPrimary(pageClient) {
   const result = await pageClient.evaluate(
     `(async () => {
-      const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
       const normalize = (value) => String(value || "").replace(/\\s+/g, " ").trim();
       const visible = (el) => {
         if (!el) return false;
@@ -2145,24 +2139,16 @@ async function clickAuthPrimary(pageClient) {
         const rect = el.getBoundingClientRect();
         return style.display !== "none" && style.visibility !== "hidden" && rect.width > 0 && rect.height > 0 && !el.disabled;
       };
-      const clickReal = (target) => {
+      const rectFor = (target) => {
         target.scrollIntoView({ block: "center", inline: "center" });
         try { target.focus?.(); } catch (_error) {}
         const rect = target.getBoundingClientRect();
-        const init = {
-          bubbles: true,
-          cancelable: true,
-          view: window,
-          button: 0,
-          buttons: 1,
-          clientX: Math.round(rect.left + rect.width / 2),
-          clientY: Math.round(rect.top + rect.height / 2)
+        return {
+          x: Math.round(rect.left + rect.width / 2),
+          y: Math.round(rect.top + rect.height / 2),
+          width: Math.round(rect.width),
+          height: Math.round(rect.height),
         };
-        const PointerCtor = window.PointerEvent || MouseEvent;
-        ["mouseover", "mousemove", "pointerdown", "mousedown"].forEach((type) => target.dispatchEvent(new PointerCtor(type, init)));
-        target.dispatchEvent(new PointerCtor("pointerup", { ...init, buttons: 0 }));
-        target.dispatchEvent(new MouseEvent("mouseup", { ...init, buttons: 0 }));
-        target.dispatchEvent(new MouseEvent("click", { ...init, buttons: 0 }));
       };
       const labelFor = (el) => normalize([
         el.getAttribute("aria-label"),
@@ -2196,24 +2182,16 @@ async function clickAuthPrimary(pageClient) {
             checkbox.closest("label")?.innerText,
             checkbox.closest('[data-automation-id], section, div')?.innerText,
           ].filter(Boolean).join(" "));
-          return /privacy notice|terms|condition|consent|agree|continuing|create account/i.test(text);
+          return /privacy notice|terms|condition|consent|agree|acknowledge|continuing|create account/i.test(text);
         });
       const checked = [];
       for (const checkbox of checkboxCandidates) {
-        if (!checkbox.checked) {
-          clickReal(checkbox);
-          await sleep(250);
-          if (!checkbox.checked) {
-            checkbox.checked = true;
-            checkbox.dispatchEvent(new Event("input", { bubbles: true }));
-            checkbox.dispatchEvent(new Event("change", { bubbles: true }));
-            await sleep(120);
-          }
-        }
+        const rect = rectFor(checkbox);
         checked.push({
           id: checkbox.id || "",
           automationId: checkbox.getAttribute("data-automation-id") || "",
           checked: Boolean(checkbox.checked),
+          rect,
         });
       }
       const controls = [...document.querySelectorAll('button, [role="button"]')]
@@ -2240,13 +2218,12 @@ async function clickAuthPrimary(pageClient) {
         return { clicked: false, reason: "auth_primary_not_found", checked, currentStepText };
       }
       const target = controls[0];
-      clickReal(target.el);
-      await sleep(5500);
       return {
-        clicked: true,
-        reason: "auth_primary_clicked",
+        clicked: false,
+        reason: "auth_primary_target_found",
         label: target.label,
         metadata: target.metadata,
+        rect: rectFor(target.el),
         checked,
         href: location.href,
         title: document.title,
@@ -2255,6 +2232,18 @@ async function clickAuthPrimary(pageClient) {
     })()`,
     30000,
   );
+  if (result?.rect) {
+    for (const checkbox of result.checked || []) {
+      if (checkbox?.rect && !checkbox.checked) {
+        await cdpClick(pageClient, checkbox.rect.x, checkbox.rect.y);
+        await sleep(300);
+      }
+    }
+    await cdpClick(pageClient, result.rect.x, result.rect.y);
+    result.clicked = true;
+    result.reason = "auth_primary_cdp_clicked";
+  }
+  await sleep(5500);
   await sleep(1200);
   const after = await inspectPage(pageClient);
   return { ...result, after };

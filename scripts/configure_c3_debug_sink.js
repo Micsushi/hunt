@@ -366,7 +366,7 @@ async function main() {
             debugLogSinkEnabled: Boolean(current.debugLogSinkEnabled),
             hasServiceToken: Boolean(current.serviceToken),
             profileCounts,
-            useFieldPipelineV2: Boolean(current.useFieldPipelineV2),
+            useFieldPipelineV2: true,
             autoClickNextAfterFill: Boolean(current.autoClickNextAfterFill),
             testResult: { skipped: true },
             writes,
@@ -447,8 +447,8 @@ async function main() {
               browserContextConfiguredBy: nextBrowserContext.configuredBy,
               browserContextConfiguredAt: nextBrowserContext.configuredAt,
               browserContextDevtoolsPort: nextBrowserContext.devtoolsPort,
-              pipelineVersion: next.useFieldPipelineV2 ? "v2" : "v1",
-              useFieldPipelineV2: next.useFieldPipelineV2,
+              pipelineVersion: "v2",
+              useFieldPipelineV2: true,
               settingsVersion: next.settingsVersion,
               payload: { source: "scripts/configure_c3_debug_sink.js" }
             })

@@ -702,8 +702,7 @@ function readSettingsForm() {
     flagLowConfidenceAnswers: document.getElementById(
       "flag-low-confidence-answers",
     )?.checked,
-    useFieldPipelineV2: document.getElementById("use-field-pipeline-v2")
-      ?.checked,
+    useFieldPipelineV2: true,
     stripLongDash: document.getElementById("strip-long-dash")?.checked,
   };
 }
@@ -830,10 +829,6 @@ async function loadState() {
   setCheckboxValue(
     "flag-low-confidence-answers",
     response.settings.flagLowConfidenceAnswers,
-  );
-  setCheckboxValue(
-    "use-field-pipeline-v2",
-    response.settings.useFieldPipelineV2,
   );
   setCheckboxValue("strip-long-dash", response.settings.stripLongDash);
 

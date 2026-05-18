@@ -610,6 +610,12 @@ Expected Graduation: Sep 2026
         options = (REPO_ROOT / "executioner" / "src" / "options" / "options.html").read_text(
             encoding="utf-8"
         )
+        clear_pipeline_v2 = (
+            REPO_ROOT / "executioner" / "src" / "shared" / "v2" / "clear-pipeline.js"
+        ).read_text(encoding="utf-8")
+        safe_next = (REPO_ROOT / "executioner" / "src" / "background" / "safe-next.js").read_text(
+            encoding="utf-8"
+        )
 
         self.assertIn("alarms", manifest["permissions"])
         self.assertIn("downloads", manifest["permissions"])
@@ -667,6 +673,7 @@ Expected Graduation: Sep 2026
         self.assertIn("llmAnswerFallbackEnabled", settings)
         self.assertIn("useFieldPipelineV2", settings)
         self.assertIn("useFieldPipelineV2: true", settings)
+        self.assertIn("useFieldPipelineV2: true", storage)
         self.assertIn("degreeLevel", settings)
         self.assertIn("highestEducation", settings)
         self.assertIn("preferredEducationIndex", settings)
@@ -730,6 +737,9 @@ Expected Graduation: Sep 2026
         self.assertIn("isWorkdayDetailsApplyLabel", background)
         self.assertIn("isPlainWorkdayApplyCandidate", background)
         self.assertIn("isApplyManuallyCandidate", background)
+        self.assertIn('path.includes("/job/")', background)
+        self.assertIn('/\\/(?:details|job)\\//i.test(location.pathname || "")', background)
+        self.assertNotIn('[id*="error"]', safe_next)
         self.assertIn("function currentWorkdayStep()", background)
         self.assertIn("preferClick: isPlainApplyFirstClick", background)
         self.assertIn("function v2ReviewIssues", background)
@@ -747,7 +757,7 @@ Expected Graduation: Sep 2026
         self.assertIn('id="fill-required-only"', options)
         self.assertIn('id="auto-export-logs"', options)
         self.assertIn('id="debug-log-sink-enabled"', options)
-        self.assertIn('id="use-field-pipeline-v2"', options)
+        self.assertNotIn('id="use-field-pipeline-v2"', options)
         self.assertIn('id="auto-export-log-prefix"', options)
         self.assertIn('id="backend-url-status"', popup_js + popup_html)
         self.assertIn('id="service-token-status"', popup_js + popup_html)
@@ -789,7 +799,7 @@ Expected Graduation: Sep 2026
         self.assertNotIn("URL.createObjectURL", background)
         self.assertIn("showPageToast", background)
         self.assertIn("debugIdentityForState", background)
-        self.assertIn('pipelineVersion: settings.useFieldPipelineV2 ? "v2" : "v1"', background)
+        self.assertIn('pipelineVersion: "v2"', background)
         self.assertIn('browserContext: browserContext.name || "normal_chrome"', background)
         fill_runner = (
             REPO_ROOT / "executioner" / "src" / "background" / "fill-runner.js"
@@ -844,7 +854,8 @@ Expected Graduation: Sep 2026
         self.assertIn("defaultResume: defaultResume || {}", field_pipeline_v2)
         self.assertIn("activeApplyContext: context.activeApplyContext || {}", field_pipeline_v2)
         self.assertIn("defaultResume: context.defaultResume || {}", field_pipeline_v2)
-        self.assertIn("looksLikeUploadedFile", background)
+        self.assertIn("containsUploadedFileText", clear_pipeline_v2)
+        self.assertIn("collectUploadedFileNodes", clear_pipeline_v2)
         self.assertIn("sendDebugLog", background)
         self.assertIn("requestBackendAnswerDecisions", fill_runner)
         self.assertIn("createApplyAnswerDecisionsFunction", fill_runner)
@@ -905,7 +916,9 @@ Expected Graduation: Sep 2026
         self.assertIn("sanitizeAttempt", fill_runner)
         self.assertIn("let attempt = sanitizeAttempt(attemptPayload)", fill_runner)
         self.assertIn("debugIdentityForState(context.extensionState)", fill_runner)
-        self.assertIn("FILL_ADAPTERS_V2", fill_runner)
+        self.assertNotIn("FILL_ADAPTERS_V2", fill_runner)
+        self.assertNotIn("createGenericFillFunction", fill_runner)
+        self.assertNotIn("createWorkdayFillFunction", fill_runner)
         self.assertIn("v2_fill_cancelled", field_pipeline_v2)
         self.assertIn("__huntApplyActiveFillRunId", field_pipeline_v2)
         self.assertIn("__huntApplyCancelledFillRunIds", field_pipeline_v2)
@@ -955,11 +968,10 @@ Expected Graduation: Sep 2026
         self.assertIn("state.settings.llmAnswerFallbackEnabled === true", background)
         self.assertIn("message.payload?.allowLlmAnswers !== false", background)
         self.assertIn("showLlmConfirm", popup_js)
-        generic_fill = (
-            REPO_ROOT / "executioner" / "src" / "ats" / "generic" / "fill.js"
+        option_collector_v2 = (
+            REPO_ROOT / "executioner" / "src" / "shared" / "v2" / "option-collector.js"
         ).read_text(encoding="utf-8")
-        self.assertIn('[role="combobox"][aria-expanded="true"]', generic_fill)
-        self.assertIn('key: "Escape"', generic_fill)
+        self.assertIn('[role="combobox"]', option_collector_v2)
         self.assertIn("realisticOptionClick", shared_utils)
         self.assertIn("pointerdown", shared_utils)
         self.assertIn('key("Enter")', shared_utils)
@@ -979,7 +991,7 @@ Expected Graduation: Sep 2026
         )
         self.assertIn('const BROWSER_CONTEXT_KEY = "hunt.apply.browserContext"', configure_debug)
         self.assertIn('name: "p_chrome"', configure_debug)
-        self.assertIn('pipelineVersion: next.useFieldPipelineV2 ? "v2" : "v1"', configure_debug)
+        self.assertIn('pipelineVersion: "v2"', configure_debug)
         self.assertIn("browserContext: result.browserContext", configure_debug)
 
     def test_v2_invalid_controls_are_treated_as_required_for_repair(self):
@@ -1101,6 +1113,63 @@ Expected Graduation: Sep 2026
                 "type": "address_line_2",
                 "value": "N/A",
                 "valueSource": "default:required_address_line_2",
+            },
+        )
+
+    def test_v2_ethnicity_does_not_match_city_alias(self):
+        paths = [
+            REPO_ROOT / "executioner" / "src" / "shared" / "v2" / "field-catalog.js",
+            REPO_ROOT / "executioner" / "src" / "shared" / "v2" / "question-identifier.js",
+            REPO_ROOT / "executioner" / "src" / "shared" / "v2" / "answer-resolver.js",
+        ]
+        script = f"""
+            const fs = require("node:fs");
+            const vm = require("node:vm");
+            const context = {{ window: {{ __huntV2: {{}} }} }};
+            vm.createContext(context);
+            for (const path of {json.dumps([str(path) for path in paths])}) {{
+              vm.runInContext(fs.readFileSync(path, "utf8"), context);
+            }}
+            const root = context.window.__huntV2;
+            const field = {{
+              workday: {{
+                fieldLabel: "Please select the ethnicity which most accurately describes how you identify yourself."
+              }},
+              fieldId: "personalInfoUS--ethnicity",
+              descriptor: "Please select the ethnicity which most accurately describes how you identify yourself.* Select One",
+              required: true,
+              uiModel: "button_listbox"
+            }};
+            const question = root.questionIdentifier.identifyQuestion(field, null, null);
+            const answer = root.answerResolver.resolveAnswer({{
+              question,
+              field,
+              profile: {{}},
+              audit: null,
+              fieldAudit: null
+            }});
+            console.log(JSON.stringify({{
+              type: question.type,
+              value: answer.value,
+              valueSource: answer.source
+            }}));
+        """
+        try:
+            result = subprocess.run(
+                ["node", "-e", script],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+        except FileNotFoundError:
+            self.skipTest("node is required to test the C3 V2 question identifier")
+
+        self.assertEqual(
+            json.loads(result.stdout),
+            {
+                "type": "ethnicity_disclosure_neutral",
+                "value": "I decline to disclose",
+                "valueSource": "default:ethnicity_disclosure_neutral",
             },
         )
 
@@ -2212,9 +2281,12 @@ Expected Graduation: Sep 2026
         safe_next = (REPO_ROOT / "executioner" / "src" / "background" / "safe-next.js").read_text(
             encoding="utf-8"
         )
-        workday = (REPO_ROOT / "executioner" / "src" / "ats" / "workday" / "fill.js").read_text(
-            encoding="utf-8"
-        )
+        clear_pipeline = (
+            REPO_ROOT / "executioner" / "src" / "shared" / "v2" / "clear-pipeline.js"
+        ).read_text(encoding="utf-8")
+        field_drivers = (
+            REPO_ROOT / "executioner" / "src" / "shared" / "v2" / "field-drivers.js"
+        ).read_text(encoding="utf-8")
 
         self.assertIn("detectPageKind", content)
         self.assertIn("ATS_HOST_PATTERNS", content)
@@ -2305,20 +2377,14 @@ Expected Graduation: Sep 2026
         self.assertIn("window.close()", popup_js)
         self.assertIn("page.clear", background)
         self.assertIn("allFrames: true", background)
-        self.assertIn('[role="combobox"], [aria-autocomplete="list"]', background)
-        self.assertIn("clearDatasetSelection", background)
-        self.assertIn("select__single-value", background)
-        self.assertIn("select__indicators button", background)
-        self.assertIn("clickSelectClearIndicators", background)
-        self.assertIn(".select__indicators > *", background)
-        self.assertIn("clickableIndicators.slice(0, -1)", background)
-        self.assertIn("isDropdownToggleLabel", background)
-        self.assertIn("closeOpenDropdowns", background)
-        self.assertIn("closedDropdowns", background)
-        self.assertIn("remainingOpenDropdowns", background)
-        self.assertIn("remainingFilledControls", background)
-        self.assertIn("clearIndicatorClicks", background)
-        self.assertIn("hiddenDropdownMenus", background)
+        self.assertIn("clearCurrentPageV2", background)
+        self.assertIn("runHuntV2Clear", background)
+        self.assertIn("[role='combobox']", clear_pipeline)
+        self.assertIn("clearGenericIconControls", clear_pipeline)
+        self.assertIn("selectedControlContextFor", clear_pipeline)
+        self.assertIn("generic_clear_icon_result", clear_pipeline)
+        self.assertIn("uploadedFileClears", clear_pipeline)
+        self.assertIn("field_clear_failed", clear_pipeline)
         self.assertIn("withTimeout", background)
         self.assertIn("safe_next_probe_timeout", background)
         self.assertIn("Safe Next check timed out.", background)
@@ -2327,44 +2393,24 @@ Expected Graduation: Sep 2026
         self.assertIn(
             "visibleValidationErrors: nextAction.visibleValidationErrors || []", background
         )
-        self.assertIn("exactFieldKey", workday)
-        self.assertIn("preferredcheck", workday)
-        self.assertIn("phonenumber--extension", workday)
-        self.assertNotIn('fieldKey.includes("preferred name")', workday)
-        self.assertIn('reason: "skills_not_committed"', workday)
-        self.assertNotIn('pushManualReviewReason("skills:skills_not_committed")', workday)
-        self.assertIn("checkboxGroupHasSelection", workday)
-        self.assertIn('input[type="checkbox"][id$="', workday)
-        self.assertIn("checkbox_group_selected", workday)
+        self.assertIn("fieldIdentityKey", (REPO_ROOT / "executioner" / "src" / "shared" / "v2" / "field-pipeline.js").read_text(encoding="utf-8"))
+        self.assertIn("skills_not_committed", (REPO_ROOT / "executioner" / "src" / "ats" / "workday" / "workday-repeatables-v2.js").read_text(encoding="utf-8"))
         self.assertIn("Fill timed out before the page responded.", background)
         self.assertIn("fill_timeout", background)
-        self.assertIn("hideTransientDropdownMenus", background)
-        self.assertIn("clearWorkdayButtonDropdowns", background)
-        self.assertIn("clearWorkdayMultiselects", background)
-        self.assertIn("countRemainingWorkdayButtonValues", background)
-        self.assertIn("countRemainingWorkdayMultiselectValues", background)
-        self.assertIn('button[aria-haspopup="listbox"]', background)
-        self.assertIn("press delete to clear value", background)
-        self.assertIn("workdaySelectedItems", background)
-        self.assertIn("workdayButtonClears", background)
-        self.assertIn("workdayMultiselectClears", background)
-        self.assertIn("clearUploadedFileControls", background)
-        self.assertIn("uploadedFileClears", background)
-        self.assertIn("successfully uploaded", background)
-        self.assertIn("clickClearControl", background)
-        self.assertIn("fieldHasSelectedValue", background)
+        self.assertIn("clearUploadedFileControls", clear_pipeline)
+        self.assertIn("uploadedFileClears", clear_pipeline)
+        self.assertIn("successfully uploaded", clear_pipeline)
+        self.assertIn("fieldDrivers.clearField", clear_pipeline)
+        self.assertIn("fieldState.readFieldState", clear_pipeline)
         self.assertIn("realisticClick", background)
-        self.assertIn("setNativeValue", background)
+        self.assertIn("dispatchTextEvents", field_drivers)
         self.assertIn('new InputEvent("input"', injected)
         self.assertIn('new InputEvent("beforeinput"', injected)
-        self.assertIn('[aria-expanded="true"]', background)
-        self.assertIn('el.setAttribute("aria-expanded", "false")', background)
-        self.assertIn("select__menu--is-open", background)
-        self.assertIn("buttons.length > 1 && index === 0", background)
-        self.assertIn("input[aria-hidden='true'], input[tabindex='-1']", background)
-        self.assertIn("aria-activedescendant", background)
-        self.assertIn(".select__container, .select-shell", background)
-        self.assertNotIn("[class*='select'], [role='group']", background)
+        self.assertIn(".select__container", clear_pipeline)
+        self.assertIn("[aria-haspopup='listbox']", clear_pipeline)
+        self.assertIn("clearControlTarget", clear_pipeline)
+        self.assertIn("clickVisibleUploadConfirmButton", clear_pipeline)
+        self.assertIn("remove attachment:", clear_pipeline)
 
     def test_options_resume_save_uses_direct_storage_and_toasts(self):
         options = (REPO_ROOT / "executioner" / "src" / "options" / "options.js").read_text(
@@ -2606,7 +2652,27 @@ Expected Graduation: Sep 2026
         self.assertIn("async function gmailAuthorizedToken", gmail_oauth_lib)
 
     def test_workday_adapter_handles_hidden_file_inputs_and_missing_resume_logging(self):
-        workday = (REPO_ROOT / "executioner" / "src" / "ats" / "workday" / "fill.js").read_text(
+        field_drivers = (
+            REPO_ROOT / "executioner" / "src" / "shared" / "v2" / "field-drivers.js"
+        ).read_text(encoding="utf-8")
+        field_pipeline = (
+            REPO_ROOT / "executioner" / "src" / "shared" / "v2" / "field-pipeline.js"
+        ).read_text(encoding="utf-8")
+        workday_ui = (
+            REPO_ROOT / "executioner" / "src" / "ats" / "workday" / "workday-ui-v2.js"
+        ).read_text(encoding="utf-8")
+        workday_drivers = (
+            REPO_ROOT / "executioner" / "src" / "ats" / "workday" / "workday-drivers-v2.js"
+        ).read_text(encoding="utf-8")
+        workday_repeatables = (
+            REPO_ROOT / "executioner" / "src" / "ats" / "workday" / "workday-repeatables-v2.js"
+        ).read_text(encoding="utf-8")
+        field_catalog = (
+            REPO_ROOT / "executioner" / "src" / "shared" / "v2" / "field-catalog.js"
+        ).read_text(encoding="utf-8")
+        answer_resolver = (
+            REPO_ROOT / "executioner" / "src" / "shared" / "v2" / "answer-resolver.js"
+        ).read_text(
             encoding="utf-8"
         )
         shared_utils = (REPO_ROOT / "executioner" / "src" / "shared" / "injected.js").read_text(
@@ -2622,18 +2688,11 @@ Expected Graduation: Sep 2026
             encoding="utf-8"
         )
 
-        self.assertIn("document.querySelectorAll('input[type=\"file\"]')", workday)
-        self.assertIn("resume_upload:missing_resume_data", workday)
-        self.assertIn("pageLooksLikeResumeUpload", workday)
-        self.assertIn("fieldInventory", workday)
-        self.assertIn("interactionTrace", workday)
+        self.assertIn("attachResumeToFileInput", field_drivers)
+        self.assertIn("resume_upload:", field_drivers)
+        self.assertIn("fieldInventory", field_pipeline)
+        self.assertIn("interactionTrace", field_pipeline)
         self.assertIn('new FocusEvent("focusout"', shared_utils)
-        self.assertIn("setWorkdayTextValue", workday)
-        self.assertIn("phone_number_commit_events", workday)
-        self.assertIn('traceInteraction("hover"', workday)
-        self.assertIn('traceInteraction("click"', workday)
-        self.assertIn('traceInteraction("already_filled"', workday)
-        self.assertIn("u.traceInteraction = traceInteraction", workday)
         self.assertIn("traceHoverAndClick", shared_utils)
         self.assertIn("select_radio_option", shared_utils)
         self.assertIn("select_combobox_option", shared_utils)
@@ -2641,53 +2700,31 @@ Expected Graduation: Sep 2026
         self.assertIn("sanitizeWorkExperience", storage)
         self.assertIn("sanitizeEducation", storage)
         self.assertIn("sanitizeLanguages", storage)
-        self.assertIn("isWorkdayApplicationButtonDropdown", background)
-        self.assertIn("utilityMenuButton", background)
+        self.assertIn("workdayWidgetKind", workday_ui)
+        self.assertIn("nearestWorkdayField", workday_ui)
         self.assertIn('"manual_review"', fill_runner)
         self.assertIn("manual review needed", fill_runner)
         self.assertIn("allFrames: true", fill_runner)
         self.assertIn("chooseBestFrameResult", fill_runner)
         self.assertIn("frameResults", fill_runner)
         self.assertIn("frameUrl", fill_runner)
-        self.assertIn("shouldSkipProfileFill", workday)
-        self.assertIn("unsafe_profile_context", workday)
-        self.assertIn("unsafe_generated_answer_context", workday)
-        self.assertIn("isExactCityField", workday)
-        self.assertIn("isExactProvinceField", workday)
-        self.assertIn("applicationSource", workday)
-        self.assertIn("fillComboboxElement", workday)
-        self.assertIn('button[aria-haspopup="listbox"]', workday)
-        self.assertIn("fillWorkdayButtonDropdown", workday)
-        self.assertIn("buttonValueMatchesChoice", workday)
-        self.assertIn("aria-invalid", workday)
-        self.assertIn("bestEffortWarnings", workday)
-        self.assertIn("chooseBestEffortOption", workday)
-        self.assertIn("best_effort:default_text", workday)
-        self.assertIn("currentValueForTarget", workday)
-        self.assertIn("selectedOption", workday)
-        self.assertIn("forceSetWorkdayButtonChoice", workday)
-        self.assertIn("workday_button_force_commit_after_click", workday)
-        self.assertIn("clearWorkdayButtonSelection", workday)
-        self.assertIn('[role="listbox"]', workday)
-        self.assertIn('el.style.pointerEvents = "none"', workday)
-        self.assertIn("primeCountryDependentFields", workday)
-        self.assertIn("isPhoneCountryCodeField", workday)
-        self.assertIn("countryCodeLooksCorrect", workday)
-        self.assertIn("scrollAttempt", workday)
-        self.assertIn('[id^="pill-"]', workday)
-        self.assertIn("press delete to clear value", workday)
-        self.assertIn("clearCountryCodeSelection", workday)
-        self.assertIn("required_terms_checkbox", workday)
-        self.assertIn("addWorkExperienceEntries", workday)
-        self.assertIn("addEducationEntries", workday)
-        self.assertIn("fillWorkdaySkills", workday)
-        self.assertIn("addWebsiteEntries", workday)
-        self.assertIn("processMyExperienceSections", workday)
+        self.assertIn("shouldSkipPasswordField", field_pipeline)
+        self.assertIn("applicationSource", field_catalog)
+        self.assertIn('button[aria-haspopup="listbox"]', workday_ui + workday_drivers)
+        self.assertIn("aria-invalid", field_pipeline)
+        self.assertIn("bestEffortWarnings", field_pipeline)
+        self.assertIn("selectedOption", field_pipeline)
+        self.assertIn('[role="listbox"]', workday_drivers)
+        self.assertIn('[id^="pill-"]', workday_drivers)
+        self.assertIn("clearSelectedItems", workday_drivers)
+        self.assertIn("terms_acceptance", field_catalog)
+        self.assertIn("fillWorkdayRepeatables", workday_repeatables)
+        self.assertIn("fillTechnicalSkills", workday_drivers)
         self.assertIn("chooseStructuredChoice", shared_utils)
         self.assertIn("optionScoreForChoice", shared_utils)
         self.assertIn("phone device type", shared_utils)
         self.assertIn("countryParts.country", shared_utils)
-        self.assertIn("primaryQuestionnaire--", workday)
+        self.assertIn("fieldId", field_pipeline)
         self.assertIn("family member employed", shared_utils)
         self.assertIn("lived or traveled outside", shared_utils)
         self.assertIn("lived or travelled outside", shared_utils)
@@ -2695,20 +2732,17 @@ Expected Graduation: Sep 2026
         self.assertIn("deloitte", shared_utils)
         self.assertIn("language skills", shared_utils)
         self.assertIn("preferred language", shared_utils)
-        self.assertIn("background security check", shared_utils)
-        self.assertIn("artificial intelligence enabled tools", shared_utils)
+        self.assertIn("background security check", field_catalog)
+        self.assertIn("automated tools such as ai", field_catalog)
         self.assertIn("inferWorkdayLocationFromApplyContext", shared_utils)
         self.assertIn("All Canada Employers", shared_utils)
-        self.assertIn("initialsFromProfile", shared_utils)
-        self.assertIn("salaryExpectationRange", shared_utils)
-        self.assertIn("best_effort:default_option", shared_utils)
-        self.assertIn("best_effort_default:no_matching_option", shared_utils)
-        self.assertIn("$95000 - $105000", shared_utils)
+        self.assertIn("nameParts", answer_resolver)
+        self.assertIn("salaryExpectationRange", field_catalog)
         self.assertIn("Yes, I am a citizen or permanent resident of Canada", shared_utils)
         self.assertIn('option.startsWith(target + ",")', shared_utils)
         self.assertIn("how did you hear", shared_utils)
         self.assertIn("knownProvinces", shared_utils)
-        self.assertIn("default:noPreviousInstitution", shared_utils)
+        self.assertIn("previous_employer", field_catalog)
         self.assertIn("profile:canadianCitizenOrPermanentResident", shared_utils)
         self.assertIn("profile:sinStartsWithNine", shared_utils)
         self.assertIn("profile:sinExpiryDate", shared_utils)
@@ -2726,17 +2760,24 @@ Expected Graduation: Sep 2026
         self.assertIn("profile:middleName", shared_utils)
         self.assertIn('desc.includes("middlename")', shared_utils)
         self.assertIn("I choose not to disclose", shared_utils)
-        self.assertIn("resume_already_uploaded", workday)
-        self.assertIn("not_resume_input", workday)
-        self.assertIn("resume/cv", workday)
-        self.assertIn("!isPhoneCountryCodeField(elem, desc)", workday)
-        self.assertIn('"drop file"', workday)
-        self.assertIn('"file-upload"', workday)
+        self.assertIn("resume_already_uploaded", field_drivers)
+        self.assertIn("not_resume_input", field_drivers)
+        self.assertIn("resume/cv", field_catalog)
+        self.assertIn("drop files", field_catalog)
+        self.assertIn("fileInput", field_drivers)
 
     def test_workday_review_fixes_have_regression_guards(self):
-        workday = (REPO_ROOT / "executioner" / "src" / "ats" / "workday" / "fill.js").read_text(
+        field_pipeline = (
+            REPO_ROOT / "executioner" / "src" / "shared" / "v2" / "field-pipeline.js"
+        ).read_text(encoding="utf-8")
+        workday_drivers = (
+            REPO_ROOT / "executioner" / "src" / "ats" / "workday" / "workday-drivers-v2.js"
+        ).read_text(
             encoding="utf-8"
         )
+        field_drivers = (
+            REPO_ROOT / "executioner" / "src" / "shared" / "v2" / "field-drivers.js"
+        ).read_text(encoding="utf-8")
         fill_runner = (
             REPO_ROOT / "executioner" / "src" / "background" / "fill-runner.js"
         ).read_text(encoding="utf-8")
@@ -2744,70 +2785,45 @@ Expected Graduation: Sep 2026
             encoding="utf-8"
         )
 
-        self.assertIn("try {", workday)
-        self.assertIn("finally {", workday)
-        self.assertIn("traceTruncated", workday)
-        self.assertIn("finalizeRequiredFieldReview", workday)
-        self.assertIn('buttonResult.reason === "already_filled"', workday)
-        self.assertIn('phoneCountryResult.reason === "already_filled"', workday)
-        self.assertIn('"required_field_unresolved:"', workday)
-        self.assertIn("clear_failed", workday)
+        clear_pipeline = (
+            REPO_ROOT / "executioner" / "src" / "shared" / "v2" / "clear-pipeline.js"
+        ).read_text(encoding="utf-8")
+        self.assertIn("try {", workday_drivers)
+        self.assertIn("traceTruncated", field_pipeline)
+        self.assertIn("generated_or_placeholder_text_fallback", field_drivers)
+        self.assertIn("workday_commit_not_verified", workday_drivers)
+        self.assertIn("clear_failed", clear_pipeline)
         self.assertIn("traceTruncated", fill_runner)
         self.assertIn("traceTruncated", storage)
 
     def test_workday_my_experience_live_regression_guards(self):
-        workday = (REPO_ROOT / "executioner" / "src" / "ats" / "workday" / "fill.js").read_text(
+        workday_repeatables = (
+            REPO_ROOT / "executioner" / "src" / "ats" / "workday" / "workday-repeatables-v2.js"
+        ).read_text(
             encoding="utf-8"
         )
 
-        self.assertIn("isWorkdayAddButtonLabel", workday)
-        self.assertIn("isWorkdayAddAnotherButtonLabel", workday)
-        self.assertIn("findSectionAddButton(section, idx > 0)", workday)
-        self.assertIn("add another", workday)
-        self.assertIn("visibleInSection", workday)
-        self.assertIn("waitForSectionFieldCountIncrease", workday)
-        self.assertIn("emptyUrlInputs", workday)
-        self.assertIn("emptyStructuredControlGroupsForSection", workday)
-        self.assertIn("structuredGroupHasFillableControl", workday)
-        self.assertIn("section_reuse_empty_row", workday)
-        self.assertIn("workday_structured_entry_reused_empty_row", workday)
-        self.assertIn("section_fill_inline_new_row", workday)
-        self.assertIn("workday_structured_entry_inline_row", workday)
-        self.assertIn("targetControls", workday)
-        self.assertIn("fill_one_new_workday_repeatable_row", workday)
-        self.assertIn("fillWebsiteDialog(url, true)", workday)
-        self.assertIn("removeSurplusEmptyStructuredRows", workday)
-        self.assertIn("removeDuplicateStructuredRows", workday)
-        self.assertIn("profileLanguages", workday)
-        self.assertIn("addLanguageEntries", workday)
-        self.assertIn('"Languages"', workday)
-        self.assertIn('"profile:languages"', workday)
-        self.assertIn("removed_surplus_empty_repeatable_rows_without_profile", workday)
-        self.assertIn("section_no_profile_entries", workday)
-        self.assertIn("section_remove_duplicate_row", workday)
-        self.assertIn("remove_duplicate_workday_repeatable_row", workday)
-        self.assertIn("section_remove_empty_row", workday)
-        self.assertIn("removeSurplusEmptyWebsiteRows", workday)
-        self.assertIn("workday_websites_removed_empty_rows", workday)
-        self.assertIn("normalizeStructuredMultilineText", workday)
-        self.assertIn("splitInlineDashBullets", workday)
-        self.assertIn("split(/\\s+(?=(?:[-*]|\\u2022)\\s+[A-Z0-9])/", workday)
-        self.assertIn('String(el.id || "").includes("secondaryQuestionnaire--")', workday)
-        self.assertIn('[data-automation-id="formField"]', workday)
-        self.assertIn("hasExistingResumeUpload", workday)
-        self.assertIn("resume_upload_existing", workday)
-        self.assertIn("existing_resume_upload_detected", workday)
-        self.assertIn('button, [role="button"], a, [tabindex]', workday)
-        self.assertIn("missing_profile_entries", workday)
-        self.assertIn("workday_my_experience_profile_counts", workday)
-        self.assertIn("visibleStepHeadings", workday)
-        self.assertIn("select_workday_skill_checkbox", workday)
-        self.assertIn("findWorkdaySkillCheckbox", workday)
-        self.assertIn("select_workday_skill_checkbox_failed", workday)
-        self.assertIn("select_workday_skill_checkbox_space", workday)
-        self.assertIn("aria-checked", workday)
-        self.assertIn("open_workday_skill_results_with_enter", workday)
-        self.assertIn("choose not to disclose", workday)
+        self.assertIn("findAddButton", workday_repeatables)
+        self.assertIn("findAddButton(section, index > 0)", workday_repeatables)
+        self.assertIn("add another", workday_repeatables)
+        self.assertIn("sectionHasMissingRequiredControls", workday_repeatables)
+        self.assertIn("fillWorkdayRepeatables", workday_repeatables)
+        self.assertIn("fillWebsiteUrlInputs", workday_repeatables)
+        self.assertIn("deleteAllRows", workday_repeatables)
+        self.assertIn("clearWorkdayRepeatables", workday_repeatables)
+        self.assertIn("workday_repeatables_fill", workday_repeatables)
+        self.assertIn("workday_repeatables_clear", workday_repeatables)
+        self.assertIn("normalizeWork", workday_repeatables)
+        self.assertIn("[data-automation-id='formField']", workday_repeatables)
+        self.assertIn("resumeUploadedText", workday_repeatables)
+        self.assertIn("clearResumeUpload", workday_repeatables)
+        self.assertIn('"button,[role=\'button\'],a,[tabindex]"', workday_repeatables)
+        self.assertIn("skillOptionCommitTarget", workday_repeatables)
+        self.assertIn("waitForSkillOption", workday_repeatables)
+        self.assertIn("fillSkill", workday_repeatables)
+        self.assertIn("skills_not_committed", workday_repeatables)
+        self.assertIn("skillOptionIsChecked", workday_repeatables)
+        self.assertIn("typeSearchTextLikeUser", workday_repeatables)
 
     def test_devtools_target_picker_finds_c3_options_page(self):
         target = find_c3_target(

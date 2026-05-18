@@ -1066,7 +1066,7 @@ def test_generic_fill_populates_required_fields_only():
     fixture = REPO_ROOT / "executioner/fixtures/generic/basic_required.html"
     injected_js = _load_script(REPO_ROOT / "executioner/src/shared/injected.js")
     fill_js = _module_to_browser_script(
-        _load_script(REPO_ROOT / "executioner/src/ats/generic/fill.js")
+        _load_script(REPO_ROOT / "executioner/src/ats/generic/fill-v2.js")
     )
     rules_js = _module_to_browser_script(
         _load_script(REPO_ROOT / "executioner/src/ats/generic/field-rules.js")
@@ -1080,14 +1080,13 @@ def test_generic_fill_populates_required_fields_only():
 
         page = browser.new_page()
         page.goto(fixture.as_uri())
-        page.add_script_tag(content=injected_js)
-        page.add_script_tag(content=rules_js)
+        _load_v2_scripts(page)
         page.add_script_tag(content=fill_js)
 
         result = page.evaluate(
             """
             async () => {
-              const fill = createGenericFillFunction();
+              const fill = createGenericFillV2Function();
               return await fill({
                 profile: {
                   fullName: "Michael Shi",
@@ -1180,7 +1179,7 @@ def test_generic_fill_retries_text_fields_that_lose_committed_value():
 
     injected_js = _load_script(REPO_ROOT / "executioner/src/shared/injected.js")
     fill_js = _module_to_browser_script(
-        _load_script(REPO_ROOT / "executioner/src/ats/generic/fill.js")
+        _load_script(REPO_ROOT / "executioner/src/ats/generic/fill-v2.js")
     )
     rules_js = _module_to_browser_script(
         _load_script(REPO_ROOT / "executioner/src/ats/generic/field-rules.js")
@@ -1211,14 +1210,13 @@ def test_generic_fill_retries_text_fields_that_lose_committed_value():
             </html>
             """
         )
-        page.add_script_tag(content=injected_js)
-        page.add_script_tag(content=rules_js)
+        _load_v2_scripts(page)
         page.add_script_tag(content=fill_js)
 
         result = page.evaluate(
             """
             async () => {
-              const fill = createGenericFillFunction();
+              const fill = createGenericFillV2Function();
               return await fill({
                 profile: {
                   fullName: "Michael Shi",
@@ -1265,7 +1263,7 @@ def test_generic_fill_can_fill_optional_known_fields_when_required_only_is_off()
     fixture = REPO_ROOT / "executioner/fixtures/generic/basic_required.html"
     injected_js = _load_script(REPO_ROOT / "executioner/src/shared/injected.js")
     fill_js = _module_to_browser_script(
-        _load_script(REPO_ROOT / "executioner/src/ats/generic/fill.js")
+        _load_script(REPO_ROOT / "executioner/src/ats/generic/fill-v2.js")
     )
     rules_js = _module_to_browser_script(
         _load_script(REPO_ROOT / "executioner/src/ats/generic/field-rules.js")
@@ -1279,14 +1277,13 @@ def test_generic_fill_can_fill_optional_known_fields_when_required_only_is_off()
 
         page = browser.new_page()
         page.goto(fixture.as_uri())
-        page.add_script_tag(content=injected_js)
-        page.add_script_tag(content=rules_js)
+        _load_v2_scripts(page)
         page.add_script_tag(content=fill_js)
 
         result = page.evaluate(
             """
             async () => {
-              const fill = createGenericFillFunction();
+              const fill = createGenericFillV2Function();
               return await fill({
                 profile: {
                   fullName: "Michael Shi",
@@ -1355,7 +1352,7 @@ def test_generic_fill_reads_sibling_labels_and_hidden_resume_inputs():
     fixture = REPO_ROOT / "executioner/fixtures/generic/greenhouse_like.html"
     injected_js = _load_script(REPO_ROOT / "executioner/src/shared/injected.js")
     fill_js = _module_to_browser_script(
-        _load_script(REPO_ROOT / "executioner/src/ats/generic/fill.js")
+        _load_script(REPO_ROOT / "executioner/src/ats/generic/fill-v2.js")
     )
     rules_js = _module_to_browser_script(
         _load_script(REPO_ROOT / "executioner/src/ats/generic/field-rules.js")
@@ -1369,14 +1366,13 @@ def test_generic_fill_reads_sibling_labels_and_hidden_resume_inputs():
 
         page = browser.new_page()
         page.goto(fixture.as_uri())
-        page.add_script_tag(content=injected_js)
-        page.add_script_tag(content=rules_js)
+        _load_v2_scripts(page)
         page.add_script_tag(content=fill_js)
 
         result = page.evaluate(
             """
             async () => {
-              const fill = createGenericFillFunction();
+              const fill = createGenericFillV2Function();
               return await fill({
                 profile: {
                   fullName: "Michael Shi",
@@ -1465,7 +1461,7 @@ def test_generic_fill_commits_greenhouse_style_custom_selects():
     fixture = REPO_ROOT / "executioner/fixtures/generic/greenhouse_custom_selects.html"
     injected_js = _load_script(REPO_ROOT / "executioner/src/shared/injected.js")
     fill_js = _module_to_browser_script(
-        _load_script(REPO_ROOT / "executioner/src/ats/generic/fill.js")
+        _load_script(REPO_ROOT / "executioner/src/ats/generic/fill-v2.js")
     )
     rules_js = _module_to_browser_script(
         _load_script(REPO_ROOT / "executioner/src/ats/generic/field-rules.js")
@@ -1479,14 +1475,13 @@ def test_generic_fill_commits_greenhouse_style_custom_selects():
 
         page = browser.new_page()
         page.goto(fixture.as_uri())
-        page.add_script_tag(content=injected_js)
-        page.add_script_tag(content=rules_js)
+        _load_v2_scripts(page)
         page.add_script_tag(content=fill_js)
 
         result = page.evaluate(
             """
             async () => {
-              const fill = createGenericFillFunction();
+              const fill = createGenericFillV2Function();
               return await fill({
                 profile: {
                   fullName: "Michael Shi",
