@@ -2,6 +2,11 @@
 // application, and ATS pages. It asks before filling; actual fill still runs in
 // the background so manual popup fill and detected-page fill share one path.
 (async () => {
+  if (window.__huntApplyContentBootstrapLoaded) {
+    return;
+  }
+  window.__huntApplyContentBootstrapLoaded = true;
+
   const PROMPT_ID = "hunt-apply-detected-page-prompt";
   const LLM_PROMPT_ID = "hunt-apply-llm-fill-prompt";
   const FILL_PROGRESS_ID = "hunt-apply-fill-progress";
@@ -365,7 +370,9 @@
     if (/creating account|signup/i.test(message || "")) {
       return "Hunt is moving through the account signup step.";
     }
-    if (/opening application|trying to start application/i.test(message || "")) {
+    if (
+      /opening application|trying to start application/i.test(message || "")
+    ) {
       return "Hunt is opening the employer application flow.";
     }
     if (/filling application/i.test(message || "")) {
@@ -1283,10 +1290,38 @@
     }
   });
 
+  async function restoreActiveFillProgress() {
+    let response = null;
+    try {
+      response = await chrome.runtime.sendMessage({
+        type: "hunt.apply.get_active_fill_progress",
+      });
+    } catch (_error) {
+      return;
+    }
+    if (!response?.ok || !response.active) {
+      return;
+    }
+    showFillProgress({
+      message: response.message || "Filling page",
+      fillRunId: response.fillRunId || "",
+    });
+    logPageUiEvent(
+      "ui.fill_progress.restore",
+      "Restored active fill progress indicator after page load.",
+      {
+        message: response.message || "Filling page",
+        fillRunId: response.fillRunId || "",
+        updatedAt: response.updatedAt || 0,
+      },
+    );
+  }
+
   const stateResponse = await chrome.runtime.sendMessage({
     type: "hunt.apply.get_state",
   });
   cachedStateResponse = stateResponse;
+  await restoreActiveFillProgress();
 
   function currentStepText() {
     const activeStep = document.querySelector(
@@ -1366,8 +1401,7 @@
       lastFillCompletedUrl === window.location.href &&
       lastFillCompletedStep === currentStepText() &&
       Date.now() - lastFillCompletedAt < PROMPT_SUPPRESS_AFTER_FILL_MS;
-    const transitionCooldownActive =
-      Date.now() < detectedPromptSuppressedUntil;
+    const transitionCooldownActive = Date.now() < detectedPromptSuppressedUntil;
     return (
       response?.ok &&
       response?.settings?.autoPromptEnabled &&

@@ -846,6 +846,12 @@ class OrchestrationService:
             step_name="worker_reconcile",
             payload={"reason": reason, "manual_review_flags": review_flags},
         )
+        try:
+            from .telegram import notify_manual_review
+
+            notify_manual_review(run_id, run.job_id, reason, run.company)
+        except Exception:
+            pass
 
     def claim_next_fill(
         self,
@@ -1360,18 +1366,39 @@ class OrchestrationService:
                 db_path=self.db_path,
                 key="coordinator_last_awaiting_approval",
             )
+            try:
+                from .telegram import notify_fill_complete
+
+                notify_fill_complete(run_id, run.job_id, run.company, run.job_title)
+            except Exception:
+                pass
         elif new_status == "failed":
             _notify(
                 f"Run {run_id} (job {run.job_id}) failed after fill",
                 db_path=self.db_path,
                 key="coordinator_last_fill_failed",
             )
+        if new_status == "manual_review":
+            try:
+                from .telegram import notify_manual_review
+
+                notify_manual_review(
+                    run_id, run.job_id, manual_review_reason or "unknown", run.company
+                )
+            except Exception:
+                pass
         if new_status == "investigation_queued":
             _notify(
                 f"Run {run_id} (job {run.job_id}) queued for investigation: {failure_code}",
                 db_path=self.db_path,
                 key="coordinator_last_investigation_queued",
             )
+            try:
+                from .telegram import notify_investigation_queued
+
+                notify_investigation_queued(run_id, run.job_id, failure_code or "unknown")
+            except Exception:
+                pass
         return {
             "run": updated_run.to_dict(),
             "manual_review_flags": review_flags,
@@ -1408,6 +1435,14 @@ class OrchestrationService:
         updated = self.get_run(run_id)
         if updated is None:
             raise OrchestrationError(f"Run {run_id} disappeared after queueing investigation.")
+        try:
+            from .telegram import notify_investigation_queued
+
+            notify_investigation_queued(
+                run_id, updated.job_id, updated.failure_code or "manual_queue"
+            )
+        except Exception:
+            pass
         return {"run": updated.to_dict()}
 
     def record_investigation_result(self, run_id: str, payload: dict[str, Any]) -> dict[str, Any]:

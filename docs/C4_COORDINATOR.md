@@ -32,11 +32,7 @@ C3 owns all browser interaction and field filling. C4 owns what happens between 
 - PowerShell and Bash wrappers under `scripts/c4_*_worker.*`.
 - Full test suite: API, CLI, agent runtime, worker protocol, C3 bridge, failure log, scheduler, investigation routing.
 
-### Not built — C4-only, could build now
-
-- `allow-submit` Telegram command: wire in service_api startup alongside `approve`/`deny`. Calls `approve_submit` with `decision="approve"`.
-- Telegram push on state transitions: `notify_fill_complete` (on `awaiting_submit_approval`), `notify_manual_review` (on `manual_review`), `notify_investigation_queued` (on `investigation_queued`). Push functions exist in `telegram.py`; service.py does not call them yet.
-- CAPTCHA agent prompt: `agent_runtime.py` only has investigation prompts. CAPTCHA-specific prompt and result schema not written.
+All C4-only gaps are now implemented. See sections below for what remains blocked on other components.
 
 ### Not built — requires C3 changes
 
@@ -182,8 +178,8 @@ Implemented in `coordinator/failure_log.py`.
 Order of operations (all hardcoded except fallback):
 
 1. Check if a CAPTCHA extension is loaded in the active browser profile. **Not yet built — requires C3 to report extension state.**
-2. If no extension or extension fails: launch investigation agent with CAPTCHA-specific prompt. **Agent prompt not yet written.**
-3. If agent fails: push Telegram prompt to operator. Operator replies with solve or skip. **Telegram escalation built** (`notify_captcha` fires when investigation result returns `captcha_blocked`).
+2. If no extension or extension fails: launch investigation agent with CAPTCHA-specific prompt. **Agent prompt built** (`build_captcha_prompt` in `coordinator/agent_runtime.py`).
+3. If agent fails: push Telegram prompt to operator. Operator replies with solve or skip. **Built** — `notify_captcha` fires when investigation result returns `captcha_blocked`.
 
 CAPTCHA type is classified by C3 and included in the failure code: `captcha_hcaptcha`, `captcha_recaptcha`, `captcha_cloudflare`, `captcha_unknown`.
 
@@ -196,7 +192,7 @@ C4 sends `allow_submit` in every fill request (`fill_request.json` and `/c3/pend
 C4 enables per-run via:
 - CLI: `python -m coordinator.cli approve-submit --run-id <id> --decision approve`
 - API: `POST /runs/{run_id}/approve`
-- Telegram command: `allow-submit <run_id>` — **not yet wired, could build now**
+- Telegram command: `allow-submit <run_id>` — built, wired in service_api startup
 - C0 UI approval action — **not yet built**
 
 C3 must check `allowSubmit` before clicking final submit — **not yet built in C3**.
@@ -205,23 +201,19 @@ C3 must check `allowSubmit` before clicking final submit — **not yet built in 
 
 Bidirectional. C4 pushes events; operator replies with commands.
 
-**Built (push functions exist, wired for CAPTCHA escalation):**
-- CAPTCHA challenge: fires when investigation result returns `captcha_blocked`.
-
-**Push functions exist but not yet wired to state transitions:**
-- Fill complete, awaiting approval — `notify_fill_complete` in `telegram.py`, not called from service.
-- Manual review required — `notify_manual_review` in `telegram.py`, not called from `_mark_run_manual_review`.
-- Investigation queued — `notify_investigation_queued` in `telegram.py`, not called from `queue_investigation`.
-- Investigation report ready — `notify_investigation_complete` fires from `record_investigation_result`.
+**Push notifications (all wired):**
+- Fill complete, awaiting approval — fires on `awaiting_submit_approval` transition.
+- Manual review required — fires on `manual_review` transition (fill result and reconcile-stale paths).
+- Investigation queued — fires on `investigation_queued` transition and on manual `queue_investigation`.
+- Investigation complete — fires from `record_investigation_result`.
+- CAPTCHA challenge — fires when investigation result returns `captcha_blocked`.
 
 **Wired commands (service_api startup):**
 - `approve <run_id>` / `deny <run_id>`
 - `skip <job_id>`
 - `investigate <run_id>`
-- `status`
-
-**Not yet wired:**
 - `allow-submit <run_id>`
+- `status`
 
 ## Investigation Agent
 

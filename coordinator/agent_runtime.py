@@ -217,6 +217,88 @@ After posting the result, stop. Do not claim another lease or continue to anothe
 {claim_block}{template_block}"""
 
 
+def build_captcha_result_template(claim: dict[str, Any]) -> dict[str, Any]:
+    fill = claim.get("fill") or {}
+    return {
+        "status": "solved",
+        "captcha_type": fill.get("failure_code", "captcha_unknown"),
+        "page_observed": fill.get("apply_url", ""),
+        "method_used": "",
+        "screenshots": [],
+        "notes": "",
+    }
+
+
+def build_captcha_prompt(
+    *,
+    base_url: str,
+    claim: dict[str, Any],
+    token_env_var: str = "HUNT_SERVICE_TOKEN",
+    claim_path: str | Path | None = None,
+    result_template_path: str | Path | None = None,
+) -> str:
+    lease = claim.get("lease") or {}
+    lease_id = lease.get("lease_id")
+    summary = _claim_summary(claim)
+    fill = claim.get("fill") or {}
+    captcha_type = fill.get("failure_code", "captcha_unknown")
+    claim_ref = str(claim_path) if claim_path else "the Claim JSON block below"
+    result_ref = (
+        str(result_template_path) if result_template_path else "the Result Template block below"
+    )
+    claim_block = "" if claim_path else f"\nClaim JSON:\n```json\n{_json_for_prompt(claim)}\n```\n"
+    template = build_captcha_result_template(claim)
+    template_block = (
+        ""
+        if result_template_path
+        else f"\nResult Template:\n```json\n{_json_for_prompt(template)}\n```\n"
+    )
+    result_endpoint = f"{base_url.rstrip('/')}/workers/{lease_id}/result"
+    heartbeat_endpoint = f"{base_url.rstrip('/')}/workers/{lease_id}/heartbeat"
+
+    return f"""# Hunt C4 CAPTCHA Worker
+
+You are operating exactly one Hunt C4 CAPTCHA lease. A C3 automated fill attempt was blocked by a CAPTCHA on this page. Your job is to solve only the CAPTCHA and report the result. You do not fill application forms or submit applications.
+
+Lease summary:
+```json
+{_json_for_prompt(summary)}
+```
+
+CAPTCHA type: {captcha_type}
+
+Inputs:
+- Full claim payload: {claim_ref}
+- Result template: {result_ref}
+- Service token: read the bearer token from environment variable `{token_env_var}`. Do not print, store, or reveal the token.
+
+Your task:
+1. Open only the claimed `apply_url` in your browser.
+2. Navigate to the CAPTCHA challenge.
+3. Attempt to solve the CAPTCHA ({captcha_type}).
+4. Take a screenshot before and after your attempt.
+5. Heartbeat while working by POSTing JSON to `{heartbeat_endpoint}` with body `{{"lease_seconds": 600}}`.
+6. Finish by POSTing JSON to `{result_endpoint}` with body `{{"payload": <result object>}}`.
+7. Stop.
+
+Hard stops:
+- Do not fill any application field.
+- Do not click any submit, apply, next, or complete button.
+- Do not interact with Hunt's database.
+- Do not browse unrelated pages, search for other jobs, send messages, or email anyone.
+
+Result requirements:
+- `status`: `solved` if the CAPTCHA was solved successfully; `failed` if you could not solve it; `inconclusive` if the CAPTCHA was not present or the page state could not be reached.
+- `captcha_type`: confirm or correct the CAPTCHA type.
+- `page_observed`: the URL where you found the CAPTCHA.
+- `method_used`: brief description of the approach used (e.g. "audio challenge", "image selection", "token injection").
+- `screenshots`: list of screenshot file paths.
+- `notes`: any additional context.
+
+After posting the result, stop. Do not claim another lease or continue to another page.
+{claim_block}{template_block}"""
+
+
 def build_runtime_command(
     *,
     runtime_name: str,

@@ -195,12 +195,27 @@ def test_fill_progress_can_request_cancel():
     assert "user_cancelled" in field_pipeline
 
 
+def test_fill_progress_restores_across_apply_navigation():
+    content = _load_script(REPO_ROOT / "executioner/src/content/bootstrap.js")
+    background = _load_script(REPO_ROOT / "executioner/src/background/index.js")
+
+    assert "activeFillProgressByTab" in background
+    assert "activeFillProgressByTab.set(tabId" in background
+    assert "activeFillProgressByTab.delete(tabId)" in background
+    assert 'case "hunt.apply.get_active_fill_progress"' in background
+    assert 'type: "hunt.apply.get_active_fill_progress"' in content
+    assert "async function restoreActiveFillProgress" in content
+    assert "ui.fill_progress.restore" in content
+    assert "await restoreActiveFillProgress();" in content
+
+
 def test_fill_run_cancels_when_user_reloads_same_page():
     background = _load_script(REPO_ROOT / "executioner/src/background/index.js")
+    compact_background = "".join(background.split())
 
     assert "cancelFillRunForUserReload" in background
     assert 'changeInfo.status === "loading"' in background
-    assert 'cancelActiveFillRunsForTab(tabId, "page_reloaded")' in background
+    assert 'cancelActiveFillRunsForTab(tabId,"page_reloaded"' in compact_background
     assert "normalizeComparableUrl" in background
     assert "expectedReloads" in background
     assert "markFillRunExpectedReload(fillRunId)" in background
@@ -228,6 +243,96 @@ def test_apply_entry_prompt_click_suppresses_transition_reprompts():
     assert 'kind === "apply_entry"' in content
     assert "Date.now() < detectedPromptSuppressedUntil" in content
     assert "!transitionCooldownActive" in content
+
+
+def test_apply_entry_uses_condition_waits_instead_of_mandatory_sleep():
+    background = _load_script(REPO_ROOT / "executioner/src/background/index.js")
+    apply_entry = background[
+        background.index("function createClickWorkdayApplyManuallyFunction")
+        : background.index("class C3WorkflowSection")
+    ]
+    workflow = background[
+        background.index("class C3ApplyEntryWorkflow")
+        : background.index("class C3JobFillWorkflow")
+    ]
+
+    assert "waitForApplyEntryState" in apply_entry
+    assert "waitForApplyEntryTransitionForTab" in workflow
+    assert "waitForApplicationFieldsReadyAfterAuth" in workflow
+    assert 'pageLabel: "application page"' in workflow
+    assert "setTimeout(resolve, 900)" not in apply_entry
+    assert "setTimeout(resolve, 3600)" not in apply_entry
+    assert "setTimeout(resolve, result.navigationStarted ? 5000 : 2500)" not in workflow
+
+
+def test_application_readiness_requires_application_fields_not_generic_controls():
+    background = _load_script(REPO_ROOT / "executioner/src/background/index.js")
+    readiness = background[
+        background.index("async function inspectApplicationFieldReadiness")
+        : background.index("async function waitForApplicationFieldsReadyAfterAuth")
+    ]
+    wait_ready = background[
+        background.index("async function waitForApplicationFieldsReadyAfterAuth")
+        : background.index("function compactStopDetails")
+    ]
+
+    assert "applicationFieldCount" in readiness
+    assert "requiredApplicationFieldCount" in readiness
+    assert "entry.applicationFieldCount > 0" in readiness
+    assert "skip to main content" in readiness
+    assert "lastProbe.applicationFieldCount > 0" in wait_ready
+    assert "lastProbe.meaningfulControlCount >= 2" not in wait_ready
+
+
+def test_page_ui_message_recovers_when_content_script_missing():
+    background = _load_script(REPO_ROOT / "executioner/src/background/index.js")
+    content = _load_script(REPO_ROOT / "executioner/src/content/bootstrap.js")
+    ui_message = background[
+        background.index("async function sendPageUiMessage")
+        : background.index("function safeFilePart")
+    ]
+
+    assert "__huntApplyContentBootstrapLoaded" in content
+    assert "chrome.scripting.executeScript" in ui_message
+    assert 'files: ["src/content/bootstrap.js"]' in ui_message
+    assert "recoveredViaInjection" in ui_message
+
+
+def test_page_walk_next_uses_condition_waits_instead_of_mandatory_sleep():
+    background = _load_script(REPO_ROOT / "executioner/src/background/index.js")
+    safe_next_click = background[
+        background.index("async function clickSafeNextForTab")
+        : background.index("async function maybeHandleSafeNextAfterFill")
+    ]
+    page_walk = background[
+        background.index("async function runV2PageWalkAfterFill")
+        : background.index("async function runFillWithOneRefreshRetry")
+    ]
+
+    assert "waitForPostNextSignalForTab" in background
+    assert "pageSnapshotChangedAfterAction" in background
+    assert "setTimeout(resolve, 1800)" not in safe_next_click
+    assert "setTimeout(resolve, 650)" not in page_walk
+    assert "setTimeout(resolve, 900)" not in page_walk
+
+
+def test_auth_flow_uses_condition_waits_instead_of_mandatory_sleep():
+    background = _load_script(REPO_ROOT / "executioner/src/background/index.js")
+    combined_workflow = background[
+        background.index("class C3CombinedFillWorkflow")
+        : background.index("async function logUiEvent")
+    ]
+    page_walk = background[
+        background.index("async function runV2PageWalkAfterFill")
+        : background.index("async function runFillWithOneRefreshRetry")
+    ]
+
+    assert "waitForAuthActionTransitionForTab" in background
+    assert "authDetectionChangedAfterAction" in background
+    assert "inspectApplicationFieldReadiness" in background
+    assert "setTimeout(resolve, 1800)" not in combined_workflow
+    assert "setTimeout(resolve, 1800)" not in page_walk
+    assert "setTimeout(resolve, 1600)" not in page_walk
 
 
 def test_workday_apply_detection_checks_all_visible_buttons_before_log_cap():
@@ -457,6 +562,43 @@ def test_page_walk_transient_dismissal_can_preserve_fill_progress():
     assert "preserveFillProgress: Boolean(message.preserveFillProgress)" in dismiss_message
     assert "dismissPageTransientUi(tabId, { preserveFillProgress: true })" in page_walk
     assert "page_walk.advance_observed" in page_walk
+
+
+def test_fill_startup_cleanup_preserves_prompt_progress():
+    background = _load_script(REPO_ROOT / "executioner/src/background/index.js")
+    fill_handler = background[
+        background.index('case "hunt.apply.fill_current_page"')
+        : background.index('case "hunt.apply.fill_remaining_with_llm"')
+    ]
+
+    assert "dismissPageTransientUi(tabId, { preserveFillProgress: true })" in fill_handler
+    assert "dismissPageTransientUi(tabId);" not in fill_handler
+
+
+def test_apply_entry_startup_skips_non_entry_checks_before_click():
+    background = _load_script(REPO_ROOT / "executioner/src/background/index.js")
+    fill_handler = background[
+        background.index('case "hunt.apply.fill_current_page"')
+        : background.index('case "hunt.apply.fill_remaining_with_llm"')
+    ]
+    apply_entry_run = background[
+        background.index("class C3ApplyEntryWorkflow")
+        : background.index("class C3JobFillWorkflow")
+    ]
+
+    assert "const startupDetection = await detectWorkflowForTab(tabId);" in fill_handler
+    assert "const startsAtApplyEntry = Boolean(startupDetection?.isApplyEntryPage);" in fill_handler
+    assert "startupRuntimeRecovery = startsAtApplyEntry" in fill_handler
+    assert "directVerificationGate = startsAtApplyEntry" in fill_handler
+    assert "initialDetection: startupDetection" in fill_handler
+    assert "isApplyEntryRequest" not in fill_handler
+    assert "const detectLogPromise = this.log(" in apply_entry_run
+    assert apply_entry_run.index("const detectLogPromise = this.log(") < apply_entry_run.index(
+        "chrome.scripting.executeScript"
+    )
+    assert apply_entry_run.index("await detectLogPromise;") > apply_entry_run.index(
+        "chooseBestWorkflowActionResult"
+    )
 
 
 def test_prompt_fill_click_cannot_leave_prompt_stuck_filling():

@@ -49,6 +49,7 @@ const V2_SHARED_SCRIPT_FILES = [
 let activeRunId = "";
 const activeFillRuns = new Map();
 const activeFillRunByTab = new Map();
+const activeFillProgressByTab = new Map();
 
 function createFillRunId() {
   return `fill_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
@@ -144,7 +145,10 @@ async function cancelFillRunForUserReload(tabId, changeInfo = {}, tab = {}) {
     run.expectedReloads = Number(run.expectedReloads || 0) - 1;
     return;
   }
-  const cancelledFillRunIds = cancelActiveFillRunsForTab(tabId, "page_reloaded");
+  const cancelledFillRunIds = cancelActiveFillRunsForTab(
+    tabId,
+    "page_reloaded",
+  );
   if (!cancelledFillRunIds.length) {
     return;
   }
@@ -1509,6 +1513,35 @@ function createClickWorkdayApplyManuallyFunction() {
       };
     }
 
+    function applyEntryState() {
+      var text = document.body ? document.body.innerText || "" : "";
+      var followupCandidates = candidatesForApplyAction();
+      return {
+        href: location.href,
+        step: currentWorkdayStep(),
+        emailGateReached: isOracleEmailGate(text),
+        applyManuallyCandidate: chooseApplyCandidate(followupCandidates, {
+          allowPlainApply: false,
+        }),
+        text: text,
+      };
+    }
+
+    async function waitForApplyEntryState(predicate, timeoutMs) {
+      var startedAt = Date.now();
+      var lastState = applyEntryState();
+      while (Date.now() - startedAt < timeoutMs) {
+        lastState = applyEntryState();
+        if (predicate(lastState)) {
+          return lastState;
+        }
+        await new Promise(function (resolve) {
+          setTimeout(resolve, 100);
+        });
+      }
+      return lastState;
+    }
+
     var bodyText = document.body ? document.body.innerText || "" : "";
     if (currentWorkdayStep()) {
       return {
@@ -1585,13 +1618,14 @@ function createClickWorkdayApplyManuallyFunction() {
         href: firstAction.href,
       };
     }
-    await new Promise(function (resolve) {
-      setTimeout(resolve, 900);
-    });
-    var followupCandidates = candidatesForApplyAction();
-    var followupCandidate = chooseApplyCandidate(followupCandidates, {
-      allowPlainApply: false,
-    });
+    var afterFirstClick = await waitForApplyEntryState(function (state) {
+      return (
+        Boolean(state.step) ||
+        state.emailGateReached ||
+        Boolean(state.applyManuallyCandidate)
+      );
+    }, 2500);
+    var followupCandidate = afterFirstClick.applyManuallyCandidate;
     if (
       followupCandidate &&
       followupCandidate !== candidate &&
@@ -1609,17 +1643,12 @@ function createClickWorkdayApplyManuallyFunction() {
           firstClick: candidate.text || "Apply",
         };
       }
-      await new Promise(function (resolve) {
-        setTimeout(resolve, 3600);
-      });
-    } else {
-      await new Promise(function (resolve) {
-        setTimeout(resolve, 3600);
-      });
     }
-    var afterText = document.body ? document.body.innerText || "" : "";
-    var step = currentWorkdayStep();
-    var emailGateReached = isOracleEmailGate(afterText);
+    var finalState = await waitForApplyEntryState(function (state) {
+      return Boolean(state.step) || state.emailGateReached;
+    }, 3600);
+    var step = finalState.step;
+    var emailGateReached = finalState.emailGateReached;
     return {
       ok: Boolean(step) || emailGateReached,
       clicked: true,
@@ -1738,22 +1767,32 @@ class C3ApplyEntryWorkflow extends C3WorkflowSection {
       };
     }
     await this.notify("Trying to start application");
-    await this.log("detect", "Detected apply-entry gate before job fill.", {
+    const detectLogPromise = this.log(
+      "detect",
+      "Detected apply-entry gate before job fill.",
+      {
       href: detection.href || "",
       startApplication: Boolean(detection.startApplication),
       applyManually: Boolean(detection.applyManually),
       genericApplyEntry: Boolean(detection.genericApplyEntry),
-    });
+      },
+    ).catch(() => {});
     const results = await chrome.scripting.executeScript({
       target: { tabId: this.tabId, allFrames: true },
       func: createClickWorkdayApplyManuallyFunction(),
     });
     const result = chooseBestWorkflowActionResult(results);
     if (result.ok && result.clicked && !result.skipped) {
-      await new Promise((resolve) => {
-        setTimeout(resolve, result.navigationStarted ? 5000 : 2500);
+      await waitForApplyEntryTransitionForTab(this.tabId, {
+        timeoutMs: result.navigationStarted ? 5000 : 2500,
+      });
+      await waitForApplicationFieldsReadyAfterAuth(this.tabId, {
+        fillRunId: this.fillRunId,
+        pageLabel: "application page",
+        timeoutMs: 8000,
       });
     }
+    await detectLogPromise;
     await this.log(
       result.ok ? "complete" : "failed",
       result.ok
@@ -1768,6 +1807,252 @@ class C3ApplyEntryWorkflow extends C3WorkflowSection {
     );
     return { ...result, phase: "apply_entry", detection };
   }
+}
+
+async function waitForApplyEntryTransitionForTab(
+  tabId,
+  { timeoutMs = 2500 } = {},
+) {
+  const startedAt = Date.now();
+  let lastResult = { ok: false, reason: "not_checked" };
+  while (Date.now() - startedAt < timeoutMs) {
+    const results = await chrome.scripting
+      .executeScript({
+        target: { tabId, allFrames: true },
+        func: () => {
+          function normalize(value) {
+            return String(value || "")
+              .replace(/\s+/g, " ")
+              .trim();
+          }
+          const activeStep = document.querySelector(
+            '[data-automation-id="progressBarActiveStep"]',
+          );
+          const text = document.body ? document.body.innerText || "" : "";
+          const hasApplyManually = Array.from(
+            document.querySelectorAll("a, button, [role='button']"),
+          ).some((el) =>
+            /^Apply Manually(?:\s+Apply Manually)?$/i.test(
+              normalize(
+                [
+                  el.getAttribute("aria-label"),
+                  el.innerText,
+                  el.textContent,
+                  el.href,
+                ]
+                  .filter(Boolean)
+                  .join(" "),
+              ),
+            ),
+          );
+          return {
+            step: activeStep
+              ? normalize(activeStep.innerText || activeStep.textContent)
+              : "",
+            hasApplyManually,
+            hasAuthOrEmailGate:
+              /create account|sign in|log in|verify your email|check your email|email address/i.test(
+                text,
+              ),
+          };
+        },
+      })
+      .catch(() => []);
+    const ready = results.some((entry) => {
+      const result = entry?.result || {};
+      lastResult = result;
+      return (
+        Boolean(result.step) ||
+        Boolean(result.hasApplyManually) ||
+        Boolean(result.hasAuthOrEmailGate)
+      );
+    });
+    if (ready) {
+      return { ok: true, waitedMs: Date.now() - startedAt, lastResult };
+    }
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+  return { ok: false, reason: "timeout", waitedMs: timeoutMs, lastResult };
+}
+
+function pageSnapshotChangedAfterAction(
+  beforeSnapshot = {},
+  afterSnapshot = {},
+) {
+  const beforeStep = beforeSnapshot.currentStep || {};
+  const afterStep = afterSnapshot.currentStep || {};
+  const beforeStepNumber = Number(beforeStep.current || 0);
+  const afterStepNumber = Number(afterStep.current || 0);
+  if (
+    beforeStepNumber &&
+    afterStepNumber &&
+    afterStepNumber !== beforeStepNumber
+  ) {
+    return true;
+  }
+  if (
+    String(beforeStep.title || "").trim() &&
+    String(afterStep.title || "").trim() &&
+    String(beforeStep.title || "").trim() !==
+      String(afterStep.title || "").trim()
+  ) {
+    return true;
+  }
+  if (
+    String(beforeSnapshot.href || "").trim() &&
+    String(afterSnapshot.href || "").trim() &&
+    String(beforeSnapshot.href || "").trim() !==
+      String(afterSnapshot.href || "").trim()
+  ) {
+    return true;
+  }
+  return Boolean((afterSnapshot.visibleValidationErrors || []).length);
+}
+
+async function waitForPostNextSignalForTab(
+  tabId,
+  beforeSnapshot = {},
+  { timeoutMs = 1800, intervalMs = 100 } = {},
+) {
+  const startedAt = Date.now();
+  let lastSnapshot = beforeSnapshot || {};
+  let lastRuntime = { found: false, reason: "not_checked" };
+  while (Date.now() - startedAt < timeoutMs) {
+    lastRuntime = await detectWorkdayRuntimeErrorForTab(tabId);
+    if (lastRuntime.found) {
+      return {
+        ok: true,
+        reason: lastRuntime.reason || "workday_runtime_error",
+        waitedMs: Date.now() - startedAt,
+        runtime: lastRuntime,
+        snapshot: lastSnapshot,
+      };
+    }
+    lastSnapshot = await getPageSnapshot(tabId);
+    if (pageSnapshotChangedAfterAction(beforeSnapshot, lastSnapshot)) {
+      return {
+        ok: true,
+        reason: "page_state_changed",
+        waitedMs: Date.now() - startedAt,
+        runtime: lastRuntime,
+        snapshot: lastSnapshot,
+      };
+    }
+    await new Promise((resolve) => setTimeout(resolve, intervalMs));
+  }
+  return {
+    ok: false,
+    reason: "timeout",
+    waitedMs: timeoutMs,
+    runtime: lastRuntime,
+    snapshot: lastSnapshot,
+  };
+}
+
+function authDetectionChangedAfterAction(
+  beforeDetection = {},
+  afterDetection = {},
+) {
+  if (!afterDetection || !afterDetection.ok) {
+    return false;
+  }
+  if (
+    String(beforeDetection.href || "") !== String(afterDetection.href || "")
+  ) {
+    return true;
+  }
+  if (
+    Boolean(beforeDetection.isAuthPage) !== Boolean(afterDetection.isAuthPage)
+  ) {
+    return true;
+  }
+  if (
+    String(beforeDetection.authState || "") !==
+    String(afterDetection.authState || "")
+  ) {
+    return true;
+  }
+  if (
+    String(beforeDetection.authUiState || "") !==
+    String(afterDetection.authUiState || "")
+  ) {
+    return true;
+  }
+  return Boolean(afterDetection.currentStep?.title);
+}
+
+async function waitForAuthActionTransitionForTab(
+  tabId,
+  {
+    beforeDetection = {},
+    beforeSnapshot = {},
+    timeoutMs = 2500,
+    intervalMs = 100,
+  } = {},
+) {
+  const startedAt = Date.now();
+  let lastDetection = beforeDetection || {};
+  let lastSnapshot = beforeSnapshot || {};
+  let lastReadiness = null;
+  let lastVerificationGate = null;
+  while (Date.now() - startedAt < timeoutMs) {
+    lastVerificationGate = await detectEmailVerificationCodePage(tabId);
+    if (lastVerificationGate.ok) {
+      return {
+        ok: true,
+        reason: "email_verification_gate",
+        waitedMs: Date.now() - startedAt,
+        detection: lastDetection,
+        snapshot: lastSnapshot,
+        verificationGate: lastVerificationGate,
+      };
+    }
+    lastDetection = await detectWorkflowForTab(tabId);
+    if (authDetectionChangedAfterAction(beforeDetection, lastDetection)) {
+      return {
+        ok: true,
+        reason: "auth_detection_changed",
+        waitedMs: Date.now() - startedAt,
+        detection: lastDetection,
+        snapshot: lastSnapshot,
+      };
+    }
+    lastSnapshot = await getPageSnapshot(tabId);
+    if (pageSnapshotChangedAfterAction(beforeSnapshot, lastSnapshot)) {
+      return {
+        ok: true,
+        reason: "page_state_changed",
+        waitedMs: Date.now() - startedAt,
+        detection: lastDetection,
+        snapshot: lastSnapshot,
+      };
+    }
+    lastReadiness = await inspectApplicationFieldReadiness(tabId);
+    if (
+      lastReadiness.finalSubmitVisible ||
+      lastReadiness.validationErrorCount > 0 ||
+      lastReadiness.meaningfulControlCount >= 2
+    ) {
+      return {
+        ok: true,
+        reason: "application_fields_ready",
+        waitedMs: Date.now() - startedAt,
+        detection: lastDetection,
+        snapshot: lastSnapshot,
+        readiness: lastReadiness,
+      };
+    }
+    await new Promise((resolve) => setTimeout(resolve, intervalMs));
+  }
+  return {
+    ok: false,
+    reason: "timeout",
+    waitedMs: timeoutMs,
+    detection: lastDetection,
+    snapshot: lastSnapshot,
+    readiness: lastReadiness,
+    verificationGate: lastVerificationGate,
+  };
 }
 
 class C3JobFillWorkflow extends C3WorkflowSection {
@@ -1796,11 +2081,12 @@ class C3JobFillWorkflow extends C3WorkflowSection {
 }
 
 class C3CombinedFillWorkflow {
-  constructor({ tabId, fillRunId, state, triggeredBy }) {
+  constructor({ tabId, fillRunId, state, triggeredBy, initialDetection }) {
     this.tabId = tabId;
     this.fillRunId = fillRunId;
     this.state = state;
     this.triggeredBy = triggeredBy || "fill_current_page";
+    this.initialDetection = initialDetection || null;
   }
 
   async detect() {
@@ -1812,7 +2098,7 @@ class C3CombinedFillWorkflow {
   }
 
   async prepare() {
-    const initialDetection = await this.detect();
+    const initialDetection = this.initialDetection || (await this.detect());
     let auth = await new C3AuthWorkflow(this).run(initialDetection);
     let detection = initialDetection;
     if (
@@ -1856,8 +2142,16 @@ class C3CombinedFillWorkflow {
           detection,
         };
       }
-      await new Promise((resolve) => setTimeout(resolve, 1800));
-      detection = await this.detect();
+      const authTransition = await waitForAuthActionTransitionForTab(
+        this.tabId,
+        {
+          beforeDetection: initialDetection,
+          timeoutMs: 2500,
+        },
+      );
+      detection = authTransition.detection?.ok
+        ? authTransition.detection
+        : await this.detect();
     }
     const applyEntry = await new C3ApplyEntryWorkflow(this).run(detection);
     detection =
@@ -1905,6 +2199,7 @@ async function sendPageUiMessage({
   }
   let sent = false;
   let errorMessage = "";
+  let recoveredViaInjection = false;
   try {
     await withTimeout(
       chrome.tabs.sendMessage(tabId, message),
@@ -1915,13 +2210,40 @@ async function sendPageUiMessage({
   } catch (error) {
     errorMessage = error instanceof Error ? error.message : String(error);
   }
+  if (
+    !sent &&
+    /receiving end does not exist|could not establish connection/i.test(
+      errorMessage,
+    )
+  ) {
+    try {
+      await chrome.scripting.executeScript({
+        target: { tabId },
+        files: ["src/content/bootstrap.js"],
+      });
+      await withTimeout(
+        chrome.tabs.sendMessage(tabId, message),
+        timeoutMs,
+        () => null,
+      );
+      sent = true;
+      recoveredViaInjection = true;
+    } catch (error) {
+      errorMessage = error instanceof Error ? error.message : String(error);
+    }
+  }
   await logUiEvent(
     sent ? action : failedAction || `${action}_failed`,
     sent
       ? summary
       : failedSummary ||
           `Could not ${summary.charAt(0).toLowerCase()}${summary.slice(1)}`,
-    { tabId, ...details, error: errorMessage },
+    {
+      tabId,
+      ...details,
+      error: sent ? "" : errorMessage,
+      recoveredViaInjection,
+    },
     sent ? "ok" : "warn",
   );
   return sent;
@@ -2410,6 +2732,13 @@ async function showFillProgress(
   message = "Filling page",
   fillRunId = "",
 ) {
+  if (tabId) {
+    activeFillProgressByTab.set(tabId, {
+      message,
+      fillRunId,
+      updatedAt: Date.now(),
+    });
+  }
   await sendPageUiMessage({
     tabId,
     message: {
@@ -2428,6 +2757,9 @@ async function showFillProgress(
 }
 
 async function hideFillProgress(tabId) {
+  if (tabId) {
+    activeFillProgressByTab.delete(tabId);
+  }
   await sendPageUiMessage({
     tabId,
     message: {
@@ -2859,7 +3191,12 @@ function describePageWalkPage(snapshot = {}, fallbackNumber = 1) {
   return title ? `${title} page ${pageNumber}` : `page ${pageNumber}`;
 }
 
-function describePageWalkAttempt(action, snapshot = {}, fallbackNumber = 1, attempt = 1) {
+function describePageWalkAttempt(
+  action,
+  snapshot = {},
+  fallbackNumber = 1,
+  attempt = 1,
+) {
   const pageLabel = describePageWalkPage(snapshot, fallbackNumber);
   return `${action} ${pageLabel}: attempt ${attempt}`;
 }
@@ -2909,7 +3246,7 @@ async function inspectApplicationFieldReadiness(tabId) {
               "input, textarea, select, [role='combobox'], [role='listbox']",
             ),
           ].filter(visible);
-          const meaningfulControls = controls.filter((control) => {
+          const isApplicationControl = (control) => {
             const descriptor = [
               control.id,
               control.name,
@@ -2923,14 +3260,42 @@ async function inspectApplicationFieldReadiness(tabId) {
             ]
               .join(" ")
               .toLowerCase();
-            if (/settingsselectorbutton|settings selector|language/i.test(descriptor)) {
+            if (control.disabled) {
+              return false;
+            }
+            if (
+              control.type &&
+              /^(hidden|submit|button|reset)$/i.test(control.type)
+            ) {
+              return false;
+            }
+            if (
+              /settingsselectorbutton|settings selector|language/i.test(
+                descriptor,
+              )
+            ) {
               return false;
             }
             if (/search/i.test(descriptor) && controls.length <= 2) {
               return false;
             }
+            if (
+              /skip to main content|search for jobs|back to job posting|candidate home/i.test(
+                descriptor,
+              )
+            ) {
+              return false;
+            }
             return true;
-          });
+          };
+          const applicationControls = controls.filter(isApplicationControl);
+          const requiredApplicationControls = applicationControls.filter(
+            (control) =>
+              control.required ||
+              control.getAttribute?.("aria-required") === "true" ||
+              control.closest?.("[aria-required='true']") ||
+              /\brequired\b/i.test(textOf(control)),
+          );
           const validationErrors = [
             ...document.querySelectorAll(
               [
@@ -2960,7 +3325,9 @@ async function inspectApplicationFieldReadiness(tabId) {
             readyState: document.readyState || "",
             bodyHead: bodyText.slice(0, 300),
             visibleControlCount: controls.length,
-            meaningfulControlCount: meaningfulControls.length,
+            meaningfulControlCount: applicationControls.length,
+            applicationFieldCount: applicationControls.length,
+            requiredApplicationFieldCount: requiredApplicationControls.length,
             validationErrorCount: new Set(validationErrors).size,
             finalSubmitVisible,
           };
@@ -2976,9 +3343,18 @@ async function inspectApplicationFieldReadiness(tabId) {
         }))
       : [];
     return (
-      entries.find((entry) => entry.frameId === 0 && entry.ok) ||
-      entries.find((entry) => entry.ok && entry.meaningfulControlCount > 0) ||
-      entries.find((entry) => entry.ok) || {
+      entries.find(
+        (entry) =>
+          entry.frameId === 0 &&
+          entry.ok &&
+          (entry.applicationFieldCount > 0 ||
+            entry.validationErrorCount > 0 ||
+            entry.finalSubmitVisible),
+      ) ||
+      entries.find((entry) => entry.ok && entry.applicationFieldCount > 0) ||
+      entries.find((entry) => entry.ok && entry.validationErrorCount > 0) ||
+      entries.find((entry) => entry.ok && entry.finalSubmitVisible) ||
+      entries[0] || {
         ok: false,
         reason: "empty_readiness_result",
       }
@@ -3011,7 +3387,7 @@ async function waitForApplicationFieldsReadyAfterAuth(
     if (
       lastProbe.finalSubmitVisible ||
       lastProbe.validationErrorCount > 0 ||
-      lastProbe.meaningfulControlCount >= 2
+      lastProbe.applicationFieldCount > 0
     ) {
       await sendDebugLog("c3_page_walk_application_fields_ready", {
         tabId,
@@ -3780,6 +4156,7 @@ async function clickSafeNextForTab(tabId, details = {}) {
     };
   }
 
+  const beforeClickSnapshot = await getPageSnapshot(tabId);
   let clickResult;
   try {
     const results = await withTimeout(
@@ -3810,7 +4187,9 @@ async function clickSafeNextForTab(tabId, details = {}) {
   }
 
   if (clickResult.clicked) {
-    await new Promise((resolve) => setTimeout(resolve, 1800));
+    await waitForPostNextSignalForTab(tabId, beforeClickSnapshot, {
+      timeoutMs: 1800,
+    });
     const runtimeRecovery = await recoverWorkdayRuntimeErrorForTab(tabId, {
       reason: "safe_next_workday_runtime_error",
       settleMs: 1800,
@@ -4141,8 +4520,16 @@ async function runV2PageWalkAfterFill({
           };
           break;
         }
-        await new Promise((resolve) => setTimeout(resolve, 1600));
-        currentPageSnapshot = await getPageSnapshot(tabId);
+        const verificationTransition = await waitForAuthActionTransitionForTab(
+          tabId,
+          {
+            beforeDetection: workflowDetection,
+            beforeSnapshot: beforeNextSnapshot,
+            timeoutMs: 2500,
+          },
+        );
+        currentPageSnapshot =
+          verificationTransition.snapshot || (await getPageSnapshot(tabId));
         lastPageNumber = pageNumberFromSnapshot(
           currentPageSnapshot,
           beforePageNumber,
@@ -4190,8 +4577,13 @@ async function runV2PageWalkAfterFill({
       }
 
       await dismissPageTransientUi(tabId, { preserveFillProgress: true });
-      await new Promise((resolve) => setTimeout(resolve, 1800));
-      currentPageSnapshot = await getPageSnapshot(tabId);
+      const authTransition = await waitForAuthActionTransitionForTab(tabId, {
+        beforeDetection: workflowDetection,
+        beforeSnapshot: beforeNextSnapshot,
+        timeoutMs: 2500,
+      });
+      currentPageSnapshot =
+        authTransition.snapshot || (await getPageSnapshot(tabId));
       lastPageNumber = pageNumberFromSnapshot(
         currentPageSnapshot,
         beforePageNumber,
@@ -4259,7 +4651,8 @@ async function runV2PageWalkAfterFill({
         lastPageNumber,
       );
       if (!readiness.ok) {
-        stoppedReason = readiness.reason || "application_fields_not_ready_after_auth";
+        stoppedReason =
+          readiness.reason || "application_fields_not_ready_after_auth";
         failedPageNumber = lastPageNumber;
         stopDetails = {
           message:
@@ -4488,21 +4881,17 @@ async function runV2PageWalkAfterFill({
       break;
     }
     await dismissPageTransientUi(tabId, { preserveFillProgress: true });
-    await new Promise((resolve) => setTimeout(resolve, 650));
-    let afterNextSnapshot = await getPageSnapshot(tabId);
+    const postNextSignal = await waitForPostNextSignalForTab(
+      tabId,
+      beforeNextSnapshot,
+      { timeoutMs: 1550 },
+    );
+    let afterNextSnapshot =
+      postNextSignal.snapshot || (await getPageSnapshot(tabId));
     const beforeStepNumber = Number(
       beforeNextSnapshot.currentStep?.current || 0,
     );
     let afterStepNumber = Number(afterNextSnapshot.currentStep?.current || 0);
-    if (
-      beforeStepNumber &&
-      afterStepNumber &&
-      afterStepNumber <= beforeStepNumber
-    ) {
-      await new Promise((resolve) => setTimeout(resolve, 900));
-      afterNextSnapshot = await getPageSnapshot(tabId);
-      afterStepNumber = Number(afterNextSnapshot.currentStep?.current || 0);
-    }
     const afterNextErrors = afterNextSnapshot.visibleValidationErrors || [];
     if (
       beforeStepNumber &&
@@ -4673,12 +5062,7 @@ async function runV2PageWalkAfterFill({
     }
     await showFillProgress(
       tabId,
-      describePageWalkAttempt(
-        "Filling",
-        afterNextSnapshot,
-        nextPageNumber,
-        1,
-      ),
+      describePageWalkAttempt("Filling", afterNextSnapshot, nextPageNumber, 1),
       fillRunId,
     );
     const pageState = await getExtensionState();
@@ -5471,11 +5855,11 @@ async function runFillWithOneRefreshRetry(
       },
       "warn",
     );
-      await showFillProgress(
-        tabId,
-        "Refreshing page before fill retry: attempt 2",
-        fillRunId,
-      );
+    await showFillProgress(
+      tabId,
+      "Refreshing page before fill retry: attempt 2",
+      fillRunId,
+    );
     if (isFillRunCancelled(fillRunId)) {
       return fillCancelledResponse(state, fillRunCancelReason(fillRunId));
     }
@@ -5604,6 +5988,23 @@ async function handleMessage(message, sender = {}) {
 
     case "hunt.apply.get_state":
       return { ok: true, ...(await getExtensionState()) };
+
+    case "hunt.apply.get_active_fill_progress": {
+      const tabId = message.payload?.tabId || sender.tab?.id;
+      const progress = tabId ? activeFillProgressByTab.get(tabId) : null;
+      const fillRunId = progress?.fillRunId || "";
+      const run = fillRunId ? activeFillRuns.get(fillRunId) : null;
+      if (!progress || (fillRunId && !run)) {
+        return { ok: true, active: false };
+      }
+      return {
+        ok: true,
+        active: true,
+        message: progress.message || "Filling page",
+        fillRunId,
+        updatedAt: progress.updatedAt || 0,
+      };
+    }
 
     case "hunt.apply.cancel_fill": {
       const fillRunId = message.payload?.fillRunId || "";
@@ -5766,19 +6167,20 @@ async function handleMessage(message, sender = {}) {
           "warn",
         );
       }
-      await dismissPageTransientUi(tabId);
+      await dismissPageTransientUi(tabId, { preserveFillProgress: true });
       await markPageFillCancelled(tabId, fillRunId, false);
       const allowLlmAnswers =
         state.settings.llmAnswerFallbackEnabled === true &&
         message.payload?.allowLlmAnswers !== false;
+      const startupDetection = await detectWorkflowForTab(tabId);
+      const startsAtApplyEntry = Boolean(startupDetection?.isApplyEntryPage);
       let workflow = null;
       try {
-        const startupRuntimeRecovery = await recoverWorkdayRuntimeErrorForTab(
-          tabId,
-          {
-            reason: WORKDAY_RUNTIME_ERROR_REASON,
-          },
-        );
+        const startupRuntimeRecovery = startsAtApplyEntry
+          ? { attempted: false, ok: true, reason: "apply_entry_section" }
+          : await recoverWorkdayRuntimeErrorForTab(tabId, {
+              reason: WORKDAY_RUNTIME_ERROR_REASON,
+            });
         if (startupRuntimeRecovery.attempted && !startupRuntimeRecovery.ok) {
           result = {
             ok: false,
@@ -5822,13 +6224,15 @@ async function handleMessage(message, sender = {}) {
             generatedAnswers: [],
           };
         }
-        const directVerificationGate = await maybeHandleEmailVerificationGate({
-          tabId,
-          state,
-          fillRunId,
-          triggeredBy: message.payload?.triggeredBy || "fill_current_page",
-          pageIndex: 0,
-        });
+        const directVerificationGate = startsAtApplyEntry
+          ? { handled: false, result: null, reason: "apply_entry_section" }
+          : await maybeHandleEmailVerificationGate({
+              tabId,
+              state,
+              fillRunId,
+              triggeredBy: message.payload?.triggeredBy || "fill_current_page",
+              pageIndex: 0,
+            });
         if (result) {
           // Startup runtime recovery already classified the page.
         } else if (
@@ -5884,6 +6288,7 @@ async function handleMessage(message, sender = {}) {
             fillRunId,
             state,
             triggeredBy: message.payload?.triggeredBy || "fill_current_page",
+            initialDetection: startupDetection,
           }).prepare();
           if (!workflow.auth?.ok) {
             result = workflowBlockedResponse(
@@ -5903,11 +6308,7 @@ async function handleMessage(message, sender = {}) {
               (workflow.applyEntry?.ok && !workflow.applyEntry?.skipped)
                 ? "Filling application page: attempt 1"
                 : "Filling current page: attempt 1";
-            await showFillProgress(
-              tabId,
-              fillMessage,
-              fillRunId,
-            );
+            await showFillProgress(tabId, fillMessage, fillRunId);
             result = await runFillWithOneRefreshRetry(
               tabId,
               state,

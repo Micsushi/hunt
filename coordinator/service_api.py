@@ -65,6 +65,15 @@ def _startup() -> None:
         except Exception as exc:
             return f"Error: {exc}"
 
+    def _allow_submit(args: list[str]) -> str:
+        if not args:
+            return "Usage: allow-submit <run_id>"
+        try:
+            svc.approve_submit(args[0], decision="approve", approved_by="telegram")
+            return f"Submit enabled for {args[0]}"
+        except Exception as exc:
+            return f"Error: {exc}"
+
     def _status(_args: list[str]) -> str:
         try:
             from coordinator.scheduler import get_scheduler
@@ -84,6 +93,7 @@ def _startup() -> None:
     tg.register_handler("deny", _deny)
     tg.register_handler("skip", _skip)
     tg.register_handler("investigate", _investigate)
+    tg.register_handler("allow-submit", _allow_submit)
     tg.register_handler("status", _status)
     tg.start_polling()
 
