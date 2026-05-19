@@ -11,6 +11,8 @@
     "Decline to answer",
     "Not disclosed",
     "Not declared",
+    "I do not declare",
+    "Do not declare",
   ];
 
   function entry(id, config) {
@@ -42,6 +44,14 @@
     entry("last_name", {
       aliases: ["last name", "surname", "family name", "legal last name"],
       profilePaths: ["lastName"],
+    }),
+    entry("name_prefix", {
+      aliases: ["prefix", "name prefix", "legal name prefix", "title"],
+      defaultValue: "Not Mapped",
+      answerType: "option",
+      optionAliases: {
+        "Not Mapped": ["Not Mapped", "None", "No Prefix"],
+      },
     }),
     entry("full_name", {
       exactLabels: ["name"],
@@ -195,8 +205,12 @@
       defaultValue: true,
       answerType: "yes_no",
     }),
-    entry("us_government_employee", {
+    entry("government_official", {
       aliases: [
+        "are you or have you been within the last 12 months a government official",
+        "are you a government official",
+        "have you been a government official",
+        "government official",
         "current or former employee of the united states government",
         "former employee of the united states government",
       ],
@@ -225,6 +239,11 @@
         "direct business interactions with workday",
         "related to an employee of a customer",
         "related to a government official",
+        "immediate family members government officials",
+        "family members government officials",
+        "family member government official",
+        "employee of any government department agency",
+        "organization owned fully or partially by government",
       ],
       defaultValue: false,
       answerType: "yes_no",
@@ -250,6 +269,10 @@
       aliases: [
         "ethnicity which most accurately describes",
         "please select the ethnicity",
+        "ethno-racial identity",
+        "ethno racial identity",
+        "ethno-racial identities",
+        "ethno racial identities",
         "race/ethnicity",
         "race ethnicity",
       ],
@@ -423,12 +446,14 @@
       aliases: [
         "preferred communication channel",
         "please select your preferred communication channel",
+        "preferred method of communication",
+        "preferred method of communication should we want to contact you",
       ],
       profilePaths: ["preferredCommunicationChannel"],
       defaultValue: "Email",
       answerType: "option",
       optionAliases: {
-        Email: ["E-mail", "Email Address"],
+        Email: ["E-mail", "Email Address", "Personal Email", "Work Email"],
       },
     }),
     entry("aedt_processing_opt_out_request", {
@@ -478,6 +503,8 @@
         "legally entitled to work",
         "legally allowed to work",
         "legally authorized",
+        "legally permitted to work",
+        "permitted to work",
         "legal right to work",
         "right to work in the country",
         "work authorization",
@@ -499,8 +526,27 @@
       defaultValue: false,
       answerType: "yes_no",
     }),
+    entry("open_work_permit", {
+      aliases: [
+        "currently on an open work permit",
+        "on an open work permit",
+        "open work permit",
+      ],
+      profilePaths: ["openWorkPermit"],
+      defaultValue: false,
+      answerType: "yes_no",
+    }),
+    entry("canadian_citizenship_status", {
+      aliases: [
+        "canadian citizenship status",
+        "provide your canadian citizenship status",
+        "citizenship status to assist us",
+      ],
+      profilePaths: ["canadianCitizenOrPermanentResident"],
+      defaultValue: "Citizen (Canada)",
+    }),
     entry("canadian_citizen_pr", {
-      aliases: ["canadian citizen", "permanent resident", "citizenship status"],
+      aliases: ["canadian citizen", "permanent resident"],
       profilePaths: ["canadianCitizenOrPermanentResident"],
       answerType: "yes_no",
     }),
@@ -557,6 +603,29 @@
       defaultValue: true,
       answerType: "yes_no",
     }),
+    entry("legal_age_industry_eligibility", {
+      aliases: [
+        "legal age to work",
+        "of legal age to work",
+        "legal age to work in the cannabis",
+        "legal age to work in the cannabis liquor industry",
+        "legal age to work in the liquor industry",
+      ],
+      defaultValue: true,
+      answerType: "yes_no",
+    }),
+    entry("reliable_transportation", {
+      aliases: [
+        "valid driver's license or have reliable transportation",
+        "valid driver’s license or have reliable transportation",
+        "drivers license or have reliable transportation",
+        "driver's license or have reliable transportation",
+        "reliable transportation to report to work",
+        "have reliable transportation",
+      ],
+      defaultValue: true,
+      answerType: "yes_no",
+    }),
     entry("union_membership", {
       aliases: [
         "member of cewa",
@@ -588,6 +657,8 @@
         "available to start",
         "available to start work",
         "date are you available to start work",
+        "earliest date you can start",
+        "if hired what is the earliest date you can start",
         "earliest availability to start this new position",
         "when is your earliest availability to start this new position",
         "earliest date that you could start work",
@@ -597,7 +668,7 @@
         "start work date",
       ],
       profilePaths: ["desiredStartDate"],
-      defaultValue: "2026-05-25",
+      defaultValue: "today",
     }),
     entry("shift_availability", {
       aliases: [
@@ -632,10 +703,7 @@
       answerType: "yes_no",
     }),
     entry("age_at_least_18", {
-      aliases: [
-        "are you at least 18 years old",
-        "at least 18 years old",
-      ],
+      aliases: ["are you at least 18 years old", "at least 18 years old"],
       profilePaths: ["atLeast18"],
       defaultValue: true,
       answerType: "yes_no",
@@ -704,8 +772,19 @@
         "gender",
         "disability",
         "veteran",
+        "ethno-racial",
+        "ethno racial",
+        "racial identity",
+        "racialized",
+        "ethno-racial identity",
         "visible minority",
+        "visible minority based on the definition",
+        "member of a visible minority",
+        "member of an visible minority",
         "indigenous",
+        "aboriginal people",
+        "member of an aboriginal people",
+        "member of aboriginal people",
         "self-identify",
         "diversity",
         "sexual orientation",

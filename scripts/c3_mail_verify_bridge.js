@@ -315,7 +315,7 @@ function decodeQuotedPrintable(value) {
 
 function imapReadLine(socket, timeoutMs) {
   if (!socket.__huntBuffer) {
-    socket.__huntBuffer = "";
+    socket.__huntBuffer = Buffer.alloc(0);
   }
   return new Promise((resolve, reject) => {
     const timer = setTimeout(() => {
@@ -330,8 +330,8 @@ function imapReadLine(socket, timeoutMs) {
     function tryLine() {
       const index = socket.__huntBuffer.indexOf("\r\n");
       if (index >= 0) {
-        const line = socket.__huntBuffer.slice(0, index);
-        socket.__huntBuffer = socket.__huntBuffer.slice(index + 2);
+        const line = socket.__huntBuffer.subarray(0, index).toString("utf8");
+        socket.__huntBuffer = socket.__huntBuffer.subarray(index + 2);
         cleanup();
         resolve(line);
         return true;
@@ -339,7 +339,7 @@ function imapReadLine(socket, timeoutMs) {
       return false;
     }
     function onData(chunk) {
-      socket.__huntBuffer += chunk.toString("utf8");
+      socket.__huntBuffer = Buffer.concat([socket.__huntBuffer, chunk]);
       tryLine();
     }
     function onError(error) {
@@ -379,7 +379,7 @@ function imapReadBytes(socket, byteCount, timeoutMs) {
     return Promise.resolve("");
   }
   if (!socket.__huntBuffer) {
-    socket.__huntBuffer = "";
+    socket.__huntBuffer = Buffer.alloc(0);
   }
   return new Promise((resolve, reject) => {
     const timer = setTimeout(() => {
@@ -392,9 +392,11 @@ function imapReadBytes(socket, byteCount, timeoutMs) {
       socket.off("error", onError);
     }
     function tryRead() {
-      if (Buffer.byteLength(socket.__huntBuffer, "utf8") >= byteCount) {
-        const output = socket.__huntBuffer.slice(0, byteCount);
-        socket.__huntBuffer = socket.__huntBuffer.slice(byteCount);
+      if (socket.__huntBuffer.length >= byteCount) {
+        const output = socket.__huntBuffer
+          .subarray(0, byteCount)
+          .toString("utf8");
+        socket.__huntBuffer = socket.__huntBuffer.subarray(byteCount);
         cleanup();
         resolve(output);
         return true;
@@ -402,7 +404,7 @@ function imapReadBytes(socket, byteCount, timeoutMs) {
       return false;
     }
     function onData(chunk) {
-      socket.__huntBuffer += chunk.toString("utf8");
+      socket.__huntBuffer = Buffer.concat([socket.__huntBuffer, chunk]);
       tryRead();
     }
     function onError(error) {
@@ -482,6 +484,11 @@ async function verifyImap(request) {
   const timeoutSeconds = Number(
     request.timeoutSeconds || process.env.HUNT_C3_MAIL_MAX_WAIT_SECONDS || 90,
   );
+  const maxSearchMessages = Number(
+    request.maxSearchMessages ||
+      process.env.HUNT_C3_MAIL_MAX_SEARCH_MESSAGES ||
+      75,
+  );
   const deadline = Date.now() + timeoutSeconds * 1000;
   const since = request.since ? new Date(request.since) : new Date(Date.now());
   const senderAllowlist = splitCsv(process.env.HUNT_C3_MAIL_FROM_ALLOWLIST);
@@ -511,10 +518,14 @@ async function verifyImap(request) {
       if (!result.ok) {
         throw new Error("imap_select_failed");
       }
+      // IMAP SEARCH SINCE is date-only and Gmail can bucket late-evening
+      // messages by local mailbox date. Search one day wider, then keep the
+      // precise receivedAt >= since filter below.
+      const imapSearchSince = new Date(since.getTime() - 24 * 60 * 60 * 1000);
       result = await imapCommand(
         socket,
         "A003",
-        `SEARCH SINCE ${imapDate(since)}`,
+        `SEARCH SINCE ${imapDate(imapSearchSince)}`,
       );
       const searchLine = result.lines.find((line) =>
         line.startsWith("* SEARCH"),
@@ -524,7 +535,9 @@ async function verifyImap(request) {
         .trim()
         .split(/\s+/)
         .filter(Boolean)
-        .slice(-12)
+        // Gmail All Mail can contain many newer test messages after Workday's
+        // original verification email. Do not cap this at a tiny page.
+        .slice(-Math.max(12, maxSearchMessages))
         .reverse();
       for (const id of ids) {
         const headers = decodeQuotedPrintable(

@@ -96,6 +96,29 @@
     );
   }
 
+  function isDeferredHierarchicalWorkdayField(field, answer) {
+    var el = field?.element || field?.anchor;
+    var text = norm(
+      [
+        field?.fieldId,
+        field?.descriptor,
+        field?.workday?.fieldLabel,
+        field?.workday?.contextText,
+        el?.id,
+        el?.name,
+        el?.getAttribute?.("aria-label"),
+        answer?.source,
+        answer?.value,
+        answer?.questionType,
+      ].join(" "),
+    );
+    return (
+      text.includes("canadian citizenship status") ||
+      text.includes("provide your canadian citizenship status") ||
+      text.includes("citizenship status to assist")
+    );
+  }
+
   function salaryNumbers(value) {
     var matches = String(value || "").match(/\d[\d,]*/g) || [];
     var numbers = matches
@@ -141,6 +164,54 @@
       Number(optionNumbers[0]) <= Number(targetNumbers[0]) &&
       Number(targetNumbers[0]) <= Number(optionNumbers[1])
     );
+  }
+
+  function salaryOptionDistance(option, answer) {
+    var targetNumbers = salaryNumbers(answer.value);
+    if (!targetNumbers.length) {
+      return null;
+    }
+    var target = Number(targetNumbers[0]);
+    if (!Number.isFinite(target)) {
+      return null;
+    }
+    var optionNumbers = salaryNumbers(
+      [option.label, option.value].filter(Boolean).join(" "),
+    ).map(Number);
+    if (!optionNumbers.length) {
+      return null;
+    }
+    if (
+      optionNumbers.length >= 2 &&
+      Number.isFinite(optionNumbers[0]) &&
+      Number.isFinite(optionNumbers[1])
+    ) {
+      var lower = Math.min(optionNumbers[0], optionNumbers[1]);
+      var upper = Math.max(optionNumbers[0], optionNumbers[1]);
+      if (lower <= target && target <= upper) {
+        return 0;
+      }
+      return Math.min(Math.abs(target - lower), Math.abs(target - upper));
+    }
+    var numeric = optionNumbers.find(Number.isFinite);
+    return Number.isFinite(numeric) ? Math.abs(target - numeric) : null;
+  }
+
+  function closestSalaryOption(options, answer) {
+    return (options || [])
+      .map(function (option, index) {
+        return {
+          option: option,
+          index: index,
+          distance: salaryOptionDistance(option, answer),
+        };
+      })
+      .filter(function (candidate) {
+        return candidate.distance !== null;
+      })
+      .sort(function (a, b) {
+        return a.distance - b.distance || a.index - b.index;
+      })[0]?.option;
   }
 
   function neutralOption(options) {
@@ -190,12 +261,36 @@
         fallback: false,
       };
     }
-    if (field?.uiModel === "checkbox") {
-      return {
-        option: null,
-        source: "checkbox_no_safe_match",
-        fallback: false,
-      };
+    if (answer.answerType === "yes_no" && (target === "yes" || target === "no")) {
+      var directYesNo = real.find(function (option) {
+        var label = normOptionLabel(option.label);
+        var value = normOptionLabel(option.value);
+        return (
+          label === target ||
+          value === target ||
+          label.startsWith(target + " ") ||
+          label.startsWith(target + ",") ||
+          value.startsWith(target + " ") ||
+          value.startsWith(target + ",")
+        );
+      });
+      if (directYesNo) {
+        return {
+          option: directYesNo,
+          source: "yes_no_prefix",
+          fallback: false,
+        };
+      }
+    }
+    if (field?.uiModel === "checkbox" && answer.answerType === "non_disclosure") {
+      var checkboxNeutral = neutralOption(real);
+      if (checkboxNeutral) {
+        return {
+          option: checkboxNeutral,
+          source: "neutral_disclosure_checkbox",
+          fallback: false,
+        };
+      }
     }
     if (
       [
@@ -235,6 +330,13 @@
       if (aliasMatch) {
         return { option: aliasMatch, source: "alias", fallback: false };
       }
+    }
+    if (field?.uiModel === "checkbox") {
+      return {
+        option: null,
+        source: "checkbox_no_safe_match",
+        fallback: false,
+      };
     }
     if (isProvinceField(field)) {
       return {
@@ -278,6 +380,14 @@
           fallback: false,
         };
       }
+      salaryMatch = closestSalaryOption(real, answer);
+      if (salaryMatch) {
+        return {
+          option: salaryMatch,
+          source: "salary_numeric_closest",
+          fallback: false,
+        };
+      }
       root.audit?.pushIssue(audit, fieldAudit, {
         kind: "salary_option_no_safe_match",
         severity: field?.required ? "warn" : "info",
@@ -291,6 +401,13 @@
       return {
         option: null,
         source: "salary_no_safe_match",
+        fallback: false,
+      };
+    }
+    if (isDeferredHierarchicalWorkdayField(field, answer)) {
+      return {
+        option: null,
+        source: "hierarchical_workday_deferred",
         fallback: false,
       };
     }
@@ -320,26 +437,26 @@
       }
     }
     if (answer.answerType === "unknown") {
-      var unknownYesOption = real.find(function (option) {
+      var unknownNoOption = real.find(function (option) {
         var label = normOptionLabel(option.label);
         var value = normOptionLabel(option.value);
-        return label === "yes" || value === "yes";
+        return label === "no" || value === "no";
       });
-      if (unknownYesOption) {
+      if (unknownNoOption) {
         root.audit?.pushIssue(audit, fieldAudit, {
           kind: "unknown_question_default_option",
           severity: "warn",
           failedStep: "option.match",
           reason:
-            "Question was not recognized, so C3 selected Yes as the max-progress fallback.",
-          selectedOption: unknownYesOption.label,
+            "Question was not recognized, so C3 selected No as the max-progress fallback.",
+          selectedOption: unknownNoOption.label,
           options: real.map(function (option) {
             return option.label;
           }),
         });
         return {
-          option: unknownYesOption,
-          source: "unknown_yes_fallback",
+          option: unknownNoOption,
+          source: "unknown_no_fallback",
           fallback: true,
         };
       }

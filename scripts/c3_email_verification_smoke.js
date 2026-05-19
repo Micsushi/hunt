@@ -710,19 +710,32 @@ async function pageHasAccountFields(pageClient) {
       const accountFieldCount = fields.filter((field) => /email|username|user|password/i.test([field.id, field.name, field.type, field.autocomplete, field.placeholder, field.label].join(" "))).length;
       const passwordCount = fields.filter((field) => field.type === "password").length;
       const hasEmailField = fields.some((field) => /email|username|user/i.test([field.id, field.name, field.type, field.autocomplete, field.placeholder, field.label].join(" ")));
-      const buttons = [...document.querySelectorAll("button, [role='button'], a")]
+      const buttonRecords = [...document.querySelectorAll("button, [role='button'], a")]
         .filter((el) => {
           const style = getComputedStyle(el);
           const rect = el.getBoundingClientRect();
           return style.display !== "none" && style.visibility !== "hidden" && rect.width > 0 && rect.height > 0;
         })
-        .map((el) => [
-          el.getAttribute("aria-label"),
-          el.getAttribute("title"),
-          el.innerText,
-          el.textContent
-        ].filter(Boolean).join(" ").replace(/\\s+/g, " ").trim())
+        .map((el) => ({
+          text: [
+            el.getAttribute("aria-label"),
+            el.getAttribute("title"),
+            el.innerText,
+            el.textContent
+          ].filter(Boolean).join(" ").replace(/\\s+/g, " ").trim(),
+          automation: el.getAttribute("data-automation-id") || "",
+        }))
+        .filter((button) => button.text || button.automation);
+      const buttons = buttonRecords
+        .map((button) => button.text || button.automation)
         .filter(Boolean);
+      const isEmailSignInAction = (button) => {
+        const combined = [button.automation, button.text].filter(Boolean).join(" ");
+        if (/\\b(google|apple|linkedin|facebook|sso|oauth)\\b/i.test(combined)) {
+          return false;
+        }
+        return /\\bsign\\b/i.test(combined) && /\\bemail\\b/i.test(combined);
+      };
       return {
         ok: accountFieldCount > 0,
         fieldCount: fields.length,
@@ -730,7 +743,7 @@ async function pageHasAccountFields(pageClient) {
         isSignupForm: hasEmailField && passwordCount > 1,
         isLoginForm: hasEmailField && passwordCount === 1,
         hasCreateAccountAction: buttons.some((label) => /^(create account|sign up|signup|register)\\b/i.test(label)),
-        hasSignInWithEmailAction: buttons.some((label) => /^sign in with email\\b|^sign in using email\\b|^email sign in\\b/i.test(label)),
+        hasSignInWithEmailAction: buttonRecords.some(isEmailSignInAction),
         hasGoogleAction: buttons.some((label) => /sign\\s*in\\s*with\\s*google|continue\\s*with\\s*google|google/i.test(label)),
         buttons: buttons.slice(0, 20),
         fields: fields.slice(0, 20),
@@ -769,22 +782,13 @@ async function clickSafeAccountAction(pageClient, intent = "auto") {
         el.innerText,
         el.textContent
       ].filter(Boolean).join(" ").replace(/\\s+/g, " ").trim();
-      const clickReal = (target) => {
+      const clickTarget = (target) => {
         target.scrollIntoView({ block: "center", inline: "center" });
         const rect = target.getBoundingClientRect();
-        const init = {
-          bubbles: true,
-          cancelable: true,
-          view: window,
-          button: 0,
-          buttons: 1,
-          clientX: Math.round(rect.left + rect.width / 2),
-          clientY: Math.round(rect.top + rect.height / 2)
+        return {
+          x: Math.round(rect.left + rect.width / 2),
+          y: Math.round(rect.top + rect.height / 2)
         };
-        ["mouseover", "mousemove", "pointerdown", "mousedown"].forEach((type) => target.dispatchEvent(new PointerEvent(type, init)));
-        target.dispatchEvent(new PointerEvent("pointerup", { ...init, buttons: 0 }));
-        target.dispatchEvent(new MouseEvent("mouseup", { ...init, buttons: 0 }));
-        target.dispatchEvent(new MouseEvent("click", { ...init, buttons: 0 }));
       };
       const forbidden = /(submit application|final submit|submit my application|send application|withdraw|delete)/i;
       const unsafeNavigation = /^(skip to main content|search for jobs|back to job posting|read more|forgot your password\\?|linkedin)\\b/i;
@@ -795,17 +799,16 @@ async function clickSafeAccountAction(pageClient, intent = "auto") {
         /^(send verification|send verification email)\\b/i,
         /^(verify email|verify account)\\b/i
       ];
+      const emailSignInPattern = /^(?=.*\\bsign\\b)(?=.*\\bemail\\b)(?!.*\\b(google|apple|linkedin|facebook|sso|oauth)\\b).*$/i;
       const preferredByIntent = {
         "apply": [/^(apply manually)$/i, /^(apply now)$/i, /^apply for this job$/i, /^apply\\b/i],
-        "email": [/^sign in with email\\b/i, /^sign in using email\\b/i, /^email sign in\\b/i],
+        "email": [emailSignInPattern],
         "create": [/^(create account|sign up|signup|register)\\b/i],
         "verify": verificationActionPatterns,
         "submit": [/^(continue|next)\\b/i, ...verificationActionPatterns, /^(sign in|log in|login)\\b/i],
         "auto": [
           /^(apply manually)$/i,
-          /^sign in with email\\b/i,
-          /^sign in using email\\b/i,
-          /^email sign in\\b/i,
+          emailSignInPattern,
           /^(create account|sign up|signup|register)\\b/i,
           /^(continue|next)\\b/i,
           ...verificationActionPatterns,
@@ -815,7 +818,17 @@ async function clickSafeAccountAction(pageClient, intent = "auto") {
           /^apply for this job$/i
         ]
       };
+      const automationByIntent = {
+        "apply": ["adventureButton"],
+        "email": ["SignInWithEmailButton"],
+        "create": ["createAccountSubmitButton"],
+        "verify": ["informationalBlurbButton"],
+        "submit": ["signInSubmitButton", "createAccountSubmitButton", "informationalBlurbButton"],
+        "auto": ["adventureButton", "SignInWithEmailButton", "createAccountSubmitButton", "signInSubmitButton", "informationalBlurbButton"]
+      };
       const preferred = preferredByIntent[intent] || preferredByIntent.auto;
+      const preferredAutomation =
+        automationByIntent[intent] || automationByIntent.auto;
       const readButtons = () => [...document.querySelectorAll("button, [role='button'], a")]
         .filter(visible)
         .map((el) => ({
@@ -833,16 +846,23 @@ async function clickSafeAccountAction(pageClient, intent = "auto") {
           .map((button, index) => ({
             button,
             index,
+            automationIndex: preferredAutomation.indexOf(button.automation),
             preferredIndex: preferred.findIndex((pattern) =>
-              pattern.test(button.text),
+              pattern.test(button.automation + " " + button.text),
             ),
           }))
           .filter(
-            (item) => allowed(item.button) && item.preferredIndex >= 0,
+            (item) =>
+              allowed(item.button) &&
+              (item.automationIndex >= 0 || item.preferredIndex >= 0),
           )
           .sort(
             (a, b) =>
-              a.preferredIndex - b.preferredIndex || a.index - b.index,
+              (a.automationIndex >= 0 ? a.automationIndex : 999) -
+                (b.automationIndex >= 0 ? b.automationIndex : 999) ||
+              (a.preferredIndex >= 0 ? a.preferredIndex : 999) -
+                (b.preferredIndex >= 0 ? b.preferredIndex : 999) ||
+              a.index - b.index,
           );
         const candidate = preferredButtons[0]?.button
           || [...document.querySelectorAll('a[role="button"], a[data-automation-id], a[href*="/apply"]')]
@@ -901,14 +921,18 @@ async function clickSafeAccountAction(pageClient, intent = "auto") {
           bodyHead: ""
         };
       }
-      clickReal(candidate.el);
+      const target = clickTarget(candidate.el);
+      // Workday auth buttons can ignore synthetic DOM pointer/mouse events.
+      // Return coordinates and click with CDP Input.dispatchMouseEvent outside the page.
       return {
         ok: true,
         clicked: true,
         label: candidate.text,
+        automation: candidate.automation || "",
         intent,
         beforeHref,
         href: beforeHref,
+        clickTarget: target,
         verificationNeeded: false,
         loginNeeded: false,
         bodyHead: ""
@@ -923,6 +947,30 @@ async function clickSafeAccountAction(pageClient, intent = "auto") {
       href: clickResult.navigateTo,
       navigatedByCdp: true,
     };
+  }
+  if (clickResult?.clickTarget?.x != null && clickResult?.clickTarget?.y != null) {
+    await pageClient.send("Input.dispatchMouseEvent", {
+      type: "mouseMoved",
+      x: clickResult.clickTarget.x,
+      y: clickResult.clickTarget.y,
+      button: "none",
+    });
+    await pageClient.send("Input.dispatchMouseEvent", {
+      type: "mousePressed",
+      x: clickResult.clickTarget.x,
+      y: clickResult.clickTarget.y,
+      button: "left",
+      clickCount: 1,
+    });
+    await pageClient.send("Input.dispatchMouseEvent", {
+      type: "mouseReleased",
+      x: clickResult.clickTarget.x,
+      y: clickResult.clickTarget.y,
+      button: "left",
+      clickCount: 1,
+    });
+    clickResult.trustedCdpClick = true;
+    delete clickResult.clickTarget;
   }
   await sleep(5500);
   return clickResult;

@@ -18,6 +18,28 @@
     ].includes(field.uiModel);
   }
 
+  function fieldFillTimeoutMs(context) {
+    var raw = Number(context?.settings?.fieldFillTimeoutMs);
+    if (Number.isFinite(raw) && raw > 0) {
+      return raw;
+    }
+    return 5000;
+  }
+
+  function withTimeout(promise, timeoutMs, fallbackFactory) {
+    var timer = null;
+    var timeout = new Promise(function (resolve) {
+      timer = setTimeout(function () {
+        resolve(fallbackFactory());
+      }, timeoutMs);
+    });
+    return Promise.race([promise, timeout]).finally(function () {
+      if (timer) {
+        clearTimeout(timer);
+      }
+    });
+  }
+
   function inventoryEntry(field, fieldAudit) {
     return {
       kind: field.kind,
@@ -530,7 +552,23 @@
         valueSource: fieldAudit.valueSource,
         reason: match.source,
       });
-      if (!option) {
+      var quietOptionalCheckboxNoOption =
+        !field.required &&
+        field.uiModel === "checkbox" &&
+        ["checkbox_no_safe_match", "no_options", "missing_profile_value"].includes(
+          match.source,
+        );
+      var quietCommittedButtonNoOption =
+        ["button_listbox", "combobox"].includes(field.uiModel) &&
+        !option &&
+        fieldAudit.beforeState?.selected &&
+        String(answer.source || "").startsWith("profile:");
+      if (
+        !option &&
+        match.source !== "hierarchical_workday_deferred" &&
+        !quietOptionalCheckboxNoOption &&
+        !quietCommittedButtonNoOption
+      ) {
         root.audit.pushIssue(audit, fieldAudit, {
           kind: "unsupported_or_empty_option_set",
           severity: field.required ? "warn" : "info",
@@ -807,15 +845,48 @@
           });
           continue;
         }
-        var result = await runField({
-          field: field,
-          profile: context.profile || {},
-          settings: context.settings || {},
-          audit: audit,
-          activeApplyContext: context.activeApplyContext || {},
-          defaultResume: context.defaultResume || {},
-          fillRunId: context.fillRunId || "",
-        });
+        var result = await withTimeout(
+          runField({
+            field: field,
+            profile: context.profile || {},
+            settings: context.settings || {},
+            audit: audit,
+            activeApplyContext: context.activeApplyContext || {},
+            defaultResume: context.defaultResume || {},
+            fillRunId: context.fillRunId || "",
+          }),
+          fieldFillTimeoutMs(context),
+          function () {
+            var fieldAudit = root.audit.createFieldAudit(audit, field);
+            fieldAudit.beforeState = root.fieldState.readFieldState(field);
+            fieldAudit.afterState = {
+              ...root.fieldState.readFieldState(field),
+              reason: "field_fill_timeout",
+            };
+            fieldAudit.filled = false;
+            root.audit.pushIssue(audit, fieldAudit, {
+              kind: "field_fill_timeout",
+              severity: field.required ? "warn" : "info",
+              failedStep: "field.timeout",
+              reason:
+                "Field fill exceeded the per-field timeout before completing.",
+            });
+            root.audit.pushEvent(audit, {
+              action: "field_timeout",
+              step: "field.timeout",
+              status: field.required ? "warn" : "info",
+              reason: "field_fill_timeout",
+              fieldId: field.fieldId,
+              questionHash: field.questionHash,
+              uiModel: field.uiModel,
+              detail: {
+                descriptor: String(field.descriptor || "").slice(0, 240),
+                timeoutMs: fieldFillTimeoutMs(context),
+              },
+            });
+            return { filled: false, fieldAudit: fieldAudit };
+          },
+        );
         if (fillCancelled(context)) {
           return cancelledResult(
             context,

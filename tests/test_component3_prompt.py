@@ -526,6 +526,11 @@ def test_workday_logs_field_and_dropdown_actions():
     assert "workday_phone_country_code_missing" in workday_v2_drivers
     assert "workday_phone_country_code_commit_failed" in workday_v2_drivers
     assert "select_virtualized_phone_country_code" in workday_v2_drivers
+    assert "fillCanadianCitizenshipStatus" in workday_v2_drivers
+    assert "openWorkdayPopupUntilOptions" in workday_v2_drivers
+    assert "workday_citizenship_country_open" in workday_v2_drivers
+    assert "workday_citizenship_status_option" in workday_v2_drivers
+    assert "workday_citizenship_status_commit_failed" in workday_v2_drivers
     assert "workdayActiveListboxFor" in workday_v2_drivers
     assert "workdayClickOptionCommitTarget" in workday_v2_drivers
     assert "workdayOptionRadioTarget" in workday_v2_drivers
@@ -551,6 +556,8 @@ def test_workday_logs_field_and_dropdown_actions():
     assert "await clearWorkdayField(field, audit, fieldAudit)" in workday_v2_drivers
     assert 'label.includes("linkedin")' in workday_v2_drivers
     assert 'label.includes("employee referral")' in workday_v2_drivers
+    assert 'label.includes("social referral")' in workday_v2_drivers
+    assert 'label.includes("connection")' in workday_v2_drivers
     assert "document.elementFromPoint" in workday_v2_drivers
     assert "var options = await collectWorkdayOptions" in workday_v2_drivers
     assert "isSelectInputPrompt" in workday_repeatables

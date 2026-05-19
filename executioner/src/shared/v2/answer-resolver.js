@@ -89,37 +89,41 @@
   }
 
   function salaryTextAnswer(field, profile) {
-    var descriptor = clean(field.descriptor || field.label || "").toLowerCase();
-    var asksAnnualAmount =
-      descriptor.includes("annual") ||
-      descriptor.includes("yearly") ||
-      descriptor.includes("amount") ||
-      /\be\.g\.\s*\d+/i.test(descriptor);
     var point = clean(profile.salaryExpectation);
     var range = clean(profile.salaryExpectationRange);
-    if (asksAnnualAmount && point) {
+    var target = salaryTargetNumber(point || range);
+    if (target) {
       return {
-        value: point,
-        source: "profile:salaryExpectation",
-        confidence: 0.96,
-      };
-    }
-    if (range || point) {
-      return {
-        value: range || point,
-        source: range
-          ? "profile:salaryExpectationRange"
-          : "profile:salaryExpectation",
+        value: target,
+        source: point
+          ? "profile:salaryExpectation"
+          : "profile:salaryExpectationRange",
         confidence: 0.96,
       };
     }
     return {
-      value: asksAnnualAmount ? "95000" : "90,000 - 105,000",
-      source: asksAnnualAmount
-        ? "default:salaryExpectation"
-        : "default:salaryExpectationRange",
+      value: "100000",
+      source: "default:salaryExpectation",
       confidence: 0.72,
     };
+  }
+
+  function salaryTargetNumber(value) {
+    var numbers = String(value || "").match(/\d[\d,]*/g) || [];
+    numbers = numbers
+      .map(function (match) {
+        return Number(match.replace(/,/g, ""));
+      })
+      .filter(function (number) {
+        return Number.isFinite(number) && number >= 1000;
+      });
+    if (!numbers.length) {
+      return "";
+    }
+    if (numbers.length >= 2) {
+      return String(Math.round((numbers[0] + numbers[1]) / 2));
+    }
+    return String(numbers[0]);
   }
 
   function datePartName(field) {
@@ -197,7 +201,8 @@
       }
     }
     raw = raw || clean(entry.defaultValue);
-    var parts = parseIsoLikeDate(raw);
+    var usesDefaultToday = raw.toLowerCase() === "today";
+    var parts = usesDefaultToday ? todayDateParts() : parseIsoLikeDate(raw);
     var part = datePartName(field);
     if (parts && part) {
       return {
@@ -207,7 +212,7 @@
             ? "default:" + entry.id + ":" + part
             : "profile:" + (entry.profilePaths || [entry.id])[0] + ":" + part,
         answerType: "text",
-        confidence: raw === clean(entry.defaultValue) ? 0.72 : 0.96,
+        confidence: raw === clean(entry.defaultValue) ? 0.96 : 0.96,
       };
     }
     if (parts) {
@@ -218,7 +223,7 @@
             ? "default:" + entry.id
             : "profile:" + (entry.profilePaths || [entry.id])[0],
         answerType: "text",
-        confidence: raw === clean(entry.defaultValue) ? 0.72 : 0.96,
+        confidence: raw === clean(entry.defaultValue) ? 0.96 : 0.96,
       };
     }
     return {
@@ -248,6 +253,48 @@
       source: "default:" + entry.id,
       answerType: "text",
       confidence: 0.96,
+    };
+  }
+
+  function canadianCitizenshipStatusAnswer(entry, profile) {
+    var status = clean(profile.canadianCitizenOrPermanentResident);
+    var openPermit = clean(profile.openWorkPermit).toLowerCase();
+    var country = clean(profile.country) || "Canada";
+    var lowered = status.toLowerCase();
+    if (
+      lowered.includes("permanent") ||
+      lowered === "pr" ||
+      lowered.includes("resident")
+    ) {
+      return {
+        value: "Permanent Resident (" + country + ")",
+        source: "profile:canadianCitizenOrPermanentResident",
+        confidence: 0.94,
+      };
+    }
+    if (
+      lowered === "yes" ||
+      lowered === "true" ||
+      lowered === "citizen" ||
+      lowered.includes("citizen")
+    ) {
+      return {
+        value: "Citizen (" + country + ")",
+        source: "profile:canadianCitizenOrPermanentResident",
+        confidence: 0.94,
+      };
+    }
+    if (openPermit === "yes" || openPermit === "true") {
+      return {
+        value: "On Current Work Permit (" + country + ")",
+        source: "profile:openWorkPermit",
+        confidence: 0.88,
+      };
+    }
+    return {
+      value: clean(entry.defaultValue) || "Citizen (Canada)",
+      source: "default:" + entry.id,
+      confidence: 0.72,
     };
   }
 
@@ -330,6 +377,27 @@
 
     if (entry.id === "current_date") {
       return currentDateAnswerForEntry(entry, field);
+    }
+
+    if (entry.id === "canadian_citizenship_status") {
+      var citizenshipAnswer = canadianCitizenshipStatusAnswer(entry, profile);
+      if (citizenshipAnswer.source.startsWith("default:")) {
+        root.audit?.pushIssue(audit, fieldAudit, {
+          kind: "default_answer_used",
+          severity: "warn",
+          failedStep: "answer.resolve",
+          reason:
+            "Used Canadian citizenship status default because profile citizenship fields were blank.",
+          questionType: question.type,
+        });
+      }
+      return {
+        value: citizenshipAnswer.value,
+        source: citizenshipAnswer.source,
+        answerType: entry.answerType || "text",
+        confidence: citizenshipAnswer.confidence,
+        optionAliases: entry.optionAliases || {},
+      };
     }
 
     if (entry.id === "address_line_2" && field.required) {
@@ -427,6 +495,24 @@
           optionAliases: entry.optionAliases || {},
         };
       }
+    }
+
+    if (entry.answerType === "non_disclosure" && entry.defaultValue !== "") {
+      root.audit?.pushIssue(audit, fieldAudit, {
+        kind: "neutral_disclosure_default",
+        severity: "warn",
+        failedStep: "answer.resolve",
+        reason:
+          "Used catalog non-disclosure default for voluntary disclosure.",
+        questionType: question.type,
+      });
+      return {
+        value: answerValueForEntry(entry, entry.defaultValue),
+        source: "default:" + entry.id,
+        answerType: entry.answerType || "text",
+        confidence: 0.9,
+        optionAliases: entry.optionAliases || {},
+      };
     }
 
     for (var i = 0; i < (entry.profilePaths || []).length; i++) {

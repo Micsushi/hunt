@@ -4,7 +4,7 @@ const crypto = require("node:crypto");
 const fs = require("node:fs");
 const path = require("node:path");
 
-const DEFAULT_OUTPUT_DIR = path.join("docs", "c3-issues");
+const DEFAULT_OUTPUT_DIR = path.join("logs", "c3-issues");
 const ISSUE_LOG = "issues.jsonl";
 const ISSUE_SUMMARY = "index.md";
 

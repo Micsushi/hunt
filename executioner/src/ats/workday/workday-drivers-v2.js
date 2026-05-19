@@ -49,6 +49,7 @@
       Enter: 13,
       Escape: 27,
       ArrowDown: 40,
+      Home: 36,
       Backspace: 8,
       Delete: 46,
     };
@@ -108,6 +109,15 @@
         }),
       );
     });
+  }
+
+  function workdayFillCancelled() {
+    return Boolean(
+      window.__huntApplyCancelAllFills ||
+      (window.__huntApplyCancelFillRunId &&
+        window.__huntApplyCancelFillRunId ===
+          window.__huntApplyActiveFillRunId),
+    );
   }
 
   function printableKeyOn(target, char) {
@@ -534,13 +544,36 @@
           value: label,
           element: target,
           placeholder: false,
-          isCategory: isPromptCategoryOption(target),
+          isCategory: isPromptCategoryOption(target, field),
         });
       });
     return options;
   }
 
-  function isPromptCategoryOption(option) {
+  function isSourcePromptCategoryOption(option, field) {
+    if (!isApplicationSourceField(field?.element, field?.descriptor)) {
+      return false;
+    }
+    var label = norm(optionLabel(option));
+    if (!label || lowerPressDelete(label) || isNoItemsOption(label)) {
+      return false;
+    }
+    var automationId = norm(option.getAttribute?.("data-automation-id"));
+    var uxiWidget = norm(option.getAttribute?.("data-uxi-widget-type"));
+    var sourceLikeRow =
+      automationId.includes("menuitem") ||
+      automationId.includes("promptoption") ||
+      automationId.includes("promptleafnode") ||
+      uxiWidget.includes("multiselectlistitem");
+    if (!sourceLikeRow) {
+      return false;
+    }
+    return /\b(campus campaign|career websites?|career sites?|employee referral|event|job alert|job boards?|job sites?|social media|social referral|alumni)\b/.test(
+      label,
+    );
+  }
+
+  function isPromptCategoryOption(option, field) {
     if (!option) {
       return false;
     }
@@ -561,6 +594,9 @@
     var label = norm(optionLabel(option));
     if (!label || lowerPressDelete(label) || isNoItemsOption(label)) {
       return false;
+    }
+    if (isSourcePromptCategoryOption(option, field)) {
+      return true;
     }
     var promptLeaf = option.matches?.('[data-automation-id="promptLeafNode"]')
       ? option
@@ -691,9 +727,18 @@
     );
   }
 
+  function workdayPromptLeafTarget(option) {
+    return (
+      option?.querySelector?.('[data-automation-id="promptLeafNode"]') || option
+    );
+  }
+
   function workdayClickOptionCommitTarget(option) {
     var target = workdayOptionRadioTarget(option);
     clickLikeUser(target || option);
+    if (target && typeof target.click === "function") {
+      target.click();
+    }
     if (target !== option) {
       clickLikeUser(option);
     }
@@ -712,8 +757,7 @@
       listbox &&
       attempts < (maxAttempts || 80) &&
       listbox.scrollHeight > listbox.clientHeight + 2 &&
-      !window.__huntApplyCancelAllFills &&
-      !window.__huntApplyCancelFillRunId
+      !workdayFillCancelled()
     ) {
       attempts += 1;
       listbox.scrollTop += 260;
@@ -769,6 +813,113 @@
     );
   }
 
+  function isCanadianCitizenshipStatusField(field, answer) {
+    var text = norm(
+      [
+        field?.fieldId,
+        field?.descriptor,
+        field?.workday?.fieldLabel,
+        field?.workday?.contextText,
+        answer?.source,
+        answer?.value,
+      ].join(" "),
+    );
+    return (
+      text.includes("canadian citizenship status") ||
+      text.includes("provide your canadian citizenship status") ||
+      text.includes("citizenship status to assist")
+    );
+  }
+
+  function citizenshipCountryFromAnswer(answer) {
+    var match = String(answer?.value || "").match(/\(([^)]+)\)/);
+    return clean(match?.[1] || "Canada");
+  }
+
+  function activeWorkdayOptionLabel(listbox) {
+    var activeId = listbox?.getAttribute?.("aria-activedescendant") || "";
+    var active = activeId ? document.getElementById(activeId) : null;
+    return clean(
+      active?.innerText ||
+        active?.textContent ||
+        active?.getAttribute?.("aria-label") ||
+        "",
+    );
+  }
+
+  async function keyboardOpenCitizenshipCountry(input, country) {
+    var listbox = workdayActiveListboxFor(input);
+    if (!listbox) {
+      return { ok: false, reason: "missing_listbox", attempts: 0 };
+    }
+    listbox.focus?.();
+    keyOn(listbox, "Home");
+    await sleep(120);
+    for (var attempt = 0; attempt < 90 && !workdayFillCancelled(); attempt++) {
+      var activeLabel = activeWorkdayOptionLabel(listbox);
+      if (optionMatches({ label: activeLabel }, country)) {
+        keyOn(listbox, "Enter");
+        await sleep(650);
+        return {
+          ok: true,
+          reason: "keyboard_country_opened",
+          attempts: attempt + 1,
+          selectedOption: activeLabel,
+        };
+      }
+      keyOn(listbox, "ArrowDown");
+      await sleep(45);
+    }
+    return {
+      ok: false,
+      reason: "keyboard_country_missing",
+      attempts: 90,
+      selectedOption: activeWorkdayOptionLabel(listbox),
+    };
+  }
+
+  async function openWorkdayPopupUntilOptions(field, searchText, maxAttempts) {
+    var el = field.element;
+    var container = root.workdayUi?.nearestWorkdayField(el);
+    var targets = [
+      el,
+      el?.closest?.('[data-automation-id="monikerSearchBox"]'),
+      el?.closest?.('[data-automation-id="multiSelectContainer"]'),
+      container,
+    ].filter(Boolean);
+    for (var attempt = 0; attempt < (maxAttempts || 3); attempt++) {
+      await openPopup(field, searchText || "");
+      await sleep(180);
+      var options = visibleWorkdayOptions(field);
+      if (options.length) {
+        return {
+          ok: true,
+          attempts: attempt + 1,
+          options: options,
+        };
+      }
+      var target = targets[attempt % targets.length];
+      if (target) {
+        clickLikeUser(target);
+        keyOn(el, "ArrowDown");
+      }
+      await sleep(260);
+      options = visibleWorkdayOptions(field);
+      if (options.length) {
+        return {
+          ok: true,
+          attempts: attempt + 1,
+          options: options,
+        };
+      }
+    }
+    return {
+      ok: false,
+      attempts: maxAttempts || 3,
+      options: visibleWorkdayOptions(field),
+    };
+  }
+
   async function waitForWorkdayOptions(previousLabels, timeoutMs, field) {
     var start = Date.now();
     var attempts = 0;
@@ -776,8 +927,7 @@
     var options = visibleWorkdayOptions(field);
     while (
       Date.now() - start < (timeoutMs || 2200) &&
-      !window.__huntApplyCancelAllFills &&
-      !window.__huntApplyCancelFillRunId
+      !workdayFillCancelled()
     ) {
       attempts += 1;
       options = visibleWorkdayOptions(field);
@@ -831,7 +981,10 @@
     var label = norm(option?.label);
     return (
       label.includes("employee referral") ||
+      label.includes("social referral") ||
+      label.includes("connection") ||
       label.includes("referred") ||
+      label.includes("refer") ||
       label.includes("referral")
     );
   }
@@ -849,7 +1002,7 @@
     if (label.includes("linkedin")) {
       score += 95;
     }
-    if (label.includes("social media") || label.includes("social")) {
+    if (label.includes("social media")) {
       score += 85;
     }
     if (label.includes("job sites") || label.includes("job board")) {
@@ -1167,7 +1320,11 @@
     audit,
     fieldAudit,
   ) {
-    var texts = answerTexts(answer, option);
+    var sourceField = isApplicationSourceField(
+      field?.element,
+      field?.descriptor,
+    );
+    var texts = answerTexts(answer, sourceField ? null : option);
     var categories = (options || [])
       .filter(function (candidate) {
         return candidate.isCategory;
@@ -1215,7 +1372,12 @@
           }),
         },
       });
-      var target = preferredWorkdayOption(childOptions, option, answer, field);
+      var target = preferredWorkdayOption(
+        childOptions,
+        sourceField ? null : option,
+        answer,
+        field,
+      );
       if (target) {
         return target;
       }
@@ -1300,9 +1462,14 @@
       el.querySelector?.(
         'input:not([type="hidden"]), button, [role="radio"], [role="checkbox"]',
       ) || null;
-    clickLikeUser(nested || el);
-    if (typeof (nested || el).click === "function") {
-      (nested || el).click();
+    // AMA-style Workday source prompts use a virtualized hierarchical prompt:
+    // the outer menuItem row is hover-only, the category/leaf onClick lives on
+    // promptLeafNode, and the visible radio onChange can be a no-op. Dispatch to
+    // the prompt leaf first; only then use the native click fallback.
+    var target = nested || workdayPromptLeafTarget(el);
+    clickLikeUser(target || el);
+    if (typeof (target || el).click === "function") {
+      (target || el).click();
     }
     await sleep(250);
     return true;
@@ -1537,6 +1704,153 @@
         (option?.label
           ? "workday:option_match"
           : "fallback:workday_first_option"),
+      answerText: target.label,
+    };
+  }
+
+  async function fillCanadianCitizenshipStatus({
+    field,
+    answer,
+    option,
+    audit,
+    fieldAudit,
+  }) {
+    var input = field.element;
+    var country = citizenshipCountryFromAnswer(answer);
+    await closePopup(field);
+    var openResult = await openWorkdayPopupUntilOptions(field, "", 4);
+    var listbox = workdayActiveListboxFor(input);
+    if (listbox) {
+      listbox.scrollTop = 0;
+      listbox.dispatchEvent(new Event("scroll", { bubbles: true }));
+      await sleep(120);
+    }
+    var keyboardCountry = await keyboardOpenCitizenshipCountry(input, country);
+    var countryResult = { match: null, attempts: 0 };
+    var countryOption = null;
+    if (!keyboardCountry?.ok) {
+      countryResult = await scrollWorkdayListboxUntil(
+        input,
+        function () {
+          return visibleWorkdayOptions(field).find(function (candidate) {
+            return optionMatches(candidate, country);
+          });
+        },
+        80,
+      );
+      countryOption = countryResult.match;
+    }
+    if (!countryOption && !keyboardCountry?.ok) {
+      root.audit?.pushIssue(audit, fieldAudit, {
+        kind: "workday_citizenship_country_missing",
+        severity: field.required ? "warn" : "info",
+        failedStep: "workday.driver.fill",
+        reason:
+          "Could not find the citizenship country parent option in the Workday prompt.",
+        options: visibleWorkdayOptions(field).map(function (candidate) {
+          return candidate.label;
+        }),
+      });
+      await closePopup(field);
+      return {
+        ok: false,
+        reason: "workday_citizenship_country_missing",
+        afterState: workdayCommittedState(field),
+      };
+    }
+    root.audit?.pushFieldStep(audit, fieldAudit, {
+      action: "workday_citizenship_country_open",
+      step: "workday.driver.fill",
+      status: "info",
+      reason: "open_citizenship_country_parent",
+      selectedOption: countryOption?.label || keyboardCountry?.selectedOption,
+      detail: {
+        openAttemptCount: openResult.attempts || 0,
+        scrollAttemptCount: countryResult.attempts || 0,
+        keyboardAttemptCount: keyboardCountry?.attempts || 0,
+      },
+    });
+    if (countryOption) {
+      await clickWorkdayOption(countryOption);
+    }
+    var childResult = await waitForWorkdayOptions([], 2600, field);
+    var childOptions = childResult.options.filter(function (candidate) {
+      return !candidate.isCategory;
+    });
+    var target =
+      preferredWorkdayOption(childOptions, option, answer, field) ||
+      childOptions.find(function (candidate) {
+        return optionMatches(candidate, answer?.value);
+      });
+    if (!target) {
+      root.audit?.pushIssue(audit, fieldAudit, {
+        kind: "workday_citizenship_status_missing",
+        severity: field.required ? "warn" : "info",
+        failedStep: "workday.driver.fill",
+        reason:
+          "Opened the citizenship country but could not find a matching terminal status option.",
+        options: childOptions.map(function (candidate) {
+          return candidate.label;
+        }),
+      });
+      await closePopup(field);
+      return {
+        ok: false,
+        reason: "workday_citizenship_status_missing",
+        afterState: workdayCommittedState(field),
+      };
+    }
+    root.audit?.pushFieldStep(audit, fieldAudit, {
+      action: "workday_citizenship_status_option",
+      step: "workday.driver.fill",
+      status: "info",
+      reason: "select_citizenship_status_leaf",
+      selectedOption: target.label,
+      detail: {
+        childOptionCount: childOptions.length,
+        waitAttempts: childResult.attempts,
+      },
+    });
+    await clickWorkdayOption(target);
+    var childListbox = workdayActiveListboxFor(input);
+    // Workday's terminal citizenship rows are checkbox-backed promptLeafNode
+    // items. Direct checkbox/row clicks can only focus the row; Enter on the
+    // active listbox is the path that runs Workday's real selection handler.
+    if (
+      childListbox &&
+      target.element?.querySelector?.(
+        '[data-automation-id="checkboxPanel"], input[type="checkbox"]',
+      )
+    ) {
+      childListbox.focus?.();
+      keyOn(childListbox, "Enter");
+    }
+    await sleep(500);
+    var state = workdayCommittedState(field);
+    var invalid = field.element?.getAttribute?.("aria-invalid") === "true";
+    var ok =
+      !invalid ||
+      optionMatches({ label: state.text }, target.label) ||
+      optionMatches({ label: state.rawValue }, target.label);
+    await closePopup(field);
+    if (!ok) {
+      root.audit?.pushIssue(audit, fieldAudit, {
+        kind: "workday_citizenship_status_commit_failed",
+        severity: field.required ? "warn" : "info",
+        failedStep: "workday.driver.verify",
+        reason:
+          "Clicked citizenship status but Workday did not clear the required validation state.",
+        options: childOptions.map(function (candidate) {
+          return candidate.label;
+        }),
+      });
+    }
+    return {
+      ok: ok,
+      reason: ok ? "" : "workday_citizenship_status_commit_failed",
+      afterState: state,
+      selectedOption: target.label,
+      valueSource: fieldAudit?.valueSource || answer?.source || "",
       answerText: target.label,
     };
   }
@@ -1787,6 +2101,9 @@
       field?.workday?.kind &&
       ["combobox", "button_listbox"].includes(field.uiModel)
     ) {
+      if (isCanadianCitizenshipStatusField(field, args?.answer)) {
+        return fillCanadianCitizenshipStatus(args);
+      }
       if (field.workday.kind === "phone_country_code") {
         return fillPhoneCountryCode(args);
       }
@@ -1811,6 +2128,7 @@
 
   root.workdayDrivers = {
     collectWorkdayOptions: collectWorkdayOptions,
+    fillCanadianCitizenshipStatus: fillCanadianCitizenshipStatus,
     fillPhoneCountryCode: fillPhoneCountryCode,
     fillWorkdayPopup: fillWorkdayPopup,
     clearWorkdayField: clearWorkdayField,

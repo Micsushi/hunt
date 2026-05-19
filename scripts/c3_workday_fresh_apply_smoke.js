@@ -300,7 +300,7 @@ async function main() {
       String(args.maxPages),
       "--fills-per-page",
       String(args.fillsPerPage),
-      "--preserve-current",
+      "--close-other-workday-tabs",
       "--extension-auto-next",
       "--start-step",
       args.startStep,

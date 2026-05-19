@@ -33,9 +33,9 @@ function parseArgs(argv) {
 
 function usage() {
   return [
-    "Usage: node scripts/c3_issue_registry.js --audit <audit.json> [--output-dir docs/c3-issues]",
+    "Usage: node scripts/c3_issue_registry.js --audit <audit.json> [--output-dir logs/c3-issues]",
     "",
-    "Extracts typed C3 issues from a live-smoke audit and appends them to a repo-visible JSONL ledger.",
+    "Extracts typed C3 issues from a live-smoke audit and appends them to an ignored runtime JSONL ledger.",
   ].join("\n");
 }
 

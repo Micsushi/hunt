@@ -60,7 +60,7 @@ function parseArgs(argv) {
     noSeedExtension: false,
     fillMessageTimeoutMs: 0,
     cdpRepairPhoneCountry: false,
-    llmAnswers: true,
+    llmAnswers: false,
     accountEmail: process.env.HUNT_C3_TEST_ACCOUNT_EMAIL || "",
     accountPassword: process.env.HUNT_C3_TEST_ACCOUNT_PASSWORD || "",
     auditJson: process.env.HUNT_C3_AUDIT_JSON || "",
@@ -94,7 +94,9 @@ function parseArgs(argv) {
     } else if (arg === "--stop-after-fill") {
       args.stopAfterFill = true;
     } else if (arg === "--preserve-current") {
-      args.preserveCurrent = true;
+      throw new Error(
+        "--preserve-current is disabled because it can target stale Workday tabs. Use --job-url with --close-other-workday-tabs.",
+      );
     } else if (arg === "--target-step" && next) {
       args.targetStep = next;
       i += 1;
@@ -120,6 +122,8 @@ function parseArgs(argv) {
       i += 1;
     } else if (arg === "--cdp-repair-phone-country") {
       args.cdpRepairPhoneCountry = true;
+    } else if (arg === "--llm-answers") {
+      args.llmAnswers = true;
     } else if (arg === "--no-llm-answers") {
       args.llmAnswers = false;
     } else if (arg === "--account-email" && next) {
@@ -166,7 +170,7 @@ function usage() {
     "  --max-pages <n>    Safety cap for Next clicks, default 8",
     "  --fills-per-page <n> Fill the same page n times before Next",
     "  --stop-after-fill  Do not click Next after the fill step",
-    "  --preserve-current Do not navigate the Workday tab before running",
+    "  --close-other-workday-tabs Close other Workday apply tabs before filling this site",
     "  --target-step <name> Stop logic can target a Workday step title",
     "  --start-step <name> Click a Workday step before filling, if visible",
     "  --require-target Fail before fill unless current step matches target",
@@ -178,11 +182,11 @@ function usage() {
     "  --no-seed-extension Skip Chrome storage seeding for repeat p chrome runs",
     "  --fill-message-timeout-ms <ms> Override extension fill message timeout",
     "  --cdp-repair-phone-country Diagnostic only: patch phone country via CDP if extension fill fails",
-    "  --no-llm-answers Do not auto-apply backend answer-router decisions during fill",
+    "  --llm-answers Allow backend answer-router decisions during fill",
+    "  --no-llm-answers Do not auto-apply backend answer-router decisions during fill (default)",
     "  --account-email <email> Optional account/profile email override",
     "  --audit-json <path> Write full page/retry/value audit JSON, default logs/c3_workday_audit_<timestamp>.json",
     "  --no-audit-json Disable audit JSON file writing",
-    "  --close-other-workday-tabs Close other Workday apply tabs before filling this site",
   ].join("\n");
 }
 
@@ -1491,6 +1495,8 @@ function fillMessageTimeoutMs(args) {
 }
 
 async function fillCurrentPage(optionsClient, applyUrl, args) {
+  const messageTimeoutMs = fillMessageTimeoutMs(args);
+  const evaluateTimeoutMs = messageTimeoutMs + 10000;
   return optionsClient.evaluate(
     `(async () => {
       const tabs = await new Promise((resolve) => chrome.tabs.query({}, resolve));
@@ -1503,6 +1509,7 @@ async function fillCurrentPage(optionsClient, applyUrl, args) {
         .replace(/\\/$/, "");
       const jobPathBase = normalizeWorkdayPathname(parsedApplyUrl.pathname)
         .replace(/\\/apply\\/applyManually\\/?$/i, "")
+        .replace(/\\/apply\\/.*$/i, "")
         .replace(/\\/apply\\/?$/i, "");
       const exactApplyManually = (item) => String(item.url || "").startsWith(applyBase)
         && !/error|ok/i.test(String(item.title || ""));
@@ -1576,13 +1583,47 @@ async function fillCurrentPage(optionsClient, applyUrl, args) {
       if (tab.windowId) {
         await chrome.windows.update(tab.windowId, { focused: true }).catch(() => null);
       }
+      const messageTimeoutMs = ${JSON.stringify(messageTimeoutMs)};
       const wrapped = await new Promise((resolve) => {
+        let settled = false;
+        const finish = (value) => {
+          if (settled) {
+            return;
+          }
+          settled = true;
+          resolve(value);
+        };
+        const timer = setTimeout(() => {
+          finish({
+            messageResponse: {
+              ok: false,
+              error: "fill_message_timeout",
+              message: "Fill message timed out before the extension responded.",
+              attempt: {
+                status: "timeout",
+                summary: "Fill message timed out.",
+                filledFieldCount: 0,
+                manualReviewReasons: ["fill_timeout"],
+                bestEffortWarnings: ["fill_message_timeout"]
+              },
+              result: {
+                pendingLlmFieldCount: 0,
+                manualReviewReasons: ["fill_timeout"],
+                fieldInventory: []
+              }
+            },
+            lastError: ""
+          });
+        }, messageTimeoutMs);
         chrome.runtime.sendMessage(
           { type: "hunt.apply.fill_current_page", payload: { tabId: tab.id, allowLlmAnswers: ${JSON.stringify(args.llmAnswers)}, triggeredBy: "c3_workday_live_smoke:fill_current_page" } },
-          (messageResponse) => resolve({
-            messageResponse,
-            lastError: chrome.runtime.lastError && chrome.runtime.lastError.message
-          })
+          (messageResponse) => {
+            clearTimeout(timer);
+            finish({
+              messageResponse,
+              lastError: chrome.runtime.lastError && chrome.runtime.lastError.message
+            });
+          }
         );
       });
       const response = wrapped.messageResponse || {};
@@ -1620,11 +1661,77 @@ async function fillCurrentPage(optionsClient, applyUrl, args) {
         }))
       };
     })()`,
-    fillMessageTimeoutMs(args),
+    evaluateTimeoutMs,
   );
 }
 
 async function tryFixWorkdaySourceViaKeyboard(pageClient) {
+  function isUnsafeSourceText(text) {
+    return /\b(referr?al|referred|refer|connection)\b/i.test(String(text || ""));
+  }
+
+  async function dispatchKey(key, code) {
+    await pageClient.send("Input.dispatchKeyEvent", {
+      type: "keyDown",
+      key,
+      code: key,
+      windowsVirtualKeyCode: code,
+      nativeVirtualKeyCode: code,
+    });
+    await pageClient.send("Input.dispatchKeyEvent", {
+      type: "keyUp",
+      key,
+      code: key,
+      windowsVirtualKeyCode: code,
+      nativeVirtualKeyCode: code,
+    });
+  }
+  async function sourceKeyboardState() {
+    return pageClient.evaluate(
+      `(() => {
+        const visible = (el) => {
+          if (!el) return false;
+          const style = getComputedStyle(el);
+          const rect = el.getBoundingClientRect();
+          return style.display !== "none" && style.visibility !== "hidden" && rect.width > 0 && rect.height > 0;
+        };
+        const textOf = (el) => (el?.innerText || el?.textContent || el?.getAttribute?.("aria-label") || "").replace(/\\s+/g, " ").trim();
+        const labelOf = (el) => [el?.getAttribute?.("aria-label"), textOf(el)].filter(Boolean).join(" ");
+        const input = document.getElementById("source--source") || document.querySelector('input[data-uxi-widget-type="selectinput"]');
+        const container = input?.closest?.('[data-automation-id="formField"], [data-automation-id="formField-source"]') || input?.parentElement;
+        const text = textOf(container);
+        const selected = [...(container?.querySelectorAll?.('[data-automation-id="selectedItem"], [data-automation-id="promptSelectionLabel"], [aria-label*="press delete"]') || [])]
+          .filter(visible)
+          .map((el) => [el.getAttribute("aria-label"), textOf(el)].filter(Boolean).join(" "))
+          .join(" ")
+          .replace(/\\s+/g, " ")
+          .trim();
+        const options = [...document.querySelectorAll('[role="option"], [data-automation-id="menuItem"]')]
+          .filter(visible)
+          .map((el) => ({
+            text: textOf(el),
+            aria: el.getAttribute("aria-label") || "",
+            label: labelOf(el),
+            selected: el.getAttribute("aria-selected") || ""
+          }))
+          .filter((option) => /campus|career|employee referral|event|job alert|job board|job sites?|social|industry/i.test(option.label))
+          .slice(0, 30);
+        const highlighted = options.find((option) => option.selected === "true") || null;
+        const selectedByCount = /\\b[1-9]\\d*\\s+items?\\s+selected\\b/i.test(text);
+        const selectedByLabel = selected && !/^expanded$/i.test(selected) && !/^search$/i.test(selected);
+        const unsafe = /\\b(referr?al|referred|refer|connection)\\b/i.test(selected || text);
+        return {
+          text,
+          selected,
+          unsafe,
+          selectedOk: Boolean((selectedByCount || selectedByLabel) && !unsafe),
+          highlighted,
+          options
+        };
+      })()`,
+      20000,
+    );
+  }
   const target = await pageClient.evaluate(
     `(async () => {
       const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -1635,6 +1742,7 @@ async function tryFixWorkdaySourceViaKeyboard(pageClient) {
         return style.display !== "none" && style.visibility !== "hidden" && rect.width > 0 && rect.height > 0 && !el.disabled;
       };
       const textOf = (el) => (el?.innerText || el?.textContent || "").replace(/\\s+/g, " ").trim();
+      const isUnsafeSource = (value) => /\\b(referr?al|referred|refer|connection)\\b/i.test(String(value || ""));
       const hasAnySelection = (input) => {
         const container = input.closest('[data-automation-id="formField"], [data-automation-id="formField-source"]') || input.parentElement;
         const text = textOf(container);
@@ -1643,7 +1751,24 @@ async function tryFixWorkdaySourceViaKeyboard(pageClient) {
           .join(" ")
           .replace(/\\s+/g, " ")
           .trim();
+        if (isUnsafeSource(selected || text)) {
+          return false;
+        }
         return /\\b[1-9]\\d*\\s+items?\\s+selected\\b/i.test(text) || (selected && !/^expanded$/i.test(selected) && !/^search$/i.test(selected));
+      };
+      const clearUnsafeSelection = (input) => {
+        const container = input.closest('[data-automation-id="formField"], [data-automation-id="formField-source"]') || input.parentElement;
+        const selected = [...(container?.querySelectorAll?.('[data-automation-id="selectedItem"], [aria-label*="press delete"]') || [])]
+          .find((el) => isUnsafeSource([el.getAttribute("aria-label"), textOf(el)].filter(Boolean).join(" ")));
+        if (!selected) {
+          return false;
+        }
+        selected.focus();
+        selected.dispatchEvent(new KeyboardEvent("keydown", { key: "Delete", code: "Delete", keyCode: 46, which: 46, bubbles: true, cancelable: true }));
+        selected.dispatchEvent(new KeyboardEvent("keyup", { key: "Delete", code: "Delete", keyCode: 46, which: 46, bubbles: true, cancelable: true }));
+        const deleteCharm = selected.querySelector('[data-automation-id="DELETE_charm"]') || selected;
+        deleteCharm.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, view: window }));
+        return true;
       };
       const input = document.getElementById("source--source") || [...document.querySelectorAll('input[data-automation-id="searchBox"], input[data-uxi-widget-type="selectinput"]')]
         .find((candidate) => /how did you hear about us|source/i.test(textOf(candidate.closest('[data-automation-id*="formField"], [role="group"]') || candidate.parentElement)));
@@ -1653,6 +1778,7 @@ async function tryFixWorkdaySourceViaKeyboard(pageClient) {
       if (hasAnySelection(input)) {
         return { ok: true, reason: "source_already_selected" };
       }
+      clearUnsafeSelection(input);
       input.scrollIntoView({ block: "center", inline: "center" });
       await sleep(250);
       const rect = input.getBoundingClientRect();
@@ -1687,78 +1813,85 @@ async function tryFixWorkdaySourceViaKeyboard(pageClient) {
     button: "left",
     clickCount: 1,
   });
-  await sleep(350);
-  const attempts = [];
-  for (let attempt = 0; attempt < 6; attempt += 1) {
-    await pageClient.send("Input.dispatchKeyEvent", {
-      type: "keyDown",
-      key: "ArrowDown",
-      code: "ArrowDown",
-      windowsVirtualKeyCode: 40,
-      nativeVirtualKeyCode: 40,
-    });
-    await pageClient.send("Input.dispatchKeyEvent", {
-      type: "keyUp",
-      key: "ArrowDown",
-      code: "ArrowDown",
-      windowsVirtualKeyCode: 40,
-      nativeVirtualKeyCode: 40,
-    });
-    await sleep(100);
-    await pageClient.send("Input.dispatchKeyEvent", {
-      type: "keyDown",
-      key: "Enter",
-      code: "Enter",
-      windowsVirtualKeyCode: 13,
-      nativeVirtualKeyCode: 13,
-    });
-    await pageClient.send("Input.dispatchKeyEvent", {
-      type: "keyUp",
-      key: "Enter",
-      code: "Enter",
-      windowsVirtualKeyCode: 13,
-      nativeVirtualKeyCode: 13,
-    });
-    await sleep(500);
-    const state = await pageClient.evaluate(
-      `(() => {
-        const textOf = (el) => (el?.innerText || el?.textContent || "").replace(/\\s+/g, " ").trim();
-        const input = document.getElementById("source--source") || document.querySelector('input[data-uxi-widget-type="selectinput"]');
-        const container = input?.closest?.('[data-automation-id="formField"], [data-automation-id="formField-source"]') || input?.parentElement;
-        const text = textOf(container);
-        const options = [...document.querySelectorAll('[role="option"], [data-automation-id="promptLeafNode"]')]
-          .filter((el) => {
-            const style = getComputedStyle(el);
-            const rect = el.getBoundingClientRect();
-            return style.display !== "none" && style.visibility !== "hidden" && rect.width > 0 && rect.height > 0;
-          })
-          .map((el) => textOf(el))
-          .filter(Boolean)
-          .slice(0, 30);
-        const selected = [...(container?.querySelectorAll?.('[data-automation-id="selectedItem"], [data-automation-id="promptSelectionLabel"], [aria-label*="press delete"]') || [])]
-          .map((el) => [el.getAttribute("aria-label"), textOf(el)].filter(Boolean).join(" "))
-          .join(" ")
-          .replace(/\\s+/g, " ")
-          .trim();
-        const selectedByCount = /\\b[1-9]\\d*\\s+items?\\s+selected\\b/i.test(text);
-        const selectedByLabel = selected && !/^expanded$/i.test(selected) && !/^search$/i.test(selected);
-        return {
-          text,
-          selected,
-          selectedOk: Boolean(selectedByCount || selectedByLabel),
-          options
-        };
-      })()`,
-      20000,
-    );
-    attempts.push({ attempt: attempt + 1, ...state });
-    if (state.selectedOk) {
-      return {
-        ok: true,
-        reason: "source_keyboard_selected",
-        attempts,
+  await sleep(1200);
+  const attempts = [{ step: "opened", ...(await sourceKeyboardState()) }];
+  const clickedSafeTopLevel = await pageClient.evaluate(
+    `(() => {
+      const visible = (el) => {
+        if (!el) return false;
+        const style = getComputedStyle(el);
+        const rect = el.getBoundingClientRect();
+        return style.display !== "none" && style.visibility !== "hidden" && rect.width > 0 && rect.height > 0;
       };
+      const textOf = (el) => (el?.innerText || el?.textContent || el?.getAttribute?.("aria-label") || "").replace(/\\s+/g, " ").trim();
+      const options = [...document.querySelectorAll('[role="option"], [data-automation-id="menuItem"]')].filter(visible);
+      const unsafe = /\\b(referr?al|referred|refer|connection)\\b/i;
+      const wanted = options.find((el) => /\\b(job sites?|job boards?)\\b/i.test(textOf(el)) && !unsafe.test(textOf(el)))
+        || options.find((el) => /\\bcareer websites?\\b/i.test(textOf(el)) && !unsafe.test(textOf(el)));
+      if (!wanted) return { ok: false, reason: "safe_source_category_not_found", labels: options.map(textOf).slice(0, 20) };
+      wanted.scrollIntoView({ block: "nearest", inline: "nearest" });
+      const rect = wanted.getBoundingClientRect();
+      return { ok: true, label: textOf(wanted), x: Math.round(rect.left + rect.width / 2), y: Math.round(rect.top + rect.height / 2) };
+    })()`,
+    20000,
+  );
+  if (clickedSafeTopLevel?.ok) {
+    attempts.push({ step: "safe_category_target", ...clickedSafeTopLevel });
+    await pageClient.send("Input.dispatchMouseEvent", {
+      type: "mouseMoved",
+      x: clickedSafeTopLevel.x,
+      y: clickedSafeTopLevel.y,
+    });
+    await pageClient.send("Input.dispatchMouseEvent", {
+      type: "mousePressed",
+      x: clickedSafeTopLevel.x,
+      y: clickedSafeTopLevel.y,
+      button: "left",
+      clickCount: 1,
+    });
+    await pageClient.send("Input.dispatchMouseEvent", {
+      type: "mouseReleased",
+      x: clickedSafeTopLevel.x,
+      y: clickedSafeTopLevel.y,
+      button: "left",
+      clickCount: 1,
+    });
+    await sleep(1600);
+    attempts.push({ step: "safe_children_loaded", ...(await sourceKeyboardState()) });
+    await dispatchKey("Enter", 13);
+    await sleep(900);
+    const finalState = await sourceKeyboardState();
+    attempts.push({ step: "safe_child_selected", ...finalState });
+    if (finalState.selectedOk) {
+      return { ok: true, reason: "source_keyboard_selected", attempts };
     }
+  }
+  // Workday source prompts use native keyboard state: synthetic DOM key events
+  // can leave focus on the wrong prompt. In p Chrome, real CDP key events match
+  // the manual flow: ArrowDown to Job Board, Enter to load children, Enter to
+  // commit the first child such as Industry Job Board.
+  for (let attempt = 0; attempt < 12; attempt += 1) {
+    const state = await sourceKeyboardState();
+    attempts.push({ step: "category_scan", attempt: attempt + 1, ...state });
+    if (/job sites?|job board/i.test(state.highlighted?.label || "") && !isUnsafeSourceText(state.highlighted?.label || "")) {
+      break;
+    }
+    await dispatchKey("ArrowDown", 40);
+    await sleep(160);
+  }
+  await dispatchKey("Enter", 13);
+  await sleep(1600);
+  attempts.push({ step: "children_loaded", ...(await sourceKeyboardState()) });
+  await dispatchKey("Enter", 13);
+  await sleep(900);
+  const finalState = await sourceKeyboardState();
+  attempts.push({ step: "child_selected", ...finalState });
+  if (finalState.selectedOk) {
+    return {
+      ok: true,
+      reason: "source_keyboard_selected",
+      attempts,
+    };
   }
   return {
     ok: false,
@@ -2055,6 +2188,7 @@ async function clearCurrentPage(optionsClient, applyUrl) {
         .replace(/\\/$/, "");
       const jobPathBase = normalizeWorkdayPathname(parsedApplyUrl.pathname)
         .replace(/\\/apply\\/applyManually\\/?$/i, "")
+        .replace(/\\/apply\\/.*$/i, "")
         .replace(/\\/apply\\/?$/i, "");
       const exactApplyManually = (item) => String(item.url || "").startsWith(applyBase)
         && !/error|ok/i.test(String(item.title || ""));
@@ -2979,16 +3113,23 @@ async function run() {
           }
         }
         const sourceNeedsKeyboard =
-          fillSummary.manualReviewReasons.some((reason) =>
-            /required_field_unresolved:commit_not_verified/.test(reason),
-          ) &&
           fillSummary.unfilledRequired.some((field) =>
             /source--source|how did you hear about us/i.test(
               [field.id, field.name, field.descriptor]
                 .filter(Boolean)
                 .join(" "),
             ),
-          );
+          ) &&
+          (fillSummary.manualReviewReasons.some((reason) =>
+            /required_field_unresolved:(commit_not_verified|field_fill_timeout)/.test(
+              reason,
+            ),
+          ) ||
+            fillSummary.bestEffortWarnings.some((warning) =>
+              /field_fill_timeout|workday_source_options_unavailable|workday_commit_not_verified/.test(
+                warning,
+              ),
+            ));
         if (sourceNeedsKeyboard) {
           const cdpSourceKeyboard =
             await tryFixWorkdaySourceViaKeyboard(pageClient);
@@ -2997,7 +3138,9 @@ async function run() {
             fillSummary.manualReviewReasons =
               fillSummary.manualReviewReasons.filter(
                 (reason) =>
-                  !/required_field_unresolved:commit_not_verified/.test(reason),
+                  !/required_field_unresolved:(commit_not_verified|field_fill_timeout)/.test(
+                    reason,
+                  ),
               );
             fillSummary.unfilledRequired = fillSummary.unfilledRequired.filter(
               (field) =>

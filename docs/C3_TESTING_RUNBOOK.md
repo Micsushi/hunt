@@ -538,14 +538,14 @@ node scripts\c3_workday_live_smoke.js --mode manual --resume main.pdf --target-s
 Fill only the current page in the already-open `p chrome` Workday tab:
 
 ```powershell
-node scripts\c3_workday_live_smoke.js --mode manual --resume main.pdf --preserve-current --stop-after-fill --max-pages 1
+node scripts\c3_workday_live_smoke.js --mode manual --job-url "<Workday posting URL>" --resume main.pdf --close-other-workday-tabs --stop-after-fill --max-pages 1
 ```
 
 Fill the already-open `p chrome` tab only for a one-page My Experience test,
 then stop:
 
 ```powershell
-node scripts\c3_workday_live_smoke.js --mode manual --resume main.pdf --preserve-current --target-step "My Experience" --require-target --stop-after-fill --max-pages 1
+node scripts\c3_workday_live_smoke.js --mode manual --job-url "<Workday posting URL>" --resume main.pdf --close-other-workday-tabs --target-step "My Experience" --require-target --stop-after-fill --max-pages 1
 ```
 
 Expected result for the Jonas Software Canada posting:

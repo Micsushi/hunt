@@ -281,6 +281,117 @@ def test_workday_v2_source_prompt_drills_into_category_and_selects_leaf():
     assert any("LinkedIn" in event["detail"]["options"] for event in category_events)
 
 
+def test_workday_v2_source_prompt_drills_flat_category_to_radio_leaf():
+    if sync_playwright is None:
+        pytest.skip("playwright is required for the Workday C3 fill fixture")
+
+    fill_v2_js = _module_to_browser_script(
+        _load_script(REPO_ROOT / "executioner/src/ats/workday/fill-v2.js")
+    )
+
+    with sync_playwright() as playwright:
+        try:
+            browser = playwright.chromium.launch()
+        except PlaywrightError as error:
+            pytest.skip(f"playwright chromium is unavailable: {error}")
+
+        page = browser.new_page()
+        page.set_content(
+            """
+            <html>
+              <body>
+                <div data-automation-id="applyFlowMyInfoPage">
+                  <div data-automation-id="formField-source" data-fkit-id="source--source">
+                    <label for="source--source">How Did You Hear About Us?*</label>
+                    <div data-automation-id="multiSelectContainer" data-uxi-widget-type="multiselect">
+                      <div data-automation-id="multiselectInputContainer">
+                        <input id="source--source" placeholder="Search" aria-required="true" data-uxi-widget-type="selectinput" data-uxi-multiselect-id="source-list" />
+                      </div>
+                    </div>
+                  </div>
+                </div>
+                <script>
+                  const container = document.querySelector("[data-automation-id='multiSelectContainer']");
+                  function showSourceMenu() {
+                    if (document.querySelector("#source-menu")) return;
+                    document.body.insertAdjacentHTML(
+                      "beforeend",
+                      `<div id="source-menu" role="listbox" data-automation-id="activeListContainer">
+                        <div id="source-campus" role="option" data-automation-id="menuItem">Campus Campaign</div>
+                        <div id="source-career" role="option" data-automation-id="menuItem">Career Websites</div>
+                        <div id="source-board" role="option" data-automation-id="menuItem">Job Board</div>
+                        <div id="source-sites" role="option" data-automation-id="menuItem">Job Sites</div>
+                      </div>`
+                    );
+                    document.querySelector("#source-board").addEventListener("click", () => {
+                      const menu = document.querySelector("#source-menu");
+                      setTimeout(() => {
+                        menu.innerHTML =
+                          `<div id="source-industry" role="option" data-automation-id="menuItem">
+                            <input type="radio" data-automation-id="radioBtn" onclick="selectSource('Industry Job Board')" />
+                            <span data-automation-id="promptOption">Industry Job Board</span>
+                          </div>`;
+                      }, 160);
+                    });
+                  }
+                  window.selectSource = (leaf) => {
+                    container.insertAdjacentHTML(
+                      "beforeend",
+                      `<div role="option" data-automation-id="selectedItem" aria-label="${leaf}, press delete to clear value.">${leaf}</div>`
+                    );
+                    document.querySelector("#source-menu")?.remove();
+                  };
+                  document.querySelector("#source--source").addEventListener("click", showSourceMenu);
+                </script>
+              </body>
+            </html>
+            """
+        )
+        _load_v2_workday_scripts(page)
+        page.add_script_tag(content=fill_v2_js)
+        result = page.evaluate(
+            """
+            async () => {
+              const fill = createWorkdayFillV2Function();
+              return await fill({
+                profile: {
+                  applicationSourceCategory: "Job Board",
+                  applicationSource: "LinkedIn",
+                  applicationSourceDetail: "LinkedIn",
+                },
+                settings: { fillRequiredOnly: true, useFieldPipelineV2: true },
+                activeApplyContext: {},
+                defaultResume: {},
+                fillRunId: "workday_source_flat_category",
+              });
+            }
+            """
+        )
+        selected = page.evaluate(
+            """
+            () => document.querySelector("[data-automation-id='selectedItem']")?.textContent.trim() || ""
+            """
+        )
+        browser.close()
+
+    fields = {entry["fieldId"]: entry for entry in result["v2Audit"]["fields"]}
+    source = fields["source--source"]
+    category_events = [
+        event
+        for event in result["v2Audit"]["events"]
+        if event.get("action") == "workday_prompt_category_options"
+    ]
+
+    assert result["ok"] is True
+    assert selected == "Industry Job Board"
+    assert source["filled"] is True
+    assert category_events
+    assert any(
+        "Industry Job Board" in event["detail"]["options"]
+        for event in category_events
+    )
+
+
 def test_workday_v2_uses_specific_identity_for_grouped_my_info_fields():
     if sync_playwright is None:
         pytest.skip("playwright is required for the Workday C3 fill fixture")

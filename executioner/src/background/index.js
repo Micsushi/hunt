@@ -3617,6 +3617,24 @@ async function waitForApplicationFieldsReadyAfterAuth(
       };
     }
     lastProbe = await inspectApplicationFieldReadiness(tabId);
+    const workflowDetection = await detectWorkflowForTab(tabId);
+    if (workflowDetection?.isAuthPage) {
+      await sendDebugLog("c3_page_walk_wait_after_auth_still_auth", {
+        tabId,
+        fillRunId,
+        pageLabel,
+        waitMs: Date.now() - startedAt,
+        detection: workflowDetection,
+        probe: lastProbe,
+      });
+      return {
+        ok: false,
+        reason: "still_on_auth_page",
+        waitMs: Date.now() - startedAt,
+        detection: workflowDetection,
+        lastProbe,
+      };
+    }
     const currentStepTitle = String(lastProbe?.currentStep?.title || "");
     const currentStepLooksAuth =
       /create account|sign in|log in|login|register|sign up/i.test(
@@ -3640,24 +3658,6 @@ async function waitForApplicationFieldsReadyAfterAuth(
         reason: "application_fields_ready",
         waitMs: Date.now() - startedAt,
         probe: lastProbe,
-      };
-    }
-    const workflowDetection = await detectWorkflowForTab(tabId);
-    if (workflowDetection?.isAuthPage) {
-      await sendDebugLog("c3_page_walk_wait_after_auth_still_auth", {
-        tabId,
-        fillRunId,
-        pageLabel,
-        waitMs: Date.now() - startedAt,
-        detection: workflowDetection,
-        probe: lastProbe,
-      });
-      return {
-        ok: false,
-        reason: "still_on_auth_page",
-        waitMs: Date.now() - startedAt,
-        detection: workflowDetection,
-        lastProbe,
       };
     }
     await showFillProgress(
@@ -6946,7 +6946,11 @@ async function handleMessage(message, sender = {}) {
               );
             }
           }
-          if (result.pageWalk.manualReviewRequired && result.attempt) {
+          if (
+            result.pageWalk.manualReviewRequired &&
+            result.pageWalk.stoppedReason !== "final_submit_visible" &&
+            result.attempt
+          ) {
             result.attempt.manualReviewRequired = true;
             result.attempt.manualReviewReasons = Array.from(
               new Set([
