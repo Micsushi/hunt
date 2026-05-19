@@ -850,19 +850,6 @@
         if (fillRunId) {
           window.__huntApplyCancelFillRunId = fillRunId;
         }
-        const button = host.shadowRoot.getElementById(
-          "hunt-apply-fill-progress-cancel",
-        );
-        const text = host.shadowRoot.getElementById(
-          "hunt-apply-fill-progress-message",
-        );
-        if (button) {
-          button.disabled = true;
-          button.textContent = "Canceling";
-        }
-        if (text) {
-          text.textContent = "Canceling fill";
-        }
         logPageUiEvent(
           "ui.fill_progress.cancel_click",
           "Cancel fill clicked.",
@@ -870,6 +857,7 @@
             fillRunId,
           },
         );
+        hideFillProgress();
         chrome.runtime
           .sendMessage({
             type: "hunt.apply.cancel_fill",

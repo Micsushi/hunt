@@ -172,8 +172,24 @@ def test_fill_progress_can_request_cancel():
 
     assert "hunt-apply-fill-progress-cancel" in content
     assert 'type: "hunt.apply.cancel_fill"' in content
+    cancel_handler = content[
+        content.index('"hunt-apply-fill-progress-cancel"') : content.index(
+            "logPageUiEvent(\"ui.fill_progress.show\""
+        )
+    ]
+    assert "hideFillProgress();" in cancel_handler
+    assert "Canceling fill" not in cancel_handler
     assert "ui.fill_progress.cancel_click" in content
     assert 'case "hunt.apply.cancel_fill"' in background
+    cancel_case = background[
+        background.index('case "hunt.apply.cancel_fill"') : background.index(
+            'case "hunt.apply.site_action_log"'
+        )
+    ]
+    assert "hideFillProgress(tabId)" in cancel_case
+    assert "showFillProgress" not in cancel_case
+    assert "activeFillRunByTab.get(tabId)" in cancel_case
+    assert "activeFillRunByTab.delete(tabId)" in cancel_case
     assert "activeFillRuns" in background
     assert "activeFillRunByTab" in background
     assert "cancelActiveFillRunsForTab" in background
@@ -217,6 +233,10 @@ def test_fill_run_cancels_when_user_reloads_same_page():
     assert 'changeInfo.status === "loading"' in background
     assert 'cancelActiveFillRunsForTab(tabId,"page_reloaded"' in compact_background
     assert "normalizeComparableUrl" in background
+    reload_start = background.index("async function cancelFillRunForUserReload")
+    reload_fn = background[reload_start : background.index("async function sendDebugLog")]
+    assert "nextUrl !== currentUrl" not in reload_fn
+    assert "run.lastKnownUrl = nextUrl || currentUrl" in reload_fn
     assert "expectedReloads" in background
     assert "markFillRunExpectedReload(fillRunId)" in background
     assert "fill.cancel_page_reload" in background
@@ -280,8 +300,66 @@ def test_application_readiness_requires_application_fields_not_generic_controls(
     assert "requiredApplicationFieldCount" in readiness
     assert "entry.applicationFieldCount > 0" in readiness
     assert "skip to main content" in readiness
+    assert "workflowDetection?.isAuthPage" in wait_ready
+    assert 'reason: "still_on_auth_page"' in wait_ready
     assert "lastProbe.applicationFieldCount > 0" in wait_ready
     assert "lastProbe.meaningfulControlCount >= 2" not in wait_ready
+
+
+def test_auth_email_prefers_account_email():
+    resolver = _load_script(REPO_ROOT / "executioner/src/shared/v2/answer-resolver.js")
+    injected = _load_script(REPO_ROOT / "executioner/src/shared/injected.js")
+    background = _load_script(REPO_ROOT / "executioner/src/background/index.js")
+    pipeline = _load_script(REPO_ROOT / "executioner/src/shared/v2/field-pipeline.js")
+
+    assert 'entry.id === "email"' in resolver
+    assert "profile.accountEmail" in resolver
+    assert "profile:accountEmail" in resolver
+    assert "create account email" in injected
+    assert "fillVisibleAuthFields" in background
+    assert "filledAuthFields" in background
+    assert "shouldFillAuthConsentCheckbox" in pipeline
+    assert "auth_page_checkbox_consent" in pipeline
+    assert "visibleCheckboxes.length === 1" in pipeline
+
+
+def test_detected_workday_overrides_stale_generic_context():
+    runner = _load_script(REPO_ROOT / "executioner/src/background/fill-runner.js")
+    routes = _load_script(REPO_ROOT / "executioner/src/background/fill-routes.js")
+
+    assert "normalizeContextForCurrentPage" in runner
+    assert "hostForUrl" in runner
+    assert "contextHost !== pageHost" in runner
+    assert "contextAtsType === \"generic\"" in runner
+    assert "detectedSpecificAts" in runner
+    assert 'contextAtsType !== "generic"' in routes
+    assert 'contextAtsType !== "unknown"' in routes
+
+
+def test_validation_repair_scopes_to_visible_error_fields():
+    background = _load_script(REPO_ROOT / "executioner/src/background/index.js")
+    pipeline = _load_script(REPO_ROOT / "executioner/src/shared/v2/field-pipeline.js")
+    runner = _load_script(REPO_ROOT / "executioner/src/background/fill-runner.js")
+
+    assert "repairVisibleValidationErrors" in background
+    assert "repairVisibleValidationErrors" in runner
+    assert "function fieldMatchesRepairError" in pipeline
+    assert "step: \"field.repair_scope\"" in pipeline
+    assert "not_in_visible_validation_errors" in pipeline
+
+
+def test_optional_checkbox_does_not_use_first_real_fallback():
+    matcher = _load_script(REPO_ROOT / "executioner/src/shared/v2/option-matcher.js")
+    resolver = _load_script(REPO_ROOT / "executioner/src/shared/v2/answer-resolver.js")
+
+    assert 'field?.uiModel === "checkbox"' in matcher
+    assert 'source: "checkbox_no_safe_match"' in matcher
+    assert "first_real_option" in matcher
+    assert matcher.index('source: "checkbox_no_safe_match"') < matcher.index(
+        "max_progress_first_real_option"
+    )
+    assert 'path === "lastName"' in resolver
+    assert "direct === names.fullName" in resolver
 
 
 def test_page_ui_message_recovers_when_content_script_missing():
@@ -311,6 +389,8 @@ def test_page_walk_next_uses_condition_waits_instead_of_mandatory_sleep():
 
     assert "waitForPostNextSignalForTab" in background
     assert "pageSnapshotChangedAfterAction" in background
+    assert "waitForSafeNextAvailabilityForTab" in background
+    assert "next.available_after_wait" in background
     assert "setTimeout(resolve, 1800)" not in safe_next_click
     assert "setTimeout(resolve, 650)" not in page_walk
     assert "setTimeout(resolve, 900)" not in page_walk
@@ -458,6 +538,8 @@ def test_workday_logs_field_and_dropdown_actions():
     assert "workday_prompt_category_options" in workday_v2_drivers
     assert "waitForWorkdayOptions" in workday_v2_drivers
     assert "sourceCategoryScore" in workday_v2_drivers
+    assert "optionBelongsToField" in workday_v2_drivers
+    assert "visibleWorkdayOptions(field)" in workday_v2_drivers
     assert "data-uxi-multiselectlistitem-hassidecharm" in workday_v2_drivers
     assert "data-uxi-multiselectlistitem-type" in workday_v2_drivers
     assert "var aliasTexts = answerTexts(answer, option)" in workday_v2_drivers
@@ -599,6 +681,26 @@ def test_apply_entry_startup_skips_non_entry_checks_before_click():
     assert apply_entry_run.index("await detectLogPromise;") > apply_entry_run.index(
         "chooseBestWorkflowActionResult"
     )
+
+
+def test_apply_entry_redetects_auth_before_job_fill():
+    background = _load_script(REPO_ROOT / "executioner/src/background/index.js")
+    combined_workflow = background[
+        background.index("class C3CombinedFillWorkflow")
+        : background.index("async function logUiEvent")
+    ]
+    fill_handler = background[
+        background.index('case "hunt.apply.fill_current_page"')
+        : background.index('case "hunt.apply.fill_remaining_with_llm"')
+    ]
+
+    assert "function workflowDetectionReadyForDecision" in background
+    assert "async function waitForWorkflowDecisionReadyAfterApplyEntry" in background
+    assert "waitForWorkflowDecisionReadyAfterApplyEntry(" in combined_workflow
+    assert "if (detection?.isAuthPage)" in combined_workflow
+    assert "post_apply_auth_landing_choice" in combined_workflow
+    assert '"Filling account signup fields: attempt 1"' in fill_handler
+    assert '"Filling account sign-in fields: attempt 1"' in fill_handler
 
 
 def test_prompt_fill_click_cannot_leave_prompt_stuck_filling():

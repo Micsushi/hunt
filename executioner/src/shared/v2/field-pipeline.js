@@ -116,6 +116,59 @@
     );
   }
 
+  function normalizedTokens(value) {
+    return String(value || "")
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, " ")
+      .replace(/\s+/g, " ")
+      .trim();
+  }
+
+  function repairFieldSignals(field) {
+    var el = field.element || field.anchor;
+    return [
+      field.fieldId,
+      field.name,
+      field.descriptor,
+      field.workday?.fieldLabel,
+      field.questionType,
+      el?.id,
+      el?.name,
+      el?.getAttribute?.("aria-label"),
+      el?.getAttribute?.("data-automation-id"),
+    ]
+      .filter(Boolean)
+      .map(normalizedTokens)
+      .filter(Boolean);
+  }
+
+  function fieldMatchesRepairError(field, context) {
+    var errors = Array.isArray(context.repairVisibleValidationErrors)
+      ? context.repairVisibleValidationErrors
+      : [];
+    if (!errors.length) {
+      return true;
+    }
+    var signals = repairFieldSignals(field);
+    return errors.some(function (error) {
+      var text = normalizedTokens(
+        typeof error === "string"
+          ? error
+          : [error.field, error.label, error.message, error.text, error.summary]
+              .filter(Boolean)
+              .join(" "),
+      );
+      if (!text) {
+        return false;
+      }
+      return signals.some(function (signal) {
+        return (
+          signal.length >= 4 && (text.includes(signal) || signal.includes(text))
+        );
+      });
+    });
+  }
+
   function shouldFillOptionalProfileCorrection(field, context) {
     var profile = context.profile || {};
     if (!profile.country) {
@@ -137,6 +190,84 @@
       signal.includes("address--countryregion") ||
       signal.includes("country region")
     );
+  }
+
+  function authCheckboxSignal(field) {
+    var el = field.element || field.anchor;
+    return [
+      field.fieldId,
+      field.name,
+      field.descriptor,
+      field.workday?.fieldLabel,
+      el?.id,
+      el?.name,
+      el?.getAttribute?.("aria-label"),
+      el?.getAttribute?.("data-automation-id"),
+      el?.closest?.("label")?.innerText,
+      el?.closest?.("[data-automation-id], section, div")?.innerText,
+    ]
+      .filter(Boolean)
+      .join(" ")
+      .toLowerCase();
+  }
+
+  function shouldFillAuthConsentCheckbox(field) {
+    if (field.uiModel !== "checkbox") {
+      return false;
+    }
+    var body = String(document.body?.innerText || "").toLowerCase();
+    var isAuthPage =
+      /create account|sign in|log in|login|register|already have an account|don't have an account/.test(
+        body,
+      ) ||
+      /\/login(?:\?|$)|\/apply\/applymanually/i.test(
+        String(window.location?.href || ""),
+      );
+    if (!isAuthPage) {
+      return false;
+    }
+    var signal = authCheckboxSignal(field);
+    if (/do not|decline|unsubscribe|opt out|do not contact/i.test(signal)) {
+      return false;
+    }
+    var looksLikeConsent =
+      /privacy|terms|condition|consent|agree|acknowledg|candidate|create account|check the box|createaccountcheckbox/i.test(
+        signal,
+      );
+    var visibleCheckboxes = Array.from(
+      document.querySelectorAll('input[type="checkbox"]'),
+    ).filter(function (checkbox) {
+      if (!checkbox || typeof checkbox.getBoundingClientRect !== "function") {
+        return false;
+      }
+      var rect = checkbox.getBoundingClientRect();
+      var style = window.getComputedStyle(checkbox);
+      return (
+        style.display !== "none" &&
+        style.visibility !== "hidden" &&
+        rect.width > 0 &&
+        rect.height > 0
+      );
+    });
+    return (
+      visibleCheckboxes.includes(field.element) &&
+      (looksLikeConsent || visibleCheckboxes.length === 1)
+    );
+  }
+
+  function authConsentQuestion() {
+    var entry = (root.fieldCatalog?.entries || []).find(function (candidate) {
+      return candidate.id === "terms_acceptance";
+    });
+    if (!entry) {
+      return null;
+    }
+    return {
+      type: entry.id,
+      entry: entry,
+      source: "auth_checkbox",
+      confidence: 0.94,
+    };
   }
 
   function fillCancelled(context) {
@@ -300,11 +431,25 @@
       },
     );
 
+    var authConsentCheckbox = shouldFillAuthConsentCheckbox(field);
     var question = root.questionIdentifier.identifyQuestion(
       field,
       audit,
       fieldAudit,
     );
+    if (question.type === "unknown" && authConsentCheckbox) {
+      var consentQuestion = authConsentQuestion();
+      if (consentQuestion) {
+        question = consentQuestion;
+        root.audit.pushFieldStep(audit, fieldAudit, {
+          action: "question_identified",
+          step: "question.auth_checkbox",
+          status: "ok",
+          questionType: question.type,
+          reason: "auth_page_checkbox_consent",
+        });
+      }
+    }
     fieldAudit.questionType = question.type;
     if (question.type === "unknown") {
       root.audit.pushIssue(audit, fieldAudit, {
@@ -366,9 +511,17 @@
       });
       option = match.option;
       fieldAudit.selectedOption = option?.label || "";
+      if (
+        question.type === "unknown" &&
+        option &&
+        !String(fieldAudit.answerPreview || "").trim()
+      ) {
+        fieldAudit.answerPreview = option.label || option.value || "";
+      }
       fieldAudit.valueSource = match.fallback
         ? "fallback:" + match.source
         : answer.source || match.source;
+      fieldAudit.noOptionReason = option ? "" : match.source;
       root.audit.pushFieldStep(audit, fieldAudit, {
         action: "option_resolved",
         step: "option.match",
@@ -411,7 +564,10 @@
         uiModel: field.uiModel || "",
         workdayKind: field.workday?.kind || "",
       });
-      fieldAudit.afterState = root.fieldState.readFieldState(field);
+      fieldAudit.afterState = {
+        ...root.fieldState.readFieldState(field),
+        reason: fieldAudit.noOptionReason || "no_matching_option",
+      };
       return { filled: false, fieldAudit: fieldAudit };
     }
 
@@ -592,13 +748,26 @@
           !field.required &&
           field.uiModel !== "file" &&
           !hasValidationState(field) &&
-          !shouldFillOptionalProfileCorrection(field, context)
+          !shouldFillOptionalProfileCorrection(field, context) &&
+          !shouldFillAuthConsentCheckbox(field)
         ) {
           root.audit.pushEvent(audit, {
             action: "field_skipped",
             step: "field.required_filter",
             status: "info",
             reason: "not_required",
+            fieldId: field.fieldId,
+            questionHash: field.questionHash,
+            uiModel: field.uiModel,
+          });
+          continue;
+        }
+        if (!fieldMatchesRepairError(field, context)) {
+          root.audit.pushEvent(audit, {
+            action: "field_skipped",
+            step: "field.repair_scope",
+            status: "info",
+            reason: "not_in_visible_validation_errors",
             fieldId: field.fieldId,
             questionHash: field.questionHash,
             uiModel: field.uiModel,

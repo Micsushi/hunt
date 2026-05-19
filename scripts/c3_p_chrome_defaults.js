@@ -2,7 +2,7 @@
 
 const DEFAULT_ACCOUNT_EMAIL = "hunt.executioner.test@gmail.com";
 const DEFAULT_ACCOUNT_PASSWORD =
-  process.env.HUNT_C3_TEST_ACCOUNT_PASSWORD || "Hunt12345678!";
+  process.env.HUNT_C3_TEST_ACCOUNT_PASSWORD || "Hunt112233445566778899!";
 
 function makeDefaultWorkExperience() {
   return {
@@ -16,6 +16,21 @@ function makeDefaultWorkExperience() {
     current: false,
     description:
       "Built browser automation, data tooling, and production software features.",
+  };
+}
+
+function makeDefaultSecondWorkExperience() {
+  return {
+    jobTitle: "Research Assistant",
+    company: "University of Alberta",
+    location: "Edmonton, Alberta, Canada",
+    startMonth: "09",
+    startYear: "2024",
+    endMonth: "02",
+    endYear: "2026",
+    current: false,
+    description:
+      "Built data analysis tooling and supported research workflows with Python.",
   };
 }
 
@@ -92,7 +107,10 @@ function makeWorkdayProfileDefaults(options = {}) {
     disclosureVisibleMinority: "",
     disclosureVeteranStatus: "",
     skills: ["Python", "React"],
-    workExperience: [makeDefaultWorkExperience()],
+    workExperience: [
+      makeDefaultWorkExperience(),
+      makeDefaultSecondWorkExperience(),
+    ],
     education: [makeDefaultEducation()],
     websites: [
       "https://mshi.ca",

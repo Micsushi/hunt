@@ -353,15 +353,16 @@ async function seedExtension(optionsClient, args, applyUrl) {
         applyUrl: ${js(applyUrl)},
         jobUrl: ${js(applyUrl)}
       };
-      const storedSettings = await chrome.storage.sync.get("hunt.apply.settings");
-      await chrome.storage.sync.set({
-        "hunt.apply.settings": {
-          ...(storedSettings["hunt.apply.settings"] || {}),
-          settingsVersion: 4,
+      const storedRuntime = await chrome.storage.local.get("hunt.apply.runtimeConfig");
+      await chrome.storage.local.set({
+        "hunt.apply.runtimeConfig": {
+          ...(storedRuntime["hunt.apply.runtimeConfig"] || {}),
           autoAccountSignupLoginEnabled: true,
           autoEmailVerificationEnabled: true,
           autoClickNextAfterFill: false,
-          emailVerificationTimeoutSeconds: ${Number(args.timeoutSeconds || 90)}
+          emailVerificationTimeoutSeconds: ${Number(args.timeoutSeconds || 90)},
+          configuredBy: "scripts/c3_email_verification_smoke.js",
+          configuredAt: new Date().toISOString()
         }
       });
       await chrome.storage.local.set({
@@ -788,11 +789,18 @@ async function clickSafeAccountAction(pageClient, intent = "auto") {
       const forbidden = /(submit application|final submit|submit my application|send application|withdraw|delete)/i;
       const unsafeNavigation = /^(skip to main content|search for jobs|back to job posting|read more|forgot your password\\?|linkedin)\\b/i;
       const allowed = (button) => !forbidden.test(button.text) && !unsafeNavigation.test(button.text);
+      const verificationActionPatterns = [
+        /^(resend account verification)\\b/i,
+        /^(resend verification|resend verification email)\\b/i,
+        /^(send verification|send verification email)\\b/i,
+        /^(verify email|verify account)\\b/i
+      ];
       const preferredByIntent = {
         "apply": [/^(apply manually)$/i, /^(apply now)$/i, /^apply for this job$/i, /^apply\\b/i],
         "email": [/^sign in with email\\b/i, /^sign in using email\\b/i, /^email sign in\\b/i],
         "create": [/^(create account|sign up|signup|register)\\b/i],
-        "submit": [/^(continue|next)\\b/i, /^(verify email|send verification|resend verification)\\b/i, /^(sign in|log in|login)\\b/i],
+        "verify": verificationActionPatterns,
+        "submit": [/^(continue|next)\\b/i, ...verificationActionPatterns, /^(sign in|log in|login)\\b/i],
         "auto": [
           /^(apply manually)$/i,
           /^sign in with email\\b/i,
@@ -800,7 +808,7 @@ async function clickSafeAccountAction(pageClient, intent = "auto") {
           /^email sign in\\b/i,
           /^(create account|sign up|signup|register)\\b/i,
           /^(continue|next)\\b/i,
-          /^(verify email|send verification|resend verification)\\b/i,
+          ...verificationActionPatterns,
           /^(sign in|log in|login)\\b/i,
           /^apply\\b/i,
           /^(apply now)$/i,
@@ -1960,9 +1968,119 @@ async function main() {
       }
     }
 
+    let verificationRequest = {
+      ok: true,
+      clicked: false,
+      skipped: true,
+      reason: "verification_request_not_needed",
+    };
+    let verificationRequestedAt = "";
+    const verificationNeededState = Boolean(
+      postSubmitState.verificationNeeded ||
+        reachResult.state?.verificationNeeded ||
+        loginFirstResult.loginState?.verificationNeeded,
+    );
+    if (args.provider !== "fake" && verificationNeededState) {
+      verificationRequestedAt = new Date().toISOString();
+      verificationRequest = await clickSafeAccountAction(pageClient, "verify");
+      recordWorkflowEvent(
+        "auth",
+        "request_email_verification",
+        verificationRequest.ok ? "ok" : "failed",
+        verificationRequest.ok
+          ? "Requested account verification email from Workday."
+          : "Could not request account verification email from Workday.",
+        {
+          reason: verificationRequest.reason || "",
+          label: verificationRequest.label || "",
+          clicked: Boolean(verificationRequest.clicked),
+          postSubmitVerificationNeeded: Boolean(
+            postSubmitState.verificationNeeded,
+          ),
+          reachVerificationNeeded: Boolean(reachResult.state?.verificationNeeded),
+          loginVerificationNeeded: Boolean(
+            loginFirstResult.loginState?.verificationNeeded,
+          ),
+        },
+      );
+      if (!verificationRequest.ok || !verificationRequest.clicked) {
+        const retrySignIn = await signInFromCurrentAccountState(
+          pageClient,
+          args,
+          fillTargetUrl,
+        );
+        if (retrySignIn.switchedClient && retrySignIn.client) {
+          pageClient.close();
+          pageClient = retrySignIn.client;
+        }
+        recordWorkflowEvent(
+          "auth",
+          "verification_signin_retry",
+          retrySignIn.ok ? "ok" : "failed",
+          retrySignIn.ok
+            ? "Sign-in succeeded after verification state changed."
+            : "Sign-in retry still did not advance after verification request was unavailable.",
+          {
+            reason: retrySignIn.reason || retrySignIn.loginPage?.reason || "",
+            loginFilled: Boolean(retrySignIn.loginFill?.ok),
+            loginSubmitted: Boolean(retrySignIn.loginSubmit?.ok),
+            signedInOrAdvanced: Boolean(
+              retrySignIn.loginState?.signedInOrAdvanced,
+            ),
+            verificationNeeded: Boolean(retrySignIn.loginState?.verificationNeeded),
+          },
+        );
+        if (retrySignIn.ok) {
+          const applicationState = await inspectApplicationState(pageClient);
+          console.log(
+            JSON.stringify(
+              {
+                ok: true,
+                provider: args.provider,
+                resetSiteData,
+                reason: "verification_state_changed_signin_succeeded",
+                fill: {
+                  ok: Boolean(fillResult.ok || workdayAccountFill.ok),
+                  filledFieldCount:
+                    fillResult.attempt?.filledFieldCount ||
+                    fillResult.result?.filledFieldCount ||
+                    0,
+                  workdayAccountFill,
+                },
+                submit: submitResult,
+                bridge: {
+                  ok: true,
+                  skipped: true,
+                  reason: "verification_resend_not_needed_after_retry",
+                },
+                login: retrySignIn,
+                verified: applicationState,
+              },
+              null,
+              2,
+            ),
+          );
+          return;
+        }
+        if (retrySignIn.loginState?.verificationNeeded) {
+          verificationRequestedAt = new Date().toISOString();
+          verificationRequest = await clickSafeAccountAction(pageClient, "verify");
+        }
+        if (!verificationRequest.ok || !verificationRequest.clicked) {
+          throw new Error(
+            `Verification email request failed: ${JSON.stringify({
+              verificationRequest,
+              retrySignIn,
+            })}`,
+          );
+        }
+      }
+    }
+
     const expectedVerificationHosts =
       args.provider === "fake" ? ["127.0.0.1"] : [new URL(fillTargetUrl).host];
     const verificationSince =
+      verificationRequestedAt ||
       submitResult.signupStartedAt ||
       submitStartedAt ||
       new Date().toISOString();

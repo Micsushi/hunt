@@ -47,11 +47,15 @@
       };
     }
     if (field.uiModel === "checkbox") {
+      var checked =
+        Boolean(el.checked) ||
+        el.getAttribute?.("aria-checked") === "true" ||
+        Boolean(el.closest?.('[aria-checked="true"]'));
       return {
-        rawValue: el.checked ? "checked" : "",
-        text: el.checked ? "checked" : "",
-        checked: Boolean(el.checked),
-        selected: Boolean(el.checked),
+        rawValue: checked ? "checked" : "",
+        text: checked ? "checked" : "",
+        checked: checked,
+        selected: checked,
       };
     }
     if (field.uiModel === "select") {

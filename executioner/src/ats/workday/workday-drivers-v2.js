@@ -311,7 +311,8 @@
       el?.getAttribute?.("aria-label"),
       el?.getAttribute?.("placeholder"),
       el?.getAttribute?.("data-uxi-multiselect-id"),
-      el?.closest?.('[data-automation-id="formField-skills"]')
+      el
+        ?.closest?.('[data-automation-id="formField-skills"]')
         ?.getAttribute?.("data-automation-id"),
     ]
       .filter(Boolean)
@@ -440,7 +441,9 @@
     }
     return {
       ok: ok,
-      reason: ok ? "technical_skills_selected" : "workday_skill_checkbox_not_verified",
+      reason: ok
+        ? "technical_skills_selected"
+        : "workday_skill_checkbox_not_verified",
       afterState: state,
       selectedOption: selectedTechnicalSkillLabels(field).join("; "),
       valueSource: fieldAudit?.valueSource || answer?.source || "",
@@ -448,11 +451,43 @@
     };
   }
 
-  function visibleWorkdayOptions() {
+  function optionBelongsToField(target, field) {
+    if (!field?.element || !target) {
+      return true;
+    }
+    var input = field.element;
+    var multiSelectId = input?.getAttribute?.("data-uxi-multiselect-id") || "";
+    var targetText = [
+      target.getAttribute?.("data-uxi-multiselect-id"),
+      target
+        .querySelector?.("[data-uxi-multiselect-id]")
+        ?.getAttribute?.("data-uxi-multiselect-id"),
+      target
+        .closest?.("[data-uxi-multiselect-id]")
+        ?.getAttribute?.("data-uxi-multiselect-id"),
+    ]
+      .filter(Boolean)
+      .join(" ");
+    if (multiSelectId && targetText && targetText.includes(multiSelectId)) {
+      return true;
+    }
+    var activeListbox = workdayActiveListboxFor(input);
+    if (activeListbox && activeListbox.contains(target)) {
+      return true;
+    }
+    var container = root.workdayUi?.nearestWorkdayField(input);
+    return Boolean(container && container.contains(target));
+  }
+
+  function visibleWorkdayOptions(field) {
     var options = [];
     var seen = new Set();
+    var activeListbox = field?.element
+      ? workdayActiveListboxFor(field.element)
+      : null;
+    var rootNode = activeListbox || document;
     Array.from(
-      document.querySelectorAll(
+      rootNode.querySelectorAll(
         [
           '[role="option"]',
           '[data-automation-id="promptOption"]',
@@ -470,6 +505,9 @@
           el.closest?.('[role="option"]') ||
           el.closest?.('[data-automation-id="promptOption"]') ||
           el;
+        if (!optionBelongsToField(target, field)) {
+          return;
+        }
         if (
           target.closest?.('[data-automation-id="selectedItemList"]') ||
           target.matches?.('[data-automation-id="selectedItem"]') ||
@@ -731,18 +769,18 @@
     );
   }
 
-  async function waitForWorkdayOptions(previousLabels, timeoutMs) {
+  async function waitForWorkdayOptions(previousLabels, timeoutMs, field) {
     var start = Date.now();
     var attempts = 0;
     var previousKey = (previousLabels || []).map(norm).join("|");
-    var options = visibleWorkdayOptions();
+    var options = visibleWorkdayOptions(field);
     while (
       Date.now() - start < (timeoutMs || 2200) &&
       !window.__huntApplyCancelAllFills &&
       !window.__huntApplyCancelFillRunId
     ) {
       attempts += 1;
-      options = visibleWorkdayOptions();
+      options = visibleWorkdayOptions(field);
       var key = options
         .map(function (option) {
           return norm(option.label);
@@ -1036,7 +1074,8 @@
       field.workday?.kind === "phone_country_code" ||
       isTechnicalSkillsField(field, answer);
     var searchText = shouldTypeSearch
-      ? answer.value || (field.workday?.kind === "phone_country_code" ? "Canada (+1)" : "")
+      ? answer.value ||
+        (field.workday?.kind === "phone_country_code" ? "Canada (+1)" : "")
       : "";
     _huntLog("collectWorkdayOptions_start", {
       descriptor: String(field.descriptor || "").slice(0, 120),
@@ -1047,7 +1086,7 @@
     await closePopup(field);
     await sleep(40);
     var previousLabels = searchText
-      ? visibleWorkdayOptions().map(function (option) {
+      ? visibleWorkdayOptions(field).map(function (option) {
           return option.label;
         })
       : [];
@@ -1055,12 +1094,17 @@
     var waitResult = await waitForWorkdayOptions(
       previousLabels,
       searchText ? 3400 : 2200,
+      field,
     );
     var options = waitResult.options;
-    if (!options.length && searchText && isTechnicalSkillsField(field, answer)) {
+    if (
+      !options.length &&
+      searchText &&
+      isTechnicalSkillsField(field, answer)
+    ) {
       keyOn(field.element, "Enter");
       await sleep(180);
-      waitResult = await waitForWorkdayOptions([], 2600);
+      waitResult = await waitForWorkdayOptions([], 2600, field);
       options = waitResult.options;
     }
     _huntLog("collectWorkdayOptions_after_popup", {
@@ -1136,7 +1180,7 @@
     }
     for (var idx = 0; idx < categories.length; idx++) {
       var category = categories[idx];
-      var beforeLabels = visibleWorkdayOptions().map(function (candidate) {
+      var beforeLabels = visibleWorkdayOptions(field).map(function (candidate) {
         return candidate.label;
       });
       root.audit?.pushFieldStep(audit, fieldAudit, {
@@ -1151,7 +1195,7 @@
         },
       });
       await clickWorkdayOption(category);
-      var waitResult = await waitForWorkdayOptions(beforeLabels, 2600);
+      var waitResult = await waitForWorkdayOptions(beforeLabels, 2600, field);
       var childOptions = waitResult.options.filter(function (candidate) {
         return !candidate.isCategory;
       });
@@ -1178,7 +1222,7 @@
       await closePopup(field);
       await sleep(80);
       await openPopup(field, "");
-      await waitForWorkdayOptions([], 1600);
+      await waitForWorkdayOptions([], 1600, field);
     }
     return null;
   }
@@ -1232,6 +1276,11 @@
     var el = option?.element;
     if (!el) {
       return false;
+    }
+    if (!option?.isCategory) {
+      workdayClickOptionCommitTarget(el);
+      await sleep(350);
+      return true;
     }
     if (option?.isCategory) {
       var rect = el.getBoundingClientRect?.();

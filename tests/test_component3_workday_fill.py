@@ -221,7 +221,7 @@ def test_workday_v2_source_prompt_drills_into_category_and_selects_leaf():
                       menu.insertAdjacentHTML(
                         "beforeend",
                         `<div role="option" data-automation-id="promptOption" onclick="selectSource('${leaf}')">
-                          <input type="radio" data-automation-id="radioBtn" /> ${leaf}
+                          <input type="radio" data-automation-id="radioBtn" onclick="event.stopPropagation()" /> ${leaf}
                         </div>`
                       );
                     }, 380);
@@ -426,6 +426,7 @@ def test_workday_v2_uses_specific_identity_for_grouped_my_info_fields():
               return await fill({
                 profile: {
                   fullName: "Michael Shi",
+                  lastName: "Michael Shi",
                   email: "wenjian2@ualberta.ca",
                   phone: "7804923111",
                   phoneDeviceType: "Mobile",
@@ -493,6 +494,68 @@ def test_workday_v2_uses_specific_identity_for_grouped_my_info_fields():
     assert "address--addressLine1" in skipped
     assert "address--postalCode" in skipped
     assert "phoneNumber--extension" in skipped
+
+
+def test_workday_v2_does_not_fill_optional_preferred_name_checkbox_by_fallback():
+    if sync_playwright is None:
+        pytest.skip("playwright is required for the Workday C3 fill fixture")
+
+    fill_v2_js = _module_to_browser_script(
+        _load_script(REPO_ROOT / "executioner/src/ats/workday/fill-v2.js")
+    )
+
+    with sync_playwright() as playwright:
+        try:
+            browser = playwright.chromium.launch()
+        except PlaywrightError as error:
+            pytest.skip(f"playwright chromium is unavailable: {error}")
+
+        page = browser.new_page()
+        page.set_content(
+            """
+            <html>
+              <body>
+                <div data-automation-id="applyFlowMyInfoPage">
+                  <div data-automation-id="formField-preferredCheck">
+                    I have a preferred name
+                    <input id="name--preferredCheck" type="checkbox" name="preferredCheck" aria-required="false" />
+                  </div>
+                </div>
+              </body>
+            </html>
+            """
+        )
+        _load_v2_workday_scripts(page)
+        page.add_script_tag(content=fill_v2_js)
+        result = page.evaluate(
+            """
+            async () => {
+              const fill = createWorkdayFillV2Function();
+              return await fill({
+                profile: { fullName: "Michael Shi", firstName: "Michael", lastName: "Shi" },
+                settings: {
+                  fillRequiredOnly: false,
+                  useFieldPipelineV2: true,
+                },
+                activeApplyContext: {},
+                defaultResume: {},
+                fillRunId: "workday_optional_preferred_checkbox",
+              });
+            }
+            """
+        )
+        checked = page.evaluate(
+            '() => document.querySelector("#name--preferredCheck").checked'
+        )
+        browser.close()
+
+    inventory = {entry["id"]: entry for entry in result["fieldInventory"]}
+    assert checked is False
+    assert inventory["name--preferredCheck"]["filled"] is False
+    assert inventory["name--preferredCheck"]["skippedReason"] in {
+        "checkbox_no_safe_match",
+        "no_options",
+    }
 
 
 def test_workday_v2_repeatables_match_profile_and_clear_deletes_rows_and_resume():
@@ -575,6 +638,10 @@ def test_workday_v2_repeatables_match_profile_and_clear_deletes_rows_and_resume(
                     <button type="button" aria-label="Delete Website 1" onclick="this.closest('.row').remove()">Delete</button>
                   </div>
                 </section>
+                <section id="social-websites">
+                  <h3>Social Network URLs</h3>
+                  <button id="social-website-add" type="button" data-automation-id="add-button" onclick="addSocialWebsiteRow()">Add Another</button>
+                </section>
                 <script>
                   function countRows(section, kind) {
                     return document.querySelectorAll(section + " .row[data-kind='" + kind + "']").length + 1;
@@ -618,6 +685,18 @@ def test_workday_v2_repeatables_match_profile_and_clear_deletes_rows_and_resume(
                       </div>`
                     );
                   }
+                  function addSocialWebsiteRow() {
+                    const count = countRows("#social-websites", "website");
+                    document.querySelector("#social-websites").insertAdjacentHTML(
+                      "beforeend",
+                      `<div class="row" data-kind="website">
+                        <h4>Social Network URLs ${count}</h4>
+                        <label>Social Network<input id="socialNetwork-${count}--type"></label>
+                        <label>URL<input id="socialNetwork-${count}--url"></label>
+                        <button type="button" aria-label="Delete Social Network URL ${count}" onclick="this.closest('.row').remove()">Delete</button>
+                      </div>`
+                    );
+                  }
                 </script>
               </body>
             </html>
@@ -654,6 +733,7 @@ def test_workday_v2_repeatables_match_profile_and_clear_deletes_rows_and_resume(
                   ],
                   websites: [
                     { url: "https://mshi.ca" },
+                    "https://linkedin.com/in/wjshi",
                     "https://github.com/micsushi",
                   ],
                 },
@@ -681,6 +761,10 @@ def test_workday_v2_repeatables_match_profile_and_clear_deletes_rows_and_resume(
                 websites: Array.from(document.querySelectorAll("#websites .row")).map((row) => (
                   row.querySelector("input")?.value || ""
                 )),
+                socialWebsites: Array.from(document.querySelectorAll("#social-websites .row")).map((row) => ({
+                  type: row.querySelector("[id$='--type']")?.value || "",
+                  url: row.querySelector("[id$='--url']")?.value || "",
+                })),
                 resumeUploaded: Boolean(document.querySelector("#resume-row")),
               });
               const valuesAfterFill = collect();
@@ -732,7 +816,11 @@ def test_workday_v2_repeatables_match_profile_and_clear_deletes_rows_and_resume(
                 "degree": "BSc Computer Science",
             }
         ],
-        "websites": ["https://mshi.ca", "https://github.com/micsushi"],
+        "websites": ["https://mshi.ca"],
+        "socialWebsites": [
+            {"type": "LinkedIn", "url": "https://linkedin.com/in/wjshi"},
+            {"type": "GitHub", "url": "https://github.com/micsushi"},
+        ],
         "resumeUploaded": True,
     }
     assert fill_events
@@ -742,6 +830,7 @@ def test_workday_v2_repeatables_match_profile_and_clear_deletes_rows_and_resume(
         "work": [],
         "education": [],
         "websites": [],
+        "socialWebsites": [],
         "resumeUploaded": False,
     }
     assert result["clearResult"]["clearedFieldCount"] >= 6

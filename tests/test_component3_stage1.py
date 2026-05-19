@@ -508,6 +508,11 @@ Expected Graduation: Sep 2026
                     detectedAtsType: "workday",
                     availableAdapters,
                 }}),
+                staleGenericWorkday: selectFillRoute({{
+                    activeApplyContext: {{ jobId: "old", sourceMode: "db", atsType: "generic" }},
+                    detectedAtsType: "workday",
+                    availableAdapters,
+                }}),
             }};
             console.log(JSON.stringify(routes));
         """
@@ -534,6 +539,8 @@ Expected Graduation: Sep 2026
         self.assertTrue(routes["c4Filler"]["usedGenericFallback"])
         self.assertEqual(routes["c4Lever"]["routeName"], "c4_ats_filler")
         self.assertEqual(routes["c4AtsFiller"]["routeName"], "c4_ats_filler")
+        self.assertEqual(routes["staleGenericWorkday"]["routeName"], "db_ats_filler")
+        self.assertEqual(routes["staleGenericWorkday"]["adapterName"], "workday")
 
     def test_ats_registry_detects_embedded_greenhouse_and_popular_backlog(self):
         registry_path = REPO_ROOT / "executioner" / "src" / "ats" / "registry.js"
@@ -632,7 +639,10 @@ Expected Graduation: Sep 2026
         self.assertIn("fillRequiredOnly", settings)
         self.assertIn("settingsVersion: 6", settings)
         self.assertIn("browserContext", settings)
+        self.assertIn("runtimeConfig", settings)
+        self.assertIn("unknownQuestionDefaults", settings)
         self.assertIn("DEFAULT_BROWSER_CONTEXT", settings)
+        self.assertIn("DEFAULT_RUNTIME_CONFIG", settings)
         self.assertIn("autoExportLogs", settings)
         self.assertIn("debugLogSinkEnabled", settings)
         self.assertIn("accountEmail", settings)
@@ -689,7 +699,13 @@ Expected Graduation: Sep 2026
         self.assertIn("sanitizeText(profile.phoneCountryCode)", storage)
         self.assertIn("sanitizeV2Audit", storage)
         self.assertIn("sanitizeBrowserContext", storage)
+        self.assertIn("sanitizeRuntimeConfig", storage)
+        self.assertIn("sanitizeUnknownQuestionDefault", storage)
+        self.assertIn("appendUnknownQuestionDefaults", storage)
+        self.assertIn("applyRuntimeConfig", storage)
         self.assertIn("STORAGE_KEYS.browserContext", storage)
+        self.assertIn("STORAGE_KEYS.runtimeConfig", storage)
+        self.assertIn("STORAGE_KEYS.unknownQuestionDefaults", storage)
         self.assertIn("autoClickNextAfterFill", storage)
         self.assertIn("function sameJson", storage)
         self.assertIn("const localPatch = {}", storage)
@@ -726,7 +742,20 @@ Expected Graduation: Sep 2026
         self.assertIn("clicked_auth_primary_action", background)
         self.assertIn("checkVisibleAuthConsentBoxes", background)
         self.assertIn("checkedConsentBoxes", background)
+        self.assertIn("fillVisibleAuthFields", background)
+        self.assertIn("filledAuthFields", background)
+        self.assertIn("V2_AUTH_FLOW_MAX_STEPS", background)
+        self.assertIn("V2_AUTH_SAME_PAGE_MAX_ATTEMPTS", background)
+        self.assertIn("auth_flow_limit_reached", background)
+        self.assertIn("auth_same_page_attempt_limit_reached", background)
+        self.assertIn("auth attempt ${authStepCount}", background)
+        self.assertIn("noteAuthSamePageFailure", background)
         self.assertIn("auth_action_did_not_advance", background)
+        self.assertIn('kind: "auth_chain_continue"', background)
+        self.assertIn('reason: "still_on_auth_page"', background)
+        self.assertIn("mainFrameApplication", background)
+        self.assertIn("currentStepLooksAuth", background)
+        self.assertIn("application_fields_ready", background)
         self.assertIn("currentStepIsAuth ||", background)
         self.assertIn('var wantsLandingChoice = authUiState === "landing_choice"', background)
         self.assertIn("exactEmailSignin", background)
@@ -990,6 +1019,9 @@ Expected Graduation: Sep 2026
             encoding="utf-8"
         )
         self.assertIn('const BROWSER_CONTEXT_KEY = "hunt.apply.browserContext"', configure_debug)
+        self.assertIn('const RUNTIME_CONFIG_KEY = "hunt.apply.runtimeConfig"', configure_debug)
+        self.assertIn("chrome.storage.local.set({ [", configure_debug)
+        self.assertNotIn("chrome.storage.sync.set({ [${js(SETTINGS_KEY)}]", configure_debug)
         self.assertIn('name: "p_chrome"', configure_debug)
         self.assertIn('pipelineVersion: "v2"', configure_debug)
         self.assertIn("browserContext: result.browserContext", configure_debug)
@@ -1405,7 +1437,7 @@ Expected Graduation: Sep 2026
             },
         )
 
-    def test_v2_unknown_yes_no_has_no_safe_option(self):
+    def test_v2_unknown_yes_no_defaults_to_yes_with_review_warning(self):
         paths = [
             REPO_ROOT / "executioner" / "src" / "shared" / "v2" / "field-catalog.js",
             REPO_ROOT / "executioner" / "src" / "shared" / "v2" / "option-matcher.js",
@@ -1445,9 +1477,9 @@ Expected Graduation: Sep 2026
         self.assertEqual(
             json.loads(result.stdout),
             {
-                "option": None,
-                "source": "unknown_no_safe_option",
-                "fallback": False,
+                "option": "Yes",
+                "source": "unknown_yes_fallback",
+                "fallback": True,
             },
         )
 
@@ -1588,6 +1620,10 @@ Expected Graduation: Sep 2026
               acknowledgement: resolve("Please enter yes if you acknowledge that you have read and answered all questions truthfully and accurately.", [
                 {{ label: "Yes", value: "Yes" }},
                 {{ label: "No", value: "No" }}
+              ]),
+              bmsEngagement: resolve("Have you previously or are you currently engaged with BMS as a contractor, consultant, former employee, or any other role that required/requires you to have access to BMS systems? If yes, please answer the questions below. If not, please continue to the next item.", [
+                {{ label: "Yes", value: "Yes" }},
+                {{ label: "No", value: "No" }}
               ])
             }}));
         """
@@ -1620,6 +1656,12 @@ Expected Graduation: Sep 2026
                     "type": "truthful_application_acknowledgement",
                     "value": "Yes",
                     "selectedOption": "Yes",
+                    "fallback": False,
+                },
+                "bmsEngagement": {
+                    "type": "previous_employer",
+                    "value": "No",
+                    "selectedOption": "No",
                     "fallback": False,
                 },
             },
@@ -1737,6 +1779,14 @@ Expected Graduation: Sep 2026
                 fieldId: "input-9",
                 descriptor: "By continuing, you agree to the above Career Privacy Notice",
                 uiModel: "checkbox"
+              }},
+              {{
+                workday: {{
+                  fieldLabel: "Candidate acknowledgment"
+                }},
+                fieldId: "input-9",
+                descriptor: "Candidate acknowledgment input-9 checkbox createAccountCheckbox",
+                uiModel: "checkbox"
               }}
             ];
             const results = cases.map((field) => {{
@@ -1791,6 +1841,13 @@ Expected Graduation: Sep 2026
                 "valueSource": "default:terms_acceptance",
                 "optionSource": "affirmative_checkbox",
                 "fallback": False,
+                },
+                {
+                    "type": "terms_acceptance",
+                    "answer": "Yes",
+                    "valueSource": "default:terms_acceptance",
+                    "optionSource": "affirmative_checkbox",
+                    "fallback": False,
                 },
                 {
                     "type": "terms_acceptance",
@@ -2505,6 +2562,9 @@ Expected Graduation: Sep 2026
         live_smoke = (REPO_ROOT / "scripts" / "c3_workday_live_smoke.js").read_text(
             encoding="utf-8"
         )
+        issue_registry = (REPO_ROOT / "scripts" / "lib" / "c3_issue_registry.js").read_text(
+            encoding="utf-8"
+        )
         configure_sink = (REPO_ROOT / "scripts" / "configure_c3_debug_sink.js").read_text(
             encoding="utf-8"
         )
@@ -2516,6 +2576,9 @@ Expected Graduation: Sep 2026
         )
         answer_resolver = (
             REPO_ROOT / "executioner" / "src" / "shared" / "v2" / "answer-resolver.js"
+        ).read_text(encoding="utf-8")
+        workday_repeatables = (
+            REPO_ROOT / "executioner" / "src" / "ats" / "workday" / "workday-repeatables-v2.js"
         ).read_text(encoding="utf-8")
 
         self.assertIn("POST /verify-email", bridge)
@@ -2539,6 +2602,9 @@ Expected Graduation: Sep 2026
         self.assertIn("email_verified.html", smoke)
         self.assertIn("enterVerificationCode", smoke)
         self.assertIn("Email verification code found", smoke)
+        self.assertIn("resend account verification", smoke)
+        self.assertIn("request_email_verification", smoke)
+        self.assertIn('clickSafeAccountAction(pageClient, "verify")', smoke)
         self.assertIn("codeEntry", smoke)
         self.assertIn("HUNT_C3_TEST_WORKDAY_URL", smoke)
         self.assertIn("loadDotEnv", smoke)
@@ -2593,6 +2659,8 @@ Expected Graduation: Sep 2026
         self.assertIn("logWorkflowPhase", live_smoke)
         self.assertIn("waitForWorkdayPageReady", live_smoke)
         self.assertIn("Workday page reached a classified state", live_smoke)
+        self.assertIn("posting_not_found", live_smoke)
+        self.assertIn("the page you are looking for", live_smoke)
         self.assertIn("Detected start-application page and clicked Apply Manually", live_smoke)
         self.assertIn('phase: "apply_entry"', live_smoke)
         self.assertIn('phase: "job_fill"', live_smoke)
@@ -2601,13 +2669,32 @@ Expected Graduation: Sep 2026
         self.assertIn('require("./lib/c3_cdp")', live_smoke)
         self.assertNotIn("class CdpClient", live_smoke)
         self.assertIn("--no-llm-answers", live_smoke)
+        self.assertIn("sameWorkdayLoginRedirect", live_smoke)
+        self.assertIn('url.searchParams.get("redirect")', live_smoke)
         self.assertIn("--audit-json", live_smoke)
         self.assertIn("buildFillAudit", live_smoke)
         self.assertIn("writeAuditJson", live_smoke)
+        self.assertIn("recordAuditIssues", live_smoke)
+        self.assertIn("unknown_question_defaulted", issue_registry)
+        self.assertIn("unsupported_or_empty_option_set", issue_registry)
+        self.assertIn("required_field_unfilled", issue_registry)
+        self.assertIn("no_safe_next_button", issue_registry)
+        self.assertIn("auth_primary_action_not_found", issue_registry)
+        self.assertIn("posting_not_found", issue_registry)
+        self.assertIn("issues.jsonl", issue_registry)
         self.assertIn("valuePut", live_smoke)
         self.assertIn("visible_validation_errors", live_smoke)
         self.assertIn("makeWorkdayProfileDefaults", live_smoke)
         self.assertIn("makeWorkdayProfileDefaults", configure_sink)
+        self.assertIn("makeDefaultSecondWorkExperience", p_chrome_defaults)
+        self.assertIn("Research Assistant", p_chrome_defaults)
+        self.assertIn("topUpRepeatables", configure_sink)
+        self.assertIn("repeatableKey(entry, kind)", configure_sink)
+        self.assertIn("Social Network URLs", workday_repeatables)
+        self.assertIn("socialWebsites", workday_repeatables)
+        self.assertIn("hunt.apply.runtimeConfig", live_smoke)
+        self.assertIn("hunt.apply.runtimeConfig", smoke)
+        self.assertIn("RUNTIME_CONFIG_KEY", configure_sink)
         self.assertIn("withWorkdayProfileAliases", live_smoke)
         self.assertIn("7804923111", p_chrome_defaults)
         self.assertIn("phoneDeviceType", p_chrome_defaults)
@@ -2645,7 +2732,7 @@ Expected Graduation: Sep 2026
         self.assertIn("http://127.0.0.1:8765/verify-email", background)
         self.assertIn('require("./lib/c3_gmail_oauth")', bridge)
         self.assertIn('require("./lib/c3_gmail_oauth")', gmail_oauth_smoke)
-        self.assertIn("settingsVersion: 6", configure_sink)
+        self.assertIn("nextRuntimeConfig", configure_sink)
         self.assertIn("class CdpClient", cdp_lib)
         self.assertIn("function httpJson", cdp_lib)
         self.assertIn("function tokenPathFor", gmail_oauth_lib)
@@ -2756,6 +2843,11 @@ Expected Graduation: Sep 2026
         self.assertIn("profile:disclosureVeteranStatus", shared_utils)
         self.assertIn("profile:accountEmail", shared_utils)
         self.assertIn("profile:accountPassword", shared_utils)
+        self.assertIn("email address*", shared_utils)
+        self.assertIn("create account email", shared_utils)
+        self.assertIn("shouldFillAuthConsentCheckbox", field_pipeline)
+        self.assertIn("auth_page_checkbox_consent", field_pipeline)
+        self.assertIn("createaccountcheckbox", field_catalog)
         self.assertIn("current password", shared_utils)
         self.assertIn("profile:middleName", shared_utils)
         self.assertIn('desc.includes("middlename")', shared_utils)

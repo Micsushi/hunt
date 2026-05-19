@@ -154,6 +154,111 @@ def merge_investigation_result(
     return report
 
 
+_SKILL_MARKER_START = "<!-- AUTO-UPDATED by: python -m coordinator.cli sync-investigator-skill -->"
+_SKILL_MARKER_END = "<!-- END KNOWN PATTERNS -->"
+
+_DEFAULT_SKILL_PATH = (
+    Path.home() / ".hermes" / "skills" / "hunt" / "c4-ats-investigator" / "SKILL.md"
+)
+_REPO_SKILL_PATH = Path(__file__).parent / "agents" / "hermes" / "c4_ats_investigator_skill.md"
+
+
+def sync_investigator_skill(
+    logs_dir: Path,
+    *,
+    limit: int = 200,
+    skill_path: Path | None = None,
+) -> dict[str, Any]:
+    """Read completed investigation results from failures.jsonl and update
+    the Known Patterns section of the Hermes investigator skill file.
+
+    Returns a summary dict with counts and the path written.
+    """
+    from datetime import UTC, datetime
+
+    entries = read_failure_log(logs_dir, limit=limit)
+    completed = [
+        e
+        for e in entries
+        if e.get("investigation_status") == "complete" and e.get("agent_findings")
+    ]
+
+    # Group by ATS type
+    by_ats: dict[str, list[dict[str, Any]]] = {}
+    for entry in completed:
+        ats = str(entry.get("ats_type") or "unknown").lower()
+        by_ats.setdefault(ats, []).append(entry)
+
+    # Build patterns markdown
+    now = datetime.now(UTC).replace(microsecond=0).isoformat()
+    lines: list[str] = [
+        _SKILL_MARKER_START,
+        f"<!-- Last sync: {now} -->",
+        f"<!-- Entries read: {len(entries)} | Completed investigations: {len(completed)} -->",
+        "",
+    ]
+
+    if not completed:
+        lines.append("No completed investigations yet.")
+    else:
+        for ats, items in sorted(by_ats.items()):
+            lines.append(f"### {ats.title()} — {len(items)} investigation(s)")
+            for item in items[-5:]:  # last 5 per ATS type
+                fc = item.get("failure_code", "unknown")
+                fix = item.get("suggested_fix_area", "")
+                findings = (item.get("agent_findings") or "")[:300]
+                widget = item.get("unknown_widget") or {}
+                selector = widget.get("selector", "")
+                role = widget.get("role", "")
+                label = widget.get("label", "")
+                lines.append(f"\n**Failure:** `{fc}`")
+                if selector or role or label:
+                    lines.append(f"**Widget:** selector=`{selector}` role=`{role}` label=`{label}`")
+                if findings:
+                    lines.append(f"**Findings:** {findings}")
+                if fix:
+                    lines.append(f"**Suggested fix:** {fix}")
+            lines.append("")
+
+    lines.append(_SKILL_MARKER_END)
+    patterns_block = "\n".join(lines)
+
+    # Determine target skill files
+    targets: list[Path] = []
+    if skill_path:
+        targets.append(skill_path)
+    else:
+        targets.append(_DEFAULT_SKILL_PATH)
+        if _REPO_SKILL_PATH.exists():
+            targets.append(_REPO_SKILL_PATH)
+
+    written: list[str] = []
+    for target in targets:
+        if not target.exists():
+            continue
+        text = target.read_text(encoding="utf-8")
+        # Replace existing block or append
+        if _SKILL_MARKER_START in text:
+            start = text.index(_SKILL_MARKER_START)
+            if _SKILL_MARKER_END in text:
+                end = text.index(_SKILL_MARKER_END) + len(_SKILL_MARKER_END)
+                text = text[:start] + patterns_block + text[end:]
+            else:
+                text = text[:start] + patterns_block
+        else:
+            text = text.rstrip() + "\n\n" + patterns_block + "\n"
+        target.write_text(text, encoding="utf-8")
+        written.append(str(target))
+
+    return {
+        "entries_read": len(entries),
+        "completed_investigations": len(completed),
+        "ats_types": sorted(by_ats.keys()),
+        "skill_files_updated": written,
+        "synced_at": now,
+    }
+
+
 def read_failure_log(logs_dir: Path, *, limit: int = 100) -> list[dict[str, Any]]:
     """Read the last `limit` entries from failures.jsonl."""
     log_path = logs_dir / "failures.jsonl"

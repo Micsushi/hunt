@@ -299,6 +299,9 @@ After posting the result, stop. Do not claim another lease or continue to anothe
 {claim_block}{template_block}"""
 
 
+C4_HERMES_SKILLS = "hunt/c4-ats-investigator"
+
+
 def build_runtime_command(
     *,
     runtime_name: str,
@@ -307,6 +310,7 @@ def build_runtime_command(
     toolsets: str | None = None,
     llm_provider: str | None = None,
     llm_model: str | None = None,
+    skills: str | None = None,
 ) -> list[str]:
     spec = normalize_runtime_choice(runtime_name)
     if spec.engine == "openclaw":
@@ -338,6 +342,9 @@ def build_runtime_command(
         selected_toolsets = toolsets or spec.default_toolsets
         if selected_toolsets:
             command.extend(["--toolsets", selected_toolsets])
+        selected_skills = skills if skills is not None else C4_HERMES_SKILLS
+        if selected_skills:
+            command.extend(["--skills", selected_skills])
         return command
     raise AgentRuntimeError(f"Runtime `{spec.name}` has no command builder.")
 
@@ -350,6 +357,7 @@ def build_command_preview(
     toolsets: str | None = None,
     llm_provider: str | None = None,
     llm_model: str | None = None,
+    skills: str | None = None,
 ) -> dict[str, str]:
     spec = normalize_runtime_choice(runtime_name)
     prompt = str(prompt_path)
@@ -369,8 +377,10 @@ def build_command_preview(
             provider_args += f' --provider "{selected_provider}"'
         if llm_model:
             provider_args += f' --model "{llm_model}"'
+        selected_skills = skills if skills is not None else C4_HERMES_SKILLS
+        skills_arg = f' --skills "{selected_skills}"' if selected_skills else ""
         return {
-            "powershell": f'& "{hermes}" chat -q (Get-Content -Raw "{prompt}") --quiet --ignore-rules --max-turns {max_turns}{provider_args} --toolsets "{selected_toolsets}"',
-            "bash": f'"{hermes}" chat -q "$(cat \'{prompt}\')" --quiet --ignore-rules --max-turns {max_turns}{provider_args} --toolsets "{selected_toolsets}"',
+            "powershell": f'& "{hermes}" chat -q (Get-Content -Raw "{prompt}") --quiet --ignore-rules --max-turns {max_turns}{provider_args} --toolsets "{selected_toolsets}"{skills_arg}',
+            "bash": f'"{hermes}" chat -q "$(cat \'{prompt}\')" --quiet --ignore-rules --max-turns {max_turns}{provider_args} --toolsets "{selected_toolsets}"{skills_arg}',
         }
     raise AgentRuntimeError(f"Runtime `{spec.name}` has no command preview.")

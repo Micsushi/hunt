@@ -39,6 +39,18 @@
     };
     if (Object.prototype.hasOwnProperty.call(derived, path)) {
       var direct = clean(profile[path]);
+      if (path === "firstName" && direct === names.fullName) {
+        direct = "";
+      }
+      if (
+        path === "lastName" &&
+        names.fullName &&
+        names.lastName &&
+        (direct === names.fullName ||
+          direct === names.firstName + " " + names.lastName)
+      ) {
+        direct = "";
+      }
       return {
         value: direct || derived[path],
         derived: !direct && Boolean(derived[path]),
@@ -393,6 +405,28 @@
           sourceAliasMap,
         ),
       };
+    }
+
+    if (entry.id === "email") {
+      var bodyText = clean(document.body?.innerText || "").toLowerCase();
+      var descriptorText = clean(field.descriptor || "").toLowerCase();
+      var isAuthEmail =
+        /create account|sign in|log in|login|register|forgot your password|already have an account|don't have an account/i.test(
+          bodyText,
+        ) ||
+        /login email|account email|username|user name|user id/i.test(
+          descriptorText,
+        );
+      var authEmail = clean(profile.accountEmail);
+      if (isAuthEmail && authEmail) {
+        return {
+          value: authEmail,
+          source: "profile:accountEmail",
+          answerType: entry.answerType || "text",
+          confidence: 0.97,
+          optionAliases: entry.optionAliases || {},
+        };
+      }
     }
 
     for (var i = 0; i < (entry.profilePaths || []).length; i++) {

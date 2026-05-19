@@ -199,6 +199,15 @@ def build_parser() -> argparse.ArgumentParser:
     )
     claim_investigation_parser.add_argument("--lease-seconds", type=int, default=900)
 
+    sync_skill_parser = subparsers.add_parser(
+        "sync-investigator-skill",
+        parents=[common],
+        help="Update the Hermes c4-ats-investigator skill Known Patterns from completed investigation results.",
+    )
+    sync_skill_parser.add_argument(
+        "--limit", type=int, default=200, help="Max entries to read from failures.jsonl."
+    )
+
     return parser
 
 
@@ -317,6 +326,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                 lease_seconds=args.lease_seconds,
                 task_type="investigation",
             )
+        elif args.command == "sync-investigator-skill":
+            payload = service.sync_investigator_skill(limit=args.limit)
         else:
             parser.error(f"unknown command: {args.command}")
             return 2

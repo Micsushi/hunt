@@ -12,6 +12,7 @@ const {
 const DEFAULT_PORT = 9222;
 const DEFAULT_EXTENSION_ID = "cbdmkibihimaedoihjhpidclolglnncc";
 const SETTINGS_KEY = "hunt.apply.settings";
+const RUNTIME_CONFIG_KEY = "hunt.apply.runtimeConfig";
 const PROFILE_KEY = "hunt.apply.profile";
 const BROWSER_CONTEXT_KEY = "hunt.apply.browserContext";
 
@@ -61,7 +62,7 @@ function usage() {
     [
       "Usage: node scripts/configure_c3_debug_sink.js [options]",
       "",
-      "Writes backend URL, service token, and Local debug log sink settings into p chrome.",
+      "Writes local p chrome runtime overrides for backend URL, service token, debug sink, and auto-next.",
       "The token is read from HUNT_SERVICE_TOKEN or --env-file and is never printed.",
       "",
       "Options:",
@@ -73,7 +74,7 @@ function usage() {
       "  --auto-next         Enable extension auto-next/page walk for full-flow testing",
       "  --no-auto-next      Keep fill on the current page for direct debugging. Default",
       "  --no-test            Do not post a test debug-log entry",
-      "  --inspect-only       Read p chrome C3 settings without writing storage",
+      "  --inspect-only       Read p chrome C3 effective settings without writing storage",
     ].join("\n"),
   );
 }
@@ -320,62 +321,79 @@ async function main() {
         const existing = await chrome.storage.sync.get([${js(SETTINGS_KEY)}]);
         const current = existing[${js(SETTINGS_KEY)}] || {};
         const existingLocal = await chrome.storage.local.get([
+          ${js(RUNTIME_CONFIG_KEY)},
           ${js(BROWSER_CONTEXT_KEY)},
           ${js(PROFILE_KEY)}
         ]);
+        const currentRuntimeConfig = existingLocal[${js(RUNTIME_CONFIG_KEY)}] || {};
         const currentBrowserContext = existingLocal[${js(BROWSER_CONTEXT_KEY)}] || {};
-        const next = {
-          settingsVersion: 6,
-          autofillOnLoad: false,
-          manualFillEnabled: true,
-          autoPromptEnabled: true,
-          autoClickNextAfterFill: autoNext,
-          fillRequiredOnly: true,
-          emailVerificationBridgeUrl: "http://127.0.0.1:8765/verify-email",
-          autoExportLogs: false,
-          autoExportLogPrefix: "hunt-c3-logs",
-          debugLogSinkEnabled: true,
-          c4PollingEnabled: false,
-          pollIntervalSeconds: 60,
-          heartbeatIntervalSeconds: 120,
-          oneActiveRunLock: true,
-          allowGeneratedAnswers: true,
-          flagLowConfidenceAnswers: true,
-          llmAnswerFallbackEnabled: true,
-          useFieldPipelineV2: true,
-          stripLongDash: true,
-          ...current,
-          settingsVersion: 6,
-          autoClickNextAfterFill: autoNext,
-          useFieldPipelineV2: true,
+        const nextRuntimeConfigCore = {
           backendUrl,
           serviceToken,
-          debugLogSinkEnabled: true
+          debugLogSinkEnabled: true,
+          autoClickNextAfterFill: autoNext,
+        };
+        const nextRuntimeConfig = {
+          ...currentRuntimeConfig,
+          ...nextRuntimeConfigCore,
+          configuredBy: "scripts/configure_c3_debug_sink.js",
+          configuredAt: sameJson(
+            {
+              backendUrl: currentRuntimeConfig.backendUrl,
+              serviceToken: currentRuntimeConfig.serviceToken,
+              debugLogSinkEnabled: currentRuntimeConfig.debugLogSinkEnabled,
+              autoClickNextAfterFill: currentRuntimeConfig.autoClickNextAfterFill
+            },
+            nextRuntimeConfigCore
+          )
+            ? currentRuntimeConfig.configuredAt || ""
+            : new Date().toISOString()
+        };
+        const effective = {
+          ...current,
+          backendUrl: nextRuntimeConfig.backendUrl || current.backendUrl || "",
+          serviceToken: nextRuntimeConfig.serviceToken || current.serviceToken || "",
+          debugLogSinkEnabled:
+            nextRuntimeConfig.debugLogSinkEnabled ?? current.debugLogSinkEnabled,
+          autoClickNextAfterFill:
+            nextRuntimeConfig.autoClickNextAfterFill ?? current.autoClickNextAfterFill,
+          useFieldPipelineV2: true
         };
         const writes = {
-          settings: false,
+          runtimeConfig: false,
           browserContext: false,
           profile: false
         };
         if (inspectOnly) {
           const profileCountsFor = ${workdayProfileCounts.toString()};
           const profileCounts = profileCountsFor(existingLocal[${js(PROFILE_KEY)}] || {});
+          const inspectedRuntimeConfig = currentRuntimeConfig || {};
+          const inspectedEffective = {
+            ...current,
+            backendUrl: inspectedRuntimeConfig.backendUrl || current.backendUrl || "",
+            serviceToken: inspectedRuntimeConfig.serviceToken || current.serviceToken || "",
+            debugLogSinkEnabled:
+              inspectedRuntimeConfig.debugLogSinkEnabled ?? current.debugLogSinkEnabled,
+            autoClickNextAfterFill:
+              inspectedRuntimeConfig.autoClickNextAfterFill ?? current.autoClickNextAfterFill,
+            useFieldPipelineV2: true
+          };
           return {
-            backendUrl: current.backendUrl || "",
+            backendUrl: inspectedEffective.backendUrl || "",
             browserContext: currentBrowserContext.name || "",
-            debugLogSinkEnabled: Boolean(current.debugLogSinkEnabled),
-            hasServiceToken: Boolean(current.serviceToken),
+            debugLogSinkEnabled: Boolean(inspectedEffective.debugLogSinkEnabled),
+            hasServiceToken: Boolean(inspectedEffective.serviceToken),
             profileCounts,
             useFieldPipelineV2: true,
-            autoClickNextAfterFill: Boolean(current.autoClickNextAfterFill),
+            autoClickNextAfterFill: Boolean(inspectedEffective.autoClickNextAfterFill),
             testResult: { skipped: true },
             writes,
             inspectOnly: true
           };
         }
-        if (!sameJson(current, next)) {
-          await chrome.storage.sync.set({ [${js(SETTINGS_KEY)}]: next });
-          writes.settings = true;
+        if (!sameJson(currentRuntimeConfig, nextRuntimeConfig)) {
+          await chrome.storage.local.set({ [${js(RUNTIME_CONFIG_KEY)}]: nextRuntimeConfig });
+          writes.runtimeConfig = true;
         }
         const nextBrowserContext = {
           ...browserContext,
@@ -398,27 +416,80 @@ async function main() {
         let profileCounts = null;
         if (seedProfile) {
           const currentProfile = existingLocal[${js(PROFILE_KEY)}] || {};
+          const cleanKey = (value) => String(value || "").trim().toLowerCase();
+          const repeatableKey = (entry, kind) => {
+            if (!entry || typeof entry === "string") {
+              return cleanKey(entry);
+            }
+            if (kind === "work") {
+              return [
+                entry.jobTitle || entry.title || entry.position || "",
+                entry.company || entry.employer || entry.companyName || ""
+              ].map(cleanKey).join("|");
+            }
+            if (kind === "education") {
+              return [
+                entry.school || entry.university || entry.schoolName || "",
+                entry.degree || entry.degreeLevel || entry.credential || ""
+              ].map(cleanKey).join("|");
+            }
+            if (kind === "website") {
+              return cleanKey(entry.url || entry.href || entry.websiteUrl || entry.website || entry.link || "");
+            }
+            return JSON.stringify(entry || {}).toLowerCase();
+          };
+          const topUpRepeatables = (currentValue, defaultValue, kind) => {
+            const currentList = Array.isArray(currentValue) ? currentValue : [];
+            const defaultList = Array.isArray(defaultValue) ? defaultValue : [];
+            const merged = [];
+            const seen = new Set();
+            for (const entry of currentList) {
+              const key = repeatableKey(entry, kind);
+              if (key && !seen.has(key)) {
+                merged.push(entry);
+                seen.add(key);
+              }
+            }
+            for (const entry of defaultList) {
+              const key = repeatableKey(entry, kind);
+              if (!seen.has(key)) {
+                merged.push(entry);
+                seen.add(key);
+              }
+            }
+            return merged.length ? merged : defaultList;
+          };
           const mergedProfile = {
             ...currentProfile,
             ...workdayProfileDefaults,
             email: workdayProfileDefaults.email,
             accountEmail: workdayProfileDefaults.accountEmail,
             accountPassword:
-              !currentProfile.accountPassword || currentProfile.accountPassword === "Hunt123456!"
+              !currentProfile.accountPassword ||
+              currentProfile.accountPassword === "Hunt123456!" ||
+              currentProfile.accountPassword === "Hunt12345678!" ||
+              currentProfile.accountPassword === "Hunt12345678901!" ||
+              String(currentProfile.accountPassword || "").length < 16
                 ? workdayProfileDefaults.accountPassword || ${js(DEFAULT_ACCOUNT_PASSWORD)}
                 : currentProfile.accountPassword,
             skills: Array.isArray(currentProfile.skills) && currentProfile.skills.length
               ? currentProfile.skills
               : workdayProfileDefaults.skills,
-            workExperience: Array.isArray(currentProfile.workExperience) && currentProfile.workExperience.length
-              ? currentProfile.workExperience
-              : workdayProfileDefaults.workExperience,
-            education: Array.isArray(currentProfile.education) && currentProfile.education.length
-              ? currentProfile.education
-              : workdayProfileDefaults.education,
-            websites: Array.isArray(currentProfile.websites) && currentProfile.websites.length
-              ? currentProfile.websites
-              : workdayProfileDefaults.websites
+            workExperience: topUpRepeatables(
+              currentProfile.workExperience,
+              workdayProfileDefaults.workExperience,
+              "work"
+            ),
+            education: topUpRepeatables(
+              currentProfile.education,
+              workdayProfileDefaults.education,
+              "education"
+            ),
+            websites: topUpRepeatables(
+              currentProfile.websites,
+              workdayProfileDefaults.websites,
+              "website"
+            )
           };
           if (!sameJson(currentProfile, mergedProfile)) {
             await chrome.storage.local.set({ [${js(PROFILE_KEY)}]: mergedProfile });
@@ -449,7 +520,7 @@ async function main() {
               browserContextDevtoolsPort: nextBrowserContext.devtoolsPort,
               pipelineVersion: "v2",
               useFieldPipelineV2: true,
-              settingsVersion: next.settingsVersion,
+              settingsVersion: current.settingsVersion || 6,
               payload: { source: "scripts/configure_c3_debug_sink.js" }
             })
           });
@@ -460,13 +531,13 @@ async function main() {
           };
         }
         return {
-          backendUrl: next.backendUrl,
+          backendUrl: effective.backendUrl,
           browserContext: nextBrowserContext.name,
-          debugLogSinkEnabled: next.debugLogSinkEnabled,
-          hasServiceToken: Boolean(next.serviceToken),
+          debugLogSinkEnabled: effective.debugLogSinkEnabled,
+          hasServiceToken: Boolean(effective.serviceToken),
           profileCounts,
-          useFieldPipelineV2: next.useFieldPipelineV2,
-          autoClickNextAfterFill: next.autoClickNextAfterFill,
+          useFieldPipelineV2: effective.useFieldPipelineV2,
+          autoClickNextAfterFill: effective.autoClickNextAfterFill,
           testResult,
           writes,
           inspectOnly: false

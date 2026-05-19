@@ -111,7 +111,7 @@ def test_generic_v2_radio_options_use_associated_labels_before_group_text():
     }
 
 
-def test_generic_v2_unknown_option_does_not_guess_no_or_first_real():
+def test_generic_v2_unknown_option_defaults_to_neutral_yes_then_first_real():
     if sync_playwright is None:
         pytest.skip("playwright is required for the generic C3 V2 fixture")
 
@@ -149,11 +149,23 @@ def test_generic_v2_unknown_option_does_not_guess_no_or_first_real():
                 audit: null,
                 fieldAudit: null,
               });
+              const firstRealFallback = root.optionMatcher.matchOption({
+                options: [
+                  { label: "Maybe", value: "Maybe" },
+                  { label: "No", value: "No" },
+                ],
+                answer: { value: "", answerType: "unknown" },
+                field: {},
+                audit: null,
+                fieldAudit: null,
+              });
               return {
                 firstRealLabel: firstReal.option && firstReal.option.label,
                 firstRealSource: firstReal.source,
                 neutralLabel: neutralWins.option && neutralWins.option.label,
                 neutralSource: neutralWins.source,
+                fallbackLabel: firstRealFallback.option && firstRealFallback.option.label,
+                fallbackSource: firstRealFallback.source,
               };
             }
             """
@@ -161,10 +173,12 @@ def test_generic_v2_unknown_option_does_not_guess_no_or_first_real():
         browser.close()
 
     assert result == {
-        "firstRealLabel": None,
-        "firstRealSource": "unknown_no_safe_option",
+        "firstRealLabel": "Yes",
+        "firstRealSource": "unknown_yes_fallback",
         "neutralLabel": "Prefer not to disclose",
         "neutralSource": "neutral_fallback",
+        "fallbackLabel": "Maybe",
+        "fallbackSource": "unknown_first_real_option",
     }
 
 

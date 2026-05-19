@@ -11,6 +11,7 @@ import { createWorkdayFillV2Function } from "../ats/workday/fill-v2.js";
 import {
   appendAttempt,
   appendQuestionAnswers,
+  appendUnknownQuestionDefaults,
   sanitizeAttempt,
 } from "../shared/storage.js";
 import { selectFillRoute } from "./fill-routes.js";
@@ -76,6 +77,66 @@ function debugIdentityForState(extensionState = {}) {
     settingsVersion: Number(settings.settingsVersion || 0),
     extensionVersion: manifest.version || "",
     extensionId: chrome.runtime.id || "",
+  };
+}
+
+function hostForUrl(value = "") {
+  try {
+    return new URL(value).hostname.toLowerCase();
+  } catch (_error) {
+    return "";
+  }
+}
+
+function specificDetectedAtsType(value = "") {
+  const atsType = String(value || "").toLowerCase();
+  return atsType && atsType !== "generic" && atsType !== "unknown"
+    ? atsType
+    : "";
+}
+
+function normalizeContextForCurrentPage(
+  extensionState = {},
+  pageUrl = "",
+  detectedAtsType = "",
+) {
+  const activeApplyContext = extensionState.activeApplyContext || {};
+  const detectedSpecificAts = specificDetectedAtsType(detectedAtsType);
+  const contextHost = hostForUrl(
+    activeApplyContext.applyUrl || activeApplyContext.jobUrl || "",
+  );
+  const pageHost = hostForUrl(pageUrl);
+  const staleContext = Boolean(
+    contextHost && pageHost && contextHost !== pageHost,
+  );
+  const contextAtsType = String(activeApplyContext.atsType || "").toLowerCase();
+  const needsDetectedAts =
+    detectedSpecificAts &&
+    (!contextAtsType ||
+      contextAtsType === "generic" ||
+      contextAtsType === "unknown" ||
+      staleContext);
+  if (!staleContext && !needsDetectedAts && activeApplyContext.applyUrl) {
+    return extensionState;
+  }
+  return {
+    ...extensionState,
+    activeApplyContext: {
+      ...activeApplyContext,
+      sourceMode: activeApplyContext.sourceMode || "manual",
+      source: activeApplyContext.source || "manual",
+      applyUrl:
+        staleContext || !activeApplyContext.applyUrl
+          ? pageUrl
+          : activeApplyContext.applyUrl,
+      jobUrl:
+        staleContext || !activeApplyContext.jobUrl
+          ? pageUrl
+          : activeApplyContext.jobUrl,
+      atsType: needsDetectedAts
+        ? detectedSpecificAts
+        : activeApplyContext.atsType || detectedAtsType || "generic",
+    },
   };
 }
 
@@ -1102,6 +1163,11 @@ class DetectAtsStep {
       context.pageUrl,
       context.availableAdapters,
     );
+    context.extensionState = normalizeContextForCurrentPage(
+      context.extensionState,
+      context.pageUrl,
+      context.detectedAtsType,
+    );
   }
 }
 
@@ -1210,6 +1276,8 @@ class RunAdapterFillStep {
           fieldRules: GENERIC_FIELD_RULES,
           fillRoute: context.route,
           fillRunId: context.options.fillRunId || "",
+          repairVisibleValidationErrors:
+            context.options.repairVisibleValidationErrors || [],
         },
       ],
     });
@@ -1453,7 +1521,63 @@ async function persistFillAttempt({
       },
     };
   }
+  const unknownQuestionDefaults = extractUnknownQuestionDefaults({
+    result,
+    attempt,
+    extensionState,
+    pageUrl,
+  });
+  try {
+    await appendUnknownQuestionDefaults(unknownQuestionDefaults);
+  } catch (error) {
+    if (unknownQuestionDefaults.length) {
+      result.persistenceDiagnostics = {
+        ...(result.persistenceDiagnostics || {}),
+        unknownQuestionDefaultsStorage: {
+          reason: "append_unknown_question_defaults_failed",
+          message: error instanceof Error ? error.message : String(error),
+        },
+      };
+    }
+  }
   return { attempt, answerEntries };
+}
+
+function extractUnknownQuestionDefaults({
+  result,
+  attempt,
+  extensionState,
+  pageUrl,
+}) {
+  const fields = result?.v2Audit?.fields || [];
+  const fallbackFields = fields.filter((field) => {
+    const valueSource = String(field.valueSource || "");
+    return (
+      field.questionType === "unknown" &&
+      field.selectedOption &&
+      valueSource.startsWith("fallback:")
+    );
+  });
+  return fallbackFields.map((field) => ({
+    jobId: extensionState.activeApplyContext.jobId,
+    applyUrl:
+      extensionState.activeApplyContext.applyUrl ||
+      attempt?.applyUrl ||
+      pageUrl,
+    atsType: result.atsType || attempt?.atsType || "unknown",
+    questionHash: field.questionHash,
+    questionText: field.descriptor,
+    uiModel: field.uiModel,
+    fieldId: field.fieldId,
+    fieldName: field.element?.name || "",
+    selectedOption: field.selectedOption,
+    valueSource: field.valueSource,
+    options: (field.steps || [])
+      .filter((step) => step.action === "options_collected")
+      .flatMap((step) => step.detail?.options || [])
+      .slice(0, 80),
+    reason: "unknown_question_defaulted",
+  }));
 }
 
 export async function runFillForTab(tabId, extensionState, options = {}) {

@@ -29,6 +29,7 @@ from .failure_log import (
     derive_failure_code,
     merge_investigation_result,
     read_failure_log,
+    sync_investigator_skill,
     write_failure_report,
 )
 from .models import (
@@ -1553,6 +1554,10 @@ class OrchestrationService:
     def get_failure_log(self, *, limit: int = 100) -> list[dict[str, Any]]:
         """Read the last `limit` entries from the perma-log."""
         return read_failure_log(self.runtime_root / "logs", limit=limit)
+
+    def sync_investigator_skill(self, *, limit: int = 200) -> dict[str, Any]:
+        """Read completed investigation results and update the Hermes skill Known Patterns section."""
+        return sync_investigator_skill(self.runtime_root / "logs", limit=limit)
 
     def resolve_review(
         self, run_id: str, *, decision: str, approved_by: str, reason: str = ""

@@ -316,16 +316,57 @@
 
   async function fillCheckbox(field, option) {
     var el = field.element;
-    if (!el.checked) {
-      clickLikeUser(el);
-      el.checked = true;
+    function checkboxOn() {
+      return (
+        Boolean(el.checked) ||
+        el.getAttribute?.("aria-checked") === "true" ||
+        el.closest?.('[aria-checked="true"]')
+      );
+    }
+    function setNativeChecked() {
+      try {
+        var descriptor = Object.getOwnPropertyDescriptor(
+          HTMLInputElement.prototype,
+          "checked",
+        );
+        if (descriptor?.set) {
+          descriptor.set.call(el, true);
+        } else {
+          el.checked = true;
+        }
+      } catch (_error) {
+        el.checked = true;
+      }
       el.dispatchEvent(new Event("input", { bubbles: true }));
       el.dispatchEvent(new Event("change", { bubbles: true }));
     }
-    await sleep(80);
+    if (!checkboxOn()) {
+      var labelFor =
+        el.id && document.querySelector(`label[for="${CSS.escape(el.id)}"]`);
+      var targets = [
+        labelFor,
+        el.closest?.("label"),
+        el.closest?.('[role="checkbox"], [data-automation-id*="checkbox" i]'),
+        el.parentElement,
+        el,
+      ].filter(Boolean);
+      for (var i = 0; i < targets.length && !checkboxOn(); i++) {
+        clickLikeUser(targets[i]);
+        await sleep(120);
+      }
+      if (!checkboxOn()) {
+        setNativeChecked();
+      }
+      await sleep(250);
+      if (!checkboxOn()) {
+        setNativeChecked();
+        await sleep(120);
+      }
+    }
+    var state = root.fieldState.readFieldState(field);
     return {
-      ok: Boolean(el.checked),
-      afterState: root.fieldState.readFieldState(field),
+      ok: Boolean(checkboxOn() || state.checked || state.selected),
+      afterState: state,
       selectedOption: option?.label || "checked",
       reason: "",
     };

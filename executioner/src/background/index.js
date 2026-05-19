@@ -32,6 +32,8 @@ const C4_POLL_ALARM = "hunt.apply.c4.poll";
 const C4_HEARTBEAT_ALARM = "hunt.apply.c4.heartbeat";
 const FILL_TIMEOUT_MS = 120000;
 const V2_PAGE_WALK_MAX_PAGES = 12;
+const V2_AUTH_FLOW_MAX_STEPS = 24;
+const V2_AUTH_SAME_PAGE_MAX_ATTEMPTS = 3;
 const V2_SHARED_SCRIPT_FILES = [
   "src/shared/injected.js",
   "src/shared/v2/audit.js",
@@ -137,12 +139,9 @@ async function cancelFillRunForUserReload(tabId, changeInfo = {}, tab = {}) {
   }
   const nextUrl = normalizeComparableUrl(changeInfo.url || tab?.url || "");
   const currentUrl = normalizeComparableUrl(run.lastKnownUrl || "");
-  if (nextUrl && currentUrl && nextUrl !== currentUrl) {
-    run.lastKnownUrl = nextUrl;
-    return;
-  }
   if (Number(run.expectedReloads || 0) > 0) {
     run.expectedReloads = Number(run.expectedReloads || 0) - 1;
+    run.lastKnownUrl = nextUrl || currentUrl;
     return;
   }
   const cancelledFillRunIds = cancelActiveFillRunsForTab(
@@ -548,6 +547,16 @@ function chooseBestWorkflowDetection(results = []) {
     frameId: entry.frameId,
     result: entry.result || {},
   }));
+  const mainFrameApplication = detections.find(
+    (entry) =>
+      entry.frameId === 0 &&
+      entry.result?.ok &&
+      entry.result?.isJobFillPage &&
+      entry.result?.currentStep?.title,
+  );
+  if (mainFrameApplication) {
+    return mainFrameApplication.result;
+  }
   const ranked = detections
     .filter((entry) => entry.result?.ok)
     .sort(
@@ -835,6 +844,8 @@ function createClickAuthPrimaryActionFunction() {
     var authUiState = String(
       (options && options.authUiState) || "",
     ).toLowerCase();
+    var accountEmail = normalize((options && options.accountEmail) || "");
+    var accountPassword = normalize((options && options.accountPassword) || "");
     var click = Boolean(options && options.click);
 
     function normalize(value) {
@@ -1069,6 +1080,87 @@ function createClickAuthPrimaryActionFunction() {
       }
     }
 
+    function setNativeValue(input, value) {
+      if (!input || !value) {
+        return false;
+      }
+      if (typeof input.scrollIntoView === "function") {
+        input.scrollIntoView({ block: "center", inline: "center" });
+      }
+      if (typeof input.focus === "function") {
+        try {
+          input.focus({ preventScroll: true });
+        } catch (_error) {
+          input.focus();
+        }
+      }
+      try {
+        var descriptor = Object.getOwnPropertyDescriptor(
+          HTMLInputElement.prototype,
+          "value",
+        );
+        if (descriptor?.set) {
+          descriptor.set.call(input, value);
+        } else {
+          input.value = value;
+        }
+      } catch (_error) {
+        input.value = value;
+      }
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+      input.dispatchEvent(new Event("change", { bubbles: true }));
+      input.dispatchEvent(new KeyboardEvent("keyup", { bubbles: true }));
+      input.blur?.();
+      return input.value === value;
+    }
+
+    function fillVisibleAuthFields() {
+      var filled = [];
+      Array.from(document.querySelectorAll("input"))
+        .filter(visible)
+        .forEach(function (input) {
+          var type = lower(input.getAttribute("type") || "");
+          var signal = lower(
+            [
+              labelFor(input),
+              metadataFor(input),
+              input.closest("[data-automation-id], label, div")?.innerText,
+            ]
+              .filter(Boolean)
+              .join(" "),
+          );
+          var value = "";
+          var source = "";
+          if (
+            accountEmail &&
+            (type === "email" ||
+              /\bemail\b|e-mail|username|user name|user id|login id/i.test(
+                signal,
+              ))
+          ) {
+            value = accountEmail;
+            source = "profile:accountEmail";
+          } else if (
+            accountPassword &&
+            type === "password" &&
+            !/old password|current password|existing password|temporary password/i.test(
+              signal,
+            )
+          ) {
+            value = accountPassword;
+            source = "profile:accountPassword";
+          }
+          if (value && input.value !== value) {
+            filled.push({
+              selector: describeElement(input),
+              source: source,
+              ok: setNativeValue(input, value),
+            });
+          }
+        });
+      return filled;
+    }
+
     function checkboxConsentText(checkbox) {
       return lower(
         [
@@ -1084,21 +1176,50 @@ function createClickAuthPrimaryActionFunction() {
 
     function checkVisibleAuthConsentBoxes() {
       var checked = [];
-      Array.from(document.querySelectorAll('input[type="checkbox"]'))
-        .filter(visible)
+      var visibleCheckboxes = Array.from(
+        document.querySelectorAll('input[type="checkbox"]'),
+      ).filter(visible);
+      function checkboxOn(checkbox) {
+        return (
+          Boolean(checkbox.checked) ||
+          checkbox.getAttribute("aria-checked") === "true" ||
+          Boolean(checkbox.closest('[aria-checked="true"]'))
+        );
+      }
+      visibleCheckboxes
         .filter(function (checkbox) {
           var text = checkboxConsentText(checkbox);
           return (
-            /privacy notice|terms|condition|consent|agree|continuing|create account|check the box/i.test(
+            visibleCheckboxes.length === 1 ||
+            (/privacy notice|terms|condition|consent|agree|continuing|create account|check the box/i.test(
               text,
-            ) && !/do not|decline|unsubscribe|opt out/i.test(text)
+            ) &&
+              !/do not|decline|unsubscribe|opt out/i.test(text))
           );
         })
         .forEach(function (checkbox) {
-          if (!checkbox.checked) {
-            realisticClick(checkbox);
+          if (!checkboxOn(checkbox)) {
+            var labelFor =
+              checkbox.id &&
+              document.querySelector(`label[for="${CSS.escape(checkbox.id)}"]`);
+            var targets = [
+              labelFor,
+              checkbox.closest("label"),
+              checkbox.closest(
+                '[role="checkbox"], [data-automation-id*="checkbox" i]',
+              ),
+              checkbox.parentElement,
+              checkbox,
+            ].filter(Boolean);
+            for (
+              var i = 0;
+              i < targets.length && !checkboxOn(checkbox);
+              i += 1
+            ) {
+              realisticClick(targets[i]);
+            }
           }
-          if (!checkbox.checked) {
+          if (!checkboxOn(checkbox)) {
             try {
               var descriptor = Object.getOwnPropertyDescriptor(
                 HTMLInputElement.prototype,
@@ -1118,7 +1239,7 @@ function createClickAuthPrimaryActionFunction() {
           checked.push({
             id: checkbox.id || "",
             automationId: checkbox.getAttribute("data-automation-id") || "",
-            checked: Boolean(checkbox.checked),
+            checked: Boolean(checkboxOn(checkbox)),
           });
         });
       return checked;
@@ -1178,6 +1299,7 @@ function createClickAuthPrimaryActionFunction() {
     }
 
     if (click) {
+      var filledAuthFields = fillVisibleAuthFields();
       var checkedConsentBoxes = checkVisibleAuthConsentBoxes();
       realisticClick(candidate.element);
     }
@@ -1201,6 +1323,8 @@ function createClickAuthPrimaryActionFunction() {
       },
       checkedConsentBoxes:
         typeof checkedConsentBoxes === "undefined" ? [] : checkedConsentBoxes,
+      filledAuthFields:
+        typeof filledAuthFields === "undefined" ? [] : filledAuthFields,
       candidateCount: candidates.length,
     };
   };
@@ -1771,10 +1895,10 @@ class C3ApplyEntryWorkflow extends C3WorkflowSection {
       "detect",
       "Detected apply-entry gate before job fill.",
       {
-      href: detection.href || "",
-      startApplication: Boolean(detection.startApplication),
-      applyManually: Boolean(detection.applyManually),
-      genericApplyEntry: Boolean(detection.genericApplyEntry),
+        href: detection.href || "",
+        startApplication: Boolean(detection.startApplication),
+        applyManually: Boolean(detection.applyManually),
+        genericApplyEntry: Boolean(detection.genericApplyEntry),
       },
     ).catch(() => {});
     const results = await chrome.scripting.executeScript({
@@ -1978,7 +2102,7 @@ function authDetectionChangedAfterAction(
   ) {
     return true;
   }
-  return Boolean(afterDetection.currentStep?.title);
+  return false;
 }
 
 async function waitForAuthActionTransitionForTab(
@@ -2029,9 +2153,10 @@ async function waitForAuthActionTransitionForTab(
     }
     lastReadiness = await inspectApplicationFieldReadiness(tabId);
     if (
-      lastReadiness.finalSubmitVisible ||
-      lastReadiness.validationErrorCount > 0 ||
-      lastReadiness.meaningfulControlCount >= 2
+      !lastDetection?.isAuthPage &&
+      (lastReadiness.finalSubmitVisible ||
+        lastReadiness.validationErrorCount > 0 ||
+        lastReadiness.meaningfulControlCount >= 2)
     ) {
       return {
         ok: true,
@@ -2154,8 +2279,68 @@ class C3CombinedFillWorkflow {
         : await this.detect();
     }
     const applyEntry = await new C3ApplyEntryWorkflow(this).run(detection);
-    detection =
-      applyEntry?.ok && !applyEntry?.skipped ? await this.detect() : detection;
+    if (applyEntry?.ok && !applyEntry?.skipped) {
+      const decisionReady = await waitForWorkflowDecisionReadyAfterApplyEntry(
+        this.tabId,
+        {
+          fillRunId: this.fillRunId,
+        },
+      );
+      detection = decisionReady.detection?.ok
+        ? decisionReady.detection
+        : await this.detect();
+      if (detection?.isAuthPage) {
+        auth = await new C3AuthWorkflow(this).run(detection);
+        if (
+          auth?.ok &&
+          !auth.skipped &&
+          detection?.authUiState === "landing_choice"
+        ) {
+          const authAction = await clickAuthPrimaryActionForTab(
+            this.tabId,
+            detection,
+            {
+              auto: true,
+              triggeredBy: `${this.triggeredBy}:post_apply_auth_landing_choice`,
+            },
+          );
+          auth = {
+            ...auth,
+            ok: Boolean(authAction.clicked),
+            clicked: Boolean(authAction.clicked),
+            reason: authAction.clicked
+              ? "post_apply_auth_landing_choice_clicked"
+              : authAction.reason ||
+                "post_apply_auth_landing_choice_not_clicked",
+            message: authAction.message || auth.message || "",
+            landingChoiceAction: authAction,
+          };
+          if (!authAction.clicked) {
+            return {
+              auth,
+              applyEntry,
+              jobFill: {
+                ok: false,
+                skipped: true,
+                reason: auth.reason,
+              },
+              initialDetection,
+              detection,
+            };
+          }
+          const authTransition = await waitForAuthActionTransitionForTab(
+            this.tabId,
+            {
+              beforeDetection: detection,
+              timeoutMs: 2500,
+            },
+          );
+          detection = authTransition.detection?.ok
+            ? authTransition.detection
+            : await this.detect();
+        }
+      }
+    }
     const jobFill = await new C3JobFillWorkflow(this).run(detection);
     return {
       auth,
@@ -3241,6 +3426,53 @@ async function inspectApplicationFieldReadiness(tabId) {
                 .join(" "),
             );
           const bodyText = normalize(document.body?.innerText || "");
+          function currentWorkdayStep() {
+            const activeStep = document.querySelector(
+              '[data-automation-id="progressBarActiveStep"]',
+            );
+            if (activeStep) {
+              const steps = Array.from(
+                document.querySelectorAll(
+                  '[data-automation-id^="progressBar"]',
+                ),
+              );
+              const labels = Array.from(activeStep.querySelectorAll("label"))
+                .map((label) =>
+                  normalize(label.innerText || label.textContent || ""),
+                )
+                .filter(Boolean);
+              const title =
+                labels[labels.length - 1] ||
+                normalize(activeStep.innerText || activeStep.textContent || "")
+                  .split(/\n/)
+                  .map(normalize)
+                  .filter(Boolean)
+                  .pop() ||
+                "";
+              return title
+                ? {
+                    current: Math.max(steps.indexOf(activeStep) + 1, 1),
+                    total: steps.length || 1,
+                    title,
+                  }
+                : null;
+            }
+            const stepMatch =
+              bodyText.match(
+                /current\s+s?tep\s+(\d+)\s+of\s+(\d+)\s*\n([^\n]+)/i,
+              ) ||
+              normalize(bodyText).match(
+                /current\s+s?tep\s+(\d+)\s+of\s+(\d+)\s+(.+?)(?:\s+s?tep\s+\d+\s+of\s+\d+|$)/i,
+              );
+            return stepMatch
+              ? {
+                  current: Number(stepMatch[1]),
+                  total: Number(stepMatch[2]),
+                  title: normalize(stepMatch[3]),
+                }
+              : null;
+          }
+          const currentStep = currentWorkdayStep();
           const controls = [
             ...document.querySelectorAll(
               "input, textarea, select, [role='combobox'], [role='listbox']",
@@ -3322,6 +3554,7 @@ async function inspectApplicationFieldReadiness(tabId) {
             ok: true,
             href: location.href,
             title: document.title || "",
+            currentStep,
             readyState: document.readyState || "",
             bodyHead: bodyText.slice(0, 300),
             visibleControlCount: controls.length,
@@ -3384,10 +3617,16 @@ async function waitForApplicationFieldsReadyAfterAuth(
       };
     }
     lastProbe = await inspectApplicationFieldReadiness(tabId);
+    const currentStepTitle = String(lastProbe?.currentStep?.title || "");
+    const currentStepLooksAuth =
+      /create account|sign in|log in|login|register|sign up/i.test(
+        currentStepTitle,
+      );
     if (
-      lastProbe.finalSubmitVisible ||
-      lastProbe.validationErrorCount > 0 ||
-      lastProbe.applicationFieldCount > 0
+      !currentStepLooksAuth &&
+      (lastProbe.finalSubmitVisible ||
+        lastProbe.validationErrorCount > 0 ||
+        lastProbe.applicationFieldCount > 0)
     ) {
       await sendDebugLog("c3_page_walk_application_fields_ready", {
         tabId,
@@ -3401,6 +3640,24 @@ async function waitForApplicationFieldsReadyAfterAuth(
         reason: "application_fields_ready",
         waitMs: Date.now() - startedAt,
         probe: lastProbe,
+      };
+    }
+    const workflowDetection = await detectWorkflowForTab(tabId);
+    if (workflowDetection?.isAuthPage) {
+      await sendDebugLog("c3_page_walk_wait_after_auth_still_auth", {
+        tabId,
+        fillRunId,
+        pageLabel,
+        waitMs: Date.now() - startedAt,
+        detection: workflowDetection,
+        probe: lastProbe,
+      });
+      return {
+        ok: false,
+        reason: "still_on_auth_page",
+        waitMs: Date.now() - startedAt,
+        detection: workflowDetection,
+        lastProbe,
       };
     }
     await showFillProgress(
@@ -3423,6 +3680,83 @@ async function waitForApplicationFieldsReadyAfterAuth(
     reason: "application_fields_not_ready_after_auth",
     waitMs: Date.now() - startedAt,
     lastProbe,
+  };
+}
+
+function workflowDetectionReadyForDecision(detection = {}) {
+  if (!detection || !detection.ok) {
+    return false;
+  }
+  if (detection.isApplyEntryPage) {
+    return true;
+  }
+  if (detection.isJobFillPage) {
+    return true;
+  }
+  if (!detection.isAuthPage) {
+    return false;
+  }
+  const authUiState = String(detection.authUiState || "");
+  if (
+    authUiState === "landing_choice" ||
+    authUiState === "email_link_verification"
+  ) {
+    return true;
+  }
+  return Boolean(
+    Number(detection.inputCount || 0) > 0 ||
+    Number(detection.passwordCount || 0) > 0 ||
+    Number(detection.emailCount || 0) > 0,
+  );
+}
+
+async function waitForWorkflowDecisionReadyAfterApplyEntry(
+  tabId,
+  { fillRunId = "", timeoutMs = 8000, intervalMs = 150 } = {},
+) {
+  const startedAt = Date.now();
+  let lastDetection = null;
+  while (Date.now() - startedAt < timeoutMs) {
+    if (isFillRunCancelled(fillRunId)) {
+      return {
+        ok: false,
+        reason: "user_cancelled",
+        detection: lastDetection,
+      };
+    }
+    lastDetection = await detectWorkflowForTab(tabId);
+    if (workflowDetectionReadyForDecision(lastDetection)) {
+      await sendDebugLog("c3_workflow_decision_ready_after_apply_entry", {
+        tabId,
+        fillRunId,
+        waitMs: Date.now() - startedAt,
+        detection: lastDetection,
+      });
+      return {
+        ok: true,
+        reason: "workflow_decision_ready",
+        waitMs: Date.now() - startedAt,
+        detection: lastDetection,
+      };
+    }
+    await showFillProgress(
+      tabId,
+      "Checking the next application page",
+      fillRunId,
+    );
+    await new Promise((resolve) => setTimeout(resolve, intervalMs));
+  }
+  await sendDebugLog("c3_workflow_decision_not_ready_after_apply_entry", {
+    tabId,
+    fillRunId,
+    timeoutMs,
+    detection: lastDetection,
+  });
+  return {
+    ok: false,
+    reason: "workflow_decision_not_ready_after_apply_entry",
+    waitMs: Date.now() - startedAt,
+    detection: lastDetection,
   };
 }
 
@@ -3473,6 +3807,9 @@ function describePageWalkStop(reason = "", details = {}) {
   if (reason === "auth_action_did_not_advance") {
     return "Clicked the account action, but the account page did not advance.";
   }
+  if (reason === "auth_same_page_attempt_limit_reached") {
+    return "Account sign-in or signup stayed on the same page after 3 failed attempts.";
+  }
   if (reason === "auth_primary_action_not_found") {
     return "No safe account sign-in or create-account button was found.";
   }
@@ -3491,6 +3828,9 @@ function describePageWalkStop(reason = "", details = {}) {
   }
   if (reason === "max_pages_reached") {
     return "Stopped after reaching the page-walk limit.";
+  }
+  if (reason === "auth_flow_limit_reached") {
+    return "Account sign-in or signup did not reach the application after repeated attempts.";
   }
   return compact.message || reason || "Page walk stopped.";
 }
@@ -3660,6 +4000,50 @@ async function probeSafeNextForTab(tabId) {
       message: error instanceof Error ? error.message : String(error),
     };
   }
+}
+
+async function waitForSafeNextAvailabilityForTab(
+  tabId,
+  { timeoutMs = 3500, intervalMs = 150 } = {},
+) {
+  const startedAt = Date.now();
+  let lastProbe = null;
+  let lastRuntime = { found: false, reason: "not_checked" };
+  while (Date.now() - startedAt < timeoutMs) {
+    lastRuntime = await detectWorkdayRuntimeErrorForTab(tabId);
+    if (lastRuntime.found) {
+      return {
+        ok: false,
+        reason: lastRuntime.reason || "workday_runtime_error",
+        waitedMs: Date.now() - startedAt,
+        runtime: lastRuntime,
+        probe: lastProbe,
+      };
+    }
+    lastProbe = await probeSafeNextForTab(tabId);
+    if (
+      lastProbe.available ||
+      (lastProbe.reason && lastProbe.reason !== "no_safe_next_button")
+    ) {
+      return {
+        ok: Boolean(lastProbe.available),
+        reason: lastProbe.available
+          ? "safe_next_available_after_wait"
+          : lastProbe.reason,
+        waitedMs: Date.now() - startedAt,
+        runtime: lastRuntime,
+        probe: lastProbe,
+      };
+    }
+    await new Promise((resolve) => setTimeout(resolve, intervalMs));
+  }
+  return {
+    ok: false,
+    reason: "safe_next_wait_timeout",
+    waitedMs: Date.now() - startedAt,
+    runtime: lastRuntime,
+    probe: lastProbe,
+  };
 }
 
 async function detectWorkflowForTab(tabId) {
@@ -3934,11 +4318,21 @@ async function clickAuthPrimaryActionForTab(
 
   let clickResult;
   try {
+    const state = await getExtensionState();
     const clickResults = await withTimeout(
       chrome.scripting.executeScript({
         target: { tabId, frameIds: [probe.frameId] },
         func: createClickAuthPrimaryActionFunction(),
-        args: [{ authState, authUiState, click: true }],
+        args: [
+          {
+            authState,
+            authUiState,
+            click: true,
+            accountEmail:
+              state.profile?.accountEmail || state.profile?.email || "",
+            accountPassword: state.profile?.accountPassword || "",
+          },
+        ],
       }),
       5000,
       () => null,
@@ -4024,7 +4418,7 @@ async function clickSafeNextForTab(tabId, details = {}) {
     await showPageToast(tabId, blocked.message, "warn");
     return blocked;
   }
-  const probe = await probeSafeNextForTab(tabId);
+  let probe = await probeSafeNextForTab(tabId);
   if (!probe.available) {
     if (
       probe.reason === "no_safe_next_button" ||
@@ -4134,26 +4528,58 @@ async function clickSafeNextForTab(tabId, details = {}) {
         };
       }
     }
-    await logActivity(
-      "next.blocked",
-      summarizeSafeNextResult(probe),
-      {
-        tabId,
-        reason: probe.reason,
-        triggeredBy: details.triggeredBy || "",
-        blockedFinalSubmitLabels: probe.blockedFinalSubmitLabels || [],
-        visibleValidationErrors: probe.visibleValidationErrors || [],
-        inputCount: probe.inputCount || 0,
-        candidateCount: probe.candidateCount || 0,
-      },
-      probe.reason === "no_safe_next_button" ? "warn" : "blocked",
-    );
-    await showPageToast(tabId, summarizeSafeNextResult(probe), "warn");
-    return {
-      ...probe,
-      clicked: false,
-      auto: Boolean(details.auto),
-    };
+    if (probe.reason === "no_safe_next_button") {
+      const waitResult = await waitForSafeNextAvailabilityForTab(tabId, {
+        timeoutMs: 3500,
+        intervalMs: 150,
+      });
+      if (waitResult.ok && waitResult.probe?.available) {
+        await logActivity(
+          "next.available_after_wait",
+          "A safe Next or Continue button appeared after Workday finished rendering.",
+          {
+            tabId,
+            triggeredBy: details.triggeredBy || "",
+            waitedMs: waitResult.waitedMs || 0,
+            candidate: waitResult.probe.candidate || {},
+            inputCount: waitResult.probe.inputCount || 0,
+            candidateCount: waitResult.probe.candidateCount || 0,
+          },
+          "ok",
+        );
+        probe = waitResult.probe;
+      } else if (
+        waitResult.probe &&
+        waitResult.probe.reason !== "no_safe_next_button"
+      ) {
+        probe = waitResult.probe;
+      }
+    }
+    if (probe.available) {
+      // Workday mounted the footer after the first probe. Fall through to the
+      // normal click path below with the fresh candidate.
+    } else {
+      await logActivity(
+        "next.blocked",
+        summarizeSafeNextResult(probe),
+        {
+          tabId,
+          reason: probe.reason,
+          triggeredBy: details.triggeredBy || "",
+          blockedFinalSubmitLabels: probe.blockedFinalSubmitLabels || [],
+          visibleValidationErrors: probe.visibleValidationErrors || [],
+          inputCount: probe.inputCount || 0,
+          candidateCount: probe.candidateCount || 0,
+        },
+        probe.reason === "no_safe_next_button" ? "warn" : "blocked",
+      );
+      await showPageToast(tabId, summarizeSafeNextResult(probe), "warn");
+      return {
+        ...probe,
+        clicked: false,
+        auto: Boolean(details.auto),
+      };
+    }
   }
 
   const beforeClickSnapshot = await getPageSnapshot(tabId);
@@ -4316,6 +4742,7 @@ function summarizeV2Issues(issues = [], limit = 12) {
     descriptor: String(issue.descriptor || "").slice(0, 240),
     questionType: issue.questionType || "",
     uiModel: issue.uiModel || "",
+    selectedOption: issue.selectedOption || "",
     fieldName: issue.fieldName || "",
     elementType: issue.elementType || "",
     selectorPath: String(issue.selectorPath || "").slice(0, 320),
@@ -4389,7 +4816,34 @@ async function runV2PageWalkAfterFill({
     currentPageSnapshot,
     successfulPageCount || 1,
   );
+  let authStepCount = 0;
   const validationRepairKeys = new Set();
+  const authSamePageFailureCounts = new Map();
+
+  function authSamePageKey(detection = {}, snapshot = {}) {
+    return [
+      normalizeComparableUrl(detection.href || snapshot.href || ""),
+      detection.authState || "unknown",
+      detection.authUiState || "unknown",
+      snapshot.currentStep?.title || "",
+    ].join("|");
+  }
+
+  function noteAuthSamePageFailure(detection = {}, snapshot = {}, reason = "") {
+    const key = authSamePageKey(detection, snapshot);
+    const count = (authSamePageFailureCounts.get(key) || 0) + 1;
+    authSamePageFailureCounts.set(key, count);
+    return {
+      key,
+      count,
+      limit: V2_AUTH_SAME_PAGE_MAX_ATTEMPTS,
+      reason,
+    };
+  }
+
+  function samePageAuthLimitReached(failure = {}) {
+    return Number(failure.count || 0) >= V2_AUTH_SAME_PAGE_MAX_ATTEMPTS;
+  }
 
   for (let pageIndex = 1; pageIndex <= V2_PAGE_WALK_MAX_PAGES; pageIndex += 1) {
     if (isFillRunCancelled(fillRunId)) {
@@ -4482,6 +4936,19 @@ async function runV2PageWalkAfterFill({
     }
     const workflowDetection = await detectWorkflowForTab(tabId);
     if (workflowDetection?.isAuthPage) {
+      authStepCount += 1;
+      if (authStepCount > V2_AUTH_FLOW_MAX_STEPS) {
+        stoppedReason = "auth_flow_limit_reached";
+        failedPageNumber = lastPageNumber;
+        stopDetails = {
+          message:
+            "Account sign-in or signup did not reach the application after repeated attempts.",
+          pageTitle: currentPageSnapshot.currentStep?.title || "",
+          authState: workflowDetection.authState || "unknown",
+          authUiState: workflowDetection.authUiState || "unknown",
+        };
+        break;
+      }
       if (workflowDetection.authState === "verify_email") {
         await showFillProgress(
           tabId,
@@ -4534,15 +5001,17 @@ async function runV2PageWalkAfterFill({
           currentPageSnapshot,
           beforePageNumber,
         );
+        pageIndex -= 1;
         continue;
       }
       await showFillProgress(
         tabId,
         workflowDetection.authState === "signup"
-          ? `Creating account for ${describePageWalkPage(beforeNextSnapshot, beforePageNumber)}`
-          : `Logging in for ${describePageWalkPage(beforeNextSnapshot, beforePageNumber)}`,
+          ? `Creating account for ${describePageWalkPage(beforeNextSnapshot, beforePageNumber)}: auth attempt ${authStepCount}`
+          : `Logging in for ${describePageWalkPage(beforeNextSnapshot, beforePageNumber)}: auth attempt ${authStepCount}`,
         fillRunId,
       );
+      markFillRunExpectedReload(fillRunId);
       const authAction = await clickAuthPrimaryActionForTab(
         tabId,
         workflowDetection,
@@ -4563,6 +5032,7 @@ async function runV2PageWalkAfterFill({
         authState: workflowDetection.authState || "unknown",
         authUiState: workflowDetection.authUiState || "unknown",
         candidate: authAction.candidate || {},
+        filledAuthFields: authAction.filledAuthFields || [],
         inputCount: workflowDetection.inputCount || 0,
         fillBeforeClick: pageWalkFillSummary(currentFill),
       });
@@ -4624,7 +5094,36 @@ async function runV2PageWalkAfterFill({
           currentPageSnapshot,
           lastPageNumber,
         );
+        pageIndex -= 1;
         continue;
+      }
+
+      const afterAuthDetection = await detectWorkflowForTab(tabId);
+      if (afterAuthDetection?.isAuthPage) {
+        const sameAuthPage =
+          afterAuthDetection.authState === workflowDetection.authState &&
+          afterAuthDetection.authUiState === workflowDetection.authUiState &&
+          afterAuthDetection.href === workflowDetection.href;
+        if (!sameAuthPage) {
+          steps.push({
+            step: steps.length + 1,
+            kind: "auth_chain_continue",
+            pageIndex: lastPageNumber,
+            attemptIndex: pageIndex,
+            fromAuthState: workflowDetection.authState || "unknown",
+            fromAuthUiState: workflowDetection.authUiState || "unknown",
+            toAuthState: afterAuthDetection.authState || "unknown",
+            toAuthUiState: afterAuthDetection.authUiState || "unknown",
+            href: afterAuthDetection.href || "",
+          });
+          currentPageSnapshot = await getPageSnapshot(tabId);
+          lastPageNumber = pageNumberFromSnapshot(
+            currentPageSnapshot,
+            lastPageNumber,
+          );
+          pageIndex -= 1;
+          continue;
+        }
       }
 
       const afterAuthPageLabel = describePageWalkPage(
@@ -4651,24 +5150,95 @@ async function runV2PageWalkAfterFill({
         lastPageNumber,
       );
       if (!readiness.ok) {
-        stoppedReason =
-          readiness.reason || "application_fields_not_ready_after_auth";
-        failedPageNumber = lastPageNumber;
-        stopDetails = {
-          message:
-            "Signed in, but Workday did not expose fillable application fields before the timeout.",
-          pageTitle: currentPageSnapshot.currentStep?.title || "",
-          readiness: readiness.lastProbe || {},
-        };
-        break;
+        if (readiness.reason === "still_on_auth_page") {
+          if (!(currentPageSnapshot.visibleValidationErrors || []).length) {
+            const samePageFailure = noteAuthSamePageFailure(
+              readiness.detection || workflowDetection,
+              currentPageSnapshot,
+              readiness.reason,
+            );
+            if (samePageAuthLimitReached(samePageFailure)) {
+              stoppedReason = "auth_same_page_attempt_limit_reached";
+              failedPageNumber = lastPageNumber;
+              stopDetails = {
+                message:
+                  "Account sign-in or signup stayed on the same page after 3 failed attempts.",
+                pageTitle: currentPageSnapshot.currentStep?.title || "",
+                authState:
+                  readiness.detection?.authState ||
+                  workflowDetection.authState ||
+                  "unknown",
+                authUiState:
+                  readiness.detection?.authUiState ||
+                  workflowDetection.authUiState ||
+                  "unknown",
+                samePageAttempts: samePageFailure.count,
+                maxSamePageAttempts: samePageFailure.limit,
+                lastReason: samePageFailure.reason,
+              };
+              break;
+            }
+            steps.push({
+              step: steps.length + 1,
+              kind: "auth_chain_continue",
+              pageIndex: lastPageNumber,
+              attemptIndex: pageIndex,
+              fromAuthState: workflowDetection.authState || "unknown",
+              fromAuthUiState: workflowDetection.authUiState || "unknown",
+              toAuthState: readiness.detection?.authState || "unknown",
+              toAuthUiState: readiness.detection?.authUiState || "unknown",
+              href: readiness.detection?.href || currentPageSnapshot.href || "",
+              reason: readiness.reason,
+            });
+            currentPageSnapshot = await getPageSnapshot(tabId);
+            lastPageNumber = pageNumberFromSnapshot(
+              currentPageSnapshot,
+              lastPageNumber,
+            );
+            pageIndex -= 1;
+            continue;
+          }
+        } else {
+          stoppedReason =
+            readiness.reason || "application_fields_not_ready_after_auth";
+          failedPageNumber = lastPageNumber;
+          stopDetails = {
+            message:
+              "Signed in, but Workday did not expose fillable application fields before the timeout.",
+            pageTitle: currentPageSnapshot.currentStep?.title || "",
+            readiness: readiness.lastProbe || {},
+          };
+          break;
+        }
       }
 
-      const afterAuthDetection = await detectWorkflowForTab(tabId);
       if (
         afterAuthDetection?.isAuthPage &&
         afterAuthDetection.authState === workflowDetection.authState &&
         afterAuthDetection.href === workflowDetection.href
       ) {
+        const samePageFailure = noteAuthSamePageFailure(
+          afterAuthDetection,
+          currentPageSnapshot,
+          "auth_action_did_not_advance",
+        );
+        if (samePageAuthLimitReached(samePageFailure)) {
+          stoppedReason = "auth_same_page_attempt_limit_reached";
+          failedPageNumber = beforePageNumber;
+          stopDetails = {
+            message:
+              "Account sign-in or signup stayed on the same page after 3 failed attempts.",
+            pageTitle: currentPageSnapshot.currentStep?.title || "",
+            authState: afterAuthDetection.authState || "unknown",
+            authUiState: afterAuthDetection.authUiState || "unknown",
+            visibleValidationErrors:
+              currentPageSnapshot.visibleValidationErrors || [],
+            samePageAttempts: samePageFailure.count,
+            maxSamePageAttempts: samePageFailure.limit,
+            lastReason: samePageFailure.reason,
+          };
+          break;
+        }
         const repairKey = `${beforePageNumber}:${beforeNextSnapshot.href || ""}:auth_after_action`;
         if (
           shouldRepairPageWalkValidation(
@@ -4698,7 +5268,11 @@ async function runV2PageWalkAfterFill({
             repairState,
             `${triggeredBy || "fill_current_page"}:v2_page_walk_auth_validation_repair`,
             fillRunId,
-            { allowLlmAnswers },
+            {
+              allowLlmAnswers,
+              repairVisibleValidationErrors:
+                currentPageSnapshot.visibleValidationErrors || [],
+            },
           );
           currentFill = repairFill;
           steps.push({
@@ -4715,6 +5289,7 @@ async function runV2PageWalkAfterFill({
             !repairFill.cancelled &&
             pageWalkFillSummary(repairFill).filledFieldCount > 0
           ) {
+            pageIndex -= 1;
             continue;
           }
         }
@@ -4776,6 +5351,7 @@ async function runV2PageWalkAfterFill({
         };
         break;
       }
+      pageIndex -= 1;
       continue;
     }
     await showFillProgress(
@@ -4783,6 +5359,7 @@ async function runV2PageWalkAfterFill({
       `Trying to continue from ${describePageWalkPage(beforeNextSnapshot, beforePageNumber)}`,
       fillRunId,
     );
+    markFillRunExpectedReload(fillRunId);
     const nextAction = await clickSafeNextForTab(tabId, {
       auto: true,
       triggeredBy: `${triggeredBy || "fill_current_page"}:v2_page_walk:${pageIndex}`,
@@ -4827,7 +5404,11 @@ async function runV2PageWalkAfterFill({
           repairState,
           `${triggeredBy || "fill_current_page"}:v2_page_walk_validation_repair`,
           fillRunId,
-          { allowLlmAnswers },
+          {
+            allowLlmAnswers,
+            repairVisibleValidationErrors:
+              nextAction.visibleValidationErrors || [],
+          },
         );
         currentFill = repairFill;
         steps.push({
@@ -4977,7 +5558,10 @@ async function runV2PageWalkAfterFill({
           repairState,
           `${triggeredBy || "fill_current_page"}:v2_page_walk_after_next_validation_repair`,
           fillRunId,
-          { allowLlmAnswers },
+          {
+            allowLlmAnswers,
+            repairVisibleValidationErrors: afterNextErrors,
+          },
         );
         currentFill = repairFill;
         steps.push({
@@ -5117,6 +5701,9 @@ async function runV2PageWalkAfterFill({
     ok: pageWalkStopIsOk(stoppedReason),
     enabled: true,
     maxPages: V2_PAGE_WALK_MAX_PAGES,
+    maxAuthSteps: V2_AUTH_FLOW_MAX_STEPS,
+    maxSamePageAuthAttempts: V2_AUTH_SAME_PAGE_MAX_ATTEMPTS,
+    authStepCount,
     pagesFilled: successfulPageCount,
     successfulPageCount,
     currentPageNumber: lastPageNumber,
@@ -6007,9 +6594,13 @@ async function handleMessage(message, sender = {}) {
     }
 
     case "hunt.apply.cancel_fill": {
-      const fillRunId = message.payload?.fillRunId || "";
       const tabId = message.payload?.tabId || sender.tab?.id;
+      const fillRunId =
+        message.payload?.fillRunId || activeFillRunByTab.get(tabId) || "";
       const cancelled = cancelFillRun(fillRunId);
+      if (tabId && activeFillRunByTab.get(tabId) === fillRunId) {
+        activeFillRunByTab.delete(tabId);
+      }
       Promise.allSettled([
         markPageFillCancelled(tabId, fillRunId),
         logActivity(
@@ -6020,7 +6611,7 @@ async function handleMessage(message, sender = {}) {
           { fillRunId, tabId },
           cancelled ? "warn" : "blocked",
         ),
-        showFillProgress(tabId, "Canceling fill", fillRunId),
+        hideFillProgress(tabId),
       ]).catch(() => {});
       return { ok: cancelled, cancelled, fillRunId };
     }
@@ -6303,9 +6894,12 @@ async function handleMessage(message, sender = {}) {
               workflow.applyEntry?.reason || "apply_entry_failed",
             );
           } else {
-            const fillMessage =
-              message.payload?.pageKind === "apply_entry" ||
-              (workflow.applyEntry?.ok && !workflow.applyEntry?.skipped)
+            const fillMessage = workflow.detection?.isAuthPage
+              ? workflow.detection?.authState === "signup"
+                ? "Filling account signup fields: attempt 1"
+                : "Filling account sign-in fields: attempt 1"
+              : message.payload?.pageKind === "apply_entry" ||
+                  (workflow.applyEntry?.ok && !workflow.applyEntry?.skipped)
                 ? "Filling application page: attempt 1"
                 : "Filling current page: attempt 1";
             await showFillProgress(tabId, fillMessage, fillRunId);

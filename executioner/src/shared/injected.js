@@ -591,10 +591,16 @@
     }
     var mapping = [
       [
-        ["login email", "account email"],
+        [
+          "login email",
+          "account email",
+          "create account email",
+          "sign in email",
+          "email address*",
+        ],
         accountEmail,
         "profile:accountEmail",
-        5,
+        4,
       ],
       [["email", "e-mail"], profile.email, "profile:email", 10],
       [

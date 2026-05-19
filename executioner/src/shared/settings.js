@@ -1,10 +1,12 @@
 export const STORAGE_KEYS = {
   settings: "hunt.apply.settings",
+  runtimeConfig: "hunt.apply.runtimeConfig",
   profile: "hunt.apply.profile",
   defaultResume: "hunt.apply.defaultResume",
   activeApplyContext: "hunt.apply.activeApplyContext",
   attempts: "hunt.apply.attempts",
   questionAnswers: "hunt.apply.questionAnswers",
+  unknownQuestionDefaults: "hunt.apply.unknownQuestionDefaults",
   activityLog: "hunt.apply.activityLog",
   browserContext: "hunt.apply.browserContext",
 };
@@ -39,6 +41,18 @@ export const DEFAULT_SETTINGS = {
 export const DEFAULT_BROWSER_CONTEXT = {
   name: "normal_chrome",
   configuredBy: "extension_default",
+  configuredAt: "",
+};
+
+export const DEFAULT_RUNTIME_CONFIG = {
+  backendUrl: "",
+  serviceToken: "",
+  debugLogSinkEnabled: null,
+  autoClickNextAfterFill: null,
+  autoAccountSignupLoginEnabled: null,
+  autoEmailVerificationEnabled: null,
+  emailVerificationTimeoutSeconds: null,
+  configuredBy: "",
   configuredAt: "",
 };
 

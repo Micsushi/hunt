@@ -3,6 +3,7 @@ import {
   DEFAULT_BROWSER_CONTEXT,
   DEFAULT_PROFILE,
   DEFAULT_RESUME,
+  DEFAULT_RUNTIME_CONFIG,
   DEFAULT_SETTINGS,
   STORAGE_KEYS,
 } from "./settings.js";
@@ -34,6 +35,27 @@ function sanitizeBackendUrl(value) {
     return DEFAULT_SETTINGS.backendUrl;
   }
   return backendUrl;
+}
+
+function sanitizeOptionalBoolean(value) {
+  if (value === true || value === "true") {
+    return true;
+  }
+  if (value === false || value === "false") {
+    return false;
+  }
+  return null;
+}
+
+function sanitizeOptionalInteger(value, min, max) {
+  if (value === null || value === undefined || value === "") {
+    return null;
+  }
+  const numberValue = Number(value);
+  if (!Number.isFinite(numberValue)) {
+    return null;
+  }
+  return Math.min(Math.max(Math.round(numberValue), min), max);
 }
 
 export async function getFromSyncStorage(keys) {
@@ -131,6 +153,59 @@ export function sanitizeSettings(settings = {}) {
     useFieldPipelineV2: true,
     stripLongDash: sanitizeBoolean(settings.stripLongDash ?? true),
   };
+}
+
+export function sanitizeRuntimeConfig(config = {}) {
+  return {
+    backendUrl: sanitizeUrl(config.backendUrl),
+    serviceToken: sanitizeText(config.serviceToken),
+    debugLogSinkEnabled: sanitizeOptionalBoolean(config.debugLogSinkEnabled),
+    autoClickNextAfterFill: sanitizeOptionalBoolean(
+      config.autoClickNextAfterFill,
+    ),
+    autoAccountSignupLoginEnabled: sanitizeOptionalBoolean(
+      config.autoAccountSignupLoginEnabled,
+    ),
+    autoEmailVerificationEnabled: sanitizeOptionalBoolean(
+      config.autoEmailVerificationEnabled,
+    ),
+    emailVerificationTimeoutSeconds: sanitizeOptionalInteger(
+      config.emailVerificationTimeoutSeconds,
+      15,
+      600,
+    ),
+    configuredBy: sanitizeText(config.configuredBy),
+    configuredAt: sanitizeText(config.configuredAt),
+  };
+}
+
+export function applyRuntimeConfig(settings, runtimeConfig = {}) {
+  const nextSettings = { ...settings };
+  if (runtimeConfig.backendUrl) {
+    nextSettings.backendUrl = sanitizeBackendUrl(runtimeConfig.backendUrl);
+  }
+  if (runtimeConfig.serviceToken) {
+    nextSettings.serviceToken = runtimeConfig.serviceToken;
+  }
+  if (runtimeConfig.debugLogSinkEnabled !== null) {
+    nextSettings.debugLogSinkEnabled = runtimeConfig.debugLogSinkEnabled;
+  }
+  if (runtimeConfig.autoClickNextAfterFill !== null) {
+    nextSettings.autoClickNextAfterFill = runtimeConfig.autoClickNextAfterFill;
+  }
+  if (runtimeConfig.autoAccountSignupLoginEnabled !== null) {
+    nextSettings.autoAccountSignupLoginEnabled =
+      runtimeConfig.autoAccountSignupLoginEnabled;
+  }
+  if (runtimeConfig.autoEmailVerificationEnabled !== null) {
+    nextSettings.autoEmailVerificationEnabled =
+      runtimeConfig.autoEmailVerificationEnabled;
+  }
+  if (runtimeConfig.emailVerificationTimeoutSeconds !== null) {
+    nextSettings.emailVerificationTimeoutSeconds =
+      runtimeConfig.emailVerificationTimeoutSeconds;
+  }
+  return nextSettings;
 }
 
 export function sanitizeBrowserContext(context = {}) {
@@ -408,6 +483,7 @@ function sanitizeV2Issue(issue = {}) {
     selectorPath: sanitizeText(issue.selectorPath),
     fieldName: sanitizeText(issue.fieldName),
     elementType: sanitizeText(issue.elementType),
+    selectedOption: sanitizeText(issue.selectedOption),
     descriptor: sanitizeText(issue.descriptor),
     options: Array.isArray(issue.options)
       ? issue.options.map((option) => sanitizeText(option)).slice(0, 80)
@@ -573,30 +649,62 @@ export function sanitizeQuestionAnswer(entry = {}) {
   };
 }
 
+export function sanitizeUnknownQuestionDefault(entry = {}) {
+  return {
+    id: sanitizeText(entry.id || crypto.randomUUID()),
+    createdAt: sanitizeText(entry.createdAt || new Date().toISOString()),
+    lastSeenAt: sanitizeText(entry.lastSeenAt || new Date().toISOString()),
+    count: Number.isFinite(Number(entry.count)) ? Number(entry.count) : 1,
+    jobId: sanitizeText(String(entry.jobId ?? "")),
+    applyUrl: sanitizeUrl(entry.applyUrl),
+    atsType: sanitizeText(entry.atsType || "unknown"),
+    questionHash: sanitizeText(entry.questionHash),
+    questionText: sanitizeText(entry.questionText),
+    uiModel: sanitizeText(entry.uiModel),
+    fieldId: sanitizeText(entry.fieldId),
+    fieldName: sanitizeText(entry.fieldName),
+    selectedOption: sanitizeText(entry.selectedOption),
+    valueSource: sanitizeText(entry.valueSource),
+    options: Array.isArray(entry.options)
+      ? entry.options.map((option) => sanitizeText(option)).filter(Boolean).slice(0, 80)
+      : [],
+    reason: sanitizeText(entry.reason),
+  };
+}
+
 export async function ensureStageOneState() {
   const syncState = await getFromSyncStorage([STORAGE_KEYS.settings]);
   const localState = await getFromLocalStorage([
+    STORAGE_KEYS.runtimeConfig,
     STORAGE_KEYS.profile,
     STORAGE_KEYS.defaultResume,
     STORAGE_KEYS.activeApplyContext,
     STORAGE_KEYS.attempts,
     STORAGE_KEYS.questionAnswers,
+    STORAGE_KEYS.unknownQuestionDefaults,
     STORAGE_KEYS.activityLog,
     STORAGE_KEYS.browserContext,
   ]);
 
   const rawSettings = syncState[STORAGE_KEYS.settings];
+  const rawRuntimeConfig = localState[STORAGE_KEYS.runtimeConfig];
   const rawProfile = localState[STORAGE_KEYS.profile];
   const rawDefaultResume = localState[STORAGE_KEYS.defaultResume];
   const rawActiveApplyContext = localState[STORAGE_KEYS.activeApplyContext];
   const rawAttempts = localState[STORAGE_KEYS.attempts];
   const rawQuestionAnswers = localState[STORAGE_KEYS.questionAnswers];
+  const rawUnknownQuestionDefaults =
+    localState[STORAGE_KEYS.unknownQuestionDefaults];
   const rawActivityLog = localState[STORAGE_KEYS.activityLog];
   const rawBrowserContext = localState[STORAGE_KEYS.browserContext];
 
-  const settings = rawSettings
+  const syncedSettings = rawSettings
     ? sanitizeSettings(rawSettings)
     : clone(DEFAULT_SETTINGS);
+  const runtimeConfig = rawRuntimeConfig
+    ? sanitizeRuntimeConfig(rawRuntimeConfig)
+    : clone(DEFAULT_RUNTIME_CONFIG);
+  const settings = applyRuntimeConfig(syncedSettings, runtimeConfig);
   const profile = rawProfile
     ? sanitizeProfile(rawProfile)
     : clone(DEFAULT_PROFILE);
@@ -612,6 +720,9 @@ export async function ensureStageOneState() {
   const questionAnswers = Array.isArray(rawQuestionAnswers)
     ? rawQuestionAnswers.map(sanitizeQuestionAnswer)
     : [];
+  const unknownQuestionDefaults = Array.isArray(rawUnknownQuestionDefaults)
+    ? rawUnknownQuestionDefaults.map(sanitizeUnknownQuestionDefault)
+    : [];
   const activityLog = Array.isArray(rawActivityLog)
     ? rawActivityLog.map(sanitizeActivityLogEntry)
     : [];
@@ -619,10 +730,13 @@ export async function ensureStageOneState() {
     ? sanitizeBrowserContext(rawBrowserContext)
     : clone(DEFAULT_BROWSER_CONTEXT);
 
-  if (!sameJson(rawSettings, settings)) {
-    await setInSyncStorage({ [STORAGE_KEYS.settings]: settings });
+  if (!sameJson(rawSettings, syncedSettings)) {
+    await setInSyncStorage({ [STORAGE_KEYS.settings]: syncedSettings });
   }
   const localPatch = {};
+  if (rawRuntimeConfig && !sameJson(rawRuntimeConfig, runtimeConfig)) {
+    localPatch[STORAGE_KEYS.runtimeConfig] = runtimeConfig;
+  }
   if (!sameJson(rawProfile, profile)) {
     localPatch[STORAGE_KEYS.profile] = profile;
   }
@@ -638,6 +752,10 @@ export async function ensureStageOneState() {
   if (!sameJson(rawQuestionAnswers, questionAnswers)) {
     localPatch[STORAGE_KEYS.questionAnswers] = questionAnswers;
   }
+  if (!sameJson(rawUnknownQuestionDefaults, unknownQuestionDefaults)) {
+    localPatch[STORAGE_KEYS.unknownQuestionDefaults] =
+      unknownQuestionDefaults;
+  }
   if (!sameJson(rawActivityLog, activityLog)) {
     localPatch[STORAGE_KEYS.activityLog] = activityLog;
   }
@@ -650,11 +768,13 @@ export async function ensureStageOneState() {
 
   return {
     settings,
+    runtimeConfig,
     profile,
     defaultResume,
     activeApplyContext,
     attempts,
     questionAnswers,
+    unknownQuestionDefaults,
     activityLog,
     browserContext,
   };
@@ -711,6 +831,60 @@ export async function appendQuestionAnswers(entries) {
   );
   await setInLocalStorage({ [STORAGE_KEYS.questionAnswers]: questionAnswers });
   return sanitizedEntries;
+}
+
+export async function appendUnknownQuestionDefaults(entries) {
+  const state = await ensureStageOneState();
+  const existing = Array.isArray(state.unknownQuestionDefaults)
+    ? state.unknownQuestionDefaults
+    : [];
+  const now = new Date().toISOString();
+  const byKey = new Map(
+    existing.map((entry) => [
+      [
+        entry.questionHash,
+        entry.questionText,
+        entry.selectedOption,
+        entry.applyUrl,
+      ]
+        .map((part) => sanitizeText(part).toLowerCase())
+        .join("|"),
+      entry,
+    ]),
+  );
+  for (const rawEntry of entries || []) {
+    const nextEntry = sanitizeUnknownQuestionDefault({
+      ...rawEntry,
+      createdAt: rawEntry.createdAt || now,
+      lastSeenAt: now,
+    });
+    const key = [
+      nextEntry.questionHash,
+      nextEntry.questionText,
+      nextEntry.selectedOption,
+      nextEntry.applyUrl,
+    ]
+      .map((part) => sanitizeText(part).toLowerCase())
+      .join("|");
+    const prior = byKey.get(key);
+    if (prior) {
+      byKey.set(key, {
+        ...prior,
+        ...nextEntry,
+        id: prior.id,
+        createdAt: prior.createdAt,
+        count: Number(prior.count || 1) + 1,
+        lastSeenAt: now,
+      });
+    } else {
+      byKey.set(key, nextEntry);
+    }
+  }
+  const nextEntries = clampList(Array.from(byKey.values()), 500);
+  await setInLocalStorage({
+    [STORAGE_KEYS.unknownQuestionDefaults]: nextEntries,
+  });
+  return nextEntries;
 }
 
 export function sanitizeActivityLogEntry(entry = {}) {

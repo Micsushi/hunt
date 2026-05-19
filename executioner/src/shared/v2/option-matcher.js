@@ -153,7 +153,9 @@
         if (label.length <= 3 || alias.length <= 3) {
           return label === alias;
         }
-        return label === alias || label.includes(alias) || alias.includes(label);
+        return (
+          label === alias || label.includes(alias) || alias.includes(label)
+        );
       });
       if (found) {
         return found;
@@ -185,6 +187,13 @@
       return {
         option: real[0],
         source: "affirmative_checkbox",
+        fallback: false,
+      };
+    }
+    if (field?.uiModel === "checkbox") {
+      return {
+        option: null,
+        source: "checkbox_no_safe_match",
         fallback: false,
       };
     }
@@ -292,16 +301,64 @@
       var neutral = neutralOption(options);
       if (neutral) {
         root.audit?.pushIssue(audit, fieldAudit, {
-          kind: "max_progress_neutral_option",
+          kind:
+            answer.answerType === "unknown"
+              ? "unknown_question_default_option"
+              : "max_progress_neutral_option",
           severity: "warn",
           failedStep: "option.match",
-          reason: "Selected neutral or non-disclosure fallback.",
+          reason:
+            answer.answerType === "unknown"
+              ? "Question was not recognized, so C3 selected the neutral or non-disclosure fallback."
+              : "Selected neutral or non-disclosure fallback.",
+          selectedOption: neutral.label,
           options: real.map(function (option) {
             return option.label;
           }),
         });
         return { option: neutral, source: "neutral_fallback", fallback: true };
       }
+    }
+    if (answer.answerType === "unknown") {
+      var unknownYesOption = real.find(function (option) {
+        var label = normOptionLabel(option.label);
+        var value = normOptionLabel(option.value);
+        return label === "yes" || value === "yes";
+      });
+      if (unknownYesOption) {
+        root.audit?.pushIssue(audit, fieldAudit, {
+          kind: "unknown_question_default_option",
+          severity: "warn",
+          failedStep: "option.match",
+          reason:
+            "Question was not recognized, so C3 selected Yes as the max-progress fallback.",
+          selectedOption: unknownYesOption.label,
+          options: real.map(function (option) {
+            return option.label;
+          }),
+        });
+        return {
+          option: unknownYesOption,
+          source: "unknown_yes_fallback",
+          fallback: true,
+        };
+      }
+      root.audit?.pushIssue(audit, fieldAudit, {
+        kind: "unknown_question_default_option",
+        severity: "warn",
+        failedStep: "option.match",
+        reason:
+          "Question was not recognized, so C3 selected the first real non-placeholder option.",
+        selectedOption: real[0].label,
+        options: real.map(function (option) {
+          return option.label;
+        }),
+      });
+      return {
+        option: real[0],
+        source: "unknown_first_real_option",
+        fallback: true,
+      };
     }
     var other = real.find(function (option) {
       var label = norm(option.label);
@@ -320,23 +377,6 @@
         }),
       });
       return { option: other, source: "other_fallback", fallback: true };
-    }
-    if (answer.answerType === "unknown") {
-      root.audit?.pushIssue(audit, fieldAudit, {
-        kind: "unknown_question_no_safe_option",
-        severity: field?.required ? "warn" : "info",
-        failedStep: "option.match",
-        reason:
-          "Question was not recognized, so C3 did not choose No or the first available option.",
-        options: real.map(function (option) {
-          return option.label;
-        }),
-      });
-      return {
-        option: null,
-        source: "unknown_no_safe_option",
-        fallback: false,
-      };
     }
     var noOption = real.find(function (option) {
       var label = normOptionLabel(option.label);

@@ -30,7 +30,13 @@ export function selectFillRoute({
   availableAdapters = [],
 }) {
   const fillSource = classifyFillSource(activeApplyContext);
-  const requestedAtsType = activeApplyContext.atsType || detectedAtsType;
+  const contextAtsType = String(activeApplyContext.atsType || "").toLowerCase();
+  const requestedAtsType =
+    contextAtsType &&
+    contextAtsType !== "generic" &&
+    contextAtsType !== "unknown"
+      ? contextAtsType
+      : detectedAtsType;
   const hasAtsAdapter =
     requestedAtsType &&
     requestedAtsType !== "unknown" &&

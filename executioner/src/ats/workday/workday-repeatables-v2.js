@@ -282,7 +282,8 @@
     if (
       !sectionBounds("Work Experience") &&
       !sectionBounds("Education") &&
-      !sectionBounds("Websites")
+      !sectionBounds("Websites") &&
+      !sectionBounds("Social Network URLs")
     ) {
       return false;
     }
@@ -296,7 +297,9 @@
       source.includes("work experience") ||
       source.includes("education") ||
       source.includes("webaddress") ||
-      source.includes("web address")
+      source.includes("web address") ||
+      source.includes("socialnetwork") ||
+      source.includes("social network")
     ) {
       return true;
     }
@@ -309,11 +312,14 @@
     ) {
       return false;
     }
-    return ["Work Experience", "Education", "Websites"].some(
-      function (section) {
-        return inBounds(el, sectionBounds(section));
-      },
-    );
+    return [
+      "Work Experience",
+      "Education",
+      "Websites",
+      "Social Network URLs",
+    ].some(function (section) {
+      return inBounds(el, sectionBounds(section));
+    });
   }
 
   function activeDialog() {
@@ -370,8 +376,8 @@
     var sectionPrefix =
       section === "Education"
         ? "(?:education|school)"
-        : section === "Websites"
-          ? "(?:webAddress|website|websites|url)"
+        : section === "Websites" || section === "Social Network URLs"
+          ? "(?:webAddress|website|websites|socialNetwork|social|url)"
           : "(?:workExperience|work|experience|employment)";
     var match = source.match(new RegExp(sectionPrefix + "[-_]*(\\d+)", "i"));
     if (match) {
@@ -1339,6 +1345,10 @@
         return entry.url;
       },
     );
+    var socialWebsites = websites.filter(function (entry) {
+      var url = norm(entry.url);
+      return url.includes("linkedin") || url.includes("github");
+    });
     var skills = profileAliasList(profile, [
       "skills",
       "skillList",
@@ -1356,7 +1366,7 @@
           }) === index
         );
       });
-    return { work, education, websites, skills };
+    return { work, education, websites, socialWebsites, skills };
   }
 
   function websiteType(url) {
@@ -1368,6 +1378,38 @@
       return "GitHub";
     }
     return "Personal Website";
+  }
+
+  function isSocialWebsite(entry) {
+    var url = norm(entry?.url || entry || "");
+    return url.includes("linkedin") || url.includes("github");
+  }
+
+  function websiteEntriesForSections(lists) {
+    if (sectionBounds("Social Network URLs")) {
+      return {
+        websites: lists.websites.filter(function (entry) {
+          return !isSocialWebsite(entry);
+        }),
+        socialWebsites: lists.socialWebsites,
+      };
+    }
+    return {
+      websites: lists.websites,
+      socialWebsites: [],
+    };
+  }
+
+  function isWebsiteTypeControl(control) {
+    var own = ownControlKey(control);
+    return (
+      (own.includes("type") ||
+        own.includes("category") ||
+        own.includes("network")) &&
+      !own.includes("url") &&
+      !own.includes("webaddress") &&
+      !own.includes("web address")
+    );
   }
 
   function workdayMonthValue(value) {
@@ -1516,7 +1558,7 @@
     var own = ownControlKey(control);
     var desc = controlText(control);
     if (kind === "website") {
-      if (own.includes("type") || own.includes("category")) {
+      if (isWebsiteTypeControl(control)) {
         return websiteType(entry.url);
       }
       return entry.url;
@@ -2040,11 +2082,17 @@
 
   async function fillWorkdayRepeatables(context) {
     var lists = profileLists(context?.profile || {});
+    var websiteSections = websiteEntriesForSections(lists);
     var sections = [
       await syncSection("Work Experience", "work", lists.work),
       await syncSection("Education", "education", lists.education),
       await syncSkills(lists.skills),
-      await syncSection("Websites", "website", lists.websites),
+      await syncSection("Websites", "website", websiteSections.websites),
+      await syncSection(
+        "Social Network URLs",
+        "website",
+        websiteSections.socialWebsites,
+      ),
     ];
     return {
       ok: true,
@@ -2127,9 +2175,14 @@
     var deletedWork = await deleteAllRows("Work Experience");
     var deletedEducation = await deleteAllRows("Education");
     var deletedWebsites = await deleteAllRows("Websites");
+    var deletedSocialWebsites = await deleteAllRows("Social Network URLs");
     var deletedResume = await clearResumeUpload();
     var clearedFieldCount =
-      deletedWork + deletedEducation + deletedWebsites + deletedResume;
+      deletedWork +
+      deletedEducation +
+      deletedWebsites +
+      deletedSocialWebsites +
+      deletedResume;
     return {
       ok: true,
       clearedFieldCount: clearedFieldCount,
@@ -2137,12 +2190,14 @@
         deletedWork ? { field: "Work Experience rows" } : null,
         deletedEducation ? { field: "Education rows" } : null,
         deletedWebsites ? { field: "Website rows" } : null,
+        deletedSocialWebsites ? { field: "Social Network URL rows" } : null,
         deletedResume ? { field: "Resume/CV upload" } : null,
       ].filter(Boolean),
       detail: {
         deletedWork,
         deletedEducation,
         deletedWebsites,
+        deletedSocialWebsites,
         deletedResume,
       },
     };

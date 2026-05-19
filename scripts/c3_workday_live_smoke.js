@@ -8,6 +8,7 @@ const {
   withWorkdayProfileAliases,
 } = require("./c3_p_chrome_defaults");
 const { CdpClient, httpJson, httpText, js, sleep } = require("./lib/c3_cdp");
+const { recordAuditIssues } = require("./lib/c3_issue_registry");
 
 function loadDotEnv(filePath = ".env") {
   if (!fs.existsSync(filePath)) return;
@@ -480,6 +481,7 @@ function workdayPageKindExpression() {
       (loadingNodes.length > 0 && fields.length === 0 && !currentStepText);
     let pageKind = "unknown";
     if (stillLoading) pageKind = "loading";
+    else if (/the page you are looking for (doesn't|does not) exist|page not found|job posting is no longer available|job is no longer available/i.test(normalizedText)) pageKind = "posting_not_found";
     else if (/workday is currently unavailable|service interruption/i.test(normalizedText)) pageKind = "maintenance";
     else if (/something went wrong/i.test(normalizedText) && /please refresh/i.test(normalizedText)) pageKind = "runtime_error";
     else if (hasEmailField && passwordCount > 1) pageKind = "signup_form";
@@ -542,16 +544,18 @@ async function seedExtension(optionsClient, seedPayload, args = {}) {
     `(async () => {
       const payload = ${js(seedPayload)};
       const sameJson = (a, b) => JSON.stringify(a || null) === JSON.stringify(b || null);
-      const storedSettings = await chrome.storage.sync.get("hunt.apply.settings");
-      const nextSettings = {
-        ...(storedSettings["hunt.apply.settings"] || {}),
-        settingsVersion: 4,
+      const storedRuntime = await chrome.storage.local.get("hunt.apply.runtimeConfig");
+      const currentRuntime = storedRuntime["hunt.apply.runtimeConfig"] || {};
+      const nextRuntime = {
+        ...currentRuntime,
         autoClickNextAfterFill: ${Boolean(args.extensionAutoNext)},
         autoAccountSignupLoginEnabled: true,
-        autoEmailVerificationEnabled: true
+        autoEmailVerificationEnabled: true,
+        configuredBy: "scripts/c3_workday_live_smoke.js",
+        configuredAt: new Date().toISOString()
       };
-      if (!sameJson(storedSettings["hunt.apply.settings"], nextSettings)) {
-        await chrome.storage.sync.set({ "hunt.apply.settings": nextSettings });
+      if (!sameJson(currentRuntime, nextRuntime)) {
+        await chrome.storage.local.set({ "hunt.apply.runtimeConfig": nextRuntime });
       }
       const storedLocal = await chrome.storage.local.get([
         "hunt.apply.profile",
@@ -583,13 +587,15 @@ async function seedExtension(optionsClient, seedPayload, args = {}) {
 async function setExtensionAutoNext(optionsClient, enabled) {
   return optionsClient.evaluate(
     `(async () => {
-      const storedSettings = await chrome.storage.sync.get("hunt.apply.settings");
-      const current = storedSettings["hunt.apply.settings"] || {};
+      const storedRuntime = await chrome.storage.local.get("hunt.apply.runtimeConfig");
+      const current = storedRuntime["hunt.apply.runtimeConfig"] || {};
       if (Boolean(current.autoClickNextAfterFill) !== ${Boolean(enabled)}) {
-        await chrome.storage.sync.set({
-          "hunt.apply.settings": {
+        await chrome.storage.local.set({
+          "hunt.apply.runtimeConfig": {
             ...current,
-            autoClickNextAfterFill: ${Boolean(enabled)}
+            autoClickNextAfterFill: ${Boolean(enabled)},
+            configuredBy: "scripts/c3_workday_live_smoke.js",
+            configuredAt: new Date().toISOString()
           }
         });
       }
@@ -946,6 +952,15 @@ async function clickApplyManuallyEntry(pageClient) {
       ok: false,
       phase: "apply_entry",
       reason: "workday_page_still_loading",
+      readyState,
+    };
+  }
+  if (readyState.pageKind === "posting_not_found") {
+    return {
+      ok: false,
+      phase: "apply_entry",
+      reason: "posting_not_found",
+      message: "Workday says this job posting page does not exist.",
       readyState,
     };
   }
@@ -1503,14 +1518,37 @@ async function fillCurrentPage(optionsClient, applyUrl, args) {
           return false;
         }
       };
+      const sameWorkdayLoginRedirect = (item) => {
+        try {
+          const url = new URL(item.url || "");
+          if (url.host !== applyHost || !/\\/login\\/?$/i.test(url.pathname)) {
+            return false;
+          }
+          const redirect = url.searchParams.get("redirect") || "";
+          if (!redirect) {
+            return false;
+          }
+          const redirectUrl = new URL(redirect, parsedApplyUrl.origin);
+          const redirectPath = normalizeWorkdayPathname(redirectUrl.pathname);
+          return redirectPath.startsWith(jobPathBase)
+            && /\\/apply(?:\\/|$)/i.test(redirectPath)
+            && !/error|ok/i.test(String(item.title || ""));
+        } catch (_error) {
+          return false;
+        }
+      };
       const exactCandidates = tabs.filter(exactApplyManually);
       const broadCandidates = tabs.filter(sameWorkdayApply);
-      const candidates = exactCandidates.concat(broadCandidates);
+      const loginRedirectCandidates = tabs.filter(sameWorkdayLoginRedirect);
+      const candidates = exactCandidates.concat(broadCandidates, loginRedirectCandidates);
       const deduped = [...new Map(candidates.map((item) => [item.id, item])).values()];
       const sortedExact = exactCandidates.sort((a, b) => Number(b.id || 0) - Number(a.id || 0));
+      const sortedLoginRedirect = loginRedirectCandidates.sort((a, b) => Number(b.id || 0) - Number(a.id || 0));
       const sortedBroad = deduped.sort((a, b) => Number(b.id || 0) - Number(a.id || 0));
       let tab = sortedExact.find((item) => item.active)
         || sortedExact[0]
+        || sortedLoginRedirect.find((item) => item.active)
+        || sortedLoginRedirect[0]
         || sortedBroad.find((item) => item.active)
         || sortedBroad[0];
       if (!tab) {
@@ -2032,14 +2070,37 @@ async function clearCurrentPage(optionsClient, applyUrl) {
           return false;
         }
       };
+      const sameWorkdayLoginRedirect = (item) => {
+        try {
+          const url = new URL(item.url || "");
+          if (url.host !== applyHost || !/\\/login\\/?$/i.test(url.pathname)) {
+            return false;
+          }
+          const redirect = url.searchParams.get("redirect") || "";
+          if (!redirect) {
+            return false;
+          }
+          const redirectUrl = new URL(redirect, parsedApplyUrl.origin);
+          const redirectPath = normalizeWorkdayPathname(redirectUrl.pathname);
+          return redirectPath.startsWith(jobPathBase)
+            && /\\/apply(?:\\/|$)/i.test(redirectPath)
+            && !/error|ok/i.test(String(item.title || ""));
+        } catch (_error) {
+          return false;
+        }
+      };
       const exactCandidates = tabs.filter(exactApplyManually);
       const broadCandidates = tabs.filter(sameWorkdayApply);
-      const candidates = exactCandidates.concat(broadCandidates);
+      const loginRedirectCandidates = tabs.filter(sameWorkdayLoginRedirect);
+      const candidates = exactCandidates.concat(broadCandidates, loginRedirectCandidates);
       const deduped = [...new Map(candidates.map((item) => [item.id, item])).values()];
       const sortedExact = exactCandidates.sort((a, b) => Number(b.id || 0) - Number(a.id || 0));
+      const sortedLoginRedirect = loginRedirectCandidates.sort((a, b) => Number(b.id || 0) - Number(a.id || 0));
       const sortedBroad = deduped.sort((a, b) => Number(b.id || 0) - Number(a.id || 0));
       let tab = sortedExact.find((item) => item.active)
         || sortedExact[0]
+        || sortedLoginRedirect.find((item) => item.active)
+        || sortedLoginRedirect[0]
         || sortedBroad.find((item) => item.active)
         || sortedBroad[0];
       if (!tab) {
@@ -2528,6 +2589,9 @@ function summarizeFill(fill) {
       valueSource: field.valueSource || "",
       bestEffortWarning: field.bestEffortWarning || "",
       options: field.options || [],
+      questionHash: field.questionHash || "",
+      questionType: field.questionType || "",
+      uiModel: field.uiModel || "",
     })),
     nextAction: fill.nextAction || null,
     siteActions,
@@ -2623,6 +2687,7 @@ function buildFillAudit({
     suppressedErrors: afterFill.suppressedErrors || [],
     remainingValues: afterFill.remainingValues || {},
     nextAction: fillSummary.nextAction || null,
+    v2AuditSummary: fillSummary.v2AuditSummary || null,
   };
 }
 
@@ -2721,11 +2786,6 @@ async function run() {
         currentStep: applyEntry.currentStep?.title || "",
       },
     );
-    if (!applyEntry.ok) {
-      throw new Error(
-        `Apply entry phase failed: ${JSON.stringify(applyEntry)}`,
-      );
-    }
     const startStep = await clickWorkdayStep(pageClient, args.startStep);
 
     const timeline = [];
@@ -2756,6 +2816,46 @@ async function run() {
       startedAt: new Date().toISOString(),
       pages: [],
     };
+    if (applyEntry.reason === "posting_not_found") {
+      audit.workflow.applyEntry = applyEntry;
+      audit.ok = false;
+      audit.finishedAt = new Date().toISOString();
+      audit.final = {
+        href: applyEntry.readyState?.href || applyEntry.href || applyUrl,
+        currentStep: null,
+        hasSubmit: false,
+        hasNext: false,
+        errors: [],
+      };
+      const auditPath = writeAuditJson(args.auditJson, audit);
+      const issueRegistry = recordAuditIssues({
+        audit,
+        auditPath: auditPath || args.auditJson || "",
+      });
+      console.log(
+        JSON.stringify(
+          {
+            ok: false,
+            mode: args.mode,
+            applyUrl,
+            auditJson: auditPath,
+            issueRegistry,
+            reason: "posting_not_found",
+            message: "Workday says this job posting page does not exist.",
+            final: audit.final,
+            timeline,
+          },
+          null,
+          2,
+        ),
+      );
+      return;
+    }
+    if (!applyEntry.ok) {
+      throw new Error(
+        `Apply entry phase failed: ${JSON.stringify(applyEntry)}`,
+      );
+    }
     for (let i = 0; i < args.maxPages; i += 1) {
       let before = await inspectPage(pageClient);
       if (before.workdayRuntimeError) {
@@ -3194,6 +3294,10 @@ async function run() {
       errors: finalPage.errors,
     };
     const auditPath = writeAuditJson(args.auditJson, audit);
+    const issueRegistry = recordAuditIssues({
+      audit,
+      auditPath: auditPath || args.auditJson || "",
+    });
     console.log(
       JSON.stringify(
         {
@@ -3201,6 +3305,7 @@ async function run() {
           mode: args.mode,
           applyUrl,
           auditJson: auditPath,
+          issueRegistry,
           final: {
             href: finalPage.href,
             currentStep: finalPage.currentStep,
