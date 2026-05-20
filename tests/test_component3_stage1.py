@@ -1710,6 +1710,79 @@ Expected Graduation: Sep 2026
             },
         )
 
+    def test_v2_ethno_racial_checkbox_selects_i_do_not_wish_to_answer(self):
+        paths = [
+            REPO_ROOT / "executioner" / "src" / "shared" / "v2" / "field-catalog.js",
+            REPO_ROOT / "executioner" / "src" / "shared" / "v2" / "question-identifier.js",
+            REPO_ROOT / "executioner" / "src" / "shared" / "v2" / "answer-resolver.js",
+            REPO_ROOT / "executioner" / "src" / "shared" / "v2" / "option-matcher.js",
+        ]
+        script = f"""
+            const fs = require("node:fs");
+            const vm = require("node:vm");
+            const context = {{ window: {{ __huntV2: {{}} }} }};
+            vm.createContext(context);
+            for (const path of {json.dumps([str(path) for path in paths])}) {{
+              vm.runInContext(fs.readFileSync(path, "utf8"), context);
+            }}
+            const root = context.window.__huntV2;
+            const field = {{
+              workday: {{
+                fieldLabel: "What is / are your race(s) / ethnicity(ies)?"
+              }},
+              fieldId: "primaryQuestionnaire--raceEthnicity",
+              descriptor: "What is / are your race(s) / ethnicity(ies)?",
+              required: true,
+              uiModel: "checkbox"
+            }};
+            const question = root.questionIdentifier.identifyQuestion(field, null, null);
+            const answer = root.answerResolver.resolveAnswer({{
+              question,
+              field,
+              profile: {{}},
+              audit: null,
+              fieldAudit: null
+            }});
+            const match = root.optionMatcher.matchOption({{
+              options: [
+                {{ label: "Asian (United States of America)" }},
+                {{ label: "White (United States of America)" }},
+                {{ label: "I do not wish to answer. (United States of America)" }}
+              ],
+              answer,
+              field,
+              audit: null,
+              fieldAudit: null
+            }});
+            console.log(JSON.stringify({{
+              type: question.type,
+              value: answer.value,
+              valueSource: answer.source,
+              option: match.option && match.option.label,
+              source: match.source
+            }}));
+        """
+        try:
+            result = subprocess.run(
+                ["node", "-e", script],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+        except FileNotFoundError:
+            self.skipTest("node is required to test the C3 V2 question identifier")
+
+        self.assertEqual(
+            json.loads(result.stdout),
+            {
+                "type": "ethnicity_disclosure_neutral",
+                "value": "I decline to disclose",
+                "valueSource": "default:ethnicity_disclosure_neutral",
+                "option": "I do not wish to answer. (United States of America)",
+                "source": "neutral_disclosure_checkbox",
+            },
+        )
+
     def test_v2_workday_disability_checkbox_neutral_option_is_safe(self):
         paths = [
             REPO_ROOT / "executioner" / "src" / "shared" / "v2" / "field-catalog.js",

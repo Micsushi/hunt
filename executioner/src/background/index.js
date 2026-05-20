@@ -31,6 +31,9 @@ import {
 const C4_POLL_ALARM = "hunt.apply.c4.poll";
 const C4_HEARTBEAT_ALARM = "hunt.apply.c4.heartbeat";
 const FILL_TIMEOUT_MS = 120000;
+const FILL_NO_PROGRESS_TIMEOUT_MS = 5000;
+const FILL_UPLOAD_PROGRESS_TIMEOUT_MS = 30000;
+const ACTIVE_FILL_PREPARING_MESSAGE = "Preparing application workflow";
 const V2_PAGE_WALK_MAX_PAGES = 12;
 const V2_AUTH_FLOW_MAX_STEPS = 24;
 const V2_AUTH_SAME_PAGE_MAX_ATTEMPTS = 3;
@@ -120,12 +123,34 @@ function normalizeComparableUrl(value = "") {
   }
 }
 
-function markFillRunExpectedReload(fillRunId) {
+function markFillRunExpectedReload(fillRunId, count = 1) {
   const run = fillRunId ? activeFillRuns.get(fillRunId) : null;
   if (!run) {
     return;
   }
-  run.expectedReloads = Number(run.expectedReloads || 0) + 1;
+  const increment = Math.max(1, Number(count || 1));
+  run.expectedReloads = Number(run.expectedReloads || 0) + increment;
+}
+
+function allowFillRunExpectedReloadWindow(fillRunId, durationMs) {
+  const run = fillRunId ? activeFillRuns.get(fillRunId) : null;
+  if (!run) {
+    return;
+  }
+  const until = Date.now() + Math.max(0, Number(durationMs || 0));
+  run.expectedReloadUntil = Math.max(
+    Number(run.expectedReloadUntil || 0),
+    until,
+  );
+}
+
+function clearFillRunExpectedReloads(fillRunId) {
+  const run = fillRunId ? activeFillRuns.get(fillRunId) : null;
+  if (!run) {
+    return;
+  }
+  run.expectedReloads = 0;
+  run.expectedReloadUntil = 0;
 }
 
 async function cancelFillRunForUserReload(tabId, changeInfo = {}, tab = {}) {
@@ -139,6 +164,10 @@ async function cancelFillRunForUserReload(tabId, changeInfo = {}, tab = {}) {
   }
   const nextUrl = normalizeComparableUrl(changeInfo.url || tab?.url || "");
   const currentUrl = normalizeComparableUrl(run.lastKnownUrl || "");
+  if (Number(run.expectedReloadUntil || 0) > Date.now()) {
+    run.lastKnownUrl = nextUrl || currentUrl;
+    return;
+  }
   if (Number(run.expectedReloads || 0) > 0) {
     run.expectedReloads = Number(run.expectedReloads || 0) - 1;
     run.lastKnownUrl = nextUrl || currentUrl;
@@ -1901,19 +1930,27 @@ class C3ApplyEntryWorkflow extends C3WorkflowSection {
         genericApplyEntry: Boolean(detection.genericApplyEntry),
       },
     ).catch(() => {});
+    let result = null;
+    let readiness = null;
+    markFillRunExpectedReload(this.fillRunId, 2);
+    allowFillRunExpectedReloadWindow(this.fillRunId, 20000);
     const results = await chrome.scripting.executeScript({
       target: { tabId: this.tabId, allFrames: true },
       func: createClickWorkdayApplyManuallyFunction(),
     });
-    const result = chooseBestWorkflowActionResult(results);
+    result = chooseBestWorkflowActionResult(results);
     if (result.ok && result.clicked && !result.skipped) {
+      if (result.navigationStarted) {
+        markFillRunExpectedReload(this.fillRunId, 2);
+        allowFillRunExpectedReloadWindow(this.fillRunId, 20000);
+      }
       await waitForApplyEntryTransitionForTab(this.tabId, {
         timeoutMs: result.navigationStarted ? 5000 : 2500,
       });
-      await waitForApplicationFieldsReadyAfterAuth(this.tabId, {
+      readiness = await waitForApplicationFieldsReadyAfterAuth(this.tabId, {
         fillRunId: this.fillRunId,
         pageLabel: "application page",
-        timeoutMs: 8000,
+        timeoutMs: 12000,
       });
     }
     await detectLogPromise;
@@ -1925,11 +1962,11 @@ class C3ApplyEntryWorkflow extends C3WorkflowSection {
           : "Apply-entry completed before job fill."
         : "Apply-entry failed before job fill.",
       {
-        result,
+        result: { ...result, readiness },
       },
       result.ok ? "ok" : "failed",
     );
-    return { ...result, phase: "apply_entry", detection };
+    return { ...result, readiness, phase: "apply_entry", detection };
   }
 }
 
@@ -2031,6 +2068,13 @@ function pageSnapshotChangedAfterAction(
     return true;
   }
   return Boolean((afterSnapshot.visibleValidationErrors || []).length);
+}
+
+function postNextSignalHasPageChange(signal = {}, beforeSnapshot = {}) {
+  if (!signal?.ok || !signal.snapshot) {
+    return false;
+  }
+  return pageSnapshotChangedAfterAction(beforeSnapshot, signal.snapshot);
 }
 
 async function waitForPostNextSignalForTab(
@@ -2289,6 +2333,33 @@ class C3CombinedFillWorkflow {
       detection = decisionReady.detection?.ok
         ? decisionReady.detection
         : await this.detect();
+      if (detection?.isJobFillPage && !detection?.isAuthPage) {
+        const applicationReady = applyEntry.readiness?.ok
+          ? applyEntry.readiness
+          : await waitForApplicationFieldsReadyAfterAuth(this.tabId, {
+              fillRunId: this.fillRunId,
+              pageLabel: "application page",
+              timeoutMs: 12000,
+            });
+        if (!applicationReady.ok) {
+          return {
+            auth,
+            applyEntry: {
+              ...applyEntry,
+              readiness: applicationReady,
+            },
+            jobFill: {
+              ok: false,
+              skipped: true,
+              reason:
+                applicationReady.reason || "application_fields_not_ready",
+              readiness: applicationReady,
+            },
+            initialDetection,
+            detection,
+          };
+        }
+      }
       if (detection?.isAuthPage) {
         auth = await new C3AuthWorkflow(this).run(detection);
         if (
@@ -3473,6 +3544,29 @@ async function inspectApplicationFieldReadiness(tabId) {
               : null;
           }
           const currentStep = currentWorkdayStep();
+          const loadingIndicators = [
+            ...document.querySelectorAll(
+              [
+                '[role="progressbar"]',
+                '[aria-busy="true"]',
+                '[data-automation-id*="loading" i]',
+                '[data-automation-id*="spinner" i]',
+                '[class*="loading" i]',
+                '[class*="spinner" i]',
+              ].join(", "),
+            ),
+          ].filter((element) => {
+            if (!visible(element)) {
+              return false;
+            }
+            const descriptor = textOf(element).toLowerCase();
+            const rect = element.getBoundingClientRect();
+            return (
+              element.getAttribute?.("aria-busy") === "true" ||
+              /loading|spinner|progress/i.test(descriptor) ||
+              rect.width >= 20
+            );
+          });
           const controls = [
             ...document.querySelectorAll(
               "input, textarea, select, [role='combobox'], [role='listbox']",
@@ -3557,6 +3651,7 @@ async function inspectApplicationFieldReadiness(tabId) {
             currentStep,
             readyState: document.readyState || "",
             bodyHead: bodyText.slice(0, 300),
+            loadingIndicatorVisible: loadingIndicators.length > 0,
             visibleControlCount: controls.length,
             meaningfulControlCount: applicationControls.length,
             applicationFieldCount: applicationControls.length,
@@ -3607,6 +3702,8 @@ async function waitForApplicationFieldsReadyAfterAuth(
 ) {
   const startedAt = Date.now();
   let lastProbe = null;
+  let lastReadyKey = "";
+  let stableReadyProbeCount = 0;
   let attempt = 1;
   while (Date.now() - startedAt < timeoutMs) {
     if (isFillRunCancelled(fillRunId)) {
@@ -3640,24 +3737,42 @@ async function waitForApplicationFieldsReadyAfterAuth(
       /create account|sign in|log in|login|register|sign up/i.test(
         currentStepTitle,
       );
-    if (
+    const hasApplicationSurface =
       !currentStepLooksAuth &&
       (lastProbe.finalSubmitVisible ||
         lastProbe.validationErrorCount > 0 ||
-        lastProbe.applicationFieldCount > 0)
-    ) {
+        lastProbe.applicationFieldCount > 0);
+    const readyKey = [
+      lastProbe.href || "",
+      currentStepTitle,
+      Number(lastProbe.applicationFieldCount || 0),
+      Number(lastProbe.requiredApplicationFieldCount || 0),
+      Number(lastProbe.validationErrorCount || 0),
+      Boolean(lastProbe.finalSubmitVisible),
+    ].join("|");
+    if (hasApplicationSurface && !lastProbe.loadingIndicatorVisible) {
+      stableReadyProbeCount =
+        readyKey && readyKey === lastReadyKey ? stableReadyProbeCount + 1 : 1;
+      lastReadyKey = readyKey;
+    } else {
+      stableReadyProbeCount = 0;
+      lastReadyKey = readyKey;
+    }
+    if (hasApplicationSurface && stableReadyProbeCount >= 2) {
       await sendDebugLog("c3_page_walk_application_fields_ready", {
         tabId,
         fillRunId,
         pageLabel,
         waitMs: Date.now() - startedAt,
         probe: lastProbe,
+        stableReadyProbeCount,
       });
       return {
         ok: true,
         reason: "application_fields_ready",
         waitMs: Date.now() - startedAt,
         probe: lastProbe,
+        stableReadyProbeCount,
       };
     }
     await showFillProgress(
@@ -4613,9 +4728,29 @@ async function clickSafeNextForTab(tabId, details = {}) {
   }
 
   if (clickResult.clicked) {
-    await waitForPostNextSignalForTab(tabId, beforeClickSnapshot, {
-      timeoutMs: 1800,
-    });
+    const clickSentAt = new Date().toISOString();
+    logActivity(
+      "next.click_sent",
+      "Sent safe Next click to the page.",
+      {
+        tabId,
+        frameId: probe.frameId,
+        sentAt: clickSentAt,
+        triggeredBy: details.triggeredBy || "",
+        candidate: clickResult.candidate || probe.candidate || {},
+        inputCount: clickResult.inputCount || probe.inputCount || 0,
+        candidateCount: clickResult.candidateCount || probe.candidateCount || 0,
+        auto: Boolean(details.auto),
+      },
+      "ok",
+    ).catch(() => {});
+    clickResult.postNextSignal = await waitForPostNextSignalForTab(
+      tabId,
+      beforeClickSnapshot,
+      {
+        timeoutMs: 1800,
+      },
+    );
     const runtimeRecovery = await recoverWorkdayRuntimeErrorForTab(tabId, {
       reason: "safe_next_workday_runtime_error",
       settleMs: 1800,
@@ -5462,11 +5597,20 @@ async function runV2PageWalkAfterFill({
       break;
     }
     await dismissPageTransientUi(tabId, { preserveFillProgress: true });
-    const postNextSignal = await waitForPostNextSignalForTab(
-      tabId,
-      beforeNextSnapshot,
-      { timeoutMs: 1550 },
-    );
+    let postNextSignal = nextAction.postNextSignal || null;
+    let reusedPostNextSignal = false;
+    if (
+      nextAction.runtimeRecovery?.attempted ||
+      !postNextSignalHasPageChange(postNextSignal, beforeNextSnapshot)
+    ) {
+      postNextSignal = await waitForPostNextSignalForTab(
+        tabId,
+        beforeNextSnapshot,
+        { timeoutMs: 1550 },
+      );
+    } else {
+      reusedPostNextSignal = true;
+    }
     let afterNextSnapshot =
       postNextSignal.snapshot || (await getPageSnapshot(tabId));
     const beforeStepNumber = Number(
@@ -5603,6 +5747,9 @@ async function runV2PageWalkAfterFill({
         fillRunId,
         beforePageNumber,
         nextPageNumber,
+        postNextSignalReason: postNextSignal.reason || "",
+        postNextSignalWaitedMs: postNextSignal.waitedMs || 0,
+        reusedPostNextSignal,
         beforeStep: beforeNextSnapshot.currentStep || null,
         afterStep: afterNextSnapshot.currentStep || null,
       },
@@ -6218,6 +6365,292 @@ function fillCancelledResponse(state, reason = "user_cancelled") {
   };
 }
 
+function fillNoProgressTimeoutResponse(state, progress = {}) {
+  return {
+    ok: false,
+    reason: "fill_no_progress_timeout",
+    message:
+      "Fill stopped because no visible fields changed within 5 seconds.",
+    route: {
+      routeName: "timeout",
+      fillSource: state.activeApplyContext.sourceMode || "manual",
+      strategy: "no_progress_timeout",
+      adapterName: state.activeApplyContext.atsType || "",
+      requestedAtsType: state.activeApplyContext.atsType || "",
+      detectedAtsType: state.activeApplyContext.atsType || "",
+      usedGenericFallback: false,
+      adapterBackedByGeneric: false,
+    },
+    attempt: {
+      applyUrl: state.activeApplyContext.applyUrl,
+      atsType: state.activeApplyContext.atsType,
+      filledFieldCount: 0,
+      manualReviewRequired: true,
+      manualReviewReasons: ["fill_no_progress_timeout"],
+    },
+    result: {
+      ok: false,
+      pendingLlmFieldCount: 0,
+      manualReviewReasons: ["fill_no_progress_timeout"],
+      filledFieldCount: 0,
+      filledFields: [],
+      fieldInventory: [],
+      generatedAnswers: [],
+      fillProgressWatchdog: progress,
+    },
+    generatedAnswers: [],
+    fillProgressWatchdog: progress,
+  };
+}
+
+async function inspectVisibleFillProgress(tabId) {
+  if (!tabId) {
+    return { ok: false, reason: "missing_tab_id", filledCount: 0 };
+  }
+  try {
+    const results = await withTimeout(
+      chrome.scripting.executeScript({
+        target: { tabId, allFrames: true },
+        func: () => {
+          const normalize = (value) =>
+            String(value || "")
+              .replace(/\s+/g, " ")
+              .trim();
+          const visible = (element) => {
+            if (!element) {
+              return false;
+            }
+            const style = getComputedStyle(element);
+            const rect = element.getBoundingClientRect();
+            return (
+              style.display !== "none" &&
+              style.visibility !== "hidden" &&
+              rect.width > 0 &&
+              rect.height > 0
+            );
+          };
+          const values = [];
+          const activeStep = document.querySelector(
+            '[data-automation-id="progressBarActiveStep"]',
+          );
+          if (activeStep && visible(activeStep)) {
+            const stepText = normalize(
+              activeStep.innerText || activeStep.textContent || "",
+            );
+            if (stepText) {
+              values.push(`step:${stepText}`);
+            }
+          }
+          values.push(`href:${location.href.split("#")[0]}`);
+          for (const input of document.querySelectorAll("input, textarea")) {
+            if (!visible(input)) {
+              continue;
+            }
+            const type = String(input.type || "").toLowerCase();
+            if (/^(hidden|submit|button|reset|file)$/i.test(type)) {
+              continue;
+            }
+            if (type === "checkbox" || type === "radio") {
+              if (input.checked) {
+                values.push(`checked:${input.id || input.name || type}`);
+              }
+              continue;
+            }
+            const value = normalize(input.value || "");
+            if (value) {
+              values.push(`value:${input.id || input.name || value}`);
+            }
+          }
+          for (const select of document.querySelectorAll("select")) {
+            if (!visible(select)) {
+              continue;
+            }
+            const value = normalize(select.value || select.selectedOptions?.[0]?.text || "");
+            if (value && !/^select one$/i.test(value)) {
+              values.push(`select:${select.id || select.name || value}`);
+            }
+          }
+          for (const button of document.querySelectorAll("button, [role='button']")) {
+            if (!visible(button)) {
+              continue;
+            }
+            const text = normalize(
+              button.innerText ||
+                button.textContent ||
+                button.getAttribute?.("aria-label") ||
+                "",
+            );
+            const id = button.id || button.getAttribute?.("data-automation-id") || "";
+            const name = button.getAttribute?.("name") || "";
+            const aria = button.getAttribute?.("aria-label") || "";
+            const isFieldValue =
+              Boolean(button.id || name) &&
+              !/^pageFooter|^utilityButton|^navigationItem|^backToJobPosting|^add-button$/i.test(id);
+            if (
+              isFieldValue &&
+              text &&
+              !/^select one$/i.test(text) &&
+              !/^0 items selected$/i.test(text) &&
+              !/^(next|back|cancel|add|remove|upload|select files)$/i.test(text)
+            ) {
+              values.push(`button:${id || name || aria || text}:${text}`);
+            }
+          }
+          for (const pill of document.querySelectorAll(
+            [
+              '[data-automation-id="selectedItem"]',
+              '[data-automation-id="promptSelectionLabel"]',
+              '[aria-label*="press delete" i]',
+            ].join(", "),
+          )) {
+            if (!visible(pill)) {
+              continue;
+            }
+            const text = normalize(
+              pill.innerText ||
+                pill.textContent ||
+                pill.getAttribute?.("aria-label") ||
+                "",
+            );
+            if (text) {
+              values.push(`pill:${text}`);
+            }
+          }
+          for (const upload of document.querySelectorAll(
+            '[data-automation-id*="attachment" i], [data-automation-id*="upload" i]',
+          )) {
+            if (!visible(upload)) {
+              continue;
+            }
+            const text = normalize(upload.innerText || upload.textContent || "");
+            if (/successfully uploaded|\.pdf|\.docx?/i.test(text)) {
+              values.push(`upload:${text.slice(0, 160)}`);
+            }
+          }
+          const errors = [...document.querySelectorAll('[role="alert"], [data-automation-id*="error" i], [id*="error" i]')]
+            .filter(visible)
+            .map((element) => normalize(element.innerText || element.textContent || ""))
+            .filter(Boolean)
+            .slice(0, 20);
+          if (errors.length) {
+            values.push(`errors:${errors.join("||")}`);
+          }
+          return {
+            ok: true,
+            href: location.href,
+            filledCount: new Set(values).size,
+            signature: Array.from(new Set(values)).sort().join("|"),
+            values: Array.from(new Set(values)).slice(0, 25),
+          };
+        },
+      }),
+      3000,
+      () => null,
+    );
+    const entries = Array.isArray(results)
+      ? results.map((entry) => entry.result).filter(Boolean)
+      : [];
+    return (
+      entries.sort(
+        (a, b) => Number(b.filledCount || 0) - Number(a.filledCount || 0),
+      )[0] || { ok: false, reason: "empty_progress_result", filledCount: 0 }
+    );
+  } catch (error) {
+    return {
+      ok: false,
+      reason: "fill_progress_probe_failed",
+      message: String(error?.message || error),
+      filledCount: 0,
+    };
+  }
+}
+
+async function runFillForTabWithNoProgressWatchdog(
+  tabId,
+  state,
+  fillRunId,
+  options = {},
+) {
+  const startedAt = Date.now();
+  const before = await inspectVisibleFillProgress(tabId);
+  let lastProgress = before;
+  let lastProgressSignature = String(before.signature || "");
+  let lastProgressAt = Date.now();
+  let settled = false;
+  const run = activeFillRuns.get(fillRunId);
+  const hasUploadProgress = (progress = {}) =>
+    (progress.values || []).some((value) =>
+      /^(upload:)|successfully uploaded|\.pdf|\.docx?/i.test(
+        String(value || ""),
+      ),
+    );
+  const fillPromise = runFillForTab(tabId, state, options)
+    .then((result) => {
+      settled = true;
+      return result;
+    })
+    .catch((error) => {
+      settled = true;
+      throw error;
+    });
+  const watchdogPromise = (async () => {
+    while (!settled) {
+      await new Promise((resolve) => setTimeout(resolve, 500));
+      if (settled) {
+        return null;
+      }
+      const after = await inspectVisibleFillProgress(tabId);
+      const nextSignature = String(after.signature || "");
+      if (nextSignature && nextSignature !== lastProgressSignature) {
+        lastProgress = after;
+        lastProgressSignature = nextSignature;
+        lastProgressAt = Date.now();
+        continue;
+      }
+      const progressTimeoutMs = hasUploadProgress(lastProgress)
+        ? FILL_UPLOAD_PROGRESS_TIMEOUT_MS
+        : FILL_NO_PROGRESS_TIMEOUT_MS;
+      if (Date.now() - lastProgressAt < progressTimeoutMs) {
+        continue;
+      }
+      try {
+        run?.abortController?.abort("fill_no_progress_timeout");
+      } catch (_error) {
+        // Abort is best effort; the page-side cancel flag below stops V2 loops.
+      }
+      await markPageFillCancelled(tabId, fillRunId, true);
+      await logActivity(
+        "fill.no_progress_timeout",
+        "Stopped fill because no visible fields changed within 5 seconds.",
+        {
+          tabId,
+          fillRunId,
+          timeoutMs: progressTimeoutMs,
+          before,
+          lastProgress,
+          after,
+        },
+        "blocked",
+      );
+      return fillNoProgressTimeoutResponse(state, {
+        timeoutMs: progressTimeoutMs,
+        elapsedMs: Date.now() - startedAt,
+        idleMs: Date.now() - lastProgressAt,
+        before,
+        lastProgress,
+        after,
+      });
+    }
+    return null;
+  })();
+  const raced = await Promise.race([fillPromise, watchdogPromise]);
+  if (raced) {
+    fillPromise.catch(() => {});
+    return raced;
+  }
+  return fillPromise;
+}
+
 function workflowBlockedResponse(state, workflow, reason = "workflow_blocked") {
   return {
     ok: false,
@@ -6355,7 +6788,7 @@ async function runFillWithOneRefreshRetry(
       }
     }
     let result = await withTimeout(
-      runFillForTab(tabId, state, {
+      runFillForTabWithNoProgressWatchdog(tabId, state, fillRunId, {
         fillRunId,
         isCancelled: () => isFillRunCancelled(fillRunId),
         allowLlmAnswers: options.allowLlmAnswers === true,
@@ -6480,7 +6913,7 @@ async function runFillWithOneRefreshRetry(
       fillRunId,
     );
     const retryResult = await withTimeout(
-      runFillForTab(tabId, state, {
+      runFillForTabWithNoProgressWatchdog(tabId, state, fillRunId, {
         fillRunId,
         isCancelled: () => isFillRunCancelled(fillRunId),
         allowLlmAnswers: options.allowLlmAnswers === true,
@@ -6579,17 +7012,18 @@ async function handleMessage(message, sender = {}) {
     case "hunt.apply.get_active_fill_progress": {
       const tabId = message.payload?.tabId || sender.tab?.id;
       const progress = tabId ? activeFillProgressByTab.get(tabId) : null;
-      const fillRunId = progress?.fillRunId || "";
+      const activeFillRunId = tabId ? activeFillRunByTab.get(tabId) : "";
+      const fillRunId = progress?.fillRunId || activeFillRunId || "";
       const run = fillRunId ? activeFillRuns.get(fillRunId) : null;
-      if (!progress || (fillRunId && !run)) {
+      if (!run) {
         return { ok: true, active: false };
       }
       return {
         ok: true,
         active: true,
-        message: progress.message || "Filling page",
+        message: progress?.message || ACTIVE_FILL_PREPARING_MESSAGE,
         fillRunId,
-        updatedAt: progress.updatedAt || 0,
+        updatedAt: progress?.updatedAt || Date.parse(run.startedAt || "") || 0,
       };
     }
 
@@ -6903,13 +7337,17 @@ async function handleMessage(message, sender = {}) {
                 ? "Filling application page: attempt 1"
                 : "Filling current page: attempt 1";
             await showFillProgress(tabId, fillMessage, fillRunId);
-            result = await runFillWithOneRefreshRetry(
-              tabId,
-              state,
-              message.payload?.triggeredBy || "fill_current_page",
-              fillRunId,
-              { allowLlmAnswers },
-            );
+            try {
+              result = await runFillWithOneRefreshRetry(
+                tabId,
+                state,
+                message.payload?.triggeredBy || "fill_current_page",
+                fillRunId,
+                { allowLlmAnswers },
+              );
+            } finally {
+              clearFillRunExpectedReloads(fillRunId);
+            }
             result.workflow = workflow;
             if (result.result) {
               result.result.workflow = workflow;

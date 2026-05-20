@@ -15,7 +15,7 @@
   const PROMPT_SUPPRESS_AFTER_FILL_MS = 45000;
   const PROMPT_SUPPRESS_AFTER_APPLY_ENTRY_MS = 30000;
   const PROMPT_AUTO_DISMISS_MS = 5000;
-  const PROMPT_FILL_REQUEST_TIMEOUT_MS = 65000;
+  const PROMPT_FILL_REQUEST_TIMEOUT_MS = 600000;
   let lastPromptSignature = "";
   const dismissedPromptSignatures = new Set();
   let promptCheckTimer = null;
@@ -416,6 +416,23 @@
     document.getElementById(TOAST_CONTAINER_ID)?.remove();
   }
 
+  function updateToastStackPosition() {
+    const container = document.getElementById(TOAST_CONTAINER_ID);
+    if (!container) {
+      return;
+    }
+    const fillProgress = document.getElementById(FILL_PROGRESS_ID);
+    const fillPanel = fillProgress?.shadowRoot?.querySelector(".panel");
+    const fillRect =
+      fillPanel?.getBoundingClientRect?.() ||
+      fillProgress?.getBoundingClientRect?.();
+    const hasVisibleFillProgress =
+      fillRect && fillRect.width > 0 && fillRect.height > 0;
+    container.style.top = hasVisibleFillProgress
+      ? `${Math.ceil(fillRect.bottom + 8)}px`
+      : "18px";
+  }
+
   function removeLlmPrompt() {
     document.getElementById(LLM_PROMPT_ID)?.remove();
   }
@@ -429,6 +446,7 @@
     if (existing) {
       logPageUiEvent("ui.fill_progress.hide", "Hid fill progress indicator.");
       existing.remove();
+      updateToastStackPosition();
     }
   }
 
@@ -751,6 +769,7 @@
             message || "Filling page",
           );
         }
+        updateToastStackPosition();
         logPageUiEvent(
           "ui.fill_progress.update",
           "Updated fill progress indicator.",
@@ -843,6 +862,7 @@
       </div>
     `;
     document.documentElement.appendChild(host);
+    updateToastStackPosition();
     host.shadowRoot
       .getElementById("hunt-apply-fill-progress-cancel")
       ?.addEventListener("click", () => {
@@ -884,8 +904,10 @@
       container.style.gap = "8px";
       container.style.maxWidth = "380px";
       container.style.fontFamily = "Segoe UI, system-ui, sans-serif";
+      container.style.transition = "top 160ms ease";
       document.documentElement.appendChild(container);
     }
+    updateToastStackPosition();
     var toast = document.createElement("div");
     toast.textContent = message;
     toast.style.background = tone === "warn" ? "#2d2410" : "#172212";
@@ -907,6 +929,11 @@
     setTimeout(
       function () {
         toast.remove();
+        if (!container.children.length) {
+          container.remove();
+        } else {
+          updateToastStackPosition();
+        }
       },
       tone === "warn" ? 7000 : 4200,
     );
@@ -1040,6 +1067,8 @@
             PROMPT_SUPPRESS_AFTER_APPLY_ENTRY_MS,
           );
         }
+        dismissedPromptSignatures.add(promptSignature({ kind, inputCount }));
+        removePrompt();
         removeToasts();
         showFillProgress({ message: promptProgressMessage(kind) });
         logPageUiEvent(
@@ -1305,6 +1334,17 @@
     );
   }
 
+  async function activeFillProgress() {
+    try {
+      const response = await chrome.runtime.sendMessage({
+        type: "hunt.apply.get_active_fill_progress",
+      });
+      return response?.ok && response.active ? response : null;
+    } catch (_error) {
+      return null;
+    }
+  }
+
   const stateResponse = await chrome.runtime.sendMessage({
     type: "hunt.apply.get_state",
   });
@@ -1408,6 +1448,25 @@
 
   async function maybeShowPrompt(reason) {
     handlePageContextChange(reason);
+    const activeFill = await activeFillProgress();
+    if (activeFill?.active) {
+      if (!document.getElementById(FILL_PROGRESS_ID)) {
+        showFillProgress({
+          message: activeFill.message || "Filling application page",
+          fillRunId: activeFill.fillRunId || "",
+        });
+      }
+      logPageUiEvent(
+        "ui.detect_prompt.suppress_active_fill",
+        "Suppressed detected-page prompt because a fill run is already active.",
+        {
+          reason,
+          fillRunId: activeFill.fillRunId || "",
+          message: activeFill.message || "",
+        },
+      );
+      return;
+    }
     const detection = detectPageKind();
     if (!canPrompt(cachedStateResponse, detection)) {
       return;

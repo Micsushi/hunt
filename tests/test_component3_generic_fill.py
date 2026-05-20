@@ -111,6 +111,84 @@ def test_generic_v2_radio_options_use_associated_labels_before_group_text():
     }
 
 
+def test_workday_date_section_commit_accepts_unpadded_month_and_day():
+    if sync_playwright is None:
+        pytest.skip("playwright is required for the generic C3 V2 fixture")
+
+    with sync_playwright() as playwright:
+        try:
+            browser = playwright.chromium.launch()
+        except PlaywrightError as error:
+            pytest.skip(f"playwright chromium is unavailable: {error}")
+
+        page = browser.new_page()
+        page.set_content(
+            """
+            <html>
+              <body>
+                <label>Month
+                  <input id="questionnaire--desiredStart-dateSectionMonth-input"
+                    data-automation-id="dateSectionMonth-input" />
+                </label>
+                <label>Day
+                  <input id="questionnaire--desiredStart-dateSectionDay-input"
+                    data-automation-id="dateSectionDay-input" />
+                </label>
+                <script>
+                  for (const input of document.querySelectorAll("input")) {
+                    input.addEventListener("input", () => {
+                      if (/^0\\d$/.test(input.value)) input.value = String(Number(input.value));
+                    });
+                    input.addEventListener("change", () => {
+                      if (/^0\\d$/.test(input.value)) input.value = String(Number(input.value));
+                    });
+                  }
+                </script>
+              </body>
+            </html>
+            """
+        )
+        _load_v2_scripts(page)
+        result = page.evaluate(
+            """
+            async () => {
+              const root = window.__huntV2;
+              const fields = root.uiInspector.collectCandidates();
+              const month = fields.find((field) => /dateSectionMonth/.test(field.fieldId));
+              const day = fields.find((field) => /dateSectionDay/.test(field.fieldId));
+              const monthFill = await root.fieldDrivers.fillField({
+                field: month,
+                answer: { value: "05", answerType: "text" },
+                option: null,
+                audit: null,
+                fieldAudit: null,
+              });
+              const dayFill = await root.fieldDrivers.fillField({
+                field: day,
+                answer: { value: "09", answerType: "text" },
+                option: null,
+                audit: null,
+                fieldAudit: null,
+              });
+              return {
+                monthOk: monthFill.ok,
+                monthValue: document.querySelector("[data-automation-id='dateSectionMonth-input']").value,
+                dayOk: dayFill.ok,
+                dayValue: document.querySelector("[data-automation-id='dateSectionDay-input']").value,
+              };
+            }
+            """
+        )
+        browser.close()
+
+    assert result == {
+        "monthOk": True,
+        "monthValue": "5",
+        "dayOk": True,
+        "dayValue": "9",
+    }
+
+
 def test_generic_v2_unknown_option_defaults_to_neutral_yes_then_first_real():
     if sync_playwright is None:
         pytest.skip("playwright is required for the generic C3 V2 fixture")

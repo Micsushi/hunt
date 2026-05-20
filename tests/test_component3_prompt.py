@@ -109,6 +109,36 @@ def test_page_ui_actions_are_logged():
     assert "ui.llm_prompt.requested" in background
 
 
+def test_toast_stack_sits_below_fill_progress_and_moves_up_after_fill():
+    content = _load_script(REPO_ROOT / "executioner/src/content/bootstrap.js")
+    stack_fn = content[
+        content.index("function updateToastStackPosition")
+        : content.index("function removeLlmPrompt")
+    ]
+    hide_fill = content[
+        content.index("function hideFillProgress")
+        : content.index("function logPageUiEvent")
+    ]
+    show_fill = content[
+        content.index("function showFillProgress")
+        : content.index("function showExtensionToast")
+    ]
+    show_toast = content[
+        content.index("function showExtensionToast")
+        : content.index("function showPrompt")
+    ]
+
+    assert "FILL_PROGRESS_ID" in stack_fn
+    assert 'shadowRoot?.querySelector(".panel")' in stack_fn
+    assert "fillRect.bottom + 8" in stack_fn
+    assert 'container.style.top = hasVisibleFillProgress' in stack_fn
+    assert '"18px"' in stack_fn
+    assert "updateToastStackPosition();" in hide_fill
+    assert "updateToastStackPosition();" in show_fill
+    assert "updateToastStackPosition();" in show_toast
+    assert "container.style.transition = \"top 160ms ease\"" in show_toast
+
+
 def test_background_ui_messages_use_central_logged_sender():
     background = _load_script(REPO_ROOT / "executioner/src/background/index.js")
 
@@ -219,6 +249,12 @@ def test_fill_progress_restores_across_apply_navigation():
     assert "activeFillProgressByTab.set(tabId" in background
     assert "activeFillProgressByTab.delete(tabId)" in background
     assert 'case "hunt.apply.get_active_fill_progress"' in background
+    assert "ACTIVE_FILL_PREPARING_MESSAGE" in background
+    assert "activeFillRunByTab.get(tabId)" in background[
+        background.index('case "hunt.apply.get_active_fill_progress"') : background.index(
+            'case "hunt.apply.cancel_fill"'
+        )
+    ]
     assert 'type: "hunt.apply.get_active_fill_progress"' in content
     assert "async function restoreActiveFillProgress" in content
     assert "ui.fill_progress.restore" in content
@@ -259,8 +295,16 @@ def test_apply_entry_prompt_click_suppresses_transition_reprompts():
 
     assert "PROMPT_SUPPRESS_AFTER_APPLY_ENTRY_MS" in content
     assert "function suppressDetectedPrompts" in content
+    assert "async function activeFillProgress" in content
+    assert '"hunt.apply.get_active_fill_progress"' in content
+    assert '"ui.detect_prompt.suppress_active_fill"' in content
     assert '"apply_entry_transition"' in content
     assert 'kind === "apply_entry"' in content
+    assert "removePrompt();" in content[
+        content.index('getElementById("fill")') : content.index(
+            'const response = await runtimeMessageWithTimeout'
+        )
+    ]
     assert "Date.now() < detectedPromptSuppressedUntil" in content
     assert "!transitionCooldownActive" in content
 
@@ -279,10 +323,36 @@ def test_apply_entry_uses_condition_waits_instead_of_mandatory_sleep():
     assert "waitForApplyEntryState" in apply_entry
     assert "waitForApplyEntryTransitionForTab" in workflow
     assert "waitForApplicationFieldsReadyAfterAuth" in workflow
+    assert "readiness = await waitForApplicationFieldsReadyAfterAuth" in workflow
+    assert "return { ...result, readiness, phase: \"apply_entry\", detection }" in workflow
     assert 'pageLabel: "application page"' in workflow
     assert "setTimeout(resolve, 900)" not in apply_entry
     assert "setTimeout(resolve, 3600)" not in apply_entry
     assert "setTimeout(resolve, result.navigationStarted ? 5000 : 2500)" not in workflow
+
+
+def test_apply_entry_navigation_is_an_expected_reload():
+    background = _load_script(REPO_ROOT / "executioner/src/background/index.js")
+    workflow = background[
+        background.index("class C3ApplyEntryWorkflow")
+        : background.index("async function waitForApplyEntryTransitionForTab")
+    ]
+    fill_handler = background[
+        background.index('case "hunt.apply.fill_current_page"')
+        : background.index('case "hunt.apply.fill_remaining_with_llm"')
+    ]
+
+    assert "function clearFillRunExpectedReloads" in background
+    assert "function allowFillRunExpectedReloadWindow" in background
+    assert workflow.index("markFillRunExpectedReload(this.fillRunId, 2);") < workflow.index(
+        "chrome.scripting.executeScript"
+    )
+    assert "allowFillRunExpectedReloadWindow(this.fillRunId, 20000);" in workflow
+    assert "if (result.navigationStarted)" in workflow
+    assert "clearFillRunExpectedReloads(fillRunId);" in fill_handler
+    assert fill_handler.index("clearFillRunExpectedReloads(fillRunId);") > fill_handler.index(
+        "runFillWithOneRefreshRetry"
+    )
 
 
 def test_application_readiness_requires_application_fields_not_generic_controls():
@@ -298,12 +368,44 @@ def test_application_readiness_requires_application_fields_not_generic_controls(
 
     assert "applicationFieldCount" in readiness
     assert "requiredApplicationFieldCount" in readiness
+    assert "loadingIndicatorVisible" in readiness
     assert "entry.applicationFieldCount > 0" in readiness
     assert "skip to main content" in readiness
     assert "workflowDetection?.isAuthPage" in wait_ready
     assert 'reason: "still_on_auth_page"' in wait_ready
     assert "lastProbe.applicationFieldCount > 0" in wait_ready
+    assert "stableReadyProbeCount >= 2" in wait_ready
+    assert "!lastProbe.loadingIndicatorVisible" in wait_ready
     assert "lastProbe.meaningfulControlCount >= 2" not in wait_ready
+
+
+def test_fill_attempt_stops_when_no_visible_progress_within_five_seconds():
+    background = _load_script(REPO_ROOT / "executioner/src/background/index.js")
+    no_progress = background[
+        background.index("function fillNoProgressTimeoutResponse")
+        : background.index("async function handleMessage")
+    ]
+    run_fill = background[
+        background.index("async function runFillWithOneRefreshRetry")
+        : background.index("async function handleMessage")
+    ]
+
+    assert "FILL_NO_PROGRESS_TIMEOUT_MS = 5000" in background
+    assert "FILL_UPLOAD_PROGRESS_TIMEOUT_MS = 30000" in background
+    assert "async function inspectVisibleFillProgress" in no_progress
+    assert "async function runFillForTabWithNoProgressWatchdog" in no_progress
+    assert '"fill_no_progress_timeout"' in no_progress
+    assert "selectedItem" in no_progress
+    assert "promptSelectionLabel" in no_progress
+    assert "successfully uploaded" in no_progress
+    assert "isFieldValue" in no_progress
+    assert "hasUploadProgress" in no_progress
+    assert "progressTimeoutMs" in no_progress
+    assert "lastProgressAt" in no_progress
+    assert "nextSignature !== lastProgressSignature" in no_progress
+    assert "Date.now() - lastProgressAt < progressTimeoutMs" in no_progress
+    assert "markPageFillCancelled(tabId, fillRunId, true)" in no_progress
+    assert "runFillForTabWithNoProgressWatchdog(tabId, state, fillRunId" in run_fill
 
 
 def test_auth_email_prefers_account_email():
@@ -389,8 +491,13 @@ def test_page_walk_next_uses_condition_waits_instead_of_mandatory_sleep():
 
     assert "waitForPostNextSignalForTab" in background
     assert "pageSnapshotChangedAfterAction" in background
+    assert "postNextSignalHasPageChange" in background
     assert "waitForSafeNextAvailabilityForTab" in background
     assert "next.available_after_wait" in background
+    assert "next.click_sent" in safe_next_click
+    assert "clickResult.postNextSignal" in safe_next_click
+    assert "nextAction.postNextSignal" in page_walk
+    assert "reusedPostNextSignal" in page_walk
     assert "setTimeout(resolve, 1800)" not in safe_next_click
     assert "setTimeout(resolve, 650)" not in page_walk
     assert "setTimeout(resolve, 900)" not in page_walk
@@ -730,7 +837,7 @@ def test_prompt_fill_click_cannot_leave_prompt_stuck_filling():
         )
     ]
 
-    assert "PROMPT_FILL_REQUEST_TIMEOUT_MS = 65000" in content
+    assert "PROMPT_FILL_REQUEST_TIMEOUT_MS = 600000" in content
     assert "runtimeMessageWithTimeout" in content
     assert "try {\n      runtimeMessage = chrome.runtime.sendMessage(message);" in content
     assert "try {\n      chrome.runtime" in content

@@ -9,6 +9,7 @@ const {
 } = require("./c3_p_chrome_defaults");
 const { CdpClient, httpJson, httpText, js, sleep } = require("./lib/c3_cdp");
 const { recordAuditIssues } = require("./lib/c3_issue_registry");
+const { verifyEmail } = require("./c3_mail_verify_bridge");
 
 function loadDotEnv(filePath = ".env") {
   if (!fs.existsSync(filePath)) return;
@@ -33,6 +34,8 @@ loadDotEnv();
 const DEFAULT_JOB_URL =
   "https://talentmanagementsolution.wd3.myworkdayjobs.com/en-US/JonasSoftwareCanada/job/Remote---Canada/Junior-AI-Software-Engineer_R50805-1?source=LinkedIn";
 const DEFAULT_EXTENSION_ID = "cbdmkibihimaedoihjhpidclolglnncc";
+const AUTH_VERIFICATION_RE =
+  /an email has been sent to you\.?\s*please verify your account|verify your account before you sign in|request a verification email/i;
 
 function auditTimestamp() {
   return new Date().toISOString().replace(/[:.]/g, "-");
@@ -623,6 +626,182 @@ async function navigate(pageClient, applyUrl) {
       href: readyState.href || "",
     },
   );
+}
+
+function authVerificationErrors(errors = []) {
+  return (errors || []).filter((error) =>
+    AUTH_VERIFICATION_RE.test(String(error || "")),
+  );
+}
+
+function looksLikeAuthPage(summary = {}) {
+  const title = String(summary.currentStep?.title || "");
+  const href = String(summary.href || "");
+  const fields = summary.fields || [];
+  const hasEmail = fields.some((field) =>
+    /email|username|user/i.test(
+      [field.id, field.name, field.automationId, field.ariaLabel, field.text]
+        .filter(Boolean)
+        .join(" "),
+    ),
+  );
+  const hasPassword = fields.some(
+    (field) =>
+      String(field.type || "").toLowerCase() === "password" ||
+      /password/i.test(
+        [field.id, field.name, field.automationId, field.ariaLabel, field.text]
+          .filter(Boolean)
+          .join(" "),
+      ),
+  );
+  return (
+    /create account|sign in|log in|login|register|sign up/i.test(title) ||
+    (/\/login\b|\/apply\/applyManually/i.test(href) && hasEmail && hasPassword)
+  );
+}
+
+function expectedVerificationDomains(...urls) {
+  const hosts = new Set(["workday.com", "myworkday.com", "myworkdayjobs.com"]);
+  for (const value of urls) {
+    try {
+      const host = new URL(value).hostname;
+      if (host) hosts.add(host);
+      const parts = host.split(".");
+      if (parts.length > 2) hosts.add(parts.slice(-3).join("."));
+      if (parts.length > 1) hosts.add(parts.slice(-2).join("."));
+    } catch (_error) {
+      // Ignore non-URL values; the generic Workday hosts above remain.
+    }
+  }
+  return [...hosts].filter(Boolean);
+}
+
+async function resolveAuthVerificationViaMail(pageClient, args, context = {}) {
+  const before = await inspectPage(pageClient);
+  const errors = authVerificationErrors(before.errors || []);
+  const bodyText = String(before.bodyHead || "");
+  if (!errors.length && !AUTH_VERIFICATION_RE.test(bodyText)) {
+    return {
+      ok: false,
+      skipped: true,
+      reason: "auth_verification_not_present",
+      before,
+    };
+  }
+  const resend = await pageClient.evaluate(
+    `(async () => {
+      const normalize = (value) => String(value || "").replace(/\\s+/g, " ").trim();
+      const visible = (el) => {
+        if (!el) return false;
+        const style = getComputedStyle(el);
+        const rect = el.getBoundingClientRect();
+        return style.display !== "none" && style.visibility !== "hidden" && rect.width > 0 && rect.height > 0 && !el.disabled;
+      };
+      const controls = [...document.querySelectorAll('button, [role="button"], a')]
+        .filter(visible)
+        .map((el) => ({
+          el,
+          text: normalize([el.innerText, el.textContent, el.getAttribute("aria-label"), el.getAttribute("title")].filter(Boolean).join(" ")),
+          automationId: el.getAttribute("data-automation-id") || "",
+        }))
+        .filter((entry) => /resend.*(verification|email)|request.*verification/i.test(entry.text + " " + entry.automationId));
+      if (!controls.length) return { clicked: false, reason: "resend_not_found" };
+      const target = controls[0].el;
+      target.scrollIntoView({ block: "center", inline: "center" });
+      target.click();
+      return {
+        clicked: true,
+        reason: "resend_clicked",
+        label: controls[0].text,
+        automationId: controls[0].automationId,
+        clickedAt: new Date().toISOString(),
+      };
+    })()`,
+    30000,
+  ).catch((error) => ({
+    clicked: false,
+    reason: "resend_probe_failed",
+    message: error instanceof Error ? error.message : String(error),
+  }));
+  if (resend.clicked) {
+    await sleep(2500);
+  }
+  const provider = process.env.HUNT_C3_MAIL_PROVIDER || "imap";
+  const since =
+    context.since ||
+    (resend.clicked
+      ? resend.clickedAt
+      : new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString());
+  const request = {
+    email: args.accountEmail,
+    expectedDomains: expectedVerificationDomains(
+      before.href,
+      args.jobUrl,
+      context.applyUrl,
+    ),
+    since,
+    timeoutSeconds: Number(
+      process.env.HUNT_C3_MAIL_MAX_WAIT_SECONDS ||
+        process.env.HUNT_C3_EMAIL_VERIFICATION_TIMEOUT_SECONDS ||
+        90,
+    ),
+    jobUrl: before.href || context.applyUrl || args.jobUrl,
+  };
+  const bridge = await verifyEmail(request, { provider });
+  if (!bridge.ok || !bridge.link) {
+    return {
+      ok: false,
+      reason: bridge.reason || "auth_verification_required",
+      message:
+        bridge.message ||
+        "Workday requires account verification, but the mail bridge did not return an activation link.",
+      provider,
+      request: {
+        email: request.email,
+        expectedDomains: request.expectedDomains,
+        since: request.since,
+        timeoutSeconds: request.timeoutSeconds,
+        jobUrl: request.jobUrl,
+      },
+      bridge,
+      resend,
+      before,
+    };
+  }
+  await navigate(pageClient, bridge.link);
+  await sleep(2500);
+  let after = await inspectPage(pageClient);
+  let postVerifyRedirect = null;
+  try {
+    const currentUrl = new URL(after.href || "");
+    const redirect = currentUrl.searchParams.get("redirect");
+    if (/\/login\/ok\b/i.test(currentUrl.pathname) && redirect) {
+      postVerifyRedirect = new URL(redirect, currentUrl.origin).href;
+      await navigate(pageClient, postVerifyRedirect);
+      await sleep(2500);
+      after = await inspectPage(pageClient);
+    }
+  } catch (_error) {
+    // If the verification URL is unusual, keep the verified page state and let
+    // the main loop decide whether a sign-in/application page is available.
+  }
+  return {
+    ok: true,
+    reason: "auth_verification_link_opened",
+    provider,
+    request: {
+      email: request.email,
+      expectedDomains: request.expectedDomains,
+      since: request.since,
+      timeoutSeconds: request.timeoutSeconds,
+      jobUrl: request.jobUrl,
+    },
+    bridge,
+    resend,
+    postVerifyRedirect,
+    before,
+    after,
+  };
 }
 
 function stepMatches(summary, targetStep) {
@@ -1481,6 +1660,152 @@ async function suppressStaleWorkdayDateErrors(summary) {
   };
 }
 
+async function tryFixKnownVisibleValidationErrors(pageClient) {
+  return pageClient.evaluate(
+    `(async () => {
+      const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+      const normalize = (value) => String(value || "").replace(/\\s+/g, " ").trim();
+      const visible = (el) => {
+        if (!el) return false;
+        const style = getComputedStyle(el);
+        const rect = el.getBoundingClientRect();
+        return style.display !== "none" && style.visibility !== "hidden" && rect.width > 0 && rect.height > 0;
+      };
+      const clickReal = (target) => {
+        if (!target) return false;
+        target.scrollIntoView({ block: "center", inline: "center" });
+        const rect = target.getBoundingClientRect();
+        const init = {
+          bubbles: true,
+          cancelable: true,
+          view: window,
+          button: 0,
+          buttons: 1,
+          clientX: Math.round(rect.left + rect.width / 2),
+          clientY: Math.round(rect.top + rect.height / 2)
+        };
+        ["mouseover", "mousemove", "pointerdown", "mousedown"].forEach((type) => target.dispatchEvent(new PointerEvent(type, init)));
+        target.dispatchEvent(new PointerEvent("pointerup", { ...init, buttons: 0 }));
+        target.dispatchEvent(new MouseEvent("mouseup", { ...init, buttons: 0 }));
+        target.dispatchEvent(new MouseEvent("click", { ...init, buttons: 0 }));
+        return true;
+      };
+      const visibleValidationErrors = () => [...document.querySelectorAll([
+        '[role="alert"]',
+        '[data-automation-id*="error" i]',
+        '[id*="error" i]',
+        '.css-1iucqxd'
+      ].join(","))]
+        .filter(visible)
+        .map((node) => normalize(node.innerText || node.textContent || ""))
+        .filter(Boolean)
+        .filter((text, index, all) => all.indexOf(text) === index);
+      const errors = visibleValidationErrors();
+      const body = normalize(document.body?.innerText || "");
+      const repairs = [];
+
+      if (/preferred communication channel/i.test(errors.join(" ") || body)) {
+        const target = [...document.querySelectorAll('button[aria-haspopup="listbox"], button')]
+          .filter(visible)
+          .filter((button) => {
+            const text = normalize([button.innerText, button.textContent, button.getAttribute("aria-label"), button.id, button.name].filter(Boolean).join(" "));
+            return /select one/i.test(text) && (button.getAttribute("aria-invalid") === "true" || /required/i.test(text));
+          })[0];
+        if (target && clickReal(target)) {
+          await sleep(900);
+          const option = [...document.querySelectorAll('[role="option"], [data-automation-id="promptOption"], div, li')]
+            .filter(visible)
+            .find((candidate) => /^e-?mail$|^email$|personal email|email address/i.test(normalize(candidate.innerText || candidate.textContent || "")));
+          repairs.push({
+            kind: "preferred_communication_channel",
+            opened: true,
+            option: option ? normalize(option.innerText || option.textContent || "") : "",
+            clicked: Boolean(option && clickReal(option))
+          });
+          await sleep(1200);
+        }
+      }
+
+      if (/candidate privacy statement|consent to the transfer and processing/i.test(errors.join(" ") || body)) {
+        const checkbox = [...document.querySelectorAll('input[type="checkbox"]')]
+          .find((input) => {
+            const id = input.id || "";
+            const label = id ? document.querySelector('label[for="' + CSS.escape(id) + '"]') : null;
+            const text = normalize([
+              input.id,
+              input.name,
+              input.getAttribute("aria-label"),
+              label?.innerText,
+              input.closest("label")?.innerText,
+              input.closest('[data-automation-id], section, div')?.innerText,
+            ].filter(Boolean).join(" "));
+            return /consent|candidate privacy statement|privacy statement|termsAndConditions|acceptTermsAndAgreements/i.test(text);
+          });
+        if (checkbox) {
+          const id = checkbox.id || "";
+          const label = id ? document.querySelector('label[for="' + CSS.escape(id) + '"]') : null;
+          const clicked = clickReal(label || checkbox);
+          if (!checkbox.checked) {
+            checkbox.checked = true;
+            checkbox.dispatchEvent(new Event("input", { bubbles: true }));
+            checkbox.dispatchEvent(new Event("change", { bubbles: true }));
+          }
+          repairs.push({
+            kind: "candidate_privacy_consent",
+            id,
+            clicked,
+            checked: Boolean(checkbox.checked)
+          });
+          await sleep(800);
+        }
+      }
+
+      if (/race\\(s\\)|ethnicity\\(ies\\)|ethnicity/i.test(errors.join(" "))) {
+        const neutralEthnicity = [...document.querySelectorAll('input[type="checkbox"]')]
+          .find((input) => {
+            const id = input.id || "";
+            const label = id ? document.querySelector('label[for="' + CSS.escape(id) + '"]') : null;
+            const text = normalize([
+              input.id,
+              input.name,
+              input.getAttribute("aria-label"),
+              label?.innerText,
+              input.closest("label")?.innerText,
+              input.closest('[data-automation-id], section, div')?.innerText,
+            ].filter(Boolean).join(" "));
+            return /ethnicity|race/i.test(text) && /i do not wish to answer\\.?/i.test(text);
+          });
+        if (neutralEthnicity) {
+          const id = neutralEthnicity.id || "";
+          const label = id ? document.querySelector('label[for="' + CSS.escape(id) + '"]') : null;
+          const clicked = clickReal(label || neutralEthnicity);
+          if (!neutralEthnicity.checked || neutralEthnicity.getAttribute("aria-checked") !== "true") {
+            neutralEthnicity.checked = true;
+            neutralEthnicity.setAttribute("aria-checked", "true");
+            neutralEthnicity.dispatchEvent(new Event("input", { bubbles: true }));
+            neutralEthnicity.dispatchEvent(new Event("change", { bubbles: true }));
+          }
+          repairs.push({
+            kind: "ethnicity_non_disclosure",
+            id,
+            clicked,
+            checked: Boolean(neutralEthnicity.checked)
+          });
+          await sleep(800);
+        }
+      }
+
+      return {
+        ok: repairs.some((repair) => repair.clicked || repair.checked),
+        repairs,
+        beforeErrors: errors,
+        afterErrors: visibleValidationErrors()
+      };
+    })()`,
+    30000,
+  );
+}
+
 function fillMessageTimeoutMs(args) {
   if (
     Number.isFinite(args.fillMessageTimeoutMs) &&
@@ -1489,18 +1814,20 @@ function fillMessageTimeoutMs(args) {
     return args.fillMessageTimeoutMs;
   }
   if (args.extensionAutoNext) {
-    return 300000;
+    return 600000;
   }
   return 120000;
 }
 
-async function fillCurrentPage(optionsClient, applyUrl, args) {
+async function fillCurrentPage(optionsClient, applyUrl, args, pageContext = {}) {
   const messageTimeoutMs = fillMessageTimeoutMs(args);
   const evaluateTimeoutMs = messageTimeoutMs + 10000;
+  const allowLoginRedirectFill = looksLikeAuthPage(pageContext);
   return optionsClient.evaluate(
     `(async () => {
       const tabs = await new Promise((resolve) => chrome.tabs.query({}, resolve));
       const applyUrl = ${JSON.stringify(applyUrl)};
+      const allowLoginRedirectFill = ${JSON.stringify(allowLoginRedirectFill)};
       const parsedApplyUrl = new URL(applyUrl);
       const applyHost = parsedApplyUrl.host;
       const applyBase = applyUrl.split("?")[0];
@@ -1547,15 +1874,18 @@ async function fillCurrentPage(optionsClient, applyUrl, args) {
       const exactCandidates = tabs.filter(exactApplyManually);
       const broadCandidates = tabs.filter(sameWorkdayApply);
       const loginRedirectCandidates = tabs.filter(sameWorkdayLoginRedirect);
-      const candidates = exactCandidates.concat(broadCandidates, loginRedirectCandidates);
+      const candidates = exactCandidates.concat(
+        broadCandidates,
+        allowLoginRedirectFill ? loginRedirectCandidates : []
+      );
       const deduped = [...new Map(candidates.map((item) => [item.id, item])).values()];
       const sortedExact = exactCandidates.sort((a, b) => Number(b.id || 0) - Number(a.id || 0));
       const sortedLoginRedirect = loginRedirectCandidates.sort((a, b) => Number(b.id || 0) - Number(a.id || 0));
       const sortedBroad = deduped.sort((a, b) => Number(b.id || 0) - Number(a.id || 0));
       let tab = sortedExact.find((item) => item.active)
         || sortedExact[0]
-        || sortedLoginRedirect.find((item) => item.active)
-        || sortedLoginRedirect[0]
+        || (allowLoginRedirectFill ? sortedLoginRedirect.find((item) => item.active) : null)
+        || (allowLoginRedirectFill ? sortedLoginRedirect[0] : null)
         || sortedBroad.find((item) => item.active)
         || sortedBroad[0];
       if (!tab) {
@@ -2175,11 +2505,13 @@ async function tryFixWorkdayRequiredSearchInputsViaKeyboard(
   };
 }
 
-async function clearCurrentPage(optionsClient, applyUrl) {
+async function clearCurrentPage(optionsClient, applyUrl, pageContext = {}) {
+  const allowLoginRedirectFill = looksLikeAuthPage(pageContext);
   return optionsClient.evaluate(
     `(async () => {
       const tabs = await new Promise((resolve) => chrome.tabs.query({}, resolve));
       const applyUrl = ${JSON.stringify(applyUrl)};
+      const allowLoginRedirectFill = ${JSON.stringify(allowLoginRedirectFill)};
       const parsedApplyUrl = new URL(applyUrl);
       const applyHost = parsedApplyUrl.host;
       const applyBase = applyUrl.split("?")[0];
@@ -2226,15 +2558,18 @@ async function clearCurrentPage(optionsClient, applyUrl) {
       const exactCandidates = tabs.filter(exactApplyManually);
       const broadCandidates = tabs.filter(sameWorkdayApply);
       const loginRedirectCandidates = tabs.filter(sameWorkdayLoginRedirect);
-      const candidates = exactCandidates.concat(broadCandidates, loginRedirectCandidates);
+      const candidates = exactCandidates.concat(
+        broadCandidates,
+        allowLoginRedirectFill ? loginRedirectCandidates : []
+      );
       const deduped = [...new Map(candidates.map((item) => [item.id, item])).values()];
       const sortedExact = exactCandidates.sort((a, b) => Number(b.id || 0) - Number(a.id || 0));
       const sortedLoginRedirect = loginRedirectCandidates.sort((a, b) => Number(b.id || 0) - Number(a.id || 0));
       const sortedBroad = deduped.sort((a, b) => Number(b.id || 0) - Number(a.id || 0));
       let tab = sortedExact.find((item) => item.active)
         || sortedExact[0]
-        || sortedLoginRedirect.find((item) => item.active)
-        || sortedLoginRedirect[0]
+        || (allowLoginRedirectFill ? sortedLoginRedirect.find((item) => item.active) : null)
+        || (allowLoginRedirectFill ? sortedLoginRedirect[0] : null)
         || sortedBroad.find((item) => item.active)
         || sortedBroad[0];
       if (!tab) {
@@ -2292,11 +2627,11 @@ function summarizeClear(clear) {
   };
 }
 
-async function clearPageUntilStable(optionsClient, pageClient, applyUrl) {
+async function clearPageUntilStable(optionsClient, pageClient, applyUrl, pageContext = {}) {
   const attempts = [];
   let previousRemaining = Number.POSITIVE_INFINITY;
   for (let index = 0; index < 3; index += 1) {
-    const clear = await clearCurrentPage(optionsClient, applyUrl);
+    const clear = await clearCurrentPage(optionsClient, applyUrl, pageContext);
     await sleep(2200);
     const afterClear = await inspectPage(pageClient);
     const remaining = Number(clear?.reviewIssueCount || 0);
@@ -2361,7 +2696,7 @@ async function clickAuthPrimary(pageClient) {
         el.className,
       ].filter(Boolean).join(" "));
       const bodyText = normalize(document.body?.innerText || "");
-      const verificationBlocked = /verify your account before you sign in|request a verification email/i.test(bodyText);
+      const verificationBlocked = ${AUTH_VERIFICATION_RE}.test(bodyText);
       if (verificationBlocked) {
         return {
           clicked: false,
@@ -2455,9 +2790,7 @@ async function clickAuthPrimary(pageClient) {
   const afterText = String(after?.bodyHead || "");
   if (
     result?.clicked &&
-    /verify your account before you sign in|request a verification email/i.test(
-      afterText,
-    )
+    AUTH_VERIFICATION_RE.test(afterText)
   ) {
     return {
       ...result,
@@ -3058,7 +3391,7 @@ async function run() {
         ? await clearRepeatableWorkdaySections(pageClient)
         : null;
       const pageClear = args.clearBeforeFill
-        ? await clearPageUntilStable(optionsClient, pageClient, applyUrl)
+        ? await clearPageUntilStable(optionsClient, pageClient, applyUrl, before)
         : null;
       const fills = [];
       let afterFill = before;
@@ -3069,7 +3402,7 @@ async function run() {
             fillIndex === args.fillsPerPage - 1,
           );
         }
-        const fill = await fillCurrentPage(optionsClient, applyUrl, args);
+        const fill = await fillCurrentPage(optionsClient, applyUrl, args, before);
         const fillSummary = summarizeFill(fill);
         if (fillSummary.manualReviewReasons.includes("fill_timeout")) {
           afterFill = await inspectPage(pageClient);
@@ -3260,6 +3593,13 @@ async function run() {
             afterFill = await inspectPage(pageClient);
           }
         }
+        if (afterFill.errors?.length) {
+          fillSummary.visibleValidationRepair =
+            await tryFixKnownVisibleValidationErrors(pageClient);
+          if (fillSummary.visibleValidationRepair?.ok) {
+            afterFill = await inspectPage(pageClient);
+          }
+        }
         afterFill = await suppressStaleWorkdayDateErrors(afterFill);
         fills.push({
           fillIndex: fillIndex + 1,
@@ -3285,10 +3625,15 @@ async function run() {
           }),
         );
         if (args.verifyClear) {
-          const clear = await clearCurrentPage(optionsClient, applyUrl);
+          const clear = await clearCurrentPage(optionsClient, applyUrl, afterFill);
           await sleep(1800);
           const afterClear = await inspectPage(pageClient);
-          const refill = await fillCurrentPage(optionsClient, applyUrl, args);
+          const refill = await fillCurrentPage(
+            optionsClient,
+            applyUrl,
+            args,
+            afterClear,
+          );
           await sleep(1800);
           afterFill = await inspectPage(pageClient);
           fills[fills.length - 1].clear = clear;
@@ -3353,19 +3698,44 @@ async function run() {
       if (args.targetStep && stepMatches(afterFill, args.targetStep)) {
         break;
       }
+      if (authVerificationErrors(afterFill.errors || []).length) {
+        const authVerification = await resolveAuthVerificationViaMail(
+          pageClient,
+          args,
+          { applyUrl },
+        );
+        timeline[timeline.length - 1].authVerification = authVerification;
+        if (!authVerification.ok) {
+          break;
+        }
+        await sleep(1800);
+        continue;
+      }
       if (
         afterFill.hasSubmit ||
         /review/i.test(afterFill.currentStep?.title || "")
       ) {
         break;
       }
-      if (
-        /create account|sign in|log in|login|register|sign up/i.test(
-          afterFill.currentStep?.title || "",
-        )
-      ) {
+      if (looksLikeAuthPage(afterFill)) {
         const authNext = await clickAuthPrimary(pageClient);
         timeline[timeline.length - 1].authNext = authNext;
+        if (
+          authNext.reason === "auth_verification_required" ||
+          authVerificationErrors(authNext.after?.errors || []).length
+        ) {
+          const authVerification = await resolveAuthVerificationViaMail(
+            pageClient,
+            args,
+            { applyUrl },
+          );
+          timeline[timeline.length - 1].authVerification = authVerification;
+          if (!authVerification.ok) {
+            break;
+          }
+          await sleep(1800);
+          continue;
+        }
         if (!authNext.clicked) {
           break;
         }
@@ -3457,7 +3827,27 @@ async function run() {
     }
 
     const finalPage = await inspectPage(pageClient);
-    audit.ok = true;
+    const finalAuthVerificationErrors = authVerificationErrors(
+      finalPage.errors || [],
+    );
+    const finalReachedReview =
+      finalPage.hasSubmit || /review/i.test(finalPage.currentStep?.title || "");
+    const terminalReason = finalAuthVerificationErrors.length
+      ? "auth_verification_required"
+      : !args.stopAfterFill && !args.targetStep && !finalReachedReview
+        ? finalPage.hasNext
+          ? "max_pages_before_terminal"
+          : "stuck_before_review"
+        : "";
+    audit.ok = !terminalReason;
+    if (terminalReason) {
+      audit.reason = terminalReason;
+      audit.message =
+        finalAuthVerificationErrors[0] ||
+        (finalPage.hasNext
+          ? "Smoke ended before reaching Review or Submit while a Next button was still available."
+          : "Smoke ended before reaching Review or Submit and no safe Next button was available.");
+    }
     audit.finishedAt = new Date().toISOString();
     audit.final = {
       href: finalPage.href,
@@ -3474,11 +3864,14 @@ async function run() {
     console.log(
       JSON.stringify(
         {
-          ok: true,
+          ok: audit.ok,
           mode: args.mode,
           applyUrl,
           auditJson: auditPath,
           issueRegistry,
+          ...(terminalReason
+            ? { reason: terminalReason, message: audit.message }
+            : {}),
           final: {
             href: finalPage.href,
             currentStep: finalPage.currentStep,

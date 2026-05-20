@@ -161,6 +161,50 @@
     });
   }
 
+  function dateSectionKind(field) {
+    var value = [
+      field?.fieldId,
+      field?.id,
+      field?.name,
+      field?.descriptor,
+      field?.element?.id,
+      field?.element?.name,
+      field?.element?.getAttribute?.("data-automation-id"),
+      field?.element?.getAttribute?.("aria-label"),
+    ]
+      .filter(Boolean)
+      .join(" ");
+    if (/dateSectionMonth/i.test(value)) {
+      return "month";
+    }
+    if (/dateSectionDay/i.test(value)) {
+      return "day";
+    }
+    if (/dateSectionYear/i.test(value)) {
+      return "year";
+    }
+    return "";
+  }
+
+  function dateSectionCommitMatches(field, expected, committed) {
+    var kind = dateSectionKind(field);
+    if (!kind) {
+      return false;
+    }
+    var expectedText = String(expected || "").trim();
+    var committedText = String(committed || "").trim();
+    if (!expectedText || !committedText) {
+      return false;
+    }
+    if (!/^\d+$/.test(expectedText) || !/^\d+$/.test(committedText)) {
+      return false;
+    }
+    if (kind === "year") {
+      return expectedText === committedText;
+    }
+    return Number(expectedText) === Number(committedText);
+  }
+
   async function fillText(field, value) {
     var el = field.element;
     var ok = setValue(el, value);
@@ -173,12 +217,14 @@
       type === "tel" &&
       expected.replace(/\D+/g, "") &&
       expected.replace(/\D+/g, "") === committed.replace(/\D+/g, "");
+    var datePartMatch = dateSectionCommitMatches(field, expected, committed);
     return {
       ok:
         ok &&
         (state.rawValue === value ||
           state.text === expected.trim() ||
-          digitMatch),
+          digitMatch ||
+          datePartMatch),
       afterState: state,
       reason: ok ? "" : "set_value_failed",
     };
