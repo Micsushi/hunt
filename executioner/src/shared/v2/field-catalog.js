@@ -6,6 +6,8 @@
     "Choose not to disclose",
     "Prefer not to disclose",
     "I prefer not to answer",
+    "I do not want to answer",
+    "Decline to State",
     "Do not wish to disclose",
     "I do not wish to self-identify",
     "Decline to answer",
@@ -268,6 +270,7 @@
     entry("ethnicity_disclosure_neutral", {
       aliases: [
         "ethnicity which most accurately describes",
+        "what is your ethnicity",
         "please select the ethnicity",
         "ethno-racial identity",
         "ethno racial identity",
@@ -284,6 +287,8 @@
           "I choose not to disclose",
           "I do not want to answer",
           "I do not want to answer (United States of America)",
+          "Decline to State",
+          "Decline to State (United States of America)",
           "Prefer not to answer",
           "Not Declared",
         ],
@@ -641,10 +646,68 @@
     entry("degree_level", {
       aliases: ["degree level", "level of education", "education level"],
       profilePaths: ["degreeLevel"],
+      optionAliases: {
+        "Bachelor's Degree": ["Bachelor's", "Bachelors", "Bachelor", "University"],
+        "Graduate School": ["Graduate School", "MBA", "PHD", "PhD", "Master"],
+        Bachelors: ["Bachelor's", "Bachelor's Degree", "Bachelor"],
+      },
     }),
     entry("highest_education", {
-      aliases: ["highest education", "highest level of education"],
+      aliases: [
+        "highest education",
+        "highest level of education",
+        "highest level of completed education",
+      ],
       profilePaths: ["highestEducation", "degreeLevel"],
+      optionAliases: {
+        "Bachelor's Degree": ["Bachelor's", "Bachelors", "Bachelor", "University"],
+        "Graduate School": ["Graduate School", "MBA", "PHD", "PhD", "Master"],
+        Bachelors: ["Bachelor's", "Bachelor's Degree", "Bachelor"],
+      },
+    }),
+    entry("microsoft_office_proficiency", {
+      aliases: [
+        "microsoft office proficiency",
+        "level of computer proficiency in microsoft office",
+        "computer proficiency in microsoft office",
+      ],
+      profilePaths: ["microsoftOfficeProficiency", "officeProficiency"],
+      defaultValue: "Expert",
+      optionAliases: {
+        Expert: ["Expert", "Advanced", "Fluent", "Native", "Excellent"],
+      },
+    }),
+    entry("highest_proficiency", {
+      aliases: [
+        "proficiency",
+        "level of proficiency",
+        "proficiency level",
+      ],
+      profilePaths: ["proficiencyLevel"],
+      defaultValue: "Expert",
+      optionAliases: {
+        Expert: ["Expert", "Advanced", "Fluent", "Native", "Excellent"],
+      },
+    }),
+    entry("travel_availability", {
+      aliases: [
+        "travel is required",
+        "what is your availability",
+        "travel availability",
+        "availability for travel",
+      ],
+      profilePaths: ["travelAvailability"],
+      defaultValue: "highest",
+      answerType: "travel_availability",
+    }),
+    entry("computer_programs", {
+      aliases: [
+        "what other computer programs have you worked in",
+        "other computer programs",
+        "computer programs have you worked in",
+      ],
+      profilePaths: ["computerPrograms", "skills", "skillList", "technicalSkills"],
+      defaultValue: "",
     }),
     entry("expected_graduation_year", {
       aliases: ["graduation year", "expected graduation"],
@@ -703,7 +766,12 @@
       answerType: "yes_no",
     }),
     entry("age_at_least_18", {
-      aliases: ["are you at least 18 years old", "at least 18 years old"],
+      aliases: [
+        "are you at least 18 years old",
+        "at least 18 years old",
+        "are you at least 18 years of age",
+        "at least 18 years of age",
+      ],
       profilePaths: ["atLeast18"],
       defaultValue: true,
       answerType: "yes_no",
@@ -730,7 +798,7 @@
       },
     }),
     entry("salary_expectation", {
-      aliases: ["salary", "compensation", "pay expectation"],
+      aliases: ["salary", "compensation", "pay expectation", "desired pay"],
       profilePaths: ["salaryExpectationRange", "salaryExpectation"],
       defaultValue: "90,000 - 105,000",
     }),
@@ -786,6 +854,7 @@
         "member of an aboriginal people",
         "member of aboriginal people",
         "self-identify",
+        "i do not want to answer",
         "diversity",
         "sexual orientation",
       ],

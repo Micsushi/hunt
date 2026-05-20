@@ -578,6 +578,75 @@
     });
   }
 
+  function triggerReactClickHandler(el) {
+    try {
+      var fiberKey = Object.keys(el || {}).find(function (key) {
+        return (
+          key.startsWith("__reactFiber$") ||
+          key.startsWith("__reactInternalInstance$")
+        );
+      });
+      if (!fiberKey) {
+        return false;
+      }
+      var node = el[fiberKey];
+      while (node) {
+        var props = node.memoizedProps || node.pendingProps;
+        if (props) {
+          var mockEvt = {
+            type: "click",
+            target: el,
+            currentTarget: el,
+            bubbles: true,
+            preventDefault: function () {},
+            stopPropagation: function () {},
+            isPropagationStopped: function () {
+              return false;
+            },
+            isDefaultPrevented: function () {
+              return false;
+            },
+            nativeEvent: new MouseEvent("click", {
+              bubbles: true,
+              cancelable: true,
+              detail: 1,
+            }),
+          };
+          if (typeof props.onClick === "function") {
+            props.onClick(mockEvt);
+            return true;
+          }
+          if (typeof props.onMouseDown === "function") {
+            mockEvt.type = "mousedown";
+            props.onMouseDown(mockEvt);
+            return true;
+          }
+        }
+        node = node.return;
+      }
+    } catch (_error) {}
+    return false;
+  }
+
+  function triggerReactClickDeep(el) {
+    if (!el) {
+      return false;
+    }
+    var candidates = [el].concat(
+      Array.from(
+        el.querySelectorAll?.(
+          '[data-automation-id="checkboxPanel"], [data-automation-id="promptLeafNode"], [data-uxi-widget-type], input, span, div',
+        ) || [],
+      ).slice(0, 10),
+    );
+    for (var idx = 0; idx < candidates.length; idx++) {
+      if (triggerReactClickHandler(candidates[idx])) {
+        return true;
+      }
+    }
+    return false;
+  }
+
   function isSelectInputPrompt(control) {
     return (
       control?.getAttribute?.("data-uxi-widget-type") === "selectinput" ||
@@ -797,6 +866,10 @@
     );
   }
 
+  function hasAnySelectedSkill() {
+    return Boolean(skillSelectedText());
+  }
+
   function hasSelectedSkill(skills) {
     var selected = skillSelectedText();
     return (skills || []).some(function (skill) {
@@ -855,6 +928,40 @@
     );
   }
 
+  function clearSkillSearch(input) {
+    if (!input) {
+      return;
+    }
+    setValue(input, "");
+    keyOn(input, "Escape");
+    input.blur?.();
+    commitValue(input);
+  }
+
+  function skillQueryCandidates(skill, allowFallback) {
+    var values = [skill];
+    if (allowFallback) {
+      values = values.concat([
+        "Communication",
+        "Problem Solving",
+        "Teamwork",
+        "Microsoft Office",
+      ]);
+    }
+    var seen = {};
+    return values
+      .map(clean)
+      .filter(Boolean)
+      .filter(function (value) {
+        var key = choiceKey(value);
+        if (!key || seen[key]) {
+          return false;
+        }
+        seen[key] = true;
+        return true;
+      });
+  }
+
   function scoreSkillOption(option, skill) {
     var labelKey = choiceKey(textOf(option));
     var skillKey = choiceKey(skill);
@@ -897,32 +1004,54 @@
     return null;
   }
 
-  async function fillSkill(input, skill) {
+  async function fillSkill(input, skill, allowFallback) {
     if (!input || !skill) {
       return false;
     }
     if (choiceMatches(skillSelectedText(), skill)) {
       return true;
     }
-    clickLikeUser(input);
-    await sleep(140);
-    await typeSearchTextLikeUser(input, skill);
-    keyOn(input, "Enter");
-    var option = await waitForSkillOption(skill, 5200);
-    if (!option) {
-      return false;
-    }
-    var target = skillOptionCommitTarget(option);
-    clickLikeUser(target || option);
-    if (typeof (target || option).click === "function") {
-      (target || option).click();
-    }
-    var start = Date.now();
-    while (Date.now() - start < 2200) {
-      if (choiceMatches(skillSelectedText(), skill)) {
+    var candidates = skillQueryCandidates(skill, allowFallback);
+    for (var i = 0; i < candidates.length; i++) {
+      var query = candidates[i];
+      clearSkillSearch(input);
+      clickLikeUser(input);
+      await sleep(140);
+      await typeSearchTextLikeUser(input, query);
+      keyOn(input, "Enter");
+      var option = await waitForSkillOption(query, 5200);
+      if (!option) {
+        clearSkillSearch(input);
+        await sleep(120);
+        continue;
+      }
+      var target = skillOptionCommitTarget(option);
+      triggerReactClickDeep(target || option);
+      if (target !== option) {
+        triggerReactClickDeep(option);
+      }
+      clickLikeUser(target || option);
+      if (typeof (target || option).click === "function") {
+        (target || option).click();
+      }
+      var start = Date.now();
+      while (Date.now() - start < 2600) {
+        var selected = skillSelectedText();
+        if (
+          choiceMatches(selected, query) ||
+          choiceMatches(selected, skill) ||
+          (allowFallback && selected)
+        ) {
+          clearSkillSearch(input);
+          await sleep(180);
+          return true;
+        }
+        await sleep(120);
+      }
+      clearSkillSearch(input);
+      if (allowFallback && hasAnySelectedSkill()) {
         return true;
       }
-      await sleep(120);
     }
     return choiceMatches(skillSelectedText(), skill);
   }
@@ -1248,19 +1377,35 @@
       return null;
     }
     if (typeof entry === "string") {
-      return { url: clean(entry) };
+      return { url: canonicalWebsiteUrl(entry) };
     }
     return {
-      url: firstText([
-        entry.url,
-        entry.href,
-        entry.link,
-        entry.website,
-        entry.websiteUrl,
-        entry.portfolioUrl,
-        entry.profileUrl,
-      ]),
+      url: canonicalWebsiteUrl(
+        firstText([
+          entry.url,
+          entry.href,
+          entry.link,
+          entry.website,
+          entry.websiteUrl,
+          entry.portfolioUrl,
+          entry.profileUrl,
+        ]),
+      ),
     };
+  }
+
+  function canonicalWebsiteUrl(value) {
+    var url = clean(value);
+    if (!url) {
+      return "";
+    }
+    if (/^https?:\/\/linkedin\.com\/in\//i.test(url)) {
+      url = url.replace(/^https?:\/\/linkedin\.com\//i, "https://www.linkedin.com/");
+    }
+    if (/^https?:\/\/www\.linkedin\.com\/in\/[^/?#]+$/i.test(url)) {
+      return url + "/";
+    }
+    return url;
   }
 
   function hasAnyValue(entry) {
@@ -1380,6 +1525,23 @@
     return "Personal Website";
   }
 
+  function websiteNetwork(url) {
+    var lowered = norm(url);
+    if (lowered.includes("linkedin")) {
+      return "linkedin";
+    }
+    if (lowered.includes("github")) {
+      return "github";
+    }
+    if (lowered.includes("twitter") || lowered.includes("x.com")) {
+      return "twitter";
+    }
+    if (lowered.includes("facebook")) {
+      return "facebook";
+    }
+    return "";
+  }
+
   function isSocialWebsite(entry) {
     var url = norm(entry?.url || entry || "");
     return url.includes("linkedin") || url.includes("github");
@@ -1406,10 +1568,36 @@
       (own.includes("type") ||
         own.includes("category") ||
         own.includes("network")) &&
+      !own.includes("account") &&
+      !own.includes("profile") &&
       !own.includes("url") &&
       !own.includes("webaddress") &&
       !own.includes("web address")
     );
+  }
+
+  function dedicatedSocialUrlNetwork(control) {
+    var own = ownControlKey(control);
+    if (
+      own.includes("socialnetwork") ||
+      own.includes("social network") ||
+      own.includes("account") ||
+      own.includes("profile")
+    ) {
+      if (own.includes("linkedin")) {
+        return "linkedin";
+      }
+      if (own.includes("github")) {
+        return "github";
+      }
+      if (own.includes("twitter") || own.includes("xaccount")) {
+        return "twitter";
+      }
+      if (own.includes("facebook")) {
+        return "facebook";
+      }
+    }
+    return "";
   }
 
   function workdayMonthValue(value) {
@@ -1523,6 +1711,19 @@
       [parts.month, parts.year].filter(Boolean).forEach(function (control) {
         commitValue(control);
       });
+      if (parts.month && monthValue && !clean(parts.month.value || "")) {
+        if (setValue(parts.month, monthValue)) {
+          filled += 1;
+        }
+      }
+      if (parts.year && yearValue && !clean(parts.year.value || "")) {
+        if (setValue(parts.year, yearValue)) {
+          filled += 1;
+        }
+      }
+      [parts.month, parts.year].filter(Boolean).forEach(function (control) {
+        commitValue(control);
+      });
     }
     return filled;
   }
@@ -1558,6 +1759,10 @@
     var own = ownControlKey(control);
     var desc = controlText(control);
     if (kind === "website") {
+      var dedicatedNetwork = dedicatedSocialUrlNetwork(control);
+      if (dedicatedNetwork) {
+        return websiteNetwork(entry.url) === dedicatedNetwork ? entry.url : "";
+      }
       if (isWebsiteTypeControl(control)) {
         return websiteType(entry.url);
       }
@@ -2048,15 +2253,18 @@
         satisfied += 1;
         continue;
       }
-      if (await fillSkill(input, skill)) {
+      if (await fillSkill(input, skill, !hasAnySelectedSkill())) {
         added += 1;
         satisfied += 1;
+        if (hasAnySelectedSkill()) {
+          break;
+        }
         await sleep(180);
       }
     }
     var missingRequired =
       controlLooksRequired(input) &&
-      !hasSelectedSkill(skills) &&
+      !hasAnySelectedSkill() &&
       !clean(input.value || "");
     inventory.filled = satisfied > 0 && !missingRequired;
     if (!inventory.filled) {

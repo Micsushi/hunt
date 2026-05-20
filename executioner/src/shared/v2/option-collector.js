@@ -238,12 +238,24 @@
       });
     }
     if (field.uiModel === "checkbox") {
-      var label = window.__huntApplyUtils?.getDescriptor
-        ? window.__huntApplyUtils.getDescriptor(
-            field.element,
-            root.uiInspector?.containerSelectors || [],
-          )
-        : field.element.value || field.element.id || "";
+      var labelFor =
+        field.element.id &&
+        document.querySelector(`label[for="${CSS.escape(field.element.id)}"]`);
+      var rowLabel =
+        field.element.closest?.('[role="row"], [role="cell"]')?.innerText ||
+        field.element.closest?.("label")?.innerText ||
+        field.element.closest?.("div")?.innerText ||
+        "";
+      var label =
+        labelFor?.innerText ||
+        labelFor?.textContent ||
+        rowLabel ||
+        (window.__huntApplyUtils?.getDescriptor
+          ? window.__huntApplyUtils.getDescriptor(
+              field.element,
+              root.uiInspector?.containerSelectors || [],
+            )
+          : field.element.value || field.element.id || "");
       return [
         {
           label: root.audit?.normalizeText(label || "Yes"),

@@ -1467,6 +1467,10 @@
     // promptLeafNode, and the visible radio onChange can be a no-op. Dispatch to
     // the prompt leaf first; only then use the native click fallback.
     var target = nested || workdayPromptLeafTarget(el);
+    triggerReactClickDeep(target || el);
+    if (target !== el) {
+      triggerReactClickDeep(el);
+    }
     clickLikeUser(target || el);
     if (typeof (target || el).click === "function") {
       (target || el).click();

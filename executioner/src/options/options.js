@@ -93,6 +93,7 @@ const WORK_EXPERIENCE_FIELDS = [
 
 const EDUCATION_FIELDS = [
   ["school", "School or university", "text"],
+  ["educationTitle", "Education title", "text"],
   ["degree", "Degree", "text"],
   ["degreeLevel", "Degree level", "select"],
   ["fieldOfStudy", "Field of study", "text"],
@@ -154,6 +155,7 @@ function emptyWorkExperienceEntry() {
 function emptyEducationEntry() {
   return {
     school: "",
+    educationTitle: "",
     degree: "",
     degreeLevel: "",
     fieldOfStudy: "",

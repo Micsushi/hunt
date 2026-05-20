@@ -345,6 +345,7 @@ function sanitizeEducation(entries = []) {
     .slice(0, 20)
     .map((entry) => ({
       school: sanitizeText(entry.school),
+      educationTitle: sanitizeText(entry.educationTitle),
       degree: sanitizeText(entry.degree),
       degreeLevel: sanitizeText(entry.degreeLevel),
       fieldOfStudy: sanitizeText(entry.fieldOfStudy),

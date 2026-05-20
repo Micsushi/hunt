@@ -214,6 +214,47 @@
       })[0]?.option;
   }
 
+  function travelOptionScore(option, index) {
+    var label = [option?.label, option?.value].filter(Boolean).join(" ");
+    var numbers = (String(label).match(/\d+(?:\.\d+)?/g) || [])
+      .map(Number)
+      .filter(Number.isFinite);
+    if (!numbers.length) {
+      return null;
+    }
+    var max = Math.max.apply(null, numbers);
+    var min = Math.min.apply(null, numbers);
+    var normalized = norm(label);
+    var openEnded =
+      numbers.length === 1 ||
+      normalized.includes("plus") ||
+      normalized.includes("or more") ||
+      normalized.includes("or greater") ||
+      normalized.includes("and above") ||
+      normalized.includes("above");
+    return {
+      option: option,
+      index: index,
+      max: max,
+      min: min,
+      openEnded: openEnded ? 1 : 0,
+    };
+  }
+
+  function highestTravelOption(options) {
+    return (options || [])
+      .map(travelOptionScore)
+      .filter(Boolean)
+      .sort(function (a, b) {
+        return (
+          b.max - a.max ||
+          b.openEnded - a.openEnded ||
+          b.min - a.min ||
+          a.index - b.index
+        );
+      })[0]?.option;
+  }
+
   function neutralOption(options) {
     var aliases = root.fieldCatalog?.nonDisclosureAliases || [];
     var real = realOptions(options);
@@ -240,6 +281,16 @@
     var target = norm(answer.value);
     if (!real.length) {
       return { option: null, source: "no_options", fallback: false };
+    }
+    if (answer.answerType === "travel_availability") {
+      var travel = highestTravelOption(real);
+      if (travel) {
+        return {
+          option: travel,
+          source: "highest_travel_numeric",
+          fallback: false,
+        };
+      }
     }
     var exact = real.find(function (option) {
       var label = normOptionLabel(option.label);

@@ -328,9 +328,10 @@ class Component3Stage1Tests(unittest.TestCase):
         self.assertEqual(profile["linkedinUrl"], "https://linkedin.com/in/wjshi")
         self.assertEqual(profile["githubUrl"], "https://github.com/micsushi")
         self.assertEqual(profile["education"][0]["school"], "University of Alberta")
-        self.assertIn("Computer Science", profile["education"][0]["degree"])
+        self.assertEqual(profile["education"][0]["degree"], "BSc")
         self.assertEqual(profile["education"][0]["degreeLevel"], "Bachelors")
         self.assertEqual(profile["education"][0]["fieldOfStudy"], "Computer Science")
+        self.assertIn("Computer Science", profile["education"][0]["educationTitle"])
         self.assertNotIn("Awards", profile["education"][0]["overallResult"])
         self.assertEqual(profile["education"][0]["endYear"], "2026")
         self.assertEqual(profile["workExperience"][0]["company"], "INVIDI Technologies")
@@ -383,6 +384,14 @@ Education
 University of Alberta, BSc in Computer Science with Specialization
 Expected Graduation: Sep 2026
 """
+        no_degree_resume_text = """
+Michael Shi
+Edmonton, AB | wenjian2@ualberta.ca | https://mshi.ca
+
+Education
+University of Alberta, Computer Science with Specialization
+Expected Graduation: Sep 2026
+"""
         inline_bullet_resume_text = """
 Michael Shi
 Edmonton, AB | wenjian2@ualberta.ca | https://mshi.ca
@@ -416,7 +425,8 @@ Expected Graduation: Sep 2026
             const longPdfProfile = parseResumePdfBytes(new TextEncoder().encode({json.dumps(long_bullet_pdf_source)}));
             const inlineTextProfile = parseResumeText({json.dumps(inline_bullet_resume_text)});
             const inlinePdfProfile = parseResumePdfBytes(new TextEncoder().encode({json.dumps(inline_bullet_pdf_source)}));
-            console.log(JSON.stringify({{ textProfile, pdfProfile, longTextProfile, longPdfProfile, inlineTextProfile, inlinePdfProfile }}));
+            const noDegreeProfile = parseResumeText({json.dumps(no_degree_resume_text)});
+            console.log(JSON.stringify({{ textProfile, pdfProfile, longTextProfile, longPdfProfile, inlineTextProfile, inlinePdfProfile, noDegreeProfile }}));
         """
 
         try:
@@ -435,8 +445,10 @@ Expected Graduation: Sep 2026
             self.assertEqual(profile["fullName"], "Michael Shi")
             self.assertEqual(profile["email"], "wenjian2@ualberta.ca")
             self.assertEqual(profile["education"][0]["school"], "University of Alberta")
+            self.assertEqual(profile["education"][0]["degree"], "BSc")
             self.assertEqual(profile["education"][0]["degreeLevel"], "Bachelors")
             self.assertEqual(profile["education"][0]["fieldOfStudy"], "Computer Science")
+            self.assertIn("Computer Science", profile["education"][0]["educationTitle"])
             self.assertEqual(profile["education"][0]["overallResult"], "")
             self.assertEqual(profile["education"][0]["endYear"], "2026")
             self.assertEqual(len(profile["workExperience"]), 2)
@@ -461,6 +473,13 @@ Expected Graduation: Sep 2026
             self.assertTrue(description.startswith("- Taught multiple upper-level"))
             self.assertIn("\n- Mentored 500+ students", description)
             self.assertIn("\n- Reduced evaluation time", description)
+
+        no_degree_education = payload["noDegreeProfile"]["education"][0]
+        self.assertEqual(no_degree_education["school"], "University of Alberta")
+        self.assertEqual(no_degree_education["degree"], "")
+        self.assertEqual(no_degree_education["degreeLevel"], "")
+        self.assertEqual(no_degree_education["fieldOfStudy"], "Computer Science")
+        self.assertIn("Computer Science", no_degree_education["educationTitle"])
 
     def test_fill_route_names_cover_standalone_db_and_c4_modes(self):
         route_path = REPO_ROOT / "executioner" / "src" / "background" / "fill-routes.js"
@@ -1256,6 +1275,194 @@ Expected Graduation: Sep 2026
         self.assertEqual(parsed["startDate"]["source"], "default:desired_start_date")
         self.assertRegex(parsed["startDate"]["value"], r"^\d{2}/\d{2}/\d{4}$")
 
+    def test_v2_orion_review_answer_regressions(self):
+        paths = [
+            REPO_ROOT / "executioner" / "src" / "shared" / "v2" / "field-catalog.js",
+            REPO_ROOT / "executioner" / "src" / "shared" / "v2" / "question-identifier.js",
+            REPO_ROOT / "executioner" / "src" / "shared" / "v2" / "answer-resolver.js",
+            REPO_ROOT / "executioner" / "src" / "shared" / "v2" / "option-matcher.js",
+        ]
+        script = f"""
+            const fs = require("node:fs");
+            const vm = require("node:vm");
+            const context = {{ window: {{ __huntV2: {{}} }} }};
+            vm.createContext(context);
+            for (const path of {json.dumps([str(path) for path in paths])}) {{
+              vm.runInContext(fs.readFileSync(path, "utf8"), context);
+            }}
+            const root = context.window.__huntV2;
+            function resolve(field, profile = {{}}, options = []) {{
+              const question = root.questionIdentifier.identifyQuestion(field, null, null);
+              const answer = root.answerResolver.resolveAnswer({{
+                question,
+                field,
+                profile,
+                audit: null,
+                fieldAudit: null
+              }});
+              const match = options.length ? root.optionMatcher.matchOption({{
+                options,
+                answer,
+                field,
+                audit: null,
+                fieldAudit: null
+              }}) : {{ option: null, source: "" }};
+              return {{
+                type: question.type,
+                value: answer.value,
+                source: answer.source,
+                selectedOption: match.option && match.option.label,
+                optionSource: match.source
+              }};
+            }}
+            const profile = {{
+              education: [{{ degree: "BSc Computer Science", degreeLevel: "Bachelors" }}],
+              salaryExpectationRange: "90,000 - 105,000"
+            }};
+            const legalAge = {{
+              workday: {{ fieldLabel: "Are you at least 18 years of age? (If not, your employer is subject to verification that you are of at least legal age and that you are able to supply any required work permit).*" }},
+              descriptor: "Are you at least 18 years of age? (If not, your employer is subject to verification that you are of at least legal age and that you are able to supply any required work permit).* Yes No",
+              uiModel: "button_listbox",
+              required: true
+            }};
+            const highestEducation = {{
+              workday: {{ fieldLabel: "What is the highest level of education you have completed?*" }},
+              descriptor: "What is the highest level of education you have completed?* Not Applicable Bachelor's Degree",
+              uiModel: "button_listbox",
+              required: true
+            }};
+            const desiredPay = {{
+              workday: {{ fieldLabel: "What is your desired pay?" }},
+              descriptor: "What is your desired pay?",
+              uiModel: "text",
+              required: false
+            }};
+            const finningHighestEducation = {{
+              workday: {{ fieldLabel: "What is your highest level of completed education?*" }},
+              descriptor: "What is your highest level of completed education?* Select One High School Diploma College/Technical School University",
+              uiModel: "button_listbox",
+              required: true
+            }};
+            const microsoftOffice = {{
+              workday: {{ fieldLabel: "What is your level of computer proficiency in Microsoft Office?*" }},
+              descriptor: "What is your level of computer proficiency in Microsoft Office?* Beginner Intermediate Expert",
+              uiModel: "button_listbox",
+              required: true
+            }};
+            const travelAvailability = {{
+              workday: {{ fieldLabel: "If travel is required for the role you have applied to, what is your availability?*" }},
+              descriptor: "If travel is required for the role you have applied to, what is your availability?* 0 - 10% 10 - 20% 20% plus Not Applicable",
+              uiModel: "button_listbox",
+              required: true
+            }};
+            const computerPrograms = {{
+              workday: {{ fieldLabel: "What other computer programs have you worked in?" }},
+              descriptor: "What other computer programs have you worked in?",
+              uiModel: "textarea",
+              required: false
+            }};
+            console.log(JSON.stringify({{
+              legalAge: resolve(legalAge, {{}}, [{{ label: "Yes" }}, {{ label: "No" }}]),
+              highestEducation: resolve(highestEducation, profile, [
+                {{ label: "Not Applicable" }},
+                {{ label: "High School" }},
+                {{ label: "Bachelor's" }}
+              ]),
+              desiredPay: resolve(desiredPay, profile),
+              finningHighestEducation: resolve(finningHighestEducation, profile, [
+                {{ label: "Select One", placeholder: true }},
+                {{ label: "High School Diploma" }},
+                {{ label: "College/Technical School" }},
+                {{ label: "University" }}
+              ]),
+              microsoftOffice: resolve(microsoftOffice, {{}}, [
+                {{ label: "Beginner" }},
+                {{ label: "Intermediate" }},
+                {{ label: "Expert" }}
+              ]),
+              travelAvailability: resolve(travelAvailability, {{}}, [
+                {{ label: "0 - 10%" }},
+                {{ label: "10 - 20%" }},
+                {{ label: "20% plus" }},
+                {{ label: "Not Applicable" }}
+              ]),
+              travelAvailabilityWith100: resolve(travelAvailability, {{}}, [
+                {{ label: "0 - 10%" }},
+                {{ label: "20% plus" }},
+                {{ label: "100%" }}
+              ]),
+              travelAvailabilityTie: resolve(travelAvailability, {{}}, [
+                {{ label: "10 - 20%" }},
+                {{ label: "15 - 20%" }},
+                {{ label: "0 - 20%" }}
+              ]),
+              computerPrograms: resolve(computerPrograms, {{
+                skills: ["Python", "TypeScript", "React", "SQL"]
+              }})
+            }}));
+        """
+        try:
+            result = subprocess.run(
+                ["node", "-e", script],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+        except FileNotFoundError:
+            self.skipTest("node is required to test the C3 V2 Orion mappings")
+
+        parsed = json.loads(result.stdout)
+        self.assertEqual(parsed["legalAge"]["type"], "age_at_least_18")
+        self.assertEqual(parsed["legalAge"]["value"], "Yes")
+        self.assertEqual(parsed["legalAge"]["selectedOption"], "Yes")
+        self.assertEqual(parsed["highestEducation"]["type"], "highest_education")
+        self.assertEqual(parsed["highestEducation"]["value"], "Bachelor's Degree")
+        self.assertEqual(parsed["highestEducation"]["selectedOption"], "Bachelor's")
+        self.assertEqual(parsed["desiredPay"]["type"], "salary_expectation")
+        self.assertEqual(parsed["desiredPay"]["value"], "97500")
+        self.assertEqual(
+            parsed["finningHighestEducation"]["type"], "highest_education"
+        )
+        self.assertEqual(
+            parsed["finningHighestEducation"]["value"], "Bachelor's Degree"
+        )
+        self.assertEqual(
+            parsed["finningHighestEducation"]["selectedOption"], "University"
+        )
+        self.assertEqual(
+            parsed["microsoftOffice"]["type"], "microsoft_office_proficiency"
+        )
+        self.assertEqual(parsed["microsoftOffice"]["value"], "Expert")
+        self.assertEqual(
+            parsed["microsoftOffice"]["selectedOption"], "Expert"
+        )
+        self.assertEqual(parsed["travelAvailability"]["type"], "travel_availability")
+        self.assertEqual(parsed["travelAvailability"]["value"], "highest")
+        self.assertEqual(
+            parsed["travelAvailability"]["selectedOption"], "20% plus"
+        )
+        self.assertEqual(
+            parsed["travelAvailability"]["optionSource"], "highest_travel_numeric"
+        )
+        self.assertEqual(
+            parsed["travelAvailabilityWith100"]["selectedOption"], "100%"
+        )
+        self.assertEqual(
+            parsed["travelAvailabilityTie"]["selectedOption"], "15 - 20%"
+        )
+        self.assertEqual(parsed["computerPrograms"]["type"], "computer_programs")
+        self.assertEqual(
+            parsed["computerPrograms"]["value"], "Python, TypeScript, React, SQL"
+        )
+
+    def test_v2_orion_optional_policy_fields_are_not_skipped_by_required_filter(self):
+        field_pipeline_v2 = (
+            REPO_ROOT / "executioner" / "src" / "shared" / "v2" / "field-pipeline.js"
+        ).read_text(encoding="utf-8")
+        self.assertIn('signal.includes("desired start date")', field_pipeline_v2)
+        self.assertIn('signal.includes("desired pay")', field_pipeline_v2)
+        self.assertIn('signal.includes("previously worked")', field_pipeline_v2)
+
     def test_v2_canadian_citizenship_status_uses_terminal_workday_option(self):
         paths = [
             REPO_ROOT / "executioner" / "src" / "shared" / "v2" / "field-catalog.js",
@@ -1500,6 +1707,138 @@ Expected Graduation: Sep 2026
                 "valueSource": "default:ethnicity_disclosure_neutral",
                 "option": "I choose not to disclose",
                 "source": "neutral_disclosure_checkbox",
+            },
+        )
+
+    def test_v2_workday_disability_checkbox_neutral_option_is_safe(self):
+        paths = [
+            REPO_ROOT / "executioner" / "src" / "shared" / "v2" / "field-catalog.js",
+            REPO_ROOT / "executioner" / "src" / "shared" / "v2" / "question-identifier.js",
+            REPO_ROOT / "executioner" / "src" / "shared" / "v2" / "answer-resolver.js",
+            REPO_ROOT / "executioner" / "src" / "shared" / "v2" / "option-matcher.js",
+        ]
+        script = f"""
+            const fs = require("node:fs");
+            const vm = require("node:vm");
+            const context = {{ window: {{ __huntV2: {{}} }} }};
+            vm.createContext(context);
+            for (const path of {json.dumps([str(path) for path in paths])}) {{
+              vm.runInContext(fs.readFileSync(path, "utf8"), context);
+            }}
+            const root = context.window.__huntV2;
+            const field = {{
+              fieldId: "64cbff5f364f10000af3af293a050000-disabilityStatus",
+              descriptor: "I do not want to answer",
+              required: true,
+              uiModel: "checkbox"
+            }};
+            const question = root.questionIdentifier.identifyQuestion(field, null, null);
+            const answer = root.answerResolver.resolveAnswer({{
+              question,
+              field,
+              profile: {{}},
+              audit: null,
+              fieldAudit: null
+            }});
+            const match = root.optionMatcher.matchOption({{
+              options: [{{ label: "I do not want to answer" }}],
+              answer,
+              field,
+              audit: null,
+              fieldAudit: null
+            }});
+            console.log(JSON.stringify({{
+              type: question.type,
+              value: answer.value,
+              option: match.option && match.option.label,
+              source: match.source
+            }}));
+        """
+        try:
+            result = subprocess.run(
+                ["node", "-e", script],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+        except FileNotFoundError:
+            self.skipTest("node is required to test the C3 V2 question identifier")
+
+        self.assertEqual(
+            json.loads(result.stdout),
+            {
+                "type": "disclosure_neutral",
+                "value": "I choose not to disclose",
+                "option": "I do not want to answer",
+                "source": "neutral_disclosure_checkbox",
+            },
+        )
+
+    def test_v2_ethnicity_decline_to_state_is_neutral_disclosure(self):
+        paths = [
+            REPO_ROOT / "executioner" / "src" / "shared" / "v2" / "field-catalog.js",
+            REPO_ROOT / "executioner" / "src" / "shared" / "v2" / "question-identifier.js",
+            REPO_ROOT / "executioner" / "src" / "shared" / "v2" / "answer-resolver.js",
+            REPO_ROOT / "executioner" / "src" / "shared" / "v2" / "option-matcher.js",
+        ]
+        script = f"""
+            const fs = require("node:fs");
+            const vm = require("node:vm");
+            const context = {{ window: {{ __huntV2: {{}} }} }};
+            vm.createContext(context);
+            for (const path of {json.dumps([str(path) for path in paths])}) {{
+              vm.runInContext(fs.readFileSync(path, "utf8"), context);
+            }}
+            const root = context.window.__huntV2;
+            const field = {{
+              fieldId: "personalInfoUS--ethnicity",
+              descriptor: "What is your ethnicity?",
+              required: true,
+              uiModel: "button_listbox"
+            }};
+            const question = root.questionIdentifier.identifyQuestion(field, null, null);
+            const answer = root.answerResolver.resolveAnswer({{
+              question,
+              field,
+              profile: {{}},
+              audit: null,
+              fieldAudit: null
+            }});
+            const match = root.optionMatcher.matchOption({{
+              options: [
+                {{ label: "American Indian or Alaska Native (Not Hispanic or Latino) (United States of America)" }},
+                {{ label: "Decline to State (United States of America)" }},
+                {{ label: "White (Not Hispanic or Latino) (United States of America)" }}
+              ],
+              answer,
+              field,
+              audit: null,
+              fieldAudit: null
+            }});
+            console.log(JSON.stringify({{
+              type: question.type,
+              value: answer.value,
+              option: match.option && match.option.label,
+              source: match.source
+            }}));
+        """
+        try:
+            result = subprocess.run(
+                ["node", "-e", script],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+        except FileNotFoundError:
+            self.skipTest("node is required to test the C3 V2 option matcher")
+
+        self.assertEqual(
+            json.loads(result.stdout),
+            {
+                "type": "ethnicity_disclosure_neutral",
+                "value": "I decline to disclose",
+                "option": "Decline to State (United States of America)",
+                "source": "alias",
             },
         )
 

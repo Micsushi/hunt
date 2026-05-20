@@ -193,9 +193,6 @@
 
   function shouldFillOptionalProfileCorrection(field, context) {
     var profile = context.profile || {};
-    if (!profile.country) {
-      return false;
-    }
     var el = field.element || field.anchor;
     var signal = [
       field.fieldId,
@@ -208,6 +205,22 @@
     ]
       .join(" ")
       .toLowerCase();
+    if (
+      signal.includes("desired start date") ||
+      signal.includes("available start date") ||
+      signal.includes("available to start") ||
+      signal.includes("earliest date") ||
+      signal.includes("desired pay") ||
+      signal.includes("desired salary") ||
+      signal.includes("salary expectation") ||
+      signal.includes("previously worked") ||
+      signal.includes("previously employed")
+    ) {
+      return true;
+    }
+    if (!profile.country) {
+      return false;
+    }
     return (
       signal.includes("address--countryregion") ||
       signal.includes("country region")

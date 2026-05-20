@@ -392,6 +392,107 @@ def test_workday_v2_source_prompt_drills_flat_category_to_radio_leaf():
     )
 
 
+def test_workday_v2_source_prompt_uses_react_click_for_category_and_leaf():
+    if sync_playwright is None:
+        pytest.skip("playwright is required for the Workday C3 fill fixture")
+
+    fill_v2_js = _module_to_browser_script(
+        _load_script(REPO_ROOT / "executioner/src/ats/workday/fill-v2.js")
+    )
+
+    with sync_playwright() as playwright:
+        try:
+            browser = playwright.chromium.launch()
+        except PlaywrightError as error:
+            pytest.skip(f"playwright chromium is unavailable: {error}")
+
+        page = browser.new_page()
+        page.set_content(
+            """
+            <html>
+              <body>
+                <div data-automation-id="applyFlowMyInfoPage">
+                  <div data-automation-id="formField-source" data-fkit-id="source--source">
+                    <label for="source--source">How Did You Hear About Us?*</label>
+                    <div id="source-container" data-automation-id="multiSelectContainer" data-uxi-widget-type="multiselect">
+                      <input id="source--source" placeholder="Search" aria-required="true" data-uxi-widget-type="selectinput" data-uxi-multiselect-id="source-list" />
+                    </div>
+                  </div>
+                </div>
+                <script>
+                  const container = document.querySelector("#source-container");
+                  function attachReactClick(el, handler) {
+                    el["__reactFiber$hunt"] = {
+                      memoizedProps: { onClick: handler },
+                      return: null,
+                    };
+                  }
+                  function showMenu() {
+                    if (document.querySelector("#source-menu")) return;
+                    document.body.insertAdjacentHTML(
+                      "beforeend",
+                      `<div id="source-menu" role="listbox" data-automation-id="activeListContainer">
+                        <div id="external-row" role="option" data-automation-id="menuItem" data-hunt-prompt-category="true">
+                          <span id="external-leaf" data-automation-id="promptLeafNode">External Career Site Sources</span>
+                        </div>
+                      </div>`
+                    );
+                    attachReactClick(document.querySelector("#external-leaf"), showChildren);
+                  }
+                  function showChildren() {
+                    const menu = document.querySelector("#source-menu");
+                    menu.innerHTML =
+                      `<div id="job-row" role="option" data-automation-id="menuItem">
+                        <span id="job-leaf" data-automation-id="promptLeafNode">Job Board</span>
+                      </div>`;
+                    attachReactClick(document.querySelector("#job-leaf"), () => {
+                      container.insertAdjacentHTML(
+                        "beforeend",
+                        `<div role="option" data-automation-id="selectedItem" aria-label="Job Board, press delete to clear value.">Job Board</div>`
+                      );
+                      document.querySelector("#source-menu")?.remove();
+                    });
+                  }
+                  document.querySelector("#source--source").addEventListener("click", showMenu);
+                </script>
+              </body>
+            </html>
+            """
+        )
+        _load_v2_workday_scripts(page)
+        page.add_script_tag(content=fill_v2_js)
+        result = page.evaluate(
+            """
+            async () => {
+              const fill = createWorkdayFillV2Function();
+              return await fill({
+                profile: {
+                  applicationSourceCategory: "Job Board",
+                  applicationSource: "Job Board",
+                },
+                settings: { fillRequiredOnly: true, useFieldPipelineV2: true },
+                activeApplyContext: {},
+                defaultResume: {},
+                fillRunId: "workday_source_react_category",
+              });
+            }
+            """
+        )
+        selected = page.evaluate(
+            """
+            () => document.querySelector("[data-automation-id='selectedItem']")?.textContent.trim() || ""
+            """
+        )
+        browser.close()
+
+    fields = {entry["fieldId"]: entry for entry in result["v2Audit"]["fields"]}
+    source = fields["source--source"]
+
+    assert result["ok"] is True
+    assert selected == "Job Board"
+    assert source["filled"] is True
+
+
 def test_workday_v2_uses_specific_identity_for_grouped_my_info_fields():
     if sync_playwright is None:
         pytest.skip("playwright is required for the Workday C3 fill fixture")
@@ -929,7 +1030,7 @@ def test_workday_v2_repeatables_match_profile_and_clear_deletes_rows_and_resume(
         ],
         "websites": ["https://mshi.ca"],
         "socialWebsites": [
-            {"type": "LinkedIn", "url": "https://linkedin.com/in/wjshi"},
+            {"type": "LinkedIn", "url": "https://www.linkedin.com/in/wjshi/"},
             {"type": "GitHub", "url": "https://github.com/micsushi"},
         ],
         "resumeUploaded": True,
@@ -947,6 +1048,75 @@ def test_workday_v2_repeatables_match_profile_and_clear_deletes_rows_and_resume(
     assert result["clearResult"]["clearedFieldCount"] >= 6
     assert clear_events
     assert clear_events[-1]["detail"]["deletedResume"] == 1
+
+
+def test_workday_v2_social_account_inputs_receive_urls_not_labels():
+    if sync_playwright is None:
+        pytest.skip("playwright is required for the Workday C3 fill fixture")
+
+    fill_v2_js = _module_to_browser_script(
+        _load_script(REPO_ROOT / "executioner/src/ats/workday/fill-v2.js")
+    )
+
+    with sync_playwright() as playwright:
+        try:
+            browser = playwright.chromium.launch()
+        except PlaywrightError as error:
+            pytest.skip(f"playwright chromium is unavailable: {error}")
+
+        page = browser.new_page()
+        page.set_content(
+            """
+            <html>
+              <body>
+                <h2>My Experience</h2>
+                <section id="social-websites">
+                  <h3>Social Network URLs</h3>
+                  <div class="row" data-kind="website">
+                    <label>Linkedin<input id="socialNetworkAccounts--linkedInAccount" name="linkedInAccount"></label>
+                  </div>
+                  <div class="row" data-kind="website">
+                    <label>X<input id="socialNetworkAccounts--twitterAccount" name="twitterAccount"></label>
+                  </div>
+                </section>
+              </body>
+            </html>
+            """
+        )
+        _load_v2_workday_scripts(page)
+        page.add_script_tag(content=fill_v2_js)
+        result = page.evaluate(
+            """
+            async () => {
+              const fill = createWorkdayFillV2Function();
+              const fillResult = await fill({
+                profile: {
+                  websites: [
+                    "https://linkedin.com/in/wjshi",
+                    "https://github.com/micsushi",
+                  ],
+                },
+                settings: {
+                  fillRequiredOnly: true,
+                  useFieldPipelineV2: true,
+                },
+                activeApplyContext: {},
+                defaultResume: {},
+                fillRunId: "workday_v2_social_accounts",
+              });
+              return {
+                fillResult,
+                linkedIn: document.querySelector("#socialNetworkAccounts--linkedInAccount")?.value || "",
+                twitter: document.querySelector("#socialNetworkAccounts--twitterAccount")?.value || "",
+              };
+            }
+            """
+        )
+        browser.close()
+
+    assert result["fillResult"]["ok"] is True
+    assert result["linkedIn"] == "https://www.linkedin.com/in/wjshi/"
+    assert result["twitter"] == ""
 
 
 def test_workday_v2_repeatables_repairs_missing_degree_choice_on_dirty_row():
@@ -1433,3 +1603,132 @@ def test_workday_required_only_still_adds_my_experience_sections_from_aliases():
     assert sections["Websites"]["filled"] is True
     assert second_sections["Work Experience"]["skippedReason"] == "already_filled"
     assert second_sections["Education"]["skippedReason"] == "already_filled"
+
+
+def test_workday_repeatable_skills_uses_generic_remote_checkbox_fallback():
+    if sync_playwright is None:
+        pytest.skip("playwright is required for the Workday C3 fill fixture")
+
+    fill_v2_js = _module_to_browser_script(
+        _load_script(REPO_ROOT / "executioner/src/ats/workday/fill-v2.js")
+    )
+
+    with sync_playwright() as playwright:
+        try:
+            browser = playwright.chromium.launch()
+        except PlaywrightError as error:
+            pytest.skip(f"playwright chromium is unavailable: {error}")
+
+        page = browser.new_page()
+        page.set_content(
+            """
+            <html>
+              <head>
+                <style>
+                  body { font-family: system-ui, sans-serif; margin: 24px; }
+                  section { border-top: 1px solid #ddd; padding: 16px 0; }
+                  input { display: block; margin: 8px 0; width: 320px; }
+                  [role="option"] { display: block; min-height: 28px; }
+                </style>
+              </head>
+              <body>
+                <h3>My Experience</h3>
+                <section id="skills-section">
+                  <h4>Skills</h4>
+                  <div data-automation-id="formField-skills">
+                    <label>Type to Add Skills
+                      <input
+                        id="skills--skills"
+                        aria-required="true"
+                        data-uxi-widget-type="selectinput"
+                        data-uxi-multiselect-id="skill-list"
+                      />
+                    </label>
+                    <div id="selected-skills" data-automation-id="selectedItemList"></div>
+                  </div>
+                </section>
+                <script>
+                  const input = document.querySelector("#skills--skills");
+                  const selected = document.querySelector("#selected-skills");
+                  function attachReactClick(el, handler) {
+                    el["__reactFiber$hunt"] = {
+                      memoizedProps: { onClick: handler },
+                      return: null,
+                    };
+                  }
+                  function selectSkill(label) {
+                    selected.innerHTML =
+                      `<div data-automation-id="selectedItem" aria-label="${label}, press delete to clear value.">${label}</div>`;
+                    document.querySelector("#skill-menu")?.remove();
+                    input.value = "";
+                    input.removeAttribute("aria-invalid");
+                  }
+                  function renderOptions() {
+                    const query = input.value || "";
+                    document.querySelector("#skill-menu")?.remove();
+                    if (!/communication/i.test(query)) return;
+                    document.body.insertAdjacentHTML(
+                      "beforeend",
+                      `<div id="skill-menu" role="listbox" data-automation-id="activeListContainer">
+                        <div id="communication-row" role="option" data-automation-id="menuItem" aria-label="Communication not checked">
+                          <input id="communication-checkbox" type="checkbox" data-automation-id="checkboxPanel" />
+                          <span>Communication</span>
+                        </div>
+                      </div>`
+                    );
+                    attachReactClick(
+                      document.querySelector("#communication-checkbox"),
+                      () => selectSkill("Communication")
+                    );
+                  }
+                  input.addEventListener("input", () => setTimeout(renderOptions, 80));
+                  input.addEventListener("click", renderOptions);
+                </script>
+              </body>
+            </html>
+            """
+        )
+        _load_v2_workday_scripts(page)
+        page.add_script_tag(content=fill_v2_js)
+
+        result = page.evaluate(
+            """
+            async () => {
+              const fill = createWorkdayFillV2Function();
+              return await fill({
+                profile: { skillList: ["Python"] },
+                settings: {
+                  fillRequiredOnly: true,
+                  useFieldPipelineV2: true,
+                },
+                activeApplyContext: {},
+                defaultResume: {},
+                fillRunId: "workday_remote_skill_fallback",
+              });
+            }
+            """
+        )
+        values = page.evaluate(
+            """
+            () => ({
+              selected: document.querySelector("[data-automation-id='selectedItem']")?.textContent.trim() || "",
+              inputValue: document.querySelector("#skills--skills")?.value || "",
+              openMenu: Boolean(document.querySelector("#skill-menu")),
+            })
+            """
+        )
+        browser.close()
+
+    sections = {
+        entry["name"]: entry
+        for entry in result["fieldInventory"]
+        if entry["kind"] == "workdaySection"
+    }
+
+    assert result["ok"] is True
+    assert values == {
+        "selected": "Communication",
+        "inputValue": "",
+        "openMenu": False,
+    }
+    assert sections["Skills"]["filled"] is True

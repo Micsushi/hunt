@@ -298,6 +298,63 @@
     };
   }
 
+  function educationAnswerForEntry(entry, profile) {
+    var directPaths = entry.profilePaths || [];
+    for (var i = 0; i < directPaths.length; i++) {
+      var direct = clean(profile[directPaths[i]]);
+      if (direct) {
+        return {
+          value: direct,
+          source: "profile:" + directPaths[i],
+          confidence: 0.96,
+        };
+      }
+    }
+    var education = Array.isArray(profile.education) ? profile.education : [];
+    var preferredIndex = Number(profile.preferredEducationIndex || 0);
+    var row = education[Number.isFinite(preferredIndex) ? preferredIndex : 0];
+    if (!row && education.length) {
+      row = education[0];
+    }
+    if (row) {
+      var fromRow = clean(row.degree) || clean(row.degreeLevel);
+      if (fromRow) {
+        return {
+          value: canonicalEducationAnswer(fromRow),
+          source: clean(row.degree)
+            ? "profile:education[0].degree"
+            : "profile:education[0].degreeLevel",
+          confidence: 0.9,
+        };
+      }
+    }
+    return null;
+  }
+
+  function canonicalEducationAnswer(value) {
+    var text = clean(value);
+    var lowered = text.toLowerCase();
+    if (
+      /\bbachelor/.test(lowered) ||
+      /\bb\.?\s?s\.?\b/.test(lowered) ||
+      /\bbsc\b/.test(lowered) ||
+      /\bba\b/.test(lowered)
+    ) {
+      return "Bachelor's Degree";
+    }
+    if (
+      /\bmaster/.test(lowered) ||
+      /\bm\.?\s?s\.?\b/.test(lowered) ||
+      /\bmsc\b/.test(lowered) ||
+      /\bmba\b/.test(lowered) ||
+      /\bph\.?\s?d\b/.test(lowered) ||
+      /\bphd\b/.test(lowered)
+    ) {
+      return "Graduate School";
+    }
+    return text;
+  }
+
   function resolveAnswer({ question, field, profile, audit, fieldAudit }) {
     var entry = question.entry;
     if (!entry) {
@@ -398,6 +455,19 @@
         confidence: citizenshipAnswer.confidence,
         optionAliases: entry.optionAliases || {},
       };
+    }
+
+    if (entry.id === "highest_education" || entry.id === "degree_level") {
+      var educationAnswer = educationAnswerForEntry(entry, profile);
+      if (educationAnswer) {
+        return {
+          value: educationAnswer.value,
+          source: educationAnswer.source,
+          answerType: entry.answerType || "text",
+          confidence: educationAnswer.confidence,
+          optionAliases: entry.optionAliases || {},
+        };
+      }
     }
 
     if (entry.id === "address_line_2" && field.required) {
@@ -519,9 +589,15 @@
       var path = entry.profilePaths[i];
       var result = profileValue(profile, path);
       var allValues = null;
-      if (entry.id === "technical_skills" && Array.isArray(result.value)) {
+      if (
+        (entry.id === "technical_skills" || entry.id === "computer_programs") &&
+        Array.isArray(result.value)
+      ) {
         allValues = result.value.map(clean).filter(Boolean);
-        result.value = allValues[0] || "";
+        result.value =
+          entry.id === "computer_programs"
+            ? allValues.join(", ")
+            : allValues[0] || "";
       }
       if (
         result.value !== undefined &&

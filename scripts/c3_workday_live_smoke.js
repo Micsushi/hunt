@@ -2361,6 +2361,17 @@ async function clickAuthPrimary(pageClient) {
         el.className,
       ].filter(Boolean).join(" "));
       const bodyText = normalize(document.body?.innerText || "");
+      const verificationBlocked = /verify your account before you sign in|request a verification email/i.test(bodyText);
+      if (verificationBlocked) {
+        return {
+          clicked: false,
+          reason: "auth_verification_required",
+          message: "Workday requires account verification before sign-in can continue.",
+          href: location.href,
+          title: document.title,
+          bodyHead: bodyText.slice(0, 800),
+        };
+      }
       const currentStepNode = document.querySelector('[data-automation-id="progressBarActiveStep"]');
       const currentStepText = normalize(currentStepNode?.innerText || currentStepNode?.textContent || bodyText.match(/current\\s+s?tep\\s+\\d+\\s+of\\s+\\d+[^\\n]*/i)?.[0] || "");
       const isAuthStep = /create account|sign in|log in|login|register|sign up/i.test(currentStepText)
@@ -2441,6 +2452,20 @@ async function clickAuthPrimary(pageClient) {
   await sleep(5500);
   await sleep(1200);
   const after = await inspectPage(pageClient);
+  const afterText = String(after?.bodyHead || "");
+  if (
+    result?.clicked &&
+    /verify your account before you sign in|request a verification email/i.test(
+      afterText,
+    )
+  ) {
+    return {
+      ...result,
+      after,
+      reason: "auth_verification_required",
+      message: "Workday requires account verification before sign-in can continue.",
+    };
+  }
   return { ...result, after };
 }
 
@@ -3047,17 +3072,27 @@ async function run() {
         const fill = await fillCurrentPage(optionsClient, applyUrl, args);
         const fillSummary = summarizeFill(fill);
         if (fillSummary.manualReviewReasons.includes("fill_timeout")) {
+          afterFill = await inspectPage(pageClient);
           fills.push({
             fillIndex: fillIndex + 1,
             fill: fillSummary,
-            afterFill: before,
+            afterFill: {
+              href: afterFill.href,
+              currentStep: afterFill.currentStep,
+              hasNext: afterFill.hasNext,
+              hasSubmit: afterFill.hasSubmit,
+              errors: afterFill.errors,
+              suppressedErrors: afterFill.suppressedErrors || [],
+              fields: afterFill.fields,
+              remainingValues: afterFill.remainingValues,
+            },
           });
           audit.pages.push(
             buildFillAudit({
               pageIndex: i + 1,
               fillIndex: fillIndex + 1,
               before,
-              afterFill: before,
+              afterFill,
               fillSummary,
             }),
           );
@@ -3312,11 +3347,6 @@ async function run() {
         },
       });
 
-      if (
-        fills.some((f) => f.fill?.manualReviewReasons?.includes("fill_timeout"))
-      ) {
-        break;
-      }
       if (args.stopAfterFill) {
         break;
       }

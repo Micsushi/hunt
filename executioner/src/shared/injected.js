@@ -117,7 +117,10 @@
       var setter = proto
         ? Object.getOwnPropertyDescriptor(proto, "value")?.set
         : null;
-      if (setter) {
+      if (setter && el instanceof HTMLTextAreaElement) {
+        setter.call(el, normalized);
+        u.dispatchInputEvents(el);
+      } else if (setter) {
         setter.call(el, "");
         u.dispatchInputEvents(el);
         var nextValue = "";

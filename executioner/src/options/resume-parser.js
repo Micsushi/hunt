@@ -271,6 +271,49 @@ function inferDegreeLevel(value) {
   return "";
 }
 
+function extractDegreeCredential(value) {
+  const text = normalizeWhitespace(value);
+  const patterns = [
+    /\b(?:ph\.?\s?d\.?|doctorate|doctor of [a-z ]+)\b/i,
+    /\b(?:m\.?\s?sc\.?|m\.?\s?a\.?|mba|masters?|master of [a-z ]+)\b/i,
+    /\b(?:b\.?\s?sc\.?|b\.?\s?a\.?|bachelors?|bachelor of [a-z ]+)\b/i,
+    /\b(?:associate(?:s)?|associate of [a-z ]+)\b/i,
+    /\b(?:high school diploma|diploma|certificate)\b/i,
+  ];
+  for (const pattern of patterns) {
+    const match = text.match(pattern);
+    if (match?.[0]) {
+      return normalizeWhitespace(match[0].replace(/\.$/, ""));
+    }
+  }
+  return "";
+}
+
+function extractFieldOfStudy(value) {
+  const text = normalizeWhitespace(value);
+  const explicit = text.match(
+    /\b(?:in|of)\s+([A-Z][A-Za-z& /-]+?)(?:\s+with\b|\s+speciali[sz]ation\b|\s+minor\b|,|$)/,
+  );
+  if (explicit?.[1]) {
+    return normalizeWhitespace(explicit[1]);
+  }
+  if (/computer science/i.test(text)) {
+    return "Computer Science";
+  }
+  return "";
+}
+
+function parseEducationDetails(value) {
+  const title = normalizeWhitespace(value);
+  const degree = extractDegreeCredential(title);
+  return {
+    degree,
+    degreeLevel: degree ? inferDegreeLevel(degree) : "",
+    fieldOfStudy: extractFieldOfStudy(title),
+    educationTitle: title,
+  };
+}
+
 function extractBullets(block) {
   return [
     ...String(block || "").matchAll(
@@ -309,15 +352,15 @@ function parseEducation(tex) {
   }
   const header = stripLatex(entry.content);
   const [school = "", ...degreeParts] = header.split(",");
+  const details = parseEducationDetails(degreeParts.join(","));
   const dates = parseDateRange(entry.argument);
   return [
     {
       school: normalizeWhitespace(school),
-      degree: normalizeWhitespace(degreeParts.join(",")),
-      degreeLevel: inferDegreeLevel(degreeParts.join(",")),
-      fieldOfStudy: /computer science/i.test(degreeParts.join(","))
-        ? "Computer Science"
-        : "",
+      degree: details.degree,
+      degreeLevel: details.degreeLevel,
+      fieldOfStudy: details.fieldOfStudy,
+      educationTitle: details.educationTitle,
       startMonth: "",
       startYear: "",
       endMonth: dates.endMonth || dates.startMonth,
@@ -444,13 +487,14 @@ function parsePlainEducation(text) {
     lines.slice(0, 3).join(", ").replace(rangeText, ""),
   );
   const [school = "", ...degreeParts] = header.split(/\s*,\s*/);
-  const degree = normalizeWhitespace(degreeParts.join(", "));
+  const details = parseEducationDetails(degreeParts.join(", "));
   return [
     {
       school,
-      degree,
-      degreeLevel: inferDegreeLevel(degree),
-      fieldOfStudy: /computer science/i.test(degree) ? "Computer Science" : "",
+      degree: details.degree,
+      degreeLevel: details.degreeLevel,
+      fieldOfStudy: details.fieldOfStudy,
+      educationTitle: details.educationTitle,
       startMonth: dates.startMonth,
       startYear: dates.startYear,
       endMonth: dates.endMonth || dates.startMonth,
