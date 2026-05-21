@@ -96,6 +96,48 @@
     );
   }
 
+  function isPhoneCountryCodeField(field) {
+    var el = field?.element || field?.anchor;
+    var text = norm(
+      [
+        field?.fieldId,
+        field?.descriptor,
+        field?.workday?.fieldLabel,
+        field?.workday?.kind,
+        el?.id,
+        el?.name,
+        el?.getAttribute?.("aria-label"),
+      ].join(" "),
+    );
+    return (
+      text.includes("phone country code") ||
+      text.includes("country phone code") ||
+      text.includes("country territory phone code") ||
+      text.includes("countryphonecode") ||
+      text.includes("phone_country_code")
+    );
+  }
+
+  function phoneCountryCodeOption(options, answer) {
+    var target = norm(answer?.value || "");
+    if (!target) {
+      return null;
+    }
+    return realOptions(options).find(function (option) {
+      var label = normOptionLabel(option.label);
+      var value = normOptionLabel(option.value);
+      return (
+        label === target ||
+        value === target ||
+        ((target === "1" || target === "01" || target.includes("1")) &&
+          label.includes("canada") &&
+          /\b1\b/.test(label)) ||
+        (target.includes("canada") && label.includes("canada")) ||
+        (target.includes("ca") && label.includes("canada"))
+      );
+    });
+  }
+
   function isDeferredHierarchicalWorkdayField(field, answer) {
     var el = field?.element || field?.anchor;
     var text = norm(
@@ -117,6 +159,77 @@
       text.includes("provide your canadian citizenship status") ||
       text.includes("citizenship status to assist")
     );
+  }
+
+  function isApplicationSourceField(field, answer) {
+    var el = field?.element || field?.anchor;
+    var text = norm(
+      [
+        field?.fieldId,
+        field?.descriptor,
+        field?.workday?.fieldLabel,
+        field?.workday?.contextText,
+        el?.id,
+        el?.name,
+        el?.getAttribute?.("aria-label"),
+        answer?.source,
+        answer?.questionType,
+      ].join(" "),
+    );
+    return (
+      text.includes("application source") ||
+      text.includes("how did you hear") ||
+      text.includes("source") ||
+      text.includes("applicationsource")
+    );
+  }
+
+  function safeApplicationSourceOption(options) {
+    var blocked = [
+      "select",
+      "referral",
+      "referred",
+      "refer",
+      "employee",
+      "employ",
+      "recruiter",
+      "agency",
+    ];
+    var preferred = [
+      "linkedin",
+      "indeed",
+      "naukri",
+      "internet",
+      "job board",
+      "job site",
+      "job sites",
+      "career site",
+      "career website",
+      "careers website",
+      "careers",
+      "company website",
+      "google",
+      "glassdoor",
+      "zip recruiter",
+      "other job site",
+      "other",
+    ];
+    var candidates = (options || []).filter(function (option) {
+      var label = norm(option.label);
+      return !blocked.some(function (word) {
+        return label.includes(word);
+      });
+    });
+    for (var i = 0; i < preferred.length; i += 1) {
+      var needle = preferred[i];
+      var match = candidates.find(function (option) {
+        return norm(option.label).includes(needle);
+      });
+      if (match) {
+        return match;
+      }
+    }
+    return null;
   }
 
   function salaryNumbers(value) {
@@ -274,6 +387,41 @@
       }
     }
     return null;
+  }
+
+  function isVeteranDisclosureField(field, answer) {
+    var el = field?.element || field?.anchor;
+    var text = norm(
+      [
+        field?.fieldId,
+        field?.descriptor,
+        field?.workday?.fieldLabel,
+        field?.workday?.contextText,
+        el?.id,
+        el?.name,
+        el?.getAttribute?.("aria-label"),
+        answer?.source,
+      ].join(" "),
+    );
+    return (
+      text.includes("veteran") &&
+      (text.includes("disclosure") ||
+        text.includes("protected") ||
+        text.includes("classifications") ||
+        text.includes("status"))
+    );
+  }
+
+  function safeNotVeteranOption(options) {
+    return realOptions(options).find(function (option) {
+      var label = normOptionLabel(option.label);
+      return (
+        label.includes("not a veteran") ||
+        label.includes("not protected veteran") ||
+        (label.includes("i am not") && label.includes("veteran")) ||
+        (label.includes("not one") && label.includes("veteran"))
+      );
+    });
   }
 
   function matchOption({ options, answer, audit, fieldAudit, field }) {
@@ -455,12 +603,43 @@
         fallback: false,
       };
     }
+    if (isPhoneCountryCodeField(field)) {
+      var phoneMatch = phoneCountryCodeOption(real, answer);
+      if (phoneMatch) {
+        return {
+          option: phoneMatch,
+          source: "phone_country_code_safe_match",
+          fallback: false,
+        };
+      }
+    }
     if (isDeferredHierarchicalWorkdayField(field, answer)) {
       return {
         option: null,
         source: "hierarchical_workday_deferred",
         fallback: false,
       };
+    }
+    if (isApplicationSourceField(field, answer)) {
+      var sourceFallback = safeApplicationSourceOption(real);
+      if (sourceFallback) {
+        root.audit?.pushIssue(audit, fieldAudit, {
+          kind: "application_source_safe_fallback",
+          severity: "warn",
+          failedStep: "option.match",
+          reason:
+            "Application source did not exactly match the profile value, so C3 selected a safe job-site style source instead of event/referral/recruiter options.",
+          selectedOption: sourceFallback.label,
+          options: real.map(function (option) {
+            return option.label;
+          }),
+        });
+        return {
+          option: sourceFallback,
+          source: "application_source_safe_fallback",
+          fallback: true,
+        };
+      }
     }
     if (
       answer.answerType === "non_disclosure" ||
@@ -486,6 +665,44 @@
         });
         return { option: neutral, source: "neutral_fallback", fallback: true };
       }
+    }
+    if (answer.answerType === "non_disclosure") {
+      if (isVeteranDisclosureField(field, answer)) {
+        var notVeteran = safeNotVeteranOption(real);
+        if (notVeteran) {
+          root.audit?.pushIssue(audit, fieldAudit, {
+            kind: "veteran_disclosure_profile_safe_fallback",
+            severity: "warn",
+            failedStep: "option.match",
+            reason:
+              "No neutral veteran disclosure option was visible, so C3 selected the profile-safe not-veteran option.",
+            selectedOption: notVeteran.label,
+            options: real.map(function (option) {
+              return option.label;
+            }),
+          });
+          return {
+            option: notVeteran,
+            source: "veteran_not_veteran_safe_fallback",
+            fallback: true,
+          };
+        }
+      }
+      root.audit?.pushIssue(audit, fieldAudit, {
+        kind: "non_disclosure_no_neutral_option",
+        severity: field?.required ? "warn" : "info",
+        failedStep: "option.match",
+        reason:
+          "No neutral or non-disclosure option was visible, so C3 did not select a concrete demographic fallback.",
+        options: real.map(function (option) {
+          return option.label;
+        }),
+      });
+      return {
+        option: null,
+        source: "non_disclosure_no_neutral_option",
+        fallback: false,
+      };
     }
     if (answer.answerType === "unknown") {
       var unknownNoOption = real.find(function (option) {

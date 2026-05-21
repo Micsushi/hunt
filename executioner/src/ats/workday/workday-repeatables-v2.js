@@ -562,8 +562,13 @@
     if (!el) {
       return;
     }
-    var code = key === "Enter" ? "Enter" : key;
-    var keyCode = key === "Enter" ? 13 : 0;
+    var keyCodes = {
+      Enter: 13,
+      Home: 36,
+      ArrowDown: 40,
+    };
+    var code = key;
+    var keyCode = keyCodes[key] || 0;
     ["keydown", "keyup"].forEach(function (type) {
       el.dispatchEvent(
         new KeyboardEvent(type, {
@@ -576,6 +581,184 @@
         }),
       );
     });
+  }
+
+  function activeListboxFor(control) {
+    var boxes = Array.from(
+      document.querySelectorAll(
+        [
+          "[data-automation-id='activeListContainer']",
+          "[data-automation-id='promptSearchResultList']",
+          "[data-uxi-widget-type='multiselectlist']",
+          "[role='listbox']",
+        ].join(","),
+      ),
+    )
+      .filter(function (box) {
+        if (
+          box.matches?.("[data-automation-id='selectedItemList']") ||
+          box.closest?.("[data-automation-id='selectedItemList']")
+        ) {
+          return false;
+        }
+        return visible(box);
+      })
+      .sort(function (a, b) {
+        var ar = a.getBoundingClientRect();
+        var br = b.getBoundingClientRect();
+        return br.height - ar.height || br.width - ar.width;
+      });
+    return boxes[0] || control;
+  }
+
+  function keyboardSequenceForChoice(targets) {
+    var options = optionElements().filter(function (option) {
+      return !option.closest?.("[data-automation-id='selectedItemList']");
+    });
+    var index = options.findIndex(function (candidate) {
+      return targets.some(function (target) {
+        return choiceMatches(textOf(candidate), target);
+      });
+    });
+    if (index < 0) {
+      return [];
+    }
+    var keys = [
+      { key: "Home", code: "Home", windowsVirtualKeyCode: 36 },
+    ];
+    for (var idx = 0; idx < index; idx += 1) {
+      keys.push({
+        key: "ArrowDown",
+        code: "ArrowDown",
+        windowsVirtualKeyCode: 40,
+      });
+    }
+    keys.push({ key: "Enter", code: "Enter", windowsVirtualKeyCode: 13 });
+    return keys;
+  }
+
+  function requestTrustedKeySequence(keys) {
+    if (
+      !keys?.length ||
+      typeof chrome === "undefined" ||
+      !chrome.runtime?.sendMessage
+    ) {
+      return Promise.resolve({ ok: false, reason: "trusted_input_unavailable" });
+    }
+    return new Promise(function (resolve) {
+      try {
+        chrome.runtime.sendMessage(
+          {
+            type: "hunt.apply.trusted_input",
+            payload: {
+              action: "key_sequence",
+              keys: keys,
+              purpose: "repeatable_choice_keyboard",
+            },
+          },
+          function (response) {
+            var error = chrome.runtime.lastError;
+            if (error) {
+              resolve({
+                ok: false,
+                reason: "trusted_input_message_failed",
+                message: error.message,
+              });
+              return;
+            }
+            resolve(response || { ok: false, reason: "trusted_input_empty" });
+          },
+        );
+      } catch (error) {
+        resolve({
+          ok: false,
+          reason: "trusted_input_exception",
+          message: error instanceof Error ? error.message : String(error),
+        });
+      }
+    });
+  }
+
+  function requestTrustedMouseClick(el, purpose, label) {
+    if (
+      !el ||
+      typeof chrome === "undefined" ||
+      !chrome.runtime?.sendMessage
+    ) {
+      return Promise.resolve({ ok: false, reason: "trusted_input_unavailable" });
+    }
+    var rect = el.getBoundingClientRect?.();
+    var x = rect ? Math.round(rect.left + rect.width / 2) : NaN;
+    var y = rect ? Math.round(rect.top + rect.height / 2) : NaN;
+    if (!Number.isFinite(x) || !Number.isFinite(y)) {
+      return Promise.resolve({ ok: false, reason: "trusted_input_missing_rect" });
+    }
+    return new Promise(function (resolve) {
+      try {
+        chrome.runtime.sendMessage(
+          {
+            type: "hunt.apply.trusted_input",
+            payload: {
+              action: "mouse_click",
+              x: x,
+              y: y,
+              label: label || clean(textOf(el)),
+              purpose: purpose || "repeatable_mouse_click",
+            },
+          },
+          function (response) {
+            var error = chrome.runtime.lastError;
+            if (error) {
+              resolve({
+                ok: false,
+                reason: "trusted_input_message_failed",
+                message: error.message,
+              });
+              return;
+            }
+            resolve(response || { ok: false, reason: "trusted_input_empty" });
+          },
+        );
+      } catch (error) {
+        resolve({
+          ok: false,
+          reason: "trusted_input_exception",
+          message: error instanceof Error ? error.message : String(error),
+        });
+      }
+    });
+  }
+
+  async function keyboardSelectChoice(button, targets) {
+    clickLikeUser(button);
+    await sleep(220);
+    var keys = keyboardSequenceForChoice(targets);
+    if (!keys.length) {
+      return { ok: false, reason: "keyboard_option_not_found" };
+    }
+    var trusted = await requestTrustedKeySequence(keys);
+    if (!trusted?.ok) {
+      var target = activeListboxFor(button);
+      try {
+        target?.focus?.({ preventScroll: true });
+      } catch (_error) {
+        target?.focus?.();
+      }
+      for (var idx = 0; idx < keys.length; idx += 1) {
+        keyOn(target, keys[idx].key);
+        await sleep(80);
+      }
+    }
+    await sleep(650);
+    var committed =
+      targets.some(function (target) {
+        return choiceMatches(textOf(button), target);
+      }) || Boolean(button.value);
+    return {
+      ok: committed,
+      reason: committed ? "" : "keyboard_choice_not_committed",
+      trustedInput: trusted || null,
+    };
   }
 
   function triggerReactClickHandler(el) {
@@ -684,12 +867,27 @@
 
   function setSearchText(control, value) {
     if (!control) {
-      return;
+      return false;
     }
     if (typeof control.scrollIntoView === "function") {
       control.scrollIntoView({ block: "center", inline: "nearest" });
     }
-    control.focus?.();
+    try {
+      control.focus?.({ preventScroll: true });
+    } catch (_error) {
+      control.focus?.();
+    }
+    if (document.activeElement !== control) {
+      clickLikeUser(control);
+      try {
+        control.focus?.({ preventScroll: true });
+      } catch (_error) {
+        control.focus?.();
+      }
+    }
+    if (document.activeElement !== control) {
+      return false;
+    }
     var setter = Object.getOwnPropertyDescriptor(
       HTMLInputElement.prototype,
       "value",
@@ -700,39 +898,44 @@
       control.value = "";
     }
     control.dispatchEvent(new Event("input", { bubbles: true }));
-    if (document.execCommand) {
-      try {
-        document.execCommand("insertText", false, value);
-      } catch (_error) {
-        // Fall back below.
-      }
+    control.dispatchEvent(
+      new InputEvent("beforeinput", {
+        bubbles: true,
+        cancelable: true,
+        inputType: "insertText",
+        data: value,
+      }),
+    );
+    if (setter) {
+      setter.call(control, value);
+    } else {
+      control.value = value;
     }
-    if (!choiceMatches(control.value, value)) {
-      if (setter) {
-        setter.call(control, value);
-      } else {
-        control.value = value;
-      }
-      control.dispatchEvent(
-        new InputEvent("input", {
-          bubbles: true,
-          cancelable: true,
-          inputType: "insertText",
-          data: value,
-        }),
-      );
-    }
+    control.dispatchEvent(
+      new InputEvent("input", {
+        bubbles: true,
+        cancelable: true,
+        inputType: "insertText",
+        data: value,
+      }),
+    );
+    return choiceMatches(control.value, value) || control.value === String(value || "");
   }
 
   async function typeSearchTextLikeUser(control, value) {
     if (!control) {
-      return;
+      return false;
     }
-    setSearchText(control, "");
+    if (!setSearchText(control, "")) {
+      return false;
+    }
     var text = String(value || "");
     var current = "";
     for (var index = 0; index < text.length; index++) {
       var char = text[index];
+      if (document.activeElement !== control && !setSearchText(control, current)) {
+        return false;
+      }
       control.dispatchEvent(
         new KeyboardEvent("keydown", {
           bubbles: true,
@@ -750,7 +953,9 @@
         }),
       );
       current += char;
-      setSearchText(control, current);
+      if (!setSearchText(control, current)) {
+        return false;
+      }
       control.dispatchEvent(
         new KeyboardEvent("keyup", {
           bubbles: true,
@@ -761,6 +966,7 @@
       );
       await sleep(25);
     }
+    return true;
   }
 
   async function waitForPromptTarget(previousLabels, value, timeoutMs) {
@@ -1048,6 +1254,25 @@
         }
         await sleep(120);
       }
+      await requestTrustedMouseClick(
+        target || option,
+        "repeatable_skill_option",
+        query,
+      );
+      start = Date.now();
+      while (Date.now() - start < 1800) {
+        var trustedSelected = skillSelectedText();
+        if (
+          choiceMatches(trustedSelected, query) ||
+          choiceMatches(trustedSelected, skill) ||
+          (allowFallback && trustedSelected)
+        ) {
+          clearSkillSearch(input);
+          await sleep(180);
+          return true;
+        }
+        await sleep(120);
+      }
       clearSkillSearch(input);
       if (allowFallback && hasAnySelectedSkill()) {
         return true;
@@ -1086,7 +1311,12 @@
         targetKey,
       )
     ) {
-      values.push("Bachelors", "Bachelor's Degree");
+      values.push(
+        "Bachelors",
+        "Bachelor's Degree",
+        "Bachelor / Undergraduate Degree",
+        "Undergraduate Degree",
+      );
       if (targetKey.includes("science")) {
         values.push("BS", "BSc");
       }
@@ -1104,6 +1334,8 @@
       }
     } else if (targetKey === "bachelors" || targetKey === "bachelor degree") {
       values.push(
+        "Bachelor / Undergraduate Degree",
+        "Undergraduate Degree",
         "Bachelor of Science",
         "Bachelor of Engineering",
         "Bachelor of Commerce",
@@ -1158,6 +1390,10 @@
       targets.some(function (target) {
         return choiceMatches(textOf(button), target);
       }) || Boolean(button.value);
+    if (!committed) {
+      var keyboard = await keyboardSelectChoice(button, targets);
+      committed = keyboard.ok;
+    }
     return {
       ok: committed,
       alreadyFilled: false,
@@ -1916,7 +2152,16 @@
       return Boolean(control.checked);
     }
     if (isChoiceControl(control)) {
-      var text = norm(textOf(control));
+      var directText = clean(
+        [
+          control.value,
+          control.innerText,
+          control.textContent,
+        ]
+          .filter(Boolean)
+          .join(" "),
+      );
+      var text = norm(directText || textOf(control));
       return Boolean(text && !text.includes("select one"));
     }
     return Boolean(clean(control.value || textOf(control)));

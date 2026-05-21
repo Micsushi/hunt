@@ -67,6 +67,29 @@
     if (value === undefined || value === null) {
       return false;
     }
+    if (
+      el instanceof HTMLInputElement &&
+      String(el.type || "").toLowerCase() === "password"
+    ) {
+      el.setAttribute("autocomplete", "new-password");
+      el.setAttribute("data-hunt-password-manager-suppressed", "true");
+      var form = el.closest("form");
+      if (form) {
+        form.setAttribute("autocomplete", "off");
+        form.setAttribute("data-hunt-password-manager-suppressed", "true");
+      }
+    }
+    if (
+      text &&
+      u?.setElementValue &&
+      (el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement)
+    ) {
+      var injectedOk = u.setElementValue(el, text, true);
+      dispatchBlurEvents(el);
+      if (injectedOk) {
+        return true;
+      }
+    }
     try {
       el.focus?.();
     } catch (_error) {
@@ -390,11 +413,11 @@
       var labelFor =
         el.id && document.querySelector(`label[for="${CSS.escape(el.id)}"]`);
       var targets = [
+        el,
         labelFor,
         el.closest?.("label"),
         el.closest?.('[role="checkbox"], [data-automation-id*="checkbox" i]'),
         el.parentElement,
-        el,
       ].filter(Boolean);
       for (var i = 0; i < targets.length && !checkboxOn(); i++) {
         clickLikeUser(targets[i]);

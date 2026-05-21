@@ -150,6 +150,102 @@ function hostAllowed(host, allowlist) {
   });
 }
 
+function workdayPathSegments(url) {
+  return String(url?.pathname || "")
+    .split("/")
+    .map((segment) => segment.trim())
+    .filter(Boolean)
+    .filter((segment) => !/^[a-z]{2}-[A-Z]{2}$/i.test(segment));
+}
+
+function workdayScopeFromUrl(value) {
+  if (!value) {
+    return null;
+  }
+  let url;
+  try {
+    url = new URL(value);
+  } catch {
+    return null;
+  }
+  const host = normalizeHost(url.hostname);
+  if (!host) {
+    return null;
+  }
+  const segments = workdayPathSegments(url);
+  const appSegment = segments[0] || "";
+  const jobIndex = segments.findIndex(
+    (segment) => segment.toLowerCase() === "job",
+  );
+  const jobPath =
+    jobIndex >= 0 && segments.length > jobIndex + 1
+      ? segments.slice(0, jobIndex + 3).join("/")
+      : "";
+  return {
+    host,
+    appSegment: appSegment.toLowerCase(),
+    jobPath: jobPath.toLowerCase(),
+  };
+}
+
+function requestExpectedWorkdayScopes(request) {
+  return [
+    request.expectedApplyUrl,
+    request.applyUrl,
+    request.expectedJobUrl,
+    request.jobUrl,
+  ]
+    .map(workdayScopeFromUrl)
+    .filter(Boolean);
+}
+
+function candidateUrlsForScope(rawUrl) {
+  let url;
+  try {
+    url = rawUrl instanceof URL ? rawUrl : new URL(rawUrl);
+  } catch {
+    return [];
+  }
+  const urls = [url];
+  for (const key of ["redirect", "returnUrl", "returnURL", "url"]) {
+    const value = url.searchParams.get(key);
+    if (!value) {
+      continue;
+    }
+    try {
+      urls.push(new URL(value, url.origin));
+    } catch {
+      // Ignore malformed redirect parameters.
+    }
+  }
+  return urls;
+}
+
+function workdayLinkMatchesScope(rawUrl, scope) {
+  return candidateUrlsForScope(rawUrl).some((candidate) => {
+    const host = normalizeHost(candidate.hostname);
+    if (host !== scope.host) {
+      return false;
+    }
+    const segments = workdayPathSegments(candidate);
+    const appSegment = String(segments[0] || "").toLowerCase();
+    const path = segments.join("/").toLowerCase();
+    return (
+      !scope.appSegment ||
+      appSegment === scope.appSegment ||
+      (scope.jobPath && path.includes(scope.jobPath))
+    );
+  });
+}
+
+function workdayLinkAllowed(url, request) {
+  const scopes = requestExpectedWorkdayScopes(request);
+  if (!scopes.length) {
+    return true;
+  }
+  return scopes.some((scope) => workdayLinkMatchesScope(url, scope));
+}
+
 function requestExpectedHosts(request) {
   const fromRequest = Array.isArray(request.expectedDomains)
     ? request.expectedDomains
@@ -191,6 +287,9 @@ function safeVerificationLinks(text, request, { allowInsecure = false } = {}) {
       continue;
     }
     if (!hostAllowed(url.hostname, expectedHosts)) {
+      continue;
+    }
+    if (!workdayLinkAllowed(url, request)) {
       continue;
     }
     const contextIndex = Math.max(0, String(text).indexOf(raw) - 120);
@@ -956,6 +1055,7 @@ if (require.main === module) {
 module.exports = {
   checkMailAuth,
   safeVerificationLinks,
+  workdayLinkAllowed,
   verificationCodeCandidates,
   verifyEmail,
 };

@@ -355,6 +355,86 @@
     return text;
   }
 
+  function educationRank(value) {
+    var text = clean(value).toLowerCase();
+    if (!text) {
+      return 0;
+    }
+    if (
+      /\bdoctor/.test(text) ||
+      /\bph\.?\s?d\b/.test(text) ||
+      /\bphd\b/.test(text)
+    ) {
+      return 5;
+    }
+    if (
+      /\bmaster/.test(text) ||
+      /\bm\.?\s?s\.?\b/.test(text) ||
+      /\bmsc\b/.test(text) ||
+      /\bmba\b/.test(text) ||
+      /\bgraduate/.test(text)
+    ) {
+      return 4;
+    }
+    if (
+      /\bbachelor/.test(text) ||
+      /\bbachelors\b/.test(text) ||
+      /\bb\.?\s?s\.?\b/.test(text) ||
+      /\bbsc\b/.test(text) ||
+      /\bba\b/.test(text) ||
+      /\buniversity\b/.test(text)
+    ) {
+      return 3;
+    }
+    if (/\bassociate/.test(text) || /\bcollege\b/.test(text)) {
+      return 2;
+    }
+    if (/\bhigh school\b/.test(text) || /\bged\b/.test(text)) {
+      return 1;
+    }
+    return 0;
+  }
+
+  function educationLevelYesNoAnswer(entry, profile) {
+    var candidates = [];
+    (entry.profilePaths || []).forEach(function (path) {
+      var value = clean(profile[path]);
+      if (value) {
+        candidates.push({ value: value, source: "profile:" + path });
+      }
+    });
+    var education = Array.isArray(profile.education) ? profile.education : [];
+    education.forEach(function (row, index) {
+      var value = clean(row?.degreeLevel) || clean(row?.degree);
+      if (value) {
+        candidates.push({
+          value: value,
+          source: "profile:education[" + index + "]",
+        });
+      }
+    });
+    var requiredRank = entry.expectedEducationLevel === "bachelors" ? 3 : 0;
+    var best = candidates
+      .map(function (candidate) {
+        return {
+          value: candidate.value,
+          source: candidate.source,
+          rank: educationRank(candidate.value),
+        };
+      })
+      .sort(function (a, b) {
+        return b.rank - a.rank;
+      })[0];
+    var hasLevel = Boolean(best && requiredRank && best.rank >= requiredRank);
+    return {
+      value: hasLevel ? "Yes" : "No",
+      source: best?.source || "default:" + entry.id,
+      answerType: "yes_no",
+      confidence: best ? 0.94 : 0.7,
+      optionAliases: entry.optionAliases || {},
+    };
+  }
+
   function resolveAnswer({ question, field, profile, audit, fieldAudit }) {
     var entry = question.entry;
     if (!entry) {
@@ -384,6 +464,10 @@
         answerType: "yes_no",
         confidence: 0.92,
       };
+    }
+
+    if (entry.answerType === "education_level_yes_no") {
+      return educationLevelYesNoAnswer(entry, profile);
     }
 
     if (entry.answerType === "file") {

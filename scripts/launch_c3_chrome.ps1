@@ -3,6 +3,10 @@ $ErrorActionPreference = "Stop"
 $extension = "C:\Users\sushi\Documents\Github\hunt\executioner"
 $browserKind = "override"
 $chrome = $env:HUNT_C3_CHROME
+$debugPort = 9222
+if ($env:HUNT_C3_CHROME_REMOTE_DEBUGGING_PORT) {
+    $debugPort = [int]$env:HUNT_C3_CHROME_REMOTE_DEBUGGING_PORT
+}
 
 if (-not $chrome) {
     $playwrightRoot = Join-Path $env:LOCALAPPDATA "ms-playwright"
@@ -49,7 +53,84 @@ if (-not (Test-Path -LiteralPath (Join-Path $extension "manifest.json"))) {
     throw "Hunt extension manifest not found: $extension"
 }
 
+$resetProfile = $env:HUNT_C3_CHROME_RESET_PROFILE -in @("1", "true", "TRUE", "yes", "YES")
+if ($resetProfile -and (Test-Path -LiteralPath $profile)) {
+    $huntRoot = Join-Path $env:LOCALAPPDATA "Hunt"
+    $resolvedHuntRoot = [System.IO.Path]::GetFullPath($huntRoot).TrimEnd('\')
+    $resolvedProfile = [System.IO.Path]::GetFullPath($profile).TrimEnd('\')
+    $profileName = Split-Path -Leaf $resolvedProfile
+    $isSafeParallelProfile =
+        $resolvedProfile.StartsWith($resolvedHuntRoot + "\", [System.StringComparison]::OrdinalIgnoreCase) -and
+        $profileName.StartsWith("ChromeC3PlaywrightParallel", [System.StringComparison]::OrdinalIgnoreCase)
+    if (-not $isSafeParallelProfile) {
+        throw "Refusing to reset non-parallel C3 profile: $resolvedProfile"
+    }
+    $profileUsers = Get-CimInstance Win32_Process |
+        Where-Object { $_.CommandLine -like "*$resolvedProfile*" }
+    if ($profileUsers) {
+        $owners = ($profileUsers | Select-Object -ExpandProperty ProcessId) -join ", "
+        throw "Refusing to reset profile because it is still in use by process id(s): $owners"
+    }
+    Remove-Item -LiteralPath $resolvedProfile -Recurse -Force
+    Write-Host "Reset C3 parallel profile: $resolvedProfile"
+}
+
 New-Item -ItemType Directory -Force -Path $profile | Out-Null
+
+function Merge-JsonObject {
+    param(
+        [Parameter(Mandatory=$true)] $Target,
+        [Parameter(Mandatory=$true)] $Patch
+    )
+    foreach ($property in $Patch.PSObject.Properties) {
+        $name = $property.Name
+        $value = $property.Value
+        $existing = $Target.PSObject.Properties[$name]
+        if ($existing -and $value -is [pscustomobject] -and $existing.Value -is [pscustomobject]) {
+            Merge-JsonObject -Target $existing.Value -Patch $value
+        } else {
+            if ($existing) {
+                $existing.Value = $value
+            } else {
+                $Target | Add-Member -NotePropertyName $name -NotePropertyValue $value
+            }
+        }
+    }
+}
+
+function Disable-PasswordManagerForProfile {
+    param(
+        [Parameter(Mandatory=$true)][string]$ProfilePath
+    )
+    $defaultProfile = Join-Path $ProfilePath "Default"
+    New-Item -ItemType Directory -Force -Path $defaultProfile | Out-Null
+    $preferencesPath = Join-Path $defaultProfile "Preferences"
+    if (Test-Path -LiteralPath $preferencesPath) {
+        try {
+            $preferences = Get-Content -LiteralPath $preferencesPath -Raw | ConvertFrom-Json
+        } catch {
+            Write-Warning "Could not parse Chrome Preferences for password-manager disablement: $($_.Exception.Message)"
+            $preferences = [pscustomobject]@{}
+        }
+    } else {
+        $preferences = [pscustomobject]@{}
+    }
+    $patch = [pscustomobject]@{
+        credentials_enable_service = $false
+        profile = [pscustomobject]@{
+            password_manager_enabled = $false
+        }
+        password_manager = [pscustomobject]@{
+            account_storage_per_account_settings = [pscustomobject]@{}
+        }
+    }
+    Merge-JsonObject -Target $preferences -Patch $patch
+    $preferences |
+        ConvertTo-Json -Depth 20 |
+        Set-Content -LiteralPath $preferencesPath -Encoding UTF8
+}
+
+Disable-PasswordManagerForProfile -ProfilePath $profile
 
 $windowPosition = $env:HUNT_C3_CHROME_WINDOW_POSITION
 $windowSize = $env:HUNT_C3_CHROME_WINDOW_SIZE
@@ -73,7 +154,7 @@ if (-not $windowPosition) {
     }
 }
 
-$existingEndpoint = Get-NetTCPConnection -LocalPort 9222 -State Listen -ErrorAction SilentlyContinue
+$existingEndpoint = Get-NetTCPConnection -LocalPort $debugPort -State Listen -ErrorAction SilentlyContinue
 if ($existingEndpoint) {
     $owners = $existingEndpoint |
         Select-Object -ExpandProperty OwningProcess -Unique |
@@ -82,23 +163,24 @@ if ($existingEndpoint) {
         Where-Object {
             $_.CommandLine -like "*$profile*" -and
             $_.CommandLine -like "*--load-extension*"
-        } |
+    } |
         Select-Object -First 1
     if ($expectedOwner) {
-        Write-Host "Chrome DevTools endpoint already active: http://127.0.0.1:9222"
+        Write-Host "Chrome DevTools endpoint already active: http://127.0.0.1:$debugPort"
         Write-Host "Owner: $($expectedOwner.ProcessId)"
         return
     }
-    throw "Port 9222 is already in use by another process. Close the old debug browser or free port 9222 before launching C3 Chrome."
+    throw "Port $debugPort is already in use by another process. Close the old debug browser or free port $debugPort before launching C3 Chrome."
 }
 
 $arguments = @(
-    "--remote-debugging-port=9222",
+    "--remote-debugging-port=$debugPort",
     "--user-data-dir=$profile",
     "--disable-extensions-except=$extension",
     "--load-extension=$extension",
     "--no-first-run",
     "--no-default-browser-check",
+    "--disable-save-password-bubble",
     "--window-size=$windowSize"
 )
 if ($windowPosition) {
@@ -106,10 +188,14 @@ if ($windowPosition) {
 }
 
 Start-Process -FilePath $chrome -ArgumentList $arguments
-Write-Host "Started C3 Chrome DevTools endpoint: http://127.0.0.1:9222"
+Write-Host "Started C3 Chrome DevTools endpoint: http://127.0.0.1:$debugPort"
 Write-Host "Browser kind: $browserKind"
 Write-Host "Browser: $chrome"
 Write-Host "Profile: $profile"
-Write-Host "Window position: $($windowPosition -or 'default')"
+if ($windowPosition) {
+    Write-Host "Window position: $windowPosition"
+} else {
+    Write-Host "Window position: default"
+}
 Write-Host "Window size: $windowSize"
 Write-Host "Extension: $extension"

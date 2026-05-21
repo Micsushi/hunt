@@ -10,6 +10,20 @@ const {
 const { CdpClient, httpJson, httpText, js, sleep } = require("./lib/c3_cdp");
 const { recordAuditIssues } = require("./lib/c3_issue_registry");
 const { verifyEmail } = require("./c3_mail_verify_bridge");
+const {
+  WorkdayWorkflowIdentifier,
+} = require("./lib/c3_workday_identifier");
+const {
+  WorkdayApplyEntryWorkflow,
+} = require("./lib/c3_workday_apply_entry");
+const {
+  WorkdayAuthWorkflow,
+} = require("./lib/c3_workday_auth_workflow");
+const {
+  buildFillAudit,
+  summarizeFill,
+  writeAuditJson,
+} = require("./lib/c3_workday_audit");
 
 function loadDotEnv(filePath = ".env") {
   if (!fs.existsSync(filePath)) return;
@@ -36,9 +50,64 @@ const DEFAULT_JOB_URL =
 const DEFAULT_EXTENSION_ID = "cbdmkibihimaedoihjhpidclolglnncc";
 const AUTH_VERIFICATION_RE =
   /an email has been sent to you\.?\s*please verify your account|verify your account before you sign in|request a verification email/i;
+const IDENTIFIER_TIMEOUT_MS = 60_000;
+const AUTH_WORKFLOW_TIMEOUT_MS = 120_000;
+const APPLY_ENTRY_TIMEOUT_MS = 60_000;
+const PAGE_FILL_AND_NEXT_TIMEOUT_MS = 60_000;
+const FULL_APPLICATION_TIMEOUT_MS = 300_000;
+
+class PhaseTimeoutError extends Error {
+  constructor(phase, timeoutMs) {
+    super(`${phase} timed out after ${Math.round(timeoutMs / 1000)} seconds.`);
+    this.name = "PhaseTimeoutError";
+    this.phase = phase;
+    this.timeoutMs = timeoutMs;
+    this.reason = `${phase}_timeout`;
+  }
+}
+
+async function withPhaseTimeout(phase, timeoutMs, work) {
+  let timer = null;
+  try {
+    return await Promise.race([
+      Promise.resolve().then(work),
+      new Promise((_, reject) => {
+        timer = setTimeout(
+          () => reject(new PhaseTimeoutError(phase, timeoutMs)),
+          timeoutMs,
+        );
+      }),
+    ]);
+  } finally {
+    if (timer) {
+      clearTimeout(timer);
+    }
+  }
+}
 
 function auditTimestamp() {
   return new Date().toISOString().replace(/[:.]/g, "-");
+}
+
+function pageReachedReview(page) {
+  return Boolean(
+    page?.pageKind === "review" ||
+      page?.hasSubmit ||
+      /review/i.test(page?.currentStep?.title || ""),
+  );
+}
+
+function pageHasBlockingValidation(page) {
+  return Boolean((page?.errors || []).length || page?.workdayRuntimeError);
+}
+
+async function reconcilePageFillTimeoutToReview(pageClient) {
+  await sleep(1200);
+  const page = await inspectPage(pageClient);
+  return {
+    page,
+    reachedReview: pageReachedReview(page) && !pageHasBlockingValidation(page),
+  };
 }
 
 function parseArgs(argv) {
@@ -62,7 +131,6 @@ function parseArgs(argv) {
     extensionAutoNext: false,
     noSeedExtension: false,
     fillMessageTimeoutMs: 0,
-    cdpRepairPhoneCountry: false,
     llmAnswers: false,
     accountEmail: process.env.HUNT_C3_TEST_ACCOUNT_EMAIL || "",
     accountPassword: process.env.HUNT_C3_TEST_ACCOUNT_PASSWORD || "",
@@ -123,8 +191,6 @@ function parseArgs(argv) {
     } else if (arg === "--fill-message-timeout-ms" && next) {
       args.fillMessageTimeoutMs = Number(next);
       i += 1;
-    } else if (arg === "--cdp-repair-phone-country") {
-      args.cdpRepairPhoneCountry = true;
     } else if (arg === "--llm-answers") {
       args.llmAnswers = true;
     } else if (arg === "--no-llm-answers") {
@@ -184,7 +250,6 @@ function usage() {
     "  --extension-auto-next Enable C3's own safe Next-after-fill setting",
     "  --no-seed-extension Skip Chrome storage seeding for repeat p chrome runs",
     "  --fill-message-timeout-ms <ms> Override extension fill message timeout",
-    "  --cdp-repair-phone-country Diagnostic only: patch phone country via CDP if extension fill fails",
     "  --llm-answers Allow backend answer-router decisions during fill",
     "  --no-llm-answers Do not auto-apply backend answer-router decisions during fill (default)",
     "  --account-email <email> Optional account/profile email override",
@@ -324,13 +389,31 @@ function findExtensionId(targets) {
 
 async function ensureOptionsTarget(port, fallbackExtensionId) {
   let targets = await getTargets(port);
+  const extensionId = findExtensionId(targets) || fallbackExtensionId;
+  const blockedExtensionTabs = targets.filter((item) => {
+    const url = String(item.url || "");
+    const title = String(item.title || "");
+    return (
+      item.type === "page" &&
+      (url === `chrome-extension://${extensionId}` ||
+        url === `chrome-extension://${extensionId}/` ||
+        (url.startsWith("chrome-error://") &&
+          (title.includes(`${extensionId} is blocked`) ||
+            title.includes("ERR_BLOCKED_BY_CLIENT"))))
+    );
+  });
+  for (const item of blockedExtensionTabs) {
+    await httpText(port, `/json/close/${item.id}`).catch(() => "");
+  }
+  if (blockedExtensionTabs.length) {
+    targets = await getTargets(port);
+  }
   let target = targets.find((item) =>
     String(item.url || "").includes("/src/options/options.html"),
   );
   if (target) {
     return target;
   }
-  const extensionId = findExtensionId(targets) || fallbackExtensionId;
   if (!extensionId) {
     throw new Error("Could not find loaded C3 extension in CDP targets");
   }
@@ -441,109 +524,13 @@ async function connectTarget(target) {
   return new CdpClient(target.webSocketDebuggerUrl).connect();
 }
 
-function workdayPageKindExpression() {
-  return `(() => {
-    const normalize = (value) => String(value || "").replace(/\\s+/g, " ").trim();
-    const visible = (el) => {
-      if (!el) return false;
-      const style = getComputedStyle(el);
-      const rect = el.getBoundingClientRect();
-      return style.display !== "none" && style.visibility !== "hidden" && rect.width > 0 && rect.height > 0;
-    };
-    const textOf = (el) => normalize([
-      el?.getAttribute?.("aria-label"),
-      el?.getAttribute?.("title"),
-      el?.innerText,
-      el?.textContent
-    ].filter(Boolean).join(" "));
-    const text = document.body ? document.body.innerText : "";
-    const normalizedText = normalize(text);
-    const buttons = [...document.querySelectorAll("button, [role='button'], a")]
-      .filter(visible)
-      .map((el) => textOf(el))
-      .filter(Boolean);
-    const fields = [...document.querySelectorAll("input:not([type='hidden']), textarea, select")]
-      .filter((el) => el.name !== "website" && visible(el))
-      .map((el) => ({
-        id: el.id || "",
-        name: el.name || "",
-        type: el.type || "",
-        autocomplete: el.autocomplete || "",
-        placeholder: el.placeholder || "",
-        label: el.getAttribute("aria-label") || ""
-      }));
-    const fieldText = (field) => [field.id, field.name, field.type, field.autocomplete, field.placeholder, field.label].join(" ");
-    const hasEmailField = fields.some((field) => /email|username|user/i.test(fieldText(field)));
-    const passwordCount = fields.filter((field) => field.type === "password").length;
-    const currentStepNode = document.querySelector('[data-automation-id="progressBarActiveStep"]');
-    const currentStepText = normalize(currentStepNode?.innerText || currentStepNode?.textContent || "");
-    const hasButton = (pattern) => buttons.some((label) => pattern.test(label));
-    const loadingNodes = [...document.querySelectorAll('[aria-busy="true"], [role="progressbar"], [data-automation-id*="loading" i], [class*="loading" i], [class*="spinner" i]')]
-      .filter(visible);
-    const hasClassificationSignal =
-      buttons.length > 0 || fields.length > 0 || Boolean(currentStepText) || normalizedText.length > 80;
-    const stillLoading =
-      document.readyState !== "complete" ||
-      (!hasClassificationSignal && normalizedText.length < 20) ||
-      (loadingNodes.length > 0 && fields.length === 0 && !currentStepText);
-    let pageKind = "unknown";
-    if (stillLoading) pageKind = "loading";
-    else if (/the page you are looking for (doesn't|does not) exist|page not found|job posting is no longer available|job is no longer available/i.test(normalizedText)) pageKind = "posting_not_found";
-    else if (/workday is currently unavailable|service interruption/i.test(normalizedText)) pageKind = "maintenance";
-    else if (/something went wrong/i.test(normalizedText) && /please refresh/i.test(normalizedText)) pageKind = "runtime_error";
-    else if (hasEmailField && passwordCount > 1) pageKind = "signup_form";
-    else if (hasEmailField && passwordCount === 1) pageKind = "signin_form";
-    else if (hasButton(/^sign in with email\\b/i) || hasButton(/sign\\s*in\\s*with\\s*(google|apple)/i)) pageKind = "signin_choice";
-    else if (/start your application/i.test(normalizedText) || hasButton(/^apply manually$/i) || hasButton(/^autofill with resume$/i)) pageKind = "apply_choice";
-    else if (currentStepText && !/create account|sign in/i.test(currentStepText)) pageKind = "application_step";
-    else if (/resume\\/cv|my information|my experience|application questions|voluntary disclosures|self identify|review/i.test(normalizedText)) pageKind = "application_step";
-    else if (hasButton(/^apply\\b/i) || /job requisition id|posted on/i.test(normalizedText)) pageKind = "job_posting";
-    return {
-      href: location.href,
-      title: document.title,
-      readyState: document.readyState,
-      pageKind,
-      stillLoading,
-      fieldCount: fields.length,
-      passwordCount,
-      hasEmailField,
-      buttonCount: buttons.length,
-      currentStepText,
-      loadingNodeCount: loadingNodes.length,
-      bodyHead: normalizedText.slice(0, 800)
-    };
-  })()`;
-}
-
-async function inspectWorkdayPageKind(pageClient) {
-  return pageClient.evaluate(workdayPageKindExpression(), 30000);
-}
-
 async function waitForWorkdayPageReady(pageClient, timeoutMs = 45000) {
-  const started = Date.now();
-  let last = null;
-  let stableSince = 0;
-  while (Date.now() - started < timeoutMs) {
-    const state = await inspectWorkdayPageKind(pageClient);
-    const key = `${state.href}|${state.pageKind}|${state.fieldCount}|${state.buttonCount}`;
-    if (!state.stillLoading && state.pageKind !== "loading") {
-      if (key === last?.key) {
-        if (!stableSince) stableSince = Date.now();
-        if (Date.now() - stableSince >= 700) {
-          return { ...state, waitedMs: Date.now() - started };
-        }
-      } else {
-        stableSince = Date.now();
-      }
-    }
-    last = { key, state };
-    await sleep(500);
-  }
-  return {
-    ...(last?.state || { pageKind: "unknown", stillLoading: true }),
-    timedOut: true,
-    waitedMs: Date.now() - started,
-  };
+  const identifier = new WorkdayWorkflowIdentifier({
+    pageClient,
+    sleep,
+    authVerificationPattern: AUTH_VERIFICATION_RE,
+  });
+  return identifier.waitForReady(timeoutMs);
 }
 
 async function seedExtension(optionsClient, seedPayload, args = {}) {
@@ -611,10 +598,14 @@ async function setExtensionAutoNext(optionsClient, enabled) {
   );
 }
 
-async function navigate(pageClient, applyUrl) {
+async function navigate(
+  pageClient,
+  applyUrl,
+  waitForReady = () => waitForWorkdayPageReady(pageClient),
+) {
   await pageClient.send("Page.enable");
   await pageClient.send("Page.navigate", { url: applyUrl });
-  const readyState = await waitForWorkdayPageReady(pageClient);
+  const readyState = await waitForReady();
   logWorkflowPhase(
     "site",
     readyState.timedOut ? "blocked" : "ok",
@@ -661,19 +652,50 @@ function looksLikeAuthPage(summary = {}) {
 }
 
 function expectedVerificationDomains(...urls) {
-  const hosts = new Set(["workday.com", "myworkday.com", "myworkdayjobs.com"]);
+  const hosts = new Set();
   for (const value of urls) {
     try {
       const host = new URL(value).hostname;
       if (host) hosts.add(host);
-      const parts = host.split(".");
-      if (parts.length > 2) hosts.add(parts.slice(-3).join("."));
-      if (parts.length > 1) hosts.add(parts.slice(-2).join("."));
     } catch (_error) {
-      // Ignore non-URL values; the generic Workday hosts above remain.
+      // Ignore non-URL values; generic Workday hosts are only a no-context fallback.
     }
   }
+  if (!hosts.size) {
+    ["workday.com", "myworkday.com", "myworkdayjobs.com"].forEach((host) =>
+      hosts.add(host),
+    );
+  }
   return [...hosts].filter(Boolean);
+}
+
+function authReturnUrl(afterHref, fallbackApplyUrl) {
+  try {
+    const current = new URL(afterHref || "");
+    if (/\/userHome\b/i.test(current.pathname)) {
+      return fallbackApplyUrl;
+    }
+  } catch (_error) {
+    // Invalid URLs fall through to the normal workflow loop.
+  }
+  return "";
+}
+
+function workdayAppScope(value) {
+  try {
+    const url = new URL(value);
+    const segments = url.pathname
+      .split("/")
+      .map((segment) => segment.trim())
+      .filter(Boolean)
+      .filter((segment) => !/^[a-z]{2}-[A-Z]{2}$/i.test(segment));
+    return {
+      host: url.hostname.toLowerCase(),
+      appSegment: String(segments[0] || "").toLowerCase(),
+    };
+  } catch (_error) {
+    return { host: "", appSegment: "" };
+  }
 }
 
 async function resolveAuthVerificationViaMail(pageClient, args, context = {}) {
@@ -746,6 +768,8 @@ async function resolveAuthVerificationViaMail(pageClient, args, context = {}) {
         90,
     ),
     jobUrl: before.href || context.applyUrl || args.jobUrl,
+    expectedApplyUrl: context.applyUrl || args.jobUrl || before.href,
+    expectedJobUrl: args.jobUrl || context.applyUrl || before.href,
   };
   const bridge = await verifyEmail(request, { provider });
   if (!bridge.ok || !bridge.link) {
@@ -762,6 +786,8 @@ async function resolveAuthVerificationViaMail(pageClient, args, context = {}) {
         since: request.since,
         timeoutSeconds: request.timeoutSeconds,
         jobUrl: request.jobUrl,
+        expectedApplyUrl: request.expectedApplyUrl,
+        expectedJobUrl: request.expectedJobUrl,
       },
       bridge,
       resend,
@@ -784,6 +810,40 @@ async function resolveAuthVerificationViaMail(pageClient, args, context = {}) {
   } catch (_error) {
     // If the verification URL is unusual, keep the verified page state and let
     // the main loop decide whether a sign-in/application page is available.
+  }
+  const expectedScope = workdayAppScope(
+    request.expectedApplyUrl || request.expectedJobUrl,
+  );
+  const afterScope = workdayAppScope(after.href || "");
+  if (
+    expectedScope.host &&
+    afterScope.host &&
+    (afterScope.host !== expectedScope.host ||
+      (expectedScope.appSegment &&
+        afterScope.appSegment &&
+        afterScope.appSegment !== expectedScope.appSegment))
+  ) {
+    return {
+      ok: false,
+      reason: "verification_link_tenant_mismatch",
+      message:
+        "Verification link opened a different Workday tenant than the current run.",
+      provider,
+      request: {
+        email: request.email,
+        expectedDomains: request.expectedDomains,
+        since: request.since,
+        timeoutSeconds: request.timeoutSeconds,
+        jobUrl: request.jobUrl,
+        expectedApplyUrl: request.expectedApplyUrl,
+        expectedJobUrl: request.expectedJobUrl,
+      },
+      bridge,
+      resend,
+      postVerifyRedirect,
+      before,
+      after,
+    };
   }
   return {
     ok: true,
@@ -857,6 +917,10 @@ function pageSummaryExpression() {
       return stepMatch ? { current: Number(stepMatch[1]), total: Number(stepMatch[2]), title: normalize(stepMatch[3]) } : null;
     };
     const currentStep = readCurrentStep();
+    const actionText = (value) => {
+      const parts = normalize(value).split(" ").filter(Boolean);
+      return parts.filter((part, index) => index === 0 || part.toLowerCase() !== parts[index - 1].toLowerCase()).join(" ");
+    };
     const buttons = [...document.querySelectorAll("button")].filter(visible).map((button) => ({
       text: (button.innerText || button.textContent || "").replace(/\\s+/g, " ").trim(),
       automationId: button.getAttribute("data-automation-id") || "",
@@ -907,11 +971,18 @@ function pageSummaryExpression() {
       .filter(Boolean)
       .filter((text) => !/successfully uploaded/i.test(text))
       .slice(0, 30);
+    const pageKind = /community\\.workday\\.com\\/maintenance-page/i.test(location.href)
+      || /workday is currently unavailable|service interruption/i.test(text)
+      ? "maintenance"
+      : buttons.some((button) => /^submit$/i.test(actionText(button.text))) || /review/i.test(currentStep?.title || "")
+        ? "review"
+        : "";
     return {
       href: location.href,
       title: document.title,
       currentStep,
-      hasSubmit: buttons.some((button) => /^submit$/i.test(button.text)),
+      pageKind,
+      hasSubmit: buttons.some((button) => /^submit$/i.test(actionText(button.text))),
       hasNext: buttons.some((button) => isSafeNextText(button.text) && !button.disabled),
       buttons,
       fields,
@@ -1128,164 +1199,6 @@ async function clickWorkdayStep(pageClient, stepName) {
   };
 }
 
-async function clickApplyManuallyEntry(pageClient) {
-  const readyState = await waitForWorkdayPageReady(pageClient);
-  if (readyState.stillLoading || readyState.pageKind === "loading") {
-    return {
-      ok: false,
-      phase: "apply_entry",
-      reason: "workday_page_still_loading",
-      readyState,
-    };
-  }
-  if (readyState.pageKind === "posting_not_found") {
-    return {
-      ok: false,
-      phase: "apply_entry",
-      reason: "posting_not_found",
-      message: "Workday says this job posting page does not exist.",
-      readyState,
-    };
-  }
-  const result = await pageClient.evaluate(
-    `(async () => {
-      const normalize = (value) => String(value || "").replace(/\\s+/g, " ").trim();
-      const visible = (el) => {
-        const style = getComputedStyle(el);
-        const rect = el.getBoundingClientRect();
-        return style.display !== "none" && style.visibility !== "hidden" && rect.width > 0 && rect.height > 0;
-      };
-      const bodyText = document.body ? document.body.innerText : "";
-      const currentStep = document.querySelector('[data-automation-id="progressBarActiveStep"]')
-        || bodyText.match(/current\\s+s?tep\\s+\\d+\\s+of\\s+\\d+[^\\n]*/i);
-      const currentStepText = normalize(currentStep?.innerText || currentStep?.textContent || currentStep?.[0] || "");
-      if (currentStep && !/create account|sign in|log in|login|register|sign up/i.test(currentStepText)) {
-        return {
-          ok: true,
-          skipped: true,
-          phase: "apply_entry",
-          reason: "already_on_application_step",
-          href: location.href,
-        };
-      }
-      if (currentStep) {
-        return {
-          ok: true,
-          skipped: true,
-          phase: "apply_entry",
-          reason: "already_on_auth_step",
-          href: location.href,
-          currentStep: currentStepText,
-        };
-      }
-      if (!/Start Your Application/i.test(bodyText)) {
-        return {
-          ok: true,
-          skipped: true,
-          phase: "apply_entry",
-          reason: "not_on_start_application_page",
-          href: location.href,
-        };
-      }
-      const candidates = [...document.querySelectorAll("a, button, [role='button']")]
-        .filter(visible)
-        .map((el) => {
-          const rect = el.getBoundingClientRect();
-          return {
-            el,
-            text: normalize([el.getAttribute("aria-label"), el.innerText, el.textContent].filter(Boolean).join(" ")),
-            href: el.href || "",
-            x: Math.round(rect.left + rect.width / 2),
-            y: Math.round(rect.top + rect.height / 2),
-          };
-        });
-      const candidate = candidates.find((item) => /^Apply Manually$/i.test(item.text))
-        || candidates.find((item) => /\\/apply\\/applyManually/i.test(item.href));
-      if (!candidate) {
-        return {
-          ok: false,
-          phase: "apply_entry",
-          reason: "apply_manually_not_found",
-          href: location.href,
-          candidates: candidates.map((item) => item.text || item.href).filter(Boolean).slice(0, 30),
-        };
-      }
-      return {
-        ok: true,
-        phase: "apply_entry",
-        clicked: true,
-        label: candidate.text || "Apply Manually",
-        href: candidate.href || "",
-        x: candidate.x,
-        y: candidate.y,
-        reason: candidate.href ? "apply_manually_href_found" : "apply_manually_button_found",
-      };
-    })()`,
-    30000,
-  );
-  if (result?.ok) {
-    if (!result.skipped && result.href) {
-      await navigate(pageClient, result.href);
-    } else if (!result.skipped && result.x != null && result.y != null) {
-      await cdpClick(pageClient, result.x, result.y);
-      await waitForWorkdayPageReady(pageClient);
-    }
-    if (result.skipped) {
-      return result;
-    }
-    const after = await pageClient.evaluate(
-      `(() => {
-        const normalize = (value) => String(value || "").replace(/\\s+/g, " ").trim();
-        const text = document.body ? document.body.innerText : "";
-        const readCurrentStep = () => {
-          const activeStep = document.querySelector('[data-automation-id="progressBarActiveStep"]');
-          if (activeStep) {
-            const steps = [...document.querySelectorAll('[data-automation-id^="progressBar"]')];
-            const labels = [...activeStep.querySelectorAll("label")]
-              .map((label) => normalize(label.innerText || label.textContent || ""))
-              .filter(Boolean);
-            const title = labels.at(-1)
-              || normalize(activeStep.innerText || activeStep.textContent || "").split(/\\n/).map(normalize).filter(Boolean).at(-1)
-              || "";
-            if (title) {
-              return {
-                current: Math.max(steps.indexOf(activeStep) + 1, 1),
-                total: steps.length || 1,
-                title
-              };
-            }
-          }
-          const stepMatch = text.match(/current\\s+s?tep\\s+(\\d+)\\s+of\\s+(\\d+)\\s*\\n([^\\n]+)/i)
-            || normalize(text).match(/current\\s+s?tep\\s+(\\d+)\\s+of\\s+(\\d+)\\s+(.+?)(?:\\s+s?tep\\s+\\d+\\s+of\\s+\\d+|$)/i);
-          return stepMatch ? { current: Number(stepMatch[1]), total: Number(stepMatch[2]), title: normalize(stepMatch[3]) } : null;
-        };
-        const currentStep = readCurrentStep();
-        return {
-          href: location.href,
-          currentStep,
-        };
-      })()`,
-      10000,
-    );
-    return {
-      ...result,
-      ok: Boolean(after?.currentStep),
-      href: after?.href || result.href || "",
-      currentStep: after?.currentStep || null,
-      reason: after?.currentStep
-        ? "apply_manually_clicked"
-        : "application_step_not_reached",
-    };
-  }
-  return (
-    result || {
-      ok: false,
-      phase: "apply_entry",
-      reason: "apply_entry_detection_failed",
-    }
-  );
-}
-
 async function cdpClick(client, x, y) {
   await client.send("Input.dispatchMouseEvent", {
     type: "mouseMoved",
@@ -1311,304 +1224,6 @@ async function cdpClick(client, x, y) {
     buttons: 0,
     clickCount: 1,
   });
-}
-
-async function cdpArrowDownEnter(client, presses) {
-  for (let i = 0; i < presses; i++) {
-    await client.send("Input.dispatchKeyEvent", {
-      type: "keyDown",
-      key: "ArrowDown",
-      code: "ArrowDown",
-      windowsVirtualKeyCode: 40,
-    });
-    await client.send("Input.dispatchKeyEvent", {
-      type: "keyUp",
-      key: "ArrowDown",
-      code: "ArrowDown",
-      windowsVirtualKeyCode: 40,
-    });
-    await new Promise((r) => setTimeout(r, 25));
-  }
-  await new Promise((r) => setTimeout(r, 200));
-  await client.send("Input.dispatchKeyEvent", {
-    type: "keyDown",
-    key: "Enter",
-    code: "Enter",
-    windowsVirtualKeyCode: 13,
-  });
-  await client.send("Input.dispatchKeyEvent", {
-    type: "keyUp",
-    key: "Enter",
-    code: "Enter",
-    windowsVirtualKeyCode: 13,
-  });
-}
-
-async function cdpKey(client, key, code, virtualKeyCode, modifiers = 0) {
-  await client.send("Input.dispatchKeyEvent", {
-    type: "keyDown",
-    key,
-    code,
-    windowsVirtualKeyCode: virtualKeyCode,
-    nativeVirtualKeyCode: virtualKeyCode,
-    modifiers,
-  });
-  await client.send("Input.dispatchKeyEvent", {
-    type: "keyUp",
-    key,
-    code,
-    windowsVirtualKeyCode: virtualKeyCode,
-    nativeVirtualKeyCode: virtualKeyCode,
-    modifiers,
-  });
-}
-
-async function cdpTypeText(client, text) {
-  await client.send("Input.insertText", { text: String(text || "") });
-}
-
-async function checkPhoneCountryCommitted(pageClient) {
-  return pageClient.evaluate(
-    `(() => {
-      function hasCanada(el) {
-        var t = ((el && (el.innerText || el.textContent)) || "").toLowerCase().replace(/\\s+/g, " ");
-        return t.includes("canada") && (t.includes("+1") || t.includes("(+1)"));
-      }
-      var input = document.getElementById("phoneNumber--countryPhoneCode");
-      if (input) {
-        var node = input;
-        for (var i = 0; i < 10 && node; i++) {
-          node = node.parentElement;
-          if (node && hasCanada(node)) return true;
-        }
-      }
-      var checked = document.querySelector('[aria-label*="Canada"][aria-checked="true"], [aria-label*="Canada"][aria-selected="true"]');
-      if (checked) return true;
-      var chips = Array.from(document.querySelectorAll('[data-automation-id*="country"], [class*="chip"], [class*="tag"], [class*="pill"]'));
-      if (chips.some(hasCanada)) return true;
-      return false;
-    })()`,
-    5000,
-  );
-}
-
-async function tryFixPhoneCountryCodeViaCdp(pageClient) {
-  try {
-    await pageClient.send("Page.bringToFront", {});
-    // Get the country code input's viewport coords to open the dropdown.
-    const inputCoords = await pageClient.evaluate(
-      `(() => {
-        var input = document.getElementById("phoneNumber--countryPhoneCode");
-        if (!input) return null;
-        var rect = input.getBoundingClientRect();
-        if (!rect || rect.width === 0) return null;
-        return { x: Math.round(rect.left + rect.width / 2), y: Math.round(rect.top + rect.height / 2) };
-      })()`,
-      3000,
-    );
-    if (!inputCoords || !inputCoords.x) {
-      process.stderr.write("[phoneCountryFix] input not found\n");
-      return false;
-    }
-
-    // Attempt 1: CDP click to open, scroll to exact Canada, then click
-    // the row radio. Plain ArrowDown/Enter can commit the wrong country.
-    await cdpClick(pageClient, inputCoords.x, inputCoords.y);
-    await sleep(500);
-    const canadaTarget = await pageClient.evaluate(
-      `(async () => {
-        const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
-        const visible = (el) => {
-          if (!el) return false;
-          const style = getComputedStyle(el);
-          const rect = el.getBoundingClientRect();
-          return style.display !== "none" && style.visibility !== "hidden" && rect.width > 0 && rect.height > 0;
-        };
-        const textOf = (el) => (el?.innerText || el?.textContent || el?.getAttribute?.("aria-label") || "").replace(/\\s+/g, " ").trim();
-        const input = document.getElementById("phoneNumber--countryPhoneCode");
-        if (!input) return { ok: false, reason: "phone_input_not_found" };
-        input.focus();
-        const listboxForOptions = () => [...document.querySelectorAll('[data-automation-id="activeListContainer"], [data-automation-id="promptSearchResultList"], [role="listbox"]')]
-          .filter(visible)
-          .sort((a, b) => Math.max(0, b.scrollHeight - b.clientHeight) - Math.max(0, a.scrollHeight - a.clientHeight))[0] || null;
-        const inListViewport = (option, listbox) => {
-          if (!option || !listbox) return true;
-          const rect = option.getBoundingClientRect();
-          const listRect = listbox.getBoundingClientRect();
-          return rect.bottom > listRect.top && rect.top < listRect.bottom && rect.right > listRect.left && rect.left < listRect.right;
-        };
-        const canadaOption = () => {
-          const listbox = listboxForOptions();
-          const options = [...document.querySelectorAll('[role="option"]')]
-            .filter(visible)
-            .filter((option) => inListViewport(option, listbox))
-            .map((option) => ({ option, text: textOf(option) }));
-          const match = options.find((item) => /canada/i.test(item.text) && /(\\+1|\\(\\+1\\))/.test(item.text));
-          return { match, listbox, options: options.slice(0, 12).map((item) => item.text) };
-        };
-        let state = canadaOption();
-        let attempts = 0;
-        while (!state.match && state.listbox && attempts < 80 && state.listbox.scrollHeight > state.listbox.clientHeight + 2) {
-          attempts += 1;
-          state.listbox.scrollTop += 260;
-          state.listbox.dispatchEvent(new Event("scroll", { bubbles: true }));
-          await sleep(70);
-          state = canadaOption();
-        }
-        if (!state.match) {
-          return { ok: false, reason: "canada_option_not_found", attempts, options: state.options || [] };
-        }
-        const option = state.match.option;
-        const radio = option.querySelector('input[data-automation-id="radioBtn"], input[type="radio"], [role="radio"]');
-        const target = radio && visible(radio) ? radio : option;
-        const rect = target.getBoundingClientRect();
-        return {
-          ok: true,
-          reason: "canada_radio_target_found",
-          attempts,
-          text: state.match.text,
-          x: Math.round(rect.left + rect.width / 2),
-          y: Math.round(rect.top + rect.height / 2),
-          targetAutomationId: target.getAttribute("data-automation-id") || "",
-          options: state.options || []
-        };
-      })()`,
-      15000,
-    );
-    if (canadaTarget?.ok) {
-      await cdpClick(pageClient, canadaTarget.x, canadaTarget.y);
-      await sleep(900);
-      if (await checkPhoneCountryCommitted(pageClient)) {
-        process.stderr.write(
-          "[phoneCountryFix] committed via exact Canada radio click\n",
-        );
-        return true;
-      }
-    }
-    // Attempt 2: reload the page. Workday often pre-fills the country code on reload.
-    process.stderr.write(
-      "[phoneCountryFix] exact Canada radio attempt failed; reloading page\n",
-    );
-    await pageClient.send("Page.reload", { ignoreCache: false });
-    await new Promise((r) => setTimeout(r, 4000));
-    if (await checkPhoneCountryCommitted(pageClient)) {
-      process.stderr.write("[phoneCountryFix] committed after page reload\n");
-      return true;
-    }
-
-    process.stderr.write("[phoneCountryFix] all attempts failed\n");
-    return false;
-  } catch (_e) {
-    process.stderr.write("[phoneCountryFix] error: " + String(_e) + "\n");
-    return false;
-  }
-}
-
-async function tryFixWorkdayDateSectionsViaCdp(pageClient) {
-  const fields = await pageClient.evaluate(
-    `(() => {
-      const visible = (el) => {
-        if (!el) return false;
-        const style = getComputedStyle(el);
-        const rect = el.getBoundingClientRect();
-        return style.display !== "none" && style.visibility !== "hidden" && rect.width > 0 && rect.height > 0 && !el.disabled;
-      };
-      const controls = [...document.querySelectorAll('input[id*="dateSectionMonth"], input[id*="dateSectionDay"], input[id*="dateSectionYear"]')]
-        .filter(visible)
-        .map((input) => {
-          input.scrollIntoView({ block: "center", inline: "center" });
-          const rect = input.getBoundingClientRect();
-          const id = input.id || "";
-          let value = input.value || "";
-          if (/dateSectionMonth/i.test(id)) value = value || "5";
-          if (/dateSectionDay/i.test(id)) value = value || "25";
-          if (/dateSectionYear/i.test(id)) value = value || "2026";
-          return {
-            id,
-            label: input.getAttribute("aria-label") || "",
-            value,
-            beforeValue: input.value || "",
-            x: Math.round(rect.left + rect.width / 2),
-            y: Math.round(rect.top + rect.height / 2)
-          };
-        });
-      return controls;
-    })()`,
-    10000,
-  );
-  if (!Array.isArray(fields) || fields.length === 0) {
-    return { ok: false, reason: "date_section_fields_not_found" };
-  }
-  const attempts = [];
-  for (const field of fields) {
-    await cdpClick(pageClient, field.x, field.y);
-    await sleep(80);
-    await cdpKey(pageClient, "a", "KeyA", 65, 2);
-    await sleep(40);
-    await pageClient.send("Input.dispatchKeyEvent", {
-      type: "keyDown",
-      key: "Backspace",
-      code: "Backspace",
-      windowsVirtualKeyCode: 8,
-      nativeVirtualKeyCode: 8,
-    });
-    await pageClient.send("Input.dispatchKeyEvent", {
-      type: "keyUp",
-      key: "Backspace",
-      code: "Backspace",
-      windowsVirtualKeyCode: 8,
-      nativeVirtualKeyCode: 8,
-    });
-    await sleep(80);
-    await cdpTypeText(pageClient, field.value);
-    await sleep(80);
-    await cdpKey(pageClient, "Tab", "Tab", 9);
-    await sleep(180);
-    const after = await pageClient.evaluate(
-      `(() => {
-        const input = document.getElementById(${JSON.stringify(field.id)});
-        return input ? {
-          id: input.id || "",
-          value: input.value || "",
-          invalid: input.getAttribute("aria-invalid") || ""
-        } : null;
-      })()`,
-      5000,
-    );
-    attempts.push({ ...field, after });
-  }
-  await sleep(700);
-  const state = await pageClient.evaluate(
-    `(() => {
-      const visible = (el) => {
-        if (!el) return false;
-        const style = getComputedStyle(el);
-        const rect = el.getBoundingClientRect();
-        return style.display !== "none" && style.visibility !== "hidden" && rect.width > 0 && rect.height > 0;
-      };
-      const errors = [...document.querySelectorAll('[role="alert"], [data-automation-id*="error"], [id*="error"], .css-1iucqxd')]
-        .filter(visible)
-        .map((el) => (el.innerText || el.textContent || "").replace(/\\s+/g, " ").trim())
-        .filter(Boolean)
-        .slice(0, 10);
-      const values = [...document.querySelectorAll('input[id*="dateSectionMonth"], input[id*="dateSectionDay"], input[id*="dateSectionYear"]')]
-        .filter(visible)
-        .map((input) => ({ id: input.id || "", value: input.value || "", invalid: input.getAttribute("aria-invalid") || "" }));
-      return { errors, values };
-    })()`,
-    10000,
-  );
-  const hasDateError = (state.errors || []).some((error) =>
-    /desired start date|required and must have a value/i.test(error),
-  );
-  return {
-    ok: !hasDateError,
-    reason: hasDateError
-      ? "date_section_still_has_validation_error"
-      : "date_section_keyboard_committed",
-    attempts,
-    state,
-  };
 }
 
 async function suppressStaleWorkdayDateErrors(summary) {
@@ -1660,152 +1275,6 @@ async function suppressStaleWorkdayDateErrors(summary) {
   };
 }
 
-async function tryFixKnownVisibleValidationErrors(pageClient) {
-  return pageClient.evaluate(
-    `(async () => {
-      const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
-      const normalize = (value) => String(value || "").replace(/\\s+/g, " ").trim();
-      const visible = (el) => {
-        if (!el) return false;
-        const style = getComputedStyle(el);
-        const rect = el.getBoundingClientRect();
-        return style.display !== "none" && style.visibility !== "hidden" && rect.width > 0 && rect.height > 0;
-      };
-      const clickReal = (target) => {
-        if (!target) return false;
-        target.scrollIntoView({ block: "center", inline: "center" });
-        const rect = target.getBoundingClientRect();
-        const init = {
-          bubbles: true,
-          cancelable: true,
-          view: window,
-          button: 0,
-          buttons: 1,
-          clientX: Math.round(rect.left + rect.width / 2),
-          clientY: Math.round(rect.top + rect.height / 2)
-        };
-        ["mouseover", "mousemove", "pointerdown", "mousedown"].forEach((type) => target.dispatchEvent(new PointerEvent(type, init)));
-        target.dispatchEvent(new PointerEvent("pointerup", { ...init, buttons: 0 }));
-        target.dispatchEvent(new MouseEvent("mouseup", { ...init, buttons: 0 }));
-        target.dispatchEvent(new MouseEvent("click", { ...init, buttons: 0 }));
-        return true;
-      };
-      const visibleValidationErrors = () => [...document.querySelectorAll([
-        '[role="alert"]',
-        '[data-automation-id*="error" i]',
-        '[id*="error" i]',
-        '.css-1iucqxd'
-      ].join(","))]
-        .filter(visible)
-        .map((node) => normalize(node.innerText || node.textContent || ""))
-        .filter(Boolean)
-        .filter((text, index, all) => all.indexOf(text) === index);
-      const errors = visibleValidationErrors();
-      const body = normalize(document.body?.innerText || "");
-      const repairs = [];
-
-      if (/preferred communication channel/i.test(errors.join(" ") || body)) {
-        const target = [...document.querySelectorAll('button[aria-haspopup="listbox"], button')]
-          .filter(visible)
-          .filter((button) => {
-            const text = normalize([button.innerText, button.textContent, button.getAttribute("aria-label"), button.id, button.name].filter(Boolean).join(" "));
-            return /select one/i.test(text) && (button.getAttribute("aria-invalid") === "true" || /required/i.test(text));
-          })[0];
-        if (target && clickReal(target)) {
-          await sleep(900);
-          const option = [...document.querySelectorAll('[role="option"], [data-automation-id="promptOption"], div, li')]
-            .filter(visible)
-            .find((candidate) => /^e-?mail$|^email$|personal email|email address/i.test(normalize(candidate.innerText || candidate.textContent || "")));
-          repairs.push({
-            kind: "preferred_communication_channel",
-            opened: true,
-            option: option ? normalize(option.innerText || option.textContent || "") : "",
-            clicked: Boolean(option && clickReal(option))
-          });
-          await sleep(1200);
-        }
-      }
-
-      if (/candidate privacy statement|consent to the transfer and processing/i.test(errors.join(" ") || body)) {
-        const checkbox = [...document.querySelectorAll('input[type="checkbox"]')]
-          .find((input) => {
-            const id = input.id || "";
-            const label = id ? document.querySelector('label[for="' + CSS.escape(id) + '"]') : null;
-            const text = normalize([
-              input.id,
-              input.name,
-              input.getAttribute("aria-label"),
-              label?.innerText,
-              input.closest("label")?.innerText,
-              input.closest('[data-automation-id], section, div')?.innerText,
-            ].filter(Boolean).join(" "));
-            return /consent|candidate privacy statement|privacy statement|termsAndConditions|acceptTermsAndAgreements/i.test(text);
-          });
-        if (checkbox) {
-          const id = checkbox.id || "";
-          const label = id ? document.querySelector('label[for="' + CSS.escape(id) + '"]') : null;
-          const clicked = clickReal(label || checkbox);
-          if (!checkbox.checked) {
-            checkbox.checked = true;
-            checkbox.dispatchEvent(new Event("input", { bubbles: true }));
-            checkbox.dispatchEvent(new Event("change", { bubbles: true }));
-          }
-          repairs.push({
-            kind: "candidate_privacy_consent",
-            id,
-            clicked,
-            checked: Boolean(checkbox.checked)
-          });
-          await sleep(800);
-        }
-      }
-
-      if (/race\\(s\\)|ethnicity\\(ies\\)|ethnicity/i.test(errors.join(" "))) {
-        const neutralEthnicity = [...document.querySelectorAll('input[type="checkbox"]')]
-          .find((input) => {
-            const id = input.id || "";
-            const label = id ? document.querySelector('label[for="' + CSS.escape(id) + '"]') : null;
-            const text = normalize([
-              input.id,
-              input.name,
-              input.getAttribute("aria-label"),
-              label?.innerText,
-              input.closest("label")?.innerText,
-              input.closest('[data-automation-id], section, div')?.innerText,
-            ].filter(Boolean).join(" "));
-            return /ethnicity|race/i.test(text) && /i do not wish to answer\\.?/i.test(text);
-          });
-        if (neutralEthnicity) {
-          const id = neutralEthnicity.id || "";
-          const label = id ? document.querySelector('label[for="' + CSS.escape(id) + '"]') : null;
-          const clicked = clickReal(label || neutralEthnicity);
-          if (!neutralEthnicity.checked || neutralEthnicity.getAttribute("aria-checked") !== "true") {
-            neutralEthnicity.checked = true;
-            neutralEthnicity.setAttribute("aria-checked", "true");
-            neutralEthnicity.dispatchEvent(new Event("input", { bubbles: true }));
-            neutralEthnicity.dispatchEvent(new Event("change", { bubbles: true }));
-          }
-          repairs.push({
-            kind: "ethnicity_non_disclosure",
-            id,
-            clicked,
-            checked: Boolean(neutralEthnicity.checked)
-          });
-          await sleep(800);
-        }
-      }
-
-      return {
-        ok: repairs.some((repair) => repair.clicked || repair.checked),
-        repairs,
-        beforeErrors: errors,
-        afterErrors: visibleValidationErrors()
-      };
-    })()`,
-    30000,
-  );
-}
-
 function fillMessageTimeoutMs(args) {
   if (
     Number.isFinite(args.fillMessageTimeoutMs) &&
@@ -1816,7 +1285,7 @@ function fillMessageTimeoutMs(args) {
   if (args.extensionAutoNext) {
     return 600000;
   }
-  return 120000;
+  return PAGE_FILL_AND_NEXT_TIMEOUT_MS;
 }
 
 async function fillCurrentPage(optionsClient, applyUrl, args, pageContext = {}) {
@@ -1995,516 +1464,6 @@ async function fillCurrentPage(optionsClient, applyUrl, args, pageContext = {}) 
   );
 }
 
-async function tryFixWorkdaySourceViaKeyboard(pageClient) {
-  function isUnsafeSourceText(text) {
-    return /\b(referr?al|referred|refer|connection)\b/i.test(String(text || ""));
-  }
-
-  async function dispatchKey(key, code) {
-    await pageClient.send("Input.dispatchKeyEvent", {
-      type: "keyDown",
-      key,
-      code: key,
-      windowsVirtualKeyCode: code,
-      nativeVirtualKeyCode: code,
-    });
-    await pageClient.send("Input.dispatchKeyEvent", {
-      type: "keyUp",
-      key,
-      code: key,
-      windowsVirtualKeyCode: code,
-      nativeVirtualKeyCode: code,
-    });
-  }
-  async function sourceKeyboardState() {
-    return pageClient.evaluate(
-      `(() => {
-        const visible = (el) => {
-          if (!el) return false;
-          const style = getComputedStyle(el);
-          const rect = el.getBoundingClientRect();
-          return style.display !== "none" && style.visibility !== "hidden" && rect.width > 0 && rect.height > 0;
-        };
-        const textOf = (el) => (el?.innerText || el?.textContent || el?.getAttribute?.("aria-label") || "").replace(/\\s+/g, " ").trim();
-        const labelOf = (el) => [el?.getAttribute?.("aria-label"), textOf(el)].filter(Boolean).join(" ");
-        const input = document.getElementById("source--source") || document.querySelector('input[data-uxi-widget-type="selectinput"]');
-        const container = input?.closest?.('[data-automation-id="formField"], [data-automation-id="formField-source"]') || input?.parentElement;
-        const text = textOf(container);
-        const selected = [...(container?.querySelectorAll?.('[data-automation-id="selectedItem"], [data-automation-id="promptSelectionLabel"], [aria-label*="press delete"]') || [])]
-          .filter(visible)
-          .map((el) => [el.getAttribute("aria-label"), textOf(el)].filter(Boolean).join(" "))
-          .join(" ")
-          .replace(/\\s+/g, " ")
-          .trim();
-        const options = [...document.querySelectorAll('[role="option"], [data-automation-id="menuItem"]')]
-          .filter(visible)
-          .map((el) => ({
-            text: textOf(el),
-            aria: el.getAttribute("aria-label") || "",
-            label: labelOf(el),
-            selected: el.getAttribute("aria-selected") || ""
-          }))
-          .filter((option) => /campus|career|employee referral|event|job alert|job board|job sites?|social|industry/i.test(option.label))
-          .slice(0, 30);
-        const highlighted = options.find((option) => option.selected === "true") || null;
-        const selectedByCount = /\\b[1-9]\\d*\\s+items?\\s+selected\\b/i.test(text);
-        const selectedByLabel = selected && !/^expanded$/i.test(selected) && !/^search$/i.test(selected);
-        const unsafe = /\\b(referr?al|referred|refer|connection)\\b/i.test(selected || text);
-        return {
-          text,
-          selected,
-          unsafe,
-          selectedOk: Boolean((selectedByCount || selectedByLabel) && !unsafe),
-          highlighted,
-          options
-        };
-      })()`,
-      20000,
-    );
-  }
-  const target = await pageClient.evaluate(
-    `(async () => {
-      const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
-      const visible = (el) => {
-        if (!el) return false;
-        const style = getComputedStyle(el);
-        const rect = el.getBoundingClientRect();
-        return style.display !== "none" && style.visibility !== "hidden" && rect.width > 0 && rect.height > 0 && !el.disabled;
-      };
-      const textOf = (el) => (el?.innerText || el?.textContent || "").replace(/\\s+/g, " ").trim();
-      const isUnsafeSource = (value) => /\\b(referr?al|referred|refer|connection)\\b/i.test(String(value || ""));
-      const hasAnySelection = (input) => {
-        const container = input.closest('[data-automation-id="formField"], [data-automation-id="formField-source"]') || input.parentElement;
-        const text = textOf(container);
-        const selected = [...(container?.querySelectorAll?.('[data-automation-id="selectedItem"], [data-automation-id="promptSelectionLabel"], [aria-label*="press delete"]') || [])]
-          .map((el) => [el.getAttribute("aria-label"), textOf(el)].filter(Boolean).join(" "))
-          .join(" ")
-          .replace(/\\s+/g, " ")
-          .trim();
-        if (isUnsafeSource(selected || text)) {
-          return false;
-        }
-        return /\\b[1-9]\\d*\\s+items?\\s+selected\\b/i.test(text) || (selected && !/^expanded$/i.test(selected) && !/^search$/i.test(selected));
-      };
-      const clearUnsafeSelection = (input) => {
-        const container = input.closest('[data-automation-id="formField"], [data-automation-id="formField-source"]') || input.parentElement;
-        const selected = [...(container?.querySelectorAll?.('[data-automation-id="selectedItem"], [aria-label*="press delete"]') || [])]
-          .find((el) => isUnsafeSource([el.getAttribute("aria-label"), textOf(el)].filter(Boolean).join(" ")));
-        if (!selected) {
-          return false;
-        }
-        selected.focus();
-        selected.dispatchEvent(new KeyboardEvent("keydown", { key: "Delete", code: "Delete", keyCode: 46, which: 46, bubbles: true, cancelable: true }));
-        selected.dispatchEvent(new KeyboardEvent("keyup", { key: "Delete", code: "Delete", keyCode: 46, which: 46, bubbles: true, cancelable: true }));
-        const deleteCharm = selected.querySelector('[data-automation-id="DELETE_charm"]') || selected;
-        deleteCharm.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, view: window }));
-        return true;
-      };
-      const input = document.getElementById("source--source") || [...document.querySelectorAll('input[data-automation-id="searchBox"], input[data-uxi-widget-type="selectinput"]')]
-        .find((candidate) => /how did you hear about us|source/i.test(textOf(candidate.closest('[data-automation-id*="formField"], [role="group"]') || candidate.parentElement)));
-      if (!input || !visible(input)) {
-        return { ok: false, reason: "source_input_not_found" };
-      }
-      if (hasAnySelection(input)) {
-        return { ok: true, reason: "source_already_selected" };
-      }
-      clearUnsafeSelection(input);
-      input.scrollIntoView({ block: "center", inline: "center" });
-      await sleep(250);
-      const rect = input.getBoundingClientRect();
-      return {
-        ok: true,
-        reason: "source_keyboard_target",
-        x: Math.round(rect.left + rect.width / 2),
-        y: Math.round(rect.top + rect.height / 2)
-      };
-    })()`,
-    20000,
-  );
-  if (!target?.ok || target.reason === "source_already_selected") {
-    return target;
-  }
-  await pageClient.send("Input.dispatchMouseEvent", {
-    type: "mouseMoved",
-    x: target.x,
-    y: target.y,
-  });
-  await pageClient.send("Input.dispatchMouseEvent", {
-    type: "mousePressed",
-    x: target.x,
-    y: target.y,
-    button: "left",
-    clickCount: 1,
-  });
-  await pageClient.send("Input.dispatchMouseEvent", {
-    type: "mouseReleased",
-    x: target.x,
-    y: target.y,
-    button: "left",
-    clickCount: 1,
-  });
-  await sleep(1200);
-  const attempts = [{ step: "opened", ...(await sourceKeyboardState()) }];
-  const clickedSafeTopLevel = await pageClient.evaluate(
-    `(() => {
-      const visible = (el) => {
-        if (!el) return false;
-        const style = getComputedStyle(el);
-        const rect = el.getBoundingClientRect();
-        return style.display !== "none" && style.visibility !== "hidden" && rect.width > 0 && rect.height > 0;
-      };
-      const textOf = (el) => (el?.innerText || el?.textContent || el?.getAttribute?.("aria-label") || "").replace(/\\s+/g, " ").trim();
-      const options = [...document.querySelectorAll('[role="option"], [data-automation-id="menuItem"]')].filter(visible);
-      const unsafe = /\\b(referr?al|referred|refer|connection)\\b/i;
-      const wanted = options.find((el) => /\\b(job sites?|job boards?)\\b/i.test(textOf(el)) && !unsafe.test(textOf(el)))
-        || options.find((el) => /\\bcareer websites?\\b/i.test(textOf(el)) && !unsafe.test(textOf(el)));
-      if (!wanted) return { ok: false, reason: "safe_source_category_not_found", labels: options.map(textOf).slice(0, 20) };
-      wanted.scrollIntoView({ block: "nearest", inline: "nearest" });
-      const rect = wanted.getBoundingClientRect();
-      return { ok: true, label: textOf(wanted), x: Math.round(rect.left + rect.width / 2), y: Math.round(rect.top + rect.height / 2) };
-    })()`,
-    20000,
-  );
-  if (clickedSafeTopLevel?.ok) {
-    attempts.push({ step: "safe_category_target", ...clickedSafeTopLevel });
-    await pageClient.send("Input.dispatchMouseEvent", {
-      type: "mouseMoved",
-      x: clickedSafeTopLevel.x,
-      y: clickedSafeTopLevel.y,
-    });
-    await pageClient.send("Input.dispatchMouseEvent", {
-      type: "mousePressed",
-      x: clickedSafeTopLevel.x,
-      y: clickedSafeTopLevel.y,
-      button: "left",
-      clickCount: 1,
-    });
-    await pageClient.send("Input.dispatchMouseEvent", {
-      type: "mouseReleased",
-      x: clickedSafeTopLevel.x,
-      y: clickedSafeTopLevel.y,
-      button: "left",
-      clickCount: 1,
-    });
-    await sleep(1600);
-    attempts.push({ step: "safe_children_loaded", ...(await sourceKeyboardState()) });
-    await dispatchKey("Enter", 13);
-    await sleep(900);
-    const finalState = await sourceKeyboardState();
-    attempts.push({ step: "safe_child_selected", ...finalState });
-    if (finalState.selectedOk) {
-      return { ok: true, reason: "source_keyboard_selected", attempts };
-    }
-  }
-  // Workday source prompts use native keyboard state: synthetic DOM key events
-  // can leave focus on the wrong prompt. In p Chrome, real CDP key events match
-  // the manual flow: ArrowDown to Job Board, Enter to load children, Enter to
-  // commit the first child such as Industry Job Board.
-  for (let attempt = 0; attempt < 12; attempt += 1) {
-    const state = await sourceKeyboardState();
-    attempts.push({ step: "category_scan", attempt: attempt + 1, ...state });
-    if (/job sites?|job board/i.test(state.highlighted?.label || "") && !isUnsafeSourceText(state.highlighted?.label || "")) {
-      break;
-    }
-    await dispatchKey("ArrowDown", 40);
-    await sleep(160);
-  }
-  await dispatchKey("Enter", 13);
-  await sleep(1600);
-  attempts.push({ step: "children_loaded", ...(await sourceKeyboardState()) });
-  await dispatchKey("Enter", 13);
-  await sleep(900);
-  const finalState = await sourceKeyboardState();
-  attempts.push({ step: "child_selected", ...finalState });
-  if (finalState.selectedOk) {
-    return {
-      ok: true,
-      reason: "source_keyboard_selected",
-      attempts,
-    };
-  }
-  return {
-    ok: false,
-    reason: "source_keyboard_not_selected",
-    attempts,
-  };
-}
-
-async function tryFixWorkdayRequiredSearchInputsViaKeyboard(
-  pageClient,
-  fields,
-) {
-  const requestedFields = (fields || [])
-    .map((field) => ({
-      id: field.id || "",
-      name: field.name || "",
-      descriptor: field.descriptor || "",
-    }))
-    .filter((field) => field.id || field.name || field.descriptor);
-  if (!requestedFields.length) {
-    return { ok: true, skipped: true, reason: "no_required_search_inputs" };
-  }
-  const repairs = [];
-  for (const field of requestedFields) {
-    const fieldText = [field.id, field.name, field.descriptor]
-      .filter(Boolean)
-      .join(" ");
-    const isCitizenshipField = /citizenship/i.test(fieldText);
-    const isPhoneCountryCodeField =
-      /country\s*phone\s*code/i.test(fieldText) ||
-      /countryphonecode/i.test(fieldText);
-    const desiredSearchText = isPhoneCountryCodeField ? "Canada" : "";
-    const target = await pageClient.evaluate(
-      `(() => {
-        const wanted = ${JSON.stringify(field)};
-        const desiredSearchText = ${JSON.stringify(desiredSearchText)};
-        const visible = (el) => {
-          if (!el) return false;
-          const style = getComputedStyle(el);
-          const rect = el.getBoundingClientRect();
-          return style.display !== "none" && style.visibility !== "hidden" && rect.width > 0 && rect.height > 0 && !el.disabled;
-        };
-        const textOf = (el) => (el?.innerText || el?.textContent || "").replace(/\\s+/g, " ").trim();
-        const isSearchInput = (el) => el?.tagName === "INPUT"
-          && (el.getAttribute("data-automation-id") === "searchBox"
-            || /selectinput|multiselect/i.test(el.getAttribute("data-uxi-widget-type") || "")
-            || el.getAttribute("role") === "combobox"
-            || el.getAttribute("aria-autocomplete") === "list");
-        const hasAnySelection = (input) => {
-          const container = input.closest('[data-automation-id="formField"], [data-automation-id*="formField"], [role="group"]') || input.parentElement;
-          const text = textOf(container);
-          const selected = [...(container?.querySelectorAll?.('[data-automation-id="selectedItem"], [data-automation-id="promptSelectionLabel"], [aria-label*="press delete"]') || [])]
-            .map((el) => [el.getAttribute("aria-label"), textOf(el)].filter(Boolean).join(" "))
-            .join(" ")
-            .replace(/\\s+/g, " ")
-            .trim();
-          const selectedText = [text, selected, input.value].filter(Boolean).join(" ").toLowerCase();
-          if (desiredSearchText && !selectedText.includes(desiredSearchText.toLowerCase())) {
-            return false;
-          }
-          return /\\b[1-9]\\d*\\s+items?\\s+selected\\b/i.test(text)
-            || (selected && !/^expanded$/i.test(selected) && !/^search$/i.test(selected))
-            || Boolean(String(input.value || "").trim());
-        };
-        const wantedText = [wanted.id, wanted.name, wanted.descriptor].filter(Boolean).join(" ").toLowerCase();
-        const candidates = [...document.querySelectorAll("input")]
-          .filter((input) => visible(input) && isSearchInput(input))
-          .map((input) => {
-            const container = input.closest('[data-automation-id="formField"], [data-automation-id*="formField"], [role="group"]') || input.parentElement;
-            const haystack = [
-              input.id,
-              input.name,
-              input.getAttribute("aria-label"),
-              input.getAttribute("placeholder"),
-              textOf(container)
-            ].filter(Boolean).join(" ").toLowerCase();
-            let score = 0;
-            if (wanted.id && input.id === wanted.id) score += 1000;
-            if (wanted.name && input.name === wanted.name) score += 700;
-            wantedText.split(/\\s+/).filter((piece) => piece.length > 3).forEach((piece) => {
-              if (haystack.includes(piece)) score += 5;
-            });
-            return { input, score, haystack };
-          })
-          .filter((item) => item.score > 0)
-          .sort((a, b) => b.score - a.score);
-        const item = candidates[0];
-        if (!item) {
-          return { ok: false, reason: "required_search_input_not_found", field: wanted };
-        }
-        if (hasAnySelection(item.input)) {
-          return { ok: true, reason: "required_search_input_already_selected", field: wanted };
-        }
-        item.input.scrollIntoView({ block: "center", inline: "center" });
-        const rect = item.input.getBoundingClientRect();
-        return {
-          ok: true,
-          reason: "required_search_input_keyboard_target",
-          field: wanted,
-          id: item.input.id || "",
-          score: item.score,
-          x: Math.round(rect.left + rect.width / 2),
-          y: Math.round(rect.top + rect.height / 2)
-        };
-      })()`,
-      20000,
-    );
-    if (
-      !target?.ok ||
-      target.reason === "required_search_input_already_selected"
-    ) {
-      repairs.push(target);
-      continue;
-    }
-    if (isCitizenshipField || isPhoneCountryCodeField) {
-      await pageClient.evaluate(
-        `(() => {
-          const input = document.getElementById(${JSON.stringify(field.id)});
-          if (!input) return false;
-          input.focus();
-          try {
-            input.setSelectionRange(0, String(input.value || "").length);
-          } catch (_error) {}
-          return true;
-        })()`,
-        5000,
-      );
-      await cdpKey(pageClient, "Backspace", "Backspace", 8);
-      await sleep(250);
-    }
-    await cdpClick(pageClient, target.x, target.y);
-    await sleep(350);
-    if (desiredSearchText) {
-      await cdpKey(pageClient, "a", "KeyA", 65, 2);
-      await cdpKey(pageClient, "Backspace", "Backspace", 8);
-      await sleep(100);
-      await cdpTypeText(pageClient, desiredSearchText);
-      await sleep(500);
-    }
-    if (isPhoneCountryCodeField) {
-      const canadaOption = await pageClient.evaluate(
-        `(() => {
-          const input = document.getElementById(${JSON.stringify(target.id)});
-          if (input) {
-            input.focus();
-            const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set;
-            if (setter) setter.call(input, "Canada");
-            else input.value = "Canada";
-            input.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertText", data: "Canada" }));
-            input.dispatchEvent(new Event("change", { bubbles: true }));
-          }
-          const visible = (el) => {
-            if (!el) return false;
-            const style = getComputedStyle(el);
-            const rect = el.getBoundingClientRect();
-            return style.display !== "none" && style.visibility !== "hidden" && rect.width > 0 && rect.height > 0;
-          };
-          const textOf = (el) => (el?.innerText || el?.textContent || el?.getAttribute?.("aria-label") || "").replace(/\\s+/g, " ").trim();
-          const options = [...document.querySelectorAll('[role="option"], [data-automation-id="promptLeafNode"], [data-automation-id="promptOption"]')]
-            .filter(visible)
-            .map((el) => ({ el, text: textOf(el) }))
-            .filter((item) => /canada/i.test(item.text) && /(\\+1|\\(\\+1\\))/.test(item.text));
-          const item = options[0];
-          if (!item) {
-            return { ok: false, reason: "canada_option_not_found" };
-          }
-          item.el.scrollIntoView({ block: "center", inline: "center" });
-          const rect = item.el.getBoundingClientRect();
-          return {
-            ok: true,
-            reason: "canada_option_found",
-            text: item.text,
-            x: Math.round(rect.left + rect.width / 2),
-            y: Math.round(rect.top + rect.height / 2)
-          };
-        })()`,
-        10000,
-      );
-      if (canadaOption?.ok) {
-        await cdpClick(pageClient, canadaOption.x, canadaOption.y);
-        await sleep(700);
-        const committed = await checkPhoneCountryCommitted(pageClient);
-        if (committed?.ok) {
-          repairs.push({
-            ok: true,
-            reason: "required_search_input_keyboard_selected",
-            target,
-            attempts: [
-              {
-                attempt: 1,
-                selectedOk: true,
-                desiredOk: true,
-                selected: committed.reason,
-                options: [canadaOption.text],
-              },
-            ],
-          });
-          continue;
-        }
-      }
-    }
-    const attempts = [];
-    const attemptCount = isCitizenshipField ? 1 : 8;
-    for (let attempt = 0; attempt < attemptCount; attempt += 1) {
-      if (isCitizenshipField) {
-        await cdpArrowDownEnter(pageClient, 43);
-      } else {
-        await cdpKey(pageClient, "ArrowDown", "ArrowDown", 40);
-        await sleep(100);
-        await cdpKey(pageClient, "Enter", "Enter", 13);
-      }
-      await sleep(100);
-      await sleep(550);
-      const state = await pageClient.evaluate(
-        `(() => {
-          const input = document.getElementById(${JSON.stringify(target.id)});
-          const visible = (el) => {
-            if (!el) return false;
-            const style = getComputedStyle(el);
-            const rect = el.getBoundingClientRect();
-            return style.display !== "none" && style.visibility !== "hidden" && rect.width > 0 && rect.height > 0;
-          };
-          const textOf = (el) => (el?.innerText || el?.textContent || "").replace(/\\s+/g, " ").trim();
-          const container = input?.closest?.('[data-automation-id="formField"], [data-automation-id*="formField"], [role="group"]') || input?.parentElement;
-          const text = textOf(container);
-          const selected = [...(container?.querySelectorAll?.('[data-automation-id="selectedItem"], [data-automation-id="promptSelectionLabel"], [aria-label*="press delete"]') || [])]
-            .map((el) => [el.getAttribute("aria-label"), textOf(el)].filter(Boolean).join(" "))
-            .join(" ")
-            .replace(/\\s+/g, " ")
-            .trim();
-          const options = [...document.querySelectorAll('[role="option"], [data-automation-id="promptLeafNode"]')]
-            .filter(visible)
-            .map((el) => textOf(el))
-            .filter(Boolean)
-            .slice(0, 40);
-          const selectedOk = /\\b[1-9]\\d*\\s+items?\\s+selected\\b/i.test(text)
-            || (selected && !/^expanded$/i.test(selected) && !/^search$/i.test(selected))
-            || Boolean(String(input?.value || "").trim());
-          const desiredOk = ${JSON.stringify(
-            desiredSearchText,
-          )} ? [text, selected, input?.value || ""].join(" ").toLowerCase().includes(${JSON.stringify(
-            desiredSearchText.toLowerCase(),
-          )}) : true;
-          return {
-            text,
-            inputValue: input?.value || "",
-            selected,
-            selectedOk: Boolean(selectedOk && desiredOk),
-            desiredOk: Boolean(desiredOk),
-            options
-          };
-        })()`,
-        20000,
-      );
-      attempts.push({ attempt: attempt + 1, ...state });
-      if (state.selectedOk) {
-        repairs.push({
-          ok: true,
-          reason: "required_search_input_keyboard_selected",
-          target,
-          attempts,
-        });
-        break;
-      }
-    }
-    if (!repairs.at(-1)?.ok || repairs.at(-1)?.target?.id !== target.id) {
-      repairs.push({
-        ok: false,
-        reason: "required_search_input_keyboard_not_selected",
-        target,
-        attempts,
-      });
-    }
-  }
-  return {
-    ok: repairs.some((repair) => repair?.ok),
-    reason: repairs.some((repair) => repair?.ok)
-      ? "required_search_keyboard_selected"
-      : "required_search_keyboard_not_selected",
-    repairs,
-  };
-}
-
 async function clearCurrentPage(optionsClient, applyUrl, pageContext = {}) {
   const allowLoginRedirectFill = looksLikeAuthPage(pageContext);
   return optionsClient.evaluate(
@@ -2657,149 +1616,6 @@ async function clearPageUntilStable(optionsClient, pageClient, applyUrl, pageCon
     attempts,
     final: attempts.at(-1) || null,
   };
-}
-
-async function clickAuthPrimary(pageClient) {
-  const result = await pageClient.evaluate(
-    `(async () => {
-      const normalize = (value) => String(value || "").replace(/\\s+/g, " ").trim();
-      const visible = (el) => {
-        if (!el) return false;
-        const style = getComputedStyle(el);
-        const rect = el.getBoundingClientRect();
-        return style.display !== "none" && style.visibility !== "hidden" && rect.width > 0 && rect.height > 0 && !el.disabled;
-      };
-      const rectFor = (target) => {
-        target.scrollIntoView({ block: "center", inline: "center" });
-        try { target.focus?.(); } catch (_error) {}
-        const rect = target.getBoundingClientRect();
-        return {
-          x: Math.round(rect.left + rect.width / 2),
-          y: Math.round(rect.top + rect.height / 2),
-          width: Math.round(rect.width),
-          height: Math.round(rect.height),
-        };
-      };
-      const labelFor = (el) => normalize([
-        el.getAttribute("aria-label"),
-        el.getAttribute("title"),
-        el.value,
-        el.innerText,
-        el.textContent,
-      ].filter(Boolean).join(" "));
-      const metadataFor = (el) => normalize([
-        el.id,
-        el.name,
-        el.type,
-        el.getAttribute("data-automation-id"),
-        el.getAttribute("data-testid"),
-        el.className,
-      ].filter(Boolean).join(" "));
-      const bodyText = normalize(document.body?.innerText || "");
-      const verificationBlocked = ${AUTH_VERIFICATION_RE}.test(bodyText);
-      if (verificationBlocked) {
-        return {
-          clicked: false,
-          reason: "auth_verification_required",
-          message: "Workday requires account verification before sign-in can continue.",
-          href: location.href,
-          title: document.title,
-          bodyHead: bodyText.slice(0, 800),
-        };
-      }
-      const currentStepNode = document.querySelector('[data-automation-id="progressBarActiveStep"]');
-      const currentStepText = normalize(currentStepNode?.innerText || currentStepNode?.textContent || bodyText.match(/current\\s+s?tep\\s+\\d+\\s+of\\s+\\d+[^\\n]*/i)?.[0] || "");
-      const isAuthStep = /create account|sign in|log in|login|register|sign up/i.test(currentStepText)
-        || /create account|verify new password|already have an account|career privacy notice/i.test(bodyText);
-      if (!isAuthStep) {
-        return { clicked: false, reason: "not_auth_step", currentStepText };
-      }
-      const checkboxCandidates = [...document.querySelectorAll('input[type="checkbox"]')]
-        .filter(visible)
-        .filter((checkbox) => {
-          const text = normalize([
-            labelFor(checkbox),
-            metadataFor(checkbox),
-            checkbox.closest("label")?.innerText,
-            checkbox.closest('[data-automation-id], section, div')?.innerText,
-          ].filter(Boolean).join(" "));
-          return /privacy notice|terms|condition|consent|agree|acknowledge|continuing|create account/i.test(text);
-        });
-      const checked = [];
-      for (const checkbox of checkboxCandidates) {
-        const rect = rectFor(checkbox);
-        checked.push({
-          id: checkbox.id || "",
-          automationId: checkbox.getAttribute("data-automation-id") || "",
-          checked: Boolean(checkbox.checked),
-          rect,
-        });
-      }
-      const controls = [...document.querySelectorAll('button, [role="button"]')]
-        .filter(visible)
-        .map((el) => {
-          const label = labelFor(el);
-          const metadata = metadataFor(el);
-          const tag = String(el.tagName || "").toLowerCase();
-          const type = String(el.getAttribute("type") || "").toLowerCase();
-          let score = 0;
-          if (/^create account(?: create account)?$/i.test(label)) score += 140;
-          else if (/^sign in(?: sign in)?$/i.test(label)) score += 120;
-          else if (/^submit$/i.test(label)) score += 110;
-          else if (/create account|sign up|register|sign in|log in|login/i.test(label + " " + metadata)) score += 80;
-          if (tag === "button" || type === "submit") score += 30;
-          if (/submitbutton/i.test(metadata)) score += 25;
-          if (/click_filter/i.test(metadata)) score -= 20;
-          if (/utility|navigation|search for jobs|backtojobposting|forgotpassword/i.test(metadata)) score -= 80;
-          return { el, label, metadata, score };
-        })
-        .filter((entry) => entry.score > 0)
-        .sort((a, b) => b.score - a.score);
-      if (!controls.length) {
-        return { clicked: false, reason: "auth_primary_not_found", checked, currentStepText };
-      }
-      const target = controls[0];
-      return {
-        clicked: false,
-        reason: "auth_primary_target_found",
-        label: target.label,
-        metadata: target.metadata,
-        rect: rectFor(target.el),
-        checked,
-        href: location.href,
-        title: document.title,
-        bodyHead: normalize(document.body?.innerText || "").slice(0, 800),
-      };
-    })()`,
-    30000,
-  );
-  if (result?.rect) {
-    for (const checkbox of result.checked || []) {
-      if (checkbox?.rect && !checkbox.checked) {
-        await cdpClick(pageClient, checkbox.rect.x, checkbox.rect.y);
-        await sleep(300);
-      }
-    }
-    await cdpClick(pageClient, result.rect.x, result.rect.y);
-    result.clicked = true;
-    result.reason = "auth_primary_cdp_clicked";
-  }
-  await sleep(5500);
-  await sleep(1200);
-  const after = await inspectPage(pageClient);
-  const afterText = String(after?.bodyHead || "");
-  if (
-    result?.clicked &&
-    AUTH_VERIFICATION_RE.test(afterText)
-  ) {
-    return {
-      ...result,
-      after,
-      reason: "auth_verification_required",
-      message: "Workday requires account verification before sign-in can continue.",
-    };
-  }
-  return { ...result, after };
 }
 
 async function clickNext(pageClient) {
@@ -2984,214 +1800,6 @@ async function clearRepeatableWorkdaySections(pageClient) {
   );
 }
 
-function summarizeFill(fill) {
-  const interactionTrace = fill.interactionTrace || [];
-  const fieldInventory = Array.isArray(fill.fieldInventory)
-    ? fill.fieldInventory
-    : [];
-  const v2Audit = fill.v2Audit || null;
-  const v2SiteActions = Array.isArray(v2Audit?.events)
-    ? v2Audit.events
-        .filter((entry) =>
-          [
-            "site_state_before_field",
-            "site_state_after_field",
-            "workday_options_collected",
-            "workday_option_click",
-            "field_fill_result",
-            "permanent_issue",
-          ].includes(entry.action),
-        )
-        .map((entry) => ({
-          index: entry.index,
-          at: entry.at,
-          action: entry.action,
-          step: entry.step,
-          status: entry.status,
-          reason: entry.reason,
-          fieldId: entry.fieldId || "",
-          questionType: entry.questionType || "",
-          uiModel: entry.uiModel || "",
-          selectedOption: entry.selectedOption || "",
-          detail: entry.detail || {},
-        }))
-    : [];
-  const backgroundSiteActions = Array.isArray(fill.siteActions)
-    ? fill.siteActions.map((entry) => ({
-        at: entry.at || "",
-        action: entry.action || "",
-        status: entry.status || "",
-        reason: entry.reason || "",
-        siteState: entry.siteState || {},
-      }))
-    : [];
-  const siteActions = [...backgroundSiteActions, ...v2SiteActions];
-  const componentTrace = interactionTrace.filter((entry) =>
-    ["hover", "click", "already_filled", "set_value"].includes(entry.action),
-  );
-  const phoneCountryCodeTrace = interactionTrace.filter((entry) => {
-    const reason = String(entry.reason || "");
-    const target = entry.target || {};
-    return (
-      reason.includes("phone_country_code") ||
-      String(target.id || "").includes("countryPhoneCode") ||
-      String(target.name || "").includes("countryPhoneCode") ||
-      String(target.ariaLabel || "").includes("Country Phone Code")
-    );
-  });
-  return {
-    ok: fill.ok,
-    error: fill.error,
-    status: fill.status,
-    summary: fill.summary,
-    filledFieldCount: fill.filledFieldCount,
-    pendingLlmFieldCount: fill.pendingLlmFieldCount,
-    manualReviewReasons: fill.manualReviewReasons || [],
-    bestEffortWarnings: fill.bestEffortWarnings || [],
-    filledFields: (fill.filledFields || []).map((field) => ({
-      field: field.field || "",
-      descriptor: field.descriptor || field.field || "",
-      id: field.id || "",
-      name: field.name || "",
-      tagName: field.tagName || "",
-      type: field.type || "",
-      value: field.value || "",
-      selectedOption: field.selectedOption || "",
-      valueSource: field.valueSource || "",
-      bestEffortWarning: field.bestEffortWarning || "",
-    })),
-    generatedAnswers: (fill.generatedAnswers || []).map((answer) => ({
-      questionHash: answer.questionHash || "",
-      questionText: answer.questionText || "",
-      answerText: answer.answerText || "",
-      answerSource: answer.answerSource || "",
-      confidence: answer.confidence || "",
-      manualReviewRequired: Boolean(answer.manualReviewRequired),
-    })),
-    fieldInventory: fieldInventory.map((field) => ({
-      kind: field.kind || "",
-      tagName: field.tagName || "",
-      type: field.type || "",
-      id: field.id || "",
-      name: field.name || "",
-      descriptor: field.descriptor || "",
-      required: Boolean(field.required),
-      filled: Boolean(field.filled),
-      skippedReason: field.skippedReason || "",
-      valueSource: field.valueSource || "",
-      bestEffortWarning: field.bestEffortWarning || "",
-      options: field.options || [],
-      questionHash: field.questionHash || "",
-      questionType: field.questionType || "",
-      uiModel: field.uiModel || "",
-    })),
-    nextAction: fill.nextAction || null,
-    siteActions,
-    v2AuditSummary: v2Audit
-      ? {
-          runId: v2Audit.runId || "",
-          page: v2Audit.page || {},
-          summary: v2Audit.summary || {},
-          permanentIssues: v2Audit.permanentIssues || [],
-        }
-      : null,
-    unfilledRequired: fieldInventory
-      .filter((field) => field.required && !field.filled)
-      .map((field) => ({
-        tagName: field.tagName,
-        type: field.type,
-        id: field.id,
-        name: field.name,
-        descriptor: field.descriptor,
-        skippedReason: field.skippedReason,
-      }))
-      .slice(0, 30),
-    phoneCountryCodeTrace,
-    interactionTrace: componentTrace.slice(0, 120),
-  };
-}
-
-function buildFieldAudit(fillSummary) {
-  const filledByKey = new Map();
-  for (const field of fillSummary.filledFields || []) {
-    const keys = [
-      field.id && `id:${field.id}`,
-      field.name && `name:${field.name}`,
-      field.descriptor && `descriptor:${field.descriptor}`,
-      field.field && `descriptor:${field.field}`,
-    ].filter(Boolean);
-    for (const key of keys) {
-      if (!filledByKey.has(key)) {
-        filledByKey.set(key, field);
-      }
-    }
-  }
-  return (fillSummary.fieldInventory || []).map((field) => {
-    const filled =
-      (field.id && filledByKey.get(`id:${field.id}`)) ||
-      (field.name && filledByKey.get(`name:${field.name}`)) ||
-      (field.descriptor && filledByKey.get(`descriptor:${field.descriptor}`)) ||
-      null;
-    return {
-      id: field.id || "",
-      name: field.name || "",
-      tagName: field.tagName || "",
-      type: field.type || "",
-      kind: field.kind || "",
-      descriptor: field.descriptor || filled?.descriptor || "",
-      required: Boolean(field.required),
-      filled: Boolean(field.filled),
-      skippedReason: field.skippedReason || "",
-      options: field.options || [],
-      valuePut: filled?.value || "",
-      selectedOption: filled?.selectedOption || filled?.value || "",
-      valueSource: filled?.valueSource || field.valueSource || "",
-      bestEffortWarning:
-        filled?.bestEffortWarning || field.bestEffortWarning || "",
-    };
-  });
-}
-
-function buildFillAudit({
-  pageIndex,
-  fillIndex,
-  before,
-  afterFill,
-  fillSummary,
-}) {
-  return {
-    pageIndex,
-    retryIndex: fillIndex,
-    stepBefore: before.currentStep || null,
-    stepAfter: afterFill.currentStep || null,
-    hrefBefore: before.href || "",
-    hrefAfter: afterFill.href || "",
-    status: fillSummary.status || "",
-    ok: Boolean(fillSummary.ok),
-    filledFieldCount: fillSummary.filledFieldCount || 0,
-    pendingLlmFieldCount: fillSummary.pendingLlmFieldCount || 0,
-    manualReviewReasons: fillSummary.manualReviewReasons || [],
-    bestEffortWarnings: fillSummary.bestEffortWarnings || [],
-    fields: buildFieldAudit(fillSummary),
-    generatedAnswers: fillSummary.generatedAnswers || [],
-    filledFields: fillSummary.filledFields || [],
-    afterErrors: afterFill.errors || [],
-    suppressedErrors: afterFill.suppressedErrors || [],
-    remainingValues: afterFill.remainingValues || {},
-    nextAction: fillSummary.nextAction || null,
-    v2AuditSummary: fillSummary.v2AuditSummary || null,
-  };
-}
-
-function writeAuditJson(auditPath, audit) {
-  if (!auditPath) {
-    return null;
-  }
-  fs.mkdirSync(path.dirname(auditPath), { recursive: true });
-  fs.writeFileSync(auditPath, JSON.stringify(audit, null, 2), "utf-8");
-  return auditPath;
-}
-
 async function run() {
   const args = parseArgs(process.argv);
   if (args.help) {
@@ -3213,6 +1821,71 @@ async function run() {
     : [];
   const optionsClient = await connectTarget(optionsTarget);
   const pageClient = await connectTarget(pageTarget);
+    const workflowIdentifier = new WorkdayWorkflowIdentifier({
+      pageClient,
+      sleep,
+      authVerificationPattern: AUTH_VERIFICATION_RE,
+    });
+  const authWorkflow = new WorkdayAuthWorkflow({
+    pageClient,
+    cdpClick,
+    inspectPage,
+    js,
+    sleep,
+    authVerificationPattern: AUTH_VERIFICATION_RE,
+    accountEmail: args.accountEmail,
+    accountPassword: args.accountPassword,
+  });
+  const applyEntryWorkflow = new WorkdayApplyEntryWorkflow({
+    pageClient,
+    waitForReady: () => workflowIdentifier.waitForReady(APPLY_ENTRY_TIMEOUT_MS),
+    navigate: (url) =>
+      navigate(pageClient, url, () =>
+        workflowIdentifier.waitForReady(APPLY_ENTRY_TIMEOUT_MS),
+      ),
+    cdpClick,
+  });
+    const signupAttemptsByScope = new Map();
+    const fullApplicationStartedAt = Date.now();
+    const remainingFullApplicationMs = () =>
+      Math.max(
+        0,
+        FULL_APPLICATION_TIMEOUT_MS - (Date.now() - fullApplicationStartedAt),
+      );
+    const withApplicationPhaseTimeout = (phase, timeoutMs, work) => {
+      const remaining = remainingFullApplicationMs();
+      if (remaining <= 0) {
+        throw new PhaseTimeoutError(
+          "full_application",
+          FULL_APPLICATION_TIMEOUT_MS,
+        );
+      }
+      return withPhaseTimeout(phase, Math.min(timeoutMs, remaining), work);
+    };
+    const authScopeKey = (href) => {
+    const scope = workdayAppScope(href || applyUrl);
+    return `${scope.host}|${scope.appSegment}`;
+  };
+  const routeAfterSignupAttempt = (route) => {
+    const key = authScopeKey(route?.state?.href);
+    if (
+      route?.authState === "signup" &&
+      (signupAttemptsByScope.get(key) || 0) > 0
+    ) {
+      return {
+        ...route,
+        authState: "login",
+        authUiState: "credential_form",
+        signupRetryAsLogin: true,
+      };
+    }
+    return route;
+  };
+  const noteSignupAttempt = (route) => {
+    if (route?.authState !== "signup") return;
+    const key = authScopeKey(route?.state?.href);
+    signupAttemptsByScope.set(key, (signupAttemptsByScope.get(key) || 0) + 1);
+  };
 
   try {
     if (args.noSeedExtension) {
@@ -3247,10 +1920,18 @@ async function run() {
     }
     await pageClient.send("Page.bringToFront");
     if (!args.preserveCurrent) {
-      await navigate(pageClient, applyUrl);
+      await withApplicationPhaseTimeout("identifier", IDENTIFIER_TIMEOUT_MS, () =>
+        navigate(pageClient, applyUrl, () =>
+          workflowIdentifier.waitForReady(IDENTIFIER_TIMEOUT_MS),
+        ),
+      );
       await pageClient.send("Page.bringToFront");
     } else {
-      const readyState = await waitForWorkdayPageReady(pageClient);
+      const readyState = await withApplicationPhaseTimeout(
+        "identifier",
+        IDENTIFIER_TIMEOUT_MS,
+        () => workflowIdentifier.waitForReady(IDENTIFIER_TIMEOUT_MS),
+      );
       logWorkflowPhase(
         "site",
         readyState.timedOut ? "blocked" : "ok",
@@ -3263,7 +1944,40 @@ async function run() {
         },
       );
     }
-    const applyEntry = await clickApplyManuallyEntry(pageClient);
+    const initialRoute = await withApplicationPhaseTimeout(
+      "identifier",
+      IDENTIFIER_TIMEOUT_MS,
+      () => workflowIdentifier.identify(IDENTIFIER_TIMEOUT_MS),
+    );
+    logWorkflowPhase(
+      "identifier",
+      initialRoute.ok ? "ok" : "blocked",
+      "Classified initial Workday page before choosing a workflow.",
+      {
+        phase: initialRoute.phase,
+        pageKind: initialRoute.pageKind,
+        authState: initialRoute.authState,
+        authUiState: initialRoute.authUiState,
+        href: initialRoute.state?.href || "",
+      },
+    );
+    const applyEntry =
+      initialRoute.phase === "apply_entry"
+        ? await withApplicationPhaseTimeout("apply_entry", APPLY_ENTRY_TIMEOUT_MS, () =>
+            applyEntryWorkflow.clickApplyManuallyEntry(),
+          )
+        : {
+            ok: true,
+            skipped: true,
+            phase: "apply_entry",
+            reason:
+              initialRoute.phase === "job_fill"
+                ? "already_on_application_step"
+                : initialRoute.phase === "auth"
+                  ? "auth_workflow_first"
+                  : "no_apply_entry_gate",
+            readyState: initialRoute.state,
+          };
     logWorkflowPhase(
       "apply_entry",
       applyEntry.ok ? "ok" : "failed",
@@ -3296,6 +2010,10 @@ async function run() {
           reason: "handled_outside_live_smoke",
         },
         applyEntry,
+        identifier: {
+          phase: "identifier",
+          initial: initialRoute,
+        },
         jobFill: {
           phase: "job_fill",
           started: true,
@@ -3348,7 +2066,14 @@ async function run() {
         `Apply entry phase failed: ${JSON.stringify(applyEntry)}`,
       );
     }
-    for (let i = 0; i < args.maxPages; i += 1) {
+    pageLoop: for (let i = 0; i < args.maxPages; i += 1) {
+      const pagePhaseStartedAt = Date.now();
+      if (Date.now() - fullApplicationStartedAt > FULL_APPLICATION_TIMEOUT_MS) {
+        audit.reason = "full_application_timeout";
+        audit.message =
+          "Full Workday application flow exceeded the 5 minute timeout.";
+        break;
+      }
       let before = await inspectPage(pageClient);
       if (before.workdayRuntimeError) {
         const runtimeRecovery = await recoverWorkdayRuntimeError(
@@ -3360,6 +2085,103 @@ async function run() {
           throw new Error("Workday runtime error did not recover after reload");
         }
         before = await inspectPage(pageClient);
+      }
+      const route = await withApplicationPhaseTimeout(
+        "identifier",
+        IDENTIFIER_TIMEOUT_MS,
+        () => workflowIdentifier.identify(IDENTIFIER_TIMEOUT_MS),
+      );
+      if (route.phase === "terminal") {
+        if (route.pageKind === "maintenance") {
+          audit.reason = "site_or_posting_state";
+          audit.message = "Workday maintenance page reached.";
+        }
+        timeline.push({
+          pageIndex: i + 1,
+          workflowPhase: "identifier",
+          route,
+          before: {
+            href: before.href,
+            currentStep: before.currentStep,
+            pageKind: before.pageKind,
+            hasNext: before.hasNext,
+            hasSubmit: before.hasSubmit,
+            errors: before.errors,
+          },
+        });
+        break;
+      }
+      if (route.phase === "apply_entry") {
+        const routedApplyEntry = await withApplicationPhaseTimeout(
+          "apply_entry",
+          APPLY_ENTRY_TIMEOUT_MS,
+          () => applyEntryWorkflow.clickApplyManuallyEntry(),
+        );
+        timeline.push({
+          pageIndex: i + 1,
+          workflowPhase: "apply_entry",
+          route,
+          applyEntry: routedApplyEntry,
+        });
+        if (!routedApplyEntry.ok) {
+          break;
+        }
+        await sleep(1200);
+        continue;
+      }
+      if (route.phase === "auth") {
+        const authRoute = routeAfterSignupAttempt(route);
+        const authNext = await withApplicationPhaseTimeout(
+          "auth",
+          AUTH_WORKFLOW_TIMEOUT_MS,
+          () => authWorkflow.clickPrimary(authRoute),
+        );
+        noteSignupAttempt(authRoute);
+        timeline.push({
+          pageIndex: i + 1,
+          workflowPhase: "auth",
+          route: authRoute,
+          authNext,
+          before: {
+            href: before.href,
+            currentStep: before.currentStep,
+            hasNext: before.hasNext,
+            hasSubmit: before.hasSubmit,
+            errors: before.errors,
+          },
+        });
+        if (
+          route.authState === "verify_email" ||
+          authNext.reason === "auth_verification_required" ||
+          authVerificationErrors(authNext.after?.errors || []).length
+        ) {
+          const authVerification = await withApplicationPhaseTimeout(
+            "auth",
+            AUTH_WORKFLOW_TIMEOUT_MS,
+            () =>
+              resolveAuthVerificationViaMail(pageClient, args, { applyUrl }),
+          );
+          timeline[timeline.length - 1].authVerification = authVerification;
+          if (!authVerification.ok) {
+            break;
+          }
+          await sleep(1800);
+          continue;
+        }
+        if (!authNext.clicked) {
+          break;
+        }
+        const returnUrl = authReturnUrl(authNext.after?.href, applyUrl);
+        if (returnUrl) {
+          timeline[timeline.length - 1].authReturnUrl = returnUrl;
+          await navigate(pageClient, returnUrl, () =>
+            workflowIdentifier.waitForReady(AUTH_WORKFLOW_TIMEOUT_MS),
+          );
+          await sleep(1200);
+          continue;
+        }
+        await sleep(1800);
+        continue;
       }
       if (args.requireTarget && !stepMatches(before, args.targetStep)) {
         throw new Error(
@@ -3396,13 +2218,92 @@ async function run() {
       const fills = [];
       let afterFill = before;
       for (let fillIndex = 0; fillIndex < args.fillsPerPage; fillIndex += 1) {
+        const remainingPageMs =
+          PAGE_FILL_AND_NEXT_TIMEOUT_MS - (Date.now() - pagePhaseStartedAt);
+        if (remainingPageMs <= 0) {
+          audit.reason = "page_fill_and_next_timeout";
+          audit.message =
+            "Current Workday page did not finish filling and advance within the 1 minute timeout.";
+          break pageLoop;
+        }
         if (args.extensionAutoNext) {
           await setExtensionAutoNext(
             optionsClient,
             fillIndex === args.fillsPerPage - 1,
           );
         }
-        const fill = await fillCurrentPage(optionsClient, applyUrl, args, before);
+        let fill = null;
+        try {
+          fill = await withApplicationPhaseTimeout(
+            "page_fill_and_next",
+            remainingPageMs,
+            () => fillCurrentPage(optionsClient, applyUrl, args, before),
+          );
+        } catch (error) {
+          if (!(error instanceof PhaseTimeoutError)) {
+            throw error;
+          }
+          const reconciliation = await reconcilePageFillTimeoutToReview(
+            pageClient,
+          );
+          afterFill = reconciliation.page;
+          if (reconciliation.reachedReview) {
+            timeline.push({
+              pageIndex: i + 1,
+              workflowPhase: "job_fill",
+              reason: "timeout_reconciled_to_review",
+              before: {
+                href: before.href,
+                currentStep: before.currentStep,
+                pageKind: before.pageKind,
+                hasNext: before.hasNext,
+                hasSubmit: before.hasSubmit,
+                errors: before.errors,
+              },
+              afterFill: {
+                href: afterFill.href,
+                currentStep: afterFill.currentStep,
+                pageKind: afterFill.pageKind,
+                hasNext: afterFill.hasNext,
+                hasSubmit: afterFill.hasSubmit,
+                errors: afterFill.errors,
+              },
+            });
+            break pageLoop;
+          }
+          const fillSummary = {
+            ok: false,
+            error: "page_fill_and_next_timeout",
+            status: "timeout",
+            summary:
+              "Current Workday page did not finish filling and advance within the 1 minute timeout.",
+            filledFieldCount: 0,
+            pendingLlmFieldCount: 0,
+            manualReviewReasons: ["page_fill_and_next_timeout"],
+            bestEffortWarnings: ["page_fill_and_next_timeout"],
+            filledFields: [],
+            generatedAnswers: [],
+            fieldInventory: [],
+            nextAction: null,
+            siteActions: [],
+            v2AuditSummary: null,
+            unfilledRequired: [],
+            phoneCountryCodeTrace: [],
+            interactionTrace: [],
+          };
+          audit.pages.push(
+            buildFillAudit({
+              pageIndex: i + 1,
+              fillIndex: fillIndex + 1,
+              before,
+              afterFill,
+              fillSummary,
+            }),
+          );
+          audit.reason = "page_fill_and_next_timeout";
+          audit.message = fillSummary.summary;
+          break pageLoop;
+        }
         const fillSummary = summarizeFill(fill);
         if (fillSummary.manualReviewReasons.includes("fill_timeout")) {
           afterFill = await inspectPage(pageClient);
@@ -3431,137 +2332,6 @@ async function run() {
           );
           break;
         }
-        const phoneCountryUnfilled = fillSummary.unfilledRequired.some(
-          (field) =>
-            /phonecountrycode|country\s*phone\s*code/i.test(
-              [field.id, field.name, field.descriptor]
-                .filter(Boolean)
-                .join(" "),
-            ),
-        );
-        if (
-          args.cdpRepairPhoneCountry &&
-          (fillSummary.manualReviewReasons.includes(
-            "required_field_unresolved:phone_country_code_commit_failed",
-          ) ||
-            (phoneCountryUnfilled &&
-              fillSummary.manualReviewReasons.some((reason) =>
-                /required_field_unresolved:(no_matching_option|no_known_match|commit_not_verified)/.test(
-                  reason,
-                ),
-              )))
-        ) {
-          const cdpFixed = await tryFixPhoneCountryCodeViaCdp(pageClient);
-          if (cdpFixed) {
-            fillSummary.manualReviewReasons =
-              fillSummary.manualReviewReasons.filter(
-                (r) =>
-                  r !==
-                    "required_field_unresolved:phone_country_code_commit_failed" &&
-                  !(
-                    phoneCountryUnfilled &&
-                    /required_field_unresolved:(no_matching_option|no_known_match|commit_not_verified)/.test(
-                      r,
-                    )
-                  ),
-              );
-            fillSummary.unfilledRequired = fillSummary.unfilledRequired.filter(
-              (field) =>
-                !/phonecountrycode|country\s*phone\s*code/i.test(
-                  [field.id, field.name, field.descriptor]
-                    .filter(Boolean)
-                    .join(" "),
-                ),
-            );
-            fillSummary.status =
-              fillSummary.manualReviewReasons.length === 0
-                ? "filled"
-                : fillSummary.status;
-            fillSummary.cdpPhoneCodeFixed = true;
-          }
-        }
-        const sourceNeedsKeyboard =
-          fillSummary.unfilledRequired.some((field) =>
-            /source--source|how did you hear about us/i.test(
-              [field.id, field.name, field.descriptor]
-                .filter(Boolean)
-                .join(" "),
-            ),
-          ) &&
-          (fillSummary.manualReviewReasons.some((reason) =>
-            /required_field_unresolved:(commit_not_verified|field_fill_timeout)/.test(
-              reason,
-            ),
-          ) ||
-            fillSummary.bestEffortWarnings.some((warning) =>
-              /field_fill_timeout|workday_source_options_unavailable|workday_commit_not_verified/.test(
-                warning,
-              ),
-            ));
-        if (sourceNeedsKeyboard) {
-          const cdpSourceKeyboard =
-            await tryFixWorkdaySourceViaKeyboard(pageClient);
-          fillSummary.cdpSourceKeyboard = cdpSourceKeyboard;
-          if (cdpSourceKeyboard?.ok) {
-            fillSummary.manualReviewReasons =
-              fillSummary.manualReviewReasons.filter(
-                (reason) =>
-                  !/required_field_unresolved:(commit_not_verified|field_fill_timeout)/.test(
-                    reason,
-                  ),
-              );
-            fillSummary.unfilledRequired = fillSummary.unfilledRequired.filter(
-              (field) =>
-                !/source--source|how did you hear about us/i.test(
-                  [field.id, field.name, field.descriptor]
-                    .filter(Boolean)
-                    .join(" "),
-                ),
-            );
-            fillSummary.status =
-              fillSummary.manualReviewReasons.length === 0
-                ? "filled"
-                : fillSummary.status;
-          }
-        }
-        const requiredSearchNeedsKeyboard = fillSummary.unfilledRequired.filter(
-          (field) => {
-            const fieldKey = [field.id, field.name, field.descriptor]
-              .filter(Boolean)
-              .join(" ");
-            return (
-              field.tagName === "INPUT" &&
-              /required_field_unresolved:(no_known_match|no_matching_option|commit_not_verified)/.test(
-                fillSummary.manualReviewReasons.join(" "),
-              ) &&
-              !/source--source|how did you hear about us|phonecountrycode|datesection/i.test(
-                fieldKey,
-              )
-            );
-          },
-        );
-        if (requiredSearchNeedsKeyboard.length) {
-          fillSummary.cdpRequiredSearchKeyboard =
-            await tryFixWorkdayRequiredSearchInputsViaKeyboard(
-              pageClient,
-              requiredSearchNeedsKeyboard,
-            );
-          if (fillSummary.cdpRequiredSearchKeyboard?.ok) {
-            const repairedIds = new Set(
-              (fillSummary.cdpRequiredSearchKeyboard.repairs || [])
-                .filter((repair) => repair?.ok)
-                .map((repair) => repair?.target?.field?.id || repair?.field?.id)
-                .filter(Boolean),
-            );
-            fillSummary.unfilledRequired = fillSummary.unfilledRequired.filter(
-              (field) => !repairedIds.has(field.id),
-            );
-            if (fillSummary.unfilledRequired.length === 0) {
-              fillSummary.manualReviewReasons = [];
-              fillSummary.status = "filled";
-            }
-          }
-        }
         await sleep(
           args.extensionAutoNext
             ? 7500
@@ -3576,27 +2346,6 @@ async function run() {
             "after_fill_workday_runtime_error",
           );
           if (fillSummary.runtimeRecovery.ok) {
-            afterFill = await inspectPage(pageClient);
-          }
-        }
-        const dateSectionNeedsKeyboard =
-          afterFill.errors?.some((error) =>
-            /desired start date|required and must have a value/i.test(error),
-          ) &&
-          afterFill.fields?.some((field) =>
-            /dateSection(Month|Day|Year)/i.test(field.id || ""),
-          );
-        if (dateSectionNeedsKeyboard) {
-          fillSummary.cdpDateSection =
-            await tryFixWorkdayDateSectionsViaCdp(pageClient);
-          if (fillSummary.cdpDateSection?.ok) {
-            afterFill = await inspectPage(pageClient);
-          }
-        }
-        if (afterFill.errors?.length) {
-          fillSummary.visibleValidationRepair =
-            await tryFixKnownVisibleValidationErrors(pageClient);
-          if (fillSummary.visibleValidationRepair?.ok) {
             afterFill = await inspectPage(pageClient);
           }
         }
@@ -3685,6 +2434,7 @@ async function run() {
           currentStep: afterFill.currentStep,
           hasNext: afterFill.hasNext,
           hasSubmit: afterFill.hasSubmit,
+          pageKind: afterFill.pageKind,
           errors: afterFill.errors,
           suppressedErrors: afterFill.suppressedErrors || [],
           fields: afterFill.fields,
@@ -3713,22 +2463,33 @@ async function run() {
       }
       if (
         afterFill.hasSubmit ||
-        /review/i.test(afterFill.currentStep?.title || "")
+        pageReachedReview(afterFill)
       ) {
         break;
       }
       if (looksLikeAuthPage(afterFill)) {
-        const authNext = await clickAuthPrimary(pageClient);
+        const authRoute = routeAfterSignupAttempt(
+          await withApplicationPhaseTimeout("identifier", IDENTIFIER_TIMEOUT_MS, () =>
+            workflowIdentifier.identify(IDENTIFIER_TIMEOUT_MS),
+          ),
+        );
+          const authNext = await withApplicationPhaseTimeout(
+            "auth",
+            AUTH_WORKFLOW_TIMEOUT_MS,
+            () => authWorkflow.clickPrimary(authRoute),
+          );
+        noteSignupAttempt(authRoute);
         timeline[timeline.length - 1].authNext = authNext;
         if (
           authNext.reason === "auth_verification_required" ||
           authVerificationErrors(authNext.after?.errors || []).length
         ) {
-          const authVerification = await resolveAuthVerificationViaMail(
-            pageClient,
-            args,
-            { applyUrl },
-          );
+            const authVerification = await withApplicationPhaseTimeout(
+              "auth",
+              AUTH_WORKFLOW_TIMEOUT_MS,
+              () =>
+                resolveAuthVerificationViaMail(pageClient, args, { applyUrl }),
+            );
           timeline[timeline.length - 1].authVerification = authVerification;
           if (!authVerification.ok) {
             break;
@@ -3739,10 +2500,33 @@ async function run() {
         if (!authNext.clicked) {
           break;
         }
+        const returnUrl = authReturnUrl(authNext.after?.href, applyUrl);
+        if (returnUrl) {
+          timeline[timeline.length - 1].authReturnUrl = returnUrl;
+          await navigate(pageClient, returnUrl, () =>
+            workflowIdentifier.waitForReady(AUTH_WORKFLOW_TIMEOUT_MS),
+          );
+          await sleep(1200);
+          continue;
+        }
         await sleep(1800);
         continue;
       }
       if (args.extensionAutoNext) {
+        const fillAdvancedPage =
+          (afterFill.currentStep?.current ?? 0) >
+          (before.currentStep?.current ?? 0);
+        if (fillAdvancedPage) {
+          timeline[timeline.length - 1].next = {
+            clicked: Boolean(fills.at(-1)?.fill?.nextAction?.clicked),
+            auto: true,
+            reason: "fill_already_advanced_page",
+            message: `Fill advanced from step ${before.currentStep?.current} to step ${afterFill.currentStep?.current}; continuing so the new Workday step can be filled.`,
+            errors: afterFill.errors?.slice(0, 10) || [],
+          };
+          await sleep(1200);
+          continue;
+        }
         if (afterFill.errors?.length) {
           timeline[timeline.length - 1].next = {
             clicked: false,
@@ -3769,7 +2553,19 @@ async function run() {
           if (!fillNeedsReview || afterFill.errors?.length) {
             break;
           }
-          const next = await clickNext(pageClient);
+          const remainingNextMs =
+            PAGE_FILL_AND_NEXT_TIMEOUT_MS - (Date.now() - pagePhaseStartedAt);
+          if (remainingNextMs <= 0) {
+            audit.reason = "page_fill_and_next_timeout";
+            audit.message =
+              "Current Workday page did not finish filling and advance within the 1 minute timeout.";
+            break pageLoop;
+          }
+          const next = await withApplicationPhaseTimeout(
+            "page_fill_and_next",
+            remainingNextMs,
+            () => clickNext(pageClient),
+          );
           if (next.workdayRuntimeError) {
             next.runtimeRecovery = await recoverWorkdayRuntimeError(
               pageClient,
@@ -3812,7 +2608,19 @@ async function run() {
         await sleep(1200);
         continue;
       }
-      const next = await clickNext(pageClient);
+      const remainingNextMs =
+        PAGE_FILL_AND_NEXT_TIMEOUT_MS - (Date.now() - pagePhaseStartedAt);
+      if (remainingNextMs <= 0) {
+        audit.reason = "page_fill_and_next_timeout";
+        audit.message =
+          "Current Workday page did not finish filling and advance within the 1 minute timeout.";
+        break;
+      }
+      const next = await withApplicationPhaseTimeout(
+        "page_fill_and_next",
+        remainingNextMs,
+        () => clickNext(pageClient),
+      );
       if (next.workdayRuntimeError) {
         next.runtimeRecovery = await recoverWorkdayRuntimeError(
           pageClient,
@@ -3831,18 +2639,33 @@ async function run() {
       finalPage.errors || [],
     );
     const finalReachedReview =
-      finalPage.hasSubmit || /review/i.test(finalPage.currentStep?.title || "");
-    const terminalReason = finalAuthVerificationErrors.length
+      pageReachedReview(finalPage) && !pageHasBlockingValidation(finalPage);
+    const finalMaintenance =
+      finalPage.pageKind === "maintenance" ||
+      /community\.workday\.com\/maintenance-page/i.test(finalPage.href || "");
+    const terminalReason = finalReachedReview
+      ? ""
+      : finalMaintenance
+      ? "site_or_posting_state"
+      : audit.reason
+      ? audit.reason
+      : finalAuthVerificationErrors.length
       ? "auth_verification_required"
       : !args.stopAfterFill && !args.targetStep && !finalReachedReview
         ? finalPage.hasNext
           ? "max_pages_before_terminal"
           : "stuck_before_review"
         : "";
+    if (finalReachedReview) {
+      delete audit.reason;
+      delete audit.message;
+    } else if (finalMaintenance) {
+      audit.message = "Workday maintenance page reached.";
+    }
     audit.ok = !terminalReason;
     if (terminalReason) {
       audit.reason = terminalReason;
-      audit.message =
+      audit.message = audit.message ||
         finalAuthVerificationErrors[0] ||
         (finalPage.hasNext
           ? "Smoke ended before reaching Review or Submit while a Next button was still available."
@@ -3852,6 +2675,7 @@ async function run() {
     audit.final = {
       href: finalPage.href,
       currentStep: finalPage.currentStep,
+      pageKind: finalPage.pageKind,
       hasSubmit: finalPage.hasSubmit,
       hasNext: finalPage.hasNext,
       errors: finalPage.errors,
@@ -3875,6 +2699,7 @@ async function run() {
           final: {
             href: finalPage.href,
             currentStep: finalPage.currentStep,
+            pageKind: finalPage.pageKind,
             hasSubmit: finalPage.hasSubmit,
             hasNext: finalPage.hasNext,
             errors: finalPage.errors,
@@ -3894,6 +2719,21 @@ async function run() {
 run().catch((error) => {
   const message = error?.stack || error?.message || String(error);
   console.error(message);
+  if (error instanceof PhaseTimeoutError) {
+    console.log(
+      JSON.stringify(
+        {
+          ok: false,
+          reason: error.reason,
+          message: error.message,
+          phase: error.phase,
+          timeoutMs: error.timeoutMs,
+        },
+        null,
+        2,
+      ),
+    );
+  }
   if (/MAX_WRITE_OPERATIONS_PER_MINUTE/i.test(message)) {
     console.error(
       [

@@ -1270,7 +1270,10 @@ class RunAdapterFillStep {
       args: [
         {
           profile: adapterProfile,
-          settings: context.extensionState.settings,
+          settings: {
+            ...context.extensionState.settings,
+            fieldFillTimeoutMs: context.options.fieldFillTimeoutMs,
+          },
           activeApplyContext: context.extensionState.activeApplyContext,
           defaultResume: context.extensionState.defaultResume,
           fieldRules: GENERIC_FIELD_RULES,

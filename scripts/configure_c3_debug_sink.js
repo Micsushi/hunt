@@ -244,6 +244,54 @@ function findExtensionPage(targets, extensionId) {
   );
 }
 
+function isBlockedExtensionTab(target, extensionId) {
+  const url = String(target.url || "");
+  const title = String(target.title || "");
+  return (
+    target.type === "page" &&
+    (url === `chrome-extension://${extensionId}` ||
+      url === `chrome-extension://${extensionId}/` ||
+      (url.startsWith("chrome-error://") &&
+        (title.includes(`${extensionId} is blocked`) ||
+          title.includes("ERR_BLOCKED_BY_CLIENT"))))
+  );
+}
+
+async function closeBlockedExtensionTabs(port, targets, extensionId) {
+  const blocked = targets.filter((target) =>
+    isBlockedExtensionTab(target, extensionId),
+  );
+  for (const target of blocked) {
+    await httpText(port, `/json/close/${target.id}`).catch(() => "");
+  }
+  return blocked.length;
+}
+
+async function targetHasExtensionApi(target) {
+  if (!target?.webSocketDebuggerUrl) {
+    return false;
+  }
+  const client = await new CdpClient(target.webSocketDebuggerUrl).connect();
+  try {
+    return Boolean(
+      await client.evaluate(
+        `Boolean(globalThis.chrome && chrome.storage && chrome.storage.local && chrome.runtime)`,
+        5000,
+      ),
+    );
+  } catch (_error) {
+    return false;
+  } finally {
+    client.close();
+  }
+}
+
+async function closeTarget(port, target) {
+  if (target?.id) {
+    await httpText(port, `/json/close/${target.id}`).catch(() => "");
+  }
+}
+
 function findExtensionId(targets, fallbackExtensionId) {
   const huntWorker = targets.find((target) =>
     String(target.url || "").includes("/src/background/index.js"),
@@ -270,16 +318,38 @@ function findExtensionId(targets, fallbackExtensionId) {
 
 async function ensureExtensionPage(port, targets, fallbackExtensionId) {
   const extensionId = findExtensionId(targets, fallbackExtensionId);
+  const closedBlockedCount = await closeBlockedExtensionTabs(
+    port,
+    targets,
+    extensionId,
+  );
+  if (closedBlockedCount) {
+    targets = await httpJson(port, "/json/list");
+  }
   const existing = findExtensionPage(targets, extensionId);
   if (existing?.webSocketDebuggerUrl) {
-    return existing;
+    if (await targetHasExtensionApi(existing)) {
+      return existing;
+    }
+    await closeTarget(port, existing);
+    targets = await httpJson(port, "/json/list");
   }
   const url = `chrome-extension://${extensionId}/src/options/options.html`;
   await httpText(port, `/json/new?${encodeURIComponent(url)}`, "PUT");
-  const refreshed = await httpJson(port, "/json/list");
-  const opened = findExtensionPage(refreshed, extensionId);
+  let opened = null;
+  for (let attempt = 0; attempt < 20; attempt += 1) {
+    const refreshed = await httpJson(port, "/json/list");
+    opened = findExtensionPage(refreshed, extensionId);
+    if (opened?.webSocketDebuggerUrl) {
+      break;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 250));
+  }
   if (!opened?.webSocketDebuggerUrl) {
     throw new Error("Could not open the Hunt Apply Options page in p chrome.");
+  }
+  if (!(await targetHasExtensionApi(opened))) {
+    throw new Error("Hunt Apply Options page opened without extension APIs.");
   }
   return opened;
 }

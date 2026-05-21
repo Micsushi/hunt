@@ -158,7 +158,7 @@ def find_c3_target(targets):
         url = str(target.get("url") or "")
         title = str(target.get("title") or "")
         target_type = str(target.get("type") or "")
-        if target_type == "background_page" and url.startswith("chrome-extension://"):
+        if target_type in {"background_page", "service_worker"} and url.startswith("chrome-extension://"):
             if EXTENSION_TITLE in title or "/src/background/" in url:
                 return target
         if url.startswith("chrome-extension://") and (

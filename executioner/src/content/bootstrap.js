@@ -269,10 +269,10 @@
       return "Detected job application";
     }
     if (kind === "signup") {
-      return "Detected signup page";
+      return "Detected account page";
     }
     if (kind === "signin") {
-      return "Detected sign-in page";
+      return "Detected account page";
     }
     if (kind === "apply_entry") {
       return "Detected job site with Apply";
@@ -285,10 +285,10 @@
       return "Job site";
     }
     if (kind === "signin") {
-      return "Sign in";
+      return "Account";
     }
     if (kind === "signup") {
-      return "Signup";
+      return "Account";
     }
     if (kind === "ats" || kind === "application") {
       return "Job application";
@@ -299,15 +299,15 @@
   function promptMeta(kind, inputCount) {
     if (kind === "signup") {
       return [
-        "Use the saved account email and password to create the applicant account.",
+        "Create the applicant account, handle email verification when available, then continue applying.",
         `${inputCount} visible account controls found.`,
       ];
     }
     if (kind === "signin") {
       return [
         inputCount > 0
-          ? "Use the saved account email and password to sign in."
-          : "Open the email sign-in choice before filling credentials.",
+          ? "Log in or switch to account creation if this account does not exist, then continue applying."
+          : "Open the email sign-in choice, then continue the account flow.",
         inputCount > 0
           ? `${inputCount} visible sign-in controls found.`
           : "No credential fields are visible yet.",
@@ -333,10 +333,10 @@
 
   function promptFillButtonLabel(kind) {
     if (kind === "signup") {
-      return "Create account";
+      return "Create account and apply";
     }
     if (kind === "signin") {
-      return "Sign in";
+      return "Log in and apply";
     }
     if (kind === "apply_entry") {
       return "Open application";

@@ -6,6 +6,8 @@ const PROFILE_FIELD_LABELS = {
   linkedinUrl: "LinkedIn URL",
   githubUrl: "GitHub URL",
   websiteUrl: "Website URL",
+  degreeLevel: "Degree level",
+  highestEducation: "Highest education",
 };
 
 function normalizeWhitespace(value) {
@@ -269,6 +271,44 @@ function inferDegreeLevel(value) {
     return "Diploma";
   }
   return "";
+}
+
+function highestEducationOptionForDegreeLevel(value) {
+  const level = normalizeWhitespace(value).toLowerCase();
+  if (!level) {
+    return "";
+  }
+  if (level === "doctorate") {
+    return "Doctorate/Ph.D.";
+  }
+  if (level === "masters") {
+    return "Master's Degree";
+  }
+  if (level === "bachelors") {
+    return "Bachelor's Degree";
+  }
+  if (level === "associates") {
+    return "Associate's Degree";
+  }
+  if (level === "high school diploma") {
+    return "High School Diploma/GED";
+  }
+  if (level === "diploma") {
+    return "Diploma";
+  }
+  return "";
+}
+
+function profileEducationFields(education) {
+  const entries = Array.isArray(education) ? education : [];
+  const first = entries.find((entry) => entry?.degreeLevel || entry?.degree);
+  const degreeLevel =
+    normalizeWhitespace(first?.degreeLevel) ||
+    inferDegreeLevel(first?.degree || "");
+  return {
+    degreeLevel,
+    highestEducation: highestEducationOptionForDegreeLevel(degreeLevel),
+  };
 }
 
 function extractDegreeCredential(value) {
@@ -634,10 +674,12 @@ function parsePlainHeader(text) {
 }
 
 export function parseResumeText(text) {
+  const education = parsePlainEducation(text);
   return {
     ...parsePlainHeader(text),
     workExperience: parsePlainWorkExperience(text),
-    education: parsePlainEducation(text),
+    education,
+    ...profileEducationFields(education),
     skills: parsePlainSkills(text),
   };
 }
@@ -730,6 +772,7 @@ export function parseResumeTex(tex) {
       !/linkedin\.com|github\.com/i.test(href.target),
   );
 
+  const education = parseEducation(tex);
   return {
     fullName: parseName(tex),
     email: emailHref?.target.replace(/^mailto:/i, "") || "",
@@ -739,7 +782,8 @@ export function parseResumeTex(tex) {
     githubUrl: githubHref ? normalizeUrl(githubHref.target) : "",
     websiteUrl: websiteHref ? normalizeUrl(websiteHref.target) : "",
     workExperience: parseWorkExperience(tex),
-    education: parseEducation(tex),
+    education,
+    ...profileEducationFields(education),
     skills: parseSkills(tex),
   };
 }

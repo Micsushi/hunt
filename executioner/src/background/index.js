@@ -31,7 +31,8 @@ import {
 const C4_POLL_ALARM = "hunt.apply.c4.poll";
 const C4_HEARTBEAT_ALARM = "hunt.apply.c4.heartbeat";
 const FILL_TIMEOUT_MS = 120000;
-const FILL_NO_PROGRESS_TIMEOUT_MS = 5000;
+const FILL_NO_PROGRESS_TIMEOUT_MS = 30000;
+const FILL_ACTIVE_WIDGET_PROGRESS_TIMEOUT_MS = 20000;
 const FILL_UPLOAD_PROGRESS_TIMEOUT_MS = 30000;
 const ACTIVE_FILL_PREPARING_MESSAGE = "Preparing application workflow";
 const V2_PAGE_WALK_MAX_PAGES = 12;
@@ -55,6 +56,181 @@ let activeRunId = "";
 const activeFillRuns = new Map();
 const activeFillRunByTab = new Map();
 const activeFillProgressByTab = new Map();
+
+async function dispatchTrustedInput(payload = {}, sender = {}) {
+  const tabId = payload.tabId || sender.tab?.id;
+  const x = Number(payload.x);
+  const y = Number(payload.y);
+  const action = payload.action || "mouse_click";
+  if (
+    !tabId ||
+    (action === "mouse_click" && (!Number.isFinite(x) || !Number.isFinite(y)))
+  ) {
+    return { ok: false, reason: "trusted_input_missing_target" };
+  }
+  if (!chrome.debugger?.attach || !chrome.debugger?.sendCommand) {
+    return { ok: false, reason: "debugger_api_unavailable" };
+  }
+  const target = { tabId };
+  let attached = false;
+  try {
+    await new Promise((resolve, reject) => {
+      chrome.debugger.attach(target, "1.3", () => {
+        const error = chrome.runtime.lastError;
+        if (error) {
+          reject(new Error(error.message));
+          return;
+        }
+        attached = true;
+        resolve();
+      });
+    });
+    const events =
+      action === "key_sequence"
+        ? (payload.keys || []).flatMap((entry) => {
+            const key = entry.key || "";
+            const code = entry.code || key;
+            const vk = Number(entry.windowsVirtualKeyCode || entry.vk || 0);
+            return [
+              {
+                type: "keyDown",
+                key,
+                code,
+                windowsVirtualKeyCode: vk,
+                nativeVirtualKeyCode: vk,
+              },
+              {
+                type: "keyUp",
+                key,
+                code,
+                windowsVirtualKeyCode: vk,
+                nativeVirtualKeyCode: vk,
+              },
+            ];
+          })
+        : [
+            { type: "mouseMoved", x, y, button: "none" },
+            {
+              type: "mousePressed",
+              x,
+              y,
+              button: "left",
+              buttons: 1,
+              clickCount: 1,
+            },
+            {
+              type: "mouseReleased",
+              x,
+              y,
+              button: "left",
+              buttons: 0,
+              clickCount: 1,
+            },
+          ];
+    const method =
+      action === "key_sequence"
+        ? "Input.dispatchKeyEvent"
+        : "Input.dispatchMouseEvent";
+    for (const event of events) {
+      await new Promise((resolve, reject) => {
+        chrome.debugger.sendCommand(target, method, event, () => {
+          const error = chrome.runtime.lastError;
+          if (error) {
+            reject(new Error(error.message));
+            return;
+          }
+          resolve();
+        });
+      });
+    }
+    return {
+      ok: true,
+      reason:
+        action === "key_sequence"
+          ? "trusted_key_sequence_dispatched"
+          : "trusted_mouse_click_dispatched",
+    };
+  } catch (error) {
+    return {
+      ok: false,
+      reason: "debugger_command_failed",
+      message: error instanceof Error ? error.message : String(error),
+    };
+  } finally {
+    if (attached) {
+      try {
+        await new Promise((resolve) => {
+          chrome.debugger.detach(target, () => resolve());
+        });
+      } catch (_error) {}
+    }
+  }
+}
+
+async function ensurePasswordSavingDisabled(reason = "c3_fill") {
+  const setting = chrome.privacy?.services?.passwordSavingEnabled;
+  if (!setting?.get || !setting?.set) {
+    return {
+      ok: false,
+      reason: "privacy_password_saving_api_unavailable",
+    };
+  }
+  const details = await new Promise((resolve) => {
+    setting.get({}, (value) => {
+      if (chrome.runtime.lastError) {
+        resolve({ error: chrome.runtime.lastError.message });
+        return;
+      }
+      resolve(value || {});
+    });
+  });
+  if (details.error) {
+    return {
+      ok: false,
+      reason: "password_saving_get_failed",
+      message: details.error,
+    };
+  }
+  if (
+    details.levelOfControl &&
+    !["controllable_by_this_extension", "controlled_by_this_extension"].includes(
+      details.levelOfControl,
+    )
+  ) {
+    return {
+      ok: false,
+      reason: "password_saving_not_controllable",
+      levelOfControl: details.levelOfControl,
+      value: details.value,
+    };
+  }
+  if (details.value === false) {
+    return {
+      ok: true,
+      changed: false,
+      reason,
+      levelOfControl: details.levelOfControl,
+    };
+  }
+  return new Promise((resolve) => {
+    setting.set({ value: false }, () => {
+      if (chrome.runtime.lastError) {
+        resolve({
+          ok: false,
+          reason: "password_saving_set_failed",
+          message: chrome.runtime.lastError.message,
+        });
+        return;
+      }
+      resolve({
+        ok: true,
+        changed: true,
+        reason,
+        levelOfControl: details.levelOfControl,
+      });
+    });
+  });
+}
 
 function createFillRunId() {
   return `fill_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
@@ -700,32 +876,57 @@ function createC3WorkflowDetectionFunction() {
           .join(" "),
       );
     }).length;
-    var buttonLabels = Array.from(
+    var buttonItems = Array.from(
       document.querySelectorAll("a, button, [role='button']"),
     )
       .filter(visible)
       .map(function (el) {
-        return normalize(
+        var visibleText = normalize(
           [
             el.getAttribute("aria-label"),
             el.getAttribute("title"),
             el.innerText,
             el.textContent,
+          ]
+            .filter(Boolean)
+            .join(" "),
+        );
+        var metadata = normalize(
+          [
+            el.getAttribute("data-automation-id"),
+            el.getAttribute("data-testid"),
+            el.id,
+            el.getAttribute("name"),
             el.href,
           ]
             .filter(Boolean)
             .join(" "),
         );
+        return {
+          label: normalize([visibleText, metadata].filter(Boolean).join(" ")),
+          visibleText: visibleText,
+          metadata: metadata,
+          href: el.href || "",
+        };
       })
-      .filter(Boolean);
+      .filter(function (item) {
+        return item.label || item.visibleText || item.href;
+      });
+    var buttonLabels = buttonItems.map(function (item) {
+      return item.label;
+    });
     var buttons = buttonLabels.slice(0, 80);
     var currentStep = currentWorkdayStep();
     var startApplication = /start your application/i.test(bodyText);
-    function isWorkdayDetailsApplyLabel(label) {
-      var text = normalize(label);
+    function isWorkdayDetailsApplyItem(item) {
+      var text = normalize(item && (item.visibleText || item.label));
+      var metadata = normalize(item && item.metadata);
+      var href = normalize(item && item.href);
       return (
         /^apply(?:\s+apply)?$/i.test(text) ||
-        (/^apply\b/i.test(text) && /\/apply(?:$|[/?#\s])/i.test(text))
+        (/^apply\b/i.test(text) && /\/apply(?:$|[/?#\s])/i.test(href || metadata)) ||
+        (/^apply\b/i.test(text) &&
+          /apply|jobApply|externalApply/i.test(metadata))
       );
     }
     var applyManually = buttonLabels.some(function (label) {
@@ -737,8 +938,8 @@ function createC3WorkflowDetectionFunction() {
     var workdayDetailsApply =
       /myworkdayjobs\.com/i.test(location.hostname || "") &&
       (path.includes("/details/") || path.includes("/job/")) &&
-      buttonLabels.some(function (label) {
-        return isWorkdayDetailsApplyLabel(label);
+      buttonItems.some(function (item) {
+        return isWorkdayDetailsApplyItem(item);
       });
     var genericApplyEntry =
       (location.hostname.toLowerCase().includes("career") ||
@@ -766,8 +967,11 @@ function createC3WorkflowDetectionFunction() {
         return /sign in|log in|login/i.test(label);
       });
     var hasEmailSigninChoice = buttonLabels.some(function (label) {
-      return /\bsign in with email\b|\bsign in using email\b|\bemail sign in\b/i.test(
-        label,
+      var signal = label.toLowerCase().replace(/[^a-z0-9]+/g, "");
+      return (
+        /\bsign in with email\b|\bsign in using email\b|\bemail sign in\b/i.test(
+          label,
+        ) || signal.includes("signinwithemailbutton")
       );
     });
     var isWorkdayLoginPath =
@@ -818,6 +1022,13 @@ function createC3WorkflowDetectionFunction() {
       } else if (hasLoginFailure && hasCreateAccount) {
         authState = "signup";
         authUiState = "landing_choice";
+      } else if (
+        currentStepIsAuth &&
+        hasCreateAccount &&
+        /create account|sign up|register/i.test(currentStepTitle)
+      ) {
+        authState = "signup";
+        authUiState = passwordCount >= 2 ? "signup_form" : "landing_choice";
       } else if (hasCreateAccount && passwordCount >= 2) {
         authState = "signup";
         authUiState = "signup_form";
@@ -976,7 +1187,10 @@ function createClickAuthPrimaryActionFunction() {
       var exactEmailSignin =
         /\bsign in with email\b|\bsign in using email\b|\bemail sign in\b/.test(
           visibleText,
-        );
+        ) ||
+        lower(metadata)
+          .replace(/[^a-z0-9]+/g, "")
+          .includes("signinwithemailbutton");
       var exactSubmit = visibleText === "submit";
       var looseSignup =
         /(^|\b)(create account|sign up|signup|register|join today)(\b|$)/i.test(
@@ -987,6 +1201,8 @@ function createClickAuthPrimaryActionFunction() {
 
       if (wantsEmailVerification) {
         return 0;
+      } else if (exactEmailSignin && (!authState || authState === "unknown")) {
+        score = 135;
       } else if (wantsSignup) {
         if (exactSignup) {
           score = 120;
@@ -1031,6 +1247,9 @@ function createClickAuthPrimaryActionFunction() {
       }
       if (el.closest("form")) {
         score += 8;
+      }
+      if (/signinsubmitbutton|createaccountsubmitbutton/i.test(metadata)) {
+        score += 70;
       }
       if (
         tagName !== "button" &&
@@ -1143,6 +1362,19 @@ function createClickAuthPrimaryActionFunction() {
       return input.value === value;
     }
 
+    function suppressPasswordManagerForAuthInput(input) {
+      if (!input || lower(input.getAttribute("type") || "") !== "password") {
+        return;
+      }
+      input.setAttribute("autocomplete", "new-password");
+      input.setAttribute("data-hunt-password-manager-suppressed", "true");
+      var form = input.closest("form");
+      if (form) {
+        form.setAttribute("autocomplete", "off");
+        form.setAttribute("data-hunt-password-manager-suppressed", "true");
+      }
+    }
+
     function fillVisibleAuthFields() {
       var filled = [];
       Array.from(document.querySelectorAll("input"))
@@ -1180,6 +1412,9 @@ function createClickAuthPrimaryActionFunction() {
             source = "profile:accountPassword";
           }
           if (value && input.value !== value) {
+            if (source === "profile:accountPassword") {
+              suppressPasswordManagerForAuthInput(input);
+            }
             filled.push({
               selector: describeElement(input),
               source: source,
@@ -1597,13 +1832,31 @@ function createClickWorkdayApplyManuallyFunction() {
       return Array.from(document.querySelectorAll("a, button, [role='button']"))
         .filter(visible)
         .map(function (el) {
+          var visibleText = normalize(
+            [
+              el.getAttribute("aria-label"),
+              el.getAttribute("title"),
+              el.innerText,
+              el.textContent,
+            ]
+              .filter(Boolean)
+              .join(" "),
+          );
+          var metadata = normalize(
+            [
+              el.getAttribute("data-automation-id"),
+              el.getAttribute("data-testid"),
+              el.id,
+              el.getAttribute("name"),
+              el.href,
+            ]
+              .filter(Boolean)
+              .join(" "),
+          );
           return {
             el: el,
-            text: normalize(
-              [el.getAttribute("aria-label"), el.innerText, el.textContent]
-                .filter(Boolean)
-                .join(" "),
-            ),
+            text: visibleText,
+            metadata: metadata,
             href: el.href || "",
           };
         });
@@ -1611,10 +1864,13 @@ function createClickWorkdayApplyManuallyFunction() {
 
     function isPlainWorkdayApplyCandidate(item) {
       var text = normalize(item && item.text);
+      var metadata = normalize(item && item.metadata);
       var href = normalize(item && item.href);
       return (
         /^Apply(?:\s+Apply)?$/i.test(text) ||
-        (/^Apply\b/i.test(text) && /\/apply(?:$|[/?#\s])/i.test(href || text))
+        (/^Apply\b/i.test(text) && /\/apply(?:$|[/?#\s])/i.test(href || metadata)) ||
+        (/^Apply\b/i.test(text) &&
+          /apply|jobApply|externalApply/i.test(metadata))
       );
     }
 
@@ -1715,13 +1971,27 @@ function createClickWorkdayApplyManuallyFunction() {
             el.getAttribute("title"),
             el.innerText,
             el.textContent,
+          ]
+            .filter(Boolean)
+            .join(" "),
+        );
+        var metadata = normalize(
+          [
+            el.getAttribute("data-automation-id"),
+            el.getAttribute("data-testid"),
+            el.id,
+            el.getAttribute("name"),
             el.href,
           ]
             .filter(Boolean)
             .join(" "),
         );
         return (
-          isPlainWorkdayApplyCandidate({ text: label }) ||
+          isPlainWorkdayApplyCandidate({
+            text: label,
+            metadata: metadata,
+            href: el.href || "",
+          }) ||
           /(^|\s)apply now(\s|$)/i.test(label) ||
           /apply for this job/i.test(label) ||
           /apply to this job/i.test(label) ||
@@ -2199,7 +2469,8 @@ async function waitForAuthActionTransitionForTab(
     if (
       !lastDetection?.isAuthPage &&
       (lastReadiness.finalSubmitVisible ||
-        lastReadiness.validationErrorCount > 0 ||
+        lastReadiness.applicationFieldCount > 0 ||
+        Boolean(lastReadiness.currentStep?.title) ||
         lastReadiness.meaningfulControlCount >= 2)
     ) {
       return {
@@ -2231,7 +2502,32 @@ class C3JobFillWorkflow extends C3WorkflowSection {
 
   async run(detection) {
     const hasJobFillSignal =
-      Boolean(detection?.currentStep?.title) || detection?.phase === "job_fill";
+      Boolean(detection?.currentStep?.title) ||
+      Boolean(detection?.isAuthPage) ||
+      (detection?.phase === "job_fill" &&
+        Number(detection?.inputCount || 0) > 0);
+    if (!hasJobFillSignal) {
+      await this.notify("Waiting for an application, account, or apply page");
+      await this.log(
+        "blocked",
+        "Job-fill workflow blocked because no application surface was detected.",
+        {
+          detectedPhase: detection?.phase || "unknown",
+          currentStep: detection?.currentStep || null,
+          inputCount: detection?.inputCount || 0,
+          href: detection?.href || "",
+          buttons: detection?.buttons || [],
+        },
+        "blocked",
+      );
+      return {
+        ok: false,
+        skipped: true,
+        phase: "job_fill",
+        reason: "no_job_fill_surface",
+        detection,
+      };
+    }
     const message = detection?.isAuthPage
       ? detection.authState === "signup"
         ? "Filling account signup fields"
@@ -2625,6 +2921,50 @@ function hostsFromEmailVerificationPayload(payload = {}, tabUrl = "") {
   return Array.from(hosts).filter(Boolean);
 }
 
+function workdayAppScopeFromUrl(value = "") {
+  try {
+    const url = new URL(value);
+    const segments = String(url.pathname || "")
+      .split("/")
+      .map((segment) => segment.trim())
+      .filter(Boolean)
+      .filter((segment) => !/^[a-z]{2}-[A-Z]{2}$/i.test(segment));
+    return {
+      host: String(url.hostname || "").toLowerCase(),
+      appSegment: String(segments[0] || "").toLowerCase(),
+    };
+  } catch {
+    return { host: "", appSegment: "" };
+  }
+}
+
+function emailVerificationExpectedApplyUrl(payload = {}, state = {}, tabUrl = "") {
+  return (
+    payload.expectedApplyUrl ||
+    payload.applyUrl ||
+    state.activeApplyContext?.applyUrl ||
+    payload.jobUrl ||
+    tabUrl ||
+    ""
+  );
+}
+
+function emailVerificationTenantMatches(expectedUrl = "", actualUrl = "") {
+  const expected = workdayAppScopeFromUrl(expectedUrl);
+  const actual = workdayAppScopeFromUrl(actualUrl);
+  if (!expected.host || !actual.host) {
+    return true;
+  }
+  if (expected.host !== actual.host) {
+    return false;
+  }
+  return (
+    !expected.appSegment ||
+    !actual.appSegment ||
+    expected.appSegment === actual.appSegment
+  );
+}
+
 async function enterEmailVerificationCode(tabId, code) {
   if (!tabId || !code) {
     return { ok: false, reason: "missing_tab_or_code" };
@@ -2814,6 +3154,11 @@ async function awaitEmailVerification(payload = {}, sender = {}) {
     payload,
     tab?.url || state.activeApplyContext.applyUrl || "",
   );
+  const expectedApplyUrl = emailVerificationExpectedApplyUrl(
+    payload,
+    state,
+    tab?.url || "",
+  );
   if (!email) {
     await showPageToast(
       tabId,
@@ -2862,6 +3207,8 @@ async function awaitEmailVerification(payload = {}, sender = {}) {
           state.settings.emailVerificationTimeoutSeconds ||
           90,
         jobUrl: payload.jobUrl || tab?.url || state.activeApplyContext.applyUrl,
+        expectedApplyUrl,
+        expectedJobUrl: payload.expectedJobUrl || payload.jobUrl || expectedApplyUrl,
       }),
     });
     const result = await response.json().catch(() => ({
@@ -2940,6 +3287,41 @@ async function awaitEmailVerification(payload = {}, sender = {}) {
       fillRunId,
     );
     await chrome.tabs.update(tabId, { url: result.link, active: true });
+    await new Promise((resolve) => setTimeout(resolve, 1200));
+    const afterTab = await chrome.tabs.get(tabId).catch(() => null);
+    if (
+      afterTab?.url &&
+      !emailVerificationTenantMatches(expectedApplyUrl, afterTab.url)
+    ) {
+      await showPageToast(
+        tabId,
+        "Manual email verification required: verification link opened a different Workday tenant.",
+        "warn",
+      );
+      await logActivity(
+        "email_verification.tenant_mismatch",
+        "Blocked email verification because the opened link did not match the current Workday tenant.",
+        {
+          tabId,
+          source: result.source,
+          subject: result.subject,
+          receivedAt: result.receivedAt,
+          expectedApplyUrl,
+          actualUrl: afterTab.url,
+          linkHost: new URL(result.link).hostname,
+        },
+        "blocked",
+      );
+      return {
+        ok: false,
+        reason: "verification_link_tenant_mismatch",
+        message:
+          "Verification link opened a different Workday tenant than the current run.",
+        bridgeResult: result,
+        expectedApplyUrl,
+        actualUrl: afterTab.url,
+      };
+    }
     await logActivity(
       "email_verification.open_link",
       "Opened email verification link.",
@@ -3740,8 +4122,8 @@ async function waitForApplicationFieldsReadyAfterAuth(
     const hasApplicationSurface =
       !currentStepLooksAuth &&
       (lastProbe.finalSubmitVisible ||
-        lastProbe.validationErrorCount > 0 ||
-        lastProbe.applicationFieldCount > 0);
+        lastProbe.applicationFieldCount > 0 ||
+        Boolean(lastProbe.currentStep?.title));
     const readyKey = [
       lastProbe.href || "",
       currentStepTitle,
@@ -6366,11 +6748,11 @@ function fillCancelledResponse(state, reason = "user_cancelled") {
 }
 
 function fillNoProgressTimeoutResponse(state, progress = {}) {
+  const timeoutSeconds = Math.round(Number(progress.timeoutMs || 5000) / 1000);
   return {
     ok: false,
     reason: "fill_no_progress_timeout",
-    message:
-      "Fill stopped because no visible fields changed within 5 seconds.",
+    message: `Fill stopped because no visible fields changed within ${timeoutSeconds} seconds.`,
     route: {
       routeName: "timeout",
       fillSource: state.activeApplyContext.sourceMode || "manual",
@@ -6527,6 +6909,33 @@ async function inspectVisibleFillProgress(tabId) {
               values.push(`upload:${text.slice(0, 160)}`);
             }
           }
+          const activeWidgetLabels = [];
+          for (const widget of document.querySelectorAll(
+            [
+              '[role="listbox"]',
+              '[data-automation-id="activeListContainer"]',
+              '[data-automation-id="menuItem"]',
+              '[role="option"]',
+            ].join(", "),
+          )) {
+            if (!visible(widget)) {
+              continue;
+            }
+            const text = normalize(
+              widget.innerText ||
+                widget.textContent ||
+                widget.getAttribute?.("aria-label") ||
+                "",
+            );
+            if (text) {
+              activeWidgetLabels.push(text.slice(0, 120));
+            }
+          }
+          if (activeWidgetLabels.length) {
+            values.push(
+              `activeWidget:${activeWidgetLabels.slice(0, 6).join("|")}`,
+            );
+          }
           const errors = [...document.querySelectorAll('[role="alert"], [data-automation-id*="error" i], [id*="error" i]')]
             .filter(visible)
             .map((element) => normalize(element.innerText || element.textContent || ""))
@@ -6584,6 +6993,10 @@ async function runFillForTabWithNoProgressWatchdog(
         String(value || ""),
       ),
     );
+  const hasActiveWidgetProgress = (progress = {}) =>
+    (progress.values || []).some((value) =>
+      /^activeWidget:/i.test(String(value || "")),
+    );
   const fillPromise = runFillForTab(tabId, state, options)
     .then((result) => {
       settled = true;
@@ -6607,9 +7020,15 @@ async function runFillForTabWithNoProgressWatchdog(
         lastProgressAt = Date.now();
         continue;
       }
+      const baseNoProgressTimeoutMs = Math.max(
+        Number(options.noProgressTimeoutMs || 0),
+        FILL_NO_PROGRESS_TIMEOUT_MS,
+      );
       const progressTimeoutMs = hasUploadProgress(lastProgress)
         ? FILL_UPLOAD_PROGRESS_TIMEOUT_MS
-        : FILL_NO_PROGRESS_TIMEOUT_MS;
+        : hasActiveWidgetProgress(lastProgress)
+          ? FILL_ACTIVE_WIDGET_PROGRESS_TIMEOUT_MS
+          : baseNoProgressTimeoutMs;
       if (Date.now() - lastProgressAt < progressTimeoutMs) {
         continue;
       }
@@ -6621,7 +7040,7 @@ async function runFillForTabWithNoProgressWatchdog(
       await markPageFillCancelled(tabId, fillRunId, true);
       await logActivity(
         "fill.no_progress_timeout",
-        "Stopped fill because no visible fields changed within 5 seconds.",
+        `Stopped fill because no visible fields changed within ${Math.round(progressTimeoutMs / 1000)} seconds.`,
         {
           tabId,
           fillRunId,
@@ -6793,6 +7212,8 @@ async function runFillWithOneRefreshRetry(
         isCancelled: () => isFillRunCancelled(fillRunId),
         allowLlmAnswers: options.allowLlmAnswers === true,
         abortSignal: activeFillRuns.get(fillRunId)?.abortController?.signal,
+        noProgressTimeoutMs: options.noProgressTimeoutMs,
+        fieldFillTimeoutMs: options.fieldFillTimeoutMs,
       }),
       FILL_TIMEOUT_MS,
       () => ({
@@ -6918,6 +7339,8 @@ async function runFillWithOneRefreshRetry(
         isCancelled: () => isFillRunCancelled(fillRunId),
         allowLlmAnswers: options.allowLlmAnswers === true,
         abortSignal: activeFillRuns.get(fillRunId)?.abortController?.signal,
+        noProgressTimeoutMs: options.noProgressTimeoutMs,
+        fieldFillTimeoutMs: options.fieldFillTimeoutMs,
       }),
       FILL_TIMEOUT_MS,
       () => ({
@@ -7075,6 +7498,9 @@ async function handleMessage(message, sender = {}) {
       return { ok: true };
     }
 
+    case "hunt.apply.trusted_input":
+      return dispatchTrustedInput(message.payload || {}, sender);
+
     case "hunt.apply.await_email_verification":
       return awaitEmailVerification(message.payload || {}, sender);
 
@@ -7160,6 +7586,17 @@ async function handleMessage(message, sender = {}) {
           reason: "manual_fill_disabled",
           message: "Manual fill is currently disabled in extension settings.",
         };
+      }
+      const passwordSaving = await ensurePasswordSavingDisabled(
+        "fill_current_page",
+      );
+      if (!passwordSaving.ok) {
+        await logActivity(
+          "password_saving.disable_failed",
+          "C3 could not disable Chrome password saving before fill.",
+          passwordSaving,
+          "warn",
+        );
       }
       let result;
       const fillRunId = createFillRunId();
@@ -7338,12 +7775,19 @@ async function handleMessage(message, sender = {}) {
                 : "Filling current page: attempt 1";
             await showFillProgress(tabId, fillMessage, fillRunId);
             try {
+              const justEnteredApplication = Boolean(
+                workflow.applyEntry?.ok && !workflow.applyEntry?.skipped,
+              );
               result = await runFillWithOneRefreshRetry(
                 tabId,
                 state,
                 message.payload?.triggeredBy || "fill_current_page",
                 fillRunId,
-                { allowLlmAnswers },
+                {
+                  allowLlmAnswers,
+                  noProgressTimeoutMs: justEnteredApplication ? 15000 : 0,
+                  fieldFillTimeoutMs: justEnteredApplication ? 15000 : 0,
+                },
               );
             } finally {
               clearFillRunExpectedReloads(fillRunId);
@@ -7665,12 +8109,20 @@ async function handleMessage(message, sender = {}) {
 
 chrome.runtime.onInstalled.addListener(async () => {
   const state = await ensureStageOneState();
+  const passwordSaving = await ensurePasswordSavingDisabled("on_installed");
+  if (!passwordSaving.ok) {
+    console.warn("Could not disable Chrome password saving:", passwordSaving);
+  }
   await refreshPollingAlarms(state.settings);
   console.log("Hunt Apply extension installed.");
 });
 
 chrome.runtime.onStartup.addListener(async () => {
   const state = await ensureStageOneState();
+  const passwordSaving = await ensurePasswordSavingDisabled("on_startup");
+  if (!passwordSaving.ok) {
+    console.warn("Could not disable Chrome password saving:", passwordSaving);
+  }
   await refreshPollingAlarms(state.settings);
 });
 

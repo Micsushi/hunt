@@ -392,6 +392,104 @@ def test_workday_v2_source_prompt_drills_flat_category_to_radio_leaf():
     )
 
 
+def test_workday_v2_source_prompt_prefers_safe_job_site_leaf():
+    if sync_playwright is None:
+        pytest.skip("playwright is required for the Workday C3 fill fixture")
+
+    fill_v2_js = _module_to_browser_script(
+        _load_script(REPO_ROOT / "executioner/src/ats/workday/fill-v2.js")
+    )
+
+    with sync_playwright() as playwright:
+        try:
+            browser = playwright.chromium.launch()
+        except PlaywrightError as error:
+            pytest.skip(f"playwright chromium is unavailable: {error}")
+
+        page = browser.new_page()
+        page.set_content(
+            """
+            <html>
+              <body>
+                <div data-automation-id="applyFlowMyInfoPage">
+                  <div data-automation-id="formField-source" data-fkit-id="source--source">
+                    <label for="source--source">How Did You Hear About Us?*</label>
+                    <div data-automation-id="multiSelectContainer" data-uxi-widget-type="multiselect">
+                      <input id="source--source" placeholder="Search" aria-required="true" data-uxi-widget-type="selectinput" data-uxi-multiselect-id="source-list" />
+                    </div>
+                  </div>
+                </div>
+                <script>
+                  const container = document.querySelector("[data-automation-id='multiSelectContainer']");
+                  function showSourceMenu() {
+                    if (document.querySelector("#source-menu")) return;
+                    document.body.insertAdjacentHTML(
+                      "beforeend",
+                      `<div id="source-menu" role="listbox" data-automation-id="activeListContainer">
+                        <div id="source-email" role="option" data-automation-id="promptOption" data-hunt-prompt-category="true">Email <svg></svg></div>
+                        <div id="source-job-sites" role="option" data-automation-id="promptOption" data-hunt-prompt-category="true">Job Sites <svg></svg></div>
+                      </div>`
+                    );
+                    document.querySelector("#source-job-sites").addEventListener("click", () => {
+                      const menu = document.querySelector("#source-menu");
+                      setTimeout(() => {
+                        menu.innerHTML =
+                          `<div role="option" data-automation-id="promptOption" onclick="selectSource('Glassdoor')">Glassdoor</div>
+                           <div role="option" data-automation-id="promptOption" onclick="selectSource('Google')">Google</div>
+                           <div role="option" data-automation-id="promptOption" onclick="selectSource('Indeed')">Indeed</div>
+                           <div role="option" data-automation-id="promptOption" onclick="selectSource('Other Job Site')">Other Job Site</div>
+                           <div role="option" data-automation-id="promptOption" onclick="selectSource('Zip Recruiter')">Zip Recruiter</div>`;
+                      }, 120);
+                    });
+                  }
+                  window.selectSource = (leaf) => {
+                    container.insertAdjacentHTML(
+                      "beforeend",
+                      `<div role="option" data-automation-id="selectedItem" aria-label="${leaf}, press delete to clear value.">${leaf}</div>`
+                    );
+                    document.querySelector("#source-menu")?.remove();
+                  };
+                  document.querySelector("#source--source").addEventListener("click", showSourceMenu);
+                </script>
+              </body>
+            </html>
+            """
+        )
+        _load_v2_workday_scripts(page)
+        page.add_script_tag(content=fill_v2_js)
+        result = page.evaluate(
+            """
+            async () => {
+              const fill = createWorkdayFillV2Function();
+              return await fill({
+                profile: {
+                  applicationSourceCategory: "Job Board",
+                  applicationSource: "LinkedIn",
+                  applicationSourceDetail: "LinkedIn",
+                },
+                settings: { fillRequiredOnly: true, useFieldPipelineV2: true },
+                activeApplyContext: {},
+                defaultResume: {},
+                fillRunId: "workday_source_safe_leaf",
+              });
+            }
+            """
+        )
+        selected = page.evaluate(
+            """
+            () => document.querySelector("[data-automation-id='selectedItem']")?.textContent.trim() || ""
+            """
+        )
+        browser.close()
+
+    fields = {entry["fieldId"]: entry for entry in result["v2Audit"]["fields"]}
+    source = fields["source--source"]
+
+    assert result["ok"] is True
+    assert selected == "Indeed"
+    assert source["filled"] is True
+
+
 def test_workday_v2_source_prompt_uses_react_click_for_category_and_leaf():
     if sync_playwright is None:
         pytest.skip("playwright is required for the Workday C3 fill fixture")
@@ -706,6 +804,74 @@ def test_workday_v2_uses_specific_identity_for_grouped_my_info_fields():
     assert "address--addressLine1" in skipped
     assert "address--postalCode" in skipped
     assert "phoneNumber--extension" in skipped
+
+
+def test_workday_v2_text_fill_uses_per_character_framework_events():
+    if sync_playwright is None:
+        pytest.skip("playwright is required for the Workday C3 fill fixture")
+
+    fill_v2_js = _module_to_browser_script(
+        _load_script(REPO_ROOT / "executioner/src/ats/workday/fill-v2.js")
+    )
+
+    with sync_playwright() as playwright:
+        try:
+            browser = playwright.chromium.launch()
+        except PlaywrightError as error:
+            pytest.skip(f"playwright chromium is unavailable: {error}")
+
+        page = browser.new_page()
+        page.set_content(
+            """
+            <html>
+              <body>
+                <div data-automation-id="applyFlowMyInfoPage">
+                  <div data-automation-id="formField-firstName">
+                    First Name*
+                    <input id="name--legalName--firstName" name="legalName--firstName" aria-required="true" />
+                  </div>
+                  <script>
+                    window.__frameworkModel = { firstName: "" };
+                    const firstName = document.querySelector("#name--legalName--firstName");
+                    firstName.addEventListener("input", (event) => {
+                      if (event.data && event.data.length === 1) {
+                        window.__frameworkModel.firstName += event.data;
+                      }
+                    });
+                  </script>
+                </div>
+              </body>
+            </html>
+            """
+        )
+        _load_v2_workday_scripts(page)
+        page.add_script_tag(content=fill_v2_js)
+        result = page.evaluate(
+            """
+            async () => {
+              const fill = createWorkdayFillV2Function();
+              return await fill({
+                profile: { fullName: "Michael Shi", firstName: "Michael" },
+                settings: { fillRequiredOnly: true, useFieldPipelineV2: true },
+                activeApplyContext: {},
+                defaultResume: {},
+                fillRunId: "workday_text_framework_events",
+              });
+            }
+            """
+        )
+        values = page.evaluate(
+            """
+            () => ({
+              dom: document.querySelector("#name--legalName--firstName").value,
+              model: window.__frameworkModel.firstName,
+            })
+            """
+        )
+        browser.close()
+
+    assert result["ok"] is True
+    assert values == {"dom": "Michael", "model": "Michael"}
 
 
 def test_workday_v2_does_not_fill_optional_preferred_name_checkbox_by_fallback():
@@ -1223,6 +1389,211 @@ def test_workday_v2_repeatables_repairs_missing_degree_choice_on_dirty_row():
     assert sections["Education"]["skippedReason"] == ""
 
 
+def test_workday_v2_repeatables_uses_keyboard_fallback_for_degree_choice():
+    if sync_playwright is None:
+        pytest.skip("playwright is required for the Workday C3 fill fixture")
+
+    fill_v2_js = _module_to_browser_script(
+        _load_script(REPO_ROOT / "executioner/src/ats/workday/fill-v2.js")
+    )
+
+    with sync_playwright() as playwright:
+        try:
+            browser = playwright.chromium.launch()
+        except PlaywrightError as error:
+            pytest.skip(f"playwright chromium is unavailable: {error}")
+
+        page = browser.new_page()
+        page.set_content(
+            """
+            <html>
+              <body>
+                <h2>My Experience</h2>
+                <section id="education">
+                  <h3>Education</h3>
+                  <div class="row" data-kind="education">
+                    <h4>Education 1</h4>
+                    <label>School or University*<input id="education-98--schoolName" value="University of Alberta"></label>
+                    <label>Degree*
+                      <button id="education-98--degree" name="degree" type="button" aria-haspopup="listbox" aria-label="Degree Select One Required">Select One</button>
+                    </label>
+                  </div>
+                </section>
+                <script>
+                  const button = document.querySelector("#education-98--degree");
+                  button.addEventListener("click", () => {
+                    if (document.querySelector("#degree-options")) return;
+                    document.body.insertAdjacentHTML(
+                      "beforeend",
+                      `<ul id="degree-options" role="listbox" tabindex="0">
+                        <li role="option">Select One</li>
+                        <li role="option">Other</li>
+                        <li role="option">Not applicable</li>
+                        <li role="option">Some Secondary / HighSchool</li>
+                        <li role="option">Secondary / High School / General Equivalency Diploma</li>
+                        <li role="option">Some College</li>
+                        <li role="option">Trade, Technical School or Apprenticeship</li>
+                        <li role="option">Associate Degree</li>
+                        <li role="option">Executive / Management Development Program</li>
+                        <li role="option" data-value="bachelor">Bachelor / Undergraduate Degree</li>
+                        <li role="option">Master / Graduate Degree</li>
+                      </ul>`
+                    );
+                    const listbox = document.querySelector("#degree-options");
+                    let active = 0;
+                    listbox.addEventListener("keydown", (event) => {
+                      if (event.key === "Home") active = 0;
+                      if (event.key === "ArrowDown") active = Math.min(active + 1, listbox.children.length - 1);
+                      if (event.key === "Enter") {
+                        const option = listbox.children[active];
+                        button.textContent = option.textContent;
+                        button.value = option.getAttribute("data-value") || option.textContent;
+                        listbox.remove();
+                      }
+                    });
+                  });
+                </script>
+              </body>
+            </html>
+            """
+        )
+        _load_v2_workday_scripts(page)
+        page.add_script_tag(content=fill_v2_js)
+        result = page.evaluate(
+            """
+            async () => {
+              const fill = createWorkdayFillV2Function();
+              return await fill({
+                profile: {
+                  educationHistory: [
+                    {
+                      university: "University of Alberta",
+                      degree: "Bachelor's Degree",
+                      degreeLevel: "Bachelors",
+                      fieldOfStudy: "Computer Science",
+                    },
+                  ],
+                },
+                settings: {
+                  fillRequiredOnly: true,
+                  useFieldPipelineV2: true,
+                },
+                activeApplyContext: {},
+                defaultResume: {},
+                fillRunId: "workday_degree_keyboard_fallback",
+              });
+            }
+            """
+        )
+        degree = page.evaluate(
+            """() => document.querySelector("#education-98--degree").textContent.trim()"""
+        )
+        browser.close()
+
+    assert result["ok"] is True
+    assert degree == "Bachelor / Undergraduate Degree"
+
+
+def test_workday_v2_repeatable_skills_use_trusted_click_when_dom_click_does_not_commit():
+    if sync_playwright is None:
+        pytest.skip("playwright is required for the Workday C3 fill fixture")
+
+    with sync_playwright() as playwright:
+        try:
+            browser = playwright.chromium.launch()
+        except PlaywrightError as error:
+            pytest.skip(f"playwright chromium is unavailable: {error}")
+
+        page = browser.new_page()
+        page.set_content(
+            """
+            <html>
+              <body>
+                <main data-automation-id="applyFlowMyExperiencePage">
+                  <h4>Skills</h4>
+                  <div data-automation-id="formField-skills">
+                    <label for="skills--skills">Type to Add Skills</label>
+                    <input id="skills--skills" data-automation-id="searchBox" />
+                    <div id="selected-skills" data-automation-id="selectedItemList">0 items selected</div>
+                  </div>
+                </main>
+                <script>
+                  const input = document.querySelector("#skills--skills");
+                  const selected = document.querySelector("#selected-skills");
+                  window.trustedInputRequests = [];
+                  function renderOptions() {
+                    document.querySelector("#skills-menu")?.remove();
+                    document.body.insertAdjacentHTML(
+                      "beforeend",
+                      `<div id="skills-menu" role="listbox" data-automation-id="activeListContainer">
+                        <div id="communication-option" role="option" data-automation-id="menuItem">
+                          <input id="communication-checkbox" type="checkbox" data-automation-id="checkboxPanel" />
+                          Communication
+                        </div>
+                      </div>`
+                    );
+                  }
+                  function commitTrusted(label) {
+                    selected.innerHTML =
+                      `<div data-automation-id="selectedItem">${label}</div>`;
+                    input.value = "";
+                    document.querySelector("#skills-menu")?.remove();
+                  }
+                  window.chrome = {
+                    runtime: {
+                      lastError: null,
+                      sendMessage(message, callback) {
+                        window.trustedInputRequests.push(message);
+                        if (message?.type === "hunt.apply.trusted_input") {
+                          commitTrusted(message.payload.label);
+                          callback({ ok: true, reason: "test_trusted_click" });
+                          return;
+                        }
+                        callback({ ok: false, reason: "unexpected_message" });
+                      },
+                    },
+                  };
+                  input.addEventListener("click", renderOptions);
+                  input.addEventListener("input", renderOptions);
+                </script>
+              </body>
+            </html>
+            """
+        )
+        _load_v2_workday_scripts(page)
+
+        result = page.evaluate(
+            """
+            async () => {
+              return await window.__huntV2.workdayRepeatables.fillWorkdayRepeatables({
+                profile: { skills: ["Communication"] },
+              });
+            }
+            """
+        )
+        values = page.evaluate(
+            """
+            () => ({
+              selected: document.querySelector("[data-automation-id='selectedItem']")?.textContent.trim() || "",
+              trustedInputCount: window.trustedInputRequests.length,
+              trustedInputType: window.trustedInputRequests[0]?.type || "",
+              trustedPurpose: window.trustedInputRequests[0]?.payload?.purpose || "",
+              trustedLabel: window.trustedInputRequests[0]?.payload?.label || "",
+            })
+            """
+        )
+        browser.close()
+
+    assert result["filledFieldCount"] == 1
+    assert values == {
+        "selected": "Communication",
+        "trustedInputCount": 1,
+        "trustedInputType": "hunt.apply.trusted_input",
+        "trustedPurpose": "repeatable_skill_option",
+        "trustedLabel": "Communication",
+    }
+
+
 def test_workday_bdo_questionnaire_defaults_and_location_answer():
     if sync_playwright is None:
         pytest.skip("playwright is required for the Workday C3 fill fixture")
@@ -1732,3 +2103,590 @@ def test_workday_repeatable_skills_uses_generic_remote_checkbox_fallback():
         "openMenu": False,
     }
     assert sections["Skills"]["filled"] is True
+
+
+def test_workday_ethnicity_prompt_selects_prefer_not_to_respond_canada():
+    if sync_playwright is None:
+        pytest.skip("playwright is required for the Workday C3 fill fixture")
+
+    fill_v2_js = _module_to_browser_script(
+        _load_script(REPO_ROOT / "executioner/src/ats/workday/fill-v2.js")
+    )
+
+    with sync_playwright() as playwright:
+        try:
+            browser = playwright.chromium.launch()
+        except PlaywrightError as error:
+            pytest.skip(f"playwright chromium is unavailable: {error}")
+
+        page = browser.new_page()
+        page.set_content(
+            """
+            <html>
+              <head>
+                <style>
+                  body { font-family: system-ui, sans-serif; margin: 24px; }
+                  [role="option"] { min-height: 28px; display: block; }
+                  input { display: block; width: 320px; }
+                </style>
+              </head>
+              <body>
+                <main data-automation-id="applyFlowVoluntaryDisclosuresPage">
+                  <h3>Voluntary Disclosures</h3>
+                  <div data-automation-id="formField-personalInfoPerson--ethnicities">
+                    <label for="personalInfoPerson--ethnicities">Ethnicity*</label>
+                    <div id="selected-ethnicities" data-automation-id="selectedItemList">0 items selected</div>
+                    <input
+                      id="personalInfoPerson--ethnicities"
+                      aria-required="true"
+                      aria-invalid="true"
+                      placeholder="Search"
+                      data-uxi-widget-type="selectinput"
+                      data-uxi-multiselect-id="ethnicity-list"
+                    />
+                    <div id="ethnicity-error">Error: The field Ethnicity is required and must have a value.</div>
+                  </div>
+                  <label>
+                    <input id="termsAndConditions--acceptTermsAndAgreements" type="checkbox" required />
+                    Yes, I have read and acknowledge Autodesk's Candidate Privacy Statement.*
+                  </label>
+                </main>
+                <script>
+                  const input = document.querySelector("#personalInfoPerson--ethnicities");
+                  const selected = document.querySelector("#selected-ethnicities");
+                  function attachReactClick(el, handler) {
+                    el["__reactFiber$hunt"] = {
+                      memoizedProps: { onClick: handler },
+                      return: null,
+                    };
+                  }
+                  function selectEthnicity(label) {
+                    selected.innerHTML =
+                      `<div data-automation-id="selectedItem" aria-label="${label}, press delete to clear value.">${label}</div>`;
+                    document.querySelector("#ethnicity-menu")?.remove();
+                    document.querySelector("#ethnicity-error").remove();
+                    input.value = "";
+                    input.removeAttribute("aria-invalid");
+                  }
+                  function renderOptions() {
+                    document.querySelector("#ethnicity-menu")?.remove();
+                    document.body.insertAdjacentHTML(
+                      "beforeend",
+                      `<div id="ethnicity-menu" role="listbox" data-automation-id="activeListContainer">
+                        <div id="asian-option" role="option" data-automation-id="menuItem">Asian (Canada)</div>
+                        <div id="prefer-not-option" role="option" data-automation-id="menuItem">Prefer not to respond (Canada)</div>
+                      </div>`
+                    );
+                    attachReactClick(
+                      document.querySelector("#prefer-not-option"),
+                      () => selectEthnicity("Prefer not to respond (Canada)")
+                    );
+                  }
+                  input.addEventListener("click", renderOptions);
+                  input.addEventListener("input", renderOptions);
+                </script>
+              </body>
+            </html>
+            """
+        )
+        _load_v2_workday_scripts(page)
+        page.add_script_tag(content=fill_v2_js)
+
+        result = page.evaluate(
+            """
+            async () => {
+              const fill = createWorkdayFillV2Function();
+              return await fill({
+                profile: {},
+                settings: {
+                  fillRequiredOnly: true,
+                  useFieldPipelineV2: true,
+                },
+                activeApplyContext: {},
+                defaultResume: {},
+                fillRunId: "workday_ethnicity_prompt_neutral",
+              });
+            }
+            """
+        )
+        values = page.evaluate(
+            """
+            () => ({
+              selected: document.querySelector("[data-automation-id='selectedItem']")?.textContent.trim() || "",
+              inputValue: document.querySelector("#personalInfoPerson--ethnicities")?.value || "",
+              invalid: document.querySelector("#personalInfoPerson--ethnicities")?.getAttribute("aria-invalid") || "",
+              errorPresent: Boolean(document.querySelector("#ethnicity-error")),
+              termsChecked: document.querySelector("#termsAndConditions--acceptTermsAndAgreements")?.checked || false,
+            })
+            """
+        )
+        browser.close()
+
+    fields = {entry["fieldId"]: entry for entry in result["v2Audit"]["fields"]}
+    ethnicity = fields["personalInfoPerson--ethnicities"]
+
+    assert result["ok"] is True
+    assert values == {
+        "selected": "Prefer not to respond (Canada)",
+        "inputValue": "",
+        "invalid": "",
+        "errorPresent": False,
+        "termsChecked": True,
+    }
+    assert ethnicity["questionType"] == "ethnicity_disclosure_neutral"
+    assert ethnicity["selectedOption"] == "Prefer not to respond (Canada)"
+    assert ethnicity["filled"] is True
+
+
+def test_workday_prompt_uses_trusted_input_fallback_when_dom_click_does_not_commit():
+    if sync_playwright is None:
+        pytest.skip("playwright is required for the Workday C3 fill fixture")
+
+    fill_v2_js = _module_to_browser_script(
+        _load_script(REPO_ROOT / "executioner/src/ats/workday/fill-v2.js")
+    )
+
+    with sync_playwright() as playwright:
+        try:
+            browser = playwright.chromium.launch()
+        except PlaywrightError as error:
+            pytest.skip(f"playwright chromium is unavailable: {error}")
+
+        page = browser.new_page()
+        page.set_content(
+            """
+            <html>
+              <body>
+                <main data-automation-id="applyFlowVoluntaryDisclosuresPage">
+                  <div data-automation-id="formField-personalInfoPerson--ethnicities">
+                    <label for="personalInfoPerson--ethnicities">Ethnicity*</label>
+                    <div id="selected-ethnicities" data-automation-id="selectedItemList">0 items selected</div>
+                    <input
+                      id="personalInfoPerson--ethnicities"
+                      aria-required="true"
+                      aria-invalid="true"
+                      placeholder="Search"
+                      data-uxi-widget-type="selectinput"
+                      data-uxi-multiselect-id="ethnicity-list"
+                    />
+                    <div id="ethnicity-error">Error: The field Ethnicity is required and must have a value.</div>
+                  </div>
+                </main>
+                <script>
+                  const input = document.querySelector("#personalInfoPerson--ethnicities");
+                  const selected = document.querySelector("#selected-ethnicities");
+                  window.trustedInputRequests = [];
+                  function commitTrusted(label) {
+                    selected.innerHTML =
+                      `<div data-automation-id="selectedItem" aria-label="${label}, press delete to clear value.">${label}</div>`;
+                    document.querySelector("#ethnicity-menu")?.remove();
+                    document.querySelector("#ethnicity-error")?.remove();
+                    input.value = "";
+                    input.removeAttribute("aria-invalid");
+                  }
+                  window.chrome = {
+                    runtime: {
+                      lastError: null,
+                      sendMessage(message, callback) {
+                        window.trustedInputRequests.push(message);
+                        if (message?.type === "hunt.apply.trusted_input") {
+                          commitTrusted(message.payload.label);
+                          callback({ ok: true, reason: "test_trusted_click" });
+                          return;
+                        }
+                        callback({ ok: false, reason: "unexpected_message" });
+                      },
+                    },
+                  };
+                  function renderOptions() {
+                    document.querySelector("#ethnicity-menu")?.remove();
+                    document.body.insertAdjacentHTML(
+                      "beforeend",
+                      `<div id="ethnicity-menu" role="listbox" data-automation-id="activeListContainer">
+                        <div id="asian-option" role="option" data-automation-id="menuItem">Asian (Canada)</div>
+                        <div id="prefer-not-option" role="option" data-automation-id="menuItem">Prefer not to respond (Canada)</div>
+                      </div>`
+                    );
+                  }
+                  input.addEventListener("click", renderOptions);
+                  input.addEventListener("input", renderOptions);
+                </script>
+              </body>
+            </html>
+            """
+        )
+        _load_v2_workday_scripts(page)
+        page.add_script_tag(content=fill_v2_js)
+
+        result = page.evaluate(
+            """
+            async () => {
+              const fill = createWorkdayFillV2Function();
+              return await fill({
+                profile: {},
+                settings: {
+                  fillRequiredOnly: true,
+                  useFieldPipelineV2: true,
+                },
+                activeApplyContext: {},
+                defaultResume: {},
+                fillRunId: "workday_prompt_trusted_input",
+              });
+            }
+            """
+        )
+        values = page.evaluate(
+            """
+            () => ({
+              selected: document.querySelector("[data-automation-id='selectedItem']")?.textContent.trim() || "",
+              trustedInputCount: window.trustedInputRequests.length,
+              trustedInputType: window.trustedInputRequests[0]?.type || "",
+              trustedPurpose: window.trustedInputRequests[0]?.payload?.purpose || "",
+            })
+            """
+        )
+        browser.close()
+
+    fields = {entry["fieldId"]: entry for entry in result["v2Audit"]["fields"]}
+    ethnicity = fields["personalInfoPerson--ethnicities"]
+
+    assert result["ok"] is True
+    assert values == {
+        "selected": "Prefer not to respond (Canada)",
+        "trustedInputCount": 1,
+        "trustedInputType": "hunt.apply.trusted_input",
+        "trustedPurpose": "option",
+    }
+    assert ethnicity["filled"] is True
+
+
+def test_workday_disclosure_dropdown_scrolls_to_virtualized_neutral_option():
+    if sync_playwright is None:
+        pytest.skip("playwright is required for the Workday C3 fill fixture")
+
+    fill_v2_js = _module_to_browser_script(
+        _load_script(REPO_ROOT / "executioner/src/ats/workday/fill-v2.js")
+    )
+
+    with sync_playwright() as playwright:
+        try:
+            browser = playwright.chromium.launch()
+        except PlaywrightError as error:
+            pytest.skip(f"playwright chromium is unavailable: {error}")
+
+        page = browser.new_page()
+        page.set_content(
+            """
+            <html>
+              <head>
+                <style>
+                  body { font-family: system-ui, sans-serif; margin: 24px; }
+                  #ethnicity-menu {
+                    position: absolute;
+                    top: 120px;
+                    left: 24px;
+                    width: 520px;
+                    height: 72px;
+                    overflow-y: auto;
+                    border: 1px solid #999;
+                  }
+                  [role="option"] { height: 32px; padding: 4px; }
+                </style>
+              </head>
+              <body>
+                <div data-automation-id="applyFlowVoluntaryDisclosuresPage">
+                  <div data-automation-id="formField-ethnicity">
+                    <label for="personalInfoUS--ethnicity">Please select the ethnicity which most accurately describes you.*</label>
+                    <button id="personalInfoUS--ethnicity" type="button" aria-haspopup="listbox" aria-label="Please select the ethnicity which most accurately describes you. Select One Required">Select One</button>
+                    <div id="ethnicity-error" data-automation-id="inputAlert">Required</div>
+                  </div>
+                </div>
+                <script>
+                  const button = document.querySelector("#personalInfoUS--ethnicity");
+                  function commit(label) {
+                    button.textContent = label;
+                    button.setAttribute("aria-label", label);
+                    document.querySelector("#ethnicity-error")?.remove();
+                    document.querySelector("#ethnicity-menu")?.remove();
+                  }
+                  function renderInitial() {
+                    if (document.querySelector("#ethnicity-menu")) return;
+                    document.body.insertAdjacentHTML(
+                      "beforeend",
+                      `<div id="ethnicity-menu" role="listbox" data-automation-id="activeListContainer">
+                         <div role="option" data-automation-id="menuItem" onclick="commit('Asian (Not Hispanic or Latino) (United States of America)')">Asian (Not Hispanic or Latino) (United States of America)</div>
+                         <div role="option" data-automation-id="menuItem" onclick="commit('White (Not Hispanic or Latino) (United States of America)')">White (Not Hispanic or Latino) (United States of America)</div>
+                         <div style="height: 260px"></div>
+                       </div>`
+                    );
+                    const menu = document.querySelector("#ethnicity-menu");
+                    menu.addEventListener("scroll", () => {
+                      if (menu.scrollTop < 200 || document.querySelector("#not-specified-option")) return;
+                      menu.insertAdjacentHTML(
+                        "beforeend",
+                        `<div id="not-specified-option" role="option" data-automation-id="menuItem" onclick="commit('Not Specified (United States of America)')">Not Specified (United States of America)</div>`
+                      );
+                    });
+                  }
+                  button.addEventListener("click", renderInitial);
+                </script>
+              </body>
+            </html>
+            """
+        )
+        _load_v2_workday_scripts(page)
+        page.add_script_tag(content=fill_v2_js)
+
+        result = page.evaluate(
+            """
+            async () => {
+              const fill = createWorkdayFillV2Function();
+              return await fill({
+                profile: {},
+                settings: {
+                  fillRequiredOnly: true,
+                  useFieldPipelineV2: true,
+                },
+                activeApplyContext: {},
+                defaultResume: {},
+                fillRunId: "workday_disclosure_virtualized_neutral",
+              });
+            }
+            """
+        )
+        value = page.evaluate(
+            """
+            () => document.querySelector("#personalInfoUS--ethnicity")?.textContent.trim() || ""
+            """
+        )
+        browser.close()
+
+    fields = {entry["fieldId"]: entry for entry in result["v2Audit"]["fields"]}
+    ethnicity = fields["personalInfoUS--ethnicity"]
+
+    assert result["ok"] is True
+    assert value == "Not Specified (United States of America)"
+    assert ethnicity["filled"] is True
+
+
+def test_workday_sanctioned_country_checkbox_selects_actual_none_input():
+    if sync_playwright is None:
+        pytest.skip("playwright is required for the Workday C3 fill fixture")
+
+    fill_v2_js = _module_to_browser_script(
+        _load_script(REPO_ROOT / "executioner/src/ats/workday/fill-v2.js")
+    )
+
+    with sync_playwright() as playwright:
+        try:
+            browser = playwright.chromium.launch()
+        except PlaywrightError as error:
+            pytest.skip(f"playwright chromium is unavailable: {error}")
+
+        page = browser.new_page()
+        page.set_content(
+            """
+            <html>
+              <body>
+                <div data-automation-id="applyFlowQuestionnairePage">
+                  <fieldset aria-required="true">
+                    <legend>Please indicate which, if any, where you are a citizen.*</legend>
+                    <label for="citizen-cuba">Cuba</label>
+                    <input id="citizen-cuba" type="checkbox" aria-label="Please indicate which, if any, where you are a citizen. Cuba Required" />
+                    <label for="citizen-syria">Syria</label>
+                    <input id="citizen-syria" type="checkbox" aria-label="Please indicate which, if any, where you are a citizen. Syria Required" />
+                    <label for="citizen-none">None of these</label>
+                    <input id="citizen-none" type="checkbox" aria-label="Please indicate which, if any, where you are a citizen. None of these Required" />
+                    <div id="citizenship-error" data-automation-id="inputAlert">Required</div>
+                  </fieldset>
+                </div>
+                <script>
+                  for (const input of document.querySelectorAll("input[type='checkbox']")) {
+                    input.addEventListener("change", () => {
+                      if (document.querySelector("#citizen-none").checked) {
+                        document.querySelector("#citizenship-error")?.remove();
+                      }
+                    });
+                  }
+                </script>
+              </body>
+            </html>
+            """
+        )
+        _load_v2_workday_scripts(page)
+        page.add_script_tag(content=fill_v2_js)
+
+        result = page.evaluate(
+            """
+            async () => {
+              const fill = createWorkdayFillV2Function();
+              return await fill({
+                profile: {},
+                settings: {
+                  fillRequiredOnly: true,
+                  useFieldPipelineV2: true,
+                },
+                activeApplyContext: {},
+                defaultResume: {},
+                fillRunId: "workday_sanctioned_country_none",
+              });
+            }
+            """
+        )
+        values = page.evaluate(
+            """
+            () => ({
+              cuba: document.querySelector("#citizen-cuba").checked,
+              syria: document.querySelector("#citizen-syria").checked,
+              none: document.querySelector("#citizen-none").checked,
+            })
+            """
+        )
+        browser.close()
+
+    assert result["ok"] is True
+    assert values == {
+        "cuba": False,
+        "syria": False,
+        "none": True,
+    }
+
+
+def test_workday_repeatable_skills_does_not_write_into_active_name_field():
+    if sync_playwright is None:
+        pytest.skip("playwright is required for the Workday C3 fill fixture")
+
+    repeatables_source = _load_script(
+        REPO_ROOT / "executioner/src/ats/workday/workday-repeatables-v2.js"
+    )
+    assert 'execCommand("insertText"' not in repeatables_source
+    assert "document.execCommand" not in repeatables_source
+
+    fill_v2_js = _module_to_browser_script(
+        _load_script(REPO_ROOT / "executioner/src/ats/workday/fill-v2.js")
+    )
+
+    with sync_playwright() as playwright:
+        try:
+            browser = playwright.chromium.launch()
+        except PlaywrightError as error:
+            pytest.skip(f"playwright chromium is unavailable: {error}")
+
+        page = browser.new_page()
+        page.set_content(
+            """
+            <html>
+              <head>
+                <style>
+                  body { font-family: system-ui, sans-serif; margin: 24px; }
+                  section { border-top: 1px solid #ddd; padding: 16px 0; }
+                  input { display: block; margin: 8px 0; width: 320px; }
+                  [role="option"] { display: block; min-height: 28px; }
+                </style>
+              </head>
+              <body>
+                <h3>My Experience</h3>
+                <input id="self-identify-name" value="Michael Shi" />
+                <section id="skills-section">
+                  <h4>Skills</h4>
+                  <div data-automation-id="formField-skills">
+                    <label>Type to Add Skills
+                      <input
+                        id="skills--skills"
+                        aria-required="true"
+                        data-uxi-widget-type="selectinput"
+                        data-uxi-multiselect-id="skill-list"
+                      />
+                    </label>
+                    <div id="selected-skills" data-automation-id="selectedItemList"></div>
+                  </div>
+                </section>
+                <script>
+                  const nameInput = document.querySelector("#self-identify-name");
+                  const skillInput = document.querySelector("#skills--skills");
+                  const selected = document.querySelector("#selected-skills");
+                  nameInput.focus();
+                  document.execCommand = (command, _showUi, value) => {
+                    if (command === "insertText" && document.activeElement) {
+                      document.activeElement.value += value;
+                    }
+                    return true;
+                  };
+                  function attachReactClick(el, handler) {
+                    el["__reactFiber$hunt"] = {
+                      memoizedProps: { onClick: handler },
+                      return: null,
+                    };
+                  }
+                  function selectSkill(label) {
+                    selected.innerHTML =
+                      `<div data-automation-id="selectedItem" aria-label="${label}, press delete to clear value.">${label}</div>`;
+                    document.querySelector("#skill-menu")?.remove();
+                    skillInput.value = "";
+                    skillInput.removeAttribute("aria-invalid");
+                  }
+                  function renderOptions() {
+                    const query = skillInput.value || "";
+                    document.querySelector("#skill-menu")?.remove();
+                    if (!/communication/i.test(query)) return;
+                    document.body.insertAdjacentHTML(
+                      "beforeend",
+                      `<div id="skill-menu" role="listbox" data-automation-id="activeListContainer">
+                        <div id="communication-row" role="option" data-automation-id="menuItem" aria-label="Communication not checked">
+                          <input id="communication-checkbox" type="checkbox" data-automation-id="checkboxPanel" />
+                          <span>Communication</span>
+                        </div>
+                      </div>`
+                    );
+                    attachReactClick(
+                      document.querySelector("#communication-checkbox"),
+                      () => selectSkill("Communication")
+                    );
+                  }
+                  skillInput.addEventListener("input", () => setTimeout(renderOptions, 80));
+                  skillInput.addEventListener("click", renderOptions);
+                </script>
+              </body>
+            </html>
+            """
+        )
+        _load_v2_workday_scripts(page)
+        page.add_script_tag(content=fill_v2_js)
+
+        result = page.evaluate(
+            """
+            async () => {
+              const fill = createWorkdayFillV2Function();
+              return await fill({
+                profile: {
+                  fullName: "Michael Shi",
+                  skillList: ["Python"],
+                },
+                settings: {
+                  fillRequiredOnly: true,
+                  useFieldPipelineV2: true,
+                },
+                activeApplyContext: {},
+                defaultResume: {},
+                fillRunId: "workday_skill_no_name_pollution",
+              });
+            }
+            """
+        )
+        values = page.evaluate(
+            """
+            () => ({
+              name: document.querySelector("#self-identify-name")?.value || "",
+              selected: document.querySelector("[data-automation-id='selectedItem']")?.textContent.trim() || "",
+              inputValue: document.querySelector("#skills--skills")?.value || "",
+            })
+            """
+        )
+        browser.close()
+
+    assert result["ok"] is True
+    assert values == {
+        "name": "Michael Shi",
+        "selected": "Communication",
+        "inputValue": "",
+    }

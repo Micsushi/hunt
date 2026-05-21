@@ -72,14 +72,16 @@ Status on 2026-05-11:
 Use `p chrome` for repeatable extension reloads, fixture smokes, DOM/iframe
 inspection, screenshots, Workday debugging, and Hootsuite-style debugging.
 
-Detailed `p chrome` operating notes and job fast paths live in the vault, not in
-repo docs. Before using `p chrome`, read:
+Detailed `p chrome` operating notes and job fast paths are internal agent
+memory, not repo documentation. Keep repo scripts here; keep job/browser memory
+outside public docs.
 
-```text
-C:\Users\sushi\Documents\agentsvault\Wiki\Projects\Hunt\p-chrome\_index.md
-```
-
-Keep repo scripts here; keep job/browser memory in vault child pages.
+For five-lane Workday batches with isolated p Chrome profiles and per-lane
+subagent monitoring, use `docs\C3_PARALLEL_BATCH.md`.
+For per-lane subagent behavior, use `docs\C3_LANE_AGENT.md`.
+For consistent failure classification, use `docs\C3_ERROR_TAXONOMY.md`.
+For reusable p Chrome launch/reload/seed/capture commands, use
+`docs\C3_TESTING_METHODS.md`.
 
 After navigating to a new step in the same application, C3 should re-run page
 detection and show the in-page fill prompt again if the new step has visible
@@ -583,11 +585,8 @@ node scripts\c3_workday_live_smoke.js --mode manual --resume main.pdf --max-page
 Use this when checking idempotency. It should show already-correct controls as
 `already_filled` on repeated fills.
 
-Job-specific fast paths live in the vault:
-
-```text
-C:\Users\sushi\Documents\agentsvault\Wiki\Projects\Hunt\p-chrome\jobs\
-```
+Job-specific fast paths are internal agent memory. Keep public repo docs focused
+on reusable commands and safety rules.
 
 ## First Live ATS Pilot
 

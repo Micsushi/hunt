@@ -260,6 +260,53 @@ def test_generic_v2_unknown_option_defaults_to_neutral_yes_then_first_real():
     }
 
 
+def test_generic_v2_non_disclosure_prefers_tenant_identify_option():
+    if sync_playwright is None:
+        pytest.skip("playwright is required for the generic C3 V2 fixture")
+
+    with sync_playwright() as playwright:
+        try:
+            browser = playwright.chromium.launch()
+        except PlaywrightError as error:
+            pytest.skip(f"playwright chromium is unavailable: {error}")
+
+        page = browser.new_page()
+        page.set_content("<html><body></body></html>")
+        _load_v2_scripts(page)
+        result = page.evaluate(
+            """
+            () => {
+              const root = window.__huntV2;
+              const match = root.optionMatcher.matchOption({
+                options: [
+                  { label: "Select One", value: "" },
+                  { label: "Yes", value: "Yes" },
+                  { label: "No", value: "No" },
+                  { label: "I prefer not to identify", value: "I prefer not to identify" },
+                ],
+                answer: {
+                  value: "I choose not to disclose",
+                  answerType: "non_disclosure",
+                },
+                field: {},
+                audit: null,
+                fieldAudit: null,
+              });
+              return {
+                label: match.option && match.option.label,
+                source: match.source,
+              };
+            }
+            """
+        )
+        browser.close()
+
+    assert result == {
+        "label": "I prefer not to identify",
+        "source": "neutral_fallback",
+    }
+
+
 def test_generic_v2_option_matcher_keeps_checkbox_guard_before_aliases():
     option_matcher = _load_script(REPO_ROOT / "executioner/src/shared/v2/option-matcher.js")
 

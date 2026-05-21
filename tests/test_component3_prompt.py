@@ -194,6 +194,66 @@ def test_workday_runtime_error_recovery_stops_before_safe_next_click():
     assert "prefill_workday_runtime_error" in live_smoke
 
 
+def test_live_smoke_routes_pages_through_identifier_before_action():
+    live_smoke = _load_script(REPO_ROOT / "scripts/c3_workday_live_smoke.js")
+    identifier = _load_script(REPO_ROOT / "scripts/lib/c3_workday_identifier.js")
+    auth = _load_script(REPO_ROOT / "scripts/lib/c3_workday_auth_workflow.js")
+    apply_entry = _load_script(REPO_ROOT / "scripts/lib/c3_workday_apply_entry.js")
+
+    assert "WorkdayWorkflowIdentifier" in live_smoke
+    assert "WorkdayAuthWorkflow" in live_smoke
+    assert "WorkdayApplyEntryWorkflow" in live_smoke
+    assert "IDENTIFIER_TIMEOUT_MS = 60_000" in live_smoke
+    assert "AUTH_WORKFLOW_TIMEOUT_MS = 120_000" in live_smoke
+    assert "APPLY_ENTRY_TIMEOUT_MS = 60_000" in live_smoke
+    assert "PAGE_FILL_AND_NEXT_TIMEOUT_MS = 60_000" in live_smoke
+    assert "FULL_APPLICATION_TIMEOUT_MS = 300_000" in live_smoke
+    assert "withPhaseTimeout" in live_smoke
+    assert "page_fill_and_next_timeout" in live_smoke
+    assert "reconcilePageFillTimeoutToReview" in live_smoke
+    assert "timeout_reconciled_to_review" in live_smoke
+    assert 'pageKind = "review"' in identifier
+    assert "finalSubmitVisible" in identifier
+    assert "full_application_timeout" in live_smoke
+    assert "async function clickAuthPrimary(" not in live_smoke
+    assert "async function clickApplyManuallyEntry(" not in live_smoke
+    assert 'workflowPhase = "auth"' in identifier
+    assert 'workflowPhase = "apply_entry"' in identifier
+    assert 'workflowPhase = "job_fill"' in identifier
+    assert 'workflowPhase = "terminal"' in identifier
+    assert 'pageKind === "signup_form"' in identifier
+    assert 'pageKind === "signup_form" || hasCreateAccount' not in identifier
+    assert 'document.readyState !== "complete" && !hasClassificationSignal' in identifier
+    assert (
+        'else if (/create account|sign in|log in|login|register|sign up/i.test(currentStepText))'
+        in identifier
+    )
+    assert identifier.index(
+        'else if (/create account|sign in|log in|login|register|sign up/i.test(currentStepText))'
+    ) < identifier.index(
+        'else if (/resume\\\\/cv|my information|my experience|application questions|voluntary disclosures|self identify|review/i.test(normalizedText))'
+    )
+    assert 'phase: "identifier"' in live_smoke
+    assert 'initialRoute.phase === "apply_entry"' in live_smoke
+    assert 'initialRoute.phase === "auth"' in live_smoke
+    assert 'route.phase === "auth"' in live_smoke
+    assert "authWorkflow.clickPrimary(authRoute)" in live_smoke
+    assert "signupAttemptsByScope" in live_smoke
+    assert "signupRetryAsLogin" in live_smoke
+    assert "authReturnUrl" in live_smoke
+    assert "/\\/userHome\\b/i.test(current.pathname)" in live_smoke
+    assert 'desiredAuthState === "signup"' in auth
+    assert "accountEmail" in auth
+    assert "accountPassword" in auth
+    assert 'data-automation-id") || ""' in auth
+    assert "verifyPassword" in auth
+    assert "createAccountCheckbox" in auth
+    assert "a[href]" in auth
+    assert 'getAttribute("aria-hidden") || "").toLowerCase() === "true"' in auth
+    assert "if (/click_filter/i.test(metadata)) score += 45" in auth
+    assert "clickApplyManuallyEntry" in apply_entry
+
+
 def test_fill_progress_can_request_cancel():
     content = _load_script(REPO_ROOT / "executioner/src/content/bootstrap.js")
     background = _load_script(REPO_ROOT / "executioner/src/background/index.js")

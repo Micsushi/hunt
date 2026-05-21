@@ -23,7 +23,7 @@
     if (Number.isFinite(raw) && raw > 0) {
       return raw;
     }
-    return 5000;
+    return 15000;
   }
 
   function withTimeout(promise, timeoutMs, fallbackFactory) {

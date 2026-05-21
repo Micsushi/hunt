@@ -98,6 +98,8 @@ function classifyStopReason(reason = "") {
     return "visible_validation_errors";
   if (/workday_runtime_error|runtime/i.test(value))
     return "workday_runtime_error";
+  if (/site_or_posting_state|maintenance|service interruption/i.test(value))
+    return "site_or_posting_state";
   if (/posting_not_found|page_not_found|job_not_found/i.test(value))
     return "posting_not_found";
   if (/fill_timeout|fill_retry_timeout/i.test(value)) return "fill_timeout";
@@ -367,6 +369,7 @@ function renderSummary(records) {
     "- `no_safe_next_button`: Page-walk could not find a safe Next/Continue action.",
     "- `auth_primary_action_not_found`: Auth page had no safe sign-in/create-account action.",
     "- `posting_not_found`: Workday says the posting or apply URL does not exist.",
+    "- `site_or_posting_state`: Workday reached maintenance or another tenant site-state page.",
     "- `commit_not_verified`: UI showed a value but C3 could not verify React/Workday commit.",
     "- `final_visible_errors`: Final inspected page still had visible error-like text.",
     "",

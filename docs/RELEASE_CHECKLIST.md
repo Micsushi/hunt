@@ -57,14 +57,14 @@ Verify in the live dashboard:
 - `docs/roadmap.md`: mark newly completed items
 - `docs/LOCAL_POSTGRES_SMOKES.md`: update if smoke procedure changed
 
-## 6. Update vault
+## 6. Update vault when durable context changed
 
-Open the vault (`kb`) and update:
+Open the vault (`kb`) only when release work changed durable operator context:
 
 - internal backlog/status pages if new work was discovered
 - `Wiki/Projects/Hunt/agent-working-context.md` if architecture changed
 - `Wiki/Projects/Hunt/commands.md` if any commands changed
-- Any relevant component pages for things that changed
+- relevant component pages if behavior, workflow, config, or blockers changed
 
 ---
 

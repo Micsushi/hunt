@@ -331,6 +331,8 @@ class Component3Stage1Tests(unittest.TestCase):
         self.assertEqual(profile["education"][0]["degree"], "BSc")
         self.assertEqual(profile["education"][0]["degreeLevel"], "Bachelors")
         self.assertEqual(profile["education"][0]["fieldOfStudy"], "Computer Science")
+        self.assertEqual(profile["degreeLevel"], "Bachelors")
+        self.assertEqual(profile["highestEducation"], "Bachelor's Degree")
         self.assertIn("Computer Science", profile["education"][0]["educationTitle"])
         self.assertNotIn("Awards", profile["education"][0]["overallResult"])
         self.assertEqual(profile["education"][0]["endYear"], "2026")
@@ -448,6 +450,8 @@ Expected Graduation: Sep 2026
             self.assertEqual(profile["education"][0]["degree"], "BSc")
             self.assertEqual(profile["education"][0]["degreeLevel"], "Bachelors")
             self.assertEqual(profile["education"][0]["fieldOfStudy"], "Computer Science")
+            self.assertEqual(profile["degreeLevel"], "Bachelors")
+            self.assertEqual(profile["highestEducation"], "Bachelor's Degree")
             self.assertIn("Computer Science", profile["education"][0]["educationTitle"])
             self.assertEqual(profile["education"][0]["overallResult"], "")
             self.assertEqual(profile["education"][0]["endYear"], "2026")
@@ -779,10 +783,13 @@ Expected Graduation: Sep 2026
         self.assertIn('var wantsLandingChoice = authUiState === "landing_choice"', background)
         self.assertIn("exactEmailSignin", background)
         self.assertIn("\\bsign in with email\\b", background)
+        self.assertIn("signinwithemailbutton", background)
         self.assertIn("score = 135", background)
         self.assertIn("(startApplication && /\\/apply\\/applyManually/i.test(label))", background)
         self.assertIn("createClickWorkdayApplyManuallyFunction", background)
-        self.assertIn("isWorkdayDetailsApplyLabel", background)
+        self.assertIn("isWorkdayDetailsApplyItem", background)
+        self.assertIn("visibleText: visibleText", background)
+        self.assertIn('"no_job_fill_surface"', background)
         self.assertIn("isPlainWorkdayApplyCandidate", background)
         self.assertIn("isApplyManuallyCandidate", background)
         self.assertIn('path.includes("/job/")', background)
@@ -832,6 +839,8 @@ Expected Graduation: Sep 2026
         self.assertIn('id="profile-disclosure-veteran"', options)
         self.assertIn('id="profile-degree-level"', options)
         self.assertIn('id="profile-highest-education"', options)
+        self.assertIn('<select\n                id="profile-highest-education"', options)
+        self.assertIn('value="Bachelor\'s Degree"', options)
         self.assertIn('id="profile-preferred-education-index"', options)
         self.assertIn("max-height: min(420px, 52vh)", options)
         options_js = (REPO_ROOT / "executioner" / "src" / "options" / "options.js").read_text(
@@ -878,6 +887,7 @@ Expected Graduation: Sep 2026
         self.assertIn("hasHumanText(buttonText)", workday_drivers_v2)
         self.assertIn("hasHumanText(inputVal)", workday_drivers_v2)
         self.assertIn("workday_selected_item_clear", workday_drivers_v2)
+        self.assertIn("preselected_workday_source", workday_drivers_v2)
         self.assertIn("fillWorkdayRepeatables", workday_repeatables_v2)
         self.assertIn("clearWorkdayRepeatables", workday_repeatables_v2)
         self.assertIn("workday_repeatables_fill", workday_repeatables_v2)
@@ -1522,6 +1532,111 @@ Expected Graduation: Sep 2026
             },
         )
 
+    def test_workday_canadian_citizenship_status_requires_trusted_terminal_commit(
+        self,
+    ):
+        workday_drivers = (
+            REPO_ROOT
+            / "executioner"
+            / "src"
+            / "ats"
+            / "workday"
+            / "workday-drivers-v2.js"
+        ).read_text(encoding="utf-8")
+
+        self.assertIn("citizenship_status_keyboard", workday_drivers)
+        self.assertIn("trustedKeyboardSequenceForOption(target, field)", workday_drivers)
+        self.assertIn(
+            "Clicked citizenship status but Workday did not clear the required validation state.",
+            workday_drivers,
+        )
+        self.assertNotIn(
+            "var ok =\n      !invalid ||\n      optionMatches({ label: state.text }, target.label)",
+            workday_drivers,
+        )
+
+    def test_v2_intel_age_and_sponsorship_prompts_are_disambiguated(self):
+        paths = [
+            REPO_ROOT / "executioner" / "src" / "shared" / "v2" / "field-catalog.js",
+            REPO_ROOT / "executioner" / "src" / "shared" / "v2" / "question-identifier.js",
+            REPO_ROOT / "executioner" / "src" / "shared" / "v2" / "answer-resolver.js",
+        ]
+        script = f"""
+            const fs = require("node:fs");
+            const vm = require("node:vm");
+            const context = {{ window: {{ __huntV2: {{}} }} }};
+            vm.createContext(context);
+            for (const path of {json.dumps([str(path) for path in paths])}) {{
+              vm.runInContext(fs.readFileSync(path, "utf8"), context);
+            }}
+            const root = context.window.__huntV2;
+            function resolve(descriptor, profile, options) {{
+              const field = {{
+                workday: {{ fieldLabel: descriptor }},
+                fieldId: descriptor.slice(0, 50),
+                descriptor
+              }};
+              const question = root.questionIdentifier.identifyQuestion(field, null, null);
+              const answer = root.answerResolver.resolveAnswer({{
+                question,
+                field,
+                profile: profile || {{}},
+                options: options || [{{ label: "Yes" }}, {{ label: "No" }}],
+                audit: null,
+                fieldAudit: null
+              }});
+              return {{
+                type: question.type,
+                value: answer.value,
+                answerType: answer.answerType,
+                valueSource: answer.source
+              }};
+            }}
+            console.log(JSON.stringify({{
+              legalAge: resolve(
+                "As of today's date, are you 18 years of age or older?* Select One",
+                {{ atLeast18: true }}
+              ),
+              currentDate: resolve(
+                "Please enter today's date:* Month",
+                {{}},
+                []
+              ),
+              sponsorship: resolve(
+                "Do you now, or will you in the future, require Intel to sponsor a visa petition or other work authorization application in order to legally work in the United States? This includes H-1B, TN, O-1, E-3, or permanent resident applications.",
+                {{ sponsorshipRequired: false, canadianCitizenOrPermanentResident: "yes" }}
+              ),
+              canadianStatus: resolve(
+                "Please provide your Canadian citizenship status to assist us in evaluating your application for employment.*",
+                {{ canadianCitizenOrPermanentResident: "yes", country: "Canada" }},
+                [{{ label: "Citizen (Canada)" }}, {{ label: "Permanent Resident (Canada)" }}]
+              )
+            }}));
+        """
+        try:
+            result = subprocess.run(
+                ["node", "-e", script],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+        except FileNotFoundError:
+            self.skipTest("node is required to test the C3 V2 Intel mappings")
+
+        parsed = json.loads(result.stdout)
+        self.assertEqual(parsed["legalAge"]["type"], "age_at_least_18")
+        self.assertEqual(parsed["legalAge"]["value"], "Yes")
+        self.assertEqual(parsed["legalAge"]["answerType"], "yes_no")
+        self.assertEqual(parsed["currentDate"]["type"], "current_date")
+        self.assertEqual(parsed["sponsorship"]["type"], "sponsorship_required")
+        self.assertEqual(parsed["sponsorship"]["value"], "No")
+        self.assertEqual(parsed["sponsorship"]["answerType"], "yes_no")
+        self.assertEqual(
+            parsed["sponsorship"]["valueSource"], "profile:sponsorshipRequired"
+        )
+        self.assertEqual(parsed["canadianStatus"]["type"], "canadian_citizenship_status")
+        self.assertEqual(parsed["canadianStatus"]["value"], "Citizen (Canada)")
+
     def test_v2_required_address_line_2_uses_nonblank_default(self):
         paths = [
             REPO_ROOT / "executioner" / "src" / "shared" / "v2" / "field-catalog.js",
@@ -1635,6 +1750,911 @@ Expected Graduation: Sep 2026
                 "valueSource": "default:ethnicity_disclosure_neutral",
             },
         )
+
+    def test_v2_comcast_application_questions_are_cataloged(self):
+        paths = [
+            REPO_ROOT / "executioner" / "src" / "shared" / "v2" / "field-catalog.js",
+            REPO_ROOT / "executioner" / "src" / "shared" / "v2" / "question-identifier.js",
+            REPO_ROOT / "executioner" / "src" / "shared" / "v2" / "answer-resolver.js",
+            REPO_ROOT / "executioner" / "src" / "shared" / "v2" / "option-matcher.js",
+        ]
+        cases = [
+            {
+                "key": "degree",
+                "descriptor": "Highest degree attained?* Select One",
+                "options": [
+                    "High School Diploma/GED",
+                    "Bachelor's Degree",
+                    "Master's Degree",
+                ],
+            },
+            {
+                "key": "priorApplication",
+                "descriptor": "Have you ever applied for employment with this company?* Select One",
+                "options": [
+                    "Yes, I have applied previously",
+                    "No, I have not applied previously",
+                ],
+            },
+            {
+                "key": "contractual",
+                "descriptor": "Are there any contractual restrictions on your ability to work at Comcast or any of its affiliates?* Select One",
+                "options": [
+                    "Yes, contractual restrictions exist",
+                    "No contractual restrictions exist",
+                ],
+            },
+            {
+                "key": "nonSolicitation",
+                "descriptor": "Are you bound by any non-solicitation agreements which would restrict your ability to prospect for business?* Select One",
+                "options": [
+                    "Yes, non-solicitation agreements exist",
+                    "No non-solicitation agreements exist",
+                ],
+            },
+            {
+                "key": "outsideConflict",
+                "descriptor": "Are you involved in any outside activities (for example, trade groups or board memberships) that could be considered as competitive to or in competition with Comcast or any of its affiliates?* Select One",
+                "options": [
+                    "Yes, I am involved in possible conflicting outside activities",
+                    "No, I am not involved in conflicting outside activities",
+                ],
+            },
+        ]
+        script = f"""
+            const fs = require("node:fs");
+            const vm = require("node:vm");
+            const context = {{ window: {{ __huntV2: {{}} }} }};
+            vm.createContext(context);
+            for (const path of {json.dumps([str(path) for path in paths])}) {{
+              vm.runInContext(fs.readFileSync(path, "utf8"), context);
+            }}
+            const root = context.window.__huntV2;
+            const profile = {{ highestEducation: "Bachelor's Degree" }};
+            const results = {{}};
+            for (const item of {json.dumps(cases)}) {{
+              const field = {{
+                descriptor: item.descriptor,
+                required: true,
+                uiModel: "button_listbox"
+              }};
+              const question = root.questionIdentifier.identifyQuestion(field, null, null);
+              const answer = root.answerResolver.resolveAnswer({{
+                question,
+                field,
+                profile,
+                audit: null,
+                fieldAudit: null
+              }});
+              const match = root.optionMatcher.matchOption({{
+                options: item.options.map((label) => ({{ label }})),
+                answer,
+                field,
+                audit: null,
+                fieldAudit: null
+              }});
+              results[item.key] = {{
+                type: question.type,
+                answerType: answer.answerType,
+                value: answer.value,
+                valueSource: answer.source,
+                option: match.option && match.option.label,
+                source: match.source,
+              }};
+            }}
+            console.log(JSON.stringify(results));
+        """
+        try:
+            result = subprocess.run(
+                ["node", "-e", script],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+        except FileNotFoundError:
+            self.skipTest("node is required to test the C3 V2 question identifier")
+
+        parsed = json.loads(result.stdout)
+        self.assertEqual(parsed["degree"]["type"], "highest_education")
+        self.assertEqual(parsed["degree"]["option"], "Bachelor's Degree")
+        self.assertEqual(parsed["priorApplication"]["type"], "previous_application")
+        self.assertEqual(
+            parsed["priorApplication"]["option"], "No, I have not applied previously"
+        )
+        self.assertEqual(parsed["contractual"]["type"], "non_compete_restriction")
+        self.assertEqual(parsed["contractual"]["option"], "No contractual restrictions exist")
+        self.assertEqual(parsed["nonSolicitation"]["type"], "non_compete_restriction")
+        self.assertEqual(
+            parsed["nonSolicitation"]["option"], "No non-solicitation agreements exist"
+        )
+        self.assertEqual(parsed["outsideConflict"]["type"], "outside_conflict_activities")
+        self.assertEqual(
+            parsed["outsideConflict"]["option"],
+            "No, I am not involved in conflicting outside activities",
+        )
+        self.assertNotIn(
+            "fallback",
+            " ".join(entry["source"] for entry in parsed.values()),
+        )
+
+    def test_v2_application_source_prefers_safe_flat_option(self):
+        paths = [
+            REPO_ROOT / "executioner" / "src" / "shared" / "v2" / "field-catalog.js",
+            REPO_ROOT / "executioner" / "src" / "shared" / "v2" / "question-identifier.js",
+            REPO_ROOT / "executioner" / "src" / "shared" / "v2" / "answer-resolver.js",
+            REPO_ROOT / "executioner" / "src" / "shared" / "v2" / "option-matcher.js",
+        ]
+        script = f"""
+            const fs = require("node:fs");
+            const vm = require("node:vm");
+            const context = {{ window: {{ __huntV2: {{}} }} }};
+            vm.createContext(context);
+            for (const path of {json.dumps([str(path) for path in paths])}) {{
+              vm.runInContext(fs.readFileSync(path, "utf8"), context);
+            }}
+            const root = context.window.__huntV2;
+            const field = {{
+              fieldId: "source--source",
+              descriptor: "How Did You Hear About Us?* Select One",
+              required: true,
+              uiModel: "button_listbox"
+            }};
+            const question = root.questionIdentifier.identifyQuestion(field, null, null);
+            const answer = root.answerResolver.resolveAnswer({{
+              question,
+              field,
+              profile: {{
+                applicationSourceCategory: "Job Board",
+                applicationSource: "LinkedIn",
+                applicationSourceDetail: "LinkedIn"
+              }},
+              audit: null,
+              fieldAudit: null
+            }});
+            const match = root.optionMatcher.matchOption({{
+              options: [
+                {{ label: "Capital One Event" }},
+                {{ label: "Employee Referral" }},
+                {{ label: "Internet" }}
+              ],
+              answer,
+              field,
+              audit: null,
+              fieldAudit: null
+            }});
+            console.log(JSON.stringify({{
+              type: question.type,
+              value: answer.value,
+              option: match.option && match.option.label,
+              source: match.source,
+              fallback: match.fallback
+            }}));
+        """
+        try:
+            result = subprocess.run(
+                ["node", "-e", script],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+        except FileNotFoundError:
+            self.skipTest("node is required to test the C3 V2 option matcher")
+
+        self.assertEqual(
+            json.loads(result.stdout),
+            {
+                "type": "application_source",
+                "value": "Job Board",
+                "option": "Internet",
+                "source": "application_source_safe_fallback",
+                "fallback": True,
+            },
+        )
+
+    def test_v2_application_source_uses_blocklist_before_fallback(self):
+        paths = [
+            REPO_ROOT / "executioner" / "src" / "shared" / "v2" / "field-catalog.js",
+            REPO_ROOT / "executioner" / "src" / "shared" / "v2" / "question-identifier.js",
+            REPO_ROOT / "executioner" / "src" / "shared" / "v2" / "answer-resolver.js",
+            REPO_ROOT / "executioner" / "src" / "shared" / "v2" / "option-matcher.js",
+        ]
+        script = f"""
+            const fs = require("node:fs");
+            const vm = require("node:vm");
+            const context = {{ window: {{ __huntV2: {{}} }} }};
+            vm.createContext(context);
+            for (const path of {json.dumps([str(path) for path in paths])}) {{
+              vm.runInContext(fs.readFileSync(path, "utf8"), context);
+            }}
+            const root = context.window.__huntV2;
+            const field = {{
+              fieldId: "source--source",
+              descriptor: "How Did You Hear About Us?* Select One",
+              required: true,
+              uiModel: "button_listbox"
+            }};
+            const question = root.questionIdentifier.identifyQuestion(field, null, null);
+            const answer = root.answerResolver.resolveAnswer({{
+              question,
+              field,
+              profile: {{
+                applicationSourceCategory: "Job Board",
+                applicationSource: "LinkedIn",
+                applicationSourceDetail: "LinkedIn"
+              }},
+              audit: null,
+              fieldAudit: null
+            }});
+            const match = root.optionMatcher.matchOption({{
+              options: [
+                {{ label: "Select One" }},
+                {{ label: "Employee Referral" }},
+                {{ label: "Referred by Employee" }},
+                {{ label: "Naukri" }},
+                {{ label: "Corporate Careers Website" }}
+              ],
+              answer,
+              field,
+              audit: null,
+              fieldAudit: null
+            }});
+            console.log(JSON.stringify({{
+              option: match.option && match.option.label,
+              source: match.source,
+              fallback: match.fallback
+            }}));
+        """
+        try:
+            result = subprocess.run(
+                ["node", "-e", script],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+        except FileNotFoundError:
+            self.skipTest("node is required to test the C3 V2 option matcher")
+
+        self.assertEqual(
+            json.loads(result.stdout),
+            {
+                "option": "Naukri",
+                "source": "application_source_safe_fallback",
+                "fallback": True,
+            },
+        )
+
+    def test_v2_workday_source_preselected_requires_safe_value(self):
+        drivers = (
+            REPO_ROOT / "executioner" / "src" / "ats" / "workday" / "workday-drivers-v2.js"
+        ).read_text(encoding="utf-8")
+
+        self.assertIn("committedApplicationSourceMatches", drivers)
+        self.assertNotIn(
+            'isApplicationSourceField(field.element, field.descriptor) && committedLabel)',
+            drivers,
+        )
+        self.assertIn('"source_category_keyboard"', drivers)
+
+    def test_v2_capital_one_degree_age_and_essential_functions_are_cataloged(self):
+        paths = [
+            REPO_ROOT / "executioner" / "src" / "shared" / "v2" / "field-catalog.js",
+            REPO_ROOT / "executioner" / "src" / "shared" / "v2" / "question-identifier.js",
+            REPO_ROOT / "executioner" / "src" / "shared" / "v2" / "answer-resolver.js",
+            REPO_ROOT / "executioner" / "src" / "shared" / "v2" / "option-matcher.js",
+        ]
+        cases = [
+            {
+                "key": "bachelors",
+                "descriptor": "Do you have a Bachelor's Degree?* Yes No",
+            },
+            {
+                "key": "age",
+                "descriptor": "Are you age 18 or over?* Yes No",
+            },
+            {
+                "key": "essential",
+                "descriptor": "Are you able to perform the essential functions of the position for which you are applying with or without reasonable accommodation?* Yes No",
+            },
+        ]
+        script = f"""
+            const fs = require("node:fs");
+            const vm = require("node:vm");
+            const context = {{ window: {{ __huntV2: {{}} }} }};
+            vm.createContext(context);
+            for (const path of {json.dumps([str(path) for path in paths])}) {{
+              vm.runInContext(fs.readFileSync(path, "utf8"), context);
+            }}
+            const root = context.window.__huntV2;
+            const profile = {{
+              highestEducation: "Bachelor's Degree",
+              degreeLevel: "Bachelors",
+              atLeast18: true
+            }};
+            const results = {{}};
+            for (const item of {json.dumps(cases)}) {{
+              const field = {{
+                descriptor: item.descriptor,
+                workday: {{ fieldLabel: item.descriptor }},
+                required: true,
+                uiModel: "button_listbox"
+              }};
+              const question = root.questionIdentifier.identifyQuestion(field, null, null);
+              const answer = root.answerResolver.resolveAnswer({{
+                question,
+                field,
+                profile,
+                audit: null,
+                fieldAudit: null
+              }});
+              const match = root.optionMatcher.matchOption({{
+                options: [{{ label: "Yes" }}, {{ label: "No" }}],
+                answer,
+                field,
+                audit: null,
+                fieldAudit: null
+              }});
+              results[item.key] = {{
+                type: question.type,
+                value: answer.value,
+                valueSource: answer.source,
+                answerType: answer.answerType,
+                option: match.option && match.option.label,
+                source: match.source
+              }};
+            }}
+            console.log(JSON.stringify(results));
+        """
+        try:
+            result = subprocess.run(
+                ["node", "-e", script],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+        except FileNotFoundError:
+            self.skipTest("node is required to test the C3 V2 question identifier")
+
+        parsed = json.loads(result.stdout)
+        self.assertEqual(parsed["bachelors"]["type"], "has_bachelors_degree")
+        self.assertEqual(parsed["bachelors"]["value"], "Yes")
+        self.assertEqual(parsed["bachelors"]["option"], "Yes")
+        self.assertEqual(parsed["bachelors"]["valueSource"], "profile:highestEducation")
+        self.assertEqual(parsed["age"]["type"], "age_at_least_18")
+        self.assertEqual(parsed["age"]["value"], "Yes")
+        self.assertEqual(parsed["age"]["option"], "Yes")
+        self.assertEqual(parsed["essential"]["type"], "essential_functions")
+        self.assertEqual(parsed["essential"]["value"], "Yes")
+        self.assertEqual(parsed["essential"]["option"], "Yes")
+
+    def test_v2_ethnicity_disclosure_without_neutral_does_not_pick_concrete_option(self):
+        paths = [
+            REPO_ROOT / "executioner" / "src" / "shared" / "v2" / "field-catalog.js",
+            REPO_ROOT / "executioner" / "src" / "shared" / "v2" / "question-identifier.js",
+            REPO_ROOT / "executioner" / "src" / "shared" / "v2" / "answer-resolver.js",
+            REPO_ROOT / "executioner" / "src" / "shared" / "v2" / "option-matcher.js",
+        ]
+        script = f"""
+            const fs = require("node:fs");
+            const vm = require("node:vm");
+            const context = {{ window: {{ __huntV2: {{}} }} }};
+            vm.createContext(context);
+            for (const path of {json.dumps([str(path) for path in paths])}) {{
+              vm.runInContext(fs.readFileSync(path, "utf8"), context);
+            }}
+            const root = context.window.__huntV2;
+            const field = {{
+              fieldId: "personalInfoPerson--ethnicities",
+              descriptor: "Please select your ethnicity.",
+              required: true,
+              uiModel: "button_listbox"
+            }};
+            const question = root.questionIdentifier.identifyQuestion(field, null, null);
+            const answer = root.answerResolver.resolveAnswer({{
+              question,
+              field,
+              profile: {{}},
+              audit: null,
+              fieldAudit: null
+            }});
+            const match = root.optionMatcher.matchOption({{
+              options: [
+                {{ label: "Asian (Not Hispanic or Latino) (United States of America)" }},
+                {{ label: "White (Not Hispanic or Latino) (United States of America)" }}
+              ],
+              answer,
+              field,
+              audit: null,
+              fieldAudit: null
+            }});
+            console.log(JSON.stringify({{
+              type: question.type,
+              answerType: answer.answerType,
+              option: match.option && match.option.label,
+              source: match.source,
+              fallback: match.fallback
+            }}));
+        """
+        try:
+            result = subprocess.run(
+                ["node", "-e", script],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+        except FileNotFoundError:
+            self.skipTest("node is required to test the C3 V2 option matcher")
+
+        self.assertEqual(
+            json.loads(result.stdout),
+            {
+                "type": "ethnicity_disclosure_neutral",
+                "answerType": "non_disclosure",
+                "option": None,
+                "source": "non_disclosure_no_neutral_option",
+                "fallback": False,
+            },
+        )
+
+    def test_v2_workday_us_disclosure_neutral_aliases_are_matched(self):
+        paths = [
+            REPO_ROOT / "executioner" / "src" / "shared" / "v2" / "field-catalog.js",
+            REPO_ROOT / "executioner" / "src" / "shared" / "v2" / "question-identifier.js",
+            REPO_ROOT / "executioner" / "src" / "shared" / "v2" / "answer-resolver.js",
+            REPO_ROOT / "executioner" / "src" / "shared" / "v2" / "option-matcher.js",
+        ]
+        script = f"""
+            const fs = require("node:fs");
+            const vm = require("node:vm");
+            const context = {{ window: {{ __huntV2: {{}} }} }};
+            vm.createContext(context);
+            for (const path of {json.dumps([str(path) for path in paths])}) {{
+              vm.runInContext(fs.readFileSync(path, "utf8"), context);
+            }}
+            const root = context.window.__huntV2;
+            function resolve(fieldId, descriptor, options) {{
+              const field = {{
+                fieldId,
+                descriptor,
+                required: true,
+                uiModel: "button_listbox"
+              }};
+              const question = root.questionIdentifier.identifyQuestion(field, null, null);
+              const answer = root.answerResolver.resolveAnswer({{
+                question,
+                field,
+                profile: {{}},
+                audit: null,
+                fieldAudit: null
+              }});
+              const match = root.optionMatcher.matchOption({{
+                options: options.map((label) => ({{ label }})),
+                answer,
+                field,
+                audit: null,
+                fieldAudit: null
+              }});
+              return {{
+                type: question.type,
+                answerType: answer.answerType,
+                option: match.option && match.option.label,
+                source: match.source,
+                fallback: match.fallback
+              }};
+            }}
+            console.log(JSON.stringify({{
+              autodeskEthnicity: resolve(
+                "personalInfoUS--ethnicity",
+                "What is your ethnicity?",
+                [
+                  "Asian (Not Hispanic or Latino) (United States of America)",
+                  "Declined to State (United States of America)"
+                ]
+              ),
+              boeingEthnicity: resolve(
+                "personalInfoUS--ethnicity",
+                "What is your ethnicity?",
+                [
+                  "American Indian/Alaskan Native (Not Hispanic or Latino) (United States of America)",
+                  "Declined to Identify (United States of America)"
+                ]
+              ),
+              boeingVeteran: resolve(
+                "personalInfoUS--veteranStatus",
+                "Are you a veteran?",
+                [
+                  "I IDENTIFY AS ONE OR MORE OF THE CLASSIFICATIONS OF PROTECTED VETERAN",
+                  "I DO NOT WISH TO SELF-IDENTIFY"
+                ]
+              )
+            }}));
+        """
+        try:
+            result = subprocess.run(
+                ["node", "-e", script],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+        except FileNotFoundError:
+            self.skipTest("node is required to test the C3 V2 option matcher")
+
+        self.assertEqual(
+            json.loads(result.stdout),
+            {
+                "autodeskEthnicity": {
+                    "type": "ethnicity_disclosure_neutral",
+                    "answerType": "non_disclosure",
+                    "option": "Declined to State (United States of America)",
+                    "source": "alias",
+                    "fallback": False,
+                },
+                "boeingEthnicity": {
+                    "type": "ethnicity_disclosure_neutral",
+                    "answerType": "non_disclosure",
+                    "option": "Declined to Identify (United States of America)",
+                    "source": "alias",
+                    "fallback": False,
+                },
+                "boeingVeteran": {
+                    "type": "veteran_disclosure_neutral",
+                    "answerType": "non_disclosure",
+                    "option": "I DO NOT WISH TO SELF-IDENTIFY",
+                    "source": "alias",
+                    "fallback": False,
+                },
+            },
+        )
+
+    def test_v2_bms_and_amgen_disclosure_options_are_safe(self):
+        paths = [
+            REPO_ROOT / "executioner" / "src" / "shared" / "v2" / "field-catalog.js",
+            REPO_ROOT / "executioner" / "src" / "shared" / "v2" / "question-identifier.js",
+            REPO_ROOT / "executioner" / "src" / "shared" / "v2" / "answer-resolver.js",
+            REPO_ROOT / "executioner" / "src" / "shared" / "v2" / "option-matcher.js",
+        ]
+        script = f"""
+            const fs = require("node:fs");
+            const vm = require("node:vm");
+            const context = {{ window: {{ __huntV2: {{}} }} }};
+            vm.createContext(context);
+            for (const path of {json.dumps([str(path) for path in paths])}) {{
+              vm.runInContext(fs.readFileSync(path, "utf8"), context);
+            }}
+            const root = context.window.__huntV2;
+            function resolve(fieldId, descriptor, options) {{
+              const field = {{ fieldId, descriptor, required: true, uiModel: "button_listbox" }};
+              const question = root.questionIdentifier.identifyQuestion(field, null, null);
+              const answer = root.answerResolver.resolveAnswer({{
+                question,
+                field,
+                profile: {{}},
+                audit: null,
+                fieldAudit: null
+              }});
+              const match = root.optionMatcher.matchOption({{
+                options: options.map((label) => ({{ label }})),
+                answer,
+                field,
+                audit: null,
+                fieldAudit: null
+              }});
+              return {{
+                type: question.type,
+                answerType: answer.answerType,
+                option: match.option && match.option.label,
+                source: match.source,
+                fallback: match.fallback
+              }};
+            }}
+            console.log(JSON.stringify({{
+              bmsVeteran: resolve(
+                "personalInfoUS--veteranStatus",
+                "What is your veteran status?",
+                ["I AM A VETERAN", "I DON'T WISH TO ANSWER"]
+              ),
+              amgenEthnicity: resolve(
+                "personalInfoUS--ethnicity",
+                "Please select the ethnicity which most accurately describes you.",
+                ["Asian (Not Hispanic or Latino) (United States of America)", "Not Specified (United States of America)"]
+              ),
+              amgenVeteran: resolve(
+                "personalInfoUS--veteranStatus",
+                "Protected Veteran: Please indicate your classifications of protected veterans.",
+                ["I IDENTIFY AS ONE OR MORE OF THE CLASSIFICATIONS OF PROTECTED VETERAN", "I AM NOT A VETERAN"]
+              )
+            }}));
+        """
+        try:
+            result = subprocess.run(
+                ["node", "-e", script],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+        except FileNotFoundError:
+            self.skipTest("node is required to test the C3 V2 disclosure options")
+
+        self.assertEqual(
+            json.loads(result.stdout),
+            {
+                "bmsVeteran": {
+                    "type": "veteran_disclosure_neutral",
+                    "answerType": "non_disclosure",
+                    "option": "I DON'T WISH TO ANSWER",
+                    "source": "alias",
+                    "fallback": False,
+                },
+                "amgenEthnicity": {
+                    "type": "ethnicity_disclosure_neutral",
+                    "answerType": "non_disclosure",
+                    "option": "Not Specified (United States of America)",
+                    "source": "alias",
+                    "fallback": False,
+                },
+                "amgenVeteran": {
+                    "type": "veteran_disclosure_neutral",
+                    "answerType": "non_disclosure",
+                    "option": "I AM NOT A VETERAN",
+                    "source": "veteran_not_veteran_safe_fallback",
+                    "fallback": True,
+                },
+            },
+        )
+
+    def test_v2_thermo_sanctioned_country_checkbox_selects_none(self):
+        paths = [
+            REPO_ROOT / "executioner" / "src" / "shared" / "v2" / "field-catalog.js",
+            REPO_ROOT / "executioner" / "src" / "shared" / "v2" / "question-identifier.js",
+            REPO_ROOT / "executioner" / "src" / "shared" / "v2" / "answer-resolver.js",
+            REPO_ROOT / "executioner" / "src" / "shared" / "v2" / "option-matcher.js",
+        ]
+        script = f"""
+            const fs = require("node:fs");
+            const vm = require("node:vm");
+            const context = {{ window: {{ __huntV2: {{}} }} }};
+            vm.createContext(context);
+            for (const path of {json.dumps([str(path) for path in paths])}) {{
+              vm.runInContext(fs.readFileSync(path, "utf8"), context);
+            }}
+            const root = context.window.__huntV2;
+            const field = {{
+              descriptor: "Please indicate which, if any, where you are a citizen. None of these",
+              required: true,
+              uiModel: "checkbox"
+            }};
+            const question = root.questionIdentifier.identifyQuestion(field, null, null);
+            const answer = root.answerResolver.resolveAnswer({{
+              question,
+              field,
+              profile: {{}},
+              audit: null,
+              fieldAudit: null
+            }});
+            const match = root.optionMatcher.matchOption({{
+              options: [{{ label: "None of these", value: "None of these" }}],
+              answer,
+              field,
+              audit: null,
+              fieldAudit: null
+            }});
+            console.log(JSON.stringify({{
+              type: question.type,
+              value: answer.value,
+              valueSource: answer.source,
+              option: match.option && match.option.label,
+              source: match.source,
+              fallback: match.fallback
+            }}));
+        """
+        try:
+            result = subprocess.run(
+                ["node", "-e", script],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+        except FileNotFoundError:
+            self.skipTest("node is required to test the C3 V2 sanctioned-country answer")
+
+        self.assertEqual(
+            json.loads(result.stdout),
+            {
+                "type": "sanctioned_country_citizenship",
+                "value": "None of these",
+                "valueSource": "default:sanctioned_country_citizenship",
+                "option": "None of these",
+                "source": "exact",
+                "fallback": False,
+            },
+        )
+
+    def test_v2_citizenship_and_secondary_citizenship_are_cataloged(self):
+        paths = [
+            REPO_ROOT / "executioner" / "src" / "shared" / "v2" / "field-catalog.js",
+            REPO_ROOT / "executioner" / "src" / "shared" / "v2" / "question-identifier.js",
+            REPO_ROOT / "executioner" / "src" / "shared" / "v2" / "answer-resolver.js",
+            REPO_ROOT / "executioner" / "src" / "shared" / "v2" / "option-matcher.js",
+        ]
+        script = f"""
+            const fs = require("node:fs");
+            const vm = require("node:vm");
+            const context = {{ window: {{ __huntV2: {{}} }} }};
+            vm.createContext(context);
+            for (const path of {json.dumps([str(path) for path in paths])}) {{
+              vm.runInContext(fs.readFileSync(path, "utf8"), context);
+            }}
+            const root = context.window.__huntV2;
+            function resolve(descriptor, options, profile = {{ country: "Canada" }}) {{
+              const field = {{ descriptor, required: true, uiModel: "button_listbox" }};
+              const question = root.questionIdentifier.identifyQuestion(field, null, null);
+              const answer = root.answerResolver.resolveAnswer({{
+                question,
+                field,
+                profile,
+                audit: null,
+                fieldAudit: null
+              }});
+              const match = root.optionMatcher.matchOption({{
+                options: options.map((label) => ({{ label }})),
+                answer,
+                field,
+                audit: null,
+                fieldAudit: null
+              }});
+              return {{
+                type: question.type,
+                value: answer.value,
+                valueSource: answer.source,
+                option: match.option && match.option.label,
+                source: match.source,
+                fallback: match.fallback
+              }};
+            }}
+            console.log(JSON.stringify({{
+              primary: resolve(
+                "Country of citizenship",
+                ["United States", "Canada", "Mexico"]
+              ),
+              secondary: resolve(
+                "Secondary country of citizenship",
+                ["United States", "Canada", "None of these"]
+              ),
+              sanctionedStillSpecific: resolve(
+                "Please indicate which, if any, where you are a citizen.",
+                ["Cuba", "Syria", "None of these"],
+                {{}}
+              )
+            }}));
+        """
+        try:
+            result = subprocess.run(
+                ["node", "-e", script],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+        except FileNotFoundError:
+            self.skipTest("node is required to test the C3 V2 citizenship answers")
+
+        self.assertEqual(
+            json.loads(result.stdout),
+            {
+                "primary": {
+                    "type": "citizenship",
+                    "value": "Canada",
+                    "valueSource": "profile:country",
+                    "option": "Canada",
+                    "source": "exact",
+                    "fallback": False,
+                },
+                "secondary": {
+                    "type": "secondary_citizenship",
+                    "value": "None of these",
+                    "valueSource": "default:secondary_citizenship",
+                    "option": "None of these",
+                    "source": "exact",
+                    "fallback": False,
+                },
+                "sanctionedStillSpecific": {
+                    "type": "sanctioned_country_citizenship",
+                    "value": "None of these",
+                    "valueSource": "default:sanctioned_country_citizenship",
+                    "option": "None of these",
+                    "source": "exact",
+                    "fallback": False,
+                },
+            },
+        )
+
+    def test_v2_cox_policy_questions_are_deterministic(self):
+        paths = [
+            REPO_ROOT / "executioner" / "src" / "shared" / "v2" / "field-catalog.js",
+            REPO_ROOT / "executioner" / "src" / "shared" / "v2" / "question-identifier.js",
+            REPO_ROOT / "executioner" / "src" / "shared" / "v2" / "answer-resolver.js",
+            REPO_ROOT / "executioner" / "src" / "shared" / "v2" / "option-matcher.js",
+        ]
+        script = f"""
+            const fs = require("node:fs");
+            const vm = require("node:vm");
+            const context = {{ window: {{ __huntV2: {{}} }} }};
+            vm.createContext(context);
+            for (const path of {json.dumps([str(path) for path in paths])}) {{
+              vm.runInContext(fs.readFileSync(path, "utf8"), context);
+            }}
+            const root = context.window.__huntV2;
+            function resolve(descriptor, options) {{
+              const field = {{ descriptor, required: true, uiModel: "button_listbox" }};
+              const question = root.questionIdentifier.identifyQuestion(field, null, null);
+              const answer = root.answerResolver.resolveAnswer({{
+                question,
+                field,
+                profile: {{}},
+                audit: null,
+                fieldAudit: null
+              }});
+              const match = root.optionMatcher.matchOption({{
+                options: options.map((label) => ({{ label }})),
+                answer,
+                field,
+                audit: null,
+                fieldAudit: null
+              }});
+              return {{
+                type: question.type,
+                value: answer.value,
+                option: match.option && match.option.label,
+                source: match.source,
+                fallback: match.fallback
+              }};
+            }}
+            console.log(JSON.stringify({{
+              restrictive: resolve("Are you subject to any restrictive agreement that may limit your ability to work for Cox?", ["Yes", "No"]),
+              termination: resolve("Have you ever been terminated or asked to resign from employment?", ["Yes", "No"]),
+              consent: resolve("I understand and consent to background screening, identity verification, and drug testing.", ["I understand and consent", "I do not consent"])
+            }}));
+        """
+        try:
+            result = subprocess.run(
+                ["node", "-e", script],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+        except FileNotFoundError:
+            self.skipTest("node is required to test the C3 V2 Cox policy answers")
+
+        self.assertEqual(
+            json.loads(result.stdout),
+            {
+                "restrictive": {
+                    "type": "non_compete_restriction",
+                    "value": "No",
+                    "option": "No",
+                    "source": "exact",
+                    "fallback": False,
+                },
+                "termination": {
+                    "type": "prior_termination_or_resignation",
+                    "value": "No",
+                    "option": "No",
+                    "source": "exact",
+                    "fallback": False,
+                },
+                "consent": {
+                    "type": "background_check_consent",
+                    "value": "Yes",
+                    "option": "I understand and consent",
+                    "source": "affirmative_agreement",
+                    "fallback": False,
+                },
+            },
+        )
+
+    def test_auth_primary_action_accepts_email_signin_when_state_unknown(self):
+        background = (
+            REPO_ROOT / "executioner" / "src" / "background" / "index.js"
+        ).read_text(encoding="utf-8")
+        self.assertIn("exactEmailSignin && (!authState || authState === \"unknown\")", background)
 
     def test_v2_ethno_racial_checkbox_selects_non_disclosure(self):
         paths = [
@@ -2201,7 +3221,7 @@ Expected Graduation: Sep 2026
               vm.runInContext(fs.readFileSync(path, "utf8"), context);
             }}
             const root = context.window.__huntV2;
-            function resolve(label) {{
+            function resolve(label, options) {{
               const field = {{
                 workday: {{ fieldLabel: label }},
                 fieldId: label.includes("SMS") ? "smsConsent" : "aiProcessingConsent",
@@ -2218,7 +3238,7 @@ Expected Graduation: Sep 2026
                 fieldAudit: null
               }});
               const match = root.optionMatcher.matchOption({{
-                options: [
+                options: options || [
                   {{ label: "Select One", placeholder: true }},
                   {{ label: "Opt-In" }},
                   {{ label: "Opt-Out" }}
@@ -2239,6 +3259,13 @@ Expected Graduation: Sep 2026
             }}
             console.log(JSON.stringify([
               resolve("I agree that Visa may reach out to me via SMS regarding my application and candidate experience. Message and data rates may apply. I can opt-out at any time.*"),
+              resolve(
+                "I agree that Comcast may reach out to me via SMS regarding my application and candidate experience. Message and data rates may apply. I can opt-out at any time.*",
+                [
+                  {{ label: "Yes, I opt-in to receive SMS/Text messages" }},
+                  {{ label: "No, I do not wish to receive SMS/Text messages" }}
+                ]
+              ),
               resolve("Visa may use automated tools such as AI to support review of your application for this role, and if applicable, match you with relevant existing and future open roles. If you prefer not to have your application processed by these tools, you can opt-out. Opting out will not impact your eligibility for this role or to apply for relevant open roles.*")
             ]));
         """
@@ -2264,6 +3291,14 @@ Expected Graduation: Sep 2026
                     "fallback": False,
                 },
                 {
+                    "type": "sms_application_contact_opt_out",
+                    "value": "Opt-Out",
+                    "valueSource": "default:sms_application_contact_opt_out",
+                    "option": "No, I do not wish to receive SMS/Text messages",
+                    "source": "alias",
+                    "fallback": False,
+                },
+                {
                     "type": "automated_ai_processing_opt_out",
                     "value": "Opt-Out",
                     "valueSource": "default:automated_ai_processing_opt_out",
@@ -2274,7 +3309,7 @@ Expected Graduation: Sep 2026
             ],
         )
 
-    def test_v2_gender_not_declared_matches_non_disclosure(self):
+    def test_v2_gender_disclosure_neutral_aliases_match(self):
         paths = [
             REPO_ROOT / "executioner" / "src" / "shared" / "v2" / "field-catalog.js",
             REPO_ROOT / "executioner" / "src" / "shared" / "v2" / "question-identifier.js",
@@ -2305,25 +3340,86 @@ Expected Graduation: Sep 2026
               audit: null,
               fieldAudit: null
             }});
-            const match = root.optionMatcher.matchOption({{
-              options: [
-                {{ label: "Select One", placeholder: true }},
-                {{ label: "Female" }},
-                {{ label: "Male" }},
-                {{ label: "Not Declared" }}
-              ],
-              answer,
-              field,
-              audit: null,
-              fieldAudit: null
-            }});
+            function matchFor(options) {{
+              return root.optionMatcher.matchOption({{
+                options,
+                answer,
+                field,
+                audit: null,
+                fieldAudit: null
+              }});
+            }}
+            const notDeclared = matchFor([
+              {{ label: "Select One", placeholder: true }},
+              {{ label: "Female" }},
+              {{ label: "Male" }},
+              {{ label: "Not Declared" }}
+            ]);
+            const thermoUndisclosed = matchFor([
+              {{ label: "Select One", placeholder: true }},
+              {{ label: "Female" }},
+              {{ label: "Male" }},
+              {{ label: "Non-Binary (United States of America)" }},
+              {{ label: "Undisclosed (United States of America)" }}
+            ]);
+            const doNotWish = matchFor([
+              {{ label: "Select One", placeholder: true }},
+              {{ label: "Female" }},
+              {{ label: "Male" }},
+              {{ label: "I DO NOT WISH TO ANSWER" }}
+            ]);
+            const dontWish = matchFor([
+              {{ label: "Select One", placeholder: true }},
+              {{ label: "Female" }},
+              {{ label: "Male" }},
+              {{ label: "I DON'T WISH TO ANSWER" }}
+            ]);
+            const notSpecified = matchFor([
+              {{ label: "Select One", placeholder: true }},
+              {{ label: "Female" }},
+              {{ label: "Male" }},
+              {{ label: "Not Specified (United States of America)" }}
+            ]);
+            const noneOfThese = matchFor([
+              {{ label: "Select One", placeholder: true }},
+              {{ label: "Female" }},
+              {{ label: "Male" }},
+              {{ label: "None of these" }}
+            ]);
             console.log(JSON.stringify({{
               type: question.type,
               value: answer.value,
               valueSource: answer.source,
-              option: match.option && match.option.label,
-              source: match.source,
-              fallback: match.fallback
+              notDeclared: {{
+                option: notDeclared.option && notDeclared.option.label,
+                source: notDeclared.source,
+                fallback: notDeclared.fallback
+              }},
+              thermoUndisclosed: {{
+                option: thermoUndisclosed.option && thermoUndisclosed.option.label,
+                source: thermoUndisclosed.source,
+                fallback: thermoUndisclosed.fallback
+              }},
+              doNotWish: {{
+                option: doNotWish.option && doNotWish.option.label,
+                source: doNotWish.source,
+                fallback: doNotWish.fallback
+              }},
+              dontWish: {{
+                option: dontWish.option && dontWish.option.label,
+                source: dontWish.source,
+                fallback: dontWish.fallback
+              }},
+              notSpecified: {{
+                option: notSpecified.option && notSpecified.option.label,
+                source: notSpecified.source,
+                fallback: notSpecified.fallback
+              }},
+              noneOfThese: {{
+                option: noneOfThese.option && noneOfThese.option.label,
+                source: noneOfThese.source,
+                fallback: noneOfThese.fallback
+              }}
             }}));
         """
         try:
@@ -2342,9 +3438,36 @@ Expected Graduation: Sep 2026
                 "type": "disclosure_neutral",
                 "value": "I choose not to disclose",
                 "valueSource": "default:disclosure_neutral",
-                "option": "Not Declared",
-                "source": "alias",
-                "fallback": False,
+                "notDeclared": {
+                    "option": "Not Declared",
+                    "source": "alias",
+                    "fallback": False,
+                },
+                "thermoUndisclosed": {
+                    "option": "Undisclosed (United States of America)",
+                    "source": "alias",
+                    "fallback": False,
+                },
+                "doNotWish": {
+                    "option": "I DO NOT WISH TO ANSWER",
+                    "source": "alias",
+                    "fallback": False,
+                },
+                "dontWish": {
+                    "option": "I DON'T WISH TO ANSWER",
+                    "source": "alias",
+                    "fallback": False,
+                },
+                "notSpecified": {
+                    "option": "Not Specified (United States of America)",
+                    "source": "alias",
+                    "fallback": False,
+                },
+                "noneOfThese": {
+                    "option": "None of these",
+                    "source": "alias",
+                    "fallback": False,
+                },
             },
         )
 
@@ -3407,13 +4530,13 @@ Expected Graduation: Sep 2026
         self.assertIn('detection.kind === "signin"', content)
         self.assertIn("atsType,", content)
         self.assertIn("Detected job site with Apply", content)
-        self.assertIn("Detected sign-in page", content)
-        self.assertIn("Detected signup page", content)
+        self.assertIn("Detected account page", content)
         self.assertIn("Detected job application", content)
-        self.assertIn("Open the email sign-in choice before filling credentials.", content)
+        self.assertIn("Open the email sign-in choice, then continue the account flow.", content)
         self.assertIn("No credential fields are visible yet.", content)
         self.assertIn("Hunt is moving through the account sign-in step.", content)
-        self.assertIn("Create account", content)
+        self.assertIn("Create account and apply", content)
+        self.assertIn("Log in and apply", content)
         self.assertIn("Fill application", content)
         self.assertIn("hunt.apply.fill_current_page", content)
         self.assertIn("hunt.apply.show_toast", content)
@@ -3598,6 +4721,9 @@ Expected Graduation: Sep 2026
         live_smoke = (REPO_ROOT / "scripts" / "c3_workday_live_smoke.js").read_text(
             encoding="utf-8"
         )
+        final_ui_capture = (
+            REPO_ROOT / "scripts" / "c3_capture_final_ui.js"
+        ).read_text(encoding="utf-8")
         issue_registry = (REPO_ROOT / "scripts" / "lib" / "c3_issue_registry.js").read_text(
             encoding="utf-8"
         )
@@ -3605,6 +4731,9 @@ Expected Graduation: Sep 2026
             encoding="utf-8"
         )
         p_chrome_defaults = (REPO_ROOT / "scripts" / "c3_p_chrome_defaults.js").read_text(
+            encoding="utf-8"
+        )
+        p_chrome_launcher = (REPO_ROOT / "scripts" / "launch_c3_chrome.ps1").read_text(
             encoding="utf-8"
         )
         background = (REPO_ROOT / "executioner" / "src" / "background" / "index.js").read_text(
@@ -3616,6 +4745,10 @@ Expected Graduation: Sep 2026
         workday_repeatables = (
             REPO_ROOT / "executioner" / "src" / "ats" / "workday" / "workday-repeatables-v2.js"
         ).read_text(encoding="utf-8")
+        field_drivers = (
+            REPO_ROOT / "executioner" / "src" / "shared" / "v2" / "field-drivers.js"
+        ).read_text(encoding="utf-8")
+        manifest = (REPO_ROOT / "executioner" / "manifest.json").read_text(encoding="utf-8")
 
         self.assertIn("POST /verify-email", bridge)
         self.assertIn("HUNT_C3_MAIL_PROVIDER", bridge)
@@ -3634,6 +4767,7 @@ Expected Graduation: Sep 2026
         self.assertIn("Buffer.concat([socket.__huntBuffer, chunk])", bridge)
         self.assertIn("Search one day wider", bridge)
         self.assertIn("code.length >= 4 && code.length <= 8", bridge)
+
         self.assertIn("Multiple verification codes matched", bridge)
         self.assertIn('method: "code"', bridge)
         self.assertIn("code: codes[0]", bridge)
@@ -3665,10 +4799,15 @@ Expected Graduation: Sep 2026
         self.assertIn("clickSignInAction", smoke)
         self.assertIn("recordWorkflowEvent", smoke)
         self.assertIn("detect_account_state", smoke)
-        self.assertIn("workdayPageKindExpression", smoke)
+        workday_identifier = (
+            REPO_ROOT / "scripts" / "lib" / "c3_workday_identifier.js"
+        ).read_text(encoding="utf-8")
+        self.assertIn("WorkdayWorkflowIdentifier", live_smoke)
+        self.assertIn("workdayPageKindExpression", workday_identifier)
         self.assertIn("waitForWorkdayPageReady", smoke)
         self.assertIn("signin_choice", smoke)
         self.assertIn("application_step", smoke)
+
         self.assertIn("workday_page_still_loading", smoke)
         self.assertIn("session_detected", smoke)
         self.assertIn("clickWorkdayLoginSubmit", smoke)
@@ -3718,7 +4857,7 @@ Expected Graduation: Sep 2026
         )
         self.assertIn("Workday page reached a classified state", live_smoke)
         self.assertIn("posting_not_found", live_smoke)
-        self.assertIn("the page you are looking for", live_smoke)
+        self.assertIn("the page you are looking for", workday_identifier)
         self.assertIn("Detected start-application page and clicked Apply Manually", live_smoke)
         self.assertIn('phase: "apply_entry"', live_smoke)
         self.assertIn('phase: "job_fill"', live_smoke)
@@ -3735,17 +4874,25 @@ Expected Graduation: Sep 2026
         self.assertIn("buildFillAudit", live_smoke)
         self.assertIn("writeAuditJson", live_smoke)
         self.assertIn("recordAuditIssues", live_smoke)
+        workday_audit = (
+            REPO_ROOT / "scripts" / "lib" / "c3_workday_audit.js"
+        ).read_text(encoding="utf-8")
         self.assertIn("unknown_question_defaulted", issue_registry)
         self.assertIn("unsupported_or_empty_option_set", issue_registry)
         self.assertIn("required_field_unfilled", issue_registry)
         self.assertIn("no_safe_next_button", issue_registry)
         self.assertIn("auth_primary_action_not_found", issue_registry)
         self.assertIn("posting_not_found", issue_registry)
+        self.assertIn("site_or_posting_state", issue_registry)
         self.assertIn("issues.jsonl", issue_registry)
         self.assertIn('path.join("logs", "c3-issues")', issue_registry)
         self.assertNotIn('path.join("docs", "c3-issues")', issue_registry)
-        self.assertIn("valuePut", live_smoke)
+        self.assertIn("valuePut", workday_audit)
         self.assertIn("visible_validation_errors", live_smoke)
+        self.assertIn("reconcilePageFillTimeoutToReview", live_smoke)
+        self.assertIn("timeout_reconciled_to_review", live_smoke)
+        self.assertIn("pageReachedReview", live_smoke)
+        self.assertIn("normalizeSubmitText", final_ui_capture)
         self.assertIn("makeWorkdayProfileDefaults", live_smoke)
         self.assertIn("makeWorkdayProfileDefaults", configure_sink)
         self.assertIn("makeDefaultSecondWorkExperience", p_chrome_defaults)
@@ -3763,6 +4910,17 @@ Expected Graduation: Sep 2026
         self.assertIn("applicationSource", p_chrome_defaults)
         self.assertIn("applicationSourceCategory", p_chrome_defaults)
         self.assertIn("Job Board", p_chrome_defaults)
+        self.assertIn('"privacy"', manifest)
+        self.assertIn("ensurePasswordSavingDisabled", background)
+        self.assertIn("chrome.privacy?.services?.passwordSavingEnabled", background)
+        self.assertIn('"password_saving.disable_failed"', background)
+        self.assertIn("suppressPasswordManagerForAuthInput", background)
+        self.assertIn("data-hunt-password-manager-suppressed", background)
+        self.assertIn("data-hunt-password-manager-suppressed", field_drivers)
+        self.assertIn("Disable-PasswordManagerForProfile", p_chrome_launcher)
+        self.assertIn("credentials_enable_service", p_chrome_launcher)
+        self.assertIn("password_manager_enabled", p_chrome_launcher)
+        self.assertIn("--disable-save-password-bubble", p_chrome_launcher)
         self.assertIn('entry.id === "application_source"', answer_resolver)
         self.assertIn("applicationSourceDetail", answer_resolver)
         self.assertIn("Social Media", answer_resolver)
@@ -3799,6 +4957,71 @@ Expected Graduation: Sep 2026
         self.assertIn("function httpJson", cdp_lib)
         self.assertIn("function tokenPathFor", gmail_oauth_lib)
         self.assertIn("async function gmailAuthorizedToken", gmail_oauth_lib)
+
+    def test_workday_prompt_driver_has_trusted_input_bridge(self):
+        manifest = json.loads(
+            (REPO_ROOT / "executioner" / "manifest.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        background = (
+            REPO_ROOT / "executioner" / "src" / "background" / "index.js"
+        ).read_text(encoding="utf-8")
+        driver = (
+            REPO_ROOT
+            / "executioner"
+            / "src"
+            / "ats"
+            / "workday"
+            / "workday-drivers-v2.js"
+        ).read_text(encoding="utf-8")
+
+        self.assertIn("debugger", manifest["permissions"])
+        self.assertIn('"hunt.apply.trusted_input"', background)
+        self.assertIn("chrome.debugger.attach", background)
+        self.assertIn("requestTrustedWorkdayClick", driver)
+        self.assertIn('"category"', driver)
+        self.assertIn('"option"', driver)
+
+    def test_c3_email_verification_rejects_cross_tenant_workday_links(self):
+        script = f"""
+            const bridge = require({json.dumps(str(REPO_ROOT / "scripts" / "c3_mail_verify_bridge.js"))});
+            const request = {{
+              expectedDomains: ["myworkdayjobs.com", "capitalone.wd12.myworkdayjobs.com"],
+              jobUrl: "https://capitalone.wd12.myworkdayjobs.com/Capital_One/job/Plainfield-NJ/Part-Time-Branch-Ambassador---New-Jersey-Market_R237537-2",
+              expectedApplyUrl: "https://capitalone.wd12.myworkdayjobs.com/Capital_One/job/Plainfield-NJ/Part-Time-Branch-Ambassador---New-Jersey-Market_R237537-2/apply/applyManually?source=LinkedIn"
+            }};
+            const staleRtx = "https://globalhr.wd5.myworkdayjobs.com/REC_RTX_Ext_Gateway/activate/old-token";
+            const capitalOne = "https://capitalone.wd12.myworkdayjobs.com/Capital_One/activate/new-token?redirect=%2FCapital_One%2Fjob%2FPlainfield-NJ%2FPart-Time-Branch-Ambassador---New-Jersey-Market_R237537-2%2Fapply%2FapplyManually%3Fsource%3DLinkedIn";
+            const links = bridge.safeVerificationLinks(
+              `Please verify your account ${{staleRtx}}. Please verify your account ${{capitalOne}}.`,
+              request
+            );
+            console.log(JSON.stringify({{
+              links,
+              staleAllowed: bridge.workdayLinkAllowed(staleRtx, request),
+              capitalAllowed: bridge.workdayLinkAllowed(capitalOne, request)
+            }}));
+        """
+        try:
+            result = subprocess.run(
+                ["node", "-e", script],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+        except FileNotFoundError:
+            self.skipTest("node is required to test the C3 mail bridge")
+
+        parsed = json.loads(result.stdout)
+        self.assertEqual(
+            parsed["links"],
+            [
+                "https://capitalone.wd12.myworkdayjobs.com/Capital_One/activate/new-token?redirect=%2FCapital_One%2Fjob%2FPlainfield-NJ%2FPart-Time-Branch-Ambassador---New-Jersey-Market_R237537-2%2Fapply%2FapplyManually%3Fsource%3DLinkedIn"
+            ],
+        )
+        self.assertFalse(parsed["staleAllowed"])
+        self.assertTrue(parsed["capitalAllowed"])
 
     def test_workday_adapter_handles_hidden_file_inputs_and_missing_resume_logging(self):
         field_drivers = (
@@ -3975,6 +5198,8 @@ Expected Graduation: Sep 2026
         self.assertIn("skillOptionCommitTarget", workday_repeatables)
         self.assertIn("waitForSkillOption", workday_repeatables)
         self.assertIn("fillSkill", workday_repeatables)
+        self.assertIn("requestTrustedMouseClick", workday_repeatables)
+        self.assertIn('"repeatable_skill_option"', workday_repeatables)
         self.assertIn("skills_not_committed", workday_repeatables)
         self.assertIn("skillOptionIsChecked", workday_repeatables)
         self.assertIn("typeSearchTextLikeUser", workday_repeatables)
