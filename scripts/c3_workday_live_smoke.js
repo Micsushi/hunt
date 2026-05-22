@@ -110,6 +110,184 @@ async function reconcilePageFillTimeoutToReview(pageClient) {
   };
 }
 
+function fillDidUsefulWork(fill) {
+  if (!fill) return false;
+  if (Number(fill.filledFieldCount || 0) > 0) return true;
+  if ((fill.filledFields || []).length > 0) return true;
+  return (fill.fieldInventory || []).some(
+    (field) => field.filled || field.valuePut || field.selectedOption,
+  );
+}
+
+function fillHasNoProgressReason(fill) {
+  return (fill?.manualReviewReasons || []).some((reason) =>
+    /fill_no_progress_timeout|fill_timeout|fill_retry_timeout|page_fill_and_next_timeout/i.test(
+      String(reason || ""),
+    ),
+  );
+}
+
+function pageSettleSignature(page) {
+  return [
+    page?.href || "",
+    page?.currentStep?.current || "",
+    page?.currentStep?.title || "",
+    page?.hasNext ? "next" : "",
+    page?.hasSubmit ? "submit" : "",
+    (page?.errors || []).join("|"),
+    page?.loadingNodeCount || 0,
+  ].join("::");
+}
+
+function pageAdvancedFrom(before, after) {
+  return Boolean(
+    after?.hasSubmit ||
+      (after?.currentStep?.current ?? 0) > (before?.currentStep?.current ?? 0) ||
+      (after?.href && before?.href && after.href !== before.href),
+  );
+}
+
+async function setRunnerFillProgress(optionsClient, applyUrl, message) {
+  if (!optionsClient || !applyUrl) {
+    return { ok: false, reason: "missing_progress_context" };
+  }
+  return optionsClient.evaluate(
+    `(() => {
+      const applyUrl = ${JSON.stringify(applyUrl)};
+      const message = ${JSON.stringify(message || "")};
+      const normalizeWorkdayPathname = (pathname) =>
+        String(pathname || "").replace(/\\/apply(?:\\/[^/]+)?\\/?$/, "");
+      return (async () => {
+        const apply = new URL(applyUrl);
+        const applyHost = apply.host;
+        const applyPathBase = normalizeWorkdayPathname(apply.pathname);
+        const tabs = await chrome.tabs.query({});
+        const candidates = tabs.filter((item) => {
+          try {
+            const url = new URL(item.url || "");
+            return url.host === applyHost
+              && normalizeWorkdayPathname(url.pathname).startsWith(applyPathBase);
+          } catch (_error) {
+            return false;
+          }
+        });
+        const tab = candidates.find((item) => item.active)
+          || candidates.sort((a, b) => Number(b.id || 0) - Number(a.id || 0))[0];
+        if (!tab?.id) {
+          return { ok: false, reason: "workday_tab_not_found" };
+        }
+        const uiMessage = {
+          type: "hunt.apply.show_fill_progress",
+          message,
+          fillRunId: "c3_workday_live_smoke"
+        };
+        try {
+          await chrome.tabs.sendMessage(tab.id, uiMessage);
+        } catch (error) {
+          if (!/receiving end does not exist|could not establish connection/i.test(String(error?.message || error))) {
+            return { ok: false, reason: "progress_message_failed", message: String(error?.message || error) };
+          }
+          await chrome.scripting.executeScript({
+            target: { tabId: tab.id },
+            files: ["src/content/bootstrap.js"]
+          });
+          await chrome.tabs.sendMessage(tab.id, uiMessage);
+        }
+        return { ok: true, tabId: tab.id };
+      })();
+    })()`,
+    10000,
+  );
+}
+
+async function hideRunnerFillProgress(optionsClient, applyUrl) {
+  if (!optionsClient || !applyUrl) {
+    return { ok: false, reason: "missing_progress_context" };
+  }
+  return optionsClient.evaluate(
+    `(() => {
+      const applyUrl = ${JSON.stringify(applyUrl)};
+      const normalizeWorkdayPathname = (pathname) =>
+        String(pathname || "").replace(/\\/apply(?:\\/[^/]+)?\\/?$/, "");
+      return (async () => {
+        const apply = new URL(applyUrl);
+        const applyHost = apply.host;
+        const applyPathBase = normalizeWorkdayPathname(apply.pathname);
+        const tabs = await chrome.tabs.query({});
+        const candidates = tabs.filter((item) => {
+          try {
+            const url = new URL(item.url || "");
+            return url.host === applyHost
+              && normalizeWorkdayPathname(url.pathname).startsWith(applyPathBase);
+          } catch (_error) {
+            return false;
+          }
+        });
+        const tab = candidates.find((item) => item.active)
+          || candidates.sort((a, b) => Number(b.id || 0) - Number(a.id || 0))[0];
+        if (!tab?.id) {
+          return { ok: false, reason: "workday_tab_not_found" };
+        }
+        await chrome.tabs.sendMessage(tab.id, {
+          type: "hunt.apply.hide_fill_progress"
+        });
+        return { ok: true, tabId: tab.id };
+      })();
+    })()`,
+    10000,
+  );
+}
+
+async function waitForPostFillSettle(
+  pageClient,
+  before,
+  { args, fillSummary, optionsClient, applyUrl },
+) {
+  const initialSettleMs = 1000;
+  const maxSettleMs = 3000;
+  await setRunnerFillProgress(
+    optionsClient,
+    applyUrl,
+    "Waiting for Workday to finish loading",
+  ).catch(() => null);
+  try {
+    const started = Date.now();
+    await sleep(initialSettleMs);
+    let latest = await inspectPage(pageClient);
+    const initialLoading =
+      latest.readyState !== "complete" || latest.loadingNodeCount > 0;
+    const initialAdvanced = pageAdvancedFrom(before, latest);
+    const waitForAdvance =
+      args.extensionAutoNext && fillSummary?.nextAction?.clicked;
+    if (!initialLoading && (initialAdvanced || !waitForAdvance)) {
+      return latest;
+    }
+    let lastSignature = pageSettleSignature(latest);
+    let stableSince = Date.now();
+    while (Date.now() - started < maxSettleMs) {
+      latest = await inspectPage(pageClient);
+      const signature = pageSettleSignature(latest);
+      if (signature !== lastSignature) {
+        lastSignature = signature;
+        stableSince = Date.now();
+      }
+      const stableMs = Date.now() - stableSince;
+      const loading =
+        latest.readyState !== "complete" || latest.loadingNodeCount > 0;
+      const advanced = pageAdvancedFrom(before, latest);
+      const waitForAdvance =
+        args.extensionAutoNext && fillSummary?.nextAction?.clicked;
+      if (!loading && stableMs >= 350 && (advanced || !waitForAdvance)) {
+        return latest;
+      }
+      await sleep(250);
+    }
+    return latest;
+  } finally {
+    await hideRunnerFillProgress(optionsClient, applyUrl).catch(() => null);
+  }
+}
+
 function parseArgs(argv) {
   const args = {
     mode: "manual",
@@ -971,15 +1149,26 @@ function pageSummaryExpression() {
       .filter(Boolean)
       .filter((text) => !/successfully uploaded/i.test(text))
       .slice(0, 30);
+    const loadingNodes = [...document.querySelectorAll('[aria-busy="true"], [role="progressbar"], [data-automation-id*="loading" i], [class*="loading" i], [class*="spinner" i]')]
+      .filter(visible);
+    const fieldText = (field) => [field.id, field.name, field.type, field.automationId, field.ariaLabel, field.text].join(" ");
+    const hasEmailField = fields.some((field) => /email|username|user/i.test(fieldText(field)));
+    const passwordCount = fields.filter((field) => field.type === "password").length;
+    const hasAuthText = /create account|sign in|log in|login|register|sign up/i.test(text)
+      || /create account|sign in|log in|login|register|sign up/i.test(currentStep?.title || "");
+    const authPageVisible = hasEmailField && passwordCount > 0 && hasAuthText;
     const pageKind = /community\\.workday\\.com\\/maintenance-page/i.test(location.href)
       || /workday is currently unavailable|service interruption/i.test(text)
       ? "maintenance"
-      : buttons.some((button) => /^submit$/i.test(actionText(button.text))) || /review/i.test(currentStep?.title || "")
+      : authPageVisible
+        ? "auth"
+        : buttons.some((button) => /^submit$/i.test(actionText(button.text))) || /review/i.test(currentStep?.title || "")
         ? "review"
         : "";
     return {
       href: location.href,
       title: document.title,
+      readyState: document.readyState,
       currentStep,
       pageKind,
       hasSubmit: buttons.some((button) => /^submit$/i.test(actionText(button.text))),
@@ -992,6 +1181,7 @@ function pageSummaryExpression() {
         filledNative
       },
       errors,
+      loadingNodeCount: loadingNodes.length,
       workdayRuntimeError,
       bodyHead: text.replace(/\\s+/g, " ").trim().slice(0, 1200)
     };
@@ -2332,14 +2522,12 @@ async function run() {
           );
           break;
         }
-        await sleep(
-          args.extensionAutoNext
-            ? 7500
-            : before.currentStep?.current === 1 && args.mode === "resume"
-              ? 7000
-              : 1200,
-        );
-        afterFill = await inspectPage(pageClient);
+        afterFill = await waitForPostFillSettle(pageClient, before, {
+          args,
+          fillSummary,
+          optionsClient,
+          applyUrl,
+        });
         if (afterFill.workdayRuntimeError) {
           fillSummary.runtimeRecovery = await recoverWorkdayRuntimeError(
             pageClient,
@@ -2524,7 +2712,7 @@ async function run() {
             message: `Fill advanced from step ${before.currentStep?.current} to step ${afterFill.currentStep?.current}; continuing so the new Workday step can be filled.`,
             errors: afterFill.errors?.slice(0, 10) || [],
           };
-          await sleep(1200);
+          await sleep(250);
           continue;
         }
         if (afterFill.errors?.length) {
@@ -2548,9 +2736,22 @@ async function run() {
             "C3 extension safe auto-next handled this page.",
         };
         if (!fills.at(-1)?.fill?.nextAction?.clicked && afterFill.hasNext) {
+          const latestFill = fills.at(-1)?.fill || {};
           const fillNeedsReview =
-            fills.at(-1)?.fill?.manualReviewReasons?.length > 0;
+            latestFill.manualReviewReasons?.length > 0;
           if (!fillNeedsReview || afterFill.errors?.length) {
+            break;
+          }
+          if (!fillDidUsefulWork(latestFill) || fillHasNoProgressReason(latestFill)) {
+            timeline[timeline.length - 1].next = {
+              clicked: false,
+              auto: true,
+              reason: "fill_not_ready_for_next_no_progress",
+              message:
+                "Next skipped because fill reported manual-review/no-progress without filled fields.",
+              manualReviewReasons: latestFill.manualReviewReasons || [],
+              filledFieldCount: latestFill.filledFieldCount || 0,
+            };
             break;
           }
           const remainingNextMs =

@@ -89,6 +89,39 @@
   }
 
   function salaryTextAnswer(field, profile) {
+    if (isHourlyCompensationField(field)) {
+      var hourly = clean(profile.hourlyPayExpectation);
+      if (hourly) {
+        return {
+          value: hourly,
+          source: "profile:hourlyPayExpectation",
+          confidence: 0.97,
+        };
+      }
+      var calculated = hourlyFromAnnual(profile.salaryExpectation);
+      if (calculated) {
+        return {
+          value: calculated,
+          source: "calculated:salaryExpectationHourly",
+          confidence: 0.94,
+        };
+      }
+      var calculatedFromRange = hourlyFromAnnual(
+        profile.salaryExpectationRange,
+      );
+      if (calculatedFromRange) {
+        return {
+          value: calculatedFromRange,
+          source: "calculated:salaryExpectationRangeHourly",
+          confidence: 0.9,
+        };
+      }
+      return {
+        value: "48.08",
+        source: "default:hourlyPayExpectation",
+        confidence: 0.72,
+      };
+    }
     var point = clean(profile.salaryExpectation);
     var range = clean(profile.salaryExpectationRange);
     var target = salaryTargetNumber(point || range);
@@ -106,6 +139,32 @@
       source: "default:salaryExpectation",
       confidence: 0.72,
     };
+  }
+
+  function isHourlyCompensationField(field) {
+    var text = clean(
+      [
+        field?.workday?.fieldLabel,
+        field?.descriptor,
+        field?.fieldId,
+        field?.element?.id,
+        field?.element?.name,
+        field?.element?.getAttribute?.("aria-label"),
+      ].join(" "),
+    ).toLowerCase();
+    return /\bhourly\b|\bwage\b/.test(text);
+  }
+
+  function hourlyFromAnnual(value) {
+    var target = salaryTargetNumber(value);
+    if (!target) {
+      return "";
+    }
+    var annual = Number(String(target).replace(/,/g, ""));
+    if (!Number.isFinite(annual) || annual <= 0) {
+      return "";
+    }
+    return (annual / 2080).toFixed(2);
   }
 
   function salaryTargetNumber(value) {
@@ -656,8 +715,7 @@
         kind: "neutral_disclosure_default",
         severity: "warn",
         failedStep: "answer.resolve",
-        reason:
-          "Used catalog non-disclosure default for voluntary disclosure.",
+        reason: "Used catalog non-disclosure default for voluntary disclosure.",
         questionType: question.type,
       });
       return {

@@ -108,6 +108,30 @@ Unknown question or answer type is acceptable only when C3 logs a warning and
 continues without bad fill. Unknowns that block progress or create bad fills are
 failures.
 
+## Review Answer Triage
+
+When Review exposes a bad fill, classify the fix before proposing code changes:
+
+- Candidate-specific or preference-specific answer: add or reuse a visible
+  profile field, then route the question through that profile field.
+- Supported question category with new option wording: add matcher aliases,
+  neutral/non-disclosure wording, or exact leaf-option matching.
+- Missing question category: add a reusable catalog category and focused tests.
+- UI failed to commit a correct answer: classify/prove the widget behavior
+  before changing drivers.
+- Hardcoded/default answer: use only when it is a reusable safe fallback and a
+  profile override exists.
+
+Examples from replacement Workday lanes:
+
+- Legal-name prefix is profile-backed by `namePrefix`; blank profile must not
+  fall through to `Not Mapped`.
+- Accommodation request is profile-backed by `accommodationRequest`; blank
+  profile stays neutral and resolves to `No` only for required yes/no prompts
+  that need a concrete answer.
+- Hourly compensation prompts use explicit/calculated hourly profile data, not
+  raw annual salary.
+
 ## Error Taxonomy
 
 Every lane owner must classify failures with `docs/C3_ERROR_TAXONOMY.md` before

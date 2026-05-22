@@ -37,6 +37,12 @@
     });
   }
 
+  function isNonAnswerOption(option) {
+    var label = normOptionLabel(option?.label);
+    var value = normOptionLabel(option?.value);
+    return label === "not mapped" || value === "not mapped";
+  }
+
   function optionAliases(answer) {
     var aliases = [];
     var map = answer.optionAliases || {};
@@ -427,6 +433,13 @@
   function matchOption({ options, answer, audit, fieldAudit, field }) {
     var real = realOptions(options);
     var target = norm(answer.value);
+    if (answer?.source === "missing_profile_value" && !target) {
+      return {
+        option: null,
+        source: "missing_profile_value",
+        fallback: false,
+      };
+    }
     if (!real.length) {
       return { option: null, source: "no_options", fallback: false };
     }
@@ -441,6 +454,9 @@
       }
     }
     var exact = real.find(function (option) {
+      if (isNonAnswerOption(option)) {
+        return false;
+      }
       var label = normOptionLabel(option.label);
       var value = normOptionLabel(option.value);
       return target && (label === target || value === target);
@@ -460,7 +476,10 @@
         fallback: false,
       };
     }
-    if (answer.answerType === "yes_no" && (target === "yes" || target === "no")) {
+    if (
+      answer.answerType === "yes_no" &&
+      (target === "yes" || target === "no")
+    ) {
       var directYesNo = real.find(function (option) {
         var label = normOptionLabel(option.label);
         var value = normOptionLabel(option.value);
@@ -481,7 +500,10 @@
         };
       }
     }
-    if (field?.uiModel === "checkbox" && answer.answerType === "non_disclosure") {
+    if (
+      field?.uiModel === "checkbox" &&
+      answer.answerType === "non_disclosure"
+    ) {
       var checkboxNeutral = neutralOption(real);
       if (checkboxNeutral) {
         return {
@@ -524,6 +546,9 @@
     for (var i = 0; i < aliases.length; i++) {
       var alias = norm(aliases[i]);
       var aliasMatch = real.find(function (option) {
+        if (isNonAnswerOption(option)) {
+          return false;
+        }
         return isStrictAliasMatch(option, alias);
       });
       if (aliasMatch) {
@@ -545,6 +570,9 @@
       };
     }
     var boundary = real.find(function (option) {
+      if (isNonAnswerOption(option)) {
+        return false;
+      }
       var label = normOptionLabel(option.label);
       var value = normOptionLabel(option.value);
       return (
@@ -559,6 +587,9 @@
       return { option: boundary, source: "boundary", fallback: false };
     }
     var partial = real.find(function (option) {
+      if (isNonAnswerOption(option)) {
+        return false;
+      }
       var label = normOptionLabel(option.label);
       var value = normOptionLabel(option.value);
       return (

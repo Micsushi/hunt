@@ -275,6 +275,32 @@ def _date_value(profile: dict[str, Any], key: str, default: str) -> tuple[str, s
     return raw, source, confidence
 
 
+def _salary_point(value: Any) -> float | None:
+    numbers = [
+        float(match.replace(",", ""))
+        for match in re.findall(r"\d[\d,]*(?:\.\d+)?", str(value or ""))
+    ]
+    numbers = [number for number in numbers if number >= 1000]
+    if not numbers:
+        return None
+    if len(numbers) >= 2:
+        return (numbers[0] + numbers[1]) / 2
+    return numbers[0]
+
+
+def _hourly_compensation_value(profile: dict[str, Any]) -> tuple[str, str, float]:
+    hourly = str(profile.get("hourlyPayExpectation") or "").strip()
+    if hourly:
+        return hourly, "profile.hourlyPayExpectation", 0.97
+    annual = _salary_point(profile.get("salaryExpectation"))
+    if annual:
+        return f"{annual / 2080:.2f}", "calculated.salaryExpectationHourly", 0.94
+    annual_range = _salary_point(profile.get("salaryExpectationRange"))
+    if annual_range:
+        return f"{annual_range / 2080:.2f}", "calculated.salaryExpectationRangeHourly", 0.9
+    return "48.08", "default.hourlyPayExpectation", 0.72
+
+
 def deterministic_decision(request: C3AnswerRequest) -> C3AnswerDecision | None:
     question = normalize_question_text(request.field.label)
     options = _real_options(request.field.options)
@@ -295,7 +321,32 @@ def deterministic_decision(request: C3AnswerRequest) -> C3AnswerDecision | None:
             confidence=confidence,
             camp="profile_value",
         )
-    if ("salary" in question or "compensation" in question) and not options:
+    compensation_question = (
+        "salary" in question
+        or "compensation" in question
+        or "hourly expectation" in question
+        or "hourly expectations" in question
+        or "hourly pay" in question
+        or "hourly rate" in question
+        or "hourly wage" in question
+        or "wage expectation" in question
+        or "wage expectations" in question
+        or "pay expectation" in question
+        or "pay expectations" in question
+    )
+    if compensation_question and not options:
+        asks_hourly_amount = "hourly" in question or "wage" in question
+        if asks_hourly_amount:
+            answer, source, confidence = _hourly_compensation_value(profile)
+            return _text_decision(
+                request,
+                canonical_field="salary_expectation",
+                answer_text=answer,
+                source_field=source,
+                reason="Question asks for an hourly compensation value and C3 calculated hourly pay from the profile annual salary.",
+                confidence=confidence,
+                camp="profile_value",
+            )
         salary_range = str(profile.get("salaryExpectationRange") or "").strip()
         salary_point = str(profile.get("salaryExpectation") or "").strip()
         asks_annual_amount = (
@@ -304,7 +355,8 @@ def deterministic_decision(request: C3AnswerRequest) -> C3AnswerDecision | None:
             or "amount" in question
             or bool(re.search(r"\be\.g\.\s*\d+", question))
         )
-        if asks_annual_amount and salary_point:
+        asks_point_amount = asks_annual_amount
+        if asks_point_amount and salary_point:
             return _text_decision(
                 request,
                 canonical_field="salary_expectation",
@@ -329,10 +381,10 @@ def deterministic_decision(request: C3AnswerRequest) -> C3AnswerDecision | None:
         return _text_decision(
             request,
             canonical_field="salary_expectation",
-            answer_text="95000" if asks_annual_amount else "90,000 - 105,000",
+            answer_text="95000" if asks_point_amount else "90,000 - 105,000",
             source_field=(
                 "default.salaryExpectation"
-                if asks_annual_amount
+                if asks_point_amount
                 else "default.salaryExpectationRange"
             ),
             reason="Question asks for salary expectation and profile salary fields are blank: use the C3 salary default.",
@@ -341,6 +393,29 @@ def deterministic_decision(request: C3AnswerRequest) -> C3AnswerDecision | None:
         )
     if not options:
         return None
+
+    accommodation_request_question = (
+        ("accommodation" in question or "adjustment" in question or "support" in question)
+        and ("require" in question or "need" in question or "selecting yes" in question)
+    )
+    if accommodation_request_question:
+        profile_value = _truthy(profile.get("accommodationRequest"))
+        requested = profile_value if profile_value is not None else False
+        option = _yes_no(options, requested)
+        if option:
+            return _source_decision(
+                request,
+                canonical_field="accommodation_request",
+                option=option,
+                source_field=(
+                    "profile.accommodationRequest"
+                    if profile_value is not None
+                    else "default.accommodationRequest"
+                ),
+                reason="Accessibility accommodation request comes from profile when set; blank profile defaults to No for required yes/no application prompts.",
+                confidence=0.95 if profile_value is not None else 0.72,
+                camp="profile_value" if profile_value is not None else "negative_conflict",
+            )
 
     if _question_has_any(question, SENSITIVE_DISCLOSURE_PATTERNS):
         option = _neutral_option(options)
@@ -389,6 +464,23 @@ def deterministic_decision(request: C3AnswerRequest) -> C3AnswerDecision | None:
                 camp="negative_conflict",
             )
 
+    basic_requirements_question = (
+        ("basic" in question or "minimum" in question or "required" in question)
+        and ("requirement" in question or "qualification" in question)
+        and ("meet" in question or "satisfy" in question)
+    )
+    if basic_requirements_question:
+        option = _yes_no(options, True)
+        if option:
+            return _source_decision(
+                request,
+                canonical_field="basic_requirements_qualified",
+                option=option,
+                source_field="policy.basic_requirements_qualified",
+                reason="Basic/minimum qualification questions default to Yes unless explicit profile evidence says otherwise.",
+                camp="opportunity_positive",
+            )
+
     if (
         "legally" in question
         or "eligible to work" in question
@@ -429,7 +521,7 @@ def deterministic_decision(request: C3AnswerRequest) -> C3AnswerDecision | None:
                 reason="Question asks relocation and profile has a relocation setting.",
                 camp="profile_value",
             )
-    if "salary" in question or "compensation" in question:
+    if compensation_question:
         option = _yes_no(options, _truthy(profile.get("salaryFlexible")))
         if option:
             return _source_decision(

@@ -156,6 +156,116 @@ def test_salary_text_question_uses_default_without_llm(monkeypatch):
     assert decision.confidence == 0.72
 
 
+def test_hourly_expectation_text_question_uses_calculated_hourly_without_llm(monkeypatch):
+    def fail_generate_json(**_kwargs):
+        raise AssertionError("hourly expectation text should not call LLM")
+
+    monkeypatch.setattr("c3_answering.pipeline.generate_json", fail_generate_json)
+
+    decision = decide_answer(
+        make_request(
+            "What are your Hourly expectations for the Position?",
+            [],
+            {"salaryExpectation": "97500", "salaryExpectationRange": "90,000 - 105,000"},
+            kind="text",
+        )
+    )
+
+    assert decision.status == "fillable"
+    assert decision.action == "fill_text"
+    assert decision.answer_text == "46.88"
+    assert decision.canonical_field == "salary_expectation"
+    assert decision.source_fields == ["calculated.salaryExpectationHourly"]
+
+
+def test_hourly_rate_text_question_uses_explicit_hourly_without_llm(monkeypatch):
+    def fail_generate_json(**_kwargs):
+        raise AssertionError("hourly rate text should not call LLM")
+
+    monkeypatch.setattr("c3_answering.pipeline.generate_json", fail_generate_json)
+
+    decision = decide_answer(
+        make_request(
+            "What is your expected hourly rate?",
+            [],
+            {"salaryExpectation": "97500", "hourlyPayExpectation": "46.88"},
+            kind="text",
+        )
+    )
+
+    assert decision.status == "fillable"
+    assert decision.action == "fill_text"
+    assert decision.answer_text == "46.88"
+    assert decision.canonical_field == "salary_expectation"
+    assert decision.source_fields == ["profile.hourlyPayExpectation"]
+
+
+def test_accessibility_accommodation_request_defaults_no_without_llm(monkeypatch):
+    def fail_generate_json(**_kwargs):
+        raise AssertionError("accommodation request yes/no should not call LLM")
+
+    monkeypatch.setattr("c3_answering.pipeline.generate_json", fail_generate_json)
+
+    decision = decide_answer(
+        make_request(
+            "Do you require accessibility accommodations or adjustments?",
+            [
+                "Select One",
+                "Yes, I will require accessibility accommodations or adjustments",
+                "No, I do not require accessibility accommodations or adjustments",
+            ],
+        )
+    )
+
+    assert decision.status == "fillable"
+    assert decision.selected_option == "No, I do not require accessibility accommodations or adjustments"
+    assert decision.canonical_field == "accommodation_request"
+    assert decision.source_fields == ["default.accommodationRequest"]
+
+
+def test_accessibility_accommodation_request_can_use_profile_yes_without_llm(monkeypatch):
+    def fail_generate_json(**_kwargs):
+        raise AssertionError("accommodation request yes/no should not call LLM")
+
+    monkeypatch.setattr("c3_answering.pipeline.generate_json", fail_generate_json)
+
+    decision = decide_answer(
+        make_request(
+            "Do you require accessibility accommodations or adjustments?",
+            [
+                "Select One",
+                "Yes, I will require accessibility accommodations or adjustments",
+                "No, I do not require accessibility accommodations or adjustments",
+            ],
+            {"accommodationRequest": "yes"},
+        )
+    )
+
+    assert decision.status == "fillable"
+    assert decision.selected_option == "Yes, I will require accessibility accommodations or adjustments"
+    assert decision.canonical_field == "accommodation_request"
+    assert decision.source_fields == ["profile.accommodationRequest"]
+
+
+def test_basic_qualification_question_defaults_yes_without_llm(monkeypatch):
+    def fail_generate_json(**_kwargs):
+        raise AssertionError("basic qualification yes/no should not call LLM")
+
+    monkeypatch.setattr("c3_answering.pipeline.generate_json", fail_generate_json)
+
+    decision = decide_answer(
+        make_request(
+            "Do you meet all the basic requirements/qualifications for this role?",
+            ["Select One", "Yes", "No"],
+        )
+    )
+
+    assert decision.status == "fillable"
+    assert decision.selected_option == "Yes"
+    assert decision.canonical_field == "basic_requirements_qualified"
+    assert decision.source_fields == ["policy.basic_requirements_qualified"]
+
+
 def test_desired_start_date_text_question_uses_profile_without_llm(monkeypatch):
     def fail_generate_json(**_kwargs):
         raise AssertionError("desired start date should not call LLM")

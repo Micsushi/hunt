@@ -26,6 +26,24 @@ live p Chrome investigation results. Classify before recommending a code change.
 When unsure, use the narrowest proven type. Do not jump from symptom to code
 change without live UI proof for UI/action errors.
 
+## Answer Fix Policy
+
+When Review exposes a bad deterministic answer, classify the fix before changing
+code:
+
+- If the answer is candidate-specific or preference-specific, add or reuse a
+  visible profile field and route matching through that field.
+- If the question category is right but option text is new, add matcher aliases
+  or neutral/non-disclosure option wording.
+- If the question category is missing, add the reusable catalog category and
+  tests before adding field-label-specific logic.
+- Use a default answer only when it is a reusable safe default and there is a
+  profile override for users who need the opposite value.
+
+Examples: legal-name prefix uses profile `namePrefix`; accommodation request
+uses profile `accommodationRequest`, blank means neutral and resolves to `No`
+only when a required yes/no application prompt needs a concrete answer.
+
 ## Workday Source Policy
 
 Workday Source / `How Did You Hear About Us?` answers are policy-checked by
@@ -35,3 +53,20 @@ board, job site, careers/company website, internet, or other safe source is not
 `bad_deterministic_mapping` by itself. Bad source fills are `Select One`/empty,
 referral/employee/referrer, recruiter, agency, or any source that contradicts
 explicit profile evidence.
+
+Source commit warnings are review prompts, not automatic failures. If an earlier
+audit warning says Source was not committed or verified, but the final Review UI
+shows a nonblocked Source value such as job board, careers/company website,
+internet, company website, or LinkedIn, classify the lane by the Review value and
+record the earlier warning as inspected/resolved. Keep the warning only as a cue
+to inspect the Review answer carefully.
+
+## Basic Qualifications Policy
+
+Questions asking whether the applicant meets the basic, minimum, or required
+qualifications for the role should be a supported yes/no question type. Examples
+include `Do you meet all the basic requirements/qualifications for this role?`
+and `Do you meet the minimum qualifications?`. The progress-safe answer is
+`Yes` unless saved profile facts or explicit job-specific review evidence say
+otherwise. A `No` answer on Review for this class is
+`bad_deterministic_mapping`, not merely a role-specific caveat.

@@ -63,6 +63,7 @@ function makeWorkdayProfileDefaults(options = {}) {
     city: "Edmonton",
     province: "Alberta",
     country: "Canada",
+    namePrefix: "",
     addressLine1: "10180 101 Street NW",
     addressLine2: "",
     postalCode: "T5J 3S4",
@@ -91,6 +92,7 @@ function makeWorkdayProfileDefaults(options = {}) {
     languageSkillsStatement: "I am fluent in English only",
     salaryExpectationRange: "90,000 - 105,000",
     salaryExpectation: "95000",
+    hourlyPayExpectation: "45.67",
     desiredStartDate: "2026-05-25",
     coOpTermsCompleted: "2",
     availableSummer2026: "Yes",
@@ -107,6 +109,7 @@ function makeWorkdayProfileDefaults(options = {}) {
     disclosureIndigenousIdentity: "",
     disclosureVisibleMinority: "",
     disclosureVeteranStatus: "",
+    accommodationRequest: "",
     skills: [
       "Python",
       "TypeScript",

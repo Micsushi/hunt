@@ -221,6 +221,8 @@ export function sanitizeBrowserContext(context = {}) {
 }
 
 export function sanitizeProfile(profile = {}) {
+  const salaryExpectation = sanitizeText(profile.salaryExpectation);
+  const calculatedHourly = calculateHourlyPayExpectation(salaryExpectation);
   return {
     fullName: sanitizeText(profile.fullName),
     email: sanitizeText(profile.email),
@@ -234,6 +236,7 @@ export function sanitizeProfile(profile = {}) {
     province: sanitizeText(profile.province),
     country: sanitizeText(profile.country),
     middleName: sanitizeText(profile.middleName),
+    namePrefix: sanitizeText(profile.namePrefix),
     addressLine1: sanitizeText(profile.addressLine1),
     addressLine2: sanitizeText(profile.addressLine2),
     postalCode: sanitizeText(profile.postalCode),
@@ -261,6 +264,7 @@ export function sanitizeProfile(profile = {}) {
     ),
     disclosureVisibleMinority: sanitizeText(profile.disclosureVisibleMinority),
     disclosureVeteranStatus: sanitizeText(profile.disclosureVeteranStatus),
+    accommodationRequest: sanitizeText(profile.accommodationRequest),
     sponsorshipRequired: sanitizeBoolean(profile.sponsorshipRequired),
     willingToRelocate: sanitizeBoolean(profile.willingToRelocate ?? true),
     openToAnyLocation: sanitizeBoolean(profile.openToAnyLocation ?? true),
@@ -273,7 +277,10 @@ export function sanitizeProfile(profile = {}) {
       profile.previousDeloitteErnstYoung,
     ),
     languageSkillsStatement: sanitizeText(profile.languageSkillsStatement),
+    salaryExpectation,
     salaryExpectationRange: sanitizeText(profile.salaryExpectationRange),
+    hourlyPayExpectation:
+      calculatedHourly || sanitizeText(profile.hourlyPayExpectation),
     coOpTermsCompleted: sanitizeText(profile.coOpTermsCompleted),
     availableSummer2026: sanitizeText(profile.availableSummer2026),
     availableInterviewWindow: sanitizeText(profile.availableInterviewWindow),
@@ -288,6 +295,18 @@ export function sanitizeProfile(profile = {}) {
     education: sanitizeEducation(profile.education),
     notes: sanitizeText(profile.notes),
   };
+}
+
+function calculateHourlyPayExpectation(annualSalary) {
+  const match = sanitizeText(annualSalary).match(/\d[\d,]*(?:\.\d+)?/);
+  if (!match) {
+    return "";
+  }
+  const annual = Number(match[0].replace(/,/g, ""));
+  if (!Number.isFinite(annual) || annual <= 0) {
+    return "";
+  }
+  return (annual / 2080).toFixed(2);
 }
 
 function sanitizeTextList(value, maxItems = 50) {
@@ -667,7 +686,10 @@ export function sanitizeUnknownQuestionDefault(entry = {}) {
     selectedOption: sanitizeText(entry.selectedOption),
     valueSource: sanitizeText(entry.valueSource),
     options: Array.isArray(entry.options)
-      ? entry.options.map((option) => sanitizeText(option)).filter(Boolean).slice(0, 80)
+      ? entry.options
+          .map((option) => sanitizeText(option))
+          .filter(Boolean)
+          .slice(0, 80)
       : [],
     reason: sanitizeText(entry.reason),
   };
@@ -754,8 +776,7 @@ export async function ensureStageOneState() {
     localPatch[STORAGE_KEYS.questionAnswers] = questionAnswers;
   }
   if (!sameJson(rawUnknownQuestionDefaults, unknownQuestionDefaults)) {
-    localPatch[STORAGE_KEYS.unknownQuestionDefaults] =
-      unknownQuestionDefaults;
+    localPatch[STORAGE_KEYS.unknownQuestionDefaults] = unknownQuestionDefaults;
   }
   if (!sameJson(rawActivityLog, activityLog)) {
     localPatch[STORAGE_KEYS.activityLog] = activityLog;

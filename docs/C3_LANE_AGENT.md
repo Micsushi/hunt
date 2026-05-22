@@ -64,6 +64,17 @@ agent investigates and reports. It does not change C3 code.
   board, job site, careers/company website, internet, or other safe source is
   acceptable. Treat referral, employee, recruiter, agency, or empty/Select One
   values as bad unless profile evidence explicitly supports them.
+- When a bad answer is found, classify whether the fix belongs in a visible
+  profile field, answer-option matching, question classification, or UI driver
+  behavior before recommending code changes.
+- Do not recommend a one-off hardcoded answer for candidate-specific or
+  preference-specific data. Use or add a profile field. Examples:
+  `namePrefix` controls legal-name prefix, `accommodationRequest` controls
+  accommodation-request questions, and hourly prompts use calculated/explicit
+  hourly profile data rather than annual salary.
+- Defaults are acceptable only when they are reusable safe fallbacks and the
+  profile can override them. Blank `accommodationRequest` resolves to `No` only
+  when a required yes/no prompt needs a concrete answer.
 - Record any issue in `current_debug.md` using `docs/C3_ERROR_TAXONOMY.md`.
 
 ## If The Lane Fails

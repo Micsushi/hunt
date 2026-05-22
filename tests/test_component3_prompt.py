@@ -212,8 +212,29 @@ def test_live_smoke_routes_pages_through_identifier_before_action():
     assert "page_fill_and_next_timeout" in live_smoke
     assert "reconcilePageFillTimeoutToReview" in live_smoke
     assert "timeout_reconciled_to_review" in live_smoke
+    assert "waitForPostFillSettle" in live_smoke
+    assert "initialSettleMs = 1000" in live_smoke
+    assert "maxSettleMs = 3000" in live_smoke
+    assert "loadingNodeCount" in live_smoke
+    assert "setRunnerFillProgress" in live_smoke
+    assert "hideRunnerFillProgress" in live_smoke
+    assert "Waiting for Workday to finish loading" in live_smoke
+    assert "hunt.apply.show_fill_progress" in live_smoke
+    assert "fillDidUsefulWork" in live_smoke
+    assert "fill_not_ready_for_next_no_progress" in live_smoke
+    assert "forced_next_after_no_visible_errors" in live_smoke
+    assert "args.extensionAutoNext ? 7500" not in live_smoke
     assert 'pageKind = "review"' in identifier
     assert "finalSubmitVisible" in identifier
+    assert "blankWorkdayShell" in identifier
+    assert "blankShellReloaded" in identifier
+    assert 'this.pageClient.send("Page.reload"' in identifier
+    assert "authPageVisible" in identifier
+    assert 'else if (authPageVisible && hasEmailField && passwordCount > 1)' in identifier
+    assert 'else if (authPageVisible && hasEmailField && passwordCount === 1)' in identifier
+    assert identifier.index("authPageVisible") < identifier.index(
+        'else if (/review/i.test(currentStepText) || finalSubmitVisible)'
+    )
     assert "full_application_timeout" in live_smoke
     assert "async function clickAuthPrimary(" not in live_smoke
     assert "async function clickApplyManuallyEntry(" not in live_smoke

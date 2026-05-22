@@ -8,6 +8,7 @@ import { saveDefaultResume as saveDefaultResumeDirect } from "../shared/storage.
 
 let currentDefaultResume = {};
 const AUTOSAVE_DELAY_MS = 650;
+const HOURS_PER_YEAR = 2080;
 let statusHideTimer = null;
 
 function showToast(message, tone = "info") {
@@ -74,6 +75,26 @@ function setCheckboxValue(id, value) {
   if (element) {
     element.checked = Boolean(value);
   }
+}
+
+function calculateHourlyPayExpectation(annualSalary) {
+  const match = String(annualSalary || "").match(/\d[\d,]*(?:\.\d+)?/);
+  if (!match) {
+    return "";
+  }
+  const annual = Number(match[0].replace(/,/g, ""));
+  if (!Number.isFinite(annual) || annual <= 0) {
+    return "";
+  }
+  return (annual / HOURS_PER_YEAR).toFixed(2);
+}
+
+function updateCalculatedHourlyPay() {
+  const annual = document.getElementById("profile-salary-expectation")?.value;
+  setInputValue(
+    "profile-hourly-pay-expectation",
+    calculateHourlyPayExpectation(annual),
+  );
 }
 
 let currentActivityLog = [];
@@ -371,6 +392,7 @@ function readProfileForm() {
     city: document.getElementById("profile-city")?.value,
     province: document.getElementById("profile-province")?.value,
     country: document.getElementById("profile-country")?.value,
+    namePrefix: document.getElementById("profile-name-prefix")?.value,
     addressLine1: document.getElementById("profile-address-line-1")?.value,
     addressLine2: document.getElementById("profile-address-line-2")?.value,
     postalCode: document.getElementById("profile-postal-code")?.value,
@@ -397,9 +419,14 @@ function readProfileForm() {
     languageSkillsStatement: document.getElementById(
       "profile-language-skills-statement",
     )?.value,
+    salaryExpectation: document.getElementById("profile-salary-expectation")
+      ?.value,
     salaryExpectationRange: document.getElementById(
       "profile-salary-expectation-range",
     )?.value,
+    hourlyPayExpectation: calculateHourlyPayExpectation(
+      document.getElementById("profile-salary-expectation")?.value,
+    ),
     coOpTermsCompleted: document.getElementById("profile-coop-terms-completed")
       ?.value,
     expectedGraduationYear: document.getElementById(
@@ -445,6 +472,9 @@ function readProfileForm() {
     disclosureVeteranStatus: document.getElementById(
       "profile-disclosure-veteran",
     )?.value,
+    accommodationRequest: document.getElementById(
+      "profile-accommodation-request",
+    )?.value,
     previousEmployers: document.getElementById("profile-previous-employers")
       ?.value,
     skills: splitListText(document.getElementById("profile-skills")?.value),
@@ -463,6 +493,7 @@ function writeProfileFields(profile) {
   setInputValue("profile-city", profile.city);
   setInputValue("profile-province", profile.province);
   setInputValue("profile-country", profile.country);
+  setInputValue("profile-name-prefix", profile.namePrefix);
   setInputValue("profile-address-line-1", profile.addressLine1);
   setInputValue("profile-address-line-2", profile.addressLine2);
   setInputValue("profile-postal-code", profile.postalCode);
@@ -494,9 +525,15 @@ function writeProfileFields(profile) {
     "profile-language-skills-statement",
     profile.languageSkillsStatement,
   );
+  setInputValue("profile-salary-expectation", profile.salaryExpectation);
   setInputValue(
     "profile-salary-expectation-range",
     profile.salaryExpectationRange,
+  );
+  setInputValue(
+    "profile-hourly-pay-expectation",
+    profile.hourlyPayExpectation ||
+      calculateHourlyPayExpectation(profile.salaryExpectation),
   );
   setInputValue("profile-coop-terms-completed", profile.coOpTermsCompleted);
   setInputValue(
@@ -540,6 +577,7 @@ function writeProfileFields(profile) {
     profile.disclosureVisibleMinority,
   );
   setInputValue("profile-disclosure-veteran", profile.disclosureVeteranStatus);
+  setInputValue("profile-accommodation-request", profile.accommodationRequest);
   setInputValue("profile-previous-employers", profile.previousEmployers);
   setInputValue("profile-skills", formatListText(profile.skills));
   workExperienceEntries = Array.isArray(profile.workExperience)
@@ -949,6 +987,10 @@ document
       response?.ok ? "info" : "warn",
     );
   });
+
+document
+  .getElementById("profile-salary-expectation")
+  ?.addEventListener("input", updateCalculatedHourlyPay);
 
 installAutosave(
   "settings-form",

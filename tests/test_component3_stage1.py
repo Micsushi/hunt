@@ -618,6 +618,9 @@ Expected Graduation: Sep 2026
         storage = (REPO_ROOT / "executioner" / "src" / "shared" / "storage.js").read_text(
             encoding="utf-8"
         )
+        settings = (REPO_ROOT / "executioner" / "src" / "shared" / "settings.js").read_text(
+            encoding="utf-8"
+        )
         background = (REPO_ROOT / "executioner" / "src" / "background" / "index.js").read_text(
             encoding="utf-8"
         )
@@ -638,6 +641,9 @@ Expected Graduation: Sep 2026
             encoding="utf-8"
         )
         options = (REPO_ROOT / "executioner" / "src" / "options" / "options.html").read_text(
+            encoding="utf-8"
+        )
+        options_js = (REPO_ROOT / "executioner" / "src" / "options" / "options.js").read_text(
             encoding="utf-8"
         )
         clear_pipeline_v2 = (
@@ -819,6 +825,7 @@ Expected Graduation: Sep 2026
         self.assertIn("summarizeBackendUrl", popup_js)
         self.assertIn('id="profile-account-email"', options)
         self.assertIn('id="profile-account-password"', options)
+        self.assertIn('id="profile-name-prefix"', options)
         self.assertIn('id="export-logs-now"', options)
         self.assertIn('id="test-debug-log-sink"', options)
         self.assertIn('id="activity-log-count"', options)
@@ -826,6 +833,10 @@ Expected Graduation: Sep 2026
         self.assertIn('id="work-experience-list"', options)
         self.assertIn('id="education-list"', options)
         self.assertIn('id="profile-skills"', options)
+        self.assertIn('id="profile-salary-expectation"', options)
+        self.assertIn('id="profile-hourly-pay-expectation"', options)
+        self.assertIn("updateCalculatedHourlyPay", options_js)
+        self.assertIn("HOURS_PER_YEAR = 2080", options_js)
         self.assertIn('id="profile-canadian-citizen-pr"', options)
         self.assertIn('id="profile-sin-starts-with-nine"', options)
         self.assertIn('id="profile-sin-expiry-date"', options)
@@ -837,9 +848,11 @@ Expected Graduation: Sep 2026
         self.assertIn('id="profile-disclosure-indigenous"', options)
         self.assertIn('id="profile-disclosure-visible-minority"', options)
         self.assertIn('id="profile-disclosure-veteran"', options)
+        self.assertIn('id="profile-accommodation-request"', options)
         self.assertIn('id="profile-degree-level"', options)
         self.assertIn('id="profile-highest-education"', options)
-        self.assertIn('<select\n                id="profile-highest-education"', options)
+        self.assertIn('id="profile-highest-education"', options)
+        self.assertIn('name="highestEducation"', options)
         self.assertIn('value="Bachelor\'s Degree"', options)
         self.assertIn('id="profile-preferred-education-index"', options)
         self.assertIn("max-height: min(420px, 52vh)", options)
@@ -1174,6 +1187,101 @@ Expected Graduation: Sep 2026
                 "source": "alias",
                 "value": "No",
                 "valueSource": "default:open_work_permit",
+            },
+        )
+
+    def test_v2_basic_requirements_and_hourly_expectations_are_supported(self):
+        paths = [
+            REPO_ROOT / "executioner" / "src" / "shared" / "v2" / "field-catalog.js",
+            REPO_ROOT / "executioner" / "src" / "shared" / "v2" / "question-identifier.js",
+            REPO_ROOT / "executioner" / "src" / "shared" / "v2" / "answer-resolver.js",
+        ]
+        script = f"""
+            const fs = require("node:fs");
+            const vm = require("node:vm");
+            const context = {{ window: {{ __huntV2: {{}} }} }};
+            vm.createContext(context);
+            for (const path of {json.dumps([str(path) for path in paths])}) {{
+              vm.runInContext(fs.readFileSync(path, "utf8"), context);
+            }}
+            const root = context.window.__huntV2;
+            function resolve(label, profile = {{}}) {{
+              const field = {{
+                workday: {{ fieldLabel: label }},
+                descriptor: `${{label}} Select One`,
+                uiModel: "button_listbox",
+                required: true
+              }};
+              const question = root.questionIdentifier.identifyQuestion(field, null, null);
+              const answer = root.answerResolver.resolveAnswer({{
+                question,
+                field,
+                profile,
+                audit: null,
+                fieldAudit: null
+              }});
+              return {{
+                type: question.type,
+                value: answer.value,
+                source: answer.source,
+                answerType: answer.answerType
+              }};
+            }}
+            console.log(JSON.stringify({{
+              basicRequirements: resolve(
+                "Do you meet all the basic requirements/qualifications for this role?"
+              ),
+              hourlyProfile: resolve(
+                "What are your Hourly expectations for the Position",
+                {{ salaryExpectation: "97500", salaryExpectationRange: "90,000 - 105,000" }}
+              ),
+              hourlyExplicit: resolve(
+                "What is your expected hourly rate?",
+                {{ salaryExpectation: "97500", hourlyPayExpectation: "46.88" }}
+              ),
+              hourlyDefault: resolve(
+                "What are your Hourly expectations for the Position",
+                {{ salaryExpectation: "", salaryExpectationRange: "" }}
+              )
+            }}));
+        """
+        try:
+            result = subprocess.run(
+                ["node", "-e", script],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+        except FileNotFoundError:
+            self.skipTest("node is required to test the C3 V2 question identifier")
+
+        self.assertEqual(
+            json.loads(result.stdout),
+            {
+                "basicRequirements": {
+                    "type": "basic_requirements_qualified",
+                    "value": "Yes",
+                    "source": "default:basic_requirements_qualified",
+                    "answerType": "yes_no",
+                },
+                "hourlyProfile": {
+                    "type": "salary_expectation",
+                    "value": "46.88",
+                    "source": "calculated:salaryExpectationHourly",
+                    "answerType": "text",
+                },
+                "hourlyExplicit": {
+                    "type": "salary_expectation",
+                    "value": "46.88",
+                    "source": "profile:hourlyPayExpectation",
+                    "answerType": "text",
+                },
+                "hourlyDefault": {
+                    "type": "salary_expectation",
+                    "value": "48.08",
+                    "source": "default:hourlyPayExpectation",
+                    "answerType": "text",
+                },
             },
         )
 
@@ -2285,22 +2393,22 @@ Expected Graduation: Sep 2026
                     "type": "ethnicity_disclosure_neutral",
                     "answerType": "non_disclosure",
                     "option": "Declined to State (United States of America)",
-                    "source": "alias",
-                    "fallback": False,
+                    "source": "neutral_fallback",
+                    "fallback": True,
                 },
                 "boeingEthnicity": {
                     "type": "ethnicity_disclosure_neutral",
                     "answerType": "non_disclosure",
                     "option": "Declined to Identify (United States of America)",
-                    "source": "alias",
-                    "fallback": False,
+                    "source": "neutral_fallback",
+                    "fallback": True,
                 },
                 "boeingVeteran": {
                     "type": "veteran_disclosure_neutral",
                     "answerType": "non_disclosure",
                     "option": "I DO NOT WISH TO SELF-IDENTIFY",
-                    "source": "alias",
-                    "fallback": False,
+                    "source": "neutral_fallback",
+                    "fallback": True,
                 },
             },
         )
@@ -3024,7 +3132,7 @@ Expected Graduation: Sep 2026
               vm.runInContext(fs.readFileSync(path, "utf8"), context);
             }}
             const root = context.window.__huntV2;
-            function resolve(label, options) {{
+            function resolve(label, options, profile = {{}}) {{
               const issues = [];
               const audit = {{ pushIssue: (_audit, _fieldAudit, issue) => issues.push(issue), pushFieldStep: () => null }};
               root.audit = audit;
@@ -3036,7 +3144,7 @@ Expected Graduation: Sep 2026
                 uiModel: "button_listbox"
               }};
               const question = root.questionIdentifier.identifyQuestion(field, null, null);
-              const answer = root.answerResolver.resolveAnswer({{ question, field, profile: {{}}, audit: null, fieldAudit: null }});
+              const answer = root.answerResolver.resolveAnswer({{ question, field, profile, audit: null, fieldAudit: null }});
               const match = root.optionMatcher.matchOption({{
                 options: options.map((label) => ({{ label, value: label }})),
                 answer,
@@ -3056,15 +3164,18 @@ Expected Graduation: Sep 2026
             }}
             const results = {{
               prefix: resolve("Prefix Select One", ["Select One", "Dr", "Mr", "Mrs", "Ms", "Not Mapped", "Prof"]),
+              prefixFromProfile: resolve("Prefix Select One", ["Select One", "No Prefix", "Dr", "Mr", "Mrs", "Ms", "Not Mapped", "Prof"], {{ namePrefix: "No Prefix" }}),
               workEligibility: resolve("Are you legally eligible to work in Canada?*", ["Select One", "Yes, I am a citizen or permanent resident of Canada", "No"]),
               priorEmployer: resolve("Have you been employed by Ernst & Young within the last 2 years, or employed by Deloitte LLP at any time?*", ["Select One", "Yes", "No, I have not worked at either Deloitte LLP or Ernst & Young."]),
               governmentOfficial: resolve("Are you (or have you been within the last 12 months) a Government Official?", ["Select One", "Yes", "No"]),
               familyGovernmentOfficial: resolve("Are any of your immediate family members Government Officials (Any Official or Employee of any government department/agency; Company or Organization owned fully or partially by government or public institution)?", ["Select One", "Yes", "No"]),
               shellEyFinancial: resolve("Do you have any financial arrangements (including retirement funds or shares) with Shell's auditor EY? (A financial interest can be anything of monetary value, whether the value is readily ascertainable, which is held by an individual).", ["Select One", "Yes", "No"]),
               unknownGenericNo: resolve("Some unknown yes or no screening question?", ["Select One", "Yes", "No"]),
-              aboriginalDisclosure: resolve("Are you a member of an Aboriginal People based on the definition in the information box?*", ["Select One", "Yes", "No", "I do not declare"]),
-              visibleMinority: resolve("Are you a member of an visible minority based on the definition in the information box?*", ["Select One", "Yes", "No", "I do not declare"]),
-              disability: resolve("Do you have a disability based on the definition in the information box?*", ["Select One", "Yes", "No", "I do not declare"])
+              shellAccommodation: resolve("Do you require accessibility accommodations or adjustments?", ["Select One", "Yes, I will require accessibility accommodations or adjustments", "No, I do not require accessibility accommodations or adjustments"]),
+              shellAccommodationFromProfile: resolve("Do you require accessibility accommodations or adjustments?", ["Select One", "Yes, I will require accessibility accommodations or adjustments", "No, I do not require accessibility accommodations or adjustments"], {{ accommodationRequest: "yes" }}),
+              aboriginalDisclosure: resolve("Are you a member of an Aboriginal People based on the definition in the information box?*", ["Select One", "Yes", "No", "I prefer not to respond"]),
+              visibleMinority: resolve("Are you a member of an visible minority based on the definition in the information box?*", ["Select One", "Yes", "No", "I prefer not to respond"]),
+              disability: resolve("Do you have a disability based on the definition in the information box?*", ["Select One", "Yes", "No", "I prefer not to respond"])
             }};
             console.log(JSON.stringify(results));
         """
@@ -3080,8 +3191,12 @@ Expected Graduation: Sep 2026
 
         results = json.loads(result.stdout)
         self.assertEqual(results["prefix"]["type"], "name_prefix")
-        self.assertEqual(results["prefix"]["value"], "Not Mapped")
-        self.assertEqual(results["prefix"]["selected"], "Not Mapped")
+        self.assertEqual(results["prefix"]["value"], "")
+        self.assertIsNone(results["prefix"]["selected"])
+        self.assertEqual(results["prefixFromProfile"]["type"], "name_prefix")
+        self.assertEqual(results["prefixFromProfile"]["value"], "No Prefix")
+        self.assertEqual(results["prefixFromProfile"]["source"], "profile:namePrefix")
+        self.assertEqual(results["prefixFromProfile"]["selected"], "No Prefix")
         self.assertEqual(results["workEligibility"]["type"], "work_authorized")
         self.assertEqual(results["workEligibility"]["value"], "Yes")
         self.assertEqual(results["workEligibility"]["source"], "default:work_authorized")
@@ -3109,11 +3224,30 @@ Expected Graduation: Sep 2026
         self.assertEqual(results["shellEyFinancial"]["matchSource"], "unknown_no_fallback")
         self.assertEqual(results["unknownGenericNo"]["type"], "unknown")
         self.assertEqual(results["unknownGenericNo"]["selected"], "No")
+        shell_accommodation = results["shellAccommodation"]
+        self.assertEqual(shell_accommodation["type"], "accommodation_request")
+        self.assertEqual(shell_accommodation["value"], "No")
+        self.assertEqual(shell_accommodation["source"], "default:accommodation_request")
+        self.assertEqual(
+            shell_accommodation["selected"],
+            "No, I do not require accessibility accommodations or adjustments",
+        )
+        shell_accommodation_profile = results["shellAccommodationFromProfile"]
+        self.assertEqual(shell_accommodation_profile["type"], "accommodation_request")
+        self.assertEqual(shell_accommodation_profile["value"], "Yes")
+        self.assertEqual(
+            shell_accommodation_profile["source"],
+            "profile:accommodationRequest",
+        )
+        self.assertEqual(
+            shell_accommodation_profile["selected"],
+            "Yes, I will require accessibility accommodations or adjustments",
+        )
         self.assertEqual(results["unknownGenericNo"]["matchSource"], "unknown_no_fallback")
         for key in ["aboriginalDisclosure", "visibleMinority", "disability"]:
             self.assertEqual(results[key]["answerType"], "non_disclosure")
             self.assertEqual(results[key]["value"], "I choose not to disclose")
-            self.assertEqual(results[key]["selected"], "I do not declare")
+            self.assertEqual(results[key]["selected"], "I prefer not to respond")
 
     def test_v2_optional_preferred_name_checkbox_is_quietly_skipped(self):
         field_pipeline = (
@@ -3440,33 +3574,33 @@ Expected Graduation: Sep 2026
                 "valueSource": "default:disclosure_neutral",
                 "notDeclared": {
                     "option": "Not Declared",
-                    "source": "alias",
-                    "fallback": False,
+                    "source": "neutral_fallback",
+                    "fallback": True,
                 },
                 "thermoUndisclosed": {
                     "option": "Undisclosed (United States of America)",
-                    "source": "alias",
-                    "fallback": False,
+                    "source": "neutral_fallback",
+                    "fallback": True,
                 },
                 "doNotWish": {
                     "option": "I DO NOT WISH TO ANSWER",
-                    "source": "alias",
-                    "fallback": False,
+                    "source": "neutral_fallback",
+                    "fallback": True,
                 },
                 "dontWish": {
                     "option": "I DON'T WISH TO ANSWER",
-                    "source": "alias",
-                    "fallback": False,
+                    "source": "neutral_fallback",
+                    "fallback": True,
                 },
                 "notSpecified": {
                     "option": "Not Specified (United States of America)",
-                    "source": "alias",
-                    "fallback": False,
+                    "source": "neutral_fallback",
+                    "fallback": True,
                 },
                 "noneOfThese": {
                     "option": "None of these",
-                    "source": "alias",
-                    "fallback": False,
+                    "source": "neutral_fallback",
+                    "fallback": True,
                 },
             },
         )
@@ -4804,6 +4938,9 @@ Expected Graduation: Sep 2026
         ).read_text(encoding="utf-8")
         self.assertIn("WorkdayWorkflowIdentifier", live_smoke)
         self.assertIn("workdayPageKindExpression", workday_identifier)
+        self.assertIn("blankWorkdayShell", workday_identifier)
+        self.assertIn("blankShellReloaded", workday_identifier)
+        self.assertIn('this.pageClient.send("Page.reload"', workday_identifier)
         self.assertIn("waitForWorkdayPageReady", smoke)
         self.assertIn("signin_choice", smoke)
         self.assertIn("application_step", smoke)
@@ -5056,6 +5193,9 @@ Expected Graduation: Sep 2026
         storage = (REPO_ROOT / "executioner" / "src" / "shared" / "storage.js").read_text(
             encoding="utf-8"
         )
+        settings = (REPO_ROOT / "executioner" / "src" / "shared" / "settings.js").read_text(
+            encoding="utf-8"
+        )
         background = (REPO_ROOT / "executioner" / "src" / "background" / "index.js").read_text(
             encoding="utf-8"
         )
@@ -5104,12 +5244,23 @@ Expected Graduation: Sep 2026
         self.assertIn("deloitte", shared_utils)
         self.assertIn("language skills", shared_utils)
         self.assertIn("preferred language", shared_utils)
+        self.assertIn("salaryExpectation", settings)
+        self.assertIn("hourlyPayExpectation", settings)
+        self.assertIn("namePrefix", settings)
+        self.assertIn("accommodationRequest", settings)
+        self.assertIn("calculateHourlyPayExpectation", storage)
+        self.assertIn("2080", storage)
         self.assertIn("background security check", field_catalog)
         self.assertIn("automated tools such as ai", field_catalog)
         self.assertIn("inferWorkdayLocationFromApplyContext", shared_utils)
         self.assertIn("All Canada Employers", shared_utils)
         self.assertIn("nameParts", answer_resolver)
         self.assertIn("salaryExpectationRange", field_catalog)
+        self.assertIn("hourlyPayExpectation", field_catalog)
+        self.assertIn("profilePaths: [\"namePrefix\"]", field_catalog)
+        self.assertIn("profilePaths: [\"accommodationRequest\"]", field_catalog)
+        self.assertIn("Undeclared/Diverse", field_catalog)
+        self.assertIn("accommodation_request", field_catalog)
         self.assertIn("Yes, I am a citizen or permanent resident of Canada", shared_utils)
         self.assertIn('option.startsWith(target + ",")', shared_utils)
         self.assertIn("how did you hear", shared_utils)

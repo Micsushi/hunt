@@ -46,12 +46,24 @@ function workdayPageKindExpression(authVerificationPatternSource) {
       || hasButton(/create account|sign up|signup|register|join today/i);
     const hasSignIn = /already have an account|sign in|log in|login/i.test(normalizedText)
       || hasButton(/sign in|log in|login/i);
+    const authPageVisible =
+      (hasEmailField && passwordCount > 0 && (hasCreateAccount || hasSignIn)) ||
+      /create account|sign in|log in|login|register|sign up/i.test(currentStepText);
     const needsEmailVerification = new RegExp(${JSON.stringify(authVerificationPatternSource)}, "i").test(normalizedText)
       || /verify your email|confirm your email|check your email|activation link|verification link/i.test(normalizedText);
     const loadingNodes = [...document.querySelectorAll('[aria-busy="true"], [role="progressbar"], [data-automation-id*="loading" i], [class*="loading" i], [class*="spinner" i]')]
       .filter(visible);
     const hasClassificationSignal =
       buttons.length > 0 || fields.length > 0 || Boolean(currentStepText) || normalizedText.length > 80;
+    const blankWorkdayShell =
+      document.readyState === "complete" &&
+      /myworkdayjobs\\.com/i.test(location.href) &&
+      /\\/apply\\//i.test(location.href) &&
+      !hasClassificationSignal &&
+      normalizedText.length < 20 &&
+      fields.length === 0 &&
+      buttons.length === 0 &&
+      !currentStepText;
     const stillLoading =
       (document.readyState !== "complete" && !hasClassificationSignal) ||
       (!hasClassificationSignal && normalizedText.length < 20) ||
@@ -61,11 +73,11 @@ function workdayPageKindExpression(authVerificationPatternSource) {
     else if (/the page you are looking for (doesn't|does not) exist|page not found|job posting is no longer available|job is no longer available/i.test(normalizedText)) pageKind = "posting_not_found";
     else if (/workday is currently unavailable|service interruption/i.test(normalizedText) || /community\\.workday\\.com\\/maintenance-page/i.test(location.href)) pageKind = "maintenance";
     else if (/something went wrong/i.test(normalizedText) && /please refresh/i.test(normalizedText)) pageKind = "runtime_error";
-    else if (/review/i.test(currentStepText) || finalSubmitVisible) pageKind = "review";
-    else if (hasEmailField && passwordCount > 1) pageKind = "signup_form";
-    else if (hasEmailField && passwordCount === 1) pageKind = "signin_form";
+    else if (authPageVisible && hasEmailField && passwordCount > 1) pageKind = "signup_form";
+    else if (authPageVisible && hasEmailField && passwordCount === 1) pageKind = "signin_form";
     else if (hasButton(/^sign in with email\\b/i) || hasButton(/sign\\s*in\\s*with\\s*(google|apple)/i)) pageKind = "signin_choice";
     else if (/create account|sign in|log in|login|register|sign up/i.test(currentStepText)) pageKind = hasCreateAccount ? "signup_form" : "signin_form";
+    else if (/review/i.test(currentStepText) || finalSubmitVisible) pageKind = "review";
     else if (/start your application/i.test(normalizedText) || hasButton(/^apply manually$/i) || hasButton(/^autofill with resume$/i)) pageKind = "apply_choice";
     else if (currentStepText && !/create account|sign in/i.test(currentStepText)) pageKind = "application_step";
     else if (/resume\\/cv|my information|my experience|application questions|voluntary disclosures|self identify|review/i.test(normalizedText)) pageKind = "application_step";
@@ -101,6 +113,7 @@ function workdayPageKindExpression(authVerificationPatternSource) {
       authState,
       authUiState,
       stillLoading,
+      blankWorkdayShell,
       fieldCount: fields.length,
       passwordCount,
       hasEmailField,
@@ -134,14 +147,35 @@ class WorkdayWorkflowIdentifier {
     const started = Date.now();
     let last = null;
     let stableSince = 0;
+    let blankShellSince = 0;
+    let blankShellReloaded = false;
     while (Date.now() - started < timeoutMs) {
       const state = await this.inspectPageKind();
       const key = `${state.href}|${state.pageKind}|${state.fieldCount}|${state.buttonCount}`;
+      if (state.blankWorkdayShell && !blankShellReloaded) {
+        if (!blankShellSince) blankShellSince = Date.now();
+        if (Date.now() - blankShellSince >= 2500) {
+          blankShellReloaded = true;
+          await this.pageClient.send("Page.reload", { ignoreCache: false });
+          await this.sleep(3000);
+          last = {
+            key,
+            state: { ...state, blankShellReloadAttempted: true },
+          };
+          continue;
+        }
+      } else if (!state.blankWorkdayShell) {
+        blankShellSince = 0;
+      }
       if (!state.stillLoading && state.pageKind !== "loading") {
         if (key === last?.key) {
           if (!stableSince) stableSince = Date.now();
           if (Date.now() - stableSince >= 700) {
-            return { ...state, waitedMs: Date.now() - started };
+            return {
+              ...state,
+              blankShellReloaded,
+              waitedMs: Date.now() - started,
+            };
           }
         } else {
           stableSince = Date.now();
@@ -152,6 +186,7 @@ class WorkdayWorkflowIdentifier {
     }
     return {
       ...(last?.state || { pageKind: "unknown", stillLoading: true }),
+      blankShellReloaded,
       timedOut: true,
       waitedMs: Date.now() - started,
     };

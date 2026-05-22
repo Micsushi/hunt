@@ -771,6 +771,18 @@
               <input id="profile-full-name" name="fullName" type="text" />
             </label>
             <label>
+              Name prefix
+              <select id="profile-name-prefix" name="namePrefix">
+                <option value="">Manual</option>
+                <option value="No Prefix">No Prefix</option>
+                <option value="Mr">Mr</option>
+                <option value="Ms">Ms</option>
+                <option value="Mrs">Mrs</option>
+                <option value="Dr">Dr</option>
+                <option value="Prof">Prof</option>
+              </select>
+            </label>
+            <label>
               Email
               <input id="profile-email" name="email" type="email" />
             </label>
@@ -925,12 +937,35 @@
               />
             </label>
             <label>
+              Annual salary expectation
+              <input
+                id="profile-salary-expectation"
+                name="salaryExpectation"
+                placeholder="97500"
+                type="number"
+                min="0"
+                step="100"
+              />
+            </label>
+            <label>
               Salary expectation range
               <input
                 id="profile-salary-expectation-range"
                 name="salaryExpectationRange"
                 placeholder="90,000 - 105,000"
                 type="text"
+              />
+            </label>
+            <label>
+              Calculated hourly expectation
+              <input
+                id="profile-hourly-pay-expectation"
+                name="hourlyPayExpectation"
+                placeholder="46.88"
+                type="number"
+                min="0"
+                step="0.01"
+                readonly
               />
             </label>
             <label>
@@ -964,10 +999,7 @@
             </label>
             <label>
               Highest education
-              <select
-                id="profile-highest-education"
-                name="highestEducation"
-              >
+              <select id="profile-highest-education" name="highestEducation">
                 <option value="">Manual</option>
                 <option value="High School Diploma/GED">
                   High School Diploma/GED
@@ -1121,6 +1153,17 @@
                 placeholder="I choose not to disclose"
                 type="text"
               />
+            </label>
+            <label>
+              Accommodation request
+              <select
+                id="profile-accommodation-request"
+                name="accommodationRequest"
+              >
+                <option value="">Manual</option>
+                <option value="no">No</option>
+                <option value="yes">Yes</option>
+              </select>
             </label>
             <label>
               Previous employers
