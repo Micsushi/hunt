@@ -826,6 +826,7 @@ Expected Graduation: Sep 2026
         self.assertIn('id="profile-account-email"', options)
         self.assertIn('id="profile-account-password"', options)
         self.assertIn('id="profile-name-prefix"', options)
+        self.assertIn('id="profile-name-suffix"', options)
         self.assertIn('id="export-logs-now"', options)
         self.assertIn('id="test-debug-log-sink"', options)
         self.assertIn('id="activity-log-count"', options)
@@ -835,6 +836,7 @@ Expected Graduation: Sep 2026
         self.assertIn('id="profile-skills"', options)
         self.assertIn('id="profile-salary-expectation"', options)
         self.assertIn('id="profile-hourly-pay-expectation"', options)
+        self.assertIn('id="profile-compensation-offer-factors"', options)
         self.assertIn("updateCalculatedHourlyPay", options_js)
         self.assertIn("HOURS_PER_YEAR = 2080", options_js)
         self.assertIn('id="profile-canadian-citizen-pr"', options)
@@ -849,6 +851,14 @@ Expected Graduation: Sep 2026
         self.assertIn('id="profile-disclosure-visible-minority"', options)
         self.assertIn('id="profile-disclosure-veteran"', options)
         self.assertIn('id="profile-accommodation-request"', options)
+        self.assertIn('id="profile-conflict-of-interest-relationship"', options)
+        self.assertIn('id="profile-hhs-oig-excluded"', options)
+        self.assertIn('id="profile-gsa-federal-program-excluded"', options)
+        self.assertIn('id="profile-generic-drug-debarred"', options)
+        self.assertIn('id="profile-debarment-proceedings-pending"', options)
+        self.assertIn('id="profile-us-licensed-physician"', options)
+        self.assertIn('id="profile-fda-hhs-investigational-drug-restricted"', options)
+        self.assertIn('id="profile-governmental-licensing-inquiry"', options)
         self.assertIn('id="profile-degree-level"', options)
         self.assertIn('id="profile-highest-education"', options)
         self.assertIn('id="profile-highest-education"', options)
@@ -1284,6 +1294,71 @@ Expected Graduation: Sep 2026
                 },
             },
         )
+
+    def test_v2_phone_device_type_uses_cell_work_home_order(self):
+        paths = [
+            REPO_ROOT / "executioner" / "src" / "shared" / "v2" / "field-catalog.js",
+            REPO_ROOT / "executioner" / "src" / "shared" / "v2" / "question-identifier.js",
+            REPO_ROOT / "executioner" / "src" / "shared" / "v2" / "answer-resolver.js",
+            REPO_ROOT / "executioner" / "src" / "shared" / "v2" / "option-matcher.js",
+        ]
+        script = f"""
+            const fs = require("node:fs");
+            const vm = require("node:vm");
+            const context = {{ window: {{ __huntV2: {{}} }} }};
+            vm.createContext(context);
+            for (const path of {json.dumps([str(path) for path in paths])}) {{
+              vm.runInContext(fs.readFileSync(path, "utf8"), context);
+            }}
+            const root = context.window.__huntV2;
+            function resolve(options) {{
+              const field = {{
+                workday: {{ fieldLabel: "Phone Device Type*" }},
+                descriptor: "Phone Device Type* Select One",
+                fieldId: "phoneNumber--phoneType",
+                required: true,
+                uiModel: "button_listbox"
+              }};
+              const question = root.questionIdentifier.identifyQuestion(field, null, null);
+              const answer = root.answerResolver.resolveAnswer({{ question, field, profile: {{}}, audit: null, fieldAudit: null }});
+              const match = root.optionMatcher.matchOption({{
+                options: options.map((label) => ({{ label, value: label }})),
+                answer,
+                field,
+                audit: null,
+                fieldAudit: null
+              }});
+              return {{
+                type: question.type,
+                value: answer.value,
+                source: answer.source,
+                selected: match.option && match.option.label,
+                matchSource: match.source
+              }};
+            }}
+            console.log(JSON.stringify({{
+              cellFirst: resolve(["Select One", "Home", "Work", "Cell"]),
+              workFallback: resolve(["Select One", "Home", "Work"]),
+              homeFallback: resolve(["Select One", "Home"])
+            }}));
+        """
+        try:
+            result = subprocess.run(
+                ["node", "-e", script],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+        except FileNotFoundError:
+            self.skipTest("node is required to test the C3 V2 phone-device answer")
+
+        results = json.loads(result.stdout)
+        self.assertEqual(results["cellFirst"]["type"], "phone_device_type")
+        self.assertEqual(results["cellFirst"]["value"], "Mobile")
+        self.assertEqual(results["cellFirst"]["source"], "default:phone_device_type")
+        self.assertEqual(results["cellFirst"]["selected"], "Cell")
+        self.assertEqual(results["workFallback"]["selected"], "Work")
+        self.assertEqual(results["homeFallback"]["selected"], "Home")
 
     def test_v2_bird_work_auth_preferred_contact_and_start_date_defaults(self):
         paths = [
@@ -3132,7 +3207,7 @@ Expected Graduation: Sep 2026
               vm.runInContext(fs.readFileSync(path, "utf8"), context);
             }}
             const root = context.window.__huntV2;
-            function resolve(label, options, profile = {{}}) {{
+            function resolve(label, options, profile = {{}}, required = true) {{
               const issues = [];
               const audit = {{ pushIssue: (_audit, _fieldAudit, issue) => issues.push(issue), pushFieldStep: () => null }};
               root.audit = audit;
@@ -3140,7 +3215,7 @@ Expected Graduation: Sep 2026
                 workday: {{ fieldLabel: label }},
                 descriptor: label,
                 fieldId: "primaryQuestionnaire--test",
-                required: true,
+                required,
                 uiModel: "button_listbox"
               }};
               const question = root.questionIdentifier.identifyQuestion(field, null, null);
@@ -3165,6 +3240,8 @@ Expected Graduation: Sep 2026
             const results = {{
               prefix: resolve("Prefix Select One", ["Select One", "Dr", "Mr", "Mrs", "Ms", "Not Mapped", "Prof"]),
               prefixFromProfile: resolve("Prefix Select One", ["Select One", "No Prefix", "Dr", "Mr", "Mrs", "Ms", "Not Mapped", "Prof"], {{ namePrefix: "No Prefix" }}),
+              suffixBlank: resolve("Suffix Select One", ["Select One", "Fr.", "Jr", "Sr"], {{}}, false),
+              suffixFromProfile: resolve("Suffix Select One", ["Select One", "Fr.", "Jr", "Sr"], {{ nameSuffix: "Jr" }}, false),
               workEligibility: resolve("Are you legally eligible to work in Canada?*", ["Select One", "Yes, I am a citizen or permanent resident of Canada", "No"]),
               priorEmployer: resolve("Have you been employed by Ernst & Young within the last 2 years, or employed by Deloitte LLP at any time?*", ["Select One", "Yes", "No, I have not worked at either Deloitte LLP or Ernst & Young."]),
               governmentOfficial: resolve("Are you (or have you been within the last 12 months) a Government Official?", ["Select One", "Yes", "No"]),
@@ -3173,6 +3250,17 @@ Expected Graduation: Sep 2026
               unknownGenericNo: resolve("Some unknown yes or no screening question?", ["Select One", "Yes", "No"]),
               shellAccommodation: resolve("Do you require accessibility accommodations or adjustments?", ["Select One", "Yes, I will require accessibility accommodations or adjustments", "No, I do not require accessibility accommodations or adjustments"]),
               shellAccommodationFromProfile: resolve("Do you require accessibility accommodations or adjustments?", ["Select One", "Yes, I will require accessibility accommodations or adjustments", "No, I do not require accessibility accommodations or adjustments"], {{ accommodationRequest: "yes" }}),
+              bmsCompFactors: resolve("In the event an offer of employment is made, are there any factors BMS should consider when creating a compensation offer? Please note that applicants are not required to disclose salary or compensation history.", ["Select One", "Yes", "No"]),
+              bmsCompFactorsFromProfile: resolve("In the event an offer of employment is made, are there any factors BMS should consider when creating a compensation offer? Please note that applicants are not required to disclose salary or compensation history.", ["Select One", "Yes", "No"], {{ compensationOfferFactors: true }}),
+              bmsConflict: resolve("BMS seeks to avoid conflicts of interest. Do you have relatives, romantic partners, people with whom you share a dwelling or have a business relationship with who work in any capacity at BMS?*", ["Select One", "Yes", "No"]),
+              bmsHhsOig: resolve("Are you or have you ever appeared on the HHS/OIG List of Excluded Individuals/Entities?", ["Select One", "Yes", "No"], {{ hhsOigExcluded: false }}),
+              bmsGsa: resolve("Are you or have you ever appeared on the General Services Administration's List of Parties Excluded from Federal Programs?", ["Select One", "Yes", "No"]),
+              bmsDebarred: resolve("Are you debarred under the Generic Drug Enforcement Act of 1992?", ["Select One", "Yes", "No"]),
+              bmsDebarmentPending: resolve("Are debarment proceedings pending or to your knowledge threatened?", ["Select One", "Yes", "No"]),
+              bmsPhysician: resolve("Are you a US licensed physician?", ["Select One", "Yes", "No"]),
+              bmsInvestigationalDrug: resolve("Have you ever been investigated for or disqualified or restricted by the FDA or HHS from receiving investigational drugs?", ["Select One", "Yes", "No"]),
+              bmsLicensingInquiry: resolve("Are you currently the subject of any pending inquiry by any governmental entity or licensing association or has administrative action been imposed upon you by any governmental entity or licensing association?", ["Select One", "Yes", "No"]),
+              bmsHhsOigFromProfile: resolve("Are you or have you ever appeared on the HHS/OIG List of Excluded Individuals/Entities?", ["Select One", "Yes", "No"], {{ hhsOigExcluded: true }}),
               aboriginalDisclosure: resolve("Are you a member of an Aboriginal People based on the definition in the information box?*", ["Select One", "Yes", "No", "I prefer not to respond"]),
               visibleMinority: resolve("Are you a member of an visible minority based on the definition in the information box?*", ["Select One", "Yes", "No", "I prefer not to respond"]),
               disability: resolve("Do you have a disability based on the definition in the information box?*", ["Select One", "Yes", "No", "I prefer not to respond"])
@@ -3197,6 +3285,17 @@ Expected Graduation: Sep 2026
         self.assertEqual(results["prefixFromProfile"]["value"], "No Prefix")
         self.assertEqual(results["prefixFromProfile"]["source"], "profile:namePrefix")
         self.assertEqual(results["prefixFromProfile"]["selected"], "No Prefix")
+        self.assertEqual(results["suffixBlank"]["type"], "name_suffix")
+        self.assertEqual(results["suffixBlank"]["value"], "")
+        self.assertIsNone(results["suffixBlank"]["selected"])
+        self.assertEqual(
+            results["suffixBlank"]["matchSource"],
+            "optional_profile_field_blank",
+        )
+        self.assertEqual(results["suffixFromProfile"]["type"], "name_suffix")
+        self.assertEqual(results["suffixFromProfile"]["value"], "Jr")
+        self.assertEqual(results["suffixFromProfile"]["source"], "profile:nameSuffix")
+        self.assertEqual(results["suffixFromProfile"]["selected"], "Jr")
         self.assertEqual(results["workEligibility"]["type"], "work_authorized")
         self.assertEqual(results["workEligibility"]["value"], "Yes")
         self.assertEqual(results["workEligibility"]["source"], "default:work_authorized")
@@ -3243,6 +3342,41 @@ Expected Graduation: Sep 2026
             shell_accommodation_profile["selected"],
             "Yes, I will require accessibility accommodations or adjustments",
         )
+        self.assertEqual(results["bmsCompFactors"]["type"], "compensation_offer_factors")
+        self.assertEqual(results["bmsCompFactors"]["value"], "No")
+        self.assertEqual(results["bmsCompFactors"]["source"], "default:compensation_offer_factors")
+        self.assertEqual(results["bmsCompFactors"]["selected"], "No")
+        self.assertNotEqual(results["bmsCompFactors"]["matchSource"], "salary_no_safe_match")
+        self.assertEqual(
+            results["bmsCompFactorsFromProfile"]["type"],
+            "compensation_offer_factors",
+        )
+        self.assertEqual(results["bmsCompFactorsFromProfile"]["value"], "Yes")
+        self.assertEqual(
+            results["bmsCompFactorsFromProfile"]["source"],
+            "profile:compensationOfferFactors",
+        )
+        self.assertEqual(results["bmsCompFactorsFromProfile"]["selected"], "Yes")
+        bms_expected = {
+            "bmsConflict": "conflict_of_interest_relationship",
+            "bmsHhsOig": "hhs_oig_exclusion",
+            "bmsGsa": "gsa_federal_program_exclusion",
+            "bmsDebarred": "generic_drug_enforcement_debarment",
+            "bmsDebarmentPending": "debarment_proceedings_pending",
+            "bmsPhysician": "us_licensed_physician",
+            "bmsInvestigationalDrug": "fda_hhs_investigational_drug_restriction",
+            "bmsLicensingInquiry": "governmental_or_licensing_inquiry",
+        }
+        for key, question_type in bms_expected.items():
+            self.assertEqual(results[key]["type"], question_type)
+            self.assertEqual(results[key]["value"], "No")
+            self.assertEqual(results[key]["selected"], "No")
+            self.assertNotEqual(results[key]["matchSource"], "unknown_no_fallback")
+        self.assertEqual(results["bmsHhsOig"]["source"], "profile:hhsOigExcluded")
+        self.assertEqual(results["bmsHhsOigFromProfile"]["type"], "hhs_oig_exclusion")
+        self.assertEqual(results["bmsHhsOigFromProfile"]["value"], "Yes")
+        self.assertEqual(results["bmsHhsOigFromProfile"]["source"], "profile:hhsOigExcluded")
+        self.assertEqual(results["bmsHhsOigFromProfile"]["selected"], "Yes")
         self.assertEqual(results["unknownGenericNo"]["matchSource"], "unknown_no_fallback")
         for key in ["aboriginalDisclosure", "visibleMinority", "disability"]:
             self.assertEqual(results[key]["answerType"], "non_disclosure")
@@ -4678,6 +4812,10 @@ Expected Graduation: Sep 2026
         self.assertIn("hunt.apply.show_fill_progress", content)
         self.assertIn("hunt.apply.show_fill_summary", content)
         self.assertIn("hunt-apply-fill-summary", content)
+        self.assertIn("activeFillProgressRunId", content)
+        self.assertIn('host.style.pointerEvents = "none"', content)
+        self.assertIn("pointer-events: auto;", content)
+        self.assertIn("ui.fill_summary.suppressed_active_progress", content)
         self.assertIn("hunt.apply.hide_fill_progress", content)
         self.assertIn("hunt.apply.dismiss_transient_ui", content)
         self.assertIn("MutationObserver", content)
@@ -5017,6 +5155,7 @@ Expected Graduation: Sep 2026
         self.assertIn("unknown_question_defaulted", issue_registry)
         self.assertIn("unsupported_or_empty_option_set", issue_registry)
         self.assertIn("required_field_unfilled", issue_registry)
+        self.assertIn("review_profile_section_no_response", issue_registry)
         self.assertIn("no_safe_next_button", issue_registry)
         self.assertIn("auth_primary_action_not_found", issue_registry)
         self.assertIn("posting_not_found", issue_registry)
@@ -5028,6 +5167,10 @@ Expected Graduation: Sep 2026
         self.assertIn("visible_validation_errors", live_smoke)
         self.assertIn("reconcilePageFillTimeoutToReview", live_smoke)
         self.assertIn("timeout_reconciled_to_review", live_smoke)
+        self.assertIn("terminalReconciliation", live_smoke)
+        self.assertIn("35_000", live_smoke)
+        self.assertIn("reviewCoverage", live_smoke)
+        self.assertIn("reviewNoResponseLabels", live_smoke)
         self.assertIn("pageReachedReview", live_smoke)
         self.assertIn("normalizeSubmitText", final_ui_capture)
         self.assertIn("makeWorkdayProfileDefaults", live_smoke)
@@ -5038,6 +5181,11 @@ Expected Graduation: Sep 2026
         self.assertIn("repeatableKey(entry, kind)", configure_sink)
         self.assertIn("Social Network URLs", workday_repeatables)
         self.assertIn("socialWebsites", workday_repeatables)
+        self.assertIn("selectedSkillMatches", workday_repeatables)
+        self.assertIn("skillOptionText", workday_repeatables)
+        self.assertIn("waitForGroupCount", workday_repeatables)
+        self.assertIn("fillWebsiteUrlInputs(section, entries)", workday_repeatables)
+        self.assertIn("deleteInvalidWebsiteRows(section)", workday_repeatables)
         self.assertIn("hunt.apply.runtimeConfig", live_smoke)
         self.assertIn("hunt.apply.runtimeConfig", smoke)
         self.assertIn("RUNTIME_CONFIG_KEY", configure_sink)
@@ -5246,8 +5394,18 @@ Expected Graduation: Sep 2026
         self.assertIn("preferred language", shared_utils)
         self.assertIn("salaryExpectation", settings)
         self.assertIn("hourlyPayExpectation", settings)
+        self.assertIn("compensationOfferFactors", settings)
         self.assertIn("namePrefix", settings)
+        self.assertIn("nameSuffix", settings)
         self.assertIn("accommodationRequest", settings)
+        self.assertIn("conflictOfInterestRelationship", settings)
+        self.assertIn("hhsOigExcluded", settings)
+        self.assertIn("gsaFederalProgramExcluded", settings)
+        self.assertIn("genericDrugDebarred", settings)
+        self.assertIn("debarmentProceedingsPending", settings)
+        self.assertIn("usLicensedPhysician", settings)
+        self.assertIn("fdaHhsInvestigationalDrugRestricted", settings)
+        self.assertIn("governmentalLicensingInquiry", settings)
         self.assertIn("calculateHourlyPayExpectation", storage)
         self.assertIn("2080", storage)
         self.assertIn("background security check", field_catalog)

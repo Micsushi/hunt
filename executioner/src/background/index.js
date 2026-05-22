@@ -4372,6 +4372,15 @@ function buildFillSummaryPayload(result = {}) {
   }
   const stoppedReason = pageWalk.stoppedReason || result.reason || "";
   const reachedFinalSubmit = stoppedReason === "final_submit_visible";
+  const terminalSummary =
+    reachedFinalSubmit ||
+    !result.ok ||
+    Boolean(result.cancelled) ||
+    Boolean(result.attempt?.manualReviewRequired) ||
+    Boolean(pageWalk.manualReviewRequired);
+  if (!terminalSummary) {
+    return null;
+  }
   const stoppedDetails = pageWalk.stopDetails || {};
   const failedPageNumber = reachedFinalSubmit
     ? 0
@@ -4418,6 +4427,7 @@ function buildFillSummaryPayload(result = {}) {
     pagesAdvancedThisRun: successfulPageCount,
     lastPageNumber,
     reviewIssueCount,
+    terminal: true,
     reviewIssueLabels: summaryReviewIssues
       .map((issue) =>
         String(issue.fieldName || issue.reason || issue.kind || "")

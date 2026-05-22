@@ -94,6 +94,11 @@
         "No Prefix": ["None", "No Prefix"],
       },
     }),
+    entry("name_suffix", {
+      aliases: ["suffix", "name suffix", "legal name suffix"],
+      profilePaths: ["nameSuffix"],
+      answerType: "option",
+    }),
     entry("full_name", {
       exactLabels: ["name"],
       aliases: [
@@ -133,6 +138,22 @@
       aliases: ["phone device type", "phone type", "device type"],
       profilePaths: ["phoneDeviceType"],
       defaultValue: "Mobile",
+      optionAliases: {
+        Mobile: [
+          "Cell",
+          "Cell Phone",
+          "Cellular",
+          "Mobile",
+          "Mobile Phone",
+          "Personal Mobile",
+          "Work",
+          "Work Phone",
+          "Business Phone",
+          "Home",
+          "Home Phone",
+          "Personal Home",
+        ],
+      },
     }),
     entry("phone_country_code", {
       aliases: [
@@ -218,6 +239,88 @@
         "current employee of cvs health",
       ],
       profilePaths: ["currentEmployers"],
+      defaultValue: false,
+      answerType: "yes_no",
+    }),
+    entry("conflict_of_interest_relationship", {
+      aliases: [
+        "avoid conflicts of interest",
+        "relatives romantic partners",
+        "people with whom you share a dwelling",
+        "business relationship with who work",
+        "work in any capacity at bms",
+        "conflict of interest relationship",
+      ],
+      profilePaths: ["conflictOfInterestRelationship"],
+      defaultValue: false,
+      answerType: "yes_no",
+    }),
+    entry("hhs_oig_exclusion", {
+      aliases: [
+        "hhs/oig list of excluded individuals/entities",
+        "hhs oig list of excluded individuals entities",
+        "list of excluded individuals/entities",
+        "oig.hhs.gov",
+      ],
+      profilePaths: ["hhsOigExcluded"],
+      defaultValue: false,
+      answerType: "yes_no",
+    }),
+    entry("gsa_federal_program_exclusion", {
+      aliases: [
+        "general services administration's list of parties excluded from federal programs",
+        "general services administration list of parties excluded from federal programs",
+        "list of parties excluded from federal programs",
+        "excluded from federal programs",
+        "epls.gov",
+      ],
+      profilePaths: ["gsaFederalProgramExcluded"],
+      defaultValue: false,
+      answerType: "yes_no",
+    }),
+    entry("generic_drug_enforcement_debarment", {
+      aliases: [
+        "debarred under the generic drug enforcement act",
+        "generic drug enforcement act of 1992",
+      ],
+      profilePaths: ["genericDrugDebarred"],
+      defaultValue: false,
+      answerType: "yes_no",
+    }),
+    entry("debarment_proceedings_pending", {
+      aliases: [
+        "debarment proceedings pending",
+        "debarment proceedings pending or to your knowledge threatened",
+        "to your knowledge threatened",
+      ],
+      profilePaths: ["debarmentProceedingsPending"],
+      defaultValue: false,
+      answerType: "yes_no",
+    }),
+    entry("us_licensed_physician", {
+      aliases: ["us licensed physician", "u.s. licensed physician"],
+      profilePaths: ["usLicensedPhysician"],
+      defaultValue: false,
+      answerType: "yes_no",
+    }),
+    entry("fda_hhs_investigational_drug_restriction", {
+      aliases: [
+        "disqualified or restricted by the fda or hhs",
+        "receiving investigational drugs",
+        "investigated for or disqualified or restricted",
+      ],
+      profilePaths: ["fdaHhsInvestigationalDrugRestricted"],
+      defaultValue: false,
+      answerType: "yes_no",
+    }),
+    entry("governmental_or_licensing_inquiry", {
+      aliases: [
+        "pending inquiry by any governmental entity or licensing association",
+        "administrative action been imposed upon you by any governmental entity",
+        "governmental entity or licensing association",
+        "not requesting any information relating to criminal arrests",
+      ],
+      profilePaths: ["governmentalLicensingInquiry"],
       defaultValue: false,
       answerType: "yes_no",
     }),
@@ -1072,6 +1175,19 @@
       defaultValue: true,
       answerType: "yes_no",
     }),
+    entry("compensation_offer_factors", {
+      aliases: [
+        "factors bms should consider when creating a compensation offer",
+        "any factors bms should consider",
+        "factors should consider when creating a compensation offer",
+        "not required to disclose salary or compensation history",
+        "compensation offer",
+        "compensation history",
+      ],
+      profilePaths: ["compensationOfferFactors"],
+      defaultValue: false,
+      answerType: "yes_no",
+    }),
     entry("salary_expectation", {
       aliases: [
         "salary",
@@ -1094,6 +1210,13 @@
         "hourly wage expectation",
         "wage expectation",
         "wage expectations",
+      ],
+      excludeKeywords: [
+        "compensation history",
+        "compensation offer",
+        "creating a compensation offer",
+        "factors bms should consider",
+        "not required to disclose salary or compensation history",
       ],
       profilePaths: [
         "hourlyPayExpectation",

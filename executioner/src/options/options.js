@@ -393,6 +393,7 @@ function readProfileForm() {
     province: document.getElementById("profile-province")?.value,
     country: document.getElementById("profile-country")?.value,
     namePrefix: document.getElementById("profile-name-prefix")?.value,
+    nameSuffix: document.getElementById("profile-name-suffix")?.value,
     addressLine1: document.getElementById("profile-address-line-1")?.value,
     addressLine2: document.getElementById("profile-address-line-2")?.value,
     postalCode: document.getElementById("profile-postal-code")?.value,
@@ -494,6 +495,7 @@ function writeProfileFields(profile) {
   setInputValue("profile-province", profile.province);
   setInputValue("profile-country", profile.country);
   setInputValue("profile-name-prefix", profile.namePrefix);
+  setInputValue("profile-name-suffix", profile.nameSuffix);
   setInputValue("profile-address-line-1", profile.addressLine1);
   setInputValue("profile-address-line-2", profile.addressLine2);
   setInputValue("profile-postal-code", profile.postalCode);
@@ -695,6 +697,32 @@ function readFullProfileForm() {
     openToAnyLocation: document.getElementById("profile-open-to-any-location")
       ?.checked,
     salaryFlexible: document.getElementById("profile-salary-flexible")?.checked,
+    compensationOfferFactors: document.getElementById(
+      "profile-compensation-offer-factors",
+    )?.checked,
+    conflictOfInterestRelationship: document.getElementById(
+      "profile-conflict-of-interest-relationship",
+    )?.checked,
+    hhsOigExcluded: document.getElementById("profile-hhs-oig-excluded")
+      ?.checked,
+    gsaFederalProgramExcluded: document.getElementById(
+      "profile-gsa-federal-program-excluded",
+    )?.checked,
+    genericDrugDebarred: document.getElementById(
+      "profile-generic-drug-debarred",
+    )?.checked,
+    debarmentProceedingsPending: document.getElementById(
+      "profile-debarment-proceedings-pending",
+    )?.checked,
+    usLicensedPhysician: document.getElementById(
+      "profile-us-licensed-physician",
+    )?.checked,
+    fdaHhsInvestigationalDrugRestricted: document.getElementById(
+      "profile-fda-hhs-investigational-drug-restricted",
+    )?.checked,
+    governmentalLicensingInquiry: document.getElementById(
+      "profile-governmental-licensing-inquiry",
+    )?.checked,
     workExperience: workExperienceEntries,
     education: educationEntries,
     languages: languageEntries,
@@ -887,6 +915,39 @@ async function loadState() {
     response.profile.openToAnyLocation,
   );
   setCheckboxValue("profile-salary-flexible", response.profile.salaryFlexible);
+  setCheckboxValue(
+    "profile-compensation-offer-factors",
+    response.profile.compensationOfferFactors,
+  );
+  setCheckboxValue(
+    "profile-conflict-of-interest-relationship",
+    response.profile.conflictOfInterestRelationship,
+  );
+  setCheckboxValue("profile-hhs-oig-excluded", response.profile.hhsOigExcluded);
+  setCheckboxValue(
+    "profile-gsa-federal-program-excluded",
+    response.profile.gsaFederalProgramExcluded,
+  );
+  setCheckboxValue(
+    "profile-generic-drug-debarred",
+    response.profile.genericDrugDebarred,
+  );
+  setCheckboxValue(
+    "profile-debarment-proceedings-pending",
+    response.profile.debarmentProceedingsPending,
+  );
+  setCheckboxValue(
+    "profile-us-licensed-physician",
+    response.profile.usLicensedPhysician,
+  );
+  setCheckboxValue(
+    "profile-fda-hhs-investigational-drug-restricted",
+    response.profile.fdaHhsInvestigationalDrugRestricted,
+  );
+  setCheckboxValue(
+    "profile-governmental-licensing-inquiry",
+    response.profile.governmentalLicensingInquiry,
+  );
   setInputValue("profile-notes", response.profile.notes);
 
   setInputValue("resume-label", response.defaultResume.label);

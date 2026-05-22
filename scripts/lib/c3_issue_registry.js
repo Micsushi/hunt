@@ -242,12 +242,37 @@ function issueFromManualReview({ audit, auditPath, page, reason, now }) {
   return record;
 }
 
+function auditReachedReview(audit = {}) {
+  return Boolean(
+    audit.ok &&
+      (audit.final?.pageKind === "review" ||
+        audit.final?.hasSubmit ||
+        /review/i.test(audit.final?.currentStep?.title || "")),
+  );
+}
+
+function staleTimeoutReason(reason = "") {
+  return /page_fill_and_next_timeout|fill_timeout|fill_retry_timeout/i.test(
+    clean(reason),
+  );
+}
+
+function reviewCoverageIssueLabels(audit = {}) {
+  const labels = list(audit.final?.reviewCoverage?.noResponseLabels || [], 120);
+  return labels.filter((label) =>
+    /resume|cv|curriculum vitae|website|social network|linkedin|github|profile url|skills/i.test(
+      label,
+    ),
+  );
+}
+
 function extractIssuesFromAudit(audit, auditPath = "") {
   const now = new Date().toISOString();
   const records = [];
   const pages = Array.isArray(audit.pages) ? audit.pages : [];
   const workflowReason = clean(audit.workflow?.applyEntry?.reason);
-  if (workflowReason) {
+  const reachedReview = auditReachedReview(audit);
+  if (workflowReason && !reachedReview) {
     const record = issueFromStopReason({
       audit,
       auditPath,
@@ -275,6 +300,9 @@ function extractIssuesFromAudit(audit, auditPath = "") {
       if (record) records.push(record);
     }
     for (const reason of page.manualReviewReasons || []) {
+      if (reachedReview && staleTimeoutReason(reason)) {
+        continue;
+      }
       const record = issueFromManualReview({
         audit,
         auditPath,
@@ -285,6 +313,9 @@ function extractIssuesFromAudit(audit, auditPath = "") {
       if (record) records.push(record);
     }
     const stopReason = page.nextAction?.reason || page.next?.reason || "";
+    if (reachedReview && staleTimeoutReason(stopReason)) {
+      continue;
+    }
     const stopRecord = issueFromStopReason({
       audit,
       auditPath,
@@ -304,6 +335,23 @@ function extractIssuesFromAudit(audit, auditPath = "") {
       reason: "final_page_reported_visible_errors",
       questionText: short(audit.final.errors.join(" | "), 1200),
       evidence: { finalErrors: audit.final.errors },
+    };
+    record.fingerprint = fingerprintFor(record);
+    records.push(record);
+  }
+  const reviewCoverageLabels = reviewCoverageIssueLabels(audit);
+  for (const label of reviewCoverageLabels) {
+    const page = pages[pages.length - 1] || {};
+    const record = {
+      ...issueBase({ audit, auditPath, page, now }),
+      severity: "warn",
+      errorType: "review_profile_section_no_response",
+      kind: "review_coverage",
+      reason: "profile_backed_review_section_no_response",
+      questionText: short(label, 1200),
+      evidence: {
+        reviewCoverage: audit.final?.reviewCoverage || null,
+      },
     };
     record.fingerprint = fingerprintFor(record);
     records.push(record);

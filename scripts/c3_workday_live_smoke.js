@@ -101,12 +101,26 @@ function pageHasBlockingValidation(page) {
   return Boolean((page?.errors || []).length || page?.workdayRuntimeError);
 }
 
-async function reconcilePageFillTimeoutToReview(pageClient) {
-  await sleep(1200);
-  const page = await inspectPage(pageClient);
+async function reconcilePageFillTimeoutToReview(pageClient, options = {}) {
+  const timeoutMs = Number(options.timeoutMs || 25_000);
+  const intervalMs = Number(options.intervalMs || 1200);
+  const startedAt = Date.now();
+  let page = await inspectPage(pageClient);
+  while (Date.now() - startedAt < timeoutMs) {
+    if (pageReachedReview(page) && !pageHasBlockingValidation(page)) {
+      return {
+        page,
+        reachedReview: true,
+        waitedMs: Date.now() - startedAt,
+      };
+    }
+    await sleep(intervalMs);
+    page = await inspectPage(pageClient);
+  }
   return {
     page,
     reachedReview: pageReachedReview(page) && !pageHasBlockingValidation(page),
+    waitedMs: Date.now() - startedAt,
   };
 }
 
@@ -1149,6 +1163,13 @@ function pageSummaryExpression() {
       .filter(Boolean)
       .filter((text) => !/successfully uploaded/i.test(text))
       .slice(0, 30);
+    const reviewNoResponseLabels = [];
+    const reviewLines = text.split(/\\n+/).map(normalize).filter(Boolean);
+    for (let index = 1; index < reviewLines.length; index += 1) {
+      if (/^no response$/i.test(reviewLines[index])) {
+        reviewNoResponseLabels.push(reviewLines[index - 1]);
+      }
+    }
     const loadingNodes = [...document.querySelectorAll('[aria-busy="true"], [role="progressbar"], [data-automation-id*="loading" i], [class*="loading" i], [class*="spinner" i]')]
       .filter(visible);
     const fieldText = (field) => [field.id, field.name, field.type, field.automationId, field.ariaLabel, field.text].join(" ");
@@ -1183,6 +1204,9 @@ function pageSummaryExpression() {
       errors,
       loadingNodeCount: loadingNodes.length,
       workdayRuntimeError,
+      reviewCoverage: {
+        noResponseLabels: Array.from(new Set(reviewNoResponseLabels)).slice(0, 80)
+      },
       bodyHead: text.replace(/\\s+/g, " ").trim().slice(0, 1200)
     };
   })()`;
@@ -2835,7 +2859,38 @@ async function run() {
       await sleep(1200);
     }
 
-    const finalPage = await inspectPage(pageClient);
+    let finalPage = await inspectPage(pageClient);
+    let terminalReconciliation = null;
+    if (
+      audit.reason === "page_fill_and_next_timeout" &&
+      !(pageReachedReview(finalPage) && !pageHasBlockingValidation(finalPage))
+    ) {
+      terminalReconciliation = await reconcilePageFillTimeoutToReview(
+        pageClient,
+        { timeoutMs: 35_000, intervalMs: 1500 },
+      );
+      if (terminalReconciliation.reachedReview) {
+        finalPage = terminalReconciliation.page;
+        audit.terminalReconciliation = {
+          reason: "timeout_reconciled_to_review",
+          waitedMs: terminalReconciliation.waitedMs,
+          previousReason: "page_fill_and_next_timeout",
+        };
+        timeline.push({
+          workflowPhase: "terminal_reconciliation",
+          reason: "timeout_reconciled_to_review",
+          waitedMs: terminalReconciliation.waitedMs,
+          final: {
+            href: finalPage.href,
+            currentStep: finalPage.currentStep,
+            pageKind: finalPage.pageKind,
+            hasNext: finalPage.hasNext,
+            hasSubmit: finalPage.hasSubmit,
+            errors: finalPage.errors,
+          },
+        });
+      }
+    }
     const finalAuthVerificationErrors = authVerificationErrors(
       finalPage.errors || [],
     );
@@ -2858,6 +2913,9 @@ async function run() {
           : "stuck_before_review"
         : "";
     if (finalReachedReview) {
+      if (audit.terminalReconciliation) {
+        audit.warning = audit.warning || "timeout_reconciled_to_review";
+      }
       delete audit.reason;
       delete audit.message;
     } else if (finalMaintenance) {
@@ -2880,6 +2938,7 @@ async function run() {
       hasSubmit: finalPage.hasSubmit,
       hasNext: finalPage.hasNext,
       errors: finalPage.errors,
+      reviewCoverage: finalPage.reviewCoverage || null,
     };
     const auditPath = writeAuditJson(args.auditJson, audit);
     const issueRegistry = recordAuditIssues({

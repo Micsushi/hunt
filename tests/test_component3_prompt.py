@@ -1,4 +1,5 @@
 from pathlib import Path
+import subprocess
 
 import pytest
 
@@ -98,6 +99,7 @@ def test_page_ui_actions_are_logged():
     assert "ui.toast.show" in content
     assert "ui.fill_progress.show" in content
     assert "ui.fill_summary.show" in content
+    assert "ui.fill_summary.suppressed_active_progress" in content
     assert "ui.fill_progress.hide" in content
     assert "ui.llm_prompt.show" in content
     assert "ui.llm_prompt.use_click" in content
@@ -228,6 +230,7 @@ def test_live_smoke_routes_pages_through_identifier_before_action():
     assert "finalSubmitVisible" in identifier
     assert "blankWorkdayShell" in identifier
     assert "blankShellReloaded" in identifier
+
     assert 'this.pageClient.send("Page.reload"' in identifier
     assert "authPageVisible" in identifier
     assert 'else if (authPageVisible && hasEmailField && passwordCount > 1)' in identifier
@@ -275,6 +278,73 @@ def test_live_smoke_routes_pages_through_identifier_before_action():
     assert "clickApplyManuallyEntry" in apply_entry
 
 
+def test_issue_registry_suppresses_stale_timeout_when_review_reconciled():
+    script = r"""
+const { extractIssuesFromAudit } = require("./scripts/lib/c3_issue_registry");
+const audit = {
+  ok: true,
+  workflow: { applyEntry: { reason: "auth_workflow_first" } },
+  final: {
+    pageKind: "review",
+    hasSubmit: true,
+    currentStep: { title: "Review" },
+    errors: [],
+  },
+  pages: [{
+    pageIndex: 3,
+    manualReviewReasons: ["page_fill_and_next_timeout"],
+    next: { reason: "page_fill_and_next_timeout" },
+    afterErrors: ["Required field was briefly visible"],
+  }],
+};
+const issues = extractIssuesFromAudit(audit, "cox.audit.json");
+if (issues.length) {
+  throw new Error(JSON.stringify(issues));
+}
+"""
+    subprocess.run(
+        ["node", "-e", script],
+        cwd=REPO_ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+
+def test_issue_registry_flags_profile_backed_review_no_response_sections():
+    script = r"""
+const { extractIssuesFromAudit } = require("./scripts/lib/c3_issue_registry");
+const audit = {
+  ok: true,
+  final: {
+    pageKind: "review",
+    hasSubmit: true,
+    currentStep: { title: "Review" },
+    errors: [],
+    reviewCoverage: {
+      noResponseLabels: ["Resume/CV, Cover Letter, Additional Documents", "Websites", "Favorite Color"],
+    },
+  },
+  pages: [],
+};
+const issues = extractIssuesFromAudit(audit, "amgen.audit.json");
+const labels = issues.map((issue) => issue.questionText).sort();
+if (issues.length !== 2 || !labels.includes("Resume/CV, Cover Letter, Additional Documents") || !labels.includes("Websites")) {
+  throw new Error(JSON.stringify(issues));
+}
+if (issues.some((issue) => issue.errorType !== "review_profile_section_no_response")) {
+  throw new Error(JSON.stringify(issues));
+}
+"""
+    subprocess.run(
+        ["node", "-e", script],
+        cwd=REPO_ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+
 def test_fill_progress_can_request_cancel():
     content = _load_script(REPO_ROOT / "executioner/src/content/bootstrap.js")
     background = _load_script(REPO_ROOT / "executioner/src/background/index.js")
@@ -282,6 +352,10 @@ def test_fill_progress_can_request_cancel():
     field_pipeline = _load_script(REPO_ROOT / "executioner/src/shared/v2/field-pipeline.js")
 
     assert "hunt-apply-fill-progress-cancel" in content
+    assert "activeFillProgressRunId" in content
+    assert 'host.style.pointerEvents = "none"' in content
+    assert "pointer-events: none;" in content
+    assert "pointer-events: auto;" in content
     assert 'type: "hunt.apply.cancel_fill"' in content
     cancel_handler = content[
         content.index('"hunt-apply-fill-progress-cancel"') : content.index(
@@ -625,6 +699,12 @@ def test_v2_page_walk_counts_successful_pages_and_shows_summary():
     assert "function buildFillSummaryPayload" in background
     assert "function uniqueReviewIssues" in background
     assert "pagesAdvancedThisRun" in background
+    assert "terminalSummary" in background
+    assert "return null;" in background[
+        background.index("function buildFillSummaryPayload")
+        : background.index("async function showLlmPrompt")
+    ]
+    assert "terminal: true" in background
     assert "Math.max(lastPageNumber, successfulPageCount)" in background
     assert "async function getPageSnapshot" in background
     assert "successfulPageCount += 1" in background

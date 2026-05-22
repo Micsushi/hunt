@@ -1072,14 +1072,39 @@
     );
   }
 
+  function selectedSkillKeys() {
+    var bounds = sectionBounds("Skills");
+    var scope = bounds?.element || bounds?.heading?.parentElement || document;
+    return Array.from(
+      scope.querySelectorAll(
+        "[data-automation-id='selectedItem'], [data-automation-id='promptSelectionLabel']",
+      ),
+    )
+      .map(textOf)
+      .map(choiceKey)
+      .filter(Boolean)
+      .filter(function (key) {
+        return !/^\d+\s+items?\s+selected$/.test(key);
+      });
+  }
+
+  function selectedSkillMatches(skill) {
+    var skillKey = choiceKey(skill);
+    return Boolean(
+      skillKey &&
+        selectedSkillKeys().some(function (selectedKey) {
+          return selectedKey === skillKey;
+        }),
+    );
+  }
+
   function hasAnySelectedSkill() {
     return Boolean(skillSelectedText());
   }
 
   function hasSelectedSkill(skills) {
-    var selected = skillSelectedText();
     return (skills || []).some(function (skill) {
-      return choiceMatches(selected, skill);
+      return selectedSkillMatches(skill);
     });
   }
 
@@ -1134,6 +1159,18 @@
     );
   }
 
+  function skillOptionText(option) {
+    return clean(
+      [
+        option?.innerText,
+        option?.textContent,
+        option?.getAttribute?.("title"),
+      ]
+        .filter(Boolean)
+        .join(" "),
+    ).replace(/\b(not\s+)?checked\b/gi, "");
+  }
+
   function clearSkillSearch(input) {
     if (!input) {
       return;
@@ -1146,14 +1183,6 @@
 
   function skillQueryCandidates(skill, allowFallback) {
     var values = [skill];
-    if (allowFallback) {
-      values = values.concat([
-        "Communication",
-        "Problem Solving",
-        "Teamwork",
-        "Microsoft Office",
-      ]);
-    }
     var seen = {};
     return values
       .map(clean)
@@ -1169,22 +1198,13 @@
   }
 
   function scoreSkillOption(option, skill) {
-    var labelKey = choiceKey(textOf(option));
+    var labelKey = choiceKey(skillOptionText(option));
     var skillKey = choiceKey(skill);
     if (!labelKey || !skillKey || skillOptionIsChecked(option)) {
       return 0;
     }
     if (labelKey === skillKey) {
       return 100;
-    }
-    if (labelKey === skillKey + " programming language") {
-      return 96;
-    }
-    if (labelKey.startsWith(skillKey + " ")) {
-      return 90;
-    }
-    if (labelKey.includes(skillKey)) {
-      return 70;
     }
     return 0;
   }
@@ -1214,7 +1234,7 @@
     if (!input || !skill) {
       return false;
     }
-    if (choiceMatches(skillSelectedText(), skill)) {
+    if (selectedSkillMatches(skill)) {
       return true;
     }
     var candidates = skillQueryCandidates(skill, allowFallback);
@@ -1224,7 +1244,6 @@
       clickLikeUser(input);
       await sleep(140);
       await typeSearchTextLikeUser(input, query);
-      keyOn(input, "Enter");
       var option = await waitForSkillOption(query, 5200);
       if (!option) {
         clearSkillSearch(input);
@@ -1242,12 +1261,7 @@
       }
       var start = Date.now();
       while (Date.now() - start < 2600) {
-        var selected = skillSelectedText();
-        if (
-          choiceMatches(selected, query) ||
-          choiceMatches(selected, skill) ||
-          (allowFallback && selected)
-        ) {
+        if (selectedSkillMatches(query)) {
           clearSkillSearch(input);
           await sleep(180);
           return true;
@@ -1261,12 +1275,7 @@
       );
       start = Date.now();
       while (Date.now() - start < 1800) {
-        var trustedSelected = skillSelectedText();
-        if (
-          choiceMatches(trustedSelected, query) ||
-          choiceMatches(trustedSelected, skill) ||
-          (allowFallback && trustedSelected)
-        ) {
+        if (selectedSkillMatches(query)) {
           clearSkillSearch(input);
           await sleep(180);
           return true;
@@ -1274,11 +1283,8 @@
         await sleep(120);
       }
       clearSkillSearch(input);
-      if (allowFallback && hasAnySelectedSkill()) {
-        return true;
-      }
     }
-    return choiceMatches(skillSelectedText(), skill);
+    return selectedSkillMatches(skill);
   }
 
   function choiceKey(value) {
@@ -2291,8 +2297,8 @@
     return { filled: filled, saved: false };
   }
 
-  async function fillWebsiteUrlInputs(entries) {
-    var inputs = controlGroups("Websites")
+  async function fillWebsiteUrlInputs(section, entries) {
+    var inputs = controlGroups(section)
       .map(function (group) {
         return group.controls.find(function (control) {
           var own = ownControlKey(control);
@@ -2339,11 +2345,11 @@
     });
   }
 
-  async function deleteInvalidWebsiteRows() {
+  async function deleteInvalidWebsiteRows(section) {
     var deleted = 0;
     for (var pass = 0; pass < 5; pass++) {
       var seen = new Set();
-      var groups = controlGroups("Websites");
+      var groups = controlGroups(section);
       var target = null;
       for (var index = groups.length - 1; index >= 0; index--) {
         var group = groups[index];
@@ -2358,13 +2364,24 @@
           break;
         }
       }
-      if (!target || !(await deleteGroup("Websites", target))) {
+      if (!target || !(await deleteGroup(section, target))) {
         break;
       }
       deleted += 1;
       await sleep(220);
     }
     return deleted;
+  }
+
+  async function waitForGroupCount(section, count, timeoutMs) {
+    var start = Date.now();
+    while (Date.now() - start < (timeoutMs || 2500)) {
+      if (controlGroups(section).length >= count) {
+        return true;
+      }
+      await sleep(120);
+    }
+    return false;
   }
 
   async function syncSection(section, kind, entries) {
@@ -2401,11 +2418,14 @@
           break;
         }
         clickLikeUser(addButton);
-        await sleep(450);
-        var dialogResult = await fillDialogEntry(entries[index], kind);
-        if (dialogResult.filled) {
-          filledCount += dialogResult.filled;
-          await sleep(400);
+        if (await waitForGroupCount(section, index + 1, 2800)) {
+          await sleep(180);
+        } else {
+          var dialogResult = await fillDialogEntry(entries[index], kind);
+          if (dialogResult.filled) {
+            filledCount += dialogResult.filled;
+            await sleep(400);
+          }
         }
       }
     }
@@ -2421,8 +2441,8 @@
       }
     }
     if (kind === "website") {
-      filledCount += await fillWebsiteUrlInputs(entries);
-      deletedCount += await deleteInvalidWebsiteRows();
+      filledCount += await fillWebsiteUrlInputs(section, entries);
+      deletedCount += await deleteInvalidWebsiteRows(section);
     }
     var finalGroups = controlGroups(section);
     for (var extra = finalGroups.length - 1; extra >= entries.length; extra--) {
@@ -2494,7 +2514,7 @@
     var satisfied = 0;
     for (var index = 0; index < skills.length; index++) {
       var skill = skills[index];
-      if (choiceMatches(skillSelectedText(), skill)) {
+      if (selectedSkillMatches(skill)) {
         satisfied += 1;
         continue;
       }

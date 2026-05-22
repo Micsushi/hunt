@@ -1,14 +1,16 @@
 import json
 from pathlib import Path
 
-import pytest
+import pytest  # type: ignore[reportMissingImports]
 
 try:
-    from playwright.sync_api import Error as PlaywrightError
-    from playwright.sync_api import sync_playwright
+    from playwright.sync_api import Error as PlaywrightError  # type: ignore[reportMissingImports]
+    from playwright.sync_api import sync_playwright  # type: ignore[reportMissingImports]
 except ImportError:  # pragma: no cover
     sync_playwright = None
-    PlaywrightError = Exception
+
+    class PlaywrightError(Exception):
+        """Fallback used only when Playwright is not installed."""
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -165,6 +167,99 @@ def test_workday_v2_empty_popup_rejects_wrong_committed_button_value():
 
     assert phone_type["filled"] is False
     assert fill_steps[-1]["reason"] == "workday_popup_options_missing"
+
+
+def test_workday_v2_phone_type_uses_controlled_listbox_and_ordered_fallback():
+    if sync_playwright is None:
+        pytest.skip("playwright is required for the Workday C3 fill fixture")
+
+    fill_v2_js = _module_to_browser_script(
+        _load_script(REPO_ROOT / "executioner/src/ats/workday/fill-v2.js")
+    )
+
+    with sync_playwright() as playwright:
+        try:
+            browser = playwright.chromium.launch()
+        except PlaywrightError as error:
+            pytest.skip(f"playwright chromium is unavailable: {error}")
+
+        page = browser.new_page()
+        page.set_content(
+            """
+            <html>
+              <head>
+                <style>
+                  .menu { display: none; border: 1px solid #999; padding: 4px; }
+                  .menu.open { display: block; }
+                  [role="option"] { display: block; min-height: 20px; padding: 4px; }
+                </style>
+              </head>
+              <body>
+                <div data-automation-id="applyFlowMyInfoPage">
+                  <div data-automation-id="formField-prefix">
+                    Prefix
+                    <button id="name--legalName--title" name="legalName--title" type="button" aria-haspopup="listbox" aria-controls="prefix-menu">Select One</button>
+                    <div id="prefix-menu" role="listbox" class="menu open">
+                      <div role="option">Dr.</div>
+                      <div role="option">Ms.</div>
+                    </div>
+                  </div>
+                  <div data-automation-id="formField-phoneType">
+                    Phone Device Type*
+                    <button id="phoneNumber--phoneType" name="phoneType" type="button" aria-haspopup="listbox" aria-controls="phone-type-menu" aria-label="Phone Device Type Select One Required">Select One</button>
+                    <div id="phone-type-menu" role="listbox" class="menu">
+                      <div role="option">Home</div>
+                      <div role="option">Work</div>
+                    </div>
+                  </div>
+                </div>
+                <script>
+                  function wire(buttonSelector, menuSelector) {
+                    const control = document.querySelector(buttonSelector);
+                    const menu = document.querySelector(menuSelector);
+                    control.addEventListener("click", () => menu.classList.add("open"));
+                    menu.querySelectorAll("[role=option]").forEach((option) => {
+                      option.addEventListener("click", () => {
+                        control.textContent = option.textContent;
+                        control.value = option.textContent;
+                        menu.classList.remove("open");
+                      });
+                    });
+                  }
+                  wire("#phoneNumber--phoneType", "#phone-type-menu");
+                </script>
+              </body>
+            </html>
+            """
+        )
+        _load_v2_workday_scripts(page)
+        page.add_script_tag(content=fill_v2_js)
+        result = page.evaluate(
+            """
+            async () => {
+              const fill = createWorkdayFillV2Function();
+              return await fill({
+                profile: {},
+                settings: { fillRequiredOnly: true, useFieldPipelineV2: true },
+                activeApplyContext: {},
+                defaultResume: {},
+                fillRunId: "workday_phone_type_controlled_listbox",
+              });
+            }
+            """
+        )
+        value = page.evaluate(
+            """() => document.querySelector("#phoneNumber--phoneType").textContent"""
+        )
+        browser.close()
+
+    fields = {entry["fieldId"]: entry for entry in result["v2Audit"]["fields"]}
+    phone_type = fields["phoneNumber--phoneType"]
+
+    assert phone_type["filled"] is True
+    assert phone_type["questionType"] == "phone_device_type"
+    assert phone_type["valueSource"] == "default:phone_device_type"
+    assert value == "Work"
 
 
 def test_workday_v2_source_prompt_drills_into_category_and_selects_leaf():
@@ -1594,6 +1689,102 @@ def test_workday_v2_repeatable_skills_use_trusted_click_when_dom_click_does_not_
     }
 
 
+def test_workday_v2_repeatable_skills_reject_fuzzy_suggestions_before_commit():
+    if sync_playwright is None:
+        pytest.skip("playwright is required for the Workday C3 fill fixture")
+
+    with sync_playwright() as playwright:
+        try:
+            browser = playwright.chromium.launch()
+        except PlaywrightError as error:
+            pytest.skip(f"playwright chromium is unavailable: {error}")
+
+        page = browser.new_page()
+        page.set_content(
+            """
+            <html>
+              <body>
+                <main data-automation-id="applyFlowMyExperiencePage">
+                  <h4>Skills</h4>
+                  <div data-automation-id="formField-skills">
+                    <label for="skills--skills">Type to Add Skills</label>
+                    <input id="skills--skills" data-automation-id="searchBox" />
+                    <div id="selected-skills" data-automation-id="selectedItemList">0 items selected</div>
+                  </div>
+                </main>
+                <script>
+                  const input = document.querySelector("#skills--skills");
+                  const selected = document.querySelector("#selected-skills");
+                  window.enterPressed = false;
+                  window.clickedOptions = [];
+                  function option(label) {
+                    return `<div role="option" data-automation-id="menuItem" data-label="${label}">
+                      <input type="checkbox" data-automation-id="checkboxPanel" />${label}
+                    </div>`;
+                  }
+                  function renderOptions() {
+                    document.querySelector("#skills-menu")?.remove();
+                    document.body.insertAdjacentHTML(
+                      "beforeend",
+                      `<div id="skills-menu" role="listbox" data-automation-id="activeListContainer">
+                        ${option("Stani's Python Editor")}
+                        ${option("Python Automation")}
+                        ${option("Python")}
+                      </div>`
+                    );
+                    document.querySelectorAll("[role='option']").forEach((el) => {
+                      el.addEventListener("click", () => {
+                        const label = el.getAttribute("data-label");
+                        window.clickedOptions.push(label);
+                        selected.innerHTML = `<div data-automation-id="selectedItem">${label}</div>`;
+                        input.value = "";
+                        document.querySelector("#skills-menu")?.remove();
+                      });
+                    });
+                  }
+                  input.addEventListener("input", renderOptions);
+                  input.addEventListener("click", renderOptions);
+                  input.addEventListener("keydown", (event) => {
+                    if (event.key === "Enter") {
+                      window.enterPressed = true;
+                      selected.innerHTML = `<div data-automation-id="selectedItem">Stani's Python Editor</div>`;
+                    }
+                  });
+                </script>
+              </body>
+            </html>
+            """
+        )
+        _load_v2_workday_scripts(page)
+
+        result = page.evaluate(
+            """
+            async () => {
+              return await window.__huntV2.workdayRepeatables.fillWorkdayRepeatables({
+                profile: { skills: ["Python"] },
+              });
+            }
+            """
+        )
+        values = page.evaluate(
+            """
+            () => ({
+              selected: document.querySelector("[data-automation-id='selectedItem']")?.textContent.trim() || "",
+              enterPressed: window.enterPressed,
+              clickedOptions: window.clickedOptions,
+            })
+            """
+        )
+        browser.close()
+
+    assert result["filledFieldCount"] == 1
+    assert values == {
+        "selected": "Python",
+        "enterPressed": False,
+        "clickedOptions": ["Python"],
+    }
+
+
 def test_workday_bdo_questionnaire_defaults_and_location_answer():
     if sync_playwright is None:
         pytest.skip("playwright is required for the Workday C3 fill fixture")
@@ -1673,7 +1864,6 @@ def test_workday_required_only_skips_optional_generated_textareas():
     if sync_playwright is None:
         pytest.skip("playwright is required for the Workday C3 fill fixture")
 
-    injected_js = _load_script(REPO_ROOT / "executioner/src/shared/injected.js")
     fill_js = _module_to_browser_script(
         _load_script(REPO_ROOT / "executioner/src/ats/workday/fill-v2.js")
     )
@@ -1796,7 +1986,6 @@ def test_workday_required_only_still_adds_my_experience_sections_from_aliases():
     if sync_playwright is None:
         pytest.skip("playwright is required for the Workday C3 fill fixture")
 
-    injected_js = _load_script(REPO_ROOT / "executioner/src/shared/injected.js")
     fill_js = _module_to_browser_script(
         _load_script(REPO_ROOT / "executioner/src/ats/workday/fill-v2.js")
     )

@@ -607,16 +607,15 @@
       : option.querySelector?.('[data-automation-id="promptLeafNode"]');
     var hasCategoryCue = Boolean(
       option.getAttribute?.("data-hunt-prompt-category") === "true" ||
-        option.getAttribute?.("aria-haspopup") ||
-        option.getAttribute?.("aria-expanded") ||
-        promptLeaf?.getAttribute?.(
-          "data-uxi-multiselectlistitem-hassidecharm",
-        ) === "true" ||
-        promptLeaf?.getAttribute?.("data-uxi-multiselectlistitem-type") ===
-          "2" ||
-        option.querySelector?.("svg") ||
-        option.querySelector?.('[data-automation-id*="chevron"]') ||
-        option.querySelector?.('[data-automation-id*="drill"]'),
+      option.getAttribute?.("aria-haspopup") ||
+      option.getAttribute?.("aria-expanded") ||
+      promptLeaf?.getAttribute?.(
+        "data-uxi-multiselectlistitem-hassidecharm",
+      ) === "true" ||
+      promptLeaf?.getAttribute?.("data-uxi-multiselectlistitem-type") === "2" ||
+      option.querySelector?.("svg") ||
+      option.querySelector?.('[data-automation-id*="chevron"]') ||
+      option.querySelector?.('[data-automation-id*="drill"]'),
     );
     if (!hasCategoryCue) {
       return false;
@@ -710,6 +709,43 @@
   }
 
   function workdayActiveListboxFor(input) {
+    var controlledIds = [
+      input?.getAttribute?.("aria-controls"),
+      input?.getAttribute?.("aria-owns"),
+    ]
+      .join(" ")
+      .split(/\s+/)
+      .map(clean)
+      .filter(Boolean);
+    for (
+      var controlledIndex = 0;
+      controlledIndex < controlledIds.length;
+      controlledIndex += 1
+    ) {
+      var controlled = document.getElementById(controlledIds[controlledIndex]);
+      if (
+        controlled &&
+        controlled.matches?.(
+          [
+            '[data-automation-id="activeListContainer"]',
+            '[data-automation-id="promptSearchResultList"]',
+            '[data-uxi-widget-type="multiselectlist"]',
+            '[role="listbox"]',
+          ].join(", "),
+        )
+      ) {
+        var controlledStyle = window.getComputedStyle(controlled);
+        var controlledRect = controlled.getBoundingClientRect();
+        if (
+          controlledStyle.display !== "none" &&
+          controlledStyle.visibility !== "hidden" &&
+          controlledRect.width > 0 &&
+          controlledRect.height > 0
+        ) {
+          return controlled;
+        }
+      }
+    }
     var multiSelectId = input?.getAttribute?.("data-uxi-multiselect-id") || "";
     var visibleListboxes = Array.from(
       document.querySelectorAll(
@@ -822,7 +858,10 @@
       typeof chrome === "undefined" ||
       !chrome.runtime?.sendMessage
     ) {
-      return Promise.resolve({ ok: false, reason: "trusted_input_unavailable" });
+      return Promise.resolve({
+        ok: false,
+        reason: "trusted_input_unavailable",
+      });
     }
     return new Promise(function (resolve) {
       try {
@@ -866,7 +905,10 @@
       typeof chrome === "undefined" ||
       !chrome.runtime?.sendMessage
     ) {
-      return Promise.resolve({ ok: false, reason: "trusted_input_unavailable" });
+      return Promise.resolve({
+        ok: false,
+        reason: "trusted_input_unavailable",
+      });
     }
     return new Promise(function (resolve) {
       try {
@@ -906,11 +948,11 @@
     var el = option?.element;
     var pos = Number(el?.getAttribute?.("aria-posinset") || 0);
     if ((!Number.isFinite(pos) || pos < 1) && field) {
-      var visibleOptions = visibleWorkdayOptions(field).filter(function (
-        candidate,
-      ) {
-        return !candidate.isCategory;
-      });
+      var visibleOptions = visibleWorkdayOptions(field).filter(
+        function (candidate) {
+          return !candidate.isCategory;
+        },
+      );
       var index = visibleOptions.findIndex(function (candidate) {
         return (
           candidate.element === el ||
@@ -925,9 +967,7 @@
     if (!Number.isFinite(pos) || pos < 1 || pos > 80) {
       return [];
     }
-    var keys = [
-      { key: "Home", code: "Home", windowsVirtualKeyCode: 36 },
-    ];
+    var keys = [{ key: "Home", code: "Home", windowsVirtualKeyCode: 36 }];
     for (var idx = 1; idx < pos; idx++) {
       keys.push({
         key: "ArrowDown",
@@ -977,9 +1017,9 @@
     }
     return Boolean(
       option?.element?.getAttribute?.("aria-posinset") &&
-        option.element.querySelector?.(
-          '[data-automation-id="checkboxPanel"], input[type="checkbox"]',
-        ),
+      option.element.querySelector?.(
+        '[data-automation-id="checkboxPanel"], input[type="checkbox"]',
+      ),
     );
   }
 
@@ -1055,6 +1095,14 @@
         answer?.source,
       ].join(" "),
     );
+    if (
+      text.includes("compensation history") ||
+      text.includes("compensation offer") ||
+      text.includes("creating a compensation offer") ||
+      text.includes("factors bms should consider")
+    ) {
+      return false;
+    }
     return (
       text.includes("salary") ||
       text.includes("compensation") ||
@@ -1334,7 +1382,9 @@
     if (committedStateMatches(state, answer, option)) {
       return true;
     }
-    return sourceFallbackScore({ label: label }, answerTexts(answer, option)) > -1000;
+    return (
+      sourceFallbackScore({ label: label }, answerTexts(answer, option)) > -1000
+    );
   }
 
   function firstRealOption(options) {
@@ -1703,7 +1753,10 @@
       });
       var trustedCategory = null;
       if (!childOptions.length) {
-        trustedCategory = await requestTrustedWorkdayClick(category, "category");
+        trustedCategory = await requestTrustedWorkdayClick(
+          category,
+          "category",
+        );
         if (trustedCategory?.ok) {
           waitResult = await waitForWorkdayOptions(beforeLabels, 2600, field);
           childOptions = waitResult.options.filter(function (candidate) {

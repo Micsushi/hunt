@@ -26,6 +26,7 @@
   let lastFillCompletedStep = "";
   let lastPageContextKey = "";
   let activeFillRequestId = "";
+  let activeFillProgressRunId = "";
   let detectedPromptSuppressedUntil = 0;
   let detectedPromptSuppressedReason = "";
   const ATS_HOST_PATTERNS = [
@@ -446,6 +447,7 @@
     if (existing) {
       logPageUiEvent("ui.fill_progress.hide", "Hid fill progress indicator.");
       existing.remove();
+      activeFillProgressRunId = "";
       updateToastStackPosition();
     }
   }
@@ -558,6 +560,20 @@
   }
 
   function showFillSummary(payload) {
+    const activeProgress = document.getElementById(FILL_PROGRESS_ID);
+    const terminal = Boolean(payload?.terminal);
+    if (activeProgress && !terminal) {
+      logPageUiEvent(
+        "ui.fill_summary.suppressed_active_progress",
+        "Suppressed fill summary while fill progress is still active.",
+        {
+          status: payload?.status || "",
+          title: payload?.title || "",
+          fillRunId: activeFillProgressRunId,
+        },
+      );
+      return;
+    }
     removeFillSummary();
     const status = String(payload?.status || "stopped");
     const failedPageNumber = Number(payload?.failedPageNumber || 0);
@@ -575,9 +591,13 @@
     host.style.zIndex = "2147483647";
     host.style.maxWidth = "430px";
     host.style.fontFamily = "Segoe UI, system-ui, sans-serif";
+    host.style.pointerEvents = "none";
     host.attachShadow({ mode: "open" });
     host.shadowRoot.innerHTML = `
       <style>
+        :host {
+          pointer-events: none;
+        }
         .card {
           background: #0b1510;
           border: 1px solid #3a5a3a;
@@ -587,6 +607,7 @@
           color: #d4f0dc;
           overflow: hidden;
           min-width: 310px;
+          pointer-events: none;
         }
         .card.failed,
         .card.stopped {
@@ -687,6 +708,7 @@
           display: flex;
           justify-content: flex-end;
           padding: 10px 14px;
+          pointer-events: auto;
         }
         button {
           background: #59a96a;
@@ -698,6 +720,7 @@
           min-height: 30px;
           min-width: 86px;
           padding: 6px 10px;
+          pointer-events: auto;
         }
       </style>
       <div class="card ${escapeHtml(status)}" role="dialog" aria-live="polite" aria-label="Hunt fill summary">
@@ -756,6 +779,9 @@
     removeFillSummary();
     var existing = document.getElementById(FILL_PROGRESS_ID);
     if (existing?.shadowRoot) {
+      if (fillRunId) {
+        activeFillProgressRunId = fillRunId;
+      }
       var existingText = existing.shadowRoot.getElementById(
         "hunt-apply-fill-progress-message",
       );
@@ -779,6 +805,7 @@
       return;
     }
     fillRunId = fillRunId || "";
+    activeFillProgressRunId = fillRunId;
     const host = document.createElement("div");
     host.id = FILL_PROGRESS_ID;
     host.style.position = "fixed";
@@ -787,9 +814,13 @@
     host.style.zIndex = "2147483647";
     host.style.maxWidth = "min(560px, calc(100vw - 36px))";
     host.style.fontFamily = "Segoe UI, system-ui, sans-serif";
+    host.style.pointerEvents = "none";
     host.attachShadow({ mode: "open" });
     host.shadowRoot.innerHTML = `
       <style>
+        :host {
+          pointer-events: none;
+        }
         @keyframes huntApplySpin {
           to { transform: rotate(360deg); }
         }
@@ -805,6 +836,7 @@
           gap: 10px;
           min-width: 330px;
           padding: 10px 12px;
+          pointer-events: none;
         }
         #hunt-apply-fill-progress-spinner {
           animation: huntApplySpin 760ms linear infinite;
@@ -846,6 +878,7 @@
           font: 750 12px Segoe UI, system-ui, sans-serif;
           min-height: 28px;
           padding: 5px 9px;
+          pointer-events: auto;
         }
         .cancel:disabled {
           cursor: default;

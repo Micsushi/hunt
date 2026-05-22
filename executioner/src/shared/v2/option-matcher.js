@@ -94,6 +94,14 @@
         answer?.source,
       ].join(" "),
     );
+    if (
+      text.includes("compensation history") ||
+      text.includes("compensation offer") ||
+      text.includes("creating a compensation offer") ||
+      text.includes("factors bms should consider")
+    ) {
+      return false;
+    }
     return (
       text.includes("salary") ||
       text.includes("compensation") ||
@@ -187,6 +195,14 @@
       text.includes("how did you hear") ||
       text.includes("source") ||
       text.includes("applicationsource")
+    );
+  }
+
+  function shouldLeaveOptionalProfileFieldBlank(field, answer) {
+    return (
+      !field?.required &&
+      answer?.source === "missing_profile_value" &&
+      (answer?.answerType === "option" || answer?.answerType === "text")
     );
   }
 
@@ -434,6 +450,13 @@
     var real = realOptions(options);
     var target = norm(answer.value);
     if (answer?.source === "missing_profile_value" && !target) {
+      if (shouldLeaveOptionalProfileFieldBlank(field, answer)) {
+        return {
+          option: null,
+          source: "optional_profile_field_blank",
+          fallback: false,
+        };
+      }
       return {
         option: null,
         source: "missing_profile_value",
@@ -648,6 +671,23 @@
       return {
         option: null,
         source: "hierarchical_workday_deferred",
+        fallback: false,
+      };
+    }
+    if (shouldLeaveOptionalProfileFieldBlank(field, answer)) {
+      root.audit?.pushIssue(audit, fieldAudit, {
+        kind: "optional_profile_field_blank",
+        severity: "info",
+        failedStep: "option.match",
+        reason:
+          "Optional profile-backed field had no saved value, so C3 left it blank.",
+        options: real.map(function (option) {
+          return option.label;
+        }),
+      });
+      return {
+        option: null,
+        source: "optional_profile_field_blank",
         fallback: false,
       };
     }

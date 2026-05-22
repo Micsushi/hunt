@@ -237,6 +237,7 @@ export function sanitizeProfile(profile = {}) {
     country: sanitizeText(profile.country),
     middleName: sanitizeText(profile.middleName),
     namePrefix: sanitizeText(profile.namePrefix),
+    nameSuffix: sanitizeText(profile.nameSuffix),
     addressLine1: sanitizeText(profile.addressLine1),
     addressLine2: sanitizeText(profile.addressLine2),
     postalCode: sanitizeText(profile.postalCode),
@@ -269,6 +270,25 @@ export function sanitizeProfile(profile = {}) {
     willingToRelocate: sanitizeBoolean(profile.willingToRelocate ?? true),
     openToAnyLocation: sanitizeBoolean(profile.openToAnyLocation ?? true),
     salaryFlexible: sanitizeBoolean(profile.salaryFlexible ?? true),
+    compensationOfferFactors: sanitizeBoolean(profile.compensationOfferFactors),
+    conflictOfInterestRelationship: sanitizeBoolean(
+      profile.conflictOfInterestRelationship,
+    ),
+    hhsOigExcluded: sanitizeBoolean(profile.hhsOigExcluded),
+    gsaFederalProgramExcluded: sanitizeBoolean(
+      profile.gsaFederalProgramExcluded,
+    ),
+    genericDrugDebarred: sanitizeBoolean(profile.genericDrugDebarred),
+    debarmentProceedingsPending: sanitizeBoolean(
+      profile.debarmentProceedingsPending,
+    ),
+    usLicensedPhysician: sanitizeBoolean(profile.usLicensedPhysician),
+    fdaHhsInvestigationalDrugRestricted: sanitizeBoolean(
+      profile.fdaHhsInvestigationalDrugRestricted,
+    ),
+    governmentalLicensingInquiry: sanitizeBoolean(
+      profile.governmentalLicensingInquiry,
+    ),
     familyMemberAtCompany: sanitizeText(profile.familyMemberAtCompany),
     reliabilityStatusClearance: sanitizeText(
       profile.reliabilityStatusClearance,
