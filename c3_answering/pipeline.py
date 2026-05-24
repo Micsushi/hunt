@@ -45,6 +45,7 @@ NEUTRAL_OPTION_PATTERNS = (
     "i choose not to disclose",
     "choose not to disclose",
     "do not wish to disclose",
+    "do not wish to share",
     "do not wish to self identify",
     "do not wi h to self identify",
     "do not wi h to elf identify",
@@ -57,6 +58,22 @@ NEUTRAL_OPTION_PATTERNS = (
     "not applicable",
     "n/a",
     "none of the above",
+)
+
+NEUTRAL_OPTION_SUBSTRINGS = (
+    "not to respond",
+    "prefer not",
+    "do not wish",
+    "do not want",
+    "don't wish",
+    "don't want",
+    "decline",
+    "not disclosed",
+    "not declared",
+    "not specified",
+    "undisclosed",
+    "undeclared",
+    "choose not",
 )
 
 
@@ -112,6 +129,10 @@ def _exact_option(options: list[str], selected: str) -> str:
 
 def _neutral_option(options: list[str]) -> str:
     real_options = _real_options(options)
+    for option in real_options:
+        option_norm = _norm_option(option)
+        if any(pattern in option_norm for pattern in NEUTRAL_OPTION_SUBSTRINGS):
+            return option
     for pattern in NEUTRAL_OPTION_PATTERNS:
         pattern_norm = _norm_option(pattern)
         for option in real_options:
@@ -160,6 +181,27 @@ def _yes_no(options: list[str], value: bool | None) -> str:
     if value is None:
         return ""
     return _matching_option(options, "Yes" if value else "No")
+
+
+def _year_range_option(options: list[str], target: str) -> str:
+    match = re.search(r"\d+", str(target or ""))
+    if not match:
+        return ""
+    year = int(match.group(0))
+    for option in _real_options(options):
+        normalized = _norm_option(option)
+        numbers = [int(value) for value in re.findall(r"\d+", normalized)]
+        if not numbers:
+            continue
+        if "more than" in normalized or normalized.endswith("plus"):
+            if year > numbers[0]:
+                return option
+        elif len(numbers) >= 2:
+            if numbers[0] <= year <= numbers[1]:
+                return option
+        elif year == numbers[0]:
+            return option
+    return ""
 
 
 def _source_decision(
@@ -292,13 +334,7 @@ def _hourly_compensation_value(profile: dict[str, Any]) -> tuple[str, str, float
     hourly = str(profile.get("hourlyPayExpectation") or "").strip()
     if hourly:
         return hourly, "profile.hourlyPayExpectation", 0.97
-    annual = _salary_point(profile.get("salaryExpectation"))
-    if annual:
-        return f"{annual / 2080:.2f}", "calculated.salaryExpectationHourly", 0.94
-    annual_range = _salary_point(profile.get("salaryExpectationRange"))
-    if annual_range:
-        return f"{annual_range / 2080:.2f}", "calculated.salaryExpectationRangeHourly", 0.9
-    return "48.08", "default.hourlyPayExpectation", 0.72
+    return "25.00", "default.hourlyPayExpectation", 0.72
 
 
 def deterministic_decision(request: C3AnswerRequest) -> C3AnswerDecision | None:
@@ -310,6 +346,10 @@ def deterministic_decision(request: C3AnswerRequest) -> C3AnswerDecision | None:
         or "available start date" in question
         or "desired start date" in question
         or "date are you available to start work" in question
+        or "how soon can you start" in question
+        or "how soon would you be available to start" in question
+        or "availability date" in question
+        or "earliest availability date" in question
     ):
         answer, source, confidence = _date_value(profile, "desiredStartDate", "2026-05-25")
         return _text_decision(
@@ -343,7 +383,7 @@ def deterministic_decision(request: C3AnswerRequest) -> C3AnswerDecision | None:
                 canonical_field="salary_expectation",
                 answer_text=answer,
                 source_field=source,
-                reason="Question asks for an hourly compensation value and C3 calculated hourly pay from the profile annual salary.",
+                reason="Question asks for an hourly compensation value and C3 uses explicit hourly profile data or the hourly default.",
                 confidence=confidence,
                 camp="profile_value",
             )
@@ -395,9 +435,8 @@ def deterministic_decision(request: C3AnswerRequest) -> C3AnswerDecision | None:
         return None
 
     accommodation_request_question = (
-        ("accommodation" in question or "adjustment" in question or "support" in question)
-        and ("require" in question or "need" in question or "selecting yes" in question)
-    )
+        "accommodation" in question or "adjustment" in question or "support" in question
+    ) and ("require" in question or "need" in question or "selecting yes" in question)
     if accommodation_request_question:
         profile_value = _truthy(profile.get("accommodationRequest"))
         requested = profile_value if profile_value is not None else False
@@ -436,6 +475,12 @@ def deterministic_decision(request: C3AnswerRequest) -> C3AnswerDecision | None:
         or "previously been employed" in question
         or "previously employed" in question
         or "previous employment" in question
+        or "directly employed" in question
+        or "accepted an offer" in question
+        or "contracted with" in question
+        or "work with us before" in question
+        or "worked with us before" in question
+        or "co-op or internship" in question
     )
     referral_question = (
         "know anyone" in question
@@ -449,6 +494,28 @@ def deterministic_decision(request: C3AnswerRequest) -> C3AnswerDecision | None:
         or "ernst and young" in question
         or "deloitte" in question
     )
+    family_or_relative_question = (
+        "family member" in question
+        or "relative" in question
+        or "relatives" in question
+        or "domestic partner" in question
+    )
+    if family_or_relative_question:
+        value = _truthy(profile.get("familyMemberAtCompany"))
+        option = _yes_no(options, value if value is not None else False)
+        if option:
+            return _source_decision(
+                request,
+                canonical_field="family_member_at_company",
+                option=option,
+                source_field=(
+                    "profile.familyMemberAtCompany"
+                    if value is not None
+                    else "default.familyMemberAtCompany"
+                ),
+                reason="Family/referral relationship questions default to No unless profile evidence says otherwise.",
+                camp="negative_conflict",
+            )
     if previous_company_question or referral_question:
         previous = _norm(profile.get("previousEmployers"))
         company = _norm(request.job.company)
@@ -481,6 +548,35 @@ def deterministic_decision(request: C3AnswerRequest) -> C3AnswerDecision | None:
                 camp="opportunity_positive",
             )
 
+    experience_question = (
+        "experience" in question or "worked with" in question or "work with" in question
+    ) and not any(
+        blocked in question
+        for blocked in (
+            "years of experience",
+            "how many years",
+            "license",
+            "licensed",
+            "certification",
+            "certified",
+            "salary",
+            "compensation",
+            "trans experience",
+            "lived experience",
+        )
+    )
+    if experience_question:
+        option = _yes_no(options, True)
+        if option:
+            return _source_decision(
+                request,
+                canonical_field="experience_affirmation",
+                option=option,
+                source_field="policy.experience_affirmation",
+                reason="Experience-related yes/no questions default to Yes by C3 policy.",
+                camp="opportunity_positive",
+            )
+
     if (
         "legally" in question
         or "eligible to work" in question
@@ -489,15 +585,52 @@ def deterministic_decision(request: C3AnswerRequest) -> C3AnswerDecision | None:
         or "legal right to work" in question
         or "proof of your legal right to work" in question
     ):
-        option = _yes_no(options, _truthy(profile.get("workAuthorized")))
+        value = _truthy(profile.get("workAuthorized"))
+        option = _yes_no(options, value if value is not None else True)
         if option:
             return _source_decision(
                 request,
                 canonical_field="work_authorized",
                 option=option,
-                source_field="profile.workAuthorized",
-                reason="Question asks work authorization and profile has a work authorization setting.",
+                source_field="profile.workAuthorized"
+                if value is not None
+                else "default.workAuthorized",
+                reason="Question asks work authorization and C3 uses profile value or the progress-safe default Yes.",
                 camp="opportunity_positive",
+            )
+    if "canadian citizen" in question or "permanent resident status" in question:
+        value = _truthy(profile.get("canadianCitizenOrPermanentResident"))
+        option = _yes_no(options, value if value is not None else True)
+        if option:
+            return _source_decision(
+                request,
+                canonical_field="canadian_citizen_pr",
+                option=option,
+                source_field=(
+                    "profile.canadianCitizenOrPermanentResident"
+                    if value is not None
+                    else "default.canadianCitizenOrPermanentResident"
+                ),
+                reason="Canadian citizen/permanent-resident eligibility defaults to Yes for progress unless profile evidence says otherwise.",
+                camp="opportunity_positive",
+            )
+    if (
+        ("social insurance number" in question and "begins with the number 9" in question)
+        or "sin starts with 9" in question
+        or "sin begins with the number 9" in question
+    ):
+        value = _truthy(profile.get("sinStartsWithNine"))
+        option = _yes_no(options, value if value is not None else False)
+        if option:
+            return _source_decision(
+                request,
+                canonical_field="sin_starts_with_nine",
+                option=option,
+                source_field="profile.sinStartsWithNine"
+                if value is not None
+                else "default.sinStartsWithNine",
+                reason="SIN starting with 9 defaults to No unless profile evidence says otherwise.",
+                camp="negative_conflict",
             )
     if "sponsor" in question or "visa support" in question or "work permit sponsorship" in question:
         option = _yes_no(options, _truthy(profile.get("sponsorshipRequired")))
@@ -544,6 +677,214 @@ def deterministic_decision(request: C3AnswerRequest) -> C3AnswerDecision | None:
                 reason="Question asks co-op terms and profile has the completed term count.",
                 camp="profile_value",
             )
+    if (
+        "contract roles" in question
+        or "short-contract" in question
+        or "short contract" in question
+        or "temporary basis" in question
+    ) and not any(
+        blocked in question
+        for blocked in ("temporary password", "temporary work permit", "temporary sin")
+    ):
+        value = _truthy(profile.get("interestedTemporaryShortContract"))
+        option = _yes_no(options, value if value is not None else False)
+        if option:
+            return _source_decision(
+                request,
+                canonical_field="temporary_short_contract_interest",
+                option=option,
+                source_field=(
+                    "profile.interestedTemporaryShortContract"
+                    if value is not None
+                    else "default.interestedTemporaryShortContract"
+                ),
+                reason="Question asks about temporary or contract-role interest and defaults to No unless profile evidence says otherwise.",
+                camp="profile_value",
+            )
+    if "temporary staffing agency" in question or "staffing agency" in question:
+        value = _truthy(profile.get("priorTempStaffingAgency"))
+        option = _yes_no(options, value if value is not None else False)
+        if option:
+            return _source_decision(
+                request,
+                canonical_field="prior_temp_staffing_agency",
+                option=option,
+                source_field=(
+                    "profile.priorTempStaffingAgency"
+                    if value is not None
+                    else "default.priorTempStaffingAgency"
+                ),
+                reason="Temporary staffing agency history defaults to No unless profile evidence says otherwise.",
+                camp="negative_conflict",
+            )
+    if "criminal offence" in question or "criminal offense" in question or "pardon" in question:
+        value = _truthy(profile.get("criminalConvictionUnpardoned"))
+        option = _yes_no(options, value if value is not None else False)
+        if option:
+            return _source_decision(
+                request,
+                canonical_field="criminal_conviction_unpardoned",
+                option=option,
+                source_field=(
+                    "profile.criminalConvictionUnpardoned"
+                    if value is not None
+                    else "default.criminalConvictionUnpardoned"
+                ),
+                reason="Criminal conviction/unpardoned offence questions default to No unless profile evidence says otherwise.",
+                camp="negative_conflict",
+            )
+    if "how many years" in question and "related experience" in question:
+        target = str(profile.get("relatedExperienceYearsRange") or "3").strip()
+        option = _year_range_option(options, target) or _matching_option(
+            options, target, ["3-5 years", "2-5 years", "3 years"]
+        )
+        if option:
+            return _source_decision(
+                request,
+                canonical_field="related_experience_years",
+                option=option,
+                source_field=(
+                    "profile.relatedExperienceYearsRange"
+                    if profile.get("relatedExperienceYearsRange")
+                    else "default.relatedExperienceYearsRange"
+                ),
+                reason="Related-experience range uses profile value or the pro-application default range.",
+                camp="profile_value",
+            )
+    if (
+        "license to sell cannabis" in question
+        or "license to sell liquor" in question
+        or "cannabis/liquor" in question
+    ):
+        value = _truthy(profile.get("cannabisLiquorSalesLicense"))
+        option = _yes_no(options, value if value is not None else True)
+        if option:
+            return _source_decision(
+                request,
+                canonical_field="regulated_cannabis_liquor_license",
+                option=option,
+                source_field=(
+                    "profile.cannabisLiquorSalesLicense"
+                    if value is not None
+                    else "default.cannabisLiquorSalesLicense"
+                ),
+                reason="Regulated cannabis/liquor license questions use profile value or the pro-application default Yes.",
+                camp="profile_value",
+            )
+    if "disciplinary action" in question and (
+        "professional license" in question
+        or "certification" in question
+        or "credentials" in question
+    ):
+        value = _truthy(profile.get("professionalLicenseDiscipline"))
+        option = _yes_no(options, value if value is not None else False)
+        if option:
+            return _source_decision(
+                request,
+                canonical_field="professional_license_discipline",
+                option=option,
+                source_field=(
+                    "profile.professionalLicenseDiscipline"
+                    if value is not None
+                    else "default.professionalLicenseDiscipline"
+                ),
+                reason="Professional discipline history defaults to No unless profile evidence says otherwise.",
+                camp="negative_conflict",
+            )
+    if "active clearance" in question or "currently hold a security clearance" in question:
+        value = _truthy(profile.get("activeClearance"))
+        option = _yes_no(options, value if value is not None else False)
+        if option:
+            return _source_decision(
+                request,
+                canonical_field="active_security_clearance",
+                option=option,
+                source_field="profile.activeClearance"
+                if value is not None
+                else "default.activeClearance",
+                reason="Active clearance defaults to No unless profile evidence says otherwise, avoiding conditional clearance-detail blockers.",
+                camp="negative_conflict",
+            )
+    if (
+        "citizen of the united states" in question
+        or "united states citizen" in question
+        or "u.s. citizen" in question
+    ):
+        value = _truthy(profile.get("usCitizen"))
+        option = _yes_no(options, value if value is not None else False)
+        if option:
+            return _source_decision(
+                request,
+                canonical_field="us_citizen",
+                option=option,
+                source_field="profile.usCitizen" if value is not None else "default.usCitizen",
+                reason="Direct U.S. citizenship questions use the profile citizenship flag and default to No for the seeded Canadian profile.",
+                camp="profile_value",
+            )
+    if "current u.s. federal" in question or "current us federal" in question:
+        value = _truthy(profile.get("currentUsFederalEmployeeOrMilitary"))
+        option = _yes_no(options, value if value is not None else False)
+        if option:
+            return _source_decision(
+                request,
+                canonical_field="current_us_federal_employee_or_military",
+                option=option,
+                source_field=(
+                    "profile.currentUsFederalEmployeeOrMilitary"
+                    if value is not None
+                    else "default.currentUsFederalEmployeeOrMilitary"
+                ),
+                reason="Current U.S. federal civilian or military employment defaults to No unless profile evidence says otherwise.",
+                camp="negative_conflict",
+            )
+    if "former u.s. federal" in question or "former us federal" in question:
+        value = _truthy(profile.get("formerUsFederalEmployeeOrMilitary"))
+        option = _yes_no(options, value if value is not None else False)
+        if option:
+            return _source_decision(
+                request,
+                canonical_field="former_us_federal_employee_or_military",
+                option=option,
+                source_field=(
+                    "profile.formerUsFederalEmployeeOrMilitary"
+                    if value is not None
+                    else "default.formerUsFederalEmployeeOrMilitary"
+                ),
+                reason="Former U.S. federal civilian or military employment defaults to No unless profile evidence says otherwise.",
+                camp="negative_conflict",
+            )
+    if "military spouse" in question or "spouse" in question and "military" in question:
+        value = _truthy(profile.get("militarySpouseOrPartner"))
+        option = _yes_no(options, value if value is not None else False)
+        if option:
+            return _source_decision(
+                request,
+                canonical_field="military_spouse_or_partner",
+                option=option,
+                source_field="profile.militarySpouseOrPartner"
+                if value is not None
+                else "default.militarySpouseOrPartner",
+                reason="Military spouse/partner status defaults to No unless profile evidence says otherwise.",
+                camp="profile_value",
+            )
+    if (
+        "national guard" in question
+        or "guard/reserves" in question
+        or "guard or reserves" in question
+    ):
+        value = _truthy(profile.get("nationalGuardOrReserves"))
+        option = _yes_no(options, value if value is not None else False)
+        if option:
+            return _source_decision(
+                request,
+                canonical_field="national_guard_or_reserves",
+                option=option,
+                source_field="profile.nationalGuardOrReserves"
+                if value is not None
+                else "default.nationalGuardOrReserves",
+                reason="National Guard/Reserves status defaults to No unless profile evidence says otherwise.",
+                camp="profile_value",
+            )
     if "graduation" in question:
         year = str(profile.get("expectedGraduationYear") or "").strip()
         option = _matching_option(options, year, [f"graduated before {year}"])
@@ -576,6 +917,176 @@ def deterministic_decision(request: C3AnswerRequest) -> C3AnswerDecision | None:
                 option=option,
                 source_field="profile.availableSummer2026",
                 reason="Question asks Summer 2026 availability and profile has that availability setting.",
+                camp="profile_value",
+            )
+    if (
+        "preferred communication channel" in question
+        or "preferred method of communication" in question
+    ):
+        target = str(profile.get("preferredCommunicationChannel") or "Email").strip()
+        option = _matching_option(options, target, ["Email", "E-mail", "Personal Email"])
+        if option:
+            return _source_decision(
+                request,
+                canonical_field="preferred_communication_channel",
+                option=option,
+                source_field=(
+                    "profile.preferredCommunicationChannel"
+                    if profile.get("preferredCommunicationChannel")
+                    else "default.preferredCommunicationChannel"
+                ),
+                reason="Preferred communication channel uses profile value or defaults to Email.",
+                camp="profile_value",
+            )
+    if "preferred language" in question or "interview language" in question:
+        target = str(profile.get("preferredLanguage") or "English").strip()
+        option = _matching_option(options, target, ["English"])
+        if option:
+            return _source_decision(
+                request,
+                canonical_field="preferred_language",
+                option=option,
+                source_field="profile.preferredLanguage"
+                if profile.get("preferredLanguage")
+                else "default.preferredLanguage",
+                reason="Preferred language uses profile value or defaults to English.",
+                camp="profile_value",
+            )
+    if (
+        "ai-enabled recruiting tools" in question
+        or "ai enabled recruiting tools" in question
+        or "ai-enabled tools" in question
+        or "ai enabled tools" in question
+        or "artificial intelligence enabled tools" in question
+        or "recruiting tools consent" in question
+    ):
+        value = _truthy(profile.get("aiRecruitingToolsConsent"))
+        option = _yes_no(options, value if value is not None else True)
+        if option:
+            return _source_decision(
+                request,
+                canonical_field="ai_recruiting_tools_consent",
+                option=option,
+                source_field="profile.aiRecruitingToolsConsent"
+                if value is not None
+                else "default.aiRecruitingToolsConsent",
+                reason="AI recruiting-tools consent uses profile value or the pro-application default Yes.",
+                camp="profile_value",
+            )
+    if "alternative positions" in question or "alternate positions" in question:
+        value = _truthy(profile.get("alternativePositionsInterest"))
+        option = _yes_no(options, value if value is not None else True)
+        if option:
+            return _source_decision(
+                request,
+                canonical_field="alternative_positions_interest",
+                option=option,
+                source_field="profile.alternativePositionsInterest"
+                if value is not None
+                else "default.alternativePositionsInterest",
+                reason="Alternative-position consideration uses profile value or the pro-application default Yes.",
+                camp="profile_value",
+            )
+    if (
+        "future communications" in question
+        or "future opportunities" in question
+        or "talent community" in question
+    ):
+        value = _truthy(
+            profile.get("futureCommunicationsOptIn") or profile.get("talentCommunityOptIn")
+        )
+        option = _yes_no(options, value if value is not None else True)
+        if option:
+            return _source_decision(
+                request,
+                canonical_field="future_communications_opt_in",
+                option=option,
+                source_field="profile.futureCommunicationsOptIn"
+                if value is not None
+                else "default.futureCommunicationsOptIn",
+                reason="Future communications/talent-community prompts use profile value or the pro-application default Yes.",
+                camp="profile_value",
+            )
+    if "commute" in question or "work location" in question:
+        value = _truthy(profile.get("commuteWillingness") or profile.get("workLocationWillingness"))
+        option = _yes_no(options, value if value is not None else True)
+        if option:
+            return _source_decision(
+                request,
+                canonical_field="commute_willingness",
+                option=option,
+                source_field="profile.commuteWillingness"
+                if value is not None
+                else "default.commuteWillingness",
+                reason="Commute/work-location willingness uses profile value or the pro-application default Yes.",
+                camp="profile_value",
+            )
+    if "shiftwork" in question or "shift work" in question:
+        value = _truthy(profile.get("shiftAvailability"))
+        option = _yes_no(options, value if value is not None else True)
+        if option:
+            return _source_decision(
+                request,
+                canonical_field="shift_availability",
+                option=option,
+                source_field="profile.shiftAvailability"
+                if value is not None
+                else "default.shiftAvailability",
+                reason="Shift availability uses profile value or the pro-application default Yes.",
+                camp="profile_value",
+            )
+    if (
+        "department of defense" in question
+        or "dod contract" in question
+        or "government procurement" in question
+    ):
+        value = _truthy(profile.get("governmentProcurementHistory"))
+        option = _yes_no(options, value if value is not None else False)
+        if option:
+            return _source_decision(
+                request,
+                canonical_field="government_procurement_history",
+                option=option,
+                source_field="profile.governmentProcurementHistory"
+                if value is not None
+                else "default.governmentProcurementHistory",
+                reason="Government procurement/DoD contract history defaults to No unless profile evidence says otherwise.",
+                camp="negative_conflict",
+            )
+    if (
+        "non-compete" in question
+        or "non-solicitation" in question
+        or "restrictive agreement" in question
+    ):
+        value = _truthy(profile.get("restrictiveAgreement") or profile.get("nonCompeteRestriction"))
+        option = _yes_no(options, value if value is not None else False)
+        if option:
+            return _source_decision(
+                request,
+                canonical_field="restrictive_agreement",
+                option=option,
+                source_field="profile.restrictiveAgreement"
+                if value is not None
+                else "default.restrictiveAgreement",
+                reason="Restrictive agreement history defaults to No unless profile evidence says otherwise.",
+                camp="negative_conflict",
+            )
+    if (
+        "currently located in the area" in question
+        or "located in the area where the job is located" in question
+        or "located in the area where this job is located" in question
+    ):
+        value = _truthy(profile.get("currentlyInJobArea") or profile.get("openToAnyLocation"))
+        option = _yes_no(options, value if value is not None else True)
+        if option:
+            return _source_decision(
+                request,
+                canonical_field="currently_in_job_area",
+                option=option,
+                source_field="profile.currentlyInJobArea"
+                if value is not None
+                else "default.currentlyInJobArea",
+                reason="Job-area location uses profile value or the pro-application default Yes.",
                 camp="profile_value",
             )
     if ("city" in question or "located" in question or "location" in question) and not (
@@ -784,7 +1295,9 @@ def decide_answer(request: C3AnswerRequest) -> C3AnswerDecision:
                 model=result.model,
                 reason=str(exc),
                 requires_review=True,
-                normalized_question=build_standard_question(request.field.label, request.field.options),
+                normalized_question=build_standard_question(
+                    request.field.label, request.field.options
+                ),
             )
         if not repaired.success or not repaired.parsed:
             return C3AnswerDecision(
@@ -794,7 +1307,9 @@ def decide_answer(request: C3AnswerRequest) -> C3AnswerDecision:
                 model=repaired.model or result.model,
                 reason=repaired.error or result.error or "LLM provider returned no parsed JSON.",
                 requires_review=True,
-                normalized_question=build_standard_question(request.field.label, request.field.options),
+                normalized_question=build_standard_question(
+                    request.field.label, request.field.options
+                ),
             )
         result = repaired
     return _validate_decision(

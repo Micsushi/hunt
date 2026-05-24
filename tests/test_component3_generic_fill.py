@@ -1,4 +1,5 @@
 import json
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -206,6 +207,8 @@ def test_generic_v2_unknown_option_defaults_to_neutral_yes_then_first_real():
             """
             () => {
               const root = window.__huntV2;
+              const originalRandom = Math.random;
+              Math.random = () => 0;
               const firstReal = root.optionMatcher.matchOption({
                 options: [
                   { label: "Yes", value: "Yes" },
@@ -230,13 +233,14 @@ def test_generic_v2_unknown_option_defaults_to_neutral_yes_then_first_real():
               const firstRealFallback = root.optionMatcher.matchOption({
                 options: [
                   { label: "Maybe", value: "Maybe" },
-                  { label: "No", value: "No" },
+                  { label: "Sometimes", value: "Sometimes" },
                 ],
                 answer: { value: "", answerType: "unknown" },
                 field: {},
                 audit: null,
                 fieldAudit: null,
               });
+              Math.random = originalRandom;
               return {
                 firstRealLabel: firstReal.option && firstReal.option.label,
                 firstRealSource: firstReal.source,
@@ -251,12 +255,12 @@ def test_generic_v2_unknown_option_defaults_to_neutral_yes_then_first_real():
         browser.close()
 
     assert result == {
-        "firstRealLabel": "Yes",
-        "firstRealSource": "unknown_yes_fallback",
+        "firstRealLabel": "No",
+        "firstRealSource": "unknown_no_fallback",
         "neutralLabel": "Prefer not to disclose",
-        "neutralSource": "neutral_fallback",
+        "neutralSource": "unknown_neutral_fallback",
         "fallbackLabel": "Maybe",
-        "fallbackSource": "unknown_first_real_option",
+        "fallbackSource": "unknown_first_real_fallback",
     }
 
 
@@ -391,16 +395,16 @@ def test_generic_v2_fill_logs_profile_defaults_and_text_fallbacks():
         )
         browser.close()
 
-    assert result["ok"] is True
+    assert result["ok"] is False
     assert values["firstName"] == "Michael"
     assert values["gender"] == "not_disclose"
-    assert values["unknownRaw"] == " "
+    assert values["unknownRaw"] == ""
     assert result["manualReviewRequired"] is True
     assert result["v2Audit"]["schemaVersion"] == "c3-v2-audit-1"
     issue_kinds = {issue["kind"] for issue in result["v2Audit"]["permanentIssues"]}
     assert "derived_profile_pairing" in issue_kinds
     assert "neutral_disclosure_default" in issue_kinds
-    assert "generated_or_placeholder_text_fallback" in issue_kinds
+    assert "unknown_question_unresolved" in issue_kinds
 
 
 def test_generic_v2_fills_oracle_email_and_hidden_terms_checkbox():
@@ -994,6 +998,73 @@ def test_safe_next_clicks_next_controls_only():
     assert values["nextClicked"] == "1"
 
 
+def test_safe_next_offer_allows_warning_only_manual_review():
+    safe_next_js = _module_to_browser_script(
+        _load_script(REPO_ROOT / "executioner/src/background/safe-next.js")
+    )
+    payload = {
+        "ok": True,
+        "attempt": {
+            "filledFieldCount": 0,
+            "status": "filled",
+            "manualReviewRequired": True,
+            "v2Audit": {
+                "permanentIssues": [{"kind": "optional_catalog_no_match", "severity": "warn"}]
+            },
+        },
+        "result": {
+            "pendingLlmFieldCount": 0,
+            "manualReviewRequired": True,
+        },
+    }
+    script = (
+        safe_next_js
+        + "\nconsole.log(JSON.stringify(canOfferSafeNextAfterFill("
+        + json.dumps(payload)
+        + ")));"
+    )
+    result = subprocess.run(
+        ["node", "-e", script],
+        check=True,
+        capture_output=True,
+        text=True,
+        cwd=REPO_ROOT,
+    )
+    assert json.loads(result.stdout) is True
+
+
+def test_safe_next_offer_blocks_hard_v2_issue():
+    safe_next_js = _module_to_browser_script(
+        _load_script(REPO_ROOT / "executioner/src/background/safe-next.js")
+    )
+    payload = {
+        "ok": True,
+        "attempt": {
+            "filledFieldCount": 1,
+            "manualReviewRequired": True,
+        },
+        "result": {
+            "pendingLlmFieldCount": 0,
+            "manualReviewRequired": True,
+            "v2Audit": {"permanentIssues": [{"kind": "required_unfilled", "severity": "blocked"}]},
+        },
+    }
+    script = (
+        safe_next_js
+        + "\nconsole.log(JSON.stringify(canOfferSafeNextAfterFill("
+        + json.dumps(payload)
+        + ")));"
+    )
+    result = subprocess.run(
+        ["node", "-e", script],
+        check=True,
+        capture_output=True,
+        text=True,
+        cwd=REPO_ROOT,
+    )
+    assert json.loads(result.stdout) is False
+
+
 def test_safe_next_ignores_workday_upload_success_alerts():
     if sync_playwright is None:
         pytest.skip("playwright is required for the safe next fixture")
@@ -1203,12 +1274,8 @@ def test_generic_fill_populates_required_fields_only():
         pytest.skip("playwright is required for the generic C3 fill fixture")
 
     fixture = REPO_ROOT / "executioner/fixtures/generic/basic_required.html"
-    injected_js = _load_script(REPO_ROOT / "executioner/src/shared/injected.js")
     fill_js = _module_to_browser_script(
         _load_script(REPO_ROOT / "executioner/src/ats/generic/fill-v2.js")
-    )
-    rules_js = _module_to_browser_script(
-        _load_script(REPO_ROOT / "executioner/src/ats/generic/field-rules.js")
     )
 
     with sync_playwright() as playwright:
@@ -1316,12 +1383,8 @@ def test_generic_fill_retries_text_fields_that_lose_committed_value():
     if sync_playwright is None:
         pytest.skip("playwright is required for the generic C3 fill fixture")
 
-    injected_js = _load_script(REPO_ROOT / "executioner/src/shared/injected.js")
     fill_js = _module_to_browser_script(
         _load_script(REPO_ROOT / "executioner/src/ats/generic/fill-v2.js")
-    )
-    rules_js = _module_to_browser_script(
-        _load_script(REPO_ROOT / "executioner/src/ats/generic/field-rules.js")
     )
 
     with sync_playwright() as playwright:
@@ -1400,12 +1463,8 @@ def test_generic_fill_can_fill_optional_known_fields_when_required_only_is_off()
         pytest.skip("playwright is required for the generic C3 fill fixture")
 
     fixture = REPO_ROOT / "executioner/fixtures/generic/basic_required.html"
-    injected_js = _load_script(REPO_ROOT / "executioner/src/shared/injected.js")
     fill_js = _module_to_browser_script(
         _load_script(REPO_ROOT / "executioner/src/ats/generic/fill-v2.js")
-    )
-    rules_js = _module_to_browser_script(
-        _load_script(REPO_ROOT / "executioner/src/ats/generic/field-rules.js")
     )
 
     with sync_playwright() as playwright:
@@ -1489,12 +1548,8 @@ def test_generic_fill_reads_sibling_labels_and_hidden_resume_inputs():
         pytest.skip("playwright is required for the generic C3 fill fixture")
 
     fixture = REPO_ROOT / "executioner/fixtures/generic/greenhouse_like.html"
-    injected_js = _load_script(REPO_ROOT / "executioner/src/shared/injected.js")
     fill_js = _module_to_browser_script(
         _load_script(REPO_ROOT / "executioner/src/ats/generic/fill-v2.js")
-    )
-    rules_js = _module_to_browser_script(
-        _load_script(REPO_ROOT / "executioner/src/ats/generic/field-rules.js")
     )
 
     with sync_playwright() as playwright:
@@ -1598,12 +1653,8 @@ def test_generic_fill_commits_greenhouse_style_custom_selects():
         pytest.skip("playwright is required for the generic C3 fill fixture")
 
     fixture = REPO_ROOT / "executioner/fixtures/generic/greenhouse_custom_selects.html"
-    injected_js = _load_script(REPO_ROOT / "executioner/src/shared/injected.js")
     fill_js = _module_to_browser_script(
         _load_script(REPO_ROOT / "executioner/src/ats/generic/fill-v2.js")
-    )
-    rules_js = _module_to_browser_script(
-        _load_script(REPO_ROOT / "executioner/src/ats/generic/field-rules.js")
     )
 
     with sync_playwright() as playwright:

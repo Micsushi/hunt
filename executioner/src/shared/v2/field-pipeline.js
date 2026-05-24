@@ -171,6 +171,22 @@
     if (!errors.length) {
       return true;
     }
+    var genericRequiredError = errors.some(function (error) {
+      var text = normalizedTokens(
+        typeof error === "string"
+          ? error
+          : [error.field, error.label, error.message, error.text, error.summary]
+              .filter(Boolean)
+              .join(" "),
+      );
+      return (
+        text &&
+        /required|must have a value|select one|invalid|error/.test(text)
+      );
+    });
+    if (genericRequiredError && (field.required || hasValidationState(field))) {
+      return true;
+    }
     var signals = repairFieldSignals(field);
     return errors.some(function (error) {
       var text = normalizedTokens(
@@ -357,6 +373,30 @@
     });
   }
 
+  function isConditionalYesFollowupText(field) {
+    if (!["text", "textarea"].includes(field.uiModel)) {
+      return false;
+    }
+    var el = field.element || field.anchor;
+    var signal = [
+      field.fieldId,
+      field.name,
+      field.descriptor,
+      field.workday?.fieldLabel,
+      el?.id,
+      el?.name,
+      el?.getAttribute?.("aria-label"),
+      el?.getAttribute?.("placeholder"),
+    ]
+      .join(" ")
+      .toLowerCase();
+    return (
+      /\bif\s+yes\b/.test(signal) ||
+      /\bif\s+you\s+answered\s+yes\b/.test(signal) ||
+      /\bplease\s+explain\s+.*\byes\b/.test(signal)
+    );
+  }
+
   function emitSiteAction(context, payload) {
     try {
       if (
@@ -488,11 +528,14 @@
     fieldAudit.questionType = question.type;
     if (question.type === "unknown") {
       root.audit.pushIssue(audit, fieldAudit, {
-        kind: "unknown_question_unresolved",
+        kind: field.required
+          ? "unknown_question_defaulted"
+          : "unknown_question_defaulted",
         severity: field.required ? "warn" : "info",
         failedStep: "question.identify",
-        reason:
-          "C3 did not recognize this question. Add a catalog entry or profile mapping before trusting an automatic answer.",
+        reason: field.required
+          ? "C3 did not recognize this required question and will use progress-first fallback if the UI is usable."
+          : "C3 did not recognize this optional question. Add a catalog entry or profile mapping before trusting any automatic answer.",
         questionType: "unknown",
       });
     }
@@ -568,9 +611,11 @@
       var quietOptionalCheckboxNoOption =
         !field.required &&
         field.uiModel === "checkbox" &&
-        ["checkbox_no_safe_match", "no_options", "missing_profile_value"].includes(
-          match.source,
-        );
+        [
+          "checkbox_no_safe_match",
+          "no_options",
+          "missing_profile_value",
+        ].includes(match.source);
       var quietCommittedButtonNoOption =
         ["button_listbox", "combobox"].includes(field.uiModel) &&
         !option &&
@@ -761,7 +806,7 @@
             pendingCount: fields.filter(function (field) {
               return (
                 field.required &&
-                !processedQuestionHashes.has(field.questionHash)
+                !processedFieldKeys.has(fieldIdentityKey(field))
               );
             }).length,
           },
@@ -779,9 +824,6 @@
         }
         var field = fields[i];
         var fieldKey = fieldIdentityKey(field);
-        if (processedQuestionHashes.has(field.questionHash)) {
-          continue;
-        }
         if (fieldKey && processedFieldKeys.has(fieldKey)) {
           root.audit.pushEvent(audit, {
             action: "field_skipped",
@@ -855,6 +897,18 @@
               "Skipped final signature field because the page is already in post-submit validation mode.",
             descriptor: field.descriptor || "",
             uiModel: field.uiModel || "",
+          });
+          continue;
+        }
+        if (isConditionalYesFollowupText(field)) {
+          root.audit.pushEvent(audit, {
+            action: "field_skipped",
+            step: "field.conditional_followup_guard",
+            status: "info",
+            reason: "conditional_yes_followup_left_blank",
+            fieldId: field.fieldId,
+            questionHash: field.questionHash,
+            uiModel: field.uiModel,
           });
           continue;
         }

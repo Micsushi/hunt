@@ -186,8 +186,17 @@ $arguments = @(
 if ($windowPosition) {
     $arguments += "--window-position=$windowPosition"
 }
+$startMinimized = $env:HUNT_C3_CHROME_START_MINIMIZED -in @("1", "true", "TRUE", "yes", "YES")
+if ($startMinimized) {
+    $arguments += "--start-minimized"
+    $arguments += "--no-startup-window"
+}
 
-Start-Process -FilePath $chrome -ArgumentList $arguments
+if ($startMinimized) {
+    Start-Process -FilePath $chrome -ArgumentList $arguments -WindowStyle Minimized
+} else {
+    Start-Process -FilePath $chrome -ArgumentList $arguments
+}
 Write-Host "Started C3 Chrome DevTools endpoint: http://127.0.0.1:$debugPort"
 Write-Host "Browser kind: $browserKind"
 Write-Host "Browser: $chrome"

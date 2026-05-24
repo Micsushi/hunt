@@ -85,6 +85,24 @@
     return clean(pieces.filter(Boolean).join(" "));
   }
 
+  function looksLikeAiConsentText(text) {
+    var value = lower(text);
+    return (
+      (value.includes("ai") ||
+        value.includes("artificial intelligence") ||
+        value.includes("automated tools") ||
+        value.includes("automated decision") ||
+        value.includes("ai-enabled") ||
+        value.includes("ai enabled")) &&
+      (value.includes("consent") ||
+        value.includes("processed by these tools") ||
+        value.includes("support review of your application") ||
+        value.includes("recruiting tools") ||
+        value.includes("opt-out") ||
+        value.includes("opt out"))
+    );
+  }
+
   function workdayWidgetKind(field) {
     var el = field.element || field.anchor;
     var fieldLabel = workdayFieldLabel(el);
@@ -106,12 +124,13 @@
     var role = lower(el?.getAttribute?.("role"));
     var popup = lower(el?.getAttribute?.("aria-haspopup"));
     if (
-      automationId.includes("select-files") ||
-      automationId.includes("file-upload") ||
-      ownText.includes("upload a file") ||
-      ownText.includes("drop files") ||
-      ownText.includes("resume/cv") ||
-      ownText.includes("resume cv")
+      !looksLikeAiConsentText([ownText, text].join(" ")) &&
+      (automationId.includes("select-files") ||
+        automationId.includes("file-upload") ||
+        ownText.includes("upload a file") ||
+        ownText.includes("drop files") ||
+        ownText.includes("resume/cv") ||
+        ownText.includes("resume cv"))
     ) {
       return "resume_file";
     }
@@ -366,6 +385,7 @@
         [
           'button[aria-haspopup="listbox"]',
           'button[data-automation-id*="prompt"]',
+          'button[data-automation-id*="select-files"]',
           'button[data-automation-id*="select"]',
           '[role="combobox"][aria-haspopup="listbox"]',
         ].join(", "),
@@ -382,6 +402,11 @@
               root.uiInspector?.containerSelectors || [],
             )
           : workdayContextText({ element: el, anchor: el, descriptor: "" });
+        var kind = workdayWidgetKind({
+          element: el,
+          anchor: el,
+          descriptor: descriptor || "",
+        });
         extras.push(
           classify({
             kind: "element",
@@ -392,7 +417,12 @@
             questionHash: window.__huntApplyUtils?.buildQuestionHash
               ? window.__huntApplyUtils.buildQuestionHash(descriptor || "")
               : "workday_extra_" + index,
-            uiModel: el.tagName === "BUTTON" ? "button_listbox" : "combobox",
+            uiModel:
+              kind === "resume_file"
+                ? "file"
+                : el.tagName === "BUTTON"
+                  ? "button_listbox"
+                  : "combobox",
             required: root.uiInspector?.isRequired
               ? root.uiInspector.isRequired(el, descriptor)
               : false,

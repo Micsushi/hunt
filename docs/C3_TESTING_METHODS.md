@@ -3,6 +3,14 @@
 Reusable commands for p Chrome and C3 live testing. Prefer these methods over
 ad hoc terminal or CDP snippets.
 
+## Testing Priority
+
+For C3 Workday tests, fill completion is more important than fill correctness.
+The runner and lane agents should try to reach Review whenever the UI is usable,
+then stop before final Submit. Wrong answers, questionable defaults, and profile
+gaps should be captured in Review/audit instead of stopping the flow, unless the
+answer creates required follow-up fields, validation, or another blocker.
+
 ## Launch Primary P Chrome
 
 ```powershell
@@ -19,18 +27,49 @@ Defaults:
 
 ## Main-Agent Batch Setup Order
 
-Use this order before assigning lane work:
+Use this order for a rolling six-lane queue with a five-hard-failure stop rule:
 
 1. Create `logs\<batch-id>\current_debug.md`.
-2. Pick the five Workday-compatible jobs and assign ports.
-3. Run `scripts\setup_c3_parallel_lanes.ps1` for the selected ports.
-4. Confirm `logs\<batch-id>\lane_setup_summary.json` exists and every lane
+2. For a large batch, create the full assignment table. Mark all jobs queued and
+   mark up to six jobs active.
+3. Pick up to six active Workday-compatible jobs and assign unused ports.
+4. Do not set up Chrome profiles, windows, tabs, or subagents for queued jobs.
+5. Run `scripts\setup_c3_parallel_lanes.ps1` for the selected active ports.
+6. Confirm `logs\<batch-id>\lane_setup_summary.json` exists and every lane
    passed preflight.
-5. Spawn one subagent per lane with `docs/C3_LANE_AGENT.md`,
+7. Spawn one subagent per active lane with `docs/C3_LANE_AGENT.md`,
    `docs/C3_ERROR_TAXONOMY.md`, lane port, job URL, and batch id.
+8. When any lane reports, close that subagent thread and update the batch
+   counters. Review lanes should close their p Chrome. Hard pre-Review failures
+   and non-C3/site/posting stops should preserve their p Chrome for user
+   inspection. If fewer than five lanes have hard-failed before Review, promote
+   the next queued job to active on a different unused port, set up one fresh
+   p Chrome lane, and spawn one new subagent. If five hard failures have
+   accumulated, stop promoting queued jobs and let already-active lanes finish.
 
 Do not open visible helper terminals. Use the existing Codex shell or hidden
 background processes with redirected logs.
+
+For larger requests, do not launch every row at once. Keep a rolling queue with
+at most six active p Chrome lanes/subagents. Queued future rows exist only in
+the debug assignment table until promoted into a free active slot. A hard
+failure is only a pre-Review failure: reaching Review with bad fills still
+counts as Review reached, not as a hard failure.
+Site/posting stops such as Workday maintenance, dead/closed postings,
+non-application pages, CAPTCHA/MFA, external assessment, or tenant outage do
+not count as hard C3 failures.
+
+Before picking ports, inspect active p Chrome lane owners and avoid any ports
+already used by another batch:
+
+```powershell
+Get-CimInstance Win32_Process |
+  Where-Object {
+    $_.Name -eq "chrome.exe" -and
+    $_.CommandLine -match "ChromeC3PlaywrightParallel|--remote-debugging-port=9\d\d\d"
+  } |
+  Select-Object ProcessId, CommandLine
+```
 
 ## Lane-Agent First-Pass Order
 
@@ -50,18 +89,25 @@ Subagents should use this order for their assigned lane:
 
 ## Set Up Parallel Lanes
 
-Use this for normal five-lane batch setup:
+Use this for normal six-lane batch setup:
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File scripts\setup_c3_parallel_lanes.ps1 -BatchId "<batch-id>" -Ports "9401,9402,9403,9404,9405"
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\setup_c3_parallel_lanes.ps1 -BatchId "<batch-id>" -Ports "9401,9402,9403,9404,9405,9406" -MaxActiveLanes 6
 ```
 
 The setup script:
 
+- refuses to set up more than the configured active-lane limit unless
+  `-AllowLargeBatch` is supplied for intentional launcher debugging
+- refuses to reuse a port owned by another active Chrome lane/process
 - closes stale p Chrome lanes on the selected ports
 - uses fresh batch-specific profiles
 - resets those profiles by default
-- launches Playwright Chromium off the main monitor
+- launches Playwright Chromium minimized during setup and leaves it in the
+  background by default
+- restores/cascades windows only when `-RestoreWindows` is explicitly supplied
+  for manual inspection
+- clamps windows inside the visible secondary-monitor working area
 - closes blocked extension-root tabs
 - seeds the Workday test profile
 - verifies extension target, profile counts, `browserContext: p_chrome`,
@@ -72,7 +118,55 @@ Fresh p Chrome launch already loads the current unpacked extension. Do not
 reload during normal setup. Use `-ReloadExtension` only for focused launcher
 debugging, because reload can invalidate an already-open Options tab.
 
-Do not spawn subagents until this setup command succeeds for every lane.
+Do not spawn subagents until this setup command succeeds for every selected
+active lane.
+
+If setup fails because another batch owns a port, choose unused ports. Do not
+kill or overwrite another active batch unless the user explicitly asks for
+cleanup.
+
+## Move Existing P Chrome Windows Back On-Screen
+
+Use this when old p Chrome windows were launched off-screen or onto the wrong
+monitor. It restores and cascades matching p Chrome windows onto a secondary
+monitor without closing pages or changing tabs:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\move_c3_parallel_windows.ps1 -Monitor right
+```
+
+Optional filters:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\move_c3_parallel_windows.ps1 -BatchId "parallel_2026-05-22_last20_wd_rows22_41"
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\move_c3_parallel_windows.ps1 -Ports "9461,9462,9463,9464,9465"
+```
+
+## Close Completed Lane
+
+Use this after an individual Review lane has reported, proof artifacts are
+captured, and no preserved live UI is still needed. Do not close hard-failure or
+site/posting-stop lanes until the user or main agent explicitly allows cleanup.
+In rolling batches, lane agents close Review lanes only. The main agent can run
+the same command as a backstop before promoting the next queued job.
+
+Preview first:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\close_c3_parallel_lanes.ps1 -BatchId "<batch-id>" -DryRun
+```
+
+Then close only that lane or matching batch lanes:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\close_c3_parallel_lanes.ps1 -BatchId "<batch-id>"
+```
+
+Or close explicit ports:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\close_c3_parallel_lanes.ps1 -Ports "9401"
+```
 
 ## Launch One Isolated Lane Manually
 
@@ -104,22 +198,24 @@ For background helpers, use the existing Codex shell or `Start-Process
 -WindowStyle Hidden` with stdout/stderr redirected. Do not open visible helper
 terminals.
 
-## Clean Up Stale Parallel Lanes
+## Emergency Clean Up Stale Parallel Lanes
 
-Use this before rerunning the same job set or after abandoning old lanes. It
-targets only dedicated parallel p Chrome profiles, not normal Chrome:
+Prefer `scripts\close_c3_parallel_lanes.ps1` for normal lane cleanup. Use this
+manual process list only when abandoning old lanes that cannot be matched by
+batch id or active ports. It targets only dedicated parallel p Chrome
+profiles, not normal Chrome:
 
 ```powershell
 $stale = Get-CimInstance Win32_Process |
   Where-Object {
     $_.CommandLine -match 'ChromeC3PlaywrightParallel' -or
-    $_.CommandLine -match '--remote-debugging-port=94\d\d'
+    $_.CommandLine -match '--remote-debugging-port=9\d\d\d'
   }
 $stale | Select-Object ProcessId, CommandLine
 $stale | ForEach-Object { Stop-Process -Id $_.ProcessId -Force }
 ```
 
-Do not launch new p Chrome lanes for the same jobs until unused old lanes are
+Do not launch a new p Chrome lane for the same job until the old lane is
 closed. Fresh lanes must still use off-main-monitor window placement.
 
 ## Verify DevTools Target
@@ -204,13 +300,13 @@ flow.
 ## Capture Final UI
 
 ```powershell
-node scripts\c3_capture_final_ui.js --ports 9401,9402,9403,9404,9405 --out-dir "logs\<batch-id>\final_ui"
+node scripts\c3_capture_final_ui.js --ports 9401 --out-dir "logs\<batch-id>\final_ui"
 ```
 
 ## Collect Console Logs
 
 ```powershell
-node scripts\c3_collect_console_logs.js --ports 9401,9402,9403,9404,9405 --out-dir "logs\<batch-id>\console"
+node scripts\c3_collect_console_logs.js --ports 9401 --out-dir "logs\<batch-id>\console"
 ```
 
 ## Failed Lane Proof

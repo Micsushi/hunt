@@ -41,7 +41,9 @@ def clean_question_label(value: str) -> str:
     text = re.sub(r"\bworkexperience-\d+--[a-z0-9-]+\b", " ", text, flags=re.IGNORECASE)
     text = re.sub(r"\beducation-\d+--[a-z0-9-]+\b", " ", text, flags=re.IGNORECASE)
     text = re.sub(r"\b[a-z]+--[a-z0-9-]+\b", " ", text, flags=re.IGNORECASE)
-    text = re.sub(r"\b(textarea|textbox|button|combobox|checkbox|required)\b", " ", text, flags=re.IGNORECASE)
+    text = re.sub(
+        r"\b(textarea|textbox|button|combobox|checkbox|required)\b", " ", text, flags=re.IGNORECASE
+    )
     pieces = []
     seen = set()
     for piece in re.split(r"(?<=[.?])\s+|\s{2,}", text):
@@ -78,6 +80,31 @@ def compact_profile(profile: dict[str, Any]) -> dict[str, Any]:
         "availableInterviewWindow",
         "expectedGraduationYear",
         "previousEmployers",
+        "criminalConvictionUnpardoned",
+        "priorTempStaffingAgency",
+        "relatedExperienceYearsRange",
+        "cannabisLiquorSalesLicense",
+        "professionalLicenseDiscipline",
+        "commuteWillingness",
+        "workLocationWillingness",
+        "shiftAvailability",
+        "alternativePositionsInterest",
+        "aiRecruitingToolsConsent",
+        "talentCommunityOptIn",
+        "futureCommunicationsOptIn",
+        "preferredCommunicationChannel",
+        "preferredLanguage",
+        "activeClearance",
+        "usCitizen",
+        "usCitizenshipStatus",
+        "usCitizenshipStatusExplanation",
+        "currentUsFederalEmployeeOrMilitary",
+        "formerUsFederalEmployeeOrMilitary",
+        "militarySpouseOrPartner",
+        "nationalGuardOrReserves",
+        "governmentProcurementHistory",
+        "restrictiveAgreement",
+        "familyMemberAtCompany",
         "notes",
     ]
     compact = {key: profile.get(key) for key in allowed if profile.get(key) not in (None, "")}

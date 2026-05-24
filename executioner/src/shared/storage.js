@@ -256,6 +256,28 @@ export function sanitizeProfile(profile = {}) {
     interestedTemporaryShortContract: sanitizeText(
       profile.interestedTemporaryShortContract || "yes",
     ),
+    currentlyInJobArea: sanitizeBoolean(profile.currentlyInJobArea ?? true),
+    commuteWillingness: sanitizeBoolean(profile.commuteWillingness ?? true),
+    workLocationWillingness: sanitizeBoolean(
+      profile.workLocationWillingness ?? true,
+    ),
+    alternativePositionsInterest: sanitizeBoolean(
+      profile.alternativePositionsInterest ?? true,
+    ),
+    aiRecruitingToolsConsent: sanitizeBoolean(
+      profile.aiRecruitingToolsConsent ?? true,
+    ),
+    talentCommunityOptIn: sanitizeBoolean(profile.talentCommunityOptIn ?? true),
+    futureOpportunitiesOptIn: sanitizeBoolean(
+      profile.futureOpportunitiesOptIn ?? true,
+    ),
+    futureCommunicationsOptIn: sanitizeBoolean(
+      profile.futureCommunicationsOptIn ?? true,
+    ),
+    preferredCommunicationChannel: sanitizeText(
+      profile.preferredCommunicationChannel || "Email",
+    ),
+    preferredLanguage: sanitizeText(profile.preferredLanguage || "English"),
     disclosureGender: sanitizeText(profile.disclosureGender),
     disclosureTransExperience: sanitizeText(profile.disclosureTransExperience),
     disclosureLgbqIdentity: sanitizeText(profile.disclosureLgbqIdentity),
@@ -289,10 +311,50 @@ export function sanitizeProfile(profile = {}) {
     governmentalLicensingInquiry: sanitizeBoolean(
       profile.governmentalLicensingInquiry,
     ),
+    professionalLicenseDiscipline: sanitizeBoolean(
+      profile.professionalLicenseDiscipline,
+    ),
+    cannabisLiquorSalesLicense: sanitizeBoolean(
+      profile.cannabisLiquorSalesLicense ?? true,
+    ),
+    regulatedSalesLicense: sanitizeBoolean(
+      profile.regulatedSalesLicense ?? true,
+    ),
+    governmentProcurementHistory: sanitizeBoolean(
+      profile.governmentProcurementHistory,
+    ),
+    debarredOrSuspended: sanitizeBoolean(profile.debarredOrSuspended),
+    restrictiveAgreement: sanitizeBoolean(profile.restrictiveAgreement),
+    nonCompeteRestriction: sanitizeBoolean(profile.nonCompeteRestriction),
     familyMemberAtCompany: sanitizeText(profile.familyMemberAtCompany),
     reliabilityStatusClearance: sanitizeText(
       profile.reliabilityStatusClearance,
     ),
+    activeClearance: sanitizeBoolean(profile.activeClearance ?? true),
+    activeSecurityClearance: sanitizeBoolean(
+      profile.activeSecurityClearance ?? true,
+    ),
+    usCitizen: sanitizeBoolean(profile.usCitizen),
+    usPersonForExportControl: sanitizeBoolean(
+      profile.usPersonForExportControl ?? true,
+    ),
+    currentUsFederalEmployeeOrMilitary: sanitizeBoolean(
+      profile.currentUsFederalEmployeeOrMilitary,
+    ),
+    formerUsFederalEmployeeOrMilitary: sanitizeBoolean(
+      profile.formerUsFederalEmployeeOrMilitary,
+    ),
+    usCitizenshipStatus: sanitizeText(profile.usCitizenshipStatus || "Other"),
+    usCitizenshipStatusExplanation: sanitizeText(
+      profile.usCitizenshipStatusExplanation || "Canadian citizen",
+    ),
+    militarySpouseOrPartner: sanitizeBoolean(profile.militarySpouseOrPartner),
+    nationalGuardOrReserves: sanitizeBoolean(profile.nationalGuardOrReserves),
+    priorTempStaffingAgency: sanitizeBoolean(profile.priorTempStaffingAgency),
+    relatedExperienceYearsRange: sanitizeText(
+      profile.relatedExperienceYearsRange || "3",
+    ),
+    publicSectorRestriction: sanitizeBoolean(profile.publicSectorRestriction),
     previousDeloitteErnstYoung: sanitizeText(
       profile.previousDeloitteErnstYoung,
     ),

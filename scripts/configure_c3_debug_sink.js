@@ -292,6 +292,28 @@ async function closeTarget(port, target) {
   }
 }
 
+async function createBackgroundTarget(port, url) {
+  const version = await httpJson(port, "/json/version");
+  if (!version?.webSocketDebuggerUrl) {
+    throw new Error("Could not find browser DevTools websocket.");
+  }
+  const browserClient = await new CdpClient(
+    version.webSocketDebuggerUrl,
+  ).connect();
+  try {
+    return await browserClient.send(
+      "Target.createTarget",
+      {
+        url,
+        background: true,
+      },
+      10000,
+    );
+  } finally {
+    browserClient.close();
+  }
+}
+
 function findExtensionId(targets, fallbackExtensionId) {
   const huntWorker = targets.find((target) =>
     String(target.url || "").includes("/src/background/index.js"),
@@ -335,7 +357,7 @@ async function ensureExtensionPage(port, targets, fallbackExtensionId) {
     targets = await httpJson(port, "/json/list");
   }
   const url = `chrome-extension://${extensionId}/src/options/options.html`;
-  await httpText(port, `/json/new?${encodeURIComponent(url)}`, "PUT");
+  await createBackgroundTarget(port, url);
   let opened = null;
   for (let attempt = 0; attempt < 20; attempt += 1) {
     const refreshed = await httpJson(port, "/json/list");
@@ -566,39 +588,48 @@ async function main() {
             writes.profile = true;
           }
           profileCounts = profileCountsFor(mergedProfile);
-          if (writes.profile) {
-            setTimeout(() => window.location.reload(), 100);
-          }
         } else {
           profileCounts = profileCountsFor(existingLocal[${js(PROFILE_KEY)}] || {});
         }
         let testResult = { skipped: true };
         if (${js(args.test)}) {
-          const response = await fetch(backendUrl.replace(/\\/+$/, "") + "/api/c3/debug-log", {
-            method: "POST",
-            headers: {
-              "Accept": "application/json",
-              "Content-Type": "application/json",
-              ...(serviceToken ? { "Authorization": "Bearer " + serviceToken } : {})
-            },
-            body: JSON.stringify({
-              eventType: "p_chrome.debug_sink_configured",
-              extensionTime: new Date().toISOString(),
-              browserContext: nextBrowserContext.name,
-              browserContextConfiguredBy: nextBrowserContext.configuredBy,
-              browserContextConfiguredAt: nextBrowserContext.configuredAt,
-              browserContextDevtoolsPort: nextBrowserContext.devtoolsPort,
-              pipelineVersion: "v2",
-              useFieldPipelineV2: true,
-              settingsVersion: current.settingsVersion || 6,
-              payload: { source: "scripts/configure_c3_debug_sink.js" }
-            })
-          });
-          testResult = {
-            ok: response.ok,
-            status: response.status,
-            body: await response.text()
-          };
+          try {
+            const response = await fetch(backendUrl.replace(/\\/+$/, "") + "/api/c3/debug-log", {
+              method: "POST",
+              headers: {
+                "Accept": "application/json",
+                "Content-Type": "application/json",
+                ...(serviceToken ? { "Authorization": "Bearer " + serviceToken } : {})
+              },
+              body: JSON.stringify({
+                eventType: "p_chrome.debug_sink_configured",
+                extensionTime: new Date().toISOString(),
+                browserContext: nextBrowserContext.name,
+                browserContextConfiguredBy: nextBrowserContext.configuredBy,
+                browserContextConfiguredAt: nextBrowserContext.configuredAt,
+                browserContextDevtoolsPort: nextBrowserContext.devtoolsPort,
+                pipelineVersion: "v2",
+                useFieldPipelineV2: true,
+                settingsVersion: current.settingsVersion || 6,
+                payload: { source: "scripts/configure_c3_debug_sink.js" }
+              })
+            });
+            testResult = {
+              ok: response.ok,
+              status: response.status,
+              body: await response.text()
+            };
+          } catch (error) {
+            testResult = {
+              ok: false,
+              status: null,
+              body: "",
+              error: error?.message || String(error)
+            };
+          }
+        }
+        if (writes.profile) {
+          setTimeout(() => window.location.reload(), 100);
         }
         return {
           backendUrl: effective.backendUrl,
@@ -629,6 +660,7 @@ async function main() {
           tokenSource: source ? "found" : "missing",
           testOk: result.testResult?.ok === true,
           testStatus: result.testResult?.status || null,
+          testError: result.testResult?.error || null,
           writes: result.writes || null,
           inspectOnly: Boolean(result.inspectOnly),
         },

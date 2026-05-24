@@ -51,6 +51,9 @@ function classifyPermanentIssue(issue = {}) {
   const kind = clean(issue.kind);
   const reason = clean(issue.reason);
   const questionType = clean(issue.questionType);
+  // Unknown defaulted means a documented safe default was selected. Unknown
+  // unresolved is expected for required questions when C3 lacks a safe mapping,
+  // answer policy, or profile field and should not guess.
   if (
     questionType === "unknown" ||
     /unknown_question|question_unresolved|unknown_no_safe|unknown_yes_fallback/i.test(
@@ -96,6 +99,8 @@ function classifyStopReason(reason = "") {
   }
   if (/visible_validation_errors/i.test(value))
     return "visible_validation_errors";
+  if (/workday_source_query_state/i.test(value))
+    return "workday_source_query_state";
   if (/workday_runtime_error|runtime/i.test(value))
     return "workday_runtime_error";
   if (/site_or_posting_state|maintenance|service interruption/i.test(value))
@@ -252,18 +257,31 @@ function auditReachedReview(audit = {}) {
 }
 
 function staleTimeoutReason(reason = "") {
-  return /page_fill_and_next_timeout|fill_timeout|fill_retry_timeout/i.test(
+  return /page_fill_and_next_timeout|fill_timeout|fill_retry_timeout|recovered_after_timeout|timeout_reconciled_to_later_step|timeout_reconciled_to_review/i.test(
+    clean(reason),
+  );
+}
+
+function staleRecoveredStopReason(reason = "") {
+  return /page_walk_stopped|fill_failed|visible_validation_errors/i.test(
     clean(reason),
   );
 }
 
 function reviewCoverageIssueLabels(audit = {}) {
   const labels = list(audit.final?.reviewCoverage?.noResponseLabels || [], 120);
-  return labels.filter((label) =>
-    /resume|cv|curriculum vitae|website|social network|linkedin|github|profile url|skills/i.test(
+  return labels.filter((label) => {
+    if (
+      /gender|race|ethnic|veteran|military|aboriginal|indigenous|disabilit|birth sex|marital|citizenship status/i.test(
+        label,
+      )
+    ) {
+      return false;
+    }
+    return /resume|cv|curriculum vitae|website|social network|linkedin|github|profile url|skills|salary|compensation|work authorization|authorized|eligible to work|sponsor|sponsorship|relocat|preferred geographic|location|name|date|please check one|checkbox|contract roles/i.test(
       label,
-    ),
-  );
+    );
+  });
 }
 
 function extractIssuesFromAudit(audit, auditPath = "") {
@@ -313,7 +331,10 @@ function extractIssuesFromAudit(audit, auditPath = "") {
       if (record) records.push(record);
     }
     const stopReason = page.nextAction?.reason || page.next?.reason || "";
-    if (reachedReview && staleTimeoutReason(stopReason)) {
+    if (
+      reachedReview &&
+      (staleTimeoutReason(stopReason) || staleRecoveredStopReason(stopReason))
+    ) {
       continue;
     }
     const stopRecord = issueFromStopReason({
@@ -325,16 +346,31 @@ function extractIssuesFromAudit(audit, auditPath = "") {
     });
     if (stopRecord) records.push(stopRecord);
   }
-  if (audit.final?.errors?.length) {
+  const finalErrors = list(audit.final?.errors || [], 1200).filter(
+    (error) => !/successfully uploaded|\.pdf successfully uploaded/i.test(error),
+  );
+  if (finalErrors.length) {
     const page = pages[pages.length - 1] || {};
     const record = {
       ...issueBase({ audit, auditPath, page, now }),
       severity: "warn",
-      errorType: "final_visible_errors",
-      kind: "final_visible_errors",
+      errorType: finalErrors.some((error) =>
+        /source can be either|source.*referral|source.*social|source.*share|how did you hear|referrer/i.test(
+          error,
+        ),
+      )
+        ? "workday_source_query_state"
+        : "final_visible_errors",
+      kind: finalErrors.some((error) =>
+        /source can be either|source.*referral|source.*social|source.*share|how did you hear|referrer/i.test(
+          error,
+        ),
+      )
+        ? "workday_source_query_state"
+        : "final_visible_errors",
       reason: "final_page_reported_visible_errors",
-      questionText: short(audit.final.errors.join(" | "), 1200),
-      evidence: { finalErrors: audit.final.errors },
+      questionText: short(finalErrors.join(" | "), 1200),
+      evidence: { finalErrors },
     };
     record.fingerprint = fingerprintFor(record);
     records.push(record);
@@ -410,8 +446,8 @@ function renderSummary(records) {
     "Durable issue ledger generated from C3 live-smoke audits. Use this to promote unknown questions into the catalog, identify common UI gaps, and keep page-walk failures out of chat-only memory.",
     "",
     "## Known Error Types",
-    "- `unknown_question_defaulted`: C3 selected a fallback for an unmapped question. Review selected option and add a catalog mapping when reusable.",
-    "- `unknown_question_unresolved`: C3 could not safely resolve an unmapped question.",
+    "- `unknown_question_defaulted`: C3 selected a progress-first fallback. Review selected option and add or tighten a catalog mapping when reusable.",
+    "- `unknown_question_unresolved`: C3 could not complete the required unknown prompt, usually because the UI/options were not usable or no selectable option existed.",
     "- `unsupported_or_empty_option_set`: C3 saw an option control but no usable options or an already-committed value without options.",
     "- `required_field_unfilled`: A required field remained empty after fill.",
     "- `no_safe_next_button`: Page-walk could not find a safe Next/Continue action.",

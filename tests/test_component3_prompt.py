@@ -1,5 +1,5 @@
-from pathlib import Path
 import subprocess
+from pathlib import Path
 
 import pytest
 
@@ -61,7 +61,7 @@ def _new_prompt_page(playwright, body_html: str):
 def test_detected_page_prompt_gate_requires_visible_controls():
     content = _load_script(REPO_ROOT / "executioner/src/content/bootstrap.js")
 
-    assert 'detection.inputCount > 0 ||' in content
+    assert "detection.inputCount > 0 ||" in content
     assert 'detection.kind === "apply_entry"' in content
     assert 'detection.kind === "signin"' in content
     assert 'detection.kind === "signup"' in content
@@ -114,31 +114,29 @@ def test_page_ui_actions_are_logged():
 def test_toast_stack_sits_below_fill_progress_and_moves_up_after_fill():
     content = _load_script(REPO_ROOT / "executioner/src/content/bootstrap.js")
     stack_fn = content[
-        content.index("function updateToastStackPosition")
-        : content.index("function removeLlmPrompt")
+        content.index("function updateToastStackPosition") : content.index(
+            "function removeLlmPrompt"
+        )
     ]
     hide_fill = content[
-        content.index("function hideFillProgress")
-        : content.index("function logPageUiEvent")
+        content.index("function hideFillProgress") : content.index("function logPageUiEvent")
     ]
     show_fill = content[
-        content.index("function showFillProgress")
-        : content.index("function showExtensionToast")
+        content.index("function showFillProgress") : content.index("function showExtensionToast")
     ]
     show_toast = content[
-        content.index("function showExtensionToast")
-        : content.index("function showPrompt")
+        content.index("function showExtensionToast") : content.index("function showPrompt")
     ]
 
     assert "FILL_PROGRESS_ID" in stack_fn
     assert 'shadowRoot?.querySelector(".panel")' in stack_fn
     assert "fillRect.bottom + 8" in stack_fn
-    assert 'container.style.top = hasVisibleFillProgress' in stack_fn
+    assert "container.style.top = hasVisibleFillProgress" in stack_fn
     assert '"18px"' in stack_fn
     assert "updateToastStackPosition();" in hide_fill
     assert "updateToastStackPosition();" in show_fill
     assert "updateToastStackPosition();" in show_toast
-    assert "container.style.transition = \"top 160ms ease\"" in show_toast
+    assert 'container.style.transition = "top 160ms ease"' in show_toast
 
 
 def test_background_ui_messages_use_central_logged_sender():
@@ -172,16 +170,26 @@ def test_workday_runtime_error_recovery_stops_before_safe_next_click():
 
     assert "Something went wrong" in runtime or "something went wrong" in runtime
     assert "please refresh the page and then try again" in runtime
+    assert "error-page error" in runtime
+    assert "error code:" in runtime
+    assert "vps\\|" in runtime.lower()
     assert "chrome.tabs.reload(tabId)" in runtime
     assert "allFrames: true" in runtime
     assert "workday_runtime_error" in runtime
     assert "workday_application_shell_empty" in runtime
     assert "signedInShell" in runtime
+    assert "maxRuntimeRefreshRetries: 1" in runtime
     assert "RecoverWorkdayRuntimeErrorStep" in runner
     assert "workdayRuntimeRecovery" in runner
     assert "recoverWorkdayRuntimeErrorForTab" in background
     assert "safe_next_probe_workday_runtime_error" in background
     assert "next.workday_runtime_recovered_before_probe" in background
+    assert "waitForApplicationPageReadyAfterNext" in background
+    assert "post_next_workday_runtime_error" in background
+    assert "post_next_application_page_ready" in background
+    assert "workday_runtime_refresh_retry" in background
+    assert "workday_runtime_error_after_fill_unrecovered" in background
+    assert "workday_runtime_error_after_fill_retry" in background
     assert "detectWorkdayRuntimeErrorForTab" in background
     assert "safe_next_workday_runtime_error" in background
     assert "next.workday_runtime_blocked" in background
@@ -191,13 +199,20 @@ def test_workday_runtime_error_recovery_stops_before_safe_next_click():
     assert "clicked_safe_next_recovered_workday_runtime_error" in background
     assert "clicked_safe_next_recovered_workday_runtime_error" in safe_next
     assert "workdayRuntimeError" in live_smoke
+    assert "error-page error" in live_smoke
+    assert "vps" in live_smoke.lower()
     assert "recoverWorkdayRuntimeError" in live_smoke
+    assert "waitForPostNextWorkdaySettle" in live_smoke
+    assert "workday_runtime_error_after_next" in live_smoke
+    assert "workday_runtime_error_after_next_retry" in live_smoke
+    assert "runtimeRefreshAttempted" in live_smoke
     assert "start_step_workday_runtime_error" in live_smoke
     assert "prefill_workday_runtime_error" in live_smoke
 
 
 def test_live_smoke_routes_pages_through_identifier_before_action():
     live_smoke = _load_script(REPO_ROOT / "scripts/c3_workday_live_smoke.js")
+    background = _load_script(REPO_ROOT / "executioner/src/background/index.js")
     identifier = _load_script(REPO_ROOT / "scripts/lib/c3_workday_identifier.js")
     auth = _load_script(REPO_ROOT / "scripts/lib/c3_workday_auth_workflow.js")
     apply_entry = _load_script(REPO_ROOT / "scripts/lib/c3_workday_apply_entry.js")
@@ -205,11 +220,12 @@ def test_live_smoke_routes_pages_through_identifier_before_action():
     assert "WorkdayWorkflowIdentifier" in live_smoke
     assert "WorkdayAuthWorkflow" in live_smoke
     assert "WorkdayApplyEntryWorkflow" in live_smoke
-    assert "IDENTIFIER_TIMEOUT_MS = 60_000" in live_smoke
+    assert "IDENTIFIER_TIMEOUT_MS = 5_000" in live_smoke
     assert "AUTH_WORKFLOW_TIMEOUT_MS = 120_000" in live_smoke
     assert "APPLY_ENTRY_TIMEOUT_MS = 60_000" in live_smoke
-    assert "PAGE_FILL_AND_NEXT_TIMEOUT_MS = 60_000" in live_smoke
-    assert "FULL_APPLICATION_TIMEOUT_MS = 300_000" in live_smoke
+    assert "C3_EXTENSION_FILL_TIMEOUT_MS = 120_000" in live_smoke
+    assert "PAGE_FILL_AND_NEXT_TIMEOUT_MS = C3_EXTENSION_FILL_TIMEOUT_MS + 10_000" in live_smoke
+    assert "FULL_APPLICATION_TIMEOUT_MS = 600_000" in live_smoke
     assert "withPhaseTimeout" in live_smoke
     assert "page_fill_and_next_timeout" in live_smoke
     assert "reconcilePageFillTimeoutToReview" in live_smoke
@@ -217,6 +233,15 @@ def test_live_smoke_routes_pages_through_identifier_before_action():
     assert "waitForPostFillSettle" in live_smoke
     assert "initialSettleMs = 1000" in live_smoke
     assert "maxSettleMs = 3000" in live_smoke
+    assert "minWaitMs = 1000" in identifier
+    assert "maxWaitMs = Math.min(Math.max(Number(timeoutMs || 0), minWaitMs), 5000)" in identifier
+    assert "bestEffortState" in identifier
+    assert "workflow_detection_settle_timeout_best_effort" in background
+    assert "WORKFLOW_DETECTION_MIN_MS = 1000" in background
+    assert "WORKFLOW_DETECTION_MAX_MS = 5000" in background
+    assert "bestEffortWorkflowDetection" in background
+    assert "await this.sleep(5500)" not in auth
+    assert "Date.now() - startedAt < 5000" in auth
     assert "loadingNodeCount" in live_smoke
     assert "setRunnerFillProgress" in live_smoke
     assert "hideRunnerFillProgress" in live_smoke
@@ -225,6 +250,8 @@ def test_live_smoke_routes_pages_through_identifier_before_action():
     assert "fillDidUsefulWork" in live_smoke
     assert "fill_not_ready_for_next_no_progress" in live_smoke
     assert "forced_next_after_no_visible_errors" in live_smoke
+    assert "if (!fillNeedsReview || afterFill.errors?.length)" not in live_smoke
+    assert "hasOpenRequiredOrLlmWork &&\n            fillNeedsReview" in live_smoke
     assert "args.extensionAutoNext ? 7500" not in live_smoke
     assert 'pageKind = "review"' in identifier
     assert "finalSubmitVisible" in identifier
@@ -233,10 +260,10 @@ def test_live_smoke_routes_pages_through_identifier_before_action():
 
     assert 'this.pageClient.send("Page.reload"' in identifier
     assert "authPageVisible" in identifier
-    assert 'else if (authPageVisible && hasEmailField && passwordCount > 1)' in identifier
-    assert 'else if (authPageVisible && hasEmailField && passwordCount === 1)' in identifier
+    assert "else if (authPageVisible && hasEmailField && passwordCount > 1)" in identifier
+    assert "else if (authPageVisible && hasEmailField && passwordCount === 1)" in identifier
     assert identifier.index("authPageVisible") < identifier.index(
-        'else if (/review/i.test(currentStepText) || finalSubmitVisible)'
+        "else if (/review/i.test(currentStepText) || finalSubmitVisible)"
     )
     assert "full_application_timeout" in live_smoke
     assert "async function clickAuthPrimary(" not in live_smoke
@@ -248,14 +275,10 @@ def test_live_smoke_routes_pages_through_identifier_before_action():
     assert 'pageKind === "signup_form"' in identifier
     assert 'pageKind === "signup_form" || hasCreateAccount' not in identifier
     assert 'document.readyState !== "complete" && !hasClassificationSignal' in identifier
-    assert (
-        'else if (/create account|sign in|log in|login|register|sign up/i.test(currentStepText))'
-        in identifier
-    )
-    assert identifier.index(
-        'else if (/create account|sign in|log in|login|register|sign up/i.test(currentStepText))'
-    ) < identifier.index(
-        'else if (/resume\\\\/cv|my information|my experience|application questions|voluntary disclosures|self identify|review/i.test(normalizedText))'
+    assert "const authStepSignal =" in identifier
+    assert "authStepSignal && authFieldsReady" in identifier
+    assert identifier.index("authStepSignal && authFieldsReady") < identifier.index(
+        "else if (/resume\\\\/cv|my information|my experience|application questions|voluntary disclosures|self identify|review/i.test(normalizedText))"
     )
     assert 'phase: "identifier"' in live_smoke
     assert 'initialRoute.phase === "apply_entry"' in live_smoke
@@ -345,6 +368,33 @@ if (issues.some((issue) => issue.errorType !== "review_profile_section_no_respon
     )
 
 
+def test_issue_registry_classifies_workday_source_query_state_errors():
+    script = r"""
+const { extractIssuesFromAudit } = require("./scripts/lib/c3_issue_registry");
+const audit = {
+  ok: false,
+  final: {
+    pageKind: "application",
+    hasSubmit: false,
+    currentStep: { title: "Application Questions" },
+    errors: ["A source can be either a referral or social share, not both."],
+  },
+  pages: [],
+};
+const issues = extractIssuesFromAudit(audit, "wolters.audit.json");
+if (issues.length !== 1 || issues[0].errorType !== "workday_source_query_state") {
+  throw new Error(JSON.stringify(issues));
+}
+"""
+    subprocess.run(
+        ["node", "-e", script],
+        cwd=REPO_ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+
 def test_fill_progress_can_request_cancel():
     content = _load_script(REPO_ROOT / "executioner/src/content/bootstrap.js")
     background = _load_script(REPO_ROOT / "executioner/src/background/index.js")
@@ -359,7 +409,7 @@ def test_fill_progress_can_request_cancel():
     assert 'type: "hunt.apply.cancel_fill"' in content
     cancel_handler = content[
         content.index('"hunt-apply-fill-progress-cancel"') : content.index(
-            "logPageUiEvent(\"ui.fill_progress.show\""
+            'logPageUiEvent("ui.fill_progress.show"'
         )
     ]
     assert "hideFillProgress();" in cancel_handler
@@ -405,11 +455,14 @@ def test_fill_progress_restores_across_apply_navigation():
     assert "activeFillProgressByTab.delete(tabId)" in background
     assert 'case "hunt.apply.get_active_fill_progress"' in background
     assert "ACTIVE_FILL_PREPARING_MESSAGE" in background
-    assert "activeFillRunByTab.get(tabId)" in background[
-        background.index('case "hunt.apply.get_active_fill_progress"') : background.index(
-            'case "hunt.apply.cancel_fill"'
-        )
-    ]
+    assert (
+        "activeFillRunByTab.get(tabId)"
+        in background[
+            background.index('case "hunt.apply.get_active_fill_progress"') : background.index(
+                'case "hunt.apply.cancel_fill"'
+            )
+        ]
+    )
     assert 'type: "hunt.apply.get_active_fill_progress"' in content
     assert "async function restoreActiveFillProgress" in content
     assert "ui.fill_progress.restore" in content
@@ -455,31 +508,82 @@ def test_apply_entry_prompt_click_suppresses_transition_reprompts():
     assert '"ui.detect_prompt.suppress_active_fill"' in content
     assert '"apply_entry_transition"' in content
     assert 'kind === "apply_entry"' in content
-    assert "removePrompt();" in content[
-        content.index('getElementById("fill")') : content.index(
-            'const response = await runtimeMessageWithTimeout'
-        )
-    ]
+    assert (
+        "removePrompt();"
+        in content[
+            content.index('getElementById("fill")') : content.index(
+                "const response = await runtimeMessageWithTimeout"
+            )
+        ]
+    )
     assert "Date.now() < detectedPromptSuppressedUntil" in content
     assert "!transitionCooldownActive" in content
+
+
+def test_active_workflow_owns_tab_and_suppresses_midrun_prompts():
+    content = _load_script(REPO_ROOT / "executioner/src/content/bootstrap.js")
+    background = _load_script(REPO_ROOT / "executioner/src/background/index.js")
+
+    assert "workflowOwned: true" in background
+    assert "suppressDetectedPrompt: true" in background
+    assert "workflow run owns this tab" in content
+    assert "Boolean(activeFill.workflowOwned)" in content
+    assert "Boolean(activeFill.suppressDetectedPrompt)" in content
+    assert (
+        "activeFillRunByTab.get(tabId)"
+        in background[
+            background.index('case "hunt.apply.get_active_fill_progress"') : background.index(
+                'case "hunt.apply.cancel_fill"'
+            )
+        ]
+    )
+
+
+def test_fill_progress_includes_phase_substep_and_elapsed_timing():
+    content = _load_script(REPO_ROOT / "executioner/src/content/bootstrap.js")
+    background = _load_script(REPO_ROOT / "executioner/src/background/index.js")
+
+    assert "function fillProgressDetailMeta" in content
+    assert "stepElapsedMs" in content
+    assert "totalElapsedMs" in content
+    assert "lastProgressSummary" in content
+    assert "phase: message.phase" in content
+    assert "substep: message.substep" in content
+    assert "async function recordWorkflowTiming" in background
+    assert "async function updateWorkflowProgress" in background
+    assert '"workflow_timing"' in background
+    assert "workflowTimings" in background
+
+
+def test_live_smoke_records_named_phase_timings_and_timeout_phase():
+    live_smoke = _load_script(REPO_ROOT / "scripts/c3_workday_live_smoke.js")
+
+    assert "function createWorkflowTimingRecorder" in live_smoke
+    assert "timingRecorder.run" in live_smoke
+    assert "audit.timings" in live_smoke
+    assert "audit.timingSummary" in live_smoke
+    assert "timeoutPhase" in live_smoke
+    assert "job_fill.wait_post_next" in live_smoke
+    assert "job_fill.fill_current_page" in live_smoke
+    assert "remainingFullApplicationMs" in live_smoke
 
 
 def test_apply_entry_uses_condition_waits_instead_of_mandatory_sleep():
     background = _load_script(REPO_ROOT / "executioner/src/background/index.js")
     apply_entry = background[
-        background.index("function createClickWorkdayApplyManuallyFunction")
-        : background.index("class C3WorkflowSection")
+        background.index("function createClickWorkdayApplyManuallyFunction") : background.index(
+            "class C3WorkflowSection"
+        )
     ]
     workflow = background[
-        background.index("class C3ApplyEntryWorkflow")
-        : background.index("class C3JobFillWorkflow")
+        background.index("class C3ApplyEntryWorkflow") : background.index("class C3JobFillWorkflow")
     ]
 
     assert "waitForApplyEntryState" in apply_entry
     assert "waitForApplyEntryTransitionForTab" in workflow
     assert "waitForApplicationFieldsReadyAfterAuth" in workflow
     assert "readiness = await waitForApplicationFieldsReadyAfterAuth" in workflow
-    assert "return { ...result, readiness, phase: \"apply_entry\", detection }" in workflow
+    assert 'return { ...result, readiness, phase: "apply_entry", detection }' in workflow
     assert 'pageLabel: "application page"' in workflow
     assert "setTimeout(resolve, 900)" not in apply_entry
     assert "setTimeout(resolve, 3600)" not in apply_entry
@@ -489,12 +593,14 @@ def test_apply_entry_uses_condition_waits_instead_of_mandatory_sleep():
 def test_apply_entry_navigation_is_an_expected_reload():
     background = _load_script(REPO_ROOT / "executioner/src/background/index.js")
     workflow = background[
-        background.index("class C3ApplyEntryWorkflow")
-        : background.index("async function waitForApplyEntryTransitionForTab")
+        background.index("class C3ApplyEntryWorkflow") : background.index(
+            "async function waitForApplyEntryTransitionForTab"
+        )
     ]
     fill_handler = background[
-        background.index('case "hunt.apply.fill_current_page"')
-        : background.index('case "hunt.apply.fill_remaining_with_llm"')
+        background.index('case "hunt.apply.fill_current_page"') : background.index(
+            'case "hunt.apply.fill_remaining_with_llm"'
+        )
     ]
 
     assert "function clearFillRunExpectedReloads" in background
@@ -513,12 +619,14 @@ def test_apply_entry_navigation_is_an_expected_reload():
 def test_application_readiness_requires_application_fields_not_generic_controls():
     background = _load_script(REPO_ROOT / "executioner/src/background/index.js")
     readiness = background[
-        background.index("async function inspectApplicationFieldReadiness")
-        : background.index("async function waitForApplicationFieldsReadyAfterAuth")
+        background.index("async function inspectApplicationFieldReadiness") : background.index(
+            "async function waitForApplicationFieldsReadyAfterAuth"
+        )
     ]
     wait_ready = background[
-        background.index("async function waitForApplicationFieldsReadyAfterAuth")
-        : background.index("function compactStopDetails")
+        background.index(
+            "async function waitForApplicationFieldsReadyAfterAuth"
+        ) : background.index("function compactStopDetails")
     ]
 
     assert "applicationFieldCount" in readiness
@@ -537,15 +645,17 @@ def test_application_readiness_requires_application_fields_not_generic_controls(
 def test_fill_attempt_stops_when_no_visible_progress_within_five_seconds():
     background = _load_script(REPO_ROOT / "executioner/src/background/index.js")
     no_progress = background[
-        background.index("function fillNoProgressTimeoutResponse")
-        : background.index("async function handleMessage")
+        background.index("function fillNoProgressTimeoutResponse") : background.index(
+            "async function handleMessage"
+        )
     ]
     run_fill = background[
-        background.index("async function runFillWithOneRefreshRetry")
-        : background.index("async function handleMessage")
+        background.index("async function runFillWithOneRefreshRetry") : background.index(
+            "async function handleMessage"
+        )
     ]
 
-    assert "FILL_NO_PROGRESS_TIMEOUT_MS = 5000" in background
+    assert "FILL_NO_PROGRESS_TIMEOUT_MS = 60000" in background
     assert "FILL_UPLOAD_PROGRESS_TIMEOUT_MS = 30000" in background
     assert "async function inspectVisibleFillProgress" in no_progress
     assert "async function runFillForTabWithNoProgressWatchdog" in no_progress
@@ -557,6 +667,8 @@ def test_fill_attempt_stops_when_no_visible_progress_within_five_seconds():
     assert "hasUploadProgress" in no_progress
     assert "progressTimeoutMs" in no_progress
     assert "lastProgressAt" in no_progress
+    assert "stillLoading" in no_progress
+    assert "loadingNodeCount" in no_progress
     assert "nextSignature !== lastProgressSignature" in no_progress
     assert "Date.now() - lastProgressAt < progressTimeoutMs" in no_progress
     assert "markPageFillCancelled(tabId, fillRunId, true)" in no_progress
@@ -587,7 +699,7 @@ def test_detected_workday_overrides_stale_generic_context():
     assert "normalizeContextForCurrentPage" in runner
     assert "hostForUrl" in runner
     assert "contextHost !== pageHost" in runner
-    assert "contextAtsType === \"generic\"" in runner
+    assert 'contextAtsType === "generic"' in runner
     assert "detectedSpecificAts" in runner
     assert 'contextAtsType !== "generic"' in routes
     assert 'contextAtsType !== "unknown"' in routes
@@ -601,20 +713,19 @@ def test_validation_repair_scopes_to_visible_error_fields():
     assert "repairVisibleValidationErrors" in background
     assert "repairVisibleValidationErrors" in runner
     assert "function fieldMatchesRepairError" in pipeline
-    assert "step: \"field.repair_scope\"" in pipeline
+    assert 'step: "field.repair_scope"' in pipeline
     assert "not_in_visible_validation_errors" in pipeline
 
 
 def test_optional_checkbox_does_not_use_first_real_fallback():
     matcher = _load_script(REPO_ROOT / "executioner/src/shared/v2/option-matcher.js")
     resolver = _load_script(REPO_ROOT / "executioner/src/shared/v2/answer-resolver.js")
+    pipeline = _load_script(REPO_ROOT / "executioner/src/shared/v2/field-pipeline.js")
 
     assert 'field?.uiModel === "checkbox"' in matcher
     assert 'source: "checkbox_no_safe_match"' in matcher
     assert "first_real_option" in matcher
-    assert matcher.index('source: "checkbox_no_safe_match"') < matcher.index(
-        "max_progress_first_real_option"
-    )
+    assert "quietOptionalCheckboxNoOption" in pipeline
     assert 'path === "lastName"' in resolver
     assert "direct === names.fullName" in resolver
 
@@ -623,8 +734,9 @@ def test_page_ui_message_recovers_when_content_script_missing():
     background = _load_script(REPO_ROOT / "executioner/src/background/index.js")
     content = _load_script(REPO_ROOT / "executioner/src/content/bootstrap.js")
     ui_message = background[
-        background.index("async function sendPageUiMessage")
-        : background.index("function safeFilePart")
+        background.index("async function sendPageUiMessage") : background.index(
+            "function safeFilePart"
+        )
     ]
 
     assert "__huntApplyContentBootstrapLoaded" in content
@@ -636,12 +748,14 @@ def test_page_ui_message_recovers_when_content_script_missing():
 def test_page_walk_next_uses_condition_waits_instead_of_mandatory_sleep():
     background = _load_script(REPO_ROOT / "executioner/src/background/index.js")
     safe_next_click = background[
-        background.index("async function clickSafeNextForTab")
-        : background.index("async function maybeHandleSafeNextAfterFill")
+        background.index("async function clickSafeNextForTab") : background.index(
+            "async function maybeHandleSafeNextAfterFill"
+        )
     ]
     page_walk = background[
-        background.index("async function runV2PageWalkAfterFill")
-        : background.index("async function runFillWithOneRefreshRetry")
+        background.index("async function runV2PageWalkAfterFill") : background.index(
+            "async function runFillWithOneRefreshRetry"
+        )
     ]
 
     assert "waitForPostNextSignalForTab" in background
@@ -661,12 +775,14 @@ def test_page_walk_next_uses_condition_waits_instead_of_mandatory_sleep():
 def test_auth_flow_uses_condition_waits_instead_of_mandatory_sleep():
     background = _load_script(REPO_ROOT / "executioner/src/background/index.js")
     combined_workflow = background[
-        background.index("class C3CombinedFillWorkflow")
-        : background.index("async function logUiEvent")
+        background.index("class C3CombinedFillWorkflow") : background.index(
+            "async function logUiEvent"
+        )
     ]
     page_walk = background[
-        background.index("async function runV2PageWalkAfterFill")
-        : background.index("async function runFillWithOneRefreshRetry")
+        background.index("async function runV2PageWalkAfterFill") : background.index(
+            "async function runFillWithOneRefreshRetry"
+        )
     ]
 
     assert "waitForAuthActionTransitionForTab" in background
@@ -681,7 +797,8 @@ def test_workday_apply_detection_checks_all_visible_buttons_before_log_cap():
     content = _load_script(REPO_ROOT / "executioner/src/content/bootstrap.js")
     background = _load_script(REPO_ROOT / "executioner/src/background/index.js")
 
-    assert "var buttonLabels = Array.from" in background
+    assert "var buttonItems = Array.from" in background
+    assert "var buttonLabels = buttonItems.map" in background
     assert "var buttons = buttonLabels.slice(0, 80)" in background
     assert "buttonLabels.some(function (label)" in background
     assert "/^apply(?:\\s+apply)?$/i.test(label)" in content
@@ -700,10 +817,14 @@ def test_v2_page_walk_counts_successful_pages_and_shows_summary():
     assert "function uniqueReviewIssues" in background
     assert "pagesAdvancedThisRun" in background
     assert "terminalSummary" in background
-    assert "return null;" in background[
-        background.index("function buildFillSummaryPayload")
-        : background.index("async function showLlmPrompt")
-    ]
+    assert (
+        "return null;"
+        in background[
+            background.index("function buildFillSummaryPayload") : background.index(
+                "async function showLlmPrompt"
+            )
+        ]
+    )
     assert "terminal: true" in background
     assert "Math.max(lastPageNumber, successfulPageCount)" in background
     assert "async function getPageSnapshot" in background
@@ -711,6 +832,10 @@ def test_v2_page_walk_counts_successful_pages_and_shows_summary():
     assert "failedPageNumber" in background
     assert "visible_validation_errors_after_next" in background
     assert "page_did_not_advance_after_next" in background
+    assert "after_next_extra_fill" in background
+    assert "safe_next_after_extra_fill" in background
+    assert "page_advance_after_extra_fill" in background
+    assert "post_next_application_page_ready" in background
     assert "`Filling page ${pageIndex + 1}`" not in background
     assert "describePageWalkAttempt(" in background
     assert '"Filling"' in background
@@ -836,11 +961,14 @@ def test_workday_logs_field_and_dropdown_actions():
     assert 'input[data-automation-id="radioBtn"]' in workday_repeatables
     assert "data-uxi-widget-type" in workday_repeatables
     assert "data-uxi-multiselect-id" in workday_repeatables
-    assert "field.options || []" not in workday_v2_drivers[
-        workday_v2_drivers.index("async function fillWorkdayPopup") : workday_v2_drivers.index(
-            "async function fillPhoneCountryCode"
-        )
-    ]
+    assert (
+        "field.options || []"
+        not in workday_v2_drivers[
+            workday_v2_drivers.index("async function fillWorkdayPopup") : workday_v2_drivers.index(
+                "async function fillPhoneCountryCode"
+            )
+        ]
+    )
     assert "preferredSourceFallbackOption" in workday_v2_drivers
 
 
@@ -924,8 +1052,9 @@ def test_page_walk_transient_dismissal_can_preserve_fill_progress():
 def test_fill_startup_cleanup_preserves_prompt_progress():
     background = _load_script(REPO_ROOT / "executioner/src/background/index.js")
     fill_handler = background[
-        background.index('case "hunt.apply.fill_current_page"')
-        : background.index('case "hunt.apply.fill_remaining_with_llm"')
+        background.index('case "hunt.apply.fill_current_page"') : background.index(
+            'case "hunt.apply.fill_remaining_with_llm"'
+        )
     ]
 
     assert "dismissPageTransientUi(tabId, { preserveFillProgress: true })" in fill_handler
@@ -935,12 +1064,12 @@ def test_fill_startup_cleanup_preserves_prompt_progress():
 def test_apply_entry_startup_skips_non_entry_checks_before_click():
     background = _load_script(REPO_ROOT / "executioner/src/background/index.js")
     fill_handler = background[
-        background.index('case "hunt.apply.fill_current_page"')
-        : background.index('case "hunt.apply.fill_remaining_with_llm"')
+        background.index('case "hunt.apply.fill_current_page"') : background.index(
+            'case "hunt.apply.fill_remaining_with_llm"'
+        )
     ]
     apply_entry_run = background[
-        background.index("class C3ApplyEntryWorkflow")
-        : background.index("class C3JobFillWorkflow")
+        background.index("class C3ApplyEntryWorkflow") : background.index("class C3JobFillWorkflow")
     ]
 
     assert "const startupDetection = await detectWorkflowForTab(tabId);" in fill_handler
@@ -961,12 +1090,14 @@ def test_apply_entry_startup_skips_non_entry_checks_before_click():
 def test_apply_entry_redetects_auth_before_job_fill():
     background = _load_script(REPO_ROOT / "executioner/src/background/index.js")
     combined_workflow = background[
-        background.index("class C3CombinedFillWorkflow")
-        : background.index("async function logUiEvent")
+        background.index("class C3CombinedFillWorkflow") : background.index(
+            "async function logUiEvent"
+        )
     ]
     fill_handler = background[
-        background.index('case "hunt.apply.fill_current_page"')
-        : background.index('case "hunt.apply.fill_remaining_with_llm"')
+        background.index('case "hunt.apply.fill_current_page"') : background.index(
+            'case "hunt.apply.fill_remaining_with_llm"'
+        )
     ]
 
     assert "function workflowDetectionReadyForDecision" in background

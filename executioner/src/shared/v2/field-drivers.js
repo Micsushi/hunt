@@ -214,6 +214,9 @@
     if (!kind) {
       return false;
     }
+    if (dateSectionHasValidationError(field)) {
+      return false;
+    }
     var expectedText = String(expected || "").trim();
     var committedText = String(committed || "").trim();
     if (!expectedText || !committedText) {
@@ -226,6 +229,55 @@
       return expectedText === committedText;
     }
     return Number(expectedText) === Number(committedText);
+  }
+
+  function dateSectionHasValidationError(field) {
+    if (!dateSectionKind(field)) {
+      return false;
+    }
+    var el = field?.element;
+    if (el?.getAttribute?.("aria-invalid") === "true") {
+      return true;
+    }
+    var container = el?.closest?.(
+      '[data-automation-id^="formField"], [role="group"], fieldset',
+    );
+    return Boolean(
+      container?.querySelector?.(
+        '[aria-invalid="true"], [data-automation-id="inputAlert"]',
+      ),
+    );
+  }
+
+  async function commitDatePartWithKeyboard(field) {
+    var el = field?.element;
+    if (!el || !dateSectionKind(field)) {
+      return false;
+    }
+    try {
+      el.focus?.();
+      ["Enter", "Tab"].forEach(function (key) {
+        el.dispatchEvent(
+          new KeyboardEvent("keydown", {
+            bubbles: true,
+            cancelable: true,
+            key,
+          }),
+        );
+        el.dispatchEvent(
+          new KeyboardEvent("keyup", {
+            bubbles: true,
+            cancelable: true,
+            key,
+          }),
+        );
+      });
+      dispatchBlurEvents(el);
+      await sleep(180);
+      return true;
+    } catch (_error) {
+      return false;
+    }
   }
 
   async function fillText(field, value) {
@@ -241,6 +293,13 @@
       expected.replace(/\D+/g, "") &&
       expected.replace(/\D+/g, "") === committed.replace(/\D+/g, "");
     var datePartMatch = dateSectionCommitMatches(field, expected, committed);
+    var datePartKeyboardCommit = false;
+    if (ok && dateSectionKind(field) && !datePartMatch) {
+      datePartKeyboardCommit = await commitDatePartWithKeyboard(field);
+      state = root.fieldState.readFieldState(field);
+      committed = String(state.rawValue || state.text || "");
+      datePartMatch = dateSectionCommitMatches(field, expected, committed);
+    }
     return {
       ok:
         ok &&
@@ -249,7 +308,11 @@
           digitMatch ||
           datePartMatch),
       afterState: state,
-      reason: ok ? "" : "set_value_failed",
+      reason: !ok
+        ? "set_value_failed"
+        : datePartKeyboardCommit
+          ? "date_part_keyboard_commit"
+          : "",
     };
   }
 
@@ -659,6 +722,16 @@
     if (["text", "textarea"].includes(field.uiModel)) {
       if (answer.value !== "" && answer.value !== undefined) {
         return await fillText(field, String(answer.value));
+      }
+      if (field.required && answer.answerType === "unknown") {
+        root.audit?.pushIssue(audit, fieldAudit, {
+          kind: "unknown_text_defaulted",
+          severity: "warn",
+          failedStep: "driver.text",
+          reason:
+            "Required unknown text question has no mapping/profile answer, so C3 used placeholder text fallback.",
+        });
+        return await fillTextWithFallbacks(field, audit, fieldAudit);
       }
       if (field.required) {
         return await fillTextWithFallbacks(field, audit, fieldAudit);

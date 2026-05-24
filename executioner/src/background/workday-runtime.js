@@ -12,10 +12,13 @@ function normalizeText(value) {
 export function isWorkdayRuntimeErrorText(value) {
   const text = normalizeText(value);
   return (
-    text.includes("something went wrong") &&
-    (text.includes("please refresh the page and then try again") ||
-      text.includes("plea e refre h the page and then try again") ||
-      (text.includes("refre") && text.includes("try again")))
+    (text.includes("something went wrong") &&
+      (text.includes("please refresh the page and then try again") ||
+        text.includes("plea e refre h the page and then try again") ||
+        (text.includes("refre") && text.includes("try again")))) ||
+    (text.includes("error-page error") && text.includes("error code:")) ||
+    /\berror code:\s*vps\|/i.test(value || "") ||
+    /\bvps\|[0-9a-f-]{20,}/i.test(value || "")
   );
 }
 
@@ -36,10 +39,14 @@ export async function detectWorkdayRuntimeErrorForTab(tabId) {
         const bodyText = compact(document.body?.innerText || "");
         const lower = bodyText.toLowerCase();
         const found =
-          lower.includes("something went wrong") &&
-          (lower.includes("please refresh the page and then try again") ||
-            lower.includes("plea e refre h the page and then try again") ||
-            (lower.includes("refre") && lower.includes("try again")));
+          (lower.includes("something went wrong") &&
+            (lower.includes("please refresh the page and then try again") ||
+              lower.includes("plea e refre h the page and then try again") ||
+              (lower.includes("refre") && lower.includes("try again")))) ||
+          (lower.includes("error-page error") &&
+            lower.includes("error code:")) ||
+          /\berror code:\s*vps\|/i.test(bodyText) ||
+          /\bvps\|[0-9a-f-]{20,}/i.test(bodyText);
         const href = window.location.href;
         if (!found) {
           const applyUrl =
@@ -153,6 +160,7 @@ export async function recoverWorkdayRuntimeErrorForTab(
       attempted: true,
       ok: false,
       reason: reload.reason || "reload_failed",
+      maxRuntimeRefreshRetries: 1,
       before,
       reload,
     };
@@ -163,6 +171,7 @@ export async function recoverWorkdayRuntimeErrorForTab(
     attempted: true,
     ok: !after.found,
     reason: after.reason || before.reason || reason,
+    maxRuntimeRefreshRetries: 1,
     before,
     reload,
     after,

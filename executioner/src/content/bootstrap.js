@@ -774,10 +774,57 @@
     });
   }
 
-  function showFillProgress({ message, fillRunId } = {}) {
+  function formatElapsedMs(value) {
+    const elapsedMs = Number(value || 0);
+    if (!Number.isFinite(elapsedMs) || elapsedMs <= 0) {
+      return "";
+    }
+    return elapsedMs >= 1000
+      ? `${(elapsedMs / 1000).toFixed(1)}s`
+      : `${Math.round(elapsedMs)}ms`;
+  }
+
+  function fillProgressDetailMeta({
+    message,
+    phase,
+    substep,
+    stepElapsedMs,
+    totalElapsedMs,
+    lastProgressSummary,
+  } = {}) {
+    const parts = [];
+    if (phase) parts.push(`phase: ${phase}`);
+    if (substep) parts.push(`step: ${substep}`);
+    const stepElapsed = formatElapsedMs(stepElapsedMs);
+    if (stepElapsed) parts.push(`step time: ${stepElapsed}`);
+    const totalElapsed = formatElapsedMs(totalElapsedMs);
+    if (totalElapsed) parts.push(`total: ${totalElapsed}`);
+    if (lastProgressSummary) parts.push(`last: ${lastProgressSummary}`);
+    return parts.length
+      ? parts.join(" | ")
+      : fillProgressMeta(message || "Filling page");
+  }
+
+  function showFillProgress({
+    message,
+    fillRunId,
+    phase,
+    substep,
+    stepElapsedMs,
+    totalElapsedMs,
+    lastProgressSummary,
+  } = {}) {
     removePrompt();
     removeFillSummary();
     var existing = document.getElementById(FILL_PROGRESS_ID);
+    const detailMeta = fillProgressDetailMeta({
+      message,
+      phase,
+      substep,
+      stepElapsedMs,
+      totalElapsedMs,
+      lastProgressSummary,
+    });
     if (existing?.shadowRoot) {
       if (fillRunId) {
         activeFillProgressRunId = fillRunId;
@@ -791,15 +838,21 @@
       if (existingText) {
         existingText.textContent = fillProgressTitle(message);
         if (existingMeta) {
-          existingMeta.textContent = fillProgressMeta(
-            message || "Filling page",
-          );
+          existingMeta.textContent = detailMeta;
         }
         updateToastStackPosition();
         logPageUiEvent(
           "ui.fill_progress.update",
           "Updated fill progress indicator.",
-          { message: message || "Filling page" },
+          {
+            message: message || "Filling page",
+            fillRunId: fillRunId || activeFillProgressRunId || "",
+            phase: phase || "",
+            substep: substep || "",
+            stepElapsedMs: Number(stepElapsedMs || 0),
+            totalElapsedMs: Number(totalElapsedMs || 0),
+            lastProgressSummary: lastProgressSummary || "",
+          },
         );
       }
       return;
@@ -889,7 +942,7 @@
         <div id="hunt-apply-fill-progress-spinner" aria-hidden="true"></div>
         <div class="copy">
           <div class="title" id="hunt-apply-fill-progress-message">${escapeHtml(fillProgressTitle(message))}</div>
-          <div class="meta" id="hunt-apply-fill-progress-meta">${escapeHtml(fillProgressMeta(message || "Filling page"))}</div>
+          <div class="meta" id="hunt-apply-fill-progress-meta">${escapeHtml(detailMeta)}</div>
         </div>
         <button class="cancel" id="hunt-apply-fill-progress-cancel" type="button">Cancel</button>
       </div>
@@ -921,6 +974,11 @@
     logPageUiEvent("ui.fill_progress.show", "Showed fill progress indicator.", {
       message: message || "Filling page",
       fillRunId,
+      phase: phase || "",
+      substep: substep || "",
+      stepElapsedMs: Number(stepElapsedMs || 0),
+      totalElapsedMs: Number(totalElapsedMs || 0),
+      lastProgressSummary: lastProgressSummary || "",
     });
   }
 
@@ -1310,6 +1368,11 @@
       showFillProgress({
         message: message.message || "Filling page",
         fillRunId: message.fillRunId || "",
+        phase: message.phase || "",
+        substep: message.substep || "",
+        stepElapsedMs: Number(message.stepElapsedMs || 0),
+        totalElapsedMs: Number(message.totalElapsedMs || 0),
+        lastProgressSummary: message.lastProgressSummary || "",
       });
     }
     if (message?.type === "hunt.apply.hide_fill_progress") {
@@ -1355,6 +1418,15 @@
     showFillProgress({
       message: response.message || "Filling page",
       fillRunId: response.fillRunId || "",
+      phase: response.phase || "",
+      substep: response.substep || "",
+      stepElapsedMs: response.stepStartedAt
+        ? Date.now() - Number(response.stepStartedAt || 0)
+        : 0,
+      totalElapsedMs: response.startedAt
+        ? Date.now() - Number(response.startedAt || 0)
+        : 0,
+      lastProgressSummary: response.lastProgressSummary || "",
     });
     logPageUiEvent(
       "ui.fill_progress.restore",
@@ -1487,15 +1559,28 @@
         showFillProgress({
           message: activeFill.message || "Filling application page",
           fillRunId: activeFill.fillRunId || "",
+          phase: activeFill.phase || "",
+          substep: activeFill.substep || "",
+          stepElapsedMs: activeFill.stepStartedAt
+            ? Date.now() - Number(activeFill.stepStartedAt || 0)
+            : 0,
+          totalElapsedMs: activeFill.startedAt
+            ? Date.now() - Number(activeFill.startedAt || 0)
+            : 0,
+          lastProgressSummary: activeFill.lastProgressSummary || "",
         });
       }
       logPageUiEvent(
         "ui.detect_prompt.suppress_active_fill",
-        "Suppressed detected-page prompt because a fill run is already active.",
+        "Suppressed detected-page prompt because a workflow run owns this tab.",
         {
           reason,
           fillRunId: activeFill.fillRunId || "",
           message: activeFill.message || "",
+          workflowOwned: Boolean(activeFill.workflowOwned),
+          suppressDetectedPrompt: Boolean(activeFill.suppressDetectedPrompt),
+          phase: activeFill.phase || "",
+          substep: activeFill.substep || "",
         },
       );
       return;

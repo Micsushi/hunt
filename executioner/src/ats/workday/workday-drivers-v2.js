@@ -367,6 +367,28 @@
     });
   }
 
+  function clearWorkdaySearchText(field) {
+    var el = field?.element;
+    var container = root.workdayUi?.nearestWorkdayField?.(el);
+    var inputs = Array.from(
+      new Set(
+        [el].concat(
+          Array.from(
+            container?.querySelectorAll?.(
+              'input[type="text"]:not([type="hidden"]), input[role="combobox"], input[data-uxi-widget-type="selectinput"]',
+            ) || [],
+          ),
+        ),
+      ),
+    ).filter(function (input) {
+      return input && "value" in input && clean(input.value);
+    });
+    inputs.forEach(function (input) {
+      setValue(input, "");
+      input.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+  }
+
   async function fillTechnicalSkills({
     field,
     answer,
@@ -374,10 +396,36 @@
     audit,
     fieldAudit,
   }) {
+    var genericSkillFallbacks = [
+      "Customer Service",
+      "Communication",
+      "Microsoft Office",
+      "Leadership",
+      "Sales",
+      "Analysis",
+      "Project Management",
+      "Problem Solving",
+      "Python",
+      "SQL",
+    ];
     var skills = Array.isArray(answer?.allValues)
       ? answer.allValues
       : [answer?.value || option?.label || ""];
     skills = skills.map(clean).filter(Boolean);
+    if (field.required) {
+      var seenSkills = new Set(
+        skills.map(function (skill) {
+          return norm(skill);
+        }),
+      );
+      genericSkillFallbacks.forEach(function (skill) {
+        var key = norm(skill);
+        if (key && !seenSkills.has(key)) {
+          skills.push(skill);
+          seenSkills.add(key);
+        }
+      });
+    }
     if (!skills.length) {
       return {
         ok: false,
@@ -387,13 +435,20 @@
     }
     var selected = [];
     var missing = [];
-    for (var index = 0; index < skills.length; index++) {
+    var maxSkillAttempts = field.required ? 10 : 5;
+    var attempted = [];
+    for (
+      var index = 0;
+      index < skills.length && attempted.length < maxSkillAttempts;
+      index++
+    ) {
       var skill = skills[index];
       var skillAnswer = Object.assign({}, answer, { value: skill });
       if (selectedTechnicalSkillMatches(field, null, skillAnswer)) {
         selected.push(skill);
         continue;
       }
+      attempted.push(skill);
       var options = await collectWorkdayOptions(field, {
         answer: skillAnswer,
         audit: audit,
@@ -405,9 +460,29 @@
       var target =
         flatOptions.find(function (candidate) {
           return optionMatchesAny(candidate, answerTexts(skillAnswer, null));
-        }) || null;
+        }) ||
+        flatOptions.find(function (candidate) {
+          return !candidate.isCategory && !isNoItemsOption(candidate.label);
+        }) ||
+        null;
       if (!target) {
         missing.push(skill);
+        root.audit?.pushFieldStep(audit, fieldAudit, {
+          action: "workday_skill_search_no_match",
+          step: "workday.driver.fill",
+          status: "warn",
+          reason: "skill_option_not_loaded_within_2s",
+          detail: {
+            requestedSkill: skill,
+            attempt: attempted.length,
+            maxSkillAttempts: maxSkillAttempts,
+            options: flatOptions.slice(0, 8).map(function (candidate) {
+              return candidate.label;
+            }),
+          },
+        });
+        clearWorkdaySearchText(field);
+        await closePopup(field);
         continue;
       }
       root.audit?.pushFieldStep(audit, fieldAudit, {
@@ -435,24 +510,47 @@
       } else {
         missing.push(skill);
       }
+      clearWorkdaySearchText(field);
       await closePopup(field);
       await sleep(120);
     }
-    var state = workdayCommittedState(field);
-    var ok = selected.length > 0 && !missing.length;
-    if (!ok) {
+    if (!selected.length && attempted.length >= maxSkillAttempts) {
       root.audit?.pushIssue(audit, fieldAudit, {
-        kind: "workday_skill_checkbox_not_verified",
+        kind: field.required
+          ? "required_catalog_no_match"
+          : "workday_skill_first_five_no_match",
+        severity: field.required ? "warn" : "info",
+        failedStep: "workday.driver.fill",
+        reason: field.required
+          ? "Required Workday Skills did not load selectable options for profile or generic fallback terms; C3 cannot commit this required catalog field without a selected pill."
+          : "First five profile skills did not load selectable Workday options within 2 seconds each; skipping Skills for max progress.",
+        attemptedSkills: attempted,
+        missingSkills: missing,
+        selectedPills: selectedTechnicalSkillLabels(field),
+      });
+    }
+    var state = workdayCommittedState(field);
+    var ok = selected.length > 0;
+    if (missing.length) {
+      root.audit?.pushIssue(audit, fieldAudit, {
+        kind: ok
+          ? "workday_skill_partial_selection"
+          : "workday_skill_checkbox_not_verified",
         severity: field.required ? "warn" : "info",
         failedStep: "workday.driver.verify",
-        reason: "One or more searched skills did not appear as selected pills.",
+        reason: ok
+          ? "Some searched skills did not appear as selected pills, but at least one skill was committed so C3 continued for max progress."
+          : "No searched skills appeared as selected pills.",
         options: selectedTechnicalSkillLabels(field),
+        missingSkills: missing,
       });
     }
     return {
       ok: ok,
       reason: ok
-        ? "technical_skills_selected"
+        ? missing.length
+          ? "technical_skills_partially_selected"
+          : "technical_skills_selected"
         : "workday_skill_checkbox_not_verified",
       afterState: state,
       selectedOption: selectedTechnicalSkillLabels(field).join("; "),
@@ -1009,9 +1107,29 @@
   }
 
   function shouldTryTrustedKeyboardFirst(option, field) {
+    var descriptor = norm(
+      [
+        field?.uiModel,
+        field?.descriptor,
+        field?.fieldId,
+        field?.workday?.fieldLabel,
+        field?.element?.id,
+        field?.element?.name,
+        field?.element?.getAttribute?.("aria-label"),
+      ].join(" "),
+    );
     if (
       isApplicationSourceField(field?.element, field?.descriptor) &&
       option?.element?.getAttribute?.("aria-posinset")
+    ) {
+      return true;
+    }
+    if (
+      field?.uiModel === "button_listbox" &&
+      option?.element?.getAttribute?.("aria-posinset") &&
+      /\b(phone|device|degree|education level|citizenship|veteran|gender|sex|race|ethnic|disability|source)\b/.test(
+        descriptor,
+      )
     ) {
       return true;
     }
@@ -1521,6 +1639,8 @@
       await sleep(80);
       if (skillSearch) {
         await typeSearchTextLikeUser(siblingInput, searchText);
+        keyOn(siblingInput, "Enter");
+        await sleep(380);
       } else if (sourceField) {
         insertTextOrSet(siblingInput, searchText);
       } else {
@@ -1539,6 +1659,8 @@
     if (searchText && field.uiModel === "combobox") {
       if (skillSearch) {
         await typeSearchTextLikeUser(el, searchText);
+        keyOn(el, "Enter");
+        await sleep(380);
       } else if (sourceField) {
         insertTextOrSet(el, searchText);
       } else {
@@ -1565,6 +1687,7 @@
 
   async function collectWorkdayOptions(field, context) {
     var answer = context?.answer || {};
+    var isSkillsSearch = isTechnicalSkillsField(field, answer);
     var committedState = workdayCommittedState(field);
     var committedLabel = clean(
       committedState.text || committedState.rawValue || "",
@@ -1603,8 +1726,7 @@
     // source-style live search can crash Workday before its internal store is ready.
     // Skills multiselects are search-backed: opening them empty only yields "No Items."
     var shouldTypeSearch =
-      field.workday?.kind === "phone_country_code" ||
-      isTechnicalSkillsField(field, answer);
+      field.workday?.kind === "phone_country_code" || isSkillsSearch;
     var searchText = shouldTypeSearch
       ? answer.value ||
         (field.workday?.kind === "phone_country_code" ? "Canada (+1)" : "")
@@ -1625,15 +1747,11 @@
     await openPopup(field, searchText);
     var waitResult = await waitForWorkdayOptions(
       previousLabels,
-      searchText ? 3400 : 2200,
+      isSkillsSearch ? 2000 : searchText ? 3400 : 2200,
       field,
     );
     var options = waitResult.options;
-    if (
-      !options.length &&
-      searchText &&
-      isTechnicalSkillsField(field, answer)
-    ) {
+    if (!options.length && searchText && !isSkillsSearch) {
       keyOn(field.element, "Enter");
       await sleep(180);
       waitResult = await waitForWorkdayOptions([], 2600, field);
@@ -2054,6 +2172,74 @@
     );
   }
 
+  function workdayFieldHasValidationError(field) {
+    var el = field?.element;
+    var container = root.workdayUi?.nearestWorkdayField?.(el);
+    var alertText = clean(
+      Array.from(
+        container?.querySelectorAll?.(
+          [
+            '[data-automation-id="inputAlert"]',
+            '[data-automation-id="errorMessage"]',
+            '[role="alert"]',
+          ].join(", "),
+        ) || [],
+      )
+        .map(function (node) {
+          return node.innerText || node.textContent || "";
+        })
+        .join(" "),
+    );
+    return Boolean(
+      el?.getAttribute?.("aria-invalid") === "true" ||
+      container?.querySelector?.(
+        [
+          '[aria-invalid="true"]',
+          '[data-automation-id="inputAlert"]',
+          '[data-automation-id="errorMessage"]',
+          '[role="alert"]',
+        ].join(", "),
+      ) ||
+      /\b(must have a value|invalid|error|errors found)\b/i.test(alertText) ||
+      /^required$/i.test(alertText),
+    );
+  }
+
+  async function settleWorkdayCommit(field, answer, option) {
+    var state = workdayCommittedState(field);
+    var sourceField = isApplicationSourceField(
+      field?.element,
+      field?.descriptor,
+    );
+    var ok =
+      committedStateMatches(state, answer, option) ||
+      (sourceField && committedApplicationSourceMatches(state, answer, option));
+    if (ok && !workdayFieldHasValidationError(field)) {
+      return { ok: true, state: state };
+    }
+    var el = field?.element;
+    keyOn(el, "Enter");
+    keyOn(el, "Escape");
+    if (typeof el?.blur === "function") {
+      el.blur();
+    }
+    await sleep(240);
+    state = workdayCommittedState(field);
+    ok =
+      committedStateMatches(state, answer, option) ||
+      (sourceField && committedApplicationSourceMatches(state, answer, option));
+    if (ok && !workdayFieldHasValidationError(field)) {
+      return { ok: true, state: state };
+    }
+    return {
+      ok: false,
+      state: state,
+      reason: workdayFieldHasValidationError(field)
+        ? "workday_validation_not_cleared"
+        : "workday_commit_not_verified",
+    };
+  }
+
   function workdayCommittedState(field) {
     var state = root.fieldState.readFieldState(field);
     var container = root.workdayUi?.nearestWorkdayField(field.element);
@@ -2118,7 +2304,8 @@
     );
     if (
       committedLabel &&
-      committedStateMatches(committedState, answer, option)
+      committedStateMatches(committedState, answer, option) &&
+      !workdayFieldHasValidationError(field)
     ) {
       return {
         ok: true,
@@ -2131,7 +2318,8 @@
     }
     if (
       isApplicationSourceField(field.element, field.descriptor) &&
-      committedApplicationSourceMatches(committedState, answer, option)
+      committedApplicationSourceMatches(committedState, answer, option) &&
+      !workdayFieldHasValidationError(field)
     ) {
       return {
         ok: true,
@@ -2232,30 +2420,30 @@
       );
       if (trustedKeyboard?.ok) {
         await sleep(650);
-        state = workdayCommittedState(field);
+        var settled = await settleWorkdayCommit(field, answer, target);
+        state = settled.state;
         ok = skillField
           ? selectedTechnicalSkillMatches(field, target, answer)
-          : optionMatches({ label: state.text }, target.label) ||
-            optionMatches({ label: state.rawValue }, target.label);
+          : settled.ok;
       }
     }
     if (!ok) {
       await clickWorkdayOption(target);
-      state = workdayCommittedState(field);
+      var clickSettled = await settleWorkdayCommit(field, answer, target);
+      state = clickSettled.state;
       ok = skillField
         ? selectedTechnicalSkillMatches(field, target, answer)
-        : optionMatches({ label: state.text }, target.label) ||
-          optionMatches({ label: state.rawValue }, target.label);
+        : clickSettled.ok;
     }
     if (!ok) {
       trustedOption = await requestTrustedWorkdayClick(target, "option");
       if (trustedOption?.ok) {
         await sleep(550);
-        state = workdayCommittedState(field);
+        var trustedSettled = await settleWorkdayCommit(field, answer, target);
+        state = trustedSettled.state;
         ok = skillField
           ? selectedTechnicalSkillMatches(field, target, answer)
-          : optionMatches({ label: state.text }, target.label) ||
-            optionMatches({ label: state.rawValue }, target.label);
+          : trustedSettled.ok;
       }
       if (!ok) {
         var listbox = workdayActiveListboxFor(field.element);
@@ -2271,11 +2459,15 @@
         );
         if (trustedKeyboard?.ok) {
           await sleep(650);
-          state = workdayCommittedState(field);
+          var keyboardSettled = await settleWorkdayCommit(
+            field,
+            answer,
+            target,
+          );
+          state = keyboardSettled.state;
           ok = skillField
             ? selectedTechnicalSkillMatches(field, target, answer)
-            : optionMatches({ label: state.text }, target.label) ||
-              optionMatches({ label: state.rawValue }, target.label);
+            : keyboardSettled.ok;
         }
       }
     }
@@ -2285,7 +2477,9 @@
         kind: "workday_commit_not_verified",
         severity: field.required ? "warn" : "info",
         failedStep: "workday.driver.verify",
-        reason: "Clicked Workday option but committed value did not match.",
+        reason: workdayFieldHasValidationError(field)
+          ? "Clicked Workday option but validation did not clear."
+          : "Clicked Workday option but committed value did not match.",
         options: options.map(function (candidate) {
           return candidate.label;
         }),

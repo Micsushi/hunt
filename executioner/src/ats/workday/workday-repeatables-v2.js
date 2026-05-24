@@ -522,6 +522,38 @@
     return true;
   }
 
+  function groupLooksBlank(group) {
+    return !(group?.controls || []).some(function (control) {
+      if (control.type === "checkbox") {
+        return Boolean(control.checked);
+      }
+      return Boolean(clean(control.value || textOf(control)));
+    });
+  }
+
+  async function deleteBlankRequiredRows(section) {
+    var deleted = 0;
+    for (var pass = 0; pass < 5; pass++) {
+      var groups = controlGroups(section);
+      var target = groups
+        .slice()
+        .reverse()
+        .find(function (group) {
+          return (
+            groupLooksBlank(group) &&
+            group.controls.some(function (control) {
+              return controlLooksRequired(control);
+            })
+          );
+        });
+      if (!target || !(await deleteGroup(section, target))) {
+        break;
+      }
+      deleted += 1;
+    }
+    return deleted;
+  }
+
   function findAddButton(section, preferAddAnother) {
     return visibleInSection(section, "button,[role='button'],a,[tabindex]")
       .filter(function (button) {
@@ -623,9 +655,7 @@
     if (index < 0) {
       return [];
     }
-    var keys = [
-      { key: "Home", code: "Home", windowsVirtualKeyCode: 36 },
-    ];
+    var keys = [{ key: "Home", code: "Home", windowsVirtualKeyCode: 36 }];
     for (var idx = 0; idx < index; idx += 1) {
       keys.push({
         key: "ArrowDown",
@@ -643,7 +673,10 @@
       typeof chrome === "undefined" ||
       !chrome.runtime?.sendMessage
     ) {
-      return Promise.resolve({ ok: false, reason: "trusted_input_unavailable" });
+      return Promise.resolve({
+        ok: false,
+        reason: "trusted_input_unavailable",
+      });
     }
     return new Promise(function (resolve) {
       try {
@@ -680,18 +713,20 @@
   }
 
   function requestTrustedMouseClick(el, purpose, label) {
-    if (
-      !el ||
-      typeof chrome === "undefined" ||
-      !chrome.runtime?.sendMessage
-    ) {
-      return Promise.resolve({ ok: false, reason: "trusted_input_unavailable" });
+    if (!el || typeof chrome === "undefined" || !chrome.runtime?.sendMessage) {
+      return Promise.resolve({
+        ok: false,
+        reason: "trusted_input_unavailable",
+      });
     }
     var rect = el.getBoundingClientRect?.();
     var x = rect ? Math.round(rect.left + rect.width / 2) : NaN;
     var y = rect ? Math.round(rect.top + rect.height / 2) : NaN;
     if (!Number.isFinite(x) || !Number.isFinite(y)) {
-      return Promise.resolve({ ok: false, reason: "trusted_input_missing_rect" });
+      return Promise.resolve({
+        ok: false,
+        reason: "trusted_input_missing_rect",
+      });
     }
     return new Promise(function (resolve) {
       try {
@@ -919,7 +954,10 @@
         data: value,
       }),
     );
-    return choiceMatches(control.value, value) || control.value === String(value || "");
+    return (
+      choiceMatches(control.value, value) ||
+      control.value === String(value || "")
+    );
   }
 
   async function typeSearchTextLikeUser(control, value) {
@@ -933,7 +971,10 @@
     var current = "";
     for (var index = 0; index < text.length; index++) {
       var char = text[index];
-      if (document.activeElement !== control && !setSearchText(control, current)) {
+      if (
+        document.activeElement !== control &&
+        !setSearchText(control, current)
+      ) {
         return false;
       }
       control.dispatchEvent(
@@ -1092,9 +1133,9 @@
     var skillKey = choiceKey(skill);
     return Boolean(
       skillKey &&
-        selectedSkillKeys().some(function (selectedKey) {
-          return selectedKey === skillKey;
-        }),
+      selectedSkillKeys().some(function (selectedKey) {
+        return selectedKey === skillKey;
+      }),
     );
   }
 
@@ -1161,11 +1202,7 @@
 
   function skillOptionText(option) {
     return clean(
-      [
-        option?.innerText,
-        option?.textContent,
-        option?.getAttribute?.("title"),
-      ]
+      [option?.innerText, option?.textContent, option?.getAttribute?.("title")]
         .filter(Boolean)
         .join(" "),
     ).replace(/\b(not\s+)?checked\b/gi, "");
@@ -1239,13 +1276,29 @@
     }
     var candidates = skillQueryCandidates(skill, allowFallback);
     for (var i = 0; i < candidates.length; i++) {
+      var attemptStart = Date.now();
       var query = candidates[i];
+      _huntLog("workday_skill_attempt_start", {
+        skill: skill,
+        query: query,
+        candidateIndex: i,
+      });
       clearSkillSearch(input);
       clickLikeUser(input);
       await sleep(140);
       await typeSearchTextLikeUser(input, query);
-      var option = await waitForSkillOption(query, 5200);
+      keyOn(input, "Enter");
+      await sleep(380);
+      var option = await waitForSkillOption(query, 2200);
       if (!option) {
+        _huntLog("workday_skill_attempt_result", {
+          skill: skill,
+          query: query,
+          candidateIndex: i,
+          found: false,
+          committed: false,
+          elapsedMs: Date.now() - attemptStart,
+        });
         clearSkillSearch(input);
         await sleep(120);
         continue;
@@ -1262,6 +1315,15 @@
       var start = Date.now();
       while (Date.now() - start < 2600) {
         if (selectedSkillMatches(query)) {
+          _huntLog("workday_skill_attempt_result", {
+            skill: skill,
+            query: query,
+            candidateIndex: i,
+            found: true,
+            committed: true,
+            method: "click",
+            elapsedMs: Date.now() - attemptStart,
+          });
           clearSkillSearch(input);
           await sleep(180);
           return true;
@@ -1276,12 +1338,29 @@
       start = Date.now();
       while (Date.now() - start < 1800) {
         if (selectedSkillMatches(query)) {
+          _huntLog("workday_skill_attempt_result", {
+            skill: skill,
+            query: query,
+            candidateIndex: i,
+            found: true,
+            committed: true,
+            method: "trusted_mouse",
+            elapsedMs: Date.now() - attemptStart,
+          });
           clearSkillSearch(input);
           await sleep(180);
           return true;
         }
         await sleep(120);
       }
+      _huntLog("workday_skill_attempt_result", {
+        skill: skill,
+        query: query,
+        candidateIndex: i,
+        found: true,
+        committed: false,
+        elapsedMs: Date.now() - attemptStart,
+      });
       clearSkillSearch(input);
     }
     return selectedSkillMatches(skill);
@@ -1320,8 +1399,12 @@
       values.push(
         "Bachelors",
         "Bachelor's Degree",
+        "Bachelors Degree",
+        "Bachelors Degree or University",
         "Bachelor / Undergraduate Degree",
         "Undergraduate Degree",
+        "University",
+        "College/University",
       );
       if (targetKey.includes("science")) {
         values.push("BS", "BSc");
@@ -1340,8 +1423,13 @@
       }
     } else if (targetKey === "bachelors" || targetKey === "bachelor degree") {
       values.push(
+        "Bachelor's Degree",
+        "Bachelors Degree",
+        "Bachelors Degree or University",
         "Bachelor / Undergraduate Degree",
         "Undergraduate Degree",
+        "University",
+        "College/University",
         "Bachelor of Science",
         "Bachelor of Engineering",
         "Bachelor of Commerce",
@@ -1365,6 +1453,17 @@
     });
   }
 
+  function firstRealChoiceOption() {
+    return optionElements()
+      .filter(function (option) {
+        return !option.closest?.("[data-automation-id='selectedItemList']");
+      })
+      .find(function (option) {
+        var text = choiceKey(textOf(option));
+        return text && !text.includes("select one") && text !== "no items";
+      });
+  }
+
   async function fillButtonChoice(button, value) {
     if (!button || !value) {
       return { ok: false, reason: "missing_button_or_value" };
@@ -1385,7 +1484,11 @@
       });
     });
     if (!option) {
-      return { ok: false, reason: "option_not_found" };
+      option = firstRealChoiceOption();
+      if (!option) {
+        return { ok: false, reason: "option_not_found" };
+      }
+      targets = [textOf(option)].concat(targets);
     }
     clickLikeUser(option);
     if (typeof option.click === "function") {
@@ -1524,6 +1627,8 @@
         entry.start_year,
         entry.fromYear,
         entry.from_year,
+        entry.firstYearAttended,
+        entry.first_year_attended,
       ]),
       endMonth: firstText([
         entry.endMonth,
@@ -1536,6 +1641,8 @@
         entry.end_year,
         entry.toYear,
         entry.to_year,
+        entry.lastYearAttended,
+        entry.last_year_attended,
       ]),
       current: boolValue(entry.current || entry.isCurrent || entry.is_current),
       description: firstText([
@@ -1642,12 +1749,19 @@
       return "";
     }
     if (/^https?:\/\/linkedin\.com\/in\//i.test(url)) {
-      url = url.replace(/^https?:\/\/linkedin\.com\//i, "https://www.linkedin.com/");
+      url = url.replace(
+        /^https?:\/\/linkedin\.com\//i,
+        "https://www.linkedin.com/",
+      );
     }
     if (/^https?:\/\/www\.linkedin\.com\/in\/[^/?#]+$/i.test(url)) {
       return url + "/";
     }
     return url;
+  }
+
+  function normUrl(value) {
+    return norm(canonicalWebsiteUrl(value));
   }
 
   function hasAnyValue(entry) {
@@ -1733,7 +1847,7 @@
       },
     );
     var socialWebsites = websites.filter(function (entry) {
-      var url = norm(entry.url);
+      var url = normUrl(entry.url);
       return url.includes("linkedin") || url.includes("github");
     });
     var skills = profileAliasList(profile, [
@@ -1757,7 +1871,7 @@
   }
 
   function websiteType(url) {
-    var lowered = norm(url);
+    var lowered = normUrl(url);
     if (lowered.includes("linkedin")) {
       return "LinkedIn";
     }
@@ -1768,7 +1882,7 @@
   }
 
   function websiteNetwork(url) {
-    var lowered = norm(url);
+    var lowered = normUrl(url);
     if (lowered.includes("linkedin")) {
       return "linkedin";
     }
@@ -1785,7 +1899,7 @@
   }
 
   function isSocialWebsite(entry) {
-    var url = norm(entry?.url || entry || "");
+    var url = normUrl(entry?.url || entry || "");
     return url.includes("linkedin") || url.includes("github");
   }
 
@@ -2159,11 +2273,7 @@
     }
     if (isChoiceControl(control)) {
       var directText = clean(
-        [
-          control.value,
-          control.innerText,
-          control.textContent,
-        ]
+        [control.value, control.innerText, control.textContent]
           .filter(Boolean)
           .join(" "),
       );
@@ -2194,6 +2304,18 @@
         return controlLooksRequired(control) && !controlLooksFilled(control);
       });
     });
+  }
+
+  function controlFilledKeys(controls) {
+    return (controls || [])
+      .map(function (control) {
+        return choiceKey(
+          [control.value, control.innerText, control.textContent, textOf(control)]
+            .filter(Boolean)
+            .join(" "),
+        );
+      })
+      .filter(Boolean);
   }
 
   function liveControl(control) {
@@ -2265,6 +2387,44 @@
     await sleep(180);
     filled += await fillNonDateControls(controls, entry, kind, "value");
     return filled;
+  }
+
+  async function repairMissingRequiredRows(section, kind, entries) {
+    var repaired = 0;
+    for (var pass = 0; pass < 2; pass++) {
+      var groups = controlGroups(section);
+      var passFilled = 0;
+      for (
+        var index = 0;
+        index < groups.length && index < entries.length;
+        index++
+      ) {
+        var group = groups[index];
+        var missing = group.controls.filter(function (control) {
+          return controlLooksRequired(control) && !controlLooksFilled(control);
+        });
+        if (!missing.length) {
+          continue;
+        }
+        var beforeKeys = controlFilledKeys(group.controls);
+        passFilled += await fillControls(group.controls, entries[index], kind);
+        var afterKeys = controlFilledKeys(group.controls);
+        missing.forEach(function (control) {
+          var targetKey = choiceKey(valueForControl(kind, entries[index], control));
+          if (targetKey && !afterKeys.includes(targetKey)) {
+            return;
+          }
+          if (afterKeys.length > beforeKeys.length || controlLooksFilled(control)) {
+            repaired += 1;
+          }
+        });
+        await sleep(160);
+      }
+      if (!passFilled) {
+        break;
+      }
+    }
+    return repaired;
   }
 
   async function fillDialogEntry(entry, kind) {
@@ -2354,7 +2514,7 @@
       for (var index = groups.length - 1; index >= 0; index--) {
         var group = groups[index];
         var url = groupUrlValue(group);
-        var key = norm(url);
+        var key = normUrl(url);
         var duplicate = Boolean(key && seen.has(key));
         if (key) {
           seen.add(key);
@@ -2440,10 +2600,12 @@
         );
       }
     }
+    filledCount += await repairMissingRequiredRows(section, kind, entries);
     if (kind === "website") {
       filledCount += await fillWebsiteUrlInputs(section, entries);
       deletedCount += await deleteInvalidWebsiteRows(section);
     }
+    deletedCount += await deleteBlankRequiredRows(section);
     var finalGroups = controlGroups(section);
     for (var extra = finalGroups.length - 1; extra >= entries.length; extra--) {
       if (await deleteGroup(section, finalGroups[extra])) {
@@ -2512,7 +2674,19 @@
     }
     var added = 0;
     var satisfied = 0;
+    var skillsStart = Date.now();
+    var skillsBudgetMs = 25000;
     for (var index = 0; index < skills.length; index++) {
+      if (Date.now() - skillsStart > skillsBudgetMs) {
+        _huntLog("workday_skills_time_budget_exceeded", {
+          elapsedMs: Date.now() - skillsStart,
+          skillsBudgetMs: skillsBudgetMs,
+          attemptedCount: index,
+          selectedSkills: selectedSkillKeys(),
+        });
+        clearSkillSearch(input);
+        break;
+      }
       var skill = skills[index];
       if (selectedSkillMatches(skill)) {
         satisfied += 1;

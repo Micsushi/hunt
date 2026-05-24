@@ -98,26 +98,8 @@
           confidence: 0.97,
         };
       }
-      var calculated = hourlyFromAnnual(profile.salaryExpectation);
-      if (calculated) {
-        return {
-          value: calculated,
-          source: "calculated:salaryExpectationHourly",
-          confidence: 0.94,
-        };
-      }
-      var calculatedFromRange = hourlyFromAnnual(
-        profile.salaryExpectationRange,
-      );
-      if (calculatedFromRange) {
-        return {
-          value: calculatedFromRange,
-          source: "calculated:salaryExpectationRangeHourly",
-          confidence: 0.9,
-        };
-      }
       return {
-        value: "48.08",
+        value: "25.00",
         source: "default:hourlyPayExpectation",
         confidence: 0.72,
       };
@@ -472,7 +454,12 @@
         });
       }
     });
-    var requiredRank = entry.expectedEducationLevel === "bachelors" ? 3 : 0;
+    var requiredRank =
+      entry.expectedEducationLevel === "bachelors"
+        ? 3
+        : entry.expectedEducationLevel === "high_school"
+          ? 1
+          : 0;
     var best = candidates
       .map(function (candidate) {
         return {

@@ -193,9 +193,10 @@ async function ensurePasswordSavingDisabled(reason = "c3_fill") {
   }
   if (
     details.levelOfControl &&
-    !["controllable_by_this_extension", "controlled_by_this_extension"].includes(
-      details.levelOfControl,
-    )
+    ![
+      "controllable_by_this_extension",
+      "controlled_by_this_extension",
+    ].includes(details.levelOfControl)
   ) {
     return {
       ok: false,
@@ -500,7 +501,7 @@ async function collectTabSiteState(tabId, label = "") {
           .slice(0, 30);
         const controls = [
           ...document.querySelectorAll(
-            "input, textarea, select, [role='combobox'], [role='listbox']",
+            "input, textarea, select, [role='combobox'], [role='listbox'], [role='radio']",
           ),
         ].filter(visible);
         const navEntry =
@@ -924,7 +925,8 @@ function createC3WorkflowDetectionFunction() {
       var href = normalize(item && item.href);
       return (
         /^apply(?:\s+apply)?$/i.test(text) ||
-        (/^apply\b/i.test(text) && /\/apply(?:$|[/?#\s])/i.test(href || metadata)) ||
+        (/^apply\b/i.test(text) &&
+          /\/apply(?:$|[/?#\s])/i.test(href || metadata)) ||
         (/^apply\b/i.test(text) &&
           /apply|jobApply|externalApply/i.test(metadata))
       );
@@ -996,7 +998,21 @@ function createC3WorkflowDetectionFunction() {
         currentStepTitle,
       ) &&
       (passwordCount || emailCount || hasCreateAccount || hasSignIn);
-    if (currentStep && !currentStepIsAuth) {
+    var authShellStillSettling =
+      currentStepTitle &&
+      /create account|sign in|log in|login|register|sign up/i.test(
+        currentStepTitle,
+      ) &&
+      !passwordCount &&
+      !emailCount &&
+      !hasCreateAccount &&
+      !hasSignIn;
+    var stillLoading =
+      document.readyState !== "complete" || authShellStillSettling;
+    if (authShellStillSettling) {
+      phase = "loading";
+      priority = 5;
+    } else if (currentStep && !currentStepIsAuth) {
       phase = "job_fill";
       priority = 40;
     } else if (
@@ -1062,6 +1078,8 @@ function createC3WorkflowDetectionFunction() {
       hasEmailSigninChoice: hasEmailSigninChoice,
       hasLoginFailure: hasLoginFailure,
       needsEmailLinkVerification: needsEmailLinkVerification,
+      stillLoading: stillLoading,
+      authShellStillSettling: authShellStillSettling,
       startApplication: startApplication,
       applyManually: applyManually,
       workdayDetailsApply: workdayDetailsApply,
@@ -1509,17 +1527,18 @@ function createClickAuthPrimaryActionFunction() {
       return checked;
     }
 
-    var candidates = Array.from(
-      document.querySelectorAll(
-        [
-          "button",
-          "[role='button']",
-          "input[type='button']",
-          "input[type='submit']",
-          "a[href]",
-        ].join(", "),
-      ),
-    )
+    var primaryActionSelectors = [];
+    primaryActionSelectors.push("button");
+    primaryActionSelectors.push("[role='button']");
+    primaryActionSelectors.push("input[type='button']");
+    primaryActionSelectors.push("input[type='submit']");
+    primaryActionSelectors.push("a[href]");
+    primaryActionSelectors.push("div");
+    primaryActionSelectors.push("span");
+    var seenPrimaryActionElements = Array.from(
+      document.querySelectorAll(primaryActionSelectors.join(", ")),
+    );
+    var candidates = seenPrimaryActionElements
       .filter(visible)
       .map(function (el) {
         var label = labelFor(el);
@@ -1868,7 +1887,8 @@ function createClickWorkdayApplyManuallyFunction() {
       var href = normalize(item && item.href);
       return (
         /^Apply(?:\s+Apply)?$/i.test(text) ||
-        (/^Apply\b/i.test(text) && /\/apply(?:$|[/?#\s])/i.test(href || metadata)) ||
+        (/^Apply\b/i.test(text) &&
+          /\/apply(?:$|[/?#\s])/i.test(href || metadata)) ||
         (/^Apply\b/i.test(text) &&
           /apply|jobApply|externalApply/i.test(metadata))
       );
@@ -2647,8 +2667,7 @@ class C3CombinedFillWorkflow {
             jobFill: {
               ok: false,
               skipped: true,
-              reason:
-                applicationReady.reason || "application_fields_not_ready",
+              reason: applicationReady.reason || "application_fields_not_ready",
               readiness: applicationReady,
             },
             initialDetection,
@@ -2938,7 +2957,11 @@ function workdayAppScopeFromUrl(value = "") {
   }
 }
 
-function emailVerificationExpectedApplyUrl(payload = {}, state = {}, tabUrl = "") {
+function emailVerificationExpectedApplyUrl(
+  payload = {},
+  state = {},
+  tabUrl = "",
+) {
   return (
     payload.expectedApplyUrl ||
     payload.applyUrl ||
@@ -3208,7 +3231,8 @@ async function awaitEmailVerification(payload = {}, sender = {}) {
           90,
         jobUrl: payload.jobUrl || tab?.url || state.activeApplyContext.applyUrl,
         expectedApplyUrl,
-        expectedJobUrl: payload.expectedJobUrl || payload.jobUrl || expectedApplyUrl,
+        expectedJobUrl:
+          payload.expectedJobUrl || payload.jobUrl || expectedApplyUrl,
       }),
     });
     const result = await response.json().catch(() => ({
@@ -5143,6 +5167,146 @@ async function clickSafeNextForTab(tabId, details = {}) {
         timeoutMs: 1800,
       },
     );
+    if (
+      !postNextSignalHasPageChange(
+        clickResult.postNextSignal,
+        beforeClickSnapshot,
+      ) &&
+      (probe.candidate?.ariaDisabledBypass ||
+        clickResult.candidate?.ariaDisabledBypass)
+    ) {
+      const bypassCandidate = probe.candidate?.ariaDisabledBypass
+        ? probe.candidate
+        : clickResult.candidate;
+      const bypassRect = bypassCandidate?.rect || {};
+      if (bypassRect.width > 0 && bypassRect.height > 0) {
+        const trustedResult = await dispatchTrustedInput({
+          tabId,
+          x: Math.round(bypassRect.left + bypassRect.width / 2),
+          y: Math.round(bypassRect.top + bypassRect.height / 2),
+          action: "mouse_click",
+        });
+        const trustedPostSignal = await waitForPostNextSignalForTab(
+          tabId,
+          beforeClickSnapshot,
+          { timeoutMs: 2200 },
+        );
+        clickResult.ariaDisabledBypassTrusted = {
+          trustedResult: trustedResult || {},
+          postNextSignal: trustedPostSignal || {},
+        };
+        await logActivity(
+          "next.aria_disabled_bypass_trusted_click",
+          postNextSignalHasPageChange(trustedPostSignal, beforeClickSnapshot)
+            ? "CDP trusted click on aria-disabled Workday footer button produced a page transition."
+            : "CDP trusted click on aria-disabled Workday footer button did not produce a page transition.",
+          {
+            tabId,
+            frameId: probe.frameId,
+            triggeredBy: details.triggeredBy || "",
+            trustedResult: trustedResult || {},
+            postNextSignal: trustedPostSignal || {},
+            candidate: bypassCandidate || {},
+          },
+          postNextSignalHasPageChange(trustedPostSignal, beforeClickSnapshot)
+            ? "ok"
+            : "warn",
+        );
+        if (
+          postNextSignalHasPageChange(trustedPostSignal, beforeClickSnapshot)
+        ) {
+          clickResult = {
+            ...clickResult,
+            reason: "clicked_safe_next_aria_disabled_bypass_trusted",
+            ariaDisabledBypassTrusted: clickResult.ariaDisabledBypassTrusted,
+          };
+        }
+      }
+    }
+    if (
+      !postNextSignalHasPageChange(
+        clickResult.postNextSignal,
+        beforeClickSnapshot,
+      )
+    ) {
+      for (const fallback of [
+        {
+          flag: "forceWorkdayDomClickFallback",
+          activity: "safe_next_dom_fallback_after_noop",
+        },
+        {
+          flag: "forceWorkdayEnterFallback",
+          activity: "safe_next_enter_fallback_after_noop",
+        },
+        {
+          flag: "forceWorkdaySpaceFallback",
+          activity: "safe_next_space_fallback_after_noop",
+        },
+      ]) {
+        let fallbackClick = null;
+        try {
+          const fallbackResults = await withTimeout(
+            chrome.scripting.executeScript({
+              target: { tabId, frameIds: [probe.frameId] },
+              func: createSafeNextFunction(),
+              args: [{ click: true, [fallback.flag]: true }],
+            }),
+            5000,
+            () => null,
+          );
+          fallbackClick = fallbackResults?.[0]?.result || null;
+        } catch (error) {
+          fallbackClick = {
+            ok: false,
+            clicked: false,
+            reason: `${fallback.activity}_failed`,
+            message: error instanceof Error ? error.message : String(error),
+          };
+        }
+        const fallbackPostSignal = await waitForPostNextSignalForTab(
+          tabId,
+          beforeClickSnapshot,
+          { timeoutMs: 2200 },
+        );
+        await logActivity(
+          `next.${fallback.activity}`,
+          postNextSignalHasPageChange(fallbackPostSignal, beforeClickSnapshot)
+            ? "Fallback Next interaction produced a page transition."
+            : "Fallback Next interaction did not produce a page transition.",
+          {
+            tabId,
+            frameId: probe.frameId,
+            triggeredBy: details.triggeredBy || "",
+            fallbackClick: fallbackClick || {},
+            postNextSignal: fallbackPostSignal || {},
+            candidate:
+              fallbackClick?.candidate || clickResult.candidate || probe.candidate || {},
+          },
+          postNextSignalHasPageChange(fallbackPostSignal, beforeClickSnapshot)
+            ? "ok"
+            : "warn",
+        );
+        if (
+          postNextSignalHasPageChange(fallbackPostSignal, beforeClickSnapshot)
+        ) {
+          clickResult = {
+            ...clickResult,
+            clicked: true,
+            ok: true,
+            reason:
+              fallback.flag === "forceWorkdayDomClickFallback"
+                ? "clicked_safe_next_dom_fallback"
+                : fallback.flag === "forceWorkdayEnterFallback"
+                  ? "clicked_safe_next_enter_fallback"
+                  : "clicked_safe_next_space_fallback",
+            candidate:
+              fallbackClick?.candidate || clickResult.candidate || probe.candidate,
+            postNextSignal: fallbackPostSignal,
+          };
+          break;
+        }
+      }
+    }
     const runtimeRecovery = await recoverWorkdayRuntimeErrorForTab(tabId, {
       reason: "safe_next_workday_runtime_error",
       settleMs: 1800,
@@ -5344,6 +5508,7 @@ async function runV2PageWalkAfterFill({
     successfulPageCount || 1,
   );
   let authStepCount = 0;
+  let sawSignupAuthAttempt = false;
   const validationRepairKeys = new Set();
   const authSamePageFailureCounts = new Map();
 
@@ -5572,6 +5737,9 @@ async function runV2PageWalkAfterFill({
         };
         break;
       }
+      if (workflowDetection.authState === "signup") {
+        sawSignupAuthAttempt = true;
+      }
 
       await dismissPageTransientUi(tabId, { preserveFillProgress: true });
       const authTransition = await waitForAuthActionTransitionForTab(tabId, {
@@ -5631,6 +5799,37 @@ async function runV2PageWalkAfterFill({
           afterAuthDetection.authState === workflowDetection.authState &&
           afterAuthDetection.authUiState === workflowDetection.authUiState &&
           afterAuthDetection.href === workflowDetection.href;
+        if (
+          sawSignupAuthAttempt &&
+          workflowDetection.authState === "signup" &&
+          afterAuthDetection.authState === "login" &&
+          !(currentPageSnapshot.visibleValidationErrors || []).length
+        ) {
+          stoppedReason = "auth_create_account_to_signin_sink";
+          failedPageNumber = lastPageNumber;
+          stopDetails = {
+            message:
+              "Create Account redirected to Sign In without reaching verification or application fields.",
+            classification: "auth_no_progress",
+            pageTitle: currentPageSnapshot.currentStep?.title || "",
+            authState: afterAuthDetection.authState || "unknown",
+            authUiState: afterAuthDetection.authUiState || "unknown",
+            fromAuthState: workflowDetection.authState || "unknown",
+            fromAuthUiState: workflowDetection.authUiState || "unknown",
+          };
+          steps.push({
+            step: steps.length + 1,
+            kind: "auth_create_account_to_signin_sink",
+            pageIndex: lastPageNumber,
+            attemptIndex: pageIndex,
+            fromAuthState: workflowDetection.authState || "unknown",
+            fromAuthUiState: workflowDetection.authUiState || "unknown",
+            toAuthState: afterAuthDetection.authState || "unknown",
+            toAuthUiState: afterAuthDetection.authUiState || "unknown",
+            href: afterAuthDetection.href || "",
+          });
+          break;
+        }
         if (!sameAuthPage) {
           steps.push({
             step: steps.length + 1,
@@ -6857,12 +7056,16 @@ async function inspectVisibleFillProgress(tabId) {
             if (!visible(select)) {
               continue;
             }
-            const value = normalize(select.value || select.selectedOptions?.[0]?.text || "");
+            const value = normalize(
+              select.value || select.selectedOptions?.[0]?.text || "",
+            );
             if (value && !/^select one$/i.test(value)) {
               values.push(`select:${select.id || select.name || value}`);
             }
           }
-          for (const button of document.querySelectorAll("button, [role='button']")) {
+          for (const button of document.querySelectorAll(
+            "button, [role='button']",
+          )) {
             if (!visible(button)) {
               continue;
             }
@@ -6872,12 +7075,15 @@ async function inspectVisibleFillProgress(tabId) {
                 button.getAttribute?.("aria-label") ||
                 "",
             );
-            const id = button.id || button.getAttribute?.("data-automation-id") || "";
+            const id =
+              button.id || button.getAttribute?.("data-automation-id") || "";
             const name = button.getAttribute?.("name") || "";
             const aria = button.getAttribute?.("aria-label") || "";
             const isFieldValue =
               Boolean(button.id || name) &&
-              !/^pageFooter|^utilityButton|^navigationItem|^backToJobPosting|^add-button$/i.test(id);
+              !/^pageFooter|^utilityButton|^navigationItem|^backToJobPosting|^add-button$/i.test(
+                id,
+              );
             if (
               isFieldValue &&
               text &&
@@ -6914,7 +7120,9 @@ async function inspectVisibleFillProgress(tabId) {
             if (!visible(upload)) {
               continue;
             }
-            const text = normalize(upload.innerText || upload.textContent || "");
+            const text = normalize(
+              upload.innerText || upload.textContent || "",
+            );
             if (/successfully uploaded|\.pdf|\.docx?/i.test(text)) {
               values.push(`upload:${text.slice(0, 160)}`);
             }
@@ -6946,9 +7154,15 @@ async function inspectVisibleFillProgress(tabId) {
               `activeWidget:${activeWidgetLabels.slice(0, 6).join("|")}`,
             );
           }
-          const errors = [...document.querySelectorAll('[role="alert"], [data-automation-id*="error" i], [id*="error" i]')]
+          const errors = [
+            ...document.querySelectorAll(
+              '[role="alert"], [data-automation-id*="error" i], [id*="error" i]',
+            ),
+          ]
             .filter(visible)
-            .map((element) => normalize(element.innerText || element.textContent || ""))
+            .map((element) =>
+              normalize(element.innerText || element.textContent || ""),
+            )
             .filter(Boolean)
             .slice(0, 20);
           if (errors.length) {
@@ -7597,9 +7811,8 @@ async function handleMessage(message, sender = {}) {
           message: "Manual fill is currently disabled in extension settings.",
         };
       }
-      const passwordSaving = await ensurePasswordSavingDisabled(
-        "fill_current_page",
-      );
+      const passwordSaving =
+        await ensurePasswordSavingDisabled("fill_current_page");
       if (!passwordSaving.ok) {
         await logActivity(
           "password_saving.disable_failed",

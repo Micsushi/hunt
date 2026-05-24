@@ -5,6 +5,22 @@ not live-proven, so test it in layers: automated baseline first, standalone
 extension proof second, DB/C4 handoff third, and only then a low-risk live ATS
 pilot.
 
+## Fill Priority
+
+For Workday live testing, fill completion is more important than fill
+correctness. C3 should reach Review whenever the UI is usable, then stop before
+final Submit. Wrong answers, questionable defaults, and missing profile facts
+belong in Review/audit unless they block progress by creating required
+follow-up fields, validation, or another page-walk failure.
+
+Batch lanes run background-first. Do not bring p Chrome to the foreground during
+automated setup, live smoke, repair, or proof work unless the user explicitly
+asks to inspect the lane. Preserve hard-failure and site/posting-state p Chrome
+lanes for inspection; close Review lanes after artifacts are captured. Workday
+maintenance, dead postings, non-application pages, CAPTCHA/MFA, external
+assessments, and tenant outages are site/posting stops, not hard C3 fill
+failures.
+
 ## Baseline Checks
 
 Run from the repo root:
@@ -76,8 +92,11 @@ Detailed `p chrome` operating notes and job fast paths are internal agent
 memory, not repo documentation. Keep repo scripts here; keep job/browser memory
 outside public docs.
 
-For five-lane Workday batches with isolated p Chrome profiles and per-lane
-subagent monitoring, use `docs\C3_PARALLEL_BATCH.md`.
+For rolling six-lane Workday batches with isolated p Chrome profiles and
+per-lane subagent monitoring, use `docs\C3_PARALLEL_BATCH.md`.
+Rolling batches stop promoting new jobs after five hard pre-Review failures.
+Review reached with bad fills is not a hard failure; it remains a Review/audit
+quality issue.
 For per-lane subagent behavior, use `docs\C3_LANE_AGENT.md`.
 For consistent failure classification, use `docs\C3_ERROR_TAXONOMY.md`.
 For reusable p Chrome launch/reload/seed/capture commands, use
@@ -307,7 +326,9 @@ Success criteria:
 - Correct identity/contact fields are filled.
 - Resume is attached when a resume/CV file input exists and a default resume is saved, including hidden file inputs behind Attach-style controls.
 - Optional fields are skipped.
-- Unknown required fields remain for manual review instead of being guessed.
+- Unknown required option fields use the progress-first fallback ladder when the
+  UI is usable: neutral/non-disclosure first, then `No`, then the first real
+  non-placeholder option. The fallback is flagged for Review/audit.
 - No final submit click occurs.
 - The Activity Log and latest attempt record the fill.
 - Latest attempt includes field inventory: field id/name/descriptor, required flag, skip reason, and value source.
@@ -322,9 +343,10 @@ and `email ... first name` resolves to email. Workday inventory logs exact value
 sources such as `profile:firstName` or `profile:lastName`. There is no LLM field
 decisioner in the generic filler yet.
 
-Fill required fields only: enabled by default. When disabled, C3 still does not
-guess unknown fields, but it may fill optional fields that match known safe
-profile/job-context rules.
+Fill required fields only: enabled by default. When disabled, C3 may also fill
+optional fields that match known safe profile/job-context rules. Required
+unknown option prompts still use the progress-first fallback ladder when the UI
+is usable so the run can continue toward Review.
 
 Local debug log sink: Options has Local debug log sink and Test Log Sink. When
 enabled, extension activity and fill results post to the local backend endpoint
@@ -501,7 +523,8 @@ Success criteria:
 - Correct identity/contact fields are filled.
 - Resume is attached when supported.
 - Optional EEO/demographic fields are skipped.
-- Unknown required fields are flagged instead of guessed.
+- Unknown required option fields use the progress-first fallback ladder when the
+  UI is usable and are flagged for Review/audit.
 - No final submit click occurs.
 - Evidence is captured or manually noted.
 

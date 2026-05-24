@@ -132,6 +132,27 @@
     );
   }
 
+  function isPhoneDeviceTypeField(field) {
+    var el = field?.element || field?.anchor;
+    var text = norm(
+      [
+        field?.fieldId,
+        field?.descriptor,
+        field?.workday?.fieldLabel,
+        field?.workday?.kind,
+        el?.id,
+        el?.name,
+        el?.getAttribute?.("aria-label"),
+      ].join(" "),
+    );
+    return (
+      text.includes("phone device type") ||
+      text.includes("phone type") ||
+      text.includes("phone number phonetype") ||
+      text.includes("phonenumber phonetype")
+    );
+  }
+
   function phoneCountryCodeOption(options, answer) {
     var target = norm(answer?.value || "");
     if (!target) {
@@ -390,9 +411,61 @@
       })[0]?.option;
   }
 
+  function yearRangeOption(options, answer) {
+    var target = Number(String(answer?.value || "").match(/\d+/)?.[0] || "");
+    if (!Number.isFinite(target) || target <= 0) {
+      return null;
+    }
+    return options.find(function (option) {
+      var label = normOptionLabel(option.label);
+      var numbers = (label.match(/\d+/g) || [])
+        .map(Number)
+        .filter(function (number) {
+          return Number.isFinite(number);
+        });
+      if (!numbers.length) {
+        return false;
+      }
+      if (label.includes("more than") || label.includes("+")) {
+        return target > numbers[0];
+      }
+      if (numbers.length >= 2) {
+        return target >= numbers[0] && target <= numbers[1];
+      }
+      return target === numbers[0];
+    });
+  }
+
   function neutralOption(options) {
     var aliases = root.fieldCatalog?.nonDisclosureAliases || [];
+    var neutralSubstrings = [
+      "not to respond",
+      "prefer not",
+      "do not wish",
+      "do not want",
+      "don't wish",
+      "don't want",
+      "decline",
+      "not disclosed",
+      "not declared",
+      "not specified",
+      "not applicable",
+      "n/a",
+      "none of the above",
+      "undisclosed",
+      "undeclared",
+      "choose not",
+    ];
     var real = realOptions(options);
+    var substringMatch = real.find(function (option) {
+      var label = norm(option.label);
+      return neutralSubstrings.some(function (needle) {
+        return label.includes(needle);
+      });
+    });
+    if (substringMatch) {
+      return substringMatch;
+    }
     for (var i = 0; i < aliases.length; i++) {
       var alias = norm(aliases[i]);
       var found = real.find(function (option) {
@@ -446,6 +519,81 @@
     });
   }
 
+  function exactNoOption(options) {
+    return realOptions(options).find(function (option) {
+      var label = normOptionLabel(option.label);
+      var value = normOptionLabel(option.value);
+      return label === "no" || value === "no";
+    });
+  }
+
+  function progressFallbackOption({
+    real,
+    audit,
+    fieldAudit,
+    field,
+    kind,
+    reason,
+    neutralSource,
+    noSource,
+    firstSource,
+  }) {
+    var options = real.map(function (option) {
+      return option.label;
+    });
+    var neutral = neutralOption(real);
+    if (neutral) {
+      root.audit?.pushIssue(audit, fieldAudit, {
+        kind: kind || "unknown_question_defaulted",
+        severity: field?.required ? "warn" : "info",
+        failedStep: "option.match",
+        reason:
+          (reason ? reason + " " : "") +
+          "Selected neutral or non-disclosure fallback.",
+        selectedOption: neutral.label,
+        options,
+      });
+      return {
+        option: neutral,
+        source: neutralSource || "unknown_neutral_fallback",
+        fallback: true,
+      };
+    }
+    var no = exactNoOption(real);
+    if (no) {
+      root.audit?.pushIssue(audit, fieldAudit, {
+        kind: kind || "unknown_question_defaulted",
+        severity: field?.required ? "warn" : "info",
+        failedStep: "option.match",
+        reason:
+          (reason ? reason + " " : "") +
+          "No neutral option was visible, so C3 selected No.",
+        selectedOption: no.label,
+        options,
+      });
+      return {
+        option: no,
+        source: noSource || "unknown_no_fallback",
+        fallback: true,
+      };
+    }
+    root.audit?.pushIssue(audit, fieldAudit, {
+      kind: kind || "unknown_question_defaulted",
+      severity: field?.required ? "warn" : "info",
+      failedStep: "option.match",
+      reason:
+        (reason ? reason + " " : "") +
+        "No neutral or No option was visible, so C3 selected the first real option.",
+      selectedOption: real[0]?.label || "",
+      options,
+    });
+    return {
+      option: real[0],
+      source: firstSource || "unknown_first_real_fallback",
+      fallback: true,
+    };
+  }
+
   function matchOption({ options, answer, audit, fieldAudit, field }) {
     var real = realOptions(options);
     var target = norm(answer.value);
@@ -457,14 +605,23 @@
           fallback: false,
         };
       }
-      return {
-        option: null,
-        source: "missing_profile_value",
-        fallback: false,
-      };
     }
     if (!real.length) {
       return { option: null, source: "no_options", fallback: false };
+    }
+    if (answer?.source === "missing_profile_value" && !target) {
+      return progressFallbackOption({
+        real,
+        audit,
+        fieldAudit,
+        field,
+        kind: "missing_profile_value_defaulted",
+        reason:
+          "Required option field had no saved profile value, so C3 used the progress-first fallback ladder.",
+        neutralSource: "missing_profile_neutral_fallback",
+        noSource: "missing_profile_no_fallback",
+        firstSource: "missing_profile_first_real_fallback",
+      });
     }
     if (answer.answerType === "travel_availability") {
       var travel = highestTravelOption(real);
@@ -472,6 +629,16 @@
         return {
           option: travel,
           source: "highest_travel_numeric",
+          fallback: false,
+        };
+      }
+    }
+    if (answer.answerType === "year_range") {
+      var yearRange = yearRangeOption(real, answer);
+      if (yearRange) {
+        return {
+          option: yearRange,
+          source: "year_range_contains_target",
           fallback: false,
         };
       }
@@ -579,6 +746,20 @@
       }
     }
     if (field?.uiModel === "checkbox") {
+      if (field?.required) {
+        return progressFallbackOption({
+          real,
+          audit,
+          fieldAudit,
+          field,
+          kind: "checkbox_required_defaulted",
+          reason:
+            "Required checkbox had no exact safe match, so C3 used the progress-first fallback ladder.",
+          neutralSource: "checkbox_neutral_fallback",
+          noSource: "checkbox_no_fallback",
+          firstSource: "checkbox_first_real_fallback",
+        });
+      }
       return {
         option: null,
         source: "checkbox_no_safe_match",
@@ -586,6 +767,20 @@
       };
     }
     if (isProvinceField(field)) {
+      if (field?.required) {
+        return progressFallbackOption({
+          real,
+          audit,
+          fieldAudit,
+          field,
+          kind: "province_required_defaulted",
+          reason:
+            "Required province field had no exact safe match, so C3 used the progress-first fallback ladder.",
+          neutralSource: "province_neutral_fallback",
+          noSource: "province_no_fallback",
+          firstSource: "province_first_real_fallback",
+        });
+      }
       return {
         option: null,
         source: "strict_province_no_match",
@@ -646,16 +841,23 @@
         severity: field?.required ? "warn" : "info",
         failedStep: "option.match",
         reason:
-          "Salary option did not match the profile salary value, so no fallback option was selected.",
+          "Salary option did not match the profile salary value, so C3 used the progress-first fallback ladder.",
         options: real.map(function (option) {
           return option.label;
         }),
       });
-      return {
-        option: null,
-        source: "salary_no_safe_match",
-        fallback: false,
-      };
+      return progressFallbackOption({
+        real,
+        audit,
+        fieldAudit,
+        field,
+        kind: "salary_option_defaulted",
+        reason:
+          "Salary option did not match the profile salary value, so C3 used the progress-first fallback ladder.",
+        neutralSource: "salary_neutral_fallback",
+        noSource: "salary_no_fallback",
+        firstSource: "salary_first_real_fallback",
+      });
     }
     if (isPhoneCountryCodeField(field)) {
       var phoneMatch = phoneCountryCodeOption(real, answer);
@@ -666,6 +868,30 @@
           fallback: false,
         };
       }
+    }
+    if (isPhoneDeviceTypeField(field)) {
+      root.audit?.pushIssue(audit, fieldAudit, {
+        kind: "phone_device_type_no_mobile_option",
+        severity: field?.required ? "warn" : "info",
+        failedStep: "option.match",
+        reason:
+          "Phone device type did not offer a mobile or cell option, so C3 used the progress-first fallback ladder.",
+        options: real.map(function (option) {
+          return option.label;
+        }),
+      });
+      return progressFallbackOption({
+        real,
+        audit,
+        fieldAudit,
+        field,
+        kind: "phone_device_type_defaulted",
+        reason:
+          "Phone device type did not offer a mobile or cell option, so C3 used the progress-first fallback ladder.",
+        neutralSource: "phone_device_neutral_fallback",
+        noSource: "phone_device_no_fallback",
+        firstSource: "phone_device_first_real_fallback",
+      });
     }
     if (isDeferredHierarchicalWorkdayField(field, answer)) {
       return {
@@ -712,23 +938,14 @@
         };
       }
     }
-    if (
-      answer.answerType === "non_disclosure" ||
-      answer.answerType === "unknown"
-    ) {
+    if (answer.answerType === "non_disclosure") {
       var neutral = neutralOption(options);
       if (neutral) {
         root.audit?.pushIssue(audit, fieldAudit, {
-          kind:
-            answer.answerType === "unknown"
-              ? "unknown_question_default_option"
-              : "max_progress_neutral_option",
+          kind: "max_progress_neutral_option",
           severity: "warn",
           failedStep: "option.match",
-          reason:
-            answer.answerType === "unknown"
-              ? "Question was not recognized, so C3 selected the neutral or non-disclosure fallback."
-              : "Selected neutral or non-disclosure fallback.",
+          reason: "Selected neutral or non-disclosure fallback.",
           selectedOption: neutral.label,
           options: real.map(function (option) {
             return option.label;
@@ -764,103 +981,50 @@
         severity: field?.required ? "warn" : "info",
         failedStep: "option.match",
         reason:
-          "No neutral or non-disclosure option was visible, so C3 did not select a concrete demographic fallback.",
+          "No neutral or non-disclosure option was visible, so C3 used the progress-first fallback ladder.",
         options: real.map(function (option) {
           return option.label;
         }),
       });
-      return {
-        option: null,
-        source: "non_disclosure_no_neutral_option",
-        fallback: false,
-      };
+      return progressFallbackOption({
+        real,
+        audit,
+        fieldAudit,
+        field,
+        kind: "non_disclosure_defaulted",
+        reason:
+          "No neutral or non-disclosure option was visible, so C3 used the progress-first fallback ladder.",
+        neutralSource: "non_disclosure_neutral_fallback",
+        noSource: "non_disclosure_no_fallback",
+        firstSource: "non_disclosure_first_real_fallback",
+      });
     }
     if (answer.answerType === "unknown") {
-      var unknownNoOption = real.find(function (option) {
-        var label = normOptionLabel(option.label);
-        var value = normOptionLabel(option.value);
-        return label === "no" || value === "no";
-      });
-      if (unknownNoOption) {
-        root.audit?.pushIssue(audit, fieldAudit, {
-          kind: "unknown_question_default_option",
-          severity: "warn",
-          failedStep: "option.match",
-          reason:
-            "Question was not recognized, so C3 selected No as the max-progress fallback.",
-          selectedOption: unknownNoOption.label,
-          options: real.map(function (option) {
-            return option.label;
-          }),
-        });
-        return {
-          option: unknownNoOption,
-          source: "unknown_no_fallback",
-          fallback: true,
-        };
-      }
-      root.audit?.pushIssue(audit, fieldAudit, {
-        kind: "unknown_question_default_option",
-        severity: "warn",
-        failedStep: "option.match",
+      return progressFallbackOption({
+        real,
+        audit,
+        fieldAudit,
+        field,
+        kind: "unknown_question_defaulted",
         reason:
-          "Question was not recognized, so C3 selected the first real non-placeholder option.",
-        selectedOption: real[0].label,
-        options: real.map(function (option) {
-          return option.label;
-        }),
+          "Question was not recognized, so C3 used the progress-first fallback ladder.",
+        neutralSource: "unknown_neutral_fallback",
+        noSource: "unknown_no_fallback",
+        firstSource: "unknown_first_real_fallback",
       });
-      return {
-        option: real[0],
-        source: "unknown_first_real_option",
-        fallback: true,
-      };
     }
-    var other = real.find(function (option) {
-      var label = norm(option.label);
-      return (
-        label === "other" || label.includes("not applicable") || label === "n a"
-      );
+    return progressFallbackOption({
+      real,
+      audit,
+      fieldAudit,
+      field,
+      kind: "max_progress_option_defaulted",
+      reason:
+        "No exact answer option matched, so C3 used the progress-first fallback ladder.",
+      neutralSource: "neutral_fallback",
+      noSource: "no_fallback",
+      firstSource: "first_real_option",
     });
-    if (other) {
-      root.audit?.pushIssue(audit, fieldAudit, {
-        kind: "max_progress_other_option",
-        severity: "warn",
-        failedStep: "option.match",
-        reason: "Selected Other or Not applicable fallback.",
-        options: real.map(function (option) {
-          return option.label;
-        }),
-      });
-      return { option: other, source: "other_fallback", fallback: true };
-    }
-    var noOption = real.find(function (option) {
-      var label = normOptionLabel(option.label);
-      var value = normOptionLabel(option.value);
-      return label === "no" || value === "no";
-    });
-    if (noOption) {
-      root.audit?.pushIssue(audit, fieldAudit, {
-        kind: "max_progress_no_option",
-        severity: "warn",
-        failedStep: "option.match",
-        reason: "Selected No fallback before first real option.",
-        options: real.map(function (option) {
-          return option.label;
-        }),
-      });
-      return { option: noOption, source: "no_fallback", fallback: true };
-    }
-    root.audit?.pushIssue(audit, fieldAudit, {
-      kind: "max_progress_first_real_option",
-      severity: "warn",
-      failedStep: "option.match",
-      reason: "Selected first real non-placeholder option.",
-      options: real.map(function (option) {
-        return option.label;
-      }),
-    });
-    return { option: real[0], source: "first_real_option", fallback: true };
   }
 
   root.optionMatcher = {

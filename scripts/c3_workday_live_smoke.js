@@ -50,11 +50,12 @@ const DEFAULT_JOB_URL =
 const DEFAULT_EXTENSION_ID = "cbdmkibihimaedoihjhpidclolglnncc";
 const AUTH_VERIFICATION_RE =
   /an email has been sent to you\.?\s*please verify your account|verify your account before you sign in|request a verification email/i;
-const IDENTIFIER_TIMEOUT_MS = 60_000;
+const IDENTIFIER_TIMEOUT_MS = 20_000;
 const AUTH_WORKFLOW_TIMEOUT_MS = 120_000;
 const APPLY_ENTRY_TIMEOUT_MS = 60_000;
-const PAGE_FILL_AND_NEXT_TIMEOUT_MS = 60_000;
-const FULL_APPLICATION_TIMEOUT_MS = 300_000;
+const C3_EXTENSION_FILL_TIMEOUT_MS = 120_000;
+const PAGE_FILL_AND_NEXT_TIMEOUT_MS = C3_EXTENSION_FILL_TIMEOUT_MS + 10_000;
+const FULL_APPLICATION_TIMEOUT_MS = 600_000;
 
 class PhaseTimeoutError extends Error {
   constructor(phase, timeoutMs) {
@@ -104,22 +105,46 @@ function pageHasBlockingValidation(page) {
 async function reconcilePageFillTimeoutToReview(pageClient, options = {}) {
   const timeoutMs = Number(options.timeoutMs || 25_000);
   const intervalMs = Number(options.intervalMs || 1200);
+  const before = options.before || null;
   const startedAt = Date.now();
   let page = await inspectPage(pageClient);
+  let advancedPage =
+    before && pageAdvancedFrom(before, page) ? page : null;
   while (Date.now() - startedAt < timeoutMs) {
     if (pageReachedReview(page) && !pageHasBlockingValidation(page)) {
       return {
         page,
         reachedReview: true,
+        advanced: true,
+        reason: "timeout_reconciled_to_review",
         waitedMs: Date.now() - startedAt,
       };
+    }
+    if (before && pageAdvancedFrom(before, page)) {
+      advancedPage = page;
     }
     await sleep(intervalMs);
     page = await inspectPage(pageClient);
   }
+  if (advancedPage && !pageHasBlockingValidation(advancedPage)) {
+    return {
+      page: advancedPage,
+      reachedReview: pageReachedReview(advancedPage),
+      advanced: true,
+      reason: pageReachedReview(advancedPage)
+        ? "timeout_reconciled_to_review"
+        : "timeout_reconciled_to_later_step",
+      waitedMs: Date.now() - startedAt,
+    };
+  }
   return {
     page,
     reachedReview: pageReachedReview(page) && !pageHasBlockingValidation(page),
+    advanced: before ? pageAdvancedFrom(before, page) : false,
+    reason:
+      before && pageAdvancedFrom(before, page)
+        ? "timeout_reconciled_to_later_step"
+        : "page_fill_and_next_timeout",
     waitedMs: Date.now() - startedAt,
   };
 }
@@ -161,7 +186,28 @@ function pageAdvancedFrom(before, after) {
   );
 }
 
-async function setRunnerFillProgress(optionsClient, applyUrl, message) {
+function workdaySourceStateErrors(errors = []) {
+  return (errors || []).filter((error) =>
+    /source can be either|source.*referral|source.*social|source.*share|how did you hear|referrer/i.test(
+      String(error || ""),
+    ),
+  );
+}
+
+function stripWorkdaySourceQuery(value) {
+  try {
+    const url = new URL(value);
+    if (!url.searchParams.has("source")) {
+      return "";
+    }
+    url.searchParams.delete("source");
+    return url.toString();
+  } catch (_error) {
+    return "";
+  }
+}
+
+async function setRunnerFillProgress(optionsClient, applyUrl, message, details = {}) {
   if (!optionsClient || !applyUrl) {
     return { ok: false, reason: "missing_progress_context" };
   }
@@ -169,6 +215,7 @@ async function setRunnerFillProgress(optionsClient, applyUrl, message) {
     `(() => {
       const applyUrl = ${JSON.stringify(applyUrl)};
       const message = ${JSON.stringify(message || "")};
+      const details = ${JSON.stringify(details || {})};
       const normalizeWorkdayPathname = (pathname) =>
         String(pathname || "").replace(/\\/apply(?:\\/[^/]+)?\\/?$/, "");
       return (async () => {
@@ -193,7 +240,12 @@ async function setRunnerFillProgress(optionsClient, applyUrl, message) {
         const uiMessage = {
           type: "hunt.apply.show_fill_progress",
           message,
-          fillRunId: "c3_workday_live_smoke"
+          fillRunId: "c3_workday_live_smoke",
+          phase: details.phase || "",
+          substep: details.substep || "",
+          stepElapsedMs: Number(details.stepElapsedMs || 0),
+          totalElapsedMs: Number(details.totalElapsedMs || 0),
+          lastProgressSummary: details.lastProgressSummary || ""
         };
         try {
           await chrome.tabs.sendMessage(tab.id, uiMessage);
@@ -263,6 +315,11 @@ async function waitForPostFillSettle(
     optionsClient,
     applyUrl,
     "Waiting for Workday to finish loading",
+    {
+      phase: "job_fill.wait_post_next",
+      substep: "Waiting for Workday transition",
+      lastProgressSummary: "Post-fill settle started",
+    },
   ).catch(() => null);
   try {
     const started = Date.now();
@@ -302,6 +359,95 @@ async function waitForPostFillSettle(
   }
 }
 
+async function waitForPostNextWorkdaySettle(
+  pageClient,
+  { reason = "post_next_workday_settle", timeoutMs = 6500 } = {},
+) {
+  const startedAt = Date.now();
+  let latest = await inspectPage(pageClient);
+  let runtimeRefreshAttempted = false;
+  if (latest.workdayRuntimeError) {
+    const runtimeRecovery = await recoverWorkdayRuntimeError(pageClient, reason);
+    runtimeRefreshAttempted = true;
+    latest.runtimeRecovery = runtimeRecovery;
+    if (!runtimeRecovery.ok) {
+      return {
+        ok: false,
+        reason: "workday_runtime_error_after_next",
+        maxRuntimeRefreshRetries: 1,
+        runtimeRecovery,
+        page: latest,
+      };
+    }
+    latest = await inspectPage(pageClient);
+  }
+  let stableKey = "";
+  let stableCount = 0;
+  while (Date.now() - startedAt < timeoutMs) {
+    latest = await inspectPage(pageClient);
+    if (latest.workdayRuntimeError) {
+      if (runtimeRefreshAttempted) {
+        return {
+          ok: false,
+          reason: "workday_runtime_error_after_next_retry",
+          maxRuntimeRefreshRetries: 1,
+          page: latest,
+        };
+      }
+      const runtimeRecovery = await recoverWorkdayRuntimeError(
+        pageClient,
+        reason,
+      );
+      runtimeRefreshAttempted = true;
+      latest.runtimeRecovery = runtimeRecovery;
+      if (!runtimeRecovery.ok) {
+        return {
+          ok: false,
+          reason: "workday_runtime_error_after_next",
+          maxRuntimeRefreshRetries: 1,
+          runtimeRecovery,
+          page: latest,
+        };
+      }
+      latest = await inspectPage(pageClient);
+    }
+    const loading =
+      latest.readyState !== "complete" || latest.loadingNodeCount > 0;
+    const key = [
+      latest.href || "",
+      latest.currentStep?.title || "",
+      latest.currentStep?.current || "",
+      latest.fields?.length || 0,
+      latest.errors?.length || 0,
+      latest.hasSubmit ? "submit" : "",
+      latest.hasNext ? "next" : "",
+    ].join("|");
+    if (!loading && key === stableKey) {
+      stableCount += 1;
+    } else {
+      stableKey = key;
+      stableCount = loading ? 0 : 1;
+    }
+    if (!loading && stableCount >= 2) {
+      return {
+        ok: true,
+        reason: "post_next_workday_settled",
+        waitedMs: Date.now() - startedAt,
+        maxRuntimeRefreshRetries: 1,
+        page: latest,
+      };
+    }
+    await sleep(450);
+  }
+  return {
+    ok: true,
+    reason: "post_next_workday_settle_timeout",
+    waitedMs: Date.now() - startedAt,
+    maxRuntimeRefreshRetries: 1,
+    page: latest,
+  };
+}
+
 function parseArgs(argv) {
   const args = {
     mode: "manual",
@@ -329,6 +475,8 @@ function parseArgs(argv) {
     auditJson: process.env.HUNT_C3_AUDIT_JSON || "",
     noAuditJson: false,
     closeOtherWorkdayTabs: false,
+    bringToFront: false,
+    manualAuthTimeoutMs: Number(process.env.HUNT_C3_MANUAL_AUTH_TIMEOUT_MS || 0),
   };
   for (let i = 2; i < argv.length; i += 1) {
     const arg = argv[i];
@@ -393,6 +541,9 @@ function parseArgs(argv) {
     } else if (arg === "--account-password" && next) {
       args.accountPassword = next;
       i += 1;
+    } else if (arg === "--manual-auth-timeout-ms" && next) {
+      args.manualAuthTimeoutMs = Number(next);
+      i += 1;
     } else if (arg === "--audit-json" && next) {
       args.auditJson = path.resolve(process.cwd(), next);
       i += 1;
@@ -400,6 +551,8 @@ function parseArgs(argv) {
       args.noAuditJson = true;
     } else if (arg === "--close-other-workday-tabs") {
       args.closeOtherWorkdayTabs = true;
+    } else if (arg === "--bring-to-front") {
+      args.bringToFront = true;
     } else if (arg === "--help") {
       args.help = true;
     } else {
@@ -432,6 +585,7 @@ function usage() {
     "  --fills-per-page <n> Fill the same page n times before Next",
     "  --stop-after-fill  Do not click Next after the fill step",
     "  --close-other-workday-tabs Close other Workday apply tabs before filling this site",
+    "  --bring-to-front Bring the p Chrome tab to front. Off by default for background batch lanes",
     "  --target-step <name> Stop logic can target a Workday step title",
     "  --start-step <name> Click a Workday step before filling, if visible",
     "  --require-target Fail before fill unless current step matches target",
@@ -445,6 +599,7 @@ function usage() {
     "  --llm-answers Allow backend answer-router decisions during fill",
     "  --no-llm-answers Do not auto-apply backend answer-router decisions during fill (default)",
     "  --account-email <email> Optional account/profile email override",
+    "  --manual-auth-timeout-ms <ms> Wait for manual auth handoff after auth gate, default 0",
     "  --audit-json <path> Write full page/retry/value audit JSON, default logs/c3_workday_audit_<timestamp>.json",
     "  --no-audit-json Disable audit JSON file writing",
   ].join("\n");
@@ -457,6 +612,69 @@ function logWorkflowPhase(phase, status, summary, details = {}) {
   console.error(`[c3][${phase}][${status}] ${summary}${detailText}`);
 }
 
+function createWorkflowTimingRecorder() {
+  const timings = [];
+  const startedAt = Date.now();
+  let lastProgressAt = startedAt;
+  const record = (phase, status, summary, details = {}, started = Date.now()) => {
+    const now = Date.now();
+    const entry = {
+      phase,
+      status,
+      summary,
+      startedAt: new Date(started).toISOString(),
+      finishedAt: new Date(now).toISOString(),
+      elapsedMs: now - started,
+      totalElapsedMs: now - startedAt,
+      lastProgressAtMs: lastProgressAt - startedAt,
+      ...details,
+    };
+    if (status !== "timeout" && status !== "failed") {
+      lastProgressAt = now;
+    }
+    timings.push(entry);
+    logWorkflowPhase("workflow_timing", status, summary, entry);
+    return entry;
+  };
+  const run = async (phase, timeoutMs, work, details = {}) => {
+    const phaseStartedAt = Date.now();
+    record(
+      phase,
+      "started",
+      `${phase} started`,
+      { timeoutMs, ...details },
+      phaseStartedAt,
+    );
+    try {
+      const result = await withPhaseTimeout(phase, timeoutMs, work);
+      record(
+        phase,
+        "success",
+        `${phase} completed`,
+        { timeoutMs, ...details },
+        phaseStartedAt,
+      );
+      return result;
+    } catch (error) {
+      record(
+        phase,
+        error instanceof PhaseTimeoutError ? "timeout" : "failed",
+        `${phase} ${
+          error instanceof PhaseTimeoutError ? "timed out" : "failed"
+        }`,
+        {
+          timeoutMs,
+          error: String(error?.message || error),
+          ...details,
+        },
+        phaseStartedAt,
+      );
+      throw error;
+    }
+  };
+  return { timings, record, run };
+}
+
 function deriveApplyUrl(jobUrl, mode) {
   const url = new URL(jobUrl);
   const source = url.searchParams.get("source") || "LinkedIn";
@@ -466,6 +684,12 @@ function deriveApplyUrl(jobUrl, mode) {
     mode === "resume" ? "autofillWithResume" : "applyManually";
   url.pathname = `${basePath.replace(/\/$/, "")}/apply/${applySegment}`;
   url.searchParams.set("source", source);
+  return url.toString();
+}
+
+function deriveApplyUrlWithoutSource(jobUrl, mode) {
+  const url = new URL(deriveApplyUrl(jobUrl, mode));
+  url.searchParams.delete("source");
   return url.toString();
 }
 
@@ -556,6 +780,28 @@ async function getTargets(port) {
   return httpJson(port, "/json/list");
 }
 
+async function createBackgroundTarget(port, url) {
+  const version = await httpJson(port, "/json/version");
+  if (!version?.webSocketDebuggerUrl) {
+    throw new Error("Could not find browser DevTools websocket.");
+  }
+  const browserClient = await new CdpClient(
+    version.webSocketDebuggerUrl,
+  ).connect();
+  try {
+    return await browserClient.send(
+      "Target.createTarget",
+      {
+        url,
+        background: true,
+      },
+      10000,
+    );
+  } finally {
+    browserClient.close();
+  }
+}
+
 function findExtensionId(targets) {
   const c3Target = targets.find((target) =>
     String(target.url || "").includes("/src/background/index.js"),
@@ -609,12 +855,9 @@ async function ensureOptionsTarget(port, fallbackExtensionId) {
   if (!extensionId) {
     throw new Error("Could not find loaded C3 extension in CDP targets");
   }
-  await httpText(
+  await createBackgroundTarget(
     port,
-    `/json/new?${encodeURIComponent(
-      `chrome-extension://${extensionId}/src/options/options.html`,
-    )}`,
-    "PUT",
+    `chrome-extension://${extensionId}/src/options/options.html`,
   );
   await sleep(500);
   targets = await getTargets(port);
@@ -661,7 +904,7 @@ async function ensurePageTarget(port, applyUrl) {
           !/error|ok/i.test(String(item.title || "")),
       );
   if (!target) {
-    await httpText(port, `/json/new?${encodeURIComponent(applyUrl)}`, "PUT");
+    await createBackgroundTarget(port, applyUrl);
     await sleep(1000);
     targets = await getTargets(port);
     target =
@@ -726,6 +969,7 @@ async function waitForWorkdayPageReady(pageClient, timeoutMs = 45000) {
 }
 
 async function seedExtension(optionsClient, seedPayload, args = {}) {
+  await waitForExtensionStorage(optionsClient);
   return optionsClient.evaluate(
     `(async () => {
       const payload = ${js(seedPayload)};
@@ -771,6 +1015,7 @@ async function seedExtension(optionsClient, seedPayload, args = {}) {
 }
 
 async function setExtensionAutoNext(optionsClient, enabled) {
+  await waitForExtensionStorage(optionsClient);
   return optionsClient.evaluate(
     `(async () => {
       const storedRuntime = await chrome.storage.local.get("hunt.apply.runtimeConfig");
@@ -817,10 +1062,218 @@ function authVerificationErrors(errors = []) {
   );
 }
 
+async function waitForExtensionStorage(optionsClient, timeoutMs = 10000) {
+  const startedAt = Date.now();
+  let lastReason = "";
+  while (Date.now() - startedAt < timeoutMs) {
+    const state = await optionsClient
+      .evaluate(
+        `(() => {
+          const href = String(location.href || "");
+          const hasChrome = Boolean(globalThis.chrome);
+          const hasRuntime = Boolean(globalThis.chrome?.runtime);
+          const hasStorage = Boolean(globalThis.chrome?.storage?.local);
+          return {
+            ok: hasChrome && hasRuntime && hasStorage,
+            href,
+            hasChrome,
+            hasRuntime,
+            hasStorage,
+          };
+        })()`,
+        5000,
+      )
+      .catch((error) => ({
+        ok: false,
+        reason: String(error?.message || error),
+      }));
+    if (state?.ok) {
+      return state;
+    }
+    lastReason = state?.reason || JSON.stringify(state || {});
+    await sleep(250);
+  }
+  throw new Error(
+    `C3 options page did not expose chrome.storage.local within ${timeoutMs}ms: ${lastReason}`,
+  );
+}
+
+function authBadCredentialErrors(errors = []) {
+  return (errors || []).filter((error) =>
+    /wrong email address|wrong password|email address or password|account might be locked|account.*locked|invalid (email|password|credentials)|incorrect (email|password|credentials)/i.test(
+      String(error || ""),
+    ),
+  );
+}
+
+function fallbackAccountEmail(baseEmail = "", scopeKey = "", attempt = 1) {
+  const email = String(baseEmail || "").trim();
+  const at = email.lastIndexOf("@");
+  if (at <= 0 || at >= email.length - 1) return "";
+  const localBase = email.slice(0, at).replace(/\+.*/, "");
+  const domain = email.slice(at + 1);
+  const scopeSlug = String(scopeKey || "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "")
+    .slice(0, 12);
+  const suffix = [
+    "c3",
+    scopeSlug,
+    Date.now().toString(36).slice(-6),
+    String(attempt),
+  ]
+    .filter(Boolean)
+    .join("");
+  const maxBaseLength = Math.max(1, 63 - suffix.length);
+  return `${localBase.slice(0, maxBaseLength)}+${suffix}@${domain}`;
+}
+
+async function clickCreateAccountAfterBadCredentials(pageClient) {
+  return pageClient.evaluate(
+    `(async () => {
+      const normalize = (value) => String(value || "").replace(/\\s+/g, " ").trim();
+      const visible = (el) => {
+        if (!el) return false;
+        const style = getComputedStyle(el);
+        const rect = el.getBoundingClientRect();
+        return style.display !== "none" && style.visibility !== "hidden" && rect.width > 0 && rect.height > 0 && !el.disabled;
+      };
+      const labelFor = (el) => normalize([
+        el.getAttribute("aria-label"),
+        el.getAttribute("title"),
+        el.value,
+        el.innerText,
+        el.textContent,
+      ].filter(Boolean).join(" "));
+      const metadataFor = (el) => normalize([
+        el.id,
+        el.name,
+        el.type,
+        el.getAttribute("data-automation-id"),
+        el.getAttribute("data-testid"),
+        el.className,
+      ].filter(Boolean).join(" "));
+      const candidates = [...document.querySelectorAll('button, [role="button"], a[href], [data-automation-id], span, div')]
+        .filter(visible)
+        .map((el) => {
+          const label = labelFor(el);
+          const metadata = metadataFor(el);
+          let score = 0;
+          if (/createAccountLink|createAccountButton|createAccount/i.test(metadata)) score += 120;
+          if (/^create account(?: create account)?$/i.test(label)) score += 100;
+          if (/register|sign up|signup/i.test(label + " " + metadata)) score += 70;
+          if (/sign in|log in|login|google|linkedin|facebook|forgot|back/i.test(label + " " + metadata)) score -= 100;
+          return { el, label, metadata, score };
+        })
+        .filter((entry) => entry.score > 0)
+        .sort((a, b) => b.score - a.score);
+      if (!candidates.length) {
+        return { ok: false, clicked: false, reason: "create_account_action_not_found" };
+      }
+      const target = candidates[0].el;
+      target.scrollIntoView({ block: "center", inline: "center" });
+      try { target.focus?.({ preventScroll: true }); } catch (_error) {}
+      const rect = target.getBoundingClientRect();
+      const init = {
+        bubbles: true,
+        cancelable: true,
+        view: window,
+        button: 0,
+        buttons: 1,
+        clientX: Math.round(rect.left + rect.width / 2),
+        clientY: Math.round(rect.top + rect.height / 2),
+      };
+      for (const type of ["pointerover", "mouseover", "pointermove", "mousemove", "pointerdown", "mousedown"]) {
+        const Ctor = type.startsWith("pointer") ? PointerEvent : MouseEvent;
+        target.dispatchEvent(new Ctor(type, init));
+      }
+      target.dispatchEvent(new PointerEvent("pointerup", { ...init, buttons: 0 }));
+      target.dispatchEvent(new MouseEvent("mouseup", { ...init, buttons: 0 }));
+      target.dispatchEvent(new MouseEvent("click", { ...init, buttons: 0 }));
+      if (typeof target.click === "function") target.click();
+      await new Promise((resolve) => setTimeout(resolve, 1600));
+      return {
+        ok: true,
+        clicked: true,
+        reason: "create_account_after_bad_credentials",
+        label: candidates[0].label,
+        metadata: candidates[0].metadata,
+        href: location.href,
+      };
+    })()`,
+    30000,
+  );
+}
+
+async function tryBadCredentialCreateAccountFallback({
+  pageClient,
+  args,
+  authWorkflow,
+  attemptsByScope,
+  scopeKey,
+  errors,
+}) {
+  const attempts = attemptsByScope.get(scopeKey) || 0;
+  if (attempts >= 1) {
+    return {
+      ok: false,
+      skipped: true,
+      reason: "bad_credentials_create_account_fallback_exhausted",
+      attempts,
+      errors,
+    };
+  }
+  const fallbackEmail = fallbackAccountEmail(
+    args.accountEmail,
+    scopeKey,
+    attempts + 1,
+  );
+  if (!fallbackEmail) {
+    return {
+      ok: false,
+      skipped: true,
+      reason: "bad_credentials_fallback_email_unavailable",
+      attempts,
+      errors,
+    };
+  }
+  const click = await clickCreateAccountAfterBadCredentials(pageClient).catch(
+    (error) => ({
+      ok: false,
+      clicked: false,
+      reason: "create_account_after_bad_credentials_error",
+      message: error instanceof Error ? error.message : String(error),
+    }),
+  );
+  if (!click?.clicked) {
+    return {
+      ok: false,
+      skipped: true,
+      reason: click?.reason || "create_account_after_bad_credentials_failed",
+      click,
+      attempts,
+      errors,
+    };
+  }
+  attemptsByScope.set(scopeKey, attempts + 1);
+  args.accountEmail = fallbackEmail;
+  authWorkflow.accountEmail = fallbackEmail;
+  return {
+    ok: true,
+    reason: "bad_credentials_try_fresh_create_account",
+    attempts: attempts + 1,
+    email: fallbackEmail,
+    errors,
+    click,
+  };
+}
+
 function looksLikeAuthPage(summary = {}) {
   const title = String(summary.currentStep?.title || "");
   const href = String(summary.href || "");
+  const pageTitle = String(summary.title || "");
   const fields = summary.fields || [];
+  const buttons = summary.buttons || [];
   const hasEmail = fields.some((field) =>
     /email|username|user/i.test(
       [field.id, field.name, field.automationId, field.ariaLabel, field.text]
@@ -837,9 +1290,14 @@ function looksLikeAuthPage(summary = {}) {
           .join(" "),
       ),
   );
+  const hasSignInButton = buttons.some((b) =>
+    /sign in|log in|create account/i.test(String(b.text || "")),
+  );
   return (
     /create account|sign in|log in|login|register|sign up/i.test(title) ||
-    (/\/login\b|\/apply\/applyManually/i.test(href) && hasEmail && hasPassword)
+    /sign in|log in|create account/i.test(pageTitle) ||
+    (/\/login\b|\/apply\/applyManually/i.test(href) && hasEmail && hasPassword) ||
+    (/\/login\b/i.test(href) && hasSignInButton)
   );
 }
 
@@ -867,10 +1325,31 @@ function authReturnUrl(afterHref, fallbackApplyUrl) {
     if (/\/userHome\b/i.test(current.pathname)) {
       return fallbackApplyUrl;
     }
+    const redirect = current.searchParams.get("redirect");
+    if (/\/login\/ok\b/i.test(current.pathname) && redirect) {
+      return new URL(redirect, current.origin).href;
+    }
   } catch (_error) {
     // Invalid URLs fall through to the normal workflow loop.
   }
   return "";
+}
+
+function directWorkdayLoginUrl(applyUrl) {
+  try {
+    const url = new URL(applyUrl);
+    const redirect = `${url.pathname}${url.search || ""}`;
+    const segments = url.pathname.split("/").filter(Boolean);
+    const jobIndex = segments.findIndex(
+      (segment) => segment.toLowerCase() === "job",
+    );
+    const siteSegments = (jobIndex > 0 ? segments.slice(0, jobIndex) : segments.slice(0, 1))
+      .filter(Boolean);
+    const loginPath = `/${siteSegments.concat("login").join("/")}`;
+    return `${url.origin}${loginPath}?redirect=${encodeURIComponent(redirect)}`;
+  } catch (_error) {
+    return "";
+  }
 }
 
 function workdayAppScope(value) {
@@ -888,6 +1367,107 @@ function workdayAppScope(value) {
   } catch (_error) {
     return { host: "", appSegment: "" };
   }
+}
+
+async function injectManualAuthPrompt(pageClient) {
+  await pageClient
+    .evaluate(
+      `(() => {
+        if (document.getElementById("hunt-manual-auth-prompt")) return;
+        const el = document.createElement("div");
+        el.id = "hunt-manual-auth-prompt";
+        el.setAttribute("aria-live", "polite");
+        el.setAttribute("role", "dialog");
+        el.setAttribute("aria-label", "Hunt C3 sign-in required");
+        Object.assign(el.style, {
+          position: "fixed",
+          top: "20px",
+          right: "20px",
+          zIndex: "2147483647",
+          width: "320px",
+          background: "#0e1f14",
+          border: "1.5px solid #59a96a",
+          borderRadius: "12px",
+          boxShadow: "0 8px 32px rgba(0,0,0,0.5)",
+          fontFamily: "Segoe UI, system-ui, sans-serif",
+          overflow: "hidden",
+          pointerEvents: "auto",
+        });
+        el.innerHTML = [
+          '<div style="background:#143320;padding:12px 16px 10px;display:flex;align-items:center;justify-content:space-between;gap:12px;">',
+          '  <div>',
+          '    <div style="color:#9bdeac;font-size:10px;font-weight:800;letter-spacing:0.08em;text-transform:uppercase;">Hunt C3</div>',
+          '    <div style="color:#f2fff5;font-size:15px;font-weight:800;margin-top:2px;line-height:1.2;">Sign in required</div>',
+          '  </div>',
+          '  <div id="hunt-manual-auth-badge" style="background:#1e3a26;border:1px solid #f0b429;border-radius:999px;color:#f8d98a;flex:0 0 auto;font-size:11px;font-weight:800;padding:5px 8px;">Waiting</div>',
+          '</div>',
+          '<div style="padding:12px 16px 14px;">',
+          '  <div style="color:#d4f0dc;font-size:13px;font-weight:650;line-height:1.4;margin-bottom:10px;">C3 was blocked by Workday\'s sign-in gate. Please sign in manually and C3 will continue automatically.</div>',
+          '  <div id="hunt-manual-auth-status" style="background:#122118;border:1px solid #263c2a;border-radius:7px;padding:7px 9px;">',
+          '    <span style="color:#9bb69f;font-size:11px;font-weight:750;letter-spacing:0.04em;text-transform:uppercase;">Watching for auth complete...</span>',
+          '  </div>',
+          '</div>',
+          '<div style="border-top:1px solid #263c2a;display:flex;justify-content:flex-end;padding:10px 14px;">',
+          '  <button onclick="document.getElementById(\'hunt-manual-auth-prompt\').remove()" style="background:#59a96a;border:1px solid #6fc77d;border-radius:7px;color:#07100a;cursor:pointer;font:800 12px Segoe UI,system-ui,sans-serif;min-height:30px;min-width:86px;padding:6px 10px;">Dismiss</button>',
+          '</div>',
+        ].join("");
+        document.body.appendChild(el);
+      })()`,
+      10000,
+    )
+    .catch(() => null);
+}
+
+async function waitForManualAuth(pageClient, authHref, maxMs = 300000) {
+  const authTitleLike = (value) =>
+    /create account|sign[\s_-]*in|log[\s_-]*in|login|register|sign[\s_-]*up|signup|signin|auth/i.test(
+      String(value || ""),
+    );
+  const startedAt = Date.now();
+  let lastElapsed = "";
+  while (Date.now() - startedAt < maxMs) {
+    await sleep(3000);
+    const elapsed = Math.round((Date.now() - startedAt) / 1000);
+    const elapsedLabel = `${elapsed}s elapsed`;
+    if (elapsedLabel !== lastElapsed) {
+      lastElapsed = elapsedLabel;
+      await pageClient
+        .evaluate(
+          `(() => {
+            const status = document.getElementById("hunt-manual-auth-status");
+            if (status) status.innerHTML = '<span style="color:#9bb69f;font-size:11px;font-weight:750;letter-spacing:0.04em;text-transform:uppercase;">Watching... ${elapsed}s</span>';
+          })()`,
+          5000,
+        )
+        .catch(() => null);
+    }
+    const after = await inspectPage(pageClient).catch(() => null);
+    if (!after) continue;
+    const hrefChanged = String(after.href || "") !== String(authHref || "");
+    const pageKindChanged = !authTitleLike(after.pageKind || "") && !authTitleLike(after.title || "");
+    if (hrefChanged || pageKindChanged) {
+      await pageClient
+        .evaluate(
+          `(() => {
+            const badge = document.getElementById("hunt-manual-auth-badge");
+            if (badge) { badge.textContent = "Done"; badge.style.background = "#1e3a26"; badge.style.borderColor = "#59a96a"; badge.style.color = "#b4e7ce"; }
+            const status = document.getElementById("hunt-manual-auth-status");
+            if (status) status.innerHTML = '<span style="color:#9bdeac;font-size:11px;font-weight:750;letter-spacing:0.04em;text-transform:uppercase;">Auth complete, resuming...</span>';
+            setTimeout(() => { const el = document.getElementById("hunt-manual-auth-prompt"); if (el) el.remove(); }, 3000);
+          })()`,
+          5000,
+        )
+        .catch(() => null);
+      return { ok: true, after, elapsed: Date.now() - startedAt };
+    }
+  }
+  await pageClient
+    .evaluate(
+      `(() => { const el = document.getElementById("hunt-manual-auth-prompt"); if (el) el.remove(); })()`,
+      5000,
+    )
+    .catch(() => null);
+  return { ok: false, reason: "manual_auth_timeout", elapsed: Date.now() - startedAt };
 }
 
 async function resolveAuthVerificationViaMail(pageClient, args, context = {}) {
@@ -1082,10 +1662,13 @@ function pageSummaryExpression() {
     };
     const text = document.body ? document.body.innerText : "";
     const normalizedText = text.replace(/\s+/g, " ").trim().toLowerCase();
-    const workdayRuntimeError = normalizedText.includes("something went wrong")
+    const workdayRuntimeError = (normalizedText.includes("something went wrong")
       && (normalizedText.includes("please refresh the page and then try again")
         || normalizedText.includes("plea e refre h the page and then try again")
-        || (normalizedText.includes("refre") && normalizedText.includes("try again")));
+        || (normalizedText.includes("refre") && normalizedText.includes("try again"))))
+      || (normalizedText.includes("error-page error") && normalizedText.includes("error code:"))
+      || /\\berror code:\\s*vps\\|/i.test(text)
+      || /\\bvps\\|[0-9a-f-]{20,}/i.test(text);
     const readCurrentStep = () => {
       const activeStep = document.querySelector('[data-automation-id="progressBarActiveStep"]');
       if (activeStep) {
@@ -1235,6 +1818,7 @@ async function recoverWorkdayRuntimeError(
   return {
     attempted: true,
     ok: !after.workdayRuntimeError,
+    maxRuntimeRefreshRetries: 1,
     reason,
     before,
     after,
@@ -1276,10 +1860,17 @@ async function clickWorkdayStep(pageClient, stepName) {
       };
       const bodyText = document.body ? document.body.innerText : "";
       const normalizedBodyText = bodyText.toLowerCase();
-      const workdayRuntimeError = normalizedBodyText.includes("something went wrong")
-        && (normalizedBodyText.includes("please refresh the page and then try again")
-          || normalizedBodyText.includes("plea e refre h the page and then try again")
-          || (normalizedBodyText.includes("refre") && normalizedBodyText.includes("try again")));
+      const hasWorkdayRuntimeError = (value) => {
+        const lower = String(value || "").toLowerCase();
+        return (lower.includes("something went wrong")
+          && (lower.includes("please refresh the page and then try again")
+            || lower.includes("plea e refre h the page and then try again")
+            || (lower.includes("refre") && lower.includes("try again"))))
+          || (lower.includes("error-page error") && lower.includes("error code:"))
+          || /\\berror code:\\s*vps\\|/i.test(String(value || ""))
+          || /\\bvps\\|[0-9a-f-]{20,}/i.test(String(value || ""));
+      };
+      const workdayRuntimeError = hasWorkdayRuntimeError(bodyText);
       const readCurrentStep = () => {
         const activeStep = document.querySelector('[data-automation-id="progressBarActiveStep"]');
         if (activeStep) {
@@ -1333,10 +1924,7 @@ async function clickWorkdayStep(pageClient, stepName) {
           target,
           label: candidate.text,
           href: location.href,
-          workdayRuntimeError: afterText.toLowerCase().includes("something went wrong")
-            && (afterText.toLowerCase().includes("please refresh the page and then try again")
-              || afterText.toLowerCase().includes("plea e refre h the page and then try again")
-              || (afterText.toLowerCase().includes("refre") && afterText.toLowerCase().includes("try again")))
+          workdayRuntimeError: hasWorkdayRuntimeError(afterText)
         };
       }
       const back = candidates.find((item) => /^back(\\s+back)?$/i.test(item.text));
@@ -1352,10 +1940,7 @@ async function clickWorkdayStep(pageClient, stepName) {
           currentStep,
           label: back.text,
           href: location.href,
-          workdayRuntimeError: afterText.toLowerCase().includes("something went wrong")
-            && (afterText.toLowerCase().includes("please refresh the page and then try again")
-              || afterText.toLowerCase().includes("plea e refre h the page and then try again")
-              || (afterText.toLowerCase().includes("refre") && afterText.toLowerCase().includes("try again"))),
+          workdayRuntimeError: hasWorkdayRuntimeError(afterText),
           candidates: candidates.map((item) => item.text).slice(0, 30)
         };
       }
@@ -1843,6 +2428,7 @@ async function clickNext(pageClient) {
       };
       const clickReal = (target) => {
         target.scrollIntoView({ block: "center", inline: "center" });
+        target.focus?.({ preventScroll: true });
         const rect = target.getBoundingClientRect();
         const init = {
           bubbles: true,
@@ -1857,6 +2443,13 @@ async function clickNext(pageClient) {
         target.dispatchEvent(new PointerEvent("pointerup", { ...init, buttons: 0 }));
         target.dispatchEvent(new MouseEvent("mouseup", { ...init, buttons: 0 }));
         target.dispatchEvent(new MouseEvent("click", { ...init, buttons: 0 }));
+      };
+      const keyActivate = (target, key) => {
+        const code = key === " " ? "Space" : key;
+        const keyCode = key === " " ? 32 : 13;
+        target.focus?.({ preventScroll: true });
+        target.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, cancelable: true, key, code, keyCode, which: keyCode }));
+        target.dispatchEvent(new KeyboardEvent("keyup", { bubbles: true, cancelable: true, key, code, keyCode, which: keyCode }));
       };
       const safeNextText = (value) => /^(next|next step|go next|continue|save and continue|save & continue)$/i.test(String(value || "").replace(/\\s+/g, " ").trim());
       const visibleValidationErrors = () => [...document.querySelectorAll([
@@ -1905,20 +2498,44 @@ async function clickNext(pageClient) {
           suppressedErrors
         };
       }
-      const button = [...document.querySelectorAll("button")]
+      const buttonCandidates = [...document.querySelectorAll("button")]
         .filter(visible)
-        .find((candidate) => safeNextText(candidate.innerText || candidate.textContent || "") && !candidate.disabled && candidate.getAttribute("aria-disabled") !== "true");
+        .filter((candidate) => safeNextText(candidate.innerText || candidate.textContent || "") && !candidate.disabled && candidate.getAttribute("aria-disabled") !== "true")
+        .sort((a, b) => {
+          const aMeta = [a.id || "", a.getAttribute("data-automation-id") || "", a.className || ""].join(" ");
+          const bMeta = [b.id || "", b.getAttribute("data-automation-id") || "", b.className || ""].join(" ");
+          const aFooter = /pageFooterNextButton|bottom-navigation-next-button|next-button/i.test(aMeta) ? 1 : 0;
+          const bFooter = /pageFooterNextButton|bottom-navigation-next-button|next-button/i.test(bMeta) ? 1 : 0;
+          if (aFooter !== bFooter) return bFooter - aFooter;
+          return b.getBoundingClientRect().top - a.getBoundingClientRect().top;
+        });
+      const button = buttonCandidates[0];
       if (!button) {
         return { clicked: false, reason: "next_not_found", href: beforeHref };
       }
       clickReal(button);
+      await sleep(1200);
+      if (location.href === beforeHref && !visibleValidationErrors().length) {
+        keyActivate(button, "Enter");
+        await sleep(900);
+      }
+      if (location.href === beforeHref && !visibleValidationErrors().length) {
+        keyActivate(button, " ");
+        await sleep(900);
+      }
+      if (location.href === beforeHref && !visibleValidationErrors().length && typeof button.click === "function") {
+        button.click();
+      }
       await sleep(6500);
       const body = document.body ? document.body.innerText : "";
       const normalizedBody = body.toLowerCase();
-      const workdayRuntimeError = normalizedBody.includes("something went wrong")
+      const workdayRuntimeError = (normalizedBody.includes("something went wrong")
         && (normalizedBody.includes("please refresh the page and then try again")
           || normalizedBody.includes("plea e refre h the page and then try again")
-          || (normalizedBody.includes("refre") && normalizedBody.includes("try again")));
+          || (normalizedBody.includes("refre") && normalizedBody.includes("try again"))))
+        || (normalizedBody.includes("error-page error") && normalizedBody.includes("error code:"))
+        || /\\berror code:\\s*vps\\|/i.test(body)
+        || /\\bvps\\|[0-9a-f-]{20,}/i.test(body);
       const normalize = (value) => String(value || "").replace(/\\s+/g, " ").trim();
       const readCurrentStep = () => {
         const activeStep = document.querySelector('[data-automation-id="progressBarActiveStep"]');
@@ -2061,12 +2678,13 @@ async function run() {
   });
     const signupAttemptsByScope = new Map();
     const fullApplicationStartedAt = Date.now();
+    const timingRecorder = createWorkflowTimingRecorder();
     const remainingFullApplicationMs = () =>
       Math.max(
         0,
         FULL_APPLICATION_TIMEOUT_MS - (Date.now() - fullApplicationStartedAt),
       );
-    const withApplicationPhaseTimeout = (phase, timeoutMs, work) => {
+    const withApplicationPhaseTimeout = (phase, timeoutMs, work, details = {}) => {
       const remaining = remainingFullApplicationMs();
       if (remaining <= 0) {
         throw new PhaseTimeoutError(
@@ -2074,23 +2692,39 @@ async function run() {
           FULL_APPLICATION_TIMEOUT_MS,
         );
       }
-      return withPhaseTimeout(phase, Math.min(timeoutMs, remaining), work);
+      return timingRecorder.run(
+        phase,
+        Math.min(timeoutMs, remaining),
+        work,
+        {
+          requestedTimeoutMs: timeoutMs,
+          remainingFullApplicationMs: remaining,
+          ...details,
+        },
+      );
     };
     const authScopeKey = (href) => {
     const scope = workdayAppScope(href || applyUrl);
     return `${scope.host}|${scope.appSegment}`;
   };
+    const directLoginAttemptsByScope = new Map();
+    const badCredentialCreateAccountAttemptsByScope = new Map();
+    const verifiedAccountLoginRequiredByScope = new Map();
   const routeAfterSignupAttempt = (route) => {
     const key = authScopeKey(route?.state?.href);
     if (
-      route?.authState === "signup" &&
-      (signupAttemptsByScope.get(key) || 0) > 0
+      (route?.authState === "signup" &&
+        (signupAttemptsByScope.get(key) || 0) > 0) ||
+      verifiedAccountLoginRequiredByScope.get(key)
     ) {
       return {
         ...route,
         authState: "login",
         authUiState: "credential_form",
-        signupRetryAsLogin: true,
+        signupRetryAsLogin: Boolean((signupAttemptsByScope.get(key) || 0) > 0),
+        verifiedAccountRetryAsLogin: Boolean(
+          verifiedAccountLoginRequiredByScope.get(key),
+        ),
       };
     }
     return route;
@@ -2099,6 +2733,27 @@ async function run() {
     if (route?.authState !== "signup") return;
     const key = authScopeKey(route?.state?.href);
     signupAttemptsByScope.set(key, (signupAttemptsByScope.get(key) || 0) + 1);
+  };
+  const noteVerifiedAccountNeedsLogin = (authVerification, fallbackHref = "") => {
+    if (!authVerification?.ok || !looksLikeAuthPage(authVerification.after)) {
+      return null;
+    }
+    const href =
+      authVerification.after?.href ||
+      authVerification.postVerifyRedirect ||
+      fallbackHref ||
+      applyUrl;
+    const key = authScopeKey(href);
+    signupAttemptsByScope.set(
+      key,
+      Math.max(signupAttemptsByScope.get(key) || 0, 1),
+    );
+    verifiedAccountLoginRequiredByScope.set(key, true);
+    return {
+      reason: "verified_account_returned_to_auth_require_login",
+      scopeKey: key,
+      href,
+    };
   };
 
   try {
@@ -2132,14 +2787,18 @@ async function run() {
         }
       }
     }
-    await pageClient.send("Page.bringToFront");
+    if (args.bringToFront) {
+      await pageClient.send("Page.bringToFront");
+    }
     if (!args.preserveCurrent) {
       await withApplicationPhaseTimeout("identifier", IDENTIFIER_TIMEOUT_MS, () =>
         navigate(pageClient, applyUrl, () =>
           workflowIdentifier.waitForReady(IDENTIFIER_TIMEOUT_MS),
         ),
       );
-      await pageClient.send("Page.bringToFront");
+      if (args.bringToFront) {
+        await pageClient.send("Page.bringToFront");
+      }
     } else {
       const readyState = await withApplicationPhaseTimeout(
         "identifier",
@@ -2238,6 +2897,7 @@ async function run() {
       applyUrl,
       resumePath: args.resumePath,
       startedAt: new Date().toISOString(),
+      timings: timingRecorder.timings,
       pages: [],
     };
     if (applyEntry.reason === "posting_not_found") {
@@ -2285,7 +2945,7 @@ async function run() {
       if (Date.now() - fullApplicationStartedAt > FULL_APPLICATION_TIMEOUT_MS) {
         audit.reason = "full_application_timeout";
         audit.message =
-          "Full Workday application flow exceeded the 5 minute timeout.";
+          "Full Workday application flow exceeded the 10 minute timeout.";
         break;
       }
       let before = await inspectPage(pageClient);
@@ -2379,11 +3039,85 @@ async function run() {
           if (!authVerification.ok) {
             break;
           }
+          timeline[timeline.length - 1].postVerificationLogin =
+            noteVerifiedAccountNeedsLogin(
+              authVerification,
+              authNext.after?.href || route.state?.href || applyUrl,
+            );
           await sleep(1800);
           continue;
         }
+        const badCredentialErrors = authBadCredentialErrors(authNext.after?.errors || []);
+        if (badCredentialErrors.length) {
+          const key = authScopeKey(authNext.after?.href || route.state?.href || applyUrl);
+          const fallback = await tryBadCredentialCreateAccountFallback({
+            pageClient,
+            args,
+            authWorkflow,
+            attemptsByScope: badCredentialCreateAccountAttemptsByScope,
+            scopeKey: key,
+            errors: badCredentialErrors,
+          });
+          timeline[timeline.length - 1].authBadCredentials = {
+            errors: badCredentialErrors,
+            fallback,
+          };
+          if (fallback.ok) {
+            signupAttemptsByScope.set(key, 0);
+            await sleep(1800);
+            continue;
+          }
+          audit.reason = "auth_bad_credentials";
+          audit.message = badCredentialErrors[0];
+          break;
+        }
         if (!authNext.clicked) {
           break;
+        }
+        if (authNext.reason === "auth_no_captcha_gate") {
+          await injectManualAuthPrompt(pageClient);
+          timeline[timeline.length - 1].manualAuthPrompt = { injected: true, gateHref: authNext.after?.href || route.state?.href || applyUrl };
+          const manualAuthResult = await waitForManualAuth(
+            pageClient,
+            authNext.after?.href || route.state?.href || applyUrl,
+            args.manualAuthTimeoutMs,
+          );
+          timeline[timeline.length - 1].manualAuthResult = manualAuthResult;
+          if (!manualAuthResult.ok) {
+            audit.reason = "auth_no_captcha_gate";
+            audit.message =
+              "Workday sign-in stayed on the same form after filled credential submit; hidden noCaptcha wrapper was present. Manual auth timed out.";
+            break;
+          }
+          await sleep(1800);
+          continue;
+        }
+        if (authNext.reason === "auth_no_progress") {
+          const key = authScopeKey(authNext.after?.href || route.state?.href || applyUrl);
+          const directLoginAttempts = directLoginAttemptsByScope.get(key) || 0;
+          const shouldTryDirectLogin =
+            directLoginAttempts < 1 &&
+            (authRoute.authState === "login" ||
+              authRoute.authState === "signin" ||
+              authRoute.signupRetryAsLogin ||
+              authRoute.authUiState === "landing_choice" ||
+              authRoute.authState === "signup");
+          const loginUrl = shouldTryDirectLogin
+            ? directWorkdayLoginUrl(authNext.after?.href || applyUrl)
+            : "";
+          if (loginUrl) {
+            directLoginAttemptsByScope.set(key, directLoginAttempts + 1);
+            timeline[timeline.length - 1].directLoginFallback = {
+              reason: "auth_no_progress_direct_login",
+              loginUrl,
+              directLoginAttempts: directLoginAttempts + 1,
+            };
+            await navigate(pageClient, loginUrl, () =>
+              workflowIdentifier.waitForReady(AUTH_WORKFLOW_TIMEOUT_MS),
+            );
+            await sleep(1200);
+            continue;
+          }
         }
         const returnUrl = authReturnUrl(authNext.after?.href, applyUrl);
         if (returnUrl) {
@@ -2393,6 +3127,23 @@ async function run() {
           );
           await sleep(1200);
           continue;
+        }
+        if (authNext.reason === "auth_primary_cdp_clicked" || authNext.ok !== false) {
+          await sleep(1800);
+          continue;
+        }
+        await injectManualAuthPrompt(pageClient);
+        timeline[timeline.length - 1].manualAuthPrompt = { injected: true, gateHref: authNext.after?.href || route.state?.href || applyUrl };
+        const manualAuthResultNoProgress = await waitForManualAuth(
+          pageClient,
+          authNext.after?.href || route.state?.href || applyUrl,
+          args.manualAuthTimeoutMs,
+        );
+        timeline[timeline.length - 1].manualAuthResult = manualAuthResultNoProgress;
+        if (!manualAuthResultNoProgress.ok) {
+          audit.reason = "auth_no_progress";
+          audit.message = "C3 auth actions made no progress and all automatic fallbacks were exhausted. Manual auth timed out.";
+          break;
         }
         await sleep(1800);
         continue;
@@ -2437,7 +3188,7 @@ async function run() {
         if (remainingPageMs <= 0) {
           audit.reason = "page_fill_and_next_timeout";
           audit.message =
-            "Current Workday page did not finish filling and advance within the 1 minute timeout.";
+            "Current Workday page did not finish filling and advance within the C3 fill timeout.";
           break pageLoop;
         }
         if (args.extensionAutoNext) {
@@ -2459,13 +3210,15 @@ async function run() {
           }
           const reconciliation = await reconcilePageFillTimeoutToReview(
             pageClient,
+            { before },
           );
           afterFill = reconciliation.page;
-          if (reconciliation.reachedReview) {
+          if (reconciliation.reachedReview || reconciliation.advanced) {
             timeline.push({
               pageIndex: i + 1,
               workflowPhase: "job_fill",
-              reason: "timeout_reconciled_to_review",
+              reason: reconciliation.reason,
+              pageFillTimeoutReconciliation: reconciliation,
               before: {
                 href: before.href,
                 currentStep: before.currentStep,
@@ -2483,14 +3236,52 @@ async function run() {
                 errors: afterFill.errors,
               },
             });
+            if (!reconciliation.reachedReview) {
+              audit.pages.push(
+                buildFillAudit({
+                  pageIndex: i + 1,
+                  fillIndex: fillIndex + 1,
+                  before,
+                  afterFill,
+                  fillSummary: {
+                    ok: true,
+                    status: "recovered_after_timeout",
+                    reason: reconciliation.reason,
+                    summary:
+                      "Runner-side page timeout reconciled to a later Workday step after extension progress.",
+                    filledFieldCount: 0,
+                    pendingLlmFieldCount: 0,
+                    manualReviewReasons: [],
+                    bestEffortWarnings: [reconciliation.reason],
+                    filledFields: [],
+                    generatedAnswers: [],
+                    fieldInventory: [],
+                    nextAction: null,
+                    siteActions: [],
+                    v2AuditSummary: null,
+                    unfilledRequired: [],
+                    phoneCountryCodeTrace: [],
+                    interactionTrace: [],
+                  },
+                }),
+              );
+              await sleep(1200);
+              continue pageLoop;
+            }
             break pageLoop;
           }
           const fillSummary = {
             ok: false,
             error: "page_fill_and_next_timeout",
             status: "timeout",
+            phase: "job_fill.fill_current_page",
+            timeoutMs: PAGE_FILL_AND_NEXT_TIMEOUT_MS,
+            elapsedMs: Date.now() - pagePhaseStartedAt,
+            lastProgressAtMs:
+              timingRecorder.timings[timingRecorder.timings.length - 1]
+                ?.totalElapsedMs || 0,
             summary:
-              "Current Workday page did not finish filling and advance within the 1 minute timeout.",
+              "Current Workday page did not finish filling and advance within the C3 fill timeout.",
             filledFieldCount: 0,
             pendingLlmFieldCount: 0,
             manualReviewReasons: ["page_fill_and_next_timeout"],
@@ -2670,6 +3461,8 @@ async function run() {
         if (!authVerification.ok) {
           break;
         }
+        timeline[timeline.length - 1].postVerificationLogin =
+          noteVerifiedAccountNeedsLogin(authVerification, afterFill.href || applyUrl);
         await sleep(1800);
         continue;
       }
@@ -2706,11 +3499,85 @@ async function run() {
           if (!authVerification.ok) {
             break;
           }
+          timeline[timeline.length - 1].postVerificationLogin =
+            noteVerifiedAccountNeedsLogin(
+              authVerification,
+              authNext.after?.href || authRoute.state?.href || applyUrl,
+            );
           await sleep(1800);
           continue;
         }
+        const badCredentialErrors = authBadCredentialErrors(authNext.after?.errors || []);
+        if (badCredentialErrors.length) {
+          const key = authScopeKey(authNext.after?.href || authRoute.state?.href || applyUrl);
+          const fallback = await tryBadCredentialCreateAccountFallback({
+            pageClient,
+            args,
+            authWorkflow,
+            attemptsByScope: badCredentialCreateAccountAttemptsByScope,
+            scopeKey: key,
+            errors: badCredentialErrors,
+          });
+          timeline[timeline.length - 1].authBadCredentials = {
+            errors: badCredentialErrors,
+            fallback,
+          };
+          if (fallback.ok) {
+            signupAttemptsByScope.set(key, 0);
+            await sleep(1800);
+            continue;
+          }
+          audit.reason = "auth_bad_credentials";
+          audit.message = badCredentialErrors[0];
+          break;
+        }
         if (!authNext.clicked) {
           break;
+        }
+        if (authNext.reason === "auth_no_captcha_gate") {
+          await injectManualAuthPrompt(pageClient);
+          timeline[timeline.length - 1].manualAuthPrompt = { injected: true, gateHref: authNext.after?.href || route.state?.href || applyUrl };
+          const manualAuthResult = await waitForManualAuth(
+            pageClient,
+            authNext.after?.href || route.state?.href || applyUrl,
+            args.manualAuthTimeoutMs,
+          );
+          timeline[timeline.length - 1].manualAuthResult = manualAuthResult;
+          if (!manualAuthResult.ok) {
+            audit.reason = "auth_no_captcha_gate";
+            audit.message =
+              "Workday sign-in stayed on the same form after filled credential submit; hidden noCaptcha wrapper was present. Manual auth timed out.";
+            break;
+          }
+          await sleep(1800);
+          continue;
+        }
+        if (authNext.reason === "auth_no_progress") {
+          const key = authScopeKey(authNext.after?.href || route.state?.href || applyUrl);
+          const directLoginAttempts = directLoginAttemptsByScope.get(key) || 0;
+          const shouldTryDirectLogin =
+            directLoginAttempts < 1 &&
+            (authRoute.authState === "login" ||
+              authRoute.authState === "signin" ||
+              authRoute.signupRetryAsLogin ||
+              authRoute.authUiState === "landing_choice" ||
+              authRoute.authState === "signup");
+          const loginUrl = shouldTryDirectLogin
+            ? directWorkdayLoginUrl(authNext.after?.href || applyUrl)
+            : "";
+          if (loginUrl) {
+            directLoginAttemptsByScope.set(key, directLoginAttempts + 1);
+            timeline[timeline.length - 1].directLoginFallback = {
+              reason: "auth_no_progress_direct_login",
+              loginUrl,
+              directLoginAttempts: directLoginAttempts + 1,
+            };
+            await navigate(pageClient, loginUrl, () =>
+              workflowIdentifier.waitForReady(AUTH_WORKFLOW_TIMEOUT_MS),
+            );
+            await sleep(1200);
+            continue;
+          }
         }
         const returnUrl = authReturnUrl(authNext.after?.href, applyUrl);
         if (returnUrl) {
@@ -2720,6 +3587,23 @@ async function run() {
           );
           await sleep(1200);
           continue;
+        }
+        if (authNext.reason === "auth_primary_cdp_clicked" || authNext.ok !== false) {
+          await sleep(1800);
+          continue;
+        }
+        await injectManualAuthPrompt(pageClient);
+        timeline[timeline.length - 1].manualAuthPrompt = { injected: true, gateHref: authNext.after?.href || authRoute.state?.href || applyUrl };
+        const manualAuthResultNoProgress2 = await waitForManualAuth(
+          pageClient,
+          authNext.after?.href || authRoute.state?.href || applyUrl,
+          args.manualAuthTimeoutMs,
+        );
+        timeline[timeline.length - 1].manualAuthResult = manualAuthResultNoProgress2;
+        if (!manualAuthResultNoProgress2.ok) {
+          audit.reason = "auth_no_progress";
+          audit.message = "C3 auth actions made no progress and all automatic fallbacks were exhausted. Manual auth timed out.";
+          break;
         }
         await sleep(1800);
         continue;
@@ -2740,6 +3624,21 @@ async function run() {
           continue;
         }
         if (afterFill.errors?.length) {
+          const sourceStateErrors = workdaySourceStateErrors(afterFill.errors);
+          const sanitizedApplyUrl = stripWorkdaySourceQuery(afterFill.href || applyUrl);
+          if (sourceStateErrors.length && sanitizedApplyUrl) {
+            timeline[timeline.length - 1].sourceQueryRecovery = {
+              reason: "workday_source_query_state",
+              errors: sourceStateErrors.slice(0, 5),
+              hrefBefore: afterFill.href,
+              hrefAfter: sanitizedApplyUrl,
+            };
+            await navigate(pageClient, sanitizedApplyUrl, () =>
+              workflowIdentifier.waitForReady(IDENTIFIER_TIMEOUT_MS),
+            );
+            await sleep(1200);
+            continue pageLoop;
+          }
           timeline[timeline.length - 1].next = {
             clicked: false,
             auto: true,
@@ -2763,10 +3662,19 @@ async function run() {
           const latestFill = fills.at(-1)?.fill || {};
           const fillNeedsReview =
             latestFill.manualReviewReasons?.length > 0;
-          if (!fillNeedsReview || afterFill.errors?.length) {
+          if (afterFill.errors?.length) {
             break;
           }
-          if (!fillDidUsefulWork(latestFill) || fillHasNoProgressReason(latestFill)) {
+          const hasOpenRequiredOrLlmWork =
+            Number(latestFill.pendingLlmFieldCount || 0) > 0 ||
+            (latestFill.unfilledRequired || []).length > 0 ||
+            (latestFill.v2AuditSummary?.permanentIssues || []).length > 0;
+          if (
+            (!fillDidUsefulWork(latestFill) ||
+              fillHasNoProgressReason(latestFill)) &&
+            hasOpenRequiredOrLlmWork &&
+            fillNeedsReview
+          ) {
             timeline[timeline.length - 1].next = {
               clicked: false,
               auto: true,
@@ -2783,7 +3691,7 @@ async function run() {
           if (remainingNextMs <= 0) {
             audit.reason = "page_fill_and_next_timeout";
             audit.message =
-              "Current Workday page did not finish filling and advance within the 1 minute timeout.";
+              "Current Workday page did not finish filling and advance within the C3 fill timeout.";
             break pageLoop;
           }
           const next = await withApplicationPhaseTimeout(
@@ -2809,6 +3717,17 @@ async function run() {
           };
           if (!next.clicked) {
             break;
+          }
+          const postNextSettle = await waitForPostNextWorkdaySettle(
+            pageClient,
+            { reason: "forced_next_post_next_workday_runtime_error" },
+          );
+          timeline[timeline.length - 1].postNextSettle = postNextSettle;
+          if (!postNextSettle.ok) {
+            audit.reason = postNextSettle.reason || "workday_runtime_error";
+            audit.message =
+              "Workday showed a runtime error after Next and did not recover after reload.";
+            break pageLoop;
           }
         }
         await sleep(1200);
@@ -2838,7 +3757,7 @@ async function run() {
       if (remainingNextMs <= 0) {
         audit.reason = "page_fill_and_next_timeout";
         audit.message =
-          "Current Workday page did not finish filling and advance within the 1 minute timeout.";
+          "Current Workday page did not finish filling and advance within the C3 fill timeout.";
         break;
       }
       const next = await withApplicationPhaseTimeout(
@@ -2854,6 +3773,37 @@ async function run() {
       }
       timeline[timeline.length - 1].next = next;
       if (!next.clicked) {
+        const sourceStateErrors = workdaySourceStateErrors(
+          next.errors || next.visibleValidationErrors || [],
+        );
+        const sanitizedApplyUrl = stripWorkdaySourceQuery(
+          next.href || afterFill.href || applyUrl,
+        );
+        if (sourceStateErrors.length && sanitizedApplyUrl) {
+          timeline[timeline.length - 1].sourceQueryRecovery = {
+            reason: "workday_source_query_state",
+            errors: sourceStateErrors.slice(0, 5),
+            hrefBefore: next.href || afterFill.href,
+            hrefAfter: sanitizedApplyUrl,
+          };
+          await navigate(pageClient, sanitizedApplyUrl, () =>
+            workflowIdentifier.waitForReady(IDENTIFIER_TIMEOUT_MS),
+          );
+          await sleep(1200);
+          continue pageLoop;
+        }
+      }
+      if (!next.clicked) {
+        break;
+      }
+      const postNextSettle = await waitForPostNextWorkdaySettle(pageClient, {
+        reason: "next_post_next_workday_runtime_error",
+      });
+      timeline[timeline.length - 1].postNextSettle = postNextSettle;
+      if (!postNextSettle.ok) {
+        audit.reason = postNextSettle.reason || "workday_runtime_error";
+        audit.message =
+          "Workday showed a runtime error after Next and did not recover after reload.";
         break;
       }
       await sleep(1200);
@@ -2867,18 +3817,18 @@ async function run() {
     ) {
       terminalReconciliation = await reconcilePageFillTimeoutToReview(
         pageClient,
-        { timeoutMs: 35_000, intervalMs: 1500 },
+        { before: finalPage, timeoutMs: 35_000, intervalMs: 1500 },
       );
-      if (terminalReconciliation.reachedReview) {
+      if (terminalReconciliation.reachedReview || terminalReconciliation.advanced) {
         finalPage = terminalReconciliation.page;
         audit.terminalReconciliation = {
-          reason: "timeout_reconciled_to_review",
+          reason: terminalReconciliation.reason,
           waitedMs: terminalReconciliation.waitedMs,
           previousReason: "page_fill_and_next_timeout",
         };
         timeline.push({
           workflowPhase: "terminal_reconciliation",
-          reason: "timeout_reconciled_to_review",
+          reason: terminalReconciliation.reason,
           waitedMs: terminalReconciliation.waitedMs,
           final: {
             href: finalPage.href,
@@ -2930,6 +3880,24 @@ async function run() {
           ? "Smoke ended before reaching Review or Submit while a Next button was still available."
           : "Smoke ended before reaching Review or Submit and no safe Next button was available.");
     }
+    const longestTiming = (audit.timings || []).reduce(
+      (longest, entry) =>
+        Number(entry.elapsedMs || 0) > Number(longest.elapsedMs || 0)
+          ? entry
+          : longest,
+      {},
+    );
+    const timeoutTiming = (audit.timings || []).find(
+      (entry) => entry.status === "timeout",
+    );
+    audit.timingSummary = {
+      totalElapsedMs: Date.now() - fullApplicationStartedAt,
+      longestPhase: longestTiming.phase || "",
+      longestPhaseElapsedMs: Number(longestTiming.elapsedMs || 0),
+      timeoutPhase: timeoutTiming?.phase || "",
+      timeoutElapsedMs: Number(timeoutTiming?.elapsedMs || 0),
+      timingCount: (audit.timings || []).length,
+    };
     audit.finishedAt = new Date().toISOString();
     audit.final = {
       href: finalPage.href,

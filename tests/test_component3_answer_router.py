@@ -156,7 +156,7 @@ def test_salary_text_question_uses_default_without_llm(monkeypatch):
     assert decision.confidence == 0.72
 
 
-def test_hourly_expectation_text_question_uses_calculated_hourly_without_llm(monkeypatch):
+def test_hourly_expectation_text_question_uses_hourly_default_without_llm(monkeypatch):
     def fail_generate_json(**_kwargs):
         raise AssertionError("hourly expectation text should not call LLM")
 
@@ -173,9 +173,9 @@ def test_hourly_expectation_text_question_uses_calculated_hourly_without_llm(mon
 
     assert decision.status == "fillable"
     assert decision.action == "fill_text"
-    assert decision.answer_text == "46.88"
+    assert decision.answer_text == "25.00"
     assert decision.canonical_field == "salary_expectation"
-    assert decision.source_fields == ["calculated.salaryExpectationHourly"]
+    assert decision.source_fields == ["default.hourlyPayExpectation"]
 
 
 def test_hourly_rate_text_question_uses_explicit_hourly_without_llm(monkeypatch):
@@ -218,7 +218,10 @@ def test_accessibility_accommodation_request_defaults_no_without_llm(monkeypatch
     )
 
     assert decision.status == "fillable"
-    assert decision.selected_option == "No, I do not require accessibility accommodations or adjustments"
+    assert (
+        decision.selected_option
+        == "No, I do not require accessibility accommodations or adjustments"
+    )
     assert decision.canonical_field == "accommodation_request"
     assert decision.source_fields == ["default.accommodationRequest"]
 
@@ -242,7 +245,10 @@ def test_accessibility_accommodation_request_can_use_profile_yes_without_llm(mon
     )
 
     assert decision.status == "fillable"
-    assert decision.selected_option == "Yes, I will require accessibility accommodations or adjustments"
+    assert (
+        decision.selected_option
+        == "Yes, I will require accessibility accommodations or adjustments"
+    )
     assert decision.canonical_field == "accommodation_request"
     assert decision.source_fields == ["profile.accommodationRequest"]
 
@@ -425,6 +431,52 @@ def test_profile_specific_relocation_wins_before_opportunity_positive():
     assert decision.selected_option == "No"
     assert decision.canonical_field == "willing_to_relocate"
     assert decision.source_fields == ["profile.willingToRelocate"]
+
+
+def test_current_40_profile_gap_questions_route_without_llm(monkeypatch):
+    def fail_generate_json(**_kwargs):
+        raise AssertionError("profile/default answer should not call LLM")
+
+    monkeypatch.setattr("c3_answering.pipeline.generate_json", fail_generate_json)
+
+    cases = [
+        (
+            "Have you ever been convicted of a criminal offence for which a pardon has not been granted?",
+            ["Select One", "Yes", "No"],
+            "criminal_conviction_unpardoned",
+            "No",
+        ),
+        (
+            "Do you hold a valid license to sell Cannabis/Liquor in Canada?",
+            ["Select One", "Yes", "No"],
+            "regulated_cannabis_liquor_license",
+            "Yes",
+        ),
+        (
+            "Do you have an active clearance?",
+            ["Select One", "Yes", "No"],
+            "active_security_clearance",
+            "No",
+        ),
+        (
+            "Are you a citizen of the United States?",
+            ["Select One", "Yes", "No"],
+            "us_citizen",
+            "No",
+        ),
+        (
+            "Please select your preferred communication channel",
+            ["Select One", "Email", "SMS", "WhatsApp"],
+            "preferred_communication_channel",
+            "Email",
+        ),
+    ]
+
+    for question, options, canonical, selected in cases:
+        decision = decide_answer(make_request(question, options))
+        assert decision.status == "fillable"
+        assert decision.canonical_field == canonical
+        assert decision.selected_option == selected
 
 
 def test_llm_fallback_uses_schema_and_validates_exact_option(monkeypatch):

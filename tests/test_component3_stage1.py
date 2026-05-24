@@ -1276,8 +1276,8 @@ Expected Graduation: Sep 2026
                 },
                 "hourlyProfile": {
                     "type": "salary_expectation",
-                    "value": "46.88",
-                    "source": "calculated:salaryExpectationHourly",
+                    "value": "25.00",
+                    "source": "default:hourlyPayExpectation",
                     "answerType": "text",
                 },
                 "hourlyExplicit": {
@@ -1288,14 +1288,14 @@ Expected Graduation: Sep 2026
                 },
                 "hourlyDefault": {
                     "type": "salary_expectation",
-                    "value": "48.08",
+                    "value": "25.00",
                     "source": "default:hourlyPayExpectation",
                     "answerType": "text",
                 },
             },
         )
 
-    def test_v2_phone_device_type_uses_cell_work_home_order(self):
+    def test_v2_phone_device_type_uses_cell_then_progress_fallback(self):
         paths = [
             REPO_ROOT / "executioner" / "src" / "shared" / "v2" / "field-catalog.js",
             REPO_ROOT / "executioner" / "src" / "shared" / "v2" / "question-identifier.js",
@@ -1357,8 +1357,10 @@ Expected Graduation: Sep 2026
         self.assertEqual(results["cellFirst"]["value"], "Mobile")
         self.assertEqual(results["cellFirst"]["source"], "default:phone_device_type")
         self.assertEqual(results["cellFirst"]["selected"], "Cell")
-        self.assertEqual(results["workFallback"]["selected"], "Work")
+        self.assertEqual(results["workFallback"]["selected"], "Home")
+        self.assertEqual(results["workFallback"]["matchSource"], "phone_device_first_real_fallback")
         self.assertEqual(results["homeFallback"]["selected"], "Home")
+        self.assertEqual(results["homeFallback"]["matchSource"], "phone_device_first_real_fallback")
 
     def test_v2_bird_work_auth_preferred_contact_and_start_date_defaults(self):
         paths = [
@@ -1510,7 +1512,9 @@ Expected Graduation: Sep 2026
             }}
             const profile = {{
               education: [{{ degree: "BSc Computer Science", degreeLevel: "Bachelors" }}],
-              salaryExpectationRange: "90,000 - 105,000"
+              salaryExpectationRange: "90,000 - 105,000",
+              willingToRelocate: true,
+              interestedTemporaryShortContract: "yes"
             }};
             const legalAge = {{
               workday: {{ fieldLabel: "Are you at least 18 years of age? (If not, your employer is subject to verification that you are of at least legal age and that you are able to supply any required work permit).*" }},
@@ -1554,6 +1558,36 @@ Expected Graduation: Sep 2026
               uiModel: "textarea",
               required: false
             }};
+            const temporaryShortContract = {{
+              workday: {{ fieldLabel: "Are you interested in working on a temporary / short-contract basis?*" }},
+              descriptor: "Are you interested in working on a temporary / short-contract basis?* Yes No",
+              uiModel: "button_listbox",
+              required: true
+            }};
+            const highSchoolDiploma = {{
+              workday: {{ fieldLabel: "Did you receive your high school diploma?*" }},
+              descriptor: "Did you receive your high school diploma?* Yes No",
+              uiModel: "button_listbox",
+              required: true
+            }};
+            const conditionalRelocation = {{
+              workday: {{ fieldLabel: "If this position is not located in the city that you reside in, would you be willing to relocate?*" }},
+              descriptor: "If this position is not located in the city that you reside in, would you be willing to relocate?* Yes No",
+              uiModel: "button_listbox",
+              required: true
+            }};
+            const relocationLongOption = {{
+              workday: {{ fieldLabel: "Would you consider relocating for this role?*" }},
+              descriptor: "Would you consider relocating for this role?* Yes, I would consider relocating for this role No, I would not consider relocating for this role",
+              uiModel: "button_listbox",
+              required: true
+            }};
+            const shiftwork = {{
+              workday: {{ fieldLabel: "If applicable to the position, are you available to work shiftwork (days, nights, weekends)?" }},
+              descriptor: "If applicable to the position, are you available to work shiftwork (days, nights, weekends)? Yes No",
+              uiModel: "button_listbox",
+              required: false
+            }};
             console.log(JSON.stringify({{
               legalAge: resolve(legalAge, {{}}, [{{ label: "Yes" }}, {{ label: "No" }}]),
               highestEducation: resolve(highestEducation, profile, [
@@ -1591,7 +1625,15 @@ Expected Graduation: Sep 2026
               ]),
               computerPrograms: resolve(computerPrograms, {{
                 skills: ["Python", "TypeScript", "React", "SQL"]
-              }})
+              }}),
+              temporaryShortContract: resolve(temporaryShortContract, profile, [{{ label: "Yes" }}, {{ label: "No" }}]),
+              highSchoolDiploma: resolve(highSchoolDiploma, profile, [{{ label: "Yes" }}, {{ label: "No" }}]),
+              conditionalRelocation: resolve(conditionalRelocation, profile, [{{ label: "Yes" }}, {{ label: "No" }}]),
+              relocationLongOption: resolve(relocationLongOption, profile, [
+                {{ label: "Yes, I would consider relocating for this role" }},
+                {{ label: "No, I would not consider relocating for this role" }}
+              ]),
+              shiftwork: resolve(shiftwork, {{}}, [{{ label: "Yes" }}, {{ label: "No" }}])
             }}));
         """
         try:
@@ -1613,40 +1655,36 @@ Expected Graduation: Sep 2026
         self.assertEqual(parsed["highestEducation"]["selectedOption"], "Bachelor's")
         self.assertEqual(parsed["desiredPay"]["type"], "salary_expectation")
         self.assertEqual(parsed["desiredPay"]["value"], "97500")
-        self.assertEqual(
-            parsed["finningHighestEducation"]["type"], "highest_education"
-        )
-        self.assertEqual(
-            parsed["finningHighestEducation"]["value"], "Bachelor's Degree"
-        )
-        self.assertEqual(
-            parsed["finningHighestEducation"]["selectedOption"], "University"
-        )
-        self.assertEqual(
-            parsed["microsoftOffice"]["type"], "microsoft_office_proficiency"
-        )
+        self.assertEqual(parsed["finningHighestEducation"]["type"], "highest_education")
+        self.assertEqual(parsed["finningHighestEducation"]["value"], "Bachelor's Degree")
+        self.assertEqual(parsed["finningHighestEducation"]["selectedOption"], "University")
+        self.assertEqual(parsed["microsoftOffice"]["type"], "microsoft_office_proficiency")
         self.assertEqual(parsed["microsoftOffice"]["value"], "Expert")
-        self.assertEqual(
-            parsed["microsoftOffice"]["selectedOption"], "Expert"
-        )
+        self.assertEqual(parsed["microsoftOffice"]["selectedOption"], "Expert")
         self.assertEqual(parsed["travelAvailability"]["type"], "travel_availability")
         self.assertEqual(parsed["travelAvailability"]["value"], "highest")
-        self.assertEqual(
-            parsed["travelAvailability"]["selectedOption"], "20% plus"
-        )
-        self.assertEqual(
-            parsed["travelAvailability"]["optionSource"], "highest_travel_numeric"
-        )
-        self.assertEqual(
-            parsed["travelAvailabilityWith100"]["selectedOption"], "100%"
-        )
-        self.assertEqual(
-            parsed["travelAvailabilityTie"]["selectedOption"], "15 - 20%"
-        )
+        self.assertEqual(parsed["travelAvailability"]["selectedOption"], "20% plus")
+        self.assertEqual(parsed["travelAvailability"]["optionSource"], "highest_travel_numeric")
+        self.assertEqual(parsed["travelAvailabilityWith100"]["selectedOption"], "100%")
+        self.assertEqual(parsed["travelAvailabilityTie"]["selectedOption"], "15 - 20%")
         self.assertEqual(parsed["computerPrograms"]["type"], "computer_programs")
+        self.assertEqual(parsed["computerPrograms"]["value"], "Python, TypeScript, React, SQL")
         self.assertEqual(
-            parsed["computerPrograms"]["value"], "Python, TypeScript, React, SQL"
+            parsed["temporaryShortContract"]["type"],
+            "temporary_short_contract_interest",
         )
+        self.assertEqual(parsed["temporaryShortContract"]["selectedOption"], "Yes")
+        self.assertEqual(parsed["highSchoolDiploma"]["type"], "high_school_diploma_or_higher")
+        self.assertEqual(parsed["highSchoolDiploma"]["selectedOption"], "Yes")
+        self.assertEqual(parsed["conditionalRelocation"]["type"], "relocation_willingness")
+        self.assertEqual(parsed["conditionalRelocation"]["selectedOption"], "Yes")
+        self.assertEqual(parsed["relocationLongOption"]["type"], "relocation_consideration")
+        self.assertEqual(
+            parsed["relocationLongOption"]["selectedOption"],
+            "Yes, I would consider relocating for this role",
+        )
+        self.assertEqual(parsed["shiftwork"]["type"], "shift_availability")
+        self.assertEqual(parsed["shiftwork"]["selectedOption"], "Yes")
 
     def test_v2_orion_optional_policy_fields_are_not_skipped_by_required_filter(self):
         field_pipeline_v2 = (
@@ -1719,12 +1757,7 @@ Expected Graduation: Sep 2026
         self,
     ):
         workday_drivers = (
-            REPO_ROOT
-            / "executioner"
-            / "src"
-            / "ats"
-            / "workday"
-            / "workday-drivers-v2.js"
+            REPO_ROOT / "executioner" / "src" / "ats" / "workday" / "workday-drivers-v2.js"
         ).read_text(encoding="utf-8")
 
         self.assertIn("citizenship_status_keyboard", workday_drivers)
@@ -1814,9 +1847,7 @@ Expected Graduation: Sep 2026
         self.assertEqual(parsed["sponsorship"]["type"], "sponsorship_required")
         self.assertEqual(parsed["sponsorship"]["value"], "No")
         self.assertEqual(parsed["sponsorship"]["answerType"], "yes_no")
-        self.assertEqual(
-            parsed["sponsorship"]["valueSource"], "profile:sponsorshipRequired"
-        )
+        self.assertEqual(parsed["sponsorship"]["valueSource"], "profile:sponsorshipRequired")
         self.assertEqual(parsed["canadianStatus"]["type"], "canadian_citizenship_status")
         self.assertEqual(parsed["canadianStatus"]["value"], "Citizen (Canada)")
 
@@ -2041,9 +2072,7 @@ Expected Graduation: Sep 2026
         self.assertEqual(parsed["degree"]["type"], "highest_education")
         self.assertEqual(parsed["degree"]["option"], "Bachelor's Degree")
         self.assertEqual(parsed["priorApplication"]["type"], "previous_application")
-        self.assertEqual(
-            parsed["priorApplication"]["option"], "No, I have not applied previously"
-        )
+        self.assertEqual(parsed["priorApplication"]["option"], "No, I have not applied previously")
         self.assertEqual(parsed["contractual"]["type"], "non_compete_restriction")
         self.assertEqual(parsed["contractual"]["option"], "No contractual restrictions exist")
         self.assertEqual(parsed["nonSolicitation"]["type"], "non_compete_restriction")
@@ -2213,7 +2242,7 @@ Expected Graduation: Sep 2026
 
         self.assertIn("committedApplicationSourceMatches", drivers)
         self.assertNotIn(
-            'isApplicationSourceField(field.element, field.descriptor) && committedLabel)',
+            "isApplicationSourceField(field.element, field.descriptor) && committedLabel)",
             drivers,
         )
         self.assertIn('"source_category_keyboard"', drivers)
@@ -2309,7 +2338,7 @@ Expected Graduation: Sep 2026
         self.assertEqual(parsed["essential"]["value"], "Yes")
         self.assertEqual(parsed["essential"]["option"], "Yes")
 
-    def test_v2_ethnicity_disclosure_without_neutral_does_not_pick_concrete_option(self):
+    def test_v2_ethnicity_disclosure_without_neutral_uses_progress_fallback(self):
         paths = [
             REPO_ROOT / "executioner" / "src" / "shared" / "v2" / "field-catalog.js",
             REPO_ROOT / "executioner" / "src" / "shared" / "v2" / "question-identifier.js",
@@ -2372,9 +2401,9 @@ Expected Graduation: Sep 2026
             {
                 "type": "ethnicity_disclosure_neutral",
                 "answerType": "non_disclosure",
-                "option": None,
-                "source": "non_disclosure_no_neutral_option",
-                "fallback": False,
+                "option": "Asian (Not Hispanic or Latino) (United States of America)",
+                "source": "non_disclosure_first_real_fallback",
+                "fallback": True,
             },
         )
 
@@ -2834,10 +2863,10 @@ Expected Graduation: Sep 2026
         )
 
     def test_auth_primary_action_accepts_email_signin_when_state_unknown(self):
-        background = (
-            REPO_ROOT / "executioner" / "src" / "background" / "index.js"
-        ).read_text(encoding="utf-8")
-        self.assertIn("exactEmailSignin && (!authState || authState === \"unknown\")", background)
+        background = (REPO_ROOT / "executioner" / "src" / "background" / "index.js").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn('exactEmailSignin && (!authState || authState === "unknown")', background)
 
     def test_v2_ethno_racial_checkbox_selects_non_disclosure(self):
         paths = [
@@ -3243,8 +3272,13 @@ Expected Graduation: Sep 2026
               suffixBlank: resolve("Suffix Select One", ["Select One", "Fr.", "Jr", "Sr"], {{}}, false),
               suffixFromProfile: resolve("Suffix Select One", ["Select One", "Fr.", "Jr", "Sr"], {{ nameSuffix: "Jr" }}, false),
               workEligibility: resolve("Are you legally eligible to work in Canada?*", ["Select One", "Yes, I am a citizen or permanent resident of Canada", "No"]),
+              canadianCitizenPr: resolve("Are you a Canadian Citizen or have Permanent Resident status?*", ["Select One", "Yes", "No"]),
+              sinStartsWithNine: resolve("Do you have a Social Insurance Number (SIN) that begins with the number 9?*", ["Select One", "Yes", "No"]),
+              temporaryContract: resolve("Are you interested in working on a temporary / short-contract basis?*", ["Select One", "Yes", "No"]),
+              peopleRelatives: resolve("Do you have any relatives currently employed by People Inc. or any of its subsidiaries?", ["Select One", "Yes", "No"]),
               priorEmployer: resolve("Have you been employed by Ernst & Young within the last 2 years, or employed by Deloitte LLP at any time?*", ["Select One", "Yes", "No, I have not worked at either Deloitte LLP or Ernst & Young."]),
               governmentOfficial: resolve("Are you (or have you been within the last 12 months) a Government Official?", ["Select One", "Yes", "No"]),
+              politicallyExposed: resolve("Are you or any close associate a politically exposed person (PEP)?", ["Select One", "Yes", "No"]),
               familyGovernmentOfficial: resolve("Are any of your immediate family members Government Officials (Any Official or Employee of any government department/agency; Company or Organization owned fully or partially by government or public institution)?", ["Select One", "Yes", "No"]),
               shellEyFinancial: resolve("Do you have any financial arrangements (including retirement funds or shares) with Shell's auditor EY? (A financial interest can be anything of monetary value, whether the value is readily ascertainable, which is held by an individual).", ["Select One", "Yes", "No"]),
               unknownGenericNo: resolve("Some unknown yes or no screening question?", ["Select One", "Yes", "No"]),
@@ -3280,7 +3314,8 @@ Expected Graduation: Sep 2026
         results = json.loads(result.stdout)
         self.assertEqual(results["prefix"]["type"], "name_prefix")
         self.assertEqual(results["prefix"]["value"], "")
-        self.assertIsNone(results["prefix"]["selected"])
+        self.assertEqual(results["prefix"]["selected"], "Dr")
+        self.assertEqual(results["prefix"]["matchSource"], "missing_profile_first_real_fallback")
         self.assertEqual(results["prefixFromProfile"]["type"], "name_prefix")
         self.assertEqual(results["prefixFromProfile"]["value"], "No Prefix")
         self.assertEqual(results["prefixFromProfile"]["source"], "profile:namePrefix")
@@ -3303,6 +3338,21 @@ Expected Graduation: Sep 2026
             results["workEligibility"]["selected"],
             "Yes, I am a citizen or permanent resident of Canada",
         )
+        self.assertEqual(results["canadianCitizenPr"]["type"], "canadian_citizen_pr")
+        self.assertEqual(results["canadianCitizenPr"]["value"], "Yes")
+        self.assertEqual(results["canadianCitizenPr"]["selected"], "Yes")
+        self.assertEqual(results["sinStartsWithNine"]["type"], "sin_starts_with_nine")
+        self.assertEqual(results["sinStartsWithNine"]["value"], "No")
+        self.assertEqual(results["sinStartsWithNine"]["selected"], "No")
+        self.assertEqual(
+            results["temporaryContract"]["type"],
+            "temporary_short_contract_interest",
+        )
+        self.assertEqual(results["temporaryContract"]["value"], "No")
+        self.assertEqual(results["temporaryContract"]["selected"], "No")
+        self.assertEqual(results["peopleRelatives"]["type"], "referral_or_family")
+        self.assertEqual(results["peopleRelatives"]["value"], "No")
+        self.assertEqual(results["peopleRelatives"]["selected"], "No")
         self.assertEqual(results["priorEmployer"]["type"], "previous_employer")
         self.assertEqual(results["priorEmployer"]["value"], "No")
         self.assertEqual(
@@ -3312,6 +3362,9 @@ Expected Graduation: Sep 2026
         self.assertEqual(results["governmentOfficial"]["type"], "government_official")
         self.assertEqual(results["governmentOfficial"]["value"], "No")
         self.assertEqual(results["governmentOfficial"]["selected"], "No")
+        self.assertEqual(results["politicallyExposed"]["type"], "politically_exposed_person")
+        self.assertEqual(results["politicallyExposed"]["value"], "No")
+        self.assertEqual(results["politicallyExposed"]["selected"], "No")
         self.assertEqual(
             results["familyGovernmentOfficial"]["type"],
             "related_customer_or_government_official",
@@ -3320,7 +3373,10 @@ Expected Graduation: Sep 2026
         self.assertEqual(results["familyGovernmentOfficial"]["selected"], "No")
         self.assertEqual(results["shellEyFinancial"]["type"], "unknown")
         self.assertEqual(results["shellEyFinancial"]["selected"], "No")
-        self.assertEqual(results["shellEyFinancial"]["matchSource"], "unknown_no_fallback")
+        self.assertEqual(
+            results["shellEyFinancial"]["matchSource"],
+            "unknown_no_fallback",
+        )
         self.assertEqual(results["unknownGenericNo"]["type"], "unknown")
         self.assertEqual(results["unknownGenericNo"]["selected"], "No")
         shell_accommodation = results["shellAccommodation"]
@@ -3369,19 +3425,118 @@ Expected Graduation: Sep 2026
         }
         for key, question_type in bms_expected.items():
             self.assertEqual(results[key]["type"], question_type)
-            self.assertEqual(results[key]["value"], "No")
-            self.assertEqual(results[key]["selected"], "No")
+            expected_value = "Yes" if key == "bmsPhysician" else "No"
+            self.assertEqual(results[key]["value"], expected_value)
+            self.assertEqual(results[key]["selected"], expected_value)
             self.assertNotEqual(results[key]["matchSource"], "unknown_no_fallback")
         self.assertEqual(results["bmsHhsOig"]["source"], "profile:hhsOigExcluded")
         self.assertEqual(results["bmsHhsOigFromProfile"]["type"], "hhs_oig_exclusion")
         self.assertEqual(results["bmsHhsOigFromProfile"]["value"], "Yes")
         self.assertEqual(results["bmsHhsOigFromProfile"]["source"], "profile:hhsOigExcluded")
         self.assertEqual(results["bmsHhsOigFromProfile"]["selected"], "Yes")
-        self.assertEqual(results["unknownGenericNo"]["matchSource"], "unknown_no_fallback")
+        self.assertEqual(
+            results["unknownGenericNo"]["matchSource"],
+            "unknown_no_fallback",
+        )
         for key in ["aboriginalDisclosure", "visibleMinority", "disability"]:
             self.assertEqual(results[key]["answerType"], "non_disclosure")
             self.assertEqual(results[key]["value"], "I choose not to disclose")
             self.assertEqual(results[key]["selected"], "I prefer not to respond")
+
+    def test_v2_current_40_profile_gap_mappings_use_profile_or_safe_defaults(self):
+        paths = [
+            REPO_ROOT / "executioner" / "src" / "shared" / "v2" / "field-catalog.js",
+            REPO_ROOT / "executioner" / "src" / "shared" / "v2" / "question-identifier.js",
+            REPO_ROOT / "executioner" / "src" / "shared" / "v2" / "answer-resolver.js",
+            REPO_ROOT / "executioner" / "src" / "shared" / "v2" / "option-matcher.js",
+        ]
+        script = f"""
+            const fs = require("node:fs");
+            const vm = require("node:vm");
+            const context = {{ window: {{ __huntV2: {{}} }} }};
+            vm.createContext(context);
+            for (const path of {json.dumps([str(path) for path in paths])}) {{
+              vm.runInContext(fs.readFileSync(path, "utf8"), context);
+            }}
+            const root = context.window.__huntV2;
+            function resolve(label, options, profile = {{}}) {{
+              const field = {{
+                workday: {{ fieldLabel: label }},
+                descriptor: label,
+                fieldId: "primaryQuestionnaire--test",
+                required: true,
+                uiModel: "button_listbox"
+              }};
+              const question = root.questionIdentifier.identifyQuestion(field, null, null);
+              const answer = root.answerResolver.resolveAnswer({{
+                question,
+                field,
+                profile,
+                audit: null,
+                fieldAudit: null
+              }});
+              const match = root.optionMatcher.matchOption({{
+                options: options.map((label) => ({{ label, value: label }})),
+                answer,
+                field,
+                audit: null,
+                fieldAudit: null
+              }});
+              return {{
+                type: question.type,
+                value: answer.value,
+                source: answer.source,
+                selected: match.option && match.option.label,
+                matchSource: match.source
+              }};
+            }}
+            console.log(JSON.stringify({{
+              criminal: resolve("Have you ever been convicted of a criminal offence for which a pardon has not been granted?", ["Select One", "Yes", "No"]),
+              relatedYears: resolve("How many years of related experience do you have?", ["Select One", "0-1 years", "2-5 years", "7-10 years", "More than 10 years"]),
+              cannabisLicense: resolve("Do you hold a valid license to sell Cannabis/Liquor in Canada?", ["Select One", "Yes", "No"]),
+              licenseDiscipline: resolve("Have you ever had disciplinary action taken on your professional license, certification, or credentials?", ["Select One", "Yes", "No"]),
+              insuranceLicenseHistory: resolve("Has your insurance license ever been refused, revoked, or suspended?", ["Select One", "Yes", "No"]),
+              commute: resolve("If applicable, are you willing to commute to the area where this position is located?", ["Select One", "Yes", "No"]),
+              aiConsent: resolve("Do you consent to the use of AI-enabled recruiting tools?", ["Select One", "Yes", "No"]),
+              activeClearance: resolve("Do you have an active clearance?", ["Select One", "Yes", "No"]),
+              usCitizen: resolve("Are you a citizen of the United States?", ["Select One", "Yes", "No"]),
+              federalCurrent: resolve("Are you a CURRENT U.S. federal government civilian or military employee?", ["Select One", "Yes", "No"]),
+              communication: resolve("Please select your preferred communication channel", ["Select One", "Email", "SMS", "WhatsApp"]),
+              preferredLanguage: resolve("Preferred interview language", ["Select One", "English", "French"])
+            }}));
+        """
+        try:
+            result = subprocess.run(
+                ["node", "-e", script],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+        except FileNotFoundError:
+            self.skipTest("node is required to test C3 V2 profile-gap mappings")
+
+        parsed = json.loads(result.stdout)
+        expected = {
+            "criminal": ("criminal_conviction_unpardoned", "No"),
+            "relatedYears": ("related_experience_years", "2-5 years"),
+            "cannabisLicense": ("regulated_cannabis_liquor_license", "Yes"),
+            "licenseDiscipline": ("professional_license_discipline", "No"),
+            "insuranceLicenseHistory": ("professional_license_discipline", "No"),
+            "commute": ("commute_willingness", "Yes"),
+            "aiConsent": ("ai_recruiting_tools_consent", "Yes"),
+            "activeClearance": ("active_security_clearance", "No"),
+            "usCitizen": ("us_citizen", "No"),
+            "federalCurrent": ("us_federal_employment_current", "No"),
+            "communication": ("preferred_communication_channel", "Email"),
+            "preferredLanguage": ("preferred_language", "English"),
+        }
+        for key, (question_type, selected) in expected.items():
+            self.assertEqual(parsed[key]["type"], question_type)
+            self.assertEqual(parsed[key]["selected"], selected)
+            self.assertNotEqual(
+                parsed[key]["matchSource"],
+                "unknown_first_real_fallback",
+            )
 
     def test_v2_optional_preferred_name_checkbox_is_quietly_skipped(self):
         field_pipeline = (
@@ -3394,9 +3549,9 @@ Expected Graduation: Sep 2026
         self.assertIn("!quietOptionalCheckboxNoOption", field_pipeline)
 
     def test_clean_final_submit_page_walk_does_not_add_review_noise(self):
-        background = (
-            REPO_ROOT / "executioner" / "src" / "background" / "index.js"
-        ).read_text(encoding="utf-8")
+        background = (REPO_ROOT / "executioner" / "src" / "background" / "index.js").read_text(
+            encoding="utf-8"
+        )
         self.assertIn('result.pageWalk.stoppedReason !== "final_submit_visible"', background)
         self.assertIn('"c3_v2_page_walk_review_items"', background)
 
@@ -3739,7 +3894,7 @@ Expected Graduation: Sep 2026
             },
         )
 
-    def test_v2_unknown_yes_no_defaults_to_no_with_review_warning(self):
+    def test_v2_required_unknown_options_use_progress_first_fallback(self):
         paths = [
             REPO_ROOT / "executioner" / "src" / "shared" / "v2" / "field-catalog.js",
             REPO_ROOT / "executioner" / "src" / "shared" / "v2" / "option-matcher.js",
@@ -4205,11 +4360,11 @@ Expected Graduation: Sep 2026
                     "fallback": False,
                 },
                 {
-                "type": "terms_acceptance",
-                "answer": "Yes",
-                "valueSource": "default:terms_acceptance",
-                "optionSource": "affirmative_checkbox",
-                "fallback": False,
+                    "type": "terms_acceptance",
+                    "answer": "Yes",
+                    "valueSource": "default:terms_acceptance",
+                    "optionSource": "affirmative_checkbox",
+                    "fallback": False,
                 },
                 {
                     "type": "terms_acceptance",
@@ -4881,8 +5036,18 @@ Expected Graduation: Sep 2026
         self.assertIn(
             "visibleValidationErrors: nextAction.visibleValidationErrors || []", background
         )
-        self.assertIn("fieldIdentityKey", (REPO_ROOT / "executioner" / "src" / "shared" / "v2" / "field-pipeline.js").read_text(encoding="utf-8"))
-        self.assertIn("skills_not_committed", (REPO_ROOT / "executioner" / "src" / "ats" / "workday" / "workday-repeatables-v2.js").read_text(encoding="utf-8"))
+        self.assertIn(
+            "fieldIdentityKey",
+            (REPO_ROOT / "executioner" / "src" / "shared" / "v2" / "field-pipeline.js").read_text(
+                encoding="utf-8"
+            ),
+        )
+        self.assertIn(
+            "skills_not_committed",
+            (
+                REPO_ROOT / "executioner" / "src" / "ats" / "workday" / "workday-repeatables-v2.js"
+            ).read_text(encoding="utf-8"),
+        )
         self.assertIn("Fill timed out before the page responded.", background)
         self.assertIn("fill_timeout", background)
         self.assertIn("clearUploadedFileControls", clear_pipeline)
@@ -4993,9 +5158,9 @@ Expected Graduation: Sep 2026
         live_smoke = (REPO_ROOT / "scripts" / "c3_workday_live_smoke.js").read_text(
             encoding="utf-8"
         )
-        final_ui_capture = (
-            REPO_ROOT / "scripts" / "c3_capture_final_ui.js"
-        ).read_text(encoding="utf-8")
+        final_ui_capture = (REPO_ROOT / "scripts" / "c3_capture_final_ui.js").read_text(
+            encoding="utf-8"
+        )
         issue_registry = (REPO_ROOT / "scripts" / "lib" / "c3_issue_registry.js").read_text(
             encoding="utf-8"
         )
@@ -5071,9 +5236,12 @@ Expected Graduation: Sep 2026
         self.assertIn("clickSignInAction", smoke)
         self.assertIn("recordWorkflowEvent", smoke)
         self.assertIn("detect_account_state", smoke)
-        workday_identifier = (
-            REPO_ROOT / "scripts" / "lib" / "c3_workday_identifier.js"
-        ).read_text(encoding="utf-8")
+        workday_identifier = (REPO_ROOT / "scripts" / "lib" / "c3_workday_identifier.js").read_text(
+            encoding="utf-8"
+        )
+        auth_workflow = (REPO_ROOT / "scripts" / "lib" / "c3_workday_auth_workflow.js").read_text(
+            encoding="utf-8"
+        )
         self.assertIn("WorkdayWorkflowIdentifier", live_smoke)
         self.assertIn("workdayPageKindExpression", workday_identifier)
         self.assertIn("blankWorkdayShell", workday_identifier)
@@ -5111,7 +5279,7 @@ Expected Graduation: Sep 2026
         self.assertIn("--clear-before-fill", fresh_apply)
         self.assertIn("--keep-existing-workday-tabs", fresh_apply)
         self.assertIn("visibleValidationErrors", live_smoke)
-        self.assertIn('progressBarActiveStep', live_smoke)
+        self.assertIn("progressBarActiveStep", live_smoke)
         self.assertIn("workday_catalog_after_auth", background)
         self.assertIn("detectWorkdayCatalogPageForTab", background)
         self.assertIn("hasVisibleAuthChoice", background)
@@ -5119,13 +5287,72 @@ Expected Graduation: Sep 2026
         self.assertIn("auth_landing_choice_clicked", background)
         self.assertIn("auth_landing_choice_not_clicked", background)
         self.assertIn("Opening email sign-in choice", background)
+        self.assertIn('authUiState === "landing_choice"', background)
+        self.assertIn("primaryActionSelectors.push", background)
+        self.assertIn('"div"', background)
+        self.assertIn('"span"', background)
+        self.assertIn("seenPrimaryActionElements", background)
+        self.assertIn('desiredAuthUiState === "landing_choice"', auth_workflow)
+        self.assertIn("controlSelectors.push", auth_workflow)
+        self.assertIn("seenControls", auth_workflow)
+        self.assertIn("checkboxCommitTrace", auth_workflow)
+        self.assertIn("auth_checkbox_not_committed", auth_workflow)
+        self.assertIn("auth_no_captcha_gate", auth_workflow)
+        self.assertIn("noCaptchaWrapperPresent", auth_workflow)
+        self.assertIn("noCaptchaWrapperInfo", auth_workflow)
+        self.assertIn("hasPasswordInput", auth_workflow)
+        self.assertIn("hasLandingChoiceButton", auth_workflow)
+        self.assertIn("isCredentialGate", auth_workflow)
+        self.assertIn("credentialsFilled", auth_workflow)
+        self.assertIn("authSubmitTrace", auth_workflow)
+        self.assertIn("targetOverlapsAuthCheckbox", auth_workflow)
+        self.assertIn("shouldPrimeNoCaptchaSubmit", auth_workflow)
+        self.assertIn("shouldBringAuthPageToFront", auth_workflow)
+        self.assertIn('Page.bringToFront"', auth_workflow)
+        self.assertIn("broughtToFrontBeforeAuthSubmit", auth_workflow)
+        self.assertIn("refill_credentials_after_nocaptcha_prime", auth_workflow)
+        self.assertIn("native_checked_setter_after_nocaptcha_prime", auth_workflow)
+        self.assertIn("shouldSettleAfterFormRequestSubmit", auth_workflow)
+        self.assertIn("hidden_submit_after_form_no_progress", auth_workflow)
+        self.assertIn("hidden_submit_request_submit", auth_workflow)
+        self.assertIn("target_form_submit", auth_workflow)
+        self.assertIn("shouldDeferPrimaryCdpClick", auth_workflow)
+        self.assertIn("isCreateAccountSubmit", auth_workflow)
+        self.assertIn("credentialFieldsAppeared", auth_workflow)
+        self.assertIn('"nocaptcha_wrapper_cdp"', auth_workflow)
+        self.assertIn('"nocaptcha_wrapper_dom_click"', auth_workflow)
+        self.assertIn("dom_pointer_click_filter_after_no_progress", auth_workflow)
+        self.assertIn("blur_settle_dom_pointer_click_filter_after_no_progress", auth_workflow)
+        self.assertIn("delayed_click_filter_cdp_after_no_progress", auth_workflow)
+        self.assertIn("isNoCaptchaAuthSubmit", auth_workflow)
+        self.assertIn("authBadCredentialErrors", live_smoke)
+        self.assertIn("fallbackAccountEmail", live_smoke)
+        self.assertIn("clickCreateAccountAfterBadCredentials", live_smoke)
+        self.assertIn("bad_credentials_try_fresh_create_account", live_smoke)
+        self.assertIn("badCredentialCreateAccountAttemptsByScope", live_smoke)
+        self.assertIn("verifiedAccountLoginRequiredByScope", live_smoke)
+        self.assertIn("noteVerifiedAccountNeedsLogin", live_smoke)
+        self.assertIn("verified_account_returned_to_auth_require_login", live_smoke)
+        self.assertIn("verifiedAccountRetryAsLogin", live_smoke)
+        self.assertIn("auth_no_captcha_gate", live_smoke)
+        self.assertIn("manualAuthTimeoutMs", live_smoke)
+        self.assertIn("--manual-auth-timeout-ms", live_smoke)
+        self.assertIn('authNext.reason === "auth_primary_cdp_clicked"', live_smoke)
+        self.assertIn("injectManualAuthPrompt", live_smoke)
+        self.assertIn("waitForManualAuth", live_smoke)
+        self.assertIn("hunt-manual-auth-prompt", live_smoke)
+        self.assertIn("manualAuthResult", live_smoke)
+        self.assertIn("manualAuthResultNoProgress", live_smoke)
+        self.assertIn("auth_no_progress", live_smoke)
+        self.assertIn('"native_checked_setter"', auth_workflow)
+        self.assertIn("native_checked_setter_after_checked_readback", auth_workflow)
         self.assertIn('mode: "manual"', live_smoke)
         self.assertIn("clickApplyManuallyEntry", live_smoke)
         self.assertIn("logWorkflowPhase", live_smoke)
         self.assertIn("waitForWorkdayPageReady", live_smoke)
         wait_after_auth = background[
-            background.index("async function waitForApplicationFieldsReadyAfterAuth")
-        :]
+            background.index("async function waitForApplicationFieldsReadyAfterAuth") :
+        ]
         self.assertLess(
             wait_after_auth.index("const workflowDetection = await detectWorkflowForTab(tabId);"),
             wait_after_auth.index('reason: "application_fields_ready"'),
@@ -5149,9 +5376,9 @@ Expected Graduation: Sep 2026
         self.assertIn("buildFillAudit", live_smoke)
         self.assertIn("writeAuditJson", live_smoke)
         self.assertIn("recordAuditIssues", live_smoke)
-        workday_audit = (
-            REPO_ROOT / "scripts" / "lib" / "c3_workday_audit.js"
-        ).read_text(encoding="utf-8")
+        workday_audit = (REPO_ROOT / "scripts" / "lib" / "c3_workday_audit.js").read_text(
+            encoding="utf-8"
+        )
         self.assertIn("unknown_question_defaulted", issue_registry)
         self.assertIn("unsupported_or_empty_option_set", issue_registry)
         self.assertIn("required_field_unfilled", issue_registry)
@@ -5211,7 +5438,7 @@ Expected Graduation: Sep 2026
         self.assertIn("Social Media", answer_resolver)
         self.assertIn("Job Sites", answer_resolver)
         self.assertIn("hunt.apply.await_email_verification", background)
-        self.assertIn('progressBarActiveStep', background)
+        self.assertIn("progressBarActiveStep", background)
         self.assertIn("emailVerificationBridgeUrl", background)
         self.assertIn("settings.emailVerificationBridgeUrl", background)
         self.assertIn("autoEmailVerificationEnabled", background)
@@ -5245,20 +5472,13 @@ Expected Graduation: Sep 2026
 
     def test_workday_prompt_driver_has_trusted_input_bridge(self):
         manifest = json.loads(
-            (REPO_ROOT / "executioner" / "manifest.json").read_text(
-                encoding="utf-8"
-            )
+            (REPO_ROOT / "executioner" / "manifest.json").read_text(encoding="utf-8")
         )
-        background = (
-            REPO_ROOT / "executioner" / "src" / "background" / "index.js"
-        ).read_text(encoding="utf-8")
+        background = (REPO_ROOT / "executioner" / "src" / "background" / "index.js").read_text(
+            encoding="utf-8"
+        )
         driver = (
-            REPO_ROOT
-            / "executioner"
-            / "src"
-            / "ats"
-            / "workday"
-            / "workday-drivers-v2.js"
+            REPO_ROOT / "executioner" / "src" / "ats" / "workday" / "workday-drivers-v2.js"
         ).read_text(encoding="utf-8")
 
         self.assertIn("debugger", manifest["permissions"])
@@ -5324,14 +5544,15 @@ Expected Graduation: Sep 2026
         workday_repeatables = (
             REPO_ROOT / "executioner" / "src" / "ats" / "workday" / "workday-repeatables-v2.js"
         ).read_text(encoding="utf-8")
+        workday_repeatables = (
+            REPO_ROOT / "executioner" / "src" / "ats" / "workday" / "workday-repeatables-v2.js"
+        ).read_text(encoding="utf-8")
         field_catalog = (
             REPO_ROOT / "executioner" / "src" / "shared" / "v2" / "field-catalog.js"
         ).read_text(encoding="utf-8")
         answer_resolver = (
             REPO_ROOT / "executioner" / "src" / "shared" / "v2" / "answer-resolver.js"
-        ).read_text(
-            encoding="utf-8"
-        )
+        ).read_text(encoding="utf-8")
         shared_utils = (REPO_ROOT / "executioner" / "src" / "shared" / "injected.js").read_text(
             encoding="utf-8"
         )
@@ -5344,10 +5565,6 @@ Expected Graduation: Sep 2026
         settings = (REPO_ROOT / "executioner" / "src" / "shared" / "settings.js").read_text(
             encoding="utf-8"
         )
-        background = (REPO_ROOT / "executioner" / "src" / "background" / "index.js").read_text(
-            encoding="utf-8"
-        )
-
         self.assertIn("attachResumeToFileInput", field_drivers)
         self.assertIn("resume_upload:", field_drivers)
         self.assertIn("fieldInventory", field_pipeline)
@@ -5415,8 +5632,8 @@ Expected Graduation: Sep 2026
         self.assertIn("nameParts", answer_resolver)
         self.assertIn("salaryExpectationRange", field_catalog)
         self.assertIn("hourlyPayExpectation", field_catalog)
-        self.assertIn("profilePaths: [\"namePrefix\"]", field_catalog)
-        self.assertIn("profilePaths: [\"accommodationRequest\"]", field_catalog)
+        self.assertIn('profilePaths: ["namePrefix"]', field_catalog)
+        self.assertIn('profilePaths: ["accommodationRequest"]', field_catalog)
         self.assertIn("Undeclared/Diverse", field_catalog)
         self.assertIn("accommodation_request", field_catalog)
         self.assertIn("Yes, I am a citizen or permanent resident of Canada", shared_utils)
@@ -5452,15 +5669,118 @@ Expected Graduation: Sep 2026
         self.assertIn("drop files", field_catalog)
         self.assertIn("fileInput", field_drivers)
 
+    def test_workday_first20_batch_section_fix_guards(self):
+        workday_ui = (
+            REPO_ROOT / "executioner" / "src" / "ats" / "workday" / "workday-ui-v2.js"
+        ).read_text(encoding="utf-8")
+        safe_next = (REPO_ROOT / "executioner" / "src" / "background" / "safe-next.js").read_text(
+            encoding="utf-8"
+        )
+        background = (REPO_ROOT / "executioner" / "src" / "background" / "index.js").read_text(
+            encoding="utf-8"
+        )
+        field_drivers = (
+            REPO_ROOT / "executioner" / "src" / "shared" / "v2" / "field-drivers.js"
+        ).read_text(encoding="utf-8")
+
+        self.assertIn('button[data-automation-id*="select-files"]', workday_ui)
+        self.assertIn('kind === "resume_file"', workday_ui)
+        self.assertRegex(workday_ui, r"uiModel:\s+kind === \"resume_file\"\s+\?\s+\"file\"")
+        self.assertIn("forceWorkdayDomClickFallback", safe_next)
+        self.assertIn("forceWorkdayEnterFallback", safe_next)
+        self.assertIn("safe_next_dom_fallback_after_noop", background)
+        self.assertIn("safe_next_enter_fallback_after_noop", background)
+        self.assertIn("clicked_safe_next_dom_fallback", safe_next)
+        self.assertIn("clicked_safe_next_enter_fallback", safe_next)
+        self.assertIn("commitDatePartWithKeyboard", field_drivers)
+        self.assertIn("date_part_keyboard_commit", field_drivers)
+        workday_drivers = (
+            REPO_ROOT / "executioner" / "src" / "ats" / "workday" / "workday-drivers-v2.js"
+        ).read_text(encoding="utf-8")
+        workday_repeatables = (
+            REPO_ROOT / "executioner" / "src" / "ats" / "workday" / "workday-repeatables-v2.js"
+        ).read_text(encoding="utf-8")
+        self.assertIn("settleWorkdayCommit", workday_drivers)
+        self.assertIn("workdayFieldHasValidationError", workday_drivers)
+        self.assertIn("technical_skills_partially_selected", workday_drivers)
+        self.assertIn("clearWorkdaySearchText", workday_drivers)
+        self.assertIn("maxSkillAttempts = field.required ? 10 : 5", workday_drivers)
+        self.assertIn("genericSkillFallbacks", workday_drivers)
+        self.assertIn("required_catalog_no_match", workday_drivers)
+        self.assertIn("skill_option_not_loaded_within_2s", workday_drivers)
+        self.assertIn("workday_skill_first_five_no_match", workday_drivers)
+        self.assertIn("isSkillsSearch ? 2000", workday_drivers)
+        self.assertIn('keyOn(siblingInput, "Enter")', workday_drivers)
+        self.assertIn('keyOn(el, "Enter")', workday_drivers)
+        self.assertIn('keyOn(input, "Enter")', workday_repeatables)
+        self.assertIn("workday_skill_attempt_start", workday_repeatables)
+        self.assertIn("workday_skill_attempt_result", workday_repeatables)
+        self.assertIn("skillsBudgetMs = 25000", workday_repeatables)
+        self.assertIn("workday_skills_time_budget_exceeded", workday_repeatables)
+        self.assertIn("Bachelors Degree or University", workday_repeatables)
+        self.assertIn('field?.uiModel === "button_listbox"', workday_drivers)
+        self.assertIn("option_keyboard", workday_drivers)
+        self.assertIn("settleWorkdayCommit", workday_drivers)
+        self.assertIn("workday_validation_not_cleared", workday_drivers)
+        self.assertIn("committedApplicationSourceMatches", workday_drivers)
+        self.assertIn("selectedTechnicalSkillMatches", workday_drivers)
+        self.assertIn("Bachelors Degree or University", workday_repeatables)
+        self.assertIn("repairMissingRequiredRows", workday_repeatables)
+        self.assertIn("targetKey && !afterKeys.includes(targetKey)", workday_repeatables)
+        self.assertIn("activeListboxFor(button)", workday_repeatables)
+        self.assertIn("[role='radio']", background)
+        self.assertIn("external_assessment_required", safe_next)
+        self.assertIn("Take Assessment", safe_next)
+        self.assertIn("[data-uxi-widget-type='multiselectlist']", safe_next)
+        self.assertIn("disabledFooterCandidates", safe_next)
+        self.assertIn("ariaDisabledBypass", safe_next)
+        self.assertIn("[data-automation-id='pageFooterNextButton']", safe_next)
+        self.assertIn("safe_next_space_fallback_after_noop", background)
+        self.assertIn("auth_create_account_to_signin_sink", background)
+        field_pipeline = (
+            REPO_ROOT / "executioner" / "src" / "shared" / "v2" / "field-pipeline.js"
+        ).read_text(encoding="utf-8")
+        self.assertIn("genericRequiredError", field_pipeline)
+        self.assertIn("auth_no_progress", background)
+        self.assertIn("authShellStillSettling", background)
+        self.assertIn("stillLoading", background)
+        live_identifier = (REPO_ROOT / "scripts" / "lib" / "c3_workday_identifier.js").read_text(
+            encoding="utf-8"
+        )
+        live_smoke = (REPO_ROOT / "scripts" / "c3_workday_live_smoke.js").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("authShellStillSettling", live_identifier)
+        self.assertIn("timeout_reconciled_to_later_step", live_smoke)
+        self.assertIn("continue pageLoop", live_smoke)
+        self.assertIn("workdaySourceStateErrors", live_smoke)
+        self.assertIn("workday_source_query_state", live_smoke)
+        self.assertIn("pageFooterNextButton", safe_next)
+        repeatables = (
+            REPO_ROOT / "executioner" / "src" / "ats" / "workday" / "workday-repeatables-v2.js"
+        ).read_text(encoding="utf-8")
+        self.assertIn("firstYearAttended", repeatables)
+        self.assertIn("lastYearAttended", repeatables)
+        field_catalog = (
+            REPO_ROOT / "executioner" / "src" / "shared" / "v2" / "field-catalog.js"
+        ).read_text(encoding="utf-8")
+        option_matcher = (
+            REPO_ROOT / "executioner" / "src" / "shared" / "v2" / "option-matcher.js"
+        ).read_text(encoding="utf-8")
+        self.assertIn("I do not wish to share", field_catalog)
+        self.assertIn("experience_affirmation", field_catalog)
+        self.assertIn("us_person_export_control", field_catalog)
+        self.assertIn("how soon can you start", field_catalog)
+        self.assertIn("not to respond", option_matcher)
+        self.assertIn("do not wish", option_matcher)
+
     def test_workday_review_fixes_have_regression_guards(self):
         field_pipeline = (
             REPO_ROOT / "executioner" / "src" / "shared" / "v2" / "field-pipeline.js"
         ).read_text(encoding="utf-8")
         workday_drivers = (
             REPO_ROOT / "executioner" / "src" / "ats" / "workday" / "workday-drivers-v2.js"
-        ).read_text(
-            encoding="utf-8"
-        )
+        ).read_text(encoding="utf-8")
         field_drivers = (
             REPO_ROOT / "executioner" / "src" / "shared" / "v2" / "field-drivers.js"
         ).read_text(encoding="utf-8")
@@ -5485,9 +5805,7 @@ Expected Graduation: Sep 2026
     def test_workday_my_experience_live_regression_guards(self):
         workday_repeatables = (
             REPO_ROOT / "executioner" / "src" / "ats" / "workday" / "workday-repeatables-v2.js"
-        ).read_text(
-            encoding="utf-8"
-        )
+        ).read_text(encoding="utf-8")
 
         self.assertIn("findAddButton", workday_repeatables)
         self.assertIn("findAddButton(section, index > 0)", workday_repeatables)
@@ -5500,10 +5818,13 @@ Expected Graduation: Sep 2026
         self.assertIn("workday_repeatables_fill", workday_repeatables)
         self.assertIn("workday_repeatables_clear", workday_repeatables)
         self.assertIn("normalizeWork", workday_repeatables)
+        self.assertIn("normUrl", workday_repeatables)
+        self.assertIn("deleteBlankRequiredRows", workday_repeatables)
+        self.assertIn("groupLooksBlank", workday_repeatables)
         self.assertIn("[data-automation-id='formField']", workday_repeatables)
         self.assertIn("resumeUploadedText", workday_repeatables)
         self.assertIn("clearResumeUpload", workday_repeatables)
-        self.assertIn('"button,[role=\'button\'],a,[tabindex]"', workday_repeatables)
+        self.assertIn("\"button,[role='button'],a,[tabindex]\"", workday_repeatables)
         self.assertIn("skillOptionCommitTarget", workday_repeatables)
         self.assertIn("waitForSkillOption", workday_repeatables)
         self.assertIn("fillSkill", workday_repeatables)

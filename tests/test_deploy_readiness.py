@@ -285,15 +285,9 @@ def test_c3_extension_has_standalone_manual_fill_path():
     fill_runner = Path("executioner/src/background/fill-runner.js").read_text(encoding="utf-8")
     generic_fill = Path("executioner/src/ats/generic/fill-v2.js").read_text(encoding="utf-8")
     generic_rules = Path("executioner/src/ats/generic/field-rules.js").read_text(encoding="utf-8")
-    field_pipeline = Path("executioner/src/shared/v2/field-pipeline.js").read_text(
-        encoding="utf-8"
-    )
-    ui_inspector = Path("executioner/src/shared/v2/ui-inspector.js").read_text(
-        encoding="utf-8"
-    )
-    field_drivers = Path("executioner/src/shared/v2/field-drivers.js").read_text(
-        encoding="utf-8"
-    )
+    field_pipeline = Path("executioner/src/shared/v2/field-pipeline.js").read_text(encoding="utf-8")
+    ui_inspector = Path("executioner/src/shared/v2/ui-inspector.js").read_text(encoding="utf-8")
+    field_drivers = Path("executioner/src/shared/v2/field-drivers.js").read_text(encoding="utf-8")
     popup_html = Path("executioner/src/popup/popup.html").read_text(encoding="utf-8")
     popup_js = Path("executioner/src/popup/popup.js").read_text(encoding="utf-8")
 

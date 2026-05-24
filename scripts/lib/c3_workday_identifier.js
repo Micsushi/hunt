@@ -46,9 +46,12 @@ function workdayPageKindExpression(authVerificationPatternSource) {
       || hasButton(/create account|sign up|signup|register|join today/i);
     const hasSignIn = /already have an account|sign in|log in|login/i.test(normalizedText)
       || hasButton(/sign in|log in|login/i);
+    const authStepSignal = /create account|sign in|log in|login|register|sign up/i.test(currentStepText);
+    const hasEmailSigninChoice = hasButton(/^sign in with email\\b/i) || hasButton(/sign\\s*in\\s*using\\s*email/i);
+    const authFieldsReady = hasEmailField && passwordCount > 0;
     const authPageVisible =
       (hasEmailField && passwordCount > 0 && (hasCreateAccount || hasSignIn)) ||
-      /create account|sign in|log in|login|register|sign up/i.test(currentStepText);
+      (authStepSignal && authFieldsReady);
     const needsEmailVerification = new RegExp(${JSON.stringify(authVerificationPatternSource)}, "i").test(normalizedText)
       || /verify your email|confirm your email|check your email|activation link|verification link/i.test(normalizedText);
     const loadingNodes = [...document.querySelectorAll('[aria-busy="true"], [role="progressbar"], [data-automation-id*="loading" i], [class*="loading" i], [class*="spinner" i]')]
@@ -64,10 +67,16 @@ function workdayPageKindExpression(authVerificationPatternSource) {
       fields.length === 0 &&
       buttons.length === 0 &&
       !currentStepText;
+    const authShellStillSettling =
+      authStepSignal &&
+      !authFieldsReady &&
+      !hasEmailSigninChoice &&
+      (fields.length === 0 || loadingNodes.length > 0);
     const stillLoading =
       (document.readyState !== "complete" && !hasClassificationSignal) ||
       (!hasClassificationSignal && normalizedText.length < 20) ||
-      (loadingNodes.length > 0 && fields.length === 0 && !currentStepText);
+      (loadingNodes.length > 0 && fields.length === 0 && !currentStepText) ||
+      authShellStillSettling;
     let pageKind = "unknown";
     if (stillLoading) pageKind = "loading";
     else if (/the page you are looking for (doesn't|does not) exist|page not found|job posting is no longer available|job is no longer available/i.test(normalizedText)) pageKind = "posting_not_found";
@@ -75,8 +84,8 @@ function workdayPageKindExpression(authVerificationPatternSource) {
     else if (/something went wrong/i.test(normalizedText) && /please refresh/i.test(normalizedText)) pageKind = "runtime_error";
     else if (authPageVisible && hasEmailField && passwordCount > 1) pageKind = "signup_form";
     else if (authPageVisible && hasEmailField && passwordCount === 1) pageKind = "signin_form";
-    else if (hasButton(/^sign in with email\\b/i) || hasButton(/sign\\s*in\\s*with\\s*(google|apple)/i)) pageKind = "signin_choice";
-    else if (/create account|sign in|log in|login|register|sign up/i.test(currentStepText)) pageKind = hasCreateAccount ? "signup_form" : "signin_form";
+    else if (hasEmailSigninChoice || hasButton(/sign\\s*in\\s*with\\s*(google|apple)/i)) pageKind = "signin_choice";
+    else if (authStepSignal && authFieldsReady) pageKind = hasCreateAccount ? "signup_form" : "signin_form";
     else if (/review/i.test(currentStepText) || finalSubmitVisible) pageKind = "review";
     else if (/start your application/i.test(normalizedText) || hasButton(/^apply manually$/i) || hasButton(/^autofill with resume$/i)) pageKind = "apply_choice";
     else if (currentStepText && !/create account|sign in/i.test(currentStepText)) pageKind = "application_step";
@@ -113,6 +122,7 @@ function workdayPageKindExpression(authVerificationPatternSource) {
       authState,
       authUiState,
       stillLoading,
+      authShellStillSettling,
       blankWorkdayShell,
       fieldCount: fields.length,
       passwordCount,
@@ -143,15 +153,104 @@ class WorkdayWorkflowIdentifier {
     );
   }
 
+  bestEffortState(state = {}) {
+    if (!state || state.pageKind !== "loading") {
+      return state || { pageKind: "unknown", workflowPhase: "unknown" };
+    }
+    const bodyHead = String(state.bodyHead || "");
+    const currentStepText = String(state.currentStepText || "");
+    const href = String(state.href || "");
+    const hasAuthFields =
+      Boolean(state.hasEmailField) || Number(state.passwordCount || 0) > 0;
+    if (hasAuthFields || /sign in|log in|login|create account/i.test(bodyHead)) {
+      return {
+        ...state,
+        pageKind: Number(state.passwordCount || 0) > 1
+          ? "signup_form"
+          : "signin_form",
+        workflowPhase: "auth",
+        authState: Number(state.passwordCount || 0) > 1 ? "signup" : "login",
+        authUiState: Number(state.passwordCount || 0) > 0
+          ? "credential_form"
+          : "landing_choice",
+        stillLoading: false,
+        bestEffort: true,
+      };
+    }
+    if (
+      currentStepText ||
+      /resume\/cv|my information|my experience|application questions|voluntary disclosures|self identify|review/i.test(
+        bodyHead,
+      )
+    ) {
+      return {
+        ...state,
+        pageKind: /review/i.test(currentStepText || bodyHead)
+          ? "review"
+          : "application_step",
+        workflowPhase: /review/i.test(currentStepText || bodyHead)
+          ? "terminal"
+          : "job_fill",
+        stillLoading: false,
+        bestEffort: true,
+      };
+    }
+    if (/start your application|apply manually|autofill with resume/i.test(bodyHead)) {
+      return {
+        ...state,
+        pageKind: "apply_choice",
+        workflowPhase: "apply_entry",
+        stillLoading: false,
+        bestEffort: true,
+      };
+    }
+    if (/job requisition id|posted on|job description/i.test(bodyHead)) {
+      return {
+        ...state,
+        pageKind: "job_posting",
+        workflowPhase: "apply_entry",
+        stillLoading: false,
+        bestEffort: true,
+      };
+    }
+    if (/myworkdayjobs\.com/i.test(href) && /\/apply\//i.test(href)) {
+      return {
+        ...state,
+        pageKind: "application_step",
+        workflowPhase: "job_fill",
+        stillLoading: false,
+        bestEffort: true,
+      };
+    }
+    return {
+      ...state,
+      pageKind: "unknown",
+      workflowPhase: "unknown",
+      stillLoading: false,
+      bestEffort: true,
+    };
+  }
+
   async waitForReady(timeoutMs = 45000) {
     const started = Date.now();
+    const minWaitMs = 1000;
+    const maxWaitMs = Math.max(Number(timeoutMs || 0), minWaitMs);
     let last = null;
     let stableSince = 0;
     let blankShellSince = 0;
     let blankShellReloaded = false;
-    while (Date.now() - started < timeoutMs) {
+    while (Date.now() - started < maxWaitMs) {
       const state = await this.inspectPageKind();
-      const key = `${state.href}|${state.pageKind}|${state.fieldCount}|${state.buttonCount}`;
+      const key = [
+        state.href,
+        state.pageKind,
+        state.fieldCount,
+        state.buttonCount,
+        state.passwordCount,
+        state.currentStepText,
+        state.loadingNodeCount,
+        String(state.bodyHead || "").slice(0, 160),
+      ].join("|");
       if (state.blankWorkdayShell && !blankShellReloaded) {
         if (!blankShellSince) blankShellSince = Date.now();
         if (Date.now() - blankShellSince >= 2500) {
@@ -167,14 +266,17 @@ class WorkdayWorkflowIdentifier {
       } else if (!state.blankWorkdayShell) {
         blankShellSince = 0;
       }
-      if (!state.stillLoading && state.pageKind !== "loading") {
+      const minWaitSatisfied = Date.now() - started >= minWaitMs;
+      if (minWaitSatisfied && !state.stillLoading && state.pageKind !== "loading") {
         if (key === last?.key) {
           if (!stableSince) stableSince = Date.now();
-          if (Date.now() - stableSince >= 700) {
+          if (Date.now() - stableSince >= 250) {
             return {
               ...state,
               blankShellReloaded,
               waitedMs: Date.now() - started,
+              minWaitMs,
+              maxWaitMs,
             };
           }
         } else {
@@ -184,18 +286,27 @@ class WorkdayWorkflowIdentifier {
       last = { key, state };
       await this.sleep(500);
     }
+    const bestEffort = this.bestEffortState(last?.state || {
+      pageKind: "unknown",
+      stillLoading: true,
+    });
     return {
-      ...(last?.state || { pageKind: "unknown", stillLoading: true }),
+      ...bestEffort,
       blankShellReloaded,
       timedOut: true,
       waitedMs: Date.now() - started,
+      minWaitMs,
+      maxWaitMs,
     };
   }
 
   async identify(timeoutMs = 45000) {
     const state = await this.waitForReady(timeoutMs);
     return {
-      ok: !state.timedOut && !state.stillLoading && state.pageKind !== "loading",
+      ok: Boolean(
+        state.bestEffort ||
+          (!state.timedOut && !state.stillLoading && state.pageKind !== "loading"),
+      ),
       phase: state.workflowPhase || "unknown",
       pageKind: state.pageKind || "unknown",
       authState: state.authState || "unknown",

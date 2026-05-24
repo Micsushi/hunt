@@ -24,7 +24,6 @@ from coordinator.failure_log import (  # noqa: E402
     read_failure_log,
     write_failure_report,
 )
-from coordinator.scheduler import SchedulerLoop  # noqa: E402
 
 SERVICE_TOKEN = "test-token-new"
 
@@ -48,18 +47,12 @@ class FailureLogTests(unittest.TestCase):
         self.assertEqual(result, "captcha_hcaptcha")
 
     def test_derive_failure_code_from_captcha_type(self):
-        self.assertEqual(
-            derive_failure_code({"captcha_type": "hcaptcha"}, []), "captcha_hcaptcha"
-        )
-        self.assertEqual(
-            derive_failure_code({"captchaType": "reCAPTCHA"}, []), "captcha_recaptcha"
-        )
+        self.assertEqual(derive_failure_code({"captcha_type": "hcaptcha"}, []), "captcha_hcaptcha")
+        self.assertEqual(derive_failure_code({"captchaType": "reCAPTCHA"}, []), "captcha_recaptcha")
         self.assertEqual(
             derive_failure_code({"captcha_type": "cloudflare"}, []), "captcha_cloudflare"
         )
-        self.assertEqual(
-            derive_failure_code({"captcha_type": "mystery"}, []), "captcha_unknown"
-        )
+        self.assertEqual(derive_failure_code({"captcha_type": "mystery"}, []), "captcha_unknown")
 
     def test_derive_failure_code_from_flags(self):
         self.assertEqual(derive_failure_code({}, ["unknown_widget"]), "unknown_widget")
@@ -212,7 +205,6 @@ class SchedulerTests(unittest.TestCase):
         self.assertEqual(status["tick_count"], 0)
 
     def test_scheduler_start_stop(self):
-        import threading
         import time
 
         from coordinator.scheduler import SchedulerLoop
@@ -477,7 +469,7 @@ class NewCliCommandTests(unittest.TestCase):
         return main(argv)
 
     def test_failure_log_command_empty(self):
-        with tempfile.TemporaryDirectory() as tmp:
+        with tempfile.TemporaryDirectory():
             with _make_temp_context() as (db_path, root):
                 import io
                 from contextlib import redirect_stdout
@@ -485,7 +477,15 @@ class NewCliCommandTests(unittest.TestCase):
                 buf = io.StringIO()
                 with redirect_stdout(buf):
                     rc = self._run_cli(
-                        ["failure-log", "--db-path", db_path, "--runtime-root", root, "--limit", "10"]
+                        [
+                            "failure-log",
+                            "--db-path",
+                            db_path,
+                            "--runtime-root",
+                            root,
+                            "--limit",
+                            "10",
+                        ]
                     )
                 self.assertEqual(rc, 0)
                 data = json.loads(buf.getvalue())
@@ -510,7 +510,15 @@ class NewCliCommandTests(unittest.TestCase):
                 buf = io.StringIO()
                 with redirect_stdout(buf):
                     rc = self._run_cli(
-                        ["investigate", "--db-path", db_path, "--runtime-root", root, "--run-id", ctx.run_id]
+                        [
+                            "investigate",
+                            "--db-path",
+                            db_path,
+                            "--runtime-root",
+                            root,
+                            "--run-id",
+                            ctx.run_id,
+                        ]
                     )
                 self.assertEqual(rc, 0)
                 data = json.loads(buf.getvalue())
@@ -525,6 +533,7 @@ class NewCliCommandTests(unittest.TestCase):
 class NewApiRouteTests(unittest.TestCase):
     def setUp(self):
         from fastapi.testclient import TestClient
+
         from coordinator.service_api import app
 
         self.client = TestClient(app, raise_server_exceptions=True)

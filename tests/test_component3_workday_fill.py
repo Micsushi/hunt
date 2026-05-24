@@ -481,10 +481,7 @@ def test_workday_v2_source_prompt_drills_flat_category_to_radio_leaf():
     assert selected == "Industry Job Board"
     assert source["filled"] is True
     assert category_events
-    assert any(
-        "Industry Job Board" in event["detail"]["options"]
-        for event in category_events
-    )
+    assert any("Industry Job Board" in event["detail"]["options"] for event in category_events)
 
 
 def test_workday_v2_source_prompt_prefers_safe_job_site_leaf():
@@ -509,6 +506,7 @@ def test_workday_v2_source_prompt_prefers_safe_job_site_leaf():
                 <div data-automation-id="applyFlowMyInfoPage">
                   <div data-automation-id="formField-source" data-fkit-id="source--source">
                     <label for="source--source">How Did You Hear About Us?*</label>
+                    <div data-automation-id="requiredLegend">Required</div>
                     <div data-automation-id="multiSelectContainer" data-uxi-widget-type="multiselect">
                       <input id="source--source" placeholder="Search" aria-required="true" data-uxi-widget-type="selectinput" data-uxi-multiselect-id="source-list" />
                     </div>
@@ -1017,9 +1015,7 @@ def test_workday_v2_does_not_fill_optional_preferred_name_checkbox_by_fallback()
             }
             """
         )
-        checked = page.evaluate(
-            '() => document.querySelector("#name--preferredCheck").checked'
-        )
+        checked = page.evaluate('() => document.querySelector("#name--preferredCheck").checked')
         browser.close()
 
     inventory = {entry["id"]: entry for entry in result["fieldInventory"]}

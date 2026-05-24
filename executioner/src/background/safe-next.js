@@ -2,6 +2,17 @@ export function canOfferSafeNextAfterFill(fillResponse = {}) {
   const result = fillResponse.result || {};
   const attempt = fillResponse.attempt || {};
   const pendingLlmFieldCount = Number(result.pendingLlmFieldCount || 0);
+  const permanentIssues = [
+    ...(Array.isArray(result.v2Audit?.permanentIssues)
+      ? result.v2Audit.permanentIssues
+      : []),
+    ...(Array.isArray(attempt.v2Audit?.permanentIssues)
+      ? attempt.v2Audit.permanentIssues
+      : []),
+  ];
+  const hardBlockedIssue = permanentIssues.some((issue) =>
+    ["blocked", "error"].includes(String(issue?.severity || "").toLowerCase()),
+  );
   const filledFieldCount = Number(
     attempt.filledFieldCount ?? result.filledFieldCount ?? 0,
   );
@@ -11,8 +22,7 @@ export function canOfferSafeNextAfterFill(fillResponse = {}) {
     fillResponse.ok &&
     pendingLlmFieldCount === 0 &&
     (filledFieldCount > 0 || cleanAlreadyFilled) &&
-    !attempt.manualReviewRequired &&
-    !result.manualReviewRequired,
+    !hardBlockedIssue,
   );
 }
 
@@ -101,6 +111,15 @@ export function summarizeSafeNextResult(result = {}) {
 export function createSafeNextFunction() {
   return function safeNextAfterFill(options) {
     var click = Boolean(options && options.click);
+    var forceWorkdayDomClickFallback = Boolean(
+      options && options.forceWorkdayDomClickFallback,
+    );
+    var forceWorkdayEnterFallback = Boolean(
+      options && options.forceWorkdayEnterFallback,
+    );
+    var forceWorkdaySpaceFallback = Boolean(
+      options && options.forceWorkdaySpaceFallback,
+    );
 
     function normalizeText(value) {
       return String(value || "")
@@ -139,6 +158,21 @@ export function createSafeNextFunction() {
         el.getAttribute("aria-disabled") === "true" ||
         el.getAttribute("disabled") !== null
       ) {
+        return false;
+      }
+      var style = window.getComputedStyle(el);
+      var rect = el.getBoundingClientRect();
+      return (
+        style.display !== "none" &&
+        style.visibility !== "hidden" &&
+        style.pointerEvents !== "none" &&
+        rect.width > 0 &&
+        rect.height > 0
+      );
+    }
+
+    function isVisibleIgnoringDisabled(el) {
+      if (!el) {
         return false;
       }
       var style = window.getComputedStyle(el);
@@ -230,9 +264,20 @@ export function createSafeNextFunction() {
         return 0;
       }
       if (
-        /bottom-navigation-next-button|next-button|nextButton/i.test(metadata)
+        /pageFooterNextButton|pageFooter|bottom-navigation-next-button|next-button|nextButton/i.test(
+          metadata,
+        )
       ) {
         score += 18;
+      }
+      var tagName = String(el.tagName || "").toLowerCase();
+      var role = lower(el.getAttribute("role"));
+      if (tagName === "button" || tagName === "input") {
+        score += 14;
+      } else if (role === "button") {
+        score += 8;
+      } else if (/pageFooter$/i.test(metadata)) {
+        score -= 40;
       }
       if (el.closest("form")) {
         score += 8;
@@ -245,6 +290,25 @@ export function createSafeNextFunction() {
         score -= 6;
       }
       return score;
+    }
+
+    function dismissOpenWorkdayPopups() {
+      try {
+        var active = document.activeElement;
+        if (active && typeof active.dispatchEvent === "function") {
+          keyEvent(active, "Escape");
+          active.blur?.();
+        }
+      } catch (_error) {}
+      Array.from(
+        document.querySelectorAll(
+          "[role='listbox'], [role='dialog'], [data-uxi-widget-type='multiselectlist'], [data-automation-id*='popup'], [data-automation-id*='menu']",
+        ),
+      ).forEach(function (popup) {
+        try {
+          keyEvent(popup, "Escape");
+        } catch (_error) {}
+      });
     }
 
     function describeElement(el) {
@@ -306,19 +370,58 @@ export function createSafeNextFunction() {
     }
 
     function findBestCandidate() {
-      var elements = Array.from(
+      var allElements = Array.from(
         document.querySelectorAll(
           [
             "button",
             "a[href]",
             "[role='button']",
+            "[data-automation-id='pageFooterNextButton']",
+            "[data-automation-id='bottom-navigation-next-button']",
+            "[data-automation-id='nextButton']",
             "input[type='button']",
             "input[type='submit']",
           ].join(", "),
         ),
-      ).filter(isVisibleEnabled);
+      );
+      var elements = allElements.filter(isVisibleEnabled);
       var blockedFinalSubmitLabels = [];
       var candidates = [];
+      var disabledFooterCandidates = [];
+
+      allElements.forEach(function (el) {
+        var visible = visibleLabel(el);
+        var metadata = metadataLabel(el);
+        var ariaDisabled = el.getAttribute("aria-disabled") === "true";
+        if (
+          ariaDisabled &&
+          !el.disabled &&
+          el.getAttribute("disabled") === null &&
+          isVisibleIgnoringDisabled(el) &&
+          /pageFooterNextButton|bottom-navigation-next-button|next-button|nextButton/i.test(
+            metadata,
+          )
+        ) {
+          var disabledScore = safeScore(visible, metadata, el);
+          if (disabledScore) {
+            var disabledRect = el.getBoundingClientRect();
+            disabledFooterCandidates.push({
+              element: el,
+              label: (visible || metadata || "Next").slice(0, 120),
+              metadata: metadata.slice(0, 160),
+              selector: describeElement(el),
+              score: disabledScore - 4,
+              ariaDisabledBypass: true,
+              rect: {
+                top: Math.round(disabledRect.top),
+                left: Math.round(disabledRect.left),
+                width: Math.round(disabledRect.width),
+                height: Math.round(disabledRect.height),
+              },
+            });
+          }
+        }
+      });
 
       elements.forEach(function (el) {
         var visible = visibleLabel(el);
@@ -347,6 +450,10 @@ export function createSafeNextFunction() {
         });
       });
 
+      if (!candidates.length && disabledFooterCandidates.length) {
+        candidates = disabledFooterCandidates.slice(0, 1);
+      }
+
       candidates.sort(function (a, b) {
         if (a.score !== b.score) {
           return b.score - a.score;
@@ -357,20 +464,59 @@ export function createSafeNextFunction() {
       return {
         candidate: candidates[0] || null,
         candidateCount: candidates.length,
+        topCandidates: candidates.slice(0, 8).map(publicCandidate),
+        disabledFooterCandidates: disabledFooterCandidates
+          .slice(0, 8)
+          .map(publicCandidate),
         blockedFinalSubmitLabels: blockedFinalSubmitLabels.slice(0, 8),
       };
+    }
+
+    function visibleExternalAssessment() {
+      var labels = Array.from(
+        document.querySelectorAll(
+          [
+            "button",
+            "a[href]",
+            "[role='button']",
+            "input[type='button']",
+            "input[type='submit']",
+          ].join(", "),
+        ),
+      )
+        .filter(isVisibleEnabled)
+        .map(function (el) {
+          return visibleLabel(el) || metadataLabel(el);
+        })
+        .filter(Boolean);
+      var label = labels.find(function (text) {
+        return /take assessment|start assessment|assessment/i.test(text);
+      });
+      return label
+        ? {
+            found: true,
+            label: label.slice(0, 160) || "Take Assessment",
+          }
+        : { found: false };
     }
 
     function publicCandidate(candidate) {
       if (!candidate) {
         return null;
       }
+      var el = candidate.element;
       return {
         label: candidate.label,
         metadata: candidate.metadata,
         selector: candidate.selector,
         score: candidate.score,
         rect: candidate.rect,
+        tagName: String(el?.tagName || "").toLowerCase(),
+        role: el?.getAttribute?.("role") || "",
+        automationId: el?.getAttribute?.("data-automation-id") || "",
+        ariaDisabled: el?.getAttribute?.("aria-disabled") || "",
+        disabled: Boolean(el?.disabled),
+        ariaDisabledBypass: Boolean(candidate.ariaDisabledBypass),
       };
     }
 
@@ -416,6 +562,82 @@ export function createSafeNextFunction() {
       });
     }
 
+    function fallbackDomClick(el) {
+      if (!forceWorkdayDomClickFallback || !el) {
+        return false;
+      }
+      try {
+        if (typeof el.click === "function") {
+          el.click();
+          return true;
+        }
+      } catch (_error) {
+        return false;
+      }
+      return false;
+    }
+
+    function keyEvent(target, key) {
+      var code = key === "Enter" ? "Enter" : key;
+      var keyCode = key === "Enter" ? 13 : key === " " ? 32 : 0;
+      target.dispatchEvent(
+        new KeyboardEvent("keydown", {
+          bubbles: true,
+          cancelable: true,
+          key,
+          code,
+          keyCode,
+          which: keyCode,
+        }),
+      );
+      target.dispatchEvent(
+        new KeyboardEvent("keyup", {
+          bubbles: true,
+          cancelable: true,
+          key,
+          code,
+          keyCode,
+          which: keyCode,
+        }),
+      );
+    }
+
+    function fallbackFocusEnter(el) {
+      if (!forceWorkdayEnterFallback || !el) {
+        return false;
+      }
+      try {
+        if (typeof el.scrollIntoView === "function") {
+          el.scrollIntoView({ block: "center", inline: "center" });
+        }
+        if (typeof el.focus === "function") {
+          el.focus({ preventScroll: true });
+        }
+        keyEvent(el, "Enter");
+        return true;
+      } catch (_error) {
+        return false;
+      }
+    }
+
+    function fallbackFocusSpace(el) {
+      if (!forceWorkdaySpaceFallback || !el) {
+        return false;
+      }
+      try {
+        if (typeof el.scrollIntoView === "function") {
+          el.scrollIntoView({ block: "center", inline: "center" });
+        }
+        if (typeof el.focus === "function") {
+          el.focus({ preventScroll: true });
+        }
+        keyEvent(el, " ");
+        return true;
+      } catch (_error) {
+        return false;
+      }
+    }
+
     var found = findBestCandidate();
     var count = inputCount();
     var errors = visibleValidationErrors();
@@ -428,11 +650,30 @@ export function createSafeNextFunction() {
         message: "Next skipped because visible validation errors are present.",
         candidateCount: found.candidateCount,
         blockedFinalSubmitLabels: found.blockedFinalSubmitLabels,
+        disabledFooterCandidates: found.disabledFooterCandidates || [],
+        topCandidates: found.topCandidates || [],
         visibleValidationErrors: errors.slice(0, 8),
         inputCount: count,
       };
     }
     if (!found.candidate) {
+      var assessment = visibleExternalAssessment();
+      if (assessment.found) {
+        return {
+          ok: false,
+          found: false,
+          clicked: false,
+          reason: "external_assessment_required",
+          message:
+            "Stopped because Workday requires an external assessment before Review.",
+          candidateCount: found.candidateCount,
+          blockedFinalSubmitLabels: found.blockedFinalSubmitLabels,
+          disabledFooterCandidates: found.disabledFooterCandidates || [],
+          topCandidates: found.topCandidates || [],
+          assessment,
+          inputCount: count,
+        };
+      }
       var reason = found.blockedFinalSubmitLabels.length
         ? "final_submit_visible"
         : "no_safe_next_button";
@@ -447,24 +688,40 @@ export function createSafeNextFunction() {
             : "No safe Next or Continue button was found.",
         candidateCount: found.candidateCount,
         blockedFinalSubmitLabels: found.blockedFinalSubmitLabels,
+        disabledFooterCandidates: found.disabledFooterCandidates || [],
+        topCandidates: found.topCandidates || [],
         inputCount: count,
       };
     }
 
     if (click) {
+      dismissOpenWorkdayPopups();
       realisticClick(found.candidate.element);
+      fallbackDomClick(found.candidate.element);
+      fallbackFocusEnter(found.candidate.element);
+      fallbackFocusSpace(found.candidate.element);
     }
 
     return {
       ok: true,
       found: true,
       clicked: click,
-      reason: click ? "clicked_safe_next" : "safe_next_available",
+      reason: click
+        ? forceWorkdayDomClickFallback
+          ? "clicked_safe_next_dom_fallback"
+          : forceWorkdayEnterFallback
+            ? "clicked_safe_next_enter_fallback"
+            : forceWorkdaySpaceFallback
+              ? "clicked_safe_next_space_fallback"
+              : "clicked_safe_next"
+        : "safe_next_available",
       message: click
         ? "Clicked a safe Next or Continue button."
         : "A safe Next or Continue button is available.",
       candidate: publicCandidate(found.candidate),
+      topCandidates: found.topCandidates || [publicCandidate(found.candidate)],
       candidateCount: found.candidateCount,
+      disabledFooterCandidates: found.disabledFooterCandidates || [],
       blockedFinalSubmitLabels: found.blockedFinalSubmitLabels,
       inputCount: count,
     };
