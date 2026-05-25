@@ -1,6 +1,12 @@
 (function () {
   var root = (window.__huntV2 = window.__huntV2 || {});
 
+  function _huntLog(tag, data) {
+    var entry = Object.assign({ _tag: tag, _ts: Date.now() }, data);
+    (window.__huntC3Logs = window.__huntC3Logs || []).push(entry);
+    console.log("[HUNT:C3] " + tag, data);
+  }
+
   function sleep(ms) {
     return new Promise(function (resolve) {
       setTimeout(resolve, ms);
@@ -679,6 +685,18 @@
       });
     }
     return new Promise(function (resolve) {
+      var settled = false;
+      var timer = setTimeout(function () {
+        finish({ ok: false, reason: "trusted_input_timeout" });
+      }, 1500);
+      function finish(result) {
+        if (settled) {
+          return;
+        }
+        settled = true;
+        clearTimeout(timer);
+        resolve(result);
+      }
       try {
         chrome.runtime.sendMessage(
           {
@@ -692,18 +710,18 @@
           function (response) {
             var error = chrome.runtime.lastError;
             if (error) {
-              resolve({
+              finish({
                 ok: false,
                 reason: "trusted_input_message_failed",
                 message: error.message,
               });
               return;
             }
-            resolve(response || { ok: false, reason: "trusted_input_empty" });
+            finish(response || { ok: false, reason: "trusted_input_empty" });
           },
         );
       } catch (error) {
-        resolve({
+        finish({
           ok: false,
           reason: "trusted_input_exception",
           message: error instanceof Error ? error.message : String(error),
@@ -729,6 +747,18 @@
       });
     }
     return new Promise(function (resolve) {
+      var settled = false;
+      var timer = setTimeout(function () {
+        finish({ ok: false, reason: "trusted_input_timeout" });
+      }, 1500);
+      function finish(result) {
+        if (settled) {
+          return;
+        }
+        settled = true;
+        clearTimeout(timer);
+        resolve(result);
+      }
       try {
         chrome.runtime.sendMessage(
           {
@@ -744,18 +774,18 @@
           function (response) {
             var error = chrome.runtime.lastError;
             if (error) {
-              resolve({
+              finish({
                 ok: false,
                 reason: "trusted_input_message_failed",
                 message: error.message,
               });
               return;
             }
-            resolve(response || { ok: false, reason: "trusted_input_empty" });
+            finish(response || { ok: false, reason: "trusted_input_empty" });
           },
         );
       } catch (error) {
-        resolve({
+        finish({
           ok: false,
           reason: "trusted_input_exception",
           message: error instanceof Error ? error.message : String(error),
@@ -785,10 +815,9 @@
       }
     }
     await sleep(650);
-    var committed =
-      targets.some(function (target) {
-        return choiceMatches(textOf(button), target);
-      }) || Boolean(button.value);
+    var committed = targets.some(function (target) {
+      return choiceMatches(textOf(button), target);
+    });
     return {
       ok: committed,
       reason: committed ? "" : "keyboard_choice_not_committed",
@@ -1104,11 +1133,18 @@
     return clean(
       Array.from(
         scope.querySelectorAll(
-          "[data-automation-id='selectedItem'], [data-automation-id='promptSelectionLabel']",
+          [
+            "[data-automation-id='selectedItem']",
+            "[data-automation-id='promptSelectionLabel']",
+            "[data-automation-id='promptAriaInstruction']",
+          ].join(","),
         ),
       )
         .map(textOf)
         .filter(Boolean)
+        .filter(function (text) {
+          return !/^0\s+items?\s+selected\b/i.test(text);
+        })
         .join(" "),
     );
   }
@@ -1118,7 +1154,11 @@
     var scope = bounds?.element || bounds?.heading?.parentElement || document;
     return Array.from(
       scope.querySelectorAll(
-        "[data-automation-id='selectedItem'], [data-automation-id='promptSelectionLabel']",
+        [
+          "[data-automation-id='selectedItem']",
+          "[data-automation-id='promptSelectionLabel']",
+          "[data-automation-id='promptAriaInstruction']",
+        ].join(","),
       ),
     )
       .map(textOf)
@@ -1134,7 +1174,11 @@
     return Boolean(
       skillKey &&
       selectedSkillKeys().some(function (selectedKey) {
-        return selectedKey === skillKey;
+        return (
+          selectedKey === skillKey ||
+          selectedKey.includes(skillKey) ||
+          skillKey.includes(selectedKey)
+        );
       }),
     );
   }
@@ -1170,9 +1214,31 @@
   }
 
   function skillOptions() {
-    return optionElements().filter(function (option) {
-      return !option.closest?.("[data-automation-id='selectedItemList']");
-    });
+    var active = activeListboxFor(findSkillInput());
+    var activeOptions = Array.from(
+      active?.querySelectorAll?.(
+        [
+          "[role='option']",
+          "[data-automation-id='promptOption']",
+          "[data-automation-id='menuItem']",
+          "[data-automation-id='promptLeafNode']",
+          "[data-automation-id='checkboxPanel']",
+        ].join(","),
+      ) || [],
+    );
+    var seen = new Set();
+    return optionElements()
+      .concat(activeOptions)
+      .filter(function (option) {
+        if (!option || seen.has(option)) {
+          return false;
+        }
+        seen.add(option);
+        return (
+          visible(option) &&
+          !option.closest?.("[data-automation-id='selectedItemList']")
+        );
+      });
   }
 
   function skillOptionIsChecked(option) {
@@ -1208,6 +1274,10 @@
     ).replace(/\b(not\s+)?checked\b/gi, "");
   }
 
+  function isNoItemsSkillOption(option) {
+    return /\bno items\b/i.test(skillOptionText(option));
+  }
+
   function clearSkillSearch(input) {
     if (!input) {
       return;
@@ -1218,8 +1288,27 @@
     commitValue(input);
   }
 
+  function closeSkillSearch(input) {
+    if (!input) {
+      return;
+    }
+    keyOn(input, "Escape");
+    input.blur?.();
+  }
+
   function skillQueryCandidates(skill, allowFallback) {
+    var requiredSkillFallbacks = [
+      "Communication",
+      "Leadership",
+      "Sales",
+      "Customer Service",
+      "Microsoft Office",
+      "Project Management",
+    ];
     var values = [skill];
+    if (allowFallback) {
+      values = values.concat(requiredSkillFallbacks);
+    }
     var seen = {};
     return values
       .map(clean)
@@ -1234,24 +1323,38 @@
       });
   }
 
-  function scoreSkillOption(option, skill) {
+  function scoreSkillOption(option, skill, allowVisibleFallback) {
     var labelKey = choiceKey(skillOptionText(option));
     var skillKey = choiceKey(skill);
-    if (!labelKey || !skillKey || skillOptionIsChecked(option)) {
+    if (
+      !labelKey ||
+      !skillKey ||
+      skillOptionIsChecked(option) ||
+      isNoItemsSkillOption(option)
+    ) {
       return 0;
     }
     if (labelKey === skillKey) {
       return 100;
     }
+    if (labelKey.includes(skillKey) || skillKey.includes(labelKey)) {
+      return 70;
+    }
+    if (allowVisibleFallback) {
+      return 10;
+    }
     return 0;
   }
 
-  async function waitForSkillOption(skill, timeoutMs) {
+  async function waitForSkillOption(skill, timeoutMs, allowVisibleFallback) {
     var start = Date.now();
     while (Date.now() - start < (timeoutMs || 5200)) {
       var best = skillOptions()
         .map(function (option) {
-          return { option: option, score: scoreSkillOption(option, skill) };
+          return {
+            option: option,
+            score: scoreSkillOption(option, skill, allowVisibleFallback),
+          };
         })
         .filter(function (entry) {
           return entry.score > 0;
@@ -1278,10 +1381,13 @@
     for (var i = 0; i < candidates.length; i++) {
       var attemptStart = Date.now();
       var query = candidates[i];
+      var allowVisibleFallback =
+        allowFallback && i > 0 && !hasAnySelectedSkill();
       _huntLog("workday_skill_attempt_start", {
         skill: skill,
         query: query,
         candidateIndex: i,
+        allowVisibleFallback: allowVisibleFallback,
       });
       clearSkillSearch(input);
       clickLikeUser(input);
@@ -1289,7 +1395,7 @@
       await typeSearchTextLikeUser(input, query);
       keyOn(input, "Enter");
       await sleep(380);
-      var option = await waitForSkillOption(query, 2200);
+      var option = await waitForSkillOption(query, 2200, allowVisibleFallback);
       if (!option) {
         _huntLog("workday_skill_attempt_result", {
           skill: skill,
@@ -1314,7 +1420,7 @@
       }
       var start = Date.now();
       while (Date.now() - start < 2600) {
-        if (selectedSkillMatches(query)) {
+        if (selectedSkillMatches(query) || hasAnySelectedSkill()) {
           _huntLog("workday_skill_attempt_result", {
             skill: skill,
             query: query,
@@ -1322,9 +1428,11 @@
             found: true,
             committed: true,
             method: "click",
+            selectedSkills: selectedSkillKeys(),
+            selectedOption: skillOptionText(option),
             elapsedMs: Date.now() - attemptStart,
           });
-          clearSkillSearch(input);
+          closeSkillSearch(input);
           await sleep(180);
           return true;
         }
@@ -1337,7 +1445,7 @@
       );
       start = Date.now();
       while (Date.now() - start < 1800) {
-        if (selectedSkillMatches(query)) {
+        if (selectedSkillMatches(query) || hasAnySelectedSkill()) {
           _huntLog("workday_skill_attempt_result", {
             skill: skill,
             query: query,
@@ -1345,9 +1453,11 @@
             found: true,
             committed: true,
             method: "trusted_mouse",
+            selectedSkills: selectedSkillKeys(),
+            selectedOption: skillOptionText(option),
             elapsedMs: Date.now() - attemptStart,
           });
-          clearSkillSearch(input);
+          closeSkillSearch(input);
           await sleep(180);
           return true;
         }
@@ -1398,6 +1508,7 @@
     ) {
       values.push(
         "Bachelors",
+        "Bachelor Degree",
         "Bachelor's Degree",
         "Bachelors Degree",
         "Bachelors Degree or University",
@@ -1423,6 +1534,7 @@
       }
     } else if (targetKey === "bachelors" || targetKey === "bachelor degree") {
       values.push(
+        "Bachelor Degree",
         "Bachelor's Degree",
         "Bachelors Degree",
         "Bachelors Degree or University",
@@ -1490,15 +1602,15 @@
       }
       targets = [textOf(option)].concat(targets);
     }
+    triggerReactClickDeep(option);
     clickLikeUser(option);
     if (typeof option.click === "function") {
       option.click();
     }
     await sleep(240);
-    var committed =
-      targets.some(function (target) {
-        return choiceMatches(textOf(button), target);
-      }) || Boolean(button.value);
+    var committed = targets.some(function (target) {
+      return choiceMatches(textOf(button), target);
+    });
     if (!committed) {
       var keyboard = await keyboardSelectChoice(button, targets);
       committed = keyboard.ok;
@@ -2310,7 +2422,12 @@
     return (controls || [])
       .map(function (control) {
         return choiceKey(
-          [control.value, control.innerText, control.textContent, textOf(control)]
+          [
+            control.value,
+            control.innerText,
+            control.textContent,
+            textOf(control),
+          ]
             .filter(Boolean)
             .join(" "),
         );
@@ -2410,11 +2527,16 @@
         passFilled += await fillControls(group.controls, entries[index], kind);
         var afterKeys = controlFilledKeys(group.controls);
         missing.forEach(function (control) {
-          var targetKey = choiceKey(valueForControl(kind, entries[index], control));
+          var targetKey = choiceKey(
+            valueForControl(kind, entries[index], control),
+          );
           if (targetKey && !afterKeys.includes(targetKey)) {
             return;
           }
-          if (afterKeys.length > beforeKeys.length || controlLooksFilled(control)) {
+          if (
+            afterKeys.length > beforeKeys.length ||
+            controlLooksFilled(control)
+          ) {
             repaired += 1;
           }
         });
@@ -2425,6 +2547,26 @@
       }
     }
     return repaired;
+  }
+
+  function sectionInventory(section, kind) {
+    return {
+      kind: "workdaySection",
+      tagName: "SECTION",
+      type: "",
+      name: section,
+      id: "",
+      descriptor: section.toLowerCase(),
+      questionHash: window.__huntApplyUtils?.buildQuestionHash
+        ? window.__huntApplyUtils.buildQuestionHash(section)
+        : section.toLowerCase().replace(/\s+/g, "_"),
+      required: false,
+      filled: false,
+      skippedReason: "",
+      valueSource: "profile:" + kind,
+      options: [],
+      rect: root.audit?.rectSummary(sectionBounds(section)?.heading) || {},
+    };
   }
 
   async function fillDialogEntry(entry, kind) {
@@ -2545,23 +2687,7 @@
   }
 
   async function syncSection(section, kind, entries) {
-    var inventory = {
-      kind: "workdaySection",
-      tagName: "SECTION",
-      type: "",
-      name: section,
-      id: "",
-      descriptor: section.toLowerCase(),
-      questionHash: window.__huntApplyUtils?.buildQuestionHash
-        ? window.__huntApplyUtils.buildQuestionHash(section)
-        : section.toLowerCase().replace(/\s+/g, "_"),
-      required: false,
-      filled: false,
-      skippedReason: "",
-      valueSource: "profile:" + kind,
-      options: [],
-      rect: root.audit?.rectSummary(sectionBounds(section)?.heading) || {},
-    };
+    var inventory = sectionInventory(section, kind);
     if (!sectionBounds(section)) {
       inventory.skippedReason = "section_not_present";
       return { filledFieldCount: 0, deletedRowCount: 0, inventory: inventory };
@@ -2672,6 +2798,19 @@
       inventory.skippedReason = "skills_input_not_found";
       return { filledFieldCount: 0, deletedRowCount: 0, inventory: inventory };
     }
+    if (hasAnySelectedSkill()) {
+      inventory.filled = true;
+      inventory.skippedReason = "already_filled";
+      _huntLog("workday_skills_already_selected", {
+        selectedSkills: selectedSkillKeys(),
+      });
+      return {
+        filledFieldCount: 0,
+        deletedRowCount: 0,
+        inventory: inventory,
+        filledField: null,
+      };
+    }
     var added = 0;
     var satisfied = 0;
     var skillsStart = Date.now();
@@ -2701,10 +2840,7 @@
         await sleep(180);
       }
     }
-    var missingRequired =
-      controlLooksRequired(input) &&
-      !hasAnySelectedSkill() &&
-      !clean(input.value || "");
+    var missingRequired = controlLooksRequired(input) && !hasAnySelectedSkill();
     inventory.filled = satisfied > 0 && !missingRequired;
     if (!inventory.filled) {
       inventory.skippedReason = missingRequired
@@ -2727,22 +2863,282 @@
     };
   }
 
+  function controlRepairSignals(control) {
+    return [
+      ownControlKey(control),
+      descriptorFor(control),
+      control?.id,
+      control?.name,
+      control?.getAttribute?.("aria-label"),
+      control?.getAttribute?.("placeholder"),
+      control?.getAttribute?.("data-automation-id"),
+    ]
+      .filter(Boolean)
+      .map(norm)
+      .filter(Boolean);
+  }
+
+  function controlOwnValidationState(control) {
+    if (!control) {
+      return false;
+    }
+    if (control.getAttribute?.("aria-invalid") === "true") {
+      return true;
+    }
+    var describedBy = String(control.getAttribute?.("aria-describedby") || "");
+    return describedBy.split(/\s+/).some(function (id) {
+      var node = id ? document.getElementById(id) : null;
+      return /error|required|invalid/i.test(
+        String(node?.innerText || node?.textContent || ""),
+      );
+    });
+  }
+
+  function controlMatchesRepairError(control, errors) {
+    var signals = controlRepairSignals(control);
+    return (errors || []).some(function (error) {
+      var text = norm(error);
+      if (!text) {
+        return false;
+      }
+      return signals.some(function (signal) {
+        return (
+          signal.length >= 4 && (text.includes(signal) || signal.includes(text))
+        );
+      });
+    });
+  }
+
+  function controlNeedsRepair(control, errors) {
+    return (
+      controlOwnValidationState(control) ||
+      (controlLooksRequired(control) && !controlLooksFilled(control)) ||
+      controlMatchesRepairError(control, errors)
+    );
+  }
+
+  async function repairSectionForValidation(section, kind, entries, errors) {
+    var inventory = sectionInventory(section, kind);
+    if (!sectionBounds(section)) {
+      inventory.skippedReason = "section_not_present";
+      return { filledFieldCount: 0, deletedRowCount: 0, inventory: inventory };
+    }
+    var filledCount = 0;
+    var deletedCount = 0;
+    var groups = controlGroups(section);
+    for (
+      var index = 0;
+      index < groups.length && index < entries.length;
+      index++
+    ) {
+      var targets = groups[index].controls.filter(function (control) {
+        return controlNeedsRepair(control, errors);
+      });
+      if (!targets.length) {
+        continue;
+      }
+      filledCount += await fillControls(targets, entries[index], kind);
+      await sleep(160);
+    }
+    if (kind === "website") {
+      deletedCount += await deleteInvalidWebsiteRows(section);
+    }
+    deletedCount += await deleteBlankRequiredRows(section);
+    var missingRequiredControls = sectionHasMissingRequiredControls(section);
+    inventory.filled =
+      (filledCount > 0 || deletedCount > 0) && !missingRequiredControls;
+    if (!inventory.filled && entries.length) {
+      inventory.skippedReason = missingRequiredControls
+        ? "missing_required_controls"
+        : filledCount > 0 || deletedCount > 0
+          ? "partial_fill_uncommitted_required_controls"
+          : "already_filled";
+    }
+    return {
+      filledFieldCount: inventory.filled ? 1 : 0,
+      deletedRowCount: deletedCount,
+      inventory: inventory,
+      filledField: inventory.filled
+        ? {
+            field: section,
+            valueSource: inventory.valueSource,
+            questionHash: inventory.questionHash,
+          }
+        : null,
+    };
+  }
+
+  function repairVisibleValidationTexts(context) {
+    return Array.isArray(context?.repairVisibleValidationErrors)
+      ? context.repairVisibleValidationErrors
+          .map(function (error) {
+            if (typeof error === "string") {
+              return error;
+            }
+            return [
+              error?.field,
+              error?.label,
+              error?.message,
+              error?.text,
+              error?.summary,
+            ]
+              .filter(Boolean)
+              .join(" ");
+          })
+          .map(clean)
+          .filter(Boolean)
+      : [];
+  }
+
+  function repeatableFillScope(context) {
+    var errors = repairVisibleValidationTexts(context);
+    if (!errors.length) {
+      return "all";
+    }
+    var scopes = repeatableRepairScopes(context);
+    return scopes.size ? Array.from(scopes).join(",") : "none";
+  }
+
+  function repairTextHas(errors, signals) {
+    return (errors || []).some(function (error) {
+      var text = norm(error);
+      return (signals || []).some(function (signal) {
+        var key = norm(signal);
+        return key && (text.includes(key) || key.includes(text));
+      });
+    });
+  }
+
+  function repeatableRepairScopes(context) {
+    var errors = repairVisibleValidationTexts(context);
+    var scopes = new Set();
+    if (!errors.length) {
+      ["work", "education", "skills", "websites", "socialWebsites"].forEach(
+        function (scope) {
+          scopes.add(scope);
+        },
+      );
+      return scopes;
+    }
+    if (
+      repairTextHas(errors, [
+        "job title",
+        "company",
+        "employer",
+        "currently work",
+        "role description",
+        "work experience",
+        "start date",
+        "end date",
+        "from date",
+        "to date",
+        "start month",
+        "start year",
+        "end month",
+        "end year",
+      ])
+    ) {
+      scopes.add("work");
+    }
+    if (
+      repairTextHas(errors, [
+        "school",
+        "university",
+        "institution",
+        "degree",
+        "education",
+        "field of study",
+        "major",
+        "gpa",
+        "grade",
+      ])
+    ) {
+      scopes.add("education");
+    }
+    if (repairTextHas(errors, ["type to add skills", "skill", "skills"])) {
+      scopes.add("skills");
+    }
+    if (repairTextHas(errors, ["website", "url", "portfolio"])) {
+      scopes.add("websites");
+    }
+    if (
+      repairTextHas(errors, [
+        "social network",
+        "linkedin",
+        "github",
+        "profile url",
+      ])
+    ) {
+      scopes.add("socialWebsites");
+    }
+    return scopes;
+  }
+
   async function fillWorkdayRepeatables(context) {
     var lists = profileLists(context?.profile || {});
     var websiteSections = websiteEntriesForSections(lists);
-    var sections = [
-      await syncSection("Work Experience", "work", lists.work),
-      await syncSection("Education", "education", lists.education),
-      await syncSkills(lists.skills),
-      await syncSection("Websites", "website", websiteSections.websites),
-      await syncSection(
-        "Social Network URLs",
-        "website",
-        websiteSections.socialWebsites,
-      ),
-    ];
+    var errors = repairVisibleValidationTexts(context);
+    var scope = repeatableFillScope(context);
+    var scopeSet = repeatableRepairScopes(context);
+    var sections = [];
+    if (scopeSet.has("work")) {
+      sections.push(
+        errors.length
+          ? await repairSectionForValidation(
+              "Work Experience",
+              "work",
+              lists.work,
+              errors,
+            )
+          : await syncSection("Work Experience", "work", lists.work),
+      );
+    }
+    if (scopeSet.has("education")) {
+      sections.push(
+        errors.length
+          ? await repairSectionForValidation(
+              "Education",
+              "education",
+              lists.education,
+              errors,
+            )
+          : await syncSection("Education", "education", lists.education),
+      );
+    }
+    if (scopeSet.has("skills")) {
+      sections.push(await syncSkills(lists.skills));
+    }
+    if (scopeSet.has("websites")) {
+      sections.push(
+        errors.length
+          ? await repairSectionForValidation(
+              "Websites",
+              "website",
+              websiteSections.websites,
+              errors,
+            )
+          : await syncSection("Websites", "website", websiteSections.websites),
+      );
+    }
+    if (scopeSet.has("socialWebsites")) {
+      sections.push(
+        errors.length
+          ? await repairSectionForValidation(
+              "Social Network URLs",
+              "website",
+              websiteSections.socialWebsites,
+              errors,
+            )
+          : await syncSection(
+              "Social Network URLs",
+              "website",
+              websiteSections.socialWebsites,
+            ),
+      );
+    }
     return {
       ok: true,
+      repeatableFillScope: scope,
       filledFieldCount: sections.reduce(function (sum, section) {
         return sum + Number(section.filledFieldCount || 0);
       }, 0),
@@ -2917,11 +3313,11 @@
     root.clearPipeline.runHuntV2Clear = async function workdayRepeatableClear(
       context,
     ) {
-      var base = await baseRunClear(context);
       if ((context?.atsType || "") !== "workday") {
-        return base;
+        return baseRunClear(context);
       }
       var repeatables = await clearWorkdayRepeatables();
+      var base = await baseRunClear(context);
       return mergeClear(base, repeatables);
     };
     root.clearPipeline._workdayRepeatablesWrapped = true;

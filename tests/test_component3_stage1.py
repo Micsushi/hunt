@@ -2247,6 +2247,25 @@ Expected Graduation: Sep 2026
         )
         self.assertIn('"source_category_keyboard"', drivers)
 
+    def test_v2_workday_source_category_children_scroll_for_safe_option(self):
+        drivers = (
+            REPO_ROOT / "executioner" / "src" / "ats" / "workday" / "workday-drivers-v2.js"
+        ).read_text(encoding="utf-8")
+
+        self.assertIn("shouldScanForBetterSourceOption", drivers)
+        self.assertIn(
+            "sourceFallbackScore(target, answerTexts(answer, null)) < 80",
+            drivers,
+        )
+        self.assertIn("childScrollResult = childOptions.length", drivers)
+        self.assertIn(
+            "collectPreferredWorkdayOptionsWithScroll(\n"
+            "            field,\n"
+            "            answer,\n"
+            "            childOptions,",
+            drivers,
+        )
+
     def test_v2_capital_one_degree_age_and_essential_functions_are_cataloged(self):
         paths = [
             REPO_ROOT / "executioner" / "src" / "shared" / "v2" / "field-catalog.js",
@@ -5717,7 +5736,22 @@ Expected Graduation: Sep 2026
         self.assertIn("workday_skill_attempt_result", workday_repeatables)
         self.assertIn("skillsBudgetMs = 25000", workday_repeatables)
         self.assertIn("workday_skills_time_budget_exceeded", workday_repeatables)
+        self.assertIn("requiredSkillFallbacks", workday_repeatables)
+        self.assertIn('"Sales"', workday_repeatables)
+        self.assertIn("values = values.concat(requiredSkillFallbacks)", workday_repeatables)
+        self.assertIn("allowVisibleFallback", workday_repeatables)
+        self.assertIn("selectedSkillMatches(query) || hasAnySelectedSkill()", workday_repeatables)
+        self.assertIn("workday_skills_already_selected", workday_repeatables)
+        self.assertIn("promptAriaInstruction", workday_repeatables)
+        self.assertIn("repairVisibleValidationTexts", workday_repeatables)
+        self.assertIn("repeatableFillScope", workday_repeatables)
+        self.assertIn("repeatableRepairScopes", workday_repeatables)
+        self.assertIn('scopeSet.has("skills")', workday_repeatables)
+        self.assertIn("repairSectionForValidation", workday_repeatables)
+        self.assertIn("controlNeedsRepair", workday_repeatables)
+        self.assertIn("Bachelor Degree", workday_repeatables)
         self.assertIn("Bachelors Degree or University", workday_repeatables)
+        self.assertNotIn("Boolean(button.value)", workday_repeatables)
         self.assertIn('field?.uiModel === "button_listbox"', workday_drivers)
         self.assertIn("option_keyboard", workday_drivers)
         self.assertIn("settleWorkdayCommit", workday_drivers)
@@ -5740,7 +5774,10 @@ Expected Graduation: Sep 2026
         field_pipeline = (
             REPO_ROOT / "executioner" / "src" / "shared" / "v2" / "field-pipeline.js"
         ).read_text(encoding="utf-8")
-        self.assertIn("genericRequiredError", field_pipeline)
+        self.assertIn("normalizedRepairErrors", field_pipeline)
+        self.assertIn("hasValidationState(field)", field_pipeline)
+        self.assertIn("not_in_visible_validation_errors", field_pipeline)
+        self.assertNotIn("genericRequiredError", field_pipeline)
         self.assertIn("auth_no_progress", background)
         self.assertIn("authShellStillSettling", background)
         self.assertIn("stillLoading", background)

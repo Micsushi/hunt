@@ -2957,6 +2957,28 @@ function workdayAppScopeFromUrl(value = "") {
   }
 }
 
+function freshWorkdayAuthAliasEmail(baseEmail = "", scope = {}, attempt = 1) {
+  const email = String(baseEmail || "").trim();
+  const at = email.lastIndexOf("@");
+  if (at <= 0 || at >= email.length - 1) return "";
+  const localBase = email.slice(0, at).replace(/\+.*/, "");
+  const domain = email.slice(at + 1);
+  const scopeSlug = String([scope.host || "", scope.appSegment || ""].join(""))
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "")
+    .slice(0, 12);
+  const suffix = [
+    "c3",
+    scopeSlug,
+    Date.now().toString(36).slice(-6),
+    String(attempt),
+  ]
+    .filter(Boolean)
+    .join("");
+  const maxBaseLength = Math.max(1, 63 - suffix.length);
+  return `${localBase.slice(0, maxBaseLength)}+${suffix}@${domain}`;
+}
+
 function emailVerificationExpectedApplyUrl(
   payload = {},
   state = {},
@@ -4850,6 +4872,7 @@ async function clickAuthPrimaryActionForTab(
   let clickResult;
   try {
     const state = await getExtensionState();
+    const overrideEmail = String(details.accountEmailOverride || "").trim();
     const clickResults = await withTimeout(
       chrome.scripting.executeScript({
         target: { tabId, frameIds: [probe.frameId] },
@@ -4860,7 +4883,10 @@ async function clickAuthPrimaryActionForTab(
             authUiState,
             click: true,
             accountEmail:
-              state.profile?.accountEmail || state.profile?.email || "",
+              overrideEmail ||
+              state.profile?.accountEmail ||
+              state.profile?.email ||
+              "",
             accountPassword: state.profile?.accountPassword || "",
           },
         ],
@@ -5511,6 +5537,39 @@ async function runV2PageWalkAfterFill({
   let sawSignupAuthAttempt = false;
   const validationRepairKeys = new Set();
   const authSamePageFailureCounts = new Map();
+  const tenantSignupAliasEmail = new Map();
+  const tenantSignupAliasSwapCount = new Map();
+
+  function tenantAliasScopeKey(detection = {}, snapshot = {}) {
+    const scope = workdayAppScopeFromUrl(
+      detection.href || snapshot.href || "",
+    );
+    return `${scope.host}|${scope.appSegment}`;
+  }
+
+  async function trySignupAliasSwap(detection = {}, snapshot = {}) {
+    if (String(detection.authState || "").toLowerCase() !== "signup") {
+      return { ok: false, reason: "not_signup_route" };
+    }
+    const scopeKey = tenantAliasScopeKey(detection, snapshot);
+    const prior = tenantSignupAliasSwapCount.get(scopeKey) || 0;
+    if (prior >= 1) {
+      return { ok: false, reason: "alias_swap_exhausted", attempts: prior };
+    }
+    const state = await getExtensionState();
+    const baseEmail =
+      state.profile?.accountEmail || state.profile?.email || "";
+    const scope = workdayAppScopeFromUrl(
+      detection.href || snapshot.href || "",
+    );
+    const freshEmail = freshWorkdayAuthAliasEmail(baseEmail, scope, prior + 1);
+    if (!freshEmail) {
+      return { ok: false, reason: "alias_email_unavailable" };
+    }
+    tenantSignupAliasEmail.set(scopeKey, freshEmail);
+    tenantSignupAliasSwapCount.set(scopeKey, prior + 1);
+    return { ok: true, scopeKey, email: freshEmail, attempts: prior + 1 };
+  }
 
   function authSamePageKey(detection = {}, snapshot = {}) {
     return [
@@ -5704,12 +5763,16 @@ async function runV2PageWalkAfterFill({
         fillRunId,
       );
       markFillRunExpectedReload(fillRunId);
+      const accountEmailOverride = tenantSignupAliasEmail.get(
+        tenantAliasScopeKey(workflowDetection, beforeNextSnapshot),
+      );
       const authAction = await clickAuthPrimaryActionForTab(
         tabId,
         workflowDetection,
         {
           auto: true,
           triggeredBy: `${triggeredBy || "fill_current_page"}:v2_page_walk:${pageIndex}`,
+          accountEmailOverride: accountEmailOverride || "",
         },
       );
       steps.push({
@@ -5883,7 +5946,23 @@ async function runV2PageWalkAfterFill({
               currentPageSnapshot,
               readiness.reason,
             );
-            if (samePageAuthLimitReached(samePageFailure)) {
+            const aliasSwap = await trySignupAliasSwap(
+              readiness.detection || workflowDetection,
+              currentPageSnapshot,
+            );
+            if (aliasSwap.ok) {
+              authSamePageFailureCounts.set(samePageFailure.key, 0);
+              steps.push({
+                step: steps.length + 1,
+                kind: "auth_signup_alias_swap",
+                pageIndex: lastPageNumber,
+                attemptIndex: pageIndex,
+                scopeKey: aliasSwap.scopeKey,
+                attempts: aliasSwap.attempts,
+                reason: "silent_same_page_no_visible_errors",
+              });
+            }
+            if (!aliasSwap.ok && samePageAuthLimitReached(samePageFailure)) {
               stoppedReason = "auth_same_page_attempt_limit_reached";
               failedPageNumber = lastPageNumber;
               stopDetails = {
@@ -5901,6 +5980,7 @@ async function runV2PageWalkAfterFill({
                 samePageAttempts: samePageFailure.count,
                 maxSamePageAttempts: samePageFailure.limit,
                 lastReason: samePageFailure.reason,
+                aliasSwapReason: aliasSwap.reason,
               };
               break;
             }
@@ -5948,7 +6028,26 @@ async function runV2PageWalkAfterFill({
           currentPageSnapshot,
           "auth_action_did_not_advance",
         );
-        if (samePageAuthLimitReached(samePageFailure)) {
+        const silentAliasSwap =
+          !(currentPageSnapshot.visibleValidationErrors || []).length
+            ? await trySignupAliasSwap(
+                afterAuthDetection,
+                currentPageSnapshot,
+              )
+            : { ok: false, reason: "visible_validation_errors_present" };
+        if (silentAliasSwap.ok) {
+          authSamePageFailureCounts.set(samePageFailure.key, 0);
+          steps.push({
+            step: steps.length + 1,
+            kind: "auth_signup_alias_swap",
+            pageIndex: beforePageNumber,
+            attemptIndex: pageIndex,
+            scopeKey: silentAliasSwap.scopeKey,
+            attempts: silentAliasSwap.attempts,
+            reason: "auth_action_did_not_advance_no_visible_errors",
+          });
+        }
+        if (!silentAliasSwap.ok && samePageAuthLimitReached(samePageFailure)) {
           stoppedReason = "auth_same_page_attempt_limit_reached";
           failedPageNumber = beforePageNumber;
           stopDetails = {

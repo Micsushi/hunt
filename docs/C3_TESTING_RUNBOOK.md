@@ -92,11 +92,11 @@ Detailed `p chrome` operating notes and job fast paths are internal agent
 memory, not repo documentation. Keep repo scripts here; keep job/browser memory
 outside public docs.
 
-For rolling six-lane Workday batches with isolated p Chrome profiles and
-per-lane subagent monitoring, use `docs\C3_PARALLEL_BATCH.md`.
-Rolling batches stop promoting new jobs after five hard pre-Review failures.
-Review reached with bad fills is not a hard failure; it remains a Review/audit
-quality issue.
+For prompt-driven rolling Workday batches with isolated p Chrome profiles and
+per-lane subagent monitoring, use `docs\C3_PARALLEL_BATCH.md`. Put run-specific
+values such as active capacity, hard-failure threshold, and failed-lane probe
+budget in the launch prompt. Review reached with bad fills is not a hard
+failure; it remains a Review/audit quality issue.
 For per-lane subagent behavior, use `docs\C3_LANE_AGENT.md`.
 For consistent failure classification, use `docs\C3_ERROR_TAXONOMY.md`.
 For reusable p Chrome launch/reload/seed/capture commands, use

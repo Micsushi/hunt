@@ -16,8 +16,12 @@ follow-up fields, or leaves validation uncleared.
 
 Use terse/caveman-lite reporting. No narrative logs. Paste only decisive
 evidence, not full audit or console output. Prefer artifact paths. If Review is
-reached, do not deep-investigate bad fills. If the lane fails, do one live UI
-probe and one focused CDP/Playwright proof max, then report root cause or
+reached, do not deep-investigate bad fills. If the lane fails before Review, use
+the failed-lane probe budget from the main-agent prompt. The first mutating
+probe should be live UI/user-like. Later attempts may use focused CDP/Playwright
+proof or rescue scripts. Stop early when Review is reached, root cause is
+proven, the page becomes unsafe to mutate, or the next attempt would repeat the
+same evidence. When the budget is exhausted, preserve the lane and report
 `needs_deeper_probe`.
 
 ## Role
@@ -127,6 +131,21 @@ CAPTCHA/MFA, or another site/posting state outside C3 fill completion.
 Preserve the p Chrome for every hard failure and every site/posting-state stop.
 The user wants to see these lanes.
 
+Probe budget:
+
+- Use the failed-lane probe budget from the main-agent prompt.
+- The normal C3 full-flow run does not count against the probe budget.
+- Read-only inspect, snapshot, audit, or console capture does not count.
+- Count each mutating UI/CDP action or script that tries to clear the blocker,
+  prove a commit path, or rescue progress.
+- The first mutating probe should be live UI/user-like.
+- Later attempts may use focused CDP/Playwright proof or rescue scripts.
+- Each attempt must test a new hypothesis and write an artifact path.
+- Stop early if Review is reached, root cause is proven, the page becomes
+  unsafe to mutate, or the next attempt would repeat the same evidence.
+- When the budget is exhausted, preserve the lane and report
+  `needs_deeper_probe`.
+
 1. Preserve the page state when possible.
 2. Classify the failure with `docs/C3_ERROR_TAXONOMY.md`.
 3. Interact with the live p Chrome UI like a user before inspecting DOM/source.
@@ -171,6 +190,8 @@ submit_visible:
 bad_fills:
 unknowns:
 failure_point:
+probe_budget:
+probe_attempts:
 ui_probe:
 proof_script:
 recommended_c3_change:

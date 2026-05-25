@@ -1,8 +1,9 @@
 # C3 Parallel Batch
 
 Reusable main-agent protocol for parallel C3 Workday testing. The user prompt
-should only name the batch target and any special stop rules. Per-lane subagent
-behavior lives in `docs/C3_LANE_AGENT.md`.
+is the source of truth for run-specific values such as batch target, active
+capacity, hard-failure threshold, and failed-lane probe budget. Per-lane
+subagent behavior lives in `docs/C3_LANE_AGENT.md`.
 
 ## Priority
 
@@ -16,33 +17,35 @@ validation or unsupported required follow-up fields.
 
 Use terse/caveman-lite lane reporting. No narrative logs. Paste only decisive
 evidence, not full audit or console output. Prefer artifact paths. If Review is
-reached, do not deep-investigate bad fills. If a lane fails, do one live UI probe
-and one focused CDP/Playwright proof max, then report root cause or
-`needs_deeper_probe`.
+reached, do not deep-investigate bad fills. If a lane fails before Review, use
+the failed-lane probe budget from the main-agent prompt. The first mutating
+probe should be live UI/user-like. Later attempts may use focused CDP/Playwright
+proof or rescue scripts. Stop early when Review is reached, root cause is
+proven, the page becomes unsafe to mutate, or the next attempt would repeat the
+same evidence.
 
 ## Scope
 
-- Default active capacity: up to six Workday-compatible rows from the selected
-  CSV at once.
-- Large batch requests are a rolling queue. Launch up to six p Chrome
-  lanes/subagents, then start the next queued job as soon as one lane has
+- Active capacity comes from the main-agent prompt. Keep active p Chrome lanes
+  and lane subagents at or below that configured capacity.
+- Large batch requests are a rolling queue. Launch only up to the configured
+  active capacity, then start the next queued job as soon as one lane has
   finished analysis, written its report, captured artifacts, and closed its
   p Chrome.
-- Hard active-lane limit: no more than six p Chrome lanes and six lane
-  subagents at once.
-- Hard failure stop rule: stop promoting new queued jobs once the batch has five
-  hard failures. A hard failure means the lane did not reach Review/Submit
-  visibility after the normal C3 flow and required failure investigation. A lane
-  that reaches Review with bad fills, questionable answers, stale audit
-  warnings, or Review-quality issues is not a hard failure.
+- Hard failure stop rule comes from the main-agent prompt. Stop promoting new
+  queued jobs once the batch reaches that threshold. A hard failure means the
+  lane did not reach Review/Submit visibility after the normal C3 flow and
+  required failure investigation. A lane that reaches Review with bad fills,
+  questionable answers, stale audit warnings, or Review-quality issues is not a
+  hard failure.
 - Non-C3/site/posting states do not count as hard failures: Workday
   maintenance, dead/closed posting, non-application site, CAPTCHA/MFA,
   external assessment, tenant outage, or a posting that never exposes an
   application flow. Classify them separately as `site_or_posting_state` or the
   closest taxonomy type.
-- Already-active lanes may finish and report after the fifth hard failure, but
-  the main agent must not launch additional queued jobs for that batch unless
-  the user explicitly overrides the stop rule.
+- Already-active lanes may finish and report after the configured hard-failure
+  threshold is reached, but the main agent must not launch additional queued
+  jobs for that batch unless the user explicitly overrides the stop rule.
 - Non-Workday hosts are classified separately unless a different harness is
   explicitly requested.
 - Run the normal C3 full flow once per lane from the detected page/popup before
@@ -74,26 +77,26 @@ per-port profiles like `ChromeC3PlaywrightParallel_9401` across batches.
 ## Batch Lifecycle
 
 - Create the full large-batch assignment table first. Mark all jobs queued, then
-  mark up to six jobs active.
+  mark jobs active up to the configured active capacity.
 - Set up Chrome only for active jobs. Do not pre-create profiles, windows, tabs,
   or subagents for queued future jobs.
 - When a lane reaches Review, it must capture final UI/audit/console artifacts,
   write its report to `current_debug.md`, close its assigned p Chrome, and
   return. The main agent then closes the completed subagent thread and starts
-  the next queued job immediately if capacity is available and the batch has
-  fewer than five hard failures.
+  the next queued job immediately if capacity is available and the batch is
+  below the configured hard-failure threshold.
 - When a lane hard-fails before Review or stops on a non-C3/site/posting state,
   preserve that p Chrome after capture so the user can inspect it. Do not close
   it unless the main agent or user explicitly says cleanup is allowed. Preserved
   lanes still free no capacity; after they are reported, the main agent may
   launch the next queued job on a different unused port only while the hard
-  failure count is below five.
+  failure count is below the configured threshold.
 - Do not wait for all active lanes to finish before launching the next queued
-  job. Keep the active lane count at or below six.
+  job. Keep the active lane count at or below the configured capacity.
 - After every lane report, update the batch counters: `review_reached`,
   `review_reached_with_bad_fills`, `hard_failures`, and `other_non_review`
   such as dead posting, external assessment, CAPTCHA/MFA, or non-Workday.
-  Stop new promotions when `hard_failures >= 5`.
+  Stop new promotions when `hard_failures` reaches the configured threshold.
 - Do not spawn replacement or duplicate subagents for the same job while that
   job's lane is still active.
 - Start a new subagent only when a queued job is promoted into a free active
@@ -140,9 +143,9 @@ per-port profiles like `ChromeC3PlaywrightParallel_9401` across batches.
   in the table from the start, but spawn only when a job becomes active.
 - Spawn subagents only after `scripts\setup_c3_parallel_lanes.ps1` succeeds for
   every selected lane.
-- Never spawn more than six lane subagents at once. For larger user requests,
-  use one batch id and one `current_debug.md` assignment table unless the user
-  asks to split the work.
+- Never spawn more lane subagents than the configured active capacity. For
+  larger user requests, use one batch id and one `current_debug.md` assignment
+  table unless the user asks to split the work.
 - Each subagent must read and follow `docs/C3_LANE_AGENT.md`.
 - Each subagent runs `scripts\c3_workday_live_smoke.js` once for its lane before
   any failure-specific probing.
@@ -152,8 +155,9 @@ per-port profiles like `ChromeC3PlaywrightParallel_9401` across batches.
 - The main agent owns rolling-queue coordination: when a subagent reports and
   closes its p Chrome, close that subagent thread and launch the next queued
   lane if any remain.
-- Subagents may add narrow proof/probe scripts for new UI behavior, but they
-  must not modify C3 product code or the live-smoke runner.
+- Subagents may add narrow proof/probe scripts for new UI behavior within the
+  failed-lane probe budget from the main-agent prompt, but they must not modify
+  C3 product code or the live-smoke runner.
 - The main agent coordinates lanes, waits for all lane reports, synthesizes
   findings, proposes code changes, and patches only after user review.
 
@@ -178,8 +182,9 @@ per-port profiles like `ChromeC3PlaywrightParallel_9401` across batches.
    once.
 2. Let the normal C3 full flow try to reach Review.
 3. If the lane reaches Review: inspect Review UI and audit for bad fills.
-4. If the lane fails: preserve the page when possible, interact with the live UI
-   like a user, then use CDP/Playwright to prove the exact behavior C3 needs.
+4. If the lane fails: preserve the page when possible, use the prompt-provided
+   probe budget, interact with the live UI like a user first, then use
+   CDP/Playwright to prove the exact behavior C3 needs.
 5. Classify the lane as Review, failed, non-Workday, dead posting,
    verification/auth gate, or timeout.
 

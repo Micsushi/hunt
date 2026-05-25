@@ -125,17 +125,48 @@
       return true;
     }
     var container = el.closest?.(
-      '[data-automation-id^="formField"], [role="group"], fieldset, form',
+      [
+        '[data-automation-id^="formField"]',
+        ".application-field",
+        ".application-question",
+        ".input-row",
+        "fieldset",
+        "label",
+      ].join(","),
     );
-    return Boolean(
-      container &&
-      /error|required|invalid/i.test(
-        String(container.innerText || container.textContent || ""),
-      ) &&
-      container.querySelector?.(
+    if (
+      !container ||
+      !container.querySelector?.(
         '[aria-invalid="true"], [data-automation-id="inputAlert"]',
-      ),
+      )
+    ) {
+      return false;
+    }
+    var containerText = normalizedTokens(
+      String(container.innerText || container.textContent || ""),
     );
+    if (!/error|required|invalid/.test(containerText)) {
+      return false;
+    }
+    var signals = [
+      field.fieldId,
+      field.name,
+      field.descriptor,
+      field.workday?.fieldLabel,
+      el?.id,
+      el?.name,
+      el?.getAttribute?.("aria-label"),
+      el?.getAttribute?.("data-automation-id"),
+    ]
+      .filter(Boolean)
+      .map(normalizedTokens)
+      .filter(Boolean);
+    return signals.some(function (signal) {
+      return (
+        signal.length >= 4 &&
+        (containerText.includes(signal) || signal.includes(containerText))
+      );
+    });
   }
 
   function normalizedTokens(value) {
@@ -164,41 +195,40 @@
       .filter(Boolean);
   }
 
+  function normalizedRepairErrors(context) {
+    return (
+      Array.isArray(context.repairVisibleValidationErrors)
+        ? context.repairVisibleValidationErrors
+        : []
+    )
+      .map(function (error) {
+        return normalizedTokens(
+          typeof error === "string"
+            ? error
+            : [
+                error.field,
+                error.label,
+                error.message,
+                error.text,
+                error.summary,
+              ]
+                .filter(Boolean)
+                .join(" "),
+        );
+      })
+      .filter(Boolean);
+  }
+
   function fieldMatchesRepairError(field, context) {
-    var errors = Array.isArray(context.repairVisibleValidationErrors)
-      ? context.repairVisibleValidationErrors
-      : [];
+    var errors = normalizedRepairErrors(context);
     if (!errors.length) {
       return true;
     }
-    var genericRequiredError = errors.some(function (error) {
-      var text = normalizedTokens(
-        typeof error === "string"
-          ? error
-          : [error.field, error.label, error.message, error.text, error.summary]
-              .filter(Boolean)
-              .join(" "),
-      );
-      return (
-        text &&
-        /required|must have a value|select one|invalid|error/.test(text)
-      );
-    });
-    if (genericRequiredError && (field.required || hasValidationState(field))) {
+    if (hasValidationState(field)) {
       return true;
     }
     var signals = repairFieldSignals(field);
-    return errors.some(function (error) {
-      var text = normalizedTokens(
-        typeof error === "string"
-          ? error
-          : [error.field, error.label, error.message, error.text, error.summary]
-              .filter(Boolean)
-              .join(" "),
-      );
-      if (!text) {
-        return false;
-      }
+    return errors.some(function (text) {
       return signals.some(function (signal) {
         return (
           signal.length >= 4 && (text.includes(signal) || signal.includes(text))

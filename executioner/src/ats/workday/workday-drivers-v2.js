@@ -715,12 +715,32 @@
       option.querySelector?.('[data-automation-id*="chevron"]') ||
       option.querySelector?.('[data-automation-id*="drill"]'),
     );
-    if (!hasCategoryCue) {
-      return false;
+    var sourceCategoryPattern =
+      /\b(campus campaign|career websites?|career sites?|employee referral|event|job alert|job boards?|job sites?|social media|social referral|alumni)\b/;
+    var sourceCategoryLabel = sourceCategoryPattern.test(label);
+    if (hasCategoryCue) {
+      return sourceCategoryLabel;
     }
-    return /\b(campus campaign|career websites?|career sites?|employee referral|event|job alert|job boards?|job sites?|social media|social referral|alumni)\b/.test(
-      label,
+    var listbox = option.closest?.(
+      '[role="listbox"], [data-automation-id="activeListContainer"], [data-automation-id="promptSearchResultList"]',
     );
+    var siblingCategoryCount = Array.from(
+      listbox?.querySelectorAll?.(
+        [
+          '[role="option"]',
+          '[data-automation-id="menuItem"]',
+          '[data-automation-id="promptOption"]',
+        ].join(", "),
+      ) || [],
+    )
+      .filter(visible)
+      .map(function (candidate) {
+        return norm(optionLabel(candidate));
+      })
+      .filter(function (candidateLabel) {
+        return sourceCategoryPattern.test(candidateLabel);
+      }).length;
+    return Boolean(sourceCategoryLabel && siblingCategoryCount >= 2);
   }
 
   function isPromptCategoryOption(option, field) {
@@ -962,6 +982,18 @@
       });
     }
     return new Promise(function (resolve) {
+      var settled = false;
+      var timer = setTimeout(function () {
+        finish({ ok: false, reason: "trusted_input_timeout" });
+      }, 1500);
+      function finish(result) {
+        if (settled) {
+          return;
+        }
+        settled = true;
+        clearTimeout(timer);
+        resolve(result);
+      }
       try {
         chrome.runtime.sendMessage(
           {
@@ -977,18 +1009,18 @@
           function (response) {
             var error = chrome.runtime.lastError;
             if (error) {
-              resolve({
+              finish({
                 ok: false,
                 reason: "trusted_input_message_failed",
                 message: error.message,
               });
               return;
             }
-            resolve(response || { ok: false, reason: "trusted_input_empty" });
+            finish(response || { ok: false, reason: "trusted_input_empty" });
           },
         );
       } catch (error) {
-        resolve({
+        finish({
           ok: false,
           reason: "trusted_input_exception",
           message: error instanceof Error ? error.message : String(error),
@@ -1009,6 +1041,18 @@
       });
     }
     return new Promise(function (resolve) {
+      var settled = false;
+      var timer = setTimeout(function () {
+        finish({ ok: false, reason: "trusted_input_timeout" });
+      }, 1500);
+      function finish(result) {
+        if (settled) {
+          return;
+        }
+        settled = true;
+        clearTimeout(timer);
+        resolve(result);
+      }
       try {
         chrome.runtime.sendMessage(
           {
@@ -1022,18 +1066,18 @@
           function (response) {
             var error = chrome.runtime.lastError;
             if (error) {
-              resolve({
+              finish({
                 ok: false,
                 reason: "trusted_input_message_failed",
                 message: error.message,
               });
               return;
             }
-            resolve(response || { ok: false, reason: "trusted_input_empty" });
+            finish(response || { ok: false, reason: "trusted_input_empty" });
           },
         );
       } catch (error) {
-        resolve({
+        finish({
           ok: false,
           reason: "trusted_input_exception",
           message: error instanceof Error ? error.message : String(error),
@@ -1480,6 +1524,33 @@
     );
   }
 
+  function betterSourceFallbackOption(current, candidate, texts) {
+    if (!candidate) {
+      return current || null;
+    }
+    if (!current) {
+      return candidate;
+    }
+    return sourceFallbackScore(candidate, texts) >
+      sourceFallbackScore(current, texts)
+      ? candidate
+      : current;
+  }
+
+  function shouldScanForBetterSourceOption(field, answer, target, listbox) {
+    if (
+      !isApplicationSourceField(field?.element, field?.descriptor) ||
+      !listbox ||
+      listbox.scrollHeight <= listbox.clientHeight + 2
+    ) {
+      return false;
+    }
+    if (!target) {
+      return true;
+    }
+    return sourceFallbackScore(target, answerTexts(answer, null)) < 80;
+  }
+
   function committedStateMatches(state, answer, option) {
     var label = clean(state?.text || state?.rawValue || "");
     if (!state?.selected || !label) {
@@ -1513,6 +1584,30 @@
       }) ||
       null
     );
+  }
+
+  function markWorkdayProgressFallback(option, reason) {
+    if (option && reason) {
+      option.progressFallbackReason = reason;
+    }
+    return option || null;
+  }
+
+  function workdayFallbackValueSource(option) {
+    return option?.progressFallbackReason
+      ? "fallback:" + option.progressFallbackReason
+      : "";
+  }
+
+  function canUseWorkdayProgressFallback(field, answer) {
+    return Boolean(field?.required && !isSalaryField(field, answer));
+  }
+
+  function firstWorkdayProgressFallback(options, field, answer, reason) {
+    if (!canUseWorkdayProgressFallback(field, answer)) {
+      return null;
+    }
+    return markWorkdayProgressFallback(firstRealOption(options), reason);
   }
 
   function insertTextOrSet(input, text) {
@@ -1912,12 +2007,26 @@
           }),
         },
       });
-      var target = preferredWorkdayOption(
-        childOptions,
-        sourceField ? null : option,
-        answer,
-        field,
-      );
+      var childScrollResult = childOptions.length
+        ? await collectPreferredWorkdayOptionsWithScroll(
+            field,
+            answer,
+            childOptions,
+          )
+        : { options: childOptions, target: null, attempts: 0 };
+      if (childScrollResult.options.length > childOptions.length) {
+        childOptions = childScrollResult.options.filter(function (candidate) {
+          return !candidate.isCategory;
+        });
+      }
+      var target =
+        childScrollResult.target ||
+        preferredWorkdayOption(
+          childOptions,
+          sourceField ? null : option,
+          answer,
+          field,
+        );
       if (target) {
         return target;
       }
@@ -1958,7 +2067,10 @@
     if (isApplicationSourceField(field?.element, field?.descriptor)) {
       var sourceFallback = preferredSourceFallbackOption(options, aliasTexts);
       if (sourceFallback) {
-        return sourceFallback;
+        return markWorkdayProgressFallback(
+          sourceFallback,
+          "workday_source_safe_option",
+        );
       }
     }
     if (
@@ -1966,17 +2078,31 @@
       answer?.answerType &&
       !["unknown", "non_disclosure"].includes(answer.answerType)
     ) {
-      return null;
+      return firstWorkdayProgressFallback(
+        options,
+        field,
+        answer,
+        "workday_progress_required_first_option",
+      );
     }
     if (
       !option &&
       ["unknown", "non_disclosure"].includes(answer?.answerType || "")
     ) {
-      return null;
+      return firstWorkdayProgressFallback(
+        options,
+        field,
+        answer,
+        "workday_progress_required_first_option",
+      );
     }
-    return (
-      preferredSourceFallbackOption(options, aliasTexts) ||
-      firstRealOption(options)
+    var fallback = preferredSourceFallbackOption(options, aliasTexts);
+    if (fallback) {
+      return markWorkdayProgressFallback(fallback, "workday_safe_option");
+    }
+    return markWorkdayProgressFallback(
+      firstRealOption(options),
+      "workday_progress_first_option",
     );
   }
 
@@ -2008,6 +2134,8 @@
     options,
   ) {
     var listbox = workdayActiveListboxFor(field.element);
+    var sourceField = isApplicationSourceField(field?.element, field?.descriptor);
+    var sourceTexts = sourceField ? answerTexts(answer, null) : [];
     var allOptions = mergeWorkdayOptions([], options || []);
     var visibleTarget = preferredWorkdayOption(
       (options || []).filter(function (candidate) {
@@ -2017,8 +2145,10 @@
       answer,
       field,
     );
+    var bestTarget = visibleTarget;
     if (
-      visibleTarget ||
+      (visibleTarget &&
+        !shouldScanForBetterSourceOption(field, answer, visibleTarget, listbox)) ||
       !listbox ||
       listbox.scrollHeight <= listbox.clientHeight + 2
     ) {
@@ -2042,12 +2172,32 @@
         answer,
         field,
       );
+      if (sourceField) {
+        bestTarget = betterSourceFallbackOption(
+          bestTarget,
+          visibleTarget,
+          sourceTexts,
+        );
+      } else if (visibleTarget) {
+        bestTarget = visibleTarget;
+      }
       if (visibleTarget) {
-        return {
-          options: mergeWorkdayOptions(allOptions, [visibleTarget]),
-          target: visibleTarget,
-          attempts: attempt + 1,
-        };
+        if (
+          shouldScanForBetterSourceOption(
+            field,
+            answer,
+            visibleTarget,
+            listbox,
+          )
+        ) {
+          await sleep(30);
+        } else {
+          return {
+            options: mergeWorkdayOptions(allOptions, [visibleTarget]),
+            target: visibleTarget,
+            attempts: attempt + 1,
+          };
+        }
       }
       var before = listbox.scrollTop;
       listbox.scrollTop += 260;
@@ -2058,8 +2208,10 @@
       }
     }
     return {
-      options: allOptions,
-      target: null,
+      options: bestTarget
+        ? mergeWorkdayOptions(allOptions, [bestTarget])
+        : allOptions,
+      target: bestTarget || null,
       attempts: 80,
     };
   }
@@ -2074,7 +2226,19 @@
       option?.isCategory ? "category" : "option",
     );
     if (!option?.isCategory) {
+      var promptLeaf = workdayPromptLeafTarget(el);
+      if (promptLeaf && promptLeaf !== el) {
+        triggerReactClickDeep(promptLeaf);
+        clickLikeUser(promptLeaf);
+        if (typeof promptLeaf.click === "function") {
+          promptLeaf.click();
+        }
+        await sleep(120);
+      }
       workdayClickOptionCommitTarget(el);
+      if (promptLeaf && promptLeaf !== el) {
+        triggerReactClickDeep(el);
+      }
       await sleep(350);
       return true;
     }
@@ -2391,6 +2555,23 @@
         afterState: workdayCommittedState(field),
       };
     }
+    var fallbackValueSource = workdayFallbackValueSource(target);
+    if (fallbackValueSource) {
+      root.audit?.pushFieldStep(audit, fieldAudit, {
+        action: "workday_progress_fallback_target",
+        step: "workday.driver.fill",
+        status: /progress_required|progress_first/.test(fallbackValueSource)
+          ? "warn"
+          : "info",
+        reason: target.progressFallbackReason,
+        selectedOption: target.label,
+        detail: {
+          descriptor: field.descriptor || "",
+          originalAnswer: answer?.value || "",
+          sourceSafe: /source_safe|safe_option/.test(fallbackValueSource),
+        },
+      });
+    }
     root.audit?.pushFieldStep(audit, fieldAudit, {
       action: "workday_option_click",
       step: "workday.driver.fill",
@@ -2493,6 +2674,7 @@
       afterState: state,
       selectedOption: target.label,
       valueSource:
+        fallbackValueSource ||
         fieldAudit?.valueSource ||
         (option?.label
           ? "workday:option_match"

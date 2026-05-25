@@ -102,6 +102,28 @@ function pageHasBlockingValidation(page) {
   return Boolean((page?.errors || []).length || page?.workdayRuntimeError);
 }
 
+function canContinueWorkdayApplicationPage(page) {
+  if (
+    !page ||
+    pageReachedReview(page) ||
+    pageHasBlockingValidation(page) ||
+    !page.hasNext
+  ) {
+    return false;
+  }
+  const title = String(page.currentStep?.title || "");
+  if (/create account|sign in|verify|verification/i.test(title)) {
+    return false;
+  }
+  return Boolean(
+    Number(page.currentStep?.current || 0) ||
+      /my information|my experience|application questions|voluntary disclosures|self identify/i.test(
+        title,
+      ) ||
+      page.pageKind === "application",
+  );
+}
+
 async function reconcilePageFillTimeoutToReview(pageClient, options = {}) {
   const timeoutMs = Number(options.timeoutMs || 25_000);
   const intervalMs = Number(options.intervalMs || 1200);
@@ -2709,7 +2731,46 @@ async function run() {
   };
     const directLoginAttemptsByScope = new Map();
     const badCredentialCreateAccountAttemptsByScope = new Map();
+    const noCaptchaFreshAliasAttemptsByScope = new Map();
     const verifiedAccountLoginRequiredByScope = new Map();
+  const tryNoCaptchaFreshAliasRetry = ({ href = "", route = {}, reason = "" } = {}) => {
+    const routeState = String(route?.authState || "").toLowerCase();
+    const routeUiState = String(route?.authUiState || "").toLowerCase();
+    if (routeState !== "signup" && routeUiState !== "signup_form") {
+      return { ok: false, skipped: true, reason: "not_signup_route" };
+    }
+    const key = authScopeKey(href || route?.state?.href || applyUrl);
+    const attempts = noCaptchaFreshAliasAttemptsByScope.get(key) || 0;
+    if (attempts >= 1) {
+      return {
+        ok: false,
+        skipped: true,
+        reason: "nocaptcha_fresh_alias_exhausted",
+        attempts,
+      };
+    }
+    const freshEmail = fallbackAccountEmail(args.accountEmail, key, attempts + 1);
+    if (!freshEmail) {
+      return {
+        ok: false,
+        skipped: true,
+        reason: "nocaptcha_fresh_alias_email_unavailable",
+        attempts,
+      };
+    }
+    noCaptchaFreshAliasAttemptsByScope.set(key, attempts + 1);
+    args.accountEmail = freshEmail;
+    authWorkflow.accountEmail = freshEmail;
+    signupAttemptsByScope.set(key, 0);
+    return {
+      ok: true,
+      reason: "auth_no_captcha_try_fresh_alias",
+      trigger: reason || "auth_no_captcha_gate",
+      scopeKey: key,
+      attempts: attempts + 1,
+      email: freshEmail,
+    };
+  };
   const routeAfterSignupAttempt = (route) => {
     const key = authScopeKey(route?.state?.href);
     if (
@@ -2940,7 +3001,8 @@ async function run() {
         `Apply entry phase failed: ${JSON.stringify(applyEntry)}`,
       );
     }
-    pageLoop: for (let i = 0; i < args.maxPages; i += 1) {
+    const hardMaxPages = Math.max(args.maxPages, 16);
+    pageLoop: for (let i = 0; i < hardMaxPages; i += 1) {
       const pagePhaseStartedAt = Date.now();
       if (Date.now() - fullApplicationStartedAt > FULL_APPLICATION_TIMEOUT_MS) {
         audit.reason = "full_application_timeout";
@@ -2959,6 +3021,26 @@ async function run() {
           throw new Error("Workday runtime error did not recover after reload");
         }
         before = await inspectPage(pageClient);
+      }
+      if (i >= args.maxPages) {
+        if (!canContinueWorkdayApplicationPage(before)) {
+          break;
+        }
+        timeline.push({
+          pageIndex: i + 1,
+          workflowPhase: "soft_page_cap_continued",
+          reason: "workday_application_next_still_available",
+          softMaxPages: args.maxPages,
+          hardMaxPages,
+          before: {
+            href: before.href,
+            currentStep: before.currentStep,
+            pageKind: before.pageKind,
+            hasNext: before.hasNext,
+            hasSubmit: before.hasSubmit,
+            errors: before.errors,
+          },
+        });
       }
       const route = await withApplicationPhaseTimeout(
         "identifier",
@@ -3075,6 +3157,17 @@ async function run() {
           break;
         }
         if (authNext.reason === "auth_no_captcha_gate") {
+          const freshAliasRetry = tryNoCaptchaFreshAliasRetry({
+            href: authNext.after?.href || route.state?.href || applyUrl,
+            route: authRoute,
+            reason: authNext.reason,
+          });
+          timeline[timeline.length - 1].noCaptchaFreshAliasRetry =
+            freshAliasRetry;
+          if (freshAliasRetry.ok) {
+            await sleep(1200);
+            continue;
+          }
           await injectManualAuthPrompt(pageClient);
           timeline[timeline.length - 1].manualAuthPrompt = { injected: true, gateHref: authNext.after?.href || route.state?.href || applyUrl };
           const manualAuthResult = await waitForManualAuth(
@@ -3535,6 +3628,17 @@ async function run() {
           break;
         }
         if (authNext.reason === "auth_no_captcha_gate") {
+          const freshAliasRetry = tryNoCaptchaFreshAliasRetry({
+            href: authNext.after?.href || authRoute.state?.href || applyUrl,
+            route: authRoute,
+            reason: authNext.reason,
+          });
+          timeline[timeline.length - 1].noCaptchaFreshAliasRetry =
+            freshAliasRetry;
+          if (freshAliasRetry.ok) {
+            await sleep(1200);
+            continue;
+          }
           await injectManualAuthPrompt(pageClient);
           timeline[timeline.length - 1].manualAuthPrompt = { injected: true, gateHref: authNext.after?.href || route.state?.href || applyUrl };
           const manualAuthResult = await waitForManualAuth(

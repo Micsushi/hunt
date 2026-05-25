@@ -27,12 +27,14 @@ Defaults:
 
 ## Main-Agent Batch Setup Order
 
-Use this order for a rolling six-lane queue with a five-hard-failure stop rule:
+Use this order for a rolling queue. Active capacity and hard-failure threshold
+come from the main-agent prompt:
 
 1. Create `logs\<batch-id>\current_debug.md`.
 2. For a large batch, create the full assignment table. Mark all jobs queued and
-   mark up to six jobs active.
-3. Pick up to six active Workday-compatible jobs and assign unused ports.
+   mark jobs active up to the configured active capacity.
+3. Pick active Workday-compatible jobs up to the configured capacity and assign
+   unused ports.
 4. Do not set up Chrome profiles, windows, tabs, or subagents for queued jobs.
 5. Run `scripts\setup_c3_parallel_lanes.ps1` for the selected active ports.
 6. Confirm `logs\<batch-id>\lane_setup_summary.json` exists and every lane
@@ -42,19 +44,19 @@ Use this order for a rolling six-lane queue with a five-hard-failure stop rule:
 8. When any lane reports, close that subagent thread and update the batch
    counters. Review lanes should close their p Chrome. Hard pre-Review failures
    and non-C3/site/posting stops should preserve their p Chrome for user
-   inspection. If fewer than five lanes have hard-failed before Review, promote
-   the next queued job to active on a different unused port, set up one fresh
-   p Chrome lane, and spawn one new subagent. If five hard failures have
-   accumulated, stop promoting queued jobs and let already-active lanes finish.
+   inspection. If the hard-failure count is below the configured threshold,
+   promote the next queued job to active on a different unused port, set up one
+   fresh p Chrome lane, and spawn one new subagent. If the threshold has been
+   reached, stop promoting queued jobs and let already-active lanes finish.
 
 Do not open visible helper terminals. Use the existing Codex shell or hidden
 background processes with redirected logs.
 
 For larger requests, do not launch every row at once. Keep a rolling queue with
-at most six active p Chrome lanes/subagents. Queued future rows exist only in
-the debug assignment table until promoted into a free active slot. A hard
-failure is only a pre-Review failure: reaching Review with bad fills still
-counts as Review reached, not as a hard failure.
+active p Chrome lanes/subagents capped by the main-agent prompt. Queued future
+rows exist only in the debug assignment table until promoted into a free active
+slot. A hard failure is only a pre-Review failure: reaching Review with bad
+fills still counts as Review reached, not as a hard failure.
 Site/posting stops such as Workday maintenance, dead/closed postings,
 non-application pages, CAPTCHA/MFA, external assessment, or tenant outage do
 not count as hard C3 failures.
@@ -89,10 +91,11 @@ Subagents should use this order for their assigned lane:
 
 ## Set Up Parallel Lanes
 
-Use this for normal six-lane batch setup:
+Use this for normal rolling-batch setup. Replace placeholders with values from
+the main-agent prompt:
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File scripts\setup_c3_parallel_lanes.ps1 -BatchId "<batch-id>" -Ports "9401,9402,9403,9404,9405,9406" -MaxActiveLanes 6
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\setup_c3_parallel_lanes.ps1 -BatchId "<batch-id>" -Ports "<comma-separated-ports>" -MaxActiveLanes <active-capacity>
 ```
 
 The setup script:
@@ -318,6 +321,17 @@ node scripts\c3_failed_lane_ui_proof.js --cdp-port 9401 --scenario "<short-name>
 Use only after live UI interaction identifies the likely behavior to prove. The
 dispatcher above exists for old scenario aliases. Prefer the narrow scripts
 below for new investigations.
+
+Failed-lane probe budget comes from the main-agent prompt. The normal C3
+full-flow run does not count against that budget. Read-only inspection,
+snapshot, audit, or console capture does not count. A probe attempt is a
+mutating UI/CDP action or script that tries to clear the blocker, prove a
+commit path, or rescue progress. The first mutating probe should be live
+UI/user-like. Later attempts may use focused CDP/Playwright proof or rescue
+scripts. Each attempt must test a new hypothesis and preserve an artifact path.
+Stop early if Review is reached, root cause is proven, the page becomes unsafe
+to mutate, or the next attempt would repeat the same evidence. When the budget
+is exhausted, preserve the lane and report `needs_deeper_probe`.
 
 | Behavior to prove | Script |
 | --- | --- |

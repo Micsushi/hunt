@@ -106,7 +106,9 @@ python -m pytest tests\test_component3_stage1.py::Component3Stage1Tests::test_c3
 
 ## Auth Matrix How To Reproduce
 
-Use fresh p Chrome lanes and independent variants. Example setup:
+Use fresh p Chrome lanes and independent variants. This is a specific auth
+matrix reproduction example, not the rolling-batch policy. Current rolling-batch
+capacity comes from the launch prompt.
 
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\setup_c3_parallel_lanes.ps1 -BatchId parallel_YYYY-MM-DD_auth_method_matrix -Ports "9621,9622,9623,9624,9625,9626,9627" -MaxActiveLanes 7 -AllowLargeBatch -AllowPrimaryMonitor
@@ -163,25 +165,23 @@ artifacts live in `logs/parallel_2026-05-24_auth_method_matrix_all`.
 
 Use rolling queue policy from `docs/C3_PARALLEL_BATCH.md`.
 
-Prompt shape for user-facing batch requests:
+Prompt shape for user-facing batch requests. Put run-specific values here; do
+not copy them into the reusable C3 docs:
 
 ```text
-Run all Workday-compatible rows from <csv> using the current C3 rolling-batch policy.
+Run Workday-compatible rows from <csv> using the current C3 rolling-batch policy.
 
-Follow docs/C3_PARALLEL_BATCH.md and docs/C3_TESTING_METHODS.md for main-agent setup. Use a rolling queue with at most six active lanes/subagents. Stop promoting new queued jobs if the batch reaches five hard pre-Review failures. A hard failure means the lane does not reach Review/Submit visibility after normal C3 flow plus required investigation. Reaching Review with bad fills is not a hard failure.
+Follow docs/C3_PARALLEL_BATCH.md and docs/C3_TESTING_METHODS.md for main-agent setup. Each lane subagent must follow docs/C3_LANE_AGENT.md and docs/C3_ERROR_TAXONOMY.md.
 
-Set up isolated p Chrome lanes with unused ports. Launch minimized/background. Assign one subagent per active job/lane. Each subagent must read docs/C3_LANE_AGENT.md and docs/C3_ERROR_TAXONOMY.md before acting.
+Run settings:
+- rows: Workday-compatible only
+- active capacity: <N> lanes/subagents
+- stop promotion when CSV is exhausted or hard pre-Review failures reach <N>
+- failed-lane probe budget: <N> mutating probe/rescue attempts per lane
+- artifact: logs\<batch-id>\current_debug.md
+- do not modify C3 code during the batch
 
-For each lane:
-1. Run normal C3 full flow once from detected page/popup toward Review.
-2. Write findings to logs\<batch-id>\current_debug.md.
-3. If Review is reached, do not click final Submit. Verify Review UI and audit. Record bad fills as Review/audit issues.
-4. If Review is not reached, preserve the lane, interact with live UI first, then use one focused CDP/Playwright proof max to identify generalized C3 behavior.
-5. Close Review lanes after artifacts are complete. Preserve hard failure and site/posting stop lanes unless cleanup is explicitly allowed.
-
-Use terse/caveman-lite reporting. Paste decisive evidence only. Prefer artifact paths. If Review is reached, do not deep-investigate bad fills. If lane fails, one live UI probe and one focused proof max, then report root cause or needs_deeper_probe.
-
-Do not modify C3 code during the batch. After all active lanes finish, summarize: Review clean, Review with bad fills, hard pre-Review failures by error type, site/posting stops, and planned fixes with pass-to-Review blockers first.
+After active lanes finish, summarize: Review clean, Review with bad fills, hard pre-Review failures by error type, site/posting stops, and planned fixes with pass-to-Review blockers first.
 ```
 
 Main-agent setup order:
@@ -189,7 +189,7 @@ Main-agent setup order:
 1. Pick batch id: `parallel_YYYY-MM-DD_<short_name>`.
 2. Create `logs\<batch-id>\current_debug.md`.
 3. Build assignment table for all rows. Mark queued/active.
-4. Pick up to six active Workday rows.
+4. Pick active Workday rows up to the prompt-provided active capacity.
 5. Check active ports:
 
 ```powershell
@@ -204,12 +204,12 @@ Get-CimInstance Win32_Process |
 6. Setup lanes:
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File scripts\setup_c3_parallel_lanes.ps1 -BatchId "<batch-id>" -Ports "9401,9402,9403,9404,9405,9406" -MaxActiveLanes 6
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\setup_c3_parallel_lanes.ps1 -BatchId "<batch-id>" -Ports "<comma-separated-ports>" -MaxActiveLanes <active-capacity>
 ```
 
 7. Confirm `logs\<batch-id>\lane_setup_summary.json`.
 8. Spawn one lane agent per active lane only.
-9. Promote queued jobs only when lane report = complete and hard failures = under five.
+9. Promote queued jobs only when lane report = complete and hard failures remain below the prompt-provided threshold.
 
 ## Lane Agent Command Pattern
 

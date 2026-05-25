@@ -4,6 +4,11 @@ Date: 2026-05-20
 Project: Hunt
 Scope: C3 Workday live smoke reliability after the next-five p Chrome run
 
+Status: historical. Do not use this as the current rolling-batch protocol.
+Current C3 rolling batch behavior lives in `docs/C3_PARALLEL_BATCH.md`, with
+run-specific capacity, hard-failure threshold, and probe budget supplied by the
+launch prompt.
+
 ## Investigation Summary
 
 The first next-five run looked worse than the clean rerun because multiple issues were mixed together:
@@ -193,7 +198,7 @@ Verification:
 
 - Dry-run launcher test validates command construction.
 - One-job smoke test on a known safe Workday URL.
-- Full five-lane rerun after the code fixes.
+- Full rerun of the historical next-five batch after the code fixes.
 
 ## Recommended Implementation Order
 
