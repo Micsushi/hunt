@@ -2134,7 +2134,10 @@
     options,
   ) {
     var listbox = workdayActiveListboxFor(field.element);
-    var sourceField = isApplicationSourceField(field?.element, field?.descriptor);
+    var sourceField = isApplicationSourceField(
+      field?.element,
+      field?.descriptor,
+    );
     var sourceTexts = sourceField ? answerTexts(answer, null) : [];
     var allOptions = mergeWorkdayOptions([], options || []);
     var visibleTarget = preferredWorkdayOption(
@@ -2148,7 +2151,12 @@
     var bestTarget = visibleTarget;
     if (
       (visibleTarget &&
-        !shouldScanForBetterSourceOption(field, answer, visibleTarget, listbox)) ||
+        !shouldScanForBetterSourceOption(
+          field,
+          answer,
+          visibleTarget,
+          listbox,
+        )) ||
       !listbox ||
       listbox.scrollHeight <= listbox.clientHeight + 2
     ) {
@@ -2183,12 +2191,7 @@
       }
       if (visibleTarget) {
         if (
-          shouldScanForBetterSourceOption(
-            field,
-            answer,
-            visibleTarget,
-            listbox,
-          )
+          shouldScanForBetterSourceOption(field, answer, visibleTarget, listbox)
         ) {
           await sleep(30);
         } else {

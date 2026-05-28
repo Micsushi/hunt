@@ -5306,7 +5306,10 @@ async function clickSafeNextForTab(tabId, details = {}) {
             fallbackClick: fallbackClick || {},
             postNextSignal: fallbackPostSignal || {},
             candidate:
-              fallbackClick?.candidate || clickResult.candidate || probe.candidate || {},
+              fallbackClick?.candidate ||
+              clickResult.candidate ||
+              probe.candidate ||
+              {},
           },
           postNextSignalHasPageChange(fallbackPostSignal, beforeClickSnapshot)
             ? "ok"
@@ -5326,7 +5329,9 @@ async function clickSafeNextForTab(tabId, details = {}) {
                   ? "clicked_safe_next_enter_fallback"
                   : "clicked_safe_next_space_fallback",
             candidate:
-              fallbackClick?.candidate || clickResult.candidate || probe.candidate,
+              fallbackClick?.candidate ||
+              clickResult.candidate ||
+              probe.candidate,
             postNextSignal: fallbackPostSignal,
           };
           break;
@@ -5541,9 +5546,7 @@ async function runV2PageWalkAfterFill({
   const tenantSignupAliasSwapCount = new Map();
 
   function tenantAliasScopeKey(detection = {}, snapshot = {}) {
-    const scope = workdayAppScopeFromUrl(
-      detection.href || snapshot.href || "",
-    );
+    const scope = workdayAppScopeFromUrl(detection.href || snapshot.href || "");
     return `${scope.host}|${scope.appSegment}`;
   }
 
@@ -5557,11 +5560,8 @@ async function runV2PageWalkAfterFill({
       return { ok: false, reason: "alias_swap_exhausted", attempts: prior };
     }
     const state = await getExtensionState();
-    const baseEmail =
-      state.profile?.accountEmail || state.profile?.email || "";
-    const scope = workdayAppScopeFromUrl(
-      detection.href || snapshot.href || "",
-    );
+    const baseEmail = state.profile?.accountEmail || state.profile?.email || "";
+    const scope = workdayAppScopeFromUrl(detection.href || snapshot.href || "");
     const freshEmail = freshWorkdayAuthAliasEmail(baseEmail, scope, prior + 1);
     if (!freshEmail) {
       return { ok: false, reason: "alias_email_unavailable" };
@@ -6028,13 +6028,11 @@ async function runV2PageWalkAfterFill({
           currentPageSnapshot,
           "auth_action_did_not_advance",
         );
-        const silentAliasSwap =
-          !(currentPageSnapshot.visibleValidationErrors || []).length
-            ? await trySignupAliasSwap(
-                afterAuthDetection,
-                currentPageSnapshot,
-              )
-            : { ok: false, reason: "visible_validation_errors_present" };
+        const silentAliasSwap = !(
+          currentPageSnapshot.visibleValidationErrors || []
+        ).length
+          ? await trySignupAliasSwap(afterAuthDetection, currentPageSnapshot)
+          : { ok: false, reason: "visible_validation_errors_present" };
         if (silentAliasSwap.ok) {
           authSamePageFailureCounts.set(samePageFailure.key, 0);
           steps.push({
