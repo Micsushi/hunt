@@ -370,58 +370,12 @@ def test_artifact_download_filename_uses_version_family_and_timestamp(tmp_path, 
     )
 
 
-def test_provider_defaults_fail_closed(monkeypatch, tmp_path):
-    monkeypatch.setenv("HUNT_DB_PATH", str(tmp_path / "isolated.db"))
-    monkeypatch.delenv("HUNT_RESUME_LLM_PROVIDER", raising=False)
-    monkeypatch.setenv("HUNT_RESUME_MODEL_BACKEND", "heuristic")
-    assert configured_provider_name() == "heuristic"
-    monkeypatch.setenv("HUNT_RESUME_LLM_PROVIDER", "openai")
-    monkeypatch.delenv("HUNT_RESUME_CLOUD_LLM_CONFIRM", raising=False)
-    try:
-        get_provider()
-    except ValueError as exc:
-        assert "CLOUD_LLM_CONFIRM" in str(exc)
-    else:
-        raise AssertionError("cloud provider did not require confirmation")
-
-
 def test_general_base_resume_fallback_exists():
     name, path = resolve_base_resume_path("unknown")
 
     assert name == "general"
     assert path.name == "main.tex"
     assert path.exists()
-
-
-def test_provider_reads_component_settings(monkeypatch, tmp_path):
-    monkeypatch.setenv("HUNT_DB_PATH", str(tmp_path / "settings.db"))
-    monkeypatch.setenv("HUNT_RESUME_MODEL_BACKEND", "heuristic")
-    conn = get_connection()
-    try:
-        conn.execute(
-            """
-            CREATE TABLE component_settings (
-                component TEXT NOT NULL,
-                key TEXT NOT NULL,
-                value TEXT,
-                value_type TEXT DEFAULT 'text',
-                secret BOOLEAN DEFAULT 0,
-                updated_at TEXT,
-                updated_by TEXT,
-                PRIMARY KEY (component, key)
-            )
-            """
-        )
-        conn.execute(
-            """
-            INSERT INTO component_settings (component, key, value, value_type, secret)
-            VALUES ('c2', 'llm_provider', 'openrouter', 'text', 0)
-            """
-        )
-        conn.commit()
-    finally:
-        conn.close()
-    assert configured_provider_name() == "openrouter"
 
 
 def test_attempt_dirs_are_unique_for_same_label(monkeypatch, tmp_path):

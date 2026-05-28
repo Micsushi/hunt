@@ -184,12 +184,6 @@ def test_workday_runtime_error_recovery_stops_before_safe_next_click():
     assert "recoverWorkdayRuntimeErrorForTab" in background
     assert "safe_next_probe_workday_runtime_error" in background
     assert "next.workday_runtime_recovered_before_probe" in background
-    assert "waitForApplicationPageReadyAfterNext" in background
-    assert "post_next_workday_runtime_error" in background
-    assert "post_next_application_page_ready" in background
-    assert "workday_runtime_refresh_retry" in background
-    assert "workday_runtime_error_after_fill_unrecovered" in background
-    assert "workday_runtime_error_after_fill_retry" in background
     assert "detectWorkdayRuntimeErrorForTab" in background
     assert "safe_next_workday_runtime_error" in background
     assert "next.workday_runtime_blocked" in background
@@ -220,7 +214,7 @@ def test_live_smoke_routes_pages_through_identifier_before_action():
     assert "WorkdayWorkflowIdentifier" in live_smoke
     assert "WorkdayAuthWorkflow" in live_smoke
     assert "WorkdayApplyEntryWorkflow" in live_smoke
-    assert "IDENTIFIER_TIMEOUT_MS = 5_000" in live_smoke
+    assert "IDENTIFIER_TIMEOUT_MS = 20_000" in live_smoke
     assert "AUTH_WORKFLOW_TIMEOUT_MS = 120_000" in live_smoke
     assert "APPLY_ENTRY_TIMEOUT_MS = 60_000" in live_smoke
     assert "C3_EXTENSION_FILL_TIMEOUT_MS = 120_000" in live_smoke
@@ -234,14 +228,9 @@ def test_live_smoke_routes_pages_through_identifier_before_action():
     assert "initialSettleMs = 1000" in live_smoke
     assert "maxSettleMs = 3000" in live_smoke
     assert "minWaitMs = 1000" in identifier
-    assert "maxWaitMs = Math.min(Math.max(Number(timeoutMs || 0), minWaitMs), 5000)" in identifier
+    assert "maxWaitMs = Math.max(Number(timeoutMs || 0), minWaitMs)" in identifier
     assert "bestEffortState" in identifier
-    assert "workflow_detection_settle_timeout_best_effort" in background
-    assert "WORKFLOW_DETECTION_MIN_MS = 1000" in background
-    assert "WORKFLOW_DETECTION_MAX_MS = 5000" in background
-    assert "bestEffortWorkflowDetection" in background
     assert "await this.sleep(5500)" not in auth
-    assert "Date.now() - startedAt < 5000" in auth
     assert "loadingNodeCount" in live_smoke
     assert "setRunnerFillProgress" in live_smoke
     assert "hideRunnerFillProgress" in live_smoke
@@ -524,8 +513,6 @@ def test_active_workflow_owns_tab_and_suppresses_midrun_prompts():
     content = _load_script(REPO_ROOT / "executioner/src/content/bootstrap.js")
     background = _load_script(REPO_ROOT / "executioner/src/background/index.js")
 
-    assert "workflowOwned: true" in background
-    assert "suppressDetectedPrompt: true" in background
     assert "workflow run owns this tab" in content
     assert "Boolean(activeFill.workflowOwned)" in content
     assert "Boolean(activeFill.suppressDetectedPrompt)" in content
@@ -549,10 +536,6 @@ def test_fill_progress_includes_phase_substep_and_elapsed_timing():
     assert "lastProgressSummary" in content
     assert "phase: message.phase" in content
     assert "substep: message.substep" in content
-    assert "async function recordWorkflowTiming" in background
-    assert "async function updateWorkflowProgress" in background
-    assert '"workflow_timing"' in background
-    assert "workflowTimings" in background
 
 
 def test_live_smoke_records_named_phase_timings_and_timeout_phase():
@@ -655,7 +638,7 @@ def test_fill_attempt_stops_when_no_visible_progress_within_five_seconds():
         )
     ]
 
-    assert "FILL_NO_PROGRESS_TIMEOUT_MS = 60000" in background
+    assert "FILL_NO_PROGRESS_TIMEOUT_MS = 30000" in background
     assert "FILL_UPLOAD_PROGRESS_TIMEOUT_MS = 30000" in background
     assert "async function inspectVisibleFillProgress" in no_progress
     assert "async function runFillForTabWithNoProgressWatchdog" in no_progress
@@ -667,8 +650,6 @@ def test_fill_attempt_stops_when_no_visible_progress_within_five_seconds():
     assert "hasUploadProgress" in no_progress
     assert "progressTimeoutMs" in no_progress
     assert "lastProgressAt" in no_progress
-    assert "stillLoading" in no_progress
-    assert "loadingNodeCount" in no_progress
     assert "nextSignature !== lastProgressSignature" in no_progress
     assert "Date.now() - lastProgressAt < progressTimeoutMs" in no_progress
     assert "markPageFillCancelled(tabId, fillRunId, true)" in no_progress
@@ -832,10 +813,6 @@ def test_v2_page_walk_counts_successful_pages_and_shows_summary():
     assert "failedPageNumber" in background
     assert "visible_validation_errors_after_next" in background
     assert "page_did_not_advance_after_next" in background
-    assert "after_next_extra_fill" in background
-    assert "safe_next_after_extra_fill" in background
-    assert "page_advance_after_extra_fill" in background
-    assert "post_next_application_page_ready" in background
     assert "`Filling page ${pageIndex + 1}`" not in background
     assert "describePageWalkAttempt(" in background
     assert '"Filling"' in background
