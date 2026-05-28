@@ -18,7 +18,6 @@ from fletcher.db import (
     patch_fletcher_job_input,
     update_fletcher_job_progress,
 )
-from fletcher.llm.client import configured_provider_name, get_provider
 from fletcher.resume.models import (
     EducationEntry,
     EducationSection,

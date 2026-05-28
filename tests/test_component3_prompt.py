@@ -206,7 +206,6 @@ def test_workday_runtime_error_recovery_stops_before_safe_next_click():
 
 def test_live_smoke_routes_pages_through_identifier_before_action():
     live_smoke = _load_script(REPO_ROOT / "scripts/c3_workday_live_smoke.js")
-    background = _load_script(REPO_ROOT / "executioner/src/background/index.js")
     identifier = _load_script(REPO_ROOT / "scripts/lib/c3_workday_identifier.js")
     auth = _load_script(REPO_ROOT / "scripts/lib/c3_workday_auth_workflow.js")
     apply_entry = _load_script(REPO_ROOT / "scripts/lib/c3_workday_apply_entry.js")
@@ -528,7 +527,6 @@ def test_active_workflow_owns_tab_and_suppresses_midrun_prompts():
 
 def test_fill_progress_includes_phase_substep_and_elapsed_timing():
     content = _load_script(REPO_ROOT / "executioner/src/content/bootstrap.js")
-    background = _load_script(REPO_ROOT / "executioner/src/background/index.js")
 
     assert "function fillProgressDetailMeta" in content
     assert "stepElapsedMs" in content
