@@ -31,3 +31,10 @@ CLAUDE.md
 AGENTS.md
 .claude/settings.json
 .claude/settings.local.json
+
+# Local agent instructions and tooling
+.claude/
+.opencode/
+.codex/
+.agents/
+docs/agents/
