@@ -968,6 +968,138 @@ def test_workday_v2_text_fill_uses_per_character_framework_events():
     assert values == {"dom": "Michael", "model": "Michael"}
 
 
+def test_workday_v2_phone_fields_ignore_stale_source_popup():
+    if sync_playwright is None:
+        pytest.skip("playwright is required for the Workday C3 fill fixture")
+
+    fill_v2_js = _module_to_browser_script(
+        _load_script(REPO_ROOT / "executioner/src/ats/workday/fill-v2.js")
+    )
+
+    with sync_playwright() as playwright:
+        try:
+            browser = playwright.chromium.launch()
+        except PlaywrightError as error:
+            pytest.skip(f"playwright chromium is unavailable: {error}")
+
+        page = browser.new_page()
+        page.set_content(
+            """
+            <html>
+              <head>
+                <style>
+                  [role="listbox"] { position: absolute; border: 1px solid #999; background: white; }
+                  [role="option"] { min-height: 24px; padding: 4px; }
+                  #stale-source-menu { left: 20px; top: 20px; width: 360px; height: 360px; overflow: auto; }
+                  #phone-type-menu { display: none; left: 410px; top: 98px; width: 260px; }
+                  #phone-type-menu.open { display: block; }
+                  #country-code-menu { display: none; left: 410px; top: 180px; width: 260px; }
+                  #country-code-menu.open { display: block; }
+                </style>
+              </head>
+              <body>
+                <div id="stale-source-menu" role="listbox" data-automation-id="activeListContainer">
+                  <div role="option" data-automation-id="promptOption">Employee Referral</div>
+                  <div role="option" data-automation-id="promptOption">Recruiter</div>
+                  <div role="option" data-automation-id="promptOption">Agency</div>
+                  <div role="option" data-automation-id="promptOption">Job Board</div>
+                </div>
+                <div data-automation-id="applyFlowMyInfoPage" style="margin-left: 400px;">
+                  <div data-automation-id="formField-phoneType">
+                    Phone Device Type*
+                    <button id="phoneNumber--phoneType" name="phoneType" type="button" aria-haspopup="listbox" aria-controls="phone-type-menu" aria-label="Phone Device Type Select One Required">Select One</button>
+                    <div id="phone-type-menu" role="listbox">
+                      <div role="option">Fax</div>
+                      <div role="option">Mobile</div>
+                      <div role="option">Telephone</div>
+                    </div>
+                  </div>
+                  <div data-automation-id="formField-countryPhoneCode">
+                    Country Phone Code*
+                    <div data-automation-id="multiSelectContainer" data-uxi-widget-type="multiselect">
+                      <div data-automation-id="selectedItemList" role="listbox"></div>
+                      <input id="phoneNumber--countryPhoneCode" data-automation-id="searchBox" data-uxi-widget-type="selectinput" aria-required="true" placeholder="Search" />
+                    </div>
+                    <div id="country-code-menu" role="listbox" data-automation-id="activeListContainer">
+                      <div role="option">United States of America (+1)</div>
+                      <div role="option">Canada (+1)</div>
+                    </div>
+                  </div>
+                  <div data-automation-id="formField-phoneNumber">
+                    Phone Number*
+                    <input id="phoneNumber--phoneNumber" name="phoneNumber" aria-required="true" />
+                  </div>
+                </div>
+                <script>
+                  const phoneType = document.querySelector("#phoneNumber--phoneType");
+                  const phoneTypeMenu = document.querySelector("#phone-type-menu");
+                  phoneType.addEventListener("click", () => phoneTypeMenu.classList.add("open"));
+                  phoneTypeMenu.querySelectorAll("[role=option]").forEach((option) => {
+                    option.addEventListener("click", () => {
+                      phoneType.textContent = option.textContent;
+                      phoneType.value = option.textContent;
+                      phoneTypeMenu.classList.remove("open");
+                    });
+                  });
+                  const countryInput = document.querySelector("#phoneNumber--countryPhoneCode");
+                  const countryMenu = document.querySelector("#country-code-menu");
+                  countryInput.addEventListener("click", () => countryMenu.classList.add("open"));
+                  countryInput.addEventListener("input", () => countryMenu.classList.add("open"));
+                  countryMenu.querySelectorAll("[role=option]").forEach((option) => {
+                    option.addEventListener("click", () => {
+                      document.querySelector("[data-automation-id=selectedItemList]").innerHTML =
+                        `<div data-automation-id="selectedItem" role="option" aria-label="${option.textContent}, press delete to clear value.">${option.textContent}</div>`;
+                      countryMenu.classList.remove("open");
+                    });
+                  });
+                </script>
+              </body>
+            </html>
+            """
+        )
+        _load_v2_workday_scripts(page)
+        page.add_script_tag(content=fill_v2_js)
+        result = page.evaluate(
+            """
+            async () => {
+              const fill = createWorkdayFillV2Function();
+              return await fill({
+                profile: {
+                  phone: "7804923111",
+                  phoneDeviceType: "Mobile",
+                  phoneCountryCode: "Canada (+1)",
+                },
+                settings: { fillRequiredOnly: true, useFieldPipelineV2: true },
+                activeApplyContext: {},
+                defaultResume: {},
+                fillRunId: "workday_stale_source_before_phone",
+              });
+            }
+            """
+        )
+        values = page.evaluate(
+            """
+            () => ({
+              phoneType: document.querySelector("#phoneNumber--phoneType").textContent.trim(),
+              phoneCode: document.querySelector("[data-automation-id=selectedItem]")?.textContent.trim() || "",
+              phoneNumber: document.querySelector("#phoneNumber--phoneNumber").value,
+            })
+            """
+        )
+        browser.close()
+
+    fields = {entry["fieldId"]: entry for entry in result["v2Audit"]["fields"]}
+
+    assert result["ok"] is True
+    assert values == {
+        "phoneType": "Mobile",
+        "phoneCode": "Canada (+1)",
+        "phoneNumber": "7804923111",
+    }
+    assert fields["phoneNumber--phoneType"]["filled"] is True
+    assert fields["phoneNumber--countryPhoneCode"]["filled"] is True
+
+
 def test_workday_v2_does_not_fill_optional_preferred_name_checkbox_by_fallback():
     if sync_playwright is None:
         pytest.skip("playwright is required for the Workday C3 fill fixture")

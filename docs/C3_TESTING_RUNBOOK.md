@@ -13,13 +13,15 @@ final Submit. Wrong answers, questionable defaults, and missing profile facts
 belong in Review/audit unless they block progress by creating required
 follow-up fields, validation, or another page-walk failure.
 
-Batch lanes run background-first. Do not bring p Chrome to the foreground during
-automated setup, live smoke, repair, or proof work unless the user explicitly
-asks to inspect the lane. Preserve hard-failure and site/posting-state p Chrome
-lanes for inspection; close Review lanes after artifacts are captured. Workday
-maintenance, dead postings, non-application pages, CAPTCHA/MFA, external
-assessments, and tenant outages are site/posting stops, not hard C3 fill
-failures.
+Batch lanes run background-first. Do not bring p Chrome to the foreground, steal
+focus, call `Page.bringToFront`, call Playwright `page.bringToFront()`, or use
+`--bring-to-front` during automated setup, live smoke, repair, or proof work
+unless the user explicitly asks to inspect the lane. Subagents never close
+p Chrome. The main agent closes p Chrome only after patching C3, local checks,
+fresh p Chrome retest, artifact capture, and no remaining inspection need.
+Workday maintenance, dead postings, non-application pages, CAPTCHA/MFA,
+external assessments, and tenant outages are site/posting stops, not hard C3
+fill failures.
 
 ## Baseline Checks
 
@@ -99,6 +101,10 @@ budget in the launch prompt. Review reached with bad fills is not a hard
 failure; it remains a Review/audit quality issue.
 For per-lane subagent behavior, use `docs\C3_LANE_AGENT.md`.
 For consistent failure classification, use `docs\C3_ERROR_TAXONOMY.md`.
+For P1 fixes, use `docs\C3_PRIMITIVE_DEBUGGING.md`: classify the UI primitive,
+use p Chrome actual extension first, probe with subagents when sites are
+independent, inspect with CDP/Playwright, patch generic behavior, then retest
+fresh p Chrome.
 For reusable p Chrome launch/reload/seed/capture commands, use
 `docs\C3_TESTING_METHODS.md`.
 
@@ -107,7 +113,8 @@ detection and show the in-page fill prompt again if the new step has visible
 fillable controls. Fill Current Page and Clear Current Page from the popup
 dismiss existing Hunt prompts/toasts before running.
 
-Detailed change history: `docs\C3_CHANGES_SO_FAR.md`.
+Per-primitive fix history lives in the fix-record docs indexed by
+`docs\C3_PRIMITIVE_DEBUGGING.md`.
 
 ## Standalone Extension Setup
 

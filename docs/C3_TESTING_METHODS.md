@@ -3,6 +3,9 @@
 Reusable commands for p Chrome and C3 live testing. Prefer these methods over
 ad hoc terminal or CDP snippets.
 
+Start at `docs/C3_PRIMITIVE_DEBUGGING.md` for C3 Workday debugging policy and
+the indexed subdocs. This page is only reusable commands.
+
 ## Testing Priority
 
 For C3 Workday tests, fill completion is more important than fill correctness.
@@ -42,20 +45,20 @@ come from the main-agent prompt:
 7. Spawn one subagent per active lane with `docs/C3_LANE_AGENT.md`,
    `docs/C3_ERROR_TAXONOMY.md`, lane port, job URL, and batch id.
 8. When any lane reports, close that subagent thread and update the batch
-   counters. Review lanes should close their p Chrome. Hard pre-Review failures
-   and non-C3/site/posting stops should preserve their p Chrome for user
-   inspection. If the hard-failure count is below the configured threshold,
-   promote the next queued job to active on a different unused port, set up one
-   fresh p Chrome lane, and spawn one new subagent. If the threshold has been
-   reached, stop promoting queued jobs and let already-active lanes finish.
+   counters. Subagents do not close p Chrome. If the hard-failure count is below
+   the configured threshold, promote the next queued job to active on a
+   different unused port, set up one fresh p Chrome lane, and spawn one new
+   subagent. If the threshold has been reached, stop promoting queued jobs and
+   let already-active lanes finish.
 
 Do not open visible helper terminals. Use the existing Codex shell or hidden
 background processes with redirected logs.
 
 For larger requests, do not launch every row at once. Keep a rolling queue with
-active p Chrome lanes/subagents capped by the main-agent prompt. Queued future
-rows exist only in the debug assignment table until promoted into a free active
-slot. A hard failure is only a pre-Review failure: reaching Review with bad
+concurrent lane subagents capped by the main-agent prompt. Open p Chrome lanes
+persist past their subagent and do not count against that cap once the subagent
+has reported. Queued future rows exist only in the debug assignment table until
+promoted into a free active slot. A hard failure is only a pre-Review failure: reaching Review with bad
 fills still counts as Review reached, not as a hard failure.
 Site/posting stops such as Workday maintenance, dead/closed postings,
 non-application pages, CAPTCHA/MFA, external assessment, or tenant outage do
@@ -87,7 +90,11 @@ Subagents should use this order for their assigned lane:
 7. If detection should have happened but did not, classify with
    `docs/C3_ERROR_TAXONOMY.md`.
 8. Run `scripts\c3_workday_live_smoke.js` once as the full-flow runner.
-9. Write findings to `logs\<batch-id>\current_debug.md`.
+9. If it fails, classify primitive first, then probe: user-like p Chrome action
+   first, CDP/Playwright inspect second.
+10. Record active element, popup/listbox owner, option clicked, committed value,
+    validation state, fields touched by repair, and repair-loop count.
+11. Write findings to `logs\<batch-id>\current_debug.md`.
 
 ## Set Up Parallel Lanes
 
@@ -145,13 +152,12 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\move_c3_parallel_win
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\move_c3_parallel_windows.ps1 -Ports "9461,9462,9463,9464,9465"
 ```
 
-## Close Completed Lane
+## Main-Agent Cleanup
 
-Use this after an individual Review lane has reported, proof artifacts are
+Only the main agent closes p Chrome. Use this after C3 code changes are patched,
+local checks pass, fresh p Chrome retest is complete, proof artifacts are
 captured, and no preserved live UI is still needed. Do not close hard-failure or
 site/posting-stop lanes until the user or main agent explicitly allows cleanup.
-In rolling batches, lane agents close Review lanes only. The main agent can run
-the same command as a backstop before promoting the next queued job.
 
 Preview first:
 

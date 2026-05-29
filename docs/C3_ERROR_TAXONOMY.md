@@ -1,7 +1,8 @@
 # C3 Error Taxonomy
 
 Use this taxonomy when classifying C3 lane failures, Review-page bad fills, or
-live p Chrome investigation results. Classify before recommending a code change.
+live p Chrome investigation results. Classify primitive first, then taxonomy
+type. Use `docs/C3_PRIMITIVE_DEBUGGING.md` before recommending a code change.
 
 ## C3 Fill Priority
 

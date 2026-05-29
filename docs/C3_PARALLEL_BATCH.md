@@ -5,6 +5,10 @@ is the source of truth for run-specific values such as batch target, active
 capacity, hard-failure threshold, and failed-lane probe budget. Per-lane
 subagent behavior lives in `docs/C3_LANE_AGENT.md`.
 
+Use the primitive-first protocol in `docs/C3_PRIMITIVE_DEBUGGING.md`. Sites are
+evidence. Source, Skills, phone, repeatables, auth, and required checkboxes are
+the fix targets.
+
 ## Priority
 
 C3 batch testing optimizes for fill completion over fill correctness. Reaching
@@ -26,12 +30,17 @@ same evidence.
 
 ## Scope
 
-- Active capacity comes from the main-agent prompt. Keep active p Chrome lanes
-  and lane subagents at or below that configured capacity.
+- Active capacity comes from the main-agent prompt. It caps concurrent active
+  lane subagents (investigation threads), not the number of open p Chrome
+  windows. A slot frees when a subagent reports and the main agent closes its
+  thread, even though that subagent's p Chrome stays open. Open p Chrome lanes
+  accumulate off the main monitor until the main agent closes them: passing
+  Review-reached lanes at the main agent's discretion, the rest at cleanup.
 - Large batch requests are a rolling queue. Launch only up to the configured
-  active capacity, then start the next queued job as soon as one lane has
-  finished analysis, written its report, captured artifacts, and closed its
-  p Chrome.
+  active capacity, then start the next queued job as soon as one lane subagent
+  has finished analysis, written its report, and captured artifacts. The
+  subagent leaves its p Chrome open; the freed slot is the closed subagent
+  thread, not a closed browser.
 - Hard failure stop rule comes from the main-agent prompt. Stop promoting new
   queued jobs once the batch reaches that threshold. A hard failure means the
   lane did not reach Review/Submit visibility after the normal C3 flow and
@@ -50,6 +59,10 @@ same evidence.
   explicitly requested.
 - Run the normal C3 full flow once per lane from the detected page/popup before
   manual/CDP investigation.
+- If the user asks to fix one bug across multiple failed sites, spawn one
+  subagent per failed site/lane when independent. Each agent observes behavior
+  and reports primitive evidence. The main agent patches the generic C3 driver
+  once after synthesizing reports.
 - Never click final Submit.
 - Reusable launch/reload/seed/capture commands live in
   `docs/C3_TESTING_METHODS.md`.
@@ -80,19 +93,23 @@ per-port profiles like `ChromeC3PlaywrightParallel_9401` across batches.
   mark jobs active up to the configured active capacity.
 - Set up Chrome only for active jobs. Do not pre-create profiles, windows, tabs,
   or subagents for queued future jobs.
-- When a lane reaches Review, it must capture final UI/audit/console artifacts,
-  write its report to `current_debug.md`, close its assigned p Chrome, and
+- When a lane reaches Review, the subagent must capture final UI/audit/console
+  artifacts, write its report to `current_debug.md`, leave p Chrome open, and
   return. The main agent then closes the completed subagent thread and starts
-  the next queued job immediately if capacity is available and the batch is
-  below the configured hard-failure threshold.
+  the next queued job on a different unused port if capacity is available and
+  the batch is below the configured hard-failure threshold. The main agent may
+  close that passing lane's p Chrome at its discretion once the page is no
+  longer needed, to bound how many browsers stay open during a large batch.
 - When a lane hard-fails before Review or stops on a non-C3/site/posting state,
   preserve that p Chrome after capture so the user can inspect it. Do not close
-  it unless the main agent or user explicitly says cleanup is allowed. Preserved
-  lanes still free no capacity; after they are reported, the main agent may
-  launch the next queued job on a different unused port only while the hard
-  failure count is below the configured threshold.
+  it unless the main agent or user explicitly says cleanup is allowed. The
+  preserved p Chrome does not hold a capacity slot once its subagent has
+  reported; the main agent may launch the next queued job on a different unused
+  port only while the hard failure count is below the configured threshold.
 - Do not wait for all active lanes to finish before launching the next queued
-  job. Keep the active lane count at or below the configured capacity.
+  job. Keep the active subagent count at or below the configured capacity. Open
+  p Chrome windows may exceed that count because they persist until the main
+  agent closes them.
 - After every lane report, update the batch counters: `review_reached`,
   `review_reached_with_bad_fills`, `hard_failures`, and `other_non_review`
   such as dead posting, external assessment, CAPTCHA/MFA, or non-Workday.
@@ -102,14 +119,15 @@ per-port profiles like `ChromeC3PlaywrightParallel_9401` across batches.
 - Start a new subagent only when a queued job is promoted into a free active
   slot, replacing a crashed agent, or doing a clearly separate post-batch
   investigation.
-- If the same jobs need a fresh p Chrome run, close unused old p Chrome lanes
-  for those jobs before launching new ones.
+- If the same jobs need a fresh p Chrome run, the main agent closes unused old
+  p Chrome lanes for those jobs before launching new ones, or uses different
+  unused ports when the old lane must remain inspectable.
 - If a profile is reused intentionally, launch with
   `HUNT_C3_CHROME_RESET_PROFILE=1` so stale extension-disabled state is cleared.
-- Do not leave stale p Chrome lanes open after Review lanes, abandoned lanes, or
-  superseded successful lanes. Preserve hard-failure and site/posting-state
-  lanes for inspection until the user or main agent explicitly cleans them up.
-  Use `scripts\close_c3_parallel_lanes.ps1` with explicit ports for cleanup.
+- Do not leave stale p Chrome lanes open after the main-agent fix/retest cycle
+  is fully done. Preserve hard-failure and site/posting-state lanes for
+  inspection until the user or main agent explicitly cleans them up. Use
+  `scripts\close_c3_parallel_lanes.ps1` with explicit ports for cleanup.
 - If an extension-root blocked tab appears, close it with
   `scripts\c3_close_blocked_extension_tabs.js` and use the full Options URL or
   setup scripts instead.
@@ -127,7 +145,10 @@ per-port profiles like `ChromeC3PlaywrightParallel_9401` across batches.
   `scripts\move_c3_parallel_windows.ps1` or `setup_c3_parallel_lanes.ps1
   -RestoreWindows` only when the user explicitly wants to inspect the lane.
 - `scripts\c3_workday_live_smoke.js` must not use `Page.bringToFront` during
-  batch runs. The opt-in `--bring-to-front` flag is for manual debugging only.
+  batch runs. The opt-in `--bring-to-front` flag is for manual debugging only
+  when the user explicitly asks to inspect the lane.
+- Do not use Playwright `page.bringToFront()`, restore/cascade windows,
+  focus-moving browser actions, or OS activation during automated testing.
 - Before launching a fresh lane for the same job, close any unused old lane
   windows so duplicate p Chromes do not pile up on the main monitor.
 - Do not use normal Chrome or the user's main Chrome profile for agent testing.
@@ -146,20 +167,25 @@ per-port profiles like `ChromeC3PlaywrightParallel_9401` across batches.
 - Never spawn more lane subagents than the configured active capacity. For
   larger user requests, use one batch id and one `current_debug.md` assignment
   table unless the user asks to split the work.
-- Each subagent must read and follow `docs/C3_LANE_AGENT.md`.
+- Each subagent must read and follow `docs/C3_LANE_AGENT.md` and
+  `docs/C3_PRIMITIVE_DEBUGGING.md`.
+- Each subagent must classify the failing primitive and record user-like probe,
+  CDP/Playwright inspect evidence, commit proof, and repair-loop count.
 - Each subagent runs `scripts\c3_workday_live_smoke.js` once for its lane before
   any failure-specific probing.
-- Each subagent closes its p Chrome lane after a Review result. Each subagent
-  preserves its p Chrome after a hard pre-Review failure or non-C3/site/posting
-  stop unless the main-agent prompt explicitly permits cleanup.
-- The main agent owns rolling-queue coordination: when a subagent reports and
-  closes its p Chrome, close that subagent thread and launch the next queued
-  lane if any remain.
+- Subagents never close p Chrome. They capture artifacts, report, and leave the
+  lane open for the main agent.
+- The main agent owns rolling-queue coordination: when a subagent reports,
+  close that subagent thread and launch the next queued job on a different
+  unused port only while below the hard-failure threshold.
 - Subagents may add narrow proof/probe scripts for new UI behavior within the
   failed-lane probe budget from the main-agent prompt, but they must not modify
   C3 product code or the live-smoke runner.
-- The main agent coordinates lanes, waits for all lane reports, synthesizes
-  findings, proposes code changes, and patches only after user review.
+- The main agent coordinates lanes, waits for required lane proof, synthesizes
+  findings, patches the generic C3 behavior once, runs local checks, retests
+  with the actual extension in fresh p Chrome, then closes no-longer-needed
+  p Chrome lanes. Ask for review only when the user requested review or the fix
+  choice is unsafe/ambiguous.
 
 ## Current Debug File
 
@@ -185,7 +211,8 @@ per-port profiles like `ChromeC3PlaywrightParallel_9401` across batches.
 4. If the lane fails: preserve the page when possible, use the prompt-provided
    probe budget, interact with the live UI like a user first, then use
    CDP/Playwright to prove the exact behavior C3 needs.
-5. Classify the lane as Review, failed, non-Workday, dead posting,
+5. Classify the lane by primitive and taxonomy type.
+6. Classify the lane as Review, failed, non-Workday, dead posting,
    verification/auth gate, or timeout.
 
 Required unknown question or answer type should use the progress-first fallback
@@ -243,15 +270,20 @@ recommending a fix.
 Spawn prompt must include:
 
 ```text
-You own lane <lane> for <job>. Read docs/C3_LANE_AGENT.md and
-docs/C3_ERROR_TAXONOMY.md before acting. Use docs/C3_TESTING_METHODS.md
-lane-agent first-pass order. Setup already passed through
-scripts\setup_c3_parallel_lanes.ps1. Use only your assigned isolated p Chrome
-lane on port <port>. Do not use normal Chrome. Do not open visible helper
-terminals. Do not move/focus windows onto the main monitor. Do not spawn other
-agents for this same job. After you finish analysis, capture required
-artifacts, write your report, close only your assigned p Chrome lane, and
-return. Do not modify C3 code. Write findings to
+You own lane <lane> for <job>. Read docs/C3_PRIMITIVE_DEBUGGING.md,
+docs/C3_LANE_AGENT.md, and docs/C3_ERROR_TAXONOMY.md before acting. Use
+docs/C3_TESTING_METHODS.md lane-agent first-pass order. Setup already passed
+through scripts\setup_c3_parallel_lanes.ps1. Use only your assigned isolated
+p Chrome lane on port <port>. Do not use normal Chrome. Do not open visible
+helper terminals. Do not move/focus windows onto the main monitor. Do not use
+Page.bringToFront, Playwright page.bringToFront(), --bring-to-front,
+restore/cascade, or other focus-stealing actions unless explicitly told the user
+wants to inspect the lane. Do not spawn other agents for this same job.
+Classify the primitive first. Probe live UI like a user before CDP/Playwright
+inspect. Record field_focused, popup_owner, option_clicked, value_saved,
+repair_touched, commit_proof, loop_check, and agent_feedback. Do not close
+p Chrome; the main agent owns cleanup after patch/retest or explicit user
+cleanup. Do not modify C3 code. Write findings to
 logs\<batch-id>\current_debug.md under your lane section.
 ```
 
@@ -265,6 +297,6 @@ time out, unless there is a safety issue. The final report should include:
 - failed-lane root causes
 - proven UI behaviors
 - new/unclassified error types proposed by subagents
-- planned C3 changes for user review, grouped as pass-to-Review blockers first
-  and answer-quality/audit-only issues second
+- C3 changes made or next generic changes, grouped as pass-to-Review blockers
+  first and answer-quality/audit-only issues second
 - artifacts directory

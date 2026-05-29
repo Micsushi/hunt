@@ -912,6 +912,9 @@ def test_workday_logs_field_and_dropdown_actions():
     assert "waitForWorkdayOptions" in workday_v2_drivers
     assert "sourceCategoryScore" in workday_v2_drivers
     assert "optionBelongsToField" in workday_v2_drivers
+    assert "distanceFromInput" in workday_v2_drivers
+    assert "visibleOptionCandidates(input)" in workday_v2_drivers
+    assert "activeListbox = workdayActiveListboxFor(input)" in workday_v2_drivers
     assert "visibleWorkdayOptions(field)" in workday_v2_drivers
     assert "data-uxi-multiselectlistitem-hassidecharm" in workday_v2_drivers
     assert "data-uxi-multiselectlistitem-type" in workday_v2_drivers

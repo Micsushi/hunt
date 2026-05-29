@@ -4,6 +4,32 @@
 
 This doc records the C3 Workday auth/noCaptcha investigation, what each probe proved, which fixes were tried, why the standalone probe diverged from full C3, and the final Boeing auth fix.
 
+For future auth work, use `docs/C3_PRIMITIVE_DEBUGGING.md`. Treat auth as a
+primitive, not a Boeing/Visa site bug first. Use p Chrome actual extension,
+probe one variable at a time, inspect with CDP/network, then patch generic auth
+behavior.
+
+Current no-focus policy supersedes the historical `Page.bringToFront` notes
+below for automated testing. Do not foreground p Chrome, steal focus, or use
+`--bring-to-front` unless the user explicitly asks to inspect a lane. If an auth
+tenant only passes with foreground focus, classify that as an explicit
+manual/site-gate finding before adding any focus-moving behavior.
+
+## Future Agent Rule
+
+- Primitive: Workday auth hidden noCaptcha gate.
+- First run: actual C3 extension in fresh p Chrome.
+- First probe: user-like p Chrome interaction, no repeated submit loop.
+- Inspect: CDP active page state, submit target, visible errors,
+  `noCaptchaWrapper`, network request or lack of request.
+- Audit proof: field focused, popup/submit owner, option/button clicked, value
+  saved, and repair touched. For auth, record credential fields, submit target,
+  noCaptcha owner, network/progress result, and which auth ladder step ran.
+- Proof: auth advances, server rejects, or site gate persists.
+- Fix: generic auth workflow behavior only.
+- Retest: fresh p Chrome lane, actual extension, no final Submit, no focus
+  stealing unless explicitly requested.
+
 Short version: the auth method itself was not random. The missing C3-specific piece was page activation. Standalone probes ran against an active Workday page. Full C3 could submit from a background p Chrome target. Boeing noCaptcha submit needed the Workday page brought to front before the credential submit ladder.
 
 ## Final Current Status
@@ -441,7 +467,9 @@ Observed:
 - Do not treat Workday wrong-password text as noCaptcha. Use `auth_bad_credentials`.
 - Do not click final Submit in live smokes.
 - Do not remove the progress-gated ladder. Some tenants need methods later than `requestSubmit`.
-- Do not remove `Page.bringToFront` for noCaptcha credential submit without proving background p Chrome works on Boeing again.
+- Do not reintroduce foreground auth behavior in automated p Chrome runs. If
+  historical `Page.bringToFront` behavior remains in code, keep it disabled or
+  explicitly opt-in unless the user asks to inspect/focus a lane.
 
 ## Remaining Non-Auth Issues Seen During Boeing Runs
 

@@ -4003,6 +4003,7 @@ async function run() {
       timingCount: (audit.timings || []).length,
     };
     audit.finishedAt = new Date().toISOString();
+    audit.timeline = timeline;
     audit.final = {
       href: finalPage.href,
       currentStep: finalPage.currentStep,

@@ -389,6 +389,49 @@
     });
   }
 
+  function workdayFieldTextInputs(field) {
+    var el = field?.element;
+    var container = root.workdayUi?.nearestWorkdayField?.(el);
+    return Array.from(
+      new Set(
+        [el].concat(
+          Array.from(
+            container?.querySelectorAll?.(
+              'input[type="text"]:not([type="hidden"]), input[role="combobox"], input[data-uxi-widget-type="selectinput"], input[data-automation-id]',
+            ) || [],
+          ),
+        ),
+      ),
+    ).filter(function (input) {
+      return input && typeof input.blur === "function";
+    });
+  }
+
+  function blurWorkdayFieldInputs(field) {
+    var el = field?.element;
+    var container = root.workdayUi?.nearestWorkdayField?.(el);
+    var active = document.activeElement;
+    if (
+      active &&
+      active !== document.body &&
+      typeof active.blur === "function" &&
+      (active === el || container?.contains?.(active))
+    ) {
+      active.blur();
+    }
+    workdayFieldTextInputs(field).forEach(function (input) {
+      try {
+        keyOn(input, "Escape");
+      } catch (_error) {
+        // Best effort: some Workday proxy elements reject synthetic key events.
+      }
+      input.blur();
+    });
+    if (typeof el?.blur === "function") {
+      el.blur();
+    }
+  }
+
   async function fillTechnicalSkills({
     field,
     answer,
@@ -792,9 +835,11 @@
     return "workday_popup_options_missing";
   }
 
-  function visibleOptionCandidates() {
+  function visibleOptionCandidates(input) {
+    var activeListbox = input ? workdayActiveListboxFor(input) : null;
+    var rootNode = activeListbox || document;
     return Array.from(
-      document.querySelectorAll(
+      rootNode.querySelectorAll(
         [
           '[role="option"]',
           '[data-automation-id="menuItem"]',
@@ -865,6 +910,35 @@
       }
     }
     var multiSelectId = input?.getAttribute?.("data-uxi-multiselect-id") || "";
+    var inputRect = input?.getBoundingClientRect?.() || null;
+    function distanceFromInput(listbox) {
+      if (!inputRect || inputRect.width <= 0 || inputRect.height <= 0) {
+        return 100000;
+      }
+      var rect = listbox?.getBoundingClientRect?.();
+      if (!rect || rect.width <= 0 || rect.height <= 0) {
+        return 100000;
+      }
+      var xOverlap = Math.max(
+        0,
+        Math.min(inputRect.right, rect.right) -
+          Math.max(inputRect.left, rect.left),
+      );
+      var xPenalty =
+        xOverlap > 0
+          ? 0
+          : Math.min(
+              Math.abs(inputRect.left - rect.right),
+              Math.abs(rect.left - inputRect.right),
+            );
+      var yPenalty =
+        rect.top >= inputRect.bottom
+          ? rect.top - inputRect.bottom
+          : inputRect.top >= rect.bottom
+            ? inputRect.top - rect.bottom
+            : 0;
+      return yPenalty * 4 + xPenalty;
+    }
     var visibleListboxes = Array.from(
       document.querySelectorAll(
         [
@@ -894,6 +968,10 @@
       .sort(function (a, b) {
         var aScrollable = Math.max(0, a.scrollHeight - a.clientHeight);
         var bScrollable = Math.max(0, b.scrollHeight - b.clientHeight);
+        var aDistance = distanceFromInput(a);
+        var bDistance = distanceFromInput(b);
+        var aNear = aDistance < 650 ? 10000 : 0;
+        var bNear = bDistance < 650 ? 10000 : 0;
         var aAssoc =
           multiSelectId &&
           [
@@ -920,6 +998,8 @@
             : 0;
         return (
           bAssoc - aAssoc ||
+          bNear - aNear ||
+          aDistance - bDistance ||
           bScrollable - aScrollable ||
           b.getBoundingClientRect().height - a.getBoundingClientRect().height
         );
@@ -935,6 +1015,7 @@
           'input[type="radio"]',
           '[role="radio"]',
           '[data-automation-id="checkboxPanel"]',
+          'input[type="checkbox"]',
         ].join(", "),
       ) || option
     );
@@ -1771,13 +1852,24 @@
 
   async function closePopup(field) {
     var el = field.element;
-    keyOn(el, "Escape");
-    keyOn(document.body, "Escape");
-    keyOn(document, "Escape");
-    if (el?.blur) {
-      el.blur();
+    var active = document.activeElement;
+    var activeListbox = workdayActiveListboxFor(el);
+    for (var attempt = 0; attempt < 3; attempt++) {
+      keyOn(active, "Escape");
+      keyOn(activeListbox, "Escape");
+      keyOn(el, "Escape");
+      workdayFieldTextInputs(field).forEach(function (input) {
+        keyOn(input, "Escape");
+      });
+      keyOn(document.body, "Escape");
+      keyOn(document, "Escape");
+      await sleep(40);
     }
-    await sleep(60);
+    if (active?.blur && active !== document.body) {
+      active.blur();
+    }
+    blurWorkdayFieldInputs(field);
+    await sleep(120);
   }
 
   async function collectWorkdayOptions(field, context) {
@@ -1794,8 +1886,10 @@
       (field.workday?.kind === "phone_country_code"
         ? committedSelectionText &&
           optionMatches({ label: committedSelectionText }, answer.value)
-        : optionMatches({ label: committedLabel }, answer.value))
+        : optionMatches({ label: committedLabel }, answer.value) ||
+          committedApplicationSourceMatches(committedState, answer, null))
     ) {
+      await closePopup(field);
       root.audit?.pushFieldStep(context?.audit, context?.fieldAudit, {
         action: "workday_preselected_option_detected",
         step: "workday.option.collect",
@@ -2303,8 +2397,8 @@
     return { option: option, label: label, score: score };
   }
 
-  function bestVisiblePhoneCountryOption(answerText) {
-    return visibleOptionCandidates()
+  function bestVisiblePhoneCountryOption(input, answerText) {
+    return visibleOptionCandidates(input)
       .map(function (candidate) {
         return scorePhoneCountryOption(candidate, answerText);
       })
@@ -2327,6 +2421,8 @@
             '[data-automation-id="selectedItem"]',
             '[id^="pill-"]',
             '[aria-label*="press delete to clear value"]',
+            '[data-automation-id="promptSelectionLabel"]',
+            '[data-automation-id="promptAriaInstruction"]',
             '[aria-selected="true"]',
           ].join(", "),
         ) || [],
@@ -2334,7 +2430,13 @@
         .map(function (el) {
           return optionLabel(el);
         })
-        .filter(Boolean)
+        .filter(function (label) {
+          return (
+            label &&
+            !/^0\s+items?\s+selected\b/i.test(label) &&
+            !/^select\s+one$/i.test(label)
+          );
+        })
         .join(" "),
     );
   }
@@ -2387,9 +2489,7 @@
     var el = field?.element;
     keyOn(el, "Enter");
     keyOn(el, "Escape");
-    if (typeof el?.blur === "function") {
-      el.blur();
-    }
+    blurWorkdayFieldInputs(field);
     await sleep(240);
     state = workdayCommittedState(field);
     ok =
@@ -2474,6 +2574,7 @@
       committedStateMatches(committedState, answer, option) &&
       !workdayFieldHasValidationError(field)
     ) {
+      await closePopup(field);
       return {
         ok: true,
         reason: option?.committedReason || "committed_workday_selection",
@@ -2488,6 +2589,7 @@
       committedApplicationSourceMatches(committedState, answer, option) &&
       !workdayFieldHasValidationError(field)
     ) {
+      await closePopup(field);
       return {
         ok: true,
         reason: "preselected_workday_source",
@@ -2889,7 +2991,7 @@
     }
     var best = null;
     for (var attempt = 0; attempt < 3; attempt++) {
-      best = bestVisiblePhoneCountryOption(answerText);
+      best = bestVisiblePhoneCountryOption(input, answerText);
       if (best) {
         break;
       }
@@ -2902,14 +3004,14 @@
       setValue(input, searchText);
       await typeaheadOn(input, searchText);
       await sleep(250);
-      best = bestVisiblePhoneCountryOption(answerText);
+      best = bestVisiblePhoneCountryOption(input, answerText);
     }
     var scrollResult = { attempts: 0, match: best || null };
     if (!best) {
       scrollResult = await scrollWorkdayListboxUntil(
         input,
         function () {
-          return bestVisiblePhoneCountryOption(answerText);
+          return bestVisiblePhoneCountryOption(input, answerText);
         },
         80,
       );
@@ -2921,7 +3023,7 @@
         severity: field.required ? "warn" : "info",
         failedStep: "workday.driver.fill",
         reason: "Could not find the requested phone country code option.",
-        options: visibleOptionCandidates().map(function (candidate) {
+        options: visibleOptionCandidates(input).map(function (candidate) {
           return optionLabel(candidate);
         }),
       });

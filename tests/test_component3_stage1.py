@@ -2266,6 +2266,25 @@ Expected Graduation: Sep 2026
             drivers,
         )
 
+    def test_v2_workday_source_popup_close_resets_sibling_input_focus(self):
+        drivers = (
+            REPO_ROOT / "executioner" / "src" / "ats" / "workday" / "workday-drivers-v2.js"
+        ).read_text(encoding="utf-8")
+
+        self.assertIn("function workdayFieldTextInputs(field)", drivers)
+        self.assertIn("function blurWorkdayFieldInputs(field)", drivers)
+        self.assertIn("workdayFieldTextInputs(field).forEach(function (input)", drivers)
+        self.assertIn("blurWorkdayFieldInputs(field);", drivers)
+
+    def test_v2_workday_source_selected_text_reads_prompt_selection_labels(self):
+        drivers = (
+            REPO_ROOT / "executioner" / "src" / "ats" / "workday" / "workday-drivers-v2.js"
+        ).read_text(encoding="utf-8")
+
+        self.assertIn('[data-automation-id="promptSelectionLabel"]', drivers)
+        self.assertIn('[data-automation-id="promptAriaInstruction"]', drivers)
+        self.assertIn("!/^0\\s+items?\\s+selected\\b/i.test(label)", drivers)
+
     def test_v2_capital_one_degree_age_and_essential_functions_are_cataloged(self):
         paths = [
             REPO_ROOT / "executioner" / "src" / "shared" / "v2" / "field-catalog.js",
@@ -5363,6 +5382,7 @@ Expected Graduation: Sep 2026
         self.assertIn("manualAuthResult", live_smoke)
         self.assertIn("manualAuthResultNoProgress", live_smoke)
         self.assertIn("auth_no_progress", live_smoke)
+        self.assertIn("audit.timeline = timeline", live_smoke)
         self.assertIn('"native_checked_setter"', auth_workflow)
         self.assertIn("native_checked_setter_after_checked_readback", auth_workflow)
         self.assertIn('mode: "manual"', live_smoke)
@@ -5758,6 +5778,8 @@ Expected Graduation: Sep 2026
         self.assertIn("workday_validation_not_cleared", workday_drivers)
         self.assertIn("committedApplicationSourceMatches", workday_drivers)
         self.assertIn("selectedTechnicalSkillMatches", workday_drivers)
+        self.assertIn('input[type="checkbox"]', workday_drivers)
+        self.assertIn("await closePopup(field);\n      return {\n        ok: true", workday_drivers)
         self.assertIn("Bachelors Degree or University", workday_repeatables)
         self.assertIn("repairMissingRequiredRows", workday_repeatables)
         self.assertIn("targetKey && !afterKeys.includes(targetKey)", workday_repeatables)
