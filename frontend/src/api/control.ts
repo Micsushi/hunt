@@ -1,4 +1,5 @@
 import { del, get, patch, post } from './client'
+import { logHumanCommand } from './humanCommandLog'
 import type {
   FletcherQueueItem,
   ResumeDocument,
@@ -82,6 +83,17 @@ export function saveSetting(payload: {
   value_type?: string
   secret?: boolean
 }): Promise<{ setting: ComponentSetting }> {
+  void logHumanCommand({
+    action: 'c0.settings.save',
+    buttonId: 'save-component-setting',
+    details: {
+      component: payload.component,
+      key: payload.key,
+      valueType: payload.value_type || 'string',
+      secret: Boolean(payload.secret),
+      hasValue: payload.value !== '',
+    },
+  })
   return post('/api/settings', payload)
 }
 
@@ -94,6 +106,15 @@ export function saveLinkedInAccount(payload: {
   display_name?: string
   active?: boolean
 }): Promise<{ account: LinkedInAccount }> {
+  void logHumanCommand({
+    action: 'c0.linkedin_account.save',
+    buttonId: 'save-linkedin-account',
+    details: {
+      hasUsername: Boolean(payload.username),
+      hasDisplayName: Boolean(payload.display_name),
+      active: payload.active ?? true,
+    },
+  })
   return post('/api/linkedin/accounts', payload)
 }
 
@@ -106,14 +127,25 @@ export function fetchC1Queue(): Promise<unknown> {
 }
 
 export function triggerC1Scrape(): Promise<unknown> {
+  void logHumanCommand({ action: 'c1.scrape', buttonId: 'trigger-c1-scrape' })
   return post('/api/gateway/c1/scrape', {})
 }
 
 export function triggerC1Enrich(limit = 25): Promise<unknown> {
+  void logHumanCommand({
+    action: 'c1.enrich',
+    buttonId: 'trigger-c1-enrich',
+    details: { limit },
+  })
   return post('/api/gateway/c1/enrich', { limit })
 }
 
 export function triggerC1Reauth(accountId: number): Promise<unknown> {
+  void logHumanCommand({
+    action: 'c1.reauth',
+    buttonId: 'trigger-c1-reauth',
+    details: { accountId },
+  })
   return post(`/api/gateway/c1/accounts/${accountId}/reauth`, {})
 }
 
@@ -122,6 +154,11 @@ export function fetchC2Status(): Promise<unknown> {
 }
 
 export function triggerC2Generate(jobId: number): Promise<unknown> {
+  void logHumanCommand({
+    action: 'c2.generate',
+    buttonId: 'trigger-c2-generate',
+    details: { jobId },
+  })
   return post('/api/gateway/c2/generate', { job_id: jobId })
 }
 
@@ -202,6 +239,15 @@ export function enqueueFletcherJob(payload: {
   resume?: File | null
   options?: Record<string, unknown>
 }): Promise<FletcherQueueItem> {
+  void logHumanCommand({
+    action: 'c2.fletcher.queue_resume',
+    buttonId: 'queue-fletcher-resume',
+    details: {
+      jobId: payload.jobId || null,
+      hasResume: Boolean(payload.resume),
+      hasDescription: Boolean(payload.description),
+    },
+  })
   if (payload.resume) {
     const form = new FormData()
     form.append('description', payload.description || '')
@@ -268,6 +314,11 @@ export function moveFletcherJob(
   queueItemId: string,
   direction: 'up' | 'down',
 ): Promise<FletcherQueueItem> {
+  void logHumanCommand({
+    action: 'c2.fletcher.move_queue_item',
+    buttonId: 'move-fletcher-job',
+    details: { queueItemId, direction },
+  })
   return post<FletcherQueueItem>(
     `/api/fletcher/tailor/jobs/${encodeURIComponent(queueItemId)}/move`,
     { direction },
@@ -275,6 +326,11 @@ export function moveFletcherJob(
 }
 
 export function cancelFletcherJob(queueItemId: string): Promise<FletcherQueueItem> {
+  void logHumanCommand({
+    action: 'c2.fletcher.cancel_queue_item',
+    buttonId: 'cancel-fletcher-job',
+    details: { queueItemId },
+  })
   return post<FletcherQueueItem>(
     `/api/fletcher/tailor/jobs/${encodeURIComponent(queueItemId)}/cancel`,
     {},
@@ -284,6 +340,11 @@ export function cancelFletcherJob(queueItemId: string): Promise<FletcherQueueIte
 export function deleteFletcherJob(
   queueItemId: string,
 ): Promise<{ status: string; deleted: number }> {
+  void logHumanCommand({
+    action: 'c2.fletcher.delete_queue_item',
+    buttonId: 'delete-fletcher-job',
+    details: { queueItemId },
+  })
   return del<{ status: string; deleted: number }>(
     `/api/fletcher/tailor/jobs/${encodeURIComponent(queueItemId)}`,
   )
@@ -304,6 +365,14 @@ export function clearGeneratedResumes(payload: {
   includeAdHoc?: boolean
   deleteArtifacts?: boolean
 }): Promise<ClearGeneratedResumesResult> {
+  void logHumanCommand({
+    action: 'c2.fletcher.clear_generated_resumes',
+    buttonId: 'clear-generated-resumes',
+    details: {
+      includeAdHoc: payload.includeAdHoc ?? false,
+      deleteArtifacts: payload.deleteArtifacts ?? true,
+    },
+  })
   return post<ClearGeneratedResumesResult>('/api/fletcher/resumes/clear', {
     include_ad_hoc: payload.includeAdHoc ?? false,
     delete_artifacts: payload.deleteArtifacts ?? true,
@@ -355,6 +424,11 @@ export function fetchC4Runs(): Promise<{ runs: C4Run[] }> {
 }
 
 export function triggerC4Run(jobId: number): Promise<unknown> {
+  void logHumanCommand({
+    action: 'c4.run',
+    buttonId: 'trigger-c4-run',
+    details: { jobId },
+  })
   return post('/api/gateway/c4/run', { job_id: jobId })
 }
 
@@ -363,6 +437,11 @@ export function approveC4Run(
   decision: 'approve' | 'deny',
   reason: string,
 ): Promise<unknown> {
+  void logHumanCommand({
+    action: 'c4.approve_run',
+    buttonId: 'approve-c4-run',
+    details: { runId, decision },
+  })
   return post(`/api/gateway/c4/runs/${encodeURIComponent(runId)}/approve`, {
     decision,
     approved_by: 'c0',
@@ -425,5 +504,12 @@ export interface EasyApplyVerifyResult {
 }
 
 export function verifyEasyApply(jobId: number): Promise<EasyApplyVerifyResult> {
+  void logHumanCommand({
+    action: 'c3.verify_easy_apply',
+    buttonId: 'verify-easy-apply',
+    component: 'c3',
+    surface: 'c3_ui',
+    details: { jobId },
+  })
   return post<EasyApplyVerifyResult>(`/api/jobs/${jobId}/verify-easy-apply`, {})
 }

@@ -748,6 +748,8 @@ function readSettingsForm() {
     autoExportLogs: document.getElementById("auto-export-logs")?.checked,
     debugLogSinkEnabled: document.getElementById("debug-log-sink-enabled")
       ?.checked,
+    c3DeepDebugEnabled: document.getElementById("c3-deep-debug-enabled")
+      ?.checked,
     autoExportLogPrefix: document.getElementById("auto-export-log-prefix")
       ?.value,
     c4PollingEnabled: document.getElementById("c4-polling-enabled")?.checked,
@@ -868,6 +870,10 @@ async function loadState() {
   setCheckboxValue(
     "debug-log-sink-enabled",
     response.settings.debugLogSinkEnabled,
+  );
+  setCheckboxValue(
+    "c3-deep-debug-enabled",
+    response.settings.c3DeepDebugEnabled,
   );
   setInputValue(
     "auto-export-log-prefix",

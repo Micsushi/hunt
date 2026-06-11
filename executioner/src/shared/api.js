@@ -107,6 +107,16 @@ export async function postDebugLog(settings, payload) {
   });
 }
 
+export async function postLedgerEvent(settings, payload) {
+  return requestJson({
+    baseUrl: settings.ledgerBackendUrl || settings.backendUrl,
+    serviceToken: settings.serviceToken,
+    path: "/api/ledger/events",
+    method: "POST",
+    body: payload,
+  });
+}
+
 export async function postAnswerDecision(settings, payload, options = {}) {
   return requestJson({
     baseUrl: settings.backendUrl,

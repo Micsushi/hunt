@@ -490,7 +490,7 @@
       generatedAnswers: generatedAnswers,
       htmlSnapshot: document.documentElement.outerHTML.slice(0, 200000),
       interactionTrace: audit.events,
-      traceTruncated: false,
+      traceTruncated: Boolean(audit.traceTruncated),
       v2Audit: audit,
     };
   }
@@ -513,6 +513,24 @@
       uiModel: field.uiModel,
       element: root.audit.summarizeElement(field.element || field.anchor),
     });
+    root.audit.emitEvent(
+      audit,
+      "field.focus",
+      root.audit.fieldPayload(field, {
+        status: "info",
+        reason: "field_processing_started",
+      }),
+    );
+    if (hasValidationState(field)) {
+      root.audit.emitEvent(
+        audit,
+        "validation.visible",
+        root.audit.fieldPayload(field, {
+          status: "warn",
+          reason: "validation_visible_before_fill",
+        }),
+      );
+    }
     root.audit.pushFieldStep(audit, fieldAudit, {
       action: "site_state_before_field",
       step: "site.before_field",
@@ -590,6 +608,21 @@
         answerPreview: fieldAudit.answerPreview,
       },
     });
+    root.audit.emitEvent(
+      audit,
+      "field.answer.resolved",
+      root.audit.fieldPayload(field, {
+        status: answer.value || answer.needsGeneratedText ? "ok" : "warn",
+        reason: answer.value ? "answer_available" : "missing_answer",
+        valueSource: answer.source || "",
+        payload: {
+          answerType: answer.answerType || "",
+          confidence: answer.confidence || "",
+          answer: root.audit.valueSummary(answer.value ?? ""),
+          needsGeneratedText: Boolean(answer.needsGeneratedText),
+        },
+      }),
+    );
 
     var option = null;
     if (optionsNeeded(field)) {
@@ -737,6 +770,43 @@
         reason: fillResult.reason || "commit_failed",
       });
     }
+    root.audit.emitEvent(
+      audit,
+      "value.saved",
+      root.audit.fieldPayload(field, {
+        status: fillResult.ok ? "ok" : "warn",
+        reason: fillResult.reason || (fillResult.ok ? "commit_verified" : "commit_failed"),
+        selectedOption: fieldAudit.selectedOption || fillResult.selectedOption || "",
+        valueSource: fieldAudit.valueSource || "",
+        payload: {
+          afterState: {
+            selected: Boolean(fieldAudit.afterState.selected),
+            checked: Boolean(fieldAudit.afterState.checked),
+            text: root.audit.valueSummary(fieldAudit.afterState.text || ""),
+            rawValue: root.audit.valueSummary(fieldAudit.afterState.rawValue || ""),
+          },
+        },
+      }),
+    );
+    if (hasValidationState(field)) {
+      root.audit.emitEvent(
+        audit,
+        "validation.visible",
+        root.audit.fieldPayload(field, {
+          status: "warn",
+          reason: "validation_visible_after_fill",
+        }),
+      );
+    } else if (fillResult.ok) {
+      root.audit.emitEvent(
+        audit,
+        "validation.cleared",
+        root.audit.fieldPayload(field, {
+          status: "ok",
+          reason: "no_validation_after_fill",
+        }),
+      );
+    }
     var _siteAfter = root.audit.siteState();
     _huntLog("field_done", {
       descriptor: String(field.descriptor || "").slice(0, 120),
@@ -784,6 +854,11 @@
       fillRunId: context.fillRunId,
       atsType: context.atsType || context.fillRoute?.adapterName || "generic",
       mode: "fill",
+      settings: context.settings || {},
+      commandContext: context.commandContext || context.ledgerContext || null,
+      ledgerContext: context.ledgerContext || null,
+      actor: context.actor || null,
+      eventSink: context.eventSink || context.auditEventSink || null,
     });
     root.audit.pushEvent(audit, {
       action: "v2_fill_start",
@@ -797,6 +872,22 @@
     });
 
     var fields = root.uiInspector.collectCandidates();
+    root.audit.emitEvent(audit, "field.inventory", {
+      status: "info",
+      reason: "initial_field_inventory",
+      fieldCount: fields.length,
+      frameId: window.__huntFrameId || "",
+      fields: fields.slice(0, 120).map(function (field) {
+        return {
+          fieldId: field.fieldId || "",
+          questionHash: field.questionHash || "",
+          uiModel: field.uiModel || "",
+          required: Boolean(field.required),
+          descriptor: String(field.descriptor || "").slice(0, 160),
+          workdayKind: field.workday?.kind || "",
+        };
+      }),
+    });
     audit.page = root.uiInspector.describePage
       ? root.uiInspector.describePage(fields)
       : {};
@@ -812,6 +903,13 @@
     var generatedAnswers = [];
     var processedQuestionHashes = new Set();
     var processedFieldKeys = new Set();
+    if (normalizedRepairErrors(context).length || context.repairMode) {
+      root.audit.emitEvent(audit, "repair.started", {
+        status: "info",
+        reason: "repair_context_present",
+        visibleValidationErrorCount: normalizedRepairErrors(context).length,
+      });
+    }
     if (fillCancelled(context)) {
       return cancelledResult(
         context,
@@ -823,6 +921,12 @@
     }
     for (var pass = 1; pass <= 3; pass++) {
       var passFilledCount = 0;
+      root.audit.emitEvent(audit, "repair.loop", {
+        status: "info",
+        reason: pass === 1 ? "initial_pass" : "conditional_or_repair_pass",
+        pass: pass,
+        fieldCount: fields.length,
+      });
       if (pass > 1) {
         fields = root.uiInspector.collectCandidates();
         root.audit.pushEvent(audit, {
@@ -896,6 +1000,17 @@
             uiModel: field.uiModel,
           });
           continue;
+        }
+        if (normalizedRepairErrors(context).length || context.repairMode) {
+          root.audit.emitEvent(
+            audit,
+            "repair.touched",
+            root.audit.fieldPayload(field, {
+              status: "info",
+              reason: "field_in_repair_scope",
+              pass: pass,
+            }),
+          );
         }
         if (shouldSkipPasswordField(field, context)) {
           root.audit.pushEvent(audit, {
@@ -1051,7 +1166,7 @@
       generatedAnswers: generatedAnswers,
       htmlSnapshot: document.documentElement.outerHTML.slice(0, 200000),
       interactionTrace: audit.events,
-      traceTruncated: false,
+      traceTruncated: Boolean(audit.traceTruncated),
       v2Audit: audit,
     };
   }

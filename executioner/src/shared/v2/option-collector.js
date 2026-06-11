@@ -153,19 +153,46 @@
     });
   }
 
+  function emitOptionsCollected(field, context, options, reason) {
+    root.audit?.emitEvent(
+      context?.audit,
+      "options.collected",
+      root.audit.fieldPayload(field, {
+        status: (options || []).length ? "ok" : "warn",
+        reason: reason || ((options || []).length ? "options_available" : "no_options"),
+        optionCount: (options || []).length,
+        options: (options || []).slice(0, 30).map(function (option) {
+          return {
+            label: option.label || "",
+            placeholder: Boolean(option.placeholder),
+          };
+        }),
+      }),
+    );
+    return options || [];
+  }
+
   async function collectOptions(field, context) {
     if (field.uiModel === "select") {
-      return Array.from(field.element.options || []).map(function (option) {
+      return emitOptionsCollected(
+        field,
+        context,
+        Array.from(field.element.options || []).map(function (option) {
         return {
           label: root.audit?.normalizeText(option.text || option.value || ""),
           value: option.value,
           element: option,
           placeholder: option.disabled || option.value === "",
         };
-      });
+        }),
+        "native_select_options",
+      );
     }
     if (field.uiModel === "radio_group") {
-      return (field.radios || []).map(function (radio) {
+      return emitOptionsCollected(
+        field,
+        context,
+        (field.radios || []).map(function (radio) {
         var ariaLabel = radio.getAttribute?.("aria-label") || "";
         var associatedLabel = (function () {
           if (!radio.id) {
@@ -224,10 +251,15 @@
           element: radio,
           placeholder: false,
         };
-      });
+        }),
+        "radio_group_options",
+      );
     }
     if (field.uiModel === "segmented_button_group") {
-      return (field.buttons || []).map(function (button) {
+      return emitOptionsCollected(
+        field,
+        context,
+        (field.buttons || []).map(function (button) {
         var label = optionText(button);
         return {
           label: label,
@@ -235,7 +267,9 @@
           element: button,
           placeholder: false,
         };
-      });
+        }),
+        "segmented_button_options",
+      );
     }
     if (field.uiModel === "checkbox") {
       var labelFor =
@@ -256,20 +290,25 @@
               root.uiInspector?.containerSelectors || [],
             )
           : field.element.value || field.element.id || "");
-      return [
-        {
-          label: root.audit?.normalizeText(label || "Yes"),
-          value: field.element.value || "checked",
-          element: field.element,
-          placeholder: false,
-        },
-      ];
+      return emitOptionsCollected(
+        field,
+        context,
+        [
+          {
+            label: root.audit?.normalizeText(label || "Yes"),
+            value: field.element.value || "checked",
+            element: field.element,
+            placeholder: false,
+          },
+        ],
+        "checkbox_option",
+      );
     }
     if (["combobox", "button_listbox"].includes(field.uiModel)) {
       var answerText = context?.answer?.value || "";
       var options = popupOptionElements();
       if (options.length && hasOptionMatch(options, answerText)) {
-        return options;
+        return emitOptionsCollected(field, context, options, "popup_existing_options");
       }
       var opener =
         field.element?.closest?.('[role="combobox"], [aria-haspopup]') ||
@@ -283,7 +322,7 @@
       });
       options = popupOptionElements();
       if (options.length && hasOptionMatch(options, answerText)) {
-        return options;
+        return emitOptionsCollected(field, context, options, "popup_opened_options");
       }
       if (field.uiModel === "combobox" && answerText) {
         setSearchValue(field.element, answerText);
@@ -291,9 +330,14 @@
           setTimeout(resolve, 260);
         });
       }
-      return popupOptionElements();
+      return emitOptionsCollected(
+        field,
+        context,
+        popupOptionElements(),
+        "popup_search_options",
+      );
     }
-    return [];
+    return emitOptionsCollected(field, context, [], "unsupported_option_model");
   }
 
   root.optionCollector = {

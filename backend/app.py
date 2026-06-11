@@ -230,9 +230,11 @@ async def lifespan(app):
 app = FastAPI(title="Hunt Control Plane", version="0.1.0", lifespan=lifespan)
 
 from backend.gateway import router as _gateway_router  # noqa: E402
+from backend.ledger.api import router as _ledger_router  # noqa: E402
 from backend.request_id import RequestIDMiddleware  # noqa: E402
 
 app.include_router(_gateway_router)
+app.include_router(_ledger_router)
 
 # CORS - only needed during local development (Vite on :5173, FastAPI on :8000)
 _DEV_ORIGINS = [

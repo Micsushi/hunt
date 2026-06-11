@@ -131,6 +131,13 @@ export function sanitizeSettings(settings = {}) {
     debugLogSinkEnabled: hasCurrentSettingsVersion
       ? sanitizeBoolean(settings.debugLogSinkEnabled ?? true)
       : true,
+    ledgerEnabled: sanitizeBoolean(settings.ledgerEnabled),
+    ledgerBackendUrl: sanitizeUrl(settings.ledgerBackendUrl),
+    agentId: sanitizeText(settings.agentId),
+    laneId: sanitizeText(settings.laneId),
+    sessionId: sanitizeText(settings.sessionId),
+    leaseId: sanitizeText(settings.leaseId),
+    c3DeepDebugEnabled: sanitizeBoolean(settings.c3DeepDebugEnabled),
     c4PollingEnabled: sanitizeBoolean(settings.c4PollingEnabled),
     backendUrl: sanitizeBackendUrl(settings.backendUrl),
     serviceToken: sanitizeText(settings.serviceToken),
@@ -160,6 +167,13 @@ export function sanitizeRuntimeConfig(config = {}) {
     backendUrl: sanitizeUrl(config.backendUrl),
     serviceToken: sanitizeText(config.serviceToken),
     debugLogSinkEnabled: sanitizeOptionalBoolean(config.debugLogSinkEnabled),
+    ledgerEnabled: sanitizeOptionalBoolean(config.ledgerEnabled),
+    ledgerBackendUrl: sanitizeUrl(config.ledgerBackendUrl),
+    agentId: sanitizeText(config.agentId),
+    laneId: sanitizeText(config.laneId),
+    sessionId: sanitizeText(config.sessionId),
+    leaseId: sanitizeText(config.leaseId),
+    c3DeepDebugEnabled: sanitizeOptionalBoolean(config.c3DeepDebugEnabled),
     autoClickNextAfterFill: sanitizeOptionalBoolean(
       config.autoClickNextAfterFill,
     ),
@@ -189,6 +203,27 @@ export function applyRuntimeConfig(settings, runtimeConfig = {}) {
   }
   if (runtimeConfig.debugLogSinkEnabled !== null) {
     nextSettings.debugLogSinkEnabled = runtimeConfig.debugLogSinkEnabled;
+  }
+  if (runtimeConfig.ledgerEnabled !== null) {
+    nextSettings.ledgerEnabled = runtimeConfig.ledgerEnabled;
+  }
+  if (runtimeConfig.ledgerBackendUrl) {
+    nextSettings.ledgerBackendUrl = sanitizeUrl(runtimeConfig.ledgerBackendUrl);
+  }
+  if (runtimeConfig.agentId) {
+    nextSettings.agentId = runtimeConfig.agentId;
+  }
+  if (runtimeConfig.laneId) {
+    nextSettings.laneId = runtimeConfig.laneId;
+  }
+  if (runtimeConfig.sessionId) {
+    nextSettings.sessionId = runtimeConfig.sessionId;
+  }
+  if (runtimeConfig.leaseId) {
+    nextSettings.leaseId = runtimeConfig.leaseId;
+  }
+  if (runtimeConfig.c3DeepDebugEnabled !== null) {
+    nextSettings.c3DeepDebugEnabled = runtimeConfig.c3DeepDebugEnabled;
   }
   if (runtimeConfig.autoClickNextAfterFill !== null) {
     nextSettings.autoClickNextAfterFill = runtimeConfig.autoClickNextAfterFill;

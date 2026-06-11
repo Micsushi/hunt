@@ -11,6 +11,167 @@
       .trim();
   }
 
+  function shortHash(value) {
+    var text = String(value ?? "");
+    var hash = 0;
+    for (var i = 0; i < text.length; i++) {
+      hash = (hash * 31 + text.charCodeAt(i)) >>> 0;
+    }
+    return hash.toString(16).padStart(8, "0").slice(0, 12);
+  }
+
+  function looksSensitiveText(value) {
+    var text = String(value || "");
+    return (
+      /[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i.test(text) ||
+      /\b(?:\+?1[\s.-]?)?(?:\(?\d{3}\)?[\s.-]?)\d{3}[\s.-]?\d{4}\b/.test(
+        text,
+      ) ||
+      /\b(password|token|cookie|authorization|bearer|secret)\b/i.test(text)
+    );
+  }
+
+  function sensitiveKey(key) {
+    return /\b(password|token|cookie|authorization|secret|rawvalue|currentvalue|intendedvalue|answerpreview|resume|email|phone)\b/i.test(
+      String(key || "").replace(/[_-]/g, ""),
+    );
+  }
+
+  function valueSummary(value) {
+    var text = String(value ?? "");
+    return {
+      redacted: true,
+      valueClass: text ? "text" : "empty",
+      length: text.length,
+      sha256Prefix: shortHash(text),
+    };
+  }
+
+  function redactDetail(value, key, rules) {
+    if (value === null || value === undefined) {
+      return value;
+    }
+    if (typeof value === "string") {
+      if (sensitiveKey(key) || looksSensitiveText(value)) {
+        rules.push("sensitive_text");
+        return valueSummary(value);
+      }
+      return value.length > 500 ? value.slice(0, 500) : value;
+    }
+    if (typeof value === "number" || typeof value === "boolean") {
+      return value;
+    }
+    if (Array.isArray(value)) {
+      return value.slice(0, 40).map(function (item) {
+        return redactDetail(item, key, rules);
+      });
+    }
+    if (typeof value === "object") {
+      var output = {};
+      Object.keys(value)
+        .slice(0, 80)
+        .forEach(function (childKey) {
+          output[childKey] = redactDetail(value[childKey], childKey, rules);
+        });
+      return output;
+    }
+    return value;
+  }
+
+  function redactionFor(payload) {
+    var rules = [];
+    var redacted = redactDetail(payload || {}, "", rules);
+    return {
+      payload: redacted,
+      redaction: {
+        applied: true,
+        rules: Array.from(new Set(rules)),
+      },
+    };
+  }
+
+  function firstString() {
+    for (var i = 0; i < arguments.length; i++) {
+      var value = arguments[i];
+      if (value !== undefined && value !== null && String(value).trim()) {
+        return String(value);
+      }
+    }
+    return "";
+  }
+
+  function auditContext(context) {
+    var settings = context?.settings || {};
+    var commandContext =
+      context?.commandContext ||
+      context?.ledgerContext ||
+      settings.commandContext ||
+      settings.ledgerContext ||
+      {};
+    var actor =
+      commandContext.actor ||
+      context?.actor ||
+      settings.actor ||
+      (settings.actorId
+        ? {
+            type: settings.actorType || "agent",
+            id: settings.actorId,
+            surface: settings.actorSurface || "unknown",
+          }
+        : null);
+    return {
+      actor: actor || null,
+      agent_id: firstString(
+        commandContext.agent_id,
+        commandContext.agentId,
+        context?.agent_id,
+        context?.agentId,
+        settings.agent_id,
+        settings.agentId,
+      ),
+      lane_id: firstString(
+        commandContext.lane_id,
+        commandContext.laneId,
+        context?.lane_id,
+        context?.laneId,
+        settings.lane_id,
+        settings.laneId,
+      ),
+      session_id: firstString(
+        commandContext.session_id,
+        commandContext.sessionId,
+        context?.session_id,
+        context?.sessionId,
+        settings.session_id,
+        settings.sessionId,
+      ),
+      lease_id: firstString(
+        commandContext.lease_id,
+        commandContext.leaseId,
+        context?.lease_id,
+        context?.leaseId,
+        settings.lease_id,
+        settings.leaseId,
+      ),
+      command_id: firstString(
+        commandContext.command_id,
+        commandContext.commandId,
+        context?.command_id,
+        context?.commandId,
+        settings.command_id,
+        settings.commandId,
+      ),
+      trace_id: firstString(
+        commandContext.trace_id,
+        commandContext.traceId,
+        context?.trace_id,
+        context?.traceId,
+        settings.trace_id,
+        settings.traceId,
+      ),
+    };
+  }
+
   function safeCss(value) {
     if (window.CSS && typeof window.CSS.escape === "function") {
       return window.CSS.escape(String(value || ""));
@@ -163,6 +324,10 @@
       fields: [],
       events: [],
       permanentIssues: [],
+      eventContext: auditContext(context || {}),
+      eventSink: context.eventSink || context.auditEventSink || null,
+      traceTruncated: false,
+      eventCounts: {},
     };
   }
 
@@ -170,6 +335,21 @@
     if (!audit || !Array.isArray(audit.events)) {
       return event;
     }
+    if (audit.events.length >= 1000) {
+      if (!audit.traceTruncated) {
+        audit.traceTruncated = true;
+        audit.events.push({
+          index: audit.events.length + 1,
+          at: nowIso(),
+          action: "trace_truncated",
+          step: "audit.cap",
+          status: "warn",
+          reason: "event_limit_reached",
+        });
+      }
+      return event;
+    }
+    var redacted = redactionFor(event || {});
     var entry = Object.assign(
       {
         index: audit.events.length + 1,
@@ -179,10 +359,105 @@
         status: "info",
         reason: "",
       },
-      event || {},
+      redacted.payload,
     );
+    if (redacted.redaction.rules.length) {
+      entry.redaction = redacted.redaction;
+    }
     audit.events.push(entry);
     return entry;
+  }
+
+  function emitEvent(audit, eventType, payload) {
+    if (!audit || !eventType) {
+      return null;
+    }
+    audit.eventCounts = audit.eventCounts || {};
+    var count = audit.eventCounts[eventType] || 0;
+    var cap = eventType === "repair.loop" ? 20 : 120;
+    if (count >= cap) {
+      if (count === cap) {
+        audit.eventCounts[eventType] += 1;
+        return pushEvent(audit, {
+          action: eventType,
+          event_type: eventType,
+          eventType: eventType,
+          step: "audit.event_cap",
+          status: "warn",
+          reason: "event_type_cap_reached",
+          detail: { cappedEventType: eventType, cap: cap },
+        });
+      }
+      audit.eventCounts[eventType] += 1;
+      return null;
+    }
+    audit.eventCounts[eventType] = count + 1;
+    var redacted = redactionFor(payload || {});
+    var context = audit.eventContext || {};
+    var entry = pushEvent(audit, {
+      action: eventType,
+      event_type: eventType,
+      eventType: eventType,
+      component: "c3",
+      status: payload?.status || "info",
+      reason: payload?.reason || "",
+      fieldId: payload?.fieldId || "",
+      questionHash: payload?.questionHash || "",
+      questionType: payload?.questionType || "",
+      uiModel: payload?.uiModel || "",
+      selectedOption: payload?.selectedOption || "",
+      command_id: context.command_id || "",
+      session_id: context.session_id || "",
+      lane_id: context.lane_id || "",
+      agent_id: context.agent_id || "",
+      lease_id: context.lease_id || "",
+      trace_id: context.trace_id || "",
+      actor: context.actor || null,
+      payload: redacted.payload,
+      detail: redacted.payload,
+      redaction: redacted.redaction,
+    });
+    try {
+      var logEntry = Object.assign({ _tag: eventType, _ts: Date.now() }, entry);
+      (window.__huntC3Logs = window.__huntC3Logs || []).push(logEntry);
+    } catch (_error) {}
+    try {
+      if (typeof audit.eventSink === "function") {
+        audit.eventSink(entry);
+      } else if (typeof window.__huntC3EventSink === "function") {
+        window.__huntC3EventSink(entry);
+      } else if (
+        typeof chrome !== "undefined" &&
+        chrome.runtime &&
+        chrome.runtime.sendMessage
+      ) {
+        chrome.runtime.sendMessage({
+          type: "hunt.apply.audit_event",
+          payload: entry,
+        });
+      }
+    } catch (_error) {
+      // Optional package 05 integration: the local audit remains source of proof.
+    }
+    return entry;
+  }
+
+  function fieldPayload(field, extra) {
+    var el = field?.element || field?.anchor;
+    return Object.assign(
+      {
+        fieldId: field?.fieldId || "",
+        questionHash: field?.questionHash || "",
+        questionType: field?.questionType || "",
+        uiModel: field?.uiModel || "",
+        required: Boolean(field?.required),
+        descriptor: String(field?.descriptor || "").slice(0, 240),
+        workdayKind: field?.workday?.kind || "",
+        frameId: window.__huntFrameId || "",
+        element: summarizeElement(el),
+      },
+      extra || {},
+    );
   }
 
   function createFieldAudit(audit, field) {
@@ -295,6 +570,10 @@
     pushFieldStep: pushFieldStep,
     pushIssue: pushIssue,
     complete: complete,
+    emitEvent: emitEvent,
+    fieldPayload: fieldPayload,
+    redactionFor: redactionFor,
+    valueSummary: valueSummary,
     summarizeElement: summarizeElement,
     selectorPath: selectorPath,
     rectSummary: rectSummary,

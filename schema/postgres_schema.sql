@@ -222,6 +222,153 @@ CREATE TABLE IF NOT EXISTS fletcher_jobs (
 );
 
 -- -----------------------------------------------------------------------
+-- Agent command ledger tables
+-- JSONL files remain the immutable source of truth. These tables are a
+-- rebuildable Postgres search/index layer.
+-- -----------------------------------------------------------------------
+
+CREATE TABLE IF NOT EXISTS ledger_agents (
+    agent_id            TEXT PRIMARY KEY,
+    component           TEXT NOT NULL DEFAULT 'c3',
+    actor_json          JSONB NOT NULL DEFAULT '{}'::jsonb,
+    status              TEXT NOT NULL DEFAULT 'active',
+    metadata_json       JSONB NOT NULL DEFAULT '{}'::jsonb,
+    created_at          TEXT NOT NULL DEFAULT to_char(CURRENT_TIMESTAMP, 'YYYY-MM-DD HH24:MI:SS'),
+    updated_at          TEXT NOT NULL DEFAULT to_char(CURRENT_TIMESTAMP, 'YYYY-MM-DD HH24:MI:SS')
+);
+
+CREATE TABLE IF NOT EXISTS ledger_lanes (
+    lane_id             TEXT PRIMARY KEY,
+    component           TEXT NOT NULL DEFAULT 'c3',
+    agent_id            TEXT,
+    status              TEXT NOT NULL DEFAULT 'active',
+    metadata_json       JSONB NOT NULL DEFAULT '{}'::jsonb,
+    created_at          TEXT NOT NULL DEFAULT to_char(CURRENT_TIMESTAMP, 'YYYY-MM-DD HH24:MI:SS'),
+    updated_at          TEXT NOT NULL DEFAULT to_char(CURRENT_TIMESTAMP, 'YYYY-MM-DD HH24:MI:SS'),
+    CONSTRAINT ledger_lanes_agent_id_fkey
+        FOREIGN KEY (agent_id) REFERENCES ledger_agents(agent_id) ON DELETE SET NULL
+);
+
+CREATE TABLE IF NOT EXISTS ledger_sessions (
+    session_id          TEXT PRIMARY KEY,
+    component           TEXT NOT NULL DEFAULT 'c3',
+    agent_id            TEXT,
+    lane_id             TEXT,
+    parent_session_id   TEXT,
+    status              TEXT NOT NULL DEFAULT 'active',
+    manifest_path       TEXT,
+    metadata_json       JSONB NOT NULL DEFAULT '{}'::jsonb,
+    created_at          TEXT NOT NULL DEFAULT to_char(CURRENT_TIMESTAMP, 'YYYY-MM-DD HH24:MI:SS'),
+    updated_at          TEXT NOT NULL DEFAULT to_char(CURRENT_TIMESTAMP, 'YYYY-MM-DD HH24:MI:SS'),
+    ended_at            TEXT,
+    CONSTRAINT ledger_sessions_agent_id_fkey
+        FOREIGN KEY (agent_id) REFERENCES ledger_agents(agent_id) ON DELETE SET NULL,
+    CONSTRAINT ledger_sessions_lane_id_fkey
+        FOREIGN KEY (lane_id) REFERENCES ledger_lanes(lane_id) ON DELETE SET NULL,
+    CONSTRAINT ledger_sessions_parent_session_id_fkey
+        FOREIGN KEY (parent_session_id) REFERENCES ledger_sessions(session_id) ON DELETE SET NULL
+);
+
+CREATE TABLE IF NOT EXISTS ledger_leases (
+    lease_id            TEXT PRIMARY KEY,
+    component           TEXT NOT NULL DEFAULT 'c3',
+    lease_type          TEXT NOT NULL,
+    status              TEXT NOT NULL,
+    agent_id            TEXT,
+    lane_id             TEXT,
+    session_id          TEXT,
+    command_id          TEXT,
+    claimed_at          TEXT NOT NULL DEFAULT to_char(CURRENT_TIMESTAMP, 'YYYY-MM-DD HH24:MI:SS'),
+    heartbeat_at        TEXT,
+    expires_at          TEXT NOT NULL,
+    released_at         TEXT,
+    metadata_json       JSONB NOT NULL DEFAULT '{}'::jsonb,
+    CONSTRAINT ledger_leases_agent_id_fkey
+        FOREIGN KEY (agent_id) REFERENCES ledger_agents(agent_id) ON DELETE SET NULL,
+    CONSTRAINT ledger_leases_lane_id_fkey
+        FOREIGN KEY (lane_id) REFERENCES ledger_lanes(lane_id) ON DELETE SET NULL,
+    CONSTRAINT ledger_leases_session_id_fkey
+        FOREIGN KEY (session_id) REFERENCES ledger_sessions(session_id) ON DELETE SET NULL
+);
+
+CREATE TABLE IF NOT EXISTS ledger_events (
+    event_id            TEXT PRIMARY KEY,
+    seq                 INTEGER,
+    ts                  TEXT NOT NULL,
+    component           TEXT NOT NULL,
+    event_type          TEXT NOT NULL,
+    actor_json          JSONB NOT NULL DEFAULT '{}'::jsonb,
+    agent_id            TEXT,
+    lane_id             TEXT,
+    session_id          TEXT,
+    lease_id            TEXT,
+    command_id          TEXT,
+    trace_id            TEXT,
+    payload_json        JSONB NOT NULL DEFAULT '{}'::jsonb,
+    redaction_json      JSONB NOT NULL DEFAULT '{}'::jsonb,
+    prev_hash           TEXT,
+    hash                TEXT,
+    jsonl_path          TEXT,
+    jsonl_line_number   INTEGER,
+    jsonl_byte_offset   BIGINT,
+    created_at          TEXT NOT NULL DEFAULT to_char(CURRENT_TIMESTAMP, 'YYYY-MM-DD HH24:MI:SS'),
+    CONSTRAINT ledger_events_agent_id_fkey
+        FOREIGN KEY (agent_id) REFERENCES ledger_agents(agent_id) ON DELETE SET NULL,
+    CONSTRAINT ledger_events_lane_id_fkey
+        FOREIGN KEY (lane_id) REFERENCES ledger_lanes(lane_id) ON DELETE SET NULL,
+    CONSTRAINT ledger_events_session_id_fkey
+        FOREIGN KEY (session_id) REFERENCES ledger_sessions(session_id) ON DELETE SET NULL,
+    CONSTRAINT ledger_events_lease_id_fkey
+        FOREIGN KEY (lease_id) REFERENCES ledger_leases(lease_id) ON DELETE SET NULL
+);
+
+CREATE TABLE IF NOT EXISTS ledger_probe_files (
+    probe_id            TEXT PRIMARY KEY,
+    component           TEXT NOT NULL DEFAULT 'c3',
+    agent_id            TEXT,
+    lane_id             TEXT,
+    session_id          TEXT,
+    command_id          TEXT,
+    path                TEXT NOT NULL,
+    sha256              TEXT,
+    trusted             BOOLEAN NOT NULL DEFAULT FALSE,
+    reviewed            BOOLEAN NOT NULL DEFAULT FALSE,
+    status              TEXT NOT NULL DEFAULT 'unreviewed',
+    metadata_json       JSONB NOT NULL DEFAULT '{}'::jsonb,
+    created_at          TEXT NOT NULL DEFAULT to_char(CURRENT_TIMESTAMP, 'YYYY-MM-DD HH24:MI:SS'),
+    updated_at          TEXT NOT NULL DEFAULT to_char(CURRENT_TIMESTAMP, 'YYYY-MM-DD HH24:MI:SS'),
+    CONSTRAINT ledger_probe_files_agent_id_fkey
+        FOREIGN KEY (agent_id) REFERENCES ledger_agents(agent_id) ON DELETE SET NULL,
+    CONSTRAINT ledger_probe_files_lane_id_fkey
+        FOREIGN KEY (lane_id) REFERENCES ledger_lanes(lane_id) ON DELETE SET NULL,
+    CONSTRAINT ledger_probe_files_session_id_fkey
+        FOREIGN KEY (session_id) REFERENCES ledger_sessions(session_id) ON DELETE SET NULL
+);
+
+CREATE TABLE IF NOT EXISTS ledger_artifacts (
+    artifact_id         TEXT PRIMARY KEY,
+    component           TEXT NOT NULL DEFAULT 'c3',
+    artifact_type       TEXT NOT NULL,
+    agent_id            TEXT,
+    lane_id             TEXT,
+    session_id          TEXT,
+    command_id          TEXT,
+    event_id            TEXT,
+    path                TEXT NOT NULL,
+    sha256              TEXT,
+    metadata_json       JSONB NOT NULL DEFAULT '{}'::jsonb,
+    created_at          TEXT NOT NULL DEFAULT to_char(CURRENT_TIMESTAMP, 'YYYY-MM-DD HH24:MI:SS'),
+    CONSTRAINT ledger_artifacts_agent_id_fkey
+        FOREIGN KEY (agent_id) REFERENCES ledger_agents(agent_id) ON DELETE SET NULL,
+    CONSTRAINT ledger_artifacts_lane_id_fkey
+        FOREIGN KEY (lane_id) REFERENCES ledger_lanes(lane_id) ON DELETE SET NULL,
+    CONSTRAINT ledger_artifacts_session_id_fkey
+        FOREIGN KEY (session_id) REFERENCES ledger_sessions(session_id) ON DELETE SET NULL,
+    CONSTRAINT ledger_artifacts_event_id_fkey
+        FOREIGN KEY (event_id) REFERENCES ledger_events(event_id) ON DELETE SET NULL
+);
+
+-- -----------------------------------------------------------------------
 -- Indexes
 -- -----------------------------------------------------------------------
 
@@ -249,3 +396,44 @@ CREATE INDEX IF NOT EXISTS idx_worker_leases_run_status
 
 CREATE INDEX IF NOT EXISTS idx_worker_leases_status_expires
     ON orchestration_worker_leases(status, expires_at);
+
+CREATE INDEX IF NOT EXISTS idx_ledger_events_component_created
+    ON ledger_events(component, created_at);
+
+CREATE INDEX IF NOT EXISTS idx_ledger_events_agent_id
+    ON ledger_events(agent_id);
+
+CREATE INDEX IF NOT EXISTS idx_ledger_events_lane_id
+    ON ledger_events(lane_id);
+
+CREATE INDEX IF NOT EXISTS idx_ledger_events_session_id
+    ON ledger_events(session_id);
+
+CREATE INDEX IF NOT EXISTS idx_ledger_events_command_id
+    ON ledger_events(command_id);
+
+CREATE INDEX IF NOT EXISTS idx_ledger_events_event_type
+    ON ledger_events(event_type);
+
+CREATE INDEX IF NOT EXISTS idx_ledger_leases_status_expires
+    ON ledger_leases(status, expires_at);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_ledger_leases_one_active_lane
+    ON ledger_leases(lease_type, lane_id)
+    WHERE status = 'active' AND lease_type = 'lane';
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_ledger_leases_one_active_session_mutation
+    ON ledger_leases(lease_type, lane_id, session_id)
+    WHERE status = 'active' AND lease_type = 'session_mutation';
+
+CREATE INDEX IF NOT EXISTS idx_ledger_probe_files_session_trusted
+    ON ledger_probe_files(session_id, trusted);
+
+CREATE INDEX IF NOT EXISTS idx_ledger_sessions_agent_id
+    ON ledger_sessions(agent_id);
+
+CREATE INDEX IF NOT EXISTS idx_ledger_sessions_lane_id
+    ON ledger_sessions(lane_id);
+
+CREATE INDEX IF NOT EXISTS idx_ledger_lanes_agent_id
+    ON ledger_lanes(agent_id);

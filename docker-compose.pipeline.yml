@@ -44,8 +44,10 @@ services:
       HUNT_OLLAMA_FLASH_ATTENTION: ${OLLAMA_FLASH_ATTENTION:-1}
       HUNT_OLLAMA_KV_CACHE_TYPE: ${OLLAMA_KV_CACHE_TYPE:-q8_0}
       HUNT_RESUME_ARTIFACTS_DIR: ${HUNT_RESUME_ARTIFACTS_DIR:-/tmp/hunt-resumes}
+      HUNT_LEDGER_ROOT: ${HUNT_LEDGER_CONTAINER_ROOT:-/hunt-ledger}
     volumes:
       - ${HUNT_RESUME_STORAGE:-pipeline_resume_data}:/tmp/hunt-resumes
+      - ${HUNT_LEDGER_HOST_ROOT:-${USERPROFILE}/Documents/hunt-logs}:${HUNT_LEDGER_CONTAINER_ROOT:-/hunt-ledger}
     ports:
       - "${HUNT_REVIEW_BIND_HOST:-127.0.0.1}:${HUNT_REVIEW_HOST_PORT:-18080}:8000"
 

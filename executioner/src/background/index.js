@@ -14,7 +14,10 @@ import {
   postDebugLog,
   postExtensionStatus,
   postFillResult,
+  postLedgerEvent,
 } from "../shared/api.js";
+import { runC3Command } from "./commands/api.js";
+import { C3_COMMANDS } from "./commands/registry.js";
 import { runFillForTab, runPendingLlmFillForTab } from "./fill-runner.js";
 import {
   canOfferSafeNextAfterFill,
@@ -405,6 +408,13 @@ function debugIdentityForState(state = {}) {
     pipelineVersion: "v2",
     useFieldPipelineV2: true,
     settingsVersion: Number(settings.settingsVersion || 0),
+    ledgerEnabled: Boolean(settings.ledgerEnabled),
+    ledgerBackendUrl: settings.ledgerBackendUrl || "",
+    agentId: settings.agentId || "",
+    laneId: settings.laneId || "",
+    sessionId: settings.sessionId || "",
+    leaseId: settings.leaseId || "",
+    c3DeepDebugEnabled: Boolean(settings.c3DeepDebugEnabled),
     extensionVersion: manifest.version || "",
     extensionId: chrome.runtime.id || "",
   };
@@ -3665,6 +3675,157 @@ async function getPageSnapshot(tabId) {
   }
 }
 
+function createFieldInspectionFunction() {
+  return function inspectVisibleFieldsForHuntApply() {
+    function normalizeText(value) {
+      return String(value || "")
+        .replace(/\s+/g, " ")
+        .trim();
+    }
+
+    function visible(el) {
+      if (!el || typeof el.getBoundingClientRect !== "function") {
+        return false;
+      }
+      var style = window.getComputedStyle(el);
+      var rect = el.getBoundingClientRect();
+      return (
+        style.display !== "none" &&
+        style.visibility !== "hidden" &&
+        rect.width > 0 &&
+        rect.height > 0
+      );
+    }
+
+    function labelFor(el) {
+      var id = el.id || "";
+      var explicitLabel = id
+        ? document.querySelector('label[for="' + CSS.escape(id) + '"]')
+        : null;
+      var wrappingLabel = el.closest("label");
+      var labelledBy = normalizeText(
+        (el.getAttribute("aria-labelledby") || "")
+          .split(/\s+/)
+          .map(function (labelId) {
+            return document.getElementById(labelId)?.innerText || "";
+          })
+          .join(" "),
+      );
+      return normalizeText(
+        [
+          el.getAttribute("aria-label"),
+          labelledBy,
+          explicitLabel?.innerText,
+          wrappingLabel?.innerText,
+          el.getAttribute("placeholder"),
+          el.getAttribute("name"),
+          el.getAttribute("data-automation-id"),
+          el.id,
+        ]
+          .filter(Boolean)
+          .join(" "),
+      );
+    }
+
+    var fields = Array.from(
+      document.querySelectorAll(
+        [
+          "input",
+          "textarea",
+          "select",
+          "[role='combobox']",
+          "[role='listbox']",
+          "[role='radio']",
+          "[role='checkbox']",
+        ].join(", "),
+      ),
+    )
+      .filter(visible)
+      .slice(0, 120)
+      .map(function (el, index) {
+        var tagName = String(el.tagName || "").toLowerCase();
+        var type = String(el.getAttribute("type") || el.type || "").toLowerCase();
+        var role = String(el.getAttribute("role") || "").toLowerCase();
+        var rawValue = "value" in el ? String(el.value || "") : "";
+        return {
+          index,
+          tagName,
+          type,
+          role,
+          label: labelFor(el).slice(0, 180),
+          required:
+            Boolean(el.required) ||
+            String(el.getAttribute("aria-required") || "").toLowerCase() ===
+              "true",
+          disabled:
+            Boolean(el.disabled) ||
+            String(el.getAttribute("aria-disabled") || "").toLowerCase() ===
+              "true",
+          readOnly: Boolean(el.readOnly),
+          ariaInvalid: String(el.getAttribute("aria-invalid") || ""),
+          autocomplete: String(el.getAttribute("autocomplete") || ""),
+          valuePresent: Boolean(rawValue),
+          valueLength: type === "password" ? 0 : rawValue.length,
+          checked: Boolean(el.checked),
+          optionCount:
+            tagName === "select" && el.options ? Number(el.options.length) : 0,
+        };
+      });
+
+    return {
+      ok: true,
+      href: location.href,
+      title: document.title || "",
+      fieldCount: fields.length,
+      fields,
+    };
+  };
+}
+
+function chooseBestFieldInspection(results = []) {
+  const inspections = (results || [])
+    .map((entry) => ({
+      frameId: entry.frameId,
+      ...(entry.result || {}),
+    }))
+    .filter((entry) => entry.ok);
+  const mainFrame = inspections.find((entry) => entry.frameId === 0);
+  const richest = inspections
+    .slice()
+    .sort((a, b) => Number(b.fieldCount || 0) - Number(a.fieldCount || 0))[0];
+  const selected = mainFrame?.fieldCount ? mainFrame : richest || mainFrame;
+  if (!selected) {
+    return { ok: false, reason: "empty_field_inspection", fields: [] };
+  }
+  return selected;
+}
+
+async function inspectFieldsForTab(tabId) {
+  if (!tabId) {
+    return { ok: false, reason: "missing_tab", fields: [] };
+  }
+  try {
+    const results = await withTimeout(
+      chrome.scripting.executeScript({
+        target: { tabId, allFrames: true },
+        func: createFieldInspectionFunction(),
+      }),
+      3000,
+      () => null,
+    );
+    return results
+      ? chooseBestFieldInspection(results)
+      : { ok: false, reason: "field_inspection_timeout", fields: [] };
+  } catch (error) {
+    return {
+      ok: false,
+      reason: "field_inspection_failed",
+      message: error instanceof Error ? error.message : String(error),
+      fields: [],
+    };
+  }
+}
+
 async function detectEmailVerificationCodePage(tabId) {
   if (!tabId) {
     return { ok: false, reason: "missing_tab_id" };
@@ -6872,7 +7033,18 @@ async function pollC4Once() {
     tab = await chrome.tabs.create({ url: normalized.applyUrl, active: true });
     await new Promise((resolve) => setTimeout(resolve, 2500));
     const fillState = await getExtensionState();
-    const fillResult = await runFillForTab(tab.id, fillState);
+    const fillResult = await runC3Command({
+      commandName: C3_COMMANDS.fillPage,
+      state: fillState,
+      payload: {
+        tabId: tab.id,
+        url: normalized.applyUrl,
+        runId: normalized.runId,
+        triggeredBy: "c4_poll",
+      },
+      actor: { type: "system", surface: "c4_poll" },
+      handler: () => runFillForTab(tab.id, fillState),
+    });
     const payload = resultPayloadFromFill(
       normalized.runId,
       fillResult,
@@ -7753,45 +7925,143 @@ async function handleMessage(message, sender = {}) {
     case "hunt.apply.get_state":
       return { ok: true, ...(await getExtensionState()) };
 
+    case "hunt.apply.detect_page": {
+      const tabId = message.payload?.tabId || sender.tab?.id;
+      const state = await getExtensionState();
+      return runC3Command({
+        commandName: C3_COMMANDS.detectPage,
+        state,
+        payload: message.payload || {},
+        sender,
+        handler: async () => detectWorkflowForTab(tabId),
+      });
+    }
+
+    case "hunt.apply.snapshot_page": {
+      const tabId = message.payload?.tabId || sender.tab?.id;
+      const state = await getExtensionState();
+      return runC3Command({
+        commandName: C3_COMMANDS.snapshotPage,
+        state,
+        payload: message.payload || {},
+        sender,
+        handler: async () => {
+          if (!tabId) {
+            return { ok: false, reason: "missing_tab", snapshot: {} };
+          }
+          const snapshot = await getPageSnapshot(tabId);
+          return { ok: true, snapshot };
+        },
+      });
+    }
+
+    case "hunt.apply.inspect_fields": {
+      const tabId = message.payload?.tabId || sender.tab?.id;
+      const state = await getExtensionState();
+      return runC3Command({
+        commandName: C3_COMMANDS.inspectFields,
+        state,
+        payload: message.payload || {},
+        sender,
+        handler: async () => inspectFieldsForTab(tabId),
+      });
+    }
+
+    case "hunt.apply.inspect_validation": {
+      const tabId = message.payload?.tabId || sender.tab?.id;
+      const state = await getExtensionState();
+      return runC3Command({
+        commandName: C3_COMMANDS.inspectValidation,
+        state,
+        payload: message.payload || {},
+        sender,
+        handler: async () => {
+          if (!tabId) {
+            return {
+              ok: false,
+              reason: "missing_tab",
+              visibleValidationErrors: [],
+            };
+          }
+          const snapshot = await getPageSnapshot(tabId);
+          const visibleValidationErrors = Array.isArray(
+            snapshot.visibleValidationErrors,
+          )
+            ? snapshot.visibleValidationErrors
+            : [];
+          return {
+            ok: true,
+            visibleValidationErrorCount: visibleValidationErrors.length,
+            visibleValidationErrors,
+            snapshot: {
+              href: snapshot.href || "",
+              title: snapshot.title || "",
+              currentStep: snapshot.currentStep || null,
+              frameId: snapshot.frameId || 0,
+            },
+          };
+        },
+      });
+    }
+
     case "hunt.apply.get_active_fill_progress": {
       const tabId = message.payload?.tabId || sender.tab?.id;
-      const progress = tabId ? activeFillProgressByTab.get(tabId) : null;
-      const activeFillRunId = tabId ? activeFillRunByTab.get(tabId) : "";
-      const fillRunId = progress?.fillRunId || activeFillRunId || "";
-      const run = fillRunId ? activeFillRuns.get(fillRunId) : null;
-      if (!run) {
-        return { ok: true, active: false };
-      }
-      return {
-        ok: true,
-        active: true,
-        message: progress?.message || ACTIVE_FILL_PREPARING_MESSAGE,
-        fillRunId,
-        updatedAt: progress?.updatedAt || Date.parse(run.startedAt || "") || 0,
-      };
+      const state = await getExtensionState();
+      return runC3Command({
+        commandName: C3_COMMANDS.getProgress,
+        state,
+        payload: message.payload || {},
+        sender,
+        handler: async () => {
+          const progress = tabId ? activeFillProgressByTab.get(tabId) : null;
+          const activeFillRunId = tabId ? activeFillRunByTab.get(tabId) : "";
+          const fillRunId = progress?.fillRunId || activeFillRunId || "";
+          const run = fillRunId ? activeFillRuns.get(fillRunId) : null;
+          if (!run) {
+            return { ok: true, active: false };
+          }
+          return {
+            ok: true,
+            active: true,
+            message: progress?.message || ACTIVE_FILL_PREPARING_MESSAGE,
+            fillRunId,
+            updatedAt:
+              progress?.updatedAt || Date.parse(run.startedAt || "") || 0,
+          };
+        },
+      });
     }
 
     case "hunt.apply.cancel_fill": {
       const tabId = message.payload?.tabId || sender.tab?.id;
-      const fillRunId =
-        message.payload?.fillRunId || activeFillRunByTab.get(tabId) || "";
-      const cancelled = cancelFillRun(fillRunId);
-      if (tabId && activeFillRunByTab.get(tabId) === fillRunId) {
-        activeFillRunByTab.delete(tabId);
-      }
-      Promise.allSettled([
-        markPageFillCancelled(tabId, fillRunId),
-        logActivity(
-          cancelled ? "fill.cancel_requested" : "fill.cancel_missing",
-          cancelled
-            ? "Requested cancellation for the current fill."
-            : "Tried to cancel fill, but no active fill run matched.",
-          { fillRunId, tabId },
-          cancelled ? "warn" : "blocked",
-        ),
-        hideFillProgress(tabId),
-      ]).catch(() => {});
-      return { ok: cancelled, cancelled, fillRunId };
+      const state = await getExtensionState();
+      return runC3Command({
+        commandName: C3_COMMANDS.cancelSession,
+        state,
+        payload: message.payload || {},
+        sender,
+        handler: async () => {
+          const fillRunId =
+            message.payload?.fillRunId || activeFillRunByTab.get(tabId) || "";
+          const cancelled = cancelFillRun(fillRunId);
+          if (tabId && activeFillRunByTab.get(tabId) === fillRunId) {
+            activeFillRunByTab.delete(tabId);
+          }
+          Promise.allSettled([
+            markPageFillCancelled(tabId, fillRunId),
+            logActivity(
+              cancelled ? "fill.cancel_requested" : "fill.cancel_missing",
+              cancelled
+                ? "Requested cancellation for the current fill."
+                : "Tried to cancel fill, but no active fill run matched.",
+              { fillRunId, tabId },
+              cancelled ? "warn" : "blocked",
+            ),
+            hideFillProgress(tabId),
+          ]).catch(() => {});
+          return { ok: cancelled, cancelled, fillRunId };
+        },
+      });
     }
 
     case "hunt.apply.site_action_log": {
@@ -7895,6 +8165,12 @@ async function handleMessage(message, sender = {}) {
     case "hunt.apply.fill_current_page": {
       const tabId = message.payload?.tabId || sender.tab?.id;
       const state = await getExtensionState();
+      return runC3Command({
+        commandName: C3_COMMANDS.fillPage,
+        state,
+        payload: message.payload || {},
+        sender,
+        handler: async () => {
       if (!state.settings.manualFillEnabled) {
         await logActivity(
           "fill.skip",
@@ -8121,13 +8397,28 @@ async function handleMessage(message, sender = {}) {
         if (
           shouldRunV2PageWalk(state.settings, result, message.payload || {})
         ) {
-          result.pageWalk = await runV2PageWalkAfterFill({
-            tabId,
+          result.pageWalk = await runC3Command({
+            commandName: C3_COMMANDS.pageWalk,
             state,
-            initialResult: result,
-            fillRunId,
-            triggeredBy: message.payload?.triggeredBy || "fill_current_page",
-            allowLlmAnswers,
+            payload: {
+              ...(message.payload || {}),
+              tabId,
+              fillRunId,
+              triggeredBy: `${
+                message.payload?.triggeredBy || "fill_current_page"
+              }:v2_page_walk`,
+            },
+            sender,
+            handler: () =>
+              runV2PageWalkAfterFill({
+                tabId,
+                state,
+                initialResult: result,
+                fillRunId,
+                triggeredBy:
+                  message.payload?.triggeredBy || "fill_current_page",
+                allowLlmAnswers,
+              }),
           });
           result.message =
             result.pageWalk.stoppedReason === "final_submit_visible"
@@ -8309,82 +8600,111 @@ async function handleMessage(message, sender = {}) {
         }
       }
       return result;
+        },
+      });
     }
 
     case "hunt.apply.fill_remaining_with_llm": {
       const tabId = message.payload?.tabId || sender.tab?.id;
       const state = await getExtensionState();
-      const result = await runPendingLlmFillForTab(tabId, state);
-      await sendDebugLog("llm_fill_result", {
-        ok: result.ok,
-        message: result.message,
-        route: result.route,
-        attempt: result.attempt,
-        result: result.result,
-        generatedAnswers: result.generatedAnswers,
-      });
-      await logActivity(
-        result.ok ? "llm_fill.complete" : "llm_fill.failed",
-        result.message ||
-          (result.ok ? "LLM fill completed." : "LLM fill failed."),
-        {
-          filledFieldCount: result.attempt?.filledFieldCount,
-          generatedAnswerCount: result.attempt?.generatedAnswerCount,
-          pendingLlmFieldCount: result.result?.pendingLlmFieldCount || 0,
-          answerDecisionDiagnostics: (
-            result.result?.answerDecisionDiagnostics || []
-          ).slice(0, 20),
+      return runC3Command({
+        commandName: C3_COMMANDS.fillRemainingWithLlm,
+        state,
+        payload: message.payload || {},
+        sender,
+        handler: async () => {
+          const result = await runPendingLlmFillForTab(tabId, state);
+          await sendDebugLog("llm_fill_result", {
+            ok: result.ok,
+            message: result.message,
+            route: result.route,
+            attempt: result.attempt,
+            result: result.result,
+            generatedAnswers: result.generatedAnswers,
+          });
+          await logActivity(
+            result.ok ? "llm_fill.complete" : "llm_fill.failed",
+            result.message ||
+              (result.ok ? "LLM fill completed." : "LLM fill failed."),
+            {
+              filledFieldCount: result.attempt?.filledFieldCount,
+              generatedAnswerCount: result.attempt?.generatedAnswerCount,
+              pendingLlmFieldCount: result.result?.pendingLlmFieldCount || 0,
+              answerDecisionDiagnostics: (
+                result.result?.answerDecisionDiagnostics || []
+              ).slice(0, 20),
+            },
+            result.ok ? "ok" : "failed",
+          );
+          await showPageToast(
+            tabId,
+            result.message ||
+              (result.ok ? "LLM fill completed." : "LLM fill failed."),
+            result.ok ? "info" : "warn",
+          );
+          await notePageFillCompleted(tabId, {
+            triggeredBy:
+              message.payload?.triggeredBy || "fill_remaining_with_llm",
+            ok: Boolean(result?.ok),
+            filledFieldCount: Number(result?.attempt?.filledFieldCount || 0),
+          });
+          result.nextAction = await maybeHandleSafeNextAfterFill({
+            tabId,
+            fillResponse: result,
+            settings: state.settings,
+            triggeredBy:
+              message.payload?.triggeredBy || "fill_remaining_with_llm",
+          });
+          return result;
         },
-        result.ok ? "ok" : "failed",
-      );
-      await showPageToast(
-        tabId,
-        result.message ||
-          (result.ok ? "LLM fill completed." : "LLM fill failed."),
-        result.ok ? "info" : "warn",
-      );
-      await notePageFillCompleted(tabId, {
-        triggeredBy: message.payload?.triggeredBy || "fill_remaining_with_llm",
-        ok: Boolean(result?.ok),
-        filledFieldCount: Number(result?.attempt?.filledFieldCount || 0),
       });
-      result.nextAction = await maybeHandleSafeNextAfterFill({
-        tabId,
-        fillResponse: result,
-        settings: state.settings,
-        triggeredBy: message.payload?.triggeredBy || "fill_remaining_with_llm",
-      });
-      return result;
     }
 
     case "hunt.apply.click_next_after_fill": {
       const tabId = message.payload?.tabId || sender.tab?.id;
-      if (message.payload?.remember) {
-        const state = await getExtensionState();
-        const settings = await saveSettings({
-          ...state.settings,
-          autoClickNextAfterFill: true,
-        });
-        await refreshPollingAlarms(settings);
-        await logActivity("settings.save", "Behavior settings saved.", {
-          autoClickNextAfterFill: true,
-          reason: "next_prompt_remember",
-        });
-      }
-      return clickSafeNextForTab(tabId, {
-        triggeredBy: message.payload?.triggeredBy || "popup_next_prompt",
+      const state = await getExtensionState();
+      return runC3Command({
+        commandName: C3_COMMANDS.clickNextAfterFill,
+        state,
+        payload: message.payload || {},
+        sender,
+        handler: async () => {
+          if (message.payload?.remember) {
+            const settings = await saveSettings({
+              ...state.settings,
+              autoClickNextAfterFill: true,
+            });
+            await refreshPollingAlarms(settings);
+            await logActivity("settings.save", "Behavior settings saved.", {
+              autoClickNextAfterFill: true,
+              reason: "next_prompt_remember",
+            });
+          }
+          return clickSafeNextForTab(tabId, {
+            triggeredBy: message.payload?.triggeredBy || "popup_next_prompt",
+          });
+        },
       });
     }
 
     case "hunt.apply.clear_current_page": {
       const tabId = message.payload?.tabId || sender.tab?.id;
-      await dismissPageTransientUi(tabId);
-      await showFillProgress(tabId, "Clearing page");
-      try {
-        return await clearCurrentPage(tabId);
-      } finally {
-        await hideFillProgress(tabId);
-      }
+      const state = await getExtensionState();
+      return runC3Command({
+        commandName: C3_COMMANDS.clearPage,
+        state,
+        payload: message.payload || {},
+        sender,
+        handler: async () => {
+          await dismissPageTransientUi(tabId);
+          await showFillProgress(tabId, "Clearing page");
+          try {
+            return await clearCurrentPage(tabId);
+          } finally {
+            await hideFillProgress(tabId);
+          }
+        },
+      });
     }
 
     case "hunt.apply.clear_activity_log":
@@ -8417,6 +8737,18 @@ async function handleMessage(message, sender = {}) {
           message.payload?.status || "ok",
         ),
       };
+
+    case "hunt.apply.content_ledger_event": {
+      const state = await getExtensionState();
+      const event = message.payload || {};
+      if (!state.settings?.ledgerEnabled) {
+        return { ok: false, skipped: true, reason: "ledger_disabled" };
+      }
+      if (!event.event_type || event.actor?.type !== "human") {
+        return { ok: false, reason: "invalid_content_ledger_event" };
+      }
+      return postLedgerEvent(state.settings, event);
+    }
 
     default:
       return {

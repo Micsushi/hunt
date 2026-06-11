@@ -21,6 +21,10 @@ function parseArgs(argv) {
     port: DEFAULT_PORT,
     backendUrl: process.env.HUNT_BACKEND_URL || "http://127.0.0.1:8004",
     extensionId: process.env.HUNT_C3_EXTENSION_ID || DEFAULT_EXTENSION_ID,
+    agentId: process.env.HUNT_C3_AGENT_ID || "",
+    laneId: process.env.HUNT_C3_LANE_ID || "",
+    sessionId: process.env.HUNT_C3_SESSION_ID || "",
+    leaseId: process.env.HUNT_C3_LEASE_ID || "",
     envFile: ".env",
     seedWorkdayProfile: false,
     autoNext: false,
@@ -35,6 +39,14 @@ function parseArgs(argv) {
       args.backendUrl = argv[++idx] || args.backendUrl;
     } else if (arg === "--extension-id") {
       args.extensionId = argv[++idx] || args.extensionId;
+    } else if (arg === "--agent-id") {
+      args.agentId = argv[++idx] || args.agentId;
+    } else if (arg === "--lane-id") {
+      args.laneId = argv[++idx] || args.laneId;
+    } else if (arg === "--session-id") {
+      args.sessionId = argv[++idx] || args.sessionId;
+    } else if (arg === "--lease-id") {
+      args.leaseId = argv[++idx] || args.leaseId;
     } else if (arg === "--env-file") {
       args.envFile = argv[++idx] || args.envFile;
     } else if (arg === "--seed-workday-profile") {
@@ -68,6 +80,10 @@ function usage() {
       "Options:",
       "  --backend-url <url>  Backend URL. Default: http://127.0.0.1:8004",
       "  --extension-id <id> Unpacked C3 extension ID",
+      "  --agent-id <id>     Ledger agent id. Default: agent-pchrome-<port>",
+      "  --lane-id <id>      Ledger lane id. Default: lane-pchrome-<port>",
+      "  --session-id <id>   Ledger session id. Default: session-pchrome-<port>",
+      "  --lease-id <id>     Optional active ledger lease id",
       "  --env-file <path>    Env file fallback. Default: .env",
       "  --port <port>        Chrome DevTools port. Default: 9222",
       "  --seed-workday-profile Seed p chrome profile defaults for Workday testing",
@@ -398,6 +414,10 @@ async function main() {
       `(async () => {
         const backendUrl = ${js(args.backendUrl)};
         const serviceToken = ${js(token)};
+        const agentId = ${js(args.agentId || `agent-pchrome-${args.port}`)};
+        const laneId = ${js(args.laneId || `lane-pchrome-${args.port}`)};
+        const sessionId = ${js(args.sessionId || `session-pchrome-${args.port}`)};
+        const leaseId = ${js(args.leaseId || "")};
         const seedProfile = ${js(args.seedWorkdayProfile)};
         const autoNext = ${js(args.autoNext)};
         const inspectOnly = ${js(args.inspectOnly)};
@@ -423,6 +443,12 @@ async function main() {
           backendUrl,
           serviceToken,
           debugLogSinkEnabled: true,
+          ledgerEnabled: true,
+          ledgerBackendUrl: backendUrl,
+          agentId,
+          laneId,
+          sessionId,
+          leaseId,
           autoClickNextAfterFill: autoNext,
         };
         const nextRuntimeConfig = {
@@ -434,6 +460,12 @@ async function main() {
               backendUrl: currentRuntimeConfig.backendUrl,
               serviceToken: currentRuntimeConfig.serviceToken,
               debugLogSinkEnabled: currentRuntimeConfig.debugLogSinkEnabled,
+              ledgerEnabled: currentRuntimeConfig.ledgerEnabled,
+              ledgerBackendUrl: currentRuntimeConfig.ledgerBackendUrl,
+              agentId: currentRuntimeConfig.agentId,
+              laneId: currentRuntimeConfig.laneId,
+              sessionId: currentRuntimeConfig.sessionId,
+              leaseId: currentRuntimeConfig.leaseId,
               autoClickNextAfterFill: currentRuntimeConfig.autoClickNextAfterFill
             },
             nextRuntimeConfigCore
@@ -447,6 +479,14 @@ async function main() {
           serviceToken: nextRuntimeConfig.serviceToken || current.serviceToken || "",
           debugLogSinkEnabled:
             nextRuntimeConfig.debugLogSinkEnabled ?? current.debugLogSinkEnabled,
+          ledgerEnabled:
+            nextRuntimeConfig.ledgerEnabled ?? current.ledgerEnabled,
+          ledgerBackendUrl:
+            nextRuntimeConfig.ledgerBackendUrl || current.ledgerBackendUrl || "",
+          agentId: nextRuntimeConfig.agentId || current.agentId || "",
+          laneId: nextRuntimeConfig.laneId || current.laneId || "",
+          sessionId: nextRuntimeConfig.sessionId || current.sessionId || "",
+          leaseId: nextRuntimeConfig.leaseId || current.leaseId || "",
           autoClickNextAfterFill:
             nextRuntimeConfig.autoClickNextAfterFill ?? current.autoClickNextAfterFill,
           useFieldPipelineV2: true
@@ -466,6 +506,14 @@ async function main() {
             serviceToken: inspectedRuntimeConfig.serviceToken || current.serviceToken || "",
             debugLogSinkEnabled:
               inspectedRuntimeConfig.debugLogSinkEnabled ?? current.debugLogSinkEnabled,
+            ledgerEnabled:
+              inspectedRuntimeConfig.ledgerEnabled ?? current.ledgerEnabled,
+            ledgerBackendUrl:
+              inspectedRuntimeConfig.ledgerBackendUrl || current.ledgerBackendUrl || "",
+            agentId: inspectedRuntimeConfig.agentId || current.agentId || "",
+            laneId: inspectedRuntimeConfig.laneId || current.laneId || "",
+            sessionId: inspectedRuntimeConfig.sessionId || current.sessionId || "",
+            leaseId: inspectedRuntimeConfig.leaseId || current.leaseId || "",
             autoClickNextAfterFill:
               inspectedRuntimeConfig.autoClickNextAfterFill ?? current.autoClickNextAfterFill,
             useFieldPipelineV2: true
@@ -474,6 +522,12 @@ async function main() {
             backendUrl: inspectedEffective.backendUrl || "",
             browserContext: currentBrowserContext.name || "",
             debugLogSinkEnabled: Boolean(inspectedEffective.debugLogSinkEnabled),
+            ledgerEnabled: Boolean(inspectedEffective.ledgerEnabled),
+            ledgerBackendUrl: inspectedEffective.ledgerBackendUrl || "",
+            agentId: inspectedEffective.agentId || "",
+            laneId: inspectedEffective.laneId || "",
+            sessionId: inspectedEffective.sessionId || "",
+            leaseId: inspectedEffective.leaseId || "",
             hasServiceToken: Boolean(inspectedEffective.serviceToken),
             profileCounts,
             useFieldPipelineV2: true,
@@ -635,6 +689,12 @@ async function main() {
           backendUrl: effective.backendUrl,
           browserContext: nextBrowserContext.name,
           debugLogSinkEnabled: effective.debugLogSinkEnabled,
+          ledgerEnabled: Boolean(effective.ledgerEnabled),
+          ledgerBackendUrl: effective.ledgerBackendUrl || "",
+          agentId: effective.agentId || "",
+          laneId: effective.laneId || "",
+          sessionId: effective.sessionId || "",
+          leaseId: effective.leaseId || "",
           hasServiceToken: Boolean(effective.serviceToken),
           profileCounts,
           useFieldPipelineV2: effective.useFieldPipelineV2,
@@ -653,6 +713,12 @@ async function main() {
           backendUrl: result.backendUrl,
           browserContext: result.browserContext,
           debugLogSinkEnabled: result.debugLogSinkEnabled,
+          ledgerEnabled: result.ledgerEnabled,
+          ledgerBackendUrl: result.ledgerBackendUrl,
+          agentId: result.agentId,
+          laneId: result.laneId,
+          sessionId: result.sessionId,
+          leaseId: result.leaseId,
           useFieldPipelineV2: result.useFieldPipelineV2,
           autoClickNextAfterFill: result.autoClickNextAfterFill,
           hasServiceToken: result.hasServiceToken,

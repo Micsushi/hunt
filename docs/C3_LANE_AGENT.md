@@ -27,6 +27,9 @@ same evidence. When the budget is exhausted, preserve the lane and report
 ## Role
 
 - Own exactly one job/lane.
+- In the target agent-command-ledger workflow, own exactly one mutation lease at
+  a time for the assigned C3 session. Other agents may read the same logs, but
+  they must not mutate the same page while your lease is active.
 - Classify the failure by UI primitive before recommending a fix. Use
   `docs/C3_PRIMITIVE_DEBUGGING.md`.
 - Use only the assigned isolated p Chrome lane.
@@ -45,6 +48,9 @@ same evidence. When the budget is exhausted, preserve the lane and report
 - Write findings only to the assigned lane section in
   `logs\<batch-id>\current_debug.md`.
 - Do not modify C3 code.
+- In the target ledger workflow, write proof/probe scripts outside the repo
+  under the session/agent probe folder. Probe files start `trusted=false` and
+  remain for main-agent/user review; do not remove them yourself.
 - Do not spawn additional agents or duplicate your lane for the same job. A new
   agent set starts only with a new job set or an explicit main-agent handoff.
 - After a Review result, capture final UI, proof, console, and audit artifacts,
@@ -88,6 +94,45 @@ same evidence. When the budget is exhausted, preserve the lane and report
 11. Never click final Submit.
 12. After your report and artifacts are complete, leave p Chrome open and
     return. The main agent owns all p Chrome cleanup.
+
+## Agent Command Ledger Mode
+
+Use this mode once the Hunt MCP adapter and C3 command bus are available. Until
+then, follow the existing first-pass order above and keep reports compatible
+with these fields.
+
+1. Read `C:\Users\sushi\Documents\hunt-logs\LEDGER_STRUCTURE.md`.
+2. Read `C:\Users\sushi\Documents\hunt-logs\active.json`.
+3. Confirm your assigned `agent_id`, `lane_id`, `session_id`, and p Chrome
+   port.
+4. Claim a session mutation lease before any mutating page action, CDP call, or
+   probe script.
+5. Use MCP/C3 commands first for fill, inspect, click/type/select, snapshot,
+   CDP, and probe execution.
+6. If the session/browser crashes, report `session.failed`; open a replacement
+   only through the lane flow so the new `session_id` records
+   `parent_session_id`.
+7. If another agent owns the session lease, do not mutate. Read logs only, or
+   request transfer/expiry handling from the main agent.
+8. If a human action changes the page, record it as actor `human`; treat your
+   lease as interrupted or stale until you verify current state.
+9. Include event ids and command ids in your report instead of pasting long raw
+   logs.
+
+Agent log answers what you did across sessions. Session log answers what
+exactly happened inside this browser/job/session.
+
+For any probe script, report:
+
+```text
+probe_id:
+path:
+trusted: false
+purpose:
+session_id:
+command_id:
+result:
+```
 
 ## If Review Is Reached
 
@@ -134,6 +179,17 @@ the final classification is non-Workday, dead posting, external assessment,
 CAPTCHA/MFA, or another site/posting state outside C3 fill completion.
 Preserve the p Chrome for every hard failure and every site/posting-state stop.
 The user wants to see these lanes.
+
+Root-cause standard:
+
+- Do not report only what went wrong. Explain why the normal C3 path failed.
+- Record expected path, actual path, divergence point, causal mechanism, and
+  ruled-out explanations.
+- If root cause is not proven, report `root_cause_unknown` and the next
+  one-variable test needed. Do not present symptoms as a completed diagnosis.
+- A failed patch retest is not enough by itself. Explain why the patch did not
+  affect the failure path, such as stale extension, wrong module/path, empty
+  inventory, repair scope not selected, timeout before repair, or detection miss.
 
 Probe budget:
 
@@ -192,6 +248,9 @@ Write this shape into `current_debug.md` and return the same summary:
 ```text
 job:
 lane:
+agent_id:
+session_id:
+lease_id:
 status:
 error_type:
 final_url:
@@ -201,6 +260,12 @@ bad_fills:
 unknowns:
 failure_point:
 primitive:
+expected_c3_path:
+actual_c3_path:
+divergence:
+root_cause:
+ruled_out:
+next_discriminating_test:
 user_like_probe:
 cdp_probe:
 field_focused:
@@ -214,6 +279,9 @@ probe_budget:
 probe_attempts:
 ui_probe:
 proof_script:
+event_ids:
+command_ids:
+probe_ids:
 recommended_c3_change:
 agent_feedback:
 new_error_type:
@@ -221,7 +289,8 @@ artifacts:
 ```
 
 For Review lanes, focus on `bad_fills` and `unknowns`. For failed lanes, focus
-on `primitive`, `failure_point`, `user_like_probe`, `cdp_probe`,
+on `primitive`, `failure_point`, `expected_c3_path`, `actual_c3_path`,
+`divergence`, `root_cause`, `ruled_out`, `user_like_probe`, `cdp_probe`,
 `commit_proof`, `loop_check`, and `recommended_c3_change`. `agent_feedback`
 must tell the next agent what to try next or what not to repeat. Use
 `new_error_type` when the existing taxonomy does not describe the failure;

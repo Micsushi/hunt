@@ -24,6 +24,8 @@ frontend/dist/
 frontend/node_modules/
 dist/
 logs/
+.hunt-ledger/
+hunt-logs/
 .playwright-mcp/
 
 # Local agent context (private, not for repo)
@@ -38,3 +40,7 @@ AGENTS.md
 .codex/
 .agents/
 docs/agents/
+
+# Local agent implementation plans / task breakdowns
+docs/superpowers/plans/2026-06-10-c3-agent-command-ledger.md
+docs/superpowers/plans/c3-agent-command-ledger-workpackages/

@@ -64,6 +64,31 @@ Site/posting stops such as Workday maintenance, dead/closed postings,
 non-application pages, CAPTCHA/MFA, external assessment, or tenant outage do
 not count as hard C3 failures.
 
+Default active capacity is `6` unless the main-agent prompt or future config
+sets a lower value. This number comes from Codex subagent capacity, not from C3
+product logic, and should not be hardcoded into the C3 command layer.
+
+### Future MCP/Command-Ledger Order
+
+Once `tools/hunt_mcp` and the C3 command bus are available, keep steps 1-6 for
+p Chrome setup, then use this control path:
+
+1. Main agent reads `C:\Users\sushi\Documents\hunt-logs\LEDGER_STRUCTURE.md`
+   and `active.json`.
+2. Main agent creates or selects `agent_id`, `lane_id`, and `session_id` for
+   each active p Chrome lane.
+3. Subagent claims a session mutation lease through MCP before mutating the
+   page.
+4. Subagent starts fill/inspect/probe through MCP C3 commands, not direct
+   smoke-script workflow control.
+5. Subagent may use CDP and temporary probe scripts only through logged command
+   paths for its owned session.
+6. Subagent reports event ids, command ids, probe ids, and artifact paths.
+
+Current scripts remain useful for launch, preflight, one-off proof, and
+compatibility while the command path is landing. New reusable behavior should
+move into commands rather than long-lived scripts.
+
 Before picking ports, inspect active p Chrome lane owners and avoid any ports
 already used by another batch:
 

@@ -474,6 +474,274 @@
     }
   }
 
+  function contentLedgerEventId() {
+    const random = crypto?.randomUUID
+      ? crypto.randomUUID().replace(/-/g, "").slice(0, 18)
+      : Math.random().toString(36).slice(2, 20);
+    return `evt_${random}`;
+  }
+
+  function joinContentLedgerUrl(baseUrl, path) {
+    return `${String(baseUrl || "").replace(/\/+$/, "")}/${String(path || "").replace(/^\/+/, "")}`;
+  }
+
+  function contentLedgerHeaders(settings = {}) {
+    const headers = {
+      Accept: "application/json",
+      "Content-Type": "application/json",
+    };
+    if (settings.serviceToken) {
+      headers.Authorization = `Bearer ${settings.serviceToken}`;
+    }
+    return headers;
+  }
+
+  function redactLedgerValue(key, value) {
+    if (
+      /password|token|secret|authorization|credential|api[-_]?key|service[-_]?token/i.test(
+        String(key || ""),
+      )
+    ) {
+      return "[redacted]";
+    }
+    if (typeof value === "string") {
+      return value.slice(0, 500);
+    }
+    return value;
+  }
+
+  function redactLedgerPayload(value, key = "") {
+    if (Array.isArray(value)) {
+      return value.slice(0, 40).map((entry) => redactLedgerPayload(entry, key));
+    }
+    if (value && typeof value === "object") {
+      return Object.fromEntries(
+        Object.entries(value).map(([entryKey, entryValue]) => [
+          entryKey,
+          redactLedgerPayload(redactLedgerValue(entryKey, entryValue), entryKey),
+        ]),
+      );
+    }
+    return redactLedgerValue(key, value);
+  }
+
+  async function postContentLedgerEvent({
+    settings = cachedStateResponse?.settings || {},
+    eventType,
+    actorSurface = "content_ui",
+    payload = {},
+    redactionRules = ["sensitive_key_redacted", "string_length_limited"],
+  } = {}) {
+    if (!settings?.ledgerEnabled || !eventType) {
+      return { ok: false, skipped: true, reason: "ledger_disabled" };
+    }
+    const body = {
+      event_id: contentLedgerEventId(),
+      ts: new Date().toISOString(),
+      component: "c3",
+      event_type: eventType,
+      agent_id: settings.agentId || "",
+      lane_id: settings.laneId || "",
+      session_id: settings.sessionId || "",
+      lease_id: settings.leaseId || "",
+      actor: {
+        type: "human",
+        id: settings.humanActorId || "human_local",
+        surface: actorSurface,
+      },
+      payload: redactLedgerPayload({
+        url: window.location.href,
+        title: document.title,
+        ...payload,
+      }),
+      redaction: {
+        applied: true,
+        rules: redactionRules,
+      },
+    };
+    try {
+      return await chrome.runtime.sendMessage({
+        type: "hunt.apply.content_ledger_event",
+        payload: body,
+      });
+    } catch (error) {
+      console.warn("C3 content ledger event post failed:", error);
+      return {
+        ok: false,
+        reason: error instanceof Error ? error.message : String(error),
+      };
+    }
+  }
+
+  function logHumanUiAction(action, summary, details = {}, status = "ok") {
+    logPageUiEvent(action, summary, details, status);
+    postContentLedgerEvent({
+      eventType: "human.ui.click",
+      actorSurface: "content_ui",
+      payload: {
+        action,
+        summary,
+        status,
+        details,
+      },
+    }).catch(() => {});
+  }
+
+  function deepDebugSelector(element) {
+    if (!element || element.nodeType !== Node.ELEMENT_NODE) {
+      return "";
+    }
+    const tag = String(element.tagName || "").toLowerCase();
+    const id = element.id ? `#${CSS.escape(element.id)}` : "";
+    if (id) {
+      return `${tag}${id}`;
+    }
+    const dataId =
+      element.getAttribute("data-automation-id") ||
+      element.getAttribute("data-testid") ||
+      element.getAttribute("name");
+    if (dataId) {
+      return `${tag}[${dataId.replace(/["\\]/g, "")}]`;
+    }
+    const classNames = Array.from(element.classList || [])
+      .slice(0, 3)
+      .map((name) => `.${CSS.escape(name)}`)
+      .join("");
+    return `${tag}${classNames}`;
+  }
+
+  function nearbyLabel(element) {
+    if (!element || element.nodeType !== Node.ELEMENT_NODE) {
+      return "";
+    }
+    const explicitLabel =
+      element.id && document.querySelector(`label[for="${CSS.escape(element.id)}"]`);
+    const candidates = [
+      element.getAttribute("aria-label"),
+      element.getAttribute("placeholder"),
+      element.getAttribute("title"),
+      explicitLabel?.innerText,
+      element.closest("label")?.innerText,
+      element
+        .closest('[role="group"], fieldset, [data-automation-id]')
+        ?.querySelector("legend, label")?.innerText,
+    ];
+    return String(candidates.find(Boolean) || "")
+      .replace(/\s+/g, " ")
+      .trim()
+      .slice(0, 160);
+  }
+
+  function inputValueLength(element) {
+    if (!element || !("value" in element)) {
+      return 0;
+    }
+    return String(element.value || "").length;
+  }
+
+  function deepDebugMetadata(event) {
+    const element =
+      event.target?.nodeType === Node.ELEMENT_NODE
+        ? event.target
+        : event.target?.parentElement;
+    const tag = String(element?.tagName || "").toLowerCase();
+    const type = String(element?.getAttribute?.("type") || "").toLowerCase();
+    const key = event.type === "keydown" ? String(event.key || "") : "";
+    const safeKey =
+      key && key.length > 1 && !/^[\w\s]$/i.test(key) ? key : "";
+    return {
+      eventName: event.type,
+      selector: deepDebugSelector(element),
+      tag,
+      type,
+      role: element?.getAttribute?.("role") || "",
+      label: nearbyLabel(element),
+      className: String(element?.className || "").slice(0, 200),
+      valueLength: inputValueLength(element),
+      checked:
+        type === "checkbox" || type === "radio"
+          ? Boolean(element?.checked)
+          : undefined,
+      key: safeKey,
+      keyCategory:
+        event.type === "keydown"
+          ? key.length === 1
+            ? "printable_redacted"
+            : safeKey || "control"
+          : "",
+      rawValueRedacted: true,
+      url: window.location.href,
+      title: document.title,
+    };
+  }
+
+  function installDeepDebugLogging(settings = {}) {
+    if (!settings?.c3DeepDebugEnabled) {
+      return;
+    }
+    const logDeepDebug = (event) => {
+      const metadata = deepDebugMetadata(event);
+      const humanOverride = Boolean(settings.leaseId || settings.sessionId);
+      logPageUiEvent(
+        "apply_page_deep_debug",
+        `Deep debug ${event.type} on apply page.`,
+        {
+          actor: {
+            type: "human",
+            id: "human_local",
+            surface: "apply_page_deep_debug",
+          },
+          eventType: humanOverride
+            ? "human.override"
+            : "human.apply_page_deep_debug",
+          sourceEventType: "human.apply_page_deep_debug",
+          agentId: settings.agentId || "",
+          laneId: settings.laneId || "",
+          sessionId: settings.sessionId || "",
+          leaseId: settings.leaseId || "",
+          redaction: {
+            applied: true,
+            rules: ["raw_input_value_redacted", "printable_key_redacted"],
+          },
+          ...metadata,
+        },
+      );
+      postContentLedgerEvent({
+        settings,
+        eventType: humanOverride
+          ? "human.override"
+          : "human.apply_page_deep_debug",
+        actorSurface: "apply_page_deep_debug",
+        payload: {
+          action: "apply_page_deep_debug",
+          summary: `Deep debug ${event.type} on apply page.`,
+          status: "ok",
+          domEventType: event.type,
+          metadata,
+        },
+        redactionRules: [
+          "raw_input_value_redacted",
+          "printable_key_redacted",
+          "sensitive_key_redacted",
+        ],
+      }).catch(() => {});
+    };
+    ["click", "input", "change", "keydown"].forEach((eventName) => {
+      document.addEventListener(eventName, logDeepDebug, true);
+    });
+    logPageUiEvent(
+      "apply_page_deep_debug.enabled",
+      "Enabled deep apply-page debug logging.",
+      {
+        actor: {
+          type: "human",
+          id: "human_local",
+          surface: "apply_page_deep_debug",
+        },
+      },
+    );
+  }
+
   function runtimeMessageWithTimeout(message, timeoutMs, timeoutReason) {
     let timer = null;
     const timeout = new Promise((resolve) => {
@@ -757,7 +1025,7 @@
       .getElementById("hunt-apply-fill-summary-close")
       ?.addEventListener("click", () => {
         removeFillSummary();
-        logPageUiEvent(
+        logHumanUiAction(
           "ui.fill_summary.dismiss",
           "Dismissed fill summary popup.",
           { status },
@@ -1128,7 +1396,7 @@
     host.shadowRoot.getElementById("dismiss").addEventListener("click", () => {
       dismissedPromptSignatures.add(promptSignature({ kind, inputCount }));
       removePrompt();
-      logPageUiEvent(
+      logHumanUiAction(
         "ui.detect_prompt.dismiss",
         "Dismissed detected-page prompt.",
         {
@@ -1162,7 +1430,7 @@
         removePrompt();
         removeToasts();
         showFillProgress({ message: promptProgressMessage(kind) });
-        logPageUiEvent(
+        logHumanUiAction(
           "ui.detect_prompt.fill_click",
           "Clicked detected-page fill.",
           {
@@ -1322,7 +1590,7 @@
       </div>
     `;
     host.shadowRoot.getElementById("dismiss").addEventListener("click", () => {
-      logPageUiEvent("ui.llm_prompt.dismiss", "Dismissed LLM prompt.", {
+      logHumanUiAction("ui.llm_prompt.dismiss", "Dismissed LLM prompt.", {
         fieldCount: Number(fieldCount || 0),
         filledFieldCount: Number(filledFieldCount || 0),
       });
@@ -1334,7 +1602,7 @@
         const button = host.shadowRoot.getElementById("use-llm");
         button.textContent = "Thinking...";
         button.disabled = true;
-        logPageUiEvent("ui.llm_prompt.use_click", "Clicked LLM prompt.", {
+        logHumanUiAction("ui.llm_prompt.use_click", "Clicked LLM prompt.", {
           fieldCount: Number(fieldCount || 0),
           filledFieldCount: Number(filledFieldCount || 0),
         });
@@ -1692,6 +1960,7 @@
   });
 
   await maybeShowPrompt("initial_load");
+  installDeepDebugLogging(stateResponse?.settings || {});
   installNavigationWatchers();
   watchPageReadinessForPrompt();
 

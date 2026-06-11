@@ -262,6 +262,46 @@
     );
   }
 
+  function popupOwner(field) {
+    var el = field?.element;
+    var listbox = el ? workdayActiveListboxFor(el) : null;
+    return {
+      listbox: root.audit?.summarizeElement(listbox) || {},
+      container:
+        root.audit?.summarizeElement(root.workdayUi?.nearestWorkdayField?.(el)) ||
+        {},
+      activeElement: root.audit?.summarizeElement(document.activeElement) || {},
+    };
+  }
+
+  function emitWorkdayEvent(audit, eventType, field, payload) {
+    root.audit?.emitEvent(
+      audit,
+      eventType,
+      root.audit.fieldPayload(field, Object.assign({ popupOwner: popupOwner(field) }, payload || {})),
+    );
+  }
+
+  function emitWorkdayOptionsCollected(field, context, options, waitResult, reason) {
+    emitWorkdayEvent(context?.audit, "options.collected", field, {
+      status: (options || []).length ? "ok" : "warn",
+      reason: reason || ((options || []).length ? "visible_workday_options" : "no_visible_workday_options"),
+      optionCount: (options || []).length,
+      waitAttempts: waitResult?.attempts || 0,
+      waitedMs: waitResult?.waitedMs || 0,
+      scrollAttempts: waitResult?.scrollAttempts || 0,
+      scrolledToPreferred: Boolean(waitResult?.scrolledToPreferred),
+      options: (options || []).slice(0, 40).map(function (option) {
+        return {
+          label: option.label || "",
+          isCategory: Boolean(option.isCategory),
+          placeholder: Boolean(option.placeholder),
+        };
+      }),
+    });
+    return options || [];
+  }
+
   function answerTexts(answer, option) {
     var texts = [answer?.value, option?.label, option?.value];
     var aliases = answer?.optionAliases || {};
@@ -540,6 +580,14 @@
           optionElement: root.audit?.summarizeElement(target.element) || {},
         },
       });
+      emitWorkdayEvent(audit, "option.clicked", field, {
+        status: "info",
+        reason: "workday_skill_checkbox_click",
+        selectedOption: target.label,
+        skillAttempt: attempted.length,
+        selectedPillsBefore: selectedTechnicalSkillLabels(field),
+        optionElement: root.audit?.summarizeElement(target.element) || {},
+      });
       await clickWorkdayOption(target);
       var start = Date.now();
       while (
@@ -553,6 +601,16 @@
       } else {
         missing.push(skill);
       }
+      emitWorkdayEvent(audit, "option.committed", field, {
+        status: selectedTechnicalSkillMatches(field, target, skillAnswer)
+          ? "ok"
+          : "warn",
+        reason: selectedTechnicalSkillMatches(field, target, skillAnswer)
+          ? "workday_skill_pill_verified"
+          : "workday_skill_pill_missing",
+        selectedOption: target.label,
+        selectedPills: selectedTechnicalSkillLabels(field),
+      });
       clearWorkdaySearchText(field);
       await closePopup(field);
       await sleep(120);
@@ -574,6 +632,15 @@
     }
     var state = workdayCommittedState(field);
     var ok = selected.length > 0;
+    emitWorkdayEvent(audit, ok ? "validation.cleared" : "validation.visible", field, {
+      status: ok ? "ok" : "warn",
+      reason: ok
+        ? "workday_skill_validation_cleared"
+        : "workday_skill_validation_visible",
+      selectedOption: selectedTechnicalSkillLabels(field).join("; "),
+      selectedCount: selected.length,
+      missingCount: missing.length,
+    });
     if (missing.length) {
       root.audit?.pushIssue(audit, fieldAudit, {
         kind: ok
@@ -1901,7 +1968,10 @@
           committedText: committedLabel,
         },
       });
-      return [
+      return emitWorkdayOptionsCollected(
+        field,
+        context,
+        [
         {
           label: committedLabel,
           value: committedLabel,
@@ -1909,7 +1979,10 @@
           placeholder: false,
           committed: true,
         },
-      ];
+        ],
+        { attempts: 0, waitedMs: 0 },
+        "committed_workday_selection",
+      );
     }
     // Most Workday combobox/listbox fields should be opened without typing because
     // source-style live search can crash Workday before its internal store is ready.
@@ -1940,11 +2013,25 @@
       field,
     );
     var options = waitResult.options;
+    if (field.workday?.kind === "phone_country_code") {
+      options = options.filter(function (candidate) {
+        return /\+\d|canada|united states|phone|country/i.test(
+          candidate.label || "",
+        );
+      });
+    }
     if (!options.length && searchText && !isSkillsSearch) {
       keyOn(field.element, "Enter");
       await sleep(180);
       waitResult = await waitForWorkdayOptions([], 2600, field);
       options = waitResult.options;
+      if (field.workday?.kind === "phone_country_code") {
+        options = options.filter(function (candidate) {
+          return /\+\d|canada|united states|phone|country/i.test(
+            candidate.label || "",
+          );
+        });
+      }
     }
     if (options.length) {
       var scrollResult = await collectPreferredWorkdayOptionsWithScroll(
@@ -1999,7 +2086,10 @@
         postPopupState.text || postPopupState.rawValue || "",
       );
       if (committedStateMatches(postPopupState, answer, null)) {
-        return [
+        return emitWorkdayOptionsCollected(
+          field,
+          context,
+          [
           {
             label: postPopupLabel,
             value: postPopupLabel,
@@ -2008,10 +2098,19 @@
             committed: true,
             committedReason: "popup_empty_already_committed",
           },
-        ];
+          ],
+          waitResult,
+          "popup_empty_already_committed",
+        );
       }
     }
-    return options;
+    return emitWorkdayOptionsCollected(
+      field,
+      context,
+      options,
+      waitResult,
+      options.length ? "visible_workday_options" : "no_visible_workday_options",
+    );
   }
 
   async function findHierarchicalWorkdayOption(
@@ -2052,6 +2151,12 @@
           categoryIndex: idx,
           categoryScore: sourceCategoryScore(category, texts),
         },
+      });
+      emitWorkdayEvent(audit, "option.clicked", field, {
+        status: "info",
+        reason: "workday_prompt_category_open",
+        selectedOption: category.label,
+        optionElement: root.audit?.summarizeElement(category.element) || {},
       });
       await clickWorkdayOption(category);
       var waitResult = await waitForWorkdayOptions(beforeLabels, 2600, field);
@@ -2101,6 +2206,15 @@
           }),
         },
       });
+      emitWorkdayOptionsCollected(
+        field,
+        { audit: audit, fieldAudit: fieldAudit },
+        childOptions,
+        waitResult,
+        childOptions.length
+          ? "prompt_category_children_visible"
+          : "prompt_category_children_missing",
+      );
       var childScrollResult = childOptions.length
         ? await collectPreferredWorkdayOptionsWithScroll(
             field,
@@ -2398,7 +2512,27 @@
   }
 
   function bestVisiblePhoneCountryOption(input, answerText) {
-    return visibleOptionCandidates(input)
+    var scoped = visibleOptionCandidates(input)
+      .map(function (candidate) {
+        return scorePhoneCountryOption(candidate, answerText);
+      })
+      .filter(function (candidate) {
+        return (
+          candidate.score >= 100 && norm(candidate.label).includes("canada")
+        );
+      })
+      .sort(function (a, b) {
+        return b.score - a.score;
+      })[0];
+    if (scoped) {
+      return scoped;
+    }
+    return Array.from(
+      document.querySelectorAll(
+        '[role="option"], [data-automation-id="menuItem"], [data-automation-id="promptOption"]',
+      ),
+    )
+      .filter(visible)
       .map(function (candidate) {
         return scorePhoneCountryOption(candidate, answerText);
       })
@@ -2562,6 +2696,10 @@
       answerValue: String(answer?.value ?? "").slice(0, 80),
       optionLabel: option?.label || null,
     });
+    emitWorkdayEvent(audit, "field.focus", field, {
+      status: "info",
+      reason: "workday_popup_fill_started",
+    });
     if (isTechnicalSkillsField(field, answer)) {
       return fillTechnicalSkills({ field, answer, option, audit, fieldAudit });
     }
@@ -2705,6 +2843,12 @@
         "option_keyboard",
       );
       if (trustedKeyboard?.ok) {
+        emitWorkdayEvent(audit, "option.clicked", field, {
+          status: "info",
+          reason: "trusted_keyboard_option_attempt",
+          selectedOption: target.label,
+          trustedKeyboard: trustedKeyboard,
+        });
         await sleep(650);
         var settled = await settleWorkdayCommit(field, answer, target);
         state = settled.state;
@@ -2714,6 +2858,12 @@
       }
     }
     if (!ok) {
+      emitWorkdayEvent(audit, "option.clicked", field, {
+        status: "info",
+        reason: "workday_option_dom_click",
+        selectedOption: target.label,
+        optionElement: root.audit?.summarizeElement(target.element) || {},
+      });
       await clickWorkdayOption(target);
       var clickSettled = await settleWorkdayCommit(field, answer, target);
       state = clickSettled.state;
@@ -2724,6 +2874,12 @@
     if (!ok) {
       trustedOption = await requestTrustedWorkdayClick(target, "option");
       if (trustedOption?.ok) {
+        emitWorkdayEvent(audit, "option.clicked", field, {
+          status: "info",
+          reason: "trusted_input_option_click",
+          selectedOption: target.label,
+          trustedInput: trustedOption,
+        });
         await sleep(550);
         var trustedSettled = await settleWorkdayCommit(field, answer, target);
         state = trustedSettled.state;
@@ -2744,6 +2900,12 @@
           "option_keyboard",
         );
         if (trustedKeyboard?.ok) {
+          emitWorkdayEvent(audit, "option.clicked", field, {
+            status: "info",
+            reason: "trusted_keyboard_option_retry",
+            selectedOption: target.label,
+            trustedKeyboard: trustedKeyboard,
+          });
           await sleep(650);
           var keyboardSettled = await settleWorkdayCommit(
             field,
@@ -2758,6 +2920,29 @@
       }
     }
     await closePopup(field);
+    emitWorkdayEvent(audit, "option.committed", field, {
+      status: ok ? "ok" : "warn",
+      reason: ok
+        ? workdayFieldHasValidationError(field)
+          ? "workday_commit_value_without_validation_clear"
+          : "workday_commit_verified"
+        : "workday_commit_not_verified",
+      selectedOption: target.label,
+      commitProof: {
+        selected: Boolean(state.selected),
+        checked: Boolean(state.checked),
+        text: root.audit?.valueSummary(state.text || ""),
+        rawValue: root.audit?.valueSummary(state.rawValue || ""),
+        validationVisible: workdayFieldHasValidationError(field),
+      },
+    });
+    emitWorkdayEvent(audit, ok && !workdayFieldHasValidationError(field) ? "validation.cleared" : "validation.visible", field, {
+      status: ok && !workdayFieldHasValidationError(field) ? "ok" : "warn",
+      reason: ok && !workdayFieldHasValidationError(field)
+        ? "workday_validation_cleared_after_commit"
+        : "workday_validation_visible_after_commit",
+      selectedOption: target.label,
+    });
     if (!ok) {
       root.audit?.pushIssue(audit, fieldAudit, {
         kind: "workday_commit_not_verified",

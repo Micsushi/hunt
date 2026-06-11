@@ -17,6 +17,55 @@ questionable answers on Review are recorded as audit issues, not treated as
 reasons to stop early, unless they prevent reaching Review by creating
 validation or unsupported required follow-up fields.
 
+## Agent Command Ledger Migration
+
+This section describes the target workflow while the C3 agent-command-ledger
+architecture is being implemented. Until the MCP/command bus is live, keep using
+the current p Chrome setup and live-smoke runner, but write new automation so it
+can move behind the command layer.
+
+Target rule: scripts launch or probe; they do not own the workflow. The source
+of truth becomes the immutable ledger under the external Hunt logs root, indexed
+by Postgres:
+
+```text
+C:\Users\sushi\Documents\hunt-logs\
+  LEDGER_STRUCTURE.md
+  active.json
+  c3\agents\...
+  c3\lanes\...
+  c3\sessions\...
+```
+
+Main-agent target flow:
+
+1. Read `LEDGER_STRUCTURE.md` and `active.json`.
+2. Create or reuse a batch-level `agent_id`.
+3. Create one `lane_id` per active job.
+4. Launch p Chrome only for active lanes.
+5. Open one `session_id` per concrete browser/page instance.
+6. Spawn one subagent per active lane.
+7. Subagent claims a session mutation lease before clicks, typing, CDP, or
+   probe scripts.
+8. Subagent uses MCP/C3 commands first, then logged CDP/probes when needed.
+9. Subagent reports event ids, probe ids, artifact paths, and root-cause
+   summary.
+10. Main agent patches generic C3 behavior after synthesizing lane evidence.
+
+Default active subagent/lane capacity is `6` because Codex currently supports
+up to six active subagents. Treat this as operator config from the prompt/docs,
+not a product hardcode.
+
+Concurrency rule: many agents may read the same logs, but only one agent may
+hold a mutation lease for a session/page at a time. Another agent may take over
+after lease expiry, explicit transfer, or human override. If a browser crashes,
+the lane continues and the replacement browser gets a new `session_id` with the
+old session recorded as `parent_session_id`.
+
+Human override is allowed. The session log must record actor `human`, and the
+active agent lease should be interrupted or marked stale. Do not hide human
+actions from the agent report.
+
 ## Token Budget Policy
 
 Use terse/caveman-lite lane reporting. No narrative logs. Paste only decisive
@@ -181,6 +230,10 @@ per-port profiles like `ChromeC3PlaywrightParallel_9401` across batches.
 - Subagents may add narrow proof/probe scripts for new UI behavior within the
   failed-lane probe budget from the main-agent prompt, but they must not modify
   C3 product code or the live-smoke runner.
+- In the target ledger/MCP workflow, probe scripts are stored outside the repo
+  under the session/agent probe folders and start `trusted=false`. Subagents do
+  not delete them; the main agent reviews and marks them reviewed, trusted,
+  archived, stale, or deleted.
 - The main agent coordinates lanes, waits for required lane proof, synthesizes
   findings, patches the generic C3 behavior once, runs local checks, retests
   with the actual extension in fresh p Chrome, then closes no-longer-needed
@@ -285,6 +338,18 @@ repair_touched, commit_proof, loop_check, and agent_feedback. Do not close
 p Chrome; the main agent owns cleanup after patch/retest or explicit user
 cleanup. Do not modify C3 code. Write findings to
 logs\<batch-id>\current_debug.md under your lane section.
+```
+
+When the agent-command-ledger MCP tools are available, append:
+
+```text
+Read C:\Users\sushi\Documents\hunt-logs\LEDGER_STRUCTURE.md and active.json.
+Use your assigned agent_id/lane_id/session_id. Claim the session mutation lease
+before any mutating page action, CDP call, or probe script. Use MCP C3 commands
+before raw scripts. CDP and temporary probes are allowed only for your owned
+session and must be logged. Keep probe files outside the repo and do not delete
+them. Include event_id, command_id, probe_id, artifact paths, and lease status
+in your report.
 ```
 
 ## Final Batch Report

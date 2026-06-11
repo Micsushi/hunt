@@ -1,4 +1,5 @@
 import { get, patch, post, del } from './client'
+import { logHumanCommand } from './humanCommandLog'
 import type { JobDetail, JobsQuery, JobsResponse, ResumeAttempt } from '@/types/job'
 import type { ResumeReviewPackage } from '@/pages/Fletcher/review/types'
 
@@ -51,10 +52,20 @@ export function openAttemptResumeReview(attemptId: number): Promise<ResumeReview
 }
 
 export function requeueJob(id: number): Promise<{ status: string }> {
+  void logHumanCommand({
+    action: 'c0.job.requeue',
+    buttonId: 'requeue-job',
+    details: { jobId: id },
+  })
   return post(`/api/jobs/${id}/requeue`)
 }
 
 export function setJobPriority(id: number, runNext: boolean): Promise<{ status: string }> {
+  void logHumanCommand({
+    action: runNext ? 'c0.job.set_priority' : 'c0.job.clear_priority',
+    buttonId: runNext ? 'job-run-next' : 'job-clear-priority',
+    details: { jobId: id, runNext },
+  })
   return post(`/api/jobs/${id}/priority`, { run_next: runNext })
 }
 
@@ -79,6 +90,14 @@ export type PatchableJobFields = Partial<{
 }>
 
 export function patchJob(id: number, fields: PatchableJobFields): Promise<{ status: string }> {
+  void logHumanCommand({
+    action: 'c0.job.patch',
+    buttonId: 'edit-job-field',
+    details: {
+      jobId: id,
+      fields: Object.keys(fields),
+    },
+  })
   return patch(`/api/jobs/${id}`, fields)
 }
 
@@ -91,6 +110,11 @@ export function fetchAdjacentJobs(
 }
 
 export function deleteJob(id: number): Promise<{ status: string }> {
+  void logHumanCommand({
+    action: 'c0.job.delete',
+    buttonId: 'delete-job',
+    details: { jobId: id },
+  })
   return del(`/api/jobs/${id}`)
 }
 
@@ -100,5 +124,15 @@ export function bulkSelection(payload: {
   enrichment_status?: string
   confirm_delete?: boolean
 }): Promise<{ status: string; updated: number }> {
+  void logHumanCommand({
+    action: `c0.jobs.bulk_${payload.action}`,
+    buttonId: 'jobs-bulk-action',
+    details: {
+      action: payload.action,
+      count: payload.job_ids.length,
+      enrichmentStatus: payload.enrichment_status || '',
+      confirmDelete: Boolean(payload.confirm_delete),
+    },
+  })
   return post('/api/jobs/bulk-selection', payload)
 }

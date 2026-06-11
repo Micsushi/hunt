@@ -280,8 +280,16 @@
     }
   }
 
-  async function fillText(field, value) {
+  async function fillText(field, value, audit, fieldAudit) {
     var el = field.element;
+    root.audit?.emitEvent(
+      audit,
+      "field.focus",
+      root.audit.fieldPayload(field, {
+        status: "info",
+        reason: "text_driver_focus",
+      }),
+    );
     var ok = setValue(el, value);
     await sleep(350);
     var state = root.fieldState.readFieldState(field);
@@ -320,7 +328,7 @@
     var candidates = ["Not applicable.", "N/A", "\u200b"];
     for (var i = 0; i < candidates.length; i++) {
       var value = candidates[i];
-      var result = await fillText(field, value);
+      var result = await fillText(field, value, audit, fieldAudit);
       root.audit?.pushFieldStep(audit, fieldAudit, {
         action: "textbox_fallback_attempt",
         step: "driver.text.fallback",
@@ -354,7 +362,7 @@
     };
   }
 
-  async function fillSelect(field, option) {
+  async function fillSelect(field, option, audit) {
     var el = field.element;
     var target = Array.from(el.options || []).find(function (candidate) {
       return (
@@ -365,6 +373,16 @@
     if (!target) {
       return { ok: false, reason: "option_not_found" };
     }
+    root.audit?.emitEvent(
+      audit,
+      "option.clicked",
+      root.audit.fieldPayload(field, {
+        status: "info",
+        reason: "native_select_option_selected",
+        selectedOption: option.label || "",
+        optionValue: option.value || "",
+      }),
+    );
     el.value = target.value;
     el.dispatchEvent(new Event("input", { bubbles: true }));
     el.dispatchEvent(new Event("change", { bubbles: true }));
@@ -378,7 +396,7 @@
     };
   }
 
-  async function fillRadioGroup(field, option) {
+  async function fillRadioGroup(field, option, audit) {
     var target =
       option?.element && (field.radios || []).includes(option.element)
         ? option.element
@@ -401,6 +419,15 @@
     if (!target) {
       return { ok: false, reason: "radio_not_found" };
     }
+    root.audit?.emitEvent(
+      audit,
+      "option.clicked",
+      root.audit.fieldPayload(field, {
+        status: "info",
+        reason: "radio_option_clicked",
+        selectedOption: option.label || "",
+      }),
+    );
     clickLikeUser(target);
     target.checked = true;
     target.dispatchEvent(new Event("input", { bubbles: true }));
@@ -414,7 +441,7 @@
     };
   }
 
-  async function fillSegmentedButtonGroup(field, option) {
+  async function fillSegmentedButtonGroup(field, option, audit) {
     var target =
       option?.element && (field.buttons || []).includes(option.element)
         ? option.element
@@ -430,6 +457,15 @@
     if (!target) {
       return { ok: false, reason: "segmented_button_not_found" };
     }
+    root.audit?.emitEvent(
+      audit,
+      "option.clicked",
+      root.audit.fieldPayload(field, {
+        status: "info",
+        reason: "segmented_button_clicked",
+        selectedOption: option.label || "",
+      }),
+    );
     clickLikeUser(target);
     await sleep(160);
     var state = root.fieldState.readFieldState(field);
@@ -446,7 +482,7 @@
     };
   }
 
-  async function fillCheckbox(field, option) {
+  async function fillCheckbox(field, option, audit) {
     var el = field.element;
     function checkboxOn() {
       return (
@@ -483,6 +519,16 @@
         el.parentElement,
       ].filter(Boolean);
       for (var i = 0; i < targets.length && !checkboxOn(); i++) {
+        root.audit?.emitEvent(
+          audit,
+          "option.clicked",
+          root.audit.fieldPayload(field, {
+            status: "info",
+            reason: "checkbox_target_clicked",
+            selectedOption: option?.label || "checked",
+            clickIndex: i + 1,
+          }),
+        );
         clickLikeUser(targets[i]);
         await sleep(120);
       }
@@ -504,8 +550,16 @@
     };
   }
 
-  async function fillPopupOption(field, option) {
+  async function fillPopupOption(field, option, audit, fieldAudit) {
     var el = field.element;
+    root.audit?.emitEvent(
+      audit,
+      "field.focus",
+      root.audit.fieldPayload(field, {
+        status: "info",
+        reason: "popup_opener_focus",
+      }),
+    );
     clickLikeUser(el);
     await sleep(160);
     if (field.uiModel === "combobox") {
@@ -514,8 +568,8 @@
     }
     var options = await root.optionCollector.collectOptions(field, {
       answer: { value: option.label },
-      audit: null,
-      fieldAudit: null,
+      audit: audit,
+      fieldAudit: fieldAudit,
     });
     var target = options.find(function (candidate) {
       return matchesText(candidate.label, option.label);
@@ -527,6 +581,16 @@
         afterState: root.fieldState.readFieldState(field),
       };
     }
+    root.audit?.emitEvent(
+      audit,
+      "option.clicked",
+      root.audit.fieldPayload(field, {
+        status: "info",
+        reason: "popup_option_clicked",
+        selectedOption: target.label || option.label || "",
+        optionElement: root.audit?.summarizeElement(target.element) || {},
+      }),
+    );
     clickLikeUser(target.element);
     await sleep(180);
     var state = root.fieldState.readFieldState(field);
@@ -719,9 +783,19 @@
     activeApplyContext,
     defaultResume,
   }) {
+    root.audit?.emitEvent(
+      audit,
+      "field.focus",
+      root.audit.fieldPayload(field, {
+        status: "info",
+        reason: "driver_fill_started",
+      }),
+    );
+    var result = null;
     if (["text", "textarea"].includes(field.uiModel)) {
       if (answer.value !== "" && answer.value !== undefined) {
-        return await fillText(field, String(answer.value));
+        result = await fillText(field, String(answer.value), audit, fieldAudit);
+        return result;
       }
       if (field.required && answer.answerType === "unknown") {
         root.audit?.pushIssue(audit, fieldAudit, {
@@ -731,24 +805,66 @@
           reason:
             "Required unknown text question has no mapping/profile answer, so C3 used placeholder text fallback.",
         });
-        return await fillTextWithFallbacks(field, audit, fieldAudit);
+        result = await fillTextWithFallbacks(field, audit, fieldAudit);
+        return result;
       }
       if (field.required) {
-        return await fillTextWithFallbacks(field, audit, fieldAudit);
+        result = await fillTextWithFallbacks(field, audit, fieldAudit);
+        return result;
       }
       return { ok: false, reason: "missing_text_answer" };
     }
     if (field.uiModel === "select") {
-      return await fillSelect(field, option);
+      result = await fillSelect(field, option, audit);
+      root.audit?.emitEvent(
+        audit,
+        "option.committed",
+        root.audit.fieldPayload(field, {
+          status: result.ok ? "ok" : "warn",
+          reason: result.reason || (result.ok ? "select_commit_verified" : "select_commit_failed"),
+          selectedOption: result.selectedOption || option?.label || "",
+        }),
+      );
+      return result;
     }
     if (field.uiModel === "radio_group") {
-      return await fillRadioGroup(field, option);
+      result = await fillRadioGroup(field, option, audit);
+      root.audit?.emitEvent(
+        audit,
+        "option.committed",
+        root.audit.fieldPayload(field, {
+          status: result.ok ? "ok" : "warn",
+          reason: result.reason || (result.ok ? "radio_commit_verified" : "radio_commit_failed"),
+          selectedOption: result.selectedOption || option?.label || "",
+        }),
+      );
+      return result;
     }
     if (field.uiModel === "segmented_button_group") {
-      return await fillSegmentedButtonGroup(field, option);
+      result = await fillSegmentedButtonGroup(field, option, audit);
+      root.audit?.emitEvent(
+        audit,
+        "option.committed",
+        root.audit.fieldPayload(field, {
+          status: result.ok ? "ok" : "warn",
+          reason: result.reason || (result.ok ? "segmented_commit_verified" : "segmented_commit_failed"),
+          selectedOption: result.selectedOption || option?.label || "",
+        }),
+      );
+      return result;
     }
     if (field.uiModel === "checkbox") {
-      return await fillCheckbox(field, option);
+      result = await fillCheckbox(field, option, audit);
+      root.audit?.emitEvent(
+        audit,
+        "option.committed",
+        root.audit.fieldPayload(field, {
+          status: result.ok ? "ok" : "warn",
+          reason: result.reason || (result.ok ? "checkbox_commit_verified" : "checkbox_commit_failed"),
+          selectedOption: result.selectedOption || option?.label || "checked",
+        }),
+      );
+      return result;
     }
     if (["combobox", "button_listbox"].includes(field.uiModel)) {
       var currentState = root.fieldState.readFieldState(field);
@@ -760,7 +876,17 @@
           selectedOption: currentState.text || currentState.rawValue,
         };
       }
-      return await fillPopupOption(field, option);
+      result = await fillPopupOption(field, option, audit, fieldAudit);
+      root.audit?.emitEvent(
+        audit,
+        "option.committed",
+        root.audit.fieldPayload(field, {
+          status: result.ok ? "ok" : "warn",
+          reason: result.reason || (result.ok ? "popup_commit_verified" : "popup_commit_failed"),
+          selectedOption: result.selectedOption || option?.label || "",
+        }),
+      );
+      return result;
     }
     if (field.uiModel === "file") {
       return await fillFileField({

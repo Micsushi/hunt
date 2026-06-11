@@ -113,6 +113,122 @@ def test_fletcher_option_a_queues_by_job_id():
     assert "job_id: payload.jobId" in control
 
 
+def test_frontend_human_command_logger_posts_fail_open_ledger_events():
+    helper = read("frontend/src/api/humanCommandLog.ts")
+    control = read("frontend/src/api/control.ts")
+    jobs = read("frontend/src/api/jobs.ts")
+    ops = read("frontend/src/api/ops.ts")
+    detail = read("frontend/src/pages/Jobs/JobDetail.tsx")
+
+    assert "export async function logHumanCommand" in helper
+    assert "fetch('/api/ledger/events'" in helper
+    assert "component?: string" in helper
+    assert "laneId?: string" in helper
+    assert "sessionId?: string" in helper
+    assert "commandId?: string" in helper
+    assert "traceId?: string" in helper
+    assert "const component = payload.component || 'c0'" in helper
+    assert "event_type: 'human.command'" in helper
+    assert "actor: { type: 'human', id: 'human_local', surface: payload.surface || 'c0_ui' }" in helper
+    assert "lane_id: laneId" in helper
+    assert "session_id: sessionId" in helper
+    assert "command_id: commandId" in helper
+    assert "trace_id: traceId" in helper
+    assert "eventContext" in helper
+    assert "redaction: { applied: true" in helper
+    assert "human_command_no_form_values" in helper
+    assert "catch {" in helper
+    assert "logHumanCommand" in control
+    assert "action: 'c0.settings.save'" in control
+    assert "action: 'c0.linkedin_account.save'" in control
+    assert "action: 'c1.scrape'" in control
+    assert "action: 'c2.fletcher.queue_resume'" in control
+    assert "action: 'c4.run'" in control
+    assert "action: 'c3.verify_easy_apply'" in control
+    assert "component: 'c3'" in control
+    assert "surface: 'c3_ui'" in control
+    assert "action: 'c0.job.patch'" in jobs
+    assert "fields: Object.keys(fields)" in jobs
+    assert "action: 'c0.job.requeue'" in jobs
+    assert "action: 'c0.job.delete'" in jobs
+    assert "action: `c0.jobs.bulk_${payload.action}`" in jobs
+    assert "action: 'c0.ops.requeue_errors'" in ops
+    assert "action: payload.dry_run ? 'c0.ops.bulk_requeue_count' : 'c0.ops.bulk_requeue'" in ops
+    assert "action: 'c0.ops.requeue_stale_processing'" in ops
+    assert "action: 'c3.open_apply_page'" in detail
+    assert "buttonId: 'open-apply-page'" in detail
+    assert "onClick={logOpenApplyPage}" in detail
+
+
+def test_human_command_logger_records_available_event_context():
+    script = r"""
+const fs = require('fs');
+const vm = require('vm');
+const ts = require('typescript');
+const source = fs.readFileSync('src/api/humanCommandLog.ts', 'utf8');
+const compiled = ts.transpileModule(source, {
+  compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2020 },
+});
+const moduleObj = { exports: {} };
+let posted = null;
+vm.runInNewContext(compiled.outputText, {
+  module: moduleObj,
+  exports: moduleObj.exports,
+  fetch: async (url, init) => {
+    posted = { url, init, body: JSON.parse(init.body) };
+    return { ok: true };
+  },
+  location: { pathname: '/executioner' },
+  document: { title: 'Executioner' },
+  crypto: { randomUUID: () => '12345678-1234-1234-1234-123456789abc' },
+  Date,
+  Math,
+});
+(async () => {
+  await moduleObj.exports.logHumanCommand({
+    action: 'c3.open_apply_page',
+    buttonId: 'open-apply-page',
+    component: 'c3',
+    surface: 'c3_ui',
+    laneId: 'lane-1',
+    sessionId: 'session-1',
+    commandId: 'cmd-1',
+    traceId: 'trace-1',
+    details: { jobId: 42 },
+  });
+  console.log(JSON.stringify(posted.body));
+})();
+"""
+    result = subprocess.run(
+        ["node", "-e", script],
+        cwd=ROOT / "frontend",
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    payload = json.loads(result.stdout)
+
+    assert payload["component"] == "c3"
+    assert payload["event_type"] == "human.command"
+    assert payload["actor"] == {"type": "human", "id": "human_local", "surface": "c3_ui"}
+    assert payload["lane_id"] == "lane-1"
+    assert payload["session_id"] == "session-1"
+    assert payload["command_id"] == "cmd-1"
+    assert payload["trace_id"] == "trace-1"
+    assert payload["payload"]["eventContext"] == {
+        "component": "c3",
+        "route": "/executioner",
+        "page": "Executioner",
+        "laneId": "lane-1",
+        "sessionId": "session-1",
+        "commandId": "cmd-1",
+        "traceId": "trace-1",
+    }
+    assert payload["payload"]["action"] == "c3.open_apply_page"
+    assert payload["payload"]["buttonId"] == "open-apply-page"
+    assert payload["payload"]["details"] == {"jobId": 42}
+
+
 def test_job_detail_resume_actions_use_queue_and_resume_workspace_label():
     detail = read("frontend/src/pages/Jobs/JobDetail.tsx")
     review_page = read("frontend/src/pages/Fletcher/ReviewPage.tsx")

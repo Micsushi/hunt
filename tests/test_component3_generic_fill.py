@@ -190,6 +190,74 @@ def test_workday_date_section_commit_accepts_unpadded_month_and_day():
     }
 
 
+def test_generic_v2_audit_events_include_inventory_answers_and_command_context():
+    if sync_playwright is None:
+        pytest.skip("playwright is required for the generic C3 V2 fixture")
+
+    fill_v2_js = _module_to_browser_script(
+        _load_script(REPO_ROOT / "executioner/src/ats/generic/fill-v2.js")
+    )
+
+    with sync_playwright() as playwright:
+        try:
+            browser = playwright.chromium.launch()
+        except PlaywrightError as error:
+            pytest.skip(f"playwright chromium is unavailable: {error}")
+
+        page = browser.new_page()
+        page.set_content(
+            """
+            <html>
+              <body>
+                <form>
+                  <label>First name * <input id="first-name" required /></label>
+                </form>
+              </body>
+            </html>
+            """
+        )
+        _load_v2_scripts(page)
+        page.add_script_tag(content=fill_v2_js)
+
+        result = page.evaluate(
+            """
+            async () => {
+              const fill = createGenericFillV2Function();
+              return await fill({
+                profile: { fullName: "Ada Lovelace" },
+                settings: {
+                  fillRequiredOnly: true,
+                  useFieldPipelineV2: true,
+                  commandContext: {
+                    command_id: "cmd_test",
+                    session_id: "session_test",
+                    lane_id: "lane_test",
+                    actor: { type: "agent", id: "agent-test", surface: "mcp" },
+                  },
+                },
+                activeApplyContext: {},
+                defaultResume: {},
+                fillRoute: { adapterName: "generic" },
+                fillRunId: "generic_audit_events",
+              });
+            }
+            """
+        )
+        browser.close()
+
+    events = result["v2Audit"]["events"]
+    event_types = [event.get("event_type") for event in events]
+    answer_event = next(event for event in events if event.get("event_type") == "field.answer.resolved")
+
+    assert "field.inventory" in event_types
+    assert "field.answer.resolved" in event_types
+    assert answer_event["command_id"] == "cmd_test"
+    assert answer_event["session_id"] == "session_test"
+    assert answer_event["lane_id"] == "lane_test"
+    assert answer_event["actor"]["id"] == "agent-test"
+    assert answer_event["payload"]["payload"]["answer"]["redacted"] is True
+
+
 @pytest.mark.xfail(reason="c3 refactor changed behavior; needs update", strict=False)
 def test_generic_v2_unknown_option_defaults_to_neutral_yes_then_first_real():
     if sync_playwright is None:

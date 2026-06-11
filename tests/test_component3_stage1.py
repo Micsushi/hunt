@@ -674,6 +674,9 @@ Expected Graduation: Sep 2026
         self.assertIn("DEFAULT_RUNTIME_CONFIG", settings)
         self.assertIn("autoExportLogs", settings)
         self.assertIn("debugLogSinkEnabled", settings)
+        self.assertIn("ledgerEnabled", settings)
+        self.assertIn("ledgerBackendUrl", settings)
+        self.assertIn("c3DeepDebugEnabled", settings)
         self.assertIn("accountEmail", settings)
         self.assertIn("accountPassword", settings)
         self.assertIn("phoneDeviceType", settings)
@@ -713,6 +716,10 @@ Expected Graduation: Sep 2026
         self.assertIn("useFieldPipelineV2", settings)
         self.assertIn("useFieldPipelineV2: true", settings)
         self.assertIn("useFieldPipelineV2: true", storage)
+        self.assertIn("ledgerEnabled: sanitizeBoolean(settings.ledgerEnabled)", storage)
+        self.assertIn("ledgerBackendUrl: sanitizeUrl(settings.ledgerBackendUrl)", storage)
+        self.assertIn("ledgerEnabled: sanitizeOptionalBoolean(config.ledgerEnabled)", storage)
+        self.assertIn("nextSettings.ledgerEnabled = runtimeConfig.ledgerEnabled", storage)
         self.assertIn("degreeLevel", settings)
         self.assertIn("highestEducation", settings)
         self.assertIn("preferredEducationIndex", settings)
@@ -729,6 +736,8 @@ Expected Graduation: Sep 2026
         self.assertIn("sanitizeV2Audit", storage)
         self.assertIn("sanitizeBrowserContext", storage)
         self.assertIn("sanitizeRuntimeConfig", storage)
+        self.assertIn("c3DeepDebugEnabled: sanitizeBoolean", storage)
+        self.assertIn("runtimeConfig.c3DeepDebugEnabled", storage)
         self.assertIn("sanitizeUnknownQuestionDefault", storage)
         self.assertIn("appendUnknownQuestionDefaults", storage)
         self.assertIn("applyRuntimeConfig", storage)
@@ -758,6 +767,7 @@ Expected Graduation: Sep 2026
         self.assertIn('reason === "visible_validation_errors_after_next"', background)
         self.assertIn("class C3AuthWorkflow", background)
         self.assertIn("class C3ApplyEntryWorkflow", background)
+
         self.assertIn("class C3JobFillWorkflow", background)
         self.assertIn("class C3CombinedFillWorkflow", background)
         self.assertIn("c3_workflow_phase", background)
@@ -818,6 +828,8 @@ Expected Graduation: Sep 2026
         self.assertIn('id="fill-required-only"', options)
         self.assertIn('id="auto-export-logs"', options)
         self.assertIn('id="debug-log-sink-enabled"', options)
+        self.assertIn('id="c3-deep-debug-enabled"', options)
+        self.assertIn('name="c3DeepDebugEnabled"', options)
         self.assertNotIn('id="use-field-pipeline-v2"', options)
         self.assertIn('id="auto-export-log-prefix"', options)
         self.assertIn('id="backend-url-status"', popup_js + popup_html)
@@ -1077,6 +1089,49 @@ Expected Graduation: Sep 2026
         self.assertIn('name: "p_chrome"', configure_debug)
         self.assertIn('pipelineVersion: "v2"', configure_debug)
         self.assertIn("browserContext: result.browserContext", configure_debug)
+
+    def test_c3_deep_debug_is_opt_in_and_redacts_page_values(self):
+        bootstrap = (
+            REPO_ROOT / "executioner" / "src" / "content" / "bootstrap.js"
+        ).read_text(encoding="utf-8")
+
+        self.assertIn("function installDeepDebugLogging", bootstrap)
+        self.assertIn("if (!settings?.c3DeepDebugEnabled)", bootstrap)
+        self.assertIn('["click", "input", "change", "keydown"]', bootstrap)
+        self.assertIn("document.addEventListener(eventName, logDeepDebug, true)", bootstrap)
+        self.assertIn("installDeepDebugLogging(stateResponse?.settings || {})", bootstrap)
+        self.assertIn("function postContentLedgerEvent", bootstrap)
+        self.assertIn("if (!settings?.ledgerEnabled", bootstrap)
+        self.assertIn('"hunt.apply.content_ledger_event"', bootstrap)
+        self.assertIn('event_type: eventType', bootstrap)
+        self.assertIn('agent_id: settings.agentId || ""', bootstrap)
+        self.assertIn('lane_id: settings.laneId || ""', bootstrap)
+        self.assertIn('session_id: settings.sessionId || ""', bootstrap)
+        self.assertIn('lease_id: settings.leaseId || ""', bootstrap)
+        self.assertIn('type: "human"', bootstrap)
+        self.assertIn('"human"', bootstrap)
+        self.assertIn('"apply_page_deep_debug"', bootstrap)
+        self.assertIn('"human.override"', bootstrap)
+        self.assertIn('"human.apply_page_deep_debug"', bootstrap)
+        self.assertIn('"human.ui.click"', bootstrap)
+        self.assertIn("logHumanUiAction", bootstrap)
+        self.assertIn("ui.detect_prompt.fill_click", bootstrap)
+        self.assertIn("ui.detect_prompt.dismiss", bootstrap)
+        self.assertIn("ui.llm_prompt.use_click", bootstrap)
+        self.assertIn("ui.llm_prompt.dismiss", bootstrap)
+        self.assertIn("ui.fill_summary.dismiss", bootstrap)
+        self.assertIn('domEventType: event.type', bootstrap)
+        self.assertIn("postContentLedgerEvent({", bootstrap)
+        self.assertIn("sessionId: settings.sessionId ||", bootstrap)
+        self.assertIn("leaseId: settings.leaseId ||", bootstrap)
+        self.assertIn("rawValueRedacted: true", bootstrap)
+        self.assertIn('"raw_input_value_redacted"', bootstrap)
+        self.assertIn('"printable_key_redacted"', bootstrap)
+        self.assertIn('"sensitive_key_redacted"', bootstrap)
+        self.assertIn("function redactLedgerPayload", bootstrap)
+        self.assertIn("/password|token|secret|authorization|credential|api[-_]?key|service[-_]?token/i", bootstrap)
+        self.assertIn("valueLength: inputValueLength(element)", bootstrap)
+        self.assertNotIn("value: element.value", bootstrap)
 
     def test_v2_invalid_controls_are_treated_as_required_for_repair(self):
         inspector = (
@@ -5129,6 +5184,7 @@ Expected Graduation: Sep 2026
         self.assertIn("readSettingsForm", options)
         self.assertIn("autoAccountSignupLoginEnabled", options)
         self.assertIn("autoEmailVerificationEnabled", options)
+        self.assertIn("c3DeepDebugEnabled", options)
         self.assertIn("emailVerificationTimeoutSeconds", options)
         self.assertIn('type: "hunt.apply.save_settings"', options)
         self.assertIn('type: "hunt.apply.save_profile"', options)
@@ -5892,6 +5948,117 @@ Expected Graduation: Sep 2026
         self.assertIn("skills_not_committed", workday_repeatables)
         self.assertIn("skillOptionIsChecked", workday_repeatables)
         self.assertIn("typeSearchTextLikeUser", workday_repeatables)
+
+    def test_c3_command_bus_wrapper_static_contract(self):
+        command_dir = REPO_ROOT / "executioner" / "src" / "background" / "commands"
+        registry = (command_dir / "registry.js").read_text(encoding="utf-8")
+        dispatcher = (command_dir / "dispatcher.js").read_text(encoding="utf-8")
+        context = (command_dir / "context.js").read_text(encoding="utf-8")
+        command_api = (command_dir / "api.js").read_text(encoding="utf-8")
+        background = (
+            REPO_ROOT / "executioner" / "src" / "background" / "index.js"
+        ).read_text(encoding="utf-8")
+        shared_api = (
+            REPO_ROOT / "executioner" / "src" / "shared" / "api.js"
+        ).read_text(encoding="utf-8")
+        settings = (
+            REPO_ROOT / "executioner" / "src" / "shared" / "settings.js"
+        ).read_text(encoding="utf-8")
+        configure_debug_sink = (REPO_ROOT / "scripts" / "configure_c3_debug_sink.js").read_text(
+            encoding="utf-8"
+        )
+
+        for command_name in [
+            "c3.detect_page",
+            "c3.fill_page",
+            "c3.fill_remaining_with_llm",
+            "c3.page_walk",
+            "c3.click_next_after_fill",
+            "c3.clear_page",
+            "c3.cancel_session",
+            "c3.get_progress",
+            "c3.snapshot_page",
+            "c3.inspect_fields",
+            "c3.inspect_validation",
+        ]:
+            self.assertIn(command_name, registry)
+
+        for event_type in [
+            "command.requested",
+            "command.started",
+            "command.completed",
+            "command.failed",
+        ]:
+            self.assertIn(event_type, dispatcher)
+
+        self.assertIn("postLedgerEvent", dispatcher)
+        self.assertIn("postLedgerEvent", background)
+        self.assertIn('case "hunt.apply.content_ledger_event"', background)
+        self.assertIn('"invalid_content_ledger_event"', background)
+        self.assertIn("if (!settings?.ledgerEnabled)", dispatcher)
+        self.assertIn("console.warn(\"C3 ledger event post failed:", dispatcher)
+        self.assertIn("commandReceipt", dispatcher)
+        self.assertIn("attemptId", dispatcher)
+        self.assertIn("auditSummary", dispatcher)
+        self.assertIn("/api/ledger/events", shared_api)
+        self.assertIn("settings.ledgerBackendUrl || settings.backendUrl", shared_api)
+        self.assertIn("/api/c3/debug-log", shared_api)
+        self.assertIn("buildC3CommandContext", command_api)
+        self.assertIn("ledgerEnabled: true", configure_debug_sink)
+        self.assertIn("ledgerBackendUrl: backendUrl", configure_debug_sink)
+        self.assertIn("--agent-id", configure_debug_sink)
+        self.assertIn("--lane-id", configure_debug_sink)
+        self.assertIn("--session-id", configure_debug_sink)
+
+        for setting_name in [
+            "ledgerEnabled",
+            "ledgerBackendUrl",
+            "agentId",
+            "laneId",
+            "sessionId",
+            "leaseId",
+            "c3DeepDebugEnabled",
+        ]:
+            self.assertIn(setting_name, settings)
+            self.assertIn(setting_name, background)
+
+        self.assertIn('{ type: "human", surface: "popup" }', context)
+        self.assertIn('{ type: "human", surface: "content_prompt" }', context)
+        self.assertIn('{ type: "system", surface: "c4_poll" }', context)
+        self.assertIn('{ type: "script", surface: "batch_runner" }', context)
+        self.assertIn('actor: { type: "system", surface: "c4_poll" }', background)
+
+        self.assertIn("runC3Command", background)
+        self.assertIn("C3_COMMANDS.fillPage", background)
+        self.assertIn("C3_COMMANDS.fillRemainingWithLlm", background)
+        self.assertIn("C3_COMMANDS.pageWalk", background)
+        self.assertIn("C3_COMMANDS.clickNextAfterFill", background)
+        self.assertIn("C3_COMMANDS.clearPage", background)
+        self.assertIn("C3_COMMANDS.cancelSession", background)
+        self.assertIn("C3_COMMANDS.getProgress", background)
+        self.assertIn("C3_COMMANDS.detectPage", background)
+        self.assertIn("C3_COMMANDS.snapshotPage", background)
+        self.assertIn("C3_COMMANDS.inspectFields", background)
+        self.assertIn("C3_COMMANDS.inspectValidation", background)
+        self.assertIn("hunt.apply.fill_current_page", background)
+        self.assertIn("hunt.apply.cancel_fill", background)
+        self.assertIn("hunt.apply.get_active_fill_progress", background)
+        self.assertIn("hunt.apply.clear_current_page", background)
+        for route_name, command_name in [
+            ("hunt.apply.detect_page", "C3_COMMANDS.detectPage"),
+            ("hunt.apply.snapshot_page", "C3_COMMANDS.snapshotPage"),
+            ("hunt.apply.inspect_fields", "C3_COMMANDS.inspectFields"),
+            ("hunt.apply.inspect_validation", "C3_COMMANDS.inspectValidation"),
+            ("hunt.apply.fill_remaining_with_llm", "C3_COMMANDS.fillRemainingWithLlm"),
+            ("hunt.apply.click_next_after_fill", "C3_COMMANDS.clickNextAfterFill"),
+        ]:
+            self.assertIn(f'case "{route_name}"', background)
+            route_start = background.index(f'case "{route_name}"')
+            command_start = background.index(command_name, route_start)
+            self.assertIn("runC3Command({", background[route_start:command_start])
+        self.assertIn("detectWorkflowForTab(tabId)", background)
+        self.assertIn("getPageSnapshot(tabId)", background)
+        self.assertIn("inspectFieldsForTab(tabId)", background)
 
     def test_devtools_target_picker_finds_c3_options_page(self):
         target = find_c3_target(

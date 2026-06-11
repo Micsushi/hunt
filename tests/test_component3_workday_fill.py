@@ -369,12 +369,26 @@ def test_workday_v2_source_prompt_drills_into_category_and_selects_leaf():
         for event in result["v2Audit"]["events"]
         if event.get("action") == "workday_prompt_category_options"
     ]
+    audit_event_types = [
+        event.get("event_type")
+        for event in result["v2Audit"]["events"]
+        if event.get("fieldId") == "source--source"
+    ]
 
     assert result["ok"] is True
     assert selected == "LinkedIn"
     assert source["filled"] is True
     assert category_events
     assert any("LinkedIn" in event["detail"]["options"] for event in category_events)
+    for event_type in [
+        "field.focus",
+        "options.collected",
+        "option.clicked",
+        "option.committed",
+        "value.saved",
+        "validation.cleared",
+    ]:
+        assert event_type in audit_event_types
 
 
 def test_workday_v2_source_prompt_drills_flat_category_to_radio_leaf():

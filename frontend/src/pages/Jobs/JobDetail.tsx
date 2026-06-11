@@ -16,6 +16,7 @@ import {
   verifyEasyApply,
   type EasyApplyVerifyResult,
 } from '@/api/control'
+import { logHumanCommand } from '@/api/humanCommandLog'
 import { StatusBadge } from '@/components/StatusBadge'
 import { useQueryClient, useQuery } from '@tanstack/react-query'
 import styles from './JobDetail.module.css'
@@ -249,6 +250,8 @@ export function JobDetailPage() {
       </div>
     )
 
+  const loadedJob = job
+
   async function handleFieldSave(field: EditableField, value: string) {
     try {
       const payload: Record<string, string | number | null> = {}
@@ -367,6 +370,21 @@ export function JobDetailPage() {
     }
   }
 
+  function logOpenApplyPage() {
+    void logHumanCommand({
+      action: 'c3.open_apply_page',
+      buttonId: 'open-apply-page',
+      component: 'c3',
+      surface: 'c3_ui',
+      details: {
+        jobId,
+        applyType: loadedJob.apply_type || '',
+        atsType: loadedJob.ats_type || '',
+        hasSelectedResume: loadedJob.selected_resume_ready_for_c3 === 1,
+      },
+    })
+  }
+
   const remoteDisplay = job.is_remote === 1 ? 'Yes' : job.is_remote === 0 ? 'No' : ''
   const descriptionSource = job.description_source
 
@@ -407,7 +425,13 @@ export function JobDetailPage() {
             </a>
           )}
           {job.apply_url && (
-            <a href={job.apply_url} target="_blank" rel="noreferrer" className={styles.extBtn}>
+            <a
+              href={job.apply_url}
+              target="_blank"
+              rel="noreferrer"
+              className={styles.extBtn}
+              onClick={logOpenApplyPage}
+            >
               Apply ↗
             </a>
           )}

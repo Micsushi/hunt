@@ -1,0 +1,12 @@
+[project]
+name = "hunt-mcp"
+version = "0.1.0"
+description = "Hunt MCP adapter that forwards ledger tools to backend APIs"
+requires-python = ">=3.11"
+dependencies = [
+  "httpx",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
