@@ -17,7 +17,7 @@ import {
   postLedgerEvent,
 } from "../shared/api.js";
 import { runC3Command } from "./commands/api.js";
-import { C3_COMMANDS } from "./commands/registry.js";
+import { C3_COMMANDS, getC3Command } from "./commands/registry.js";
 import { runFillForTab, runPendingLlmFillForTab } from "./fill-runner.js";
 import {
   canOfferSafeNextAfterFill,
@@ -59,6 +59,20 @@ let activeRunId = "";
 const activeFillRuns = new Map();
 const activeFillRunByTab = new Map();
 const activeFillProgressByTab = new Map();
+
+const INTERNAL_C3_COMMAND_MESSAGE_TYPE = "hunt.apply.run_c3_command";
+const C3_COMMAND_RECEIVER_ROUTES = Object.freeze({
+  [C3_COMMANDS.detectPage]: "hunt.apply.detect_page",
+  [C3_COMMANDS.fillPage]: "hunt.apply.fill_current_page",
+  [C3_COMMANDS.fillRemainingWithLlm]: "hunt.apply.fill_remaining_with_llm",
+  [C3_COMMANDS.clickNextAfterFill]: "hunt.apply.click_next_after_fill",
+  [C3_COMMANDS.clearPage]: "hunt.apply.clear_current_page",
+  [C3_COMMANDS.cancelSession]: "hunt.apply.cancel_fill",
+  [C3_COMMANDS.getProgress]: "hunt.apply.get_active_fill_progress",
+  [C3_COMMANDS.snapshotPage]: "hunt.apply.snapshot_page",
+  [C3_COMMANDS.inspectFields]: "hunt.apply.inspect_fields",
+  [C3_COMMANDS.inspectValidation]: "hunt.apply.inspect_validation",
+});
 
 async function dispatchTrustedInput(payload = {}, sender = {}) {
   const tabId = payload.tabId || sender.tab?.id;
@@ -2830,6 +2844,32 @@ async function sendPageUiMessage({
   return sent;
 }
 
+async function ensureContentBootstrapForTab(tabId, reason = "command") {
+  if (!tabId) {
+    return { ok: false, reason: "missing_tab" };
+  }
+  try {
+    await chrome.scripting.executeScript({
+      target: { tabId },
+      files: ["src/content/bootstrap.js"],
+    });
+    await logActivity("content.bootstrap.ensure", "Ensured content bootstrap for tab.", {
+      tabId,
+      reason,
+    });
+    return { ok: true };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    await logActivity(
+      "content.bootstrap.ensure_failed",
+      message,
+      { tabId, reason },
+      "warn",
+    );
+    return { ok: false, reason: "bootstrap_injection_failed", message };
+  }
+}
+
 function safeFilePart(value) {
   return String(value || "")
     .replace(/[^a-zA-Z0-9._-]+/g, "-")
@@ -2919,6 +2959,29 @@ async function showPageToast(tabId, message, tone = "info") {
     skippedAction: "ui.toast.skipped",
     skippedSummary: "Skipped toast because no tab was available.",
     details: { message, tone },
+  });
+}
+
+async function showPageFailureToast(tabId, message, details = {}) {
+  await sendPageUiMessage({
+    tabId,
+    message: {
+      type: "hunt.apply.show_failure_toast",
+      message,
+      reason: details.reason || "",
+      phase: details.phase || "",
+      command: details.command || "",
+      error: details.error || "",
+      timeoutMs: Number(details.timeoutMs || 0),
+    },
+    action: "ui.failure_toast.requested",
+    failedAction: "ui.failure_toast.request_failed",
+    summary: "Requested sticky failure toast.",
+    failedSummary: "Could not request sticky failure toast.",
+    skippedAction: "ui.failure_toast.skipped",
+    skippedSummary: "Skipped failure toast because no tab was available.",
+    details: { message, ...details },
+    status: "failed",
   });
 }
 
@@ -6795,25 +6858,52 @@ async function clearCurrentPageV2(tabId, state) {
     .toString(36)
     .slice(2, 10)}`;
   await injectV2ScriptsForTab(tabId, atsType);
-  const results = await chrome.scripting.executeScript({
-    target: { tabId, allFrames: true },
-    args: [
+  const clearTimeoutMs = 20000;
+  const results = await withTimeout(
+    chrome.scripting.executeScript({
+      target: { tabId, allFrames: true },
+      args: [
+        {
+          fillRunId: clearRunId,
+          atsType,
+        },
+      ],
+      func: async (context) => {
+        if (!window.__huntV2?.clearPipeline) {
+          return {
+            ok: false,
+            reason: "missing_v2_clear_pipeline",
+            message: "C3 V2 clear pipeline scripts were not injected.",
+          };
+        }
+        return window.__huntV2.clearPipeline.runHuntV2Clear(context);
+      },
+    }),
+    clearTimeoutMs,
+    () => [
       {
-        fillRunId: clearRunId,
-        atsType,
+        frameId: 0,
+        result: {
+          ok: false,
+          reason: "v2_clear_timeout",
+          message: `V2 clear did not finish within ${Math.round(clearTimeoutMs / 1000)} seconds.`,
+          clearedFieldCount: 0,
+          clearedFields: [],
+          v2Audit: {
+            summary: { fieldCount: 0 },
+            permanentIssues: [
+              {
+                kind: "v2_clear_timeout",
+                severity: "warn",
+                failedStep: "clear.execute",
+                reason: "V2 clear timed out before returning from one or more page frames.",
+              },
+            ],
+          },
+        },
       },
     ],
-    func: async (context) => {
-      if (!window.__huntV2?.clearPipeline) {
-        return {
-          ok: false,
-          reason: "missing_v2_clear_pipeline",
-          message: "C3 V2 clear pipeline scripts were not injected.",
-        };
-      }
-      return window.__huntV2.clearPipeline.runHuntV2Clear(context);
-    },
-  });
+  );
   const result = chooseBestV2ClearFrame(results);
   const issues = result.v2Audit?.permanentIssues || [];
   await sendDebugLog("c3_v2_clear_audit", {
@@ -7917,8 +8007,157 @@ async function runFillWithOneRefreshRetry(
   }
 }
 
+function internalCommandReceipt({
+  commandName = "",
+  commandId = "",
+  traceId = "",
+  reason = "",
+  message = "",
+} = {}) {
+  return {
+    commandId,
+    traceId,
+    command: commandName,
+    ok: false,
+    reason,
+    message,
+  };
+}
+
+function internalCommandFailure({
+  commandName = "",
+  payload = {},
+  reason,
+  message,
+} = {}) {
+  return {
+    ok: false,
+    reason,
+    message,
+    commandReceipt: internalCommandReceipt({
+      commandName,
+      commandId: payload.command_id || payload.commandId || "",
+      traceId: payload.trace_id || payload.traceId || "",
+      reason,
+      message,
+    }),
+  };
+}
+
+function normalizeInternalC3CommandPayload(payload = {}, commandName = "") {
+  const commandPayload = {
+    ...(payload.command_payload || payload.commandPayload || {}),
+  };
+  const fieldMap = [
+    ["command_id", "commandId"],
+    ["trace_id", "traceId"],
+    ["agent_id", "agentId"],
+    ["lane_id", "laneId"],
+    ["session_id", "sessionId"],
+    ["lease_id", "leaseId"],
+    ["tab_id", "tabId"],
+    ["triggered_by", "triggeredBy"],
+  ];
+  for (const [snakeName, camelName] of fieldMap) {
+    if (
+      payload[snakeName] !== undefined &&
+      commandPayload[camelName] === undefined
+    ) {
+      commandPayload[camelName] = payload[snakeName];
+    }
+    if (
+      payload[camelName] !== undefined &&
+      commandPayload[camelName] === undefined
+    ) {
+      commandPayload[camelName] = payload[camelName];
+    }
+  }
+  if (payload.url !== undefined && commandPayload.url === undefined) {
+    commandPayload.url = payload.url;
+  }
+  commandPayload.actor = payload.actor;
+  commandPayload.commandName = commandName;
+  commandPayload.triggeredBy =
+    commandPayload.triggeredBy || "internal_c3_command_receiver";
+  return commandPayload;
+}
+
+async function handleInternalC3Command(message = {}, sender = {}) {
+  const payload = message.payload || {};
+  const commandName = String(
+    payload.command_name || payload.commandName || "",
+  ).trim();
+  if (!commandName) {
+    return internalCommandFailure({
+      payload,
+      reason: "missing_command_name",
+      message: "Internal C3 command receiver requires command_name.",
+    });
+  }
+
+  const command = getC3Command(commandName);
+  if (!command) {
+    return internalCommandFailure({
+      commandName,
+      payload,
+      reason: "unknown_c3_command",
+      message: `Unknown C3 command: ${commandName}`,
+    });
+  }
+
+  const actor = payload.actor || {};
+  if (!actor.type || !actor.surface) {
+    return internalCommandFailure({
+      commandName,
+      payload,
+      reason: "missing_actor_context",
+      message:
+        "Internal C3 command receiver requires actor.type and actor.surface.",
+    });
+  }
+
+  const sessionId = String(
+    payload.session_id ||
+      payload.sessionId ||
+      payload.command_payload?.session_id ||
+      payload.command_payload?.sessionId ||
+      payload.commandPayload?.session_id ||
+      payload.commandPayload?.sessionId ||
+      "",
+  ).trim();
+  if (!sessionId) {
+    return internalCommandFailure({
+      commandName,
+      payload,
+      reason: "missing_session_context",
+      message: "Internal C3 command receiver requires session_id.",
+    });
+  }
+
+  const routeType = C3_COMMAND_RECEIVER_ROUTES[command.name];
+  if (!routeType) {
+    return internalCommandFailure({
+      commandName,
+      payload,
+      reason: "unsupported_c3_command_route",
+      message: `C3 command is registered but not exposed through ${INTERNAL_C3_COMMAND_MESSAGE_TYPE}: ${commandName}`,
+    });
+  }
+
+  return handleMessage(
+    {
+      type: routeType,
+      payload: normalizeInternalC3CommandPayload(payload, command.name),
+    },
+    sender,
+  );
+}
+
 async function handleMessage(message, sender = {}) {
   switch (message?.type) {
+    case INTERNAL_C3_COMMAND_MESSAGE_TYPE:
+      return handleInternalC3Command(message, sender);
+
     case "hunt.apply.ping":
       return { ok: true, source: "background" };
 
@@ -7963,7 +8202,10 @@ async function handleMessage(message, sender = {}) {
         state,
         payload: message.payload || {},
         sender,
-        handler: async () => inspectFieldsForTab(tabId),
+        handler: async () => {
+          await ensureContentBootstrapForTab(tabId, "inspect_fields");
+          return inspectFieldsForTab(tabId);
+        },
       });
     }
 
@@ -8171,6 +8413,7 @@ async function handleMessage(message, sender = {}) {
         payload: message.payload || {},
         sender,
         handler: async () => {
+      await ensureContentBootstrapForTab(tabId, "fill_current_page");
       if (!state.settings.manualFillEnabled) {
         await logActivity(
           "fill.skip",
@@ -8669,6 +8912,7 @@ async function handleMessage(message, sender = {}) {
         payload: message.payload || {},
         sender,
         handler: async () => {
+          await ensureContentBootstrapForTab(tabId, "click_next_after_fill");
           if (message.payload?.remember) {
             const settings = await saveSettings({
               ...state.settings,
@@ -8696,6 +8940,7 @@ async function handleMessage(message, sender = {}) {
         payload: message.payload || {},
         sender,
         handler: async () => {
+          await ensureContentBootstrapForTab(tabId, "clear_current_page");
           await dismissPageTransientUi(tabId);
           await showFillProgress(tabId, "Clearing page");
           try {
@@ -8852,3 +9097,12 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     );
   return true;
 });
+
+globalThis.__huntApplyDirectMessage = async function __huntApplyDirectMessage(
+  message,
+) {
+  return handleMessage(message, {
+    id: chrome.runtime?.id || "",
+    url: chrome.runtime?.getURL?.("src/background/index.js") || "",
+  });
+};

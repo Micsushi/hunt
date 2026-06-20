@@ -80,24 +80,47 @@ class CdpClient {
         }
       }
     });
+    const rejectPending = (reason) => {
+      for (const [id, pending] of this.pending.entries()) {
+        clearTimeout(pending.timer);
+        const error = new Error(reason);
+        error.cdpMethod = pending.method || "";
+        error.cdpLabel = pending.label || pending.method || "";
+        error.reason = "cdp_connection_closed";
+        pending.reject(error);
+        this.pending.delete(id);
+      }
+    };
+    this.ws.addEventListener("close", () => {
+      rejectPending("CDP connection closed before command completed");
+    });
+    this.ws.addEventListener("error", (event) => {
+      rejectPending(
+        event.error?.message || "CDP websocket error before command completed",
+      );
+    });
     return this;
   }
 
-  send(method, params = {}, timeoutMs = 60000) {
+  send(method, params = {}, timeoutMs = 60000, label = method) {
     const id = this.nextId;
     this.nextId += 1;
     const payload = JSON.stringify({ id, method, params });
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
         this.pending.delete(id);
-        reject(new Error(`CDP timeout: ${method}`));
+        const error = new Error(`CDP timeout: ${label || method}`);
+        error.cdpMethod = method;
+        error.cdpLabel = label || method;
+        error.timeoutMs = timeoutMs;
+        reject(error);
       }, timeoutMs);
-      this.pending.set(id, { resolve, reject, timer });
+      this.pending.set(id, { resolve, reject, timer, method, label });
       this.ws.send(payload);
     });
   }
 
-  async evaluate(expression, timeoutMs = 60000) {
+  async evaluate(expression, timeoutMs = 60000, label = "Runtime.evaluate") {
     const result = await this.send(
       "Runtime.evaluate",
       {
@@ -107,6 +130,7 @@ class CdpClient {
         userGesture: true,
       },
       timeoutMs,
+      label,
     );
     if (result.exceptionDetails) {
       throw new Error(

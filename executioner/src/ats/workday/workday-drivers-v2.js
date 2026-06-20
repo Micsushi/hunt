@@ -2557,10 +2557,19 @@
             '[aria-label*="press delete to clear value"]',
             '[data-automation-id="promptSelectionLabel"]',
             '[data-automation-id="promptAriaInstruction"]',
-            '[aria-selected="true"]',
           ].join(", "),
         ) || [],
       )
+        .filter(function (el) {
+          return !el.closest?.(
+            [
+              '[data-automation-id="activeListContainer"]',
+              '[data-automation-id="promptSearchResultList"]',
+              '[data-uxi-widget-type="multiselectlist"]',
+              '[role="listbox"]',
+            ].join(", "),
+          );
+        })
         .map(function (el) {
           return optionLabel(el);
         })

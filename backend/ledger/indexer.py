@@ -217,14 +217,78 @@ class LedgerIndexer:
                 [session_id, component, agent_id, lane_id],
             )
         if lease_id:
+            self._ensure_lease_reference(event, lease_id, component, agent_id, lane_id, session_id)
+
+    def _ensure_lease_reference(
+        self,
+        event: dict[str, Any],
+        lease_id: str,
+        component: str,
+        agent_id: str | None,
+        lane_id: str | None,
+        session_id: str | None,
+    ) -> None:
+        payload = event.get("payload") if isinstance(event.get("payload"), dict) else {}
+        lease_type = payload.get("lease_kind") or payload.get("lease_type") or "indexed_from_event"
+        status = payload.get("lease_status") or "indexed_from_event"
+        expires_at = event.get("ts") or ""
+        columns = self._table_columns("ledger_leases")
+        if {"lease_type", "metadata_json"}.issubset(columns):
+            self._execute_optional(
+                """
+                INSERT INTO ledger_leases (
+                    lease_id,
+                    component,
+                    lease_type,
+                    status,
+                    agent_id,
+                    lane_id,
+                    session_id,
+                    expires_at,
+                    metadata_json
+                )
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                ON CONFLICT(lease_id) DO NOTHING
+                """,
+                [
+                    lease_id,
+                    component,
+                    lease_type,
+                    status,
+                    agent_id,
+                    lane_id,
+                    session_id,
+                    expires_at,
+                    _dump_json({"indexed_from_event_id": event.get("event_id")}),
+                ],
+            )
+        else:
             self._execute_optional(
                 """
                 INSERT INTO ledger_leases (lease_id, status, expires_at)
                 VALUES (%s, %s, %s)
                 ON CONFLICT(lease_id) DO NOTHING
                 """,
-                [lease_id, "indexed_from_event", event.get("ts") or ""],
+                [lease_id, status, expires_at],
             )
+
+    def _table_columns(self, table_name: str) -> set[str]:
+        if _is_sqlite_connection(self.connection):
+            cursor = self._execute(f"PRAGMA table_info({table_name})")
+            return {row[1] for row in cursor.fetchall()}
+        try:
+            cursor = self._execute(
+                """
+                SELECT column_name
+                FROM information_schema.columns
+                WHERE table_name = %s
+                """,
+                [table_name],
+            )
+            return {row[0] for row in cursor.fetchall()}
+        except Exception:
+            _rollback_if_available(self.connection)
+            return set()
 
     def _execute(self, sql: str, params: Iterable[Any] = ()) -> Any:
         if hasattr(self.connection, "execute"):

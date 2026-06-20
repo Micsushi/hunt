@@ -13,6 +13,8 @@ function buildHeaders(serviceToken) {
   return headers;
 }
 
+const DEFAULT_BACKGROUND_LOG_TIMEOUT_MS = 5000;
+
 async function requestJson({
   baseUrl,
   serviceToken,
@@ -104,6 +106,7 @@ export async function postDebugLog(settings, payload) {
     path: "/api/c3/debug-log",
     method: "POST",
     body: payload,
+    timeoutMs: DEFAULT_BACKGROUND_LOG_TIMEOUT_MS,
   });
 }
 
@@ -114,6 +117,7 @@ export async function postLedgerEvent(settings, payload) {
     path: "/api/ledger/events",
     method: "POST",
     body: payload,
+    timeoutMs: DEFAULT_BACKGROUND_LOG_TIMEOUT_MS,
   });
 }
 

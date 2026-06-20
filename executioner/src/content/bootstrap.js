@@ -1250,7 +1250,7 @@
     });
   }
 
-  function showExtensionToast(message, tone) {
+  function showExtensionToast(message, tone, options = {}) {
     var container = document.getElementById(TOAST_CONTAINER_ID);
     if (!container) {
       container = document.createElement("div");
@@ -1268,7 +1268,42 @@
     }
     updateToastStackPosition();
     var toast = document.createElement("div");
-    toast.textContent = message;
+    var sticky = Boolean(options.sticky);
+    var toastBody = document.createElement("div");
+    var toastMessage = document.createElement("div");
+    toastMessage.textContent = message;
+    toast.appendChild(toastBody);
+    toastBody.appendChild(toastMessage);
+    if (sticky) {
+      var closeButton = document.createElement("button");
+      closeButton.type = "button";
+      closeButton.textContent = "x";
+      closeButton.setAttribute("aria-label", "Close Hunt Apply notification");
+      closeButton.style.background = "transparent";
+      closeButton.style.border = "0";
+      closeButton.style.color = "inherit";
+      closeButton.style.cursor = "pointer";
+      closeButton.style.font = "700 13px Segoe UI, system-ui, sans-serif";
+      closeButton.style.lineHeight = "1";
+      closeButton.style.padding = "2px 4px";
+      closeButton.style.margin = "-2px -2px 0 8px";
+      closeButton.addEventListener("click", () => {
+        toast.remove();
+        logPageUiEvent("ui.toast.dismiss", "Dismissed page toast.", {
+          message,
+          tone: tone || "info",
+          sticky,
+          reason: options.reason || "",
+          phase: options.phase || "",
+        });
+        if (!container.children.length) {
+          container.remove();
+        } else {
+          updateToastStackPosition();
+        }
+      });
+      toast.appendChild(closeButton);
+    }
     toast.style.background = tone === "warn" ? "#2d2410" : "#172212";
     toast.style.border =
       tone === "warn" ? "1px solid #f0b429" : "1px solid #3a5a3a";
@@ -1277,25 +1312,50 @@
     toast.style.borderRadius = "8px";
     toast.style.boxShadow = "0 8px 28px rgba(0, 0, 0, 0.35)";
     toast.style.color = tone === "warn" ? "#f0b429" : "#d4f0dc";
+    toast.style.display = "flex";
+    toast.style.alignItems = "flex-start";
+    toast.style.justifyContent = "space-between";
     toast.style.font = "600 13px Segoe UI, system-ui, sans-serif";
     toast.style.lineHeight = "1.35";
     toast.style.padding = "10px 12px";
+    toastBody.style.minWidth = "0";
     container.appendChild(toast);
-    logPageUiEvent("ui.toast.show", "Showed page toast.", {
+    logPageUiEvent(
+      sticky ? "ui.failure_toast.show" : "ui.toast.show",
+      sticky ? "Showed sticky failure toast." : "Showed page toast.",
+      {
       message,
       tone: tone || "info",
-    });
-    setTimeout(
-      function () {
-        toast.remove();
-        if (!container.children.length) {
-          container.remove();
-        } else {
-          updateToastStackPosition();
-        }
+      sticky,
+      reason: options.reason || "",
+      phase: options.phase || "",
+      details: options.details || null,
       },
-      tone === "warn" ? 7000 : 4200,
+      sticky ? "failed" : "ok",
     );
+    if (!sticky) {
+      setTimeout(
+        function () {
+          toast.remove();
+          if (!container.children.length) {
+            container.remove();
+          } else {
+            updateToastStackPosition();
+          }
+        },
+        tone === "warn" ? 7000 : 4200,
+      );
+    }
+  }
+
+  function showFailureToast(message, details = {}) {
+    hideFillProgress();
+    showExtensionToast(message || "Hunt Apply failed.", "warn", {
+      sticky: true,
+      reason: details.reason || "",
+      phase: details.phase || "",
+      details,
+    });
   }
 
   function showPrompt({ kind, inputCount, atsType }) {
@@ -1631,6 +1691,15 @@
         message.message || "Hunt Apply update.",
         message.tone || "info",
       );
+    }
+    if (message?.type === "hunt.apply.show_failure_toast") {
+      showFailureToast(message.message || "Hunt Apply failed.", {
+        reason: message.reason || "",
+        phase: message.phase || "",
+        command: message.command || "",
+        error: message.error || "",
+        timeoutMs: Number(message.timeoutMs || 0),
+      });
     }
     if (message?.type === "hunt.apply.show_fill_progress") {
       showFillProgress({

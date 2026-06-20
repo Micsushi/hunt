@@ -144,6 +144,55 @@ def test_api_reads_agent_and_session_logs(tmp_path):
     assert session_log.json()["events"][0]["event_type"] == "command.started"
 
 
+def test_api_reads_command_timeline_and_recent_failures(tmp_path):
+    client, _service = _client(tmp_path)
+    client.post("/api/ledger/agents", json={"agent_id": "agent-timeline"})
+    client.post("/api/ledger/lanes", json={"lane_id": "lane-timeline", "agent_id": "agent-timeline"})
+    client.post(
+        "/api/ledger/sessions",
+        json={"session_id": "session-timeline", "agent_id": "agent-timeline", "lane_id": "lane-timeline"},
+    )
+    for event_type in ("command.requested", "command.started", "command.completed"):
+        client.post(
+            "/api/ledger/events",
+            json={
+                "event_type": event_type,
+                "actor": {"type": "agent", "id": "agent-timeline", "surface": "mcp"},
+                "agent_id": "agent-timeline",
+                "lane_id": "lane-timeline",
+                "session_id": "session-timeline",
+                "command_id": "cmd-timeline",
+                "payload": {"status": "accepted"},
+            },
+        )
+    client.post(
+        "/api/ledger/events",
+        json={
+            "event_type": "command.requested",
+            "actor": {"type": "agent", "id": "agent-timeline", "surface": "mcp"},
+            "agent_id": "agent-timeline",
+            "lane_id": "lane-timeline",
+            "session_id": "session-timeline",
+            "command_id": "cmd-failed",
+            "payload": {"status": "rejected", "reason_code": "missing_target"},
+        },
+    )
+
+    timeline = client.get("/api/ledger/commands/cmd-timeline/timeline")
+    failures = client.get("/api/ledger/failures/recent?limit=5")
+
+    assert timeline.status_code == 200
+    assert timeline.json()["event_count"] == 3
+    assert [event["event_type"] for event in timeline.json()["events"]] == [
+        "command.requested",
+        "command.started",
+        "command.completed",
+    ]
+    assert failures.status_code == 200
+    assert failures.json()["failures"][0]["command_id"] == "cmd-failed"
+    assert failures.json()["failures"][0]["reason_code"] == "missing_target"
+
+
 def test_api_probe_file_is_untrusted_and_does_not_log_content(tmp_path):
     client, service = _client(tmp_path)
     client.post("/api/ledger/agents", json={"agent_id": "agent-probe"})

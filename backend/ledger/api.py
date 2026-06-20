@@ -194,6 +194,25 @@ def get_session_log(
     return service.get_session_log(session_id)
 
 
+@router.get("/commands/{command_id}/timeline")
+def get_command_timeline(
+    command_id: str,
+    _access: Annotated[None, Depends(require_ledger_access)],
+    service: Annotated[LedgerService, Depends(get_ledger_service)],
+):
+    return service.command_timeline(command_id)
+
+
+@router.get("/failures/recent")
+def get_recent_failures(
+    _access: Annotated[None, Depends(require_ledger_access)],
+    service: Annotated[LedgerService, Depends(get_ledger_service)],
+    component: str = "c3",
+    limit: int = 20,
+):
+    return service.recent_failures(component=component, limit=limit)
+
+
 @router.post("/probes")
 def create_probe_file(
     body: ProbeFileCreate,

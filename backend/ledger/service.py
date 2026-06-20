@@ -40,6 +40,58 @@ def _dump_model(model: Any) -> dict[str, Any]:
     return model.dict()
 
 
+def _receipt_from_event(event: dict[str, Any]) -> dict[str, Any]:
+    payload = event.get("payload") if isinstance(event.get("payload"), dict) else {}
+    receipt = payload.get("receipt")
+    if isinstance(receipt, dict):
+        return receipt
+    if isinstance(payload.get("commandReceipt"), dict):
+        return payload["commandReceipt"]
+    return {}
+
+
+def _is_failure_event(event: dict[str, Any]) -> bool:
+    payload = event.get("payload") if isinstance(event.get("payload"), dict) else {}
+    receipt = _receipt_from_event(event)
+    event_type = str(event.get("event_type") or "")
+    status = str(payload.get("status") or "").lower()
+    reason_code = str(payload.get("reason_code") or payload.get("reason") or "").lower()
+    return (
+        "fail" in event_type
+        or "error" in event_type
+        or status in {"failed", "rejected", "error"}
+        or bool(receipt) and receipt.get("ok") is False
+        or reason_code
+        in {
+            "bad_actor",
+            "missing_lease",
+            "missing_target",
+            "unknown_command",
+            "browser_execution_failed",
+        }
+    )
+
+
+def _failure_summary(event: dict[str, Any]) -> dict[str, Any]:
+    payload = event.get("payload") if isinstance(event.get("payload"), dict) else {}
+    receipt = _receipt_from_event(event)
+    return {
+        "event_id": event.get("event_id") or "",
+        "ts": event.get("ts") or "",
+        "event_type": event.get("event_type") or "",
+        "agent_id": event.get("agent_id") or "",
+        "lane_id": event.get("lane_id") or "",
+        "session_id": event.get("session_id") or "",
+        "lease_id": event.get("lease_id") or "",
+        "command_id": event.get("command_id") or receipt.get("commandId") or "",
+        "trace_id": event.get("trace_id") or receipt.get("traceId") or "",
+        "command_name": payload.get("command_name") or receipt.get("command") or "",
+        "status": payload.get("status") or "",
+        "reason_code": payload.get("reason_code") or receipt.get("reason") or "",
+        "receipt_ok": receipt.get("ok") if receipt else None,
+    }
+
+
 class LedgerService:
     def __init__(self, root: str | Path | None = None, store: JsonlLedger | None = None):
         self.root = initialize_ledger_root(root)
@@ -280,6 +332,70 @@ class LedgerService:
 
     def get_session_log(self, session_id: str) -> dict[str, Any]:
         return self._read_log_entry("active_sessions", session_id)
+
+    def command_timeline(self, command_id: str) -> dict[str, Any]:
+        command_id = str(command_id or "").strip()
+        events = [
+            event
+            for event in self._iter_active_events()
+            if event.get("command_id") == command_id
+            or (event.get("payload") or {}).get("commandId") == command_id
+            or ((event.get("payload") or {}).get("receipt") or {}).get("commandId") == command_id
+        ]
+        events.sort(key=lambda event: (str(event.get("ts") or ""), int(event.get("seq") or 0)))
+        return {
+            "command_id": command_id,
+            "found": bool(events),
+            "event_count": len(events),
+            "events": events,
+        }
+
+    def recent_failures(self, *, component: str = "c3", limit: int = 20) -> dict[str, Any]:
+        limit = max(1, min(int(limit or 20), 200))
+        failures = [
+            _failure_summary(event)
+            for event in self._iter_active_events(component=component)
+            if _is_failure_event(event)
+        ]
+        failures.sort(key=lambda event: str(event.get("ts") or ""), reverse=True)
+        return {
+            "component": component,
+            "limit": limit,
+            "failure_count": len(failures[:limit]),
+            "failures": failures[:limit],
+        }
+
+    def _iter_active_events(self, *, component: str = "") -> list[dict[str, Any]]:
+        active = self.get_active()
+        paths: dict[str, str] = {}
+        for bucket in ("active_agents", "active_lanes", "active_sessions"):
+            for entry in (active.get(bucket) or {}).values():
+                if isinstance(entry, dict) and entry.get("log_path"):
+                    paths[str(entry["log_path"])] = str(entry["log_path"])
+        events: list[dict[str, Any]] = []
+        seen_event_ids: set[str] = set()
+        for raw_path in sorted(paths):
+            log_path = Path(raw_path)
+            if not log_path.exists():
+                continue
+            for line in log_path.read_text(encoding="utf-8").splitlines():
+                if not line.strip():
+                    continue
+                try:
+                    event = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if not isinstance(event, dict):
+                    continue
+                if component and event.get("component") != component:
+                    continue
+                event_id = str(event.get("event_id") or "")
+                if event_id and event_id in seen_event_ids:
+                    continue
+                if event_id:
+                    seen_event_ids.add(event_id)
+                events.append(event)
+        return events
 
     def create_probe_file(self, request: ProbeFileCreate) -> dict[str, Any]:
         data = _dump_model(request)

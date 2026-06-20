@@ -291,6 +291,31 @@ CREATE TABLE IF NOT EXISTS ledger_leases (
         FOREIGN KEY (session_id) REFERENCES ledger_sessions(session_id) ON DELETE SET NULL
 );
 
+CREATE TABLE IF NOT EXISTS ledger_browser_targets (
+    session_id          TEXT PRIMARY KEY,
+    component           TEXT NOT NULL DEFAULT 'c3',
+    agent_id            TEXT,
+    lane_id             TEXT,
+    browser_kind        TEXT NOT NULL,
+    debug_port          INTEGER NOT NULL,
+    extension_id        TEXT NOT NULL,
+    options_url         TEXT NOT NULL,
+    tab_id              INTEGER,
+    url                 TEXT,
+    status              TEXT NOT NULL DEFAULT 'active',
+    created_at          TEXT NOT NULL DEFAULT to_char(CURRENT_TIMESTAMP, 'YYYY-MM-DD HH24:MI:SS'),
+    heartbeat_at        TEXT NOT NULL DEFAULT to_char(CURRENT_TIMESTAMP, 'YYYY-MM-DD HH24:MI:SS'),
+    updated_at          TEXT NOT NULL DEFAULT to_char(CURRENT_TIMESTAMP, 'YYYY-MM-DD HH24:MI:SS'),
+    unregistered_at     TEXT,
+    metadata_json       JSONB NOT NULL DEFAULT '{}'::jsonb,
+    CONSTRAINT ledger_browser_targets_agent_id_fkey
+        FOREIGN KEY (agent_id) REFERENCES ledger_agents(agent_id) ON DELETE SET NULL,
+    CONSTRAINT ledger_browser_targets_lane_id_fkey
+        FOREIGN KEY (lane_id) REFERENCES ledger_lanes(lane_id) ON DELETE SET NULL,
+    CONSTRAINT ledger_browser_targets_session_id_fkey
+        FOREIGN KEY (session_id) REFERENCES ledger_sessions(session_id) ON DELETE CASCADE
+);
+
 CREATE TABLE IF NOT EXISTS ledger_events (
     event_id            TEXT PRIMARY KEY,
     seq                 INTEGER,
@@ -417,6 +442,15 @@ CREATE INDEX IF NOT EXISTS idx_ledger_events_event_type
 
 CREATE INDEX IF NOT EXISTS idx_ledger_leases_status_expires
     ON ledger_leases(status, expires_at);
+
+CREATE INDEX IF NOT EXISTS idx_ledger_browser_targets_status_session
+    ON ledger_browser_targets(status, session_id);
+
+CREATE INDEX IF NOT EXISTS idx_ledger_browser_targets_lane_status
+    ON ledger_browser_targets(lane_id, status);
+
+CREATE INDEX IF NOT EXISTS idx_ledger_browser_targets_agent_status
+    ON ledger_browser_targets(agent_id, status);
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_ledger_leases_one_active_lane
     ON ledger_leases(lease_type, lane_id)

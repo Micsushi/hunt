@@ -326,6 +326,182 @@ async function hideRunnerFillProgress(optionsClient, applyUrl) {
   );
 }
 
+function runnerFailureDetails(error, fallbackPhase = "workday_runner") {
+  const message = String(error?.message || error || "C3 runner failed.");
+  const phase = error?.phase || fallbackPhase;
+  const reason =
+    error?.reason ||
+    (error?.cdpMethod ? "cdp_timeout" : "") ||
+    (/timeout/i.test(message) ? "timeout" : "runner_failed");
+  return {
+    ok: false,
+    reason,
+    phase,
+    message,
+    command: error?.cdpLabel || error?.cdpMethod || "",
+    error: message,
+    timeoutMs: Number(error?.timeoutMs || error?.timeoutMs === 0 ? error.timeoutMs : 0),
+  };
+}
+
+async function showRunnerFailureToast(optionsClient, applyUrl, failure) {
+  if (!optionsClient || !applyUrl) {
+    return { ok: false, reason: "missing_failure_toast_context" };
+  }
+  return optionsClient.evaluate(
+    `(() => {
+      const applyUrl = ${JSON.stringify(applyUrl)};
+      const failure = ${js(failure)};
+      const normalizeWorkdayPathname = (pathname) =>
+        String(pathname || "").replace(/\\/apply(?:\\/[^/]+)?\\/?$/, "");
+      return (async () => {
+        const apply = new URL(applyUrl);
+        const applyHost = apply.host;
+        const applyPathBase = normalizeWorkdayPathname(apply.pathname);
+        const tabs = await chrome.tabs.query({});
+        const candidates = tabs.filter((item) => {
+          try {
+            const url = new URL(item.url || "");
+            return url.host === applyHost
+              && normalizeWorkdayPathname(url.pathname).startsWith(applyPathBase);
+          } catch (_error) {
+            return false;
+          }
+        });
+        const tab = candidates.find((item) => item.active)
+          || candidates.sort((a, b) => Number(b.id || 0) - Number(a.id || 0))[0];
+        if (!tab?.id) {
+          return { ok: false, reason: "workday_tab_not_found" };
+        }
+        const message = [
+          "C3 runner failed",
+          failure.phase ? "at " + failure.phase : "",
+          failure.message ? "- " + failure.message : ""
+        ].filter(Boolean).join(" ");
+        const uiMessage = {
+          type: "hunt.apply.show_failure_toast",
+          message,
+          reason: failure.reason || "",
+          phase: failure.phase || "",
+          command: failure.command || "",
+          error: failure.error || "",
+          timeoutMs: Number(failure.timeoutMs || 0)
+        };
+        try {
+          await chrome.tabs.sendMessage(tab.id, uiMessage);
+        } catch (error) {
+          if (!/receiving end does not exist|could not establish connection/i.test(String(error?.message || error))) {
+            return { ok: false, reason: "failure_toast_message_failed", message: String(error?.message || error) };
+          }
+          await chrome.scripting.executeScript({
+            target: { tabId: tab.id },
+            files: ["src/content/bootstrap.js"]
+          });
+          await chrome.tabs.sendMessage(tab.id, uiMessage);
+        }
+        return { ok: true, tabId: tab.id };
+      })();
+    })()`,
+    10000,
+    "runner_failure_toast",
+  );
+}
+
+async function showRunnerFailureDirect(pageClient, failure) {
+  if (!pageClient) {
+    return { ok: false, reason: "missing_page_client" };
+  }
+  return pageClient.evaluate(
+    `(() => {
+      const failure = ${js(failure)};
+      document.getElementById("hunt-apply-fill-progress")?.remove();
+      let container = document.getElementById("hunt-apply-page-toasts");
+      if (!container) {
+        container = document.createElement("div");
+        container.id = "hunt-apply-page-toasts";
+        container.style.position = "fixed";
+        container.style.right = "18px";
+        container.style.top = "18px";
+        container.style.zIndex = "2147483647";
+        container.style.display = "grid";
+        container.style.gap = "8px";
+        container.style.maxWidth = "420px";
+        container.style.fontFamily = "Segoe UI, system-ui, sans-serif";
+        document.documentElement.appendChild(container);
+      }
+      const toast = document.createElement("div");
+      const text = [
+        "C3 runner failed",
+        failure.phase ? "at " + failure.phase : "",
+        failure.message ? "- " + failure.message : ""
+      ].filter(Boolean).join(" ");
+      const body = document.createElement("div");
+      body.textContent = text;
+      body.style.minWidth = "0";
+      const close = document.createElement("button");
+      close.type = "button";
+      close.textContent = "x";
+      close.setAttribute("aria-label", "Close Hunt Apply notification");
+      close.style.background = "transparent";
+      close.style.border = "0";
+      close.style.color = "inherit";
+      close.style.cursor = "pointer";
+      close.style.font = "700 13px Segoe UI, system-ui, sans-serif";
+      close.style.lineHeight = "1";
+      close.style.padding = "2px 4px";
+      close.style.margin = "-2px -2px 0 8px";
+      close.addEventListener("click", () => {
+        toast.remove();
+        if (!container.children.length) {
+          container.remove();
+        }
+      });
+      toast.appendChild(body);
+      toast.appendChild(close);
+      toast.style.background = "#2d2410";
+      toast.style.border = "1px solid #f0b429";
+      toast.style.borderLeft = "4px solid #f0b429";
+      toast.style.borderRadius = "8px";
+      toast.style.boxShadow = "0 8px 28px rgba(0, 0, 0, 0.35)";
+      toast.style.color = "#f0b429";
+      toast.style.display = "flex";
+      toast.style.alignItems = "flex-start";
+      toast.style.justifyContent = "space-between";
+      toast.style.font = "600 13px Segoe UI, system-ui, sans-serif";
+      toast.style.lineHeight = "1.35";
+      toast.style.padding = "10px 12px";
+      container.appendChild(toast);
+      return {
+        ok: true,
+        removedFillProgress: true,
+        toastText: text,
+      };
+    })()`,
+    10000,
+    "runner_failure_direct_ui",
+  );
+}
+
+async function reportRunnerFailure(
+  optionsClient,
+  applyUrl,
+  error,
+  fallbackPhase,
+  pageClient = null,
+) {
+  const failure = runnerFailureDetails(error, fallbackPhase);
+  await showRunnerFailureDirect(pageClient, failure).catch(() => null);
+  await hideRunnerFillProgress(optionsClient, applyUrl).catch(() => null);
+  await showRunnerFailureToast(optionsClient, applyUrl, failure).catch(() => null);
+  logWorkflowPhase(
+    failure.phase || fallbackPhase || "workday_runner",
+    "failed",
+    failure.message || "C3 runner failed.",
+    failure,
+  );
+  return failure;
+}
+
 async function waitForPostFillSettle(
   pageClient,
   before,
@@ -872,7 +1048,24 @@ async function ensureOptionsTarget(port, fallbackExtensionId) {
     String(item.url || "").includes("/src/options/options.html"),
   );
   if (target) {
-    return target;
+    const healthClient = await new CdpClient(target.webSocketDebuggerUrl)
+      .connect()
+      .catch(() => null);
+    if (healthClient) {
+      try {
+        await healthClient.evaluate(
+          "(() => location.href)()",
+          5000,
+          "options_target.health_check",
+        );
+        healthClient.close();
+        return target;
+      } catch (_error) {
+        healthClient.close();
+      }
+    }
+    await httpText(port, `/json/close/${target.id}`).catch(() => "");
+    await sleep(500);
   }
   if (!extensionId) {
     throw new Error("Could not find loaded C3 extension in CDP targets");
@@ -2106,7 +2299,7 @@ function fillMessageTimeoutMs(args) {
   if (args.extensionAutoNext) {
     return 600000;
   }
-  return PAGE_FILL_AND_NEXT_TIMEOUT_MS;
+  return C3_EXTENSION_FILL_TIMEOUT_MS;
 }
 
 async function fillCurrentPage(optionsClient, applyUrl, args, pageContext = {}) {
@@ -2235,16 +2428,29 @@ async function fillCurrentPage(optionsClient, applyUrl, args, pageContext = {}) 
             lastError: ""
           });
         }, messageTimeoutMs);
-        chrome.runtime.sendMessage(
-          { type: "hunt.apply.fill_current_page", payload: { tabId: tab.id, allowLlmAnswers: ${JSON.stringify(args.llmAnswers)}, triggeredBy: "c3_workday_live_smoke:fill_current_page" } },
-          (messageResponse) => {
+        const message = { type: "hunt.apply.fill_current_page", payload: { tabId: tab.id, allowLlmAnswers: ${JSON.stringify(args.llmAnswers)}, triggeredBy: "c3_workday_live_smoke:fill_current_page" } };
+        if (typeof globalThis.__huntApplyDirectMessage === "function") {
+          globalThis.__huntApplyDirectMessage(message)
+            .then((messageResponse) => {
+              clearTimeout(timer);
+              finish({ messageResponse, lastError: "" });
+            })
+            .catch((error) => {
+              clearTimeout(timer);
+              finish({
+                messageResponse: null,
+                lastError: error?.message || String(error)
+              });
+            });
+        } else {
+          chrome.runtime.sendMessage(message, (messageResponse) => {
             clearTimeout(timer);
             finish({
               messageResponse,
               lastError: chrome.runtime.lastError && chrome.runtime.lastError.message
             });
-          }
-        );
+          });
+        }
       });
       const response = wrapped.messageResponse || {};
       const attempt = response.attempt || {};
@@ -2378,13 +2584,20 @@ async function clearCurrentPage(optionsClient, applyUrl, pageContext = {}) {
         await chrome.windows.update(tab.windowId, { focused: true }).catch(() => null);
       }
       const wrapped = await new Promise((resolve) => {
-        chrome.runtime.sendMessage(
-          { type: "hunt.apply.clear_current_page", payload: { tabId: tab.id } },
-          (messageResponse) => resolve({
+        const message = { type: "hunt.apply.clear_current_page", payload: { tabId: tab.id } };
+        if (typeof globalThis.__huntApplyDirectMessage === "function") {
+          globalThis.__huntApplyDirectMessage(message)
+            .then((messageResponse) => resolve({ messageResponse, lastError: "" }))
+            .catch((error) => resolve({
+              messageResponse: null,
+              lastError: error?.message || String(error)
+            }));
+        } else {
+          chrome.runtime.sendMessage(message, (messageResponse) => resolve({
             messageResponse,
             lastError: chrome.runtime.lastError && chrome.runtime.lastError.message
-          })
-        );
+          }));
+        }
       });
       return {
         ...(wrapped.messageResponse || {}),
@@ -2392,6 +2605,7 @@ async function clearCurrentPage(optionsClient, applyUrl, pageContext = {}) {
       };
     })()`,
     120000,
+    "job_fill.clear_before_fill.clearCurrentPage",
   );
 }
 
@@ -2440,38 +2654,12 @@ async function clearPageUntilStable(optionsClient, pageClient, applyUrl, pageCon
 }
 
 async function clickNext(pageClient) {
-  return pageClient.evaluate(
+  const preClick = await pageClient.evaluate(
     `(async () => {
-      const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
       const visible = (el) => {
         const style = getComputedStyle(el);
         const rect = el.getBoundingClientRect();
         return style.display !== "none" && style.visibility !== "hidden" && rect.width > 0 && rect.height > 0;
-      };
-      const clickReal = (target) => {
-        target.scrollIntoView({ block: "center", inline: "center" });
-        target.focus?.({ preventScroll: true });
-        const rect = target.getBoundingClientRect();
-        const init = {
-          bubbles: true,
-          cancelable: true,
-          view: window,
-          button: 0,
-          buttons: 1,
-          clientX: Math.round(rect.left + rect.width / 2),
-          clientY: Math.round(rect.top + rect.height / 2)
-        };
-        ["mouseover", "mousemove", "pointerdown", "mousedown"].forEach((type) => target.dispatchEvent(new PointerEvent(type, init)));
-        target.dispatchEvent(new PointerEvent("pointerup", { ...init, buttons: 0 }));
-        target.dispatchEvent(new MouseEvent("mouseup", { ...init, buttons: 0 }));
-        target.dispatchEvent(new MouseEvent("click", { ...init, buttons: 0 }));
-      };
-      const keyActivate = (target, key) => {
-        const code = key === " " ? "Space" : key;
-        const keyCode = key === " " ? 32 : 13;
-        target.focus?.({ preventScroll: true });
-        target.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, cancelable: true, key, code, keyCode, which: keyCode }));
-        target.dispatchEvent(new KeyboardEvent("keyup", { bubbles: true, cancelable: true, key, code, keyCode, which: keyCode }));
       };
       const safeNextText = (value) => /^(next|next step|go next|continue|save and continue|save & continue)$/i.test(String(value || "").replace(/\\s+/g, " ").trim());
       const visibleValidationErrors = () => [...document.querySelectorAll([
@@ -2535,18 +2723,83 @@ async function clickNext(pageClient) {
       if (!button) {
         return { clicked: false, reason: "next_not_found", href: beforeHref };
       }
-      clickReal(button);
+      button.scrollIntoView({ block: "center", inline: "center" });
+      button.focus?.({ preventScroll: true });
+      await new Promise((resolve) => setTimeout(resolve, 80));
+      const rect = button.getBoundingClientRect();
+      return {
+        clicked: false,
+        reason: "ready_for_cdp_click",
+        href: beforeHref,
+        text: (button.innerText || button.textContent || "").replace(/\\s+/g, " ").trim(),
+        x: Math.round(rect.left + rect.width / 2),
+        y: Math.round(rect.top + rect.height / 2),
+        suppressedErrors
+      };
+    })()`,
+    30000,
+  );
+  if (preClick.reason !== "ready_for_cdp_click") {
+    return preClick;
+  }
+  await cdpClick(pageClient, preClick.x, preClick.y);
+  return pageClient.evaluate(
+    `(async () => {
+      const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+      const visible = (el) => {
+        const style = getComputedStyle(el);
+        const rect = el.getBoundingClientRect();
+        return style.display !== "none" && style.visibility !== "hidden" && rect.width > 0 && rect.height > 0;
+      };
+      const keyActivate = (target, key) => {
+        const code = key === " " ? "Space" : key;
+        const keyCode = key === " " ? 32 : 13;
+        target.focus?.({ preventScroll: true });
+        target.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, cancelable: true, key, code, keyCode, which: keyCode }));
+        target.dispatchEvent(new KeyboardEvent("keyup", { bubbles: true, cancelable: true, key, code, keyCode, which: keyCode }));
+      };
+      const safeNextText = (value) => /^(next|next step|go next|continue|save and continue|save & continue)$/i.test(String(value || "").replace(/\\s+/g, " ").trim());
+      const visibleValidationErrors = () => [...document.querySelectorAll([
+        '[role="alert"]',
+        '[data-automation-id*="error" i]',
+        '[id*="error" i]',
+        '.css-1iucqxd'
+      ].join(","))]
+        .filter(visible)
+        .map((node) => (node.innerText || node.textContent || "").replace(/\\s+/g, " ").trim())
+        .filter(Boolean)
+        .filter((text) => !/successfully uploaded/i.test(text))
+        .filter((text, index, all) => all.indexOf(text) === index);
+      const beforeHref = ${JSON.stringify(preClick.href)};
       await sleep(1200);
       if (location.href === beforeHref && !visibleValidationErrors().length) {
+        const button = [...document.querySelectorAll("button")]
+          .filter(visible)
+          .filter((candidate) => safeNextText(candidate.innerText || candidate.textContent || "") && !candidate.disabled && candidate.getAttribute("aria-disabled") !== "true")
+          .sort((a, b) => b.getBoundingClientRect().top - a.getBoundingClientRect().top)[0];
+        if (button) {
         keyActivate(button, "Enter");
+        }
         await sleep(900);
       }
       if (location.href === beforeHref && !visibleValidationErrors().length) {
+        const button = [...document.querySelectorAll("button")]
+          .filter(visible)
+          .filter((candidate) => safeNextText(candidate.innerText || candidate.textContent || "") && !candidate.disabled && candidate.getAttribute("aria-disabled") !== "true")
+          .sort((a, b) => b.getBoundingClientRect().top - a.getBoundingClientRect().top)[0];
+        if (button) {
         keyActivate(button, " ");
+        }
         await sleep(900);
       }
-      if (location.href === beforeHref && !visibleValidationErrors().length && typeof button.click === "function") {
+      if (location.href === beforeHref && !visibleValidationErrors().length) {
+        const button = [...document.querySelectorAll("button")]
+          .filter(visible)
+          .filter((candidate) => safeNextText(candidate.innerText || candidate.textContent || "") && !candidate.disabled && candidate.getAttribute("aria-disabled") !== "true")
+          .sort((a, b) => b.getBoundingClientRect().top - a.getBoundingClientRect().top)[0];
+        if (button && typeof button.click === "function") {
         button.click();
+        }
       }
       await sleep(6500);
       const body = document.body ? document.body.innerText : "";
@@ -2583,16 +2836,105 @@ async function clickNext(pageClient) {
       };
       return {
         clicked: true,
+        clickMethod: "cdp_mouse",
+        clickTarget: ${JSON.stringify({
+          text: preClick.text,
+          x: preClick.x,
+          y: preClick.y,
+        })},
         beforeHref,
         href: location.href,
         currentStep: readCurrentStep(),
         workdayRuntimeError,
-        suppressedErrors,
+        suppressedErrors: ${JSON.stringify(preClick.suppressedErrors || [])},
         bodyHead: body.replace(/\\s+/g, " ").trim().slice(0, 600)
       };
     })()`,
     30000,
   );
+}
+
+async function cancelPageFillFromRunner(pageClient, reason) {
+  return pageClient.evaluate(
+    `(() => {
+      window.__huntApplyCancelAllFills = true;
+      window.__huntApplyCancelFillRunId = window.__huntApplyActiveFillRunId || "";
+      window.__huntApplyRunnerCancelReason = ${JSON.stringify(reason)};
+      document.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, cancelable: true, key: "Escape", code: "Escape", keyCode: 27, which: 27 }));
+      document.dispatchEvent(new KeyboardEvent("keyup", { bubbles: true, cancelable: true, key: "Escape", code: "Escape", keyCode: 27, which: 27 }));
+      return {
+        ok: true,
+        activeFillRunId: window.__huntApplyActiveFillRunId || "",
+        cancelFillRunId: window.__huntApplyCancelFillRunId || "",
+        reason: window.__huntApplyRunnerCancelReason || ""
+      };
+    })()`,
+    5000,
+    "cancelPageFillFromRunner",
+  );
+}
+
+async function recoverPageFillTimeoutWithDirectNext(pageClient, before) {
+  const cancel = await cancelPageFillFromRunner(
+    pageClient,
+    "page_fill_and_next_timeout",
+  ).catch((error) => ({
+    ok: false,
+    reason: "cancel_page_fill_failed",
+    error: String(error?.message || error),
+  }));
+  await sleep(1200);
+  let afterFill = await inspectPage(pageClient);
+  afterFill = await suppressStaleWorkdayDateErrors(afterFill);
+  if (!canContinueWorkdayApplicationPage(afterFill)) {
+    return {
+      ok: false,
+      reason: "timeout_recovery_not_safe_to_click_next",
+      cancel,
+      afterFill,
+    };
+  }
+  const directNext = await clickNext(pageClient);
+  const postNextSettle = await waitForPostNextWorkdaySettle(pageClient, {
+    reason: "timeout_recovery_direct_safe_next",
+  });
+  const finalPage = await suppressStaleWorkdayDateErrors(
+    postNextSettle.page || (await inspectPage(pageClient)),
+  );
+  const advanced = pageAdvancedFrom(before, finalPage);
+  if (directNext.workdayRuntimeError || finalPage.workdayRuntimeError) {
+    return {
+      ok: false,
+      reason: "workday_runtime_error_after_timeout_safe_next",
+      cancel,
+      afterFill,
+      directNext,
+      postNextSettle,
+      finalPage,
+    };
+  }
+  if (advanced && !pageHasBlockingValidation(finalPage)) {
+    return {
+      ok: true,
+      reason: pageReachedReview(finalPage)
+        ? "timeout_recovered_by_direct_safe_next_to_review"
+        : "timeout_recovered_by_direct_safe_next",
+      cancel,
+      afterFill,
+      directNext,
+      postNextSettle,
+      finalPage,
+    };
+  }
+  return {
+    ok: false,
+    reason: "timeout_safe_next_did_not_advance",
+    cancel,
+    afterFill,
+    directNext,
+    postNextSettle,
+    finalPage,
+  };
 }
 
 async function clearRepeatableWorkdaySections(pageClient) {
@@ -2929,6 +3271,7 @@ async function run() {
     const startStep = await clickWorkdayStep(pageClient, args.startStep);
 
     const timeline = [];
+    let runnerFailureReported = false;
     const audit = {
       ok: false,
       mode: args.mode,
@@ -2960,6 +3303,19 @@ async function run() {
       startedAt: new Date().toISOString(),
       timings: timingRecorder.timings,
       pages: [],
+    };
+    const reportAuditFailure = async (failure, fallbackPhase) => {
+      if (runnerFailureReported) {
+        return failure;
+      }
+      runnerFailureReported = true;
+      return reportRunnerFailure(
+        optionsClient,
+        applyUrl,
+        failure,
+        fallbackPhase,
+        pageClient,
+      );
     };
     if (applyEntry.reason === "posting_not_found") {
       audit.workflow.applyEntry = applyEntry;
@@ -3270,9 +3626,43 @@ async function run() {
       const prefillClear = args.clearRepeatableSections
         ? await clearRepeatableWorkdaySections(pageClient)
         : null;
-      const pageClear = args.clearBeforeFill
-        ? await clearPageUntilStable(optionsClient, pageClient, applyUrl, before)
-        : null;
+      let pageClear = null;
+      if (args.clearBeforeFill) {
+        try {
+          pageClear = await clearPageUntilStable(
+            optionsClient,
+            pageClient,
+            applyUrl,
+            before,
+          );
+        } catch (error) {
+          runnerFailureReported = true;
+          const failure = await reportRunnerFailure(
+            optionsClient,
+            applyUrl,
+            error,
+            "job_fill.clear_before_fill",
+            pageClient,
+          );
+          audit.reason = failure.reason || "clear_before_fill_failed";
+          audit.message = failure.message;
+          timeline.push({
+            pageIndex: i + 1,
+            workflowPhase: "job_fill.clear_before_fill",
+            reason: audit.reason,
+            failure,
+            before: {
+              href: before.href,
+              currentStep: before.currentStep,
+              pageKind: before.pageKind,
+              hasNext: before.hasNext,
+              hasSubmit: before.hasSubmit,
+              errors: before.errors,
+            },
+          });
+          break pageLoop;
+        }
+      }
       const fills = [];
       let afterFill = before;
       for (let fillIndex = 0; fillIndex < args.fillsPerPage; fillIndex += 1) {
@@ -3282,6 +3672,15 @@ async function run() {
           audit.reason = "page_fill_and_next_timeout";
           audit.message =
             "Current Workday page did not finish filling and advance within the C3 fill timeout.";
+          await reportAuditFailure(
+            {
+              reason: audit.reason,
+              message: audit.message,
+              phase: "job_fill.page_budget",
+              timeoutMs: PAGE_FILL_AND_NEXT_TIMEOUT_MS,
+            },
+            "job_fill.page_budget",
+          );
           break pageLoop;
         }
         if (args.extensionAutoNext) {
@@ -3363,6 +3762,100 @@ async function run() {
             }
             break pageLoop;
           }
+          const timeoutRecovery = await recoverPageFillTimeoutWithDirectNext(
+            pageClient,
+            before,
+          );
+          afterFill = timeoutRecovery.finalPage || timeoutRecovery.afterFill;
+          if (timeoutRecovery.ok) {
+            const fillSummary = {
+              ok: true,
+              status: "recovered_after_timeout",
+              reason: timeoutRecovery.reason,
+              summary:
+                "Extension fill command timed out, but the page had no blocking validation and runner-side CDP safe next advanced Workday.",
+              filledFieldCount: 0,
+              pendingLlmFieldCount: 0,
+              manualReviewReasons: [],
+              bestEffortWarnings: ["page_fill_and_next_timeout", timeoutRecovery.reason],
+              filledFields: [],
+              generatedAnswers: [],
+              fieldInventory: [],
+              nextAction: timeoutRecovery.directNext || null,
+              siteActions: [
+                {
+                  type: "timeout_recovery_direct_safe_next",
+                  reason: timeoutRecovery.reason,
+                  cancel: timeoutRecovery.cancel,
+                  postNextSettle: timeoutRecovery.postNextSettle,
+                },
+              ],
+              v2AuditSummary: null,
+              unfilledRequired: [],
+              phoneCountryCodeTrace: [],
+              interactionTrace: [
+                {
+                  type: "runner_timeout_recovery",
+                  reason: timeoutRecovery.reason,
+                  clickMethod: timeoutRecovery.directNext?.clickMethod || "",
+                  clickTarget: timeoutRecovery.directNext?.clickTarget || null,
+                },
+              ],
+            };
+            fills.push({
+              fillIndex: fillIndex + 1,
+              fill: fillSummary,
+              timeoutRecovery,
+              afterFill: {
+                href: afterFill.href,
+                currentStep: afterFill.currentStep,
+                hasNext: afterFill.hasNext,
+                hasSubmit: afterFill.hasSubmit,
+                errors: afterFill.errors,
+                suppressedErrors: afterFill.suppressedErrors || [],
+                fields: afterFill.fields,
+                remainingValues: afterFill.remainingValues,
+              },
+            });
+            audit.pages.push(
+              buildFillAudit({
+                pageIndex: i + 1,
+                fillIndex: fillIndex + 1,
+                before,
+                afterFill,
+                fillSummary,
+              }),
+            );
+            timeline.push({
+              pageIndex: i + 1,
+              workflowPhase: "job_fill",
+              reason: timeoutRecovery.reason,
+              pageFillTimeoutRecovery: timeoutRecovery,
+              before: {
+                href: before.href,
+                currentStep: before.currentStep,
+                pageKind: before.pageKind,
+                hasNext: before.hasNext,
+                hasSubmit: before.hasSubmit,
+                errors: before.errors,
+              },
+              fill: fillSummary,
+              fills,
+              afterFill: {
+                href: afterFill.href,
+                currentStep: afterFill.currentStep,
+                pageKind: afterFill.pageKind,
+                hasNext: afterFill.hasNext,
+                hasSubmit: afterFill.hasSubmit,
+                errors: afterFill.errors,
+              },
+            });
+            if (!pageReachedReview(afterFill)) {
+              await sleep(1200);
+              continue pageLoop;
+            }
+            break pageLoop;
+          }
           const fillSummary = {
             ok: false,
             error: "page_fill_and_next_timeout",
@@ -3383,11 +3876,30 @@ async function run() {
             generatedAnswers: [],
             fieldInventory: [],
             nextAction: null,
-            siteActions: [],
+            siteActions: timeoutRecovery
+              ? [
+                  {
+                    type: "timeout_recovery_direct_safe_next",
+                    reason: timeoutRecovery.reason,
+                    cancel: timeoutRecovery.cancel,
+                    directNext: timeoutRecovery.directNext || null,
+                    postNextSettle: timeoutRecovery.postNextSettle || null,
+                  },
+                ]
+              : [],
             v2AuditSummary: null,
             unfilledRequired: [],
             phoneCountryCodeTrace: [],
-            interactionTrace: [],
+            interactionTrace: timeoutRecovery
+              ? [
+                  {
+                    type: "runner_timeout_recovery_failed",
+                    reason: timeoutRecovery.reason,
+                    clickMethod: timeoutRecovery.directNext?.clickMethod || "",
+                    clickTarget: timeoutRecovery.directNext?.clickTarget || null,
+                  },
+                ]
+              : [],
           };
           audit.pages.push(
             buildFillAudit({
@@ -3400,6 +3912,15 @@ async function run() {
           );
           audit.reason = "page_fill_and_next_timeout";
           audit.message = fillSummary.summary;
+          await reportAuditFailure(
+            {
+              reason: audit.reason,
+              message: audit.message,
+              phase: "job_fill.fill_current_page",
+              timeoutMs: PAGE_FILL_AND_NEXT_TIMEOUT_MS,
+            },
+            "job_fill.fill_current_page",
+          );
           break pageLoop;
         }
         const fillSummary = summarizeFill(fill);
@@ -4013,6 +4534,16 @@ async function run() {
       errors: finalPage.errors,
       reviewCoverage: finalPage.reviewCoverage || null,
     };
+    if (!audit.ok && audit.reason) {
+      await reportAuditFailure(
+        {
+          reason: audit.reason,
+          message: audit.message || "C3 Workday smoke did not complete.",
+          phase: "workday_runner.audit_result",
+        },
+        "workday_runner.audit_result",
+      );
+    }
     const auditPath = writeAuditJson(args.auditJson, audit);
     const issueRegistry = recordAuditIssues({
       audit,
@@ -4043,6 +4574,15 @@ async function run() {
         2,
       ),
     );
+  } catch (error) {
+    await reportRunnerFailure(
+      optionsClient,
+      applyUrl,
+      error,
+      error?.phase || "workday_runner",
+      pageClient,
+    ).catch(() => null);
+    throw error;
   } finally {
     optionsClient.close();
     pageClient.close();
@@ -4061,6 +4601,22 @@ run().catch((error) => {
           message: error.message,
           phase: error.phase,
           timeoutMs: error.timeoutMs,
+        },
+        null,
+        2,
+      ),
+    );
+  } else {
+    const failure = runnerFailureDetails(error, "workday_runner");
+    console.log(
+      JSON.stringify(
+        {
+          ok: false,
+          reason: failure.reason,
+          message: failure.message,
+          phase: failure.phase,
+          command: failure.command,
+          timeoutMs: failure.timeoutMs,
         },
         null,
         2,

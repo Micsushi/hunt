@@ -98,6 +98,7 @@ function updateCalculatedHourlyPay() {
 }
 
 let currentActivityLog = [];
+const MAX_RENDERED_ACTIVITY_LOG_ROWS = 50;
 let workExperienceEntries = [];
 let educationEntries = [];
 let languageEntries = [];
@@ -640,10 +641,16 @@ function renderActivityLog(entries = []) {
   }
   const count = document.getElementById("activity-log-count");
   if (count) {
-    count.textContent = `${entries.length} ${entries.length === 1 ? "entry" : "entries"}`;
+    const renderedCount = Math.min(
+      entries.length,
+      MAX_RENDERED_ACTIVITY_LOG_ROWS,
+    );
+    count.textContent = `${entries.length} ${
+      entries.length === 1 ? "entry" : "entries"
+    } (${renderedCount} shown)`;
   }
   container.innerHTML = "";
-  const recentEntries = [...entries].reverse();
+  const recentEntries = entries.slice(-MAX_RENDERED_ACTIVITY_LOG_ROWS).reverse();
   if (!recentEntries.length) {
     const empty = document.createElement("div");
     empty.className = "empty-log";
@@ -674,9 +681,13 @@ function renderActivityLog(entries = []) {
 
     const details = document.createElement("pre");
     details.className = "log-details";
-    details.textContent = formatLogDetails(entry);
+    details.dataset.loaded = "false";
 
     row.addEventListener("click", () => {
+      if (details.dataset.loaded !== "true") {
+        details.textContent = formatLogDetails(entry);
+        details.dataset.loaded = "true";
+      }
       row.classList.toggle("expanded");
     });
 

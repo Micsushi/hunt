@@ -8,7 +8,6 @@ import httpx
 
 DEFAULT_BACKEND_URL = "http://127.0.0.1:8000"
 DEFAULT_TIMEOUT_SECONDS = 30.0
-MISSING_C3_COMMAND_BRIDGE = "missing_backend_browser_control_bridge"
 
 
 class HuntBackendError(RuntimeError):
@@ -92,65 +91,98 @@ class HuntLedgerClient:
         params = {key: value for key, value in payload.items() if key != "session_id"}
         return self._request("GET", f"/api/ledger/sessions/{session_id}", params=params or None)
 
+    def get_command_timeline(self, payload: dict[str, Any]) -> Any:
+        command_id = _required(payload, "command_id")
+        return self._request("GET", f"/api/ledger/commands/{command_id}/timeline")
+
+    def find_recent_failures(self, payload: dict[str, Any] | None = None) -> Any:
+        body = payload or {}
+        params = {
+            key: value
+            for key, value in {
+                "component": body.get("component") or "c3",
+                "limit": body.get("limit") or 20,
+            }.items()
+            if value is not None
+        }
+        return self._request("GET", "/api/ledger/failures/recent", params=params)
+
     def write_probe_file(self, payload: dict[str, Any]) -> Any:
         body = dict(payload)
         body.setdefault("trusted", False)
         return self._request("POST", "/api/ledger/probes", json=body)
 
-    def run_c3_command(self, payload: dict[str, Any]) -> Any:
-        command_id = _required(payload, "command_id")
-        command_name = _required(payload, "command_name")
-        agent_id = _required(payload, "agent_id")
+    def register_browser_target(self, payload: dict[str, Any]) -> Any:
+        return self._request("POST", "/api/c3/browser-targets/register", json=_browser_target_body(payload))
+
+    def get_browser_target(self, payload: dict[str, Any]) -> Any:
         session_id = _required(payload, "session_id")
-        lease_id = _required(payload, "lease_id")
-        reason = _required(payload, "reason")
+        return self._request("GET", f"/api/c3/browser-targets/{session_id}")
+
+    def list_browser_targets(self, payload: dict[str, Any] | None = None) -> Any:
+        del payload
+        return self._request("GET", "/api/c3/browser-targets")
+
+    def unregister_browser_target(self, payload: dict[str, Any]) -> Any:
+        session_id = _required(payload, "session_id")
+        params = {
+            key: value
+            for key, value in {
+                "agent_id": payload.get("agent_id"),
+                "reason": payload.get("reason"),
+            }.items()
+            if value
+        }
+        return self._request("DELETE", f"/api/c3/browser-targets/{session_id}", params=params or None)
+
+    def run_c3_command(self, payload: dict[str, Any]) -> Any:
+        _required(payload, "command_id")
+        _required(payload, "command_name")
+        _required(payload, "agent_id")
+        _required(payload, "session_id")
+        _required(payload, "lease_id")
+        _required(payload, "reason")
         command_payload = payload.get("command_payload", {})
         if not isinstance(command_payload, dict):
             raise ValueError("command_payload must be an object")
+        target = payload.get("target")
+        if target is None:
+            target = _target_from_payload(payload, command_payload)
+        if not isinstance(target, dict):
+            raise ValueError("target must be an object")
 
-        actor = payload.get("actor")
-        if not isinstance(actor, dict):
-            actor = {"type": "agent", "id": agent_id, "surface": "mcp"}
+        body = dict(payload)
+        body["command_payload"] = command_payload
+        body["target"] = target
+        return self._request("POST", "/api/c3/commands/run", json=body)
 
-        event_payload: dict[str, Any] = {
-            "command_name": command_name,
-            "command_payload": command_payload,
-            "reason": reason,
-            "requested_via": "hunt_mcp.hunt_c3_run_command",
-            "bridge_status": MISSING_C3_COMMAND_BRIDGE,
-            "execution_status": "not_executed",
-        }
-        metadata = payload.get("metadata")
-        if isinstance(metadata, dict) and metadata:
-            event_payload["metadata"] = metadata
-        probe_budget_id = payload.get("probe_budget_id")
-        if isinstance(probe_budget_id, str) and probe_budget_id.strip():
-            event_payload["probe_budget_id"] = probe_budget_id
+    def get_c3_command_catalog(self, payload: dict[str, Any] | None = None) -> Any:
+        del payload
+        return self._request("GET", "/api/c3/commands/catalog")
 
-        event_body = {
-            "component": "c3",
-            "event_type": "command.requested",
-            "actor": actor,
-            "agent_id": agent_id,
-            "lane_id": str(payload.get("lane_id") or ""),
-            "session_id": session_id,
-            "lease_id": lease_id,
-            "command_id": command_id,
-            "trace_id": str(payload.get("trace_id") or command_id),
-            "payload": event_payload,
-        }
-        ledger_event = self.append_event(event_body)
-        return {
-            "command_id": command_id,
-            "command_name": command_name,
-            "status": "recorded_not_executed",
-            "bridge_status": MISSING_C3_COMMAND_BRIDGE,
-            "message": (
-                "No backend/browser-control command endpoint exists yet; "
-                "the MCP adapter recorded an immutable ledger request only."
-            ),
-            "ledger_event": ledger_event,
-        }
+    def inspect_fields(self, payload: dict[str, Any]) -> Any:
+        return self._run_named_c3_command("c3.inspect_fields", payload, "Inspect visible fields.")
+
+    def inspect_validation(self, payload: dict[str, Any]) -> Any:
+        return self._run_named_c3_command("c3.inspect_validation", payload, "Inspect visible validation state.")
+
+    def snapshot_page(self, payload: dict[str, Any]) -> Any:
+        return self._run_named_c3_command("c3.snapshot_page", payload, "Capture sanitized page snapshot.")
+
+    def get_progress(self, payload: dict[str, Any]) -> Any:
+        return self._run_named_c3_command("c3.get_progress", payload, "Read current C3 progress.")
+
+    def fill_page(self, payload: dict[str, Any]) -> Any:
+        return self._run_named_c3_command("c3.fill_page", payload, "Fill current apply page.")
+
+    def click_next_after_fill(self, payload: dict[str, Any]) -> Any:
+        return self._run_named_c3_command("c3.click_next_after_fill", payload, "Click safe next action.")
+
+    def _run_named_c3_command(self, command_name: str, payload: dict[str, Any], default_reason: str) -> Any:
+        body = dict(payload)
+        body["command_name"] = command_name
+        body.setdefault("reason", default_reason)
+        return self.run_c3_command(body)
 
     def _request(self, method: str, path: str, **kwargs: Any) -> Any:
         response = self._client.request(method, path, **kwargs)
@@ -169,6 +201,53 @@ def _required(payload: dict[str, Any], key: str) -> str:
     if not isinstance(value, str) or not value.strip():
         raise ValueError(f"{key} is required")
     return value
+
+
+def _target_from_payload(payload: dict[str, Any], command_payload: dict[str, Any]) -> dict[str, Any]:
+    debug_port = payload.get("debug_port") or payload.get("cdp_port") or command_payload.get("cdp_port")
+    extension_id = payload.get("extension_id") or command_payload.get("extension_id")
+    tab_id = _optional_int(payload.get("tab_id") or command_payload.get("tab_id") or command_payload.get("tabId"))
+    url = payload.get("url") or command_payload.get("url")
+    return {
+        "browser_kind": payload.get("browser_kind") or "p_chrome",
+        "debug_port": debug_port,
+        "extension_id": extension_id,
+        "options_url": payload.get("options_url") or command_payload.get("options_url") or "",
+        "tab_id": tab_id,
+        "url": url or "",
+    }
+
+
+def _browser_target_body(payload: dict[str, Any]) -> dict[str, Any]:
+    session_id = _required(payload, "session_id")
+    agent_id = _required(payload, "agent_id")
+    lane_id = _required(payload, "lane_id")
+    extension_id = _required(payload, "extension_id")
+    debug_port = payload.get("debug_port") or payload.get("cdp_port")
+    if not debug_port:
+        raise ValueError("debug_port or cdp_port is required")
+    return {
+        "session_id": session_id,
+        "agent_id": agent_id,
+        "lane_id": lane_id,
+        "browser_kind": payload.get("browser_kind") or "p_chrome",
+        "debug_port": int(debug_port),
+        "extension_id": extension_id,
+        "options_url": payload.get("options_url")
+        or f"chrome-extension://{extension_id}/src/options/options.html",
+        "tab_id": _optional_int(payload.get("tab_id")),
+        "url": payload.get("url") or "",
+        "metadata": payload.get("metadata") if isinstance(payload.get("metadata"), dict) else {},
+        "actor": payload.get("actor")
+        if isinstance(payload.get("actor"), dict)
+        else {"type": "agent", "id": agent_id, "surface": "mcp"},
+    }
+
+
+def _optional_int(value: Any) -> int | None:
+    if value is None or value == "":
+        return None
+    return int(value)
 
 
 def _response_reason(response: httpx.Response) -> Any:

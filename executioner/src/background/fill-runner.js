@@ -37,6 +37,169 @@ for (const atsName of GENERIC_BACKED_ATS_NAMES) {
 const pendingLlmFillByTab = new Map();
 const SCREENSHOT_CAPTURE_TIMEOUT_MS = 1500;
 const BACKEND_ANSWER_DECISION_TIMEOUT_MS = 8000;
+const PERSIST_FILL_ATTEMPT_TIMEOUT_MS = 5000;
+const ADAPTER_EXECUTE_SCRIPT_TIMEOUT_MS = 70000;
+const ADAPTER_TIMEOUT_RECOVERY_TIMEOUT_MS = 5000;
+
+function withTimeout(promise, timeoutMs, fallbackFactory) {
+  let timer = null;
+  const timeout = new Promise((resolve) => {
+    timer = setTimeout(() => {
+      resolve(
+        typeof fallbackFactory === "function"
+          ? fallbackFactory()
+          : fallbackFactory,
+      );
+    }, timeoutMs);
+  });
+  return Promise.race([promise, timeout]).finally(() => {
+    if (timer) {
+      clearTimeout(timer);
+    }
+  });
+}
+
+function createAdapterExecuteScriptTimeoutResult(context, reason, details = {}) {
+  const manualReviewReasons = [reason];
+  return {
+    ok: false,
+    atsType: context.atsType,
+    adapterBackedByGeneric: false,
+    frameUrl: context.pageUrl || "",
+    authState: "unknown",
+    filledFieldCount: Number(details.filledFieldCount || 0),
+    generatedAnswerCount: 0,
+    manualReviewRequired: true,
+    manualReviewReasons,
+    bestEffortWarnings: manualReviewReasons,
+    filledFields: details.filledFields || [],
+    fieldInventory: details.fieldInventory || [],
+    generatedAnswers: [],
+    htmlSnapshot: details.htmlSnapshot || "",
+    interactionTrace: [
+      {
+        action: reason,
+        step: "adapter.execute_script_timeout",
+        status: "warn",
+        reason:
+          "Adapter executeScript did not resolve before the background timeout.",
+        detail: {
+          timeoutMs: ADAPTER_EXECUTE_SCRIPT_TIMEOUT_MS,
+          ...details.diagnostics,
+        },
+      },
+    ],
+    traceTruncated: false,
+    v2Audit: {
+      summary: {
+        fieldCount: Array.isArray(details.fieldInventory)
+          ? details.fieldInventory.length
+          : 0,
+      },
+      permanentIssues: [
+        {
+          kind: reason,
+          severity: "warn",
+          failedStep: "adapter.execute_script_timeout",
+          reason:
+            "Chrome scripting adapter call exceeded the background guard timeout.",
+        },
+      ],
+      events: [],
+    },
+  };
+}
+
+function adapterExecuteScriptTimeoutRecoveryFunction(reason) {
+  window.__huntApplyCancelAllFills = true;
+  window.__huntApplyCancelFillRunId = window.__huntApplyActiveFillRunId || "";
+  const clean = (value) =>
+    String(value || "")
+      .replace(/\s+/g, " ")
+      .trim();
+  const visible = (element) => {
+    if (!element) return false;
+    const style = getComputedStyle(element);
+    const rect = element.getBoundingClientRect();
+    return (
+      style.display !== "none" &&
+      style.visibility !== "hidden" &&
+      rect.width > 0 &&
+      rect.height > 0
+    );
+  };
+  const fieldInventory = [];
+  const filledFields = [];
+  Array.from(document.querySelectorAll("input, textarea, button")).forEach(
+    (el) => {
+      if (!visible(el)) return;
+      const tagName = el.tagName || "";
+      const type = String(el.type || "").toLowerCase();
+      if (
+        tagName === "INPUT" &&
+        /^(hidden|submit|button|reset|file)$/i.test(type)
+      ) {
+        return;
+      }
+      const descriptor = clean(
+        [
+          el.getAttribute?.("aria-label"),
+          el.id,
+          el.name,
+          el.innerText,
+          el.textContent,
+        ]
+          .filter(Boolean)
+          .join(" "),
+      );
+      const value =
+        type === "checkbox" || type === "radio"
+          ? el.checked
+            ? el.value || "checked"
+            : ""
+          : clean(el.value || el.innerText || el.textContent || "");
+      const filled =
+        Boolean(value) &&
+        !/^select one$/i.test(value) &&
+        !/^(english|settings|save and continue)$/i.test(value);
+      if (!descriptor && !filled) return;
+      const entry = {
+        kind: tagName.toLowerCase(),
+        tagName,
+        type,
+        id: el.id || "",
+        name: el.name || "",
+        descriptor: descriptor.slice(0, 240),
+        required:
+          el.required || /required/i.test(el.getAttribute?.("aria-label") || ""),
+        filled,
+        skippedReason: filled ? "" : reason,
+        valueSource: filled ? "dom:adapter_timeout_recovery" : "",
+        bestEffortWarning: filled ? "" : reason,
+        options: [],
+      };
+      fieldInventory.push(entry);
+      if (filled) {
+        filledFields.push({
+          field: entry.descriptor,
+          valueSource: entry.valueSource,
+          questionHash: entry.id || entry.name || entry.descriptor,
+        });
+      }
+    },
+  );
+  return {
+    filledFieldCount: filledFields.length,
+    filledFields,
+    fieldInventory,
+    htmlSnapshot: document.documentElement.outerHTML.slice(0, 50000),
+    diagnostics: {
+      href: location.href,
+      activeFillRunId: window.__huntApplyActiveFillRunId || "",
+      cancelFillRunId: window.__huntApplyCancelFillRunId || "",
+    },
+  };
+}
 
 function filledTextNeedsBackendRepair(entry, isTextual) {
   if (!isTextual) {
@@ -1264,26 +1427,69 @@ class RunAdapterFillStep {
           accountEmail: "",
           accountPassword: "",
         };
-    const injectionResults = await chrome.scripting.executeScript({
-      target: { tabId: context.activeTabId, allFrames: true },
-      func: context.adapterFactory(),
-      args: [
-        {
-          profile: adapterProfile,
-          settings: {
-            ...context.extensionState.settings,
-            fieldFillTimeoutMs: context.options.fieldFillTimeoutMs,
+    const injectionTarget =
+      context.atsType === "workday"
+        ? { tabId: context.activeTabId }
+        : { tabId: context.activeTabId, allFrames: true };
+    const injectionResults = await withTimeout(
+      chrome.scripting.executeScript({
+        target: injectionTarget,
+        func: context.adapterFactory(),
+        args: [
+          {
+            profile: adapterProfile,
+            settings: {
+              ...context.extensionState.settings,
+              fieldFillTimeoutMs: context.options.fieldFillTimeoutMs,
+              workdayFillReturnTimeoutMs:
+                context.options.workdayFillReturnTimeoutMs,
+            },
+            activeApplyContext: context.extensionState.activeApplyContext,
+            defaultResume: context.extensionState.defaultResume,
+            fieldRules: GENERIC_FIELD_RULES,
+            fillRoute: context.route,
+            fillRunId: context.options.fillRunId || "",
+            repairVisibleValidationErrors:
+              context.options.repairVisibleValidationErrors || [],
           },
-          activeApplyContext: context.extensionState.activeApplyContext,
-          defaultResume: context.extensionState.defaultResume,
-          fieldRules: GENERIC_FIELD_RULES,
-          fillRoute: context.route,
-          fillRunId: context.options.fillRunId || "",
-          repairVisibleValidationErrors:
-            context.options.repairVisibleValidationErrors || [],
-        },
-      ],
-    });
+        ],
+      }),
+      ADAPTER_EXECUTE_SCRIPT_TIMEOUT_MS,
+      async () => {
+        const reason = "adapter_execute_script_timeout";
+        let details = {};
+        try {
+          const recoveryResults = await withTimeout(
+            chrome.scripting.executeScript({
+              target: injectionTarget,
+              func: adapterExecuteScriptTimeoutRecoveryFunction,
+              args: [reason],
+            }),
+            ADAPTER_TIMEOUT_RECOVERY_TIMEOUT_MS,
+            () => [],
+          );
+          details =
+            (Array.isArray(recoveryResults)
+              ? recoveryResults.map((entry) => entry.result).find(Boolean)
+              : null) || {};
+        } catch (error) {
+          details = {
+            diagnostics: {
+              recoveryError: error instanceof Error ? error.message : String(error),
+            },
+          };
+        }
+        return [
+          {
+            result: createAdapterExecuteScriptTimeoutResult(
+              context,
+              reason,
+              details,
+            ),
+          },
+        ];
+      },
+    );
 
     context.result = chooseBestFrameResult(injectionResults);
     if (context.workdayRuntimeRecovery) {
@@ -1291,17 +1497,29 @@ class RunAdapterFillStep {
     }
     if (context.result.v2Audit) {
       try {
-        await postDebugLog(context.extensionState.settings, {
-          eventType: "c3_v2_audit",
-          extensionTime: new Date().toISOString(),
-          ...debugIdentityForState(context.extensionState),
-          payload: {
-            pageUrl: context.pageUrl,
-            atsType: context.result.atsType || context.atsType,
-            route: context.route,
-            audit: context.result.v2Audit,
-          },
-        });
+        const debugLogResult = await withTimeout(
+          postDebugLog(context.extensionState.settings, {
+            eventType: "c3_v2_audit",
+            extensionTime: new Date().toISOString(),
+            ...debugIdentityForState(context.extensionState),
+            payload: {
+              pageUrl: context.pageUrl,
+              atsType: context.result.atsType || context.atsType,
+              route: context.route,
+              audit: context.result.v2Audit,
+            },
+          }).then(() => ({ ok: true })),
+          BACKEND_ANSWER_DECISION_TIMEOUT_MS,
+          () => ({
+            ok: false,
+            reason: "v2_audit_debug_log_timeout",
+            timeoutMs: BACKEND_ANSWER_DECISION_TIMEOUT_MS,
+          }),
+        );
+        if (!debugLogResult.ok) {
+          context.result.v2AuditBackendLogFailed = true;
+          context.result.v2AuditBackendLogFailure = debugLogResult;
+        }
       } catch (_error) {
         context.result.v2AuditBackendLogFailed = true;
       }
@@ -1342,13 +1560,54 @@ class PrepareLlmHelpStep {
 
 class PersistFillAttemptStep {
   async run(context) {
-    const { attempt, answerEntries } = await persistFillAttempt({
-      extensionState: context.extensionState,
-      pageUrl: context.pageUrl,
-      atsType: context.result.atsType || context.atsType,
-      route: context.route,
-      result: context.result,
-    });
+    const { attempt, answerEntries } = await withTimeout(
+      persistFillAttempt({
+        extensionState: context.extensionState,
+        pageUrl: context.pageUrl,
+        atsType: context.result.atsType || context.atsType,
+        route: context.route,
+        result: context.result,
+      }),
+      PERSIST_FILL_ATTEMPT_TIMEOUT_MS,
+      () => {
+        context.result.persistenceDiagnostics = {
+          ...(context.result.persistenceDiagnostics || {}),
+          attemptStorage: {
+            reason: "persist_fill_attempt_timeout",
+            timeoutMs: PERSIST_FILL_ATTEMPT_TIMEOUT_MS,
+          },
+        };
+        const manualReviewRequired = Boolean(
+          context.result.manualReviewRequired,
+        );
+        return {
+          attempt: sanitizeAttempt({
+            id: crypto.randomUUID(),
+            sourceMode: context.extensionState.activeApplyContext.jobId
+              ? "c4_or_queue"
+              : "manual",
+            jobId: context.extensionState.activeApplyContext.jobId,
+            applyUrl:
+              context.extensionState.activeApplyContext.applyUrl ||
+              context.pageUrl,
+            atsType: context.result.atsType || context.atsType,
+            fillRoute: context.route.routeName,
+            status: context.result.ok
+              ? manualReviewRequired
+                ? "manual_review"
+                : "filled"
+              : "failed",
+            filledFieldCount: context.result.filledFieldCount || 0,
+            generatedAnswerCount: context.result.generatedAnswerCount || 0,
+            manualReviewRequired,
+            manualReviewReasons: context.result.manualReviewReasons || [],
+            bestEffortWarnings: context.result.bestEffortWarnings || [],
+            resultSummary: "Fill completed; attempt persistence timed out.",
+          }),
+          answerEntries: [],
+        };
+      },
+    );
     context.attempt = attempt;
     context.answerEntries = answerEntries;
   }
