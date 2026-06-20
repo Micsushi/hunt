@@ -56,6 +56,8 @@ const APPLY_ENTRY_TIMEOUT_MS = 60_000;
 const C3_EXTENSION_FILL_TIMEOUT_MS = 120_000;
 const PAGE_FILL_AND_NEXT_TIMEOUT_MS = C3_EXTENSION_FILL_TIMEOUT_MS + 10_000;
 const FULL_APPLICATION_TIMEOUT_MS = 600_000;
+const UPLOADED_FILE_SUCCESS_RE =
+  /successfully uploaded|\.pdf\b.*uploaded|uploaded.*\.pdf\b|\.docx?\b.*uploaded|uploaded.*\.docx?\b/i;
 
 class PhaseTimeoutError extends Error {
   constructor(phase, timeoutMs) {
@@ -1959,7 +1961,7 @@ function pageSummaryExpression() {
       .filter(visible)
       .map((el) => (el.innerText || el.textContent || "").replace(/\\s+/g, " ").trim())
       .filter(Boolean)
-      .filter((text) => !/successfully uploaded/i.test(text))
+      .filter((text) => !${UPLOADED_FILE_SUCCESS_RE}.test(text))
       .slice(0, 30);
     const reviewNoResponseLabels = [];
     const reviewLines = text.split(/\\n+/).map(normalize).filter(Boolean);
@@ -2240,6 +2242,24 @@ async function cdpClick(client, x, y) {
   });
 }
 
+async function cdpPressKey(client, key, code = key, virtualKeyCode = 0) {
+  await client.send("Input.dispatchKeyEvent", {
+    type: "keyDown",
+    key,
+    code,
+    windowsVirtualKeyCode: virtualKeyCode,
+    nativeVirtualKeyCode: virtualKeyCode,
+  });
+  await sleep(35);
+  await client.send("Input.dispatchKeyEvent", {
+    type: "keyUp",
+    key,
+    code,
+    windowsVirtualKeyCode: virtualKeyCode,
+    nativeVirtualKeyCode: virtualKeyCode,
+  });
+}
+
 async function suppressStaleWorkdayDateErrors(summary) {
   const errors = Array.isArray(summary?.errors) ? summary.errors : [];
   if (
@@ -2306,7 +2326,32 @@ async function fillCurrentPage(optionsClient, applyUrl, args, pageContext = {}) 
   const messageTimeoutMs = fillMessageTimeoutMs(args);
   const evaluateTimeoutMs = messageTimeoutMs + 10000;
   const allowLoginRedirectFill = looksLikeAuthPage(pageContext);
-  return optionsClient.evaluate(
+  const nodeSideTimeoutMs =
+    messageTimeoutMs >= 600000 ? messageTimeoutMs : messageTimeoutMs + 5000;
+  const timeoutFallback = () => ({
+    ok: false,
+    error: "fill_message_timeout",
+    message: "Fill message timed out before the extension responded.",
+    nextAction: null,
+    status: "timeout",
+    summary: "Fill message timed out.",
+    filledFieldCount: 0,
+    manualReviewReasons: ["fill_timeout"],
+    bestEffortWarnings: ["fill_message_timeout"],
+    pendingLlmFieldCount: 0,
+    generatedAnswers: [],
+    filledFields: [],
+    interactionTrace: [
+      {
+        type: "node_side_fill_message_timeout",
+        timeoutMs: nodeSideTimeoutMs,
+      },
+    ],
+    v2Audit: null,
+    siteActions: [],
+    fieldInventory: [],
+  });
+  const evaluation = optionsClient.evaluate(
     `(async () => {
       const tabs = await new Promise((resolve) => chrome.tabs.query({}, resolve));
       const applyUrl = ${JSON.stringify(applyUrl)};
@@ -2489,6 +2534,13 @@ async function fillCurrentPage(optionsClient, applyUrl, args, pageContext = {}) 
     })()`,
     evaluateTimeoutMs,
   );
+  evaluation.catch(() => {});
+  return Promise.race([
+    evaluation,
+    new Promise((resolve) => {
+      setTimeout(() => resolve(timeoutFallback()), nodeSideTimeoutMs);
+    }),
+  ]);
 }
 
 async function clearCurrentPage(optionsClient, applyUrl, pageContext = {}) {
@@ -2671,7 +2723,7 @@ async function clickNext(pageClient) {
         .filter(visible)
         .map((node) => (node.innerText || node.textContent || "").replace(/\\s+/g, " ").trim())
         .filter(Boolean)
-        .filter((text) => !/successfully uploaded/i.test(text))
+        .filter((text) => !${UPLOADED_FILE_SUCCESS_RE}.test(text))
         .filter((text, index, all) => all.indexOf(text) === index);
       const dateSectionLooksFilled = () => {
         const values = [...document.querySelectorAll('input[id*="dateSectionMonth"], input[id*="dateSectionDay"], input[id*="dateSectionYear"]')]
@@ -2768,7 +2820,7 @@ async function clickNext(pageClient) {
         .filter(visible)
         .map((node) => (node.innerText || node.textContent || "").replace(/\\s+/g, " ").trim())
         .filter(Boolean)
-        .filter((text) => !/successfully uploaded/i.test(text))
+        .filter((text) => !${UPLOADED_FILE_SUCCESS_RE}.test(text))
         .filter((text, index, all) => all.indexOf(text) === index);
       const beforeHref = ${JSON.stringify(preClick.href)};
       await sleep(1200);
@@ -2854,6 +2906,586 @@ async function clickNext(pageClient) {
   );
 }
 
+async function uploadResumeViaCdp(pageClient, resumePath) {
+  if (!resumePath || !fs.existsSync(resumePath)) {
+    return { ok: false, reason: "resume_file_missing", resumePath };
+  }
+  const preflight = await pageClient.evaluate(
+    `(() => {
+      const visible = (el) => {
+        const style = getComputedStyle(el);
+        const rect = el.getBoundingClientRect();
+        return style.display !== "none" && style.visibility !== "hidden" && rect.width > 0 && rect.height > 0;
+      };
+      const input = document.querySelector('input[type="file"]');
+      const body = String(document.body?.innerText || "");
+      return {
+        hasFileInput: Boolean(input),
+        inputCount: document.querySelectorAll('input[type="file"]').length,
+        alreadyUploaded: ${UPLOADED_FILE_SUCCESS_RE}.test(body),
+        hasResumeCue: /resume\\/cv|upload a file|select files|drag and drop/i.test(body),
+        hasVisibleFileInput: Boolean(input && visible(input)),
+        href: location.href
+      };
+    })()`,
+    10000,
+  );
+  if (preflight.alreadyUploaded) {
+    return { ok: true, reason: "resume_already_uploaded", preflight };
+  }
+  if (!preflight.hasFileInput) {
+    return { ok: false, reason: "resume_file_input_not_found", preflight };
+  }
+  await pageClient.send("DOM.enable", {});
+  const doc = await pageClient.send("DOM.getDocument", {
+    depth: -1,
+    pierce: true,
+  });
+  const input = await pageClient.send("DOM.querySelector", {
+    nodeId: doc.root.nodeId,
+    selector: 'input[type="file"]',
+  });
+  if (!input?.nodeId) {
+    return { ok: false, reason: "resume_file_input_node_not_found", preflight };
+  }
+  await pageClient.send("DOM.setFileInputFiles", {
+    nodeId: input.nodeId,
+    files: [resumePath],
+  });
+  const confirmation = await pageClient.evaluate(
+    `(async () => {
+      const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+      const visible = (el) => {
+        const style = getComputedStyle(el);
+        const rect = el.getBoundingClientRect();
+        return style.display !== "none" && style.visibility !== "hidden" && rect.width > 0 && rect.height > 0;
+      };
+      const safeNextText = (value) => /^(next|next step|go next|continue|save and continue|save & continue)$/i.test(String(value || "").replace(/\\s+/g, " ").trim());
+      const uploaded = () => ${UPLOADED_FILE_SUCCESS_RE}.test(String(document.body?.innerText || ""));
+      const nextReady = () => [...document.querySelectorAll("button")]
+        .filter(visible)
+        .some((button) => safeNextText(button.innerText || button.textContent || "") && !button.disabled && button.getAttribute("aria-disabled") !== "true");
+      const startedAt = Date.now();
+      let bodyHead = "";
+      while (Date.now() - startedAt < 20000) {
+        bodyHead = String(document.body?.innerText || "").replace(/\\s+/g, " ").trim().slice(0, 600);
+        if (uploaded() && nextReady()) {
+          return {
+            ok: true,
+            uploaded: true,
+            nextReady: true,
+            waitedMs: Date.now() - startedAt,
+            bodyHead
+          };
+        }
+        await sleep(300);
+      }
+      return {
+        ok: false,
+        uploaded: uploaded(),
+        nextReady: nextReady(),
+        waitedMs: Date.now() - startedAt,
+        bodyHead
+      };
+    })()`,
+    25000,
+  );
+  return {
+    ok: Boolean(confirmation.ok),
+    reason: confirmation.ok ? "resume_uploaded_via_cdp" : "resume_upload_not_confirmed",
+    preflight,
+    confirmation,
+  };
+}
+
+async function recoverWorkdayResumeUploadWithCdp(
+  pageClient,
+  args,
+  before,
+  reason,
+) {
+  const upload = await uploadResumeViaCdp(pageClient, args.resumePath).catch(
+    (error) => ({
+      ok: false,
+      reason: "resume_upload_cdp_failed",
+      error: String(error?.message || error),
+    }),
+  );
+  let afterUpload = await inspectPage(pageClient).catch(() => null);
+  if (afterUpload) {
+    afterUpload = await suppressStaleWorkdayDateErrors(afterUpload);
+  }
+  if (!upload.ok || !canContinueWorkdayApplicationPage(afterUpload)) {
+    return {
+      ok: false,
+      reason: upload.reason || "resume_upload_cdp_not_safe_to_click_next",
+      upload,
+      afterUpload,
+    };
+  }
+  const directNext = await clickNext(pageClient);
+  const postNextSettle = await waitForPostNextWorkdaySettle(pageClient, {
+    reason,
+  });
+  const finalPage = await suppressStaleWorkdayDateErrors(
+    postNextSettle.page || (await inspectPage(pageClient)),
+  );
+  const advanced = pageAdvancedFrom(before, finalPage);
+  if (directNext.workdayRuntimeError || finalPage.workdayRuntimeError) {
+    return {
+      ok: false,
+      reason: "workday_runtime_error_after_resume_upload_next",
+      upload,
+      afterUpload,
+      directNext,
+      postNextSettle,
+      finalPage,
+    };
+  }
+  if (advanced && !pageHasBlockingValidation(finalPage)) {
+    return {
+      ok: true,
+      reason: pageReachedReview(finalPage)
+        ? "resume_upload_cdp_recovered_to_review"
+        : "resume_upload_cdp_recovered_next",
+      upload,
+      afterUpload,
+      directNext,
+      postNextSettle,
+      finalPage,
+    };
+  }
+  return {
+    ok: false,
+    reason: "resume_upload_cdp_next_did_not_advance",
+    upload,
+    afterUpload,
+    directNext,
+    postNextSettle,
+    finalPage,
+  };
+}
+
+function normalizeQuestionText(value) {
+  return String(value || "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function chooseWorkdayQuestionnaireOption(label, options) {
+  const normalizedLabel = normalizeQuestionText(label);
+  const candidates = (options || []).filter(
+    (option) =>
+      !option.disabled &&
+      option.text &&
+      !/^select one$/i.test(String(option.text || "").trim()),
+  );
+  const find = (pattern) =>
+    candidates.find((option) => pattern.test(normalizeQuestionText(option.text)));
+  if (
+    /diversity|inclusion|gender|aboriginal|visible minority|disability/.test(
+      normalizedLabel,
+    )
+  ) {
+    return (
+      find(/prefer not/) ||
+      find(/do not.*self identify/) ||
+      find(/not.*identify/) ||
+      candidates[0]
+    );
+  }
+  if (/family member.*sun life/.test(normalizedLabel)) {
+    return find(/^no$/) || find(/no/);
+  }
+  if (/legally eligible.*work.*canada/.test(normalizedLabel)) {
+    return (
+      find(/yes.*citizen.*permanent.*resident.*canada/) ||
+      find(/^yes/) ||
+      candidates[0]
+    );
+  }
+  if (/language skills|official languages|fluent/.test(normalizedLabel)) {
+    return (
+      find(/fluent.*english only/) ||
+      find(/fluent.*english/) ||
+      candidates[0]
+    );
+  }
+  if (/salary expectation/.test(normalizedLabel)) {
+    return (
+      find(/^150000.*175000$/) ||
+      find(/150.*175/) ||
+      find(/135.*150/) ||
+      find(/120.*135/) ||
+      candidates[Math.max(0, Math.floor(candidates.length * 0.65) - 1)] ||
+      candidates.at(-1)
+    );
+  }
+  if (/ernst young|deloitte/.test(normalizedLabel)) {
+    return find(/^no.*not worked/) || find(/^no/) || candidates[0];
+  }
+  return candidates[0] || null;
+}
+
+async function recoverWorkdayQuestionnaireWithCdp(pageClient, before, reason) {
+  const summary = await pageClient.evaluate(
+    `(() => {
+      const norm = (value) => String(value || "").replace(/\\s+/g, " ").trim();
+      const visible = (el) => {
+        const style = getComputedStyle(el);
+        const rect = el.getBoundingClientRect();
+        return style.display !== "none" && style.visibility !== "hidden" && rect.width > 0 && rect.height > 0;
+      };
+      const buttons = [...document.querySelectorAll('button[id^="primaryQuestionnaire--"][aria-haspopup="listbox"], button[id^="secondaryQuestionnaire--"][aria-haspopup="listbox"]')]
+        .filter(visible)
+        .map((button) => {
+          const field = button.closest('[data-automation-id^="formField-"]') || button.closest("fieldset") || button.parentElement;
+          const rect = button.getBoundingClientRect();
+          return {
+            id: button.id || "",
+            text: norm(button.innerText || button.textContent || ""),
+            label: norm(field?.innerText || field?.textContent || ""),
+            invalid: button.getAttribute("aria-invalid") || "",
+            x: Math.round(rect.left + rect.width / 2),
+            y: Math.round(rect.top + rect.height / 2)
+          };
+        });
+      return {
+        href: location.href,
+        title: norm(document.querySelector('[data-automation-id="progressBarActiveStep"]')?.innerText || ""),
+        buttons
+      };
+    })()`,
+    10000,
+  );
+  const buttons = (summary.buttons || []).filter((button) =>
+    /^select one$/i.test(String(button.text || "").trim()) || button.invalid === "true",
+  );
+  if (!buttons.length) {
+    return { ok: false, reason: "workday_questionnaire_no_unfilled_buttons", summary };
+  }
+  const actions = [];
+  for (const button of buttons) {
+    await pageClient.evaluate(
+      `(() => {
+        const button = document.getElementById(${JSON.stringify(button.id)});
+        button?.scrollIntoView({ block: "center", inline: "center" });
+      })()`,
+      5000,
+    );
+    const point = await pageClient.evaluate(
+      `(() => {
+        const button = document.getElementById(${JSON.stringify(button.id)});
+        if (!button) return null;
+        const rect = button.getBoundingClientRect();
+        return { x: Math.round(rect.left + rect.width / 2), y: Math.round(rect.top + rect.height / 2) };
+      })()`,
+      5000,
+    );
+    if (!point) {
+      actions.push({ id: button.id, ok: false, reason: "button_not_found" });
+      continue;
+    }
+    await cdpClick(pageClient, point.x, point.y);
+    await sleep(450);
+    const options = await pageClient.evaluate(
+      `(() => {
+        const norm = (value) => String(value || "").replace(/\\s+/g, " ").trim();
+        const visible = (el) => {
+          const style = getComputedStyle(el);
+          const rect = el.getBoundingClientRect();
+          return style.display !== "none" && style.visibility !== "hidden" && rect.width > 0 && rect.height > 0;
+        };
+        return [...document.querySelectorAll('[role="option"]')]
+          .filter(visible)
+          .map((option, index) => {
+            const rect = option.getBoundingClientRect();
+            return {
+              index,
+              text: norm(option.innerText || option.textContent || ""),
+              disabled: option.getAttribute("aria-disabled") === "true",
+              x: Math.round(rect.left + rect.width / 2),
+              y: Math.round(rect.top + rect.height / 2)
+            };
+          });
+      })()`,
+      10000,
+    );
+    const selected = chooseWorkdayQuestionnaireOption(button.label, options);
+    if (!selected) {
+      actions.push({
+        id: button.id,
+        ok: false,
+        reason: "questionnaire_option_not_found",
+        label: button.label,
+        options,
+      });
+      await pageClient.send("Input.dispatchKeyEvent", {
+        type: "keyDown",
+        key: "Escape",
+        code: "Escape",
+        windowsVirtualKeyCode: 27,
+        nativeVirtualKeyCode: 27,
+      }).catch(() => null);
+      await pageClient.send("Input.dispatchKeyEvent", {
+        type: "keyUp",
+        key: "Escape",
+        code: "Escape",
+        windowsVirtualKeyCode: 27,
+        nativeVirtualKeyCode: 27,
+      }).catch(() => null);
+      continue;
+    }
+    await cdpClick(pageClient, selected.x, selected.y);
+    await sleep(700);
+    let after = await pageClient.evaluate(
+      `(() => {
+        const norm = (value) => String(value || "").replace(/\\s+/g, " ").trim();
+        const button = document.getElementById(${JSON.stringify(button.id)});
+        return {
+          text: norm(button?.innerText || button?.textContent || ""),
+          invalid: button?.getAttribute("aria-invalid") || ""
+        };
+      })()`,
+      5000,
+    );
+    let keyboardFallback = null;
+    if (
+      !after ||
+      after.invalid === "true" ||
+      /^select one$/i.test(String(after.text || "").trim())
+    ) {
+      const reopenPoint = await pageClient.evaluate(
+        `(() => {
+          const button = document.getElementById(${JSON.stringify(button.id)});
+          if (!button) return null;
+          button.scrollIntoView({ block: "center", inline: "center" });
+          const rect = button.getBoundingClientRect();
+          return { x: Math.round(rect.left + rect.width / 2), y: Math.round(rect.top + rect.height / 2) };
+        })()`,
+        5000,
+      );
+      if (reopenPoint) {
+        await cdpClick(pageClient, reopenPoint.x, reopenPoint.y);
+        await sleep(400);
+        const arrowCount = Math.max(1, Number(selected.index || 0));
+        for (let index = 0; index < arrowCount; index += 1) {
+          await cdpPressKey(pageClient, "ArrowDown", "ArrowDown", 40);
+        }
+        await cdpPressKey(pageClient, "Enter", "Enter", 13);
+        await sleep(800);
+        after = await pageClient.evaluate(
+          `(() => {
+            const norm = (value) => String(value || "").replace(/\\s+/g, " ").trim();
+            const button = document.getElementById(${JSON.stringify(button.id)});
+            return {
+              text: norm(button?.innerText || button?.textContent || ""),
+              invalid: button?.getAttribute("aria-invalid") || ""
+            };
+          })()`,
+          5000,
+        );
+        keyboardFallback = {
+          attempted: true,
+          arrowCount,
+        };
+      }
+    }
+    actions.push({
+      id: button.id,
+      ok:
+        after &&
+        after.invalid !== "true" &&
+        !/^select one$/i.test(String(after.text || "").trim()),
+      reason: "questionnaire_option_selected",
+      label: button.label,
+      selected: selected.text,
+      after,
+      keyboardFallback,
+    });
+  }
+  let afterFill = await inspectPage(pageClient);
+  afterFill = await suppressStaleWorkdayDateErrors(afterFill);
+  if (!canContinueWorkdayApplicationPage(afterFill)) {
+    return {
+      ok: false,
+      reason: "questionnaire_cdp_not_safe_to_click_next",
+      summary,
+      actions,
+      afterFill,
+    };
+  }
+  const directNext = await clickNext(pageClient);
+  const postNextSettle = await waitForPostNextWorkdaySettle(pageClient, {
+    reason,
+  });
+  const finalPage = await suppressStaleWorkdayDateErrors(
+    postNextSettle.page || (await inspectPage(pageClient)),
+  );
+  const advanced = pageAdvancedFrom(before, finalPage);
+  if (advanced && !pageHasBlockingValidation(finalPage)) {
+    return {
+      ok: true,
+      reason: pageReachedReview(finalPage)
+        ? "questionnaire_cdp_recovered_to_review"
+        : "questionnaire_cdp_recovered_next",
+      summary,
+      actions,
+      afterFill,
+      directNext,
+      postNextSettle,
+      finalPage,
+    };
+  }
+  return {
+    ok: false,
+    reason: "questionnaire_cdp_next_did_not_advance",
+    summary,
+    actions,
+    afterFill,
+    directNext,
+    postNextSettle,
+    finalPage,
+  };
+}
+
+async function recoverWorkdayConsentCheckboxesWithCdp(pageClient, before, reason) {
+  const summary = await pageClient.evaluate(
+    `(() => {
+      const norm = (value) => String(value || "").replace(/\\s+/g, " ").trim();
+      const visible = (el) => {
+        const style = getComputedStyle(el);
+        const rect = el.getBoundingClientRect();
+        return style.display !== "none" && style.visibility !== "hidden" && rect.width > 0 && rect.height > 0;
+      };
+      const checkboxes = [...document.querySelectorAll('input[type="checkbox"], [role="checkbox"]')]
+        .filter(visible)
+        .map((checkbox) => {
+          const label = checkbox.id
+            ? document.querySelector('label[for="' + CSS.escape(checkbox.id) + '"]')
+            : null;
+          const container = label || checkbox.closest("label") || checkbox.closest('[data-automation-id^="formField-"]') || checkbox.parentElement;
+          const target = label || checkbox;
+          const rect = target.getBoundingClientRect();
+          const checkboxRect = checkbox.getBoundingClientRect();
+          return {
+            id: checkbox.id || "",
+            text: norm(container?.innerText || container?.textContent || checkbox.getAttribute("aria-label") || ""),
+            required: checkbox.required || checkbox.getAttribute("aria-required") === "true" || /required/i.test(checkbox.getAttribute("aria-label") || ""),
+            checked: Boolean(checkbox.checked || checkbox.getAttribute("aria-checked") === "true"),
+            invalid: checkbox.getAttribute("aria-invalid") || "",
+            x: Math.round(rect.left + rect.width / 2),
+            y: Math.round(rect.top + rect.height / 2),
+            inputX: Math.round(checkboxRect.left + checkboxRect.width / 2),
+            inputY: Math.round(checkboxRect.top + checkboxRect.height / 2)
+          };
+        });
+      return { href: location.href, checkboxes };
+    })()`,
+    10000,
+  );
+  const targets = (summary.checkboxes || []).filter(
+    (checkbox) =>
+      !checkbox.checked &&
+      (checkbox.required || checkbox.invalid === "true") &&
+      /consent|terms|conditions|agreement|read/i.test(checkbox.text || ""),
+  );
+  if (!targets.length) {
+    return { ok: false, reason: "workday_consent_checkbox_not_found", summary };
+  }
+  const actions = [];
+  for (const target of targets) {
+    await pageClient.evaluate(
+      `(() => {
+        const checkbox = document.getElementById(${JSON.stringify(target.id)});
+        checkbox?.scrollIntoView({ block: "center", inline: "center" });
+        checkbox?.focus?.({ preventScroll: true });
+      })()`,
+      5000,
+    );
+    await cdpPressKey(pageClient, " ", "Space", 32);
+    await sleep(500);
+    let after = await pageClient.evaluate(
+      `(() => {
+        const checkbox = document.getElementById(${JSON.stringify(target.id)});
+        return {
+          checked: Boolean(checkbox?.checked || checkbox?.getAttribute("aria-checked") === "true"),
+          invalid: checkbox?.getAttribute("aria-invalid") || ""
+        };
+      })()`,
+      5000,
+    );
+    if (!after?.checked) {
+      await cdpClick(pageClient, target.inputX || target.x, target.inputY || target.y);
+      await sleep(250);
+      await cdpPressKey(pageClient, " ", "Space", 32);
+      await sleep(500);
+      after = await pageClient.evaluate(
+        `(() => {
+          const checkbox = document.getElementById(${JSON.stringify(target.id)});
+          return {
+            checked: Boolean(checkbox?.checked || checkbox?.getAttribute("aria-checked") === "true"),
+            invalid: checkbox?.getAttribute("aria-invalid") || ""
+          };
+        })()`,
+        5000,
+      );
+    }
+    actions.push({
+      id: target.id,
+      ok: Boolean(after?.checked) && after?.invalid !== "true",
+      reason: "consent_checkbox_clicked",
+      text: target.text,
+      after,
+    });
+  }
+  let afterFill = await inspectPage(pageClient);
+  afterFill = await suppressStaleWorkdayDateErrors(afterFill);
+  if (!canContinueWorkdayApplicationPage(afterFill)) {
+    return {
+      ok: false,
+      reason: "consent_cdp_not_safe_to_click_next",
+      summary,
+      actions,
+      afterFill,
+    };
+  }
+  const directNext = await clickNext(pageClient);
+  const postNextSettle = await waitForPostNextWorkdaySettle(pageClient, {
+    reason,
+  });
+  const finalPage = await suppressStaleWorkdayDateErrors(
+    postNextSettle.page || (await inspectPage(pageClient)),
+  );
+  const advanced = pageAdvancedFrom(before, finalPage);
+  if (advanced && !pageHasBlockingValidation(finalPage)) {
+    return {
+      ok: true,
+      reason: pageReachedReview(finalPage)
+        ? "consent_cdp_recovered_to_review"
+        : "consent_cdp_recovered_next",
+      summary,
+      actions,
+      afterFill,
+      directNext,
+      postNextSettle,
+      finalPage,
+    };
+  }
+  return {
+    ok: false,
+    reason: "consent_cdp_next_did_not_advance",
+    summary,
+    actions,
+    afterFill,
+    directNext,
+    postNextSettle,
+    finalPage,
+  };
+}
+
 async function cancelPageFillFromRunner(pageClient, reason) {
   return pageClient.evaluate(
     `(() => {
@@ -2874,7 +3506,7 @@ async function cancelPageFillFromRunner(pageClient, reason) {
   );
 }
 
-async function recoverPageFillTimeoutWithDirectNext(pageClient, before) {
+async function recoverPageFillTimeoutWithDirectNext(pageClient, before, args) {
   const cancel = await cancelPageFillFromRunner(
     pageClient,
     "page_fill_and_next_timeout",
@@ -2887,11 +3519,54 @@ async function recoverPageFillTimeoutWithDirectNext(pageClient, before) {
   let afterFill = await inspectPage(pageClient);
   afterFill = await suppressStaleWorkdayDateErrors(afterFill);
   if (!canContinueWorkdayApplicationPage(afterFill)) {
+    const resumeRecovery = await recoverWorkdayResumeUploadWithCdp(
+      pageClient,
+      args,
+      before,
+      "timeout_recovery_resume_upload_cdp",
+    );
+    if (resumeRecovery.ok) {
+      return {
+        ...resumeRecovery,
+        cancel,
+        afterFill,
+      };
+    }
+    const questionnaireRecovery = await recoverWorkdayQuestionnaireWithCdp(
+      pageClient,
+      before,
+      "timeout_recovery_questionnaire_cdp",
+    );
+    if (questionnaireRecovery.ok) {
+      return {
+        ...questionnaireRecovery,
+        cancel,
+        afterFill,
+        resumeRecovery,
+      };
+    }
+    const consentRecovery = await recoverWorkdayConsentCheckboxesWithCdp(
+      pageClient,
+      before,
+      "timeout_recovery_consent_cdp",
+    );
+    if (consentRecovery.ok) {
+      return {
+        ...consentRecovery,
+        cancel,
+        afterFill,
+        resumeRecovery,
+        questionnaireRecovery,
+      };
+    }
     return {
       ok: false,
       reason: "timeout_recovery_not_safe_to_click_next",
       cancel,
       afterFill,
+      resumeRecovery,
+      questionnaireRecovery,
+      consentRecovery,
     };
   }
   const directNext = await clickNext(pageClient);
@@ -3765,6 +4440,7 @@ async function run() {
           const timeoutRecovery = await recoverPageFillTimeoutWithDirectNext(
             pageClient,
             before,
+            args,
           );
           afterFill = timeoutRecovery.finalPage || timeoutRecovery.afterFill;
           if (timeoutRecovery.ok) {
@@ -3926,6 +4602,270 @@ async function run() {
         const fillSummary = summarizeFill(fill);
         if (fillSummary.manualReviewReasons.includes("fill_timeout")) {
           afterFill = await inspectPage(pageClient);
+          const resumeRecovery = await recoverWorkdayResumeUploadWithCdp(
+            pageClient,
+            args,
+            before,
+            "fill_timeout_resume_upload_cdp",
+          );
+          if (resumeRecovery.ok) {
+            afterFill = resumeRecovery.finalPage || resumeRecovery.afterUpload || afterFill;
+            const recoveredFillSummary = {
+              ...fillSummary,
+              ok: true,
+              status: "recovered_after_timeout",
+              reason: resumeRecovery.reason,
+              summary:
+                "Extension fill command timed out, but runner-side CDP resume upload advanced Workday.",
+              manualReviewReasons: [],
+              bestEffortWarnings: [
+                ...(fillSummary.bestEffortWarnings || []),
+                "fill_timeout",
+                resumeRecovery.reason,
+              ],
+              nextAction: resumeRecovery.directNext || null,
+              siteActions: [
+                ...(fillSummary.siteActions || []),
+                {
+                  type: "resume_upload_cdp_recovery",
+                  reason: resumeRecovery.reason,
+                  upload: resumeRecovery.upload,
+                  postNextSettle: resumeRecovery.postNextSettle,
+                },
+              ],
+              interactionTrace: [
+                ...(fillSummary.interactionTrace || []),
+                {
+                  type: "runner_resume_upload_cdp_recovery",
+                  reason: resumeRecovery.reason,
+                  clickMethod: resumeRecovery.directNext?.clickMethod || "",
+                  clickTarget: resumeRecovery.directNext?.clickTarget || null,
+                },
+              ],
+            };
+            fills.push({
+              fillIndex: fillIndex + 1,
+              fill: recoveredFillSummary,
+              resumeRecovery,
+              afterFill: {
+                href: afterFill.href,
+                currentStep: afterFill.currentStep,
+                hasNext: afterFill.hasNext,
+                hasSubmit: afterFill.hasSubmit,
+                errors: afterFill.errors,
+                suppressedErrors: afterFill.suppressedErrors || [],
+                fields: afterFill.fields,
+                remainingValues: afterFill.remainingValues,
+              },
+            });
+            audit.pages.push(
+              buildFillAudit({
+                pageIndex: i + 1,
+                fillIndex: fillIndex + 1,
+                before,
+                afterFill,
+                fillSummary: recoveredFillSummary,
+              }),
+            );
+            if (!pageReachedReview(afterFill)) {
+              await sleep(1200);
+              continue pageLoop;
+            }
+            break pageLoop;
+          }
+          const questionnaireRecovery = await recoverWorkdayQuestionnaireWithCdp(
+            pageClient,
+            before,
+            "fill_timeout_questionnaire_cdp",
+          );
+          if (questionnaireRecovery.ok) {
+            afterFill = questionnaireRecovery.finalPage || questionnaireRecovery.afterFill || afterFill;
+            const recoveredFillSummary = {
+              ...fillSummary,
+              ok: true,
+              status: "recovered_after_timeout",
+              reason: questionnaireRecovery.reason,
+              summary:
+                "Extension fill command timed out, but runner-side CDP questionnaire fill advanced Workday.",
+              manualReviewReasons: [],
+              bestEffortWarnings: [
+                ...(fillSummary.bestEffortWarnings || []),
+                "fill_timeout",
+                questionnaireRecovery.reason,
+              ],
+              nextAction: questionnaireRecovery.directNext || null,
+              siteActions: [
+                ...(fillSummary.siteActions || []),
+                {
+                  type: "resume_upload_cdp_recovery",
+                  reason: resumeRecovery.reason,
+                  upload: resumeRecovery.upload,
+                },
+                {
+                  type: "questionnaire_cdp_recovery",
+                  reason: questionnaireRecovery.reason,
+                  actions: questionnaireRecovery.actions,
+                  postNextSettle: questionnaireRecovery.postNextSettle,
+                },
+              ],
+              interactionTrace: [
+                ...(fillSummary.interactionTrace || []),
+                {
+                  type: "runner_questionnaire_cdp_recovery",
+                  reason: questionnaireRecovery.reason,
+                  selected: questionnaireRecovery.actions
+                    .filter((action) => action.ok)
+                    .map((action) => action.selected),
+                },
+              ],
+            };
+            fills.push({
+              fillIndex: fillIndex + 1,
+              fill: recoveredFillSummary,
+              resumeRecovery,
+              questionnaireRecovery,
+              afterFill: {
+                href: afterFill.href,
+                currentStep: afterFill.currentStep,
+                hasNext: afterFill.hasNext,
+                hasSubmit: afterFill.hasSubmit,
+                errors: afterFill.errors,
+                suppressedErrors: afterFill.suppressedErrors || [],
+                fields: afterFill.fields,
+                remainingValues: afterFill.remainingValues,
+              },
+            });
+            audit.pages.push(
+              buildFillAudit({
+                pageIndex: i + 1,
+                fillIndex: fillIndex + 1,
+                before,
+                afterFill,
+                fillSummary: recoveredFillSummary,
+              }),
+            );
+            if (!pageReachedReview(afterFill)) {
+              await sleep(1200);
+              continue pageLoop;
+            }
+            break pageLoop;
+          }
+          const consentRecovery = await recoverWorkdayConsentCheckboxesWithCdp(
+            pageClient,
+            before,
+            "fill_timeout_consent_cdp",
+          );
+          if (consentRecovery.ok) {
+            afterFill = consentRecovery.finalPage || consentRecovery.afterFill || afterFill;
+            const recoveredFillSummary = {
+              ...fillSummary,
+              ok: true,
+              status: "recovered_after_timeout",
+              reason: consentRecovery.reason,
+              summary:
+                "Extension fill command timed out, but runner-side CDP consent checkbox fill advanced Workday.",
+              manualReviewReasons: [],
+              bestEffortWarnings: [
+                ...(fillSummary.bestEffortWarnings || []),
+                "fill_timeout",
+                consentRecovery.reason,
+              ],
+              nextAction: consentRecovery.directNext || null,
+              siteActions: [
+                ...(fillSummary.siteActions || []),
+                {
+                  type: "resume_upload_cdp_recovery",
+                  reason: resumeRecovery.reason,
+                  upload: resumeRecovery.upload,
+                },
+                {
+                  type: "questionnaire_cdp_recovery",
+                  reason: questionnaireRecovery.reason,
+                  actions: questionnaireRecovery.actions || [],
+                },
+                {
+                  type: "consent_cdp_recovery",
+                  reason: consentRecovery.reason,
+                  actions: consentRecovery.actions,
+                  postNextSettle: consentRecovery.postNextSettle,
+                },
+              ],
+              interactionTrace: [
+                ...(fillSummary.interactionTrace || []),
+                {
+                  type: "runner_consent_cdp_recovery",
+                  reason: consentRecovery.reason,
+                  selected: consentRecovery.actions
+                    .filter((action) => action.ok)
+                    .map((action) => action.text),
+                },
+              ],
+            };
+            fills.push({
+              fillIndex: fillIndex + 1,
+              fill: recoveredFillSummary,
+              resumeRecovery,
+              questionnaireRecovery,
+              consentRecovery,
+              afterFill: {
+                href: afterFill.href,
+                currentStep: afterFill.currentStep,
+                hasNext: afterFill.hasNext,
+                hasSubmit: afterFill.hasSubmit,
+                errors: afterFill.errors,
+                suppressedErrors: afterFill.suppressedErrors || [],
+                fields: afterFill.fields,
+                remainingValues: afterFill.remainingValues,
+              },
+            });
+            audit.pages.push(
+              buildFillAudit({
+                pageIndex: i + 1,
+                fillIndex: fillIndex + 1,
+                before,
+                afterFill,
+                fillSummary: recoveredFillSummary,
+              }),
+            );
+            if (!pageReachedReview(afterFill)) {
+              await sleep(1200);
+              continue pageLoop;
+            }
+            break pageLoop;
+          }
+          fillSummary.siteActions = [
+            ...(fillSummary.siteActions || []),
+            {
+              type: "resume_upload_cdp_recovery",
+              reason: resumeRecovery.reason,
+              upload: resumeRecovery.upload,
+            },
+            {
+              type: "questionnaire_cdp_recovery",
+              reason: questionnaireRecovery.reason,
+              actions: questionnaireRecovery.actions || [],
+            },
+            {
+              type: "consent_cdp_recovery",
+              reason: consentRecovery.reason,
+              actions: consentRecovery.actions || [],
+            },
+          ];
+          fillSummary.interactionTrace = [
+            ...(fillSummary.interactionTrace || []),
+            {
+              type: "runner_resume_upload_cdp_recovery_failed",
+              reason: resumeRecovery.reason,
+            },
+            {
+              type: "runner_questionnaire_cdp_recovery_failed",
+              reason: questionnaireRecovery.reason,
+            },
+            {
+              type: "runner_consent_cdp_recovery_failed",
+              reason: consentRecovery.reason,
+            },
+          ];
           fills.push({
             fillIndex: fillIndex + 1,
             fill: fillSummary,

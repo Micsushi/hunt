@@ -15,7 +15,7 @@ from backend.ledger.leases import LeaseConflictError, LeaseNotFoundError, LeaseP
 from backend.ledger.models import Actor
 from backend.ledger.service import LedgerService
 
-CommandStatus = Literal["accepted", "rejected", "not_implemented"]
+CommandStatus = Literal["accepted", "rejected", "started", "completed", "failed", "not_implemented"]
 
 
 C3_COMMAND_REGISTRY: dict[str, dict[str, Any]] = {
@@ -109,6 +109,7 @@ def _command_event(
     body: C3CommandRunRequest,
     *,
     actor: Actor,
+    event_type: str,
     status: CommandStatus,
     reason_code: str,
     target: dict[str, Any] | None = None,
@@ -116,7 +117,7 @@ def _command_event(
     command = C3_COMMAND_REGISTRY.get(body.command_name) or {}
     return {
         "component": "c3",
-        "event_type": "command.requested",
+        "event_type": event_type,
         "actor": actor.as_event_actor(),
         "agent_id": body.agent_id,
         "lane_id": body.lane_id,
@@ -135,17 +136,25 @@ def _command_event(
     }
 
 
-def _append_command_requested(
+def _append_command_event(
     service: LedgerService,
     body: C3CommandRunRequest,
     *,
     actor: Actor,
+    event_type: str,
     status: CommandStatus,
     reason_code: str,
     target: dict[str, Any] | None = None,
 ) -> str:
     result = service.append_event(
-        _command_event(body, actor=actor, status=status, reason_code=reason_code, target=target)
+        _command_event(
+            body,
+            actor=actor,
+            event_type=event_type,
+            status=status,
+            reason_code=reason_code,
+            target=target,
+        )
     )
     return str(result["event_id"])
 
@@ -236,10 +245,11 @@ def _reject(
     reason_code: str,
     http_status: int = 400,
 ) -> JSONResponse:
-    ledger_event_id = _append_command_requested(
+    ledger_event_id = _append_command_event(
         service,
         body,
         actor=actor,
+        event_type="command.rejected",
         status="rejected",
         reason_code=reason_code,
     )
@@ -262,6 +272,8 @@ def run_c3_command(
 ):
     actor, actor_error = _actor_for_request(body)
     target = _merged_target(body, target_store)
+    if actor_error:
+        return _reject(service, body, actor=actor, reason_code=actor_error)
     if body.command_name not in C3_COMMAND_REGISTRY:
         return _reject(service, body, actor=actor, reason_code="unknown_command")
     if not C3_COMMAND_REGISTRY[body.command_name].get("executable", True):
@@ -270,8 +282,6 @@ def run_c3_command(
         return _reject(service, body, actor=actor, reason_code="missing_target")
     if not body.lease_id.strip():
         return _reject(service, body, actor=actor, reason_code="missing_lease")
-    if actor_error:
-        return _reject(service, body, actor=actor, reason_code=actor_error)
 
     try:
         lease = lease_store.require_mutation_lease(body.session_id, actor, body.lease_id)
@@ -283,11 +293,21 @@ def run_c3_command(
     if lease is None or lease.lane_id != body.lane_id:
         return _reject(service, body, actor=actor, reason_code="missing_lease")
 
-    ledger_event_id = _append_command_requested(
+    requested_event_id = _append_command_event(
         service,
         body,
         actor=actor,
+        event_type="command.requested",
         status="accepted",
+        reason_code="browser_execution_requested",
+        target=target,
+    )
+    started_event_id = _append_command_event(
+        service,
+        body,
+        actor=actor,
+        event_type="command.started",
+        status="started",
         reason_code="browser_execution_started",
         target=target,
     )
@@ -297,13 +317,49 @@ def run_c3_command(
             _extension_payload(body, target, actor),
         )
     except C3BrowserBridgeError as exc:
+        failed_event_id = _append_command_event(
+            service,
+            body,
+            actor=actor,
+            event_type="command.failed",
+            status="failed",
+            reason_code=str(exc),
+            target=target,
+        )
         return _response(
             body,
             status="rejected",
             reason_code=str(exc),
-            ledger_event_id=ledger_event_id,
+            ledger_event_id=failed_event_id,
             http_status=502,
         )
+    except Exception:
+        failed_event_id = _append_command_event(
+            service,
+            body,
+            actor=actor,
+            event_type="command.failed",
+            status="failed",
+            reason_code="unexpected_error",
+            target=target,
+        )
+        return _response(
+            body,
+            status="rejected",
+            reason_code="unexpected_error",
+            ledger_event_id=failed_event_id,
+            http_status=500,
+        )
+
+    completed_event_id = _append_command_event(
+        service,
+        body,
+        actor=actor,
+        event_type="command.completed",
+        status="completed",
+        reason_code="browser_execution_completed",
+        target=target,
+    )
 
     return JSONResponse(
         status_code=200,
@@ -317,7 +373,12 @@ def run_c3_command(
             "lane_id": body.lane_id,
             "session_id": body.session_id,
             "lease_id": body.lease_id,
-            "ledger_event_id": ledger_event_id,
+            "ledger_event_id": completed_event_id,
+            "ledger_event_ids": {
+                "requested": requested_event_id,
+                "started": started_event_id,
+                "completed": completed_event_id,
+            },
             "execution": {"attempted": True, "bridge": "playwright_cdp"},
             "target": _safe_target(target),
             "response": extension_response,

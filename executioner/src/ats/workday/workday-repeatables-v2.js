@@ -3295,10 +3295,10 @@
     root.fieldPipeline.runHuntV2Fill = async function workdayRepeatableFill(
       context,
     ) {
-      var base = await baseRunFill(context);
       if ((context?.atsType || "") !== "workday") {
-        return base;
+        return await baseRunFill(context);
       }
+      var base = await baseRunFill(context);
       var repeatables = await fillWorkdayRepeatables(context);
       return mergeFill(base, repeatables);
     };

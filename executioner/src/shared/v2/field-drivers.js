@@ -79,17 +79,6 @@
         form.setAttribute("data-hunt-password-manager-suppressed", "true");
       }
     }
-    if (
-      text &&
-      u?.setElementValue &&
-      (el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement)
-    ) {
-      var injectedOk = u.setElementValue(el, text, true);
-      dispatchBlurEvents(el);
-      if (injectedOk) {
-        return true;
-      }
-    }
     try {
       el.focus?.();
     } catch (_error) {
@@ -110,7 +99,15 @@
       forceFrameworkValueChange(el, text);
       dispatchTextEvents(el, text);
       dispatchBlurEvents(el);
-      return true;
+      if (String(el.value || "") === text) {
+        return true;
+      }
+      if (text && u?.setElementValue) {
+        var injectedOk = u.setElementValue(el, text, true);
+        dispatchBlurEvents(el);
+        return Boolean(injectedOk);
+      }
+      return false;
     }
     if (el.isContentEditable || el.getAttribute?.("role") === "textbox") {
       el.textContent = text;

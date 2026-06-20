@@ -61,6 +61,14 @@ def _session_events(service):
     return service.get_session_log("session-cmd")["events"]
 
 
+def _command_events(service):
+    return [
+        event
+        for event in _session_events(service)
+        if event.get("command_id") == "cmd-001"
+    ]
+
+
 def test_c3_command_run_valid_request_executes_bridge_and_returns_receipt(tmp_path, monkeypatch):
     client, service, lease_store = _client(tmp_path)
     lease_id = _claim_lease(lease_store)
@@ -107,17 +115,24 @@ def test_c3_command_run_valid_request_executes_bridge_and_returns_receipt(tmp_pa
     assert seen["payload"]["command_payload"]["tabId"] == 123
     assert body["ledger_event_id"].startswith("evt-")
 
-    events = _session_events(service)
-    assert events[-1]["event_type"] == "command.requested"
-    assert events[-1]["agent_id"] == "agent-cmd"
-    assert events[-1]["lane_id"] == "lane-cmd"
-    assert events[-1]["session_id"] == "session-cmd"
-    assert events[-1]["lease_id"] == lease_id
-    assert events[-1]["command_id"] == "cmd-001"
-    assert events[-1]["trace_id"] == "trace-001"
-    assert events[-1]["payload"]["command_name"] == "c3.inspect_fields"
-    assert events[-1]["payload"]["status"] == "accepted"
-    assert events[-1]["payload"]["target"]["url"] == "https://jobs.example/apply"
+    events = _command_events(service)
+    assert [event["event_type"] for event in events] == [
+        "command.requested",
+        "command.started",
+        "command.completed",
+    ]
+    for event in events:
+        assert event["agent_id"] == "agent-cmd"
+        assert event["lane_id"] == "lane-cmd"
+        assert event["session_id"] == "session-cmd"
+        assert event["lease_id"] == lease_id
+        assert event["command_id"] == "cmd-001"
+        assert event["trace_id"] == "trace-001"
+        assert event["payload"]["command_name"] == "c3.inspect_fields"
+        assert event["payload"]["target"]["url"] == "https://jobs.example/apply"
+    assert events[0]["payload"]["status"] == "accepted"
+    assert events[1]["payload"]["status"] == "started"
+    assert events[2]["payload"]["status"] == "completed"
 
     log_path = Path(service.get_session_log("session-cmd")["log_path"])
     serialized = log_path.read_text(encoding="utf-8")
@@ -125,8 +140,8 @@ def test_c3_command_run_valid_request_executes_bridge_and_returns_receipt(tmp_pa
     assert "secret form value" not in serialized
 
 
-def test_c3_command_run_bridge_error_returns_502(tmp_path, monkeypatch):
-    client, _service, lease_store = _client(tmp_path)
+def test_c3_command_run_bridge_error_returns_502_and_logs_failure(tmp_path, monkeypatch):
+    client, service, lease_store = _client(tmp_path)
     lease_id = _claim_lease(lease_store)
 
     def fake_bridge(_target, _payload):
@@ -139,6 +154,38 @@ def test_c3_command_run_bridge_error_returns_502(tmp_path, monkeypatch):
     assert response.status_code == 502
     assert response.json()["status"] == "rejected"
     assert response.json()["reason_code"] == "extension_options_page_not_found"
+    events = _command_events(service)
+    assert [event["event_type"] for event in events] == [
+        "command.requested",
+        "command.started",
+        "command.failed",
+    ]
+    assert events[-1]["payload"]["status"] == "failed"
+    assert events[-1]["payload"]["reason_code"] == "extension_options_page_not_found"
+
+
+def test_c3_command_run_unexpected_error_returns_500_and_logs_failure(tmp_path, monkeypatch):
+    client, service, lease_store = _client(tmp_path)
+    lease_id = _claim_lease(lease_store)
+
+    def fake_bridge(_target, _payload):
+        raise RuntimeError("surprise crash")
+
+    monkeypatch.setattr(c3_commands, "run_c3_extension_command", fake_bridge)
+
+    response = client.post("/api/c3/commands/run", json=_payload(lease_id))
+
+    assert response.status_code == 500
+    assert response.json()["status"] == "rejected"
+    assert response.json()["reason_code"] == "unexpected_error"
+    events = _command_events(service)
+    assert [event["event_type"] for event in events] == [
+        "command.requested",
+        "command.started",
+        "command.failed",
+    ]
+    assert events[-1]["payload"]["status"] == "failed"
+    assert events[-1]["payload"]["reason_code"] == "unexpected_error"
 
 
 def test_c3_command_run_rejects_unknown_command_and_logs_request(tmp_path):
@@ -153,7 +200,7 @@ def test_c3_command_run_rejects_unknown_command_and_logs_request(tmp_path):
     assert response.json()["status"] == "rejected"
     assert response.json()["reason_code"] == "unknown_command"
     event = _session_events(service)[-1]
-    assert event["event_type"] == "command.requested"
+    assert event["event_type"] == "command.rejected"
     assert event["payload"]["status"] == "rejected"
     assert event["payload"]["reason_code"] == "unknown_command"
 
@@ -169,6 +216,7 @@ def test_c3_command_run_rejects_registered_but_unexposed_command(tmp_path):
     assert response.status_code == 400
     assert response.json()["reason_code"] == "unsupported_command_route"
     event = _session_events(service)[-1]
+    assert event["event_type"] == "command.rejected"
     assert event["payload"]["reason_code"] == "unsupported_command_route"
 
 
@@ -195,6 +243,7 @@ def test_c3_command_run_rejects_missing_target_and_logs_request(tmp_path):
     assert response.status_code == 400
     assert response.json()["reason_code"] == "missing_target"
     event = _session_events(service)[-1]
+    assert event["event_type"] == "command.rejected"
     assert event["payload"]["status"] == "rejected"
     assert event["payload"]["reason_code"] == "missing_target"
 
@@ -207,6 +256,7 @@ def test_c3_command_run_rejects_missing_lease_and_logs_request(tmp_path):
     assert response.status_code == 400
     assert response.json()["reason_code"] == "missing_lease"
     event = _session_events(service)[-1]
+    assert event["event_type"] == "command.rejected"
     assert event["lease_id"] == ""
     assert event["payload"]["reason_code"] == "missing_lease"
 
@@ -221,6 +271,7 @@ def test_c3_command_run_rejects_bad_actor_for_other_agent_lease(tmp_path):
     assert response.status_code == 400
     assert response.json()["reason_code"] == "bad_actor"
     event = service.get_session_log("session-cmd")["events"][-1]
+    assert event["event_type"] == "command.rejected"
     assert event["agent_id"] == "agent-other"
     assert event["payload"]["reason_code"] == "bad_actor"
 
