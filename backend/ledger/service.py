@@ -9,7 +9,7 @@ from hashlib import sha256
 from pathlib import Path
 from typing import Any
 
-from backend.ledger.config import initialize_ledger_root
+from backend.ledger.config import COMPONENTS, initialize_ledger_root
 from backend.ledger.indexer import LedgerIndexer
 from backend.ledger.jsonl_store import JsonlLedger
 from backend.ledger.models import (
@@ -17,6 +17,7 @@ from backend.ledger.models import (
     LaneCreate,
     LedgerEventIn,
     ProbeFileCreate,
+    ProbeStatusUpdate,
     SessionCreate,
 )
 
@@ -32,6 +33,14 @@ def _date_folder() -> str:
 def _slug(value: str) -> str:
     slug = re.sub(r"[^A-Za-z0-9_.-]+", "-", value.strip()).strip("-")
     return slug or uuid.uuid4().hex[:10]
+
+
+def _ledger_component(value: str | None) -> str:
+    component = str(value or "c3").strip()
+    if component not in COMPONENTS:
+        allowed = ", ".join(COMPONENTS)
+        raise ValueError(f"Unsupported ledger component: {component!r}. Allowed: {allowed}.")
+    return component
 
 
 def _dump_model(model: Any) -> dict[str, Any]:
@@ -112,6 +121,13 @@ class LedgerService:
 
     def _save_json(self, path: Path, payload: dict[str, Any]) -> None:
         path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+    def _iter_probe_manifests(self, component: str = "c3") -> list[Path]:
+        component = _ledger_component(component)
+        sessions_root = self.root / component / "sessions"
+        if not sessions_root.exists():
+            return []
+        return sorted(sessions_root.glob("*/*/probes/*.manifest.json"))
 
     def _update_active(self, bucket: str, item_id: str, manifest_path: Path, log_path: Path) -> None:
         active_path = self.root / "active.json"
@@ -399,7 +415,7 @@ class LedgerService:
 
     def create_probe_file(self, request: ProbeFileCreate) -> dict[str, Any]:
         data = _dump_model(request)
-        component = data.get("component") or "c3"
+        component = _ledger_component(data.get("component"))
         session_id = _slug(data.get("session_id") or "no-session")
         agent_id = _slug(data.get("agent_id") or "no-agent")
         probe_id = f"probe-{uuid.uuid4().hex[:12]}"
@@ -412,18 +428,26 @@ class LedgerService:
         content = str(data.get("content") or "")
         path.write_text(content, encoding="utf-8")
         digest = sha256(content.encode("utf-8")).hexdigest()
+        status = data.get("status") or "written"
+        manifest_path = path.with_suffix(path.suffix + ".manifest.json")
         payload = {
             "probe_id": probe_id,
             "path": str(path),
+            "manifest_path": str(manifest_path),
             "sha256": digest,
             "trusted": False,
             "requested_trusted": bool(data.get("trusted")),
+            "status": status,
             "agent_id": agent_id,
             "lane_id": data.get("lane_id") or "",
             "session_id": session_id,
             "command_id": data.get("command_id") or "",
+            "failure_event_id": data.get("failure_event_id") or "",
+            "created_at": _now(),
+            "updated_at": _now(),
             "metadata": data.get("metadata") or {},
         }
+        self._save_json(manifest_path, payload)
         event = self.append_event(
             {
                 "component": component,
@@ -438,3 +462,71 @@ class LedgerService:
             }
         )
         return {**payload, "event_id": event["event_id"]}
+
+    def list_probe_files(self, *, component: str = "c3", session_id: str = "", status: str = "") -> dict[str, Any]:
+        component = _ledger_component(component)
+        session_id = _slug(session_id) if session_id else ""
+        probes: list[dict[str, Any]] = []
+        for manifest_path in self._iter_probe_manifests(component):
+            manifest = self._load_json(manifest_path)
+            if not manifest:
+                continue
+            manifest.setdefault("manifest_path", str(manifest_path))
+            if session_id and manifest.get("session_id") != session_id:
+                continue
+            if status and manifest.get("status") != status:
+                continue
+            probes.append(manifest)
+        probes.sort(key=lambda probe: (str(probe.get("created_at") or ""), str(probe.get("probe_id") or "")))
+        return {"component": component, "session_id": session_id, "status": status, "probes": probes}
+
+    def update_probe_status(self, probe_id: str, request: ProbeStatusUpdate) -> dict[str, Any]:
+        data = _dump_model(request)
+        component = _ledger_component(data.get("component"))
+        probe_id = str(probe_id or "").strip()
+        for manifest_path in self._iter_probe_manifests(component):
+            manifest = self._load_json(manifest_path)
+            if manifest.get("probe_id") != probe_id:
+                continue
+            previous_status = manifest.get("status") or "written"
+            status = data.get("status") or previous_status
+            manifest.update(
+                {
+                    "status": status,
+                    "agent_id": data.get("agent_id") or manifest.get("agent_id") or "",
+                    "lane_id": data.get("lane_id") or manifest.get("lane_id") or "",
+                    "session_id": _slug(data.get("session_id") or manifest.get("session_id") or "no-session"),
+                    "command_id": data.get("command_id") or manifest.get("command_id") or "",
+                    "failure_event_id": data.get("failure_event_id") or manifest.get("failure_event_id") or "",
+                    "updated_at": _now(),
+                    "metadata": {**(manifest.get("metadata") or {}), **(data.get("metadata") or {})},
+                }
+            )
+            self._save_json(manifest_path, manifest)
+            event = self.append_event(
+                {
+                    "component": component,
+                    "event_type": "probe.status_updated",
+                    "actor": {
+                        "type": "agent",
+                        "id": manifest.get("agent_id") or "no-agent",
+                        "surface": "mcp",
+                    },
+                    "agent_id": manifest.get("agent_id") or "",
+                    "lane_id": manifest.get("lane_id") or "",
+                    "session_id": manifest.get("session_id") or "",
+                    "command_id": manifest.get("command_id") or "",
+                    "payload": {
+                        "probe_id": probe_id,
+                        "path": manifest.get("path") or "",
+                        "manifest_path": str(manifest_path),
+                        "previous_status": previous_status,
+                        "status": status,
+                        "command_id": manifest.get("command_id") or "",
+                        "failure_event_id": manifest.get("failure_event_id") or "",
+                    },
+                    "redaction": {"applied": True, "rules": ["probe_content_not_in_event"]},
+                }
+            )
+            return {**manifest, "event_id": event["event_id"]}
+        raise FileNotFoundError(probe_id)

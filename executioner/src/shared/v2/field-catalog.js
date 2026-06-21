@@ -77,14 +77,20 @@
 
   var QUESTION_CATALOG = [
     entry("first_name", {
+      exactLabels: ["legal name first name"],
       aliases: ["first name", "given name", "legal first name"],
       profilePaths: ["firstName"],
+    }),
+    entry("preferred_name", {
+      aliases: ["preferred name", "preferred first name", "chosen name"],
+      profilePaths: ["preferredName"],
     }),
     entry("middle_name", {
       aliases: ["middle name", "legal middle name"],
       profilePaths: ["middleName"],
     }),
     entry("last_name", {
+      exactLabels: ["legal name last name"],
       aliases: ["last name", "surname", "family name", "legal last name"],
       profilePaths: ["lastName"],
     }),
@@ -112,6 +118,20 @@
         "please enter your name",
       ],
       profilePaths: ["fullName"],
+    }),
+    entry("application_company", {
+      aliases: ["company name", "company", "employer", "organization"],
+      profilePaths: ["applicationCompany"],
+    }),
+    entry("application_position", {
+      aliases: [
+        "position applied for",
+        "position",
+        "job title",
+        "role applied for",
+        "application role",
+      ],
+      profilePaths: ["applicationPosition"],
     }),
     entry("email", {
       aliases: ["email", "e-mail", "email address", "contact email"],
@@ -768,6 +788,7 @@
       },
     }),
     entry("city", {
+      exactLabels: ["address city"],
       aliases: ["city", "current city", "home city"],
       profilePaths: ["city"],
     }),
@@ -802,6 +823,14 @@
     }),
     entry("location", {
       aliases: ["location", "current location", "where are you located"],
+      profilePaths: ["location"],
+    }),
+    entry("city_province_location", {
+      aliases: [
+        "city province",
+        "city province are you located in",
+        "what city province are you located in",
+      ],
       profilePaths: ["location"],
     }),
     entry("address_line_1", {
@@ -1551,6 +1580,43 @@
       defaultValue: true,
       answerType: "yes_no",
     }),
+    entry("work_term_availability", {
+      aliases: [
+        "available for the summer",
+        "available for the summer 2026 term",
+        "confirm you are available for the summer",
+        "confirm you are available for the summer 2026 term",
+      ],
+      profilePaths: ["availableSummer2026", "workTermAvailability"],
+      defaultValue: true,
+      answerType: "yes_no",
+    }),
+    entry("interview_availability", {
+      aliases: [
+        "available to interview",
+        "available to interview from",
+        "are you available to interview",
+        "interview availability",
+      ],
+      profilePaths: ["availableInterviewWindow", "interviewAvailability"],
+      defaultValue: true,
+      answerType: "yes_no",
+    }),
+    entry("coop_terms_completed", {
+      aliases: [
+        "co-op terms have you completed",
+        "coop terms have you completed",
+        "how many co-op terms",
+        "how many coop terms",
+      ],
+      profilePaths: ["coOpTermsCompleted", "coopTermsCompleted"],
+      answerType: "option",
+      optionAliases: {
+        "0": ["0 terms completed, this will be my 1st term"],
+        "1": ["1 term completed, this will be my 2nd term"],
+        "2": ["2 terms completed, this will be my 3rd term"],
+      },
+    }),
     entry("full_time_part_time_preference", {
       aliases: [
         "interested in a full time or part time position",
@@ -1701,6 +1767,16 @@
       ],
       profilePaths: ["compensationOfferFactors"],
       defaultValue: false,
+      answerType: "yes_no",
+    }),
+    entry("salary_comfortable", {
+      aliases: [
+        "comfortable with the following salary",
+        "comfortable with the following salary for your work term",
+        "are you comfortable with the following salary",
+      ],
+      profilePaths: ["salaryFlexible"],
+      defaultValue: true,
       answerType: "yes_no",
     }),
     entry("salary_expectation", {

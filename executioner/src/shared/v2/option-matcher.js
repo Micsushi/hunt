@@ -153,6 +153,22 @@
     );
   }
 
+  function safePhoneDeviceTypeOption(options) {
+    var real = realOptions(options);
+    var preferred = ["mobile", "cell", "cell phone", "work", "telephone", "home"];
+    for (var i = 0; i < preferred.length; i += 1) {
+      var wanted = preferred[i];
+      var found = real.find(function (option) {
+        var label = normOptionLabel(option.label);
+        return label === wanted || label.includes(wanted);
+      });
+      if (found) {
+        return found;
+      }
+    }
+    return null;
+  }
+
   function phoneCountryCodeOption(options, answer) {
     var target = norm(answer?.value || "");
     if (!target) {
@@ -870,6 +886,14 @@
       }
     }
     if (isPhoneDeviceTypeField(field)) {
+      var safePhoneDevice = safePhoneDeviceTypeOption(real);
+      if (safePhoneDevice) {
+        return {
+          option: safePhoneDevice,
+          source: "phone_device_type_safe_option",
+          fallback: false,
+        };
+      }
       root.audit?.pushIssue(audit, fieldAudit, {
         kind: "phone_device_type_no_mobile_option",
         severity: field?.required ? "warn" : "info",

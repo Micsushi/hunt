@@ -175,6 +175,9 @@ class HuntLedgerClient:
     def fill_page(self, payload: dict[str, Any]) -> Any:
         return self._run_named_c3_command("c3.fill_page", payload, "Fill current apply page.")
 
+    def page_walk(self, payload: dict[str, Any]) -> Any:
+        return self._run_named_c3_command("c3.page_walk", payload, "Continue filling later apply pages.")
+
     def click_next_after_fill(self, payload: dict[str, Any]) -> Any:
         return self._run_named_c3_command("c3.click_next_after_fill", payload, "Click safe next action.")
 

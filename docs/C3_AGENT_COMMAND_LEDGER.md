@@ -30,6 +30,40 @@ The root structure files stay at the ledger root itself:
 - `index.json`
 - `active.json`
 
+Agents should traverse the root in this order:
+
+1. Read `active.json` for current `active_agents`, `active_lanes`, and
+   `active_sessions`.
+2. Open the referenced `manifest.json` files for stable IDs and current
+   `log_path` values.
+3. Read append-only JSONL logs as the source of truth.
+4. Query Postgres only as a rebuildable index; if it disagrees with JSONL,
+   JSONL wins.
+
+C3 agent, lane, and session paths are date partitioned:
+
+- Agent manifest/log:
+  `c3/agents/<YYYY-MM-DD>/<agent_id>/manifest.json` and `agent.jsonl`.
+- Lane manifest/log:
+  `c3/lanes/<YYYY-MM-DD>/<lane_id>/manifest.json` and `lane.jsonl`.
+- Session manifest/log:
+  `c3/sessions/<YYYY-MM-DD>/<session_id>/manifest.json` and `session.jsonl`.
+- Session probes and artifacts:
+  `c3/sessions/<YYYY-MM-DD>/<session_id>/probes/` and `artifacts/`.
+- Global fallback logs:
+  `c3/global/system.jsonl` and `c3/global/human.jsonl`.
+
+Common queries:
+
+- By agent: use `active.json.active_agents[agent_id].log_path`, API
+  `GET /api/ledger/agents/{agent_id}`, or MCP `hunt_ledger_get_agent_log`.
+- By session: use `active.json.active_sessions[session_id].log_path`, API
+  `GET /api/ledger/sessions/{session_id}`, or MCP
+  `hunt_ledger_get_session_log`.
+- By command: use API `GET /api/ledger/commands/{command_id}/timeline` or MCP
+  `hunt_ledger_get_command_timeline`; it dedupes immutable events across active
+  agent, lane, and session logs.
+
 ## Package Dependencies
 
 | Proof Area | Required Packages |
@@ -153,16 +187,15 @@ JSONL path for common debugging:
 - typed command wrappers: `hunt_c3_inspect_fields`,
   `hunt_c3_inspect_validation`, `hunt_c3_snapshot_page`,
   `hunt_c3_get_progress`, `hunt_c3_fill_page`,
-  `hunt_c3_click_next_after_fill`.
+  `hunt_c3_page_walk`, `hunt_c3_click_next_after_fill`.
 - `hunt_ledger_get_command_timeline`: returns deduped immutable events for one
   `command_id` across active agent/lane/session logs.
 - `hunt_ledger_find_recent_failures`: returns recent rejected/failed/error event
   summaries for agent debugging.
 
-`c3.page_walk` is still registered in the shared C3 registry but is not directly
-executable through the bridge receiver yet. Use `c3.fill_page` plus existing
-page-walk behavior, or add an extension receiver route before treating
-`c3.page_walk` as a first-class MCP command.
+`c3.page_walk` is a first-class MCP/backend/extension command. Agents should
+call it through `hunt_c3_page_walk` only while holding the session mutation
+lease for the target browser session.
 
 Required live inputs from other packages/workers:
 

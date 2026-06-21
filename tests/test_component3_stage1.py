@@ -6061,7 +6061,10 @@ Expected Graduation: Sep 2026
         receiver_routes_start = background.index("const C3_COMMAND_RECEIVER_ROUTES")
         receiver_routes_end = background.index("});", receiver_routes_start)
         receiver_routes = background[receiver_routes_start:receiver_routes_end]
-        self.assertNotIn("[C3_COMMANDS.pageWalk]:", receiver_routes)
+        self.assertIn(
+            '[C3_COMMANDS.pageWalk]: "hunt.apply.page_walk"',
+            receiver_routes,
+        )
         receiver_start = background.index("async function handleInternalC3Command")
         receiver_end = background.index("async function handleMessage")
         receiver_body = background[receiver_start:receiver_end]
@@ -6085,6 +6088,7 @@ Expected Graduation: Sep 2026
             ("hunt.apply.get_active_fill_progress", "C3_COMMANDS.getProgress"),
             ("hunt.apply.cancel_fill", "C3_COMMANDS.cancelSession"),
             ("hunt.apply.fill_current_page", "C3_COMMANDS.fillPage"),
+            ("hunt.apply.page_walk", "C3_COMMANDS.pageWalk"),
             ("hunt.apply.fill_remaining_with_llm", "C3_COMMANDS.fillRemainingWithLlm"),
             ("hunt.apply.click_next_after_fill", "C3_COMMANDS.clickNextAfterFill"),
             ("hunt.apply.clear_current_page", "C3_COMMANDS.clearPage"),

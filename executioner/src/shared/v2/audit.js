@@ -502,6 +502,9 @@
   }
 
   function pushIssue(audit, fieldAudit, issue) {
+    if (!audit) {
+      return null;
+    }
     var entry = Object.assign(
       {
         kind: "c3_v2_issue",

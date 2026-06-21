@@ -65,6 +65,7 @@ const C3_COMMAND_RECEIVER_ROUTES = Object.freeze({
   [C3_COMMANDS.detectPage]: "hunt.apply.detect_page",
   [C3_COMMANDS.fillPage]: "hunt.apply.fill_current_page",
   [C3_COMMANDS.fillRemainingWithLlm]: "hunt.apply.fill_remaining_with_llm",
+  [C3_COMMANDS.pageWalk]: "hunt.apply.page_walk",
   [C3_COMMANDS.clickNextAfterFill]: "hunt.apply.click_next_after_fill",
   [C3_COMMANDS.clearPage]: "hunt.apply.clear_current_page",
   [C3_COMMANDS.cancelSession]: "hunt.apply.cancel_fill",
@@ -8843,6 +8844,117 @@ async function handleMessage(message, sender = {}) {
         }
       }
       return result;
+        },
+      });
+    }
+
+    case "hunt.apply.page_walk": {
+      const tabId = message.payload?.tabId || sender.tab?.id;
+      const state = await getExtensionState();
+      return runC3Command({
+        commandName: C3_COMMANDS.pageWalk,
+        state,
+        payload: message.payload || {},
+        sender,
+        handler: async () => {
+          await ensureContentBootstrapForTab(tabId, "page_walk");
+          if (!state.settings.manualFillEnabled) {
+            await logActivity(
+              "page_walk.skip",
+              "Page walk skipped because manual fill is disabled.",
+              { tabId },
+              "blocked",
+            );
+            return {
+              ok: false,
+              enabled: true,
+              stoppedReason: "manual_fill_disabled",
+              reason: "manual_fill_disabled",
+              message:
+                "Manual fill is currently disabled in extension settings.",
+              pagesFilled: 0,
+              successfulPageCount: 0,
+              steps: [],
+            };
+          }
+          const passwordSaving =
+            await ensurePasswordSavingDisabled("page_walk");
+          if (!passwordSaving.ok) {
+            await logActivity(
+              "password_saving.disable_failed",
+              "C3 could not disable Chrome password saving before page walk.",
+              passwordSaving,
+              "warn",
+            );
+          }
+          const fillRunId = message.payload?.fillRunId || createFillRunId();
+          const abortController = new AbortController();
+          const supersededFillRunIds = cancelActiveFillRunsForTab(tabId);
+          activeFillRunByTab.set(tabId, fillRunId);
+          activeFillRuns.set(fillRunId, {
+            tabId,
+            triggeredBy: message.payload?.triggeredBy || "page_walk",
+            startedAt: new Date().toISOString(),
+            cancelled: false,
+            lastKnownUrl: sender.tab?.url || message.payload?.url || "",
+            expectedReloads: 0,
+            abortController,
+            supersededFillRunIds,
+          });
+          for (const supersededFillRunId of supersededFillRunIds) {
+            await markPageFillCancelled(tabId, supersededFillRunId, true);
+          }
+          if (supersededFillRunIds.length) {
+            await logActivity(
+              "page_walk.supersede_previous",
+              "Started a page walk and canceled previous active fill run(s) on this tab.",
+              {
+                tabId,
+                fillRunId,
+                supersededFillRunIds,
+                triggeredBy: message.payload?.triggeredBy || "page_walk",
+              },
+              "warn",
+            );
+          }
+          await dismissPageTransientUi(tabId, { preserveFillProgress: true });
+          await markPageFillCancelled(tabId, fillRunId, false);
+          const initialResult = message.payload?.initialResult || {
+            ok: true,
+            message: "Direct page walk started.",
+            attempt: {
+              filledFieldCount: 0,
+              manualReviewRequired: false,
+              manualReviewReasons: [],
+            },
+            result: {
+              filledFieldCount: 0,
+              pendingLlmFieldCount: 0,
+              manualReviewReasons: [],
+              generatedAnswers: [],
+            },
+            generatedAnswers: [],
+          };
+          const allowLlmAnswers =
+            state.settings.llmAnswerFallbackEnabled === true &&
+            message.payload?.allowLlmAnswers !== false;
+          try {
+            return await runV2PageWalkAfterFill({
+              tabId,
+              state,
+              initialResult,
+              fillRunId,
+              triggeredBy: message.payload?.triggeredBy || "page_walk",
+              allowLlmAnswers,
+            });
+          } finally {
+            const stillOwnsPageUi = activeFillRunByTab.get(tabId) === fillRunId;
+            activeFillRuns.delete(fillRunId);
+            if (stillOwnsPageUi) {
+              activeFillRunByTab.delete(tabId);
+              await hideFillProgress(tabId);
+            }
+          }
         },
       });
     }

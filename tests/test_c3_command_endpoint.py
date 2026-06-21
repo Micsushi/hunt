@@ -205,22 +205,45 @@ def test_c3_command_run_rejects_unknown_command_and_logs_request(tmp_path):
     assert event["payload"]["reason_code"] == "unknown_command"
 
 
-def test_c3_command_run_rejects_registered_but_unexposed_command(tmp_path):
+def test_c3_command_run_page_walk_executes_bridge(tmp_path, monkeypatch):
     client, service, lease_store = _client(tmp_path)
     lease_id = _claim_lease(lease_store)
     payload = _payload(lease_id)
     payload["command_name"] = "c3.page_walk"
+    seen = {}
+
+    def fake_bridge(target, bridge_payload):
+        seen["target"] = target
+        seen["payload"] = bridge_payload
+        return {
+            "ok": True,
+            "commandReceipt": {
+                "commandId": bridge_payload["command_id"],
+                "traceId": bridge_payload["trace_id"],
+                "command": bridge_payload["command_name"],
+                "ok": True,
+                "reason": "final_submit_visible",
+            },
+        }
+
+    monkeypatch.setattr(c3_commands, "run_c3_extension_command", fake_bridge)
 
     response = client.post("/api/c3/commands/run", json=payload)
 
-    assert response.status_code == 400
-    assert response.json()["reason_code"] == "unsupported_command_route"
-    event = _session_events(service)[-1]
-    assert event["event_type"] == "command.rejected"
-    assert event["payload"]["reason_code"] == "unsupported_command_route"
+    assert response.status_code == 200
+    assert response.json()["reason_code"] == "browser_execution_completed"
+    assert seen["target"]["extension_id"] == "ext-abc"
+    assert seen["payload"]["command_name"] == "c3.page_walk"
+    events = _command_events(service)
+    assert [event["event_type"] for event in events] == [
+        "command.requested",
+        "command.started",
+        "command.completed",
+    ]
+    assert events[-1]["payload"]["command_name"] == "c3.page_walk"
 
 
-def test_c3_command_catalog_marks_page_walk_not_directly_executable(tmp_path):
+def test_c3_command_catalog_marks_page_walk_directly_executable(tmp_path):
     client, _service, _lease_store = _client(tmp_path)
 
     response = client.get("/api/c3/commands/catalog")
@@ -228,7 +251,7 @@ def test_c3_command_catalog_marks_page_walk_not_directly_executable(tmp_path):
     assert response.status_code == 200
     commands = {entry["command_name"]: entry for entry in response.json()["commands"]}
     assert commands["c3.inspect_fields"]["executable"] is True
-    assert commands["c3.page_walk"]["executable"] is False
+    assert commands["c3.page_walk"]["executable"] is True
     assert commands["c3.fill_page"]["mutates_page"] is True
 
 

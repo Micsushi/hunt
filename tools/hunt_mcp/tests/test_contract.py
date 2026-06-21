@@ -46,6 +46,7 @@ def test_all_tools_are_listed() -> None:
         "hunt_c3_snapshot_page",
         "hunt_c3_get_progress",
         "hunt_c3_fill_page",
+        "hunt_c3_page_walk",
         "hunt_c3_click_next_after_fill",
     }
 
@@ -279,6 +280,7 @@ def test_c3_run_command_calls_backend_execution_endpoint_and_returns_receipt() -
         ("hunt_c3_snapshot_page", "c3.snapshot_page"),
         ("hunt_c3_get_progress", "c3.get_progress"),
         ("hunt_c3_fill_page", "c3.fill_page"),
+        ("hunt_c3_page_walk", "c3.page_walk"),
         ("hunt_c3_click_next_after_fill", "c3.click_next_after_fill"),
     ],
 )

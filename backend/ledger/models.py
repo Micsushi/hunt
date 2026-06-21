@@ -8,6 +8,7 @@ from typing import Any, Literal
 from pydantic import BaseModel, Field
 
 ActorType = Literal["human", "agent", "system", "script"]
+ProbeStatus = Literal["written", "run", "useful", "promoted", "stale", "archived"]
 
 
 class LeaseKind(StrEnum):
@@ -166,7 +167,20 @@ class ProbeFileCreate(BaseModel):
     lane_id: str = ""
     session_id: str = ""
     command_id: str = ""
+    failure_event_id: str = ""
     filename: str
     content: str
     trusted: bool = False
+    status: ProbeStatus = "written"
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class ProbeStatusUpdate(BaseModel):
+    component: str = "c3"
+    agent_id: str = ""
+    lane_id: str = ""
+    session_id: str = ""
+    command_id: str = ""
+    failure_event_id: str = ""
+    status: ProbeStatus
     metadata: dict[str, Any] = Field(default_factory=dict)

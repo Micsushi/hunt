@@ -209,20 +209,108 @@ def test_api_probe_file_is_untrusted_and_does_not_log_content(tmp_path):
             "filename": "prove-widget.js",
             "content": "console.log('probe secret body')",
             "trusted": True,
+            "command_id": "cmd-probe",
+            "failure_event_id": "evt-failed",
         },
     )
 
     assert response.status_code == 200
     body = response.json()
     assert body["trusted"] is False
+    assert body["status"] == "written"
+    assert body["command_id"] == "cmd-probe"
+    assert body["failure_event_id"] == "evt-failed"
     probe_path = Path(body["path"])
+    manifest_path = Path(body["manifest_path"])
     assert probe_path.exists()
+    assert manifest_path.exists()
     assert probe_path.is_relative_to(service.root)
+    assert manifest_path.is_relative_to(service.root)
     assert "probe secret body" in probe_path.read_text(encoding="utf-8")
+    assert "probe secret body" not in manifest_path.read_text(encoding="utf-8")
     session_log = client.get("/api/ledger/sessions/session-probe").json()
     serialized_log = "\n".join(str(event) for event in session_log["events"])
     assert "probe.file_written" in serialized_log
     assert "probe secret body" not in serialized_log
+
+
+def test_api_probe_status_update_is_logged_and_queryable(tmp_path):
+    client, _service = _client(tmp_path)
+    client.post("/api/ledger/agents", json={"agent_id": "agent-probe-status"})
+    client.post(
+        "/api/ledger/sessions",
+        json={"session_id": "session-probe-status", "agent_id": "agent-probe-status"},
+    )
+    created = client.post(
+        "/api/ledger/probes",
+        json={
+            "agent_id": "agent-probe-status",
+            "session_id": "session-probe-status",
+            "filename": "inspect-widget.js",
+            "content": "console.log('status secret body')",
+            "command_id": "cmd-original",
+        },
+    )
+    assert created.status_code == 200
+    probe_id = created.json()["probe_id"]
+
+    updated = client.patch(
+        f"/api/ledger/probes/{probe_id}/status",
+        json={
+            "agent_id": "agent-probe-status",
+            "session_id": "session-probe-status",
+            "status": "useful",
+            "command_id": "cmd-promote",
+            "failure_event_id": "evt-validation-failed",
+            "metadata": {"reason": "matched validation failure"},
+        },
+    )
+
+    assert updated.status_code == 200
+    body = updated.json()
+    assert body["status"] == "useful"
+    assert body["command_id"] == "cmd-promote"
+    assert body["failure_event_id"] == "evt-validation-failed"
+    assert body["metadata"]["reason"] == "matched validation failure"
+
+    listed = client.get("/api/ledger/probes?session_id=session-probe-status&status=useful")
+    assert listed.status_code == 200
+    probes = listed.json()["probes"]
+    assert [probe["probe_id"] for probe in probes] == [probe_id]
+    assert "content" not in probes[0]
+
+    session_log = client.get("/api/ledger/sessions/session-probe-status").json()
+    event_types = [event["event_type"] for event in session_log["events"]]
+    assert event_types == ["probe.file_written", "probe.status_updated"]
+    status_event = session_log["events"][-1]
+    assert status_event["payload"]["previous_status"] == "written"
+    assert status_event["payload"]["status"] == "useful"
+    serialized_log = "\n".join(str(event) for event in session_log["events"])
+    assert "status secret body" not in serialized_log
+
+
+def test_api_probe_component_rejects_path_escape_values(tmp_path):
+    client, _service = _client(tmp_path)
+
+    create = client.post(
+        "/api/ledger/probes",
+        json={
+            "component": "../outside",
+            "agent_id": "agent-probe",
+            "session_id": "session-probe",
+            "filename": "probe.js",
+            "content": "console.log('x')",
+        },
+    )
+    listed = client.get("/api/ledger/probes?component=..%2Foutside")
+    updated = client.patch(
+        "/api/ledger/probes/probe-nope/status",
+        json={"component": "../outside", "status": "stale"},
+    )
+
+    for response in (create, listed, updated):
+        assert response.status_code == 400
+        assert "Unsupported ledger component" in response.json()["detail"]
 
 
 def test_api_lease_claim_blocks_second_agent_and_allows_human_interrupt(tmp_path):

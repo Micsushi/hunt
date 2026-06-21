@@ -258,7 +258,6 @@ def test_generic_v2_audit_events_include_inventory_answers_and_command_context()
     assert answer_event["payload"]["payload"]["answer"]["redacted"] is True
 
 
-@pytest.mark.xfail(reason="c3 refactor changed behavior; needs update", strict=False)
 def test_generic_v2_unknown_option_defaults_to_neutral_yes_then_first_real():
     if sync_playwright is None:
         pytest.skip("playwright is required for the generic C3 V2 fixture")
@@ -333,7 +332,6 @@ def test_generic_v2_unknown_option_defaults_to_neutral_yes_then_first_real():
     }
 
 
-@pytest.mark.xfail(reason="c3 refactor changed behavior; needs update", strict=False)
 def test_generic_v2_non_disclosure_prefers_tenant_identify_option():
     if sync_playwright is None:
         pytest.skip("playwright is required for the generic C3 V2 fixture")
@@ -389,7 +387,6 @@ def test_generic_v2_option_matcher_keeps_checkbox_guard_before_aliases():
     )
 
 
-@pytest.mark.xfail(reason="c3 refactor changed behavior; needs update", strict=False)
 def test_generic_v2_fill_logs_profile_defaults_and_text_fallbacks():
     if sync_playwright is None:
         pytest.skip("playwright is required for the generic C3 V2 fixture")
@@ -466,19 +463,28 @@ def test_generic_v2_fill_logs_profile_defaults_and_text_fallbacks():
         )
         browser.close()
 
-    assert result["ok"] is False
+    assert result["ok"] is True
     assert values["firstName"] == "Michael"
     assert values["gender"] == "not_disclose"
-    assert values["unknownRaw"] == ""
+    assert values["unknownRaw"] == "Not applicable."
     assert result["manualReviewRequired"] is True
     assert result["v2Audit"]["schemaVersion"] == "c3-v2-audit-1"
     issue_kinds = {issue["kind"] for issue in result["v2Audit"]["permanentIssues"]}
     assert "derived_profile_pairing" in issue_kinds
     assert "neutral_disclosure_default" in issue_kinds
-    assert "unknown_question_unresolved" in issue_kinds
+    assert "unknown_question_defaulted" in issue_kinds
+    assert result["generatedAnswers"] == [
+        {
+            "questionHash": "q_a1dac413",
+            "questionText": "text unknown-text explain your operating mode *",
+            "answerText": "Not applicable.",
+            "answerSource": "fallback:not_applicable",
+            "confidence": "low",
+            "manualReviewRequired": True,
+        }
+    ]
 
 
-@pytest.mark.xfail(reason="c3 refactor changed behavior; needs update", strict=False)
 def test_generic_v2_fills_oracle_email_and_hidden_terms_checkbox():
     if sync_playwright is None:
         pytest.skip("playwright is required for the generic C3 V2 fixture")
@@ -563,10 +569,9 @@ def test_generic_v2_fills_oracle_email_and_hidden_terms_checkbox():
     ids = {entry["id"]: entry for entry in result["fieldInventory"]}
     assert "honey-pot-1" not in ids
     assert ids["legal-disclaimer-checkbox"]["filled"] is True
-    assert ids["legal-disclaimer-checkbox"]["valueSource"] == "profile:terms_acceptance"
+    assert ids["legal-disclaimer-checkbox"]["valueSource"] == "default:terms_acceptance"
 
 
-@pytest.mark.xfail(reason="c3 refactor changed behavior; needs update", strict=False)
 def test_generic_v2_does_not_upload_resume_to_cover_letter():
     if sync_playwright is None:
         pytest.skip("playwright is required for the generic C3 V2 fixture")
@@ -747,7 +752,6 @@ def test_generic_v2_clear_removes_oracle_uploaded_attachment_card():
     assert remaining == {"pdfText": False, "coverUpload": True}
 
 
-@pytest.mark.xfail(reason="c3 refactor changed behavior; needs update", strict=False)
 def test_generic_v2_clear_clicks_custom_select_x_and_trash_icons():
     if sync_playwright is None:
         pytest.skip("playwright is required for the generic C3 V2 fixture")
@@ -829,7 +833,6 @@ def test_generic_v2_clear_clicks_custom_select_x_and_trash_icons():
     assert remaining == {"legalValue": "", "websiteRow": False}
 
 
-@pytest.mark.xfail(reason="c3 refactor changed behavior; needs update", strict=False)
 def test_generic_v2_fills_oracle_segmented_yes_no_buttons():
     if sync_playwright is None:
         pytest.skip("playwright is required for the generic C3 V2 fixture")
@@ -968,7 +971,11 @@ def test_generic_v2_fills_oracle_segmented_yes_no_buttons():
     issue_descriptors = [
         issue.get("descriptor", "") for issue in result["v2Audit"]["permanentIssues"]
     ]
-    assert not any("CEWA" in descriptor for descriptor in issue_descriptors)
+    assert any("CEWA" in descriptor for descriptor in issue_descriptors)
+    assert any(
+        issue.get("kind") == "default_answer_used" and "CEWA" in issue.get("descriptor", "")
+        for issue in result["v2Audit"]["permanentIssues"]
+    )
 
 
 def test_generic_v2_clear_has_uploaded_file_card_guard():
@@ -1246,7 +1253,6 @@ def test_safe_next_blocks_final_submit_controls():
     assert values == {"submitted": "", "applied": ""}
 
 
-@pytest.mark.xfail(reason="c3 refactor changed behavior; needs update", strict=False)
 def test_shared_radio_group_selects_no_with_workday_true_false_values():
     if sync_playwright is None:
         pytest.skip("playwright is required for the injected utility fixture")
@@ -1283,7 +1289,9 @@ def test_shared_radio_group_selects_no_with_workday_true_false_values():
             """
             () => {
               const radios = [...document.querySelectorAll("input[type='radio']")];
-              const descriptor = radios.map((radio) => window.__huntApplyUtils.getDescriptor(radio, ["label", "[role='group']")).join(" ");
+              const descriptor = radios
+                .map((radio) => window.__huntApplyUtils.getDescriptor(radio, ["label", "[role='group']"]))
+                .join(" ");
               return {
                 filled: window.__huntApplyUtils.fillRadioGroup(
                   radios,
@@ -1302,7 +1310,6 @@ def test_shared_radio_group_selects_no_with_workday_true_false_values():
     assert result == {"filled": True, "yes": False, "no": True}
 
 
-@pytest.mark.xfail(reason="c3 refactor changed behavior; needs update", strict=False)
 def test_shared_structured_choice_handles_workday_missing_s_equity_text():
     if sync_playwright is None:
         pytest.skip("playwright is required for the injected utility fixture")
@@ -1346,7 +1353,6 @@ def test_shared_structured_choice_handles_workday_missing_s_equity_text():
     ]
 
 
-@pytest.mark.xfail(reason="c3 refactor changed behavior; needs update", strict=False)
 def test_generic_fill_populates_required_fields_only():
     if sync_playwright is None:
         pytest.skip("playwright is required for the generic C3 fill fixture")
@@ -1408,7 +1414,6 @@ def test_generic_fill_populates_required_fields_only():
                   pdfMimeType: "application/pdf",
                   pdfDataUrl: "data:application/pdf;base64,JVBERi0xLjQK",
                 },
-                fieldRules: GENERIC_FIELD_RULES,
               });
             }
             """
@@ -1457,7 +1462,6 @@ def test_generic_fill_populates_required_fields_only():
     }
 
 
-@pytest.mark.xfail(reason="c3 refactor changed behavior; needs update", strict=False)
 def test_generic_fill_retries_text_fields_that_lose_committed_value():
     if sync_playwright is None:
         pytest.skip("playwright is required for the generic C3 fill fixture")
@@ -1514,7 +1518,6 @@ def test_generic_fill_retries_text_fields_that_lose_committed_value():
                 },
                 activeApplyContext: {},
                 defaultResume: {},
-                fieldRules: GENERIC_FIELD_RULES,
               });
             }
             """
@@ -1537,7 +1540,6 @@ def test_generic_fill_retries_text_fields_that_lose_committed_value():
     assert first["skippedReason"] == ""
 
 
-@pytest.mark.xfail(reason="c3 refactor changed behavior; needs update", strict=False)
 def test_generic_fill_can_fill_optional_known_fields_when_required_only_is_off():
     if sync_playwright is None:
         pytest.skip("playwright is required for the generic C3 fill fixture")
@@ -1600,7 +1602,6 @@ def test_generic_fill_can_fill_optional_known_fields_when_required_only_is_off()
                   pdfMimeType: "application/pdf",
                   pdfDataUrl: "data:application/pdf;base64,JVBERi0xLjQK",
                 },
-                fieldRules: GENERIC_FIELD_RULES,
               });
             }
             """
@@ -1620,10 +1621,9 @@ def test_generic_fill_can_fill_optional_known_fields_when_required_only_is_off()
     ][0]
     assert preferred_inventory["required"] is False
     assert preferred_inventory["filled"] is True
-    assert preferred_inventory["valueSource"] == "profile:preferredName"
+    assert preferred_inventory["valueSource"] == "derived:preferredName"
 
 
-@pytest.mark.xfail(reason="c3 refactor changed behavior; needs update", strict=False)
 def test_generic_fill_reads_sibling_labels_and_hidden_resume_inputs():
     if sync_playwright is None:
         pytest.skip("playwright is required for the generic C3 fill fixture")
@@ -1681,7 +1681,6 @@ def test_generic_fill_reads_sibling_labels_and_hidden_resume_inputs():
                   pdfMimeType: "application/pdf",
                   pdfDataUrl: "data:application/pdf;base64,JVBERi0xLjQK",
                 },
-                fieldRules: GENERIC_FIELD_RULES,
               });
             }
             """
@@ -1719,17 +1718,9 @@ def test_generic_fill_reads_sibling_labels_and_hidden_resume_inputs():
     hidden_resume = [entry for entry in result["fieldInventory"] if entry["id"] == "resume-file"][0]
     assert hidden_resume["filled"] is True
     assert hidden_resume["valueSource"] == "resume_upload"
-    cover_letter = [
-        entry for entry in result["fieldInventory"] if entry["id"] == "cover-letter-file"
-    ][0]
-    assert cover_letter["filled"] is False
-    assert cover_letter["skippedReason"] in {
-        "not_resume_input",
-        "resume_already_uploaded",
-    }
+    assert not [entry for entry in result["fieldInventory"] if entry["id"] == "cover-letter-file"]
 
 
-@pytest.mark.xfail(reason="c3 refactor changed behavior; needs update", strict=False)
 def test_generic_fill_commits_greenhouse_style_custom_selects():
     if sync_playwright is None:
         pytest.skip("playwright is required for the generic C3 fill fixture")
@@ -1783,7 +1774,6 @@ def test_generic_fill_commits_greenhouse_style_custom_selects():
                 },
                 activeApplyContext: {},
                 defaultResume: {},
-                fieldRules: GENERIC_FIELD_RULES,
               });
             }
             """

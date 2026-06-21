@@ -28,8 +28,8 @@ C3_COMMAND_REGISTRY: dict[str, dict[str, Any]] = {
     },
     "c3.page_walk": {
         "mutates_page": True,
-        "executable": False,
-        "summary": "Continue filling later pages; registered but not directly exposed by extension receiver yet.",
+        "executable": True,
+        "summary": "Continue filling later apply pages through the extension receiver.",
     },
     "c3.click_next_after_fill": {"mutates_page": True, "executable": True, "summary": "Click safe next action."},
     "c3.clear_page": {"mutates_page": True, "executable": True, "summary": "Clear current page fields."},

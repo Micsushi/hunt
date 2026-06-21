@@ -169,7 +169,6 @@ def test_workday_v2_empty_popup_rejects_wrong_committed_button_value():
     assert fill_steps[-1]["reason"] == "workday_popup_options_missing"
 
 
-@pytest.mark.xfail(reason="c3 refactor changed behavior; needs update", strict=False)
 def test_workday_v2_phone_type_uses_controlled_listbox_and_ordered_fallback():
     if sync_playwright is None:
         pytest.skip("playwright is required for the Workday C3 fill fixture")
@@ -2005,7 +2004,6 @@ def test_workday_bdo_questionnaire_defaults_and_location_answer():
     assert "Junior AI" not in result["locationAnswer"]["answerText"]
 
 
-@pytest.mark.xfail(reason="c3 refactor changed behavior; needs update", strict=False)
 def test_workday_required_only_skips_optional_generated_textareas():
     if sync_playwright is None:
         pytest.skip("playwright is required for the Workday C3 fill fixture")
@@ -2123,8 +2121,8 @@ def test_workday_required_only_skips_optional_generated_textareas():
     assert inventory["referred-how"]["skippedReason"] == "not_required"
     assert inventory["conditional-required"]["required"] is True
     assert inventory["conditional-required"]["filled"] is True
-    assert inventory["conditional-required"]["valueSource"] == "best_effort:default_text"
-    assert result["manualReviewRequired"] is False
+    assert inventory["conditional-required"]["valueSource"] == "fallback:not_applicable"
+    assert result["manualReviewRequired"] is True
     assert result["bestEffortWarnings"]
 
 
@@ -2312,7 +2310,6 @@ def test_workday_required_only_still_adds_my_experience_sections_from_aliases():
     assert second_sections["Education"]["skippedReason"] == "already_filled"
 
 
-@pytest.mark.xfail(reason="c3 refactor changed behavior; needs update", strict=False)
 def test_workday_repeatable_skills_uses_generic_remote_checkbox_fallback():
     if sync_playwright is None:
         pytest.skip("playwright is required for the Workday C3 fill fixture")
@@ -2892,7 +2889,6 @@ def test_workday_sanctioned_country_checkbox_selects_actual_none_input():
     }
 
 
-@pytest.mark.xfail(reason="c3 refactor changed behavior; needs update", strict=False)
 def test_workday_repeatable_skills_does_not_write_into_active_name_field():
     if sync_playwright is None:
         pytest.skip("playwright is required for the Workday C3 fill fixture")

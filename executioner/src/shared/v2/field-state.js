@@ -15,7 +15,12 @@
     var selected = container?.querySelector(
       '.select__single-value, [class*="single-value"], [id^="pill-"]',
     );
-    return clean(selected?.innerText || selected?.textContent || "");
+    return clean(
+      selected?.innerText ||
+        selected?.textContent ||
+        container?.dataset?.selected ||
+        "",
+    );
   }
 
   function readFieldState(field) {
@@ -90,7 +95,7 @@
         rawValue: el.value || selectedText,
         text: selectedText || clean(el.value || ""),
         checked: false,
-        selected: Boolean(selectedText || el.value),
+        selected: Boolean(selectedText),
       };
     }
     if (el.isContentEditable || el.getAttribute?.("role") === "textbox") {

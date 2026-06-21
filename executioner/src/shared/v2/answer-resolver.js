@@ -32,6 +32,7 @@
     var loc = locationParts(profile);
     var derived = {
       firstName: names.firstName,
+      preferredName: names.firstName,
       lastName: names.lastName,
       city: loc.city,
       province: loc.province,
@@ -88,7 +89,58 @@
     return value;
   }
 
+  function dynamicOptionAliasesForEntry(entry, value, profile) {
+    var aliases = Object.assign({}, entry.optionAliases || {});
+    var key = clean(value);
+    if (!key) {
+      return aliases;
+    }
+    if (
+      entry.id === "location" ||
+      entry.id === "city" ||
+      entry.id === "city_province_location"
+    ) {
+      var loc = locationParts(profile);
+      var country = clean(loc.country).toLowerCase();
+      var province = clean(loc.province).toLowerCase();
+      var raw = clean(profile.location).toLowerCase();
+      var canada =
+        country === "canada" ||
+        raw.includes("canada") ||
+        /\b(ab|bc|b\.c\.|on|qc|mb|sk|ns|nb|nl|pe|pei|nt|nu|yt)\b/.test(
+          province,
+        );
+      if (canada) {
+        aliases[key] = Array.from(
+          new Set([...(aliases[key] || []), "Elsewhere in Canada", "Canada"]),
+        );
+      }
+    }
+    return aliases;
+  }
+
   function salaryTextAnswer(field, profile) {
+    var fieldText = clean(
+      [
+        field?.descriptor,
+        field?.fieldId,
+        field?.element?.id,
+        field?.element?.name,
+      ].join(" "),
+    ).toLowerCase();
+    if (
+      profile.salaryFlexible === true &&
+      (field?.uiModel === "textarea" ||
+        fieldText.includes("desired salary range") ||
+        fieldText.includes("salary range"))
+    ) {
+      return {
+        value:
+          "I am flexible and open to discussing compensation based on the role and overall package.",
+        source: "profile:salaryFlexible",
+        confidence: 0.92,
+      };
+    }
     if (isHourlyCompensationField(field)) {
       var hourly = clean(profile.hourlyPayExpectation);
       if (hourly) {
@@ -747,7 +799,11 @@
           source: result.source,
           answerType: entry.answerType || "text",
           confidence: result.derived ? 0.8 : 0.96,
-          optionAliases: entry.optionAliases || {},
+          optionAliases: dynamicOptionAliasesForEntry(
+            entry,
+            result.value,
+            profile,
+          ),
           allValues: allValues || undefined,
         };
       }

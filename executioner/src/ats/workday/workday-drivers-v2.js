@@ -1751,6 +1751,42 @@
     return Boolean(field?.required && !isSalaryField(field, answer));
   }
 
+  function isPhoneDeviceTypeField(field, answer) {
+    var text = norm(
+      [
+        field?.fieldId,
+        field?.descriptor,
+        field?.workday?.fieldLabel,
+        field?.workday?.kind,
+        field?.element?.id,
+        field?.element?.name,
+        answer?.source,
+      ].join(" "),
+    );
+    return (
+      text.includes("phone device type") ||
+      text.includes("phone type") ||
+      text.includes("phonenumber phonetype") ||
+      text.includes("phone number phonetype")
+    );
+  }
+
+  function safePhoneDeviceTypeOption(options) {
+    var real = root.optionMatcher?.realOptions?.(options || []) || options || [];
+    var preferred = ["mobile", "cell", "cell phone", "work", "telephone", "home"];
+    for (var i = 0; i < preferred.length; i += 1) {
+      var wanted = preferred[i];
+      var found = real.find(function (option) {
+        var label = norm(option?.label);
+        return label === wanted || label.includes(wanted);
+      });
+      if (found) {
+        return found;
+      }
+    }
+    return null;
+  }
+
   function firstWorkdayProgressFallback(options, field, answer, reason) {
     if (!canUseWorkdayProgressFallback(field, answer)) {
       return null;
@@ -2286,6 +2322,12 @@
       answer?.answerType &&
       !["unknown", "non_disclosure"].includes(answer.answerType)
     ) {
+      if (isPhoneDeviceTypeField(field, answer)) {
+        var phoneDevice = safePhoneDeviceTypeOption(options);
+        if (phoneDevice) {
+          return phoneDevice;
+        }
+      }
       return firstWorkdayProgressFallback(
         options,
         field,
@@ -2561,6 +2603,9 @@
         ) || [],
       )
         .filter(function (el) {
+          if (el.closest?.('[data-automation-id="selectedItemList"]')) {
+            return true;
+          }
           return !el.closest?.(
             [
               '[data-automation-id="activeListContainer"]',

@@ -206,6 +206,10 @@ TOOLS: dict[str, dict[str, Any]] = {
         "description": "Typed wrapper for c3.fill_page through the backend bridge.",
         "inputSchema": {"type": "object", "required": ["command_id", "agent_id", "session_id", "lease_id"], "additionalProperties": True},
     },
+    "hunt_c3_page_walk": {
+        "description": "Typed wrapper for c3.page_walk through the backend bridge.",
+        "inputSchema": {"type": "object", "required": ["command_id", "agent_id", "session_id", "lease_id"], "additionalProperties": True},
+    },
     "hunt_c3_click_next_after_fill": {
         "description": "Typed wrapper for c3.click_next_after_fill through the backend bridge.",
         "inputSchema": {"type": "object", "required": ["command_id", "agent_id", "session_id", "lease_id"], "additionalProperties": True},
@@ -239,6 +243,7 @@ def make_handlers(client: HuntLedgerClient) -> dict[str, ToolHandler]:
         "hunt_c3_snapshot_page": client.snapshot_page,
         "hunt_c3_get_progress": client.get_progress,
         "hunt_c3_fill_page": client.fill_page,
+        "hunt_c3_page_walk": client.page_walk,
         "hunt_c3_click_next_after_fill": client.click_next_after_fill,
     }
 

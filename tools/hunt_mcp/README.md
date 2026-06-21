@@ -57,7 +57,7 @@ cd tools\hunt_mcp
 - typed C3 wrappers -> `POST /api/c3/commands/run`:
   `hunt_c3_inspect_fields`, `hunt_c3_inspect_validation`,
   `hunt_c3_snapshot_page`, `hunt_c3_get_progress`, `hunt_c3_fill_page`,
-  `hunt_c3_click_next_after_fill`
+  `hunt_c3_page_walk`, `hunt_c3_click_next_after_fill`
 
 `hunt_c3_write_probe_file` sends probe content and metadata to the backend. The
 backend must store the file under the ledger-root policy, record metadata, and
@@ -72,8 +72,8 @@ returns the backend receipt JSON as text content without adding
 payload.
 
 Use `hunt_c3_command_catalog` before running unfamiliar commands. `c3.page_walk`
-is known in the shared registry but currently reports `executable=false` because
-the extension receiver does not expose it as a direct bridge route yet.
+is directly executable through `hunt_c3_page_walk` when an agent owns the
+session lease and target browser registration.
 
 Use `hunt_ledger_get_command_timeline` after any command to review immutable
 JSONL events for that `command_id`. Use `hunt_ledger_find_recent_failures` when
