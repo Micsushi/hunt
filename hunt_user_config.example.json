@@ -50,6 +50,7 @@
   "hours_old": 24,
   "run_interval_seconds": 600,
   "enrich_after_scrape": true,
+  "linkedin_fetch_description": true,
   "enrichment_batch_limit": 25,
   "enrichment_timeout_ms": 45000,
   "enrichment_max_attempts": 4,

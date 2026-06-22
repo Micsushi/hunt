@@ -23,6 +23,7 @@ from hunter.config import (
     ENRICHMENT_TIMEOUT_MS,
     ENRICHMENT_UI_VERIFY_BLOCKED,
     HOURS_OLD,
+    LINKEDIN_FETCH_DESCRIPTION,
     LOCATIONS,
     MAX_WORKERS,
     RESULTS_WANTED,
@@ -164,14 +165,18 @@ def scrape_single(site, term, location, category):
         # Import here so unit tests and non-discovery workflows don't require jobspy.
         from jobspy import scrape_jobs  # type: ignore
 
-        jobs_df = scrape_jobs(
-            site_name=[site],
-            search_term=term,
-            location=location,
-            results_wanted=RESULTS_WANTED,
-            hours_old=HOURS_OLD,
-            country_indeed="Canada",
-        )
+        scrape_kwargs = {
+            "site_name": [site],
+            "search_term": term,
+            "location": location,
+            "results_wanted": RESULTS_WANTED,
+            "hours_old": HOURS_OLD,
+            "country_indeed": "Canada",
+        }
+        if site == "linkedin":
+            scrape_kwargs["linkedin_fetch_description"] = LINKEDIN_FETCH_DESCRIPTION
+
+        jobs_df = scrape_jobs(**scrape_kwargs)
     except Exception as e:
         print(f"  [{site}] [{category}] Error for '{term}' in '{location}': {e}")
         return []

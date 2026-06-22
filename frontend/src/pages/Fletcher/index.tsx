@@ -3,6 +3,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import {
   batchDownloadFletcherJobs,
   cancelFletcherJob,
+  cancelFletcherJobs,
   clearGeneratedResumes,
   deleteFletcherJob,
   enqueueFletcherJob,
@@ -603,6 +604,7 @@ function FletcherQueuePanel({
   )
   const [historySearch, setHistorySearch] = useState('')
   const [detailJob, setDetailJob] = useState<FletcherQueueItem | null>(null)
+  const [selectedActiveIds, setSelectedActiveIds] = useState<string[]>([])
   const [selectedHistoryIds, setSelectedHistoryIds] = useState<string[]>([])
   const [batchOptionsOpen, setBatchOptionsOpen] = useState(false)
   const [batchDownloading, setBatchDownloading] = useState(false)
@@ -625,6 +627,11 @@ function FletcherQueuePanel({
   const allHistorySelected =
     visibleHistoryJobs.length > 0 &&
     visibleHistoryJobs.every((job) => selectedHistoryIdSet.has(job.queue_item_id))
+  const activeIdSet = new Set(activeJobs.map((job) => job.queue_item_id))
+  const selectedActiveIdsInView = selectedActiveIds.filter((id) => activeIdSet.has(id))
+  const selectedActiveIdSet = new Set(selectedActiveIdsInView)
+  const allActiveSelected =
+    activeJobs.length > 0 && activeJobs.every((job) => selectedActiveIdSet.has(job.queue_item_id))
   const deleteHistory = useMutation({
     mutationFn: async (queueItemIds: string[]) => {
       await Promise.all(queueItemIds.map((id) => deleteFletcherJob(id)))
@@ -659,6 +666,27 @@ function FletcherQueuePanel({
     },
     onError: (e) =>
       showToast(e instanceof Error ? e.message : 'Clear generated resumes failed', 'error'),
+  })
+  const cancelActive = useMutation({
+    mutationFn: (queueItemIds: string[]) => cancelFletcherJobs(queueItemIds),
+    onSuccess: (result) => {
+      const cancelledIds = result.jobs.map((job) => job.queue_item_id)
+      setSelectedActiveIds((current) => current.filter((id) => !cancelledIds.includes(id)))
+      setDisplayedProgress((current) => {
+        const next = { ...current }
+        for (const id of cancelledIds) delete next[id]
+        return next
+      })
+      setDetailJob((current) =>
+        current && cancelledIds.includes(current.queue_item_id) ? null : current,
+      )
+      qc.invalidateQueries({ queryKey: ['fletcher-jobs'] })
+      showToast(
+        `Cancelled ${result.cancelled} Fletcher job${result.cancelled === 1 ? '' : 's'}`,
+      )
+    },
+    onError: (e) =>
+      showToast(e instanceof Error ? e.message : 'Cancel Fletcher jobs failed', 'error'),
   })
 
   useEffect(() => {
@@ -791,6 +819,33 @@ function FletcherQueuePanel({
     })
   }
 
+  function toggleActiveSelection(queueItemId: string, checked: boolean) {
+    setSelectedActiveIds((current) => {
+      if (checked) return current.includes(queueItemId) ? current : [...current, queueItemId]
+      return current.filter((id) => id !== queueItemId)
+    })
+  }
+
+  function toggleAllActive(checked: boolean) {
+    setSelectedActiveIds(checked ? activeJobs.map((job) => job.queue_item_id) : [])
+  }
+
+  function cancelSelectedActive() {
+    if (!selectedActiveIdsInView.length) {
+      showToast('Select at least one active run', 'error')
+      return
+    }
+    const count = selectedActiveIdsInView.length
+    if (!window.confirm(`Cancel ${count} active Fletcher run${count === 1 ? '' : 's'}?`)) {
+      return
+    }
+    cancelActive.mutate(selectedActiveIdsInView)
+  }
+
+  function cancelOneActive(queueItemId: string) {
+    cancelActive.mutate([queueItemId])
+  }
+
   function toggleAllHistory(checked: boolean) {
     setSelectedHistoryIds(checked ? visibleHistoryJobs.map((job) => job.queue_item_id) : [])
   }
@@ -873,6 +928,31 @@ function FletcherQueuePanel({
             {activeJobs.length} active job{activeJobs.length === 1 ? '' : 's'}
           </span>
         </div>
+        {activeJobs.length ? (
+          <div className={styles.batchToolbar}>
+            <label className={styles.checkRow}>
+              <input
+                type="checkbox"
+                checked={allActiveSelected}
+                onChange={(e) => toggleAllActive(e.target.checked)}
+              />
+              Select all
+            </label>
+            <button
+              className={`${styles.btn} ${styles.btnDanger}`}
+              disabled={!selectedActiveIdsInView.length || cancelActive.isPending}
+              onClick={cancelSelectedActive}
+            >
+              {cancelActive.isPending ? 'Cancelling...' : 'Cancel selected'}
+            </button>
+            {selectedActiveIdsInView.length ? (
+              <button className={styles.btn} onClick={() => setSelectedActiveIds([])}>
+                Clear
+              </button>
+            ) : null}
+            <span className={styles.meta}>{selectedActiveIdsInView.length} selected</span>
+          </div>
+        ) : null}
         <div className={`${styles.queueList} ${styles.queueListScrollable}`}>
           {activeJobs.length ? (
             activeJobs.map((job) => {
@@ -890,7 +970,18 @@ function FletcherQueuePanel({
                 displayedPercent !== null &&
                 (!progressBlockedByFinishingJob || hasDisplayedProgress)
               return (
-                <article className={styles.queueCard} key={job.queue_item_id}>
+                <article
+                  className={`${styles.queueCard} ${styles.queueCardActiveSelectable}`}
+                  key={job.queue_item_id}
+                >
+                  <label className={styles.historySelect}>
+                    <input
+                      type="checkbox"
+                      checked={selectedActiveIdSet.has(job.queue_item_id)}
+                      aria-label={`Select ${fletcherTitle(job)}`}
+                      onChange={(e) => toggleActiveSelection(job.queue_item_id, e.target.checked)}
+                    />
+                  </label>
                   <div className={styles.queueCopy}>
                     <button
                       className={styles.queueTitleButton}
@@ -942,10 +1033,23 @@ function FletcherQueuePanel({
                         >
                           Down
                         </button>
-                        <button className={styles.btn} onClick={() => onCancel(job.queue_item_id)}>
+                        <button
+                          className={styles.btn}
+                          disabled={cancelActive.isPending}
+                          onClick={() => cancelOneActive(job.queue_item_id)}
+                        >
                           Cancel
                         </button>
                       </>
+                    ) : null}
+                    {job.status !== 'queued' ? (
+                      <button
+                        className={`${styles.btn} ${styles.btnDanger}`}
+                        disabled={cancelActive.isPending}
+                        onClick={() => cancelOneActive(job.queue_item_id)}
+                      >
+                        Cancel
+                      </button>
                     ) : null}
                     {job.result.review_id ? (
                       <a className={styles.btn} href={`/fletcher/reviews/${job.result.review_id}`}>
