@@ -699,6 +699,29 @@ class C0ControlApiTests(unittest.TestCase):
         self.assertEqual(cancelled["progress"]["current_step"], "cancelled")
         self.assertTrue(cancelled["progress"]["cancelled"])
 
+    def test_fletcher_running_job_can_be_reordered_in_active_queue(self):
+        from fletcher.db import (
+            claim_next_fletcher_job,
+            enqueue_fletcher_job,
+            get_fletcher_job,
+            move_fletcher_job,
+        )
+
+        running = enqueue_fletcher_job(
+            {"title": "Azure Full Stack Developer", "description": "Build APIs."}
+        )
+        queued = enqueue_fletcher_job(
+            {"title": "Data Engineer", "description": "Build data pipelines."}
+        )
+        claimed = claim_next_fletcher_job()
+        self.assertEqual(claimed["queue_item_id"], running["queue_item_id"])
+
+        moved = move_fletcher_job(running["queue_item_id"], "down")
+        queued_after = get_fletcher_job(queued["queue_item_id"])
+
+        self.assertEqual(moved["status"], "running")
+        self.assertGreater(moved["position"], queued_after["position"])
+
     def test_fletcher_late_finish_does_not_overwrite_cancelled_job(self):
         from fletcher.db import (
             cancel_fletcher_job,

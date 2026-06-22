@@ -1019,38 +1019,22 @@ function FletcherQueuePanel({
                     ) : null}
                   </div>
                   <div className={styles.queueActions}>
-                    {job.status === 'queued' ? (
-                      <>
-                        <button
-                          className={styles.btn}
-                          onClick={() => onMove(job.queue_item_id, 'up')}
-                        >
-                          Up
-                        </button>
-                        <button
-                          className={styles.btn}
-                          onClick={() => onMove(job.queue_item_id, 'down')}
-                        >
-                          Down
-                        </button>
-                        <button
-                          className={styles.btn}
-                          disabled={cancelActive.isPending}
-                          onClick={() => cancelOneActive(job.queue_item_id)}
-                        >
-                          Cancel
-                        </button>
-                      </>
-                    ) : null}
-                    {job.status !== 'queued' ? (
-                      <button
-                        className={`${styles.btn} ${styles.btnDanger}`}
-                        disabled={cancelActive.isPending}
-                        onClick={() => cancelOneActive(job.queue_item_id)}
-                      >
-                        Cancel
-                      </button>
-                    ) : null}
+                    <button className={styles.btn} onClick={() => onMove(job.queue_item_id, 'up')}>
+                      Up
+                    </button>
+                    <button
+                      className={styles.btn}
+                      onClick={() => onMove(job.queue_item_id, 'down')}
+                    >
+                      Down
+                    </button>
+                    <button
+                      className={`${styles.btn} ${styles.btnDanger}`}
+                      disabled={cancelActive.isPending}
+                      onClick={() => cancelOneActive(job.queue_item_id)}
+                    >
+                      Cancel
+                    </button>
                     {job.result.review_id ? (
                       <a className={styles.btn} href={`/fletcher/reviews/${job.result.review_id}`}>
                         Open workspace

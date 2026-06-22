@@ -331,8 +331,9 @@ def move_fletcher_job(
     queue_item_id: str, direction: str, db_path: str | Path | None = None
 ) -> dict:
     job = get_fletcher_job(queue_item_id, db_path=db_path)
-    if job["status"] != "queued":
-        raise ValueError("Only queued Fletcher jobs can be reordered.")
+    active_statuses = {"queued", "running", "cancel_requested"}
+    if job["status"] not in active_statuses:
+        raise ValueError("Only active Fletcher jobs can be reordered.")
     op = "<" if direction == "up" else ">"
     order = "DESC" if direction == "up" else "ASC"
     conn = get_connection(db_path)
@@ -340,11 +341,11 @@ def move_fletcher_job(
         other = conn.execute(
             f"""
             SELECT queue_item_id, position FROM fletcher_jobs
-            WHERE status = ? AND position {op} ?
+            WHERE status IN (?, ?, ?) AND position {op} ?
             ORDER BY position {order}
             LIMIT 1
             """,
-            ("queued", job["position"]),
+            ("queued", "running", "cancel_requested", job["position"]),
         ).fetchone()
         if other:
             conn.execute(

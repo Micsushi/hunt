@@ -123,6 +123,9 @@ def test_fletcher_active_queue_exposes_bulk_cancel_controls():
     assert "Cancel selected" in fletcher
     assert "toggleAllActive" in fletcher
     assert "cancelSelectedActive" in fletcher
+    assert "onMove(job.queue_item_id, 'up')" in fletcher
+    assert "onMove(job.queue_item_id, 'down')" in fletcher
+    assert "cancelOneActive(job.queue_item_id)" in fletcher
 
 
 def test_frontend_human_command_logger_posts_fail_open_ledger_events():
