@@ -13,13 +13,14 @@ services:
       HUNT_ADMIN_USERNAME: ${HUNT_ADMIN_USERNAME}
       HUNT_ADMIN_PASSWORD: ${HUNT_ADMIN_PASSWORD}
       HUNT_ARTIFACTS_DIR: /app/artifacts
-      HUNT_RESUME_ARTIFACTS_DIR: /app/resumes
+      HUNT_RESUME_ARTIFACTS_DIR: /tmp/hunt-resumes
       HUNT_HUNTER_URL: ${HUNT_HUNTER_URL}
       HUNT_FLETCHER_URL: ${HUNT_FLETCHER_URL}
       HUNT_COORDINATOR_URL: ${HUNT_COORDINATOR_URL}
     volumes:
       - ${HUNT_ARTIFACTS_STORAGE}:/app/artifacts:ro
       - ${HUNT_RESUME_STORAGE}:/app/resumes:ro
+      - ${HUNT_RESUME_STORAGE}:/tmp/hunt-resumes
     networks:
       default:
         aliases:

@@ -367,6 +367,14 @@ def test_pipeline_compose_shares_resume_artifacts_between_review_and_fletcher():
     assert "pipeline_resume_data:" in compose_text
 
 
+def test_server_compose_review_writes_resume_artifacts_to_writable_mount():
+    compose_text = Path("docker-compose.server.yml").read_text(encoding="utf-8")
+
+    assert "HUNT_RESUME_ARTIFACTS_DIR: /tmp/hunt-resumes" in compose_text
+    assert "- ${HUNT_RESUME_STORAGE}:/app/resumes:ro" in compose_text
+    assert "- ${HUNT_RESUME_STORAGE}:/tmp/hunt-resumes" in compose_text
+
+
 def test_coordinator_container_smoke_assets_exist():
     dockerfile = Path("docker/Dockerfile.coordinator")
     smoke_script = Path("scripts/smoke_coordinator_container.sh")
