@@ -1740,6 +1740,23 @@ def test_pipeline_summary_digest_is_human_readable(base_mocks):
     assert "  - Python" in log_text
 
 
+def test_pipeline_marks_ollama_unavailable_as_failed(base_mocks):
+    from fletcher.ad_hoc_pipeline import run_ad_hoc_pipeline
+
+    base_mocks.extract_keywords_with_ollama.return_value = {
+        "success": False,
+        "keywords": [],
+        "error": "<urlopen error [Errno -2] Name or service not known>",
+    }
+
+    result = run_ad_hoc_pipeline(title="AI Engineer", description="AI job")
+
+    assert result["status"] == "failed"
+    assert result["error_type"] == "LLMUnavailableError"
+    assert result["llm_error"] == "<urlopen error [Errno -2] Name or service not known>"
+    assert "LLM unavailable" in result["error"]
+
+
 def test_summary_banned_tone_d_check_does_not_retry_when_llm_validator_accepts(base_mocks):
     from fletcher.ad_hoc_pipeline import run_ad_hoc_pipeline
     from fletcher.llm.llm_enrich import validate_summary_grounding

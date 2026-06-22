@@ -632,6 +632,84 @@ class C0ControlApiTests(unittest.TestCase):
         self.assertEqual(updated["result"]["compile_status"], "failed")
         self.assertEqual(updated["error"], "failed")
 
+    def test_fletcher_worker_marks_ollama_unavailable_result_failed(self):
+        from pathlib import Path
+
+        from backend import app as backend_app
+        from fletcher.db import get_fletcher_job
+
+        conn = self.db.get_connection()
+        try:
+            conn.execute(
+                """
+                INSERT INTO jobs (
+                    id, title, company, description, source, enrichment_status, job_url
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    14408,
+                    "AI Engineer",
+                    "Acme",
+                    "Build AI systems.",
+                    "linkedin",
+                    "done",
+                    "https://example.com/jobs/14408",
+                ),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+        with patch.object(backend_app, "_ensure_fletcher_worker_started"):
+            response = self.client.post("/api/fletcher/tailor/jobs", json={"job_id": 14408})
+        self.assertEqual(response.status_code, 200)
+        item = response.json()
+        attempt_dir = Path(self.runtime_dir) / "option-a-ollama-unavailable"
+        attempt_dir.mkdir(parents=True)
+        pdf_path = attempt_dir / "output.pdf"
+        tex_path = attempt_dir / "output.tex"
+        log_path = attempt_dir / "pipeline_log.txt"
+        pdf_path.write_bytes(b"%PDF fallback")
+        tex_path.write_text("original resume tex", encoding="utf-8")
+        log_path.write_text("LLM unavailable", encoding="utf-8")
+        selected_resume = attempt_dir / "selected_master.tex"
+        selected_resume.write_text("selected resume tex", encoding="utf-8")
+
+        with (
+            patch(
+                "fletcher.option_a_master.prepare_option_a_master_resume_source",
+                return_value=(
+                    str(selected_resume),
+                    {
+                        "selection": {"experience": [], "projects": []},
+                        "title": "AI Engineer",
+                    },
+                ),
+            ),
+            patch(
+                "fletcher.ad_hoc_pipeline.run_ad_hoc_pipeline",
+                return_value={
+                    "status": "failed",
+                    "error_type": "LLMUnavailableError",
+                    "error": "LLM unavailable: host not found",
+                    "llm_error": "host not found",
+                    "review_id": "review-llm-unavailable",
+                    "pdf_path": str(pdf_path),
+                    "tex_path": str(tex_path),
+                    "log_path": str(log_path),
+                },
+            ),
+        ):
+            processed = backend_app._process_next_fletcher_job()
+
+        self.assertTrue(processed)
+        updated = get_fletcher_job(item["queue_item_id"])
+        self.assertEqual(updated["status"], "failed")
+        self.assertEqual(updated["error"], "LLM unavailable: host not found")
+        self.assertEqual(updated["result"]["error_type"], "LLMUnavailableError")
+        self.assertEqual(updated["result"]["llm_error"], "host not found")
+
     def test_fletcher_worker_marks_job_failed_when_queue_log_setup_fails(self):
         from backend import app as backend_app
         from fletcher.db import get_fletcher_job

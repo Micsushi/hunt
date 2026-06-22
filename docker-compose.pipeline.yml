@@ -117,6 +117,7 @@ services:
   ollama:
     image: ollama/ollama:latest
     profiles: ["pipeline", "c2", "c1c2", "all"]
+    restart: unless-stopped
     environment:
       OLLAMA_HOST: 0.0.0.0:11434
       OLLAMA_NUM_PARALLEL: ${OLLAMA_NUM_PARALLEL:-5}
@@ -125,13 +126,6 @@ services:
       OLLAMA_KV_CACHE_TYPE: ${OLLAMA_KV_CACHE_TYPE:-q8_0}
       NVIDIA_VISIBLE_DEVICES: ${NVIDIA_VISIBLE_DEVICES:-all}
       NVIDIA_DRIVER_CAPABILITIES: ${NVIDIA_DRIVER_CAPABILITIES:-compute,utility}
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: all
-              capabilities: [gpu]
     volumes:
       - ollama_data:/root/.ollama
     ports:
@@ -150,7 +144,12 @@ services:
         condition: service_healthy
     environment:
       OLLAMA_HOST: http://ollama:11434
-    entrypoint: ["/bin/sh", "-c", "ollama pull gemma4:e4b && ollama pull mxbai-embed-large"]
+    entrypoint:
+      [
+        "/bin/sh",
+        "-c",
+        "ollama pull ${HUNT_OLLAMA_MODEL:-gemma4:e4b} && ollama pull ${HUNT_OLLAMA_EMBED_MODEL:-mxbai-embed-large}",
+      ]
     restart: "no"
 
   fletcher:

@@ -367,6 +367,15 @@ def test_pipeline_compose_shares_resume_artifacts_between_review_and_fletcher():
     assert "pipeline_resume_data:" in compose_text
 
 
+def test_pipeline_compose_manages_ollama_for_c2_server_runs():
+    compose_text = Path("docker-compose.pipeline.yml").read_text(encoding="utf-8")
+
+    assert "restart: unless-stopped" in compose_text
+    assert "ollama pull ${HUNT_OLLAMA_MODEL:-gemma4:e4b}" in compose_text
+    assert "ollama pull ${HUNT_OLLAMA_EMBED_MODEL:-mxbai-embed-large}" in compose_text
+    assert "driver: nvidia" not in compose_text
+
+
 def test_server_compose_review_writes_resume_artifacts_to_writable_mount():
     compose_text = Path("docker-compose.server.yml").read_text(encoding="utf-8")
 
@@ -838,6 +847,8 @@ def test_deploy_runner_server_mode_mapping(monkeypatch):
                 "frontend",
                 "hunter",
                 "hunter-scheduler",
+                "ollama",
+                "ollama-init",
                 "fletcher",
                 "coordinator",
             ],

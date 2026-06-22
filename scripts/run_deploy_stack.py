@@ -48,7 +48,7 @@ SERVER_DEPLOY_TARGETS = {
     "db": ("postgres",),
     "c0": ("postgres", "review", "frontend"),
     "c1": ("postgres", "review", "frontend", "hunter", "hunter-scheduler"),
-    "c2": ("postgres", "review", "frontend", "fletcher"),
+    "c2": ("postgres", "review", "frontend", "ollama", "ollama-init", "fletcher"),
     "c4": ("postgres", "review", "frontend", "coordinator"),
     "c1c2": (
         "postgres",
@@ -56,6 +56,8 @@ SERVER_DEPLOY_TARGETS = {
         "frontend",
         "hunter",
         "hunter-scheduler",
+        "ollama",
+        "ollama-init",
         "fletcher",
     ),
     "all": (
@@ -64,6 +66,8 @@ SERVER_DEPLOY_TARGETS = {
         "frontend",
         "hunter",
         "hunter-scheduler",
+        "ollama",
+        "ollama-init",
         "fletcher",
         "coordinator",
     ),

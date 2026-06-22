@@ -2664,6 +2664,7 @@ def run_ad_hoc_pipeline(
         logger.step("done", total_ms=total_ms, note="original resume returned; LLM unavailable")
         log_path = write_text(attempt_dir / "pipeline_log.txt", logger.get_log_text())
         payload = {
+            "status": "failed",
             "attempt_dir": str(attempt_dir),
             "pdf_path": cr_orig.get("pdf_path"),
             "tex_path": tex_orig,
@@ -2678,6 +2679,8 @@ def run_ad_hoc_pipeline(
             "present_keywords": [],
             "missing_keywords": [],
             "llm_error": ollama_error_msg,
+            "error": f"LLM unavailable: {ollama_error_msg}",
+            "error_type": "LLMUnavailableError",
             **starting_artifacts,
         }
         return _attach_review_package(
