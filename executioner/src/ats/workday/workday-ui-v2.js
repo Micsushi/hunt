@@ -103,6 +103,73 @@
     );
   }
 
+  function looksLikeTechnicalSkillsField(field) {
+    var el = field.element || field.anchor;
+    var text = lower(
+      [
+        field.fieldId,
+        field.descriptor,
+        el?.id,
+        el?.name,
+        el?.getAttribute?.("aria-label"),
+        el?.getAttribute?.("placeholder"),
+        el?.getAttribute?.("data-automation-id"),
+        el?.getAttribute?.("data-uxi-widget-type"),
+        workdayFieldLabel(el),
+      ]
+        .filter(Boolean)
+        .join(" "),
+    );
+    return (
+      text.includes("type to add skills") ||
+      text.includes("formfield skills") ||
+      text.includes("skills skills") ||
+      /\bskills\b/.test(text)
+    );
+  }
+
+  function hasDirectRequiredSignal(el, container) {
+    var directText = lower(
+      [
+        el?.required ? "required" : "",
+        el?.getAttribute?.("aria-required"),
+        el?.getAttribute?.("data-required"),
+        el?.getAttribute?.("aria-invalid"),
+        el?.getAttribute?.("aria-describedby"),
+        el?.getAttribute?.("placeholder"),
+      ]
+        .filter(Boolean)
+        .join(" "),
+    );
+    if (
+      el?.required ||
+      el?.getAttribute?.("aria-required") === "true" ||
+      directText.includes("required") ||
+      directText.includes("true")
+    ) {
+      return true;
+    }
+    var validationText = lower(
+      Array.from(
+        container?.querySelectorAll?.(
+          [
+            '[role="alert"]',
+            '[data-automation-id="inputAlert"]',
+            '[data-automation-id*="error" i]',
+            '[id*="error" i]',
+          ].join(", "),
+        ) || [],
+      )
+        .map(function (node) {
+          return node.innerText || node.textContent || "";
+        })
+        .join(" "),
+    );
+    return /required|must have a value|please select|please enter|cannot be blank|is invalid|error/i.test(
+      validationText,
+    );
+  }
+
   function workdayWidgetKind(field) {
     var el = field.element || field.anchor;
     var fieldLabel = workdayFieldLabel(el);
@@ -243,7 +310,12 @@
     if (kind === "phone_country_code" && !field.descriptor) {
       field.descriptor = "Country / Territory Phone Code";
     }
-    if (el.getAttribute?.("aria-required") === "false" && !el.required) {
+    if (
+      looksLikeTechnicalSkillsField(field) &&
+      !hasDirectRequiredSignal(el, container)
+    ) {
+      field.required = false;
+    } else if (el.getAttribute?.("aria-required") === "false" && !el.required) {
       field.required = false;
     } else if (!field.required && container) {
       var requiredText = lower(

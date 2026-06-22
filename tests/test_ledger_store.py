@@ -1,6 +1,7 @@
 import json
 import os
 import sys
+import uuid
 from hashlib import sha256
 from pathlib import Path
 from types import SimpleNamespace
@@ -9,7 +10,7 @@ import pytest
 
 from backend.ledger.config import get_ledger_root, initialize_ledger_root
 from backend.ledger.jsonl_store import JsonlLedger
-from backend.ledger.models import AgentCreate, LaneCreate, LedgerEventIn, SessionCreate
+from backend.ledger.models import AgentCreate, LaneCreate, LedgerEventIn, ProbeFileCreate, SessionCreate
 from backend.ledger.redaction import env_check
 from backend.ledger.service import LedgerService
 
@@ -77,6 +78,49 @@ def test_initialize_ledger_root_writes_structure_files(tmp_path):
         assert (root / component).is_dir()
     structure = (root / "LEDGER_STRUCTURE.md").read_text(encoding="utf-8")
     assert "Trust JSONL over database rows" in structure
+
+
+def test_generated_ledger_structure_documents_agent_traversal():
+    root = initialize_ledger_root(Path(".state") / f"test-ledger-structure-{uuid.uuid4().hex}" / "ledger")
+    structure = (root / "LEDGER_STRUCTURE.md").read_text(encoding="utf-8")
+
+    for expected in (
+        "Root files:",
+        "`schema.json`: event fields",
+        "`index.json`: rebuildable lightweight index metadata",
+        "`active.json`: active agent, lane, and session manifest pointers",
+        "c3/agents/<YYYY-MM-DD>/<agent_id>/manifest.json",
+        "c3/lanes/<YYYY-MM-DD>/<lane_id>/manifest.json",
+        "c3/sessions/<YYYY-MM-DD>/<session_id>/manifest.json",
+        "c3/global/system.jsonl",
+        "GET /api/ledger/agents/{agent_id}",
+        "GET /api/ledger/sessions/{session_id}",
+        "GET /api/ledger/commands/{command_id}/timeline",
+        "hunt_ledger_get_command_timeline",
+    ):
+        assert expected in structure
+
+
+def test_c3_agent_command_ledger_docs_include_traversal_contract():
+    repo = Path(__file__).resolve().parents[1]
+    guide = (repo / "docs" / "C3_AGENT_COMMAND_LEDGER.md").read_text(encoding="utf-8")
+
+    for expected in (
+        "Agents should traverse the root in this order:",
+        "`active.json` for current `active_agents`, `active_lanes`, and",
+        "JSONL wins",
+        "c3/agents/<YYYY-MM-DD>/<agent_id>/manifest.json",
+        "c3/lanes/<YYYY-MM-DD>/<lane_id>/manifest.json",
+        "c3/sessions/<YYYY-MM-DD>/<session_id>/manifest.json",
+        "c3/global/system.jsonl",
+        "GET /api/ledger/agents/{agent_id}",
+        "GET /api/ledger/sessions/{session_id}",
+        "GET /api/ledger/commands/{command_id}/timeline",
+        "hunt_ledger_get_agent_log",
+        "hunt_ledger_get_session_log",
+        "hunt_ledger_get_command_timeline",
+    ):
+        assert expected in guide
 
 
 def test_append_event_increments_seq_and_hashes_previous_event(tmp_path):
@@ -209,6 +253,25 @@ def test_service_append_event_with_new_ids_creates_agent_lane_session_logs(tmp_p
     session_log = service.get_session_log("session-implicit")
     assert session_log["found"] is True
     assert session_log["events"][0]["event_type"] == "command.started"
+
+
+def test_service_probe_component_rejects_path_traversal(tmp_path):
+    service = LedgerService(tmp_path / "ledger")
+    request = ProbeFileCreate(
+        component="../outside",
+        agent_id="agent-probe",
+        session_id="session-probe",
+        filename="inspect.js",
+        content="console.log('probe')",
+    )
+
+    with pytest.raises(ValueError, match="Unsupported ledger component"):
+        service.create_probe_file(request)
+
+    with pytest.raises(ValueError, match="Unsupported ledger component"):
+        service.list_probe_files(component="../outside")
+
+    assert not (tmp_path / "outside").exists()
 
 
 def test_service_best_effort_index_receives_jsonl_source_location(tmp_path, monkeypatch):

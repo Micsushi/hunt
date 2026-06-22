@@ -52,6 +52,7 @@ export function OpsPage() {
   const [settingValue, setSettingValue] = useState('')
   const [settingSecret, setSettingSecret] = useState(false)
   const [accountUsername, setAccountUsername] = useState('')
+  const [accountPassword, setAccountPassword] = useState('')
   const [accountName, setAccountName] = useState('')
   const [c1Result, setC1Result] = useState<unknown>(null)
 
@@ -71,6 +72,7 @@ export function OpsPage() {
     onSuccess: () => {
       showToast('Account saved')
       setAccountUsername('')
+      setAccountPassword('')
       setAccountName('')
       qc.invalidateQueries({ queryKey: ['linkedin-accounts'] })
     },
@@ -177,6 +179,7 @@ export function OpsPage() {
     }
     accountMutation.mutate({
       username: accountUsername.trim(),
+      password: accountPassword || undefined,
       display_name: accountName.trim() || undefined,
       active: true,
     })
@@ -275,6 +278,17 @@ export function OpsPage() {
                 placeholder="Primary"
               />
             </label>
+            <label className={styles.field}>
+              Password
+              <input
+                className={styles.input}
+                value={accountPassword}
+                onChange={(e) => setAccountPassword(e.target.value)}
+                type="password"
+                autoComplete="new-password"
+                placeholder="Leave blank to keep existing"
+              />
+            </label>
             <button
               className={`${styles.btn} ${styles.btnPrimary}`}
               disabled={accountMutation.isPending}
@@ -289,6 +303,7 @@ export function OpsPage() {
                 <tr>
                   <th>Account</th>
                   <th>State</th>
+                  <th>Password</th>
                   <th>Active</th>
                   <th></th>
                 </tr>
@@ -301,6 +316,7 @@ export function OpsPage() {
                       <div className="mono">{a.username}</div>
                     </td>
                     <td>{a.auth_state}</td>
+                    <td>{a.has_password ? 'saved' : 'missing'}</td>
                     <td>{a.active ? 'yes' : 'no'}</td>
                     <td>
                       <button

@@ -8,6 +8,17 @@
   }
 
   function dispatchTextEvents(el, value) {
+    var pieces =
+      value && String(value).length > 1
+        ? String(value).split("")
+        : [String(value || "")];
+    if (pieces.length > 1) {
+      pieces.forEach(function (piece) {
+        dispatchTextEvents(el, piece);
+      });
+      return;
+    }
+    value = pieces[0];
     try {
       el.dispatchEvent(
         new InputEvent("beforeinput", {
@@ -79,17 +90,6 @@
         form.setAttribute("data-hunt-password-manager-suppressed", "true");
       }
     }
-    if (
-      text &&
-      u?.setElementValue &&
-      (el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement)
-    ) {
-      var injectedOk = u.setElementValue(el, text, true);
-      dispatchBlurEvents(el);
-      if (injectedOk) {
-        return true;
-      }
-    }
     try {
       el.focus?.();
     } catch (_error) {
@@ -110,7 +110,15 @@
       forceFrameworkValueChange(el, text);
       dispatchTextEvents(el, text);
       dispatchBlurEvents(el);
-      return true;
+      if (String(el.value || "") === text) {
+        return true;
+      }
+      if (text && u?.setElementValue) {
+        var injectedOk = u.setElementValue(el, text, true);
+        dispatchBlurEvents(el);
+        return Boolean(injectedOk);
+      }
+      return false;
     }
     if (el.isContentEditable || el.getAttribute?.("role") === "textbox") {
       el.textContent = text;
@@ -308,18 +316,38 @@
       committed = String(state.rawValue || state.text || "");
       datePartMatch = dateSectionCommitMatches(field, expected, committed);
     }
+    var textMatch =
+      state.rawValue === value ||
+      state.text === expected.trim() ||
+      digitMatch ||
+      datePartMatch;
+    var retriedTextCommit = false;
+    if (ok && !textMatch && ["text", "email", "tel", "url", "search", ""].includes(type)) {
+      retriedTextCommit = true;
+      ok = setValue(el, value);
+      await sleep(350);
+      state = root.fieldState.readFieldState(field);
+      committed = String(state.rawValue || state.text || "");
+      digitMatch =
+        type === "tel" &&
+        expected.replace(/\D+/g, "") &&
+        expected.replace(/\D+/g, "") === committed.replace(/\D+/g, "");
+      datePartMatch = dateSectionCommitMatches(field, expected, committed);
+      textMatch =
+        state.rawValue === value ||
+        state.text === expected.trim() ||
+        digitMatch ||
+        datePartMatch;
+    }
     return {
-      ok:
-        ok &&
-        (state.rawValue === value ||
-          state.text === expected.trim() ||
-          digitMatch ||
-          datePartMatch),
+      ok: ok && textMatch,
       afterState: state,
       reason: !ok
         ? "set_value_failed"
         : datePartKeyboardCommit
           ? "date_part_keyboard_commit"
+          : retriedTextCommit
+            ? "text_commit_retry"
           : "",
     };
   }
@@ -868,7 +896,14 @@
     }
     if (["combobox", "button_listbox"].includes(field.uiModel)) {
       var currentState = root.fieldState.readFieldState(field);
-      if (stateSatisfiesAnswer(currentState, answer)) {
+      if (
+        option &&
+        currentState.selected &&
+        stateSatisfiesAnswer(currentState, {
+          value: option.label || option.value || "",
+          optionAliases: {},
+        })
+      ) {
         return {
           ok: true,
           reason: "already_filled",

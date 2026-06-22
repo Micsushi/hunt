@@ -30,6 +30,40 @@ The root structure files stay at the ledger root itself:
 - `index.json`
 - `active.json`
 
+Agents should traverse the root in this order:
+
+1. Read `active.json` for current `active_agents`, `active_lanes`, and
+   `active_sessions`.
+2. Open the referenced `manifest.json` files for stable IDs and current
+   `log_path` values.
+3. Read append-only JSONL logs as the source of truth.
+4. Query Postgres only as a rebuildable index; if it disagrees with JSONL,
+   JSONL wins.
+
+C3 agent, lane, and session paths are date partitioned:
+
+- Agent manifest/log:
+  `c3/agents/<YYYY-MM-DD>/<agent_id>/manifest.json` and `agent.jsonl`.
+- Lane manifest/log:
+  `c3/lanes/<YYYY-MM-DD>/<lane_id>/manifest.json` and `lane.jsonl`.
+- Session manifest/log:
+  `c3/sessions/<YYYY-MM-DD>/<session_id>/manifest.json` and `session.jsonl`.
+- Session probes and artifacts:
+  `c3/sessions/<YYYY-MM-DD>/<session_id>/probes/` and `artifacts/`.
+- Global fallback logs:
+  `c3/global/system.jsonl` and `c3/global/human.jsonl`.
+
+Common queries:
+
+- By agent: use `active.json.active_agents[agent_id].log_path`, API
+  `GET /api/ledger/agents/{agent_id}`, or MCP `hunt_ledger_get_agent_log`.
+- By session: use `active.json.active_sessions[session_id].log_path`, API
+  `GET /api/ledger/sessions/{session_id}`, or MCP
+  `hunt_ledger_get_session_log`.
+- By command: use API `GET /api/ledger/commands/{command_id}/timeline` or MCP
+  `hunt_ledger_get_command_timeline`; it dedupes immutable events across active
+  agent, lane, and session logs.
+
 ## Package Dependencies
 
 | Proof Area | Required Packages |
@@ -113,6 +147,63 @@ $env:HUNT_LEDGER_ROOT = "$env:USERPROFILE\Documents\hunt-logs\ledger-proof-YYYYM
 13. Perform a human click or command override and confirm actor `{type:"human"}` is logged.
 14. Confirm the override interrupts or supersedes the owning lease as designed.
 15. Rebuild or query the Postgres index and confirm it contains the same event IDs as JSONL, with JSONL path and line/byte location when available.
+
+### Bridge Command Smoke
+
+After the backend command endpoint, extension command receiver, and MCP execution upgrade land, run the repeatable bridge smoke:
+
+```powershell
+$env:HUNT_BACKEND_URL = "http://127.0.0.1:8000"
+$env:HUNT_DB_URL = "postgresql://hunt:hunt@127.0.0.1:5432/hunt"
+$env:HUNT_C3_CDP_PORT = "9222"
+$env:HUNT_C3_EXTENSION_ID = "<unpacked-extension-id>"
+$env:HUNT_C3_JOB_URL = "<page-open-in-pchrome>"
+.venv\Scripts\python.exe scripts\smoke_c3_bridge_live.py --rebuild-index
+```
+
+For a pre-integration dry run that reports missing bridge pieces instead of requiring target registration:
+
+```powershell
+.venv\Scripts\python.exe scripts\smoke_c3_bridge_live.py --allow-missing-target-registration
+```
+
+The smoke creates fresh `agent_id`, `lane_id`, `session_id`, claims a session mutation lease, optionally registers the p Chrome target through MCP when the tool exists, and calls `hunt_c3_run_command` with `command_name=c3.inspect_fields`.
+
+Expected proof in the JSON report:
+
+- `proof.commandReceipt` exists and came from the extension command path.
+- `proof.logs.agent_log_path`, `lane_log_path`, and `session_log_path` are present, accessible, and contain the smoke `command_id`.
+- Session JSONL contains `command.requested`, `command.started`, and `command.completed` for that `command_id`.
+- `proof.postgres.summary.session_event_count` is nonzero and `missing_jsonl_path_count` is `0`.
+- `proof.postgres.command_rows` contains rows for the smoke `command_id` with `jsonl_path` and line numbers.
+
+### Agent Log Traversal Tools
+
+Code-side helpers now exist so agents do not need to manually traverse every
+JSONL path for common debugging:
+
+- `hunt_c3_command_catalog`: lists C3 command names, mutation flags, and whether
+  the bridge can execute the command directly.
+- typed command wrappers: `hunt_c3_inspect_fields`,
+  `hunt_c3_inspect_validation`, `hunt_c3_snapshot_page`,
+  `hunt_c3_get_progress`, `hunt_c3_fill_page`,
+  `hunt_c3_page_walk`, `hunt_c3_click_next_after_fill`.
+- `hunt_ledger_get_command_timeline`: returns deduped immutable events for one
+  `command_id` across active agent/lane/session logs.
+- `hunt_ledger_find_recent_failures`: returns recent rejected/failed/error event
+  summaries for agent debugging.
+
+`c3.page_walk` is a first-class MCP/backend/extension command. Agents should
+call it through `hunt_c3_page_walk` only while holding the session mutation
+lease for the target browser session.
+
+Required live inputs from other packages/workers:
+
+- MCP must expose a real command execution path for `hunt_c3_run_command`; `recorded_not_executed` is a blocker.
+- MCP/backend should expose one browser-target registration tool, currently probed as `hunt_c3_register_browser_target` or `hunt_c3_register_target`.
+- p Chrome must be running on the configured debug port with the freshly reloaded C3 extension and target page.
+- Backend must run with the same `HUNT_LEDGER_ROOT` intended for proof, outside the repo.
+- `HUNT_DB_URL` must point at Postgres with ledger tables applied; use `--rebuild-index` when the smoke should rebuild the index before querying.
 
 Docker C0/review variant:
 

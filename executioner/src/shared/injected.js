@@ -1464,7 +1464,9 @@
       lowered.includes("queer") ||
       lowered.includes("disabil") ||
       lowered.includes("di abil") ||
+      lowered.includes("di abl") ||
       loweredCompacted.includes("disabledperson") ||
+      loweredCompacted.includes("diabledperon") ||
       lowered.includes("visible minorit") ||
       lowered.includes("vi ible minorit") ||
       lowered.includes("racial") ||
@@ -1685,7 +1687,9 @@
       lowered.includes("queer") ||
       lowered.includes("disabil") ||
       lowered.includes("di abil") ||
+      lowered.includes("di abl") ||
       loweredCompacted.includes("disabledperson") ||
+      loweredCompacted.includes("diabledperon") ||
       lowered.includes("visible minorit") ||
       lowered.includes("vi ible minorit") ||
       lowered.includes("racial") ||
@@ -1784,6 +1788,30 @@
     }
     if (option === target) {
       return 100;
+    }
+    var targetNumber =
+      /^\d[\d,]*$/.test(target) && Number(target.replace(/,/g, ""));
+    if (targetNumber) {
+      var optionNumbers = (option.match(/\d[\d,]*/g) || [])
+        .map(function (match) {
+          return Number(match.replace(/,/g, ""));
+        })
+        .filter(function (number) {
+          return Number.isFinite(number);
+        });
+      if (optionNumbers.length >= 2) {
+        var low = Math.min(optionNumbers[0], optionNumbers[1]);
+        var high = Math.max(optionNumbers[0], optionNumbers[1]);
+        if (targetNumber >= low && targetNumber <= high) {
+          if (targetNumber === low) {
+            return 95;
+          }
+          if (targetNumber === high) {
+            return 86;
+          }
+          return 90;
+        }
+      }
     }
     if (option.includes(target) || target.includes(option)) {
       return 80;

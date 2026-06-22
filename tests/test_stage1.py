@@ -1,4 +1,5 @@
 import importlib
+import json
 import math
 import os
 import sqlite3
@@ -87,6 +88,78 @@ class Stage1Tests(unittest.TestCase):
 
         importlib.reload(config_module)
 
+    def test_config_reads_user_config_file_when_env_unset(self):
+        fd, path = tempfile.mkstemp(suffix=".json")
+        os.close(fd)
+        try:
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump(
+                    {
+                        "hours_old": 168,
+                        "results_wanted": 1000,
+                        "sites": ["linkedin"],
+                        "locations": ["Canada", "Remote"],
+                        "search_terms": {"engineering": ["software engineer new grad"]},
+                        "enrich_after_scrape": False,
+                        "linkedin_fetch_description": False,
+                    },
+                    f,
+                )
+
+            with patch.dict(
+                os.environ,
+                {
+                    "HUNT_USER_CONFIG_PATH": path,
+                },
+                clear=False,
+            ):
+                for key in (
+                    "HOURS_OLD",
+                    "RESULTS_WANTED",
+                    "SITES",
+                    "LOCATIONS",
+                    "SEARCH_TERMS",
+                    "ENRICH_AFTER_SCRAPE",
+                    "LINKEDIN_FETCH_DESCRIPTION",
+                ):
+                    os.environ.pop(key, None)
+                reloaded = importlib.reload(config_module)
+                self.assertEqual(reloaded.HOURS_OLD, 168)
+                self.assertEqual(reloaded.RESULTS_WANTED, 1000)
+                self.assertEqual(reloaded.SITES, ["linkedin"])
+                self.assertEqual(reloaded.LOCATIONS, ["Canada", "Remote"])
+                self.assertEqual(
+                    reloaded.SEARCH_TERMS, {"engineering": ["software engineer new grad"]}
+                )
+                self.assertFalse(reloaded.ENRICH_AFTER_SCRAPE)
+                self.assertFalse(reloaded.LINKEDIN_FETCH_DESCRIPTION)
+        finally:
+            importlib.reload(config_module)
+            if os.path.exists(path):
+                os.remove(path)
+
+    def test_config_env_overrides_user_config_file(self):
+        fd, path = tempfile.mkstemp(suffix=".json")
+        os.close(fd)
+        try:
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump({"hours_old": 168}, f)
+
+            with patch.dict(
+                os.environ,
+                {
+                    "HUNT_USER_CONFIG_PATH": path,
+                    "HOURS_OLD": "24",
+                },
+                clear=False,
+            ):
+                reloaded = importlib.reload(config_module)
+                self.assertEqual(reloaded.HOURS_OLD, 24)
+        finally:
+            importlib.reload(config_module)
+            if os.path.exists(path):
+                os.remove(path)
+
     def test_scrape_single_keeps_linkedin_rows_pending_for_browser_enrichment(self):
         jobs_df = FakeDf(
             [
@@ -104,11 +177,18 @@ class Stage1Tests(unittest.TestCase):
             ]
         )
 
+        scrape_calls = []
+
+        def fake_scrape_jobs(**kwargs):
+            scrape_calls.append(kwargs)
+            return jobs_df
+
         jobspy_fake = types.ModuleType("jobspy")
-        jobspy_fake.scrape_jobs = lambda **_kwargs: jobs_df
+        jobspy_fake.scrape_jobs = fake_scrape_jobs
         with patch.dict(sys.modules, {"jobspy": jobspy_fake}):
             jobs = discovery.scrape_single("linkedin", "software engineer", "Canada", "engineering")
 
+        self.assertEqual(scrape_calls[0]["linkedin_fetch_description"], True)
         self.assertEqual(len(jobs), 1)
         job = jobs[0]
         self.assertEqual(job["job_url"], "https://www.linkedin.com/jobs/view/1")

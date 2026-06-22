@@ -24,6 +24,7 @@ from backend.ledger.models import (
     LeaseKind,
     LedgerEventIn,
     ProbeFileCreate,
+    ProbeStatusUpdate,
     SessionCreate,
 )
 from backend.ledger.service import LedgerService
@@ -194,13 +195,64 @@ def get_session_log(
     return service.get_session_log(session_id)
 
 
+@router.get("/commands/{command_id}/timeline")
+def get_command_timeline(
+    command_id: str,
+    _access: Annotated[None, Depends(require_ledger_access)],
+    service: Annotated[LedgerService, Depends(get_ledger_service)],
+):
+    return service.command_timeline(command_id)
+
+
+@router.get("/failures/recent")
+def get_recent_failures(
+    _access: Annotated[None, Depends(require_ledger_access)],
+    service: Annotated[LedgerService, Depends(get_ledger_service)],
+    component: str = "c3",
+    limit: int = 20,
+):
+    return service.recent_failures(component=component, limit=limit)
+
+
 @router.post("/probes")
 def create_probe_file(
     body: ProbeFileCreate,
     _access: Annotated[None, Depends(require_ledger_access)],
     service: Annotated[LedgerService, Depends(get_ledger_service)],
 ):
-    return service.create_probe_file(body)
+    try:
+        return service.create_probe_file(body)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.get("/probes")
+def list_probe_files(
+    _access: Annotated[None, Depends(require_ledger_access)],
+    service: Annotated[LedgerService, Depends(get_ledger_service)],
+    component: str = "c3",
+    session_id: str = "",
+    status: str = "",
+):
+    try:
+        return service.list_probe_files(component=component, session_id=session_id, status=status)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.patch("/probes/{probe_id}/status")
+def update_probe_status(
+    probe_id: str,
+    body: ProbeStatusUpdate,
+    _access: Annotated[None, Depends(require_ledger_access)],
+    service: Annotated[LedgerService, Depends(get_ledger_service)],
+):
+    try:
+        return service.update_probe_status(probe_id, body)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=f"Probe {probe_id} was not found.") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @router.post("/leases/claim")

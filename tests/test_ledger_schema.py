@@ -15,6 +15,7 @@ def test_ledger_tables_are_idempotent():
         "ledger_lanes",
         "ledger_sessions",
         "ledger_leases",
+        "ledger_browser_targets",
         "ledger_events",
         "ledger_probe_files",
         "ledger_artifacts",
@@ -50,6 +51,9 @@ def test_ledger_indexes_cover_common_queries():
         "create index if not exists idx_ledger_events_command_id on ledger_events(command_id)",
         "create index if not exists idx_ledger_events_event_type on ledger_events(event_type)",
         "create index if not exists idx_ledger_leases_status_expires on ledger_leases(status, expires_at)",
+        "create index if not exists idx_ledger_browser_targets_status_session on ledger_browser_targets(status, session_id)",
+        "create index if not exists idx_ledger_browser_targets_lane_status on ledger_browser_targets(lane_id, status)",
+        "create index if not exists idx_ledger_browser_targets_agent_status on ledger_browser_targets(agent_id, status)",
         "create index if not exists idx_ledger_probe_files_session_trusted on ledger_probe_files(session_id, trusted)",
     ]:
         assert index_sql in schema

@@ -174,6 +174,77 @@ def test_rebuild_from_jsonl_indexes_agent_session_and_lease_events(conn, tmp_pat
     assert conn.execute("SELECT COUNT(*) FROM ledger_sessions").fetchone()[0] == 1
 
 
+def test_indexer_populates_full_lease_reference_schema(tmp_path):
+    connection = sqlite3.connect(":memory:")
+    connection.row_factory = sqlite3.Row
+    connection.execute(
+        """
+        CREATE TABLE ledger_events (
+            event_id TEXT PRIMARY KEY,
+            seq INTEGER,
+            ts TEXT NOT NULL,
+            component TEXT NOT NULL,
+            event_type TEXT NOT NULL,
+            actor_json TEXT NOT NULL DEFAULT '{}',
+            agent_id TEXT,
+            lane_id TEXT,
+            session_id TEXT,
+            lease_id TEXT,
+            command_id TEXT,
+            trace_id TEXT,
+            payload_json TEXT NOT NULL DEFAULT '{}',
+            redaction_json TEXT NOT NULL DEFAULT '{}',
+            prev_hash TEXT,
+            hash TEXT,
+            jsonl_path TEXT,
+            jsonl_line_number INTEGER,
+            jsonl_byte_offset INTEGER
+        )
+        """
+    )
+    connection.execute(
+        "CREATE TABLE ledger_agents (agent_id TEXT PRIMARY KEY, component TEXT NOT NULL, actor_json TEXT NOT NULL)"
+    )
+    connection.execute("CREATE TABLE ledger_lanes (lane_id TEXT PRIMARY KEY, component TEXT NOT NULL, agent_id TEXT)")
+    connection.execute(
+        "CREATE TABLE ledger_sessions (session_id TEXT PRIMARY KEY, component TEXT NOT NULL, agent_id TEXT, lane_id TEXT)"
+    )
+    connection.execute(
+        """
+        CREATE TABLE ledger_leases (
+            lease_id TEXT PRIMARY KEY,
+            component TEXT NOT NULL DEFAULT 'c3',
+            lease_type TEXT NOT NULL,
+            status TEXT NOT NULL,
+            agent_id TEXT,
+            lane_id TEXT,
+            session_id TEXT,
+            expires_at TEXT NOT NULL,
+            metadata_json TEXT NOT NULL DEFAULT '{}'
+        )
+        """
+    )
+
+    LedgerIndexer(connection).index_event(
+        _event(
+            "evt-lease-full",
+            event_type="lease.granted",
+            payload={
+                "lease_kind": "session_mutation",
+                "lease_status": "active",
+                "owner_agent_id": "agent-codex-a1b2",
+            },
+        ),
+        jsonl_path=tmp_path / "session.jsonl",
+        line_number=1,
+    )
+
+    row = connection.execute("SELECT * FROM ledger_leases WHERE lease_id = ?", ("lease-123",)).fetchone()
+    assert row["lease_type"] == "session_mutation"
+    assert row["status"] == "active"
+    assert row["agent_id"] == "agent-codex-a1b2"
+
+
 def test_blank_optional_relationship_ids_are_indexed_as_null(conn):
     indexer = LedgerIndexer(conn)
 

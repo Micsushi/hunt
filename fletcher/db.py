@@ -331,8 +331,9 @@ def move_fletcher_job(
     queue_item_id: str, direction: str, db_path: str | Path | None = None
 ) -> dict:
     job = get_fletcher_job(queue_item_id, db_path=db_path)
-    if job["status"] != "queued":
-        raise ValueError("Only queued Fletcher jobs can be reordered.")
+    active_statuses = {"queued", "running", "cancel_requested"}
+    if job["status"] not in active_statuses:
+        raise ValueError("Only active Fletcher jobs can be reordered.")
     op = "<" if direction == "up" else ">"
     order = "DESC" if direction == "up" else "ASC"
     conn = get_connection(db_path)
@@ -340,11 +341,11 @@ def move_fletcher_job(
         other = conn.execute(
             f"""
             SELECT queue_item_id, position FROM fletcher_jobs
-            WHERE status = ? AND position {op} ?
+            WHERE status IN (?, ?, ?) AND position {op} ?
             ORDER BY position {order}
             LIMIT 1
             """,
-            ("queued", job["position"]),
+            ("queued", "running", "cancel_requested", job["position"]),
         ).fetchone()
         if other:
             conn.execute(
@@ -361,21 +362,53 @@ def move_fletcher_job(
         conn.close()
 
 
-def cancel_fletcher_job(queue_item_id: str, db_path: str | Path | None = None) -> dict:
+def cancel_fletcher_job(
+    queue_item_id: str,
+    db_path: str | Path | None = None,
+    *,
+    reason: str = "Cancelled by operator.",
+) -> dict:
     job = get_fletcher_job(queue_item_id, db_path=db_path)
-    if job["status"] not in {"queued", "running"}:
+    if job["status"] not in {"queued", "running", "cancel_requested"}:
         return job
-    status = "cancelled" if job["status"] == "queued" else "cancel_requested"
     conn = get_connection(db_path)
     try:
         conn.execute(
-            "UPDATE fletcher_jobs SET status = ?, finished_at = CURRENT_TIMESTAMP, revision = revision + 1 WHERE queue_item_id = ?",
-            (status, queue_item_id),
+            """
+            UPDATE fletcher_jobs
+            SET status = ?, finished_at = CURRENT_TIMESTAMP, error = ?,
+                progress_json = ?, revision = revision + 1
+            WHERE queue_item_id = ?
+            """,
+            (
+                "cancelled",
+                reason,
+                json.dumps(
+                    {
+                        **(job.get("progress") or {}),
+                        "current_step": "cancelled",
+                        "cancelled": True,
+                    }
+                ),
+                queue_item_id,
+            ),
         )
         conn.commit()
         return get_fletcher_job(queue_item_id, db_path=db_path)
     finally:
         conn.close()
+
+
+def cancel_fletcher_jobs(
+    queue_item_ids: list[str],
+    db_path: str | Path | None = None,
+    *,
+    reason: str = "Cancelled by operator.",
+) -> list[dict]:
+    cancelled: list[dict] = []
+    for queue_item_id in queue_item_ids:
+        cancelled.append(cancel_fletcher_job(queue_item_id, db_path=db_path, reason=reason))
+    return cancelled
 
 
 def update_fletcher_job_progress(
@@ -648,6 +681,14 @@ def finish_fletcher_job(
 ) -> dict:
     conn = get_connection(db_path)
     try:
+        current = conn.execute(
+            "SELECT status FROM fletcher_jobs WHERE queue_item_id = ?",
+            (queue_item_id,),
+        ).fetchone()
+        if not current:
+            raise KeyError(queue_item_id)
+        if str(current["status"]) == "cancelled":
+            return get_fletcher_job(queue_item_id, db_path=db_path)
         conn.execute(
             """
             UPDATE fletcher_jobs

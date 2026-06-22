@@ -19,6 +19,51 @@ if _load_dotenv is not None:
     except Exception:
         pass
 
+try:
+    from hunter import user_config as _user_config
+except Exception:  # pragma: no cover
+    _user_config = None  # type: ignore
+
+try:
+    _USER_CONFIG = _user_config.load() if _user_config is not None else {}
+except Exception:
+    _USER_CONFIG = {}
+
+
+def _config_value(name: str, default):
+    if name in _os.environ:
+        return None
+    return _USER_CONFIG.get(name.lower(), default)
+
+
+def _get_config_int(name: str, default: int) -> int:
+    file_default = _config_value(name, default)
+    return _get_int_env(name, file_default)
+
+
+def _get_config_bool(name: str, default: bool) -> bool:
+    file_default = _config_value(name, default)
+    return _get_bool_env(name, file_default)
+
+
+def _get_config_list(name: str, default: list[str]) -> list[str]:
+    value = _config_value(name, default)
+    if isinstance(value, list):
+        return [str(item) for item in value if str(item).strip()]
+    return default
+
+
+def _get_config_dict(name: str, default: dict[str, list[str]]) -> dict[str, list[str]]:
+    value = _config_value(name, default)
+    if not isinstance(value, dict):
+        return default
+    clean: dict[str, list[str]] = {}
+    for key, items in value.items():
+        if not isinstance(items, list):
+            continue
+        clean[str(key)] = [str(item) for item in items if str(item).strip()]
+    return clean or default
+
 
 def get_db_path():
     return _os.path.abspath(
@@ -50,7 +95,7 @@ HUNT_COORDINATOR_URL = _get_str_env("HUNT_COORDINATOR_URL", "http://localhost:80
 
 # Discovery runs one query per (lane, term). Broad board results are trimmed afterward:
 # see hunter.search_lanes.LANE_TITLE_KEYWORDS (keep lanes aligned when you change terms).
-SEARCH_TERMS = {
+_DEFAULT_SEARCH_TERMS = {
     "engineering": [
         "software engineer intern",
         "software engineer new grad",
@@ -86,31 +131,40 @@ SEARCH_TERMS = {
         "junior data engineer",
     ],
 }
+SEARCH_TERMS = _get_config_dict("SEARCH_TERMS", _DEFAULT_SEARCH_TERMS)
 
-LOCATIONS = [
+_DEFAULT_LOCATIONS = [
     "Canada",
     # "Remote",
 ]
+LOCATIONS = _get_config_list("LOCATIONS", _DEFAULT_LOCATIONS)
 
-SITES = ["indeed", "linkedin"]
+SITES = _get_config_list("SITES", ["indeed", "linkedin"])
 
-MAX_WORKERS = _get_int_env("MAX_WORKERS", 10)
-RESULTS_WANTED = _get_int_env("RESULTS_WANTED", 500)
-HOURS_OLD = _get_int_env(
+MAX_WORKERS = _get_config_int("MAX_WORKERS", 10)
+RESULTS_WANTED = _get_config_int("RESULTS_WANTED", 500)
+HOURS_OLD = _get_config_int(
     "HOURS_OLD", 24
 )  # 24h lookback: job_url uniqueness handles dedup across runs
-RUN_INTERVAL_SECONDS = _get_int_env("RUN_INTERVAL_SECONDS", 600)  # 10 minutes between runs
-ENRICH_AFTER_SCRAPE = _get_bool_env("ENRICH_AFTER_SCRAPE", True)
-ENRICHMENT_BATCH_LIMIT = _get_int_env("ENRICHMENT_BATCH_LIMIT", 25)
-ENRICHMENT_TIMEOUT_MS = _get_int_env("ENRICHMENT_TIMEOUT_MS", 45000)
-ENRICHMENT_SLOW_MO_MS = _get_int_env("ENRICHMENT_SLOW_MO_MS", 0)
-ENRICHMENT_HEADFUL = _get_bool_env("ENRICHMENT_HEADFUL", False)
-ENRICHMENT_UI_VERIFY_BLOCKED = _get_bool_env("ENRICHMENT_UI_VERIFY_BLOCKED", False)
-ENRICHMENT_MAX_ATTEMPTS = _get_int_env("ENRICHMENT_MAX_ATTEMPTS", 4)
-ENRICHMENT_STALE_PROCESSING_MINUTES = _get_int_env("ENRICHMENT_STALE_PROCESSING_MINUTES", 30)
-ENRICHMENT_ALERT_MIN_ATTEMPTS = _get_int_env("ENRICHMENT_ALERT_MIN_ATTEMPTS", 5)
-ENRICHMENT_ALERT_FAILURE_RATE_PERCENT = _get_int_env("ENRICHMENT_ALERT_FAILURE_RATE_PERCENT", 50)
-ENRICHMENT_ALERT_COOLDOWN_MINUTES = _get_int_env("ENRICHMENT_ALERT_COOLDOWN_MINUTES", 60)
+RUN_INTERVAL_SECONDS = _get_config_int(
+    "RUN_INTERVAL_SECONDS", 600
+)  # 10 minutes between runs
+ENRICH_AFTER_SCRAPE = _get_config_bool("ENRICH_AFTER_SCRAPE", True)
+LINKEDIN_FETCH_DESCRIPTION = _get_config_bool("LINKEDIN_FETCH_DESCRIPTION", True)
+ENRICHMENT_BATCH_LIMIT = _get_config_int("ENRICHMENT_BATCH_LIMIT", 25)
+ENRICHMENT_TIMEOUT_MS = _get_config_int("ENRICHMENT_TIMEOUT_MS", 45000)
+ENRICHMENT_SLOW_MO_MS = _get_config_int("ENRICHMENT_SLOW_MO_MS", 0)
+ENRICHMENT_HEADFUL = _get_config_bool("ENRICHMENT_HEADFUL", False)
+ENRICHMENT_UI_VERIFY_BLOCKED = _get_config_bool("ENRICHMENT_UI_VERIFY_BLOCKED", False)
+ENRICHMENT_MAX_ATTEMPTS = _get_config_int("ENRICHMENT_MAX_ATTEMPTS", 4)
+ENRICHMENT_STALE_PROCESSING_MINUTES = _get_config_int(
+    "ENRICHMENT_STALE_PROCESSING_MINUTES", 30
+)
+ENRICHMENT_ALERT_MIN_ATTEMPTS = _get_config_int("ENRICHMENT_ALERT_MIN_ATTEMPTS", 5)
+ENRICHMENT_ALERT_FAILURE_RATE_PERCENT = _get_config_int(
+    "ENRICHMENT_ALERT_FAILURE_RATE_PERCENT", 50
+)
+ENRICHMENT_ALERT_COOLDOWN_MINUTES = _get_config_int("ENRICHMENT_ALERT_COOLDOWN_MINUTES", 60)
 REVIEW_APP_HOST = _get_str_env("REVIEW_APP_HOST", "127.0.0.1")
 REVIEW_APP_PORT = _get_int_env("REVIEW_APP_PORT", 8000)
 REVIEW_APP_PUBLIC_URL = _get_str_env("REVIEW_APP_PUBLIC_URL", "https://agent-hunt-review.mshi.ca")
@@ -123,7 +177,7 @@ REVIEW_BULK_SELECTED_MAX = _get_int_env("REVIEW_BULK_SELECTED_MAX", 250)
 # Max rows per request for bulk delete (guards accidents).
 REVIEW_BULK_DELETE_MAX = _get_int_env("REVIEW_BULK_DELETE_MAX", 50)
 
-WATCHLIST = [
+_DEFAULT_WATCHLIST = [
     "1password",
     "adobe",
     "amazon",
@@ -165,8 +219,9 @@ WATCHLIST = [
     "vmware",
     "wealthsimple",
 ]
+WATCHLIST = _get_config_list("WATCHLIST", _DEFAULT_WATCHLIST)
 
-TITLE_BLACKLIST = [
+_DEFAULT_TITLE_BLACKLIST = [
     "master",
     "phd",
     "ph.d",
@@ -224,3 +279,4 @@ TITLE_BLACKLIST = [
     " iv",
     " v ",
 ]
+TITLE_BLACKLIST = _get_config_list("TITLE_BLACKLIST", _DEFAULT_TITLE_BLACKLIST)

@@ -84,7 +84,8 @@
           if (!includesPhrase(text, phraseNorm)) {
             return;
           }
-          var score = phraseNorm.length;
+          var position = (" " + text + " ").indexOf(" " + phraseNorm + " ");
+          var score = phraseNorm.length * 10 - Math.max(position, 0);
           if (!best || score > best.score) {
             best = {
               entry: entry,
@@ -139,9 +140,15 @@
 
     var alias = null;
     for (var groupIndex = 0; groupIndex < groups.length; groupIndex += 1) {
-      alias = findAlias(entries, groups[groupIndex]);
-      if (alias) {
-        break;
+      var groupAlias = findAlias(entries, groups[groupIndex]);
+      if (
+        groupAlias &&
+        (!alias ||
+          groupAlias.score > alias.score ||
+          (groupAlias.score === alias.score &&
+            groupIndex < alias.groupIndex))
+      ) {
+        alias = Object.assign({ groupIndex: groupIndex }, groupAlias);
       }
     }
     if (alias) {

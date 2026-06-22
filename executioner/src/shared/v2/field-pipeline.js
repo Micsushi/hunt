@@ -41,6 +41,12 @@
   }
 
   function inventoryEntry(field, fieldAudit) {
+    var failedIssue = (fieldAudit.issues || [])
+      .slice()
+      .reverse()
+      .find(function (issue) {
+        return issue.kind === "field_fill_failed" && issue.reason;
+      });
     return {
       kind: field.kind,
       tagName: field.element?.tagName || "",
@@ -49,11 +55,13 @@
       id: field.element?.id || "",
       descriptor: field.descriptor || "",
       questionHash: field.questionHash || "",
+      questionType: fieldAudit.questionType || "",
+      uiModel: fieldAudit.uiModel || field.uiModel || "",
       required: Boolean(field.required),
       filled: Boolean(fieldAudit.filled),
       skippedReason: fieldAudit.filled
         ? ""
-        : fieldAudit.afterState?.reason || "",
+        : fieldAudit.afterState?.reason || failedIssue?.reason || "",
       valueSource: fieldAudit.valueSource || "",
       bestEffortWarning: fieldAudit.issues
         .map(function (issue) {
@@ -69,13 +77,23 @@
   }
 
   function fieldIdentityKey(field) {
+    var stableElementId =
+      field.element?.id ||
+      field.element?.name ||
+      field.element?.getAttribute?.("data-automation-id") ||
+      "";
+    var fieldId = field.fieldId || "";
+    if (/^segmented_button_group_\d+$/.test(fieldId)) {
+      fieldId = "";
+    }
     return [
-      field.fieldId || "",
+      fieldId,
       field.name || "",
       field.element?.id || "",
       field.element?.name || "",
       field.element?.getAttribute?.("data-automation-id") || "",
       field.selectorPath || "",
+      stableElementId ? "" : field.questionHash || field.descriptor || "",
       field.uiModel || "",
     ]
       .filter(Boolean)
@@ -167,6 +185,17 @@
         (containerText.includes(signal) || signal.includes(containerText))
       );
     });
+  }
+
+  function isResumeFileField(field) {
+    if (field.uiModel !== "file") {
+      return false;
+    }
+    var descriptor = String(field.descriptor || "").toLowerCase();
+    return (
+      (descriptor.includes("resume") || descriptor.includes("cv")) &&
+      !descriptor.includes("cover letter")
+    );
   }
 
   function normalizedTokens(value) {
@@ -404,6 +433,9 @@
   }
 
   function isConditionalYesFollowupText(field) {
+    if (field.required) {
+      return false;
+    }
     if (!["text", "textarea"].includes(field.uiModel)) {
       return false;
     }
@@ -587,10 +619,20 @@
         questionType: "unknown",
       });
     }
+    var resolverProfile = {
+      ...(profile || {}),
+      applicationCompany:
+        activeApplyContext?.company || activeApplyContext?.companyName || "",
+      applicationPosition:
+        activeApplyContext?.title ||
+        activeApplyContext?.jobTitle ||
+        activeApplyContext?.position ||
+        "",
+    };
     var answer = root.answerResolver.resolveAnswer({
       question: question,
       field: field,
-      profile: profile,
+      profile: resolverProfile,
       audit: audit,
       fieldAudit: fieldAudit,
     });
@@ -973,11 +1015,26 @@
         if (
           context.settings?.fillRequiredOnly !== false &&
           !field.required &&
-          field.uiModel !== "file" &&
+          !isResumeFileField(field) &&
           !hasValidationState(field) &&
           !shouldFillOptionalProfileCorrection(field, context) &&
           !shouldFillAuthConsentCheckbox(field)
         ) {
+          var fieldAudit = root.audit.createFieldAudit(audit, field);
+          fieldAudit.beforeState = root.fieldState.readFieldState(field);
+          fieldAudit.afterState = {
+            ...root.fieldState.readFieldState(field),
+            reason: "not_required",
+          };
+          fieldAudit.filled = false;
+          fieldAudit.valueSource = "skipped:not_required";
+          root.audit.pushFieldStep(audit, fieldAudit, {
+            action: "field_skipped",
+            step: "field.required_filter",
+            status: "info",
+            reason: "not_required",
+          });
+          fieldInventory.push(inventoryEntry(field, fieldAudit));
           root.audit.pushEvent(audit, {
             action: "field_skipped",
             step: "field.required_filter",
@@ -1046,6 +1103,21 @@
           continue;
         }
         if (isConditionalYesFollowupText(field)) {
+          var fieldAudit = root.audit.createFieldAudit(audit, field);
+          fieldAudit.beforeState = root.fieldState.readFieldState(field);
+          fieldAudit.afterState = {
+            ...root.fieldState.readFieldState(field),
+            reason: "conditional_yes_followup_left_blank",
+          };
+          fieldAudit.filled = false;
+          fieldAudit.valueSource = "skipped:conditional_yes_followup";
+          root.audit.pushFieldStep(audit, fieldAudit, {
+            action: "field_skipped",
+            step: "field.conditional_followup_guard",
+            status: "info",
+            reason: "conditional_yes_followup_left_blank",
+          });
+          fieldInventory.push(inventoryEntry(field, fieldAudit));
           root.audit.pushEvent(audit, {
             action: "field_skipped",
             step: "field.conditional_followup_guard",

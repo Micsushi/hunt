@@ -45,7 +45,7 @@ function parseArgs(argv) {
     startStep: "My Information",
     resetSiteData: false,
     closeExistingWorkdayTabs: true,
-    clearBeforeFill: true,
+    clearBeforeFill: false,
     skipAccountBootstrap: false,
     help: false,
   };
@@ -86,6 +86,8 @@ function parseArgs(argv) {
       args.resetSiteData = true;
     } else if (arg === "--keep-existing-workday-tabs") {
       args.closeExistingWorkdayTabs = false;
+    } else if (arg === "--clear-before-fill") {
+      args.clearBeforeFill = true;
     } else if (arg === "--no-clear-before-fill") {
       args.clearBeforeFill = false;
     } else if (arg === "--skip-account-bootstrap") {
@@ -119,7 +121,8 @@ function usage() {
     "  --start-step <name>           Workday step to click before fill, default My Information",
     "  --reset-site-data             Clear cookies/site data before bootstrap",
     "  --keep-existing-workday-tabs  Do not close old Workday tabs before bootstrap",
-    "  --no-clear-before-fill        Do not clear each application page before fill",
+    "  --clear-before-fill           Clear each application page before fill",
+    "  --no-clear-before-fill        Kept for compatibility; clear is already off by default",
     "  --skip-account-bootstrap      Only run application fill/auto-next",
   ].join("\n");
 }

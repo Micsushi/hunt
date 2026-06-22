@@ -113,6 +113,21 @@ def test_fletcher_option_a_queues_by_job_id():
     assert "job_id: payload.jobId" in control
 
 
+def test_fletcher_active_queue_exposes_bulk_cancel_controls():
+    fletcher = read("frontend/src/pages/Fletcher/index.tsx")
+    control = read("frontend/src/api/control.ts")
+
+    assert "cancelFletcherJobs" in control
+    assert "/api/fletcher/tailor/jobs/bulk-cancel" in control
+    assert "selectedActiveIds" in fletcher
+    assert "Cancel selected" in fletcher
+    assert "toggleAllActive" in fletcher
+    assert "cancelSelectedActive" in fletcher
+    assert "onMove(job.queue_item_id, 'up')" in fletcher
+    assert "onMove(job.queue_item_id, 'down')" in fletcher
+    assert "cancelOneActive(job.queue_item_id)" in fletcher
+
+
 def test_frontend_human_command_logger_posts_fail_open_ledger_events():
     helper = read("frontend/src/api/humanCommandLog.ts")
     control = read("frontend/src/api/control.ts")

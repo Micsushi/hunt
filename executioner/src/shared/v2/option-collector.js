@@ -101,9 +101,10 @@
     return true;
   }
 
-  function popupOptionElements() {
+  function popupOptionElements(scope) {
+    var rootNode = scope || document;
     return Array.from(
-      document.querySelectorAll(
+      rootNode.querySelectorAll(
         [
           '[role="option"]',
           '[role="gridcell"]',
@@ -151,6 +152,14 @@
         label.includes(target)
       );
     });
+  }
+
+  function fieldPopupOptions(scope) {
+    var scoped = popupOptionElements(scope);
+    if (scoped.length || !scope || scope === document) {
+      return scoped;
+    }
+    return popupOptionElements(document);
   }
 
   function emitOptionsCollected(field, context, options, reason) {
@@ -306,7 +315,11 @@
     }
     if (["combobox", "button_listbox"].includes(field.uiModel)) {
       var answerText = context?.answer?.value || "";
-      var options = popupOptionElements();
+      var optionScope =
+        field.element?.closest?.(
+          ".custom-select, .select__container, [role='combobox'], [aria-haspopup='listbox'], [aria-haspopup='grid'], .application-field, [class*='field']",
+        ) || document;
+      var options = fieldPopupOptions(optionScope);
       if (options.length && hasOptionMatch(options, answerText)) {
         return emitOptionsCollected(field, context, options, "popup_existing_options");
       }
@@ -320,7 +333,7 @@
       await new Promise(function (resolve) {
         setTimeout(resolve, 180);
       });
-      options = popupOptionElements();
+      options = fieldPopupOptions(optionScope);
       if (options.length && hasOptionMatch(options, answerText)) {
         return emitOptionsCollected(field, context, options, "popup_opened_options");
       }
@@ -333,7 +346,7 @@
       return emitOptionsCollected(
         field,
         context,
-        popupOptionElements(),
+        fieldPopupOptions(optionScope),
         "popup_search_options",
       );
     }

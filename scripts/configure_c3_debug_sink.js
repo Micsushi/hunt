@@ -253,10 +253,17 @@ function js(value) {
 }
 
 function findExtensionPage(targets, extensionId) {
-  return targets.find((target) =>
-    String(target.url || "").startsWith(
-      `chrome-extension://${extensionId}/src/options/options.html`,
-    ),
+  return (
+    targets.find((target) =>
+      String(target.url || "").startsWith(
+        `chrome-extension://${extensionId}/src/background/index.js`,
+      ),
+    ) ||
+    targets.find((target) =>
+      String(target.url || "").startsWith(
+        `chrome-extension://${extensionId}/src/options/options.html`,
+      ),
+    )
   );
 }
 

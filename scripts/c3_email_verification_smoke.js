@@ -193,12 +193,29 @@ async function ensureOptionsTarget(port, fallbackExtensionId) {
   let target = targets.find((item) =>
     String(item.url || "").includes("/src/options/options.html"),
   );
-  if (target) {
-    return target;
-  }
   const extensionId = findExtensionId(targets) || fallbackExtensionId;
   if (!extensionId) {
     throw new Error("Could not find loaded C3 extension in CDP targets");
+  }
+  if (target) {
+    const healthClient = await new CdpClient(target.webSocketDebuggerUrl)
+      .connect()
+      .catch(() => null);
+    if (healthClient) {
+      try {
+        await healthClient.evaluate(
+          "(() => location.href)()",
+          5000,
+          "options_target.health_check",
+        );
+        healthClient.close();
+        return target;
+      } catch (_error) {
+        healthClient.close();
+      }
+    }
+    await httpText(port, `/json/close/${target.id}`, "PUT").catch(() => "");
+    await sleep(500);
   }
   await httpText(
     port,
@@ -231,6 +248,90 @@ async function ensurePageTarget(port, pageUrl) {
 
 async function connectTarget(target) {
   return new CdpClient(target.webSocketDebuggerUrl).connect();
+}
+
+function bootstrapFailureDetails(error, phase = "auth_bootstrap") {
+  const message = String(error?.message || error || "C3 auth bootstrap failed.");
+  const isCdpFailure =
+    Boolean(error?.cdpMethod) ||
+    /^CDP\b|CDP timeout|CDP connection/i.test(message);
+  const reason =
+    error?.reason ||
+    (isCdpFailure
+      ? "browser_page_crashed_or_unreachable"
+      : /Signup setup failed/i.test(message)
+      ? "signup_setup_failed"
+      : "auth_bootstrap_failed");
+  return {
+    ok: false,
+    reason,
+    phase,
+    message,
+    command: error?.cdpLabel || error?.cdpMethod || "",
+    timeoutMs: Number(error?.timeoutMs || 0),
+  };
+}
+
+async function reportBootstrapFailure(optionsClient, targetUrl, failure) {
+  recordWorkflowEvent(
+    failure.phase || "auth_bootstrap",
+    "failure",
+    "failed",
+    failure.message || "C3 auth bootstrap failed.",
+    failure,
+  );
+  if (!optionsClient || !targetUrl) {
+    return { ok: false, reason: "missing_failure_toast_context" };
+  }
+  return optionsClient.evaluate(
+    `(() => {
+      const targetUrl = ${JSON.stringify(targetUrl)};
+      const failure = ${js(failure)};
+      return (async () => {
+        const target = new URL(targetUrl);
+        const tabs = await chrome.tabs.query({});
+        const tab = tabs.find((item) => {
+          try {
+            const url = new URL(item.url || "");
+            return url.host === target.host;
+          } catch (_error) {
+            return false;
+          }
+        });
+        if (!tab?.id) {
+          return { ok: false, reason: "workday_tab_not_found" };
+        }
+        const uiMessage = {
+          type: "hunt.apply.show_failure_toast",
+          message: [
+            "C3 auth bootstrap failed",
+            failure.phase ? "at " + failure.phase : "",
+            failure.message ? "- " + failure.message : ""
+          ].filter(Boolean).join(" "),
+          reason: failure.reason || "",
+          phase: failure.phase || "",
+          command: failure.command || "",
+          error: failure.message || "",
+          timeoutMs: Number(failure.timeoutMs || 0)
+        };
+        try {
+          await chrome.tabs.sendMessage(tab.id, uiMessage);
+        } catch (error) {
+          if (!/receiving end does not exist|could not establish connection/i.test(String(error?.message || error))) {
+            return { ok: false, reason: "failure_toast_message_failed", message: String(error?.message || error) };
+          }
+          await chrome.scripting.executeScript({
+            target: { tabId: tab.id },
+            files: ["src/content/bootstrap.js"]
+          });
+          await chrome.tabs.sendMessage(tab.id, uiMessage);
+        }
+        return { ok: true, tabId: tab.id };
+      })();
+    })()`,
+    10000,
+    "auth_bootstrap.failure_toast",
+  );
 }
 
 async function connectLatestWorkdayTarget(port, referenceUrl) {
@@ -389,13 +490,20 @@ async function fillCurrentPage(optionsClient, targetUrl) {
         return { ok: false, error: "target_tab_not_found" };
       }
       const wrapped = await new Promise((resolve) => {
-        chrome.runtime.sendMessage(
-          { type: "hunt.apply.fill_current_page", payload: { tabId: tab.id, triggeredBy: "email_verification_smoke" } },
-          (messageResponse) => resolve({
+        const message = { type: "hunt.apply.fill_current_page", payload: { tabId: tab.id, triggeredBy: "email_verification_smoke" } };
+        if (typeof globalThis.__huntApplyDirectMessage === "function") {
+          globalThis.__huntApplyDirectMessage(message)
+            .then((messageResponse) => resolve({ messageResponse, lastError: "" }))
+            .catch((error) => resolve({
+              messageResponse: null,
+              lastError: error?.message || String(error)
+            }));
+        } else {
+          chrome.runtime.sendMessage(message, (messageResponse) => resolve({
             messageResponse,
             lastError: chrome.runtime.lastError && chrome.runtime.lastError.message
-          })
-        );
+          }));
+        }
       });
       return {
         ...(wrapped.messageResponse || {}),
@@ -474,11 +582,21 @@ async function fillWorkdayAccountForm(pageClient, args) {
         const rect = el.getBoundingClientRect();
         return style.display !== "none" && style.visibility !== "hidden" && (rect.width > 0 || rect.height > 0 || el.offsetParent !== null);
       };
-      const inputs = [...document.querySelectorAll("input")]
-        .filter((input) => input.type !== "hidden" && input.name !== "website" && visible(input));
-      const textInputs = inputs.filter((input) => input.type === "text" || input.type === "email");
-      const passwordInputs = inputs.filter((input) => input.type === "password");
-      const checkbox = inputs.find((input) => input.type === "checkbox");
+      let inputs = [];
+      let textInputs = [];
+      let passwordInputs = [];
+      let checkbox = null;
+      for (let attempt = 0; attempt < 20; attempt += 1) {
+        inputs = [...document.querySelectorAll("input")]
+          .filter((input) => input.type !== "hidden" && input.name !== "website" && visible(input));
+        textInputs = inputs.filter((input) => input.type === "text" || input.type === "email");
+        passwordInputs = inputs.filter((input) => input.type === "password");
+        checkbox = inputs.find((input) => input.type === "checkbox");
+        if (textInputs[0] && passwordInputs[0]) {
+          break;
+        }
+        await sleep(500);
+      }
       if (textInputs[0]) {
         textInputs[0].focus();
         setValue(textInputs[0], ${js(args.accountEmail)});
@@ -504,9 +622,19 @@ async function fillWorkdayAccountForm(pageClient, args) {
         passwordFilled: Boolean(passwordInputs[0]?.value),
         confirmFilled: Boolean(passwordInputs[1]?.value),
         consentChecked: Boolean(!checkbox || checkbox.checked),
-        fieldCount: inputs.length
+        fieldCount: inputs.length,
+        inputDebug: inputs.map((input) => ({
+          id: input.id || "",
+          type: input.type || "",
+          autocomplete: input.autocomplete || "",
+          name: input.name || "",
+          valueLength: String(input.value || "").length,
+          checked: Boolean(input.checked)
+        })).slice(0, 8),
       };
     })()`,
+    30000,
+    "auth_bootstrap.fill_workday_account_form",
   );
 }
 
@@ -1626,31 +1754,39 @@ async function main() {
     }
   }
 
+  let targetUrl = args.workdayUrl;
+  let currentPhase = "auth_bootstrap.startup";
   let fixtureServer = null;
   let pageClient = null;
   let optionsClient = null;
   try {
-    let targetUrl = args.workdayUrl;
     if (args.provider === "fake") {
+      currentPhase = "auth_bootstrap.fixture";
       fixtureServer = await startFixtureServer(args.fixturePort);
       const runId = `run-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
       targetUrl = `http://127.0.0.1:${args.fixturePort}/signup_email_verification.html?${runId}`;
       process.env.HUNT_C3_FAKE_VERIFY_LINK = `http://127.0.0.1:${args.fixturePort}/email_verified.html`;
     }
+    currentPhase = "auth_bootstrap.options_target";
     const optionsTarget = await ensureOptionsTarget(
       args.cdpPort,
       args.extensionId,
     );
     optionsClient = await connectTarget(optionsTarget);
+    currentPhase = "auth_bootstrap.seed_extension";
     await seedExtension(optionsClient, args, targetUrl);
 
+    currentPhase = "auth_bootstrap.open_workday_target";
     const pageTarget = await ensurePageTarget(args.cdpPort, targetUrl);
     pageClient = await connectTarget(pageTarget);
+    currentPhase = "auth_bootstrap.reset_site_data";
     const resetSiteData = args.resetSiteData
       ? await resetBrowserSiteData(pageClient, targetUrl)
       : null;
+    currentPhase = "auth_bootstrap.navigate";
     await navigate(pageClient, targetUrl);
     if (args.provider !== "fake") {
+      currentPhase = "auth_bootstrap.dismiss_cookie_consent";
       await dismissCookieConsent(pageClient).catch(() => {});
       await sleep(3000);
     }
@@ -1690,6 +1826,7 @@ async function main() {
       return;
     }
 
+    currentPhase = "auth_bootstrap.reach_account_form";
     const reachResult =
       args.provider === "fake"
         ? { ok: true, reason: "fake_fixture" }
@@ -1903,6 +2040,15 @@ async function main() {
       args.provider === "fake"
         ? { ok: true, skipped: true }
         : await fillWorkdayAccountForm(pageClient, args);
+    if (!fillResult.ok && !workdayAccountFill.ok) {
+      throw new Error(
+        `Signup setup failed: ${JSON.stringify({
+          reachResult,
+          fillResult: compactFillResult(fillResult),
+          workdayAccountFill,
+        })}`,
+      );
+    }
     const submitStartedAt = new Date().toISOString();
     const submitResult =
       args.provider === "fake"
@@ -1912,7 +2058,7 @@ async function main() {
             email: args.accountEmail,
             signupStartedAt: submitStartedAt,
           };
-    if ((!fillResult.ok && !workdayAccountFill.ok) || !submitResult.ok) {
+    if (!submitResult.ok) {
       throw new Error(
         `Signup setup failed: ${JSON.stringify({
           reachResult,
@@ -2330,6 +2476,33 @@ async function main() {
     if (!result.ok) {
       process.exitCode = 1;
     }
+  } catch (error) {
+    const failure = bootstrapFailureDetails(error, currentPhase);
+    await reportBootstrapFailure(optionsClient, targetUrl, failure).catch(
+      () => null,
+    );
+    console.log(
+      JSON.stringify(
+        {
+          ok: false,
+          provider: args.provider,
+          reason: failure.reason,
+          phase: failure.phase,
+          message: failure.message,
+          command: failure.command,
+          workflow: {
+            auth: {
+              phase: "auth",
+              status: "failed",
+              events: workflowEvents.filter((event) => event.phase === "auth"),
+            },
+          },
+        },
+        null,
+        2,
+      ),
+    );
+    process.exitCode = 1;
   } finally {
     if (pageClient) {
       pageClient.close();

@@ -5056,6 +5056,7 @@ Expected Graduation: Sep 2026
         self.assertIn("Fill application", content)
         self.assertIn("hunt.apply.fill_current_page", content)
         self.assertIn("hunt.apply.show_toast", content)
+        self.assertIn("hunt.apply.show_failure_toast", content)
         self.assertIn("hunt-apply-page-toasts", content)
         self.assertIn("hunt.apply.show_fill_progress", content)
         self.assertIn("hunt.apply.show_fill_summary", content)
@@ -6044,13 +6045,53 @@ Expected Graduation: Sep 2026
         self.assertIn("hunt.apply.cancel_fill", background)
         self.assertIn("hunt.apply.get_active_fill_progress", background)
         self.assertIn("hunt.apply.clear_current_page", background)
+        self.assertIn(
+            'INTERNAL_C3_COMMAND_MESSAGE_TYPE = "hunt.apply.run_c3_command"',
+            background,
+        )
+        self.assertIn("case INTERNAL_C3_COMMAND_MESSAGE_TYPE", background)
+        self.assertIn("getC3Command(commandName)", background)
+        self.assertIn('"missing_command_name"', background)
+        self.assertIn('"missing_actor_context"', background)
+        self.assertIn('"missing_session_context"', background)
+        self.assertIn('"unknown_c3_command"', background)
+        self.assertIn('"unsupported_c3_command_route"', background)
+        self.assertIn("command_payload", background)
+        self.assertIn("payload.session_id", background)
+        receiver_routes_start = background.index("const C3_COMMAND_RECEIVER_ROUTES")
+        receiver_routes_end = background.index("});", receiver_routes_start)
+        receiver_routes = background[receiver_routes_start:receiver_routes_end]
+        self.assertIn(
+            '[C3_COMMANDS.pageWalk]: "hunt.apply.page_walk"',
+            receiver_routes,
+        )
+        receiver_start = background.index("async function handleInternalC3Command")
+        receiver_end = background.index("async function handleMessage")
+        receiver_body = background[receiver_start:receiver_end]
+        self.assertIn("return handleMessage(", receiver_body)
+        for bypass_call in [
+            "handler:",
+            "runFillForTab(",
+            "runPendingLlmFillForTab(",
+            "clearCurrentPage(",
+            "clickSafeNextForTab(",
+            "detectWorkflowForTab(",
+            "getPageSnapshot(",
+            "inspectFieldsForTab(",
+        ]:
+            self.assertNotIn(bypass_call, receiver_body)
         for route_name, command_name in [
             ("hunt.apply.detect_page", "C3_COMMANDS.detectPage"),
             ("hunt.apply.snapshot_page", "C3_COMMANDS.snapshotPage"),
             ("hunt.apply.inspect_fields", "C3_COMMANDS.inspectFields"),
             ("hunt.apply.inspect_validation", "C3_COMMANDS.inspectValidation"),
+            ("hunt.apply.get_active_fill_progress", "C3_COMMANDS.getProgress"),
+            ("hunt.apply.cancel_fill", "C3_COMMANDS.cancelSession"),
+            ("hunt.apply.fill_current_page", "C3_COMMANDS.fillPage"),
+            ("hunt.apply.page_walk", "C3_COMMANDS.pageWalk"),
             ("hunt.apply.fill_remaining_with_llm", "C3_COMMANDS.fillRemainingWithLlm"),
             ("hunt.apply.click_next_after_fill", "C3_COMMANDS.clickNextAfterFill"),
+            ("hunt.apply.clear_current_page", "C3_COMMANDS.clearPage"),
         ]:
             self.assertIn(f'case "{route_name}"', background)
             route_start = background.index(f'case "{route_name}"')

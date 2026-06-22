@@ -385,6 +385,10 @@
   overflow: visible;
 }
 
+.queueCardActiveSelectable {
+  grid-template-columns: 28px minmax(0, 1fr) minmax(360px, 36%);
+}
+
 .historySelect {
   display: inline-flex;
   align-items: center;

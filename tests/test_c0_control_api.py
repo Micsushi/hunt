@@ -437,6 +437,38 @@ class C0ControlApiTests(unittest.TestCase):
         self.assertEqual(item["input"]["company"], "Acme")
         self.assertEqual(item["input"]["description"], "Build embedded systems.")
 
+    def test_fletcher_queue_rejects_option_a_job_without_description(self):
+        from backend import app as backend_app
+
+        conn = self.db.get_connection()
+        try:
+            conn.execute(
+                """
+                INSERT INTO jobs (
+                    id, title, company, description, source, enrichment_status, job_url
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    14407,
+                    "Machine Learning Platform Engineer",
+                    "RBC",
+                    "",
+                    "linkedin",
+                    "pending",
+                    "https://example.com/jobs/14407",
+                ),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+        with patch.object(backend_app, "_ensure_fletcher_worker_started"):
+            response = self.client.post("/api/fletcher/tailor/jobs", json={"job_id": 14407})
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("has no job description", response.json()["detail"])
+
     def test_fletcher_worker_processes_option_a_job_id_queue_item(self):
         from pathlib import Path
 
@@ -600,6 +632,31 @@ class C0ControlApiTests(unittest.TestCase):
         self.assertEqual(updated["result"]["compile_status"], "failed")
         self.assertEqual(updated["error"], "failed")
 
+    def test_fletcher_worker_marks_job_failed_when_queue_log_setup_fails(self):
+        from backend import app as backend_app
+        from fletcher.db import get_fletcher_job
+
+        with patch.object(backend_app, "_ensure_fletcher_worker_started"):
+            response = self.client.post(
+                "/api/fletcher/tailor/jobs",
+                json={"description": "Build Python APIs", "title": "Backend Engineer"},
+            )
+        self.assertEqual(response.status_code, 200)
+        item = response.json()
+
+        with patch.object(
+            backend_app,
+            "_fletcher_queue_log_path",
+            side_effect=RuntimeError("queue log unavailable"),
+        ):
+            processed = backend_app._process_next_fletcher_job()
+
+        self.assertTrue(processed)
+        updated = get_fletcher_job(item["queue_item_id"])
+        self.assertEqual(updated["status"], "failed")
+        self.assertEqual(updated["error"], "queue log unavailable")
+        self.assertIsNone(updated["log_path"])
+
     def test_fletcher_recovery_requeues_interrupted_running_job(self):
         from fletcher.db import (
             claim_next_fletcher_job,
@@ -625,6 +682,93 @@ class C0ControlApiTests(unittest.TestCase):
         reclaimed = claim_next_fletcher_job()
         self.assertEqual(reclaimed["queue_item_id"], item["queue_item_id"])
         self.assertEqual(reclaimed["status"], "running")
+
+    def test_fletcher_cancel_running_job_finishes_as_cancelled(self):
+        from fletcher.db import cancel_fletcher_job, claim_next_fletcher_job, enqueue_fletcher_job
+
+        item = enqueue_fletcher_job(
+            {"title": "Azure Full Stack Developer", "description": "Build APIs."}
+        )
+        claimed = claim_next_fletcher_job()
+        self.assertEqual(claimed["status"], "running")
+
+        cancelled = cancel_fletcher_job(item["queue_item_id"])
+
+        self.assertEqual(cancelled["status"], "cancelled")
+        self.assertEqual(cancelled["error"], "Cancelled by operator.")
+        self.assertEqual(cancelled["progress"]["current_step"], "cancelled")
+        self.assertTrue(cancelled["progress"]["cancelled"])
+
+    def test_fletcher_running_job_can_be_reordered_in_active_queue(self):
+        from fletcher.db import (
+            claim_next_fletcher_job,
+            enqueue_fletcher_job,
+            get_fletcher_job,
+            move_fletcher_job,
+        )
+
+        running = enqueue_fletcher_job(
+            {"title": "Azure Full Stack Developer", "description": "Build APIs."}
+        )
+        queued = enqueue_fletcher_job(
+            {"title": "Data Engineer", "description": "Build data pipelines."}
+        )
+        claimed = claim_next_fletcher_job()
+        self.assertEqual(claimed["queue_item_id"], running["queue_item_id"])
+
+        moved = move_fletcher_job(running["queue_item_id"], "down")
+        queued_after = get_fletcher_job(queued["queue_item_id"])
+
+        self.assertEqual(moved["status"], "running")
+        self.assertGreater(moved["position"], queued_after["position"])
+
+    def test_fletcher_late_finish_does_not_overwrite_cancelled_job(self):
+        from fletcher.db import (
+            cancel_fletcher_job,
+            claim_next_fletcher_job,
+            enqueue_fletcher_job,
+            finish_fletcher_job,
+        )
+
+        item = enqueue_fletcher_job(
+            {"title": "Azure Full Stack Developer", "description": "Build APIs."}
+        )
+        claim_next_fletcher_job()
+        cancel_fletcher_job(item["queue_item_id"])
+
+        finished = finish_fletcher_job(
+            item["queue_item_id"],
+            status="succeeded",
+            result={"review_id": "late-review"},
+            review_id="late-review",
+        )
+
+        self.assertEqual(finished["status"], "cancelled")
+        self.assertNotEqual(finished["result"].get("review_id"), "late-review")
+        self.assertIsNone(finished["review_id"])
+
+    def test_fletcher_bulk_cancel_endpoint_cancels_active_jobs(self):
+        from backend import app as backend_app
+
+        with patch.object(backend_app, "_ensure_fletcher_worker_started"):
+            one = self.client.post(
+                "/api/fletcher/tailor/jobs",
+                json={"description": "Build APIs", "title": "Backend Engineer"},
+            ).json()
+            two = self.client.post(
+                "/api/fletcher/tailor/jobs",
+                json={"description": "Build data pipelines", "title": "Data Engineer"},
+            ).json()
+
+        response = self.client.post(
+            "/api/fletcher/tailor/jobs/bulk-cancel",
+            json={"queue_item_ids": [one["queue_item_id"], two["queue_item_id"]]},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(payload["cancelled"], 2)
+        self.assertEqual([job["status"] for job in payload["jobs"]], ["cancelled", "cancelled"])
 
     def test_fletcher_worker_start_recovers_interrupted_jobs_before_claiming(self):
         from backend import app as backend_app

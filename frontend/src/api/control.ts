@@ -103,6 +103,7 @@ export function fetchLinkedInAccounts(): Promise<{ accounts: LinkedInAccount[] }
 
 export function saveLinkedInAccount(payload: {
   username: string
+  password?: string
   display_name?: string
   active?: boolean
 }): Promise<{ account: LinkedInAccount }> {
@@ -112,6 +113,7 @@ export function saveLinkedInAccount(payload: {
     details: {
       hasUsername: Boolean(payload.username),
       hasDisplayName: Boolean(payload.display_name),
+      hasPassword: Boolean(payload.password),
       active: payload.active ?? true,
     },
   })
@@ -335,6 +337,19 @@ export function cancelFletcherJob(queueItemId: string): Promise<FletcherQueueIte
     `/api/fletcher/tailor/jobs/${encodeURIComponent(queueItemId)}/cancel`,
     {},
   )
+}
+
+export function cancelFletcherJobs(queueItemIds: string[]): Promise<{
+  status: string
+  cancelled: number
+  jobs: FletcherQueueItem[]
+}> {
+  void logHumanCommand({
+    action: 'c2.fletcher.bulk_cancel_queue_items',
+    buttonId: 'bulk-cancel-fletcher-jobs',
+    details: { count: queueItemIds.length },
+  })
+  return post('/api/fletcher/tailor/jobs/bulk-cancel', { queue_item_ids: queueItemIds })
 }
 
 export function deleteFletcherJob(

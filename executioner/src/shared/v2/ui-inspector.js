@@ -72,6 +72,24 @@
         return true;
       }
     }
+    if (type === "file") {
+      var context = [
+        el.id,
+        el.name,
+        el.getAttribute?.("accept"),
+        el.closest?.("label, .resume-block, .application-field, [class*='field']")
+          ?.innerText,
+      ]
+        .filter(Boolean)
+        .join(" ")
+        .toLowerCase();
+      if (
+        (context.includes("resume") || context.includes("cv")) &&
+        !context.includes("cover letter")
+      ) {
+        return true;
+      }
+    }
     return false;
   }
 

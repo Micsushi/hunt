@@ -166,8 +166,23 @@
   }
 
   function selectedControlContextFor(el) {
+    var label = controlLabel(el).toLowerCase();
+    var className = String(el?.className?.baseVal || el?.className || "")
+      .toLowerCase()
+      .replace(/[_-]/g, " ");
+    var start =
+      label.includes("clear") ||
+      label.includes("remove") ||
+      label.includes("delete") ||
+      label.includes("trash") ||
+      className.includes("clear") ||
+      className.includes("remove") ||
+      className.includes("delete") ||
+      className.includes("trash")
+        ? el.parentElement
+        : el;
     return (
-      el.closest?.(
+      start?.closest?.(
         [
           "[role='combobox']",
           "[aria-haspopup='listbox']",
@@ -299,9 +314,9 @@
       await sleep(180);
       await clickVisibleUploadConfirmButton();
       await sleep(220);
-      var afterText = normalizeText(
-        context?.innerText || context?.textContent || "",
-      );
+      var afterText = context?.isConnected === false
+        ? ""
+        : normalizeText(context?.innerText || context?.textContent || "");
       if (!afterText || afterText !== beforeText) {
         clearedControls += 1;
         root.audit?.pushEvent?.(audit, {

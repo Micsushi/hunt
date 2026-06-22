@@ -7,6 +7,7 @@ import re
 import sys
 import threading
 import time
+import traceback
 import uuid
 import zipfile
 from contextlib import asynccontextmanager
@@ -78,6 +79,7 @@ from hunter.config import (  # noqa: E402
     REVIEW_APP_PORT,
     REVIEW_OPS_TOKEN,
 )
+from hunter.crypto import encrypt as encrypt_secret  # noqa: E402
 from hunter.db import (  # noqa: E402
     bulk_requeue_jobs_by_ids,
     delete_jobs_by_ids,
@@ -229,11 +231,15 @@ async def lifespan(app):
 
 app = FastAPI(title="Hunt Control Plane", version="0.1.0", lifespan=lifespan)
 
+from backend.browser_targets import router as _browser_target_router  # noqa: E402
+from backend.c3_commands import router as _c3_commands_router  # noqa: E402
 from backend.gateway import router as _gateway_router  # noqa: E402
 from backend.ledger.api import router as _ledger_router  # noqa: E402
 from backend.request_id import RequestIDMiddleware  # noqa: E402
 
 app.include_router(_gateway_router)
+app.include_router(_browser_target_router)
+app.include_router(_c3_commands_router)
 app.include_router(_ledger_router)
 
 # CORS - only needed during local development (Vite on :5173, FastAPI on :8000)
@@ -490,12 +496,13 @@ def _process_next_fletcher_job() -> bool:
         return False
     qid = job["queue_item_id"]
     job_input = job.get("input") or {}
-    queue_log_path = _fletcher_queue_log_path(qid)
-    start_line = f"Fletcher queue item {qid} started at {datetime.now(UTC).isoformat()}"
-    print(start_line, flush=True)
-    _write_fletcher_queue_log(queue_log_path, start_line)
-    set_fletcher_job_log_path(qid, str(queue_log_path))
+    queue_log_path: Path | None = None
     try:
+        queue_log_path = _fletcher_queue_log_path(qid)
+        start_line = f"Fletcher queue item {qid} started at {datetime.now(UTC).isoformat()}"
+        print(start_line, flush=True)
+        _write_fletcher_queue_log(queue_log_path, start_line)
+        set_fletcher_job_log_path(qid, str(queue_log_path))
         options = job_input.get("options") or {}
         job_id = job_input.get("job_id")
         progress_tracker = _FletcherProgressTracker(is_option_a=job_id is not None)
@@ -638,13 +645,24 @@ def _process_next_fletcher_job() -> bool:
             review_id=review_id,
         )
     except Exception as exc:
-        _write_fletcher_queue_log(
-            queue_log_path,
-            f"Fletcher queue item {qid} failed before pipeline log was available:\n{exc}",
-            append=True,
+        error_text = (
+            f"Fletcher queue item {qid} failed before pipeline log was available:\n"
+            f"{traceback.format_exc()}"
         )
+        print(error_text, flush=True)
+        if queue_log_path is None:
+            try:
+                queue_log_path = _fletcher_queue_log_path(qid)
+            except Exception:
+                queue_log_path = None
+        if queue_log_path is not None:
+            _write_fletcher_queue_log(queue_log_path, error_text, append=True)
         finish_fletcher_job(
-            qid, status="failed", result={}, error=str(exc), log_path=str(queue_log_path)
+            qid,
+            status="failed",
+            result={},
+            error=str(exc),
+            log_path=str(queue_log_path) if queue_log_path is not None else None,
         )
     return True
 
@@ -655,6 +673,10 @@ def _fletcher_worker_loop() -> None:
             if not _process_next_fletcher_job():
                 time.sleep(2)
         except Exception:
+            print(
+                f"Fletcher queue worker loop error:\n{traceback.format_exc()}",
+                flush=True,
+            )
             time.sleep(5)
 
 
@@ -3527,6 +3549,14 @@ async def api_fletcher_jobs_enqueue(request: Request, _auth: str = Depends(requi
         raise HTTPException(status_code=404, detail=f"Job {job_id} not found")
     if not description and job_context:
         description = str(job_context.get("description") or "")
+    if job_id is not None and not description.strip():
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Job {job_id} has no job description. "
+                "Enrich or edit the job before queueing an Option A resume run."
+            ),
+        )
     if not description and job_id is None:
         raise HTTPException(status_code=400, detail="description or job_id is required")
     title = str(payload.get("title") or "").strip()
@@ -3683,6 +3713,25 @@ def api_fletcher_job_cancel(queue_item_id: str, _auth: str = Depends(require_aut
         return JSONResponse(cancel_fletcher_job(queue_item_id))
     except KeyError:
         raise HTTPException(status_code=404, detail="Fletcher job not found")
+
+
+@app.post("/api/fletcher/tailor/jobs/bulk-cancel")
+def api_fletcher_jobs_bulk_cancel(payload: dict = Body(...), _auth: str = Depends(require_auth)):
+    from fletcher.db import cancel_fletcher_jobs
+
+    queue_item_ids = payload.get("queue_item_ids") or []
+    if not isinstance(queue_item_ids, list) or not queue_item_ids:
+        raise HTTPException(status_code=400, detail="queue_item_ids is required")
+    if len(queue_item_ids) > 100:
+        raise HTTPException(status_code=400, detail="Bulk cancel is limited to 100 jobs")
+    cleaned = [str(queue_item_id) for queue_item_id in queue_item_ids if str(queue_item_id).strip()]
+    if not cleaned:
+        raise HTTPException(status_code=400, detail="queue_item_ids is required")
+    try:
+        jobs = cancel_fletcher_jobs(cleaned, reason="Cancelled by operator from Fletcher queue.")
+        return JSONResponse({"status": "ok", "cancelled": len(jobs), "jobs": jobs})
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=f"Fletcher job not found: {exc}")
 
 
 @app.delete("/api/fletcher/tailor/jobs/{queue_item_id}")
@@ -3956,33 +4005,64 @@ def api_linkedin_accounts_upsert(payload: dict = Body(...), _auth: str = Depends
     if not username:
         raise HTTPException(status_code=400, detail="username is required.")
     display_name = str(payload.get("display_name") or "").strip() or None
+    password = str(payload.get("password") or "")
+    password_encrypted = encrypt_secret(password) if password else None
     active = bool(payload.get("active", True))
     auth_state = str(payload.get("auth_state") or "unknown").strip() or "unknown"
     account_id = payload.get("id")
     conn = get_connection()
     try:
         if account_id:
-            conn.execute(
-                """
-                UPDATE linkedin_accounts
-                SET username = ?, display_name = ?, active = ?, auth_state = ?, updated_at = CURRENT_TIMESTAMP
-                WHERE id = ?
-                """,
-                (username, display_name, active, auth_state, int(account_id)),
-            )
+            if password_encrypted:
+                conn.execute(
+                    """
+                    UPDATE linkedin_accounts
+                    SET username = ?, password_encrypted = ?, display_name = ?, active = ?,
+                        auth_state = ?, updated_at = CURRENT_TIMESTAMP
+                    WHERE id = ?
+                    """,
+                    (username, password_encrypted, display_name, active, auth_state, int(account_id)),
+                )
+            else:
+                conn.execute(
+                    """
+                    UPDATE linkedin_accounts
+                    SET username = ?, display_name = ?, active = ?, auth_state = ?,
+                        updated_at = CURRENT_TIMESTAMP
+                    WHERE id = ?
+                    """,
+                    (username, display_name, active, auth_state, int(account_id)),
+                )
         else:
-            conn.execute(
-                """
-                INSERT INTO linkedin_accounts (username, display_name, active, auth_state, updated_at)
-                VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
-                ON CONFLICT(username) DO UPDATE SET
-                    display_name = excluded.display_name,
-                    active = excluded.active,
-                    auth_state = excluded.auth_state,
-                    updated_at = CURRENT_TIMESTAMP
-                """,
-                (username, display_name, active, auth_state),
-            )
+            if password_encrypted:
+                conn.execute(
+                    """
+                    INSERT INTO linkedin_accounts (
+                        username, password_encrypted, display_name, active, auth_state, updated_at
+                    )
+                    VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+                    ON CONFLICT(username) DO UPDATE SET
+                        password_encrypted = excluded.password_encrypted,
+                        display_name = excluded.display_name,
+                        active = excluded.active,
+                        auth_state = excluded.auth_state,
+                        updated_at = CURRENT_TIMESTAMP
+                    """,
+                    (username, password_encrypted, display_name, active, auth_state),
+                )
+            else:
+                conn.execute(
+                    """
+                    INSERT INTO linkedin_accounts (username, display_name, active, auth_state, updated_at)
+                    VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
+                    ON CONFLICT(username) DO UPDATE SET
+                        display_name = excluded.display_name,
+                        active = excluded.active,
+                        auth_state = excluded.auth_state,
+                        updated_at = CURRENT_TIMESTAMP
+                    """,
+                    (username, display_name, active, auth_state),
+                )
         conn.commit()
         row = conn.execute(
             """

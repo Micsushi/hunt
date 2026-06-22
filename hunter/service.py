@@ -60,6 +60,7 @@ class ConfigPatchRequest(BaseModel):
     run_interval_seconds: int | None = None
     enrich_after_scrape: bool | None = None
     enrichment_batch_limit: int | None = None
+    linkedin_fetch_description: bool | None = None
     enrichment_timeout_ms: int | None = None
     enrichment_max_attempts: int | None = None
     enrichment_alert_failure_rate_percent: int | None = None
@@ -165,6 +166,7 @@ def get_config():
         ENRICHMENT_MAX_ATTEMPTS,
         ENRICHMENT_TIMEOUT_MS,
         HOURS_OLD,
+        LINKEDIN_FETCH_DESCRIPTION,
         LOCATIONS,
         MAX_WORKERS,
         RESULTS_WANTED,
@@ -189,6 +191,7 @@ def get_config():
         "hours_old": HOURS_OLD,
         "run_interval_seconds": RUN_INTERVAL_SECONDS,
         "enrich_after_scrape": ENRICH_AFTER_SCRAPE,
+        "linkedin_fetch_description": LINKEDIN_FETCH_DESCRIPTION,
         "enrichment_batch_limit": ENRICHMENT_BATCH_LIMIT,
         "enrichment_timeout_ms": ENRICHMENT_TIMEOUT_MS,
         "enrichment_max_attempts": ENRICHMENT_MAX_ATTEMPTS,

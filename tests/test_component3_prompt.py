@@ -1027,6 +1027,37 @@ def test_page_walk_transient_dismissal_can_preserve_fill_progress():
     assert "page_walk.advance_observed" in page_walk
 
 
+def test_failure_toast_is_sticky_closeable_and_hides_progress():
+    content = _load_script(REPO_ROOT / "executioner/src/content/bootstrap.js")
+    background = _load_script(REPO_ROOT / "executioner/src/background/index.js")
+    live_smoke = _load_script(REPO_ROOT / "scripts/c3_workday_live_smoke.js")
+    cdp_lib = _load_script(REPO_ROOT / "scripts/lib/c3_cdp.js")
+
+    toast_fn = content[
+        content.index("function showExtensionToast") : content.index("function showPrompt")
+    ]
+    failure_handler = content[
+        content.index('message?.type === "hunt.apply.show_failure_toast"') : content.index(
+            'message?.type === "hunt.apply.show_fill_progress"'
+        )
+    ]
+
+    assert "function showFailureToast" in toast_fn
+    assert "hideFillProgress();" in toast_fn
+    assert "sticky ? \"ui.failure_toast.show\" : \"ui.toast.show\"" in toast_fn
+    assert "setAttribute(\"aria-label\", \"Close Hunt Apply notification\")" in toast_fn
+    assert "ui.toast.dismiss" in toast_fn
+    assert "if (!sticky)" in toast_fn
+    assert "showFailureToast(message.message || \"Hunt Apply failed.\"" in failure_handler
+    assert "async function showPageFailureToast" in background
+    assert "ui.failure_toast.requested" in background
+    assert "async function reportRunnerFailure" in live_smoke
+    assert "await hideRunnerFillProgress(optionsClient, applyUrl)" in live_smoke
+    assert "await showRunnerFailureToast(optionsClient, applyUrl, failure)" in live_smoke
+    assert '"job_fill.clear_before_fill.clearCurrentPage"' in live_smoke
+    assert "error.cdpLabel = label || method" in cdp_lib
+
+
 def test_fill_startup_cleanup_preserves_prompt_progress():
     background = _load_script(REPO_ROOT / "executioner/src/background/index.js")
     fill_handler = background[

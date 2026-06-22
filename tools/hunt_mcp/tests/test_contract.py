@@ -32,8 +32,22 @@ def test_all_tools_are_listed() -> None:
         "hunt_ledger_get_active",
         "hunt_ledger_get_agent_log",
         "hunt_ledger_get_session_log",
+        "hunt_ledger_get_command_timeline",
+        "hunt_ledger_find_recent_failures",
         "hunt_c3_write_probe_file",
+        "hunt_c3_register_browser_target",
+        "hunt_c3_get_browser_target",
+        "hunt_c3_list_browser_targets",
+        "hunt_c3_unregister_browser_target",
         "hunt_c3_run_command",
+        "hunt_c3_command_catalog",
+        "hunt_c3_inspect_fields",
+        "hunt_c3_inspect_validation",
+        "hunt_c3_snapshot_page",
+        "hunt_c3_get_progress",
+        "hunt_c3_fill_page",
+        "hunt_c3_page_walk",
+        "hunt_c3_click_next_after_fill",
     }
 
 
@@ -86,6 +100,13 @@ def test_all_tools_are_listed() -> None:
             "/api/ledger/sessions/session-abc",
         ),
         (
+            "hunt_ledger_get_command_timeline",
+            {"command_id": "cmd-abc"},
+            "GET",
+            "/api/ledger/commands/cmd-abc/timeline",
+        ),
+        ("hunt_ledger_find_recent_failures", {"limit": 5}, "GET", "/api/ledger/failures/recent"),
+        (
             "hunt_c3_write_probe_file",
             {
                 "component": "c3",
@@ -97,6 +118,32 @@ def test_all_tools_are_listed() -> None:
             "POST",
             "/api/ledger/probes",
         ),
+        (
+            "hunt_c3_register_browser_target",
+            {
+                "agent_id": "agent-codex-a1b2",
+                "lane_id": "lane-9401",
+                "session_id": "session-abc",
+                "extension_id": "ext-abc",
+                "cdp_port": 9222,
+            },
+            "POST",
+            "/api/c3/browser-targets/register",
+        ),
+        (
+            "hunt_c3_get_browser_target",
+            {"session_id": "session-abc"},
+            "GET",
+            "/api/c3/browser-targets/session-abc",
+        ),
+        ("hunt_c3_list_browser_targets", {}, "GET", "/api/c3/browser-targets"),
+        (
+            "hunt_c3_unregister_browser_target",
+            {"session_id": "session-abc", "agent_id": "agent-codex-a1b2"},
+            "DELETE",
+            "/api/c3/browser-targets/session-abc",
+        ),
+        ("hunt_c3_command_catalog", {}, "GET", "/api/c3/commands/catalog"),
     ],
 )
 def test_tool_calls_expected_backend_route(
@@ -166,13 +213,20 @@ def test_probe_tool_defaults_to_untrusted_and_delegates_storage_to_backend() -> 
     assert seen[0].url.path == "/api/ledger/probes"
 
 
-def test_c3_run_command_records_immutable_request_and_missing_bridge_receipt() -> None:
+def test_c3_run_command_calls_backend_execution_endpoint_and_returns_receipt() -> None:
     seen: list[httpx.Request] = []
-    client = _client_with_transport(
-        {
+    backend_receipt = {
+        "command_id": "cmd-123",
+        "command_name": "c3.inspect_fields",
+        "status": "executed",
+        "receipt_id": "receipt-123",
+        "ledger_event": {
             "event_id": "evt-command",
             "writes": [{"path": "ledger/c3/sessions/session-abc/session.jsonl"}],
         },
+    }
+    client = _client_with_transport(
+        backend_receipt,
         seen,
     )
 
@@ -192,32 +246,80 @@ def test_c3_run_command_records_immutable_request_and_missing_bridge_receipt() -
         }
     )
 
-    assert response["status"] == "recorded_not_executed"
-    assert response["bridge_status"] == "missing_backend_browser_control_bridge"
-    assert response["ledger_event"]["event_id"] == "evt-command"
-    assert seen[0].url.path == "/api/ledger/events"
+    assert response == backend_receipt
+    assert seen[0].url.path == "/api/c3/commands/run"
     request_body = json.loads(seen[0].content)
     assert request_body == {
-        "component": "c3",
-        "event_type": "command.requested",
-        "actor": {"type": "agent", "id": "agent-codex-a1b2", "surface": "mcp"},
+        "command_id": "cmd-123",
+        "command_name": "c3.inspect_fields",
         "agent_id": "agent-codex-a1b2",
         "lane_id": "lane-9401",
         "session_id": "session-abc",
         "lease_id": "lease-123",
-        "command_id": "cmd-123",
         "trace_id": "trace-abc",
-        "payload": {
-            "command_name": "c3.inspect_fields",
-            "command_payload": {"scope": "visible_controls"},
-            "reason": "verify current form state",
-            "requested_via": "hunt_mcp.hunt_c3_run_command",
-            "bridge_status": "missing_backend_browser_control_bridge",
-            "execution_status": "not_executed",
-            "metadata": {"batch_id": "batch-2026-06-11"},
-            "probe_budget_id": "budget-1",
+        "reason": "verify current form state",
+        "command_payload": {"scope": "visible_controls"},
+        "target": {
+            "browser_kind": "p_chrome",
+            "debug_port": None,
+            "extension_id": None,
+            "options_url": "",
+            "tab_id": None,
+            "url": "",
         },
+        "probe_budget_id": "budget-1",
+        "metadata": {"batch_id": "batch-2026-06-11"},
     }
+
+
+@pytest.mark.parametrize(
+    ("tool_name", "command_name"),
+    [
+        ("hunt_c3_inspect_fields", "c3.inspect_fields"),
+        ("hunt_c3_inspect_validation", "c3.inspect_validation"),
+        ("hunt_c3_snapshot_page", "c3.snapshot_page"),
+        ("hunt_c3_get_progress", "c3.get_progress"),
+        ("hunt_c3_fill_page", "c3.fill_page"),
+        ("hunt_c3_page_walk", "c3.page_walk"),
+        ("hunt_c3_click_next_after_fill", "c3.click_next_after_fill"),
+    ],
+)
+def test_typed_c3_tools_call_backend_command_endpoint(tool_name: str, command_name: str) -> None:
+    seen: list[httpx.Request] = []
+    client = _client_with_transport({"ok": True}, seen)
+
+    response = handle_request(
+        {
+            "jsonrpc": "2.0",
+            "id": 14,
+            "method": "tools/call",
+            "params": {
+                "name": tool_name,
+                "arguments": {
+                    "command_id": "cmd-typed",
+                    "agent_id": "agent-codex-a1b2",
+                    "lane_id": "lane-9401",
+                    "session_id": "session-abc",
+                    "lease_id": "lease-123",
+                    "trace_id": "trace-typed",
+                    "target": {
+                        "browser_kind": "p_chrome",
+                        "debug_port": 9222,
+                        "extension_id": "ext-abc",
+                        "url": "https://jobs.example/apply",
+                    },
+                    "command_payload": {"scope": "visible_controls"},
+                },
+            },
+        },
+        client,
+    )
+
+    assert json.loads(response["result"]["content"][0]["text"]) == {"ok": True}
+    request_body = json.loads(seen[0].content)
+    assert seen[0].url.path == "/api/c3/commands/run"
+    assert request_body["command_name"] == command_name
+    assert request_body["reason"]
 
 
 def test_c3_run_command_rejects_non_object_command_payload() -> None:
@@ -245,6 +347,50 @@ def test_c3_run_command_rejects_non_object_command_payload() -> None:
     )
 
     assert response["error"]["message"] == "command_payload must be an object"
+
+
+def test_c3_run_command_preserves_backend_not_implemented_error() -> None:
+    seen: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        return httpx.Response(
+            501,
+            json={"detail": {"code": "not_implemented", "endpoint": "/api/c3/commands/run"}},
+            request=request,
+        )
+
+    client = HuntLedgerClient(
+        HuntBackendConfig(backend_url="http://backend.test"),
+        transport=httpx.MockTransport(handler),
+    )
+
+    response = handle_request(
+        {
+            "jsonrpc": "2.0",
+            "id": 11,
+            "method": "tools/call",
+            "params": {
+                "name": "hunt_c3_run_command",
+                "arguments": {
+                    "command_id": "cmd-123",
+                    "command_name": "c3.fill_page",
+                    "agent_id": "agent-codex-a1b2",
+                    "session_id": "session-abc",
+                    "lease_id": "lease-123",
+                    "reason": "fill lane",
+                    "command_payload": {},
+                },
+            },
+        },
+        client,
+    )
+
+    assert seen[0].url.path == "/api/c3/commands/run"
+    assert response["error"]["data"] == {
+        "status_code": 501,
+        "reason": {"code": "not_implemented", "endpoint": "/api/c3/commands/run"},
+    }
 
 
 def test_backend_error_preserves_lease_block_reason() -> None:

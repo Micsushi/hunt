@@ -38,6 +38,7 @@ AGENTS.md
 .claude/
 .opencode/
 .codex/
+.codex_tmp/
 .agents/
 docs/agents/
 
