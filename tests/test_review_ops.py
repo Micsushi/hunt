@@ -345,12 +345,18 @@ class ReviewOpsApiTests(unittest.TestCase):
     def test_favicon_route_is_not_served_by_spa_shell(self):
         from backend import app as control_plane_api
 
+        expected_routes = {
+            "/favicon.svg": "frontend_favicon",
+            "/favicon-64.png": "frontend_favicon_png",
+        }
+        seen = set()
         for route in control_plane_api.app.routes:
-            if getattr(route, "path", "") == "/favicon.svg":
+            path = getattr(route, "path", "")
+            if path in expected_routes:
                 endpoint_name = getattr(getattr(route, "endpoint", None), "__name__", "")
-                self.assertEqual(endpoint_name, "frontend_favicon")
-                return
-        self.fail("Missing explicit /favicon.svg route")
+                self.assertEqual(endpoint_name, expected_routes[path])
+                seen.add(path)
+        self.assertEqual(seen, set(expected_routes))
 
     def test_sensitive_read_endpoints_require_session_auth_parameter(self):
         from backend import app as control_plane_api

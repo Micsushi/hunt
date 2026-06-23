@@ -271,6 +271,14 @@ def frontend_favicon():
     raise HTTPException(status_code=404, detail="Favicon not found.")
 
 
+@app.get("/favicon-64.png", include_in_schema=False)
+def frontend_favicon_png():
+    favicon = FRONTEND_DIST / "favicon-64.png"
+    if favicon.exists():
+        return FileResponse(favicon, media_type="image/png")
+    raise HTTPException(status_code=404, detail="Favicon not found.")
+
+
 _fletcher_worker_lock = threading.Lock()
 _fletcher_worker_started = False
 
