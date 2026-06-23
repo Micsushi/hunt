@@ -34,12 +34,21 @@
 }
 
 .brand {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
   font-weight: 800;
   font-size: 1rem;
   color: var(--accent);
   padding: 0 12px 0 4px;
-  letter-spacing: -0.02em;
   user-select: none;
+}
+
+.brandIcon {
+  width: 20px;
+  height: 20px;
+  display: block;
+  flex: 0 0 auto;
 }
 
 .navLink {

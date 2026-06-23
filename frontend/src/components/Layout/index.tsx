@@ -83,7 +83,10 @@ export function Layout({ children, username }: Props) {
       <div className={styles.shell}>
         <nav className={styles.nav} aria-label="Main navigation">
           <div className={styles.navGroup}>
-            <span className={styles.brand}>Hunt</span>
+            <span className={styles.brand}>
+              <img className={styles.brandIcon} src="/favicon.svg" alt="" aria-hidden="true" />
+              Hunt
+            </span>
             {NAV_ITEMS.map((item) => (
               <NavLink
                 key={item.to}
