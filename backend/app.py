@@ -271,6 +271,14 @@ def frontend_favicon():
     raise HTTPException(status_code=404, detail="Favicon not found.")
 
 
+@app.get("/hunt-icon.svg", include_in_schema=False)
+def frontend_hunt_icon():
+    favicon = FRONTEND_DIST / "hunt-icon.svg"
+    if favicon.exists():
+        return FileResponse(favicon, media_type="image/svg+xml")
+    raise HTTPException(status_code=404, detail="Favicon not found.")
+
+
 @app.get("/favicon.ico", include_in_schema=False)
 def frontend_favicon_ico():
     favicon = FRONTEND_DIST / "favicon.ico"
