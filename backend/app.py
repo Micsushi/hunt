@@ -263,6 +263,14 @@ if (FRONTEND_DIST / "assets").exists():
     app.mount("/assets", StaticFiles(directory=FRONTEND_DIST / "assets"), name="spa-assets")
 
 
+@app.get("/favicon.svg", include_in_schema=False)
+def frontend_favicon():
+    favicon = FRONTEND_DIST / "favicon.svg"
+    if favicon.exists():
+        return FileResponse(favicon, media_type="image/svg+xml")
+    raise HTTPException(status_code=404, detail="Favicon not found.")
+
+
 _fletcher_worker_lock = threading.Lock()
 _fletcher_worker_started = False
 

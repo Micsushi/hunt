@@ -342,6 +342,16 @@ class ReviewOpsApiTests(unittest.TestCase):
                 f"{route.path} is still handled by legacy SSR endpoint {endpoint_name}",
             )
 
+    def test_favicon_route_is_not_served_by_spa_shell(self):
+        from backend import app as control_plane_api
+
+        for route in control_plane_api.app.routes:
+            if getattr(route, "path", "") == "/favicon.svg":
+                endpoint_name = getattr(getattr(route, "endpoint", None), "__name__", "")
+                self.assertEqual(endpoint_name, "frontend_favicon")
+                return
+        self.fail("Missing explicit /favicon.svg route")
+
     def test_sensitive_read_endpoints_require_session_auth_parameter(self):
         from backend import app as control_plane_api
 
