@@ -27,6 +27,7 @@ from hunter.config import (
 from hunter.db import (
     ENRICHMENT_SOURCE_PRIORITY,
     count_ready_jobs_for_enrichment,
+    count_ready_linkedin_jobs_for_hiring_cafe_fallback,
     get_linkedin_auth_state,
     get_runtime_state,
 )
@@ -49,6 +50,12 @@ def _get_linkedin_process_batch() -> Callable[..., dict[str, Any]]:
 
 def _get_indeed_process_batch() -> Callable[..., dict[str, Any]]:
     from hunter.enrich_indeed import process_batch
+
+    return process_batch
+
+
+def _get_hiring_cafe_process_batch() -> Callable[..., dict[str, Any]]:
+    from hunter.enrich_hiring_cafe import process_batch
 
     return process_batch
 
@@ -89,6 +96,10 @@ def _run_indeed_batch(
         ui_verify_blocked=ui_verify_blocked,
         return_summary=True,
     )
+
+
+def _run_hiring_cafe_linkedin_fallback(*, limit: int) -> dict[str, Any]:
+    return _get_hiring_cafe_process_batch()(limit=limit, return_summary=True)
 
 
 # source id -> requires LinkedIn session before running this source's batch
@@ -143,6 +154,25 @@ def _run_batch_for_source(
     raise RuntimeError(
         f"Unhandled enrichment source {source!r}: add a branch in _run_batch_for_source"
     )
+
+
+def _merge_source_summary(
+    aggregate: dict[str, Any],
+    *,
+    source_key: str,
+    summary: dict[str, Any],
+) -> None:
+    aggregate["by_source"][source_key] = summary
+    aggregate["attempted"] += summary["attempted"]
+    aggregate["ui_verified"] += summary["ui_verified"]
+    aggregate["succeeded"] += summary["succeeded"]
+    aggregate["failed"] += summary["failed"]
+    aggregate["actionable_failed"] += summary["actionable_failed"]
+    aggregate["total_elapsed_seconds"] += summary["total_elapsed_seconds"]
+    for error_code, count in summary["failure_breakdown"].items():
+        aggregate["failure_breakdown"][error_code] = (
+            aggregate["failure_breakdown"].get(error_code, 0) + count
+        )
 
 
 def ensure_linkedin_session(
@@ -315,53 +345,80 @@ def run_enrichment_round(
 
         requires_li = _REQUIRES_LINKEDIN_SESSION[source]
         ready_count = count_ready_jobs_for_enrichment(sources=(source,))
+        use_hiring_cafe_fallback = False
+        if source == "linkedin" and ready_count <= 0:
+            linkedin_auth = get_linkedin_auth_state()
+            if not linkedin_auth.get("available"):
+                ready_count = count_ready_linkedin_jobs_for_hiring_cafe_fallback()
+                use_hiring_cafe_fallback = ready_count > 0
         if ready_count <= 0:
             continue
 
         source_limit = min(remaining, ready_count)
-        print(f"[enrich] Dispatching up to {source_limit} {source} row(s).")
+        if use_hiring_cafe_fallback:
+            print(
+                f"[enrich] Dispatching up to {source_limit} LinkedIn row(s) through HiringCafe fallback."
+            )
+        else:
+            print(f"[enrich] Dispatching up to {source_limit} {source} row(s).")
 
         if requires_li:
-            if not ensure_linkedin_session(
+            if use_hiring_cafe_fallback:
+                summary = _run_hiring_cafe_linkedin_fallback(limit=source_limit)
+                source_key = "linkedin_hiring_cafe"
+            elif not ensure_linkedin_session(
                 storage_state_path=storage_state_path,
                 headless=headless,
                 slow_mo=slow_mo,
                 timeout_ms=timeout_ms,
                 browser_channel=browser_channel,
             ):
-                print(
-                    "[enrich] Skipping LinkedIn enrichment this run: auth unavailable or needs refresh. "
-                    "Other sources still run."
+                fallback_count = count_ready_linkedin_jobs_for_hiring_cafe_fallback()
+                if fallback_count > 0:
+                    fallback_limit = min(remaining, fallback_count)
+                    print(
+                        "[enrich] LinkedIn auth unavailable; "
+                        f"using HiringCafe fallback for up to {fallback_limit} row(s)."
+                    )
+                    summary = _run_hiring_cafe_linkedin_fallback(limit=fallback_limit)
+                    source_key = "linkedin_hiring_cafe"
+                else:
+                    print(
+                        "[enrich] Skipping LinkedIn enrichment this run: auth unavailable or needs refresh. "
+                        "Other sources still run."
+                    )
+                    continue
+            else:
+                summary = _run_batch_for_source(
+                    source,
+                    source_limit=source_limit,
+                    storage_state_path=storage_state_path,
+                    headless=headless,
+                    slow_mo=slow_mo,
+                    timeout_ms=timeout_ms,
+                    browser_channel=browser_channel,
+                    ui_verify_blocked=ui_verify_blocked,
                 )
-                continue
-
-        summary = _run_batch_for_source(
-            source,
-            source_limit=source_limit,
-            storage_state_path=storage_state_path,
-            headless=headless,
-            slow_mo=slow_mo,
-            timeout_ms=timeout_ms,
-            browser_channel=browser_channel,
-            ui_verify_blocked=ui_verify_blocked,
-        )
-
-        aggregate["by_source"][source] = summary
-        aggregate["attempted"] += summary["attempted"]
-        aggregate["ui_verified"] += summary["ui_verified"]
-        aggregate["succeeded"] += summary["succeeded"]
-        aggregate["failed"] += summary["failed"]
-        aggregate["actionable_failed"] += summary["actionable_failed"]
-        aggregate["total_elapsed_seconds"] += summary["total_elapsed_seconds"]
-        for error_code, count in summary["failure_breakdown"].items():
-            aggregate["failure_breakdown"][error_code] = (
-                aggregate["failure_breakdown"].get(error_code, 0) + count
+                source_key = source
+        else:
+            summary = _run_batch_for_source(
+                source,
+                source_limit=source_limit,
+                storage_state_path=storage_state_path,
+                headless=headless,
+                slow_mo=slow_mo,
+                timeout_ms=timeout_ms,
+                browser_channel=browser_channel,
+                ui_verify_blocked=ui_verify_blocked,
             )
+            source_key = source
+
+        _merge_source_summary(aggregate, source_key=source_key, summary=summary)
 
         remaining -= summary["attempted"]
         if summary["stop_error_code"] and not aggregate["stop_error_code"]:
             aggregate["stop_error_code"] = summary["stop_error_code"]
-            if source == "linkedin" and summary["stop_error_code"] == "rate_limited":
+            if source_key == "linkedin" and summary["stop_error_code"] == "rate_limited":
                 blocked_index = get_active_account_index()
                 block_account_for_days(blocked_index, days=RATE_LIMIT_BLOCK_DAYS)
                 C1Logger(discord=True).event(

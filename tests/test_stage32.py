@@ -448,6 +448,18 @@ class Stage32Tests(unittest.TestCase):
 
     def test_process_multi_source_batch_skips_linkedin_without_auth_but_runs_indeed(self):
         """Indeed must not be blocked when LinkedIn auth is missing."""
+        fake_hiring_cafe_summary = {
+            "exit_code": 0,
+            "attempted": 1,
+            "ui_verified": 0,
+            "succeeded": 1,
+            "failed": 0,
+            "actionable_failed": 0,
+            "failure_breakdown": {},
+            "total_elapsed_seconds": 1.0,
+            "average_seconds_per_job": 1.0,
+            "stop_error_code": None,
+        }
         fake_indeed_summary = {
             "exit_code": 0,
             "attempted": 2,
@@ -474,17 +486,29 @@ class Stage32Tests(unittest.TestCase):
             ),
             patch.object(enrichment_dispatch, "_run_linkedin_batch") as mock_linkedin_run,
             patch.object(
+                enrichment_dispatch,
+                "_run_hiring_cafe_linkedin_fallback",
+                return_value=fake_hiring_cafe_summary,
+            ) as mock_hiring_cafe_run,
+            patch.object(
                 enrichment_dispatch, "_run_indeed_batch", return_value=fake_indeed_summary
             ) as mock_indeed_run,
             patch.object(enrichment_dispatch, "count_ready_jobs_for_enrichment") as mock_count,
+            patch.object(
+                enrichment_dispatch,
+                "count_ready_linkedin_jobs_for_hiring_cafe_fallback",
+                return_value=1,
+            ),
         ):
-            mock_count.side_effect = lambda sources=None: 2
+            mock_count.side_effect = lambda sources=None: 0 if sources == ("linkedin",) else 2
             summary = enrich_jobs.process_multi_source_batch(limit=3, return_summary=True)
 
         mock_linkedin_run.assert_not_called()
+        mock_hiring_cafe_run.assert_called()
         mock_indeed_run.assert_called()
-        self.assertEqual(summary["attempted"], 2)
+        self.assertEqual(summary["attempted"], 3)
         self.assertNotIn("linkedin", summary["by_source"])
+        self.assertIn("linkedin_hiring_cafe", summary["by_source"])
         self.assertIn("indeed", summary["by_source"])
         self.assertEqual(summary["exit_code"], 0)
 

@@ -740,6 +740,46 @@ def count_ready_linkedin_jobs_for_enrichment():
     return count_ready_jobs_for_enrichment(sources=("linkedin",))
 
 
+def _hiring_cafe_fallback_needed_sql():
+    return """
+      AND source = 'linkedin'
+      AND (
+            description IS NULL
+         OR trim(description) = ''
+         OR apply_url IS NULL
+         OR trim(apply_url) = ''
+         OR coalesce(apply_type, 'unknown') = 'unknown'
+      )
+    """
+
+
+def count_ready_linkedin_jobs_for_hiring_cafe_fallback():
+    conn = get_connection()
+    try:
+        cursor = conn.cursor()
+        row = cursor.execute(
+            f"""
+            SELECT COUNT(*)
+            FROM jobs
+            WHERE 1=1
+              {_hiring_cafe_fallback_needed_sql()}
+              AND (
+                    enrichment_status = 'pending'
+                 OR (
+                        enrichment_status = 'failed'
+                    AND next_enrichment_retry_at IS NOT NULL
+                    AND next_enrichment_retry_at <= CURRENT_TIMESTAMP
+                    AND coalesce(enrichment_attempts, 0) < ?
+                 )
+              )
+            """,
+            (ENRICHMENT_MAX_ATTEMPTS,),
+        ).fetchone()
+        return int(row[0] if row else 0)
+    finally:
+        conn.close()
+
+
 def count_stale_processing_jobs(*, sources=None):
     conn = get_connection()
     try:
@@ -909,6 +949,137 @@ def claim_job_for_enrichment(job_id=None, force=False, *, sources=None):
 
 def claim_linkedin_job_for_enrichment(job_id=None, force=False):
     return claim_job_for_enrichment(job_id=job_id, force=force, sources=("linkedin",))
+
+
+def claim_linkedin_job_for_hiring_cafe_fallback(job_id=None, force=False):
+    conn = get_connection()
+    try:
+        cursor = conn.cursor()
+        cursor.execute("BEGIN IMMEDIATE")
+
+        if job_id is None:
+            cursor.execute(
+                f"""
+                SELECT * FROM jobs
+                WHERE 1=1
+                  {_hiring_cafe_fallback_needed_sql()}
+                  AND (
+                        enrichment_status = 'pending'
+                     OR (
+                            enrichment_status = 'failed'
+                        AND next_enrichment_retry_at IS NOT NULL
+                        AND next_enrichment_retry_at <= CURRENT_TIMESTAMP
+                        AND coalesce(enrichment_attempts, 0) < ?
+                     )
+                  )
+                ORDER BY CASE enrichment_status WHEN 'pending' THEN 0 ELSE 1 END,
+                         CASE WHEN enrichment_status = 'pending' THEN date_scraped END DESC,
+                         CASE WHEN enrichment_status != 'pending' THEN next_enrichment_retry_at END ASC,
+                         date_scraped DESC,
+                         id DESC
+                LIMIT 1
+                """,
+                (ENRICHMENT_MAX_ATTEMPTS,),
+            )
+        elif force:
+            cursor.execute(
+                """
+                SELECT * FROM jobs
+                WHERE id = ?
+                  AND source = 'linkedin'
+                """,
+                (job_id,),
+            )
+        else:
+            cursor.execute(
+                f"""
+                SELECT * FROM jobs
+                WHERE id = ?
+                  {_hiring_cafe_fallback_needed_sql()}
+                  AND (
+                        enrichment_status = 'pending'
+                     OR (
+                            enrichment_status = 'failed'
+                        AND next_enrichment_retry_at IS NOT NULL
+                        AND next_enrichment_retry_at <= CURRENT_TIMESTAMP
+                        AND coalesce(enrichment_attempts, 0) < ?
+                     )
+                  )
+                """,
+                (job_id, ENRICHMENT_MAX_ATTEMPTS),
+            )
+
+        row = cursor.fetchone()
+        if not row:
+            conn.rollback()
+            return None
+
+        cursor.execute(
+            (
+                """
+                UPDATE jobs
+                SET enrichment_status = 'processing',
+                    enrichment_attempts = coalesce(enrichment_attempts, 0) + 1,
+                    last_enrichment_error = NULL,
+                    last_enrichment_started_at = CURRENT_TIMESTAMP,
+                    next_enrichment_retry_at = NULL,
+                    last_artifact_dir = NULL,
+                    last_artifact_screenshot_path = NULL,
+                    last_artifact_html_path = NULL,
+                    last_artifact_text_path = NULL
+                WHERE id = ?
+                """
+                if force
+                else """
+                UPDATE jobs
+                SET enrichment_status = 'processing',
+                    enrichment_attempts = coalesce(enrichment_attempts, 0) + 1,
+                    last_enrichment_error = NULL,
+                    last_enrichment_started_at = CURRENT_TIMESTAMP,
+                    next_enrichment_retry_at = NULL,
+                    last_artifact_dir = NULL,
+                    last_artifact_screenshot_path = NULL,
+                    last_artifact_html_path = NULL,
+                    last_artifact_text_path = NULL
+                WHERE id = ?
+                  AND coalesce(enrichment_status, '') != 'processing'
+                """
+            ),
+            (row["id"],),
+        )
+
+        if cursor.rowcount != 1:
+            conn.rollback()
+            return None
+
+        original_row = dict(row)
+        cursor.execute("SELECT * FROM jobs WHERE id = ?", (row["id"],))
+        claimed_row = cursor.fetchone()
+        conn.commit()
+        if not claimed_row:
+            return None
+
+        claimed = dict(claimed_row)
+        claimed.update(
+            {
+                "_previous_enrichment_status": original_row.get("enrichment_status"),
+                "_previous_enrichment_attempts": original_row.get("enrichment_attempts"),
+                "_previous_last_enrichment_error": original_row.get("last_enrichment_error"),
+                "_previous_last_enrichment_started_at": original_row.get(
+                    "last_enrichment_started_at"
+                ),
+                "_previous_next_enrichment_retry_at": original_row.get("next_enrichment_retry_at"),
+                "_previous_last_artifact_dir": original_row.get("last_artifact_dir"),
+                "_previous_last_artifact_screenshot_path": original_row.get(
+                    "last_artifact_screenshot_path"
+                ),
+                "_previous_last_artifact_html_path": original_row.get("last_artifact_html_path"),
+                "_previous_last_artifact_text_path": original_row.get("last_artifact_text_path"),
+            }
+        )
+        return claimed
+    finally:
+        conn.close()
 
 
 def mark_job_enrichment_succeeded(
