@@ -4,6 +4,7 @@ import sys
 import tempfile
 import unittest
 from contextlib import contextmanager
+from datetime import timedelta
 from unittest.mock import patch
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -520,6 +521,22 @@ class Stage32Tests(unittest.TestCase):
                 enrichment_dispatch._REQUIRES_LINKEDIN_SESSION,
                 msg=f"Add {source!r} to enrichment_dispatch._REQUIRES_LINKEDIN_SESSION and _run_batch_for_source",
             )
+
+    def test_hiring_cafe_global_cooldown_suppresses_fallback_claims(self):
+        with self.with_temp_db() as path:
+            self.insert_job(
+                path,
+                source="linkedin",
+                job_url="https://www.linkedin.com/jobs/view/888",
+            )
+            cooldown_until = db.format_sqlite_timestamp(db.utc_now() + timedelta(hours=1))
+
+            db.set_hiring_cafe_cooldown_until(cooldown_until)
+            self.assertEqual(db.count_ready_linkedin_jobs_for_hiring_cafe_fallback(), 0)
+            self.assertIsNone(db.claim_linkedin_job_for_hiring_cafe_fallback())
+
+            db.clear_hiring_cafe_cooldown()
+            self.assertEqual(db.count_ready_linkedin_jobs_for_hiring_cafe_fallback(), 1)
 
     def test_verify_easy_apply_filter_checks_stage2_and_c4(self):
         with self.with_temp_db() as path:

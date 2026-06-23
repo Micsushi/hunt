@@ -1,6 +1,6 @@
 import os
 import sqlite3
-from datetime import timedelta
+from datetime import UTC, datetime, timedelta
 
 from hunter import config
 from hunter.config import (
@@ -154,6 +154,7 @@ LINKEDIN_AUTH_ERROR_KEY = "linkedin_auth_error"
 LINKEDIN_AUTH_STATE_OK = "ok"
 LINKEDIN_AUTH_STATE_EXPIRED = "expired"
 LINKEDIN_AUTH_STATE_UNKNOWN = "unknown"
+HIRING_CAFE_COOLDOWN_UNTIL_KEY = "hiring_cafe_cooldown_until"
 REVIEW_AUDIT_LOG_KEY = "review_audit_log"
 
 # Backwards compatible: tests and older scripts may patch `db.DB_PATH` directly.
@@ -754,6 +755,9 @@ def _hiring_cafe_fallback_needed_sql():
 
 
 def count_ready_linkedin_jobs_for_hiring_cafe_fallback():
+    if is_hiring_cafe_in_cooldown():
+        return 0
+
     conn = get_connection()
     try:
         cursor = conn.cursor()
@@ -952,6 +956,9 @@ def claim_linkedin_job_for_enrichment(job_id=None, force=False):
 
 
 def claim_linkedin_job_for_hiring_cafe_fallback(job_id=None, force=False):
+    if not force and is_hiring_cafe_in_cooldown():
+        return None
+
     conn = get_connection()
     try:
         cursor = conn.cursor()
@@ -1267,6 +1274,46 @@ def mark_linkedin_enrichment_failed(
         artifact_text_path=artifact_text_path,
         source="linkedin",
     )
+
+
+def get_hiring_cafe_cooldown_until():
+    state = get_runtime_state([HIRING_CAFE_COOLDOWN_UNTIL_KEY]).get(
+        HIRING_CAFE_COOLDOWN_UNTIL_KEY
+    )
+    return (state or {}).get("value")
+
+
+def set_hiring_cafe_cooldown_until(value):
+    conn = get_connection()
+    try:
+        cursor = conn.cursor()
+        _upsert_runtime_state(cursor, HIRING_CAFE_COOLDOWN_UNTIL_KEY, value)
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def clear_hiring_cafe_cooldown():
+    conn = get_connection()
+    try:
+        cursor = conn.cursor()
+        _delete_runtime_state(cursor, HIRING_CAFE_COOLDOWN_UNTIL_KEY)
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def is_hiring_cafe_in_cooldown(*, now=None):
+    value = get_hiring_cafe_cooldown_until()
+    if not value:
+        return False
+    try:
+        cooldown_until = datetime.strptime(value, "%Y-%m-%d %H:%M:%S").replace(tzinfo=UTC)
+    except ValueError:
+        return False
+    if now is None:
+        now = utc_now()
+    return now < cooldown_until
 
 
 def restore_job_enrichment_claim(claimed_job, *, source=None):

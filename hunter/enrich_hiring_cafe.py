@@ -16,6 +16,7 @@ from hunter.db import (  # noqa: E402
     get_job_by_id,
     mark_job_enrichment_failed,
     mark_job_enrichment_succeeded,
+    set_hiring_cafe_cooldown_until,
 )
 from hunter.enrichment_policy import (  # noqa: E402
     compute_retry_after,
@@ -299,6 +300,8 @@ def _process_claimed_job(claimed_job):
         error_code = error_message.split(":", 1)[0].strip()
         retry_after = compute_retry_after(error_code, claimed_job.get("enrichment_attempts"))
         next_retry_at = format_sqlite_timestamp(retry_after) if retry_after else None
+        if error_code == "rate_limited" and next_retry_at:
+            set_hiring_cafe_cooldown_until(next_retry_at)
         if is_retryable_error_code(error_code) and retry_after is None:
             _log_retry_exhausted(
                 claimed_job,
