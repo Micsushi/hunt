@@ -74,6 +74,9 @@ services:
       - ${HUNT_ARTIFACTS_STORAGE}:/app/data
       - ${HUNT_STATE_STORAGE}:/app/.state
 
+  ollama:
+    gpus: all
+
   fletcher:
     container_name: ${HUNT_FLETCHER_CONTAINER_NAME}
     restart: unless-stopped

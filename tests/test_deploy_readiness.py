@@ -376,6 +376,12 @@ def test_pipeline_compose_manages_ollama_for_c2_server_runs():
     assert "driver: nvidia" not in compose_text
 
 
+def test_server_compose_requests_gpu_for_ollama():
+    compose_text = Path("docker-compose.server.yml").read_text(encoding="utf-8")
+
+    assert "ollama:\n    gpus: all" in compose_text
+
+
 def test_server_compose_review_writes_resume_artifacts_to_writable_mount():
     compose_text = Path("docker-compose.server.yml").read_text(encoding="utf-8")
 
