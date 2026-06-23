@@ -1,4 +1,4 @@
-import { NavLink, useNavigate } from 'react-router-dom'
+import { Link, NavLink, useNavigate } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
 import { LoadingBar } from '@/components/LoadingBar'
 import { useUiStore } from '@/store/ui'
@@ -81,32 +81,38 @@ export function Layout({ children, username }: Props) {
     <>
       <LoadingBar />
       <div className={styles.shell}>
-        <nav className={styles.nav} aria-label="Main navigation">
-          <div className={styles.navGroup}>
-            <span className={styles.brand}>
+        <header className={styles.header}>
+          <Link className={styles.brand} to="/" aria-label="Hunt overview">
+            <span className={styles.brandIconFrame}>
               <img className={styles.brandIcon} src="/favicon.svg" alt="" aria-hidden="true" />
-              Hunt
             </span>
-            {NAV_ITEMS.map((item) => (
-              <NavLink
-                key={item.to}
-                to={item.to}
-                end={item.exact}
-                className={({ isActive }) => `${styles.navLink} ${isActive ? styles.active : ''}`}
-                title={item.tooltip}
-              >
-                {item.label}
-                {item.dotKey && <StatusDot state={dotForKey(item.dotKey)} />}
-              </NavLink>
-            ))}
-          </div>
-          <div className={styles.navSecondary}>
-            {username && <span className={styles.username}>{username}</span>}
-            <button className={styles.logoutBtn} onClick={handleLogout}>
-              Sign out
-            </button>
-          </div>
-        </nav>
+            <span>Hunt</span>
+          </Link>
+          <nav className={styles.nav} aria-label="Main navigation">
+            <div className={styles.navGroup}>
+              {NAV_ITEMS.map((item) => (
+                <NavLink
+                  key={item.to}
+                  to={item.to}
+                  end={item.exact}
+                  className={({ isActive }) =>
+                    `${styles.navLink} ${isActive ? styles.active : ''}`
+                  }
+                  title={item.tooltip}
+                >
+                  {item.label}
+                  {item.dotKey && <StatusDot state={dotForKey(item.dotKey)} />}
+                </NavLink>
+              ))}
+            </div>
+            <div className={styles.navSecondary}>
+              {username && <span className={styles.username}>{username}</span>}
+              <button className={styles.logoutBtn} onClick={handleLogout}>
+                Sign out
+              </button>
+            </div>
+          </nav>
+        </header>
         <main className={styles.main}>{children}</main>
       </div>
     </>
