@@ -152,3 +152,8 @@ def test_enrich_linkedin_job_with_hiring_cafe_rejects_generic_title_drift():
         assert exc.code == "hiring_cafe_match_not_found"
     else:
         raise AssertionError("Expected generic title drift to be rejected.")
+
+
+def test_hiring_cafe_rate_limit_failure_stays_retryable():
+    assert enrich_hiring_cafe._get_failure_enrichment_status("rate_limited") == "failed"
+    assert enrich_hiring_cafe._should_stop_batch_after_failure("rate_limited") is True

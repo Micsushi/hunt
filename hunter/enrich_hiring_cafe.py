@@ -237,8 +237,6 @@ def _is_non_actionable_failure_code(error_code):
 
 
 def _get_failure_enrichment_status(error_code):
-    if error_code == "rate_limited":
-        return "blocked"
     return "failed"
 
 
