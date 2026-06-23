@@ -346,6 +346,7 @@ class ReviewOpsApiTests(unittest.TestCase):
         from backend import app as control_plane_api
 
         expected_routes = {
+            "/favicon.ico": "frontend_favicon_ico",
             "/favicon.svg": "frontend_favicon",
             "/favicon-64.png": "frontend_favicon_png",
         }
