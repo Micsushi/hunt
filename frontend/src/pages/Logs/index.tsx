@@ -75,7 +75,7 @@ export function LogsPage() {
   const authOk = li.available !== false
   const done =
     (summary.counts_by_status['done'] ?? 0) + (summary.counts_by_status['done_verified'] ?? 0)
-  const failed = summary.counts_by_status['failed'] ?? 0
+  const failed = summary.detail_quality_counts?.failed ?? summary.counts_by_status['failed'] ?? 0
 
   return (
     <div className={styles.page}>

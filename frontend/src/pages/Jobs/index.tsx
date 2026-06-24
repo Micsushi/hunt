@@ -311,7 +311,14 @@ export function JobsPage() {
     )
   }
 
-  const statusCounts = summary?.counts_by_status
+  const statusCounts = useMemo(() => {
+    if (!summary) return undefined
+    return {
+      ...summary.counts_by_status,
+      partial: summary.detail_quality_counts?.partial ?? 0,
+      failed: summary.detail_quality_counts?.failed ?? summary.counts_by_status.failed ?? 0,
+    }
+  }, [summary])
 
   return (
     <div className={styles.page}>

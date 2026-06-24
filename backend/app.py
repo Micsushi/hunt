@@ -110,11 +110,15 @@ except ModuleNotFoundError:  # noqa: E402
 STATUS_OPTIONS = (
     "all",
     "ready",
+    "partial",
     "pending",
     "processing",
     "done",
     "done_verified",
     "failed",
+    "failed_url",
+    "failed_description",
+    "failed_enrichment",
     "blocked",
     "blocked_verified",
 )
@@ -139,6 +143,9 @@ ENRICHMENT_STATUS_LABELS = {
     "done": "Done",
     "done_verified": "Done (verified)",
     "failed": "Failed",
+    "failed_url": "Failed URL",
+    "failed_description": "Failed description",
+    "failed_enrichment": "Failed enrichment",
     "blocked": "Blocked",
     "blocked_verified": "Blocked (verified)",
 }
@@ -146,11 +153,15 @@ ENRICHMENT_STATUS_LABELS = {
 STATUS_FILTER_LABELS = {
     "all": "All",
     "ready": "Ready",
+    "partial": "Partial enriched",
     "pending": "Pending enrichment",
     "processing": "Processing",
     "done": "Done",
     "done_verified": "Done verified",
     "failed": "Failed",
+    "failed_url": "Failed URL",
+    "failed_description": "Failed description",
+    "failed_enrichment": "Failed enrichment",
     "blocked": "Blocked",
     "blocked_verified": "Blocked verified",
 }
@@ -1920,15 +1931,19 @@ def render_artifact_links(row):
 
 def render_summary_cards(summary):
     linkedin_auth = summary.get("auth", {}).get("linkedin", {})
+    detail_counts = summary.get("detail_quality_counts") or {}
+    enriched = detail_counts.get("enriched")
+    if enriched is None:
+        enriched = summary["counts_by_status"].get("done", 0) + summary["counts_by_status"].get(
+            "done_verified", 0
+        )
+    failed = detail_counts.get("failed", summary["counts_by_status"].get("failed", 0))
     cards = [
         ("Total rows", summary["total"]),
         ("Pending enrich", summary["pending_count"]),
-        (
-            "Enriched",
-            summary["counts_by_status"].get("done", 0)
-            + summary["counts_by_status"].get("done_verified", 0),
-        ),
-        ("Failed", summary["counts_by_status"].get("failed", 0)),
+        ("Enriched", enriched),
+        ("Partial enriched", detail_counts.get("partial", 0)),
+        ("Failed", failed),
         ("Blocked", summary["blocked_count"]),
         ("LinkedIn auth", "ready" if linkedin_auth.get("available", True) else "login needed"),
     ]
@@ -1949,16 +1964,20 @@ def _jobs_href(*, source="all", status="ready", limit=50):
 
 def render_queue_jump_strip(summary):
     """Compact links for overview : no duplicate of full health tables."""
-    failed_n = int(summary.get("counts_by_status", {}).get("failed") or 0)
+    detail_counts = summary.get("detail_quality_counts") or {}
+    failed_n = int(detail_counts.get("failed") or 0)
     done_n = int(summary.get("counts_by_status", {}).get("done") or 0) + int(
         summary.get("counts_by_status", {}).get("done_verified") or 0
     )
     pills = [
         ("All jobs", "all", "all"),
         ("Ready", "all", "ready"),
+        ("Partial enriched", "all", "partial"),
         ("Pending enrich", "all", "pending"),
         ("Processing", "all", "processing"),
         ("Failed", "all", "failed"),
+        ("Failed URL", "all", "failed_url"),
+        ("Failed description", "all", "failed_description"),
         ("Blocked", "all", "blocked"),
         ("Done", "all", "done"),
         ("Done verified", "all", "done_verified"),
@@ -2487,11 +2506,15 @@ def render_search_bar(*, source, status, limit, q, sort, direction, tag=""):
             for value, label in (
                 ("all", "All statuses"),
                 ("ready", "Ready"),
+                ("partial", "Partial enriched"),
                 ("pending", "Pending enrich"),
                 ("processing", "Processing"),
                 ("done", "Done"),
                 ("done_verified", "Done verified"),
                 ("failed", "Failed"),
+                ("failed_url", "Failed URL"),
+                ("failed_description", "Failed description"),
+                ("failed_enrichment", "Failed enrichment"),
                 ("blocked", "Blocked"),
                 ("blocked_verified", "Blocked verified"),
             )
@@ -2597,6 +2620,9 @@ def render_jobs_bulk_panel(*, source, status, limit, page, q, sort, direction, t
              data-direction="{html.escape(direction)}">
           <div style="display:flex; flex-wrap:wrap; gap:12px 18px; align-items:center; margin: 12px 0;">
             <label><input type="checkbox" class="jobs-bulk-status" value="failed" checked /> Failed</label>
+            <label><input type="checkbox" class="jobs-bulk-status" value="failed_url" /> Failed URL</label>
+            <label><input type="checkbox" class="jobs-bulk-status" value="failed_description" /> Failed description</label>
+            <label><input type="checkbox" class="jobs-bulk-status" value="failed_enrichment" /> Failed enrichment</label>
             <label><input type="checkbox" class="jobs-bulk-status" value="processing" /> Processing</label>
             <label><input type="checkbox" class="jobs-bulk-status" value="pending" /> Pending enrichment</label>
             <label><input type="checkbox" class="jobs-bulk-status" value="blocked" /> Blocked</label>
@@ -4341,8 +4367,13 @@ def api_summary_daily(_auth: str = Depends(require_auth)):
             (today,),
         ).fetchone()[0]
         failed_today = conn.execute(
-            "SELECT COUNT(*) FROM jobs WHERE SUBSTR(COALESCE(enriched_at,''),1,10) = ? "
-            "AND enrichment_status = 'failed'",
+            """
+            SELECT COUNT(*) FROM jobs
+            WHERE SUBSTR(COALESCE(date_scraped,''),1,10) = ?
+              AND enrichment_status IN ('failed','failed_url','failed_description','failed_enrichment','blocked','blocked_verified')
+              AND (description IS NULL OR trim(description) = '')
+              AND (apply_url IS NULL OR trim(apply_url) = '')
+            """,
             (today,),
         ).fetchone()[0]
         return JSONResponse(

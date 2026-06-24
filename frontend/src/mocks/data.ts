@@ -108,6 +108,13 @@ export const MOCK_SUMMARY: QueueSummary = {
   stale_processing_count: 0,
   oldest_processing_started_at: null,
   counts_by_status: { done: 1, pending: 1 },
+  detail_quality_counts: {
+    enriched: 1,
+    partial: 0,
+    failed: 0,
+    description_only: 0,
+    url_only: 0,
+  },
   source_counts: { linkedin: 1, indeed: 1 },
   failure_counts: {},
   auth: {

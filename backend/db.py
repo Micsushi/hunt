@@ -15,6 +15,82 @@ from hunter import db as hunter_db
 from hunter.config import ENRICHMENT_MAX_ATTEMPTS, ENRICHMENT_STALE_PROCESSING_MINUTES
 from hunter.enrichment_policy import format_sqlite_timestamp, utc_now
 
+TERMINAL_ENRICHMENT_STATUSES = (
+    "failed",
+    "failed_url",
+    "failed_description",
+    "failed_enrichment",
+    "blocked",
+    "blocked_verified",
+)
+
+
+def _has_description_sql(column="description"):
+    return f"{column} IS NOT NULL AND trim({column}) != ''"
+
+
+def _missing_description_sql(column="description"):
+    return f"({column} IS NULL OR trim({column}) = '')"
+
+
+def _has_apply_url_sql(column="apply_url"):
+    return f"{column} IS NOT NULL AND trim({column}) != ''"
+
+
+def _missing_apply_url_sql(column="apply_url"):
+    return f"({column} IS NULL OR trim({column}) = '')"
+
+
+def _detail_quality_counts(cursor, *, source_filter_sql="", params=None):
+    params = list(params or [])
+    terminal_placeholders = ", ".join(["?"] * len(TERMINAL_ENRICHMENT_STATUSES))
+    has_description = _has_description_sql()
+    missing_description = _missing_description_sql()
+    has_apply_url = _has_apply_url_sql()
+    missing_apply_url = _missing_apply_url_sql()
+    row = cursor.execute(
+        f"""
+        SELECT
+            COUNT(*) FILTER (
+                WHERE {has_description}
+                  AND {has_apply_url}
+            ) AS enriched,
+            COUNT(*) FILTER (
+                WHERE (
+                    {has_description}
+                    AND {missing_apply_url}
+                )
+                OR (
+                    {missing_description}
+                    AND {has_apply_url}
+                )
+            ) AS partial,
+            COUNT(*) FILTER (
+                WHERE {missing_description}
+                  AND {missing_apply_url}
+                  AND enrichment_status IN ({terminal_placeholders})
+            ) AS failed,
+            COUNT(*) FILTER (
+                WHERE {has_description}
+                  AND {missing_apply_url}
+            ) AS description_only,
+            COUNT(*) FILTER (
+                WHERE {missing_description}
+                  AND {has_apply_url}
+            ) AS url_only
+        FROM jobs
+        WHERE 1=1 {source_filter_sql}
+        """,
+        tuple(params + list(TERMINAL_ENRICHMENT_STATUSES)),
+    ).fetchone()
+    return {
+        "enriched": int(row["enriched"] or 0),
+        "partial": int(row["partial"] or 0),
+        "failed": int(row["failed"] or 0),
+        "description_only": int(row["description_only"] or 0),
+        "url_only": int(row["url_only"] or 0),
+    }
+
 
 def get_review_queue_summary(*, source=None):
     conn = hunter_db.get_connection()
@@ -62,13 +138,13 @@ def get_review_queue_summary(*, source=None):
                 FROM jobs
                 WHERE 1=1 {source_filter_sql}
                   AND (
-                        enrichment_status IN ('failed', 'blocked', 'blocked_verified')
+                        enrichment_status IN ({", ".join(["?"] * len(TERMINAL_ENRICHMENT_STATUSES))})
                      OR (source != 'linkedin' AND last_enrichment_error IS NOT NULL AND trim(last_enrichment_error) != '')
                   )
                 GROUP BY error_code
                 ORDER BY count DESC, error_code ASC
                 """,
-                tuple(params),
+                tuple(params + list(TERMINAL_ENRICHMENT_STATUSES)),
             ).fetchall()
         }
         source_counts = {
@@ -84,6 +160,9 @@ def get_review_queue_summary(*, source=None):
                 tuple(params),
             ).fetchall()
         }
+        detail_quality_counts = _detail_quality_counts(
+            cursor, source_filter_sql=source_filter_sql, params=params
+        )
 
         oldest_processing = cursor.execute(
             f"""
@@ -171,6 +250,7 @@ def get_review_queue_summary(*, source=None):
         return {
             "total": sum(counts.values()),
             "counts_by_status": counts,
+            "detail_quality_counts": detail_quality_counts,
             "ready_count": int(ready_count or 0),
             "pending_count": counts.get("pending", 0),
             "retry_ready_count": int(retry_ready_count or 0),
@@ -232,6 +312,24 @@ def _review_jobs_filter_sql_and_params(
         params.append(ENRICHMENT_MAX_ATTEMPTS)
         if not linkedin_auth_available:
             parts.append(" AND source != 'linkedin'")
+    elif status == "partial":
+        parts.append(
+            f"""
+              AND (
+                    ({_has_description_sql()} AND {_missing_apply_url_sql()})
+                 OR ({_missing_description_sql()} AND {_has_apply_url_sql()})
+              )
+            """
+        )
+    elif status == "failed":
+        parts.append(
+            f"""
+              AND {_missing_description_sql()}
+              AND {_missing_apply_url_sql()}
+              AND enrichment_status IN ({", ".join(["?"] * len(TERMINAL_ENRICHMENT_STATUSES))})
+            """
+        )
+        params.extend(TERMINAL_ENRICHMENT_STATUSES)
     elif status != "all":
         if status == "pending":
             parts.append(
@@ -635,13 +733,15 @@ def get_review_activity_summary(*, hours=24):
             (mod,),
         ).fetchone()[0]
         failed = cursor.execute(
-            """
+            f"""
             SELECT COUNT(*) FROM jobs
-            WHERE enrichment_status = 'failed'
+            WHERE enrichment_status IN ({", ".join(["?"] * len(TERMINAL_ENRICHMENT_STATUSES))})
+              AND (description IS NULL OR trim(description) = '')
+              AND (apply_url IS NULL OR trim(apply_url) = '')
               AND date_scraped IS NOT NULL
               AND datetime(date_scraped) >= datetime('now', ?)
             """,
-            (mod,),
+            tuple(list(TERMINAL_ENRICHMENT_STATUSES) + [mod]),
         ).fetchone()[0]
         scraped = cursor.execute(
             """

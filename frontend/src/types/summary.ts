@@ -15,6 +15,13 @@ export interface QueueSummary {
   stale_processing_count: number
   oldest_processing_started_at: string | null
   counts_by_status: Record<string, number>
+  detail_quality_counts: {
+    enriched: number
+    partial: number
+    failed: number
+    description_only: number
+    url_only: number
+  }
   source_counts: Record<string, number>
   failure_counts: Record<string, number>
   auth: {

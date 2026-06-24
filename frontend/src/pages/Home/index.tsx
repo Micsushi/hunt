@@ -459,9 +459,17 @@ export function HomePage() {
   if (isLoading) return <div className={styles.loading}>Loading…</div>
   if (error || !summary) return <div className={styles.error}>Failed to load summary.</div>
 
-  const done =
-    (summary.counts_by_status['done'] ?? 0) + (summary.counts_by_status['done_verified'] ?? 0)
-  const failed = summary.counts_by_status['failed'] ?? 0
+  const detailCounts = summary.detail_quality_counts ?? {
+    enriched:
+      (summary.counts_by_status['done'] ?? 0) + (summary.counts_by_status['done_verified'] ?? 0),
+    partial: 0,
+    failed: summary.counts_by_status['failed'] ?? 0,
+    description_only: 0,
+    url_only: 0,
+  }
+  const done = detailCounts.enriched
+  const partial = detailCounts.partial
+  const failed = detailCounts.failed
   const authOk = summary.auth?.linkedin?.available !== false
 
   return (
@@ -485,6 +493,12 @@ export function HomePage() {
           accent={summary.pending_count > 0}
         />
         <Card label="Enriched" value={done} onClick={() => navigate('/jobs?status=done')} />
+        <Card
+          label="Partial enrich"
+          value={partial}
+          onClick={() => navigate('/jobs?status=partial')}
+          warning={partial > 0}
+        />
         <Card
           label="Failed"
           value={failed}

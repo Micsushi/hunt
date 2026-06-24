@@ -5,11 +5,15 @@ import type { JobsQuery, SortField } from '@/types/job'
 const STATUS_OPTIONS = [
   { value: 'all', label: 'All statuses' },
   { value: 'ready', label: 'Ready' },
+  { value: 'partial', label: 'Partial enriched' },
   { value: 'pending', label: 'Pending enrich' },
   { value: 'processing', label: 'Processing' },
   { value: 'done', label: 'Done' },
   { value: 'done_verified', label: 'Done verified' },
   { value: 'failed', label: 'Failed' },
+  { value: 'failed_url', label: 'Failed URL' },
+  { value: 'failed_description', label: 'Failed description' },
+  { value: 'failed_enrichment', label: 'Failed enrichment' },
   { value: 'blocked', label: 'Blocked' },
   { value: 'blocked_verified', label: 'Blocked verified' },
 ]

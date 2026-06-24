@@ -566,6 +566,52 @@ class Stage32Tests(unittest.TestCase):
         self.assertEqual(summary["source_counts"]["linkedin"], 1)
         self.assertEqual(summary["source_counts"]["indeed"], 1)
 
+    def test_review_queue_summary_splits_partial_and_true_failed_details(self):
+        with self.with_temp_db() as path:
+            self.insert_job(
+                path,
+                job_url="https://example.com/job/enriched",
+                enrichment_status="done",
+                description="Full description",
+                apply_url="https://acme.example/apply",
+            )
+            self.insert_job(
+                path,
+                job_url="https://example.com/job/description-only",
+                enrichment_status="failed",
+                description="Description only",
+                apply_url=None,
+            )
+            self.insert_job(
+                path,
+                job_url="https://example.com/job/url-only",
+                enrichment_status="failed_description",
+                description=None,
+                apply_url="https://acme.example/apply-url-only",
+            )
+            self.insert_job(
+                path,
+                job_url="https://example.com/job/failed",
+                enrichment_status="failed",
+                description=None,
+                apply_url=None,
+            )
+
+            summary = db.get_review_queue_summary()
+            partial_rows = db.list_jobs_for_review(status="partial")
+            failed_rows = db.list_jobs_for_review(status="failed")
+
+        self.assertEqual(summary["detail_quality_counts"]["enriched"], 1)
+        self.assertEqual(summary["detail_quality_counts"]["partial"], 2)
+        self.assertEqual(summary["detail_quality_counts"]["description_only"], 1)
+        self.assertEqual(summary["detail_quality_counts"]["url_only"], 1)
+        self.assertEqual(summary["detail_quality_counts"]["failed"], 1)
+        self.assertEqual({row["job_url"] for row in partial_rows}, {
+            "https://example.com/job/description-only",
+            "https://example.com/job/url-only",
+        })
+        self.assertEqual([row["job_url"] for row in failed_rows], ["https://example.com/job/failed"])
+
     def test_generic_retry_backfill_applies_to_indeed_failures(self):
         with self.with_temp_db() as path:
             job_id = self.insert_job(

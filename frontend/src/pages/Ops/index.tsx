@@ -33,6 +33,9 @@ const REQUEUE_BUTTONS = [
 
 const BULK_STATUS_OPTIONS = [
   { value: 'failed', label: 'Failed' },
+  { value: 'failed_url', label: 'Failed URL' },
+  { value: 'failed_description', label: 'Failed description' },
+  { value: 'failed_enrichment', label: 'Failed enrichment' },
   { value: 'blocked', label: 'Blocked' },
   { value: 'blocked_verified', label: 'Blocked verified' },
   { value: 'processing', label: 'Processing' },
