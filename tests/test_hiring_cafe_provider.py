@@ -157,3 +157,14 @@ def test_enrich_linkedin_job_with_hiring_cafe_rejects_generic_title_drift():
 def test_hiring_cafe_rate_limit_failure_stays_retryable():
     assert enrich_hiring_cafe._get_failure_enrichment_status("rate_limited") == "failed"
     assert enrich_hiring_cafe._should_stop_batch_after_failure("rate_limited") is True
+
+
+def test_hiring_cafe_failure_statuses_separate_url_and_description():
+    assert (
+        enrich_hiring_cafe._get_failure_enrichment_status("hiring_cafe_match_not_found")
+        == "failed_url"
+    )
+    assert (
+        enrich_hiring_cafe._get_failure_enrichment_status("description_not_found")
+        == "failed_description"
+    )

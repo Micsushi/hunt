@@ -4,6 +4,9 @@ export type EnrichmentStatus =
   | 'done'
   | 'done_verified'
   | 'failed'
+  | 'failed_url'
+  | 'failed_description'
+  | 'failed_enrichment'
   | 'blocked'
   | 'blocked_verified'
 

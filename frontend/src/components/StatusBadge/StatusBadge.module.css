@@ -32,7 +32,10 @@
   color: var(--warning);
 }
 
-.failed {
+.failed,
+.failed_url,
+.failed_description,
+.failed_enrichment {
   background: var(--danger-soft);
   color: var(--danger);
 }

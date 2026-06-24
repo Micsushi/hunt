@@ -7,6 +7,9 @@ const LABELS: Record<string, string> = {
   done: 'Done',
   done_verified: 'Done (verified)',
   failed: 'Failed',
+  failed_url: 'Failed URL',
+  failed_description: 'Failed description',
+  failed_enrichment: 'Failed enrichment',
   blocked: 'Blocked',
   blocked_verified: 'Blocked (verified)',
 }
@@ -17,6 +20,9 @@ const TOOLTIPS: Record<string, string> = {
   done: 'Enrichment succeeded: description and apply URL resolved',
   done_verified: 'Enrichment verified by a second pass',
   failed: 'Enrichment failed - check last_enrichment_error for the reason',
+  failed_url: 'Description may exist, but no confident external apply URL was found',
+  failed_description: 'Apply URL may exist, but no usable job description was found',
+  failed_enrichment: 'Both description and apply URL enrichment failed',
   blocked: 'Blocked by LinkedIn auth, rate limits, or anti-bot detection',
   blocked_verified: 'Blocked and manually confirmed - needs operator attention',
 }

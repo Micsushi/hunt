@@ -238,6 +238,10 @@ def _is_non_actionable_failure_code(error_code):
 
 
 def _get_failure_enrichment_status(error_code):
+    if error_code == "hiring_cafe_match_not_found":
+        return "failed_url"
+    if error_code == "description_not_found":
+        return "failed_description"
     return "failed"
 
 
