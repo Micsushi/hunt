@@ -110,6 +110,7 @@ except ModuleNotFoundError:  # noqa: E402
 STATUS_OPTIONS = (
     "all",
     "ready",
+    "enriched",
     "partial",
     "pending",
     "processing",
@@ -153,6 +154,7 @@ ENRICHMENT_STATUS_LABELS = {
 STATUS_FILTER_LABELS = {
     "all": "All",
     "ready": "Ready",
+    "enriched": "Enriched",
     "partial": "Partial enriched",
     "pending": "Pending enrichment",
     "processing": "Processing",
@@ -1972,6 +1974,7 @@ def render_queue_jump_strip(summary):
     pills = [
         ("All jobs", "all", "all"),
         ("Ready", "all", "ready"),
+        ("Enriched", "all", "enriched"),
         ("Partial enriched", "all", "partial"),
         ("Pending enrich", "all", "pending"),
         ("Processing", "all", "processing"),
@@ -2506,6 +2509,7 @@ def render_search_bar(*, source, status, limit, q, sort, direction, tag=""):
             for value, label in (
                 ("all", "All statuses"),
                 ("ready", "Ready"),
+                ("enriched", "Enriched"),
                 ("partial", "Partial enriched"),
                 ("pending", "Pending enrich"),
                 ("processing", "Processing"),
@@ -4311,10 +4315,44 @@ def api_summary_breakdown(field: str = "category", _auth: str = Depends(require_
         )
     conn = get_connection()
     try:
-        rows = conn.execute(
-            f"SELECT COALESCE(NULLIF(TRIM({field}), ''), 'unknown') AS label, COUNT(*) AS count "
-            "FROM jobs GROUP BY 1 ORDER BY count DESC"
-        ).fetchall()
+        if field == "enrichment_status":
+            rows = conn.execute(
+                """
+                SELECT
+                    CASE
+                        WHEN description IS NOT NULL
+                          AND trim(description) != ''
+                          AND apply_url IS NOT NULL
+                          AND trim(apply_url) != ''
+                        THEN 'enriched'
+                        WHEN (
+                            description IS NOT NULL
+                            AND trim(description) != ''
+                            AND (apply_url IS NULL OR trim(apply_url) = '')
+                        )
+                        OR (
+                            (description IS NULL OR trim(description) = '')
+                            AND apply_url IS NOT NULL
+                            AND trim(apply_url) != ''
+                        )
+                        THEN 'partial'
+                        WHEN enrichment_status IN ('failed','failed_url','failed_description','failed_enrichment','blocked','blocked_verified')
+                          AND (description IS NULL OR trim(description) = '')
+                          AND (apply_url IS NULL OR trim(apply_url) = '')
+                        THEN 'failed'
+                        ELSE COALESCE(NULLIF(TRIM(enrichment_status), ''), 'unknown')
+                    END AS label,
+                    COUNT(*) AS count
+                FROM jobs
+                GROUP BY 1
+                ORDER BY count DESC
+                """
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                f"SELECT COALESCE(NULLIF(TRIM({field}), ''), 'unknown') AS label, COUNT(*) AS count "
+                "FROM jobs GROUP BY 1 ORDER BY count DESC"
+            ).fetchall()
         return JSONResponse(
             {"field": field, "data": [{"label": r["label"], "count": r["count"]} for r in rows]}
         )

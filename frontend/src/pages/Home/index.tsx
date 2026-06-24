@@ -492,7 +492,7 @@ export function HomePage() {
           onClick={() => navigate('/jobs?status=pending')}
           accent={summary.pending_count > 0}
         />
-        <Card label="Enriched" value={done} onClick={() => navigate('/jobs?status=done')} />
+        <Card label="Enriched" value={done} onClick={() => navigate('/jobs?status=enriched')} />
         <Card
           label="Partial enrich"
           value={partial}

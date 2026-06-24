@@ -312,6 +312,8 @@ def _review_jobs_filter_sql_and_params(
         params.append(ENRICHMENT_MAX_ATTEMPTS)
         if not linkedin_auth_available:
             parts.append(" AND source != 'linkedin'")
+    elif status == "enriched":
+        parts.append(f" AND {_has_description_sql()} AND {_has_apply_url_sql()}")
     elif status == "partial":
         parts.append(
             f"""

@@ -598,6 +598,7 @@ class Stage32Tests(unittest.TestCase):
             )
 
             summary = db.get_review_queue_summary()
+            enriched_rows = db.list_jobs_for_review(status="enriched")
             partial_rows = db.list_jobs_for_review(status="partial")
             failed_rows = db.list_jobs_for_review(status="failed")
 
@@ -606,6 +607,7 @@ class Stage32Tests(unittest.TestCase):
         self.assertEqual(summary["detail_quality_counts"]["description_only"], 1)
         self.assertEqual(summary["detail_quality_counts"]["url_only"], 1)
         self.assertEqual(summary["detail_quality_counts"]["failed"], 1)
+        self.assertEqual([row["job_url"] for row in enriched_rows], ["https://example.com/job/enriched"])
         self.assertEqual({row["job_url"] for row in partial_rows}, {
             "https://example.com/job/description-only",
             "https://example.com/job/url-only",

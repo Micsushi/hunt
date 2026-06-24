@@ -315,6 +315,7 @@ export function JobsPage() {
     if (!summary) return undefined
     return {
       ...summary.counts_by_status,
+      enriched: summary.detail_quality_counts?.enriched ?? 0,
       partial: summary.detail_quality_counts?.partial ?? 0,
       failed: summary.detail_quality_counts?.failed ?? summary.counts_by_status.failed ?? 0,
     }

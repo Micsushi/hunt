@@ -5,6 +5,7 @@ import type { JobsQuery, SortField } from '@/types/job'
 const STATUS_OPTIONS = [
   { value: 'all', label: 'All statuses' },
   { value: 'ready', label: 'Ready' },
+  { value: 'enriched', label: 'Enriched' },
   { value: 'partial', label: 'Partial enriched' },
   { value: 'pending', label: 'Pending enrich' },
   { value: 'processing', label: 'Processing' },
