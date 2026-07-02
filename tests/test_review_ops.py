@@ -339,7 +339,7 @@ class ReviewOpsApiTests(unittest.TestCase):
             self.assertNotEqual(
                 legacy_shadow_endpoints.get(getattr(route, "path", "")),
                 endpoint_name,
-                f"{route.path} is still handled by legacy SSR endpoint {endpoint_name}",
+                f"{getattr(route, 'path', '')} is still handled by legacy SSR endpoint {endpoint_name}",
             )
 
     def test_favicon_route_is_not_served_by_spa_shell(self):

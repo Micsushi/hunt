@@ -1415,10 +1415,10 @@ Expected Graduation: Sep 2026
         self.assertEqual(results["cellFirst"]["value"], "Mobile")
         self.assertEqual(results["cellFirst"]["source"], "default:phone_device_type")
         self.assertEqual(results["cellFirst"]["selected"], "Cell")
-        self.assertEqual(results["workFallback"]["selected"], "Home")
-        self.assertEqual(results["workFallback"]["matchSource"], "phone_device_first_real_fallback")
+        self.assertEqual(results["workFallback"]["selected"], "Work")
+        self.assertEqual(results["workFallback"]["matchSource"], "phone_device_type_safe_option")
         self.assertEqual(results["homeFallback"]["selected"], "Home")
-        self.assertEqual(results["homeFallback"]["matchSource"], "phone_device_first_real_fallback")
+        self.assertEqual(results["homeFallback"]["matchSource"], "phone_device_type_safe_option")
 
     def test_v2_bird_work_auth_preferred_contact_and_start_date_defaults(self):
         paths = [

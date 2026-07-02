@@ -1720,7 +1720,10 @@ def test_generic_fill_reads_sibling_labels_and_hidden_resume_inputs():
     hidden_resume = [entry for entry in result["fieldInventory"] if entry["id"] == "resume-file"][0]
     assert hidden_resume["filled"] is True
     assert hidden_resume["valueSource"] == "resume_upload"
-    assert not [entry for entry in result["fieldInventory"] if entry["id"] == "cover-letter-file"]
+    cover_letter = [
+        entry for entry in result["fieldInventory"] if entry["id"] == "cover-letter-file"
+    ][0]
+    assert cover_letter["filled"] is False
 
 
 def test_generic_fill_commits_greenhouse_style_custom_selects():

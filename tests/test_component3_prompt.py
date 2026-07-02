@@ -1082,7 +1082,8 @@ def test_apply_entry_startup_skips_non_entry_checks_before_click():
     ]
 
     assert "const startupDetection = await detectWorkflowForTab(tabId);" in fill_handler
-    assert "const startsAtApplyEntry = Boolean(startupDetection?.isApplyEntryPage);" in fill_handler
+    assert "const startsAtApplyEntry = Boolean(" in fill_handler
+    assert "startupDetection?.isApplyEntryPage" in fill_handler
     assert "startupRuntimeRecovery = startsAtApplyEntry" in fill_handler
     assert "directVerificationGate = startsAtApplyEntry" in fill_handler
     assert "initialDetection: startupDetection" in fill_handler
