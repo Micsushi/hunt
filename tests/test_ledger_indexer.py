@@ -123,7 +123,9 @@ def test_duplicate_event_id_upserts_instead_of_inserting_duplicate(conn):
         line_number=2,
     )
 
-    rows = conn.execute("SELECT * FROM ledger_events WHERE event_id = ?", ("evt-duplicate",)).fetchall()
+    rows = conn.execute(
+        "SELECT * FROM ledger_events WHERE event_id = ?", ("evt-duplicate",)
+    ).fetchall()
     assert len(rows) == 1
     assert rows[0]["seq"] == 2
     assert rows[0]["event_type"] == "command.completed"
@@ -205,7 +207,9 @@ def test_indexer_populates_full_lease_reference_schema(tmp_path):
     connection.execute(
         "CREATE TABLE ledger_agents (agent_id TEXT PRIMARY KEY, component TEXT NOT NULL, actor_json TEXT NOT NULL)"
     )
-    connection.execute("CREATE TABLE ledger_lanes (lane_id TEXT PRIMARY KEY, component TEXT NOT NULL, agent_id TEXT)")
+    connection.execute(
+        "CREATE TABLE ledger_lanes (lane_id TEXT PRIMARY KEY, component TEXT NOT NULL, agent_id TEXT)"
+    )
     connection.execute(
         "CREATE TABLE ledger_sessions (session_id TEXT PRIMARY KEY, component TEXT NOT NULL, agent_id TEXT, lane_id TEXT)"
     )
@@ -239,7 +243,9 @@ def test_indexer_populates_full_lease_reference_schema(tmp_path):
         line_number=1,
     )
 
-    row = connection.execute("SELECT * FROM ledger_leases WHERE lease_id = ?", ("lease-123",)).fetchone()
+    row = connection.execute(
+        "SELECT * FROM ledger_leases WHERE lease_id = ?", ("lease-123",)
+    ).fetchone()
     assert row["lease_type"] == "session_mutation"
     assert row["status"] == "active"
     assert row["agent_id"] == "agent-codex-a1b2"
@@ -257,7 +263,10 @@ def test_blank_optional_relationship_ids_are_indexed_as_null(conn):
         )
     )
 
-    row = conn.execute("SELECT lease_id, command_id, trace_id FROM ledger_events WHERE event_id = ?", ("evt-no-lease",)).fetchone()
+    row = conn.execute(
+        "SELECT lease_id, command_id, trace_id FROM ledger_events WHERE event_id = ?",
+        ("evt-no-lease",),
+    ).fetchone()
     assert row["lease_id"] is None
     assert row["command_id"] is None
     assert row["trace_id"] is None
@@ -267,8 +276,12 @@ def test_query_helpers_filter_common_dimensions(conn):
     indexer = LedgerIndexer(conn)
     indexer.index_event(_event("evt-agent-a", agent_id="agent-a", session_id="session-a"))
     indexer.index_event(_event("evt-agent-b", agent_id="agent-b", session_id="session-b"))
-    conn.execute("UPDATE ledger_sessions SET status = ? WHERE session_id = ?", ("active", "session-a"))
-    conn.execute("UPDATE ledger_sessions SET status = ? WHERE session_id = ?", ("closed", "session-b"))
+    conn.execute(
+        "UPDATE ledger_sessions SET status = ? WHERE session_id = ?", ("active", "session-a")
+    )
+    conn.execute(
+        "UPDATE ledger_sessions SET status = ? WHERE session_id = ?", ("closed", "session-b")
+    )
     conn.execute(
         "INSERT INTO ledger_leases (lease_id, status, expires_at) VALUES (?, ?, ?)",
         ("lease-a", "granted", "2026-06-10T00:10:00.000Z"),
@@ -285,6 +298,6 @@ def test_query_helpers_filter_common_dimensions(conn):
     assert [row["event_id"] for row in indexer.events_by_session("session-b")] == ["evt-agent-b"]
     assert [row["session_id"] for row in indexer.active_sessions()] == ["session-a"]
     assert [row["lease_id"] for row in indexer.active_leases()] == ["lease-a"]
-    assert [row["probe_id"] for row in indexer.probe_files(session_id="session-a", trusted=False)] == [
-        "probe-a"
-    ]
+    assert [
+        row["probe_id"] for row in indexer.probe_files(session_id="session-a", trusted=False)
+    ] == ["probe-a"]

@@ -77,8 +77,9 @@
         el.id,
         el.name,
         el.getAttribute?.("accept"),
-        el.closest?.("label, .resume-block, .application-field, [class*='field']")
-          ?.innerText,
+        el.closest?.(
+          "label, .resume-block, .application-field, [class*='field']",
+        )?.innerText,
       ]
         .filter(Boolean)
         .join(" ")

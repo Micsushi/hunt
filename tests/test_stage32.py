@@ -607,12 +607,19 @@ class Stage32Tests(unittest.TestCase):
         self.assertEqual(summary["detail_quality_counts"]["description_only"], 1)
         self.assertEqual(summary["detail_quality_counts"]["url_only"], 1)
         self.assertEqual(summary["detail_quality_counts"]["failed"], 1)
-        self.assertEqual([row["job_url"] for row in enriched_rows], ["https://example.com/job/enriched"])
-        self.assertEqual({row["job_url"] for row in partial_rows}, {
-            "https://example.com/job/description-only",
-            "https://example.com/job/url-only",
-        })
-        self.assertEqual([row["job_url"] for row in failed_rows], ["https://example.com/job/failed"])
+        self.assertEqual(
+            [row["job_url"] for row in enriched_rows], ["https://example.com/job/enriched"]
+        )
+        self.assertEqual(
+            {row["job_url"] for row in partial_rows},
+            {
+                "https://example.com/job/description-only",
+                "https://example.com/job/url-only",
+            },
+        )
+        self.assertEqual(
+            [row["job_url"] for row in failed_rows], ["https://example.com/job/failed"]
+        )
 
     def test_generic_retry_backfill_applies_to_indeed_failures(self):
         with self.with_temp_db() as path:

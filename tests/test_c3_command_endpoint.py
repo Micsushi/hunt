@@ -62,11 +62,7 @@ def _session_events(service):
 
 
 def _command_events(service):
-    return [
-        event
-        for event in _session_events(service)
-        if event.get("command_id") == "cmd-001"
-    ]
+    return [event for event in _session_events(service) if event.get("command_id") == "cmd-001"]
 
 
 def test_c3_command_run_valid_request_executes_bridge_and_returns_receipt(tmp_path, monkeypatch):

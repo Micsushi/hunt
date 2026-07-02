@@ -113,7 +113,9 @@ class HuntLedgerClient:
         return self._request("POST", "/api/ledger/probes", json=body)
 
     def register_browser_target(self, payload: dict[str, Any]) -> Any:
-        return self._request("POST", "/api/c3/browser-targets/register", json=_browser_target_body(payload))
+        return self._request(
+            "POST", "/api/c3/browser-targets/register", json=_browser_target_body(payload)
+        )
 
     def get_browser_target(self, payload: dict[str, Any]) -> Any:
         session_id = _required(payload, "session_id")
@@ -133,7 +135,9 @@ class HuntLedgerClient:
             }.items()
             if value
         }
-        return self._request("DELETE", f"/api/c3/browser-targets/{session_id}", params=params or None)
+        return self._request(
+            "DELETE", f"/api/c3/browser-targets/{session_id}", params=params or None
+        )
 
     def run_c3_command(self, payload: dict[str, Any]) -> Any:
         _required(payload, "command_id")
@@ -164,10 +168,14 @@ class HuntLedgerClient:
         return self._run_named_c3_command("c3.inspect_fields", payload, "Inspect visible fields.")
 
     def inspect_validation(self, payload: dict[str, Any]) -> Any:
-        return self._run_named_c3_command("c3.inspect_validation", payload, "Inspect visible validation state.")
+        return self._run_named_c3_command(
+            "c3.inspect_validation", payload, "Inspect visible validation state."
+        )
 
     def snapshot_page(self, payload: dict[str, Any]) -> Any:
-        return self._run_named_c3_command("c3.snapshot_page", payload, "Capture sanitized page snapshot.")
+        return self._run_named_c3_command(
+            "c3.snapshot_page", payload, "Capture sanitized page snapshot."
+        )
 
     def get_progress(self, payload: dict[str, Any]) -> Any:
         return self._run_named_c3_command("c3.get_progress", payload, "Read current C3 progress.")
@@ -176,12 +184,18 @@ class HuntLedgerClient:
         return self._run_named_c3_command("c3.fill_page", payload, "Fill current apply page.")
 
     def page_walk(self, payload: dict[str, Any]) -> Any:
-        return self._run_named_c3_command("c3.page_walk", payload, "Continue filling later apply pages.")
+        return self._run_named_c3_command(
+            "c3.page_walk", payload, "Continue filling later apply pages."
+        )
 
     def click_next_after_fill(self, payload: dict[str, Any]) -> Any:
-        return self._run_named_c3_command("c3.click_next_after_fill", payload, "Click safe next action.")
+        return self._run_named_c3_command(
+            "c3.click_next_after_fill", payload, "Click safe next action."
+        )
 
-    def _run_named_c3_command(self, command_name: str, payload: dict[str, Any], default_reason: str) -> Any:
+    def _run_named_c3_command(
+        self, command_name: str, payload: dict[str, Any], default_reason: str
+    ) -> Any:
         body = dict(payload)
         body["command_name"] = command_name
         body.setdefault("reason", default_reason)
@@ -206,10 +220,16 @@ def _required(payload: dict[str, Any], key: str) -> str:
     return value
 
 
-def _target_from_payload(payload: dict[str, Any], command_payload: dict[str, Any]) -> dict[str, Any]:
-    debug_port = payload.get("debug_port") or payload.get("cdp_port") or command_payload.get("cdp_port")
+def _target_from_payload(
+    payload: dict[str, Any], command_payload: dict[str, Any]
+) -> dict[str, Any]:
+    debug_port = (
+        payload.get("debug_port") or payload.get("cdp_port") or command_payload.get("cdp_port")
+    )
     extension_id = payload.get("extension_id") or command_payload.get("extension_id")
-    tab_id = _optional_int(payload.get("tab_id") or command_payload.get("tab_id") or command_payload.get("tabId"))
+    tab_id = _optional_int(
+        payload.get("tab_id") or command_payload.get("tab_id") or command_payload.get("tabId")
+    )
     url = payload.get("url") or command_payload.get("url")
     return {
         "browser_kind": payload.get("browser_kind") or "p_chrome",

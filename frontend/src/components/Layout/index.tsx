@@ -95,9 +95,7 @@ export function Layout({ children, username }: Props) {
                   key={item.to}
                   to={item.to}
                   end={item.exact}
-                  className={({ isActive }) =>
-                    `${styles.navLink} ${isActive ? styles.active : ''}`
-                  }
+                  className={({ isActive }) => `${styles.navLink} ${isActive ? styles.active : ''}`}
                   title={item.tooltip}
                 >
                   {item.label}

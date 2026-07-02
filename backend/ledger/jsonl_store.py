@@ -68,5 +68,8 @@ class JsonlLedger:
             row["hash"] = digest
 
             with log_path.open("a", encoding="utf-8", newline="\n") as fh:
-                fh.write(json.dumps(row, sort_keys=True, separators=(",", ":"), ensure_ascii=False) + "\n")
+                fh.write(
+                    json.dumps(row, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+                    + "\n"
+                )
             return row

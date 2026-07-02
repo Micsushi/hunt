@@ -650,7 +650,9 @@ function renderActivityLog(entries = []) {
     } (${renderedCount} shown)`;
   }
   container.innerHTML = "";
-  const recentEntries = entries.slice(-MAX_RENDERED_ACTIVITY_LOG_ROWS).reverse();
+  const recentEntries = entries
+    .slice(-MAX_RENDERED_ACTIVITY_LOG_ROWS)
+    .reverse();
   if (!recentEntries.length) {
     const empty = document.createElement("div");
     empty.className = "empty-log";

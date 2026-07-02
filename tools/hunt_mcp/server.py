@@ -188,31 +188,59 @@ TOOLS: dict[str, dict[str, Any]] = {
     },
     "hunt_c3_inspect_fields": {
         "description": "Typed wrapper for c3.inspect_fields through the backend bridge.",
-        "inputSchema": {"type": "object", "required": ["command_id", "agent_id", "session_id", "lease_id"], "additionalProperties": True},
+        "inputSchema": {
+            "type": "object",
+            "required": ["command_id", "agent_id", "session_id", "lease_id"],
+            "additionalProperties": True,
+        },
     },
     "hunt_c3_inspect_validation": {
         "description": "Typed wrapper for c3.inspect_validation through the backend bridge.",
-        "inputSchema": {"type": "object", "required": ["command_id", "agent_id", "session_id", "lease_id"], "additionalProperties": True},
+        "inputSchema": {
+            "type": "object",
+            "required": ["command_id", "agent_id", "session_id", "lease_id"],
+            "additionalProperties": True,
+        },
     },
     "hunt_c3_snapshot_page": {
         "description": "Typed wrapper for c3.snapshot_page through the backend bridge.",
-        "inputSchema": {"type": "object", "required": ["command_id", "agent_id", "session_id", "lease_id"], "additionalProperties": True},
+        "inputSchema": {
+            "type": "object",
+            "required": ["command_id", "agent_id", "session_id", "lease_id"],
+            "additionalProperties": True,
+        },
     },
     "hunt_c3_get_progress": {
         "description": "Typed wrapper for c3.get_progress through the backend bridge.",
-        "inputSchema": {"type": "object", "required": ["command_id", "agent_id", "session_id", "lease_id"], "additionalProperties": True},
+        "inputSchema": {
+            "type": "object",
+            "required": ["command_id", "agent_id", "session_id", "lease_id"],
+            "additionalProperties": True,
+        },
     },
     "hunt_c3_fill_page": {
         "description": "Typed wrapper for c3.fill_page through the backend bridge.",
-        "inputSchema": {"type": "object", "required": ["command_id", "agent_id", "session_id", "lease_id"], "additionalProperties": True},
+        "inputSchema": {
+            "type": "object",
+            "required": ["command_id", "agent_id", "session_id", "lease_id"],
+            "additionalProperties": True,
+        },
     },
     "hunt_c3_page_walk": {
         "description": "Typed wrapper for c3.page_walk through the backend bridge.",
-        "inputSchema": {"type": "object", "required": ["command_id", "agent_id", "session_id", "lease_id"], "additionalProperties": True},
+        "inputSchema": {
+            "type": "object",
+            "required": ["command_id", "agent_id", "session_id", "lease_id"],
+            "additionalProperties": True,
+        },
     },
     "hunt_c3_click_next_after_fill": {
         "description": "Typed wrapper for c3.click_next_after_fill through the backend bridge.",
-        "inputSchema": {"type": "object", "required": ["command_id", "agent_id", "session_id", "lease_id"], "additionalProperties": True},
+        "inputSchema": {
+            "type": "object",
+            "required": ["command_id", "agent_id", "session_id", "lease_id"],
+            "additionalProperties": True,
+        },
     },
 }
 

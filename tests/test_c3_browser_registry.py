@@ -103,15 +103,22 @@ def test_reregister_same_session_updates_active_target_without_duplicate(tmp_pat
 def test_registry_supports_multiple_sessions_and_ports(tmp_path):
     client, _service, _store = _client(tmp_path)
 
-    first = client.post("/api/c3/browser-targets/register", json=_payload(session_id="session-a", debug_port=9222))
+    first = client.post(
+        "/api/c3/browser-targets/register", json=_payload(session_id="session-a", debug_port=9222)
+    )
     second = client.post(
         "/api/c3/browser-targets/register",
-        json=_payload(session_id="session-b", agent_id="agent-b", lane_id="lane-b", debug_port=9333),
+        json=_payload(
+            session_id="session-b", agent_id="agent-b", lane_id="lane-b", debug_port=9333
+        ),
     )
 
     assert first.status_code == 200
     assert second.status_code == 200
-    active = {target["session_id"]: target for target in client.get("/api/c3/browser-targets").json()["targets"]}
+    active = {
+        target["session_id"]: target
+        for target in client.get("/api/c3/browser-targets").json()["targets"]
+    }
     assert active["session-a"]["debug_port"] == 9222
     assert active["session-b"]["debug_port"] == 9333
     assert active["session-a"]["lane_id"] == "lane-a"

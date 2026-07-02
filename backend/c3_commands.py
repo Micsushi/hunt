@@ -19,8 +19,16 @@ CommandStatus = Literal["accepted", "rejected", "started", "completed", "failed"
 
 
 C3_COMMAND_REGISTRY: dict[str, dict[str, Any]] = {
-    "c3.detect_page": {"mutates_page": False, "executable": True, "summary": "Detect apply page state."},
-    "c3.fill_page": {"mutates_page": True, "executable": True, "summary": "Fill current apply page."},
+    "c3.detect_page": {
+        "mutates_page": False,
+        "executable": True,
+        "summary": "Detect apply page state.",
+    },
+    "c3.fill_page": {
+        "mutates_page": True,
+        "executable": True,
+        "summary": "Fill current apply page.",
+    },
     "c3.fill_remaining_with_llm": {
         "mutates_page": True,
         "executable": True,
@@ -31,13 +39,41 @@ C3_COMMAND_REGISTRY: dict[str, dict[str, Any]] = {
         "executable": True,
         "summary": "Continue filling later apply pages through the extension receiver.",
     },
-    "c3.click_next_after_fill": {"mutates_page": True, "executable": True, "summary": "Click safe next action."},
-    "c3.clear_page": {"mutates_page": True, "executable": True, "summary": "Clear current page fields."},
-    "c3.cancel_session": {"mutates_page": True, "executable": True, "summary": "Cancel current C3 action."},
-    "c3.get_progress": {"mutates_page": False, "executable": True, "summary": "Read fill progress."},
-    "c3.snapshot_page": {"mutates_page": False, "executable": True, "summary": "Capture sanitized page snapshot."},
-    "c3.inspect_fields": {"mutates_page": False, "executable": True, "summary": "Inspect visible fields."},
-    "c3.inspect_validation": {"mutates_page": False, "executable": True, "summary": "Inspect visible validation."},
+    "c3.click_next_after_fill": {
+        "mutates_page": True,
+        "executable": True,
+        "summary": "Click safe next action.",
+    },
+    "c3.clear_page": {
+        "mutates_page": True,
+        "executable": True,
+        "summary": "Clear current page fields.",
+    },
+    "c3.cancel_session": {
+        "mutates_page": True,
+        "executable": True,
+        "summary": "Cancel current C3 action.",
+    },
+    "c3.get_progress": {
+        "mutates_page": False,
+        "executable": True,
+        "summary": "Read fill progress.",
+    },
+    "c3.snapshot_page": {
+        "mutates_page": False,
+        "executable": True,
+        "summary": "Capture sanitized page snapshot.",
+    },
+    "c3.inspect_fields": {
+        "mutates_page": False,
+        "executable": True,
+        "summary": "Inspect visible fields.",
+    },
+    "c3.inspect_validation": {
+        "mutates_page": False,
+        "executable": True,
+        "summary": "Inspect visible validation.",
+    },
 }
 
 router = APIRouter(prefix="/api/c3/commands", tags=["c3-commands"])
@@ -169,7 +205,9 @@ def _merged_target(body: C3CommandRunRequest, store: Any) -> dict[str, Any]:
     return {**registered, **body.target}
 
 
-def _extension_payload(body: C3CommandRunRequest, target: dict[str, Any], actor: Actor) -> dict[str, Any]:
+def _extension_payload(
+    body: C3CommandRunRequest, target: dict[str, Any], actor: Actor
+) -> dict[str, Any]:
     command_payload = dict(body.command_payload)
     if target.get("tab_id") is not None and command_payload.get("tabId") is None:
         command_payload["tabId"] = target.get("tab_id")
@@ -221,7 +259,9 @@ def _normalized_receipt(
     reason_code: str,
 ) -> dict[str, Any]:
     receipt = {}
-    if isinstance(extension_response, dict) and isinstance(extension_response.get("commandReceipt"), dict):
+    if isinstance(extension_response, dict) and isinstance(
+        extension_response.get("commandReceipt"), dict
+    ):
         receipt = extension_response["commandReceipt"]
     return {
         "command_id": body.command_id,

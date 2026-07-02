@@ -168,7 +168,9 @@
       "options.collected",
       root.audit.fieldPayload(field, {
         status: (options || []).length ? "ok" : "warn",
-        reason: reason || ((options || []).length ? "options_available" : "no_options"),
+        reason:
+          reason ||
+          ((options || []).length ? "options_available" : "no_options"),
         optionCount: (options || []).length,
         options: (options || []).slice(0, 30).map(function (option) {
           return {
@@ -187,12 +189,12 @@
         field,
         context,
         Array.from(field.element.options || []).map(function (option) {
-        return {
-          label: root.audit?.normalizeText(option.text || option.value || ""),
-          value: option.value,
-          element: option,
-          placeholder: option.disabled || option.value === "",
-        };
+          return {
+            label: root.audit?.normalizeText(option.text || option.value || ""),
+            value: option.value,
+            element: option,
+            placeholder: option.disabled || option.value === "",
+          };
         }),
         "native_select_options",
       );
@@ -202,64 +204,64 @@
         field,
         context,
         (field.radios || []).map(function (radio) {
-        var ariaLabel = radio.getAttribute?.("aria-label") || "";
-        var associatedLabel = (function () {
-          if (!radio.id) {
-            return "";
-          }
-          try {
-            var label = document.querySelector(
-              'label[for="' + CSS.escape(radio.id) + '"]',
-            );
+          var ariaLabel = radio.getAttribute?.("aria-label") || "";
+          var associatedLabel = (function () {
+            if (!radio.id) {
+              return "";
+            }
+            try {
+              var label = document.querySelector(
+                'label[for="' + CSS.escape(radio.id) + '"]',
+              );
+              return label
+                ? (label.innerText || label.textContent || "").trim()
+                : "";
+            } catch (_error) {
+              return "";
+            }
+          })();
+          var closestLabel = (function () {
+            var label = radio.closest?.("label");
             return label
               ? (label.innerText || label.textContent || "").trim()
               : "";
-          } catch (_error) {
-            return "";
-          }
-        })();
-        var closestLabel = (function () {
-          var label = radio.closest?.("label");
-          return label
-            ? (label.innerText || label.textContent || "").trim()
-            : "";
-        })();
-        var siblingLabel = (function () {
-          var labelEl = radio.nextElementSibling;
-          if (
-            !labelEl?.matches?.(
+          })();
+          var siblingLabel = (function () {
+            var labelEl = radio.nextElementSibling;
+            if (
+              !labelEl?.matches?.(
+                "label, [data-automation-id*='label'], [data-automation-id*='Label']",
+              )
+            ) {
+              labelEl = radio.previousElementSibling;
+            }
+            return labelEl?.matches?.(
               "label, [data-automation-id*='label'], [data-automation-id*='Label']",
             )
-          ) {
-            labelEl = radio.previousElementSibling;
-          }
-          return labelEl?.matches?.(
-            "label, [data-automation-id*='label'], [data-automation-id*='Label']",
-          )
-            ? (labelEl.innerText || labelEl.textContent || "").trim()
-            : "";
-        })();
-        var descriptorLabel = window.__huntApplyUtils?.getDescriptor
-          ? window.__huntApplyUtils.getDescriptor(
-              radio,
-              root.uiInspector?.containerSelectors || [],
-            )
-          : radio.value || radio.id || "";
-        var label =
-          ariaLabel ||
-          associatedLabel ||
-          closestLabel ||
-          siblingLabel ||
-          descriptorLabel ||
-          radio.value ||
-          radio.id ||
-          "";
-        return {
-          label: root.audit?.normalizeText(label || radio.value || radio.id),
-          value: radio.value,
-          element: radio,
-          placeholder: false,
-        };
+              ? (labelEl.innerText || labelEl.textContent || "").trim()
+              : "";
+          })();
+          var descriptorLabel = window.__huntApplyUtils?.getDescriptor
+            ? window.__huntApplyUtils.getDescriptor(
+                radio,
+                root.uiInspector?.containerSelectors || [],
+              )
+            : radio.value || radio.id || "";
+          var label =
+            ariaLabel ||
+            associatedLabel ||
+            closestLabel ||
+            siblingLabel ||
+            descriptorLabel ||
+            radio.value ||
+            radio.id ||
+            "";
+          return {
+            label: root.audit?.normalizeText(label || radio.value || radio.id),
+            value: radio.value,
+            element: radio,
+            placeholder: false,
+          };
         }),
         "radio_group_options",
       );
@@ -269,13 +271,13 @@
         field,
         context,
         (field.buttons || []).map(function (button) {
-        var label = optionText(button);
-        return {
-          label: label,
-          value: label,
-          element: button,
-          placeholder: false,
-        };
+          var label = optionText(button);
+          return {
+            label: label,
+            value: label,
+            element: button,
+            placeholder: false,
+          };
         }),
         "segmented_button_options",
       );
@@ -321,7 +323,12 @@
         ) || document;
       var options = fieldPopupOptions(optionScope);
       if (options.length && hasOptionMatch(options, answerText)) {
-        return emitOptionsCollected(field, context, options, "popup_existing_options");
+        return emitOptionsCollected(
+          field,
+          context,
+          options,
+          "popup_existing_options",
+        );
       }
       var opener =
         field.element?.closest?.('[role="combobox"], [aria-haspopup]') ||
@@ -335,7 +342,12 @@
       });
       options = fieldPopupOptions(optionScope);
       if (options.length && hasOptionMatch(options, answerText)) {
-        return emitOptionsCollected(field, context, options, "popup_opened_options");
+        return emitOptionsCollected(
+          field,
+          context,
+          options,
+          "popup_opened_options",
+        );
       }
       if (field.uiModel === "combobox" && answerText) {
         setSearchValue(field.element, answerText);

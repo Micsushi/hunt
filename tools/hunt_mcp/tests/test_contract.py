@@ -54,7 +54,12 @@ def test_all_tools_are_listed() -> None:
 @pytest.mark.parametrize(
     ("tool_name", "arguments", "method", "path"),
     [
-        ("hunt_ledger_create_agent", {"agent_id": "agent-codex-a1b2"}, "POST", "/api/ledger/agents"),
+        (
+            "hunt_ledger_create_agent",
+            {"agent_id": "agent-codex-a1b2"},
+            "POST",
+            "/api/ledger/agents",
+        ),
         ("hunt_ledger_create_lane", {"lane_id": "lane-9401"}, "POST", "/api/ledger/lanes"),
         (
             "hunt_ledger_open_session",

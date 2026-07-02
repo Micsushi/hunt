@@ -322,7 +322,11 @@
       digitMatch ||
       datePartMatch;
     var retriedTextCommit = false;
-    if (ok && !textMatch && ["text", "email", "tel", "url", "search", ""].includes(type)) {
+    if (
+      ok &&
+      !textMatch &&
+      ["text", "email", "tel", "url", "search", ""].includes(type)
+    ) {
       retriedTextCommit = true;
       ok = setValue(el, value);
       await sleep(350);
@@ -348,7 +352,7 @@
           ? "date_part_keyboard_commit"
           : retriedTextCommit
             ? "text_commit_retry"
-          : "",
+            : "",
     };
   }
 
@@ -849,7 +853,9 @@
         "option.committed",
         root.audit.fieldPayload(field, {
           status: result.ok ? "ok" : "warn",
-          reason: result.reason || (result.ok ? "select_commit_verified" : "select_commit_failed"),
+          reason:
+            result.reason ||
+            (result.ok ? "select_commit_verified" : "select_commit_failed"),
           selectedOption: result.selectedOption || option?.label || "",
         }),
       );
@@ -862,7 +868,9 @@
         "option.committed",
         root.audit.fieldPayload(field, {
           status: result.ok ? "ok" : "warn",
-          reason: result.reason || (result.ok ? "radio_commit_verified" : "radio_commit_failed"),
+          reason:
+            result.reason ||
+            (result.ok ? "radio_commit_verified" : "radio_commit_failed"),
           selectedOption: result.selectedOption || option?.label || "",
         }),
       );
@@ -875,7 +883,11 @@
         "option.committed",
         root.audit.fieldPayload(field, {
           status: result.ok ? "ok" : "warn",
-          reason: result.reason || (result.ok ? "segmented_commit_verified" : "segmented_commit_failed"),
+          reason:
+            result.reason ||
+            (result.ok
+              ? "segmented_commit_verified"
+              : "segmented_commit_failed"),
           selectedOption: result.selectedOption || option?.label || "",
         }),
       );
@@ -888,7 +900,9 @@
         "option.committed",
         root.audit.fieldPayload(field, {
           status: result.ok ? "ok" : "warn",
-          reason: result.reason || (result.ok ? "checkbox_commit_verified" : "checkbox_commit_failed"),
+          reason:
+            result.reason ||
+            (result.ok ? "checkbox_commit_verified" : "checkbox_commit_failed"),
           selectedOption: result.selectedOption || option?.label || "checked",
         }),
       );
@@ -917,7 +931,9 @@
         "option.committed",
         root.audit.fieldPayload(field, {
           status: result.ok ? "ok" : "warn",
-          reason: result.reason || (result.ok ? "popup_commit_verified" : "popup_commit_failed"),
+          reason:
+            result.reason ||
+            (result.ok ? "popup_commit_verified" : "popup_commit_failed"),
           selectedOption: result.selectedOption || option?.label || "",
         }),
       );

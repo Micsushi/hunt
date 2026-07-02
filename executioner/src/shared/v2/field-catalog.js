@@ -1612,9 +1612,9 @@
       profilePaths: ["coOpTermsCompleted", "coopTermsCompleted"],
       answerType: "option",
       optionAliases: {
-        "0": ["0 terms completed, this will be my 1st term"],
-        "1": ["1 term completed, this will be my 2nd term"],
-        "2": ["2 terms completed, this will be my 3rd term"],
+        0: ["0 terms completed, this will be my 1st term"],
+        1: ["1 term completed, this will be my 2nd term"],
+        2: ["2 terms completed, this will be my 3rd term"],
       },
     }),
     entry("full_time_part_time_preference", {

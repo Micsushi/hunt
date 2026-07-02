@@ -1044,11 +1044,11 @@ def test_failure_toast_is_sticky_closeable_and_hides_progress():
 
     assert "function showFailureToast" in toast_fn
     assert "hideFillProgress();" in toast_fn
-    assert "sticky ? \"ui.failure_toast.show\" : \"ui.toast.show\"" in toast_fn
-    assert "setAttribute(\"aria-label\", \"Close Hunt Apply notification\")" in toast_fn
+    assert 'sticky ? "ui.failure_toast.show" : "ui.toast.show"' in toast_fn
+    assert 'setAttribute("aria-label", "Close Hunt Apply notification")' in toast_fn
     assert "ui.toast.dismiss" in toast_fn
     assert "if (!sticky)" in toast_fn
-    assert "showFailureToast(message.message || \"Hunt Apply failed.\"" in failure_handler
+    assert 'showFailureToast(message.message || "Hunt Apply failed."' in failure_handler
     assert "async function showPageFailureToast" in background
     assert "ui.failure_toast.requested" in background
     assert "async function reportRunnerFailure" in live_smoke

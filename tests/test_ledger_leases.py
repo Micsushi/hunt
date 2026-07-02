@@ -66,14 +66,22 @@ def test_active_session_mutation_lease_blocks_second_agent(store: InMemoryLeaseS
     assert store.events[-1]["event_type"] == "lease.blocked"
 
 
-def test_session_mutation_leases_are_scoped_to_sessions_for_two_agents(store: InMemoryLeaseStore) -> None:
+def test_session_mutation_leases_are_scoped_to_sessions_for_two_agents(
+    store: InMemoryLeaseStore,
+) -> None:
     session_a = store.claim_session_mutation_lease("lane-shared", "session-a", AGENT_A)
     session_b = store.claim_session_mutation_lease("lane-shared", "session-b", AGENT_B)
 
     assert session_a.lease.actor.id == "agent-a"
     assert session_b.lease.actor.id == "agent-b"
-    assert store.require_mutation_lease("session-a", AGENT_A, session_a.lease.lease_id) == session_a.lease
-    assert store.require_mutation_lease("session-b", AGENT_B, session_b.lease.lease_id) == session_b.lease
+    assert (
+        store.require_mutation_lease("session-a", AGENT_A, session_a.lease.lease_id)
+        == session_a.lease
+    )
+    assert (
+        store.require_mutation_lease("session-b", AGENT_B, session_b.lease.lease_id)
+        == session_b.lease
+    )
 
     with pytest.raises(LeaseConflictError) as first_conflict:
         store.claim_session_mutation_lease("lane-shared", "session-a", AGENT_B)
@@ -86,7 +94,9 @@ def test_session_mutation_leases_are_scoped_to_sessions_for_two_agents(store: In
     assert second_conflict.value.error["session_id"] == "session-b"
 
 
-def test_expired_session_mutation_lease_can_be_claimed(store: InMemoryLeaseStore, clock: FakeClock) -> None:
+def test_expired_session_mutation_lease_can_be_claimed(
+    store: InMemoryLeaseStore, clock: FakeClock
+) -> None:
     old = store.claim_session_mutation_lease("lane-1", "session-1", AGENT_A, ttl_seconds=10)
     clock.advance(10)
 
@@ -115,7 +125,9 @@ def test_human_interrupt_marks_active_lease_and_logs_event(store: InMemoryLeaseS
     assert events[0]["payload"]["interrupted_agent_id"] == "agent-a"
 
 
-def test_require_mutation_lease_allows_owner_and_blocks_other_agent(store: InMemoryLeaseStore) -> None:
+def test_require_mutation_lease_allows_owner_and_blocks_other_agent(
+    store: InMemoryLeaseStore,
+) -> None:
     claim = store.claim_session_mutation_lease("lane-1", "session-1", AGENT_A)
 
     assert store.require_mutation_lease("session-1", AGENT_A, claim.lease.lease_id) == claim.lease
@@ -123,7 +135,9 @@ def test_require_mutation_lease_allows_owner_and_blocks_other_agent(store: InMem
         store.require_mutation_lease("session-1", AGENT_B, claim.lease.lease_id)
 
 
-def test_human_override_bypasses_mutation_lease_and_interrupts_owner(store: InMemoryLeaseStore) -> None:
+def test_human_override_bypasses_mutation_lease_and_interrupts_owner(
+    store: InMemoryLeaseStore,
+) -> None:
     claim = store.claim_session_mutation_lease("lane-1", "session-1", AGENT_A)
 
     assert store.require_mutation_lease("session-1", HUMAN) is None
@@ -174,7 +188,10 @@ def test_session_failure_invalidates_session_mutation_lease(store: InMemoryLease
 
     assert session.status == SessionStatus.FAILED
     assert claim.lease.status == LeaseStatus.RELEASED
-    assert [event["event_type"] for event in store.events][-2:] == ["session.failed", "lease.released"]
+    assert [event["event_type"] for event in store.events][-2:] == [
+        "session.failed",
+        "lease.released",
+    ]
 
 
 def test_replacement_session_keeps_lane_and_links_parent(store: InMemoryLeaseStore) -> None:
@@ -285,7 +302,9 @@ def test_postgres_lease_store_updates_control_state_and_event_shapes(tmp_path) -
 
     heartbeat = store.heartbeat(claim.lease.lease_id, AGENT_A)
     lease = store.transfer(claim.lease.lease_id, AGENT_A, AGENT_B)
-    interrupted = store.interrupt_by_human(HUMAN, lease_id=claim.lease.lease_id, reason="manual takeover")
+    interrupted = store.interrupt_by_human(
+        HUMAN, lease_id=claim.lease.lease_id, reason="manual takeover"
+    )
 
     row = connection.execute(
         "SELECT status, agent_id, metadata_json FROM ledger_leases WHERE lease_id = ?",

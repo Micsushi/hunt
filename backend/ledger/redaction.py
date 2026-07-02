@@ -13,11 +13,15 @@ SENSITIVE_KEY_RE = re.compile(
     r"(password|passwd|pwd|token|access[_-]?token|refresh[_-]?token|api[_-]?key|secret|cookie|authorization|auth[_-]?header|set[_-]?cookie)",
     re.IGNORECASE,
 )
-CODE_KEY_RE = re.compile(r"(verification|otp|mfa|2fa|one[_-]?time).*code|code.*(verification|otp|mfa|2fa)", re.IGNORECASE)
+CODE_KEY_RE = re.compile(
+    r"(verification|otp|mfa|2fa|one[_-]?time).*code|code.*(verification|otp|mfa|2fa)", re.IGNORECASE
+)
 TEXT_KEY_RE = re.compile(r"(resume|cover[_-]?letter|page[_-]?text|field[_-]?text)", re.IGNORECASE)
 EMAIL_RE = re.compile(r"\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b", re.IGNORECASE)
 PHONE_RE = re.compile(r"(?<!\d)(?:\+?1[\s.-]?)?(?:\(?\d{3}\)?[\s.-]?)\d{3}[\s.-]?\d{4}(?!\d)")
-EMAIL_CODE_RE = re.compile(r"\b(?:code|verification code|otp)[:\s-]*([A-Z0-9]{4,8})\b", re.IGNORECASE)
+EMAIL_CODE_RE = re.compile(
+    r"\b(?:code|verification code|otp)[:\s-]*([A-Z0-9]{4,8})\b", re.IGNORECASE
+)
 
 
 def _rule(rules: set[str], name: str) -> None:
@@ -33,7 +37,9 @@ def _redact_string(value: str, rules: set[str]) -> str:
         redacted = PHONE_RE.sub(REDACTED, redacted)
         _rule(rules, "phone")
     if EMAIL_CODE_RE.search(redacted):
-        redacted = EMAIL_CODE_RE.sub(lambda match: match.group(0).replace(match.group(1), REDACTED), redacted)
+        redacted = EMAIL_CODE_RE.sub(
+            lambda match: match.group(0).replace(match.group(1), REDACTED), redacted
+        )
         _rule(rules, "email_code")
     return redacted
 

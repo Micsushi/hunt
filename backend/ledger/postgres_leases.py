@@ -172,7 +172,9 @@ class PostgresLeaseStore:
         if actor.is_human:
             active = self._active_lease_for(LeaseKind.SESSION_MUTATION, session_id=session_id)
             if active is not None:
-                self.interrupt_by_human(actor, lease_id=active.lease_id, reason="human override mutation")
+                self.interrupt_by_human(
+                    actor, lease_id=active.lease_id, reason="human override mutation"
+                )
             return None
 
         lease = (
@@ -199,7 +201,9 @@ class PostgresLeaseStore:
         lane_id: str | None = None,
         session_id: str | None = None,
     ) -> LeaseClaim:
-        events = [self._record_event("lease.requested", actor, lane_id=lane_id, session_id=session_id)]
+        events = [
+            self._record_event("lease.requested", actor, lane_id=lane_id, session_id=session_id)
+        ]
         self._begin_claim_transaction()
         try:
             active = self._active_lease_for(kind, lane_id=lane_id, session_id=session_id)

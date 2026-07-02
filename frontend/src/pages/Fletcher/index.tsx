@@ -681,9 +681,7 @@ function FletcherQueuePanel({
         current && cancelledIds.includes(current.queue_item_id) ? null : current,
       )
       qc.invalidateQueries({ queryKey: ['fletcher-jobs'] })
-      showToast(
-        `Cancelled ${result.cancelled} Fletcher job${result.cancelled === 1 ? '' : 's'}`,
-      )
+      showToast(`Cancelled ${result.cancelled} Fletcher job${result.cancelled === 1 ? '' : 's'}`)
     },
     onError: (e) =>
       showToast(e instanceof Error ? e.message : 'Cancel Fletcher jobs failed', 'error'),

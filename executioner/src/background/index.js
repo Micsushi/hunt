@@ -2854,10 +2854,14 @@ async function ensureContentBootstrapForTab(tabId, reason = "command") {
       target: { tabId },
       files: ["src/content/bootstrap.js"],
     });
-    await logActivity("content.bootstrap.ensure", "Ensured content bootstrap for tab.", {
-      tabId,
-      reason,
-    });
+    await logActivity(
+      "content.bootstrap.ensure",
+      "Ensured content bootstrap for tab.",
+      {
+        tabId,
+        reason,
+      },
+    );
     return { ok: true };
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
@@ -3808,7 +3812,9 @@ function createFieldInspectionFunction() {
       .slice(0, 120)
       .map(function (el, index) {
         var tagName = String(el.tagName || "").toLowerCase();
-        var type = String(el.getAttribute("type") || el.type || "").toLowerCase();
+        var type = String(
+          el.getAttribute("type") || el.type || "",
+        ).toLowerCase();
         var role = String(el.getAttribute("role") || "").toLowerCase();
         var rawValue = "value" in el ? String(el.value || "") : "";
         return {
@@ -6897,7 +6903,8 @@ async function clearCurrentPageV2(tabId, state) {
                 kind: "v2_clear_timeout",
                 severity: "warn",
                 failedStep: "clear.execute",
-                reason: "V2 clear timed out before returning from one or more page frames.",
+                reason:
+                  "V2 clear timed out before returning from one or more page frames.",
               },
             ],
           },
@@ -8414,436 +8421,457 @@ async function handleMessage(message, sender = {}) {
         payload: message.payload || {},
         sender,
         handler: async () => {
-      await ensureContentBootstrapForTab(tabId, "fill_current_page");
-      if (!state.settings.manualFillEnabled) {
-        await logActivity(
-          "fill.skip",
-          "Manual fill skipped because manual fill is disabled.",
-          {},
-          "blocked",
-        );
-        return {
-          ok: false,
-          reason: "manual_fill_disabled",
-          message: "Manual fill is currently disabled in extension settings.",
-        };
-      }
-      const passwordSaving =
-        await ensurePasswordSavingDisabled("fill_current_page");
-      if (!passwordSaving.ok) {
-        await logActivity(
-          "password_saving.disable_failed",
-          "C3 could not disable Chrome password saving before fill.",
-          passwordSaving,
-          "warn",
-        );
-      }
-      let result;
-      const fillRunId = createFillRunId();
-      const abortController = new AbortController();
-      const supersededFillRunIds = cancelActiveFillRunsForTab(tabId);
-      activeFillRunByTab.set(tabId, fillRunId);
-      activeFillRuns.set(fillRunId, {
-        tabId,
-        triggeredBy: message.payload?.triggeredBy || "fill_current_page",
-        startedAt: new Date().toISOString(),
-        cancelled: false,
-        lastKnownUrl: sender.tab?.url || message.payload?.url || "",
-        expectedReloads: 0,
-        abortController,
-        supersededFillRunIds,
-      });
-      for (const supersededFillRunId of supersededFillRunIds) {
-        await markPageFillCancelled(tabId, supersededFillRunId, true);
-      }
-      if (supersededFillRunIds.length) {
-        await logActivity(
-          "fill.supersede_previous",
-          "Started a new fill and canceled previous active fill run(s) on this tab.",
-          {
-            tabId,
-            fillRunId,
-            supersededFillRunIds,
-            triggeredBy: message.payload?.triggeredBy || "fill_current_page",
-          },
-          "warn",
-        );
-      }
-      await dismissPageTransientUi(tabId, { preserveFillProgress: true });
-      await markPageFillCancelled(tabId, fillRunId, false);
-      const allowLlmAnswers =
-        state.settings.llmAnswerFallbackEnabled === true &&
-        message.payload?.allowLlmAnswers !== false;
-      const startupDetection = await detectWorkflowForTab(tabId);
-      const startsAtApplyEntry = Boolean(startupDetection?.isApplyEntryPage);
-      let workflow = null;
-      try {
-        const startupRuntimeRecovery = startsAtApplyEntry
-          ? { attempted: false, ok: true, reason: "apply_entry_section" }
-          : await recoverWorkdayRuntimeErrorForTab(tabId, {
-              reason: WORKDAY_RUNTIME_ERROR_REASON,
-            });
-        if (startupRuntimeRecovery.attempted && !startupRuntimeRecovery.ok) {
-          result = {
-            ok: false,
-            reason:
-              startupRuntimeRecovery.reason || WORKDAY_RUNTIME_ERROR_REASON,
-            message:
-              startupRuntimeRecovery.after?.message ||
-              startupRuntimeRecovery.before?.message ||
-              "Workday showed its generic runtime error after loading the application.",
-            route: {
-              routeName: "workday_runtime_recovery",
-              fillSource: state.activeApplyContext.sourceMode || "manual",
-              strategy: "runtime_recovery",
-              adapterName: state.activeApplyContext.atsType || "workday",
-              requestedAtsType: state.activeApplyContext.atsType || "workday",
-              detectedAtsType: "workday",
-              usedGenericFallback: false,
-              adapterBackedByGeneric: false,
-            },
-            attempt: {
-              applyUrl: state.activeApplyContext.applyUrl,
-              atsType: state.activeApplyContext.atsType || "workday",
-              filledFieldCount: 0,
-              manualReviewRequired: true,
-              manualReviewReasons: [
-                startupRuntimeRecovery.reason || WORKDAY_RUNTIME_ERROR_REASON,
-              ],
-            },
-            result: {
-              ok: false,
-              pendingLlmFieldCount: 0,
-              manualReviewReasons: [
-                startupRuntimeRecovery.reason || WORKDAY_RUNTIME_ERROR_REASON,
-              ],
-              filledFieldCount: 0,
-              filledFields: [],
-              fieldInventory: [],
-              generatedAnswers: [],
-              runtimeRecovery: startupRuntimeRecovery,
-            },
-            generatedAnswers: [],
-          };
-        }
-        const directVerificationGate = startsAtApplyEntry
-          ? { handled: false, result: null, reason: "apply_entry_section" }
-          : await maybeHandleEmailVerificationGate({
-              tabId,
-              state,
-              fillRunId,
-              triggeredBy: message.payload?.triggeredBy || "fill_current_page",
-              pageIndex: 0,
-            });
-        if (result) {
-          // Startup runtime recovery already classified the page.
-        } else if (
-          directVerificationGate.handled &&
-          !directVerificationGate.result?.ok
-        ) {
-          result = {
-            ok: false,
-            reason:
-              directVerificationGate.result?.reason ||
-              "email_verification_failed",
-            message:
-              directVerificationGate.result?.message ||
-              "Email verification could not be completed automatically.",
-            route: {
-              routeName: "email_verification",
-              fillSource: state.activeApplyContext.sourceMode || "manual",
-              strategy: "email_verification",
-              adapterName: state.activeApplyContext.atsType || "",
-              requestedAtsType: state.activeApplyContext.atsType || "",
-              detectedAtsType: "email_verification",
-              usedGenericFallback: false,
-              adapterBackedByGeneric: false,
-            },
-            attempt: {
-              applyUrl: state.activeApplyContext.applyUrl,
-              atsType: state.activeApplyContext.atsType,
-              filledFieldCount: 0,
-              manualReviewRequired: true,
-              manualReviewReasons: [
-                directVerificationGate.result?.reason ||
-                  "email_verification_failed",
-              ],
-            },
-            result: {
-              ok: false,
-              pendingLlmFieldCount: 0,
-              manualReviewReasons: [
-                directVerificationGate.result?.reason ||
-                  "email_verification_failed",
-              ],
-              filledFieldCount: 0,
-              filledFields: [],
-              fieldInventory: [],
-              generatedAnswers: [],
-              emailVerification: directVerificationGate,
-            },
-            generatedAnswers: [],
-          };
-        } else {
-          workflow = await new C3CombinedFillWorkflow({
-            tabId,
-            fillRunId,
-            state,
-            triggeredBy: message.payload?.triggeredBy || "fill_current_page",
-            initialDetection: startupDetection,
-          }).prepare();
-          if (!workflow.auth?.ok) {
-            result = workflowBlockedResponse(
-              state,
-              workflow,
-              workflow.auth?.reason || "auth_workflow_failed",
+          await ensureContentBootstrapForTab(tabId, "fill_current_page");
+          if (!state.settings.manualFillEnabled) {
+            await logActivity(
+              "fill.skip",
+              "Manual fill skipped because manual fill is disabled.",
+              {},
+              "blocked",
             );
-          } else if (!workflow.applyEntry?.ok) {
-            result = workflowBlockedResponse(
-              state,
-              workflow,
-              workflow.applyEntry?.reason || "apply_entry_failed",
-            );
-          } else {
-            const fillMessage = workflow.detection?.isAuthPage
-              ? workflow.detection?.authState === "signup"
-                ? "Filling account signup fields: attempt 1"
-                : "Filling account sign-in fields: attempt 1"
-              : message.payload?.pageKind === "apply_entry" ||
-                  (workflow.applyEntry?.ok && !workflow.applyEntry?.skipped)
-                ? "Filling application page: attempt 1"
-                : "Filling current page: attempt 1";
-            await showFillProgress(tabId, fillMessage, fillRunId);
-            try {
-              const justEnteredApplication = Boolean(
-                workflow.applyEntry?.ok && !workflow.applyEntry?.skipped,
-              );
-              result = await runFillWithOneRefreshRetry(
-                tabId,
-                state,
-                message.payload?.triggeredBy || "fill_current_page",
-                fillRunId,
-                {
-                  allowLlmAnswers,
-                  noProgressTimeoutMs: justEnteredApplication ? 15000 : 0,
-                  fieldFillTimeoutMs: justEnteredApplication ? 15000 : 0,
-                },
-              );
-            } finally {
-              clearFillRunExpectedReloads(fillRunId);
-            }
-            result.workflow = workflow;
-            if (result.result) {
-              result.result.workflow = workflow;
-            }
+            return {
+              ok: false,
+              reason: "manual_fill_disabled",
+              message:
+                "Manual fill is currently disabled in extension settings.",
+            };
           }
-        }
-        if (
-          shouldRunV2PageWalk(state.settings, result, message.payload || {})
-        ) {
-          result.pageWalk = await runC3Command({
-            commandName: C3_COMMANDS.pageWalk,
-            state,
-            payload: {
-              ...(message.payload || {}),
-              tabId,
-              fillRunId,
-              triggeredBy: `${
-                message.payload?.triggeredBy || "fill_current_page"
-              }:v2_page_walk`,
-            },
-            sender,
-            handler: () =>
-              runV2PageWalkAfterFill({
+          const passwordSaving =
+            await ensurePasswordSavingDisabled("fill_current_page");
+          if (!passwordSaving.ok) {
+            await logActivity(
+              "password_saving.disable_failed",
+              "C3 could not disable Chrome password saving before fill.",
+              passwordSaving,
+              "warn",
+            );
+          }
+          let result;
+          const fillRunId = createFillRunId();
+          const abortController = new AbortController();
+          const supersededFillRunIds = cancelActiveFillRunsForTab(tabId);
+          activeFillRunByTab.set(tabId, fillRunId);
+          activeFillRuns.set(fillRunId, {
+            tabId,
+            triggeredBy: message.payload?.triggeredBy || "fill_current_page",
+            startedAt: new Date().toISOString(),
+            cancelled: false,
+            lastKnownUrl: sender.tab?.url || message.payload?.url || "",
+            expectedReloads: 0,
+            abortController,
+            supersededFillRunIds,
+          });
+          for (const supersededFillRunId of supersededFillRunIds) {
+            await markPageFillCancelled(tabId, supersededFillRunId, true);
+          }
+          if (supersededFillRunIds.length) {
+            await logActivity(
+              "fill.supersede_previous",
+              "Started a new fill and canceled previous active fill run(s) on this tab.",
+              {
                 tabId,
-                state,
-                initialResult: result,
                 fillRunId,
+                supersededFillRunIds,
                 triggeredBy:
                   message.payload?.triggeredBy || "fill_current_page",
-                allowLlmAnswers,
-              }),
-          });
-          result.message =
-            result.pageWalk.stoppedReason === "final_submit_visible"
-              ? `V2 filled ${result.pageWalk.pagesFilled} page${result.pageWalk.pagesFilled === 1 ? "" : "s"} and stopped before final submit.`
-              : `V2 filled ${result.pageWalk.pagesFilled} page${result.pageWalk.pagesFilled === 1 ? "" : "s"}; page walk stopped: ${result.pageWalk.stoppedReason}.`;
-          if (!result.pageWalk.ok) {
-            result.ok = false;
-            result.reason =
-              result.pageWalk.stoppedReason || "page_walk_stopped";
-            if (result.attempt) {
-              result.attempt.status = "manual_review";
-              result.attempt.manualReviewRequired = true;
-              result.attempt.manualReviewReasons = Array.from(
-                new Set([
-                  ...(result.attempt.manualReviewReasons || []),
-                  `page_walk:${result.reason}`,
-                ]),
-              );
+              },
+              "warn",
+            );
+          }
+          await dismissPageTransientUi(tabId, { preserveFillProgress: true });
+          await markPageFillCancelled(tabId, fillRunId, false);
+          const allowLlmAnswers =
+            state.settings.llmAnswerFallbackEnabled === true &&
+            message.payload?.allowLlmAnswers !== false;
+          const startupDetection = await detectWorkflowForTab(tabId);
+          const startsAtApplyEntry = Boolean(
+            startupDetection?.isApplyEntryPage,
+          );
+          let workflow = null;
+          try {
+            const startupRuntimeRecovery = startsAtApplyEntry
+              ? { attempted: false, ok: true, reason: "apply_entry_section" }
+              : await recoverWorkdayRuntimeErrorForTab(tabId, {
+                  reason: WORKDAY_RUNTIME_ERROR_REASON,
+                });
+            if (
+              startupRuntimeRecovery.attempted &&
+              !startupRuntimeRecovery.ok
+            ) {
+              result = {
+                ok: false,
+                reason:
+                  startupRuntimeRecovery.reason || WORKDAY_RUNTIME_ERROR_REASON,
+                message:
+                  startupRuntimeRecovery.after?.message ||
+                  startupRuntimeRecovery.before?.message ||
+                  "Workday showed its generic runtime error after loading the application.",
+                route: {
+                  routeName: "workday_runtime_recovery",
+                  fillSource: state.activeApplyContext.sourceMode || "manual",
+                  strategy: "runtime_recovery",
+                  adapterName: state.activeApplyContext.atsType || "workday",
+                  requestedAtsType:
+                    state.activeApplyContext.atsType || "workday",
+                  detectedAtsType: "workday",
+                  usedGenericFallback: false,
+                  adapterBackedByGeneric: false,
+                },
+                attempt: {
+                  applyUrl: state.activeApplyContext.applyUrl,
+                  atsType: state.activeApplyContext.atsType || "workday",
+                  filledFieldCount: 0,
+                  manualReviewRequired: true,
+                  manualReviewReasons: [
+                    startupRuntimeRecovery.reason ||
+                      WORKDAY_RUNTIME_ERROR_REASON,
+                  ],
+                },
+                result: {
+                  ok: false,
+                  pendingLlmFieldCount: 0,
+                  manualReviewReasons: [
+                    startupRuntimeRecovery.reason ||
+                      WORKDAY_RUNTIME_ERROR_REASON,
+                  ],
+                  filledFieldCount: 0,
+                  filledFields: [],
+                  fieldInventory: [],
+                  generatedAnswers: [],
+                  runtimeRecovery: startupRuntimeRecovery,
+                },
+                generatedAnswers: [],
+              };
+            }
+            const directVerificationGate = startsAtApplyEntry
+              ? { handled: false, result: null, reason: "apply_entry_section" }
+              : await maybeHandleEmailVerificationGate({
+                  tabId,
+                  state,
+                  fillRunId,
+                  triggeredBy:
+                    message.payload?.triggeredBy || "fill_current_page",
+                  pageIndex: 0,
+                });
+            if (result) {
+              // Startup runtime recovery already classified the page.
+            } else if (
+              directVerificationGate.handled &&
+              !directVerificationGate.result?.ok
+            ) {
+              result = {
+                ok: false,
+                reason:
+                  directVerificationGate.result?.reason ||
+                  "email_verification_failed",
+                message:
+                  directVerificationGate.result?.message ||
+                  "Email verification could not be completed automatically.",
+                route: {
+                  routeName: "email_verification",
+                  fillSource: state.activeApplyContext.sourceMode || "manual",
+                  strategy: "email_verification",
+                  adapterName: state.activeApplyContext.atsType || "",
+                  requestedAtsType: state.activeApplyContext.atsType || "",
+                  detectedAtsType: "email_verification",
+                  usedGenericFallback: false,
+                  adapterBackedByGeneric: false,
+                },
+                attempt: {
+                  applyUrl: state.activeApplyContext.applyUrl,
+                  atsType: state.activeApplyContext.atsType,
+                  filledFieldCount: 0,
+                  manualReviewRequired: true,
+                  manualReviewReasons: [
+                    directVerificationGate.result?.reason ||
+                      "email_verification_failed",
+                  ],
+                },
+                result: {
+                  ok: false,
+                  pendingLlmFieldCount: 0,
+                  manualReviewReasons: [
+                    directVerificationGate.result?.reason ||
+                      "email_verification_failed",
+                  ],
+                  filledFieldCount: 0,
+                  filledFields: [],
+                  fieldInventory: [],
+                  generatedAnswers: [],
+                  emailVerification: directVerificationGate,
+                },
+                generatedAnswers: [],
+              };
+            } else {
+              workflow = await new C3CombinedFillWorkflow({
+                tabId,
+                fillRunId,
+                state,
+                triggeredBy:
+                  message.payload?.triggeredBy || "fill_current_page",
+                initialDetection: startupDetection,
+              }).prepare();
+              if (!workflow.auth?.ok) {
+                result = workflowBlockedResponse(
+                  state,
+                  workflow,
+                  workflow.auth?.reason || "auth_workflow_failed",
+                );
+              } else if (!workflow.applyEntry?.ok) {
+                result = workflowBlockedResponse(
+                  state,
+                  workflow,
+                  workflow.applyEntry?.reason || "apply_entry_failed",
+                );
+              } else {
+                const fillMessage = workflow.detection?.isAuthPage
+                  ? workflow.detection?.authState === "signup"
+                    ? "Filling account signup fields: attempt 1"
+                    : "Filling account sign-in fields: attempt 1"
+                  : message.payload?.pageKind === "apply_entry" ||
+                      (workflow.applyEntry?.ok && !workflow.applyEntry?.skipped)
+                    ? "Filling application page: attempt 1"
+                    : "Filling current page: attempt 1";
+                await showFillProgress(tabId, fillMessage, fillRunId);
+                try {
+                  const justEnteredApplication = Boolean(
+                    workflow.applyEntry?.ok && !workflow.applyEntry?.skipped,
+                  );
+                  result = await runFillWithOneRefreshRetry(
+                    tabId,
+                    state,
+                    message.payload?.triggeredBy || "fill_current_page",
+                    fillRunId,
+                    {
+                      allowLlmAnswers,
+                      noProgressTimeoutMs: justEnteredApplication ? 15000 : 0,
+                      fieldFillTimeoutMs: justEnteredApplication ? 15000 : 0,
+                    },
+                  );
+                } finally {
+                  clearFillRunExpectedReloads(fillRunId);
+                }
+                result.workflow = workflow;
+                if (result.result) {
+                  result.result.workflow = workflow;
+                }
+              }
+            }
+            if (
+              shouldRunV2PageWalk(state.settings, result, message.payload || {})
+            ) {
+              result.pageWalk = await runC3Command({
+                commandName: C3_COMMANDS.pageWalk,
+                state,
+                payload: {
+                  ...(message.payload || {}),
+                  tabId,
+                  fillRunId,
+                  triggeredBy: `${
+                    message.payload?.triggeredBy || "fill_current_page"
+                  }:v2_page_walk`,
+                },
+                sender,
+                handler: () =>
+                  runV2PageWalkAfterFill({
+                    tabId,
+                    state,
+                    initialResult: result,
+                    fillRunId,
+                    triggeredBy:
+                      message.payload?.triggeredBy || "fill_current_page",
+                    allowLlmAnswers,
+                  }),
+              });
+              result.message =
+                result.pageWalk.stoppedReason === "final_submit_visible"
+                  ? `V2 filled ${result.pageWalk.pagesFilled} page${result.pageWalk.pagesFilled === 1 ? "" : "s"} and stopped before final submit.`
+                  : `V2 filled ${result.pageWalk.pagesFilled} page${result.pageWalk.pagesFilled === 1 ? "" : "s"}; page walk stopped: ${result.pageWalk.stoppedReason}.`;
+              if (!result.pageWalk.ok) {
+                result.ok = false;
+                result.reason =
+                  result.pageWalk.stoppedReason || "page_walk_stopped";
+                if (result.attempt) {
+                  result.attempt.status = "manual_review";
+                  result.attempt.manualReviewRequired = true;
+                  result.attempt.manualReviewReasons = Array.from(
+                    new Set([
+                      ...(result.attempt.manualReviewReasons || []),
+                      `page_walk:${result.reason}`,
+                    ]),
+                  );
+                }
+              }
+              if (
+                result.pageWalk.manualReviewRequired &&
+                result.pageWalk.stoppedReason !== "final_submit_visible" &&
+                result.attempt
+              ) {
+                result.attempt.manualReviewRequired = true;
+                result.attempt.manualReviewReasons = Array.from(
+                  new Set([
+                    ...(result.attempt.manualReviewReasons || []),
+                    "c3_v2_page_walk_review_items",
+                  ]),
+                );
+              }
+            }
+            if (result && workflow && !result.workflow) {
+              result.workflow = workflow;
+              if (result.result) {
+                result.result.workflow = workflow;
+              }
+            }
+          } finally {
+            const stillOwnsPageUi = activeFillRunByTab.get(tabId) === fillRunId;
+            activeFillRuns.delete(fillRunId);
+            if (stillOwnsPageUi) {
+              activeFillRunByTab.delete(tabId);
+              await hideFillProgress(tabId);
+            } else if (result) {
+              result.superseded = true;
             }
           }
           if (
-            result.pageWalk.manualReviewRequired &&
-            result.pageWalk.stoppedReason !== "final_submit_visible" &&
-            result.attempt
+            result?.superseded ||
+            result?.reason === "superseded_by_new_fill"
           ) {
-            result.attempt.manualReviewRequired = true;
-            result.attempt.manualReviewReasons = Array.from(
-              new Set([
-                ...(result.attempt.manualReviewReasons || []),
-                "c3_v2_page_walk_review_items",
-              ]),
+            await sendDebugLog("fill_result", {
+              ok: result.ok,
+              message: result.message,
+              route: result.route,
+              attempt: result.attempt,
+              result: result.result,
+              generatedAnswers: result.generatedAnswers,
+              refreshRetry: result.refreshRetry || null,
+              pageWalk: result.pageWalk || null,
+              workflow: result.workflow || null,
+              superseded: true,
+            });
+            await logActivity(
+              "fill.superseded",
+              "Ignored stale fill result because a newer fill owns this tab.",
+              {
+                fillRunId,
+                tabId,
+                reason: result.reason || "",
+                newerFillRunId: activeFillRunByTab.get(tabId) || "",
+              },
+              "warn",
             );
+            return result;
           }
-        }
-        if (result && workflow && !result.workflow) {
-          result.workflow = workflow;
-          if (result.result) {
-            result.result.workflow = workflow;
-          }
-        }
-      } finally {
-        const stillOwnsPageUi = activeFillRunByTab.get(tabId) === fillRunId;
-        activeFillRuns.delete(fillRunId);
-        if (stillOwnsPageUi) {
-          activeFillRunByTab.delete(tabId);
-          await hideFillProgress(tabId);
-        } else if (result) {
-          result.superseded = true;
-        }
-      }
-      if (result?.superseded || result?.reason === "superseded_by_new_fill") {
-        await sendDebugLog("fill_result", {
-          ok: result.ok,
-          message: result.message,
-          route: result.route,
-          attempt: result.attempt,
-          result: result.result,
-          generatedAnswers: result.generatedAnswers,
-          refreshRetry: result.refreshRetry || null,
-          pageWalk: result.pageWalk || null,
-          workflow: result.workflow || null,
-          superseded: true,
-        });
-        await logActivity(
-          "fill.superseded",
-          "Ignored stale fill result because a newer fill owns this tab.",
-          {
-            fillRunId,
-            tabId,
-            reason: result.reason || "",
-            newerFillRunId: activeFillRunByTab.get(tabId) || "",
-          },
-          "warn",
-        );
-        return result;
-      }
-      await notePageFillCompleted(tabId, {
-        triggeredBy: message.payload?.triggeredBy || "fill_current_page",
-        ok: Boolean(result?.ok),
-        filledFieldCount: Number(result?.attempt?.filledFieldCount || 0),
-      });
-      await sendDebugLog("fill_result", {
-        ok: result.ok,
-        message: result.message,
-        route: result.route,
-        attempt: result.attempt,
-        result: result.result,
-        generatedAnswers: result.generatedAnswers,
-        refreshRetry: result.refreshRetry || null,
-        pageWalk: result.pageWalk || null,
-        workflow: result.workflow || null,
-      });
-      await logActivity(
-        result.cancelled
-          ? "fill.cancelled"
-          : result.ok
-            ? "fill.complete"
-            : "fill.failed",
-        result.message || (result.ok ? "Fill completed." : "Fill failed."),
-        {
-          fillRunId,
-          jobId: state.activeApplyContext.jobId,
-          applyUrl:
-            result.attempt?.applyUrl || state.activeApplyContext.applyUrl,
-          atsType: result.attempt?.atsType,
-          filledFieldCount: result.attempt?.filledFieldCount,
-          pendingLlmFieldCount: result.result?.pendingLlmFieldCount || 0,
-          pendingLlmFields: (result.result?.pendingLlmFields || []).slice(
-            0,
-            10,
-          ),
-          interactionTrace: (result.result?.interactionTrace || []).slice(
-            0,
-            80,
-          ),
-          refreshRetry: result.refreshRetry || null,
-          pageWalk: result.pageWalk || null,
-          workflow: result.workflow || null,
-          v2PermanentIssues: summarizeV2Issues(v2PermanentIssues(result), 20),
-          manualReviewRequired: result.attempt?.manualReviewRequired,
-        },
-        result.ok ? "ok" : "failed",
-      );
-      const reviewReasons =
-        result.attempt?.manualReviewReasons ||
-        result.result?.manualReviewReasons ||
-        [];
-      const missingResume = reviewReasons.some((reason) =>
-        String(reason).includes("missing_resume_data"),
-      );
-      const filledNothing = result.ok && !result.attempt?.filledFieldCount;
-      const exportResult = state.settings.autoExportLogs
-        ? await withTimeout(
-            maybeAutoExportLogs(result.ok ? "fill-complete" : "fill-failed"),
-            5000,
-            () => ({ exported: false, reason: "auto_export_timeout" }),
-          )
-        : { exported: false, reason: "disabled" };
-      const fillSummaryPayload = buildFillSummaryPayload(result);
-      if (fillSummaryPayload) {
-        await showFillSummary(tabId, fillSummaryPayload);
-      }
-      await showPageToast(
-        tabId,
-        result.cancelled
-          ? "Fill canceled."
-          : missingResume
-            ? "No default resume is saved. Open Hunt Apply Options and save a PDF resume."
-            : filledNothing
-              ? "No fields were filled. Hunt logged the detected fields for review."
-              : exportResult.exported
-                ? `${result.message || (result.ok ? "Fill completed." : "Fill failed.")} Logs exported to ${exportResult.filename}.`
-                : result.message ||
-                  (result.ok ? "Fill completed." : "Fill failed."),
-        result.cancelled ||
-          missingResume ||
-          filledNothing ||
-          !result.ok ||
-          result.attempt?.manualReviewRequired
-          ? "warn"
-          : "info",
-      );
-      if (result.ok && result.result?.pendingLlmFieldCount > 0) {
-        await showLlmPrompt(tabId, {
-          fieldCount: result.result.pendingLlmFieldCount,
-          filledFieldCount: result.result.filledFieldCount || 0,
-        });
-      }
-      if (!result.cancelled) {
-        if (result.pageWalk?.enabled) {
-          result.nextAction = result.pageWalk.lastNextAction || null;
-        } else {
-          result.nextAction = await maybeHandleSafeNextAfterFill({
-            tabId,
-            fillResponse: result,
-            settings: state.settings,
+          await notePageFillCompleted(tabId, {
             triggeredBy: message.payload?.triggeredBy || "fill_current_page",
+            ok: Boolean(result?.ok),
+            filledFieldCount: Number(result?.attempt?.filledFieldCount || 0),
           });
-        }
-      }
-      return result;
+          await sendDebugLog("fill_result", {
+            ok: result.ok,
+            message: result.message,
+            route: result.route,
+            attempt: result.attempt,
+            result: result.result,
+            generatedAnswers: result.generatedAnswers,
+            refreshRetry: result.refreshRetry || null,
+            pageWalk: result.pageWalk || null,
+            workflow: result.workflow || null,
+          });
+          await logActivity(
+            result.cancelled
+              ? "fill.cancelled"
+              : result.ok
+                ? "fill.complete"
+                : "fill.failed",
+            result.message || (result.ok ? "Fill completed." : "Fill failed."),
+            {
+              fillRunId,
+              jobId: state.activeApplyContext.jobId,
+              applyUrl:
+                result.attempt?.applyUrl || state.activeApplyContext.applyUrl,
+              atsType: result.attempt?.atsType,
+              filledFieldCount: result.attempt?.filledFieldCount,
+              pendingLlmFieldCount: result.result?.pendingLlmFieldCount || 0,
+              pendingLlmFields: (result.result?.pendingLlmFields || []).slice(
+                0,
+                10,
+              ),
+              interactionTrace: (result.result?.interactionTrace || []).slice(
+                0,
+                80,
+              ),
+              refreshRetry: result.refreshRetry || null,
+              pageWalk: result.pageWalk || null,
+              workflow: result.workflow || null,
+              v2PermanentIssues: summarizeV2Issues(
+                v2PermanentIssues(result),
+                20,
+              ),
+              manualReviewRequired: result.attempt?.manualReviewRequired,
+            },
+            result.ok ? "ok" : "failed",
+          );
+          const reviewReasons =
+            result.attempt?.manualReviewReasons ||
+            result.result?.manualReviewReasons ||
+            [];
+          const missingResume = reviewReasons.some((reason) =>
+            String(reason).includes("missing_resume_data"),
+          );
+          const filledNothing = result.ok && !result.attempt?.filledFieldCount;
+          const exportResult = state.settings.autoExportLogs
+            ? await withTimeout(
+                maybeAutoExportLogs(
+                  result.ok ? "fill-complete" : "fill-failed",
+                ),
+                5000,
+                () => ({ exported: false, reason: "auto_export_timeout" }),
+              )
+            : { exported: false, reason: "disabled" };
+          const fillSummaryPayload = buildFillSummaryPayload(result);
+          if (fillSummaryPayload) {
+            await showFillSummary(tabId, fillSummaryPayload);
+          }
+          await showPageToast(
+            tabId,
+            result.cancelled
+              ? "Fill canceled."
+              : missingResume
+                ? "No default resume is saved. Open Hunt Apply Options and save a PDF resume."
+                : filledNothing
+                  ? "No fields were filled. Hunt logged the detected fields for review."
+                  : exportResult.exported
+                    ? `${result.message || (result.ok ? "Fill completed." : "Fill failed.")} Logs exported to ${exportResult.filename}.`
+                    : result.message ||
+                      (result.ok ? "Fill completed." : "Fill failed."),
+            result.cancelled ||
+              missingResume ||
+              filledNothing ||
+              !result.ok ||
+              result.attempt?.manualReviewRequired
+              ? "warn"
+              : "info",
+          );
+          if (result.ok && result.result?.pendingLlmFieldCount > 0) {
+            await showLlmPrompt(tabId, {
+              fieldCount: result.result.pendingLlmFieldCount,
+              filledFieldCount: result.result.filledFieldCount || 0,
+            });
+          }
+          if (!result.cancelled) {
+            if (result.pageWalk?.enabled) {
+              result.nextAction = result.pageWalk.lastNextAction || null;
+            } else {
+              result.nextAction = await maybeHandleSafeNextAfterFill({
+                tabId,
+                fillResponse: result,
+                settings: state.settings,
+                triggeredBy:
+                  message.payload?.triggeredBy || "fill_current_page",
+              });
+            }
+          }
+          return result;
         },
       });
     }

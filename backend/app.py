@@ -4086,7 +4086,14 @@ def api_linkedin_accounts_upsert(payload: dict = Body(...), _auth: str = Depends
                         auth_state = ?, updated_at = CURRENT_TIMESTAMP
                     WHERE id = ?
                     """,
-                    (username, password_encrypted, display_name, active, auth_state, int(account_id)),
+                    (
+                        username,
+                        password_encrypted,
+                        display_name,
+                        active,
+                        auth_state,
+                        int(account_id),
+                    ),
                 )
             else:
                 conn.execute(

@@ -247,7 +247,9 @@ def test_generic_v2_audit_events_include_inventory_answers_and_command_context()
 
     events = result["v2Audit"]["events"]
     event_types = [event.get("event_type") for event in events]
-    answer_event = next(event for event in events if event.get("event_type") == "field.answer.resolved")
+    answer_event = next(
+        event for event in events if event.get("event_type") == "field.answer.resolved"
+    )
 
     assert "field.inventory" in event_types
     assert "field.answer.resolved" in event_types

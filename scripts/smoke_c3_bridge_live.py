@@ -59,7 +59,9 @@ class McpClient:
     def request(self, method: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
         if self._proc.poll() is not None:
             stderr = self._proc.stderr.read() if self._proc.stderr else ""
-            raise SmokeFailure(f"MCP server exited early with code {self._proc.returncode}: {stderr}")
+            raise SmokeFailure(
+                f"MCP server exited early with code {self._proc.returncode}: {stderr}"
+            )
         request_id = self._next_id
         self._next_id += 1
         payload: dict[str, Any] = {"jsonrpc": "2.0", "id": request_id, "method": method}
@@ -75,7 +77,9 @@ class McpClient:
             raise SmokeFailure(f"MCP server returned no response for {method}: {stderr}")
         response = json.loads(line)
         if response.get("id") != request_id:
-            raise SmokeFailure(f"MCP response id mismatch: expected {request_id}, got {response.get('id')}")
+            raise SmokeFailure(
+                f"MCP response id mismatch: expected {request_id}, got {response.get('id')}"
+            )
         if "error" in response:
             raise SmokeFailure(f"MCP {method} failed: {response['error']}")
         return response["result"]
@@ -163,7 +167,12 @@ def run_smoke(args: argparse.Namespace, report: dict[str, Any]) -> None:
         actor = {"type": "agent", "id": agent_id, "surface": "mcp"}
         agent = client.call_tool(
             "hunt_ledger_create_agent",
-            {"component": "c3", "agent_id": agent_id, "actor": actor, "metadata": {"smoke": "c3_bridge_live"}},
+            {
+                "component": "c3",
+                "agent_id": agent_id,
+                "actor": actor,
+                "metadata": {"smoke": "c3_bridge_live"},
+            },
         )
         lane = client.call_tool(
             "hunt_ledger_create_lane",
@@ -215,7 +224,9 @@ def run_smoke(args: argparse.Namespace, report: dict[str, Any]) -> None:
         report["proof"]["lease"] = lease_response
         report["steps"].append({"name": "session_mutation_lease", "ok": True})
 
-        register_target_if_available(client, tool_names, args, report, agent_id, lane_id, session_id, lease_id)
+        register_target_if_available(
+            client, tool_names, args, report, agent_id, lane_id, session_id, lease_id
+        )
 
         command_payload = {
             "scope": args.inspect_scope,
@@ -255,7 +266,9 @@ def run_smoke(args: argparse.Namespace, report: dict[str, Any]) -> None:
         active = client.call_tool("hunt_ledger_get_active", {})
         report["proof"]["logs"] = {
             "agent_log_path": agent_log.get("log_path"),
-            "lane_log_path": (((active.get("active_lanes") or {}).get(lane_id) or {}).get("log_path")),
+            "lane_log_path": (
+                ((active.get("active_lanes") or {}).get(lane_id) or {}).get("log_path")
+            ),
             "session_log_path": session_log.get("log_path"),
         }
         verify_log_events(session_log, command_id)
@@ -263,7 +276,9 @@ def run_smoke(args: argparse.Namespace, report: dict[str, Any]) -> None:
         report["steps"].append({"name": "jsonl_agent_lane_session", "ok": True})
 
         if args.rebuild_index:
-            rebuild_result = backend_json(args.backend_url, args.service_token, "/api/ledger/rebuild-index", method="POST")
+            rebuild_result = backend_json(
+                args.backend_url, args.service_token, "/api/ledger/rebuild-index", method="POST"
+            )
             report["proof"]["postgres_rebuild"] = rebuild_result
         postgres_proof = verify_postgres(args.db_url, session_id, command_id)
         report["proof"]["postgres"] = postgres_proof
@@ -341,7 +356,11 @@ def verify_accessible_jsonl_paths(
     command_id: str,
     ledger_host_root: str = "",
 ) -> None:
-    missing = [name for name in ("agent_log_path", "lane_log_path", "session_log_path") if not paths.get(name)]
+    missing = [
+        name
+        for name in ("agent_log_path", "lane_log_path", "session_log_path")
+        if not paths.get(name)
+    ]
     if missing:
         raise SmokeFailure(f"backend did not expose expected JSONL log paths: {missing}")
     inaccessible = []
@@ -411,7 +430,9 @@ def verify_postgres(db_url: str, session_id: str, command_id: str) -> dict[str, 
     if int(summary["session_event_count"]) == 0:
         raise SmokeFailure(f"Postgres ledger_events has no rows for session_id={session_id}")
     if int(summary["missing_jsonl_path_count"]) != 0:
-        raise SmokeFailure(f"Postgres rows for session_id={session_id} include missing jsonl_path: {summary}")
+        raise SmokeFailure(
+            f"Postgres rows for session_id={session_id} include missing jsonl_path: {summary}"
+        )
     if not command_rows:
         raise SmokeFailure(f"Postgres ledger_events has no rows for command_id={command_id}")
     return {"summary": summary, "command_rows": command_rows}
@@ -422,7 +443,11 @@ def find_command_receipt(value: Any) -> dict[str, Any] | None:
         receipt = value.get("commandReceipt")
         if isinstance(receipt, dict):
             return receipt
-        payload_receipt = ((value.get("payload") or {}).get("receipt") if isinstance(value.get("payload"), dict) else None)
+        payload_receipt = (
+            (value.get("payload") or {}).get("receipt")
+            if isinstance(value.get("payload"), dict)
+            else None
+        )
         if isinstance(payload_receipt, dict):
             return payload_receipt
         for nested_key in ("result", "response", "data"):
@@ -469,7 +494,9 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Live smoke for MCP -> backend -> C3 extension command ledger bridge.",
     )
-    parser.add_argument("--backend-url", default=os.environ.get("HUNT_BACKEND_URL", DEFAULT_BACKEND_URL))
+    parser.add_argument(
+        "--backend-url", default=os.environ.get("HUNT_BACKEND_URL", DEFAULT_BACKEND_URL)
+    )
     parser.add_argument("--service-token", default=os.environ.get("HUNT_SERVICE_TOKEN", ""))
     parser.add_argument("--db-url", default=os.environ.get("HUNT_DB_URL", ""))
     parser.add_argument("--python", default=sys.executable)
@@ -479,7 +506,9 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--command-id", default="")
     parser.add_argument("--trace-id", default="")
     parser.add_argument("--lease-ttl-seconds", type=int, default=300)
-    parser.add_argument("--cdp-port", type=int, default=int(os.environ.get("HUNT_C3_CDP_PORT", "9222")))
+    parser.add_argument(
+        "--cdp-port", type=int, default=int(os.environ.get("HUNT_C3_CDP_PORT", "9222"))
+    )
     parser.add_argument("--extension-id", default=os.environ.get("HUNT_C3_EXTENSION_ID", ""))
     parser.add_argument("--target-id", default=os.environ.get("HUNT_C3_TARGET_ID", ""))
     parser.add_argument("--tab-id", default=os.environ.get("HUNT_C3_TAB_ID", ""))

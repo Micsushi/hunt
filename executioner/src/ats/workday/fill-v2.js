@@ -13,7 +13,9 @@ export function createWorkdayFillV2Function() {
       ...context,
       atsType: "workday",
     };
-    const timeoutMs = Number(context?.settings?.workdayFillReturnTimeoutMs || 60000);
+    const timeoutMs = Number(
+      context?.settings?.workdayFillReturnTimeoutMs || 60000,
+    );
     const timeoutResult = new Promise((resolve) => {
       setTimeout(() => {
         const clean = (value) =>
@@ -49,66 +51,69 @@ export function createWorkdayFillV2Function() {
           .filter((text) => !/successfully uploaded/i.test(text));
         const filledFields = [];
         const fieldInventory = [];
-        Array.from(document.querySelectorAll("input, textarea, button")).forEach(
-          (el) => {
-            if (!visible(el)) {
-              return;
-            }
-            const tagName = el.tagName || "";
-            const type = String(el.type || "").toLowerCase();
-            if (tagName === "INPUT" && /^(hidden|submit|button|reset|file)$/i.test(type)) {
-              return;
-            }
-            const label = clean(
-              [
-                el.getAttribute?.("aria-label"),
-                el.id,
-                el.name,
-                el.innerText,
-                el.textContent,
-              ]
-                .filter(Boolean)
-                .join(" "),
-            );
-            const value =
-              type === "checkbox" || type === "radio"
-                ? el.checked
-                  ? el.value || "checked"
-                  : ""
-                : clean(el.value || el.innerText || el.textContent || "");
-            const filled =
-              Boolean(value) &&
-              !/^select one$/i.test(value) &&
-              !/^(english|settings|save and continue)$/i.test(value);
-            if (!label && !filled) {
-              return;
-            }
-            const entry = {
-              kind: tagName.toLowerCase(),
-              tagName,
-              type,
-              id: el.id || "",
-              name: el.name || "",
-              descriptor: label.slice(0, 240),
-              required:
-                el.required ||
-                /required/i.test(el.getAttribute?.("aria-label") || ""),
-              filled,
-              skippedReason: filled ? "" : "workday_timeout_dom_recovery",
-              valueSource: filled ? "dom:workday_timeout_recovery" : "",
-              bestEffortWarning: "",
-              options: [],
-            };
-            fieldInventory.push(entry);
-            if (filled) {
-              filledFields.push({
-                field: entry.descriptor,
-                valueSource: entry.valueSource,
-                questionHash: entry.id || entry.name || entry.descriptor,
-              });
-            }
-          },
-        );
+        Array.from(
+          document.querySelectorAll("input, textarea, button"),
+        ).forEach((el) => {
+          if (!visible(el)) {
+            return;
+          }
+          const tagName = el.tagName || "";
+          const type = String(el.type || "").toLowerCase();
+          if (
+            tagName === "INPUT" &&
+            /^(hidden|submit|button|reset|file)$/i.test(type)
+          ) {
+            return;
+          }
+          const label = clean(
+            [
+              el.getAttribute?.("aria-label"),
+              el.id,
+              el.name,
+              el.innerText,
+              el.textContent,
+            ]
+              .filter(Boolean)
+              .join(" "),
+          );
+          const value =
+            type === "checkbox" || type === "radio"
+              ? el.checked
+                ? el.value || "checked"
+                : ""
+              : clean(el.value || el.innerText || el.textContent || "");
+          const filled =
+            Boolean(value) &&
+            !/^select one$/i.test(value) &&
+            !/^(english|settings|save and continue)$/i.test(value);
+          if (!label && !filled) {
+            return;
+          }
+          const entry = {
+            kind: tagName.toLowerCase(),
+            tagName,
+            type,
+            id: el.id || "",
+            name: el.name || "",
+            descriptor: label.slice(0, 240),
+            required:
+              el.required ||
+              /required/i.test(el.getAttribute?.("aria-label") || ""),
+            filled,
+            skippedReason: filled ? "" : "workday_timeout_dom_recovery",
+            valueSource: filled ? "dom:workday_timeout_recovery" : "",
+            bestEffortWarning: "",
+            options: [],
+          };
+          fieldInventory.push(entry);
+          if (filled) {
+            filledFields.push({
+              field: entry.descriptor,
+              valueSource: entry.valueSource,
+              questionHash: entry.id || entry.name || entry.descriptor,
+            });
+          }
+        });
         resolve({
           ok: errors.length === 0 && filledFields.length > 0,
           atsType: "workday",
@@ -133,7 +138,8 @@ export function createWorkdayFillV2Function() {
               action: "workday_fill_return_timeout_recovered",
               step: "adapter.timeout",
               status: errors.length ? "warn" : "ok",
-              reason: "Workday adapter returned DOM recovery result after page-side fill did not resolve.",
+              reason:
+                "Workday adapter returned DOM recovery result after page-side fill did not resolve.",
               detail: { timeoutMs, errors: errors.slice(0, 10) },
             },
           ],

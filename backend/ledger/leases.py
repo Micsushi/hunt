@@ -130,7 +130,9 @@ class InMemoryLeaseStore:
         session = self._require_session(session_id)
         session.status = status
         session.updated_at = self._now()
-        self._record_event(f"session.{status.value}", actor, lane_id=session.lane_id, session_id=session_id)
+        self._record_event(
+            f"session.{status.value}", actor, lane_id=session.lane_id, session_id=session_id
+        )
         if status in {SessionStatus.FAILED, SessionStatus.REPLACED, SessionStatus.CLOSED}:
             self._invalidate_session_leases(session_id, actor, f"session.{status.value}")
         return session
@@ -152,7 +154,9 @@ class InMemoryLeaseStore:
             session = self._require_session(session_id)
             if session.lane_id != lane_id:
                 raise ValueError("session_id belongs to a different lane_id")
-        return self._claim(LeaseKind.SESSION_MUTATION, actor, ttl_seconds, lane_id=lane_id, session_id=session_id)
+        return self._claim(
+            LeaseKind.SESSION_MUTATION, actor, ttl_seconds, lane_id=lane_id, session_id=session_id
+        )
 
     def heartbeat(self, lease_id: str, actor: Actor) -> dict:
         lease = self._require_lease(lease_id)
@@ -240,16 +244,24 @@ class InMemoryLeaseStore:
             )
         return events
 
-    def require_mutation_lease(self, session_id: str, actor: Actor, lease_id: str | None = None) -> LeaseRecord | None:
+    def require_mutation_lease(
+        self, session_id: str, actor: Actor, lease_id: str | None = None
+    ) -> LeaseRecord | None:
         if actor.is_human:
             active = self._active_lease_for(LeaseKind.SESSION_MUTATION, session_id=session_id)
             if active is not None:
-                self.interrupt_by_human(actor, lease_id=active.lease_id, reason="human override mutation")
+                self.interrupt_by_human(
+                    actor, lease_id=active.lease_id, reason="human override mutation"
+                )
             return None
 
-        lease = self._require_lease(lease_id) if lease_id else self._active_lease_for(
-            LeaseKind.SESSION_MUTATION,
-            session_id=session_id,
+        lease = (
+            self._require_lease(lease_id)
+            if lease_id
+            else self._active_lease_for(
+                LeaseKind.SESSION_MUTATION,
+                session_id=session_id,
+            )
         )
         if lease is None or lease.status != LeaseStatus.ACTIVE:
             raise LeasePermissionError("mutation requires active session lease")
@@ -270,7 +282,9 @@ class InMemoryLeaseStore:
         session_id: str | None = None,
         payload: dict | None = None,
     ) -> dict:
-        return self._record_event(event_type, actor, lane_id=lane_id, session_id=session_id, payload=payload)
+        return self._record_event(
+            event_type, actor, lane_id=lane_id, session_id=session_id, payload=payload
+        )
 
     def _claim(
         self,
@@ -280,7 +294,9 @@ class InMemoryLeaseStore:
         lane_id: str | None = None,
         session_id: str | None = None,
     ) -> LeaseClaim:
-        events = [self._record_event("lease.requested", actor, lane_id=lane_id, session_id=session_id)]
+        events = [
+            self._record_event("lease.requested", actor, lane_id=lane_id, session_id=session_id)
+        ]
         active = self._active_lease_for(kind, lane_id=lane_id, session_id=session_id)
         if active is not None:
             if active.is_stale_at(self._now()):
@@ -339,7 +355,9 @@ class InMemoryLeaseStore:
                 lease.status = LeaseStatus.RELEASED
                 lease.released_at = now
                 lease.updated_at = now
-                self._record_event_for_lease("lease.released", lease, actor, payload={"reason": reason})
+                self._record_event_for_lease(
+                    "lease.released", lease, actor, payload={"reason": reason}
+                )
 
     def _matching_active_leases_for_interrupt(
         self,
@@ -435,4 +453,3 @@ class InMemoryLeaseStore:
         if now.tzinfo is None:
             return now.replace(tzinfo=UTC)
         return now.astimezone(UTC)
-

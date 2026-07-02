@@ -10,7 +10,13 @@ import pytest
 
 from backend.ledger.config import get_ledger_root, initialize_ledger_root
 from backend.ledger.jsonl_store import JsonlLedger
-from backend.ledger.models import AgentCreate, LaneCreate, LedgerEventIn, ProbeFileCreate, SessionCreate
+from backend.ledger.models import (
+    AgentCreate,
+    LaneCreate,
+    LedgerEventIn,
+    ProbeFileCreate,
+    SessionCreate,
+)
 from backend.ledger.redaction import env_check
 from backend.ledger.service import LedgerService
 
@@ -81,7 +87,9 @@ def test_initialize_ledger_root_writes_structure_files(tmp_path):
 
 
 def test_generated_ledger_structure_documents_agent_traversal():
-    root = initialize_ledger_root(Path(".state") / f"test-ledger-structure-{uuid.uuid4().hex}" / "ledger")
+    root = initialize_ledger_root(
+        Path(".state") / f"test-ledger-structure-{uuid.uuid4().hex}" / "ledger"
+    )
     structure = (root / "LEDGER_STRUCTURE.md").read_text(encoding="utf-8")
 
     for expected in (
@@ -315,7 +323,9 @@ def test_service_best_effort_index_receives_jsonl_source_location(tmp_path, monk
     assert captured["closed"] is True
 
 
-def test_service_append_event_does_not_fail_when_best_effort_index_is_unavailable(tmp_path, monkeypatch):
+def test_service_append_event_does_not_fail_when_best_effort_index_is_unavailable(
+    tmp_path, monkeypatch
+):
     monkeypatch.setenv("HUNT_DB_URL", "postgresql://invalid:invalid@127.0.0.1:1/invalid")
     service = LedgerService(tmp_path / "ledger")
     agent = service.create_agent(AgentCreate(agent_id="agent-index-best-effort"))

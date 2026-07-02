@@ -268,8 +268,9 @@
     return {
       listbox: root.audit?.summarizeElement(listbox) || {},
       container:
-        root.audit?.summarizeElement(root.workdayUi?.nearestWorkdayField?.(el)) ||
-        {},
+        root.audit?.summarizeElement(
+          root.workdayUi?.nearestWorkdayField?.(el),
+        ) || {},
       activeElement: root.audit?.summarizeElement(document.activeElement) || {},
     };
   }
@@ -278,14 +279,27 @@
     root.audit?.emitEvent(
       audit,
       eventType,
-      root.audit.fieldPayload(field, Object.assign({ popupOwner: popupOwner(field) }, payload || {})),
+      root.audit.fieldPayload(
+        field,
+        Object.assign({ popupOwner: popupOwner(field) }, payload || {}),
+      ),
     );
   }
 
-  function emitWorkdayOptionsCollected(field, context, options, waitResult, reason) {
+  function emitWorkdayOptionsCollected(
+    field,
+    context,
+    options,
+    waitResult,
+    reason,
+  ) {
     emitWorkdayEvent(context?.audit, "options.collected", field, {
       status: (options || []).length ? "ok" : "warn",
-      reason: reason || ((options || []).length ? "visible_workday_options" : "no_visible_workday_options"),
+      reason:
+        reason ||
+        ((options || []).length
+          ? "visible_workday_options"
+          : "no_visible_workday_options"),
       optionCount: (options || []).length,
       waitAttempts: waitResult?.attempts || 0,
       waitedMs: waitResult?.waitedMs || 0,
@@ -632,15 +646,20 @@
     }
     var state = workdayCommittedState(field);
     var ok = selected.length > 0;
-    emitWorkdayEvent(audit, ok ? "validation.cleared" : "validation.visible", field, {
-      status: ok ? "ok" : "warn",
-      reason: ok
-        ? "workday_skill_validation_cleared"
-        : "workday_skill_validation_visible",
-      selectedOption: selectedTechnicalSkillLabels(field).join("; "),
-      selectedCount: selected.length,
-      missingCount: missing.length,
-    });
+    emitWorkdayEvent(
+      audit,
+      ok ? "validation.cleared" : "validation.visible",
+      field,
+      {
+        status: ok ? "ok" : "warn",
+        reason: ok
+          ? "workday_skill_validation_cleared"
+          : "workday_skill_validation_visible",
+        selectedOption: selectedTechnicalSkillLabels(field).join("; "),
+        selectedCount: selected.length,
+        missingCount: missing.length,
+      },
+    );
     if (missing.length) {
       root.audit?.pushIssue(audit, fieldAudit, {
         kind: ok
@@ -1772,8 +1791,16 @@
   }
 
   function safePhoneDeviceTypeOption(options) {
-    var real = root.optionMatcher?.realOptions?.(options || []) || options || [];
-    var preferred = ["mobile", "cell", "cell phone", "work", "telephone", "home"];
+    var real =
+      root.optionMatcher?.realOptions?.(options || []) || options || [];
+    var preferred = [
+      "mobile",
+      "cell",
+      "cell phone",
+      "work",
+      "telephone",
+      "home",
+    ];
     for (var i = 0; i < preferred.length; i += 1) {
       var wanted = preferred[i];
       var found = real.find(function (option) {
@@ -2008,13 +2035,13 @@
         field,
         context,
         [
-        {
-          label: committedLabel,
-          value: committedLabel,
-          element: field.element,
-          placeholder: false,
-          committed: true,
-        },
+          {
+            label: committedLabel,
+            value: committedLabel,
+            element: field.element,
+            placeholder: false,
+            committed: true,
+          },
         ],
         { attempts: 0, waitedMs: 0 },
         "committed_workday_selection",
@@ -2126,14 +2153,14 @@
           field,
           context,
           [
-          {
-            label: postPopupLabel,
-            value: postPopupLabel,
-            element: field.element,
-            placeholder: false,
-            committed: true,
-            committedReason: "popup_empty_already_committed",
-          },
+            {
+              label: postPopupLabel,
+              value: postPopupLabel,
+              element: field.element,
+              placeholder: false,
+              committed: true,
+              committedReason: "popup_empty_already_committed",
+            },
           ],
           waitResult,
           "popup_empty_already_committed",
@@ -2990,13 +3017,21 @@
         validationVisible: workdayFieldHasValidationError(field),
       },
     });
-    emitWorkdayEvent(audit, ok && !workdayFieldHasValidationError(field) ? "validation.cleared" : "validation.visible", field, {
-      status: ok && !workdayFieldHasValidationError(field) ? "ok" : "warn",
-      reason: ok && !workdayFieldHasValidationError(field)
-        ? "workday_validation_cleared_after_commit"
-        : "workday_validation_visible_after_commit",
-      selectedOption: target.label,
-    });
+    emitWorkdayEvent(
+      audit,
+      ok && !workdayFieldHasValidationError(field)
+        ? "validation.cleared"
+        : "validation.visible",
+      field,
+      {
+        status: ok && !workdayFieldHasValidationError(field) ? "ok" : "warn",
+        reason:
+          ok && !workdayFieldHasValidationError(field)
+            ? "workday_validation_cleared_after_commit"
+            : "workday_validation_visible_after_commit",
+        selectedOption: target.label,
+      },
+    );
     if (!ok) {
       root.audit?.pushIssue(audit, fieldAudit, {
         kind: "workday_commit_not_verified",

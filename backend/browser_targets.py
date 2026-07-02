@@ -30,7 +30,9 @@ class BrowserTargetRegister(BaseModel):
     heartbeat_at: str = ""
     tab_id: int | None = None
     url: str = ""
-    actor: ActorPayload = Field(default_factory=lambda: ActorPayload(type="agent", surface="c3_extension"))
+    actor: ActorPayload = Field(
+        default_factory=lambda: ActorPayload(type="agent", surface="c3_extension")
+    )
     metadata: dict[str, Any] = Field(default_factory=dict)
 
 
@@ -340,7 +342,9 @@ def get_browser_target(
 ):
     target = store.get(session_id)
     if target is None:
-        raise HTTPException(status_code=404, detail=f"Browser target for session {session_id} was not found.")
+        raise HTTPException(
+            status_code=404, detail=f"Browser target for session {session_id} was not found."
+        )
     return {"target": target.as_response()}
 
 
@@ -355,7 +359,9 @@ def unregister_browser_target(
 ):
     target = store.unregister(session_id)
     if target is None:
-        raise HTTPException(status_code=404, detail=f"Browser target for session {session_id} was not found.")
+        raise HTTPException(
+            status_code=404, detail=f"Browser target for session {session_id} was not found."
+        )
     actor = {"type": "agent", "id": agent_id or target.agent_id, "surface": "c3_extension"}
     event_id = _append_audit_event(
         service,

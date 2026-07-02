@@ -69,7 +69,8 @@ def _is_failure_event(event: dict[str, Any]) -> bool:
         "fail" in event_type
         or "error" in event_type
         or status in {"failed", "rejected", "error"}
-        or bool(receipt) and receipt.get("ok") is False
+        or bool(receipt)
+        and receipt.get("ok") is False
         or reason_code
         in {
             "bad_actor",
@@ -129,7 +130,9 @@ class LedgerService:
             return []
         return sorted(sessions_root.glob("*/*/probes/*.manifest.json"))
 
-    def _update_active(self, bucket: str, item_id: str, manifest_path: Path, log_path: Path) -> None:
+    def _update_active(
+        self, bucket: str, item_id: str, manifest_path: Path, log_path: Path
+    ) -> None:
         active_path = self.root / "active.json"
         active = self._load_json(active_path)
         active.setdefault("version", 1)
@@ -170,7 +173,12 @@ class LedgerService:
         self._write_json_if_missing(manifest_path, manifest)
         log_path.touch(exist_ok=True)
         self._update_active(active_bucket, item_id, manifest_path, log_path)
-        return {"id": item_id, "component": component, "manifest_path": str(manifest_path), "log_path": str(log_path)}
+        return {
+            "id": item_id,
+            "component": component,
+            "manifest_path": str(manifest_path),
+            "log_path": str(log_path),
+        }
 
     def create_agent(self, request: AgentCreate) -> dict[str, Any]:
         data = _dump_model(request)
@@ -463,7 +471,9 @@ class LedgerService:
         )
         return {**payload, "event_id": event["event_id"]}
 
-    def list_probe_files(self, *, component: str = "c3", session_id: str = "", status: str = "") -> dict[str, Any]:
+    def list_probe_files(
+        self, *, component: str = "c3", session_id: str = "", status: str = ""
+    ) -> dict[str, Any]:
         component = _ledger_component(component)
         session_id = _slug(session_id) if session_id else ""
         probes: list[dict[str, Any]] = []
@@ -477,8 +487,15 @@ class LedgerService:
             if status and manifest.get("status") != status:
                 continue
             probes.append(manifest)
-        probes.sort(key=lambda probe: (str(probe.get("created_at") or ""), str(probe.get("probe_id") or "")))
-        return {"component": component, "session_id": session_id, "status": status, "probes": probes}
+        probes.sort(
+            key=lambda probe: (str(probe.get("created_at") or ""), str(probe.get("probe_id") or ""))
+        )
+        return {
+            "component": component,
+            "session_id": session_id,
+            "status": status,
+            "probes": probes,
+        }
 
     def update_probe_status(self, probe_id: str, request: ProbeStatusUpdate) -> dict[str, Any]:
         data = _dump_model(request)
@@ -495,11 +512,18 @@ class LedgerService:
                     "status": status,
                     "agent_id": data.get("agent_id") or manifest.get("agent_id") or "",
                     "lane_id": data.get("lane_id") or manifest.get("lane_id") or "",
-                    "session_id": _slug(data.get("session_id") or manifest.get("session_id") or "no-session"),
+                    "session_id": _slug(
+                        data.get("session_id") or manifest.get("session_id") or "no-session"
+                    ),
                     "command_id": data.get("command_id") or manifest.get("command_id") or "",
-                    "failure_event_id": data.get("failure_event_id") or manifest.get("failure_event_id") or "",
+                    "failure_event_id": data.get("failure_event_id")
+                    or manifest.get("failure_event_id")
+                    or "",
                     "updated_at": _now(),
-                    "metadata": {**(manifest.get("metadata") or {}), **(data.get("metadata") or {})},
+                    "metadata": {
+                        **(manifest.get("metadata") or {}),
+                        **(data.get("metadata") or {}),
+                    },
                 }
             )
             self._save_json(manifest_path, manifest)

@@ -145,8 +145,7 @@
         groupAlias &&
         (!alias ||
           groupAlias.score > alias.score ||
-          (groupAlias.score === alias.score &&
-            groupIndex < alias.groupIndex))
+          (groupAlias.score === alias.score && groupIndex < alias.groupIndex))
       ) {
         alias = Object.assign({ groupIndex: groupIndex }, groupAlias);
       }

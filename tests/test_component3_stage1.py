@@ -1091,9 +1091,9 @@ Expected Graduation: Sep 2026
         self.assertIn("browserContext: result.browserContext", configure_debug)
 
     def test_c3_deep_debug_is_opt_in_and_redacts_page_values(self):
-        bootstrap = (
-            REPO_ROOT / "executioner" / "src" / "content" / "bootstrap.js"
-        ).read_text(encoding="utf-8")
+        bootstrap = (REPO_ROOT / "executioner" / "src" / "content" / "bootstrap.js").read_text(
+            encoding="utf-8"
+        )
 
         self.assertIn("function installDeepDebugLogging", bootstrap)
         self.assertIn("if (!settings?.c3DeepDebugEnabled)", bootstrap)
@@ -1103,7 +1103,7 @@ Expected Graduation: Sep 2026
         self.assertIn("function postContentLedgerEvent", bootstrap)
         self.assertIn("if (!settings?.ledgerEnabled", bootstrap)
         self.assertIn('"hunt.apply.content_ledger_event"', bootstrap)
-        self.assertIn('event_type: eventType', bootstrap)
+        self.assertIn("event_type: eventType", bootstrap)
         self.assertIn('agent_id: settings.agentId || ""', bootstrap)
         self.assertIn('lane_id: settings.laneId || ""', bootstrap)
         self.assertIn('session_id: settings.sessionId || ""', bootstrap)
@@ -1120,7 +1120,7 @@ Expected Graduation: Sep 2026
         self.assertIn("ui.llm_prompt.use_click", bootstrap)
         self.assertIn("ui.llm_prompt.dismiss", bootstrap)
         self.assertIn("ui.fill_summary.dismiss", bootstrap)
-        self.assertIn('domEventType: event.type', bootstrap)
+        self.assertIn("domEventType: event.type", bootstrap)
         self.assertIn("postContentLedgerEvent({", bootstrap)
         self.assertIn("sessionId: settings.sessionId ||", bootstrap)
         self.assertIn("leaseId: settings.leaseId ||", bootstrap)
@@ -1129,7 +1129,10 @@ Expected Graduation: Sep 2026
         self.assertIn('"printable_key_redacted"', bootstrap)
         self.assertIn('"sensitive_key_redacted"', bootstrap)
         self.assertIn("function redactLedgerPayload", bootstrap)
-        self.assertIn("/password|token|secret|authorization|credential|api[-_]?key|service[-_]?token/i", bootstrap)
+        self.assertIn(
+            "/password|token|secret|authorization|credential|api[-_]?key|service[-_]?token/i",
+            bootstrap,
+        )
         self.assertIn("valueLength: inputValueLength(element)", bootstrap)
         self.assertNotIn("value: element.value", bootstrap)
 
@@ -5956,15 +5959,15 @@ Expected Graduation: Sep 2026
         dispatcher = (command_dir / "dispatcher.js").read_text(encoding="utf-8")
         context = (command_dir / "context.js").read_text(encoding="utf-8")
         command_api = (command_dir / "api.js").read_text(encoding="utf-8")
-        background = (
-            REPO_ROOT / "executioner" / "src" / "background" / "index.js"
-        ).read_text(encoding="utf-8")
-        shared_api = (
-            REPO_ROOT / "executioner" / "src" / "shared" / "api.js"
-        ).read_text(encoding="utf-8")
-        settings = (
-            REPO_ROOT / "executioner" / "src" / "shared" / "settings.js"
-        ).read_text(encoding="utf-8")
+        background = (REPO_ROOT / "executioner" / "src" / "background" / "index.js").read_text(
+            encoding="utf-8"
+        )
+        shared_api = (REPO_ROOT / "executioner" / "src" / "shared" / "api.js").read_text(
+            encoding="utf-8"
+        )
+        settings = (REPO_ROOT / "executioner" / "src" / "shared" / "settings.js").read_text(
+            encoding="utf-8"
+        )
         configure_debug_sink = (REPO_ROOT / "scripts" / "configure_c3_debug_sink.js").read_text(
             encoding="utf-8"
         )
@@ -5997,7 +6000,7 @@ Expected Graduation: Sep 2026
         self.assertIn('case "hunt.apply.content_ledger_event"', background)
         self.assertIn('"invalid_content_ledger_event"', background)
         self.assertIn("if (!settings?.ledgerEnabled)", dispatcher)
-        self.assertIn("console.warn(\"C3 ledger event post failed:", dispatcher)
+        self.assertIn('console.warn("C3 ledger event post failed:', dispatcher)
         self.assertIn("commandReceipt", dispatcher)
         self.assertIn("attemptId", dispatcher)
         self.assertIn("auditSummary", dispatcher)

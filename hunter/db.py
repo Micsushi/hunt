@@ -1277,9 +1277,7 @@ def mark_linkedin_enrichment_failed(
 
 
 def get_hiring_cafe_cooldown_until():
-    state = get_runtime_state([HIRING_CAFE_COOLDOWN_UNTIL_KEY]).get(
-        HIRING_CAFE_COOLDOWN_UNTIL_KEY
-    )
+    state = get_runtime_state([HIRING_CAFE_COOLDOWN_UNTIL_KEY]).get(HIRING_CAFE_COOLDOWN_UNTIL_KEY)
     return (state or {}).get("value")
 
 

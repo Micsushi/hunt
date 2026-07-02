@@ -155,7 +155,14 @@
 
   function safePhoneDeviceTypeOption(options) {
     var real = realOptions(options);
-    var preferred = ["mobile", "cell", "cell phone", "work", "telephone", "home"];
+    var preferred = [
+      "mobile",
+      "cell",
+      "cell phone",
+      "work",
+      "telephone",
+      "home",
+    ];
     for (var i = 0; i < preferred.length; i += 1) {
       var wanted = preferred[i];
       var found = real.find(function (option) {

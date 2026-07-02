@@ -144,7 +144,9 @@ def test_frontend_human_command_logger_posts_fail_open_ledger_events():
     assert "traceId?: string" in helper
     assert "const component = payload.component || 'c0'" in helper
     assert "event_type: 'human.command'" in helper
-    assert "actor: { type: 'human', id: 'human_local', surface: payload.surface || 'c0_ui' }" in helper
+    assert (
+        "actor: { type: 'human', id: 'human_local', surface: payload.surface || 'c0_ui' }" in helper
+    )
     assert "lane_id: laneId" in helper
     assert "session_id: sessionId" in helper
     assert "command_id: commandId" in helper

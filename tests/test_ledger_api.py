@@ -21,7 +21,10 @@ def test_api_creates_agent_lane_and_session_with_temp_root(tmp_path):
 
     agent = client.post(
         "/api/ledger/agents",
-        json={"agent_id": "agent-codex-api", "actor": {"type": "agent", "id": "agent-codex-api", "surface": "mcp"}},
+        json={
+            "agent_id": "agent-codex-api",
+            "actor": {"type": "agent", "id": "agent-codex-api", "surface": "mcp"},
+        },
     )
     assert agent.status_code == 200
 
@@ -124,7 +127,9 @@ def test_api_global_event_without_manifest_writes_system_log(tmp_path):
 def test_api_reads_agent_and_session_logs(tmp_path):
     client, _service = _client(tmp_path)
     client.post("/api/ledger/agents", json={"agent_id": "agent-reader"})
-    client.post("/api/ledger/sessions", json={"session_id": "session-reader", "agent_id": "agent-reader"})
+    client.post(
+        "/api/ledger/sessions", json={"session_id": "session-reader", "agent_id": "agent-reader"}
+    )
     client.post(
         "/api/ledger/events",
         json={
@@ -147,10 +152,16 @@ def test_api_reads_agent_and_session_logs(tmp_path):
 def test_api_reads_command_timeline_and_recent_failures(tmp_path):
     client, _service = _client(tmp_path)
     client.post("/api/ledger/agents", json={"agent_id": "agent-timeline"})
-    client.post("/api/ledger/lanes", json={"lane_id": "lane-timeline", "agent_id": "agent-timeline"})
+    client.post(
+        "/api/ledger/lanes", json={"lane_id": "lane-timeline", "agent_id": "agent-timeline"}
+    )
     client.post(
         "/api/ledger/sessions",
-        json={"session_id": "session-timeline", "agent_id": "agent-timeline", "lane_id": "lane-timeline"},
+        json={
+            "session_id": "session-timeline",
+            "agent_id": "agent-timeline",
+            "lane_id": "lane-timeline",
+        },
     )
     for event_type in ("command.requested", "command.started", "command.completed"):
         client.post(

@@ -314,9 +314,10 @@
       await sleep(180);
       await clickVisibleUploadConfirmButton();
       await sleep(220);
-      var afterText = context?.isConnected === false
-        ? ""
-        : normalizeText(context?.innerText || context?.textContent || "");
+      var afterText =
+        context?.isConnected === false
+          ? ""
+          : normalizeText(context?.innerText || context?.textContent || "");
       if (!afterText || afterText !== beforeText) {
         clearedControls += 1;
         root.audit?.pushEvent?.(audit, {

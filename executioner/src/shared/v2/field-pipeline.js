@@ -817,15 +817,20 @@
       "value.saved",
       root.audit.fieldPayload(field, {
         status: fillResult.ok ? "ok" : "warn",
-        reason: fillResult.reason || (fillResult.ok ? "commit_verified" : "commit_failed"),
-        selectedOption: fieldAudit.selectedOption || fillResult.selectedOption || "",
+        reason:
+          fillResult.reason ||
+          (fillResult.ok ? "commit_verified" : "commit_failed"),
+        selectedOption:
+          fieldAudit.selectedOption || fillResult.selectedOption || "",
         valueSource: fieldAudit.valueSource || "",
         payload: {
           afterState: {
             selected: Boolean(fieldAudit.afterState.selected),
             checked: Boolean(fieldAudit.afterState.checked),
             text: root.audit.valueSummary(fieldAudit.afterState.text || ""),
-            rawValue: root.audit.valueSummary(fieldAudit.afterState.rawValue || ""),
+            rawValue: root.audit.valueSummary(
+              fieldAudit.afterState.rawValue || "",
+            ),
           },
         },
       }),

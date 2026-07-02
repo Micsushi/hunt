@@ -518,7 +518,10 @@
       return Object.fromEntries(
         Object.entries(value).map(([entryKey, entryValue]) => [
           entryKey,
-          redactLedgerPayload(redactLedgerValue(entryKey, entryValue), entryKey),
+          redactLedgerPayload(
+            redactLedgerValue(entryKey, entryValue),
+            entryKey,
+          ),
         ]),
       );
     }
@@ -615,7 +618,8 @@
       return "";
     }
     const explicitLabel =
-      element.id && document.querySelector(`label[for="${CSS.escape(element.id)}"]`);
+      element.id &&
+      document.querySelector(`label[for="${CSS.escape(element.id)}"]`);
     const candidates = [
       element.getAttribute("aria-label"),
       element.getAttribute("placeholder"),
@@ -647,8 +651,7 @@
     const tag = String(element?.tagName || "").toLowerCase();
     const type = String(element?.getAttribute?.("type") || "").toLowerCase();
     const key = event.type === "keydown" ? String(event.key || "") : "";
-    const safeKey =
-      key && key.length > 1 && !/^[\w\s]$/i.test(key) ? key : "";
+    const safeKey = key && key.length > 1 && !/^[\w\s]$/i.test(key) ? key : "";
     return {
       eventName: event.type,
       selector: deepDebugSelector(element),
@@ -1324,12 +1327,12 @@
       sticky ? "ui.failure_toast.show" : "ui.toast.show",
       sticky ? "Showed sticky failure toast." : "Showed page toast.",
       {
-      message,
-      tone: tone || "info",
-      sticky,
-      reason: options.reason || "",
-      phase: options.phase || "",
-      details: options.details || null,
+        message,
+        tone: tone || "info",
+        sticky,
+        reason: options.reason || "",
+        phase: options.phase || "",
+        details: options.details || null,
       },
       sticky ? "failed" : "ok",
     );

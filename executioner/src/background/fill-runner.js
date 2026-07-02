@@ -59,7 +59,11 @@ function withTimeout(promise, timeoutMs, fallbackFactory) {
   });
 }
 
-function createAdapterExecuteScriptTimeoutResult(context, reason, details = {}) {
+function createAdapterExecuteScriptTimeoutResult(
+  context,
+  reason,
+  details = {},
+) {
   const manualReviewReasons = [reason];
   return {
     ok: false,
@@ -171,7 +175,8 @@ function adapterExecuteScriptTimeoutRecoveryFunction(reason) {
         name: el.name || "",
         descriptor: descriptor.slice(0, 240),
         required:
-          el.required || /required/i.test(el.getAttribute?.("aria-label") || ""),
+          el.required ||
+          /required/i.test(el.getAttribute?.("aria-label") || ""),
         filled,
         skippedReason: filled ? "" : reason,
         valueSource: filled ? "dom:adapter_timeout_recovery" : "",
@@ -1475,7 +1480,8 @@ class RunAdapterFillStep {
         } catch (error) {
           details = {
             diagnostics: {
-              recoveryError: error instanceof Error ? error.message : String(error),
+              recoveryError:
+                error instanceof Error ? error.message : String(error),
             },
           };
         }

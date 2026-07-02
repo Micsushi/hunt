@@ -92,7 +92,9 @@ class LedgerIndexer:
         return count
 
     def events_by_agent(self, agent_id: str) -> list[Any]:
-        return self._fetch_all("SELECT * FROM ledger_events WHERE agent_id = %s ORDER BY ts", [agent_id])
+        return self._fetch_all(
+            "SELECT * FROM ledger_events WHERE agent_id = %s ORDER BY ts", [agent_id]
+        )
 
     def events_by_session(self, session_id: str) -> list[Any]:
         return self._fetch_all(
@@ -101,7 +103,9 @@ class LedgerIndexer:
         )
 
     def events_by_lane(self, lane_id: str) -> list[Any]:
-        return self._fetch_all("SELECT * FROM ledger_events WHERE lane_id = %s ORDER BY ts", [lane_id])
+        return self._fetch_all(
+            "SELECT * FROM ledger_events WHERE lane_id = %s ORDER BY ts", [lane_id]
+        )
 
     def events_by_command(self, command_id: str) -> list[Any]:
         return self._fetch_all(
@@ -146,7 +150,9 @@ class LedgerIndexer:
             clauses.append("status = %s")
             params.append(status)
         where = f" WHERE {' AND '.join(clauses)}" if clauses else ""
-        return self._fetch_all(f"SELECT * FROM ledger_probe_files{where} ORDER BY created_at", params)
+        return self._fetch_all(
+            f"SELECT * FROM ledger_probe_files{where} ORDER BY created_at", params
+        )
 
     def _event_row(
         self,

@@ -26,8 +26,7 @@ def main() -> int:
         print(json.dumps(payload, sort_keys=True))
     elif result.ok:
         print(
-            f"OK {result.path}: {result.checked_lines} lines verified, "
-            f"last_hash={result.last_hash}"
+            f"OK {result.path}: {result.checked_lines} lines verified, last_hash={result.last_hash}"
         )
     else:
         error = result.error

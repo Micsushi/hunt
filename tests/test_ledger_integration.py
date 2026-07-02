@@ -39,7 +39,11 @@ def _sqlite_index_connection():
 
 
 def _jsonl_event_ids(path: Path) -> list[str]:
-    return [json.loads(line)["event_id"] for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
+    return [
+        json.loads(line)["event_id"]
+        for line in path.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
 
 
 def _jsonl_source_rows_by_event_id(root: Path) -> dict[str, dict]:
@@ -170,16 +174,22 @@ def test_rebuilt_index_rows_match_jsonl_source_rows_for_multiple_events(tmp_path
         indexed_lines = LedgerIndexer(connection).rebuild_from_jsonl_root(service.root)
         index_rows = {
             row["event_id"]: row
-            for row in connection.execute("SELECT * FROM ledger_events ORDER BY event_id").fetchall()
+            for row in connection.execute(
+                "SELECT * FROM ledger_events ORDER BY event_id"
+            ).fetchall()
         }
     finally:
         connection.close()
 
     assert indexed_lines == 6
-    assert set(index_rows) == set(source_rows) == {
-        "evt-consistency-started",
-        "evt-consistency-completed",
-    }
+    assert (
+        set(index_rows)
+        == set(source_rows)
+        == {
+            "evt-consistency-started",
+            "evt-consistency-completed",
+        }
+    )
     for event_id, source in source_rows.items():
         event = source["event"]
         row = index_rows[event_id]
