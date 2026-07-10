@@ -4,7 +4,7 @@ Purpose: give one reliable Windows path to deploy Hunt changes to `server2`.
 
 ## What was missing before
 
-Before this doc, Hunt mentioned `server2` and the separate Ansible repo, but it did not give a repo-local Windows command. The real deploy path was split across vault notes and `ansible_homelab`, which made deploys easy to forget or improvise.
+Before this doc, Hunt mentioned `server2` and the separate Ansible repo, but it did not give a repo-local Windows command. That made deploys easy to forget or improvise.
 
 ## Standard command
 

@@ -57,14 +57,14 @@ Verify in the live dashboard:
 - `docs/roadmap.md`: mark newly completed items
 - `docs/LOCAL_POSTGRES_SMOKES.md`: update if smoke procedure changed
 
-## 6. Update vault when durable context changed
+## 6. Record durable context in the repo
 
-Open the vault (`kb`) only when release work changed durable operator context:
+When release work changes durable operator context, update the smallest relevant
+repo-local document:
 
-- internal backlog/status pages if new work was discovered
-- `Wiki/Projects/Hunt/agent-working-context.md` if architecture changed
-- `Wiki/Projects/Hunt/commands.md` if any commands changed
-- relevant component pages if behavior, workflow, config, or blockers changed
+- `docs/roadmap.md` for newly discovered or completed work
+- `AGENTS.md` for architecture or command guidance needed by future agents
+- the relevant component document for behavior, workflow, config, or blockers
 
 ---
 

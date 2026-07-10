@@ -219,5 +219,5 @@ After each fix:
   and refresh the date.
 - Update the fix doc.
 - Update `current_debug.md` or close resolved items.
-- Update the issue ledger or smallest vault status page.
+- Update the repo-local issue ledger or `current_debug.md`.
 - Tell next agent which primitive remains next and which lanes prove it.
