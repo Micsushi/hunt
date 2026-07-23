@@ -56,6 +56,8 @@ const APPLY_ENTRY_TIMEOUT_MS = 60_000;
 const C3_EXTENSION_FILL_TIMEOUT_MS = 120_000;
 const PAGE_FILL_AND_NEXT_TIMEOUT_MS = C3_EXTENSION_FILL_TIMEOUT_MS + 10_000;
 const FULL_APPLICATION_TIMEOUT_MS = 600_000;
+const RUNNER_RESOURCE_CLOSE_TIMEOUT_MS = 500;
+const RUNNER_SOCKET_CLOSE_TIMEOUT_MS = 500;
 const UPLOADED_FILE_SUCCESS_RE =
   /successfully uploaded|\.pdf\b.*uploaded|uploaded.*\.pdf\b|\.docx?\b.*uploaded|uploaded.*\.docx?\b/i;
 
@@ -85,6 +87,259 @@ async function withPhaseTimeout(phase, timeoutMs, work) {
     if (timer) {
       clearTimeout(timer);
     }
+  }
+}
+
+async function withRunnerCleanupTimeout(reason, timeoutMs, work) {
+  let timer = null;
+  try {
+    return await Promise.race([
+      Promise.resolve().then(work),
+      new Promise((_, reject) => {
+        timer = setTimeout(() => {
+          const error = new Error(`${reason} after ${timeoutMs}ms`);
+          error.reason = reason;
+          error.timeoutMs = timeoutMs;
+          reject(error);
+        }, timeoutMs);
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
+async function closeRunnerResource(resource) {
+  if (!resource || typeof resource.close !== "function") return;
+  const socket = resource.ws || null;
+  await withRunnerCleanupTimeout(
+    "runner_resource_close_timeout",
+    RUNNER_RESOURCE_CLOSE_TIMEOUT_MS,
+    () => resource.close(),
+  );
+  if (!socket || socket.readyState === 3) return;
+  let removeCloseListener = () => {};
+  const socketClosed = new Promise((resolve, reject) => {
+    const done = () => resolve();
+    if (socket.readyState === 3) {
+      resolve();
+    } else if (typeof socket.addEventListener === "function") {
+      socket.addEventListener("close", done, { once: true });
+      removeCloseListener = () => socket.removeEventListener?.("close", done);
+    } else if (typeof socket.once === "function") {
+      socket.once("close", done);
+      removeCloseListener = () => {
+        if (typeof socket.off === "function") socket.off("close", done);
+        else socket.removeListener?.("close", done);
+      };
+    } else {
+      const error = new Error("runner_socket_close_unobservable");
+      error.reason = "runner_socket_close_unobservable";
+      reject(error);
+    }
+  });
+  try {
+    await withRunnerCleanupTimeout(
+      "runner_socket_close_timeout",
+      RUNNER_SOCKET_CLOSE_TIMEOUT_MS,
+      () => socketClosed,
+    );
+  } finally {
+    removeCloseListener();
+  }
+}
+
+function createRunnerResourceTracker() {
+  const clients = new Map();
+  const browserContexts = new Set();
+  const intervals = new Set();
+  const timers = new Set();
+  let cleanupResult = null;
+  return {
+    trackClient(client, resourceType = "cdp_client") {
+      if (client) clients.set(client, resourceType);
+      return client;
+    },
+    trackBrowserContext(context) {
+      if (context) browserContexts.add(context);
+      return context;
+    },
+    trackInterval(handle) {
+      if (handle) intervals.add(handle);
+      return handle;
+    },
+    trackTimer(handle) {
+      if (handle) timers.add(handle);
+      return handle;
+    },
+    clearTimer(handle) {
+      if (!handle) return;
+      clearTimeout(handle);
+      timers.delete(handle);
+    },
+    async cleanup() {
+      if (cleanupResult) return cleanupResult;
+      const trackedClients = [...clients.entries()];
+      const trackedBrowserContexts = [...browserContexts];
+      const trackedIntervals = [...intervals];
+      const trackedTimers = [...timers];
+      trackedIntervals.forEach((handle) => clearInterval(handle));
+      trackedTimers.forEach((handle) => clearTimeout(handle));
+      const resources = [
+        ...trackedClients.map(([resource, resourceType]) => ({ resource, resourceType })),
+        ...trackedBrowserContexts.map((resource) => ({
+          resource,
+          resourceType: "browser_context",
+        })),
+      ];
+      const closeResults = await Promise.allSettled(
+        resources.map(({ resource }) => closeRunnerResource(resource)),
+      );
+      cleanupResult = {
+        cleanupComplete: closeResults.every((result) => result.status === "fulfilled"),
+        closedClients: trackedClients.length,
+        closedBrowserContexts: trackedBrowserContexts.length,
+        clearedIntervals: trackedIntervals.length,
+        clearedTimers: trackedTimers.length,
+        resourceTypes: [...new Set(resources.map(({ resourceType }) => resourceType))],
+        closeErrors: closeResults
+          .map((result, index) => ({ result, resourceType: resources[index].resourceType }))
+          .filter(({ result }) => result.status === "rejected")
+          .map(
+            ({ result, resourceType }) =>
+              `${resourceType}: ${String(result.reason?.message || result.reason)}`,
+          ),
+      };
+      clients.clear();
+      browserContexts.clear();
+      intervals.clear();
+      timers.clear();
+      return cleanupResult;
+    },
+  };
+}
+
+function runnerCleanupError(cleanup, cause = null) {
+  const details = (cleanup?.closeErrors || []).join("; ") || "unknown cleanup error";
+  const error = new Error(`Runner resource cleanup failed: ${details}`);
+  error.reason = "runner_cleanup_failed";
+  error.phase = "workday_runner.cleanup";
+  error.cleanup = cleanup;
+  if (cause) error.cause = cause;
+  return error;
+}
+
+function requireCompleteRunnerCleanup(cleanup, cause = null) {
+  if (!cleanup?.cleanupComplete) {
+    throw runnerCleanupError(cleanup, cause);
+  }
+  return cleanup;
+}
+
+async function connectRunnerTargets(
+  runnerResources,
+  optionsTarget,
+  pageTarget,
+  connector = connectTarget,
+) {
+  try {
+    const optionsClient = runnerResources.trackClient(
+      await connector(optionsTarget),
+    );
+    const pageClient = runnerResources.trackClient(await connector(pageTarget));
+    return { optionsClient, pageClient };
+  } catch (error) {
+    const cleanup = await runnerResources.cleanup();
+    requireCompleteRunnerCleanup(cleanup, error);
+    throw error;
+  }
+}
+
+async function runCleanupFixture(fixture) {
+  if (
+    ![
+      "cleanup-success",
+      "cleanup-failure",
+      "cleanup-close-failure",
+      "cleanup-close-hang",
+      "cleanup-socket-hang",
+      "setup-connect-cleanup-failure",
+    ].includes(fixture)
+  ) {
+    throw new Error(`Unknown cleanup fixture: ${fixture}`);
+  }
+  if (fixture === "setup-connect-cleanup-failure") {
+    const resources = createRunnerResourceTracker();
+    let connectCount = 0;
+    await connectRunnerTargets(resources, {}, {}, async () => {
+      connectCount += 1;
+      if (connectCount === 1) {
+        return {
+          async close() {
+            throw new Error("fixture setup client close failed");
+          },
+        };
+      }
+      throw new Error("fixture page client connect failed");
+    });
+    return;
+  }
+  const resources = createRunnerResourceTracker();
+  const cleanupEvents = [];
+  let socketCloseListener = null;
+  const fakeSocket = {
+    readyState: 1,
+    addEventListener(event, listener) {
+      if (event === "close") socketCloseListener = listener;
+    },
+  };
+  const fakeCdpClient = {
+    ws: fakeSocket,
+    async close() {
+      cleanupEvents.push("cdp_client");
+      if (fixture === "cleanup-socket-hang") return;
+      fakeSocket.readyState = 3;
+      if (socketCloseListener) socketCloseListener();
+    },
+  };
+  const fakeBrowserClient = {
+    async close() {
+      cleanupEvents.push("browser_client");
+      if (fixture === "cleanup-close-hang") {
+        return new Promise(() => {});
+      }
+    },
+  };
+  const fakeBrowserContext = {
+    async close() {
+      cleanupEvents.push("browser_context");
+      if (fixture === "cleanup-close-failure") {
+        throw new Error("fixture browser context close failed");
+      }
+    },
+  };
+  resources.trackClient(fakeCdpClient, "cdp_client");
+  resources.trackClient(fakeBrowserClient, "browser_client");
+  resources.trackBrowserContext(fakeBrowserContext);
+  resources.trackInterval(setInterval(() => {}, 60_000));
+  resources.trackTimer(setTimeout(() => {}, 60_000));
+  let fixtureError = null;
+  try {
+    if (fixture === "cleanup-failure") {
+      fixtureError = new Error("cleanup fixture failure");
+      throw fixtureError;
+    }
+  } finally {
+    const cleanup = await resources.cleanup();
+    console.log(
+      JSON.stringify({
+        fixture,
+        ...cleanup,
+        cleanupEvents,
+        ...(!cleanup.cleanupComplete ? { reason: "runner_cleanup_failed" } : {}),
+      }),
+    );
+    requireCompleteRunnerCleanup(cleanup, fixtureError);
   }
 }
 
@@ -343,6 +598,7 @@ function runnerFailureDetails(error, fallbackPhase = "workday_runner") {
     command: error?.cdpLabel || error?.cdpMethod || "",
     error: message,
     timeoutMs: Number(error?.timeoutMs || error?.timeoutMs === 0 ? error.timeoutMs : 0),
+    cleanup: error?.cleanup || null,
   };
 }
 
@@ -676,6 +932,7 @@ function parseArgs(argv) {
     noAuditJson: false,
     closeOtherWorkdayTabs: false,
     bringToFront: false,
+    fixture: "",
     manualAuthTimeoutMs: Number(process.env.HUNT_C3_MANUAL_AUTH_TIMEOUT_MS || 0),
   };
   for (let i = 2; i < argv.length; i += 1) {
@@ -753,6 +1010,9 @@ function parseArgs(argv) {
       args.closeOtherWorkdayTabs = true;
     } else if (arg === "--bring-to-front") {
       args.bringToFront = true;
+    } else if (arg === "--fixture" && next) {
+      args.fixture = next;
+      i += 1;
     } else if (arg === "--help") {
       args.help = true;
     } else {
@@ -786,6 +1046,7 @@ function usage() {
     "  --stop-after-fill  Do not click Next after the fill step",
     "  --close-other-workday-tabs Close other Workday apply tabs before filling this site",
     "  --bring-to-front Bring the p Chrome tab to front. Off by default for background batch lanes",
+    "  --fixture <name> Test-only resource cleanup fixture",
     "  --target-step <name> Stop logic can target a Workday step title",
     "  --start-step <name> Click a Workday step before filling, if visible",
     "  --require-target Fail before fill unless current step matches target",
@@ -998,7 +1259,7 @@ async function createBackgroundTarget(port, url) {
       10000,
     );
   } finally {
-    browserClient.close();
+    await closeRunnerResource(browserClient);
   }
 }
 
@@ -1060,10 +1321,10 @@ async function ensureOptionsTarget(port, fallbackExtensionId) {
           5000,
           "options_target.health_check",
         );
-        healthClient.close();
+        await closeRunnerResource(healthClient);
         return target;
       } catch (_error) {
-        healthClient.close();
+        await closeRunnerResource(healthClient);
       }
     }
     await httpText(port, `/json/close/${target.id}`).catch(() => "");
@@ -2322,7 +2583,13 @@ function fillMessageTimeoutMs(args) {
   return C3_EXTENSION_FILL_TIMEOUT_MS;
 }
 
-async function fillCurrentPage(optionsClient, applyUrl, args, pageContext = {}) {
+async function fillCurrentPage(
+  optionsClient,
+  applyUrl,
+  args,
+  pageContext = {},
+  runnerResources = null,
+) {
   const messageTimeoutMs = fillMessageTimeoutMs(args);
   const evaluateTimeoutMs = messageTimeoutMs + 10000;
   const allowLoginRedirectFill = looksLikeAuthPage(pageContext);
@@ -2356,6 +2623,7 @@ async function fillCurrentPage(optionsClient, applyUrl, args, pageContext = {}) 
       const tabs = await new Promise((resolve) => chrome.tabs.query({}, resolve));
       const applyUrl = ${JSON.stringify(applyUrl)};
       const allowLoginRedirectFill = ${JSON.stringify(allowLoginRedirectFill)};
+      const allowForeground = ${JSON.stringify(args.bringToFront === true)};
       const parsedApplyUrl = new URL(applyUrl);
       const applyHost = parsedApplyUrl.host;
       const applyBase = applyUrl.split("?")[0];
@@ -2437,9 +2705,11 @@ async function fillCurrentPage(optionsClient, applyUrl, args, pageContext = {}) 
       if (!tab) {
         return { ok: false, error: "workday_tab_not_found" };
       }
-      await chrome.tabs.update(tab.id, { active: true });
-      if (tab.windowId) {
-        await chrome.windows.update(tab.windowId, { focused: true }).catch(() => null);
+      if (allowForeground) {
+        await chrome.tabs.update(tab.id, { active: true });
+        if (tab.windowId) {
+          await chrome.windows.update(tab.windowId, { focused: true }).catch(() => null);
+        }
       }
       const messageTimeoutMs = ${JSON.stringify(messageTimeoutMs)};
       const wrapped = await new Promise((resolve) => {
@@ -2535,21 +2805,33 @@ async function fillCurrentPage(optionsClient, applyUrl, args, pageContext = {}) 
     evaluateTimeoutMs,
   );
   evaluation.catch(() => {});
+  let nodeSideTimer = null;
+  const nodeSideTimeout = new Promise((resolve) => {
+    const handle = setTimeout(() => {
+      runnerResources?.clearTimer(handle);
+      resolve(timeoutFallback());
+    }, nodeSideTimeoutMs);
+    nodeSideTimer = runnerResources
+      ? runnerResources.trackTimer(handle)
+      : handle;
+  });
   return Promise.race([
     evaluation,
-    new Promise((resolve) => {
-      setTimeout(() => resolve(timeoutFallback()), nodeSideTimeoutMs);
-    }),
-  ]);
+    nodeSideTimeout,
+  ]).finally(() => {
+    if (runnerResources) runnerResources.clearTimer(nodeSideTimer);
+    else clearTimeout(nodeSideTimer);
+  });
 }
 
-async function clearCurrentPage(optionsClient, applyUrl, pageContext = {}) {
+async function clearCurrentPage(optionsClient, applyUrl, args, pageContext = {}) {
   const allowLoginRedirectFill = looksLikeAuthPage(pageContext);
   return optionsClient.evaluate(
     `(async () => {
       const tabs = await new Promise((resolve) => chrome.tabs.query({}, resolve));
       const applyUrl = ${JSON.stringify(applyUrl)};
       const allowLoginRedirectFill = ${JSON.stringify(allowLoginRedirectFill)};
+      const allowForeground = ${JSON.stringify(args.bringToFront === true)};
       const parsedApplyUrl = new URL(applyUrl);
       const applyHost = parsedApplyUrl.host;
       const applyBase = applyUrl.split("?")[0];
@@ -2631,9 +2913,11 @@ async function clearCurrentPage(optionsClient, applyUrl, pageContext = {}) {
       if (!tab) {
         return { ok: false, error: "workday_tab_not_found" };
       }
-      await chrome.tabs.update(tab.id, { active: true });
-      if (tab.windowId) {
-        await chrome.windows.update(tab.windowId, { focused: true }).catch(() => null);
+      if (allowForeground) {
+        await chrome.tabs.update(tab.id, { active: true });
+        if (tab.windowId) {
+          await chrome.windows.update(tab.windowId, { focused: true }).catch(() => null);
+        }
       }
       const wrapped = await new Promise((resolve) => {
         const message = { type: "hunt.apply.clear_current_page", payload: { tabId: tab.id } };
@@ -2673,11 +2957,17 @@ function summarizeClear(clear) {
   };
 }
 
-async function clearPageUntilStable(optionsClient, pageClient, applyUrl, pageContext = {}) {
+async function clearPageUntilStable(
+  optionsClient,
+  pageClient,
+  applyUrl,
+  args,
+  pageContext = {},
+) {
   const attempts = [];
   let previousRemaining = Number.POSITIVE_INFINITY;
   for (let index = 0; index < 3; index += 1) {
-    const clear = await clearCurrentPage(optionsClient, applyUrl, pageContext);
+    const clear = await clearCurrentPage(optionsClient, applyUrl, args, pageContext);
     await sleep(2200);
     const afterClear = await inspectPage(pageClient);
     const remaining = Number(clear?.reviewIssueCount || 0);
@@ -3676,6 +3966,10 @@ async function run() {
     console.log(usage());
     return;
   }
+  if (args.fixture) {
+    await runCleanupFixture(args.fixture);
+    return;
+  }
   if (!fs.existsSync(args.resumePath)) {
     throw new Error(`Resume not found: ${args.resumePath}`);
   }
@@ -3689,8 +3983,14 @@ async function run() {
   const closedWorkdayTabs = args.closeOtherWorkdayTabs
     ? await closeOtherWorkdayTabs(args.cdpPort, pageTarget)
     : [];
-  const optionsClient = await connectTarget(optionsTarget);
-  const pageClient = await connectTarget(pageTarget);
+  const runnerResources = createRunnerResourceTracker();
+  let optionsClient = null;
+  let pageClient = null;
+  ({ optionsClient, pageClient } = await connectRunnerTargets(
+    runnerResources,
+    optionsTarget,
+    pageTarget,
+  ));
     const workflowIdentifier = new WorkdayWorkflowIdentifier({
       pageClient,
       sleep,
@@ -3705,6 +4005,7 @@ async function run() {
     authVerificationPattern: AUTH_VERIFICATION_RE,
     accountEmail: args.accountEmail,
     accountPassword: args.accountPassword,
+    allowForeground: args.bringToFront,
   });
   const applyEntryWorkflow = new WorkdayApplyEntryWorkflow({
     pageClient,
@@ -3834,6 +4135,7 @@ async function run() {
     };
   };
 
+  let runnerError = null;
   try {
     if (args.noSeedExtension) {
       logWorkflowPhase(
@@ -3950,6 +4252,9 @@ async function run() {
     const audit = {
       ok: false,
       mode: args.mode,
+      capabilities: {
+        allowForeground: args.bringToFront === true,
+      },
       workflow: {
         cleanup: {
           phase: "cleanup",
@@ -4308,6 +4613,7 @@ async function run() {
             optionsClient,
             pageClient,
             applyUrl,
+            args,
             before,
           );
         } catch (error) {
@@ -4369,7 +4675,7 @@ async function run() {
           fill = await withApplicationPhaseTimeout(
             "page_fill_and_next",
             remainingPageMs,
-            () => fillCurrentPage(optionsClient, applyUrl, args, before),
+            () => fillCurrentPage(optionsClient, applyUrl, args, before, runnerResources),
           );
         } catch (error) {
           if (!(error instanceof PhaseTimeoutError)) {
@@ -4931,7 +5237,12 @@ async function run() {
           }),
         );
         if (args.verifyClear) {
-          const clear = await clearCurrentPage(optionsClient, applyUrl, afterFill);
+          const clear = await clearCurrentPage(
+            optionsClient,
+            applyUrl,
+            args,
+            afterFill,
+          );
           await sleep(1800);
           const afterClear = await inspectPage(pageClient);
           const refill = await fillCurrentPage(
@@ -4939,6 +5250,7 @@ async function run() {
             applyUrl,
             args,
             afterClear,
+            runnerResources,
           );
           await sleep(1800);
           afterFill = await inspectPage(pageClient);
@@ -5515,6 +5827,7 @@ async function run() {
       ),
     );
   } catch (error) {
+    runnerError = error;
     await reportRunnerFailure(
       optionsClient,
       applyUrl,
@@ -5524,8 +5837,8 @@ async function run() {
     ).catch(() => null);
     throw error;
   } finally {
-    optionsClient.close();
-    pageClient.close();
+    const cleanup = await runnerResources.cleanup();
+    requireCompleteRunnerCleanup(cleanup, runnerError);
   }
 }
 
@@ -5557,6 +5870,7 @@ run().catch((error) => {
           phase: failure.phase,
           command: failure.command,
           timeoutMs: failure.timeoutMs,
+          ...(failure.cleanup ? { cleanup: failure.cleanup } : {}),
         },
         null,
         2,
@@ -5571,5 +5885,5 @@ run().catch((error) => {
       ].join(" "),
     );
   }
-  process.exit(1);
+  process.exitCode = 1;
 });

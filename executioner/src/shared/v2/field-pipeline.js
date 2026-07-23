@@ -26,18 +26,116 @@
     return 15000;
   }
 
-  function withTimeout(promise, timeoutMs, fallbackFactory) {
+  async function withTimeout(
+    promise,
+    timeoutMs,
+    fallbackFactory,
+    onTimeout,
+    onUnwindTimeout,
+    unwindTimeoutMs,
+    onLateSettlement,
+  ) {
+    var observed = Promise.resolve(promise).then(
+      function (value) {
+        return { kind: "settled", value: value };
+      },
+      function (error) {
+        return { kind: "rejected", error: error };
+      },
+    );
     var timer = null;
-    var timeout = new Promise(function (resolve) {
-      timer = setTimeout(function () {
-        resolve(fallbackFactory());
-      }, timeoutMs);
+    var first = await Promise.race([
+      observed,
+      new Promise(function (resolve) {
+        timer = setTimeout(function () {
+          resolve({ kind: "timeout" });
+        }, timeoutMs);
+      }),
+    ]);
+    if (timer) {
+      clearTimeout(timer);
+    }
+    if (first.kind === "settled") {
+      return first.value;
+    }
+    if (first.kind === "rejected") {
+      throw first.error;
+    }
+    if (typeof onTimeout === "function") {
+      onTimeout();
+    }
+    var unwindTimer = null;
+    var unwind = await Promise.race([
+      observed,
+      new Promise(function (resolve) {
+        unwindTimer = setTimeout(
+          function () {
+            resolve({ kind: "unwind_timeout" });
+          },
+          Math.max(100, Number(unwindTimeoutMs || 2000)),
+        );
+      }),
+    ]);
+    if (unwindTimer) {
+      clearTimeout(unwindTimer);
+    }
+    if (
+      unwind.kind === "unwind_timeout" &&
+      typeof onUnwindTimeout === "function"
+    ) {
+      onUnwindTimeout();
+    }
+    if (unwind.kind === "unwind_timeout") {
+      // Cancellation guards quarantine any late completion. Do not let a driver
+      // that ignores cancellation hold the background command worker forever.
+      observed.then(function () {
+        if (typeof onLateSettlement === "function") {
+          onLateSettlement();
+        }
+      });
+    }
+    return fallbackFactory({
+      unwound: unwind.kind !== "unwind_timeout",
+      unwindTimedOut: unwind.kind === "unwind_timeout",
     });
-    return Promise.race([promise, timeout]).finally(function () {
-      if (timer) {
-        clearTimeout(timer);
+  }
+
+  function captureFieldMutationState(field) {
+    var element = field?.element || field?.anchor;
+    if (!element) {
+      return null;
+    }
+    return {
+      element: element,
+      value: "value" in element ? element.value : undefined,
+      checked: "checked" in element ? Boolean(element.checked) : undefined,
+      selectedIndex:
+        "selectedIndex" in element ? Number(element.selectedIndex) : undefined,
+      innerHTML: element.isContentEditable ? element.innerHTML : undefined,
+    };
+  }
+
+  function restoreFieldMutationState(snapshot) {
+    var element = snapshot?.element;
+    if (!element?.isConnected) {
+      return;
+    }
+    try {
+      if (snapshot.value !== undefined && element.value !== snapshot.value) {
+        element.value = snapshot.value;
       }
-    });
+      if (snapshot.checked !== undefined) {
+        element.checked = snapshot.checked;
+      }
+      if (snapshot.selectedIndex !== undefined) {
+        element.selectedIndex = snapshot.selectedIndex;
+      }
+      if (snapshot.innerHTML !== undefined) {
+        element.innerHTML = snapshot.innerHTML;
+      }
+    } catch (_error) {
+      // Best-effort rollback complements the permanent cancellation guard.
+    }
   }
 
   function inventoryEntry(field, fieldAudit) {
@@ -480,6 +578,119 @@
     }
   }
 
+  function createFieldActionGuard(context, field) {
+    var active = true;
+    var stopReason = "";
+    var terminalClaimed = false;
+    function cancelRun(reason) {
+      var runReason = String(reason || stopReason || "operation_cancelled");
+      var fillRunId = context?.fillRunId || "";
+      if (!fillRunId) {
+        return;
+      }
+      var cancelledIds = Array.isArray(window.__huntApplyCancelledFillRunIds)
+        ? window.__huntApplyCancelledFillRunIds
+        : [];
+      if (!cancelledIds.includes(fillRunId)) {
+        cancelledIds.push(fillRunId);
+      }
+      window.__huntApplyCancelledFillRunIds = cancelledIds.slice(-25);
+      window.__huntApplyCancelFillRunId = fillRunId;
+      window.__huntApplyFillCancelReasons = Object.assign(
+        {},
+        window.__huntApplyFillCancelReasons || {},
+        { [fillRunId]: runReason },
+      );
+      try {
+        chrome?.runtime?.sendMessage?.({
+          type: "hunt.apply.cancel_fill",
+          payload: { fillRunId: fillRunId, reason: runReason },
+        });
+      } catch (_error) {
+        // The page-side flag still prevents subsequent mutations.
+      }
+    }
+    return {
+      canMutate: function () {
+        return active && !fillCancelled(context || {});
+      },
+      cancel: function (reason) {
+        active = false;
+        if (!stopReason) {
+          stopReason = String(reason || "operation_cancelled");
+        }
+      },
+      cancelRun: cancelRun,
+      claimTerminal: function () {
+        if (terminalClaimed) {
+          return false;
+        }
+        terminalClaimed = true;
+        return true;
+      },
+      terminalClaimed: function () {
+        return terminalClaimed;
+      },
+      operationId:
+        context?.operationId ||
+        context?.operation_id ||
+        context?.commandContext?.operationId ||
+        context?.commandContext?.operation_id ||
+        "",
+      fillRunId: context?.fillRunId || "",
+      reason: function () {
+        if (stopReason) {
+          return stopReason;
+        }
+        return fillCancelled(context || {})
+          ? fillCancellationReason(context || {})
+          : "";
+      },
+      fieldId: field?.fieldId || "",
+    };
+  }
+
+  function structuredFieldTracePayload(audit, field, extra) {
+    var el = field?.element || field?.anchor;
+    return Object.assign(
+      {
+        operationId: audit?.operationId || "",
+        runId: audit?.runId || "",
+        fieldId: field?.fieldId || "",
+        label: String(
+          field?.descriptor || el?.getAttribute?.("aria-label") || "",
+        ).slice(0, 240),
+        kind:
+          field?.workday?.kind || field?.uiModel || field?.kind || "unknown",
+        required: Boolean(field?.required),
+        attempt: 1,
+        driver: field?.workday?.kind ? "workday-v2" : "field-driver-v2",
+        action: "fill",
+        elapsedMs: 0,
+        reasonCode: "trace_checkpoint",
+      },
+      extra || {},
+    );
+  }
+
+  function fillCancellationReason(context) {
+    var fillRunId = context.fillRunId || "";
+    var reasons = window.__huntApplyFillCancelReasons || {};
+    return String(
+      (fillRunId && reasons[fillRunId]) ||
+        window.__huntApplyCancelReason ||
+        "user_cancelled",
+    );
+  }
+
+  function emitStructuredFieldTrace(audit, eventType, field, extra) {
+    return root.audit.emitEvent(
+      audit,
+      eventType,
+      structuredFieldTracePayload(audit, field, extra),
+    );
+  }
+
   function cancelledResult(
     context,
     audit,
@@ -487,11 +698,12 @@
     fieldInventory,
     generatedAnswers,
   ) {
+    var cancellationReason = fillCancellationReason(context);
     root.audit.pushEvent(audit, {
       action: "v2_fill_cancelled",
       step: "run.cancel",
       status: "warn",
-      reason: "user_cancelled",
+      reason: cancellationReason,
       detail: {
         fillRunId: context.fillRunId || "",
         activeFillRunId: window.__huntApplyActiveFillRunId || "",
@@ -501,7 +713,7 @@
     return {
       ok: false,
       cancelled: true,
-      reason: "user_cancelled",
+      reason: cancellationReason,
       message: "Fill canceled.",
       atsType: context.atsType || context.fillRoute?.adapterName || "generic",
       adapterBackedByGeneric:
@@ -513,7 +725,7 @@
       filledFieldCount: filledFields.length,
       generatedAnswerCount: generatedAnswers.length,
       manualReviewRequired: true,
-      manualReviewReasons: ["user_cancelled"],
+      manualReviewReasons: [cancellationReason],
       bestEffortWarnings: audit.permanentIssues.map(function (issue) {
         return issue.kind + ":" + issue.reason;
       }),
@@ -535,9 +747,17 @@
     activeApplyContext,
     defaultResume,
     fillRunId,
+    actionGuard,
   }) {
+    var traceStartedAt = Date.now();
     var fieldAudit = root.audit.createFieldAudit(audit, field);
     fieldAudit.beforeState = root.fieldState.readFieldState(field);
+    emitStructuredFieldTrace(audit, "field.attempt.started", field, {
+      reasonCode: "field_attempt_started",
+    });
+    emitStructuredFieldTrace(audit, "field.action.started", field, {
+      reasonCode: "field_action_started",
+    });
     root.audit.pushFieldStep(audit, fieldAudit, {
       action: "field_start",
       step: "field.start",
@@ -672,6 +892,7 @@
         answer: answer,
         audit: audit,
         fieldAudit: fieldAudit,
+        actionGuard: actionGuard,
       });
       root.audit.pushFieldStep(audit, fieldAudit, {
         action: "options_collected",
@@ -769,6 +990,27 @@
         ...root.fieldState.readFieldState(field),
         reason: fieldAudit.noOptionReason || "no_matching_option",
       };
+      if (actionGuard?.terminalClaimed?.()) {
+        return {
+          filled: false,
+          fieldAudit: fieldAudit,
+          terminalSuppressed: true,
+        };
+      }
+      actionGuard?.claimTerminal?.();
+      var noOptionElapsedMs = Math.max(0, Date.now() - traceStartedAt);
+      var noOptionReason = fieldAudit.noOptionReason || "no_matching_option";
+      emitStructuredFieldTrace(audit, "field.commit.checked", field, {
+        elapsedMs: noOptionElapsedMs,
+        clicked: false,
+        committed: false,
+        reasonCode: noOptionReason,
+      });
+      emitStructuredFieldTrace(audit, "field.action.failed", field, {
+        elapsedMs: noOptionElapsedMs,
+        committed: false,
+        reasonCode: noOptionReason,
+      });
       return { filled: false, fieldAudit: fieldAudit };
     }
 
@@ -780,16 +1022,53 @@
       fieldAudit: fieldAudit,
       activeApplyContext: activeApplyContext || {},
       defaultResume: defaultResume || {},
+      actionGuard: actionGuard,
     });
+    if (actionGuard?.terminalClaimed?.()) {
+      fieldAudit.afterState =
+        fillResult.afterState || root.fieldState.readFieldState(field);
+      fieldAudit.filled = false;
+      return {
+        filled: false,
+        fieldAudit: fieldAudit,
+        terminalSuppressed: true,
+      };
+    }
+    actionGuard?.claimTerminal?.();
     fieldAudit.afterState =
       fillResult.afterState || root.fieldState.readFieldState(field);
-    fieldAudit.filled = Boolean(fillResult.ok);
+    var actionStillCurrent = actionGuard?.canMutate?.() !== false;
+    fieldAudit.filled = Boolean(fillResult.ok && actionStillCurrent);
     if (fillResult.valueSource) {
       fieldAudit.valueSource = fillResult.valueSource;
     }
     if (fillResult.answerText) {
       fieldAudit.answerPreview = String(fillResult.answerText).slice(0, 160);
     }
+    var traceElapsedMs = Math.max(0, Date.now() - traceStartedAt);
+    emitStructuredFieldTrace(audit, "field.commit.checked", field, {
+      elapsedMs: traceElapsedMs,
+      clicked: Boolean(fillResult.clicked),
+      committed: Boolean(fillResult.ok && actionStillCurrent),
+      reasonCode:
+        fillResult.reason ||
+        (fillResult.ok ? "commit_verified" : "commit_not_verified"),
+    });
+    var terminalTraceType =
+      fillResult.ok && actionStillCurrent
+        ? "field.action.completed"
+        : fillResult.cancelled ||
+            actionGuard?.canMutate?.() === false ||
+            fillResult.reason === "operation_cancelled"
+          ? "field.action.cancelled"
+          : "field.action.failed";
+    emitStructuredFieldTrace(audit, terminalTraceType, field, {
+      elapsedMs: traceElapsedMs,
+      committed: Boolean(fillResult.ok && actionStillCurrent),
+      reasonCode:
+        fillResult.reason ||
+        (fillResult.ok ? "field_action_completed" : "field_action_failed"),
+    });
     root.audit.pushFieldStep(audit, fieldAudit, {
       action: "field_fill_result",
       step: "driver.fill",
@@ -907,6 +1186,14 @@
       actor: context.actor || null,
       eventSink: context.eventSink || context.auditEventSink || null,
     });
+    audit.operationId =
+      context.operation_id ||
+      context.operationId ||
+      context.commandContext?.operation_id ||
+      context.commandContext?.operationId ||
+      context.ledgerContext?.operation_id ||
+      context.ledgerContext?.operationId ||
+      "";
     root.audit.pushEvent(audit, {
       action: "v2_fill_start",
       step: "run.start",
@@ -918,7 +1205,16 @@
       },
     });
 
-    var fields = root.uiInspector.collectCandidates();
+    var fields = root.uiInspector.sortActionableFields
+      ? root.uiInspector.sortActionableFields(
+          root.uiInspector.collectCandidates(),
+        )
+      : root.uiInspector.collectCandidates();
+    fields.forEach(function (field) {
+      emitStructuredFieldTrace(audit, "field.discovered", field, {
+        reasonCode: "field_discovered",
+      });
+    });
     root.audit.emitEvent(audit, "field.inventory", {
       status: "info",
       reason: "initial_field_inventory",
@@ -975,7 +1271,11 @@
         fieldCount: fields.length,
       });
       if (pass > 1) {
-        fields = root.uiInspector.collectCandidates();
+        fields = root.uiInspector.sortActionableFields
+          ? root.uiInspector.sortActionableFields(
+              root.uiInspector.collectCandidates(),
+            )
+          : root.uiInspector.collectCandidates();
         root.audit.pushEvent(audit, {
           action: "page_rescanned",
           step: "page.rescan",
@@ -1134,6 +1434,8 @@
           });
           continue;
         }
+        var actionGuard = createFieldActionGuard(context, field);
+        var mutationSnapshot = captureFieldMutationState(field);
         var result = await withTimeout(
           runField({
             field: field,
@@ -1143,9 +1445,11 @@
             activeApplyContext: context.activeApplyContext || {},
             defaultResume: context.defaultResume || {},
             fillRunId: context.fillRunId || "",
+            actionGuard: actionGuard,
           }),
           fieldFillTimeoutMs(context),
           function () {
+            var timeoutMs = fieldFillTimeoutMs(context);
             var fieldAudit = root.audit.createFieldAudit(audit, field);
             fieldAudit.beforeState = root.fieldState.readFieldState(field);
             fieldAudit.afterState = {
@@ -1170,10 +1474,32 @@
               uiModel: field.uiModel,
               detail: {
                 descriptor: String(field.descriptor || "").slice(0, 240),
-                timeoutMs: fieldFillTimeoutMs(context),
+                timeoutMs: timeoutMs,
               },
             });
+            emitStructuredFieldTrace(audit, "field.commit.checked", field, {
+              elapsedMs: timeoutMs,
+              committed: false,
+              clicked: false,
+              reasonCode: "field_fill_timeout",
+            });
+            emitStructuredFieldTrace(audit, "field.action.failed", field, {
+              elapsedMs: timeoutMs,
+              committed: false,
+              reasonCode: "field_fill_timeout",
+            });
             return { filled: false, fieldAudit: fieldAudit };
+          },
+          function () {
+            actionGuard.cancel("field_fill_timeout");
+            actionGuard.claimTerminal();
+          },
+          function () {
+            actionGuard.cancelRun("field_driver_unwind_timeout");
+          },
+          Number(context?.settings?.fieldFillUnwindTimeoutMs || 2000),
+          function () {
+            restoreFieldMutationState(mutationSnapshot);
           },
         );
         if (fillCancelled(context)) {

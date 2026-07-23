@@ -1,6 +1,10 @@
 (function () {
   var root = (window.__huntV2 = window.__huntV2 || {});
 
+  function actionCanMutate(context) {
+    return !context?.actionGuard || context.actionGuard.canMutate();
+  }
+
   function visible(el) {
     if (!el) {
       return false;
@@ -19,8 +23,8 @@
     return root.audit?.normalizeText(el?.innerText || el?.textContent || "");
   }
 
-  function clickLikeUser(el) {
-    if (!el) {
+  function clickLikeUser(el, context) {
+    if (!el || !actionCanMutate(context)) {
       return;
     }
     if (typeof el.scrollIntoView === "function") {
@@ -58,8 +62,14 @@
     return proto ? Object.getOwnPropertyDescriptor(proto, "value")?.set : null;
   }
 
-  function setSearchValue(el, value) {
-    if (!el || !("value" in el) || value === undefined || value === null) {
+  function setSearchValue(el, value, context) {
+    if (
+      !actionCanMutate(context) ||
+      !el ||
+      !("value" in el) ||
+      value === undefined ||
+      value === null
+    ) {
       return false;
     }
     var text = String(value);
@@ -336,10 +346,13 @@
           "button, [role='button'], [aria-haspopup]",
         ) ||
         field.element;
-      clickLikeUser(opener);
+      clickLikeUser(opener, context);
       await new Promise(function (resolve) {
         setTimeout(resolve, 180);
       });
+      if (!actionCanMutate(context)) {
+        return [];
+      }
       options = fieldPopupOptions(optionScope);
       if (options.length && hasOptionMatch(options, answerText)) {
         return emitOptionsCollected(
@@ -350,10 +363,13 @@
         );
       }
       if (field.uiModel === "combobox" && answerText) {
-        setSearchValue(field.element, answerText);
+        setSearchValue(field.element, answerText, context);
         await new Promise(function (resolve) {
           setTimeout(resolve, 260);
         });
+        if (!actionCanMutate(context)) {
+          return [];
+        }
       }
       return emitOptionsCollected(
         field,

@@ -1,6 +1,6 @@
 # C3 Agent Command Ledger
 
-This guide is the release-integration checklist for the C3 agent command ledger. It documents how to prove the pieces work together after packages 01-08 land. It is not an implementation-complete claim.
+This guide is the release-integration checklist and operating contract for the C3 agent command ledger.
 
 ## Status
 
@@ -9,6 +9,76 @@ This guide is the release-integration checklist for the C3 agent command ledger.
 - Runtime ledger roots must stay outside the repo. Use `HUNT_LEDGER_ROOT`, or the default user-home path: Windows `%USERPROFILE%\Documents\hunt-logs`; POSIX `~/.hunt/logs`.
 - Mutating agent commands require an active session lease unless the actor is a logged human override.
 - Probe files must be outside the repo and begin with `trusted=false`.
+- Agent mutations run as durable asynchronous operations. Use the operation
+  projection/events as truth; never infer success or a stall from process
+  stdout.
+- Extension heartbeats occur every two seconds. The watchdog records a
+  suspected stall after 10 seconds without heartbeat, captures a failure
+  bundle at 20 seconds, and requests cancellation at 30 seconds. Cancellation
+  is not acknowledged until the active field driver has unwound.
+- Ordinary agent tools cannot request final Submit or foreground control.
+- Every mutating route requires an exact Chrome `target_id` in addition to the
+  session-bound tab ID. The bridge rechecks both identities immediately before
+  dispatch and fails closed if Chrome replaced or reused the tab.
+- Bridge and cancellation pools have bounded admission. Exhausted capacity is
+  reported immediately as `operation_bridge_capacity_exhausted` or
+  `cancel_bridge_capacity_exhausted`; it is never hidden behind an unbounded
+  executor queue.
+
+## Current MCP Control Surface
+
+### Failure context is the first diagnostic read
+
+After a C3 operation reaches `completed`, `failed`, `cancelled`, or `orphaned`, call
+`hunt_c3_get_failure_context` with its exact `operation_id`, `agent_id`, and
+`lease_id`. This read remains authorized after the mutation lease is released.
+It returns a redacted, bounded packet derived from the append-only event stream:
+scope and stable cause code, causal element when proven, last-touched element,
+expected versus observed state, validation and evidence IDs, artifact summaries,
+confidence, missing evidence, and whether live inspection is still required.
+
+`diagnosis.json` is an atomic projection beside `operation.json`; it is never a
+second source of truth. The first terminal lifecycle event owns state, result,
+error, terminal reason, and cause. Later monitor or artifact events may refresh
+monitor/artifact summaries, but cannot replace that cause. A causal element is
+the element proved to have failed; `last_touched_element` is context only and
+must not be blamed automatically.
+
+The operation projection retains the first terminal event ID/type/sequence so a
+missing or corrupt diagnosis can be rebuilt from bounded evidence without
+changing terminal authority. Event pagination is writer-locked, cursor indexed,
+and byte bounded. Operation events and projections remove applicant answers,
+raw values, and DOM/HTML before persistence; reports retain only structural UI
+identity, expected/observed state, and bounded evidence references.
+
+Use direct Playwright/browser inspection only when the packet says
+`live_inspection_required=true`, names missing evidence, or the packet retrieval
+itself has an explicit unavailable/error status. Do not re-open every site merely
+to reconstruct facts C3 already retained.
+
+The MCP adapter exposes the full C3 lifecycle:
+
+- bootstrap agent/lane/session, claim/heartbeat/release or transfer the lease,
+  and register the isolated browser target;
+- start, inspect, wait for, cancel, redispatch cancellation, and retry durable
+  C3 operations;
+- typed wrappers for every registered C3 command, including `c3.page_walk`,
+  progress, field/validation inspection, and page snapshot;
+- read-only browser diagnostics plus budgeted owned-popup probes;
+- failure-artifact listing and downloads;
+- durable idempotent lane finish/fail helpers.
+
+Diagnostics never navigate, focus, type, evaluate arbitrary JavaScript, or
+click arbitrary elements. The only mutation probes are opening a control's
+verified `aria-controls`/`aria-owns` popup and clicking an exact expected option
+inside that popup. A probe reservation consumes its mutation budget before the
+action.
+
+DOM evidence is structure-only: input values, textarea content, and
+contenteditable text are removed. Raw screenshots are omitted unless a masking
+implementation can prove redaction. Historical console/network tails report
+`supported=false` when the browser cannot supply durable history; an empty list
+must not be interpreted as proof that no errors occurred.
 
 ## Ledger Root Wiring
 

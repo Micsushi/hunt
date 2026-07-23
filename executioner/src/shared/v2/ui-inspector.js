@@ -538,6 +538,28 @@
     return ["text", "textarea"].includes(field.uiModel);
   }
 
+  function sortActionableFields(fields) {
+    return (fields || []).slice().sort(function (a, b) {
+      var requiredOrder =
+        Number(Boolean(b.required)) - Number(Boolean(a.required));
+      if (requiredOrder) {
+        return requiredOrder;
+      }
+      var aTop = Number.isFinite(Number(a.rect?.top)) ? Number(a.rect.top) : 0;
+      var bTop = Number.isFinite(Number(b.rect?.top)) ? Number(b.rect.top) : 0;
+      if (aTop !== bTop) {
+        return aTop - bTop;
+      }
+      var aLeft = Number.isFinite(Number(a.rect?.left))
+        ? Number(a.rect.left)
+        : 0;
+      var bLeft = Number.isFinite(Number(b.rect?.left))
+        ? Number(b.rect.left)
+        : 0;
+      return aLeft - bLeft;
+    });
+  }
+
   function describePage(fields) {
     var headings = Array.from(
       document.querySelectorAll("h1,h2,h3,h4,[role='heading']"),
@@ -575,5 +597,6 @@
     describePage: describePage,
     containerSelectors: CONTAINER_SELECTORS,
     selectedChoiceButtons: selectedChoiceButtons,
+    sortActionableFields: sortActionableFields,
   };
 })();

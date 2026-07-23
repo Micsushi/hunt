@@ -41,6 +41,158 @@ def _load_v2_scripts(page):
         page.add_script_tag(content=_load_script(REPO_ROOT / path))
 
 
+def test_field_timeout_revokes_driver_mutation_joins_and_emits_one_terminal():
+    if sync_playwright is None:
+        pytest.skip("playwright is required for the generic C3 V2 fixture")
+
+    with sync_playwright() as playwright:
+        try:
+            browser = playwright.chromium.launch()
+        except PlaywrightError as error:
+            pytest.skip(f"playwright chromium is unavailable: {error}")
+
+        page = browser.new_page()
+        page.set_content(
+            """
+            <html><body>
+              <label for="firstName">First Name Required</label>
+              <input id="firstName" name="firstName" aria-required="true" />
+            </body></html>
+            """
+        )
+        _load_v2_scripts(page)
+        result = page.evaluate(
+            """
+            async () => {
+              const root = window.__huntV2;
+              root.fieldDrivers.fillField = async (args) => {
+                await new Promise((resolve) => setTimeout(resolve, 80));
+                if (args.actionGuard.canMutate()) {
+                  args.field.element.value = "late mutation";
+                }
+                return {
+                  ok: true,
+                  afterState: root.fieldState.readFieldState(args.field),
+                };
+              };
+              const fill = await root.fieldPipeline.runHuntV2Fill({
+                profile: { firstName: "Guarded" },
+                settings: {
+                  fillRequiredOnly: true,
+                  useFieldPipelineV2: true,
+                  fieldFillTimeoutMs: 20,
+                },
+                activeApplyContext: {},
+                defaultResume: {},
+                fillRunId: "run-timeout-guard",
+              });
+              await new Promise((resolve) => setTimeout(resolve, 120));
+              return {
+                cancelled: fill.cancelled,
+                reason: fill.reason,
+                value: document.querySelector("#firstName").value,
+                terminalEvents: fill.interactionTrace
+                  .filter((event) => [
+                    "field.action.completed",
+                    "field.action.failed",
+                    "field.action.cancelled",
+                  ].includes(event.eventType))
+                  .map((event) => ({
+                    type: event.eventType,
+                    reason: event.detail.reasonCode,
+                  })),
+                globallyCancelled: (window.__huntApplyCancelledFillRunIds || [])
+                  .includes("run-timeout-guard"),
+              };
+            }
+            """
+        )
+        browser.close()
+
+    assert result == {
+        "cancelled": None,
+        "reason": None,
+        "value": "",
+        "terminalEvents": [{"type": "field.action.failed", "reason": "field_fill_timeout"}],
+        "globallyCancelled": False,
+    }
+
+
+def test_noncooperative_field_timeout_returns_bounded_and_rolls_back_late_mutation():
+    if sync_playwright is None:
+        pytest.skip("playwright is required for the generic C3 V2 fixture")
+
+    with sync_playwright() as playwright:
+        try:
+            browser = playwright.chromium.launch()
+        except PlaywrightError as error:
+            pytest.skip(f"playwright chromium is unavailable: {error}")
+
+        page = browser.new_page()
+        page.set_content(
+            """
+            <html><body>
+              <label for="firstName">First Name Required</label>
+              <input id="firstName" name="firstName" aria-required="true" />
+            </body></html>
+            """
+        )
+        _load_v2_scripts(page)
+        result = page.evaluate(
+            """
+            async () => {
+              const root = window.__huntV2;
+              root.fieldDrivers.fillField = async (args) => {
+                await new Promise((resolve) => setTimeout(resolve, 500));
+                // Deliberately noncooperative: this simulates a third-party driver
+                // that ignores the action guard and can still mutate after timeout.
+                args.field.element.value = "unsafe late mutation";
+                return {
+                  ok: true,
+                  afterState: root.fieldState.readFieldState(args.field),
+                };
+              };
+              let settled = false;
+              root.fieldPipeline.runHuntV2Fill({
+                profile: { firstName: "Guarded" },
+                settings: {
+                  fillRequiredOnly: true,
+                  useFieldPipelineV2: true,
+                  fieldFillTimeoutMs: 20,
+                  fieldFillUnwindTimeoutMs: 100,
+                },
+                activeApplyContext: {},
+                defaultResume: {},
+                fillRunId: "run-noncooperative-timeout",
+              }).then(() => { settled = true; });
+              await new Promise((resolve) => setTimeout(resolve, 180));
+              const settledWithinBound = settled;
+              const valueWithinBound = document.querySelector("#firstName").value;
+              await new Promise((resolve) => setTimeout(resolve, 450));
+              return {
+                settledWithinBound,
+                valueWithinBound,
+                valueAfterLateDriver: document.querySelector("#firstName").value,
+                globallyCancelled: (window.__huntApplyCancelledFillRunIds || [])
+                  .includes("run-noncooperative-timeout"),
+                cancelReason: (window.__huntApplyFillCancelReasons || {})[
+                  "run-noncooperative-timeout"
+                ] || "",
+              };
+            }
+            """
+        )
+        browser.close()
+
+    assert result == {
+        "settledWithinBound": True,
+        "valueWithinBound": "",
+        "valueAfterLateDriver": "",
+        "globallyCancelled": True,
+        "cancelReason": "field_driver_unwind_timeout",
+    }
+
+
 def test_generic_v2_radio_options_use_associated_labels_before_group_text():
     if sync_playwright is None:
         pytest.skip("playwright is required for the generic C3 V2 fixture")

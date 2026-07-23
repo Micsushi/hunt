@@ -18,6 +18,176 @@ def _load_script(path: Path) -> str:
     return path.read_text(encoding="utf-8")
 
 
+@pytest.mark.parametrize(
+    ("fixture", "expected_returncode"),
+    [
+        ("cleanup-success", 0),
+        ("cleanup-failure", 1),
+    ],
+)
+def test_live_smoke_cleanup_fixture_exits_and_closes_resources(
+    fixture: str, expected_returncode: int
+):
+    proc = subprocess.run(
+        ["node", "scripts/c3_workday_live_smoke.js", "--fixture", fixture],
+        cwd=REPO_ROOT,
+        timeout=5,
+        capture_output=True,
+        text=True,
+    )
+
+    assert proc.returncode == expected_returncode
+    assert '"cleanupComplete":true' in proc.stdout
+    assert '"closedClients":2' in proc.stdout
+    assert '"closedBrowserContexts":1' in proc.stdout
+    assert '"clearedIntervals":1' in proc.stdout
+    assert '"clearedTimers":1' in proc.stdout
+    assert '"resourceTypes":["cdp_client","browser_client","browser_context"]' in proc.stdout
+
+
+def test_live_smoke_cleanup_failure_is_terminal():
+    proc = subprocess.run(
+        [
+            "node",
+            "scripts/c3_workday_live_smoke.js",
+            "--fixture",
+            "cleanup-close-failure",
+        ],
+        cwd=REPO_ROOT,
+        timeout=5,
+        capture_output=True,
+        text=True,
+    )
+
+    assert proc.returncode == 1
+    assert '"cleanupComplete":false' in proc.stdout
+    assert '"reason":"runner_cleanup_failed"' in proc.stdout
+
+
+@pytest.mark.parametrize(
+    ("fixture", "expected_error"),
+    [
+        ("cleanup-close-hang", "runner_resource_close_timeout"),
+        ("cleanup-socket-hang", "runner_socket_close_timeout"),
+    ],
+)
+def test_live_smoke_cleanup_hangs_are_bounded_and_terminal(fixture: str, expected_error: str):
+    proc = subprocess.run(
+        ["node", "scripts/c3_workday_live_smoke.js", "--fixture", fixture],
+        cwd=REPO_ROOT,
+        timeout=5,
+        capture_output=True,
+        text=True,
+    )
+
+    assert proc.returncode == 1
+    assert '"cleanupComplete":false' in proc.stdout
+    assert '"reason":"runner_cleanup_failed"' in proc.stdout
+    assert expected_error in proc.stdout
+
+
+def test_live_smoke_setup_connect_failure_exposes_cleanup_diagnostics():
+    proc = subprocess.run(
+        [
+            "node",
+            "scripts/c3_workday_live_smoke.js",
+            "--fixture",
+            "setup-connect-cleanup-failure",
+        ],
+        cwd=REPO_ROOT,
+        timeout=5,
+        capture_output=True,
+        text=True,
+    )
+
+    assert proc.returncode == 1
+    assert '"reason": "runner_cleanup_failed"' in proc.stdout
+    assert '"phase": "workday_runner.cleanup"' in proc.stdout
+    assert '"cleanupComplete": false' in proc.stdout
+    assert "fixture setup client close failed" in proc.stdout
+
+
+def test_live_smoke_cleanup_timeout_timer_is_always_cleared():
+    live_smoke = _load_script(REPO_ROOT / "scripts/c3_workday_live_smoke.js")
+    timeout_helper = live_smoke[
+        live_smoke.index("async function withRunnerCleanupTimeout") : live_smoke.index(
+            "async function closeRunnerResource"
+        )
+    ]
+    close_resource = live_smoke[
+        live_smoke.index("async function closeRunnerResource") : live_smoke.index(
+            "function createRunnerResourceTracker"
+        )
+    ]
+
+    assert "finally {" in timeout_helper
+    assert "clearTimeout(timer)" in timeout_helper
+    assert '"runner_resource_close_timeout"' in close_resource
+    assert '"runner_socket_close_timeout"' in close_resource
+    assert close_resource.count("withRunnerCleanupTimeout(") == 2
+
+
+def test_live_smoke_fill_and_clear_respect_foreground_capability():
+    live_smoke = _load_script(REPO_ROOT / "scripts/c3_workday_live_smoke.js")
+    fill_current_page = live_smoke[
+        live_smoke.index("async function fillCurrentPage") : live_smoke.index(
+            "async function clearCurrentPage"
+        )
+    ]
+    clear_current_page = live_smoke[
+        live_smoke.index("async function clearCurrentPage") : live_smoke.index(
+            "function summarizeClear"
+        )
+    ]
+
+    for operation in (fill_current_page, clear_current_page):
+        assert "const allowForeground = ${JSON.stringify(args.bringToFront === true)};" in operation
+        assert "if (allowForeground) {" in operation
+        assert operation.count("await chrome.tabs.update(tab.id, { active: true });") == 1
+        assert (
+            operation.count(
+                "await chrome.windows.update(tab.windowId, { focused: true }).catch(() => null);"
+            )
+            == 1
+        )
+
+    assert (
+        "async function clearCurrentPage(optionsClient, applyUrl, args, pageContext = {})"
+        in live_smoke
+    )
+    assert "clearCurrentPage(optionsClient, applyUrl, pageContext)" not in live_smoke
+    assert "clearCurrentPage(optionsClient, applyUrl, afterFill)" not in live_smoke
+    assert "allowForeground: args.bringToFront === true" in live_smoke
+
+
+def test_live_smoke_tracks_and_clears_node_fill_timeout():
+    live_smoke = _load_script(REPO_ROOT / "scripts/c3_workday_live_smoke.js")
+    fill_current_page = live_smoke[
+        live_smoke.index("async function fillCurrentPage") : live_smoke.index(
+            "async function clearCurrentPage"
+        )
+    ]
+
+    assert "runnerResources.trackTimer" in fill_current_page
+    assert "runnerResources.clearTimer" in fill_current_page
+    assert "setTimeout(() => resolve(timeoutFallback()), nodeSideTimeoutMs)" not in (
+        fill_current_page
+    )
+    assert (
+        live_smoke.count("fillCurrentPage(optionsClient, applyUrl, args, before, runnerResources)")
+        == 1
+    )
+
+
+def test_live_smoke_awaits_auxiliary_cdp_client_cleanup():
+    live_smoke = _load_script(REPO_ROOT / "scripts/c3_workday_live_smoke.js")
+
+    assert "browserClient.close()" not in live_smoke
+    assert "healthClient.close()" not in live_smoke
+    assert "await closeRunnerResource(browserClient)" in live_smoke
+    assert live_smoke.count("await closeRunnerResource(healthClient)") == 2
+
+
 def _new_prompt_page(playwright, body_html: str):
     browser = playwright.chromium.launch()
     page = browser.new_page()
@@ -159,6 +329,26 @@ def test_fill_commit_failure_can_refresh_and_retry_once():
     assert "maxRefreshRetries: 1" in background
     assert "fill.refresh_retry" in background
     assert "refreshRetry: result.refreshRetry || null" in background
+
+
+def test_workday_adapter_timeout_cancels_and_quarantines_late_pipeline_completion():
+    adapter = _load_script(REPO_ROOT / "executioner/src/ats/workday/fill-v2.js")
+
+    assert "return Promise.race([" not in adapter
+    assert '"workday_fill_return_timeout"' in adapter
+    assert "await fillPromise" not in adapter
+    assert "fillPromise.catch" in adapter
+
+
+def test_background_adapter_timeout_quarantines_execute_script_after_recovery_cancel():
+    runner = _load_script(REPO_ROOT / "executioner/src/background/fill-runner.js")
+    adapter_step = runner[
+        runner.index("class RunAdapterFillStep") : runner.index("class PrepareLlmHelpStep")
+    ]
+
+    assert "withBoundedTimeoutAndQuarantine" in adapter_step
+    assert "adapter_execute_script_timeout" in adapter_step
+    assert "context.options.onAdapterTimeout" in adapter_step
 
 
 def test_workday_runtime_error_recovery_stops_before_safe_next_click():
@@ -412,7 +602,8 @@ def test_fill_progress_can_request_cancel():
     assert "hideFillProgress(tabId)" in cancel_case
     assert "showFillProgress" not in cancel_case
     assert "activeFillRunByTab.get(tabId)" in cancel_case
-    assert "activeFillRunByTab.delete(tabId)" in cancel_case
+    assert "activeFillRunByTab.delete(tabId)" not in cancel_case
+    assert "acknowledgementPending: cancelled" in cancel_case
     assert "activeFillRuns" in background
     assert "activeFillRunByTab" in background
     assert "cancelActiveFillRunsForTab" in background
@@ -650,7 +841,8 @@ def test_fill_attempt_stops_when_no_visible_progress_within_five_seconds():
     assert "lastProgressAt" in no_progress
     assert "nextSignature !== lastProgressSignature" in no_progress
     assert "Date.now() - lastProgressAt < progressTimeoutMs" in no_progress
-    assert "markPageFillCancelled(tabId, fillRunId, true)" in no_progress
+    assert 'cancelFillRun(fillRunId, "fill_no_progress_timeout")' in no_progress
+    assert '"fill_no_progress_timeout"' in no_progress
     assert "runFillForTabWithNoProgressWatchdog(tabId, state, fillRunId" in run_fill
 
 
@@ -924,7 +1116,7 @@ def test_workday_logs_field_and_dropdown_actions():
     assert "isReferralSourceOption" in workday_v2_drivers
     assert "isSalaryField(field, answer)" in workday_v2_drivers
     assert "preferredWorkdayOption(flatOptions, option, answer, field)" in workday_v2_drivers
-    assert "await clearWorkdayField(field, audit, fieldAudit)" in workday_v2_drivers
+    assert "await clearWorkdayField(field, audit, fieldAudit, actionGuard)" in workday_v2_drivers
     assert 'label.includes("linkedin")' in workday_v2_drivers
     assert 'label.includes("employee referral")' in workday_v2_drivers
     assert 'label.includes("social referral")' in workday_v2_drivers

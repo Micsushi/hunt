@@ -333,7 +333,44 @@ export function createSafeNextFunction() {
       ).filter(isVisibleEnabled).length;
     }
 
-    function visibleValidationErrors() {
+    function associatedValidationControl(errorElement) {
+      var tag = String(errorElement?.tagName || "").toLowerCase();
+      if (["input", "textarea", "select"].includes(tag)) {
+        return errorElement;
+      }
+      if (errorElement?.id) {
+        var describedControl = Array.from(
+          document.querySelectorAll("[aria-describedby]"),
+        ).find(function (control) {
+          return String(control.getAttribute("aria-describedby") || "")
+            .split(/\s+/)
+            .includes(errorElement.id);
+        });
+        if (describedControl) {
+          return describedControl;
+        }
+      }
+      var field = errorElement?.closest?.(
+        '[data-automation-id^="formField-"], fieldset, [role="group"]',
+      );
+      return field?.querySelector?.(
+        'input, textarea, select, [role="combobox"], [role="textbox"]',
+      );
+    }
+
+    function validationControlLabel(control) {
+      var field = control?.closest?.(
+        '[data-automation-id^="formField-"], fieldset, [role="group"]',
+      );
+      return normalizeText(
+        control?.getAttribute?.("aria-label") ||
+          control?.labels?.[0]?.innerText ||
+          field?.querySelector?.("label, legend")?.innerText ||
+          "",
+      ).slice(0, 160);
+    }
+
+    function visibleValidationDetails() {
       return Array.from(
         document.querySelectorAll(
           [
@@ -362,10 +399,27 @@ export function createSafeNextFunction() {
           );
         })
         .map(function (el) {
-          return normalizeText(el.innerText || el.textContent || "").slice(
-            0,
-            160,
-          );
+          var control = associatedValidationControl(el);
+          return {
+            message: normalizeText(el.innerText || el.textContent || "").slice(
+              0,
+              300,
+            ),
+            errorSelector: describeElement(el),
+            element: control
+              ? {
+                  tag: String(control.tagName || "").toLowerCase(),
+                  selector: describeElement(control),
+                  automationId:
+                    control.getAttribute("data-automation-id") || "",
+                  fieldId: control.id || "",
+                  name: control.getAttribute("name") || "",
+                  role: control.getAttribute("role") || "",
+                  type: control.getAttribute("type") || "",
+                  label: validationControlLabel(control),
+                }
+              : {},
+          };
         });
     }
 
@@ -640,7 +694,10 @@ export function createSafeNextFunction() {
 
     var found = findBestCandidate();
     var count = inputCount();
-    var errors = visibleValidationErrors();
+    var validationDetails = visibleValidationDetails();
+    var errors = validationDetails.map(function (detail) {
+      return detail.message;
+    });
     if (errors.length) {
       return {
         ok: false,
@@ -653,6 +710,7 @@ export function createSafeNextFunction() {
         disabledFooterCandidates: found.disabledFooterCandidates || [],
         topCandidates: found.topCandidates || [],
         visibleValidationErrors: errors.slice(0, 8),
+        visibleValidationDetails: validationDetails.slice(0, 8),
         inputCount: count,
       };
     }

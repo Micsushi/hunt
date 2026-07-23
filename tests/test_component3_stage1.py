@@ -17,6 +17,74 @@ from scripts import c3_apply_prep  # noqa: E402
 from scripts.reload_c3_extension import find_c3_target  # noqa: E402
 
 
+def build_auth_focus_script(*, allow_foreground: bool) -> str:
+    workflow_path = REPO_ROOT / "scripts" / "lib" / "c3_workday_auth_workflow.js"
+    return f"""
+        const {{ WorkdayAuthWorkflow }} = require({json.dumps(str(workflow_path))});
+        const cdpMethods = [];
+        const pageClient = {{
+          async evaluate(expression) {{
+            if (expression.includes("desiredAuthState")) {{
+              return {{
+                clicked: false,
+                filled: ["email", "password"],
+                checked: [],
+                label: "Sign In",
+                metadata: "signinbutton",
+                rect: {{ x: 100, y: 100 }},
+                href: "https://example.test/auth",
+                title: "Sign In",
+                noCaptchaWrapperPresent: true,
+                noCaptchaWrapper: {{ present: true }},
+              }};
+            }}
+            if (expression.includes("form_request_submit")) {{
+              return {{ ok: true, reason: "form_request_submit" }};
+            }}
+            return null;
+          }},
+          async send(method) {{
+            cdpMethods.push(method);
+            return {{}};
+          }},
+        }};
+        const inspectPage = async () => ({{
+          href: "https://example.test/application",
+          title: "Application",
+          pageKind: "application",
+          currentStep: {{ title: "My Information" }},
+          errors: [],
+          fields: [],
+          bodyHead: "My Information",
+        }});
+        const workflow = new WorkdayAuthWorkflow({{
+          pageClient,
+          cdpClick: async () => {{}},
+          inspectPage,
+          js: JSON.stringify,
+          sleep: async () => {{}},
+          authVerificationPattern: /verify your account/i,
+          accountEmail: "candidate@example.test",
+          accountPassword: "secret",
+          allowForeground: {json.dumps(allow_foreground)},
+        }});
+        workflow.clickPrimary({{
+          authUiState: "credential_form",
+          state: {{
+            href: "https://example.test/auth",
+            title: "Sign In",
+            pageKind: "signin_form",
+            currentStepText: "Sign In",
+          }},
+        }}).then(() => {{
+          console.log(JSON.stringify({{ cdp_methods: cdpMethods }}));
+        }}).catch((error) => {{
+          console.error(error.stack || error.message || String(error));
+          process.exitCode = 1;
+        }});
+    """
+
+
 class Component3Stage1Tests(unittest.TestCase):
     def make_temp_db_path(self):
         fd, path = tempfile.mkstemp(suffix=".db")
@@ -801,6 +869,15 @@ Expected Graduation: Sep 2026
         self.assertIn("\\bsign in with email\\b", background)
         self.assertIn("signinwithemailbutton", background)
         self.assertIn("score = 135", background)
+        self.assertLess(
+            background.index("wantsSignin && exactEmailSignin"),
+            background.index("} else if (wantsSignup)"),
+        )
+        self.assertIn(
+            "visibleValidationErrors: [...new Set(validationErrors)].slice(0, 8)",
+            background,
+        )
+        self.assertIn("readinessProbe.visibleValidationErrors", background)
         self.assertIn("(startApplication && /\\/apply\\/applyManually/i.test(label))", background)
         self.assertIn("createClickWorkdayApplyManuallyFunction", background)
         self.assertIn("isWorkdayDetailsApplyItem", background)
@@ -2330,9 +2407,9 @@ Expected Graduation: Sep 2026
         ).read_text(encoding="utf-8")
 
         self.assertIn("function workdayFieldTextInputs(field)", drivers)
-        self.assertIn("function blurWorkdayFieldInputs(field)", drivers)
+        self.assertIn("function blurWorkdayFieldInputs(field, actionGuard)", drivers)
         self.assertIn("workdayFieldTextInputs(field).forEach(function (input)", drivers)
-        self.assertIn("blurWorkdayFieldInputs(field);", drivers)
+        self.assertIn("blurWorkdayFieldInputs(field, actionGuard);", drivers)
 
     def test_v2_workday_source_selected_text_reads_prompt_selection_labels(self):
         drivers = (
@@ -2963,6 +3040,1703 @@ Expected Graduation: Sep 2026
             encoding="utf-8"
         )
         self.assertIn('exactEmailSignin && (!authState || authState === "unknown")', background)
+
+    def test_auth_detection_prioritizes_exact_login_form_over_stale_signup_shell(self):
+        background = (REPO_ROOT / "executioner" / "src" / "background" / "index.js").read_text(
+            encoding="utf-8"
+        )
+
+        self.assertIn("hasCredentialLoginForm", background)
+        self.assertIn('authUiState = "credential_form"', background)
+        self.assertLess(
+            background.index("if (hasCredentialLoginForm)"),
+            background.index("else if (hasLoginFailure && hasCreateAccount)"),
+        )
+
+    def test_auth_primary_action_accepts_stable_email_gateway_for_stale_login_ui(self):
+        background_path = REPO_ROOT / "executioner" / "src" / "background" / "index.js"
+        script = f"""
+            const fs = require("node:fs");
+            const vm = require("node:vm");
+            const source = fs.readFileSync({json.dumps(str(background_path))}, "utf8");
+            const start = source.indexOf("function createClickAuthPrimaryActionFunction()");
+            const end = source.indexOf("function createAuthPageProbeFunction()", start);
+            const elements = [
+              makeElement("email-gateway", "Continue", "SignInWithEmailButton"),
+              makeElement("credential-submit", "Submit", "PrimarySubmitButton", "submit"),
+              makeElement("social-login", "Sign in with Google", "GoogleSignInButton"),
+              ...Array.from({{ length: 9 }}, (_, index) =>
+                makeElement(
+                  `social-login-${{index}}`,
+                  "Sign in with Google",
+                  `GoogleSignInButton${{index}}`,
+                ),
+              ),
+            ];
+            function makeElement(id, label, automationId, type = "button") {{
+              return {{
+                id,
+                tagName: "BUTTON",
+                disabled: false,
+                tabIndex: 0,
+                innerText: label,
+                textContent: label,
+                getAttribute(name) {{
+                  return {{
+                    "data-automation-id": automationId,
+                    role: "button",
+                    type,
+                  }}[name] || null;
+                }},
+                hasAttribute() {{ return false; }},
+                getBoundingClientRect() {{
+                  return {{ top: 10, left: 10, width: 120, height: 32 }};
+                }},
+                closest() {{ return null; }},
+              }};
+            }}
+            const context = {{
+              document: {{ querySelectorAll() {{ return elements; }} }},
+              window: {{
+                getComputedStyle() {{
+                  return {{
+                    display: "block",
+                    visibility: "visible",
+                    pointerEvents: "auto",
+                    cursor: "pointer",
+                  }};
+                }},
+              }},
+              console,
+            }};
+            vm.createContext(context);
+            vm.runInContext(source.slice(start, end), context);
+            const run = context.createClickAuthPrimaryActionFunction();
+            const selected = run({{
+              authState: "login",
+              authUiState: "credential_form",
+              click: false,
+            }});
+            context.document.querySelectorAll = () =>
+              elements.filter((element) => element.id.startsWith("social-login"));
+            const blocked = run({{
+              authState: "login",
+              authUiState: "credential_form",
+              click: false,
+            }});
+            context.document.querySelectorAll = () => [
+              makeElement(
+                "mixed-social-email",
+                "Sign in with Google",
+                "SignInWithEmailButton navigation oauth",
+              ),
+            ];
+            const mixedSocial = run({{
+              authState: "login",
+              authUiState: "credential_form",
+              click: false,
+            }});
+            console.log(JSON.stringify({{ selected, blocked, mixedSocial }}));
+        """
+        result = subprocess.run(
+            ["node", "-e", script],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        payload = json.loads(result.stdout)
+
+        self.assertTrue(payload["selected"]["found"])
+        self.assertEqual(payload["selected"]["candidate"]["automationId"], "PrimarySubmitButton")
+        self.assertFalse(payload["blocked"]["found"])
+        self.assertEqual(payload["blocked"]["authState"], "login")
+        self.assertEqual(payload["blocked"]["authUiState"], "credential_form")
+        self.assertEqual(len(payload["blocked"]["nearMissCandidates"]), 8)
+        self.assertEqual(
+            payload["blocked"]["nearMissCandidates"][0]["automationId"],
+            "GoogleSignInButton",
+        )
+        self.assertEqual(payload["blocked"]["nearMissCandidates"][0]["score"], 0)
+        self.assertFalse(payload["mixedSocial"]["found"])
+        self.assertEqual(len(payload["mixedSocial"]["nearMissCandidates"]), 1)
+
+    def test_auth_primary_action_owns_nested_label_through_interactive_ancestor(self):
+        background_path = REPO_ROOT / "executioner" / "src" / "background" / "index.js"
+        script = f"""
+            const fs = require("node:fs");
+            const vm = require("node:vm");
+            const source = fs.readFileSync({json.dumps(str(background_path))}, "utf8");
+            const actionStart = source.indexOf("function createClickAuthPrimaryActionFunction()");
+            const actionEnd = source.indexOf("function createAuthPageProbeFunction()", actionStart);
+            const stateStart = source.indexOf("function compactAuthActionCandidate(");
+            const stateEnd = source.indexOf("function shouldRepairPageWalkValidation", stateStart);
+
+            function makeNode({{
+              tag = "div",
+              text = "",
+              automationId = "",
+              role = "",
+              type = "",
+              cursor = "default",
+              parent = null,
+            }} = {{}}) {{
+              const node = {{
+                tagName: tag.toUpperCase(),
+                disabled: false,
+                tabIndex: role === "button" || ["button", "a", "input"].includes(tag) ? 0 : -1,
+                parentElement: parent,
+                children: [],
+                ownText: text,
+                cursor,
+                get innerText() {{
+                  return [this.ownText, ...this.children.map((child) => child.innerText)]
+                    .filter(Boolean)
+                    .join(" ");
+                }},
+                get textContent() {{ return this.innerText; }},
+                getAttribute(name) {{
+                  return {{
+                    "data-automation-id": automationId,
+                    role,
+                    type,
+                    href: tag === "a" ? "#" : "",
+                  }}[name] || null;
+                }},
+                hasAttribute(name) {{ return this.getAttribute(name) !== null; }},
+                getBoundingClientRect() {{
+                  return {{ top: 10, left: 10, width: 180, height: 38 }};
+                }},
+                closest(selector) {{
+                  let current = this;
+                  while (current) {{
+                    if (selector === "form" && current.tagName === "FORM") return current;
+                    if (
+                      selector.includes("button") &&
+                      (["BUTTON", "A", "INPUT"].includes(current.tagName) ||
+                        current.getAttribute("role") === "button")
+                    ) return current;
+                    current = current.parentElement;
+                  }}
+                  return null;
+                }},
+                querySelectorAll() {{
+                  return this.children.flatMap((child) => [child, ...child.querySelectorAll()]);
+                }},
+              }};
+              if (parent) parent.children.push(node);
+              return node;
+            }}
+
+            const form = makeNode({{ tag: "form" }});
+            const emailButton = makeNode({{
+              tag: "button",
+              automationId: "SignInWithEmailButton",
+              type: "button",
+              cursor: "pointer",
+              parent: form,
+            }});
+            const nestedLabel = makeNode({{
+              tag: "span",
+              text: "Sign In",
+              cursor: "pointer",
+              parent: emailButton,
+            }});
+            const standaloneCursorSpan = makeNode({{
+              tag: "span",
+              text: "Sign In",
+              cursor: "pointer",
+            }});
+            const roleButton = makeNode({{
+              tag: "div",
+              text: "Sign In With Email",
+              automationId: "customEmailGateway",
+              role: "button",
+              cursor: "pointer",
+            }});
+            let elements = [emailButton, nestedLabel, standaloneCursorSpan];
+            const context = {{
+              document: {{ querySelectorAll() {{ return elements; }} }},
+              window: {{
+                getComputedStyle(element) {{
+                  return {{
+                    display: "block",
+                    visibility: "visible",
+                    pointerEvents: "auto",
+                    cursor: element.cursor,
+                  }};
+                }},
+              }},
+              console,
+            }};
+            vm.createContext(context);
+            vm.runInContext(source.slice(actionStart, actionEnd), context);
+            vm.runInContext(source.slice(stateStart, stateEnd), context);
+            const run = context.createClickAuthPrimaryActionFunction();
+            const options = {{ authState: "login", authUiState: "landing_choice", click: false }};
+            const nested = run(options);
+            elements = [standaloneCursorSpan];
+            const standalone = run(options);
+            elements = [roleButton];
+            const customRole = run(options);
+
+            const controller = context.createAuthPageWalkStateController();
+            const before = controller.beforeAction({{
+              isAuthPage: true,
+              authState: "login",
+              authUiState: "landing_choice",
+            }});
+            controller.afterAction({{
+              observedDetection: before.observedDetection,
+              preferenceApplied: before.applied,
+              candidate: nested.candidate,
+              clicked: true,
+            }});
+            const transition = controller.recordTransition({{
+              beforeDetection: before.observedDetection,
+              effectiveDetection: before.effectiveDetection,
+              afterDetection: {{ isAuthPage: false }},
+            }});
+            console.log(JSON.stringify({{ nested, standalone, customRole, transition }}));
+        """
+        result = subprocess.run(
+            ["node", "-e", script],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        payload = json.loads(result.stdout)
+
+        self.assertEqual(payload["nested"]["candidate"]["tag"], "button")
+        self.assertEqual(payload["nested"]["candidate"]["automationId"], "SignInWithEmailButton")
+        nested_span = next(
+            candidate
+            for candidate in payload["nested"]["nearMissCandidates"]
+            if candidate["tag"] == "span"
+        )
+        self.assertEqual(nested_span["rejectionReason"], "interactive_descendant")
+        self.assertFalse(payload["standalone"]["found"])
+        self.assertEqual(
+            payload["standalone"]["nearMissCandidates"][0]["rejectionReason"],
+            "not_actionable",
+        )
+        self.assertTrue(payload["customRole"]["found"])
+        self.assertEqual(payload["customRole"]["candidate"]["role"], "button")
+        self.assertFalse(payload["transition"]["terminal"])
+        self.assertFalse(payload["transition"]["cycleDetected"])
+
+    def test_auth_primary_action_rejects_captcha_filter_container_and_selects_leaf(self):
+        background_path = REPO_ROOT / "executioner" / "src" / "background" / "index.js"
+        script = f"""
+            const fs = require("node:fs");
+            const vm = require("node:vm");
+            const source = fs.readFileSync({json.dumps(str(background_path))}, "utf8");
+            const start = source.indexOf("function createClickAuthPrimaryActionFunction()");
+            const end = source.indexOf("function createAuthPageProbeFunction()", start);
+            function makeNode({{
+              id = "",
+              tag = "div",
+              text = "",
+              automationId = "",
+              role = "",
+              type = "",
+              rect = {{ top: 10, left: 10, width: 120, height: 32 }},
+              parent = null,
+            }} = {{}}) {{
+              const node = {{
+                id,
+                tagName: tag.toUpperCase(),
+                disabled: false,
+                tabIndex: role === "button" ? 0 : -1,
+                parentElement: parent,
+                children: [],
+                ownText: text,
+                get innerText() {{
+                  return [this.ownText, ...this.children.map((child) => child.innerText)]
+                    .filter(Boolean)
+                    .join(" ");
+                }},
+                get textContent() {{ return this.innerText; }},
+                getAttribute(name) {{
+                  return {{
+                    "data-automation-id": automationId,
+                    role,
+                    type,
+                  }}[name] || null;
+                }},
+                hasAttribute(name) {{ return this.getAttribute(name) !== null; }},
+                getBoundingClientRect() {{ return rect; }},
+                closest(selector) {{
+                  let current = this;
+                  while (current) {{
+                    if (selector === "form" && current.tagName === "FORM") return current;
+                    if (
+                      selector.includes("noCaptchaWrapper") &&
+                      current.getAttribute("data-automation-id") === "noCaptchaWrapper"
+                    ) return current;
+                    current = current.parentElement;
+                  }}
+                  return null;
+                }},
+                querySelectorAll() {{
+                  return this.children.flatMap((child) => [child, ...child.querySelectorAll()]);
+                }},
+              }};
+              if (parent) parent.children.push(node);
+              return node;
+            }}
+
+            const form = makeNode({{ tag: "form" }});
+            const captchaWrapper = makeNode({{
+              automationId: "noCaptchaWrapper",
+              parent: form,
+              rect: {{ top: 10, left: 10, width: 760, height: 300 }},
+            }});
+            const clickFilter = makeNode({{
+              id: "captcha-filter",
+              automationId: "click_filter",
+              role: "button",
+              parent: captchaWrapper,
+              rect: {{ top: 10, left: 10, width: 720, height: 240 }},
+            }});
+            makeNode({{ tag: "span", text: "Create Account", parent: clickFilter }});
+            const createAccountLink = makeNode({{
+              id: "create-account-leaf",
+              tag: "button",
+              text: "Create Account",
+              automationId: "createAccountLink",
+              type: "button",
+              parent: form,
+              rect: {{ top: 330, left: 10, width: 160, height: 36 }},
+            }});
+            const legitimateNativeButton = makeNode({{
+              id: "legitimate-native-button",
+              tag: "button",
+              text: "Create Account",
+              automationId: "click_filter",
+              type: "button",
+              parent: captchaWrapper,
+              rect: {{ top: 270, left: 10, width: 160, height: 36 }},
+            }});
+            const oversizedContainer = makeNode({{
+              id: "oversized-container",
+              text: "Create Account",
+              role: "button",
+              automationId: "authActionContainer",
+              rect: {{ top: 10, left: 10, width: 900, height: 300 }},
+            }});
+            let candidates = [clickFilter, createAccountLink];
+            const context = {{
+              document: {{ querySelectorAll() {{ return candidates; }} }},
+              window: {{
+                getComputedStyle(element) {{
+                  return {{
+                    display: "block",
+                    visibility: "visible",
+                    pointerEvents: "auto",
+                    cursor: element.getAttribute("role") === "button" ? "pointer" : "default",
+                  }};
+                }},
+              }},
+              console,
+            }};
+            vm.createContext(context);
+            vm.runInContext(source.slice(start, end), context);
+            const run = context.createClickAuthPrimaryActionFunction();
+            const options = {{ authState: "signup", authUiState: "signup_form", click: false }};
+            const selected = run(options);
+            candidates = [clickFilter];
+            const unsafeOnly = run(options);
+            candidates = [oversizedContainer];
+            const oversizedOnly = run(options);
+            candidates = [legitimateNativeButton];
+            const legitimate = run(options);
+            console.log(JSON.stringify({{ selected, unsafeOnly, oversizedOnly, legitimate }}));
+        """
+        result = subprocess.run(
+            ["node", "-e", script],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        payload = json.loads(result.stdout)
+
+        self.assertEqual(payload["selected"]["candidate"]["automationId"], "createAccountLink")
+        self.assertFalse(payload["unsafeOnly"]["found"])
+        self.assertEqual(
+            payload["unsafeOnly"]["nearMissCandidates"][0]["automationId"],
+            "click_filter",
+        )
+        self.assertEqual(payload["unsafeOnly"]["nearMissCandidates"][0]["score"], 0)
+        self.assertFalse(payload["oversizedOnly"]["found"])
+        self.assertTrue(payload["legitimate"]["found"])
+        self.assertEqual(payload["legitimate"]["candidate"]["tag"], "button")
+
+    def test_auth_signup_captcha_uses_in_flow_signin_fallback_and_typed_gate(self):
+        background_path = REPO_ROOT / "executioner" / "src" / "background" / "index.js"
+        script = f"""
+            const fs = require("node:fs");
+            const vm = require("node:vm");
+            const source = fs.readFileSync({json.dumps(str(background_path))}, "utf8");
+            const start = source.indexOf("function createClickAuthPrimaryActionFunction()");
+            const end = source.indexOf("function createAuthPageProbeFunction()", start);
+
+            function makeNode({{
+              id = "",
+              tag = "div",
+              text = "",
+              automationId = "",
+              role = "",
+              type = "",
+              disabled = false,
+              pointerEvents = "",
+              rect = {{ top: 10, left: 10, width: 140, height: 36 }},
+              parent = null,
+            }} = {{}}) {{
+              const node = {{
+                id,
+                tagName: tag.toUpperCase(),
+                disabled,
+                pointerEvents,
+                tabIndex: role === "button" || tag === "button" ? 0 : -1,
+                parentElement: parent,
+                children: [],
+                ownText: text,
+                get innerText() {{
+                  return [this.ownText, ...this.children.map((child) => child.innerText)]
+                    .filter(Boolean)
+                    .join(" ");
+                }},
+                get textContent() {{ return this.innerText; }},
+                getAttribute(name) {{
+                  if (name === "disabled") return this.disabled ? "" : null;
+                  return {{
+                    "data-automation-id": automationId,
+                    role,
+                    type,
+                  }}[name] || null;
+                }},
+                hasAttribute(name) {{ return this.getAttribute(name) !== null; }},
+                getBoundingClientRect() {{ return rect; }},
+                closest(selector) {{
+                  let current = this;
+                  while (current) {{
+                    if (selector === "form" && current.tagName === "FORM") return current;
+                    if (
+                      selector.includes("noCaptchaWrapper") &&
+                      current.getAttribute("data-automation-id") === "noCaptchaWrapper"
+                    ) return current;
+                    current = current.parentElement;
+                  }}
+                  return null;
+                }},
+                querySelectorAll() {{
+                  return this.children.flatMap((child) => [child, ...child.querySelectorAll()]);
+                }},
+              }};
+              if (parent) parent.children.push(node);
+              return node;
+            }}
+
+            const form = makeNode({{ tag: "form", automationId: "createAccountForm" }});
+            const captchaWrapper = makeNode({{
+              automationId: "noCaptchaWrapper",
+              parent: form,
+              rect: {{ top: 200, left: 20, width: 720, height: 220 }},
+            }});
+            const clickFilter = makeNode({{
+              tag: "div",
+              text: "Create Account",
+              automationId: "click_filter",
+              role: "button",
+              parent: captchaWrapper,
+              rect: {{ top: 210, left: 20, width: 680, height: 170 }},
+            }});
+            const createSubmit = makeNode({{
+              tag: "button",
+              text: "Create Account",
+              automationId: "createAccountSubmitButton",
+              type: "submit",
+              disabled: true,
+              parent: captchaWrapper,
+              rect: {{ top: 390, left: 20, width: 180, height: 36 }},
+            }});
+            const signInLink = makeNode({{
+              tag: "button",
+              text: "Sign In",
+              automationId: "signInLink",
+              type: "button",
+              parent: form,
+              rect: {{ top: 440, left: 20, width: 120, height: 36 }},
+            }});
+            const headerSignIn = makeNode({{
+              tag: "button",
+              text: "Sign In",
+              automationId: "utilityButtonSignIn",
+              type: "button",
+              rect: {{ top: 5, left: 600, width: 100, height: 32 }},
+            }});
+            const skipLink = makeNode({{
+              id: "accessibilitySkipToMainContent",
+              tag: "a",
+              text: "Skip to main content",
+              automationId: "accessibilitySkipToMainContent",
+              rect: {{ top: 0, left: 0, width: 1, height: 1 }},
+            }});
+            const noise = Array.from({{ length: 10 }}, (_, index) =>
+              makeNode({{
+                tag: "button",
+                text: `Navigation ${{index}}`,
+                automationId: `navigationItem-${{index}}`,
+                type: "button",
+                rect: {{ top: 500 + index, left: 10, width: 120, height: 32 }},
+              }}),
+            );
+            let candidates = [
+              skipLink,
+              ...noise,
+              headerSignIn,
+              captchaWrapper,
+              clickFilter,
+              createSubmit,
+              signInLink,
+            ];
+            const context = {{
+              document: {{ querySelectorAll() {{ return candidates; }} }},
+              window: {{
+                getComputedStyle(element) {{
+                  return {{
+                    display: "block",
+                    visibility: "visible",
+                    pointerEvents:
+                      element.pointerEvents || (element.disabled ? "none" : "auto"),
+                    cursor: element.getAttribute("role") === "button" ? "pointer" : "default",
+                  }};
+                }},
+              }},
+              console,
+            }};
+            vm.createContext(context);
+            vm.runInContext(source.slice(start, end), context);
+            const run = context.createClickAuthPrimaryActionFunction();
+            const options = {{ authState: "signup", authUiState: "signup_form", click: false }};
+            const fallback = run(options);
+            candidates = [
+              skipLink,
+              ...noise,
+              headerSignIn,
+              captchaWrapper,
+              clickFilter,
+              createSubmit,
+            ];
+            const captchaGate = run(options);
+            createSubmit.disabled = false;
+            createSubmit.pointerEvents = "none";
+            const cssCaptchaGate = run(options);
+            createSubmit.pointerEvents = "auto";
+            candidates = [
+              skipLink,
+              headerSignIn,
+              captchaWrapper,
+              clickFilter,
+              createSubmit,
+              signInLink,
+            ];
+            const enabledCreate = run(options);
+            console.log(JSON.stringify({{
+              fallback,
+              captchaGate,
+              cssCaptchaGate,
+              enabledCreate,
+            }}));
+        """
+        result = subprocess.run(
+            ["node", "-e", script],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        payload = json.loads(result.stdout)
+
+        self.assertEqual(payload["fallback"]["candidate"]["automationId"], "signInLink")
+        fallback_misses = {
+            candidate["automationId"]: candidate
+            for candidate in payload["fallback"]["nearMissCandidates"]
+        }
+        self.assertLessEqual(len(fallback_misses), 8)
+        self.assertEqual(
+            fallback_misses["createAccountSubmitButton"]["rejectionReason"], "disabled"
+        )
+        self.assertEqual(fallback_misses["click_filter"]["rejectionReason"], "unsafe_container")
+        self.assertEqual(
+            fallback_misses["utilityButtonSignIn"]["rejectionReason"],
+            "generic_or_social",
+        )
+        miss_ids = list(fallback_misses)
+        self.assertNotIn("accessibilitySkipToMainContent", miss_ids)
+        self.assertLess(
+            miss_ids.index("createAccountSubmitButton"),
+            miss_ids.index("utilityButtonSignIn"),
+        )
+        self.assertLess(
+            miss_ids.index("click_filter"),
+            miss_ids.index("utilityButtonSignIn"),
+        )
+
+        self.assertEqual(payload["captchaGate"]["reason"], "auth_captcha_gate")
+        self.assertEqual(
+            payload["captchaGate"]["candidate"]["automationId"],
+            "createAccountSubmitButton",
+        )
+        self.assertEqual(payload["captchaGate"]["candidate"]["rejectionReason"], "disabled")
+        self.assertEqual(
+            payload["captchaGate"]["captchaCandidate"]["rejectionReason"],
+            "unsafe_container",
+        )
+        self.assertEqual(payload["cssCaptchaGate"]["reason"], "auth_captcha_gate")
+        self.assertFalse(payload["cssCaptchaGate"]["candidate"]["disabled"])
+        self.assertFalse(payload["cssCaptchaGate"]["candidate"]["clickable"])
+        self.assertEqual(
+            payload["cssCaptchaGate"]["candidate"]["rejectionReason"],
+            "not_clickable",
+        )
+        self.assertEqual(
+            payload["enabledCreate"]["candidate"]["automationId"],
+            "createAccountSubmitButton",
+        )
+        self.assertTrue(payload["enabledCreate"]["candidate"]["clickable"])
+
+        background = background_path.read_text(encoding="utf-8")
+        self.assertIn('entry.result?.reason === "auth_captcha_gate"', background)
+        self.assertIn('probe.reason === "auth_captcha_gate"', background)
+        self.assertIn("credentialGatePrimed: true", background)
+        self.assertIn("filledAuthFields: filledAuthFields", background)
+        self.assertIn("candidate: authAction.candidate || {}", background)
+        self.assertIn("captchaCandidate: authAction.captchaCandidate || {}", background)
+        self.assertIn('if (reason === "auth_captcha_gate")', background)
+        issue_registry = (REPO_ROOT / "scripts" / "lib" / "c3_issue_registry.js").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn('return "auth_captcha_gate"', issue_registry)
+        self.assertIn("`auth_captcha_gate`", issue_registry)
+
+    def test_auth_login_captcha_gate_retains_blocked_submit_and_fills_when_enabled(self):
+        background_path = REPO_ROOT / "executioner" / "src" / "background" / "index.js"
+        script = f"""
+            const fs = require("node:fs");
+            const vm = require("node:vm");
+            const source = fs.readFileSync({json.dumps(str(background_path))}, "utf8");
+            const start = source.indexOf("function createClickAuthPrimaryActionFunction()");
+            const end = source.indexOf("function createAuthPageProbeFunction()", start);
+            const stateStart = source.indexOf("function compactAuthActionCandidate(");
+            const stateEnd = source.indexOf("function shouldRepairPageWalkValidation", stateStart);
+
+            function makeNode({{
+              tag = "div",
+              text = "",
+              automationId = "",
+              role = "",
+              type = "",
+              autocomplete = "",
+              disabled = false,
+              pointerEvents = "auto",
+              rectWidth = 220,
+              rectHeight = 40,
+              parent = null,
+            }} = {{}}) {{
+              const attrs = {{
+                "data-automation-id": automationId,
+                role,
+                type,
+                autocomplete,
+              }};
+              const node = {{
+                tagName: tag.toUpperCase(),
+                disabled,
+                pointerEvents,
+                tabIndex: role === "button" || ["button", "a", "input"].includes(tag) ? 0 : -1,
+                parentElement: parent,
+                children: [],
+                ownText: text,
+                value: "",
+                clickCount: 0,
+                get innerText() {{
+                  return [this.ownText, ...this.children.map((child) => child.innerText)]
+                    .filter(Boolean)
+                    .join(" ");
+                }},
+                get textContent() {{ return this.innerText; }},
+                getAttribute(name) {{
+                  if (name === "disabled") return this.disabled ? "" : null;
+                  if (name === "href" && tag === "a") return "#";
+                  return attrs[name] || null;
+                }},
+                setAttribute(name, value) {{ attrs[name] = String(value); }},
+                hasAttribute(name) {{ return this.getAttribute(name) !== null; }},
+                getBoundingClientRect() {{
+                  return {{ top: 20, left: 20, width: rectWidth, height: rectHeight }};
+                }},
+                closest(selector) {{
+                  let current = this;
+                  while (current) {{
+                    if (selector === "form" && current.tagName === "FORM") return current;
+                    if (
+                      selector.includes("noCaptchaWrapper") &&
+                      current.getAttribute("data-automation-id") === "noCaptchaWrapper"
+                    ) return current;
+                    if (
+                      selector.includes("button") &&
+                      (["BUTTON", "A", "INPUT"].includes(current.tagName) ||
+                        current.getAttribute("role") === "button")
+                    ) return current;
+                    if (
+                      selector.includes("[data-automation-id]") &&
+                      (current.getAttribute("data-automation-id") || current.tagName === "DIV")
+                    ) return current;
+                    current = current.parentElement;
+                  }}
+                  return null;
+                }},
+                querySelectorAll() {{
+                  return this.children.flatMap((child) => [child, ...child.querySelectorAll()]);
+                }},
+                scrollIntoView() {{}},
+                focus() {{}},
+                blur() {{}},
+                dispatchEvent() {{}},
+                click() {{ this.clickCount += 1; }},
+              }};
+              if (parent) parent.children.push(node);
+              return node;
+            }}
+
+            const form = makeNode({{ tag: "form", automationId: "signInForm" }});
+            form.requestSubmit = () => {{ form.submitCount = (form.submitCount || 0) + 1; }};
+            const email = makeNode({{
+              tag: "input",
+              automationId: "email",
+              type: "email",
+              autocomplete: "email",
+              parent: form,
+            }});
+            const password = makeNode({{
+              tag: "input",
+              automationId: "password",
+              type: "password",
+              autocomplete: "current-password",
+              parent: form,
+            }});
+            const captchaWrapper = makeNode({{
+              automationId: "noCaptchaWrapper",
+              parent: form,
+            }});
+            const clickFilter = makeNode({{
+              text: "Sign In",
+              automationId: "click_filter",
+              role: "button",
+              parent: captchaWrapper,
+            }});
+            const signInSubmit = makeNode({{
+              tag: "button",
+              text: "Sign In",
+              automationId: "signInSubmitButton",
+              type: "submit",
+              disabled: true,
+              pointerEvents: "none",
+              parent: captchaWrapper,
+            }});
+            const createAccountLink = makeNode({{
+              tag: "a",
+              text: "Create Account",
+              automationId: "createAccountLink",
+              parent: form,
+            }});
+            const emailGateway = makeNode({{
+              tag: "button",
+              text: "Sign In With Email",
+              automationId: "SignInWithEmailButton",
+              type: "button",
+              parent: form,
+            }});
+            let credentialInputs = [email, password];
+            let actionElements = [
+              captchaWrapper,
+              clickFilter,
+              signInSubmit,
+              createAccountLink,
+            ];
+            const context = {{
+              document: {{
+                querySelectorAll(selector) {{
+                  if (selector === "input") return credentialInputs;
+                  if (selector === 'input[type="checkbox"]') return [];
+                  return actionElements;
+                }},
+              }},
+              window: {{
+                getComputedStyle(element) {{
+                  return {{
+                    display: "block",
+                    visibility: "visible",
+                    pointerEvents: element.disabled ? "none" : element.pointerEvents,
+                    cursor: element.getAttribute("role") === "button" ? "pointer" : "default",
+                  }};
+                }},
+              }},
+              HTMLInputElement: function HTMLInputElement() {{}},
+              Event: class Event {{ constructor(type) {{ this.type = type; }} }},
+              KeyboardEvent: class KeyboardEvent {{ constructor(type) {{ this.type = type; }} }},
+              MouseEvent: class MouseEvent {{ constructor(type) {{ this.type = type; }} }},
+              CSS: {{ escape: (value) => value }},
+              console,
+            }};
+            Object.defineProperty(context.HTMLInputElement.prototype, "value", {{
+              set(value) {{ this.value = value; }},
+            }});
+            vm.createContext(context);
+            vm.runInContext(source.slice(start, end), context);
+            vm.runInContext(source.slice(stateStart, stateEnd), context);
+            const run = context.createClickAuthPrimaryActionFunction();
+            const controller = context.createAuthPageWalkStateController();
+            const signupForm = controller.beforeAction({{
+              isAuthPage: true,
+              authState: "signup",
+              authUiState: "signup_form",
+            }});
+            controller.afterAction({{
+              observedDetection: signupForm.observedDetection,
+              preferenceApplied: signupForm.applied,
+              candidate: {{ automationId: "signInLink", label: "Sign In" }},
+              clicked: true,
+            }});
+            const effectiveLanding = controller.beforeAction({{
+              isAuthPage: true,
+              authState: "signup",
+              authUiState: "landing_choice",
+            }});
+            const options = {{
+              ...effectiveLanding.effectiveDetection,
+              accountEmail: "candidate@example.com",
+              accountPassword: "secret-password",
+            }};
+            const disabledGate = run({{ ...options, click: false }});
+            const primedGate = run({{ ...options, click: true }});
+            signInSubmit.disabled = false;
+            signInSubmit.pointerEvents = "none";
+            const cssGate = run({{ ...options, click: false }});
+            signInSubmit.pointerEvents = "auto";
+            signInSubmit.getBoundingClientRect = () => ({{
+              top: 20, left: 20, width: 0, height: 0,
+            }});
+            const unrenderedGate = run({{ ...options, click: false }});
+            signInSubmit.getBoundingClientRect = () => ({{
+              top: 20, left: 20, width: 220, height: 40,
+            }});
+            signInSubmit.pointerEvents = "auto";
+            const enabled = run({{ ...options, click: true }});
+            credentialInputs = [];
+            actionElements = [emailGateway, createAccountLink];
+            const genuineLanding = run({{ ...options, click: false }});
+            const signupIntentGateway = run({{
+              ...options,
+              authState: "signup",
+              authUiState: "landing_choice",
+              click: false,
+            }});
+            actionElements = [clickFilter];
+            const filterOnly = run({{ ...options, click: false }});
+            console.log(JSON.stringify({{
+              disabledGate,
+              primedGate,
+              cssGate,
+              unrenderedGate,
+              enabled,
+              genuineLanding,
+              signupIntentGateway,
+              filterOnly,
+              effectiveLanding,
+              emailValue: email.value,
+              passwordValue: password.value,
+              clickCount: signInSubmit.clickCount,
+            }}));
+        """
+        result = subprocess.run(
+            ["node", "-e", script],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        payload = json.loads(result.stdout)
+
+        self.assertTrue(payload["effectiveLanding"]["applied"])
+        self.assertEqual(payload["effectiveLanding"]["observedAuthState"], "signup")
+        self.assertEqual(payload["effectiveLanding"]["effectiveDetection"]["authState"], "login")
+        self.assertEqual(
+            payload["effectiveLanding"]["effectiveDetection"]["authUiState"], "landing_choice"
+        )
+
+        for gate, rejection in (
+            (payload["disabledGate"], "disabled"),
+            (payload["cssGate"], "not_clickable"),
+            (payload["unrenderedGate"], "not_clickable"),
+        ):
+            self.assertEqual(gate["reason"], "auth_captcha_gate")
+            self.assertEqual(gate["candidate"]["automationId"], "signInSubmitButton")
+            self.assertEqual(gate["candidate"]["rejectionReason"], rejection)
+            self.assertEqual(gate["captchaCandidate"]["automationId"], "click_filter")
+            self.assertTrue(gate["nearMissCandidates"])
+
+        self.assertEqual(payload["primedGate"]["reason"], "auth_captcha_gate")
+        self.assertEqual(
+            {field["source"] for field in payload["primedGate"]["filledAuthFields"]},
+            {"profile:accountEmail", "profile:accountPassword"},
+        )
+
+        self.assertEqual(payload["enabled"]["candidate"]["automationId"], "signInSubmitButton")
+        self.assertTrue(payload["enabled"]["clicked"])
+        self.assertEqual(payload["emailValue"], "candidate@example.com")
+        self.assertEqual(payload["passwordValue"], "secret-password")
+        self.assertEqual(
+            {field["source"] for field in payload["enabled"]["filledAuthFields"]},
+            {"profile:accountEmail", "profile:accountPassword"},
+        )
+        self.assertGreater(payload["clickCount"], 0)
+        self.assertEqual(
+            payload["genuineLanding"]["candidate"]["automationId"], "SignInWithEmailButton"
+        )
+        self.assertEqual(
+            payload["signupIntentGateway"]["candidate"]["automationId"],
+            "SignInWithEmailButton",
+        )
+        self.assertFalse(payload["filterOnly"]["found"])
+        self.assertEqual(payload["filterOnly"]["reason"], "auth_primary_action_not_found")
+
+    def test_page_walk_bounds_signup_to_signin_continuation(self):
+        background = (REPO_ROOT / "executioner" / "src" / "background" / "index.js").read_text(
+            encoding="utf-8"
+        )
+
+        self.assertIn("let signupToSigninTransitions = 0", background)
+        self.assertIn('"auth_signup_to_signin_continue"', background)
+        self.assertIn('stoppedReason: terminal ? "auth_signup_signin_loop" : ""', background)
+        self.assertIn('"auth_signup_signin_loop"', background)
+        self.assertIn('reason: "auth_signup_signin_loop"', background)
+        self.assertIn("signupToSigninTransitions += 1", background)
+        self.assertIn("signupToSigninTransitions,", background)
+        self.assertIn(
+            "lastSafeCandidate: compactAuthActionCandidate(authAction.candidate)", background
+        )
+        self.assertIn('kind: "auth_validation_blocked"', background)
+        self.assertIn('stoppedReason: "visible_validation_errors"', background)
+        self.assertIn("pageIndex -= 1", background)
+        self.assertLess(
+            background.index('kind: "auth_validation_blocked"'),
+            background.index('if (before.authState === "signup"'),
+        )
+
+    def test_auth_transition_decision_is_bounded_typed_and_repair_aware(self):
+        background_path = REPO_ROOT / "executioner" / "src" / "background" / "index.js"
+        script = f"""
+            const fs = require("node:fs");
+            const vm = require("node:vm");
+            const source = fs.readFileSync({json.dumps(str(background_path))}, "utf8");
+            const start = source.indexOf("function createAuthTransitionDecisionFunction()");
+            const end = source.indexOf("function shouldRepairPageWalkValidation", start);
+            const context = {{}};
+            vm.createContext(context);
+            vm.runInContext(source.slice(start, end), context);
+            const decide = context.createAuthTransitionDecisionFunction();
+            const decideRepair = context.createAuthValidationRepairDecisionFunction();
+            const beforeSignup = {{
+              isAuthPage: true,
+              authState: "signup",
+              authUiState: "signup_form",
+              href: "https://tenant.test/auth/signup",
+            }};
+            const afterLogin = {{
+              isAuthPage: true,
+              authState: "login",
+              authUiState: "credential_form",
+              href: "https://tenant.test/auth/login",
+            }};
+            const candidate = {{
+              tag: "button",
+              role: "button",
+              selector: "button[value='private applicant value'][data-automation-id='createAccountSubmitButton']",
+              automationId: "createAccountSubmitButton",
+              label: "Create Account",
+              disabled: false,
+              score: 138,
+              value: "private applicant value",
+              metadata: "private metadata",
+            }};
+            const first = decide({{
+              beforeDetection: beforeSignup,
+              afterDetection: afterLogin,
+              signupToSigninTransitions: 0,
+              visibleValidationErrors: [],
+              lastSafeCandidate: candidate,
+            }});
+            const second = decide({{
+              beforeDetection: beforeSignup,
+              afterDetection: afterLogin,
+              signupToSigninTransitions: 1,
+              visibleValidationErrors: [],
+              lastSafeCandidate: candidate,
+            }});
+            const changedWithValidation = decide({{
+              beforeDetection: beforeSignup,
+              afterDetection: afterLogin,
+              signupToSigninTransitions: 0,
+              visibleValidationErrors: ["Please check the box"],
+              lastSafeCandidate: candidate,
+            }});
+            const samePageValidation = decide({{
+              beforeDetection: afterLogin,
+              afterDetection: afterLogin,
+              signupToSigninTransitions: 0,
+              visibleValidationErrors: ["Required"],
+              lastSafeCandidate: candidate,
+            }});
+            const repairSuccess = decideRepair({{
+              ok: true,
+              cancelled: false,
+              filledFieldCount: 1,
+            }});
+            const repairFailure = decideRepair({{
+              ok: true,
+              cancelled: false,
+              filledFieldCount: 0,
+            }});
+            const repairCancelled = decideRepair({{
+              ok: true,
+              cancelled: true,
+              filledFieldCount: 1,
+            }});
+            console.log(JSON.stringify({{
+              first,
+              second,
+              changedWithValidation,
+              samePageValidation,
+              repairSuccess,
+              repairFailure,
+              repairCancelled,
+            }}));
+        """
+        result = subprocess.run(
+            ["node", "-e", script],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        payload = json.loads(result.stdout)
+
+        self.assertEqual(payload["first"]["kind"], "auth_signup_to_signin_continue")
+        self.assertFalse(payload["first"]["terminal"])
+        self.assertEqual(payload["first"]["transitionCount"], 1)
+        self.assertEqual(payload["second"]["kind"], "auth_signup_signin_loop")
+        self.assertTrue(payload["second"]["terminal"])
+        self.assertEqual(payload["second"]["stoppedReason"], "auth_signup_signin_loop")
+        self.assertEqual(payload["second"]["transitionCount"], 2)
+        self.assertNotIn("value", payload["second"]["lastSafeCandidate"])
+        self.assertNotIn("metadata", payload["second"]["lastSafeCandidate"])
+        self.assertNotIn(
+            "private applicant value",
+            payload["second"]["lastSafeCandidate"]["selector"],
+        )
+        self.assertEqual(payload["changedWithValidation"]["kind"], "auth_validation_blocked")
+        self.assertTrue(payload["changedWithValidation"]["terminal"])
+        self.assertEqual(payload["samePageValidation"]["kind"], "auth_same_page")
+        self.assertTrue(payload["samePageValidation"]["repairValidation"])
+        self.assertEqual(payload["repairSuccess"]["kind"], "auth_validation_repair_succeeded")
+        self.assertTrue(payload["repairSuccess"]["continuePageWalk"])
+        self.assertEqual(payload["repairFailure"]["kind"], "auth_validation_repair_failed")
+        self.assertFalse(payload["repairFailure"]["continuePageWalk"])
+        self.assertEqual(payload["repairFailure"]["stoppedReason"], "auth_action_did_not_advance")
+        self.assertEqual(payload["repairCancelled"]["kind"], "auth_validation_repair_failed")
+        self.assertFalse(payload["repairCancelled"]["continuePageWalk"])
+
+        background = background_path.read_text(encoding="utf-8")
+        self.assertIn(
+            "const authTransitionDecision = decideAuthTransitionAfterAction({", background
+        )
+        self.assertIn("steps.push(authTransitionDecision.step);", background)
+        self.assertIn("const authValidationRepairDecision =", background)
+        self.assertIn("decideAuthValidationRepairOutcome({", background)
+        self.assertIn("terminalStep: steps.length ? steps[steps.length - 1] : null", background)
+
+    def test_auth_signin_preference_and_ui_cycle_state_machine(self):
+        background_path = REPO_ROOT / "executioner" / "src" / "background" / "index.js"
+        script = f"""
+            const fs = require("node:fs");
+            const vm = require("node:vm");
+            const source = fs.readFileSync({json.dumps(str(background_path))}, "utf8");
+            const actionStart = source.indexOf("function createClickAuthPrimaryActionFunction()");
+            const actionEnd = source.indexOf("function createAuthPageProbeFunction()", actionStart);
+            const stateStart = source.indexOf("function compactAuthActionCandidate(");
+            const stateEnd = source.indexOf("function shouldRepairPageWalkValidation", stateStart);
+
+            function element(label, automationId) {{
+              return {{
+                tagName: "BUTTON",
+                disabled: false,
+                tabIndex: 0,
+                innerText: label,
+                textContent: label,
+                getAttribute(name) {{
+                  return {{
+                    "data-automation-id": automationId,
+                    role: "button",
+                    type: "button",
+                  }}[name] || null;
+                }},
+                hasAttribute() {{ return false; }},
+                getBoundingClientRect() {{
+                  return {{ top: 10, left: 10, width: 160, height: 36 }};
+                }},
+                closest() {{ return null; }},
+                querySelectorAll() {{ return []; }},
+              }};
+            }}
+            const createAccountLink = element("Create Account", "createAccountLink");
+            const emailGateway = element("Sign In With Email", "SignInWithEmailButton");
+            let elements = [createAccountLink, emailGateway];
+            const context = {{
+              document: {{ querySelectorAll() {{ return elements; }} }},
+              window: {{
+                getComputedStyle() {{
+                  return {{
+                    display: "block",
+                    visibility: "visible",
+                    pointerEvents: "auto",
+                    cursor: "pointer",
+                  }};
+                }},
+              }},
+              console,
+            }};
+            vm.createContext(context);
+            vm.runInContext(source.slice(actionStart, actionEnd), context);
+            vm.runInContext(source.slice(stateStart, stateEnd), context);
+            const preference = context.createAuthSigninPreferenceStateMachine();
+            const historyMachine = context.createAuthUiTransitionHistoryFunction();
+            const pageWalkController = context.createAuthPageWalkStateController();
+            const afterFallback = preference.afterAction({{
+              preferSigninAfterSignupFallback: false,
+              observedDetection: {{
+                isAuthPage: true,
+                authState: "signup",
+                authUiState: "signup_form",
+              }},
+              candidate: {{ automationId: "signInLink" }},
+              clicked: true,
+            }});
+            const landing = preference.beforeAction({{
+              preferSigninAfterSignupFallback:
+                afterFallback.preferSigninAfterSignupFallback,
+              observedDetection: {{
+                isAuthPage: true,
+                authState: "signup",
+                authUiState: "landing_choice",
+              }},
+            }});
+            const runAction = context.createClickAuthPrimaryActionFunction();
+            const selected = runAction({{
+              ...landing.effectiveDetection,
+              click: false,
+            }});
+            elements = [createAccountLink];
+            const missingGateway = runAction({{
+              ...landing.effectiveDetection,
+              click: false,
+            }});
+            const controlledFallbackBefore = pageWalkController.beforeAction({{
+              isAuthPage: true,
+              authState: "signup",
+              authUiState: "signup_form",
+            }});
+            const controlledFallbackAfter = pageWalkController.afterAction({{
+              observedDetection: controlledFallbackBefore.observedDetection,
+              preferenceApplied: controlledFallbackBefore.applied,
+              candidate: {{ automationId: "signInLink", label: "Sign In" }},
+              clicked: true,
+            }});
+            const controlledLanding = pageWalkController.beforeAction({{
+              isAuthPage: true,
+              authState: "signup",
+              authUiState: "landing_choice",
+            }});
+            elements = [createAccountLink, emailGateway];
+            const controlledSelection = runAction({{
+              ...controlledLanding.effectiveDetection,
+              click: false,
+            }});
+            const controlledGatewayAfter = pageWalkController.afterAction({{
+              observedDetection: controlledLanding.observedDetection,
+              preferenceApplied: controlledLanding.applied,
+              candidate: controlledSelection.candidate,
+              clicked: true,
+            }});
+
+            const stateA = {{
+              isAuthPage: true,
+              authState: "signup",
+              authUiState: "landing_choice",
+              href: "https://tenant.test/auth",
+            }};
+            const stateB = {{
+              isAuthPage: true,
+              authState: "signup",
+              authUiState: "signup_form",
+              href: "https://tenant.test/auth",
+            }};
+            let historyState = {{ history: [], transitionCount: 0 }};
+            for (const transition of [
+              [stateA, stateB, createAccountLink],
+              [stateB, stateA, element("Sign In", "signInLink")],
+              [stateA, stateB, createAccountLink],
+              [stateB, stateA, element("Sign In", "signInLink")],
+            ]) {{
+              historyState = historyMachine.record({{
+                history: historyState.history,
+                transitionCount: historyState.transitionCount,
+                beforeDetection: transition[0],
+                afterDetection: transition[1],
+                effectiveDetection: transition[0],
+                candidate: {{
+                  automationId: transition[2].getAttribute("data-automation-id"),
+                  label: transition[2].innerText,
+                  selector: "button[value='private'][data-automation-id='safe']",
+                  value: "private",
+                }},
+              }});
+            }}
+            const cycleController = context.createAuthPageWalkStateController();
+            let cycleTerminal = null;
+            for (const transition of [
+              [stateA, stateB, {{ automationId: "createAccountLink", label: "Create Account" }}],
+              [stateB, stateA, {{ automationId: "signInLink", label: "Sign In" }}],
+              [stateA, stateB, {{ automationId: "createAccountLink", label: "Create Account" }}],
+              [stateB, stateA, {{ automationId: "signInLink", label: "Sign In" }}],
+            ]) {{
+              const before = cycleController.beforeAction(transition[0]);
+              cycleController.afterAction({{
+                observedDetection: transition[0],
+                preferenceApplied: before.applied,
+                candidate: transition[2],
+                clicked: true,
+              }});
+              cycleTerminal = cycleController.recordTransition({{
+                beforeDetection: transition[0],
+                effectiveDetection: before.effectiveDetection,
+                afterDetection: transition[1],
+              }});
+            }}
+            const stateC = {{
+              isAuthPage: true,
+              authState: "login",
+              authUiState: "credential_form",
+              href: "https://tenant.test/auth",
+            }};
+            const stateD = {{
+              isAuthPage: true,
+              authState: "login",
+              authUiState: "challenge_form",
+              href: "https://tenant.test/auth",
+            }};
+            const periodOneController = context.createAuthPageWalkStateController();
+            let periodOneTerminal = null;
+            for (const transition of [
+              [stateA, stateB, {{ automationId: "createAccountLink", label: "Create" }}],
+              [stateA, stateB, {{ automationId: "createAccountLink", label: "Create" }}],
+            ]) {{
+              const before = periodOneController.beforeAction(transition[0]);
+              periodOneController.afterAction({{
+                observedDetection: transition[0],
+                preferenceApplied: before.applied,
+                candidate: transition[2],
+                clicked: true,
+              }});
+              periodOneTerminal = periodOneController.recordTransition({{
+                beforeDetection: transition[0],
+                effectiveDetection: before.effectiveDetection,
+                afterDetection: transition[1],
+              }});
+            }}
+            const periodThreeController = context.createAuthPageWalkStateController();
+            let periodThreeTerminal = null;
+            for (const transition of [
+              [stateA, stateB, {{ automationId: "createAccountLink", label: "Create" }}],
+              [stateB, stateC, {{ automationId: "signInLink", label: "Login" }}],
+              [stateC, stateA, {{ automationId: "createAccountLink", label: "Create" }}],
+              [stateA, stateB, {{ automationId: "createAccountLink", label: "Create" }}],
+              [stateB, stateC, {{ automationId: "signInLink", label: "Login" }}],
+              [stateC, stateA, {{ automationId: "createAccountLink", label: "Create" }}],
+            ]) {{
+              const before = periodThreeController.beforeAction(transition[0]);
+              periodThreeController.afterAction({{
+                observedDetection: transition[0],
+                preferenceApplied: before.applied,
+                candidate: transition[2],
+                clicked: true,
+              }});
+              periodThreeTerminal = periodThreeController.recordTransition({{
+                beforeDetection: transition[0],
+                effectiveDetection: before.effectiveDetection,
+                afterDetection: transition[1],
+              }});
+            }}
+            const periodFourController = context.createAuthPageWalkStateController();
+            let periodFourTerminal = null;
+            for (const transition of [
+              [stateA, stateB, {{ automationId: "action-a", label: "A" }}],
+              [stateB, stateC, {{ automationId: "action-b", label: "B" }}],
+              [stateC, stateD, {{ automationId: "action-c", label: "C" }}],
+              [stateD, stateA, {{ automationId: "action-d", label: "D" }}],
+              [stateA, stateB, {{ automationId: "action-a", label: "A" }}],
+              [stateB, stateC, {{ automationId: "action-b", label: "B" }}],
+              [stateC, stateD, {{ automationId: "action-c", label: "C" }}],
+              [stateD, stateA, {{ automationId: "action-d", label: "D" }}],
+            ]) {{
+              const before = periodFourController.beforeAction(transition[0]);
+              periodFourController.afterAction({{
+                observedDetection: transition[0],
+                preferenceApplied: before.applied,
+                candidate: transition[2],
+                clicked: true,
+              }});
+              periodFourTerminal = periodFourController.recordTransition({{
+                beforeDetection: transition[0],
+                effectiveDetection: before.effectiveDetection,
+                afterDetection: transition[1],
+              }});
+            }}
+            const progressController = context.createAuthPageWalkStateController();
+            let progressResult = null;
+            for (let index = 0; index < 6; index += 1) {{
+              const from = {{
+                isAuthPage: true,
+                authState: `state-${{index}}`,
+                authUiState: `ui-${{index}}`,
+              }};
+              const to = {{
+                isAuthPage: true,
+                authState: `state-${{index + 1}}`,
+                authUiState: `ui-${{index + 1}}`,
+              }};
+              const before = progressController.beforeAction(from);
+              progressController.afterAction({{
+                observedDetection: from,
+                preferenceApplied: before.applied,
+                candidate: {{ automationId: `action-${{index}}`, label: `Action ${{index}}` }},
+                clicked: true,
+              }});
+              progressResult = progressController.recordTransition({{
+                beforeDetection: from,
+                effectiveDetection: before.effectiveDetection,
+                afterDetection: to,
+              }});
+            }}
+            const samePageController = context.createAuthPageWalkStateController();
+            const samePageBefore = samePageController.beforeAction(stateB);
+            samePageController.afterAction({{
+              observedDetection: stateB,
+              preferenceApplied: samePageBefore.applied,
+              candidate: {{ automationId: "createAccountSubmitButton", label: "Create Account" }},
+              clicked: true,
+            }});
+            samePageController.recordTransition({{
+              beforeDetection: stateB,
+              effectiveDetection: samePageBefore.effectiveDetection,
+              afterDetection: stateB,
+            }});
+            const samePageTerminal = samePageController.terminal(
+              "auth_same_page_attempt_limit_reached",
+              {{
+                observedDetection: stateB,
+                effectiveDetection: samePageBefore.effectiveDetection,
+                nearMissCandidates: [{{
+                  automationId: "createAccountSubmitButton",
+                  rejectionReason: "not_clickable",
+                }}],
+                stopDetails: {{ samePageAttempts: 3, maxSamePageAttempts: 3 }},
+              }},
+            );
+            console.log(JSON.stringify({{
+              afterFallback,
+              landing,
+              selected,
+              missingGateway,
+              historyState,
+              controlledFallbackAfter,
+              controlledLanding,
+              controlledSelection,
+              controlledGatewayAfter,
+              controlledSnapshot: pageWalkController.snapshot(),
+              cycleTerminal,
+              periodOneTerminal,
+              periodThreeTerminal,
+              periodFourTerminal,
+              progressResult,
+              samePageTerminal,
+            }}));
+        """
+        result = subprocess.run(
+            ["node", "-e", script],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        payload = json.loads(result.stdout)
+
+        self.assertTrue(payload["afterFallback"]["preferSigninAfterSignupFallback"])
+        self.assertTrue(payload["landing"]["applied"])
+        self.assertEqual(payload["landing"]["observedAuthState"], "signup")
+        self.assertEqual(payload["landing"]["effectiveDetection"]["authState"], "login")
+        self.assertEqual(payload["selected"]["candidate"]["automationId"], "SignInWithEmailButton")
+        self.assertNotEqual(payload["selected"]["candidate"]["automationId"], "createAccountLink")
+        self.assertFalse(payload["missingGateway"]["found"])
+        self.assertEqual(
+            payload["missingGateway"]["nearMissCandidates"][0]["automationId"],
+            "createAccountLink",
+        )
+        self.assertTrue(payload["historyState"]["cycleDetected"])
+        self.assertEqual(payload["historyState"]["transitionCount"], 4)
+        self.assertLessEqual(len(payload["historyState"]["history"]), 8)
+        self.assertNotIn(
+            "private",
+            payload["historyState"]["history"][-1]["candidate"]["selector"],
+        )
+
+        self.assertTrue(payload["controlledFallbackAfter"]["selectedSignupSigninFallback"])
+        self.assertTrue(payload["controlledLanding"]["applied"])
+        self.assertEqual(payload["controlledLanding"]["effectiveDetection"]["authState"], "login")
+        self.assertEqual(
+            payload["controlledSelection"]["candidate"]["automationId"],
+            "SignInWithEmailButton",
+        )
+        self.assertTrue(payload["controlledGatewayAfter"]["consumed"])
+        self.assertFalse(payload["controlledSnapshot"]["preferSigninAfterSignupFallback"])
+        self.assertTrue(payload["cycleTerminal"]["terminal"])
+        self.assertEqual(payload["cycleTerminal"]["stoppedReason"], "auth_ui_cycle_detected")
+        self.assertEqual(payload["cycleTerminal"]["step"]["kind"], "auth_ui_cycle_detected")
+        self.assertEqual(payload["cycleTerminal"]["stopDetails"]["authTransitionCount"], 4)
+        self.assertEqual(
+            len(payload["cycleTerminal"]["stopDetails"]["authTransitionHistory"]),
+            4,
+        )
+        self.assertTrue(payload["periodOneTerminal"]["terminal"])
+        self.assertEqual(payload["periodOneTerminal"]["cyclePeriod"], 1)
+        self.assertEqual(payload["periodOneTerminal"]["cycleLength"], 2)
+        self.assertEqual(payload["periodOneTerminal"]["stopDetails"]["authTransitionCount"], 2)
+        self.assertTrue(payload["periodThreeTerminal"]["terminal"])
+        self.assertEqual(payload["periodThreeTerminal"]["cyclePeriod"], 3)
+        self.assertEqual(payload["periodThreeTerminal"]["stopDetails"]["authTransitionCount"], 6)
+        self.assertTrue(payload["periodFourTerminal"]["terminal"])
+        self.assertEqual(payload["periodFourTerminal"]["cyclePeriod"], 4)
+        self.assertEqual(payload["periodFourTerminal"]["cycleLength"], 8)
+        self.assertEqual(payload["periodFourTerminal"]["stopDetails"]["authTransitionCount"], 8)
+        self.assertEqual(
+            len(payload["periodFourTerminal"]["stopDetails"]["authTransitionHistory"]),
+            8,
+        )
+        self.assertFalse(payload["progressResult"]["terminal"])
+        self.assertTrue(payload["samePageTerminal"]["terminal"])
+        self.assertEqual(
+            payload["samePageTerminal"]["step"]["kind"],
+            "auth_same_page_attempt_limit_reached",
+        )
+        self.assertEqual(payload["samePageTerminal"]["stopDetails"]["authTransitionCount"], 1)
+        self.assertEqual(
+            payload["samePageTerminal"]["stopDetails"]["lastAuthActionCandidate"]["automationId"],
+            "createAccountSubmitButton",
+        )
+        self.assertEqual(payload["samePageTerminal"]["step"]["candidate"], {})
+        self.assertEqual(
+            payload["samePageTerminal"]["step"]["nearMissCandidates"][0]["rejectionReason"],
+            "not_clickable",
+        )
+
+    def test_page_walk_verify_email_failure_owns_terminal_evidence(self):
+        background_path = REPO_ROOT / "executioner" / "src" / "background" / "index.js"
+        script = f"""
+            const fs = require("node:fs");
+            const vm = require("node:vm");
+            const source = fs.readFileSync({json.dumps(str(background_path))}, "utf8");
+            const stateStart = source.indexOf("function compactAuthActionCandidate(");
+            const stateEnd = source.indexOf("function shouldRepairPageWalkValidation", stateStart);
+            const walkStart = source.indexOf("async function runV2PageWalkAfterFill(");
+            const walkEnd = source.indexOf("function chooseBestV2ClearFrame", walkStart);
+            const detection = {{
+              isAuthPage: true,
+              authState: "verify_email",
+              authUiState: "email_verification",
+              href: "https://tenant.test/auth/verify",
+            }};
+            const snapshot = {{
+              href: detection.href,
+              currentStep: {{ number: 1, title: "Verify Email" }},
+              visibleValidationErrors: [],
+            }};
+            const samePageDetection = {{
+              isAuthPage: true,
+              authState: "login",
+              authUiState: "credential_form",
+              href: "https://tenant.test/auth/login",
+            }};
+            const cycleA = {{
+              isAuthPage: true,
+              authState: "login",
+              authUiState: "landing_choice",
+              href: "https://tenant.test/auth/login",
+            }};
+            const cycleB = {{
+              isAuthPage: true,
+              authState: "login",
+              authUiState: "credential_form",
+              href: "https://tenant.test/auth/login",
+            }};
+            let scenario = "verify_email";
+            let verificationCalls = 0;
+            let detectionIndex = 0;
+            let actionIndex = 0;
+            const context = {{
+              console,
+              V2_PAGE_WALK_MAX_PAGES: 8,
+              V2_AUTH_FLOW_MAX_STEPS: 12,
+              V2_AUTH_SAME_PAGE_MAX_ATTEMPTS: 3,
+              WORKDAY_RUNTIME_ERROR_REASON: "workday_runtime_error",
+              getPageSnapshot: async () => snapshot,
+              pageNumberFromSnapshot: () => 1,
+              isFillRunCancelled: () => false,
+              fillRunCancelReason: () => "",
+              recoverWorkdayRuntimeErrorForTab: async () => ({{ attempted: false }}),
+              maybeHandleEmailVerificationGate: async () => {{
+                if (scenario !== "verify_email") return {{ handled: false }};
+                verificationCalls += 1;
+                if (verificationCalls === 1) return {{ handled: false }};
+                return {{
+                  handled: true,
+                  detection,
+                  result: {{
+                    ok: false,
+                    reason: "email_verification_link_unavailable",
+                    message: "No safe verification link was available.",
+                  }},
+                }};
+              }},
+              detectWorkflowForTab: async () => {{
+                if (scenario === "verify_email") return detection;
+                if (scenario === "same_page") return samePageDetection;
+                const cycleDetections = [
+                  cycleA, cycleB,
+                  cycleB, cycleA,
+                  cycleA, cycleB,
+                  cycleB, cycleA,
+                ];
+                return cycleDetections[detectionIndex++] || cycleA;
+              }},
+              showFillProgress: async () => {{}},
+              describePageWalkPage: () => "Verify Email",
+              workdayAppScopeFromUrl: () => ({{ host: "tenant.test", appSegment: "auth" }}),
+              normalizeComparableUrl: (value) => value,
+              markFillRunExpectedReload: () => {{}},
+              clickAuthPrimaryActionForTab: async () => {{
+                const automationId =
+                  scenario === "same_page"
+                    ? `same-page-action-${{actionIndex}}`
+                    : actionIndex % 2 === 0
+                      ? "cycle-action-a"
+                      : "cycle-action-b";
+                actionIndex += 1;
+                return {{
+                  clicked: true,
+                  candidate: {{ automationId, label: automationId }},
+                  nearMissCandidates:
+                    scenario === "same_page"
+                      ? [{{ automationId, rejectionReason: "not_clickable" }}]
+                      : [],
+                }};
+              }},
+              dismissPageTransientUi: async () => {{}},
+              waitForAuthActionTransitionForTab: async () => ({{ snapshot }}),
+              waitForApplicationFieldsReadyAfterAuth: async () => ({{
+                ok: false,
+                reason: "still_on_auth_page",
+                detection: samePageDetection,
+                lastProbe: {{ visibleValidationErrors: [] }},
+              }}),
+              pageWalkFillSummary: () => ({{ filledFieldCount: 1, reviewIssues: [] }}),
+              uniqueReviewIssues: () => [],
+              pageWalkStopIsOk: () => false,
+              compactStopDetails: (value) => value,
+              sendDebugLog: async () => {{}},
+              logActivity: async () => {{}},
+            }};
+            vm.createContext(context);
+            vm.runInContext(source.slice(stateStart, stateEnd), context);
+            vm.runInContext(source.slice(walkStart, walkEnd), context);
+            async function run(fillRunId) {{
+              return context.runV2PageWalkAfterFill({{
+                tabId: 1,
+                state: {{}},
+                initialResult: {{ ok: true, attempt: {{ filledFieldCount: 1 }} }},
+                fillRunId,
+                triggeredBy: "test",
+                allowLlmAnswers: false,
+              }});
+            }}
+            (async () => {{
+              const verifyEmail = await run("verify-email-run");
+              scenario = "same_page";
+              detectionIndex = 0;
+              actionIndex = 0;
+              const samePage = await run("same-page-run");
+              scenario = "cycle";
+              detectionIndex = 0;
+              actionIndex = 0;
+              const cycle = await run("cycle-run");
+              console.log(JSON.stringify({{ verifyEmail, samePage, cycle }}));
+            }})();
+        """
+        result = subprocess.run(
+            ["node", "-e", script],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        payload = json.loads(result.stdout)
+        verify_email = payload["verifyEmail"]
+        same_page = payload["samePage"]
+        cycle = payload["cycle"]
+
+        self.assertEqual(verify_email["stoppedReason"], "email_verification_link_unavailable")
+        self.assertEqual(verify_email["terminalStep"]["kind"], verify_email["stoppedReason"])
+        self.assertEqual(verify_email["terminalStep"]["observedAuthState"], "verify_email")
+        self.assertEqual(verify_email["terminalStep"]["effectiveAuthState"], "verify_email")
+        self.assertEqual(verify_email["terminalStep"]["authTransitionCount"], 0)
+        self.assertEqual(verify_email["terminalStep"]["authTransitionHistory"], [])
+        self.assertIn("candidate", verify_email["terminalStep"])
+        self.assertEqual(verify_email["stopDetails"]["authTransitionCount"], 0)
+        self.assertEqual(verify_email["stopDetails"]["observedAuthUiState"], "email_verification")
+        self.assertEqual(verify_email["steps"][-2]["kind"], "email_verification_link_gate")
+
+        self.assertEqual(same_page["stoppedReason"], "auth_same_page_attempt_limit_reached")
+        self.assertEqual(same_page["terminalStep"]["kind"], same_page["stoppedReason"])
+        self.assertEqual(same_page["terminalStep"]["authTransitionCount"], 3)
+        self.assertEqual(
+            same_page["terminalStep"]["candidate"]["automationId"], "same-page-action-2"
+        )
+        self.assertEqual(
+            same_page["terminalStep"]["nearMissCandidates"][0]["rejectionReason"],
+            "not_clickable",
+        )
+        self.assertEqual(same_page["steps"][-2]["kind"], "wait_after_auth_fields")
+
+        self.assertEqual(cycle["stoppedReason"], "auth_ui_cycle_detected")
+        self.assertEqual(cycle["terminalStep"]["kind"], cycle["stoppedReason"])
+        self.assertEqual(cycle["terminalStep"]["cyclePeriod"], 2)
+        self.assertEqual(cycle["terminalStep"]["cycleLength"], 4)
+        self.assertEqual(cycle["terminalStep"]["authTransitionCount"], 4)
 
     def test_v2_ethno_racial_checkbox_selects_non_disclosure(self):
         paths = [
@@ -3650,6 +5424,18 @@ Expected Graduation: Sep 2026
         )
         self.assertIn('result.pageWalk.stoppedReason !== "final_submit_visible"', background)
         self.assertIn('"c3_v2_page_walk_review_items"', background)
+
+    def test_direct_page_walk_runs_apply_entry_and_initial_fill_first(self):
+        background = (REPO_ROOT / "executioner" / "src" / "background" / "index.js").read_text(
+            encoding="utf-8"
+        )
+
+        self.assertIn("async function runInitialFillBeforeDirectPageWalk", background)
+        self.assertIn("await runInitialFillBeforeDirectPageWalk({", background)
+        self.assertIn("markFillRunExpectedReload(fillRunId, 16)", background)
+        self.assertIn("function isActionableAuthCandidate", background)
+        self.assertIn("if (!isActionableAuthCandidate(el, metadata))", background)
+        self.assertIn('stoppedReason: initialResult.reason || "initial_fill_failed"', background)
 
     def test_v2_identity_verification_upon_hire_is_yes(self):
         paths = [
@@ -5129,9 +6915,13 @@ Expected Graduation: Sep 2026
         self.assertIn("safe_next_probe_timeout", background)
         self.assertIn("Safe Next check timed out.", background)
         self.assertIn("visible_validation_errors", safe_next)
+        self.assertIn("visibleValidationDetails", safe_next)
         self.assertIn("visibleValidationErrors: probe.visibleValidationErrors || []", background)
         self.assertIn(
             "visibleValidationErrors: nextAction.visibleValidationErrors || []", background
+        )
+        self.assertIn(
+            "visibleValidationDetails: nextAction.visibleValidationDetails || []", background
         )
         self.assertIn(
             "fieldIdentityKey",
@@ -5587,6 +7377,26 @@ Expected Graduation: Sep 2026
         self.assertIn('"category"', driver)
         self.assertIn('"option"', driver)
 
+    def test_workday_auth_focus_requires_explicit_capability(self):
+        result = subprocess.run(
+            ["node", "-e", build_auth_focus_script(allow_foreground=False)],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+
+        self.assertNotIn("Page.bringToFront", json.loads(result.stdout)["cdp_methods"])
+
+    def test_workday_auth_focus_explicit_capability_allows_focus(self):
+        result = subprocess.run(
+            ["node", "-e", build_auth_focus_script(allow_foreground=True)],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+
+        self.assertIn("Page.bringToFront", json.loads(result.stdout)["cdp_methods"])
+
     def test_c3_email_verification_rejects_cross_tenant_workday_links(self):
         script = f"""
             const bridge = require({json.dumps(str(REPO_ROOT / "scripts" / "c3_mail_verify_bridge.js"))});
@@ -5809,8 +7619,8 @@ Expected Graduation: Sep 2026
         self.assertIn("skill_option_not_loaded_within_2s", workday_drivers)
         self.assertIn("workday_skill_first_five_no_match", workday_drivers)
         self.assertIn("isSkillsSearch ? 2000", workday_drivers)
-        self.assertIn('keyOn(siblingInput, "Enter")', workday_drivers)
-        self.assertIn('keyOn(el, "Enter")', workday_drivers)
+        self.assertIn('keyOn(siblingInput, "Enter", actionGuard)', workday_drivers)
+        self.assertIn('keyOn(el, "Enter", actionGuard)', workday_drivers)
         self.assertIn('keyOn(input, "Enter")', workday_repeatables)
         self.assertIn("workday_skill_attempt_start", workday_repeatables)
         self.assertIn("workday_skill_attempt_result", workday_repeatables)
@@ -5839,7 +7649,10 @@ Expected Graduation: Sep 2026
         self.assertIn("committedApplicationSourceMatches", workday_drivers)
         self.assertIn("selectedTechnicalSkillMatches", workday_drivers)
         self.assertIn('input[type="checkbox"]', workday_drivers)
-        self.assertIn("await closePopup(field);\n      return {\n        ok: true", workday_drivers)
+        self.assertIn(
+            "await closePopup(field, actionGuard);\n      return {\n        ok: true",
+            workday_drivers,
+        )
         self.assertIn("Bachelors Degree or University", workday_repeatables)
         self.assertIn("repairMissingRequiredRows", workday_repeatables)
         self.assertIn("targetKey && !afterKeys.includes(targetKey)", workday_repeatables)
@@ -5852,7 +7665,8 @@ Expected Graduation: Sep 2026
         self.assertIn("ariaDisabledBypass", safe_next)
         self.assertIn("[data-automation-id='pageFooterNextButton']", safe_next)
         self.assertIn("safe_next_space_fallback_after_noop", background)
-        self.assertIn("auth_create_account_to_signin_sink", background)
+        self.assertIn("auth_signup_to_signin_continue", background)
+        self.assertIn("auth_signup_signin_loop", background)
         field_pipeline = (
             REPO_ROOT / "executioner" / "src" / "shared" / "v2" / "field-pipeline.js"
         ).read_text(encoding="utf-8")
@@ -6123,6 +7937,47 @@ Expected Graduation: Sep 2026
         )
 
         self.assertEqual(target["id"], "extension-options")
+
+    def test_last20_resume_preflight_configure_seeds_bounded_local_pdf(self):
+        configure_sink = (REPO_ROOT / "scripts" / "configure_c3_debug_sink.js").read_text(
+            encoding="utf-8"
+        )
+
+        self.assertIn('const DEFAULT_RESUME_KEY = "hunt.apply.defaultResume";', configure_sink)
+        self.assertIn('} else if (arg === "--resume") {', configure_sink)
+        self.assertIn("args.resume = argv[++idx] || args.resume;", configure_sink)
+        self.assertIn("function readResumeSeed(resumePath)", configure_sink)
+        self.assertIn("fs.accessSync(absolutePath, fs.constants.R_OK)", configure_sink)
+        self.assertIn("MAX_RESUME_BYTES", configure_sink)
+        self.assertIn('const PDF_DATA_URL_PREFIX = "data:application/pdf;base64,";', configure_sink)
+        self.assertIn(
+            'pdfDataUrl: `${PDF_DATA_URL_PREFIX}${pdf.toString("base64")}`', configure_sink
+        )
+        self.assertIn("[${js(DEFAULT_RESUME_KEY)}]: resumeSeed", configure_sink)
+        self.assertNotIn("pdfDataUrl: result", configure_sink)
+
+    def test_last20_resume_preflight_inspect_reports_boolean_without_pdf_data(self):
+        configure_sink = (REPO_ROOT / "scripts" / "configure_c3_debug_sink.js").read_text(
+            encoding="utf-8"
+        )
+
+        self.assertIn("const defaultResumeReady =", configure_sink)
+        self.assertIn("defaultResumeReady: Boolean(defaultResumeReady)", configure_sink)
+        self.assertIn("defaultResumeReady: Boolean(result.defaultResumeReady)", configure_sink)
+        self.assertNotIn("defaultResume: result.defaultResume", configure_sink)
+
+    def test_last20_resume_preflight_lane_setup_requires_and_confirms_worktree_pdf(self):
+        setup = (REPO_ROOT / "scripts" / "setup_c3_parallel_lanes.ps1").read_text(encoding="utf-8")
+
+        self.assertIn('$resolvedResumePath = Join-Path $repoRoot "main.pdf"', setup)
+        self.assertIn("Test-ResumePreflight -ResumePath $resolvedResumePath", setup)
+        self.assertGreaterEqual(
+            setup.count("--resume $resolvedResumePath --seed-workday-profile"),
+            2,
+        )
+        self.assertIn("if (-not $Inspect.defaultResumeReady)", setup)
+        self.assertIn("resume_preflight_missing", setup)
+        self.assertIn("defaultResumeReady = [bool]$inspect.defaultResumeReady", setup)
 
 
 if __name__ == "__main__":

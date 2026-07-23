@@ -1,6 +1,7 @@
 $ErrorActionPreference = "Stop"
 
-$extension = "C:\Users\sushi\Documents\Github\hunt\executioner"
+$repoRoot = Split-Path -Parent (Split-Path -Parent $MyInvocation.MyCommand.Path)
+$extension = Join-Path $repoRoot "executioner"
 $browserKind = "override"
 $chrome = $env:HUNT_C3_CHROME
 $debugPort = 9222
@@ -189,7 +190,6 @@ if ($windowPosition) {
 $startMinimized = $env:HUNT_C3_CHROME_START_MINIMIZED -in @("1", "true", "TRUE", "yes", "YES")
 if ($startMinimized) {
     $arguments += "--start-minimized"
-    $arguments += "--no-startup-window"
 }
 
 if ($startMinimized) {

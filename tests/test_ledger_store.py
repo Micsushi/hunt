@@ -2,6 +2,7 @@ import json
 import os
 import sys
 import uuid
+from concurrent.futures import ThreadPoolExecutor
 from hashlib import sha256
 from pathlib import Path
 from types import SimpleNamespace
@@ -44,6 +45,25 @@ def _assert_valid_hash_chain(path: Path) -> list[dict]:
         assert actual_hash == expected_hash
         expected_prev_hash = actual_hash
     return rows
+
+
+def test_active_registry_updates_are_atomic_under_parallel_agents(tmp_path):
+    service = LedgerService(tmp_path / "ledger")
+
+    def update(index: int) -> None:
+        service._update_active(
+            "active_sessions",
+            f"session-{index}",
+            tmp_path / f"manifest-{index}.json",
+            tmp_path / f"events-{index}.jsonl",
+        )
+
+    with ThreadPoolExecutor(max_workers=12) as pool:
+        list(pool.map(update, range(60)))
+
+    active = json.loads((service.root / "active.json").read_text(encoding="utf-8"))
+    assert set(active["active_sessions"]) >= {f"session-{index}" for index in range(60)}
+    assert not list(service.root.glob(".active.json.*.tmp"))
 
 
 def test_default_log_root_is_outside_repo(monkeypatch):

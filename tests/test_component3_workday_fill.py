@@ -45,6 +45,553 @@ def _load_v2_workday_scripts(page):
         page.add_script_tag(content=_load_script(REPO_ROOT / path))
 
 
+def test_workday_v2_field_trace_records_ordered_action_and_commit_checkpoints():
+    if sync_playwright is None:
+        pytest.skip("playwright is required for the Workday C3 fill fixture")
+
+    with sync_playwright() as playwright:
+        try:
+            browser = playwright.chromium.launch()
+        except PlaywrightError as error:
+            pytest.skip(f"playwright chromium is unavailable: {error}")
+
+        page = browser.new_page()
+        page.set_content(
+            """
+            <html><body>
+              <div data-automation-id="formField-firstName">
+                <label for="firstName">First Name Required</label>
+                <input id="firstName" name="firstName" aria-required="true" />
+              </div>
+            </body></html>
+            """
+        )
+        _load_v2_workday_scripts(page)
+        result = page.evaluate(
+            """
+            async () => await window.__huntV2.fieldPipeline.runHuntV2Fill({
+              profile: { firstName: "Trace" },
+              settings: { fillRequiredOnly: true, useFieldPipelineV2: true },
+              activeApplyContext: {},
+              defaultResume: {},
+              fillRunId: "run-trace-1",
+              commandContext: {
+                operation_id: "op-trace-1",
+                command_id: "cmd-trace-1",
+                trace_id: "trace-1"
+              }
+            })
+            """
+        )
+        browser.close()
+
+    events = [
+        event
+        for event in result["interactionTrace"]
+        if event.get("fieldId") == "firstName"
+        and event.get("eventType")
+        in {
+            "field.discovered",
+            "field.attempt.started",
+            "field.action.started",
+            "field.commit.checked",
+            "field.action.completed",
+            "field.action.failed",
+            "field.action.cancelled",
+        }
+    ]
+    event_types = [event["eventType"] for event in events]
+    assert event_types == [
+        "field.discovered",
+        "field.attempt.started",
+        "field.action.started",
+        "field.commit.checked",
+        "field.action.completed",
+    ]
+    for event in events:
+        detail = event["detail"]
+        assert detail["operationId"] == "op-trace-1"
+        assert detail["runId"] == "run-trace-1"
+        assert detail["fieldId"] == "firstName"
+        assert detail["label"]
+        assert detail["kind"]
+        assert detail["required"] is True
+        assert detail["attempt"] == 1
+        assert detail["driver"]
+        assert detail["action"]
+        assert detail["elapsedMs"] >= 0
+        assert detail["reasonCode"]
+
+
+def test_workday_v2_required_phone_and_email_are_scheduled_before_optional_dropdowns():
+    if sync_playwright is None:
+        pytest.skip("playwright is required for the Workday C3 fill fixture")
+
+    with sync_playwright() as playwright:
+        try:
+            browser = playwright.chromium.launch()
+        except PlaywrightError as error:
+            pytest.skip(f"playwright chromium is unavailable: {error}")
+
+        page = browser.new_page()
+        page.set_content(
+            """
+            <html><body>
+              <div><button id="optional-source" aria-haspopup="listbox">Select One</button></div>
+              <div><label for="phone">Phone Required</label><input id="phone" aria-required="true" /></div>
+              <div><label for="email">Email Required</label><input id="email" aria-required="true" /></div>
+            </body></html>
+            """
+        )
+        _load_v2_workday_scripts(page)
+        ordered = page.evaluate(
+            """
+            () => window.__huntV2.uiInspector
+              .sortActionableFields(window.__huntV2.uiInspector.collectCandidates())
+              .map((field) => ({ id: field.fieldId, required: field.required }))
+            """
+        )
+        browser.close()
+
+    ids = [field["id"] for field in ordered]
+    assert ids.index("phone") < ids.index("optional-source")
+    assert ids.index("email") < ids.index("optional-source")
+
+
+@pytest.mark.parametrize("ownership_attribute", ["aria-controls", "aria-owns"])
+def test_workday_v2_offviewport_control_uses_owned_popup_and_records_popup_events(
+    ownership_attribute: str,
+):
+    if sync_playwright is None:
+        pytest.skip("playwright is required for the Workday C3 fill fixture")
+
+    with sync_playwright() as playwright:
+        try:
+            browser = playwright.chromium.launch()
+        except PlaywrightError as error:
+            pytest.skip(f"playwright chromium is unavailable: {error}")
+
+        page = browser.new_page(viewport={"width": 1000, "height": 700})
+        page.set_content(
+            """
+            <html><body style="min-height:3000px">
+              <div id="unrelated-popup" role="listbox" style="position:fixed;top:10px;left:10px">
+                <div role="option">Fax</div>
+              </div>
+              <div data-automation-id="formField-phoneType" style="margin-top:2200px">
+                Phone Device Type Required
+                <button id="phoneNumber--phoneType" name="phoneType" type="button"
+                  aria-haspopup="listbox" aria-controls="owned-phone-popup"
+                  aria-expanded="true" aria-required="true">Select One</button>
+              </div>
+              <div id="owned-phone-popup" role="listbox" style="position:absolute;top:2260px;left:20px">
+                <div id="owned-mobile" role="option">Mobile</div>
+              </div>
+              <script>
+                document.querySelector('#owned-mobile').addEventListener('click', () => {
+                  const button = document.querySelector('#phoneNumber--phoneType');
+                  button.textContent = 'Mobile';
+                  button.setAttribute('aria-expanded', 'false');
+                  document.querySelector('#owned-mobile').setAttribute('aria-selected', 'true');
+                });
+              </script>
+            </body></html>
+            """.replace("aria-controls=", f"{ownership_attribute}=")
+        )
+        page.evaluate(
+            """
+            () => {
+              window.__huntRuntimeMessages = [];
+              window.chrome = {
+                runtime: {
+                  lastError: undefined,
+                  sendMessage(message, callback) {
+                    window.__huntRuntimeMessages.push(message);
+                    if (callback) callback({ ok: false, reason: "test_fallback" });
+                  },
+                },
+              };
+            }
+            """
+        )
+        _load_v2_workday_scripts(page)
+        result = page.evaluate(
+            """
+            async () => await window.__huntV2.fieldPipeline.runHuntV2Fill({
+              profile: { phoneDeviceType: "Mobile" },
+              settings: { fillRequiredOnly: true, fieldFillTimeoutMs: 7000 },
+              activeApplyContext: {},
+              defaultResume: {},
+              fillRunId: "owned-popup-run",
+              commandContext: { operation_id: "owned-popup-op" }
+            })
+            """
+        )
+        runtime_messages = page.evaluate("window.__huntRuntimeMessages")
+        button_text = page.locator("#phoneNumber--phoneType").inner_text()
+        browser.close()
+
+    assert button_text == "Mobile"
+    popup_events = [
+        event
+        for event in result["interactionTrace"]
+        if event.get("eventType")
+        in {"popup.opened", "popup.reused", "popup.rejected", "popup.closed"}
+    ]
+    assert popup_events
+    for event in popup_events:
+        detail = event["detail"]
+        assert detail["operationId"] == "owned-popup-op"
+        assert detail["runId"] == "owned-popup-run"
+        assert detail["fieldId"] == "phoneNumber--phoneType"
+        assert detail["label"]
+        assert detail["kind"]
+        assert detail["required"] is True
+        assert detail["attempt"] == 1
+        assert detail["driver"] == "workday-v2"
+        assert detail["action"] == event["eventType"]
+        assert detail["elapsedMs"] >= 0
+        assert detail["reasonCode"]
+    assert all(
+        event["detail"]["popupOwner"]["controlId"] == "phoneNumber--phoneType"
+        for event in popup_events
+    )
+    assert any(
+        event["detail"]["popupOwner"]["popupId"] == "owned-phone-popup" for event in popup_events
+    )
+    assert all("geometry" in event["detail"]["popupOwner"] for event in popup_events)
+    assert not any(
+        event["detail"]["popupOwner"]["popupId"] == "unrelated-popup" for event in popup_events
+    )
+    popup_messages = [
+        message["payload"]
+        for message in runtime_messages
+        if message.get("type") == "hunt.apply.site_action_log"
+        and str(message.get("payload", {}).get("action", "")).startswith("popup.")
+    ]
+    assert popup_messages
+    assert {message.get("operationId") for message in popup_messages} == {"owned-popup-op"}
+    assert all(message["fillRunId"] == "owned-popup-run" for message in popup_messages)
+
+
+def test_workday_v2_outer_timeout_retains_partial_structured_trace():
+    if sync_playwright is None:
+        pytest.skip("playwright is required for the Workday C3 fill fixture")
+
+    with sync_playwright() as playwright:
+        try:
+            browser = playwright.chromium.launch()
+        except PlaywrightError as error:
+            pytest.skip(f"playwright chromium is unavailable: {error}")
+
+        page = browser.new_page()
+        page.set_content(
+            '<label for="firstName">First Name Required</label>'
+            '<input id="firstName" name="firstName" aria-required="true" />'
+        )
+        _load_v2_workday_scripts(page)
+        result = page.evaluate(
+            """
+            async () => {
+              window.__huntV2.fieldDrivers.fillField = async (args) => {
+                await new Promise((resolve) => setTimeout(resolve, 80));
+                if (!args.actionGuard.canMutate()) {
+                  return {
+                    ok: false,
+                    cancelled: true,
+                    reason: args.actionGuard.reason(),
+                    afterState: window.__huntV2.fieldState.readFieldState(args.field),
+                  };
+                }
+                return { ok: false, reason: "unexpected_mutation_window" };
+              };
+              return await window.__huntV2.fieldPipeline.runHuntV2Fill({
+                profile: { firstName: "Timeout" },
+                settings: { fillRequiredOnly: true, fieldFillTimeoutMs: 40 },
+                fillRunId: "timeout-trace-run",
+                commandContext: { operation_id: "timeout-trace-op" }
+              });
+            }
+            """
+        )
+        browser.close()
+
+    structured = [
+        event
+        for event in result["interactionTrace"]
+        if event.get("fieldId") == "firstName" and event.get("eventType")
+    ]
+    assert [event["eventType"] for event in structured[:3]] == [
+        "field.discovered",
+        "field.attempt.started",
+        "field.action.started",
+    ]
+    terminal = [event for event in structured if event["eventType"] == "field.action.failed"]
+    assert terminal[-1]["detail"]["reasonCode"] == "field_fill_timeout"
+    assert terminal[-1]["detail"]["elapsedMs"] >= 40
+
+
+def test_workday_search_typing_keeps_concurrent_operation_guards_isolated():
+    if sync_playwright is None:
+        pytest.skip("playwright is required for the Workday C3 fill fixture")
+
+    with sync_playwright() as playwright:
+        try:
+            browser = playwright.chromium.launch()
+        except PlaywrightError as error:
+            pytest.skip(f"playwright chromium is unavailable: {error}")
+
+        page = browser.new_page()
+        page.set_content(
+            """
+            <input id="cancelled-search" />
+            <input id="current-search" />
+            <script>
+              window.cancelledEvents = 0;
+              for (const type of ["keydown", "beforeinput", "input", "keyup"]) {
+                document.querySelector("#cancelled-search").addEventListener(
+                  type,
+                  () => { window.cancelledEvents += 1; },
+                );
+              }
+            </script>
+            """
+        )
+        _load_v2_workday_scripts(page)
+        result = page.evaluate(
+            """
+            async () => {
+              let oldActive = true;
+              const oldGuard = {
+                operationId: "old-operation",
+                fillRunId: "old-run",
+                canMutate: () => oldActive,
+              };
+              const currentGuard = {
+                operationId: "current-operation",
+                fillRunId: "current-run",
+                canMutate: () => true,
+              };
+              const oldPromise = window.__huntV2.workdayDrivers
+                .typeSearchTextLikeUser(
+                  document.querySelector("#cancelled-search"),
+                  "OLD",
+                  oldGuard,
+                );
+              setTimeout(() => { oldActive = false; }, 20);
+              const currentPromise = window.__huntV2.workdayDrivers
+                .typeSearchTextLikeUser(
+                  document.querySelector("#current-search"),
+                  "NEW",
+                  currentGuard,
+                );
+              const [oldResult, currentResult] = await Promise.all([
+                oldPromise,
+                currentPromise,
+              ]);
+              return {
+                oldResult,
+                currentResult,
+                cancelledValue: document.querySelector("#cancelled-search").value,
+                currentValue: document.querySelector("#current-search").value,
+                cancelledEvents: window.cancelledEvents,
+              };
+            }
+            """
+        )
+        browser.close()
+
+    assert result == {
+        "oldResult": False,
+        "currentResult": True,
+        "cancelledValue": "",
+        "currentValue": "NEW",
+        "cancelledEvents": 0,
+    }
+
+
+def test_workday_v2_option_click_without_selected_state_is_not_committed():
+    if sync_playwright is None:
+        pytest.skip("playwright is required for the Workday C3 fill fixture")
+
+    with sync_playwright() as playwright:
+        try:
+            browser = playwright.chromium.launch()
+        except PlaywrightError as error:
+            pytest.skip(f"playwright chromium is unavailable: {error}")
+
+        page = browser.new_page()
+        page.set_content(
+            """
+            <div data-automation-id="formField-phoneType">
+              Phone Device Type Required
+              <button id="phoneNumber--phoneType" name="phoneType" type="button"
+                aria-haspopup="listbox" aria-controls="phone-options"
+                aria-required="true">Select One</button>
+            </div>
+            <div id="phone-options" role="listbox">
+              <div id="mobile-option" role="option">Mobile</div>
+            </div>
+            <script>
+              document.querySelector('#mobile-option').addEventListener('click', () => {
+                // Deliberately only paint text. No aria-selected, hidden input, pill,
+                // or other backing state is committed.
+                document.querySelector('#phoneNumber--phoneType').textContent = 'Mobile';
+              });
+            </script>
+            """
+        )
+        _load_v2_workday_scripts(page)
+        result = page.evaluate(
+            """
+            async () => await window.__huntV2.fieldPipeline.runHuntV2Fill({
+              profile: { phoneDeviceType: "Mobile" },
+              settings: { fillRequiredOnly: true, fieldFillTimeoutMs: 7000 },
+              fillRunId: "uncommitted-click-run"
+            })
+            """
+        )
+        browser.close()
+
+    field = next(
+        item for item in result["v2Audit"]["fields"] if item["fieldId"] == "phoneNumber--phoneType"
+    )
+    assert field["filled"] is False
+    commit_events = [
+        event
+        for event in result["interactionTrace"]
+        if event.get("fieldId") == "phoneNumber--phoneType"
+        and event.get("eventType") == "field.commit.checked"
+    ]
+    assert commit_events[-1]["detail"]["clicked"] is True
+    assert commit_events[-1]["detail"]["committed"] is False
+    assert commit_events[-1]["detail"]["reasonCode"] == "workday_commit_not_verified"
+
+
+def test_workday_v2_footer_linkedin_text_does_not_commit_source_field():
+    if sync_playwright is None:
+        pytest.skip("playwright is required for the Workday C3 fill fixture")
+
+    with sync_playwright() as playwright:
+        try:
+            browser = playwright.chromium.launch()
+        except PlaywrightError as error:
+            pytest.skip(f"playwright chromium is unavailable: {error}")
+
+        page = browser.new_page()
+        page.set_content(
+            """
+            <div data-automation-id="formField-source">
+              <label for="source--source">How did you hear about us? Required</label>
+              <input id="source--source" placeholder="Search" aria-required="true"
+                role="combobox" aria-controls="source-popup" />
+            </div>
+            <div id="source-popup" role="listbox"></div>
+            <footer><a href="https://linkedin.com/company/example">LinkedIn</a></footer>
+            """
+        )
+        _load_v2_workday_scripts(page)
+        result = page.evaluate(
+            """
+            async () => await window.__huntV2.fieldPipeline.runHuntV2Fill({
+              profile: { applicationSource: "LinkedIn", applicationSourceDetail: "LinkedIn" },
+              settings: { fillRequiredOnly: true, fieldFillTimeoutMs: 3500 },
+              fillRunId: "source-footer-run"
+            })
+            """
+        )
+        browser.close()
+
+    source_fields = [
+        field for field in result["v2Audit"]["fields"] if field["fieldId"] == "source--source"
+    ]
+    assert source_fields[-1]["filled"] is False
+    assert not any(
+        event.get("reason") == "preselected_workday_source" for event in result["interactionTrace"]
+    )
+
+
+def test_workday_v2_empty_option_attempt_has_terminal_structured_trace():
+    if sync_playwright is None:
+        pytest.skip("playwright is required for the Workday C3 fill fixture")
+
+    with sync_playwright() as playwright:
+        try:
+            browser = playwright.chromium.launch()
+        except PlaywrightError as error:
+            pytest.skip(f"playwright chromium is unavailable: {error}")
+
+        page = browser.new_page()
+        page.set_content(
+            '<label for="country">Country Required</label>'
+            '<select id="country" aria-required="true"><option value="">Select One</option></select>'
+        )
+        _load_v2_workday_scripts(page)
+        result = page.evaluate(
+            """
+            async () => await window.__huntV2.fieldPipeline.runHuntV2Fill({
+              profile: { country: "Canada" },
+              settings: { fillRequiredOnly: true },
+              fillRunId: "empty-options-run"
+            })
+            """
+        )
+        browser.close()
+
+    types = [
+        event["eventType"]
+        for event in result["interactionTrace"]
+        if event.get("fieldId") == "country" and event.get("eventType")
+    ]
+    assert types[-2:] == ["field.commit.checked", "field.action.failed"]
+
+
+def test_workday_v2_cancelled_driver_emits_cancelled_terminal_trace():
+    if sync_playwright is None:
+        pytest.skip("playwright is required for the Workday C3 fill fixture")
+
+    with sync_playwright() as playwright:
+        try:
+            browser = playwright.chromium.launch()
+        except PlaywrightError as error:
+            pytest.skip(f"playwright chromium is unavailable: {error}")
+
+        page = browser.new_page()
+        page.set_content(
+            '<label for="firstName">First Name Required</label>'
+            '<input id="firstName" name="firstName" aria-required="true" />'
+        )
+        _load_v2_workday_scripts(page)
+        result = page.evaluate(
+            """
+            async () => {
+              window.__huntV2.fieldDrivers.fillField = async () => ({
+                ok: false,
+                cancelled: true,
+                reason: "operation_cancelled",
+                afterState: { rawValue: "", text: "", selected: false }
+              });
+              return await window.__huntV2.fieldPipeline.runHuntV2Fill({
+                profile: { firstName: "Cancelled" },
+                settings: { fillRequiredOnly: true },
+                fillRunId: "cancelled-trace-run"
+              });
+            }
+            """
+        )
+        browser.close()
+
+    terminal = [
+        event
+        for event in result["interactionTrace"]
+        if event.get("fieldId") == "firstName"
+        and event.get("eventType")
+        in {"field.action.completed", "field.action.failed", "field.action.cancelled"}
+    ]
+    assert terminal[-1]["eventType"] == "field.action.cancelled"
+    assert terminal[-1]["detail"]["reasonCode"] == "operation_cancelled"
+
+
 def test_workday_v2_empty_popup_accepts_matching_committed_button_value():
     if sync_playwright is None:
         pytest.skip("playwright is required for the Workday C3 fill fixture")

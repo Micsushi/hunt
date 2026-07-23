@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import threading
 import uuid
 from datetime import UTC, datetime
 from hashlib import sha256
@@ -20,6 +21,17 @@ from backend.ledger.models import (
     ProbeStatusUpdate,
     SessionCreate,
 )
+
+_JSON_LOCKS: dict[Path, threading.RLock] = {}
+_JSON_LOCKS_GUARD = threading.Lock()
+
+
+def _json_lock(path: Path) -> threading.RLock:
+    resolved = path.resolve()
+    with _JSON_LOCKS_GUARD:
+        if resolved not in _JSON_LOCKS:
+            _JSON_LOCKS[resolved] = threading.RLock()
+        return _JSON_LOCKS[resolved]
 
 
 def _now() -> str:
@@ -111,17 +123,28 @@ class LedgerService:
         return self.root / component / kind / _date_folder() / item_id
 
     def _write_json_if_missing(self, path: Path, payload: dict[str, Any]) -> None:
-        if path.exists():
-            return
-        path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        with _json_lock(path):
+            if path.exists():
+                return
+            self._save_json_unlocked(path, payload)
 
     def _load_json(self, path: Path) -> dict[str, Any]:
-        if not path.exists():
-            return {}
-        return json.loads(path.read_text(encoding="utf-8"))
+        with _json_lock(path):
+            if not path.exists():
+                return {}
+            return json.loads(path.read_text(encoding="utf-8"))
 
     def _save_json(self, path: Path, payload: dict[str, Any]) -> None:
-        path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        with _json_lock(path):
+            self._save_json_unlocked(path, payload)
+
+    def _save_json_unlocked(self, path: Path, payload: dict[str, Any]) -> None:
+        temporary = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
+        temporary.write_text(
+            json.dumps(payload, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+        temporary.replace(path)
 
     def _iter_probe_manifests(self, component: str = "c3") -> list[Path]:
         component = _ledger_component(component)
@@ -134,16 +157,19 @@ class LedgerService:
         self, bucket: str, item_id: str, manifest_path: Path, log_path: Path
     ) -> None:
         active_path = self.root / "active.json"
-        active = self._load_json(active_path)
-        active.setdefault("version", 1)
-        active["updated_at"] = _now()
-        entries = active.setdefault(bucket, {})
-        entries[item_id] = {
-            "manifest_path": str(manifest_path),
-            "log_path": str(log_path),
-            "updated_at": _now(),
-        }
-        self._save_json(active_path, active)
+        with _json_lock(active_path):
+            active = (
+                json.loads(active_path.read_text(encoding="utf-8")) if active_path.exists() else {}
+            )
+            active.setdefault("version", 1)
+            active["updated_at"] = _now()
+            entries = active.setdefault(bucket, {})
+            entries[item_id] = {
+                "manifest_path": str(manifest_path),
+                "log_path": str(log_path),
+                "updated_at": _now(),
+            }
+            self._save_json_unlocked(active_path, active)
 
     def _create_manifest(
         self,
@@ -356,6 +382,24 @@ class LedgerService:
 
     def get_session_log(self, session_id: str) -> dict[str, Any]:
         return self._read_log_entry("active_sessions", session_id)
+
+    def get_session_directory(self, session_id: str, *, create: bool = False) -> Path:
+        session_id = _slug(session_id)
+        entry = self._active_entry("active_sessions", session_id)
+        if entry and entry.get("manifest_path"):
+            directory = Path(entry["manifest_path"]).resolve().parent
+        else:
+            matches = sorted((self.root / "c3" / "sessions").glob(f"*/{session_id}"))
+            directory = matches[-1] if matches else self._manifest_dir("c3", "sessions", session_id)
+        if create:
+            directory.mkdir(parents=True, exist_ok=True)
+        return directory
+
+    def get_session_operations_directory(self, session_id: str, *, create: bool = False) -> Path:
+        directory = self.get_session_directory(session_id, create=create) / "operations"
+        if create:
+            directory.mkdir(parents=True, exist_ok=True)
+        return directory
 
     def command_timeline(self, command_id: str) -> dict[str, Any]:
         command_id = str(command_id or "").strip()
