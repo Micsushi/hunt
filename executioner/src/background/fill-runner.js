@@ -59,6 +59,36 @@ function withTimeout(promise, timeoutMs, fallbackFactory) {
   });
 }
 
+async function withBoundedTimeoutAndQuarantine(
+  promise,
+  timeoutMs,
+  fallbackFactory,
+) {
+  const observed = Promise.resolve(promise).then(
+    (value) => ({ kind: "settled", value }),
+    (error) => ({ kind: "rejected", error }),
+  );
+  let timer = null;
+  const first = await Promise.race([
+    observed,
+    new Promise((resolve) => {
+      timer = setTimeout(() => resolve({ kind: "timeout" }), timeoutMs);
+    }),
+  ]);
+  if (timer) {
+    clearTimeout(timer);
+  }
+  if (first.kind === "settled") {
+    return first.value;
+  }
+  if (first.kind === "rejected") {
+    throw first.error;
+  }
+  const fallback = await fallbackFactory();
+  observed.then(() => {});
+  return fallback;
+}
+
 function createAdapterExecuteScriptTimeoutResult(
   context,
   reason,
@@ -1436,7 +1466,7 @@ class RunAdapterFillStep {
       context.atsType === "workday"
         ? { tabId: context.activeTabId }
         : { tabId: context.activeTabId, allFrames: true };
-    const injectionResults = await withTimeout(
+    const injectionResults = await withBoundedTimeoutAndQuarantine(
       chrome.scripting.executeScript({
         target: injectionTarget,
         func: context.adapterFactory(),
@@ -1454,6 +1484,8 @@ class RunAdapterFillStep {
             fieldRules: GENERIC_FIELD_RULES,
             fillRoute: context.route,
             fillRunId: context.options.fillRunId || "",
+            operationId: context.options.operationId || "",
+            commandContext: context.options.commandContext || null,
             repairVisibleValidationErrors:
               context.options.repairVisibleValidationErrors || [],
           },
@@ -1462,6 +1494,13 @@ class RunAdapterFillStep {
       ADAPTER_EXECUTE_SCRIPT_TIMEOUT_MS,
       async () => {
         const reason = "adapter_execute_script_timeout";
+        if (typeof context.options.onAdapterTimeout === "function") {
+          await withTimeout(
+            Promise.resolve(context.options.onAdapterTimeout(reason)),
+            ADAPTER_TIMEOUT_RECOVERY_TIMEOUT_MS,
+            () => null,
+          );
+        }
         let details = {};
         try {
           const recoveryResults = await withTimeout(

@@ -6,6 +6,8 @@ import re
 from collections.abc import Mapping
 from typing import Any
 
+from backend.c3_identifiers import restore_trusted_generated_c3_ids
+
 REDACTED = "[REDACTED]"
 MAX_SAFE_TEXT_PREVIEW = 240
 
@@ -75,8 +77,9 @@ def redact_payload(payload: Any) -> tuple[Any, dict[str, Any]]:
 
 def redact_event(event: Mapping[str, Any]) -> dict[str, Any]:
     safe = dict(event)
-    payload, info = redact_payload(safe.get("payload", {}))
-    safe["payload"] = payload
+    original_payload = safe.get("payload", {})
+    payload, info = redact_payload(original_payload)
+    safe["payload"] = restore_trusted_generated_c3_ids(payload, original_payload)
     existing = safe.get("redaction") if isinstance(safe.get("redaction"), Mapping) else {}
     existing_rules = existing.get("rules", []) if isinstance(existing, Mapping) else []
     rules = sorted({str(rule) for rule in existing_rules} | set(info["rules"]))

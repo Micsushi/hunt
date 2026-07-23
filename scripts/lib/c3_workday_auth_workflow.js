@@ -10,6 +10,7 @@ class WorkdayAuthWorkflow {
     authVerificationPattern,
     accountEmail = "",
     accountPassword = "",
+    allowForeground = false,
   }) {
     this.pageClient = pageClient;
     this.cdpClick = cdpClick;
@@ -19,6 +20,7 @@ class WorkdayAuthWorkflow {
     this.authVerificationPattern = authVerificationPattern;
     this.accountEmail = accountEmail;
     this.accountPassword = accountPassword;
+    this.allowForeground = allowForeground === true;
   }
 
   async clickPrimary(route = {}) {
@@ -447,6 +449,7 @@ class WorkdayAuthWorkflow {
             String(result.metadata || ""),
           ));
       const shouldBringAuthPageToFront =
+        this.allowForeground === true &&
         shouldDeferPrimaryCdpClick &&
         Boolean(result.noCaptchaWrapperPresent || result.noCaptchaWrapper?.present);
       if (shouldBringAuthPageToFront) {

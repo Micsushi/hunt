@@ -17,12 +17,11 @@ questionable answers on Review are recorded as audit issues, not treated as
 reasons to stop early, unless they prevent reaching Review by creating
 validation or unsupported required follow-up fields.
 
-## Agent Command Ledger Migration
+## Agent Command Ledger Workflow
 
-This section describes the target workflow while the C3 agent-command-ledger
-architecture is being implemented. Until the MCP/command bus is live, keep using
-the current p Chrome setup and live-smoke runner, but write new automation so it
-can move behind the command layer.
+The MCP/command bus is the default workflow. Scripts launch isolated p Chrome
+lanes and discover targets; the durable operation ledger owns execution state,
+progress, cancellation, and artifacts.
 
 Target rule: scripts launch or probe; they do not own the workflow. The source
 of truth becomes the immutable ledger under the external Hunt logs root, indexed
@@ -52,9 +51,49 @@ Main-agent target flow:
    summary.
 10. Main agent patches generic C3 behavior after synthesizing lane evidence.
 
+For a repeatable CSV batch, use:
+
+```powershell
+python scripts\c3_agent_batch.py plan `
+  --csv wd_test_jobs.csv --count 5 --ports 9411,9412,9413,9414,9415 `
+  --batch-id <batch-id> --artifact-root <external-log-root> `
+  --deadline-seconds 180 --output <external-log-root>\plan.json
+
+python scripts\c3_agent_batch.py run `
+  --csv wd_test_jobs.csv --count 5 --ports 9411,9412,9413,9414,9415 `
+  --batch-id <batch-id> --artifact-root <external-log-root> `
+  --deadline-seconds 180 --max-concurrency 5 `
+  --report <external-log-root>\report.json
+
+# Subagent-owned execution: each agent receives one immutable lane index.
+python scripts\c3_agent_batch.py run-lane `
+  --plan <external-log-root>\plan.json --lane-index 1 `
+  --report <external-log-root>\lane-1-report.json
+```
+
+The planner verifies old CSV rows through Workday CXS using the posting's full
+path. If rows are expired, it can discover current postings from the same
+tenant/site. A 401/403 remains `unknown_browser_check`, never `expired`.
+
 Default active subagent/lane capacity is `6` because Codex currently supports
 up to six active subagents. Treat this as operator config from the prompt/docs,
 not a product hardcode.
+
+The batch runner caps actual concurrency at six, creates a unique browser
+profile/port/agent/lane/session per job, sends no foreground or submit
+capability, and closes each MCP client deterministically. One stalled lane does
+not block the other workers.
+
+`run-lane` sets concurrency to one and only prepares the selected lane. The
+launcher resolves an absolute artifact root directly, so its setup logs,
+operation artifacts, and lane report remain outside the source tree when the
+plan uses an external root.
+
+Before bootstrap, the runner creates the selected job tab with `active:false`,
+waits for its runtime URL, rejects any tab Chrome reports active, and pins the
+exact tab ID plus resolved URL in the browser-target record. Atomic lane
+checkpoints retain lease/operation/event IDs; `resume-report` continues only
+unfinished lanes and preserves completed results.
 
 Concurrency rule: many agents may read the same logs, but only one agent may
 hold a mutation lease for a session/page at a time. Another agent may take over
@@ -353,6 +392,27 @@ in your report.
 ```
 
 ## Final Batch Report
+
+Each terminal lane report includes a compact failure-context projection in
+addition to the legacy classification. Required diagnostic fields include
+`failure_context_status`, scope/code, causal and last-touched identity, expected
+and observed state, confidence/unknown flag, evidence/checkpoint/artifact IDs,
+validation messages, missing evidence, `next_safe_action`, and
+`live_inspection_required`. Raw DOM, console, network, and unbounded ledger data
+do not belong in the batch report.
+
+Reports also retain bounded 16-item action, validation, and navigation tails,
+up to 32 validated artifact summaries, plus independent operation/context
+refresh status and error fields. A refresh error preserves the last authoritative
+projection and is reported explicitly; it must never silently erase or replace
+the original terminal cause.
+
+Fetch the packet exactly once after terminal/cancellation reconciliation and
+cache it through lane finalization. A nonterminal cancellation must say
+`unavailable_nonterminal`; an API/MCP failure must say `error` or `unavailable`
+with a bounded reason. Never silently omit the packet. This lets multiple agents
+diagnose their own lanes without taking foreground control or repeatedly opening
+the same site.
 
 The main agent reports only after all lanes reach Review, fail, classify, or
 time out, unless there is a safety issue. The final report should include:

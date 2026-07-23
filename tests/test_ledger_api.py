@@ -1,9 +1,11 @@
 from pathlib import Path
 
+import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from backend.ledger.api import get_ledger_service, require_ledger_access, router
+from backend.ledger.leases import InMemoryLeaseStore
 from backend.ledger.service import LedgerService
 
 
@@ -377,3 +379,258 @@ def test_api_lease_claim_blocks_second_agent_and_allows_human_interrupt(tmp_path
     assert "lease.granted" in event_types
     assert "lease.blocked" in event_types
     assert "lease.interrupted_by_human" in event_types
+
+
+def test_lane_terminal_endpoint_is_durable_and_idempotent_across_fresh_clients(
+    tmp_path, monkeypatch
+):
+    import backend.ledger.api as ledger_api
+
+    lease_store = InMemoryLeaseStore(id_factory=lambda prefix: f"{prefix}-terminal")
+    monkeypatch.setattr(ledger_api, "_lease_store", lease_store)
+    monkeypatch.delenv("HUNT_DB_URL", raising=False)
+    client, service = _client(tmp_path)
+    client.post("/api/ledger/agents", json={"agent_id": "agent-terminal"})
+    client.post(
+        "/api/ledger/lanes",
+        json={"lane_id": "lane-terminal", "agent_id": "agent-terminal"},
+    )
+    client.post(
+        "/api/ledger/sessions",
+        json={
+            "session_id": "session-terminal",
+            "agent_id": "agent-terminal",
+            "lane_id": "lane-terminal",
+        },
+    )
+    claim = client.post(
+        "/api/ledger/leases/claim",
+        json={
+            "agent_id": "agent-terminal",
+            "lane_id": "lane-terminal",
+            "session_id": "session-terminal",
+            "actor": {"type": "agent", "id": "agent-terminal", "surface": "mcp"},
+        },
+    )
+    lease_id = claim.json()["lease"]["lease_id"]
+    body = {
+        "agent_id": "agent-terminal",
+        "session_id": "session-terminal",
+        "lease_id": lease_id,
+        "event_type": "lane.finished",
+        "reason": "done",
+        "result": {"filled": 12},
+        "actor": {"type": "agent", "id": "agent-terminal", "surface": "mcp"},
+    }
+
+    first = client.post("/api/ledger/lanes/lane-terminal/terminal", json=body)
+    fresh_client = TestClient(client.app)
+    second = fresh_client.post("/api/ledger/lanes/lane-terminal/terminal", json=body)
+
+    assert first.status_code == 200
+    assert second.status_code == 200
+    assert second.json() == first.json()
+    assert first.json()["terminal"]["status"] == "complete"
+    marker_path = Path(first.json()["terminal"]["marker_path"])
+    assert marker_path.exists()
+    assert marker_path.is_relative_to(service.root)
+    events = client.get("/api/ledger/sessions/session-terminal").json()["events"]
+    assert [event["event_type"] for event in events].count("lane.finished") == 1
+    assert [event["event_type"] for event in events].count("lease.released") == 1
+
+
+def test_lane_terminal_retry_after_event_before_marker_crash_does_not_duplicate(
+    tmp_path, monkeypatch
+):
+    import backend.ledger.api as ledger_api
+
+    client, _service, body = _terminal_lane_fixture(tmp_path, monkeypatch, "event-crash")
+    original_save = ledger_api._save_terminal_marker
+    saves = 0
+
+    def crash_after_event(path, marker):
+        nonlocal saves
+        saves += 1
+        if saves == 2:
+            raise OSError("injected_event_before_marker_crash")
+        original_save(path, marker)
+
+    monkeypatch.setattr(ledger_api, "_save_terminal_marker", crash_after_event)
+    crashing_client = TestClient(client.app, raise_server_exceptions=False)
+    first = crashing_client.post("/api/ledger/lanes/lane-event-crash/terminal", json=body)
+    monkeypatch.setattr(ledger_api, "_save_terminal_marker", original_save)
+    fresh_client = TestClient(client.app)
+    second = fresh_client.post("/api/ledger/lanes/lane-event-crash/terminal", json=body)
+
+    assert first.status_code == 500
+    assert second.status_code == 200
+    assert second.json()["terminal"]["status"] == "complete"
+    events = fresh_client.get("/api/ledger/sessions/session-event-crash").json()["events"]
+    assert [event["event_type"] for event in events].count("lane.finished") == 1
+
+
+def test_lane_terminal_retry_after_release_before_final_marker_returns_complete(
+    tmp_path, monkeypatch
+):
+    import backend.ledger.api as ledger_api
+
+    client, _service, body = _terminal_lane_fixture(tmp_path, monkeypatch, "release-crash")
+    original_save = ledger_api._save_terminal_marker
+    saves = 0
+
+    def crash_after_release(path, marker):
+        nonlocal saves
+        saves += 1
+        if saves == 3:
+            raise OSError("injected_release_before_marker_crash")
+        original_save(path, marker)
+
+    monkeypatch.setattr(ledger_api, "_save_terminal_marker", crash_after_release)
+    crashing_client = TestClient(client.app, raise_server_exceptions=False)
+    first = crashing_client.post("/api/ledger/lanes/lane-release-crash/terminal", json=body)
+    monkeypatch.setattr(ledger_api, "_save_terminal_marker", original_save)
+    fresh_client = TestClient(client.app)
+    second = fresh_client.post("/api/ledger/lanes/lane-release-crash/terminal", json=body)
+
+    assert first.status_code == 500
+    assert second.status_code == 200
+    assert second.json()["terminal"]["status"] == "complete"
+    events = fresh_client.get("/api/ledger/sessions/session-release-crash").json()["events"]
+    assert [event["event_type"] for event in events].count("lane.finished") == 1
+    assert [event["event_type"] for event in events].count("lease.released") == 1
+
+
+def test_lane_terminal_marker_redacts_reason_and_result_before_persistence(tmp_path, monkeypatch):
+    client, service, body = _terminal_lane_fixture(tmp_path, monkeypatch, "redacted")
+    body["reason"] = "candidate@example.com called 303-555-1212"
+    body["result"] = {
+        "token": "secret-terminal-token",
+        "answer": "private questionnaire answer",
+    }
+
+    response = client.post("/api/ledger/lanes/lane-redacted/terminal", json=body)
+
+    assert response.status_code == 200
+    marker_path = service.get_session_directory("session-redacted") / "lane-terminal.json"
+    serialized = marker_path.read_text(encoding="utf-8")
+    assert "candidate@example.com" not in serialized
+    assert "303-555-1212" not in serialized
+    assert "secret-terminal-token" not in serialized
+    assert response.json()["terminal"]["result"]["token"] == "[REDACTED]"
+
+
+def test_lane_terminal_retry_after_marker_crash_rejects_changed_canonical_payload(
+    tmp_path, monkeypatch
+):
+    import backend.ledger.api as ledger_api
+
+    client, _service, body = _terminal_lane_fixture(tmp_path, monkeypatch, "changed-retry")
+    body["reason"] = "original reason"
+    body["result"] = {"filled": 1}
+    original_save = ledger_api._save_terminal_marker
+    saves = 0
+
+    def crash_after_initial_marker(path, marker):
+        nonlocal saves
+        saves += 1
+        original_save(path, marker)
+        if saves == 1:
+            raise OSError("injected_after_initial_marker")
+
+    monkeypatch.setattr(ledger_api, "_save_terminal_marker", crash_after_initial_marker)
+    crashing_client = TestClient(client.app, raise_server_exceptions=False)
+    first = crashing_client.post("/api/ledger/lanes/lane-changed-retry/terminal", json=body)
+    monkeypatch.setattr(ledger_api, "_save_terminal_marker", original_save)
+    changed = {
+        **body,
+        "reason": "changed retry reason",
+        "result": {"filled": 999, "unexpected": True},
+    }
+    second = client.post("/api/ledger/lanes/lane-changed-retry/terminal", json=changed)
+
+    assert first.status_code == 500
+    assert second.status_code == 409
+    assert second.json()["detail"] == {
+        "reason_code": "lane_terminal_conflict",
+        "field": "terminal_payload",
+    }
+    events = client.get("/api/ledger/sessions/session-changed-retry").json()["events"]
+    assert [event["event_type"] for event in events].count("lane.finished") == 0
+
+
+def test_lane_terminal_marker_strictly_redacts_candidate_value_like_fields(tmp_path, monkeypatch):
+    client, service, body = _terminal_lane_fixture(tmp_path, monkeypatch, "strict-redaction")
+    body["result"] = {
+        "answer": "arbitrary secret questionnaire response",
+        "value": "arbitrary private input",
+        "content": "arbitrary cover letter body",
+        "address": "123 Secret Street Apartment 9",
+        "nested": {"candidate_answer": "another private response"},
+        "filled": 4,
+    }
+
+    response = client.post("/api/ledger/lanes/lane-strict-redaction/terminal", json=body)
+
+    assert response.status_code == 200
+    marker_path = service.get_session_directory("session-strict-redaction") / "lane-terminal.json"
+    serialized = marker_path.read_text(encoding="utf-8")
+    for secret in (
+        "arbitrary secret questionnaire response",
+        "arbitrary private input",
+        "arbitrary cover letter body",
+        "123 Secret Street Apartment 9",
+        "another private response",
+    ):
+        assert secret not in serialized
+    result = response.json()["terminal"]["result"]
+    assert result["answer"] == "[REDACTED]"
+    assert result["nested"]["candidate_answer"] == "[REDACTED]"
+    assert result["filled"] == 4
+
+
+@pytest.mark.parametrize("contents", ["{not-json", "x" * 70_000], ids=["malformed", "oversized"])
+def test_lane_terminal_corrupt_marker_returns_bounded_typed_error(tmp_path, monkeypatch, contents):
+    client, service, body = _terminal_lane_fixture(tmp_path, monkeypatch, "corrupt-marker")
+    marker_path = service.get_session_directory("session-corrupt-marker") / "lane-terminal.json"
+    marker_path.write_text(contents, encoding="utf-8")
+
+    response = client.post("/api/ledger/lanes/lane-corrupt-marker/terminal", json=body)
+
+    assert response.status_code == 409
+    assert response.json()["detail"] == {"reason_code": "lane_terminal_marker_invalid"}
+
+
+def _terminal_lane_fixture(tmp_path, monkeypatch, suffix):
+    import backend.ledger.api as ledger_api
+
+    lease_store = InMemoryLeaseStore(id_factory=lambda prefix: f"{prefix}-{suffix}")
+    monkeypatch.setattr(ledger_api, "_lease_store", lease_store)
+    monkeypatch.delenv("HUNT_DB_URL", raising=False)
+    client, service = _client(tmp_path)
+    agent_id = f"agent-{suffix}"
+    lane_id = f"lane-{suffix}"
+    session_id = f"session-{suffix}"
+    client.post("/api/ledger/agents", json={"agent_id": agent_id})
+    client.post("/api/ledger/lanes", json={"lane_id": lane_id, "agent_id": agent_id})
+    client.post(
+        "/api/ledger/sessions",
+        json={"session_id": session_id, "agent_id": agent_id, "lane_id": lane_id},
+    )
+    claim = client.post(
+        "/api/ledger/leases/claim",
+        json={
+            "agent_id": agent_id,
+            "lane_id": lane_id,
+            "session_id": session_id,
+            "actor": {"type": "agent", "id": agent_id, "surface": "mcp"},
+        },
+    )
+    body = {
+        "agent_id": agent_id,
+        "session_id": session_id,
+        "lease_id": claim.json()["lease"]["lease_id"],
+        "event_type": "lane.finished",
+        "reason": "done",
+        "actor": {"type": "agent", "id": agent_id, "surface": "mcp"},
+    }
+    return client, service, body

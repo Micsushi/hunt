@@ -2,12 +2,81 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from typing import Any
 from urllib.request import Request, urlopen
 
 
 class C3BrowserBridgeError(RuntimeError):
     pass
+
+
+_MAX_BRIDGE_TIMEOUT_MS = 300_000
+_MUTATING_C3_COMMANDS = {
+    "c3.fill_page",
+    "c3.fill_remaining_with_llm",
+    "c3.page_walk",
+    "c3.click_next_after_fill",
+    "c3.clear_page",
+    "c3.cancel_session",
+}
+
+
+def _bounded_bridge_timeout_ms(value: Any) -> int:
+    try:
+        timeout_ms = int(value or 0)
+    except (TypeError, ValueError, OverflowError):
+        return 0
+    return max(0, min(_MAX_BRIDGE_TIMEOUT_MS, timeout_ms))
+
+
+RESERVED_C3_COMMAND_PAYLOAD_KEYS = frozenset(
+    {
+        "operationid",
+        "allowsubmit",
+        "triggeredby",
+        "fillrunid",
+        "allowforeground",
+        "bringtofront",
+        "bridgetimeoutms",
+        "runid",
+        "capabilities",
+        "commandid",
+        "traceid",
+        "agentid",
+        "laneid",
+        "sessionid",
+        "leaseid",
+        "browsertargetid",
+    }
+)
+
+
+def sanitize_c3_command_payload(value: Any) -> Any:
+    """Recursively remove fields whose values must be owned by the backend/runtime."""
+
+    if isinstance(value, dict):
+        safe: dict[str, Any] = {}
+        for key, item in value.items():
+            normalized = re.sub(r"[^a-z0-9]", "", str(key).lower())
+            if normalized in RESERVED_C3_COMMAND_PAYLOAD_KEYS:
+                continue
+            safe[str(key)] = sanitize_c3_command_payload(item)
+        return safe
+    if isinstance(value, list):
+        return [sanitize_c3_command_payload(item) for item in value]
+    if isinstance(value, tuple):
+        return [sanitize_c3_command_payload(item) for item in value]
+    return value
+
+
+def c3_bridge_response_ok(response: Any) -> bool:
+    if not isinstance(response, dict):
+        return False
+    receipt = response.get("commandReceipt")
+    if isinstance(receipt, dict) and "ok" in receipt:
+        return receipt.get("ok") is True
+    return response.get("ok") is True
 
 
 def run_c3_extension_command(target: dict[str, Any], payload: dict[str, Any]) -> dict[str, Any]:
@@ -20,6 +89,15 @@ def run_c3_extension_command(target: dict[str, Any], payload: dict[str, Any]) ->
         options_url = f"chrome-extension://{extension_id}/src/options/options.html"
     if not debug_port or not extension_id:
         raise C3BrowserBridgeError("missing_debug_port_or_extension_id")
+    bridge_timeout_ms = _bounded_bridge_timeout_ms(payload.get("bridge_timeout_ms"))
+    expected_target_id = str(target.get("target_id") or "").strip()
+    expected_tab_id = target.get("tab_id")
+    if str(payload.get("command_name") or "") in _MUTATING_C3_COMMANDS and not expected_target_id:
+        raise C3BrowserBridgeError("registered_target_identity_missing")
+    if expected_target_id and (
+        isinstance(expected_tab_id, bool) or not isinstance(expected_tab_id, int)
+    ):
+        raise C3BrowserBridgeError("registered_tab_identity_missing")
 
     try:
         from playwright.sync_api import sync_playwright
@@ -34,6 +112,8 @@ def run_c3_extension_command(target: dict[str, Any], payload: dict[str, Any]) ->
             try:
                 endpoint = f"http://{host}:{debug_port}"
                 kwargs = {}
+                if bridge_timeout_ms:
+                    kwargs["timeout"] = bridge_timeout_ms
                 if host not in {"127.0.0.1", "localhost"}:
                     endpoint = _rewritten_cdp_websocket_url(host, debug_port)
                     kwargs["headers"] = {"Host": f"127.0.0.1:{debug_port}"}
@@ -52,11 +132,30 @@ def run_c3_extension_command(target: dict[str, Any], payload: dict[str, Any]) ->
         try:
             page = _find_extension_page(browser, options_url, extension_id)
             if page is None:
-                page = _open_extension_page(browser, options_url)
+                page = _open_extension_page(
+                    browser,
+                    options_url,
+                    timeout_ms=bridge_timeout_ms or 10_000,
+                )
             return page.evaluate(
                 """
-                async ({ payload, targetUrl }) => {
+                async ({ payload, targetUrl, expectedTargetId, expectedTabId }) => {
                   let tabId = payload.tab_id || payload.tabId || payload.command_payload?.tabId;
+                  if (expectedTargetId) {
+                    if (!Number.isInteger(Number(tabId)) || Number(tabId) !== Number(expectedTabId)) {
+                      return { ok: false, reason: "registered_tab_identity_mismatch" };
+                    }
+                    if (!chrome.debugger?.getTargets) {
+                      return { ok: false, reason: "registered_target_identity_unavailable" };
+                    }
+                    const targets = await chrome.debugger.getTargets();
+                    const registered = targets.find(
+                      (candidate) => Number(candidate.tabId) === Number(expectedTabId)
+                    );
+                    if (!registered || String(registered.id || "") !== String(expectedTargetId)) {
+                      return { ok: false, reason: "registered_target_identity_mismatch" };
+                    }
+                  }
                   if (!tabId && targetUrl && targetUrl !== "about:blank") {
                     const wanted = String(targetUrl);
                     const wantedNoHash = wanted.split("#")[0];
@@ -76,13 +175,27 @@ def run_c3_extension_command(target: dict[str, Any], payload: dict[str, Any]) ->
                       tabId
                     };
                   }
-                  return await chrome.runtime.sendMessage({
+                  const responsePromise = chrome.runtime.sendMessage({
                     type: "hunt.apply.run_c3_command",
                     payload
                   });
+                  const timeoutMs = Math.max(0, Math.min(300000, Number(payload.bridge_timeout_ms || 0)));
+                  if (!timeoutMs) return await responsePromise;
+                  return await Promise.race([
+                    responsePromise,
+                    new Promise((resolve) => setTimeout(() => resolve({
+                      ok: false,
+                      reason: "bridge_command_timeout"
+                    }), timeoutMs))
+                  ]);
                 }
                 """,
-                {"payload": payload, "targetUrl": str(target.get("url") or "")},
+                {
+                    "payload": payload,
+                    "targetUrl": str(target.get("url") or ""),
+                    "expectedTargetId": expected_target_id,
+                    "expectedTabId": expected_tab_id,
+                },
             )
         finally:
             browser.close()
@@ -101,12 +214,12 @@ def _find_extension_page(browser: Any, options_url: str, extension_id: str) -> A
     return None
 
 
-def _open_extension_page(browser: Any, options_url: str) -> Any:
+def _open_extension_page(browser: Any, options_url: str, *, timeout_ms: int = 10_000) -> Any:
     if not options_url:
         raise C3BrowserBridgeError("extension_options_page_not_found")
     context = browser.contexts[0] if browser.contexts else browser.new_context()
     page = context.new_page()
-    page.goto(options_url, wait_until="domcontentloaded", timeout=10_000)
+    page.goto(options_url, wait_until="domcontentloaded", timeout=timeout_ms)
     return page
 
 

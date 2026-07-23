@@ -97,9 +97,15 @@ same evidence. When the budget is exhausted, preserve the lane and report
 
 ## Agent Command Ledger Mode
 
-Use this mode once the Hunt MCP adapter and C3 command bus are available. Until
-then, follow the existing first-pass order above and keep reports compatible
-with these fields.
+Use this mode by default for agent-driven lanes. Fall back to the legacy
+live-smoke path only when the MCP/backend health check itself is the proven
+blocker, and record that fallback in the lane report.
+
+The prepared lane must provide both `tab_id` and Chrome debugger `target_id`.
+Treat `registered_target_identity_missing`,
+`registered_target_identity_mismatch`, and
+`operation_bridge_capacity_exhausted` as typed control-plane failures; do not
+fall back to URL matching, raw Playwright mutation, or a foreground browser.
 
 1. Read `C:\Users\sushi\Documents\hunt-logs\LEDGER_STRUCTURE.md`.
 2. Read `C:\Users\sushi\Documents\hunt-logs\active.json`.
@@ -107,16 +113,22 @@ with these fields.
    port.
 4. Claim a session mutation lease before any mutating page action, CDP call, or
    probe script.
-5. Use MCP/C3 commands first for fill, inspect, click/type/select, snapshot,
-   CDP, and probe execution.
-6. If the session/browser crashes, report `session.failed`; open a replacement
+5. Use MCP/C3 commands first for fill, progress, inspect, snapshot, diagnostics,
+   artifacts, and budgeted owned-popup probes. Never use arbitrary click/type/
+   evaluate controls.
+6. Treat the operation projection and event stream as truth. Heartbeat activity
+   proves liveness; semantic progress identifies the exact phase, field,
+   pending action, and popup owner.
+7. If cancellation is requested, do not report it complete until the operation
+   records `cancel_acknowledged`; that event means the field driver unwound.
+8. If the session/browser crashes, report `session.failed`; open a replacement
    only through the lane flow so the new `session_id` records
    `parent_session_id`.
-7. If another agent owns the session lease, do not mutate. Read logs only, or
+9. If another agent owns the session lease, do not mutate. Read logs only, or
    request transfer/expiry handling from the main agent.
-8. If a human action changes the page, record it as actor `human`; treat your
+10. If a human action changes the page, record it as actor `human`; treat your
    lease as interrupted or stale until you verify current state.
-9. Include event ids and command ids in your report instead of pasting long raw
+11. Include event ids and command ids in your report instead of pasting long raw
    logs.
 
 Agent log answers what you did across sessions. Session log answers what
@@ -172,6 +184,32 @@ result:
 - Record any issue in `current_debug.md` using `docs/C3_ERROR_TAXONOMY.md`.
 
 ## If The Lane Fails
+
+Before controlling or inspecting the live page, retrieve
+`hunt_c3_get_failure_context` for the terminal operation. Report its
+`failure_scope`, `root_cause_code`, causal selector/label, expected and observed
+state, confidence, evidence/checkpoint/artifact IDs, missing evidence, and
+`live_inspection_required`. Keep `last_touched_element` separate from the causal
+element: the most recent click is not proof that the clicked element failed.
+
+Only use live browser inspection when the packet explicitly requires it or is
+unavailable. If inspection is required, start with the packet's
+`next_safe_action` and missing-evidence list instead of repeating the whole flow.
+If a report requires live inspection while `failure_artifact_status` is `idle`,
+`capturing`, or `partial`, call `hunt_c3_get_failure_context` once more before
+opening the page; a validated late bundle may now supply the missing evidence.
+
+Cancellation has terminal guarantees. A page-walk that unwinds with
+`user_cancelled` becomes acknowledged and `cancelled`; retry dispatch waits for
+`cancel_retry_after`; an unreconciled control-plane cancellation becomes
+`orphaned` with `control_plane_cancel_unreconciled` after a hard deadline. Do not
+leave a lane indefinitely in `cancelling` or require a released lease for backend
+reconciliation.
+
+Artifact capture may first report a timeout and later complete. A validated late
+manifest is linked idempotently and refreshes the packet without changing the
+terminal cause. Treat artifact status as lifecycle state, not as a replacement
+error.
 
 If the lane did not reach Review/Submit visibility after the normal C3 flow and
 required investigation, mark it as a hard failure for batch-stop counting unless

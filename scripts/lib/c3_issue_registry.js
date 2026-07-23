@@ -92,6 +92,9 @@ function classifyStopReason(reason = "") {
   if (/no_safe_next_button/i.test(value)) return "no_safe_next_button";
   if (/auth_primary_action_not_found/i.test(value))
     return "auth_primary_action_not_found";
+  if (/auth_captcha_gate/i.test(value)) return "auth_captcha_gate";
+  if (/auth_ui_cycle_detected/i.test(value)) return "auth_ui_cycle_detected";
+  if (/auth_signup_signin_loop/i.test(value)) return "auth_signup_signin_loop";
   if (/auth_action_did_not_advance/i.test(value))
     return "auth_action_did_not_advance";
   if (/auth_flow_limit_reached|auth_same_page_attempt_limit/i.test(value)) {
@@ -101,6 +104,8 @@ function classifyStopReason(reason = "") {
     return "visible_validation_errors";
   if (/workday_source_query_state/i.test(value))
     return "workday_source_query_state";
+  if (/workday_runtime_not_ready/i.test(value))
+    return "workday_runtime_not_ready";
   if (/workday_runtime_error|runtime/i.test(value))
     return "workday_runtime_error";
   if (/site_or_posting_state|maintenance|service interruption/i.test(value))
@@ -250,9 +255,9 @@ function issueFromManualReview({ audit, auditPath, page, reason, now }) {
 function auditReachedReview(audit = {}) {
   return Boolean(
     audit.ok &&
-      (audit.final?.pageKind === "review" ||
-        audit.final?.hasSubmit ||
-        /review/i.test(audit.final?.currentStep?.title || "")),
+    (audit.final?.pageKind === "review" ||
+      audit.final?.hasSubmit ||
+      /review/i.test(audit.final?.currentStep?.title || "")),
   );
 }
 
@@ -347,7 +352,8 @@ function extractIssuesFromAudit(audit, auditPath = "") {
     if (stopRecord) records.push(stopRecord);
   }
   const finalErrors = list(audit.final?.errors || [], 1200).filter(
-    (error) => !/successfully uploaded|\.pdf successfully uploaded/i.test(error),
+    (error) =>
+      !/successfully uploaded|\.pdf successfully uploaded/i.test(error),
   );
   if (finalErrors.length) {
     const page = pages[pages.length - 1] || {};
@@ -452,6 +458,10 @@ function renderSummary(records) {
     "- `required_field_unfilled`: A required field remained empty after fill.",
     "- `no_safe_next_button`: Page-walk could not find a safe Next/Continue action.",
     "- `auth_primary_action_not_found`: Auth page had no safe sign-in/create-account action.",
+    "- `auth_captcha_gate`: Create Account remained disabled behind CAPTCHA and no safe in-flow Sign In fallback was available.",
+    "- `auth_ui_cycle_detected`: Authentication repeated a structural UI/action suffix pattern.",
+    "- `auth_signup_signin_loop`: Signup returned to Sign In repeatedly after one bounded continuation.",
+    "- `workday_runtime_not_ready`: Workday shell did not expose a rendered auth/application/navigation surface.",
     "- `posting_not_found`: Workday says the posting or apply URL does not exist.",
     "- `site_or_posting_state`: Workday reached maintenance or another tenant site-state page.",
     "- `commit_not_verified`: UI showed a value but C3 could not verify React/Workday commit.",

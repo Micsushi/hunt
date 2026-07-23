@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+const crypto = require("crypto");
 const fs = require("fs");
 const http = require("http");
 const path = require("path");
@@ -15,17 +16,136 @@ const SETTINGS_KEY = "hunt.apply.settings";
 const RUNTIME_CONFIG_KEY = "hunt.apply.runtimeConfig";
 const PROFILE_KEY = "hunt.apply.profile";
 const BROWSER_CONTEXT_KEY = "hunt.apply.browserContext";
+const DEFAULT_RESUME_KEY = "hunt.apply.defaultResume";
+const MAX_RESUME_BYTES = 10 * 1024 * 1024;
+const PDF_DATA_URL_PREFIX = "data:application/pdf;base64,";
+
+function isSafePdfFilename(value) {
+  const fileName = String(value || "");
+  return (
+    fileName.length > 4 &&
+    fileName.length <= 128 &&
+    !fileName.includes("..") &&
+    /^[A-Za-z0-9][A-Za-z0-9._ -]*\.pdf$/i.test(fileName)
+  );
+}
+
+function decodeStrictBase64(value) {
+  const encoded = String(value || "");
+  if (
+    !encoded ||
+    encoded.length % 4 !== 0 ||
+    !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(
+      encoded,
+    )
+  ) {
+    return null;
+  }
+  const decoded = Buffer.from(encoded, "base64");
+  return decoded.toString("base64") === encoded ? decoded : null;
+}
+
+function defaultResumeIdentity(resume) {
+  return {
+    pdfFileName: String(resume?.pdfFileName || ""),
+    pdfByteCount: Number(resume?.pdfByteCount || 0),
+    pdfSha256: String(resume?.pdfSha256 || "").toLowerCase(),
+  };
+}
+
+function isDefaultResumeReady(resume) {
+  try {
+    const identity = defaultResumeIdentity(resume);
+    const dataUrl = String(resume?.pdfDataUrl || "");
+    if (
+      resume?.pdfMimeType !== "application/pdf" ||
+      !isSafePdfFilename(identity.pdfFileName) ||
+      !Number.isSafeInteger(identity.pdfByteCount) ||
+      identity.pdfByteCount <= 0 ||
+      identity.pdfByteCount > MAX_RESUME_BYTES ||
+      !/^[a-f0-9]{64}$/.test(identity.pdfSha256) ||
+      !dataUrl.startsWith(PDF_DATA_URL_PREFIX)
+    ) {
+      return false;
+    }
+    const decoded = decodeStrictBase64(dataUrl.slice(PDF_DATA_URL_PREFIX.length));
+    if (
+      !decoded ||
+      decoded.length !== identity.pdfByteCount ||
+      decoded.subarray(0, 5).toString("ascii") !== "%PDF-"
+    ) {
+      return false;
+    }
+    const actualSha256 = crypto.createHash("sha256").update(decoded).digest("hex");
+    return actualSha256 === identity.pdfSha256;
+  } catch (_error) {
+    return false;
+  }
+}
+
+async function isDefaultResumeReadyInBrowser(resume) {
+  try {
+    const fileName = String(resume?.pdfFileName || "");
+    const byteCount = Number(resume?.pdfByteCount || 0);
+    const expectedSha256 = String(resume?.pdfSha256 || "").toLowerCase();
+    const prefix = "data:application/pdf;base64,";
+    const dataUrl = String(resume?.pdfDataUrl || "");
+    const safeFileName =
+      fileName.length > 4 &&
+      fileName.length <= 128 &&
+      !fileName.includes("..") &&
+      /^[A-Za-z0-9][A-Za-z0-9._ -]*\.pdf$/i.test(fileName);
+    if (
+      resume?.pdfMimeType !== "application/pdf" ||
+      !safeFileName ||
+      !Number.isSafeInteger(byteCount) ||
+      byteCount <= 0 ||
+      byteCount > 10 * 1024 * 1024 ||
+      !/^[a-f0-9]{64}$/.test(expectedSha256) ||
+      !dataUrl.startsWith(prefix)
+    ) {
+      return false;
+    }
+    const encoded = dataUrl.slice(prefix.length);
+    if (
+      !encoded ||
+      encoded.length % 4 !== 0 ||
+      !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(
+        encoded,
+      )
+    ) {
+      return false;
+    }
+    const binary = atob(encoded);
+    if (
+      btoa(binary) !== encoded ||
+      binary.length !== byteCount ||
+      binary.slice(0, 5) !== "%PDF-"
+    ) {
+      return false;
+    }
+    const bytes = Uint8Array.from(binary, (character) => character.charCodeAt(0));
+    const digest = await globalThis.crypto.subtle.digest("SHA-256", bytes);
+    const actualSha256 = Array.from(new Uint8Array(digest), (value) =>
+      value.toString(16).padStart(2, "0"),
+    ).join("");
+    return actualSha256 === expectedSha256;
+  } catch (_error) {
+    return false;
+  }
+}
 
 function parseArgs(argv) {
   const args = {
     port: DEFAULT_PORT,
-    backendUrl: process.env.HUNT_BACKEND_URL || "http://127.0.0.1:8004",
+    backendUrl: process.env.HUNT_BACKEND_URL || "http://127.0.0.1:8000",
     extensionId: process.env.HUNT_C3_EXTENSION_ID || DEFAULT_EXTENSION_ID,
     agentId: process.env.HUNT_C3_AGENT_ID || "",
     laneId: process.env.HUNT_C3_LANE_ID || "",
     sessionId: process.env.HUNT_C3_SESSION_ID || "",
     leaseId: process.env.HUNT_C3_LEASE_ID || "",
     envFile: ".env",
+    resume: "",
     seedWorkdayProfile: false,
     autoNext: false,
     test: true,
@@ -49,6 +169,8 @@ function parseArgs(argv) {
       args.leaseId = argv[++idx] || args.leaseId;
     } else if (arg === "--env-file") {
       args.envFile = argv[++idx] || args.envFile;
+    } else if (arg === "--resume") {
+      args.resume = argv[++idx] || args.resume;
     } else if (arg === "--seed-workday-profile") {
       args.seedWorkdayProfile = true;
     } else if (arg === "--auto-next") {
@@ -78,7 +200,7 @@ function usage() {
       "The token is read from HUNT_SERVICE_TOKEN or --env-file and is never printed.",
       "",
       "Options:",
-      "  --backend-url <url>  Backend URL. Default: http://127.0.0.1:8004",
+      "  --backend-url <url>  Backend URL. Default: http://127.0.0.1:8000",
       "  --extension-id <id> Unpacked C3 extension ID",
       "  --agent-id <id>     Ledger agent id. Default: agent-pchrome-<port>",
       "  --lane-id <id>      Ledger lane id. Default: lane-pchrome-<port>",
@@ -86,6 +208,7 @@ function usage() {
       "  --lease-id <id>     Optional active ledger lease id",
       "  --env-file <path>    Env file fallback. Default: .env",
       "  --port <port>        Chrome DevTools port. Default: 9222",
+      "  --resume <pdf>       Readable PDF to seed as the isolated lane default resume",
       "  --seed-workday-profile Seed p chrome profile defaults for Workday testing",
       "  --auto-next         Enable extension auto-next/page walk for full-flow testing",
       "  --no-auto-next      Keep fill on the current page for direct debugging. Default",
@@ -380,23 +503,95 @@ async function ensureExtensionPage(port, targets, fallbackExtensionId) {
     targets = await httpJson(port, "/json/list");
   }
   const url = `chrome-extension://${extensionId}/src/options/options.html`;
-  await createBackgroundTarget(port, url);
-  let opened = null;
-  for (let attempt = 0; attempt < 20; attempt += 1) {
-    const refreshed = await httpJson(port, "/json/list");
-    opened = findExtensionPage(refreshed, extensionId);
-    if (opened?.webSocketDebuggerUrl) {
-      break;
+  for (let pageAttempt = 0; pageAttempt < 3; pageAttempt += 1) {
+    await createBackgroundTarget(port, url);
+    let opened = null;
+    for (let attempt = 0; attempt < 20; attempt += 1) {
+      const refreshed = await httpJson(port, "/json/list");
+      opened = findExtensionPage(refreshed, extensionId);
+      if (opened?.webSocketDebuggerUrl) {
+        break;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 250));
     }
+    if (!opened?.webSocketDebuggerUrl) {
+      continue;
+    }
+    if (await targetHasExtensionApi(opened)) {
+      return opened;
+    }
+    await closeTarget(port, opened);
     await new Promise((resolve) => setTimeout(resolve, 250));
   }
-  if (!opened?.webSocketDebuggerUrl) {
-    throw new Error("Could not open the Hunt Apply Options page in p chrome.");
+  throw new Error("Hunt Apply Options page opened without extension APIs after 3 attempts.");
+}
+
+function readResumeSeed(resumePath) {
+  const absolutePath = path.resolve(resumePath || "");
+  let stat;
+  try {
+    fs.accessSync(absolutePath, fs.constants.R_OK);
+    stat = fs.statSync(absolutePath);
+  } catch (_error) {
+    throw new Error("resume_preflight_missing: configured resume is not readable");
   }
-  if (!(await targetHasExtensionApi(opened))) {
-    throw new Error("Hunt Apply Options page opened without extension APIs.");
+  if (!stat.isFile() || path.extname(absolutePath).toLowerCase() !== ".pdf") {
+    throw new Error("resume_preflight_missing: configured resume must be a PDF file");
   }
-  return opened;
+  if (stat.size <= 0 || stat.size > MAX_RESUME_BYTES) {
+    throw new Error(
+      `resume_preflight_missing: configured resume must be 1-${MAX_RESUME_BYTES} bytes`,
+    );
+  }
+  const pdf = fs.readFileSync(absolutePath);
+  if (pdf.subarray(0, 5).toString("ascii") !== "%PDF-") {
+    throw new Error("resume_preflight_missing: configured resume is not a PDF document");
+  }
+  const pdfFileName = path.basename(absolutePath);
+  if (!isSafePdfFilename(pdfFileName)) {
+    throw new Error("resume_preflight_missing: configured resume filename is unsafe");
+  }
+  return {
+    label: pdfFileName,
+    sourceType: "local_pdf",
+    pdfPath: absolutePath,
+    pdfFileName,
+    pdfMimeType: "application/pdf",
+    pdfDataUrl: `${PDF_DATA_URL_PREFIX}${pdf.toString("base64")}`,
+    pdfByteCount: pdf.length,
+    pdfSha256: crypto.createHash("sha256").update(pdf).digest("hex"),
+    texPath: "",
+    versionId: "c3-isolated-lane-default",
+    jobId: "",
+    updatedAt: new Date(stat.mtimeMs).toISOString(),
+  };
+}
+
+function makePublicResult(result, tokenSource) {
+  return {
+    ok: true,
+    backendUrl: result.backendUrl,
+    browserContext: result.browserContext,
+    debugLogSinkEnabled: result.debugLogSinkEnabled,
+    ledgerEnabled: result.ledgerEnabled,
+    ledgerBackendUrl: result.ledgerBackendUrl,
+    agentId: result.agentId,
+    laneId: result.laneId,
+    sessionId: result.sessionId,
+    leaseId: result.leaseId,
+    useFieldPipelineV2: result.useFieldPipelineV2,
+    autoClickNextAfterFill: result.autoClickNextAfterFill,
+    hasServiceToken: result.hasServiceToken,
+    profileCounts: result.profileCounts || null,
+    defaultResumeReady: Boolean(result.defaultResumeReady),
+    defaultResumeIdentity: result.defaultResumeIdentity || null,
+    tokenSource: tokenSource ? "found" : "missing",
+    testOk: result.testResult?.ok === true,
+    testStatus: result.testResult?.status || null,
+    testError: result.testResult?.error || null,
+    writes: result.writes || null,
+    inspectOnly: Boolean(result.inspectOnly),
+  };
 }
 
 async function main() {
@@ -405,6 +600,12 @@ async function main() {
     usage();
     return;
   }
+  if (args.seedWorkdayProfile && !args.resume) {
+    throw new Error(
+      "resume_preflight_missing: --seed-workday-profile requires --resume <pdf>",
+    );
+  }
+  const resumeSeed = args.resume ? readResumeSeed(args.resume) : null;
   const { token, source } = readEnvToken(args.envFile);
   const targets = await httpJson(args.port, "/json/list");
   const extensionPage = await ensureExtensionPage(
@@ -428,7 +629,10 @@ async function main() {
         const seedProfile = ${js(args.seedWorkdayProfile)};
         const autoNext = ${js(args.autoNext)};
         const inspectOnly = ${js(args.inspectOnly)};
+        const resumeSeed = ${js(resumeSeed)};
         const sameJson = (a, b) => JSON.stringify(a || null) === JSON.stringify(b || null);
+        const defaultResumeReadyFor = ${isDefaultResumeReadyInBrowser.toString()};
+        const defaultResumeIdentityFor = ${defaultResumeIdentity.toString()};
         const browserContext = {
           name: "p_chrome",
           configuredBy: "scripts/configure_c3_debug_sink.js",
@@ -442,7 +646,8 @@ async function main() {
         const existingLocal = await chrome.storage.local.get([
           ${js(RUNTIME_CONFIG_KEY)},
           ${js(BROWSER_CONTEXT_KEY)},
-          ${js(PROFILE_KEY)}
+          ${js(PROFILE_KEY)},
+          ${js(DEFAULT_RESUME_KEY)}
         ]);
         const currentRuntimeConfig = existingLocal[${js(RUNTIME_CONFIG_KEY)}] || {};
         const currentBrowserContext = existingLocal[${js(BROWSER_CONTEXT_KEY)}] || {};
@@ -501,12 +706,17 @@ async function main() {
         const writes = {
           runtimeConfig: false,
           browserContext: false,
-          profile: false
+          profile: false,
+          resume: false
         };
         if (inspectOnly) {
           const profileCountsFor = ${workdayProfileCounts.toString()};
           const profileCounts = profileCountsFor(existingLocal[${js(PROFILE_KEY)}] || {});
           const inspectedRuntimeConfig = currentRuntimeConfig || {};
+          const defaultResumeReady = await defaultResumeReadyFor(
+            existingLocal[${js(DEFAULT_RESUME_KEY)}] || {},
+          );
+          const inspectedDefaultResume = existingLocal[${js(DEFAULT_RESUME_KEY)}] || {};
           const inspectedEffective = {
             ...current,
             backendUrl: inspectedRuntimeConfig.backendUrl || current.backendUrl || "",
@@ -537,6 +747,10 @@ async function main() {
             leaseId: inspectedEffective.leaseId || "",
             hasServiceToken: Boolean(inspectedEffective.serviceToken),
             profileCounts,
+            defaultResumeReady: Boolean(defaultResumeReady),
+            defaultResumeIdentity: defaultResumeReady
+              ? defaultResumeIdentityFor(inspectedDefaultResume)
+              : null,
             useFieldPipelineV2: true,
             autoClickNextAfterFill: Boolean(inspectedEffective.autoClickNextAfterFill),
             testResult: { skipped: true },
@@ -565,6 +779,15 @@ async function main() {
           await chrome.storage.local.set({ [${js(BROWSER_CONTEXT_KEY)}]: nextBrowserContext });
           writes.browserContext = true;
         }
+        const currentDefaultResume = existingLocal[${js(DEFAULT_RESUME_KEY)}] || {};
+        if (resumeSeed && !sameJson(currentDefaultResume, resumeSeed)) {
+          await chrome.storage.local.set({ [${js(DEFAULT_RESUME_KEY)}]: resumeSeed });
+          writes.resume = true;
+        }
+        const effectiveDefaultResume = resumeSeed || currentDefaultResume;
+        const defaultResumeReady = await defaultResumeReadyFor(
+          effectiveDefaultResume,
+        );
         const profileCountsFor = ${workdayProfileCounts.toString()};
         let profileCounts = null;
         if (seedProfile) {
@@ -704,6 +927,10 @@ async function main() {
           leaseId: effective.leaseId || "",
           hasServiceToken: Boolean(effective.serviceToken),
           profileCounts,
+          defaultResumeReady: Boolean(defaultResumeReady),
+          defaultResumeIdentity: defaultResumeReady
+            ? defaultResumeIdentityFor(effectiveDefaultResume)
+            : null,
           useFieldPipelineV2: effective.useFieldPipelineV2,
           autoClickNextAfterFill: effective.autoClickNextAfterFill,
           testResult,
@@ -715,28 +942,7 @@ async function main() {
     );
     console.log(
       JSON.stringify(
-        {
-          ok: true,
-          backendUrl: result.backendUrl,
-          browserContext: result.browserContext,
-          debugLogSinkEnabled: result.debugLogSinkEnabled,
-          ledgerEnabled: result.ledgerEnabled,
-          ledgerBackendUrl: result.ledgerBackendUrl,
-          agentId: result.agentId,
-          laneId: result.laneId,
-          sessionId: result.sessionId,
-          leaseId: result.leaseId,
-          useFieldPipelineV2: result.useFieldPipelineV2,
-          autoClickNextAfterFill: result.autoClickNextAfterFill,
-          hasServiceToken: result.hasServiceToken,
-          profileCounts: result.profileCounts || null,
-          tokenSource: source ? "found" : "missing",
-          testOk: result.testResult?.ok === true,
-          testStatus: result.testResult?.status || null,
-          testError: result.testResult?.error || null,
-          writes: result.writes || null,
-          inspectOnly: Boolean(result.inspectOnly),
-        },
+        makePublicResult(result, source),
         null,
         2,
       ),
@@ -746,7 +952,19 @@ async function main() {
   }
 }
 
-main().catch((error) => {
-  console.error(error.message || error);
-  process.exit(1);
-});
+if (require.main === module) {
+  main().catch((error) => {
+    console.error(error.message || error);
+    process.exit(1);
+  });
+}
+
+module.exports = {
+  MAX_RESUME_BYTES,
+  defaultResumeIdentity,
+  isDefaultResumeReady,
+  isDefaultResumeReadyInBrowser,
+  makePublicResult,
+  parseArgs,
+  readResumeSeed,
+};

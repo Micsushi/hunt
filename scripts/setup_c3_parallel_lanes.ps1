@@ -2,6 +2,8 @@ param(
     [Parameter(Mandatory=$true)][string]$BatchId,
     [string]$Ports = "9401,9402,9403,9404,9405",
     [string]$LogsRoot = "logs",
+    [string]$BatchLogDir = "",
+    [string]$ResumePath = "",
     [switch]$NoResetProfiles,
     [int]$MaxActiveLanes = 5,
     [switch]$AllowLargeBatch,
@@ -23,7 +25,20 @@ $reloadScript = Join-Path $repoRoot "scripts\reload_c3_extension.py"
 $closeBlockedScript = Join-Path $repoRoot "scripts\c3_close_blocked_extension_tabs.js"
 $configureScript = Join-Path $repoRoot "scripts\configure_c3_debug_sink.js"
 $moveWindowsScript = Join-Path $repoRoot "scripts\move_c3_parallel_windows.ps1"
-$batchLogDir = Join-Path $repoRoot (Join-Path $LogsRoot $BatchId)
+$resolvedResumePath = Join-Path $repoRoot "main.pdf"
+if ($ResumePath) {
+    $resolvedResumePath = [IO.Path]::GetFullPath($ResumePath)
+}
+$resolvedLogsRoot = if ([IO.Path]::IsPathRooted($LogsRoot)) {
+    [IO.Path]::GetFullPath($LogsRoot)
+} else {
+    [IO.Path]::GetFullPath((Join-Path $repoRoot $LogsRoot))
+}
+$batchLogDir = if ($BatchLogDir) {
+    [IO.Path]::GetFullPath($BatchLogDir)
+} else {
+    Join-Path $resolvedLogsRoot $BatchId
+}
 $currentDebug = Join-Path $batchLogDir "current_debug.md"
 $lanePorts = $Ports -split "," | ForEach-Object { [int]$_.Trim() } | Where-Object { $_ -gt 0 }
 
@@ -143,11 +158,61 @@ function Wait-DevToolsEndpoint {
     throw "DevTools endpoint did not become reachable on port $Port. Last error: $lastError"
 }
 
+function Test-ResumePreflight {
+    param([Parameter(Mandatory=$true)][string]$ResumePath)
+    if (-not (Test-Path -LiteralPath $ResumePath -PathType Leaf)) {
+        throw "resume_preflight_missing: default resume PDF was not found."
+    }
+    $resumeInfo = Get-Item -LiteralPath $ResumePath -ErrorAction Stop
+    if ($resumeInfo.Length -le 0 -or $resumeInfo.Length -gt 10MB) {
+        throw "resume_preflight_missing: default resume PDF must be between 1 byte and 10 MiB."
+    }
+    $stream = $null
+    $pdfHeaderValid = $false
+    try {
+        $stream = [IO.File]::Open(
+            $ResumePath,
+            [IO.FileMode]::Open,
+            [IO.FileAccess]::Read,
+            [IO.FileShare]::Read
+        )
+        $headerBytes = [byte[]]::new(5)
+        $headerLength = $stream.Read($headerBytes, 0, $headerBytes.Length)
+        $pdfHeaderValid = (
+            $headerLength -eq $headerBytes.Length -and
+            [Text.Encoding]::ASCII.GetString($headerBytes) -ceq "%PDF-"
+        )
+    } catch {
+        throw "resume_preflight_missing: default resume PDF is not readable."
+    } finally {
+        if ($stream) { $stream.Dispose() }
+    }
+    if (-not $pdfHeaderValid) {
+        throw "resume_preflight_missing: default resume PDF header is invalid."
+    }
+    $fileName = [IO.Path]::GetFileName($ResumePath)
+    if (
+        $fileName.Length -le 4 -or
+        $fileName.Length -gt 128 -or
+        $fileName.Contains("..") -or
+        $fileName -notmatch '^[A-Za-z0-9][A-Za-z0-9._ -]*\.pdf$'
+    ) {
+        throw "resume_preflight_missing: default resume PDF filename is unsafe."
+    }
+    $sha256 = (Get-FileHash -LiteralPath $ResumePath -Algorithm SHA256).Hash.ToLowerInvariant()
+    [pscustomobject]@{
+        pdfFileName = $fileName
+        pdfByteCount = [long]$resumeInfo.Length
+        pdfSha256 = $sha256
+    }
+}
+
 function Test-LanePreflight {
     param(
         [Parameter(Mandatory=$true)][int]$Port,
         [Parameter(Mandatory=$true)][string]$Profile,
-        [Parameter(Mandatory=$true)]$Inspect
+        [Parameter(Mandatory=$true)]$Inspect,
+        [Parameter(Mandatory=$true)]$ExpectedResumeIdentity
     )
     $targets = Invoke-RestMethod "http://127.0.0.1:$Port/json/list" -TimeoutSec 5
     $extensionTarget = $targets | Where-Object {
@@ -173,6 +238,18 @@ function Test-LanePreflight {
     if (-not $Inspect.profileCounts) {
         throw "Lane $Port did not report seeded profile counts."
     }
+    if (-not $Inspect.defaultResumeReady) {
+        throw "resume_preflight_missing: Lane $Port did not confirm a seeded default resume."
+    }
+    $actualResumeIdentity = $Inspect.defaultResumeIdentity
+    if (
+        -not $actualResumeIdentity -or
+        [string]$actualResumeIdentity.pdfFileName -cne [string]$ExpectedResumeIdentity.pdfFileName -or
+        [long]$actualResumeIdentity.pdfByteCount -ne [long]$ExpectedResumeIdentity.pdfByteCount -or
+        [string]$actualResumeIdentity.pdfSha256 -ine [string]$ExpectedResumeIdentity.pdfSha256
+    ) {
+        throw "resume_preflight_identity_mismatch: Lane $Port did not confirm the configured resume identity."
+    }
     $profileCounts = $Inspect.profileCounts
     foreach ($name in @("workExperience", "education", "skills", "websites")) {
         if ([int]$profileCounts.$name -le 0) {
@@ -195,6 +272,8 @@ function Test-LanePreflight {
         throw "Lane $Port is not using expected profile $Profile."
     }
 }
+
+$expectedResumeIdentity = Test-ResumePreflight -ResumePath $resolvedResumePath
 
 $summary = @()
 $layout = Get-LaneWindowLayout
@@ -249,11 +328,11 @@ for ($index = 0; $index -lt $lanePorts.Count; $index += 1) {
         node $closeBlockedScript --port $port
     }
     Invoke-LoggedCommand -LogPath "$laneLogPrefix.seed.log" -Command {
-        node $configureScript --port $port --seed-workday-profile
+        node $configureScript --port $port --resume $resolvedResumePath --seed-workday-profile
     }
     Start-Sleep -Seconds 1
     Invoke-LoggedCommand -LogPath "$laneLogPrefix.seed_confirm.log" -Command {
-        node $configureScript --port $port --seed-workday-profile
+        node $configureScript --port $port --resume $resolvedResumePath --seed-workday-profile
     }
     if ($ReloadExtension) {
         Invoke-LoggedCommand -LogPath "$laneLogPrefix.reload.log" -Command {
@@ -263,14 +342,14 @@ for ($index = 0; $index -lt $lanePorts.Count; $index += 1) {
             node $closeBlockedScript --port $port
         }
         Invoke-LoggedCommand -LogPath "$laneLogPrefix.post_reload_seed.log" -Command {
-            node $configureScript --port $port --seed-workday-profile
+            node $configureScript --port $port --resume $resolvedResumePath --seed-workday-profile
         }
     }
     Invoke-LoggedCommand -LogPath "$laneLogPrefix.inspect.log" -Command {
         node $configureScript --port $port --inspect-only
     }
     $inspect = Get-Content -LiteralPath "$laneLogPrefix.inspect.log" -Raw | ConvertFrom-Json
-    Test-LanePreflight -Port $port -Profile $profile -Inspect $inspect
+    Test-LanePreflight -Port $port -Profile $profile -Inspect $inspect -ExpectedResumeIdentity $expectedResumeIdentity
 
     $summary += [pscustomobject]@{
         port = $port
@@ -281,6 +360,8 @@ for ($index = 0; $index -lt $lanePorts.Count; $index += 1) {
         primaryScreen = $layout.Primary
         browserContext = $inspect.browserContext
         profileCounts = $inspect.profileCounts
+        defaultResumeReady = [bool]$inspect.defaultResumeReady
+        defaultResumeIdentity = $inspect.defaultResumeIdentity
     }
 }
 

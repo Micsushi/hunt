@@ -41,8 +41,12 @@
     );
   }
 
-  function keyOn(target, keyName) {
-    if (!target || typeof target.dispatchEvent !== "function") {
+  function keyOn(target, keyName, actionGuard) {
+    if (
+      workdayFillCancelled(actionGuard) ||
+      !target ||
+      typeof target.dispatchEvent !== "function"
+    ) {
       return;
     }
     var keyCodes = {
@@ -54,6 +58,9 @@
       Delete: 46,
     };
     var code = keyCodes[keyName] || 0;
+    if (workdayFillCancelled(actionGuard)) {
+      return;
+    }
     target.dispatchEvent(
       new KeyboardEvent("keydown", {
         key: keyName,
@@ -64,6 +71,9 @@
         cancelable: true,
       }),
     );
+    if (workdayFillCancelled(actionGuard)) {
+      return;
+    }
     target.dispatchEvent(
       new KeyboardEvent("keyup", {
         key: keyName,
@@ -76,8 +86,8 @@
     );
   }
 
-  function clickLikeUser(el) {
-    if (!el) {
+  function clickLikeUser(el, actionGuard) {
+    if (!el || workdayFillCancelled(actionGuard)) {
       return;
     }
     if (typeof el.scrollIntoView === "function") {
@@ -93,6 +103,9 @@
       "mouseup",
       "click",
     ].forEach(function (type) {
+      if (workdayFillCancelled(actionGuard)) {
+        return;
+      }
       var Ctor =
         window.PointerEvent && type.startsWith("pointer")
           ? window.PointerEvent
@@ -111,17 +124,45 @@
     });
   }
 
-  function workdayFillCancelled() {
+  function workdayFillCancelled(actionGuard) {
+    var activeRunId = window.__huntApplyActiveFillRunId || "";
+    var cancelledIds = Array.isArray(window.__huntApplyCancelledFillRunIds)
+      ? window.__huntApplyCancelledFillRunIds
+      : [];
     return Boolean(
+      (actionGuard && !actionGuard.canMutate()) ||
       window.__huntApplyCancelAllFills ||
       (window.__huntApplyCancelFillRunId &&
         window.__huntApplyCancelFillRunId ===
-          window.__huntApplyActiveFillRunId),
+          activeRunId) ||
+      (activeRunId && cancelledIds.includes(activeRunId)),
     );
   }
 
-  function printableKeyOn(target, char) {
-    if (!target || typeof target.dispatchEvent !== "function" || !char) {
+  function workdayActionCancelled(actionGuard) {
+    return workdayFillCancelled(actionGuard);
+  }
+
+  function guardForField(field, actionGuard) {
+    return actionGuard || field?._huntActionGuard || null;
+  }
+
+  function workdayCancelledResult(field, actionGuard) {
+    return {
+      ok: false,
+      cancelled: true,
+      reason: actionGuard?.reason?.() || "operation_cancelled",
+      afterState: root.fieldState.readFieldState(field),
+    };
+  }
+
+  function printableKeyOn(target, char, actionGuard) {
+    if (
+      workdayFillCancelled(actionGuard) ||
+      !target ||
+      typeof target.dispatchEvent !== "function" ||
+      !char
+    ) {
       return;
     }
     var code = char.length === 1 ? char.toUpperCase().charCodeAt(0) : 0;
@@ -135,11 +176,13 @@
       cancelable: true,
     };
     target.dispatchEvent(new KeyboardEvent("keydown", base));
+    if (workdayFillCancelled(actionGuard)) return;
     target.dispatchEvent(new KeyboardEvent("keypress", base));
+    if (workdayFillCancelled(actionGuard)) return;
     target.dispatchEvent(new KeyboardEvent("keyup", base));
   }
 
-  async function typeaheadOn(target, text) {
+  async function typeaheadOn(target, text, actionGuard) {
     var value = clean(text || "");
     if (!target || !value) {
       return;
@@ -150,12 +193,21 @@
       target.focus?.();
     }
     for (var idx = 0; idx < value.length; idx++) {
-      printableKeyOn(target, value[idx]);
+      if (workdayFillCancelled(actionGuard)) {
+        return;
+      }
+      printableKeyOn(target, value[idx], actionGuard);
       await sleep(25);
+      if (workdayFillCancelled(actionGuard)) {
+        return;
+      }
     }
   }
 
-  function triggerReactClickHandler(el) {
+  function triggerReactClickHandler(el, actionGuard) {
+    if (workdayFillCancelled(actionGuard)) {
+      return false;
+    }
     try {
       var fiberKey = Object.keys(el || {}).find(function (key) {
         return (
@@ -190,11 +242,13 @@
             }),
           };
           if (typeof props.onClick === "function") {
+            if (workdayFillCancelled(actionGuard)) return false;
             props.onClick(mockEvt);
             return true;
           }
           if (typeof props.onMouseDown === "function") {
             mockEvt.type = "mousedown";
+            if (workdayFillCancelled(actionGuard)) return false;
             props.onMouseDown(mockEvt);
             return true;
           }
@@ -205,7 +259,10 @@
     return false;
   }
 
-  function triggerReactClickDeep(el) {
+  function triggerReactClickDeep(el, actionGuard) {
+    if (workdayFillCancelled(actionGuard)) {
+      return false;
+    }
     if (!el) {
       return false;
     }
@@ -217,14 +274,17 @@
       ).slice(0, 8),
     );
     for (var idx = 0; idx < candidates.length; idx++) {
-      if (triggerReactClickHandler(candidates[idx])) {
+      if (triggerReactClickHandler(candidates[idx], actionGuard)) {
         return true;
       }
     }
     return false;
   }
 
-  function setValue(el, value) {
+  function setValue(el, value, actionGuard) {
+    if (workdayFillCancelled(actionGuard)) {
+      return false;
+    }
     if (!el) {
       return false;
     }
@@ -266,6 +326,23 @@
     var el = field?.element;
     var listbox = el ? workdayActiveListboxFor(el) : null;
     return {
+      controlId: el?.id || el?.name || "",
+      popupId: listbox?.id || "",
+      relationshipIds: [
+        el?.getAttribute?.("aria-controls") || "",
+        el?.getAttribute?.("aria-owns") || "",
+      ]
+        .join(" ")
+        .split(/\s+/)
+        .filter(Boolean),
+      geometry: {
+        control: root.audit?.rectSummary(el) || {},
+        popup: root.audit?.rectSummary(listbox) || {},
+        viewport: {
+          width: window.innerWidth || 0,
+          height: window.innerHeight || 0,
+        },
+      },
       listbox: root.audit?.summarizeElement(listbox) || {},
       container:
         root.audit?.summarizeElement(
@@ -275,15 +352,83 @@
     };
   }
 
+  function closeUnrelatedExpandedControls(field, actionGuard) {
+    actionGuard = guardForField(field, actionGuard);
+    var control = field?.element;
+    Array.from(
+      document.querySelectorAll(
+        '[aria-expanded="true"][aria-haspopup="listbox"], [aria-expanded="true"][role="combobox"]',
+      ),
+    ).forEach(function (candidate) {
+      if (candidate === control) {
+        return;
+      }
+      keyOn(candidate, "Escape", actionGuard);
+      var owned = workdayActiveListboxFor(candidate);
+      keyOn(owned, "Escape", actionGuard);
+      candidate.blur?.();
+    });
+  }
+
   function emitWorkdayEvent(audit, eventType, field, payload) {
+    var tracePayload = payload || {};
+    var owner = tracePayload.popupOwner || popupOwner(field);
+    var actionGuard = guardForField(field);
     root.audit?.emitEvent(
       audit,
       eventType,
       root.audit.fieldPayload(
         field,
-        Object.assign({ popupOwner: popupOwner(field) }, payload || {}),
+        Object.assign(
+          {
+            operationId: audit?.operationId || actionGuard?.operationId || "",
+            runId: audit?.runId || actionGuard?.fillRunId || "",
+            fieldId: field?.fieldId || "",
+            label: String(
+              field?.descriptor ||
+                field?.element?.getAttribute?.("aria-label") ||
+                "",
+            ).slice(0, 240),
+            kind: field?.workday?.kind || field?.uiModel || "unknown",
+            required: Boolean(field?.required),
+            attempt: 1,
+            driver: "workday-v2",
+            action: eventType,
+            elapsedMs: Math.max(
+              0,
+              Date.now() - Number(field?._huntTraceStartedAt || Date.now()),
+            ),
+            reasonCode: tracePayload.reason || "workday_trace_checkpoint",
+            popupOwner: owner,
+          },
+          tracePayload,
+        ),
       ),
     );
+    if (
+      eventType.startsWith("popup.") &&
+      typeof chrome !== "undefined" &&
+      chrome.runtime?.sendMessage
+    ) {
+      try {
+        chrome.runtime.sendMessage({
+          type: "hunt.apply.site_action_log",
+          payload: {
+            operationId: audit?.operationId || actionGuard?.operationId || "",
+            fillRunId: audit?.runId || actionGuard?.fillRunId || "",
+            action: eventType,
+            status: tracePayload.status || "info",
+            reason: tracePayload.reason || "workday_popup_checkpoint",
+            fieldId: field?.fieldId || "",
+            descriptor: String(field?.descriptor || "").slice(0, 240),
+            uiModel: field?.uiModel || "",
+            popupOwner: tracePayload.popupOwner || owner,
+          },
+        });
+      } catch (_error) {
+        // Best-effort progress reporting; the structured audit remains primary.
+      }
+    }
   }
 
   function emitWorkdayOptionsCollected(
@@ -421,7 +566,8 @@
     });
   }
 
-  function clearWorkdaySearchText(field) {
+  function clearWorkdaySearchText(field, actionGuard) {
+    actionGuard = guardForField(field, actionGuard);
     var el = field?.element;
     var container = root.workdayUi?.nearestWorkdayField?.(el);
     var inputs = Array.from(
@@ -438,8 +584,10 @@
       return input && "value" in input && clean(input.value);
     });
     inputs.forEach(function (input) {
-      setValue(input, "");
-      input.dispatchEvent(new Event("change", { bubbles: true }));
+      setValue(input, "", actionGuard);
+      if (!workdayFillCancelled(actionGuard)) {
+        input.dispatchEvent(new Event("change", { bubbles: true }));
+      }
     });
   }
 
@@ -461,7 +609,8 @@
     });
   }
 
-  function blurWorkdayFieldInputs(field) {
+  function blurWorkdayFieldInputs(field, actionGuard) {
+    actionGuard = guardForField(field, actionGuard);
     var el = field?.element;
     var container = root.workdayUi?.nearestWorkdayField?.(el);
     var active = document.activeElement;
@@ -475,7 +624,7 @@
     }
     workdayFieldTextInputs(field).forEach(function (input) {
       try {
-        keyOn(input, "Escape");
+        keyOn(input, "Escape", actionGuard);
       } catch (_error) {
         // Best effort: some Workday proxy elements reject synthetic key events.
       }
@@ -492,7 +641,11 @@
     option,
     audit,
     fieldAudit,
+    actionGuard,
   }) {
+    if (workdayActionCancelled(actionGuard)) {
+      return workdayCancelledResult(field, actionGuard);
+    }
     var genericSkillFallbacks = [
       "Customer Service",
       "Communication",
@@ -539,6 +692,9 @@
       index < skills.length && attempted.length < maxSkillAttempts;
       index++
     ) {
+      if (workdayActionCancelled(actionGuard)) {
+        return workdayCancelledResult(field, actionGuard);
+      }
       var skill = skills[index];
       var skillAnswer = Object.assign({}, answer, { value: skill });
       if (selectedTechnicalSkillMatches(field, null, skillAnswer)) {
@@ -550,7 +706,11 @@
         answer: skillAnswer,
         audit: audit,
         fieldAudit: fieldAudit,
+        actionGuard: actionGuard,
       });
+      if (workdayActionCancelled(actionGuard)) {
+        return workdayCancelledResult(field, actionGuard);
+      }
       var flatOptions = options.filter(function (candidate) {
         return !candidate.isCategory;
       });
@@ -578,8 +738,8 @@
             }),
           },
         });
-        clearWorkdaySearchText(field);
-        await closePopup(field);
+        clearWorkdaySearchText(field, actionGuard);
+        await closePopup(field, actionGuard);
         continue;
       }
       root.audit?.pushFieldStep(audit, fieldAudit, {
@@ -602,10 +762,14 @@
         selectedPillsBefore: selectedTechnicalSkillLabels(field),
         optionElement: root.audit?.summarizeElement(target.element) || {},
       });
-      await clickWorkdayOption(target);
+      await clickWorkdayOption(target, actionGuard);
+      if (workdayActionCancelled(actionGuard)) {
+        return workdayCancelledResult(field, actionGuard);
+      }
       var start = Date.now();
       while (
         Date.now() - start < 2600 &&
+        !workdayActionCancelled(actionGuard) &&
         !selectedTechnicalSkillMatches(field, target, skillAnswer)
       ) {
         await sleep(120);
@@ -625,9 +789,12 @@
         selectedOption: target.label,
         selectedPills: selectedTechnicalSkillLabels(field),
       });
-      clearWorkdaySearchText(field);
-      await closePopup(field);
+      clearWorkdaySearchText(field, actionGuard);
+      await closePopup(field, actionGuard);
       await sleep(120);
+      if (workdayActionCancelled(actionGuard)) {
+        return workdayCancelledResult(field, actionGuard);
+      }
     }
     if (!selected.length && attempted.length >= maxSkillAttempts) {
       root.audit?.pushIssue(audit, fieldAudit, {
@@ -1136,7 +1303,10 @@
     };
   }
 
-  function requestTrustedWorkdayClick(option, purpose) {
+  function requestTrustedWorkdayClick(option, purpose, actionGuard) {
+    if (workdayFillCancelled(actionGuard)) {
+      return Promise.resolve({ ok: false, reason: "operation_cancelled" });
+    }
     var point = workdayOptionClickPoint(option, purpose);
     if (
       !point ||
@@ -1166,6 +1336,8 @@
           {
             type: "hunt.apply.trusted_input",
             payload: {
+              operationId: actionGuard?.operationId || "",
+              fillRunId: actionGuard?.fillRunId || "",
               action: "mouse_click",
               x: point.x,
               y: point.y,
@@ -1196,7 +1368,10 @@
     });
   }
 
-  function requestTrustedWorkdayKeys(keys, purpose) {
+  function requestTrustedWorkdayKeys(keys, purpose, actionGuard) {
+    if (workdayFillCancelled(actionGuard)) {
+      return Promise.resolve({ ok: false, reason: "operation_cancelled" });
+    }
     if (
       !keys?.length ||
       typeof chrome === "undefined" ||
@@ -1225,6 +1400,8 @@
           {
             type: "hunt.apply.trusted_input",
             payload: {
+              operationId: actionGuard?.operationId || "",
+              fillRunId: actionGuard?.fillRunId || "",
               action: "key_sequence",
               keys: keys,
               purpose: purpose || "option_keyboard",
@@ -1288,7 +1465,8 @@
     return keys;
   }
 
-  async function dispatchWorkdayKeySequence(field, keys) {
+  async function dispatchWorkdayKeySequence(field, keys, actionGuard) {
+    actionGuard = guardForField(field, actionGuard);
     if (!keys?.length) {
       return { ok: false, reason: "empty_key_sequence" };
     }
@@ -1299,21 +1477,31 @@
       target?.focus?.();
     }
     for (var idx = 0; idx < keys.length; idx += 1) {
-      keyOn(target, keys[idx].key);
+      if (workdayFillCancelled(actionGuard)) {
+        return { ok: false, reason: "operation_cancelled" };
+      }
+      keyOn(target, keys[idx].key, actionGuard);
       await sleep(80);
+      if (workdayFillCancelled(actionGuard)) {
+        return { ok: false, reason: "operation_cancelled" };
+      }
     }
     return { ok: true, reason: "synthetic_key_sequence_dispatched" };
   }
 
-  async function requestOrDispatchWorkdayKeys(field, keys, purpose) {
+  async function requestOrDispatchWorkdayKeys(field, keys, purpose, actionGuard) {
+    actionGuard = guardForField(field, actionGuard);
     if (!keys?.length) {
       return { ok: false, reason: "empty_key_sequence" };
     }
-    var trusted = await requestTrustedWorkdayKeys(keys, purpose);
+    var trusted = await requestTrustedWorkdayKeys(keys, purpose, actionGuard);
+    if (workdayFillCancelled(actionGuard)) {
+      return { ok: false, reason: "operation_cancelled" };
+    }
     if (trusted?.ok) {
       return trusted;
     }
-    var synthetic = await dispatchWorkdayKeySequence(field, keys);
+    var synthetic = await dispatchWorkdayKeySequence(field, keys, actionGuard);
     return Object.assign({}, synthetic, { trustedInput: trusted || null });
   }
 
@@ -1352,22 +1540,34 @@
     );
   }
 
-  function workdayClickOptionCommitTarget(option) {
+  function workdayClickOptionCommitTarget(option, actionGuard) {
+    if (workdayFillCancelled(actionGuard)) {
+      return false;
+    }
     var target = workdayOptionRadioTarget(option);
-    clickLikeUser(target || option);
-    if (target && typeof target.click === "function") {
+    clickLikeUser(target || option, actionGuard);
+    if (
+      !workdayFillCancelled(actionGuard) &&
+      target &&
+      typeof target.click === "function"
+    ) {
       target.click();
     }
     if (target !== option) {
-      clickLikeUser(option);
+      clickLikeUser(option, actionGuard);
     }
-    triggerReactClickDeep(target || option);
+    triggerReactClickDeep(target || option, actionGuard);
     if (target !== option) {
-      triggerReactClickDeep(option);
+      triggerReactClickDeep(option, actionGuard);
     }
   }
 
-  async function scrollWorkdayListboxUntil(input, findMatch, maxAttempts) {
+  async function scrollWorkdayListboxUntil(
+    input,
+    findMatch,
+    maxAttempts,
+    actionGuard,
+  ) {
     var listbox = workdayActiveListboxFor(input);
     var attempts = 0;
     var match = findMatch();
@@ -1376,12 +1576,15 @@
       listbox &&
       attempts < (maxAttempts || 80) &&
       listbox.scrollHeight > listbox.clientHeight + 2 &&
-      !workdayFillCancelled()
+      !workdayFillCancelled(actionGuard)
     ) {
       attempts += 1;
       listbox.scrollTop += 260;
       listbox.dispatchEvent(new Event("scroll", { bubbles: true }));
       await sleep(30);
+      if (workdayFillCancelled(actionGuard)) {
+        break;
+      }
       match = findMatch();
     }
     return { match: match, listbox: listbox, attempts: attempts };
@@ -1474,18 +1677,22 @@
     );
   }
 
-  async function keyboardOpenCitizenshipCountry(input, country) {
+  async function keyboardOpenCitizenshipCountry(input, country, actionGuard) {
     var listbox = workdayActiveListboxFor(input);
     if (!listbox) {
       return { ok: false, reason: "missing_listbox", attempts: 0 };
     }
     listbox.focus?.();
-    keyOn(listbox, "Home");
+    keyOn(listbox, "Home", actionGuard);
     await sleep(120);
-    for (var attempt = 0; attempt < 90 && !workdayFillCancelled(); attempt++) {
+    for (
+      var attempt = 0;
+      attempt < 90 && !workdayFillCancelled(actionGuard);
+      attempt++
+    ) {
       var activeLabel = activeWorkdayOptionLabel(listbox);
       if (optionMatches({ label: activeLabel }, country)) {
-        keyOn(listbox, "Enter");
+        keyOn(listbox, "Enter", actionGuard);
         await sleep(650);
         return {
           ok: true,
@@ -1494,7 +1701,7 @@
           selectedOption: activeLabel,
         };
       }
-      keyOn(listbox, "ArrowDown");
+      keyOn(listbox, "ArrowDown", actionGuard);
       await sleep(45);
     }
     return {
@@ -1505,7 +1712,13 @@
     };
   }
 
-  async function openWorkdayPopupUntilOptions(field, searchText, maxAttempts) {
+  async function openWorkdayPopupUntilOptions(
+    field,
+    searchText,
+    maxAttempts,
+    actionGuard,
+  ) {
+    actionGuard = guardForField(field, actionGuard);
     var el = field.element;
     var container = root.workdayUi?.nearestWorkdayField(el);
     var targets = [
@@ -1515,8 +1728,11 @@
       container,
     ].filter(Boolean);
     for (var attempt = 0; attempt < (maxAttempts || 3); attempt++) {
-      await openPopup(field, searchText || "");
+      await openPopup(field, searchText || "", actionGuard);
       await sleep(180);
+      if (workdayFillCancelled(actionGuard)) {
+        return { ok: false, attempts: attempt + 1, options: [] };
+      }
       var options = visibleWorkdayOptions(field);
       if (options.length) {
         return {
@@ -1527,10 +1743,13 @@
       }
       var target = targets[attempt % targets.length];
       if (target) {
-        clickLikeUser(target);
-        keyOn(el, "ArrowDown");
+        clickLikeUser(target, actionGuard);
+        keyOn(el, "ArrowDown", actionGuard);
       }
       await sleep(260);
+      if (workdayFillCancelled(actionGuard)) {
+        return { ok: false, attempts: attempt + 1, options: [] };
+      }
       options = visibleWorkdayOptions(field);
       if (options.length) {
         return {
@@ -1547,14 +1766,20 @@
     };
   }
 
-  async function waitForWorkdayOptions(previousLabels, timeoutMs, field) {
+  async function waitForWorkdayOptions(
+    previousLabels,
+    timeoutMs,
+    field,
+    actionGuard,
+  ) {
+    actionGuard = guardForField(field, actionGuard);
     var start = Date.now();
     var attempts = 0;
     var previousKey = (previousLabels || []).map(norm).join("|");
     var options = visibleWorkdayOptions(field);
     while (
       Date.now() - start < (timeoutMs || 2200) &&
-      !workdayFillCancelled()
+      !workdayFillCancelled(actionGuard)
     ) {
       attempts += 1;
       options = visibleWorkdayOptions(field);
@@ -1571,6 +1796,9 @@
         };
       }
       await sleep(120);
+      if (workdayFillCancelled(actionGuard)) {
+        break;
+      }
     }
     return {
       options: options,
@@ -1821,7 +2049,10 @@
     return markWorkdayProgressFallback(firstRealOption(options), reason);
   }
 
-  function insertTextOrSet(input, text) {
+  function insertTextOrSet(input, text, actionGuard) {
+    if (workdayFillCancelled(actionGuard)) {
+      return false;
+    }
     if (!input) {
       return false;
     }
@@ -1831,7 +2062,7 @@
       input.focus?.();
     }
     if (document.activeElement !== input) {
-      clickLikeUser(input);
+      clickLikeUser(input, actionGuard);
       try {
         input.focus?.({ preventScroll: true });
       } catch (_error) {
@@ -1841,7 +2072,10 @@
     if (document.activeElement !== input) {
       return false;
     }
-    setValue(input, "");
+    setValue(input, "", actionGuard);
+    if (workdayFillCancelled(actionGuard)) {
+      return false;
+    }
     input.dispatchEvent(
       new InputEvent("beforeinput", {
         bubbles: true,
@@ -1850,12 +2084,12 @@
         data: text,
       }),
     );
-    setValue(input, text);
+    setValue(input, text, actionGuard);
     return clean(input.value) === clean(text);
   }
 
-  async function typeSearchTextLikeUser(input, text) {
-    if (!input) {
+  async function typeSearchTextLikeUser(input, text, actionGuard) {
+    if (!input || workdayFillCancelled(actionGuard)) {
       return false;
     }
     try {
@@ -1864,7 +2098,7 @@
       input.focus?.();
     }
     if (document.activeElement !== input) {
-      clickLikeUser(input);
+      clickLikeUser(input, actionGuard);
       try {
         input.focus?.({ preventScroll: true });
       } catch (_error) {
@@ -1874,12 +2108,18 @@
     if (document.activeElement !== input) {
       return false;
     }
-    setValue(input, "");
+    setValue(input, "", actionGuard);
     await sleep(40);
+    if (workdayFillCancelled(actionGuard)) {
+      return false;
+    }
     var value = "";
     for (var index = 0; index < String(text || "").length; index++) {
       var char = String(text)[index];
-      if (document.activeElement !== input) {
+      if (
+        workdayFillCancelled(actionGuard) ||
+        document.activeElement !== input
+      ) {
         return false;
       }
       input.dispatchEvent(
@@ -1890,6 +2130,9 @@
           cancelable: true,
         }),
       );
+      if (workdayFillCancelled(actionGuard)) {
+        return false;
+      }
       input.dispatchEvent(
         new InputEvent("beforeinput", {
           bubbles: true,
@@ -1898,8 +2141,14 @@
           data: char,
         }),
       );
+      if (workdayFillCancelled(actionGuard)) {
+        return false;
+      }
       value += char;
-      setValue(input, value);
+      setValue(input, value, actionGuard);
+      if (workdayFillCancelled(actionGuard)) {
+        return false;
+      }
       input.dispatchEvent(
         new KeyboardEvent("keyup", {
           key: char,
@@ -1909,12 +2158,17 @@
         }),
       );
       await sleep(25);
+      if (workdayFillCancelled(actionGuard)) {
+        return false;
+      }
     }
     return true;
   }
 
-  async function openPopup(field, searchText) {
+  async function openPopup(field, searchText, actionGuard) {
+    actionGuard = guardForField(field, actionGuard);
     var el = field.element;
+    var traceAudit = field?._huntTraceAudit;
     var sourceField = isApplicationSourceField(el, field.descriptor);
     _huntLog("openPopup", {
       descriptor: String(field.descriptor || "").slice(0, 120),
@@ -1924,8 +2178,20 @@
       elTag: el?.tagName || "none",
       elId: el?.id || el?.getAttribute?.("data-automation-id") || "",
     });
-    if (!el) {
+    if (!el || workdayFillCancelled(actionGuard)) {
+      emitWorkdayEvent(traceAudit, "popup.rejected", field, {
+        status: "warn",
+        reason: "popup_control_missing",
+      });
       return false;
+    }
+    closeUnrelatedExpandedControls(field, actionGuard);
+    var existingOwnedPopup = workdayActiveListboxFor(el);
+    if (existingOwnedPopup) {
+      emitWorkdayEvent(traceAudit, "popup.reused", field, {
+        status: "info",
+        reason: "owned_popup_already_available",
+      });
     }
     var container = root.workdayUi?.nearestWorkdayField(el);
     var siblingInput =
@@ -1941,18 +2207,33 @@
       } catch (_error) {
         siblingInput.focus?.();
       }
-      clickLikeUser(siblingInput);
+      clickLikeUser(siblingInput, actionGuard);
       await sleep(80);
+      if (workdayFillCancelled(actionGuard)) return false;
       if (skillSearch) {
-        await typeSearchTextLikeUser(siblingInput, searchText);
-        keyOn(siblingInput, "Enter");
+        await typeSearchTextLikeUser(siblingInput, searchText, actionGuard);
+        if (workdayFillCancelled(actionGuard)) return false;
+        keyOn(siblingInput, "Enter", actionGuard);
         await sleep(380);
+        if (workdayFillCancelled(actionGuard)) return false;
       } else if (sourceField) {
-        insertTextOrSet(siblingInput, searchText);
+        insertTextOrSet(siblingInput, searchText, actionGuard);
       } else {
-        setValue(siblingInput, searchText);
+        setValue(siblingInput, searchText, actionGuard);
       }
       await sleep(260);
+      if (workdayFillCancelled(actionGuard)) return false;
+      emitWorkdayEvent(
+        traceAudit,
+        workdayActiveListboxFor(el) ? "popup.opened" : "popup.rejected",
+        field,
+        {
+          status: workdayActiveListboxFor(el) ? "ok" : "warn",
+          reason: workdayActiveListboxFor(el)
+            ? "owned_popup_opened"
+            : "owned_popup_not_found",
+        },
+      );
       return true;
     }
     try {
@@ -1960,49 +2241,82 @@
     } catch (_error) {
       el.focus?.();
     }
-    clickLikeUser(el.closest?.('[role="combobox"]') || el);
+    clickLikeUser(el.closest?.('[role="combobox"]') || el, actionGuard);
     await sleep(120);
+    if (workdayFillCancelled(actionGuard)) return false;
     if (searchText && field.uiModel === "combobox") {
       if (skillSearch) {
-        await typeSearchTextLikeUser(el, searchText);
-        keyOn(el, "Enter");
+        await typeSearchTextLikeUser(el, searchText, actionGuard);
+        if (workdayFillCancelled(actionGuard)) return false;
+        keyOn(el, "Enter", actionGuard);
         await sleep(380);
+        if (workdayFillCancelled(actionGuard)) return false;
       } else if (sourceField) {
-        insertTextOrSet(el, searchText);
+        insertTextOrSet(el, searchText, actionGuard);
       } else {
-        setValue(el, searchText);
+        setValue(el, searchText, actionGuard);
       }
       await sleep(220);
+      if (workdayFillCancelled(actionGuard)) return false;
     } else {
-      keyOn(el, "ArrowDown");
+      keyOn(el, "ArrowDown", actionGuard);
       await sleep(160);
+      if (workdayFillCancelled(actionGuard)) return false;
     }
+    emitWorkdayEvent(
+      traceAudit,
+      workdayActiveListboxFor(el) ? "popup.opened" : "popup.rejected",
+      field,
+      {
+        status: workdayActiveListboxFor(el) ? "ok" : "warn",
+        reason: workdayActiveListboxFor(el)
+          ? "owned_popup_opened"
+          : "owned_popup_not_found",
+      },
+    );
     return true;
   }
 
-  async function closePopup(field) {
+  async function closePopup(field, actionGuard) {
+    actionGuard = guardForField(field, actionGuard);
+    if (workdayFillCancelled(actionGuard)) {
+      return;
+    }
     var el = field.element;
+    var traceAudit = field?._huntTraceAudit;
     var active = document.activeElement;
     var activeListbox = workdayActiveListboxFor(el);
+    var ownerBeforeClose = popupOwner(field);
     for (var attempt = 0; attempt < 3; attempt++) {
-      keyOn(active, "Escape");
-      keyOn(activeListbox, "Escape");
-      keyOn(el, "Escape");
+      keyOn(active, "Escape", actionGuard);
+      keyOn(activeListbox, "Escape", actionGuard);
+      keyOn(el, "Escape", actionGuard);
       workdayFieldTextInputs(field).forEach(function (input) {
-        keyOn(input, "Escape");
+        keyOn(input, "Escape", actionGuard);
       });
-      keyOn(document.body, "Escape");
-      keyOn(document, "Escape");
+      keyOn(document.body, "Escape", actionGuard);
+      keyOn(document, "Escape", actionGuard);
       await sleep(40);
+      if (workdayFillCancelled(actionGuard)) return;
     }
     if (active?.blur && active !== document.body) {
       active.blur();
     }
-    blurWorkdayFieldInputs(field);
+    blurWorkdayFieldInputs(field, actionGuard);
     await sleep(120);
+    if (workdayFillCancelled(actionGuard)) return;
+    emitWorkdayEvent(traceAudit, "popup.closed", field, {
+      status: "info",
+      reason: "popup_close_dispatched",
+      popupOwner: ownerBeforeClose,
+    });
   }
 
   async function collectWorkdayOptions(field, context) {
+    var actionGuard = guardForField(field, context?.actionGuard);
+    if (workdayFillCancelled(actionGuard)) {
+      return [];
+    }
     var answer = context?.answer || {};
     var isSkillsSearch = isTechnicalSkillsField(field, answer);
     var committedState = workdayCommittedState(field);
@@ -2019,7 +2333,7 @@
         : optionMatches({ label: committedLabel }, answer.value) ||
           committedApplicationSourceMatches(committedState, answer, null))
     ) {
-      await closePopup(field);
+      await closePopup(field, actionGuard);
       root.audit?.pushFieldStep(context?.audit, context?.fieldAudit, {
         action: "workday_preselected_option_detected",
         step: "workday.option.collect",
@@ -2062,18 +2376,21 @@
       workdayKind: field.workday?.kind || "",
       searchText: String(searchText || "").slice(0, 80),
     });
-    await closePopup(field);
+    await closePopup(field, actionGuard);
     await sleep(40);
+    if (workdayFillCancelled(actionGuard)) return [];
     var previousLabels = searchText
       ? visibleWorkdayOptions(field).map(function (option) {
           return option.label;
         })
       : [];
-    await openPopup(field, searchText);
+    await openPopup(field, searchText, actionGuard);
+    if (workdayFillCancelled(actionGuard)) return [];
     var waitResult = await waitForWorkdayOptions(
       previousLabels,
       isSkillsSearch ? 2000 : searchText ? 3400 : 2200,
       field,
+      actionGuard,
     );
     var options = waitResult.options;
     if (field.workday?.kind === "phone_country_code") {
@@ -2084,9 +2401,10 @@
       });
     }
     if (!options.length && searchText && !isSkillsSearch) {
-      keyOn(field.element, "Enter");
+      keyOn(field.element, "Enter", actionGuard);
       await sleep(180);
-      waitResult = await waitForWorkdayOptions([], 2600, field);
+      if (workdayFillCancelled(actionGuard)) return [];
+      waitResult = await waitForWorkdayOptions([], 2600, field, actionGuard);
       options = waitResult.options;
       if (field.workday?.kind === "phone_country_code") {
         options = options.filter(function (candidate) {
@@ -2101,6 +2419,7 @@
         field,
         answer,
         options,
+        actionGuard,
       );
       if (scrollResult.options.length > options.length) {
         options = scrollResult.options;
@@ -2183,7 +2502,9 @@
     options,
     audit,
     fieldAudit,
+    actionGuard,
   ) {
+    actionGuard = guardForField(field, actionGuard);
     var sourceField = isApplicationSourceField(
       field?.element,
       field?.descriptor,
@@ -2221,8 +2542,14 @@
         selectedOption: category.label,
         optionElement: root.audit?.summarizeElement(category.element) || {},
       });
-      await clickWorkdayOption(category);
-      var waitResult = await waitForWorkdayOptions(beforeLabels, 2600, field);
+      await clickWorkdayOption(category, actionGuard);
+      if (workdayFillCancelled(actionGuard)) return null;
+      var waitResult = await waitForWorkdayOptions(
+        beforeLabels,
+        2600,
+        field,
+        actionGuard,
+      );
       var childOptions = waitResult.options.filter(function (candidate) {
         return !candidate.isCategory;
       });
@@ -2231,9 +2558,16 @@
         trustedCategory = await requestTrustedWorkdayClick(
           category,
           "category",
+          actionGuard,
         );
         if (trustedCategory?.ok) {
-          waitResult = await waitForWorkdayOptions(beforeLabels, 2600, field);
+          if (workdayFillCancelled(actionGuard)) return null;
+          waitResult = await waitForWorkdayOptions(
+            beforeLabels,
+            2600,
+            field,
+            actionGuard,
+          );
           childOptions = waitResult.options.filter(function (candidate) {
             return !candidate.isCategory;
           });
@@ -2244,9 +2578,16 @@
           field,
           trustedKeyboardSequenceForOption(category, field),
           "source_category_keyboard",
+          actionGuard,
         );
         if (trustedCategory?.ok) {
-          waitResult = await waitForWorkdayOptions(beforeLabels, 2600, field);
+          if (workdayFillCancelled(actionGuard)) return null;
+          waitResult = await waitForWorkdayOptions(
+            beforeLabels,
+            2600,
+            field,
+            actionGuard,
+          );
           childOptions = waitResult.options.filter(function (candidate) {
             return !candidate.isCategory;
           });
@@ -2283,6 +2624,7 @@
             field,
             answer,
             childOptions,
+            actionGuard,
           )
         : { options: childOptions, target: null, attempts: 0 };
       if (childScrollResult.options.length > childOptions.length) {
@@ -2301,10 +2643,11 @@
       if (target) {
         return target;
       }
-      await closePopup(field);
+      await closePopup(field, actionGuard);
       await sleep(80);
-      await openPopup(field, "");
-      await waitForWorkdayOptions([], 1600, field);
+      if (workdayFillCancelled(actionGuard)) return null;
+      await openPopup(field, "", actionGuard);
+      await waitForWorkdayOptions([], 1600, field, actionGuard);
     }
     return null;
   }
@@ -2409,7 +2752,9 @@
     field,
     answer,
     options,
+    actionGuard,
   ) {
+    actionGuard = guardForField(field, actionGuard);
     var listbox = workdayActiveListboxFor(field.element);
     var sourceField = isApplicationSourceField(
       field?.element,
@@ -2443,10 +2788,17 @@
         attempts: 0,
       };
     }
+    if (workdayFillCancelled(actionGuard)) {
+      return { options: allOptions, target: bestTarget, attempts: 0 };
+    }
     listbox.scrollTop = 0;
     listbox.dispatchEvent(new Event("scroll", { bubbles: true }));
     await sleep(80);
-    for (var attempt = 0; attempt < 80 && !workdayFillCancelled(); attempt++) {
+    for (
+      var attempt = 0;
+      attempt < 80 && !workdayFillCancelled(actionGuard);
+      attempt++
+    ) {
       var visibleOptions = visibleWorkdayOptions(field);
       allOptions = mergeWorkdayOptions(allOptions, visibleOptions);
       visibleTarget = preferredWorkdayOption(
@@ -2471,6 +2823,7 @@
           shouldScanForBetterSourceOption(field, answer, visibleTarget, listbox)
         ) {
           await sleep(30);
+          if (workdayFillCancelled(actionGuard)) break;
         } else {
           return {
             options: mergeWorkdayOptions(allOptions, [visibleTarget]),
@@ -2483,6 +2836,7 @@
       listbox.scrollTop += 260;
       listbox.dispatchEvent(new Event("scroll", { bubbles: true }));
       await sleep(90);
+      if (workdayFillCancelled(actionGuard)) break;
       if (Math.abs(listbox.scrollTop - before) < 1) {
         break;
       }
@@ -2496,9 +2850,9 @@
     };
   }
 
-  async function clickWorkdayOption(option) {
+  async function clickWorkdayOption(option, actionGuard) {
     var el = option?.element;
-    if (!el) {
+    if (!el || workdayFillCancelled(actionGuard)) {
       return false;
     }
     option._trustedClickPoint = workdayOptionClickPoint(
@@ -2508,19 +2862,25 @@
     if (!option?.isCategory) {
       var promptLeaf = workdayPromptLeafTarget(el);
       if (promptLeaf && promptLeaf !== el) {
-        triggerReactClickDeep(promptLeaf);
-        clickLikeUser(promptLeaf);
-        if (typeof promptLeaf.click === "function") {
+        triggerReactClickDeep(promptLeaf, actionGuard);
+        clickLikeUser(promptLeaf, actionGuard);
+        if (
+          !workdayFillCancelled(actionGuard) &&
+          typeof promptLeaf.click === "function"
+        ) {
           promptLeaf.click();
         }
         await sleep(120);
+        if (workdayFillCancelled(actionGuard)) {
+          return false;
+        }
       }
-      workdayClickOptionCommitTarget(el);
+      workdayClickOptionCommitTarget(el, actionGuard);
       if (promptLeaf && promptLeaf !== el) {
-        triggerReactClickDeep(el);
+        triggerReactClickDeep(el, actionGuard);
       }
       await sleep(350);
-      return true;
+      return !workdayFillCancelled(actionGuard);
     }
     if (option?.isCategory) {
       var rect = el.getBoundingClientRect?.();
@@ -2532,8 +2892,8 @@
             )
           : null;
       if (sideTarget && (sideTarget === el || el.contains(sideTarget))) {
-        clickLikeUser(sideTarget);
-        triggerReactClickDeep(sideTarget);
+        clickLikeUser(sideTarget, actionGuard);
+        triggerReactClickDeep(sideTarget, actionGuard);
       }
     }
     var nested =
@@ -2545,16 +2905,19 @@
     // promptLeafNode, and the visible radio onChange can be a no-op. Dispatch to
     // the prompt leaf first; only then use the native click fallback.
     var target = nested || workdayPromptLeafTarget(el);
-    triggerReactClickDeep(target || el);
+    triggerReactClickDeep(target || el, actionGuard);
     if (target !== el) {
-      triggerReactClickDeep(el);
+      triggerReactClickDeep(el, actionGuard);
     }
-    clickLikeUser(target || el);
-    if (typeof (target || el).click === "function") {
+    clickLikeUser(target || el, actionGuard);
+    if (
+      !workdayFillCancelled(actionGuard) &&
+      typeof (target || el).click === "function"
+    ) {
       (target || el).click();
     }
     await sleep(250);
-    return true;
+    return !workdayFillCancelled(actionGuard);
   }
 
   function scorePhoneCountryOption(option, answerText) {
@@ -2689,27 +3052,82 @@
     );
   }
 
-  async function settleWorkdayCommit(field, answer, option) {
+  function workdaySelectionEvidence(field, option) {
+    var optionElement = option?.element;
+    var selectedItemText = selectedWorkdayItemText(field);
+    if (selectedItemText) {
+      return true;
+    }
+    if (!optionElement || !optionElement.isConnected) {
+      return true;
+    }
+    var selectedNode =
+      optionElement.closest?.(
+        '[aria-selected="true"], [aria-checked="true"], [data-selected="true"]',
+      ) ||
+      optionElement.querySelector?.(
+        '[aria-selected="true"], [aria-checked="true"], [data-selected="true"]',
+      );
+    if (selectedNode) {
+      return true;
+    }
+    var className = String(
+      optionElement.className?.baseVal || optionElement.className || "",
+    )
+      .toLowerCase()
+      .replace(/[_-]/g, " ");
+    if (/\b(selected|checked|active)\b/.test(className)) {
+      return true;
+    }
+    var control = field?.element;
+    var backingValue = clean(control?.value || control?.dataset?.value || "");
+    if (
+      backingValue &&
+      optionMatches({ label: backingValue }, option?.label || option?.value || "")
+    ) {
+      return true;
+    }
+    return Boolean(
+      optionElement.id &&
+        [
+          control?.getAttribute?.("aria-activedescendant"),
+          control?.getAttribute?.("data-selected-id"),
+        ].includes(optionElement.id),
+    );
+  }
+
+  async function settleWorkdayCommit(field, answer, option, actionGuard) {
+    actionGuard = guardForField(field, actionGuard);
     var state = workdayCommittedState(field);
     var sourceField = isApplicationSourceField(
       field?.element,
       field?.descriptor,
     );
     var ok =
-      committedStateMatches(state, answer, option) ||
-      (sourceField && committedApplicationSourceMatches(state, answer, option));
+      (committedStateMatches(state, answer, option) ||
+        (sourceField &&
+          committedApplicationSourceMatches(state, answer, option))) &&
+      workdaySelectionEvidence(field, option);
     if (ok && !workdayFieldHasValidationError(field)) {
       return { ok: true, state: state };
     }
     var el = field?.element;
-    keyOn(el, "Enter");
-    keyOn(el, "Escape");
-    blurWorkdayFieldInputs(field);
+    if (workdayFillCancelled(actionGuard)) {
+      return { ok: false, state: state, reason: "operation_cancelled" };
+    }
+    keyOn(el, "Enter", actionGuard);
+    keyOn(el, "Escape", actionGuard);
+    blurWorkdayFieldInputs(field, actionGuard);
     await sleep(240);
+    if (workdayFillCancelled(actionGuard)) {
+      return { ok: false, state: state, reason: "operation_cancelled" };
+    }
     state = workdayCommittedState(field);
     ok =
-      committedStateMatches(state, answer, option) ||
-      (sourceField && committedApplicationSourceMatches(state, answer, option));
+      (committedStateMatches(state, answer, option) ||
+        (sourceField &&
+          committedApplicationSourceMatches(state, answer, option))) &&
+      workdaySelectionEvidence(field, option);
     if (ok && !workdayFieldHasValidationError(field)) {
       return { ok: true, state: state };
     }
@@ -2769,7 +3187,14 @@
     option,
     audit,
     fieldAudit,
+    actionGuard,
   }) {
+    actionGuard = guardForField(field, actionGuard);
+    if (workdayActionCancelled(actionGuard)) {
+      return workdayCancelledResult(field, actionGuard);
+    }
+    field._huntTraceAudit = audit;
+    field._huntTraceStartedAt = Date.now();
     _huntLog("fillWorkdayPopup_entry", {
       descriptor: String(field.descriptor || "").slice(0, 120),
       uiModel: field.uiModel || "",
@@ -2782,7 +3207,14 @@
       reason: "workday_popup_fill_started",
     });
     if (isTechnicalSkillsField(field, answer)) {
-      return fillTechnicalSkills({ field, answer, option, audit, fieldAudit });
+      return fillTechnicalSkills({
+        field,
+        answer,
+        option,
+        audit,
+        fieldAudit,
+        actionGuard,
+      });
     }
     var committedState = workdayCommittedState(field);
     var committedLabel = clean(
@@ -2793,7 +3225,7 @@
       committedStateMatches(committedState, answer, option) &&
       !workdayFieldHasValidationError(field)
     ) {
-      await closePopup(field);
+      await closePopup(field, actionGuard);
       return {
         ok: true,
         reason: option?.committedReason || "committed_workday_selection",
@@ -2808,7 +3240,7 @@
       committedApplicationSourceMatches(committedState, answer, option) &&
       !workdayFieldHasValidationError(field)
     ) {
-      await closePopup(field);
+      await closePopup(field, actionGuard);
       return {
         ok: true,
         reason: "preselected_workday_source",
@@ -2822,7 +3254,11 @@
       answer: answer,
       audit: audit,
       fieldAudit: fieldAudit,
+      actionGuard: actionGuard,
     });
+    if (workdayActionCancelled(actionGuard)) {
+      return workdayCancelledResult(field, actionGuard);
+    }
     var flatOptions = options.filter(function (candidate) {
       return !candidate.isCategory;
     });
@@ -2840,18 +3276,25 @@
         options,
         audit,
         fieldAudit,
+        actionGuard,
       );
+      if (workdayActionCancelled(actionGuard)) {
+        return workdayCancelledResult(field, actionGuard);
+      }
     }
     if (!target) {
       if (isSalaryField(field, answer) && committedLabel) {
-        await clearWorkdayField(field, audit, fieldAudit);
+        await clearWorkdayField(field, audit, fieldAudit, actionGuard);
+        if (workdayActionCancelled(actionGuard)) {
+          return workdayCancelledResult(field, actionGuard);
+        }
       }
       var postPopupState = workdayCommittedState(field);
       var postPopupLabel = clean(
         postPopupState.text || postPopupState.rawValue || "",
       );
       if (committedStateMatches(postPopupState, answer, option)) {
-        await closePopup(field);
+        await closePopup(field, actionGuard);
         return {
           ok: true,
           reason: "popup_empty_already_committed",
@@ -2872,7 +3315,7 @@
             : "Workday popup opened but no selectable option was visible.",
         options: [],
       });
-      await closePopup(field);
+      await closePopup(field, actionGuard);
       return {
         ok: false,
         reason: missingKind,
@@ -2912,6 +3355,9 @@
     var state = workdayCommittedState(field);
     var ok = false;
     if (shouldTryTrustedKeyboardFirst(target, field)) {
+      if (workdayActionCancelled(actionGuard)) {
+        return workdayCancelledResult(field, actionGuard);
+      }
       var initialListbox = workdayActiveListboxFor(field.element);
       try {
         initialListbox?.focus?.({ preventScroll: true });
@@ -2922,7 +3368,11 @@
         field,
         trustedKeyboardSequenceForOption(target, field),
         "option_keyboard",
+        actionGuard,
       );
+      if (workdayActionCancelled(actionGuard)) {
+        return workdayCancelledResult(field, actionGuard);
+      }
       if (trustedKeyboard?.ok) {
         emitWorkdayEvent(audit, "option.clicked", field, {
           status: "info",
@@ -2931,7 +3381,15 @@
           trustedKeyboard: trustedKeyboard,
         });
         await sleep(650);
-        var settled = await settleWorkdayCommit(field, answer, target);
+        if (workdayActionCancelled(actionGuard)) {
+          return workdayCancelledResult(field, actionGuard);
+        }
+        var settled = await settleWorkdayCommit(
+          field,
+          answer,
+          target,
+          actionGuard,
+        );
         state = settled.state;
         ok = skillField
           ? selectedTechnicalSkillMatches(field, target, answer)
@@ -2939,21 +3397,42 @@
       }
     }
     if (!ok) {
+      if (workdayActionCancelled(actionGuard)) {
+        return workdayCancelledResult(field, actionGuard);
+      }
       emitWorkdayEvent(audit, "option.clicked", field, {
         status: "info",
         reason: "workday_option_dom_click",
         selectedOption: target.label,
         optionElement: root.audit?.summarizeElement(target.element) || {},
       });
-      await clickWorkdayOption(target);
-      var clickSettled = await settleWorkdayCommit(field, answer, target);
+      await clickWorkdayOption(target, actionGuard);
+      if (workdayActionCancelled(actionGuard)) {
+        return workdayCancelledResult(field, actionGuard);
+      }
+      var clickSettled = await settleWorkdayCommit(
+        field,
+        answer,
+        target,
+        actionGuard,
+      );
       state = clickSettled.state;
       ok = skillField
         ? selectedTechnicalSkillMatches(field, target, answer)
         : clickSettled.ok;
     }
     if (!ok) {
-      trustedOption = await requestTrustedWorkdayClick(target, "option");
+      if (workdayActionCancelled(actionGuard)) {
+        return workdayCancelledResult(field, actionGuard);
+      }
+      trustedOption = await requestTrustedWorkdayClick(
+        target,
+        "option",
+        actionGuard,
+      );
+      if (workdayActionCancelled(actionGuard)) {
+        return workdayCancelledResult(field, actionGuard);
+      }
       if (trustedOption?.ok) {
         emitWorkdayEvent(audit, "option.clicked", field, {
           status: "info",
@@ -2962,7 +3441,15 @@
           trustedInput: trustedOption,
         });
         await sleep(550);
-        var trustedSettled = await settleWorkdayCommit(field, answer, target);
+        if (workdayActionCancelled(actionGuard)) {
+          return workdayCancelledResult(field, actionGuard);
+        }
+        var trustedSettled = await settleWorkdayCommit(
+          field,
+          answer,
+          target,
+          actionGuard,
+        );
         state = trustedSettled.state;
         ok = skillField
           ? selectedTechnicalSkillMatches(field, target, answer)
@@ -2979,7 +3466,11 @@
           field,
           trustedKeyboardSequenceForOption(target, field),
           "option_keyboard",
+          actionGuard,
         );
+        if (workdayActionCancelled(actionGuard)) {
+          return workdayCancelledResult(field, actionGuard);
+        }
         if (trustedKeyboard?.ok) {
           emitWorkdayEvent(audit, "option.clicked", field, {
             status: "info",
@@ -2988,10 +3479,14 @@
             trustedKeyboard: trustedKeyboard,
           });
           await sleep(650);
+          if (workdayActionCancelled(actionGuard)) {
+            return workdayCancelledResult(field, actionGuard);
+          }
           var keyboardSettled = await settleWorkdayCommit(
             field,
             answer,
             target,
+            actionGuard,
           );
           state = keyboardSettled.state;
           ok = skillField
@@ -3000,7 +3495,7 @@
         }
       }
     }
-    await closePopup(field);
+    await closePopup(field, actionGuard);
     emitWorkdayEvent(audit, "option.committed", field, {
       status: ok ? "ok" : "warn",
       reason: ok
@@ -3049,6 +3544,7 @@
     }
     return {
       ok: ok,
+      clicked: true,
       reason: ok ? "" : "workday_commit_not_verified",
       afterState: state,
       selectedOption: target.label,
@@ -3068,18 +3564,41 @@
     option,
     audit,
     fieldAudit,
+    actionGuard,
   }) {
+    actionGuard = guardForField(field, actionGuard);
+    if (workdayActionCancelled(actionGuard)) {
+      return workdayCancelledResult(field, actionGuard);
+    }
     var input = field.element;
     var country = citizenshipCountryFromAnswer(answer);
-    await closePopup(field);
-    var openResult = await openWorkdayPopupUntilOptions(field, "", 4);
+    await closePopup(field, actionGuard);
+    var openResult = await openWorkdayPopupUntilOptions(
+      field,
+      "",
+      4,
+      actionGuard,
+    );
+    if (workdayActionCancelled(actionGuard)) {
+      return workdayCancelledResult(field, actionGuard);
+    }
     var listbox = workdayActiveListboxFor(input);
     if (listbox) {
+      if (workdayActionCancelled(actionGuard)) {
+        return workdayCancelledResult(field, actionGuard);
+      }
       listbox.scrollTop = 0;
       listbox.dispatchEvent(new Event("scroll", { bubbles: true }));
       await sleep(120);
     }
-    var keyboardCountry = await keyboardOpenCitizenshipCountry(input, country);
+    if (workdayActionCancelled(actionGuard)) {
+      return workdayCancelledResult(field, actionGuard);
+    }
+    var keyboardCountry = await keyboardOpenCitizenshipCountry(
+      input,
+      country,
+      actionGuard,
+    );
     var countryResult = { match: null, attempts: 0 };
     var countryOption = null;
     if (!keyboardCountry?.ok) {
@@ -3091,6 +3610,7 @@
           });
         },
         80,
+        actionGuard,
       );
       countryOption = countryResult.match;
     }
@@ -3105,7 +3625,7 @@
           return candidate.label;
         }),
       });
-      await closePopup(field);
+      await closePopup(field, actionGuard);
       return {
         ok: false,
         reason: "workday_citizenship_country_missing",
@@ -3125,9 +3645,17 @@
       },
     });
     if (countryOption) {
-      await clickWorkdayOption(countryOption);
+      await clickWorkdayOption(countryOption, actionGuard);
     }
-    var childResult = await waitForWorkdayOptions([], 2600, field);
+    var childResult = await waitForWorkdayOptions(
+      [],
+      2600,
+      field,
+      actionGuard,
+    );
+    if (workdayActionCancelled(actionGuard)) {
+      return workdayCancelledResult(field, actionGuard);
+    }
     var childOptions = childResult.options.filter(function (candidate) {
       return !candidate.isCategory;
     });
@@ -3147,7 +3675,7 @@
           return candidate.label;
         }),
       });
-      await closePopup(field);
+      await closePopup(field, actionGuard);
       return {
         ok: false,
         reason: "workday_citizenship_status_missing",
@@ -3165,7 +3693,10 @@
         waitAttempts: childResult.attempts,
       },
     });
-    await clickWorkdayOption(target);
+    await clickWorkdayOption(target, actionGuard);
+    if (workdayActionCancelled(actionGuard)) {
+      return workdayCancelledResult(field, actionGuard);
+    }
     var childListbox = workdayActiveListboxFor(input);
     // Workday's terminal citizenship rows are checkbox-backed promptLeafNode
     // items. Direct checkbox/row clicks can only focus the row; Enter on the
@@ -3185,6 +3716,7 @@
         field,
         trustedKeyboardSequenceForOption(target, field),
         "citizenship_status_keyboard",
+        actionGuard,
       );
       root.audit?.pushFieldStep(audit, fieldAudit, {
         action: "workday_citizenship_status_keyboard",
@@ -3196,13 +3728,16 @@
       });
     }
     await sleep(500);
+    if (workdayActionCancelled(actionGuard)) {
+      return workdayCancelledResult(field, actionGuard);
+    }
     var state = workdayCommittedState(field);
     var invalid = field.element?.getAttribute?.("aria-invalid") === "true";
     var ok =
       !invalid &&
       (optionMatches({ label: state.text }, target.label) ||
         optionMatches({ label: state.rawValue }, target.label));
-    await closePopup(field);
+    await closePopup(field, actionGuard);
     if (!ok) {
       root.audit?.pushIssue(audit, fieldAudit, {
         kind: "workday_citizenship_status_commit_failed",
@@ -3231,7 +3766,12 @@
     option,
     audit,
     fieldAudit,
+    actionGuard,
   }) {
+    actionGuard = guardForField(field, actionGuard);
+    if (workdayActionCancelled(actionGuard)) {
+      return workdayCancelledResult(field, actionGuard);
+    }
     var input = field.element;
     var answerText = option?.label || answer?.value || "Canada (+1)";
     var committedState = workdayCommittedState(field);
@@ -3254,11 +3794,17 @@
         answerText: committedSelectionText,
       };
     }
-    clearSelectedItems(field, audit, fieldAudit);
-    await closePopup(field);
-    await openPopup(field, "");
+    clearSelectedItems(field, audit, fieldAudit, actionGuard);
+    await closePopup(field, actionGuard);
+    await openPopup(field, "", actionGuard);
+    if (workdayActionCancelled(actionGuard)) {
+      return workdayCancelledResult(field, actionGuard);
+    }
     var listbox = workdayActiveListboxFor(input);
     if (listbox) {
+      if (workdayActionCancelled(actionGuard)) {
+        return workdayCancelledResult(field, actionGuard);
+      }
       listbox.scrollTop = 0;
       listbox.dispatchEvent(new Event("scroll", { bubbles: true }));
       await sleep(120);
@@ -3270,14 +3816,20 @@
         break;
       }
       await sleep(60);
+      if (workdayActionCancelled(actionGuard)) {
+        return workdayCancelledResult(field, actionGuard);
+      }
     }
     if (!best) {
       var searchText = norm(answerText).includes("canada")
         ? "Canada"
         : answerText;
-      setValue(input, searchText);
-      await typeaheadOn(input, searchText);
+      setValue(input, searchText, actionGuard);
+      await typeaheadOn(input, searchText, actionGuard);
       await sleep(250);
+      if (workdayActionCancelled(actionGuard)) {
+        return workdayCancelledResult(field, actionGuard);
+      }
       best = bestVisiblePhoneCountryOption(input, answerText);
     }
     var scrollResult = { attempts: 0, match: best || null };
@@ -3288,6 +3840,7 @@
           return bestVisiblePhoneCountryOption(input, answerText);
         },
         80,
+        actionGuard,
       );
       best = scrollResult.match;
     }
@@ -3301,7 +3854,7 @@
           return optionLabel(candidate);
         }),
       });
-      await closePopup(field);
+      await closePopup(field, actionGuard);
       return {
         ok: false,
         reason: "workday_phone_country_code_missing",
@@ -3322,10 +3875,16 @@
         ),
       },
     });
-    workdayClickOptionCommitTarget(best.option);
+    workdayClickOptionCommitTarget(best.option, actionGuard);
     await sleep(350);
+    if (workdayActionCancelled(actionGuard)) {
+      return workdayCancelledResult(field, actionGuard);
+    }
     input?.blur?.();
     await sleep(250);
+    if (workdayActionCancelled(actionGuard)) {
+      return workdayCancelledResult(field, actionGuard);
+    }
     var state = workdayCommittedState(field);
     var selectedText = selectedWorkdayItemText(field);
     var ok =
@@ -3333,7 +3892,7 @@
       (selectedText &&
         (optionMatches({ label: state.text }, best.label) ||
           optionMatches({ label: state.rawValue }, best.label)));
-    await closePopup(field);
+    await closePopup(field, actionGuard);
     if (!ok) {
       root.audit?.pushIssue(audit, fieldAudit, {
         kind: "workday_phone_country_code_commit_failed",
@@ -3354,7 +3913,8 @@
     };
   }
 
-  function clearSelectedItems(field, audit, fieldAudit) {
+  function clearSelectedItems(field, audit, fieldAudit, actionGuard) {
+    actionGuard = guardForField(field, actionGuard);
     var container = root.workdayUi?.nearestWorkdayField(field.element);
     var selected = Array.from(
       container?.querySelectorAll?.(
@@ -3372,8 +3932,8 @@
       } catch (_error) {
         item.focus?.();
       }
-      keyOn(item, "Delete");
-      keyOn(item, "Backspace");
+      keyOn(item, "Delete", actionGuard);
+      keyOn(item, "Backspace", actionGuard);
       changed = true;
       root.audit?.pushFieldStep(audit, fieldAudit, {
         action: "workday_selected_item_clear",
@@ -3395,20 +3955,21 @@
     )
       .filter(visible)
       .forEach(function (button) {
-        clickLikeUser(button);
+        clickLikeUser(button, actionGuard);
         changed = true;
       });
     return changed;
   }
 
-  async function clearWorkdayField(field, audit, fieldAudit) {
-    var changed = clearSelectedItems(field, audit, fieldAudit);
+  async function clearWorkdayField(field, audit, fieldAudit, actionGuard) {
+    actionGuard = guardForField(field, actionGuard);
+    var changed = clearSelectedItems(field, audit, fieldAudit, actionGuard);
     if (field.element && "value" in field.element && field.element.value) {
-      setValue(field.element, "");
+      setValue(field.element, "", actionGuard);
       changed = true;
     }
     if (field.uiModel === "button_listbox") {
-      await openPopup(field, "");
+      await openPopup(field, "", actionGuard);
       var placeholder = visibleWorkdayOptions().find(function (candidate) {
         var label = norm(candidate.label);
         return (
@@ -3419,12 +3980,15 @@
         );
       });
       if (placeholder) {
-        await clickWorkdayOption(placeholder);
+        await clickWorkdayOption(placeholder, actionGuard);
         changed = true;
       }
-      await closePopup(field);
+      await closePopup(field, actionGuard);
     }
     await sleep(120);
+    if (workdayFillCancelled(actionGuard)) {
+      return workdayCancelledResult(field, actionGuard);
+    }
     var state = workdayCommittedState(field);
     var ok = root.fieldState.isEmptyState(state) || !clean(state.text);
     if (!ok && !changed) {
@@ -3453,13 +4017,23 @@
     field,
     context,
   ) {
-    if (
-      field?.workday?.kind &&
-      ["combobox", "button_listbox"].includes(field.uiModel)
-    ) {
-      return collectWorkdayOptions(field, context || {});
+    var previousGuard = field?._huntActionGuard || null;
+    if (field) {
+      field._huntActionGuard = context?.actionGuard || previousGuard;
     }
-    return root.optionCollector._workdayBaseCollectOptions(field, context);
+    try {
+      if (
+        field?.workday?.kind &&
+        ["combobox", "button_listbox"].includes(field.uiModel)
+      ) {
+        return await collectWorkdayOptions(field, context || {});
+      }
+      return await root.optionCollector._workdayBaseCollectOptions(field, context);
+    } finally {
+      if (field) {
+        field._huntActionGuard = previousGuard;
+      }
+    }
   };
 
   if (!root.fieldDrivers._workdayBaseFillField) {
@@ -3471,19 +4045,32 @@
 
   root.fieldDrivers.fillField = async function workdayFillField(args) {
     var field = args?.field;
-    if (
-      field?.workday?.kind &&
-      ["combobox", "button_listbox"].includes(field.uiModel)
-    ) {
-      if (isCanadianCitizenshipStatusField(field, args?.answer)) {
-        return fillCanadianCitizenshipStatus(args);
-      }
-      if (field.workday.kind === "phone_country_code") {
-        return fillPhoneCountryCode(args);
-      }
-      return fillWorkdayPopup(args);
+    var previousGuard = field?._huntActionGuard || null;
+    if (field) {
+      field._huntActionGuard = args?.actionGuard || previousGuard;
     }
-    return root.fieldDrivers._workdayBaseFillField(args);
+    try {
+      if (workdayActionCancelled(args?.actionGuard)) {
+        return workdayCancelledResult(field, args?.actionGuard);
+      }
+      if (
+        field?.workday?.kind &&
+        ["combobox", "button_listbox"].includes(field.uiModel)
+      ) {
+        if (isCanadianCitizenshipStatusField(field, args?.answer)) {
+          return await fillCanadianCitizenshipStatus(args);
+        }
+        if (field.workday.kind === "phone_country_code") {
+          return await fillPhoneCountryCode(args);
+        }
+        return await fillWorkdayPopup(args);
+      }
+      return await root.fieldDrivers._workdayBaseFillField(args);
+    } finally {
+      if (field) {
+        field._huntActionGuard = previousGuard;
+      }
+    }
   };
 
   root.fieldDrivers.clearField = async function workdayClearField(
@@ -3506,6 +4093,7 @@
     fillPhoneCountryCode: fillPhoneCountryCode,
     fillWorkdayPopup: fillWorkdayPopup,
     clearWorkdayField: clearWorkdayField,
+    typeSearchTextLikeUser: typeSearchTextLikeUser,
     visibleWorkdayOptions: visibleWorkdayOptions,
   };
 })();

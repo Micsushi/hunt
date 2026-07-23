@@ -7,19 +7,34 @@
     });
   }
 
-  function dispatchTextEvents(el, value) {
+  function actionCanMutate(actionGuard) {
+    return !actionGuard || actionGuard.canMutate();
+  }
+
+  function cancelledResult(field, actionGuard) {
+    return {
+      ok: false,
+      cancelled: true,
+      reason: actionGuard?.reason?.() || "operation_cancelled",
+      afterState: root.fieldState.readFieldState(field),
+    };
+  }
+
+  function dispatchTextEvents(el, value, actionGuard) {
+    if (!actionCanMutate(actionGuard)) return;
     var pieces =
       value && String(value).length > 1
         ? String(value).split("")
         : [String(value || "")];
     if (pieces.length > 1) {
       pieces.forEach(function (piece) {
-        dispatchTextEvents(el, piece);
+        dispatchTextEvents(el, piece, actionGuard);
       });
       return;
     }
     value = pieces[0];
     try {
+      if (!actionCanMutate(actionGuard)) return;
       el.dispatchEvent(
         new InputEvent("beforeinput", {
           bubbles: true,
@@ -32,6 +47,7 @@
       // InputEvent is not constructable in every embedded browser.
     }
     try {
+      if (!actionCanMutate(actionGuard)) return;
       el.dispatchEvent(
         new InputEvent("input", {
           bubbles: true,
@@ -43,10 +59,13 @@
     } catch (_error) {
       el.dispatchEvent(new Event("input", { bubbles: true }));
     }
-    el.dispatchEvent(new Event("change", { bubbles: true }));
+    if (actionCanMutate(actionGuard)) {
+      el.dispatchEvent(new Event("change", { bubbles: true }));
+    }
   }
 
-  function dispatchBlurEvents(el) {
+  function dispatchBlurEvents(el, actionGuard) {
+    if (!actionCanMutate(actionGuard)) return;
     el.dispatchEvent(new Event("blur", { bubbles: true }));
     try {
       el.dispatchEvent(new FocusEvent("focusout", { bubbles: true }));
@@ -72,7 +91,10 @@
     }
   }
 
-  function setValue(el, value) {
+  function setValue(el, value, actionGuard) {
+    if (!actionCanMutate(actionGuard)) {
+      return false;
+    }
     var u = window.__huntApplyUtils;
     var text = String(value ?? "");
     if (value === undefined || value === null) {
@@ -100,30 +122,30 @@
       if (setter) {
         setter.call(el, "");
         forceFrameworkValueChange(el, "");
-        dispatchTextEvents(el, "");
+        dispatchTextEvents(el, "", actionGuard);
         setter.call(el, text);
       } else {
         el.value = "";
-        dispatchTextEvents(el, "");
+        dispatchTextEvents(el, "", actionGuard);
         el.value = text;
       }
       forceFrameworkValueChange(el, text);
-      dispatchTextEvents(el, text);
-      dispatchBlurEvents(el);
+      dispatchTextEvents(el, text, actionGuard);
+      dispatchBlurEvents(el, actionGuard);
       if (String(el.value || "") === text) {
         return true;
       }
       if (text && u?.setElementValue) {
         var injectedOk = u.setElementValue(el, text, true);
-        dispatchBlurEvents(el);
+        dispatchBlurEvents(el, actionGuard);
         return Boolean(injectedOk);
       }
       return false;
     }
     if (el.isContentEditable || el.getAttribute?.("role") === "textbox") {
       el.textContent = text;
-      dispatchTextEvents(el, text);
-      dispatchBlurEvents(el);
+      dispatchTextEvents(el, text, actionGuard);
+      dispatchBlurEvents(el, actionGuard);
       return true;
     }
     if (u?.setElementValue) {
@@ -132,8 +154,8 @@
     return false;
   }
 
-  function clickLikeUser(el) {
-    if (!el) {
+  function clickLikeUser(el, actionGuard) {
+    if (!el || !actionCanMutate(actionGuard)) {
       return;
     }
     if (typeof el.scrollIntoView === "function") {
@@ -142,6 +164,7 @@
     var rect = el.getBoundingClientRect();
     ["pointerdown", "mousedown", "pointerup", "mouseup", "click"].forEach(
       function (type) {
+        if (!actionCanMutate(actionGuard)) return;
         var Ctor =
           window.PointerEvent && type.startsWith("pointer")
             ? window.PointerEvent
@@ -257,9 +280,12 @@
     );
   }
 
-  async function commitDatePartWithKeyboard(field) {
+  async function commitDatePartWithKeyboard(field, actionGuard) {
     var el = field?.element;
     if (!el || !dateSectionKind(field)) {
+      return false;
+    }
+    if (!actionCanMutate(actionGuard)) {
       return false;
     }
     try {
@@ -282,13 +308,13 @@
       });
       dispatchBlurEvents(el);
       await sleep(180);
-      return true;
+      return actionCanMutate(actionGuard);
     } catch (_error) {
       return false;
     }
   }
 
-  async function fillText(field, value, audit, fieldAudit) {
+  async function fillText(field, value, audit, fieldAudit, actionGuard) {
     var el = field.element;
     root.audit?.emitEvent(
       audit,
@@ -298,8 +324,14 @@
         reason: "text_driver_focus",
       }),
     );
-    var ok = setValue(el, value);
+    if (!actionCanMutate(actionGuard)) {
+      return cancelledResult(field, actionGuard);
+    }
+    var ok = setValue(el, value, actionGuard);
     await sleep(350);
+    if (!actionCanMutate(actionGuard)) {
+      return cancelledResult(field, actionGuard);
+    }
     var state = root.fieldState.readFieldState(field);
     var expected = String(value);
     var committed = String(state.rawValue || state.text || "");
@@ -311,7 +343,7 @@
     var datePartMatch = dateSectionCommitMatches(field, expected, committed);
     var datePartKeyboardCommit = false;
     if (ok && dateSectionKind(field) && !datePartMatch) {
-      datePartKeyboardCommit = await commitDatePartWithKeyboard(field);
+      datePartKeyboardCommit = await commitDatePartWithKeyboard(field, actionGuard);
       state = root.fieldState.readFieldState(field);
       committed = String(state.rawValue || state.text || "");
       datePartMatch = dateSectionCommitMatches(field, expected, committed);
@@ -327,9 +359,15 @@
       !textMatch &&
       ["text", "email", "tel", "url", "search", ""].includes(type)
     ) {
+      if (!actionCanMutate(actionGuard)) {
+        return cancelledResult(field, actionGuard);
+      }
       retriedTextCommit = true;
-      ok = setValue(el, value);
+      ok = setValue(el, value, actionGuard);
       await sleep(350);
+      if (!actionCanMutate(actionGuard)) {
+        return cancelledResult(field, actionGuard);
+      }
       state = root.fieldState.readFieldState(field);
       committed = String(state.rawValue || state.text || "");
       digitMatch =
@@ -356,11 +394,14 @@
     };
   }
 
-  async function fillTextWithFallbacks(field, audit, fieldAudit) {
+  async function fillTextWithFallbacks(field, audit, fieldAudit, actionGuard) {
     var candidates = ["Not applicable.", "N/A", "\u200b"];
     for (var i = 0; i < candidates.length; i++) {
       var value = candidates[i];
-      var result = await fillText(field, value, audit, fieldAudit);
+      if (!actionCanMutate(actionGuard)) {
+        return cancelledResult(field, actionGuard);
+      }
+      var result = await fillText(field, value, audit, fieldAudit, actionGuard);
       root.audit?.pushFieldStep(audit, fieldAudit, {
         action: "textbox_fallback_attempt",
         step: "driver.text.fallback",
@@ -394,7 +435,7 @@
     };
   }
 
-  async function fillSelect(field, option, audit) {
+  async function fillSelect(field, option, audit, actionGuard) {
     var el = field.element;
     var target = Array.from(el.options || []).find(function (candidate) {
       return (
@@ -415,10 +456,16 @@
         optionValue: option.value || "",
       }),
     );
+    if (!actionCanMutate(actionGuard)) {
+      return cancelledResult(field, actionGuard);
+    }
     el.value = target.value;
     el.dispatchEvent(new Event("input", { bubbles: true }));
     el.dispatchEvent(new Event("change", { bubbles: true }));
     await sleep(80);
+    if (!actionCanMutate(actionGuard)) {
+      return cancelledResult(field, actionGuard);
+    }
     var state = root.fieldState.readFieldState(field);
     return {
       ok: matchesText(state.text, option.label) || el.value === target.value,
@@ -428,7 +475,7 @@
     };
   }
 
-  async function fillRadioGroup(field, option, audit) {
+  async function fillRadioGroup(field, option, audit, actionGuard) {
     var target =
       option?.element && (field.radios || []).includes(option.element)
         ? option.element
@@ -460,11 +507,17 @@
         selectedOption: option.label || "",
       }),
     );
-    clickLikeUser(target);
+    if (!actionCanMutate(actionGuard)) {
+      return cancelledResult(field, actionGuard);
+    }
+    clickLikeUser(target, actionGuard);
     target.checked = true;
     target.dispatchEvent(new Event("input", { bubbles: true }));
     target.dispatchEvent(new Event("change", { bubbles: true }));
     await sleep(80);
+    if (!actionCanMutate(actionGuard)) {
+      return cancelledResult(field, actionGuard);
+    }
     return {
       ok: Boolean(target.checked),
       afterState: root.fieldState.readFieldState(field),
@@ -473,7 +526,7 @@
     };
   }
 
-  async function fillSegmentedButtonGroup(field, option, audit) {
+  async function fillSegmentedButtonGroup(field, option, audit, actionGuard) {
     var target =
       option?.element && (field.buttons || []).includes(option.element)
         ? option.element
@@ -498,8 +551,14 @@
         selectedOption: option.label || "",
       }),
     );
-    clickLikeUser(target);
+    if (!actionCanMutate(actionGuard)) {
+      return cancelledResult(field, actionGuard);
+    }
+    clickLikeUser(target, actionGuard);
     await sleep(160);
+    if (!actionCanMutate(actionGuard)) {
+      return cancelledResult(field, actionGuard);
+    }
     var state = root.fieldState.readFieldState(field);
     var ok =
       matchesText(state.text, option.label) ||
@@ -514,7 +573,7 @@
     };
   }
 
-  async function fillCheckbox(field, option, audit) {
+  async function fillCheckbox(field, option, audit, actionGuard) {
     var el = field.element;
     function checkboxOn() {
       return (
@@ -551,6 +610,9 @@
         el.parentElement,
       ].filter(Boolean);
       for (var i = 0; i < targets.length && !checkboxOn(); i++) {
+        if (!actionCanMutate(actionGuard)) {
+          return cancelledResult(field, actionGuard);
+        }
         root.audit?.emitEvent(
           audit,
           "option.clicked",
@@ -561,17 +623,26 @@
             clickIndex: i + 1,
           }),
         );
-        clickLikeUser(targets[i]);
+        clickLikeUser(targets[i], actionGuard);
         await sleep(120);
       }
       if (!checkboxOn()) {
+        if (!actionCanMutate(actionGuard)) {
+          return cancelledResult(field, actionGuard);
+        }
         setNativeChecked();
       }
       await sleep(250);
       if (!checkboxOn()) {
+        if (!actionCanMutate(actionGuard)) {
+          return cancelledResult(field, actionGuard);
+        }
         setNativeChecked();
         await sleep(120);
       }
+    }
+    if (!actionCanMutate(actionGuard)) {
+      return cancelledResult(field, actionGuard);
     }
     var state = root.fieldState.readFieldState(field);
     return {
@@ -582,7 +653,7 @@
     };
   }
 
-  async function fillPopupOption(field, option, audit, fieldAudit) {
+  async function fillPopupOption(field, option, audit, fieldAudit, actionGuard) {
     var el = field.element;
     root.audit?.emitEvent(
       audit,
@@ -592,10 +663,16 @@
         reason: "popup_opener_focus",
       }),
     );
-    clickLikeUser(el);
+    if (!actionCanMutate(actionGuard)) {
+      return cancelledResult(field, actionGuard);
+    }
+    clickLikeUser(el, actionGuard);
     await sleep(160);
+    if (!actionCanMutate(actionGuard)) {
+      return cancelledResult(field, actionGuard);
+    }
     if (field.uiModel === "combobox") {
-      setValue(el, option.label);
+      setValue(el, option.label, actionGuard);
       await sleep(220);
     }
     var options = await root.optionCollector.collectOptions(field, {
@@ -603,6 +680,9 @@
       audit: audit,
       fieldAudit: fieldAudit,
     });
+    if (!actionCanMutate(actionGuard)) {
+      return cancelledResult(field, actionGuard);
+    }
     var target = options.find(function (candidate) {
       return matchesText(candidate.label, option.label);
     });
@@ -623,8 +703,11 @@
         optionElement: root.audit?.summarizeElement(target.element) || {},
       }),
     );
-    clickLikeUser(target.element);
+    clickLikeUser(target.element, actionGuard);
     await sleep(180);
+    if (!actionCanMutate(actionGuard)) {
+      return cancelledResult(field, actionGuard);
+    }
     var state = root.fieldState.readFieldState(field);
     return {
       ok: matchesText(state.text, option.label) || state.selected,
@@ -639,6 +722,7 @@
     answer,
     activeApplyContext,
     defaultResume,
+    actionGuard,
     audit,
     fieldAudit,
   }) {
@@ -709,11 +793,17 @@
       reason: "hidden_file_input",
       element: root.audit?.summarizeElement(input) || {},
     });
+    if (!actionCanMutate(actionGuard)) {
+      return cancelledResult(field, actionGuard);
+    }
     var attachment = await u.attachResumeToFileInput(
       input,
       activeApplyContext || {},
       defaultResume || {},
     );
+    if (!actionCanMutate(actionGuard)) {
+      return cancelledResult(field, actionGuard);
+    }
     if (!attachment.attached) {
       return {
         ok: false,
@@ -722,6 +812,9 @@
       };
     }
     await sleep(800);
+    if (!actionCanMutate(actionGuard)) {
+      return cancelledResult(field, actionGuard);
+    }
     return {
       ok: true,
       reason: "resume_file_attached",
@@ -806,7 +899,7 @@
     };
   }
 
-  async function fillField({
+  async function fillFieldImpl({
     field,
     answer,
     option,
@@ -814,6 +907,7 @@
     fieldAudit,
     activeApplyContext,
     defaultResume,
+    actionGuard,
   }) {
     root.audit?.emitEvent(
       audit,
@@ -826,7 +920,13 @@
     var result = null;
     if (["text", "textarea"].includes(field.uiModel)) {
       if (answer.value !== "" && answer.value !== undefined) {
-        result = await fillText(field, String(answer.value), audit, fieldAudit);
+        result = await fillText(
+          field,
+          String(answer.value),
+          audit,
+          fieldAudit,
+          actionGuard,
+        );
         return result;
       }
       if (field.required && answer.answerType === "unknown") {
@@ -837,17 +937,17 @@
           reason:
             "Required unknown text question has no mapping/profile answer, so C3 used placeholder text fallback.",
         });
-        result = await fillTextWithFallbacks(field, audit, fieldAudit);
+        result = await fillTextWithFallbacks(field, audit, fieldAudit, actionGuard);
         return result;
       }
       if (field.required) {
-        result = await fillTextWithFallbacks(field, audit, fieldAudit);
+        result = await fillTextWithFallbacks(field, audit, fieldAudit, actionGuard);
         return result;
       }
       return { ok: false, reason: "missing_text_answer" };
     }
     if (field.uiModel === "select") {
-      result = await fillSelect(field, option, audit);
+      result = await fillSelect(field, option, audit, actionGuard);
       root.audit?.emitEvent(
         audit,
         "option.committed",
@@ -862,7 +962,7 @@
       return result;
     }
     if (field.uiModel === "radio_group") {
-      result = await fillRadioGroup(field, option, audit);
+      result = await fillRadioGroup(field, option, audit, actionGuard);
       root.audit?.emitEvent(
         audit,
         "option.committed",
@@ -877,7 +977,7 @@
       return result;
     }
     if (field.uiModel === "segmented_button_group") {
-      result = await fillSegmentedButtonGroup(field, option, audit);
+      result = await fillSegmentedButtonGroup(field, option, audit, actionGuard);
       root.audit?.emitEvent(
         audit,
         "option.committed",
@@ -894,7 +994,7 @@
       return result;
     }
     if (field.uiModel === "checkbox") {
-      result = await fillCheckbox(field, option, audit);
+      result = await fillCheckbox(field, option, audit, actionGuard);
       root.audit?.emitEvent(
         audit,
         "option.committed",
@@ -925,7 +1025,7 @@
           selectedOption: currentState.text || currentState.rawValue,
         };
       }
-      result = await fillPopupOption(field, option, audit, fieldAudit);
+      result = await fillPopupOption(field, option, audit, fieldAudit, actionGuard);
       root.audit?.emitEvent(
         audit,
         "option.committed",
@@ -947,9 +1047,14 @@
         defaultResume: defaultResume,
         audit: audit,
         fieldAudit: fieldAudit,
+        actionGuard: actionGuard,
       });
     }
     return { ok: false, reason: "unsupported_fill_ui" };
+  }
+
+  async function fillField(args) {
+    return await fillFieldImpl(args || {});
   }
 
   root.fieldDrivers = {

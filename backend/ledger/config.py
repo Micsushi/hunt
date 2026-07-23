@@ -75,6 +75,7 @@ def initialize_ledger_root(root: str | Path | None = None) -> Path:
                     "- Sessions: `c3/sessions/<YYYY-MM-DD>/<session_id>/manifest.json` and `session.jsonl`.",
                     "- Session probes: `c3/sessions/<YYYY-MM-DD>/<session_id>/probes/`.",
                     "- Session artifacts: `c3/sessions/<YYYY-MM-DD>/<session_id>/artifacts/`.",
+                    "- Session operations: `c3/sessions/<YYYY-MM-DD>/<session_id>/operations/<operation_id>/events.jsonl` plus atomic `operation.json` projection.",
                     "- Global events: `c3/global/system.jsonl` or `c3/global/human.jsonl`.",
                     "",
                     "Common lookups:",

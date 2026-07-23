@@ -103,6 +103,10 @@ class PostgresLeaseStore:
         self._update_lease(lease)
         return self._record_event_for_lease("lease.released", lease, actor)
 
+    def get_lease(self, lease_id: str) -> LeaseRecord:
+        """Return a lease regardless of status for crash recovery checks."""
+        return self._require_lease(lease_id)
+
     def expire(self, lease_id: str, actor: Actor | None = None) -> dict:
         lease = self._require_lease(lease_id)
         if lease.status != LeaseStatus.ACTIVE:

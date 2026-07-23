@@ -161,6 +161,16 @@ class LeaseActionRequest(BaseModel):
     reason: str = ""
 
 
+class LaneTerminalRequest(BaseModel):
+    agent_id: str = Field(min_length=1)
+    session_id: str = Field(min_length=1)
+    lease_id: str = Field(min_length=1)
+    event_type: Literal["lane.finished", "lane.failed"]
+    reason: str = Field(min_length=1)
+    result: dict[str, Any] = Field(default_factory=dict)
+    actor: ActorPayload
+
+
 class ProbeFileCreate(BaseModel):
     component: str = "c3"
     agent_id: str = ""

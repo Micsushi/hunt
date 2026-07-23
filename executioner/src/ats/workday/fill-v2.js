@@ -16,8 +16,9 @@ export function createWorkdayFillV2Function() {
     const timeoutMs = Number(
       context?.settings?.workdayFillReturnTimeoutMs || 60000,
     );
+    let timeoutHandle = null;
     const timeoutResult = new Promise((resolve) => {
-      setTimeout(() => {
+      timeoutHandle = setTimeout(() => {
         const clean = (value) =>
           String(value || "")
             .replace(/\s+/g, " ")
@@ -161,9 +162,42 @@ export function createWorkdayFillV2Function() {
         });
       }, timeoutMs);
     });
-    return Promise.race([
-      window.__huntV2.fieldPipeline.runHuntV2Fill(fillContext),
-      timeoutResult,
+    const fillPromise = window.__huntV2.fieldPipeline.runHuntV2Fill(fillContext);
+    const first = await Promise.race([
+      fillPromise.then((result) => ({ kind: "fill", result })),
+      timeoutResult.then((result) => ({ kind: "timeout", result })),
     ]);
+    if (first.kind === "fill") {
+      if (timeoutHandle) {
+        clearTimeout(timeoutHandle);
+      }
+      return first.result;
+    }
+
+    const reason = "workday_fill_return_timeout";
+    const fillRunId = context?.fillRunId || "";
+    const cancelledIds = Array.isArray(window.__huntApplyCancelledFillRunIds)
+      ? window.__huntApplyCancelledFillRunIds
+      : [];
+    if (fillRunId && !cancelledIds.includes(fillRunId)) {
+      cancelledIds.push(fillRunId);
+    }
+    window.__huntApplyCancelledFillRunIds = cancelledIds.slice(-25);
+    window.__huntApplyCancelFillRunId = fillRunId;
+    window.__huntApplyFillCancelReasons = Object.assign(
+      {},
+      window.__huntApplyFillCancelReasons || {},
+      fillRunId ? { [fillRunId]: reason } : {},
+    );
+    try {
+      chrome?.runtime?.sendMessage?.({
+        type: "hunt.apply.cancel_fill",
+        payload: { fillRunId, reason },
+      });
+    } catch (_error) {
+      // Page-side cancellation still prevents further Workday mutations.
+    }
+    fillPromise.catch(() => null);
+    return first.result;
   };
 }
