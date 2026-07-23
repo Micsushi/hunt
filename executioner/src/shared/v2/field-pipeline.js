@@ -47,9 +47,9 @@
     var first = await Promise.race([
       observed,
       new Promise(function (resolve) {
-      timer = setTimeout(function () {
+        timer = setTimeout(function () {
           resolve({ kind: "timeout" });
-      }, timeoutMs);
+        }, timeoutMs);
       }),
     ]);
     if (timer) {
@@ -68,9 +68,12 @@
     var unwind = await Promise.race([
       observed,
       new Promise(function (resolve) {
-        unwindTimer = setTimeout(function () {
-          resolve({ kind: "unwind_timeout" });
-        }, Math.max(100, Number(unwindTimeoutMs || 2000)));
+        unwindTimer = setTimeout(
+          function () {
+            resolve({ kind: "unwind_timeout" });
+          },
+          Math.max(100, Number(unwindTimeoutMs || 2000)),
+        );
       }),
     ]);
     if (unwindTimer) {
@@ -654,11 +657,11 @@
         operationId: audit?.operationId || "",
         runId: audit?.runId || "",
         fieldId: field?.fieldId || "",
-        label: String(field?.descriptor || el?.getAttribute?.("aria-label") || "").slice(
-          0,
-          240,
-        ),
-        kind: field?.workday?.kind || field?.uiModel || field?.kind || "unknown",
+        label: String(
+          field?.descriptor || el?.getAttribute?.("aria-label") || "",
+        ).slice(0, 240),
+        kind:
+          field?.workday?.kind || field?.uiModel || field?.kind || "unknown",
         required: Boolean(field?.required),
         attempt: 1,
         driver: field?.workday?.kind ? "workday-v2" : "field-driver-v2",
@@ -988,7 +991,11 @@
         reason: fieldAudit.noOptionReason || "no_matching_option",
       };
       if (actionGuard?.terminalClaimed?.()) {
-        return { filled: false, fieldAudit: fieldAudit, terminalSuppressed: true };
+        return {
+          filled: false,
+          fieldAudit: fieldAudit,
+          terminalSuppressed: true,
+        };
       }
       actionGuard?.claimTerminal?.();
       var noOptionElapsedMs = Math.max(0, Date.now() - traceStartedAt);
@@ -1021,7 +1028,11 @@
       fieldAudit.afterState =
         fillResult.afterState || root.fieldState.readFieldState(field);
       fieldAudit.filled = false;
-      return { filled: false, fieldAudit: fieldAudit, terminalSuppressed: true };
+      return {
+        filled: false,
+        fieldAudit: fieldAudit,
+        terminalSuppressed: true,
+      };
     }
     actionGuard?.claimTerminal?.();
     fieldAudit.afterState =
@@ -1043,25 +1054,21 @@
         fillResult.reason ||
         (fillResult.ok ? "commit_verified" : "commit_not_verified"),
     });
-    var terminalTraceType = fillResult.ok && actionStillCurrent
-      ? "field.action.completed"
-      : fillResult.cancelled ||
-          actionGuard?.canMutate?.() === false ||
-          fillResult.reason === "operation_cancelled"
-        ? "field.action.cancelled"
-        : "field.action.failed";
-    emitStructuredFieldTrace(
-      audit,
-      terminalTraceType,
-      field,
-      {
-        elapsedMs: traceElapsedMs,
-        committed: Boolean(fillResult.ok && actionStillCurrent),
-        reasonCode:
-          fillResult.reason ||
-          (fillResult.ok ? "field_action_completed" : "field_action_failed"),
-      },
-    );
+    var terminalTraceType =
+      fillResult.ok && actionStillCurrent
+        ? "field.action.completed"
+        : fillResult.cancelled ||
+            actionGuard?.canMutate?.() === false ||
+            fillResult.reason === "operation_cancelled"
+          ? "field.action.cancelled"
+          : "field.action.failed";
+    emitStructuredFieldTrace(audit, terminalTraceType, field, {
+      elapsedMs: traceElapsedMs,
+      committed: Boolean(fillResult.ok && actionStillCurrent),
+      reasonCode:
+        fillResult.reason ||
+        (fillResult.ok ? "field_action_completed" : "field_action_failed"),
+    });
     root.audit.pushFieldStep(audit, fieldAudit, {
       action: "field_fill_result",
       step: "driver.fill",
@@ -1199,7 +1206,9 @@
     });
 
     var fields = root.uiInspector.sortActionableFields
-      ? root.uiInspector.sortActionableFields(root.uiInspector.collectCandidates())
+      ? root.uiInspector.sortActionableFields(
+          root.uiInspector.collectCandidates(),
+        )
       : root.uiInspector.collectCandidates();
     fields.forEach(function (field) {
       emitStructuredFieldTrace(audit, "field.discovered", field, {

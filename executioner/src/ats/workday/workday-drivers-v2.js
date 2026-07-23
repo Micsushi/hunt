@@ -133,8 +133,7 @@
       (actionGuard && !actionGuard.canMutate()) ||
       window.__huntApplyCancelAllFills ||
       (window.__huntApplyCancelFillRunId &&
-        window.__huntApplyCancelFillRunId ===
-          activeRunId) ||
+        window.__huntApplyCancelFillRunId === activeRunId) ||
       (activeRunId && cancelledIds.includes(activeRunId)),
     );
   }
@@ -1489,7 +1488,12 @@
     return { ok: true, reason: "synthetic_key_sequence_dispatched" };
   }
 
-  async function requestOrDispatchWorkdayKeys(field, keys, purpose, actionGuard) {
+  async function requestOrDispatchWorkdayKeys(
+    field,
+    keys,
+    purpose,
+    actionGuard,
+  ) {
     actionGuard = guardForField(field, actionGuard);
     if (!keys?.length) {
       return { ok: false, reason: "empty_key_sequence" };
@@ -3083,16 +3087,19 @@
     var backingValue = clean(control?.value || control?.dataset?.value || "");
     if (
       backingValue &&
-      optionMatches({ label: backingValue }, option?.label || option?.value || "")
+      optionMatches(
+        { label: backingValue },
+        option?.label || option?.value || "",
+      )
     ) {
       return true;
     }
     return Boolean(
       optionElement.id &&
-        [
-          control?.getAttribute?.("aria-activedescendant"),
-          control?.getAttribute?.("data-selected-id"),
-        ].includes(optionElement.id),
+      [
+        control?.getAttribute?.("aria-activedescendant"),
+        control?.getAttribute?.("data-selected-id"),
+      ].includes(optionElement.id),
     );
   }
 
@@ -3647,12 +3654,7 @@
     if (countryOption) {
       await clickWorkdayOption(countryOption, actionGuard);
     }
-    var childResult = await waitForWorkdayOptions(
-      [],
-      2600,
-      field,
-      actionGuard,
-    );
+    var childResult = await waitForWorkdayOptions([], 2600, field, actionGuard);
     if (workdayActionCancelled(actionGuard)) {
       return workdayCancelledResult(field, actionGuard);
     }
@@ -4028,7 +4030,10 @@
       ) {
         return await collectWorkdayOptions(field, context || {});
       }
-      return await root.optionCollector._workdayBaseCollectOptions(field, context);
+      return await root.optionCollector._workdayBaseCollectOptions(
+        field,
+        context,
+      );
     } finally {
       if (field) {
         field._huntActionGuard = previousGuard;

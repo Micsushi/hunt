@@ -162,7 +162,8 @@ export function createWorkdayFillV2Function() {
         });
       }, timeoutMs);
     });
-    const fillPromise = window.__huntV2.fieldPipeline.runHuntV2Fill(fillContext);
+    const fillPromise =
+      window.__huntV2.fieldPipeline.runHuntV2Fill(fillContext);
     const first = await Promise.race([
       fillPromise.then((result) => ({ kind: "fill", result })),
       timeoutResult.then((result) => ({ kind: "timeout", result })),

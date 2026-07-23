@@ -343,7 +343,10 @@
     var datePartMatch = dateSectionCommitMatches(field, expected, committed);
     var datePartKeyboardCommit = false;
     if (ok && dateSectionKind(field) && !datePartMatch) {
-      datePartKeyboardCommit = await commitDatePartWithKeyboard(field, actionGuard);
+      datePartKeyboardCommit = await commitDatePartWithKeyboard(
+        field,
+        actionGuard,
+      );
       state = root.fieldState.readFieldState(field);
       committed = String(state.rawValue || state.text || "");
       datePartMatch = dateSectionCommitMatches(field, expected, committed);
@@ -653,7 +656,13 @@
     };
   }
 
-  async function fillPopupOption(field, option, audit, fieldAudit, actionGuard) {
+  async function fillPopupOption(
+    field,
+    option,
+    audit,
+    fieldAudit,
+    actionGuard,
+  ) {
     var el = field.element;
     root.audit?.emitEvent(
       audit,
@@ -937,11 +946,21 @@
           reason:
             "Required unknown text question has no mapping/profile answer, so C3 used placeholder text fallback.",
         });
-        result = await fillTextWithFallbacks(field, audit, fieldAudit, actionGuard);
+        result = await fillTextWithFallbacks(
+          field,
+          audit,
+          fieldAudit,
+          actionGuard,
+        );
         return result;
       }
       if (field.required) {
-        result = await fillTextWithFallbacks(field, audit, fieldAudit, actionGuard);
+        result = await fillTextWithFallbacks(
+          field,
+          audit,
+          fieldAudit,
+          actionGuard,
+        );
         return result;
       }
       return { ok: false, reason: "missing_text_answer" };
@@ -977,7 +996,12 @@
       return result;
     }
     if (field.uiModel === "segmented_button_group") {
-      result = await fillSegmentedButtonGroup(field, option, audit, actionGuard);
+      result = await fillSegmentedButtonGroup(
+        field,
+        option,
+        audit,
+        actionGuard,
+      );
       root.audit?.emitEvent(
         audit,
         "option.committed",
@@ -1025,7 +1049,13 @@
           selectedOption: currentState.text || currentState.rawValue,
         };
       }
-      result = await fillPopupOption(field, option, audit, fieldAudit, actionGuard);
+      result = await fillPopupOption(
+        field,
+        option,
+        audit,
+        fieldAudit,
+        actionGuard,
+      );
       root.audit?.emitEvent(
         audit,
         "option.committed",

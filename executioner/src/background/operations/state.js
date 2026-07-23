@@ -30,7 +30,9 @@ export function createOperationStateStore({
   const configuredRetentionMs = Number(terminalRetentionMs);
   const retentionMs = Math.max(
     1,
-    Number.isFinite(configuredRetentionMs) ? configuredRetentionMs : 5 * 60 * 1000,
+    Number.isFinite(configuredRetentionMs)
+      ? configuredRetentionMs
+      : 5 * 60 * 1000,
   );
 
   function operationKey(tabId, operationId, fillRunId) {
@@ -44,8 +46,8 @@ export function createOperationStateStore({
   function matches(current, operationId, fillRunId) {
     return Boolean(
       current &&
-        current.operationId === String(operationId || "") &&
-        current.fillRunId === String(fillRunId || ""),
+      current.operationId === String(operationId || "") &&
+      current.fillRunId === String(fillRunId || ""),
     );
   }
 
@@ -83,7 +85,11 @@ export function createOperationStateStore({
     while (terminalOperationKeys.length) {
       const key = terminalOperationKeys[0];
       const state = byOperation.get(key);
-      if (state && timestamp - Number(state.completedAt || state.updatedAt || 0) < retentionMs) {
+      if (
+        state &&
+        timestamp - Number(state.completedAt || state.updatedAt || 0) <
+          retentionMs
+      ) {
         break;
       }
       terminalOperationKeys.shift();
@@ -130,8 +136,8 @@ export function createOperationStateStore({
       const current = byTab.get(tabId);
       return Boolean(
         matches(current, operationId, fillRunId) &&
-          current.active &&
-          !current.cancelRequested,
+        current.active &&
+        !current.cancelRequested,
       );
     },
 
@@ -225,7 +231,10 @@ export function createOperationStateStore({
       if (!current) {
         return { ok: true, cleared: false };
       }
-      if ((operationId || fillRunId) && !matches(current, operationId, fillRunId)) {
+      if (
+        (operationId || fillRunId) &&
+        !matches(current, operationId, fillRunId)
+      ) {
         const exact = exactState(tabId, operationId, fillRunId);
         if (!exact) {
           return staleResult(current);

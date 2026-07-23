@@ -1197,10 +1197,10 @@ function createC3WorkflowDetectionFunction() {
     }).length;
     var hasCredentialLoginForm = Boolean(
       emailCount &&
-        passwordCount === 1 &&
-        document.querySelector(
-          '[data-automation-id="signInSubmitButton"], form[data-automation-id="signInFormo"]',
-        ),
+      passwordCount === 1 &&
+      document.querySelector(
+        '[data-automation-id="signInSubmitButton"], form[data-automation-id="signInFormo"]',
+      ),
     );
     var buttonItems = Array.from(
       document.querySelectorAll("a, button, [role='button']"),
@@ -2367,10 +2367,10 @@ function createAuthPageProbeFunction() {
     }).length;
     var hasCredentialLoginForm = Boolean(
       emailCount &&
-        passwordCount === 1 &&
-        document.querySelector(
-          '[data-automation-id="signInSubmitButton"], form[data-automation-id="signInFormo"]',
-        ),
+      passwordCount === 1 &&
+      document.querySelector(
+        '[data-automation-id="signInSubmitButton"], form[data-automation-id="signInFormo"]',
+      ),
     );
     var buttons = Array.from(
       document.querySelectorAll(
@@ -2424,16 +2424,16 @@ function createAuthPageProbeFunction() {
       ? "verify_email"
       : hasCredentialLoginForm
         ? "login"
-      : hasLoginFailure && hasCreateAccount
-        ? "signup"
-        : hasCreateAccount && passwordCount >= 2
+        : hasLoginFailure && hasCreateAccount
           ? "signup"
-          : hasSignIn ||
-              hasEmailSigninChoice ||
-              (isWorkdayLoginPath && hasSignIn) ||
-              passwordCount
-            ? "login"
-            : "unknown";
+          : hasCreateAccount && passwordCount >= 2
+            ? "signup"
+            : hasSignIn ||
+                hasEmailSigninChoice ||
+                (isWorkdayLoginPath && hasSignIn) ||
+                passwordCount
+              ? "login"
+              : "unknown";
     var authUiState =
       authState === "verify_email"
         ? "email_link_verification"
@@ -4387,8 +4387,7 @@ function createPageSnapshotFunction() {
             ? {
                 tag: String(control.tagName || "").toLowerCase(),
                 selector: describeValidationElement(control),
-                automationId:
-                  control.getAttribute("data-automation-id") || "",
+                automationId: control.getAttribute("data-automation-id") || "",
                 fieldId: control.id || "",
                 name: control.getAttribute("name") || "",
                 role: control.getAttribute("role") || "",
@@ -4418,9 +4417,11 @@ function createPageSnapshotFunction() {
       seen[key] = true;
       return true;
     });
-    var visibleValidationErrors = visibleValidationDetails.map(function (detail) {
-      return detail.message;
-    });
+    var visibleValidationErrors = visibleValidationDetails.map(
+      function (detail) {
+        return detail.message;
+      },
+    );
     return {
       href: window.location.href,
       title: document.title,
@@ -7066,9 +7067,10 @@ function createAuthPageWalkStateController() {
     return (Array.isArray(fields) ? fields : [])
       .slice(0, 4)
       .map((field) => {
-        const source = ["profile:accountEmail", "profile:accountPassword"].includes(
-          field?.source,
-        )
+        const source = [
+          "profile:accountEmail",
+          "profile:accountPassword",
+        ].includes(field?.source)
           ? field.source
           : "";
         const selector = compactAuthActionCandidate({

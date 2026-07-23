@@ -540,7 +540,8 @@
 
   function sortActionableFields(fields) {
     return (fields || []).slice().sort(function (a, b) {
-      var requiredOrder = Number(Boolean(b.required)) - Number(Boolean(a.required));
+      var requiredOrder =
+        Number(Boolean(b.required)) - Number(Boolean(a.required));
       if (requiredOrder) {
         return requiredOrder;
       }
@@ -549,8 +550,12 @@
       if (aTop !== bTop) {
         return aTop - bTop;
       }
-      var aLeft = Number.isFinite(Number(a.rect?.left)) ? Number(a.rect.left) : 0;
-      var bLeft = Number.isFinite(Number(b.rect?.left)) ? Number(b.rect.left) : 0;
+      var aLeft = Number.isFinite(Number(a.rect?.left))
+        ? Number(a.rect.left)
+        : 0;
+      var bLeft = Number.isFinite(Number(b.rect?.left))
+        ? Number(b.rect.left)
+        : 0;
       return aLeft - bLeft;
     });
   }

@@ -35,10 +35,10 @@ export function classifyWorkdayRuntimeProbe(probe = {}) {
   );
   const empty = Boolean(
     probe.ok !== false &&
-      !probe.loadingIndicatorVisible &&
-      !hasStep &&
-      visibleSurfaceCount === 0 &&
-      (rootEmpty || !hasRenderedText),
+    !probe.loadingIndicatorVisible &&
+    !hasStep &&
+    visibleSurfaceCount === 0 &&
+    (rootEmpty || !hasRenderedText),
   );
 
   if (empty) {
