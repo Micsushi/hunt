@@ -425,3 +425,6 @@ time out, unless there is a safety issue. The final report should include:
 - C3 changes made or next generic changes, grouped as pass-to-Review blockers
   first and answer-quality/audit-only issues second
 - artifacts directory
+
+The consolidated 2026-07-22 twenty-five-lane failure-to-Review analysis and
+remediation map is in `docs/C3_25_JOB_REVIEW_REMEDIATION.md`.
