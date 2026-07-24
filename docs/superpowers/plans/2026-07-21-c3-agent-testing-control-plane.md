@@ -138,6 +138,7 @@ Cover the exact state set and transition table:
 NONTERMINAL = {"queued", "running", "slow", "suspected_stall", "stalled", "cancelling"}
 TERMINAL = {"completed", "failed", "cancelled", "orphaned"}
 
+
 def test_completed_operation_cannot_return_to_running():
     with pytest.raises(InvalidOperationTransition):
         validate_transition("completed", "running")
