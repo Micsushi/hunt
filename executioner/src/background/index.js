@@ -1564,9 +1564,72 @@ function createClickAuthPrimaryActionFunction() {
       return Boolean(!isNativeAuthCandidate(el) && interactiveAuthAncestor(el));
     }
 
+    function normalizedAuthAutomationId(el) {
+      return lower(el?.getAttribute?.("data-automation-id") || "").replace(
+        /[^a-z0-9]+/g,
+        "",
+      );
+    }
+
+    function isExactWorkdaySubmitProxy(el) {
+      if (
+        normalizedAuthAutomationId(el) !== "clickfilter" ||
+        el.getAttribute("role") !== "button"
+      ) {
+        return false;
+      }
+      if (
+        !inferredCredentialForm &&
+        !["credential_form", "signup_form"].includes(authUiState)
+      ) {
+        return false;
+      }
+      var wrapper = el.closest?.('[data-automation-id="noCaptchaWrapper"]');
+      if (!wrapper || wrapper === el) {
+        return false;
+      }
+      var expectedSubmitId =
+        authState === "signup"
+          ? "createaccountsubmitbutton"
+          : ["login", "signin"].includes(authState)
+            ? "signinsubmitbutton"
+            : "";
+      if (!expectedSubmitId) {
+        return false;
+      }
+      var label = lower(labelFor(el));
+      var expectedLabel =
+        expectedSubmitId === "createaccountsubmitbutton"
+          ? /^(create account|sign up|signup|register|submit)$/
+          : /^(sign in|log in|login|submit)$/;
+      if (!expectedLabel.test(label)) {
+        return false;
+      }
+      var nativeSubmitters =
+        typeof wrapper.querySelectorAll === "function"
+          ? Array.from(
+              wrapper.querySelectorAll(
+                "button, input[type='submit'], input[type='image']",
+              ),
+            )
+          : [];
+      return nativeSubmitters.some(function (submitter) {
+        return (
+          isNativeAuthCandidate(submitter) &&
+          normalizedAuthAutomationId(submitter) === expectedSubmitId
+        );
+      });
+    }
+
     function isUnsafeAuthActionContainer(el, metadata) {
       if (isInteractiveAuthDescendant(el)) {
         return true;
+      }
+      // Workday renders the visible trusted control as a role=button proxy
+      // over a hidden native submitter. The exact proxy is the action; the
+      // surrounding noCaptchaWrapper remains an unsafe container.
+      if (isExactWorkdaySubmitProxy(el)) {
+        return false;
       }
       var tagName = String(el.tagName || "").toLowerCase();
       var type = String(el.getAttribute("type") || "").toLowerCase();
@@ -1593,6 +1656,31 @@ function createClickAuthPrimaryActionFunction() {
       }
       var rect = el.getBoundingClientRect();
       return rect.width >= 480 && rect.height >= 160;
+    }
+
+    function hasExplicitCaptchaChallenge() {
+      var challengeSelector = [
+        'iframe[src*="recaptcha"]',
+        'iframe[src*="hcaptcha.com"]',
+        'iframe[src*="challenges.cloudflare.com"]',
+        'iframe[src*="arkoselabs.com"]',
+        ".g-recaptcha",
+        ".h-captcha",
+        "[data-callback][data-sitekey]",
+        'textarea[name="g-recaptcha-response"]',
+        'textarea[name="h-captcha-response"]',
+      ].join(", ");
+      var challengeElement =
+        typeof document.querySelector === "function"
+          ? document.querySelector(challengeSelector)
+          : null;
+      if (challengeElement) {
+        return true;
+      }
+      var bodyText = lower(document.body?.innerText || "");
+      return /verify (that )?you are human|i am not a robot|i'm not a robot|complete (the )?(captcha|security challenge)/.test(
+        bodyText,
+      );
     }
 
     var visibleAuthCredentialInputs = Array.from(
@@ -1657,7 +1745,7 @@ function createClickAuthPrimaryActionFunction() {
       var wantsSignin = authState === "login" || authState === "signin";
       var wantsEmailVerification = authState === "verify_email";
       var wantsCredentialSubmit =
-        authUiState === "credential_form" ||
+        ["credential_form", "signup_form"].includes(authUiState) ||
         inferredCredentialForm ||
         isExactSignInSubmit(el);
       var exactSignInSubmit = isExactSignInSubmit(el);
@@ -2244,7 +2332,11 @@ function createClickAuthPrimaryActionFunction() {
         .sort(function (a, b) {
           return b.relevance - a.relevance;
         })[0];
-      if (blockedSubmitCandidate && captchaCandidate) {
+      if (
+        blockedSubmitCandidate &&
+        captchaCandidate &&
+        hasExplicitCaptchaChallenge()
+      ) {
         var blockedActionMessage =
           blockedSubmitAutomationId === "signinsubmitbutton"
             ? "Sign In is disabled by the CAPTCHA gate and no safe account action is available."

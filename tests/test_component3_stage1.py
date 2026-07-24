@@ -3324,7 +3324,7 @@ Expected Graduation: Sep 2026
         self.assertFalse(payload["transition"]["terminal"])
         self.assertFalse(payload["transition"]["cycleDetected"])
 
-    def test_auth_primary_action_rejects_captcha_filter_container_and_selects_leaf(self):
+    def test_auth_primary_action_rejects_unverified_filter_container_and_selects_leaf(self):
         background_path = REPO_ROOT / "executioner" / "src" / "background" / "index.js"
         script = f"""
             const fs = require("node:fs");
@@ -3471,7 +3471,7 @@ Expected Graduation: Sep 2026
         self.assertTrue(payload["legitimate"]["found"])
         self.assertEqual(payload["legitimate"]["candidate"]["tag"], "button")
 
-    def test_auth_signup_captcha_uses_in_flow_signin_fallback_and_typed_gate(self):
+    def test_auth_signup_uses_exact_workday_submit_proxy_but_rejects_wrapper(self):
         background_path = REPO_ROOT / "executioner" / "src" / "background" / "index.js"
         script = f"""
             const fs = require("node:fs");
@@ -3551,6 +3551,14 @@ Expected Graduation: Sep 2026
               parent: captchaWrapper,
               rect: {{ top: 210, left: 20, width: 680, height: 170 }},
             }});
+            const unverifiedClickFilter = makeNode({{
+              tag: "div",
+              text: "Continue",
+              automationId: "click_filter",
+              role: "button",
+              parent: captchaWrapper,
+              rect: {{ top: 210, left: 20, width: 680, height: 170 }},
+            }});
             const createSubmit = makeNode({{
               tag: "button",
               text: "Create Account",
@@ -3600,8 +3608,13 @@ Expected Graduation: Sep 2026
               createSubmit,
               signInLink,
             ];
+            let explicitChallenge = false;
             const context = {{
-              document: {{ querySelectorAll() {{ return candidates; }} }},
+              document: {{
+                body: {{ innerText: "" }},
+                querySelectorAll() {{ return candidates; }},
+                querySelector() {{ return explicitChallenge ? {{}} : null; }},
+              }},
               window: {{
                 getComputedStyle(element) {{
                   return {{
@@ -3619,6 +3632,20 @@ Expected Graduation: Sep 2026
             vm.runInContext(source.slice(start, end), context);
             const run = context.createClickAuthPrimaryActionFunction();
             const options = {{ authState: "signup", authUiState: "signup_form", click: false }};
+            candidates = [captchaWrapper, unverifiedClickFilter, createSubmit];
+            const internalNamesOnly = run(options);
+            explicitChallenge = true;
+            const explicitCaptchaGate = run(options);
+            explicitChallenge = false;
+            candidates = [
+              skipLink,
+              ...noise,
+              headerSignIn,
+              captchaWrapper,
+              clickFilter,
+              createSubmit,
+              signInLink,
+            ];
             const fallback = run(options);
             candidates = [
               skipLink,
@@ -3643,6 +3670,8 @@ Expected Graduation: Sep 2026
             ];
             const enabledCreate = run(options);
             console.log(JSON.stringify({{
+              internalNamesOnly,
+              explicitCaptchaGate,
               fallback,
               captchaGate,
               cssCaptchaGate,
@@ -3657,7 +3686,9 @@ Expected Graduation: Sep 2026
         )
         payload = json.loads(result.stdout)
 
-        self.assertEqual(payload["fallback"]["candidate"]["automationId"], "signInLink")
+        self.assertEqual(payload["internalNamesOnly"]["reason"], "auth_primary_action_not_found")
+        self.assertEqual(payload["explicitCaptchaGate"]["reason"], "auth_captcha_gate")
+        self.assertEqual(payload["fallback"]["candidate"]["automationId"], "click_filter")
         fallback_misses = {
             candidate["automationId"]: candidate
             for candidate in payload["fallback"]["nearMissCandidates"]
@@ -3666,7 +3697,7 @@ Expected Graduation: Sep 2026
         self.assertEqual(
             fallback_misses["createAccountSubmitButton"]["rejectionReason"], "disabled"
         )
-        self.assertEqual(fallback_misses["click_filter"]["rejectionReason"], "unsafe_container")
+        self.assertEqual(fallback_misses["noCaptchaWrapper"]["rejectionReason"], "unsafe_container")
         self.assertEqual(
             fallback_misses["utilityButtonSignIn"]["rejectionReason"],
             "generic_or_social",
@@ -3677,28 +3708,10 @@ Expected Graduation: Sep 2026
             miss_ids.index("createAccountSubmitButton"),
             miss_ids.index("utilityButtonSignIn"),
         )
-        self.assertLess(
-            miss_ids.index("click_filter"),
-            miss_ids.index("utilityButtonSignIn"),
-        )
-
-        self.assertEqual(payload["captchaGate"]["reason"], "auth_captcha_gate")
-        self.assertEqual(
-            payload["captchaGate"]["candidate"]["automationId"],
-            "createAccountSubmitButton",
-        )
-        self.assertEqual(payload["captchaGate"]["candidate"]["rejectionReason"], "disabled")
-        self.assertEqual(
-            payload["captchaGate"]["captchaCandidate"]["rejectionReason"],
-            "unsafe_container",
-        )
-        self.assertEqual(payload["cssCaptchaGate"]["reason"], "auth_captcha_gate")
-        self.assertFalse(payload["cssCaptchaGate"]["candidate"]["disabled"])
-        self.assertFalse(payload["cssCaptchaGate"]["candidate"]["clickable"])
-        self.assertEqual(
-            payload["cssCaptchaGate"]["candidate"]["rejectionReason"],
-            "not_clickable",
-        )
+        self.assertEqual(payload["captchaGate"]["candidate"]["automationId"], "click_filter")
+        self.assertEqual(payload["captchaGate"]["reason"], "auth_primary_action_available")
+        self.assertEqual(payload["cssCaptchaGate"]["candidate"]["automationId"], "click_filter")
+        self.assertEqual(payload["cssCaptchaGate"]["reason"], "auth_primary_action_available")
         self.assertEqual(
             payload["enabledCreate"]["candidate"]["automationId"],
             "createAccountSubmitButton",
@@ -3719,7 +3732,7 @@ Expected Graduation: Sep 2026
         self.assertIn('return "auth_captcha_gate"', issue_registry)
         self.assertIn("`auth_captcha_gate`", issue_registry)
 
-    def test_auth_login_captcha_gate_retains_blocked_submit_and_fills_when_enabled(self):
+    def test_auth_login_uses_exact_workday_submit_proxy_and_fills_credentials(self):
         background_path = REPO_ROOT / "executioner" / "src" / "background" / "index.js"
         script = f"""
             const fs = require("node:fs");
@@ -3957,6 +3970,7 @@ Expected Graduation: Sep 2026
               emailValue: email.value,
               passwordValue: password.value,
               clickCount: signInSubmit.clickCount,
+              proxyClickCount: clickFilter.clickCount,
             }}));
         """
         result = subprocess.run(
@@ -3974,18 +3988,18 @@ Expected Graduation: Sep 2026
             payload["effectiveLanding"]["effectiveDetection"]["authUiState"], "landing_choice"
         )
 
-        for gate, rejection in (
-            (payload["disabledGate"], "disabled"),
-            (payload["cssGate"], "not_clickable"),
-            (payload["unrenderedGate"], "not_clickable"),
+        for gate in (
+            payload["disabledGate"],
+            payload["cssGate"],
+            payload["unrenderedGate"],
         ):
-            self.assertEqual(gate["reason"], "auth_captcha_gate")
-            self.assertEqual(gate["candidate"]["automationId"], "signInSubmitButton")
-            self.assertEqual(gate["candidate"]["rejectionReason"], rejection)
-            self.assertEqual(gate["captchaCandidate"]["automationId"], "click_filter")
-            self.assertTrue(gate["nearMissCandidates"])
+            self.assertEqual(gate["reason"], "auth_primary_action_available")
+            self.assertEqual(gate["candidate"]["automationId"], "click_filter")
+            self.assertTrue(gate["candidate"]["clickable"])
 
-        self.assertEqual(payload["primedGate"]["reason"], "auth_captcha_gate")
+        self.assertEqual(payload["primedGate"]["reason"], "clicked_auth_primary_action")
+        self.assertEqual(payload["primedGate"]["candidate"]["automationId"], "click_filter")
+        self.assertTrue(payload["primedGate"]["clicked"])
         self.assertEqual(
             {field["source"] for field in payload["primedGate"]["filledAuthFields"]},
             {"profile:accountEmail", "profile:accountPassword"},
@@ -4000,6 +4014,7 @@ Expected Graduation: Sep 2026
             {"profile:accountEmail", "profile:accountPassword"},
         )
         self.assertGreater(payload["clickCount"], 0)
+        self.assertGreater(payload["proxyClickCount"], 0)
         self.assertEqual(
             payload["genuineLanding"]["candidate"]["automationId"], "SignInWithEmailButton"
         )
