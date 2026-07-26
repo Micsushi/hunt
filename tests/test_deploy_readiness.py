@@ -1233,26 +1233,25 @@ def test_github_actions_ci_workflow_exists():
     assert workflow.is_file()
 
     workflow_text = workflow.read_text(encoding="utf-8")
-    assert "actions/setup-python@v5" in workflow_text
-    assert "actions/setup-node@v4" in workflow_text
+    assert "actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065" in workflow_text
+    assert "actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020" in workflow_text
     assert "python ci.py" in workflow_text
     assert "hunter-cli-smoke" in workflow_text
     assert "./hunter.sh queue" in workflow_text
-    assert "./hunter.sh definitely-not-a-command" in workflow_text
+    assert "for launcher in hunter.sh ui.sh fletch.sh; do" in workflow_text
+    assert '"./$launcher" definitely-not-a-command' in workflow_text
     assert ".\\hunter.ps1 queue" in workflow_text
     assert ".\\hunter.ps1 definitely-not-a-command" in workflow_text
     assert "hunter.cmd queue" in workflow_text
     assert "hunter.cmd definitely-not-a-command" in workflow_text
     assert "ui-cli-smoke" in workflow_text
     assert "./ui.sh --help" in workflow_text
-    assert "./ui.sh definitely-not-a-command" in workflow_text
     assert ".\\ui.ps1 --help" in workflow_text
     assert ".\\ui.ps1 definitely-not-a-command" in workflow_text
     assert "ui.cmd --help" in workflow_text
     assert "ui.cmd definitely-not-a-command" in workflow_text
     assert "fletch-cli-smoke" in workflow_text
     assert "./fletch.sh --help" in workflow_text
-    assert "./fletch.sh definitely-not-a-command" in workflow_text
     assert ".\\fletch.ps1 --help" in workflow_text
     assert ".\\fletch.ps1 definitely-not-a-command" in workflow_text
     assert "fletch.cmd --help" in workflow_text
