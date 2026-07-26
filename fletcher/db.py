@@ -1202,6 +1202,49 @@ def record_resume_attempt(
         conn.close()
 
 
+def select_resume_version_for_c3(
+    job_id: int,
+    version_id: int,
+    db_path: str | Path | None = None,
+) -> None:
+    """Select an already-recorded version only after external quality acceptance."""
+    conn = get_connection(db_path)
+    try:
+        version = conn.execute(
+            """
+            SELECT resume_attempt_id, pdf_path, tex_path
+            FROM resume_versions
+            WHERE id = ? AND job_id = ?
+            """,
+            (version_id, job_id),
+        ).fetchone()
+        if not version:
+            raise ValueError("Resume version does not belong to the requested job.")
+        conn.execute(
+            "UPDATE resume_versions SET is_selected_for_c3 = FALSE WHERE job_id = ?",
+            (job_id,),
+        )
+        conn.execute(
+            "UPDATE resume_versions SET is_selected_for_c3 = TRUE WHERE id = ?",
+            (version_id,),
+        )
+        conn.execute(
+            """
+            UPDATE jobs
+            SET selected_resume_version_id = ?,
+                selected_resume_pdf_path = ?,
+                selected_resume_tex_path = ?,
+                selected_resume_selected_at = CURRENT_TIMESTAMP,
+                selected_resume_ready_for_c3 = TRUE
+            WHERE id = ?
+            """,
+            (version_id, version["pdf_path"], version["tex_path"], job_id),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
 def get_apply_context(job_id: int, db_path: str | Path | None = None) -> dict | None:
     job = get_job_context(job_id, db_path)
     if not job:

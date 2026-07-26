@@ -22,6 +22,7 @@ from .db import (
     job_description_fingerprint,
     list_jobs_ready_for_resume,
     record_resume_attempt,
+    select_resume_version_for_c3,
 )
 from .job_metadata_settings import load_c2_prompt_settings
 from .jobs.classifier import classify_job, slugify
@@ -298,32 +299,61 @@ def generate_resume_for_job(
     resume_path: str | Path = DEFAULT_OG_RESUME_PATH,
     candidate_profile_path: str | Path = DEFAULT_CANDIDATE_PROFILE_PATH,
     bullet_library_path: str | Path = DEFAULT_BULLET_LIBRARY_PATH,
+    resume_cooker_gate=None,
+    resume_cooker_preflight_override=None,
+    resume_cooker_postflight_override=None,
 ) -> dict:
     init_resume_db(db_path)
     job = get_job_context(job_id, db_path)
     if not job:
         raise ValueError(f"Job {job_id} not found.")
 
-    return _run_pipeline(
-        title=job.get("title") or "",
-        description=job.get("description") or "",
-        company=job.get("company") or "",
-        source_mode="queue",
-        job_id=job_id,
-        db_path=db_path,
-        allow_downstream_selection=_job_is_ready_for_c3(job),
-        db_role_family=_first_text_value(
-            job,
-            ("role_family", "job_role_family", "latest_resume_role_family"),
-        ),
-        db_job_level=_first_text_value(
-            job,
-            ("job_level", "level", "latest_resume_job_level"),
-        ),
-        resume_path=resume_path,
-        candidate_profile_path=candidate_profile_path,
-        bullet_library_path=bullet_library_path,
+    if resume_cooker_gate is None:
+        from coordinator.resume_cooker import ResumeCookerConfig, ResumeCookerQualityGate
+
+        resume_cooker_gate = ResumeCookerQualityGate(ResumeCookerConfig.from_env())
+
+    downstream_ready = _job_is_ready_for_c3(job)
+
+    def run_fletcher() -> dict:
+        result = _run_pipeline(
+            title=job.get("title") or "",
+            description=job.get("description") or "",
+            company=job.get("company") or "",
+            source_mode="queue",
+            job_id=job_id,
+            db_path=db_path,
+            allow_downstream_selection=downstream_ready and not resume_cooker_gate.config.enabled,
+            db_role_family=_first_text_value(
+                job,
+                ("role_family", "job_role_family", "latest_resume_role_family"),
+            ),
+            db_job_level=_first_text_value(
+                job,
+                ("job_level", "level", "latest_resume_job_level"),
+            ),
+            resume_path=resume_path,
+            candidate_profile_path=candidate_profile_path,
+            bullet_library_path=bullet_library_path,
+        )
+        if resume_cooker_gate.config.enabled:
+            result["quality_candidate_for_c3"] = downstream_ready
+        return result
+
+    result = resume_cooker_gate.run(
+        source_path=resume_path,
+        fletcher=run_fletcher,
+        preflight_override=resume_cooker_preflight_override,
+        postflight_override=resume_cooker_postflight_override,
     )
+    if (
+        resume_cooker_gate.config.enabled
+        and result.get("selected_for_c3")
+        and result.get("resume_version_id")
+    ):
+        select_resume_version_for_c3(job_id, int(result["resume_version_id"]), db_path)
+    result.pop("quality_candidate_for_c3", None)
+    return result
 
 
 def generate_resume_for_ad_hoc(
