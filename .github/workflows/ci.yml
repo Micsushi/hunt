@@ -2,23 +2,85 @@ name: CI
 
 on:
   push:
+    branches: [main]
   pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
 
 jobs:
-  hunter-cli-smoke:
-    name: Hunter CLI Smoke (${{ matrix.os }})
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, windows-latest]
-
+  trusted-linux-smoke:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: [self-hosted, Linux, X64, server1, hunt]
+    name: Linux launcher smoke (trusted main)
     steps:
       - name: Check out repo
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.12"
+
+      - name: Install runtime dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r hunter/requirements.txt
+
+      - name: Run Linux launcher smoke tests
+        run: |
+          chmod +x hunter.sh ui.sh fletch.sh scripts/launchers/hunter.sh
+          ./hunter.sh queue
+          ./ui.sh --help
+          ./fletch.sh --help
+          for launcher in hunter.sh ui.sh fletch.sh; do
+            if "./$launcher" definitely-not-a-command >/tmp/hunt-invalid.log 2>&1; then
+              cat /tmp/hunt-invalid.log
+              exit 1
+            fi
+          done
+
+  pull-request-linux-smoke:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    name: Linux launcher smoke (public pull request)
+    steps:
+      - name: Check out repo
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Set up Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.12"
+
+      - name: Install runtime dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r hunter/requirements.txt
+
+      - name: Run Linux launcher smoke tests
+        run: |
+          chmod +x hunter.sh ui.sh fletch.sh scripts/launchers/hunter.sh
+          ./hunter.sh queue
+          ./ui.sh --help
+          ./fletch.sh --help
+          for launcher in hunter.sh ui.sh fletch.sh; do
+            if "./$launcher" definitely-not-a-command >/tmp/hunt-invalid.log 2>&1; then
+              cat /tmp/hunt-invalid.log
+              exit 1
+            fi
+          done
+
+  hunter-cli-smoke:
+    name: Hunter CLI Smoke (Windows)
+    runs-on: windows-latest
+    steps:
+      - name: Check out repo
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Set up Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
           python-version: "3.12"
 
@@ -27,18 +89,7 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r hunter/requirements.txt
 
-      - name: Run standalone launcher smoke on Linux
-        if: runner.os == 'Linux'
-        run: |
-          chmod +x hunter.sh scripts/launchers/hunter.sh
-          ./hunter.sh queue
-          if ./hunter.sh definitely-not-a-command >/tmp/hunter-invalid.log 2>&1; then
-            cat /tmp/hunter-invalid.log
-            exit 1
-          fi
-
       - name: Run standalone launcher smoke on Windows PowerShell
-        if: runner.os == 'Windows'
         shell: powershell
         run: |
           .\hunter.ps1 queue
@@ -49,7 +100,6 @@ jobs:
           exit 0
 
       - name: Run standalone launcher smoke on Windows cmd
-        if: runner.os == 'Windows'
         shell: cmd
         run: |
           hunter.cmd queue
@@ -58,19 +108,14 @@ jobs:
           exit /b 0
 
   ui-cli-smoke:
-    name: UI CLI Smoke (${{ matrix.os }})
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, windows-latest]
-
+    name: UI CLI Smoke (Windows)
+    runs-on: windows-latest
     steps:
       - name: Check out repo
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
           python-version: "3.12"
 
@@ -79,18 +124,7 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r hunter/requirements.txt
 
-      - name: Run standalone launcher smoke on Linux
-        if: runner.os == 'Linux'
-        run: |
-          chmod +x ui.sh scripts/launchers/ui.sh
-          ./ui.sh --help
-          if ./ui.sh definitely-not-a-command >/tmp/ui-invalid.log 2>&1; then
-            cat /tmp/ui-invalid.log
-            exit 1
-          fi
-
       - name: Run standalone launcher smoke on Windows PowerShell
-        if: runner.os == 'Windows'
         shell: powershell
         run: |
           .\ui.ps1 --help
@@ -101,7 +135,6 @@ jobs:
           exit 0
 
       - name: Run standalone launcher smoke on Windows cmd
-        if: runner.os == 'Windows'
         shell: cmd
         run: |
           ui.cmd --help
@@ -110,19 +143,14 @@ jobs:
           exit /b 0
 
   fletch-cli-smoke:
-    name: Fletch CLI Smoke (${{ matrix.os }})
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, windows-latest]
-
+    name: Fletch CLI Smoke (Windows)
+    runs-on: windows-latest
     steps:
       - name: Check out repo
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
           python-version: "3.12"
 
@@ -131,18 +159,7 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r hunter/requirements.txt
 
-      - name: Run standalone launcher smoke on Linux
-        if: runner.os == 'Linux'
-        run: |
-          chmod +x fletch.sh scripts/launchers/fletch.sh
-          ./fletch.sh --help
-          if ./fletch.sh definitely-not-a-command >/tmp/fletch-invalid.log 2>&1; then
-            cat /tmp/fletch-invalid.log
-            exit 1
-          fi
-
       - name: Run standalone launcher smoke on Windows PowerShell
-        if: runner.os == 'Windows'
         shell: powershell
         run: |
           .\fletch.ps1 --help
@@ -153,7 +170,6 @@ jobs:
           exit 0
 
       - name: Run standalone launcher smoke on Windows cmd
-        if: runner.os == 'Windows'
         shell: cmd
         run: |
           fletch.cmd --help
@@ -161,20 +177,55 @@ jobs:
           if %ERRORLEVEL% EQU 0 exit /b 1
           exit /b 0
 
-  ci:
-    runs-on: ubuntu-latest
-
+  ci-trusted:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: [self-hosted, Linux, X64, server1, hunt]
+    name: Full CI (trusted main)
     steps:
       - name: Check out repo
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
           python-version: "3.12"
 
       - name: Set up Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: "22"
+          cache: "npm"
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install Python dev dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r hunter/requirements.txt
+          pip install -r requirements-dev.txt
+          pip install pytest httpx fastapi
+
+      - name: Install frontend dependencies
+        run: npm ci
+        working-directory: frontend
+
+      - name: Run full CI
+        run: python ci.py
+
+  ci:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    name: Full CI (public pull request)
+    steps:
+      - name: Check out repo
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Set up Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.12"
+
+      - name: Set up Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: "22"
           cache: "npm"
