@@ -24,6 +24,12 @@ PHONE_RE = re.compile(r"(?<!\d)(?:\+?1[\s.-]?)?(?:\(?\d{3}\)?[\s.-]?)\d{3}[\s.-]
 EMAIL_CODE_RE = re.compile(
     r"\b(?:code|verification code|otp)[:\s-]*([A-Z0-9]{4,8})\b", re.IGNORECASE
 )
+VALUE_FREE_PASSWORD_TELEMETRY_KEYS = {
+    "passwordcount",
+    "passwordvisible",
+    "passwordprepared",
+    "passwordpopulated",
+}
 
 
 def _rule(rules: set[str], name: str) -> None:
@@ -48,6 +54,9 @@ def _redact_string(value: str, rules: set[str]) -> str:
 
 def _redact_value(value: Any, rules: set[str], key: str | None = None) -> Any:
     key_name = key or ""
+    normalized_key = re.sub(r"[^a-z0-9]", "", key_name.lower())
+    if normalized_key in VALUE_FREE_PASSWORD_TELEMETRY_KEYS and isinstance(value, (bool, int)):
+        return value
     if key_name and SENSITIVE_KEY_RE.search(key_name):
         _rule(rules, f"key:{key_name}")
         return REDACTED

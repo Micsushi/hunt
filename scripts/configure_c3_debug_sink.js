@@ -376,17 +376,12 @@ function js(value) {
 }
 
 function findExtensionPage(targets, extensionId) {
-  return (
-    targets.find((target) =>
-      String(target.url || "").startsWith(
-        `chrome-extension://${extensionId}/src/background/index.js`,
-      ),
-    ) ||
-    targets.find((target) =>
+  return targets.find(
+    (target) =>
+      target.type === "page" &&
       String(target.url || "").startsWith(
         `chrome-extension://${extensionId}/src/options/options.html`,
       ),
-    )
   );
 }
 
@@ -460,32 +455,56 @@ async function createBackgroundTarget(port, url) {
   }
 }
 
-function findExtensionId(targets, fallbackExtensionId) {
-  const huntWorker = targets.find((target) =>
-    String(target.url || "").includes("/src/background/index.js"),
+function findLoadedHuntExtensionId(targets) {
+  const huntTarget = targets.find(
+    (target) =>
+      target.type === "service_worker" &&
+      String(target.url || "").includes("/src/background/index.js"),
   );
-  const huntMatch = String(huntWorker?.url || "").match(
+  const match = String(huntTarget?.url || "").match(
     /^chrome-extension:\/\/([^/]+)/,
   );
-  if (huntMatch) {
-    return huntMatch[1];
-  }
-  if (fallbackExtensionId) {
-    return fallbackExtensionId;
-  }
-  for (const target of targets) {
-    const match = String(target.url || "").match(
-      /^chrome-extension:\/\/([^/]+)/,
-    );
-    if (match) {
-      return match[1];
+  return match ? match[1] : "";
+}
+
+async function waitForLoadedHuntExtensionId(
+  port,
+  initialTargets,
+  fallbackExtensionId,
+  dependencies = {},
+) {
+  const listTargets =
+    dependencies.listTargets || (() => httpJson(port, "/json/list"));
+  const sleep =
+    dependencies.sleep ||
+    ((milliseconds) =>
+      new Promise((resolve) => setTimeout(resolve, milliseconds)));
+  const maxAttempts = Math.max(1, Number(dependencies.maxAttempts || 40));
+  const pollMs = Math.max(0, Number(dependencies.pollMs ?? 250));
+  let targets = Array.isArray(initialTargets) ? initialTargets : [];
+  for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+    const extensionId = findLoadedHuntExtensionId(targets);
+    if (extensionId) {
+      return { extensionId, targets };
+    }
+    if (attempt + 1 < maxAttempts) {
+      await sleep(pollMs);
+      targets = await listTargets();
     }
   }
-  return fallbackExtensionId;
+  throw new Error(
+    `hunt_extension_not_loaded:${port}:fallback=${String(fallbackExtensionId || "")}`,
+  );
 }
 
 async function ensureExtensionPage(port, targets, fallbackExtensionId) {
-  const extensionId = findExtensionId(targets, fallbackExtensionId);
+  const resolved = await waitForLoadedHuntExtensionId(
+    port,
+    targets,
+    fallbackExtensionId,
+  );
+  const extensionId = resolved.extensionId;
+  targets = resolved.targets;
   const closedBlockedCount = await closeBlockedExtensionTabs(
     port,
     targets,
@@ -962,9 +981,11 @@ if (require.main === module) {
 module.exports = {
   MAX_RESUME_BYTES,
   defaultResumeIdentity,
+  findExtensionPage,
   isDefaultResumeReady,
   isDefaultResumeReadyInBrowser,
   makePublicResult,
   parseArgs,
   readResumeSeed,
+  waitForLoadedHuntExtensionId,
 };

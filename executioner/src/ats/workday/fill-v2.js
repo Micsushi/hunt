@@ -16,6 +16,127 @@ export function createWorkdayFillV2Function() {
     const timeoutMs = Number(
       context?.settings?.workdayFillReturnTimeoutMs || 60000,
     );
+    const evidenceText = (value, maxLength) =>
+      String(value || "")
+        .replace(
+          /\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/gi,
+          "[redacted-email]",
+        )
+        .replace(
+          /\b(password|passwd|token|secret|authorization)\b\s*[:=]\s*\S+/gi,
+          "$1=[redacted]",
+        )
+        .replace(/\s+/g, " ")
+        .trim()
+        .slice(0, maxLength);
+    const evidenceIso = (value) => {
+      const parsed = Date.parse(String(value || ""));
+      return Number.isFinite(parsed) ? new Date(parsed).toISOString() : "";
+    };
+    const evidenceField = (field) => ({
+      id: evidenceText(field?.id || "", 160),
+      label: evidenceText(field?.label || "", 240),
+      type: evidenceText(field?.type || "", 80),
+    });
+    const evidenceCommittedState = (state) => ({
+      committed: Boolean(state?.committed),
+      selected: Boolean(state?.selected),
+      checked: Boolean(state?.checked),
+      empty: Boolean(state?.empty),
+      validationVisible: Boolean(state?.validationVisible),
+      reason: evidenceText(state?.reason || "", 160),
+    });
+    const evidencePopupOwner = (owner) => ({
+      id: evidenceText(owner?.id || "", 160),
+      role: evidenceText(owner?.role || "", 80),
+      automationId: evidenceText(owner?.automationId || "", 160),
+      controls: evidenceText(owner?.controls || "", 160),
+    });
+    const evidenceIsSourceField = (field) =>
+      /\bsource\b|how did you hear|hear about us/.test(
+        [field?.id, field?.label, field?.type].join(" ").toLowerCase(),
+      );
+    const evidenceIntendedOption = (option, field) => ({
+      label: evidenceIsSourceField(field)
+        ? evidenceText(option?.label || "", 160)
+        : "",
+    });
+    const evidenceAction = (action) => ({
+      method: evidenceText(action?.method || "", 80),
+      result: evidenceText(action?.result || "", 80),
+      reason: evidenceText(action?.reason || "", 160),
+    });
+    const evidenceCommitVerification = (verification) => ({
+      verified: Boolean(verification?.verified),
+      selectedPillPresent: Boolean(verification?.selectedPillPresent),
+      backingValuePresent: Boolean(verification?.backingValuePresent),
+      validationVisible: Boolean(verification?.validationVisible),
+      reason: evidenceText(verification?.reason || "", 160),
+    });
+    const sanitizeDriverEvidence = (raw) => {
+      raw = raw && typeof raw === "object" ? raw : {};
+      const startedAt = evidenceIso(raw.startedAt);
+      const capturedAt = new Date().toISOString();
+      const measuredElapsed = startedAt
+        ? Math.max(0, Date.now() - Date.parse(startedAt))
+        : 0;
+      const elapsedMs = Math.max(
+        0,
+        Number.isFinite(Number(raw.elapsedMs)) ? Number(raw.elapsedMs) : 0,
+        measuredElapsed,
+      );
+      const sanitizeMechanism = (entry) => {
+        const field = evidenceField(entry?.field);
+        return {
+          field,
+          popupOwner: evidencePopupOwner(entry?.popupOwner),
+          intendedOption: evidenceIntendedOption(entry?.intendedOption, field),
+          action: evidenceAction(entry?.action),
+          commitVerification: evidenceCommitVerification(
+            entry?.commitVerification,
+          ),
+          lastCommittedState: evidenceCommittedState(entry?.lastCommittedState),
+        };
+      };
+      const sanitizeBreadcrumb = (entry) => ({
+        at: evidenceIso(entry?.at),
+        elapsedMs: Math.max(
+          0,
+          Number.isFinite(Number(entry?.elapsedMs))
+            ? Number(entry.elapsedMs)
+            : 0,
+        ),
+        phase: evidenceText(entry?.phase || "idle", 80),
+        waitClass: evidenceText(entry?.waitClass || "idle", 80),
+        awaitedOperation: evidenceText(entry?.awaitedOperation || "", 160),
+        ...sanitizeMechanism(entry),
+      });
+      const sanitizeOutcome = (entry) => ({
+        at: evidenceIso(entry?.at),
+        phase: evidenceText(entry?.phase || "", 80),
+        ...sanitizeMechanism(entry),
+      });
+      const currentMechanism = sanitizeMechanism(raw);
+      return {
+        active: Boolean(raw.active),
+        fillRunId: evidenceText(raw.fillRunId || "", 120),
+        operationId: evidenceText(raw.operationId || "", 120),
+        phase: evidenceText(raw.phase || "idle", 80),
+        waitClass: evidenceText(raw.waitClass || "idle", 80),
+        awaitedOperation: evidenceText(raw.awaitedOperation || "", 160),
+        startedAt,
+        lastProgressAt: evidenceIso(raw.lastProgressAt),
+        capturedAt,
+        elapsedMs,
+        ...currentMechanism,
+        breadcrumbs: Array.isArray(raw.breadcrumbs)
+          ? raw.breadcrumbs.slice(-16).map(sanitizeBreadcrumb)
+          : [],
+        recentFieldOutcomes: Array.isArray(raw.recentFieldOutcomes)
+          ? raw.recentFieldOutcomes.slice(-12).map(sanitizeOutcome)
+          : [],
+      };
+    };
     let timeoutHandle = null;
     const timeoutResult = new Promise((resolve) => {
       timeoutHandle = setTimeout(() => {
@@ -115,6 +236,30 @@ export function createWorkdayFillV2Function() {
             });
           }
         });
+        let rawDriverEvidence = {};
+        try {
+          rawDriverEvidence =
+            window.__huntV2?.driverEvidence?.snapshot?.() || {};
+        } catch (_error) {
+          rawDriverEvidence = {};
+        }
+        const driverInFlight = sanitizeDriverEvidence(rawDriverEvidence);
+        const documentReadyState = evidenceText(
+          document.readyState || "unknown",
+          32,
+        );
+        const pageTransitionObserved = documentReadyState !== "complete";
+        const timeoutEvidence = {
+          reason: "workday_fill_return_timeout",
+          capturedAt: new Date().toISOString(),
+          timeoutMs,
+          documentReadyState,
+          pageTransitionObserved,
+          observedWaitState: pageTransitionObserved
+            ? "page_transition"
+            : driverInFlight.waitClass || "idle",
+          driverInFlight,
+        };
         resolve({
           ok: errors.length === 0 && filledFields.length > 0,
           atsType: "workday",
@@ -133,6 +278,7 @@ export function createWorkdayFillV2Function() {
           filledFields,
           fieldInventory,
           generatedAnswers: [],
+          timeoutEvidence,
           htmlSnapshot: document.documentElement.outerHTML.slice(0, 50000),
           interactionTrace: [
             {
@@ -141,7 +287,11 @@ export function createWorkdayFillV2Function() {
               status: errors.length ? "warn" : "ok",
               reason:
                 "Workday adapter returned DOM recovery result after page-side fill did not resolve.",
-              detail: { timeoutMs, errors: errors.slice(0, 10) },
+              detail: {
+                timeoutMs,
+                errors: errors.slice(0, 10),
+                timeoutEvidence,
+              },
             },
           ],
           traceTruncated: false,

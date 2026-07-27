@@ -3,6 +3,8 @@ import time
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 
+import pytest
+
 from backend.c3_operation_monitor import C3OperationMonitor
 from backend.c3_watchdog import C3WatchdogPolicy
 
@@ -89,20 +91,31 @@ def _operation(**patch):
     return FakeOperation(**values)
 
 
+def _authoritative_progress(**patch):
+    progress = {
+        "ok": True,
+        "active": True,
+        "operationId": "op-1",
+        "heartbeatSeq": 1,
+        "progressSeq": 1,
+    }
+    progress.update(patch)
+    return progress
+
+
 def test_monitor_records_independent_heartbeat_and_semantic_progress():
     operation = _operation()
     store = FakeStore(operation)
     monitor = C3OperationMonitor(
         store,
-        progress_probe=lambda _operation: {
-            "operationId": "op-1",
-            "heartbeatSeq": 3,
-            "progressSeq": 2,
-            "phase": "field_action",
-            "substep": "wait_for_options",
-            "fieldKey": "source",
-            "fieldLabel": "How did you hear about us?",
-        },
+        progress_probe=lambda _operation: _authoritative_progress(
+            heartbeatSeq=3,
+            progressSeq=2,
+            phase="field_action",
+            substep="wait_for_options",
+            fieldKey="source",
+            fieldLabel="How did you hear about us?",
+        ),
         artifact_capture=lambda *_args: "",
         cancel_request=lambda *_args: None,
     )
@@ -126,6 +139,8 @@ def test_monitor_discards_progress_when_operation_finishes_during_probe():
         operation.state = "failed"
         operation.terminal_reason = "extension_command_failed"
         return {
+            "ok": True,
+            "active": True,
             "operationId": "op-1",
             "heartbeatSeq": 99,
             "progressSeq": 99,
@@ -165,7 +180,7 @@ def test_monitor_terminalizes_expired_queued_operation_without_cancel_dispatch()
     cancels = []
     monitor = C3OperationMonitor(
         store,
-        progress_probe=lambda _operation: {},
+        progress_probe=lambda _operation: _authoritative_progress(),
         artifact_capture=lambda *_args: "artifact-queued-deadline",
         cancel_request=lambda *args: cancels.append(args),
         interval_seconds=60,
@@ -177,7 +192,10 @@ def test_monitor_terminalizes_expired_queued_operation_without_cancel_dispatch()
     assert current.state == "failed"
     assert current.terminal_reason == "operation_queue_deadline_exceeded"
     assert cancels == []
-    assert [event for event, _payload in store.events][0] == "operation.failed"
+    assert [event for event, _payload in store.events] == [
+        "operation.failed",
+        "operation.artifact_captured",
+    ]
 
 
 def test_monitor_discards_health_when_operation_finishes_during_probe():
@@ -196,7 +214,7 @@ def test_monitor_discards_health_when_operation_finishes_during_probe():
 
     monitor = C3OperationMonitor(
         store,
-        progress_probe=lambda _operation: {},
+        progress_probe=lambda _operation: _authoritative_progress(),
         health_probe=finish_then_return_health,
         artifact_capture=lambda current, reason: (
             captures.append((current.operation_id, reason)) or "artifact-health-race"
@@ -229,12 +247,11 @@ def test_monitor_stops_semantic_progress_when_heartbeat_races_with_terminal_stat
     store = TerminalAfterHeartbeatStore(operation)
     monitor = C3OperationMonitor(
         store,
-        progress_probe=lambda _operation: {
-            "operationId": "op-1",
-            "heartbeatSeq": 2,
-            "progressSeq": 2,
-            "phase": "stale_phase",
-        },
+        progress_probe=lambda _operation: _authoritative_progress(
+            heartbeatSeq=2,
+            progressSeq=2,
+            phase="stale_phase",
+        ),
         artifact_capture=lambda *_args: "",
         cancel_request=lambda *_args: None,
         interval_seconds=60,
@@ -278,7 +295,7 @@ def test_monitor_watchdog_transition_loses_race_without_monitor_failure():
     store = TerminalDuringConditionalStore(operation)
     monitor = C3OperationMonitor(
         store,
-        progress_probe=lambda _operation: {},
+        progress_probe=lambda _operation: _authoritative_progress(),
         health_probe=lambda _operation: {},
         artifact_capture=lambda *_args: "",
         cancel_request=lambda *_args: None,
@@ -305,7 +322,7 @@ def test_monitor_captures_once_and_requests_cancel_at_stall_boundary():
     cancels = []
     monitor = C3OperationMonitor(
         store,
-        progress_probe=lambda _operation: {},
+        progress_probe=lambda _operation: _authoritative_progress(),
         artifact_capture=lambda operation, reason: captures.append(reason) or "artifact-1",
         cancel_request=lambda operation_id, reason: cancels.append((operation_id, reason)),
         watchdog=C3WatchdogPolicy(),
@@ -325,12 +342,10 @@ def test_monitor_waits_for_extension_unwind_before_cancel_terminal():
     store = FakeStore(operation)
     monitor = C3OperationMonitor(
         store,
-        progress_probe=lambda _operation: {
-            "operationId": "op-1",
-            "heartbeatSeq": 2,
-            "progressSeq": 1,
-            "cancelAcknowledgedAt": 1234,
-        },
+        progress_probe=lambda _operation: _authoritative_progress(
+            heartbeatSeq=2,
+            cancelAcknowledgedAt=1234,
+        ),
         artifact_capture=lambda *_args: "",
         cancel_request=lambda *_args: None,
     )
@@ -345,12 +360,14 @@ def test_monitor_waits_for_extension_unwind_before_cancel_terminal():
     assert operation.terminal_reason == "watchdog_timeout"
 
 
-def test_monitor_ignores_progress_from_superseding_operation():
+def test_monitor_rejects_progress_from_superseding_operation():
     operation = _operation()
     store = FakeStore(operation)
     monitor = C3OperationMonitor(
         store,
         progress_probe=lambda _operation: {
+            "ok": True,
+            "active": True,
             "operationId": "op-new",
             "heartbeatSeq": 99,
             "progressSeq": 99,
@@ -362,11 +379,36 @@ def test_monitor_ignores_progress_from_superseding_operation():
     monitor.poll_once("op-1")
     monitor.shutdown()
 
-    assert store.events[0] == (
-        "operation.stale_progress_ignored",
-        {"reported_operation_id": "op-new"},
-    )
+    assert store.events[0][0] == "operation.progress_probe_failed"
+    assert store.events[0][1]["reason"] == "operation_id_mismatch"
     assert operation.heartbeat_seq == 1
+
+
+@pytest.mark.parametrize(
+    ("state", "expected_reason"),
+    [
+        ("completed", "operation_completed"),
+        ("failed", "operation_failed"),
+        ("cancelled", "operation_cancelled"),
+        ("orphaned", "operation_orphaned"),
+    ],
+)
+def test_monitor_captures_post_terminal_bundle_for_every_non_success_state(state, expected_reason):
+    operation = _operation(state=state)
+    store = FakeStore(operation)
+    captures = []
+    monitor = C3OperationMonitor(
+        store,
+        progress_probe=lambda _operation: {},
+        artifact_capture=lambda _operation, reason: captures.append(reason) or f"artifact-{state}",
+        cancel_request=lambda *_args: None,
+    )
+
+    monitor.poll_once("op-1")
+    monitor.shutdown()
+
+    assert captures == [expected_reason]
+    assert operation.artifact_ids == [f"artifact-{state}"]
 
 
 def test_monitor_detects_cancel_request_that_never_unwinds():
@@ -378,7 +420,7 @@ def test_monitor_detects_cancel_request_that_never_unwinds():
     captures = []
     monitor = C3OperationMonitor(
         store,
-        progress_probe=lambda _operation: {"operationId": "op-1"},
+        progress_probe=lambda _operation: _authoritative_progress(),
         artifact_capture=lambda _operation, reason: captures.append(reason) or "artifact-cancel",
         cancel_request=lambda *_args: None,
         cancel_ack_timeout_seconds=10,
@@ -431,7 +473,7 @@ def test_monitor_orphans_cancel_failure_after_bounded_reconciliation_window():
     store = FakeStore(operation)
     monitor = C3OperationMonitor(
         store,
-        progress_probe=lambda _operation: {"operationId": "op-1"},
+        progress_probe=lambda _operation: _authoritative_progress(),
         artifact_capture=lambda *_args: "artifact-cancel",
         cancel_request=lambda *_args: None,
         cancel_reconcile_timeout_seconds=5,
@@ -459,7 +501,7 @@ def test_cancel_reconciliation_deadline_does_not_slide_after_redispatch_failure(
     store = FakeStore(operation)
     monitor = C3OperationMonitor(
         store,
-        progress_probe=lambda _operation: {"operationId": "op-1"},
+        progress_probe=lambda _operation: _authoritative_progress(),
         artifact_capture=lambda *_args: "artifact-cancel",
         cancel_request=lambda *_args: None,
         cancel_reconcile_timeout_seconds=30,
@@ -472,7 +514,7 @@ def test_cancel_reconciliation_deadline_does_not_slide_after_redispatch_failure(
     assert terminal.error == {"reason_code": "control_plane_cancel_unreconciled"}
 
 
-def test_monitor_evaluates_watchdog_when_progress_probe_hangs():
+def test_monitor_does_not_evaluate_age_watchdog_when_progress_probe_hangs():
     blocker = threading.Event()
     operation = _operation(
         last_heartbeat_at=datetime.now(UTC) - timedelta(seconds=31),
@@ -495,8 +537,90 @@ def test_monitor_evaluates_watchdog_when_progress_probe_hangs():
     blocker.set()
 
     assert elapsed < 0.25
-    assert cancels == [("op-1", "operation_heartbeat_missing")]
-    assert "operation.health_probe_failed" in [event for event, _ in store.events]
+    assert cancels == []
+    assert [event for event, _ in store.events] == ["operation.progress_probe_failed"]
+    assert store.events[0][1]["reason"] == "probe_timeout"
+    assert operation.state == "running"
+
+
+@pytest.mark.parametrize(
+    ("response", "reason"),
+    [
+        ({}, "empty_response"),
+        ({"ok": False, "reason": "bridge_failed"}, "response_not_ok"),
+        (
+            {
+                "ok": True,
+                "busy": True,
+                "operationId": "op-1",
+                "active": True,
+                "heartbeatSeq": 1,
+            },
+            "probe_busy",
+        ),
+        (
+            {"ok": True, "active": False, "operationId": "op-1", "heartbeatSeq": 1},
+            "operation_inactive",
+        ),
+        (
+            {"ok": True, "active": True, "operationId": "op-new", "heartbeatSeq": 1},
+            "operation_id_mismatch",
+        ),
+        (
+            {"ok": True, "active": True, "operationId": "op-1"},
+            "heartbeat_seq_invalid",
+        ),
+    ],
+)
+def test_invalid_progress_response_cannot_trigger_age_watchdog(response, reason):
+    stale = datetime.now(UTC) - timedelta(seconds=31)
+    operation = _operation(last_heartbeat_at=stale, last_progress_at=stale)
+    store = FakeStore(operation)
+    captures = []
+    cancels = []
+    monitor = C3OperationMonitor(
+        store,
+        progress_probe=lambda _operation: response,
+        health_probe=lambda _operation: pytest.fail("health probe must not run"),
+        artifact_capture=lambda *_args: captures.append("capture") or "artifact-invalid",
+        cancel_request=lambda *args: cancels.append(args),
+        interval_seconds=60,
+    )
+
+    monitor.poll_once("op-1")
+    monitor.shutdown()
+
+    assert operation.state == "running"
+    assert captures == []
+    assert cancels == []
+    assert [event for event, _ in store.events] == ["operation.progress_probe_failed"]
+    assert store.events[0][1]["reason"] == reason
+
+
+def test_invalid_progress_response_does_not_block_absolute_running_deadline():
+    stale = datetime.now(UTC) - timedelta(seconds=31)
+    operation = _operation(
+        last_heartbeat_at=stale,
+        last_progress_at=stale,
+        deadline_at=datetime.now(UTC) - timedelta(seconds=1),
+    )
+    store = FakeStore(operation)
+    captures = []
+    cancels = []
+    monitor = C3OperationMonitor(
+        store,
+        progress_probe=lambda _operation: {},
+        artifact_capture=lambda _operation, reason: captures.append(reason) or "artifact-deadline",
+        cancel_request=lambda *args: cancels.append(args),
+        interval_seconds=60,
+    )
+
+    monitor.poll_once("op-1")
+    monitor.shutdown()
+
+    assert operation.state == "stalled"
+    assert captures == ["operation_deadline_exceeded"]
+    assert cancels == [("op-1", "operation_deadline_exceeded")]
 
 
 def test_monitor_globally_bounds_hung_probe_admission():
@@ -540,7 +664,7 @@ def test_monitor_captures_terminal_failure_and_cancel_bridge_failure():
     captures = []
     failed_monitor = C3OperationMonitor(
         failed_store,
-        progress_probe=lambda _operation: {},
+        progress_probe=lambda _operation: _authoritative_progress(),
         artifact_capture=lambda _operation, reason: captures.append(reason) or "artifact-failed",
         cancel_request=lambda *_args: None,
     )
@@ -555,7 +679,7 @@ def test_monitor_captures_terminal_failure_and_cancel_bridge_failure():
     cancelling_store = FakeStore(cancelling)
     cancel_monitor = C3OperationMonitor(
         cancelling_store,
-        progress_probe=lambda _operation: {},
+        progress_probe=lambda _operation: _authoritative_progress(),
         artifact_capture=lambda _operation, reason: (
             captures.append(reason) or "artifact-cancel-failed"
         ),
@@ -575,7 +699,7 @@ def test_monitor_rate_limits_slow_checkpoints():
     store = FakeStore(operation)
     monitor = C3OperationMonitor(
         store,
-        progress_probe=lambda _operation: {},
+        progress_probe=lambda _operation: _authoritative_progress(),
         artifact_capture=lambda *_args: "",
         cancel_request=lambda *_args: None,
         checkpoint_cooldown_seconds=60,
@@ -597,7 +721,7 @@ def test_monitor_runs_independent_health_probe_at_suspected_stall():
     probes = []
     monitor = C3OperationMonitor(
         store,
-        progress_probe=lambda _operation: {},
+        progress_probe=lambda _operation: _authoritative_progress(),
         health_probe=lambda current: probes.append(current.operation_id) or {"reachable": True},
         artifact_capture=lambda *_args: "",
         cancel_request=lambda *_args: None,
@@ -619,7 +743,7 @@ def test_failure_bundle_capture_is_bounded_when_diagnostics_hang():
     store = FakeStore(operation)
     monitor = C3OperationMonitor(
         store,
-        progress_probe=lambda _operation: {},
+        progress_probe=lambda _operation: _authoritative_progress(),
         artifact_capture=lambda *_args: blocker.wait(60) and "artifact-late",
         cancel_request=lambda *_args: None,
         artifact_timeout_seconds=0.02,

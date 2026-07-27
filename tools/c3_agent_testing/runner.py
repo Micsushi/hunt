@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import time
 import uuid
 from collections.abc import Callable, Iterable
@@ -8,8 +9,12 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Protocol
-from urllib.parse import urlsplit, urlunsplit
+from urllib.parse import parse_qs, urlsplit, urlunsplit
 
+from backend.c3_failure_context import (
+    required_field_label_from_validation,
+    required_field_text_is_empty,
+)
 from backend.c3_identifiers import is_trusted_generated_c3_id
 
 from .classifier import classify_operation
@@ -24,6 +29,7 @@ FAILURE_EVIDENCE_TAIL_LIMIT = 16
 FAILURE_ARTIFACT_SUMMARY_LIMIT = 32
 ARTIFACT_PATH_LIMIT = 32
 ARTIFACT_PATH_CHARACTER_LIMIT = 2_000
+FIELD_OBSERVATION_LIMIT = 64
 
 
 class ResumeOperationIdentityError(RuntimeError):
@@ -337,10 +343,9 @@ class C3BatchSupervisor:
                     ),
                 )
 
-            failure_context, failure_context_status, failure_context_error = (
-                self._fetch_terminal_failure_context(client, lane, lease_id, operation_id)
-            )
-            failure_context_fetched = True
+            failure_context = {}
+            failure_context_status = "not_requested"
+            failure_context_error = ""
             operation_refresh_status = "not_requested"
             operation_refresh_error = ""
             try:
@@ -369,6 +374,16 @@ class C3BatchSupervisor:
                 if safety["submit_activated"] or safety["focus_activated"]
                 else classification_hint or classify_operation(operation)
             )
+            failure_context, failure_context_status, failure_context_error = (
+                self._fetch_terminal_failure_context(
+                    client,
+                    lane,
+                    lease_id,
+                    operation_id,
+                    required_artifact_reason=(_required_terminal_artifact_reason(operation)),
+                )
+            )
+            failure_context_fetched = True
             terminal_payload = {
                 "agent_id": lane.agent_id,
                 "lane_id": lane.lane_id,
@@ -423,7 +438,11 @@ class C3BatchSupervisor:
                 and _failure_artifact_is_pending(failure_context, failure_context_status)
             ):
                 refreshed_context = self._fetch_terminal_failure_context(
-                    client, lane, lease_id, operation_id
+                    client,
+                    lane,
+                    lease_id,
+                    operation_id,
+                    required_artifact_reason=(_required_terminal_artifact_reason(operation)),
                 )
                 if refreshed_context[1] == "available" or failure_context_status != "available":
                     (
@@ -440,6 +459,31 @@ class C3BatchSupervisor:
                 if safety["submit_activated"] or safety["focus_activated"]
                 else classification_hint or classify_operation(operation)
             )
+            context_artifact_ids = failure_context.get("artifact_ids")
+            if isinstance(context_artifact_ids, list) and context_artifact_ids:
+                projected_artifact_ids = (
+                    operation.get("artifact_ids")
+                    if isinstance(operation.get("artifact_ids"), list)
+                    else []
+                )
+                if not set(context_artifact_ids).issubset(projected_artifact_ids):
+                    try:
+                        artifact_refreshed_operation = _operation_projection(
+                            client.get_c3_operation(
+                                {
+                                    "operation_id": operation_id,
+                                    "agent_id": lane.agent_id,
+                                    "lease_id": lease_id,
+                                }
+                            )
+                        )
+                    except Exception:
+                        pass
+                    else:
+                        if str(artifact_refreshed_operation.get("state") or "") in TERMINAL_STATES:
+                            operation = _merge_operation_projection(
+                                operation, artifact_refreshed_operation
+                            )
             result = _lane_result(
                 lane,
                 operation_id,
@@ -526,7 +570,13 @@ class C3BatchSupervisor:
                 except Exception:
                     pass
             context_result = (
-                self._fetch_terminal_failure_context(client, lane, lease_id, operation_id)
+                self._fetch_terminal_failure_context(
+                    client,
+                    lane,
+                    lease_id,
+                    operation_id,
+                    required_artifact_reason=(_required_terminal_artifact_reason(operation)),
+                )
                 if not failure_context_fetched
                 and operation_id
                 and str(operation.get("state") or "") in TERMINAL_STATES
@@ -541,6 +591,8 @@ class C3BatchSupervisor:
                 )
             )
             failure_fields = _failure_context_fields(*context_result)
+            artifact_paths = _artifact_paths(context_result[0], operation_id=operation_id)
+            failure_fields = _merge_artifact_page_observations(failure_fields, artifact_paths)
             if not operation_id:
                 failure_fields["missing_evidence"] = (
                     "operation_not_started",
@@ -548,13 +600,14 @@ class C3BatchSupervisor:
                 )
                 failure_fields["root_cause_unknown"] = True
                 failure_fields["live_inspection_required"] = True
+            classification = _refine_failure_classification("fill_failed", failure_fields)
             result = LaneResult(
                 agent_id=lane.agent_id,
                 lane_id=lane.lane_id,
                 session_id=lane.session_id,
                 operation_id=operation_id,
                 job_url=lane.job.url,
-                classification="fill_failed",
+                classification=classification,
                 operation_state=str(operation.get("state") or "failed"),
                 terminal_reason=str(operation.get("terminal_reason") or "batch_lane_exception"),
                 lease_id=lease_id,
@@ -562,7 +615,7 @@ class C3BatchSupervisor:
                 trace_id=trace_id,
                 artifact_dir=lane.artifact_dir,
                 artifact_ids=_string_tuple(operation.get("artifact_ids")),
-                artifact_paths=_artifact_paths(context_result[0], operation_id=operation_id),
+                artifact_paths=artifact_paths,
                 event_ids=tuple(dict.fromkeys(event_ids)),
                 cancel_requested=cancel_requested,
                 cancel_acknowledged=str(operation.get("state") or "") == "cancelled",
@@ -693,12 +746,18 @@ class C3BatchSupervisor:
         lane: LanePlan,
         lease_id: str,
         operation_id: str,
+        *,
+        required_artifact_reason: str = "",
     ) -> tuple[dict[str, Any], str, str]:
         latest = _fetch_failure_context(client, lane, lease_id, operation_id)
         last_available = latest if latest[1] == "available" else None
         for _attempt in range(1, FAILURE_CONTEXT_REFRESH_ATTEMPTS):
             context, status, _error = latest
-            if not _failure_artifact_is_pending(context, status):
+            if not _failure_artifact_is_pending(
+                context,
+                status,
+                required_reason=required_artifact_reason,
+            ):
                 break
             self.sleep(FAILURE_CONTEXT_REFRESH_INTERVAL_SECONDS)
             refreshed = _fetch_failure_context(client, lane, lease_id, operation_id)
@@ -708,6 +767,14 @@ class C3BatchSupervisor:
             latest = refreshed
             if latest[1] == "available":
                 last_available = latest
+        context, status, _error = latest
+        if (
+            required_artifact_reason
+            and status == "available"
+            and _failure_artifact_has_reason_telemetry(context)
+            and not _failure_artifact_has_reason(context, required_artifact_reason)
+        ):
+            return context, status, "terminal_artifact_settlement_timeout"
         return latest
 
     def _cancel_and_wait(
@@ -845,15 +912,25 @@ def _operation_projection(value: Any) -> dict[str, Any]:
     return value if isinstance(value, dict) else {}
 
 
+def _required_terminal_artifact_reason(operation: dict[str, Any]) -> str:
+    return {
+        "completed": "operation_completed",
+        "failed": "operation_failed",
+        "cancelled": "operation_cancelled",
+        "orphaned": "operation_orphaned",
+    }.get(str(operation.get("state") or ""), "")
+
+
 def _merge_operation_projection(
     previous: dict[str, Any], refreshed: dict[str, Any]
 ) -> dict[str, Any]:
-    """Merge an authoritative refresh without discarding earlier terminal evidence."""
+    """Use authoritative refreshed lifecycle/result fields atomically."""
     merged = {**previous, **refreshed}
-    previous_result = previous.get("result")
-    refreshed_result = refreshed.get("result")
-    if isinstance(previous_result, dict) and isinstance(refreshed_result, dict):
-        merged["result"] = {**previous_result, **refreshed_result}
+    prior_safety = _operation_safety_evidence(previous)
+    if prior_safety["submit_activated"]:
+        merged["submit_activated"] = True
+    if prior_safety["focus_activated"]:
+        merged["focus_activated"] = True
     return merged
 
 
@@ -1018,6 +1095,14 @@ def _lane_result(
 ) -> LaneResult:
     artifact_ids = operation.get("artifact_ids")
     safety = _operation_safety_evidence(operation)
+    artifact_paths = _artifact_paths(failure_context or {}, operation_id=operation_id)
+    failure_fields = _failure_context_fields(
+        failure_context or {}, failure_context_status, failure_context_error
+    )
+    failure_fields = _merge_artifact_page_observations(failure_fields, artifact_paths)
+    classification = _refine_failure_classification(classification, failure_fields)
+    if classification == "review_ready":
+        failure_fields = _success_terminal_evidence_fields(failure_fields)
     return LaneResult(
         agent_id=lane.agent_id,
         lane_id=lane.lane_id,
@@ -1034,7 +1119,7 @@ def _lane_result(
         trace_id=trace_id or str(operation.get("trace_id") or ""),
         artifact_dir=lane.artifact_dir,
         artifact_ids=tuple(artifact_ids) if isinstance(artifact_ids, list) else (),
-        artifact_paths=_artifact_paths(failure_context or {}, operation_id=operation_id),
+        artifact_paths=artifact_paths,
         event_ids=tuple(dict.fromkeys(event_ids)),
         cancel_requested=cancel_requested,
         cancel_acknowledged=str(operation.get("state") or "") == "cancelled"
@@ -1042,9 +1127,7 @@ def _lane_result(
         submit_activated=safety["submit_activated"],
         focus_activated=safety["focus_activated"],
         error=error,
-        **_failure_context_fields(
-            failure_context or {}, failure_context_status, failure_context_error
-        ),
+        **failure_fields,
     )
 
 
@@ -1073,13 +1156,49 @@ def _fetch_failure_context(
     return context, "available", ""
 
 
-def _failure_artifact_is_pending(context: dict[str, Any], status: str) -> bool:
-    return status == "available" and str(context.get("artifact_status") or "idle") in {
+def _failure_artifact_is_pending(
+    context: dict[str, Any],
+    status: str,
+    *,
+    required_reason: str = "",
+) -> bool:
+    if status != "available":
+        return False
+    if (
+        required_reason
+        and _failure_artifact_has_reason_telemetry(context)
+        and not _failure_artifact_has_reason(context, required_reason)
+    ):
+        return True
+    return str(context.get("artifact_status") or "idle") in {
         "idle",
         "pending",
         "queued",
         "capturing",
     }
+
+
+def _failure_artifact_has_reason(context: dict[str, Any], reason: str) -> bool:
+    wanted = str(reason or "").strip()
+    artifacts = context.get("artifacts")
+    if not wanted or not isinstance(artifacts, (list, tuple)):
+        return not wanted
+    return any(
+        isinstance(item, dict)
+        and item.get("status") == "completed"
+        and item.get("kind") == "failure_bundle"
+        and item.get("manifest_present") is True
+        and str(item.get("reason_code") or "").strip() == wanted
+        for item in artifacts
+    )
+
+
+def _failure_artifact_has_reason_telemetry(context: dict[str, Any]) -> bool:
+    artifacts = context.get("artifacts")
+    return isinstance(artifacts, (list, tuple)) and any(
+        isinstance(item, dict) and bool(str(item.get("reason_code") or "").strip())
+        for item in artifacts
+    )
 
 
 def _failure_context_projection(value: Any) -> dict[str, Any]:
@@ -1121,20 +1240,50 @@ def _failure_context_fields(context: dict[str, Any], status: str, error: str) ->
     causal = causal if isinstance(causal, dict) else {}
     last_touched = context.get("last_touched_element")
     last_touched = last_touched if isinstance(last_touched, dict) else {}
+    observed_messages, moved_diagnostics = _partition_observed_messages(
+        context.get("observed_messages")
+    )
+    diagnostic_messages = tuple(
+        dict.fromkeys(
+            [
+                *_string_tuple(context.get("diagnostic_messages")),
+                *moved_diagnostics,
+            ]
+        )
+    )
     return {
         "failure_context_status": status,
         "diagnosis_id": str(context.get("diagnosis_id") or ""),
         "failure_scope": str(context.get("failure_scope") or ""),
         "root_cause_code": str(context.get("root_cause_code") or ""),
+        "reported_cause_code": str(context.get("reported_cause_code") or ""),
+        "cause_asserted": bool(context.get("cause_asserted", False)),
         "failure_summary": str(context.get("summary") or ""),
         "causal_selector": str(causal.get("selector") or ""),
         "causal_label": str(causal.get("label") or ""),
+        "causal_field": _compact_causal_field(causal),
         "last_touched_selector": str(last_touched.get("selector") or ""),
         "last_touched_label": str(last_touched.get("label") or ""),
         "expected_state": str(context.get("expected_state") or ""),
         "observed_state": str(context.get("observed_state") or ""),
+        "observed_messages": observed_messages,
+        "diagnostic_messages": diagnostic_messages,
+        "monitor_summary": _compact_monitor_summary(context.get("monitor_summary")),
+        "page_observations": _compact_page_observations(context.get("page_observations")),
+        "field_observations": _compact_field_observations(context.get("field_observations")),
+        "field_commit_failures": _compact_field_commit_failures(
+            context.get("field_commit_failures")
+        ),
+        "timeout_evidence": _compact_timeout_evidence(context.get("timeout_evidence")),
+        "auth_action_boundary": (
+            dict(context["auth_action_boundary"])
+            if isinstance(context.get("auth_action_boundary"), dict)
+            else {}
+        ),
+        "evidence_conflicts": _string_tuple(context.get("evidence_conflicts")),
         "confidence": str(context.get("confidence") or "unknown"),
         "root_cause_unknown": bool(context.get("root_cause_unknown", True)),
+        "mechanism_unknown": bool(context.get("mechanism_unknown", False)),
         "failure_evidence_event_ids": _string_tuple(context.get("evidence_event_ids")),
         "failure_checkpoint_ids": _string_tuple(context.get("checkpoint_ids")),
         "failure_artifact_ids": _string_tuple(context.get("artifact_ids")),
@@ -1165,6 +1314,209 @@ def _failure_context_fields(context: dict[str, Any], status: str, error: str) ->
         "next_safe_action": str(context.get("next_safe_action") or ""),
         "failure_context_error": error,
     }
+
+
+def _partition_observed_messages(value: Any) -> tuple[tuple[str, ...], tuple[str, ...]]:
+    observed: list[str] = []
+    diagnostics: list[str] = []
+    for message in _string_tuple(value):
+        target = diagnostics if _looks_like_internal_diagnostic_message(message) else observed
+        if message not in target:
+            target.append(message)
+    return tuple(observed), tuple(diagnostics)
+
+
+def _looks_like_internal_diagnostic_message(value: str) -> bool:
+    text = value.strip()
+    if not text or any(not (char.isalnum() or char in "_.:-") for char in text):
+        return False
+    normalized = text.casefold().replace("-", "_").replace(".", "_").replace(":", "_")
+    segments = tuple(part for part in normalized.split("_") if part)
+    return any(
+        token in segments for token in ("monitor", "bridge", "heartbeat", "probe", "transport")
+    ) or all(token in segments for token in ("operation", "id"))
+
+
+def _compact_monitor_summary(value: Any) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        return {}
+    result: dict[str, Any] = {}
+    for name in (
+        "health_probe_failure_count",
+        "progress_probe_failure_count",
+        "monitor_failure_count",
+        "artifact_capture_failure_count",
+        "cancel_failure_count",
+    ):
+        if name in value:
+            result[name] = _nonnegative_int(value.get(name))
+    if value.get("last_error_code"):
+        result["last_error_code"] = str(value["last_error_code"])[:300]
+    return result
+
+
+def _refine_failure_classification(
+    classification: str,
+    failure_fields: dict[str, Any],
+) -> str:
+    if classification != "fill_failed" or failure_fields.get("cause_asserted") is not True:
+        return classification
+    refined = {
+        "credential_rejected": "auth_failed",
+        "job_unavailable": "job_unavailable",
+        "maintenance": "site_unavailable",
+    }.get(str(failure_fields.get("root_cause_code") or ""))
+    if refined:
+        return refined
+    return classification
+
+
+def _compact_page_observations(value: Any) -> tuple[dict[str, Any], ...]:
+    if not isinstance(value, (list, tuple)):
+        return ()
+    allowed = (
+        "event_id",
+        "href",
+        "title",
+        "page_kind",
+        "phase",
+        "auth_state",
+        "auth_ui_state",
+        "current_step",
+        "document_ready_state",
+        "frame_id",
+        "auth_field_count",
+        "application_field_count",
+    )
+    observations: list[dict[str, Any]] = []
+    for raw in value[-32:]:
+        if not isinstance(raw, dict):
+            continue
+        item = {
+            key: (
+                _nonnegative_int(raw.get(key))
+                if key in {"frame_id", "auth_field_count", "application_field_count"}
+                and raw.get(key) is not None
+                else _bounded_text(raw.get(key), 500)
+            )
+            for key in allowed
+            if raw.get(key) not in (None, "")
+        }
+        if item:
+            observations.append(item)
+    return tuple(observations)
+
+
+def _compact_field_observations(value: Any) -> tuple[dict[str, Any], ...]:
+    if not isinstance(value, (list, tuple)):
+        return ()
+    observations: list[dict[str, Any]] = []
+    for index, raw in enumerate(value[:FIELD_OBSERVATION_LIMIT]):
+        if not isinstance(raw, dict):
+            continue
+        field_type = _bounded_text(raw.get("type"), 80)
+        field_id = _bounded_text(
+            raw.get("id") or raw.get("field_id") or f"index:{index}",
+            160,
+        )
+        item: dict[str, Any] = {
+            "id": field_id,
+            "label": _bounded_text(raw.get("label"), 300),
+            "type": field_type,
+            "value_present": bool(raw.get("value_present", False)),
+            "value_length_state": (
+                "redacted"
+                if field_type.casefold() == "password"
+                else _bounded_text(
+                    raw.get("value_length_state") or "unknown",
+                    40,
+                )
+            ),
+        }
+        observations.append(item)
+    return tuple(observations)
+
+
+def _compact_field_commit_failures(value: Any) -> tuple[dict[str, Any], ...]:
+    if not isinstance(value, (list, tuple)):
+        return ()
+    allowed_text = (
+        "event_id",
+        "field_id",
+        "label",
+        "ui_model",
+        "action",
+        "reason_code",
+        "action_method",
+        "action_result",
+    )
+    failures: list[dict[str, Any]] = []
+    for raw in value[-32:]:
+        if not isinstance(raw, dict):
+            continue
+        item = {
+            key: _bounded_text(raw.get(key), 300)
+            for key in allowed_text
+            if raw.get(key) not in (None, "")
+        }
+        item["committed"] = bool(raw.get("committed"))
+        attempted_option = _bounded_text(raw.get("attempted_option"), 160)
+        source_signal = " ".join(
+            _bounded_text(raw.get(key), 300).casefold() for key in ("field_id", "label", "ui_model")
+        )
+        if (
+            attempted_option
+            and (
+                "source" in source_signal
+                or "how did you hear" in source_signal
+                or "hear about us" in source_signal
+            )
+            and attempted_option.casefold()
+            not in {
+                "expanded",
+                "collapsed",
+                "open",
+                "closed",
+                "true",
+                "false",
+                "select",
+                "select one",
+                "0 item selected",
+                "0 items selected",
+            }
+        ):
+            item["attempted_option"] = attempted_option
+        for key in (
+            "required",
+            "selected_value_present",
+            "commit_verified",
+            "selected_pill_present",
+            "backing_value_present",
+            "validation_visible",
+        ):
+            if raw.get(key) is not None:
+                item[key] = bool(raw.get(key))
+        if raw.get("option_count") is not None:
+            item["option_count"] = _nonnegative_int(raw.get("option_count"))
+        failures.append(item)
+    return tuple(failures)
+
+
+def _compact_causal_field(value: Any) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        return {}
+    field_id = _bounded_text(
+        value.get("field_id") or value.get("element_id") or value.get("automation_id"),
+        160,
+    )
+    compact = {
+        "field_id": field_id,
+        "label": _bounded_text(value.get("label"), 300),
+        "ui_model": _bounded_text(value.get("ui_model"), 80),
+        "action": _bounded_text(value.get("action"), 80),
+        "selector": _bounded_text(value.get("selector"), 300),
+    }
+    return {key: current for key, current in compact.items() if current}
 
 
 def _compact_credential_preparation(value: Any) -> tuple[dict[str, Any], ...]:
@@ -1214,6 +1566,92 @@ def _compact_evidence_tail(value: Any) -> tuple[dict[str, Any], ...]:
     return tuple(items)
 
 
+def _compact_timeout_evidence(value: Any) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        return {}
+
+    def text_field(source: dict[str, Any], key: str, limit: int = 240) -> str:
+        return _bounded_text(source.get(key), limit)
+
+    def compact_field(source: Any) -> dict[str, Any]:
+        if not isinstance(source, dict):
+            return {}
+        return {
+            key: text_field(source, key)
+            for key in ("id", "label", "type")
+            if source.get(key) not in (None, "")
+        }
+
+    def compact_committed(source: Any) -> dict[str, Any]:
+        if not isinstance(source, dict):
+            return {}
+        result = {
+            key: bool(source[key])
+            for key in (
+                "committed",
+                "selected",
+                "checked",
+                "empty",
+                "validation_visible",
+            )
+            if isinstance(source.get(key), bool)
+        }
+        if source.get("reason") not in (None, ""):
+            result["reason"] = text_field(source, "reason", 160)
+        return result
+
+    def compact_driver(source: Any, *, include_breadcrumbs: bool) -> dict[str, Any]:
+        if not isinstance(source, dict):
+            return {}
+        result: dict[str, Any] = {}
+        for key, limit in (
+            ("phase", 80),
+            ("wait_class", 80),
+            ("awaited_operation", 160),
+            ("started_at", 80),
+            ("last_progress_at", 80),
+            ("captured_at", 80),
+            ("at", 80),
+        ):
+            if source.get(key) not in (None, ""):
+                result[key] = text_field(source, key, limit)
+        if isinstance(source.get("active"), bool):
+            result["active"] = bool(source["active"])
+        if source.get("elapsed_ms") not in (None, ""):
+            result["elapsed_ms"] = _nonnegative_int(source.get("elapsed_ms"))
+        field_value = compact_field(source.get("field"))
+        if field_value:
+            result["field"] = field_value
+        committed = compact_committed(source.get("last_committed_state"))
+        if committed:
+            result["last_committed_state"] = committed
+        if include_breadcrumbs and isinstance(source.get("breadcrumbs"), (list, tuple)):
+            result["breadcrumbs"] = tuple(
+                compact_driver(item, include_breadcrumbs=False)
+                for item in source["breadcrumbs"][-16:]
+                if isinstance(item, dict)
+            )
+        return result
+
+    compact: dict[str, Any] = {}
+    for key, limit in (
+        ("reason", 160),
+        ("captured_at", 80),
+        ("document_ready_state", 40),
+        ("observed_wait_state", 80),
+    ):
+        if value.get(key) not in (None, ""):
+            compact[key] = text_field(value, key, limit)
+    if value.get("timeout_ms") not in (None, ""):
+        compact["timeout_ms"] = _nonnegative_int(value.get("timeout_ms"))
+    if isinstance(value.get("page_transition_observed"), bool):
+        compact["page_transition_observed"] = bool(value["page_transition_observed"])
+    driver = compact_driver(value.get("driver_in_flight"), include_breadcrumbs=True)
+    if driver:
+        compact["driver_in_flight"] = driver
+    return compact
+
+
 def _compact_element(value: Any) -> dict[str, Any]:
     if not isinstance(value, dict):
         return {}
@@ -1251,6 +1689,7 @@ def _compact_artifact_summaries(value: Any) -> tuple[dict[str, Any], ...]:
                 "artifact_id": _bounded_text(raw.get("artifact_id")),
                 "status": _bounded_text(raw.get("status")),
                 "kind": _bounded_text(raw.get("kind")),
+                "reason_code": _bounded_text(raw.get("reason_code")),
                 "captured_at": _bounded_text(raw.get("captured_at")),
                 "files": _bounded_string_tuple(raw.get("files"), 32),
                 "manifest_present": bool(raw.get("manifest_present", False)),
@@ -1341,6 +1780,553 @@ def _artifact_paths(context: Any, *, operation_id: str = "") -> tuple[str, ...]:
         if text not in found:
             found.append(text)
     return tuple(found)
+
+
+def _artifact_page_observations(
+    manifest_paths: Iterable[str],
+) -> tuple[dict[str, Any], ...]:
+    observations: list[dict[str, Any]] = []
+    for manifest_value in list(manifest_paths)[:ARTIFACT_PATH_LIMIT]:
+        manifest_path = Path(str(manifest_value))
+        page_path = manifest_path.parent / "page.json"
+        try:
+            if (
+                not manifest_path.is_file()
+                or manifest_path.stat().st_size > 256_000
+                or not page_path.is_file()
+                or page_path.stat().st_size > 256_000
+            ):
+                continue
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            payload = json.loads(page_path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeError, json.JSONDecodeError):
+            continue
+        if not isinstance(manifest, dict) or not isinstance(payload, dict):
+            continue
+        artifact_id = _bounded_text(manifest.get("artifact_id"), 120)
+        artifact_reason_code = _bounded_text(manifest.get("reason_code"), 120)
+        captured_at = _bounded_text(manifest.get("created_at"), 80)
+        terminal_relation = (
+            "post_terminal"
+            if artifact_reason_code
+            in {
+                "operation_completed",
+                "operation_failed",
+                "operation_cancelled",
+                "operation_orphaned",
+            }
+            else "preterminal"
+        )
+        snapshot = payload.get("snapshot")
+        if not isinstance(snapshot, dict):
+            result = payload.get("result")
+            snapshot = result.get("snapshot") if isinstance(result, dict) else None
+        if not isinstance(snapshot, dict):
+            continue
+        workflow = snapshot.get("workflow")
+        workflow = workflow if isinstance(workflow, dict) else {}
+        readiness = snapshot.get("readiness")
+        readiness = readiness if isinstance(readiness, dict) else {}
+        direct_evidence = workflow.get("directEvidence")
+        direct_evidence = direct_evidence if isinstance(direct_evidence, dict) else {}
+        messages: list[str] = []
+        for raw in snapshot.get("visibleMessages") or []:
+            message = raw.get("message") if isinstance(raw, dict) else raw
+            text_value = _bounded_text(message, 300).strip()
+            if text_value and text_value not in messages:
+                messages.append(text_value)
+        controls: list[str] = []
+        for raw in workflow.get("buttons") or []:
+            label = (
+                _bounded_text(raw, 160).strip()
+                if isinstance(raw, str)
+                else _bounded_text(
+                    raw.get("label") or raw.get("text") or raw.get("ariaLabel"),
+                    160,
+                ).strip()
+                if isinstance(raw, dict)
+                else ""
+            )
+            if label and label not in controls:
+                controls.append(label)
+        href = _normalized_target_url(_bounded_text(snapshot.get("href"), 2_000))
+        artifact_evidence_conflicts = _artifact_snapshot_field_conflicts(
+            snapshot,
+            manifest_path.parent / "fields.json",
+            manifest,
+        )
+        direct_messages: list[str] = []
+        for raw in direct_evidence.get("messages") or []:
+            message = raw.get("message") if isinstance(raw, dict) else raw
+            text_value = _bounded_text(message, 300).strip()
+            if text_value and text_value not in direct_messages:
+                direct_messages.append(text_value)
+        observation = {
+            "source": "failure_artifact",
+            "artifact_id": artifact_id,
+            "artifact_reason_code": artifact_reason_code,
+            "captured_at": captured_at,
+            "terminal_relation": terminal_relation,
+            "snapshot_available": bool(
+                snapshot.get("ok") is not False and (snapshot.get("href") or snapshot.get("title"))
+            ),
+            "authoritative_terminal_snapshot": bool(
+                terminal_relation == "post_terminal"
+                and snapshot.get("ok") is not False
+                and (snapshot.get("href") or snapshot.get("title"))
+                and not artifact_evidence_conflicts
+            ),
+            "href": href,
+            "redirect_path": _safe_redirect_path(snapshot.get("href")),
+            "title": _bounded_text(snapshot.get("title"), 300),
+            "page_kind": _bounded_text(workflow.get("pageKind"), 80),
+            "phase": _bounded_text(workflow.get("phase"), 80),
+            "auth_state": _bounded_text(workflow.get("authState"), 80),
+            "auth_ui_state": _bounded_text(workflow.get("authUiState"), 80),
+            "document_ready_state": _bounded_text(snapshot.get("documentReadyState"), 40),
+            "visible_messages": tuple(messages[:20]),
+            "visible_controls": tuple(controls[:24]),
+            "auth_field_count": _nonnegative_int(readiness.get("authFieldCount")),
+            "application_field_count": _nonnegative_int(readiness.get("applicationFieldCount")),
+            "meaningful_control_count": _nonnegative_int(readiness.get("meaningfulControlCount")),
+            "final_submit_visible": bool(readiness.get("finalSubmitVisible")),
+            "loading_indicator_visible": bool(readiness.get("loadingIndicatorVisible")),
+            "is_auth_page": bool(workflow.get("isAuthPage")),
+            "is_apply_entry_page": bool(workflow.get("isApplyEntryPage")),
+            "is_job_fill_page": bool(workflow.get("isJobFillPage")),
+            "captcha_challenge_present": bool(workflow.get("captchaChallengePresent")),
+            "maintenance_visible": bool(direct_evidence.get("maintenanceVisible")),
+            "job_unavailable_visible": bool(direct_evidence.get("jobUnavailableVisible")),
+            "credential_rejection_visible": bool(direct_evidence.get("credentialRejectionVisible")),
+            "direct_evidence_messages": tuple(direct_messages[:20]),
+        }
+        if artifact_evidence_conflicts:
+            observation["artifact_evidence_coherent"] = False
+            observation["artifact_evidence_conflicts"] = artifact_evidence_conflicts
+        observations.append(observation)
+    return tuple(observations)
+
+
+def _artifact_snapshot_field_conflicts(
+    snapshot: dict[str, Any],
+    fields_path: Path,
+    manifest: dict[str, Any],
+) -> tuple[str, ...]:
+    declared_files = {
+        str(item.get("name") or "")
+        for item in manifest.get("files") or []
+        if isinstance(item, dict)
+    }
+    if "fields.json" not in declared_files:
+        return ()
+    conflicts: list[str] = []
+    field_capture_path = fields_path.with_name("field_capture.json")
+    if "field_capture.json" in declared_files:
+        try:
+            if field_capture_path.is_file() and field_capture_path.stat().st_size <= 256_000:
+                field_capture = json.loads(field_capture_path.read_text(encoding="utf-8"))
+            else:
+                field_capture = {}
+        except (OSError, UnicodeError, json.JSONDecodeError):
+            field_capture = {}
+        snapshot_generation = _artifact_document_generation(snapshot)
+        fields_generation = _artifact_document_generation(field_capture)
+        if not snapshot_generation or not fields_generation:
+            conflicts.append("snapshot_fields_capture_generation_unproven")
+        elif snapshot_generation != fields_generation:
+            conflicts.append("snapshot_fields_capture_generation_mismatch")
+
+    try:
+        if not fields_path.is_file() or fields_path.stat().st_size > 256_000:
+            return tuple(conflicts)
+        fields = json.loads(fields_path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError):
+        return tuple(conflicts)
+    if not isinstance(fields, list):
+        return tuple(conflicts)
+
+    has_email = False
+    has_password = False
+    for raw in fields[:FIELD_OBSERVATION_LIMIT]:
+        if not isinstance(raw, dict):
+            continue
+        field_type = _bounded_text(raw.get("type"), 80).casefold()
+        autocomplete = _bounded_text(raw.get("autocomplete"), 120).casefold()
+        label = _bounded_text(raw.get("label"), 300).casefold()
+        has_password = has_password or (
+            field_type == "password"
+            or "current-password" in autocomplete
+            or "new-password" in autocomplete
+            or "password" in label
+        )
+        has_email = has_email or (
+            field_type == "email" or "email" in autocomplete or "email" in label
+        )
+
+    workflow = snapshot.get("workflow")
+    workflow = workflow if isinstance(workflow, dict) else {}
+    readiness = snapshot.get("readiness")
+    readiness = readiness if isinstance(readiness, dict) else {}
+    if (
+        _bounded_text(workflow.get("authUiState"), 80) == "landing_choice"
+        and _nonnegative_int(readiness.get("authFieldCount")) == 0
+        and has_email
+        and has_password
+    ):
+        conflicts.append("snapshot_landing_choice_conflicts_with_credential_fields")
+    return tuple(dict.fromkeys(conflicts))
+
+
+def _artifact_document_generation(payload: Any) -> str:
+    if not isinstance(payload, dict):
+        return ""
+    candidates = [payload]
+    nested_snapshot = payload.get("snapshot")
+    if isinstance(nested_snapshot, dict):
+        candidates.append(nested_snapshot)
+    for candidate in candidates:
+        generation = candidate.get("documentGeneration") or candidate.get("document_generation")
+        if isinstance(generation, dict):
+            value = (
+                generation.get("id")
+                or generation.get("documentId")
+                or generation.get("document_id")
+            )
+            if isinstance(value, (str, int)) and str(value).strip():
+                return _bounded_text(value, 160).strip()
+        for key in (
+            "captureGeneration",
+            "capture_generation",
+            "documentId",
+            "document_id",
+        ):
+            value = candidate.get(key)
+            if isinstance(value, (str, int)) and str(value).strip():
+                return _bounded_text(value, 160).strip()
+    return ""
+
+
+def _artifact_field_observations(
+    manifest_paths: Iterable[str],
+) -> tuple[dict[str, Any], ...]:
+    observations: list[dict[str, Any]] = []
+    terminal_reasons = {
+        "operation_completed",
+        "operation_failed",
+        "operation_cancelled",
+        "operation_orphaned",
+    }
+    for manifest_value in list(manifest_paths)[:ARTIFACT_PATH_LIMIT]:
+        manifest_path = Path(str(manifest_value))
+        fields_path = manifest_path.parent / "fields.json"
+        try:
+            if (
+                not manifest_path.is_file()
+                or manifest_path.stat().st_size > 256_000
+                or not fields_path.is_file()
+                or fields_path.stat().st_size > 256_000
+            ):
+                continue
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            payload = json.loads(fields_path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeError, json.JSONDecodeError):
+            continue
+        if not isinstance(manifest, dict) or not isinstance(payload, list):
+            continue
+        if manifest.get("reason_code") not in terminal_reasons:
+            continue
+        declared_files = {
+            str(item.get("name") or "")
+            for item in manifest.get("files") or []
+            if isinstance(item, dict)
+        }
+        if "fields.json" not in declared_files:
+            continue
+        for position, raw in enumerate(payload):
+            if len(observations) >= FIELD_OBSERVATION_LIMIT:
+                return tuple(observations)
+            if not isinstance(raw, dict):
+                continue
+            raw_id = raw.get("id") or raw.get("fieldId") or raw.get("field_id")
+            if not raw_id and raw.get("index") is not None:
+                raw_id = f"index:{_nonnegative_int(raw.get('index'))}"
+            observations.extend(
+                _compact_field_observations(
+                    (
+                        {
+                            "id": raw_id or f"index:{position}",
+                            "label": raw.get("label"),
+                            "type": raw.get("type"),
+                            "value_present": bool(
+                                raw.get(
+                                    "valuePresent",
+                                    raw.get("value_present", False),
+                                )
+                            ),
+                            "value_length_state": raw.get(
+                                "valueLengthState",
+                                raw.get("value_length_state"),
+                            ),
+                        },
+                    )
+                )
+            )
+    return tuple(observations[:FIELD_OBSERVATION_LIMIT])
+
+
+def _safe_redirect_path(value: Any) -> str:
+    try:
+        query = parse_qs(urlsplit(str(value or "")).query, keep_blank_values=False)
+        redirect = str((query.get("redirect") or [""])[0]).strip()
+        parsed = urlsplit(redirect)
+    except (TypeError, ValueError):
+        return ""
+    path = parsed.path
+    return path[:2_000] if path.startswith("/") else ""
+
+
+def _merge_artifact_page_observations(
+    failure_fields: dict[str, Any],
+    artifact_paths: Iterable[str],
+    *,
+    artifact_observations: Iterable[dict[str, Any]] | None = None,
+    artifact_field_observations: Iterable[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    merged = dict(failure_fields)
+    materialized_artifact_paths = tuple(artifact_paths)
+    projected_observations = tuple(
+        artifact_observations
+        if artifact_observations is not None
+        else _artifact_page_observations(materialized_artifact_paths)
+    )
+    projected_fields = _compact_field_observations(
+        tuple(
+            artifact_field_observations
+            if artifact_field_observations is not None
+            else _artifact_field_observations(materialized_artifact_paths)
+        )
+    )
+    if projected_observations:
+        merged["page_observations"] = tuple(
+            [
+                *merged.get("page_observations", ()),
+                *projected_observations,
+            ][-32:]
+        )
+    if projected_fields:
+        merged["field_observations"] = tuple(
+            [
+                *merged.get("field_observations", ()),
+                *projected_fields,
+            ][-FIELD_OBSERVATION_LIMIT:]
+        )
+    projected_conflicts = tuple(
+        conflict
+        for observation in projected_observations
+        if isinstance(observation, dict)
+        for conflict in observation.get("artifact_evidence_conflicts", ())
+        if isinstance(conflict, str) and conflict
+    )
+    if projected_conflicts:
+        merged["evidence_conflicts"] = tuple(
+            dict.fromkeys(
+                [
+                    *merged.get("evidence_conflicts", ()),
+                    *projected_conflicts,
+                ]
+            )
+        )[:32]
+        merged["live_inspection_required"] = True
+        merged["missing_evidence"] = tuple(
+            dict.fromkeys(
+                [
+                    *merged.get("missing_evidence", ()),
+                    "coherent_terminal_page_snapshot",
+                ]
+            )
+        )
+    terminal_observations = tuple(
+        item
+        for item in merged.get("page_observations", ())
+        if isinstance(item, dict) and bool(item.get("authoritative_terminal_snapshot"))
+    )
+    if terminal_observations:
+        latest = terminal_observations[-1]
+        messages = tuple(
+            dict.fromkeys(
+                [
+                    *merged.get("observed_messages", ()),
+                    *latest.get("visible_messages", ()),
+                    *latest.get("direct_evidence_messages", ()),
+                ]
+            )
+        )[:64]
+        merged["observed_messages"] = messages
+        known_cause = _direct_known_cause_from_terminal_observation(latest)
+        if known_cause:
+            code, scope, summary, observed_state, next_action = known_cause
+            merged.update(
+                root_cause_code=code,
+                cause_asserted=True,
+                failure_scope=scope,
+                failure_summary=summary,
+                observed_state=observed_state,
+                confidence="proven",
+                root_cause_unknown=False,
+                missing_evidence=(),
+                live_inspection_required=False,
+                next_safe_action=next_action,
+            )
+        else:
+            required_label = _direct_required_blocker_from_terminal_observation(latest)
+            if required_label:
+                merged.update(
+                    root_cause_code="required_field_uncommitted",
+                    cause_asserted=True,
+                    failure_scope="ui_element",
+                    failure_summary=(
+                        "A directly observed required field remained empty and blocked "
+                        "page advancement; the lower-level commit mechanism was not "
+                        "established."
+                    ),
+                    causal_label=required_label,
+                    causal_selector="",
+                    expected_state=(
+                        f'Required field "{required_label}" contains a committed value.'
+                    ),
+                    observed_state=(
+                        f'Required field "{required_label}" remained empty, and the site '
+                        "displayed a required-value validation error."
+                    ),
+                    confidence="proven",
+                    root_cause_unknown=False,
+                    mechanism_unknown=True,
+                    missing_evidence=("field_commit_evidence",),
+                    live_inspection_required=False,
+                    next_safe_action="request_manual_completion_for_required_field",
+                    evidence_conflicts=tuple(
+                        conflict
+                        for conflict in merged.get("evidence_conflicts", ())
+                        if conflict != "unasserted_reported_cause_visible_validation_errors"
+                    ),
+                )
+            elif isinstance(merged.get("auth_action_boundary"), dict) and isinstance(
+                merged["auth_action_boundary"].get("actionReceipt"), dict
+            ):
+                merged.update(
+                    mechanism_unknown=True,
+                    live_inspection_required=False,
+                    missing_evidence=tuple(
+                        item
+                        for item in merged.get("missing_evidence", ())
+                        if item != "terminal_page_snapshot"
+                    ),
+                    next_safe_action="diagnose_from_retained_evidence",
+                )
+    if not merged.get("cause_asserted", False) and not any(
+        bool(item.get("authoritative_terminal_snapshot"))
+        for item in merged.get("page_observations", ())
+        if isinstance(item, dict)
+    ):
+        merged["live_inspection_required"] = True
+        merged["missing_evidence"] = tuple(
+            dict.fromkeys(
+                [
+                    *merged.get("missing_evidence", ()),
+                    "terminal_page_snapshot",
+                ]
+            )
+        )
+    return merged
+
+
+def _direct_required_blocker_from_terminal_observation(
+    observation: dict[str, Any],
+) -> str:
+    messages = tuple(
+        [
+            *observation.get("visible_messages", ()),
+            *observation.get("direct_evidence_messages", ()),
+        ]
+    )
+    controls = tuple(observation.get("visible_controls", ()))
+    for message in messages:
+        label = required_field_label_from_validation(message)
+        if label and any(required_field_text_is_empty(label, control) for control in controls):
+            return label
+    return ""
+
+
+def _direct_known_cause_from_terminal_observation(
+    observation: dict[str, Any],
+) -> tuple[str, str, str, str, str] | None:
+    """Promote only explicit browser facts from the terminal snapshot."""
+
+    if observation.get("job_unavailable_visible") is True:
+        return (
+            "job_unavailable",
+            "page_state",
+            "The terminal page directly reports that this job is unavailable.",
+            "A visible job-unavailable message is present.",
+            "Use a current posting for the same company.",
+        )
+    if observation.get("maintenance_visible") is True:
+        return (
+            "maintenance",
+            "page_state",
+            "The terminal page directly reports maintenance or temporary unavailability.",
+            "A visible maintenance or temporary-unavailability message is present.",
+            "Retry after the site becomes available.",
+        )
+    if observation.get("credential_rejection_visible") is True:
+        return (
+            "credential_rejected",
+            "authentication",
+            "The terminal page directly rejects the submitted credentials or reports that the account might be locked.",
+            "A visible credential/account rejection alert is present.",
+            "Verify the account credentials and lock state before retrying.",
+        )
+    if observation.get("captcha_challenge_present") is True:
+        return (
+            "auth_captcha_gate",
+            "authentication",
+            "The terminal page contains a visible structural CAPTCHA challenge.",
+            "A visible CAPTCHA challenge is present.",
+            "Complete the CAPTCHA manually before resuming.",
+        )
+    return None
+
+
+def _success_terminal_evidence_fields(
+    failure_fields: dict[str, Any],
+) -> dict[str, Any]:
+    fields = dict(failure_fields)
+    has_terminal_snapshot = any(
+        bool(item.get("authoritative_terminal_snapshot"))
+        for item in fields.get("page_observations", ())
+        if isinstance(item, dict)
+    )
+    fields.update(
+        failure_scope="",
+        root_cause_code="",
+        reported_cause_code="",
+        cause_asserted=False,
+        failure_summary="",
+        causal_selector="",
+        causal_label="",
+        expected_state="",
+        observed_state="",
+        confidence="proven" if has_terminal_snapshot else "unknown",
+        root_cause_unknown=False,
+        mechanism_unknown=False,
+        missing_evidence=()
+        if has_terminal_snapshot
+        else tuple(dict.fromkeys([*fields.get("missing_evidence", ()), "terminal_page_snapshot"])),
+        live_inspection_required=not has_terminal_snapshot,
+        evidence_conflicts=(),
+        next_safe_action="",
+    )
+    return fields
 
 
 def _operation_safety_evidence(operation: dict[str, Any]) -> dict[str, bool]:

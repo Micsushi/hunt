@@ -297,6 +297,7 @@ for ($index = 0; $index -lt $lanePorts.Count; $index += 1) {
         Size = $env:HUNT_C3_CHROME_WINDOW_SIZE
         Reset = $env:HUNT_C3_CHROME_RESET_PROFILE
         StartMinimized = $env:HUNT_C3_CHROME_START_MINIMIZED
+        IsolatedDesktop = $env:HUNT_C3_CHROME_ISOLATED_DESKTOP
     }
     try {
         $env:HUNT_C3_CHROME_REMOTE_DEBUGGING_PORT = [string]$port
@@ -304,6 +305,7 @@ for ($index = 0; $index -lt $lanePorts.Count; $index += 1) {
         $env:HUNT_C3_CHROME_WINDOW_POSITION = $position
         $env:HUNT_C3_CHROME_WINDOW_SIZE = $size
         $env:HUNT_C3_CHROME_START_MINIMIZED = "1"
+        $env:HUNT_C3_CHROME_ISOLATED_DESKTOP = "1"
         if ($NoResetProfiles) {
             Remove-Item Env:\HUNT_C3_CHROME_RESET_PROFILE -ErrorAction SilentlyContinue
         } else {
@@ -320,6 +322,7 @@ for ($index = 0; $index -lt $lanePorts.Count; $index += 1) {
         if ($null -eq $oldEnv.Size) { Remove-Item Env:\HUNT_C3_CHROME_WINDOW_SIZE -ErrorAction SilentlyContinue } else { $env:HUNT_C3_CHROME_WINDOW_SIZE = $oldEnv.Size }
         if ($null -eq $oldEnv.Reset) { Remove-Item Env:\HUNT_C3_CHROME_RESET_PROFILE -ErrorAction SilentlyContinue } else { $env:HUNT_C3_CHROME_RESET_PROFILE = $oldEnv.Reset }
         if ($null -eq $oldEnv.StartMinimized) { Remove-Item Env:\HUNT_C3_CHROME_START_MINIMIZED -ErrorAction SilentlyContinue } else { $env:HUNT_C3_CHROME_START_MINIMIZED = $oldEnv.StartMinimized }
+        if ($null -eq $oldEnv.IsolatedDesktop) { Remove-Item Env:\HUNT_C3_CHROME_ISOLATED_DESKTOP -ErrorAction SilentlyContinue } else { $env:HUNT_C3_CHROME_ISOLATED_DESKTOP = $oldEnv.IsolatedDesktop }
     }
 
     Wait-DevToolsEndpoint -Port $port | Out-Null

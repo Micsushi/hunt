@@ -127,6 +127,7 @@ class C3ArtifactManifestSummary(BaseModel):
     artifact_id: str = Field(min_length=1)
     status: str = ""
     kind: str = ""
+    reason_code: str = ""
     captured_at: str = ""
     files: list[str] = Field(default_factory=list, max_length=FAILURE_ARTIFACT_FILE_LIMIT)
     manifest_present: bool = False
@@ -670,7 +671,11 @@ def _project_failure_event(event: Any) -> tuple[C3FailureEvidenceItem | None, se
     event_type = _safe_failure_text(row.get("event_type"), 120)
     if not event_type:
         return None, set(), True
-    action = _first_text(values, ("action", "interaction", "command"), limit=80)
+    action = _first_text(
+        values,
+        ("action", "interaction", "command", "substep", "pending_action"),
+        limit=80,
+    )
     reason_code = _first_text(
         values,
         ("root_cause_code", "reason_code", "error_code", "stopped_reason"),
@@ -943,6 +948,7 @@ def _failure_artifact_summaries(
                 artifact_id=artifact_id,
                 status="completed",
                 kind="failure_bundle",
+                reason_code=_safe_failure_text(manifest.get("reason_code"), 120),
                 captured_at=_safe_failure_text(manifest.get("created_at"), 80),
                 files=sorted(files),
                 manifest_present=True,

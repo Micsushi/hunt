@@ -79,6 +79,29 @@ Default active subagent/lane capacity is `6` because Codex currently supports
 up to six active subagents. Treat this as operator config from the prompt/docs,
 not a product hardcode.
 
+Active subagent capacity is separate from retained-browser capacity:
+
+- Preferred p Chrome capacity is `10`; absolute capacity is `20`.
+- Count both p Chrome lane windows and live application/job-testing tabs before
+  every launch. Ignore extension pages, service workers, and other internal
+  targets. Apply the stricter count if windows and job tabs differ.
+- At or below 10, run the normal ownership, activity, preserve, and
+  documentation checks. Normally retain completed lanes.
+- Above 10, before opening more testing, aggressively review inactive
+  same-project lanes and close as many eligible oldest terminal lanes as
+  practical to return to 10 or fewer.
+- Existing plus proposed windows or job-testing tabs must never exceed 20. This
+  hard cap has no launcher-debugging, large-batch, or operator convenience
+  bypass.
+- Capacity pressure never permits closing an active, other-project,
+  user-preserved, undocumented, or uncertain lane.
+
+Current enforcement status: setup now launches each lane on a named, unswitched
+Windows desktop, and `scripts\verify_c3_window_safety.ps1` verifies ownership
+and foreground isolation. The global 10/20 inventory,
+documentation-gated closure, and closure receipts still require the manual
+preflight in `docs/C3_TESTING_METHODS.md`.
+
 The batch runner caps actual concurrency at six, creates a unique browser
 profile/port/agent/lane/session per job, sends no foreground or submit
 capability, and closes each MCP client deterministically. One stalled lane does
@@ -118,12 +141,10 @@ same evidence.
 
 ## Scope
 
-- Active capacity comes from the main-agent prompt. It caps concurrent active
-  lane subagents (investigation threads), not the number of open p Chrome
-  windows. A slot frees when a subagent reports and the main agent closes its
-  thread, even though that subagent's p Chrome stays open. Open p Chrome lanes
-  accumulate off the main monitor until the main agent closes them: passing
-  Review-reached lanes at the main agent's discretion, the rest at cleanup.
+- Active agent capacity comes from the main-agent prompt and caps concurrent
+  lane subagents. It does not replace the separate p Chrome soft cap of 10 and
+  non-bypassable hard cap of 20. A subagent slot frees when the subagent
+  completes its terminal report, even though its p Chrome remains open.
 - Large batch requests are a rolling queue. Launch only up to the configured
   active capacity, then start the next queued job as soon as one lane subagent
   has finished analysis, written its report, and captured artifacts. The
@@ -179,25 +200,25 @@ per-port profiles like `ChromeC3PlaywrightParallel_9401` across batches.
 
 - Create the full large-batch assignment table first. Mark all jobs queued, then
   mark jobs active up to the configured active capacity.
+- Before creating a lane, inventory every existing p Chrome lane and live
+  job-testing tab. Record project, batch, port/profile, job URL, owner/agent,
+  activity/heartbeat, terminal result, report/evidence paths, and preserve
+  status. Unknown ownership is a preserve condition, not a cleanup candidate.
 - Set up Chrome only for active jobs. Do not pre-create profiles, windows, tabs,
   or subagents for queued future jobs.
 - When a lane reaches Review, the subagent must capture final UI/audit/console
   artifacts, write its report to `current_debug.md`, leave p Chrome open, and
   return. The main agent then closes the completed subagent thread and starts
-  the next queued job on a different unused port if capacity is available and
-  the batch is below the configured hard-failure threshold. The main agent may
-  close that passing lane's p Chrome at its discretion once the page is no
-  longer needed, to bound how many browsers stay open during a large batch.
+  the next queued job only if agent capacity, browser capacity, and the
+  hard-failure threshold allow it. Completing or passing a test is not itself
+  permission to close that lane.
 - When a lane hard-fails before Review or stops on a non-C3/site/posting state,
-  preserve that p Chrome after capture so the user can inspect it. Do not close
-  it unless the main agent or user explicitly says cleanup is allowed. The
-  preserved p Chrome does not hold a capacity slot once its subagent has
-  reported; the main agent may launch the next queued job on a different unused
-  port only while the hard failure count is below the configured threshold.
+  capture the same terminal report/evidence and leave p Chrome open. The lane no
+  longer consumes an agent slot after the report, but it still counts toward
+  the p Chrome soft/hard caps.
 - Do not wait for all active lanes to finish before launching the next queued
-  job. Keep the active subagent count at or below the configured capacity. Open
-  p Chrome windows may exceed that count because they persist until the main
-  agent closes them.
+  job when all capacity and safety checks pass. Keep active subagents within
+  their configured capacity and retained p Chrome within the 10/20 policy.
 - After every lane report, update the batch counters: `review_reached`,
   `review_reached_with_bad_fills`, `hard_failures`, and `other_non_review`
   such as dead posting, external assessment, CAPTCHA/MFA, or non-Workday.
@@ -207,15 +228,33 @@ per-port profiles like `ChromeC3PlaywrightParallel_9401` across batches.
 - Start a new subagent only when a queued job is promoted into a free active
   slot, replacing a crashed agent, or doing a clearly separate post-batch
   investigation.
-- If the same jobs need a fresh p Chrome run, the main agent closes unused old
-  p Chrome lanes for those jobs before launching new ones, or uses different
-  unused ports when the old lane must remain inspectable.
+- A lane agent always runs to a terminal success, failure, or typed external
+  stop, writes complete findings/evidence, and leaves p Chrome open. It never
+  performs browser cleanup at task completion.
+- Browser cleanup is considered when starting more testing and capacity or
+  exact port/profile reuse requires it. At or below 10 use normal checks and
+  normally retain prior lanes. Above 10, review closure candidates
+  aggressively and close eligible oldest lanes until at or below 10 when
+  practical. Never launch when the resulting count would exceed 20.
+- If a lane may still be running, verify its owning agent/thread and current
+  progress. If the agent stopped, determine and document why before deciding
+  whether the lane is inactive and eligible.
+- A lane is closable only when it belongs to Hunt, is inactive, has a verified
+  terminal report plus evidence, has no preserve instruction, and is not needed
+  for an active investigation. Different-project and uncertain lanes are never
+  cleanup candidates.
+- Before closing, write a closure receipt with lane/batch/port/profile, terminal
+  result, report and evidence paths, prior agent state, closure reason, and
+  timestamp. Use explicit ports or an exact batch selector; never broad process
+  cleanup.
+- If the same job needs a fresh run, use a different unused port when the old
+  lane is not safely closable. Port reuse does not override the cleanup gate.
 - If a profile is reused intentionally, launch with
   `HUNT_C3_CHROME_RESET_PROFILE=1` so stale extension-disabled state is cleared.
-- Do not leave stale p Chrome lanes open after the main-agent fix/retest cycle
-  is fully done. Preserve hard-failure and site/posting-state lanes for
-  inspection until the user or main agent explicitly cleans them up. Use
-  `scripts\close_c3_parallel_lanes.ps1` with explicit ports for cleanup.
+- Do not perform end-of-agent or end-of-wave cleanup merely to make the desktop
+  tidy. Retained lanes are reviewed at the next test-start capacity preflight.
+  Use `scripts\close_c3_parallel_lanes.ps1` only after the evidence gate and with
+  explicit ports or an exact verified batch.
 - If an extension-root blocked tab appears, close it with
   `scripts\c3_close_blocked_extension_tabs.js` and use the full Options URL or
   setup scripts instead.
@@ -224,12 +263,19 @@ per-port profiles like `ChromeC3PlaywrightParallel_9401` across batches.
 
 ## No-Focus Rule
 
-- Place p Chrome windows off the main monitor.
-- Use launcher auto-placement or lane-specific window position/size env vars.
-  The setup script must verify a secondary monitor and keep every window inside
-  the visible working area. Do not tile lanes downward beyond the desktop.
-- During setup, p Chrome lanes launch minimized and stay in the background by
-  default. Do not restore/cascade windows during automated batches. Use
+- During automated setup, p Chrome lanes launch on named, unswitched Windows
+  desktops and start minimized/non-activating. Chrome may restore internally on
+  its isolated desktop, but it must not appear on, focus, or receive input from
+  the user's active desktop. A visible smaller shared-desktop window does not
+  satisfy this rule.
+- Capture foreground ownership before/after launch and enumerate the named
+  desktop with `scripts\verify_c3_window_safety.ps1`. A pChrome process on the
+  active desktop or any pChrome foreground ownership is a typed setup failure.
+- Secondary-monitor placement is only a fallback for windows the user
+  explicitly asks to inspect. It is not a substitute for minimized/no-focus
+  operation. When restored, keep every window inside that monitor's visible
+  working area.
+- Do not restore/cascade windows during automated batches. Use
   `scripts\move_c3_parallel_windows.ps1` or `setup_c3_parallel_lanes.ps1
   -RestoreWindows` only when the user explicitly wants to inspect the lane.
 - `scripts\c3_workday_live_smoke.js` must not use `Page.bringToFront` during
@@ -237,8 +283,6 @@ per-port profiles like `ChromeC3PlaywrightParallel_9401` across batches.
   when the user explicitly asks to inspect the lane.
 - Do not use Playwright `page.bringToFront()`, restore/cascade windows,
   focus-moving browser actions, or OS activation during automated testing.
-- Before launching a fresh lane for the same job, close any unused old lane
-  windows so duplicate p Chromes do not pile up on the main monitor.
 - Do not use normal Chrome or the user's main Chrome profile for agent testing.
 - Do not open visible Terminal, Windows Terminal, PowerShell, cmd, or log-tail
   windows for lanes or helper processes.
@@ -264,8 +308,8 @@ per-port profiles like `ChromeC3PlaywrightParallel_9401` across batches.
 - Subagents never close p Chrome. They capture artifacts, report, and leave the
   lane open for the main agent.
 - The main agent owns rolling-queue coordination: when a subagent reports,
-  close that subagent thread and launch the next queued job on a different
-  unused port only while below the hard-failure threshold.
+  close that subagent thread and launch the next queued job only while below the
+  hard-failure threshold and within both browser caps.
 - Subagents may add narrow proof/probe scripts for new UI behavior within the
   failed-lane probe budget from the main-agent prompt, but they must not modify
   C3 product code or the live-smoke runner.
@@ -274,10 +318,11 @@ per-port profiles like `ChromeC3PlaywrightParallel_9401` across batches.
   not delete them; the main agent reviews and marks them reviewed, trusted,
   archived, stale, or deleted.
 - The main agent coordinates lanes, waits for required lane proof, synthesizes
-  findings, patches the generic C3 behavior once, runs local checks, retests
-  with the actual extension in fresh p Chrome, then closes no-longer-needed
-  p Chrome lanes. Ask for review only when the user requested review or the fix
-  choice is unsafe/ambiguous.
+  findings, patches the generic C3 behavior once, runs local checks, and retests
+  with the actual extension in fresh p Chrome. It reviews evidence-gated
+  closure candidates when starting later testing; it does not close browsers
+  merely because the current agents or wave finished. Ask for review only when
+  the user requested review or the fix choice is unsafe/ambiguous.
 
 ## Current Debug File
 
@@ -374,8 +419,9 @@ wants to inspect the lane. Do not spawn other agents for this same job.
 Classify the primitive first. Probe live UI like a user before CDP/Playwright
 inspect. Record field_focused, popup_owner, option_clicked, value_saved,
 repair_touched, commit_proof, loop_check, and agent_feedback. Do not close
-p Chrome; the main agent owns cleanup after patch/retest or explicit user
-cleanup. Do not modify C3 code. Write findings to
+p Chrome; finish the terminal report and evidence, then leave it open. The main
+agent may perform evidence-gated cleanup when starting later testing. Do not
+modify C3 code. Write findings to
 logs\<batch-id>\current_debug.md under your lane section.
 ```
 

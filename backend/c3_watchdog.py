@@ -62,7 +62,11 @@ class C3WatchdogPolicy:
             )
         if state == "queued":
             return C3WatchdogDecision(state, "operation_queued")
-        if heartbeat_age >= self.stalled_seconds:
+        both_stale = (
+            heartbeat_age >= self.suspected_stall_seconds
+            and progress_age >= self.suspected_stall_seconds
+        )
+        if heartbeat_age >= self.stalled_seconds and progress_age >= self.stalled_seconds:
             return C3WatchdogDecision(
                 "stalled",
                 "operation_heartbeat_missing",
@@ -70,7 +74,7 @@ class C3WatchdogPolicy:
                 heartbeat_age,
                 progress_age,
             )
-        if heartbeat_age >= self.bundle_seconds:
+        if heartbeat_age >= self.bundle_seconds and progress_age >= self.bundle_seconds:
             return C3WatchdogDecision(
                 "suspected_stall",
                 "operation_heartbeat_missing",
@@ -78,10 +82,18 @@ class C3WatchdogPolicy:
                 heartbeat_age,
                 progress_age,
             )
-        if heartbeat_age >= self.suspected_stall_seconds:
+        if both_stale:
             return C3WatchdogDecision(
                 "suspected_stall",
                 "operation_heartbeat_missing",
+                ("health_probe",),
+                heartbeat_age,
+                progress_age,
+            )
+        if heartbeat_age >= self.suspected_stall_seconds:
+            return C3WatchdogDecision(
+                "running",
+                "operation_heartbeat_probe_stale",
                 ("health_probe",),
                 heartbeat_age,
                 progress_age,

@@ -27,11 +27,22 @@ def test_failure_bundle_is_redacted_hashed_and_linked(tmp_path: Path):
                 }
             ],
             "validation": [{"text": "Email candidate@example.com is invalid"}],
+            "page": {
+                "snapshot": {
+                    "href": "https://example.test/job/123",
+                    "title": "Example role",
+                    "workflow": {
+                        "pageKind": "apply_entry",
+                        "phase": "apply_entry",
+                        "buttons": [{"label": "Apply Manually"}],
+                    },
+                }
+            },
             "progress": {"phase": "field_action", "token": "secret-token"},
             "console": ["failed for candidate@example.com"],
             "network": [{"url": "https://example.test", "authorization": "Bearer x"}],
             "health": {"reachable": True},
-            "events": [{"seq": index, "message": f"event {index}"} for index in range(150)],
+            "events": [{"seq": index, "message": f"event {index}"} for index in range(1_100)],
             "checkpoints": [{"field": "source", "status": "failed"}],
         },
     )
@@ -44,7 +55,12 @@ def test_failure_bundle_is_redacted_hashed_and_linked(tmp_path: Path):
     assert manifest["redaction"]["applied"] is True
     assert manifest["files"]
     assert all(len(entry["sha256"]) == 64 for entry in manifest["files"])
-    assert len(json.loads((manifest_path.parent / "events.json").read_text())) == 100
+    retained_events = json.loads((manifest_path.parent / "events.json").read_text())
+    assert len(retained_events) == 16
+    assert retained_events[-1]["seq"] == 1_099
+    page = json.loads((manifest_path.parent / "page.json").read_text())
+    assert page["snapshot"]["workflow"]["pageKind"] == "apply_entry"
+    assert page["snapshot"]["workflow"]["buttons"][0]["label"] == "Apply Manually"
     all_text = "\n".join(
         path.read_text(encoding="utf-8", errors="ignore")
         for path in manifest_path.parent.iterdir()
@@ -209,6 +225,106 @@ def test_failure_bundle_capture_bounds_oversized_sections(tmp_path: Path):
     directory = Path(result["manifest_path"]).parent
     assert (directory / "fields.json").stat().st_size <= MAX_JSON_SECTION_BYTES
     assert all(path.stat().st_size <= MAX_ARTIFACT_FILE_BYTES for path in directory.iterdir())
+
+
+def test_failure_bundle_event_tail_preserves_terminal_failure_after_noisy_progress(
+    tmp_path: Path,
+):
+    progress_events = [
+        {
+            "seq": index,
+            "event_type": "operation.progress",
+            "payload": {
+                "substep": f"attempt-{index}",
+                "samples": [{"state": "loading", "attempt": sample} for sample in range(40)],
+            },
+        }
+        for index in range(1, 70)
+    ]
+    terminal = {
+        "seq": 70,
+        "event_type": "operation.failed",
+        "payload": {
+            "terminal_reason": "extension_command_failed",
+            "error": {
+                "bridge_reason_code": "auth_surface_loading",
+                "failure_evidence": {
+                    "stopped_reason": "auth_surface_loading",
+                    "action_receipt": {"attempted": False, "clicked": False},
+                },
+            },
+        },
+    }
+
+    result = C3ArtifactStore(tmp_path).capture_failure_bundle(
+        session_id="session-1",
+        operation_id="op-1",
+        reason_code="operation_failed",
+        diagnostics={"events": [*progress_events, terminal]},
+    )
+
+    events = json.loads(
+        (Path(result["manifest_path"]).parent / "events.json").read_text(encoding="utf-8")
+    )
+    assert events[-1]["seq"] == 70
+    assert events[-1]["event_type"] == "operation.failed"
+    assert events[-1]["payload"]["error"]["bridge_reason_code"] == ("auth_surface_loading")
+    assert events[-1]["payload"]["error"]["failure_evidence"]["action_receipt"] == {
+        "attempted": False,
+        "clicked": False,
+    }
+
+
+def test_failure_bundle_preserves_value_free_nested_auth_boundary_samples(
+    tmp_path: Path,
+):
+    terminal = {
+        "seq": 80,
+        "event_type": "operation.failed",
+        "payload": {
+            "error": {
+                "failure_evidence": {
+                    "auth_action_boundary": {
+                        "stage": "preflight_blocked",
+                        "stabilization": {
+                            "reason": "auth_surface_loading",
+                            "sample_count": 1,
+                            "samples": [
+                                {
+                                    "sampled_at": "2026-07-26T22:07:04.006Z",
+                                    "password_count": 0,
+                                    "password_populated": False,
+                                    "password": "must-not-survive",
+                                }
+                            ],
+                        },
+                        "credential_completeness": {
+                            "password_visible": False,
+                            "password_populated": False,
+                        },
+                    }
+                }
+            }
+        },
+    }
+
+    result = C3ArtifactStore(tmp_path).capture_failure_bundle(
+        session_id="session-1",
+        operation_id="op-1",
+        reason_code="operation_failed",
+        diagnostics={"events": [terminal]},
+    )
+
+    events = json.loads(
+        (Path(result["manifest_path"]).parent / "events.json").read_text(encoding="utf-8")
+    )
+    boundary = events[0]["payload"]["error"]["failure_evidence"]["auth_action_boundary"]
+    sample = boundary["stabilization"]["samples"][0]
+    assert sample["sampled_at"] == "2026-07-26T22:07:04.006Z"
+    assert sample["password_count"] == 0
+    assert sample["password_populated"] is False
+    assert sample["password"] == "[REDACTED]"
+    assert boundary["credential_completeness"]["password_visible"] is False
 
 
 def test_failure_bundle_validation_rejects_manifest_symlink_outside_root(tmp_path: Path):

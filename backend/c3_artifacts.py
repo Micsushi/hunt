@@ -5,6 +5,7 @@ import html
 import json
 import re
 import uuid
+from collections import deque
 from datetime import UTC, datetime
 from html.parser import HTMLParser
 from itertools import islice
@@ -12,7 +13,11 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit, urlunsplit
 
-from backend.ledger.redaction import REDACTED, redact_payload
+from backend.ledger.redaction import (
+    REDACTED,
+    VALUE_FREE_PASSWORD_TELEMETRY_KEYS,
+    redact_payload,
+)
 
 SAFE_ID = re.compile(r"^[A-Za-z0-9_.-]+$")
 SENSITIVE_ARTIFACT_KEY = re.compile(
@@ -30,6 +35,7 @@ CONTEXT_VALUE_KEYS = {
 URL_KEYS = {"url", "request_url", "document_url", "page_url"}
 REQUIRED_ARTIFACT_FILES = {
     "dom.html",
+    "page.json",
     "fields.json",
     "validation.json",
     "progress.json",
@@ -39,6 +45,7 @@ REQUIRED_ARTIFACT_FILES = {
     "events.json",
     "checkpoints.json",
 }
+OPTIONAL_ARTIFACT_FILES = {"field_capture.json"}
 MAX_DOM_BYTES = 500_000
 MAX_JSON_SECTION_BYTES = 256_000
 MAX_ARTIFACT_FILE_BYTES = 1_000_000
@@ -49,7 +56,7 @@ STRUCTURAL_LABEL_BYTES = 240
 STRUCTURAL_ATTRIBUTE_BYTES = 160
 MAX_SECTION_ITEMS = 200
 MAX_SECTION_MAPPING_KEYS = 128
-MAX_SECTION_DEPTH = 8
+MAX_SECTION_DEPTH = 12
 MAX_SECTION_NODES = 2_000
 MAX_SECTION_STRING_BYTES = 20_000
 STRUCTURAL_ALLOWED_ATTRIBUTES = {
@@ -135,14 +142,17 @@ class C3ArtifactStore:
             _write_text(directory / "dom.html", str(safe_dom), max_bytes=MAX_ARTIFACT_FILE_BYTES)
         )
 
+        retained_events = deque(diagnostics.get("events", []) or [], maxlen=16)
         sections = {
+            "page": diagnostics.get("page", {}),
             "fields": diagnostics.get("fields", []),
+            "field_capture": diagnostics.get("field_capture", {}),
             "validation": diagnostics.get("validation", []),
             "progress": diagnostics.get("progress", {}),
             "console": diagnostics.get("console", []),
             "network": diagnostics.get("network", []),
             "health": diagnostics.get("health", {}),
-            "events": list(islice(iter(diagnostics.get("events", []) or []), 100)),
+            "events": list(retained_events),
             "checkpoints": diagnostics.get("checkpoints", []),
         }
         for name, value in sections.items():
@@ -228,7 +238,11 @@ class C3ArtifactStore:
         manifest_names = {
             str(entry.get("name") or "") for entry in files if isinstance(entry, dict)
         }
-        if len(manifest_names) != len(files) or manifest_names != REQUIRED_ARTIFACT_FILES:
+        if (
+            len(manifest_names) != len(files)
+            or not REQUIRED_ARTIFACT_FILES.issubset(manifest_names)
+            or not manifest_names.issubset(REQUIRED_ARTIFACT_FILES | OPTIONAL_ARTIFACT_FILES)
+        ):
             raise ValueError("artifact_manifest_files_invalid")
         bundle_bytes = 0
         for entry in files:
@@ -262,6 +276,9 @@ class C3ArtifactStore:
 
 def _artifact_redact(value: Any, key: str = "") -> tuple[Any, set[str]]:
     rules: set[str] = set()
+    normalized_key = re.sub(r"[^a-z0-9]", "", key.lower())
+    if normalized_key in VALUE_FREE_PASSWORD_TELEMETRY_KEYS and isinstance(value, (bool, int)):
+        return value, rules
     if key and SENSITIVE_ARTIFACT_KEY.search(key):
         return REDACTED, {f"artifact_key:{key}"}
     if isinstance(value, dict):

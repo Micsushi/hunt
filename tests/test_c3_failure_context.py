@@ -38,6 +38,762 @@ def _event(seq: int, event_type: str, payload: dict, *, event_id: str | None = N
     }
 
 
+def test_failure_context_preserves_value_free_auth_action_boundary():
+    context = build_failure_context(
+        _operation(),
+        [
+            _event(
+                1,
+                "operation.failed",
+                {
+                    "error": {
+                        "reason_code": "extension_command_failed",
+                        "failure_evidence": {
+                            "auth_action_boundary": {
+                                "stage": "preflight_blocked",
+                                "preActionDetection": {
+                                    "authState": "login",
+                                    "authUiState": "credential_form",
+                                    "documentGenerationId": "nav-auth-1",
+                                    "frameId": 0,
+                                    "emailCount": 1,
+                                    "passwordCount": 1,
+                                },
+                                "stabilization": {
+                                    "reason": "auth_surface_loading",
+                                    "sampleCount": 2,
+                                    "samples": [
+                                        {
+                                            "authState": "login",
+                                            "authUiState": "credential_form",
+                                            "emailCount": 1,
+                                            "passwordCount": 1,
+                                        },
+                                        {
+                                            "authState": "login",
+                                            "authUiState": "auth_loading",
+                                            "emailCount": 0,
+                                            "passwordCount": 0,
+                                        },
+                                    ],
+                                },
+                                "credentialCompleteness": {
+                                    "emailVisible": False,
+                                    "passwordVisible": False,
+                                },
+                                "actionReceipt": {
+                                    "attempted": False,
+                                    "candidateProbePerformed": False,
+                                    "clicked": False,
+                                    "reason": "auth_surface_loading",
+                                },
+                                "candidate": {
+                                    "automation_id": "signInSubmitButton",
+                                    "selector": "button[data-automation-id='signInSubmitButton']",
+                                    "label": "Sign In",
+                                    "role": "button",
+                                    "disabled": False,
+                                },
+                            }
+                        },
+                    }
+                },
+            )
+        ],
+    )
+
+    assert context.auth_action_boundary["stage"] == "preflight_blocked"
+    assert context.auth_action_boundary["actionReceipt"] == {
+        "attempted": False,
+        "candidateProbePerformed": False,
+        "clicked": False,
+        "reason": "auth_surface_loading",
+    }
+    assert context.auth_action_boundary["stabilization"]["sampleCount"] == 2
+    assert context.auth_action_boundary["preActionDetection"]["passwordCount"] == 1
+    assert context.auth_action_boundary["credentialCompleteness"] == {
+        "emailVisible": False,
+        "passwordVisible": False,
+        "emailPopulated": False,
+        "passwordPopulated": False,
+    }
+    assert context.mechanism_unknown is True
+    assert context.auth_action_boundary["candidate"]["label"] == "Sign In"
+    assert context.auth_action_boundary["candidate"]["automation_id"] == "signInSubmitButton"
+
+
+def test_unclassified_timeout_context_exposes_structured_driver_evidence():
+    context = build_failure_context(
+        _operation(),
+        [
+            _event(
+                1,
+                "operation.failed",
+                {
+                    "error": {
+                        "reason_code": "workday_fill_return_timeout",
+                        "failure_evidence": {
+                            "stopped_reason": "workday_fill_return_timeout",
+                            "timeout_evidence": {
+                                "reason": "workday_fill_return_timeout",
+                                "observed_wait_state": "field_commit",
+                                "driver_in_flight": {
+                                    "phase": "field_commit_wait",
+                                    "wait_class": "field_commit",
+                                    "field": {
+                                        "id": "education-1--degree",
+                                        "label": "Degree",
+                                        "type": "button_listbox",
+                                    },
+                                    "awaited_operation": "workday.settleWorkdayCommit",
+                                    "elapsed_ms": 30000,
+                                    "breadcrumbs": [],
+                                },
+                            },
+                        },
+                    }
+                },
+            )
+        ],
+    )
+
+    assert context.root_cause_code == "unclassified_failure"
+    assert context.cause_asserted is False
+    assert context.timeout_evidence["observed_wait_state"] == "field_commit"
+    assert (
+        context.timeout_evidence["driver_in_flight"]["awaited_operation"]
+        == "workday.settleWorkdayCommit"
+    )
+
+
+def test_explicit_credential_rejection_is_proven_and_retains_page_facts():
+    message = (
+        "You may have entered the wrong email address or password or your account might be locked."
+    )
+    events = [
+        _event(
+            1,
+            "operation.failed",
+            {
+                "terminal_reason": "credential_rejected",
+                "result": {
+                    "pageWalk": {
+                        "stoppedReason": "credential_rejected",
+                        "detection": {
+                            "href": "https://tenant.example/login?token=private",
+                            "title": "Sign In",
+                            "pageKind": "credential_rejected",
+                            "phase": "auth",
+                            "authState": "login",
+                            "authUiState": "credential_form",
+                            "documentReadyState": "complete",
+                            "directEvidence": {"alerts": [{"message": message, "role": "alert"}]},
+                        },
+                    }
+                },
+            },
+        )
+    ]
+
+    context = build_failure_context(_operation(), events)
+
+    assert context.root_cause_code == "credential_rejected"
+    assert context.confidence == "proven"
+    assert context.root_cause_unknown is False
+    assert message in context.observed_messages
+    assert context.page_observations[-1].page_kind == "credential_rejected"
+    assert context.page_observations[-1].href == "https://tenant.example/login"
+
+
+def test_direct_job_unavailable_terminal_outranks_earlier_validation_history():
+    unavailable_message = "The page you are looking for doesn't exist."
+    events = [
+        _event(
+            1,
+            "operation.progress",
+            {
+                "stage": "fill_result",
+                "reason_code": "visible_validation_errors",
+                "message": unavailable_message,
+            },
+        ),
+        _event(
+            2,
+            "operation.failed",
+            {
+                "terminal_reason": "job_unavailable",
+                "reason_code": "job_unavailable",
+                "result": {
+                    "pageWalk": {
+                        "stoppedReason": "job_unavailable",
+                        "stopDetails": {
+                            "reasonCode": "job_unavailable",
+                            "stoppedReason": "job_unavailable",
+                            "directObservation": {
+                                "href": "https://tenant.example/job/expired",
+                                "title": "Job unavailable",
+                                "pageKind": "job_unavailable",
+                                "phase": "unavailable",
+                                "jobUnavailableVisible": True,
+                                "messages": [unavailable_message],
+                            },
+                            "nonAuthoritativeHistory": [
+                                {
+                                    "stage": "fill_result",
+                                    "reason": "visible_validation_errors",
+                                    "message": unavailable_message,
+                                }
+                            ],
+                        },
+                        "directObservation": {
+                            "href": "https://tenant.example/job/expired",
+                            "title": "Job unavailable",
+                            "pageKind": "job_unavailable",
+                            "phase": "unavailable",
+                            "jobUnavailableVisible": True,
+                            "messages": [unavailable_message],
+                        },
+                    }
+                },
+            },
+        ),
+    ]
+
+    context = build_failure_context(_operation(), events)
+
+    assert context.root_cause_code == "job_unavailable"
+    assert context.reported_cause_code == "job_unavailable"
+    assert context.cause_asserted is True
+    assert context.confidence == "proven"
+    assert context.root_cause_unknown is False
+    assert context.evidence_conflicts == []
+    assert unavailable_message in context.observed_messages
+    assert context.page_observations[-1].page_kind == "job_unavailable"
+
+
+def test_unclassified_failure_retains_messages_and_page_timeline_without_guessing():
+    events = [
+        _event(
+            1,
+            "operation.progress",
+            {
+                "snapshot": {
+                    "href": "https://tenant.example/apply",
+                    "title": "Loading",
+                    "pageKind": "unknown",
+                    "phase": "unknown",
+                    "documentReadyState": "interactive",
+                    "visibleMessages": [{"message": "Something changed unexpectedly."}],
+                }
+            },
+        ),
+        _event(
+            2,
+            "operation.failed",
+            {
+                "terminal_reason": "unclassified_failure",
+                "snapshot": {
+                    "href": "https://tenant.example/apply",
+                    "title": "Application",
+                    "pageKind": "unknown",
+                    "phase": "unknown",
+                    "documentReadyState": "complete",
+                    "visibleMessages": [{"message": "Please contact recruiting support."}],
+                },
+            },
+        ),
+    ]
+
+    context = build_failure_context(_operation(), events)
+
+    assert context.root_cause_code == "unclassified_failure"
+    assert context.root_cause_unknown is True
+    assert context.confidence == "unknown"
+    assert context.observed_messages == [
+        "Something changed unexpectedly.",
+        "Please contact recruiting support.",
+    ]
+    assert [item.document_ready_state for item in context.page_observations] == [
+        "interactive",
+        "complete",
+    ]
+
+
+def test_transport_probe_and_monitor_messages_are_diagnostic_not_page_observations():
+    visible_message = (
+        "You may have entered the wrong email address or password or your account might be locked."
+    )
+    context = build_failure_context(
+        _operation(),
+        [
+            _event(
+                1,
+                "operation.progress_probe_failed",
+                {
+                    "reason": "operation_id_mismatch",
+                    "reported_operation_id": "",
+                },
+            ),
+            _event(
+                2,
+                "operation.progress_probe_failed",
+                {
+                    "reason": "probe_timeout",
+                    "error": {
+                        "message": "monitor_bridge_timeout",
+                        "type": "C3MonitorBridgeTimeoutError",
+                    },
+                },
+            ),
+            _event(
+                3,
+                "operation.heartbeat",
+                {"message": "heartbeat_transport_late", "phase": "bridge"},
+            ),
+            _event(
+                4,
+                "operation.monitor_failed",
+                {
+                    "error": {
+                        "reason_code": "internal_transport_failure",
+                        "message": "monitor_transport_disconnected",
+                    }
+                },
+            ),
+            _event(
+                5,
+                "operation.failed",
+                {
+                    "terminal_reason": "credential_rejected",
+                    "snapshot": {
+                        "href": "https://tenant.example/login",
+                        "title": "Sign In",
+                        "pageKind": "credential_rejected",
+                        "documentReadyState": "complete",
+                        "visibleMessages": [{"message": visible_message}],
+                    },
+                },
+            ),
+        ],
+    )
+
+    assert context.observed_messages == [visible_message]
+    assert context.diagnostic_messages == [
+        "operation_id_mismatch",
+        "probe_timeout",
+        "monitor_bridge_timeout",
+        "heartbeat_transport_late",
+        "internal_transport_failure",
+        "monitor_transport_disconnected",
+    ]
+    assert context.monitor_summary.progress_probe_failure_count == 2
+    assert context.monitor_summary.monitor_failure_count == 1
+    assert context.monitor_summary.last_error_code == "internal_transport_failure"
+
+
+def test_ignored_late_result_auth_metadata_is_not_page_truth_or_observed_message():
+    context = build_failure_context(
+        _operation(),
+        [
+            _event(
+                1,
+                "operation.result_ignored_after_cancel",
+                {
+                    "message": "After authentication the page was signup.",
+                    "result": {
+                        "lastNextAction": {
+                            "authState": "signup",
+                            "authUiState": "signup_form",
+                            "frameId": 0,
+                        }
+                    },
+                },
+            ),
+            _event(
+                2,
+                "operation.cancelled",
+                {
+                    "snapshot": {
+                        "href": "https://tenant.example/login",
+                        "title": "Sign In",
+                        "pageKind": "auth_form",
+                        "phase": "auth",
+                        "authState": "login",
+                        "authUiState": "credential_form",
+                        "documentReadyState": "complete",
+                    }
+                },
+            ),
+        ],
+    )
+
+    assert [item.auth_state for item in context.page_observations] == ["login"]
+    assert "After authentication the page was signup." not in context.observed_messages
+
+
+def test_non_allowlisted_validation_label_is_reported_but_not_asserted():
+    message = "Reliability Engineering Intern page is loaded"
+    context = build_failure_context(
+        _operation(),
+        [
+            _event(
+                1,
+                "operation.failed",
+                {
+                    "terminal_reason": "extension_command_failed",
+                    "result": {
+                        "pageWalk": {
+                            "stoppedReason": "visible_validation_errors",
+                            "stopDetails": {
+                                "visibleValidationErrors": [message],
+                            },
+                        }
+                    },
+                },
+            )
+        ],
+    )
+
+    assert context.root_cause_code == "unclassified_failure"
+    assert context.reported_cause_code == "visible_validation_errors"
+    assert context.cause_asserted is False
+    assert message in context.observed_messages
+    assert "unasserted_reported_cause_visible_validation_errors" in context.evidence_conflicts
+
+
+def test_direct_required_empty_field_is_asserted_without_inventing_commit_mechanism():
+    message = (
+        "Error-How Did You Hear About Us? The field How Did You Hear About Us? "
+        "is required and must have a value."
+    )
+    context = build_failure_context(
+        _operation(),
+        [
+            _event(
+                1,
+                "operation.progress",
+                {
+                    "phase": "field_action",
+                    "substep": "popup.closed",
+                    "field": {
+                        "key": "source--source",
+                        "kind": "combobox",
+                        "label": (
+                            "How Did You Hear About Us?* 0 items selected "
+                            "Error: The field How Did You Hear About Us? is required "
+                            "and must have a value."
+                        ),
+                        "selector": "button[data-automation-id='source']",
+                    },
+                },
+            ),
+            _event(
+                2,
+                "operation.failed",
+                {
+                    "terminal_reason": "extension_command_failed",
+                    "error": {
+                        "reason_code": "visible_validation_errors",
+                        "failure_evidence": {
+                            "stopped_reason": "visible_validation_errors",
+                            "validation_messages": [message],
+                        },
+                    },
+                },
+            ),
+        ],
+    )
+
+    assert context.root_cause_code == "required_field_uncommitted"
+    assert context.reported_cause_code == "visible_validation_errors"
+    assert context.cause_asserted is True
+    assert context.root_cause_unknown is False
+    assert context.mechanism_unknown is True
+    assert context.confidence == "proven"
+    assert context.causal_element is not None
+    assert context.causal_element.field_id == "source--source"
+    assert context.causal_element.label == "How Did You Hear About Us?"
+    assert context.causal_element.selector == "button[data-automation-id='source']"
+    assert context.missing_evidence == ["field_commit_evidence"]
+    assert context.live_inspection_required is False
+    assert context.summary == (
+        "A directly observed required field remained empty and blocked page advancement; "
+        "the lower-level commit mechanism was not established."
+    )
+    assert context.observed_state == (
+        'Required field "How Did You Hear About Us?" remained empty, and the site '
+        "displayed a required-value validation error."
+    )
+    assert context.next_safe_action == "request_manual_completion_for_required_field"
+    assert "unasserted_reported_cause_visible_validation_errors" not in (context.evidence_conflicts)
+
+
+def test_required_validation_without_direct_empty_field_evidence_is_not_asserted():
+    message = "The field Source is required and must have a value."
+    context = build_failure_context(
+        _operation(),
+        [
+            _event(
+                1,
+                "operation.progress",
+                {
+                    "field": {
+                        "key": "phone--country-code",
+                        "label": "Phone Country Code",
+                        "selected_value_present": False,
+                    }
+                },
+            ),
+            _event(
+                2,
+                "operation.failed",
+                {
+                    "error": {
+                        "reason_code": "visible_validation_errors",
+                        "failure_evidence": {"validation_messages": [message]},
+                    }
+                },
+            ),
+        ],
+    )
+
+    assert context.root_cause_code == "unclassified_failure"
+    assert context.cause_asserted is False
+    assert context.mechanism_unknown is True
+
+
+def test_captcha_label_is_downgraded_without_direct_challenge_proof():
+    context = build_failure_context(
+        _operation(),
+        [
+            _event(
+                1,
+                "operation.failed",
+                {
+                    "terminal_reason": "auth_captcha_gate",
+                    "captchaCandidate": {
+                        "automationId": "click_filter",
+                        "label": "Verify",
+                    },
+                    "message": "Authentication did not advance.",
+                },
+            )
+        ],
+    )
+
+    assert context.root_cause_code == "unclassified_failure"
+    assert context.root_cause_unknown is True
+    assert "Authentication did not advance." not in context.observed_messages
+    assert "Authentication did not advance." in context.diagnostic_messages
+
+
+def test_captcha_label_is_retained_with_direct_challenge_proof():
+    context = build_failure_context(
+        _operation(),
+        [
+            _event(
+                1,
+                "operation.failed",
+                {
+                    "terminal_reason": "auth_captcha_gate",
+                    "captchaChallengePresent": True,
+                    "detection": {
+                        "pageKind": "captcha_present",
+                        "href": "https://tenant.example/login",
+                    },
+                    "message": "Complete the security challenge.",
+                },
+            )
+        ],
+    )
+
+    assert context.root_cause_code == "auth_captcha_gate"
+    assert context.root_cause_unknown is False
+
+
+def test_terminal_packet_retains_source_commit_failure_even_when_terminal_is_generic():
+    events = [
+        _event(
+            1,
+            "operation.failed",
+            {
+                "terminal_reason": "extension_command_failed",
+                "result": {
+                    "pageWalk": {
+                        "stoppedReason": "visible_validation_errors",
+                        "steps": [
+                            {
+                                "eventType": "field.action.failed",
+                                "fieldId": "source--source",
+                                "label": "How did you hear about us?",
+                                "uiModel": "combobox",
+                                "action": "select",
+                                "required": True,
+                                "reasonCode": "workday_commit_not_verified",
+                                "committed": False,
+                                "optionCount": 8,
+                                "selectedValuePresent": False,
+                            }
+                        ],
+                    }
+                },
+            },
+        )
+    ]
+
+    context = build_failure_context(_operation(), events)
+
+    assert len(context.field_commit_failures) == 1
+    failure = context.field_commit_failures[0]
+    assert failure.field_id == "source--source"
+    assert failure.label == "How did you hear about us?"
+    assert failure.reason_code == "workday_commit_not_verified"
+    assert failure.committed is False
+    assert failure.option_count == 8
+    assert failure.selected_value_present is False
+
+
+def test_generic_operation_failure_does_not_cross_join_not_started_breadcrumb_as_field_failure():
+    context = build_failure_context(
+        _operation(),
+        [
+            _event(
+                1,
+                "operation.failed",
+                {
+                    "error": {
+                        "reason_code": "page_did_not_advance_after_next",
+                        "failure_evidence": {
+                            "terminal_step": {
+                                "kind": "page_advance_check",
+                                "reason_code": "page_did_not_advance_after_next",
+                            },
+                            "driver_evidence": {
+                                "breadcrumbs": [
+                                    {
+                                        "phase": "field_discovered",
+                                        "last_committed_state": {
+                                            "committed": False,
+                                            "reason": "not_started",
+                                        },
+                                    }
+                                ],
+                                "recent_field_outcomes": [
+                                    {
+                                        "field": {
+                                            "id": "input-4",
+                                            "label": "Email Address",
+                                            "type": "text",
+                                        },
+                                        "action": {
+                                            "result": "committed",
+                                            "reason": "commit_verified",
+                                        },
+                                        "commit_verification": {"verified": True},
+                                        "last_committed_state": {
+                                            "committed": True,
+                                            "reason": "commit_verified",
+                                        },
+                                    }
+                                ],
+                            },
+                        },
+                    }
+                },
+            )
+        ],
+    )
+
+    assert context.field_commit_failures == []
+
+
+def test_required_source_validation_uses_explicit_driver_mechanism_evidence():
+    message = "The field How Did You Hear About Us? is required and must have a value."
+    context = build_failure_context(
+        _operation(),
+        [
+            _event(
+                1,
+                "operation.progress",
+                {
+                    "field": {
+                        "key": "source--source",
+                        "kind": "combobox",
+                        "label": "How Did You Hear About Us?* 0 items selected",
+                    }
+                },
+            ),
+            _event(
+                2,
+                "operation.failed",
+                {
+                    "error": {
+                        "reason_code": "visible_validation_errors",
+                        "failure_evidence": {
+                            "stopped_reason": "visible_validation_errors",
+                            "validation_messages": [message],
+                            "stop_details": {
+                                "driver_evidence": {
+                                    "causal_field": {
+                                        "phase": "field_commit_checked",
+                                        "field": {
+                                            "id": "source--source",
+                                            "label": "How Did You Hear About Us?",
+                                            "type": "combobox",
+                                        },
+                                        "intended_option": {"label": "LinkedIn"},
+                                        "action": {
+                                            "method": "dom_click",
+                                            "result": "failed",
+                                            "reason": "workday_commit_not_verified",
+                                        },
+                                        "commit_verification": {
+                                            "verified": False,
+                                            "selected_pill_present": True,
+                                            "backing_value_present": True,
+                                            "validation_visible": True,
+                                            "reason": "workday_commit_not_verified",
+                                        },
+                                        "last_committed_state": {
+                                            "committed": False,
+                                            "selected": True,
+                                            "empty": False,
+                                            "validation_visible": True,
+                                            "reason": "workday_commit_not_verified",
+                                        },
+                                    }
+                                }
+                            },
+                        },
+                    }
+                },
+            ),
+        ],
+    )
+
+    assert context.root_cause_code == "required_field_uncommitted"
+    assert context.mechanism_unknown is False
+    assert context.missing_evidence == []
+    assert context.summary == (
+        "A directly observed required field remained empty and blocked page advancement; "
+        "C3 retained the failed field-commit mechanism."
+    )
+    assert len(context.field_commit_failures) == 1
+    failure = context.field_commit_failures[0]
+    assert failure.field_id == "source--source"
+    assert failure.label == "How Did You Hear About Us?"
+    assert failure.reason_code == "workday_commit_not_verified"
+    assert failure.action == "select"
+    assert failure.attempted_option == "LinkedIn"
+    assert failure.action_method == "dom_click"
+    assert failure.action_result == "failed"
+    assert failure.commit_verified is False
+    assert failure.selected_pill_present is True
+    assert failure.backing_value_present is True
+    assert failure.validation_visible is True
+    assert failure.selected_value_present is False
+
+
 def test_auth_redirect_keeps_exposing_action_but_has_no_causal_element():
     events = [
         _event(
@@ -78,7 +834,7 @@ def test_auth_redirect_keeps_exposing_action_but_has_no_causal_element():
     context = build_failure_context(_operation(), events)
 
     assert context.failure_scope == "navigation"
-    assert context.root_cause_code == "auth_create_account_to_signin_sink"
+    assert context.reported_cause_code == "auth_create_account_to_signin_sink"
     assert context.causal_element is None
     assert context.exposing_action is not None
     assert context.exposing_action.selector.endswith("createAccountSubmitButton']")
@@ -138,20 +894,22 @@ def test_post_auth_application_readiness_boundary_is_specific_but_honestly_unres
     context = build_failure_context(_operation(), events)
 
     assert context.failure_scope == "navigation"
-    assert context.root_cause_code == "application_fields_not_ready_after_auth"
+    assert context.reported_cause_code == "application_fields_not_ready_after_auth"
     assert context.summary == (
-        "Authentication completed, but application fields did not become ready."
+        "C3 recorded a failure but did not assert a diagnosis; use the retained observations."
     )
-    assert context.expected_state == "Application fields become ready after authentication."
+    assert context.expected_state == (
+        "The authentication action reaches a verified application surface."
+    )
     assert context.observed_state == (
-        "Authentication completed without exposing ready application fields."
+        "No verified application surface appeared; authentication success was not established."
     )
     assert context.causal_element is None
     assert context.confidence == "strong"
     assert context.root_cause_unknown is True
     assert context.missing_evidence == ["post_auth_readiness_reason"]
     assert context.live_inspection_required is True
-    assert context.next_safe_action == "inspect_post_auth_readiness_evidence"
+    assert context.next_safe_action == "diagnose_from_retained_evidence"
 
 
 def test_missing_safe_next_control_is_specific_without_inventing_an_element():
@@ -170,14 +928,16 @@ def test_missing_safe_next_control_is_specific_without_inventing_an_element():
     )
 
     assert context.failure_scope == "navigation"
-    assert context.root_cause_code == "no_safe_next_button"
+    assert context.reported_cause_code == "no_safe_next_button"
     assert context.causal_element is None
-    assert context.summary == "No safe Next or Continue control was available on the current page."
+    assert context.summary == (
+        "C3 recorded a failure but did not assert a diagnosis; use the retained observations."
+    )
     assert context.expected_state == "A single safe non-submit navigation control is available."
     assert context.observed_state == "No safe Next or Continue candidate was retained."
     assert context.missing_evidence == ["page_readiness_or_navigation_candidates"]
     assert context.live_inspection_required is True
-    assert context.next_safe_action == "inspect_page_readiness_without_mutation"
+    assert context.next_safe_action == "diagnose_from_retained_evidence"
 
 
 def test_auth_primary_action_not_found_exposes_stable_near_miss_without_blame():
@@ -245,7 +1005,7 @@ def test_auth_primary_action_not_found_exposes_stable_near_miss_without_blame():
     context = build_failure_context(_operation(), events)
 
     assert context.failure_scope == "navigation"
-    assert context.root_cause_code == "auth_primary_action_not_found"
+    assert context.reported_cause_code == "auth_primary_action_not_found"
     assert context.causal_element is None
     assert context.exposing_action is not None
     assert context.exposing_action.automation_id == "createAccountSubmitButton"
@@ -255,7 +1015,7 @@ def test_auth_primary_action_not_found_exposes_stable_near_miss_without_blame():
     assert context.root_cause_unknown is True
     assert context.missing_evidence == []
     assert context.live_inspection_required is False
-    assert context.next_safe_action == "retry_stable_auth_gateway_candidate"
+    assert context.next_safe_action == "diagnose_from_retained_evidence"
 
 
 def test_auth_primary_action_missing_rejection_reason_requires_live_inspection():
@@ -408,18 +1168,23 @@ def test_auth_captcha_gate_has_typed_site_gate_context_and_candidate_reason():
     )
 
     assert context.failure_scope == "navigation"
-    assert context.root_cause_code == "auth_captcha_gate"
+    assert context.root_cause_code == "unclassified_failure"
+    assert context.reported_cause_code == "auth_captcha_gate"
+    assert context.cause_asserted is False
     assert context.causal_element is None
     assert context.exposing_action is not None
     assert context.exposing_action.automation_id == "click_filter"
-    assert context.expected_state == "The site authentication gate verifies the applicant."
+    assert context.expected_state == (
+        "A visible structural security challenge is directly observed."
+    )
+    assert context.observed_state.startswith("No direct visible CAPTCHA proof was retained")
     assert "captcha_challenge_not_verified" in context.observed_state
-    assert context.summary == "A site captcha gate blocked authentication progress."
-    assert context.confidence == "strong"
-    assert context.root_cause_unknown is False
-    assert context.missing_evidence == []
-    assert context.live_inspection_required is False
-    assert context.next_safe_action == "stop_for_site_auth_gate"
+    assert context.summary.startswith("C3 recorded a failure but did not assert")
+    assert context.confidence == "unknown"
+    assert context.root_cause_unknown is True
+    assert context.missing_evidence == ["direct_captcha_challenge"]
+    assert context.live_inspection_required is True
+    assert context.next_safe_action == "diagnose_from_retained_evidence"
     assert context.evidence_event_ids == ["evt-auth-captcha-gate"]
     assert [item.model_dump() for item in context.credential_preparation] == [
         {
@@ -463,8 +1228,11 @@ def test_auth_captcha_gate_without_candidate_reason_requests_live_inspection():
         ],
     )
 
+    assert context.reported_cause_code == "auth_captcha_gate"
+    assert context.root_cause_code == "unclassified_failure"
+    assert context.cause_asserted is False
     assert context.exposing_action is not None
-    assert context.missing_evidence == ["auth_candidate_rejection_reason"]
+    assert context.missing_evidence == ["direct_captcha_challenge"]
     assert context.live_inspection_required is True
 
 
@@ -543,7 +1311,7 @@ def test_auth_ui_cycle_detected_projects_complete_transition_evidence():
     )
 
     assert context.failure_scope == "navigation"
-    assert context.root_cause_code == "auth_ui_cycle_detected"
+    assert context.reported_cause_code == "auth_ui_cycle_detected"
     assert context.causal_element is not None
     assert context.causal_element.automation_id == "createAccountLink"
     assert context.exposing_action == context.causal_element
@@ -552,12 +1320,14 @@ def test_auth_ui_cycle_detected_projects_complete_transition_evidence():
     assert "cycle period 1" in context.observed_state
     assert "cycle length 2" in context.observed_state
     assert "login/credential_form->signup/signup_form" in context.observed_state
-    assert context.summary == "Authentication entered a repeated UI control loop."
+    assert context.summary == (
+        "C3 recorded a failure but did not assert a diagnosis; use the retained observations."
+    )
     assert context.confidence == "strong"
-    assert context.root_cause_unknown is False
+    assert context.root_cause_unknown is True
     assert context.missing_evidence == []
     assert context.live_inspection_required is False
-    assert context.next_safe_action == "stop_repeated_auth_ui_cycle"
+    assert context.next_safe_action == "diagnose_from_retained_evidence"
     assert context.evidence_event_ids == ["evt-auth-ui-cycle"]
 
 
@@ -748,10 +1518,10 @@ def test_auth_flow_limit_with_history_is_an_evidenced_active_auth_loop():
     assert context.causal_element.automation_id == "signInLink"
     assert context.exposing_action == context.causal_element
     assert context.confidence == "strong"
-    assert context.root_cause_unknown is False
+    assert context.root_cause_unknown is True
     assert context.missing_evidence == []
     assert context.live_inspection_required is False
-    assert context.next_safe_action == "stop_active_auth_loop"
+    assert context.next_safe_action == "diagnose_from_retained_evidence"
     assert "2 retained transitions" in context.observed_state
 
 
@@ -843,15 +1613,15 @@ def test_same_page_auth_limit_with_history_is_an_evidenced_active_auth_loop():
     )
 
     assert context.failure_scope == "navigation"
-    assert context.root_cause_code == "auth_same_page_attempt_limit_reached"
+    assert context.reported_cause_code == "auth_same_page_attempt_limit_reached"
     assert context.causal_element is not None
     assert context.causal_element.automation_id == "createAccountSubmitButton"
     assert context.exposing_action == context.causal_element
     assert context.confidence == "strong"
-    assert context.root_cause_unknown is False
+    assert context.root_cause_unknown is True
     assert context.missing_evidence == []
     assert context.live_inspection_required is False
-    assert context.next_safe_action == "stop_active_auth_loop"
+    assert context.next_safe_action == "diagnose_from_retained_evidence"
     assert "1 retained transitions" in context.observed_state
 
 
@@ -978,17 +1748,17 @@ def test_auth_signup_signin_loop_is_proven_without_causal_ui_element():
     )
 
     assert context.failure_scope == "navigation"
-    assert context.root_cause_code == "auth_signup_signin_loop"
+    assert context.reported_cause_code == "auth_signup_signin_loop"
     assert context.causal_element is None
     assert (
         context.expected_state == "Authentication advances beyond the signup-to-signin transition."
     )
     assert context.observed_state == "Signup returned to Sign In more than once in one run."
     assert context.confidence == "proven"
-    assert context.root_cause_unknown is False
+    assert context.root_cause_unknown is True
     assert context.missing_evidence == []
     assert context.live_inspection_required is False
-    assert context.next_safe_action == "stop_repeated_auth_transition"
+    assert context.next_safe_action == "diagnose_from_retained_evidence"
 
 
 def test_auth_signup_signin_loop_projects_terminal_last_safe_candidate():
@@ -1042,14 +1812,14 @@ def test_auth_signup_signin_loop_projects_terminal_last_safe_candidate():
     serialized = json.dumps(context.model_dump(mode="json"), sort_keys=True)
 
     assert context.failure_scope == "navigation"
-    assert context.root_cause_code == "auth_signup_signin_loop"
+    assert context.reported_cause_code == "auth_signup_signin_loop"
     assert context.causal_element is not None
     assert context.causal_element.automation_id == "click_filter"
     assert context.causal_element.selector.endswith("[value='[REDACTED]']")
     assert context.last_touched_element == context.causal_element
     assert context.exposing_action == context.causal_element
     assert context.confidence == "proven"
-    assert context.root_cause_unknown is False
+    assert context.root_cause_unknown is True
     assert context.missing_evidence == []
     assert context.live_inspection_required is False
     assert context.evidence_event_ids == ["evt-auth-loop-terminal"]
@@ -1131,7 +1901,7 @@ def test_workday_runtime_not_ready_reports_empty_shell_not_missing_next():
     )
 
     assert context.failure_scope == "navigation"
-    assert context.root_cause_code == "workday_runtime_not_ready"
+    assert context.reported_cause_code == "workday_runtime_not_ready"
     assert context.causal_element is None
     assert context.expected_state == (
         "Workday exposes an authentication, application, validation, or navigation surface."
@@ -1143,7 +1913,7 @@ def test_workday_runtime_not_ready_reports_empty_shell_not_missing_next():
     assert context.root_cause_unknown is True
     assert context.missing_evidence == ["runtime_readiness_reason"]
     assert context.live_inspection_required is True
-    assert context.next_safe_action == "retry_workday_runtime_readiness_without_mutation"
+    assert context.next_safe_action == "diagnose_from_retained_evidence"
 
 
 def test_workday_runtime_summary_satisfies_runtime_reason_evidence():
@@ -1182,7 +1952,7 @@ def test_workday_runtime_summary_satisfies_runtime_reason_evidence():
         ],
     )
 
-    assert context.root_cause_code == "workday_runtime_not_ready"
+    assert context.reported_cause_code == "workday_runtime_not_ready"
     assert context.missing_evidence == []
 
 
@@ -1209,13 +1979,13 @@ def test_missing_resume_is_setup_failure_with_relevant_upload_element():
     context = build_failure_context(_operation(), events)
 
     assert context.failure_scope == "setup"
-    assert context.root_cause_code == "resume_upload_missing_data"
+    assert context.reported_cause_code == "resume_upload_missing_data"
     assert context.causal_element is not None
     assert context.causal_element.selector == "button#resumeAttachments--attachments"
     assert context.expected_state == "Resume attachment committed before continuing."
     assert context.observed_state == "Required resume data was unavailable."
     assert context.confidence == "proven"
-    assert context.root_cause_unknown is False
+    assert context.root_cause_unknown is True
     assert context.live_inspection_required is False
 
 
@@ -1252,7 +2022,7 @@ def test_workday_commit_failure_uses_specific_action_evidence_over_generic_termi
     context = build_failure_context(_operation(), events, artifact_ids=("artifact-a",))
 
     assert context.failure_scope == "ui_element"
-    assert context.root_cause_code == "workday_commit_not_verified"
+    assert context.reported_cause_code == "workday_commit_not_verified"
     assert context.causal_element is not None
     assert context.causal_element.selector == "input#source--source"
     assert context.checkpoint_ids == ["checkpoint-before", "checkpoint-after"]
@@ -1288,7 +2058,7 @@ def test_field_prefixed_workday_commit_reason_normalizes_to_stable_code():
         ],
     )
 
-    assert context.root_cause_code == "workday_commit_not_verified"
+    assert context.reported_cause_code == "workday_commit_not_verified"
 
 
 def test_control_plane_cancellation_backoff_has_no_causal_ui_element():
@@ -1322,7 +2092,7 @@ def test_control_plane_cancellation_backoff_has_no_causal_ui_element():
     )
 
     assert context.failure_scope == "control_plane"
-    assert context.root_cause_code == "control_plane_cancel_unreconciled"
+    assert context.reported_cause_code == "control_plane_cancel_unreconciled"
     assert context.causal_element is None
     assert context.last_touched_element is not None
     assert context.monitor_summary.cancel_failure_count == 1
@@ -1344,7 +2114,7 @@ def test_unknown_failure_requests_live_inspection_only_when_evidence_is_missing(
     )
 
     assert context.failure_scope == "unknown"
-    assert context.root_cause_code == "unexpected_error"
+    assert context.reported_cause_code == "unexpected_error"
     assert context.root_cause_unknown is True
     assert context.confidence == "unknown"
     assert context.causal_element is None
@@ -1413,7 +2183,7 @@ def test_terminal_event_is_authoritative_over_mutable_projection_and_late_monito
         ],
     )
 
-    assert context.root_cause_code == "auth_create_account_to_signin_sink"
+    assert context.reported_cause_code == "auth_create_account_to_signin_sink"
     assert context.authoritative_event_id == "evt-authoritative"
     assert context.monitor_summary.monitor_failure_count == 1
     assert context.monitor_summary.last_error_code == "page_probe_timeout"
@@ -1449,7 +2219,7 @@ def test_first_terminal_event_remains_authoritative_over_legacy_duplicate_termin
     )
 
     assert context.authoritative_event_id == "evt-primary-terminal"
-    assert context.root_cause_code == "auth_create_account_to_signin_sink"
+    assert context.reported_cause_code == "auth_create_account_to_signin_sink"
     assert context.expected_state == "Primary expected state."
     assert context.observed_state == "Primary observed state."
     assert context.evidence_event_ids == ["evt-primary-terminal"]
@@ -1525,7 +2295,7 @@ def test_post_terminal_action_event_cannot_replace_authoritative_cause():
         ],
     )
 
-    assert context.root_cause_code == "unexpected_error"
+    assert context.reported_cause_code == "unexpected_error"
     assert context.failure_scope == "unknown"
     assert context.authoritative_event_id == "evt-terminal"
     assert "evt-post-terminal-poison" not in context.evidence_event_ids
@@ -1562,7 +2332,7 @@ def test_ordinary_after_checkpoint_cannot_be_promoted_to_causal_element():
         ],
     )
 
-    assert context.root_cause_code == "extension_command_failed"
+    assert context.reported_cause_code == "extension_command_failed"
     assert context.causal_element is None
     assert context.last_touched_element is not None
     assert context.last_touched_element.selector == "button#next"
@@ -1730,14 +2500,14 @@ def test_production_nested_field_action_failure_supplies_exact_causal_identity()
         ],
     )
 
-    assert context.root_cause_code == "workday_commit_not_verified"
+    assert context.reported_cause_code == "workday_commit_not_verified"
     assert context.causal_element is not None
     assert context.causal_element.field_id == "employment-country"
     assert context.causal_element.label == "Employment country"
     assert context.expected_state
     assert context.observed_state
     assert context.confidence == "proven"
-    assert context.root_cause_unknown is False
+    assert context.root_cause_unknown is True
     assert "private-selected-answer" not in json.dumps(context.model_dump(mode="json"))
 
 
@@ -1844,7 +2614,7 @@ def test_repaired_correlated_action_failure_cannot_override_generic_terminal():
         ],
     )
 
-    assert context.root_cause_code == "extension_command_failed"
+    assert context.reported_cause_code == "extension_command_failed"
     assert context.causal_element is None
     assert "evt-failed-action" not in context.evidence_event_ids
 
@@ -1872,7 +2642,7 @@ def test_uncorrelated_old_action_failure_cannot_override_generic_terminal():
         ],
     )
 
-    assert context.root_cause_code == "extension_command_failed"
+    assert context.reported_cause_code == "extension_command_failed"
     assert context.causal_element is None
     assert context.evidence_event_ids == ["evt-terminal"]
 
@@ -1910,7 +2680,7 @@ def test_specific_terminal_cannot_reuse_element_from_resolved_linked_failure():
         ],
     )
 
-    assert context.root_cause_code == "workday_commit_not_verified"
+    assert context.reported_cause_code == "workday_commit_not_verified"
     assert context.causal_element is None
 
 
@@ -1931,7 +2701,7 @@ def test_free_text_reason_and_secret_like_reason_code_never_become_machine_code(
     )
     serialized = json.dumps(context.model_dump(mode="json"), sort_keys=True)
 
-    assert context.root_cause_code == "unexpected_error"
+    assert context.reported_cause_code == "unexpected_error"
     assert "hunter2" not in serialized
     assert "Yes-I-am-secret" not in serialized
 
@@ -1952,7 +2722,7 @@ def test_nested_artifact_and_element_kind_cannot_replace_terminal_machine_code()
         ],
     )
 
-    assert context.root_cause_code == "extension_command_failed"
+    assert context.reported_cause_code == "extension_command_failed"
     assert context.failure_scope == "extension"
 
 
@@ -2118,7 +2888,7 @@ def test_cyclic_and_excessively_deep_payloads_are_bounded_and_marked_truncated()
         ],
     )
 
-    assert context.root_cause_code == "unexpected_error"
+    assert context.reported_cause_code == "unexpected_error"
     assert context.evidence_truncated is True
 
 
@@ -2211,7 +2981,7 @@ def test_dynamic_css_selector_cannot_claim_proven_ui_root_cause():
         ],
     )
 
-    assert context.root_cause_code == "workday_commit_not_verified"
+    assert context.reported_cause_code == "workday_commit_not_verified"
     assert context.causal_element is not None
     assert context.confidence in {"weak", "unknown"}
     assert context.root_cause_unknown is True

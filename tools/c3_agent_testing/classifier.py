@@ -19,6 +19,7 @@ def classify_operation(operation: dict[str, Any] | None) -> str:
         result.get("review_ready") is True
         or result.get("pageKind") == "review"
         or result.get("hasSubmit") is True
+        or result.get("stoppedReason") == "final_submit_visible"
         or page_walk.get("stoppedReason") == "final_submit_visible"
         or page_walk.get("pageKind") == "review"
         or page_walk.get("hasSubmit") is True
@@ -32,6 +33,10 @@ def classify_operation(operation: dict[str, Any] | None) -> str:
         return "artifact_capture_failed"
     if any(token in reason for token in ("auth_no_captcha", "auth_gate", "login_gate")):
         return "site_auth_gate"
+    if "job_unavailable" in reason:
+        return "job_unavailable"
+    if "maintenance" in reason:
+        return "site_unavailable"
     if any(token in reason for token in ("http_404", "http_410", "job_expired")):
         return "job_expired"
     if any(token in reason for token in ("cdp_connect", "bridge_unreachable", "target_missing")):

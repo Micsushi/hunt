@@ -226,6 +226,111 @@ def test_last20_public_result_never_contains_pdf_data(tmp_path):
     assert output["defaultResumeIdentity"]["pdfByteCount"] == len(secret_pdf)
 
 
+def test_fresh_pchrome_waits_for_actual_hunt_service_worker_id_before_using_options():
+    result = run_node(
+        helper_script(
+            """
+            const stale = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+            const actual = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+            const reads = [
+              [{ type: "page", url: "about:blank" }],
+              [{
+                type: "service_worker",
+                url: `chrome-extension://${actual}/src/background/index.js`,
+              }],
+            ];
+            helpers.waitForLoadedHuntExtensionId(
+              9981,
+              [
+                { type: "page", url: "about:blank" },
+                {
+                  type: "page",
+                  url: `chrome-extension://${stale}/src/options/options.html`,
+                },
+              ],
+              stale,
+              {
+                maxAttempts: 3,
+                pollMs: 0,
+                listTargets: async () => reads.shift() || [],
+                sleep: async () => {},
+              },
+            ).then((resolved) => {
+              console.log(JSON.stringify({
+                extensionId: resolved.extensionId,
+                remainingReads: reads.length,
+              }));
+            }).catch((error) => {
+              console.error(error.stack || error.message || String(error));
+              process.exitCode = 1;
+            });
+            """
+        )
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert json.loads(result.stdout) == {
+        "extensionId": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "remainingReads": 0,
+    }
+
+
+def test_fresh_pchrome_rejects_stale_fallback_when_hunt_worker_never_loads():
+    result = run_node(
+        helper_script(
+            """
+            helpers.waitForLoadedHuntExtensionId(
+              9981,
+              [{ type: "page", url: "about:blank" }],
+              "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              {
+                maxAttempts: 2,
+                pollMs: 0,
+                listTargets: async () => [],
+                sleep: async () => {},
+              },
+            ).then(() => {
+              console.log("unexpected-success");
+              process.exitCode = 1;
+            }).catch((error) => {
+              console.log(String(error.message || error));
+            });
+            """
+        )
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == (
+        "hunt_extension_not_loaded:9981:fallback=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    )
+
+
+def test_extension_page_selector_never_returns_background_service_worker():
+    result = run_node(
+        helper_script(
+            """
+            const extensionId = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+            const selected = helpers.findExtensionPage([
+              {
+                id: "worker",
+                type: "service_worker",
+                url: `chrome-extension://${extensionId}/src/background/index.js`,
+              },
+              {
+                id: "options",
+                type: "page",
+                url: `chrome-extension://${extensionId}/src/options/options.html`,
+              },
+            ], extensionId);
+            console.log(JSON.stringify(selected));
+            """
+        )
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert json.loads(result.stdout)["id"] == "options"
+
+
 def test_last20_lane_setup_fails_closed_and_compares_resume_identity(tmp_path):
     missing = tmp_path / "missing.pdf"
     logs = tmp_path / "logs"

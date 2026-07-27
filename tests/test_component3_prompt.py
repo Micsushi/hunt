@@ -237,6 +237,28 @@ def test_detected_page_prompt_gate_requires_visible_controls():
     assert 'detection.kind === "signup"' in content
 
 
+def test_ats_hostname_with_only_search_control_does_not_prompt():
+    if sync_playwright is None:
+        pytest.skip("playwright is required for the C3 prompt fixture")
+    with sync_playwright() as playwright:
+        try:
+            browser, page = _new_prompt_page(
+                playwright,
+                """
+                <main>
+                  <h1>Search our company</h1>
+                  <label>Search <input type="search" name="q" /></label>
+                </main>
+                """,
+            )
+        except PlaywrightError as error:
+            pytest.skip(f"playwright chromium is unavailable: {error}")
+        try:
+            assert page.locator("#hunt-apply-detected-page-prompt").count() == 0
+        finally:
+            browser.close()
+
+
 def test_career_apply_button_pages_can_prompt_without_visible_fields():
     content = _load_script(REPO_ROOT / "executioner/src/content/bootstrap.js")
     background = _load_script(REPO_ROOT / "executioner/src/background/index.js")
@@ -808,9 +830,13 @@ def test_application_readiness_requires_application_fields_not_generic_controls(
     assert "skip to main content" in readiness
     assert "workflowDetection?.isAuthPage" in wait_ready
     assert 'reason: "still_on_auth_page"' in wait_ready
-    assert "lastProbe.applicationFieldCount > 0" in wait_ready
+    assert "fieldProbeHasApplicationSurface" in wait_ready
+    assert "workflowHasApplicationSurface" in wait_ready
+    assert "Number(lastProbe?.applicationFieldCount || 0) > 0" in wait_ready
     assert "stableReadyProbeCount >= 2" in wait_ready
-    assert "!lastProbe.loadingIndicatorVisible" in wait_ready
+    assert "!effectiveProbe.loadingIndicatorVisible" in wait_ready
+    assert "graceEligible" in wait_ready
+    assert "hardDeadline" in wait_ready
     assert "lastProbe.meaningfulControlCount >= 2" not in wait_ready
 
 

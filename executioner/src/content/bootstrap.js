@@ -228,6 +228,15 @@
       isWorkday &&
       /\/login\/?$/i.test(window.location.pathname || "") &&
       (hasSignInWithEmailAction || hasSocialSignInAction);
+    const hasWorkdayApplicationStep =
+      isWorkday &&
+      Boolean(activeStepText) &&
+      !hasWorkdayAuthStep &&
+      /my information|experience|application questions|voluntary disclosures|self identify|review/i.test(
+        activeStepText,
+      );
+    const hasWorkdayApplicationPath =
+      isWorkday && /\/apply(?:\/|$)/i.test(path);
     const hasCareerApplyEntry =
       (host.includes("career") ||
         host.includes("jobs") ||
@@ -244,6 +253,11 @@
           /^apply(?:\s+apply)?$/i.test(label) ||
           (/^apply\b/i.test(label) && /\/apply(?:$|[/?#\s])/i.test(label)),
       );
+    const hasAtsApplicationSurface =
+      (isAts || hasEmbeddedAts) &&
+      inputCount >= 1 &&
+      hasApplicationSignal &&
+      (!isWorkday || hasWorkdayApplicationStep || hasWorkdayApplicationPath);
     if (inputCount >= 2 && hasSignupSignal && passwordCount >= 2) {
       return { kind: "signup", inputCount, atsType };
     }
@@ -256,7 +270,7 @@
     if (hasWorkdayDetailsApply || hasCareerApplyEntry) {
       return { kind: "apply_entry", inputCount, atsType };
     }
-    if (isAts || hasEmbeddedAts) {
+    if (hasAtsApplicationSurface) {
       return { kind: "ats", inputCount, atsType };
     }
     if (inputCount >= 3 && hasApplicationSignal) {

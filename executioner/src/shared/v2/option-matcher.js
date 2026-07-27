@@ -434,6 +434,27 @@
       })[0]?.option;
   }
 
+  function travelOptionForAnswer(options, answer) {
+    if (norm(answer?.value) === "highest") {
+      return highestTravelOption(options);
+    }
+    var numbers = (String(answer?.value || "").match(/\d+(?:\.\d+)?/g) || [])
+      .map(Number)
+      .filter(Number.isFinite);
+    if (!numbers.length) {
+      return null;
+    }
+    var target = numbers[0];
+    return (options || [])
+      .map(travelOptionScore)
+      .filter(function (candidate) {
+        return candidate && candidate.min <= target && target <= candidate.max;
+      })
+      .sort(function (a, b) {
+        return a.max - a.min - (b.max - b.min) || a.index - b.index;
+      })[0]?.option;
+  }
+
   function yearRangeOption(options, answer) {
     var target = Number(String(answer?.value || "").match(/\d+/)?.[0] || "");
     if (!Number.isFinite(target) || target <= 0) {
@@ -496,9 +517,7 @@
         if (label.length <= 3 || alias.length <= 3) {
           return label === alias;
         }
-        return (
-          label === alias || label.includes(alias) || alias.includes(label)
-        );
+        return label === alias || label.includes(alias);
       });
       if (found) {
         return found;
@@ -507,7 +526,15 @@
     return null;
   }
 
-  function isVeteranDisclosureField(field, answer) {
+  function exactNoOption(options) {
+    return realOptions(options).find(function (option) {
+      var label = normOptionLabel(option.label);
+      var value = normOptionLabel(option.value);
+      return label === "no" || value === "no";
+    });
+  }
+
+  function isSensitiveDisclosureField(field, answer) {
     var el = field?.element || field?.anchor;
     var text = norm(
       [
@@ -521,33 +548,76 @@
         answer?.source,
       ].join(" "),
     );
-    return (
-      text.includes("veteran") &&
-      (text.includes("disclosure") ||
-        text.includes("protected") ||
-        text.includes("classifications") ||
-        text.includes("status"))
+    return /\b(gender|sex|sexual orientation|transgender|racial|race|ethnic|ethnicity|disability|disabled|veteran|indigenous|aboriginal|religion|religious)\b/.test(
+      text,
     );
   }
 
-  function safeNotVeteranOption(options) {
-    return realOptions(options).find(function (option) {
-      var label = normOptionLabel(option.label);
-      return (
-        label.includes("not a veteran") ||
-        label.includes("not protected veteran") ||
-        (label.includes("i am not") && label.includes("veteran")) ||
-        (label.includes("not one") && label.includes("veteran"))
-      );
-    });
+  function isMaterialDecisionField(field, answer) {
+    if (
+      answer?.answerType === "salary_expectation" ||
+      answer?.answerType === "travel_availability"
+    ) {
+      return true;
+    }
+    if (isSensitiveDisclosureField(field, answer)) {
+      return true;
+    }
+    var el = field?.element || field?.anchor;
+    var text = norm(
+      [
+        field?.fieldId,
+        field?.descriptor,
+        field?.workday?.fieldLabel,
+        field?.workday?.contextText,
+        el?.id,
+        el?.name,
+        el?.getAttribute?.("aria-label"),
+        answer?.answerType,
+      ].join(" "),
+    );
+    return /\b(salary|compensation|pay expectation|work authori[sz](?:e|ed|ation)?|right to work|eligible to work|sponsor(?:ship)?|visa (?:sponsorship|support|petition)|immigration visa|work permit|citizen(?:ship)?|security clearance|active clearance|relocat(?:e|ed|ing|ion)|travel availability|percentage of travel|licen[cs](?:e|ed|ing)|certification|criminal (?:record|conviction|offen[cs]e)|background check|years?(?:\s+\w+){0,3}\s+experience|proficiency)\b/.test(
+      text,
+    );
   }
 
-  function exactNoOption(options) {
-    return realOptions(options).find(function (option) {
-      var label = normOptionLabel(option.label);
-      var value = normOptionLabel(option.value);
-      return label === "no" || value === "no";
+  function materialNoSafeOption(real, audit, fieldAudit, field) {
+    var neutral = neutralOption(real);
+    if (neutral) {
+      root.audit?.pushIssue(audit, fieldAudit, {
+        kind: "material_neutral_option",
+        severity: field?.required ? "warn" : "info",
+        failedStep: "option.match",
+        reason:
+          "No saved profile answer supported this material decision, so C3 selected a neutral or non-disclosure option.",
+        selectedOption: neutral.label,
+        options: real.map(function (option) {
+          return option.label;
+        }),
+      });
+      return {
+        option: neutral,
+        source: "material_neutral_option",
+        fallback: true,
+      };
+    }
+    root.audit?.pushIssue(audit, fieldAudit, {
+      kind: "material_answer_no_safe_option",
+      severity: field?.required ? "warn" : "info",
+      failedStep: "option.match",
+      reason:
+        "No exact saved profile answer or neutral option supported this material decision. C3 refused to infer an answer.",
+      options: real.map(function (option) {
+        return option.label;
+      }),
     });
+    return {
+      option: null,
+      source: "material_no_safe_option",
+      fallback: false,
+      blocked: true,
+      noMutation: true,
+    };
   }
 
   function progressFallbackOption({
@@ -632,6 +702,30 @@
     if (!real.length) {
       return { option: null, source: "no_options", fallback: false };
     }
+    var materialDecision = isMaterialDecisionField(field, answer);
+    var profileBacked = String(answer?.source || "").startsWith("profile:");
+    if (
+      materialDecision &&
+      !profileBacked &&
+      answer?.answerType !== "non_disclosure" &&
+      !(
+        answer?.answerType === "unknown" &&
+        isSensitiveDisclosureField(field, answer)
+      )
+    ) {
+      return materialNoSafeOption(real, audit, fieldAudit, field);
+    }
+    if (
+      field?.uiModel === "checkbox" &&
+      answer?.source === "missing_profile_value" &&
+      !target
+    ) {
+      return {
+        option: null,
+        source: "checkbox_no_safe_match",
+        fallback: false,
+      };
+    }
     if (answer?.source === "missing_profile_value" && !target) {
       return progressFallbackOption({
         real,
@@ -647,11 +741,14 @@
       });
     }
     if (answer.answerType === "travel_availability") {
-      var travel = highestTravelOption(real);
+      var travel = travelOptionForAnswer(real, answer);
       if (travel) {
         return {
           option: travel,
-          source: "highest_travel_numeric",
+          source:
+            norm(answer?.value) === "highest"
+              ? "highest_travel_numeric"
+              : "travel_numeric_match",
           fallback: false,
         };
       }
@@ -769,23 +866,9 @@
       }
     }
     if (field?.uiModel === "checkbox") {
-      if (field?.required) {
-        return progressFallbackOption({
-          real,
-          audit,
-          fieldAudit,
-          field,
-          kind: "checkbox_required_defaulted",
-          reason:
-            "Required checkbox had no exact safe match, so C3 used the progress-first fallback ladder.",
-          neutralSource: "checkbox_neutral_fallback",
-          noSource: "checkbox_no_fallback",
-          firstSource: "checkbox_first_real_fallback",
-        });
-      }
       return {
         option: null,
-        source: "checkbox_no_safe_match",
+        source: target ? "checkbox_target_mismatch" : "checkbox_no_safe_match",
         fallback: false,
       };
     }
@@ -864,23 +947,12 @@
         severity: field?.required ? "warn" : "info",
         failedStep: "option.match",
         reason:
-          "Salary option did not match the profile salary value, so C3 used the progress-first fallback ladder.",
+          "Salary option did not match the saved profile salary value, so C3 refused to infer an answer.",
         options: real.map(function (option) {
           return option.label;
         }),
       });
-      return progressFallbackOption({
-        real,
-        audit,
-        fieldAudit,
-        field,
-        kind: "salary_option_defaulted",
-        reason:
-          "Salary option did not match the profile salary value, so C3 used the progress-first fallback ladder.",
-        neutralSource: "salary_neutral_fallback",
-        noSource: "salary_no_fallback",
-        firstSource: "salary_first_real_fallback",
-      });
+      return materialNoSafeOption(real, audit, fieldAudit, field);
     }
     if (isPhoneCountryCodeField(field)) {
       var phoneMatch = phoneCountryCodeOption(real, answer);
@@ -930,6 +1002,13 @@
         source: "hierarchical_workday_deferred",
         fallback: false,
       };
+    }
+    if (
+      materialDecision &&
+      answer?.answerType !== "non_disclosure" &&
+      answer?.answerType !== "unknown"
+    ) {
+      return materialNoSafeOption(real, audit, fieldAudit, field);
     }
     if (shouldLeaveOptionalProfileFieldBlank(field, answer)) {
       root.audit?.pushIssue(audit, fieldAudit, {
@@ -986,51 +1065,44 @@
       }
     }
     if (answer.answerType === "non_disclosure") {
-      if (isVeteranDisclosureField(field, answer)) {
-        var notVeteran = safeNotVeteranOption(real);
-        if (notVeteran) {
-          root.audit?.pushIssue(audit, fieldAudit, {
-            kind: "veteran_disclosure_profile_safe_fallback",
-            severity: "warn",
-            failedStep: "option.match",
-            reason:
-              "No neutral veteran disclosure option was visible, so C3 selected the profile-safe not-veteran option.",
-            selectedOption: notVeteran.label,
-            options: real.map(function (option) {
-              return option.label;
-            }),
-          });
-          return {
-            option: notVeteran,
-            source: "veteran_not_veteran_safe_fallback",
-            fallback: true,
-          };
-        }
-      }
       root.audit?.pushIssue(audit, fieldAudit, {
-        kind: "non_disclosure_no_neutral_option",
-        severity: field?.required ? "warn" : "info",
+        kind: "sensitive_disclosure_no_safe_option",
+        severity: "warn",
         failedStep: "option.match",
         reason:
-          "No neutral or non-disclosure option was visible, so C3 used the progress-first fallback ladder.",
+          "No neutral or non-disclosure option was visible. C3 refused to infer a sensitive demographic answer.",
         options: real.map(function (option) {
           return option.label;
         }),
       });
-      return progressFallbackOption({
-        real,
-        audit,
-        fieldAudit,
-        field,
-        kind: "non_disclosure_defaulted",
-        reason:
-          "No neutral or non-disclosure option was visible, so C3 used the progress-first fallback ladder.",
-        neutralSource: "non_disclosure_neutral_fallback",
-        noSource: "non_disclosure_no_fallback",
-        firstSource: "non_disclosure_first_real_fallback",
-      });
+      return {
+        option: null,
+        source: "sensitive_no_safe_option",
+        fallback: false,
+        blocked: true,
+        noMutation: true,
+      };
     }
     if (answer.answerType === "unknown") {
+      if (isSensitiveDisclosureField(field, answer)) {
+        root.audit?.pushIssue(audit, fieldAudit, {
+          kind: "sensitive_disclosure_no_safe_option",
+          severity: "warn",
+          failedStep: "option.match",
+          reason:
+            "C3 did not recognize this sensitive disclosure question and refused to infer an answer.",
+          options: real.map(function (option) {
+            return option.label;
+          }),
+        });
+        return {
+          option: null,
+          source: "sensitive_no_safe_option",
+          fallback: false,
+          blocked: true,
+          noMutation: true,
+        };
+      }
       return progressFallbackOption({
         real,
         audit,

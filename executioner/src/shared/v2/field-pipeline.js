@@ -7,6 +7,324 @@
     console.log("[HUNT:C3] " + tag, data);
   }
 
+  function evidenceText(value, maxLength) {
+    return String(value || "")
+      .replace(
+        /\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/gi,
+        "[redacted-email]",
+      )
+      .replace(
+        /\b(password|passwd|token|secret|authorization)\b\s*[:=]\s*\S+/gi,
+        "$1=[redacted]",
+      )
+      .replace(/\s+/g, " ")
+      .trim()
+      .slice(0, maxLength);
+  }
+
+  function evidenceField(field) {
+    var element = field?.element || field?.anchor || {};
+    return {
+      id: evidenceText(
+        field?.fieldId || field?.id || element.id || element.name || "",
+        160,
+      ),
+      label: evidenceText(
+        field?.descriptor ||
+          field?.label ||
+          field?.workday?.fieldLabel ||
+          element.getAttribute?.("aria-label") ||
+          "",
+        240,
+      ),
+      type: evidenceText(
+        field?.uiModel ||
+          field?.type ||
+          field?.workday?.kind ||
+          element.type ||
+          element.tagName ||
+          "",
+        80,
+      ),
+    };
+  }
+
+  function evidenceCommittedState(state) {
+    state = state || {};
+    return {
+      committed: Boolean(state.committed),
+      selected: Boolean(state.selected),
+      checked: Boolean(state.checked),
+      empty: Boolean(state.empty),
+      validationVisible: Boolean(state.validationVisible),
+      reason: evidenceText(state.reason || "", 160),
+    };
+  }
+
+  function evidencePopupOwner(owner) {
+    owner = owner || {};
+    return {
+      id: evidenceText(owner.id || "", 160),
+      role: evidenceText(owner.role || "", 80),
+      automationId: evidenceText(owner.automationId || "", 160),
+      controls: evidenceText(owner.controls || "", 160),
+    };
+  }
+
+  function sourceOptionLabelIsSafe(field) {
+    var signal = [field?.id, field?.label, field?.type].join(" ").toLowerCase();
+    return /\bsource\b|how did you hear|hear about us/.test(signal);
+  }
+
+  function evidenceOptionLabelIsUiState(label) {
+    var normalized = evidenceText(label || "", 160)
+      .toLowerCase()
+      .replace(/\s+/g, " ")
+      .trim();
+    return /^(?:expanded|collapsed|open|closed|true|false|select|select one|0 items? selected)$/.test(
+      normalized,
+    );
+  }
+
+  function evidenceIntendedOption(option, field) {
+    var label = evidenceText(option?.label || "", 160);
+    return {
+      label:
+        option?.safe &&
+        sourceOptionLabelIsSafe(field) &&
+        !evidenceOptionLabelIsUiState(label)
+          ? label
+          : "",
+    };
+  }
+
+  function evidenceAction(action) {
+    action = action || {};
+    return {
+      method: evidenceText(action.method || "", 80),
+      result: evidenceText(action.result || "", 80),
+      reason: evidenceText(action.reason || "", 160),
+    };
+  }
+
+  function evidenceCommitVerification(verification) {
+    verification = verification || {};
+    return {
+      verified: Boolean(verification.verified),
+      selectedPillPresent: Boolean(verification.selectedPillPresent),
+      backingValuePresent: Boolean(verification.backingValuePresent),
+      validationVisible: Boolean(verification.validationVisible),
+      reason: evidenceText(verification.reason || "", 160),
+    };
+  }
+
+  function createDriverEvidenceTracker() {
+    var limit = 16;
+    var outcomeLimit = 12;
+    var state = null;
+
+    function nowIso(now) {
+      return new Date(now).toISOString();
+    }
+
+    function reset(meta) {
+      var now = Date.now();
+      state = {
+        active: true,
+        fillRunId: evidenceText(meta?.fillRunId || "", 120),
+        operationId: evidenceText(meta?.operationId || "", 120),
+        phase: "idle",
+        waitClass: "idle",
+        field: { id: "", label: "", type: "" },
+        awaitedOperation: "",
+        startedAt: nowIso(now),
+        lastProgressAt: nowIso(now),
+        startedAtMs: now,
+        lastCommittedState: evidenceCommittedState({ reason: "not_started" }),
+        popupOwner: evidencePopupOwner({}),
+        intendedOption: evidenceIntendedOption({}, {}),
+        action: evidenceAction({}),
+        commitVerification: evidenceCommitVerification({}),
+        breadcrumbs: [],
+        recentFieldOutcomes: [],
+      };
+      return snapshot();
+    }
+
+    function sameField(left, right) {
+      if (left?.id && right?.id) {
+        return left.id === right.id;
+      }
+      return Boolean(left?.label && left.label === right?.label);
+    }
+
+    function resetFieldMechanism() {
+      state.popupOwner = evidencePopupOwner({});
+      state.intendedOption = evidenceIntendedOption({}, state.field);
+      state.action = evidenceAction({});
+      state.commitVerification = evidenceCommitVerification({});
+    }
+
+    function fieldOutcome(at) {
+      return {
+        at: at,
+        phase: state.phase,
+        field: { ...state.field },
+        popupOwner: { ...state.popupOwner },
+        intendedOption: { ...state.intendedOption },
+        action: { ...state.action },
+        commitVerification: { ...state.commitVerification },
+        lastCommittedState: { ...state.lastCommittedState },
+      };
+    }
+
+    function recordFieldOutcome(at) {
+      var outcome = fieldOutcome(at);
+      var last =
+        state.recentFieldOutcomes[state.recentFieldOutcomes.length - 1];
+      if (last && sameField(last.field, outcome.field)) {
+        state.recentFieldOutcomes[state.recentFieldOutcomes.length - 1] =
+          outcome;
+      } else {
+        state.recentFieldOutcomes.push(outcome);
+      }
+      state.recentFieldOutcomes =
+        state.recentFieldOutcomes.slice(-outcomeLimit);
+    }
+
+    function update(next) {
+      if (!state) {
+        reset({});
+      }
+      next = next || {};
+      var now = Date.now();
+      if (Object.prototype.hasOwnProperty.call(next, "active")) {
+        state.active = Boolean(next.active);
+      }
+      if (next.phase) {
+        state.phase = evidenceText(next.phase, 80);
+      }
+      if (next.waitClass) {
+        state.waitClass = evidenceText(next.waitClass, 80);
+      }
+      if (next.field) {
+        var nextField = evidenceField(next.field);
+        if (!sameField(state.field, nextField)) {
+          state.field = nextField;
+          resetFieldMechanism();
+        } else {
+          state.field = nextField;
+        }
+      }
+      if (Object.prototype.hasOwnProperty.call(next, "awaitedOperation")) {
+        state.awaitedOperation = evidenceText(next.awaitedOperation, 160);
+      }
+      if (next.lastCommittedState) {
+        state.lastCommittedState = evidenceCommittedState(
+          next.lastCommittedState,
+        );
+      }
+      if (next.popupOwner) {
+        state.popupOwner = evidencePopupOwner(next.popupOwner);
+      }
+      if (next.intendedOption) {
+        state.intendedOption = evidenceIntendedOption(
+          next.intendedOption,
+          state.field,
+        );
+      }
+      if (next.action) {
+        state.action = evidenceAction(next.action);
+      }
+      if (next.commitVerification) {
+        state.commitVerification = evidenceCommitVerification(
+          next.commitVerification,
+        );
+      }
+      state.lastProgressAt = nowIso(now);
+      state.breadcrumbs.push({
+        at: state.lastProgressAt,
+        elapsedMs: Math.max(0, now - state.startedAtMs),
+        phase: state.phase,
+        waitClass: state.waitClass,
+        field: { ...state.field },
+        awaitedOperation: state.awaitedOperation,
+        popupOwner: { ...state.popupOwner },
+        intendedOption: { ...state.intendedOption },
+        action: { ...state.action },
+        commitVerification: { ...state.commitVerification },
+        lastCommittedState: { ...state.lastCommittedState },
+      });
+      state.breadcrumbs = state.breadcrumbs.slice(-limit);
+      if (
+        [
+          "field_commit_checked",
+          "field_timeout",
+          "field_cancelled",
+          "field_failed",
+        ].includes(state.phase)
+      ) {
+        recordFieldOutcome(state.lastProgressAt);
+      }
+      return snapshot();
+    }
+
+    function snapshot() {
+      if (!state) {
+        reset({});
+      }
+      var now = Date.now();
+      return {
+        active: Boolean(state.active),
+        fillRunId: state.fillRunId,
+        operationId: state.operationId,
+        phase: state.phase,
+        waitClass: state.waitClass,
+        field: { ...state.field },
+        awaitedOperation: state.awaitedOperation,
+        startedAt: state.startedAt,
+        lastProgressAt: state.lastProgressAt,
+        capturedAt: nowIso(now),
+        elapsedMs: Math.max(0, now - state.startedAtMs),
+        popupOwner: { ...state.popupOwner },
+        intendedOption: { ...state.intendedOption },
+        action: { ...state.action },
+        commitVerification: { ...state.commitVerification },
+        lastCommittedState: { ...state.lastCommittedState },
+        breadcrumbs: state.breadcrumbs.map(function (entry) {
+          return {
+            ...entry,
+            field: { ...entry.field },
+            popupOwner: { ...entry.popupOwner },
+            intendedOption: { ...entry.intendedOption },
+            action: { ...entry.action },
+            commitVerification: { ...entry.commitVerification },
+            lastCommittedState: { ...entry.lastCommittedState },
+          };
+        }),
+        recentFieldOutcomes: state.recentFieldOutcomes.map(function (outcome) {
+          return {
+            ...outcome,
+            field: { ...outcome.field },
+            popupOwner: { ...outcome.popupOwner },
+            intendedOption: { ...outcome.intendedOption },
+            action: { ...outcome.action },
+            commitVerification: { ...outcome.commitVerification },
+            lastCommittedState: { ...outcome.lastCommittedState },
+          };
+        }),
+      };
+    }
+
+    return {
+      reset: reset,
+      update: update,
+      snapshot: snapshot,
+    };
+  }
+
+  root.driverEvidence = createDriverEvidenceTracker();
+
   function optionsNeeded(field) {
     return [
       "select",
@@ -736,6 +1054,7 @@
       interactionTrace: audit.events,
       traceTruncated: Boolean(audit.traceTruncated),
       v2Audit: audit,
+      driverEvidence: root.driverEvidence.snapshot(),
     };
   }
 
@@ -750,6 +1069,20 @@
     actionGuard,
   }) {
     var traceStartedAt = Date.now();
+    root.driverEvidence.update({
+      phase: "field_prepare",
+      waitClass: "idle",
+      awaitedOperation: "answerResolver.resolveAnswer",
+      field: field,
+      lastCommittedState: {
+        committed: false,
+        selected: false,
+        checked: false,
+        empty: true,
+        validationVisible: hasValidationState(field),
+        reason: "field_started",
+      },
+    });
     var fieldAudit = root.audit.createFieldAudit(audit, field);
     fieldAudit.beforeState = root.fieldState.readFieldState(field);
     emitStructuredFieldTrace(audit, "field.attempt.started", field, {
@@ -888,11 +1221,23 @@
 
     var option = null;
     if (optionsNeeded(field)) {
+      root.driverEvidence.update({
+        phase: "popup_options_wait",
+        waitClass: "popup_options",
+        awaitedOperation: "optionCollector.collectOptions",
+        field: field,
+      });
       field.options = await root.optionCollector.collectOptions(field, {
         answer: answer,
         audit: audit,
         fieldAudit: fieldAudit,
         actionGuard: actionGuard,
+      });
+      root.driverEvidence.update({
+        phase: "option_match",
+        waitClass: "idle",
+        awaitedOperation: "optionMatcher.matchOption",
+        field: field,
       });
       root.audit.pushFieldStep(audit, fieldAudit, {
         action: "options_collected",
@@ -914,6 +1259,42 @@
         field: field,
       });
       option = match.option;
+      if (match.blocked || match.noMutation) {
+        fieldAudit.selectedOption = "";
+        fieldAudit.valueSource = match.source || "option_mutation_blocked";
+        fieldAudit.noOptionReason = match.source || "option_mutation_blocked";
+        fieldAudit.afterState = {
+          ...root.fieldState.readFieldState(field),
+          reason: match.source || "option_mutation_blocked",
+        };
+        fieldAudit.filled = false;
+        root.audit.pushFieldStep(audit, fieldAudit, {
+          action: "option_mutation_blocked",
+          step: "option.match",
+          status: "warn",
+          selectedOption: "",
+          valueSource: fieldAudit.valueSource,
+          reason: match.source || "option_mutation_blocked",
+          detail: {
+            blocked: true,
+            noMutation: true,
+          },
+        });
+        actionGuard?.claimTerminal?.();
+        var blockedElapsedMs = Math.max(0, Date.now() - traceStartedAt);
+        emitStructuredFieldTrace(audit, "field.commit.checked", field, {
+          elapsedMs: blockedElapsedMs,
+          clicked: false,
+          committed: false,
+          reasonCode: fieldAudit.noOptionReason,
+        });
+        emitStructuredFieldTrace(audit, "field.action.failed", field, {
+          elapsedMs: blockedElapsedMs,
+          committed: false,
+          reasonCode: fieldAudit.noOptionReason,
+        });
+        return { filled: false, fieldAudit: fieldAudit };
+      }
       fieldAudit.selectedOption = option?.label || "";
       if (
         question.type === "unknown" &&
@@ -1014,6 +1395,17 @@
       return { filled: false, fieldAudit: fieldAudit };
     }
 
+    var workdayPopupField =
+      Boolean(field.workday?.kind) &&
+      ["combobox", "button_listbox"].includes(field.uiModel);
+    root.driverEvidence.update({
+      phase: workdayPopupField ? "popup_options_wait" : "field_commit_wait",
+      waitClass: workdayPopupField ? "popup_options" : "field_commit",
+      awaitedOperation: workdayPopupField
+        ? "workday.fieldDrivers.fillField"
+        : "fieldDrivers.fillField",
+      field: field,
+    });
     var fillResult = await root.fieldDrivers.fillField({
       field: field,
       answer: answer,
@@ -1039,6 +1431,25 @@
       fillResult.afterState || root.fieldState.readFieldState(field);
     var actionStillCurrent = actionGuard?.canMutate?.() !== false;
     fieldAudit.filled = Boolean(fillResult.ok && actionStillCurrent);
+    root.driverEvidence.update({
+      phase: "field_commit_checked",
+      waitClass: "idle",
+      awaitedOperation: "",
+      field: field,
+      lastCommittedState: {
+        committed: fieldAudit.filled,
+        selected: Boolean(fieldAudit.afterState?.selected),
+        checked: Boolean(fieldAudit.afterState?.checked),
+        empty: Boolean(fieldAudit.afterState?.empty),
+        validationVisible: Boolean(
+          fieldAudit.afterState?.validationVisible ||
+          fieldAudit.afterState?.invalid,
+        ),
+        reason:
+          fillResult.reason ||
+          (fieldAudit.filled ? "commit_verified" : "commit_not_verified"),
+      },
+    });
     if (fillResult.valueSource) {
       fieldAudit.valueSource = fillResult.valueSource;
     }
@@ -1176,6 +1587,22 @@
   }
 
   async function runHuntV2Fill(context) {
+    root.driverEvidence.reset({
+      fillRunId: context.fillRunId || "",
+      operationId:
+        context.operation_id ||
+        context.operationId ||
+        context.commandContext?.operation_id ||
+        context.commandContext?.operationId ||
+        context.ledgerContext?.operation_id ||
+        context.ledgerContext?.operationId ||
+        "",
+    });
+    root.driverEvidence.update({
+      phase: "pipeline_inventory",
+      waitClass: "idle",
+      awaitedOperation: "uiInspector.collectCandidates",
+    });
     var audit = root.audit.createRunAudit({
       fillRunId: context.fillRunId,
       atsType: context.atsType || context.fillRoute?.adapterName || "generic",
@@ -1450,6 +1877,20 @@
           fieldFillTimeoutMs(context),
           function () {
             var timeoutMs = fieldFillTimeoutMs(context);
+            root.driverEvidence.update({
+              phase: "field_timeout",
+              waitClass: "idle",
+              awaitedOperation: "",
+              field: field,
+              lastCommittedState: {
+                committed: false,
+                selected: false,
+                checked: false,
+                empty: true,
+                validationVisible: hasValidationState(field),
+                reason: "field_fill_timeout",
+              },
+            });
             var fieldAudit = root.audit.createFieldAudit(audit, field);
             fieldAudit.beforeState = root.fieldState.readFieldState(field);
             fieldAudit.afterState = {
@@ -1543,6 +1984,12 @@
       }
     }
     root.audit.complete(audit);
+    root.driverEvidence.update({
+      active: false,
+      phase: "pipeline_complete",
+      waitClass: "idle",
+      awaitedOperation: "",
+    });
     var manualReviewRequired = audit.permanentIssues.some(function (issue) {
       return ["warn", "blocked", "error"].includes(issue.severity);
     });
@@ -1571,6 +2018,7 @@
       interactionTrace: audit.events,
       traceTruncated: Boolean(audit.traceTruncated),
       v2Audit: audit,
+      driverEvidence: root.driverEvidence.snapshot(),
     };
   }
 

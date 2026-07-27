@@ -35,15 +35,28 @@ class LaneResult:
     diagnosis_id: str = ""
     failure_scope: str = ""
     root_cause_code: str = ""
+    reported_cause_code: str = ""
+    cause_asserted: bool = False
     failure_summary: str = ""
     causal_selector: str = ""
     causal_label: str = ""
+    causal_field: dict[str, Any] = field(default_factory=dict)
     last_touched_selector: str = ""
     last_touched_label: str = ""
     expected_state: str = ""
     observed_state: str = ""
+    observed_messages: tuple[str, ...] = ()
+    diagnostic_messages: tuple[str, ...] = ()
+    monitor_summary: dict[str, Any] = field(default_factory=dict)
+    page_observations: tuple[dict[str, Any], ...] = ()
+    field_observations: tuple[dict[str, Any], ...] = ()
+    field_commit_failures: tuple[dict[str, Any], ...] = ()
+    timeout_evidence: dict[str, Any] = field(default_factory=dict)
+    auth_action_boundary: dict[str, Any] = field(default_factory=dict)
+    evidence_conflicts: tuple[str, ...] = ()
     confidence: str = "unknown"
     root_cause_unknown: bool = True
+    mechanism_unknown: bool = False
     failure_evidence_event_ids: tuple[str, ...] = ()
     failure_checkpoint_ids: tuple[str, ...] = ()
     failure_artifact_ids: tuple[str, ...] = ()

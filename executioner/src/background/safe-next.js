@@ -224,8 +224,73 @@ export function createSafeNextFunction() {
       if (!value) {
         return false;
       }
-      return /(^|\b)(submit|apply|finish|complete|send|finalize|done|register)(\b|$)/i.test(
+      return /(^|\b)(submit|finish|complete|send|finalize|done|register)(\b|$)/i.test(
         value,
+      );
+    }
+
+    function hasFinalReviewContext() {
+      var bodyText = normalizeText(document.body?.innerText || "");
+      var activeStep = document.querySelector(
+        '[data-automation-id="progressBarActiveStep"]',
+      );
+      var activeTitle = normalizeText(
+        activeStep?.getAttribute?.("aria-label") ||
+          activeStep?.innerText ||
+          activeStep?.textContent ||
+          "",
+      );
+      var stepNumbers = bodyText.match(/current\s+s?tep\s+(\d+)\s+of\s+(\d+)/i);
+      var numberedFinalReview =
+        /\breview\b/i.test(activeTitle) &&
+        (!stepNumbers || Number(stepNumbers[1]) === Number(stepNumbers[2]));
+      var explicitReview =
+        /\breview(?:\s+your)?\s+application\b|\breview\s+and\s+submit\b/i.test(
+          bodyText,
+        );
+      return Boolean(
+        /\/(?:apply|application)(?:\/|$)/i.test(
+          window.location?.pathname || "",
+        ) &&
+        (numberedFinalReview || explicitReview),
+      );
+    }
+
+    function isAuthoritativeFinalSubmitControl(el, visible, metadata) {
+      if (!isVisibleEnabled(el) || !hasFinalReviewContext()) {
+        return false;
+      }
+      var style = window.getComputedStyle(el);
+      var automationId = String(el.getAttribute?.("data-automation-id") || "");
+      if (
+        el.getAttribute?.("aria-hidden") === "true" ||
+        Number(style.opacity || 1) === 0 ||
+        /click_filter/i.test(automationId) ||
+        el.closest?.(
+          '[data-automation-id="noCaptchaWrapper"], [aria-hidden="true"], [inert]',
+        )
+      ) {
+        return false;
+      }
+      var tagName = String(el.tagName || "").toLowerCase();
+      var type = String(el.getAttribute?.("type") || "").toLowerCase();
+      var nativeSubmit =
+        (tagName === "button" && (!type || type === "submit")) ||
+        (tagName === "input" && type === "submit");
+      var workdayFinalSubmit =
+        tagName === "button" &&
+        /bottom-navigation-next-button/i.test(metadata || automationId);
+      var label = normalizeText(
+        el.getAttribute?.("aria-label") ||
+          el.getAttribute?.("title") ||
+          (tagName === "input" ? el.value : "") ||
+          el.innerText ||
+          el.textContent ||
+          visible,
+      );
+      return Boolean(
+        (nativeSubmit || workdayFinalSubmit) &&
+        /^submit(?:\s+application|\s+my application)?$/i.test(label),
       );
     }
 
@@ -378,6 +443,7 @@ export function createSafeNextFunction() {
             '[data-automation-id*="error"]',
             '[id^="Error-"]',
             '[id^="error-"]',
+            '[aria-invalid="true"]',
             ".css-1iucqxd",
           ].join(", "),
         ),
@@ -396,6 +462,29 @@ export function createSafeNextFunction() {
             style.visibility !== "hidden" &&
             rect.width > 0 &&
             rect.height > 0
+          );
+        })
+        .filter(function (el) {
+          var text = normalizeText(el.innerText || el.textContent || "");
+          var control = associatedValidationControl(el);
+          var role = String(el.getAttribute?.("role") || "").toLowerCase();
+          var automationId = String(
+            el.getAttribute?.("data-automation-id") || "",
+          ).toLowerCase();
+          var id = String(el.id || "").toLowerCase();
+          var className = String(el.className || "").toLowerCase();
+          var validationMessage =
+            /\b(error|required|invalid|incorrect|wrong|locked|must (?:enter|select|provide|have)|please (?:enter|select|provide|correct)|not valid|cannot be blank|can't be blank)\b/i.test(
+              text,
+            );
+          return Boolean(
+            control ||
+            el.getAttribute?.("aria-invalid") === "true" ||
+            automationId.includes("error") ||
+            id.startsWith("error-") ||
+            className.includes("css-1iucqxd") ||
+            (role === "alert" && validationMessage) ||
+            validationMessage,
           );
         })
         .map(function (el) {
@@ -481,7 +570,9 @@ export function createSafeNextFunction() {
         var visible = visibleLabel(el);
         var metadata = metadataLabel(el);
         if (hasFinalSubmitTerms(visible)) {
-          blockedFinalSubmitLabels.push(visible.slice(0, 120));
+          if (isAuthoritativeFinalSubmitControl(el, visible, metadata)) {
+            blockedFinalSubmitLabels.push(visible.slice(0, 120));
+          }
           return;
         }
         var score = safeScore(visible, metadata, el);

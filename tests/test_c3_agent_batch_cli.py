@@ -1,4 +1,5 @@
 import json
+import os
 import subprocess
 import sys
 from dataclasses import asdict, dataclass
@@ -51,6 +52,24 @@ def test_cli_is_directly_executable_from_repo_root():
     assert "Plan and supervise isolated C3 agent tests" in completed.stdout
 
 
+def test_cli_loads_service_token_from_repo_env_without_overriding_explicit_env(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    (tmp_path / ".env").write_text(
+        "HUNT_SERVICE_TOKEN=repo-secret\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(c3_batch, "REPO_ROOT", tmp_path)
+    monkeypatch.delenv("HUNT_SERVICE_TOKEN", raising=False)
+
+    c3_batch._load_repo_environment()
+    assert os.environ["HUNT_SERVICE_TOKEN"] == "repo-secret"
+
+    monkeypatch.setenv("HUNT_SERVICE_TOKEN", "explicit-secret")
+    c3_batch._load_repo_environment()
+    assert os.environ["HUNT_SERVICE_TOKEN"] == "explicit-secret"
+
+
 def test_pchrome_launcher_loads_extension_from_its_own_checkout():
     launcher = Path("scripts/launch_c3_chrome.ps1").read_text(encoding="utf-8")
 
@@ -63,6 +82,104 @@ def test_pchrome_launcher_keeps_a_minimized_window_for_stable_extension_target()
 
     assert "--start-minimized" in launcher
     assert "--no-startup-window" not in launcher
+    assert "-WindowStyle Hidden -PassThru" in launcher
+    assert "IsWindowVisible" in launcher
+    assert "SetWindowPos" in launcher
+    assert "SW_SHOWMINNOACTIVE" in launcher
+    assert "$laneEverForeground" in launcher
+    assert "GetForegroundWindow" in launcher
+    assert "SetForegroundWindow" in launcher
+    assert "C3 Chrome launch failed no-focus verification" in launcher
+    assert "C3 Chrome took foreground at least once during launch" in launcher
+
+
+def test_pchrome_lanes_use_an_isolated_windows_desktop():
+    launcher = Path("scripts/launch_c3_chrome.ps1").read_text(encoding="utf-8")
+    setup = Path("scripts/setup_c3_parallel_lanes.ps1").read_text(encoding="utf-8")
+    window_guard = Path("scripts/verify_c3_window_safety.ps1").read_text(encoding="utf-8")
+
+    assert "CreateDesktop" in launcher
+    assert "lpDesktop" in launcher
+    assert "HuntC3_$debugPort" in launcher
+    assert "DESKTOP_SWITCHDESKTOP" not in launcher
+    assert 'HUNT_C3_CHROME_ISOLATED_DESKTOP = "1"' in setup
+    assert "EnumDesktopWindows" in window_guard
+    assert "OpenDesktop" in window_guard
+
+
+def test_strict_lane_evidence_captures_screenshot_and_checks_window_safety():
+    capture = Path("scripts/c3_capture_final_ui.js").read_text(encoding="utf-8")
+    window_guard = Path("scripts/verify_c3_window_safety.ps1").read_text(encoding="utf-8")
+
+    assert "Page.captureScreenshot" in capture
+    assert "fromSurface: false" in capture
+    assert "selected_target_not_visible" in capture
+    assert "screenshot_target_identity_changed" in capture
+    assert "Page.printToPDF" in capture
+    assert "target_scoped_print_render" in capture
+    assert "print_layout_not_viewport_screenshot" in capture
+    assert "Target.activateTarget" not in capture
+    assert "Page.bringToFront" not in capture
+    assert ".manifest.json" in capture
+    assert "GetForegroundWindow" in window_guard
+    assert "IsIconic" in window_guard
+    assert "ShowWindowAsync" in window_guard
+    assert "lane_window_not_minimized" in window_guard
+    assert "lane_window_not_minimized_before_check" in window_guard
+    assert "lane_window_is_foreground" in window_guard
+    assert "lane_window_was_foreground_before_check" in window_guard
+    assert "lane_window_not_on_secondary_monitor" in window_guard
+    assert "Chrome_WidgetWin_1" in window_guard
+    assert "GetWindowPlacement" in window_guard
+
+
+def test_exact_plan_retarget_preserves_jobs_and_disables_foreground(tmp_path):
+    source = {
+        "batch_id": "old",
+        "allow_foreground": True,
+        "allow_submit": True,
+        "availability": [{"status": "live"}],
+        "lanes": [
+            {
+                "index": 1,
+                "port": 9901,
+                "job": {"job_id": "JR-1", "url": "https://example.test/JR-1"},
+            }
+        ],
+    }
+    source_path = tmp_path / "source.json"
+    output_path = tmp_path / "retargeted.json"
+    source_path.write_text(json.dumps(source), encoding="utf-8")
+
+    completed = subprocess.run(
+        [
+            sys.executable,
+            "scripts/c3_retarget_exact_plan.py",
+            "--source-plan",
+            str(source_path),
+            "--batch-id",
+            "strict-retest",
+            "--ports",
+            "9951",
+            "--artifact-root",
+            str(tmp_path / "artifacts"),
+            "--output",
+            str(output_path),
+        ],
+        cwd=Path(__file__).resolve().parents[1],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    result = json.loads(output_path.read_text(encoding="utf-8"))
+    assert result["exact_retest"] is True
+    assert result["allow_foreground"] is False
+    assert result["allow_submit"] is False
+    assert result["lanes"][0]["job"] == source["lanes"][0]["job"]
+    assert result["lanes"][0]["port"] == 9951
+    assert result["availability"][0]["status"] == "exact_retest_required"
 
 
 def test_fresh_batch_setup_does_not_immediately_reload_extension():
@@ -485,6 +602,83 @@ def test_run_lane_writes_atomic_planned_checkpoint_before_supervisor_failure(tmp
     assert checkpoint["status"] == "running"
     assert checkpoint["lanes"][0]["stage"] == "planned"
     assert checkpoint["lanes"][0]["plan"]["session_id"]
+
+
+def test_pre_operation_setup_failure_writes_typed_terminal_report(tmp_path: Path, capsys):
+    plan_path = tmp_path / "plan.json"
+    report_path = tmp_path / "setup-failed.json"
+    artifact_root = tmp_path / "artifacts"
+    assert (
+        main(
+            [
+                "plan",
+                "--csv",
+                "wd_test_jobs.csv",
+                "--count",
+                "1",
+                "--ports",
+                "9904",
+                "--batch-id",
+                "setup-failure-report",
+                "--artifact-root",
+                str(artifact_root),
+                "--output",
+                str(plan_path),
+            ],
+            dependencies=CliDependencies(
+                availability_check=lambda _job: AvailabilityResult("live", "fixture")
+            ),
+        )
+        == 0
+    )
+    capsys.readouterr()
+
+    def fail_setup(*_args):
+        raise RuntimeError(
+            "Hunt Apply Options page opened without extension APIs after 3 attempts."
+        )
+
+    def supervisor_must_not_start(_lanes):
+        raise AssertionError("supervisor_started_after_setup_failure")
+
+    code = main(
+        [
+            "run-lane",
+            "--plan",
+            str(plan_path),
+            "--lane-index",
+            "1",
+            "--report",
+            str(report_path),
+        ],
+        dependencies=CliDependencies(
+            setup_lanes=fail_setup,
+            supervisor_factory=supervisor_must_not_start,
+            browser_retention_check=lambda port: (
+                "preserved_for_inspection" if port == 9904 else "wrong_port"
+            ),
+        ),
+    )
+
+    assert code == 1
+    stdout = json.loads(capsys.readouterr().out)
+    assert stdout["ok"] is False
+    assert stdout["error_code"] == "options_extension_apis_unavailable"
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    assert report.get("status") != "running"
+    lane = report["lanes"][0]
+    assert lane["classification"] == "setup_failed"
+    assert lane["operation_state"] == "failed"
+    assert lane["operation_id"] == ""
+    assert lane["terminal_reason"] == "options_extension_apis_unavailable"
+    assert lane["root_cause_code"] == "options_extension_apis_unavailable"
+    assert lane["cause_asserted"] is True
+    assert "before any operation or job navigation started" in lane["failure_summary"]
+    setup_evidence = lane["failure_action_tail"][0]
+    assert setup_evidence["operation_started"] is False
+    assert setup_evidence["job_navigation_started"] is False
+    assert setup_evidence["browser_retention_status"] == "preserved_for_inspection"
+    assert setup_evidence["cleanup_action"] == "none_policy_retains_failed_lane"
 
 
 def test_run_lane_keeps_nonterminal_result_as_resumable_checkpoint(tmp_path: Path):
@@ -910,6 +1104,34 @@ def test_resume_report_finalizes_running_checkpoint_when_all_lanes_are_complete(
 def test_resume_report_refreshes_completed_failure_evidence_without_resending_terminal_lane(
     tmp_path: Path,
 ):
+    artifact_id = "artifact_452190f484f04b8f820d30a0eb5494b0"
+    artifact_dir = tmp_path / "op-refresh" / "artifacts" / artifact_id
+    artifact_dir.mkdir(parents=True)
+    manifest_path = artifact_dir / "manifest.json"
+    manifest_path.write_text('{"files":[]}', encoding="utf-8")
+    (artifact_dir / "page.json").write_text(
+        json.dumps(
+            {
+                "snapshot": {
+                    "href": "https://tenant.example/login",
+                    "title": "Sign In",
+                    "documentReadyState": "complete",
+                    "workflow": {
+                        "pageKind": "auth_form",
+                        "phase": "auth",
+                        "authState": "login",
+                        "authUiState": "landing_choice",
+                        "isAuthPage": True,
+                    },
+                    "readiness": {
+                        "applicationFieldCount": 0,
+                        "finalSubmitVisible": False,
+                    },
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
     plan_path = tmp_path / "plan.json"
     main(
         [
@@ -964,7 +1186,7 @@ def test_resume_report_refreshes_completed_failure_evidence_without_resending_te
                 "operation": {
                     "operation_id": "op-refresh",
                     "state": "failed",
-                    "artifact_ids": ["artifact-late"],
+                    "artifact_ids": [artifact_id],
                     "terminal_reason": "extension_command_failed",
                 }
             }
@@ -977,9 +1199,19 @@ def test_resume_report_refreshes_completed_failure_evidence_without_resending_te
                     "diagnosis_id": "diagnosis-refresh",
                     "root_cause_code": "ui_commit_failed",
                     "artifact_status": "completed",
-                    "artifact_ids": ["artifact-late"],
+                    "artifact_ids": [artifact_id],
                     "root_cause_unknown": False,
-                }
+                },
+                "artifacts": [
+                    {
+                        "artifact_id": artifact_id,
+                        "status": "completed",
+                        "kind": "failure_bundle",
+                        "reason_code": "operation_failed",
+                        "manifest_present": True,
+                        "manifest_path": str(manifest_path),
+                    }
+                ],
             }
 
         def close(self):
@@ -995,9 +1227,66 @@ def test_resume_report_refreshes_completed_failure_evidence_without_resending_te
 
     refreshed = json.loads(report_path.read_text(encoding="utf-8"))["lanes"][0]
     assert refreshed["failure_artifact_status"] == "completed"
-    assert refreshed["failure_artifact_ids"] == ["artifact-late"]
-    assert refreshed["artifact_ids"] == ["artifact-late"]
+    assert refreshed["failure_artifact_ids"] == [artifact_id]
+    assert refreshed["artifact_ids"] == [artifact_id]
+    assert refreshed["page_observations"][-1]["source"] == "failure_artifact"
+    assert refreshed["page_observations"][-1]["page_kind"] == "auth_form"
     assert [name for name, _payload in calls] == ["get", "context", "close"]
+
+
+@pytest.mark.parametrize(
+    ("root_cause_code", "expected_classification"),
+    [
+        ("job_unavailable", "job_unavailable"),
+        ("maintenance", "site_unavailable"),
+    ],
+)
+def test_completed_report_refresh_refines_direct_site_state_without_rewriting_terminal_reason(
+    root_cause_code: str,
+    expected_classification: str,
+):
+    original = LaneResult(
+        agent_id="agent-direct-site-state",
+        lane_id="lane-direct-site-state",
+        session_id="session-direct-site-state",
+        operation_id="op-direct-site-state",
+        job_url="https://example.test/job",
+        classification="fill_failed",
+        operation_state="failed",
+        terminal_reason="extension_command_failed",
+        lease_id="lease-direct-site-state",
+    )
+
+    class DirectSiteStateClient:
+        def get_c3_operation(self, _payload):
+            return {
+                "operation": {
+                    "operation_id": original.operation_id,
+                    "state": "failed",
+                    "terminal_reason": "extension_command_failed",
+                }
+            }
+
+        def get_c3_failure_context(self, _payload):
+            return {
+                "failure_context": {
+                    "operation_id": original.operation_id,
+                    "root_cause_code": root_cause_code,
+                    "cause_asserted": True,
+                    "root_cause_unknown": False,
+                    "artifact_status": "completed",
+                }
+            }
+
+    refreshed = c3_batch._refresh_completed_lane_result(
+        DirectSiteStateClient(),
+        original,
+    )
+
+    assert refreshed.classification == expected_classification
+    assert refreshed.root_cause_code == root_cause_code
+    assert refreshed.cause_asserted is True
+    assert refreshed.terminal_reason == "extension_command_failed"
 
 
 def test_resume_report_records_refresh_error_without_erasing_original_failure_context(
@@ -1326,18 +1615,26 @@ def test_prepare_inactive_job_tab_rejects_unexpected_active_target():
     assert "chrome.tabs.remove(417)" in expressions[1]
 
 
-def test_prepare_inactive_job_tab_rejects_target_that_never_finishes_loading():
-    with pytest.raises(RuntimeError, match="prepared_job_tab_not_complete"):
-        _prepare_inactive_job_tab(
-            "ws://127.0.0.1:9911/devtools/page/extension",
-            "https://example.wd5.myworkdayjobs.com/job/original",
-            evaluate=lambda _url, _expression: {
-                "tab_id": 417,
-                "resolved_url": "https://example.wd5.myworkdayjobs.com/job/original",
-                "active": False,
-                "status": "loading",
-            },
-        )
+def test_prepare_inactive_job_tab_retains_valid_loading_target_for_c3_readiness_wait():
+    prepared = _prepare_inactive_job_tab(
+        "ws://127.0.0.1:9911/devtools/page/extension",
+        "https://example.wd5.myworkdayjobs.com/job/original",
+        evaluate=lambda _url, _expression: {
+            "tab_id": 417,
+            "target_id": "target-job-417",
+            "resolved_url": "https://example.wd5.myworkdayjobs.com/job/original",
+            "active": False,
+            "status": "loading",
+        },
+    )
+
+    assert prepared == {
+        "tab_id": 417,
+        "target_id": "target-job-417",
+        "resolved_url": "https://example.wd5.myworkdayjobs.com/job/original",
+        "active": False,
+        "status": "loading",
+    }
 
 
 def test_prepare_inactive_job_tab_requires_observed_resolved_url():

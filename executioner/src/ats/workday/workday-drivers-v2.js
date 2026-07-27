@@ -26,6 +26,75 @@
       .trim();
   }
 
+  function updateDriverEvidence(
+    field,
+    phase,
+    waitClass,
+    awaitedOperation,
+    lastCommittedState,
+    mechanismEvidence,
+  ) {
+    root.driverEvidence?.update?.({
+      phase: phase,
+      waitClass: waitClass,
+      awaitedOperation: awaitedOperation,
+      field: field,
+      lastCommittedState: lastCommittedState,
+      ...(mechanismEvidence || {}),
+    });
+  }
+
+  function workdayPopupOwnerEvidence(field) {
+    var control = field?.element;
+    var listbox = workdayActiveListboxFor(control);
+    return {
+      id: listbox?.id || "",
+      role: listbox?.getAttribute?.("role") || "",
+      automationId:
+        listbox?.getAttribute?.("data-automation-id") ||
+        listbox?.getAttribute?.("data-uxi-element-id") ||
+        "",
+      controls:
+        control?.getAttribute?.("aria-controls") ||
+        control?.getAttribute?.("aria-owns") ||
+        "",
+    };
+  }
+
+  function workdayCommitEvidence(field, state, verified, reason) {
+    state = state || {};
+    return {
+      verified: Boolean(verified),
+      selectedPillPresent: Boolean(selectedWorkdayItemText(field)),
+      backingValuePresent: Boolean(clean(state.text || state.rawValue || "")),
+      validationVisible: workdayFieldHasValidationError(field),
+      reason: reason || "",
+    };
+  }
+
+  function updateWorkdayOptionMechanism(field, option, method, result, reason) {
+    var terminal = ["committed", "failed"].includes(result || "");
+    updateDriverEvidence(
+      field,
+      terminal ? "field_commit_checked" : "field_commit_wait",
+      terminal ? "idle" : "field_commit",
+      terminal ? "" : method ? "workday." + method : "workday.option_selection",
+      null,
+      {
+        popupOwner: workdayPopupOwnerEvidence(field),
+        intendedOption: {
+          label: option?.label || "",
+          safe: isApplicationSourceField(field?.element, field?.descriptor),
+        },
+        action: {
+          method: method || "",
+          result: result || "",
+          reason: reason || "",
+        },
+      },
+    );
+  }
+
   function visible(el) {
     if (!el) {
       return false;
@@ -504,6 +573,21 @@
     return norm(label) === "no items";
   }
 
+  function isWorkdayUiStateOptionLabel(label) {
+    return [
+      "expanded",
+      "collapsed",
+      "open",
+      "closed",
+      "true",
+      "false",
+      "select",
+      "select one",
+      "0 item selected",
+      "0 items selected",
+    ].includes(norm(label));
+  }
+
   function isTechnicalSkillsField(field, answer) {
     var el = field?.element;
     var key = [
@@ -953,7 +1037,11 @@
           return;
         }
         var label = optionLabel(target);
-        if (lowerPressDelete(label) || isNoItemsOption(label)) {
+        if (
+          lowerPressDelete(label) ||
+          isNoItemsOption(label) ||
+          isWorkdayUiStateOptionLabel(label)
+        ) {
           return;
         }
         var key =
@@ -1723,6 +1811,12 @@
     actionGuard,
   ) {
     actionGuard = guardForField(field, actionGuard);
+    updateDriverEvidence(
+      field,
+      "popup_options_wait",
+      "popup_options",
+      "workday.openPopupUntilOptions",
+    );
     var el = field.element;
     var container = root.workdayUi?.nearestWorkdayField(el);
     var targets = [
@@ -1777,6 +1871,12 @@
     actionGuard,
   ) {
     actionGuard = guardForField(field, actionGuard);
+    updateDriverEvidence(
+      field,
+      "popup_options_wait",
+      "popup_options",
+      "workday.waitForOptions",
+    );
     var start = Date.now();
     var attempts = 0;
     var previousKey = (previousLabels || []).map(norm).join("|");
@@ -2318,6 +2418,12 @@
 
   async function collectWorkdayOptions(field, context) {
     var actionGuard = guardForField(field, context?.actionGuard);
+    updateDriverEvidence(
+      field,
+      "popup_options_wait",
+      "popup_options",
+      "workday.collectOptions",
+    );
     if (workdayFillCancelled(actionGuard)) {
       return [];
     }
@@ -2657,6 +2763,9 @@
   }
 
   function preferredWorkdayOption(options, option, answer, field) {
+    options = (options || []).filter(function (candidate) {
+      return !isWorkdayUiStateOptionLabel(candidate?.label);
+    });
     if (option) {
       var exact = options.find(function (candidate) {
         return optionMatches(candidate, option.label);
@@ -3105,6 +3214,29 @@
 
   async function settleWorkdayCommit(field, answer, option, actionGuard) {
     actionGuard = guardForField(field, actionGuard);
+    updateDriverEvidence(
+      field,
+      "field_commit_wait",
+      "field_commit",
+      "workday.settleWorkdayCommit",
+      {
+        committed: false,
+        selected: false,
+        checked: false,
+        empty: true,
+        validationVisible: workdayFieldHasValidationError(field),
+        reason: "commit_pending",
+      },
+      {
+        popupOwner: workdayPopupOwnerEvidence(field),
+        commitVerification: workdayCommitEvidence(
+          field,
+          {},
+          false,
+          "commit_pending",
+        ),
+      },
+    );
     var state = workdayCommittedState(field);
     var sourceField = isApplicationSourceField(
       field?.element,
@@ -3116,10 +3248,54 @@
           committedApplicationSourceMatches(state, answer, option))) &&
       workdaySelectionEvidence(field, option);
     if (ok && !workdayFieldHasValidationError(field)) {
+      updateDriverEvidence(
+        field,
+        "field_commit_checked",
+        "idle",
+        "",
+        {
+          committed: true,
+          selected: Boolean(state.selected),
+          checked: Boolean(state.checked),
+          empty: false,
+          validationVisible: false,
+          reason: "workday_commit_verified",
+        },
+        {
+          commitVerification: workdayCommitEvidence(
+            field,
+            state,
+            true,
+            "workday_commit_verified",
+          ),
+        },
+      );
       return { ok: true, state: state };
     }
     var el = field?.element;
     if (workdayFillCancelled(actionGuard)) {
+      updateDriverEvidence(
+        field,
+        "field_commit_checked",
+        "idle",
+        "",
+        {
+          committed: false,
+          selected: Boolean(state.selected),
+          checked: Boolean(state.checked),
+          empty: !Boolean(state.text || state.rawValue),
+          validationVisible: workdayFieldHasValidationError(field),
+          reason: "operation_cancelled",
+        },
+        {
+          commitVerification: workdayCommitEvidence(
+            field,
+            state,
+            false,
+            "operation_cancelled",
+          ),
+        },
+      );
       return { ok: false, state: state, reason: "operation_cancelled" };
     }
     keyOn(el, "Enter", actionGuard);
@@ -3127,6 +3303,28 @@
     blurWorkdayFieldInputs(field, actionGuard);
     await sleep(240);
     if (workdayFillCancelled(actionGuard)) {
+      updateDriverEvidence(
+        field,
+        "field_commit_checked",
+        "idle",
+        "",
+        {
+          committed: false,
+          selected: Boolean(state.selected),
+          checked: Boolean(state.checked),
+          empty: !Boolean(state.text || state.rawValue),
+          validationVisible: workdayFieldHasValidationError(field),
+          reason: "operation_cancelled",
+        },
+        {
+          commitVerification: workdayCommitEvidence(
+            field,
+            state,
+            false,
+            "operation_cancelled",
+          ),
+        },
+      );
       return { ok: false, state: state, reason: "operation_cancelled" };
     }
     state = workdayCommittedState(field);
@@ -3136,14 +3334,54 @@
           committedApplicationSourceMatches(state, answer, option))) &&
       workdaySelectionEvidence(field, option);
     if (ok && !workdayFieldHasValidationError(field)) {
+      updateDriverEvidence(
+        field,
+        "field_commit_checked",
+        "idle",
+        "",
+        {
+          committed: true,
+          selected: Boolean(state.selected),
+          checked: Boolean(state.checked),
+          empty: false,
+          validationVisible: false,
+          reason: "workday_commit_verified",
+        },
+        {
+          commitVerification: workdayCommitEvidence(
+            field,
+            state,
+            true,
+            "workday_commit_verified",
+          ),
+        },
+      );
       return { ok: true, state: state };
     }
+    var reason = workdayFieldHasValidationError(field)
+      ? "workday_validation_not_cleared"
+      : "workday_commit_not_verified";
+    updateDriverEvidence(
+      field,
+      "field_commit_checked",
+      "idle",
+      "",
+      {
+        committed: false,
+        selected: Boolean(state.selected),
+        checked: Boolean(state.checked),
+        empty: !Boolean(state.text || state.rawValue),
+        validationVisible: workdayFieldHasValidationError(field),
+        reason: reason,
+      },
+      {
+        commitVerification: workdayCommitEvidence(field, state, false, reason),
+      },
+    );
     return {
       ok: false,
       state: state,
-      reason: workdayFieldHasValidationError(field)
-        ? "workday_validation_not_cleared"
-        : "workday_commit_not_verified",
+      reason: reason,
     };
   }
 
@@ -3197,8 +3435,23 @@
     actionGuard,
   }) {
     actionGuard = guardForField(field, actionGuard);
+    updateDriverEvidence(
+      field,
+      "popup_options_wait",
+      "popup_options",
+      "workday.fillPopup",
+    );
     if (workdayActionCancelled(actionGuard)) {
       return workdayCancelledResult(field, actionGuard);
+    }
+    if (!option && fieldAudit?.noOptionReason === "sensitive_no_safe_option") {
+      return {
+        ok: false,
+        clicked: false,
+        noMutation: true,
+        reason: "sensitive_no_safe_option",
+        afterState: root.fieldState.readFieldState(field),
+      };
     }
     field._huntTraceAudit = audit;
     field._huntTraceStartedAt = Date.now();
@@ -3290,6 +3543,13 @@
       }
     }
     if (!target) {
+      updateWorkdayOptionMechanism(
+        field,
+        null,
+        "option_match",
+        "failed",
+        "no_matching_option",
+      );
       if (isSalaryField(field, answer) && committedLabel) {
         await clearWorkdayField(field, audit, fieldAudit, actionGuard);
         if (workdayActionCancelled(actionGuard)) {
@@ -3329,6 +3589,13 @@
         afterState: workdayCommittedState(field),
       };
     }
+    updateWorkdayOptionMechanism(
+      field,
+      target,
+      "option_match",
+      "matched",
+      "matching_option_selected",
+    );
     var fallbackValueSource = workdayFallbackValueSource(target);
     if (fallbackValueSource) {
       root.audit?.pushFieldStep(audit, fieldAudit, {
@@ -3365,6 +3632,13 @@
       if (workdayActionCancelled(actionGuard)) {
         return workdayCancelledResult(field, actionGuard);
       }
+      updateWorkdayOptionMechanism(
+        field,
+        target,
+        "trusted_keyboard",
+        "attempted",
+        "option_keyboard",
+      );
       var initialListbox = workdayActiveListboxFor(field.element);
       try {
         initialListbox?.focus?.({ preventScroll: true });
@@ -3381,6 +3655,13 @@
         return workdayCancelledResult(field, actionGuard);
       }
       if (trustedKeyboard?.ok) {
+        updateWorkdayOptionMechanism(
+          field,
+          target,
+          "trusted_keyboard",
+          "dispatched",
+          "option_keyboard",
+        );
         emitWorkdayEvent(audit, "option.clicked", field, {
           status: "info",
           reason: "trusted_keyboard_option_attempt",
@@ -3407,6 +3688,13 @@
       if (workdayActionCancelled(actionGuard)) {
         return workdayCancelledResult(field, actionGuard);
       }
+      updateWorkdayOptionMechanism(
+        field,
+        target,
+        "dom_click",
+        "attempted",
+        "workday_option_dom_click",
+      );
       emitWorkdayEvent(audit, "option.clicked", field, {
         status: "info",
         reason: "workday_option_dom_click",
@@ -3427,11 +3715,25 @@
       ok = skillField
         ? selectedTechnicalSkillMatches(field, target, answer)
         : clickSettled.ok;
+      updateWorkdayOptionMechanism(
+        field,
+        target,
+        "dom_click",
+        ok ? "committed" : "failed",
+        ok ? "workday_commit_verified" : clickSettled.reason,
+      );
     }
     if (!ok) {
       if (workdayActionCancelled(actionGuard)) {
         return workdayCancelledResult(field, actionGuard);
       }
+      updateWorkdayOptionMechanism(
+        field,
+        target,
+        "trusted_pointer",
+        "attempted",
+        "trusted_input_option_click",
+      );
       trustedOption = await requestTrustedWorkdayClick(
         target,
         "option",
@@ -3441,6 +3743,13 @@
         return workdayCancelledResult(field, actionGuard);
       }
       if (trustedOption?.ok) {
+        updateWorkdayOptionMechanism(
+          field,
+          target,
+          "trusted_pointer",
+          "dispatched",
+          "trusted_input_option_click",
+        );
         emitWorkdayEvent(audit, "option.clicked", field, {
           status: "info",
           reason: "trusted_input_option_click",
@@ -3469,6 +3778,13 @@
         } catch (_error) {
           listbox?.focus?.();
         }
+        updateWorkdayOptionMechanism(
+          field,
+          target,
+          "trusted_keyboard_retry",
+          "attempted",
+          "trusted_keyboard_option_retry",
+        );
         trustedKeyboard = await requestOrDispatchWorkdayKeys(
           field,
           trustedKeyboardSequenceForOption(target, field),
@@ -3479,6 +3795,13 @@
           return workdayCancelledResult(field, actionGuard);
         }
         if (trustedKeyboard?.ok) {
+          updateWorkdayOptionMechanism(
+            field,
+            target,
+            "trusted_keyboard_retry",
+            "dispatched",
+            "trusted_keyboard_option_retry",
+          );
           emitWorkdayEvent(audit, "option.clicked", field, {
             status: "info",
             reason: "trusted_keyboard_option_retry",
@@ -3503,6 +3826,17 @@
       }
     }
     await closePopup(field, actionGuard);
+    updateWorkdayOptionMechanism(
+      field,
+      target,
+      trustedKeyboard?.ok
+        ? "trusted_keyboard"
+        : trustedOption?.ok
+          ? "trusted_pointer"
+          : "dom_click",
+      ok ? "committed" : "failed",
+      ok ? "workday_commit_verified" : "workday_commit_not_verified",
+    );
     emitWorkdayEvent(audit, "option.committed", field, {
       status: ok ? "ok" : "warn",
       reason: ok
@@ -4100,5 +4434,7 @@
     clearWorkdayField: clearWorkdayField,
     typeSearchTextLikeUser: typeSearchTextLikeUser,
     visibleWorkdayOptions: visibleWorkdayOptions,
+    isWorkdayUiStateOptionLabel: isWorkdayUiStateOptionLabel,
+    preferredWorkdayOption: preferredWorkdayOption,
   };
 })();

@@ -1,5 +1,6 @@
 import json
 import os
+import subprocess
 import sys
 import uuid
 from concurrent.futures import ThreadPoolExecutor
@@ -18,12 +19,34 @@ from backend.ledger.models import (
     ProbeFileCreate,
     SessionCreate,
 )
-from backend.ledger.redaction import env_check
+from backend.ledger.redaction import REDACTED, env_check, redact_payload
 from backend.ledger.service import LedgerService
 
 
 def _rows(path: Path):
     return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line]
+
+
+def test_redaction_preserves_only_value_free_password_telemetry():
+    safe, _ = redact_payload(
+        {
+            "passwordCount": 1,
+            "password_visible": False,
+            "passwordPrepared": True,
+            "passwordPopulated": False,
+            "password": "hunter2",
+            "passwordCountText": "hunter2",
+        }
+    )
+
+    assert safe == {
+        "passwordCount": 1,
+        "password_visible": False,
+        "passwordPrepared": True,
+        "passwordPopulated": False,
+        "password": REDACTED,
+        "passwordCountText": REDACTED,
+    }
 
 
 def _assert_valid_hash_chain(path: Path) -> list[dict]:
@@ -64,6 +87,64 @@ def test_active_registry_updates_are_atomic_under_parallel_agents(tmp_path):
     active = json.loads((service.root / "active.json").read_text(encoding="utf-8"))
     assert set(active["active_sessions"]) >= {f"session-{index}" for index in range(60)}
     assert not list(service.root.glob(".active.json.*.tmp"))
+
+
+def test_active_registry_retries_transient_windows_replace_denial(tmp_path, monkeypatch):
+    service = LedgerService(tmp_path / "ledger")
+    real_replace = Path.replace
+    attempts = 0
+
+    def flaky_replace(path: Path, target: Path):
+        nonlocal attempts
+        attempts += 1
+        if attempts < 3:
+            raise PermissionError(13, "transient sharing violation", str(target))
+        return real_replace(path, target)
+
+    monkeypatch.setattr(Path, "replace", flaky_replace)
+
+    service._update_active(
+        "active_sessions",
+        "session-retry",
+        tmp_path / "manifest.json",
+        tmp_path / "events.jsonl",
+    )
+
+    active = json.loads((service.root / "active.json").read_text(encoding="utf-8"))
+    assert "session-retry" in active["active_sessions"]
+    assert attempts == 3
+    assert not list(service.root.glob(".active.json.*.tmp"))
+
+
+def test_active_registry_serializes_updates_across_processes(tmp_path):
+    root = tmp_path / "ledger"
+    code = """
+import sys
+from pathlib import Path
+from backend.ledger.service import LedgerService
+root, prefix = Path(sys.argv[1]), sys.argv[2]
+service = LedgerService(root)
+for index in range(20):
+    service._update_active(
+        "active_sessions",
+        f"{prefix}-{index}",
+        root / f"{prefix}-{index}.manifest.json",
+        root / f"{prefix}-{index}.jsonl",
+    )
+"""
+    env = os.environ.copy()
+    env["PYTHONPATH"] = str(Path(__file__).resolve().parents[1])
+    processes = [
+        subprocess.Popen(
+            [sys.executable, "-c", code, str(root), f"process-{process_index}"],
+            env=env,
+        )
+        for process_index in range(4)
+    ]
+
+    assert [process.wait(timeout=30) for process in processes] == [0, 0, 0, 0]
+    active = json.loads((root / "active.json").read_text(encoding="utf-8"))
+    assert len(active["active_sessions"]) == 80
 
 
 def test_default_log_root_is_outside_repo(monkeypatch):

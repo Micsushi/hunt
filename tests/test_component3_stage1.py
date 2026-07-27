@@ -1784,7 +1784,8 @@ Expected Graduation: Sep 2026
         parsed = json.loads(result.stdout)
         self.assertEqual(parsed["legalAge"]["type"], "age_at_least_18")
         self.assertEqual(parsed["legalAge"]["value"], "Yes")
-        self.assertEqual(parsed["legalAge"]["selectedOption"], "Yes")
+        self.assertIsNone(parsed["legalAge"]["selectedOption"])
+        self.assertEqual(parsed["legalAge"]["optionSource"], "material_no_safe_option")
         self.assertEqual(parsed["highestEducation"]["type"], "highest_education")
         self.assertEqual(parsed["highestEducation"]["value"], "Bachelor's Degree")
         self.assertEqual(parsed["highestEducation"]["selectedOption"], "Bachelor's")
@@ -1795,13 +1796,24 @@ Expected Graduation: Sep 2026
         self.assertEqual(parsed["finningHighestEducation"]["selectedOption"], "University")
         self.assertEqual(parsed["microsoftOffice"]["type"], "microsoft_office_proficiency")
         self.assertEqual(parsed["microsoftOffice"]["value"], "Expert")
-        self.assertEqual(parsed["microsoftOffice"]["selectedOption"], "Expert")
+        self.assertIsNone(parsed["microsoftOffice"]["selectedOption"])
+        self.assertEqual(
+            parsed["microsoftOffice"]["optionSource"],
+            "material_no_safe_option",
+        )
         self.assertEqual(parsed["travelAvailability"]["type"], "travel_availability")
         self.assertEqual(parsed["travelAvailability"]["value"], "highest")
-        self.assertEqual(parsed["travelAvailability"]["selectedOption"], "20% plus")
-        self.assertEqual(parsed["travelAvailability"]["optionSource"], "highest_travel_numeric")
-        self.assertEqual(parsed["travelAvailabilityWith100"]["selectedOption"], "100%")
-        self.assertEqual(parsed["travelAvailabilityTie"]["selectedOption"], "15 - 20%")
+        self.assertEqual(
+            parsed["travelAvailability"]["selectedOption"],
+            "Not Applicable",
+        )
+        self.assertEqual(
+            parsed["travelAvailability"]["optionSource"],
+            "material_neutral_option",
+        )
+        for key in ("travelAvailabilityWith100", "travelAvailabilityTie"):
+            self.assertIsNone(parsed[key]["selectedOption"])
+            self.assertEqual(parsed[key]["optionSource"], "material_no_safe_option")
         self.assertEqual(parsed["computerPrograms"]["type"], "computer_programs")
         self.assertEqual(parsed["computerPrograms"]["value"], "Python, TypeScript, React, SQL")
         self.assertEqual(
@@ -2511,7 +2523,7 @@ Expected Graduation: Sep 2026
         self.assertEqual(parsed["essential"]["value"], "Yes")
         self.assertEqual(parsed["essential"]["option"], "Yes")
 
-    def test_v2_ethnicity_disclosure_without_neutral_uses_progress_fallback(self):
+    def test_v2_ethnicity_disclosure_without_neutral_refuses_sensitive_fallback(self):
         paths = [
             REPO_ROOT / "executioner" / "src" / "shared" / "v2" / "field-catalog.js",
             REPO_ROOT / "executioner" / "src" / "shared" / "v2" / "question-identifier.js",
@@ -2551,12 +2563,48 @@ Expected Graduation: Sep 2026
               audit: null,
               fieldAudit: null
             }});
+            const racialField = {{
+              fieldId: "racial-background",
+              descriptor: "Please identify your racial background.",
+              required: true,
+              uiModel: "button_listbox"
+            }};
+            const racialQuestion = root.questionIdentifier.identifyQuestion(
+              racialField,
+              null,
+              null
+            );
+            const racialAnswer = root.answerResolver.resolveAnswer({{
+              question: racialQuestion,
+              field: racialField,
+              profile: {{}},
+              audit: null,
+              fieldAudit: null
+            }});
+            const racialMatch = root.optionMatcher.matchOption({{
+              options: [
+                {{ label: "Black" }},
+                {{ label: "White" }}
+              ],
+              answer: racialAnswer,
+              field: racialField,
+              audit: null,
+              fieldAudit: null
+            }});
             console.log(JSON.stringify({{
               type: question.type,
               answerType: answer.answerType,
               option: match.option && match.option.label,
               source: match.source,
-              fallback: match.fallback
+              fallback: match.fallback,
+              blocked: match.blocked,
+              noMutation: match.noMutation,
+              racialType: racialQuestion.type,
+              racialOption: racialMatch.option && racialMatch.option.label,
+              racialSource: racialMatch.source,
+              racialFallback: racialMatch.fallback,
+              racialBlocked: racialMatch.blocked,
+              racialNoMutation: racialMatch.noMutation
             }}));
         """
         try:
@@ -2574,11 +2622,48 @@ Expected Graduation: Sep 2026
             {
                 "type": "ethnicity_disclosure_neutral",
                 "answerType": "non_disclosure",
-                "option": "Asian (Not Hispanic or Latino) (United States of America)",
-                "source": "non_disclosure_first_real_fallback",
-                "fallback": True,
+                "option": None,
+                "source": "sensitive_no_safe_option",
+                "fallback": False,
+                "blocked": True,
+                "noMutation": True,
+                "racialType": "unknown",
+                "racialOption": None,
+                "racialSource": "sensitive_no_safe_option",
+                "racialFallback": False,
+                "racialBlocked": True,
+                "racialNoMutation": True,
             },
         )
+
+    def test_sensitive_refusal_blocks_pipeline_and_workday_driver_mutation(self):
+        pipeline = (
+            REPO_ROOT / "executioner" / "src" / "shared" / "v2" / "field-pipeline.js"
+        ).read_text(encoding="utf-8")
+        workday = (
+            REPO_ROOT / "executioner" / "src" / "ats" / "workday" / "workday-drivers-v2.js"
+        ).read_text(encoding="utf-8")
+
+        pipeline_match = pipeline.index("var match = root.optionMatcher.matchOption")
+        pipeline_block = pipeline.index("if (match.blocked || match.noMutation)", pipeline_match)
+        pipeline_driver = pipeline.index(
+            "var fillResult = await root.fieldDrivers.fillField", pipeline_match
+        )
+        self.assertLess(pipeline_block, pipeline_driver)
+        self.assertIn('reason: match.source || "option_mutation_blocked"', pipeline)
+        self.assertIn("filled: false", pipeline[pipeline_block:pipeline_driver])
+
+        popup_start = workday.index("async function fillWorkdayPopup")
+        popup_collect = workday.index("var options = await collectWorkdayOptions", popup_start)
+        popup_guard = workday.index(
+            'fieldAudit?.noOptionReason === "sensitive_no_safe_option"',
+            popup_start,
+        )
+        self.assertLess(popup_guard, popup_collect)
+        guarded_region = workday[popup_guard:popup_collect]
+        self.assertIn('reason: "sensitive_no_safe_option"', guarded_region)
+        self.assertIn("clicked: false", guarded_region)
+        self.assertIn("noMutation: true", guarded_region)
 
     def test_v2_workday_us_disclosure_neutral_aliases_are_matched(self):
         paths = [
@@ -2779,9 +2864,9 @@ Expected Graduation: Sep 2026
                 "amgenVeteran": {
                     "type": "veteran_disclosure_neutral",
                     "answerType": "non_disclosure",
-                    "option": "I AM NOT A VETERAN",
-                    "source": "veteran_not_veteran_safe_fallback",
-                    "fallback": True,
+                    "option": None,
+                    "source": "sensitive_no_safe_option",
+                    "fallback": False,
                 },
             },
         )
@@ -2848,8 +2933,8 @@ Expected Graduation: Sep 2026
                 "value": "None of these",
                 "valueSource": "default:sanctioned_country_citizenship",
                 "option": "None of these",
-                "source": "exact",
-                "fallback": False,
+                "source": "material_neutral_option",
+                "fallback": True,
             },
         )
 
@@ -2937,16 +3022,16 @@ Expected Graduation: Sep 2026
                     "value": "None of these",
                     "valueSource": "default:secondary_citizenship",
                     "option": "None of these",
-                    "source": "exact",
-                    "fallback": False,
+                    "source": "material_neutral_option",
+                    "fallback": True,
                 },
                 "sanctionedStillSpecific": {
                     "type": "sanctioned_country_citizenship",
                     "value": "None of these",
                     "valueSource": "default:sanctioned_country_citizenship",
                     "option": "None of these",
-                    "source": "exact",
-                    "fallback": False,
+                    "source": "material_neutral_option",
+                    "fallback": True,
                 },
             },
         )
@@ -3047,10 +3132,10 @@ Expected Graduation: Sep 2026
         )
 
         self.assertIn("hasCredentialLoginForm", background)
-        self.assertIn('authUiState = "credential_form"', background)
+        self.assertIn('authUiState: "credential_form"', background)
         self.assertLess(
-            background.index("if (hasCredentialLoginForm)"),
-            background.index("else if (hasLoginFailure && hasCreateAccount)"),
+            background.index("if (evidence.hasCredentialLoginForm)"),
+            background.index("if (evidence.emailCount || evidence.passwordCount)"),
         )
 
     def test_auth_primary_action_accepts_stable_email_gateway_for_stale_login_ui(self):
@@ -4753,6 +4838,100 @@ Expected Graduation: Sep 2026
         self.assertEqual(cycle["terminalStep"]["cycleLength"], 4)
         self.assertEqual(cycle["terminalStep"]["authTransitionCount"], 4)
 
+    def test_page_walk_preserves_exact_fill_cancellation_reason_in_all_branches(self):
+        background = (REPO_ROOT / "executioner" / "src" / "background" / "index.js").read_text(
+            encoding="utf-8"
+        )
+        walk_start = background.index("async function runV2PageWalkAfterFill(")
+        walk_end = background.index("function chooseBestV2ClearFrame", walk_start)
+        page_walk = background[walk_start:walk_end]
+
+        self.assertEqual(
+            page_walk.count("stoppedReason = fillRunCancelReason(fillRunId);"),
+            2,
+        )
+        self.assertEqual(
+            page_walk.count(
+                "currentFill.cancelled\n"
+                "            ? currentFill.reason || fillRunCancelReason(fillRunId)\n"
+                '            : "fill_failed"'
+            ),
+            1,
+        )
+        self.assertEqual(
+            page_walk.count(
+                "currentFill.cancelled\n"
+                "        ? currentFill.reason || fillRunCancelReason(fillRunId)\n"
+                '        : "fill_failed"'
+            ),
+            1,
+        )
+        self.assertNotIn('stoppedReason = "user_cancelled";', page_walk)
+        self.assertNotIn(
+            'currentFill.cancelled ? "user_cancelled" : "fill_failed"',
+            page_walk,
+        )
+
+    def test_page_walk_returns_internal_fill_cancellation_reason_verbatim(self):
+        background_path = REPO_ROOT / "executioner" / "src" / "background" / "index.js"
+        script = f"""
+            const fs = require("node:fs");
+            const vm = require("node:vm");
+            const source = fs.readFileSync({json.dumps(str(background_path))}, "utf8");
+            const walkStart = source.indexOf("async function runV2PageWalkAfterFill(");
+            const walkEnd = source.indexOf("function chooseBestV2ClearFrame", walkStart);
+            const context = {{
+              V2_PAGE_WALK_MAX_PAGES: 8,
+              V2_AUTH_FLOW_MAX_STEPS: 12,
+              V2_AUTH_SAME_PAGE_MAX_ATTEMPTS: 3,
+              getPageSnapshot: async () => ({{
+                href: "https://tenant.test/application",
+                currentStep: {{ number: 5, title: "Application Questions" }},
+              }}),
+              pageNumberFromSnapshot: () => 5,
+              createAuthPageWalkStateController: () => ({{
+                snapshot: () => ({{
+                  authTransitionCount: 0,
+                  authTransitionHistory: [],
+                  lastAuthActionCandidate: {{}},
+                }}),
+              }}),
+              isFillRunCancelled: () => true,
+              fillRunCancelReason: () => "workday_fill_return_timeout",
+              uniqueReviewIssues: () => [],
+              pageWalkStopIsOk: () => false,
+              compactStopDetails: (value) => value,
+              sendDebugLog: async () => {{}},
+              logActivity: async () => {{}},
+            }};
+            vm.createContext(context);
+            vm.runInContext(source.slice(walkStart, walkEnd), context);
+            (async () => {{
+              const result = await context.runV2PageWalkAfterFill({{
+                tabId: 1,
+                state: {{}},
+                initialResult: {{ ok: true }},
+                fillRunId: "fill-run",
+                triggeredBy: "test",
+                allowLlmAnswers: false,
+              }});
+              console.log(JSON.stringify(result));
+            }})();
+        """
+        result = subprocess.run(
+            ["node", "-e", script],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        payload = json.loads(result.stdout)
+
+        self.assertEqual(payload["stoppedReason"], "workday_fill_return_timeout")
+        self.assertEqual(
+            payload["stopDetails"]["message"],
+            "workday_fill_return_timeout",
+        )
+
     def test_v2_ethno_racial_checkbox_selects_non_disclosure(self):
         paths = [
             REPO_ROOT / "executioner" / "src" / "shared" / "v2" / "field-catalog.js",
@@ -5219,13 +5398,18 @@ Expected Graduation: Sep 2026
         self.assertEqual(results["workEligibility"]["type"], "work_authorized")
         self.assertEqual(results["workEligibility"]["value"], "Yes")
         self.assertEqual(results["workEligibility"]["source"], "default:work_authorized")
+        self.assertIsNone(results["workEligibility"]["selected"])
         self.assertEqual(
-            results["workEligibility"]["selected"],
-            "Yes, I am a citizen or permanent resident of Canada",
+            results["workEligibility"]["matchSource"],
+            "material_no_safe_option",
         )
         self.assertEqual(results["canadianCitizenPr"]["type"], "canadian_citizen_pr")
         self.assertEqual(results["canadianCitizenPr"]["value"], "Yes")
-        self.assertEqual(results["canadianCitizenPr"]["selected"], "Yes")
+        self.assertIsNone(results["canadianCitizenPr"]["selected"])
+        self.assertEqual(
+            results["canadianCitizenPr"]["matchSource"],
+            "material_no_safe_option",
+        )
         self.assertEqual(results["sinStartsWithNine"]["type"], "sin_starts_with_nine")
         self.assertEqual(results["sinStartsWithNine"]["value"], "No")
         self.assertEqual(results["sinStartsWithNine"]["selected"], "No")
@@ -5286,8 +5470,11 @@ Expected Graduation: Sep 2026
         self.assertEqual(results["bmsCompFactors"]["type"], "compensation_offer_factors")
         self.assertEqual(results["bmsCompFactors"]["value"], "No")
         self.assertEqual(results["bmsCompFactors"]["source"], "default:compensation_offer_factors")
-        self.assertEqual(results["bmsCompFactors"]["selected"], "No")
-        self.assertNotEqual(results["bmsCompFactors"]["matchSource"], "salary_no_safe_match")
+        self.assertIsNone(results["bmsCompFactors"]["selected"])
+        self.assertEqual(
+            results["bmsCompFactors"]["matchSource"],
+            "material_no_safe_option",
+        )
         self.assertEqual(
             results["bmsCompFactorsFromProfile"]["type"],
             "compensation_offer_factors",
@@ -5304,16 +5491,20 @@ Expected Graduation: Sep 2026
             "bmsGsa": "gsa_federal_program_exclusion",
             "bmsDebarred": "generic_drug_enforcement_debarment",
             "bmsDebarmentPending": "debarment_proceedings_pending",
-            "bmsPhysician": "us_licensed_physician",
             "bmsInvestigationalDrug": "fda_hhs_investigational_drug_restriction",
-            "bmsLicensingInquiry": "governmental_or_licensing_inquiry",
         }
         for key, question_type in bms_expected.items():
             self.assertEqual(results[key]["type"], question_type)
-            expected_value = "Yes" if key == "bmsPhysician" else "No"
-            self.assertEqual(results[key]["value"], expected_value)
-            self.assertEqual(results[key]["selected"], expected_value)
+            self.assertEqual(results[key]["value"], "No")
+            self.assertEqual(results[key]["selected"], "No")
             self.assertNotEqual(results[key]["matchSource"], "unknown_no_fallback")
+        for key, question_type in {
+            "bmsPhysician": "us_licensed_physician",
+            "bmsLicensingInquiry": "governmental_or_licensing_inquiry",
+        }.items():
+            self.assertEqual(results[key]["type"], question_type)
+            self.assertIsNone(results[key]["selected"])
+            self.assertEqual(results[key]["matchSource"], "material_no_safe_option")
         self.assertEqual(results["bmsHhsOig"]["source"], "profile:hhsOigExcluded")
         self.assertEqual(results["bmsHhsOigFromProfile"]["type"], "hhs_oig_exclusion")
         self.assertEqual(results["bmsHhsOigFromProfile"]["value"], "Yes")
@@ -5401,16 +5592,23 @@ Expected Graduation: Sep 2026
             self.skipTest("node is required to test C3 V2 profile-gap mappings")
 
         parsed = json.loads(result.stdout)
+        blocked = {
+            "criminal": "criminal_conviction_unpardoned",
+            "relatedYears": "related_experience_years",
+            "cannabisLicense": "regulated_cannabis_liquor_license",
+            "licenseDiscipline": "professional_license_discipline",
+            "insuranceLicenseHistory": "professional_license_discipline",
+            "activeClearance": "active_security_clearance",
+            "usCitizen": "us_citizen",
+        }
+        for key, question_type in blocked.items():
+            self.assertEqual(parsed[key]["type"], question_type)
+            self.assertIsNone(parsed[key]["selected"])
+            self.assertEqual(parsed[key]["matchSource"], "material_no_safe_option")
+
         expected = {
-            "criminal": ("criminal_conviction_unpardoned", "No"),
-            "relatedYears": ("related_experience_years", "2-5 years"),
-            "cannabisLicense": ("regulated_cannabis_liquor_license", "Yes"),
-            "licenseDiscipline": ("professional_license_discipline", "No"),
-            "insuranceLicenseHistory": ("professional_license_discipline", "No"),
             "commute": ("commute_willingness", "Yes"),
             "aiConsent": ("ai_recruiting_tools_consent", "Yes"),
-            "activeClearance": ("active_security_clearance", "No"),
-            "usCitizen": ("us_citizen", "No"),
             "federalCurrent": ("us_federal_employment_current", "No"),
             "communication": ("preferred_communication_channel", "Email"),
             "preferredLanguage": ("preferred_language", "English"),
@@ -5837,6 +6035,110 @@ Expected Graduation: Sep 2026
             },
         )
 
+    def test_v2_material_options_require_profile_evidence_or_neutral_choice(self):
+        path = REPO_ROOT / "executioner" / "src" / "shared" / "v2" / "option-matcher.js"
+        script = f"""
+            const fs = require("node:fs");
+            const vm = require("node:vm");
+            const context = {{ window: {{ __huntV2: {{}} }} }};
+            vm.createContext(context);
+            vm.runInContext(fs.readFileSync({json.dumps(str(path))}, "utf8"), context);
+            const matcher = context.window.__huntV2.optionMatcher;
+            function match(descriptor, answer, options) {{
+              const result = matcher.matchOption({{
+                options: options.map(label => ({{ label }})),
+                answer,
+                field: {{
+                  descriptor,
+                  required: true,
+                  uiModel: "button_listbox"
+                }},
+                audit: null,
+                fieldAudit: null
+              }});
+              return {{
+                option: result.option && result.option.label,
+                source: result.source,
+                blocked: result.blocked === true,
+                noMutation: result.noMutation === true
+              }};
+            }}
+            console.log(JSON.stringify({{
+              clearanceDefault: match(
+                "Do you currently hold an active security clearance?",
+                {{ value: "No", source: "default:active_security_clearance", answerType: "yes_no" }},
+                ["Yes", "No"]
+              ),
+              salaryDefault: match(
+                "What is your desired salary?",
+                {{ value: "100000", source: "default:salary_expectation", answerType: "salary_expectation" }},
+                ["Yes", "No"]
+              ),
+              proficiencyDefault: match(
+                "What is your proficiency level?",
+                {{ value: "Expert", source: "default:highest_proficiency", answerType: "option" }},
+                ["Beginner", "Intermediate", "Expert"]
+              ),
+              travelDefault: match(
+                "What percentage of travel can you accept?",
+                {{ value: "highest", source: "default:travel_availability", answerType: "travel_availability" }},
+                ["0 - 10%", "10 - 20%", "20% plus"]
+              ),
+              neutralWithoutProfile: match(
+                "Do you currently hold an active security clearance?",
+                {{ value: "", source: "missing_profile_value", answerType: "yes_no" }},
+                ["Yes", "No", "Prefer not to answer"]
+              ),
+              clearanceProfile: match(
+                "Do you currently hold an active security clearance?",
+                {{ value: "Yes", source: "profile:activeClearance", answerType: "yes_no" }},
+                ["Yes", "No"]
+              ),
+              salaryProfile: match(
+                "What is your desired salary?",
+                {{ value: "100000", source: "profile:salaryExpectation", answerType: "salary_expectation" }},
+                ["90,000 - 105,000", "105,001 - 120,000"]
+              ),
+              travelProfile: match(
+                "What percentage of travel can you accept?",
+                {{ value: "15%", source: "profile:travelAvailability", answerType: "travel_availability" }},
+                ["0 - 10%", "10 - 20%", "20% plus"]
+              )
+            }}));
+        """
+        try:
+            result = subprocess.run(
+                ["node", "-e", script],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+        except FileNotFoundError:
+            self.skipTest("node is required to test the C3 V2 option matcher")
+
+        parsed = json.loads(result.stdout)
+        for key in (
+            "clearanceDefault",
+            "salaryDefault",
+            "proficiencyDefault",
+            "travelDefault",
+        ):
+            self.assertEqual(
+                parsed[key],
+                {
+                    "option": None,
+                    "source": "material_no_safe_option",
+                    "blocked": True,
+                    "noMutation": True,
+                },
+            )
+        self.assertEqual(parsed["neutralWithoutProfile"]["option"], "Prefer not to answer")
+        self.assertEqual(parsed["neutralWithoutProfile"]["source"], "material_neutral_option")
+        self.assertFalse(parsed["neutralWithoutProfile"]["blocked"])
+        self.assertEqual(parsed["clearanceProfile"]["option"], "Yes")
+        self.assertEqual(parsed["salaryProfile"]["option"], "90,000 - 105,000")
+        self.assertEqual(parsed["travelProfile"]["option"], "10 - 20%")
+
     def test_v2_unknown_text_fallback_does_not_use_space(self):
         driver_path = REPO_ROOT / "executioner" / "src" / "shared" / "v2" / "field-drivers.js"
         driver_source = driver_path.read_text(encoding="utf-8")
@@ -5844,7 +6146,7 @@ Expected Graduation: Sep 2026
         self.assertIn('"fallback:na"', driver_source)
         self.assertNotIn('"fallback:space"', driver_source)
 
-    def test_v2_background_check_consent_is_yes(self):
+    def test_v2_background_check_consent_requires_profile_evidence(self):
         paths = [
             REPO_ROOT / "executioner" / "src" / "shared" / "v2" / "field-catalog.js",
             REPO_ROOT / "executioner" / "src" / "shared" / "v2" / "question-identifier.js",
@@ -5912,8 +6214,8 @@ Expected Graduation: Sep 2026
                 "type": "background_check_consent",
                 "value": "Yes",
                 "valueSource": "default:background_check_consent",
-                "selectedOption": "Yes",
-                "optionSource": "exact",
+                "selectedOption": None,
+                "optionSource": "material_no_safe_option",
                 "fallback": False,
             },
         )
@@ -7186,6 +7488,11 @@ Expected Graduation: Sep 2026
         self.assertIn("workday_catalog_after_auth", background)
         self.assertIn("detectWorkdayCatalogPageForTab", background)
         self.assertIn("hasVisibleAuthChoice", background)
+        self.assertIn("!isJobOrApplyPath", background)
+        self.assertIn("Number(details.authStepCount || 0) > 0", background)
+        self.assertIn("authStepCount,", background)
+        self.assertIn("next.apply_entry_clicked", background)
+        self.assertIn("createClickWorkdayApplyManuallyFunction()", background)
         self.assertIn("isWorkdayLoginPath", background)
         self.assertIn("auth_landing_choice_clicked", background)
         self.assertIn("auth_landing_choice_not_clicked", background)

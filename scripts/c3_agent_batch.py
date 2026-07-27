@@ -41,8 +41,11 @@ from tools.c3_agent_testing.runner import (  # noqa: E402
     _artifact_paths,
     _failure_context_fields,
     _failure_context_projection,
+    _merge_artifact_page_observations,
     _operation_projection,
+    _refine_failure_classification,
     _string_tuple,
+    _success_terminal_evidence_fields,
 )
 
 
@@ -55,6 +58,15 @@ class CliDependencies:
     discover_target: Any = None
     prepare_lane: Any = None
     supervisor_factory: Any = None
+    browser_retention_check: Any = None
+
+
+class _LaneSetupError(RuntimeError):
+    def __init__(self, code: str, evidence: tuple[str, ...]) -> None:
+        self.code = code
+        self.evidence = evidence
+        message = evidence[-1] if evidence else code
+        super().__init__(message)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -90,6 +102,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None, *, dependencies: CliDependencies | None = None) -> int:
     args = build_parser().parse_args(argv)
+    _load_repo_environment()
     deps = dependencies or CliDependencies()
     if args.command == "resume-report":
         payload = _read_json(Path(args.report))
@@ -143,6 +156,13 @@ def main(argv: list[str] | None = None, *, dependencies: CliDependencies | None 
     return _run_lanes(args, deps, lanes, max_concurrency=args.max_concurrency)
 
 
+def _load_repo_environment() -> None:
+    """Load local Hunt credentials for direct CLI runs without overriding explicit env."""
+    from hunter.dotenv import load_dotenv
+
+    load_dotenv(REPO_ROOT / ".env", override=False)
+
+
 def _run_lanes(
     args: Any,
     deps: CliDependencies,
@@ -160,11 +180,33 @@ def _run_lanes(
     checkpoint.write()
     if not args.no_setup:
         setup = deps.setup_lanes or _setup_lanes
-        setup(
-            lanes[0].batch_id,
-            [lane.port for lane in lanes],
-            str(_lane_artifact_root(lanes)),
-        )
+        try:
+            setup(
+                lanes[0].batch_id,
+                [lane.port for lane in lanes],
+                str(_lane_artifact_root(lanes)),
+            )
+        except Exception as error:
+            retention_check = deps.browser_retention_check or _browser_retention_status
+            report, error_code = _setup_failure_report(
+                lanes,
+                checkpoint=checkpoint,
+                error=error,
+                retention_check=retention_check,
+            )
+            report.write_json(args.report)
+            print(
+                json.dumps(
+                    {
+                        "ok": False,
+                        "report": str(Path(args.report).resolve()),
+                        "error_code": error_code,
+                        "operation_started": False,
+                        "job_navigation_started": False,
+                    }
+                )
+            )
+            return 1
     discover = deps.discover_target or _discover_target
     if deps.prepare_lane is not None:
         prepare_lane = deps.prepare_lane
@@ -288,7 +330,7 @@ def _add_plan_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--ports", required=True)
     parser.add_argument("--batch-id", required=True)
     parser.add_argument("--artifact-root", default="")
-    parser.add_argument("--deadline-seconds", type=int, default=120)
+    parser.add_argument("--deadline-seconds", type=int, default=600)
 
 
 def _build_plan(args: Any, deps: CliDependencies) -> tuple[dict[str, Any], list[Any]]:
@@ -430,7 +472,7 @@ def _lane_value(lane: Any, key: str) -> str:
 
 
 def _setup_lanes(batch_id: str, ports: list[int], batch_log_dir: str) -> None:
-    subprocess.run(
+    completed = subprocess.run(
         [
             "powershell",
             "-NoProfile",
@@ -448,7 +490,150 @@ def _setup_lanes(batch_id: str, ports: list[int], batch_log_dir: str) -> None:
             str(len(ports)),
         ],
         cwd=REPO_ROOT,
-        check=True,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if completed.returncode:
+        evidence = _bounded_setup_evidence(completed.stdout, completed.stderr)
+        raise _LaneSetupError(
+            _setup_error_code("\n".join(evidence)),
+            evidence,
+        )
+
+
+def _bounded_setup_evidence(*streams: str) -> tuple[str, ...]:
+    lines = [
+        line.strip()
+        for stream in streams
+        for line in str(stream or "").splitlines()
+        if line.strip()
+    ]
+    return tuple(line[:500] for line in lines[-20:])
+
+
+def _setup_error_code(value: Any) -> str:
+    text = str(value or "").casefold()
+    if "without extension apis" in text:
+        return "options_extension_apis_unavailable"
+    if "hunt_extension_not_loaded" in text:
+        return "hunt_extension_not_loaded"
+    if "resume_preflight_missing" in text:
+        return "resume_preflight_missing"
+    if "c3_extension_target_missing" in text:
+        return "c3_extension_target_missing"
+    if "c3_extension_page_not_ready" in text:
+        return "c3_extension_page_not_ready"
+    return "lane_setup_failed"
+
+
+def _browser_retention_status(port: int) -> str:
+    try:
+        with urlopen(f"http://127.0.0.1:{port}/json/version", timeout=0.5) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+        if payload.get("webSocketDebuggerUrl"):
+            return "preserved_for_inspection"
+        return "retention_unverified"
+    except Exception:
+        return "browser_not_running_after_setup_failure"
+
+
+def _setup_failure_report(
+    lanes: list[LanePlan],
+    *,
+    checkpoint: _BatchCheckpoint,
+    error: Exception,
+    retention_check: Any,
+) -> tuple[BatchReport, str]:
+    if isinstance(error, _LaneSetupError):
+        error_code = error.code
+        setup_evidence = error.evidence
+    else:
+        setup_evidence = _bounded_setup_evidence(str(error))
+        error_code = _setup_error_code("\n".join(setup_evidence))
+    message = setup_evidence[-1] if setup_evidence else error_code
+    results: list[LaneResult] = []
+    for lane in lanes:
+        retention_status = str(retention_check(lane.port) or "retention_unverified")
+        artifact_root = Path(lane.artifact_dir).resolve().parent
+        artifact_paths = tuple(
+            str(path)
+            for path in sorted(artifact_root.glob(f"lane_{lane.port}*.log"))
+            if path.is_file()
+        )
+        evidence_record = {
+            "stage": "setup",
+            "error_code": error_code,
+            "error_type": type(error).__name__,
+            "message": message,
+            "evidence": list(setup_evidence),
+            "operation_started": False,
+            "job_navigation_started": False,
+            "browser_retention_status": retention_status,
+            "cleanup_action": "none_policy_retains_failed_lane",
+        }
+        result = LaneResult(
+            agent_id=lane.agent_id,
+            lane_id=lane.lane_id,
+            session_id=lane.session_id,
+            operation_id="",
+            job_url=lane.job.url,
+            classification="setup_failed",
+            operation_state="failed",
+            terminal_reason=error_code,
+            lease_id="",
+            artifact_dir=lane.artifact_dir,
+            artifact_paths=artifact_paths,
+            error=message,
+            failure_context_status="not_applicable_pre_operation",
+            failure_scope="control_plane_setup",
+            root_cause_code=error_code,
+            reported_cause_code=error_code,
+            cause_asserted=True,
+            failure_summary=(
+                f"Lane setup failed ({error_code}) before any operation or job navigation started."
+            ),
+            expected_state="pchrome_extension_api_ready",
+            observed_state=error_code,
+            confidence="high",
+            root_cause_unknown=False,
+            failure_action_tail=(evidence_record,),
+            missing_evidence=(
+                "operation_projection_not_created",
+                "job_page_not_navigated",
+                "terminal_page_snapshot_not_created",
+            ),
+            live_inspection_required=retention_status == "preserved_for_inspection",
+            next_safe_action=(
+                "Inspect the retained isolated pChrome extension readiness without "
+                "foreground activation."
+                if retention_status == "preserved_for_inspection"
+                else "Repair lane setup, then rerun the exact job in a fresh isolated lane."
+            ),
+        )
+        checkpoint.update(
+            lane,
+            {
+                "stage": "complete",
+                "setup_failure": True,
+                "result": asdict(result),
+            },
+        )
+        results.append(result)
+    return (
+        BatchReport(
+            batch_id=lanes[0].batch_id,
+            lanes=tuple(results),
+            started_at=str(checkpoint.payload.get("started_at") or utc_now()),
+            completed_at=utc_now(),
+            metadata={
+                "terminal_phase": "setup",
+                "operation_started": False,
+                "job_navigation_started": False,
+                "setup_error_code": error_code,
+            },
+        ),
+        error_code,
     )
 
 
@@ -709,7 +894,7 @@ def _validated_prepared_job_tab(result: Any) -> dict[str, Any]:
         raise RuntimeError("prepared_job_tab_missing_identity")
     if result.get("active") is not False:
         raise RuntimeError("prepared_job_tab_became_active")
-    if result.get("status") != "complete":
+    if result.get("status") not in {"loading", "complete"}:
         raise RuntimeError("prepared_job_tab_not_complete")
     resolved_url = str(result.get("resolved_url") or "").strip()
     parsed_url = urlsplit(resolved_url)
@@ -887,13 +1072,24 @@ def _refresh_completed_lane_result(client: Any, result: LaneResult) -> LaneResul
                 failure_context_refresh_error=type(error).__name__,
             )
         if context:
-            updates.update(_failure_context_fields(context, "available", ""))
+            failure_fields = _failure_context_fields(context, "available", "")
+            artifact_paths = (
+                _artifact_paths(context, operation_id=result.operation_id)
+                or updates.get("artifact_paths")
+                or result.artifact_paths
+            )
+            failure_fields = _merge_artifact_page_observations(failure_fields, artifact_paths)
+            if result.classification == "review_ready":
+                failure_fields = _success_terminal_evidence_fields(failure_fields)
+            updates["classification"] = _refine_failure_classification(
+                result.classification,
+                failure_fields,
+            )
+            updates.update(failure_fields)
             updates.update(
                 failure_context_refresh_status="refreshed",
                 failure_context_refresh_error="",
-                artifact_paths=_artifact_paths(context, operation_id=result.operation_id)
-                or updates.get("artifact_paths")
-                or result.artifact_paths,
+                artifact_paths=artifact_paths,
             )
         elif "failure_context_refresh_status" not in updates:
             updates.update(

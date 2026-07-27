@@ -13,12 +13,29 @@ final Submit. Wrong answers, questionable defaults, and missing profile facts
 belong in Review/audit unless they block progress by creating required
 follow-up fields, validation, or another page-walk failure.
 
-Batch lanes run background-first. Do not bring p Chrome to the foreground, steal
-focus, call `Page.bringToFront`, call Playwright `page.bringToFront()`, or use
-`--bring-to-front` during automated setup, live smoke, repair, or proof work
-unless the user explicitly asks to inspect the lane. Subagents never close
-p Chrome. The main agent closes p Chrome only after patching C3, local checks,
-fresh p Chrome retest, artifact capture, and no remaining inspection need.
+Batch lanes launch on named, unswitched Windows desktops and start
+minimized/non-activating. Chrome may restore internally on its isolated
+desktop, but it must never appear on or take input/focus from the user's active
+desktop. A smaller shared-desktop window is not compliant. Do not call
+`Page.bringToFront`, call Playwright `page.bringToFront()`, restore/cascade, or
+use `--bring-to-front` during automated setup, live smoke, repair, or proof work
+unless the user explicitly asks to inspect the lane.
+
+Preferred retained capacity is 10 p Chrome lane windows or live job-testing
+tabs; absolute non-bypassable capacity is 20, using the higher of those two
+counts. At or below 10, run normal ownership/activity/documentation checks and
+normally retain completed lanes. Above 10, before opening more testing,
+aggressively close eligible oldest inactive same-project lanes until at or below
+10 when practical. Never launch if existing plus proposed testing would exceed
+20.
+
+Subagents always document terminal success, failure, or typed site/posting stop,
+capture evidence, and leave p Chrome open. The main agent considers cleanup only
+when starting more testing. It must first verify same-project ownership,
+inactivity, terminal report/evidence, no preserve instruction, and no continuing
+investigation, then record the closure. For a possibly running lane, verify its
+owner/agent and determine why work stopped before closing. Never close
+other-project, active, user-preserved, undocumented, or uncertain lanes.
 Workday maintenance, dead postings, non-application pages, CAPTCHA/MFA,
 external assessments, and tenant outages are site/posting stops, not hard C3
 fill failures.
@@ -59,12 +76,22 @@ In C3 notes and chat, `p chrome` means this controlled Playwright Chrome
 instance:
 
 ```powershell
+$env:HUNT_C3_CHROME_START_MINIMIZED = "1"
+$env:HUNT_C3_CHROME_ISOLATED_DESKTOP = "1"
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\launch_c3_chrome.ps1
+Remove-Item Env:\HUNT_C3_CHROME_START_MINIMIZED -ErrorAction SilentlyContinue
+Remove-Item Env:\HUNT_C3_CHROME_ISOLATED_DESKTOP -ErrorAction SilentlyContinue
 ```
 
 This starts Playwright Chromium with the unpacked Hunt extension loaded from
 `executioner`, a dedicated profile, and a DevTools endpoint at
 `http://127.0.0.1:9222`.
+
+The batch setup enables isolated-desktop launch automatically. Verify each wave
+with `scripts\verify_c3_window_safety.ps1`; it enumerates the named desktops and
+checks active-desktop foreground ownership. Follow
+`docs/C3_TESTING_METHODS.md` for the global 10/20 inventory and evidence-gated
+cleanup, which still require operator review.
 
 The launcher tries to place the test browser on a non-primary monitor so it
 does not cover the main working screen. Override placement when needed:

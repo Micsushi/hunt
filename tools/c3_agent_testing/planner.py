@@ -103,7 +103,7 @@ def plan_lanes(
     batch_id: str,
     ports: Iterable[int],
     artifact_root: str | Path,
-    deadline_seconds: int = 120,
+    deadline_seconds: int = 600,
 ) -> list[LanePlan]:
     job_list = list(jobs)
     port_list = [int(port) for port in ports]

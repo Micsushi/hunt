@@ -1,4 +1,5 @@
 import hashlib
+import json
 import threading
 import time
 from dataclasses import replace
@@ -12,12 +13,865 @@ from tools.c3_agent_testing.planner import plan_lanes, read_job_csv
 from tools.c3_agent_testing.runner import (
     C3BatchSupervisor,
     ResumeOperationIdentityError,
+    _artifact_page_observations,
     _artifact_paths,
+    _failure_context_fields,
     _is_cancel_backoff_active,
+    _merge_artifact_page_observations,
+    _merge_operation_projection,
+    _refine_failure_classification,
+    _success_terminal_evidence_fields,
     _validate_lanes,
     _validate_operation_identity,
 )
 from tools.hunt_mcp.client import HuntBackendError
+
+
+def test_planner_default_allows_full_multi_page_workday_flow():
+    lane = plan_lanes(
+        read_job_csv(Path("wd_test_jobs.csv"))[:1],
+        batch_id="deadline-default",
+        ports=[9876],
+        artifact_root=Path("logs/deadline-default"),
+    )[0]
+
+    assert lane.deadline_seconds == 600
+
+
+def test_authoritative_operation_refresh_replaces_result_instead_of_deep_merging():
+    merged = _merge_operation_projection(
+        {
+            "state": "running",
+            "result": {"authState": "signup", "staleOnly": True},
+        },
+        {
+            "state": "failed",
+            "result": {"authState": "login"},
+        },
+    )
+
+    assert merged["state"] == "failed"
+    assert merged["result"] == {"authState": "login"}
+
+
+def test_failure_context_projection_preserves_unknown_required_field_mechanism():
+    projected = _failure_context_fields(
+        {
+            "operation_id": "op-required",
+            "root_cause_code": "required_field_uncommitted",
+            "reported_cause_code": "visible_validation_errors",
+            "cause_asserted": True,
+            "mechanism_unknown": True,
+            "root_cause_unknown": False,
+            "missing_evidence": ["field_commit_evidence"],
+            "live_inspection_required": False,
+            "causal_element": {
+                "field_id": "source--source",
+                "label": "How Did You Hear About Us?",
+                "ui_model": "combobox",
+                "action": "select",
+                "selector": "button[data-automation-id='source']",
+            },
+            "field_commit_failures": [
+                {
+                    "event_id": "evt-source",
+                    "field_id": "source--source",
+                    "label": "How Did You Hear About Us?",
+                    "ui_model": "combobox",
+                    "action": "select",
+                    "reason_code": "workday_commit_not_verified",
+                    "committed": False,
+                    "selected_value_present": False,
+                    "attempted_option": "LinkedIn",
+                    "action_method": "trusted_pointer",
+                    "action_result": "failed",
+                    "commit_verified": False,
+                    "selected_pill_present": True,
+                    "backing_value_present": True,
+                    "validation_visible": True,
+                }
+            ],
+        },
+        "available",
+        "",
+    )
+
+    assert projected["root_cause_code"] == "required_field_uncommitted"
+    assert projected["cause_asserted"] is True
+    assert projected["mechanism_unknown"] is True
+    assert projected["root_cause_unknown"] is False
+    assert projected["missing_evidence"] == ("field_commit_evidence",)
+    assert projected["live_inspection_required"] is False
+    assert projected["causal_field"] == {
+        "field_id": "source--source",
+        "label": "How Did You Hear About Us?",
+        "ui_model": "combobox",
+        "action": "select",
+        "selector": "button[data-automation-id='source']",
+    }
+    assert projected["field_commit_failures"] == (
+        {
+            "event_id": "evt-source",
+            "field_id": "source--source",
+            "label": "How Did You Hear About Us?",
+            "ui_model": "combobox",
+            "action": "select",
+            "reason_code": "workday_commit_not_verified",
+            "committed": False,
+            "selected_value_present": False,
+            "attempted_option": "LinkedIn",
+            "action_method": "trusted_pointer",
+            "action_result": "failed",
+            "commit_verified": False,
+            "selected_pill_present": True,
+            "backing_value_present": True,
+            "validation_visible": True,
+        },
+    )
+
+
+def test_failure_context_projection_bounds_failures_and_drops_unsafe_option_intent():
+    failures = [
+        {
+            "event_id": f"evt-{index}",
+            "field_id": "source--source" if index % 2 == 0 else "address--countryRegion",
+            "label": ("How Did You Hear About Us?" if index % 2 == 0 else "Province or Territory"),
+            "ui_model": "combobox",
+            "action": "select",
+            "reason_code": "workday_commit_not_verified",
+            "committed": False,
+            "attempted_option": (
+                "Expanded"
+                if index == 0
+                else "LinkedIn"
+                if index % 2 == 0
+                else "private province option"
+            ),
+        }
+        for index in range(40)
+    ]
+
+    projected = _failure_context_fields(
+        {"field_commit_failures": failures},
+        "available",
+        "",
+    )
+
+    compact = projected["field_commit_failures"]
+    assert len(compact) == 32
+    assert compact[0]["event_id"] == "evt-8"
+    assert compact[-1]["event_id"] == "evt-39"
+    assert all(failure.get("attempted_option") != "Expanded" for failure in compact)
+    assert all(
+        "attempted_option" not in failure
+        for failure in compact
+        if failure["field_id"] == "address--countryRegion"
+    )
+    assert any(failure.get("attempted_option") == "LinkedIn" for failure in compact)
+
+
+def test_failure_context_projection_keeps_diagnostics_outside_observed_messages():
+    projected = _failure_context_fields(
+        {
+            "operation_id": "op-diagnostics",
+            "observed_messages": [
+                "monitor_bridge_timeout",
+                "Visible page alert.",
+            ],
+            "diagnostic_messages": [
+                "operation_id_mismatch",
+                "monitor_bridge_timeout",
+            ],
+            "monitor_summary": {
+                "progress_probe_failure_count": 2,
+                "monitor_failure_count": 1,
+                "last_error_code": "monitor_bridge_timeout",
+            },
+        },
+        "available",
+        "",
+    )
+
+    assert projected["observed_messages"] == ("Visible page alert.",)
+    assert projected["diagnostic_messages"] == (
+        "operation_id_mismatch",
+        "monitor_bridge_timeout",
+    )
+    assert projected["monitor_summary"] == {
+        "progress_probe_failure_count": 2,
+        "monitor_failure_count": 1,
+        "last_error_code": "monitor_bridge_timeout",
+    }
+
+
+def test_failure_context_projection_keeps_auth_action_boundary():
+    boundary = {
+        "stage": "preflight_blocked",
+        "preActionDetection": {
+            "authState": "login",
+            "authUiState": "credential_form",
+            "documentGenerationId": "nav-auth-1",
+            "frameId": 0,
+            "emailCount": 1,
+            "passwordCount": 1,
+        },
+        "stabilization": {
+            "reason": "auth_surface_loading",
+            "sampleCount": 2,
+            "samples": [],
+        },
+        "credentialCompleteness": {
+            "emailFieldVisible": False,
+            "passwordVisible": False,
+        },
+        "actionReceipt": {
+            "attempted": False,
+            "candidateProbePerformed": False,
+            "clicked": False,
+            "reason": "auth_surface_loading",
+        },
+    }
+
+    projected = _failure_context_fields(
+        {"auth_action_boundary": boundary},
+        "available",
+        "",
+    )
+
+    assert projected["auth_action_boundary"] == boundary
+
+
+def test_asserted_credential_rejection_refines_outer_failure_classification():
+    assert (
+        _refine_failure_classification(
+            "fill_failed",
+            {
+                "root_cause_code": "credential_rejected",
+                "cause_asserted": True,
+            },
+        )
+        == "auth_failed"
+    )
+    assert (
+        _refine_failure_classification(
+            "fill_failed",
+            {
+                "root_cause_code": "credential_rejected",
+                "cause_asserted": False,
+            },
+        )
+        == "fill_failed"
+    )
+    assert (
+        _refine_failure_classification(
+            "safety_violation",
+            {
+                "root_cause_code": "credential_rejected",
+                "cause_asserted": True,
+            },
+        )
+        == "safety_violation"
+    )
+
+
+@pytest.mark.parametrize(
+    ("root_cause_code", "expected"),
+    [
+        ("job_unavailable", "job_unavailable"),
+        ("maintenance", "site_unavailable"),
+    ],
+)
+def test_asserted_direct_site_state_refines_outer_failure_classification(
+    root_cause_code: str,
+    expected: str,
+):
+    assert (
+        _refine_failure_classification(
+            "fill_failed",
+            {
+                "root_cause_code": root_cause_code,
+                "cause_asserted": True,
+            },
+        )
+        == expected
+    )
+    assert (
+        _refine_failure_classification(
+            "fill_failed",
+            {
+                "root_cause_code": root_cause_code,
+                "cause_asserted": False,
+            },
+        )
+        == "fill_failed"
+    )
+    assert (
+        _refine_failure_classification(
+            "review_ready",
+            {
+                "root_cause_code": root_cause_code,
+                "cause_asserted": True,
+            },
+        )
+        == "review_ready"
+    )
+    assert (
+        _refine_failure_classification(
+            "safety_violation",
+            {
+                "root_cause_code": root_cause_code,
+                "cause_asserted": True,
+            },
+        )
+        == "safety_violation"
+    )
+
+
+def test_unasserted_failure_without_authoritative_terminal_snapshot_requires_inspection():
+    merged = _merge_artifact_page_observations(
+        {
+            "cause_asserted": False,
+            "live_inspection_required": False,
+            "missing_evidence": (),
+            "page_observations": ({"source": "event", "page_kind": "unknown"},),
+        },
+        (),
+    )
+
+    assert merged["live_inspection_required"] is True
+    assert "terminal_page_snapshot" in merged["missing_evidence"]
+
+
+def test_authoritative_terminal_artifact_and_action_receipt_remove_live_inspection_need():
+    merged = _merge_artifact_page_observations(
+        {
+            "cause_asserted": False,
+            "root_cause_code": "unclassified_failure",
+            "root_cause_unknown": True,
+            "mechanism_unknown": False,
+            "live_inspection_required": True,
+            "missing_evidence": ("causal_mechanism", "terminal_page_snapshot"),
+            "next_safe_action": "inspect_retained_evidence_then_use_live_inspection",
+            "auth_action_boundary": {
+                "stage": "preflight_blocked",
+                "actionReceipt": {
+                    "attempted": False,
+                    "candidateProbePerformed": False,
+                    "clicked": False,
+                    "reason": "auth_surface_loading",
+                },
+            },
+            "page_observations": (),
+        },
+        (),
+        artifact_observations=(
+            {
+                "source": "failure_artifact",
+                "authoritative_terminal_snapshot": True,
+                "visible_messages": (),
+                "direct_evidence_messages": (),
+                "visible_controls": ("Email", "Password", "Sign In"),
+                "page_kind": "auth_form",
+                "phase": "auth",
+            },
+        ),
+    )
+
+    assert merged["root_cause_unknown"] is True
+    assert merged["mechanism_unknown"] is True
+    assert merged["live_inspection_required"] is False
+    assert merged["missing_evidence"] == ("causal_mechanism",)
+    assert merged["next_safe_action"] == "diagnose_from_retained_evidence"
+
+
+def test_authoritative_terminal_artifact_promotes_direct_credential_rejection():
+    merged = _merge_artifact_page_observations(
+        {
+            "cause_asserted": False,
+            "root_cause_code": "unclassified_failure",
+            "reported_cause_code": "page_did_not_advance_after_next",
+            "failure_scope": "unknown",
+            "failure_summary": "Failure cause could not be established.",
+            "observed_messages": (),
+            "confidence": "unknown",
+            "root_cause_unknown": True,
+            "live_inspection_required": True,
+            "missing_evidence": ("causal_element", "terminal_page_snapshot"),
+            "page_observations": (),
+        },
+        (),
+        artifact_observations=(
+            {
+                "source": "failure_artifact",
+                "authoritative_terminal_snapshot": True,
+                "credential_rejection_visible": True,
+                "maintenance_visible": False,
+                "job_unavailable_visible": False,
+                "captcha_challenge_present": False,
+                "visible_messages": (
+                    "The email address or password is wrong, or the account might be locked.",
+                ),
+                "direct_evidence_messages": (
+                    "The email address or password is wrong, or the account might be locked.",
+                ),
+                "page_kind": "auth",
+                "phase": "authentication",
+            },
+        ),
+    )
+
+    assert merged["root_cause_code"] == "credential_rejected"
+    assert merged["cause_asserted"] is True
+    assert merged["root_cause_unknown"] is False
+    assert merged["confidence"] == "proven"
+    assert merged["live_inspection_required"] is False
+    assert merged["missing_evidence"] == ()
+    assert merged["reported_cause_code"] == "page_did_not_advance_after_next"
+    assert merged["observed_messages"] == (
+        "The email address or password is wrong, or the account might be locked.",
+    )
+
+
+def test_authoritative_terminal_artifact_promotes_only_required_empty_field_blocker():
+    message = (
+        "Error-How Did You Hear About Us? The field How Did You Hear About Us? "
+        "is required and must have a value."
+    )
+    merged = _merge_artifact_page_observations(
+        {
+            "cause_asserted": False,
+            "root_cause_code": "unclassified_failure",
+            "reported_cause_code": "visible_validation_errors",
+            "failure_scope": "ui_element",
+            "failure_summary": "C3 recorded a failure.",
+            "observed_messages": (message,),
+            "confidence": "unknown",
+            "root_cause_unknown": True,
+            "live_inspection_required": True,
+            "missing_evidence": ("causal_element", "causal_evidence"),
+            "evidence_conflicts": ("unasserted_reported_cause_visible_validation_errors",),
+            "page_observations": (),
+        },
+        (),
+        artifact_observations=(
+            {
+                "source": "failure_artifact",
+                "authoritative_terminal_snapshot": True,
+                "visible_messages": (message,),
+                "direct_evidence_messages": (message,),
+                "visible_controls": (
+                    "How Did You Hear About Us?* 0 items selected",
+                    "Next Next pageFooterNextButton",
+                ),
+                "page_kind": "application_page",
+                "phase": "job_fill",
+            },
+        ),
+    )
+
+    assert merged["root_cause_code"] == "required_field_uncommitted"
+    assert merged["reported_cause_code"] == "visible_validation_errors"
+    assert merged["cause_asserted"] is True
+    assert merged["mechanism_unknown"] is True
+    assert merged["root_cause_unknown"] is False
+    assert merged["causal_label"] == "How Did You Hear About Us?"
+    assert merged["causal_selector"] == ""
+    assert merged["missing_evidence"] == ("field_commit_evidence",)
+    assert merged["live_inspection_required"] is False
+    assert merged["evidence_conflicts"] == ()
+
+
+def test_success_terminal_evidence_clears_stale_failure_requirements():
+    fields = _success_terminal_evidence_fields(
+        {
+            "failure_scope": "unknown",
+            "root_cause_code": "unclassified_failure",
+            "reported_cause_code": "page_did_not_advance_after_next",
+            "cause_asserted": False,
+            "failure_summary": "stale failure",
+            "missing_evidence": ("causal_element",),
+            "live_inspection_required": True,
+            "evidence_conflicts": ("stale conflict",),
+            "page_observations": (
+                {"authoritative_terminal_snapshot": True, "page_kind": "review"},
+            ),
+        }
+    )
+
+    assert fields["root_cause_code"] == ""
+    assert fields["missing_evidence"] == ()
+    assert fields["live_inspection_required"] is False
+    assert fields["evidence_conflicts"] == ()
+    assert fields["confidence"] == "proven"
+
+
+def test_artifact_page_observations_project_terminal_workflow_state(tmp_path: Path):
+    artifact_dir = tmp_path / "artifact"
+    artifact_dir.mkdir()
+    manifest_path = artifact_dir / "manifest.json"
+    manifest_path.write_text(
+        json.dumps(
+            {
+                "artifact_id": "artifact_fixture",
+                "reason_code": "operation_cancelled",
+                "created_at": "2026-07-26T16:00:00Z",
+                "files": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+    (artifact_dir / "page.json").write_text(
+        """
+        {
+          "snapshot": {
+            "href": "https://tenant.example/login?redirect=%2Fjob%2F123%2Fapply%2FapplyManually",
+            "title": "Example role",
+            "documentReadyState": "complete",
+            "visibleMessages": [{"message": "Application choices available"}],
+            "workflow": {
+              "pageKind": "apply_entry",
+              "phase": "apply_entry",
+              "authState": "unknown",
+              "authUiState": "unknown",
+              "isAuthPage": true,
+              "isApplyEntryPage": false,
+              "isJobFillPage": false,
+              "captchaChallengePresent": false,
+              "directEvidence": {
+                "maintenanceVisible": false,
+                "jobUnavailableVisible": false,
+                "credentialRejectionVisible": false,
+                "messages": ["No direct failure evidence"]
+              },
+              "buttons": [
+                "Autofill with Resume",
+                {"label": "Apply Manually"}
+              ]
+            },
+            "readiness": {
+              "authFieldCount": 2,
+              "applicationFieldCount": 0,
+              "meaningfulControlCount": 2,
+              "finalSubmitVisible": false,
+              "loadingIndicatorVisible": false
+            }
+          }
+        }
+        """,
+        encoding="utf-8",
+    )
+
+    observations = _artifact_page_observations((str(manifest_path),))
+
+    assert observations == (
+        {
+            "source": "failure_artifact",
+            "artifact_id": "artifact_fixture",
+            "artifact_reason_code": "operation_cancelled",
+            "captured_at": "2026-07-26T16:00:00Z",
+            "terminal_relation": "post_terminal",
+            "snapshot_available": True,
+            "authoritative_terminal_snapshot": True,
+            "href": "https://tenant.example/login",
+            "redirect_path": "/job/123/apply/applyManually",
+            "title": "Example role",
+            "page_kind": "apply_entry",
+            "phase": "apply_entry",
+            "auth_state": "unknown",
+            "auth_ui_state": "unknown",
+            "document_ready_state": "complete",
+            "visible_messages": ("Application choices available",),
+            "visible_controls": ("Autofill with Resume", "Apply Manually"),
+            "auth_field_count": 2,
+            "application_field_count": 0,
+            "meaningful_control_count": 2,
+            "final_submit_visible": False,
+            "loading_indicator_visible": False,
+            "is_auth_page": True,
+            "is_apply_entry_page": False,
+            "is_job_fill_page": False,
+            "captcha_challenge_present": False,
+            "maintenance_visible": False,
+            "job_unavailable_visible": False,
+            "credential_rejection_visible": False,
+            "direct_evidence_messages": ("No direct failure evidence",),
+        },
+    )
+
+
+def test_artifact_landing_choice_snapshot_conflicting_with_credentials_requires_inspection(
+    tmp_path: Path,
+):
+    artifact_dir = tmp_path / "artifact"
+    artifact_dir.mkdir()
+    manifest_path = artifact_dir / "manifest.json"
+    manifest_path.write_text(
+        json.dumps(
+            {
+                "artifact_id": "artifact_lane22",
+                "reason_code": "operation_failed",
+                "created_at": "2026-07-26T20:25:38Z",
+                "files": [
+                    {"name": "page.json"},
+                    {"name": "fields.json"},
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    (artifact_dir / "page.json").write_text(
+        json.dumps(
+            {
+                "snapshot": {
+                    "href": "https://tenant.example/login",
+                    "title": "Sign In",
+                    "documentReadyState": "complete",
+                    "workflow": {
+                        "pageKind": "auth_form",
+                        "phase": "auth",
+                        "authState": "login",
+                        "authUiState": "landing_choice",
+                        "isAuthPage": True,
+                    },
+                    "readiness": {"authFieldCount": 0},
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    (artifact_dir / "fields.json").write_text(
+        json.dumps(
+            [
+                {
+                    "index": 0,
+                    "label": "Email Address",
+                    "type": "text",
+                    "autocomplete": "email",
+                    "value": "must-not-leak@example.test",
+                },
+                {
+                    "index": 1,
+                    "label": "Password",
+                    "type": "password",
+                    "autocomplete": "current-password",
+                    "value": "must-not-leak",
+                },
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    observations = _artifact_page_observations((str(manifest_path),))
+    assert observations[0]["authoritative_terminal_snapshot"] is False
+    assert observations[0]["artifact_evidence_coherent"] is False
+    assert observations[0]["artifact_evidence_conflicts"] == (
+        "snapshot_landing_choice_conflicts_with_credential_fields",
+    )
+
+    merged = _merge_artifact_page_observations(
+        {
+            "cause_asserted": False,
+            "missing_evidence": (),
+            "live_inspection_required": False,
+            "evidence_conflicts": (),
+            "page_observations": (),
+            "field_observations": (),
+        },
+        (str(manifest_path),),
+        artifact_observations=observations,
+    )
+    assert merged["live_inspection_required"] is True
+    assert "coherent_terminal_page_snapshot" in merged["missing_evidence"]
+    assert (
+        "snapshot_landing_choice_conflicts_with_credential_fields" in merged["evidence_conflicts"]
+    )
+    serialized = json.dumps(merged, sort_keys=True)
+    assert "must-not-leak@example.test" not in serialized
+    assert '"must-not-leak"' not in serialized
+
+
+def test_artifact_mixed_document_generations_are_projected_as_evidence_conflict(
+    tmp_path: Path,
+):
+    artifact_dir = tmp_path / "artifact"
+    artifact_dir.mkdir()
+    manifest_path = artifact_dir / "manifest.json"
+    manifest_path.write_text(
+        json.dumps(
+            {
+                "artifact_id": "artifact_mixed_generation",
+                "reason_code": "operation_failed",
+                "created_at": "2026-07-26T20:25:38Z",
+                "files": [
+                    {"name": "page.json"},
+                    {"name": "fields.json"},
+                    {"name": "field_capture.json"},
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    (artifact_dir / "page.json").write_text(
+        json.dumps(
+            {
+                "snapshot": {
+                    "href": "https://tenant.example/login",
+                    "documentGeneration": {"id": "nav-page"},
+                    "workflow": {"pageKind": "auth_form", "isAuthPage": True},
+                    "readiness": {"authFieldCount": 0},
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    (artifact_dir / "fields.json").write_text("[]", encoding="utf-8")
+    (artifact_dir / "field_capture.json").write_text(
+        json.dumps(
+            {
+                "ok": True,
+                "documentGeneration": {"id": "nav-fields"},
+                "fields": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    observations = _artifact_page_observations((str(manifest_path),))
+
+    assert observations[0]["authoritative_terminal_snapshot"] is False
+    assert observations[0]["artifact_evidence_coherent"] is False
+    assert observations[0]["artifact_evidence_conflicts"] == (
+        "snapshot_fields_capture_generation_mismatch",
+    )
+
+
+def test_artifact_merge_projects_bounded_value_free_terminal_field_observations(
+    tmp_path: Path,
+):
+    artifact_dir = tmp_path / "artifact"
+    artifact_dir.mkdir()
+    manifest_path = artifact_dir / "manifest.json"
+    manifest_path.write_text(
+        json.dumps(
+            {
+                "artifact_id": "artifact_lane19",
+                "reason_code": "operation_failed",
+                "created_at": "2026-07-26T19:14:56Z",
+                "files": [
+                    {"name": "page.json"},
+                    {"name": "fields.json"},
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    (artifact_dir / "page.json").write_text(
+        json.dumps(
+            {
+                "snapshot": {
+                    "href": "https://tenant.example/login",
+                    "title": "Sign In",
+                    "documentReadyState": "complete",
+                    "workflow": {
+                        "pageKind": "credential_rejected",
+                        "phase": "auth",
+                        "authState": "login",
+                        "authUiState": "credential_form",
+                        "isAuthPage": True,
+                    },
+                    "readiness": {
+                        "authFieldCount": 2,
+                        "applicationFieldCount": 0,
+                    },
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    (artifact_dir / "fields.json").write_text(
+        json.dumps(
+            [
+                {
+                    "index": 0,
+                    "label": "Email Address",
+                    "type": "text",
+                    "value": "applicant-secret@example.test",
+                    "valueLength": 29,
+                    "valuePresent": True,
+                    "valueLengthState": "observed",
+                },
+                {
+                    "index": 1,
+                    "label": "Password",
+                    "type": "password",
+                    "value": "correct-horse-secret",
+                    "valueLength": 20,
+                    "valuePresent": True,
+                    "valueLengthState": "redacted",
+                },
+                {
+                    "id": "beecatcher",
+                    "label": "Website",
+                    "type": "text",
+                    "value": "",
+                    "valueLength": 0,
+                    "valuePresent": False,
+                    "valueLengthState": "observed",
+                },
+                *[
+                    {
+                        "id": f"extra-{index}",
+                        "label": f"Extra field {index}",
+                        "type": "text",
+                        "value": f"never-project-{index}",
+                        "valueLength": 16,
+                        "valuePresent": True,
+                        "valueLengthState": "observed",
+                    }
+                    for index in range(70)
+                ],
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    merged = _merge_artifact_page_observations(
+        {"page_observations": (), "field_observations": ()},
+        (str(manifest_path),),
+    )
+
+    assert merged["page_observations"][-1]["auth_field_count"] == 2
+    assert merged["page_observations"][-1]["application_field_count"] == 0
+    assert merged["field_observations"][:3] == (
+        {
+            "id": "index:0",
+            "label": "Email Address",
+            "type": "text",
+            "value_present": True,
+            "value_length_state": "observed",
+        },
+        {
+            "id": "index:1",
+            "label": "Password",
+            "type": "password",
+            "value_present": True,
+            "value_length_state": "redacted",
+        },
+        {
+            "id": "beecatcher",
+            "label": "Website",
+            "type": "text",
+            "value_present": False,
+            "value_length_state": "observed",
+        },
+    )
+    assert len(merged["field_observations"]) == 64
+    serialized = json.dumps(merged, sort_keys=True)
+    assert "applicant-secret@example.test" not in serialized
+    assert "correct-horse-secret" not in serialized
+    assert "never-project-" not in serialized
+    assert '"value_length":' not in serialized
+    assert '"valueLength":' not in serialized
 
 
 class FakeMcpClient:
@@ -168,6 +1022,14 @@ def test_classifier_uses_stable_failure_taxonomy():
     )
     assert classify_operation({"state": "failed", "terminal_reason": "http_410"}) == "job_expired"
     assert (
+        classify_operation({"state": "failed", "terminal_reason": "job_unavailable"})
+        == "job_unavailable"
+    )
+    assert (
+        classify_operation({"state": "failed", "terminal_reason": "maintenance"})
+        == "site_unavailable"
+    )
+    assert (
         classify_operation({"state": "failed", "terminal_reason": "cdp_connect_failed"})
         == "bridge_unreachable"
     )
@@ -191,6 +1053,52 @@ def test_classifier_recognizes_nested_page_walk_review_evidence_only():
         == "review_ready"
     )
     assert classify_operation({"state": "completed", "result": {}}) == "fill_failed"
+
+
+def test_classifier_recognizes_top_level_page_walk_review_evidence():
+    assert (
+        classify_operation(
+            {
+                "state": "completed",
+                "terminal_reason": "browser_execution_completed",
+                "result": {
+                    "stoppedReason": "final_submit_visible",
+                },
+            }
+        )
+        == "review_ready"
+    )
+
+
+def test_review_ready_lane_fetches_terminal_evidence_context():
+    lane = plan_lanes(
+        read_job_csv(Path("wd_test_jobs.csv"))[:1],
+        batch_id="review-without-failure-context",
+        ports=[9859],
+        artifact_root=Path("logs/review-without-failure-context"),
+    )[0]
+
+    class ReviewClient(FakeMcpClient):
+        def __init__(self):
+            super().__init__({lane.session_id: "completed"}, [], threading.Lock())
+
+        def get_c3_failure_context(self, payload):
+            return {
+                "failure_context": {
+                    "operation_id": payload["operation_id"],
+                    "artifact_status": "completed",
+                    "artifact_ids": [],
+                }
+            }
+
+    result = (
+        C3BatchSupervisor(client_factory=ReviewClient, prepare_lane=_exact_runtime)
+        .run([lane], max_concurrency=1)
+        .lanes[0]
+    )
+
+    assert result.classification == "review_ready"
+    assert result.failure_context_status == "available"
 
 
 def test_supervisor_runs_five_isolated_lanes_without_stall_blocking_others():
@@ -227,25 +1135,30 @@ def test_supervisor_runs_five_isolated_lanes_without_stall_blocking_others():
     assert sum(1 for name, _, _ in calls if name == "start") == 5
     assert sum(1 for name, _, _ in calls if name == "finish") == 4
     assert sum(1 for name, _, _ in calls if name == "fail") == 1
-    assert all(item.failure_context_status == "available" for item in report.lanes)
-    assert all(item.root_cause_code == "ui_commit_failed" for item in report.lanes)
-    assert all(item.causal_label == "How did you hear about us?" for item in report.lanes)
-    assert all(item.live_inspection_required is False for item in report.lanes)
-    assert all(item.failure_artifact_status == "completed" for item in report.lanes)
-    assert all(item.failure_source_event_sequence == 42 for item in report.lanes)
     assert all(
-        item.credential_preparation
-        == (
-            {
-                "source": "profile:accountPassword",
-                "selector": "input[type='password']",
-                "ok": True,
-                "changed": True,
-            },
-        )
+        item.failure_context_status in {"available", "not_requested_success"}
         for item in report.lanes
     )
-    assert all(item.failure_evidence_truncated is False for item in report.lanes)
+    assert stalled.root_cause_code == "ui_commit_failed"
+    assert stalled.causal_label == "How did you hear about us?"
+    assert stalled.live_inspection_required is True
+    assert "terminal_page_snapshot" in stalled.missing_evidence
+    assert stalled.failure_artifact_status == "completed"
+    assert stalled.failure_source_event_sequence == 42
+    assert stalled.credential_preparation == (
+        {
+            "source": "profile:accountPassword",
+            "selector": "input[type='password']",
+            "ok": True,
+            "changed": True,
+        },
+    )
+    assert stalled.failure_evidence_truncated is False
+    assert all(
+        item.root_cause_code == "" for item in report.lanes if item.classification == "review_ready"
+    )
+    # Terminal evidence is collected for both failed and successful lanes so a
+    # Review-ready report can include the authoritative completed-page artifact.
     assert sum(1 for name, _, _ in calls if name == "failure_context") == 5
     assert sum(1 for name, _, _ in calls if name == "cancel") == 1
     assert sum(1 for name, _, _ in calls if name == "heartbeat") == 0
@@ -1200,7 +2113,7 @@ def test_existing_terminal_lane_is_reused_without_browser_work_or_refinalization
     assert result.event_ids == ("evt-prior-terminal",)
 
 
-def test_failure_context_is_fetched_once_and_reused_if_lane_finish_raises():
+def test_terminal_context_is_fetched_once_and_reused_if_lane_finish_raises():
     lane = plan_lanes(
         read_job_csv(Path("wd_test_jobs.csv"))[:1],
         batch_id="failure-context-once",
@@ -1225,14 +2138,8 @@ def test_failure_context_is_fetched_once_and_reused_if_lane_finish_raises():
 
     context_calls = [payload for name, _, payload in calls if name == "failure_context"]
     assert len(context_calls) == 1
-    assert context_calls[0] == {
-        "operation_id": f"op_{lane.session_id}",
-        "agent_id": lane.agent_id,
-        "lease_id": f"lease_{lane.session_id}",
-        "session_id": lane.session_id,
-    }
     assert report.lanes[0].failure_context_status == "available"
-    assert report.lanes[0].root_cause_code == "ui_commit_failed"
+    assert report.lanes[0].root_cause_code == ""
 
 
 def test_failure_context_fetch_error_is_explicit_in_lane_result():
@@ -1267,7 +2174,8 @@ def test_failure_context_fetch_error_is_explicit_in_lane_result():
 
     assert result.failure_context_status == "error"
     assert result.failure_context_error == "RuntimeError"
-    assert result.root_cause_unknown is True
+    assert result.root_cause_unknown is False
+    assert result.live_inspection_required is True
 
 
 def test_lane_result_retains_bounded_compact_failure_evidence_and_artifact_summaries():
@@ -1300,6 +2208,22 @@ def test_lane_result_retains_bounded_compact_failure_evidence_and_artifact_summa
                     "diagnosis_id": "diagnosis-rich",
                     "root_cause_code": "ui_commit_failed",
                     "artifact_status": "completed",
+                    "observed_messages": [
+                        "The account might be locked.",
+                        "Please contact recruiting support.",
+                    ],
+                    "page_observations": [
+                        {
+                            "event_id": "evt-page",
+                            "href": "https://example.test/login",
+                            "title": "Sign In",
+                            "page_kind": "credential_rejected",
+                            "phase": "auth",
+                            "auth_state": "login",
+                            "document_ready_state": "complete",
+                            "unsafe": "must-not-persist",
+                        }
+                    ],
                 },
                 "action_tail": action_tail,
                 "validation_tail": [
@@ -1317,6 +2241,7 @@ def test_lane_result_retains_bounded_compact_failure_evidence_and_artifact_summa
                         "artifact_id": "artifact-1",
                         "status": "completed",
                         "kind": "failure_bundle",
+                        "reason_code": "operation_failed",
                         "files": ["dom.html", "health.json"],
                         "manifest_present": True,
                         "unsafe": "must-not-persist",
@@ -1343,9 +2268,25 @@ def test_lane_result_retains_bounded_compact_failure_evidence_and_artifact_summa
             "artifact_id": "artifact-1",
             "status": "completed",
             "kind": "failure_bundle",
+            "reason_code": "operation_failed",
             "captured_at": "",
             "files": ("dom.html", "health.json"),
             "manifest_present": True,
+        },
+    )
+    assert result.observed_messages == (
+        "The account might be locked.",
+        "Please contact recruiting support.",
+    )
+    assert result.page_observations == (
+        {
+            "event_id": "evt-page",
+            "href": "https://example.test/login",
+            "title": "Sign In",
+            "page_kind": "credential_rejected",
+            "phase": "auth",
+            "auth_state": "login",
+            "document_ready_state": "complete",
         },
     )
 
@@ -1555,6 +2496,134 @@ def test_partial_artifact_is_settled_and_truncation_sources_remain_distinct():
     assert result.failure_artifact_status == "partial"
     assert result.failure_evidence_truncated is False
     assert result.failure_response_evidence_truncated is True
+
+
+def test_failed_lane_waits_for_terminal_artifact_reason_after_earlier_partial_bundle(
+    tmp_path: Path,
+):
+    lane = plan_lanes(
+        read_job_csv(Path("wd_test_jobs.csv"))[:1],
+        batch_id="terminal-artifact-reason",
+        ports=[9853],
+        artifact_root=tmp_path,
+    )[0]
+    operation_id = f"op_{lane.session_id}"
+    early_id = "artifact_11111111111111111111111111111111"
+    terminal_id = "artifact_22222222222222222222222222222222"
+
+    def artifact_summary(artifact_id: str, reason_code: str, *, page=False):
+        artifact_dir = tmp_path / operation_id / "artifacts" / artifact_id
+        artifact_dir.mkdir(parents=True)
+        manifest_path = artifact_dir / "manifest.json"
+        manifest_path.write_text('{"files":[]}', encoding="utf-8")
+        if page:
+            (artifact_dir / "page.json").write_text(
+                json.dumps(
+                    {
+                        "snapshot": {
+                            "href": "https://tenant.example/apply",
+                            "title": "My Experience",
+                            "documentReadyState": "complete",
+                            "workflow": {
+                                "pageKind": "application_form",
+                                "phase": "application",
+                                "authState": "authenticated",
+                                "authUiState": "authenticated",
+                                "isJobFillPage": True,
+                            },
+                            "readiness": {
+                                "applicationFieldCount": 4,
+                                "finalSubmitVisible": False,
+                            },
+                        }
+                    }
+                ),
+                encoding="utf-8",
+            )
+        return {
+            "artifact_id": artifact_id,
+            "status": "completed",
+            "kind": "failure_bundle",
+            "reason_code": reason_code,
+            "manifest_present": True,
+            "manifest_path": str(manifest_path),
+        }
+
+    early = artifact_summary(early_id, "operation_heartbeat_missing")
+    terminal = artifact_summary(terminal_id, "operation_failed", page=True)
+
+    class DelayedTerminalArtifactClient(FakeMcpClient):
+        def __init__(self):
+            super().__init__({lane.session_id: "failed"}, [], threading.Lock())
+            self.context_reads = 0
+
+        def get_c3_operation(self, payload):
+            artifact_ids = [early_id]
+            if self.context_reads >= 2:
+                artifact_ids.append(terminal_id)
+            return {
+                "operation": {
+                    "operation_id": payload["operation_id"],
+                    "session_id": lane.session_id,
+                    "state": "failed",
+                    "terminal_reason": "extension_command_failed",
+                    "artifact_ids": artifact_ids,
+                }
+            }
+
+        def get_c3_failure_context(self, payload):
+            self.context_reads += 1
+            has_terminal = self.context_reads >= 2
+            artifacts = [early, terminal] if has_terminal else [early]
+            return {
+                "failure_context": {
+                    "operation_id": payload["operation_id"],
+                    "diagnosis_id": "diagnosis-terminal-artifact",
+                    "root_cause_code": "unclassified_failure",
+                    "reported_cause_code": "workday_fill_return_timeout",
+                    "timeout_evidence": {
+                        "reason": "workday_fill_return_timeout",
+                        "observed_wait_state": "field_commit",
+                        "driver_in_flight": {
+                            "phase": "field_commit_wait",
+                            "wait_class": "field_commit",
+                            "field_id": "education-1--degree",
+                            "awaited_operation": "workday.settleWorkdayCommit",
+                        },
+                    },
+                    "artifact_status": "partial",
+                    "artifact_ids": [item["artifact_id"] for item in artifacts],
+                },
+                "artifacts": artifacts,
+            }
+
+    client = DelayedTerminalArtifactClient()
+    result = (
+        C3BatchSupervisor(
+            client_factory=lambda: client,
+            prepare_lane=_exact_runtime,
+            sleep=lambda _seconds: None,
+        )
+        .run([lane], max_concurrency=1)
+        .lanes[0]
+    )
+
+    assert client.context_reads == 2
+    assert result.artifact_ids == (early_id, terminal_id)
+    assert result.failure_artifact_ids == (early_id, terminal_id)
+    assert tuple(summary["reason_code"] for summary in result.failure_artifact_summaries) == (
+        "operation_heartbeat_missing",
+        "operation_failed",
+    )
+    assert result.artifact_paths[-1].endswith(f"{terminal_id}{Path('/manifest.json')}")
+    assert result.page_observations[-1]["source"] == "failure_artifact"
+    assert result.page_observations[-1]["page_kind"] == "application_form"
+    assert result.timeout_evidence["observed_wait_state"] == "field_commit"
+    assert (
+        result.timeout_evidence["driver_in_flight"]["awaited_operation"]
+        == "workday.settleWorkdayCommit"
+    )
+    assert result.failure_context_error == ""
 
 
 def test_terminal_failure_context_refresh_error_keeps_last_available_context():

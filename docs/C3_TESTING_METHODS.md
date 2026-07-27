@@ -17,7 +17,9 @@ answer creates required follow-up fields, validation, or another blocker.
 ## Launch Primary P Chrome
 
 ```powershell
+$env:HUNT_C3_CHROME_START_MINIMIZED = "1"
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\launch_c3_chrome.ps1
+Remove-Item Env:\HUNT_C3_CHROME_START_MINIMIZED -ErrorAction SilentlyContinue
 ```
 
 Defaults:
@@ -25,7 +27,8 @@ Defaults:
 - DevTools: `http://127.0.0.1:9222`
 - profile: Playwright Chromium profile under `%LOCALAPPDATA%\Hunt`
 - extension: repo `executioner`
-- window: secondary monitor when available
+- window: minimized/background requested; secondary monitor only if explicitly
+  restored for inspection
 - password manager disabled
 
 ## Main-Agent Batch Setup Order
@@ -34,32 +37,44 @@ Use this order for a rolling queue. Active capacity and hard-failure threshold
 come from the main-agent prompt:
 
 1. Create `logs\<batch-id>\current_debug.md`.
-2. For a large batch, create the full assignment table. Mark all jobs queued and
+2. Inventory all existing p Chrome lane windows and live job-testing tabs.
+   Record project, batch, port/profile, job, owner/agent, activity, report,
+   evidence, and preserve status.
+3. Apply the browser caps before choosing ports: preferred maximum 10, absolute
+   non-bypassable maximum 20. At or below 10 use normal checks. Above 10,
+   aggressively review and close eligible oldest inactive same-project lanes
+   before opening more; never bypass ownership, activity, documentation, or
+   preserve gates.
+4. For a large batch, create the full assignment table. Mark all jobs queued and
    mark jobs active up to the configured active capacity.
-3. Pick active Workday-compatible jobs up to the configured capacity and assign
+5. Pick active Workday-compatible jobs up to the configured capacity and assign
    unused ports.
-4. Do not set up Chrome profiles, windows, tabs, or subagents for queued jobs.
-5. Run `scripts\setup_c3_parallel_lanes.ps1` for the selected active ports.
-6. Confirm `logs\<batch-id>\lane_setup_summary.json` exists and every lane
+6. Do not set up Chrome profiles, windows, tabs, or subagents for queued jobs.
+7. Run `scripts\setup_c3_parallel_lanes.ps1` for the selected active ports.
+8. Confirm `logs\<batch-id>\lane_setup_summary.json` exists and every lane
    passed preflight.
-7. Spawn one subagent per active lane with `docs/C3_LANE_AGENT.md`,
+9. Verify each lane is actually minimized, no p Chrome window became the
+   foreground window, and the user's pre-launch foreground application retained
+   focus. A smaller visible window fails this check.
+10. Spawn one subagent per active lane with `docs/C3_LANE_AGENT.md`,
    `docs/C3_ERROR_TAXONOMY.md`, lane port, job URL, and batch id.
-8. When any lane reports, close that subagent thread and update the batch
+11. When any lane reports, close that subagent thread and update the batch
    counters. Subagents do not close p Chrome. If the hard-failure count is below
-   the configured threshold, promote the next queued job to active on a
-   different unused port, set up one fresh p Chrome lane, and spawn one new
-   subagent. If the threshold has been reached, stop promoting queued jobs and
-   let already-active lanes finish.
+   the configured threshold and the 10/20 browser policy permits it, promote the
+   next queued job to active on a different unused port, set up one fresh p
+   Chrome lane, and spawn one new subagent. If a threshold has been reached,
+   stop promoting queued jobs and let already-active lanes finish.
 
 Do not open visible helper terminals. Use the existing Codex shell or hidden
 background processes with redirected logs.
 
 For larger requests, do not launch every row at once. Keep a rolling queue with
 concurrent lane subagents capped by the main-agent prompt. Open p Chrome lanes
-persist past their subagent and do not count against that cap once the subagent
-has reported. Queued future rows exist only in the debug assignment table until
-promoted into a free active slot. A hard failure is only a pre-Review failure: reaching Review with bad
-fills still counts as Review reached, not as a hard failure.
+persist past their subagent. They no longer consume subagent capacity after the
+terminal report, but they continue to count toward the p Chrome soft/hard caps.
+Queued future rows exist only in the debug assignment table until promoted into
+a free active slot. A hard failure is only a pre-Review failure: reaching Review
+with bad fills still counts as Review reached, not as a hard failure.
 Site/posting stops such as Workday maintenance, dead/closed postings,
 non-application pages, CAPTCHA/MFA, external assessment, or tenant outage do
 not count as hard C3 failures.
@@ -132,14 +147,15 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\setup_c3_parallel_la
 
 The setup script:
 
-- refuses to set up more than the configured active-lane limit unless
-  `-AllowLargeBatch` is supplied for intentional launcher debugging
+- must be preceded by the inventory and 10/20 capacity preflight above
 - refuses to reuse a port owned by another active Chrome lane/process
-- closes stale p Chrome lanes on the selected ports
+- must not be allowed to close a stale selected-port lane until its
+  project/owner, inactivity, terminal report/evidence, and preserve status have
+  been verified
 - uses fresh batch-specific profiles
 - resets those profiles by default
-- launches Playwright Chromium minimized during setup and leaves it in the
-  background by default
+- launches each pChrome on a named, unswitched Windows desktop, starts it
+  minimized/non-activating, and preserves active-desktop foreground ownership
 - restores/cascades windows only when `-RestoreWindows` is explicitly supplied
   for manual inspection
 - clamps windows inside the visible secondary-monitor working area
@@ -148,6 +164,12 @@ The setup script:
 - verifies extension target, profile counts, `browserContext: p_chrome`,
   Playwright Chromium, expected port, expected profile, and no blocked tabs
 - writes `logs\<batch-id>\lane_setup_summary.json`
+
+Current enforcement gap: `setup_c3_parallel_lanes.ps1` isolates each launched
+lane, but it still checks only the new wave, permits `-AllowLargeBatch`, and can
+stop a selected stale lane process. The main agent must perform the global
+inventory manually, must never use `-AllowLargeBatch` to exceed 20, and must
+stop before setup if a selected port has not passed the cleanup gate.
 
 Fresh p Chrome launch already loads the current unpacked extension. Do not
 reload during normal setup. Use `-ReloadExtension` only for focused launcher
@@ -163,8 +185,10 @@ cleanup.
 ## Move Existing P Chrome Windows Back On-Screen
 
 Use this when old p Chrome windows were launched off-screen or onto the wrong
-monitor. It restores and cascades matching p Chrome windows onto a secondary
-monitor without closing pages or changing tabs:
+monitor and the user explicitly asks to inspect them. It restores and cascades
+matching p Chrome windows onto a secondary monitor without closing pages or
+changing tabs. Never use it during automated testing; a restored smaller window
+is not compliant with the default minimized/no-focus policy.
 
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\move_c3_parallel_windows.ps1 -Monitor right
@@ -179,10 +203,29 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\move_c3_parallel_win
 
 ## Main-Agent Cleanup
 
-Only the main agent closes p Chrome. Use this after C3 code changes are patched,
-local checks pass, fresh p Chrome retest is complete, proof artifacts are
-captured, and no preserved live UI is still needed. Do not close hard-failure or
-site/posting-stop lanes until the user or main agent explicitly allows cleanup.
+Only the main agent closes p Chrome, and only while preparing to start more
+testing when capacity or exact port/profile reuse requires cleanup. Do not close
+lanes merely because a subagent, job, wave, patch, or retest finished.
+
+Before cleanup:
+
+1. Inventory every p Chrome lane and job-testing tab.
+2. Confirm the candidate belongs to Hunt and identify its batch, port/profile,
+   job, and prior agent.
+3. Verify it is inactive. If it may still be running, check the owning
+   agent/thread and current progress. If work stopped, determine and document
+   why.
+4. Verify a terminal success/failure/site-stop report and its evidence paths.
+5. Confirm there is no user preserve instruction and no active investigation
+   still needs the page.
+6. Write a closure receipt containing identity, result, prior agent state,
+   report/evidence paths, reason, and timestamp.
+
+At or below 10, use these normal checks and normally keep existing lanes. Above
+10, apply the same checks aggressively to eligible oldest inactive same-project
+lanes and close as many as practical to return to 10 or fewer. Never allow
+existing plus proposed lanes or job-testing tabs to exceed 20. Never close
+other-project, active, user-preserved, undocumented, or uncertain lanes.
 
 Preview first:
 
@@ -202,6 +245,10 @@ Or close explicit ports:
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\close_c3_parallel_lanes.ps1 -Ports "9401"
 ```
 
+Until the close script validates reports and writes closure receipts itself,
+the main agent must perform and record those checks before running it. Prefer
+explicit ports; use a batch selector only after verifying every matched lane.
+
 ## Launch One Isolated Lane Manually
 
 Use this only for focused manual work or when debugging the setup script itself.
@@ -213,8 +260,13 @@ $env:HUNT_C3_CHROME_REMOTE_DEBUGGING_PORT="9401"
 $env:HUNT_C3_CHROME_PROFILE="$env:LOCALAPPDATA\Hunt\ChromeC3PlaywrightParallel_${batchId}_9401"
 $env:HUNT_C3_CHROME_WINDOW_POSITION="2200,80"
 $env:HUNT_C3_CHROME_WINDOW_SIZE="1400,1000"
+$env:HUNT_C3_CHROME_START_MINIMIZED="1"
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\launch_c3_chrome.ps1
+Remove-Item Env:\HUNT_C3_CHROME_START_MINIMIZED -ErrorAction SilentlyContinue
 ```
+
+Only omit `HUNT_C3_CHROME_START_MINIMIZED` when the user explicitly asks to
+inspect the restored secondary-monitor window.
 
 Use a new profile name for every batch. Do not reuse bare per-port profiles
 such as `ChromeC3PlaywrightParallel_9401` across batches because Chrome can keep
@@ -224,8 +276,10 @@ If you intentionally need to reuse a parallel profile name, reset it first:
 
 ```powershell
 $env:HUNT_C3_CHROME_RESET_PROFILE="1"
+$env:HUNT_C3_CHROME_START_MINIMIZED="1"
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\launch_c3_chrome.ps1
 Remove-Item Env:\HUNT_C3_CHROME_RESET_PROFILE -ErrorAction SilentlyContinue
+Remove-Item Env:\HUNT_C3_CHROME_START_MINIMIZED -ErrorAction SilentlyContinue
 ```
 
 For background helpers, use the existing Codex shell or `Start-Process
@@ -234,10 +288,9 @@ terminals.
 
 ## Emergency Clean Up Stale Parallel Lanes
 
-Prefer `scripts\close_c3_parallel_lanes.ps1` for normal lane cleanup. Use this
-manual process list only when abandoning old lanes that cannot be matched by
-batch id or active ports. It targets only dedicated parallel p Chrome
-profiles, not normal Chrome:
+There is no ownership-blind emergency cleanup. Use this process list only to
+inventory dedicated parallel p Chrome candidates that cannot yet be matched by
+batch id or active ports:
 
 ```powershell
 $stale = Get-CimInstance Win32_Process |
@@ -246,11 +299,18 @@ $stale = Get-CimInstance Win32_Process |
     $_.CommandLine -match '--remote-debugging-port=9\d\d\d'
   }
 $stale | Select-Object ProcessId, CommandLine
-$stale | ForEach-Object { Stop-Process -Id $_.ProcessId -Force }
 ```
 
-Do not launch a new p Chrome lane for the same job until the old lane is
-closed. Fresh lanes must still use off-main-monitor window placement.
+Do not terminate these processes from this broad list. Resolve exact
+project/batch/port/profile ownership, agent activity, terminal documentation,
+evidence, and preserve state first. If ownership or documentation remains
+uncertain, preserve the lane and use a different port or stop before the hard
+cap. After a candidate passes the cleanup gate, preview and close it through
+`scripts\close_c3_parallel_lanes.ps1` with an explicit port.
+
+Do not launch a new p Chrome lane for the same job until the old lane is safely
+closed or a different unused port is selected. Fresh lanes must still be
+actually minimized and non-activating.
 
 ## Verify DevTools Target
 

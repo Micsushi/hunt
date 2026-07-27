@@ -5,12 +5,11 @@ agent investigates and reports. It does not change C3 code.
 
 ## Priority
 
-Fill completion beats fill correctness. The lane goal is to reach Review and
-stop before final Submit. If C3 can interact with a required field, do not stop
-only because the answer might be wrong. Use the progress-first fallback policy,
-continue, and report the questionable answer as a Review/audit issue. Treat it
-as a lane failure only when it blocks progress, creates unsupported required
-follow-up fields, or leaves validation uncleared.
+The lane goal is to reach Review and stop before final Submit, but C3 must not
+invent sensitive identity or material applicant facts to get there. A real
+neutral/non-disclosure answer may be used when available. Otherwise preserve a
+manual-review stop and report the unresolved field. Non-material defaults must
+be visible in the Review/audit handoff.
 
 ## Token Budget Policy
 
@@ -39,9 +38,12 @@ same evidence. When the budget is exhausted, preserve the lane and report
 - Do not open visible Terminal, Windows Terminal, PowerShell, cmd, or log-tail
   windows.
 - Do not move browser/helper windows onto the main monitor or steal focus.
-- Keep p Chrome in the background. Do not use browser, CDP, Playwright, or
-  script actions that bring the lane to the foreground unless the user
-  explicitly asks to inspect it.
+- Run p Chrome on its assigned named, unswitched Windows desktop and start it
+  minimized/non-activating. Chrome may restore internally on that isolated
+  desktop; it must never appear on or take input/focus from the user's active
+  desktop. A smaller shared-desktop window is not compliant.
+- Do not use browser, CDP, Playwright, or script actions that bring the lane to
+  the foreground unless the user explicitly asks to inspect it.
 - Do not use `Page.bringToFront`, Playwright `page.bringToFront()`,
   `--bring-to-front`, restore/cascade, or focus-moving actions unless the user
   explicitly asks to inspect the lane.
@@ -53,17 +55,27 @@ same evidence. When the budget is exhausted, preserve the lane and report
   remain for main-agent/user review; do not remove them yourself.
 - Do not spawn additional agents or duplicate your lane for the same job. A new
   agent set starts only with a new job set or an explicit main-agent handoff.
-- After a Review result, capture final UI, proof, console, and audit artifacts,
-  then report. Do not close p Chrome.
-- After a hard pre-Review failure, preserve your assigned p Chrome lane for the
-  user to inspect. Do not close it unless the main-agent prompt explicitly says
-  cleanup is allowed.
+- After every terminal result--Review success, Review with bad fills, hard
+  pre-Review failure, or typed external/site stop--capture final UI, proof,
+  console, and audit artifacts; finish the assigned report; then return. Do not
+  close p Chrome.
+- Capture the pinned page through read-only CDP and visually inspect its PNG
+  before accepting the C3 report. Do not use the capture path to activate,
+  restore, focus, or mutate the page.
+- A lane-agent task is not complete until the terminal result and evidence
+  paths are durable in its assigned report. If capture is partial, document
+  exactly what is missing and why instead of returning an undocumented lane.
+- Leave p Chrome open even after a fully documented success. Main-agent cleanup
+  is considered only when later testing needs capacity and must pass the
+  project/ownership/activity/evidence/preserve checks.
+- The main agent owns the preferred cap of 10 and absolute cap of 20. Do not
+  close your lane to free a slot or make room for another agent.
 - After a non-C3/site/posting stop such as Workday maintenance, dead posting,
   non-application site, CAPTCHA/MFA, external assessment, or tenant outage,
   preserve the lane for inspection and classify it separately. It is not a hard
   C3 fill failure.
 - If your assigned job is rerun in a fresh p Chrome lane, tell the main agent
-  which old lane needs cleanup.
+  which old lane needs cleanup review. Do not close it yourself.
 
 ## First Pass
 
@@ -92,8 +104,11 @@ same evidence. When the budget is exhausted, preserve the lane and report
 10. Run `scripts\c3_workday_live_smoke.js` once and let C3 run the normal full
    flow toward Review.
 11. Never click final Submit.
-12. After your report and artifacts are complete, leave p Chrome open and
-    return. The main agent owns all p Chrome cleanup.
+12. Record terminal status, report/evidence completeness, owner activity at
+    return, preserve reason, and `browser_left_open: true`.
+13. After the report write succeeds and artifacts are complete—or every missing
+    artifact is explicitly documented—leave p Chrome open and return. The main
+    agent owns all evidence-gated p Chrome cleanup when later testing starts.
 
 ## Agent Command Ledger Mode
 
@@ -276,8 +291,9 @@ Probe budget:
     follow-up. Examples: active clearance should default to `No` without
     explicit active-clearance evidence; AI consent should be treated as an
     application question, not as resume upload.
-13. Do not close the lane after a hard failure or site/posting stop unless the
-    main agent explicitly says cleanup is allowed.
+13. Do not close the lane after any result. Even an explicit cleanup request is
+    executed by the main agent after its ownership/activity/evidence checks,
+    not by the lane agent.
 
 ## Report Shape
 
@@ -290,6 +306,12 @@ agent_id:
 session_id:
 lease_id:
 status:
+owner_activity_at_return:
+report_complete:
+evidence_complete:
+missing_evidence:
+preserve_reason:
+browser_left_open: true
 error_type:
 final_url:
 review_reached:

@@ -40,6 +40,7 @@ _CONTROL_EVENT_TYPES = {
 }
 _MONITOR_EVENT_TYPES = {
     "operation.health_probe_failed",
+    "operation.progress_probe_failed",
     "operation.monitor_failed",
     "operation.artifact_capture_failed",
 }
@@ -94,6 +95,14 @@ _DYNAMIC_SELECTOR_RE = re.compile(
     r"(?i)(?::nth-(?:child|of-type)|\.css-[a-z0-9_-]{5,}|"
     r"\.(?:sc|jsx)-[a-z0-9_-]{5,})"
 )
+_REQUIRED_FIELD_VALIDATION_RE = re.compile(
+    r"\bthe field\s+(?P<label>.+?)\s+is required and must have a value\b",
+    re.I,
+)
+_EMPTY_FIELD_EVIDENCE_RE = re.compile(
+    r"\b(?:0|no)\s+items?\s+selected\b|\bselect one\b|\b(?:value\s+is\s+)?(?:empty|blank)\b",
+    re.I,
+)
 _MAX_WALK_DEPTH = 16
 _MAX_WALK_NODES = 2_048
 _MAX_EVIDENCE_EVENT_IDS = 128
@@ -101,6 +110,10 @@ _MAX_CHECKPOINT_IDS = 64
 _MAX_ARTIFACT_IDS = 64
 _MAX_VALIDATION_MESSAGES = 32
 _MAX_CREDENTIAL_PREPARATION = 4
+_MAX_OBSERVED_MESSAGES = 64
+_MAX_DIAGNOSTIC_MESSAGES = 64
+_MAX_PAGE_OBSERVATIONS = 32
+_MAX_FIELD_COMMIT_FAILURES = 32
 _MAX_REASON_LIST_ITEMS = 32
 _MAX_GENERIC_LIST_ITEMS = 512
 _MAX_DIAGNOSIS_EVENTS = 128
@@ -224,6 +237,7 @@ class C3MonitorSummary(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
 
     health_probe_failure_count: int = Field(default=0, ge=0)
+    progress_probe_failure_count: int = Field(default=0, ge=0)
     monitor_failure_count: int = Field(default=0, ge=0)
     artifact_capture_failure_count: int = Field(default=0, ge=0)
     cancel_failure_count: int = Field(default=0, ge=0)
@@ -237,6 +251,83 @@ class C3MonitorSummary(BaseModel):
         return _normalize_code(value)
 
 
+class C3PageObservation(BaseModel):
+    """Value-free page state retained from a browser observation."""
+
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    event_id: str = ""
+    href: str = ""
+    title: str = ""
+    page_kind: str = ""
+    phase: str = ""
+    auth_state: str = ""
+    auth_ui_state: str = ""
+    current_step: str = ""
+    document_ready_state: str = ""
+    frame_id: int | None = None
+
+    @field_validator(
+        "event_id",
+        "href",
+        "title",
+        "page_kind",
+        "phase",
+        "auth_state",
+        "auth_ui_state",
+        "current_step",
+        "document_ready_state",
+        mode="before",
+    )
+    @classmethod
+    def _sanitize_text(cls, value: Any) -> Any:
+        return _safe_text(value, limit=500) if isinstance(value, str) else value
+
+
+class C3FieldCommitFailure(BaseModel):
+    """Value-free proof that a field action did not commit."""
+
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    event_id: str = ""
+    field_id: str = ""
+    label: str = ""
+    ui_model: str = ""
+    action: str = ""
+    reason_code: str = ""
+    committed: bool = False
+    required: bool | None = None
+    option_count: int | None = Field(default=None, ge=0)
+    selected_value_present: bool | None = None
+    attempted_option: str = ""
+    action_method: str = ""
+    action_result: str = ""
+    commit_verified: bool | None = None
+    selected_pill_present: bool | None = None
+    backing_value_present: bool | None = None
+    validation_visible: bool | None = None
+
+    @field_validator(
+        "event_id",
+        "field_id",
+        "label",
+        "ui_model",
+        "reason_code",
+        "attempted_option",
+        "action_method",
+        "action_result",
+        mode="before",
+    )
+    @classmethod
+    def _sanitize_text(cls, value: Any) -> Any:
+        return _safe_text(value, limit=300) if isinstance(value, str) else value
+
+    @field_validator("action", mode="before")
+    @classmethod
+    def _sanitize_action(cls, value: Any) -> Any:
+        return _safe_action(value) if isinstance(value, str) else value
+
+
 class C3FailureContext(BaseModel):
     """Compact evidence packet. Append-only events remain its source of truth."""
 
@@ -246,12 +337,21 @@ class C3FailureContext(BaseModel):
     operation_id: str = Field(min_length=1)
     failure_scope: FailureScope = "unknown"
     root_cause_code: str = "unknown_failure"
+    reported_cause_code: str = ""
+    cause_asserted: bool = False
     summary: str = "Failure cause could not be established from retained evidence."
     causal_element: C3ElementEvidence | None = None
     last_touched_element: C3ElementEvidence | None = None
     exposing_action: C3ElementEvidence | None = None
     expected_state: str = ""
     observed_state: str = ""
+    observed_messages: list[str] = Field(default_factory=list)
+    diagnostic_messages: list[str] = Field(default_factory=list)
+    page_observations: list[C3PageObservation] = Field(default_factory=list)
+    field_commit_failures: list[C3FieldCommitFailure] = Field(default_factory=list)
+    timeout_evidence: dict[str, Any] = Field(default_factory=dict)
+    auth_action_boundary: dict[str, Any] = Field(default_factory=dict)
+    evidence_conflicts: list[str] = Field(default_factory=list)
     validation_messages: list[str] = Field(default_factory=list)
     credential_preparation: list[C3CredentialPreparationEvidence] = Field(
         default_factory=list, max_length=_MAX_CREDENTIAL_PREPARATION
@@ -262,6 +362,7 @@ class C3FailureContext(BaseModel):
     ruled_out: list[str] = Field(default_factory=list)
     confidence: Confidence = "unknown"
     root_cause_unknown: bool = True
+    mechanism_unknown: bool = False
     missing_evidence: list[str] = Field(default_factory=list)
     monitor_summary: C3MonitorSummary = Field(default_factory=C3MonitorSummary)
     artifact_status: ArtifactStatus = "idle"
@@ -281,6 +382,11 @@ class C3FailureContext(BaseModel):
         data = dict(value)
         caps = {
             "validation_messages": _MAX_VALIDATION_MESSAGES,
+            "observed_messages": _MAX_OBSERVED_MESSAGES,
+            "diagnostic_messages": _MAX_DIAGNOSTIC_MESSAGES,
+            "page_observations": _MAX_PAGE_OBSERVATIONS,
+            "field_commit_failures": _MAX_FIELD_COMMIT_FAILURES,
+            "evidence_conflicts": _MAX_REASON_LIST_ITEMS,
             "credential_preparation": _MAX_CREDENTIAL_PREPARATION,
             "evidence_event_ids": _MAX_EVIDENCE_EVENT_IDS,
             "checkpoint_ids": _MAX_CHECKPOINT_IDS,
@@ -307,7 +413,7 @@ class C3FailureContext(BaseModel):
     def _sanitize_identifier_fields(cls, value: Any) -> Any:
         return _safe_identifier(value) if isinstance(value, str) else value
 
-    @field_validator("root_cause_code", mode="before")
+    @field_validator("root_cause_code", "reported_cause_code", mode="before")
     @classmethod
     def _sanitize_root_cause_code(cls, value: Any) -> Any:
         if not isinstance(value, str):
@@ -338,6 +444,18 @@ class C3FailureContext(BaseModel):
             collector.add(_safe_text(item, limit=300))
         return collector.values
 
+    @field_validator("observed_messages", "diagnostic_messages", mode="before")
+    @classmethod
+    def _redact_observed_messages(cls, value: Any) -> Any:
+        if not isinstance(value, list):
+            return value
+        collector = _OrderedCollector(_MAX_OBSERVED_MESSAGES)
+        for item in value:
+            if not isinstance(item, str):
+                return value
+            collector.add(_safe_text(item, limit=500))
+        return collector.values
+
     @field_validator("evidence_event_ids", "checkpoint_ids", "artifact_ids", mode="before")
     @classmethod
     def _sanitize_identifier_lists(cls, value: Any, info: ValidationInfo) -> Any:
@@ -355,7 +473,7 @@ class C3FailureContext(BaseModel):
             collector.add(_safe_identifier(item))
         return collector.values
 
-    @field_validator("ruled_out", "missing_evidence", mode="before")
+    @field_validator("ruled_out", "missing_evidence", "evidence_conflicts", mode="before")
     @classmethod
     def _sanitize_reason_lists(cls, value: Any) -> Any:
         if not isinstance(value, list):
@@ -369,10 +487,11 @@ class C3FailureContext(BaseModel):
 
     @model_validator(mode="after")
     def _enforce_causal_and_confidence_invariants(self):
+        evidence_code = self.root_cause_code if self.cause_asserted else self.reported_cause_code
         if (
             self.failure_scope in _NON_CAUSAL_ELEMENT_SCOPES
             and self.causal_element
-            and self.root_cause_code not in {"auth_signup_signin_loop", *_AUTH_CYCLE_CODES}
+            and evidence_code not in {"auth_signup_signin_loop", *_AUTH_CYCLE_CODES}
         ):
             raise ValueError(f"{self.failure_scope} failures cannot name a causal UI element")
         if self.confidence in {"weak", "unknown"} and not self.root_cause_unknown:
@@ -420,6 +539,609 @@ def _credential_preparation_from_event(
     return prepared, truncated
 
 
+def _observed_messages_from_events(events: list[dict[str, Any]]) -> tuple[list[str], bool]:
+    collector = _OrderedCollector(_MAX_OBSERVED_MESSAGES)
+    visible_message_keys = {
+        "alert",
+        "alerts",
+        "visible_messages",
+        "visible_validation_errors",
+        "validation_messages",
+        "body_text_excerpt",
+    }
+    for event in events:
+        if _event_type(event).lower() in {
+            "operation.result_ignored_after_cancel",
+            "operation.result_ignored_after_deadline",
+        }:
+            continue
+        for key, current in _bounded_walk(_payload(event)):
+            if key in {
+                "direct_evidence",
+                "directevidence",
+                "direct_observation",
+                "directobservation",
+            } and isinstance(current, Mapping):
+                for direct_key in (
+                    "messages",
+                    "visible_messages",
+                    "alerts",
+                    "body_text_excerpt",
+                ):
+                    collector.extend(_message_text_values(current.get(direct_key)))
+            if key not in visible_message_keys:
+                continue
+            collector.extend(_message_text_values(current))
+    return collector.values, collector.truncated
+
+
+def _message_text_values(value: Any) -> list[str]:
+    values = value if isinstance(value, (list, tuple)) else [value]
+    result: list[str] = []
+    for candidate in values:
+        if isinstance(candidate, Mapping):
+            candidate = (
+                candidate.get("message")
+                or candidate.get("text")
+                or candidate.get("body_text_excerpt")
+            )
+        if isinstance(candidate, str):
+            result.append(_safe_text(candidate, limit=500))
+    return result
+
+
+def _diagnostic_messages_from_events(
+    events: list[dict[str, Any]],
+    *,
+    excluded_visible_messages: Iterable[str] = (),
+) -> tuple[list[str], bool]:
+    collector = _OrderedCollector(_MAX_DIAGNOSTIC_MESSAGES)
+    excluded = set(excluded_visible_messages)
+    diagnostic_keys = {
+        "reason",
+        "reason_code",
+        "reasoncode",
+        "error_code",
+        "errorcode",
+        "message",
+        "messages",
+    }
+    for event in events:
+        event_type = _event_type(event).lower()
+        payload = _payload(event)
+        phase = _normalize_code(_first_value(payload, {"phase", "substep", "stage"}))
+        if not (
+            event_type in {*_MONITOR_EVENT_TYPES, *_CONTROL_EVENT_TYPES}
+            or event_type in _TERMINAL_EVENT_TYPES
+            or any(
+                token in event_type
+                for token in ("heartbeat", "probe", "monitor", "bridge", "transport")
+            )
+            or any(
+                token in phase for token in ("heartbeat", "probe", "monitor", "bridge", "transport")
+            )
+        ):
+            continue
+        for key, current in _bounded_walk(payload):
+            if key not in diagnostic_keys:
+                continue
+            collector.extend(
+                message for message in _message_text_values(current) if message not in excluded
+            )
+    return collector.values, collector.truncated
+
+
+def _page_observations_from_events(
+    events: list[dict[str, Any]],
+) -> tuple[list[dict[str, Any]], bool]:
+    observations: list[dict[str, Any]] = []
+    seen: set[tuple[Any, ...]] = set()
+    truncated = False
+    for event in events:
+        event_id = _event_id(event)
+        if _event_type(event).lower() in {
+            "operation.result_ignored_after_cancel",
+            "operation.result_ignored_after_deadline",
+        }:
+            continue
+        for _, current in _bounded_walk(_payload(event)):
+            if not isinstance(current, Mapping):
+                continue
+            normalized = {_snake_key(key): value for key, value in current.items()}
+            href = normalized.get("href") or normalized.get("url") or ""
+            page_kind = normalized.get("page_kind") or ""
+            phase = normalized.get("phase") or ""
+            auth_state = normalized.get("auth_state") or ""
+            auth_ui_state = normalized.get("auth_ui_state") or ""
+            document_ready_state = normalized.get("document_ready_state") or ""
+            current_step_value = normalized.get("current_step")
+            if isinstance(current_step_value, Mapping):
+                current_step = (
+                    current_step_value.get("title") or current_step_value.get("label") or ""
+                )
+            else:
+                current_step = current_step_value or normalized.get("current_step_title") or ""
+            title = normalized.get("title") or normalized.get("page_title") or ""
+            # Action/result metadata often carries authState or phase without
+            # being a browser page observation. Require page identity so an
+            # ignored late action cannot overwrite terminal browser truth.
+            if not href and not (title and document_ready_state):
+                continue
+            if not any(
+                (
+                    href,
+                    page_kind,
+                    phase,
+                    auth_state,
+                    auth_ui_state,
+                    current_step,
+                    document_ready_state,
+                )
+            ):
+                continue
+            frame_id = normalized.get("frame_id")
+            try:
+                frame_id = int(frame_id) if frame_id is not None else None
+            except (TypeError, ValueError):
+                frame_id = None
+            observation = {
+                "event_id": event_id,
+                "href": _safe_text(href, limit=500),
+                "title": _safe_text(title, limit=300),
+                "page_kind": _normalize_code(page_kind),
+                "phase": _normalize_code(phase),
+                "auth_state": _normalize_code(auth_state),
+                "auth_ui_state": _normalize_code(auth_ui_state),
+                "current_step": _safe_text(current_step, limit=300),
+                "document_ready_state": _normalize_code(document_ready_state),
+                "frame_id": frame_id,
+            }
+            identity = tuple(observation.values())
+            if identity in seen:
+                continue
+            seen.add(identity)
+            if len(observations) >= _MAX_PAGE_OBSERVATIONS:
+                truncated = True
+                continue
+            observations.append(observation)
+    return observations, truncated
+
+
+_DRIVER_COMMIT_FAILURE_REASONS = {
+    "commit_not_verified",
+    "no_matching_option",
+    "option_not_committed",
+    "workday_commit_not_verified",
+    "workday_popup_options_missing",
+    "workday_source_options_unavailable",
+    "workday_validation_not_cleared",
+}
+
+
+def _normalized_mapping(value: Any) -> dict[str, Any]:
+    if not isinstance(value, Mapping):
+        return {}
+    return {_snake_key(key): current for key, current in value.items()}
+
+
+def _driver_failure_outcomes(payload: Mapping[str, Any]) -> list[Mapping[str, Any]]:
+    outcomes: list[Mapping[str, Any]] = []
+    seen: set[int] = set()
+    for key, current in _bounded_walk(payload):
+        if key != "driver_evidence" or not isinstance(current, Mapping):
+            continue
+        driver = _normalized_mapping(current)
+        causal = driver.get("causal_field")
+        candidates: list[Any] = [causal] if isinstance(causal, Mapping) else []
+        recent = driver.get("recent_field_outcomes")
+        if isinstance(recent, (list, tuple)):
+            candidates.extend(recent[-12:])
+        for candidate in candidates:
+            if not isinstance(candidate, Mapping) or id(candidate) in seen:
+                continue
+            seen.add(id(candidate))
+            outcomes.append(candidate)
+    return outcomes
+
+
+def _driver_field_commit_failure(
+    event: Mapping[str, Any],
+    outcome: Mapping[str, Any],
+) -> dict[str, Any] | None:
+    normalized = _normalized_mapping(outcome)
+    field = _normalized_mapping(normalized.get("field"))
+    action = _normalized_mapping(normalized.get("action"))
+    verification = _normalized_mapping(normalized.get("commit_verification"))
+    committed_state = _normalized_mapping(normalized.get("last_committed_state"))
+    intended_option = _normalized_mapping(normalized.get("intended_option"))
+
+    action_result = _normalize_code(action.get("result"))
+    action_reason = _normalize_code(action.get("reason"))
+    verification_reason = _normalize_code(verification.get("reason"))
+    committed_reason = _normalize_code(committed_state.get("reason"))
+    explicitly_succeeded = (
+        action_result == "committed"
+        or verification.get("verified") is True
+        or committed_state.get("committed") is True
+    )
+    explicitly_failed = (
+        action_result == "failed"
+        or action_reason in _DRIVER_COMMIT_FAILURE_REASONS
+        or verification_reason in _DRIVER_COMMIT_FAILURE_REASONS
+        or committed_reason in _DRIVER_COMMIT_FAILURE_REASONS
+    )
+    if explicitly_succeeded or not explicitly_failed:
+        return None
+
+    field_id = _safe_identifier(field.get("id") or field.get("field_id") or "")
+    label = _safe_text(field.get("label") or "", limit=300)
+    ui_model = _safe_identifier(field.get("type") or field.get("ui_model") or "")
+    if not field_id and not label:
+        return None
+    reason_code = (
+        action_reason
+        if action_result == "failed" and action_reason
+        else verification_reason or committed_reason or action_reason or "field_action_failed"
+    )
+    selected_present: bool | None = None
+    if verification.get("verified") is False or committed_state.get("committed") is False:
+        selected_present = False
+    elif verification.get("verified") is True or committed_state.get("committed") is True:
+        selected_present = True
+    elif isinstance(committed_state.get("empty"), bool):
+        selected_present = not committed_state["empty"]
+    elif isinstance(verification.get("backing_value_present"), bool):
+        selected_present = verification["backing_value_present"]
+    return {
+        "event_id": _event_id(event),
+        "field_id": field_id,
+        "label": label,
+        "ui_model": ui_model,
+        "action": ("select" if ui_model in {"combobox", "button_listbox", "select"} else "type"),
+        "reason_code": reason_code,
+        "committed": False,
+        "required": None,
+        "option_count": None,
+        "selected_value_present": selected_present,
+        "attempted_option": _safe_text(intended_option.get("label") or "", limit=160),
+        "action_method": _normalize_code(action.get("method")),
+        "action_result": action_result,
+        "commit_verified": (
+            verification.get("verified") if isinstance(verification.get("verified"), bool) else None
+        ),
+        "selected_pill_present": (
+            verification.get("selected_pill_present")
+            if isinstance(verification.get("selected_pill_present"), bool)
+            else None
+        ),
+        "backing_value_present": (
+            verification.get("backing_value_present")
+            if isinstance(verification.get("backing_value_present"), bool)
+            else None
+        ),
+        "validation_visible": (
+            verification.get("validation_visible")
+            if isinstance(verification.get("validation_visible"), bool)
+            else committed_state.get("validation_visible")
+            if isinstance(committed_state.get("validation_visible"), bool)
+            else None
+        ),
+    }
+
+
+def _field_commit_failures_from_events(
+    events: list[dict[str, Any]],
+) -> tuple[list[dict[str, Any]], bool]:
+    failures: list[dict[str, Any]] = []
+    seen: set[tuple[str, str, str]] = set()
+    truncated = False
+    for event in events:
+        event_type = _event_type(event).lower()
+        payload = _payload(event)
+        driver_failures = [
+            failure
+            for outcome in _driver_failure_outcomes(payload)
+            if (failure := _driver_field_commit_failure(event, outcome)) is not None
+        ]
+        if driver_failures:
+            for failure in driver_failures:
+                identity = (
+                    failure["field_id"],
+                    failure["reason_code"],
+                    failure["label"],
+                )
+                if identity in seen:
+                    continue
+                seen.add(identity)
+                if len(failures) >= _MAX_FIELD_COMMIT_FAILURES:
+                    truncated = True
+                    continue
+                failures.append(failure)
+            continue
+        is_field_failure_event = (
+            "field.action.failed" in event_type
+            or "field.commit.failed" in event_type
+            or "commit_failed" in event_type
+        )
+        if not is_field_failure_event:
+            continue
+        reason_code = _normalize_code(
+            _first_value(payload, {"reason_code", "reasoncode", "reason"})
+        )
+        element = _first_mapping(payload, {"causal_element", "causalelement", "element"}) or {}
+        field_id = _safe_identifier(
+            _first_value(payload, {"field_id", "fieldid"})
+            or element.get("field_id")
+            or element.get("fieldId")
+            or ""
+        )
+        label = _safe_text(
+            _first_value(payload, {"label", "descriptor"}) or element.get("label") or "",
+            limit=300,
+        )
+        if not field_id and not label:
+            continue
+        ui_model = _safe_identifier(
+            _first_value(payload, {"ui_model", "uimodel", "kind"})
+            or element.get("ui_model")
+            or element.get("uiModel")
+            or ""
+        )
+        identity = (field_id, reason_code, label)
+        if identity in seen:
+            continue
+        seen.add(identity)
+        if len(failures) >= _MAX_FIELD_COMMIT_FAILURES:
+            truncated = True
+            continue
+        option_count_value = _first_value(payload, {"option_count", "optioncount"})
+        try:
+            option_count = (
+                max(0, int(option_count_value)) if option_count_value is not None else None
+            )
+        except (TypeError, ValueError):
+            option_count = None
+        selected_present = _first_value(
+            payload,
+            {
+                "selected_value_present",
+                "selectedvaluepresent",
+                "committed_value_present",
+                "committedvaluepresent",
+            },
+        )
+        failures.append(
+            {
+                "event_id": _event_id(event),
+                "field_id": field_id,
+                "label": label,
+                "ui_model": ui_model,
+                "action": _safe_action(
+                    _first_value(payload, {"action"}) or element.get("action") or ""
+                ),
+                "reason_code": reason_code or "field_action_failed",
+                "committed": False,
+                "required": (
+                    bool(_first_value(payload, {"required"}))
+                    if _first_value(payload, {"required"}) is not None
+                    else None
+                ),
+                "option_count": option_count,
+                "selected_value_present": (
+                    bool(selected_present) if selected_present is not None else None
+                ),
+                "attempted_option": "",
+                "action_method": "",
+                "action_result": "",
+                "commit_verified": None,
+                "selected_pill_present": None,
+                "backing_value_present": None,
+                "validation_visible": None,
+            }
+        )
+    return failures, truncated
+
+
+def _field_commit_failure_matches_element(
+    failure: Mapping[str, Any],
+    element: Any,
+) -> bool:
+    raw_element = _model_dump_or_none(element) or {}
+    failure_id = _safe_identifier(failure.get("field_id") or "")
+    element_id = _safe_identifier(
+        raw_element.get("field_id")
+        or raw_element.get("element_id")
+        or raw_element.get("automation_id")
+        or ""
+    )
+    if failure_id and element_id and failure_id == element_id:
+        return True
+    failure_label = re.sub(
+        r"[^a-z0-9]+",
+        " ",
+        str(failure.get("label") or "").lower(),
+    ).strip()
+    element_label = re.sub(
+        r"[^a-z0-9]+",
+        " ",
+        str(raw_element.get("label") or "").lower(),
+    ).strip()
+    return bool(
+        failure_label
+        and element_label
+        and (
+            failure_label == element_label
+            or failure_label in element_label
+            or element_label in failure_label
+        )
+    )
+
+
+def _known_cause_has_direct_proof(
+    code: str,
+    events: list[dict[str, Any]],
+    observed_messages: list[str],
+    page_observations: list[dict[str, Any]],
+) -> bool:
+    combined = " ".join(observed_messages)
+    page_kinds = {item.get("page_kind") for item in page_observations}
+    if code == "credential_rejected":
+        return bool(
+            re.search(
+                r"wrong email address or password|account might be locked|invalid "
+                r"(?:email address|username) or password|incorrect email or password",
+                combined,
+                re.I,
+            )
+            or "credential_rejected" in page_kinds
+        )
+    if code == "maintenance":
+        return bool(
+            re.search(
+                r"(?:undergoing|scheduled)\s+maintenance|service unavailable|"
+                r"temporarily unavailable|down for maintenance",
+                combined,
+                re.I,
+            )
+            or "maintenance" in page_kinds
+        )
+    if code == "job_unavailable":
+        return bool(
+            re.search(
+                r"page you are looking for|job is no longer available|job posting "
+                r"(?:is )?(?:closed|expired)|position has been filled",
+                combined,
+                re.I,
+            )
+            or "job_unavailable" in page_kinds
+        )
+    if code == "auth_captcha_gate":
+        if "captcha_present" in page_kinds:
+            return True
+        for event in events:
+            proof = _first_value(
+                _payload(event),
+                {
+                    "captcha_challenge_present",
+                    "captchachallengepresent",
+                    "captcha_present",
+                    "captchapresent",
+                },
+            )
+            if proof is True:
+                return True
+        return False
+    return code == "unclassified_failure"
+
+
+def required_field_label_from_validation(value: Any) -> str:
+    """Return only a field name explicitly stated by a required-value validation."""
+
+    if not isinstance(value, str):
+        return ""
+    match = _REQUIRED_FIELD_VALIDATION_RE.search(value)
+    return _safe_text(match.group("label"), limit=300).strip(" *:-") if match else ""
+
+
+def required_field_text_is_empty(label: str, value: Any) -> bool:
+    """Require same-field text plus an explicit empty/zero-selection marker."""
+
+    return bool(_text_names_required_field(label, value) and _EMPTY_FIELD_EVIDENCE_RE.search(value))
+
+
+def _text_names_required_field(label: str, value: Any) -> bool:
+    if not label or not isinstance(value, str):
+        return False
+    normalized_label = re.sub(r"[^a-z0-9]+", " ", label.lower()).strip()
+    normalized_value = re.sub(r"[^a-z0-9]+", " ", value.lower()).strip()
+    return bool(normalized_label and normalized_label in normalized_value)
+
+
+def _direct_required_field_blocker(
+    authoritative: dict[str, Any] | None,
+    cause_event: dict[str, Any] | None,
+    events: list[dict[str, Any]],
+) -> tuple[str, C3ElementEvidence, dict[str, Any], str] | None:
+    validation_messages: list[str] = []
+    seen_sources: set[int] = set()
+    for event in (cause_event, authoritative):
+        if event is None or id(event) in seen_sources:
+            continue
+        seen_sources.add(id(event))
+        validation_messages.extend(
+            _safe_text_list(
+                _find_values(
+                    _payload(event),
+                    {
+                        "validation_messages",
+                        "validationmessages",
+                        "visible_validation_errors",
+                        "visiblevalidationerrors",
+                    },
+                )
+            )
+        )
+    named_validations = [
+        (required_field_label_from_validation(message), message) for message in validation_messages
+    ]
+    named_validations = [(label, message) for label, message in named_validations if label]
+    if not named_validations:
+        return None
+
+    terminal_seq = _event_seq(authoritative) if authoritative else None
+    for event in reversed(events):
+        if terminal_seq is not None and _event_seq(event) > terminal_seq:
+            continue
+        payload = _payload(event)
+        raw_candidates = [
+            value
+            for value in _find_values(
+                payload,
+                {
+                    "field",
+                    "element",
+                    "causal_element",
+                    "causalelement",
+                },
+            )
+            if isinstance(value, Mapping)
+        ]
+        for raw in raw_candidates:
+            field_text = " ".join(
+                str(raw.get(key) or "")
+                for key in (
+                    "label",
+                    "text",
+                    "value",
+                    "raw_value",
+                    "rawValue",
+                )
+            )
+            for label, message in named_validations:
+                explicit_empty = required_field_text_is_empty(label, field_text)
+                selected_present = _first_value(
+                    raw,
+                    {
+                        "selected_value_present",
+                        "selectedvaluepresent",
+                        "committed_value_present",
+                        "committedvaluepresent",
+                    },
+                )
+                explicit_empty = explicit_empty or (
+                    selected_present is False and _text_names_required_field(label, field_text)
+                )
+                if not explicit_empty:
+                    continue
+                element_data = dict(raw)
+                element_data["label"] = label
+                element = _element(element_data, payload)
+                if element is None:
+                    element = C3ElementEvidence(label=label)
+                return label, element, event, _safe_text(message, limit=300)
+    return None
+
+
 def build_failure_context(
     operation: Any,
     events: Iterable[Any],
@@ -431,7 +1153,28 @@ def build_failure_context(
 
     traversal_report = _TraversalReport()
     operation_data = _as_mapping(operation)
-    normalized_events = _normalize_events(events, traversal_report)
+    normalized_events = [
+        event
+        for event in _normalize_events(events, traversal_report)
+        if _event_type(event).lower()
+        not in {
+            "operation.result_ignored_after_cancel",
+            "operation.result_ignored_after_deadline",
+        }
+    ]
+    observed_messages, observed_messages_truncated = _observed_messages_from_events(
+        normalized_events
+    )
+    diagnostic_messages, diagnostic_messages_truncated = _diagnostic_messages_from_events(
+        normalized_events,
+        excluded_visible_messages=observed_messages,
+    )
+    page_observations, page_observations_truncated = _page_observations_from_events(
+        normalized_events
+    )
+    field_commit_failures, field_commit_failures_truncated = _field_commit_failures_from_events(
+        normalized_events
+    )
     materialized_artifact_ids, artifact_input_truncated = _materialize_artifact_ids(artifact_ids)
     for event in normalized_events:
         for _ in _bounded_walk(_payload(event), traversal_report):
@@ -441,6 +1184,30 @@ def build_failure_context(
         authoritative
     )
     cause_code, cause_event = _select_cause(authoritative, normalized_events)
+    reported_cause_code = cause_code
+    required_field_blocker = (
+        _direct_required_field_blocker(authoritative, cause_event, normalized_events)
+        if cause_code in {"visible_validation_errors", "visible_validation_errors_after_next"}
+        else None
+    )
+    diagnostic_cause_code = "required_field_uncommitted" if required_field_blocker else cause_code
+    cause_asserted = bool(required_field_blocker) or (
+        cause_code != "unclassified_failure"
+        and _known_cause_has_direct_proof(
+            cause_code,
+            normalized_events,
+            observed_messages,
+            page_observations,
+        )
+    )
+    effective_cause_code = diagnostic_cause_code if cause_asserted else "unclassified_failure"
+    evidence_conflicts: list[str] = []
+    operation_state = _normalize_code(operation_data.get("state"))
+    page_kinds = {item.get("page_kind") for item in page_observations}
+    if operation_state in {"failed", "cancelled", "orphaned"} and "review" in page_kinds:
+        evidence_conflicts.append("terminal_failure_with_review_evidence")
+    if not cause_asserted and reported_cause_code != "unclassified_failure":
+        evidence_conflicts.append(f"unasserted_reported_cause_{reported_cause_code}")
     auth_transition_history, raw_auth_transition_count, auth_history_input_clipped = (
         _auth_transition_history(authoritative)
     )
@@ -453,21 +1220,24 @@ def build_failure_context(
         explicit_auth_transition_count is not None
         and explicit_auth_transition_count > len(auth_transition_history)
     )
-    scope = _classify_scope(cause_code)
+    scope = _classify_scope(diagnostic_cause_code)
     if cause_code in _EVIDENCE_GATED_AUTH_CYCLE_CODES and auth_transition_history:
         scope = "navigation"
 
-    causal_element, causal_event = _find_causal_element(
-        cause_code,
-        scope,
-        authoritative,
-        normalized_events,
-        cause_event,
-        auth_transition_history,
-    )
+    if required_field_blocker:
+        _, causal_element, causal_event, _ = required_field_blocker
+    else:
+        causal_element, causal_event = _find_causal_element(
+            diagnostic_cause_code,
+            scope,
+            authoritative,
+            normalized_events,
+            cause_event,
+            auth_transition_history,
+        )
     last_touched, last_event = _find_last_touched(normalized_events, authoritative)
     exposing_action, exposing_event, exposing_rejection_reason = _find_exposing_action(
-        cause_code, normalized_events, authoritative
+        reported_cause_code, normalized_events, authoritative
     )
     if cause_code in _AUTH_CYCLE_CODES and auth_transition_history:
         cycle_identity = _last_auth_cycle_candidate(
@@ -502,24 +1272,51 @@ def build_failure_context(
     ):
         causal_element = None
         causal_event = None
+    commit_mechanism_known = bool(
+        required_field_blocker
+        and causal_element
+        and any(
+            _field_commit_failure_matches_element(failure, causal_element)
+            for failure in field_commit_failures
+        )
+    )
 
     expected_state, observed_state = _states_for(
-        cause_code,
+        diagnostic_cause_code,
         authoritative,
         cause_event,
         exposing_rejection_reason,
         auth_transition_history,
         auth_transition_total,
     )
+    if required_field_blocker:
+        required_label = required_field_blocker[0]
+        expected_state = f'Required field "{required_label}" contains a committed value.'
+        observed_state = (
+            f'Required field "{required_label}" remained empty, and the site '
+            "displayed a required-value validation error."
+        )
+    if cause_code == "auth_captcha_gate" and not cause_asserted:
+        expected_state = "A visible structural security challenge is directly observed."
+        observed_state = (
+            "No direct visible CAPTCHA proof was retained; only an authentication "
+            "candidate or gate label was reported."
+        )
+        if exposing_rejection_reason:
+            observed_state += f" Candidate rejection: {exposing_rejection_reason}."
     confidence, root_unknown = _confidence_for(
-        cause_code,
+        diagnostic_cause_code,
         scope,
         causal_element,
         authoritative,
         auth_transition_history,
     )
+    if cause_code == "auth_captcha_gate" and not cause_asserted:
+        confidence = "unknown"
+    if not cause_asserted:
+        root_unknown = True
     missing_evidence = _missing_evidence_for(
-        cause_code,
+        diagnostic_cause_code,
         scope,
         causal_element,
         confidence,
@@ -527,8 +1324,12 @@ def build_failure_context(
         exposing_rejection_reason,
         auth_transition_history,
     )
+    if required_field_blocker:
+        missing_evidence = [] if commit_mechanism_known else ["field_commit_evidence"]
+    if cause_code == "auth_captcha_gate":
+        missing_evidence = [] if cause_asserted else ["direct_captcha_challenge"]
     live_inspection_required = _live_inspection_required(
-        cause_code,
+        diagnostic_cause_code,
         scope,
         confidence,
         root_unknown,
@@ -597,26 +1398,50 @@ def build_failure_context(
     )
     operation_id = _safe_identifier(operation_data.get("operation_id") or "unknown-operation")
     diagnosis_suffix = _safe_identifier(authoritative_id or str(authoritative_seq or "none"))
+    timeout_evidence = _first_mapping(
+        _payload(authoritative or {}),
+        {"timeout_evidence", "timeoutevidence"},
+    )
+    auth_action_boundary = _auth_action_boundary(authoritative)
+    summary = _summary_for(effective_cause_code, scope)
+    if effective_cause_code == "required_field_uncommitted" and commit_mechanism_known:
+        summary = (
+            "A directly observed required field remained empty and blocked page advancement; "
+            "C3 retained the failed field-commit mechanism."
+        )
 
     raw = {
         "diagnosis_id": f"diagnosis-{operation_id}-{diagnosis_suffix}",
         "operation_id": operation_id,
         "failure_scope": scope,
-        "root_cause_code": cause_code,
-        "summary": _summary_for(cause_code, scope),
+        "root_cause_code": effective_cause_code,
+        "reported_cause_code": reported_cause_code,
+        "cause_asserted": cause_asserted,
+        "summary": summary,
         "causal_element": _model_dump_or_none(causal_element),
         "last_touched_element": _model_dump_or_none(last_touched),
         "exposing_action": _model_dump_or_none(exposing_action),
         "expected_state": expected_state,
         "observed_state": observed_state,
+        "observed_messages": observed_messages,
+        "diagnostic_messages": diagnostic_messages,
+        "page_observations": page_observations,
+        "field_commit_failures": field_commit_failures,
+        "timeout_evidence": dict(timeout_evidence or {}),
+        "auth_action_boundary": auth_action_boundary,
+        "evidence_conflicts": evidence_conflicts,
         "validation_messages": validation_messages.values,
         "credential_preparation": credential_preparation,
         "evidence_event_ids": evidence_event_ids.values,
         "checkpoint_ids": checkpoint_ids.values,
         "artifact_ids": all_artifact_ids,
-        "ruled_out": _ruled_out_for(cause_code),
+        "ruled_out": _ruled_out_for(diagnostic_cause_code),
         "confidence": confidence,
         "root_cause_unknown": root_unknown,
+        "mechanism_unknown": bool(
+            (required_field_blocker and not commit_mechanism_known)
+            or (effective_cause_code == "unclassified_failure" and not cause_asserted)
+        ),
         "missing_evidence": missing_evidence,
         "monitor_summary": monitor_summary.model_dump(mode="python"),
         "artifact_status": artifact_status,
@@ -626,6 +1451,10 @@ def build_failure_context(
             or evidence_event_ids.truncated
             or checkpoint_ids.truncated
             or validation_messages.truncated
+            or observed_messages_truncated
+            or diagnostic_messages_truncated
+            or page_observations_truncated
+            or field_commit_failures_truncated
             or credential_preparation_truncated
             or artifact_ids_truncated
             or artifact_input_truncated
@@ -635,7 +1464,7 @@ def build_failure_context(
         "authoritative_event_type": authoritative_type,
         "source_event_sequence": authoritative_seq,
         "live_inspection_required": live_inspection_required,
-        "next_safe_action": _next_safe_action_for(cause_code, scope),
+        "next_safe_action": _next_safe_action_for(effective_cause_code, scope),
         "generated_at": generated_at,
     }
     safe, _ = redact_payload(raw)
@@ -778,6 +1607,17 @@ def _normalized_nested_field_payload(value: Mapping[str, Any]) -> dict[str, Any]
         "field_id": field_id,
         "action": action,
         "committed": False,
+        "required": _first_value(value, {"required"}),
+        "option_count": _first_value(value, {"option_count", "optioncount"}),
+        "selected_value_present": _first_value(
+            value,
+            {
+                "selected_value_present",
+                "selectedvaluepresent",
+                "committed_value_present",
+                "committedvaluepresent",
+            },
+        ),
         "causal_element": element,
         "expected_state": "Field action completes with a verified commit.",
         "observed_state": f"Field action ended without commit proof ({reason_code}).",
@@ -975,6 +1815,7 @@ def _classify_scope(code: str) -> FailureScope:
     ):
         return "setup"
     if code in {
+        "credential_rejected",
         "auth_create_account_to_signin_sink",
         "auth_captcha_gate",
         "auth_primary_action_not_found",
@@ -985,7 +1826,13 @@ def _classify_scope(code: str) -> FailureScope:
         "workday_runtime_not_ready",
     } or any(token in code for token in ("navigation", "redirect", "signin_sink", "load_failed")):
         return "navigation"
-    if code in {"visible_validation_errors", "visible_validation_errors_after_next"}:
+    if code in {"maintenance", "job_unavailable"}:
+        return "external_server"
+    if code in {
+        "required_field_uncommitted",
+        "visible_validation_errors",
+        "visible_validation_errors_after_next",
+    }:
         return "ui_element"
     if any(token in code for token in ("tenant_server", "external_server", "http_4", "http_5")):
         return "external_server"
@@ -1321,6 +2168,202 @@ def _auth_transition_count(authoritative: Mapping[str, Any] | None) -> int | Non
     return None
 
 
+def _auth_action_boundary(
+    authoritative: Mapping[str, Any] | None,
+) -> dict[str, Any]:
+    if not authoritative:
+        return {}
+    raw = _first_mapping(
+        _payload(authoritative),
+        {
+            "auth_action_boundary",
+            "authactionboundary",
+            "last_auth_action_boundary",
+            "lastauthactionboundary",
+        },
+    )
+    if not raw:
+        return {}
+
+    def safe_int(value: Any) -> int:
+        try:
+            return int(value or 0)
+        except (TypeError, ValueError):
+            return 0
+
+    def detection_sample(value: Mapping[str, Any] | None) -> dict[str, Any]:
+        value = value or {}
+        return {
+            "authState": _normalize_code(_first_value(value, {"auth_state", "authstate"}))
+            or "unknown",
+            "authUiState": _normalize_code(_first_value(value, {"auth_ui_state", "authuistate"}))
+            or "unknown",
+            "documentGenerationId": _safe_identifier(
+                _first_value(
+                    value,
+                    {"document_generation_id", "documentgenerationid"},
+                )
+                or ""
+            ),
+            "frameId": max(
+                0,
+                min(
+                    1_000_000,
+                    safe_int(_first_value(value, {"frame_id", "frameid"})),
+                ),
+            ),
+            "emailCount": max(
+                0,
+                min(
+                    100,
+                    safe_int(_first_value(value, {"email_count", "emailcount"})),
+                ),
+            ),
+            "passwordCount": max(
+                0,
+                min(
+                    100,
+                    safe_int(
+                        _first_value(
+                            value,
+                            {
+                                "password_count",
+                                "passwordcount",
+                            },
+                        )
+                    ),
+                ),
+            ),
+            "emailPopulated": bool(_first_value(value, {"email_populated", "emailpopulated"})),
+            "passwordPopulated": bool(
+                _first_value(value, {"password_populated", "passwordpopulated"})
+            ),
+            "sampledAt": _safe_text(
+                _first_value(value, {"sampled_at", "sampledat"}) or "",
+                limit=80,
+            ),
+            "urlIdentity": _safe_text(
+                _first_value(value, {"url_identity", "urlidentity"}) or "",
+                limit=500,
+            ),
+            "pageTitle": _safe_text(
+                _first_value(value, {"page_title", "pagetitle"}) or "",
+                limit=300,
+            ),
+            "pageKind": _normalize_code(_first_value(value, {"page_kind", "pagekind"})),
+            "phase": _normalize_code(_first_value(value, {"phase"})),
+            "stillLoading": bool(_first_value(value, {"still_loading", "stillloading"})),
+            "authShellStillSettling": bool(
+                _first_value(
+                    value,
+                    {"auth_shell_still_settling", "authshellstillsettling"},
+                )
+            ),
+        }
+
+    pre = _first_mapping(raw, {"pre_action_detection", "preactiondetection"})
+    post = _first_mapping(raw, {"post_action_detection", "postactiondetection"})
+    stabilization = _first_mapping(raw, {"stabilization"}) or {}
+    raw_samples = _first_value(stabilization, {"samples"})
+    samples = (
+        [
+            detection_sample(sample)
+            for sample in list(raw_samples)[-8:]
+            if isinstance(sample, Mapping)
+        ]
+        if isinstance(raw_samples, (list, tuple))
+        else []
+    )
+    completeness = _first_mapping(raw, {"credential_completeness", "credentialcompleteness"}) or {}
+    receipt = _first_mapping(raw, {"action_receipt", "actionreceipt"}) or {}
+    reason = (
+        _normalize_code(_first_value(receipt, {"reason", "reason_code", "reasoncode"}))
+        or _normalize_code(
+            _first_value(
+                stabilization,
+                {"reason", "reason_code", "reasoncode"},
+            )
+        )
+        or ""
+    )
+    boundary = {
+        "stage": _normalize_code(_first_value(raw, {"stage"})) or "unknown",
+        "preActionDetection": detection_sample(pre),
+        "stabilization": {
+            "reason": _normalize_code(
+                _first_value(
+                    stabilization,
+                    {"reason", "reason_code", "reasoncode"},
+                )
+            )
+            or reason,
+            "sampleCount": max(
+                len(samples),
+                min(
+                    8,
+                    max(
+                        0,
+                        safe_int(
+                            _first_value(
+                                stabilization,
+                                {"sample_count", "samplecount"},
+                            )
+                        ),
+                    ),
+                ),
+            ),
+            "samples": samples,
+        },
+        "credentialCompleteness": {
+            "emailVisible": bool(_first_value(completeness, {"email_visible", "emailvisible"})),
+            "passwordVisible": bool(
+                _first_value(
+                    completeness,
+                    {
+                        "password_visible",
+                        "passwordvisible",
+                    },
+                )
+            ),
+            "emailPopulated": bool(
+                _first_value(completeness, {"email_populated", "emailpopulated"})
+            ),
+            "passwordPopulated": bool(
+                _first_value(
+                    completeness,
+                    {"password_populated", "passwordpopulated"},
+                )
+            ),
+        },
+        "actionReceipt": {
+            "attempted": bool(_first_value(receipt, {"attempted"})),
+            "candidateProbePerformed": bool(
+                _first_value(
+                    receipt,
+                    {
+                        "candidate_probe_performed",
+                        "candidateprobeperformed",
+                    },
+                )
+            ),
+            "clicked": bool(_first_value(receipt, {"clicked"})),
+            "reason": reason,
+        },
+    }
+    if post:
+        boundary["postActionDetection"] = detection_sample(post)
+    candidate = _element(
+        _first_mapping(raw, {"candidate"}),
+        raw,
+    )
+    if candidate:
+        boundary["candidate"] = candidate.model_dump(
+            mode="python",
+            exclude_none=True,
+        )
+    return boundary
+
+
 def _last_auth_cycle_candidate(
     history: list[Mapping[str, Any]],
     parent: Mapping[str, Any],
@@ -1450,13 +2493,25 @@ def _states_for(
     expected = _find_state_value([cause_event, authoritative], {"expected_state", "expectedstate"})
     observed = _find_state_value([cause_event, authoritative], {"observed_state", "observedstate"})
     defaults = {
+        "credential_rejected": (
+            "Authentication advances to a non-authentication destination.",
+            "The site displayed an explicit credential or account-lock rejection.",
+        ),
+        "maintenance": (
+            "The job site exposes an available application surface.",
+            "The site displayed an explicit maintenance or temporary-unavailability message.",
+        ),
+        "job_unavailable": (
+            "The requested job posting exposes an application surface.",
+            "The site displayed an explicit missing, closed, or unavailable-job message.",
+        ),
         "auth_create_account_to_signin_sink": (
             "Create Account reaches verification or application fields.",
             "Create Account returned to Sign In without an exposed validation reason.",
         ),
         "application_fields_not_ready_after_auth": (
-            "Application fields become ready after authentication.",
-            "Authentication completed without exposing ready application fields.",
+            "The authentication action reaches a verified application surface.",
+            "No verified application surface appeared; authentication success was not established.",
         ),
         "auth_primary_action_not_found": (
             "A safe primary authentication action is selected.",
@@ -1611,6 +2666,13 @@ def _confidence_for(
     authoritative: dict[str, Any] | None,
     auth_transition_history: list[Mapping[str, Any]] | None = None,
 ) -> tuple[Confidence, bool]:
+    if code in {
+        "credential_rejected",
+        "maintenance",
+        "job_unavailable",
+        "required_field_uncommitted",
+    }:
+        return "proven", False
     if code == "auth_create_account_to_signin_sink":
         return "strong", True
     if code == "auth_primary_action_not_found":
@@ -1691,6 +2753,10 @@ def _missing_evidence_for(
     candidate_rejection_reason: str = "",
     auth_transition_history: list[Mapping[str, Any]] | None = None,
 ) -> list[str]:
+    if code in {"credential_rejected", "maintenance", "job_unavailable"}:
+        return []
+    if code == "required_field_uncommitted":
+        return ["field_commit_evidence"]
     if code == "auth_create_account_to_signin_sink":
         return ["tenant_rejection_reason"]
     if code in {"auth_primary_action_not_found", "auth_captcha_gate"}:
@@ -1787,11 +2853,19 @@ def _live_inspection_required(
 
 def _summary_for(code: str, scope: FailureScope) -> str:
     summaries = {
+        "credential_rejected": (
+            "The site explicitly rejected the credentials or reported that the account might be locked."
+        ),
+        "maintenance": "The site explicitly reported a maintenance or unavailable state.",
+        "job_unavailable": "The site explicitly reported that the requested job was unavailable.",
+        "unclassified_failure": (
+            "C3 recorded a failure but did not assert a diagnosis; use the retained observations."
+        ),
         "auth_create_account_to_signin_sink": (
             "Create Account returned to Sign In without reaching verification or application fields."
         ),
         "application_fields_not_ready_after_auth": (
-            "Authentication completed, but application fields did not become ready."
+            "The authentication action did not reach a verified application surface."
         ),
         "auth_primary_action_not_found": (
             "No safe primary authentication action was selected from the current page."
@@ -1816,6 +2890,10 @@ def _summary_for(code: str, scope: FailureScope) -> str:
         "workday_runtime_not_ready": (
             "Workday runtime did not expose a usable page surface within the readiness budget."
         ),
+        "required_field_uncommitted": (
+            "A directly observed required field remained empty and blocked page advancement; "
+            "the lower-level commit mechanism was not established."
+        ),
     }
     if code in _EVIDENCE_GATED_AUTH_CYCLE_CODES and scope == "navigation":
         return "Authentication remained in an active control loop until the flow limit."
@@ -1827,6 +2905,10 @@ def _summary_for(code: str, scope: FailureScope) -> str:
 
 def _next_safe_action_for(code: str, scope: FailureScope) -> str:
     actions = {
+        "credential_rejected": "verify_credentials_or_account_state",
+        "maintenance": "retry_after_maintenance",
+        "job_unavailable": "find_current_job_posting",
+        "unclassified_failure": "diagnose_from_retained_evidence",
         "auth_create_account_to_signin_sink": "record_auth_sink_and_try_next_job",
         "application_fields_not_ready_after_auth": "inspect_post_auth_readiness_evidence",
         "auth_primary_action_not_found": "retry_stable_auth_gateway_candidate",
@@ -1838,6 +2920,7 @@ def _next_safe_action_for(code: str, scope: FailureScope) -> str:
         "control_plane_cancel_unreconciled": "reconcile_backend_cancellation_without_page_mutation",
         "no_safe_next_button": "inspect_page_readiness_without_mutation",
         "workday_runtime_not_ready": "retry_workday_runtime_readiness_without_mutation",
+        "required_field_uncommitted": "request_manual_completion_for_required_field",
     }
     if code in actions:
         return actions[code]
@@ -1861,6 +2944,7 @@ def _ruled_out_for(code: str) -> list[str]:
 def _monitor_summary(events: list[dict[str, Any]]) -> C3MonitorSummary:
     summary: dict[str, Any] = {
         "health_probe_failure_count": 0,
+        "progress_probe_failure_count": 0,
         "monitor_failure_count": 0,
         "artifact_capture_failure_count": 0,
         "cancel_failure_count": 0,
@@ -1868,6 +2952,7 @@ def _monitor_summary(events: list[dict[str, Any]]) -> C3MonitorSummary:
     }
     event_to_count = {
         "operation.health_probe_failed": "health_probe_failure_count",
+        "operation.progress_probe_failed": "progress_probe_failure_count",
         "operation.monitor_failed": "monitor_failure_count",
         "operation.artifact_capture_failed": "artifact_capture_failure_count",
         "operation.cancel_failed": "cancel_failure_count",
@@ -1880,6 +2965,10 @@ def _monitor_summary(events: list[dict[str, Any]]) -> C3MonitorSummary:
             codes = _code_candidates(_payload(event))
             if codes:
                 summary["last_error_code"] = max(codes, key=lambda item: item[0])[1]
+            else:
+                diagnostics, _ = _diagnostic_messages_from_events([event])
+                if diagnostics:
+                    summary["last_error_code"] = _normalize_code(diagnostics[0])
     return C3MonitorSummary.model_validate(summary)
 
 

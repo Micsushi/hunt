@@ -398,6 +398,7 @@ def test_failure_context_returns_owned_bounded_redacted_evidence_after_lease_rel
             "artifact_id": artifact_id,
             "status": "completed",
             "kind": "failure_bundle",
+            "reason_code": "required_field_rejected",
             "captured_at": artifact_manifest["created_at"],
             "files": sorted(entry["name"] for entry in artifact_manifest["files"]),
             "manifest_present": True,
@@ -436,6 +437,36 @@ def test_failure_context_preserves_strict_nested_event_id_but_redacts_phone_like
     assert body["action_tail"][0]["event_id"] == generated_event_id
     assert body["action_tail"][1]["event_id"] != "evt-3035551212"
     assert "3035551212" not in response.text
+
+
+def test_failure_context_projects_semantic_progress_as_action_when_explicit_action_is_absent(
+    tmp_path,
+):
+    client, manager = _client(tmp_path, lambda *_args, **_kwargs: {})
+    manager.store.failure_evidence_events = [
+        {
+            "seq": 1,
+            "event_id": "event-substep",
+            "event_type": "operation.progress",
+            "payload": {"phase": "auth", "substep": "open_sign_in"},
+        },
+        {
+            "seq": 2,
+            "event_id": "event-pending-action",
+            "event_type": "operation.progress",
+            "payload": {"phase": "loading", "pending_action": "wait_for_application_form"},
+        },
+    ]
+
+    response = client.get(
+        "/api/c3/control/operations/op-1/failure-context?agent_id=agent-1&lease_id=lease-1"
+    )
+
+    assert response.status_code == 200
+    assert [(item["event_id"], item["action"]) for item in response.json()["action_tail"]] == [
+        ("event-substep", "open_sign_in"),
+        ("event-pending-action", "wait_for_application_form"),
+    ]
 
 
 def test_failure_context_does_not_call_bounded_transition_projection_real_loss(tmp_path):
@@ -852,6 +883,7 @@ def test_failure_context_artifact_summary_uses_validated_bundle_metadata(tmp_pat
             "artifact_id": artifact_id,
             "status": "completed",
             "kind": "failure_bundle",
+            "reason_code": "field_fill_failed",
             "captured_at": manifest["created_at"],
             "files": sorted(entry["name"] for entry in manifest["files"]),
             "manifest_present": True,

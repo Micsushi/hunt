@@ -4,7 +4,9 @@ import json
 import os
 import re
 import threading
+import time
 import uuid
+from contextlib import contextmanager
 from datetime import UTC, datetime
 from hashlib import sha256
 from pathlib import Path
@@ -26,12 +28,49 @@ _JSON_LOCKS: dict[Path, threading.RLock] = {}
 _JSON_LOCKS_GUARD = threading.Lock()
 
 
-def _json_lock(path: Path) -> threading.RLock:
+@contextmanager
+def _json_lock(path: Path):
     resolved = path.resolve()
     with _JSON_LOCKS_GUARD:
         if resolved not in _JSON_LOCKS:
             _JSON_LOCKS[resolved] = threading.RLock()
-        return _JSON_LOCKS[resolved]
+        thread_lock = _JSON_LOCKS[resolved]
+    with thread_lock:
+        lock_path = resolved.with_name(f".{resolved.name}.lock")
+        lock_path.parent.mkdir(parents=True, exist_ok=True)
+        with lock_path.open("a+b") as lock_file:
+            lock_file.seek(0, os.SEEK_END)
+            if lock_file.tell() == 0:
+                lock_file.write(b"\0")
+                lock_file.flush()
+            lock_file.seek(0)
+            if os.name == "nt":
+                import msvcrt
+
+                acquired = False
+                for attempt in range(500):
+                    try:
+                        msvcrt.locking(lock_file.fileno(), msvcrt.LK_NBLCK, 1)
+                        acquired = True
+                        break
+                    except OSError:
+                        if attempt >= 499:
+                            raise TimeoutError(f"json_lock_timeout:{resolved}")
+                        time.sleep(0.01)
+                try:
+                    yield
+                finally:
+                    if acquired:
+                        lock_file.seek(0)
+                        msvcrt.locking(lock_file.fileno(), msvcrt.LK_UNLCK, 1)
+            else:
+                import fcntl
+
+                fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+                try:
+                    yield
+                finally:
+                    fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
 
 
 def _now() -> str:
@@ -144,7 +183,17 @@ class LedgerService:
             json.dumps(payload, indent=2, sort_keys=True) + "\n",
             encoding="utf-8",
         )
-        temporary.replace(path)
+        try:
+            for attempt in range(5):
+                try:
+                    temporary.replace(path)
+                    break
+                except PermissionError:
+                    if attempt >= 4:
+                        raise
+                    time.sleep(0.01 * (attempt + 1))
+        finally:
+            temporary.unlink(missing_ok=True)
 
     def _iter_probe_manifests(self, component: str = "c3") -> list[Path]:
         component = _ledger_component(component)

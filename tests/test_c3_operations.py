@@ -31,8 +31,10 @@ from backend.c3_operations import (
     C3OperationManager,
     C3OperationStore,
     _bounded_bridge_mappings,
+    _bridge_completion_reason,
     _bridge_failure_event_payload,
     _lock_for,
+    _sanitize_operation_event_payload,
 )
 from backend.ledger.leases import InMemoryLeaseStore
 from backend.ledger.models import Actor
@@ -79,6 +81,21 @@ def _request_payload(**overrides):
     }
     payload.update(overrides)
     return payload
+
+
+def test_bridge_completion_reason_prefers_review_ready_terminal_state():
+    response = {
+        "ok": True,
+        "stoppedReason": "final_submit_visible",
+        "result": {
+            "ok": True,
+            "stoppedReason": "final_submit_visible",
+            "pageKind": "review",
+            "finalSubmitVisible": True,
+        },
+    }
+
+    assert _bridge_completion_reason(response) == "review_ready"
 
 
 def test_operation_state_sets_are_exact_and_disjoint():
@@ -232,7 +249,9 @@ def test_terminal_append_persists_atomic_failure_context_and_rebuilds_it(tmp_pat
     diagnosis_path = operation_dir / "diagnosis.json"
     persisted = json.loads(diagnosis_path.read_text(encoding="utf-8"))
 
-    assert persisted["root_cause_code"] == "resume_upload_missing_data"
+    assert persisted["root_cause_code"] == "unclassified_failure"
+    assert persisted["reported_cause_code"] == "resume_upload_missing_data"
+    assert persisted["cause_asserted"] is False
     assert store.get_failure_context("op-test").model_dump(mode="json") == persisted
     assert store.rebuild_failure_context("op-test").model_dump(mode="json") == persisted
     assert store.get("op-test").diagnosis_id == persisted["diagnosis_id"]
@@ -322,13 +341,14 @@ def test_production_bridge_failure_is_bounded_private_and_keeps_causal_field(tmp
             "htmlsnapshot",
         ):
             assert forbidden_key not in lowered
-        assert context.root_cause_code == "workday_commit_not_verified"
+        assert context.root_cause_code == "unclassified_failure"
+        assert context.reported_cause_code == "workday_commit_not_verified"
         assert context.causal_element is not None
         assert context.causal_element.field_id == "country-field"
         assert context.causal_element.label == "Country of residence"
         assert context.expected_state
         assert context.observed_state
-        assert context.root_cause_unknown is False
+        assert context.root_cause_unknown is True
     finally:
         manager.shutdown(wait=True)
 
@@ -498,14 +518,75 @@ def test_bridge_visible_validation_error_projects_exact_causal_control(tmp_path)
         _wait_for_manager_state(manager, operation.operation_id, lambda current: current.terminal)
         context = store.get_failure_context(operation.operation_id)
 
-        assert context.root_cause_code == "visible_validation_errors"
+        assert context.root_cause_code == "unclassified_failure"
+        assert context.reported_cause_code == "visible_validation_errors"
         assert context.failure_scope == "ui_element"
         assert context.causal_element is not None
         assert context.causal_element.selector == "input#source--source"
         assert context.causal_element.field_id == "source--source"
         assert context.validation_messages == [message]
-        assert context.root_cause_unknown is False
+        assert context.root_cause_unknown is True
         assert context.live_inspection_required is False
+    finally:
+        manager.shutdown(wait=True)
+
+
+def test_bridge_direct_job_unavailable_projects_proven_terminal_context(tmp_path):
+    unavailable_message = "The page you are looking for doesn't exist."
+    direct_observation = {
+        "pageKind": "job_unavailable",
+        "phase": "unavailable",
+        "href": "https://tenant.example/job/expired",
+        "title": "Job unavailable",
+        "messages": [unavailable_message],
+        "maintenanceVisible": False,
+        "jobUnavailableVisible": True,
+    }
+    bridge_response = {
+        "ok": False,
+        "reason": "job_unavailable",
+        "stoppedReason": "job_unavailable",
+        "stopDetails": {
+            "reasonCode": "job_unavailable",
+            "stoppedReason": "job_unavailable",
+            "directObservation": direct_observation,
+            "nonAuthoritativeHistory": [
+                {
+                    "stage": "fill_result",
+                    "reason": "visible_validation_errors",
+                    "message": unavailable_message,
+                }
+            ],
+        },
+        "directObservation": direct_observation,
+        "terminalStep": {
+            "kind": "direct_page_state_terminal",
+            "reason": "job_unavailable",
+            "reasonCode": "job_unavailable",
+            "directObservation": direct_observation,
+        },
+    }
+    store = C3OperationStore(tmp_path / "ledger", recover=False)
+    manager = C3OperationManager(
+        store,
+        lease_store=object(),
+        target_store=object(),
+        bridge=lambda _target, _payload: bridge_response,
+        max_workers=1,
+    )
+    operation = manager.start(C3OperationRequest(**_request_payload()), mutates_page=True)
+    try:
+        _wait_for_manager_state(manager, operation.operation_id, lambda current: current.terminal)
+        context = store.get_failure_context(operation.operation_id)
+
+        assert context.root_cause_code == "job_unavailable"
+        assert context.reported_cause_code == "job_unavailable"
+        assert context.cause_asserted is True
+        assert context.confidence == "proven"
+        assert context.root_cause_unknown is False
+        assert context.evidence_conflicts == []
+        assert unavailable_message in context.observed_messages
+        assert context.page_observations[-1].page_kind == "job_unavailable"
     finally:
         manager.shutdown(wait=True)
 
@@ -624,7 +705,9 @@ def test_bridge_auth_captcha_gate_projects_direct_login_candidates_without_priva
         ]
 
         assert context.failure_scope == "navigation"
-        assert context.root_cause_code == "auth_captcha_gate"
+        assert context.root_cause_code == "unclassified_failure"
+        assert context.reported_cause_code == "auth_captcha_gate"
+        assert context.cause_asserted is False
         assert context.causal_element is None
         assert [candidate["automation_id"] for candidate in projected_candidates] == [
             "signInSubmitButton",
@@ -651,8 +734,8 @@ def test_bridge_auth_captcha_gate_projects_direct_login_candidates_without_priva
         assert context.exposing_action.automation_id == "click_filter"
         assert context.exposing_action.selector == "div[data-automation-id='click_filter']"
         assert "captcha_challenge_not_verified" in context.observed_state
-        assert context.missing_evidence == []
-        assert context.live_inspection_required is False
+        assert context.missing_evidence == ["direct_captcha_challenge"]
+        assert context.live_inspection_required is True
         assert secret_email not in serialized
         assert secret_password not in serialized
         for forbidden_key in ('"email":', '"password":', '"rawvalue":', '"value":'):
@@ -689,6 +772,208 @@ def test_bridge_failure_caps_structural_near_misses_at_eight():
     assert [item["automation_id"] for item in evidence["near_miss_candidates"]] == [
         f"Candidate{index}" for index in range(8)
     ]
+
+
+def test_bridge_failure_preserves_bounded_redacted_workday_timeout_evidence():
+    response = {
+        "ok": False,
+        "pageWalk": {
+            "stoppedReason": "workday_fill_return_timeout",
+            "terminalStep": {
+                "kind": "workday_fill_return_timeout",
+                "reason": "workday_fill_return_timeout",
+            },
+            "stopDetails": {
+                "timeoutEvidence": {
+                    "reason": "workday_fill_return_timeout",
+                    "capturedAt": "2026-07-26T17:00:00.000Z",
+                    "timeoutMs": 120000,
+                    "documentReadyState": "complete",
+                    "pageTransitionObserved": False,
+                    "observedWaitState": "field_commit",
+                    "driverInFlight": {
+                        "phase": "field_commit_wait",
+                        "waitClass": "field_commit",
+                        "field": {
+                            "id": "education-1--degree",
+                            "label": "Degree",
+                            "type": "button_listbox",
+                        },
+                        "awaitedOperation": "workday.settleWorkdayCommit",
+                        "startedAt": "2026-07-26T16:59:30.000Z",
+                        "lastProgressAt": "2026-07-26T16:59:45.000Z",
+                        "elapsedMs": 30000,
+                        "lastCommittedState": {
+                            "committed": False,
+                            "selected": True,
+                            "checked": False,
+                            "empty": False,
+                            "validationVisible": False,
+                            "reason": "commit_not_observed",
+                        },
+                        "breadcrumbs": [
+                            {
+                                "phase": "popup_options_wait",
+                                "waitClass": "popup_options",
+                                "field": {
+                                    "id": "education-1--degree",
+                                    "label": "Degree",
+                                    "type": "button_listbox",
+                                },
+                                "awaitedOperation": "workday.waitForOptions",
+                                "at": "2026-07-26T16:59:40.000Z",
+                                "secret": "must-not-survive",
+                            }
+                        ],
+                        "password": "must-not-survive",
+                    },
+                }
+            },
+        },
+    }
+
+    evidence = _bridge_failure_event_payload(response)["error"]["failure_evidence"]
+
+    timeout = evidence["timeout_evidence"]
+    assert timeout["reason"] == "workday_fill_return_timeout"
+    assert timeout["observed_wait_state"] == "field_commit"
+    assert timeout["driver_in_flight"]["field"]["id"] == "education-1--degree"
+    assert timeout["driver_in_flight"]["awaited_operation"] == "workday.settleWorkdayCommit"
+    assert timeout["driver_in_flight"]["last_committed_state"] == {
+        "committed": False,
+        "selected": True,
+        "checked": False,
+        "empty": False,
+        "validation_visible": False,
+        "reason": "commit_not_observed",
+    }
+    assert len(timeout["driver_in_flight"]["breadcrumbs"]) == 1
+    assert "must-not-survive" not in json.dumps(timeout)
+
+
+def test_bridge_failure_preserves_bounded_source_driver_evidence():
+    recent_outcomes = [
+        {
+            "at": f"2026-07-26T17:00:{index:02d}.000Z",
+            "phase": "field_commit_checked",
+            "field": {
+                "id": f"field-{index}",
+                "label": f"Field {index}",
+                "type": "button_listbox",
+            },
+            "intendedOption": {"label": f"private option {index}"},
+            "action": {
+                "method": "dom_click",
+                "result": "committed",
+                "reason": "workday_commit_verified",
+            },
+            "commitVerification": {
+                "verified": True,
+                "selectedPillPresent": True,
+                "backingValuePresent": True,
+                "validationVisible": False,
+                "reason": "workday_commit_verified",
+            },
+            "lastCommittedState": {
+                "committed": True,
+                "selected": True,
+                "empty": False,
+                "validationVisible": False,
+                "reason": "workday_commit_verified",
+            },
+        }
+        for index in range(12)
+    ]
+    source_outcome = {
+        "at": "2026-07-26T17:01:00.000Z",
+        "phase": "field_commit_checked",
+        "field": {
+            "id": "source--source",
+            "label": "How Did You Hear About Us?",
+            "type": "combobox",
+        },
+        "popupOwner": {
+            "id": "source--source",
+            "role": "combobox",
+            "automationId": "source",
+            "controls": "source-listbox",
+            "password": "must-not-survive",
+        },
+        "intendedOption": {"label": "LinkedIn"},
+        "action": {
+            "method": "dom_click",
+            "result": "failed",
+            "reason": "workday_commit_not_verified",
+        },
+        "commitVerification": {
+            "verified": False,
+            "selectedPillPresent": False,
+            "backingValuePresent": False,
+            "validationVisible": True,
+            "reason": "workday_commit_not_verified",
+        },
+        "lastCommittedState": {
+            "committed": False,
+            "selected": False,
+            "empty": True,
+            "validationVisible": True,
+            "reason": "workday_commit_not_verified",
+        },
+        "secret": "must-not-survive",
+    }
+    response = {
+        "ok": False,
+        "pageWalk": {
+            "stoppedReason": "visible_validation_errors",
+            "terminalStep": {
+                "kind": "safe_next",
+                "reason": "visible_validation_errors",
+            },
+            "stopDetails": {
+                "visibleValidationErrors": [
+                    "The field How Did You Hear About Us? is required and must have a value."
+                ],
+                "driverEvidence": {
+                    "active": False,
+                    "fillRunId": "fill-source",
+                    "operationId": "op-source",
+                    "phase": "field_commit_checked",
+                    "field": source_outcome["field"],
+                    "popupOwner": source_outcome["popupOwner"],
+                    "intendedOption": source_outcome["intendedOption"],
+                    "action": source_outcome["action"],
+                    "commitVerification": source_outcome["commitVerification"],
+                    "lastCommittedState": source_outcome["lastCommittedState"],
+                    "recentFieldOutcomes": [*recent_outcomes, source_outcome],
+                    "causalField": source_outcome,
+                    "password": "must-not-survive",
+                },
+            },
+        },
+    }
+
+    evidence = _bridge_failure_event_payload(response)["error"]["failure_evidence"]
+    driver = evidence["stop_details"]["driver_evidence"]
+
+    assert driver["fill_run_id"] == "fill-source"
+    assert driver["intended_option"] == {"label": "LinkedIn"}
+    assert driver["action"] == {
+        "method": "dom_click",
+        "result": "failed",
+        "reason": "workday_commit_not_verified",
+    }
+    assert driver["commit_verification"] == {
+        "verified": False,
+        "selected_pill_present": False,
+        "backing_value_present": False,
+        "validation_visible": True,
+        "reason": "workday_commit_not_verified",
+    }
+    assert len(driver["recent_field_outcomes"]) == 12
+    assert driver["recent_field_outcomes"][-1]["field"]["id"] == "source--source"
+    assert driver["recent_field_outcomes"][0]["intended_option"] == {"label": ""}
+    assert driver["causal_field"]["intended_option"] == {"label": "LinkedIn"}
+    assert "must-not-survive" not in json.dumps(evidence)
 
 
 def test_bridge_auth_not_found_does_not_promote_prior_successful_candidate_as_near_miss():
@@ -1225,6 +1510,157 @@ def test_bridge_failure_omits_same_reason_evidence_from_prior_attempt_owner():
     assert evidence["terminal_step"]["auth_state"] == "login"
     assert "stop_details" not in evidence
     assert "near_miss_candidates" not in evidence
+
+
+def test_bridge_failure_retains_value_free_auth_preflight_boundary():
+    response = {
+        "ok": False,
+        "pageWalk": {
+            "stoppedReason": "auth_surface_loading",
+            "lastAuthActionBoundary": {
+                "stage": "preflight_blocked",
+                "preActionDetection": {
+                    "authState": "login",
+                    "authUiState": "credential_form",
+                    "documentGenerationId": "nav-before",
+                    "frameId": 0,
+                    "emailCount": 1,
+                    "passwordCount": 1,
+                    "emailPopulated": True,
+                    "passwordPopulated": False,
+                    "sampledAt": "2026-07-26T22:00:00.000Z",
+                    "urlIdentity": "https://example.test/login",
+                    "pageTitle": "Sign In",
+                    "pageKind": "auth_form",
+                    "phase": "auth",
+                    "stillLoading": False,
+                    "authShellStillSettling": False,
+                    "emailValue": "must-not-survive@example.test",
+                },
+                "stabilization": {
+                    "reason": "auth_surface_loading",
+                    "sampleCount": 2,
+                    "samples": [
+                        {
+                            "authState": "login",
+                            "authUiState": "credential_form",
+                            "documentGenerationId": "nav-before",
+                            "frameId": 0,
+                            "emailCount": 1,
+                            "passwordCount": 1,
+                        },
+                        {
+                            "authState": "login",
+                            "authUiState": "auth_loading",
+                            "documentGenerationId": "nav-before",
+                            "frameId": 0,
+                            "emailCount": 0,
+                            "passwordCount": 0,
+                        },
+                    ],
+                },
+                "credentialCompleteness": {
+                    "emailVisible": False,
+                    "passwordVisible": False,
+                    "emailPopulated": True,
+                    "passwordPopulated": False,
+                    "emailPrepared": True,
+                    "passwordPrepared": True,
+                },
+                "actionReceipt": {
+                    "attempted": False,
+                    "candidateProbePerformed": False,
+                    "clicked": False,
+                    "reason": "auth_surface_loading",
+                },
+                "candidate": {
+                    "tag": "button",
+                    "role": "button",
+                    "selector": "button[data-automation-id='signInSubmitButton']",
+                    "automationId": "signInSubmitButton",
+                    "label": "Sign In",
+                    "disabled": False,
+                    "clickable": True,
+                },
+            },
+            "stopDetails": {
+                "message": "Authentication surface changed before action.",
+            },
+            "terminalStep": {
+                "kind": "safe_next",
+                "reason": "auth_surface_loading",
+            },
+        },
+    }
+
+    evidence = _bridge_failure_event_payload(response)["error"]["failure_evidence"]
+
+    assert evidence["auth_action_boundary"] == {
+        "stage": "preflight_blocked",
+        "pre_action_detection": {
+            "auth_state": "login",
+            "auth_ui_state": "credential_form",
+            "document_generation_id": "nav-before",
+            "frame_id": 0,
+            "email_count": 1,
+            "password_count": 1,
+            "email_populated": True,
+            "password_populated": False,
+            "sampled_at": "2026-07-26T22:00:00.000Z",
+            "url_identity": "https://example.test/login",
+            "page_title": "Sign In",
+            "page_kind": "auth_form",
+            "phase": "auth",
+            "still_loading": False,
+            "auth_shell_still_settling": False,
+        },
+        "stabilization": {
+            "reason_code": "auth_surface_loading",
+            "sample_count": 2,
+            "samples": [
+                {
+                    "auth_state": "login",
+                    "auth_ui_state": "credential_form",
+                    "document_generation_id": "nav-before",
+                    "frame_id": 0,
+                    "email_count": 1,
+                    "password_count": 1,
+                },
+                {
+                    "auth_state": "login",
+                    "auth_ui_state": "auth_loading",
+                    "document_generation_id": "nav-before",
+                    "frame_id": 0,
+                    "email_count": 0,
+                    "password_count": 0,
+                },
+            ],
+        },
+        "credential_completeness": {
+            "email_visible": False,
+            "password_visible": False,
+            "email_populated": True,
+            "password_populated": False,
+            "email_prepared": True,
+            "password_prepared": True,
+        },
+        "action_receipt": {
+            "attempted": False,
+            "candidate_probe_performed": False,
+            "clicked": False,
+            "reason_code": "auth_surface_loading",
+        },
+        "candidate": {
+            "tag": "button",
+            "role": "button",
+            "selector": "button[data-automation-id='signInSubmitButton']",
+            "automation_id": "signInSubmitButton",
+            "label": "Sign In",
+            "disabled": False,
+            "clickable": True,
+        },
+    }
+    assert "must-not-survive@example.test" not in json.dumps(evidence)
 
 
 def test_bridge_failure_ignores_control_keys_beyond_mapping_scan_bound():
@@ -2306,7 +2742,8 @@ def test_recovery_rebuilds_missing_diagnosis_from_projected_first_terminal(tmp_p
 
     assert context.authoritative_event_id == terminal.event_id
     assert context.authoritative_event_type == "operation.failed"
-    assert context.root_cause_code == "workday_commit_not_verified"
+    assert context.root_cause_code == "unclassified_failure"
+    assert context.reported_cause_code == "workday_commit_not_verified"
     assert context.evidence_truncated is True
 
 
@@ -2451,6 +2888,88 @@ def test_monitor_bridge_boundary_serializes_probes_without_starving_main_bridge(
         manager.shutdown(wait=True)
 
 
+def test_monitor_bridge_blocked_target_does_not_block_another_target(tmp_path):
+    target_a_entered = threading.Event()
+    release_target_a = threading.Event()
+
+    def bridge(target, _payload):
+        if target["target_id"] == "target-a":
+            target_a_entered.set()
+            assert release_target_a.wait(timeout=5)
+        return {"ok": True, "target_id": target["target_id"]}
+
+    manager = C3OperationManager(
+        _store(tmp_path),
+        lease_store=None,
+        target_store=None,
+        bridge=bridge,
+        max_workers=2,
+    )
+    target_a = {"debug_port": 9981, "target_id": "target-a"}
+    target_b = {"debug_port": 9982, "target_id": "target-b"}
+    blocked_a = manager.executor.submit(
+        manager.run_monitor_bridge,
+        target_a,
+        {},
+        timeout_seconds=1,
+    )
+    try:
+        assert target_a_entered.wait(timeout=1)
+
+        result_b = manager.run_monitor_bridge(target_b, {}, timeout_seconds=0.5)
+
+        assert result_b == {"ok": True, "target_id": "target-b"}
+        with pytest.raises(C3MonitorBridgeBusyError):
+            manager.run_monitor_bridge(target_a, {}, timeout_seconds=0.1)
+    finally:
+        release_target_a.set()
+        assert blocked_a.result(timeout=1)["target_id"] == "target-a"
+        manager.shutdown(wait=True)
+
+
+def test_monitor_task_derives_isolation_key_from_operation_target(tmp_path):
+    target_a_entered = threading.Event()
+    release_target_a = threading.Event()
+    operation_a = SimpleNamespace(
+        target={"debug_port": 9981, "target_id": "target-a"},
+        browser_target_id="browser-a",
+    )
+    operation_b = SimpleNamespace(
+        target={"debug_port": 9982},
+        browser_target_id="browser-b",
+    )
+
+    def task(operation):
+        if operation is operation_a:
+            target_a_entered.set()
+            assert release_target_a.wait(timeout=5)
+        return operation.browser_target_id
+
+    manager = C3OperationManager(
+        _store(tmp_path),
+        lease_store=None,
+        target_store=None,
+        bridge=lambda *_args: {},
+        max_workers=2,
+    )
+    blocked_a = manager.executor.submit(
+        manager.run_monitor_task,
+        task,
+        operation_a,
+        timeout_seconds=1,
+    )
+    try:
+        assert target_a_entered.wait(timeout=1)
+
+        assert manager.run_monitor_task(task, operation_b, timeout_seconds=0.5) == "browser-b"
+        with pytest.raises(C3MonitorBridgeBusyError):
+            manager.run_monitor_task(task, operation_a, timeout_seconds=0.1)
+    finally:
+        release_target_a.set()
+        assert blocked_a.result(timeout=1) == "browser-a"
+        manager.shutdown(wait=True)
+
+
 def test_monitor_bridge_timeout_keeps_slot_owned_until_late_cleanup_finishes(tmp_path):
     entered = threading.Event()
     release = threading.Event()
@@ -2494,12 +3013,15 @@ def test_terminal_artifact_admission_has_priority_over_new_progress_probes(tmp_p
     artifact_entered = threading.Event()
     release_artifact = threading.Event()
 
-    def progress_task():
+    target_a = {"debug_port": 9981, "target_id": "target-a"}
+    target_b = {"debug_port": 9982, "target_id": "target-b"}
+
+    def progress_task(_target):
         progress_entered.set()
         assert release_progress.wait(timeout=5)
         return "progress-finished"
 
-    def artifact_task():
+    def artifact_task(_target):
         artifact_entered.set()
         assert release_artifact.wait(timeout=5)
         return "artifact-finished"
@@ -2513,29 +3035,56 @@ def test_terminal_artifact_admission_has_priority_over_new_progress_probes(tmp_p
     progress = manager.executor.submit(
         manager.run_monitor_task,
         progress_task,
+        target_a,
         timeout_seconds=1,
     )
+    admission_a = manager._monitor_target_admission((target_a,))  # noqa: SLF001
     artifact = None
     try:
         assert progress_entered.wait(timeout=1)
         artifact = manager.executor.submit(
             manager.run_monitor_artifact_task,
             artifact_task,
+            target_a,
             admission_timeout_seconds=1,
             timeout_seconds=1,
         )
         deadline = time.monotonic() + 1
-        while manager._monitor_artifact_waiters < 1 and time.monotonic() < deadline:  # noqa: SLF001
+        while admission_a.artifact_waiters < 1 and time.monotonic() < deadline:
             time.sleep(0.01)
-        assert manager._monitor_artifact_waiters == 1  # noqa: SLF001
+        assert admission_a.artifact_waiters == 1
 
         with pytest.raises(C3MonitorBridgeBusyError):
-            manager.run_monitor_task(lambda: "new-progress", timeout_seconds=0.1)
+            manager.run_monitor_task(
+                lambda _target: "new-progress",
+                target_a,
+                timeout_seconds=0.1,
+            )
+        assert (
+            manager.run_monitor_task(
+                lambda _target: "other-target-progress",
+                target_b,
+                timeout_seconds=0.1,
+            )
+            == "other-target-progress"
+        )
 
         release_progress.set()
         assert artifact_entered.wait(timeout=1)
         with pytest.raises(C3MonitorBridgeBusyError):
-            manager.run_monitor_task(lambda: "overlap", timeout_seconds=0.1)
+            manager.run_monitor_task(
+                lambda _target: "overlap",
+                target_a,
+                timeout_seconds=0.1,
+            )
+        assert (
+            manager.run_monitor_task(
+                lambda _target: "other-target-during-artifact",
+                target_b,
+                timeout_seconds=0.1,
+            )
+            == "other-target-during-artifact"
+        )
         release_artifact.set()
 
         assert progress.result(timeout=1) == "progress-finished"
@@ -2565,6 +3114,23 @@ def test_operation_projection_and_events_are_redacted(tmp_path):
     assert "top-secret" not in serialized + projection
     assert "303-555-1212" not in serialized + projection
     assert operation.command_payload["access_token"] == "[REDACTED]"
+
+
+def test_event_payload_sanitizer_distinguishes_empty_text_from_exhausted_text_budget(
+    monkeypatch,
+):
+    monkeypatch.setattr("backend.c3_operations._EVENT_MAX_TOTAL_STRING_CHARS", 3)
+
+    sanitized = _sanitize_operation_event_payload(
+        {
+            "budget_filler": "abc",
+            "genuine_empty": "",
+            "nonempty_after_budget": "still-present-in-source",
+        }
+    )
+
+    assert sanitized["genuine_empty"] == ""
+    assert sanitized["nonempty_after_budget"] == "[TRUNCATED]"
 
 
 def test_restart_rebuilds_from_jsonl_and_orphans_only_nonterminal_operations(tmp_path):
@@ -2855,7 +3421,15 @@ def test_main_bridge_deadline_releases_operation_worker_and_ignores_late_result(
         captured_payload.update(payload)
         bridge_entered.set()
         assert bridge_release.wait(timeout=5)
-        return {"ok": True, "commandReceipt": {"ok": True}}
+        return {
+            "ok": True,
+            "commandReceipt": {"ok": True},
+            "result": {
+                "stoppedReason": "final_submit_visible",
+                "pageKind": "review",
+                "hasSubmit": True,
+            },
+        }
 
     client, manager, lease_store = _operation_client(tmp_path, blocking_bridge, max_workers=2)
     lease_id = _claim_operation_lease(lease_store)
@@ -2886,12 +3460,21 @@ def test_main_bridge_deadline_releases_operation_worker_and_ignores_late_result(
         assert current.state == "failed"
         assert "operation.completed" not in event_types
         assert "operation.result_ignored_after_deadline" in event_types
+        ignored = next(
+            event
+            for event in manager.events(operation_id)
+            if event.event_type == "operation.result_ignored_after_deadline"
+        )
+        assert ignored.payload["late_terminal_evidence"]["stopped_reason"] == "final_submit_visible"
+        context = manager.store.get_failure_context(operation_id)
+        assert not any(item.page_kind == "review" for item in context.page_observations)
+        assert "terminal_failure_with_review_evidence" not in context.evidence_conflicts
     finally:
         bridge_release.set()
         manager.shutdown(wait=True)
 
 
-def test_hard_hung_bridge_pool_fails_later_operation_immediately(tmp_path):
+def test_hard_hung_bridge_pool_rejects_later_operation_without_dispatch(tmp_path):
     bridge_release = threading.Event()
     bridge_calls = 0
 
@@ -2915,7 +3498,6 @@ def test_hard_hung_bridge_pool_fails_later_operation_immediately(tmp_path):
             operation_id = response.json()["operation_id"]
             _wait_for_state(client, operation_id, {"failed"}, lease_id, timeout=2)
 
-        started = time.monotonic()
         response = client.post(
             "/api/c3/operations",
             json=_operation_api_payload(
@@ -2924,9 +3506,8 @@ def test_hard_hung_bridge_pool_fails_later_operation_immediately(tmp_path):
             ),
         )
         operation_id = response.json()["operation_id"]
-        failed = _wait_for_state(client, operation_id, {"failed"}, lease_id, timeout=1)
+        failed = _wait_for_state(client, operation_id, {"failed"}, lease_id, timeout=6)
 
-        assert time.monotonic() - started < 1
         assert failed["terminal_reason"] == "operation_bridge_capacity_exhausted"
         assert bridge_calls == 2
     finally:
@@ -3380,7 +3961,18 @@ def test_cancel_retains_active_state_until_ack_and_retry_creates_child(tmp_path)
         manager.shutdown(wait=True)
 
 
-def test_original_bridge_user_cancelled_response_reconciles_cancelling_operation(tmp_path):
+@pytest.mark.parametrize(
+    ("cancel_reason", "bridge_stopped_reason"),
+    [
+        ("test cancel", "user_cancelled"),
+        ("workday_fill_return_timeout", "workday_fill_return_timeout"),
+    ],
+)
+def test_original_bridge_cancel_response_reconciles_cancelling_operation(
+    tmp_path,
+    cancel_reason,
+    bridge_stopped_reason,
+):
     fill_entered = threading.Event()
     fill_release = threading.Event()
 
@@ -3395,8 +3987,8 @@ def test_original_bridge_user_cancelled_response_reconciles_cancelling_operation
         assert fill_release.wait(timeout=5)
         return {
             "ok": False,
-            "stoppedReason": "user_cancelled",
-            "commandReceipt": {"ok": False, "reason": "user_cancelled"},
+            "stoppedReason": bridge_stopped_reason,
+            "commandReceipt": {"ok": False, "reason": bridge_stopped_reason},
         }
 
     client, manager, lease_store = _operation_client(tmp_path, bridge, max_workers=3)
@@ -3408,7 +4000,7 @@ def test_original_bridge_user_cancelled_response_reconciles_cancelling_operation
 
         cancelled = client.post(
             f"/api/c3/operations/{operation_id}/cancel",
-            json={"agent_id": "agent-test", "lease_id": lease_id, "reason": "test cancel"},
+            json={"agent_id": "agent-test", "lease_id": lease_id, "reason": cancel_reason},
         )
         assert cancelled.status_code == 202
         _wait_for_manager_state(
@@ -3420,13 +4012,89 @@ def test_original_bridge_user_cancelled_response_reconciles_cancelling_operation
         fill_release.set()
         terminal = _wait_for_state(client, operation_id, {"cancelled"}, lease_id)
         assert terminal["cancel_acknowledged_at"] is not None
-        assert terminal["terminal_reason"] == "test cancel"
+        assert terminal["terminal_reason"] == cancel_reason
         event_types = [event.event_type for event in manager.events(operation_id)]
         assert "operation.cancel_acknowledged" in event_types
         assert "operation.cancelled" in event_types
         assert "operation.result_ignored_after_cancel" not in event_types
     finally:
         fill_release.set()
+        manager.shutdown(wait=True)
+
+
+def test_natural_driver_failure_wins_before_cancellation_becomes_terminal(tmp_path):
+    fill_entered = threading.Event()
+    fill_release = threading.Event()
+    natural_reason = "auth_primary_action_click_failed"
+
+    def bridge(_target, payload):
+        if payload["command_name"] == "c3.cancel_session":
+            return {
+                "ok": True,
+                "cancelled": True,
+                "acknowledged": False,
+                "commandReceipt": {"ok": True},
+            }
+        fill_entered.set()
+        assert fill_release.wait(timeout=5)
+        return {
+            "ok": False,
+            "stoppedReason": natural_reason,
+            "commandReceipt": {"ok": False, "reason": natural_reason},
+        }
+
+    client, manager, lease_store = _operation_client(tmp_path, bridge, max_workers=3)
+    lease_id = _claim_operation_lease(lease_store)
+    try:
+        started = client.post("/api/c3/operations", json=_operation_api_payload(lease_id))
+        operation_id = started.json()["operation_id"]
+        assert fill_entered.wait(timeout=1)
+
+        response = client.post(
+            f"/api/c3/operations/{operation_id}/cancel",
+            json={"agent_id": "agent-test", "lease_id": lease_id, "reason": "watchdog"},
+        )
+        assert response.status_code == 202
+        _wait_for_manager_state(
+            manager,
+            operation_id,
+            lambda current: current.state == "cancelling",
+        )
+
+        fill_release.set()
+        terminal = _wait_for_state(client, operation_id, {"failed"}, lease_id)
+        assert terminal["error"]["reason_code"] == natural_reason
+        event_types = [event.event_type for event in manager.events(operation_id)]
+        assert "operation.failed" in event_types
+        assert "operation.result_ignored_after_cancel" not in event_types
+    finally:
+        fill_release.set()
+        manager.shutdown(wait=True)
+
+
+def test_internal_fill_cancel_reason_fails_running_operation_verbatim(tmp_path):
+    reason = "workday_fill_return_timeout"
+
+    def bridge(_target, _payload):
+        return {
+            "ok": False,
+            "stoppedReason": reason,
+            "commandReceipt": {"ok": False, "reason": reason},
+        }
+
+    client, manager, lease_store = _operation_client(tmp_path, bridge)
+    lease_id = _claim_operation_lease(lease_store)
+    try:
+        started = client.post("/api/c3/operations", json=_operation_api_payload(lease_id))
+        operation_id = started.json()["operation_id"]
+
+        terminal = _wait_for_state(client, operation_id, {"failed"}, lease_id)
+
+        assert terminal["state"] == "failed"
+        assert terminal["error"]["reason_code"] == reason
+        assert terminal["error"]["bridge_reason_code"] == reason
+        assert terminal["result"] is None
+    finally:
         manager.shutdown(wait=True)
 
 

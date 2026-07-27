@@ -106,8 +106,10 @@ specific unknown that still needs a named test.
 ## P Chrome Rules
 
 - Use p Chrome actual extension for C3 proof.
-- Keep p Chrome off the main monitor, minimized/backgrounded when possible, and
-  never steal focus.
+- Keep p Chrome actually minimized and non-activating; a smaller visible window
+  does not qualify. Opening a browser or job tab must not take keyboard focus
+  from the user's current application. Secondary-monitor placement is only for
+  explicit user inspection and does not replace minimized operation.
 - Do not use `Page.bringToFront`, Playwright `page.bringToFront()`,
   `--bring-to-front`, restore/cascade, or focus-moving browser actions unless
   the user explicitly asks to inspect the lane.
@@ -115,14 +117,18 @@ specific unknown that still needs a named test.
   CDP/Playwright without activating the OS window.
 - Subagents never close p Chrome. They capture artifacts, report, and leave the
   lane for the main agent.
-- Main agent closes p Chrome only after the C3 change is patched, local checks
-  pass, fresh p Chrome retest is done, and no further inspection is needed, or
-  when the user explicitly asks for cleanup.
-- Main agent may also close a passing Review-reached lane mid-batch once its
-  page is no longer needed. This is the main agent's judgment call, not a
-  requirement.
-- Preserve hard failures and site/auth/posting gates until the main agent has
-  used them or the user permits cleanup. Do not close these on discretion.
+- Preferred capacity is 10 p Chrome lane windows or live job-testing tabs;
+  absolute non-bypassable capacity is 20. At or below 10, use normal checks and
+  normally retain lanes. Above 10, review eligible oldest inactive same-project
+  lanes aggressively before opening more testing.
+- Main-agent cleanup happens when starting more testing, not when an agent or
+  wave finishes. Close only after verifying Hunt ownership, inactivity,
+  terminal report/evidence, no preserve instruction, and no continuing
+  investigation, then record the closure.
+- If a lane may still be running, verify its owner/agent and progress. If work
+  stopped, determine and document why before deciding whether it is eligible.
+- Never close another project's browser, an active or user-preserved browser,
+  or a lane with uncertain ownership, state, or documentation.
 
 ## Agent Pattern
 
@@ -134,7 +140,8 @@ Use subagents when sites are independent:
 - Do not let subagents edit product code.
 - Each agent owns one p Chrome lane and writes only its lane report.
 - Main agent synthesizes, patches once, retests with actual extension, then
-  closes no-longer-needed p Chrome lanes.
+  leaves the completed lanes open. Evidence-gated cleanup is reviewed when
+  later testing starts and needs capacity.
 
 ## Required Proof
 

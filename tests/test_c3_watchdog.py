@@ -48,6 +48,14 @@ def test_live_heartbeat_with_old_progress_is_slow_not_stalled():
     assert decision.actions == ("capture_checkpoint",)
 
 
+def test_fresh_semantic_progress_prevents_stale_heartbeat_cancellation():
+    decision = C3WatchdogPolicy().evaluate(_operation(heartbeat_age=35, progress_age=2), now=NOW)
+
+    assert decision.state == "running"
+    assert decision.reason_code == "operation_heartbeat_probe_stale"
+    assert decision.actions == ("health_probe",)
+
+
 def test_hard_deadline_requests_bundle_and_cancel_even_with_live_heartbeat():
     decision = C3WatchdogPolicy().evaluate(
         _operation(heartbeat_age=1, progress_age=1, deadline_age=1), now=NOW

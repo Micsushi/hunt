@@ -1349,7 +1349,7 @@ def test_safe_next_ignores_workday_upload_success_alerts():
     assert next_clicked == "1"
 
 
-def test_safe_next_blocks_final_submit_controls():
+def test_safe_next_ignores_positive_page_loaded_alert():
     if sync_playwright is None:
         pytest.skip("playwright is required for the safe next fixture")
 
@@ -1368,6 +1368,53 @@ def test_safe_next_blocks_final_submit_controls():
             """
             <html>
               <body>
+                <div role="alert">Reliability Engineering Intern page is loaded</div>
+                <button id="next" type="button">Next</button>
+                <script>
+                  document.querySelector("#next").addEventListener("click", () => {
+                    document.body.dataset.nextClicked = "1";
+                  });
+                </script>
+              </body>
+            </html>
+            """
+        )
+        page.add_script_tag(content=safe_next_js)
+        result = page.evaluate(
+            """
+            () => {
+              const safeNext = createSafeNextFunction();
+              return safeNext({ click: true });
+            }
+            """
+        )
+        next_clicked = page.evaluate('document.body.dataset.nextClicked || ""')
+        browser.close()
+
+    assert result["ok"] is True
+    assert result["clicked"] is True
+    assert next_clicked == "1"
+
+
+def test_safe_next_blocks_final_submit_controls():
+    if sync_playwright is None:
+        pytest.skip("playwright is required for the safe next fixture")
+
+    safe_next_js = _module_to_browser_script(
+        _load_script(REPO_ROOT / "executioner/src/background/safe-next.js")
+    )
+
+    with sync_playwright() as playwright:
+        try:
+            browser = playwright.chromium.launch()
+        except PlaywrightError as error:
+            pytest.skip(f"playwright chromium is unavailable: {error}")
+
+        page = browser.new_page()
+        html = """
+            <html>
+              <body>
+                <h1>Review your application</h1>
                 <button id="submit" type="submit">Submit application</button>
                 <button id="apply" type="button">Apply now</button>
                 <script>
@@ -1381,7 +1428,11 @@ def test_safe_next_blocks_final_submit_controls():
               </body>
             </html>
             """
+        page.route(
+            "**/*",
+            lambda route: route.fulfill(status=200, content_type="text/html", body=html),
         )
+        page.goto("https://tenant.wd3.myworkdayjobs.com/en-US/jobs/apply/applyManually")
         page.add_script_tag(content=safe_next_js)
         result = page.evaluate(
             """
@@ -1405,6 +1456,55 @@ def test_safe_next_blocks_final_submit_controls():
     assert result["clicked"] is False
     assert result["reason"] == "final_submit_visible"
     assert values == {"submitted": "", "applied": ""}
+
+
+def test_safe_next_does_not_treat_job_posting_apply_as_final_submit():
+    if sync_playwright is None:
+        pytest.skip("playwright is required for the safe next fixture")
+
+    safe_next_js = _module_to_browser_script(
+        _load_script(REPO_ROOT / "executioner/src/background/safe-next.js")
+    )
+
+    with sync_playwright() as playwright:
+        try:
+            browser = playwright.chromium.launch()
+        except PlaywrightError as error:
+            pytest.skip(f"playwright chromium is unavailable: {error}")
+
+        page = browser.new_page()
+        page.set_content(
+            """
+            <html>
+              <body>
+                <a id="apply" href="/job/example/apply">Apply</a>
+                <script>
+                  document.querySelector("#apply").addEventListener("click", (event) => {
+                    event.preventDefault();
+                    document.body.dataset.applied = "1";
+                  });
+                </script>
+              </body>
+            </html>
+            """
+        )
+        page.add_script_tag(content=safe_next_js)
+        result = page.evaluate(
+            """
+            () => {
+              const safeNext = createSafeNextFunction();
+              return safeNext({ click: true });
+            }
+            """
+        )
+        applied = page.evaluate('document.body.dataset.applied || ""')
+        browser.close()
+
+    assert result["ok"] is False
+    assert result["clicked"] is False
+    assert result["reason"] == "no_safe_next_button"
+    assert result["blockedFinalSubmitLabels"] == []
+    assert applied == ""
 
 
 def test_shared_radio_group_selects_no_with_workday_true_false_values():

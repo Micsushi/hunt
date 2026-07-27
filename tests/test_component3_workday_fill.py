@@ -1716,7 +1716,104 @@ def test_workday_v2_does_not_fill_optional_preferred_name_checkbox_by_fallback()
     assert inventory["name--preferredCheck"]["filled"] is False
     assert inventory["name--preferredCheck"]["skippedReason"] in {
         "checkbox_no_safe_match",
+        "checkbox_target_mismatch",
         "no_options",
+    }
+
+
+def test_workday_v2_required_checkbox_group_selects_only_explicit_match_and_consent():
+    if sync_playwright is None:
+        pytest.skip("playwright is required for the Workday C3 fill fixture")
+
+    fill_v2_js = _module_to_browser_script(
+        _load_script(REPO_ROOT / "executioner/src/ats/workday/fill-v2.js")
+    )
+
+    with sync_playwright() as playwright:
+        try:
+            browser = playwright.chromium.launch()
+        except PlaywrightError as error:
+            pytest.skip(f"playwright chromium is unavailable: {error}")
+
+        page = browser.new_page()
+        page.set_content(
+            """
+            <html>
+              <body>
+                <main data-automation-id="applyFlowPrimaryQuestionnairePage">
+                  <div data-automation-id="formField-preferredCommunication">
+                    What is your preferred method of communication should we want to contact you?*
+                    <label for="personal-mobile">
+                      <input id="personal-mobile" type="checkbox" />
+                      Personal Mobile
+                    </label>
+                    <label for="personal-home">
+                      <input id="personal-home" type="checkbox" />
+                      Personal Home
+                    </label>
+                    <label for="work">
+                      <input id="work" type="checkbox" />
+                      Work
+                    </label>
+                    <label for="personal-email">
+                      <input id="personal-email" type="checkbox" />
+                      Personal Email
+                    </label>
+                  </div>
+                  <label>
+                    <input
+                      id="termsAndConditions--acceptTermsAndAgreements"
+                      type="checkbox"
+                      required
+                    />
+                    Yes, I have read and consent to the terms and conditions.*
+                  </label>
+                </main>
+              </body>
+            </html>
+            """
+        )
+        _load_v2_workday_scripts(page)
+        page.add_script_tag(content=fill_v2_js)
+        result = page.evaluate(
+            """
+            async () => {
+              const fill = createWorkdayFillV2Function();
+              return await fill({
+                profile: { preferredCommunicationChannel: "Email" },
+                settings: {
+                  fillRequiredOnly: true,
+                  useFieldPipelineV2: true,
+                },
+                activeApplyContext: {},
+                defaultResume: {},
+                fillRunId: "workday_required_checkbox_group",
+              });
+            }
+            """
+        )
+        values = page.evaluate(
+            """
+            () => ({
+              mobile: document.querySelector("#personal-mobile").checked,
+              home: document.querySelector("#personal-home").checked,
+              work: document.querySelector("#work").checked,
+              email: document.querySelector("#personal-email").checked,
+              consent: document.querySelector(
+                "#termsAndConditions--acceptTermsAndAgreements"
+              ).checked,
+            })
+            """
+        )
+        browser.close()
+
+    assert result["ok"] is True
+    assert values == {
+        "mobile": False,
+        "home": False,
+        "work": False,
+        "email": True,
+        "consent": True,
     }
 
 
@@ -3352,7 +3449,6 @@ def test_workday_disclosure_dropdown_scrolls_to_virtualized_neutral_option():
     assert ethnicity["filled"] is True
 
 
-@pytest.mark.xfail(reason="c3 refactor changed behavior; needs update", strict=False)
 def test_workday_sanctioned_country_checkbox_selects_actual_none_input():
     if sync_playwright is None:
         pytest.skip("playwright is required for the Workday C3 fill fixture")

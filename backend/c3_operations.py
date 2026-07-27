@@ -121,6 +121,7 @@ _EVENT_MAX_LIST_ITEMS = 128
 _EVENT_MAX_STRING_CHARS = 16_384
 _EVENT_MAX_TOTAL_STRING_CHARS = 240_000
 _EVENT_MAX_NODES = 2_048
+_EVENT_ROOT_TEXT_LEAF_KEYS = frozenset({"terminalreason", "reason", "error"})
 _BRIDGE_SCAN_MAX_NODES = 2_048
 _BRIDGE_SCAN_MAX_DEPTH = 16
 _BRIDGE_NEAR_MISS_LIMIT = 8
@@ -210,6 +211,14 @@ def _normalized_event_key(value: Any) -> str:
     return re.sub(r"[^a-z0-9]", "", str(value).lower())
 
 
+def _event_truncation_value(value: Any, reason: str) -> Any:
+    if isinstance(value, str):
+        return f"[TRUNCATED:{reason}]"
+    if value is None or isinstance(value, (bool, int, float)):
+        return value
+    return {"truncated": True, "reason": reason}
+
+
 def _sanitize_operation_event_payload(
     value: Any,
     *,
@@ -221,10 +230,24 @@ def _sanitize_operation_event_payload(
     budget = _budget if _budget is not None else {"nodes": 0, "string_chars": 0}
     budget["nodes"] += 1
     if budget["nodes"] > _EVENT_MAX_NODES:
-        return {"truncated": True, "reason": "event_node_limit"}
+        return _event_truncation_value(value, "event_node_limit")
     if _depth > _EVENT_MAX_DEPTH:
-        return {"truncated": True, "reason": "event_depth_limit"}
+        return _event_truncation_value(value, "event_depth_limit")
     if isinstance(value, dict):
+        preserved_root_text: dict[str, Any] = {}
+        if _depth == 0:
+            for index, (key, child) in enumerate(value.items()):
+                if index >= _EVENT_MAX_MAPPING_KEYS:
+                    break
+                normalized_key = _normalized_event_key(key)
+                if normalized_key in _EVENT_PRIVATE_KEYS:
+                    continue
+                if normalized_key in _EVENT_ROOT_TEXT_LEAF_KEYS and isinstance(child, str):
+                    preserved_root_text[str(key)[:160]] = _sanitize_operation_event_payload(
+                        child,
+                        _depth=_depth + 1,
+                        _budget=budget,
+                    )
         safe: dict[str, Any] = {}
         for index, (key, child) in enumerate(value.items()):
             if index >= _EVENT_MAX_MAPPING_KEYS:
@@ -232,9 +255,17 @@ def _sanitize_operation_event_payload(
                 break
             if _normalized_event_key(key) in _EVENT_PRIVATE_KEYS:
                 continue
-            retained = _sanitize_operation_event_payload(child, _depth=_depth + 1, _budget=budget)
+            safe_key = str(key)[:160]
+            if safe_key in preserved_root_text:
+                safe[safe_key] = preserved_root_text[safe_key]
+                continue
+            retained = _sanitize_operation_event_payload(
+                child,
+                _depth=_depth + 1,
+                _budget=budget,
+            )
             if retained is not _OMIT:
-                safe[str(key)[:160]] = retained
+                safe[safe_key] = retained
         return safe
     if isinstance(value, (list, tuple)):
         safe = [
@@ -245,6 +276,8 @@ def _sanitize_operation_event_payload(
             safe.append({"truncated": True, "reason": "event_list_limit"})
         return [child for child in safe if child is not _OMIT]
     if isinstance(value, str):
+        if not value:
+            return ""
         remaining = max(0, _EVENT_MAX_TOTAL_STRING_CHARS - budget["string_chars"])
         retained = value[: min(_EVENT_MAX_STRING_CHARS, remaining)]
         budget["string_chars"] += len(retained)
@@ -258,6 +291,62 @@ def _redact_operation_event_payload(payload: dict[str, Any]) -> dict[str, Any]:
     redacted, _redaction = redact_payload(payload)
     restored = restore_trusted_generated_c3_ids(redacted, payload)
     return restored if isinstance(restored, dict) else {}
+
+
+def _bridge_review_ready(response: Any) -> bool:
+    if not isinstance(response, dict):
+        return False
+    stopped_reason = _machine_reason(
+        _direct_mapping_value(response, {"stopped_reason", "stoppedReason"})
+        or _mapping_value(response, {"stopped_reason", "stoppedReason"})
+    )
+    if stopped_reason != "final_submit_visible":
+        return False
+    priority_observations: list[dict[str, Any]] = [response]
+    result = _direct_mapping_value(response, {"result"})
+    if isinstance(result, dict):
+        priority_observations.append(result)
+    for container in tuple(priority_observations):
+        page_walk = _direct_mapping_value(container, {"page_walk", "pageWalk"})
+        if isinstance(page_walk, dict):
+            priority_observations.append(page_walk)
+    observations = (
+        *priority_observations,
+        *_bounded_bridge_mappings(response),
+    )
+    seen: set[int] = set()
+    for observation in observations:
+        identity = id(observation)
+        if identity in seen:
+            continue
+        seen.add(identity)
+        observation_reason = _machine_reason(
+            _direct_mapping_value(
+                observation,
+                {"stopped_reason", "stoppedReason"},
+            )
+        )
+        if (
+            observation_reason == "final_submit_visible"
+            and _direct_mapping_value(observation, {"ok"}) is True
+        ):
+            return True
+        page_kind = _machine_reason(_direct_mapping_value(observation, {"page_kind", "pageKind"}))
+        final_submit_visible = _direct_mapping_value(
+            observation,
+            {"final_submit_visible", "finalSubmitVisible", "hasSubmit"},
+        )
+        if page_kind == "review" and final_submit_visible is True:
+            return True
+    return False
+
+
+def _bridge_completion_reason(response: Any) -> str:
+    if _bridge_review_ready(response):
+        return "review_ready"
+    if c3_bridge_response_ok(response):
+        return "browser_execution_completed"
+    return ""
 
 
 def _bounded_bridge_mappings(value: Any):
@@ -576,7 +665,354 @@ def _bridge_stop_details(raw: Any, sensitive_values: set[str]) -> dict[str, Any]
                 int(details.get("transition_count") or 0),
                 len(raw_transition_history),
             )
+    driver_evidence = _bridge_timeout_driver(
+        _direct_mapping_value(raw, {"driver_evidence", "driverEvidence"}),
+        sensitive_values,
+    )
+    if driver_evidence:
+        details["driver_evidence"] = driver_evidence
     return details
+
+
+def _bridge_direct_observation(raw: Any, sensitive_values: set[str]) -> dict[str, Any]:
+    if not isinstance(raw, dict):
+        return {}
+    page_kind = _machine_reason(_direct_mapping_value(raw, {"page_kind", "pageKind"}))
+    maintenance_visible = (
+        _direct_mapping_value(raw, {"maintenance_visible", "maintenanceVisible"}) is True
+    )
+    job_unavailable_visible = (
+        _direct_mapping_value(
+            raw,
+            {"job_unavailable_visible", "jobUnavailableVisible"},
+        )
+        is True
+    )
+    directly_observed = (page_kind == "maintenance" and maintenance_visible) or (
+        page_kind == "job_unavailable" and job_unavailable_visible
+    )
+    if not directly_observed:
+        return {}
+
+    observation: dict[str, Any] = {
+        "page_kind": page_kind,
+        "maintenance_visible": maintenance_visible,
+        "job_unavailable_visible": job_unavailable_visible,
+    }
+    phase = _machine_reason(_direct_mapping_value(raw, {"phase"}))
+    if phase:
+        observation["phase"] = phase
+    for names, target in (
+        ({"href", "url"}, "href"),
+        ({"title", "page_title", "pageTitle"}, "title"),
+    ):
+        value = _safe_bridge_label(
+            _direct_mapping_value(raw, names),
+            sensitive_values,
+        )
+        if value:
+            observation[target] = value
+    raw_messages = _direct_mapping_value(
+        raw,
+        {"messages", "direct_messages", "directMessages"},
+    )
+    if isinstance(raw_messages, (list, tuple)):
+        messages: list[str] = []
+        for item in raw_messages[:8]:
+            value = _safe_bridge_label(item, sensitive_values)
+            if value and value not in messages:
+                messages.append(value)
+        if messages:
+            observation["messages"] = messages
+    return observation
+
+
+def _bridge_timeout_field(raw: Any, sensitive_values: set[str]) -> dict[str, Any]:
+    if not isinstance(raw, dict):
+        return {}
+    field: dict[str, Any] = {}
+    for source_names, target in (
+        ({"id", "field_id", "fieldId"}, "id"),
+        ({"label", "field_label", "fieldLabel"}, "label"),
+        ({"type", "field_type", "fieldType"}, "type"),
+    ):
+        value = _safe_bridge_label(
+            _direct_mapping_value(raw, source_names),
+            sensitive_values,
+        )
+        if value:
+            field[target] = value
+    return field
+
+
+def _bridge_timeout_committed_state(
+    raw: Any,
+    sensitive_values: set[str],
+) -> dict[str, Any]:
+    if not isinstance(raw, dict):
+        return {}
+    state: dict[str, Any] = {}
+    for source_names, target in (
+        ({"committed"}, "committed"),
+        ({"selected"}, "selected"),
+        ({"checked"}, "checked"),
+        ({"empty"}, "empty"),
+        ({"validation_visible", "validationVisible"}, "validation_visible"),
+    ):
+        value = _direct_mapping_value(raw, source_names)
+        if isinstance(value, bool):
+            state[target] = value
+    reason = _machine_reason(
+        _safe_bridge_label(
+            _direct_mapping_value(raw, {"reason", "reason_code", "reasonCode"}),
+            sensitive_values,
+        )
+    )
+    if reason:
+        state["reason"] = reason
+    return state
+
+
+def _bridge_driver_source_field(field: dict[str, Any]) -> bool:
+    signal = " ".join(str(field.get(key) or "").lower() for key in ("id", "label", "type"))
+    return bool(re.search(r"\bsource\b|how did you hear|hear about us", signal))
+
+
+def _bridge_driver_popup_owner(
+    raw: Any,
+    sensitive_values: set[str],
+) -> dict[str, Any]:
+    if not isinstance(raw, dict):
+        return {}
+    owner: dict[str, Any] = {}
+    for source_names, target in (
+        ({"id"}, "id"),
+        ({"role"}, "role"),
+        ({"automation_id", "automationId"}, "automation_id"),
+        ({"controls"}, "controls"),
+    ):
+        value = _safe_bridge_label(
+            _direct_mapping_value(raw, source_names),
+            sensitive_values,
+        )
+        if value:
+            owner[target] = value
+    return owner
+
+
+def _bridge_driver_intended_option(
+    raw: Any,
+    field: dict[str, Any],
+    sensitive_values: set[str],
+) -> dict[str, Any]:
+    if not isinstance(raw, dict):
+        return {}
+    label = ""
+    if _bridge_driver_source_field(field):
+        label = _safe_bridge_label(
+            _direct_mapping_value(raw, {"label"}),
+            sensitive_values,
+        )
+    return {"label": label}
+
+
+def _bridge_driver_action(
+    raw: Any,
+    sensitive_values: set[str],
+) -> dict[str, Any]:
+    if not isinstance(raw, dict):
+        return {}
+    action: dict[str, Any] = {}
+    for source_names, target in (
+        ({"method"}, "method"),
+        ({"result"}, "result"),
+        ({"reason", "reason_code", "reasonCode"}, "reason"),
+    ):
+        value = _safe_bridge_label(
+            _direct_mapping_value(raw, source_names),
+            sensitive_values,
+        )
+        if value:
+            action[target] = value
+    return action
+
+
+def _bridge_driver_commit_verification(
+    raw: Any,
+    sensitive_values: set[str],
+) -> dict[str, Any]:
+    if not isinstance(raw, dict):
+        return {}
+    verification: dict[str, Any] = {}
+    for source_names, target in (
+        ({"verified"}, "verified"),
+        ({"selected_pill_present", "selectedPillPresent"}, "selected_pill_present"),
+        ({"backing_value_present", "backingValuePresent"}, "backing_value_present"),
+        ({"validation_visible", "validationVisible"}, "validation_visible"),
+    ):
+        value = _direct_mapping_value(raw, source_names)
+        if isinstance(value, bool):
+            verification[target] = value
+    reason = _machine_reason(
+        _safe_bridge_label(
+            _direct_mapping_value(raw, {"reason", "reason_code", "reasonCode"}),
+            sensitive_values,
+        )
+    )
+    if reason:
+        verification["reason"] = reason
+    return verification
+
+
+def _bridge_timeout_driver(
+    raw: Any,
+    sensitive_values: set[str],
+    *,
+    include_breadcrumbs: bool = True,
+) -> dict[str, Any]:
+    if not isinstance(raw, dict):
+        return {}
+    driver: dict[str, Any] = {}
+    for source_names, target in (
+        ({"fill_run_id", "fillRunId"}, "fill_run_id"),
+        ({"operation_id", "operationId"}, "operation_id"),
+        ({"phase"}, "phase"),
+        ({"wait_class", "waitClass"}, "wait_class"),
+        ({"awaited_operation", "awaitedOperation"}, "awaited_operation"),
+        ({"started_at", "startedAt"}, "started_at"),
+        ({"last_progress_at", "lastProgressAt"}, "last_progress_at"),
+        ({"captured_at", "capturedAt"}, "captured_at"),
+        ({"at"}, "at"),
+    ):
+        value = _safe_bridge_label(
+            _direct_mapping_value(raw, source_names),
+            sensitive_values,
+        )
+        if value:
+            driver[target] = value
+    elapsed = _direct_mapping_value(raw, {"elapsed_ms", "elapsedMs"})
+    if isinstance(elapsed, (int, float)) and not isinstance(elapsed, bool):
+        if math.isfinite(float(elapsed)):
+            driver["elapsed_ms"] = max(0, min(86_400_000, int(elapsed)))
+    active = _direct_mapping_value(raw, {"active"})
+    if isinstance(active, bool):
+        driver["active"] = active
+    field = _bridge_timeout_field(
+        _direct_mapping_value(raw, {"field"}),
+        sensitive_values,
+    )
+    if field:
+        driver["field"] = field
+    committed = _bridge_timeout_committed_state(
+        _direct_mapping_value(
+            raw,
+            {"last_committed_state", "lastCommittedState"},
+        ),
+        sensitive_values,
+    )
+    if committed:
+        driver["last_committed_state"] = committed
+    popup_owner = _bridge_driver_popup_owner(
+        _direct_mapping_value(raw, {"popup_owner", "popupOwner"}),
+        sensitive_values,
+    )
+    if popup_owner:
+        driver["popup_owner"] = popup_owner
+    intended_option = _bridge_driver_intended_option(
+        _direct_mapping_value(raw, {"intended_option", "intendedOption"}),
+        field,
+        sensitive_values,
+    )
+    if intended_option:
+        driver["intended_option"] = intended_option
+    action = _bridge_driver_action(
+        _direct_mapping_value(raw, {"action"}),
+        sensitive_values,
+    )
+    if action:
+        driver["action"] = action
+    commit_verification = _bridge_driver_commit_verification(
+        _direct_mapping_value(raw, {"commit_verification", "commitVerification"}),
+        sensitive_values,
+    )
+    if commit_verification:
+        driver["commit_verification"] = commit_verification
+    if include_breadcrumbs:
+        raw_breadcrumbs = _direct_mapping_value(raw, {"breadcrumbs"})
+        breadcrumbs: list[dict[str, Any]] = []
+        if isinstance(raw_breadcrumbs, (list, tuple)):
+            for item in raw_breadcrumbs[-16:]:
+                breadcrumb = _bridge_timeout_driver(
+                    item,
+                    sensitive_values,
+                    include_breadcrumbs=False,
+                )
+                if breadcrumb:
+                    breadcrumbs.append(breadcrumb)
+        if breadcrumbs:
+            driver["breadcrumbs"] = breadcrumbs
+        raw_outcomes = _direct_mapping_value(
+            raw,
+            {"recent_field_outcomes", "recentFieldOutcomes"},
+        )
+        outcomes: list[dict[str, Any]] = []
+        if isinstance(raw_outcomes, (list, tuple)):
+            for item in raw_outcomes[-12:]:
+                outcome = _bridge_timeout_driver(
+                    item,
+                    sensitive_values,
+                    include_breadcrumbs=False,
+                )
+                if outcome:
+                    outcomes.append(outcome)
+        if outcomes:
+            driver["recent_field_outcomes"] = outcomes
+        causal_field = _bridge_timeout_driver(
+            _direct_mapping_value(raw, {"causal_field", "causalField"}),
+            sensitive_values,
+            include_breadcrumbs=False,
+        )
+        if causal_field:
+            driver["causal_field"] = causal_field
+    return driver
+
+
+def _bridge_timeout_evidence(
+    raw: Any,
+    sensitive_values: set[str],
+) -> dict[str, Any]:
+    if not isinstance(raw, dict):
+        return {}
+    evidence: dict[str, Any] = {}
+    for source_names, target in (
+        ({"reason"}, "reason"),
+        ({"captured_at", "capturedAt"}, "captured_at"),
+        ({"document_ready_state", "documentReadyState"}, "document_ready_state"),
+        ({"observed_wait_state", "observedWaitState"}, "observed_wait_state"),
+    ):
+        value = _safe_bridge_label(
+            _direct_mapping_value(raw, source_names),
+            sensitive_values,
+        )
+        if value:
+            evidence[target] = value
+    timeout_ms = _direct_mapping_value(raw, {"timeout_ms", "timeoutMs"})
+    if isinstance(timeout_ms, (int, float)) and not isinstance(timeout_ms, bool):
+        if math.isfinite(float(timeout_ms)):
+            evidence["timeout_ms"] = max(0, min(86_400_000, int(timeout_ms)))
+    transition = _direct_mapping_value(
+        raw,
+        {"page_transition_observed", "pageTransitionObserved"},
+    )
+    if isinstance(transition, bool):
+        evidence["page_transition_observed"] = transition
+    driver = _bridge_timeout_driver(
+        _direct_mapping_value(raw, {"driver_in_flight", "driverInFlight"}),
+        sensitive_values,
+    )
+    if driver:
+        evidence["driver_in_flight"] = driver
+    return evidence
 
 
 def _bridge_structural_candidate(raw: Any, sensitive_values: set[str]) -> dict[str, Any] | None:
@@ -846,6 +1282,135 @@ def _bridge_near_miss_candidates(
     return candidates
 
 
+def _bridge_auth_detection_sample(raw: Any, sensitive_values: set[str]) -> dict[str, Any]:
+    if not isinstance(raw, dict):
+        return {}
+    sample: dict[str, Any] = {}
+    for source_key, target_key in (
+        ("authState", "auth_state"),
+        ("authUiState", "auth_ui_state"),
+        ("documentGenerationId", "document_generation_id"),
+        ("sampledAt", "sampled_at"),
+        ("urlIdentity", "url_identity"),
+        ("pageTitle", "page_title"),
+        ("pageKind", "page_kind"),
+        ("phase", "phase"),
+    ):
+        value = _safe_bridge_label(raw.get(source_key), sensitive_values)
+        if value:
+            sample[target_key] = value
+    for source_key, target_key in (
+        ("frameId", "frame_id"),
+        ("emailCount", "email_count"),
+        ("passwordCount", "password_count"),
+    ):
+        value = raw.get(source_key)
+        if isinstance(value, int) and not isinstance(value, bool):
+            sample[target_key] = max(0, min(1_000_000, value))
+    for source_key, target_key in (
+        ("emailPopulated", "email_populated"),
+        ("passwordPopulated", "password_populated"),
+        ("stillLoading", "still_loading"),
+        ("authShellStillSettling", "auth_shell_still_settling"),
+    ):
+        value = raw.get(source_key)
+        if isinstance(value, bool):
+            sample[target_key] = value
+    return sample
+
+
+def _bridge_auth_action_boundary(raw: Any, sensitive_values: set[str]) -> dict[str, Any]:
+    if not isinstance(raw, dict):
+        return {}
+    boundary: dict[str, Any] = {}
+    stage = _machine_reason(raw.get("stage"))
+    if stage:
+        boundary["stage"] = stage
+    pre_action = _bridge_auth_detection_sample(
+        raw.get("preActionDetection") or raw.get("pre_action_detection"),
+        sensitive_values,
+    )
+    if pre_action:
+        boundary["pre_action_detection"] = pre_action
+    post_action = _bridge_auth_detection_sample(
+        raw.get("postActionDetection") or raw.get("post_action_detection"),
+        sensitive_values,
+    )
+    if post_action:
+        boundary["post_action_detection"] = post_action
+    candidate = _bridge_structural_candidate(raw.get("candidate"), sensitive_values)
+    if candidate:
+        boundary["candidate"] = candidate
+    raw_stabilization = raw.get("stabilization")
+    if isinstance(raw_stabilization, dict):
+        stabilization: dict[str, Any] = {}
+        reason_code = _machine_reason(
+            raw_stabilization.get("reason")
+            or raw_stabilization.get("reasonCode")
+            or raw_stabilization.get("reason_code")
+        )
+        if reason_code:
+            stabilization["reason_code"] = reason_code
+        raw_samples = raw_stabilization.get("samples")
+        samples: list[dict[str, Any]] = []
+        if isinstance(raw_samples, (list, tuple)):
+            for raw_sample in raw_samples[:8]:
+                sample = _bridge_auth_detection_sample(raw_sample, sensitive_values)
+                if sample:
+                    samples.append(sample)
+        sample_count = raw_stabilization.get("sampleCount", raw_stabilization.get("sample_count"))
+        if isinstance(sample_count, int) and not isinstance(sample_count, bool):
+            stabilization["sample_count"] = max(len(samples), min(1_000_000, max(0, sample_count)))
+        elif samples:
+            stabilization["sample_count"] = len(samples)
+        if samples:
+            stabilization["samples"] = samples
+        if stabilization:
+            boundary["stabilization"] = stabilization
+    for source_name, target_name, keys in (
+        (
+            "credentialCompleteness",
+            "credential_completeness",
+            (
+                ("emailVisible", "email_visible"),
+                ("passwordVisible", "password_visible"),
+                ("emailPopulated", "email_populated"),
+                ("passwordPopulated", "password_populated"),
+                ("emailPrepared", "email_prepared"),
+                ("passwordPrepared", "password_prepared"),
+            ),
+        ),
+        (
+            "actionReceipt",
+            "action_receipt",
+            (
+                ("attempted", "attempted"),
+                ("candidateProbePerformed", "candidate_probe_performed"),
+                ("clicked", "clicked"),
+            ),
+        ),
+    ):
+        raw_section = raw.get(source_name) or raw.get(target_name)
+        if not isinstance(raw_section, dict):
+            continue
+        section = {
+            target_key: raw_section[source_key]
+            for source_key, target_key in keys
+            if isinstance(raw_section.get(source_key), bool)
+        }
+        if target_name == "action_receipt":
+            reason_code = _machine_reason(
+                raw_section.get("reason")
+                or raw_section.get("reasonCode")
+                or raw_section.get("reason_code")
+            )
+            if reason_code:
+                section["reason_code"] = reason_code
+        if section:
+            boundary[target_name] = section
+    return boundary
+
+
 def _bridge_terminal_failure_evidence(response: Any) -> dict[str, Any] | None:
     sensitive_values = _bridge_sensitive_values(response)
     stopped_reason, raw_step, raw_details, raw_candidates, selected_owner = (
@@ -853,8 +1418,45 @@ def _bridge_terminal_failure_evidence(response: Any) -> dict[str, Any] | None:
     )
     raw_step = _bridge_terminal_owner_step(stopped_reason, raw_step, selected_owner)
     stop_details = _bridge_stop_details(raw_details, sensitive_values)
+    direct_observation: dict[str, Any] = {}
+    for source in (raw_step, raw_details, selected_owner):
+        if not isinstance(source, dict):
+            continue
+        direct_observation = _bridge_direct_observation(
+            _direct_mapping_value(
+                source,
+                {"direct_observation", "directObservation"},
+            ),
+            sensitive_values,
+        )
+        if direct_observation:
+            break
+    timeout_evidence = (
+        _bridge_timeout_evidence(
+            _direct_mapping_value(
+                raw_details,
+                {"timeout_evidence", "timeoutEvidence"},
+            ),
+            sensitive_values,
+        )
+        if isinstance(raw_details, dict)
+        else {}
+    )
     terminal_step = _bridge_terminal_step(raw_step, sensitive_values)
     near_miss_candidates = _bridge_near_miss_candidates(raw_candidates, sensitive_values)
+    auth_action_boundary: dict[str, Any] = {}
+    for source in (raw_step, raw_details, selected_owner):
+        if not isinstance(source, dict):
+            continue
+        auth_action_boundary = _bridge_auth_action_boundary(
+            _direct_mapping_value(
+                source,
+                {"auth_action_boundary", "authActionBoundary", "lastAuthActionBoundary"},
+            ),
+            sensitive_values,
+        )
+        if auth_action_boundary:
+            break
     validation_messages: list[str] = []
     causal_element: dict[str, Any] | None = None
     if isinstance(raw_details, dict):
@@ -894,8 +1496,11 @@ def _bridge_terminal_failure_evidence(response: Any) -> dict[str, Any] | None:
         (
             stopped_reason,
             stop_details,
+            direct_observation,
+            timeout_evidence,
             terminal_step,
             near_miss_candidates,
+            auth_action_boundary,
             validation_messages,
             causal_element,
         )
@@ -906,10 +1511,16 @@ def _bridge_terminal_failure_evidence(response: Any) -> dict[str, Any] | None:
         evidence["stopped_reason"] = stopped_reason
     if stop_details:
         evidence["stop_details"] = stop_details
+    if direct_observation:
+        evidence["direct_observation"] = direct_observation
+    if timeout_evidence:
+        evidence["timeout_evidence"] = timeout_evidence
     if terminal_step:
         evidence["terminal_step"] = terminal_step
     if near_miss_candidates:
         evidence["near_miss_candidates"] = near_miss_candidates
+    if auth_action_boundary:
+        evidence["auth_action_boundary"] = auth_action_boundary
     if validation_messages:
         evidence["validation_messages"] = validation_messages
     if causal_element:
@@ -1907,6 +2518,13 @@ class C3MonitorArtifactTimeoutError(C3MonitorBridgeError):
         super().__init__("monitor_artifact_capture_timeout")
 
 
+class _MonitorTargetAdmission:
+    def __init__(self) -> None:
+        self.slot = threading.BoundedSemaphore(1)
+        self.lock = threading.Lock()
+        self.artifact_waiters = 0
+
+
 class C3OperationRetryError(RuntimeError):
     def __init__(self, reason_code: str) -> None:
         super().__init__(reason_code)
@@ -1953,12 +2571,11 @@ class C3OperationManager:
             thread_name_prefix="c3-cancel-bridge",
         )
         self._monitor_bridge_executor = ThreadPoolExecutor(
-            max_workers=1,
+            max_workers=bridge_workers,
             thread_name_prefix="c3-monitor-bridge",
         )
-        self._monitor_bridge_slot = threading.BoundedSemaphore(1)
         self._monitor_admission_lock = threading.Lock()
-        self._monitor_artifact_waiters = 0
+        self._monitor_target_admissions: dict[tuple[str, str], _MonitorTargetAdmission] = {}
         self._cancel_bridge_slots = threading.BoundedSemaphore(self.control_workers)
         self.cancel_timeout_seconds = max(0.01, float(cancel_timeout_seconds))
         self.cancel_retry_backoff_seconds = max(0.0, float(cancel_retry_backoff_seconds))
@@ -2047,31 +2664,32 @@ class C3OperationManager:
         admission_timeout_seconds: float,
     ) -> Any:
         timeout_seconds = max(0.01, float(timeout_seconds))
+        admission = self._monitor_target_admission(args)
         if artifact_priority:
-            with self._monitor_admission_lock:
-                self._monitor_artifact_waiters += 1
+            with admission.lock:
+                admission.artifact_waiters += 1
             try:
-                acquired = self._monitor_bridge_slot.acquire(
+                acquired = admission.slot.acquire(
                     timeout=max(0.01, float(admission_timeout_seconds))
                 )
             finally:
-                with self._monitor_admission_lock:
-                    self._monitor_artifact_waiters -= 1
+                with admission.lock:
+                    admission.artifact_waiters -= 1
             if not acquired:
                 raise C3MonitorArtifactAdmissionTimeoutError()
         else:
-            with self._monitor_admission_lock:
-                if self._monitor_artifact_waiters:
+            with admission.lock:
+                if admission.artifact_waiters:
                     raise C3MonitorBridgeBusyError()
-                acquired = self._monitor_bridge_slot.acquire(blocking=False)
+                acquired = admission.slot.acquire(blocking=False)
             if not acquired:
                 raise C3MonitorBridgeBusyError()
         try:
             future = self._monitor_bridge_executor.submit(callback, *args)
         except Exception:
-            self._monitor_bridge_slot.release()
+            admission.slot.release()
             raise
-        future.add_done_callback(lambda _completed: self._monitor_bridge_slot.release())
+        future.add_done_callback(lambda _completed: admission.slot.release())
         try:
             return future.result(timeout=timeout_seconds)
         except FutureTimeoutError as exc:
@@ -2080,6 +2698,33 @@ class C3OperationManager:
             raise C3MonitorBridgeTimeoutError() from exc
         except Exception as exc:
             raise C3MonitorBridgeExecutionError(type(exc).__name__, str(exc)) from exc
+
+    def _monitor_target_admission(
+        self,
+        args: tuple[Any, ...],
+    ) -> _MonitorTargetAdmission:
+        key = self._monitor_target_key(args)
+        with self._monitor_admission_lock:
+            admission = self._monitor_target_admissions.get(key)
+            if admission is None:
+                admission = _MonitorTargetAdmission()
+                self._monitor_target_admissions[key] = admission
+            return admission
+
+    @staticmethod
+    def _monitor_target_key(args: tuple[Any, ...]) -> tuple[str, str]:
+        first = args[0] if args else None
+        target = first if isinstance(first, dict) else getattr(first, "target", None)
+        if not isinstance(target, dict):
+            target = {}
+        debug_port = target.get("debug_port")
+        target_id = target.get("target_id") or target.get("browser_target_id")
+        if not target_id and first is not None and not isinstance(first, dict):
+            target_id = getattr(first, "browser_target_id", "")
+        return (
+            str(debug_port) if debug_port not in (None, "") else "<unknown-port>",
+            str(target_id) if target_id else "<unknown-target>",
+        )
 
     def run_monitor_bridge(
         self,
@@ -2273,9 +2918,11 @@ class C3OperationManager:
                 )
                 return
             current = self.store.get(operation_id)
+            bridge_stopped_reason = _bridge_stopped_reason(response)
             if (
                 current.state == "cancelling"
-                and _bridge_stopped_reason(response) == "user_cancelled"
+                and bridge_stopped_reason
+                and bridge_stopped_reason in {"user_cancelled", current.cancellation_reason}
             ):
                 with self._lock:
                     current = self.store.get(operation_id)
@@ -2304,18 +2951,44 @@ class C3OperationManager:
                             expected_states={"cancelling"},
                         )
                 return
-            if current.state == "cancelling" or current.terminal:
+            completion_reason = _bridge_completion_reason(response)
+            if current.state == "cancelling":
+                # The original driver may finish naturally while cancellation
+                # is racing it. Preserve that specific outcome if cancellation
+                # has not already become terminal.
+                if completion_reason:
+                    self.store.append_if_nonterminal(
+                        operation_id,
+                        "operation.completed",
+                        {
+                            "terminal_reason": completion_reason,
+                            "result": response,
+                        },
+                        expected_states={"cancelling"},
+                    )
+                else:
+                    self.store.append_if_nonterminal(
+                        operation_id,
+                        "operation.failed",
+                        _bridge_failure_event_payload(response),
+                        expected_states={"cancelling"},
+                    )
+                return
+            if current.terminal:
                 self.store.append(
                     operation_id,
                     "operation.result_ignored_after_cancel",
                     {"result": response, "reason": "operation_no_longer_running"},
                 )
                 return
-            if c3_bridge_response_ok(response):
+            if completion_reason:
                 self.store.append(
                     operation_id,
                     "operation.completed",
-                    {"result": response, "terminal_reason": "browser_execution_completed"},
+                    {
+                        "terminal_reason": completion_reason,
+                        "result": response,
+                    },
                 )
             else:
                 self.store.append(
@@ -2370,6 +3043,23 @@ class C3OperationManager:
                 "reason": "operation_deadline_already_terminal",
                 "late_response_ok": c3_bridge_response_ok(response),
             }
+            terminal_evidence = _bridge_terminal_failure_evidence(response)
+            field_evidence = _bridge_field_failure(response)
+            if terminal_evidence:
+                payload["late_terminal_evidence"] = terminal_evidence
+            if field_evidence:
+                payload["late_field_evidence"] = field_evidence
+            late_page_kind = _machine_reason(_mapping_value(response, {"page_kind", "pageKind"}))
+            late_href = _safe_bridge_label(
+                _mapping_value(response, {"href", "url"}),
+                _bridge_sensitive_values(response),
+            )
+            if late_page_kind or late_href:
+                payload["late_page_observation"] = {
+                    "page_kind": late_page_kind,
+                    "href": late_href,
+                    "has_submit": bool(_mapping_value(response, {"has_submit", "hasSubmit"})),
+                }
         except Exception as exc:
             payload = {
                 "reason": "operation_deadline_already_terminal",

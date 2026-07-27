@@ -93,13 +93,19 @@ class C3OperationMonitor:
         if operation.terminal:
             self._finish_terminal(operation)
             return operation
-        if probe_error is not None:
-            self.store.append(
+        progress_authoritative, probe_failure = self._validate_progress_response(
+            operation_id,
+            progress,
+            probe_error,
+        )
+        if probe_failure is not None:
+            self._append_if_nonterminal(
                 operation_id,
-                "operation.health_probe_failed",
-                {"error": probe_error},
+                "operation.progress_probe_failed",
+                probe_failure,
+                expected_states={operation.state},
             )
-        if progress:
+        if progress_authoritative:
             self._record_progress(operation_id, operation, progress)
         operation = self.store.get(operation_id)
         if operation.terminal:
@@ -119,7 +125,7 @@ class C3OperationMonitor:
                     )
                     current = self.store.get(operation_id)
                     if terminal is not None or current.terminal:
-                        self._cleanup_operation(operation_id)
+                        self._finish_terminal(current)
                     return current
                 monitor_error = getattr(operation, "monitor_error", None)
                 error = (
@@ -138,6 +144,11 @@ class C3OperationMonitor:
             return operation
 
         decision = self.watchdog.evaluate(operation)
+        if not progress_authoritative and decision.reason_code not in {
+            "operation_queue_deadline_exceeded",
+            "operation_deadline_exceeded",
+        }:
+            return operation
         if "fail_queued" in decision.actions:
             self._append_if_nonterminal(
                 operation_id,
@@ -209,6 +220,67 @@ class C3OperationMonitor:
         if "capture_failure_bundle" in decision.actions:
             self._capture_once(operation, decision.reason_code)
         return self.store.get(operation_id)
+
+    @staticmethod
+    def _validate_progress_response(
+        operation_id: str,
+        progress: dict[str, Any],
+        probe_error: dict[str, str] | None,
+    ) -> tuple[bool, dict[str, Any] | None]:
+        if probe_error is not None:
+            error_type = str(probe_error.get("type") or "")
+            error_message = str(probe_error.get("message") or "")
+            if error_type == "TimeoutError" or "timeout" in error_message.lower():
+                reason = "probe_timeout"
+            elif error_type == "CapacityError":
+                reason = "probe_capacity_exhausted"
+            else:
+                reason = "probe_error"
+            return False, {"reason": reason, "error": probe_error}
+        if not progress:
+            return False, {"reason": "empty_response"}
+        if progress.get("busy") is True:
+            return False, {
+                "reason": "probe_busy",
+                "response_reason": str(progress.get("reason") or "")[:240],
+            }
+        if progress.get("ok") is not True:
+            return False, {
+                "reason": "response_not_ok",
+                "response_reason": str(progress.get("reason") or "")[:240],
+            }
+        reported_id = str(progress.get("operationId") or progress.get("operation_id") or "")
+        if reported_id != operation_id:
+            return False, {
+                "reason": "operation_id_mismatch",
+                "reported_operation_id": reported_id,
+            }
+        if progress.get("active") is False:
+            return False, {"reason": "operation_inactive"}
+        if (
+            C3OperationMonitor._usable_sequence(
+                progress.get("heartbeatSeq", progress.get("heartbeat_seq"))
+            )
+            is None
+        ):
+            return False, {"reason": "heartbeat_seq_invalid"}
+        return True, None
+
+    @staticmethod
+    def _usable_sequence(value: Any) -> int | None:
+        if value is None or isinstance(value, bool):
+            return None
+        try:
+            sequence = int(value)
+        except (TypeError, ValueError, OverflowError):
+            return None
+        if sequence < 0:
+            return None
+        if isinstance(value, float) and value != sequence:
+            return None
+        if isinstance(value, str) and value.strip() != str(sequence):
+            return None
+        return sequence
 
     def _cancel_reconciliation_expired(self, operation: Any) -> bool:
         if operation.cancel_failed_at is None:
@@ -322,8 +394,14 @@ class C3OperationMonitor:
             self._captured = {key for key in self._captured if key[0] != operation_id}
 
     def _finish_terminal(self, operation: Any) -> None:
-        if operation.state == "failed":
-            self._capture_once(operation, "operation_failed")
+        terminal_artifact_reason = {
+            "completed": "operation_completed",
+            "failed": "operation_failed",
+            "cancelled": "operation_cancelled",
+            "orphaned": "operation_orphaned",
+        }.get(str(operation.state or ""))
+        if terminal_artifact_reason:
+            self._capture_once(operation, terminal_artifact_reason)
         self._cleanup_operation(operation.operation_id)
 
     def _clear_completed_pending(
