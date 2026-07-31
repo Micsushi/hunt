@@ -13,7 +13,10 @@ export const historicalR1Revision =
 export const planningRevision =
   "8c5785abf4f0d08dba871744cda006e906dab051" as const;
 
-export const contractRevisionStatus = "r2_frozen" as const;
+export const predecessorAcceptedBase =
+  "13eab5a4cde3e369291d52ca1533f4c82470c820" as const;
+
+export const contractRevisionStatus = "r2n_frozen" as const;
 
 const revisionRecordPath = join(
   "executioner",
@@ -33,6 +36,7 @@ interface ContractRevisionRecord {
   readonly historicalR1: string;
   readonly contractSource: string;
   readonly planningRevision: string;
+  readonly predecessorAcceptedBase: string;
   readonly contractTreeOids: Readonly<Record<string, string>>;
   readonly serializedVersions: Readonly<Record<string, number>>;
 }
@@ -83,6 +87,12 @@ export function assertFrozenContractBase(
   assertAncestor(record.planningRevision, revision, repository, "planning revision");
   assertAncestor(record.historicalR1, revision, repository, "historical R1");
   assertAncestor(record.contractSource, revision, repository, "contract source");
+  assertAncestor(
+    record.predecessorAcceptedBase,
+    revision,
+    repository,
+    "predecessor accepted base",
+  );
   assertFrozenRootsClean(revision, repository);
 
   for (const path of frozenTreePaths) {
@@ -97,10 +107,11 @@ export function assertFrozenContractBase(
 
 function assertRevisionRecord(record: ContractRevisionRecord): void {
   if (
-    record.schemaVersion !== 1 ||
+    record.schemaVersion !== 2 ||
     record.historicalR1 !== historicalR1Revision ||
     record.contractSource !== historicalContractRevision ||
     record.planningRevision !== planningRevision ||
+    record.predecessorAcceptedBase !== predecessorAcceptedBase ||
     !sameKeys(record.contractTreeOids, frozenTreePaths) ||
     !Object.values(record.contractTreeOids).every((oid) =>
       /^[0-9a-f]{40}$/u.test(oid),

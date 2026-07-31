@@ -315,6 +315,7 @@ export const componentBoundaries = [
     dataOwnership: [
       "OperationId",
       "JourneyStatus",
+      "FactualTerminalOutcome",
       "TerminalResult",
       "McpRequest",
       "McpResponse",
@@ -389,7 +390,7 @@ export const componentBoundaries = [
         results: ["EventAppendResult", "JourneyProgress"],
         errors: ["ObservabilityError"],
         sideEffect:
-          "F10 alone admits and appends value-free events and projects monotonic progress.",
+          "F10 alone admits and appends value-free events and projects monotonic progress; F5 page-understanding and F6 answer-resolution terminal facts project blocked without entering failure reporting.",
         retry: "An append may be retried only with the same event ID.",
         cancellation:
           "Cancellation before append leaves no event; an acknowledged append remains recorded.",

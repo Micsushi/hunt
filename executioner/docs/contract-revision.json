@@ -1,22 +1,23 @@
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "historicalR1": "c57c24ef59aec6dd6e2ee8f222aa64695777a0dd",
   "contractSource": "d95e845e61bcf0a030b3b07c6d6261e3d95c1fad",
   "planningRevision": "8c5785abf4f0d08dba871744cda006e906dab051",
+  "predecessorAcceptedBase": "13eab5a4cde3e369291d52ca1533f4c82470c820",
   "contractTreeOids": {
-    "executioner/src/contracts": "2759362c506526699a797e94ffd9c4b3f6fcf6ea",
-    "executioner/src/testing/contracts": "cf9a7a2322f2d2083cdebf089dcba1b584ca22cb",
-    "executioner/tests/contracts": "d299d28577855fa6fa9556559c31a79fdfd10a62",
+    "executioner/src/contracts": "5dcc0941e569fb2165ccaf24aa8f4a18d657696a",
+    "executioner/src/testing/contracts": "b567ae218f5d03f0b6872851f8de6c6f76f5e5f7",
+    "executioner/tests/contracts": "557dee2331017a5140f01df9dabc93df7503a343",
     "executioner/tests/security/privacy": "24771827d97117615b9360579e3293a05d3784dd"
   },
   "serializedVersions": {
     "fixtureManifest": 2,
-    "durableJourneyState": 2,
+    "durableJourneyState": 3,
     "eventEnvelope": 2,
     "errorEnvelope": 2,
     "evidenceManifest": 2,
-    "terminalResult": 2,
+    "terminalResult": 3,
     "mcpRequest": 2,
-    "mcpResponse": 2
+    "mcpResponse": 3
   }
 }

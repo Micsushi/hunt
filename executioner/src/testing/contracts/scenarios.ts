@@ -136,7 +136,7 @@ function journeyStateScenarioFactory(): ContractProviderFactory<"JourneyStateSto
           return { ok: false, error: providerError("journey_revision_conflict") };
         }
         revision += 1;
-        terminal = request.status === "review_reached" || request.status === "cancelled" || request.status === "failed";
+        terminal = request.status === "review_reached" || request.status === "blocked" || request.status === "cancelled" || request.status === "failed";
         const result = {
           state: { ...contractFixtures.journeyState, status: request.status, pageId: request.pageId, revision },
           applied: true,
@@ -150,7 +150,7 @@ function journeyStateScenarioFactory(): ContractProviderFactory<"JourneyStateSto
 
 function mcpError(request: McpRequest, code: "journey_request_conflict" | "journey_busy"): McpResponse {
   return {
-    schemaVersion: 2,
+    schemaVersion: 3,
     requestId: request.requestId,
     ok: false,
     error: {
@@ -196,14 +196,14 @@ function mcpScenarioFactory(): ContractProviderFactory<"McpJourneyApi"> {
         }
         const response: McpResponse = request.method === "journey_result"
           ? {
-              schemaVersion: 2,
+              schemaVersion: 3,
               requestId: request.requestId,
               ok: true,
               result: {
                 kind: "terminal",
                 terminal: journeyStatus === "cancelled"
                   ? {
-                      schemaVersion: 2,
+                      schemaVersion: 3,
                       journeyId: contractFixtures.journeyState.journeyId,
                       status: "cancelled",
                       completedPages: 0,
@@ -213,7 +213,7 @@ function mcpScenarioFactory(): ContractProviderFactory<"McpJourneyApi"> {
             }
           : request.method === "journey_status"
           ? {
-              schemaVersion: 2,
+              schemaVersion: 3,
               requestId: request.requestId,
               ok: true,
               result: {
@@ -222,7 +222,7 @@ function mcpScenarioFactory(): ContractProviderFactory<"McpJourneyApi"> {
               },
             }
           : {
-              schemaVersion: 2,
+              schemaVersion: 3,
               requestId: request.requestId,
               ok: true,
               result: {
@@ -245,7 +245,27 @@ function eventScenarioFactory(): ContractProviderFactory<"EventSink"> {
       append: (request) => {
         const fresh = !appended.has(request.event.eventId);
         appended.add(request.event.eventId);
-        return { ok: true, value: { appended: fresh, progress: contractFixtures.progress } };
+        const factualBlocked = request.event.kind === "journey_terminal" && (
+          (
+            request.event.component === "F5" &&
+            request.event.phase === "page_understanding" &&
+            request.event.step === "classify"
+          ) || (
+            request.event.component === "F6" &&
+            request.event.phase === "answer_resolution" &&
+            request.event.step === "resolve"
+          )
+        );
+        return {
+          ok: true,
+          value: {
+            appended: fresh,
+            progress: {
+              ...contractFixtures.progress,
+              status: factualBlocked ? "blocked" : contractFixtures.progress.status,
+            },
+          },
+        };
       },
     });
   });
@@ -311,7 +331,7 @@ function journeyControlScenarioFactory(): ContractProviderFactory<"JourneyContro
         return {
           ok: true,
           value: {
-            schemaVersion: 2,
+            schemaVersion: 3,
             journeyId: request.journeyId,
             status: "cancelled",
             completedPages: 0,

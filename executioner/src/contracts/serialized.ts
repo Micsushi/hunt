@@ -2,6 +2,7 @@ import {
   booleanProfileFactIds,
   browserPageId,
   eventId,
+  fieldId,
   generatedEvidenceId,
   fixturePageId,
   fixtureRunId,
@@ -12,6 +13,7 @@ import {
   mcpRequestId,
   numberProfileFactIds,
   phaseIds,
+  questionId,
   stableErrorPolicy,
   stepIds,
   textProfileFactIds,
@@ -38,13 +40,13 @@ import type {
 export const SERIALIZED_CONTRACT_VERSION = 2 as const;
 export const serializedContractVersions = {
   fixtureManifest: 2,
-  durableJourneyState: 2,
+  durableJourneyState: 3,
   eventEnvelope: 2,
   errorEnvelope: 2,
   evidenceManifest: 2,
-  terminalResult: 2,
+  terminalResult: 3,
   mcpRequest: 2,
-  mcpResponse: 2,
+  mcpResponse: 3,
 } as const;
 
 export type ContractParseErrorCode =
@@ -224,6 +226,7 @@ const journeyStatuses = [
   "running",
   "cancelling",
   "review_reached",
+  "blocked",
   "cancelled",
   "failed",
 ] as const satisfies readonly JourneyStatus[];
@@ -270,12 +273,13 @@ export function parseDurableJourneyState(
   value: unknown,
 ): DurableJourneyState {
   const snapshot = admittedSerializedSnapshot(value);
-  const state = versioned(snapshot, "$", [
-    "journeyId",
-    "status",
-    "pageId",
-    "revision",
-  ]);
+  const state = versioned(
+    snapshot,
+    "$",
+    ["journeyId", "status", "pageId", "revision"],
+    [],
+    serializedContractVersions.durableJourneyState,
+  );
   identifier(state.journeyId, "$.journeyId", journeyId);
   oneOf(state.status, journeyStatuses, "$.status");
   if (state.pageId !== null) {
@@ -482,11 +486,11 @@ export function parseTerminalResult(value: unknown): TerminalResult {
     "journeyId",
     "status",
     "completedPages",
-  ], ["errorCode"], serializedContractVersions.terminalResult);
+  ], ["errorCode", "factualOutcome"], serializedContractVersions.terminalResult);
   identifier(result.journeyId, "$.journeyId", journeyId);
   const status = oneOf(
     result.status,
-    ["review_reached", "cancelled", "failed"],
+    ["review_reached", "blocked", "cancelled", "failed"],
     "$.status",
   );
   integer(result.completedPages, "$.completedPages");
@@ -495,10 +499,54 @@ export function parseTerminalResult(value: unknown): TerminalResult {
       throw new ContractParseError("missing_key", "$.errorCode");
     }
     oneOf(result.errorCode, stableErrorCodes, "$.errorCode");
-  } else if (Object.hasOwn(result, "errorCode")) {
-    throw new ContractParseError("extra_key", "$.errorCode");
+    if (Object.hasOwn(result, "factualOutcome")) {
+      throw new ContractParseError("extra_key", "$.factualOutcome");
+    }
+  } else if (status === "blocked") {
+    if (Object.hasOwn(result, "errorCode")) {
+      throw new ContractParseError("extra_key", "$.errorCode");
+    }
+    if (!Object.hasOwn(result, "factualOutcome")) {
+      throw new ContractParseError("missing_key", "$.factualOutcome");
+    }
+    parseFactualTerminalOutcome(result.factualOutcome, "$.factualOutcome");
+  } else {
+    if (Object.hasOwn(result, "errorCode")) {
+      throw new ContractParseError("extra_key", "$.errorCode");
+    }
+    if (Object.hasOwn(result, "factualOutcome")) {
+      throw new ContractParseError("extra_key", "$.factualOutcome");
+    }
   }
   return snapshot as TerminalResult;
+}
+
+function parseFactualTerminalOutcome(value: unknown, path: string): void {
+  const outcome = exact(value, path, ["source", "result"]);
+  const source = oneOf(
+    outcome.source,
+    ["page_understanding", "answer_resolution"],
+    `${path}.source`,
+  );
+  if (source === "page_understanding") {
+    const result = exact(outcome.result, `${path}.result`, ["kind", "pageId"]);
+    oneOf(result.kind, ["unknown", "ambiguous"], `${path}.result.kind`);
+    identifier(result.pageId, `${path}.result.pageId`, browserPageId);
+    return;
+  }
+  const candidate = record(outcome.result, `${path}.result`);
+  const kind = oneOf(
+    candidate.kind,
+    ["profile_answer_missing", "unsupported"],
+    `${path}.result.kind`,
+  );
+  if (kind === "profile_answer_missing") {
+    const result = exact(candidate, `${path}.result`, ["kind", "questionId"]);
+    identifier(result.questionId, `${path}.result.questionId`, questionId);
+    return;
+  }
+  const result = exact(candidate, `${path}.result`, ["kind", "fieldId"]);
+  identifier(result.fieldId, `${path}.result.fieldId`, fieldId);
 }
 
 export function parseApplicantProfile(value: unknown): ApplicantProfile {
@@ -599,6 +647,12 @@ const schemaVersion = { const: SERIALIZED_CONTRACT_VERSION } as const;
 const mcpSchemaVersion = {
   const: serializedContractVersions.mcpRequest,
 } as const;
+const durableJourneyStateSchemaVersion = {
+  const: serializedContractVersions.durableJourneyState,
+} as const;
+const mcpResponseSchemaVersion = {
+  const: serializedContractVersions.mcpResponse,
+} as const;
 const errorSchemaVersion = {
   const: serializedContractVersions.errorEnvelope,
 } as const;
@@ -665,15 +719,71 @@ const terminalResultSchema = {
   properties: {
     schemaVersion: terminalSchemaVersion,
     journeyId: journeyIdentifierSchema,
-    status: { enum: ["review_reached", "cancelled", "failed"] },
+    status: { enum: ["review_reached", "blocked", "cancelled", "failed"] },
     completedPages: nonNegativeInteger,
     errorCode: { enum: stableErrorCodes },
+    factualOutcome: {
+      oneOf: [
+        {
+          type: "object",
+          additionalProperties: false,
+          required: ["source", "result"],
+          properties: {
+            source: { const: "page_understanding" },
+            result: {
+              type: "object",
+              additionalProperties: false,
+              required: ["kind", "pageId"],
+              properties: {
+                kind: { enum: ["unknown", "ambiguous"] },
+                pageId: opaqueIdentifierSchema,
+              },
+            },
+          },
+        },
+        {
+          type: "object",
+          additionalProperties: false,
+          required: ["source", "result"],
+          properties: {
+            source: { const: "answer_resolution" },
+            result: {
+              oneOf: [
+                {
+                  type: "object",
+                  additionalProperties: false,
+                  required: ["kind", "questionId"],
+                  properties: {
+                    kind: { const: "profile_answer_missing" },
+                    questionId: opaqueIdentifierSchema,
+                  },
+                },
+                {
+                  type: "object",
+                  additionalProperties: false,
+                  required: ["kind", "fieldId"],
+                  properties: {
+                    kind: { const: "unsupported" },
+                    fieldId: opaqueIdentifierSchema,
+                  },
+                },
+              ],
+            },
+          },
+        },
+      ],
+    },
   },
   allOf: [
     {
       if: { properties: { status: { const: "failed" } } },
       then: { required: ["errorCode"] },
       else: { not: { required: ["errorCode"] } },
+    },
+    {
+      if: { properties: { status: { const: "blocked" } } },
+      then: { required: ["factualOutcome"] },
+      else: { not: { required: ["factualOutcome"] } },
     },
   ],
 } as const;
@@ -712,7 +822,7 @@ export const serializedSchemas = {
       "revision",
     ],
     properties: {
-      schemaVersion,
+      schemaVersion: durableJourneyStateSchemaVersion,
       journeyId: journeyIdentifierSchema,
       status: { enum: journeyStatuses },
       pageId: { type: ["string", "null"], minLength: 1, maxLength: 128, pattern: "^[A-Za-z0-9][A-Za-z0-9._-]*$" },
@@ -848,7 +958,7 @@ export const serializedSchemas = {
     additionalProperties: false,
     required: ["schemaVersion", "requestId", "ok"],
     properties: {
-      schemaVersion: mcpSchemaVersion,
+      schemaVersion: mcpResponseSchemaVersion,
       requestId: opaqueIdentifierSchema,
       ok: { type: "boolean" },
       result: {

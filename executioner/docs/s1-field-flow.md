@@ -53,6 +53,13 @@ option decision, and F7 owns behavior dispatch for every row.
 | Evidence | F9 | F11 | F11 | F11 | F9 | F10 |
 | Terminal result | F9 | External MCP Client | F9 | F9 | F9 | F10 |
 
+F5 page-understanding `unknown` or `ambiguous` and F6 answer-resolution
+`profile_answer_missing` or `unsupported` are factual terminal outcomes. F9
+publishes them as `blocked` with only the current page, question, or field
+coordinate. F10 projects provider-attributed terminal events to value-free
+`blocked` progress. These facts never enter the stable-error or
+`FailureContext` channels.
+
 ## Control slice
 
 Each retained R2 F4, F9, F10, and F11 port occurs once. The R1

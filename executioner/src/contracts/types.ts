@@ -707,11 +707,12 @@ export type JourneyStatus =
   | "running"
   | "cancelling"
   | "review_reached"
+  | "blocked"
   | "cancelled"
   | "failed";
 
 export interface DurableJourneyState {
-  readonly schemaVersion: 2;
+  readonly schemaVersion: 3;
   readonly journeyId: JourneyId;
   readonly status: JourneyStatus;
   readonly pageId: BrowserPageId | null;
@@ -1023,19 +1024,43 @@ export interface JourneyOperationResult {
   readonly accepted: boolean;
 }
 
+export type FactualTerminalOutcome =
+  | {
+      readonly source: "page_understanding";
+      readonly result:
+        | { readonly kind: "unknown"; readonly pageId: BrowserPageId }
+        | { readonly kind: "ambiguous"; readonly pageId: BrowserPageId };
+    }
+  | {
+      readonly source: "answer_resolution";
+      readonly result:
+        | {
+            readonly kind: "profile_answer_missing";
+            readonly questionId: QuestionId;
+          }
+        | { readonly kind: "unsupported"; readonly fieldId: FieldId };
+    };
+
 export type TerminalResult =
   | {
-      readonly schemaVersion: 2;
+      readonly schemaVersion: 3;
       readonly journeyId: JourneyId;
       readonly status: "review_reached" | "cancelled";
       readonly completedPages: number;
     }
   | {
-      readonly schemaVersion: 2;
+      readonly schemaVersion: 3;
       readonly journeyId: JourneyId;
       readonly status: "failed";
       readonly completedPages: number;
       readonly errorCode: StableErrorCode;
+    }
+  | {
+      readonly schemaVersion: 3;
+      readonly journeyId: JourneyId;
+      readonly status: "blocked";
+      readonly completedPages: number;
+      readonly factualOutcome: FactualTerminalOutcome;
     };
 
 export type McpRequest =
@@ -1072,13 +1097,13 @@ export type McpResult =
 
 export type McpResponse =
   | {
-      readonly schemaVersion: 2;
+      readonly schemaVersion: 3;
       readonly requestId: McpRequestId;
       readonly ok: true;
       readonly result: McpResult;
     }
   | {
-      readonly schemaVersion: 2;
+      readonly schemaVersion: 3;
       readonly requestId: McpRequestId;
       readonly ok: false;
       readonly error: ErrorEnvelope;

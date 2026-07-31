@@ -11,7 +11,7 @@ import { contractFixtures } from "../../src/testing/contracts/fixtures.ts";
 
 if (false) {
   const invalidState: import("../../src/contracts/index.ts").DurableJourneyState = {
-    schemaVersion: 2,
+    schemaVersion: 3,
     journeyId: contractFixtures.journeyState.journeyId,
     status: "running",
     // @ts-expect-error durable pages retain a branded browser page ID

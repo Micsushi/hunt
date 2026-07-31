@@ -14,16 +14,16 @@ import {
   serializedContractVersions,
 } from "../../../src/contracts/index.ts";
 
-test("every incompatibly changed wire shape is version 2", () => {
+test("serialized contract versions identify only the changed R2.n shapes", () => {
   assert.deepEqual(serializedContractVersions, {
     fixtureManifest: 2,
-    durableJourneyState: 2,
+    durableJourneyState: 3,
     eventEnvelope: 2,
     errorEnvelope: 2,
     evidenceManifest: 2,
-    terminalResult: 2,
+    terminalResult: 3,
     mcpRequest: 2,
-    mcpResponse: 2,
+    mcpResponse: 3,
   });
 
   assert.equal(
@@ -180,7 +180,7 @@ test("every retained serialized identity rejects oversize and nongenerated value
     profileId: "x".repeat(129), revision: 1, facts: [],
   }));
   invalidValue(() => parseMcpResponse({
-    schemaVersion: 2,
+    schemaVersion: 3,
     requestId: "request-1",
     ok: true,
     result: {

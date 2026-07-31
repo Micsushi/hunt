@@ -217,5 +217,11 @@ test("failure context derives owner and retryability from its error code", () =>
       component: "F9",
     };
     void invalid;
+    const factualOutcomeIsNotFailure: FailureContext = {
+      ...context,
+      // @ts-expect-error factual terminal outcomes are not stable errors
+      code: "profile_answer_missing",
+    };
+    void factualOutcomeIsNotFailure;
   }
 });

@@ -169,7 +169,7 @@ test("MCP scenario rejects a provider that reports a fixed non-cancelled termina
             return {
               ok: true,
               value: {
-                schemaVersion: 2,
+                schemaVersion: 3,
                 requestId: request.requestId,
                 ok: true,
                 result: { kind: "status", progress: contractFixtures.progress },
@@ -180,7 +180,7 @@ test("MCP scenario rejects a provider that reports a fixed non-cancelled termina
             return {
               ok: true,
               value: {
-                schemaVersion: 2,
+                schemaVersion: 3,
                 requestId: request.requestId,
                 ok: true,
                 result: { kind: "terminal", terminal: contractFixtures.terminalResult },

@@ -35,7 +35,7 @@ const serializedCases = [
     name: "durable journey state",
     parse: parseDurableJourneyState,
     value: {
-      schemaVersion: 2,
+      schemaVersion: 3,
       journeyId: "journey_0123456789abcdef",
       status: "ready",
       pageId: null,
@@ -106,7 +106,7 @@ const serializedCases = [
     name: "MCP response",
     parse: parseMcpResponse,
     value: {
-      schemaVersion: 2,
+      schemaVersion: 3,
       requestId: "request-1",
       ok: true,
       result: {
@@ -120,7 +120,7 @@ const serializedCases = [
     name: "terminal result",
     parse: parseTerminalResult,
     value: {
-      schemaVersion: 2,
+      schemaVersion: 3,
       journeyId: "journey_0123456789abcdef",
       status: "review_reached",
       completedPages: 3,
@@ -164,7 +164,7 @@ test("serialized inputs reject malformed fields with stable codes", () => {
   expectCode(
     () =>
       parseTerminalResult({
-        schemaVersion: 2,
+        schemaVersion: 3,
         journeyId: "journey_0123456789abcdef",
         status: "review_reached",
         completedPages: "three",
@@ -201,7 +201,7 @@ test("serialized inputs reject malformed fields with stable codes", () => {
 test("MCP accepted results return operation and journey identity", () => {
   assert.deepEqual(
     parseMcpResponse({
-      schemaVersion: 2,
+      schemaVersion: 3,
       requestId: "request-1",
       ok: true,
       result: {
@@ -211,7 +211,7 @@ test("MCP accepted results return operation and journey identity", () => {
       },
     }),
     {
-      schemaVersion: 2,
+      schemaVersion: 3,
       requestId: "request-1",
       ok: true,
       result: {
@@ -226,7 +226,7 @@ test("MCP accepted results return operation and journey identity", () => {
 test("MCP status returns the value-free progress projection", () => {
   assert.deepEqual(
     parseMcpResponse({
-      schemaVersion: 2,
+      schemaVersion: 3,
       requestId: "request-2",
       ok: true,
       result: {
@@ -239,7 +239,7 @@ test("MCP status returns the value-free progress projection", () => {
       },
     }),
     {
-      schemaVersion: 2,
+      schemaVersion: 3,
       requestId: "request-2",
       ok: true,
       result: {
@@ -321,7 +321,7 @@ test("safe-integer parsers and schemas share the JavaScript upper bound", () => 
   for (const parse of [
     () =>
       parseDurableJourneyState({
-        schemaVersion: 2,
+        schemaVersion: 3,
         journeyId: "journey_0123456789abcdef",
         status: "ready",
         pageId: null,
@@ -329,7 +329,7 @@ test("safe-integer parsers and schemas share the JavaScript upper bound", () => 
       }),
     () =>
       parseMcpResponse({
-        schemaVersion: 2,
+        schemaVersion: 3,
         requestId: "request-1",
         ok: true,
         result: {
@@ -343,7 +343,7 @@ test("safe-integer parsers and schemas share the JavaScript upper bound", () => 
       }),
     () =>
       parseTerminalResult({
-        schemaVersion: 2,
+        schemaVersion: 3,
         journeyId: "journey_0123456789abcdef",
         status: "review_reached",
         completedPages: unsafe,

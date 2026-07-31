@@ -323,7 +323,7 @@ test("conformance accepts a generated F4 bootstrap journey", async () => {
         journeyId,
         inputs: contractFixtures.journeyInputs,
         state: {
-          schemaVersion: 2,
+          schemaVersion: 3,
           journeyId,
           status: "ready",
           pageId: null,
@@ -342,7 +342,7 @@ test("conformance chains loaded F4 state into its transition", async () => {
     load: async (request, signal) =>
       result(signal, {
         state: {
-          schemaVersion: 2,
+          schemaVersion: 3,
           journeyId: request.journeyId,
           status: "running",
           pageId: browserPageId("runtime-page-3"),
@@ -352,7 +352,7 @@ test("conformance chains loaded F4 state into its transition", async () => {
     transition: async (request, signal) =>
       result(signal, {
         state: {
-          schemaVersion: 2,
+          schemaVersion: 3,
           journeyId: request.journeyId,
           status: request.status,
           pageId: request.pageId,
@@ -397,7 +397,7 @@ test("conformance chains a generated JourneyControl identity", async () => {
     result: async (request, signal) => {
       assert.equal(request.journeyId, journeyId);
       return result(signal, {
-        schemaVersion: 2,
+        schemaVersion: 3,
         journeyId: request.journeyId,
         status: "cancelled",
         completedPages: 2,
@@ -417,13 +417,13 @@ test("conformance accepts runtime-owned terminal progress", async () => {
         throw new TypeError("journey_result request is required");
       }
       return result(signal, {
-        schemaVersion: 2 as const,
+        schemaVersion: 3 as const,
         requestId: request.requestId,
         ok: true as const,
         result: {
           kind: "terminal" as const,
           terminal: {
-            schemaVersion: 2 as const,
+            schemaVersion: 3 as const,
             journeyId: request.params.journeyId,
             status: "review_reached" as const,
             completedPages: 7,
@@ -445,13 +445,13 @@ test("conformance rejects an invented terminal error code", async () => {
       signal: AbortSignal,
     ) =>
       result(signal, {
-        schemaVersion: 2,
+        schemaVersion: 3,
         requestId: request.requestId,
         ok: true,
         result: {
           kind: "terminal",
           terminal: {
-            schemaVersion: 2,
+            schemaVersion: 3,
             journeyId: contractFixtures.journeyState.journeyId,
             status: "failed",
             completedPages: 1,

@@ -84,7 +84,7 @@ export function createJourneyInputsFixture(): JourneyInputs {
 }
 
 const journeyState = {
-  schemaVersion: 2,
+  schemaVersion: 3,
   journeyId: fixtureValue(generatedJourneyId(generatedIds)),
   status: "running",
   pageId: browserPageId("page-profile"),
@@ -213,7 +213,7 @@ const evidenceManifest = {
   records: [evidenceRecord],
 } as const satisfies EvidenceManifest;
 const terminalResult = {
-  schemaVersion: 2,
+  schemaVersion: 3,
   journeyId: journeyState.journeyId,
   status: "review_reached",
   completedPages: 3,

@@ -75,8 +75,30 @@ function legalJourneyStatus(value: unknown): boolean {
     value === "running" ||
     value === "cancelling" ||
     value === "review_reached" ||
+    value === "blocked" ||
     value === "cancelled" ||
     value === "failed"
+  );
+}
+
+function isFactualBlockedTerminalEvent(
+  event: {
+    readonly kind: string;
+    readonly component: string;
+    readonly phase: string;
+    readonly step: string;
+  },
+): boolean {
+  return event.kind === "journey_terminal" && (
+    (
+      event.component === "F5" &&
+      event.phase === "page_understanding" &&
+      event.step === "classify"
+    ) || (
+      event.component === "F6" &&
+      event.phase === "answer_resolution" &&
+      event.step === "resolve"
+    )
   );
 }
 
@@ -280,7 +302,7 @@ export const contractOperationCases = {
         journeyId: contractFixtures.journeyState.journeyId,
         inputs: contractFixtures.journeyInputs,
         state: {
-          schemaVersion: 2,
+          schemaVersion: 3,
           journeyId: contractFixtures.journeyState.journeyId,
           status: "ready",
           pageId: null,
@@ -305,7 +327,7 @@ export const contractOperationCases = {
           "pageId",
           "revision",
         ]) &&
-        value.state.schemaVersion === 2 &&
+        value.state.schemaVersion === 3 &&
         value.state.journeyId === value.journeyId &&
         value.state.status === "ready" &&
         value.state.pageId === null &&
@@ -342,7 +364,7 @@ export const contractOperationCases = {
           "pageId",
           "revision",
         ]) &&
-        value.state.schemaVersion === 2 &&
+        value.state.schemaVersion === 3 &&
         value.state.journeyId === request.journeyId &&
         legalJourneyStatus(value.state.status) &&
         (value.state.pageId === null || nonEmpty(value.state.pageId)) &&
@@ -379,7 +401,7 @@ export const contractOperationCases = {
           "pageId",
           "revision",
         ]) &&
-        value.state.schemaVersion === 2 &&
+        value.state.schemaVersion === 3 &&
         value.state.journeyId === request.journeyId &&
         value.state.status === request.status &&
         value.state.pageId === request.pageId &&
@@ -527,7 +549,7 @@ export const contractOperationCases = {
         return { journeyId: started.journeyId };
       },
       expected: {
-        schemaVersion: 2,
+        schemaVersion: 3,
         journeyId: contractFixtures.journeyState.journeyId,
         status: "cancelled",
         completedPages: contractFixtures.terminalResult.completedPages,
@@ -539,7 +561,7 @@ export const contractOperationCases = {
           "status",
           "completedPages",
         ]) &&
-        value.schemaVersion === 2 &&
+        value.schemaVersion === 3 &&
         value.journeyId === request.journeyId &&
         value.status === "cancelled" &&
         nonNegativeInteger(value.completedPages),
@@ -556,7 +578,7 @@ export const contractOperationCases = {
         },
       },
       expected: {
-        schemaVersion: 2,
+        schemaVersion: 3,
         requestId: mcpRequestId("request-synthetic"),
         ok: true,
         result: {
@@ -600,7 +622,11 @@ export const contractOperationCases = {
           "completedSteps",
         ]) &&
         value.progress.journeyId === request.event.journeyId &&
-        legalJourneyStatus(value.progress.status) &&
+        value.progress.status === (
+          isFactualBlockedTerminalEvent(request.event)
+            ? "blocked"
+            : contractFixtures.progress.status
+        ) &&
         nonNegativeInteger(value.progress.completedSteps),
     },
   },
