@@ -1,6 +1,7 @@
 # C3 v3
 
-C3 v2 has been removed from `main`. C3 v3 is planned but not implemented.
+C3 v2 has been removed from `main`. C3 v3 runtime behavior is not implemented.
+The v3 strict-TypeScript package and dependency rule are established.
 
 The v2 source, fixtures, tests, and supporting tools remain available on:
 
@@ -20,3 +21,14 @@ sources are reference material only. C3 v3 must not import or execute v2.
 - Unknown personal facts stop with `profile_answer_missing`.
 
 Implementation begins only from an approved stage, feature, and task plan.
+
+## Development
+
+```powershell
+npm ci
+npm test -- tests/architecture
+npm run quality
+```
+
+Tests use Node's built-in runner. Components may depend on shared contracts but
+not on peer implementations or C3 v2 source.
