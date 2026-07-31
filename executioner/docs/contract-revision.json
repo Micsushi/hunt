@@ -1,0 +1,22 @@
+{
+  "schemaVersion": 1,
+  "historicalR1": "c57c24ef59aec6dd6e2ee8f222aa64695777a0dd",
+  "contractSource": "d95e845e61bcf0a030b3b07c6d6261e3d95c1fad",
+  "planningRevision": "8c5785abf4f0d08dba871744cda006e906dab051",
+  "contractTreeOids": {
+    "executioner/src/contracts": "2759362c506526699a797e94ffd9c4b3f6fcf6ea",
+    "executioner/src/testing/contracts": "a8a34e7a619daffc17230223dc391d9981b97237",
+    "executioner/tests/contracts": "067b4d785f59a35158376adacd3171cb72cf402a",
+    "executioner/tests/security/privacy": "24771827d97117615b9360579e3293a05d3784dd"
+  },
+  "serializedVersions": {
+    "fixtureManifest": 2,
+    "durableJourneyState": 2,
+    "eventEnvelope": 2,
+    "errorEnvelope": 2,
+    "evidenceManifest": 2,
+    "terminalResult": 2,
+    "mcpRequest": 2,
+    "mcpResponse": 2
+  }
+}

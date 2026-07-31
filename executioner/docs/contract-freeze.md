@@ -1,12 +1,17 @@
 # C3 Stage 1 contract freeze
 
-Status: R2 draft, not accepted
+Status: R2 frozen component baseline
 
-The historical R1 contract source is Git revision
-`d95e845e61bcf0a030b3b07c6d6261e3d95c1fad`. R2 amends that source and does
-not yet have an accepted F1 base. T8 records the accepted SHA and contract tree
-object IDs after authorized commit and review. Until then, no component may
-claim this draft as its accepted base.
+The historical R1 baseline is
+`c57c24ef59aec6dd6e2ee8f222aa64695777a0dd`, its contract source is
+`d95e845e61bcf0a030b3b07c6d6261e3d95c1fad`, and the recovery planning
+revision is `8c5785abf4f0d08dba871744cda006e906dab051`.
+
+The machine-readable freeze record is `docs/contract-revision.json`. It stores
+the four named contract tree object IDs and every authoritative serialized
+version. It deliberately does not store the accepted F1 commit because a commit
+cannot contain its own hash. After review, the coordinator records that commit
+and review evidence in the private acceptance ledger.
 
 ## Serialized versions
 
@@ -18,10 +23,10 @@ event envelopes, and evidence manifests now enforce tighter bounded coordinate
 or generated-identifier grammars used by their TypeScript contracts. Those
 stricter grammars are also incompatible with their version 1 wire shapes.
 
-F2 through F11 must start from the final accepted F1 tip recorded in the Hunt
-handoff. That tip contains this contract revision and the shared test kit. A
-component branch may use the types, fixtures, fakes, and conformance helper. It
-must not edit the contract or import a peer implementation.
+F2 through F11 must start from the accepted F1 tip recorded by the coordinator.
+That tip contains this contract revision and the shared test kit. A component
+branch may use the types, fixtures, fakes, and conformance helper. It must not
+edit the contract or import a peer implementation.
 
 ## Ownership and changes
 
