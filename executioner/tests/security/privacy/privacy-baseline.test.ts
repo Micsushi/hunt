@@ -40,6 +40,31 @@ test("bounded payload admission rejects credential and raw-content keys", () => 
   );
 });
 
+test("frozen credential aliases report paths without rejected values", () => {
+  const aliases = [
+    "password",
+    "workdayPassword",
+    "apiKey",
+    "accessToken",
+    "sessionCookie",
+    "authorizationHeader",
+    "privateKey",
+    "clientSecret",
+    "bearerToken",
+    "authToken",
+    "oauthToken",
+  ] as const;
+
+  for (const alias of aliases) {
+    const rejected = `rejected-${alias}`;
+    const violations = findPayloadPrivacyViolations({
+      nested: { [alias]: rejected },
+    });
+    assert.deepEqual(violations, [`$.nested.${alias}:credential`]);
+    assert.equal(violations.join(" ").includes(rejected), false);
+  }
+});
+
 test("file scanning is bounded to source, tests, and fixtures", () => {
   const root = mkdtempSync(join(tmpdir(), "hunt-privacy-"));
 

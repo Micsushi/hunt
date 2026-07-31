@@ -10,11 +10,17 @@ type PayloadPrivacyCode = "credential" | "email_body" | "raw_text";
 
 const payloadKeyCodes: ReadonlyMap<string, PayloadPrivacyCode> = new Map([
   ["password", "credential"],
+  ["workdaypassword", "credential"],
   ["passcode", "credential"],
   ["credential", "credential"],
   ["apikey", "credential"],
+  ["privatekey", "credential"],
+  ["clientsecret", "credential"],
   ["accesstoken", "credential"],
   ["refreshtoken", "credential"],
+  ["bearertoken", "credential"],
+  ["authtoken", "credential"],
+  ["oauthtoken", "credential"],
   ["sessioncookie", "credential"],
   ["authorizationheader", "credential"],
   ["emailbody", "email_body"],

@@ -46,6 +46,25 @@ function nonEmpty(value: unknown): value is string {
   return typeof value === "string" && value.length > 0;
 }
 
+function nonNegativeInteger(value: unknown): value is number {
+  return (
+    typeof value === "number" &&
+    Number.isSafeInteger(value) &&
+    value >= 0
+  );
+}
+
+function legalJourneyStatus(value: unknown): boolean {
+  return (
+    value === "ready" ||
+    value === "running" ||
+    value === "cancelling" ||
+    value === "review_reached" ||
+    value === "cancelled" ||
+    value === "failed"
+  );
+}
+
 const failureContext = {
   journeyId: contractFixtures.journeyState.journeyId,
   component: "F9",
@@ -121,7 +140,7 @@ export const contractOperationCases = {
     start: {
       request: {
         journeyId: contractFixtures.journeyState.journeyId,
-        target: "https://fixture.invalid/account",
+        target: "https://fixture.invalid/profile",
       },
       expected: {
         sessionId: contractFixtures.browserObservation.sessionId,
@@ -244,8 +263,37 @@ export const contractOperationCases = {
       expected: {
         journeyId: contractFixtures.journeyState.journeyId,
         inputs: contractFixtures.journeyInputs,
-        state: contractFixtures.journeyState,
+        state: {
+          schemaVersion: 1,
+          journeyId: contractFixtures.journeyState.journeyId,
+          status: "ready",
+          pageId: null,
+          revision: 0,
+        },
       },
+      assert: (value, request) =>
+        exactKeys(value, ["journeyId", "inputs", "state"]) &&
+        nonEmpty(value.journeyId) &&
+        exactKeys(value.inputs, ["job", "resume", "profile"]) &&
+        isDeepStrictEqual(value.inputs.job, contractFixtures.job) &&
+        value.inputs.job.jobId === request.jobId &&
+        isDeepStrictEqual(value.inputs.resume, contractFixtures.resume) &&
+        value.inputs.resume.resumeId === request.resumeId &&
+        isDeepStrictEqual(value.inputs.profile, contractFixtures.profile) &&
+        value.inputs.profile.profileId === request.profileId &&
+        value.inputs.profile.revision === contractFixtures.profile.revision &&
+        exactKeys(value.state, [
+          "schemaVersion",
+          "journeyId",
+          "status",
+          "pageId",
+          "revision",
+        ]) &&
+        value.state.schemaVersion === 1 &&
+        value.state.journeyId === value.journeyId &&
+        value.state.status === "ready" &&
+        value.state.pageId === null &&
+        value.state.revision === 0,
     },
   },
   ProfileQuery: {
@@ -268,19 +316,58 @@ export const contractOperationCases = {
         journeyId: contractFixtures.journeyState.journeyId,
       },
       expected: { state: contractFixtures.journeyState },
+      assert: (value, request) =>
+        exactKeys(value, ["state"]) &&
+        value.state !== null &&
+        exactKeys(value.state, [
+          "schemaVersion",
+          "journeyId",
+          "status",
+          "pageId",
+          "revision",
+        ]) &&
+        value.state.schemaVersion === 1 &&
+        value.state.journeyId === request.journeyId &&
+        legalJourneyStatus(value.state.status) &&
+        (value.state.pageId === null || nonEmpty(value.state.pageId)) &&
+        nonNegativeInteger(value.state.revision),
     },
     transition: {
-      request: {
-        journeyId: contractFixtures.journeyState.journeyId,
-        operationId: "operation-synthetic",
-        expectedRevision: contractFixtures.journeyState.revision,
-        status: "running",
-        pageId: contractFixtures.journeyState.pageId,
+      request: (results) => {
+        const loaded = results.load?.state;
+        if (loaded === undefined || loaded === null) {
+          throw new TypeError("JourneyStateStore.load state is required");
+        }
+        return {
+          journeyId: loaded.journeyId,
+          operationId: "operation-synthetic",
+          expectedRevision: loaded.revision,
+          status: loaded.status,
+          pageId: loaded.pageId,
+        };
       },
       expected: {
-        state: contractFixtures.journeyState,
+        state: {
+          ...contractFixtures.journeyState,
+          revision: contractFixtures.journeyState.revision + 1,
+        },
         applied: true,
       },
+      assert: (value, request) =>
+        exactKeys(value, ["state", "applied"]) &&
+        value.applied === true &&
+        exactKeys(value.state, [
+          "schemaVersion",
+          "journeyId",
+          "status",
+          "pageId",
+          "revision",
+        ]) &&
+        value.state.schemaVersion === 1 &&
+        value.state.journeyId === request.journeyId &&
+        value.state.status === request.status &&
+        value.state.pageId === request.pageId &&
+        value.state.revision === request.expectedRevision + 1,
     },
   },
   PageUnderstanding: {
@@ -373,29 +460,69 @@ export const contractOperationCases = {
         journeyId: contractFixtures.journeyState.journeyId,
         accepted: true,
       },
+      assert: (value, request) =>
+        exactKeys(value, ["operationId", "journeyId", "accepted"]) &&
+        value.operationId === request.operationId &&
+        nonEmpty(value.journeyId) &&
+        value.accepted === true,
+    },
+    status: {
+      request: (results) => {
+        const started = results.start;
+        if (started === undefined) {
+          throw new TypeError("JourneyControl.start result is required");
+        }
+        return { journeyId: started.journeyId };
+      },
+      expected: "running",
     },
     cancel: {
-      request: {
-        operationId: "operation-cancel-synthetic",
-        journeyId: contractFixtures.journeyState.journeyId,
+      request: (results) => {
+        const started = results.start;
+        if (started === undefined) {
+          throw new TypeError("JourneyControl.start result is required");
+        }
+        return {
+          operationId: "operation-cancel-synthetic",
+          journeyId: started.journeyId,
+        };
       },
       expected: {
         operationId: "operation-cancel-synthetic",
         journeyId: contractFixtures.journeyState.journeyId,
         accepted: true,
       },
-    },
-    status: {
-      request: {
-        journeyId: contractFixtures.journeyState.journeyId,
-      },
-      expected: "running",
+      assert: (value, request) =>
+        exactKeys(value, ["operationId", "journeyId", "accepted"]) &&
+        value.operationId === request.operationId &&
+        value.journeyId === request.journeyId &&
+        value.accepted === true,
     },
     result: {
-      request: {
-        journeyId: contractFixtures.journeyState.journeyId,
+      request: (results) => {
+        const started = results.start;
+        if (started === undefined) {
+          throw new TypeError("JourneyControl.start result is required");
+        }
+        return { journeyId: started.journeyId };
       },
-      expected: contractFixtures.terminalResult,
+      expected: {
+        schemaVersion: 1,
+        journeyId: contractFixtures.journeyState.journeyId,
+        status: "cancelled",
+        completedPages: contractFixtures.terminalResult.completedPages,
+      },
+      assert: (value, request) =>
+        exactKeys(value, [
+          "schemaVersion",
+          "journeyId",
+          "status",
+          "completedPages",
+        ]) &&
+        value.schemaVersion === 1 &&
+        value.journeyId === request.journeyId &&
+        value.status === "cancelled" &&
+        nonNegativeInteger(value.completedPages),
     },
   },
   McpJourneyApi: {
@@ -417,6 +544,50 @@ export const contractOperationCases = {
           terminal: contractFixtures.terminalResult,
         },
       },
+      assert: (value, request) => {
+        if (
+          !exactKeys(value, [
+            "schemaVersion",
+            "requestId",
+            "ok",
+            "result",
+          ]) ||
+          value.schemaVersion !== 1 ||
+          value.requestId !== request.requestId ||
+          value.ok !== true ||
+          request.method !== "journey_result" ||
+          value.result.kind !== "terminal" ||
+          !exactKeys(value.result, ["kind", "terminal"])
+        ) {
+          return false;
+        }
+        const terminal = value.result.terminal;
+        const terminalKeys =
+          terminal.status === "failed"
+            ? [
+                "schemaVersion",
+                "journeyId",
+                "status",
+                "completedPages",
+                "errorCode",
+              ]
+            : [
+                "schemaVersion",
+                "journeyId",
+                "status",
+                "completedPages",
+              ];
+        return (
+          exactKeys(terminal, terminalKeys) &&
+          terminal.schemaVersion === 1 &&
+          terminal.journeyId === request.params.journeyId &&
+          (terminal.status === "review_reached" ||
+            terminal.status === "cancelled" ||
+            terminal.status === "failed") &&
+          nonNegativeInteger(terminal.completedPages) &&
+          (terminal.status !== "failed" || nonEmpty(terminal.errorCode))
+        );
+      },
     },
   },
   EventSink: {
@@ -426,6 +597,17 @@ export const contractOperationCases = {
         appended: true,
         progress: contractFixtures.progress,
       },
+      assert: (value, request) =>
+        exactKeys(value, ["appended", "progress"]) &&
+        value.appended === true &&
+        exactKeys(value.progress, [
+          "journeyId",
+          "status",
+          "completedSteps",
+        ]) &&
+        value.progress.journeyId === request.event.journeyId &&
+        legalJourneyStatus(value.progress.status) &&
+        nonNegativeInteger(value.progress.completedSteps),
     },
   },
   ProgressReader: {
@@ -434,6 +616,15 @@ export const contractOperationCases = {
         journeyId: contractFixtures.journeyState.journeyId,
       },
       expected: contractFixtures.progress,
+      assert: (value, request) =>
+        exactKeys(value, [
+          "journeyId",
+          "status",
+          "completedSteps",
+        ]) &&
+        value.journeyId === request.journeyId &&
+        legalJourneyStatus(value.status) &&
+        nonNegativeInteger(value.completedSteps),
     },
   },
   FailureReporter: {
@@ -452,6 +643,14 @@ export const contractOperationCases = {
           delivered: true,
         },
       },
+      assert: (value, request) =>
+        exactKeys(value, ["report", "notification"]) &&
+        exactKeys(value.report, ["reportId", "context"]) &&
+        value.report.reportId === request.reportId &&
+        isDeepStrictEqual(value.report.context, request.context) &&
+        exactKeys(value.notification, ["reportId", "delivered"]) &&
+        value.notification.reportId === request.reportId &&
+        typeof value.notification.delivered === "boolean",
     },
   },
   PrivacyGuard: {
@@ -494,6 +693,24 @@ export const contractOperationCases = {
         journeyId: contractFixtures.journeyState.journeyId,
       },
       expected: contractFixtures.evidenceManifest,
+      assert: (value, request) =>
+        exactKeys(value, ["schemaVersion", "journeyId", "records"]) &&
+        value.schemaVersion === 1 &&
+        value.journeyId === request.journeyId &&
+        Array.isArray(value.records) &&
+        value.records.every(
+          (record) =>
+            exactKeys(record, [
+              "id",
+              "kind",
+              "component",
+              "phase",
+              "step",
+              "sha256",
+            ]) &&
+            nonEmpty(record.id) &&
+            nonEmpty(record.sha256),
+        ),
     },
   },
   ModelController: {
@@ -510,6 +727,18 @@ export const contractOperationCases = {
           optionIds: ["option-synthetic"],
         },
       },
+      assert: (value, request) =>
+        exactKeys(value, ["attemptId", "suggestion"]) &&
+        value.attemptId === request.attemptId &&
+        exactKeys(value.suggestion, ["kind", "optionIds"]) &&
+        (value.suggestion.kind === "option_ranking" ||
+          value.suggestion.kind === "question_hint") &&
+        Array.isArray(value.suggestion.optionIds) &&
+        new Set(value.suggestion.optionIds).size ===
+          value.suggestion.optionIds.length &&
+        value.suggestion.optionIds.every((optionId) =>
+          request.allowedOptionIds.includes(optionId),
+        ),
     },
   },
 } as const satisfies {
