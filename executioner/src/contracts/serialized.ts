@@ -548,7 +548,11 @@ export function parseApplicantProfile(value: unknown): ApplicantProfile {
 }
 
 const nonEmptyString = { type: "string", minLength: 1 } as const;
-const nonNegativeInteger = { type: "integer", minimum: 0 } as const;
+const nonNegativeInteger = {
+  type: "integer",
+  minimum: 0,
+  maximum: Number.MAX_SAFE_INTEGER,
+} as const;
 const schemaVersion = { const: SERIALIZED_CONTRACT_VERSION } as const;
 
 const sourceReferenceSchema = {

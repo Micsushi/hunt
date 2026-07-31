@@ -12,6 +12,7 @@ import {
   parseMcpRequest,
   parseMcpResponse,
   parseTerminalResult,
+  serializedSchemas,
 } from "../../../src/contracts/index.ts";
 
 const serializedCases = [
@@ -310,4 +311,62 @@ test("ApplicantProfile rejects credential fields at its intake boundary", () => 
       "credential_forbidden",
     );
   }
+});
+
+test("safe-integer parsers and schemas share the JavaScript upper bound", () => {
+  const unsafe = Number.MAX_SAFE_INTEGER + 1;
+
+  for (const parse of [
+    () =>
+      parseDurableJourneyState({
+        schemaVersion: 1,
+        journeyId: "journey-1",
+        status: "ready",
+        pageId: null,
+        revision: unsafe,
+      }),
+    () =>
+      parseMcpResponse({
+        schemaVersion: 1,
+        requestId: "request-1",
+        ok: true,
+        result: {
+          kind: "status",
+          progress: {
+            journeyId: "journey-1",
+            status: "running",
+            completedSteps: unsafe,
+          },
+        },
+      }),
+    () =>
+      parseTerminalResult({
+        schemaVersion: 1,
+        journeyId: "journey-1",
+        status: "review_reached",
+        completedPages: unsafe,
+      }),
+    () =>
+      parseApplicantProfile({
+        profileId: "profile-1",
+        revision: unsafe,
+        facts: [],
+      }),
+  ]) {
+    expectCode(parse, "invalid_value");
+  }
+
+  assert.equal(
+    serializedSchemas.durableJourneyState.properties.revision.maximum,
+    Number.MAX_SAFE_INTEGER,
+  );
+  assert.equal(
+    serializedSchemas.mcpResponse.properties.result.oneOf[1].properties
+      .progress.properties.completedSteps.maximum,
+    Number.MAX_SAFE_INTEGER,
+  );
+  assert.equal(
+    serializedSchemas.terminalResult.properties.completedPages.maximum,
+    Number.MAX_SAFE_INTEGER,
+  );
 });
