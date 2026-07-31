@@ -1,0 +1,161 @@
+import assert from "node:assert/strict";
+import { test } from "node:test";
+
+import {
+  browserReadbackText,
+  MAX_BROWSER_READBACK_CODE_POINTS,
+  type BrowserObservation,
+  type FieldIntent,
+  type JourneyBootstrapRequest,
+  journeyBootstrapReferenceKeys,
+  parseMcpRequest,
+  serializedSchemas,
+  type StartJourneyCommand,
+  uiBehaviorIds,
+} from "../../src/contracts/index.ts";
+
+test("browser observations carry bounded verifier readback", () => {
+  const observation = {
+    sessionId: "session-1",
+    pageId: "page-1",
+    origin: "http://fixture.invalid",
+    path: "/profile",
+    targets: [
+      {
+        token: "target-text",
+        role: "textbox",
+        name: browserReadbackText("First name"),
+        required: true,
+        options: [],
+        readback: { kind: "text", value: browserReadbackText("Ada") },
+      },
+      {
+        token: "target-check",
+        role: "checkbox",
+        name: browserReadbackText("Authorized"),
+        required: true,
+        options: [],
+        readback: { kind: "checked", checked: true },
+      },
+      {
+        token: "target-select",
+        role: "combobox",
+        name: browserReadbackText("Country"),
+        required: true,
+        options: [browserReadbackText("Synthetic option")],
+        readback: {
+          kind: "selected",
+          option: browserReadbackText("Synthetic option"),
+        },
+      },
+      {
+        token: "target-upload",
+        role: "file",
+        name: browserReadbackText("Resume"),
+        required: true,
+        options: [],
+        readback: { kind: "upload", resumeId: "resume-1" },
+      },
+    ],
+  } as const satisfies BrowserObservation;
+
+  assert.equal(MAX_BROWSER_READBACK_CODE_POINTS, 512);
+  assert.deepEqual(
+    observation.targets.map(({ readback }) => readback.kind),
+    ["text", "checked", "selected", "upload"],
+  );
+  assert.ok(
+    observation.targets[0].readback.value.length <=
+      MAX_BROWSER_READBACK_CODE_POINTS,
+  );
+  assert.throws(
+    () =>
+      browserReadbackText(
+        "x".repeat(MAX_BROWSER_READBACK_CODE_POINTS + 1),
+      ),
+    RangeError,
+  );
+});
+
+test("MCP start, orchestration, and F4 bootstrap share one ID request", () => {
+  const request = parseMcpRequest({
+    schemaVersion: 1,
+    requestId: "request-1",
+    method: "start_journey",
+    params: {
+      operationId: "operation-1",
+      jobId: "job-1",
+      resumeId: "resume-1",
+      profileId: "profile-1",
+    },
+  });
+  assert.equal(request.method, "start_journey");
+  const bootstrap =
+    request.params satisfies JourneyBootstrapRequest & StartJourneyCommand;
+
+  assert.deepEqual(Object.keys(bootstrap), journeyBootstrapReferenceKeys);
+  assert.deepEqual(
+    serializedSchemas.mcpRequest.oneOf[0].properties.params.required,
+    journeyBootstrapReferenceKeys,
+  );
+});
+
+test("field intents retain the exact UI behavior for driver dispatch", () => {
+  const intents = [
+    {
+      kind: "text",
+      behavior: "textarea",
+      fieldId: "field-text",
+      target: "target-text",
+      value: "Synthetic narrative",
+      provenance: "configured_template",
+    },
+    {
+      kind: "choice",
+      behavior: "listbox",
+      fieldId: "field-choice",
+      target: "target-choice",
+      optionId: "option-1",
+      provenance: "visible_option",
+    },
+    {
+      kind: "toggle",
+      behavior: "checkbox",
+      fieldId: "field-check",
+      target: "target-check",
+      checked: true,
+      provenance: "owner_provided",
+    },
+    {
+      kind: "date",
+      behavior: "date",
+      fieldId: "field-date",
+      target: "target-date",
+      isoDate: "2026-08-01",
+      provenance: "owner_provided",
+    },
+    {
+      kind: "resume_upload",
+      behavior: "file_upload",
+      fieldId: "field-upload",
+      target: "target-upload",
+      resumeId: "resume-1",
+      provenance: "resume_verified",
+    },
+  ] as const satisfies readonly FieldIntent[];
+
+  assert.deepEqual(uiBehaviorIds, [
+    "text",
+    "textarea",
+    "radio",
+    "checkbox",
+    "select",
+    "listbox",
+    "date",
+    "file_upload",
+  ]);
+  assert.deepEqual(
+    intents.map(({ behavior }) => behavior),
+    ["textarea", "listbox", "checkbox", "date", "file_upload"],
+  );
+});

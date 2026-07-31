@@ -49,10 +49,11 @@ const serializedCases = [
       eventId: "event-1",
       journeyId: "journey-1",
       component: "F4",
-      phase: "bootstrap",
-      step: "validated",
+      phase: "intake",
+      step: "validate",
       kind: "step_completed",
       at: "2026-07-30T12:00:00.000Z",
+      source: { kind: "operation", id: "operation-1" },
     },
   },
   {
@@ -62,9 +63,10 @@ const serializedCases = [
       schemaVersion: 1,
       code: "browser_timeout",
       component: "F3",
-      phase: "observation",
-      step: "read",
+      phase: "browser",
+      step: "observe",
       retryable: true,
+      source: { kind: "operation", id: "operation-1" },
     },
   },
   {
@@ -78,8 +80,8 @@ const serializedCases = [
           id: "evidence-1",
           kind: "semantic_snapshot",
           component: "F5",
-          phase: "understanding",
-          step: "classified",
+          phase: "page_understanding",
+          step: "classify",
           sha256: "sha256:evidence",
         },
       ],
@@ -199,8 +201,8 @@ test("ApplicantProfile rejects credential fields at its intake boundary", () => 
       revision: 1,
       facts: [
         {
-          questionId: "work_authorization",
-          value: "authorized",
+          factId: "work_authorization",
+          value: true,
           provenance: "owner_provided",
         },
       ],
@@ -210,8 +212,8 @@ test("ApplicantProfile rejects credential fields at its intake boundary", () => 
       revision: 1,
       facts: [
         {
-          questionId: "work_authorization",
-          value: "authorized",
+          factId: "work_authorization",
+          value: true,
           provenance: "owner_provided",
         },
       ],
@@ -227,7 +229,7 @@ test("ApplicantProfile rejects credential fields at its intake boundary", () => 
       }),
     "extra_key",
   );
-  for (const questionId of [
+  for (const factId of [
     "password",
     "workdayPassword",
     "apiKey",
@@ -242,7 +244,7 @@ test("ApplicantProfile rejects credential fields at its intake boundary", () => 
           revision: 1,
           facts: [
             {
-              questionId,
+              factId,
               value: "forbidden",
               provenance: "owner_provided",
             },

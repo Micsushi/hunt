@@ -1,3 +1,11 @@
+import {
+  booleanProfileFactIds,
+  journeyBootstrapReferenceKeys,
+  numberProfileFactIds,
+  phaseIds,
+  stepIds,
+  textProfileFactIds,
+} from "./types.ts";
 import type {
   ApplicantProfile,
   ComponentId,
@@ -130,6 +138,23 @@ function versioned(
     );
   }
   return result;
+}
+
+function parseSourceReference(value: unknown, path: string): void {
+  const source = exact(value, path, ["kind", "id"]);
+  oneOf(
+    source.kind,
+    ["operation", "event", "evidence", "fixture"],
+    `${path}.kind`,
+  );
+  string(source.id, `${path}.id`);
+}
+
+function parseVerifiedCause(value: unknown, path: string): void {
+  const cause = exact(value, path, ["verification", "code", "source"]);
+  oneOf(cause.verification, ["verified"], `${path}.verification`);
+  oneOf(cause.code, stableErrorCodes, `${path}.code`);
+  parseSourceReference(cause.source, `${path}.source`);
 }
 
 const componentIds = [
@@ -265,18 +290,20 @@ export function parseEventEnvelope(value: unknown): EventEnvelope {
     "step",
     "kind",
     "at",
+    "source",
   ]);
   string(event.eventId, "$.eventId");
   string(event.journeyId, "$.journeyId");
   oneOf(event.component, componentIds, "$.component");
-  string(event.phase, "$.phase");
-  string(event.step, "$.step");
+  oneOf(event.phase, phaseIds, "$.phase");
+  oneOf(event.step, stepIds, "$.step");
   oneOf(
     event.kind,
     ["step_started", "step_completed", "step_failed", "journey_terminal"],
     "$.kind",
   );
   string(event.at, "$.at");
+  parseSourceReference(event.source, "$.source");
   return value as EventEnvelope;
 }
 
@@ -287,12 +314,17 @@ export function parseErrorEnvelope(value: unknown): ErrorEnvelope {
     "phase",
     "step",
     "retryable",
-  ]);
+    "source",
+  ], ["cause"]);
   oneOf(error.code, stableErrorCodes, "$.code");
   oneOf(error.component, componentIds, "$.component");
-  string(error.phase, "$.phase");
-  string(error.step, "$.step");
+  oneOf(error.phase, phaseIds, "$.phase");
+  oneOf(error.step, stepIds, "$.step");
   boolean(error.retryable, "$.retryable");
+  parseSourceReference(error.source, "$.source");
+  if (Object.hasOwn(error, "cause")) {
+    parseVerifiedCause(error.cause, "$.cause");
+  }
   return value as ErrorEnvelope;
 }
 
@@ -319,8 +351,8 @@ export function parseEvidenceManifest(value: unknown): EvidenceManifest {
       componentIds,
       `$.records[${index}].component`,
     );
-    string(evidence.phase, `$.records[${index}].phase`);
-    string(evidence.step, `$.records[${index}].step`);
+    oneOf(evidence.phase, phaseIds, `$.records[${index}].phase`);
+    oneOf(evidence.step, stepIds, `$.records[${index}].step`);
     string(evidence.sha256, `$.records[${index}].sha256`);
   }
   return value as EvidenceManifest;
@@ -331,12 +363,7 @@ function parseMcpParams(
   value: unknown,
 ): void {
   if (method === "start_journey") {
-    const params = exact(value, "$.params", [
-      "operationId",
-      "jobId",
-      "resumeId",
-      "profileId",
-    ]);
+    const params = exact(value, "$.params", journeyBootstrapReferenceKeys);
     for (const key of Object.keys(params)) {
       string(params[key], `$.params.${key}`);
     }
@@ -447,36 +474,49 @@ export function parseApplicantProfile(value: unknown): ApplicantProfile {
   integer(profile.revision, "$.revision");
   for (const [index, item] of array(profile.facts, "$.facts").entries()) {
     const fact = exact(item, `$.facts[${index}]`, [
-      "questionId",
+      "factId",
       "value",
       "provenance",
     ]);
-    const questionId = string(
-      fact.questionId,
-      `$.facts[${index}].questionId`,
+    const factId = string(
+      fact.factId,
+      `$.facts[${index}].factId`,
     );
-    const normalizedQuestionId = questionId
+    const normalizedFactId = factId
       .replace(/([a-z0-9])([A-Z])/g, "$1_$2")
       .toLowerCase()
       .replace(/[^a-z0-9]+/g, "_");
     if (
-      /(?:^|_)(?:password|passcode|passphrase|secret|api_key|access_token|refresh_token|session_token|session_cookie|cookie|authorization_header)(?:$|_)/.test(
-        normalizedQuestionId,
+      /(?:^|_)(?:credential|credentials|password|passcode|passphrase|secret|private_key|api_key|access_token|refresh_token|bearer_token|auth_token|oauth_token|session_token|session_cookie|cookie|authorization_header|client_secret)(?:$|_)/.test(
+        normalizedFactId,
       )
     ) {
       throw new ContractParseError(
         "credential_forbidden",
-        `$.facts[${index}].questionId`,
+        `$.facts[${index}].factId`,
       );
     }
-    if (
-      typeof fact.value !== "string" &&
-      typeof fact.value !== "number" &&
-      typeof fact.value !== "boolean"
+    if ((textProfileFactIds as readonly string[]).includes(factId)) {
+      string(fact.value, `$.facts[${index}].value`);
+    } else if (
+      (booleanProfileFactIds as readonly string[]).includes(factId)
     ) {
+      boolean(fact.value, `$.facts[${index}].value`);
+    } else if ((numberProfileFactIds as readonly string[]).includes(factId)) {
+      if (
+        typeof fact.value !== "number" ||
+        !Number.isFinite(fact.value) ||
+        fact.value < 0
+      ) {
+        throw new ContractParseError(
+          typeof fact.value === "number" ? "invalid_value" : "invalid_type",
+          `$.facts[${index}].value`,
+        );
+      }
+    } else {
       throw new ContractParseError(
-        "invalid_type",
-        `$.facts[${index}].value`,
+        "invalid_value",
+        `$.facts[${index}].factId`,
       );
     }
     oneOf(
@@ -492,6 +532,27 @@ const nonEmptyString = { type: "string", minLength: 1 } as const;
 const nonNegativeInteger = { type: "integer", minimum: 0 } as const;
 const schemaVersion = { const: SERIALIZED_CONTRACT_VERSION } as const;
 
+const sourceReferenceSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: ["kind", "id"],
+  properties: {
+    kind: { enum: ["operation", "event", "evidence", "fixture"] },
+    id: nonEmptyString,
+  },
+} as const;
+
+const verifiedCauseSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: ["verification", "code", "source"],
+  properties: {
+    verification: { const: "verified" },
+    code: { enum: stableErrorCodes },
+    source: sourceReferenceSchema,
+  },
+} as const;
+
 const errorEnvelopeSchema = {
   type: "object",
   additionalProperties: false,
@@ -502,14 +563,17 @@ const errorEnvelopeSchema = {
     "phase",
     "step",
     "retryable",
+    "source",
   ],
   properties: {
     schemaVersion,
     code: { enum: stableErrorCodes },
     component: { enum: componentIds },
-    phase: nonEmptyString,
-    step: nonEmptyString,
+    phase: { enum: phaseIds },
+    step: { enum: stepIds },
     retryable: { type: "boolean" },
+    source: sourceReferenceSchema,
+    cause: verifiedCauseSchema,
   },
 } as const;
 
@@ -586,14 +650,15 @@ export const serializedSchemas = {
       "step",
       "kind",
       "at",
+      "source",
     ],
     properties: {
       schemaVersion,
       eventId: nonEmptyString,
       journeyId: nonEmptyString,
       component: { enum: componentIds },
-      phase: nonEmptyString,
-      step: nonEmptyString,
+      phase: { enum: phaseIds },
+      step: { enum: stepIds },
       kind: {
         enum: [
           "step_started",
@@ -603,6 +668,7 @@ export const serializedSchemas = {
         ],
       },
       at: nonEmptyString,
+      source: sourceReferenceSchema,
     },
   },
   errorEnvelope: errorEnvelopeSchema,
@@ -629,8 +695,8 @@ export const serializedSchemas = {
               ],
             },
             component: { enum: componentIds },
-            phase: nonEmptyString,
-            step: nonEmptyString,
+            phase: { enum: phaseIds },
+            step: { enum: stepIds },
             sha256: nonEmptyString,
           },
         },
@@ -661,7 +727,7 @@ export const serializedSchemas = {
           params: {
             type: "object",
             additionalProperties: false,
-            required: ["operationId", "jobId", "resumeId", "profileId"],
+            required: journeyBootstrapReferenceKeys,
             properties: {
               operationId: nonEmptyString,
               jobId: nonEmptyString,

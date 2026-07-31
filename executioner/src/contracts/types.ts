@@ -86,6 +86,35 @@ export type BrowserTargetRole =
   | "button"
   | "file";
 
+export const MAX_BROWSER_READBACK_CODE_POINTS = 512 as const;
+
+declare const browserReadbackTextBrand: unique symbol;
+export type BrowserReadbackText = string & {
+  readonly [browserReadbackTextBrand]: true;
+};
+
+export function browserReadbackText(value: string): BrowserReadbackText {
+  let codePoints = 0;
+  for (const _codePoint of value) {
+    codePoints += 1;
+    if (codePoints > MAX_BROWSER_READBACK_CODE_POINTS) {
+      throw new RangeError("browser readback exceeds the contract limit");
+    }
+  }
+  return value as BrowserReadbackText;
+}
+
+export type BrowserReadback =
+  | { readonly kind: "empty" }
+  | { readonly kind: "text"; readonly value: BrowserReadbackText }
+  | { readonly kind: "checked"; readonly checked: boolean }
+  | {
+      readonly kind: "selected";
+      readonly option: BrowserReadbackText | null;
+    }
+  | { readonly kind: "upload"; readonly resumeId: string | null }
+  | { readonly kind: "unavailable" };
+
 export interface BrowserObservation {
   readonly sessionId: BrowserSessionId;
   readonly pageId: BrowserPageId;
@@ -94,9 +123,10 @@ export interface BrowserObservation {
   readonly targets: readonly {
     readonly token: BrowserTargetToken;
     readonly role: BrowserTargetRole;
-    readonly name: string;
+    readonly name: BrowserReadbackText;
     readonly required: boolean;
-    readonly options: readonly string[];
+    readonly options: readonly BrowserReadbackText[];
+    readonly readback: BrowserReadback;
   }[];
 }
 
@@ -192,14 +222,63 @@ export type ProfileAnswerProvenance =
   | "resume_verified"
   | "configured_template";
 
+export const textProfileFactIds = [
+  "given_name",
+  "family_name",
+  "preferred_name",
+  "email_address",
+  "phone_number",
+  "city",
+  "region",
+  "country",
+  "postal_code",
+  "current_company",
+  "current_title",
+  "highest_education",
+  "earliest_start_date",
+  "configured_narrative",
+] as const;
+
+export const booleanProfileFactIds = [
+  "work_authorization",
+  "sponsorship_required",
+  "age_requirement_met",
+] as const;
+
+export const numberProfileFactIds = [
+  "years_experience",
+  "desired_salary",
+] as const;
+
+export const profileFactIds = [
+  ...textProfileFactIds,
+  ...booleanProfileFactIds,
+  ...numberProfileFactIds,
+] as const;
+
+export type ProfileFactId = (typeof profileFactIds)[number];
+
+export type ProfileFact =
+  | {
+      readonly factId: (typeof textProfileFactIds)[number];
+      readonly value: string;
+      readonly provenance: ProfileAnswerProvenance;
+    }
+  | {
+      readonly factId: (typeof booleanProfileFactIds)[number];
+      readonly value: boolean;
+      readonly provenance: ProfileAnswerProvenance;
+    }
+  | {
+      readonly factId: (typeof numberProfileFactIds)[number];
+      readonly value: number;
+      readonly provenance: ProfileAnswerProvenance;
+    };
+
 export interface ApplicantProfile {
   readonly profileId: string;
   readonly revision: number;
-  readonly facts: readonly {
-    readonly questionId: QuestionId;
-    readonly value: string | number | boolean;
-    readonly provenance: ProfileAnswerProvenance;
-  }[];
+  readonly facts: readonly ProfileFact[];
 }
 
 export interface JourneyInputs {
@@ -224,10 +303,16 @@ export interface DurableJourneyState {
   readonly revision: number;
 }
 
-export interface JourneyBootstrapRequest {
-  readonly requestId: string;
-  readonly inputs: JourneyInputs;
-}
+export const journeyBootstrapReferenceKeys = [
+  "operationId",
+  "jobId",
+  "resumeId",
+  "profileId",
+] as const;
+
+export type JourneyBootstrapRequest = Readonly<
+  Record<(typeof journeyBootstrapReferenceKeys)[number], string>
+>;
 
 export interface JourneyBootstrapResult {
   readonly journeyId: JourneyId;
@@ -238,7 +323,7 @@ export interface JourneyBootstrapResult {
 export interface ProfileQueryRequest {
   readonly profileId: string;
   readonly profileRevision: number;
-  readonly questionId: QuestionId;
+  readonly factId: ProfileFactId;
 }
 
 export type ProfileAnswerResult =
@@ -288,15 +373,18 @@ export type PageIdentity =
   | { readonly kind: "unknown" }
   | { readonly kind: "ambiguous" };
 
-export type UiBehaviorId =
-  | "text"
-  | "textarea"
-  | "radio"
-  | "checkbox"
-  | "select"
-  | "listbox"
-  | "date"
-  | "file_upload";
+export const uiBehaviorIds = [
+  "text",
+  "textarea",
+  "radio",
+  "checkbox",
+  "select",
+  "listbox",
+  "date",
+  "file_upload",
+] as const;
+
+export type UiBehaviorId = (typeof uiBehaviorIds)[number];
 
 export interface FieldObservation {
   readonly fieldId: string;
@@ -337,6 +425,7 @@ export type AnswerProvenance =
 export type FieldIntent =
   | {
       readonly kind: "text";
+      readonly behavior: "text" | "textarea";
       readonly fieldId: string;
       readonly target: BrowserTargetToken;
       readonly value: string;
@@ -344,6 +433,7 @@ export type FieldIntent =
     }
   | {
       readonly kind: "choice";
+      readonly behavior: "radio" | "select" | "listbox";
       readonly fieldId: string;
       readonly target: BrowserTargetToken;
       readonly optionId: OptionId;
@@ -351,6 +441,7 @@ export type FieldIntent =
     }
   | {
       readonly kind: "toggle";
+      readonly behavior: "checkbox";
       readonly fieldId: string;
       readonly target: BrowserTargetToken;
       readonly checked: boolean;
@@ -358,6 +449,7 @@ export type FieldIntent =
     }
   | {
       readonly kind: "date";
+      readonly behavior: "date";
       readonly fieldId: string;
       readonly target: BrowserTargetToken;
       readonly isoDate: string;
@@ -365,6 +457,7 @@ export type FieldIntent =
     }
   | {
       readonly kind: "resume_upload";
+      readonly behavior: "file_upload";
       readonly fieldId: string;
       readonly target: BrowserTargetToken;
       readonly resumeId: string;
@@ -464,12 +557,7 @@ export type NavigationError = PortError<
   "page_incomplete" | "navigation_illegal" | "navigation_uncertain"
 >;
 
-export interface StartJourneyCommand {
-  readonly operationId: OperationId;
-  readonly jobId: string;
-  readonly resumeId: string;
-  readonly profileId: string;
-}
+export type StartJourneyCommand = JourneyBootstrapRequest;
 
 export interface CancelJourneyCommand {
   readonly operationId: OperationId;
@@ -510,12 +598,7 @@ export type McpRequest =
       readonly schemaVersion: 1;
       readonly requestId: string;
       readonly method: "start_journey";
-      readonly params: {
-        readonly operationId: OperationId;
-        readonly jobId: string;
-        readonly resumeId: string;
-        readonly profileId: string;
-      };
+      readonly params: JourneyBootstrapRequest;
     }
   | {
       readonly schemaVersion: 1;
@@ -577,15 +660,76 @@ export type EventKind =
   | "step_failed"
   | "journey_terminal";
 
+export const phaseIds = [
+  "fixture",
+  "browser",
+  "intake",
+  "profile",
+  "journey_state",
+  "page_understanding",
+  "answer_resolution",
+  "field_interaction",
+  "verification",
+  "navigation",
+  "orchestration",
+  "mcp",
+  "observability",
+  "privacy",
+  "safety",
+  "evidence",
+  "model",
+  "terminal",
+] as const;
+
+export type PhaseId = (typeof phaseIds)[number];
+
+export const stepIds = [
+  "start",
+  "observe",
+  "validate",
+  "classify",
+  "resolve",
+  "mutate",
+  "readback",
+  "verify",
+  "complete",
+  "navigate",
+  "reconcile",
+  "persist",
+  "append",
+  "report",
+  "notify",
+  "admit",
+  "cancel",
+  "close",
+  "reset",
+  "transition",
+  "stop_review",
+] as const;
+
+export type StepId = (typeof stepIds)[number];
+
+export interface SourceReference {
+  readonly kind: "operation" | "event" | "evidence" | "fixture";
+  readonly id: string;
+}
+
+export interface VerifiedCause {
+  readonly verification: "verified";
+  readonly code: StableErrorCode;
+  readonly source: SourceReference;
+}
+
 export interface EventEnvelope {
   readonly schemaVersion: 1;
   readonly eventId: string;
   readonly journeyId: JourneyId;
   readonly component: ComponentId;
-  readonly phase: string;
-  readonly step: string;
+  readonly phase: PhaseId;
+  readonly step: StepId;
   readonly kind: EventKind;
   readonly at: string;
+  readonly source: SourceReference;
 }
 
 export interface EventAppendRequest {
@@ -610,10 +754,12 @@ export interface ProgressReadRequest {
 export interface FailureContext {
   readonly journeyId: JourneyId;
   readonly component: ComponentId;
-  readonly phase: string;
-  readonly step: string;
+  readonly phase: PhaseId;
+  readonly step: StepId;
   readonly code: StableErrorCode;
   readonly retryable: boolean;
+  readonly source: SourceReference;
+  readonly cause?: VerifiedCause;
 }
 
 export interface FailureReportRequest {
@@ -674,8 +820,8 @@ export interface EvidenceRecord {
   readonly id: string;
   readonly kind: "semantic_snapshot" | "operation_receipt" | "verification";
   readonly component: ComponentId;
-  readonly phase: string;
-  readonly step: string;
+  readonly phase: PhaseId;
+  readonly step: StepId;
   readonly sha256: string;
 }
 
@@ -759,7 +905,9 @@ export interface ErrorEnvelope {
   readonly schemaVersion: 1;
   readonly code: StableErrorCode;
   readonly component: ComponentId;
-  readonly phase: string;
-  readonly step: string;
+  readonly phase: PhaseId;
+  readonly step: StepId;
   readonly retryable: boolean;
+  readonly source: SourceReference;
+  readonly cause?: VerifiedCause;
 }
