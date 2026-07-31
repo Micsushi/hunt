@@ -2,8 +2,8 @@
 
 The in-process contract source is frozen at Git revision
 `f75c5b5e483fc1e58372e6872a284fb7782a5390`. The conformance suite rejects
-changes under `executioner/src/contracts` until this record is deliberately
-updated.
+tracked changes and untracked files under `executioner/src/contracts` until
+this record is deliberately updated.
 
 F2 through F11 must start from the final accepted F1 tip recorded in the Hunt
 handoff. That tip contains this contract revision and the shared test kit. A
@@ -28,4 +28,6 @@ defective boundary:
 
 Fakes are narrow contract examples. They record calls and return one synthetic
 success per declared operation, or an explicitly supplied result override.
-They do not simulate component behavior or replace F12 connection tests.
+Provider conformance checks each operation's success shape, declared errors,
+and exact cancellation result. Fakes do not simulate component behavior or
+replace F12 connection tests.
