@@ -11,24 +11,99 @@ const expectedComponents = {
       "src/testing/fixture-server.ts",
       "src/testing/fixture-state.ts",
     ],
-    ports: { FixtureRuntime: ["F12/F13 composition"] },
+    dataOwnership: [
+      "FixtureManifest",
+      "FixturePageId",
+      "FixtureSemanticHash",
+      "FixtureRunState",
+    ],
+    ports: {
+      FixtureRuntime: {
+        consumers: ["F12/F13 composition"],
+        requests: [
+          "FixtureStartRequest",
+          "FixtureTransitionRequest",
+          "FixtureResetRequest",
+          "FixtureFaultRequest",
+        ],
+        results: [
+          "FixtureStartResult",
+          "FixtureTransitionResult",
+          "FixtureResetResult",
+        ],
+        errors: ["FixtureRuntimeError"],
+      },
+    },
   },
   F3: {
     sourceOwnership: ["src/browser/**"],
+    dataOwnership: [
+      "BrowserSessionId",
+      "BrowserPageId",
+      "BrowserTargetToken",
+      "BrowserObservation",
+      "BrowserOperationReceipt",
+    ],
     ports: {
-      BrowserSession: [
-        "F7 Field Drivers",
-        "F8 Verification/Navigation",
-        "F9 Orchestrator",
-      ],
+      BrowserSession: {
+        consumers: [
+          "F7 Field Drivers",
+          "F8 Verification/Navigation",
+          "F9 Orchestrator",
+        ],
+        requests: [
+          "BrowserStartRequest",
+          "BrowserObservationRequest",
+          "BrowserMutationRequest",
+          "BrowserNavigationRequest",
+          "BrowserCloseRequest",
+        ],
+        results: [
+          "BrowserSessionResult",
+          "BrowserObservation",
+          "BrowserOperationReceipt",
+          "BrowserNavigationObservation",
+        ],
+        errors: ["BrowserSessionError"],
+      },
     },
   },
   F4: {
     sourceOwnership: ["src/intake/**", "src/profile/**", "src/journey/**"],
+    dataOwnership: [
+      "JobIntake",
+      "ResumeSelection",
+      "JourneyInputs",
+      "JourneyId",
+      "ApplicantProfile",
+      "ProfileAnswerProvenance",
+      "DurableJourneyState",
+    ],
     ports: {
-      JourneyIntake: ["F9 Orchestrator"],
-      ProfileQuery: ["F6 Answer Resolver"],
-      JourneyStateStore: ["F9 Orchestrator"],
+      JourneyIntake: {
+        consumers: ["F9 Orchestrator"],
+        requests: ["JourneyBootstrapRequest"],
+        results: ["JourneyInputs", "JourneyBootstrapResult"],
+        errors: ["JourneyInputError"],
+      },
+      ProfileQuery: {
+        consumers: ["F6 Answer Resolver"],
+        requests: ["ProfileQueryRequest"],
+        results: ["ProfileAnswerResult"],
+        errors: ["ProfileQueryError"],
+      },
+      JourneyStateStore: {
+        consumers: ["F9 Orchestrator"],
+        requests: [
+          "JourneyStateLoadRequest",
+          "JourneyStateTransitionCommand",
+        ],
+        results: [
+          "JourneyStateLoadResult",
+          "JourneyStateTransitionResult",
+        ],
+        errors: ["JourneyStateError"],
+      },
     },
   },
   F5: {
@@ -38,7 +113,20 @@ const expectedComponents = {
       "src/form/ui/**",
       "src/form/semantic-snapshot.ts",
     ],
-    ports: { PageUnderstanding: ["F9 Orchestrator"] },
+    dataOwnership: [
+      "PageIdentity",
+      "FieldObservation",
+      "SemanticPageSnapshot",
+      "UiBehaviorId",
+    ],
+    ports: {
+      PageUnderstanding: {
+        consumers: ["F9 Orchestrator"],
+        requests: ["PageUnderstandingRequest"],
+        results: ["PageUnderstandingResult", "SemanticPageSnapshot"],
+        errors: ["PageUnderstandingError"],
+      },
+    },
   },
   F6: {
     sourceOwnership: [
@@ -46,11 +134,32 @@ const expectedComponents = {
       "src/form/answers/**",
       "src/form/options/**",
     ],
-    ports: { AnswerResolver: ["F9 Orchestrator"] },
+    dataOwnership: [
+      "QuestionId",
+      "OptionId",
+      "AnswerProvenance",
+      "FieldIntent",
+    ],
+    ports: {
+      AnswerResolver: {
+        consumers: ["F9 Orchestrator"],
+        requests: ["AnswerResolutionRequest"],
+        results: ["AnswerResolutionResult", "FieldIntent"],
+        errors: ["AnswerResolutionError"],
+      },
+    },
   },
   F7: {
     sourceOwnership: ["src/interaction/drivers/**"],
-    ports: { FieldDriver: ["F9 Orchestrator"] },
+    dataOwnership: ["DriverBehaviorId", "MutationReceipt"],
+    ports: {
+      FieldDriver: {
+        consumers: ["F9 Orchestrator"],
+        requests: ["DriverRequest"],
+        results: ["MutationReceipt"],
+        errors: ["DriverError"],
+      },
+    },
   },
   F8: {
     sourceOwnership: [
@@ -58,34 +167,105 @@ const expectedComponents = {
       "src/interaction/completion/**",
       "src/interaction/navigation/**",
     ],
+    dataOwnership: [
+      "VerificationResult",
+      "PageCompletionResult",
+      "NavigationDecision",
+      "NavigationResult",
+    ],
     ports: {
-      FieldVerifier: ["F9 Orchestrator"],
-      CompletionNavigation: ["F9 Orchestrator"],
+      FieldVerifier: {
+        consumers: ["F9 Orchestrator"],
+        requests: ["VerificationRequest"],
+        results: ["VerificationResult"],
+        errors: ["VerificationError"],
+      },
+      CompletionNavigation: {
+        consumers: ["F9 Orchestrator"],
+        requests: [
+          "PageCompletionRequest",
+          "NavigationReconciliationRequest",
+        ],
+        results: [
+          "PageCompletionResult",
+          "NavigationDecision",
+          "NavigationResult",
+        ],
+        errors: ["NavigationError"],
+      },
     },
   },
   F9: {
     sourceOwnership: ["src/control/orchestrator/**", "src/control/mcp/**"],
+    dataOwnership: [
+      "OperationId",
+      "JourneyStatus",
+      "TerminalResult",
+      "McpRequest",
+      "McpResponse",
+    ],
     ports: {
-      JourneyControl: ["F9 MCP Facade"],
-      McpJourneyApi: ["External MCP Client"],
+      JourneyControl: {
+        consumers: ["F9 MCP Facade"],
+        requests: [
+          "StartJourneyCommand",
+          "CancelJourneyCommand",
+          "JourneyStatusQuery",
+          "JourneyResultQuery",
+        ],
+        results: [
+          "JourneyOperationResult",
+          "JourneyStatus",
+          "TerminalResult",
+        ],
+        errors: ["OrchestratorError"],
+      },
+      McpJourneyApi: {
+        consumers: ["External MCP Client"],
+        requests: ["McpRequest"],
+        results: ["McpResponse"],
+        errors: ["McpTransportError"],
+      },
     },
   },
   F10: {
     sourceOwnership: ["src/observability/**"],
+    dataOwnership: [
+      "EventEnvelope",
+      "JourneyProgress",
+      "FailureContext",
+      "FailureReport",
+      "NotificationRecord",
+    ],
     ports: {
-      EventSink: [
-        "F2 Fixture Runtime",
-        "F3 Browser Adapter",
-        "F4 Journey State",
-        "F5 Page Understanding",
-        "F6 Answer Resolver",
-        "F7 Field Drivers",
-        "F8 Verification/Navigation",
-        "F9 Orchestrator",
-        "F11 Safety/Evidence",
-      ],
-      ProgressReader: ["F9 MCP Facade"],
-      FailureReporter: ["F9 Orchestrator"],
+      EventSink: {
+        consumers: [
+          "F2 Fixture Runtime",
+          "F3 Browser Adapter",
+          "F4 Journey State",
+          "F5 Page Understanding",
+          "F6 Answer Resolver",
+          "F7 Field Drivers",
+          "F8 Verification/Navigation",
+          "F9 Orchestrator",
+          "F11 Safety/Evidence",
+        ],
+        requests: ["EventAppendRequest"],
+        results: ["EventAppendResult", "JourneyProgress"],
+        errors: ["ObservabilityError"],
+      },
+      ProgressReader: {
+        consumers: ["F9 MCP Facade"],
+        requests: ["ProgressReadRequest"],
+        results: ["JourneyProgress"],
+        errors: ["ObservabilityError"],
+      },
+      FailureReporter: {
+        consumers: ["F9 Orchestrator"],
+        requests: ["FailureReportRequest"],
+        results: ["FailureReport", "NotificationRecord"],
+        errors: ["FailureReportingError"],
+      },
     },
   },
   F11: {
@@ -94,21 +274,48 @@ const expectedComponents = {
       "src/evidence/**",
       "src/control/model/**",
     ],
+    dataOwnership: [
+      "AdmissionDecision",
+      "RedactionCode",
+      "EvidenceManifest",
+      "EvidenceRecord",
+      "ModelSuggestion",
+    ],
     ports: {
-      PrivacyGuard: [
-        "F2 Fixture Runtime",
-        "F4 Intake/Profile",
-        "F9 MCP Facade",
-        "F10 Observability",
-      ],
-      SafetyGuard: [
-        "F3 Browser Adapter",
-        "F7 Field Drivers",
-        "F8 Verification/Navigation",
-        "F9 Orchestrator",
-      ],
-      EvidenceStore: ["F9 Orchestrator", "F10 Failure Reporter"],
-      ModelController: ["F9 Orchestrator"],
+      PrivacyGuard: {
+        consumers: [
+          "F2 Fixture Runtime",
+          "F4 Intake/Profile",
+          "F9 MCP Facade",
+          "F10 Observability",
+        ],
+        requests: ["PrivacyAdmissionRequest"],
+        results: ["AdmissionDecision"],
+        errors: ["PrivacyDenial"],
+      },
+      SafetyGuard: {
+        consumers: [
+          "F3 Browser Adapter",
+          "F7 Field Drivers",
+          "F8 Verification/Navigation",
+          "F9 Orchestrator",
+        ],
+        requests: ["SafetyAdmissionRequest"],
+        results: ["AdmissionDecision"],
+        errors: ["SafetyDenial"],
+      },
+      EvidenceStore: {
+        consumers: ["F9 Orchestrator", "F10 Failure Reporter"],
+        requests: ["EvidenceAdmissionRequest", "EvidenceReadRequest"],
+        results: ["EvidenceWriteResult", "EvidenceManifest"],
+        errors: ["EvidenceError"],
+      },
+      ModelController: {
+        consumers: ["F9 Orchestrator"],
+        requests: ["ModelSuggestionRequest"],
+        results: ["ModelSuggestionResult"],
+        errors: ["ModelAdmissionError"],
+      },
     },
   },
 } as const;
@@ -239,9 +446,13 @@ test("every Stage 1 component has complete boundary metadata", () => {
   for (const component of componentBoundaries) {
     const expected = expectedComponents[component.feature];
     assert.deepEqual(component.sourceOwnership, expected.sourceOwnership);
+    assert.deepEqual(component.dataOwnership, expected.dataOwnership);
     assert.deepEqual(
       Object.fromEntries(
-        component.ports.map(({ name, consumers }) => [name, consumers]),
+        component.ports.map(({ name, consumers, requests, results, errors }) => [
+          name,
+          { consumers, requests, results, errors },
+        ]),
       ),
       expected.ports,
     );
@@ -302,10 +513,12 @@ test("F9 coordinates field data without making peers port consumers", () => {
 
   assert.equal(dataOwners.FieldIntent, "F6");
   assert.equal(dataOwners.MutationReceipt, "F7");
-  assert.deepEqual(expectedComponents.F6.ports.AnswerResolver, [
+  assert.deepEqual(expectedComponents.F6.ports.AnswerResolver.consumers, [
     "F9 Orchestrator",
   ]);
-  assert.deepEqual(expectedComponents.F7.ports.FieldDriver, ["F9 Orchestrator"]);
+  assert.deepEqual(expectedComponents.F7.ports.FieldDriver.consumers, [
+    "F9 Orchestrator",
+  ]);
 });
 
 test("the human boundary document names the frozen matrix", () => {
