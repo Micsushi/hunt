@@ -1,6 +1,12 @@
 # C3 v3 Parallel Stage One Design
 
-Status: approved by the owner on 2026-07-30
+Status: superseded by `2026-07-31-c3-v3-hybrid-recovery-design.md`.
+
+This document preserves the original approved decomposition and should not be
+used to launch implementation. The prototype batch disproved its assumption
+that the first F1 freeze was sufficient for fully independent F2-F11 delivery.
+
+Historical status: approved by the owner on 2026-07-30, then superseded.
 
 ## Goal
 
