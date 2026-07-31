@@ -55,7 +55,21 @@ export type FakeResponses<P> = {
     : never;
 };
 
-export type FakeResponseOverrides<P> = Partial<FakeResponses<P>>;
+export type FakeResponseOverrides<P> = Partial<{
+  readonly [K in keyof P]: P[K] extends (
+    request: infer R,
+    signal: AbortSignal,
+  ) => Promise<unknown>
+    ? | FakeResponses<P>[K]
+      | ((
+          request: R,
+          signal: AbortSignal,
+          callIndex: number,
+        ) =>
+          | FakeResponses<P>[K]
+          | Promise<FakeResponses<P>[K]>)
+    : never;
+}>;
 
 export interface ContractCall {
   readonly operation: string;

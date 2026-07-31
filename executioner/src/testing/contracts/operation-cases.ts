@@ -1,23 +1,50 @@
 import type { PortResult } from "../../contracts/index.ts";
+import { isDeepStrictEqual } from "node:util";
+
 import { contractFixtures } from "./fixtures.ts";
 import type {
   ContractPortMap,
   ContractPortName,
 } from "./types.ts";
 
-type OperationCase<M> = M extends (
+type SuccessOf<M> = M extends (
+  request: never,
+  signal: AbortSignal,
+) => Promise<PortResult<infer S, unknown>>
+  ? S
+  : never;
+
+type PortSuccesses<P> = {
+  readonly [K in keyof P]: SuccessOf<P[K]>;
+};
+
+type OperationCase<M, P> = M extends (
   request: infer R,
   signal: AbortSignal,
 ) => Promise<PortResult<infer S, unknown>>
   ? {
-      readonly request: R;
+      readonly request:
+        | R
+        | ((results: Partial<PortSuccesses<P>>) => R);
       readonly expected: S;
+      readonly assert?: (value: S, request: R) => boolean;
     }
   : never;
 
 type PortCases<P> = {
-  readonly [K in keyof P]: OperationCase<P[K]>;
+  readonly [K in keyof P]: OperationCase<P[K], P>;
 };
+
+function exactKeys(
+  value: object,
+  keys: readonly string[],
+): boolean {
+  return isDeepStrictEqual(Object.keys(value).sort(), [...keys].sort());
+}
+
+function nonEmpty(value: unknown): value is string {
+  return typeof value === "string" && value.length > 0;
+}
 
 const failureContext = {
   journeyId: contractFixtures.journeyState.journeyId,
@@ -38,6 +65,15 @@ export const contractOperationCases = {
         origin: "https://fixture.invalid",
         pageId: "fixture-account",
       },
+      assert: (value, request) => {
+        return (
+          exactKeys(value, ["fixtureRunId", "origin", "pageId"]) &&
+          value.fixtureRunId === request.fixtureRunId &&
+          nonEmpty(value.origin) &&
+          URL.canParse(value.origin) &&
+          nonEmpty(value.pageId)
+        );
+      },
     },
     transition: {
       request: {
@@ -50,12 +86,27 @@ export const contractOperationCases = {
         pageId: "fixture-profile",
         semanticHash: "sha256:fixture-profile",
       },
+      assert: (value, request) => {
+        return (
+          exactKeys(value, ["transitionId", "pageId", "semanticHash"]) &&
+          value.transitionId === request.transitionId &&
+          value.pageId === request.toPageId &&
+          nonEmpty(value.semanticHash)
+        );
+      },
     },
     reset: {
       request: { fixtureRunId: "fixture-run-synthetic" },
       expected: {
         fixtureRunId: "fixture-run-synthetic",
         semanticHash: "sha256:fixture-reset",
+      },
+      assert: (value, request) => {
+        return (
+          exactKeys(value, ["fixtureRunId", "semanticHash"]) &&
+          value.fixtureRunId === request.fixtureRunId &&
+          nonEmpty(value.semanticHash)
+        );
       },
     },
     setFault: {
@@ -76,47 +127,108 @@ export const contractOperationCases = {
         sessionId: contractFixtures.browserObservation.sessionId,
         pageId: contractFixtures.browserObservation.pageId,
       },
+      assert: (value) => {
+        return (
+          exactKeys(value, ["sessionId", "pageId"]) &&
+          nonEmpty(value.sessionId) &&
+          nonEmpty(value.pageId)
+        );
+      },
     },
     observe: {
-      request: {
-        sessionId: contractFixtures.browserObservation.sessionId,
-        pageId: contractFixtures.browserObservation.pageId,
+      request: (results) => {
+        const started = results.start;
+        if (started === undefined) {
+          throw new TypeError("BrowserSession.start result is required");
+        }
+        return {
+          sessionId: started.sessionId,
+          pageId: started.pageId,
+        };
       },
       expected: contractFixtures.browserObservation,
+      assert: (value, request) =>
+        exactKeys(value, [
+          "sessionId",
+          "pageId",
+          "origin",
+          "path",
+          "targets",
+        ]) &&
+        value.sessionId === request.sessionId &&
+        value.pageId === request.pageId &&
+        value.origin === contractFixtures.browserObservation.origin &&
+        value.path === contractFixtures.browserObservation.path &&
+        isDeepStrictEqual(
+          value.targets,
+          contractFixtures.browserObservation.targets,
+        ),
     },
     mutate: {
-      request: {
-        sessionId: contractFixtures.browserObservation.sessionId,
-        pageId: contractFixtures.browserObservation.pageId,
-        operationId: contractFixtures.mutationReceipt.operationId,
-        mutation: {
-          kind: "type",
-          target: contractFixtures.field.target,
-          text: "Synthetic",
-        },
+      request: (results) => {
+        const started = results.start;
+        if (started === undefined) {
+          throw new TypeError("BrowserSession.start result is required");
+        }
+        return {
+          sessionId: started.sessionId,
+          pageId: started.pageId,
+          operationId: contractFixtures.mutationReceipt.operationId,
+          mutation: {
+            kind: "type" as const,
+            target: contractFixtures.field.target,
+            text: "Synthetic",
+          },
+        };
       },
       expected: {
         operationId: contractFixtures.mutationReceipt.operationId,
         pageId: contractFixtures.browserObservation.pageId,
         attempted: true,
       },
+      assert: (value, request) => {
+        return (
+          exactKeys(value, ["operationId", "pageId", "attempted"]) &&
+          value.operationId === request.operationId &&
+          value.pageId === request.pageId &&
+          value.attempted === true
+        );
+      },
     },
     navigate: {
-      request: {
-        sessionId: contractFixtures.browserObservation.sessionId,
-        pageId: contractFixtures.browserObservation.pageId,
-        operationId: contractFixtures.mutationReceipt.operationId,
-        action: "next",
+      request: (results) => {
+        const started = results.start;
+        if (started === undefined) {
+          throw new TypeError("BrowserSession.start result is required");
+        }
+        return {
+          sessionId: started.sessionId,
+          pageId: started.pageId,
+          operationId: contractFixtures.mutationReceipt.operationId,
+          action: "next" as const,
+        };
       },
       expected: {
         operationId: contractFixtures.mutationReceipt.operationId,
         fromPageId: contractFixtures.browserObservation.pageId,
         pageId: "page-questionnaire",
       },
+      assert: (value, request) => {
+        return (
+          exactKeys(value, ["operationId", "fromPageId", "pageId"]) &&
+          value.operationId === request.operationId &&
+          value.fromPageId === request.pageId &&
+          nonEmpty(value.pageId)
+        );
+      },
     },
     close: {
-      request: {
-        sessionId: contractFixtures.browserObservation.sessionId,
+      request: (results) => {
+        const started = results.start;
+        if (started === undefined) {
+          throw new TypeError("BrowserSession.start result is required");
+        }
+        return { sessionId: started.sessionId };
       },
       expected: undefined,
     },

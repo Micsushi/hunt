@@ -42,15 +42,23 @@ function createFake<P extends object>(
   overrides: FakeResponseOverrides<P>,
 ): ContractFake<P> {
   const calls: ContractCall[] = [];
+  const callCounts = new Map<string, number>();
   const responses = { ...defaults, ...overrides };
   const port = Object.fromEntries(
     Object.keys(defaults).map((operation) => [
       operation,
       async (request: unknown, signal: AbortSignal) => {
+        const callIndex = callCounts.get(operation) ?? 0;
+        callCounts.set(operation, callIndex + 1);
         calls.push({ operation, request });
-        return signal.aborted
-          ? cancelled
-          : responses[operation as keyof FakeResponses<P>];
+        if (signal.aborted) {
+          return cancelled;
+        }
+        const response =
+          responses[operation as keyof FakeResponses<P>];
+        return typeof response === "function"
+          ? response(request, signal, callIndex)
+          : response;
       },
     ]),
   ) as P;

@@ -5,6 +5,11 @@ This document is the human view of the declarative matrix in
 F11 own only the source listed below. A component may import F1 contracts, but
 never a peer implementation. Only composition may connect real providers.
 
+F1 also owns the shared browser-consumer suite at
+`tests/contracts/consumers/browser/**` and the privacy baseline at
+`tests/security/privacy/**`. Component branches run these suites but route
+changes through F1.
+
 ## Source and data ownership
 
 | Feature | Component | Source ownership | Cross-component data ownership |

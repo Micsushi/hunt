@@ -3,12 +3,14 @@ import { test } from "node:test";
 
 import {
   portNames,
+  type BrowserSession,
   type FailureReporter,
   type FixtureRuntime,
 } from "../../../src/contracts/index.ts";
 import {
   assertProviderConformance,
   contractFakeFactories,
+  contractFixtures,
   contractPortOperations,
 } from "../../../src/testing/contracts/index.ts";
 
@@ -87,7 +89,7 @@ test("conformance rejects invented successes and error codes", async () => {
 
   await assert.rejects(
     () => assertProviderConformance("FixtureRuntime", inventedSuccess),
-    /FixtureRuntime\.start.*expected success fixture/u,
+    /FixtureRuntime\.start.*success invariant/u,
   );
   await assert.rejects(
     () => assertProviderConformance("FixtureRuntime", inventedError),
@@ -215,3 +217,82 @@ test("synthetic success cases reject declared live provider errors", async () =>
     /FixtureRuntime\.start.*live synthetic case.*fixture_not_found/u,
   );
 });
+
+test("conformance accepts runtime-owned F2 origin and hashes", async () => {
+  const provider = {
+    start: async (request, signal) =>
+      result(signal, {
+        fixtureRunId: request.fixtureRunId,
+        origin: "http://127.0.0.1:43123",
+        pageId: "runtime-account",
+      }),
+    transition: async (request, signal) =>
+      result(signal, {
+        transitionId: request.transitionId,
+        pageId: request.toPageId,
+        semanticHash: `sha256:${request.toPageId}`,
+      }),
+    reset: async (request, signal) =>
+      result(signal, {
+        fixtureRunId: request.fixtureRunId,
+        semanticHash: "sha256:runtime-reset",
+      }),
+    setFault: async (_request, signal) => result(signal, undefined),
+  } satisfies FixtureRuntime;
+
+  await assert.doesNotReject(() =>
+    assertProviderConformance("FixtureRuntime", provider),
+  );
+});
+
+test("conformance chains runtime-owned F3 session and page IDs", async () => {
+  const sessionId = "runtime-session-7";
+  const pageId = "runtime-page-11";
+  const provider = {
+    start: async (_request, signal) =>
+      result(signal, { sessionId, pageId }),
+    observe: async (request, signal) =>
+      result(signal, {
+        ...contractFixtures.browserObservation,
+        sessionId: request.sessionId,
+        pageId: request.pageId,
+      }),
+    mutate: async (request, signal) =>
+      result(signal, {
+        operationId: request.operationId,
+        pageId: request.pageId,
+        attempted: true,
+      }),
+    navigate: async (request, signal) =>
+      result(signal, {
+        operationId: request.operationId,
+        fromPageId: request.pageId,
+        pageId: "runtime-page-12",
+      }),
+    close: async (_request, signal) => result(signal, undefined),
+  } satisfies BrowserSession;
+
+  await assert.doesNotReject(() =>
+    assertProviderConformance("BrowserSession", provider),
+  );
+});
+
+function result<T>(
+  signal: AbortSignal,
+  value: T,
+):
+  | { readonly ok: true; readonly value: T }
+  | {
+      readonly ok: false;
+      readonly error: {
+        readonly code: "operation_cancelled";
+        readonly retryable: false;
+      };
+    } {
+  return signal.aborted
+    ? {
+        ok: false,
+        error: { code: "operation_cancelled", retryable: false },
+      }
+    : { ok: true, value };
+}

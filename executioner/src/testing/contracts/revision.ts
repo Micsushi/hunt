@@ -1,7 +1,7 @@
 import { execFileSync } from "node:child_process";
 
 export const frozenContractRevision =
-  "f75c5b5e483fc1e58372e6872a284fb7782a5390" as const;
+  "d95e845e61bcf0a030b3b07c6d6261e3d95c1fad" as const;
 
 const contractPath = ":(top)executioner/src/contracts";
 

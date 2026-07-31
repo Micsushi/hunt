@@ -37,3 +37,41 @@ test("all fake operations use the frozen cancellation result", async () => {
     },
   );
 });
+
+test("fake responders can derive and sequence results from calls", async () => {
+  const harness = createProfileQueryFake({
+    query: (current, _signal, callIndex) =>
+      callIndex === 0
+        ? {
+            ok: true,
+            value: {
+              kind: "answered",
+              value: current.factId,
+              provenance: "owner_provided",
+            },
+          }
+        : {
+            ok: true,
+            value: { kind: "profile_answer_missing" },
+          },
+  });
+
+  assert.deepEqual(
+    await harness.port.query(request, new AbortController().signal),
+    {
+      ok: true,
+      value: {
+        kind: "answered",
+        value: "given_name",
+        provenance: "owner_provided",
+      },
+    },
+  );
+  assert.deepEqual(
+    await harness.port.query(request, new AbortController().signal),
+    {
+      ok: true,
+      value: { kind: "profile_answer_missing" },
+    },
+  );
+});

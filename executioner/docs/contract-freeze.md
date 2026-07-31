@@ -1,7 +1,7 @@
 # C3 Stage 1 contract freeze
 
 The in-process contract source is frozen at Git revision
-`f75c5b5e483fc1e58372e6872a284fb7782a5390`. The conformance suite rejects
+`d95e845e61bcf0a030b3b07c6d6261e3d95c1fad`. The conformance suite rejects
 tracked changes and untracked files under `executioner/src/contracts` until
 this record is deliberately updated.
 
@@ -28,6 +28,14 @@ defective boundary:
 
 Fakes are narrow contract examples. They record calls and return one synthetic
 success per declared operation, or an explicitly supplied result override.
-Provider conformance requires each live operation's exact synthetic success
-fixture and each aborted operation's exact cancellation result. Fakes do not
-simulate component behavior or replace F12 connection tests.
+Provider conformance requires exact deterministic synthetic results or the
+case's narrow runtime-owned invariants, plus the exact cancellation result for
+each aborted operation. Fakes do not simulate component behavior or replace
+F12 connection tests.
+
+## Shared suite ownership
+
+F1 owns `tests/contracts/consumers/browser/**` and
+`tests/security/privacy/**`. Component branches run these suites but do not
+redefine or independently edit them. Required changes route through the F1
+contract owner.
