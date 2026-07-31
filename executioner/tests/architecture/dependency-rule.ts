@@ -1,5 +1,6 @@
 import { globSync, readFileSync } from "node:fs";
 import { join, posix } from "node:path";
+import * as ts from "typescript";
 
 export interface SourceFile {
   path: string;
@@ -27,20 +28,52 @@ const owners: ReadonlyArray<readonly [RegExp, string]> = [
 
 const legacyRoots = /^(?:src\/)?(?:background|content|options|popup|shared)(?:\/|$)/;
 const legacyVersion = /(?:^|[/.-])v2(?:[/.-]|$)/;
-const imports =
-  /(?:import|export)\s+(?:[^'"]*?\s+from\s*)?["']([^"']+)["']|import\s*\(\s*["']([^"']+)["']\s*\)/g;
 
 function owner(path: string): string | undefined {
   return owners.find(([pattern]) => pattern.test(path))?.[1];
 }
 
+function moduleSpecifiers(file: SourceFile): string[] {
+  const source = ts.createSourceFile(
+    file.path,
+    file.source,
+    ts.ScriptTarget.Latest,
+    false,
+    ts.ScriptKind.TS,
+  );
+  const specifiers: string[] = [];
+
+  function visit(node: ts.Node): void {
+    if (
+      (ts.isImportDeclaration(node) || ts.isExportDeclaration(node)) &&
+      node.moduleSpecifier !== undefined &&
+      ts.isStringLiteralLike(node.moduleSpecifier)
+    ) {
+      specifiers.push(node.moduleSpecifier.text);
+    } else if (
+      ts.isCallExpression(node) &&
+      node.expression.kind === ts.SyntaxKind.ImportKeyword &&
+      node.arguments.length === 1 &&
+      ts.isStringLiteralLike(node.arguments[0]!)
+    ) {
+      specifiers.push(node.arguments[0].text);
+    }
+    ts.forEachChild(node, visit);
+  }
+
+  visit(source);
+  return specifiers;
+}
+
 export function dependencyViolations(files: readonly SourceFile[]): string[] {
   return files.flatMap((file) => {
     const importerOwner = owner(file.path);
+    if (importerOwner === undefined) {
+      return [`${file.path} has no component owner`];
+    }
 
-    return [...file.source.matchAll(imports)].flatMap((match) => {
-      const specifier = match[1] ?? match[2];
-      if (!specifier?.startsWith(".")) {
+    return moduleSpecifiers(file).flatMap((specifier) => {
+      if (!specifier.startsWith(".")) {
         return [];
       }
 
@@ -52,8 +85,10 @@ export function dependencyViolations(files: readonly SourceFile[]): string[] {
       }
 
       const targetOwner = owner(target);
+      if (targetOwner === undefined) {
+        return [`${file.path} imports unowned source ${target}`];
+      }
       if (
-        targetOwner !== undefined &&
         targetOwner !== "contracts" &&
         importerOwner !== "composition" &&
         targetOwner !== importerOwner
