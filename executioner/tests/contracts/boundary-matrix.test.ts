@@ -521,24 +521,86 @@ test("F9 coordinates field data without making peers port consumers", () => {
   ]);
 });
 
-test("the human boundary document names the frozen matrix", () => {
+function portSection(document: string, name: string): string {
+  const heading = `**${name}**`;
+  const start = document.indexOf(heading);
+  assert.notEqual(start, -1, `missing port section: ${name}`);
+
+  const contentStart = start + heading.length;
+  const ends = [
+    document.indexOf("\n**", contentStart),
+    document.indexOf("\n###", contentStart),
+    document.indexOf("\n## ", contentStart),
+  ].filter((index) => index >= 0);
+  return document.slice(
+    contentStart,
+    ends.length === 0 ? undefined : Math.min(...ends),
+  );
+}
+
+function bullet(
+  section: string,
+  singular: string,
+  plural = singular,
+): string {
+  const prefixes = [`- ${singular}: `, `- ${plural}: `];
+  const lines = section.split(/\r?\n/);
+  const index = lines.findIndex((line) =>
+    prefixes.some((prefix) => line.startsWith(prefix)),
+  );
+  assert.notEqual(index, -1, `missing ${singular} bullet`);
+
+  const line = lines[index];
+  assert.ok(line !== undefined);
+  const prefix = prefixes.find((candidate) => line.startsWith(candidate));
+  assert.ok(prefix !== undefined);
+
+  let value = line.slice(prefix.length);
+  for (let next = index + 1; lines[next]?.startsWith("  "); next += 1) {
+    value += ` ${lines[next]?.trim()}`;
+  }
+  return value;
+}
+
+function listBullet(
+  section: string,
+  singular: string,
+  plural: string,
+): string[] {
+  return bullet(section, singular, plural).replace(/\.$/, "").split(", ");
+}
+
+test("each human port section exactly matches the frozen matrix", () => {
   const document = readFileSync("docs/component-boundaries.md", "utf8");
   const requiredTerms = componentBoundaries.flatMap((component) => [
     component.feature,
     component.component,
     ...component.sourceOwnership,
     ...component.dataOwnership,
-    ...component.ports.flatMap((port) => [
-      port.name,
-      ...port.consumers,
-      ...port.requests,
-      ...port.results,
-      ...port.errors,
-    ]),
   ]);
 
   for (const term of requiredTerms) {
     assert.ok(document.includes(term), `missing boundary documentation: ${term}`);
+  }
+
+  for (const component of componentBoundaries) {
+    for (const port of component.ports) {
+      const section = portSection(document, port.name);
+      assert.deepEqual(
+        listBullet(section, "Consumer", "Consumers"),
+        port.consumers,
+      );
+      assert.deepEqual(
+        listBullet(section, "Request", "Requests"),
+        port.requests,
+      );
+      assert.deepEqual(listBullet(section, "Result", "Results"), port.results);
+      assert.deepEqual(listBullet(section, "Error", "Errors"), port.errors);
+      assert.equal(bullet(section, "Side effect owner"), port.sideEffect);
+      assert.equal(bullet(section, "Retry"), port.retry);
+      assert.equal(bullet(section, "Cancellation"), port.cancellation);
+      assert.equal(bullet(section, "Idempotency"), port.idempotency);
+    }
   }
 
   assert.ok(document.includes("F6-owned FieldIntent to FieldDriver"));

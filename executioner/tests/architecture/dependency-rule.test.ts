@@ -2,10 +2,21 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import {
+  componentSourceOwners,
   dependencyViolations,
   sourceFiles,
   type SourceFile,
 } from "./dependency-rule.ts";
+import { componentBoundaries } from "../../src/contracts/ownership.ts";
+
+test("component source ownership comes from the boundary matrix", () => {
+  assert.deepEqual(
+    componentSourceOwners,
+    componentBoundaries.flatMap(({ feature, sourceOwnership }) =>
+      sourceOwnership.map((pattern) => ({ pattern, owner: feature })),
+    ),
+  );
+});
 
 test("components may import contracts and their own implementation", () => {
   const files: SourceFile[] = [

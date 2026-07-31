@@ -36,10 +36,11 @@ Credentials, raw page values, and Submit capability are not shared data.
 - Error: FixtureRuntimeError.
 - Side effect owner: F2 owns fixture-server lifecycle, fixture transition
   state, reset, and fault activation.
-- Retry: callers may retry start and reset after a timeout. Transitions are
+- Retry: Callers may retry start and reset after a timeout; transitions are
   never retried automatically.
-- Cancellation: start cancellation stops only F2-owned server or state work.
-- Idempotency: start is keyed by fixture-run ID, reset is repeatable, and a
+- Cancellation: Start accepts cancellation and stops only F2-owned server or
+  state work.
+- Idempotency: Start is keyed by fixture-run ID, reset is repeatable, and a
   transition ID applies at most once.
 
 ### F3 Browser Session Adapter
@@ -54,12 +55,12 @@ Credentials, raw page values, and Submit capability are not shared data.
 - Error: BrowserSessionError.
 - Side effect owner: F3 alone owns browser/page lifecycle, observation,
   mutation, navigation, and cleanup.
-- Retry: F3 performs no policy retry. F9 may retry only contract-declared
+- Retry: F3 performs no policy retry; F9 may retry only contract-declared
   retryable operations.
-- Cancellation: every bounded browser operation stops at its declared safe
-  boundary.
-- Idempotency: duplicate page ownership is rejected, close is repeatable, and a
-  mutation operation ID applies at most once.
+- Cancellation: Every bounded browser operation accepts cancellation and stops
+  at its declared safe boundary.
+- Idempotency: Duplicate page ownership is rejected, close is repeatable, and
+  a mutation operation ID applies at most once.
 
 ### F4 Intake, Profile, Bootstrap, and Journey State
 
@@ -69,12 +70,13 @@ Credentials, raw page values, and Submit capability are not shared data.
 - Request: JourneyBootstrapRequest.
 - Results: JourneyInputs, JourneyBootstrapResult.
 - Error: JourneyInputError.
-- Side effect owner: F4 validates immutable intake before JourneyStateStore may
-  persist bootstrap state.
-- Retry: an identical bootstrap request may be retried. Changed inputs require
-  a new request identity.
-- Cancellation: cancellation before persistence leaves no journey state.
-- Idempotency: an identical request returns the same journey identity.
+- Side effect owner: F4 validates immutable intake before the JourneyStateStore
+  may persist bootstrap state.
+- Retry: A caller may retry an identical bootstrap request; changed inputs
+  require a new request identity.
+- Cancellation: Cancellation before persistence leaves no journey state.
+- Idempotency: An identical bootstrap request returns the same journey
+  identity.
 
 **ProfileQuery**
 
@@ -82,10 +84,10 @@ Credentials, raw page values, and Submit capability are not shared data.
 - Request: ProfileQueryRequest.
 - Result: ProfileAnswerResult.
 - Error: ProfileQueryError.
-- Side effect owner: queries are read-only. F4 alone owns profile data.
-- Retry: the same read-only query may be retried.
-- Cancellation: cancellation changes no profile data.
-- Idempotency: the same profile revision and query return the same result.
+- Side effect owner: Profile queries are read-only; F4 alone owns profile data.
+- Retry: Read-only queries may be retried with the same request.
+- Cancellation: Cancellation may stop a query without changing profile data.
+- Idempotency: The same profile revision and query return the same result.
 
 **JourneyStateStore**
 
@@ -93,12 +95,12 @@ Credentials, raw page values, and Submit capability are not shared data.
 - Requests: JourneyStateLoadRequest, JourneyStateTransitionCommand.
 - Results: JourneyStateLoadResult, JourneyStateTransitionResult.
 - Error: JourneyStateError.
-- Side effect owner: F4 alone validates and persists durable journey state. F9
+- Side effect owner: F4 alone validates and persists durable journey state; F9
   supplies legal transition commands.
-- Retry: loads are retryable. A transition retry keeps its operation ID.
-- Cancellation: cancellation before commit leaves state unchanged. An
+- Retry: Loads are retryable; transition retries require the same operation ID.
+- Cancellation: Cancellation before commit leaves state unchanged; an
   acknowledged commit remains committed.
-- Idempotency: transition operation IDs and terminal states are idempotent.
+- Idempotency: Transition operation IDs and terminal states are idempotent.
 
 ### F5 Workday Page Understanding
 
@@ -108,10 +110,11 @@ Credentials, raw page values, and Submit capability are not shared data.
 - Request: PageUnderstandingRequest.
 - Results: PageUnderstandingResult, SemanticPageSnapshot.
 - Error: PageUnderstandingError.
-- Side effect owner: none. F5 classifies bounded F3 observations.
-- Retry: the same immutable BrowserObservation may be classified again.
-- Cancellation: cancellation stops classification without mutation.
-- Idempotency: the same observation produces the same semantic result.
+- Side effect owner: F5 is read-only and owns only semantic classification of
+  bounded F3 observations.
+- Retry: The same immutable browser observation may be classified again.
+- Cancellation: Cancellation stops classification without mutation.
+- Idempotency: The same observation produces the same semantic result.
 
 ### F6 Question, Answer, and Option Resolution
 
@@ -121,12 +124,12 @@ Credentials, raw page values, and Submit capability are not shared data.
 - Request: AnswerResolutionRequest.
 - Results: AnswerResolutionResult, FieldIntent.
 - Error: AnswerResolutionError.
-- Side effect owner: none. F6 never mutates profiles, browser state, or
-  reviewed catalogs.
-- Retry: resolution may be retried against the same catalog and profile
+- Side effect owner: F6 is read-only and never mutates profiles, browser state,
+  or reviewed catalogs.
+- Retry: Resolution may be retried against the same catalog and profile
   revisions.
-- Cancellation: cancellation stops resolution without mutation.
-- Idempotency: the same semantic field and authoritative inputs return the same
+- Cancellation: Cancellation stops resolution without mutation.
+- Idempotency: The same semantic field and authoritative inputs return the same
   result.
 
 ### F7 Field Interaction Drivers
@@ -137,13 +140,14 @@ Credentials, raw page values, and Submit capability are not shared data.
 - Request: DriverRequest.
 - Result: MutationReceipt.
 - Error: DriverError.
-- Side effect owner: F7 owns one-driver dispatch and receipt creation. F3 alone
+- Side effect owner: F7 owns one-driver dispatch and receipt creation; F3 alone
   performs the requested browser mutation.
-- Retry: F7 never retries mutation. F9 may issue a new attempt only after
+- Retry: F7 never retries mutation; F9 may issue a new attempt only after
   verification and policy allow it.
-- Cancellation: cancellation is forwarded to F3 and never claims verification.
-- Idempotency: a driver operation ID dispatches at most once. Its receipt never
-  claims verification.
+- Cancellation: Cancellation is forwarded to F3 and returns without claiming
+  verification.
+- Idempotency: A driver operation ID dispatches at most once and its receipt
+  never claims verification.
 
 ### F8 Independent Verification, Completion, and Navigation
 
@@ -153,11 +157,11 @@ Credentials, raw page values, and Submit capability are not shared data.
 - Request: VerificationRequest.
 - Result: VerificationResult.
 - Error: VerificationError.
-- Side effect owner: none. F8 owns bounded readback comparison, F3 owns browser
-  reads, and F8 never calls F7.
-- Retry: F8 owns only bounded verification polling. F9 owns any mutation retry.
-- Cancellation: cancellation stops polling without changing browser state.
-- Idempotency: verification is repeatable for the same intent, receipt, and
+- Side effect owner: F8 owns bounded readback comparison; F3 owns browser reads
+  and F8 never calls F7.
+- Retry: F8 owns only bounded verification polling; F9 owns any mutation retry.
+- Cancellation: Cancellation stops polling without changing browser state.
+- Idempotency: Verification is repeatable for the same intent, receipt, and
   observed state.
 
 **CompletionNavigation**
@@ -166,13 +170,13 @@ Credentials, raw page values, and Submit capability are not shared data.
 - Requests: PageCompletionRequest, NavigationReconciliationRequest.
 - Results: PageCompletionResult, NavigationDecision, NavigationResult.
 - Error: NavigationError.
-- Side effect owner: F8 owns completion and navigation decisions. F3 owns
+- Side effect owner: F8 owns completion and navigation decisions; F3 owns
   navigation and F9 owns the loop.
-- Retry: F8 does not retry navigation. F9 reconciles an uncertain result before
+- Retry: F8 does not retry navigation; F9 reconciles an uncertain result before
   another attempt.
-- Cancellation: cancellation stops decision or reconciliation work without
+- Cancellation: Cancellation stops decision or reconciliation work without
   authorizing navigation.
-- Idempotency: completion is pure. Reconciliation returns one result per
+- Idempotency: Completion is pure and reconciliation returns one result per
   navigation operation ID.
 
 ### F9 Orchestrator and MCP Facade
@@ -185,14 +189,13 @@ Credentials, raw page values, and Submit capability are not shared data.
 - Results: JourneyOperationResult, JourneyStatus, TerminalResult.
 - Error: OrchestratorError.
 - Side effect owner: F9 alone owns journey/page loop scheduling, operation
-  ownership, retry policy, and cancellation propagation. Providers retain their
-  component side effects.
+  ownership, retry policy, and cancellation propagation.
 - Retry: F9 applies the only bounded retries and only to errors declared
   retryable by the providing port.
-- Cancellation: F9 propagates cancellation to active bounded operations before
-  terminal state.
-- Idempotency: start and cancel use operation IDs. Status and terminal reads are
-  repeatable. Terminal state is final.
+- Cancellation: F9 owns cancellation and propagates it to active bounded
+  operations before terminal state.
+- Idempotency: Start and cancel are keyed by operation ID; status and terminal
+  reads are repeatable; terminal state is final.
 
 **McpJourneyApi**
 
@@ -200,12 +203,13 @@ Credentials, raw page values, and Submit capability are not shared data.
 - Request: McpRequest.
 - Result: McpResponse.
 - Error: McpTransportError.
-- Side effect owner: the F9 MCP facade validates and forwards commands to
+- Side effect owner: The F9 MCP facade only validates and forwards commands to
   JourneyControl.
-- Retry: the facade performs no retry. Duplicate transport requests retain
+- Retry: The facade performs no retry; duplicate transport requests retain
   their request ID.
-- Cancellation: only the explicit cancel operation requests cancellation.
-- Idempotency: status and result reads are repeatable. Mutating requests use
+- Cancellation: Only the explicit cancel operation requests journey
+  cancellation.
+- Idempotency: Status and result reads are repeatable; mutating requests use
   operation IDs.
 
 ### F10 Observability and Factual Failure Reporting
@@ -220,10 +224,10 @@ Credentials, raw page values, and Submit capability are not shared data.
 - Error: ObservabilityError.
 - Side effect owner: F10 alone admits and appends value-free events and projects
   monotonic progress.
-- Retry: an append may be retried only with the same event ID.
-- Cancellation: cancellation before append leaves no event. An acknowledged
+- Retry: An append may be retried only with the same event ID.
+- Cancellation: Cancellation before append leaves no event; an acknowledged
   append remains recorded.
-- Idempotency: event IDs deduplicate appends. Terminal events never duplicate
+- Idempotency: Event IDs deduplicate appends and terminal events never duplicate
   terminal progress.
 
 **ProgressReader**
@@ -232,10 +236,10 @@ Credentials, raw page values, and Submit capability are not shared data.
 - Request: ProgressReadRequest.
 - Result: JourneyProgress.
 - Error: ObservabilityError.
-- Side effect owner: none. Progress reads are side-effect free.
-- Retry: reads may be retried.
-- Cancellation: cancellation stops only the read.
-- Idempotency: a read never changes progress.
+- Side effect owner: Progress reads are side-effect free.
+- Retry: Reads may be retried.
+- Cancellation: Cancellation stops only the read.
+- Idempotency: A read never changes progress.
 
 **FailureReporter**
 
@@ -245,10 +249,10 @@ Credentials, raw page values, and Submit capability are not shared data.
 - Error: FailureReportingError.
 - Side effect owner: F10 owns factual report projection and bounded value-free
   notification delivery.
-- Retry: notification retry is bounded and reuses the failure report ID.
-- Cancellation: cancellation may stop undelivered notification work but never
+- Retry: Notification retry is bounded and reuses the failure report ID.
+- Cancellation: Cancellation may stop undelivered notification work but never
   rewrites the factual report.
-- Idempotency: a failure report ID produces one terminal report and at most one
+- Idempotency: A failure report ID produces one terminal report and at most one
   delivered notification.
 
 ### F11 Privacy, Safety, and Sanitized Evidence
@@ -260,10 +264,11 @@ Credentials, raw page values, and Submit capability are not shared data.
 - Request: PrivacyAdmissionRequest.
 - Result: AdmissionDecision.
 - Error: PrivacyDenial.
-- Side effect owner: none. Denied content is never retained.
-- Retry: the same bounded payload may be checked again.
-- Cancellation: cancellation stops admission without retention.
-- Idempotency: the same payload and policy revision return the same decision.
+- Side effect owner: F11 privacy admission is pure and denied content is never
+  retained.
+- Retry: The same bounded payload may be checked again.
+- Cancellation: Cancellation stops admission without retention.
+- Idempotency: The same payload and policy revision return the same decision.
 
 **SafetyGuard**
 
@@ -272,10 +277,11 @@ Credentials, raw page values, and Submit capability are not shared data.
 - Request: SafetyAdmissionRequest.
 - Result: AdmissionDecision.
 - Error: SafetyDenial.
-- Side effect owner: none. Denied capabilities never reach a side-effect owner.
-- Retry: the same semantic request may be checked again.
-- Cancellation: cancellation stops admission without authorization.
-- Idempotency: the same request and policy revision return the same decision.
+- Side effect owner: F11 safety admission is pure; denied capabilities never
+  reach a side-effect owner.
+- Retry: The same semantic request may be checked again.
+- Cancellation: Cancellation stops admission without authorization.
+- Idempotency: The same request and policy revision return the same decision.
 
 **EvidenceStore**
 
@@ -285,10 +291,10 @@ Credentials, raw page values, and Submit capability are not shared data.
 - Error: EvidenceError.
 - Side effect owner: F11 alone admits and stores bounded sanitized evidence and
   replay manifests.
-- Retry: writes may be retried only with the same evidence record ID.
-- Cancellation: cancellation before commit retains nothing. Denied content is
+- Retry: Writes may be retried only with the same evidence record ID.
+- Cancellation: Cancellation before commit retains nothing; denied content is
   never written.
-- Idempotency: evidence record IDs deduplicate writes. Reads never mutate
+- Idempotency: Evidence record IDs deduplicate writes and reads never mutate
   retention.
 
 **ModelController**
@@ -297,12 +303,12 @@ Credentials, raw page values, and Submit capability are not shared data.
 - Request: ModelSuggestionRequest.
 - Result: ModelSuggestionResult.
 - Error: ModelAdmissionError.
-- Side effect owner: F11 owns admitted local-model invocation. Returned
+- Side effect owner: F11 owns admitted local-model invocation; returned
   suggestions cannot mutate or choose policy.
 - Retry: F9 may request another suggestion only within its retry budget and
   with a new attempt ID.
-- Cancellation: cancellation stops the bounded model request.
-- Idempotency: a completed attempt ID returns its recorded semantic result
+- Cancellation: Cancellation stops the bounded model request.
+- Idempotency: A completed attempt ID returns its recorded semantic result
   without reinvocation.
 
 ## Frozen execution rules

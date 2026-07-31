@@ -2,6 +2,8 @@ import { globSync, readFileSync } from "node:fs";
 import { join, posix } from "node:path";
 import * as ts from "typescript";
 
+import { componentBoundaries } from "../../src/contracts/ownership.ts";
+
 export interface SourceFile {
   path: string;
   source: string;
@@ -12,31 +14,35 @@ type ModuleReference =
   | { kind: "path"; path: string }
   | { kind: "nonliteral-dynamic" };
 
-const owners: ReadonlyArray<readonly [RegExp, string]> = [
+const fixedOwners: ReadonlyArray<readonly [RegExp, string]> = [
   [/^src\/contracts(?:\/|$)/, "contracts"],
   [/^src\/testing\/contracts(?:\/|$)/, "test-kit"],
-  [/^src\/testing\/fixture-(?:server|state)\.ts$/, "fixtures"],
-  [/^src\/browser(?:\/|$)/, "browser"],
-  [/^src\/(?:intake|profile|journey)(?:\/|$)/, "state"],
-  [/^src\/ats(?:\/|$)/, "understanding"],
-  [/^src\/form\/(?:discovery|ui)(?:\/|$)/, "understanding"],
-  [/^src\/form\/semantic-snapshot\.ts$/, "understanding"],
-  [/^src\/form\/(?:questions|answers|options)(?:\/|$)/, "answers"],
-  [/^src\/interaction\/drivers(?:\/|$)/, "drivers"],
-  [/^src\/interaction\/(?:verification|completion|navigation)(?:\/|$)/, "verification"],
-  [/^src\/control\/(?:orchestrator|mcp)(?:\/|$)/, "orchestrator"],
-  [/^src\/observability(?:\/|$)/, "observability"],
-  [/^src\/(?:safety|evidence)(?:\/|$)/, "safety"],
-  [/^src\/control\/model(?:\/|$)/, "safety"],
   [/^src\/composition(?:\/|$)/, "composition"],
   [/^tests(?:\/|$)/, "tests"],
 ];
+
+export const componentSourceOwners = componentBoundaries.flatMap(
+  ({ feature, sourceOwnership }) =>
+    sourceOwnership.map((pattern) => ({ pattern, owner: feature })),
+);
 
 const legacyRoots = /^(?:src\/)?(?:background|content|options|popup|shared)(?:\/|$)/;
 const legacyVersion = /(?:^|[/.-])v2(?:[/.-]|$)/;
 
 function owner(path: string): string | undefined {
-  return owners.find(([pattern]) => pattern.test(path))?.[1];
+  const fixedOwner = fixedOwners.find(([pattern]) => pattern.test(path))?.[1];
+  if (fixedOwner !== undefined) {
+    return fixedOwner;
+  }
+
+  return componentSourceOwners.find(({ pattern }) => {
+    const directory = pattern.endsWith("/**")
+      ? pattern.slice(0, -3)
+      : undefined;
+    return directory === undefined
+      ? path === pattern
+      : path === directory || path.startsWith(`${directory}/`);
+  })?.owner;
 }
 
 function moduleReferences(file: SourceFile): ModuleReference[] {
