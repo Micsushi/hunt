@@ -525,7 +525,7 @@ function parseFactualTerminalOutcome(value: unknown, path: string): void {
   const outcome = exact(value, path, ["source", "result"]);
   const source = oneOf(
     outcome.source,
-    ["page_understanding", "answer_resolution"],
+    ["page_understanding", "answer_resolution", "verification"],
     `${path}.source`,
   );
   if (source === "page_understanding") {
@@ -535,12 +535,41 @@ function parseFactualTerminalOutcome(value: unknown, path: string): void {
     return;
   }
   const candidate = record(outcome.result, `${path}.result`);
+  if (source === "verification") {
+    const kind = oneOf(
+      candidate.kind,
+      ["rejected", "ambiguous", "unavailable"],
+      `${path}.result.kind`,
+    );
+    if (kind === "rejected") {
+      const result = exact(
+        candidate,
+        `${path}.result`,
+        ["kind", "fieldId", "reason"],
+      );
+      identifier(result.fieldId, `${path}.result.fieldId`, fieldId);
+      oneOf(result.reason, ["mismatch", "stale"], `${path}.result.reason`);
+      return;
+    }
+    const result = exact(candidate, `${path}.result`, ["kind", "fieldId"]);
+    identifier(result.fieldId, `${path}.result.fieldId`, fieldId);
+    return;
+  }
   const kind = oneOf(
     candidate.kind,
-    ["profile_answer_missing", "unsupported"],
+    [
+      "profile_answer_missing",
+      "option_no_match",
+      "option_ambiguous",
+      "unsupported",
+    ],
     `${path}.result.kind`,
   );
-  if (kind === "profile_answer_missing") {
+  if (
+    kind === "profile_answer_missing" ||
+    kind === "option_no_match" ||
+    kind === "option_ambiguous"
+  ) {
     const result = exact(candidate, `${path}.result`, ["kind", "questionId"]);
     identifier(result.questionId, `${path}.result.questionId`, questionId);
     return;
@@ -731,13 +760,15 @@ const terminalResultSchema = {
           properties: {
             source: { const: "page_understanding" },
             result: {
-              type: "object",
-              additionalProperties: false,
-              required: ["kind", "pageId"],
-              properties: {
-                kind: { enum: ["unknown", "ambiguous"] },
-                pageId: opaqueIdentifierSchema,
-              },
+              oneOf: ["unknown", "ambiguous"].map((kind) => ({
+                type: "object",
+                additionalProperties: false,
+                required: ["kind", "pageId"],
+                properties: {
+                  kind: { const: kind },
+                  pageId: opaqueIdentifierSchema,
+                },
+              })),
             },
           },
         },
@@ -764,6 +795,64 @@ const terminalResultSchema = {
                   required: ["kind", "fieldId"],
                   properties: {
                     kind: { const: "unsupported" },
+                    fieldId: opaqueIdentifierSchema,
+                  },
+                },
+                {
+                  type: "object",
+                  additionalProperties: false,
+                  required: ["kind", "questionId"],
+                  properties: {
+                    kind: { const: "option_no_match" },
+                    questionId: opaqueIdentifierSchema,
+                  },
+                },
+                {
+                  type: "object",
+                  additionalProperties: false,
+                  required: ["kind", "questionId"],
+                  properties: {
+                    kind: { const: "option_ambiguous" },
+                    questionId: opaqueIdentifierSchema,
+                  },
+                },
+              ],
+            },
+          },
+        },
+        {
+          type: "object",
+          additionalProperties: false,
+          required: ["source", "result"],
+          properties: {
+            source: { const: "verification" },
+            result: {
+              oneOf: [
+                {
+                  type: "object",
+                  additionalProperties: false,
+                  required: ["kind", "fieldId", "reason"],
+                  properties: {
+                    kind: { const: "rejected" },
+                    fieldId: opaqueIdentifierSchema,
+                    reason: { enum: ["mismatch", "stale"] },
+                  },
+                },
+                {
+                  type: "object",
+                  additionalProperties: false,
+                  required: ["kind", "fieldId"],
+                  properties: {
+                    kind: { const: "ambiguous" },
+                    fieldId: opaqueIdentifierSchema,
+                  },
+                },
+                {
+                  type: "object",
+                  additionalProperties: false,
+                  required: ["kind", "fieldId"],
+                  properties: {
+                    kind: { const: "unavailable" },
                     fieldId: opaqueIdentifierSchema,
                   },
                 },

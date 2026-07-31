@@ -80,6 +80,94 @@ test("durable journey state v3 supports blocked and rejects adjacent versions", 
   }
 });
 
+test("exported schemas publish every exact factual branch and MCP v3 nesting", () => {
+  const terminalSchema = serializedSchemas.terminalResult;
+  const [page, answer, verification] =
+    terminalSchema.properties.factualOutcome.oneOf;
+
+  assert.deepEqual(
+    [page, answer, verification].map(({ additionalProperties }) =>
+      additionalProperties
+    ),
+    [false, false, false],
+  );
+  assert.deepEqual(page.properties.source, { const: "page_understanding" });
+  assert.deepEqual(
+    page.properties.result.oneOf.map(({ required, properties }) => ({
+      kind: properties.kind.const,
+      required,
+    })),
+    [
+      { kind: "unknown", required: ["kind", "pageId"] },
+      { kind: "ambiguous", required: ["kind", "pageId"] },
+    ],
+  );
+  assert.equal(
+    page.properties.result.oneOf.every(
+      ({ additionalProperties }) => additionalProperties === false,
+    ),
+    true,
+  );
+
+  assert.deepEqual(answer.properties.source, { const: "answer_resolution" });
+  assert.deepEqual(
+    answer.properties.result.oneOf.map(({ required, properties }) => ({
+      kind: properties.kind.const,
+      required,
+    })),
+    [
+      { kind: "profile_answer_missing", required: ["kind", "questionId"] },
+      { kind: "unsupported", required: ["kind", "fieldId"] },
+      { kind: "option_no_match", required: ["kind", "questionId"] },
+      { kind: "option_ambiguous", required: ["kind", "questionId"] },
+    ],
+  );
+  assert.equal(
+    answer.properties.result.oneOf.every(
+      ({ additionalProperties }) => additionalProperties === false,
+    ),
+    true,
+  );
+
+  assert.deepEqual(verification.properties.source, { const: "verification" });
+  assert.deepEqual(
+    verification.properties.result.oneOf.map(({ required, properties }) => ({
+      kind: properties.kind.const,
+      required,
+      reasons: "reason" in properties ? properties.reason.enum : undefined,
+    })),
+    [
+      {
+        kind: "rejected",
+        required: ["kind", "fieldId", "reason"],
+        reasons: ["mismatch", "stale"],
+      },
+      {
+        kind: "ambiguous",
+        required: ["kind", "fieldId"],
+        reasons: undefined,
+      },
+      {
+        kind: "unavailable",
+        required: ["kind", "fieldId"],
+        reasons: undefined,
+      },
+    ],
+  );
+  assert.equal(
+    verification.properties.result.oneOf.every(
+      ({ additionalProperties }) => additionalProperties === false,
+    ),
+    true,
+  );
+
+  const terminalMcpResult =
+    serializedSchemas.mcpResponse.properties.result.oneOf[2];
+  assert.equal(serializedSchemas.mcpResponse.properties.schemaVersion.const, 3);
+  assert.equal(terminalSchema.properties.schemaVersion.const, 3);
+  assert.equal(terminalMcpResult.properties.terminal, terminalSchema);
+});
+
 test("terminal v3 preserves each approved factual outcome exactly", () => {
   const outcomes = [
     {
@@ -97,6 +185,30 @@ test("terminal v3 preserves each approved factual outcome exactly", () => {
     {
       source: "answer_resolution",
       result: { kind: "unsupported", fieldId: "field-sponsorship" },
+    },
+    {
+      source: "answer_resolution",
+      result: { kind: "option_no_match", questionId: "question-country" },
+    },
+    {
+      source: "answer_resolution",
+      result: { kind: "option_ambiguous", questionId: "question-country" },
+    },
+    {
+      source: "verification",
+      result: { kind: "rejected", fieldId: "field-country", reason: "mismatch" },
+    },
+    {
+      source: "verification",
+      result: { kind: "rejected", fieldId: "field-country", reason: "stale" },
+    },
+    {
+      source: "verification",
+      result: { kind: "ambiguous", fieldId: "field-country" },
+    },
+    {
+      source: "verification",
+      result: { kind: "unavailable", fieldId: "field-country" },
     },
   ] as const;
 
@@ -151,12 +263,32 @@ test("terminal v3 rejects unapproved, mismatched, and widened factual outcomes",
       result: { kind: "unknown" },
     },
     {
-      source: "answer_resolution",
+      source: "verification",
       result: { kind: "option_no_match", questionId: "question-name" },
     },
     {
       source: "answer_resolution",
-      result: { kind: "option_ambiguous", questionId: "question-name" },
+      result: { kind: "rejected", fieldId: "field-name", reason: "mismatch" },
+    },
+    {
+      source: "verification",
+      result: { kind: "verified", fieldId: "field-name" },
+    },
+    {
+      source: "verification",
+      result: { kind: "rejected", fieldId: "field-name", reason: "changed" },
+    },
+    {
+      source: "verification",
+      result: { kind: "rejected", fieldId: "field-name" },
+    },
+    {
+      source: "verification",
+      result: { kind: "ambiguous" },
+    },
+    {
+      source: "verification",
+      result: { kind: "unavailable", fieldId: "field-name", retry: true },
     },
     {
       source: "page_understanding",
@@ -212,6 +344,10 @@ test("factual outcomes never enter the stable error-code channel", () => {
     "ambiguous",
     "profile_answer_missing",
     "unsupported",
+    "option_no_match",
+    "option_ambiguous",
+    "rejected",
+    "unavailable",
   ]) {
     expectCode(
       () => parseErrorEnvelope({

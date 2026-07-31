@@ -1038,7 +1038,20 @@ export type FactualTerminalOutcome =
             readonly kind: "profile_answer_missing";
             readonly questionId: QuestionId;
           }
+        | { readonly kind: "option_no_match"; readonly questionId: QuestionId }
+        | { readonly kind: "option_ambiguous"; readonly questionId: QuestionId }
         | { readonly kind: "unsupported"; readonly fieldId: FieldId };
+    }
+  | {
+      readonly source: "verification";
+      readonly result:
+        | {
+            readonly kind: "rejected";
+            readonly fieldId: FieldId;
+            readonly reason: "mismatch" | "stale";
+          }
+        | { readonly kind: "ambiguous"; readonly fieldId: FieldId }
+        | { readonly kind: "unavailable"; readonly fieldId: FieldId };
     };
 
 export type TerminalResult =

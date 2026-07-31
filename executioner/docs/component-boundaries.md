@@ -201,9 +201,16 @@ Credentials, raw page values, and Submit capability are not shared data.
 - Idempotency: Start and cancel are keyed by operation ID; status and terminal
   reads are repeatable; terminal state is final.
 - Factual outcome: unknown or ambiguous page understanding retains the current
-  page ID. Missing profile answers retain the question ID, and unsupported
-  fields retain the field ID. These four closed outcomes terminate as
-  `blocked`; they are not stable errors or failure reports.
+  page ID. Missing profile answers, unmatched options, and ambiguous options
+  retain the question ID; unsupported fields retain the field ID. Final
+  verification rejection retains the field ID and exact `mismatch` or `stale`
+  reason; verification ambiguity and unavailability retain the field ID. These
+  closed outcomes terminate as `blocked`; they are not stable errors or failure
+  reports. A rejected verification terminalizes only after F9 exhausts its
+  bounded verification retry. Ambiguous and unavailable verification never
+  authorize blind remutation. F9 transitions durable status to `blocked`
+  before terminal publication and emits exactly one provider-attributed
+  `journey_terminal` event.
 
 **McpJourneyApi**
 
@@ -223,10 +230,12 @@ Credentials, raw page values, and Submit capability are not shared data.
 
 **EventSink**
 
-Provider-attributed `journey_terminal` events at F5 page-understanding classify
-or F6 answer-resolution resolve project value-free `blocked` progress. The
-factual outcome remains in `TerminalResult`; it never enters `FailureContext`.
-The same coordinates with `step_failed` do not project a factual block.
+Provider-attributed `journey_terminal` events at F5 page-understanding classify,
+F6 answer-resolution resolve, or F8 verification verify project value-free
+`blocked` progress. The factual outcome remains in `TerminalResult`; it never
+enters `FailureContext`. The same coordinates with `step_failed` do not project
+a factual block. F10 owns only the value-free event and progress projection; F9
+owns the factual terminal wrapper.
 
 - Consumers: F2 Fixture Runtime, F3 Browser Adapter, F4 Journey State,
   F5 Page Understanding, F6 Answer Resolver, F7 Field Drivers, F8
@@ -235,8 +244,9 @@ The same coordinates with `step_failed` do not project a factual block.
 - Results: EventAppendResult, JourneyProgress.
 - Error: ObservabilityError.
 - Side effect owner: F10 alone admits and appends value-free events and projects
-  monotonic progress; F5 page-understanding and F6 answer-resolution terminal
-  facts project blocked without entering failure reporting.
+  monotonic progress; F5 page-understanding, F6 answer-resolution, and F8
+  verification terminal facts project blocked without entering failure
+  reporting.
 - Retry: An append may be retried only with the same event ID.
 - Cancellation: Cancellation before append leaves no event; an acknowledged
   append remains recorded.

@@ -98,6 +98,10 @@ function isFactualBlockedTerminalEvent(
       event.component === "F6" &&
       event.phase === "answer_resolution" &&
       event.step === "resolve"
+    ) || (
+      event.component === "F8" &&
+      event.phase === "verification" &&
+      event.step === "verify"
     )
   );
 }

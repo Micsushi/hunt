@@ -379,7 +379,7 @@ const expectedBehaviors = {
     "`requestId` is the sole caller idempotency key.",
   ],
   EventSink: [
-    "F10 alone admits and appends value-free events and projects monotonic progress; F5 page-understanding and F6 answer-resolution terminal facts project blocked without entering failure reporting.",
+    "F10 alone admits and appends value-free events and projects monotonic progress; F5 page-understanding, F6 answer-resolution, and F8 verification terminal facts project blocked without entering failure reporting.",
     "An append may be retried only with the same event ID.",
     "Cancellation before append leaves no event; an acknowledged append remains recorded.",
     "Event IDs deduplicate appends and terminal events never duplicate terminal progress.",

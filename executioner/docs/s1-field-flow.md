@@ -53,12 +53,18 @@ option decision, and F7 owns behavior dispatch for every row.
 | Evidence | F9 | F11 | F11 | F11 | F9 | F10 |
 | Terminal result | F9 | External MCP Client | F9 | F9 | F9 | F10 |
 
-F5 page-understanding `unknown` or `ambiguous` and F6 answer-resolution
-`profile_answer_missing` or `unsupported` are factual terminal outcomes. F9
-publishes them as `blocked` with only the current page, question, or field
-coordinate. F10 projects provider-attributed terminal events to value-free
-`blocked` progress. These facts never enter the stable-error or
-`FailureContext` channels.
+F5 page-understanding `unknown` or `ambiguous`; F6 answer-resolution
+`profile_answer_missing`, `unsupported`, `option_no_match`, or
+`option_ambiguous`; and final F8 verification `rejected`, `ambiguous`, or
+`unavailable` are factual terminal outcomes. F9 publishes them as `blocked`
+with only the current page, question, field, or closed rejection reason. An
+option fact does not become a question error. Rejected verification terminalizes
+only after F9 exhausts its bounded verification retry. Ambiguous or unavailable
+verification never authorizes blind remutation. F10 projects the exact F5, F6,
+or F8 provider-attributed terminal event to value-free `blocked` progress.
+F9 transitions durable state to `blocked` before terminal publication and emits
+exactly one such `journey_terminal` event. These facts never enter the
+stable-error or `FailureContext` channels.
 
 ## Control slice
 

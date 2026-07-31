@@ -24,17 +24,29 @@ idempotency key.
 
 Version 3 adds the terminal `blocked` status and one separate closed factual
 outcome channel. Page-understanding outcomes retain `unknown` or `ambiguous`
-with the current page ID. Answer-resolution outcomes retain only
-`profile_answer_missing` with its question ID or `unsupported` with its field
-ID. Option mismatch and ambiguity are not factual terminal outcomes. No
-factual outcome is a `StableErrorCode`, `FailureContext`, `ErrorEnvelope`, or
-verified failure cause. Failed terminals require an error code, blocked
-terminals require a factual outcome, and the channels are mutually exclusive.
+with the current page ID. Answer-resolution outcomes retain
+`profile_answer_missing`, `option_no_match`, or `option_ambiguous` with the
+question ID, or `unsupported` with the field ID. Final verification outcomes
+retain `rejected` with the field ID and exact `mismatch` or `stale` reason, or
+`ambiguous` or `unavailable` with the field ID. `verified` is not a factual
+terminal outcome. No factual outcome is a `StableErrorCode`, `FailureContext`,
+`ErrorEnvelope`, or verified failure cause. Failed terminals require an error
+code, blocked terminals require a factual outcome, and the channels are
+mutually exclusive.
 
-Provider-attributed terminal events at F5 page-understanding classify or F6
-answer-resolution resolve project value-free `blocked` progress. The event and
-progress wires remain version 2 because their field shapes did not change.
-`step_failed` remains failure-path evidence and never projects a factual block.
+F9 terminalizes option facts without converting them to question errors. A
+rejected verification becomes terminal only after F9 exhausts its bounded
+verification retry. Ambiguous and unavailable verification never authorize
+blind remutation and terminalize factually. For every factual terminal, F9
+transitions durable journey status to `blocked` before publishing the terminal
+result and emits exactly one provider-attributed `journey_terminal` event.
+
+Provider-attributed terminal events at F5 page-understanding classify, F6
+answer-resolution resolve, or F8 verification verify project value-free
+`blocked` progress. The event and progress wires remain version 2 because their
+field shapes did not change. `step_failed` remains failure-path evidence and
+never projects a factual block. F10 owns only value-free event admission,
+storage, and progress projection; F9 owns the factual terminal wrapper.
 
 F2 through F11 must start from the accepted F1 tip recorded by the coordinator.
 That tip contains this contract revision and the shared test kit. A component

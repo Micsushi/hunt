@@ -254,6 +254,10 @@ function eventScenarioFactory(): ContractProviderFactory<"EventSink"> {
             request.event.component === "F6" &&
             request.event.phase === "answer_resolution" &&
             request.event.step === "resolve"
+          ) || (
+            request.event.component === "F8" &&
+            request.event.phase === "verification" &&
+            request.event.step === "verify"
           )
         );
         return {

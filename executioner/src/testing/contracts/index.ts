@@ -2,6 +2,7 @@ export * from "./conformance.ts";
 export * from "./compatibility-probes.ts";
 export * from "./coverage-registry.ts";
 export * from "./fakes.ts";
+export * from "./factual-outcome-cases.ts";
 export * from "./fixtures.ts";
 export * from "./operation-cases.ts";
 export * from "./privacy.ts";
