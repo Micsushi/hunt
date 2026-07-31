@@ -5,8 +5,8 @@
   "planningRevision": "8c5785abf4f0d08dba871744cda006e906dab051",
   "contractTreeOids": {
     "executioner/src/contracts": "2759362c506526699a797e94ffd9c4b3f6fcf6ea",
-    "executioner/src/testing/contracts": "a8a34e7a619daffc17230223dc391d9981b97237",
-    "executioner/tests/contracts": "067b4d785f59a35158376adacd3171cb72cf402a",
+    "executioner/src/testing/contracts": "cf9a7a2322f2d2083cdebf089dcba1b584ca22cb",
+    "executioner/tests/contracts": "d299d28577855fa6fa9556559c31a79fdfd10a62",
     "executioner/tests/security/privacy": "24771827d97117615b9360579e3293a05d3784dd"
   },
   "serializedVersions": {

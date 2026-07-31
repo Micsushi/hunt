@@ -1,5 +1,4 @@
 import assert from "node:assert/strict";
-import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import test from "node:test";
@@ -17,12 +16,7 @@ test("the F1 contract baseline is frozen", () => {
   assert.equal(contractRevisionStatus, "r2_frozen");
 });
 
-test("the staged F1 baseline has exact ancestry, trees, and versions", () => {
-  const stagedTree = execFileSync("git", ["write-tree"], {
-    cwd: repository,
-    encoding: "utf8",
-    stdio: ["ignore", "pipe", "pipe"],
-  }).trim();
+test("the committed F1 baseline has exact ancestry, trees, and versions", () => {
   const record = JSON.parse(
     readFileSync("docs/contract-revision.json", "utf8"),
   ) as Readonly<Record<string, unknown>>;
@@ -45,9 +39,7 @@ test("the staged F1 baseline has exact ancestry, trees, and versions", () => {
     },
   });
   assert.equal("acceptedF1Base" in record, false);
-  assert.doesNotThrow(() =>
-    assertFrozenContractBase("HEAD", repository, stagedTree),
-  );
+  assert.doesNotThrow(() => assertFrozenContractBase("HEAD", repository));
 });
 
 test("a wrong F1 base is rejected with a stable ancestry diagnostic", () => {

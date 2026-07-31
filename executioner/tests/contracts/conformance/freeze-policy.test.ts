@@ -30,35 +30,41 @@ test("the R2 freeze records ancestry without a self-referential base", () => {
   assert.doesNotMatch(record, /acceptedF1Base:\s*[0-9a-f]{40}/u);
 });
 
-test("the freeze gate rejects an untracked contract file", () => {
+test("the freeze gate rejects dirty and untracked files in every frozen root", () => {
   const repository = mkdtempSync(join(tmpdir(), "hunt-contract-freeze-"));
-  const contracts = join(repository, "executioner", "src", "contracts");
+  const roots = [
+    "executioner/src/contracts",
+    "executioner/src/testing/contracts",
+    "executioner/tests/contracts",
+    "executioner/tests/security/privacy",
+  ];
 
   try {
-    mkdirSync(contracts, { recursive: true });
-    writeFileSync(join(contracts, "ports.ts"), "export interface Port {}\n");
+    for (const root of roots) {
+      mkdirSync(join(repository, root), { recursive: true });
+      writeFileSync(join(repository, root, "tracked.ts"), "tracked\n");
+    }
     git(repository, "init");
     git(repository, "add", ".");
     const revision = git(repository, "write-tree").trim();
 
-    writeFileSync(
-      join(contracts, "untracked.ts"),
-      "export interface Untracked {}\n",
-    );
-    assert.doesNotThrow(() =>
-      git(
-        repository,
-        "diff",
-        "--exit-code",
-        revision,
-        "--",
-        ":(top)executioner/src/contracts",
-      ),
-    );
-    assert.throws(
-      () => assertFrozenContractTree(revision, repository),
-      /untracked contract file.*untracked\.ts/u,
-    );
+    for (const root of roots) {
+      const tracked = join(repository, root, "tracked.ts");
+      const untracked = join(repository, root, "untracked.ts");
+      writeFileSync(tracked, "dirty\n");
+      assert.throws(
+        () => assertFrozenContractTree(revision, repository),
+        /dirty frozen root/u,
+      );
+      writeFileSync(tracked, "tracked\n");
+
+      writeFileSync(untracked, "untracked\n");
+      assert.throws(
+        () => assertFrozenContractTree(revision, repository),
+        /untracked frozen root file/u,
+      );
+      rmSync(untracked);
+    }
   } finally {
     rmSync(repository, { recursive: true, force: true });
   }

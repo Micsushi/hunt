@@ -15,7 +15,6 @@ export const planningRevision =
 
 export const contractRevisionStatus = "r2_frozen" as const;
 
-const contractPath = ":(top)executioner/src/contracts";
 const revisionRecordPath = join(
   "executioner",
   "docs",
@@ -27,6 +26,7 @@ const frozenTreePaths = [
   "executioner/tests/contracts",
   "executioner/tests/security/privacy",
 ] as const;
+const frozenPathspecs = frozenTreePaths.map((path) => `:(top)${path}`);
 
 interface ContractRevisionRecord {
   readonly schemaVersion: number;
@@ -41,26 +41,40 @@ export function assertFrozenContractTree(
   revision: string,
   repository: string,
 ): void {
-  execFileSync(
-    "git",
-    ["diff", "--exit-code", revision, "--", contractPath],
-    { cwd: repository, stdio: "pipe" },
-  );
+  assertFrozenRootsClean(revision, repository);
+}
 
-  const untracked = execFileSync(
-    "git",
-    ["ls-files", "--others", "--exclude-standard", "--", contractPath],
-    { cwd: repository, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] },
+export function assertFrozenRootsClean(
+  revision: string,
+  repository: string,
+): void {
+  const dirty = git(
+    repository,
+    "diff",
+    "--name-only",
+    revision,
+    "--",
+    ...frozenPathspecs,
+  ).trim();
+  if (dirty !== "") {
+    throw new Error(`dirty frozen root: ${dirty}`);
+  }
+  const untracked = git(
+    repository,
+    "ls-files",
+    "--others",
+    "--exclude-standard",
+    "--",
+    ...frozenPathspecs,
   ).trim();
   if (untracked !== "") {
-    throw new Error(`untracked contract file: ${untracked}`);
+    throw new Error(`untracked frozen root file: ${untracked}`);
   }
 }
 
 export function assertFrozenContractBase(
   revision: string,
   repository: string,
-  treeish = revision,
 ): void {
   const record = JSON.parse(
     readFileSync(join(repository, revisionRecordPath), "utf8"),
@@ -69,9 +83,10 @@ export function assertFrozenContractBase(
   assertAncestor(record.planningRevision, revision, repository, "planning revision");
   assertAncestor(record.historicalR1, revision, repository, "historical R1");
   assertAncestor(record.contractSource, revision, repository, "contract source");
+  assertFrozenRootsClean(revision, repository);
 
   for (const path of frozenTreePaths) {
-    const actual = git(repository, "rev-parse", `${treeish}:${path}`).trim();
+    const actual = git(repository, "rev-parse", `${revision}:${path}`).trim();
     if (record.contractTreeOids[path] !== actual) {
       throw new Error(
         `contract tree mismatch: ${path}: expected ${record.contractTreeOids[path]}, received ${actual}`,
