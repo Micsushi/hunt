@@ -15,6 +15,14 @@ export const contractPortOperations = Object.fromEntries(
   readonly [N in ContractPortName]: readonly (keyof ContractPortMap[N] & string)[];
 };
 
+export const contractConformanceRegistry = Object.entries(
+  contractPortOperations,
+).map(([name, operations]) => ({
+  name: name as ContractPortName,
+  operations,
+  skip: false as const,
+}));
+
 export async function assertProviderConformance<N extends ContractPortName>(
   name: N,
   provider: ContractPortMap[N],

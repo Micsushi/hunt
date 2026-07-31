@@ -12,7 +12,6 @@ import type {
   JourneyIntake,
   JourneyStateStore,
   McpJourneyApi,
-  ModelController,
   PageUnderstanding,
   PrivacyGuard,
   ProfileQuery,
@@ -20,6 +19,7 @@ import type {
   SafetyGuard,
 } from "../../contracts/index.ts";
 import { contractOperationCases } from "./operation-cases.ts";
+import { contractFixtures } from "./fixtures.ts";
 import type {
   ContractCall,
   ContractFake,
@@ -72,9 +72,6 @@ export function createFixtureRuntimeFake(
   return createFake<FixtureRuntime>(
     {
       start: ok(contractOperationCases.FixtureRuntime.start.expected),
-      transition: ok(
-        contractOperationCases.FixtureRuntime.transition.expected,
-      ),
       reset: ok(contractOperationCases.FixtureRuntime.reset.expected),
       setFault: ok(contractOperationCases.FixtureRuntime.setFault.expected),
     },
@@ -102,7 +99,10 @@ export function createJourneyIntakeFake(
 ): ContractFake<JourneyIntake> {
   return createFake<JourneyIntake>(
     {
-      bootstrap: ok(contractOperationCases.JourneyIntake.bootstrap.expected),
+      bootstrap: ok({
+        ...contractOperationCases.JourneyIntake.bootstrap.expected,
+        inputs: contractFixtures.journeyInputs,
+      }),
     },
     overrides,
   );
@@ -252,7 +252,7 @@ export function createPrivacyGuardFake(
 ): ContractFake<PrivacyGuard> {
   return createFake<PrivacyGuard>(
     {
-      admit: ok(contractOperationCases.PrivacyGuard.admit.expected),
+      admit: ok(contractFixtures.privacyAdmission),
     },
     overrides,
   );
@@ -263,7 +263,7 @@ export function createSafetyGuardFake(
 ): ContractFake<SafetyGuard> {
   return createFake<SafetyGuard>(
     {
-      admit: ok(contractOperationCases.SafetyGuard.admit.expected),
+      admit: ok(contractFixtures.safetyAdmission),
     },
     overrides,
   );
@@ -276,17 +276,6 @@ export function createEvidenceStoreFake(
     {
       write: ok(contractOperationCases.EvidenceStore.write.expected),
       read: ok(contractOperationCases.EvidenceStore.read.expected),
-    },
-    overrides,
-  );
-}
-
-export function createModelControllerFake(
-  overrides: FakeResponseOverrides<ModelController> = {},
-): ContractFake<ModelController> {
-  return createFake<ModelController>(
-    {
-      suggest: ok(contractOperationCases.ModelController.suggest.expected),
     },
     overrides,
   );
@@ -311,7 +300,6 @@ export const contractFakeFactories = {
   PrivacyGuard: createPrivacyGuardFake,
   SafetyGuard: createSafetyGuardFake,
   EvidenceStore: createEvidenceStoreFake,
-  ModelController: createModelControllerFake,
 } as const satisfies {
   readonly [N in keyof ContractPortMap]: (
     overrides?: FakeResponseOverrides<ContractPortMap[N]>,

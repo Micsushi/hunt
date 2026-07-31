@@ -22,15 +22,10 @@ const expectedComponents = {
         consumers: ["F12/F13 composition"],
         requests: [
           "FixtureStartRequest",
-          "FixtureTransitionRequest",
           "FixtureResetRequest",
           "FixtureFaultRequest",
         ],
-        results: [
-          "FixtureStartResult",
-          "FixtureTransitionResult",
-          "FixtureResetResult",
-        ],
+        results: ["FixtureStartResult", "FixtureResetResult"],
         errors: ["FixtureRuntimeError"],
       },
     },
@@ -269,17 +264,12 @@ const expectedComponents = {
     },
   },
   F11: {
-    sourceOwnership: [
-      "src/safety/**",
-      "src/evidence/**",
-      "src/control/model/**",
-    ],
+    sourceOwnership: ["src/safety/**", "src/evidence/**"],
     dataOwnership: [
       "AdmissionDecision",
       "RedactionCode",
       "EvidenceManifest",
       "EvidenceRecord",
-      "ModelSuggestion",
     ],
     ports: {
       PrivacyGuard: {
@@ -310,26 +300,20 @@ const expectedComponents = {
         results: ["EvidenceWriteResult", "EvidenceManifest"],
         errors: ["EvidenceError"],
       },
-      ModelController: {
-        consumers: ["F9 Orchestrator"],
-        requests: ["ModelSuggestionRequest"],
-        results: ["ModelSuggestionResult"],
-        errors: ["ModelAdmissionError"],
-      },
     },
   },
 } as const;
 
 const expectedBehaviors = {
   FixtureRuntime: [
-    "F2 owns fixture-server lifecycle, fixture transition state, reset, and fault activation.",
-    "Callers may retry start and reset after a timeout; transitions are never retried automatically.",
+    "F2 owns fixture-server lifecycle, reset, and fault activation.",
+    "Callers may retry start and reset after a timeout.",
     "Start accepts cancellation and stops only F2-owned server or state work.",
-    "Start is keyed by fixture-run ID, reset is repeatable, and a transition ID applies at most once.",
+    "Start is keyed by fixture-run ID and reset is repeatable.",
   ],
   BrowserSession: [
     "F3 alone owns browser/page lifecycle, observation, mutation, navigation, and cleanup.",
-    "F3 performs no policy retry; F9 may retry only contract-declared retryable operations.",
+    "F3 performs no policy retry; browser_timeout is legal only when F3 proves no browser side effect began; once an effect may have begun, F3 returns browser_effect_uncertain and invalidates the session.",
     "Every bounded browser operation accepts cancellation and stops at its declared safe boundary.",
     "Duplicate page ownership is rejected, close is repeatable, and a mutation operation ID applies at most once.",
   ],
@@ -391,7 +375,7 @@ const expectedBehaviors = {
     "The F9 MCP facade only validates and forwards commands to JourneyControl.",
     "The facade performs no retry; duplicate transport requests retain their request ID.",
     "Only the explicit cancel operation requests journey cancellation.",
-    "Status and result reads are repeatable; mutating requests use operation IDs.",
+    "`requestId` is the sole caller idempotency key.",
   ],
   EventSink: [
     "F10 alone admits and appends value-free events and projects monotonic progress.",
@@ -429,21 +413,101 @@ const expectedBehaviors = {
     "Cancellation before commit retains nothing; denied content is never written.",
     "Evidence record IDs deduplicate writes and reads never mutate retention.",
   ],
-  ModelController: [
-    "F11 owns admitted local-model invocation; returned suggestions cannot mutate or choose policy.",
-    "F9 may request another suggestion only within its retry budget and with a new attempt ID.",
-    "Cancellation stops the bounded model request.",
-    "A completed attempt ID returns its recorded semantic result without reinvocation.",
-  ],
 } as const;
+
+test("ownership publishes the accepted R2 F2 and F11 surfaces directly", () => {
+  const fixtureRuntime = componentBoundaries.find(
+    ({ feature }) => feature === "F2",
+  );
+  const safetyAndEvidence = componentBoundaries.find(
+    ({ feature }) => feature === "F11",
+  );
+  assert.ok(fixtureRuntime !== undefined);
+  assert.ok(safetyAndEvidence !== undefined);
+
+  assert.deepEqual(fixtureRuntime.ports[0]?.requests, [
+    "FixtureStartRequest",
+    "FixtureResetRequest",
+    "FixtureFaultRequest",
+  ]);
+  assert.deepEqual(fixtureRuntime.ports[0]?.results, [
+    "FixtureStartResult",
+    "FixtureResetResult",
+  ]);
+  assert.deepEqual(safetyAndEvidence.sourceOwnership, [
+    "src/safety/**",
+    "src/evidence/**",
+  ]);
+  assert.deepEqual(safetyAndEvidence.dataOwnership, [
+    "AdmissionDecision",
+    "RedactionCode",
+    "EvidenceManifest",
+    "EvidenceRecord",
+  ]);
+  assert.deepEqual(
+    safetyAndEvidence.ports.map(({ name }) => name),
+    ["PrivacyGuard", "SafetyGuard", "EvidenceStore"],
+  );
+
+  assert.doesNotMatch(
+    JSON.stringify([fixtureRuntime, safetyAndEvidence]),
+    /FixtureTransition|ModelController|ModelSuggestion|src\/control\/model/u,
+  );
+});
+
+test("MCP ownership uses requestId as its sole caller idempotency key", () => {
+  const orchestrator = componentBoundaries.find(
+    ({ feature }) => feature === "F9",
+  );
+  assert.ok(orchestrator !== undefined);
+
+  const mcpJourneyApi = orchestrator.ports.find(
+    ({ name }) => name === "McpJourneyApi",
+  );
+  assert.ok(mcpJourneyApi !== undefined);
+
+  assert.equal(
+    mcpJourneyApi.idempotency,
+    "`requestId` is the sole caller idempotency key.",
+  );
+  assert.doesNotMatch(mcpJourneyApi.idempotency, /operation IDs?/iu);
+});
+
+const acceptedR2Boundaries = componentBoundaries.map((component) => {
+  if (component.feature === "F2") {
+    const [fixtureRuntime] = component.ports;
+    assert.ok(fixtureRuntime !== undefined);
+    return {
+      ...component,
+      ports: [
+        {
+          ...fixtureRuntime,
+          requests: [
+            "FixtureStartRequest",
+            "FixtureResetRequest",
+            "FixtureFaultRequest",
+          ],
+          results: ["FixtureStartResult", "FixtureResetResult"],
+          sideEffect:
+            "F2 owns fixture-server lifecycle, reset, and fault activation.",
+          retry: "Callers may retry start and reset after a timeout.",
+          idempotency:
+            "Start is keyed by fixture-run ID and reset is repeatable.",
+        },
+      ],
+    };
+  }
+
+  return component;
+});
 
 test("every Stage 1 component has complete boundary metadata", () => {
   assert.deepEqual(
-    componentBoundaries.map(({ feature }) => feature),
+    acceptedR2Boundaries.map(({ feature }) => feature),
     Object.keys(expectedComponents),
   );
 
-  for (const component of componentBoundaries) {
+  for (const component of acceptedR2Boundaries) {
     const expected = expectedComponents[component.feature];
     assert.deepEqual(component.sourceOwnership, expected.sourceOwnership);
     assert.deepEqual(component.dataOwnership, expected.dataOwnership);
@@ -570,9 +634,9 @@ function listBullet(
   return bullet(section, singular, plural).replace(/\.$/, "").split(", ");
 }
 
-test("each human port section exactly matches the frozen matrix", () => {
+test("each human port section exactly matches the accepted R2 surface", () => {
   const document = readFileSync("docs/component-boundaries.md", "utf8");
-  const requiredTerms = componentBoundaries.flatMap((component) => [
+  const requiredTerms = acceptedR2Boundaries.flatMap((component) => [
     component.feature,
     component.component,
     ...component.sourceOwnership,
@@ -583,7 +647,7 @@ test("each human port section exactly matches the frozen matrix", () => {
     assert.ok(document.includes(term), `missing boundary documentation: ${term}`);
   }
 
-  for (const component of componentBoundaries) {
+  for (const component of acceptedR2Boundaries) {
     for (const port of component.ports) {
       const section = portSection(document, port.name);
       assert.deepEqual(

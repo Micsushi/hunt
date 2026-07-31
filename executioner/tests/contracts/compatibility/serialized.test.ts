@@ -20,13 +20,13 @@ const serializedCases = [
     name: "fixture manifest",
     parse: parseFixtureManifest,
     value: {
-      schemaVersion: 1,
+      schemaVersion: 2,
       fixtureSet: "workday-s1",
       pages: [
         {
           id: "account",
           path: "/account",
-          semanticHash: "sha256:account",
+          semanticHash: "sha256.account",
         },
       ],
     },
@@ -35,8 +35,8 @@ const serializedCases = [
     name: "durable journey state",
     parse: parseDurableJourneyState,
     value: {
-      schemaVersion: 1,
-      journeyId: "journey-1",
+      schemaVersion: 2,
+      journeyId: "journey_0123456789abcdef",
       status: "ready",
       pageId: null,
       revision: 0,
@@ -46,44 +46,44 @@ const serializedCases = [
     name: "event envelope",
     parse: parseEventEnvelope,
     value: {
-      schemaVersion: 1,
+      schemaVersion: 2,
       eventId: "event-1",
-      journeyId: "journey-1",
+      journeyId: "journey_0123456789abcdef",
       component: "F4",
       phase: "intake",
       step: "validate",
       kind: "step_completed",
       at: "2026-07-30T12:00:00.000Z",
-      source: { kind: "operation", id: "operation-1" },
+      source: { kind: "operation", id: "operation_0123456789abcdef" },
     },
   },
   {
     name: "error envelope",
     parse: parseErrorEnvelope,
     value: {
-      schemaVersion: 1,
+      schemaVersion: 2,
       code: "browser_timeout",
       component: "F3",
       phase: "browser",
       step: "observe",
       retryable: true,
-      source: { kind: "operation", id: "operation-1" },
+      source: { kind: "operation", id: "operation_0123456789abcdef" },
     },
   },
   {
     name: "evidence manifest",
     parse: parseEvidenceManifest,
     value: {
-      schemaVersion: 1,
-      journeyId: "journey-1",
+      schemaVersion: 2,
+      journeyId: "journey_0123456789abcdef",
       records: [
         {
-          id: "evidence-1",
+          id: "evidence_0123456789abcdef",
           kind: "semantic_snapshot",
           component: "F5",
           phase: "page_understanding",
           step: "classify",
-          sha256: "sha256:evidence",
+          sha256: "0000000000000000000000000000000000000000000000000000000000000000",
         },
       ],
     },
@@ -92,11 +92,10 @@ const serializedCases = [
     name: "MCP request",
     parse: parseMcpRequest,
     value: {
-      schemaVersion: 1,
+      schemaVersion: 2,
       requestId: "request-1",
       method: "start_journey",
       params: {
-        operationId: "operation-1",
         jobId: "job-1",
         resumeId: "resume-1",
         profileId: "profile-1",
@@ -107,13 +106,13 @@ const serializedCases = [
     name: "MCP response",
     parse: parseMcpResponse,
     value: {
-      schemaVersion: 1,
+      schemaVersion: 2,
       requestId: "request-1",
       ok: true,
       result: {
         kind: "accepted",
-        operationId: "operation-1",
-        journeyId: "journey-1",
+        operationId: "operation_0123456789abcdef",
+        journeyId: "journey_0123456789abcdef",
       },
     },
   },
@@ -121,8 +120,8 @@ const serializedCases = [
     name: "terminal result",
     parse: parseTerminalResult,
     value: {
-      schemaVersion: 1,
-      journeyId: "journey-1",
+      schemaVersion: 2,
+      journeyId: "journey_0123456789abcdef",
       status: "review_reached",
       completedPages: 3,
     },
@@ -142,9 +141,13 @@ for (const contract of serializedCases) {
     assert.deepEqual(contract.parse(contract.value), contract.value);
   });
 
-  test(`${contract.name} rejects an incompatible version`, () => {
+  test(`${contract.name} rejects its previous or next version`, () => {
     expectCode(
-      () => contract.parse({ ...contract.value, schemaVersion: 2 }),
+      () =>
+        contract.parse({
+          ...contract.value,
+          schemaVersion: 1,
+        }),
       "incompatible_version",
     );
   });
@@ -161,8 +164,8 @@ test("serialized inputs reject malformed fields with stable codes", () => {
   expectCode(
     () =>
       parseTerminalResult({
-        schemaVersion: 1,
-        journeyId: "journey-1",
+        schemaVersion: 2,
+        journeyId: "journey_0123456789abcdef",
         status: "review_reached",
         completedPages: "three",
       }),
@@ -171,7 +174,7 @@ test("serialized inputs reject malformed fields with stable codes", () => {
   expectCode(
     () =>
       parseMcpRequest({
-        schemaVersion: 1,
+        schemaVersion: 2,
         requestId: "request-1",
         method: "submit",
         params: {},
@@ -181,11 +184,10 @@ test("serialized inputs reject malformed fields with stable codes", () => {
   expectCode(
     () =>
       parseMcpRequest({
-        schemaVersion: 1,
+        schemaVersion: 2,
         requestId: "request-1",
         method: "start_journey",
         params: {
-          operationId: "operation-1",
           jobId: "job-1",
           resumeId: "resume-1",
           profileId: "profile-1",
@@ -199,23 +201,23 @@ test("serialized inputs reject malformed fields with stable codes", () => {
 test("MCP accepted results return operation and journey identity", () => {
   assert.deepEqual(
     parseMcpResponse({
-      schemaVersion: 1,
+      schemaVersion: 2,
       requestId: "request-1",
       ok: true,
       result: {
         kind: "accepted",
-        operationId: "operation-1",
-        journeyId: "journey-1",
+        operationId: "operation_0123456789abcdef",
+        journeyId: "journey_0123456789abcdef",
       },
     }),
     {
-      schemaVersion: 1,
+      schemaVersion: 2,
       requestId: "request-1",
       ok: true,
       result: {
         kind: "accepted",
-        operationId: "operation-1",
-        journeyId: "journey-1",
+        operationId: "operation_0123456789abcdef",
+        journeyId: "journey_0123456789abcdef",
       },
     },
   );
@@ -224,26 +226,26 @@ test("MCP accepted results return operation and journey identity", () => {
 test("MCP status returns the value-free progress projection", () => {
   assert.deepEqual(
     parseMcpResponse({
-      schemaVersion: 1,
+      schemaVersion: 2,
       requestId: "request-2",
       ok: true,
       result: {
         kind: "status",
         progress: {
-          journeyId: "journey-1",
+          journeyId: "journey_0123456789abcdef",
           status: "running",
           completedSteps: 4,
         },
       },
     }),
     {
-      schemaVersion: 1,
+      schemaVersion: 2,
       requestId: "request-2",
       ok: true,
       result: {
         kind: "status",
         progress: {
-          journeyId: "journey-1",
+          journeyId: "journey_0123456789abcdef",
           status: "running",
           completedSteps: 4,
         },
@@ -319,21 +321,21 @@ test("safe-integer parsers and schemas share the JavaScript upper bound", () => 
   for (const parse of [
     () =>
       parseDurableJourneyState({
-        schemaVersion: 1,
-        journeyId: "journey-1",
+        schemaVersion: 2,
+        journeyId: "journey_0123456789abcdef",
         status: "ready",
         pageId: null,
         revision: unsafe,
       }),
     () =>
       parseMcpResponse({
-        schemaVersion: 1,
+        schemaVersion: 2,
         requestId: "request-1",
         ok: true,
         result: {
           kind: "status",
           progress: {
-            journeyId: "journey-1",
+            journeyId: "journey_0123456789abcdef",
             status: "running",
             completedSteps: unsafe,
           },
@@ -341,8 +343,8 @@ test("safe-integer parsers and schemas share the JavaScript upper bound", () => 
       }),
     () =>
       parseTerminalResult({
-        schemaVersion: 1,
-        journeyId: "journey-1",
+        schemaVersion: 2,
+        journeyId: "journey_0123456789abcdef",
         status: "review_reached",
         completedPages: unsafe,
       }),

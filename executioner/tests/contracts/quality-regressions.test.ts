@@ -2,6 +2,10 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import {
+  fieldId,
+  fixturePageId,
+  fixtureRunId,
+  generatedOperationId,
   type FixtureFault,
   type FixtureFaultRequest,
   type FixtureRunState,
@@ -11,15 +15,15 @@ import {
 
 test("mutation receipts represent attempts only", () => {
   const attempted = {
-    operationId: "operation-1",
-    fieldId: "field-1",
+    operationId: generatedOperationId("operation_0123456789abcdef"),
+    fieldId: fieldId("field-1"),
     behavior: "text",
     attempted: true,
   } satisfies MutationReceipt;
 
   const notAttempted: MutationReceipt = {
-    operationId: "operation-2",
-    fieldId: "field-2",
+    operationId: generatedOperationId("operation_fedcba9876543210"),
+    fieldId: fieldId("field-2"),
     behavior: "text",
     // @ts-expect-error non-attempt is a DriverError, never a receipt
     attempted: false,
@@ -32,18 +36,18 @@ test("mutation receipts represent attempts only", () => {
 test("fixture state and request share one closed fault type", () => {
   const fault = "component_failure" satisfies FixtureFault;
   const request = {
-    fixtureRunId: "fixture-1",
+    fixtureRunId: fixtureRunId("fixture-1"),
     fault,
   } satisfies FixtureFaultRequest;
   const state = {
-    fixtureRunId: "fixture-1",
-    pageId: "account",
+    fixtureRunId: fixtureRunId("fixture-1"),
+    pageId: fixturePageId("account"),
     enabledFault: fault,
   } satisfies FixtureRunState;
 
   const invalid: FixtureRunState = {
-    fixtureRunId: "fixture-1",
-    pageId: "account",
+    fixtureRunId: fixtureRunId("fixture-1"),
+    pageId: fixturePageId("account"),
     // @ts-expect-error undeclared fixture faults are not representable
     enabledFault: "another_fault",
   };

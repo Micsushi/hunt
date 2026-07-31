@@ -12,7 +12,6 @@ import type {
   JourneyIntake,
   JourneyStateStore,
   McpJourneyApi,
-  ModelController,
   PageUnderstanding,
   PrivacyGuard,
   ProfileQuery,
@@ -39,7 +38,6 @@ export interface ContractPortMap {
   readonly PrivacyGuard: PrivacyGuard;
   readonly SafetyGuard: SafetyGuard;
   readonly EvidenceStore: EvidenceStore;
-  readonly ModelController: ModelController;
 }
 
 export type ContractPortName = keyof ContractPortMap;

@@ -1,5 +1,15 @@
 import {
+  admitContractSnapshot,
+  bindAdmissionRequest,
+  browserPageId,
   ContractParseError,
+  fixturePageId,
+  fixtureRunId,
+  fixtureSemanticHash,
+  mcpRequestId,
+  generatedOperationId,
+  generatedReportId,
+  guardRevision,
   parseEvidenceManifest,
   parseMcpResponse,
   type PortResult,
@@ -77,17 +87,17 @@ const failureContext = {
   step: "start",
   code: "journey_not_found",
   retryable: false,
-  source: { kind: "operation", id: "operation-synthetic" },
+  source: { kind: "operation", id: generatedOperationId("operation_0123456789abcdef") },
 } as const;
 
 export const contractOperationCases = {
   FixtureRuntime: {
     start: {
-      request: { fixtureRunId: "fixture-run-synthetic" },
+      request: { fixtureRunId: fixtureRunId("fixture-run-synthetic") },
       expected: {
-        fixtureRunId: "fixture-run-synthetic",
+        fixtureRunId: fixtureRunId("fixture-run-synthetic"),
         origin: "https://fixture.invalid",
-        pageId: "fixture-account",
+        pageId: fixturePageId("fixture-account"),
       },
       assert: (value, request) => {
         return (
@@ -99,31 +109,11 @@ export const contractOperationCases = {
         );
       },
     },
-    transition: {
-      request: {
-        fixtureRunId: "fixture-run-synthetic",
-        transitionId: "transition-synthetic",
-        toPageId: "fixture-profile",
-      },
-      expected: {
-        transitionId: "transition-synthetic",
-        pageId: "fixture-profile",
-        semanticHash: "sha256:fixture-profile",
-      },
-      assert: (value, request) => {
-        return (
-          exactKeys(value, ["transitionId", "pageId", "semanticHash"]) &&
-          value.transitionId === request.transitionId &&
-          value.pageId === request.toPageId &&
-          nonEmpty(value.semanticHash)
-        );
-      },
-    },
     reset: {
-      request: { fixtureRunId: "fixture-run-synthetic" },
+      request: { fixtureRunId: fixtureRunId("fixture-run-synthetic") },
       expected: {
-        fixtureRunId: "fixture-run-synthetic",
-        semanticHash: "sha256:fixture-reset",
+        fixtureRunId: fixtureRunId("fixture-run-synthetic"),
+        semanticHash: fixtureSemanticHash("sha256.fixture-reset"),
       },
       assert: (value, request) => {
         return (
@@ -135,7 +125,7 @@ export const contractOperationCases = {
     },
     setFault: {
       request: {
-        fixtureRunId: "fixture-run-synthetic",
+        fixtureRunId: fixtureRunId("fixture-run-synthetic"),
         fault: "component_failure",
       },
       expected: undefined,
@@ -194,16 +184,25 @@ export const contractOperationCases = {
         if (started === undefined) {
           throw new TypeError("BrowserSession.start result is required");
         }
-        return {
-          sessionId: started.sessionId,
-          pageId: started.pageId,
-          operationId: contractFixtures.mutationReceipt.operationId,
-          mutation: {
-            kind: "type" as const,
-            target: contractFixtures.field.target,
-            text: "Synthetic",
+        const operation = generatedOperationId("operation_0123456789abcdef");
+        const revision = guardRevision("policy-s1");
+        const admitted = admitContractSnapshot(
+          {
+            policyRevision: revision,
+            capability: "field_mutation",
+            effect: {
+              kind: "browser_mutation",
+              sessionId: started.sessionId,
+              pageId: started.pageId,
+              operationId: operation,
+              mutation: { kind: "set_text", target: contractFixtures.field.target, text: "Synthetic" },
+            },
           },
-        };
+          "safety",
+          { journeyId: contractFixtures.journeyState.journeyId, attemptId: operation, guardRevision: revision },
+        );
+        if (!admitted.ok) throw new TypeError("synthetic mutation admission failed");
+        return bindAdmissionRequest(admitted.value);
       },
       expected: {
         operationId: contractFixtures.mutationReceipt.operationId,
@@ -213,8 +212,8 @@ export const contractOperationCases = {
       assert: (value, request) => {
         return (
           exactKeys(value, ["operationId", "pageId", "attempted"]) &&
-          value.operationId === request.operationId &&
-          value.pageId === request.pageId &&
+          value.operationId === request.snapshot.effect.operationId &&
+          value.pageId === request.snapshot.effect.pageId &&
           value.attempted === true
         );
       },
@@ -225,23 +224,36 @@ export const contractOperationCases = {
         if (started === undefined) {
           throw new TypeError("BrowserSession.start result is required");
         }
-        return {
-          sessionId: started.sessionId,
-          pageId: started.pageId,
-          operationId: contractFixtures.mutationReceipt.operationId,
-          action: "next" as const,
-        };
+        const operation = generatedOperationId("operation_fedcba9876543210");
+        const revision = guardRevision("policy-s1");
+        const admitted = admitContractSnapshot(
+          {
+            policyRevision: revision,
+            capability: "navigate_next",
+            effect: {
+              kind: "browser_navigation",
+              sessionId: started.sessionId,
+              pageId: started.pageId,
+              operationId: operation,
+              action: "next",
+            },
+          },
+          "safety",
+          { journeyId: contractFixtures.journeyState.journeyId, attemptId: operation, guardRevision: revision },
+        );
+        if (!admitted.ok) throw new TypeError("synthetic navigation admission failed");
+        return bindAdmissionRequest(admitted.value);
       },
       expected: {
-        operationId: contractFixtures.mutationReceipt.operationId,
+        operationId: generatedOperationId("operation_fedcba9876543210"),
         fromPageId: contractFixtures.browserObservation.pageId,
-        pageId: "page-questionnaire",
+        pageId: browserPageId("page-questionnaire"),
       },
       assert: (value, request) => {
         return (
           exactKeys(value, ["operationId", "fromPageId", "pageId"]) &&
-          value.operationId === request.operationId &&
-          value.fromPageId === request.pageId &&
+          value.operationId === request.snapshot.effect.operationId &&
+          value.fromPageId === request.snapshot.effect.pageId &&
           nonEmpty(value.pageId)
         );
       },
@@ -260,7 +272,6 @@ export const contractOperationCases = {
   JourneyIntake: {
     bootstrap: {
       request: {
-        operationId: "operation-synthetic",
         jobId: contractFixtures.job.jobId,
         resumeId: contractFixtures.resume.resumeId,
         profileId: contractFixtures.profile.profileId,
@@ -269,7 +280,7 @@ export const contractOperationCases = {
         journeyId: contractFixtures.journeyState.journeyId,
         inputs: contractFixtures.journeyInputs,
         state: {
-          schemaVersion: 1,
+          schemaVersion: 2,
           journeyId: contractFixtures.journeyState.journeyId,
           status: "ready",
           pageId: null,
@@ -279,7 +290,7 @@ export const contractOperationCases = {
       assert: (value, request) =>
         exactKeys(value, ["journeyId", "inputs", "state"]) &&
         nonEmpty(value.journeyId) &&
-        exactKeys(value.inputs, ["job", "resume", "profile"]) &&
+        exactKeys(value.inputs, ["job", "resume", "resumeArtifact", "profile"]) &&
         isDeepStrictEqual(value.inputs.job, contractFixtures.job) &&
         value.inputs.job.jobId === request.jobId &&
         isDeepStrictEqual(value.inputs.resume, contractFixtures.resume) &&
@@ -294,7 +305,7 @@ export const contractOperationCases = {
           "pageId",
           "revision",
         ]) &&
-        value.state.schemaVersion === 1 &&
+        value.state.schemaVersion === 2 &&
         value.state.journeyId === value.journeyId &&
         value.state.status === "ready" &&
         value.state.pageId === null &&
@@ -331,7 +342,7 @@ export const contractOperationCases = {
           "pageId",
           "revision",
         ]) &&
-        value.state.schemaVersion === 1 &&
+        value.state.schemaVersion === 2 &&
         value.state.journeyId === request.journeyId &&
         legalJourneyStatus(value.state.status) &&
         (value.state.pageId === null || nonEmpty(value.state.pageId)) &&
@@ -345,7 +356,7 @@ export const contractOperationCases = {
         }
         return {
           journeyId: loaded.journeyId,
-          operationId: "operation-synthetic",
+          operationId: generatedOperationId("operation_0123456789abcdef"),
           expectedRevision: loaded.revision,
           status: loaded.status,
           pageId: loaded.pageId,
@@ -368,7 +379,7 @@ export const contractOperationCases = {
           "pageId",
           "revision",
         ]) &&
-        value.state.schemaVersion === 1 &&
+        value.state.schemaVersion === 2 &&
         value.state.journeyId === request.journeyId &&
         value.state.status === request.status &&
         value.state.pageId === request.pageId &&
@@ -393,6 +404,7 @@ export const contractOperationCases = {
         profileId: contractFixtures.profile.profileId,
         profileRevision: contractFixtures.profile.revision,
         resume: contractFixtures.resume,
+        resumeArtifact: contractFixtures.resumeArtifact,
       },
       expected: {
         kind: "resolved",
@@ -403,8 +415,10 @@ export const contractOperationCases = {
   FieldDriver: {
     drive: {
       request: {
+        journeyId: contractFixtures.journeyState.journeyId,
         sessionId: contractFixtures.browserObservation.sessionId,
         pageId: contractFixtures.browserObservation.pageId,
+        guardRevision: guardRevision("policy-s1"),
         operationId: contractFixtures.mutationReceipt.operationId,
         intent: contractFixtures.intent,
       },
@@ -440,8 +454,9 @@ export const contractOperationCases = {
         observation: {
           operationId: contractFixtures.mutationReceipt.operationId,
           fromPageId: contractFixtures.browserObservation.pageId,
-          pageId: "page-questionnaire",
+          pageId: browserPageId("page-questionnaire"),
         },
+        sourcePage: { kind: "workday", page: "profile" },
         expected: { kind: "workday", page: "questionnaire" },
         observed: { kind: "workday", page: "questionnaire" },
       },
@@ -455,13 +470,13 @@ export const contractOperationCases = {
   JourneyControl: {
     start: {
       request: {
-        operationId: "operation-synthetic",
+        operationId: generatedOperationId("operation_0123456789abcdef"),
         jobId: contractFixtures.job.jobId,
         resumeId: contractFixtures.resume.resumeId,
         profileId: contractFixtures.profile.profileId,
       },
       expected: {
-        operationId: "operation-synthetic",
+        operationId: generatedOperationId("operation_0123456789abcdef"),
         journeyId: contractFixtures.journeyState.journeyId,
         accepted: true,
       },
@@ -488,12 +503,12 @@ export const contractOperationCases = {
           throw new TypeError("JourneyControl.start result is required");
         }
         return {
-          operationId: "operation-cancel-synthetic",
+          operationId: generatedOperationId("operation_cafebabecafebabe"),
           journeyId: started.journeyId,
         };
       },
       expected: {
-        operationId: "operation-cancel-synthetic",
+        operationId: generatedOperationId("operation_cafebabecafebabe"),
         journeyId: contractFixtures.journeyState.journeyId,
         accepted: true,
       },
@@ -512,7 +527,7 @@ export const contractOperationCases = {
         return { journeyId: started.journeyId };
       },
       expected: {
-        schemaVersion: 1,
+        schemaVersion: 2,
         journeyId: contractFixtures.journeyState.journeyId,
         status: "cancelled",
         completedPages: contractFixtures.terminalResult.completedPages,
@@ -524,7 +539,7 @@ export const contractOperationCases = {
           "status",
           "completedPages",
         ]) &&
-        value.schemaVersion === 1 &&
+        value.schemaVersion === 2 &&
         value.journeyId === request.journeyId &&
         value.status === "cancelled" &&
         nonNegativeInteger(value.completedPages),
@@ -533,16 +548,16 @@ export const contractOperationCases = {
   McpJourneyApi: {
     handle: {
       request: {
-        schemaVersion: 1,
-        requestId: "request-synthetic",
+        schemaVersion: 2,
+        requestId: mcpRequestId("request-synthetic"),
         method: "journey_result",
         params: {
           journeyId: contractFixtures.journeyState.journeyId,
         },
       },
       expected: {
-        schemaVersion: 1,
-        requestId: "request-synthetic",
+        schemaVersion: 2,
+        requestId: mcpRequestId("request-synthetic"),
         ok: true,
         result: {
           kind: "terminal",
@@ -609,16 +624,16 @@ export const contractOperationCases = {
   FailureReporter: {
     report: {
       request: {
-        reportId: "report-synthetic",
+        reportId: generatedReportId("report_0123456789abcdef"),
         context: failureContext,
       },
       expected: {
         report: {
-          reportId: "report-synthetic",
+          reportId: generatedReportId("report_0123456789abcdef"),
           context: failureContext,
         },
         notification: {
-          reportId: "report-synthetic",
+          reportId: generatedReportId("report_0123456789abcdef"),
           delivered: true,
         },
       },
@@ -635,32 +650,48 @@ export const contractOperationCases = {
   PrivacyGuard: {
     admit: {
       request: {
-        policyRevision: "policy-s1",
-        semanticPayload: { fixture: "synthetic" },
+        binding: {
+          journeyId: contractFixtures.privacyAdmission.journeyId,
+          attemptId: contractFixtures.privacyAdmission.attemptId,
+          guardRevision: contractFixtures.privacyAdmission.guardRevision,
+        },
+        purpose: "privacy",
+        input: { policyRevision: "policy-s1", semanticPayload: { fieldId: "field-given-name" } },
       },
-      expected: {
-        kind: "admitted",
-        policyRevision: "policy-s1",
-      },
+      expected: contractFixtures.privacyAdmission,
     },
   },
   SafetyGuard: {
     admit: {
       request: {
-        policyRevision: "policy-s1",
-        capability: "observe",
+        binding: {
+          journeyId: contractFixtures.safetyAdmission.journeyId,
+          attemptId: contractFixtures.safetyAdmission.attemptId,
+          guardRevision: contractFixtures.safetyAdmission.guardRevision,
+        },
+        policyRevision: contractFixtures.safetyAdmission.guardRevision,
+        capability: "field_mutation",
+        input: contractFixtures.safetyAdmission.snapshot,
       },
-      expected: {
-        kind: "admitted",
-        policyRevision: "policy-s1",
-      },
+      expected: contractFixtures.safetyAdmission,
     },
   },
   EvidenceStore: {
     write: {
-      request: {
-        journeyId: contractFixtures.journeyState.journeyId,
-        record: contractFixtures.evidenceRecord,
+      request: () => {
+        const operation = generatedOperationId("operation_e1e1e1e1e1e1e1e1");
+        const revision = guardRevision("policy-s1");
+        const admitted = admitContractSnapshot(
+          {
+            journeyId: contractFixtures.journeyState.journeyId,
+            operationId: operation,
+            record: contractFixtures.evidenceRecord,
+          },
+          "evidence",
+          { journeyId: contractFixtures.journeyState.journeyId, attemptId: operation, guardRevision: revision },
+        );
+        if (!admitted.ok) throw new TypeError("synthetic evidence admission failed");
+        return bindAdmissionRequest(admitted.value);
       },
       expected: {
         recordId: contractFixtures.evidenceRecord.id,
@@ -685,34 +716,6 @@ export const contractOperationCases = {
           throw error;
         }
       },
-    },
-  },
-  ModelController: {
-    suggest: {
-      request: {
-        attemptId: "attempt-synthetic",
-        questionId: "question-synthetic",
-        allowedOptionIds: ["option-synthetic"],
-      },
-      expected: {
-        attemptId: "attempt-synthetic",
-        suggestion: {
-          kind: "option_ranking",
-          optionIds: ["option-synthetic"],
-        },
-      },
-      assert: (value, request) =>
-        exactKeys(value, ["attemptId", "suggestion"]) &&
-        value.attemptId === request.attemptId &&
-        exactKeys(value.suggestion, ["kind", "optionIds"]) &&
-        (value.suggestion.kind === "option_ranking" ||
-          value.suggestion.kind === "question_hint") &&
-        Array.isArray(value.suggestion.optionIds) &&
-        new Set(value.suggestion.optionIds).size ===
-          value.suggestion.optionIds.length &&
-        value.suggestion.optionIds.every((optionId) =>
-          request.allowedOptionIds.includes(optionId),
-        ),
     },
   },
 } as const satisfies {

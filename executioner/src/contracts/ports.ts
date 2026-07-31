@@ -1,9 +1,9 @@
 import type {
-  AdmissionDecision,
   AnswerResolutionError,
   AnswerResolutionRequest,
   AnswerResolutionResult,
   BrowserCloseRequest,
+  BrowserEffectError,
   BrowserNavigationObservation,
   BrowserNavigationRequest,
   BrowserObservation,
@@ -33,8 +33,6 @@ import type {
   FixtureRuntimeError,
   FixtureStartRequest,
   FixtureStartResult,
-  FixtureTransitionRequest,
-  FixtureTransitionResult,
   JourneyBootstrapRequest,
   JourneyBootstrapResult,
   JourneyInputError,
@@ -51,9 +49,6 @@ import type {
   McpRequest,
   McpResponse,
   McpTransportError,
-  ModelAdmissionError,
-  ModelSuggestionRequest,
-  ModelSuggestionResult,
   MutationReceipt,
   NavigationError,
   NavigationReconciliationRequest,
@@ -81,6 +76,7 @@ import type {
   VerificationRequest,
   VerificationResult,
 } from "./types.ts";
+import type { AdmittedSnapshot } from "./admission.ts";
 
 export const inProcessContractPolicy = {
   pin: "git-revision",
@@ -116,14 +112,12 @@ export const portNames = [
   "PrivacyGuard",
   "SafetyGuard",
   "EvidenceStore",
-  "ModelController",
 ] as const;
 
 type AsyncResult<T, E> = Promise<PortResult<T, E | CancellationError>>;
 
 export interface FixtureRuntime {
   start(request: FixtureStartRequest, signal: AbortSignal): AsyncResult<FixtureStartResult, FixtureRuntimeError>;
-  transition(request: FixtureTransitionRequest, signal: AbortSignal): AsyncResult<FixtureTransitionResult, FixtureRuntimeError>;
   reset(request: FixtureResetRequest, signal: AbortSignal): AsyncResult<FixtureResetResult, FixtureRuntimeError>;
   setFault(request: FixtureFaultRequest, signal: AbortSignal): AsyncResult<void, FixtureRuntimeError>;
 }
@@ -131,8 +125,8 @@ export interface FixtureRuntime {
 export interface BrowserSession {
   start(request: BrowserStartRequest, signal: AbortSignal): AsyncResult<BrowserSessionResult, BrowserSessionError>;
   observe(request: BrowserObservationRequest, signal: AbortSignal): AsyncResult<BrowserObservation, BrowserSessionError>;
-  mutate(request: BrowserMutationRequest, signal: AbortSignal): AsyncResult<BrowserOperationReceipt, BrowserSessionError>;
-  navigate(request: BrowserNavigationRequest, signal: AbortSignal): AsyncResult<BrowserNavigationObservation, BrowserSessionError>;
+  mutate(request: BrowserMutationRequest, signal: AbortSignal): AsyncResult<BrowserOperationReceipt, BrowserEffectError>;
+  navigate(request: BrowserNavigationRequest, signal: AbortSignal): AsyncResult<BrowserNavigationObservation, BrowserEffectError>;
   close(request: BrowserCloseRequest, signal: AbortSignal): AsyncResult<void, BrowserSessionError>;
 }
 
@@ -197,18 +191,20 @@ export interface FailureReporter {
 }
 
 export interface PrivacyGuard {
-  admit(request: PrivacyAdmissionRequest, signal: AbortSignal): AsyncResult<AdmissionDecision, PrivacyDenial>;
+  admit(request: PrivacyAdmissionRequest, signal: AbortSignal): AsyncResult<AdmittedSnapshot<"privacy" | "evidence">, PrivacyDenial>;
 }
 
 export interface SafetyGuard {
-  admit(request: SafetyAdmissionRequest, signal: AbortSignal): AsyncResult<AdmissionDecision, SafetyDenial>;
+  admit<const I extends SafetyAdmissionRequest["input"]>(
+    request: SafetyAdmissionRequest<I>,
+    signal: AbortSignal,
+  ): AsyncResult<
+    AdmittedSnapshot<"safety", I>,
+    SafetyDenial
+  >;
 }
 
 export interface EvidenceStore {
   write(request: EvidenceAdmissionRequest, signal: AbortSignal): AsyncResult<EvidenceWriteResult, EvidenceError>;
   read(request: EvidenceReadRequest, signal: AbortSignal): AsyncResult<EvidenceManifest, EvidenceError>;
-}
-
-export interface ModelController {
-  suggest(request: ModelSuggestionRequest, signal: AbortSignal): AsyncResult<ModelSuggestionResult, ModelAdmissionError>;
 }

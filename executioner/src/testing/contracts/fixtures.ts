@@ -1,5 +1,21 @@
 import {
+  admitContractSnapshot,
+  bindAdmissionRequest,
+  browserPageId,
+  browserTargetToken,
   boundedText,
+  captureResumeArtifact,
+  createGeneratedIdAllocator,
+  eventId,
+  generatedEvidenceId,
+  fieldId,
+  generatedJourneyId,
+  generatedSessionId,
+  guardRevision,
+  generatedOperationId,
+  upstreamJobId,
+  upstreamProfileId,
+  upstreamResumeId,
   type ApplicantProfile,
   type BrowserObservation,
   type DurableJourneyState,
@@ -12,26 +28,42 @@ import {
   type JourneyInputs,
   type JourneyProgress,
   type MutationReceipt,
+  type PortResult,
   type ResumeSelection,
   type SemanticPageSnapshot,
   type TerminalResult,
   type VerificationResult,
 } from "../../contracts/index.ts";
 
+function fixtureValue<T>(result: PortResult<T, unknown>): T {
+  if (!result.ok) throw new Error("invalid deterministic contract fixture id");
+  return result.value;
+}
+
+const generatedIds = createGeneratedIdAllocator({
+  next: () => "0123456789abcdef",
+});
+
 const job = {
-  jobId: "job-synthetic",
+  jobId: upstreamJobId("job-synthetic"),
   title: "Synthetic role",
   company: "Synthetic company",
   applyUrl: "https://fixture.invalid/apply",
 } as const satisfies JobIntake;
 
 const resume = {
-  resumeId: "resume-synthetic",
-  sha256: "sha256:synthetic-resume",
+  resumeId: upstreamResumeId("resume-synthetic"),
+  sha256: "6a5c5b7838b3f7a7bf24b7e9ca49141f10ee68b2e14c9ee43eba3fdecf7173cc",
 } as const satisfies ResumeSelection;
 
+export function createResumeArtifactFixture() {
+  return fixtureValue(
+    captureResumeArtifact(resume, new TextEncoder().encode("synthetic resume")),
+  );
+}
+
 const profile = {
-  profileId: "profile-synthetic",
+  profileId: upstreamProfileId("profile-synthetic"),
   revision: 1,
   facts: [
     {
@@ -42,32 +74,46 @@ const profile = {
   ],
 } as const satisfies ApplicantProfile;
 
-const journeyInputs = {
-  job,
-  resume,
-  profile,
-} as const satisfies JourneyInputs;
+export function createJourneyInputsFixture(): JourneyInputs {
+  return {
+    job,
+    resume,
+    resumeArtifact: createResumeArtifactFixture(),
+    profile,
+  };
+}
 
 const journeyState = {
-  schemaVersion: 1,
-  journeyId: "journey-synthetic",
+  schemaVersion: 2,
+  journeyId: fixtureValue(generatedJourneyId(generatedIds)),
   status: "running",
-  pageId: "page-profile",
+  pageId: browserPageId("page-profile"),
   revision: 1,
 } as const satisfies DurableJourneyState;
 
+const admissionBinding = {
+  journeyId: journeyState.journeyId,
+  attemptId: generatedOperationId("operation_0123456789abcdef"),
+  guardRevision: guardRevision("policy-s1"),
+} as const;
+export function createPrivacyAdmissionFixture() {
+  return fixtureValue(admitContractSnapshot(
+    { policyRevision: "policy-s1", semanticPayload: { fieldId: "field-given-name" } },
+    "privacy",
+    admissionBinding,
+  ));
+}
 const browserObservation = {
-  sessionId: "session-synthetic",
-  pageId: "page-profile",
+  sessionId: fixtureValue(generatedSessionId(generatedIds)),
+  pageId: browserPageId("page-profile"),
   origin: "https://fixture.invalid",
   path: "/profile",
   targets: [
     {
-      token: "target-given-name",
-      role: "textbox",
+      token: browserTargetToken("target-given-name"),
       name: boundedText("Given name"),
       required: true,
-      options: [],
+      control: { kind: "text", element: "input" },
       state: {
         visibility: "visible",
         enabled: true,
@@ -79,8 +125,8 @@ const browserObservation = {
 } as const satisfies BrowserObservation;
 
 const field = {
-  fieldId: "field-given-name",
-  target: "target-given-name",
+  fieldId: fieldId("field-given-name"),
+  target: browserTargetToken("target-given-name"),
   label: boundedText("Given name"),
   required: true,
   behavior: "text",
@@ -98,12 +144,32 @@ const intent = {
 } as const satisfies FieldIntent;
 
 const mutationReceipt = {
-  operationId: "operation-synthetic",
+  operationId: generatedOperationId("operation_0123456789abcdef"),
   fieldId: field.fieldId,
   behavior: "text",
   attempted: true,
 } as const satisfies MutationReceipt;
 
+const mutationSnapshot = {
+  policyRevision: admissionBinding.guardRevision,
+  capability: "field_mutation",
+  effect: {
+    kind: "browser_mutation",
+    sessionId: browserObservation.sessionId,
+    pageId: browserObservation.pageId,
+    operationId: mutationReceipt.operationId,
+    mutation: {
+      kind: "set_text",
+      target: field.target,
+      text: "Synthetic",
+    },
+  },
+} as const;
+export function createSafetyAdmissionFixture() {
+  return fixtureValue(
+    admitContractSnapshot(mutationSnapshot, "safety", admissionBinding),
+  );
+}
 const pageSnapshot = {
   pageIdentity: { kind: "workday", page: "profile" },
   fields: [field],
@@ -115,15 +181,15 @@ const verification = {
 } as const satisfies VerificationResult;
 
 const event = {
-  schemaVersion: 1,
-  eventId: "event-synthetic",
+  schemaVersion: 2,
+  eventId: eventId("event-synthetic"),
   journeyId: journeyState.journeyId,
   component: "F9",
   phase: "orchestration",
   step: "start",
   kind: "step_started",
   at: "2026-07-30T00:00:00.000Z",
-  source: { kind: "operation", id: "operation-synthetic" },
+  source: { kind: "operation", id: generatedOperationId("operation_0123456789abcdef") },
 } as const satisfies EventEnvelope;
 
 const progress = {
@@ -133,22 +199,21 @@ const progress = {
 } as const satisfies JourneyProgress;
 
 const evidenceRecord = {
-  id: "evidence-synthetic",
+  id: generatedEvidenceId("evidence_0123456789abcdef"),
   kind: "semantic_snapshot",
   component: "F5",
   phase: "page_understanding",
   step: "classify",
-  sha256: "sha256:synthetic-evidence",
+  sha256: "0000000000000000000000000000000000000000000000000000000000000000",
 } as const satisfies EvidenceRecord;
 
 const evidenceManifest = {
-  schemaVersion: 1,
+  schemaVersion: 2,
   journeyId: journeyState.journeyId,
   records: [evidenceRecord],
 } as const satisfies EvidenceManifest;
-
 const terminalResult = {
-  schemaVersion: 1,
+  schemaVersion: 2,
   journeyId: journeyState.journeyId,
   status: "review_reached",
   completedPages: 3,
@@ -157,9 +222,20 @@ const terminalResult = {
 export const contractFixtures = {
   job,
   resume,
+  get resumeArtifact() {
+    return createResumeArtifactFixture();
+  },
   profile,
-  journeyInputs,
+  get journeyInputs() {
+    return createJourneyInputsFixture();
+  },
   journeyState,
+  get privacyAdmission() {
+    return createPrivacyAdmissionFixture();
+  },
+  get safetyAdmission() {
+    return createSafetyAdmissionFixture();
+  },
   browserObservation,
   field,
   intent,

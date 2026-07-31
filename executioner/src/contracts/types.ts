@@ -1,29 +1,323 @@
-export type FixturePageId = string;
-export type FixtureSemanticHash = string;
-export type BrowserSessionId = string;
-export type BrowserPageId = string;
-export type BrowserTargetToken = string;
-export type JourneyId = string;
-export type QuestionId = string;
-export type OptionId = string;
-export type OperationId = string;
+export const MAX_IDENTIFIER_CODE_POINTS = 128 as const;
+
+declare const identifierBrand: unique symbol;
+type Identifier<Kind extends string> = string & {
+  readonly [identifierBrand]: Kind;
+};
+
+function boundedIdentifier<Kind extends string>(
+  value: string,
+  kind: Kind,
+  label: string = kind,
+): Identifier<Kind> {
+  let codePoints = 0;
+  for (const _codePoint of value) {
+    codePoints += 1;
+  }
+  if (
+    codePoints === 0 ||
+    codePoints > MAX_IDENTIFIER_CODE_POINTS ||
+    !/^[A-Za-z0-9][A-Za-z0-9._-]*$/u.test(value)
+  ) {
+    throw new RangeError(`${label} identifier is malformed or out of bounds`);
+  }
+  return value as Identifier<Kind>;
+}
+
+export type FixturePageId = Identifier<"fixture_page">;
+export type FixtureSemanticHash = Identifier<"fixture_semantic_hash">;
+export type BrowserSessionId = Identifier<"browser_session">;
+export type BrowserPageId = Identifier<"browser_page">;
+export type BrowserTargetToken = Identifier<"browser_target">;
+export type JourneyId = Identifier<"journey">;
+export type QuestionId = Identifier<"question">;
+export type OptionId = Identifier<"option">;
+export type OperationId = Identifier<"operation">;
+export type JobId = Identifier<"upstream_job">;
+export type ResumeId = Identifier<"upstream_resume">;
+export type ProfileId = Identifier<"upstream_profile">;
+export type McpRequestId = Identifier<"mcp_request">;
+export type GuardRevision = Identifier<"guard_revision">;
+export type FixtureRunId = Identifier<"fixture_run">;
+export type FieldId = Identifier<"field">;
+export type EventId = Identifier<"event">;
+export type EvidenceId = Identifier<"evidence">;
+export type ReportId = Identifier<"report">;
+
+export const upstreamJobId = (value: string): JobId =>
+  boundedIdentifier(value, "upstream_job", "job");
+export const upstreamResumeId = (value: string): ResumeId =>
+  boundedIdentifier(value, "upstream_resume", "resume");
+export const upstreamProfileId = (value: string): ProfileId =>
+  boundedIdentifier(value, "upstream_profile", "profile");
+export const mcpRequestId = (value: string): McpRequestId =>
+  boundedIdentifier(value, "mcp_request", "MCP request");
+export const guardRevision = (value: string): GuardRevision =>
+  boundedIdentifier(value, "guard_revision", "guard revision");
+export function generatedOperationId(value: string): OperationId {
+  if (!/^operation_[A-Za-z0-9_-]{16,64}$/u.test(value)) {
+    throw new RangeError("operation identifier is malformed or out of bounds");
+  }
+  return value as OperationId;
+}
+export function journeyId(value: string): JourneyId {
+  if (!/^journey_[A-Za-z0-9_-]{16,64}$/u.test(value)) {
+    throw new RangeError("journey identifier is malformed or out of bounds");
+  }
+  return value as JourneyId;
+}
+export const fixturePageId = (value: string): FixturePageId =>
+  boundedIdentifier(value, "fixture_page", "fixture page");
+export const fixtureSemanticHash = (value: string): FixtureSemanticHash =>
+  boundedIdentifier(
+    value,
+    "fixture_semantic_hash",
+    "fixture semantic hash",
+  );
+export const browserPageId = (value: string): BrowserPageId =>
+  boundedIdentifier(value, "browser_page", "browser page");
+export const browserTargetToken = (value: string): BrowserTargetToken =>
+  boundedIdentifier(value, "browser_target", "browser target");
+export const questionId = (value: string): QuestionId =>
+  boundedIdentifier(value, "question");
+export const optionId = (value: string): OptionId =>
+  boundedIdentifier(value, "option");
+export const fixtureRunId = (value: string): FixtureRunId =>
+  boundedIdentifier(value, "fixture_run", "fixture run");
+export const fieldId = (value: string): FieldId =>
+  boundedIdentifier(value, "field");
+export const eventId = (value: string): EventId =>
+  boundedIdentifier(value, "event");
+export function generatedEvidenceId(value: string): EvidenceId {
+  if (!/^evidence_[A-Za-z0-9_-]{16,64}$/u.test(value)) {
+    throw new RangeError("evidence identifier is malformed or out of bounds");
+  }
+  return value as EvidenceId;
+}
+export function generatedReportId(value: string): ReportId {
+  if (!/^report_[A-Za-z0-9_-]{16,64}$/u.test(value)) {
+    throw new RangeError("report identifier is malformed or out of bounds");
+  }
+  return value as ReportId;
+}
+
+export type GeneratedIdScope = "journey" | "browser_session" | "operation" | "report";
+
+export interface NonSensitiveIdSource {
+  next(scope: GeneratedIdScope): string;
+}
+
+export interface GeneratedIdAllocator {
+  journeyId(): PortResult<JourneyId, JourneyIdentityError>;
+  sessionId(): PortResult<BrowserSessionId, SessionIdentityError>;
+  operationId(): PortResult<OperationId, OperationIdentityError>;
+  reportId(): PortResult<ReportId, ReportIdentityError>;
+}
+
+export type SessionIdentityError = PortError<
+  "session_identity_source_invalid" | "session_identity_collision"
+>;
+export type JourneyIdentityError = PortError<
+  "journey_identity_source_invalid" | "journey_identity_collision"
+>;
+export type OperationIdentityError = PortError<
+  "operation_identity_source_invalid" | "operation_identity_collision"
+>;
+export type ReportIdentityError = PortError<
+  "report_identity_source_invalid" | "report_identity_collision"
+>;
+
+export function createGeneratedIdAllocator(
+  source: NonSensitiveIdSource,
+): GeneratedIdAllocator {
+  const occupied = new Set<string>();
+  const prefixes = {
+    journey: "journey_",
+    browser_session: "browser_session_",
+    operation: "operation_",
+    report: "report_",
+  } as const;
+  const allocate = <Kind extends GeneratedIdScope>(scope: Kind) => {
+    const errorPrefix = scope === "browser_session" ? "session" : scope;
+    for (let attempt = 0; attempt < 8; attempt += 1) {
+      let token: string;
+      try {
+        token = source.next(scope);
+      } catch {
+        return { ok: false, error: providerError(`${errorPrefix}_identity_source_invalid` as
+          | "session_identity_source_invalid"
+          | "journey_identity_source_invalid"
+          | "operation_identity_source_invalid"
+          | "report_identity_source_invalid") } as const;
+      }
+      if (typeof token !== "string" || !/^[A-Za-z0-9_-]{16,64}$/u.test(token)) {
+        return { ok: false, error: providerError(`${errorPrefix}_identity_source_invalid` as
+          | "session_identity_source_invalid"
+          | "journey_identity_source_invalid"
+          | "operation_identity_source_invalid"
+          | "report_identity_source_invalid") } as const;
+      }
+      const candidate = boundedIdentifier(`${prefixes[scope]}${token}`, scope);
+      if (!occupied.has(candidate)) {
+        occupied.add(candidate);
+        return { ok: true, value: candidate } as const;
+      }
+    }
+    return { ok: false, error: providerError(`${errorPrefix}_identity_collision` as
+      | "session_identity_collision"
+      | "journey_identity_collision"
+      | "operation_identity_collision"
+      | "report_identity_collision") } as const;
+  };
+  return Object.freeze({
+    journeyId: () => allocate("journey") as PortResult<JourneyId, JourneyIdentityError>,
+    sessionId: () => allocate("browser_session") as PortResult<BrowserSessionId, SessionIdentityError>,
+    operationId: () => allocate("operation") as PortResult<OperationId, OperationIdentityError>,
+    reportId: () => allocate("report") as PortResult<ReportId, ReportIdentityError>,
+  });
+}
+
+export function generatedJourneyId(
+  allocator: GeneratedIdAllocator,
+): PortResult<JourneyId, JourneyIdentityError> {
+  return allocator.journeyId();
+}
+
+export function generatedSessionId(
+  allocator: GeneratedIdAllocator,
+): PortResult<BrowserSessionId, SessionIdentityError> {
+  return allocator.sessionId();
+}
+
+export const stableErrorPolicy = {
+  session_identity_source_invalid: { owner: "F3", retryable: false },
+  session_identity_collision: { owner: "F3", retryable: false },
+  journey_identity_source_invalid: { owner: "F9", retryable: false },
+  journey_identity_collision: { owner: "F9", retryable: false },
+  operation_identity_source_invalid: { owner: "F9", retryable: false },
+  operation_identity_collision: { owner: "F9", retryable: false },
+  report_identity_source_invalid: { owner: "F10", retryable: false },
+  report_identity_collision: { owner: "F10", retryable: false },
+  operation_cancelled: { owner: "F9", retryable: false },
+  fixture_not_found: { owner: "F2", retryable: false },
+  fixture_already_started: { owner: "F2", retryable: false },
+  fixture_timeout: { owner: "F2", retryable: true },
+  browser_target_invalid: { owner: "F3", retryable: false },
+  browser_page_owned: { owner: "F3", retryable: false },
+  browser_session_missing: { owner: "F3", retryable: false },
+  browser_target_stale: { owner: "F3", retryable: false },
+  browser_target_ambiguous: { owner: "F3", retryable: false },
+  browser_operation_replayed: { owner: "F3", retryable: false },
+  browser_timeout: { owner: "F3", retryable: true },
+  browser_effect_uncertain: { owner: "F3", retryable: false },
+  browser_session_invalidated: { owner: "F3", retryable: false },
+  journey_input_invalid: { owner: "F4", retryable: false },
+  resume_identity_mismatch: { owner: "F4", retryable: false },
+  journey_persistence_unavailable: { owner: "F4", retryable: true },
+  artifact_size_invalid: { owner: "F4", retryable: false },
+  artifact_digest_mismatch: { owner: "F4", retryable: false },
+  artifact_changed: { owner: "F4", retryable: false },
+  artifact_already_consumed: { owner: "F4", retryable: false },
+  artifact_handle_invalid: { owner: "F4", retryable: false },
+  profile_query_invalid: { owner: "F4", retryable: false },
+  profile_missing: { owner: "F4", retryable: false },
+  profile_revision_mismatch: { owner: "F4", retryable: false },
+  journey_state_invalid: { owner: "F4", retryable: false },
+  journey_transition_illegal: { owner: "F4", retryable: false },
+  journey_revision_conflict: { owner: "F4", retryable: true },
+  journey_state_unavailable: { owner: "F4", retryable: true },
+  page_observation_invalid: { owner: "F5", retryable: false },
+  question_unknown: { owner: "F6", retryable: false },
+  question_ambiguous: { owner: "F6", retryable: false },
+  protected_answer_denied: { owner: "F6", retryable: false },
+  driver_intent_invalid: { owner: "F7", retryable: false },
+  driver_behavior_unsupported: { owner: "F7", retryable: false },
+  driver_target_invalid: { owner: "F7", retryable: false },
+  driver_operation_replayed: { owner: "F7", retryable: false },
+  verification_input_invalid: { owner: "F8", retryable: false },
+  verification_timeout: { owner: "F8", retryable: true },
+  page_incomplete: { owner: "F8", retryable: false },
+  navigation_illegal: { owner: "F8", retryable: false },
+  navigation_uncertain: { owner: "F8", retryable: false },
+  journey_request_conflict: { owner: "F9", retryable: false },
+  journey_not_found: { owner: "F9", retryable: false },
+  journey_already_terminal: { owner: "F9", retryable: false },
+  journey_busy: { owner: "F9", retryable: false },
+  journey_retry_exhausted: { owner: "F9", retryable: false },
+  mcp_request_invalid: { owner: "F9", retryable: false },
+  mcp_method_unknown: { owner: "F9", retryable: false },
+  mcp_internal_error: { owner: "F9", retryable: true },
+  event_invalid: { owner: "F10", retryable: false },
+  event_store_unavailable: { owner: "F10", retryable: true },
+  progress_not_found: { owner: "F10", retryable: false },
+  failure_context_invalid: { owner: "F10", retryable: false },
+  notification_unavailable: { owner: "F10", retryable: true },
+  credential_forbidden: { owner: "F11", retryable: false },
+  token_forbidden: { owner: "F11", retryable: false },
+  raw_text_forbidden: { owner: "F11", retryable: false },
+  selector_forbidden: { owner: "F11", retryable: false },
+  policy_override_forbidden: { owner: "F11", retryable: false },
+  submit_forbidden: { owner: "F11", retryable: false },
+  payload_too_large: { owner: "F11", retryable: false },
+  evidence_denied: { owner: "F11", retryable: false },
+  evidence_limit_exceeded: { owner: "F11", retryable: false },
+  evidence_unavailable: { owner: "F11", retryable: true },
+  admission_graph_invalid: { owner: "F11", retryable: false },
+  admission_shape_invalid: { owner: "F11", retryable: false },
+  admission_invalid: { owner: "F11", retryable: false },
+  admission_stale: { owner: "F11", retryable: false },
+  admission_consumed: { owner: "F11", retryable: false },
+  admission_mismatch: { owner: "F11", retryable: false },
+} as const;
+
+export type StableErrorCode = keyof typeof stableErrorPolicy;
+export type ErrorOwner = (typeof stableErrorPolicy)[StableErrorCode]["owner"];
+
+type ErrorPolicy<C extends StableErrorCode> = (typeof stableErrorPolicy)[C];
+export type ProviderErrorCause<C extends StableErrorCode = StableErrorCode> =
+  C extends StableErrorCode
+    ? {
+        readonly code: C;
+        readonly owner: ErrorPolicy<C>["owner"];
+        readonly retryable: ErrorPolicy<C>["retryable"];
+        readonly source: SourceReference;
+      }
+    : never;
 
 export type PortResult<T, E> =
   | { readonly ok: true; readonly value: T }
   | { readonly ok: false; readonly error: E };
 
-export interface PortError<C extends string> {
-  readonly code: C;
-  readonly retryable: boolean;
+export type PortError<C extends StableErrorCode> = C extends StableErrorCode
+  ? {
+      readonly code: C;
+      readonly retryable: ErrorPolicy<C>["retryable"];
+      readonly cause?: ProviderErrorCause;
+    }
+  : never;
+
+export type CancellationError = PortError<"operation_cancelled">;
+
+export function providerCause<C extends StableErrorCode>(
+  code: C,
+  source: SourceReference,
+): ProviderErrorCause<C> {
+  const policy = stableErrorPolicy[code];
+  return { code, owner: policy.owner, retryable: policy.retryable, source } as
+    ProviderErrorCause<C>;
 }
 
-export interface CancellationError {
-  readonly code: "operation_cancelled";
-  readonly retryable: false;
+export function providerError<C extends StableErrorCode>(
+  code: C,
+  cause?: ProviderErrorCause,
+): PortError<C> {
+  const error = { code, retryable: stableErrorPolicy[code].retryable, cause };
+  if (cause === undefined) delete error.cause;
+  return error as PortError<C>;
 }
 
 export interface FixtureManifest {
-  readonly schemaVersion: 1;
+  readonly schemaVersion: 2;
   readonly fixtureSet: "workday-s1";
   readonly pages: readonly {
     readonly id: FixturePageId;
@@ -35,63 +329,73 @@ export interface FixtureManifest {
 export type FixtureFault = "component_failure" | null;
 
 export interface FixtureRunState {
-  readonly fixtureRunId: string;
+  readonly fixtureRunId: FixtureRunId;
   readonly pageId: FixturePageId;
   readonly enabledFault: FixtureFault;
 }
 
 export interface FixtureStartRequest {
-  readonly fixtureRunId: string;
-}
-
-export interface FixtureTransitionRequest {
-  readonly fixtureRunId: string;
-  readonly transitionId: string;
-  readonly toPageId: FixturePageId;
+  readonly fixtureRunId: FixtureRunId;
 }
 
 export interface FixtureResetRequest {
-  readonly fixtureRunId: string;
+  readonly fixtureRunId: FixtureRunId;
 }
 
 export interface FixtureFaultRequest {
-  readonly fixtureRunId: string;
+  readonly fixtureRunId: FixtureRunId;
   readonly fault: FixtureFault;
 }
 
 export interface FixtureStartResult {
-  readonly fixtureRunId: string;
+  readonly fixtureRunId: FixtureRunId;
   readonly origin: string;
   readonly pageId: FixturePageId;
 }
 
-export interface FixtureTransitionResult {
-  readonly transitionId: string;
-  readonly pageId: FixturePageId;
-  readonly semanticHash: FixtureSemanticHash;
-}
-
 export interface FixtureResetResult {
-  readonly fixtureRunId: string;
+  readonly fixtureRunId: FixtureRunId;
   readonly semanticHash: FixtureSemanticHash;
 }
 
 export type FixtureRuntimeError = PortError<
   | "fixture_not_found"
   | "fixture_already_started"
-  | "fixture_transition_illegal"
-  | "fixture_transition_replayed"
   | "fixture_timeout"
 >;
 
-export type BrowserTargetRole =
-  | "textbox"
-  | "radio"
-  | "checkbox"
-  | "combobox"
-  | "listbox"
-  | "button"
-  | "file";
+export const browserControlKinds = [
+  "text",
+  "date",
+  "choice",
+  "select",
+  "button",
+  "file",
+] as const;
+
+export type BrowserControl =
+  | {
+      readonly kind: "text";
+      readonly element: "input" | "textarea";
+    }
+  | {
+      readonly kind: "date";
+      readonly element: "input";
+    }
+  | {
+      readonly kind: "choice";
+      readonly element: "input";
+      readonly choice: "radio" | "checkbox";
+      readonly group: BoundedText;
+      readonly checked: boolean;
+    }
+  | {
+      readonly kind: "select";
+      readonly element: "select" | "listbox";
+      readonly options: readonly BrowserReadbackText[];
+    }
+  | { readonly kind: "button"; readonly element: "button" }
+  | { readonly kind: "file"; readonly element: "input" };
 
 export const MAX_BROWSER_READBACK_CODE_POINTS = 512 as const;
 
@@ -114,6 +418,18 @@ export function boundedText(value: string): BoundedText {
 export type BrowserReadbackText = BoundedText;
 export const browserReadbackText = boundedText;
 
+declare const sha256DigestBrand: unique symbol;
+export type Sha256Digest = string & {
+  readonly [sha256DigestBrand]: true;
+};
+
+export function sha256Digest(value: string): Sha256Digest {
+  if (!/^[a-f0-9]{64}$/u.test(value)) {
+    throw new RangeError("SHA-256 digest must be 64 lowercase hexadecimal characters");
+  }
+  return value as Sha256Digest;
+}
+
 export type BrowserReadback =
   | { readonly kind: "empty" }
   | { readonly kind: "text"; readonly value: BrowserReadbackText }
@@ -122,7 +438,16 @@ export type BrowserReadback =
       readonly kind: "selected";
       readonly option: BrowserReadbackText | null;
     }
-  | { readonly kind: "upload"; readonly resumeId: string | null }
+  | {
+      readonly kind: "upload";
+      readonly resumeId: null;
+      readonly sha256: null;
+    }
+  | {
+      readonly kind: "upload";
+      readonly resumeId: ResumeId;
+      readonly sha256: Sha256Digest;
+    }
   | { readonly kind: "unavailable" };
 
 export type BrowserTargetState =
@@ -142,31 +467,38 @@ export type BrowserTargetState =
       readonly actionable: boolean;
     };
 
+export interface BrowserTargetObservation {
+  readonly token: BrowserTargetToken;
+  readonly name: BrowserReadbackText;
+  readonly required: boolean;
+  readonly control: BrowserControl;
+  readonly state: BrowserTargetState;
+  readonly readback: BrowserReadback;
+}
+
 export interface BrowserObservation {
   readonly sessionId: BrowserSessionId;
   readonly pageId: BrowserPageId;
   readonly origin: string;
   readonly path: string;
-  readonly targets: readonly {
-    readonly token: BrowserTargetToken;
-    readonly role: BrowserTargetRole;
-    readonly name: BrowserReadbackText;
-    readonly required: boolean;
-    readonly options: readonly BrowserReadbackText[];
-    readonly state: BrowserTargetState;
-    readonly readback: BrowserReadback;
-  }[];
+  readonly targets: readonly BrowserTargetObservation[];
 }
 
 export type BrowserMutation =
   | {
-      readonly kind: "type";
+      readonly kind: "set_text";
       readonly target: BrowserTargetToken;
       readonly text: string;
     }
   | {
-      readonly kind: "click";
+      readonly kind: "set_date";
       readonly target: BrowserTargetToken;
+      readonly isoDate: string;
+    }
+  | {
+      readonly kind: "set_checked";
+      readonly target: BrowserTargetToken;
+      readonly checked: boolean;
     }
   | {
       readonly kind: "select";
@@ -176,8 +508,13 @@ export type BrowserMutation =
   | {
       readonly kind: "upload";
       readonly target: BrowserTargetToken;
-      readonly resumeId: string;
+      readonly artifact: ResolvedResumeArtifact;
     };
+
+export const browserUploadPolicy = {
+  consumeHandle: true,
+  verifyFreshCopyDigestBeforeSideEffect: true,
+} as const;
 
 export interface BrowserStartRequest {
   readonly journeyId: JourneyId;
@@ -196,15 +533,39 @@ export interface BrowserOperationCoordinates {
 
 export type BrowserObservationRequest = BrowserOperationCoordinates;
 
-export interface BrowserMutationRequest extends BrowserOperationCoordinates {
-  readonly operationId: OperationId;
-  readonly mutation: BrowserMutation;
-}
+export type BrowserMutationAdmissionSnapshot = {
+  readonly policyRevision: GuardRevision;
+  readonly capability: "field_mutation";
+  readonly effect: {
+    readonly kind: "browser_mutation";
+    readonly sessionId: BrowserSessionId;
+    readonly pageId: BrowserPageId;
+    readonly operationId: OperationId;
+    readonly mutation: BrowserMutation;
+  };
+};
 
-export interface BrowserNavigationRequest extends BrowserOperationCoordinates {
-  readonly operationId: OperationId;
-  readonly action: "next";
-}
+export type BrowserNavigationAdmissionSnapshot = {
+  readonly policyRevision: GuardRevision;
+  readonly capability: "navigate_next";
+  readonly effect: {
+    readonly kind: "browser_navigation";
+    readonly sessionId: BrowserSessionId;
+    readonly pageId: BrowserPageId;
+    readonly operationId: OperationId;
+    readonly action: "next";
+  };
+};
+
+export type BrowserMutationRequest = AdmissionConsumptionRequest<
+  "safety",
+  BrowserMutationAdmissionSnapshot
+>;
+
+export type BrowserNavigationRequest = AdmissionConsumptionRequest<
+  "safety",
+  BrowserNavigationAdmissionSnapshot
+>;
 
 export interface BrowserCloseRequest {
   readonly sessionId: BrowserSessionId;
@@ -227,7 +588,7 @@ export interface BrowserNavigationObservation {
   readonly pageId: BrowserPageId;
 }
 
-export type BrowserSessionError = PortError<
+export type BrowserReadError = PortError<
   | "browser_target_invalid"
   | "browser_page_owned"
   | "browser_session_missing"
@@ -237,15 +598,36 @@ export type BrowserSessionError = PortError<
   | "browser_timeout"
 >;
 
+export type BrowserEffectError = PortError<
+  | "browser_target_invalid"
+  | "browser_page_owned"
+  | "browser_session_missing"
+  | "browser_target_stale"
+  | "browser_target_ambiguous"
+  | "browser_operation_replayed"
+  | "browser_timeout"
+  | "browser_effect_uncertain"
+  | "browser_session_invalidated"
+  | "artifact_changed"
+  | "artifact_already_consumed"
+  | "artifact_handle_invalid"
+  | AdmissionConsumptionCode
+>;
+
+export type BrowserSessionError =
+  | BrowserReadError
+  | BrowserEffectError
+  | SessionIdentityError;
+
 export interface JobIntake {
-  readonly jobId: string;
+  readonly jobId: JobId;
   readonly title: string;
   readonly company: string;
   readonly applyUrl: string;
 }
 
 export interface ResumeSelection {
-  readonly resumeId: string;
+  readonly resumeId: ResumeId;
   readonly sha256: string;
 }
 
@@ -308,7 +690,7 @@ export type ProfileFact =
     };
 
 export interface ApplicantProfile {
-  readonly profileId: string;
+  readonly profileId: ProfileId;
   readonly revision: number;
   readonly facts: readonly ProfileFact[];
 }
@@ -316,6 +698,7 @@ export interface ApplicantProfile {
 export interface JourneyInputs {
   readonly job: JobIntake;
   readonly resume: ResumeSelection;
+  readonly resumeArtifact: ResolvedResumeArtifact;
   readonly profile: ApplicantProfile;
 }
 
@@ -328,23 +711,24 @@ export type JourneyStatus =
   | "failed";
 
 export interface DurableJourneyState {
-  readonly schemaVersion: 1;
+  readonly schemaVersion: 2;
   readonly journeyId: JourneyId;
   readonly status: JourneyStatus;
-  readonly pageId: string | null;
+  readonly pageId: BrowserPageId | null;
   readonly revision: number;
 }
 
 export const journeyBootstrapReferenceKeys = [
-  "operationId",
   "jobId",
   "resumeId",
   "profileId",
 ] as const;
 
-export type JourneyBootstrapRequest = Readonly<
-  Record<(typeof journeyBootstrapReferenceKeys)[number], string>
->;
+export interface JourneyBootstrapRequest {
+  readonly jobId: JobId;
+  readonly resumeId: ResumeId;
+  readonly profileId: ProfileId;
+}
 
 export interface JourneyBootstrapResult {
   readonly journeyId: JourneyId;
@@ -353,7 +737,7 @@ export interface JourneyBootstrapResult {
 }
 
 export interface ProfileQueryRequest {
-  readonly profileId: string;
+  readonly profileId: ProfileId;
   readonly profileRevision: number;
   readonly factId: ProfileFactId;
 }
@@ -375,7 +759,7 @@ export interface JourneyStateTransitionCommand {
   readonly operationId: OperationId;
   readonly expectedRevision: number;
   readonly status: JourneyStatus;
-  readonly pageId: string | null;
+  readonly pageId: BrowserPageId | null;
 }
 
 export interface JourneyStateLoadResult {
@@ -388,10 +772,14 @@ export interface JourneyStateTransitionResult {
 }
 
 export type JourneyInputError = PortError<
-  "journey_input_invalid" | "resume_identity_mismatch"
+  | "journey_input_invalid"
+  | "resume_identity_mismatch"
+  | "journey_persistence_unavailable"
+  | "artifact_size_invalid"
+  | "artifact_digest_mismatch"
 >;
 export type ProfileQueryError = PortError<
-  "profile_missing" | "profile_revision_mismatch"
+  "profile_query_invalid" | "profile_missing" | "profile_revision_mismatch"
 >;
 export type JourneyStateError = PortError<
   | "journey_state_invalid"
@@ -419,7 +807,7 @@ export const uiBehaviorIds = [
 export type UiBehaviorId = (typeof uiBehaviorIds)[number];
 
 export interface FieldObservation {
-  readonly fieldId: string;
+  readonly fieldId: FieldId;
   readonly target: BrowserTargetToken;
   readonly label: BoundedText;
   readonly required: boolean;
@@ -459,7 +847,7 @@ export type FieldIntent =
   | {
       readonly kind: "text";
       readonly behavior: "text" | "textarea";
-      readonly fieldId: string;
+      readonly fieldId: FieldId;
       readonly target: BrowserTargetToken;
       readonly value: string;
       readonly provenance: AnswerProvenance;
@@ -467,7 +855,7 @@ export type FieldIntent =
   | {
       readonly kind: "choice";
       readonly behavior: "radio" | "select" | "listbox";
-      readonly fieldId: string;
+      readonly fieldId: FieldId;
       readonly target: BrowserTargetToken;
       readonly optionId: OptionId;
       readonly expectedOption: BoundedText;
@@ -476,7 +864,7 @@ export type FieldIntent =
   | {
       readonly kind: "toggle";
       readonly behavior: "checkbox";
-      readonly fieldId: string;
+      readonly fieldId: FieldId;
       readonly target: BrowserTargetToken;
       readonly checked: boolean;
       readonly provenance: AnswerProvenance;
@@ -484,7 +872,7 @@ export type FieldIntent =
   | {
       readonly kind: "date";
       readonly behavior: "date";
-      readonly fieldId: string;
+      readonly fieldId: FieldId;
       readonly target: BrowserTargetToken;
       readonly isoDate: string;
       readonly provenance: AnswerProvenance;
@@ -492,17 +880,18 @@ export type FieldIntent =
   | {
       readonly kind: "resume_upload";
       readonly behavior: "file_upload";
-      readonly fieldId: string;
+      readonly fieldId: FieldId;
       readonly target: BrowserTargetToken;
-      readonly resumeId: string;
+      readonly artifact: ResolvedResumeArtifact;
       readonly provenance: AnswerProvenance;
     };
 
 export interface AnswerResolutionRequest {
   readonly field: FieldObservation;
-  readonly profileId: string;
+  readonly profileId: ProfileId;
   readonly profileRevision: number;
   readonly resume: ResumeSelection;
+  readonly resumeArtifact: ResolvedResumeArtifact;
 }
 
 export type AnswerResolutionResult =
@@ -510,36 +899,43 @@ export type AnswerResolutionResult =
   | { readonly kind: "profile_answer_missing"; readonly questionId: QuestionId }
   | { readonly kind: "option_no_match"; readonly questionId: QuestionId }
   | { readonly kind: "option_ambiguous"; readonly questionId: QuestionId }
-  | { readonly kind: "unsupported"; readonly fieldId: string };
+  | { readonly kind: "unsupported"; readonly fieldId: FieldId };
 
-export type AnswerResolutionError = PortError<
-  | "question_unknown"
-  | "question_ambiguous"
-  | "protected_answer_denied"
->;
+export type AnswerResolutionError =
+  | PortError<
+      | "question_unknown"
+      | "question_ambiguous"
+      | "protected_answer_denied"
+    >
+  | ProfileQueryError;
 
 export type DriverBehaviorId = UiBehaviorId;
 
 export interface DriverRequest {
+  readonly journeyId: JourneyId;
   readonly sessionId: BrowserSessionId;
   readonly pageId: BrowserPageId;
+  readonly guardRevision: GuardRevision;
   readonly operationId: OperationId;
   readonly intent: FieldIntent;
 }
 
 export interface MutationReceipt {
   readonly operationId: OperationId;
-  readonly fieldId: string;
+  readonly fieldId: FieldId;
   readonly behavior: DriverBehaviorId;
   readonly attempted: true;
 }
 
-export type DriverError = PortError<
-  | "driver_intent_invalid"
-  | "driver_behavior_unsupported"
-  | "driver_target_invalid"
-  | "driver_operation_replayed"
->;
+export type DriverError =
+  | PortError<
+      | "driver_intent_invalid"
+      | "driver_behavior_unsupported"
+      | "driver_target_invalid"
+      | "driver_operation_replayed"
+    >
+  | SafetyDenial
+  | BrowserEffectError;
 
 export interface VerificationRequest {
   readonly sessionId: BrowserSessionId;
@@ -549,10 +945,10 @@ export interface VerificationRequest {
 }
 
 export type VerificationResult =
-  | { readonly kind: "verified"; readonly fieldId: string }
-  | { readonly kind: "rejected"; readonly fieldId: string; readonly reason: "mismatch" | "stale" }
-  | { readonly kind: "ambiguous"; readonly fieldId: string }
-  | { readonly kind: "unavailable"; readonly fieldId: string };
+  | { readonly kind: "verified"; readonly fieldId: FieldId }
+  | { readonly kind: "rejected"; readonly fieldId: FieldId; readonly reason: "mismatch" | "stale" }
+  | { readonly kind: "ambiguous"; readonly fieldId: FieldId }
+  | { readonly kind: "unavailable"; readonly fieldId: FieldId };
 
 export interface PageCompletionRequest {
   readonly page: SemanticPageSnapshot;
@@ -566,7 +962,7 @@ export type PageCompletionResult =
     }
   | {
       readonly kind: "blocked";
-      readonly fieldIds: readonly string[];
+      readonly fieldIds: readonly FieldId[];
       readonly decision: { readonly kind: "blocked" };
     };
 
@@ -582,6 +978,7 @@ export interface NavigationReconciliationRequest {
   readonly operationId: OperationId;
   readonly decision: ApprovedNavigationDecision;
   readonly observation: BrowserNavigationObservation;
+  readonly sourcePage: PageIdentity;
   readonly expected: PageIdentity;
   readonly observed: PageIdentity;
 }
@@ -596,14 +993,16 @@ export type NavigationResult = {
   | { readonly kind: "illegal_transition" }
 );
 
-export type VerificationError = PortError<
-  "verification_input_invalid" | "verification_timeout"
->;
+export type VerificationError =
+  | PortError<"verification_input_invalid" | "verification_timeout">
+  | BrowserSessionError;
 export type NavigationError = PortError<
   "page_incomplete" | "navigation_illegal" | "navigation_uncertain"
 >;
 
-export type StartJourneyCommand = JourneyBootstrapRequest;
+export type StartJourneyCommand = JourneyBootstrapRequest & {
+  readonly operationId: OperationId;
+};
 
 export interface CancelJourneyCommand {
   readonly operationId: OperationId;
@@ -626,13 +1025,13 @@ export interface JourneyOperationResult {
 
 export type TerminalResult =
   | {
-      readonly schemaVersion: 1;
+      readonly schemaVersion: 2;
       readonly journeyId: JourneyId;
       readonly status: "review_reached" | "cancelled";
       readonly completedPages: number;
     }
   | {
-      readonly schemaVersion: 1;
+      readonly schemaVersion: 2;
       readonly journeyId: JourneyId;
       readonly status: "failed";
       readonly completedPages: number;
@@ -641,23 +1040,20 @@ export type TerminalResult =
 
 export type McpRequest =
   | {
-      readonly schemaVersion: 1;
-      readonly requestId: string;
+      readonly schemaVersion: 2;
+      readonly requestId: McpRequestId;
       readonly method: "start_journey";
       readonly params: JourneyBootstrapRequest;
     }
   | {
-      readonly schemaVersion: 1;
-      readonly requestId: string;
+      readonly schemaVersion: 2;
+      readonly requestId: McpRequestId;
       readonly method: "cancel_journey";
-      readonly params: {
-        readonly operationId: OperationId;
-        readonly journeyId: JourneyId;
-      };
+      readonly params: { readonly journeyId: JourneyId };
     }
   | {
-      readonly schemaVersion: 1;
-      readonly requestId: string;
+      readonly schemaVersion: 2;
+      readonly requestId: McpRequestId;
       readonly method: "journey_status" | "journey_result";
       readonly params: { readonly journeyId: JourneyId };
     };
@@ -676,25 +1072,25 @@ export type McpResult =
 
 export type McpResponse =
   | {
-      readonly schemaVersion: 1;
-      readonly requestId: string;
+      readonly schemaVersion: 2;
+      readonly requestId: McpRequestId;
       readonly ok: true;
       readonly result: McpResult;
     }
   | {
-      readonly schemaVersion: 1;
-      readonly requestId: string;
+      readonly schemaVersion: 2;
+      readonly requestId: McpRequestId;
       readonly ok: false;
       readonly error: ErrorEnvelope;
     };
 
 export type OrchestratorError = PortError<
-  | "journey_operation_replayed"
+  | "journey_request_conflict"
   | "journey_not_found"
   | "journey_already_terminal"
   | "journey_busy"
   | "journey_retry_exhausted"
->;
+> | JourneyIdentityError | OperationIdentityError;
 export type McpTransportError = PortError<
   "mcp_request_invalid" | "mcp_method_unknown" | "mcp_internal_error"
 >;
@@ -722,7 +1118,6 @@ export const phaseIds = [
   "privacy",
   "safety",
   "evidence",
-  "model",
   "terminal",
 ] as const;
 
@@ -754,10 +1149,11 @@ export const stepIds = [
 
 export type StepId = (typeof stepIds)[number];
 
-export interface SourceReference {
-  readonly kind: "operation" | "event" | "evidence" | "fixture";
-  readonly id: string;
-}
+export type SourceReference =
+  | { readonly kind: "operation"; readonly id: OperationId }
+  | { readonly kind: "event"; readonly id: EventId }
+  | { readonly kind: "evidence"; readonly id: EvidenceId }
+  | { readonly kind: "fixture"; readonly id: FixtureRunId };
 
 export interface VerifiedCause {
   readonly verification: "verified";
@@ -766,8 +1162,8 @@ export interface VerifiedCause {
 }
 
 export interface EventEnvelope {
-  readonly schemaVersion: 1;
-  readonly eventId: string;
+  readonly schemaVersion: 2;
+  readonly eventId: EventId;
   readonly journeyId: JourneyId;
   readonly component: ComponentId;
   readonly phase: PhaseId;
@@ -796,29 +1192,31 @@ export interface ProgressReadRequest {
   readonly journeyId: JourneyId;
 }
 
-export interface FailureContext {
-  readonly journeyId: JourneyId;
-  readonly component: ComponentId;
-  readonly phase: PhaseId;
-  readonly step: StepId;
-  readonly code: StableErrorCode;
-  readonly retryable: boolean;
-  readonly source: SourceReference;
-  readonly cause?: VerifiedCause;
-}
+export type FailureContext = {
+  readonly [C in StableErrorCode]: {
+    readonly journeyId: JourneyId;
+    readonly component: ErrorPolicy<C>["owner"];
+    readonly phase: PhaseId;
+    readonly step: StepId;
+    readonly code: C;
+    readonly retryable: ErrorPolicy<C>["retryable"];
+    readonly source: SourceReference;
+    readonly cause?: VerifiedCause;
+  };
+}[StableErrorCode];
 
 export interface FailureReportRequest {
-  readonly reportId: string;
+  readonly reportId: ReportId;
   readonly context: FailureContext;
 }
 
 export interface FailureReport {
-  readonly reportId: string;
+  readonly reportId: ReportId;
   readonly context: FailureContext;
 }
 
 export interface NotificationRecord {
-  readonly reportId: string;
+  readonly reportId: ReportId;
   readonly delivered: boolean;
 }
 
@@ -826,7 +1224,10 @@ export type ObservabilityError = PortError<
   "event_invalid" | "event_store_unavailable" | "progress_not_found"
 >;
 export type FailureReportingError = PortError<
-  "failure_context_invalid" | "notification_unavailable"
+  | "failure_context_invalid"
+  | "notification_unavailable"
+  | "report_identity_source_invalid"
+  | "report_identity_collision"
 >;
 
 export const admissionDecisionPolicy = {
@@ -834,10 +1235,7 @@ export const admissionDecisionPolicy = {
   denied: "error",
 } as const;
 
-export interface AdmissionDecision {
-  readonly kind: "admitted";
-  readonly policyRevision: string;
-}
+export type AdmissionDecision = AdmittedSnapshot;
 
 export type RedactionCode =
   | "credential_forbidden"
@@ -849,22 +1247,26 @@ export type RedactionCode =
   | "payload_too_large";
 
 export interface PrivacyAdmissionRequest {
-  readonly policyRevision: string;
-  readonly semanticPayload: Readonly<Record<string, string | number | boolean>>;
+  readonly binding: AdmissionBinding;
+  readonly purpose: "privacy" | "evidence";
+  readonly input: Readonly<Record<string, unknown>>;
 }
 
-export interface SafetyAdmissionRequest {
-  readonly policyRevision: string;
-  readonly capability:
-    | "observe"
-    | "field_mutation"
-    | "navigate_next"
-    | "read_progress"
-    | "read_result";
+export type SafetyAdmissionInput =
+  | BrowserMutationAdmissionSnapshot
+  | BrowserNavigationAdmissionSnapshot;
+
+export interface SafetyAdmissionRequest<
+  I extends SafetyAdmissionInput = SafetyAdmissionInput,
+> {
+  readonly binding: AdmissionBinding;
+  readonly policyRevision: GuardRevision;
+  readonly capability: I["capability"];
+  readonly input: I;
 }
 
 export interface EvidenceRecord {
-  readonly id: string;
+  readonly id: EvidenceId;
   readonly kind: "semantic_snapshot" | "operation_receipt" | "verification";
   readonly component: ComponentId;
   readonly phase: PhaseId;
@@ -873,48 +1275,44 @@ export interface EvidenceRecord {
 }
 
 export interface EvidenceManifest {
-  readonly schemaVersion: 1;
+  readonly schemaVersion: 2;
   readonly journeyId: JourneyId;
   readonly records: readonly EvidenceRecord[];
 }
 
-export interface EvidenceAdmissionRequest {
+export type EvidenceAdmissionSnapshot = {
   readonly journeyId: JourneyId;
+  readonly operationId: OperationId;
   readonly record: EvidenceRecord;
-}
+};
+
+export type EvidenceAdmissionRequest = AdmissionConsumptionRequest<
+  "evidence",
+  EvidenceAdmissionSnapshot
+>;
 
 export interface EvidenceReadRequest {
   readonly journeyId: JourneyId;
 }
 
 export interface EvidenceWriteResult {
-  readonly recordId: string;
+  readonly recordId: EvidenceId;
   readonly written: boolean;
 }
 
-export interface ModelSuggestionRequest {
-  readonly attemptId: string;
-  readonly questionId: QuestionId;
-  readonly allowedOptionIds: readonly OptionId[];
-}
-
-export interface ModelSuggestion {
-  readonly kind: "option_ranking" | "question_hint";
-  readonly optionIds: readonly OptionId[];
-}
-
-export interface ModelSuggestionResult {
-  readonly attemptId: string;
-  readonly suggestion: ModelSuggestion;
-}
-
-export type PrivacyDenial = PortError<RedactionCode>;
-export type SafetyDenial = PortError<RedactionCode>;
+export type AdmissionInputCode = "admission_graph_invalid" | "admission_shape_invalid";
+export type AdmissionConsumptionCode =
+  | "admission_invalid"
+  | "admission_stale"
+  | "admission_consumed"
+  | "admission_mismatch";
+export type PrivacyDenial = PortError<RedactionCode | AdmissionInputCode | AdmissionConsumptionCode>;
+export type SafetyDenial = PortError<RedactionCode | AdmissionInputCode | AdmissionConsumptionCode>;
 export type EvidenceError = PortError<
-  "evidence_denied" | "evidence_limit_exceeded" | "evidence_unavailable"
->;
-export type ModelAdmissionError = PortError<
-  "model_request_denied" | "model_result_denied" | "model_unavailable"
+  | "evidence_denied"
+  | "evidence_limit_exceeded"
+  | "evidence_unavailable"
+  | AdmissionConsumptionCode
 >;
 
 export type ComponentId =
@@ -929,33 +1327,17 @@ export type ComponentId =
   | "F10"
   | "F11";
 
-export type StableErrorCode =
-  | CancellationError["code"]
-  | FixtureRuntimeError["code"]
-  | BrowserSessionError["code"]
-  | JourneyInputError["code"]
-  | ProfileQueryError["code"]
-  | JourneyStateError["code"]
-  | PageUnderstandingError["code"]
-  | AnswerResolutionError["code"]
-  | DriverError["code"]
-  | VerificationError["code"]
-  | NavigationError["code"]
-  | OrchestratorError["code"]
-  | McpTransportError["code"]
-  | ObservabilityError["code"]
-  | FailureReportingError["code"]
-  | PrivacyDenial["code"]
-  | EvidenceError["code"]
-  | ModelAdmissionError["code"];
-
-export interface ErrorEnvelope {
-  readonly schemaVersion: 1;
-  readonly code: StableErrorCode;
-  readonly component: ComponentId;
-  readonly phase: PhaseId;
-  readonly step: StepId;
-  readonly retryable: boolean;
-  readonly source: SourceReference;
-  readonly cause?: VerifiedCause;
-}
+export type ErrorEnvelope = {
+  readonly [C in StableErrorCode]: {
+    readonly schemaVersion: 2;
+    readonly code: C;
+    readonly component: ErrorPolicy<C>["owner"];
+    readonly phase: PhaseId;
+    readonly step: StepId;
+    readonly retryable: ErrorPolicy<C>["retryable"];
+    readonly source: SourceReference;
+    readonly cause?: VerifiedCause;
+  };
+}[StableErrorCode];
+import type { ResolvedResumeArtifact } from "./resume-artifact.ts";
+import type { AdmissionBinding, AdmittedSnapshot, AdmissionConsumptionRequest } from "./admission.ts";

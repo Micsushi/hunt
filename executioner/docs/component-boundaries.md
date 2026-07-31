@@ -1,9 +1,10 @@
 # C3 v3 Stage 1 component boundaries
 
-This document is the human view of the declarative matrix in
-`src/contracts/ownership.ts`. F1 owns the matrix and all contracts. F2 through
-F11 own only the source listed below. A component may import F1 contracts, but
-never a peer implementation. Only composition may connect real providers.
+This document is the human view of the accepted R2 boundary surface. The
+declarative matrix in `src/contracts/ownership.ts` remains the frozen T5
+baseline. F1 owns the matrix and all contracts. F2 through F11 own only the
+source listed below. A component may import F1 contracts, but never a peer
+implementation. Only composition may connect real providers.
 
 F1 also owns the shared browser-consumer suite at
 `tests/contracts/consumers/browser/**` and the privacy baseline at
@@ -23,7 +24,7 @@ changes through F1.
 | F8 | Independent Verification, Completion, and Navigation | `src/interaction/verification/**`<br>`src/interaction/completion/**`<br>`src/interaction/navigation/**` | VerificationResult, PageCompletionResult, NavigationDecision, NavigationResult |
 | F9 | Orchestrator and MCP Facade | `src/control/orchestrator/**`<br>`src/control/mcp/**` | OperationId, JourneyStatus, TerminalResult, McpRequest, McpResponse |
 | F10 | Observability and Factual Failure Reporting | `src/observability/**` | EventEnvelope, JourneyProgress, FailureContext, FailureReport, NotificationRecord |
-| F11 | Privacy, Safety, and Sanitized Evidence | `src/safety/**`<br>`src/evidence/**`<br>`src/control/model/**` | AdmissionDecision, RedactionCode, EvidenceManifest, EvidenceRecord, ModelSuggestion |
+| F11 | Privacy, Safety, and Sanitized Evidence | `src/safety/**`<br>`src/evidence/**` | AdmissionDecision, RedactionCode, EvidenceManifest, EvidenceRecord |
 
 These assignments are disjoint. Data named in the final column has one owner.
 Credentials, raw page values, and Submit capability are not shared data.
@@ -35,18 +36,15 @@ Credentials, raw page values, and Submit capability are not shared data.
 **FixtureRuntime**
 
 - Consumer: F12/F13 composition.
-- Requests: FixtureStartRequest, FixtureTransitionRequest,
-  FixtureResetRequest, FixtureFaultRequest.
-- Results: FixtureStartResult, FixtureTransitionResult, FixtureResetResult.
+- Requests: FixtureStartRequest, FixtureResetRequest, FixtureFaultRequest.
+- Results: FixtureStartResult, FixtureResetResult.
 - Error: FixtureRuntimeError.
-- Side effect owner: F2 owns fixture-server lifecycle, fixture transition
-  state, reset, and fault activation.
-- Retry: Callers may retry start and reset after a timeout; transitions are
-  never retried automatically.
+- Side effect owner: F2 owns fixture-server lifecycle, reset, and fault
+  activation.
+- Retry: Callers may retry start and reset after a timeout.
 - Cancellation: Start accepts cancellation and stops only F2-owned server or
   state work.
-- Idempotency: Start is keyed by fixture-run ID, reset is repeatable, and a
-  transition ID applies at most once.
+- Idempotency: Start is keyed by fixture-run ID and reset is repeatable.
 
 ### F3 Browser Session Adapter
 
@@ -60,8 +58,9 @@ Credentials, raw page values, and Submit capability are not shared data.
 - Error: BrowserSessionError.
 - Side effect owner: F3 alone owns browser/page lifecycle, observation,
   mutation, navigation, and cleanup.
-- Retry: F3 performs no policy retry; F9 may retry only contract-declared
-  retryable operations.
+- Retry: F3 performs no policy retry; browser_timeout is legal only when F3
+  proves no browser side effect began; once an effect may have begun, F3 returns
+  browser_effect_uncertain and invalidates the session.
 - Cancellation: Every bounded browser operation accepts cancellation and stops
   at its declared safe boundary.
 - Idempotency: Duplicate page ownership is rejected, close is repeatable, and
@@ -214,8 +213,7 @@ Credentials, raw page values, and Submit capability are not shared data.
   their request ID.
 - Cancellation: Only the explicit cancel operation requests journey
   cancellation.
-- Idempotency: Status and result reads are repeatable; mutating requests use
-  operation IDs.
+- Idempotency: `requestId` is the sole caller idempotency key.
 
 ### F10 Observability and Factual Failure Reporting
 
@@ -302,20 +300,6 @@ Credentials, raw page values, and Submit capability are not shared data.
 - Idempotency: Evidence record IDs deduplicate writes and reads never mutate
   retention.
 
-**ModelController**
-
-- Consumer: F9 Orchestrator.
-- Request: ModelSuggestionRequest.
-- Result: ModelSuggestionResult.
-- Error: ModelAdmissionError.
-- Side effect owner: F11 owns admitted local-model invocation; returned
-  suggestions cannot mutate or choose policy.
-- Retry: F9 may request another suggestion only within its retry budget and
-  with a new attempt ID.
-- Cancellation: Cancellation stops the bounded model request.
-- Idempotency: A completed attempt ID returns its recorded semantic result
-  without reinvocation.
-
 ## Frozen execution rules
 
 - F9 owns the only journey/page loop and retry policy.
@@ -328,10 +312,13 @@ Credentials, raw page values, and Submit capability are not shared data.
 - F4 owns durable state validation and persistence. F9 supplies legal
   transition commands.
 - F10 owns event, progress, factual failure, and notification persistence.
-- F11 owns admission, evidence persistence, and bounded model invocation.
+- F11 owns admission and evidence persistence.
 - PrivacyGuard and SafetyGuard return `AdmissionDecision` only for admission;
   denials use their declared stable port-error channel.
 - Every in-process port method requires an `AbortSignal`. Cancellation returns
   the shared non-retryable `operation_cancelled` result error.
 - Contract corrections go through the F1 owner. Component branches do not copy
   or edit shared contracts.
+- The executable field and control matrix, including canonical synthetic IDs,
+  is frozen in `docs/s1-field-flow.md` and
+  `src/testing/contracts/field-flow-cases.ts`.

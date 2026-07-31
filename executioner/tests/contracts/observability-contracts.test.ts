@@ -12,22 +12,22 @@ import {
 
 test("events use closed coordinates and a factual source reference", () => {
   const event = parseEventEnvelope({
-    schemaVersion: 1,
+    schemaVersion: 2,
     eventId: "event-1",
-    journeyId: "journey-1",
+    journeyId: "journey_0123456789abcdef",
     component: "F4",
     phase: "intake",
     step: "validate",
     kind: "step_completed",
     at: "2026-07-30T12:00:00.000Z",
-    source: { kind: "operation", id: "operation-1" },
+    source: { kind: "operation", id: "operation_0123456789abcdef" },
   });
 
   assert.ok(phaseIds.includes(event.phase));
   assert.ok(stepIds.includes(event.step));
   assert.deepEqual(event.source, {
     kind: "operation",
-    id: "operation-1",
+    id: "operation_0123456789abcdef",
   });
   assert.deepEqual(
     serializedSchemas.eventEnvelope.properties.phase.enum,
@@ -41,13 +41,13 @@ test("events use closed coordinates and a factual source reference", () => {
 
 test("failure cause is optional, separate, and explicitly verified", () => {
   const observed = parseErrorEnvelope({
-    schemaVersion: 1,
+    schemaVersion: 2,
     code: "browser_timeout",
     component: "F3",
     phase: "browser",
     step: "observe",
     retryable: true,
-    source: { kind: "operation", id: "operation-1" },
+    source: { kind: "operation", id: "operation_0123456789abcdef" },
   });
   assert.equal(observed.cause, undefined);
 

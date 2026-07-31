@@ -5,14 +5,33 @@ import {
   contractFixtures,
   createBrowserSessionFake,
 } from "../../../../src/testing/contracts/index.ts";
+import {
+  browserPageId,
+  admitContractSnapshot,
+  bindAdmissionRequest,
+  consumeBrowserMutationAdmission,
+  consumeBrowserNavigationAdmission,
+  createGeneratedIdAllocator,
+  generatedJourneyId,
+  generatedSessionId,
+  generatedOperationId,
+  guardRevision,
+} from "../../../../src/contracts/index.ts";
 
 test("a browser consumer can exercise every shared fake operation", async () => {
+  const ids = createGeneratedIdAllocator({
+    next: () => "0123456789abcdef",
+  });
+  const sessionId = generatedSessionId(ids);
+  if (!sessionId.ok) throw new Error("test session allocation failed");
+  const journeyId = generatedJourneyId(ids);
+  if (!journeyId.ok) throw new Error("test journey allocation failed");
   const harness = createBrowserSessionFake({
-    start: (request) => ({
+    start: () => ({
       ok: true,
       value: {
-        sessionId: `session:${request.journeyId}`,
-        pageId: "page:account",
+        sessionId: sessionId.value,
+        pageId: browserPageId("page-account"),
       },
     }),
     observe: (request) => ({
@@ -23,27 +42,29 @@ test("a browser consumer can exercise every shared fake operation", async () => 
         pageId: request.pageId,
       },
     }),
-    mutate: (request) => ({
-      ok: true,
-      value: {
-        operationId: request.operationId,
-        pageId: request.pageId,
-        attempted: true,
-      },
-    }),
-    navigate: (request) => ({
-      ok: true,
-      value: {
-        operationId: request.operationId,
-        fromPageId: request.pageId,
-        pageId: "page:profile",
-      },
-    }),
+    mutate: (request) => {
+      const consumed = consumeBrowserMutationAdmission(request);
+      if (!consumed.ok) return consumed;
+      const effect = consumed.value.effect;
+      return { ok: true, value: { operationId: effect.operationId, pageId: effect.pageId, attempted: true } };
+    },
+    navigate: (request) => {
+      const consumed = consumeBrowserNavigationAdmission(request);
+      if (!consumed.ok) return consumed;
+      const effect = consumed.value.effect;
+      return {
+        ok: true,
+        value: { operationId: effect.operationId, fromPageId: effect.pageId, pageId: browserPageId("page-profile") },
+      };
+    },
     close: () => ({ ok: true, value: undefined }),
   });
   const signal = new AbortController().signal;
   const started = await harness.port.start(
-    { journeyId: "journey-1", target: "https://fixture.invalid/account" },
+    {
+      journeyId: journeyId.value,
+      target: "https://fixture.invalid/account",
+    },
     signal,
   );
   assert.equal(started.ok, true);
@@ -51,22 +72,44 @@ test("a browser consumer can exercise every shared fake operation", async () => 
     return;
   }
   const coordinates = started.value;
+  const revision = guardRevision("guard-browser-consumer");
+  const mutationOperationId = generatedOperationId("operation_0123456789abcdef");
+  const mutationAdmission = admitContractSnapshot(
+    {
+      policyRevision: revision,
+      capability: "field_mutation",
+      effect: {
+        kind: "browser_mutation",
+        ...coordinates,
+        operationId: mutationOperationId,
+        mutation: { kind: "set_text", target: contractFixtures.field.target, text: "Synthetic" },
+      },
+    },
+    "safety",
+    { journeyId: journeyId.value, attemptId: mutationOperationId, guardRevision: revision },
+  );
+  if (!mutationAdmission.ok) throw new Error("test mutation admission failed");
+  const navigationOperationId = generatedOperationId("operation_fedcba9876543210");
+  const navigationAdmission = admitContractSnapshot(
+    {
+      policyRevision: revision,
+      capability: "navigate_next",
+      effect: { kind: "browser_navigation", ...coordinates, operationId: navigationOperationId, action: "next" },
+    },
+    "safety",
+    { journeyId: journeyId.value, attemptId: navigationOperationId, guardRevision: revision },
+  );
+  if (!navigationAdmission.ok) throw new Error("test navigation admission failed");
+  assert.notEqual(mutationAdmission.value.permit, navigationAdmission.value.permit);
+  assert.notEqual(mutationAdmission.value.attemptId, navigationAdmission.value.attemptId);
 
   await harness.port.observe(coordinates, signal);
   await harness.port.mutate(
-    {
-      ...coordinates,
-      operationId: "operation-1",
-      mutation: {
-        kind: "type",
-        target: contractFixtures.field.target,
-        text: "Synthetic",
-      },
-    },
+    bindAdmissionRequest(mutationAdmission.value),
     signal,
   );
   await harness.port.navigate(
-    { ...coordinates, operationId: "operation-2", action: "next" },
+    bindAdmissionRequest(navigationAdmission.value),
     signal,
   );
   await harness.port.close({ sessionId: coordinates.sessionId }, signal);

@@ -1,11 +1,25 @@
 import {
   booleanProfileFactIds,
+  browserPageId,
+  eventId,
+  generatedEvidenceId,
+  fixturePageId,
+  fixtureRunId,
+  fixtureSemanticHash,
+  generatedOperationId,
+  journeyId,
   journeyBootstrapReferenceKeys,
+  mcpRequestId,
   numberProfileFactIds,
   phaseIds,
+  stableErrorPolicy,
   stepIds,
   textProfileFactIds,
+  upstreamJobId,
+  upstreamProfileId,
+  upstreamResumeId,
 } from "./types.ts";
+import { copyContractDataGraph } from "./admission.ts";
 import type {
   ApplicantProfile,
   ComponentId,
@@ -21,7 +35,17 @@ import type {
   TerminalResult,
 } from "./types.ts";
 
-export const SERIALIZED_CONTRACT_VERSION = 1 as const;
+export const SERIALIZED_CONTRACT_VERSION = 2 as const;
+export const serializedContractVersions = {
+  fixtureManifest: 2,
+  durableJourneyState: 2,
+  eventEnvelope: 2,
+  errorEnvelope: 2,
+  evidenceManifest: 2,
+  terminalResult: 2,
+  mcpRequest: 2,
+  mcpResponse: 2,
+} as const;
 
 export type ContractParseErrorCode =
   | "invalid_type"
@@ -83,6 +107,19 @@ function string(value: unknown, path: string): string {
   return value;
 }
 
+function identifier<T>(
+  value: unknown,
+  path: string,
+  parse: (candidate: string) => T,
+): T {
+  const candidate = string(value, path);
+  try {
+    return parse(candidate);
+  } catch {
+    throw new ContractParseError("invalid_value", path);
+  }
+}
+
 function boolean(value: unknown, path: string): boolean {
   if (typeof value !== "boolean") {
     throw new ContractParseError("invalid_type", path);
@@ -126,12 +163,13 @@ function versioned(
   path: string,
   required: readonly string[],
   optional: readonly string[] = [],
+  expectedVersion: number = SERIALIZED_CONTRACT_VERSION,
 ): JsonObject {
   const result = exact(value, path, ["schemaVersion", ...required], optional);
   if (typeof result.schemaVersion !== "number") {
     throw new ContractParseError("invalid_type", `${path}.schemaVersion`);
   }
-  if (result.schemaVersion !== SERIALIZED_CONTRACT_VERSION) {
+  if (result.schemaVersion !== expectedVersion) {
     throw new ContractParseError(
       "incompatible_version",
       `${path}.schemaVersion`,
@@ -140,14 +178,25 @@ function versioned(
   return result;
 }
 
+function admittedSerializedSnapshot(value: unknown): unknown {
+  const copied = copyContractDataGraph(value);
+  if (!copied.ok) {
+    throw new ContractParseError("invalid_type", "$");
+  }
+  return copied.value;
+}
+
 function parseSourceReference(value: unknown, path: string): void {
   const source = exact(value, path, ["kind", "id"]);
-  oneOf(
+  const kind = oneOf(
     source.kind,
     ["operation", "event", "evidence", "fixture"],
     `${path}.kind`,
   );
-  string(source.id, `${path}.id`);
+  if (kind === "operation") identifier(source.id, `${path}.id`, generatedOperationId);
+  else if (kind === "event") identifier(source.id, `${path}.id`, eventId);
+  else if (kind === "evidence") identifier(source.id, `${path}.id`, generatedEvidenceId);
+  else identifier(source.id, `${path}.id`, fixtureRunId);
 }
 
 function parseVerifiedCause(value: unknown, path: string): void {
@@ -179,68 +228,9 @@ const journeyStatuses = [
   "failed",
 ] as const satisfies readonly JourneyStatus[];
 
-const stableErrorCodes = [
-  "operation_cancelled",
-  "fixture_not_found",
-  "fixture_already_started",
-  "fixture_transition_illegal",
-  "fixture_transition_replayed",
-  "fixture_timeout",
-  "browser_target_invalid",
-  "browser_page_owned",
-  "browser_session_missing",
-  "browser_target_stale",
-  "browser_target_ambiguous",
-  "browser_operation_replayed",
-  "browser_timeout",
-  "journey_input_invalid",
-  "resume_identity_mismatch",
-  "profile_missing",
-  "profile_revision_mismatch",
-  "journey_state_invalid",
-  "journey_transition_illegal",
-  "journey_revision_conflict",
-  "journey_state_unavailable",
-  "page_observation_invalid",
-  "question_unknown",
-  "question_ambiguous",
-  "protected_answer_denied",
-  "driver_intent_invalid",
-  "driver_behavior_unsupported",
-  "driver_target_invalid",
-  "driver_operation_replayed",
-  "verification_input_invalid",
-  "verification_timeout",
-  "page_incomplete",
-  "navigation_illegal",
-  "navigation_uncertain",
-  "journey_operation_replayed",
-  "journey_not_found",
-  "journey_already_terminal",
-  "journey_busy",
-  "journey_retry_exhausted",
-  "mcp_request_invalid",
-  "mcp_method_unknown",
-  "mcp_internal_error",
-  "event_invalid",
-  "event_store_unavailable",
-  "progress_not_found",
-  "failure_context_invalid",
-  "notification_unavailable",
-  "credential_forbidden",
-  "token_forbidden",
-  "raw_text_forbidden",
-  "selector_forbidden",
-  "policy_override_forbidden",
-  "submit_forbidden",
-  "payload_too_large",
-  "evidence_denied",
-  "evidence_limit_exceeded",
-  "evidence_unavailable",
-  "model_request_denied",
-  "model_result_denied",
-  "model_unavailable",
-] as const satisfies readonly StableErrorCode[];
+const stableErrorCodes = Object.freeze(
+  Object.keys(stableErrorPolicy) as StableErrorCode[],
+);
 
 type SameUnion<A, B> =
   [A] extends [B] ? ([B] extends [A] ? true : false) : false;
@@ -260,7 +250,8 @@ export const serializedContractCoverage = {
 } as const;
 
 export function parseFixtureManifest(value: unknown): FixtureManifest {
-  const manifest = versioned(value, "$", ["fixtureSet", "pages"]);
+  const snapshot = admittedSerializedSnapshot(value);
+  const manifest = versioned(snapshot, "$", ["fixtureSet", "pages"]);
   oneOf(manifest.fixtureSet, ["workday-s1"], "$.fixtureSet");
   for (const [index, item] of array(manifest.pages, "$.pages").entries()) {
     const page = exact(item, `$.pages[${index}]`, [
@@ -268,33 +259,35 @@ export function parseFixtureManifest(value: unknown): FixtureManifest {
       "path",
       "semanticHash",
     ]);
-    string(page.id, `$.pages[${index}].id`);
+    identifier(page.id, `$.pages[${index}].id`, fixturePageId);
     string(page.path, `$.pages[${index}].path`);
-    string(page.semanticHash, `$.pages[${index}].semanticHash`);
+    identifier(page.semanticHash, `$.pages[${index}].semanticHash`, fixtureSemanticHash);
   }
-  return value as FixtureManifest;
+  return snapshot as FixtureManifest;
 }
 
 export function parseDurableJourneyState(
   value: unknown,
 ): DurableJourneyState {
-  const state = versioned(value, "$", [
+  const snapshot = admittedSerializedSnapshot(value);
+  const state = versioned(snapshot, "$", [
     "journeyId",
     "status",
     "pageId",
     "revision",
   ]);
-  string(state.journeyId, "$.journeyId");
+  identifier(state.journeyId, "$.journeyId", journeyId);
   oneOf(state.status, journeyStatuses, "$.status");
   if (state.pageId !== null) {
-    string(state.pageId, "$.pageId");
+    identifier(state.pageId, "$.pageId", browserPageId);
   }
   integer(state.revision, "$.revision");
-  return value as DurableJourneyState;
+  return snapshot as DurableJourneyState;
 }
 
 export function parseEventEnvelope(value: unknown): EventEnvelope {
-  const event = versioned(value, "$", [
+  const snapshot = admittedSerializedSnapshot(value);
+  const event = versioned(snapshot, "$", [
     "eventId",
     "journeyId",
     "component",
@@ -304,8 +297,8 @@ export function parseEventEnvelope(value: unknown): EventEnvelope {
     "at",
     "source",
   ]);
-  string(event.eventId, "$.eventId");
-  string(event.journeyId, "$.journeyId");
+  identifier(event.eventId, "$.eventId", eventId);
+  identifier(event.journeyId, "$.journeyId", journeyId);
   oneOf(event.component, componentIds, "$.component");
   oneOf(event.phase, phaseIds, "$.phase");
   oneOf(event.step, stepIds, "$.step");
@@ -316,33 +309,41 @@ export function parseEventEnvelope(value: unknown): EventEnvelope {
   );
   string(event.at, "$.at");
   parseSourceReference(event.source, "$.source");
-  return value as EventEnvelope;
+  return snapshot as EventEnvelope;
 }
 
 export function parseErrorEnvelope(value: unknown): ErrorEnvelope {
-  const error = versioned(value, "$", [
+  const snapshot = admittedSerializedSnapshot(value);
+  const error = versioned(snapshot, "$", [
     "code",
     "component",
     "phase",
     "step",
     "retryable",
     "source",
-  ], ["cause"]);
-  oneOf(error.code, stableErrorCodes, "$.code");
-  oneOf(error.component, componentIds, "$.component");
+  ], ["cause"], serializedContractVersions.errorEnvelope);
+  const code = oneOf(error.code, stableErrorCodes, "$.code");
+  const component = oneOf(error.component, componentIds, "$.component");
+  if (component !== stableErrorPolicy[code].owner) {
+    throw new ContractParseError("invalid_value", "$.component");
+  }
   oneOf(error.phase, phaseIds, "$.phase");
   oneOf(error.step, stepIds, "$.step");
-  boolean(error.retryable, "$.retryable");
+  const retryable = boolean(error.retryable, "$.retryable");
+  if (retryable !== stableErrorPolicy[code].retryable) {
+    throw new ContractParseError("invalid_value", "$.retryable");
+  }
   parseSourceReference(error.source, "$.source");
   if (Object.hasOwn(error, "cause")) {
     parseVerifiedCause(error.cause, "$.cause");
   }
-  return value as ErrorEnvelope;
+  return snapshot as ErrorEnvelope;
 }
 
 export function parseEvidenceManifest(value: unknown): EvidenceManifest {
-  const manifest = versioned(value, "$", ["journeyId", "records"]);
-  string(manifest.journeyId, "$.journeyId");
+  const snapshot = admittedSerializedSnapshot(value);
+  const manifest = versioned(snapshot, "$", ["journeyId", "records"]);
+  identifier(manifest.journeyId, "$.journeyId", journeyId);
   for (const [index, item] of array(manifest.records, "$.records").entries()) {
     const evidence = exact(item, `$.records[${index}]`, [
       "id",
@@ -352,7 +353,7 @@ export function parseEvidenceManifest(value: unknown): EvidenceManifest {
       "step",
       "sha256",
     ]);
-    string(evidence.id, `$.records[${index}].id`);
+    identifier(evidence.id, `$.records[${index}].id`, generatedEvidenceId);
     oneOf(
       evidence.kind,
       ["semantic_snapshot", "operation_receipt", "verification"],
@@ -365,9 +366,11 @@ export function parseEvidenceManifest(value: unknown): EvidenceManifest {
     );
     oneOf(evidence.phase, phaseIds, `$.records[${index}].phase`);
     oneOf(evidence.step, stepIds, `$.records[${index}].step`);
-    string(evidence.sha256, `$.records[${index}].sha256`);
+    if (!/^[a-f0-9]{64}$/u.test(string(evidence.sha256, `$.records[${index}].sha256`))) {
+      throw new ContractParseError("invalid_value", `$.records[${index}].sha256`);
+    }
   }
-  return value as EvidenceManifest;
+  return snapshot as EvidenceManifest;
 }
 
 function parseMcpParams(
@@ -376,31 +379,37 @@ function parseMcpParams(
 ): void {
   if (method === "start_journey") {
     const params = exact(value, "$.params", journeyBootstrapReferenceKeys);
-    for (const key of Object.keys(params)) {
-      string(params[key], `$.params.${key}`);
-    }
+    identifier(params.jobId, "$.params.jobId", upstreamJobId);
+    identifier(params.resumeId, "$.params.resumeId", upstreamResumeId);
+    identifier(params.profileId, "$.params.profileId", upstreamProfileId);
     return;
   }
   if (method === "cancel_journey") {
-    const params = exact(value, "$.params", ["operationId", "journeyId"]);
-    string(params.operationId, "$.params.operationId");
-    string(params.journeyId, "$.params.journeyId");
+    const params = exact(value, "$.params", ["journeyId"]);
+    identifier(params.journeyId, "$.params.journeyId", journeyId);
     return;
   }
   const params = exact(value, "$.params", ["journeyId"]);
-  string(params.journeyId, "$.params.journeyId");
+  identifier(params.journeyId, "$.params.journeyId", journeyId);
 }
 
 export function parseMcpRequest(value: unknown): McpRequest {
-  const request = versioned(value, "$", ["requestId", "method", "params"]);
-  string(request.requestId, "$.requestId");
+  const snapshot = admittedSerializedSnapshot(value);
+  const request = versioned(
+    snapshot,
+    "$",
+    ["requestId", "method", "params"],
+    [],
+    serializedContractVersions.mcpRequest,
+  );
+  identifier(request.requestId, "$.requestId", mcpRequestId);
   const method = oneOf(
     request.method,
     ["start_journey", "cancel_journey", "journey_status", "journey_result"],
     "$.method",
   );
   parseMcpParams(method, request.params);
-  return value as McpRequest;
+  return snapshot as McpRequest;
 }
 
 function parseMcpResult(value: unknown): void {
@@ -416,8 +425,8 @@ function parseMcpResult(value: unknown): void {
       "operationId",
       "journeyId",
     ]);
-    string(accepted.operationId, "$.result.operationId");
-    string(accepted.journeyId, "$.result.journeyId");
+    identifier(accepted.operationId, "$.result.operationId", generatedOperationId);
+    identifier(accepted.journeyId, "$.result.journeyId", journeyId);
     return;
   }
   if (kind === "status") {
@@ -427,7 +436,7 @@ function parseMcpResult(value: unknown): void {
       "status",
       "completedSteps",
     ]);
-    string(progress.journeyId, "$.result.progress.journeyId");
+    identifier(progress.journeyId, "$.result.progress.journeyId", journeyId);
     oneOf(progress.status, journeyStatuses, "$.result.progress.status");
     integer(progress.completedSteps, "$.result.progress.completedSteps");
     return;
@@ -437,11 +446,15 @@ function parseMcpResult(value: unknown): void {
 }
 
 export function parseMcpResponse(value: unknown): McpResponse {
-  const response = versioned(value, "$", ["requestId", "ok"], [
-    "result",
-    "error",
-  ]);
-  string(response.requestId, "$.requestId");
+  const snapshot = admittedSerializedSnapshot(value);
+  const response = versioned(
+    snapshot,
+    "$",
+    ["requestId", "ok"],
+    ["result", "error"],
+    serializedContractVersions.mcpResponse,
+  );
+  identifier(response.requestId, "$.requestId", mcpRequestId);
   const ok = boolean(response.ok, "$.ok");
   if (ok) {
     if (!Object.hasOwn(response, "result")) {
@@ -460,16 +473,17 @@ export function parseMcpResponse(value: unknown): McpResponse {
     }
     parseErrorEnvelope(response.error);
   }
-  return value as McpResponse;
+  return snapshot as McpResponse;
 }
 
 export function parseTerminalResult(value: unknown): TerminalResult {
-  const result = versioned(value, "$", [
+  const snapshot = admittedSerializedSnapshot(value);
+  const result = versioned(snapshot, "$", [
     "journeyId",
     "status",
     "completedPages",
-  ], ["errorCode"]);
-  string(result.journeyId, "$.journeyId");
+  ], ["errorCode"], serializedContractVersions.terminalResult);
+  identifier(result.journeyId, "$.journeyId", journeyId);
   const status = oneOf(
     result.status,
     ["review_reached", "cancelled", "failed"],
@@ -484,12 +498,13 @@ export function parseTerminalResult(value: unknown): TerminalResult {
   } else if (Object.hasOwn(result, "errorCode")) {
     throw new ContractParseError("extra_key", "$.errorCode");
   }
-  return value as TerminalResult;
+  return snapshot as TerminalResult;
 }
 
 export function parseApplicantProfile(value: unknown): ApplicantProfile {
-  const profile = exact(value, "$", ["profileId", "revision", "facts"]);
-  string(profile.profileId, "$.profileId");
+  const snapshot = admittedSerializedSnapshot(value);
+  const profile = exact(snapshot, "$", ["profileId", "revision", "facts"]);
+  identifier(profile.profileId, "$.profileId", upstreamProfileId);
   integer(profile.revision, "$.revision");
   for (const [index, item] of array(profile.facts, "$.facts").entries()) {
     const fact = exact(item, `$.facts[${index}]`, [
@@ -544,16 +559,52 @@ export function parseApplicantProfile(value: unknown): ApplicantProfile {
       `$.facts[${index}].provenance`,
     );
   }
-  return value as ApplicantProfile;
+  return snapshot as ApplicantProfile;
 }
 
 const nonEmptyString = { type: "string", minLength: 1 } as const;
+const opaqueIdentifierSchema = {
+  type: "string",
+  minLength: 1,
+  maxLength: 128,
+  pattern: "^[A-Za-z0-9][A-Za-z0-9._-]*$",
+} as const;
+const journeyIdentifierSchema = {
+  type: "string",
+  maxLength: 72,
+  pattern: "^journey_[A-Za-z0-9_-]{16,64}$",
+} as const;
+const operationIdentifierSchema = {
+  type: "string",
+  maxLength: 74,
+  pattern: "^operation_[A-Za-z0-9_-]{16,64}$",
+} as const;
+const evidenceIdentifierSchema = {
+  type: "string",
+  maxLength: 73,
+  pattern: "^evidence_[A-Za-z0-9_-]{16,64}$",
+} as const;
+const sha256Schema = {
+  type: "string",
+  minLength: 64,
+  maxLength: 64,
+  pattern: "^[a-f0-9]{64}$",
+} as const;
 const nonNegativeInteger = {
   type: "integer",
   minimum: 0,
   maximum: Number.MAX_SAFE_INTEGER,
 } as const;
 const schemaVersion = { const: SERIALIZED_CONTRACT_VERSION } as const;
+const mcpSchemaVersion = {
+  const: serializedContractVersions.mcpRequest,
+} as const;
+const errorSchemaVersion = {
+  const: serializedContractVersions.errorEnvelope,
+} as const;
+const terminalSchemaVersion = {
+  const: serializedContractVersions.terminalResult,
+} as const;
 
 const sourceReferenceSchema = {
   type: "object",
@@ -561,8 +612,15 @@ const sourceReferenceSchema = {
   required: ["kind", "id"],
   properties: {
     kind: { enum: ["operation", "event", "evidence", "fixture"] },
-    id: nonEmptyString,
+    id: opaqueIdentifierSchema,
   },
+  allOf: [{
+    if: { properties: { kind: { const: "operation" } } },
+    then: { properties: { id: operationIdentifierSchema } },
+  }, {
+    if: { properties: { kind: { const: "evidence" } } },
+    then: { properties: { id: evidenceIdentifierSchema } },
+  }],
 } as const;
 
 const verifiedCauseSchema = {
@@ -589,7 +647,7 @@ const errorEnvelopeSchema = {
     "source",
   ],
   properties: {
-    schemaVersion,
+    schemaVersion: errorSchemaVersion,
     code: { enum: stableErrorCodes },
     component: { enum: componentIds },
     phase: { enum: phaseIds },
@@ -605,8 +663,8 @@ const terminalResultSchema = {
   additionalProperties: false,
   required: ["schemaVersion", "journeyId", "status", "completedPages"],
   properties: {
-    schemaVersion,
-    journeyId: nonEmptyString,
+    schemaVersion: terminalSchemaVersion,
+    journeyId: journeyIdentifierSchema,
     status: { enum: ["review_reached", "cancelled", "failed"] },
     completedPages: nonNegativeInteger,
     errorCode: { enum: stableErrorCodes },
@@ -635,9 +693,9 @@ export const serializedSchemas = {
           additionalProperties: false,
           required: ["id", "path", "semanticHash"],
           properties: {
-            id: nonEmptyString,
+            id: opaqueIdentifierSchema,
             path: nonEmptyString,
-            semanticHash: nonEmptyString,
+            semanticHash: opaqueIdentifierSchema,
           },
         },
       },
@@ -655,9 +713,9 @@ export const serializedSchemas = {
     ],
     properties: {
       schemaVersion,
-      journeyId: nonEmptyString,
+      journeyId: journeyIdentifierSchema,
       status: { enum: journeyStatuses },
-      pageId: { type: ["string", "null"], minLength: 1 },
+      pageId: { type: ["string", "null"], minLength: 1, maxLength: 128, pattern: "^[A-Za-z0-9][A-Za-z0-9._-]*$" },
       revision: nonNegativeInteger,
     },
   },
@@ -677,8 +735,8 @@ export const serializedSchemas = {
     ],
     properties: {
       schemaVersion,
-      eventId: nonEmptyString,
-      journeyId: nonEmptyString,
+      eventId: opaqueIdentifierSchema,
+      journeyId: journeyIdentifierSchema,
       component: { enum: componentIds },
       phase: { enum: phaseIds },
       step: { enum: stepIds },
@@ -701,7 +759,7 @@ export const serializedSchemas = {
     required: ["schemaVersion", "journeyId", "records"],
     properties: {
       schemaVersion,
-      journeyId: nonEmptyString,
+      journeyId: journeyIdentifierSchema,
       records: {
         type: "array",
         items: {
@@ -709,7 +767,7 @@ export const serializedSchemas = {
           additionalProperties: false,
           required: ["id", "kind", "component", "phase", "step", "sha256"],
           properties: {
-            id: nonEmptyString,
+            id: evidenceIdentifierSchema,
             kind: {
               enum: [
                 "semantic_snapshot",
@@ -720,7 +778,7 @@ export const serializedSchemas = {
             component: { enum: componentIds },
             phase: { enum: phaseIds },
             step: { enum: stepIds },
-            sha256: nonEmptyString,
+            sha256: sha256Schema,
           },
         },
       },
@@ -731,8 +789,8 @@ export const serializedSchemas = {
     additionalProperties: false,
     required: ["schemaVersion", "requestId", "method", "params"],
     properties: {
-      schemaVersion,
-      requestId: nonEmptyString,
+      schemaVersion: mcpSchemaVersion,
+      requestId: opaqueIdentifierSchema,
       method: {
         enum: [
           "start_journey",
@@ -752,10 +810,9 @@ export const serializedSchemas = {
             additionalProperties: false,
             required: journeyBootstrapReferenceKeys,
             properties: {
-              operationId: nonEmptyString,
-              jobId: nonEmptyString,
-              resumeId: nonEmptyString,
-              profileId: nonEmptyString,
+              jobId: opaqueIdentifierSchema,
+              resumeId: opaqueIdentifierSchema,
+              profileId: opaqueIdentifierSchema,
             },
           },
         },
@@ -766,10 +823,9 @@ export const serializedSchemas = {
           params: {
             type: "object",
             additionalProperties: false,
-            required: ["operationId", "journeyId"],
+            required: ["journeyId"],
             properties: {
-              operationId: nonEmptyString,
-              journeyId: nonEmptyString,
+              journeyId: journeyIdentifierSchema,
             },
           },
         },
@@ -781,7 +837,7 @@ export const serializedSchemas = {
             type: "object",
             additionalProperties: false,
             required: ["journeyId"],
-            properties: { journeyId: nonEmptyString },
+            properties: { journeyId: journeyIdentifierSchema },
           },
         },
       },
@@ -792,8 +848,8 @@ export const serializedSchemas = {
     additionalProperties: false,
     required: ["schemaVersion", "requestId", "ok"],
     properties: {
-      schemaVersion,
-      requestId: nonEmptyString,
+      schemaVersion: mcpSchemaVersion,
+      requestId: opaqueIdentifierSchema,
       ok: { type: "boolean" },
       result: {
         oneOf: [
@@ -803,8 +859,8 @@ export const serializedSchemas = {
             required: ["kind", "operationId", "journeyId"],
             properties: {
               kind: { const: "accepted" },
-              operationId: nonEmptyString,
-              journeyId: nonEmptyString,
+              operationId: operationIdentifierSchema,
+              journeyId: journeyIdentifierSchema,
             },
           },
           {
@@ -818,7 +874,7 @@ export const serializedSchemas = {
                 additionalProperties: false,
                 required: ["journeyId", "status", "completedSteps"],
                 properties: {
-                  journeyId: nonEmptyString,
+                  journeyId: journeyIdentifierSchema,
                   status: { enum: journeyStatuses },
                   completedSteps: nonNegativeInteger,
                 },

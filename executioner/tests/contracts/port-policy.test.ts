@@ -7,14 +7,13 @@ import {
   admissionDecisionPolicy,
   type CancellationError,
   type FixtureRuntime,
+  fixtureRunId,
   inProcessCancellationPolicy,
 } from "../../src/contracts/index.ts";
+import { contractFixtures } from "../../src/testing/contracts/fixtures.ts";
 
 test("privacy and safety denial use only the port error channel", () => {
-  const admitted = {
-    kind: "admitted",
-    policyRevision: "policy-1",
-  } satisfies AdmissionDecision;
+  const admitted = contractFixtures.privacyAdmission satisfies AdmissionDecision;
 
   const denied: AdmissionDecision = {
     // @ts-expect-error a denial is a PrivacyDenial/SafetyDenial port error
@@ -55,7 +54,7 @@ function declareFixtureCalls(): void {
     // @ts-expect-error AbortSignal is required for every port operation
     void fixture.start({ fixtureRunId: "fixture-1" });
     void fixture.start(
-      { fixtureRunId: "fixture-1" },
+      { fixtureRunId: fixtureRunId("fixture-1") },
       AbortSignal.abort(),
     );
   }

@@ -2,7 +2,17 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import {
+  browserPageId,
+  consumeBrowserMutationAdmission,
+  consumeBrowserNavigationAdmission,
+  consumeEvidenceAdmission,
+  createGeneratedIdAllocator,
+  fixturePageId,
+  fixtureSemanticHash,
+  generatedJourneyId,
+  generatedSessionId,
   portNames,
+  type PortResult,
   type BrowserSession,
   type EventSink,
   type EvidenceStore,
@@ -12,7 +22,6 @@ import {
   type JourneyIntake,
   type JourneyStateStore,
   type McpJourneyApi,
-  type ModelController,
   type ProgressReader,
 } from "../../../src/contracts/index.ts";
 import {
@@ -22,6 +31,11 @@ import {
   contractOperationCases,
   contractPortOperations,
 } from "../../../src/testing/contracts/index.ts";
+
+function generatedValue<T>(result: PortResult<T, unknown>): T {
+  if (!result.ok) throw new Error("test id allocation failed");
+  return result.value;
+}
 
 test("the shared kit has one narrow fake for every frozen port", () => {
   assert.deepEqual(Object.keys(contractFakeFactories), portNames);
@@ -207,10 +221,6 @@ test("synthetic success cases reject declared live provider errors", async () =>
       _request: Parameters<FixtureRuntime["start"]>[0],
       signal: AbortSignal,
     ) => declaredFailure(signal),
-    transition: async (
-      _request: Parameters<FixtureRuntime["transition"]>[0],
-      signal: AbortSignal,
-    ) => declaredFailure(signal),
     reset: async (
       _request: Parameters<FixtureRuntime["reset"]>[0],
       signal: AbortSignal,
@@ -233,18 +243,12 @@ test("conformance accepts runtime-owned F2 origin and hashes", async () => {
       result(signal, {
         fixtureRunId: request.fixtureRunId,
         origin: "http://127.0.0.1:43123",
-        pageId: "runtime-account",
-      }),
-    transition: async (request, signal) =>
-      result(signal, {
-        transitionId: request.transitionId,
-        pageId: request.toPageId,
-        semanticHash: `sha256:${request.toPageId}`,
+        pageId: fixturePageId("runtime-account"),
       }),
     reset: async (request, signal) =>
       result(signal, {
         fixtureRunId: request.fixtureRunId,
-        semanticHash: "sha256:runtime-reset",
+        semanticHash: fixtureSemanticHash("sha256.runtime-reset"),
       }),
     setFault: async (_request, signal) => result(signal, undefined),
   } satisfies FixtureRuntime;
@@ -255,8 +259,11 @@ test("conformance accepts runtime-owned F2 origin and hashes", async () => {
 });
 
 test("conformance chains runtime-owned F3 session and page IDs", async () => {
-  const sessionId = "runtime-session-7";
-  const pageId = "runtime-page-11";
+  const ids = createGeneratedIdAllocator({
+    next: () => "abcdef0123456789",
+  });
+  const sessionId = generatedValue(generatedSessionId(ids));
+  const pageId = browserPageId("runtime-page-11");
   const provider = {
     start: async (_request, signal) =>
       result(signal, { sessionId, pageId }),
@@ -266,18 +273,26 @@ test("conformance chains runtime-owned F3 session and page IDs", async () => {
         sessionId: request.sessionId,
         pageId: request.pageId,
       }),
-    mutate: async (request, signal) =>
-      result(signal, {
-        operationId: request.operationId,
-        pageId: request.pageId,
+    mutate: async (request, signal) => {
+      if (signal.aborted) return { ok: false, error: { code: "operation_cancelled", retryable: false } } as const;
+      const consumed = consumeBrowserMutationAdmission(request);
+      if (!consumed.ok) return consumed;
+      return result(signal, {
+        operationId: consumed.value.effect.operationId,
+        pageId: consumed.value.effect.pageId,
         attempted: true,
-      }),
-    navigate: async (request, signal) =>
-      result(signal, {
-        operationId: request.operationId,
-        fromPageId: request.pageId,
-        pageId: "runtime-page-12",
-      }),
+      });
+    },
+    navigate: async (request, signal) => {
+      if (signal.aborted) return { ok: false, error: { code: "operation_cancelled", retryable: false } } as const;
+      const consumed = consumeBrowserNavigationAdmission(request);
+      if (!consumed.ok) return consumed;
+      return result(signal, {
+        operationId: consumed.value.effect.operationId,
+        fromPageId: consumed.value.effect.pageId,
+        pageId: browserPageId("runtime-page-12"),
+      });
+    },
     close: async (_request, signal) => result(signal, undefined),
   } satisfies BrowserSession;
 
@@ -299,14 +314,16 @@ test("the F3 start target describes the frozen observation page", () => {
 });
 
 test("conformance accepts a generated F4 bootstrap journey", async () => {
-  const journeyId = "runtime-journey-41";
+  const journeyId = generatedValue(generatedJourneyId(
+    createGeneratedIdAllocator({ next: () => "abcdef0123456789" }),
+  ));
   const provider = {
     bootstrap: async (request, signal) =>
       result(signal, {
         journeyId,
         inputs: contractFixtures.journeyInputs,
         state: {
-          schemaVersion: 1,
+          schemaVersion: 2,
           journeyId,
           status: "ready",
           pageId: null,
@@ -325,17 +342,17 @@ test("conformance chains loaded F4 state into its transition", async () => {
     load: async (request, signal) =>
       result(signal, {
         state: {
-          schemaVersion: 1,
+          schemaVersion: 2,
           journeyId: request.journeyId,
           status: "running",
-          pageId: "runtime-page-3",
+          pageId: browserPageId("runtime-page-3"),
           revision: 3,
         },
       }),
     transition: async (request, signal) =>
       result(signal, {
         state: {
-          schemaVersion: 1,
+          schemaVersion: 2,
           journeyId: request.journeyId,
           status: request.status,
           pageId: request.pageId,
@@ -351,7 +368,9 @@ test("conformance chains loaded F4 state into its transition", async () => {
 });
 
 test("conformance chains a generated JourneyControl identity", async () => {
-  const journeyId = "runtime-control-9";
+  const journeyId = generatedValue(generatedJourneyId(
+    createGeneratedIdAllocator({ next: () => "fedcba9876543210" }),
+  ));
   let status: "running" | "cancelled" = "running";
   const provider = {
     start: async (request, signal) =>
@@ -378,7 +397,7 @@ test("conformance chains a generated JourneyControl identity", async () => {
     result: async (request, signal) => {
       assert.equal(request.journeyId, journeyId);
       return result(signal, {
-        schemaVersion: 1,
+        schemaVersion: 2,
         journeyId: request.journeyId,
         status: "cancelled",
         completedPages: 2,
@@ -398,13 +417,13 @@ test("conformance accepts runtime-owned terminal progress", async () => {
         throw new TypeError("journey_result request is required");
       }
       return result(signal, {
-        schemaVersion: 1 as const,
+        schemaVersion: 2 as const,
         requestId: request.requestId,
         ok: true as const,
         result: {
           kind: "terminal" as const,
           terminal: {
-            schemaVersion: 1 as const,
+            schemaVersion: 2 as const,
             journeyId: request.params.journeyId,
             status: "review_reached" as const,
             completedPages: 7,
@@ -426,13 +445,13 @@ test("conformance rejects an invented terminal error code", async () => {
       signal: AbortSignal,
     ) =>
       result(signal, {
-        schemaVersion: 1,
+        schemaVersion: 2,
         requestId: request.requestId,
         ok: true,
         result: {
           kind: "terminal",
           terminal: {
-            schemaVersion: 1,
+            schemaVersion: 2,
             journeyId: contractFixtures.journeyState.journeyId,
             status: "failed",
             completedPages: 1,
@@ -490,36 +509,26 @@ test("conformance accepts runtime-owned observability progress", async () => {
   );
 });
 
-test("conformance accepts runtime-owned evidence and model results", async () => {
+test("conformance accepts runtime-owned evidence results", async () => {
   const evidenceStore = {
-    write: async (request, signal) =>
-      result(signal, {
-        recordId: request.record.id,
+    write: async (request, signal) => {
+      if (signal.aborted) return { ok: false, error: { code: "operation_cancelled", retryable: false } } as const;
+      const consumed = consumeEvidenceAdmission(request);
+      if (!consumed.ok) return consumed;
+      return result(signal, {
+        recordId: consumed.value.record.id,
         written: true,
-      }),
+      });
+    },
     read: async (request, signal) =>
       result(signal, {
-        schemaVersion: 1 as const,
+        schemaVersion: 2 as const,
         journeyId: request.journeyId,
         records: [],
       }),
   } satisfies EvidenceStore;
-  const modelController = {
-    suggest: async (request, signal) =>
-      result(signal, {
-        attemptId: request.attemptId,
-        suggestion: {
-          kind: "question_hint" as const,
-          optionIds: [],
-        },
-      }),
-  } satisfies ModelController;
-
   await assert.doesNotReject(() =>
     assertProviderConformance("EvidenceStore", evidenceStore),
-  );
-  await assert.doesNotReject(() =>
-    assertProviderConformance("ModelController", modelController),
   );
 });
 
@@ -530,7 +539,7 @@ test("conformance rejects invented evidence kinds and coordinates", async () => 
       signal: AbortSignal,
     ) =>
       result(signal, {
-        recordId: request.record.id,
+        recordId: request.snapshot.record.id,
         written: true,
       }),
     read: async (
@@ -538,7 +547,7 @@ test("conformance rejects invented evidence kinds and coordinates", async () => 
       signal: AbortSignal,
     ) =>
       result(signal, {
-        schemaVersion: 1,
+        schemaVersion: 2,
         journeyId: request.journeyId,
         records: [
           {

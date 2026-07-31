@@ -1,9 +1,22 @@
 # C3 Stage 1 contract freeze
 
-The in-process contract source is frozen at Git revision
-`d95e845e61bcf0a030b3b07c6d6261e3d95c1fad`. The conformance suite rejects
-tracked changes and untracked files under `executioner/src/contracts` until
-this record is deliberately updated.
+Status: R2 draft, not accepted
+
+The historical R1 contract source is Git revision
+`d95e845e61bcf0a030b3b07c6d6261e3d95c1fad`. R2 amends that source and does
+not yet have an accepted F1 base. T8 records the accepted SHA and contract tree
+object IDs after authorized commit and review. Until then, no component may
+claim this draft as its accepted base.
+
+## Serialized versions
+
+All accepted serialized boundaries are schema version 2. Error envelopes and
+terminal results changed their closed stable-error enum. MCP request and
+response removed caller operation IDs and retain the bounded `requestId` as
+the sole caller idempotency key. Fixture manifests, durable journey state,
+event envelopes, and evidence manifests now enforce tighter bounded coordinate
+or generated-identifier grammars used by their TypeScript contracts. Those
+stricter grammars are also incompatible with their version 1 wire shapes.
 
 F2 through F11 must start from the final accepted F1 tip recorded in the Hunt
 handoff. That tip contains this contract revision and the shared test kit. A

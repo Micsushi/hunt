@@ -4,6 +4,7 @@ import { test } from "node:test";
 import {
   inProcessContractPolicy,
   portNames,
+  serializedContractVersions,
   serializedSchemas,
 } from "../../src/contracts/index.ts";
 import { componentBoundaries } from "../../src/contracts/ownership.ts";
@@ -31,9 +32,14 @@ test("only serialized Stage 1 boundaries export closed JSON Schemas", () => {
     "terminalResult",
   ]);
 
-  for (const schema of Object.values(serializedSchemas)) {
+  for (const [name, schema] of Object.entries(serializedSchemas)) {
     assert.equal(schema.type, "object");
     assert.equal(schema.additionalProperties, false);
-    assert.equal(schema.properties.schemaVersion.const, 1);
+    assert.equal(
+      schema.properties.schemaVersion.const,
+      serializedContractVersions[
+        name as keyof typeof serializedContractVersions
+      ],
+    );
   }
 });

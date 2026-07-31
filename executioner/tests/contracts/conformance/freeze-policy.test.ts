@@ -8,23 +8,22 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { join } from "node:path";
 import { test } from "node:test";
 
 import {
   assertFrozenContractTree,
-  frozenContractRevision,
+  contractRevisionStatus,
+  historicalContractRevision,
 } from "../../../src/testing/contracts/index.ts";
 
-test("the frozen revision matches the checked-in contracts and policy record", () => {
-  assert.match(frozenContractRevision, /^[0-9a-f]{40}$/u);
-  assert.match(
-    readFileSync("docs/contract-freeze.md", "utf8"),
-    new RegExp(frozenContractRevision, "u"),
-  );
-  assert.doesNotThrow(() =>
-    assertFrozenContractTree(frozenContractRevision, resolve("..")),
-  );
+test("the R2 draft records historical ancestry without claiming acceptance", () => {
+  assert.equal(contractRevisionStatus, "r2_draft");
+  assert.match(historicalContractRevision, /^[0-9a-f]{40}$/u);
+  const record = readFileSync("docs/contract-freeze.md", "utf8");
+  assert.match(record, new RegExp(historicalContractRevision, "u"));
+  assert.match(record, /Status: R2 draft, not accepted/u);
+  assert.doesNotMatch(record, /acceptedF1Base:\s*[0-9a-f]{40}/u);
 });
 
 test("the freeze gate rejects an untracked contract file", () => {

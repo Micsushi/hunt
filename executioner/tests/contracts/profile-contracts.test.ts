@@ -6,13 +6,14 @@ import {
   ContractParseError,
   parseApplicantProfile,
   profileFactIds,
+  upstreamProfileId,
 } from "../../src/contracts/index.ts";
 
 type ProfileFactId = ApplicantProfile["facts"][number]["factId"];
 
 test("ApplicantProfile has a closed credential-free fact catalog", () => {
   const profile = {
-    profileId: "profile-1",
+    profileId: upstreamProfileId("profile-1"),
     revision: 1,
     facts: [
       {

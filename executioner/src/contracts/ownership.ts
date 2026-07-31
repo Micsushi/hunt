@@ -51,24 +51,18 @@ export const componentBoundaries = [
         consumers: ["F12/F13 composition"],
         requests: [
           "FixtureStartRequest",
-          "FixtureTransitionRequest",
           "FixtureResetRequest",
           "FixtureFaultRequest",
         ],
-        results: [
-          "FixtureStartResult",
-          "FixtureTransitionResult",
-          "FixtureResetResult",
-        ],
+        results: ["FixtureStartResult", "FixtureResetResult"],
         errors: ["FixtureRuntimeError"],
         sideEffect:
-          "F2 owns fixture-server lifecycle, fixture transition state, reset, and fault activation.",
-        retry:
-          "Callers may retry start and reset after a timeout; transitions are never retried automatically.",
+          "F2 owns fixture-server lifecycle, reset, and fault activation.",
+        retry: "Callers may retry start and reset after a timeout.",
         cancellation:
           "Start accepts cancellation and stops only F2-owned server or state work.",
         idempotency:
-          "Start is keyed by fixture-run ID, reset is repeatable, and a transition ID applies at most once.",
+          "Start is keyed by fixture-run ID and reset is repeatable.",
       },
     ],
   },
@@ -108,7 +102,7 @@ export const componentBoundaries = [
         sideEffect:
           "F3 alone owns browser/page lifecycle, observation, mutation, navigation, and cleanup.",
         retry:
-          "F3 performs no policy retry; F9 may retry only contract-declared retryable operations.",
+          "F3 performs no policy retry; browser_timeout is legal only when F3 proves no browser side effect began; once an effect may have begun, F3 returns browser_effect_uncertain and invalidates the session.",
         cancellation:
           "Every bounded browser operation accepts cancellation and stops at its declared safe boundary.",
         idempotency:
@@ -362,8 +356,7 @@ export const componentBoundaries = [
           "The facade performs no retry; duplicate transport requests retain their request ID.",
         cancellation:
           "Only the explicit cancel operation requests journey cancellation.",
-        idempotency:
-          "Status and result reads are repeatable; mutating requests use operation IDs.",
+        idempotency: "`requestId` is the sole caller idempotency key.",
       },
     ],
   },
@@ -437,14 +430,12 @@ export const componentBoundaries = [
     sourceOwnership: [
       "src/safety/**",
       "src/evidence/**",
-      "src/control/model/**",
     ],
     dataOwnership: [
       "AdmissionDecision",
       "RedactionCode",
       "EvidenceManifest",
       "EvidenceRecord",
-      "ModelSuggestion",
     ],
     ports: [
       {
@@ -494,20 +485,6 @@ export const componentBoundaries = [
           "Cancellation before commit retains nothing; denied content is never written.",
         idempotency:
           "Evidence record IDs deduplicate writes and reads never mutate retention.",
-      },
-      {
-        name: "ModelController",
-        consumers: ["F9 Orchestrator"],
-        requests: ["ModelSuggestionRequest"],
-        results: ["ModelSuggestionResult"],
-        errors: ["ModelAdmissionError"],
-        sideEffect:
-          "F11 owns admitted local-model invocation; returned suggestions cannot mutate or choose policy.",
-        retry:
-          "F9 may request another suggestion only within its retry budget and with a new attempt ID.",
-        cancellation: "Cancellation stops the bounded model request.",
-        idempotency:
-          "A completed attempt ID returns its recorded semantic result without reinvocation.",
       },
     ],
   },
