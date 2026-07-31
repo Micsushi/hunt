@@ -35,22 +35,6 @@ test("the freeze gate rejects an untracked contract file", () => {
     mkdirSync(contracts, { recursive: true });
     writeFileSync(join(contracts, "ports.ts"), "export interface Port {}\n");
     git(repository, "init");
-    git(repository, "config", "--local", "user.name", "Test User");
-    git(
-      repository,
-      "config",
-      "--local",
-      "user.email",
-      "test@example.invalid",
-    );
-    assert.equal(
-      git(repository, "config", "--local", "--get", "user.name").trim(),
-      "Test User",
-    );
-    assert.equal(
-      git(repository, "config", "--local", "--get", "user.email").trim(),
-      "test@example.invalid",
-    );
     git(repository, "add", ".");
     const revision = git(repository, "write-tree").trim();
 
@@ -81,6 +65,11 @@ function git(repository: string, ...args: string[]): string {
   return execFileSync("git", args, {
     cwd: repository,
     encoding: "utf8",
+    env: {
+      ...process.env,
+      GIT_CONFIG_GLOBAL: process.platform === "win32" ? "NUL" : "/dev/null",
+      GIT_CONFIG_NOSYSTEM: "1",
+    },
     stdio: ["ignore", "pipe", "pipe"],
   });
 }

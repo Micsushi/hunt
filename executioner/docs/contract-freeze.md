@@ -28,6 +28,6 @@ defective boundary:
 
 Fakes are narrow contract examples. They record calls and return one synthetic
 success per declared operation, or an explicitly supplied result override.
-Provider conformance checks each operation's exact synthetic success fixture,
-declared errors, and exact cancellation result. Fakes do not simulate component
-behavior or replace F12 connection tests.
+Provider conformance requires each live operation's exact synthetic success
+fixture and each aborted operation's exact cancellation result. Fakes do not
+simulate component behavior or replace F12 connection tests.

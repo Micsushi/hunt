@@ -91,7 +91,7 @@ test("conformance rejects invented successes and error codes", async () => {
   );
   await assert.rejects(
     () => assertProviderConformance("FixtureRuntime", inventedError),
-    /FixtureRuntime\.start.*invented_error.*declared/u,
+    /FixtureRuntime\.start.*live synthetic case.*invented_error/u,
   );
 });
 
@@ -171,5 +171,47 @@ test("exact success fixtures reject an invented nested stable error code", async
   await assert.rejects(
     () => assertProviderConformance("FailureReporter", invalid),
     /FailureReporter\.report.*expected success fixture/u,
+  );
+});
+
+test("synthetic success cases reject declared live provider errors", async () => {
+  const declaredFailure = (signal: AbortSignal) =>
+    signal.aborted
+      ? {
+          ok: false,
+          error: {
+            code: "operation_cancelled",
+            retryable: false,
+          },
+        }
+      : {
+          ok: false,
+          error: {
+            code: "fixture_not_found",
+            retryable: false,
+          },
+        };
+  const invalid = {
+    start: async (
+      _request: Parameters<FixtureRuntime["start"]>[0],
+      signal: AbortSignal,
+    ) => declaredFailure(signal),
+    transition: async (
+      _request: Parameters<FixtureRuntime["transition"]>[0],
+      signal: AbortSignal,
+    ) => declaredFailure(signal),
+    reset: async (
+      _request: Parameters<FixtureRuntime["reset"]>[0],
+      signal: AbortSignal,
+    ) => declaredFailure(signal),
+    setFault: async (
+      _request: Parameters<FixtureRuntime["setFault"]>[0],
+      signal: AbortSignal,
+    ) => declaredFailure(signal),
+  } as unknown as FixtureRuntime;
+
+  await assert.rejects(
+    () => assertProviderConformance("FixtureRuntime", invalid),
+    /FixtureRuntime\.start.*live synthetic case.*fixture_not_found/u,
   );
 });
