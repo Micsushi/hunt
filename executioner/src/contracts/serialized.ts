@@ -399,18 +399,25 @@ function parseMcpResult(value: unknown): void {
     "$.result.kind",
   );
   if (kind === "accepted") {
-    const accepted = exact(result, "$.result", ["kind", "operationId"]);
+    const accepted = exact(result, "$.result", [
+      "kind",
+      "operationId",
+      "journeyId",
+    ]);
     string(accepted.operationId, "$.result.operationId");
+    string(accepted.journeyId, "$.result.journeyId");
     return;
   }
   if (kind === "status") {
-    const status = exact(result, "$.result", [
-      "kind",
+    const status = exact(result, "$.result", ["kind", "progress"]);
+    const progress = exact(status.progress, "$.result.progress", [
       "journeyId",
       "status",
+      "completedSteps",
     ]);
-    string(status.journeyId, "$.result.journeyId");
-    oneOf(status.status, journeyStatuses, "$.result.status");
+    string(progress.journeyId, "$.result.progress.journeyId");
+    oneOf(progress.status, journeyStatuses, "$.result.progress.status");
+    integer(progress.completedSteps, "$.result.progress.completedSteps");
     return;
   }
   const terminal = exact(result, "$.result", ["kind", "terminal"]);
@@ -777,20 +784,29 @@ export const serializedSchemas = {
           {
             type: "object",
             additionalProperties: false,
-            required: ["kind", "operationId"],
+            required: ["kind", "operationId", "journeyId"],
             properties: {
               kind: { const: "accepted" },
               operationId: nonEmptyString,
+              journeyId: nonEmptyString,
             },
           },
           {
             type: "object",
             additionalProperties: false,
-            required: ["kind", "journeyId", "status"],
+            required: ["kind", "progress"],
             properties: {
               kind: { const: "status" },
-              journeyId: nonEmptyString,
-              status: { enum: journeyStatuses },
+              progress: {
+                type: "object",
+                additionalProperties: false,
+                required: ["journeyId", "status", "completedSteps"],
+                properties: {
+                  journeyId: nonEmptyString,
+                  status: { enum: journeyStatuses },
+                  completedSteps: nonNegativeInteger,
+                },
+              },
             },
           },
           {

@@ -112,6 +112,7 @@ const serializedCases = [
       result: {
         kind: "accepted",
         operationId: "operation-1",
+        journeyId: "journey-1",
       },
     },
   },
@@ -191,6 +192,62 @@ test("serialized inputs reject malformed fields with stable codes", () => {
         },
       }),
     "extra_key",
+  );
+});
+
+test("MCP accepted results return operation and journey identity", () => {
+  assert.deepEqual(
+    parseMcpResponse({
+      schemaVersion: 1,
+      requestId: "request-1",
+      ok: true,
+      result: {
+        kind: "accepted",
+        operationId: "operation-1",
+        journeyId: "journey-1",
+      },
+    }),
+    {
+      schemaVersion: 1,
+      requestId: "request-1",
+      ok: true,
+      result: {
+        kind: "accepted",
+        operationId: "operation-1",
+        journeyId: "journey-1",
+      },
+    },
+  );
+});
+
+test("MCP status returns the value-free progress projection", () => {
+  assert.deepEqual(
+    parseMcpResponse({
+      schemaVersion: 1,
+      requestId: "request-2",
+      ok: true,
+      result: {
+        kind: "status",
+        progress: {
+          journeyId: "journey-1",
+          status: "running",
+          completedSteps: 4,
+        },
+      },
+    }),
+    {
+      schemaVersion: 1,
+      requestId: "request-2",
+      ok: true,
+      result: {
+        kind: "status",
+        progress: {
+          journeyId: "journey-1",
+          status: "running",
+          completedSteps: 4,
+        },
+      },
+    },
   );
 });
 

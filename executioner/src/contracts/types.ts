@@ -636,11 +636,11 @@ export type McpResult =
   | {
       readonly kind: "accepted";
       readonly operationId: OperationId;
+      readonly journeyId: JourneyId;
     }
   | {
       readonly kind: "status";
-      readonly journeyId: JourneyId;
-      readonly status: JourneyStatus;
+      readonly progress: JourneyProgress;
     }
   | { readonly kind: "terminal"; readonly terminal: TerminalResult };
 
