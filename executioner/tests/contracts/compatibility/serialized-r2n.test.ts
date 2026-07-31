@@ -10,6 +10,7 @@ import {
   parseTerminalResult,
   serializedContractVersions,
   serializedSchemas,
+  stableErrorPolicy,
 } from "../../../src/contracts/index.ts";
 
 const journeyId = "journey_0123456789abcdef";
@@ -349,17 +350,26 @@ test("factual outcomes never enter the stable error-code channel", () => {
     "rejected",
     "unavailable",
   ]) {
-    expectCode(
+    assert.equal(code in stableErrorPolicy, false);
+    assert.equal(
+      (serializedSchemas.errorEnvelope.properties.code.enum as readonly string[])
+        .includes(code),
+      false,
+    );
+    assert.throws(
       () => parseErrorEnvelope({
         schemaVersion: 2,
         code,
         component: "F9",
         phase: "orchestration",
-        step: "finish",
+        step: "validate",
         retryable: false,
         source: { kind: "operation", id: "operation_0123456789abcdef" },
       }),
-      "invalid_value",
+      (error: unknown) =>
+        error instanceof ContractParseError &&
+        error.code === "invalid_value" &&
+        error.path === "$.code",
     );
   }
 });

@@ -416,7 +416,7 @@ const expectedBehaviors = {
   ],
 } as const;
 
-test("ownership publishes the accepted R2 F2 and F11 surfaces directly", () => {
+test("ownership publishes the accepted R2.n F2 and F11 surfaces directly", () => {
   const fixtureRuntime = componentBoundaries.find(
     ({ feature }) => feature === "F2",
   );
@@ -635,7 +635,7 @@ function listBullet(
   return bullet(section, singular, plural).replace(/\.$/, "").split(", ");
 }
 
-test("each human port section exactly matches the accepted R2 surface", () => {
+test("each human port section exactly matches the accepted R2.n surface", () => {
   const document = readFileSync("docs/component-boundaries.md", "utf8");
   const requiredTerms = acceptedR2Boundaries.flatMap((component) => [
     component.feature,

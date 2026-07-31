@@ -25,7 +25,7 @@ function documentedDeltaDecisions(markdown: string) {
   );
 }
 
-test("T5 classifications agree with the accepted R2 port surface", () => {
+test("T5 classifications agree with the accepted R2.n port surface", () => {
   const ports = (componentBoundaries as readonly ComponentBoundary[]).flatMap(
     (component) => component.ports,
   );
@@ -274,7 +274,7 @@ test("every required fixture control has one complete owner chain", () => {
   );
 });
 
-test("the control slice lists each retained R2 F9/F4/F10/F11 port once", () => {
+test("the control slice lists each retained R2.n F9/F4/F10/F11 port once", () => {
   const cases = requiredControlFlowCases;
   const names = cases.map(({ port }) => port);
   assert.equal(new Set(names).size, names.length);

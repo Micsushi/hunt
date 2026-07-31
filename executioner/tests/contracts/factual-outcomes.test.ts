@@ -27,9 +27,9 @@ test("provider-attributed factual terminal events project value-free blocked pro
     },
   ] as const;
 
-  const lease = statefulScenarioProviderFactories.EventSink.create();
-  try {
-    for (const [index, coordinates] of cases.entries()) {
+  for (const [index, coordinates] of cases.entries()) {
+    const lease = statefulScenarioProviderFactories.EventSink.create();
+    try {
       const appended = await lease.provider.append({
         event: {
           ...contractFixtures.event,
@@ -47,9 +47,14 @@ test("provider-attributed factual terminal events project value-free blocked pro
       });
       assert.equal("factualOutcome" in appended.value.progress, false);
       assert.equal("errorCode" in appended.value.progress, false);
+      assert.equal(lease.calls.length, 1);
+      assert.equal(
+        (lease.calls[0]?.request as { event?: { kind?: string } }).event?.kind,
+        "journey_terminal",
+      );
+    } finally {
+      await lease.cleanup();
     }
-  } finally {
-    await lease.cleanup();
   }
 });
 
@@ -97,7 +102,19 @@ test("shared F9 consumer cases exhaust every factual terminal without remutation
   );
 
   for (const scenario of requiredFactualTerminalConsumerCases) {
-    assert.deepEqual(scenario.factualOutcome.result, scenario.providerResult);
+    if (scenario.provider === "PageUnderstanding") {
+      assert.deepEqual(scenario.providerResult, {
+        kind: scenario.name === "page-unknown" ? "unknown" : "ambiguous",
+      });
+      assert.deepEqual(scenario.factualOutcome.result, {
+        ...scenario.providerResult,
+        pageId: scenario.contextPageId,
+      });
+      assert.notEqual(scenario.contextPageId, null);
+    } else {
+      assert.deepEqual(scenario.factualOutcome.result, scenario.providerResult);
+      assert.equal(scenario.contextPageId, null);
+    }
     assert.deepEqual(
       parseTerminalResult(scenario.expectedTerminal),
       scenario.expectedTerminal,

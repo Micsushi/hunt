@@ -4,6 +4,7 @@ import {
   journeyId,
   questionId,
   type AnswerResolutionResult,
+  type BrowserPageId,
   type FactualTerminalOutcome,
   type PageUnderstandingResult,
   type TerminalResult,
@@ -31,6 +32,7 @@ export interface FactualTerminalConsumerCase {
     | "FieldVerifier";
   readonly providerResult: PageFact | AnswerFact | VerificationFact;
   readonly factualOutcome: FactualTerminalOutcome;
+  readonly contextPageId: BrowserPageId | null;
   readonly terminalize:
     | "immediately"
     | "after_bounded_verification_retry_exhausted";
@@ -102,6 +104,7 @@ function consumerCase(
     provider,
     providerResult: factualOutcome.result,
     factualOutcome,
+    contextPageId: null,
     terminalize,
     blindRemutationAllowed: false,
     stableErrorCode: null,
@@ -121,15 +124,28 @@ function consumerCase(
   };
 }
 
+function pageConsumerCase(
+  name: string,
+  providerResult: PageFact,
+): FactualTerminalConsumerCase {
+  const factualOutcome = {
+    source: "page_understanding",
+    result: { ...providerResult, pageId: currentPageId },
+  } as const satisfies FactualTerminalOutcome;
+  return {
+    ...consumerCase(
+      name,
+      "PageUnderstanding",
+      factualOutcome,
+    ),
+    providerResult,
+    contextPageId: currentPageId,
+  };
+}
+
 export const requiredFactualTerminalConsumerCases = [
-  consumerCase("page-unknown", "PageUnderstanding", {
-    source: "page_understanding",
-    result: { kind: "unknown", pageId: currentPageId },
-  }),
-  consumerCase("page-ambiguous", "PageUnderstanding", {
-    source: "page_understanding",
-    result: { kind: "ambiguous", pageId: currentPageId },
-  }),
+  pageConsumerCase("page-unknown", { kind: "unknown" }),
+  pageConsumerCase("page-ambiguous", { kind: "ambiguous" }),
   consumerCase("profile-answer-missing", "AnswerResolver", {
     source: "answer_resolution",
     result: {

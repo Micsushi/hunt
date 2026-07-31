@@ -1,6 +1,6 @@
 # C3 v3 Stage 1 component boundaries
 
-This document is the human view of the accepted R2 boundary surface. The
+This document is the human view of the accepted R2.n boundary surface. The
 declarative matrix in `src/contracts/ownership.ts` remains the frozen T5
 baseline. F1 owns the matrix and all contracts. F2 through F11 own only the
 source listed below. A component may import F1 contracts, but never a peer
