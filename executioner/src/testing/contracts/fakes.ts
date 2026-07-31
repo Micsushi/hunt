@@ -19,7 +19,7 @@ import type {
   ProgressReader,
   SafetyGuard,
 } from "../../contracts/index.ts";
-import { contractFixtures } from "./fixtures.ts";
+import { contractOperationCases } from "./operation-cases.ts";
 import type {
   ContractCall,
   ContractFake,
@@ -63,21 +63,12 @@ export function createFixtureRuntimeFake(
 ): ContractFake<FixtureRuntime> {
   return createFake<FixtureRuntime>(
     {
-      start: ok({
-        fixtureRunId: "fixture-run-synthetic",
-        origin: "https://fixture.invalid",
-        pageId: "fixture-account",
-      }),
-      transition: ok({
-        transitionId: "transition-synthetic",
-        pageId: "fixture-profile",
-        semanticHash: "sha256:fixture-profile",
-      }),
-      reset: ok({
-        fixtureRunId: "fixture-run-synthetic",
-        semanticHash: "sha256:fixture-reset",
-      }),
-      setFault: ok(undefined),
+      start: ok(contractOperationCases.FixtureRuntime.start.expected),
+      transition: ok(
+        contractOperationCases.FixtureRuntime.transition.expected,
+      ),
+      reset: ok(contractOperationCases.FixtureRuntime.reset.expected),
+      setFault: ok(contractOperationCases.FixtureRuntime.setFault.expected),
     },
     overrides,
   );
@@ -88,22 +79,11 @@ export function createBrowserSessionFake(
 ): ContractFake<BrowserSession> {
   return createFake<BrowserSession>(
     {
-      start: ok({
-        sessionId: contractFixtures.browserObservation.sessionId,
-        pageId: contractFixtures.browserObservation.pageId,
-      }),
-      observe: ok(contractFixtures.browserObservation),
-      mutate: ok({
-        operationId: contractFixtures.mutationReceipt.operationId,
-        pageId: contractFixtures.browserObservation.pageId,
-        attempted: true,
-      }),
-      navigate: ok({
-        operationId: contractFixtures.mutationReceipt.operationId,
-        fromPageId: contractFixtures.browserObservation.pageId,
-        pageId: "page-questionnaire",
-      }),
-      close: ok(undefined),
+      start: ok(contractOperationCases.BrowserSession.start.expected),
+      observe: ok(contractOperationCases.BrowserSession.observe.expected),
+      mutate: ok(contractOperationCases.BrowserSession.mutate.expected),
+      navigate: ok(contractOperationCases.BrowserSession.navigate.expected),
+      close: ok(contractOperationCases.BrowserSession.close.expected),
     },
     overrides,
   );
@@ -114,11 +94,7 @@ export function createJourneyIntakeFake(
 ): ContractFake<JourneyIntake> {
   return createFake<JourneyIntake>(
     {
-      bootstrap: ok({
-        journeyId: contractFixtures.journeyState.journeyId,
-        inputs: contractFixtures.journeyInputs,
-        state: contractFixtures.journeyState,
-      }),
+      bootstrap: ok(contractOperationCases.JourneyIntake.bootstrap.expected),
     },
     overrides,
   );
@@ -129,11 +105,7 @@ export function createProfileQueryFake(
 ): ContractFake<ProfileQuery> {
   return createFake<ProfileQuery>(
     {
-      query: ok({
-        kind: "answered",
-        value: "Synthetic",
-        provenance: "owner_provided",
-      }),
+      query: ok(contractOperationCases.ProfileQuery.query.expected),
     },
     overrides,
   );
@@ -144,11 +116,10 @@ export function createJourneyStateStoreFake(
 ): ContractFake<JourneyStateStore> {
   return createFake<JourneyStateStore>(
     {
-      load: ok({ state: contractFixtures.journeyState }),
-      transition: ok({
-        state: contractFixtures.journeyState,
-        applied: true,
-      }),
+      load: ok(contractOperationCases.JourneyStateStore.load.expected),
+      transition: ok(
+        contractOperationCases.JourneyStateStore.transition.expected,
+      ),
     },
     overrides,
   );
@@ -159,10 +130,9 @@ export function createPageUnderstandingFake(
 ): ContractFake<PageUnderstanding> {
   return createFake<PageUnderstanding>(
     {
-      understand: ok({
-        kind: "understood",
-        snapshot: contractFixtures.pageSnapshot,
-      }),
+      understand: ok(
+        contractOperationCases.PageUnderstanding.understand.expected,
+      ),
     },
     overrides,
   );
@@ -173,10 +143,7 @@ export function createAnswerResolverFake(
 ): ContractFake<AnswerResolver> {
   return createFake<AnswerResolver>(
     {
-      resolve: ok({
-        kind: "resolved",
-        intent: contractFixtures.intent,
-      }),
+      resolve: ok(contractOperationCases.AnswerResolver.resolve.expected),
     },
     overrides,
   );
@@ -186,7 +153,7 @@ export function createFieldDriverFake(
   overrides: FakeResponseOverrides<FieldDriver> = {},
 ): ContractFake<FieldDriver> {
   return createFake<FieldDriver>(
-    { drive: ok(contractFixtures.mutationReceipt) },
+    { drive: ok(contractOperationCases.FieldDriver.drive.expected) },
     overrides,
   );
 }
@@ -195,7 +162,7 @@ export function createFieldVerifierFake(
   overrides: FakeResponseOverrides<FieldVerifier> = {},
 ): ContractFake<FieldVerifier> {
   return createFake<FieldVerifier>(
-    { verify: ok(contractFixtures.verification) },
+    { verify: ok(contractOperationCases.FieldVerifier.verify.expected) },
     overrides,
   );
 }
@@ -205,15 +172,12 @@ export function createCompletionNavigationFake(
 ): ContractFake<CompletionNavigation> {
   return createFake<CompletionNavigation>(
     {
-      complete: ok({
-        kind: "complete",
-        decision: { kind: "next", expectedPage: "questionnaire" },
-      }),
-      reconcile: ok({
-        kind: "advanced",
-        expected: { kind: "workday", page: "questionnaire" },
-        observed: { kind: "workday", page: "questionnaire" },
-      }),
+      complete: ok(
+        contractOperationCases.CompletionNavigation.complete.expected,
+      ),
+      reconcile: ok(
+        contractOperationCases.CompletionNavigation.reconcile.expected,
+      ),
     },
     overrides,
   );
@@ -224,18 +188,10 @@ export function createJourneyControlFake(
 ): ContractFake<JourneyControl> {
   return createFake<JourneyControl>(
     {
-      start: ok({
-        operationId: "operation-synthetic",
-        journeyId: contractFixtures.journeyState.journeyId,
-        accepted: true,
-      }),
-      cancel: ok({
-        operationId: "operation-cancel-synthetic",
-        journeyId: contractFixtures.journeyState.journeyId,
-        accepted: true,
-      }),
-      status: ok("running"),
-      result: ok(contractFixtures.terminalResult),
+      start: ok(contractOperationCases.JourneyControl.start.expected),
+      cancel: ok(contractOperationCases.JourneyControl.cancel.expected),
+      status: ok(contractOperationCases.JourneyControl.status.expected),
+      result: ok(contractOperationCases.JourneyControl.result.expected),
     },
     overrides,
   );
@@ -246,15 +202,7 @@ export function createMcpJourneyApiFake(
 ): ContractFake<McpJourneyApi> {
   return createFake<McpJourneyApi>(
     {
-      handle: ok({
-        schemaVersion: 1,
-        requestId: "request-synthetic",
-        ok: true,
-        result: {
-          kind: "terminal",
-          terminal: contractFixtures.terminalResult,
-        },
-      }),
+      handle: ok(contractOperationCases.McpJourneyApi.handle.expected),
     },
     overrides,
   );
@@ -265,10 +213,7 @@ export function createEventSinkFake(
 ): ContractFake<EventSink> {
   return createFake<EventSink>(
     {
-      append: ok({
-        appended: true,
-        progress: contractFixtures.progress,
-      }),
+      append: ok(contractOperationCases.EventSink.append.expected),
     },
     overrides,
   );
@@ -278,7 +223,7 @@ export function createProgressReaderFake(
   overrides: FakeResponseOverrides<ProgressReader> = {},
 ): ContractFake<ProgressReader> {
   return createFake<ProgressReader>(
-    { read: ok(contractFixtures.progress) },
+    { read: ok(contractOperationCases.ProgressReader.read.expected) },
     overrides,
   );
 }
@@ -286,25 +231,9 @@ export function createProgressReaderFake(
 export function createFailureReporterFake(
   overrides: FakeResponseOverrides<FailureReporter> = {},
 ): ContractFake<FailureReporter> {
-  const context = {
-    journeyId: contractFixtures.journeyState.journeyId,
-    component: "F9",
-    phase: "orchestration",
-    step: "start",
-    code: "journey_not_found",
-    retryable: false,
-    source: { kind: "operation", id: "operation-synthetic" },
-  } as const;
-
   return createFake<FailureReporter>(
     {
-      report: ok({
-        report: { reportId: "report-synthetic", context },
-        notification: {
-          reportId: "report-synthetic",
-          delivered: true,
-        },
-      }),
+      report: ok(contractOperationCases.FailureReporter.report.expected),
     },
     overrides,
   );
@@ -315,10 +244,7 @@ export function createPrivacyGuardFake(
 ): ContractFake<PrivacyGuard> {
   return createFake<PrivacyGuard>(
     {
-      admit: ok({
-        kind: "admitted",
-        policyRevision: "policy-s1",
-      }),
+      admit: ok(contractOperationCases.PrivacyGuard.admit.expected),
     },
     overrides,
   );
@@ -329,10 +255,7 @@ export function createSafetyGuardFake(
 ): ContractFake<SafetyGuard> {
   return createFake<SafetyGuard>(
     {
-      admit: ok({
-        kind: "admitted",
-        policyRevision: "policy-s1",
-      }),
+      admit: ok(contractOperationCases.SafetyGuard.admit.expected),
     },
     overrides,
   );
@@ -343,11 +266,8 @@ export function createEvidenceStoreFake(
 ): ContractFake<EvidenceStore> {
   return createFake<EvidenceStore>(
     {
-      write: ok({
-        recordId: contractFixtures.evidenceRecord.id,
-        written: true,
-      }),
-      read: ok(contractFixtures.evidenceManifest),
+      write: ok(contractOperationCases.EvidenceStore.write.expected),
+      read: ok(contractOperationCases.EvidenceStore.read.expected),
     },
     overrides,
   );
@@ -358,13 +278,7 @@ export function createModelControllerFake(
 ): ContractFake<ModelController> {
   return createFake<ModelController>(
     {
-      suggest: ok({
-        attemptId: "attempt-synthetic",
-        suggestion: {
-          kind: "option_ranking",
-          optionIds: ["option-synthetic"],
-        },
-      }),
+      suggest: ok(contractOperationCases.ModelController.suggest.expected),
     },
     overrides,
   );

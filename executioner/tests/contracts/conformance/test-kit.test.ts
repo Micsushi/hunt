@@ -1,7 +1,11 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { portNames, type FixtureRuntime } from "../../../src/contracts/index.ts";
+import {
+  portNames,
+  type FailureReporter,
+  type FixtureRuntime,
+} from "../../../src/contracts/index.ts";
 import {
   assertProviderConformance,
   contractFakeFactories,
@@ -83,7 +87,7 @@ test("conformance rejects invented successes and error codes", async () => {
 
   await assert.rejects(
     () => assertProviderConformance("FixtureRuntime", inventedSuccess),
-    /FixtureRuntime\.start.*success result/u,
+    /FixtureRuntime\.start.*expected success fixture/u,
   );
   await assert.rejects(
     () => assertProviderConformance("FixtureRuntime", inventedError),
@@ -119,5 +123,53 @@ test("cancellation is allowed only for an already-aborted signal", async () => {
   await assert.rejects(
     () => assertProviderConformance("FixtureRuntime", ignoresCancellation),
     /FixtureRuntime\.start.*aborted signal.*operation_cancelled/u,
+  );
+});
+
+test("exact success fixtures reject an invented nested stable error code", async () => {
+  const valid = contractFakeFactories.FailureReporter().port;
+  const invalid = {
+    ...valid,
+    report: async (
+      _request: Parameters<FailureReporter["report"]>[0],
+      signal: AbortSignal,
+    ) =>
+      signal.aborted
+        ? {
+            ok: false,
+            error: {
+              code: "operation_cancelled",
+              retryable: false,
+            },
+          }
+        : {
+            ok: true,
+            value: {
+              report: {
+                reportId: "report-synthetic",
+                context: {
+                  journeyId: "journey-synthetic",
+                  component: "F9",
+                  phase: "orchestration",
+                  step: "start",
+                  code: "invented_nested_error",
+                  retryable: false,
+                  source: {
+                    kind: "operation",
+                    id: "operation-synthetic",
+                  },
+                },
+              },
+              notification: {
+                reportId: "report-synthetic",
+                delivered: true,
+              },
+            },
+          },
+  } as unknown as FailureReporter;
+
+  await assert.rejects(
+    () => assertProviderConformance("FailureReporter", invalid),
+    /FailureReporter\.report.*expected success fixture/u,
   );
 });

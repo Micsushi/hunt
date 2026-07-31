@@ -35,9 +35,24 @@ test("the freeze gate rejects an untracked contract file", () => {
     mkdirSync(contracts, { recursive: true });
     writeFileSync(join(contracts, "ports.ts"), "export interface Port {}\n");
     git(repository, "init");
+    git(repository, "config", "--local", "user.name", "Test User");
+    git(
+      repository,
+      "config",
+      "--local",
+      "user.email",
+      "test@example.invalid",
+    );
+    assert.equal(
+      git(repository, "config", "--local", "--get", "user.name").trim(),
+      "Test User",
+    );
+    assert.equal(
+      git(repository, "config", "--local", "--get", "user.email").trim(),
+      "test@example.invalid",
+    );
     git(repository, "add", ".");
-    git(repository, "commit", "-m", "freeze");
-    const revision = git(repository, "rev-parse", "HEAD").trim();
+    const revision = git(repository, "write-tree").trim();
 
     writeFileSync(
       join(contracts, "untracked.ts"),
