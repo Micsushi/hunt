@@ -1,4 +1,9 @@
-import type { PortResult } from "../../contracts/index.ts";
+import {
+  ContractParseError,
+  parseEvidenceManifest,
+  parseMcpResponse,
+  type PortResult,
+} from "../../contracts/index.ts";
 import { isDeepStrictEqual } from "node:util";
 
 import { contractFixtures } from "./fixtures.ts";
@@ -545,48 +550,22 @@ export const contractOperationCases = {
         },
       },
       assert: (value, request) => {
-        if (
-          !exactKeys(value, [
-            "schemaVersion",
-            "requestId",
-            "ok",
-            "result",
-          ]) ||
-          value.schemaVersion !== 1 ||
-          value.requestId !== request.requestId ||
-          value.ok !== true ||
-          request.method !== "journey_result" ||
-          value.result.kind !== "terminal" ||
-          !exactKeys(value.result, ["kind", "terminal"])
-        ) {
-          return false;
+        try {
+          const response = parseMcpResponse(value);
+          return (
+            response.requestId === request.requestId &&
+            response.ok === true &&
+            request.method === "journey_result" &&
+            response.result.kind === "terminal" &&
+            response.result.terminal.journeyId ===
+              request.params.journeyId
+          );
+        } catch (error) {
+          if (error instanceof ContractParseError) {
+            return false;
+          }
+          throw error;
         }
-        const terminal = value.result.terminal;
-        const terminalKeys =
-          terminal.status === "failed"
-            ? [
-                "schemaVersion",
-                "journeyId",
-                "status",
-                "completedPages",
-                "errorCode",
-              ]
-            : [
-                "schemaVersion",
-                "journeyId",
-                "status",
-                "completedPages",
-              ];
-        return (
-          exactKeys(terminal, terminalKeys) &&
-          terminal.schemaVersion === 1 &&
-          terminal.journeyId === request.params.journeyId &&
-          (terminal.status === "review_reached" ||
-            terminal.status === "cancelled" ||
-            terminal.status === "failed") &&
-          nonNegativeInteger(terminal.completedPages) &&
-          (terminal.status !== "failed" || nonEmpty(terminal.errorCode))
-        );
       },
     },
   },
@@ -693,24 +672,19 @@ export const contractOperationCases = {
         journeyId: contractFixtures.journeyState.journeyId,
       },
       expected: contractFixtures.evidenceManifest,
-      assert: (value, request) =>
-        exactKeys(value, ["schemaVersion", "journeyId", "records"]) &&
-        value.schemaVersion === 1 &&
-        value.journeyId === request.journeyId &&
-        Array.isArray(value.records) &&
-        value.records.every(
-          (record) =>
-            exactKeys(record, [
-              "id",
-              "kind",
-              "component",
-              "phase",
-              "step",
-              "sha256",
-            ]) &&
-            nonEmpty(record.id) &&
-            nonEmpty(record.sha256),
-        ),
+      assert: (value, request) => {
+        try {
+          return (
+            parseEvidenceManifest(value).journeyId ===
+            request.journeyId
+          );
+        } catch (error) {
+          if (error instanceof ContractParseError) {
+            return false;
+          }
+          throw error;
+        }
+      },
     },
   },
   ModelController: {

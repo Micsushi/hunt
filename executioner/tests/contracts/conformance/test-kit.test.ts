@@ -419,6 +419,35 @@ test("conformance accepts runtime-owned terminal progress", async () => {
   );
 });
 
+test("conformance rejects an invented terminal error code", async () => {
+  const provider = {
+    handle: async (
+      request: Parameters<McpJourneyApi["handle"]>[0],
+      signal: AbortSignal,
+    ) =>
+      result(signal, {
+        schemaVersion: 1,
+        requestId: request.requestId,
+        ok: true,
+        result: {
+          kind: "terminal",
+          terminal: {
+            schemaVersion: 1,
+            journeyId: contractFixtures.journeyState.journeyId,
+            status: "failed",
+            completedPages: 1,
+            errorCode: "invented_error",
+          },
+        },
+      }),
+  } as unknown as McpJourneyApi;
+
+  await assert.rejects(
+    () => assertProviderConformance("McpJourneyApi", provider),
+    /McpJourneyApi\.handle.*success invariant/u,
+  );
+});
+
 test("conformance accepts runtime-owned observability progress", async () => {
   const eventSink = {
     append: async (request, signal) =>
@@ -491,6 +520,41 @@ test("conformance accepts runtime-owned evidence and model results", async () =>
   );
   await assert.doesNotReject(() =>
     assertProviderConformance("ModelController", modelController),
+  );
+});
+
+test("conformance rejects invented evidence kinds and coordinates", async () => {
+  const provider = {
+    write: async (
+      request: Parameters<EvidenceStore["write"]>[0],
+      signal: AbortSignal,
+    ) =>
+      result(signal, {
+        recordId: request.record.id,
+        written: true,
+      }),
+    read: async (
+      request: Parameters<EvidenceStore["read"]>[0],
+      signal: AbortSignal,
+    ) =>
+      result(signal, {
+        schemaVersion: 1,
+        journeyId: request.journeyId,
+        records: [
+          {
+            ...contractFixtures.evidenceRecord,
+            kind: "invented_evidence",
+            component: "F99",
+            phase: "invented_phase",
+            step: "invented_step",
+          },
+        ],
+      }),
+  } as unknown as EvidenceStore;
+
+  await assert.rejects(
+    () => assertProviderConformance("EvidenceStore", provider),
+    /EvidenceStore\.read.*success invariant/u,
   );
 });
 
