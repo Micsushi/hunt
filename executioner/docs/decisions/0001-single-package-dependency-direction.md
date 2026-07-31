@@ -13,8 +13,9 @@ the type check and the complete test suite.
 Component source may import its own implementation, the shared contracts, and
 external packages. It may not import another component's implementation or any
 C3 v2 path. The composition root may import component implementations solely
-to assemble them. Every source path must have an explicit owner. The
-architecture test parses TypeScript imports and exports to enforce these rules.
+to assemble them. The contract test kit is test-only. Every source path must
+have an explicit owner. The architecture test parses TypeScript module
+references to enforce these rules.
 
 ## Consequences
 

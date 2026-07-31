@@ -9,7 +9,7 @@ export interface SourceFile {
 
 const owners: ReadonlyArray<readonly [RegExp, string]> = [
   [/^src\/contracts(?:\/|$)/, "contracts"],
-  [/^src\/testing\/contracts(?:\/|$)/, "contracts"],
+  [/^src\/testing\/contracts(?:\/|$)/, "test-kit"],
   [/^src\/testing\/fixture-(?:server|state)\.ts$/, "fixtures"],
   [/^src\/browser(?:\/|$)/, "browser"],
   [/^src\/(?:intake|profile|journey)(?:\/|$)/, "state"],
@@ -24,6 +24,7 @@ const owners: ReadonlyArray<readonly [RegExp, string]> = [
   [/^src\/(?:safety|evidence)(?:\/|$)/, "safety"],
   [/^src\/control\/model(?:\/|$)/, "safety"],
   [/^src\/composition(?:\/|$)/, "composition"],
+  [/^tests(?:\/|$)/, "tests"],
 ];
 
 const legacyRoots = /^(?:src\/)?(?:background|content|options|popup|shared)(?:\/|$)/;
@@ -50,6 +51,12 @@ function moduleSpecifiers(file: SourceFile): string[] {
       ts.isStringLiteralLike(node.moduleSpecifier)
     ) {
       specifiers.push(node.moduleSpecifier.text);
+    } else if (
+      ts.isImportTypeNode(node) &&
+      ts.isLiteralTypeNode(node.argument) &&
+      ts.isStringLiteralLike(node.argument.literal)
+    ) {
+      specifiers.push(node.argument.literal.text);
     } else if (
       ts.isCallExpression(node) &&
       node.expression.kind === ts.SyntaxKind.ImportKeyword &&
@@ -88,9 +95,13 @@ export function dependencyViolations(files: readonly SourceFile[]): string[] {
       if (targetOwner === undefined) {
         return [`${file.path} imports unowned source ${target}`];
       }
+      if (targetOwner === "test-kit" && importerOwner !== "tests") {
+        return [`${file.path} imports test-only source ${target}`];
+      }
       if (
         targetOwner !== "contracts" &&
         importerOwner !== "composition" &&
+        importerOwner !== "tests" &&
         targetOwner !== importerOwner
       ) {
         return [`${file.path} imports peer implementation ${target}`];

@@ -34,6 +34,45 @@ test("components may not import peer implementations", () => {
   ]);
 });
 
+test("import types may not reference peer implementations", () => {
+  const files: SourceFile[] = [
+    {
+      path: "src/browser/adapter.ts",
+      source: 'type Profile = import("../profile/store.ts").Profile;',
+    },
+  ];
+
+  assert.deepEqual(dependencyViolations(files), [
+    "src/browser/adapter.ts imports peer implementation src/profile/store.ts",
+  ]);
+});
+
+test("production components may not import the contract test kit", () => {
+  const files: SourceFile[] = [
+    {
+      path: "src/browser/adapter.ts",
+      source:
+        'import { fakeBrowser } from "../testing/contracts/browser.ts";',
+    },
+  ];
+
+  assert.deepEqual(dependencyViolations(files), [
+    "src/browser/adapter.ts imports test-only source src/testing/contracts/browser.ts",
+  ]);
+});
+
+test("tests may import the contract test kit", () => {
+  const files: SourceFile[] = [
+    {
+      path: "tests/browser/adapter.test.ts",
+      source:
+        'import { fakeBrowser } from "../../src/testing/contracts/browser.ts";',
+    },
+  ];
+
+  assert.deepEqual(dependencyViolations(files), []);
+});
+
 test("components may not import unowned source", () => {
   const files: SourceFile[] = [
     {
