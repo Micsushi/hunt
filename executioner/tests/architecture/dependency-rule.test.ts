@@ -47,6 +47,46 @@ test("import types may not reference peer implementations", () => {
   ]);
 });
 
+test("dynamic imports inspect a literal first argument with options", () => {
+  const files: SourceFile[] = [
+    {
+      path: "src/browser/adapter.ts",
+      source:
+        'const profile = import("../profile/store.ts", { with: { type: "json" } });',
+    },
+  ];
+
+  assert.deepEqual(dependencyViolations(files), [
+    "src/browser/adapter.ts imports peer implementation src/profile/store.ts",
+  ]);
+});
+
+test("nonliteral dynamic imports are rejected", () => {
+  const files: SourceFile[] = [
+    {
+      path: "src/browser/adapter.ts",
+      source: 'const path = "../profile/store.ts"; import(path);',
+    },
+  ];
+
+  assert.deepEqual(dependencyViolations(files), [
+    "src/browser/adapter.ts uses a nonliteral dynamic import",
+  ]);
+});
+
+test("triple-slash path references obey component boundaries", () => {
+  const files: SourceFile[] = [
+    {
+      path: "src/browser/adapter.ts",
+      source: '/// <reference path="../profile/store.ts" />',
+    },
+  ];
+
+  assert.deepEqual(dependencyViolations(files), [
+    "src/browser/adapter.ts imports peer implementation src/profile/store.ts",
+  ]);
+});
+
 test("production components may not import the contract test kit", () => {
   const files: SourceFile[] = [
     {
@@ -71,6 +111,34 @@ test("tests may import the contract test kit", () => {
   ];
 
   assert.deepEqual(dependencyViolations(files), []);
+});
+
+test("the contract test kit may import itself", () => {
+  const files: SourceFile[] = [
+    {
+      path: "src/testing/contracts/browser.ts",
+      source: 'export { fakeBase } from "./base.ts";',
+    },
+  ];
+
+  assert.deepEqual(dependencyViolations(files), []);
+});
+
+test("composition may not import test-only source", () => {
+  const files: SourceFile[] = [
+    {
+      path: "src/composition/runtime.ts",
+      source: [
+        'import { fakeBrowser } from "../testing/contracts/browser.ts";',
+        'import { helper } from "../../tests/helper.ts";',
+      ].join("\n"),
+    },
+  ];
+
+  assert.deepEqual(dependencyViolations(files), [
+    "src/composition/runtime.ts imports test-only source src/testing/contracts/browser.ts",
+    "src/composition/runtime.ts imports test-only source tests/helper.ts",
+  ]);
 });
 
 test("components may not import unowned source", () => {

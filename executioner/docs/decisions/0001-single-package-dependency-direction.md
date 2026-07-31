@@ -7,15 +7,16 @@ Status: accepted
 C3 v3 is one private ESM package targeting Node 22.18 or newer. TypeScript uses
 strict checking, and tests run with Node's built-in test runner.
 
-`npm test -- <path>` accepts a test file or directory. `npm run quality` runs
-the type check and the complete test suite.
+`npm test -- <path>` accepts a `*.test.ts` file or a directory containing one.
+Empty selections fail. `npm run quality` runs the type check and the complete
+test suite.
 
 Component source may import its own implementation, the shared contracts, and
 external packages. It may not import another component's implementation or any
 C3 v2 path. The composition root may import component implementations solely
 to assemble them. The contract test kit is test-only. Every source path must
 have an explicit owner. The architecture test parses TypeScript module
-references to enforce these rules.
+references to enforce these rules. Dynamic imports must use a literal target.
 
 ## Consequences
 

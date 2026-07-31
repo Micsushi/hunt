@@ -7,6 +7,11 @@ export interface SourceFile {
   source: string;
 }
 
+type ModuleReference =
+  | { kind: "module"; path: string }
+  | { kind: "path"; path: string }
+  | { kind: "nonliteral-dynamic" };
+
 const owners: ReadonlyArray<readonly [RegExp, string]> = [
   [/^src\/contracts(?:\/|$)/, "contracts"],
   [/^src\/testing\/contracts(?:\/|$)/, "test-kit"],
@@ -34,7 +39,7 @@ function owner(path: string): string | undefined {
   return owners.find(([pattern]) => pattern.test(path))?.[1];
 }
 
-function moduleSpecifiers(file: SourceFile): string[] {
+function moduleReferences(file: SourceFile): ModuleReference[] {
   const source = ts.createSourceFile(
     file.path,
     file.source,
@@ -42,7 +47,9 @@ function moduleSpecifiers(file: SourceFile): string[] {
     false,
     ts.ScriptKind.TS,
   );
-  const specifiers: string[] = [];
+  const references: ModuleReference[] = source.referencedFiles.map(
+    ({ fileName }) => ({ kind: "path", path: fileName }),
+  );
 
   function visit(node: ts.Node): void {
     if (
@@ -50,26 +57,29 @@ function moduleSpecifiers(file: SourceFile): string[] {
       node.moduleSpecifier !== undefined &&
       ts.isStringLiteralLike(node.moduleSpecifier)
     ) {
-      specifiers.push(node.moduleSpecifier.text);
+      references.push({ kind: "module", path: node.moduleSpecifier.text });
     } else if (
       ts.isImportTypeNode(node) &&
       ts.isLiteralTypeNode(node.argument) &&
       ts.isStringLiteralLike(node.argument.literal)
     ) {
-      specifiers.push(node.argument.literal.text);
+      references.push({ kind: "module", path: node.argument.literal.text });
     } else if (
       ts.isCallExpression(node) &&
-      node.expression.kind === ts.SyntaxKind.ImportKeyword &&
-      node.arguments.length === 1 &&
-      ts.isStringLiteralLike(node.arguments[0]!)
+      node.expression.kind === ts.SyntaxKind.ImportKeyword
     ) {
-      specifiers.push(node.arguments[0].text);
+      const firstArgument = node.arguments[0];
+      references.push(
+        firstArgument !== undefined && ts.isStringLiteralLike(firstArgument)
+          ? { kind: "module", path: firstArgument.text }
+          : { kind: "nonliteral-dynamic" },
+      );
     }
     ts.forEachChild(node, visit);
   }
 
   visit(source);
-  return specifiers;
+  return references;
 }
 
 export function dependencyViolations(files: readonly SourceFile[]): string[] {
@@ -79,13 +89,16 @@ export function dependencyViolations(files: readonly SourceFile[]): string[] {
       return [`${file.path} has no component owner`];
     }
 
-    return moduleSpecifiers(file).flatMap((specifier) => {
-      if (!specifier.startsWith(".")) {
+    return moduleReferences(file).flatMap((reference) => {
+      if (reference.kind === "nonliteral-dynamic") {
+        return [`${file.path} uses a nonliteral dynamic import`];
+      }
+      if (reference.kind === "module" && !reference.path.startsWith(".")) {
         return [];
       }
 
       const target = posix.normalize(
-        posix.join(posix.dirname(file.path), specifier),
+        posix.join(posix.dirname(file.path), reference.path),
       );
       if (legacyRoots.test(target) || legacyVersion.test(target)) {
         return [`${file.path} imports C3 v2 path ${target}`];
@@ -95,19 +108,21 @@ export function dependencyViolations(files: readonly SourceFile[]): string[] {
       if (targetOwner === undefined) {
         return [`${file.path} imports unowned source ${target}`];
       }
-      if (targetOwner === "test-kit" && importerOwner !== "tests") {
+      if (
+        targetOwner === "contracts" ||
+        targetOwner === importerOwner ||
+        importerOwner === "tests"
+      ) {
+        return [];
+      }
+      if (targetOwner === "test-kit" || targetOwner === "tests") {
         return [`${file.path} imports test-only source ${target}`];
       }
-      if (
-        targetOwner !== "contracts" &&
-        importerOwner !== "composition" &&
-        importerOwner !== "tests" &&
-        targetOwner !== importerOwner
-      ) {
-        return [`${file.path} imports peer implementation ${target}`];
+      if (importerOwner === "composition") {
+        return [];
       }
 
-      return [];
+      return [`${file.path} imports peer implementation ${target}`];
     });
   });
 }

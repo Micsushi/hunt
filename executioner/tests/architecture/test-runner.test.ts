@@ -9,3 +9,10 @@ test("an explicit directory with no tests is rejected", () => {
     /No test files found in tests\/architecture\/empty/,
   );
 });
+
+test("an explicit file must use the test filename", () => {
+  assert.throws(
+    () => testTargets(["tests/run.ts"]),
+    /Test file must match \*\.test\.ts: tests\/run\.ts/,
+  );
+});
