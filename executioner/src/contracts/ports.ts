@@ -14,6 +14,7 @@ import type {
   BrowserSessionResult,
   BrowserStartRequest,
   CancelJourneyCommand,
+  CancellationError,
   DriverError,
   DriverRequest,
   EvidenceAdmissionRequest,
@@ -86,6 +87,16 @@ export const inProcessContractPolicy = {
   runtimeVersionField: false,
 } as const;
 
+export const inProcessCancellationPolicy = {
+  signal: "required",
+  outcome: "result_error",
+  error: { code: "operation_cancelled", retryable: false },
+} as const satisfies {
+  readonly signal: "required";
+  readonly outcome: "result_error";
+  readonly error: CancellationError;
+};
+
 export const portNames = [
   "FixtureRuntime",
   "BrowserSession",
@@ -108,96 +119,96 @@ export const portNames = [
   "ModelController",
 ] as const;
 
-type AsyncResult<T, E> = Promise<PortResult<T, E>>;
+type AsyncResult<T, E> = Promise<PortResult<T, E | CancellationError>>;
 
 export interface FixtureRuntime {
-  start(request: FixtureStartRequest, signal?: AbortSignal): AsyncResult<FixtureStartResult, FixtureRuntimeError>;
-  transition(request: FixtureTransitionRequest, signal?: AbortSignal): AsyncResult<FixtureTransitionResult, FixtureRuntimeError>;
-  reset(request: FixtureResetRequest, signal?: AbortSignal): AsyncResult<FixtureResetResult, FixtureRuntimeError>;
-  setFault(request: FixtureFaultRequest, signal?: AbortSignal): AsyncResult<void, FixtureRuntimeError>;
+  start(request: FixtureStartRequest, signal: AbortSignal): AsyncResult<FixtureStartResult, FixtureRuntimeError>;
+  transition(request: FixtureTransitionRequest, signal: AbortSignal): AsyncResult<FixtureTransitionResult, FixtureRuntimeError>;
+  reset(request: FixtureResetRequest, signal: AbortSignal): AsyncResult<FixtureResetResult, FixtureRuntimeError>;
+  setFault(request: FixtureFaultRequest, signal: AbortSignal): AsyncResult<void, FixtureRuntimeError>;
 }
 
 export interface BrowserSession {
-  start(request: BrowserStartRequest, signal?: AbortSignal): AsyncResult<BrowserSessionResult, BrowserSessionError>;
-  observe(request: BrowserObservationRequest, signal?: AbortSignal): AsyncResult<BrowserObservation, BrowserSessionError>;
-  mutate(request: BrowserMutationRequest, signal?: AbortSignal): AsyncResult<BrowserOperationReceipt, BrowserSessionError>;
-  navigate(request: BrowserNavigationRequest, signal?: AbortSignal): AsyncResult<BrowserNavigationObservation, BrowserSessionError>;
-  close(request: BrowserCloseRequest, signal?: AbortSignal): AsyncResult<void, BrowserSessionError>;
+  start(request: BrowserStartRequest, signal: AbortSignal): AsyncResult<BrowserSessionResult, BrowserSessionError>;
+  observe(request: BrowserObservationRequest, signal: AbortSignal): AsyncResult<BrowserObservation, BrowserSessionError>;
+  mutate(request: BrowserMutationRequest, signal: AbortSignal): AsyncResult<BrowserOperationReceipt, BrowserSessionError>;
+  navigate(request: BrowserNavigationRequest, signal: AbortSignal): AsyncResult<BrowserNavigationObservation, BrowserSessionError>;
+  close(request: BrowserCloseRequest, signal: AbortSignal): AsyncResult<void, BrowserSessionError>;
 }
 
 export interface JourneyIntake {
-  bootstrap(request: JourneyBootstrapRequest, signal?: AbortSignal): AsyncResult<JourneyBootstrapResult, JourneyInputError>;
+  bootstrap(request: JourneyBootstrapRequest, signal: AbortSignal): AsyncResult<JourneyBootstrapResult, JourneyInputError>;
 }
 
 export interface ProfileQuery {
-  query(request: ProfileQueryRequest, signal?: AbortSignal): AsyncResult<ProfileAnswerResult, ProfileQueryError>;
+  query(request: ProfileQueryRequest, signal: AbortSignal): AsyncResult<ProfileAnswerResult, ProfileQueryError>;
 }
 
 export interface JourneyStateStore {
-  load(request: JourneyStateLoadRequest, signal?: AbortSignal): AsyncResult<JourneyStateLoadResult, JourneyStateError>;
-  transition(request: JourneyStateTransitionCommand, signal?: AbortSignal): AsyncResult<JourneyStateTransitionResult, JourneyStateError>;
+  load(request: JourneyStateLoadRequest, signal: AbortSignal): AsyncResult<JourneyStateLoadResult, JourneyStateError>;
+  transition(request: JourneyStateTransitionCommand, signal: AbortSignal): AsyncResult<JourneyStateTransitionResult, JourneyStateError>;
 }
 
 export interface PageUnderstanding {
-  understand(request: PageUnderstandingRequest, signal?: AbortSignal): AsyncResult<PageUnderstandingResult, PageUnderstandingError>;
+  understand(request: PageUnderstandingRequest, signal: AbortSignal): AsyncResult<PageUnderstandingResult, PageUnderstandingError>;
 }
 
 export interface AnswerResolver {
-  resolve(request: AnswerResolutionRequest, signal?: AbortSignal): AsyncResult<AnswerResolutionResult, AnswerResolutionError>;
+  resolve(request: AnswerResolutionRequest, signal: AbortSignal): AsyncResult<AnswerResolutionResult, AnswerResolutionError>;
 }
 
 export interface FieldDriver {
-  drive(request: DriverRequest, signal?: AbortSignal): AsyncResult<MutationReceipt, DriverError>;
+  drive(request: DriverRequest, signal: AbortSignal): AsyncResult<MutationReceipt, DriverError>;
 }
 
 export interface FieldVerifier {
-  verify(request: VerificationRequest, signal?: AbortSignal): AsyncResult<VerificationResult, VerificationError>;
+  verify(request: VerificationRequest, signal: AbortSignal): AsyncResult<VerificationResult, VerificationError>;
 }
 
 export interface CompletionNavigation {
-  complete(request: PageCompletionRequest, signal?: AbortSignal): AsyncResult<PageCompletionResult, NavigationError>;
-  reconcile(request: NavigationReconciliationRequest, signal?: AbortSignal): AsyncResult<NavigationResult, NavigationError>;
+  complete(request: PageCompletionRequest, signal: AbortSignal): AsyncResult<PageCompletionResult, NavigationError>;
+  reconcile(request: NavigationReconciliationRequest, signal: AbortSignal): AsyncResult<NavigationResult, NavigationError>;
 }
 
 export interface JourneyControl {
-  start(request: StartJourneyCommand, signal?: AbortSignal): AsyncResult<JourneyOperationResult, OrchestratorError>;
-  cancel(request: CancelJourneyCommand, signal?: AbortSignal): AsyncResult<JourneyOperationResult, OrchestratorError>;
-  status(request: JourneyStatusQuery, signal?: AbortSignal): AsyncResult<JourneyStatus, OrchestratorError>;
-  result(request: JourneyResultQuery, signal?: AbortSignal): AsyncResult<TerminalResult, OrchestratorError>;
+  start(request: StartJourneyCommand, signal: AbortSignal): AsyncResult<JourneyOperationResult, OrchestratorError>;
+  cancel(request: CancelJourneyCommand, signal: AbortSignal): AsyncResult<JourneyOperationResult, OrchestratorError>;
+  status(request: JourneyStatusQuery, signal: AbortSignal): AsyncResult<JourneyStatus, OrchestratorError>;
+  result(request: JourneyResultQuery, signal: AbortSignal): AsyncResult<TerminalResult, OrchestratorError>;
 }
 
 export interface McpJourneyApi {
-  handle(request: McpRequest, signal?: AbortSignal): AsyncResult<McpResponse, McpTransportError>;
+  handle(request: McpRequest, signal: AbortSignal): AsyncResult<McpResponse, McpTransportError>;
 }
 
 export interface EventSink {
-  append(request: EventAppendRequest, signal?: AbortSignal): AsyncResult<EventAppendResult, ObservabilityError>;
+  append(request: EventAppendRequest, signal: AbortSignal): AsyncResult<EventAppendResult, ObservabilityError>;
 }
 
 export interface ProgressReader {
-  read(request: ProgressReadRequest, signal?: AbortSignal): AsyncResult<JourneyProgress, ObservabilityError>;
+  read(request: ProgressReadRequest, signal: AbortSignal): AsyncResult<JourneyProgress, ObservabilityError>;
 }
 
 export interface FailureReporter {
-  report(request: FailureReportRequest, signal?: AbortSignal): AsyncResult<
+  report(request: FailureReportRequest, signal: AbortSignal): AsyncResult<
     { readonly report: FailureReport; readonly notification: NotificationRecord },
     FailureReportingError
   >;
 }
 
 export interface PrivacyGuard {
-  admit(request: PrivacyAdmissionRequest, signal?: AbortSignal): AsyncResult<AdmissionDecision, PrivacyDenial>;
+  admit(request: PrivacyAdmissionRequest, signal: AbortSignal): AsyncResult<AdmissionDecision, PrivacyDenial>;
 }
 
 export interface SafetyGuard {
-  admit(request: SafetyAdmissionRequest, signal?: AbortSignal): AsyncResult<AdmissionDecision, SafetyDenial>;
+  admit(request: SafetyAdmissionRequest, signal: AbortSignal): AsyncResult<AdmissionDecision, SafetyDenial>;
 }
 
 export interface EvidenceStore {
-  write(request: EvidenceAdmissionRequest, signal?: AbortSignal): AsyncResult<EvidenceWriteResult, EvidenceError>;
-  read(request: EvidenceReadRequest, signal?: AbortSignal): AsyncResult<EvidenceManifest, EvidenceError>;
+  write(request: EvidenceAdmissionRequest, signal: AbortSignal): AsyncResult<EvidenceWriteResult, EvidenceError>;
+  read(request: EvidenceReadRequest, signal: AbortSignal): AsyncResult<EvidenceManifest, EvidenceError>;
 }
 
 export interface ModelController {
-  suggest(request: ModelSuggestionRequest, signal?: AbortSignal): AsyncResult<ModelSuggestionResult, ModelAdmissionError>;
+  suggest(request: ModelSuggestionRequest, signal: AbortSignal): AsyncResult<ModelSuggestionResult, ModelAdmissionError>;
 }

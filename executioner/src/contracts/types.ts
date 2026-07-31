@@ -17,6 +17,11 @@ export interface PortError<C extends string> {
   readonly retryable: boolean;
 }
 
+export interface CancellationError {
+  readonly code: "operation_cancelled";
+  readonly retryable: false;
+}
+
 export interface FixtureManifest {
   readonly schemaVersion: 1;
   readonly fixtureSet: "workday-s1";
@@ -118,6 +123,23 @@ export type BrowserReadback =
   | { readonly kind: "upload"; readonly resumeId: string | null }
   | { readonly kind: "unavailable" };
 
+export type BrowserTargetState =
+  | {
+      readonly visibility: "hidden";
+      readonly enabled: boolean;
+      readonly actionable: false;
+    }
+  | {
+      readonly visibility: "visible";
+      readonly enabled: false;
+      readonly actionable: false;
+    }
+  | {
+      readonly visibility: "visible";
+      readonly enabled: true;
+      readonly actionable: boolean;
+    };
+
 export interface BrowserObservation {
   readonly sessionId: BrowserSessionId;
   readonly pageId: BrowserPageId;
@@ -129,6 +151,7 @@ export interface BrowserObservation {
     readonly name: BrowserReadbackText;
     readonly required: boolean;
     readonly options: readonly BrowserReadbackText[];
+    readonly state: BrowserTargetState;
     readonly readback: BrowserReadback;
   }[];
 }
@@ -210,7 +233,6 @@ export type BrowserSessionError = PortError<
   | "browser_target_ambiguous"
   | "browser_operation_replayed"
   | "browser_timeout"
-  | "browser_cancelled"
 >;
 
 export interface JobIntake {
@@ -424,9 +446,7 @@ export type PageUnderstandingResult =
   | { readonly kind: "unknown" }
   | { readonly kind: "ambiguous" };
 
-export type PageUnderstandingError = PortError<
-  "page_observation_invalid" | "page_understanding_cancelled"
->;
+export type PageUnderstandingError = PortError<"page_observation_invalid">;
 
 export type AnswerProvenance =
   | ProfileAnswerProvenance
@@ -480,6 +500,7 @@ export interface AnswerResolutionRequest {
   readonly field: FieldObservation;
   readonly profileId: string;
   readonly profileRevision: number;
+  readonly resume: ResumeSelection;
 }
 
 export type AnswerResolutionResult =
@@ -493,7 +514,6 @@ export type AnswerResolutionError = PortError<
   | "question_unknown"
   | "question_ambiguous"
   | "protected_answer_denied"
-  | "answer_resolution_cancelled"
 >;
 
 export type DriverBehaviorId = UiBehaviorId;
@@ -517,7 +537,6 @@ export type DriverError = PortError<
   | "driver_behavior_unsupported"
   | "driver_target_invalid"
   | "driver_operation_replayed"
-  | "driver_cancelled"
 >;
 
 export interface VerificationRequest {
@@ -541,7 +560,7 @@ export interface PageCompletionRequest {
 export type PageCompletionResult =
   | {
       readonly kind: "complete";
-      readonly decision: NavigationDecision;
+      readonly decision: ApprovedNavigationDecision;
     }
   | {
       readonly kind: "blocked";
@@ -549,25 +568,34 @@ export type PageCompletionResult =
       readonly decision: { readonly kind: "blocked" };
     };
 
-export type NavigationDecision =
+export type ApprovedNavigationDecision =
   | { readonly kind: "next"; readonly expectedPage: "profile" | "questionnaire" | "review" }
-  | { readonly kind: "stop_review" }
+  | { readonly kind: "stop_review" };
+
+export type NavigationDecision =
+  | ApprovedNavigationDecision
   | { readonly kind: "blocked" };
 
 export interface NavigationReconciliationRequest {
   readonly operationId: OperationId;
-  readonly decision: NavigationDecision;
+  readonly decision: ApprovedNavigationDecision;
   readonly observation: BrowserNavigationObservation;
+  readonly expected: PageIdentity;
+  readonly observed: PageIdentity;
 }
 
-export type NavigationResult =
-  | { readonly kind: "advanced"; readonly page: "profile" | "questionnaire" | "review" }
+export type NavigationResult = {
+  readonly expected: PageIdentity;
+  readonly observed: PageIdentity;
+} & (
+  | { readonly kind: "advanced" }
   | { readonly kind: "review_reached" }
   | { readonly kind: "uncertain" }
-  | { readonly kind: "illegal_transition" };
+  | { readonly kind: "illegal_transition" }
+);
 
 export type VerificationError = PortError<
-  "verification_input_invalid" | "verification_timeout" | "verification_cancelled"
+  "verification_input_invalid" | "verification_timeout"
 >;
 export type NavigationError = PortError<
   "page_incomplete" | "navigation_illegal" | "navigation_uncertain"
@@ -664,7 +692,6 @@ export type OrchestratorError = PortError<
   | "journey_already_terminal"
   | "journey_busy"
   | "journey_retry_exhausted"
-  | "journey_cancelled"
 >;
 export type McpTransportError = PortError<
   "mcp_request_invalid" | "mcp_method_unknown" | "mcp_internal_error"
@@ -800,13 +827,15 @@ export type FailureReportingError = PortError<
   "failure_context_invalid" | "notification_unavailable"
 >;
 
-export type AdmissionDecision =
-  | { readonly kind: "admitted"; readonly policyRevision: string }
-  | {
-      readonly kind: "denied";
-      readonly policyRevision: string;
-      readonly code: RedactionCode;
-    };
+export const admissionDecisionPolicy = {
+  admitted: "result",
+  denied: "error",
+} as const;
+
+export interface AdmissionDecision {
+  readonly kind: "admitted";
+  readonly policyRevision: string;
+}
 
 export type RedactionCode =
   | "credential_forbidden"
@@ -899,6 +928,7 @@ export type ComponentId =
   | "F11";
 
 export type StableErrorCode =
+  | CancellationError["code"]
   | FixtureRuntimeError["code"]
   | BrowserSessionError["code"]
   | JourneyInputError["code"]

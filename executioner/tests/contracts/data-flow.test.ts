@@ -3,6 +3,7 @@ import { test } from "node:test";
 
 import {
   boundedText,
+  type AnswerResolutionRequest,
   browserReadbackText,
   browserOperationCoordinateKeys,
   type BrowserMutationRequest,
@@ -14,6 +15,9 @@ import {
   type JourneyBootstrapRequest,
   journeyBootstrapReferenceKeys,
   parseMcpRequest,
+  type NavigationReconciliationRequest,
+  type NavigationResult,
+  type PageCompletionResult,
   serializedSchemas,
   type StartJourneyCommand,
   uiBehaviorIds,
@@ -33,6 +37,7 @@ test("browser observations carry bounded verifier readback", () => {
         name: browserReadbackText("First name"),
         required: true,
         options: [],
+        state: { visibility: "visible", enabled: true, actionable: true },
         readback: { kind: "text", value: browserReadbackText("Ada") },
       },
       {
@@ -41,6 +46,7 @@ test("browser observations carry bounded verifier readback", () => {
         name: browserReadbackText("Authorized"),
         required: true,
         options: [],
+        state: { visibility: "visible", enabled: true, actionable: true },
         readback: { kind: "checked", checked: true },
       },
       {
@@ -49,6 +55,7 @@ test("browser observations carry bounded verifier readback", () => {
         name: browserReadbackText("Country"),
         required: true,
         options: [browserReadbackText("Synthetic option")],
+        state: { visibility: "visible", enabled: true, actionable: true },
         readback: {
           kind: "selected",
           option: browserReadbackText("Synthetic option"),
@@ -60,6 +67,7 @@ test("browser observations carry bounded verifier readback", () => {
         name: browserReadbackText("Resume"),
         required: true,
         options: [],
+        state: { visibility: "hidden", enabled: true, actionable: false },
         readback: { kind: "upload", resumeId: "resume-1" },
       },
     ],
@@ -81,6 +89,67 @@ test("browser observations carry bounded verifier readback", () => {
       ),
     RangeError,
   );
+});
+
+test("answer resolution carries the selected resume input", () => {
+  const request = {
+    field: {
+      fieldId: "resume",
+      target: "target-upload",
+      label: boundedText("Resume"),
+      required: true,
+      behavior: "file_upload",
+      options: [],
+      state: "empty",
+    },
+    profileId: "profile-1",
+    profileRevision: 1,
+    resume: {
+      resumeId: "resume-1",
+      sha256: "sha256:resume",
+    },
+  } as const satisfies AnswerResolutionRequest;
+
+  assert.equal(request.resume.resumeId, "resume-1");
+});
+
+test("navigation reconciliation compares semantic page identity", () => {
+  const expected = {
+    kind: "workday",
+    page: "questionnaire",
+  } as const;
+  const observed = {
+    kind: "workday",
+    page: "questionnaire",
+  } as const;
+  const request = {
+    operationId: "operation-1",
+    decision: { kind: "next", expectedPage: "questionnaire" },
+    observation: {
+      operationId: "operation-1",
+      fromPageId: "browser-page-1",
+      pageId: "browser-page-2",
+    },
+    expected,
+    observed,
+  } as const satisfies NavigationReconciliationRequest;
+  const result = {
+    kind: "advanced",
+    expected,
+    observed,
+  } as const satisfies NavigationResult;
+
+  assert.deepEqual(result.expected, request.expected);
+  assert.deepEqual(result.observed, request.observed);
+});
+
+test("complete pages cannot carry a blocked navigation decision", () => {
+  // @ts-expect-error complete results require an approved next/review decision
+  const invalid: PageCompletionResult = {
+    kind: "complete",
+    decision: { kind: "blocked" },
+  };
+  assert.equal(invalid.decision.kind, "blocked");
 });
 
 test("driver and verifier requests carry explicit browser coordinates", () => {

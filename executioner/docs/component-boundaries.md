@@ -324,5 +324,9 @@ Credentials, raw page values, and Submit capability are not shared data.
   transition commands.
 - F10 owns event, progress, factual failure, and notification persistence.
 - F11 owns admission, evidence persistence, and bounded model invocation.
+- PrivacyGuard and SafetyGuard return `AdmissionDecision` only for admission;
+  denials use their declared stable port-error channel.
+- Every in-process port method requires an `AbortSignal`. Cancellation returns
+  the shared non-retryable `operation_cancelled` result error.
 - Contract corrections go through the F1 owner. Component branches do not copy
   or edit shared contracts.
