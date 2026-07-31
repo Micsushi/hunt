@@ -242,6 +242,23 @@ const stableErrorCodes = [
   "model_unavailable",
 ] as const satisfies readonly StableErrorCode[];
 
+type SameUnion<A, B> =
+  [A] extends [B] ? ([B] extends [A] ? true : false) : false;
+
+const componentIdsCoverUnion: SameUnion<
+  (typeof componentIds)[number],
+  ComponentId
+> = true;
+const stableErrorCodesCoverUnion: SameUnion<
+  (typeof stableErrorCodes)[number],
+  StableErrorCode
+> = true;
+
+export const serializedContractCoverage = {
+  componentIds: componentIdsCoverUnion,
+  stableErrorCodes: stableErrorCodesCoverUnion,
+} as const;
+
 export function parseFixtureManifest(value: unknown): FixtureManifest {
   const manifest = versioned(value, "$", ["fixtureSet", "pages"]);
   oneOf(manifest.fixtureSet, ["workday-s1"], "$.fixtureSet");

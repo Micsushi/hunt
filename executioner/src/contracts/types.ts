@@ -32,10 +32,12 @@ export interface FixtureManifest {
   }[];
 }
 
+export type FixtureFault = "component_failure" | null;
+
 export interface FixtureRunState {
   readonly fixtureRunId: string;
   readonly pageId: FixturePageId;
-  readonly enabledFault: string | null;
+  readonly enabledFault: FixtureFault;
 }
 
 export interface FixtureStartRequest {
@@ -54,7 +56,7 @@ export interface FixtureResetRequest {
 
 export interface FixtureFaultRequest {
   readonly fixtureRunId: string;
-  readonly fault: "component_failure" | null;
+  readonly fault: FixtureFault;
 }
 
 export interface FixtureStartResult {
@@ -529,7 +531,7 @@ export interface MutationReceipt {
   readonly operationId: OperationId;
   readonly fieldId: string;
   readonly behavior: DriverBehaviorId;
-  readonly attempted: boolean;
+  readonly attempted: true;
 }
 
 export type DriverError = PortError<
