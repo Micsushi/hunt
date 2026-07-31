@@ -88,12 +88,12 @@ export type BrowserTargetRole =
 
 export const MAX_BROWSER_READBACK_CODE_POINTS = 512 as const;
 
-declare const browserReadbackTextBrand: unique symbol;
-export type BrowserReadbackText = string & {
-  readonly [browserReadbackTextBrand]: true;
+declare const boundedTextBrand: unique symbol;
+export type BoundedText = string & {
+  readonly [boundedTextBrand]: true;
 };
 
-export function browserReadbackText(value: string): BrowserReadbackText {
+export function boundedText(value: string): BoundedText {
   let codePoints = 0;
   for (const _codePoint of value) {
     codePoints += 1;
@@ -101,8 +101,11 @@ export function browserReadbackText(value: string): BrowserReadbackText {
       throw new RangeError("browser readback exceeds the contract limit");
     }
   }
-  return value as BrowserReadbackText;
+  return value as BoundedText;
 }
+
+export type BrowserReadbackText = BoundedText;
+export const browserReadbackText = boundedText;
 
 export type BrowserReadback =
   | { readonly kind: "empty" }
@@ -143,7 +146,7 @@ export type BrowserMutation =
   | {
       readonly kind: "select";
       readonly target: BrowserTargetToken;
-      readonly option: string;
+      readonly option: BoundedText;
     }
   | {
       readonly kind: "upload";
@@ -156,19 +159,24 @@ export interface BrowserStartRequest {
   readonly target: string;
 }
 
-export interface BrowserObservationRequest {
+export const browserOperationCoordinateKeys = [
+  "sessionId",
+  "pageId",
+] as const;
+
+export interface BrowserOperationCoordinates {
   readonly sessionId: BrowserSessionId;
   readonly pageId: BrowserPageId;
 }
 
-export interface BrowserMutationRequest {
-  readonly sessionId: BrowserSessionId;
+export type BrowserObservationRequest = BrowserOperationCoordinates;
+
+export interface BrowserMutationRequest extends BrowserOperationCoordinates {
   readonly operationId: OperationId;
   readonly mutation: BrowserMutation;
 }
 
-export interface BrowserNavigationRequest {
-  readonly sessionId: BrowserSessionId;
+export interface BrowserNavigationRequest extends BrowserOperationCoordinates {
   readonly operationId: OperationId;
   readonly action: "next";
 }
@@ -389,10 +397,13 @@ export type UiBehaviorId = (typeof uiBehaviorIds)[number];
 export interface FieldObservation {
   readonly fieldId: string;
   readonly target: BrowserTargetToken;
-  readonly label: string;
+  readonly label: BoundedText;
   readonly required: boolean;
   readonly behavior: UiBehaviorId | "unsupported";
-  readonly options: readonly { readonly id: OptionId; readonly label: string }[];
+  readonly options: readonly {
+    readonly id: OptionId;
+    readonly label: BoundedText;
+  }[];
   readonly state: "empty" | "populated" | "hidden" | "ambiguous";
 }
 
@@ -437,6 +448,7 @@ export type FieldIntent =
       readonly fieldId: string;
       readonly target: BrowserTargetToken;
       readonly optionId: OptionId;
+      readonly expectedOption: BoundedText;
       readonly provenance: AnswerProvenance;
     }
   | {
@@ -487,6 +499,8 @@ export type AnswerResolutionError = PortError<
 export type DriverBehaviorId = UiBehaviorId;
 
 export interface DriverRequest {
+  readonly sessionId: BrowserSessionId;
+  readonly pageId: BrowserPageId;
   readonly operationId: OperationId;
   readonly intent: FieldIntent;
 }
@@ -507,6 +521,8 @@ export type DriverError = PortError<
 >;
 
 export interface VerificationRequest {
+  readonly sessionId: BrowserSessionId;
+  readonly pageId: BrowserPageId;
   readonly intent: FieldIntent;
   readonly receipt: MutationReceipt;
 }

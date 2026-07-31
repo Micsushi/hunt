@@ -2,9 +2,14 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import {
+  boundedText,
   browserReadbackText,
+  browserOperationCoordinateKeys,
+  type BrowserMutationRequest,
+  type BrowserReadback,
   MAX_BROWSER_READBACK_CODE_POINTS,
   type BrowserObservation,
+  type DriverRequest,
   type FieldIntent,
   type JourneyBootstrapRequest,
   journeyBootstrapReferenceKeys,
@@ -12,6 +17,7 @@ import {
   serializedSchemas,
   type StartJourneyCommand,
   uiBehaviorIds,
+  type VerificationRequest,
 } from "../../src/contracts/index.ts";
 
 test("browser observations carry bounded verifier readback", () => {
@@ -77,6 +83,51 @@ test("browser observations carry bounded verifier readback", () => {
   );
 });
 
+test("driver and verifier requests carry explicit browser coordinates", () => {
+  const intent = {
+    kind: "text",
+    behavior: "text",
+    fieldId: "field-1",
+    target: "target-1",
+    value: "Synthetic",
+    provenance: "owner_provided",
+  } as const satisfies FieldIntent;
+  const coordinates = {
+    sessionId: "session-1",
+    pageId: "page-1",
+  };
+  const driver = {
+    ...coordinates,
+    operationId: "operation-1",
+    intent,
+  } satisfies DriverRequest;
+  const verification = {
+    ...coordinates,
+    intent,
+    receipt: {
+      operationId: "operation-1",
+      fieldId: "field-1",
+      behavior: "text",
+      attempted: true,
+    },
+  } satisfies VerificationRequest;
+  const mutation = {
+    ...coordinates,
+    operationId: driver.operationId,
+    mutation: {
+      kind: "type",
+      target: intent.target,
+      text: intent.value,
+    },
+  } satisfies BrowserMutationRequest;
+
+  assert.deepEqual(
+    browserOperationCoordinateKeys.map((key) => driver[key]),
+    ["session-1", "page-1"],
+  );
+  assert.equal(verification.pageId, mutation.pageId);
+});
+
 test("MCP start, orchestration, and F4 bootstrap share one ID request", () => {
   const request = parseMcpRequest({
     schemaVersion: 1,
@@ -116,6 +167,7 @@ test("field intents retain the exact UI behavior for driver dispatch", () => {
       fieldId: "field-choice",
       target: "target-choice",
       optionId: "option-1",
+      expectedOption: boundedText("Synthetic option"),
       provenance: "visible_option",
     },
     {
@@ -157,5 +209,37 @@ test("field intents retain the exact UI behavior for driver dispatch", () => {
   assert.deepEqual(
     intents.map(({ behavior }) => behavior),
     ["textarea", "listbox", "checkbox", "date", "file_upload"],
+  );
+});
+
+test("choice intent carries one bounded browser-usable expected option", () => {
+  const choice = {
+    kind: "choice",
+    behavior: "select",
+    fieldId: "field-choice",
+    target: "target-choice",
+    optionId: "option-1",
+    expectedOption: boundedText("Synthetic option"),
+    provenance: "visible_option",
+  } as const satisfies FieldIntent;
+  const mutation = {
+    sessionId: "session-1",
+    pageId: "page-1",
+    operationId: "operation-1",
+    mutation: {
+      kind: "select",
+      target: choice.target,
+      option: choice.expectedOption,
+    },
+  } satisfies BrowserMutationRequest;
+  const readback = {
+    kind: "selected",
+    option: choice.expectedOption,
+  } satisfies BrowserReadback;
+
+  assert.equal(mutation.mutation.option, readback.option);
+  assert.throws(
+    () => boundedText("x".repeat(MAX_BROWSER_READBACK_CODE_POINTS + 1)),
+    RangeError,
   );
 });
