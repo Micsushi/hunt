@@ -11,8 +11,6 @@ import { LogsPage } from '@/pages/Logs'
 import { OpsPage } from '@/pages/Ops'
 import { FletcherPage } from '@/pages/Fletcher'
 import { FletcherReviewPage } from '@/pages/Fletcher/ReviewPage'
-import { ExecutionerPage } from '@/pages/Executioner'
-import { CoordinatorPage } from '@/pages/Coordinator'
 import { SettingsPage } from '@/pages/Settings'
 
 const MOCK = import.meta.env.VITE_MOCK_BACKEND === 'true'
@@ -131,23 +129,8 @@ export default function App() {
           }
         />
 
-        <Route
-          path="/executioner"
-          element={
-            <AuthGuard username={username}>
-              <ExecutionerPage />
-            </AuthGuard>
-          }
-        />
-
-        <Route
-          path="/coordinator"
-          element={
-            <AuthGuard username={username}>
-              <CoordinatorPage />
-            </AuthGuard>
-          }
-        />
+        <Route path="/coordinator" element={<Navigate to="/" replace />} />
+        <Route path="/executioner" element={<Navigate to="/" replace />} />
 
         {/* Legacy redirects for old SSR paths */}
         <Route path="/health-view" element={<Navigate to="/logs" replace />} />

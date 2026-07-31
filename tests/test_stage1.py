@@ -232,23 +232,24 @@ class Stage1Tests(unittest.TestCase):
             with patch.object(discovery, "SEARCH_TERMS", {"engineering": ["software engineer"]}):
                 with patch.object(discovery, "LOCATIONS", ["Canada"]):
                     with patch.object(discovery, "SITES", ["linkedin"]):
-                        with patch.object(discovery, "MAX_WORKERS", 1):
-                            with patch.object(discovery, "init_db"):
-                                with patch.object(
-                                    discovery,
-                                    "add_job",
-                                    side_effect=[("inserted", 35), ("inserted", 39)],
-                                ):
+                        with patch.object(discovery, "WATCHLIST", ["amazon", "microsoft"]):
+                            with patch.object(discovery, "MAX_WORKERS", 1):
+                                with patch.object(discovery, "init_db"):
                                     with patch.object(
                                         discovery,
-                                        "send_discord_webhook_message",
-                                        return_value={
-                                            "sent": True,
-                                            "reason": None,
-                                            "status_code": 204,
-                                        },
-                                    ) as send_mock:
-                                        summary = discovery.scrape(enrich_pending=False)
+                                        "add_job",
+                                        side_effect=[("inserted", 35), ("inserted", 39)],
+                                    ):
+                                        with patch.object(
+                                            discovery,
+                                            "send_discord_webhook_message",
+                                            return_value={
+                                                "sent": True,
+                                                "reason": None,
+                                                "status_code": 204,
+                                            },
+                                        ) as send_mock:
+                                            summary = discovery.scrape(enrich_pending=False)
 
         self.assertEqual(summary["inserted"], 2)
         send_mock.assert_called_once()

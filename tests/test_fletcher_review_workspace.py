@@ -369,12 +369,17 @@ def test_artifact_download_filename_uses_version_family_and_timestamp(tmp_path, 
     )
 
 
-def test_general_base_resume_fallback_exists():
+def test_general_base_resume_prefers_ignored_local_source(monkeypatch, tmp_path):
+    general = tmp_path / "general"
+    general.mkdir()
+    local_resume = general / "main.local.tex"
+    local_resume.write_text("local resume", encoding="utf-8")
+    monkeypatch.setattr("fletcher.config.BASE_RESUMES_ROOT", tmp_path)
+
     name, path = resolve_base_resume_path("unknown")
 
     assert name == "general"
-    assert path.name == "main.tex"
-    assert path.exists()
+    assert path == local_resume
 
 
 def test_attempt_dirs_are_unique_for_same_label(monkeypatch, tmp_path):

@@ -217,13 +217,13 @@ def test_import_master_resume_yaml_from_template_tex_is_loadable():
     yaml_text = import_master_resume_yaml(MAIN_TEX)
     data = parse_master_yaml(yaml_text)
 
-    assert data["header"]["name"] == "Michael Shi"
-    assert data["education"]["date_text"] == r"Expected Graduation: \textbf{Sep 2026}"
-    assert data["experience"][0]["id"] == "job1_invidi_technologies"
-    assert data["experience"][0]["title"] == "Junior Software Developer (Part-time)"
-    assert data["experience"][0]["company"] == "INVIDI Technologies"
-    assert data["experience"][0]["location"] == "Edmonton, AB"
-    assert data["projects"][0]["url"] == "https://github.com/NatRunners/StudyAmp"
+    assert data["header"]["name"] == "Your Name"
+    assert data["education"]["date_text"] == r"Expected Graduation: \textbf{YYYY}"
+    assert data["experience"][0]["id"] == "job1_company"
+    assert data["experience"][0]["title"] == "Current Role"
+    assert data["experience"][0]["company"] == "Company"
+    assert data["experience"][0]["location"] == "City, Region"
+    assert data["projects"][0]["url"] == "https://github.com/yourhandle/project-one"
     assert "Python" in data["skills"]["Languages"]
 
     doc, _ = build_master_resume_document(
@@ -235,7 +235,7 @@ def test_import_master_resume_yaml_from_template_tex_is_loadable():
     tex = render_resume_tex(doc)
 
     assert r"\section{Experience}" in tex
-    assert "Junior Software Developer (Part-time), INVIDI Technologies -- Edmonton, AB" in tex
+    assert "Current Role, Company -- City, Region" in tex
 
 
 def test_import_master_cli_writes_yaml(tmp_path):
@@ -259,5 +259,5 @@ def test_import_master_cli_writes_yaml(tmp_path):
 
     assert result.returncode == 0, result.stderr
     data = parse_master_yaml(output.read_text(encoding="utf-8"))
-    assert data["header"]["name"] == "Michael Shi"
-    assert data["projects"][0]["id"] == "proj1_studyamp_nathacks_1st_place"
+    assert data["header"]["name"] == "Your Name"
+    assert data["projects"][0]["id"] == "proj1_project_one"

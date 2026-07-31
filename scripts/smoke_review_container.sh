@@ -71,7 +71,6 @@ docker run -d \
   -e HUNT_ADMIN_PASSWORD="$ADMIN_PASSWORD" \
   -e HUNT_HUNTER_URL="http://127.0.0.1:8001" \
   -e HUNT_FLETCHER_URL="http://127.0.0.1:8002" \
-  -e HUNT_COORDINATOR_URL="http://127.0.0.1:8003" \
   "$IMAGE" >/dev/null
 
 for _ in $(seq 1 20); do

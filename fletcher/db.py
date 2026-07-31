@@ -1259,7 +1259,7 @@ def list_jobs_ready_for_resume(
                     WHEN latest_resume_generated_at IS NULL OR trim(coalesce(latest_resume_generated_at, '')) = '' THEN 0
                     ELSE 1
                 END,
-                coalesce(enriched_at, date_scraped, CURRENT_TIMESTAMP) DESC,
+                coalesce(enriched_at, date_scraped, CAST(CURRENT_TIMESTAMP AS TEXT)) DESC,
                 id DESC
         """
         want = max(1, limit)

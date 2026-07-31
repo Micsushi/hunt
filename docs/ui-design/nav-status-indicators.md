@@ -13,7 +13,7 @@ Each nav link shows a live status dot - no need to enter a page to know if a com
 |-------------|---------------------------|
 | Ops         | DB + C1 reachable         |
 | Fletcher    | C2 reachable (`c2.ok`)    |
-| Executioner | C3 bridge (`c3_bridge.ok`)|
-| Coordinator | C4 reachable (`c4.ok`)    |
+| Executioner | Removed until C3 v3 has a runtime |
+| Coordinator | Removed while C4 is paused |
 
 ---

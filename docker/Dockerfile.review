@@ -35,6 +35,7 @@ COPY backend /app/backend
 COPY control_plane_api.py /app/control_plane_api.py
 COPY hunter /app/hunter
 COPY fletcher /app/fletcher
+COPY main.tex /app/main.tex
 COPY --from=frontend-build /frontend/dist /app/frontend/dist
 
 EXPOSE 8000

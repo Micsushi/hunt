@@ -1,5 +1,7 @@
 # C4 Hermes Worker Runbook
 
+> Status: paused as of 2026-07-30. The wrapper exits without starting Hermes. This runbook is retained as historical reference only.
+
 Goal: use Hermes Agent as a bounded C4 investigation worker when C3 reports a novel failure or unknown widget. Hermes observes the blocking page and produces a structured investigation report. It does not fill forms or submit applications.
 
 Preferred for Linux, WSL2, and server2. Use OpenClaw first for Windows-local investigation.

@@ -12,7 +12,8 @@
 
 ### Add
 
-**Service health strip:** inline row of component pills (DB / C1 / C2 / C3 bridge / C4), colour-coded, click navigates to component page.
+**Service health strip:** inline row of component pills (DB / C1 / C2), plus
+non-clickable C3 v3 planned status.
 
 **Jobs by category - pie/donut chart (switchable):** toggle buttons switch breakdown dimension between: job category / ATS type / source / enrichment status. Click a slice -> navigate to `/jobs` with that filter applied. Uses **Recharts**.
 

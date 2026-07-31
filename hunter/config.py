@@ -83,60 +83,21 @@ HUNT_DB_URL = _get_str_env("HUNT_DB_URL", "")
 HUNT_CREDENTIAL_KEY = _get_str_env("HUNT_CREDENTIAL_KEY", "")
 
 # Shared bearer token used by all component service APIs.
-# C0 backend sends this token when calling C1/C2/C4 services.
+# C0 backend sends this token when calling active C1/C2 services.
 # Each service validates it on every request.
 # Leave blank in dev to disable auth on service APIs.
 HUNT_SERVICE_TOKEN = _get_str_env("HUNT_SERVICE_TOKEN", "")
 
-# Component service base URLs (used by C0 gateway to reach each service).
+# Active component service base URLs (used by C0 gateway).
 HUNT_HUNTER_URL = _get_str_env("HUNT_HUNTER_URL", "http://localhost:8001")
 HUNT_FLETCHER_URL = _get_str_env("HUNT_FLETCHER_URL", "http://localhost:8002")
-HUNT_COORDINATOR_URL = _get_str_env("HUNT_COORDINATOR_URL", "http://localhost:8003")
 
 # Discovery runs one query per (lane, term). Broad board results are trimmed afterward:
 # see hunter.search_lanes.LANE_TITLE_KEYWORDS (keep lanes aligned when you change terms).
-_DEFAULT_SEARCH_TERMS = {
-    "engineering": [
-        "software engineer intern",
-        "software engineer new grad",
-        "junior software engineer",
-        "software developer intern",
-        "software developer new grad",
-        "junior software developer",
-        "frontend developer intern",
-        "backend developer intern",
-        "fullstack developer intern",
-    ],
-    "product": [
-        "product manager intern",
-        "product manager new grad",
-        "junior product manager",
-        "associate product manager",
-        "project manager intern",
-        "project manager new grad",
-        "scrum master junior",
-        "scrum master intern",
-        "business analyst intern",
-        "business analyst new grad",
-    ],
-    "data": [
-        "data analyst intern",
-        "data analyst new grad",
-        "junior data analyst",
-        "data scientist intern",
-        "data scientist new grad",
-        "junior data scientist",
-        "data engineer intern",
-        "data engineer new grad",
-        "junior data engineer",
-    ],
-}
+_DEFAULT_SEARCH_TERMS = {"engineering": ["software engineer"]}
 SEARCH_TERMS = _get_config_dict("SEARCH_TERMS", _DEFAULT_SEARCH_TERMS)
 
-_DEFAULT_LOCATIONS = [
-    "Canada",
-    # "Remote",
-]
+_DEFAULT_LOCATIONS = ["Remote"]
 LOCATIONS = _get_config_list("LOCATIONS", _DEFAULT_LOCATIONS)
 
 SITES = _get_config_list("SITES", ["indeed", "linkedin"])
@@ -161,7 +122,7 @@ ENRICHMENT_ALERT_FAILURE_RATE_PERCENT = _get_config_int("ENRICHMENT_ALERT_FAILUR
 ENRICHMENT_ALERT_COOLDOWN_MINUTES = _get_config_int("ENRICHMENT_ALERT_COOLDOWN_MINUTES", 60)
 REVIEW_APP_HOST = _get_str_env("REVIEW_APP_HOST", "127.0.0.1")
 REVIEW_APP_PORT = _get_int_env("REVIEW_APP_PORT", 8000)
-REVIEW_APP_PUBLIC_URL = _get_str_env("REVIEW_APP_PUBLIC_URL", "https://agent-hunt-review.mshi.ca")
+REVIEW_APP_PUBLIC_URL = _get_str_env("REVIEW_APP_PUBLIC_URL", "http://127.0.0.1:8000")
 # Optional : require this bearer token for mutating review-app POST APIs (empty = disabled).
 REVIEW_OPS_TOKEN = _get_str_env("REVIEW_OPS_TOKEN", "")
 # Max rows a single bulk requeue from the review UI may touch.
@@ -171,106 +132,8 @@ REVIEW_BULK_SELECTED_MAX = _get_int_env("REVIEW_BULK_SELECTED_MAX", 250)
 # Max rows per request for bulk delete (guards accidents).
 REVIEW_BULK_DELETE_MAX = _get_int_env("REVIEW_BULK_DELETE_MAX", 50)
 
-_DEFAULT_WATCHLIST = [
-    "1password",
-    "adobe",
-    "amazon",
-    "amd",
-    "apple",
-    "atlassian",
-    "bloomberg",
-    "celestica",
-    "cisco",
-    "cloudflare",
-    "connor, clark & lunn",
-    "d2l",
-    "datadog",
-    "dell",
-    "doordash",
-    "drw",
-    "flare",
-    "google",
-    "hashicorp",
-    "hewlett packard",
-    "hootsuite",
-    "hp",
-    "ibm",
-    "meta",
-    "microsoft",
-    "okta",
-    "paypal",
-    "pcl",
-    "pinterest",
-    "qualcomm",
-    "reddit",
-    "robinhood",
-    "salesforce",
-    "sap",
-    "shopify",
-    "stripe",
-    "uber",
-    "unity",
-    "vmware",
-    "wealthsimple",
-]
+_DEFAULT_WATCHLIST: list[str] = []
 WATCHLIST = _get_config_list("WATCHLIST", _DEFAULT_WATCHLIST)
 
-_DEFAULT_TITLE_BLACKLIST = [
-    "master",
-    "phd",
-    "ph.d",
-    "doctoral",
-    "postdoc",
-    "post-doc",
-    "senior",
-    "sr.",
-    "sr ",
-    "staff",
-    "principal",
-    "lead",
-    "director",
-    "vp ",
-    "vice president",
-    "head of",
-    "chief ",
-    "architect",
-    # Higher than Tier I / Level 1
-    "engineer ii",
-    "engineer iii",
-    "engineer iv",
-    "engineer v",
-    "developer ii",
-    "developer iii",
-    "developer iv",
-    "analyst ii",
-    "analyst iii",
-    "scientist ii",
-    "scientist iii",
-    "level 2",
-    "level 3",
-    "level 4",
-    "level 5",
-    " l2",
-    " l3",
-    " l4",
-    " l5",
-    "l2 ",
-    "l3 ",
-    "l4 ",
-    "l5 ",
-    "tier 2",
-    "tier 3",
-    "tier 4",
-    "tier ii",
-    "tier iii",
-    "tier iv",
-    " ii ",
-    " iii ",
-    " iv ",
-    " v ",
-    " ii",
-    " iii",
-    " iv",
-    " v ",
-]
+_DEFAULT_TITLE_BLACKLIST: list[str] = []
 TITLE_BLACKLIST = _get_config_list("TITLE_BLACKLIST", _DEFAULT_TITLE_BLACKLIST)

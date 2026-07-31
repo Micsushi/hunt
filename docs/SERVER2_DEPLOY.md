@@ -22,15 +22,15 @@ Useful variants:
 .\scripts\deploy_server2.ps1 -Stages 6 -Check
 .\scripts\deploy_server2.ps1 -Stages 6,7
 .\scripts\deploy_server2.ps1 -Stages 6 -PrintOnly
-.\scripts\deploy_server2.ps1 -Stages 9 -AnsibleRepo C:\path\to\ansible_homelab
 ```
 
 ## Stage map
 
 - `6`: C0 + C1 + Postgres base Hunt runtime
 - `7`: C2 Fletcher
-- `8`: C3 helper artifacts
-- `9`: C4 Coordinator / OpenClaw runtime
+
+The Hunt wrapper rejects every other stage. C3 v3 is not implemented and C4 is
+on hold, so neither has a deploy stage.
 
 ## Prerequisites
 
@@ -91,31 +91,25 @@ Use this when you want to prove not just that Hunt can start, but that the Ansib
 python deploy.py all --mode server --env-file .env.server2 --dry-run
 ```
 
-2. Preview the exact remote playbook command:
+2. Optional Ansible check mode:
 
 ```powershell
-.\scripts\deploy_server2.ps1 -Stages 9 -PrintOnly
+.\scripts\deploy_server2.ps1 -Stages 6,7 -Check
 ```
 
-3. Optional Ansible check mode:
+3. Real remote deploy:
 
 ```powershell
-.\scripts\deploy_server2.ps1 -Stages 9 -Check
+.\scripts\deploy_server2.ps1 -Stages 6,7
 ```
 
-4. Real remote deploy:
-
-```powershell
-.\scripts\deploy_server2.ps1 -Stages 9
-```
-
-5. After deploy, verify the private runtime contract on the host:
+4. After deploy, verify the private runtime contract on the host:
 
 - Hunt containers are up on `server2`
 - `hunt_review` and `hunt_frontend` exist with the expected names
 - the `homelab` Docker network still contains those services
 
-6. Then verify the public contract:
+5. Then verify the public contract:
 
 - open the public frontend hostname through Cloudflare Tunnel
 - open the public review/backend hostname through Cloudflare Tunnel

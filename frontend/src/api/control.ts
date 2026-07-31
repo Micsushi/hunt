@@ -50,23 +50,6 @@ export interface LinkedInAccount {
   has_password: boolean
 }
 
-export interface C4Run {
-  id?: string
-  run_id?: string
-  job_id?: number
-  status?: string
-  updated_at?: string
-  created_at?: string
-  [key: string]: unknown
-}
-
-export interface PendingFill {
-  run_id: string
-  job_id?: number
-  ats_type?: string
-  [key: string]: unknown
-}
-
 export function fetchSystemStatus(): Promise<SystemStatus> {
   return get<SystemStatus>('/api/system/status')
 }
@@ -430,44 +413,6 @@ export function revertFletcherReviewVersion(
   )
 }
 
-export function fetchC4Status(): Promise<unknown> {
-  return get('/api/gateway/c4/status')
-}
-
-export function fetchC4Runs(): Promise<{ runs: C4Run[] }> {
-  return get('/api/gateway/c4/runs?limit=20')
-}
-
-export function triggerC4Run(jobId: number): Promise<unknown> {
-  void logHumanCommand({
-    action: 'c4.run',
-    buttonId: 'trigger-c4-run',
-    details: { jobId },
-  })
-  return post('/api/gateway/c4/run', { job_id: jobId })
-}
-
-export function approveC4Run(
-  runId: string,
-  decision: 'approve' | 'deny',
-  reason: string,
-): Promise<unknown> {
-  void logHumanCommand({
-    action: 'c4.approve_run',
-    buttonId: 'approve-c4-run',
-    details: { runId, decision },
-  })
-  return post(`/api/gateway/c4/runs/${encodeURIComponent(runId)}/approve`, {
-    decision,
-    approved_by: 'c0',
-    reason,
-  })
-}
-
-export function fetchPendingFills(): Promise<{ fills: PendingFill[] }> {
-  return get('/api/c3/pending-fills')
-}
-
 export interface C1Config {
   config_file: string
   config_file_exists: boolean
@@ -520,10 +465,10 @@ export interface EasyApplyVerifyResult {
 
 export function verifyEasyApply(jobId: number): Promise<EasyApplyVerifyResult> {
   void logHumanCommand({
-    action: 'c3.verify_easy_apply',
+    action: 'c1.verify_easy_apply',
     buttonId: 'verify-easy-apply',
-    component: 'c3',
-    surface: 'c3_ui',
+    component: 'c1',
+    surface: 'c0_ui',
     details: { jobId },
   })
   return post<EasyApplyVerifyResult>(`/api/jobs/${jobId}/verify-easy-apply`, {})

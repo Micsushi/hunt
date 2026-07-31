@@ -71,7 +71,6 @@ from backend.resume_review_ui import (  # noqa: E402
     load_json_file,
 )
 from hunter.config import (  # noqa: E402
-    HUNT_COORDINATOR_URL,
     HUNT_FLETCHER_URL,
     HUNT_HUNTER_URL,
     HUNT_SERVICE_TOKEN,
@@ -239,30 +238,19 @@ async def lifespan(app):
             "Set HUNT_ADMIN_PASSWORD in your environment to enable the web UI.",
             stacklevel=1,
         )
-    try:
-        yield
-    finally:
-        from backend.c3_commands import shutdown_c3_operation_managers
-
-        shutdown_c3_operation_managers(wait=False)
+    yield
 
 
 app = FastAPI(title="Hunt Control Plane", version="0.1.0", lifespan=lifespan)
 
-from backend.browser_targets import router as _browser_target_router  # noqa: E402
-from backend.c3_commands import operations_router as _c3_operations_router  # noqa: E402
-from backend.c3_commands import router as _c3_commands_router  # noqa: E402
-from backend.c3_control_plane import router as _c3_control_router  # noqa: E402
+from backend.audit_log import MAX_AUDIT_REQUEST_BYTES  # noqa: E402
+from backend.audit_log import router as _audit_router  # noqa: E402
 from backend.gateway import router as _gateway_router  # noqa: E402
-from backend.ledger.api import router as _ledger_router  # noqa: E402
 from backend.request_id import RequestIDMiddleware  # noqa: E402
+from shared.mutation_audit import audit_mutation_request  # noqa: E402
 
+app.include_router(_audit_router)
 app.include_router(_gateway_router)
-app.include_router(_browser_target_router)
-app.include_router(_c3_commands_router)
-app.include_router(_c3_operations_router)
-app.include_router(_c3_control_router)
-app.include_router(_ledger_router)
 
 # CORS - only needed during local development (Vite on :5173, FastAPI on :8000)
 _DEV_ORIGINS = [
@@ -279,6 +267,45 @@ app.add_middleware(
     allow_headers=["*"],
 )
 app.add_middleware(RequestIDMiddleware)
+
+
+def _mutation_component(path: str) -> str:
+    if path.startswith("/api/gateway/c1/"):
+        return "c1"
+    if path.startswith("/api/gateway/c2/") or path.startswith("/api/fletcher/"):
+        return "c2"
+    return "c0"
+
+
+@app.middleware("http")
+async def audit_successful_mutations(request: Request, call_next):
+    method = request.method.upper()
+    path = request.url.path
+    if method == "POST" and path == "/api/audit/events":
+        content_length = request.headers.get("content-length", "")
+        if content_length.isdigit() and int(content_length) > MAX_AUDIT_REQUEST_BYTES:
+            return JSONResponse(
+                status_code=413,
+                content={"detail": "Audit event request is too large"},
+            )
+        if len(await request.body()) > MAX_AUDIT_REQUEST_BYTES:
+            return JSONResponse(
+                status_code=413,
+                content={"detail": "Audit event request is too large"},
+            )
+
+    should_audit = (
+        method in {"DELETE", "PATCH", "POST", "PUT"}
+        and (path.startswith("/api/") or path.startswith("/legacy/"))
+        and path != "/api/audit/events"
+    )
+    return await audit_mutation_request(
+        request,
+        call_next,
+        component=_mutation_component(path),
+        enabled=should_audit,
+    )
+
 
 # Serve built SPA assets at /assets/* if frontend/dist exists
 if (FRONTEND_DIST / "assets").exists():
@@ -4167,21 +4194,20 @@ def api_linkedin_accounts_upsert(payload: dict = Body(...), _auth: str = Depends
 
 @app.get("/api/system/status")
 def api_system_status(_auth: str = Depends(require_auth)):
-    """Return C0 operator health: DB plus component services as seen from C0."""
+    """Return C0 operator health without contacting paused C4."""
     c1 = _check_component("c1", HUNT_HUNTER_URL)
     c2 = _check_component("c2", HUNT_FLETCHER_URL)
-    c4 = _check_component("c4", HUNT_COORDINATOR_URL)
-    c3_bridge = _check_component("c3", HUNT_COORDINATOR_URL, path="/c3/pending-fills")
-    pending_fills = None
-    detail = c3_bridge.get("detail")
-    if isinstance(detail, dict) and isinstance(detail.get("fills"), list):
-        pending_fills = len(detail["fills"])
     c3 = {
         "component": "c3",
-        "status": c3_bridge["status"],
-        "status_code": c3_bridge["status_code"],
-        "pending_fills": pending_fills,
-        "detail": c3_bridge["detail"],
+        "status": "planned",
+        "status_code": None,
+        "detail": "C3 v2 was removed. C3 v3 is planned but not implemented.",
+    }
+    c4 = {
+        "component": "c4",
+        "status": "paused",
+        "status_code": None,
+        "detail": "C4 is on hold and is not contacted by C0.",
     }
     return JSONResponse(
         {
@@ -4195,110 +4221,6 @@ def api_system_status(_auth: str = Depends(require_auth)):
             },
         }
     )
-
-
-@app.get("/api/c3/pending-fills")
-async def api_c3_pending_fills(_auth: str = Depends(require_session_or_service_token)):
-    from backend.gateway import _proxy_get
-
-    return await _proxy_get(f"{HUNT_COORDINATOR_URL}/c3/pending-fills")
-
-
-@app.post("/api/c3/fill-result")
-async def api_c3_fill_result(
-    request: Request, _auth: str = Depends(require_session_or_service_token)
-):
-    from backend.gateway import _proxy_post
-
-    body = await request.json()
-    return await _proxy_post(f"{HUNT_COORDINATOR_URL}/c3/fill-result", body)
-
-
-@app.post("/api/c3/status")
-async def api_c3_status(request: Request, _auth: str = Depends(require_session_or_service_token)):
-    body = await request.json()
-    return {
-        "ok": True,
-        "received_at": datetime.now(UTC).isoformat(),
-        "status": body,
-    }
-
-
-@app.get("/api/c3/llm-status")
-async def api_c3_llm_status(_auth: str = Depends(require_session_or_service_token)):
-    from c3_answering.pipeline import provider_status
-
-    status = provider_status()
-    return {
-        "ok": True,
-        "provider": status.provider,
-        "model": status.model,
-        "cloud": status.cloud,
-        "cloud_confirmed": status.cloud_confirmed,
-        "ready": status.ready,
-        "reason": status.reason,
-    }
-
-
-@app.post("/api/c3/answer-decision")
-async def api_c3_answer_decision(
-    payload: dict = Body(...), _auth: str = Depends(require_session_or_service_token)
-):
-    from c3_answering.pipeline import decide_answer
-    from c3_answering.schemas import C3AnswerRequest
-
-    try:
-        if hasattr(C3AnswerRequest, "model_validate"):
-            request_model = C3AnswerRequest.model_validate(payload)  # type: ignore[attr-defined]
-        else:
-            request_model = C3AnswerRequest.parse_obj(payload)
-    except Exception as exc:
-        raise HTTPException(status_code=422, detail=f"Invalid C3 answer request: {exc}") from exc
-
-    decision = decide_answer(request_model)
-    body = decision.model_dump(mode="json") if hasattr(decision, "model_dump") else decision.dict()
-    log_dir = REPO_ROOT / "logs"
-    log_dir.mkdir(parents=True, exist_ok=True)
-    with (log_dir / "c3_answer_decisions.jsonl").open("a", encoding="utf-8") as fh:
-        fh.write(
-            json.dumps(
-                {
-                    "received_at": datetime.now(UTC).isoformat(),
-                    "host": request_model.host,
-                    "ats": request_model.ats,
-                    "question_hash": request_model.field.question_hash,
-                    "normalized_question": decision.normalized_question,
-                    "decision": body,
-                },
-                ensure_ascii=False,
-                default=str,
-            )
-        )
-        fh.write("\n")
-    return {"ok": True, "decision": body}
-
-
-@app.post("/api/c3/debug-log")
-async def api_c3_debug_log(
-    request: Request, _auth: str = Depends(require_session_or_service_token)
-):
-    body = await request.json()
-    log_dir = REPO_ROOT / "logs"
-    log_dir.mkdir(parents=True, exist_ok=True)
-    log_path = log_dir / "c3_extension_debug.jsonl"
-    entry = {
-        "received_at": datetime.now(UTC).isoformat(),
-        "source": "c3_extension",
-        "payload": body,
-    }
-    with log_path.open("a", encoding="utf-8") as fh:
-        fh.write(json.dumps(entry, ensure_ascii=False, default=str))
-        fh.write("\n")
-    return {
-        "ok": True,
-        "path": str(log_path),
-        "received_at": entry["received_at"],
-    }
 
 
 # ---------------------------------------------------------------------------
@@ -5194,8 +5116,6 @@ def api_job_priority(job_id: int, payload: dict = Body(...)):
 
 @app.post("/api/jobs/{job_id}/verify-easy-apply", dependencies=[Depends(review_ops_dependency)])
 def api_verify_easy_apply(job_id: int):
-    from coordinator.service import OrchestrationService
-
     job = get_job_by_id(job_id)
     if not job:
         raise HTTPException(status_code=404, detail="Job not found.")
@@ -5214,15 +5134,6 @@ def api_verify_easy_apply(job_id: int):
             f"expected enrichment_status in {{'done', 'done_verified'}}, "
             f"got {job.get('enrichment_status')!r}"
         )
-
-    try:
-        decision = OrchestrationService().get_ready_decision(job_id)
-        if decision.ready:
-            failures.append("C4 marked the job ready, but Easy Apply rows must stay excluded")
-        if decision.reason != "easy_apply_excluded":
-            failures.append(f"expected C4 reason='easy_apply_excluded', got {decision.reason!r}")
-    except Exception as exc:
-        failures.append(f"C4 decision check failed: {exc}")
 
     return JSONResponse(
         {

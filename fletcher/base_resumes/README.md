@@ -2,8 +2,8 @@
 
 This folder is reserved for curated role-family base resumes used by C2 (Fletcher).
 
-The source material remains:
-- `main.tex`
+Personal source material is stored as ignored `main.local.tex` files. Fresh
+checkouts fall back to the neutral repo-root `main.tex` template.
 
 Role-family base resumes are intended to be:
 - reviewed

@@ -2,21 +2,27 @@
 
 Putting in the Work so it is less Work for you to apply for Work
 
-Automated Hunt runtime. Today it includes **C0 (Frontend)**, **C1 (Hunter)** discovery/enrichment, **C2 (Fletcher)** resume generation, a local **C3 (Executioner)** browser extension, and **C4 (Coordinator)** orchestration scaffolding.
+Automated Hunt runtime. The active runtime scope is **C0 (Frontend)**,
+**C1 (Hunter)** discovery/enrichment, and **C2 (Fletcher)** resume generation.
+**C3 v3 is planned but not implemented. C4 is on hold.**
 
-Current operator confidence snapshot (subjective, as of 2026-05-08):
+Current operator confidence snapshot (as of 2026-07-30):
 
 - **C0**: mostly done
 - **C1 / Hunter**: about 95% done
 - **C2 / Fletcher**: about 80% done
-- **C3**: standalone extension lane exists, but not meaningfully live-proven yet
-- **C4**: coordinator state machine, API, CLI, worker lease protocol, stale recovery, and OpenClaw/Hermes one-shot launcher exist; live browser/agent execution is not proven yet
+- **C3**: v2 removed from `main`; v3 implementation has not started
+- **C4**: paused, excluded from active deployment and runtime paths; its direct
+  service, CLI, and worker entrypoints fail closed, with source retained for
+  possible reuse
 
-The most solid path today is **C0 + C1**, with Hunter now mostly down to live Easy Apply proof. C2 has grown into a strong operator workflow: Option B pasted-JD queue/history, Option A job-linked master-resume generation, persistent artifacts, PDF/TeX upload and export, full review workspace, manual edits, segment revert, compile, progress recovery, keyword inspection, logs, and multi-provider LLM configuration. C3 now has a standalone extension lane for extension-local profile/resume fill plus a route vocabulary for generic, ATS-specific, DB-backed, and C4-backed fills. C4 has a real DB-backed orchestration scaffold plus a worker lease/heartbeat/result protocol, but C3/OpenClaw/Hermes browser-backed runs are still the main unproven gap before long-running job-application agents can be trusted.
+The active path currently ends after C2 resume preparation. C3 v3 will add the
+application journey after its planned stages are implemented.
 
 C0 note: the React SPA is the primary operator UI, but `/legacy/*` server-rendered routes still exist as fallback while we retire them.
 
-Component rule: build each component so it can run and be tested on its own. Today that means **C0 (Frontend)** should remain usable through `backend/app.py` against the shared DB/artifacts even if other component runtimes are not running, and **C1/C2/C3** should keep direct terminal-driven workflows without requiring the UI. **C4 (Coordinator)** is the only intentionally coupled component: it depends on C1/C2/C3 contracts to do end-to-end orchestration, but the other components must not depend on C4 to do their own work.
+Component rule: C1 and C2 run independently. C3 v3 will own its local loop and
+will not depend on C4.
 
 **Names and folders:** see **`docs/NAMING.md`** (C1 code is the **`hunter`** package; **`hunter/scraper.py`** is the discovery script name only).
 
@@ -25,8 +31,7 @@ Current focus:
 - keep C0 stable and documented accurately
 - finish C1's last live proof: verify Easy Apply filtering on a real matching row
 - validate C2's Option A/Option B workflows against real server2 jobs and keep improving generation quality
-- prove C3 `filler` on safe ordinary pages before trusting live job pages
-- harden C4 as the durable state machine for long-running Windows/WSL2/Linux job-application agents
+- implement the approved C3 v3 stages independently of C4
 - keep Easy Apply classified as `easy_apply` and excluded from downstream external-apply automation
 
 ## C1 (Hunter) v0.1 : how it runs
@@ -120,13 +125,11 @@ numeric guardrail keys.
 ## Planning Docs
 
 - **Component IDs and code names:** `docs/NAMING.md`
-- C4 coordinator contract and commands: `docs/C4_COORDINATOR.md`
+- Paused C4 reference: `docs/C4_COORDINATOR.md`
 - C2 Fletcher runtime, queue/history, and review workspace: `fletcher/README.md`
 - C2 settings and provider/runtime controls: `docs/C2_SETTINGS.md`
-- C3 safe testing runbook: `docs/C3_TESTING_RUNBOOK.md`
-- C4 shared worker protocol: `docs/C4_AGENT_WORKERS.md`
-- C4 OpenClaw runbook: `docs/C4_OPENCLAW_RUNBOOK.md`
-- C4 Hermes runbook: `docs/C4_HERMES_RUNBOOK.md`
+- C3 v3 public status: `executioner/README.md`
+- Paused C4 worker references: `docs/C4_AGENT_WORKERS.md`, `docs/C4_OPENCLAW_RUNBOOK.md`, `docs/C4_HERMES_RUNBOOK.md`
 - System roadmap: `docs/roadmap.md`
 - Shared glossary: `docs/GLOSSARY.md`
 - Repo-native deploy command: `python deploy.py all`
@@ -139,47 +142,26 @@ numeric guardrail keys.
 - One-command local smoke runner: `python smoke.py`
 - Windows deploy wrapper for server2: `.\scripts\deploy_server2.ps1 -Stages 6`
 - Public `server2` access still relies on Cloudflare Tunnel and Cloudflare Access around the Hunt runtime
-- Component smokes: `python smoke.py c0`, `python smoke.py c1`, `python smoke.py c2`, `python smoke.py c4`
-- Short test groups: `python test.py c0`, `python test.py c1`, `python test.py c2`, `python test.py c3`, `python test.py c4`
-- Short quality checks: `python quality.py c0`, `python quality.py c1`, `python quality.py c2`, `python quality.py c3`, `python quality.py c4`
-- Full CI entrypoints: `python ci.py` and `python ci.py c0|c1|c2|c3|c4|shared|frontend`
+- Component smokes: `python smoke.py c0`, `python smoke.py c1`, `python smoke.py c2`
+- Short test groups: `python test.py c0`, `python test.py c1`, `python test.py c2`
+- Short quality checks: `python quality.py c0`, `python quality.py c1`, `python quality.py c2`
+- Full CI entrypoints: `python ci.py` and `python ci.py c0|c1|c2|shared|frontend`
 - Root hygiene: keep service Dockerfiles under `docker/`, one-off probes under `tools/dev-probes/`, and checked-in database fixtures under `tests/fixtures/databases/`.
   Quick test aliases:
 
-- `python test.py all`: all repo Python tests
+- `python test.py all`: active C0 through C2 Python tests; paused C4 tests are excluded
 - `python test.py c0`: C0/backend and related UI-facing backend tests
 - `python test.py c1`: C1/Hunter tests
 - `python test.py c2`: C2/Fletcher tests
-- `python test.py c3`: C3/Executioner-related tests
-- `python test.py c4`: C4/Coordinator tests
 - `python test.py shared`: DB/runtime/deploy-readiness shared tests
 
 Quick quality aliases:
 
-- `python quality.py all`: Python Ruff + frontend lint/typecheck + Prettier checks + C3 extension quality
+- `python quality.py all`: Python Ruff + frontend lint/typecheck + Prettier checks
 - `python quality.py c0`: backend Ruff + frontend lint/typecheck/Prettier
 - `python quality.py c1`: Hunter Ruff checks
 - `python quality.py c2`: Fletcher Ruff checks
-- `python quality.py c3`: Executioner JS syntax lint + Prettier check
-- `python quality.py c4`: Coordinator Ruff checks
 - `python quality.py shared`: scripts/tests Ruff checks
-
-C3 extension dev reload:
-
-- Options page button: `Reload Extension`
-- Terminal helper: `.\hunter.ps1 c3-reload`
-- Requires Chrome launched with `--remote-debugging-port=9222` for terminal reload.
-
-C3 extension quality:
-
-- `.\hunter.ps1 c3-quality`: lint + format check
-- `.\hunter.ps1 c3-test`: C3 pytest target
-- `.\hunter.ps1 c3-ci`: quality + tests
-- `.\hunter.ps1 c3-lint`: JS syntax lint only
-- `.\hunter.ps1 c3-format-check`: Prettier check only
-- `.\hunter.ps1 c3-format`: Prettier write
-- `.\hunter.ps1 c3-package`: create an unpacked extension folder and zip in `dist/c3/`
-- `.\hunter.ps1 c3-store-deploy`: package and upload C3 to an existing Chrome Web Store item
 
 Quick CI aliases:
 
@@ -187,8 +169,6 @@ Quick CI aliases:
 - `python ci.py c0`: C0 checks plus C0 tests
 - `python ci.py c1`: C1 checks plus C1 tests
 - `python ci.py c2`: C2 checks plus C2 tests
-- `python ci.py c3`: C3 checks plus C3 tests
-- `python ci.py c4`: C4 checks plus C4 tests
 
 Compatibility alias:
 
@@ -199,7 +179,7 @@ Compatibility alias:
 Before saying work is done:
 
 - run the relevant verification command for the change you made
-- prefer the smallest matching CI target first: `python ci.py c0`, `python ci.py c1`, `python ci.py c2`, `python ci.py c3`, `python ci.py c4`, `python ci.py shared`, or `python ci.py frontend`
+- prefer the smallest matching CI target first: `python ci.py c0`, `python ci.py c1`, `python ci.py c2`, `python ci.py shared`, or `python ci.py frontend`
 - run `python ci.py` when the change crosses component boundaries or when you are unsure which component owns the impact
 - do not claim success based only on reading code or on a dry-run command
 - if a required verification command cannot be run, say exactly what was not run and why
@@ -216,20 +196,22 @@ Repo homes by component:
 - `frontend/` + `backend/` : **C0 (Frontend)** UI and control-plane backend
 - `hunter/` : **C1 (Hunter)** runtime package
 - `fletcher/` : **C2 (Fletcher)** source and contracts
-- `executioner/` : **C3 (Executioner)** source and fixtures
-- `coordinator/` : **C4 (Coordinator)** source and contracts
+- `executioner/` : **C3 v3** status only; implementation has not started
+- `coordinator/` : paused C4 source retained for possible reuse
 
 Testing posture by component:
 
-- `backend/app.py` / C0: browse and inspect DB-backed state without requiring live C1/C2/C3/C4 services
-- C1/C2/C3: runnable from terminal without C0
-- C4: depends on upstream/downstream component outputs by design
+- `backend/app.py` / C0: browse and inspect DB-backed state without requiring live C1/C2 services
+- C1/C2: runnable from terminal without C0
+- C3 v3: planned, not runnable
+- C4: paused and excluded from active component completion
 
 Current local checkpoint for later components:
 
 - `fletcher/` : **C2 (Fletcher)** has usable Option B pasted-JD and Option A job-linked workflows, a shared review workspace, provider/settings scaffolding, progress/restart recovery, and job-linked resume persistence. Treat generation quality, live C1 -> C2 server proof, keyword-list-only targeting, section-level regeneration, and provider model evaluation as the remaining risks.
-- `executioner/` : **C3 (Executioner)** has standalone profile/resume storage, generic required-field fill, a browser-backed basic generic fixture test, Workday-specific fill, activity logging, extension reload helpers, named fill routes, detected-page prompt scaffold, and C4 polling/postback scaffold. It still needs a manual loaded-extension fixture proof, prompt-noise validation, C4 polling/postback proof, broader fixture coverage, and live ATS proof before it should be trusted on real applications.
-- `coordinator/` : **C4 (Coordinator)** DB-backed readiness/state-machine code, service routes, CLI commands, C3 bridge tests, and a Postgres smoke exist. It should still be treated as early-stage automation because live browser-backed workers and stale-run recovery are not proven yet.
+- `executioner/` : **C3 v3** contains only public status and boundaries. The v2
+  runtime is preserved on `codex/c3-v2-backup-20260730`.
+- `coordinator/` : **C4 (Coordinator)** source is retained but the component is on hold and has no active deploy, UI, polling, smoke, or worker path.
 
 ## Legacy Helpers
 

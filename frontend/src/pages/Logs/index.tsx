@@ -31,15 +31,13 @@ function JsonExpander({ value }: { value: unknown }) {
   )
 }
 
-type ServiceTab = 'all' | 'c0' | 'c1' | 'c2' | 'c3' | 'c4' | 'db'
+type ServiceTab = 'all' | 'c0' | 'c1' | 'c2' | 'db'
 
 const SERVICE_TABS: { key: ServiceTab; label: string }[] = [
   { key: 'all', label: 'All' },
   { key: 'c0', label: 'C0' },
   { key: 'c1', label: 'C1' },
   { key: 'c2', label: 'C2' },
-  { key: 'c3', label: 'C3 bridge' },
-  { key: 'c4', label: 'C4' },
   { key: 'db', label: 'DB' },
 ]
 

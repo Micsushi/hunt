@@ -1,5 +1,7 @@
 # C4 Coordinator
 
+> Status: paused as of 2026-07-30. C4 is not deployed, started, polled, or included in active Hunt verification. The material below describes retained historical source and is not an operator runbook.
+
 C4 is the orchestration, scheduling, failure-logging, and submit-control layer for Hunt. It runs the pipeline that iterates ready jobs, calls C3 to fill each one, logs every failure in a structured format, queues novel failures for agent investigation, handles CAPTCHA escalation, gates final submit behind human approval, and exposes a Telegram interface for remote control.
 
 C3 owns all browser interaction and field filling. C4 owns what happens between jobs and after a fill attempt completes.
@@ -328,14 +330,5 @@ Hunter pass-through examples:
 
 ## Verification
 
-Unit/API tests:
-
-```powershell
-python test.py c4
-```
-
-C4 smoke:
-
-```powershell
-python smoke.py c4
-```
+No active verification command exists while C4 is on hold. The normal test,
+quality, CI, deploy, and smoke runners reject C4 targets.

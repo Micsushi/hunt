@@ -1,6 +1,5 @@
 # general
 
-Place the general fallback base resume for broad or weakly classified jobs here later.
+Place the ignored general fallback at `main.local.tex`.
 
-Until that exists, the OG resume in `main.tex` is the default general fallback.
-
+Until that exists, the configured OG resume is the general fallback.

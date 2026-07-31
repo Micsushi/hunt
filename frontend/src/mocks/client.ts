@@ -5,14 +5,11 @@ import {
   MOCK_C1_QUEUE,
   MOCK_C1_STATUS,
   MOCK_C2_STATUS,
-  MOCK_C4_RUNS,
-  MOCK_C4_STATUS,
   MOCK_DAILY,
   MOCK_JOB_DETAIL,
   MOCK_JOBS,
   MOCK_LINKEDIN_ACCOUNTS,
   MOCK_LOGS,
-  MOCK_PENDING_FILLS,
   MOCK_QUEUE_AGE,
   MOCK_SETTINGS,
   MOCK_SUMMARY,
@@ -33,9 +30,6 @@ const EXACT_GET_ROUTES: Record<string, unknown> = {
   '/api/gateway/c1/status': MOCK_C1_STATUS,
   '/api/gateway/c1/queue': MOCK_C1_QUEUE,
   '/api/gateway/c2/status': MOCK_C2_STATUS,
-  '/api/gateway/c4/status': MOCK_C4_STATUS,
-  '/api/gateway/c4/runs': MOCK_C4_RUNS,
-  '/api/c3/pending-fills': MOCK_PENDING_FILLS,
 }
 
 function matchRoute(path: string): unknown | undefined {

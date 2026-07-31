@@ -37,8 +37,6 @@ const NAV_ITEMS: NavItem[] = [
   { to: '/', label: 'Overview', exact: true },
   { to: '/jobs', label: 'Jobs' },
   { to: '/fletcher', label: 'Fletcher', dotKey: 'c2' },
-  { to: '/executioner', label: 'Executioner', dotKey: 'c3' },
-  { to: '/coordinator', label: 'Coordinator', dotKey: 'c4' },
   { to: '/settings', label: 'Settings' },
   { to: '/ops', label: 'Ops', dotKey: 'c1' },
   { to: '/logs', label: 'Logs' },

@@ -32,7 +32,7 @@ if ($Mode -eq "c0") {
   Start-ComposeProfile "c2"
 } elseif ($Mode -eq "full") {
   Start-ComposeProfile "all"
-  Write-Host "C3 is manual: load unpacked extension from executioner/. C4 is not started."
+  Write-Host "C3 v3 is not implemented. C4 is not started."
 }
 
 $env:VITE_BACKEND_URL = "http://127.0.0.1:18080"

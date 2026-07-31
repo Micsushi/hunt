@@ -1,6 +1,6 @@
 # data
 
-Place the data-focused base resume here later.
+Place the ignored data-focused base resume at `main.local.tex`.
 
 This family should emphasize:
 - analytics

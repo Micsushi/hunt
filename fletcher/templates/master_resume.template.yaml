@@ -1,5 +1,6 @@
 # Fletcher master resume source.
-# Edit this file's copy at fletcher/master_resume.yaml. The renderer owns LaTeX layout.
+# Copy this file to fletcher/master_resume.local.yaml and replace the sample data.
+# The renderer owns LaTeX layout.
 
 selection:
   min_experience: 2

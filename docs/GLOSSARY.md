@@ -29,15 +29,14 @@ In this repo, C2 is resume tailoring.
 
 C3 (Executioner).
 
-In this repo, C3 is the browser autofill extension and apply-assistance layer.
+In this repo, C3 v3 is the planned browser application-journey component. C3
+v2 was removed from `main`; no C3 runtime is currently available.
 
 ### C4
 
 C4 (Coordinator).
 
-In this repo, C4 is the higher-level orchestration and submit-control layer.
-
-OpenClaw is the current most likely first implementation of C4.
+C4 is a paused orchestration experiment. Its source and historical contracts are retained, but it is not deployed and is not part of C1 through C3 completion.
 
 ### S1, S2, S3, ...
 
@@ -142,7 +141,7 @@ The automated C2 path triggered from normal C1 output.
 
 ### Apply context
 
-The explicit bundle used by C4 or OpenClaw when handing a job to C3.
+The explicit job, resume, and applicant-data bundle used to start C3 work.
 
 It should include the selected application link plus the selected resume and related metadata for the same `job_id`.
 

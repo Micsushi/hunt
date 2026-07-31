@@ -212,6 +212,13 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: Sequence[str] | None = None) -> int:
+    print(
+        json.dumps({"error": "C4 is on hold. The coordinator CLI is disabled."}),
+        file=sys.stderr,
+    )
+    return 2
+
+    # Historical implementation retained below for possible future reuse.
     parser = build_parser()
     args = parser.parse_args(argv)
     service = OrchestrationService(db_path=args.db_path, runtime_root=args.runtime_root)

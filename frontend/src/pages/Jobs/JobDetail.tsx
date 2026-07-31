@@ -372,10 +372,10 @@ export function JobDetailPage() {
 
   function logOpenApplyPage() {
     void logHumanCommand({
-      action: 'c3.open_apply_page',
+      action: 'c0.open_apply_page',
       buttonId: 'open-apply-page',
-      component: 'c3',
-      surface: 'c3_ui',
+      component: 'c0',
+      surface: 'c0_ui',
       details: {
         jobId,
         applyType: loadedJob.apply_type || '',
@@ -584,7 +584,7 @@ export function JobDetailPage() {
                   className={styles.actionBtn}
                   onClick={handleVerifyEasyApply}
                   disabled={verifying}
-                  title="Verify this Easy Apply job is excluded from C4 automation"
+                  title="Verify C1 marks this Easy Apply job ineligible for external autofill"
                 >
                   {verifying ? 'Verifying…' : 'Verify Easy Apply'}
                 </button>

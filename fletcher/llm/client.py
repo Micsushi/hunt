@@ -26,33 +26,27 @@ PROVIDERS: dict[str, type[LLMProvider]] = {
 }
 
 
-def configured_provider_name(component: str = "c2") -> str:
-    if component == "c3":
-        return _config.c3_llm_provider()
+def configured_provider_name() -> str:
     return _config.resume_llm_provider()
 
 
-def configured_model(task_name: str | None = None, component: str = "c2") -> str:
-    if component == "c3":
-        return _config.c3_llm_model(task_name)
+def configured_model(task_name: str | None = None) -> str:
     return _config.resume_llm_model(task_name)
 
 
-def _cloud_confirmed(component: str) -> bool:
-    if component == "c3":
-        return _config.c3_cloud_llm_confirmed()
+def _cloud_confirmed() -> bool:
     return _config.resume_cloud_llm_confirmed()
 
 
-def get_provider(name: str | None = None, *, component: str = "c2") -> LLMProvider:
-    provider_name = (name or configured_provider_name(component)).lower()
+def get_provider(name: str | None = None) -> LLMProvider:
+    provider_name = (name or configured_provider_name()).lower()
     cls = PROVIDERS.get(provider_name)
     if cls is None:
         raise ValueError(f"Unsupported Fletcher LLM provider: {provider_name}")
     provider = cls()
-    if provider.cloud and not _cloud_confirmed(component):
+    if provider.cloud and not _cloud_confirmed():
         raise ValueError(
-            f"HUNT_{component.upper()}_CLOUD_LLM_CONFIRM=1 or HUNT_CLOUD_LLM_CONFIRM=1 "
+            "HUNT_C2_CLOUD_LLM_CONFIRM=1 or HUNT_CLOUD_LLM_CONFIRM=1 "
             f"is required before using {provider_name}."
         )
     return provider
@@ -88,9 +82,8 @@ def generate_json(
     timeout_sec: float | None = None,
     model: str | None = None,
     logger=None,
-    component: str = "c2",
 ) -> LLMJsonResult:
-    provider = get_provider(component=component)
+    provider = get_provider()
     result = provider.generate_json(
         task_name=task_name,
         system=system,
@@ -98,7 +91,7 @@ def generate_json(
         schema=schema,
         temperature=temperature,
         timeout_sec=timeout_sec,
-        model=model or configured_model(task_name, component),
+        model=model or configured_model(task_name),
         logger=logger,
     )
     ok, parsed, error = _validate_payload(schema_model, result.parsed)

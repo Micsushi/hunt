@@ -12,7 +12,7 @@ This directory is the repo home for **C2 (Fletcher)** : resume tailoring. See **
 
 ## Runtime (what exists today)
 
-- Parse / render **`main.tex`** (immutable OG resume), optional **family base** resumes under `fletcher/base_resumes/<family>/`.
+- Parse / render a neutral tracked **`main.tex`** template or an ignored personal source selected with `HUNT_OG_RESUME_PATH`. Optional family sources live as ignored `main.local.tex` files under `fletcher/base_resumes/<family>/`, or under `HUNT_BASE_RESUMES_ROOT`.
 - **Keywords** (`fletcher/keyword_extractor.py`): tiny draft from the job title when the backend is `heuristic`. With Ollama or another configured provider, Fletcher can fill metadata, judge JD usability, extract grounded keywords, rewrite bullets, validate rewrites, restore original inline `\textbf{...}` formatting for surviving rewritten phrases, normalize added Technical Skills phrases so their first letter is capitalized, and generate/validate summaries.
 - **Heuristic** bullet scoring and selection (candidate profile + bullet library). Bullets are selected by relevance score. Keywords are never force-injected into unrelated bullets.
 - **LaTeX compile**, **one-page gate** with controlled retries.
@@ -24,7 +24,9 @@ This directory is the repo home for **C2 (Fletcher)** : resume tailoring. See **
 - **Review app**: per-attempt PDF/TeX/Keywords/LLM I/O links, keyword pills panel, LLM I/O viewer page at `/api/attempts/{id}/llm`, and Fletcher review workspace at `/fletcher/reviews/{review_id}`.
 - **Review workspace**: `review_package.json` preserves original, generated, and current editable `ResumeDocument` JSON for `no_summary` and `with_summary` versions. The UI shows a PDF-like resume surface with PR-style inline diffs, segment revert, block edit, draft undo/redo, undo-all, explicit save, compile, logs, keyword/RAG score inspection, and PDF/TeX downloads. Inline LaTeX formatting such as `\textbf{...}` and `\href{...}{...}` is rendered as bold text and links in the workspace.
 - **PDF upload import**: text-based PDFs are imported through `pdfminer.six` into the canonical Hunt resume template. Scanned/image-only PDFs are not supported.
-- **Master resume import**: `import-master` converts a template-compatible `main.tex` into the structured `master_resume.yaml` format for review before replacing the Option A source.
+- **Master resume source**: copy `templates/master_resume.template.yaml` to the ignored `master_resume.local.yaml`, or set `HUNT_MASTER_RESUME_PATH`. Fresh checkouts use the neutral template.
+- **LaTeX resume source**: copy the neutral repo-root `main.tex` to ignored `base_resume.local.tex`, then set `HUNT_OG_RESUME_PATH=fletcher/base_resume.local.tex`. Docker mounts personal sources read-only at runtime; they are excluded from image build contexts.
+- **Master resume import**: `import-master` converts a template-compatible `main.tex` into the structured YAML format for review before replacing the Option A source.
 - **Provider abstraction**: `fletcher/llm/client.py` and `fletcher/llm/providers/*` normalize heuristic, Ollama, Codex CLI OAuth, OpenAI, OpenRouter, Anthropic, and Gemini JSON calls. Cloud providers fail closed unless explicitly configured and confirmed.
 
 ### Candidate profile and bullet library
@@ -33,8 +35,9 @@ Copy the template to get started:
 
 ```bash
 cp fletcher/templates/candidate_profile.template.md fletcher/candidate_profile.md
+cp fletcher/templates/bullet_library.template.md fletcher/bullet_library.md
 # Edit fletcher/candidate_profile.md with your real job history, projects, and skills.
-# Run `fletch context` to see what Entry IDs C2 derives from your main.tex.
+# Run `fletch context` to see what Entry IDs C2 derives from your configured resume.
 ```
 
 Both files are **gitignored**. They contain personal data. See the template for full instructions on Entry ID matching, role-family tags, and bullet format.
@@ -44,15 +47,19 @@ Both files are **gitignored**. They contain personal data. See the template for 
 | Variable                                                                                             | Default                           | Purpose                                                                                                                          |
 | ---------------------------------------------------------------------------------------------------- | --------------------------------- | -------------------------------------------------------------------------------------------------------------------------------- |
 | `HUNT_DB_PATH`                                                                                       | `<repo>/hunt.db`                  | Hunt SQLite DB (same as C1).                                                                                                     |
-| `HUNT_RESUME_ARTIFACTS_DIR`                                                                          | `/home/michael/data/hunt/resumes` | Artifact root (attempts, PDFs, metadata, queue uploads, queue logs, review packages).                                            |
-| `HUNT_LLM_PROVIDER`                                                                                  | `ollama`                          | Shared provider default for C2/C3/C4: `ollama`, `codex`, `openai`, `openrouter`, `anthropic`, or `gemini`.                       |
+| `HUNT_RESUME_ARTIFACTS_DIR`                                                                          | `<home>/.local/share/hunt/resumes` | Artifact root (attempts, PDFs, metadata, queue uploads, queue logs, review packages).                                           |
+| `HUNT_OG_RESUME_PATH`                                                                                | ignored local file, then `main.tex` | Personal LaTeX source override; Docker mounts it read-only rather than copying it into the image.                               |
+| `HUNT_BASE_RESUMES_ROOT`                                                                             | `fletcher/base_resumes`            | Root for ignored role-family `main.local.tex` sources.                                                                          |
+| `HUNT_MASTER_RESUME_PATH`                                                                            | ignored local file, then template  | Structured master resume source.                                                                                                |
+| `HUNT_CANDIDATE_PROFILE_PATH`                                                                         | ignored local file, then template  | Candidate profile source.                                                                                                       |
+| `HUNT_BULLET_LIBRARY_PATH`                                                                            | ignored local file, then template  | Reviewed bullet library source.                                                                                                 |
+| `HUNT_LLM_PROVIDER`                                                                                  | `ollama`                          | Shared provider default for C2: `ollama`, `codex`, `openai`, `openrouter`, `anthropic`, or `gemini`.                             |
 | `HUNT_C2_LLM_PROVIDER`                                                                               | `HUNT_LLM_PROVIDER`               | C2-specific provider override.                                                                                                   |
-| `HUNT_C3_LLM_PROVIDER`                                                                               | `HUNT_LLM_PROVIDER`               | C3 answer-router provider override.                                                                                              |
 | `HUNT_RESUME_MODEL_BACKEND`                                                                          | `ollama`                          | Backward-compatible selector: `heuristic` or `ollama`.                                                                           |
 | `HUNT_RESUME_LLM_PROVIDER`                                                                           | `HUNT_RESUME_MODEL_BACKEND`       | Legacy C2 provider abstraction value: `heuristic`, `ollama`, `codex`, `openai`, `openrouter`, `anthropic`, or `gemini`.          |
 | `HUNT_RESUME_LLM_MODEL`                                                                              | unset                             | Generic provider model override.                                                                                                 |
 | `HUNT_CLOUD_LLM_CONFIRM`                                                                             | unset                             | Shared confirmation before cloud/subscription providers receive resume content.                                                  |
-| `HUNT_C2_CLOUD_LLM_CONFIRM` / `HUNT_C3_CLOUD_LLM_CONFIRM`                                            | `HUNT_CLOUD_LLM_CONFIRM`          | Component-specific cloud confirmation overrides.                                                                                 |
+| `HUNT_C2_CLOUD_LLM_CONFIRM`                                                                          | `HUNT_CLOUD_LLM_CONFIRM`          | C2 cloud confirmation override.                                                                                                  |
 | `HUNT_RESUME_CLOUD_LLM_CONFIRM`                                                                      | unset                             | Legacy C2 cloud confirmation.                                                                                                    |
 | `HUNT_OPENAI_API_KEY` / `HUNT_OPENROUTER_API_KEY` / `HUNT_ANTHROPIC_API_KEY` / `HUNT_GEMINI_API_KEY` | unset                             | Cloud provider credentials. These can also be stored as redacted C2 secret settings from the Settings page.                      |
 | `HUNT_CODEX_COMMAND` / `HUNT_CODEX_ARGS` / `HUNT_CODEX_MODEL`                                        | `codex` / read-only exec / Codex  | Codex CLI OAuth provider controls. Requires a signed-in Codex CLI and cloud confirmation.                                        |

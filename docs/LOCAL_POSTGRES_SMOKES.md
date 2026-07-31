@@ -8,14 +8,13 @@ This runbook covers:
 
 - `scripts/smoke_pipeline_compose.sh`: full pipeline compose smoke.
 - `scripts/smoke_c0_pipeline_container.sh`: C0 gateway/operator smoke.
-- `scripts/smoke_coordinator_e2e.sh`: C4 orchestration smoke with Postgres.
 
 ## Prerequisites
 
 - Docker Desktop or Docker Engine running.
 - Repo root as current working directory.
 
-For the default (fresh-stack) mode, local ports `18080`, `18001`, `18002`, `18003`, and `15432` must be free. If the stack is already running on those ports, use `--existing` instead.
+For the default fresh-stack mode, local ports `18080`, `18001`, `18002`, and `15432` must be free. If the stack is already running on those ports, use `--existing` instead.
 
 ## Commands
 
@@ -80,7 +79,6 @@ Use the same command shape on Windows and Linux:
 python smoke.py c0
 python smoke.py c1
 python smoke.py c2
-python smoke.py c4
 ```
 
 Targets:
@@ -89,8 +87,6 @@ Targets:
 - `python smoke.py c0`: C0 gateway/operator smoke using the compose pipeline stack
 - `python smoke.py c1`: C1 Hunter container smoke
 - `python smoke.py c2`: C2 Fletcher container smoke
-- `python smoke.py c4`: C4 Coordinator end-to-end smoke
-- `python smoke.py c4-container`: C4 Coordinator container boot smoke only
 - `python smoke.py review`: review image smoke
 - `python smoke.py server2`: server2 production smoke
 - `python smoke.py server2-c0`: server2 C0/public smoke only
@@ -101,7 +97,6 @@ Aliases:
 - `python smoke.py full`: same as `python smoke.py all`
 - `python smoke.py hunter`: same as `python smoke.py c1`
 - `python smoke.py fletcher`: same as `python smoke.py c2`
-- `python smoke.py coordinator`: same as `python smoke.py c4`
 
 Current gap:
 
@@ -118,10 +113,8 @@ Windows note:
 - `python smoke.py all`: prints `[local-smoke] smoke target `all` passed`.
 - `python smoke.py c1`: prints `hunter container smoke passed`.
 - `python smoke.py c2`: prints `fletcher container smoke passed`.
-- `python smoke.py c4`: prints `coordinator e2e smoke PASSED`.
 - `smoke_pipeline_compose.sh`: prints `pipeline compose smoke passed`.
 - `smoke_c0_pipeline_container.sh`: prints `C0 pipeline smoke PASSED`.
-- `smoke_coordinator_e2e.sh`: prints `coordinator e2e smoke PASSED`.
 
 Any non-zero exit or `FAILED` output means the smoke did not pass.
 

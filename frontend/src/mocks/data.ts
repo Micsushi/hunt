@@ -154,12 +154,11 @@ export const MOCK_SYSTEM_STATUS: SystemStatus = {
     c2: { component: 'c2', status: 'unreachable', status_code: null, url: 'mock://c2' },
     c3: {
       component: 'c3',
-      status: 'unreachable',
+      status: 'planned',
       status_code: null,
       pending_fills: 0,
-      url: 'mock://c3',
     },
-    c4: { component: 'c4', status: 'unreachable', status_code: null, url: 'mock://c4' },
+    c4: { component: 'c4', status: 'paused', status_code: null },
   },
 }
 
@@ -240,6 +239,3 @@ export const MOCK_LINKEDIN_ACCOUNTS: { accounts: LinkedInAccount[] } = {
 export const MOCK_C1_STATUS = { status: 'mock', service: 'hunter' }
 export const MOCK_C1_QUEUE = { pending: 1, processing: 0, retry_ready: 0 }
 export const MOCK_C2_STATUS = { status: 'mock', service: 'fletcher' }
-export const MOCK_C4_STATUS = { status: 'unreachable', service: 'coordinator' }
-export const MOCK_C4_RUNS = { runs: [] }
-export const MOCK_PENDING_FILLS = { fills: [] }

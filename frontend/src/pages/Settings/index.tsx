@@ -1567,13 +1567,11 @@ function JobMetadataSettings() {
 
 // ---- main page -------------------------------------------------------------
 
-type SettingsTab = 'c1' | 'c2' | 'c3' | 'c4' | 'integrations'
+type SettingsTab = 'c1' | 'c2' | 'integrations'
 
 const SETTINGS_TABS: Array<{ id: SettingsTab; label: string; description: string }> = [
   { id: 'c1', label: 'C1 discovery', description: 'Scrape, filters, enrich cadence' },
   { id: 'c2', label: 'C2 Fletcher', description: 'Resume LLM, queue, prompt policy' },
-  { id: 'c3', label: 'C3 extension', description: 'Apply handoff and browser fill' },
-  { id: 'c4', label: 'C4 agent', description: 'Long-running application runs' },
   { id: 'integrations', label: 'Integrations', description: 'Discord and shared services' },
 ]
 
@@ -1684,21 +1682,6 @@ export function SettingsPage() {
     </div>
   )
 
-  const placeholderContent = (
-    <div className={styles.panel}>
-      <div className={styles.panelHeader}>
-        <h2 className={styles.panelTitle}>
-          {activeTab === 'c3' ? 'C3 extension settings' : 'C4 agent settings'}
-        </h2>
-      </div>
-      <p className="muted">
-        {activeTab === 'c3'
-          ? 'C3 settings will live here as apply handoff and extension controls move into component settings.'
-          : 'C4 settings will live here for agent cadence, approvals, provider fallback, and run limits.'}
-      </p>
-    </div>
-  )
-
   return (
     <div className={styles.page}>
       <section className={styles.hero}>
@@ -1731,8 +1714,6 @@ export function SettingsPage() {
           <JobMetadataSettings />
         </>
       )}
-
-      {(activeTab === 'c3' || activeTab === 'c4') && placeholderContent}
 
       {activeTab === 'integrations' && integrationsContent}
     </div>

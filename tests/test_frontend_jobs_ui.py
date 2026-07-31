@@ -128,7 +128,7 @@ def test_fletcher_active_queue_exposes_bulk_cancel_controls():
     assert "cancelOneActive(job.queue_item_id)" in fletcher
 
 
-def test_frontend_human_command_logger_posts_fail_open_ledger_events():
+def test_frontend_human_command_logger_posts_fail_open_active_component_events():
     helper = read("frontend/src/api/humanCommandLog.ts")
     control = read("frontend/src/api/control.ts")
     jobs = read("frontend/src/api/jobs.ts")
@@ -136,34 +136,23 @@ def test_frontend_human_command_logger_posts_fail_open_ledger_events():
     detail = read("frontend/src/pages/Jobs/JobDetail.tsx")
 
     assert "export async function logHumanCommand" in helper
-    assert "fetch('/api/ledger/events'" in helper
     assert "component?: string" in helper
     assert "laneId?: string" in helper
     assert "sessionId?: string" in helper
     assert "commandId?: string" in helper
     assert "traceId?: string" in helper
-    assert "const component = payload.component || 'c0'" in helper
+    assert "fetch('/api/audit/events'" in helper
+    assert "const component = payload.component || actionComponent || 'c0'" in helper
     assert "event_type: 'human.command'" in helper
-    assert (
-        "actor: { type: 'human', id: 'human_local', surface: payload.surface || 'c0_ui' }" in helper
-    )
-    assert "lane_id: laneId" in helper
-    assert "session_id: sessionId" in helper
-    assert "command_id: commandId" in helper
-    assert "trace_id: traceId" in helper
-    assert "eventContext" in helper
-    assert "redaction: { applied: true" in helper
-    assert "human_command_no_form_values" in helper
+    assert "redaction:" not in helper
     assert "catch {" in helper
     assert "logHumanCommand" in control
     assert "action: 'c0.settings.save'" in control
     assert "action: 'c0.linkedin_account.save'" in control
     assert "action: 'c1.scrape'" in control
     assert "action: 'c2.fletcher.queue_resume'" in control
-    assert "action: 'c4.run'" in control
-    assert "action: 'c3.verify_easy_apply'" in control
-    assert "component: 'c3'" in control
-    assert "surface: 'c3_ui'" in control
+    assert "action: 'c4.run'" not in control
+    assert "action: 'c1.verify_easy_apply'" in control
     assert "action: 'c0.job.patch'" in jobs
     assert "fields: Object.keys(fields)" in jobs
     assert "action: 'c0.job.requeue'" in jobs
@@ -172,12 +161,12 @@ def test_frontend_human_command_logger_posts_fail_open_ledger_events():
     assert "action: 'c0.ops.requeue_errors'" in ops
     assert "action: payload.dry_run ? 'c0.ops.bulk_requeue_count' : 'c0.ops.bulk_requeue'" in ops
     assert "action: 'c0.ops.requeue_stale_processing'" in ops
-    assert "action: 'c3.open_apply_page'" in detail
+    assert "action: 'c0.open_apply_page'" in detail
     assert "buttonId: 'open-apply-page'" in detail
     assert "onClick={logOpenApplyPage}" in detail
 
 
-def test_human_command_logger_records_available_event_context():
+def test_human_command_logger_records_c0_c2_context_without_form_values():
     script = r"""
 const fs = require('fs');
 const vm = require('vm');
@@ -192,28 +181,24 @@ vm.runInNewContext(compiled.outputText, {
   module: moduleObj,
   exports: moduleObj.exports,
   fetch: async (url, init) => {
-    posted = { url, init, body: JSON.parse(init.body) };
+    posted = { url, body: JSON.parse(init.body) };
     return { ok: true };
   },
-  location: { pathname: '/executioner' },
-  document: { title: 'Executioner' },
+  location: { pathname: '/jobs/42' },
+  document: { title: 'Job 42' },
   crypto: { randomUUID: () => '12345678-1234-1234-1234-123456789abc' },
   Date,
   Math,
 });
 (async () => {
   await moduleObj.exports.logHumanCommand({
-    action: 'c3.open_apply_page',
-    buttonId: 'open-apply-page',
-    component: 'c3',
-    surface: 'c3_ui',
-    laneId: 'lane-1',
-    sessionId: 'session-1',
-    commandId: 'cmd-1',
+    action: 'c2.fletcher.queue_resume',
+    buttonId: 'queue-fletcher-resume',
+    surface: 'c0_ui',
     traceId: 'trace-1',
-    details: { jobId: 42 },
+    details: { jobId: 42, hasResume: true },
   });
-  console.log(JSON.stringify(posted.body));
+  console.log(JSON.stringify(posted));
 })();
 """
     result = subprocess.run(
@@ -223,27 +208,21 @@ vm.runInNewContext(compiled.outputText, {
         capture_output=True,
         text=True,
     )
-    payload = json.loads(result.stdout)
+    posted = json.loads(result.stdout)
+    payload = posted["body"]
 
-    assert payload["component"] == "c3"
+    assert posted["url"] == "/api/audit/events"
+    assert payload["component"] == "c2"
     assert payload["event_type"] == "human.command"
-    assert payload["actor"] == {"type": "human", "id": "human_local", "surface": "c3_ui"}
-    assert payload["lane_id"] == "lane-1"
-    assert payload["session_id"] == "session-1"
-    assert payload["command_id"] == "cmd-1"
+    assert payload["actor"] == {"type": "human", "id": "human_local", "surface": "c0_ui"}
     assert payload["trace_id"] == "trace-1"
     assert payload["payload"]["eventContext"] == {
-        "component": "c3",
-        "route": "/executioner",
-        "page": "Executioner",
-        "laneId": "lane-1",
-        "sessionId": "session-1",
-        "commandId": "cmd-1",
+        "component": "c2",
+        "route": "/jobs/42",
+        "page": "Job 42",
         "traceId": "trace-1",
     }
-    assert payload["payload"]["action"] == "c3.open_apply_page"
-    assert payload["payload"]["buttonId"] == "open-apply-page"
-    assert payload["payload"]["details"] == {"jobId": 42}
+    assert payload["payload"]["details"] == {"jobId": 42, "hasResume": True}
 
 
 def test_job_detail_resume_actions_use_queue_and_resume_workspace_label():

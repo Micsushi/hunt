@@ -33,7 +33,6 @@ services:
       HUNT_CREDENTIAL_KEY: ${HUNT_CREDENTIAL_KEY:-472Pa6u8kvZjh58A3oN7v026YL-KxALGTo41gH4TBZM=}
       HUNT_HUNTER_URL: ${HUNT_HUNTER_URL:-http://hunter:8001}
       HUNT_FLETCHER_URL: ${HUNT_FLETCHER_URL:-http://fletcher:8002}
-      HUNT_COORDINATOR_URL: ${HUNT_COORDINATOR_URL:-http://coordinator:8003}
       HUNT_RESUME_MODEL_BACKEND: ${HUNT_RESUME_MODEL_BACKEND:-ollama}
       HUNT_OLLAMA_HOST: http://ollama:11434
       HUNT_OLLAMA_MODEL: ${HUNT_OLLAMA_MODEL:-gemma4:e4b}
@@ -44,10 +43,20 @@ services:
       HUNT_OLLAMA_FLASH_ATTENTION: ${OLLAMA_FLASH_ATTENTION:-1}
       HUNT_OLLAMA_KV_CACHE_TYPE: ${OLLAMA_KV_CACHE_TYPE:-q8_0}
       HUNT_RESUME_ARTIFACTS_DIR: ${HUNT_RESUME_ARTIFACTS_DIR:-/tmp/hunt-resumes}
-      HUNT_LEDGER_ROOT: ${HUNT_LEDGER_CONTAINER_ROOT:-/hunt-ledger}
+      HUNT_AUDIT_LOG_ROOT: ${HUNT_AUDIT_LOG_CONTAINER_ROOT:-/hunt-audit}
+      HUNT_OG_RESUME_PATH: /run/hunt-private/base_resume.tex
+      HUNT_BASE_RESUMES_ROOT: /run/hunt-private/base_resumes
+      HUNT_MASTER_RESUME_PATH: /run/hunt-private/master_resume.yaml
+      HUNT_CANDIDATE_PROFILE_PATH: /run/hunt-private/candidate_profile.md
+      HUNT_BULLET_LIBRARY_PATH: /run/hunt-private/bullet_library.md
     volumes:
       - ${HUNT_RESUME_STORAGE:-pipeline_resume_data}:/tmp/hunt-resumes
-      - ${HUNT_LEDGER_HOST_ROOT:-${USERPROFILE}/Documents/hunt-logs}:${HUNT_LEDGER_CONTAINER_ROOT:-/hunt-ledger}
+      - ${HUNT_AUDIT_LOG_STORAGE:-pipeline_audit_data}:${HUNT_AUDIT_LOG_CONTAINER_ROOT:-/hunt-audit}
+      - ${HUNT_OG_RESUME_PATH:-./main.tex}:/run/hunt-private/base_resume.tex:ro
+      - ${HUNT_BASE_RESUMES_ROOT:-./fletcher/base_resumes}:/run/hunt-private/base_resumes:ro
+      - ${HUNT_MASTER_RESUME_PATH:-./fletcher/templates/master_resume.template.yaml}:/run/hunt-private/master_resume.yaml:ro
+      - ${HUNT_CANDIDATE_PROFILE_PATH:-./fletcher/templates/candidate_profile.template.md}:/run/hunt-private/candidate_profile.md:ro
+      - ${HUNT_BULLET_LIBRARY_PATH:-./fletcher/templates/bullet_library.template.md}:/run/hunt-private/bullet_library.md:ro
     ports:
       - "${HUNT_REVIEW_BIND_HOST:-127.0.0.1}:${HUNT_REVIEW_HOST_PORT:-18080}:8000"
 
@@ -77,9 +86,11 @@ services:
       HIRING_CAFE_SLEEP_MIN_SECONDS: ${HIRING_CAFE_SLEEP_MIN_SECONDS:-20}
       HIRING_CAFE_SLEEP_MAX_SECONDS: ${HIRING_CAFE_SLEEP_MAX_SECONDS:-60}
       HUNT_DISCORD_WEBHOOK_URL: ${HUNT_DISCORD_WEBHOOK_URL:-}
+      HUNT_AUDIT_LOG_ROOT: ${HUNT_AUDIT_LOG_CONTAINER_ROOT:-/hunt-audit}
     volumes:
       - ${HUNT_LOCAL_STATE_DIR:-./.hunt-state}:/app/.state
       - ${HUNT_LOCAL_DATA_DIR:-./.hunt-data}:/app/data
+      - ${HUNT_AUDIT_LOG_STORAGE:-pipeline_audit_data}:${HUNT_AUDIT_LOG_CONTAINER_ROOT:-/hunt-audit}
     ports:
       - "${HUNT_HUNTER_BIND_HOST:-127.0.0.1}:${HUNT_HUNTER_HOST_PORT:-18001}:8001"
 
@@ -184,26 +195,22 @@ services:
       HUNT_OLLAMA_CONTEXT_LENGTH: ${OLLAMA_CONTEXT_LENGTH:-8192}
       HUNT_OLLAMA_FLASH_ATTENTION: ${OLLAMA_FLASH_ATTENTION:-1}
       HUNT_OLLAMA_KV_CACHE_TYPE: ${OLLAMA_KV_CACHE_TYPE:-q8_0}
+      HUNT_AUDIT_LOG_ROOT: ${HUNT_AUDIT_LOG_CONTAINER_ROOT:-/hunt-audit}
+      HUNT_OG_RESUME_PATH: /run/hunt-private/base_resume.tex
+      HUNT_BASE_RESUMES_ROOT: /run/hunt-private/base_resumes
+      HUNT_MASTER_RESUME_PATH: /run/hunt-private/master_resume.yaml
+      HUNT_CANDIDATE_PROFILE_PATH: /run/hunt-private/candidate_profile.md
+      HUNT_BULLET_LIBRARY_PATH: /run/hunt-private/bullet_library.md
     volumes:
       - ${HUNT_RESUME_STORAGE:-pipeline_resume_data}:/tmp/hunt-resumes
+      - ${HUNT_AUDIT_LOG_STORAGE:-pipeline_audit_data}:${HUNT_AUDIT_LOG_CONTAINER_ROOT:-/hunt-audit}
+      - ${HUNT_OG_RESUME_PATH:-./main.tex}:/run/hunt-private/base_resume.tex:ro
+      - ${HUNT_BASE_RESUMES_ROOT:-./fletcher/base_resumes}:/run/hunt-private/base_resumes:ro
+      - ${HUNT_MASTER_RESUME_PATH:-./fletcher/templates/master_resume.template.yaml}:/run/hunt-private/master_resume.yaml:ro
+      - ${HUNT_CANDIDATE_PROFILE_PATH:-./fletcher/templates/candidate_profile.template.md}:/run/hunt-private/candidate_profile.md:ro
+      - ${HUNT_BULLET_LIBRARY_PATH:-./fletcher/templates/bullet_library.template.md}:/run/hunt-private/bullet_library.md:ro
     ports:
       - "${HUNT_FLETCHER_BIND_HOST:-127.0.0.1}:${HUNT_FLETCHER_HOST_PORT:-18002}:8002"
-
-  coordinator:
-    build:
-      context: .
-      dockerfile: docker/Dockerfile.coordinator
-    profiles: ["pipeline"]
-    depends_on:
-      postgres:
-        condition: service_healthy
-    environment:
-      HUNT_DB_URL: ${HUNT_COMPOSE_DB_URL:-postgresql://hunt:hunt@postgres:5432/hunt}
-      HUNT_SERVICE_TOKEN: ${HUNT_SERVICE_TOKEN:-hunt-local-smoke-token}
-      HUNT_COORDINATOR_ROOT: ${HUNT_COORDINATOR_ROOT:-/tmp/hunt-coordinator}
-      HUNT_DISCORD_WEBHOOK_URL: ${HUNT_DISCORD_WEBHOOK_URL:-}
-    ports:
-      - "${HUNT_COORDINATOR_BIND_HOST:-127.0.0.1}:${HUNT_COORDINATOR_HOST_PORT:-18003}:8003"
 
   frontend:
     build:
@@ -222,3 +229,4 @@ volumes:
   pipeline_pg_data:
   ollama_data:
   pipeline_resume_data:
+  pipeline_audit_data:

@@ -32,7 +32,7 @@ Get help:
 - `job`: show one job by id
 - `ready`, `blocked`, `failed`, `done`, `processing`, `pending`: quick status views
 - `verify`: verify one enriched LinkedIn row
-- `verify-easy-apply`: verify an Easy Apply row is still excluded from C4
+- `verify-easy-apply`: verify C1 marks an Easy Apply row ineligible for external autofill
 
 Examples:
 
@@ -64,13 +64,13 @@ Examples:
 ```powershell
 .\hunter.ps1 config
 .\hunter.ps1 config-set run_interval_seconds 300
-.\hunter.ps1 config-set watchlist '["shopify","stripe"]'
+.\hunter.ps1 config-set watchlist '["example-company"]'
 ```
 
 ```bash
 ./hunter.sh config
 ./hunter.sh config-set run_interval_seconds 300
-./hunter.sh config-set watchlist '["shopify","stripe"]'
+./hunter.sh config-set watchlist '["example-company"]'
 ```
 
 Config values can also be edited via the **Settings** page in the web UI (requires C1 service running).
@@ -158,6 +158,8 @@ Notes:
 
 ### C4 commands exposed through the Hunter CLI
 
+C4 is on hold. These retained command names exit without starting coordinator code.
+
 - `c4-init-db`
 - `c4-ready`
 - `c4-ready-list`
@@ -193,4 +195,4 @@ Use `docs/C1_LOCAL_RUNBOOK.md` for:
 - switching headless and headful enrichment runs
 - running headed Linux sessions on Xvfb
 - running scrape and enrich locally on Windows with `hunter.ps1` or `hunter.cmd`
-- proving a real Easy Apply row is excluded from C4
+- proving a real Easy Apply row is excluded by C1

@@ -16,7 +16,6 @@ services:
       HUNT_RESUME_ARTIFACTS_DIR: /tmp/hunt-resumes
       HUNT_HUNTER_URL: ${HUNT_HUNTER_URL}
       HUNT_FLETCHER_URL: ${HUNT_FLETCHER_URL}
-      HUNT_COORDINATOR_URL: ${HUNT_COORDINATOR_URL}
     volumes:
       - ${HUNT_ARTIFACTS_STORAGE}:/app/artifacts:ro
       - ${HUNT_RESUME_STORAGE}:/app/resumes:ro
@@ -105,17 +104,6 @@ services:
       - ${HUNT_RESUME_STORAGE}:/app/resumes
     extra_hosts:
       - "host.docker.internal:host-gateway"
-
-  coordinator:
-    container_name: ${HUNT_COORDINATOR_CONTAINER_NAME}
-    restart: unless-stopped
-    environment:
-      HUNT_DB_URL: ${HUNT_COMPOSE_DB_URL}
-      HUNT_SERVICE_TOKEN: ${HUNT_SERVICE_TOKEN}
-      HUNT_COORDINATOR_ROOT: /app/coordinator-data
-      HUNT_DISCORD_WEBHOOK_URL: ${HUNT_DISCORD_WEBHOOK_URL}
-    volumes:
-      - ${HUNT_COORDINATOR_STORAGE}:/app/coordinator-data
 
 networks:
   default:

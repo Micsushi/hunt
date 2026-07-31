@@ -22,6 +22,9 @@ def _get_service():
 
 @app.on_event("startup")
 def _startup() -> None:
+    raise RuntimeError("C4 is on hold. The coordinator service is disabled.")
+
+    # Historical startup implementation retained below for possible future reuse.
     from coordinator import telegram as tg
 
     svc = _get_service()

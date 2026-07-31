@@ -1,4 +1,4 @@
-"""C0 gateway routes - proxy calls to C1/C2/C4 component services.
+"""C0 gateway routes for active component services.
 
 Mounted on the main FastAPI app under /api/gateway.
 All routes require the review-app session auth (require_auth).
@@ -205,54 +205,45 @@ async def c2_attempts(job_id: int, _auth: str = Depends(_require_auth)):
 # ---------------------------------------------------------------------------
 
 
+def _c4_paused() -> JSONResponse:
+    return JSONResponse(
+        status_code=503,
+        content={"detail": "C4 is on hold and has no active runtime."},
+    )
+
+
 @router.get("/c4/status")
 async def c4_status(_auth: str = Depends(_require_auth)):
-    from hunter.config import HUNT_COORDINATOR_URL
-
-    return await _proxy_get(f"{HUNT_COORDINATOR_URL}/status")
+    return _c4_paused()
 
 
 @router.get("/c4/runs")
 async def c4_runs(status: str | None = None, limit: int = 20, _auth: str = Depends(_require_auth)):
-    from hunter.config import HUNT_COORDINATOR_URL
-
-    params = {}
-    if status:
-        params["status"] = status
-    params["limit"] = str(limit)
-    qs = "&".join(f"{k}={v}" for k, v in params.items())
-    url = f"{HUNT_COORDINATOR_URL}/runs"
-    if qs:
-        url = f"{url}?{qs}"
-    return await _proxy_get(url)
+    del status, limit
+    return _c4_paused()
 
 
 @router.post("/c4/run")
 async def c4_run(request: Request, _auth: str = Depends(_require_auth)):
-    from hunter.config import HUNT_COORDINATOR_URL
-
-    body = await request.json()
-    return await _proxy_post(f"{HUNT_COORDINATOR_URL}/run", body)
+    await request.body()
+    return _c4_paused()
 
 
 @router.get("/c4/runs/{run_id}")
 async def c4_get_run(run_id: str, _auth: str = Depends(_require_auth)):
-    from hunter.config import HUNT_COORDINATOR_URL
-
-    return await _proxy_get(f"{HUNT_COORDINATOR_URL}/runs/{run_id}")
+    del run_id
+    return _c4_paused()
 
 
 @router.post("/c4/runs/{run_id}/approve")
 async def c4_approve(run_id: str, request: Request, _auth: str = Depends(_require_auth)):
-    from hunter.config import HUNT_COORDINATOR_URL
-
-    body = await request.json()
-    return await _proxy_post(f"{HUNT_COORDINATOR_URL}/runs/{run_id}/approve", body)
+    del run_id
+    await request.body()
+    return _c4_paused()
 
 
 @router.post("/c4/runs/{run_id}/fill-result")
 async def c4_fill_result(run_id: str, request: Request, _auth: str = Depends(_require_auth)):
-    from hunter.config import HUNT_COORDINATOR_URL
-
-    body = await request.json()
-    return await _proxy_post(f"{HUNT_COORDINATOR_URL}/runs/{run_id}/fill-result", body)
+    del run_id
+    await request.body()
+    return _c4_paused()

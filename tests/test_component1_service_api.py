@@ -1,6 +1,8 @@
 """Tests for the C1 hunter service HTTP API."""
 
+import json
 import os
+import shutil
 import sqlite3
 import sys
 import tempfile
@@ -28,12 +30,14 @@ class HunterServiceApiTests(unittest.TestCase):
     def setUp(self):
         fd, self.db_path = tempfile.mkstemp(suffix=".db")
         os.close(fd)
+        self.audit_dir = tempfile.mkdtemp(prefix="hunt-c1-audit-")
         self.old_db_path = db.DB_PATH
         self.clients = []
         self.env = patch.dict(
             os.environ,
             {
                 "HUNT_DB_PATH": self.db_path,
+                "HUNT_AUDIT_LOG_ROOT": self.audit_dir,
             },
             clear=False,
         )
@@ -50,6 +54,7 @@ class HunterServiceApiTests(unittest.TestCase):
         self.env.stop()
         if os.path.exists(self.db_path):
             os.remove(self.db_path)
+        shutil.rmtree(self.audit_dir, ignore_errors=True)
 
     def _reset_service_flags(self):
         with service._scrape_lock:
@@ -191,8 +196,16 @@ class HunterServiceApiTests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json(), {"status": "started"})
+        self.assertEqual(response.headers.get("X-Hunt-Audit-Status"), "written")
         scrape_mock.assert_called_once_with(enrich_pending=False, enrich_limit=7)
         self.assertFalse(service._is_scrape_running())
+        with open(
+            os.path.join(self.audit_dir, "human-commands.jsonl"),
+            encoding="utf-8",
+        ) as stream:
+            event = json.loads(stream.readline())
+        self.assertEqual(event["component"], "c1")
+        self.assertEqual(event["payload"]["details"]["route"], "/scrape")
 
     def test_scrape_rejects_duplicate_run_while_first_is_active(self):
         client = self._make_client()

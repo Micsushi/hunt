@@ -11,7 +11,7 @@ Hunt uses a dark olive-green, data-dense control dashboard for the job pipeline.
 ## Rules
 
 - Keep pipeline state, errors, source, age, and next actions easy to scan.
-- Preserve component independence; C0 must remain useful without C4.
+- Preserve component independence; C0 through C2 remain useful while C3 v3 is built and C4 is paused.
 - Use exact state labels and never rely on color alone.
 - Keep review and automation actions explicit about their target and status.
 - Update `DESIGN.md` when stable visual tokens change.

@@ -14,7 +14,7 @@ class Component2Stage1Tests(unittest.TestCase):
     def test_parse_main_resume_extracts_expected_sections(self):
         doc = parse_resume_file(MAIN_TEX)
 
-        self.assertEqual(doc.header.name, "Michael Shi")
+        self.assertEqual(doc.header.name, "Your Name")
         self.assertEqual(
             doc.section_order, ["Education", "Experience", "Projects", "Technical Skills"]
         )
@@ -30,11 +30,11 @@ class Component2Stage1Tests(unittest.TestCase):
 
         self.assertEqual(
             doc.education.entry.date_text,
-            "Expected Graduation: \\textbf{Sep 2026}",
+            "Expected Graduation: \\textbf{YYYY}",
         )
         self.assertEqual(
             doc.projects[0].date_or_link_text,
-            "\\href{https://github.com/NatRunners/StudyAmp}{github.com/NatRunners/StudyAmp}",
+            "\\href{https://github.com/yourhandle/project-one}{github.com/yourhandle/project-one}",
         )
 
     def test_renderer_round_trip_preserves_parsed_structure(self):

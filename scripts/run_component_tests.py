@@ -13,6 +13,11 @@ TEST_TARGETS = {
     "all": [
         "tests",
         "hunter/tests",
+        "--ignore=tests/test_component4_agent_runtime.py",
+        "--ignore=tests/test_component4_cli.py",
+        "--ignore=tests/test_component4_service_api.py",
+        "--ignore=tests/test_component4_worker_protocol.py",
+        "--ignore=tests/test_component4_new_features.py",
     ],
     "c0": [
         "tests/test_c0_control_api.py",
@@ -35,20 +40,6 @@ TEST_TARGETS = {
         "tests/test_component2_pipeline.py",
         "tests/test_component2_ollama.py",
     ],
-    "c3": [
-        "tests/test_component3_stage1.py",
-        "tests/test_component3_generic_fill.py",
-        "tests/test_component3_workday_fill.py",
-        "tests/test_component3_gap_report.py",
-    ],
-    "c4": [
-        "tests/test_component4_agent_runtime.py",
-        "tests/test_component4_cli.py",
-        "tests/test_component4_service_api.py",
-        "tests/test_component4_c3_bridge.py",
-        "tests/test_component4_worker_protocol.py",
-        "tests/test_component4_new_features.py",
-    ],
     "shared": [
         "tests/test_db_compat.py",
         "tests/test_new_tables.py",
@@ -62,8 +53,6 @@ TARGET_ALIASES = {
     "backend": "c0",
     "hunter": "c1",
     "fletcher": "c2",
-    "executioner": "c3",
-    "coordinator": "c4",
     "infra": "shared",
     "full": "all",
 }
@@ -77,7 +66,7 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
         "target",
         nargs="?",
         default="all",
-        help="Test target: all, c0, c1, c2, c3, c4, shared, frontend",
+        help="Test target: all, c0, c1, c2, shared, frontend",
     )
     parser.add_argument(
         "--dry-run",

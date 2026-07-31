@@ -380,6 +380,13 @@ def run_once(args: argparse.Namespace) -> dict[str, Any]:
 
 
 def main(argv: list[str] | None = None) -> int:
+    print(
+        json.dumps({"error": "C4 is on hold. Agent workers are disabled."}),
+        file=sys.stderr,
+    )
+    return 2
+
+    # Historical implementation retained below for possible future reuse.
     parser = build_parser()
     args = parser.parse_args(argv)
     try:

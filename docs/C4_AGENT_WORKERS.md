@@ -1,5 +1,7 @@
 # C4 Agent Workers
 
+> Status: paused as of 2026-07-30. Do not start these workers. The contracts below are retained only for possible future reuse.
+
 C4 uses agent workers (Hermes, OpenClaw) for two bounded tasks: investigating novel ATS failures that C3 cannot handle, and attempting CAPTCHA fallback when no extension is available. Agents do not fill application forms. C3 owns all fill work.
 
 ## When Agents Are Triggered
@@ -222,7 +224,5 @@ RUNTIME=hermes_local ./scripts/c4_hermes_worker.sh --execute-agent
 
 ## Verification
 
-```powershell
-python test.py c4
-python smoke.py c4
-```
+No active verification command exists while C4 is on hold. Worker wrappers
+exit before starting OpenClaw, Hermes, or coordinator code.

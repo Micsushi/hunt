@@ -18,7 +18,7 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
         "target",
         nargs="?",
         default="all",
-        help="CI target: all, c0, c1, c2, c3, c4, shared, frontend",
+        help="CI target: all, c0, c1, c2, shared, frontend; C3 is planned and C4 is blocked",
     )
     parser.add_argument(
         "--dry-run",
@@ -30,6 +30,12 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
 
 def main() -> int:
     args = _parse_args(sys.argv[1:])
+    if args.target in {"c3", "executioner"}:
+        print("[ci] C3 v3 is planned but not implemented.", file=sys.stderr)
+        return 2
+    if args.target in {"c4", "coordinator"}:
+        print("[ci] C4 is on hold. No C4 checks or tests were started.", file=sys.stderr)
+        return 2
 
     commands = [
         [PYTHON, "quality.py", args.target],

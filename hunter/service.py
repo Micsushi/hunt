@@ -4,14 +4,24 @@ from __future__ import annotations
 
 import threading
 
-from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException
+from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, Request
 from pydantic import BaseModel
 
 from hunter.service_auth import require_service_token
 from hunter.service_request_id import ServiceRequestIDMiddleware
+from shared.mutation_audit import audit_mutation_request
 
 app = FastAPI(title="C1 Hunter Service")
 app.add_middleware(ServiceRequestIDMiddleware, service_name="c1-hunter")
+
+
+@app.middleware("http")
+async def audit_successful_mutations(request: Request, call_next):
+    return await audit_mutation_request(
+        request,
+        call_next,
+        component="c1",
+    )
 
 
 # ---------------------------------------------------------------------------

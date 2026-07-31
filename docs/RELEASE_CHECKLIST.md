@@ -21,7 +21,7 @@ python scripts/run_local_smoke.py
 
 Check the C0 dashboard at `http://localhost:18090`:
 
-- Dashboard health cards all green (DB, C1, C2, C3, C4)
+- Dashboard health cards show active DB, C1, and C2 state plus C3 v3 as planned
 - Jobs page loads
 - Operator status page shows all services up
 
@@ -50,7 +50,7 @@ Verify in the live dashboard:
 
 - C0 dashboard loads, health cards green
 - C1 scrape/enrich can be triggered from Ops page
-- C4 run queue visible
+- C4 controls and run queue absent while the component is paused
 
 ## 5. Update docs
 

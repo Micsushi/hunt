@@ -8,7 +8,7 @@ Human/operator runbook for local C1 work. This is the supported path when you wa
 - switching between headless and headful enrichment
 - running headed Linux sessions through Xvfb
 - running scrape and enrich locally on Windows with `hunter.ps1` or `hunter.cmd`
-- proving that a real Easy Apply row stays excluded from C4
+- proving that C1 classifies a real Easy Apply row as ineligible for external autofill
 
 ## Prerequisites
 
@@ -127,7 +127,7 @@ This is local-only. You do not need to deploy to `server2` just to test C1 scrap
 
 ## Real Easy Apply proof
 
-This is the shortest honest proof that Easy Apply is detected by C1 and excluded by C4.
+This is the shortest honest proof that Easy Apply is detected and excluded by C1.
 
 1. Run a real LinkedIn scrape or identify a real pending LinkedIn row:
 
@@ -148,11 +148,10 @@ This is the shortest honest proof that Easy Apply is detected by C1 and excluded
 .\hunter.ps1 verify 123 --expect-type easy_apply
 ```
 
-4. Verify that C4 still excludes it:
+4. Verify the C1 exclusion invariant:
 
 ```powershell
 .\hunter.ps1 verify-easy-apply 123
-.\hunter.ps1 c4-ready 123
 ```
 
 Expected result:
@@ -161,4 +160,3 @@ Expected result:
 - `auto_apply_eligible=0`
 - no external `apply_url`
 - `verify-easy-apply` passes
-- `c4-ready` reports `ready=false` and `reason=easy_apply_excluded`

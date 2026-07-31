@@ -14,6 +14,6 @@
 - Axis text: text-secondary, mono font.
 - Legend: inline above chart, not below.
 
-**Approval queue (Coordinator):** visually distinct - `panel-strong` background, `accent` left border 3px, primary action buttons immediately visible.
+**Paused C4 reference:** the former Coordinator approval queue is not part of the active UI.
 
 **Pipeline status dots (nav + Overview):** green/amber/red/grey as above. Polled every 30s from `/api/system/status`.

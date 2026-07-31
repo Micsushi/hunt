@@ -23,7 +23,6 @@ LOCAL_DEPLOY_TARGETS = {
     "c0": ("review", "frontend"),
     "c1": ("review", "frontend", "hunter"),
     "c2": ("review", "frontend", "ollama", "ollama-init", "fletcher"),
-    "c4": ("review", "frontend", "coordinator"),
     "c1c2": ("review", "frontend", "hunter", "ollama", "ollama-init", "fletcher"),
     "all": (
         "review",
@@ -33,7 +32,6 @@ LOCAL_DEPLOY_TARGETS = {
         "ollama",
         "ollama-init",
         "fletcher",
-        "coordinator",
     ),
 }
 TARGET_ALIASES = {
@@ -41,7 +39,6 @@ TARGET_ALIASES = {
     "backend": "c0",
     "hunter": "c1",
     "fletcher": "c2",
-    "coordinator": "c4",
     "pipeline": "all",
 }
 SERVER_DEPLOY_TARGETS = {
@@ -49,7 +46,6 @@ SERVER_DEPLOY_TARGETS = {
     "c0": ("postgres", "review", "frontend"),
     "c1": ("postgres", "review", "frontend", "hunter", "hunter-scheduler"),
     "c2": ("postgres", "review", "frontend", "ollama", "ollama-init", "fletcher"),
-    "c4": ("postgres", "review", "frontend", "coordinator"),
     "c1c2": (
         "postgres",
         "review",
@@ -69,7 +65,6 @@ SERVER_DEPLOY_TARGETS = {
         "ollama",
         "ollama-init",
         "fletcher",
-        "coordinator",
     ),
 }
 
@@ -80,7 +75,7 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
         "target",
         nargs="?",
         default="all",
-        help="Deploy target: db, c0, c1, c2, c4, c1c2, all",
+        help="Deploy target: db, c0, c1, c2, c1c2, all. C4 is paused.",
     )
     parser.add_argument(
         "--project-name",

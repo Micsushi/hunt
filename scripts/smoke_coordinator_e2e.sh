@@ -3,6 +3,9 @@
 # exercises the full apply flow (POST /run -> C3 fill -> approve/deny).
 set -euo pipefail
 
+echo "C4 is on hold. The coordinator end-to-end smoke is disabled." >&2
+exit 2
+
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 RUN_ID="${RUN_ID:-$$}"
 

@@ -1,5 +1,5 @@
 """
-Interactive GitHub project importer for master_resume.yaml.
+Interactive GitHub project importer for master_resume.local.yaml.
 
 Fetches your GitHub repos, lets you pick + order which to include,
 generates resume bullets, and writes them back to the YAML.
@@ -36,7 +36,9 @@ from fletcher.llm.client import generate_json
 # ─── constants ────────────────────────────────────────────────────────────────
 
 GITHUB_API = "https://api.github.com"
-MASTER_YAML_PATH = _config.DEFAULT_MASTER_RESUME_PATH
+MASTER_YAML_PATH = Path(
+    os.getenv("HUNT_MASTER_RESUME_PATH") or _config.DEFAULT_MASTER_RESUME_LOCAL_PATH
+)
 
 # ─── GitHub helpers ────────────────────────────────────────────────────────────
 
@@ -335,7 +337,7 @@ def _make_proj_id(index: int, name: str) -> str:
 
 
 def write_projects_section(projects: list[dict], master_path: Path) -> None:
-    """Replace the projects: section in master_resume.yaml."""
+    """Replace the projects section in the selected local master resume."""
     raw = master_path.read_text(encoding="utf-8")
     lines = raw.splitlines()
 
@@ -355,7 +357,7 @@ def write_projects_section(projects: list[dict], master_path: Path) -> None:
             break
 
     if proj_start is None:
-        print("ERROR: 'projects:' section not found in master_resume.yaml", file=sys.stderr)
+        print("ERROR: 'projects:' section not found in the master resume", file=sys.stderr)
         return
 
     proj_blocks = []
@@ -464,6 +466,12 @@ def _review_project(proj: dict) -> dict:
 
 def run(master_path: Path | None = None, provider: str = "ollama") -> None:
     master_path = Path(master_path or MASTER_YAML_PATH)
+    if not master_path.exists() and master_path == _config.DEFAULT_MASTER_RESUME_LOCAL_PATH:
+        shutil.copyfile(_config.DEFAULT_MASTER_RESUME_TEMPLATE_PATH, master_path)
+        print(f"Created local master resume at {master_path}. Replace its sample data first.")
+        return
+    if not master_path.exists():
+        raise FileNotFoundError(f"Master resume does not exist: {master_path}")
 
     print(f"── GitHub Project Importer (LLM: {provider}) ─────────────────")
 
@@ -512,16 +520,16 @@ def run(master_path: Path | None = None, provider: str = "ollama") -> None:
     if all_skills:
         write_skills_section(all_skills, master_path)
 
-    print("\nDone. Review master_resume.yaml and run `python ci.py` to verify.")
+    print("\nDone. Review the local master resume and run `python ci.py` to verify.")
 
 
 def main() -> None:
     import argparse
 
     parser = argparse.ArgumentParser(
-        description="Interactive GitHub project importer for master_resume.yaml."
+        description="Interactive GitHub project importer for the local master resume."
     )
-    parser.add_argument("--master", default=None, help="Override path to master_resume.yaml.")
+    parser.add_argument("--master", default=None, help="Override the local master resume path.")
     parser.add_argument(
         "--provider",
         choices=["ollama", "claude-code"],

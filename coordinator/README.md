@@ -2,6 +2,10 @@
 
 This directory is the repo home for C4 (Coordinator).
 
+> Status: C4 is on hold as of 2026-07-30. The API startup, direct CLI,
+> agent-worker entrypoints, deploy/smoke runners, and wrappers fail closed. The
+> source below is retained only for possible reuse.
+
 Current scope:
 
 - orchestration and submit-control source for C4 (Coordinator)

@@ -181,6 +181,8 @@ Examples:
 
 ### C4 commands exposed through the Hunter CLI
 
+C4 is on hold. These retained command names exit without starting coordinator code.
+
 - `c4-init-db`
 - `c4-ready`
 - `c4-ready-list`

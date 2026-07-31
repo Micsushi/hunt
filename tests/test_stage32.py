@@ -538,7 +538,7 @@ class Stage32Tests(unittest.TestCase):
             db.clear_hiring_cafe_cooldown()
             self.assertEqual(db.count_ready_linkedin_jobs_for_hiring_cafe_fallback(), 1)
 
-    def test_verify_easy_apply_filter_checks_stage2_and_c4(self):
+    def test_verify_easy_apply_filter_checks_c1_invariants(self):
         with self.with_temp_db() as path:
             job_id = self.insert_job(
                 path,

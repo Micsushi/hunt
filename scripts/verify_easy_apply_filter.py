@@ -7,7 +7,6 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from coordinator.service import OrchestrationService  # noqa: E402
 from hunter.db import get_job_by_id  # noqa: E402
 
 DEFAULT_DB_PATH = REPO_ROOT / "hunt.db"
@@ -15,7 +14,7 @@ DEFAULT_DB_PATH = REPO_ROOT / "hunt.db"
 
 def build_parser():
     parser = argparse.ArgumentParser(
-        description="Verify that an Easy Apply row stays excluded from the C4 automation queue."
+        description="Verify C1 classifies an Easy Apply row as ineligible for external autofill."
     )
     parser.add_argument("--job-id", type=int, required=True, help="LinkedIn job id to verify.")
     parser.add_argument(
@@ -63,12 +62,6 @@ def _main_run(args):
             f"got {job.get('enrichment_status')!r}"
         )
 
-    decision = OrchestrationService(db_path=args.db_path).get_ready_decision(args.job_id)
-    if decision.ready:
-        failures.append("C4 marked the job ready, but Easy Apply rows must stay excluded")
-    if decision.reason != "easy_apply_excluded":
-        failures.append(f"expected C4 reason='easy_apply_excluded', got {decision.reason!r}")
-
     if failures:
         print("Easy Apply verification: FAIL")
         for failure in failures:
@@ -82,8 +75,6 @@ def _main_run(args):
     print(f"apply_type: {job['apply_type']}")
     print(f"auto_apply_eligible: {job['auto_apply_eligible']}")
     print(f"enrichment_status: {job['enrichment_status']}")
-    print(f"c4_ready: {decision.ready}")
-    print(f"c4_reason: {decision.reason}")
     return 0
 
 

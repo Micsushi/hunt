@@ -30,6 +30,10 @@ check_contains() {
   local label="$1" needle="$2" haystack="$3"
   if echo "$haystack" | grep -qF "$needle"; then ok "$label"; else fail "$label" "missing '$needle'"; fi
 }
+check_not_contains() {
+  local label="$1" needle="$2" haystack="$3"
+  if echo "$haystack" | grep -qF "$needle"; then fail "$label" "unexpected '$needle'"; else ok "$label"; fi
+}
 check_http() {
   local label="$1" expected="$2" actual="$3"
   if [ "$actual" = "$expected" ]; then ok "$label"; else fail "$label" "expected $expected got $actual"; fi
@@ -83,26 +87,27 @@ check_contains "system status has DB" '"db"' "$system_status"
 check_contains "system status has C1" '"c1"' "$system_status"
 check_contains "system status has C2" '"c2"' "$system_status"
 check_contains "system status has C3" '"c3"' "$system_status"
+check_contains "system status marks C3 planned" '"planned"' "$system_status"
 check_contains "system status has C4" '"c4"' "$system_status"
 
 check_http "anonymous gateway blocked" "401" "$(curl -s -o /dev/null -w "%{http_code}" "$BASE/api/gateway/c1/status")"
 check_http "C1 status through C0" "200" "$(curl -s -b /tmp/hunt-c0-cookies.txt -o /tmp/hunt-c0-c1.json -w "%{http_code}" "$BASE/api/gateway/c1/status")"
 check_contains "C1 status body" '"service"' "$(cat /tmp/hunt-c0-c1.json)"
 check_http "C2 status through C0" "200" "$(curl -s -b /tmp/hunt-c0-cookies.txt -o /tmp/hunt-c0-c2.json -w "%{http_code}" "$BASE/api/gateway/c2/status")"
-check_http "C4 status through C0" "200" "$(curl -s -b /tmp/hunt-c0-cookies.txt -o /tmp/hunt-c0-c4.json -w "%{http_code}" "$BASE/api/gateway/c4/status")"
+check_http "C4 status is paused" "503" "$(curl -s -b /tmp/hunt-c0-cookies.txt -o /tmp/hunt-c0-c4.json -w "%{http_code}" "$BASE/api/gateway/c4/status")"
 
-settings="$(curl -fsS -b /tmp/hunt-c0-cookies.txt -H "Content-Type: application/json" -d '{"component":"c3","key":"extension_version","value":"local-smoke","value_type":"string","secret":false}' "$BASE/api/settings")"
-check_contains "settings write returns redacted record" '"extension_version"' "$settings"
-settings_list="$(curl -fsS -b /tmp/hunt-c0-cookies.txt "$BASE/api/settings?component=c3")"
-check_contains "settings list returns c3 setting" '"local-smoke"' "$settings_list"
+settings="$(curl -fsS -b /tmp/hunt-c0-cookies.txt -H "Content-Type: application/json" -d '{"component":"c2","key":"smoke_value","value":"local-smoke","value_type":"string","secret":false}' "$BASE/api/settings")"
+check_contains "settings write returns redacted record" '"smoke_value"' "$settings"
+settings_list="$(curl -fsS -b /tmp/hunt-c0-cookies.txt "$BASE/api/settings?component=c2")"
+check_contains "settings list returns c2 setting" '"local-smoke"' "$settings_list"
 
 account="$(curl -fsS -b /tmp/hunt-c0-cookies.txt -H "Content-Type: application/json" -d '{"username":"smoke@example.com","display_name":"Smoke","active":true}' "$BASE/api/linkedin/accounts")"
 check_contains "account create returns username" '"smoke@example.com"' "$account"
 accounts="$(curl -fsS -b /tmp/hunt-c0-cookies.txt "$BASE/api/linkedin/accounts")"
 check_contains "account list returns username" '"smoke@example.com"' "$accounts"
 
-check_http "C3 pending fills via service token" "200" "$(curl -s -H "Authorization: Bearer ${SERVICE_TOKEN}" -o /tmp/hunt-c0-c3.json -w "%{http_code}" "$BASE/api/c3/pending-fills")"
-check_contains "C3 pending fills body" '"fills"' "$(cat /tmp/hunt-c0-c3.json)"
+openapi="$(curl -fsS "$BASE/openapi.json")"
+check_not_contains "C3 v2 pending fills bridge is removed" '"/api/c3/pending-fills"' "$openapi"
 
 frontend="$(curl -fsS "$FRONTEND_BASE/")"
 if echo "$frontend" | grep -qi '<!doctype html>'; then

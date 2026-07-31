@@ -22,7 +22,8 @@ function shortId(prefix: string): string {
 export async function logHumanCommand(payload: HumanCommandPayload): Promise<void> {
   const route = payload.route || globalThis.location?.pathname || ''
   const page = payload.page || globalThis.document?.title || ''
-  const component = payload.component || 'c0'
+  const actionComponent = /^(c[0-2])\./.exec(payload.action)?.[1]
+  const component = payload.component || actionComponent || 'c0'
   const laneId = payload.laneId || ''
   const sessionId = payload.sessionId || ''
   const commandId = payload.commandId || ''
@@ -31,13 +32,13 @@ export async function logHumanCommand(payload: HumanCommandPayload): Promise<voi
     component,
     route,
     page,
-    laneId,
-    sessionId,
-    commandId,
-    traceId,
+    ...(laneId ? { laneId } : {}),
+    ...(sessionId ? { sessionId } : {}),
+    ...(commandId ? { commandId } : {}),
+    ...(traceId ? { traceId } : {}),
   }
   try {
-    await fetch('/api/ledger/events', {
+    await fetch('/api/audit/events', {
       method: 'POST',
       credentials: 'include',
       headers: {
@@ -56,16 +57,13 @@ export async function logHumanCommand(payload: HumanCommandPayload): Promise<voi
         trace_id: traceId,
         payload: {
           eventContext,
-          route,
-          page,
           action: payload.action,
           buttonId: payload.buttonId || '',
           details: payload.details || {},
         },
-        redaction: { applied: true, rules: ['human_command_no_form_values'] },
       }),
     })
   } catch {
-    // Human UI commands must never fail because the ledger is offline.
+    // Operator actions remain available if audit storage is temporarily offline.
   }
 }

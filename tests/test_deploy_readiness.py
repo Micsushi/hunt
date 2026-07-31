@@ -28,6 +28,66 @@ from scripts import (
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
 
+def test_postgres_schema_does_not_provision_removed_c3_v2_ledger():
+    schema = (REPO_ROOT / "schema" / "postgres_schema.sql").read_text(encoding="utf-8")
+
+    for removed_object in (
+        "ledger_agents",
+        "ledger_lanes",
+        "ledger_sessions",
+        "ledger_leases",
+        "ledger_browser_targets",
+        "ledger_events",
+        "ledger_probe_files",
+        "ledger_artifacts",
+    ):
+        assert removed_object not in schema
+
+
+def test_pipeline_compose_persists_active_component_audit_log():
+    compose = (REPO_ROOT / "docker-compose.pipeline.yml").read_text(encoding="utf-8")
+
+    assert "HUNT_AUDIT_LOG_ROOT" in compose
+    assert "HUNT_AUDIT_LOG_STORAGE" in compose
+    assert "pipeline_audit_data" in compose
+    assert compose.count("HUNT_AUDIT_LOG_ROOT:") == 3
+    assert (
+        compose.count(
+            "- ${HUNT_AUDIT_LOG_STORAGE:-pipeline_audit_data}:"
+            "${HUNT_AUDIT_LOG_CONTAINER_ROOT:-/hunt-audit}"
+        )
+        == 3
+    )
+    assert "USERPROFILE" not in compose
+    assert "HUNT_LEDGER" not in compose
+
+
+def test_pipeline_compose_audit_volume_is_portable_without_userprofile():
+    if not shutil.which("docker"):
+        pytest.skip("Docker CLI not installed")
+    env = os.environ.copy()
+    env.pop("USERPROFILE", None)
+    result = subprocess.run(
+        [
+            "docker",
+            "compose",
+            "--profile",
+            "c0",
+            "-f",
+            str(REPO_ROOT / "docker-compose.pipeline.yml"),
+            "config",
+        ],
+        cwd=REPO_ROOT,
+        env=env,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "/Documents/hunt-logs" not in result.stdout
+    assert "pipeline_audit_data" in result.stdout
+
+
 def _standalone_launcher_env(tmp_path: Path) -> dict[str, str]:
     env = os.environ.copy()
     env["HUNT_DB_PATH"] = str(tmp_path / "hunt.db")
@@ -196,129 +256,6 @@ def test_form_parser_declared_in_runtime_requirements():
     assert "python-multipart" in requirements
 
 
-def test_c3_extension_reload_dev_helper_exists():
-    helper = Path("scripts/reload_c3_extension.py")
-    hunterctl = Path("scripts/hunterctl.py").read_text(encoding="utf-8")
-    options_html = Path("executioner/src/options/options.html").read_text(encoding="utf-8")
-    options_js = Path("executioner/src/options/options.js").read_text(encoding="utf-8")
-
-    assert helper.is_file()
-    assert "c3-reload" in hunterctl
-    assert "reload-extension" in options_html
-    assert "chrome.runtime.reload()" in options_js
-
-
-def test_c3_extension_activity_log_hooks_exist():
-    settings_js = Path("executioner/src/shared/settings.js").read_text(encoding="utf-8")
-    storage_js = Path("executioner/src/shared/storage.js").read_text(encoding="utf-8")
-    background_js = Path("executioner/src/background/index.js").read_text(encoding="utf-8")
-    options_html = Path("executioner/src/options/options.html").read_text(encoding="utf-8")
-    options_js = Path("executioner/src/options/options.js").read_text(encoding="utf-8")
-
-    assert "activityLog" in settings_js
-    assert "appendActivityLog" in storage_js
-    assert "hunt.apply.log_activity" in background_js
-    assert "hunt.apply.clear_activity_log" in background_js
-    assert "activity-log" in options_html
-    assert "Export JSON" in options_html
-    assert "renderActivityLog" in options_js
-
-
-def test_c3_extension_quality_helper_exists():
-    helper = Path("scripts/executioner_quality.py")
-    checks = Path("scripts/run_component_checks.py").read_text(encoding="utf-8")
-    hunterctl = Path("scripts/hunterctl.py").read_text(encoding="utf-8")
-
-    helper_text = helper.read_text(encoding="utf-8")
-    assert helper.is_file()
-    assert "node" in helper_text
-    assert "--check" in helper_text
-    assert "prettier" in helper_text
-    assert "test.py" in helper_text
-    assert "executioner_quality.py" in checks
-    assert '"quality"' in hunterctl
-    assert 'f"c3-{command_name}"' in hunterctl
-    assert '"format"' in hunterctl
-    assert '"style-fix"' in hunterctl
-
-
-def test_c3_extension_package_helper_exists():
-    helper = Path("scripts/package_c3_extension.py")
-    hunterctl = Path("scripts/hunterctl.py").read_text(encoding="utf-8")
-    readme = Path("executioner/README.md").read_text(encoding="utf-8")
-    root_readme = Path("README.md").read_text(encoding="utf-8")
-    gitignore = Path(".gitignore").read_text(encoding="utf-8")
-
-    helper_text = helper.read_text(encoding="utf-8")
-    assert helper.is_file()
-    assert "dist" in helper_text
-    assert "manifest.json" in helper_text
-    assert "zipfile" in helper_text
-    assert "INCLUDE_PATHS" in helper_text
-    assert "c3-package" in hunterctl
-    assert "package_c3_extension.py" in hunterctl
-    assert ".\\hunter.ps1 c3-package" in readme
-    assert ".\\hunter.ps1 c3-package" in root_readme
-    assert "dist/" in gitignore
-
-
-def test_c3_extension_store_deploy_helper_exists():
-    helper = Path("scripts/deploy_c3_store.py")
-    hunterctl = Path("scripts/hunterctl.py").read_text(encoding="utf-8")
-    runbook = Path("docs/C3_TESTING_RUNBOOK.md").read_text(encoding="utf-8")
-
-    helper_text = helper.read_text(encoding="utf-8")
-    assert helper.is_file()
-    assert "chromewebstore.googleapis.com" in helper_text
-    assert "upload/v2/publishers" in helper_text
-    assert ":publish" in helper_text
-    assert "CWS_PUBLISHER_ID" in helper_text
-    assert "CWS_EXTENSION_ID" in helper_text
-    assert "CWS_ACCESS_TOKEN" in helper_text
-    assert "package_extension" in helper_text
-    assert "c3-store-deploy" in hunterctl
-    assert "deploy_c3_store.py" in hunterctl
-    assert ".\\hunter.ps1 c3-store-deploy --publish --status" in runbook
-
-
-def test_c3_extension_has_standalone_manual_fill_path():
-    fill_runner = Path("executioner/src/background/fill-runner.js").read_text(encoding="utf-8")
-    generic_fill = Path("executioner/src/ats/generic/fill-v2.js").read_text(encoding="utf-8")
-    generic_rules = Path("executioner/src/ats/generic/field-rules.js").read_text(encoding="utf-8")
-    field_pipeline = Path("executioner/src/shared/v2/field-pipeline.js").read_text(encoding="utf-8")
-    ui_inspector = Path("executioner/src/shared/v2/ui-inspector.js").read_text(encoding="utf-8")
-    field_drivers = Path("executioner/src/shared/v2/field-drivers.js").read_text(encoding="utf-8")
-    popup_html = Path("executioner/src/popup/popup.html").read_text(encoding="utf-8")
-    popup_js = Path("executioner/src/popup/popup.js").read_text(encoding="utf-8")
-
-    assert "GENERIC_FIELD_RULES" in fill_runner
-    assert "selectFillRoute" in fill_runner
-    assert "fillRoute: route.routeName" in fill_runner
-    assert "createGenericFillV2Function" in fill_runner
-    assert "createGenericFillFunction" not in fill_runner
-    assert "genericBackedAtsNames" in fill_runner
-    assert "detectedAtsType" in fill_runner
-    assert "sourceMode: extensionState.activeApplyContext.jobId" in fill_runner
-    assert "activeApplyContext.selectedResumePath ||" in fill_runner
-    assert "extensionState.defaultResume.pdfFileName" in fill_runner
-    assert "Generic V2 adapter" in generic_fill
-    assert "runHuntV2Fill" in generic_fill
-    assert "adapterBackedByGeneric" in field_pipeline
-    assert "isRequired" in ui_inspector
-    assert "u.attachResumeToFileInput" in field_drivers
-    assert "generatedAnswerCount" in field_pipeline
-    assert "maiden name" in generic_rules
-    assert "preferred name" in generic_rules
-    assert "jobContextFields" in generic_rules
-    assert "position applied for" in generic_rules
-    assert "excludedPhrases" in generic_rules
-    assert 'id="fill-mode"' in popup_html
-    assert 'id="reload-extension"' in popup_html
-    assert "chrome.runtime.reload()" in popup_js
-    assert '"Standalone"' in popup_js
-    assert '"Job Context"' in popup_js
-
-
 def test_repo_root_does_not_keep_dev_probe_files():
     root_probe_files = [
         "test_exit.ps1",
@@ -390,7 +327,7 @@ def test_server_compose_review_writes_resume_artifacts_to_writable_mount():
     assert "- ${HUNT_RESUME_STORAGE}:/tmp/hunt-resumes" in compose_text
 
 
-def test_coordinator_container_smoke_assets_exist():
+def test_coordinator_container_assets_are_archived_and_smoke_is_blocked():
     dockerfile = Path("docker/Dockerfile.coordinator")
     smoke_script = Path("scripts/smoke_coordinator_container.sh")
 
@@ -402,8 +339,8 @@ def test_coordinator_container_smoke_assets_exist():
     assert "EXPOSE 8003" in dockerfile_text
 
     smoke_text = smoke_script.read_text(encoding="utf-8")
-    assert "docker/Dockerfile.coordinator" in smoke_text
-    assert "/status" in smoke_text
+    assert "C4 is on hold" in smoke_text
+    assert "exit 2" in smoke_text
 
 
 def test_hunter_container_smoke_assets_exist():
@@ -434,7 +371,7 @@ def test_pipeline_compose_smoke_assets_exist():
     assert "docker/Dockerfile.review" in compose_text
     assert "docker/Dockerfile.hunter" in compose_text
     assert "docker/Dockerfile.fletcher" in compose_text
-    assert "docker/Dockerfile.coordinator" in compose_text
+    assert "docker/Dockerfile.coordinator" not in compose_text
     assert "postgres:16" in compose_text
 
     smoke_text = smoke_script.read_text(encoding="utf-8")
@@ -454,7 +391,7 @@ def test_one_command_local_smoke_runner_exists(monkeypatch):
     assert "smoke_hunter_container.sh" in runner_text
     assert "smoke_fletcher_container.sh" in runner_text
     assert "smoke_c0_pipeline_container.sh" in runner_text
-    assert "smoke_coordinator_e2e.sh" in runner_text
+    assert "smoke_coordinator_e2e.sh" not in runner_text
     assert "smoke_server2_c1.sh" in runner_text
     assert 'shutil.which("wsl")' in runner_text
 
@@ -472,7 +409,6 @@ def test_one_command_local_smoke_runner_exists(monkeypatch):
     assert [command for command, _cwd in calls] == [
         ["bash", "scripts/smoke_pipeline_compose.sh"],
         ["bash", "scripts/smoke_c0_pipeline_container.sh"],
-        ["bash", "scripts/smoke_coordinator_e2e.sh"],
     ]
     assert all(cwd == run_local_smoke.ROOT for _command, cwd in calls)
 
@@ -656,7 +592,7 @@ def test_repo_root_smoke_shortcut_exists():
     assert "from scripts.run_local_smoke import main" in shortcut_text
 
 
-def test_server2_deploy_wrapper_exists():
+def test_server2_deploy_wrapper_allows_only_active_stages():
     script = Path("scripts/deploy_server2.ps1")
 
     assert script.is_file()
@@ -667,6 +603,35 @@ def test_server2_deploy_wrapper_exists():
     assert "$PrintOnly" in script_text
     assert "-Stages" in script_text
     assert "@DeployParams" in script_text
+    assert '$AllowedStages = @("6", "7")' in script_text
+    assert "Unsupported Hunt stage" in script_text
+
+
+def test_server2_deploy_wrapper_rejects_retired_c3_c4_stages(tmp_path):
+    ansible_repo = tmp_path / "ansible_homelab"
+    ansible_repo.mkdir()
+    (ansible_repo / "deploy.ps1").write_text(
+        "param([string]$Target, [string]$Stage, [string]$Tags)\n",
+        encoding="utf-8",
+    )
+    command = [
+        "powershell.exe",
+        "-NoProfile",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-File",
+        str(REPO_ROOT / "scripts" / "deploy_server2.ps1"),
+        "-Stages",
+        "9",
+        "-AnsibleRepo",
+        str(ansible_repo),
+        "-PrintOnly",
+    ]
+
+    result = subprocess.run(command, capture_output=True, text=True)
+
+    assert result.returncode != 0
+    assert "Unsupported Hunt stage" in result.stderr
 
 
 def test_server2_deploy_runbook_exists():
@@ -679,6 +644,127 @@ def test_server2_deploy_runbook_exists():
     assert "server2" in runbook_text
     assert "ansible_homelab" in runbook_text
     assert "python smoke.py server2-c1" in runbook_text
+    assert "-Stages 8" not in runbook_text
+    assert "-Stages 9" not in runbook_text
+
+
+def test_public_examples_and_candidate_template_are_machine_neutral():
+    public_files = (
+        ".env.example",
+        ".env.server.example",
+        "docs/FLETCH_CLI.md",
+        "fletcher/config.py",
+        "fletcher/README.md",
+    )
+    combined = "\n".join((REPO_ROOT / path).read_text(encoding="utf-8") for path in public_files)
+    candidate = (REPO_ROOT / "fletcher/templates/candidate_profile.template.md").read_text(
+        encoding="utf-8"
+    )
+
+    assert r"C:\Users\sushi" not in combined
+    assert "/home/michael" not in combined
+    assert "Michael Shi" not in candidate
+    assert "Citizen / Permanent Resident" not in candidate
+    assert "all code written by me" not in candidate
+    assert "Deployed the full stack" not in candidate
+    assert "<replace-with-approved-fact>" in candidate
+
+
+def test_public_hunter_defaults_are_generic():
+    config = (REPO_ROOT / "hunter/config.py").read_text(encoding="utf-8")
+    example = (REPO_ROOT / "hunt_user_config.example.json").read_text(encoding="utf-8")
+
+    assert "agent-hunt-review.mshi.ca" not in config
+    assert '"engineering": ["software engineer"]' in config
+    assert '_DEFAULT_LOCATIONS = ["Remote"]' in config
+    assert "_DEFAULT_WATCHLIST: list[str] = []" in config
+    assert "_DEFAULT_TITLE_BLACKLIST: list[str] = []" in config
+    assert "new grad" not in config
+    assert "intern" not in config
+    assert "Canada" not in config
+    assert "new grad" not in example
+    assert "intern" not in example
+    assert "Canada" not in example
+
+
+def test_public_fletcher_master_resume_default_is_generic_and_local_data_is_ignored():
+    config = (REPO_ROOT / "fletcher/config.py").read_text(encoding="utf-8")
+    template = (REPO_ROOT / "fletcher/templates/master_resume.template.yaml").read_text(
+        encoding="utf-8"
+    )
+    tracked = subprocess.run(
+        ["git", "ls-files", "fletcher/master_resume.yaml", "fletcher/master_resume.local.yaml"],
+        cwd=REPO_ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.splitlines()
+
+    assert "fletcher/master_resume.local.yaml" not in tracked
+    assert not (REPO_ROOT / "fletcher/master_resume.yaml").exists()
+    assert "HUNT_MASTER_RESUME_PATH" in config
+    assert "DEFAULT_MASTER_RESUME_LOCAL_PATH.exists()" in config
+    assert "DEFAULT_MASTER_RESUME_TEMPLATE_PATH" in config
+    assert "Your Name" in template
+    assert "Michael Shi" not in template
+    assert "wenjian2@ualberta.ca" not in template
+    ignored = subprocess.run(
+        ["git", "check-ignore", "fletcher/master_resume.local.yaml"],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+    )
+    assert ignored.returncode == 0
+
+
+def test_fletcher_private_resume_sources_are_runtime_only():
+    dockerignore = (REPO_ROOT / ".dockerignore").read_text(encoding="utf-8")
+    config = (REPO_ROOT / "fletcher/config.py").read_text(encoding="utf-8")
+    compose = (REPO_ROOT / "docker-compose.pipeline.yml").read_text(encoding="utf-8")
+
+    private_paths = (
+        "fletcher/base_resume.local.tex",
+        "fletcher/base_resumes/**/main.local.tex",
+        "fletcher/master_resume.local.yaml",
+        "fletcher/candidate_profile.md",
+        "fletcher/bullet_library.md",
+    )
+    for path in private_paths:
+        assert path in dockerignore
+
+    for env_name in (
+        "HUNT_OG_RESUME_PATH",
+        "HUNT_BASE_RESUMES_ROOT",
+        "HUNT_MASTER_RESUME_PATH",
+        "HUNT_CANDIDATE_PROFILE_PATH",
+        "HUNT_BULLET_LIBRARY_PATH",
+    ):
+        assert env_name in config
+        assert compose.count(f"{env_name}: /run/hunt-private/") == 2
+
+    assert compose.count("${HUNT_OG_RESUME_PATH:-./main.tex}") == 2
+    assert compose.count("${HUNT_BASE_RESUMES_ROOT:-./fletcher/base_resumes}") == 2
+    assert compose.count("${HUNT_MASTER_RESUME_PATH:-./fletcher/templates/") == 2
+    assert compose.count("${HUNT_CANDIDATE_PROFILE_PATH:-./fletcher/templates/") == 2
+    assert compose.count("${HUNT_BULLET_LIBRARY_PATH:-./fletcher/templates/") == 2
+
+
+def test_public_fletcher_tex_defaults_are_neutral():
+    config = (REPO_ROOT / "fletcher/config.py").read_text(encoding="utf-8")
+    public_resume = (REPO_ROOT / "main.tex").read_text(encoding="utf-8")
+    review_dockerfile = (REPO_ROOT / "docker/Dockerfile.review").read_text(encoding="utf-8")
+    fletcher_dockerfile = (REPO_ROOT / "docker/Dockerfile.fletcher").read_text(encoding="utf-8")
+    public_family_resumes = list((REPO_ROOT / "fletcher/base_resumes").glob("*/main.tex"))
+
+    assert "HUNT_OG_RESUME_PATH" in config
+    assert "DEFAULT_OG_RESUME_LOCAL_PATH.exists()" in config
+    assert "main.local.tex" in config
+    assert "Your Name" in public_resume
+    assert "Michael Shi" not in public_resume
+    assert "wenjian2@ualberta.ca" not in public_resume
+    assert "COPY main.tex /app/main.tex" in review_dockerfile
+    assert "COPY main.tex /app/main.tex" in fletcher_dockerfile
+    assert public_family_resumes == []
 
 
 def test_c1_local_runbook_exists():
@@ -856,7 +942,6 @@ def test_deploy_runner_server_mode_mapping(monkeypatch):
                 "ollama",
                 "ollama-init",
                 "fletcher",
-                "coordinator",
             ],
             run_deploy_stack.ROOT,
             {**os.environ, "OLLAMA_NUM_PARALLEL": "1", "HUNT_BULLET_REWRITE_PARALLELISM": "1"},
@@ -917,7 +1002,7 @@ def test_deploy_runner_dry_run_skips_subprocess(monkeypatch, capsys):
 
     output = capsys.readouterr().out
     assert "docker compose" in output
-    assert "coordinator" in output
+    assert "coordinator" not in output
     assert "resource_profile: fast" in output
 
 
@@ -1103,7 +1188,7 @@ def test_component_test_runner_supports_pytest_k(monkeypatch):
     monkeypatch.setattr(
         run_component_tests.sys,
         "argv",
-        ["run_component_tests.py", "c4", "-k", "status or approve"],
+        ["run_component_tests.py", "c2", "-k", "status or approve"],
     )
 
     assert run_component_tests.main() == 0
@@ -1187,7 +1272,7 @@ def test_repo_root_quality_shortcut_exists():
     assert "from scripts.run_component_checks import main" in shortcut_text
 
 
-def test_component_ci_runner_target_mapping(monkeypatch):
+def test_component_ci_runner_blocks_c4(monkeypatch, capsys):
     calls = []
 
     def fake_run(command, cwd):
@@ -1197,11 +1282,9 @@ def test_component_ci_runner_target_mapping(monkeypatch):
     monkeypatch.setattr(run_component_ci.subprocess, "run", fake_run)
     monkeypatch.setattr(run_component_ci.sys, "argv", ["run_component_ci.py", "c4"])
 
-    assert run_component_ci.main() == 0
-    assert calls == [
-        ([run_component_ci.PYTHON, "quality.py", "c4"], run_component_ci.ROOT),
-        ([run_component_ci.PYTHON, "test.py", "c4"], run_component_ci.ROOT),
-    ]
+    assert run_component_ci.main() == 2
+    assert calls == []
+    assert "C4 is on hold" in capsys.readouterr().err
 
 
 def test_component_ci_runner_dry_run_skips_subprocess(monkeypatch, capsys):

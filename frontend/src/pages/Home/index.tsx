@@ -78,15 +78,9 @@ function ServiceStrip() {
     },
     {
       key: 'c3',
-      label: 'C3 Bridge',
-      ok: data?.components?.c3?.status === 'ok',
-      path: '/executioner',
-    },
-    {
-      key: 'c4',
-      label: 'C4 Coord',
-      ok: data?.components?.c4?.status === 'ok',
-      path: '/coordinator',
+      label: 'C3 v3 planned',
+      ok: false,
+      path: '/',
     },
   ]
 

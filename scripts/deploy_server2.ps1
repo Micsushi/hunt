@@ -31,6 +31,11 @@ $NormalizedStages = @($Stages | ForEach-Object { "$_".Trim() } | Where-Object { 
 if ($NormalizedStages.Count -eq 0) {
   throw "Pass at least one Hunt stage, for example -Stages 6 or -Stages 6,7."
 }
+$AllowedStages = @("6", "7")
+$UnsupportedStages = @($NormalizedStages | Where-Object { $_ -notin $AllowedStages })
+if ($UnsupportedStages.Count -gt 0) {
+  throw "Unsupported Hunt stage(s): $($UnsupportedStages -join ', '). Active stages are 6 and 7 only; C3 is planned and C4 is on hold."
+}
 
 $DeployParams = @{
   Target = "job_agent"

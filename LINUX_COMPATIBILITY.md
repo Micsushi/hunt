@@ -4,7 +4,8 @@ Audit date: 2026-07-03
 
 ## Status
 
-Mostly compatible for Python services and Docker paths. The main Linux gaps are frontend dev scripts, C3/browser-control ergonomics, Playwright setup docs, and one Docker Compose default that assumes `USERPROFILE`.
+Mostly compatible for the active C0-C2 Python services and Docker paths. C3 v3
+has not been implemented or assessed for Linux.
 
 ## What Was Tested
 
@@ -53,9 +54,8 @@ Result:
   - `npm run dev:c0`
   - `npm run dev:c1`
   - `npm run dev:c2`
-- `docker-compose.pipeline.yml` defaults `HUNT_LEDGER_HOST_ROOT` through `${USERPROFILE}`.
 - Playwright browser install and system dependencies are not documented clearly enough for Ubuntu.
-- C3 browser lane docs and scripts are Windows-heavy.
+- C3 v3 browser compatibility remains a future implementation concern.
 
 ## Likely Changes Needed
 
@@ -67,7 +67,6 @@ Result:
 
 or replace the PowerShell orchestration with a Node/Python cross-platform dev runner.
 
-- Change the ledger default to a POSIX-safe value, for example `${HOME}/.hunt/logs`, or document setting it in `.env`.
 - Document Ubuntu setup:
 
 ```bash
@@ -78,7 +77,7 @@ pip install -r hunter/requirements.txt -r requirements-dev.txt
 python -m playwright install --with-deps chromium
 ```
 
-- Add a Linux note for C3: supported browser channel, extension loading path, and which PowerShell scripts are Windows-only.
+- Define C3 v3 Linux browser support during its implementation stages.
 
 ## Suggested Ubuntu Smoke Path
 

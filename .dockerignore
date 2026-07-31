@@ -1,7 +1,13 @@
 .git
 .github
+.env
+.env.*
 .pytest_cache
 .state
+.hunt-state
+.hunt-data
+.runtime
+secrets
 __pycache__
 *.pyc
 *.pyo
@@ -14,3 +20,13 @@ docs
 tests
 hunt.db
 *.db
+hunt_user_config.json
+client_secret_*.json
+*oauth-client*.json
+*gmail*credentials*.json
+*gmail*token*.json
+fletcher/base_resume.local.tex
+fletcher/base_resumes/**/main.local.tex
+fletcher/master_resume.local.yaml
+fletcher/candidate_profile.md
+fletcher/bullet_library.md

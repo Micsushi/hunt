@@ -4,13 +4,14 @@ Audit date: 2026-07-03
 
 ## Status
 
-Mostly compatible for Python services and shell launchers. The main macOS gaps are frontend dev scripts, C3 Chrome-lane scripts, Playwright browser setup, and Docker Compose defaults inherited from the Windows-oriented local setup.
+Mostly compatible for the active C0-C2 Python services and shell launchers. C3
+v3 has not been implemented or assessed for macOS.
 
 This was audited from Ubuntu, so no native macOS browser automation was executed.
 
 ## What Was Checked
 
-- Static scan of scripts, docs, frontend package scripts, and Chrome/C3 references.
+- Static scan of scripts, docs, and frontend package scripts.
 - Linux audit results still apply to most Python/Docker paths:
   - Python compile passed.
   - Python dependency dry-run succeeded in a Python 3.12 container.
@@ -30,8 +31,7 @@ This was audited from Ubuntu, so no native macOS browser automation was executed
 ## macOS Blockers
 
 - `frontend/package.json` dev scripts call `powershell.exe`.
-- C3 lane docs and scripts are heavily PowerShell/Windows Chrome oriented.
-- `HUNT_LEDGER_HOST_ROOT` defaults through `${USERPROFILE}`, which is usually unset on macOS.
+- C3 v3 browser compatibility remains a future implementation concern.
 - Playwright browser installation and system dependency notes need macOS-specific instructions.
 - Some docs present PowerShell as the primary path even when `.sh` wrappers exist.
 
@@ -54,13 +54,7 @@ pip install -r hunter/requirements.txt -r requirements-dev.txt
 python -m playwright install chromium
 ```
 
-- Set or document a POSIX ledger path:
-
-```bash
-export HUNT_LEDGER_HOST_ROOT="$HOME/.hunt/logs"
-```
-
-- Add macOS C3 notes:
+- Define macOS C3 v3 support:
   - Chrome app path
   - remote debugging launch command
   - unpacked extension path

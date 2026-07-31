@@ -24,6 +24,7 @@ class C0ControlApiTests(unittest.TestCase):
             {
                 "HUNT_DB_PATH": self.path,
                 "HUNT_RESUME_ARTIFACTS_DIR": self.runtime_dir,
+                "HUNT_AUDIT_LOG_ROOT": self.runtime_dir,
                 "HUNT_ADMIN_USERNAME": "admin",
                 "HUNT_ADMIN_PASSWORD": "secret",
                 "HUNT_SERVICE_TOKEN": "service-secret",
@@ -109,6 +110,16 @@ class C0ControlApiTests(unittest.TestCase):
         self.assertEqual(settings[0]["value"], None)
         self.assertTrue(settings[0]["secret"])
         self.assertTrue(settings[0]["has_value"])
+        audit_path = os.path.join(self.runtime_dir, "human-commands.jsonl")
+        with open(audit_path, encoding="utf-8") as stream:
+            audit_event = json.loads(stream.readline())
+        audit_json = json.dumps(audit_event)
+        self.assertEqual(audit_event["payload"]["action"], "c0.http_mutation")
+        self.assertEqual(audit_event["payload"]["details"]["method"], "POST")
+        self.assertEqual(audit_event["payload"]["details"]["route"], "/api/settings")
+        self.assertEqual(audit_event["payload"]["details"]["status"], 200)
+        self.assertNotIn("openrouter_api_key", audit_json)
+        self.assertNotIn("sk-test", audit_json)
 
     def test_fletcher_queue_multipart_persists_uploaded_resume(self):
         from backend import app as backend_app
@@ -970,37 +981,220 @@ class C0ControlApiTests(unittest.TestCase):
         self.assertEqual(data["db"]["status"], "ok")
         self.assertEqual(data["components"]["c1"]["status"], "ok")
         self.assertEqual(data["components"]["c2"]["status"], "ok")
-        self.assertEqual(data["components"]["c4"]["status"], "ok")
-        self.assertIn("pending_fills", data["components"]["c3"])
+        self.assertEqual(data["components"]["c3"]["status"], "planned")
+        self.assertEqual(data["components"]["c4"]["status"], "paused")
 
-    def test_c3_bridge_uses_service_token_not_web_session(self):
-        class FakeResponse:
-            status_code = 200
+    def test_c3_v2_queue_bridge_is_removed(self):
+        from backend.app import app
 
-            def json(self):
-                return {"fills": []}
+        self.assertNotIn(
+            "/api/c3/pending-fills",
+            {route.path for route in app.routes if hasattr(route, "path")},
+        )
 
-        class FakeAsyncClient:
-            def __init__(self, timeout):
-                self.timeout = timeout
-
-            async def __aenter__(self):
-                return self
-
-            async def __aexit__(self, exc_type, exc, tb):
-                return False
-
-            async def get(self, url, headers=None):
-                return FakeResponse()
-
-        with patch("backend.gateway.httpx.AsyncClient", FakeAsyncClient):
-            response = self.client.get(
-                "/api/c3/pending-fills",
-                headers={"Authorization": "Bearer service-secret"},
-            )
+    def test_active_component_human_commands_are_written_and_redacted(self):
+        response = self.client.post(
+            "/api/audit/events",
+            json={
+                "event_id": "evt-test",
+                "ts": "2026-07-30T12:00:00Z",
+                "component": "c0",
+                "event_type": "human.command",
+                "actor": {
+                    "type": "human",
+                    "id": "Jane Doe",
+                    "surface": "Candidate: Jane Doe",
+                },
+                "trace_id": "SSN 123-45-6789",
+                "payload": {
+                    "eventContext": {
+                        "component": "c0",
+                        "route": "/jobs/7",
+                        "page": "Candidate: Jane Doe",
+                    },
+                    "action": "c0.job.patch",
+                    "buttonId": "edit-job-field",
+                    "details": {
+                        "jobId": 7,
+                        "fields": ["title", "full_name=Jane Doe"],
+                    },
+                },
+            },
+        )
 
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.json(), {"fills": []})
+        result = response.json()
+        self.assertNotEqual(result["event_id"], "evt-test")
+        self.assertTrue(result["event_id"].startswith("evt_"))
+        audit_path = os.path.join(self.runtime_dir, "human-commands.jsonl")
+        with open(audit_path, encoding="utf-8") as stream:
+            event = json.loads(stream.readline())
+        serialized = json.dumps(event)
+        self.assertEqual(event["component"], "c0")
+        self.assertEqual(event["actor"], {"type": "human", "id": "human_local", "surface": "c0_ui"})
+        self.assertEqual(event["payload"]["details"]["jobId"], 7)
+        self.assertEqual(event["payload"]["details"]["fields"], ["title"])
+        self.assertEqual(event["payload"]["eventContext"]["page"], "[REDACTED]")
+        self.assertEqual(event["trace_id"], "[REDACTED]")
+        for forbidden in (
+            "Jane Doe",
+            "123-45-6789",
+        ):
+            self.assertNotIn(forbidden, serialized)
+        self.assertIn("human_command_no_form_values", event["redaction"]["rules"])
+
+        rejected = self.client.post(
+            "/api/audit/events",
+            json={
+                "component": "c3",
+                "event_type": "human.command",
+                "actor": {"type": "human", "id": "human_local", "surface": "c0_ui"},
+                "payload": {"action": "c3.run"},
+            },
+        )
+        self.assertEqual(rejected.status_code, 422)
+
+        unknown_action = self.client.post(
+            "/api/audit/events",
+            json={
+                "component": "c0",
+                "event_type": "human.command",
+                "actor": {"type": "human"},
+                "payload": {"action": "c0.unknown", "buttonId": "Jane Doe"},
+            },
+        )
+        self.assertEqual(unknown_action.status_code, 422)
+
+        mismatched_component = self.client.post(
+            "/api/audit/events",
+            json={
+                "component": "c2",
+                "event_type": "human.command",
+                "actor": {"type": "human"},
+                "payload": {
+                    "action": "c0.job.requeue",
+                    "buttonId": "requeue-job",
+                    "details": {"jobId": 7},
+                },
+            },
+        )
+        self.assertEqual(mismatched_component.status_code, 422)
+
+        adversarial_key = self.client.post(
+            "/api/audit/events",
+            json={
+                "component": "c0",
+                "event_type": "human.command",
+                "actor": {"type": "human"},
+                "payload": {
+                    "action": "c0.job.requeue",
+                    "buttonId": "requeue-job",
+                    "details": {
+                        "jobId": 7,
+                        "Candidate Jane Doe SSN 123-45-6789": "x",
+                    },
+                },
+            },
+        )
+        self.assertEqual(adversarial_key.status_code, 422)
+
+        adversarial_payload_key = self.client.post(
+            "/api/audit/events",
+            json={
+                "component": "c0",
+                "event_type": "human.command",
+                "actor": {"type": "human"},
+                "payload": {
+                    "action": "c0.job.requeue",
+                    "buttonId": "requeue-job",
+                    "details": {"jobId": 7},
+                    "Home address 123 Main Street": "x",
+                },
+            },
+        )
+        self.assertEqual(adversarial_payload_key.status_code, 422)
+
+        client_redaction = self.client.post(
+            "/api/audit/events",
+            json={
+                "component": "c0",
+                "event_type": "human.command",
+                "actor": {"type": "human"},
+                "payload": {
+                    "action": "c0.job.requeue",
+                    "buttonId": "requeue-job",
+                    "details": {"jobId": 7},
+                },
+                "redaction": {
+                    "applied": False,
+                    "Candidate Jane Doe SSN 123-45-6789": "x" * 1000,
+                },
+            },
+        )
+        self.assertEqual(client_redaction.status_code, 422)
+
+        oversized_fields = self.client.post(
+            "/api/audit/events",
+            json={
+                "component": "c0",
+                "event_type": "human.command",
+                "actor": {"type": "human"},
+                "payload": {
+                    "action": "c0.job.patch",
+                    "buttonId": "edit-job-field",
+                    "details": {"jobId": 7, "fields": ["title"] * 33},
+                },
+            },
+        )
+        self.assertEqual(oversized_fields.status_code, 422)
+
+        oversized_request = self.client.post(
+            "/api/audit/events",
+            json={
+                "component": "c0",
+                "event_type": "human.command",
+                "actor": {
+                    "type": "human",
+                    "id": "x" * 25_000,
+                },
+                "payload": {
+                    "action": "c0.job.requeue",
+                    "buttonId": "requeue-job",
+                    "details": {"jobId": 7},
+                },
+            },
+        )
+        self.assertEqual(oversized_request.status_code, 413)
+        with open(audit_path, encoding="utf-8") as stream:
+            durable_audit = stream.read()
+        for forbidden in (
+            "Candidate Jane Doe",
+            "123-45-6789",
+            "Home address",
+            "123 Main Street",
+        ):
+            self.assertNotIn(forbidden, durable_audit)
+
+    def test_audit_events_require_session_when_service_token_is_blank(self):
+        from backend.app import app
+
+        anonymous = TestClient(app)
+        with patch("hunter.config.HUNT_SERVICE_TOKEN", ""):
+            response = anonymous.post(
+                "/api/audit/events",
+                json={
+                    "component": "c0",
+                    "event_type": "human.command",
+                    "actor": {
+                        "type": "human",
+                        "id": "human_local",
+                        "surface": "c0_ui",
+                    },
+                    "payload": {"action": "c0.job.requeue"},
+                },
+            )
+
+        self.assertEqual(response.status_code, 401)
 
     def test_option_a_fletcher_generate_proxies_with_long_timeout(self):
         calls = {}

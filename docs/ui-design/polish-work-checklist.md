@@ -4,13 +4,15 @@
 
 ### All pages
 - [ ] Replace `<pre>` JSON dumps with formatted key-value grids or collapsible panels.
-- [ ] Move Fletcher + Executioner out of `_stubs/` into `pages/Fletcher/` and `pages/Executioner/` with own CSS modules.
+- [x] Move Fletcher out of `_stubs/` into `pages/Fletcher/` with its own CSS module.
 - [ ] Consistent panel header: title left, meta/badge right.
 - [ ] All timestamps: "2h ago" display, full ISO on hover.
 - [ ] Error states: inline banner with message text.
 - [ ] Login page: restyle for dark green theme.
 
-### Coordinator (skip detail page - not finished yet)
+### Coordinator
+
+Removed from active polish scope while C4 is paused.
 - [ ] Runs table: relative timestamps.
 - [ ] "Start run": job picker (type-ahead, default `auto_apply_eligible=TRUE` only; buttons to widen/narrow).
 
@@ -20,9 +22,9 @@
 - [x] File-drop area for uploading base resume `.tex` or text-based `.pdf`.
 - [x] PDF-like review workspace with inline diff marks, segment revert, block edit, compile, PDF, and TeX actions.
 
-### Executioner
-- [ ] Per-fill expandable row: ATS type, job company/title, fill timestamp.
-- [ ] Extension health panel (placeholder for heartbeat/version).
+### C3 v3
+
+Deferred until the v3 runtime reaches a stage that needs an operator surface.
 
 ### Settings + LinkedIn Accounts (Ops)
 - [ ] Settings: inline Edit + Delete per row.

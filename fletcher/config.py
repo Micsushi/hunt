@@ -16,29 +16,54 @@ if _load_dotenv is not None:
         _load_dotenv(REPO_ROOT / ".env", override=False)
     except Exception:
         pass
-DEFAULT_OG_RESUME_PATH = REPO_ROOT / "main.tex"
-DEFAULT_MASTER_RESUME_PATH = REPO_ROOT / "fletcher" / "master_resume.yaml"
+DEFAULT_OG_RESUME_TEMPLATE_PATH = REPO_ROOT / "main.tex"
+DEFAULT_OG_RESUME_LOCAL_PATH = REPO_ROOT / "fletcher" / "base_resume.local.tex"
+DEFAULT_OG_RESUME_PATH = Path(
+    os.getenv("HUNT_OG_RESUME_PATH")
+    or (
+        DEFAULT_OG_RESUME_LOCAL_PATH
+        if DEFAULT_OG_RESUME_LOCAL_PATH.exists()
+        else DEFAULT_OG_RESUME_TEMPLATE_PATH
+    )
+)
 DEFAULT_MASTER_RESUME_TEMPLATE_PATH = (
     REPO_ROOT / "fletcher" / "templates" / "master_resume.template.yaml"
+)
+DEFAULT_MASTER_RESUME_LOCAL_PATH = REPO_ROOT / "fletcher" / "master_resume.local.yaml"
+DEFAULT_MASTER_RESUME_PATH = Path(
+    os.getenv("HUNT_MASTER_RESUME_PATH")
+    or (
+        DEFAULT_MASTER_RESUME_LOCAL_PATH
+        if DEFAULT_MASTER_RESUME_LOCAL_PATH.exists()
+        else DEFAULT_MASTER_RESUME_TEMPLATE_PATH
+    )
 )
 
 _candidate_profile_real = REPO_ROOT / "fletcher" / "candidate_profile.md"
 _candidate_profile_template = REPO_ROOT / "fletcher" / "templates" / "candidate_profile.template.md"
 DEFAULT_CANDIDATE_PROFILE_PATH = (
-    _candidate_profile_real if _candidate_profile_real.exists() else _candidate_profile_template
+    Path(os.getenv("HUNT_CANDIDATE_PROFILE_PATH"))
+    if os.getenv("HUNT_CANDIDATE_PROFILE_PATH")
+    else (
+        _candidate_profile_real if _candidate_profile_real.exists() else _candidate_profile_template
+    )
 )
 
 _bullet_library_real = REPO_ROOT / "fletcher" / "bullet_library.md"
 _bullet_library_template = REPO_ROOT / "fletcher" / "templates" / "bullet_library.template.md"
 DEFAULT_BULLET_LIBRARY_PATH = (
-    _bullet_library_real if _bullet_library_real.exists() else _bullet_library_template
+    Path(os.getenv("HUNT_BULLET_LIBRARY_PATH"))
+    if os.getenv("HUNT_BULLET_LIBRARY_PATH")
+    else (_bullet_library_real if _bullet_library_real.exists() else _bullet_library_template)
 )
-BASE_RESUMES_ROOT = REPO_ROOT / "fletcher" / "base_resumes"
+BASE_RESUMES_ROOT = Path(
+    os.getenv("HUNT_BASE_RESUMES_ROOT") or REPO_ROOT / "fletcher" / "base_resumes"
+)
 
 # Stage 0 runtime layout contract. Actual server paths live outside the repo.
 _win_runtime_root = str(REPO_ROOT / ".runtime" / "resumes")
 _default_runtime_root_str = os.getenv("HUNT_RESUME_ARTIFACTS_DIR") or (
-    _win_runtime_root if os.name == "nt" else "/home/michael/data/hunt/resumes"
+    _win_runtime_root if os.name == "nt" else Path.home() / ".local" / "share" / "hunt" / "resumes"
 )
 DEFAULT_RUNTIME_ROOT = Path(_default_runtime_root_str)
 ATTEMPTS_DIRNAME = "attempts"
@@ -151,17 +176,6 @@ def resume_llm_provider() -> str:
     return choice.provider
 
 
-def c3_llm_provider() -> str:
-    choice = llm_config.choose_provider(
-        component="c3",
-        setting_lookup=None,
-        legacy_env_names=("HUNT_C3_ANSWER_LLM_PROVIDER",),
-        legacy_default="",
-        default=resume_llm_provider(),
-    )
-    return choice.provider
-
-
 def resume_llm_model(task_name: str | None = None) -> str:
     return llm_config.choose_model(
         component="c2",
@@ -176,15 +190,6 @@ def resume_llm_model(task_name: str | None = None) -> str:
     )
 
 
-def c3_llm_model(task_name: str | None = None) -> str:
-    return llm_config.choose_model(
-        component="c3",
-        task_name=task_name,
-        legacy_env_names=("HUNT_C3_ANSWER_LLM_MODEL",),
-        default=resume_llm_model(task_name),
-    )
-
-
 def resume_cloud_llm_confirmed() -> bool:
     return llm_config.cloud_confirmed(
         component="c2",
@@ -192,14 +197,6 @@ def resume_cloud_llm_confirmed() -> bool:
         setting_key="cloud_llm_confirm",
         legacy_env_names=("HUNT_RESUME_CLOUD_LLM_CONFIRM",),
         default=False,
-    )
-
-
-def c3_cloud_llm_confirmed() -> bool:
-    return llm_config.cloud_confirmed(
-        component="c3",
-        legacy_env_names=("HUNT_C3_ANSWER_CLOUD_LLM_CONFIRM",),
-        default=resume_cloud_llm_confirmed(),
     )
 
 
@@ -296,11 +293,13 @@ def resolve_base_resume_path(role_family: str) -> tuple[str, Path]:
     normalized_family = (role_family or "general").strip().lower()
     if normalized_family and normalized_family != "general":
         family_dir = BASE_RESUMES_ROOT / normalized_family
-        for file_name in ("main.tex", "resume.tex", "base.tex"):
+        for file_name in ("main.local.tex", "main.tex", "resume.tex", "base.tex"):
             candidate = family_dir / file_name
             if candidate.exists():
                 return normalized_family, candidate
-    general = BASE_RESUMES_ROOT / "general" / "main.tex"
-    if general.exists():
-        return "general", general
+    general_dir = BASE_RESUMES_ROOT / "general"
+    for file_name in ("main.local.tex", "main.tex", "resume.tex", "base.tex"):
+        general = general_dir / file_name
+        if general.exists():
+            return "general", general
     return "original", DEFAULT_OG_RESUME_PATH

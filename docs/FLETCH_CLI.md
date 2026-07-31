@@ -28,8 +28,8 @@ Get help:
 - `ready`: Batch-generate resumes for all `done`/`done_verified` jobs missing a resume.
 - `ad-hoc`: Generate a resume from a pasted job description (no DB job required).
 - `context <id>`: Print the C2 apply context for one job.
-- `parse`: Parse `main.tex` (or `--resume`) to JSON and optionally round-trip to TeX.
-- `import-master`: Convert a template-compatible `main.tex` into `master_resume.yaml` format.
+- `parse`: Parse the configured neutral/local LaTeX source (or `--resume`) to JSON and optionally round-trip to TeX.
+- `import-master`: Convert a template-compatible `main.tex` into local master-resume YAML.
 - `test-job <id>`: Run the full pipeline on one job and print timing + LLM output.
 - `option-b-smoke`: Select enriched jobs, call the deployed legacy Option B compatibility API, and save PDFs/logs for review.
 - `index`: Manage the RAG vector index (`build`, `status`, `clear`, `query`).
@@ -59,10 +59,14 @@ Get help:
 ## Notes
 
 - C2 reads from and writes to the same SQLite DB as C1. Point both at the same `HUNT_DB_PATH`.
+- Public and image defaults are neutral. Set `HUNT_OG_RESUME_PATH`,
+  `HUNT_BASE_RESUMES_ROOT`, `HUNT_MASTER_RESUME_PATH`,
+  `HUNT_CANDIDATE_PROFILE_PATH`, and `HUNT_BULLET_LIBRARY_PATH` to ignored
+  local sources when using personal data. Compose mounts those paths read-only.
 - Fletcher prompt policy and numeric prompt limits are edited in the Settings tab and persisted in
   `component_settings`; see `docs/C2_SETTINGS.md`.
 - Resume artifacts land in `HUNT_RESUME_ARTIFACTS_DIR` (defaults to `.runtime/resumes/` on Windows,
-  `/home/michael/data/hunt/resumes` on Linux).
+  `<home>/.local/share/hunt/resumes` on Linux).
 - The `test-job` and `ad-hoc` commands require the ollama backend for full LLM output; the
   heuristic backend works without it.
 - `option-b-smoke` is the preferred CLI path for quick deployed PDF/log smoke tests. It logs in to

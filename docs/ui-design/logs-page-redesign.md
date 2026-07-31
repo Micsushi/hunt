@@ -6,7 +6,7 @@
 - No filtering, no search, no service selector, not compact.
 
 ### Requirements
-- **Service tabs:** All / C0 / C1 / C2 / C3 bridge / C4 / DB.
+- **Service tabs:** All / C0 / C1 / C2 / DB. C3 v3 has no runtime logs yet.
 - **Search:** Free-text client-side filter on message content.
 - **Level filter:** All / ERROR / WARN / INFO / DEBUG (multi-select).
 - **Time filter:** 1h / 6h / 24h / 7d - default 24h.

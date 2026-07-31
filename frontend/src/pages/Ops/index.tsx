@@ -349,7 +349,7 @@ export function OpsPage() {
                 value={settingComponent}
                 onChange={(e) => setSettingComponent(e.target.value as ComponentId)}
               >
-                {(['c0', 'c1', 'c2', 'c3', 'c4'] as ComponentId[]).map((c) => (
+                {(['c0', 'c1', 'c2'] as ComponentId[]).map((c) => (
                   <option key={c} value={c}>
                     {c.toUpperCase()}
                   </option>

@@ -1,6 +1,6 @@
 # Hunt : Repo-Native Deploy
 
-Purpose: one repo command to start the full Hunt stack or a selected service bundle on either Windows or Linux.
+Purpose: start the active C0 through C2 Hunt stack or a selected service bundle on Windows or Linux. C3 v3 is not implemented and C4 is on hold.
 
 ## Standard command
 
@@ -30,16 +30,14 @@ python deploy.py all --mode server --env-file .env.server2 --project-name hunt-s
 - `c0`: C0 web runtime : backend review app + frontend + Postgres
 - `c1`: C0 + C1 Hunter
 - `c2`: C0 + C2 Fletcher + Ollama
-- `c4`: C0 + C4 Coordinator
 - `c1c2`: C0 + C1 + C2
-- `all`: full local/runtime stack : C0 + C1 + C2 + C4
+- `all`: active local/runtime stack: C0 + C1 + C2
 
 Aliases:
 
 - `full` -> `all`
 - `hunter` -> `c1`
 - `fletcher` -> `c2`
-- `coordinator` -> `c4`
 - `pipeline` -> `all`
 
 ## Examples
@@ -51,7 +49,6 @@ python deploy.py c2 --no-build
 python deploy.py all --dry-run
 python deploy.py all --mode server --env-file .env.server2
 python deploy.py c1 --stop
-python deploy.py c4 --restart
 python deploy.py all --logs
 python deploy.py all --ps
 python deploy.py c2 --resource-profile fast
@@ -119,7 +116,7 @@ Today the remote `server2` deploy still goes through `ansible_homelab`, but the 
 2. Ansible runs the repo-native deploy command from this repo
 3. Smoke checks confirm the deployed services
 
-Use `.env.server.example` as the tracked template for the target host deploy environment.
+Use `.env.server.example` as the tracked template for the active target host environment. It intentionally contains no C4 runtime settings.
 
 Public exposure is intentionally outside this command:
 

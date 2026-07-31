@@ -75,7 +75,6 @@ fi
 wait_for "http://127.0.0.1:18080/health" "" /tmp/hunt-compose-review-health.json
 wait_for "http://127.0.0.1:18001/status" "Authorization: Bearer ${SERVICE_TOKEN}" /tmp/hunt-compose-c1-status.json
 wait_for "http://127.0.0.1:18002/status" "Authorization: Bearer ${SERVICE_TOKEN}" /tmp/hunt-compose-c2-status.json
-wait_for "http://127.0.0.1:18003/status" "Authorization: Bearer ${SERVICE_TOKEN}" /tmp/hunt-compose-c4-status.json
 
 curl -fsS \
   -c /tmp/hunt-compose-cookies.txt \
@@ -93,15 +92,12 @@ cat /tmp/hunt-compose-c1-status.json
 echo
 cat /tmp/hunt-compose-c2-status.json
 echo
-cat /tmp/hunt-compose-c4-status.json
-echo
 cat /tmp/hunt-compose-gateway-c1.json
 echo
 
 grep -q '"status":"ok"' /tmp/hunt-compose-review-health.json
 grep -q '"service":"c1-hunter"' /tmp/hunt-compose-c1-status.json
 grep -q '"service":"c2-fletcher"' /tmp/hunt-compose-c2-status.json
-grep -q '"service":"c4-coordinator"' /tmp/hunt-compose-c4-status.json
 grep -q '"service":"c1-hunter"' /tmp/hunt-compose-gateway-c1.json
 
 echo "pipeline compose smoke passed"

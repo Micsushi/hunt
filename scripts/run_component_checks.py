@@ -39,7 +39,6 @@ CHECK_TARGETS = {
         (_frontend_command("lint"), ROOT / "frontend"),
         (_frontend_command("typecheck"), ROOT / "frontend"),
         (_npx_command("prettier", "--check", "src"), ROOT / "frontend"),
-        ([PYTHON, "scripts/executioner_quality.py", "quality"], ROOT),
     ],
     "c0": [
         ([PYTHON, "-m", "ruff", "check", "backend", "control_plane_api.py"], ROOT),
@@ -56,13 +55,6 @@ CHECK_TARGETS = {
         ([PYTHON, "-m", "ruff", "check", "fletcher"], ROOT),
         ([PYTHON, "-m", "ruff", "format", "--check", "fletcher"], ROOT),
     ],
-    "c3": [
-        ([PYTHON, "scripts/executioner_quality.py", "quality"], ROOT),
-    ],
-    "c4": [
-        ([PYTHON, "-m", "ruff", "check", "coordinator"], ROOT),
-        ([PYTHON, "-m", "ruff", "format", "--check", "coordinator"], ROOT),
-    ],
     "shared": [
         ([PYTHON, "-m", "ruff", "check", "scripts", "tests"], ROOT),
         ([PYTHON, "-m", "ruff", "format", "--check", "scripts", "tests"], ROOT),
@@ -77,8 +69,6 @@ TARGET_ALIASES = {
     "backend": "c0",
     "hunter": "c1",
     "fletcher": "c2",
-    "executioner": "c3",
-    "coordinator": "c4",
     "infra": "shared",
     "full": "all",
 }
@@ -92,7 +82,7 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
         "target",
         nargs="?",
         default="all",
-        help="Check target: all, c0, c1, c2, c3, c4, shared, frontend",
+        help="Check target: all, c0, c1, c2, shared, frontend",
     )
     parser.add_argument(
         "--dry-run",

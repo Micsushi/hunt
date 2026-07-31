@@ -1,5 +1,7 @@
 # C4 OpenClaw Worker Runbook
 
+> Status: paused as of 2026-07-30. The wrapper exits without starting OpenClaw. This runbook is retained as historical reference only.
+
 Goal: use OpenClaw as a bounded C4 investigation worker when C3 reports a novel failure or unknown widget. OpenClaw observes the blocking page and produces a structured investigation report. It does not fill forms or submit applications.
 
 Shared worker contract: `docs/C4_AGENT_WORKERS.md`.

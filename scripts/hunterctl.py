@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
 """
-C1 (Hunter) operator CLI : paths, auth, queue, C4 apply-prep, and related helpers.
+C1 (Hunter) operator CLI: paths, auth, queue, and related helpers.
 
-The Hunt repo contains multiple components (C1–C4). Repo-root **`hunter`** launchers and this
-script are scoped to **C1 (Hunter)** and shared operator glue, not the whole product.
+The active Hunt runtime scope is C0-C2. C3 v3 is planned but not implemented,
+and retained C4 command names exit without starting coordinator code. Repo-root
+**`hunter`** launchers and this script are scoped to **C1 (Hunter)** and shared
+operator glue.
 
 On Linux servers, systemd units **hunt-scraper.service** / **hunt-scraper.timer** keep a legacy
 name but run **C1 (Hunter)** : `python hunter/scraper.py` from the Hunt repo root. See **docs/NAMING.md**.
@@ -75,8 +77,6 @@ def _get_default_runtime_env(
         defaults["HUNT_DB_PATH"] = str(runtime_dir / "hunt.db")
     if not env.get("HUNT_ARTIFACTS_DIR"):
         defaults["HUNT_ARTIFACTS_DIR"] = str(runtime_dir / "artifacts")
-    if not env.get("HUNT_COORDINATOR_ROOT") and not env.get("HUNT_ORCHESTRATION_ROOT"):
-        defaults["HUNT_COORDINATOR_ROOT"] = str(runtime_dir / "coordinator")
     return defaults
 
 
@@ -143,7 +143,8 @@ def _require_linux(command_name: str):
 
 
 def _coordinator_command(subcommand: str, *parts: str) -> list[str]:
-    return [PYTHON, "-m", "coordinator.cli", subcommand, *parts]
+    del subcommand, parts
+    raise SystemExit("C4 is on hold. No coordinator command was started.")
 
 
 def cmd_auth_save(args):
@@ -297,48 +298,6 @@ def cmd_verify(args):
 
 def cmd_verify_easy_apply(args):
     _run([PYTHON, "scripts/verify_easy_apply_filter.py", "--job-id", str(args.job_id)])
-
-
-def cmd_c3_reload(args):
-    _run(
-        [
-            PYTHON,
-            "scripts/reload_c3_extension.py",
-            "--host",
-            args.host,
-            "--port",
-            str(args.port),
-        ]
-    )
-
-
-def cmd_executioner_quality(args):
-    command = [PYTHON, "scripts/executioner_quality.py", args.executioner_command]
-    if args.dry_run:
-        command.append("--dry-run")
-    _run(command)
-
-
-def cmd_c3_package(args):
-    command = [PYTHON, "scripts/package_c3_extension.py"]
-    if args.dry_run:
-        command.append("--dry-run")
-    _run(command)
-
-
-def cmd_c3_store_deploy(args):
-    command = [PYTHON, "scripts/deploy_c3_store.py"]
-    if args.publisher_id:
-        command.extend(["--publisher-id", args.publisher_id])
-    if args.extension_id:
-        command.extend(["--extension-id", args.extension_id])
-    if args.publish:
-        command.append("--publish")
-    if args.status:
-        command.append("--status")
-    if args.dry_run:
-        command.append("--dry-run")
-    _run(command)
 
 
 def cmd_config(_args):
@@ -588,8 +547,8 @@ def cmd_apply_prep(args):
         command.append("--embed-resume-data")
     if args.output:
         raise SystemExit(
-            "`hunterctl apply-prep --output` is no longer supported because the shared C4 apply-prep command writes its own runtime artifacts. "
-            "Use `scripts/c3_apply_prep.py` directly if you need the legacy C3-only payload helper."
+            "`hunterctl apply-prep --output` is not supported because the held C4 "
+            "apply-prep command owns its runtime artifact path."
         )
     _run(command)
 
@@ -735,8 +694,6 @@ def cmd_tests(args):
             "test_component2_pipeline.py",
             "test_component2_ollama.py",
         ],
-        "c3": ["test_component3_stage1.py"],
-        "c4": ["test_component4_cli.py"],
         "all": [
             "test_stage1.py",
             "test_stage2.py",
@@ -749,8 +706,6 @@ def cmd_tests(args):
             "test_component2_pipeline.py",
             "test_component2_ollama.py",
             "test_resume_review_ui.py",
-            "test_component3_stage1.py",
-            "test_component4_cli.py",
         ],
     }
     patterns = suites[args.stage]
@@ -1023,58 +978,10 @@ def build_parser():
 
     verify_easy_apply = subparsers.add_parser(
         "verify-easy-apply",
-        help="Verify an Easy Apply row stays excluded from the C4 queue.",
+        help="Verify an Easy Apply row preserves C1 exclusion invariants.",
     )
     verify_easy_apply.add_argument("job_id", type=int)
     verify_easy_apply.set_defaults(func=cmd_verify_easy_apply)
-
-    c3_reload = subparsers.add_parser(
-        "c3-reload",
-        help="Reload the unpacked C3 Chrome extension through Chrome DevTools.",
-    )
-    c3_reload.add_argument("--host", default="127.0.0.1")
-    c3_reload.add_argument("--port", type=int, default=9222)
-    c3_reload.set_defaults(func=cmd_c3_reload)
-
-    c3_quality_commands = {
-        "quality": "quality",
-        "lint": "lint",
-        "format-check": "format-check",
-        "format": "format",
-        "test": "test",
-        "ci": "ci",
-        # Backwards-compatible aliases from the first C3 helper pass.
-        "style": "format-check",
-        "style-fix": "format",
-    }
-    for command_name, executioner_command in c3_quality_commands.items():
-        c3_quality = subparsers.add_parser(
-            f"c3-{command_name}",
-            help=f"Run C3 extension {command_name}.",
-        )
-        c3_quality.set_defaults(
-            func=cmd_executioner_quality,
-            executioner_command=executioner_command,
-        )
-        c3_quality.add_argument("--dry-run", action="store_true")
-
-    c3_package = subparsers.add_parser(
-        "c3-package",
-        help="Package the C3 Chrome extension into dist/c3.",
-    )
-    c3_package.add_argument("--dry-run", action="store_true")
-    c3_package.set_defaults(func=cmd_c3_package)
-
-    c3_store_deploy = subparsers.add_parser(
-        "c3-store-deploy",
-        help="Package and upload C3 to an existing Chrome Web Store item.",
-    )
-    c3_store_deploy.add_argument("--publisher-id", default=None)
-    c3_store_deploy.add_argument("--extension-id", default=None)
-    c3_store_deploy.add_argument("--publish", action="store_true")
-    c3_store_deploy.add_argument("--status", action="store_true")
-    c3_store_deploy.add_argument("--dry-run", action="store_true")
-    c3_store_deploy.set_defaults(func=cmd_c3_store_deploy)
 
     config_cmd = subparsers.add_parser(
         "config",
@@ -1369,7 +1276,7 @@ def build_parser():
     tests = subparsers.add_parser("tests", help="Run Hunt unit tests by stage or component.")
     tests.add_argument(
         "stage",
-        choices=["1", "2", "3", "32", "4", "c2", "c3", "c4", "all"],
+        choices=["1", "2", "3", "32", "4", "c2", "all"],
         default="all",
         nargs="?",
     )

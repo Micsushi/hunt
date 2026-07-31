@@ -72,8 +72,7 @@ export function SystemStatusPanel() {
           <StatusCard title="DB" item={data.db} />
           <StatusCard title="C1 Hunter" item={data.components.c1} />
           <StatusCard title="C2 Fletcher" item={data.components.c2} />
-          <StatusCard title="C3 Executioner" item={data.components.c3} />
-          <StatusCard title="C4 Coordinator" item={data.components.c4} />
+          <StatusCard title="C3 v3" item={data.components.c3} />
         </div>
       ) : null}
     </section>
