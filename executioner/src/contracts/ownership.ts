@@ -87,7 +87,6 @@ export const componentBoundaries = [
       {
         name: "BrowserSession",
         consumers: [
-          "F5 Page Understanding",
           "F7 Field Drivers",
           "F8 Verification/Navigation",
           "F9 Orchestrator",
@@ -148,7 +147,7 @@ export const componentBoundaries = [
       },
       {
         name: "ProfileQuery",
-        consumers: ["F6 Answer Resolver", "F9 Orchestrator"],
+        consumers: ["F6 Answer Resolver"],
         requests: ["ProfileQueryRequest"],
         results: ["ProfileAnswerResult"],
         errors: ["ProfileQueryError"],
@@ -198,11 +197,7 @@ export const componentBoundaries = [
     ports: [
       {
         name: "PageUnderstanding",
-        consumers: [
-          "F6 Answer Resolver",
-          "F8 Verification/Navigation",
-          "F9 Orchestrator",
-        ],
+        consumers: ["F9 Orchestrator"],
         requests: ["PageUnderstandingRequest"],
         results: ["PageUnderstandingResult", "SemanticPageSnapshot"],
         errors: ["PageUnderstandingError"],
@@ -231,7 +226,7 @@ export const componentBoundaries = [
     ports: [
       {
         name: "AnswerResolver",
-        consumers: ["F7 Field Drivers", "F9 Orchestrator"],
+        consumers: ["F9 Orchestrator"],
         requests: ["AnswerResolutionRequest"],
         results: ["AnswerResolutionResult", "FieldIntent"],
         errors: ["AnswerResolutionError"],
@@ -251,7 +246,7 @@ export const componentBoundaries = [
     ports: [
       {
         name: "FieldDriver",
-        consumers: ["F8 Field Verifier", "F9 Orchestrator"],
+        consumers: ["F9 Orchestrator"],
         requests: ["DriverRequest"],
         results: ["MutationReceipt"],
         errors: ["DriverError"],

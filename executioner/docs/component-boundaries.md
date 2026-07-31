@@ -46,8 +46,7 @@ Credentials, raw page values, and Submit capability are not shared data.
 
 **BrowserSession**
 
-- Consumers: F5 Page Understanding, F7 Field Drivers, F8
-  Verification/Navigation, F9 Orchestrator.
+- Consumers: F7 Field Drivers, F8 Verification/Navigation, F9 Orchestrator.
 - Requests: BrowserStartRequest, BrowserObservationRequest,
   BrowserMutationRequest, BrowserNavigationRequest, BrowserCloseRequest.
 - Results: BrowserSessionResult, BrowserObservation, BrowserOperationReceipt,
@@ -79,7 +78,7 @@ Credentials, raw page values, and Submit capability are not shared data.
 
 **ProfileQuery**
 
-- Consumers: F6 Answer Resolver, F9 Orchestrator.
+- Consumer: F6 Answer Resolver.
 - Request: ProfileQueryRequest.
 - Result: ProfileAnswerResult.
 - Error: ProfileQueryError.
@@ -105,7 +104,7 @@ Credentials, raw page values, and Submit capability are not shared data.
 
 **PageUnderstanding**
 
-- Consumers: F6 Answer Resolver, F8 Verification/Navigation, F9 Orchestrator.
+- Consumer: F9 Orchestrator.
 - Request: PageUnderstandingRequest.
 - Results: PageUnderstandingResult, SemanticPageSnapshot.
 - Error: PageUnderstandingError.
@@ -118,7 +117,7 @@ Credentials, raw page values, and Submit capability are not shared data.
 
 **AnswerResolver**
 
-- Consumers: F7 Field Drivers, F9 Orchestrator.
+- Consumer: F9 Orchestrator.
 - Request: AnswerResolutionRequest.
 - Results: AnswerResolutionResult, FieldIntent.
 - Error: AnswerResolutionError.
@@ -134,7 +133,7 @@ Credentials, raw page values, and Submit capability are not shared data.
 
 **FieldDriver**
 
-- Consumers: F8 Field Verifier, F9 Orchestrator.
+- Consumer: F9 Orchestrator.
 - Request: DriverRequest.
 - Result: MutationReceipt.
 - Error: DriverError.
@@ -213,8 +212,8 @@ Credentials, raw page values, and Submit capability are not shared data.
 
 **EventSink**
 
-- Consumers: F2 Fixture Runtime, F3 Browser Adapter, F4 Journey State, F5 Page
-  Understanding, F6 Answer Resolver, F7 Field Drivers, F8
+- Consumers: F2 Fixture Runtime, F3 Browser Adapter, F4 Journey State,
+  F5 Page Understanding, F6 Answer Resolver, F7 Field Drivers, F8
   Verification/Navigation, F9 Orchestrator, F11 Safety/Evidence.
 - Request: EventAppendRequest.
 - Results: EventAppendResult, JourneyProgress.
@@ -309,6 +308,10 @@ Credentials, raw page values, and Submit capability are not shared data.
 ## Frozen execution rules
 
 - F9 owns the only journey/page loop and retry policy.
+- F9 passes F3-owned BrowserObservation to PageUnderstanding, F5-owned
+  FieldObservation to AnswerResolver, F6-owned FieldIntent to FieldDriver, and
+  F7-owned MutationReceipt to FieldVerifier. These are data contracts, not
+  direct peer-port dependencies.
 - F3 owns all browser mutations and navigation. F7 dispatches field behavior.
   F8 verifies and returns completion/navigation decisions.
 - F4 owns durable state validation and persistence. F9 supplies legal
