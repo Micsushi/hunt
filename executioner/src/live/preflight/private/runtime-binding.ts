@@ -1,4 +1,4 @@
-import { realpathSync } from "node:fs";
+import { existsSync, realpathSync } from "node:fs";
 import { join } from "node:path";
 
 import { admitRealRunPreflight } from "../admit.ts";
@@ -8,6 +8,12 @@ import type {
   RealRunPreflightReportV1,
   RealRunPreflightResult,
 } from "../types.ts";
+import {
+  WindowsCurrentUserAclAdmission,
+  type WindowsAclAdmissionPaths,
+  type WindowsAclAdmissionResult,
+  type WindowsAclTarget,
+} from "./windows-acl.ts";
 
 export interface PersistentBrowserRuntimeValues {
   readonly targetUrl: string;
@@ -68,19 +74,57 @@ export type PrivateRealRunAdmission =
     }
   | Extract<RealRunPreflightResult, { readonly ok: false }>;
 
+export interface PrivatePreflightContext extends PreflightContext {
+  readonly ownerConfigPath: string;
+  readonly aclAdmission?: {
+    admit(paths: WindowsAclAdmissionPaths): WindowsAclAdmissionResult;
+  };
+}
+
 export function createPrivateRealRunAdmission(
   value: unknown,
-  context: PreflightContext,
+  context: PrivatePreflightContext,
 ): PrivateRealRunAdmission {
   const result = admitRealRunPreflight(value, context);
   if (!result.ok) return result;
+
+  const input = value as RealRunOwnerInputsV1;
+  const accountRecord = secretRecordPath(input, input.accountSecret.handleId);
+  const gmailRecord = secretRecordPath(input, input.gmailAuthorization.handleId);
+  const acl = (context.aclAdmission ?? new WindowsCurrentUserAclAdmission()).admit({
+    runtime: input.roots.runtime.path,
+    secrets: input.roots.secrets.path,
+    evidence: input.roots.evidence.path,
+    ownerConfig: context.ownerConfigPath,
+    ...(existsSync(accountRecord) ? { accountRecord } : {}),
+    ...(existsSync(gmailRecord) ? { gmailRecord } : {}),
+  });
+  if (!acl.ok) return aclFailure(acl.failure.target);
 
   return {
     ok: true,
     report: result.report,
     binding: RealRunRuntimeBinding.create(
-      value as RealRunOwnerInputsV1,
+      input,
       context,
     ),
   };
+}
+
+function secretRecordPath(input: RealRunOwnerInputsV1, handleId: string): string {
+  return join(input.roots.secrets.path, `${handleId}.s2secret`);
+}
+
+function aclFailure(target: WindowsAclTarget): PrivateRealRunAdmission {
+  const code = target === "runtime_root"
+    ? "runtime_root_invalid"
+    : target === "evidence_root"
+      ? "evidence_root_invalid"
+      : target === "owner_config"
+        ? "owner_config_invalid"
+        : "secret_root_invalid";
+  return Object.freeze({
+    ok: false,
+    error: Object.freeze({ code, dimension: "acl" }),
+  });
 }

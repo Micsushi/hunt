@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { isAbsolute, join, relative } from "node:path";
 import test from "node:test";
@@ -7,6 +7,24 @@ import test from "node:test";
 import * as publicPreflight from "../../../src/live/preflight/index.ts";
 import { createPrivateRealRunAdmission } from "../../../src/live/preflight/private/runtime-binding.ts";
 import type { RealRunOwnerInputsV1 } from "../../../src/live/preflight/types.ts";
+import type {
+  WindowsAclAdmissionPaths,
+  WindowsAclAdmissionResult,
+} from "../../../src/live/preflight/private/windows-acl.ts";
+
+class RecordingAclAdmission {
+  readonly #result: WindowsAclAdmissionResult;
+  paths?: WindowsAclAdmissionPaths;
+
+  constructor(result: WindowsAclAdmissionResult = { ok: true }) {
+    this.#result = result;
+  }
+
+  admit(paths: WindowsAclAdmissionPaths): WindowsAclAdmissionResult {
+    this.paths = paths;
+    return this.#result;
+  }
+}
 
 test("the private binding captures raw browser inputs without public serialization", () => {
   const root = mkdtempSync(join(tmpdir(), "hunt-s2-binding-"));
@@ -17,10 +35,17 @@ test("the private binding captures raw browser inputs without public serializati
     const evidence = join(root, "evidence");
     for (const path of [forbidden, runtime, secrets, evidence]) mkdirSync(path);
     const input = ownerInputs(runtime, secrets, evidence);
+    const ownerConfigPath = join(runtime, "owner-inputs.json");
+    const accountRecord = join(secrets, `${input.accountSecret.handleId}.s2secret`);
+    writeFileSync(ownerConfigPath, "{}");
+    writeFileSync(accountRecord, "record");
+    const aclAdmission = new RecordingAclAdmission();
 
     const admitted = createPrivateRealRunAdmission(input, {
       now: "2026-08-01T12:00:00.000Z",
       forbiddenRoots: [forbidden],
+      ownerConfigPath,
+      aclAdmission,
     });
     assert.equal(admitted.ok, true);
     if (!admitted.ok) return;
@@ -38,6 +63,52 @@ test("the private binding captures raw browser inputs without public serializati
       assert.equal(serialized.includes(raw), false);
     }
     assert.deepEqual(Object.keys(admitted.binding), []);
+    assert.deepEqual(aclAdmission.paths, {
+      runtime,
+      secrets,
+      evidence,
+      ownerConfig: ownerConfigPath,
+      accountRecord,
+    });
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("the private admission maps ACL denial before constructing a browser binding", () => {
+  const root = mkdtempSync(join(tmpdir(), "hunt-s2-binding-acl-"));
+  try {
+    const forbidden = join(root, "repository");
+    const runtime = join(root, "runtime");
+    const secrets = join(root, "secrets");
+    const evidence = join(root, "evidence");
+    for (const path of [forbidden, runtime, secrets, evidence]) mkdirSync(path);
+    const ownerConfigPath = join(runtime, "owner-inputs.json");
+    writeFileSync(ownerConfigPath, "{}");
+    const input = ownerInputs(runtime, secrets, evidence);
+
+    for (const [target, code] of [
+      ["runtime_root", "runtime_root_invalid"],
+      ["secret_root", "secret_root_invalid"],
+      ["secret_record", "secret_root_invalid"],
+      ["evidence_root", "evidence_root_invalid"],
+      ["owner_config", "owner_config_invalid"],
+    ] as const) {
+      const admitted = createPrivateRealRunAdmission(input, {
+        now: "2026-08-01T12:00:00.000Z",
+        forbiddenRoots: [forbidden],
+        ownerConfigPath,
+        aclAdmission: new RecordingAclAdmission({
+          ok: false,
+          failure: { target, reason: "other_principal" },
+        }),
+      });
+      assert.deepEqual(admitted, {
+        ok: false,
+        error: { code, dimension: "acl" },
+      });
+      assert.equal(JSON.stringify(admitted).includes(ownerConfigPath), false);
+    }
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
