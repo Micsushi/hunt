@@ -236,6 +236,7 @@ test("a visible rejected submit does not wait for a new destination", async () =
     { state: "hidden", timeout: 10_000 },
   ]);
   assert.deepEqual(events, [
+    "submit_hit_target_clear",
     "submit_click_started",
     "submit_click_succeeded",
     "submit_control_remained_visible",
@@ -273,6 +274,7 @@ test("a markerless rejected submit may detach then reattach before classificatio
     { state: "attached", timeout: 10_000 },
   ]);
   assert.deepEqual(events, [
+    "submit_hit_target_clear",
     "submit_click_started",
     "submit_click_succeeded",
     "submit_rejection_reappeared",
@@ -321,6 +323,7 @@ test("submit stabilization fails closed when no known state appears", async () =
     "submit_sign_in",
   ));
   assert.deepEqual(events, [
+    "submit_hit_target_clear",
     "submit_click_started",
     "submit_click_succeeded",
     "submit_stabilization_failed",
@@ -335,6 +338,7 @@ test("submit click failure emits only fixed value-free stage identifiers", async
     enabled: true,
     editable: false,
     clickFails: true,
+    hitTarget: "fixed_overlay",
   });
 
   await assert.rejects(() => new PlaywrightAccountPageAdapter({
@@ -342,6 +346,7 @@ test("submit click failure emits only fixed value-free stage identifiers", async
   }).activate(new FakePage(submit), "submit_sign_in"));
 
   assert.deepEqual(events, [
+    "submit_hit_target_fixed_overlay",
     "submit_click_started",
     "submit_click_failed",
     "submit_click_other",
@@ -365,6 +370,7 @@ test("submit click timeout is reduced to one fixed diagnostic identifier", async
   }).activate(new FakePage(submit), "submit_sign_in"));
 
   assert.deepEqual(events, [
+    "submit_hit_target_clear",
     "submit_click_started",
     "submit_click_failed",
     "submit_click_timeout",
@@ -446,6 +452,7 @@ class FakeLocator {
     attachedWaitFails?: boolean;
     clickFails?: boolean;
     clickError?: Error;
+    hitTarget?: string;
   };
   readonly fillArguments: string[] = [];
   inputValueCalls = 0;
@@ -464,6 +471,7 @@ class FakeLocator {
     attachedWaitFails?: boolean;
     clickFails?: boolean;
     clickError?: Error;
+    hitTarget?: string;
   }) {
     this.values = values;
   }
@@ -477,8 +485,9 @@ class FakeLocator {
     return this.values.inputValue ?? "";
   }
   async clear(): Promise<void> { this.clearCalls += 1; }
-  async evaluate(operation: (element: HTMLInputElement) => void): Promise<void> {
+  async evaluate(operation: (element: HTMLInputElement) => unknown): Promise<unknown> {
     this.evaluateCalls += 1;
+    if (!this.values.editable) return this.values.hitTarget ?? "clear";
     const events: string[] = [];
     const input = {
       value: "occupied",

@@ -26,6 +26,12 @@ export type PlaywrightAccountPageTraceEvent =
   | "submit_click_closed"
   | "submit_click_ambiguous"
   | "submit_click_other"
+  | "submit_hit_target_clear"
+  | "submit_hit_target_fixed_overlay"
+  | "submit_hit_target_dialog_overlay"
+  | "submit_hit_target_iframe_overlay"
+  | "submit_hit_target_generic_overlay"
+  | "submit_hit_target_unavailable"
   | "submit_control_remained_visible"
   | "submit_destination_observed"
   | "submit_rejection_reappeared"
@@ -113,7 +119,10 @@ export class PlaywrightAccountPageAdapter implements SemanticAccountPageAdapter 
     if (action === "accept_terms") await locator.check();
     else {
       const submit = action === "submit_sign_in" || action === "submit_create_account";
-      if (submit) this.#emit("submit_click_started");
+      if (submit) {
+        this.#emit(await inspectSubmitHitTarget(locator));
+        this.#emit("submit_click_started");
+      }
       try {
         await locator.click();
       } catch (error) {
@@ -160,6 +169,34 @@ export class PlaywrightAccountPageAdapter implements SemanticAccountPageAdapter 
     } catch {
       // Diagnostic observation cannot affect browser behavior.
     }
+  }
+}
+
+async function inspectSubmitHitTarget(
+  locator: Locator,
+): Promise<PlaywrightAccountPageTraceEvent> {
+  try {
+    const result = await locator.evaluate((element) => {
+      const rect = element.getBoundingClientRect();
+      const top = document.elementFromPoint(
+        rect.left + rect.width / 2,
+        rect.top + rect.height / 2,
+      );
+      if (top === null) return "unavailable";
+      if (top === element || element.contains(top)) return "clear";
+      if (top.closest('[role="dialog"], [aria-modal="true"]') !== null) {
+        return "dialog_overlay";
+      }
+      if (top instanceof HTMLIFrameElement) return "iframe_overlay";
+      for (let current: Element | null = top; current !== null; current = current.parentElement) {
+        const position = getComputedStyle(current).position;
+        if (position === "fixed" || position === "sticky") return "fixed_overlay";
+      }
+      return "generic_overlay";
+    });
+    return `submit_hit_target_${result}` as PlaywrightAccountPageTraceEvent;
+  } catch {
+    return "submit_hit_target_unavailable";
   }
 }
 
