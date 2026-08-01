@@ -26,7 +26,7 @@ const pages = [
   { id: "fixture-questionnaire", path: "/questionnaire" },
   { id: "fixture-review", path: "/review" },
 ] as const;
-const csp = "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; base-uri 'none'";
+const csp = "default-src 'none'; style-src 'unsafe-inline'; script-src 'sha256-QlBQsTI4aJ11TDurUFdzjggMcWJS/fnjEyBvyGMd/ek='; form-action 'self'; base-uri 'none'";
 
 function exactDataRecord(
   value: unknown,

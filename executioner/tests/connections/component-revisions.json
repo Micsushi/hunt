@@ -18,17 +18,28 @@
     "mcpResponse": 3
   },
   "candidateInputs": {
-    "admittedFeatures": [],
+    "admittedFeatures": [
+      "F2",
+      "F3",
+      "F4",
+      "F5",
+      "F6",
+      "F7",
+      "F8"
+    ],
     "f12Paths": [
       "executioner/tests/connections/component-manifest.test.ts",
-      "executioner/tests/connections/component-revisions.json"
+      "executioner/tests/connections/component-revisions.json",
+      "executioner/tests/connections/surface/fixture-browser-understanding.test.ts",
+      "executioner/tests/connections/answers/intake-profile-answers.test.ts",
+      "executioner/tests/connections/interaction/field-flow.test.ts"
     ]
   },
   "components": [
     {
       "feature": "F2",
-      "tip": "f906d4848960e05e72aea2efea246127c3f42f98",
-      "tipTreeOid": "78eaed9ea56a81487bda173935494796e0ea2e18",
+      "tip": "4a987681618165f9dedd5b8c9f8e36ea706b3fb2",
+      "tipTreeOid": "525a2ed3b44cafb12d8d2b1a983ba74a18935a58",
       "pathSetSha256": "b3e7accc16aa47120d1bd191a84a7e2e3c67a65bd79decfde3c972506bbf6809",
       "conformance": "passed"
     },

@@ -31,7 +31,7 @@ const serializedVersions = {
   mcpResponse: 3,
 } as const;
 const acceptedTips = {
-  F2: "f906d4848960e05e72aea2efea246127c3f42f98",
+  F2: "4a987681618165f9dedd5b8c9f8e36ea706b3fb2",
   F3: "8f7d3096e443cd927f900c1c0bccfaf3d0a5a4d1",
   F4: "d010b402a845285049a29d3d03f013a2fc50f65a",
   F5: "37620784a6d67655d85a8f8466b462b320740975",

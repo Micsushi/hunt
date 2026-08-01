@@ -18,5 +18,6 @@
       <button type="submit" data-action="next" data-hunt-target-token="target-next-profile">Continue</button>
     </form>
   </main>
+  <script>document.addEventListener("click",({target})=>{if(!(target instanceof Element)||target.getAttribute("role")!=="option")return;const listbox=target.parentElement;if(listbox?.getAttribute("data-field-id")!=="s1-field-country")return;for(const option of listbox.querySelectorAll(':scope > [role="option"]'))option.setAttribute("aria-selected",option===target?"true":"false")})</script>
 </body>
 </html>

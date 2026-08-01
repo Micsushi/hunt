@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import {
   cpSync,
   mkdtempSync,
@@ -12,6 +13,7 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { test } from "node:test";
 import type { Server } from "node:http";
+import { chromium } from "playwright";
 
 import { fixtureRunId, providerError } from "../../../src/contracts/index.ts";
 import { requiredFieldFlowCases } from "../../../src/testing/contracts/field-flow-cases.ts";
@@ -24,6 +26,11 @@ import {
 const fixtureRoot = fileURLToPath(
   new URL("../../../fixtures/workday/s1/", import.meta.url),
 );
+const countryListboxScript = `document.addEventListener("click",({target})=>{if(!(target instanceof Element)||target.getAttribute("role")!=="option")return;const listbox=target.parentElement;if(listbox?.getAttribute("data-field-id")!=="s1-field-country")return;for(const option of listbox.querySelectorAll(':scope > [role="option"]'))option.setAttribute("aria-selected",option===target?"true":"false")})`;
+const countryListboxScriptSource = `sha256-${createHash("sha256")
+  .update(countryListboxScript)
+  .digest("base64")}`;
+const expectedCsp = `default-src 'none'; style-src 'unsafe-inline'; script-src '${countryListboxScriptSource}'; form-action 'self'; base-uri 'none'`;
 
 function fixtureCopy(): string {
   const root = mkdtempSync(join(tmpdir(), "hunt-f2-server-"));
@@ -130,6 +137,16 @@ test("all ten canonical controls and their exact options are browser-visible", (
   }
 });
 
+test("profile admits exactly one hashed country-listbox script", () => {
+  const profile = readFileSync(join(fixtureRoot, "profile"), "utf8");
+  assert.equal([...profile.matchAll(/<script\b/gu)].length, 1);
+  assert.deepEqual(
+    [...profile.matchAll(/<script>([\s\S]*?)<\/script>/gu)].map((match) => match[1]),
+    [countryListboxScript],
+  );
+  assert.doesNotMatch(profile, /\b(?:localStorage|sessionStorage|fetch|XMLHttpRequest|eval|Function)\b/u);
+});
+
 test("canonical fields use their exact HTML behavior and no extra options", () => {
   const html = ["profile", "questionnaire"]
     .map((page) => readFileSync(join(fixtureRoot, page), "utf8"))
@@ -212,7 +229,7 @@ test("the loopback server preserves exact fixture and browser page coordinates a
       assert.equal(response.status, 200);
       assert.equal(
         response.headers.get("content-security-policy"),
-        "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; base-uri 'none'",
+        expectedCsp,
       );
       assert.equal(response.headers.get("x-content-type-options"), "nosniff");
       const html = await response.text();
@@ -232,6 +249,50 @@ test("the loopback server preserves exact fixture and browser page coordinates a
   }
   assert.equal((await fetch(`${started.value.origin}/missing`)).status, 404);
   assert.equal((await fetch(`${started.value.origin}/account`, { method: "POST" })).status, 405);
+});
+
+test("country selection is exclusive and clears on reload, fresh session, and reset", async (t) => {
+  const server = new FixtureServer(fixtureRoot);
+  const browser = await chromium.launch({ headless: true });
+  t.after(async () => {
+    await browser.close();
+    await server.close();
+  });
+  const started = await server.start(
+    { fixtureRunId: fixtureRunId("fixture-run-listbox") },
+    new AbortController().signal,
+  );
+  assert.equal(started.ok, true);
+  if (!started.ok) return;
+
+  const page = await browser.newPage();
+  await page.goto(`${started.value.origin}/profile`);
+  const selection = () => page.locator('[role="listbox"] > [role="option"]')
+    .evaluateAll((options) => options.map((option) => option.getAttribute("aria-selected")));
+  assert.deepEqual(await selection(), ["false", "false"]);
+  await page.locator('[data-option-id="s1-option-country-us"]').click();
+  assert.deepEqual(await selection(), ["true", "false"]);
+  await page.locator('[data-option-id="s1-option-country-ca"]').click();
+  assert.deepEqual(await selection(), ["false", "true"]);
+
+  await page.reload();
+  assert.deepEqual(await selection(), ["false", "false"]);
+  const freshPage = await browser.newPage();
+  await freshPage.goto(`${started.value.origin}/profile`);
+  assert.deepEqual(
+    await freshPage.locator('[role="listbox"] > [role="option"]')
+      .evaluateAll((options) => options.map((option) => option.getAttribute("aria-selected"))),
+    ["false", "false"],
+  );
+  await freshPage.close();
+
+  await page.locator('[data-option-id="s1-option-country-us"]').click();
+  assert.equal((await server.reset(
+    { fixtureRunId: started.value.fixtureRunId },
+    new AbortController().signal,
+  )).ok, true);
+  await page.reload();
+  assert.deepEqual(await selection(), ["false", "false"]);
 });
 
 test("the server retains the exact validated asset bytes across disk changes and reset", async () => {
