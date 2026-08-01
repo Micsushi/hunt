@@ -348,6 +348,8 @@ test("the operator runbook keeps preflight dry and owner inputs external", () =>
     "24-hour crash-recovery lease",
     "30-day retention ceiling",
     "Never copy the owner input file into the repository",
+    "current user or SYSTEM",
+    "before any browser can start",
   ]) {
     assert.equal(readme.includes(statement), true, statement);
   }

@@ -57,6 +57,14 @@ opaque IDs, provider IDs, policy numbers, and the approved host, tenant, and
 posting dimension names. Raw URLs and filesystem paths remain in a private
 in-memory runtime binding.
 
+The private admission boundary verifies the runtime, secrets, and evidence
+roots, the owner input file, and every existing secret record before any
+browser can start. Each item must be owned by the current Windows user, use a
+protected DACL, grant full control directly to that user, and grant no allow
+access to a principal other than the current user or SYSTEM. Reparse targets,
+inherited allows, shared Users or Everyone access, and unavailable or malformed
+ACL inspection fail closed without exposing a path.
+
 Verify the dry boundary before any live runner is assembled:
 
 ```text
