@@ -6,6 +6,7 @@ import { resolve } from "node:path";
 import test from "node:test";
 
 const acceptedF1Base = "f274d9a6624978b61ab1dd1433ebdddfdef029d2";
+const acceptedStage1Final = "87c77e538d8bba378ec93516dbea3f4747beb822";
 const acceptedF12Candidate = "c27f34b1441650c4007a8c34a9033a67b796edba";
 const acceptedPreReviewF13 = "15781a2f17d775c9a735bda5e9539863214aec45";
 const acceptedPreReviewF13Tree = "a33c2a72836985e125f35907bc3ba5f2bf250b23";
@@ -330,7 +331,8 @@ test("a non-descendant final candidate fails with a stable diagnostic", () => {
       assertFinalReviewRepairCandidate(canonicalManifest, {
         repository,
         git: overriddenGit({
-          matches: (args) => ancestorCall(args, acceptedPreReviewF13, "HEAD"),
+          matches: (args) =>
+            ancestorCall(args, acceptedPreReviewF13, acceptedStage1Final),
           result: new Error("not an ancestor"),
         }),
       }),
@@ -423,38 +425,51 @@ test("the final layer rejects missing, extra, mismatched, and manifest repair ev
   const cases = [
     {
       git: overriddenGit({
-        matches: (args) => diffCall(args, acceptedPreReviewF13, "HEAD"),
+        matches: (args) =>
+          diffCall(args, acceptedPreReviewF13, acceptedStage1Final),
         result: reviewRepairPaths.slice(1).join("\n"),
       }),
       error: new RegExp(`^Error: final review path set mismatch: missing ${path}$`, "u"),
     },
     {
       git: overriddenGit({
-        matches: (args) => diffCall(args, acceptedPreReviewF13, "HEAD"),
+        matches: (args) =>
+          diffCall(args, acceptedPreReviewF13, acceptedStage1Final),
         result: [...reviewRepairPaths, "executioner/README.md"].join("\n"),
       }),
       error: /^Error: final review path set mismatch: unexpected executioner\/README\.md$/u,
     },
     {
       git: overriddenGit({
-        matches: (args) => revParseCall(args, `HEAD:${path}`),
+        matches: (args) => revParseCall(args, `${acceptedStage1Final}:${path}`),
         result: "0".repeat(40),
       }),
       error: new RegExp(`^Error: final review blob mismatch: ${path}$`, "u"),
     },
     {
       git: overriddenGit({
-        matches: (args) => revParseCall(args, "HEAD:executioner/tests/connections/component-revisions.json"),
+        matches: (args) =>
+          revParseCall(
+            args,
+            `${acceptedStage1Final}:executioner/tests/connections/component-revisions.json`,
+          ),
         result: "0".repeat(40),
       }),
       error: /^Error: immutable component manifest blob drift$/u,
     },
     {
       git: overriddenGit({
-        matches: (args) => revParseCall(args, "HEAD:executioner/src/contracts"),
+        matches: (args) =>
+          revParseCall(
+            args,
+            `${acceptedStage1Final}:executioner/src/contracts`,
+          ),
         result: "0".repeat(40),
       }),
-      error: /^Error: frozen root mismatch: executioner\/src\/contracts: HEAD$/u,
+      error: new RegExp(
+        `^Error: frozen root mismatch: executioner/src/contracts: ${acceptedStage1Final}$`,
+        "u",
+      ),
     },
   ];
   for (const item of cases) {
@@ -472,7 +487,8 @@ test("the final candidate must contain the exact focused F4 owner blobs", () => 
       assertFinalReviewRepairCandidate(canonicalManifest, {
         repository,
         git: overriddenGit({
-          matches: (args) => revParseCall(args, `HEAD:${path}`),
+          matches: (args) =>
+            revParseCall(args, `${acceptedStage1Final}:${path}`),
           result: "0".repeat(40),
         }),
       }),
@@ -517,7 +533,7 @@ function assertFinalReviewRepairCandidate(
   options: AdmissionOptions,
 ): void {
   const git = options.git ?? nativeGit;
-  const candidate = options.candidate ?? "HEAD";
+  const candidate = options.candidate ?? acceptedStage1Final;
   assertPreReviewF13Checkpoint(manifest, {
     ...options,
     candidate: acceptedPreReviewF13,
@@ -639,7 +655,7 @@ function assertComponentManifest(
   options: AdmissionOptions,
 ): void {
   const git = options.git ?? nativeGit;
-  const candidate = options.candidate ?? "HEAD";
+  const candidate = options.candidate ?? acceptedStage1Final;
 
   if (manifest.schemaVersion !== 1) {
     throw new Error("component manifest schema mismatch");
@@ -767,7 +783,7 @@ function assertComponentManifest(
 
 function assertCanonicalManifest(
   manifest: ComponentManifest,
-  candidate = "HEAD",
+  candidate = acceptedStage1Final,
 ): void {
   assert.deepEqual(
     manifest.components.map(({ feature }) => feature),
