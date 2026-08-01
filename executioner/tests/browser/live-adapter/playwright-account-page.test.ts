@@ -390,6 +390,24 @@ test("specific click obstruction outranks the generic timeout category", async (
   assert.equal(events.at(-1), "submit_click_intercepted");
 });
 
+test("loading obstruction is reduced to a fixed overlay category", async () => {
+  const events: string[] = [];
+  const timeout = new Error("loading spinner intercepts pointer events");
+  timeout.name = "TimeoutError";
+
+  await assert.rejects(() => new PlaywrightAccountPageAdapter({
+    trace: (event) => events.push(event),
+  }).activate(new FakePage(new FakeLocator({
+    count: 1,
+    visible: true,
+    enabled: true,
+    editable: false,
+    clickError: timeout,
+  })), "submit_sign_in"));
+
+  assert.equal(events.at(-1), "submit_click_loading_overlay");
+});
+
 class FakePage {
   readonly calls: unknown[] = [];
   readonly resultLocator: FakeLocator;

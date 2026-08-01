@@ -15,6 +15,11 @@ export type PlaywrightAccountPageTraceEvent =
   | "submit_click_timeout"
   | "submit_click_detached"
   | "submit_click_intercepted"
+  | "submit_click_loading_overlay"
+  | "submit_click_privacy_overlay"
+  | "submit_click_modal_overlay"
+  | "submit_click_iframe_overlay"
+  | "submit_click_layout_overlay"
   | "submit_click_unstable"
   | "submit_click_not_visible"
   | "submit_click_disabled"
@@ -162,6 +167,27 @@ function classifyClickFailure(error: unknown): PlaywrightAccountPageTraceEvent {
   const name = error instanceof Error ? error.name : "";
   const message = error instanceof Error ? error.message.toLowerCase() : "";
   if (message.includes("detached")) return "submit_click_detached";
+  if (
+    message.includes("loading") ||
+    message.includes("spinner") ||
+    message.includes("progress")
+  ) return "submit_click_loading_overlay";
+  if (
+    message.includes("cookie") ||
+    message.includes("privacy") ||
+    message.includes("consent")
+  ) return "submit_click_privacy_overlay";
+  if (
+    message.includes("aria-modal=\"true\"") ||
+    message.includes("role=\"dialog\"") ||
+    message.includes("modal")
+  ) return "submit_click_modal_overlay";
+  if (message.includes("<iframe")) return "submit_click_iframe_overlay";
+  if (
+    message.includes("sticky") ||
+    message.includes("<header") ||
+    message.includes("<footer")
+  ) return "submit_click_layout_overlay";
   if (message.includes("intercepts pointer events")) return "submit_click_intercepted";
   if (message.includes("element is not stable")) return "submit_click_unstable";
   if (message.includes("element is not visible")) return "submit_click_not_visible";
