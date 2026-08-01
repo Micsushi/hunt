@@ -296,6 +296,40 @@ test("fresh-create switches semantically, reclassifies, and keeps confirmation i
   assert.equal(fixture.resolverCalls, 1);
 });
 
+test("sign-in traces its semantic switch from an initial create page", async () => {
+  const fixture = accountFixture([
+    "create_account",
+    "existing_account",
+    "verification_required",
+  ]);
+  const events: string[] = [];
+
+  const result = await createAccountEntryCredentialMutationAdapter({
+    ...fixture.dependencies,
+    trace: (event) => events.push(event),
+  }).mutate(request("sign_in"), new AbortController().signal);
+
+  assert.equal(result.ok && result.value.kind, "verification_required");
+  assert.deepEqual(fixture.operations, [
+    "inspectAction:show_sign_in",
+    "activate:show_sign_in",
+    "inspectField:email",
+    "inspectField:password",
+    "inspectAction:submit_sign_in",
+    "fill:email",
+    "matches:email",
+    "fill:password",
+    "matches:password",
+    "inspectAction:submit_sign_in",
+    "activate:submit_sign_in",
+  ]);
+  assert.deepEqual(events.slice(0, 3), [
+    "initial_create_account",
+    "owned_access_started",
+    "account_mode_switched_to_sign_in",
+  ]);
+});
+
 test("create-account that remains on an entry state clears every field and is denied", async () => {
   const fixture = accountFixture(["create_account", "create_account"]);
 

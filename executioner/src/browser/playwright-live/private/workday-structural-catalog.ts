@@ -7,6 +7,7 @@ import type { ValueFreeOwnedPageSnapshot } from "./types.ts";
 
 interface CountableLocator {
   count(): Promise<number>;
+  isVisible?(): Promise<boolean>;
 }
 
 export interface WorkdayStructuralPage {
@@ -43,6 +44,12 @@ const pageRules = Object.freeze([
   rule("structural_trait_page_questionnaire_v1", '[data-automation-id="applyFlowApplicationQuestionsPage"]'),
   rule("structural_trait_page_review_step_v1", '[data-automation-id="applyFlowReviewPage"]'),
 ] satisfies readonly TraitRule[]);
+
+const inlineVerificationSelectors = Object.freeze([
+  '[data-automation-id="signInPage"]:has-text("An email has been sent to you. Please verify your account.")',
+  '[data-automation-id="signInPage"]:has-text("verify your account before you sign in")',
+  '[data-automation-id="signInPage"]:has-text("request a verification email")',
+]);
 
 const accountRules = Object.freeze([
   rule("structural_trait_account_sign_in_v1", '[data-automation-id="signInPage"]'),
@@ -91,10 +98,28 @@ export async function inspectWorkdayStructure(
 
   const traitIds = ["structural_trait_ats_workday_family_v1"];
   if (routeIsPosting) traitIds.push("structural_trait_page_job_posting_v1");
-  for (const rule of [...pageRules, ...accountRules, ...challengeRules]) {
+  const inlineVerification = await anyExactVisible(
+    page,
+    inlineVerificationSelectors,
+  );
+  if (inlineVerification) {
+    traitIds.push("structural_trait_page_email_verification_v1");
+  }
+  const rules = [
+    ...pageRules,
+    ...(inlineVerification ? [] : accountRules),
+    ...challengeRules,
+  ];
+  for (const rule of rules) {
+    if (
+      inlineVerification &&
+      rule.traitId === "structural_trait_page_account_entry_v1"
+    ) continue;
     if (await present(page, rule.selector)) traitIds.push(rule.traitId);
   }
-  const semanticAccount = await inspectSemanticAccount(account);
+  const semanticAccount = inlineVerification
+    ? undefined
+    : await inspectSemanticAccount(account);
   if (semanticAccount !== undefined) {
     const pageTrait = "structural_trait_page_account_entry_v1";
     if (!traitIds.includes(pageTrait)) {
@@ -167,6 +192,20 @@ async function matchingUnavailable(
 
 async function present(page: WorkdayStructuralPage, selector: string): Promise<boolean> {
   return await page.locator(selector).count() > 0;
+}
+
+async function anyExactVisible(
+  page: WorkdayStructuralPage,
+  selectors: readonly string[],
+): Promise<boolean> {
+  for (const selector of selectors) {
+    const locator = page.locator(selector);
+    if (
+      await locator.count() === 1 &&
+      (locator.isVisible === undefined || await locator.isVisible())
+    ) return true;
+  }
+  return false;
 }
 
 async function boundedCount(
