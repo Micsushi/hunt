@@ -32,6 +32,11 @@ export function classifyWorkdayAccountNavigation(
     return { kind: "invalid" };
   }
   const pages = Object.entries(pageTraits).filter(([, trait]) => traits.has(trait));
+  if (
+    pages.length === 2 &&
+    traits.has(pageTraits.job) &&
+    traits.has(pageTraits.apply)
+  ) return { kind: "apply_choice" };
   if (pages.length > 1) return { kind: "ambiguous" };
   if (pages.length === 0) return { kind: "invalid" };
   const page = pages[0]![0];

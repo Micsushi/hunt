@@ -43,6 +43,14 @@ test("unknown, structural ambiguity, and access challenges stop before navigatio
       ["structural_trait_page_profile_step_v1", "structural_trait_page_review_step_v1"],
       ambiguous(),
     ],
+    [
+      [
+        "structural_trait_page_job_posting_v1",
+        "structural_trait_navigation_apply_choice_v1",
+        "structural_trait_page_profile_step_v1",
+      ],
+      ambiguous(),
+    ],
     [["structural_trait_challenge_captcha_v1"], invalid()],
     [["structural_trait_challenge_mfa_v1"], invalid()],
     [["structural_trait_challenge_access_control_v1"], invalid()],
@@ -257,7 +265,12 @@ async function openedHarness(options: {
 
 function phaseTraits(phase: FakeContext["phase"]): readonly string[] {
   if (phase === "posting") return ["structural_trait_page_job_posting_v1"];
-  if (phase === "apply_choice") return ["structural_trait_navigation_apply_choice_v1"];
+  if (phase === "apply_choice") {
+    return [
+      "structural_trait_page_job_posting_v1",
+      "structural_trait_navigation_apply_choice_v1",
+    ];
+  }
   return [
     "structural_trait_page_account_entry_v1",
     "structural_trait_account_create_v1",

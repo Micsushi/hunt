@@ -44,11 +44,16 @@ test("production probe admits controlled Workday routes and emits only closed va
   const page = new ProbePage(
     "https://approved.wd5.myworkdayjobs.invalid/en-US/Careers/job/Example_R12345/apply/applyManually",
     {
-      '[data-automation-id="createAccountPage"]': 1,
-      '[data-automation-id="createAccountSubmitButton"]': 1,
       'input:not([type="hidden"]), textarea, select, [role="combobox"], [role="radio"], [role="checkbox"]': 3,
       '[required], [aria-required="true"]': 3,
       '[role="option"]': 2,
+    },
+    {
+      "label:Email Address": 1,
+      "label:Password": 1,
+      "label:Verify New Password": 1,
+      "role:button:Create Account": 1,
+      "role:button:Sign In": 1,
     },
   );
 
@@ -78,6 +83,32 @@ test("production probe admits controlled Workday routes and emits only closed va
     "text",
     "dom",
   ]) assert.equal(serialized.includes(forbidden), false, forbidden);
+});
+
+test("production probe recognizes the exact semantic sign-in boundary", async () => {
+  const result = await new WorkdayOwnedTargetProbe().inspect(
+    new ProbePage(
+      "https://approved.wd5.myworkdayjobs.invalid/en-US/Careers/job/Example_R12345/apply/applyManually",
+      {},
+      {
+        "label:Email Address": 1,
+        "label:Password": 1,
+        "role:button:Sign In": 1,
+        "role:button:Create Account": 1,
+      },
+    ),
+    expected,
+    new AbortController().signal,
+  );
+
+  assert.deepEqual(result, owned(
+    { kind: "matched" },
+    [
+      "structural_trait_ats_workday_family_v1",
+      "structural_trait_page_account_entry_v1",
+      "structural_trait_account_sign_in_v1",
+    ],
+  ));
 });
 
 test("production probe preserves structural ambiguity, unknowns, and exact unavailability", async () => {
@@ -167,13 +198,16 @@ test("production probe emits the closed apply-choice navigation trait", async ()
 class ProbePage {
   readonly currentUrl: string;
   readonly counts: Readonly<Record<string, number>>;
+  readonly semanticCounts: Readonly<Record<string, number>>;
 
   constructor(
     currentUrl: string,
     counts: Readonly<Record<string, number>> = {},
+    semanticCounts: Readonly<Record<string, number>> = {},
   ) {
     this.currentUrl = currentUrl;
     this.counts = counts;
+    this.semanticCounts = semanticCounts;
   }
 
   url(): string {
@@ -184,9 +218,33 @@ class ProbePage {
     return { count: async () => this.counts[selector] ?? 0 };
   }
 
+  getByLabel(name: string): SemanticLocator {
+    return semanticLocator(this.semanticCounts[`label:${name}`] ?? 0);
+  }
+
+  getByRole(role: string, options: { readonly name: string }): SemanticLocator {
+    return semanticLocator(this.semanticCounts[`role:${role}:${options.name}`] ?? 0);
+  }
+
   async goto(): Promise<void> {}
   isClosed(): boolean { return false; }
   async close(): Promise<void> {}
+}
+
+interface SemanticLocator {
+  count(): Promise<number>;
+  isVisible(): Promise<boolean>;
+  isEnabled(): Promise<boolean>;
+  isEditable(): Promise<boolean>;
+}
+
+function semanticLocator(count: number): SemanticLocator {
+  return {
+    count: async () => count,
+    isVisible: async () => count === 1,
+    isEnabled: async () => count === 1,
+    isEditable: async () => count === 1,
+  };
 }
 
 function owned(
