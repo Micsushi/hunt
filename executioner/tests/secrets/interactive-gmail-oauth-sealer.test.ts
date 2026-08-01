@@ -52,7 +52,7 @@ const request = {
     } as TargetIdentityV1,
     verificationHost: "wd5.myworkday.com",
     verificationTenant: "example-tenant",
-    verificationTtlSeconds: 3_600 as const,
+    verificationTtlSeconds: 86_400 as const,
   },
 };
 
@@ -105,6 +105,10 @@ test("production helper pins PKCE loopback Gmail readonly profile equality and D
   assert.match(source, /https:\/\/www\.googleapis\.com\/auth\/gmail\.readonly/u);
   assert.match(source, /https:\/\/gmail\.googleapis\.com\/gmail\/v1\/users\/me\/profile/u);
   assert.match(source, /DataProtectionScope\.CurrentUser/u);
+  assert.match(
+    source,
+    /IntegerField\(value, "verificationTtlSeconds", 86400, 86400\) != 86400/u,
+  );
   assert.match(source, /InputBox/u);
   assert.match(source, /windowsHide:\s*false/u);
   assert.match(source, /shell:\s*false/u);

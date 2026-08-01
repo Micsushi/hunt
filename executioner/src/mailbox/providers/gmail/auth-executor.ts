@@ -304,7 +304,7 @@ function parseSealedBundle(
     !tenant(value.verificationTenant) ||
     !Number.isSafeInteger(value.verificationTtlSeconds) ||
     Number(value.verificationTtlSeconds) < 60 ||
-    Number(value.verificationTtlSeconds) > 3_600
+    Number(value.verificationTtlSeconds) > 86_400
   ) {
     throw new GmailProviderFailure("gmail_auth_denied");
   }

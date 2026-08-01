@@ -82,6 +82,7 @@ test("preflights both inputs before sealing the exact Gmail handle", async () =>
     assert.equal(sealer.request?.clientId, record.bootstrap.desktopClientId);
     assert.equal(sealer.request?.binding.verificationHost, record.bootstrap.verificationHost);
     assert.equal(sealer.request?.binding.verificationTenant, record.owner.target.tenant);
+    assert.equal(sealer.request?.binding.verificationTtlSeconds, 86_400);
     assert.deepEqual(sealer.request?.binding.target, {
       schemaVersion: 1,
       atsFamily: "workday",

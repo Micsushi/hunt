@@ -245,6 +245,44 @@ test("one readonly DPAPI callback returns only safe metadata and commits one adm
   });
 });
 
+test("admits the exact 24-hour Workday verification lifetime and rejects any longer value", async () => {
+  await withFakeGmail(async (baseUrl, httpCalls) => {
+    const admitted = buildExecutor(
+      baseUrl,
+      sealedBundle({ verificationTtlSeconds: 86_400 }),
+    );
+    const result = await admitted.executor.query(
+      {
+        ...liveFixtures.mailboxPollRequest,
+        now: liveFixtures.issuedAt,
+        authorization: liveFixtures.gmailSecret,
+      },
+      new AbortController().signal,
+    );
+    assert.equal(result.ok, true);
+    assert.equal(result.ok && result.value.expiresAt, "2026-08-02T12:05:00.000Z");
+    assert.equal(admitted.rawVault.committedCount, 1);
+
+    const rejected = buildExecutor(
+      baseUrl,
+      sealedBundle({ verificationTtlSeconds: 86_401 }),
+    );
+    assert.deepEqual(
+      await rejected.executor.query(
+        {
+          ...liveFixtures.mailboxPollRequest,
+          now: liveFixtures.issuedAt,
+          authorization: liveFixtures.gmailSecret,
+        },
+        new AbortController().signal,
+      ),
+      { ok: false, error: { code: "gmail_auth_denied", retryable: false } },
+    );
+    assert.equal(rejected.rawVault.committedCount, 0);
+    assert.equal(httpCalls(), 2);
+  });
+});
+
 test("zero, ambiguous, and expired candidates remain exact and never commit raw targets", async () => {
   const cases = [
     {
