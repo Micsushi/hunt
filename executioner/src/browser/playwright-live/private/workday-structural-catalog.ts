@@ -1,3 +1,8 @@
+import type {
+  AccountActionIntent,
+  AccountFieldName,
+  SemanticControlFact,
+} from "./account-page-types.ts";
 import type { ValueFreeOwnedPageSnapshot } from "./types.ts";
 
 interface CountableLocator {
@@ -6,6 +11,12 @@ interface CountableLocator {
 
 export interface WorkdayStructuralPage {
   locator(selector: string): CountableLocator;
+}
+
+export interface WorkdaySemanticAccountInspector {
+  inspect(
+    control: AccountFieldName | AccountActionIntent,
+  ): Promise<SemanticControlFact>;
 }
 
 interface TraitRule {
@@ -63,6 +74,7 @@ const optionSelector = '[role="option"]';
 export async function inspectWorkdayStructure(
   page: WorkdayStructuralPage,
   routeIsPosting: boolean,
+  account: WorkdaySemanticAccountInspector,
 ): Promise<
   | { readonly kind: "snapshot"; readonly snapshot: ValueFreeOwnedPageSnapshot }
   | {
@@ -82,6 +94,15 @@ export async function inspectWorkdayStructure(
   for (const rule of [...pageRules, ...accountRules, ...challengeRules]) {
     if (await present(page, rule.selector)) traitIds.push(rule.traitId);
   }
+  const semanticAccount = await inspectSemanticAccount(account);
+  if (semanticAccount !== undefined) {
+    traitIds.push("structural_trait_page_account_entry_v1");
+    traitIds.push(
+      semanticAccount === "create"
+        ? "structural_trait_account_create_v1"
+        : "structural_trait_account_sign_in_v1",
+    );
+  }
   const controlCount = await boundedCount(page, controlSelector);
   const requiredControlCount = Math.min(
     controlCount,
@@ -97,6 +118,32 @@ export async function inspectWorkdayStructure(
       optionCount: await boundedCount(page, optionSelector),
     }),
   };
+}
+
+async function inspectSemanticAccount(
+  account: WorkdaySemanticAccountInspector,
+): Promise<"create" | "sign_in" | undefined> {
+  const email = await account.inspect("email");
+  const password = await account.inspect("password");
+  const confirmation = await account.inspect("password_confirmation");
+  const create = await account.inspect("submit_create_account");
+  const signIn = await account.inspect("submit_sign_in");
+  if (!exactActionable(email) || !exactActionable(password)) return undefined;
+  if (
+    exactActionable(confirmation) &&
+    exactActionable(create) &&
+    exactActionable(signIn)
+  ) return "create";
+  if (
+    confirmation.cardinality === 0 &&
+    exactActionable(signIn) &&
+    exactActionable(create)
+  ) return "sign_in";
+  return undefined;
+}
+
+function exactActionable(fact: SemanticControlFact): boolean {
+  return fact.cardinality === 1 && fact.actionable;
 }
 
 async function matchingUnavailable(

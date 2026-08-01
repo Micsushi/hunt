@@ -5,6 +5,7 @@ import type {
   PersistentPage,
   ValueFreeOwnedPageSnapshot,
 } from "./types.ts";
+import { PlaywrightAccountPageAdapter } from "./playwright-account-page.ts";
 import {
   inspectWorkdayStructure,
   type WorkdayStructuralPage,
@@ -23,6 +24,8 @@ interface ParsedWorkdayTarget {
 }
 
 export class WorkdayOwnedTargetProbe implements OwnedTargetProbe {
+  readonly #accountPage = new PlaywrightAccountPageAdapter();
+
   async inspect(
     page: PersistentPage,
     expectedTarget: ApprovedTargetBinding,
@@ -53,6 +56,9 @@ export class WorkdayOwnedTargetProbe implements OwnedTargetProbe {
     const preliminary = await inspectWorkdayStructure(
       probePage,
       parsed.routeIsPosting,
+      {
+        inspect: (control) => this.#accountPage.inspect(page, control),
+      },
     );
     const snapshot = preliminary.kind === "snapshot"
       ? preliminary.snapshot
