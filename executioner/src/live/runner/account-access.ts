@@ -25,8 +25,6 @@ export interface Stage2AccountAccessInput {
   readonly target: TargetIdentityV1;
   readonly accountSecretHandleId: SecretHandleId;
   readonly accountSecretExpiresAt: string;
-  readonly gmailAuthorizationHandleId: SecretHandleId;
-  readonly gmailAuthorizationExpiresAt: string;
   readonly now: string;
 }
 
@@ -116,16 +114,6 @@ export async function runStage2AccountAccess(
     signal,
   );
   if (!account.ok) return failure(account.code);
-  const gmail = await inspect(
-    dependencies.secretStore,
-    input,
-    input.gmailAuthorizationHandleId,
-    input.gmailAuthorizationExpiresAt,
-    "gmail_oauth",
-    "gmail_auth_executor",
-    signal,
-  );
-  if (!gmail.ok) return failure(gmail.code);
 
   let opened: LiveBrowserSessionV1 | undefined;
   let pending: Stage2AccountAccessResult = failure("account_access_failed");

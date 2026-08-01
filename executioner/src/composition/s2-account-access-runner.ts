@@ -192,9 +192,6 @@ export async function runStage2AccountAccessFromOwnerConfig(
       },
       accountSecretHandleId: owner.accountSecret.handleId as SecretHandleId,
       accountSecretExpiresAt: owner.accountSecret.expiresAt,
-      gmailAuthorizationHandleId:
-        owner.gmailAuthorization.handleId as SecretHandleId,
-      gmailAuthorizationExpiresAt: owner.gmailAuthorization.expiresAt,
       now,
     }, {
       secretStore,
