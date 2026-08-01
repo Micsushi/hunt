@@ -396,6 +396,38 @@ test("failed target admission closes the launched context and removes only its p
   assert.equal(profiles.partialCleanupCount, 1);
 });
 
+test("failed-open cleanup releases Chromium before deleting its locked profile", async () => {
+  const context = new FakeContext([]);
+  context.delayCloseMs = 5;
+  const profiles = new MemoryProfiles();
+  profiles.requireClosed = context;
+  const provider = new PlaywrightPersistentBrowserSession({
+    binding: binding(),
+    launcher: { async launchPersistentContext() { return context; } },
+    probe: {
+      async inspect() {
+        return {
+          ownership: "owned",
+          target: { kind: "target_mismatch", dimension: "posting" },
+          snapshot: structuralSnapshot,
+        } as const;
+      },
+    },
+    profiles,
+    ids: () => liveFixtures.session.sessionId,
+    timeoutMs: 100,
+  });
+
+  const result = await provider.open(openRequest(), new AbortController().signal);
+
+  assert.deepEqual(result, {
+    ok: false,
+    error: { code: "browser_target_invalid", retryable: false },
+  });
+  assert.equal(context.closed, true);
+  assert.equal(profiles.partialCleanupCount, 1);
+});
+
 test("failed-open cleanup is bounded and starts context and profile removal", async () => {
   const context = new FakeContext([]);
   const profiles = new MemoryProfiles();
@@ -669,6 +701,7 @@ class FakeContext {
   closeCount = 0;
   failClose = false;
   hangClose = false;
+  delayCloseMs = 0;
   readonly ownedPages: FakePage[];
 
   constructor(ownedPages: FakePage[]) {
@@ -690,6 +723,9 @@ class FakeContext {
     this.closeCount += 1;
     if (this.hangClose) return new Promise(() => undefined);
     if (this.failClose) throw new Error("synthetic close failure");
+    if (this.delayCloseMs > 0) {
+      await new Promise((resolve) => setTimeout(resolve, this.delayCloseMs));
+    }
     this.closed = true;
   }
 }
@@ -701,6 +737,7 @@ class MemoryProfiles {
   hangCleanup = false;
   hangPartialCleanup = false;
   partialCleanupCount = 0;
+  requireClosed?: FakeContext;
 
   async read(): Promise<unknown> {
     return this.marker;
@@ -712,6 +749,9 @@ class MemoryProfiles {
 
   async cleanup(): Promise<void> {
     this.cleanupCount += 1;
+    if (this.requireClosed !== undefined && !this.requireClosed.closed) {
+      throw new Error("profile is still locked");
+    }
     if (this.hangCleanup) return new Promise(() => undefined);
     if (this.failCleanup) throw new Error("synthetic cleanup failure");
     this.marker = undefined;
@@ -719,6 +759,9 @@ class MemoryProfiles {
 
   async cleanupPartial(): Promise<void> {
     this.partialCleanupCount += 1;
+    if (this.requireClosed !== undefined && !this.requireClosed.closed) {
+      throw new Error("profile is still locked");
+    }
     if (this.hangPartialCleanup) return new Promise(() => undefined);
     this.marker = undefined;
   }

@@ -574,10 +574,10 @@ export class PlaywrightPersistentBrowserSession
     const profilePath = this.#profilePath;
     const marker = this.#marker;
     const closedSession = this.#session;
-    const [contextCleanup, profileCleanup] = await Promise.all([
-      this.#boundedCleanup(() => context.close()),
-      this.#boundedCleanup(() => this.#options.profiles.cleanup(profilePath, marker)),
-    ]);
+    const contextCleanup = await this.#boundedCleanup(() => context.close());
+    const profileCleanup = await this.#boundedCleanup(
+      () => this.#options.profiles.cleanup(profilePath, marker),
+    );
     this.#context = undefined;
     this.#page = undefined;
     this.#approvedTarget = undefined;
@@ -598,12 +598,12 @@ export class PlaywrightPersistentBrowserSession
     marker?: ProfileMarkerV1,
   ): Promise<boolean> {
     const context = this.#context;
-    const [contextCleaned, profileCleaned] = await Promise.all([
-      this.#boundedCleanup(() => context?.close() ?? Promise.resolve()),
-      this.#boundedCleanup(() => marker === undefined
-        ? this.#options.profiles.cleanupPartial(profilePath)
-        : this.#options.profiles.cleanup(profilePath, marker)),
-    ]);
+    const contextCleaned = await this.#boundedCleanup(
+      () => context?.close() ?? Promise.resolve(),
+    );
+    const profileCleaned = await this.#boundedCleanup(() => marker === undefined
+      ? this.#options.profiles.cleanupPartial(profilePath)
+      : this.#options.profiles.cleanup(profilePath, marker));
     this.#context = undefined;
     this.#page = undefined;
     this.#session = undefined;
@@ -617,10 +617,10 @@ export class PlaywrightPersistentBrowserSession
     context: PersistentContext,
     profilePath: string,
   ): Promise<void> {
-    await Promise.all([
-      this.#boundedCleanup(() => context.close()),
-      this.#boundedCleanup(() => this.#options.profiles.cleanupPartial(profilePath)),
-    ]);
+    await this.#boundedCleanup(() => context.close());
+    await this.#boundedCleanup(
+      () => this.#options.profiles.cleanupPartial(profilePath),
+    );
   }
 
   async #boundedCleanup(action: () => Promise<unknown>): Promise<boolean> {
