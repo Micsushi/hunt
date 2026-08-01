@@ -9,6 +9,9 @@ import type {
 import type { PersistentPage } from "./types.ts";
 
 export type PlaywrightAccountPageTraceEvent =
+  | "submit_click_started"
+  | "submit_click_succeeded"
+  | "submit_click_failed"
   | "submit_control_remained_visible"
   | "submit_destination_observed"
   | "submit_rejection_reappeared"
@@ -95,8 +98,16 @@ export class PlaywrightAccountPageAdapter implements SemanticAccountPageAdapter 
     const locator = semanticLocator(page, action).locator;
     if (action === "accept_terms") await locator.check();
     else {
-      await locator.click();
-      if (action === "submit_sign_in" || action === "submit_create_account") {
+      const submit = action === "submit_sign_in" || action === "submit_create_account";
+      if (submit) this.#emit("submit_click_started");
+      try {
+        await locator.click();
+      } catch (error) {
+        if (submit) this.#emit("submit_click_failed");
+        throw error;
+      }
+      if (submit) {
+        this.#emit("submit_click_succeeded");
         const transitioned = await locator.waitFor({
           state: "hidden",
           timeout: 10_000,
@@ -105,7 +116,7 @@ export class PlaywrightAccountPageAdapter implements SemanticAccountPageAdapter 
           let observed: "destination" | "rejection";
           try {
             observed = await Promise.any([
-              playwrightPage(page).locator(postSubmitDestination(action))
+            playwrightPage(page).locator(postSubmitDestination(action))
               .first()
               .waitFor({ state: "attached", timeout: 10_000 })
                 .then(() => "destination" as const),

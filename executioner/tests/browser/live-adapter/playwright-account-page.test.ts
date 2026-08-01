@@ -235,7 +235,11 @@ test("a visible rejected submit does not wait for a new destination", async () =
   assert.deepEqual(locator.waitForArguments, [
     { state: "hidden", timeout: 10_000 },
   ]);
-  assert.deepEqual(events, ["submit_control_remained_visible"]);
+  assert.deepEqual(events, [
+    "submit_click_started",
+    "submit_click_succeeded",
+    "submit_control_remained_visible",
+  ]);
 });
 
 test("a markerless rejected submit may detach then reattach before classification", async () => {
@@ -268,7 +272,11 @@ test("a markerless rejected submit may detach then reattach before classificatio
   assert.deepEqual(absentDestination.waitForArguments, [
     { state: "attached", timeout: 10_000 },
   ]);
-  assert.deepEqual(events, ["submit_rejection_reappeared"]);
+  assert.deepEqual(events, [
+    "submit_click_started",
+    "submit_click_succeeded",
+    "submit_rejection_reappeared",
+  ]);
 });
 
 test("submit stabilization excludes the stale current account container", async () => {
@@ -312,7 +320,28 @@ test("submit stabilization fails closed when no known state appears", async () =
     new FakePage(submit, absentDestination),
     "submit_sign_in",
   ));
-  assert.deepEqual(events, ["submit_stabilization_failed"]);
+  assert.deepEqual(events, [
+    "submit_click_started",
+    "submit_click_succeeded",
+    "submit_stabilization_failed",
+  ]);
+});
+
+test("submit click failure emits only fixed value-free stage identifiers", async () => {
+  const events: string[] = [];
+  const submit = new FakeLocator({
+    count: 1,
+    visible: true,
+    enabled: true,
+    editable: false,
+    clickFails: true,
+  });
+
+  await assert.rejects(() => new PlaywrightAccountPageAdapter({
+    trace: (event) => events.push(event),
+  }).activate(new FakePage(submit), "submit_sign_in"));
+
+  assert.deepEqual(events, ["submit_click_started", "submit_click_failed"]);
 });
 
 class FakePage {
@@ -351,6 +380,7 @@ class FakeLocator {
     inputValue?: string;
     hiddenWaitFails?: boolean;
     attachedWaitFails?: boolean;
+    clickFails?: boolean;
   };
   readonly fillArguments: string[] = [];
   inputValueCalls = 0;
@@ -367,6 +397,7 @@ class FakeLocator {
     inputValue?: string;
     hiddenWaitFails?: boolean;
     attachedWaitFails?: boolean;
+    clickFails?: boolean;
   }) {
     this.values = values;
   }
@@ -394,7 +425,10 @@ class FakeLocator {
     assert.equal(input.value, "");
     assert.deepEqual(events, ["input", "change"]);
   }
-  async click(): Promise<void> { this.clickCalls += 1; }
+  async click(): Promise<void> {
+    this.clickCalls += 1;
+    if (this.values.clickFails) throw new Error("click failed");
+  }
   async waitFor(options: unknown): Promise<void> {
     this.waitForArguments.push(options);
     if (
