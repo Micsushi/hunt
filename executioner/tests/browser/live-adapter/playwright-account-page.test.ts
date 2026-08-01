@@ -110,7 +110,7 @@ test("matches field bytes exactly without returning or retaining plaintext", asy
   assert.deepEqual(Object.keys(adapter), []);
 });
 
-test("clears only the exact semantic field locator", async () => {
+test("clears only the exact semantic field without focus-moving locator clear", async () => {
   const locator = new FakeLocator({ count: 1, visible: true, enabled: true, editable: true });
   const page = new FakePage(locator);
   const adapter = new PlaywrightAccountPageAdapter();
@@ -119,7 +119,8 @@ test("clears only the exact semantic field locator", async () => {
   assert.deepEqual(page.calls, [
     { method: "locator", selector: '[data-automation-id="password"]' },
   ]);
-  assert.equal(locator.clearCalls, 1);
+  assert.equal(locator.clearCalls, 0);
+  assert.equal(locator.evaluateCalls, 1);
 });
 
 test("reports only whether the exact semantic field is empty", async () => {
@@ -160,6 +161,12 @@ test("activates each exact semantic link or button without returning page state"
     assert.equal(await adapter.activate(page, action), undefined);
     assert.deepEqual(page.calls, [expectedCall]);
     assert.equal(locator.clickCalls, 1);
+    assert.deepEqual(
+      locator.waitForArguments,
+      action.startsWith("submit_")
+        ? [{ state: "hidden", timeout: 10_000 }]
+        : [],
+    );
   }
 });
 
@@ -205,8 +212,10 @@ class FakeLocator {
   readonly fillArguments: string[] = [];
   inputValueCalls = 0;
   clearCalls = 0;
+  evaluateCalls = 0;
   clickCalls = 0;
   checkCalls = 0;
+  readonly waitForArguments: unknown[] = [];
   constructor(values: {
     count: number;
     visible: boolean;
@@ -226,6 +235,21 @@ class FakeLocator {
     return this.values.inputValue ?? "";
   }
   async clear(): Promise<void> { this.clearCalls += 1; }
+  async evaluate(operation: (element: HTMLInputElement) => void): Promise<void> {
+    this.evaluateCalls += 1;
+    const events: string[] = [];
+    const input = {
+      value: "occupied",
+      dispatchEvent: (event: Event) => {
+        events.push(event.type);
+        return true;
+      },
+    } as unknown as HTMLInputElement;
+    operation(input);
+    assert.equal(input.value, "");
+    assert.deepEqual(events, ["input", "change"]);
+  }
   async click(): Promise<void> { this.clickCalls += 1; }
+  async waitFor(options: unknown): Promise<void> { this.waitForArguments.push(options); }
   async check(): Promise<void> { this.checkCalls += 1; }
 }

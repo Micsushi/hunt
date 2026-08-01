@@ -43,7 +43,17 @@ export class PlaywrightAccountPageAdapter implements SemanticAccountPageAdapter 
   }
 
   async clear(page: PersistentPage, field: AccountFieldName): Promise<void> {
-    await semanticLocator(page, field).locator.clear();
+    await semanticLocator(page, field).locator.evaluate((element) => {
+      const input = element as HTMLInputElement;
+      const setter = Object.getOwnPropertyDescriptor(
+        Object.getPrototypeOf(input) as object,
+        "value",
+      )?.set;
+      if (setter === undefined) input.value = "";
+      else setter.call(input, "");
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+      input.dispatchEvent(new Event("change", { bubbles: true }));
+    });
   }
 
   async isEmpty(page: PersistentPage, field: AccountFieldName): Promise<boolean> {
@@ -53,7 +63,12 @@ export class PlaywrightAccountPageAdapter implements SemanticAccountPageAdapter 
   async activate(page: PersistentPage, action: AccountActionIntent): Promise<void> {
     const locator = semanticLocator(page, action).locator;
     if (action === "accept_terms") await locator.check();
-    else await locator.click();
+    else {
+      await locator.click();
+      if (action === "submit_sign_in" || action === "submit_create_account") {
+        await locator.waitFor({ state: "hidden", timeout: 10_000 }).catch(() => undefined);
+      }
+    }
   }
 }
 

@@ -246,7 +246,6 @@ test("fresh-create switches semantically, reclassifies, and keeps confirmation i
     "inspectField:password",
     "inspectField:password_confirmation",
     "inspectAction:accept_terms",
-    "activate:accept_terms",
     "inspectAction:submit_create_account",
     "fill:email",
     "matches:email",
@@ -254,6 +253,7 @@ test("fresh-create switches semantically, reclassifies, and keeps confirmation i
     "matches:password",
     "fill:password_confirmation",
     "matches:password_confirmation",
+    "activate:accept_terms",
     "activate:submit_create_account",
   ]);
   assert.equal(fixture.classificationCalls, 3);

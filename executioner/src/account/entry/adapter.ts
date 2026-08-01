@@ -117,6 +117,7 @@ async function mutateOnce(
           return;
         }
       }
+      let acceptTerms = false;
       if (request.mode === "create_account") {
         const consent = await access.inspectAction("accept_terms");
         if (!consent.ok) {
@@ -128,13 +129,7 @@ async function mutateOnce(
           localFailure = failure("credential_mutation_denied");
           return;
         }
-        if (consent.value.cardinality === 1) {
-          const accepted = await access.activate("accept_terms");
-          if (!accepted.ok) {
-            localFailure = mapBrowserFailure(accepted.error.code);
-            return;
-          }
-        }
+        acceptTerms = consent.value.cardinality === 1;
       }
       const admittedSubmit = await uniqueActionableAction(access, submit);
       if (!admittedSubmit.ok) {
@@ -174,6 +169,18 @@ async function mutateOnce(
               return accountStateResult(state.state, ["email", "password"]);
             }
             populated.push("password_confirmation");
+            if (acceptTerms) {
+              const accepted = await access.activate("accept_terms");
+              if (!accepted.ok) {
+                localFailure = await cleanupPopulated(access, populated)
+                  ? mapBrowserFailure(accepted.error.code)
+                  : failure("credential_effect_uncertain");
+                return accountStateResult(
+                  state.state,
+                  ["email", "password"],
+                );
+              }
+            }
           }
           const activated = await access.activate(submit);
           if (!activated.ok) {
