@@ -23,8 +23,8 @@ test("maps every closed control to its exact Workday semantic locator", async ()
     ["password_confirmation", { method: "locator", selector: '[data-automation-id="verifyPassword"]' }],
     ["show_sign_in", { method: "locator", selector: '[data-automation-id="signInLink"]' }],
     ["show_create_account", { method: "locator", selector: '[data-automation-id="createAccountLink"]' }],
-    ["submit_sign_in", { method: "locator", selector: '[data-automation-id="signInSubmitButton"]' }],
-    ["submit_create_account", { method: "locator", selector: '[data-automation-id="createAccountSubmitButton"]' }],
+    ["submit_sign_in", { method: "locator", selector: '[data-automation-id="noCaptchaWrapper"]:has([data-automation-id="signInSubmitButton"]) [data-automation-id="click_filter"][role="button"]' }],
+    ["submit_create_account", { method: "locator", selector: '[data-automation-id="noCaptchaWrapper"]:has([data-automation-id="createAccountSubmitButton"]) [data-automation-id="click_filter"][role="button"]' }],
     ["accept_terms", { method: "locator", selector: '[data-automation-id="createAccountCheckbox"]' }],
   ] as const;
   const adapter = new PlaywrightAccountPageAdapter();
@@ -149,8 +149,8 @@ test("activates each exact semantic link or button without returning page state"
   const cases = [
     ["show_sign_in", { method: "locator", selector: '[data-automation-id="signInLink"]' }],
     ["show_create_account", { method: "locator", selector: '[data-automation-id="createAccountLink"]' }],
-    ["submit_sign_in", { method: "locator", selector: '[data-automation-id="signInSubmitButton"]' }],
-    ["submit_create_account", { method: "locator", selector: '[data-automation-id="createAccountSubmitButton"]' }],
+    ["submit_sign_in", { method: "locator", selector: '[data-automation-id="noCaptchaWrapper"]:has([data-automation-id="signInSubmitButton"]) [data-automation-id="click_filter"][role="button"]' }],
+    ["submit_create_account", { method: "locator", selector: '[data-automation-id="noCaptchaWrapper"]:has([data-automation-id="createAccountSubmitButton"]) [data-automation-id="click_filter"][role="button"]' }],
   ] as const;
   const adapter = new PlaywrightAccountPageAdapter();
 
@@ -230,7 +230,7 @@ test("a visible rejected submit does not wait for a new destination", async () =
   }).activate(page, "submit_sign_in");
 
   assert.deepEqual(page.calls, [
-    { method: "locator", selector: '[data-automation-id="signInSubmitButton"]' },
+    { method: "locator", selector: '[data-automation-id="noCaptchaWrapper"]:has([data-automation-id="signInSubmitButton"]) [data-automation-id="click_filter"][role="button"]' },
   ]);
   assert.deepEqual(locator.waitForArguments, [
     { state: "hidden", timeout: 10_000 },
@@ -330,7 +330,7 @@ test("submit stabilization fails closed when no known state appears", async () =
   ]);
 });
 
-test("submit click failure emits only fixed value-free stage identifiers", async () => {
+test("submit click failure never repositions the page", async () => {
   const events: string[] = [];
   const submit = new FakeLocator({
     count: 1,
@@ -347,12 +347,30 @@ test("submit click failure emits only fixed value-free stage identifiers", async
 
   assert.deepEqual(events, [
     "submit_hit_target_fixed_overlay",
-    "submit_centered",
-    "submit_hit_target_fixed_overlay",
     "submit_click_started",
     "submit_click_failed",
     "submit_click_other",
   ]);
+});
+
+test("submit intents target Workday's NoCaptcha click owners, never covered buttons", async () => {
+  for (const [action, buttonId] of [
+    ["submit_sign_in", "signInSubmitButton"],
+    ["submit_create_account", "createAccountSubmitButton"],
+  ] as const) {
+    const page = new FakePage(
+      new FakeLocator({ count: 1, visible: true, enabled: true, editable: false }),
+    );
+
+    await new PlaywrightAccountPageAdapter().inspect(page, action);
+
+    const selector = (page.calls[0] as { readonly selector: string }).selector;
+    assert.equal(
+      selector,
+      `[data-automation-id="noCaptchaWrapper"]:has([data-automation-id="${buttonId}"]) [data-automation-id="click_filter"][role="button"]`,
+    );
+    assert.notEqual(selector, `[data-automation-id="${buttonId}"]`);
+  }
 });
 
 test("submit click timeout is reduced to one fixed diagnostic identifier", async () => {
