@@ -165,6 +165,24 @@ test("matching sign-in fills, independently matches, activates, and reclassifies
   assert.equal(fixture.classificationCalls, 2);
 });
 
+test("sign-in that remains on an entry state clears fields and is denied", async () => {
+  const fixture = accountFixture(["existing_account", "existing_account"]);
+
+  const result = await createAccountEntryCredentialMutationAdapter(fixture.dependencies)
+    .mutate(request("sign_in"), new AbortController().signal);
+
+  assert.deepEqual(result, {
+    ok: false,
+    error: { code: "credential_mutation_denied", retryable: false },
+  });
+  assert.deepEqual(fixture.operations.slice(-4), [
+    "clear:password",
+    "isEmpty:password",
+    "clear:email",
+    "isEmpty:email",
+  ]);
+});
+
 test("request admission denies a widened or reordered public field set before inspection", async () => {
   const fixture = accountFixture(["existing_account"]);
   const widened = {
@@ -238,6 +256,39 @@ test("fresh-create switches semantically, reclassifies, and keeps confirmation i
   ]);
   assert.equal(fixture.classificationCalls, 3);
   assert.equal(fixture.resolverCalls, 1);
+});
+
+test("create-account that remains on an entry state clears every field and is denied", async () => {
+  const fixture = accountFixture(["create_account", "create_account"]);
+
+  const result = await createAccountEntryCredentialMutationAdapter(fixture.dependencies)
+    .mutate(request("create_account"), new AbortController().signal);
+
+  assert.deepEqual(result, {
+    ok: false,
+    error: { code: "credential_mutation_denied", retryable: false },
+  });
+  assert.deepEqual(fixture.operations.slice(-6), [
+    "clear:password_confirmation",
+    "isEmpty:password_confirmation",
+    "clear:password",
+    "isEmpty:password",
+    "clear:email",
+    "isEmpty:email",
+  ]);
+});
+
+test("unchanged entry state with unproven cleanup is effect-uncertain", async () => {
+  const fixture = accountFixture(["existing_account", "existing_account"]);
+  fixture.emptyResults.set("email", false);
+
+  const result = await createAccountEntryCredentialMutationAdapter(fixture.dependencies)
+    .mutate(request("sign_in"), new AbortController().signal);
+
+  assert.deepEqual(result, {
+    ok: false,
+    error: { code: "credential_effect_uncertain", retryable: false },
+  });
 });
 
 test("missing, ambiguous, hidden, and disabled controls deny before secret resolution", async () => {

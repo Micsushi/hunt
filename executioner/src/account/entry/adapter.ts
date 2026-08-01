@@ -168,6 +168,18 @@ async function mutateOnce(
           if (!reconciled.ok || reconciled.value.kind !== "classified_account") {
             throw new Error("credential effect could not be reconciled");
           }
+          if (
+            reconciled.value.state.kind === "existing_account" ||
+            reconciled.value.state.kind === "create_account"
+          ) {
+            localFailure = await cleanupPopulated(access, populated)
+              ? failure("credential_mutation_denied")
+              : failure("credential_effect_uncertain");
+            return accountStateResult(
+              reconciled.value.state,
+              ["email", "password"],
+            );
+          }
           return accountStateResult(
             reconciled.value.state,
             ["email", "password"],
