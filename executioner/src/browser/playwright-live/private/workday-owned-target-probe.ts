@@ -87,17 +87,19 @@ function parseWorkdayTarget(value: string): ParsedWorkdayTarget | undefined {
     const host = parseExpectedHost(parsed.hostname.toLowerCase());
     if (host === undefined) return undefined;
     const segments = parsed.pathname.split("/").filter(Boolean);
-    const postings = segments.flatMap((segment) => {
+    const jobBoundary = segments.lastIndexOf("job");
+    const jobRoute = jobBoundary >= 0 ? segments.slice(jobBoundary + 1) : [];
+    const postings = jobRoute.flatMap((segment) => {
       const matched = /_([A-Za-z0-9-]{2,64})$/u.exec(segment);
       return matched === null ? [] : [matched[1]!];
     });
-    const postingIndex = segments.findIndex((segment) =>
+    const postingIndex = jobRoute.findIndex((segment) =>
       /_[A-Za-z0-9-]{2,64}$/u.test(segment)
     );
     return {
       ...host,
       postings: Object.freeze(postings),
-      routeIsPosting: postingIndex >= 0 && postingIndex === segments.length - 1,
+      routeIsPosting: postingIndex >= 0 && postingIndex === jobRoute.length - 1,
     };
   } catch {
     return undefined;

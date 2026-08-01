@@ -111,6 +111,24 @@ test("production probe recognizes the exact semantic sign-in boundary", async ()
   ));
 });
 
+test("site route underscores before the job boundary are not posting identities", async () => {
+  const result = await new WorkdayOwnedTargetProbe().inspect(
+    new ProbePage(
+      "https://approved.wd5.myworkdayjobs.invalid/en-US/External_Career/job/Example_R12345",
+    ),
+    expected,
+    new AbortController().signal,
+  );
+
+  assert.deepEqual(result, owned(
+    { kind: "matched" },
+    [
+      "structural_trait_ats_workday_family_v1",
+      "structural_trait_page_job_posting_v1",
+    ],
+  ));
+});
+
 test("production probe preserves structural ambiguity, unknowns, and exact unavailability", async () => {
   const probe = new WorkdayOwnedTargetProbe();
   const url = "https://approved.wd5.myworkdayjobs.invalid/en-US/Careers/job/Example_R12345/apply/applyManually";
