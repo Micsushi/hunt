@@ -158,11 +158,25 @@ export class PlaywrightPersistentBrowserSession
         const owned = [] as PersistentPage[];
         for (const page of this.#context.pages()) {
           if (page.isClosed()) continue;
-          const observation = await this.#options.probe.inspect(
-            page,
-            approvedTarget,
+          const inspected = await bounded(
+            this.#options.probe.inspect(page, approvedTarget, signal),
             signal,
+            this.#options.timeoutMs,
           );
+          if (inspected.kind !== "value") {
+            const cleaned = await this.#cleanupFailedOpen(
+              runtime.profilePath,
+              persisted,
+            );
+            if (!cleaned) return failure("browser_profile_cleanup_failed");
+            if (inspected.kind === "cancelled") return cancelled();
+            return failure(
+              inspected.kind === "timeout"
+                ? "browser_timeout"
+                : "browser_target_stale",
+            );
+          }
+          const observation = inspected.value;
           if (
             observation.ownership === "owned" &&
             observation.target.kind === "matched"
@@ -412,9 +426,9 @@ export class PlaywrightPersistentBrowserSession
     const profilePath = this.#profilePath;
     const marker = this.#marker;
     const closedSession = this.#session;
-    const [contextCleanup, profileCleanup] = await Promise.allSettled([
-      context.close(),
-      this.#options.profiles.cleanup(profilePath, marker),
+    const [contextCleanup, profileCleanup] = await Promise.all([
+      this.#boundedCleanup(() => context.close()),
+      this.#boundedCleanup(() => this.#options.profiles.cleanup(profilePath, marker)),
     ]);
     this.#context = undefined;
     this.#page = undefined;
@@ -423,8 +437,8 @@ export class PlaywrightPersistentBrowserSession
     this.#profilePath = undefined;
     this.#closedSessionId = closedSession.sessionId;
     if (
-      contextCleanup.status === "rejected" ||
-      profileCleanup.status === "rejected"
+      !contextCleanup ||
+      !profileCleanup
     ) {
       return failure("browser_profile_cleanup_failed");
     }
@@ -435,30 +449,39 @@ export class PlaywrightPersistentBrowserSession
     profilePath: string,
     marker?: ProfileMarkerV1,
   ): Promise<boolean> {
-    const cleanup = [
-      this.#context?.close() ?? Promise.resolve(),
-      marker === undefined
+    const context = this.#context;
+    const [contextCleaned, profileCleaned] = await Promise.all([
+      this.#boundedCleanup(() => context?.close() ?? Promise.resolve()),
+      this.#boundedCleanup(() => marker === undefined
         ? this.#options.profiles.cleanupPartial(profilePath)
-        : this.#options.profiles.cleanup(profilePath, marker),
-    ];
-    const results = await Promise.allSettled(cleanup);
+        : this.#options.profiles.cleanup(profilePath, marker)),
+    ]);
     this.#context = undefined;
     this.#page = undefined;
     this.#session = undefined;
     this.#approvedTarget = undefined;
     this.#marker = undefined;
     this.#profilePath = undefined;
-    return results.every(({ status }) => status === "fulfilled");
+    return contextCleaned && profileCleaned;
   }
 
   async #cleanupDetachedContext(
     context: PersistentContext,
     profilePath: string,
   ): Promise<void> {
-    await Promise.allSettled([
-      context.close(),
-      this.#options.profiles.cleanupPartial(profilePath),
+    await Promise.all([
+      this.#boundedCleanup(() => context.close()),
+      this.#boundedCleanup(() => this.#options.profiles.cleanupPartial(profilePath)),
     ]);
+  }
+
+  async #boundedCleanup(action: () => Promise<unknown>): Promise<boolean> {
+    const result = await bounded(
+      Promise.resolve().then(action),
+      new AbortController().signal,
+      this.#options.timeoutMs,
+    );
+    return result.kind === "value";
   }
 }
 

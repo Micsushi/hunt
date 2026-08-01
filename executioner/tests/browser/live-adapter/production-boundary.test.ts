@@ -29,3 +29,17 @@ test("public live-browser facade adds no frozen port or raw-page capability", as
     assert.equal(source.includes(forbidden), false, forbidden);
   }
 });
+
+test("production factory owns the Workday probe while tests retain constructor injection", async () => {
+  const source = await readFile(
+    new URL("../../../src/browser/playwright-live/factory.ts", import.meta.url),
+    "utf8",
+  );
+  assert.match(source, /new WorkdayOwnedTargetProbe\(\)/u);
+  assert.equal(source.includes("readonly probe:"), false);
+  const session = await readFile(
+    new URL("../../../src/browser/playwright-live/session.ts", import.meta.url),
+    "utf8",
+  );
+  assert.match(session, /options\.probe/u);
+});
