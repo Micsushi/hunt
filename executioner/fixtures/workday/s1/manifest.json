@@ -4,7 +4,7 @@
   "pages": [
     { "id": "fixture-account", "path": "/account", "semanticHash": "sha256.06f975c580de2078bc3924d295fd43cc186f2a2ed1742d39fc40e0c8a6b5280d" },
     { "id": "fixture-profile", "path": "/profile", "semanticHash": "sha256.3f17c771d99f075a391e10ae27265be667fa58487f562bdb56e0ea0f8a59d70b" },
-    { "id": "fixture-questionnaire", "path": "/questionnaire", "semanticHash": "sha256.b328b0a9a27f68a9dfa77eefbfe528830b80b58df36e12d62767a54d6efdab7b" },
+    { "id": "fixture-questionnaire", "path": "/questionnaire", "semanticHash": "sha256.eb76c82eee3535fd3687b2b418a334b6d8f3133dba57c3b3ce8a172dae3799b5" },
     { "id": "fixture-review", "path": "/review", "semanticHash": "sha256.ce2617ca34b5ae23a5db5537cfd20263ec5a74450faf744591f15be2992ff16c" }
   ]
 }

@@ -133,7 +133,8 @@ export function createJourneyOrchestrator(
     }
     activeStart = true;
     try {
-      const bootstrapped = await dependencies.intake.bootstrap(request, signal);
+      const { jobId, resumeId, profileId } = request;
+      const bootstrapped = await dependencies.intake.bootstrap({ jobId, resumeId, profileId }, signal);
       if (!bootstrapped.ok) {
         if (bootstrapped.error.code === "operation_cancelled") return cancelledResult();
         return {

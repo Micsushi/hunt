@@ -48,6 +48,7 @@ function createControlFixture(
     readonly blockVerification?: boolean;
     readonly failAnswers?: boolean;
     readonly navigateOnce?: boolean;
+    readonly strictIntake?: boolean;
   } = {},
 ) {
   const ready = {
@@ -63,7 +64,40 @@ function createControlFixture(
   const rawReport = sequence("report");
   const rawEvent = sequence("event");
 
-  const intake = createJourneyIntakeFake();
+  const intake = createJourneyIntakeFake(
+    options.strictIntake === true
+      ? {
+          bootstrap: async (request) => {
+            const descriptors = Object.getOwnPropertyDescriptors(request);
+            const keys = Reflect.ownKeys(descriptors);
+            const expected = ["jobId", "profileId", "resumeId"];
+            const exact =
+              Object.getPrototypeOf(request) === Object.prototype &&
+              keys.length === expected.length &&
+              keys.every(
+                (key) =>
+                  typeof key === "string" &&
+                  expected.includes(key) &&
+                  descriptors[key]?.enumerable === true &&
+                  "value" in descriptors[key]!,
+              );
+            return exact
+              ? {
+                  ok: true,
+                  value: {
+                    journeyId: ready.journeyId,
+                    inputs: contractFixtures.journeyInputs,
+                    state: ready,
+                  },
+                }
+              : {
+                  ok: false,
+                  error: providerError("journey_input_invalid"),
+                };
+          },
+        }
+      : {},
+  );
   const stateStore = createJourneyStateStoreFake({
     transition: async (input, signal) => {
       const request = input as JourneyStateTransitionCommand;
@@ -206,6 +240,43 @@ test("JourneyControl satisfies the shared lifecycle contract", async () => {
   await assertProviderConformance(
     "JourneyControl",
     createControlFixture({ blockVerification: true }).control,
+  );
+});
+
+test("start sends F4 intake exactly three own enumerable fields", async () => {
+  const fixture = createControlFixture({
+    blockVerification: true,
+    strictIntake: true,
+  });
+  const original = Object.freeze({
+    operationId: generatedOperationId("operation_1000000000000001"),
+    jobId: contractFixtures.job.jobId,
+    resumeId: contractFixtures.resume.resumeId,
+    profileId: contractFixtures.profile.profileId,
+  });
+  const started = await fixture.control.start(original, new AbortController().signal);
+  const captured = fixture.collaborators.intake.calls[0]?.request;
+  assert.deepEqual(captured, {
+    jobId: contractFixtures.job.jobId,
+    resumeId: contractFixtures.resume.resumeId,
+    profileId: contractFixtures.profile.profileId,
+  });
+  assert.notEqual(captured, original);
+  assert.equal(Object.isFrozen(original), true);
+  assert.deepEqual(original, {
+    operationId: generatedOperationId("operation_1000000000000001"),
+    jobId: contractFixtures.job.jobId,
+    resumeId: contractFixtures.resume.resumeId,
+    profileId: contractFixtures.profile.profileId,
+  });
+  assert.equal(started.ok, true);
+  if (!started.ok) return;
+  await fixture.control.cancel(
+    {
+      operationId: generatedOperationId("operation_1000000000000002"),
+      journeyId: started.value.journeyId,
+    },
+    new AbortController().signal,
   );
 });
 

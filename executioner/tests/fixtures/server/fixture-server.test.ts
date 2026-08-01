@@ -295,6 +295,69 @@ test("country selection is exclusive and clears on reload, fresh session, and re
   assert.deepEqual(await selection(), ["false", "false"]);
 });
 
+test("required sponsorship starts semantically unselected with only Yes and No options", async (t) => {
+  const server = new FixtureServer(fixtureRoot);
+  const browser = await chromium.launch({ headless: true });
+  t.after(async () => {
+    await browser.close();
+    await server.close();
+  });
+  const started = await server.start(
+    { fixtureRunId: fixtureRunId("fixture-run-sponsorship") },
+    new AbortController().signal,
+  );
+  assert.equal(started.ok, true);
+  if (!started.ok) return;
+
+  const page = await browser.newPage();
+  await page.goto(`${started.value.origin}/questionnaire`);
+  const sponsorship = page.locator('[data-field-id="s1-field-sponsorship"]');
+  const selection = () => sponsorship.evaluate((element) => {
+    const select = element as HTMLSelectElement;
+    const options = [...select.options];
+    return {
+      required: select.required,
+      valid: select.checkValidity(),
+      value: select.value,
+      selectedCatalogOptionId:
+        options.find((option) => option.selected)?.dataset.optionId ?? null,
+      visibleLabels: options
+        .filter((option) => !option.hidden)
+        .map((option) => option.textContent?.trim()),
+      catalogLabels: options
+        .filter((option) => option.dataset.optionId !== undefined)
+        .map((option) => option.textContent?.trim()),
+    };
+  });
+  const empty = {
+    required: true,
+    valid: false,
+    value: "",
+    selectedCatalogOptionId: null,
+    visibleLabels: ["Yes", "No"],
+    catalogLabels: ["Yes", "No"],
+  };
+  assert.deepEqual(await selection(), empty);
+
+  await sponsorship.selectOption("yes");
+  assert.deepEqual(await selection(), {
+    ...empty,
+    valid: true,
+    value: "yes",
+    selectedCatalogOptionId: "s1-option-sponsorship-yes",
+  });
+  await sponsorship.selectOption("no");
+  assert.deepEqual(await selection(), {
+    ...empty,
+    valid: true,
+    value: "no",
+    selectedCatalogOptionId: "s1-option-sponsorship-no",
+  });
+
+  await page.reload();
+  assert.deepEqual(await selection(), empty);
+});
+
 test("the server retains the exact validated asset bytes across disk changes and reset", async () => {
   const root = fixtureCopy();
   const expected = readFileSync(join(root, "account"), "utf8");

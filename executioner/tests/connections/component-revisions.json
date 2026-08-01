@@ -38,14 +38,19 @@
       "executioner/tests/connections/interaction/complete-journey.test.ts",
       "executioner/tests/connections/interaction/field-flow.test.ts",
       "executioner/tests/connections/interaction/hazards.test.ts",
-      "executioner/tests/connections/interaction/support.ts"
+      "executioner/tests/connections/interaction/support.ts",
+      "executioner/tests/connections/control/recovery.test.ts",
+      "executioner/tests/connections/control/lifecycle-replay.test.ts",
+      "executioner/tests/connections/control/support.ts",
+      "executioner/tests/connections/report/persistence.test.ts",
+      "executioner/tests/connections/report/reporting-security.test.ts"
     ]
   },
   "components": [
     {
       "feature": "F2",
-      "tip": "4a987681618165f9dedd5b8c9f8e36ea706b3fb2",
-      "tipTreeOid": "525a2ed3b44cafb12d8d2b1a983ba74a18935a58",
+      "tip": "3fb6513d794d6d0366eb27f8b9319e0a61ab1fa2",
+      "tipTreeOid": "b9f6c19719b2f3cbf0dd4774628498bcf5e25d8f",
       "pathSetSha256": "b3e7accc16aa47120d1bd191a84a7e2e3c67a65bd79decfde3c972506bbf6809",
       "conformance": "passed"
     },
@@ -93,8 +98,8 @@
     },
     {
       "feature": "F9",
-      "tip": "94a43a5cd41c501a142051016718dd7b57b71f15",
-      "tipTreeOid": "287aca8345907c127d960686897266fd1d65eed1",
+      "tip": "c6cd242b21a299a56959fc35ccb754b93c27aa2f",
+      "tipTreeOid": "e5b037002113d41d76999abcc440e12a5d1614b7",
       "pathSetSha256": "64846fef3d6c1b1aa1f167b7e5f673e88a2c8b36f4b1ceb65eb55f4280018c26",
       "conformance": "passed"
     },
