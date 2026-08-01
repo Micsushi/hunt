@@ -20,6 +20,7 @@ import {
 import { WindowsDpapiBridge } from "../bridge.ts";
 import {
   approvedSecretRoot,
+  deleteSecretRecord,
   metadataBytes,
   readSecretRecord,
   type StoredSecretRecord,
@@ -98,7 +99,12 @@ export class WindowsDpapiSecretResolver implements AccountCredentialResolver {
         expectedPurpose: handle.purpose,
         expectedConsumer: handle.consumer,
       }, this.#now());
-      if (!inspected.ok) return inspected;
+      if (!inspected.ok) {
+        if (inspected.error.code === "secret_handle_expired") {
+          await deleteSecretRecord(this.#root, handle.handleId);
+        }
+        return inspected;
+      }
       if (!sameMetadata(record.metadata, handle)) {
         return secretError("secret_handle_mismatched");
       }

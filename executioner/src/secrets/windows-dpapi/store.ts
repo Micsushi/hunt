@@ -6,8 +6,8 @@ import type {
 } from "../../contracts/live/index.ts";
 import {
   approvedSecretRoot,
+  deleteSecretRecord,
   readSecretRecord,
-  writeSecretRecord,
 } from "./record.ts";
 import { cancelled, ok, secretError } from "./result.ts";
 
@@ -35,6 +35,9 @@ export class WindowsDpapiSecretStore implements SecretStore {
         return secretError("secret_handle_invalid");
       }
       const inspected = inspectMetadata(record.metadata, request, this.#now());
+      if (!inspected.ok && inspected.error.code === "secret_handle_expired") {
+        await deleteSecretRecord(this.#root, request.handleId);
+      }
       return inspected.ok ? ok(publicMetadata(inspected.value)) : inspected;
     } catch {
       return secretError("secret_store_unavailable");
@@ -46,16 +49,11 @@ export class WindowsDpapiSecretStore implements SecretStore {
     try {
       const record = await readSecretRecord(this.#root, request.handleId);
       if (signal.aborted) return cancelled;
-      if (record === null) return secretError("secret_handle_invalid");
+      if (record === null) return ok(undefined);
       if (record.metadata.journeyId !== request.journeyId) {
         return secretError("secret_handle_mismatched");
       }
-      if (record.metadata.state === "revoked") return ok(undefined);
-      await writeSecretRecord(
-        this.#root,
-        { ...record.metadata, state: "revoked" },
-        new Uint8Array(),
-      );
+      await deleteSecretRecord(this.#root, request.handleId);
       return ok(undefined);
     } catch {
       return secretError("secret_store_unavailable");

@@ -109,52 +109,10 @@ function validField(value: Readonly<Uint8Array>, bound: number): boolean {
 }
 
 function validUtf8(value: Readonly<Uint8Array>): boolean {
-  let offset = 0;
-  while (offset < value.byteLength) {
-    const first = value[offset]!;
-    if (first <= 0x7f) {
-      offset += 1;
-      continue;
-    }
-    const second = value[offset + 1];
-    if (first >= 0xc2 && first <= 0xdf && continuation(second)) {
-      offset += 2;
-      continue;
-    }
-    const third = value[offset + 2];
-    if (
-      ((first === 0xe0 && between(second, 0xa0, 0xbf)) ||
-        ((first >= 0xe1 && first <= 0xec) && continuation(second)) ||
-        (first === 0xed && between(second, 0x80, 0x9f)) ||
-        ((first >= 0xee && first <= 0xef) && continuation(second))) &&
-      continuation(third)
-    ) {
-      offset += 3;
-      continue;
-    }
-    const fourth = value[offset + 3];
-    if (
-      ((first === 0xf0 && between(second, 0x90, 0xbf)) ||
-        ((first >= 0xf1 && first <= 0xf3) && continuation(second)) ||
-        (first === 0xf4 && between(second, 0x80, 0x8f))) &&
-      continuation(third) && continuation(fourth)
-    ) {
-      offset += 4;
-      continue;
-    }
+  try {
+    new TextDecoder("utf-8", { fatal: true }).decode(value);
+    return true;
+  } catch {
     return false;
   }
-  return true;
-}
-
-function continuation(value: number | undefined): boolean {
-  return value !== undefined && value >= 0x80 && value <= 0xbf;
-}
-
-function between(
-  value: number | undefined,
-  minimum: number,
-  maximum: number,
-): boolean {
-  return value !== undefined && value >= minimum && value <= maximum;
 }

@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
 import { test } from "node:test";
 
 import {
@@ -69,4 +70,13 @@ test("AccountCredentialBundleV1 rejects empty, oversized, and invalid UTF-8 fiel
   ]) {
     assert.equal(encodeAccountCredentialBundleV1(candidate), null);
   }
+});
+
+test("AccountCredentialBundleV1 delegates UTF-8 admission to fatal TextDecoder", async () => {
+  const source = await readFile(
+    "src/secrets/windows-dpapi/private/account-credential-bundle.ts",
+    "utf8",
+  );
+  assert.match(source, /new TextDecoder\("utf-8", \{ fatal: true \}\)/u);
+  assert.doesNotMatch(source, /function (?:continuation|between)\(/u);
 });

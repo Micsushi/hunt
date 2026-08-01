@@ -9,7 +9,8 @@
   "scripts": {
     "test": "node tests/run.ts",
     "typecheck": "tsc --noEmit",
-    "quality": "npm run typecheck && npm test"
+    "quality": "npm run typecheck && npm test",
+    "verify:dpapi-cross-user": "node scripts/verify-dpapi-cross-user.ts"
   },
   "devDependencies": {
     "@types/node": "^22.18.0",
