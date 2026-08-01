@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import { test } from "node:test";
 
 import {
@@ -185,6 +186,34 @@ test("the live preflight owner cannot import peers or test-only source", () => {
     "src/live/preflight/admit.ts imports peer implementation src/browser/adapter.ts",
     "src/live/preflight/admit.ts imports test-only source src/testing/live/fakes.ts",
   ]);
+});
+
+test("the Windows secret owner may import contracts, Node, and its own subtree only", () => {
+  assert.deepEqual(
+    dependencyViolations([
+      {
+        path: "src/secrets/windows-dpapi/store.ts",
+        source: [
+          'import { readFile } from "node:fs/promises";',
+          'import type { SecretStore } from "../../contracts/live/index.ts";',
+          'import { readRecord } from "./record.ts";',
+        ].join("\n"),
+      },
+      {
+        path: "src/secrets/windows-dpapi/store.ts",
+        source: 'import { fake } from "../../testing/live/fakes.ts";',
+      },
+    ]),
+    ["src/secrets/windows-dpapi/store.ts imports test-only source src/testing/live/fakes.ts"],
+  );
+});
+
+test("repository ignore policy admits only the intended SecretStore source and tests", () => {
+  const ignore = readFileSync("../.gitignore", "utf8");
+  assert.match(ignore, /^!executioner\/src\/secrets\/$/mu);
+  assert.match(ignore, /^!executioner\/src\/secrets\/\*\*$/mu);
+  assert.match(ignore, /^!executioner\/tests\/secrets\/$/mu);
+  assert.match(ignore, /^!executioner\/tests\/secrets\/\*\*$/mu);
 });
 
 test("the architecture owner does not widen to other live source", () => {
