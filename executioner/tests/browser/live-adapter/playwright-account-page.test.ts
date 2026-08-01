@@ -258,18 +258,26 @@ test("a markerless rejected submit may detach then reattach before classificatio
     editable: false,
     attachedWaitFails: true,
   });
+  const email = new FakeLocator({ count: 1, visible: true, enabled: true, editable: true });
+  const password = new FakeLocator({ count: 1, visible: true, enabled: true, editable: true });
 
   await new PlaywrightAccountPageAdapter({
     trace: (event) => events.push(event),
   }).activate(
-    new FakePage(submit, absentDestination),
+    new FakePage(submit, absentDestination, new Map([
+      ['[data-automation-id="email"]', email],
+      ['[data-automation-id="password"]', password],
+    ])),
     "submit_sign_in",
   );
 
   assert.deepEqual(submit.waitForArguments, [
     { state: "hidden", timeout: 10_000 },
     { state: "attached", timeout: 10_000 },
+    { state: "visible", timeout: 10_000 },
   ]);
+  assert.deepEqual(email.waitForArguments, [{ state: "visible", timeout: 10_000 }]);
+  assert.deepEqual(password.waitForArguments, [{ state: "visible", timeout: 10_000 }]);
   assert.deepEqual(absentDestination.waitForArguments, [
     { state: "attached", timeout: 10_000 },
   ]);
@@ -279,6 +287,83 @@ test("a markerless rejected submit may detach then reattach before classificatio
     "submit_click_succeeded",
     "submit_rejection_reappeared",
   ]);
+});
+
+test("a sign-in rejection waits for the complete semantic form to become visible", async () => {
+  const submit = new FakeLocator({
+    count: 1,
+    visible: true,
+    enabled: true,
+    editable: false,
+  });
+  const absentDestination = new FakeLocator({
+    count: 0,
+    visible: false,
+    enabled: false,
+    editable: false,
+    attachedWaitFails: true,
+  });
+  const email = new FakeLocator({ count: 1, visible: true, enabled: true, editable: true });
+  const password = new FakeLocator({ count: 1, visible: true, enabled: true, editable: true });
+  const page = new FakePage(submit, absentDestination, new Map([
+    ['[data-automation-id="email"]', email],
+    ['[data-automation-id="password"]', password],
+  ]));
+
+  await new PlaywrightAccountPageAdapter().activate(page, "submit_sign_in");
+
+  assert.deepEqual(submit.waitForArguments, [
+    { state: "hidden", timeout: 10_000 },
+    { state: "attached", timeout: 10_000 },
+    { state: "visible", timeout: 10_000 },
+  ]);
+  assert.deepEqual(email.waitForArguments, [{ state: "visible", timeout: 10_000 }]);
+  assert.deepEqual(password.waitForArguments, [{ state: "visible", timeout: 10_000 }]);
+  assert.equal(submit.clickCalls, 1);
+  for (const field of [email, password]) {
+    assert.equal(field.clickCalls, 0);
+    assert.deepEqual(field.fillArguments, []);
+    assert.equal(field.evaluateCalls, 0);
+  }
+});
+
+test("a create-account rejection waits for confirmation with the semantic form", async () => {
+  const submit = new FakeLocator({
+    count: 1,
+    visible: true,
+    enabled: true,
+    editable: false,
+  });
+  const absentDestination = new FakeLocator({
+    count: 0,
+    visible: false,
+    enabled: false,
+    editable: false,
+    attachedWaitFails: true,
+  });
+  const email = new FakeLocator({ count: 1, visible: true, enabled: true, editable: true });
+  const password = new FakeLocator({ count: 1, visible: true, enabled: true, editable: true });
+  const confirmation = new FakeLocator({ count: 1, visible: true, enabled: true, editable: true });
+  const page = new FakePage(submit, absentDestination, new Map([
+    ['[data-automation-id="email"]', email],
+    ['[data-automation-id="password"]', password],
+    ['[data-automation-id="verifyPassword"]', confirmation],
+  ]));
+
+  await new PlaywrightAccountPageAdapter().activate(page, "submit_create_account");
+
+  assert.deepEqual(submit.waitForArguments, [
+    { state: "hidden", timeout: 10_000 },
+    { state: "attached", timeout: 10_000 },
+    { state: "visible", timeout: 10_000 },
+  ]);
+  for (const field of [email, password, confirmation]) {
+    assert.deepEqual(field.waitForArguments, [{ state: "visible", timeout: 10_000 }]);
+    assert.equal(field.clickCalls, 0);
+    assert.deepEqual(field.fillArguments, []);
+    assert.equal(field.evaluateCalls, 0);
+  }
+  assert.equal(submit.clickCalls, 1);
 });
 
 test("submit stabilization excludes the stale current account container", async () => {
@@ -438,9 +523,15 @@ class FakePage {
   readonly calls: unknown[] = [];
   readonly resultLocator: FakeLocator;
   readonly destinationLocator: FakeLocator;
-  constructor(locator: FakeLocator, destinationLocator: FakeLocator = locator) {
+  readonly selectorLocators: ReadonlyMap<string, FakeLocator>;
+  constructor(
+    locator: FakeLocator,
+    destinationLocator: FakeLocator = locator,
+    selectorLocators: ReadonlyMap<string, FakeLocator> = new Map(),
+  ) {
     this.resultLocator = locator;
     this.destinationLocator = destinationLocator;
+    this.selectorLocators = selectorLocators;
   }
   getByLabel(name: string, options: { exact: boolean }): FakeLocator {
     this.calls.push({ method: "getByLabel", name, exact: options.exact });
@@ -452,6 +543,8 @@ class FakePage {
   }
   locator(selector: string): FakeLocator {
     this.calls.push({ method: "locator", selector });
+    const selected = this.selectorLocators.get(selector);
+    if (selected !== undefined) return selected;
     return selector.includes("candidateHomePage")
       ? this.destinationLocator
       : this.resultLocator;

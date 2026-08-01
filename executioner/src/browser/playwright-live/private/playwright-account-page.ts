@@ -148,13 +148,25 @@ export class PlaywrightAccountPageAdapter implements SemanticAccountPageAdapter 
           let observed: "destination" | "rejection";
           try {
             observed = await Promise.any([
-            playwrightPage(page).locator(postSubmitDestination(action))
-              .first()
-              .waitFor({ state: "attached", timeout: 10_000 })
+              playwrightPage(page).locator(postSubmitDestination(action))
+                .first()
+                .waitFor({ state: "attached", timeout: 10_000 })
                 .then(() => "destination" as const),
               locator.waitFor({ state: "attached", timeout: 10_000 })
                 .then(() => "rejection" as const),
             ]);
+            if (observed === "rejection") {
+              const fields: readonly AccountFieldName[] = action === "submit_sign_in"
+                ? ["email", "password"]
+                : ["email", "password", "password_confirmation"];
+              await Promise.all([
+                locator.waitFor({ state: "visible", timeout: 10_000 }),
+                ...fields.map((field) => semanticLocator(page, field).locator.waitFor({
+                  state: "visible",
+                  timeout: 10_000,
+                })),
+              ]);
+            }
           } catch (error) {
             this.#emit("submit_stabilization_failed");
             throw error;
