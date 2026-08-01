@@ -16,7 +16,8 @@ export type AccountActionIntent =
   | "show_sign_in"
   | "show_create_account"
   | "submit_sign_in"
-  | "submit_create_account";
+  | "submit_create_account"
+  | "accept_terms";
 
 export interface SemanticControlFact {
   readonly cardinality: number;

@@ -117,6 +117,25 @@ async function mutateOnce(
           return;
         }
       }
+      if (request.mode === "create_account") {
+        const consent = await access.inspectAction("accept_terms");
+        if (!consent.ok) {
+          localFailure = mapBrowserFailure(consent.error.code);
+          return;
+        }
+        if (consent.value.cardinality > 1 ||
+          (consent.value.cardinality === 1 && !consent.value.actionable)) {
+          localFailure = failure("credential_mutation_denied");
+          return;
+        }
+        if (consent.value.cardinality === 1) {
+          const accepted = await access.activate("accept_terms");
+          if (!accepted.ok) {
+            localFailure = mapBrowserFailure(accepted.error.code);
+            return;
+          }
+        }
+      }
       const admittedSubmit = await uniqueActionableAction(access, submit);
       if (!admittedSubmit.ok) {
         localFailure = mapBrowserFailure(admittedSubmit.error.code);

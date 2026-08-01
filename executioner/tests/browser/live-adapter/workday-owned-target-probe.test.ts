@@ -49,11 +49,11 @@ test("production probe admits controlled Workday routes and emits only closed va
       '[role="option"]': 2,
     },
     {
-      "label:Email Address": 1,
-      "label:Password": 1,
-      "label:Verify New Password": 1,
-      "role:button:Create Account": 1,
-      "role:button:Sign In": 1,
+      'selector:[data-automation-id="email"]': 1,
+      'selector:[data-automation-id="password"]': 1,
+      'selector:[data-automation-id="verifyPassword"]': 1,
+      'selector:[data-automation-id="createAccountSubmitButton"]': 1,
+      'selector:[data-automation-id="signInLink"]': 1,
     },
   );
 
@@ -91,10 +91,10 @@ test("production probe recognizes the exact semantic sign-in boundary", async ()
       "https://approved.wd5.myworkdayjobs.invalid/en-US/Careers/job/Example_R12345/apply/applyManually",
       {},
       {
-        "label:Email Address": 1,
-        "label:Password": 1,
-        "role:button:Sign In": 1,
-        "role:button:Create Account": 1,
+        'selector:[data-automation-id="email"]': 1,
+        'selector:[data-automation-id="password"]': 1,
+        'selector:[data-automation-id="signInSubmitButton"]': 1,
+        'selector:[data-automation-id="createAccountLink"]': 1,
       },
     ),
     expected,
@@ -232,8 +232,10 @@ class ProbePage {
     return this.currentUrl;
   }
 
-  locator(selector: string): { count(): Promise<number> } {
-    return { count: async () => this.counts[selector] ?? 0 };
+  locator(selector: string): SemanticLocator {
+    return semanticLocator(
+      this.counts[selector] ?? this.semanticCounts[`selector:${selector}`] ?? 0,
+    );
   }
 
   getByLabel(name: string): SemanticLocator {

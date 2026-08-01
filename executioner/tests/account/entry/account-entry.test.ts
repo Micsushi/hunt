@@ -245,6 +245,8 @@ test("fresh-create switches semantically, reclassifies, and keeps confirmation i
     "inspectField:email",
     "inspectField:password",
     "inspectField:password_confirmation",
+    "inspectAction:accept_terms",
+    "activate:accept_terms",
     "inspectAction:submit_create_account",
     "fill:email",
     "matches:email",
@@ -499,6 +501,7 @@ function accountFixture(states: readonly ResolvedStateKind[]) {
     "show_create_account",
     "submit_sign_in",
     "submit_create_account",
+    "accept_terms",
   ] as const) controls.set(control, { cardinality: 1, actionable: true });
   const access: AccountPageAccess = {
     inspectField: async (field) => {

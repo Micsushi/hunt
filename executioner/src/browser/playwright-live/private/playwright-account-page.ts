@@ -51,7 +51,9 @@ export class PlaywrightAccountPageAdapter implements SemanticAccountPageAdapter 
   }
 
   async activate(page: PersistentPage, action: AccountActionIntent): Promise<void> {
-    await semanticLocator(page, action).locator.click();
+    const locator = semanticLocator(page, action).locator;
+    if (action === "accept_terms") await locator.check();
+    else await locator.click();
   }
 }
 
@@ -98,6 +100,11 @@ function semanticLocator(
     case "submit_create_account":
       return {
         locator: semanticPage.locator('[data-automation-id="createAccountSubmitButton"]'),
+        field: false,
+      };
+    case "accept_terms":
+      return {
+        locator: semanticPage.locator('[data-automation-id="createAccountCheckbox"]'),
         field: false,
       };
   }

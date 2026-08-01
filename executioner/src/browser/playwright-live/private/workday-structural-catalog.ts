@@ -96,7 +96,14 @@ export async function inspectWorkdayStructure(
   }
   const semanticAccount = await inspectSemanticAccount(account);
   if (semanticAccount !== undefined) {
-    traitIds.push("structural_trait_page_account_entry_v1");
+    const pageTrait = "structural_trait_page_account_entry_v1";
+    if (!traitIds.includes(pageTrait)) {
+      const accountTraitIndex = traitIds.findIndex((trait) =>
+        trait.startsWith("structural_trait_account_")
+      );
+      if (accountTraitIndex < 0) traitIds.push(pageTrait);
+      else traitIds.splice(accountTraitIndex, 0, pageTrait);
+    }
     traitIds.push(
       semanticAccount === "create"
         ? "structural_trait_account_create_v1"
@@ -128,16 +135,18 @@ async function inspectSemanticAccount(
   const confirmation = await account.inspect("password_confirmation");
   const create = await account.inspect("submit_create_account");
   const signIn = await account.inspect("submit_sign_in");
+  const showSignIn = await account.inspect("show_sign_in");
+  const showCreate = await account.inspect("show_create_account");
   if (!exactActionable(email) || !exactActionable(password)) return undefined;
   if (
     exactActionable(confirmation) &&
     exactActionable(create) &&
-    exactActionable(signIn)
+    exactActionable(showSignIn)
   ) return "create";
   if (
     confirmation.cardinality === 0 &&
     exactActionable(signIn) &&
-    exactActionable(create)
+    exactActionable(showCreate)
   ) return "sign_in";
   return undefined;
 }

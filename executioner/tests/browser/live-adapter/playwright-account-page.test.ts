@@ -25,6 +25,7 @@ test("maps every closed control to its exact Workday semantic locator", async ()
     ["show_create_account", { method: "locator", selector: '[data-automation-id="createAccountLink"]' }],
     ["submit_sign_in", { method: "locator", selector: '[data-automation-id="signInSubmitButton"]' }],
     ["submit_create_account", { method: "locator", selector: '[data-automation-id="createAccountSubmitButton"]' }],
+    ["accept_terms", { method: "locator", selector: '[data-automation-id="createAccountCheckbox"]' }],
   ] as const;
   const adapter = new PlaywrightAccountPageAdapter();
 
@@ -162,6 +163,16 @@ test("activates each exact semantic link or button without returning page state"
   }
 });
 
+test("accepting terms uses idempotent checkbox semantics", async () => {
+  const locator = new FakeLocator({ count: 1, visible: true, enabled: true, editable: false });
+  const page = new FakePage(locator);
+  const adapter = new PlaywrightAccountPageAdapter();
+
+  assert.equal(await adapter.activate(page, "accept_terms"), undefined);
+  assert.equal(locator.checkCalls, 1);
+  assert.equal(locator.clickCalls, 0);
+});
+
 class FakePage {
   readonly calls: unknown[] = [];
   readonly resultLocator: FakeLocator;
@@ -195,6 +206,7 @@ class FakeLocator {
   inputValueCalls = 0;
   clearCalls = 0;
   clickCalls = 0;
+  checkCalls = 0;
   constructor(values: {
     count: number;
     visible: boolean;
@@ -215,4 +227,5 @@ class FakeLocator {
   }
   async clear(): Promise<void> { this.clearCalls += 1; }
   async click(): Promise<void> { this.clickCalls += 1; }
+  async check(): Promise<void> { this.checkCalls += 1; }
 }

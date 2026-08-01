@@ -22,6 +22,7 @@ export const accountActionIntents = [
   "show_create_account",
   "submit_sign_in",
   "submit_create_account",
+  "accept_terms",
 ] as const;
 export type AccountActionIntent = (typeof accountActionIntents)[number];
 
