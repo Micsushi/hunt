@@ -58,7 +58,13 @@ interface ComponentManifest {
   acceptedF1Base: string;
   contractTreeOids: Record<string, string>;
   serializedVersions: Record<string, number>;
+  candidateInputs: CandidateInputs;
   components: ComponentEvidence[];
+}
+
+interface CandidateInputs {
+  admittedFeatures: Feature[];
+  f12Paths: string[];
 }
 
 type Git = (cwd: string, args: readonly string[]) => string;
@@ -66,8 +72,6 @@ type Git = (cwd: string, args: readonly string[]) => string;
 interface AdmissionOptions {
   repository: string;
   candidate?: string;
-  admittedFeatures?: readonly Feature[];
-  allowedF12Paths?: readonly string[];
   candidateWorktree?: string;
   sourceWorktrees?: Partial<Record<Feature, string>>;
   git?: Git;
@@ -82,23 +86,24 @@ test("the canonical manifest freezes all accepted F2-F11 inputs", () => {
     canonicalManifest.components.map(({ feature }) => feature),
     Object.keys(acceptedTips),
   );
+  assert.deepEqual(canonicalManifest.candidateInputs, {
+    admittedFeatures: [],
+    f12Paths,
+  });
   assert.doesNotThrow(() =>
     assertComponentManifest(canonicalManifest, {
       repository,
-      allowedF12Paths: f12Paths,
     }),
   );
 });
 
 test("a valid partial cluster proves exact candidate blobs without history assembly", () => {
   const partial = manifestFor("F2");
+  partial.candidateInputs = { admittedFeatures: ["F2"], f12Paths: [] };
   assert.doesNotThrow(() =>
     assertComponentManifest(partial, {
       repository,
       candidate: acceptedTips.F2,
-      admittedFeatures: ["F2"],
-      sourceWorktrees: { F2: "clean-f2-source" },
-      git: cleanInjectedWorktreeGit,
     }),
   );
 });
@@ -197,10 +202,9 @@ test("a dirty component source worktree fails with a stable diagnostic", () => {
       : nativeGit(repository, args);
   assert.throws(
     () =>
-      assertComponentManifest(manifestFor("F2"), {
+      assertComponentManifest(candidateManifest(["F2"]), {
         repository,
         candidate: acceptedTips.F2,
-        admittedFeatures: ["F2"],
         sourceWorktrees: { F2: "dirty-f2-source" },
         git,
       }),
@@ -211,14 +215,55 @@ test("a dirty component source worktree fails with a stable diagnostic", () => {
 test("a candidate with another component's content fails closed", () => {
   assert.throws(
     () =>
-      assertComponentManifest(manifestFor("F2"), {
+      assertComponentManifest(candidateManifest(["F2"]), {
         repository,
         candidate: acceptedTips.F3,
-        admittedFeatures: ["F2"],
-        sourceWorktrees: { F2: "clean-f2-source" },
-        git: cleanInjectedWorktreeGit,
       }),
     /^Error: candidate component blob mismatch: F2:/u,
+  );
+});
+
+test("malformed candidate inputs fail with stable closed diagnostics", () => {
+  const missing = cloneManifest() as Partial<ComponentManifest>;
+  delete missing.candidateInputs;
+  assert.throws(
+    () => assertComponentManifest(missing as ComponentManifest, { repository }),
+    /^Error: candidate input evidence missing$/u,
+  );
+
+  const extraKey = cloneManifest();
+  (extraKey.candidateInputs as CandidateInputs & { extra: boolean }).extra = true;
+  assert.throws(
+    () => assertComponentManifest(extraKey, { repository }),
+    /^Error: candidate input keys mismatch$/u,
+  );
+
+  const duplicateFeature = cloneManifest();
+  duplicateFeature.candidateInputs.admittedFeatures = ["F2", "F2"];
+  assert.throws(
+    () => assertComponentManifest(duplicateFeature, { repository }),
+    /^Error: duplicate candidate component: F2$/u,
+  );
+
+  const unknownFeature = cloneManifest();
+  unknownFeature.candidateInputs.admittedFeatures = ["F12" as Feature];
+  assert.throws(
+    () => assertComponentManifest(unknownFeature, { repository }),
+    /^Error: unknown candidate component: F12$/u,
+  );
+
+  const duplicatePath = cloneManifest();
+  duplicatePath.candidateInputs.f12Paths = [f12Paths[0], f12Paths[0]];
+  assert.throws(
+    () => assertComponentManifest(duplicatePath, { repository }),
+    new RegExp(`^Error: duplicate F12 candidate path: ${f12Paths[0]}$`, "u"),
+  );
+
+  const unownedPath = cloneManifest();
+  unownedPath.candidateInputs.f12Paths = ["executioner/src/orchestrator.ts"];
+  assert.throws(
+    () => assertComponentManifest(unownedPath, { repository }),
+    /^Error: unowned F12 candidate path: executioner\/src\/orchestrator\.ts$/u,
   );
 });
 
@@ -228,8 +273,6 @@ function assertComponentManifest(
 ): void {
   const git = options.git ?? nativeGit;
   const candidate = options.candidate ?? "HEAD";
-  const admitted = options.admittedFeatures ?? [];
-  const allowedF12Paths = new Set(options.allowedF12Paths ?? []);
 
   if (manifest.schemaVersion !== 1) {
     throw new Error("component manifest schema mismatch");
@@ -247,6 +290,9 @@ function assertComponentManifest(
     serializedVersions,
     "serialized version mismatch",
   );
+  assertCandidateInputs(manifest.candidateInputs);
+  const admitted = manifest.candidateInputs.admittedFeatures;
+  const allowedF12Paths = new Set(manifest.candidateInputs.f12Paths);
   if (!Array.isArray(manifest.components)) {
     throw new Error("component evidence missing");
   }
@@ -311,16 +357,21 @@ function assertComponentManifest(
   assertCleanWorktree(options.candidateWorktree, "dirty candidate worktree", git);
 
   const expectedPaths = new Set<string>();
+  for (const path of allowedF12Paths) {
+    expectedPaths.add(path);
+  }
   for (const feature of admitted) {
     const component = components.get(feature);
     if (component === undefined) {
       throw new Error(`component admission evidence missing: ${feature}`);
     }
     const source = options.sourceWorktrees?.[feature];
-    if (source === undefined) {
-      throw new Error(`component source worktree missing: ${feature}`);
+    if (options.sourceWorktrees !== undefined) {
+      if (source === undefined) {
+        throw new Error(`component source worktree missing: ${feature}`);
+      }
+      assertCleanWorktree(source, `dirty component source worktree: ${feature}`, git);
     }
-    assertCleanWorktree(source, `dirty component source worktree: ${feature}`, git);
     for (const path of ownedPaths.get(feature)!) {
       expectedPaths.add(path);
       const candidateBlob = revisionBlob(candidate, path, options.repository, git);
@@ -337,11 +388,6 @@ function assertComponentManifest(
     options.repository,
     git,
   );
-  for (const path of candidatePaths) {
-    if (allowedF12Paths.has(path)) {
-      expectedPaths.add(path);
-    }
-  }
   const missing = [...expectedPaths].find((path) => !candidatePaths.includes(path));
   if (missing !== undefined) {
     throw new Error(`candidate path set mismatch: missing ${missing}`);
@@ -349,6 +395,48 @@ function assertComponentManifest(
   const unexpected = candidatePaths.find((path) => !expectedPaths.has(path));
   if (unexpected !== undefined) {
     throw new Error(`candidate path set mismatch: unexpected ${unexpected}`);
+  }
+}
+
+function assertCandidateInputs(
+  value: CandidateInputs | undefined,
+): asserts value is CandidateInputs {
+  if (value === undefined || value === null || typeof value !== "object") {
+    throw new Error("candidate input evidence missing");
+  }
+  if (
+    Object.keys(value).sort().join("\n") !==
+    ["admittedFeatures", "f12Paths"].sort().join("\n")
+  ) {
+    throw new Error("candidate input keys mismatch");
+  }
+  if (!Array.isArray(value.admittedFeatures) || !Array.isArray(value.f12Paths)) {
+    throw new Error("candidate input evidence missing");
+  }
+  const features = new Set<string>();
+  for (const feature of value.admittedFeatures) {
+    if (!Object.hasOwn(acceptedTips, feature)) {
+      throw new Error(`unknown candidate component: ${feature}`);
+    }
+    if (features.has(feature)) {
+      throw new Error(`duplicate candidate component: ${feature}`);
+    }
+    features.add(feature);
+  }
+  const paths = new Set<string>();
+  for (const path of value.f12Paths) {
+    if (
+      typeof path !== "string" ||
+      (!/^executioner\/tests\/connections\/[a-zA-Z0-9._/-]+$/u.test(path) &&
+        path !== "executioner/scripts/run-s1-connections.ts") ||
+      path.includes("/../")
+    ) {
+      throw new Error(`unowned F12 candidate path: ${String(path)}`);
+    }
+    if (paths.has(path)) {
+      throw new Error(`duplicate F12 candidate path: ${path}`);
+    }
+    paths.add(path);
   }
 }
 
@@ -470,10 +558,6 @@ function nativeGit(cwd: string, args: readonly string[]): string {
   });
 }
 
-function cleanInjectedWorktreeGit(cwd: string, args: readonly string[]): string {
-  return args[0] === "status" ? "" : nativeGit(repository, args);
-}
-
 function cloneManifest(): ComponentManifest {
   return structuredClone(canonicalManifest);
 }
@@ -486,4 +570,10 @@ function manifestFor(...features: Feature[]): ComponentManifest {
       selected.has(feature),
     ),
   };
+}
+
+function candidateManifest(features: Feature[]): ComponentManifest {
+  const manifest = manifestFor(...features);
+  manifest.candidateInputs = { admittedFeatures: features, f12Paths: [] };
+  return manifest;
 }

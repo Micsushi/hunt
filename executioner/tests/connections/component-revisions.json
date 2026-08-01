@@ -17,6 +17,13 @@
     "mcpRequest": 2,
     "mcpResponse": 3
   },
+  "candidateInputs": {
+    "admittedFeatures": [],
+    "f12Paths": [
+      "executioner/tests/connections/component-manifest.test.ts",
+      "executioner/tests/connections/component-revisions.json"
+    ]
+  },
   "components": [
     {
       "feature": "F2",
