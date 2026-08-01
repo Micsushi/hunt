@@ -10,6 +10,7 @@
     "test": "node tests/run.ts",
     "typecheck": "tsc --noEmit",
     "quality": "npm run typecheck && npm test",
+    "provision:s2-account": "node scripts/provision-s2-account.ts",
     "verify:dpapi-cross-user": "node scripts/verify-dpapi-cross-user.ts"
   },
   "devDependencies": {
