@@ -2,5 +2,8 @@ export * from "./admission.ts";
 export * from "./lifecycle.ts";
 export * from "./ports.ts";
 export * from "./resume-artifact.ts";
+export * from "./s2-common-schemas.ts";
+export * from "./s2-common-serialized.ts";
+export * from "./s2-common-wire.ts";
 export * from "./serialized.ts";
 export * from "./types.ts";
