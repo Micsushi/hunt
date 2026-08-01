@@ -19,6 +19,8 @@ const fixedOwners: ReadonlyArray<readonly [RegExp, string]> = [
   [/^src\/testing\/(?:contracts|live)(?:\/|$)/, "test-kit"],
   [/^src\/testing\/s2-revision\.ts$/, "test-kit"],
   [/^src\/live\/preflight(?:\/|$)/, "live-preflight"],
+  [/^src\/live\/runner(?:\/|$)/, "live-runner"],
+  [/^src\/live\/evidence(?:\/|$)/, "live-evidence"],
   [/^src\/secrets\/windows-dpapi(?:\/|$)/, "windows-dpapi-secret-store"],
   [/^src\/secrets\/index\.ts$/, "windows-dpapi-secret-store"],
   [/^src\/account\/entry(?:\/|$)/, "account-entry"],

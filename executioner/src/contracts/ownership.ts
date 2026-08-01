@@ -311,11 +311,7 @@ export const componentBoundaries = [
   {
     feature: "F9",
     component: "Orchestrator and MCP Facade",
-    sourceOwnership: [
-      "src/control/orchestrator/**",
-      "src/control/mcp/**",
-      "src/live/runner/**",
-    ],
+    sourceOwnership: ["src/control/orchestrator/**", "src/control/mcp/**"],
     dataOwnership: [
       "OperationId",
       "JourneyStatus",
@@ -435,7 +431,6 @@ export const componentBoundaries = [
     sourceOwnership: [
       "src/safety/**",
       "src/evidence/**",
-      "src/live/evidence/**",
     ],
     dataOwnership: [
       "AdmissionDecision",

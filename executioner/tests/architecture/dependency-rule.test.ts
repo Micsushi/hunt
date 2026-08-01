@@ -272,13 +272,10 @@ test("the architecture owner does not widen to other live source", () => {
   );
 });
 
-test("the live runner and live evidence lanes have exact F9 and F11 owners", () => {
+test("additive live runner and evidence lanes do not widen frozen ownership", () => {
   assert.deepEqual(
     componentSourceOwners.filter(({ pattern }) => pattern.startsWith("src/live/")),
-    [
-      { pattern: "src/live/runner/**", owner: "F9" },
-      { pattern: "src/live/evidence/**", owner: "F11" },
-    ],
+    [],
   );
   assert.deepEqual(dependencyViolations([
     {
