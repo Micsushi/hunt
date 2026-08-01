@@ -71,5 +71,23 @@ Verify the dry boundary before any live runner is assembled:
 npm test -- tests/live/preflight
 ```
 
+### Account secret bootstrap
+
+Keep the completed owner input JSON outside every repository and worktree, then
+run the account-only provisioner from this directory:
+
+```text
+npm run provision:s2-account -- --config C:\absolute\external\owner-inputs.json
+```
+
+The command validates the frozen preflight and Windows ACL boundary before it
+opens a secure Windows credential dialog. The dialog is the only place to enter
+the Workday account email and password. Never pass the email or password
+through arguments or environment variables. The trusted Windows child builds
+the exact account bundle and DPAPI CurrentUser ciphertext before returning any
+bytes to Node. The command writes only the preallocated opaque account handle,
+rechecks its record ACL and metadata, and prints a value-free result. It does
+not contact Workday or Gmail.
+
 Tests use Node's built-in runner. Components may depend on shared contracts but
 not on peer implementations or C3 v2 source.
