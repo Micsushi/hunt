@@ -18,6 +18,7 @@ const fixedOwners: ReadonlyArray<readonly [RegExp, string]> = [
   [/^src\/contracts(?:\/|$)/, "contracts"],
   [/^src\/testing\/(?:contracts|live)(?:\/|$)/, "test-kit"],
   [/^src\/testing\/s2-revision\.ts$/, "test-kit"],
+  [/^src\/live\/preflight(?:\/|$)/, "live-preflight"],
   [/^src\/composition(?:\/|$)/, "composition"],
   [/^tests(?:\/|$)/, "tests"],
 ];

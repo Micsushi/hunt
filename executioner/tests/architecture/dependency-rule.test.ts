@@ -155,6 +155,47 @@ test("the live contract test kit is test-only and may import itself", () => {
   ]);
 });
 
+test("the live preflight owner may import contracts, Node, and its own subtree", () => {
+  const files: SourceFile[] = [
+    {
+      path: "src/live/preflight/admit.ts",
+      source: [
+        'import { realpathSync } from "node:fs";',
+        'import type { TargetIdentityV1 } from "../../contracts/live/index.ts";',
+        'export { binding } from "./private/binding.ts";',
+      ].join("\n"),
+    },
+  ];
+
+  assert.deepEqual(dependencyViolations(files), []);
+});
+
+test("the live preflight owner cannot import peers or test-only source", () => {
+  const files: SourceFile[] = [
+    {
+      path: "src/live/preflight/admit.ts",
+      source: [
+        'import { browser } from "../../browser/adapter.ts";',
+        'import { fake } from "../../testing/live/fakes.ts";',
+      ].join("\n"),
+    },
+  ];
+
+  assert.deepEqual(dependencyViolations(files), [
+    "src/live/preflight/admit.ts imports peer implementation src/browser/adapter.ts",
+    "src/live/preflight/admit.ts imports test-only source src/testing/live/fakes.ts",
+  ]);
+});
+
+test("the architecture owner does not widen to other live source", () => {
+  assert.deepEqual(
+    dependencyViolations([
+      { path: "src/live/other.ts", source: "export const other = true;" },
+    ]),
+    ["src/live/other.ts has no component owner"],
+  );
+});
+
 test("composition may not import test-only source", () => {
   const files: SourceFile[] = [
     {
