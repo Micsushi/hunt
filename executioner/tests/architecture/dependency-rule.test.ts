@@ -208,6 +208,36 @@ test("the Windows secret owner may import contracts, Node, and its own subtree o
   );
 });
 
+test("account entry owns policy only and composition owns peer capability wiring", () => {
+  assert.deepEqual(
+    dependencyViolations([
+      {
+        path: "src/account/entry/adapter.ts",
+        source: [
+          'import type { CredentialMutationAdapter } from "../../contracts/live/index.ts";',
+          'import { local } from "./types.ts";',
+        ].join("\n"),
+      },
+      {
+        path: "src/account/entry/adapter.ts",
+        source: 'import { browser } from "../../browser/playwright-live/session.ts";',
+      },
+      {
+        path: "src/composition/s2-account-entry.ts",
+        source: [
+          'import { entry } from "../account/entry/index.ts";',
+          'import { browser } from "../browser/playwright-live/session.ts";',
+          'import { account } from "../ats/workday/live/index.ts";',
+          'import { resolver } from "../secrets/windows-dpapi/private/resolver.ts";',
+        ].join("\n"),
+      },
+    ]),
+    [
+      "src/account/entry/adapter.ts imports peer implementation src/browser/playwright-live/session.ts",
+    ],
+  );
+});
+
 test("repository ignore policy admits only the intended SecretStore source and tests", () => {
   const ignore = readFileSync("../.gitignore", "utf8");
   assert.match(ignore, /^!executioner\/src\/secrets\/$/mu);
