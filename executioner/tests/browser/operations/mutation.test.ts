@@ -1,32 +1,71 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
+import { readFileSync } from "node:fs";
+import { createServer } from "node:http";
 import test from "node:test";
 
 import { chromium } from "playwright";
 
-import { browserTargetToken, captureResumeArtifact, upstreamResumeId } from "../../../src/contracts/index.ts";
+import {
+  browserTargetToken,
+  captureResumeArtifact,
+  MAX_RESUME_ARTIFACT_BYTES,
+  upstreamResumeId,
+} from "../../../src/contracts/index.ts";
 import { PlaywrightBrowserSession } from "../../../src/browser/session.ts";
 import { applyMutation, type ResolvedBrowserTarget } from "../../../src/browser/adapter.ts";
 import { admittedMutation, dataPage, testIds, testJourneyId } from "../playwright-fixture.ts";
 
+async function loopbackPage(body: string): Promise<{
+  readonly target: string;
+  readonly close: () => Promise<void>;
+}> {
+  const server = createServer((_request, response) => {
+    response.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+    response.end(`<html data-hunt-page-id="page-test"><body>${body}</body></html>`);
+  });
+  await new Promise<void>((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", () => {
+      server.off("error", reject);
+      resolve();
+    });
+  });
+  const address = server.address();
+  if (address === null || typeof address === "string") {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+    throw new Error("loopback address unavailable");
+  }
+  return {
+    target: `http://127.0.0.1:${address.port}/`,
+    close: () => new Promise<void>((resolve, reject) => {
+      server.close((error) => error === undefined ? resolve() : reject(error));
+    }),
+  };
+}
+
 test("applies admitted desired-state mutations and independently reads them back", async () => {
+  const fixture = await loopbackPage(`
+    <label>Name <input data-hunt-target-token="target-name"></label><label>Bio <textarea data-hunt-target-token="target-bio"></textarea></label>
+    <label>Date <input type="date" data-hunt-target-token="target-date"></label><label><input type="checkbox" data-hunt-target-token="target-authorized"> Authorized</label>
+    <fieldset data-field-id="s1-field-work-authorization" data-hunt-target-token="target-s1-field-work-authorization" data-question-id="s1-question-work-authorization" data-question-label="Are you authorized to work in this location?">
+      <legend>Are you authorized to work in this location?</legend>
+      <label><input data-option-id="s1-option-work-authorization-yes" name="workAuthorization" required type="radio" value="yes">Yes</label>
+      <label><input data-option-id="s1-option-work-authorization-no" name="workAuthorization" required type="radio" value="no">No</label>
+    </fieldset>
+    <label>Country <select data-hunt-target-token="target-country"><option>Canada</option><option>United States</option></select></label>
+    <div role="listbox" aria-label="Department" data-hunt-target-token="target-department"><div role="option">Engineering</div><div role="option">Sales</div></div>
+    <label>Resume <input type="file" multiple data-hunt-target-token="target-resume"></label>
+    <script>document.querySelectorAll('[role=option]').forEach(o => o.addEventListener('click', () => { document.querySelectorAll('[role=option]').forEach(x => x.setAttribute('aria-selected','false')); o.setAttribute('aria-selected','true'); }));</script>
+  `);
   const browser = await chromium.launch();
   const context = await browser.newContext();
   const provider = new PlaywrightBrowserSession({ context, ids: testIds("bbbbbbbbbbbbbbbb") });
   try {
-    const started = await provider.start({ journeyId: testJourneyId, target: dataPage(`
-      <label>Name <input data-hunt-target-token="target-name"></label><label>Bio <textarea data-hunt-target-token="target-bio"></textarea></label>
-      <label>Date <input type="date" data-hunt-target-token="target-date"></label><label><input type="checkbox" data-hunt-target-token="target-authorized"> Authorized</label>
-      <fieldset data-field-id="s1-field-work-authorization" data-hunt-target-token="target-s1-field-work-authorization" data-question-id="s1-question-work-authorization" data-question-label="Are you authorized to work in this location?">
-        <legend>Are you authorized to work in this location?</legend>
-        <label><input data-option-id="s1-option-work-authorization-yes" name="workAuthorization" required type="radio" value="yes">Yes</label>
-        <label><input data-option-id="s1-option-work-authorization-no" name="workAuthorization" required type="radio" value="no">No</label>
-      </fieldset>
-      <label>Country <select data-hunt-target-token="target-country"><option>Canada</option><option>United States</option></select></label>
-      <div role="listbox" aria-label="Department" data-hunt-target-token="target-department"><div role="option">Engineering</div><div role="option">Sales</div></div>
-      <label>Resume <input type="file" data-hunt-target-token="target-resume"></label>
-      <script>document.querySelectorAll('[role=option]').forEach(o => o.addEventListener('click', () => { document.querySelectorAll('[role=option]').forEach(x => x.setAttribute('aria-selected','false')); o.setAttribute('aria-selected','true'); }));</script>
-    `) }, new AbortController().signal);
+    const started = await provider.start({
+      journeyId: testJourneyId,
+      target: fixture.target,
+    }, new AbortController().signal);
     if (!started.ok) throw new Error("start failed");
     const first = await provider.observe(started.value, new AbortController().signal);
     if (!first.ok) throw new Error("observe failed");
@@ -35,6 +74,74 @@ test("applies admitted desired-state mutations and independently reads them back
       if (found === undefined) throw new Error(`missing ${name}`);
       return found.token;
     };
+    const page = context.pages()[0];
+    assert.ok(page !== undefined);
+    const resumeInput = page.locator('[data-hunt-target-token="target-resume"]');
+    const resumeReadback = async () => {
+      const observed = await provider.observe(started.value, new AbortController().signal);
+      if (!observed.ok) throw new Error("resume readback failed");
+      return observed.value.targets.find(({ name }) => name === "Resume")?.readback;
+    };
+    assert.deepEqual(await resumeReadback(), {
+      kind: "upload",
+      resumeId: null,
+      sha256: null,
+    });
+
+    await resumeInput.setInputFiles({
+      name: "external.pdf",
+      mimeType: "application/pdf",
+      buffer: Buffer.from("external-file-without-cache"),
+    });
+    assert.deepEqual(await resumeReadback(), { kind: "unavailable" });
+
+    await resumeInput.setInputFiles([
+      { name: "first.pdf", mimeType: "application/pdf", buffer: Buffer.from("first") },
+      { name: "second.pdf", mimeType: "application/pdf", buffer: Buffer.from("second") },
+    ]);
+    assert.deepEqual(await resumeReadback(), { kind: "unavailable" });
+
+    const oversized = Buffer.alloc(MAX_RESUME_ARTIFACT_BYTES + 1, 1);
+    try {
+      await resumeInput.setInputFiles({
+        name: "oversized.pdf",
+        mimeType: "application/pdf",
+        buffer: oversized,
+      });
+      assert.deepEqual(await resumeReadback(), { kind: "unavailable" });
+    } finally {
+      oversized.fill(0);
+    }
+
+    await resumeInput.setInputFiles({
+      name: "unreadable.pdf",
+      mimeType: "application/pdf",
+      buffer: Buffer.from("unreadable"),
+    });
+    await page.evaluate(() => {
+      const root = globalThis as typeof globalThis & {
+        restoreFileArrayBuffer?: () => void;
+      };
+      const original = File.prototype.arrayBuffer;
+      root.restoreFileArrayBuffer = () => {
+        File.prototype.arrayBuffer = original;
+      };
+      File.prototype.arrayBuffer = async () => {
+        throw new Error("synthetic file read failure");
+      };
+    });
+    try {
+      assert.deepEqual(await resumeReadback(), { kind: "unavailable" });
+    } finally {
+      await page.evaluate(() => {
+        const root = globalThis as typeof globalThis & {
+          restoreFileArrayBuffer?: () => void;
+        };
+        root.restoreFileArrayBuffer?.();
+        delete root.restoreFileArrayBuffer;
+      });
+    }
+    await resumeInput.setInputFiles([]);
     const mutations = [
       { mutation: { kind: "set_text", target: token("Name"), text: "Ada" } as const, seed: "1111111111111111" },
       { mutation: { kind: "set_text", target: token("Bio"), text: "Builder" } as const, seed: "2222222222222222" },
@@ -67,9 +174,30 @@ test("applies admitted desired-state mutations and independently reads them back
     assert.deepEqual(values.get("Country"), { kind: "selected", option: "United States" });
     assert.deepEqual(values.get("Department"), { kind: "selected", option: "Sales" });
     assert.deepEqual(values.get("Resume"), { kind: "upload", resumeId: "resume-1", sha256: digest });
+
+    await resumeInput.setInputFiles([]);
+    const cleared = await provider.observe(started.value, new AbortController().signal);
+    if (!cleared.ok) throw new Error("cleared readback failed");
+    assert.deepEqual(
+      cleared.value.targets.find(({ name }) => name === "Resume")?.readback,
+      { kind: "upload", resumeId: null, sha256: null },
+    );
+
+    await resumeInput.setInputFiles({
+      name: "resume.pdf",
+      mimeType: "application/pdf",
+      buffer: Buffer.from("different-resume-content"),
+    });
+    const replaced = await provider.observe(started.value, new AbortController().signal);
+    if (!replaced.ok) throw new Error("replaced readback failed");
+    assert.deepEqual(
+      replaced.value.targets.find(({ name }) => name === "Resume")?.readback,
+      { kind: "unavailable" },
+    );
   } finally {
     await context.close();
     await browser.close();
+    await fixture.close();
   }
 });
 
@@ -91,6 +219,19 @@ test("fails stale, ambiguous, mismatched, and replayed operations closed", async
     await context.close();
     await browser.close();
   }
+});
+
+test("upload observation transfers only digest and size metadata from the page", () => {
+  const source = readFileSync(
+    new URL("../../../src/browser/adapter.ts", import.meta.url),
+    "utf8",
+  );
+  assert.doesNotMatch(
+    source,
+    /\b(?:btoa|base64|createHash)\b|kind:\s*"bytes"/u,
+  );
+  assert.match(source, /crypto\.subtle\.digest\("SHA-256"/u);
+  assert.match(source, /return \{ kind: "digest", sha256, size \}/u);
 });
 
 test("passes upload bytes to Playwright through a zero-copy buffer view", async () => {

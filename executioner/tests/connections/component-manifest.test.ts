@@ -32,7 +32,7 @@ const serializedVersions = {
 } as const;
 const acceptedTips = {
   F2: "3fb6513d794d6d0366eb27f8b9319e0a61ab1fa2",
-  F3: "8f7d3096e443cd927f900c1c0bccfaf3d0a5a4d1",
+  F3: "64a86491f6501dd9fc69f0ce2c8a15bd4fb005b2",
   F4: "d010b402a845285049a29d3d03f013a2fc50f65a",
   F5: "37620784a6d67655d85a8f8466b462b320740975",
   F6: "49ef638431b7b268a564960dfde8bf0d35459fb8",

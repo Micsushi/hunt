@@ -57,8 +57,8 @@
     },
     {
       "feature": "F3",
-      "tip": "8f7d3096e443cd927f900c1c0bccfaf3d0a5a4d1",
-      "tipTreeOid": "98fbb68107f82b863027716cafa8b516f51cbcd2",
+      "tip": "64a86491f6501dd9fc69f0ce2c8a15bd4fb005b2",
+      "tipTreeOid": "ff7ad06bd8fa9fad8fc642da431e34d020dd0434",
       "pathSetSha256": "c267eec04588a5d461fc137e919fb6a83960c7e08d18d438bec77caa58c9b727",
       "conformance": "passed"
     },

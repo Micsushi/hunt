@@ -3,7 +3,7 @@ import type { Locator, Page } from "playwright";
 import {
   boundedText,
   browserTargetToken,
-  MAX_BROWSER_READBACK_CODE_POINTS,
+  MAX_RESUME_ARTIFACT_BYTES,
   sha256Digest,
   type BrowserControl,
   type BrowserMutation,
@@ -65,9 +65,12 @@ export async function inspectPage(
   for (const item of raw) {
     if (item.control.kind === "button" && !nextName.test(item.name)) continue;
     const control = normalizeControl(item.control);
-    const readback = normalizeReadback(item.readback);
     const name = bounded(item.name);
     const token = browserTargetToken(item.declaredToken);
+    const uploaded = uploads.get(token);
+    const readback = item.control.kind === "file"
+      ? await inspectUploadReadback(page, item.index, uploaded)
+      : normalizeReadback(item.readback);
     const target = {
       ...item,
       name,
@@ -80,19 +83,13 @@ export async function inspectPage(
     if (matches === undefined) targets.set(token, [target]);
     else matches.push(target);
 
-    const uploaded = uploads.get(token);
     observations.push({
       token,
       name,
       required: item.required,
       control,
       state: item.state,
-      readback:
-        item.control.kind === "file"
-          ? uploaded === undefined
-            ? { kind: "upload", resumeId: null, sha256: null }
-            : { kind: "upload", ...uploaded }
-          : readback,
+      readback,
     });
   }
 
@@ -107,6 +104,86 @@ export async function inspectPage(
     },
     targets,
   };
+}
+
+async function inspectUploadReadback(
+  page: Page,
+  index: number,
+  uploaded: UploadedArtifactReadback | undefined,
+): Promise<BrowserReadback> {
+  let live: unknown;
+  try {
+    live = await page.locator(controlSelector).nth(index).evaluate(
+      async (element, maximumBytes) => {
+        if (
+          !(element instanceof HTMLInputElement) ||
+          element.type !== "file" ||
+          element.files === null
+        ) return { kind: "unavailable" };
+        if (element.files.length === 0) return { kind: "empty" };
+        if (element.files.length !== 1) return { kind: "unavailable" };
+        const file = element.files[0];
+        if (file === undefined || file.size === 0 || file.size > maximumBytes) {
+          return { kind: "unavailable" };
+        }
+        if (!globalThis.isSecureContext || globalThis.crypto?.subtle === undefined) {
+          return { kind: "unavailable" };
+        }
+        let bytes: Uint8Array<ArrayBuffer> | undefined;
+        try {
+          bytes = new Uint8Array(await file.arrayBuffer());
+          if (bytes.byteLength === 0 || bytes.byteLength > maximumBytes) {
+            return { kind: "unavailable" };
+          }
+          const size = bytes.byteLength;
+          const digest = await globalThis.crypto.subtle.digest("SHA-256", bytes);
+          if (
+            element.files.length !== 1 ||
+            element.files[0] !== file
+          ) {
+            return { kind: "unavailable" };
+          }
+          const sha256 = [...new Uint8Array(digest)]
+            .map((byte) => byte.toString(16).padStart(2, "0"))
+            .join("");
+          return { kind: "digest", sha256, size };
+        } catch {
+          return { kind: "unavailable" };
+        } finally {
+          bytes?.fill(0);
+        }
+      },
+      MAX_RESUME_ARTIFACT_BYTES,
+    );
+  } catch {
+    return { kind: "unavailable" };
+  }
+
+  if (
+    typeof live !== "object" ||
+    live === null ||
+    !("kind" in live) ||
+    typeof live.kind !== "string"
+  ) return { kind: "unavailable" };
+  if (live.kind === "empty") {
+    return { kind: "upload", resumeId: null, sha256: null };
+  }
+  if (
+    live.kind !== "digest" ||
+    uploaded === undefined ||
+    Object.keys(live).sort().join("\n") !== ["kind", "sha256", "size"].join("\n") ||
+    !("sha256" in live) ||
+    typeof live.sha256 !== "string" ||
+    !/^[a-f0-9]{64}$/u.test(live.sha256) ||
+    !("size" in live) ||
+    !Number.isSafeInteger(live.size) ||
+    typeof live.size !== "number" ||
+    live.size <= 0 ||
+    live.size > MAX_RESUME_ARTIFACT_BYTES
+  ) return { kind: "unavailable" };
+  return live.sha256 === uploaded.sha256
+    ? { kind: "upload", ...uploaded }
+    : { kind: "unavailable" };
 }
 
 export async function applyMutation(
@@ -317,7 +394,7 @@ async function inspectControls(page: Page): Promise<RawControl[]> {
 }
 
 function bounded(value: string) {
-  return boundedText([...value].slice(0, MAX_BROWSER_READBACK_CODE_POINTS).join(""));
+  return boundedText(value);
 }
 
 function normalizeControl(control: BrowserControl): BrowserControl {

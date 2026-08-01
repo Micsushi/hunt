@@ -3,8 +3,12 @@ import test from "node:test";
 
 import { chromium } from "playwright";
 
+import { providerError } from "../../../src/contracts/index.ts";
 import { PlaywrightBrowserSession } from "../../../src/browser/session.ts";
 import { dataPage, testIds, testJourneyId } from "../playwright-fixture.ts";
+
+const exactBound = "x".repeat(512);
+const overBound = "y".repeat(513);
 
 test("observes bounded structural controls without exposing selectors or handles", async () => {
   const browser = await chromium.launch();
@@ -24,7 +28,7 @@ test("observes bounded structural controls without exposing selectors or handles
       <label>Country <select data-hunt-target-token="target-country"><option>Canada</option><option selected>United States</option></select></label>
       <div role="listbox" aria-label="Department" data-hunt-target-token="target-department"><div role="option" aria-selected="true">Engineering</div><div role="option">Sales</div></div>
       <label>Resume <input type="file" data-hunt-target-token="target-resume"></label>
-      <input data-hunt-target-token="target-sensitive" aria-label="${"é".repeat(600)}">
+      <input data-hunt-target-token="target-sensitive" aria-label="${exactBound}">
       <button data-hunt-target-token="target-next">Next</button><button>Submit</button>
     `, "page-profile") }, new AbortController().signal);
     if (!started.ok) throw new Error("start failed");
@@ -52,13 +56,62 @@ test("observes bounded structural controls without exposing selectors or handles
     assert.deepEqual(byName.get("Department")?.readback, { kind: "selected", option: "Engineering" });
     assert.deepEqual(byName.get("Resume")?.readback, { kind: "upload", resumeId: null, sha256: null });
     assert.equal(byName.has("Submit"), false);
-    const boundedUnicode = observed.value.targets.find((target) => [...target.name].length > 100);
+    const boundedUnicode = observed.value.targets.find((target) => target.token === "target-sensitive");
+    assert.equal(boundedUnicode?.name, exactBound);
     assert.equal([...(boundedUnicode?.name ?? "")].length, 512);
     assert.equal(boundedUnicode?.token, "target-sensitive");
     assert.equal(JSON.stringify(observed.value).includes("selector"), false);
   } finally {
     if ((await provider.close({ sessionId: "browser_session_aaaaaaaaaaaaaaaa" as never }, new AbortController().signal)).ok) {}
     await context.close();
+    await browser.close();
+  }
+});
+
+test("rejects overbound structural strings and readbacks without fabricating prefixes", async () => {
+  const cases = [
+    {
+      name: "control name",
+      body: `<input data-hunt-target-token="target-long-name" aria-label="${overBound}">`,
+    },
+    {
+      name: "text readback",
+      body: `<label>Long text <input data-hunt-target-token="target-long-text" value="${overBound}"></label>`,
+    },
+    {
+      name: "selected readback",
+      body: `<fieldset data-hunt-target-token="target-long-selected"><legend>Choice</legend><label><input name="choice" type="radio" checked>${overBound}</label></fieldset>`,
+    },
+    {
+      name: "select option",
+      body: `<label>Choice <select data-hunt-target-token="target-long-option"><option>${overBound}</option></select></label>`,
+    },
+  ] as const;
+  const browser = await chromium.launch();
+  try {
+    for (const [index, scenario] of cases.entries()) {
+      const context = await browser.newContext();
+      const provider = new PlaywrightBrowserSession({
+        context,
+        ids: testIds(String(index + 1).repeat(16)),
+      });
+      try {
+        const started = await provider.start({
+          journeyId: testJourneyId,
+          target: dataPage(scenario.body),
+        }, new AbortController().signal);
+        assert.equal(started.ok, true, scenario.name);
+        if (!started.ok) continue;
+        assert.deepEqual(
+          await provider.observe(started.value, new AbortController().signal),
+          { ok: false, error: providerError("browser_target_invalid") },
+          scenario.name,
+        );
+      } finally {
+        await context.close();
+      }
+    }
+  } finally {
     await browser.close();
   }
 });
