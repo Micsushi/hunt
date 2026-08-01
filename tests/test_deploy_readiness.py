@@ -1272,7 +1272,8 @@ def test_repo_root_quality_shortcut_exists():
     assert "from scripts.run_component_checks import main" in shortcut_text
 
 
-def test_component_ci_runner_blocks_c4(monkeypatch, capsys):
+@pytest.mark.parametrize("target", ["c4", "coordinator"])
+def test_component_ci_runner_blocks_c4(target, monkeypatch, capsys):
     calls = []
 
     def fake_run(command, cwd):
@@ -1280,17 +1281,67 @@ def test_component_ci_runner_blocks_c4(monkeypatch, capsys):
         return types.SimpleNamespace(returncode=0)
 
     monkeypatch.setattr(run_component_ci.subprocess, "run", fake_run)
-    monkeypatch.setattr(run_component_ci.sys, "argv", ["run_component_ci.py", "c4"])
+    monkeypatch.setattr(
+        run_component_ci.sys,
+        "argv",
+        ["run_component_ci.py", target, "--dry-run"],
+    )
 
     assert run_component_ci.main() == 2
     assert calls == []
     assert "C4 is on hold" in capsys.readouterr().err
 
 
+@pytest.mark.parametrize("target", ["c3", "executioner"])
+def test_component_ci_runner_routes_executioner_aliases(target, monkeypatch):
+    calls = []
+
+    def fake_run(command, cwd):
+        calls.append((command, cwd))
+        return types.SimpleNamespace(returncode=0)
+
+    monkeypatch.setattr(run_component_ci, "_resolve_exec", lambda _name: "npm-test", raising=False)
+    monkeypatch.setattr(run_component_ci.subprocess, "run", fake_run)
+    monkeypatch.setattr(run_component_ci.sys, "argv", ["run_component_ci.py", target])
+
+    assert run_component_ci.main() == 0
+    assert calls == [
+        (["npm-test", "--prefix", "executioner", "ci"], run_component_ci.ROOT),
+        (
+            ["npm-test", "--prefix", "executioner", "run", "quality"],
+            run_component_ci.ROOT,
+        ),
+    ]
+
+
+def test_component_ci_runner_all_preserves_order_and_includes_executioner(monkeypatch):
+    calls = []
+
+    def fake_run(command, cwd):
+        calls.append((command, cwd))
+        return types.SimpleNamespace(returncode=0)
+
+    monkeypatch.setattr(run_component_ci, "_resolve_exec", lambda _name: "npm-test", raising=False)
+    monkeypatch.setattr(run_component_ci.subprocess, "run", fake_run)
+    monkeypatch.setattr(run_component_ci.sys, "argv", ["run_component_ci.py", "all"])
+
+    assert run_component_ci.main() == 0
+    assert calls == [
+        ([run_component_ci.PYTHON, "quality.py", "all"], run_component_ci.ROOT),
+        ([run_component_ci.PYTHON, "test.py", "all"], run_component_ci.ROOT),
+        (["npm-test", "--prefix", "executioner", "ci"], run_component_ci.ROOT),
+        (
+            ["npm-test", "--prefix", "executioner", "run", "quality"],
+            run_component_ci.ROOT,
+        ),
+    ]
+
+
 def test_component_ci_runner_dry_run_skips_subprocess(monkeypatch, capsys):
     def fail_run(_command, _cwd):
         raise AssertionError("subprocess.run should not be called in dry-run mode")
 
+    monkeypatch.setattr(run_component_ci, "_resolve_exec", lambda _name: "npm-test", raising=False)
     monkeypatch.setattr(run_component_ci.subprocess, "run", fail_run)
     monkeypatch.setattr(run_component_ci.sys, "argv", ["run_component_ci.py", "all", "--dry-run"])
 
@@ -1299,6 +1350,90 @@ def test_component_ci_runner_dry_run_skips_subprocess(monkeypatch, capsys):
     output = capsys.readouterr().out
     assert "quality.py all --dry-run" in output
     assert "test.py all --dry-run" in output
+    assert "npm-test --prefix executioner ci" in output
+    assert "npm-test --prefix executioner run quality" in output
+    assert "npm-test --prefix executioner ci --dry-run" not in output
+    assert "npm-test --prefix executioner run quality --dry-run" not in output
+
+
+def test_component_ci_runner_executioner_dry_run_skips_subprocess(monkeypatch, capsys):
+    def fail_run(_command, _cwd):
+        raise AssertionError("subprocess.run should not be called in dry-run mode")
+
+    monkeypatch.setattr(run_component_ci, "_resolve_exec", lambda _name: "npm-test", raising=False)
+    monkeypatch.setattr(run_component_ci.subprocess, "run", fail_run)
+    monkeypatch.setattr(
+        run_component_ci.sys,
+        "argv",
+        ["run_component_ci.py", "executioner", "--dry-run"],
+    )
+
+    assert run_component_ci.main() == 0
+    output = capsys.readouterr().out
+    assert "npm-test --prefix executioner ci" in output
+    assert "npm-test --prefix executioner run quality" in output
+    assert "--dry-run" not in "\n".join(
+        line for line in output.splitlines() if "[ci] command:" in line
+    )
+
+
+def test_component_ci_runner_stops_when_executioner_install_fails(monkeypatch):
+    calls = []
+
+    def fake_run(command, cwd):
+        calls.append((command, cwd))
+        return types.SimpleNamespace(returncode=17)
+
+    monkeypatch.setattr(run_component_ci, "_resolve_exec", lambda _name: "npm-test", raising=False)
+    monkeypatch.setattr(run_component_ci.subprocess, "run", fake_run)
+    monkeypatch.setattr(run_component_ci.sys, "argv", ["run_component_ci.py", "c3"])
+
+    assert run_component_ci.main() == 17
+    assert calls == [
+        (["npm-test", "--prefix", "executioner", "ci"], run_component_ci.ROOT),
+    ]
+
+
+@pytest.mark.parametrize(
+    ("os_name", "which_results", "expected", "queries"),
+    [
+        (
+            "nt",
+            {"npm.cmd": r"C:\Program Files\nodejs\npm.cmd"},
+            r"C:\Program Files\nodejs\npm.cmd",
+            ["npm.cmd"],
+        ),
+        (
+            "posix",
+            {"npm": "/usr/bin/npm"},
+            "/usr/bin/npm",
+            ["npm"],
+        ),
+    ],
+)
+def test_component_ci_runner_resolves_npm_cross_platform(
+    os_name,
+    which_results,
+    expected,
+    queries,
+    monkeypatch,
+):
+    seen = []
+
+    def fake_which(name):
+        seen.append(name)
+        return which_results.get(name)
+
+    monkeypatch.setattr(run_component_ci, "os", types.SimpleNamespace(name=os_name), raising=False)
+    monkeypatch.setattr(
+        run_component_ci,
+        "shutil",
+        types.SimpleNamespace(which=fake_which),
+        raising=False,
+    )
+
+    assert run_component_ci._resolve_exec("npm") == expected
+    assert seen == queries
 
 
 def test_repo_root_ci_shortcut_exists():

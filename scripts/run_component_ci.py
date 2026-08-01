@@ -4,6 +4,8 @@
 from __future__ import annotations
 
 import argparse
+import os
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -18,7 +20,7 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
         "target",
         nargs="?",
         default="all",
-        help="CI target: all, c0, c1, c2, shared, frontend; C3 is planned and C4 is blocked",
+        help="CI target: all, c0, c1, c2, c3, executioner, shared, frontend; C4 is blocked",
     )
     parser.add_argument(
         "--dry-run",
@@ -28,27 +30,46 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
     return parser.parse_args(argv)
 
 
+def _resolve_exec(name: str) -> str:
+    if os.name == "nt":
+        resolved = shutil.which(f"{name}.cmd")
+        if resolved:
+            return resolved
+    return shutil.which(name) or name
+
+
+def _executioner_commands() -> list[list[str]]:
+    npm = _resolve_exec("npm")
+    return [
+        [npm, "--prefix", "executioner", "ci"],
+        [npm, "--prefix", "executioner", "run", "quality"],
+    ]
+
+
 def main() -> int:
     args = _parse_args(sys.argv[1:])
-    if args.target in {"c3", "executioner"}:
-        print("[ci] C3 v3 is planned but not implemented.", file=sys.stderr)
-        return 2
     if args.target in {"c4", "coordinator"}:
         print("[ci] C4 is on hold. No C4 checks or tests were started.", file=sys.stderr)
         return 2
 
-    commands = [
-        [PYTHON, "quality.py", args.target],
-        [PYTHON, "test.py", args.target],
-    ]
+    if args.target in {"c3", "executioner"}:
+        commands = _executioner_commands()
+    else:
+        commands = [
+            [PYTHON, "quality.py", args.target],
+            [PYTHON, "test.py", args.target],
+        ]
+        if args.target == "all":
+            commands.extend(_executioner_commands())
 
     print("[ci] repo:", ROOT)
     print("[ci] target:", args.target)
 
     for command in commands:
-        if args.dry_run:
-            command.append("--dry-run")
-        print("[ci] command:", " ".join(command))
+        displayed = [*command]
+        if args.dry_run and command[0] == PYTHON:
+            displayed.append("--dry-run")
+        print("[ci] command:", " ".join(displayed))
         if args.dry_run:
             continue
         result = subprocess.run(command, cwd=ROOT)
