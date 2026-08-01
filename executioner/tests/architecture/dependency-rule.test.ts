@@ -238,6 +238,47 @@ test("account entry owns policy only and composition owns peer capability wiring
   );
 });
 
+test("Gmail auth and safe provider implementations have separate owners", () => {
+  assert.deepEqual(
+    dependencyViolations([
+      {
+        path: "src/mailbox/providers/gmail/auth-executor.ts",
+        source: [
+          'import { request } from "node:http";',
+          'import type { PrivilegedGmailAuthExecutor } from "../../../contracts/live/index.ts";',
+          'import { parse } from "./http-parser.ts";',
+          'import { RawArtifactVault } from "./private/raw-artifact-vault.ts";',
+        ].join("\n"),
+      },
+      {
+        path: "src/mailbox/providers/gmail/provider.ts",
+        source: [
+          'import type { MailboxProvider } from "../../../contracts/live/index.ts";',
+          'import { SafeArtifactRegistry } from "./safe-artifact-registry.ts";',
+        ].join("\n"),
+      },
+    ]),
+    [],
+  );
+
+  assert.deepEqual(
+    dependencyViolations([
+      {
+        path: "src/mailbox/providers/gmail/provider.ts",
+        source: 'import { GmailAuthExecutor } from "./auth-executor.ts";',
+      },
+      {
+        path: "src/mailbox/providers/gmail/auth-executor.ts",
+        source: 'import { createBoundedMailboxPolicy } from "../../policy.ts";',
+      },
+    ]),
+    [
+      "src/mailbox/providers/gmail/provider.ts imports peer implementation src/mailbox/providers/gmail/auth-executor.ts",
+      "src/mailbox/providers/gmail/auth-executor.ts imports peer implementation src/mailbox/policy.ts",
+    ],
+  );
+});
+
 test("repository ignore policy admits only the intended SecretStore source and tests", () => {
   const ignore = readFileSync("../.gitignore", "utf8");
   assert.match(ignore, /^!executioner\/src\/secrets\/$/mu);
