@@ -43,7 +43,8 @@
       "executioner/tests/connections/control/lifecycle-replay.test.ts",
       "executioner/tests/connections/control/support.ts",
       "executioner/tests/connections/report/persistence.test.ts",
-      "executioner/tests/connections/report/reporting-security.test.ts"
+      "executioner/tests/connections/report/reporting-security.test.ts",
+      "executioner/scripts/run-s1-connections.ts"
     ]
   },
   "components": [
