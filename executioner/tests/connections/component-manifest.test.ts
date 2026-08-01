@@ -82,19 +82,13 @@ const canonicalManifest = JSON.parse(
 ) as ComponentManifest;
 
 test("the canonical manifest freezes all accepted F2-F11 inputs", () => {
-  assert.deepEqual(
-    canonicalManifest.components.map(({ feature }) => feature),
-    Object.keys(acceptedTips),
-  );
-  assert.deepEqual(canonicalManifest.candidateInputs, {
-    admittedFeatures: [],
-    f12Paths,
-  });
-  assert.doesNotThrow(() =>
-    assertComponentManifest(canonicalManifest, {
-      repository,
-    }),
-  );
+  assert.doesNotThrow(() => assertCanonicalManifest(canonicalManifest));
+});
+
+test("the canonical checker accepts manifest-updated cluster inputs", () => {
+  const cluster = cloneManifest();
+  cluster.candidateInputs = { admittedFeatures: ["F2"], f12Paths: [] };
+  assert.doesNotThrow(() => assertCanonicalManifest(cluster, acceptedTips.F2));
 });
 
 test("a valid partial cluster proves exact candidate blobs without history assembly", () => {
@@ -396,6 +390,17 @@ function assertComponentManifest(
   if (unexpected !== undefined) {
     throw new Error(`candidate path set mismatch: unexpected ${unexpected}`);
   }
+}
+
+function assertCanonicalManifest(
+  manifest: ComponentManifest,
+  candidate = "HEAD",
+): void {
+  assert.deepEqual(
+    manifest.components.map(({ feature }) => feature),
+    Object.keys(acceptedTips),
+  );
+  assertComponentManifest(manifest, { repository, candidate });
 }
 
 function assertCandidateInputs(
