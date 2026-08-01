@@ -112,6 +112,7 @@ function verificationTarget(
   payload: Record<string, unknown>,
   expectedHost: string,
 ): Uint8Array | null {
+  const candidates = new Set<string>();
   for (const encoded of bodySegments(payload, 0)) {
     if (!/^[A-Za-z0-9_-]+$/u.test(encoded)) {
       throw new GmailProviderFailure("mailbox_query_invalid");
@@ -121,14 +122,24 @@ function verificationTarget(
       const decoded = bytes.toString("utf8");
       for (const match of decoded.matchAll(/https:\/\/[^\s"'<>]+/gu)) {
         try {
-          const candidate = new URL(match[0].replaceAll("&amp;", "&"));
+          const rawCandidate = match[0].replaceAll("&amp;", "&");
+          if (rawCandidate.length > 4_096) continue;
+          const candidate = new URL(rawCandidate);
+          const canonical = candidate.toString();
+          const decodedCanonical = decodeURI(canonical);
           if (
+            canonical.length <= 4_096 &&
+            !/[\u0000-\u001f\u007f]/u.test(decodedCanonical) &&
             candidate.protocol === "https:" &&
             candidate.hostname.toLowerCase() === expectedHost &&
+            candidate.port === "" &&
             candidate.username === "" &&
-            candidate.password === ""
+            candidate.password === "" &&
+            candidate.hash === "" &&
+            carriesVerificationToken(candidate)
           ) {
-            return new TextEncoder().encode(candidate.toString());
+            candidates.add(canonical);
+            if (candidates.size > 1) return null;
           }
         } catch {
           // Ignore a malformed candidate and continue within the bounded payload.
@@ -138,7 +149,23 @@ function verificationTarget(
       bytes.fill(0);
     }
   }
-  return null;
+  if (candidates.size !== 1) return null;
+  return new TextEncoder().encode([...candidates][0]);
+}
+
+function carriesVerificationToken(candidate: URL): boolean {
+  const marker = /(?:verify|verification|activate|activation|confirm|confirmation)/iu;
+  for (const [name, value] of candidate.searchParams) {
+    if (marker.test(name) || /(?:token|code|key)/iu.test(name)) {
+      if (value.length > 0) return true;
+    }
+  }
+  const segments = candidate.pathname
+    .split("/")
+    .filter((segment) => segment.length > 0)
+    .map((segment) => decodeURIComponent(segment));
+  const markerIndex = segments.findIndex((segment) => marker.test(segment));
+  return markerIndex >= 0 && markerIndex < segments.length - 1;
 }
 
 function bodySegments(

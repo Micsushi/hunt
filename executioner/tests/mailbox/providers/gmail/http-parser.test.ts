@@ -48,6 +48,104 @@ test("finds an admitted target in a bounded later MIME part", () => {
   );
 });
 
+test("returns no candidate when the message has no verification target", () => {
+  const value = message({
+    payload: {
+      ...message().payload,
+      parts: [{ body: { data: encoded("no target") } }],
+    },
+  });
+
+  assert.equal(parseGmailMessage(value, expected), null);
+});
+
+test("rejects multiple unique verification targets", () => {
+  const value = message();
+  const payload = value.payload as {
+    parts: { body: { data: string } }[];
+  };
+  payload.parts.push({
+    body: {
+      data: encoded(
+        "https://tenant.example.invalid/verify?token=other-private",
+      ),
+    },
+  });
+
+  assert.equal(parseGmailMessage(value, expected), null);
+});
+
+test("deduplicates canonical equivalents before enforcing uniqueness", () => {
+  const value = message();
+  const payload = value.payload as {
+    parts: { body: { data: string } }[];
+  };
+  payload.parts.push({
+    body: {
+      data: encoded(
+        "https://TENANT.example.invalid:443/other/../verify?token=private",
+      ),
+    },
+  });
+
+  assert.equal(
+    new TextDecoder().decode(
+      parseGmailMessage(value, expected)?.verificationTarget,
+    ),
+    "https://tenant.example.invalid/verify?token=private",
+  );
+});
+
+test("rejects unsafe targets without exposing their values", () => {
+  const privateValue = "private-value-that-must-not-escape";
+  const targets = [
+    `https://other.example.invalid/verify?token=${privateValue}`,
+    `https://user:${privateValue}@tenant.example.invalid/verify?token=x`,
+    `https://tenant.example.invalid/verify?token=${privateValue}#fragment`,
+    "https://%",
+    `https://tenant.example.invalid/verify?token=${"x".repeat(4_097)}`,
+    "https://tenant.example.invalid/account",
+    "https://tenant.example.invalid/verify?token=",
+  ];
+
+  for (const target of targets) {
+    const value = message({
+      payload: {
+        ...message().payload,
+        parts: [{ body: { data: encoded(target) } }],
+      },
+    });
+    const parsed = parseGmailMessage(value, expected);
+    assert.equal(parsed, null);
+    assert.doesNotMatch(
+      JSON.stringify(parsed),
+      /private-value-that-must-not-escape/u,
+    );
+  }
+});
+
+test("admits a token carried in an explicit verification path", () => {
+  const value = message({
+    payload: {
+      ...message().payload,
+      parts: [{
+        body: {
+          data: encoded(
+            "https://tenant.example.invalid/account/verify/private-path-token",
+          ),
+        },
+      }],
+    },
+  });
+
+  assert.equal(
+    new TextDecoder().decode(
+      parseGmailMessage(value, expected)?.verificationTarget,
+    ),
+    "https://tenant.example.invalid/account/verify/private-path-token",
+  );
+});
+
 test("an out-of-range timestamp is a stable malformed-response failure", () => {
   assert.throws(
     () => parseGmailMessage(
