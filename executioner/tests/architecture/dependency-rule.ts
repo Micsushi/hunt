@@ -16,7 +16,7 @@ type ModuleReference =
 
 const fixedOwners: ReadonlyArray<readonly [RegExp, string]> = [
   [/^src\/contracts(?:\/|$)/, "contracts"],
-  [/^src\/testing\/contracts(?:\/|$)/, "test-kit"],
+  [/^src\/testing\/(?:contracts|live)(?:\/|$)/, "test-kit"],
   [/^src\/composition(?:\/|$)/, "composition"],
   [/^tests(?:\/|$)/, "tests"],
 ];

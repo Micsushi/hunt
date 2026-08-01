@@ -135,6 +135,26 @@ test("the contract test kit may import itself", () => {
   assert.deepEqual(dependencyViolations(files), []);
 });
 
+test("the live contract test kit is test-only and may import itself", () => {
+  const files: SourceFile[] = [
+    {
+      path: "src/testing/live/fakes.ts",
+      source: [
+        'import type { SecretStore } from "../../contracts/live/index.ts";',
+        'export { liveFixtures } from "./fixtures.ts";',
+      ].join("\n"),
+    },
+    {
+      path: "src/browser/adapter.ts",
+      source: 'import { createSecretStoreFake } from "../testing/live/index.ts";',
+    },
+  ];
+
+  assert.deepEqual(dependencyViolations(files), [
+    "src/browser/adapter.ts imports test-only source src/testing/live/index.ts",
+  ]);
+});
+
 test("composition may not import test-only source", () => {
   const files: SourceFile[] = [
     {
