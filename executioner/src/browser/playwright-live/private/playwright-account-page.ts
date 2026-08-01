@@ -15,6 +15,9 @@ export type PlaywrightAccountPageTraceEvent =
   | "submit_click_timeout"
   | "submit_click_detached"
   | "submit_click_intercepted"
+  | "submit_click_unstable"
+  | "submit_click_not_visible"
+  | "submit_click_disabled"
   | "submit_click_closed"
   | "submit_click_ambiguous"
   | "submit_click_other"
@@ -158,13 +161,16 @@ export class PlaywrightAccountPageAdapter implements SemanticAccountPageAdapter 
 function classifyClickFailure(error: unknown): PlaywrightAccountPageTraceEvent {
   const name = error instanceof Error ? error.name : "";
   const message = error instanceof Error ? error.message.toLowerCase() : "";
-  if (name === "TimeoutError") return "submit_click_timeout";
   if (message.includes("detached")) return "submit_click_detached";
   if (message.includes("intercepts pointer events")) return "submit_click_intercepted";
+  if (message.includes("element is not stable")) return "submit_click_unstable";
+  if (message.includes("element is not visible")) return "submit_click_not_visible";
+  if (message.includes("element is not enabled")) return "submit_click_disabled";
   if (message.includes("page, context or browser has been closed")) {
     return "submit_click_closed";
   }
   if (message.includes("strict mode violation")) return "submit_click_ambiguous";
+  if (name === "TimeoutError") return "submit_click_timeout";
   return "submit_click_other";
 }
 

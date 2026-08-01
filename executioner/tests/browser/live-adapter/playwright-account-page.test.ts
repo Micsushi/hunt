@@ -372,6 +372,24 @@ test("submit click timeout is reduced to one fixed diagnostic identifier", async
   assert.equal(JSON.stringify(events).includes("private"), false);
 });
 
+test("specific click obstruction outranks the generic timeout category", async () => {
+  const events: string[] = [];
+  const timeout = new Error("another element intercepts pointer events");
+  timeout.name = "TimeoutError";
+
+  await assert.rejects(() => new PlaywrightAccountPageAdapter({
+    trace: (event) => events.push(event),
+  }).activate(new FakePage(new FakeLocator({
+    count: 1,
+    visible: true,
+    enabled: true,
+    editable: false,
+    clickError: timeout,
+  })), "submit_sign_in"));
+
+  assert.equal(events.at(-1), "submit_click_intercepted");
+});
+
 class FakePage {
   readonly calls: unknown[] = [];
   readonly resultLocator: FakeLocator;
