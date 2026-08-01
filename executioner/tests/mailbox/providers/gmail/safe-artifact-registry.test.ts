@@ -66,6 +66,26 @@ test("delegates only an admitted opaque artifact and rejects unknown or duplicat
   assert.equal(cleanupCalls, 1);
 
   assert.deepEqual(
+    await registry.port.inspect(
+      {
+        schemaVersion: 1,
+        journeyId: liveFixtures.journeyId,
+        handleId: liveFixtures.verificationArtifact.handleId,
+        expectedRecipientBindingId:
+          liveFixtures.verificationArtifact.recipientBindingId,
+        expectedTarget: liveFixtures.target,
+      },
+      signal(),
+    ),
+    {
+      ok: false,
+      error: { code: "verification_artifact_replayed", retryable: false },
+    },
+  );
+  assert.equal(inspectCalls, 1);
+  assert.equal(cleanupCalls, 1);
+
+  assert.deepEqual(
     await new GmailSafeArtifactRegistry().port.inspect(
       {
         schemaVersion: 1,

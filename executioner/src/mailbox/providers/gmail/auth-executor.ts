@@ -1,5 +1,5 @@
 import { s2StableErrorPolicy } from "../../../contracts/s2-common-wire.ts";
-import type { JourneyId } from "../../../contracts/index.ts";
+import type { JourneyId, OperationId } from "../../../contracts/index.ts";
 import type {
   ActiveGmailSecretHandle,
   GmailAuthErrorCode,
@@ -32,6 +32,7 @@ interface GmailBinding {
   readonly target: TargetIdentityV1;
   readonly notBefore: string;
   readonly notAfter: string;
+  readonly verificationOperationId: OperationId;
 }
 
 interface GmailSafeCandidate {
@@ -84,12 +85,22 @@ export interface GmailAuthorizationResolver {
   ): Promise<LivePortResult<MailboxPollResultV1, GmailAuthErrorCode>>;
 }
 
+export interface GmailApprovedPolicyCapability {
+  use(
+    operation: (policy: {
+      readonly host: Readonly<Uint8Array>;
+      readonly tenant: Readonly<Uint8Array>;
+    }) => Promise<MailboxPollResultV1>,
+  ): Promise<MailboxPollResultV1>;
+}
+
 export interface GmailApiAuthExecutorOptions {
   readonly binding: GmailBinding;
   readonly resolver: GmailAuthorizationResolver;
   readonly httpClient: GmailHttpClient;
   readonly rawVault: GmailRawArtifactVault;
   readonly artifactRegistry: SafeArtifactAdmission;
+  readonly approvedPolicy: GmailApprovedPolicyCapability;
   readonly createHandle: () => VerificationHandleId;
   readonly policyFactory: GmailPolicyFactory;
 }
@@ -110,85 +121,93 @@ export class GmailApiAuthExecutor implements PrivilegedGmailAuthExecutor {
         request.authorization,
         signal,
         async (authorization) => {
-          const authority = parseSealedBundle(
-            authorization,
-            this.#options.binding,
-          );
-          const messages = await this.#options.httpClient.query(
-            authority,
-            { notBefore: request.notBefore, notAfter: request.notAfter },
-            signal,
-          );
-          const candidates = messages.map((message) => {
-            const verificationHandle = this.#options.createHandle();
-            const expiresAt = new Date(
-              Date.parse(message.receivedAt) +
-                authority.verificationTtlSeconds * 1_000,
-            ).toISOString();
-            const candidate: GmailSafeCandidate = {
-              provider: "gmail_api_v1",
-              journeyId: request.journeyId,
-              recipientBindingId: request.recipientBindingId,
-              senderPolicyId: this.#options.binding.senderPolicyId,
-              target: request.target,
-              receivedAt: message.receivedAt,
-              expiresAt,
-              verificationHandle,
-              state: Date.parse(expiresAt) <= Date.parse(request.now)
-                ? "expired"
-                : "available",
-            };
-            return { candidate, target: message.verificationTarget };
-          });
-          const pending = this.#options.rawVault.stage(
-            candidates.map(({ candidate, target }) => ({
-              metadata: {
-                schemaVersion: 1,
-                handleId: candidate.verificationHandle,
-                journeyId: candidate.journeyId,
-                provider: candidate.provider,
-                recipientBindingId: candidate.recipientBindingId,
-                target: candidate.target,
-                issuedAt: candidate.receivedAt,
-                expiresAt: candidate.expiresAt,
-                state: "available",
-              },
-              target,
-            })),
-          );
-          try {
-            const source = oneShotSource(
-              candidates.map(({ candidate }) => candidate),
+          return this.#options.approvedPolicy.use(async (approvedPolicy) => {
+            const authority = parseSealedBundle(
+              authorization,
               this.#options.binding,
+              approvedPolicy,
             );
-            const policy = this.#options.policyFactory.create(source, request.now);
-            const safeResult = await policy.mailboxProvider.poll(request, signal);
-            if (!safeResult.ok) {
-              throw new GmailProviderFailure(
-                safeResult.error.code === "operation_cancelled"
-                  ? "operation_cancelled"
-                  : "mailbox_query_invalid",
+            const messages = await this.#options.httpClient.query(
+              authority,
+              { notBefore: request.notBefore, notAfter: request.notAfter },
+              signal,
+            );
+            const candidates = messages.map((message) => {
+              const verificationHandle = this.#options.createHandle();
+              const expiresAt = new Date(
+                Date.parse(message.receivedAt) +
+                  authority.verificationTtlSeconds * 1_000,
+              ).toISOString();
+              const candidate: GmailSafeCandidate = {
+                provider: "gmail_api_v1",
+                journeyId: request.journeyId,
+                recipientBindingId: request.recipientBindingId,
+                senderPolicyId: this.#options.binding.senderPolicyId,
+                target: request.target,
+                receivedAt: message.receivedAt,
+                expiresAt,
+                verificationHandle,
+                state: Date.parse(expiresAt) <= Date.parse(request.now)
+                  ? "expired"
+                  : "available",
+              };
+              return { candidate, target: message.verificationTarget };
+            });
+            const pending = this.#options.rawVault.stage(
+              candidates.map(({ candidate, target }) => ({
+                metadata: {
+                  schemaVersion: 1,
+                  handleId: candidate.verificationHandle,
+                  journeyId: candidate.journeyId,
+                  provider: candidate.provider,
+                  recipientBindingId: candidate.recipientBindingId,
+                  target: candidate.target,
+                  issuedAt: candidate.receivedAt,
+                  expiresAt: candidate.expiresAt,
+                  state: "available",
+                },
+                operationId: this.#options.binding.verificationOperationId,
+                target,
+                policy: {
+                  host: Uint8Array.from(approvedPolicy.host),
+                  tenant: Uint8Array.from(approvedPolicy.tenant),
+                },
+              })),
+            );
+            try {
+              const source = oneShotSource(
+                candidates.map(({ candidate }) => candidate),
+                this.#options.binding,
               );
+              const policy = this.#options.policyFactory.create(source, request.now);
+              const safeResult = await policy.mailboxProvider.poll(request, signal);
+              if (!safeResult.ok) {
+                throw new GmailProviderFailure(
+                  safeResult.error.code === "operation_cancelled"
+                    ? "operation_cancelled"
+                    : "mailbox_query_invalid",
+                );
+              }
+              const handleId = safeResult.value.verificationHandle;
+              if (handleId === null) return safeResult.value;
+              if (
+                !this.#options.artifactRegistry.register(
+                  handleId,
+                  policy.verificationArtifact,
+                  () => this.#options.rawVault.invalidate(handleId),
+                )
+              ) {
+                throw new GmailProviderFailure("mailbox_query_invalid");
+              }
+              if (!pending.commit(handleId)) {
+                this.#options.artifactRegistry.unregister(handleId);
+                throw new GmailProviderFailure("mailbox_query_invalid");
+              }
+              return safeResult.value;
+            } finally {
+              pending.discard();
             }
-            const handleId = safeResult.value.verificationHandle;
-            if (handleId === null) return safeResult.value;
-            if (
-              !this.#options.artifactRegistry.register(
-                handleId,
-                policy.verificationArtifact,
-                () => this.#options.rawVault.invalidate(handleId),
-              )
-            ) {
-              throw new GmailProviderFailure("mailbox_query_invalid");
-            }
-            if (!pending.commit(handleId)) {
-              this.#options.artifactRegistry.unregister(handleId);
-              throw new GmailProviderFailure("mailbox_query_invalid");
-            }
-            return safeResult.value;
-          } finally {
-            pending.discard();
-          }
+          });
         },
       );
     } catch (error) {
@@ -240,6 +259,10 @@ interface SealedGmailBundle {
 function parseSealedBundle(
   bytes: Readonly<Uint8Array>,
   binding: GmailBinding,
+  approvedPolicy: {
+    readonly host: Readonly<Uint8Array>;
+    readonly tenant: Readonly<Uint8Array>;
+  },
 ): SealedGmailBundle {
   let value: unknown;
   try {
@@ -261,6 +284,7 @@ function parseSealedBundle(
     "senderPolicyId",
     "target",
     "verificationHost",
+    "verificationTenant",
     "verificationTtlSeconds",
   ];
   if (
@@ -276,6 +300,8 @@ function parseSealedBundle(
     !email(value.senderAddress) ||
     typeof value.verificationHost !== "string" ||
     !host(value.verificationHost) ||
+    typeof value.verificationTenant !== "string" ||
+    !tenant(value.verificationTenant) ||
     !Number.isSafeInteger(value.verificationTtlSeconds) ||
     Number(value.verificationTtlSeconds) < 60 ||
     Number(value.verificationTtlSeconds) > 3_600
@@ -287,6 +313,23 @@ function parseSealedBundle(
     value.recipientBindingId !== binding.recipientBindingId ||
     value.senderPolicyId !== binding.senderPolicyId ||
     !sameTarget(value.target, binding.target)
+  ) {
+    throw new GmailProviderFailure("mailbox_query_invalid");
+  }
+  let approvedHost: string;
+  let approvedTenant: string;
+  try {
+    const decoder = new TextDecoder("utf-8", { fatal: true });
+    approvedHost = decoder.decode(approvedPolicy.host);
+    approvedTenant = decoder.decode(approvedPolicy.tenant);
+  } catch {
+    throw new GmailProviderFailure("mailbox_query_invalid");
+  }
+  if (
+    !host(approvedHost) ||
+    !tenant(approvedTenant) ||
+    value.verificationHost !== approvedHost ||
+    value.verificationTenant !== approvedTenant
   ) {
     throw new GmailProviderFailure("mailbox_query_invalid");
   }
@@ -362,6 +405,13 @@ function host(value: string): boolean {
   return value === value.toLowerCase() &&
     value.length <= 253 &&
     /^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/u.test(value);
+}
+
+function tenant(value: string): boolean {
+  return value === value.toLowerCase() &&
+    value.length >= 1 &&
+    value.length <= 253 &&
+    /^[a-z0-9](?:[a-z0-9.-]{0,251}[a-z0-9])?$/u.test(value);
 }
 
 function cancelled() {

@@ -1,5 +1,7 @@
 import type {
+  AvailableVerificationArtifact,
   VerificationArtifact,
+  VerificationArtifactInspectRequest,
   VerificationHandleId,
 } from "../../../contracts/live/index.ts";
 
@@ -24,17 +26,29 @@ export class GmailSafeArtifactRegistry {
       if (signal.aborted) return Promise.resolve(cancelled);
       const delegate = this.#delegates.get(request.handleId);
       if (delegate === undefined) return replayed;
-      const result = await delegate.port.inspect(request, signal);
-      if (!result.ok || result.value.state !== "available") delegate.cleanup();
-      return result;
+      try {
+        const result = await delegate.port.inspect(request, signal);
+        if (!result.ok || result.value.state !== "available") {
+          this.#delegates.delete(request.handleId);
+          delegate.cleanup();
+        }
+        return result;
+      } catch (error) {
+        this.#delegates.delete(request.handleId);
+        delegate.cleanup();
+        throw error;
+      }
     },
     invalidate: async (request, signal) => {
       if (signal.aborted) return Promise.resolve(cancelled);
       const delegate = this.#delegates.get(request.handleId);
       if (delegate === undefined) return replayed;
-      const result = await delegate.port.invalidate(request, signal);
-      delegate.cleanup();
-      return result;
+      try {
+        return await delegate.port.invalidate(request, signal);
+      } finally {
+        this.#delegates.delete(request.handleId);
+        delegate.cleanup();
+      }
     },
   };
 
@@ -50,5 +64,37 @@ export class GmailSafeArtifactRegistry {
 
   unregister(handleId: VerificationHandleId): void {
     this.#delegates.delete(handleId);
+  }
+
+  discard(handleId: VerificationHandleId): void {
+    const delegate = this.#delegates.get(handleId);
+    if (delegate === undefined) return;
+    this.#delegates.delete(handleId);
+    delegate.cleanup();
+  }
+
+  async takeForAtomicConsume(
+    request: VerificationArtifactInspectRequest,
+    signal: AbortSignal,
+  ): Promise<AvailableVerificationArtifact | null> {
+    const delegate = this.#delegates.get(request.handleId);
+    if (delegate === undefined) return null;
+    if (signal.aborted) {
+      this.discard(request.handleId);
+      return null;
+    }
+    try {
+      const result = await delegate.port.inspect(request, signal);
+      this.#delegates.delete(request.handleId);
+      if (!result.ok || result.value.state !== "available") {
+        delegate.cleanup();
+        return null;
+      }
+      return { ...result.value, state: "available" };
+    } catch {
+      this.#delegates.delete(request.handleId);
+      delegate.cleanup();
+      return null;
+    }
   }
 }

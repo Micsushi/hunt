@@ -27,6 +27,7 @@ const senderPolicyId =
 const recipientAddress = "applicant@example.invalid";
 const senderAddress = "workday@example.invalid";
 const verificationHost = "tenant.example.invalid";
+const verificationTenant = "example-tenant";
 const verificationTarget =
   `https://${verificationHost}/verify?token=synthetic-private-value`;
 const accessValue = "synthetic-private-auth-value";
@@ -43,6 +44,7 @@ function sealedBundle(overrides: Record<string, unknown> = {}): Uint8Array {
     senderAddress,
     target: liveFixtures.target,
     verificationHost,
+    verificationTenant,
     verificationTtlSeconds: 900,
     ...overrides,
   }));
@@ -105,7 +107,9 @@ async function withFakeGmail(
 
 function buildExecutor(baseUrl: string, bundle = sealedBundle()) {
   let resolverCalls = 0;
+  let policyCalls = 0;
   let callbackView: Readonly<Uint8Array> | undefined;
+  let policyViews: readonly Readonly<Uint8Array>[] = [];
   const resolver: GmailAuthorizationResolver = {
     async useGmailAuthorization(_handle, signal, operation) {
       if (signal.aborted) {
@@ -132,6 +136,7 @@ function buildExecutor(baseUrl: string, bundle = sealedBundle()) {
     target: liveFixtures.target,
     notBefore: liveFixtures.mailboxPollRequest.notBefore,
     notAfter: liveFixtures.mailboxPollRequest.notAfter,
+    verificationOperationId: liveFixtures.operationIds.verificationNavigation,
   };
   const executor = new GmailApiAuthExecutor({
     binding,
@@ -139,6 +144,20 @@ function buildExecutor(baseUrl: string, bundle = sealedBundle()) {
     httpClient: new GmailHttpClient({ baseUrl, allowLoopbackHttp: true }),
     rawVault,
     artifactRegistry: artifacts,
+    approvedPolicy: {
+      async use(operation) {
+        policyCalls += 1;
+        const host = new TextEncoder().encode(verificationHost);
+        const tenant = new TextEncoder().encode(verificationTenant);
+        policyViews = [host, tenant];
+        try {
+          return await operation({ host, tenant });
+        } finally {
+          host.fill(0);
+          tenant.fill(0);
+        }
+      },
+    },
     createHandle: () => liveFixtures.verificationArtifact.handleId,
     policyFactory: {
       create(candidateSource, admittedNow) {
@@ -156,6 +175,8 @@ function buildExecutor(baseUrl: string, bundle = sealedBundle()) {
     artifacts,
     rawVault,
     resolverCalls: () => resolverCalls,
+    policyCalls: () => policyCalls,
+    policyViews: () => policyViews,
     callbackView: () => callbackView,
   };
 }
@@ -183,9 +204,17 @@ test("one readonly DPAPI callback returns only safe metadata and commits one adm
       } satisfies MailboxPollResultV1,
     });
     assert.equal(harness.resolverCalls(), 1);
+    assert.equal(harness.policyCalls(), 1);
     assert.equal(httpCalls(), 2);
     assert.equal(harness.rawVault.committedCount, 1);
     assert.deepEqual([...(harness.callbackView() ?? [])], new Array(sealedBundle().length).fill(0));
+    assert.deepEqual(
+      harness.policyViews().map((value) => [...value]),
+      [
+        new Array(verificationHost.length).fill(0),
+        new Array(verificationTenant.length).fill(0),
+      ],
+    );
     assert.doesNotMatch(JSON.stringify(result), /synthetic-private/u);
 
     const inspected = await harness.artifacts.port.inspect(
@@ -322,6 +351,8 @@ test("wrong scope or sealed binding fails before HTTP and emits no raw handle", 
       [sealedBundle({ recipientBindingId: "recipient_fedcba9876543210" }), "mailbox_query_invalid"],
       [sealedBundle({ senderPolicyId: "sender_policy_fedcba9876543210" }), "mailbox_query_invalid"],
       [sealedBundle({ target: liveFixtures.otherTarget }), "mailbox_query_invalid"],
+      [sealedBundle({ verificationHost: "other.example.invalid" }), "mailbox_query_invalid"],
+      [sealedBundle({ verificationTenant: "other-tenant" }), "mailbox_query_invalid"],
     ] as const;
     for (const [bundle, code] of cases) {
       const harness = buildExecutor(baseUrl, bundle);
@@ -337,6 +368,7 @@ test("wrong scope or sealed binding fails before HTTP and emits no raw handle", 
         { ok: false, error: { code, retryable: false } },
       );
       assert.equal(harness.resolverCalls(), 1);
+      assert.equal(harness.policyCalls(), 1);
       assert.equal(harness.rawVault.committedCount, 0);
     }
     assert.equal(httpCalls(), 0);
@@ -366,6 +398,7 @@ test("rejects every secret and bounded-query mismatch before resolving bytes", a
       { ok: false, error: { code, retryable: false } },
     );
     assert.equal(harness.resolverCalls(), 0);
+    assert.equal(harness.policyCalls(), 0);
   }
 
   const queryCases = [
@@ -392,6 +425,7 @@ test("rejects every secret and bounded-query mismatch before resolving bytes", a
       },
     );
     assert.equal(harness.resolverCalls(), 0);
+    assert.equal(harness.policyCalls(), 0);
   }
 });
 

@@ -1,14 +1,18 @@
-import { useEphemeralBytes } from "../../../../contracts/live/private/privileged-capabilities.ts";
 import type {
   AvailableVerificationArtifact,
   TargetIdentityV1,
   VerificationHandleId,
-  VerificationNavigationResult,
 } from "../../../../contracts/live/index.ts";
+import type { OperationId } from "../../../../contracts/index.ts";
 
 export interface PendingRawArtifact {
   readonly metadata: AvailableVerificationArtifact;
+  readonly operationId: OperationId;
   readonly target: Uint8Array;
+  readonly policy: {
+    readonly host: Uint8Array;
+    readonly tenant: Uint8Array;
+  };
 }
 
 interface CommittedRawArtifact extends PendingRawArtifact {}
@@ -28,20 +32,19 @@ export class GmailRawArtifactVault {
     const entry = this.#targets.get(handleId);
     if (entry === undefined) return;
     this.#targets.delete(handleId);
-    entry.target.fill(0);
+    clear(entry);
   }
 
-  async useForNavigator<Result extends VerificationNavigationResult>(
+  takeForAtomicConsume(
+    operationId: OperationId,
     admission: AvailableVerificationArtifact,
     now: string,
-    signal: AbortSignal,
-    operation: (target: Readonly<Uint8Array>) => Promise<Result>,
-  ): Promise<Result | null> {
+  ): readonly Uint8Array[] | null {
     const entry = this.#targets.get(admission.handleId);
     if (entry === undefined) return null;
     if (
-      signal.aborted ||
       !validInstant(now) ||
+      entry.operationId !== operationId ||
       admission.state !== "available" ||
       Date.parse(admission.expiresAt) <= Date.parse(now) ||
       !sameMetadata(entry.metadata, admission)
@@ -50,7 +53,7 @@ export class GmailRawArtifactVault {
       return null;
     }
     this.#targets.delete(admission.handleId);
-    return useEphemeralBytes(entry.target, operation);
+    return [entry.target, entry.policy.host, entry.policy.tenant];
   }
 }
 
@@ -86,8 +89,14 @@ export class PendingRawArtifactBatch {
     const entries = this.#entries;
     this.#entries = null;
     if (entries === null) return;
-    for (const entry of entries) entry.target.fill(0);
+    for (const entry of entries) clear(entry);
   }
+}
+
+function clear(entry: PendingRawArtifact): void {
+  entry.target.fill(0);
+  entry.policy.host.fill(0);
+  entry.policy.tenant.fill(0);
 }
 
 function sameMetadata(

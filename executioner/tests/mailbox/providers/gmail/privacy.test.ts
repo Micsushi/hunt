@@ -25,13 +25,14 @@ test("the safe provider surface cannot name or export privileged Gmail values", 
 });
 
 test("the privileged implementation has no persistence, logging, environment, or retry surface", async () => {
-  const [executor, client, parser, vault] = await Promise.all([
+  const [executor, client, parser, vault, consumer] = await Promise.all([
     source("auth-executor.ts"),
     source("http-client.ts"),
     source("http-parser.ts"),
     source("private/raw-artifact-vault.ts"),
+    source("private/atomic-artifact-consumer.ts"),
   ]);
-  for (const value of [executor, client, parser, vault]) {
+  for (const value of [executor, client, parser, vault, consumer]) {
     assert.doesNotMatch(
       value,
       /(?:console\.|process\.|node:fs|node:path|writeFile|appendFile|createWriteStream|setInterval|scheduleRetry|backoff|localStorage)/u,
