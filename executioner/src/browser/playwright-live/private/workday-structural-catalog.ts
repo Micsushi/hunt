@@ -19,6 +19,9 @@ interface UnavailableRule {
 }
 
 const pageRules = Object.freeze([
+  rule("structural_trait_navigation_apply_choice_v1", '[data-automation-id="applyManually"]'),
+  rule("structural_trait_navigation_apply_choice_v1", '[data-automation-id="applyManuallyButton"]'),
+  rule("structural_trait_navigation_apply_choice_v1", 'a[href$="/apply/applyManually"]'),
   rule("structural_trait_page_account_entry_v1", '[data-automation-id="createAccountPage"]'),
   rule("structural_trait_page_account_entry_v1", '[data-automation-id="signInPage"]'),
   rule("structural_trait_page_account_entry_v1", '[data-automation-id="authPage"]'),

@@ -3,6 +3,7 @@ import type {
   TargetIdentityV1,
 } from "../../../contracts/live/index.ts";
 import type { SemanticAccountPageAdapter } from "./account-page-types.ts";
+import type { SemanticPostingNavigationAdapter } from "./account-navigation-types.ts";
 
 export interface PersistentBrowserRuntimeValues {
   readonly targetUrl: string;
@@ -105,6 +106,7 @@ export interface PlaywrightPersistentBrowserSessionOptions {
   readonly probe: OwnedTargetProbe;
   readonly profiles: ProfileStore;
   readonly accountPage?: SemanticAccountPageAdapter;
+  readonly postingNavigation?: SemanticPostingNavigationAdapter;
   readonly ids: () => LiveSessionId;
   readonly timeoutMs: number;
 }

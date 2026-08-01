@@ -14,10 +14,17 @@ import type {
   OwnedAccountPageAccess,
   OwnedAccountPageAccessRequest,
 } from "./private/account-page-types.ts";
+import type {
+  AccountEntryAdvancePortResult,
+  AccountEntryAdvanceRequest,
+  AccountEntryAdvanceResult,
+  PostingNavigationAction,
+} from "./private/account-navigation-types.ts";
 import { OwnedAccountPageCoordinator } from "./private/owned-account-page-coordinator.ts";
 import { bounded, cancelled, failure } from "./private/port-results.ts";
 import { isExactMarker, sessionFromMarker } from "./private/profile-marker.ts";
 import { bindApprovedTarget, sameSession, sameTarget } from "./private/target-binding.ts";
+import { classifyWorkdayAccountNavigation } from "./private/workday-account-navigation.ts";
 import type {
   PersistentContext,
   PersistentPage,
@@ -50,6 +57,10 @@ export class PlaywrightPersistentBrowserSession
   readonly #reconcileOperations = new Map<
     string,
     { readonly fingerprint: string; readonly result: Promise<ReconcilePortResult> }
+  >();
+  readonly #accountAdvanceOperations = new Map<
+    string,
+    { readonly fingerprint: string; readonly result: Promise<AccountEntryAdvancePortResult> }
   >();
 
   constructor(options: PlaywrightPersistentBrowserSessionOptions) {
@@ -396,6 +407,143 @@ export class PlaywrightPersistentBrowserSession
     return this.#accountAccess.withAccess(request, signal, use);
   }
 
+  async advanceToAccountEntry(
+    request: AccountEntryAdvanceRequest,
+    signal: AbortSignal,
+  ): Promise<AccountEntryAdvancePortResult> {
+    const fingerprint = JSON.stringify(request);
+    const previous = this.#accountAdvanceOperations.get(request.operationId);
+    if (previous !== undefined) {
+      return previous.fingerprint === fingerprint
+        ? previous.result
+        : failure("browser_operation_replayed");
+    }
+    const result = this.#advanceToAccountEntryOnce(request, signal);
+    this.#accountAdvanceOperations.set(request.operationId, { fingerprint, result });
+    return result;
+  }
+
+  async #advanceToAccountEntryOnce(
+    request: AccountEntryAdvanceRequest,
+    signal: AbortSignal,
+  ): Promise<AccountEntryAdvancePortResult> {
+    if (signal.aborted) return cancelled();
+    if (!this.#validAdvanceRequest(request)) return failure("browser_target_invalid");
+    let transitionCount = 0;
+    while (transitionCount < 2) {
+      const inspected = await inspectPinnedTarget(
+        this.#page!,
+        this.#options.probe,
+        this.#approvedTarget!,
+        request.target,
+        signal,
+        this.#options.timeoutMs,
+      );
+      if (!inspected.ok) return inspected;
+      if (inspected.value.target.kind !== "matched") {
+        return this.#stopAfterTargetFact(inspected.value.target);
+      }
+      const state = classifyWorkdayAccountNavigation(inspected.value.snapshot);
+      if (state.kind === "account_boundary") {
+        return { ok: true, value: { kind: "account_boundary" } };
+      }
+      if (state.kind === "ambiguous") {
+        return failure("browser_target_ambiguous");
+      }
+      if (state.kind === "invalid") return failure("browser_target_invalid");
+      if (state.kind === "job_posting" && transitionCount !== 0) {
+        return failure("browser_target_invalid");
+      }
+      const action: PostingNavigationAction = state.kind === "job_posting"
+        ? "start_application"
+        : "apply_manually";
+      const control = await bounded(
+        this.#options.postingNavigation!.inspect(this.#page!, action),
+        signal,
+        this.#options.timeoutMs,
+      );
+      if (control.kind === "cancelled") return cancelled();
+      if (control.kind === "timeout") return failure("browser_timeout");
+      if (control.kind === "error") return failure("browser_target_invalid");
+      if (control.value.cardinality > 1) {
+        return failure("browser_target_ambiguous");
+      }
+      if (control.value.cardinality !== 1 || !control.value.actionable) {
+        return failure("browser_target_invalid");
+      }
+      const activated = await bounded(
+        this.#options.postingNavigation!.activate(this.#page!, action),
+        signal,
+        this.#options.timeoutMs,
+      );
+      transitionCount += 1;
+      if (activated.kind !== "value") return this.#uncertainAdvanceFailure();
+      const reconciled = await reconcileOwnedPages(
+        this.#context!,
+        this.#options.probe,
+        this.#approvedTarget!,
+        request.target,
+        signal,
+        this.#options.timeoutMs,
+      );
+      if (!reconciled.ok) return this.#uncertainAdvanceFailure();
+      if (reconciled.value.kind !== "matched") {
+        return this.#stopAfterTargetFact(reconciled.value);
+      }
+      this.#page = reconciled.value.page;
+    }
+    const final = await inspectPinnedTarget(
+      this.#page!,
+      this.#options.probe,
+      this.#approvedTarget!,
+      request.target,
+      signal,
+      this.#options.timeoutMs,
+    );
+    if (!final.ok) return final;
+    if (final.value.target.kind !== "matched") {
+      return this.#stopAfterTargetFact(final.value.target);
+    }
+    return classifyWorkdayAccountNavigation(final.value.snapshot).kind === "account_boundary"
+      ? { ok: true, value: { kind: "account_boundary" } }
+      : failure("browser_target_invalid");
+  }
+
+  #validAdvanceRequest(request: AccountEntryAdvanceRequest): boolean {
+    return request.schemaVersion === 1 &&
+      this.#options.postingNavigation !== undefined &&
+      this.#context !== undefined &&
+      this.#page !== undefined &&
+      !this.#page.isClosed() &&
+      this.#session !== undefined &&
+      this.#approvedTarget !== undefined &&
+      this.#marker !== undefined &&
+      request.journeyId === this.#session.journeyId &&
+      request.sessionId === this.#session.sessionId &&
+      sameTarget(request.target, this.#session.target) &&
+      Number.isFinite(Date.parse(request.now)) &&
+      Date.parse(request.now) >= Date.parse(this.#marker.admittedAt) &&
+      Date.parse(request.now) < Date.parse(this.#session.leaseExpiresAt);
+  }
+
+  async #stopAfterTargetFact(
+    fact: Exclude<AccountEntryAdvanceResult, { readonly kind: "account_boundary" }>,
+  ): Promise<AccountEntryAdvancePortResult> {
+    const cleaned = this.#profilePath !== undefined &&
+      await this.#cleanupFailedOpen(this.#profilePath, this.#marker);
+    return cleaned
+      ? { ok: true, value: copyAdvanceFact(fact) }
+      : failure("browser_profile_cleanup_failed");
+  }
+
+  async #uncertainAdvanceFailure(): Promise<AccountEntryAdvancePortResult> {
+    const cleaned = this.#profilePath !== undefined &&
+      await this.#cleanupFailedOpen(this.#profilePath, this.#marker);
+    return cleaned
+      ? failure("browser_effect_uncertain")
+      : failure("browser_profile_cleanup_failed");
+  }
+
   async #invalidateAccountSession(): Promise<void> {
     if (this.#profilePath === undefined) return;
     await this.#cleanupFailedOpen(this.#profilePath, this.#marker);
@@ -494,3 +642,15 @@ type ReconcilePortResult = LivePortResult<
   PersistentBrowserReconcileResult,
   PersistentBrowserErrorCode
 >;
+
+function copyAdvanceFact(
+  fact: Exclude<AccountEntryAdvanceResult, { readonly kind: "account_boundary" }>,
+): Exclude<AccountEntryAdvanceResult, { readonly kind: "account_boundary" }> {
+  if (fact.kind === "target_mismatch") {
+    return Object.freeze({ kind: fact.kind, dimension: fact.dimension });
+  }
+  if (fact.kind === "posting_unavailable") {
+    return Object.freeze({ kind: fact.kind, reason: fact.reason });
+  }
+  return Object.freeze({ kind: "target_ambiguous" });
+}
