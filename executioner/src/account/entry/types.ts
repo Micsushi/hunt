@@ -23,6 +23,7 @@ export type AccountEntryTraceEvent =
   | "initial_existing_account"
   | "initial_create_account"
   | "owned_access_started"
+  | "account_mode_switched_to_sign_in"
   | "fields_admitted"
   | "credentials_resolved"
   | "email_verified"

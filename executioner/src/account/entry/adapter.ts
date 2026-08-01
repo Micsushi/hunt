@@ -109,6 +109,9 @@ async function mutateOnce(
         if (state.state.kind !== expected) {
           throw new Error("account switch reached an unexpected state");
         }
+        if (request.mode === "sign_in") {
+          emit(dependencies, "account_mode_switched_to_sign_in");
+        }
       }
 
       const fields = request.mode === "sign_in"
