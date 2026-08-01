@@ -366,6 +366,55 @@ test("a create-account rejection waits for confirmation with the semantic form",
   assert.equal(submit.clickCalls, 1);
 });
 
+test("rejection readiness fails closed when a required field stays hidden", async () => {
+  const events: string[] = [];
+  const submit = new FakeLocator({
+    count: 1,
+    visible: true,
+    enabled: true,
+    editable: false,
+  });
+  const absentDestination = new FakeLocator({
+    count: 0,
+    visible: false,
+    enabled: false,
+    editable: false,
+    attachedWaitFails: true,
+  });
+  const email = new FakeLocator({
+    count: 1,
+    visible: false,
+    enabled: true,
+    editable: true,
+    visibleWaitFails: true,
+  });
+  const password = new FakeLocator({ count: 1, visible: true, enabled: true, editable: true });
+
+  await assert.rejects(() => new PlaywrightAccountPageAdapter({
+    trace: (event) => events.push(event),
+  }).activate(new FakePage(submit, absentDestination, new Map([
+    ['[data-automation-id="email"]', email],
+    ['[data-automation-id="password"]', password],
+  ])), "submit_sign_in"));
+
+  assert.deepEqual(submit.waitForArguments, [
+    { state: "hidden", timeout: 10_000 },
+    { state: "attached", timeout: 10_000 },
+    { state: "visible", timeout: 10_000 },
+  ]);
+  assert.deepEqual(email.waitForArguments, [{ state: "visible", timeout: 10_000 }]);
+  assert.deepEqual(password.waitForArguments, [{ state: "visible", timeout: 10_000 }]);
+  assert.deepEqual(events, [
+    "submit_hit_target_clear",
+    "submit_click_started",
+    "submit_click_succeeded",
+    "submit_stabilization_failed",
+  ]);
+  assert.equal(email.clickCalls, 0);
+  assert.deepEqual(email.fillArguments, []);
+  assert.equal(email.evaluateCalls, 0);
+});
+
 test("submit stabilization excludes the stale current account container", async () => {
   for (const [action, staleMarker] of [
     ["submit_sign_in", "signInPage"],
@@ -563,6 +612,7 @@ class FakeLocator {
     inputValue?: string;
     hiddenWaitFails?: boolean;
     attachedWaitFails?: boolean;
+    visibleWaitFails?: boolean;
     clickFails?: boolean;
     clickError?: Error;
     hitTarget?: string;
@@ -582,6 +632,7 @@ class FakeLocator {
     inputValue?: string;
     hiddenWaitFails?: boolean;
     attachedWaitFails?: boolean;
+    visibleWaitFails?: boolean;
     clickFails?: boolean;
     clickError?: Error;
     hitTarget?: string;
@@ -628,6 +679,10 @@ class FakeLocator {
       this.values.attachedWaitFails &&
       (options as { readonly state?: string }).state === "attached"
     ) throw new Error("state remained detached");
+    if (
+      this.values.visibleWaitFails &&
+      (options as { readonly state?: string }).state === "visible"
+    ) throw new Error("state remained hidden");
   }
   first(): FakeLocator { return this; }
   async check(): Promise<void> { this.checkCalls += 1; }
