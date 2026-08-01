@@ -10,6 +10,11 @@ import type {
   PersistentBrowserSession,
 } from "../../contracts/live/index.ts";
 import { inspectPinnedTarget, reconcileOwnedPages } from "./private/owned-page-inspection.ts";
+import type {
+  OwnedAccountPageAccess,
+  OwnedAccountPageAccessRequest,
+} from "./private/account-page-types.ts";
+import { OwnedAccountPageCoordinator } from "./private/owned-account-page-coordinator.ts";
 import { bounded, cancelled, failure } from "./private/port-results.ts";
 import { isExactMarker, sessionFromMarker } from "./private/profile-marker.ts";
 import { bindApprovedTarget, sameSession, sameTarget } from "./private/target-binding.ts";
@@ -33,6 +38,7 @@ export class PlaywrightPersistentBrowserSession
   #marker: ProfileMarkerV1 | undefined;
   #profilePath: string | undefined;
   #closedSessionId: LiveBrowserSessionV1["sessionId"] | undefined;
+  readonly #accountAccess: OwnedAccountPageCoordinator;
   readonly #openOperations = new Map<
     string,
     { readonly fingerprint: string; readonly result: Promise<OpenPortResult> }
@@ -48,6 +54,18 @@ export class PlaywrightPersistentBrowserSession
 
   constructor(options: PlaywrightPersistentBrowserSessionOptions) {
     this.#options = options;
+    this.#accountAccess = new OwnedAccountPageCoordinator({
+      adapter: options.accountPage,
+      probe: options.probe,
+      timeoutMs: options.timeoutMs,
+      state: () => ({
+        page: this.#page,
+        session: this.#session,
+        approvedTarget: this.#approvedTarget,
+        marker: this.#marker,
+      }),
+      invalidate: () => this.#invalidateAccountSession(),
+    });
   }
 
   async open(
@@ -354,6 +372,19 @@ export class PlaywrightPersistentBrowserSession
     const result = this.#closeOnce(request, signal);
     this.#closeOperations.set(request.operationId, { fingerprint, result });
     return result;
+  }
+
+  async withOwnedAccountPageAccess(
+    request: OwnedAccountPageAccessRequest,
+    signal: AbortSignal,
+    use: (access: OwnedAccountPageAccess) => Promise<void>,
+  ): Promise<LivePortResult<void, PersistentBrowserErrorCode>> {
+    return this.#accountAccess.withAccess(request, signal, use);
+  }
+
+  async #invalidateAccountSession(): Promise<void> {
+    if (this.#profilePath === undefined) return;
+    await this.#cleanupFailedOpen(this.#profilePath, this.#marker);
   }
 
   async #closeOnce(

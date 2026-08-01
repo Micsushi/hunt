@@ -42,6 +42,39 @@ test("owned inspection remains a class capability with value-free fields", async
   assert.equal(publicFacade.includes("ValueFreeOwnedPageSnapshot"), false);
 });
 
+test("account-page access remains private, semantic, and value-free", async () => {
+  const capability = await source("private/account-page-types.ts");
+  const scope = await source("private/owned-account-page-access.ts");
+  const factory = await source("factory.ts");
+  const publicFacade = await source("index.ts");
+  for (const semanticName of [
+    "email",
+    "password",
+    "password_confirmation",
+    "show_sign_in",
+    "show_create_account",
+    "submit_sign_in",
+    "submit_create_account",
+  ]) assert.equal(capability.includes(semanticName), true, semanticName);
+  for (const forbidden of [
+    "readonly page",
+    "readonly locator",
+    "readonly url",
+    "readonly dom",
+    "readonly selector",
+    "readonly text",
+    "readonly plaintext",
+  ]) {
+    assert.equal(capability.toLowerCase().includes(forbidden), false, forbidden);
+  }
+  assert.equal(scope.includes("bytes.slice()"), true);
+  assert.equal(scope.includes("transient.fill(0)"), true);
+  assert.equal(publicFacade.includes("OwnedAccountPageAccess"), false);
+  assert.equal(publicFacade.includes("AccountFieldName"), false);
+  assert.equal(publicFacade.includes("SemanticAccountPageAdapter"), false);
+  assert.equal(factory.includes("new PlaywrightAccountPageAdapter()"), true);
+});
+
 async function source(relativePath: string): Promise<string> {
   return readFile(
     new URL(`../../src/browser/playwright-live/${relativePath}`, import.meta.url),

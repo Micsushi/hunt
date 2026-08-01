@@ -2,6 +2,7 @@ import type {
   LiveSessionId,
   TargetIdentityV1,
 } from "../../../contracts/live/index.ts";
+import type { SemanticAccountPageAdapter } from "./account-page-types.ts";
 
 export interface PersistentBrowserRuntimeValues {
   readonly targetUrl: string;
@@ -103,6 +104,7 @@ export interface PlaywrightPersistentBrowserSessionOptions {
   readonly launcher: PersistentContextLauncher;
   readonly probe: OwnedTargetProbe;
   readonly profiles: ProfileStore;
+  readonly accountPage?: SemanticAccountPageAdapter;
   readonly ids: () => LiveSessionId;
   readonly timeoutMs: number;
 }

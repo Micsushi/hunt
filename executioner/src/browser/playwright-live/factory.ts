@@ -3,6 +3,7 @@ import { randomBytes } from "node:crypto";
 import type { LiveSessionId } from "../../contracts/live/index.ts";
 import { FileProfileStore } from "./private/file-profile-store.ts";
 import { PlaywrightPersistentContextLauncher } from "./private/playwright-launcher.ts";
+import { PlaywrightAccountPageAdapter } from "./private/playwright-account-page.ts";
 import type {
   OwnedTargetProbe,
   PersistentBrowserRuntimeBinding,
@@ -23,6 +24,7 @@ export function createPlaywrightPersistentBrowserSession(
     launcher: new PlaywrightPersistentContextLauncher(),
     probe: options.probe,
     profiles: new FileProfileStore(),
+    accountPage: new PlaywrightAccountPageAdapter(),
     ids: nextSessionId,
     timeoutMs: options.timeoutMs ?? 30_000,
   });
