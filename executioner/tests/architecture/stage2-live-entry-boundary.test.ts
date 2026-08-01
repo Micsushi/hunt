@@ -28,6 +28,7 @@ test("F1-T3 remains F5 read-only classification without widening live ports", as
     "rawHtml",
     "href",
     "selector",
+    "credential",
     "password",
   ]) {
     assert.equal(production.includes(forbidden), false, forbidden);

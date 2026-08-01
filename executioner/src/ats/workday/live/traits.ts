@@ -24,7 +24,6 @@ export const LIVE_ENTRY_TRAITS = Object.freeze({
   account: Object.freeze({
     signIn: "structural_trait_account_sign_in_v1" as StructuralTraitId,
     create: "structural_trait_account_create_v1" as StructuralTraitId,
-    visibleError: "structural_trait_account_visible_error_v1" as StructuralTraitId,
   }),
   challenge: Object.freeze({
     captcha: "structural_trait_challenge_captcha_v1" as StructuralTraitId,

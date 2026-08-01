@@ -7,17 +7,11 @@ import {
   type WorkdayStructuralPage,
 } from "../../../src/browser/playwright-live/private/workday-structural-catalog.ts";
 
-const visibleAccountErrorSelector = ':is([role="alert"], [data-automation-id="errorMessage"], [data-automation-id="inputAlert"]):visible';
-
-test("visible account errors add one value-free fixed structural trait", async () => {
-  const inspectedSelectors: string[] = [];
+test("a generic visible alert does not overclaim the semantic account state", async () => {
   const page: WorkdayStructuralPage = {
-    locator: (selector) => {
-      inspectedSelectors.push(selector);
-      return {
-        count: async () => selector === visibleAccountErrorSelector ? 1 : 0,
-      };
-    },
+    locator: (selector) => ({
+      count: async () => selector.includes('[role="alert"]') ? 1 : 0,
+    }),
   };
 
   const result = await inspectWorkdayStructure(page, false, signInInspector());
@@ -27,13 +21,7 @@ test("visible account errors add one value-free fixed structural trait", async (
     "structural_trait_ats_workday_family_v1",
     "structural_trait_page_account_entry_v1",
     "structural_trait_account_sign_in_v1",
-    "structural_trait_account_visible_error_v1",
   ]);
-  assert.equal(inspectedSelectors.includes(visibleAccountErrorSelector), true);
-  assert.doesNotMatch(
-    visibleAccountErrorSelector,
-    /wrong|locked|password|email address|https?:|href|text\s*=/iu,
-  );
 });
 
 test("normal noCaptcha ownership alone never creates a CAPTCHA trait", async () => {
