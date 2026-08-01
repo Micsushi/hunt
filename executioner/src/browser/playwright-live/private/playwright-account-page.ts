@@ -12,6 +12,12 @@ export type PlaywrightAccountPageTraceEvent =
   | "submit_click_started"
   | "submit_click_succeeded"
   | "submit_click_failed"
+  | "submit_click_timeout"
+  | "submit_click_detached"
+  | "submit_click_intercepted"
+  | "submit_click_closed"
+  | "submit_click_ambiguous"
+  | "submit_click_other"
   | "submit_control_remained_visible"
   | "submit_destination_observed"
   | "submit_rejection_reappeared"
@@ -103,7 +109,10 @@ export class PlaywrightAccountPageAdapter implements SemanticAccountPageAdapter 
       try {
         await locator.click();
       } catch (error) {
-        if (submit) this.#emit("submit_click_failed");
+        if (submit) {
+          this.#emit("submit_click_failed");
+          this.#emit(classifyClickFailure(error));
+        }
         throw error;
       }
       if (submit) {
@@ -144,6 +153,19 @@ export class PlaywrightAccountPageAdapter implements SemanticAccountPageAdapter 
       // Diagnostic observation cannot affect browser behavior.
     }
   }
+}
+
+function classifyClickFailure(error: unknown): PlaywrightAccountPageTraceEvent {
+  const name = error instanceof Error ? error.name : "";
+  const message = error instanceof Error ? error.message.toLowerCase() : "";
+  if (name === "TimeoutError") return "submit_click_timeout";
+  if (message.includes("detached")) return "submit_click_detached";
+  if (message.includes("intercepts pointer events")) return "submit_click_intercepted";
+  if (message.includes("page, context or browser has been closed")) {
+    return "submit_click_closed";
+  }
+  if (message.includes("strict mode violation")) return "submit_click_ambiguous";
+  return "submit_click_other";
 }
 
 function postSubmitDestination(

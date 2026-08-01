@@ -341,7 +341,35 @@ test("submit click failure emits only fixed value-free stage identifiers", async
     trace: (event) => events.push(event),
   }).activate(new FakePage(submit), "submit_sign_in"));
 
-  assert.deepEqual(events, ["submit_click_started", "submit_click_failed"]);
+  assert.deepEqual(events, [
+    "submit_click_started",
+    "submit_click_failed",
+    "submit_click_other",
+  ]);
+});
+
+test("submit click timeout is reduced to one fixed diagnostic identifier", async () => {
+  const events: string[] = [];
+  const timeout = new Error("synthetic private detail");
+  timeout.name = "TimeoutError";
+  const submit = new FakeLocator({
+    count: 1,
+    visible: true,
+    enabled: true,
+    editable: false,
+    clickError: timeout,
+  });
+
+  await assert.rejects(() => new PlaywrightAccountPageAdapter({
+    trace: (event) => events.push(event),
+  }).activate(new FakePage(submit), "submit_sign_in"));
+
+  assert.deepEqual(events, [
+    "submit_click_started",
+    "submit_click_failed",
+    "submit_click_timeout",
+  ]);
+  assert.equal(JSON.stringify(events).includes("private"), false);
 });
 
 class FakePage {
@@ -381,6 +409,7 @@ class FakeLocator {
     hiddenWaitFails?: boolean;
     attachedWaitFails?: boolean;
     clickFails?: boolean;
+    clickError?: Error;
   };
   readonly fillArguments: string[] = [];
   inputValueCalls = 0;
@@ -398,6 +427,7 @@ class FakeLocator {
     hiddenWaitFails?: boolean;
     attachedWaitFails?: boolean;
     clickFails?: boolean;
+    clickError?: Error;
   }) {
     this.values = values;
   }
@@ -427,6 +457,7 @@ class FakeLocator {
   }
   async click(): Promise<void> {
     this.clickCalls += 1;
+    if (this.values.clickError !== undefined) throw this.values.clickError;
     if (this.values.clickFails) throw new Error("click failed");
   }
   async waitFor(options: unknown): Promise<void> {
