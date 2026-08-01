@@ -136,6 +136,40 @@ test("restart re-identifies the exact owned page without adopting foreign tabs",
   assert.equal(foreign.closed, false);
 });
 
+test("restart probe timeout is bounded and independently cleans context and profile", async () => {
+  const page = new FakePage();
+  const context = new FakeContext([page]);
+  const profiles = new MemoryProfiles();
+  profiles.marker = {
+    schemaVersion: 1,
+    journeyId: liveFixtures.journeyId,
+    profileLeaseId: liveFixtures.session.profileLeaseId,
+    sessionId: liveFixtures.session.sessionId,
+    target: liveFixtures.target,
+    admittedAt: liveFixtures.issuedAt,
+    leaseExpiresAt: liveFixtures.expiresAt,
+  };
+  const provider = new PlaywrightPersistentBrowserSession({
+    binding: binding(),
+    launcher: { async launchPersistentContext() { return context; } },
+    probe: { async inspect() { return new Promise(() => undefined); } },
+    profiles,
+    ids: () => liveFixtures.session.sessionId,
+    timeoutMs: 5,
+  });
+
+  const result = await completesWithin(
+    provider.open(openRequest(), new AbortController().signal),
+  );
+
+  assert.deepEqual(result, {
+    ok: false,
+    error: { code: "browser_timeout", retryable: true },
+  });
+  assert.equal(context.closeCount, 1);
+  assert.equal(profiles.cleanupCount, 1);
+});
+
 test("reconcile follows the sole owned matching popup and ignores foreign pages", async () => {
   const context = new FakeContext([]);
   const observations = new Map<FakePage, OwnedTargetObservation>();
@@ -297,6 +331,41 @@ test("cleanup attempts context and profile independently and reports either fail
   assert.equal(profiles.cleanupCount, 1);
 });
 
+test("close bounds never-settling cleanup and starts every independent attempt", async () => {
+  const context = new FakeContext([]);
+  const profiles = new MemoryProfiles();
+  const provider = new PlaywrightPersistentBrowserSession({
+    binding: binding(),
+    launcher: { async launchPersistentContext() { return context; } },
+    probe: { async inspect() { return ownedMatched(); } },
+    profiles,
+    ids: () => liveFixtures.session.sessionId,
+    timeoutMs: 5,
+  });
+  const opened = await provider.open(openRequest(), new AbortController().signal);
+  assert.equal(opened.ok, true);
+  if (!opened.ok) return;
+  context.hangClose = true;
+  profiles.hangCleanup = true;
+
+  const result = await completesWithin(provider.close(
+    {
+      schemaVersion: 1,
+      journeyId: liveFixtures.journeyId,
+      operationId: generatedOperationId("operation_4444444444444445"),
+      sessionId: opened.value.session.sessionId,
+    },
+    new AbortController().signal,
+  ));
+
+  assert.deepEqual(result, {
+    ok: false,
+    error: { code: "browser_profile_cleanup_failed", retryable: false },
+  });
+  assert.equal(context.closeCount, 1);
+  assert.equal(profiles.cleanupCount, 1);
+});
+
 test("failed target admission closes the launched context and removes only its partial profile", async () => {
   const context = new FakeContext([]);
   const profiles = new MemoryProfiles();
@@ -322,6 +391,40 @@ test("failed target admission closes the launched context and removes only its p
   assert.deepEqual(result, {
     ok: false,
     error: { code: "browser_target_invalid", retryable: false },
+  });
+  assert.equal(context.closeCount, 1);
+  assert.equal(profiles.partialCleanupCount, 1);
+});
+
+test("failed-open cleanup is bounded and starts context and profile removal", async () => {
+  const context = new FakeContext([]);
+  const profiles = new MemoryProfiles();
+  context.hangClose = true;
+  profiles.hangPartialCleanup = true;
+  const provider = new PlaywrightPersistentBrowserSession({
+    binding: binding(),
+    launcher: { async launchPersistentContext() { return context; } },
+    probe: {
+      async inspect() {
+        return {
+          ownership: "owned",
+          target: { kind: "target_mismatch", dimension: "posting" },
+          snapshot: structuralSnapshot,
+        } as const;
+      },
+    },
+    profiles,
+    ids: () => liveFixtures.session.sessionId,
+    timeoutMs: 5,
+  });
+
+  const result = await completesWithin(
+    provider.open(openRequest(), new AbortController().signal),
+  );
+
+  assert.deepEqual(result, {
+    ok: false,
+    error: { code: "browser_profile_cleanup_failed", retryable: false },
   });
   assert.equal(context.closeCount, 1);
   assert.equal(profiles.partialCleanupCount, 1);
@@ -565,6 +668,7 @@ class FakeContext {
   newPageCount = 0;
   closeCount = 0;
   failClose = false;
+  hangClose = false;
   readonly ownedPages: FakePage[];
 
   constructor(ownedPages: FakePage[]) {
@@ -584,6 +688,7 @@ class FakeContext {
 
   async close(): Promise<void> {
     this.closeCount += 1;
+    if (this.hangClose) return new Promise(() => undefined);
     if (this.failClose) throw new Error("synthetic close failure");
     this.closed = true;
   }
@@ -593,6 +698,8 @@ class MemoryProfiles {
   marker: unknown;
   cleanupCount = 0;
   failCleanup = false;
+  hangCleanup = false;
+  hangPartialCleanup = false;
   partialCleanupCount = 0;
 
   async read(): Promise<unknown> {
@@ -605,14 +712,25 @@ class MemoryProfiles {
 
   async cleanup(): Promise<void> {
     this.cleanupCount += 1;
+    if (this.hangCleanup) return new Promise(() => undefined);
     if (this.failCleanup) throw new Error("synthetic cleanup failure");
     this.marker = undefined;
   }
 
   async cleanupPartial(): Promise<void> {
     this.partialCleanupCount += 1;
+    if (this.hangPartialCleanup) return new Promise(() => undefined);
     this.marker = undefined;
   }
+}
+
+async function completesWithin<T>(action: Promise<T>): Promise<T> {
+  return Promise.race([
+    action,
+    new Promise<never>((_resolve, reject) => {
+      setTimeout(() => reject(new Error("operation did not terminate")), 100);
+    }),
+  ]);
 }
 
 const structuralSnapshot = {

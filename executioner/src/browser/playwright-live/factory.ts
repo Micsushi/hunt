@@ -4,15 +4,12 @@ import type { LiveSessionId } from "../../contracts/live/index.ts";
 import { FileProfileStore } from "./private/file-profile-store.ts";
 import { PlaywrightPersistentContextLauncher } from "./private/playwright-launcher.ts";
 import { PlaywrightAccountPageAdapter } from "./private/playwright-account-page.ts";
-import type {
-  OwnedTargetProbe,
-  PersistentBrowserRuntimeBinding,
-} from "./private/types.ts";
+import type { PersistentBrowserRuntimeBinding } from "./private/types.ts";
+import { WorkdayOwnedTargetProbe } from "./private/workday-owned-target-probe.ts";
 import { PlaywrightPersistentBrowserSession } from "./session.ts";
 
 export interface PlaywrightPersistentBrowserFactoryOptions {
   readonly binding: PersistentBrowserRuntimeBinding;
-  readonly probe: OwnedTargetProbe;
   readonly timeoutMs?: number;
 }
 
@@ -22,7 +19,7 @@ export function createPlaywrightPersistentBrowserSession(
   return new PlaywrightPersistentBrowserSession({
     binding: options.binding,
     launcher: new PlaywrightPersistentContextLauncher(),
-    probe: options.probe,
+    probe: new WorkdayOwnedTargetProbe(),
     profiles: new FileProfileStore(),
     accountPage: new PlaywrightAccountPageAdapter(),
     ids: nextSessionId,
