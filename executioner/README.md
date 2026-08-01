@@ -108,5 +108,46 @@ independent cleanup signal, and then atomically writes a value-free
 `submitActivated: false` refers only to final job-application Submit; account
 Create or Sign In is activated as part of account-access proof.
 
+### Gmail authorization bootstrap
+
+This is a separate short-window step after the fresh-account run stops at
+`verification_required`. Do not edit the F1 owner file. Create a new F2 owner
+file that preserves the journey, revision, and target but uses a new approval
+and preallocated account and Gmail handles. Its
+approval, account secret, and Gmail authorization must share one expiry no
+more than 30 minutes after the planned F2 bootstrap. Provision the new account
+handle first with the account command.
+
+Manually inspect the new verification email. Create a second JSON file outside
+every repository with exactly these fields:
+
+```json
+{
+  "schemaVersion": 1,
+  "contractRevision": "s2-gmail-bootstrap-v1",
+  "revisionId": "revision_...",
+  "journeyId": "journey_...",
+  "gmailHandleId": "secret_handle_...",
+  "desktopClientId": "...apps.googleusercontent.com",
+  "verificationHost": "wd5.myworkday.com"
+}
+```
+
+Use an owner-approved Google Desktop OAuth client ID with Gmail API access. Do
+not add a client secret. Enter only the verification link hostname, never the
+full link or token. Then run:
+
+```text
+npm run provision:s2-gmail -- --config C:\absolute\external\f2-owner-inputs.json --gmail-bootstrap C:\absolute\external\gmail-bootstrap-input.json
+```
+
+All ACL and exact-handle checks finish before a browser or prompt. The trusted
+Windows child uses the system browser, an ephemeral IPv4 loopback callback,
+PKCE S256, and only `gmail.readonly`. It confirms the Gmail profile matches the
+DPAPI-protected Workday email and asks for the exact lowercase sender. OAuth,
+mailbox, sender, and bundle values stay in that child; Node receives only DPAPI
+CurrentUser ciphertext. Recreate both short-lived handles instead of mixing F1
+and F2 expiry values. This command does not query Gmail or consume the message.
+
 Tests use Node's built-in runner. Components may depend on shared contracts but
 not on peer implementations or C3 v2 source.

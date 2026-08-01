@@ -12,6 +12,7 @@
     "quality": "npm run typecheck && npm test",
     "provision:s2-account": "node scripts/provision-s2-account.ts",
     "migrate:s2-v2-account": "node scripts/migrate-s2-v2-account.ts",
+    "provision:s2-gmail": "node scripts/provision-s2-gmail.ts",
     "verify:dpapi-cross-user": "node scripts/verify-dpapi-cross-user.ts",
     "live:s2": "node scripts/run-s2-acceptance.ts"
   },
