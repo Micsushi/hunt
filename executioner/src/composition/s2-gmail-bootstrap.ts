@@ -161,7 +161,7 @@ export async function bootstrapS2GmailAuthorization(
         target: targetIdentity(owner),
         verificationHost: bootstrap.verificationHost,
         verificationTenant: owner.target.tenant,
-        verificationTtlSeconds: 3_600,
+        verificationTtlSeconds: 86_400,
       },
     }, signal);
   } catch (error) {

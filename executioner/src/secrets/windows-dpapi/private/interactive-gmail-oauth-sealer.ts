@@ -331,7 +331,7 @@ public static class HuntInteractiveGmailOAuthSealer
         StringField(value, "senderPolicyId", 30, 80);
         StringField(value, "verificationHost", 3, 253);
         StringField(value, "verificationTenant", 1, 253);
-        if (IntegerField(value, "verificationTtlSeconds", 3600, 3600) != 3600)
+        if (IntegerField(value, "verificationTtlSeconds", 86400, 86400) != 86400)
             throw new FlowException(3);
         IDictionary<string, object> target = value["target"] as IDictionary<string, object>;
         if (target == null || target.Count != 5) throw new FlowException(3);
@@ -475,7 +475,7 @@ export interface GmailOAuthSealRequest {
     readonly target: TargetIdentityV1;
     readonly verificationHost: string;
     readonly verificationTenant: string;
-    readonly verificationTtlSeconds: 3600;
+    readonly verificationTtlSeconds: 86400;
   };
 }
 
