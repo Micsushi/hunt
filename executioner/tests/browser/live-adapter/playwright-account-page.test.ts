@@ -366,53 +366,77 @@ test("a create-account rejection waits for confirmation with the semantic form",
   assert.equal(submit.clickCalls, 1);
 });
 
-test("rejection readiness fails closed when a required field stays hidden", async () => {
-  const events: string[] = [];
-  const submit = new FakeLocator({
-    count: 1,
-    visible: true,
-    enabled: true,
-    editable: false,
-  });
-  const absentDestination = new FakeLocator({
-    count: 0,
-    visible: false,
-    enabled: false,
-    editable: false,
-    attachedWaitFails: true,
-  });
-  const email = new FakeLocator({
-    count: 1,
-    visible: false,
-    enabled: true,
-    editable: true,
-    visibleWaitFails: true,
-  });
-  const password = new FakeLocator({ count: 1, visible: true, enabled: true, editable: true });
+test("rejection readiness identifies the exact failed semantic wait", async () => {
+  const cases = [
+    ["submit_sign_in", "submit", "submit_rejection_submit_owner_wait_failed"],
+    ["submit_sign_in", "email", "submit_rejection_email_wait_failed"],
+    ["submit_sign_in", "password", "submit_rejection_password_wait_failed"],
+    [
+      "submit_create_account",
+      "password_confirmation",
+      "submit_rejection_password_confirmation_wait_failed",
+    ],
+  ] as const;
 
-  await assert.rejects(() => new PlaywrightAccountPageAdapter({
-    trace: (event) => events.push(event),
-  }).activate(new FakePage(submit, absentDestination, new Map([
-    ['[data-automation-id="email"]', email],
-    ['[data-automation-id="password"]', password],
-  ])), "submit_sign_in"));
+  for (const [action, failedWait, failureEvent] of cases) {
+    const events: string[] = [];
+    const submit = new FakeLocator({
+      count: 1,
+      visible: failedWait !== "submit",
+      enabled: true,
+      editable: false,
+      visibleWaitFails: failedWait === "submit",
+    });
+    const absentDestination = new FakeLocator({
+      count: 0,
+      visible: false,
+      enabled: false,
+      editable: false,
+      attachedWaitFails: true,
+    });
+    const email = new FakeLocator({
+      count: 1,
+      visible: failedWait !== "email",
+      enabled: true,
+      editable: true,
+      visibleWaitFails: failedWait === "email",
+    });
+    const password = new FakeLocator({
+      count: 1,
+      visible: failedWait !== "password",
+      enabled: true,
+      editable: true,
+      visibleWaitFails: failedWait === "password",
+    });
+    const confirmation = new FakeLocator({
+      count: 1,
+      visible: failedWait !== "password_confirmation",
+      enabled: true,
+      editable: true,
+      visibleWaitFails: failedWait === "password_confirmation",
+    });
 
-  assert.deepEqual(submit.waitForArguments, [
-    { state: "hidden", timeout: 10_000 },
-    { state: "attached", timeout: 10_000 },
-    { state: "visible", timeout: 10_000 },
-  ]);
-  assert.deepEqual(email.waitForArguments, [{ state: "visible", timeout: 10_000 }]);
-  assert.deepEqual(password.waitForArguments, [{ state: "visible", timeout: 10_000 }]);
-  assert.deepEqual(events, [
-    "submit_hit_target_clear",
-    "submit_click_started",
-    "submit_click_succeeded",
-    "submit_stabilization_failed",
-  ]);
-  assert.equal(email.clickCalls, 0);
-  assert.deepEqual(email.fillArguments, []);
-  assert.equal(email.evaluateCalls, 0);
+    await assert.rejects(() => new PlaywrightAccountPageAdapter({
+      trace: (event) => events.push(event),
+    }).activate(new FakePage(submit, absentDestination, new Map([
+      ['[data-automation-id="email"]', email],
+      ['[data-automation-id="password"]', password],
+      ['[data-automation-id="verifyPassword"]', confirmation],
+    ])), action));
+
+    assert.deepEqual(events, [
+      "submit_hit_target_clear",
+      "submit_click_started",
+      "submit_click_succeeded",
+      failureEvent,
+      "submit_stabilization_failed",
+    ]);
+    for (const field of [email, password, confirmation]) {
+      assert.equal(field.clickCalls, 0);
+      assert.deepEqual(field.fillArguments, []);
+      assert.equal(field.evaluateCalls, 0);
+    }
+  }
 });
 
 test("submit stabilization excludes the stale current account container", async () => {

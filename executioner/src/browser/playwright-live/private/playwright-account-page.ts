@@ -40,6 +40,10 @@ export type PlaywrightAccountPageTraceEvent =
   | "submit_control_remained_visible"
   | "submit_destination_observed"
   | "submit_rejection_reappeared"
+  | "submit_rejection_submit_owner_wait_failed"
+  | "submit_rejection_email_wait_failed"
+  | "submit_rejection_password_wait_failed"
+  | "submit_rejection_password_confirmation_wait_failed"
   | "submit_stabilization_failed";
 
 export interface PlaywrightAccountPageAdapterOptions {
@@ -156,16 +160,34 @@ export class PlaywrightAccountPageAdapter implements SemanticAccountPageAdapter 
                 .then(() => "rejection" as const),
             ]);
             if (observed === "rejection") {
-              const fields: readonly AccountFieldName[] = action === "submit_sign_in"
-                ? ["email", "password"]
-                : ["email", "password", "password_confirmation"];
-              await Promise.all([
-                locator.waitFor({ state: "visible", timeout: 10_000 }),
-                ...fields.map((field) => semanticLocator(page, field).locator.waitFor({
-                  state: "visible",
-                  timeout: 10_000,
-                })),
-              ]);
+              const readinessWaits: Array<readonly [
+                Locator,
+                PlaywrightAccountPageTraceEvent,
+              ]> = [
+                [locator, "submit_rejection_submit_owner_wait_failed"],
+                [
+                  semanticLocator(page, "email").locator,
+                  "submit_rejection_email_wait_failed",
+                ],
+                [
+                  semanticLocator(page, "password").locator,
+                  "submit_rejection_password_wait_failed",
+                ],
+              ];
+              if (action === "submit_create_account") {
+                readinessWaits.push([
+                  semanticLocator(page, "password_confirmation").locator,
+                  "submit_rejection_password_confirmation_wait_failed",
+                ]);
+              }
+              await Promise.all(readinessWaits.map(async ([readinessLocator, failureEvent]) => {
+                try {
+                  await readinessLocator.waitFor({ state: "visible", timeout: 10_000 });
+                } catch (error) {
+                  this.#emit(failureEvent);
+                  throw error;
+                }
+              }));
             }
           } catch (error) {
             this.#emit("submit_stabilization_failed");
