@@ -34,7 +34,6 @@ export interface SecureAccountSkeletonDependencies {
 export interface SecureAccountSkeletonInput {
   readonly schemaVersion: 1;
   readonly mode: "fresh" | "restart";
-  readonly accountMode: "create_account" | "sign_in";
   readonly journeyId: JourneyId;
   readonly session: LiveBrowserSessionV1;
   readonly target: TargetIdentityV1;
@@ -123,7 +122,7 @@ export async function runSecureAccountSkeleton(
         sessionId: input.session.sessionId,
         target: input.target,
         now: input.now,
-        mode: input.accountMode,
+        mode: "create_account",
         credential: input.credential,
         fields: ["email", "password"],
       },

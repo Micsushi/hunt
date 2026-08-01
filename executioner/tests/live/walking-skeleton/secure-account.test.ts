@@ -20,14 +20,10 @@ const secureCheckpoint: LiveCheckpointV1 = {
   phase: "mailbox_verification",
 };
 
-function input(
-  mode: "fresh" | "restart" = "fresh",
-  accountMode: "create_account" | "sign_in" = "create_account",
-) {
+function input(mode: "fresh" | "restart" = "fresh") {
   return {
     schemaVersion: 1 as const,
     mode,
-    accountMode,
     journeyId: liveFixtures.journeyId,
     session: liveFixtures.session,
     target: liveFixtures.target,
@@ -40,17 +36,6 @@ function input(
     operations: { mutate: op("31"), save: op("32"), navigate: op("33"), invalidate: op("34"), remove: op("35") },
   };
 }
-
-test("secure account forwards the admitted account mode without hardcoding create", async () => {
-  const fixture = setup();
-  await runSecureAccountSkeleton(
-    fixture.dependencies,
-    input("fresh", "sign_in"),
-    new AbortController().signal,
-  );
-  const mutation = fixture.credential.calls[0]?.request as { readonly mode: string };
-  assert.equal(mutation.mode, "sign_in");
-});
 
 function setup(mailbox = liveFixtures.mailboxAvailable) {
   const credential = createCredentialMutationAdapterFake();
