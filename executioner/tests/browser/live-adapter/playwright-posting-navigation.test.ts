@@ -49,6 +49,16 @@ test("missing, duplicate, hidden, and disabled transition controls fail closed",
   }
 });
 
+test("inspection admits a control that hydrates within the bounded semantic wait", async () => {
+  const page = new SemanticPage({ "button:Apply": delayedLocator() });
+  const adapter = new PlaywrightPostingNavigationAdapter();
+
+  assert.deepEqual(await adapter.inspect(page, "start_application"), {
+    cardinality: 1,
+    actionable: true,
+  });
+});
+
 class SemanticPage {
   readonly clicked: string[] = [];
   readonly #locators: Readonly<Record<string, LocatorState>>;
@@ -71,6 +81,8 @@ interface LocatorState {
   isEnabled(): Promise<boolean>;
   click(): Promise<void>;
   nth(index: number): LocatorState;
+  first(): LocatorState;
+  waitFor(options: { readonly state: "visible"; readonly timeout: number }): Promise<void>;
 }
 
 function locator(visible = true, enabled = true, count = 1): LocatorState {
@@ -80,5 +92,22 @@ function locator(visible = true, enabled = true, count = 1): LocatorState {
     isEnabled: async () => enabled,
     click: async () => undefined,
     nth() { return this; },
+    first() { return this; },
+    waitFor: async () => {
+      if (count !== 1 || !visible) throw new Error("not visible");
+    },
+  };
+}
+
+function delayedLocator(): LocatorState {
+  let ready = false;
+  return {
+    count: async () => ready ? 1 : 0,
+    isVisible: async () => ready,
+    isEnabled: async () => ready,
+    click: async () => undefined,
+    nth() { return this; },
+    first() { return this; },
+    waitFor: async () => { ready = true; },
   };
 }

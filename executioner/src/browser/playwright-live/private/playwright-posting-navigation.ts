@@ -13,6 +13,7 @@ export class PlaywrightPostingNavigationAdapter
     page: PersistentPage,
     action: PostingNavigationAction,
   ): Promise<{ readonly cardinality: number; readonly actionable: boolean }> {
+    await waitForAnyCandidate(page, action);
     const candidates = await matchingCandidates(page, action);
     const cardinality = candidates.length;
     const actionable = cardinality === 1 &&
@@ -39,8 +40,21 @@ async function matchingCandidates(
   page: PersistentPage,
   action: PostingNavigationAction,
 ): Promise<Locator[]> {
+  const candidates = candidateLocators(page, action);
+  const matching: Locator[] = [];
+  for (const candidate of candidates) {
+    const count = await candidate.count();
+    for (let index = 0; index < count; index += 1) matching.push(candidate.nth(index));
+  }
+  return matching;
+}
+
+function candidateLocators(
+  page: PersistentPage,
+  action: PostingNavigationAction,
+): Locator[] {
   const semanticPage = page as unknown as Pick<Page, "getByRole">;
-  const candidates = action === "apply_manually"
+  return action === "apply_manually"
     ? [
         semanticPage.getByRole("button", { name: "Apply Manually", exact: true }),
         semanticPage.getByRole("link", { name: "Apply Manually", exact: true }),
@@ -53,10 +67,13 @@ async function matchingCandidates(
         semanticPage.getByRole("button", { name: "Start Your Application", exact: true }),
         semanticPage.getByRole("link", { name: "Start Your Application", exact: true }),
       ];
-  const matching: Locator[] = [];
-  for (const candidate of candidates) {
-    const count = await candidate.count();
-    for (let index = 0; index < count; index += 1) matching.push(candidate.nth(index));
-  }
-  return matching;
+}
+
+async function waitForAnyCandidate(
+  page: PersistentPage,
+  action: PostingNavigationAction,
+): Promise<void> {
+  await Promise.any(candidateLocators(page, action).map((candidate) =>
+    candidate.first().waitFor({ state: "visible", timeout: 5_000 })
+  )).catch(() => undefined);
 }
