@@ -7,6 +7,10 @@ import test from "node:test";
 
 const acceptedF1Base = "f274d9a6624978b61ab1dd1433ebdddfdef029d2";
 const acceptedF12Candidate = "c27f34b1441650c4007a8c34a9033a67b796edba";
+const acceptedPreReviewF13 = "15781a2f17d775c9a735bda5e9539863214aec45";
+const acceptedPreReviewF13Tree = "a33c2a72836985e125f35907bc3ba5f2bf250b23";
+const acceptedF4RepairTip = "0908aa70d25ef2353c6091940bddbac12c8db135";
+const acceptedF4RepairTree = "27caccaf42d4b54ff1089cce93fb3ec64eccb096";
 const repository = resolve(process.cwd(), "..");
 const manifestPath = "tests/connections/component-revisions.json";
 const boundaryRepairPath =
@@ -24,6 +28,35 @@ const f13Paths = [
   "scripts/run_component_ci.py",
   "tests/test_deploy_readiness.py",
 ] as const;
+const preReviewF13Blobs = {
+  "executioner/README.md": "c9b9892579cf8a92dd04c9b6943d5744f1d089c8",
+  "executioner/docs/s1-verification.md": "4a85d2fff367362260c75a30d635b177ec03719e",
+  "executioner/scripts/run-s1-acceptance.ts": "9be1409c1e23934e779e490cbace99f1e8a4a22f",
+  "executioner/src/composition/s1-controlled-journey.ts": "8588f626ccd7ed5aeec09bd33ff0dc408ef90554",
+  "executioner/tests/acceptance/s1/determinism.test.ts": "a28581ffa72fd66be04ce07195af901872154ed7",
+  "executioner/tests/acceptance/s1/failure/f3-observe-invalid.test.ts": "8d4e22524a882386d2aec9ae8b99d4efb5bc24bb",
+  "executioner/tests/acceptance/s1/journey/composition.test.ts": "6e824c79bfaf47d2cc088a36d3e477f1d583aebc",
+  "executioner/tests/acceptance/s1/journey/support.ts": "69856b7c092e8d46671b0be76839f001bc00dbc3",
+  "executioner/tests/acceptance/s1/t2-support.ts": "0d2aa59aedcd9874deb474377f83ece67e9cb322",
+  "scripts/run_component_ci.py": "dd0047ef4ee2154a3bbbc55c390372ca7c5c1766",
+  "tests/test_deploy_readiness.py": "f5eda343a267e96c6a17abe3f2cb1e4c54438bf2",
+  [boundaryRepairPath]: "7156933e2a137ed4f7f7e6f4789915c95a9c27e5",
+} as const;
+const reviewRepairBlobs = {
+  "executioner/docs/s1-verification.md": "bb30b9e2af70d6cc1d8b36629193fa7ec647757f",
+  "executioner/src/composition/s1-controlled-journey.ts": "b3fcfce90a3ad549274701a8f9de4f1086c9a025",
+  "executioner/src/intake/intake.ts": "cb309221c05edc8cbae2a96ea198e79193511c49",
+  "executioner/tests/acceptance/s1/journey/composition.test.ts": "05529fd628a82611b17e50b00258eae97d0fc939",
+  "executioner/tests/acceptance/s1/journey/support.ts": "d891f1be36817afd44d288becd3fb3d9eb9701e0",
+  "executioner/tests/acceptance/s1/t2-support.ts": "bc0f45e6554829cf0edd6ff27f92bf61f12e2b77",
+  "executioner/tests/intake/intake.test.ts": "f98bf2212fb9267f252f117f4c25b972f913ae22",
+} as const;
+const reviewRepairPaths = Object.keys(reviewRepairBlobs);
+const f4ReviewRepairBlobs = {
+  "executioner/src/intake/intake.ts": "cb309221c05edc8cbae2a96ea198e79193511c49",
+  "executioner/tests/intake/intake.test.ts": "f98bf2212fb9267f252f117f4c25b972f913ae22",
+} as const;
+const immutableManifestBlob = "7bea32a36020f5fa88a5f8360a242deb692e1d87";
 const f12Paths = [
   "executioner/tests/connections/component-manifest.test.ts",
   "executioner/tests/connections/component-revisions.json",
@@ -279,136 +312,326 @@ test("malformed candidate inputs fail with stable closed diagnostics", () => {
   );
 });
 
-test("the accepted F12 candidate admits the exact F13 descendant", () => {
+test("the accepted F12 candidate retains the exact pre-review F13 checkpoint", () => {
   assert.doesNotThrow(() =>
-    assertPostF12Candidate(canonicalManifest, { repository }),
+    assertPreReviewF13Checkpoint(canonicalManifest, { repository }),
   );
 });
 
-test("the post-F12 guard allows its named boundary repair only", () => {
+test("the final candidate admits only the exact review-repair delta", () => {
   assert.doesNotThrow(() =>
-    assertPostF12Candidate(canonicalManifest, {
-      repository,
-      candidate: "post-f12-candidate",
-      git: postF12Git([...f13Paths, boundaryRepairPath]),
-    }),
+    assertFinalReviewRepairCandidate(canonicalManifest, { repository }),
   );
 });
 
-test("a non-descendant F13 candidate fails with a stable diagnostic", () => {
+test("a non-descendant final candidate fails with a stable diagnostic", () => {
   assert.throws(
     () =>
-      assertPostF12Candidate(canonicalManifest, {
+      assertFinalReviewRepairCandidate(canonicalManifest, {
         repository,
-        candidate: "post-f12-candidate",
-        git: postF12Git([...f13Paths], { descendant: false }),
-      }),
-    /^Error: F13 candidate is not descended from accepted F12 candidate$/u,
-  );
-});
-
-test("a missing declared F13 path fails with a stable diagnostic", () => {
-  assert.throws(
-    () =>
-      assertPostF12Candidate(canonicalManifest, {
-        repository,
-        candidate: "post-f12-candidate",
-        git: postF12Git(f13Paths.slice(1)),
-      }),
-    new RegExp(`^Error: post-F12 path set mismatch: missing ${f13Paths[0]}$`, "u"),
-  );
-});
-
-test("an undeclared post-F12 path fails with a stable diagnostic", () => {
-  const path = "executioner/src/unowned.ts";
-  assert.throws(
-    () =>
-      assertPostF12Candidate(canonicalManifest, {
-        repository,
-        candidate: "post-f12-candidate",
-        git: postF12Git([...f13Paths, path]),
-      }),
-    new RegExp(`^Error: post-F12 path set mismatch: unexpected ${path}$`, "u"),
-  );
-});
-
-test("post-F12 component and connection drift fail with stable diagnostics", () => {
-  const paths = [
-    "executioner/src/browser/adapter.ts",
-    "executioner/tests/connections/control/support.ts",
-    "executioner/tests/connections/component-revisions.json",
-  ] as const;
-  for (const path of paths) {
-    assert.throws(
-      () =>
-        assertPostF12Candidate(canonicalManifest, {
-          repository,
-          candidate: "post-f12-candidate",
-          git: postF12Git([...f13Paths, path]),
+        git: overriddenGit({
+          matches: (args) => ancestorCall(args, acceptedPreReviewF13, "HEAD"),
+          result: new Error("not an ancestor"),
         }),
-      new RegExp(`^Error: accepted F12 blob drift: ${path}$`, "u"),
+      }),
+    /^Error: final candidate is not descended from pre-review F13 checkpoint$/u,
+  );
+});
+
+test("the pre-review checkpoint rejects wrong tree, path, and blob evidence", () => {
+  const cases = [
+    {
+      git: overriddenGit({
+        matches: (args) => revParseCall(args, `${acceptedPreReviewF13}^{tree}`),
+        result: "0".repeat(40),
+      }),
+      error: /^Error: pre-review F13 tree mismatch$/u,
+    },
+    {
+      git: overriddenGit({
+        matches: (args) => diffCall(args, acceptedF12Candidate, acceptedPreReviewF13),
+        result: [...f13Paths.slice(1), boundaryRepairPath].join("\n"),
+      }),
+      error: /^Error: pre-review F13 path set mismatch: missing executioner\/README\.md$/u,
+    },
+    {
+      git: overriddenGit({
+        matches: (args) => revParseCall(args, `${acceptedPreReviewF13}:${f13Paths[0]}`),
+        result: "0".repeat(40),
+      }),
+      error: /^Error: pre-review F13 blob mismatch: executioner\/README\.md$/u,
+    },
+  ];
+  for (const item of cases) {
+    assert.throws(
+      () => assertPreReviewF13Checkpoint(canonicalManifest, { repository, git: item.git }),
+      item.error,
     );
   }
 });
 
-test("post-F12 frozen-root drift retains its stable diagnostic", () => {
+test("the focused F4 repair rejects wrong ancestry, tree, paths, and owner blobs", () => {
+  const oldTip = acceptedTips.F4;
+  const path = Object.keys(f4ReviewRepairBlobs)[0]!;
+  const cases = [
+    {
+      git: overriddenGit({
+        matches: (args) => ancestorCall(args, oldTip, acceptedF4RepairTip),
+        result: new Error("not an ancestor"),
+      }),
+      error: /^Error: focused F4 repair is not descended from accepted F4 tip$/u,
+    },
+    {
+      git: overriddenGit({
+        matches: (args) => revParseCall(args, `${acceptedF4RepairTip}^{tree}`),
+        result: "0".repeat(40),
+      }),
+      error: /^Error: focused F4 repair tree mismatch$/u,
+    },
+    {
+      git: overriddenGit({
+        matches: (args) => diffCall(args, oldTip, acceptedF4RepairTip),
+        result: path,
+      }),
+      error: /^Error: focused F4 repair path set mismatch: missing executioner\/tests\/intake\/intake\.test\.ts$/u,
+    },
+    {
+      git: overriddenGit({
+        matches: (args) => diffCall(args, oldTip, acceptedF4RepairTip),
+        result: [...Object.keys(f4ReviewRepairBlobs), "executioner/src/profile/profile.ts"].join("\n"),
+      }),
+      error: /^Error: focused F4 repair path set mismatch: unexpected executioner\/src\/profile\/profile\.ts$/u,
+    },
+    {
+      git: overriddenGit({
+        matches: (args) => revParseCall(args, `${acceptedF4RepairTip}:${path}`),
+        result: "0".repeat(40),
+      }),
+      error: /^Error: focused F4 owner blob mismatch: executioner\/src\/intake\/intake\.ts$/u,
+    },
+  ];
+  for (const item of cases) {
+    assert.throws(
+      () => assertFinalReviewRepairCandidate(canonicalManifest, { repository, git: item.git }),
+      item.error,
+    );
+  }
+});
+
+test("the final layer rejects missing, extra, mismatched, and manifest repair evidence", () => {
+  const path = reviewRepairPaths[0]!;
+  const cases = [
+    {
+      git: overriddenGit({
+        matches: (args) => diffCall(args, acceptedPreReviewF13, "HEAD"),
+        result: reviewRepairPaths.slice(1).join("\n"),
+      }),
+      error: new RegExp(`^Error: final review path set mismatch: missing ${path}$`, "u"),
+    },
+    {
+      git: overriddenGit({
+        matches: (args) => diffCall(args, acceptedPreReviewF13, "HEAD"),
+        result: [...reviewRepairPaths, "executioner/README.md"].join("\n"),
+      }),
+      error: /^Error: final review path set mismatch: unexpected executioner\/README\.md$/u,
+    },
+    {
+      git: overriddenGit({
+        matches: (args) => revParseCall(args, `HEAD:${path}`),
+        result: "0".repeat(40),
+      }),
+      error: new RegExp(`^Error: final review blob mismatch: ${path}$`, "u"),
+    },
+    {
+      git: overriddenGit({
+        matches: (args) => revParseCall(args, "HEAD:executioner/tests/connections/component-revisions.json"),
+        result: "0".repeat(40),
+      }),
+      error: /^Error: immutable component manifest blob drift$/u,
+    },
+    {
+      git: overriddenGit({
+        matches: (args) => revParseCall(args, "HEAD:executioner/src/contracts"),
+        result: "0".repeat(40),
+      }),
+      error: /^Error: frozen root mismatch: executioner\/src\/contracts: HEAD$/u,
+    },
+  ];
+  for (const item of cases) {
+    assert.throws(
+      () => assertFinalReviewRepairCandidate(canonicalManifest, { repository, git: item.git }),
+      item.error,
+    );
+  }
+});
+
+test("the final candidate must contain the exact focused F4 owner blobs", () => {
+  const path = Object.keys(f4ReviewRepairBlobs)[0]!;
   assert.throws(
     () =>
-      assertPostF12Candidate(canonicalManifest, {
+      assertFinalReviewRepairCandidate(canonicalManifest, {
         repository,
-        candidate: "post-f12-candidate",
-        git: postF12Git([...f13Paths], { frozenRootDrift: true }),
+        git: overriddenGit({
+          matches: (args) => revParseCall(args, `HEAD:${path}`),
+          result: "0".repeat(40),
+        }),
       }),
-    /^Error: frozen root mismatch: executioner\/src\/contracts: post-f12-candidate$/u,
+    /^Error: final review blob mismatch: executioner\/src\/intake\/intake\.ts$/u,
   );
 });
 
-function assertPostF12Candidate(
+function assertPreReviewF13Checkpoint(
   manifest: ComponentManifest,
   options: AdmissionOptions,
 ): void {
   const git = options.git ?? nativeGit;
-  const candidate = options.candidate ?? "HEAD";
-
+  const candidate = options.candidate ?? acceptedPreReviewF13;
   assertAncestor(
     acceptedF12Candidate,
     candidate,
     options.repository,
     git,
-    "F13 candidate is not descended from accepted F12 candidate",
+    "pre-review F13 checkpoint is not descended from accepted F12 candidate",
+  );
+  assertFrozenRoots(candidate, manifest, options.repository, git);
+  if (revisionTree(candidate, options.repository, git) !== acceptedPreReviewF13Tree) {
+    throw new Error("pre-review F13 tree mismatch");
+  }
+  assertExactPaths(
+    changedPaths(acceptedF12Candidate, candidate, options.repository, git),
+    Object.keys(preReviewF13Blobs),
+    "pre-review F13 path set mismatch",
+  );
+  assertRevisionBlobs(
+    candidate,
+    preReviewF13Blobs,
+    options.repository,
+    git,
+    "pre-review F13 blob mismatch",
+  );
+  assertImmutableManifest(candidate, options.repository, git);
+}
+
+function assertFinalReviewRepairCandidate(
+  manifest: ComponentManifest,
+  options: AdmissionOptions,
+): void {
+  const git = options.git ?? nativeGit;
+  const candidate = options.candidate ?? "HEAD";
+  assertPreReviewF13Checkpoint(manifest, {
+    ...options,
+    candidate: acceptedPreReviewF13,
+    git,
+  });
+  assertAncestor(
+    acceptedPreReviewF13,
+    candidate,
+    options.repository,
+    git,
+    "final candidate is not descended from pre-review F13 checkpoint",
   );
   assertFrozenRoots(candidate, manifest, options.repository, git);
 
-  const protectedPaths = new Set(
-    changedPaths(
-      acceptedF1Base,
-      acceptedF12Candidate,
-      options.repository,
-      git,
-    ),
+  assertAncestor(
+    acceptedTips.F4,
+    acceptedF4RepairTip,
+    options.repository,
+    git,
+    "focused F4 repair is not descended from accepted F4 tip",
   );
+  assertFrozenRoots(acceptedF4RepairTip, manifest, options.repository, git);
+  if (revisionTree(acceptedF4RepairTip, options.repository, git) !== acceptedF4RepairTree) {
+    throw new Error("focused F4 repair tree mismatch");
+  }
+  assertExactPaths(
+    changedPaths(acceptedTips.F4, acceptedF4RepairTip, options.repository, git),
+    Object.keys(f4ReviewRepairBlobs),
+    "focused F4 repair path set mismatch",
+  );
+  assertRevisionBlobs(
+    acceptedF4RepairTip,
+    f4ReviewRepairBlobs,
+    options.repository,
+    git,
+    "focused F4 owner blob mismatch",
+  );
+
   const candidatePaths = changedPaths(
-    acceptedF12Candidate,
+    acceptedPreReviewF13,
     candidate,
     options.repository,
     git,
   );
-  const drift = candidatePaths.find(
-    (path) => protectedPaths.has(path) && path !== boundaryRepairPath,
-  );
-  if (drift !== undefined) {
-    throw new Error(`accepted F12 blob drift: ${drift}`);
-  }
-
-  const missing = f13Paths.find((path) => !candidatePaths.includes(path));
+  const missing = reviewRepairPaths.find((path) => !candidatePaths.includes(path));
   if (missing !== undefined) {
-    throw new Error(`post-F12 path set mismatch: missing ${missing}`);
+    throw new Error(`final review path set mismatch: missing ${missing}`);
   }
-  const allowedPaths = new Set<string>([...f13Paths, boundaryRepairPath]);
-  const unexpected = candidatePaths.find((path) => !allowedPaths.has(path));
+  const allowed = new Set([...reviewRepairPaths, boundaryRepairPath]);
+  const unexpected = candidatePaths.find((path) => !allowed.has(path));
   if (unexpected !== undefined) {
-    throw new Error(`post-F12 path set mismatch: unexpected ${unexpected}`);
+    throw new Error(`final review path set mismatch: unexpected ${unexpected}`);
   }
+  assertRevisionBlobs(
+    candidate,
+    reviewRepairBlobs,
+    options.repository,
+    git,
+    "final review blob mismatch",
+  );
+  for (const path of Object.keys(f4ReviewRepairBlobs)) {
+    if (
+      revisionBlob(candidate, path, options.repository, git) !==
+        revisionBlob(acceptedF4RepairTip, path, options.repository, git)
+    ) {
+      throw new Error(`focused F4 candidate blob mismatch: ${path}`);
+    }
+  }
+  assertImmutableManifest(candidate, options.repository, git);
+}
+
+function assertExactPaths(
+  actual: readonly string[],
+  expected: readonly string[],
+  diagnostic: string,
+): void {
+  const missing = expected.find((path) => !actual.includes(path));
+  if (missing !== undefined) throw new Error(`${diagnostic}: missing ${missing}`);
+  const allowed = new Set(expected);
+  const unexpected = actual.find((path) => !allowed.has(path));
+  if (unexpected !== undefined) throw new Error(`${diagnostic}: unexpected ${unexpected}`);
+}
+
+function assertRevisionBlobs(
+  revision: string,
+  expected: Readonly<Record<string, string>>,
+  repositoryPath: string,
+  git: Git,
+  diagnostic: string,
+): void {
+  for (const [path, blob] of Object.entries(expected)) {
+    if (revisionBlob(revision, path, repositoryPath, git) !== blob) {
+      throw new Error(`${diagnostic}: ${path}`);
+    }
+  }
+}
+
+function assertImmutableManifest(
+  candidate: string,
+  repositoryPath: string,
+  git: Git,
+): void {
+  if (
+    revisionBlob(
+      candidate,
+      "executioner/tests/connections/component-revisions.json",
+      repositoryPath,
+      git,
+    ) !== immutableManifestBlob
+  ) throw new Error("immutable component manifest blob drift");
+}
+
+function revisionTree(revision: string, repositoryPath: string, git: Git): string {
+  return git(repositoryPath, ["rev-parse", `${revision}^{tree}`]).trim();
 }
 
 function assertComponentManifest(
@@ -733,47 +956,34 @@ function candidateManifest(features: Feature[]): ComponentManifest {
   return manifest;
 }
 
-function postF12Git(
-  candidatePaths: readonly string[],
-  options: {
-    readonly descendant?: boolean;
-    readonly frozenRootDrift?: boolean;
-  } = {},
-): Git {
-  const protectedPaths = [
-    "executioner/src/browser/adapter.ts",
-    "executioner/tests/connections/control/support.ts",
-    "executioner/tests/connections/component-revisions.json",
-    boundaryRepairPath,
-  ];
-  return (_cwd, args) => {
-    if (
-      args[0] === "merge-base" &&
-      args[1] === "--is-ancestor" &&
-      args[2] === acceptedF12Candidate
-    ) {
-      if (options.descendant === false) throw new Error("not an ancestor");
-      return "";
-    }
-    if (args[0] === "rev-parse" && args[1]?.startsWith("post-f12-candidate:")) {
-      const path = args[1].slice("post-f12-candidate:".length);
-      if (options.frozenRootDrift === true && path === "executioner/src/contracts") {
-        return "0".repeat(40);
-      }
-      return contractTreeOids[path as keyof typeof contractTreeOids] ?? "candidate-blob";
-    }
-    if (
-      args[0] === "diff" &&
-      args[1] === "--name-only" &&
-      args[2] === acceptedF1Base &&
-      args[3] === acceptedF12Candidate
-    ) return protectedPaths.join("\n");
-    if (
-      args[0] === "diff" &&
-      args[1] === "--name-only" &&
-      args[2] === acceptedF12Candidate &&
-      args[3] === "post-f12-candidate"
-    ) return candidatePaths.join("\n");
-    throw new Error(`unexpected git call: ${args.join(" ")}`);
+interface GitOverride {
+  readonly matches: (args: readonly string[]) => boolean;
+  readonly result: string | Error;
+}
+
+function overriddenGit(...overrides: readonly GitOverride[]): Git {
+  return (cwd, args) => {
+    const override = overrides.find(({ matches }) => matches(args));
+    if (override === undefined) return nativeGit(cwd, args);
+    if (override.result instanceof Error) throw override.result;
+    return override.result;
   };
+}
+
+function ancestorCall(
+  args: readonly string[],
+  ancestor: string,
+  descendant: string,
+): boolean {
+  return args[0] === "merge-base" && args[1] === "--is-ancestor" &&
+    args[2] === ancestor && args[3] === descendant;
+}
+
+function diffCall(args: readonly string[], base: string, revision: string): boolean {
+  return args[0] === "diff" && args[1] === "--name-only" &&
+    args[2] === base && args[3] === revision;
+}
+
+function revParseCall(args: readonly string[], revision: string): boolean {
+  return args[0] === "rev-parse" && args[1] === revision;
 }
