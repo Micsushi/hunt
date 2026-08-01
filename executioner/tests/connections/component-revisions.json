@@ -32,7 +32,10 @@
       "executioner/tests/connections/component-revisions.json",
       "executioner/tests/connections/surface/fixture-browser-understanding.test.ts",
       "executioner/tests/connections/answers/intake-profile-answers.test.ts",
-      "executioner/tests/connections/interaction/field-flow.test.ts"
+      "executioner/tests/connections/interaction/complete-journey.test.ts",
+      "executioner/tests/connections/interaction/field-flow.test.ts",
+      "executioner/tests/connections/interaction/hazards.test.ts",
+      "executioner/tests/connections/interaction/support.ts"
     ]
   },
   "components": [
