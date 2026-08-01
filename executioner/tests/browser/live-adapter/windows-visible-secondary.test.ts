@@ -3,7 +3,34 @@ import test from "node:test";
 
 import {
   selectVisibleSecondaryWindow,
+  windowsScreenDiscoveryScript,
 } from "../../../src/browser/playwright-live/private/windows-visible-secondary.ts";
+
+test("screen discovery enables per-monitor DPI awareness before reading physical work areas", () => {
+  const script = windowsScreenDiscoveryScript();
+  const awarenessIndex = script.indexOf(
+    "[HuntDpiAwareness]::SetThreadDpiAwarenessContext",
+  );
+  const enumerationIndex = script.indexOf("[System.Windows.Forms.Screen]::AllScreens");
+
+  assert.notEqual(awarenessIndex, -1);
+  assert.notEqual(enumerationIndex, -1);
+  assert.ok(awarenessIndex < enumerationIndex);
+});
+
+test("physical 2560 by 1440 secondary contains the entire visible window", () => {
+  const secondary = { primary: false, x: 2560, y: 0, width: 2560, height: 1440 };
+  const window = selectVisibleSecondaryWindow([
+    { primary: true, x: 0, y: 0, width: 2560, height: 1440 },
+    secondary,
+  ]);
+
+  assert.deepEqual(window, { x: 2600, y: 40, width: 1400, height: 1000 });
+  assert.ok(window.x >= secondary.x);
+  assert.ok(window.y >= secondary.y);
+  assert.ok(window.x + window.width <= secondary.x + secondary.width);
+  assert.ok(window.y + window.height <= secondary.y + secondary.height);
+});
 
 test("visible inspection selects and clamps inside the rightmost non-primary monitor", () => {
   assert.deepEqual(selectVisibleSecondaryWindow([

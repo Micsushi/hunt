@@ -50,20 +50,7 @@ export function visibleSecondaryWindowFromEnvironment(): VisibleSecondaryWindow 
   if (process.platform !== "win32") {
     throw new Error("visible secondary inspection is Windows-only");
   }
-  const script = String.raw`
-$ErrorActionPreference = 'Stop'
-[Console]::OutputEncoding = [System.Text.Encoding]::UTF8
-Add-Type -AssemblyName System.Windows.Forms
-@([System.Windows.Forms.Screen]::AllScreens | ForEach-Object {
-  [pscustomobject]@{
-    primary = $_.Primary
-    x = $_.WorkingArea.X
-    y = $_.WorkingArea.Y
-    width = $_.WorkingArea.Width
-    height = $_.WorkingArea.Height
-  }
-}) | ConvertTo-Json -Compress
-`;
+  const script = windowsScreenDiscoveryScript();
   const result = spawnSync(
     "powershell.exe",
     ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", script],
@@ -92,6 +79,36 @@ Add-Type -AssemblyName System.Windows.Forms
     throw new Error("secondary monitor discovery returned invalid geometry");
   }
   return selectVisibleSecondaryWindow(screens);
+}
+
+export function windowsScreenDiscoveryScript(): string {
+  return String.raw`
+$ErrorActionPreference = 'Stop'
+[Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+Add-Type -TypeDefinition @'
+using System;
+using System.Runtime.InteropServices;
+
+public static class HuntDpiAwareness {
+  [DllImport("user32.dll", SetLastError = true)]
+  public static extern IntPtr SetThreadDpiAwarenessContext(IntPtr dpiContext);
+}
+'@
+$previousDpiContext = [HuntDpiAwareness]::SetThreadDpiAwarenessContext([IntPtr]::new(-4))
+if ($previousDpiContext -eq [IntPtr]::Zero) {
+  throw 'could not enable per-monitor DPI awareness'
+}
+Add-Type -AssemblyName System.Windows.Forms
+@([System.Windows.Forms.Screen]::AllScreens | ForEach-Object {
+  [pscustomobject]@{
+    primary = $_.Primary
+    x = $_.WorkingArea.X
+    y = $_.WorkingArea.Y
+    width = $_.WorkingArea.Width
+    height = $_.WorkingArea.Height
+  }
+}) | ConvertTo-Json -Compress
+`;
 }
 
 function enabled(value: string | undefined): boolean {
