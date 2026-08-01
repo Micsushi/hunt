@@ -52,7 +52,7 @@ test("production probe admits controlled Workday routes and emits only closed va
       'selector:[data-automation-id="email"]': 1,
       'selector:[data-automation-id="password"]': 1,
       'selector:[data-automation-id="verifyPassword"]': 1,
-      'selector:[data-automation-id="createAccountSubmitButton"]': 1,
+      'selector:[data-automation-id="noCaptchaWrapper"]:has([data-automation-id="createAccountSubmitButton"]) [data-automation-id="click_filter"][role="button"]': 1,
       'selector:[data-automation-id="signInLink"]': 1,
     },
   );
@@ -93,7 +93,7 @@ test("production probe recognizes the exact semantic sign-in boundary", async ()
       {
         'selector:[data-automation-id="email"]': 1,
         'selector:[data-automation-id="password"]': 1,
-        'selector:[data-automation-id="signInSubmitButton"]': 1,
+        'selector:[data-automation-id="noCaptchaWrapper"]:has([data-automation-id="signInSubmitButton"]) [data-automation-id="click_filter"][role="button"]': 1,
         'selector:[data-automation-id="createAccountLink"]': 1,
       },
     ),

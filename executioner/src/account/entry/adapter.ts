@@ -55,6 +55,10 @@ async function mutateOnce(
   if (initial.value.kind !== "classified_account") {
     return failure("credential_mutation_denied");
   }
+  if (initial.value.state.kind === "credential_rejected") {
+    emit(dependencies, "initial_credential_rejected");
+    return failure("credential_mutation_denied");
+  }
   emit(
     dependencies,
     initial.value.state.kind === "existing_account"
@@ -102,6 +106,10 @@ async function mutateOnce(
           throw new Error("account switch could not be reconciled");
         }
         state = switched.value;
+        if (state.state.kind === "credential_rejected") {
+          localFailure = failure("credential_mutation_denied");
+          return;
+        }
         if (noSecretState(state)) {
           result = accountStateResult(state.state, []);
           return;
@@ -220,10 +228,17 @@ async function mutateOnce(
             throw new Error("credential effect could not be reconciled");
           }
           emit(dependencies, postSubmitEvent(reconciled.value.state.kind));
+          if (reconciled.value.state.kind === "credential_rejected") {
+            localFailure = await cleanupPopulated(access, populated, dependencies)
+              ? failure("credential_mutation_denied")
+              : failure("credential_effect_uncertain");
+            return accountStateResult(state.state, ["email", "password"]);
+          }
           if (
             reconciled.value.state.kind === "existing_account" ||
             reconciled.value.state.kind === "create_account"
           ) {
+            emit(dependencies, "post_submit_no_progress");
             localFailure = await cleanupPopulated(access, populated, dependencies)
               ? failure("credential_mutation_denied")
               : failure("credential_effect_uncertain");
@@ -277,7 +292,7 @@ async function cleanupPopulated(
 
 function postSubmitEvent(
   kind: "existing_account" | "create_account" | "verification_required" |
-    "application_ready" | "manual_intervention",
+    "credential_rejected" | "application_ready" | "manual_intervention",
 ) {
   return `post_submit_${kind}` as const;
 }

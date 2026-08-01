@@ -43,6 +43,37 @@ test("challenge facts override account-page inference and preserve exact reasons
   }
 });
 
+test("visible sign-in and create-account errors resolve to one fixed credential rejection", () => {
+  for (const accountTrait of [
+    LIVE_ENTRY_TRAITS.account.signIn,
+    LIVE_ENTRY_TRAITS.account.create,
+  ]) {
+    const state = classifyLiveAccountState("account_entry", [
+      accountTrait,
+      LIVE_ENTRY_TRAITS.account.visibleError,
+    ]);
+    assert.deepEqual(state, {
+      kind: "credential_rejected",
+      classificationId: "classification_account_credential_rejected_v1",
+      sourceRevisionId: LIVE_ENTRY_CLASSIFICATION_REVISION_ID,
+    });
+  }
+});
+
+test("explicit challenges take precedence over a visible credential error", () => {
+  const state = classifyLiveAccountState("account_entry", [
+    LIVE_ENTRY_TRAITS.account.signIn,
+    LIVE_ENTRY_TRAITS.account.visibleError,
+    LIVE_ENTRY_TRAITS.challenge.captcha,
+  ]);
+  assert.deepEqual(state.kind === "manual_intervention"
+    ? { kind: state.kind, reason: state.reason }
+    : state, {
+    kind: "manual_intervention",
+    reason: "captcha",
+  });
+});
+
 test("conflicting account or challenge structures are factual ambiguity", () => {
   assert.equal(classifyLiveAccountState("account_entry", [
     LIVE_ENTRY_TRAITS.account.signIn,

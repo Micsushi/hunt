@@ -51,6 +51,13 @@ const accountRules = Object.freeze([
   rule("structural_trait_account_create_v1", '[data-automation-id="createAccountSubmitButton"]'),
 ] satisfies readonly TraitRule[]);
 
+const accountErrorRules = Object.freeze([
+  rule(
+    "structural_trait_account_visible_error_v1",
+    ':is([role="alert"], [data-automation-id="errorMessage"], [data-automation-id="inputAlert"]):visible',
+  ),
+] satisfies readonly TraitRule[]);
+
 const challengeRules = Object.freeze([
   rule("structural_trait_challenge_captcha_v1", '[data-automation-id="captchaChallenge"]'),
   rule("structural_trait_challenge_captcha_v1", 'iframe[title="reCAPTCHA"]'),
@@ -109,6 +116,9 @@ export async function inspectWorkdayStructure(
         ? "structural_trait_account_create_v1"
         : "structural_trait_account_sign_in_v1",
     );
+  }
+  for (const rule of accountErrorRules) {
+    if (await present(page, rule.selector)) traitIds.push(rule.traitId);
   }
   const controlCount = await boundedCount(page, controlSelector);
   const requiredControlCount = Math.min(

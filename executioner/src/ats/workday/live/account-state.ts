@@ -11,7 +11,7 @@ type LiveAccountStateMetadata = {
 };
 
 export type ResolvedLiveAccountStateResult = LiveAccountStateMetadata & (
-  | { readonly kind: "existing_account" | "create_account" | "verification_required" | "application_ready" }
+  | { readonly kind: "existing_account" | "create_account" | "credential_rejected" | "verification_required" | "application_ready" }
   | { readonly kind: "manual_intervention"; readonly reason: "captcha" | "mfa" | "access_control" }
 );
 
@@ -26,6 +26,7 @@ export type LiveAccountStateResult =
 const ACCOUNT_CLASSIFICATION_IDS = Object.freeze({
   existing_account: "classification_account_existing_v1",
   create_account: "classification_account_create_v1",
+  credential_rejected: "classification_account_credential_rejected_v1",
   verification_required: "classification_account_verify_v1",
   application_ready: "classification_account_ready_v1",
   manual_intervention_captcha: "classification_account_captcha_v1",
@@ -36,6 +37,7 @@ const ACCOUNT_CLASSIFICATION_IDS = Object.freeze({
 }) as unknown as Readonly<Record<
   | "existing_account"
   | "create_account"
+  | "credential_rejected"
   | "verification_required"
   | "application_ready"
   | "manual_intervention_captcha"
@@ -68,6 +70,9 @@ export function classifyLiveAccountState(
     });
   }
   if (pageType === "account_entry") {
+    if (traits.has(LIVE_ENTRY_TRAITS.account.visibleError)) {
+      return state("credential_rejected");
+    }
     const signIn = traits.has(LIVE_ENTRY_TRAITS.account.signIn);
     const create = traits.has(LIVE_ENTRY_TRAITS.account.create);
     if (signIn && create) return state("account_state_ambiguous");
@@ -84,7 +89,8 @@ export function classifyLiveAccountState(
 
 function state(
   kind: "existing_account" | "create_account" | "verification_required" |
-    "application_ready" | "account_state_unknown" | "account_state_ambiguous",
+    "credential_rejected" | "application_ready" | "account_state_unknown" |
+    "account_state_ambiguous",
 ): LiveAccountStateResult {
   return Object.freeze({
     kind,

@@ -22,6 +22,7 @@ export type AccountActionIntent =
 export type AccountEntryTraceEvent =
   | "initial_existing_account"
   | "initial_create_account"
+  | "initial_credential_rejected"
   | "owned_access_started"
   | "fields_admitted"
   | "credentials_resolved"
@@ -36,6 +37,8 @@ export type AccountEntryTraceEvent =
   | "post_submit_classify_failed"
   | "post_submit_existing_account"
   | "post_submit_create_account"
+  | "post_submit_credential_rejected"
+  | "post_submit_no_progress"
   | "post_submit_verification_required"
   | "post_submit_application_ready"
   | "post_submit_manual_intervention"
@@ -75,13 +78,19 @@ export interface AccountPageAccessProvider {
   ): Promise<LivePortResult<void, PersistentBrowserErrorCode>>;
 }
 
-type AccountState = {
+type AccountStateMetadata = {
   readonly classificationId: ClassificationId;
   readonly sourceRevisionId: ClassificationRevisionId;
-} & (
+};
+
+type PublicAccountState = AccountStateMetadata & (
   | { readonly kind: "existing_account" | "create_account" | "verification_required" | "application_ready" }
   | { readonly kind: "manual_intervention"; readonly reason: "captcha" | "mfa" | "access_control" }
 );
+
+type AccountState = PublicAccountState | AccountStateMetadata & {
+  readonly kind: "credential_rejected";
+};
 
 export type ClassifiedAccountObservation =
   | {
@@ -128,6 +137,9 @@ export function accountStateResult(
   state: AccountState,
   attemptedFields: readonly ("email" | "password")[],
 ): CredentialMutationResult {
+  if (state.kind === "credential_rejected") {
+    throw new TypeError("credential rejection is internal");
+  }
   return state.kind === "manual_intervention"
     ? { kind: state.kind, reason: state.reason, attemptedFields }
     : { kind: state.kind, attemptedFields };

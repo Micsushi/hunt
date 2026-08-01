@@ -166,6 +166,20 @@ test("matching sign-in fills, independently matches, activates, and reclassifies
   assert.equal(fixture.classificationCalls, 2);
 });
 
+test("an initial credential rejection denies before page or secret access", async () => {
+  const fixture = accountFixture(["credential_rejected"]);
+
+  const result = await createAccountEntryCredentialMutationAdapter(fixture.dependencies)
+    .mutate(request("sign_in"), new AbortController().signal);
+
+  assert.deepEqual(result, {
+    ok: false,
+    error: { code: "credential_mutation_denied", retryable: false },
+  });
+  assert.equal(fixture.resolverCalls, 0);
+  assert.deepEqual(fixture.operations, []);
+});
+
 test("value-free trace reports only fixed account-stage identifiers", async () => {
   const fixture = accountFixture(["existing_account", "verification_required"]);
   const events: string[] = [];
@@ -193,8 +207,12 @@ test("value-free trace reports only fixed account-stage identifiers", async () =
 
 test("sign-in that remains on an entry state clears fields and is denied", async () => {
   const fixture = accountFixture(["existing_account", "existing_account"]);
+  const events: string[] = [];
 
-  const result = await createAccountEntryCredentialMutationAdapter(fixture.dependencies)
+  const result = await createAccountEntryCredentialMutationAdapter({
+    ...fixture.dependencies,
+    trace: (event) => events.push(event),
+  })
     .mutate(request("sign_in"), new AbortController().signal);
 
   assert.deepEqual(result, {
@@ -206,6 +224,11 @@ test("sign-in that remains on an entry state clears fields and is denied", async
     "isEmpty:password",
     "clear:email",
     "isEmpty:email",
+  ]);
+  assert.deepEqual(events.slice(-3), [
+    "post_submit_existing_account",
+    "post_submit_no_progress",
+    "cleanup_succeeded",
   ]);
 });
 
@@ -396,6 +419,44 @@ test("a submit denial after verified fills clears every credential field", async
   ]);
 });
 
+test("a visible create-account rejection clears every populated field and is denied", async () => {
+  const fixture = accountFixture(["create_account", "credential_rejected"]);
+
+  const result = await createAccountEntryCredentialMutationAdapter(fixture.dependencies)
+    .mutate(request("create_account"), new AbortController().signal);
+
+  assert.deepEqual(result, {
+    ok: false,
+    error: { code: "credential_mutation_denied", retryable: false },
+  });
+  assert.deepEqual(fixture.operations.slice(-6), [
+    "clear:password_confirmation",
+    "isEmpty:password_confirmation",
+    "clear:password",
+    "isEmpty:password",
+    "clear:email",
+    "isEmpty:email",
+  ]);
+});
+
+test("a visible sign-in rejection clears populated fields and is denied", async () => {
+  const fixture = accountFixture(["existing_account", "credential_rejected"]);
+
+  const result = await createAccountEntryCredentialMutationAdapter(fixture.dependencies)
+    .mutate(request("sign_in"), new AbortController().signal);
+
+  assert.deepEqual(result, {
+    ok: false,
+    error: { code: "credential_mutation_denied", retryable: false },
+  });
+  assert.deepEqual(fixture.operations.slice(-4), [
+    "clear:password",
+    "isEmpty:password",
+    "clear:email",
+    "isEmpty:email",
+  ]);
+});
+
 test("a submit that becomes disabled after verified fills is traced and never activated", async () => {
   const fixture = accountFixture(["existing_account"]);
   const events: string[] = [];
@@ -534,6 +595,7 @@ test("observable results retain no credential or confirmation material", async (
 type ResolvedStateKind =
   | "existing_account"
   | "create_account"
+  | "credential_rejected"
   | "verification_required"
   | "application_ready";
 
