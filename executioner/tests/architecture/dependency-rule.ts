@@ -18,6 +18,12 @@ const fixedOwners: ReadonlyArray<readonly [RegExp, string]> = [
   [/^src\/contracts(?:\/|$)/, "contracts"],
   [/^src\/testing\/(?:contracts|live)(?:\/|$)/, "test-kit"],
   [/^src\/testing\/s2-revision\.ts$/, "test-kit"],
+  [
+    /^src\/mailbox\/providers\/gmail\/(?:auth-executor|http-client|http-parser)\.ts$/,
+    "S2_GMAIL_AUTH",
+  ],
+  [/^src\/mailbox\/providers\/gmail\/private(?:\/|$)/, "S2_GMAIL_AUTH"],
+  [/^src\/mailbox\/providers\/gmail(?:\/|$)/, "S2_MAILBOX_PROVIDER"],
   [/^src\/mailbox\/policy\.ts$/, "S2_MAILBOX_PROVIDER"],
   [/^src\/live\/preflight(?:\/|$)/, "live-preflight"],
   [/^src\/secrets\/windows-dpapi(?:\/|$)/, "windows-dpapi-secret-store"],
