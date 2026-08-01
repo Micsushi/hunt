@@ -1,0 +1,92 @@
+{
+  "schemaVersion": 1,
+  "acceptedF1Base": "f274d9a6624978b61ab1dd1433ebdddfdef029d2",
+  "contractTreeOids": {
+    "executioner/src/contracts": "7b7ac5d76b79612a85089f3ca49a8a58f8971541",
+    "executioner/src/testing/contracts": "b64bef789a3153d496613567a57f9b0a83b70708",
+    "executioner/tests/contracts": "4980df277be36fde63711515f47f3ab332d26a89",
+    "executioner/tests/security/privacy": "24771827d97117615b9360579e3293a05d3784dd"
+  },
+  "serializedVersions": {
+    "fixtureManifest": 2,
+    "durableJourneyState": 3,
+    "eventEnvelope": 2,
+    "errorEnvelope": 2,
+    "evidenceManifest": 2,
+    "terminalResult": 3,
+    "mcpRequest": 2,
+    "mcpResponse": 3
+  },
+  "components": [
+    {
+      "feature": "F2",
+      "tip": "441dbe6f4e05fc10539c13be71df1428bbf568cb",
+      "tipTreeOid": "43a85f763f637ac0939422904daf7f74a0b7ecc0",
+      "pathSetSha256": "b3e7accc16aa47120d1bd191a84a7e2e3c67a65bd79decfde3c972506bbf6809",
+      "conformance": "passed"
+    },
+    {
+      "feature": "F3",
+      "tip": "8f7d3096e443cd927f900c1c0bccfaf3d0a5a4d1",
+      "tipTreeOid": "98fbb68107f82b863027716cafa8b516f51cbcd2",
+      "pathSetSha256": "c267eec04588a5d461fc137e919fb6a83960c7e08d18d438bec77caa58c9b727",
+      "conformance": "passed"
+    },
+    {
+      "feature": "F4",
+      "tip": "d010b402a845285049a29d3d03f013a2fc50f65a",
+      "tipTreeOid": "355d5bd682c41c387b72c7e947dd07b3e800e71d",
+      "pathSetSha256": "3410e12f4e0e44ab858358b8d01cf099166862fbd92c1768819b076b226b8aef",
+      "conformance": "passed"
+    },
+    {
+      "feature": "F5",
+      "tip": "37620784a6d67655d85a8f8466b462b320740975",
+      "tipTreeOid": "602fae0041521f7c98396cb450436c1dc79447fc",
+      "pathSetSha256": "3eaae93535137f1432aec3559a5e47731771965c9af5b69881974ed2be158b2c",
+      "conformance": "passed"
+    },
+    {
+      "feature": "F6",
+      "tip": "49ef638431b7b268a564960dfde8bf0d35459fb8",
+      "tipTreeOid": "e45f9085e299617b63e2a53d3b58ff8773d1b381",
+      "pathSetSha256": "d5a0919fcc0c3bff5d23ad73af2368cb8de33358e1995d82445c8f953273c434",
+      "conformance": "passed"
+    },
+    {
+      "feature": "F7",
+      "tip": "b0a62dbf5e1719089810e502e1386fb57e5d929e",
+      "tipTreeOid": "a9a2c96597be0d28c647f5112d667d1f61419ab3",
+      "pathSetSha256": "b9807ce29685e57d6291d024d85db7761db05ec291796810118743b001ff919c",
+      "conformance": "passed"
+    },
+    {
+      "feature": "F8",
+      "tip": "b3cdc5e5cc4c9c3728e814e961735bb624e513d1",
+      "tipTreeOid": "da97e40732e87f98bd8db89e1a8e4c44a92b3175",
+      "pathSetSha256": "83a588f16f6630d62fb05a5c72e5d3be8647b035d24dc7a9c913b43bb97b8ce1",
+      "conformance": "passed"
+    },
+    {
+      "feature": "F9",
+      "tip": "a09317752f68ecba5e9864ec2a2994c6f6ffe311",
+      "tipTreeOid": "481bf716ae66db0d35a24bc68dc03d45a3249e05",
+      "pathSetSha256": "ec10a9cbf39773a71469501f8e6f505c0cf97bce02850770eee1b302db9d7b1a",
+      "conformance": "passed"
+    },
+    {
+      "feature": "F10",
+      "tip": "107602245b10204d0a07e34177f2150b51e65b2d",
+      "tipTreeOid": "2a7180f78e29f422c7e91e50d112a1341dc41880",
+      "pathSetSha256": "0f199c186eb3ae8d3baccc3f666243a56a108e4e5cd00a4d4aa0c8200c48b915",
+      "conformance": "passed"
+    },
+    {
+      "feature": "F11",
+      "tip": "4eec124405df73d01e98590fc9e466b553f92940",
+      "tipTreeOid": "42185e742a2b62360042a8c8f11f2b94247d15d4",
+      "pathSetSha256": "994ac4cd3a225d32adf654f7e2bf5da8b1a588c18aa74c3df657ba770e2bdf0b",
+      "conformance": "passed"
+    }
+  ]
+}
