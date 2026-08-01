@@ -6,8 +6,24 @@ import { resolve } from "node:path";
 import test from "node:test";
 
 const acceptedF1Base = "f274d9a6624978b61ab1dd1433ebdddfdef029d2";
+const acceptedF12Candidate = "c27f34b1441650c4007a8c34a9033a67b796edba";
 const repository = resolve(process.cwd(), "..");
 const manifestPath = "tests/connections/component-revisions.json";
+const boundaryRepairPath =
+  "executioner/tests/connections/component-manifest.test.ts";
+const f13Paths = [
+  "executioner/README.md",
+  "executioner/docs/s1-verification.md",
+  "executioner/scripts/run-s1-acceptance.ts",
+  "executioner/src/composition/s1-controlled-journey.ts",
+  "executioner/tests/acceptance/s1/determinism.test.ts",
+  "executioner/tests/acceptance/s1/failure/f3-observe-invalid.test.ts",
+  "executioner/tests/acceptance/s1/journey/composition.test.ts",
+  "executioner/tests/acceptance/s1/journey/support.ts",
+  "executioner/tests/acceptance/s1/t2-support.ts",
+  "scripts/run_component_ci.py",
+  "tests/test_deploy_readiness.py",
+] as const;
 const f12Paths = [
   "executioner/tests/connections/component-manifest.test.ts",
   "executioner/tests/connections/component-revisions.json",
@@ -81,8 +97,10 @@ const canonicalManifest = JSON.parse(
   readFileSync(manifestPath, "utf8"),
 ) as ComponentManifest;
 
-test("the canonical manifest freezes all accepted F2-F11 inputs", () => {
-  assert.doesNotThrow(() => assertCanonicalManifest(canonicalManifest));
+test("the canonical manifest freezes all accepted F2-F12 inputs", () => {
+  assert.doesNotThrow(() =>
+    assertCanonicalManifest(canonicalManifest, acceptedF12Candidate),
+  );
 });
 
 test("the canonical checker accepts manifest-updated cluster inputs", () => {
@@ -260,6 +278,138 @@ test("malformed candidate inputs fail with stable closed diagnostics", () => {
     /^Error: unowned F12 candidate path: executioner\/src\/orchestrator\.ts$/u,
   );
 });
+
+test("the accepted F12 candidate admits the exact F13 descendant", () => {
+  assert.doesNotThrow(() =>
+    assertPostF12Candidate(canonicalManifest, { repository }),
+  );
+});
+
+test("the post-F12 guard allows its named boundary repair only", () => {
+  assert.doesNotThrow(() =>
+    assertPostF12Candidate(canonicalManifest, {
+      repository,
+      candidate: "post-f12-candidate",
+      git: postF12Git([...f13Paths, boundaryRepairPath]),
+    }),
+  );
+});
+
+test("a non-descendant F13 candidate fails with a stable diagnostic", () => {
+  assert.throws(
+    () =>
+      assertPostF12Candidate(canonicalManifest, {
+        repository,
+        candidate: "post-f12-candidate",
+        git: postF12Git([...f13Paths], { descendant: false }),
+      }),
+    /^Error: F13 candidate is not descended from accepted F12 candidate$/u,
+  );
+});
+
+test("a missing declared F13 path fails with a stable diagnostic", () => {
+  assert.throws(
+    () =>
+      assertPostF12Candidate(canonicalManifest, {
+        repository,
+        candidate: "post-f12-candidate",
+        git: postF12Git(f13Paths.slice(1)),
+      }),
+    new RegExp(`^Error: post-F12 path set mismatch: missing ${f13Paths[0]}$`, "u"),
+  );
+});
+
+test("an undeclared post-F12 path fails with a stable diagnostic", () => {
+  const path = "executioner/src/unowned.ts";
+  assert.throws(
+    () =>
+      assertPostF12Candidate(canonicalManifest, {
+        repository,
+        candidate: "post-f12-candidate",
+        git: postF12Git([...f13Paths, path]),
+      }),
+    new RegExp(`^Error: post-F12 path set mismatch: unexpected ${path}$`, "u"),
+  );
+});
+
+test("post-F12 component and connection drift fail with stable diagnostics", () => {
+  const paths = [
+    "executioner/src/browser/adapter.ts",
+    "executioner/tests/connections/control/support.ts",
+    "executioner/tests/connections/component-revisions.json",
+  ] as const;
+  for (const path of paths) {
+    assert.throws(
+      () =>
+        assertPostF12Candidate(canonicalManifest, {
+          repository,
+          candidate: "post-f12-candidate",
+          git: postF12Git([...f13Paths, path]),
+        }),
+      new RegExp(`^Error: accepted F12 blob drift: ${path}$`, "u"),
+    );
+  }
+});
+
+test("post-F12 frozen-root drift retains its stable diagnostic", () => {
+  assert.throws(
+    () =>
+      assertPostF12Candidate(canonicalManifest, {
+        repository,
+        candidate: "post-f12-candidate",
+        git: postF12Git([...f13Paths], { frozenRootDrift: true }),
+      }),
+    /^Error: frozen root mismatch: executioner\/src\/contracts: post-f12-candidate$/u,
+  );
+});
+
+function assertPostF12Candidate(
+  manifest: ComponentManifest,
+  options: AdmissionOptions,
+): void {
+  const git = options.git ?? nativeGit;
+  const candidate = options.candidate ?? "HEAD";
+
+  assertAncestor(
+    acceptedF12Candidate,
+    candidate,
+    options.repository,
+    git,
+    "F13 candidate is not descended from accepted F12 candidate",
+  );
+  assertFrozenRoots(candidate, manifest, options.repository, git);
+
+  const protectedPaths = new Set(
+    changedPaths(
+      acceptedF1Base,
+      acceptedF12Candidate,
+      options.repository,
+      git,
+    ),
+  );
+  const candidatePaths = changedPaths(
+    acceptedF12Candidate,
+    candidate,
+    options.repository,
+    git,
+  );
+  const drift = candidatePaths.find(
+    (path) => protectedPaths.has(path) && path !== boundaryRepairPath,
+  );
+  if (drift !== undefined) {
+    throw new Error(`accepted F12 blob drift: ${drift}`);
+  }
+
+  const missing = f13Paths.find((path) => !candidatePaths.includes(path));
+  if (missing !== undefined) {
+    throw new Error(`post-F12 path set mismatch: missing ${missing}`);
+  }
+  const allowedPaths = new Set<string>([...f13Paths, boundaryRepairPath]);
+  const unexpected = candidatePaths.find((path) => !allowedPaths.has(path));
+  if (unexpected !== undefined) {
+    throw new Error(`post-F12 path set mismatch: unexpected ${unexpected}`);
+  }
+}
 
 function assertComponentManifest(
   manifest: ComponentManifest,
@@ -581,4 +731,49 @@ function candidateManifest(features: Feature[]): ComponentManifest {
   const manifest = manifestFor(...features);
   manifest.candidateInputs = { admittedFeatures: features, f12Paths: [] };
   return manifest;
+}
+
+function postF12Git(
+  candidatePaths: readonly string[],
+  options: {
+    readonly descendant?: boolean;
+    readonly frozenRootDrift?: boolean;
+  } = {},
+): Git {
+  const protectedPaths = [
+    "executioner/src/browser/adapter.ts",
+    "executioner/tests/connections/control/support.ts",
+    "executioner/tests/connections/component-revisions.json",
+    boundaryRepairPath,
+  ];
+  return (_cwd, args) => {
+    if (
+      args[0] === "merge-base" &&
+      args[1] === "--is-ancestor" &&
+      args[2] === acceptedF12Candidate
+    ) {
+      if (options.descendant === false) throw new Error("not an ancestor");
+      return "";
+    }
+    if (args[0] === "rev-parse" && args[1]?.startsWith("post-f12-candidate:")) {
+      const path = args[1].slice("post-f12-candidate:".length);
+      if (options.frozenRootDrift === true && path === "executioner/src/contracts") {
+        return "0".repeat(40);
+      }
+      return contractTreeOids[path as keyof typeof contractTreeOids] ?? "candidate-blob";
+    }
+    if (
+      args[0] === "diff" &&
+      args[1] === "--name-only" &&
+      args[2] === acceptedF1Base &&
+      args[3] === acceptedF12Candidate
+    ) return protectedPaths.join("\n");
+    if (
+      args[0] === "diff" &&
+      args[1] === "--name-only" &&
+      args[2] === acceptedF12Candidate &&
+      args[3] === "post-f12-candidate"
+    ) return candidatePaths.join("\n");
+    throw new Error(`unexpected git call: ${args.join(" ")}`);
+  };
 }
