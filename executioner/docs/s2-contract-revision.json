@@ -2,14 +2,15 @@
   "schemaVersion": 1,
   "status": "frozen",
   "acceptedStage1Base": "87c77e538d8bba378ec93516dbea3f4747beb822",
-  "s2ContractSource": "7bb1722fca3ab8807965ee39a212ad2c01f2cf87",
+  "s2ContractSource": "100b6bbf360f2c2e3cd93384e1fba7c115a92f15",
+  "s2ContractSourceTree": "13a8406e9c296b77aead3a0f961beba1110fba61",
   "contractTreeOids": {
-    "executioner/src/contracts": "5521d7eb31842c9835d09d84248fcf4072920c9e",
-    "executioner/src/contracts/live": "fe50802757c6cf17f2f30d1e143e8615b6f016b8",
-    "executioner/src/control/orchestrator/live": "1abcc918259efcf828160d56fea73b05bb4d3358",
-    "executioner/src/testing/live": "20029664a71e4693e74f5667b0b112f7b58a6fe0",
-    "executioner/tests/live/contracts": "0d05cef1685f5b07b77ab5e481320a03b2a991c4",
-    "executioner/tests/live/walking-skeleton": "7b7cfa373290395be3260027d8e13e04b5e036bf"
+    "executioner/src/contracts": "e263d7e127f9321dae8d62a0ccd0a33cd08e1d74",
+    "executioner/src/contracts/live": "aa51ec15d16ed6049698475e3d3a368e332a9dc3",
+    "executioner/src/control/orchestrator/live": "34d1f754a0401945e8a25201206faa9813acf33c",
+    "executioner/src/testing/live": "377d167ace83fa4d95798c221f4f776d86f209ac",
+    "executioner/tests/live/contracts": "3f5ff07db80edbbc2c8852c31204d7fadd522dff",
+    "executioner/tests/live/walking-skeleton": "745b301fcc177e7feeefc1d65eb521a56a3d2292"
   },
   "serializedVersions": {
     "commonWire": {

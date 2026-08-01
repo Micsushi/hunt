@@ -12,7 +12,10 @@ export const acceptedStage1Base =
   "87c77e538d8bba378ec93516dbea3f4747beb822" as const;
 
 export const s2ContractSource =
-  "7bb1722fca3ab8807965ee39a212ad2c01f2cf87" as const;
+  "100b6bbf360f2c2e3cd93384e1fba7c115a92f15" as const;
+
+export const s2ContractSourceTree =
+  "13a8406e9c296b77aead3a0f961beba1110fba61" as const;
 
 export const s2ContractRevisionStatus = "frozen" as const;
 
@@ -42,6 +45,7 @@ export interface S2ContractRevisionRecord {
   readonly status: "frozen";
   readonly acceptedStage1Base: typeof acceptedStage1Base;
   readonly s2ContractSource: typeof s2ContractSource;
+  readonly s2ContractSourceTree: typeof s2ContractSourceTree;
   readonly contractTreeOids: Readonly<Record<string, string>>;
   readonly serializedVersions: {
     readonly commonWire: Readonly<Record<string, number>>;
@@ -77,6 +81,16 @@ export function assertS2FrozenContractBase(
     repository,
     "Stage 2 contract source",
   );
+  const sourceTree = git(
+    repository,
+    "rev-parse",
+    `${s2ContractSource}^{tree}`,
+  ).trim();
+  if (sourceTree !== s2ContractSourceTree) {
+    throw new Error(
+      `S2 contract source tree mismatch: expected ${s2ContractSourceTree}, received ${sourceTree}`,
+    );
+  }
   assertS2FrozenRootsClean(revision, repository);
 
   for (const path of s2FrozenTreePaths) {
@@ -96,6 +110,7 @@ function assertRevisionRecord(record: S2ContractRevisionRecord): void {
       "status",
       "acceptedStage1Base",
       "s2ContractSource",
+      "s2ContractSourceTree",
       "contractTreeOids",
       "serializedVersions",
       "allowedTargetAdapters",
@@ -104,6 +119,7 @@ function assertRevisionRecord(record: S2ContractRevisionRecord): void {
     record.status !== s2ContractRevisionStatus ||
     record.acceptedStage1Base !== acceptedStage1Base ||
     record.s2ContractSource !== s2ContractSource ||
+    record.s2ContractSourceTree !== s2ContractSourceTree ||
     !sameKeys(record.contractTreeOids, s2FrozenTreePaths) ||
     !Object.values(record.contractTreeOids).every((oid) =>
       /^[0-9a-f]{40}$/u.test(oid),

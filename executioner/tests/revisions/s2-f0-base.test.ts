@@ -12,6 +12,7 @@ import {
   readS2ContractRevision,
   s2AllowedTargetAdapters,
   s2ContractSource,
+  s2ContractSourceTree,
   s2ContractRevisionStatus,
   s2FrozenTreePaths,
 } from "../../src/testing/s2-revision.ts";
@@ -26,19 +27,20 @@ test("the Stage 2 F0 manifest freezes exact trees, versions, and adapters", () =
     status: s2ContractRevisionStatus,
     acceptedStage1Base,
     s2ContractSource,
+    s2ContractSourceTree,
     contractTreeOids: {
       "executioner/src/contracts":
-        "5521d7eb31842c9835d09d84248fcf4072920c9e",
+        "e263d7e127f9321dae8d62a0ccd0a33cd08e1d74",
       "executioner/src/contracts/live":
-        "fe50802757c6cf17f2f30d1e143e8615b6f016b8",
+        "aa51ec15d16ed6049698475e3d3a368e332a9dc3",
       "executioner/src/control/orchestrator/live":
-        "1abcc918259efcf828160d56fea73b05bb4d3358",
+        "34d1f754a0401945e8a25201206faa9813acf33c",
       "executioner/src/testing/live":
-        "20029664a71e4693e74f5667b0b112f7b58a6fe0",
+        "377d167ace83fa4d95798c221f4f776d86f209ac",
       "executioner/tests/live/contracts":
-        "0d05cef1685f5b07b77ab5e481320a03b2a991c4",
+        "3f5ff07db80edbbc2c8852c31204d7fadd522dff",
       "executioner/tests/live/walking-skeleton":
-        "7b7cfa373290395be3260027d8e13e04b5e036bf",
+        "745b301fcc177e7feeefc1d65eb521a56a3d2292",
     },
     serializedVersions: {
       commonWire: {

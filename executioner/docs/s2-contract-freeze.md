@@ -5,7 +5,8 @@ Status: frozen
 The accepted Stage 1 base is
 `87c77e538d8bba378ec93516dbea3f4747beb822`. The machine-readable Stage 2
 contract source is
-`7bb1722fca3ab8807965ee39a212ad2c01f2cf87`. The machine-readable Stage 2
+`100b6bbf360f2c2e3cd93384e1fba7c115a92f15`, with exact tree
+`13a8406e9c296b77aead3a0f961beba1110fba61`. The machine-readable Stage 2
 record is `docs/s2-contract-revision.json`. It freezes the Git tree object IDs
 for the complete contract surface, live contract subset, F9 live coordinator,
 deterministic live test kit, live contract tests, and offline walking
