@@ -156,15 +156,49 @@ test("activates each exact semantic link or button without returning page state"
 
   for (const [action, expectedCall] of cases) {
     const locator = new FakeLocator({ count: 1, visible: true, enabled: true, editable: false });
-    const page = new FakePage(locator);
+    const destination = new FakeLocator({ count: 1, visible: true, enabled: true, editable: false });
+    const page = new FakePage(locator, destination);
 
     assert.equal(await adapter.activate(page, action), undefined);
-    assert.deepEqual(page.calls, [expectedCall]);
+    assert.deepEqual(page.calls, action.startsWith("submit_")
+      ? [
+          expectedCall,
+          {
+            method: "locator",
+            selector: [
+              action === "submit_sign_in"
+                ? '[data-automation-id="createAccountPage"]'
+                : '[data-automation-id="signInPage"]',
+              '[data-automation-id="emailVerificationPage"]',
+              '[data-automation-id="verifyEmailPage"]',
+              '[data-automation-id="candidateHomePage"]',
+              '[data-automation-id="applyFlowMyInfoPage"]',
+              '[data-automation-id="applyFlowApplicationQuestionsPage"]',
+              '[data-automation-id="applyFlowReviewPage"]',
+              '[data-automation-id="captchaChallenge"]',
+              'iframe[title="reCAPTCHA"]',
+              'iframe[title="hCaptcha"]',
+              '[data-automation-id="mfaChallenge"]',
+              '[data-automation-id="accessDeniedPage"]',
+              '[data-automation-id="securityChallenge"]',
+            ].join(", "),
+          },
+        ]
+      : [expectedCall]);
     assert.equal(locator.clickCalls, 1);
     assert.deepEqual(
       locator.waitForArguments,
       action.startsWith("submit_")
-        ? [{ state: "hidden", timeout: 10_000 }]
+        ? [
+            { state: "hidden", timeout: 10_000 },
+            { state: "attached", timeout: 10_000 },
+          ]
+        : [],
+    );
+    assert.deepEqual(
+      destination.waitForArguments,
+      action.startsWith("submit_")
+        ? [{ state: "attached", timeout: 10_000 }]
         : [],
     );
   }
@@ -180,10 +214,103 @@ test("accepting terms uses idempotent checkbox semantics", async () => {
   assert.equal(locator.clickCalls, 0);
 });
 
+test("a visible rejected submit does not wait for a new destination", async () => {
+  const locator = new FakeLocator({
+    count: 1,
+    visible: true,
+    enabled: true,
+    editable: false,
+    hiddenWaitFails: true,
+  });
+  const page = new FakePage(locator);
+
+  await new PlaywrightAccountPageAdapter().activate(page, "submit_sign_in");
+
+  assert.deepEqual(page.calls, [
+    { method: "locator", selector: '[data-automation-id="signInSubmitButton"]' },
+  ]);
+  assert.deepEqual(locator.waitForArguments, [
+    { state: "hidden", timeout: 10_000 },
+  ]);
+});
+
+test("a markerless rejected submit may detach then reattach before classification", async () => {
+  const submit = new FakeLocator({
+    count: 1,
+    visible: true,
+    enabled: true,
+    editable: false,
+  });
+  const absentDestination = new FakeLocator({
+    count: 0,
+    visible: false,
+    enabled: false,
+    editable: false,
+    attachedWaitFails: true,
+  });
+
+  await new PlaywrightAccountPageAdapter().activate(
+    new FakePage(submit, absentDestination),
+    "submit_sign_in",
+  );
+
+  assert.deepEqual(submit.waitForArguments, [
+    { state: "hidden", timeout: 10_000 },
+    { state: "attached", timeout: 10_000 },
+  ]);
+  assert.deepEqual(absentDestination.waitForArguments, [
+    { state: "attached", timeout: 10_000 },
+  ]);
+});
+
+test("submit stabilization excludes the stale current account container", async () => {
+  for (const [action, staleMarker] of [
+    ["submit_sign_in", "signInPage"],
+    ["submit_create_account", "createAccountPage"],
+  ] as const) {
+    const page = new FakePage(
+      new FakeLocator({ count: 1, visible: true, enabled: true, editable: false }),
+      new FakeLocator({ count: 1, visible: true, enabled: true, editable: false }),
+    );
+
+    await new PlaywrightAccountPageAdapter().activate(page, action);
+
+    const destination = (page.calls[1] as { readonly selector: string }).selector;
+    assert.equal(destination.includes(`[data-automation-id="${staleMarker}"]`), false);
+    assert.equal(destination.includes('[data-automation-id="authPage"]'), false);
+  }
+});
+
+test("submit stabilization fails closed when no known state appears", async () => {
+  const submit = new FakeLocator({
+    count: 1,
+    visible: true,
+    enabled: true,
+    editable: false,
+    attachedWaitFails: true,
+  });
+  const absentDestination = new FakeLocator({
+    count: 0,
+    visible: false,
+    enabled: false,
+    editable: false,
+    attachedWaitFails: true,
+  });
+
+  await assert.rejects(() => new PlaywrightAccountPageAdapter().activate(
+    new FakePage(submit, absentDestination),
+    "submit_sign_in",
+  ));
+});
+
 class FakePage {
   readonly calls: unknown[] = [];
   readonly resultLocator: FakeLocator;
-  constructor(locator: FakeLocator) { this.resultLocator = locator; }
+  readonly destinationLocator: FakeLocator;
+  constructor(locator: FakeLocator, destinationLocator: FakeLocator = locator) {
+    this.resultLocator = locator;
+    this.destinationLocator = destinationLocator;
+  }
   getByLabel(name: string, options: { exact: boolean }): FakeLocator {
     this.calls.push({ method: "getByLabel", name, exact: options.exact });
     return this.resultLocator;
@@ -194,7 +321,9 @@ class FakePage {
   }
   locator(selector: string): FakeLocator {
     this.calls.push({ method: "locator", selector });
-    return this.resultLocator;
+    return selector.includes("candidateHomePage")
+      ? this.destinationLocator
+      : this.resultLocator;
   }
   async goto(): Promise<void> {}
   isClosed(): boolean { return false; }
@@ -208,6 +337,8 @@ class FakeLocator {
     enabled: boolean;
     editable: boolean;
     inputValue?: string;
+    hiddenWaitFails?: boolean;
+    attachedWaitFails?: boolean;
   };
   readonly fillArguments: string[] = [];
   inputValueCalls = 0;
@@ -222,6 +353,8 @@ class FakeLocator {
     enabled: boolean;
     editable: boolean;
     inputValue?: string;
+    hiddenWaitFails?: boolean;
+    attachedWaitFails?: boolean;
   }) {
     this.values = values;
   }
@@ -250,6 +383,17 @@ class FakeLocator {
     assert.deepEqual(events, ["input", "change"]);
   }
   async click(): Promise<void> { this.clickCalls += 1; }
-  async waitFor(options: unknown): Promise<void> { this.waitForArguments.push(options); }
+  async waitFor(options: unknown): Promise<void> {
+    this.waitForArguments.push(options);
+    if (
+      this.values.hiddenWaitFails &&
+      (options as { readonly state?: string }).state === "hidden"
+    ) throw new Error("submit remained visible");
+    if (
+      this.values.attachedWaitFails &&
+      (options as { readonly state?: string }).state === "attached"
+    ) throw new Error("state remained detached");
+  }
+  first(): FakeLocator { return this; }
   async check(): Promise<void> { this.checkCalls += 1; }
 }

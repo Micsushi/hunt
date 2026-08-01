@@ -8,6 +8,21 @@ import type {
 } from "./account-page-types.ts";
 import type { PersistentPage } from "./types.ts";
 
+const POST_SUBMIT_DESTINATIONS = [
+  '[data-automation-id="emailVerificationPage"]',
+  '[data-automation-id="verifyEmailPage"]',
+  '[data-automation-id="candidateHomePage"]',
+  '[data-automation-id="applyFlowMyInfoPage"]',
+  '[data-automation-id="applyFlowApplicationQuestionsPage"]',
+  '[data-automation-id="applyFlowReviewPage"]',
+  '[data-automation-id="captchaChallenge"]',
+  'iframe[title="reCAPTCHA"]',
+  'iframe[title="hCaptcha"]',
+  '[data-automation-id="mfaChallenge"]',
+  '[data-automation-id="accessDeniedPage"]',
+  '[data-automation-id="securityChallenge"]',
+];
+
 export class PlaywrightAccountPageAdapter implements SemanticAccountPageAdapter {
   async inspect(
     page: PersistentPage,
@@ -66,10 +81,30 @@ export class PlaywrightAccountPageAdapter implements SemanticAccountPageAdapter 
     else {
       await locator.click();
       if (action === "submit_sign_in" || action === "submit_create_account") {
-        await locator.waitFor({ state: "hidden", timeout: 10_000 }).catch(() => undefined);
+        const transitioned = await locator.waitFor({
+          state: "hidden",
+          timeout: 10_000,
+        }).then(() => true, () => false);
+        if (transitioned) {
+          await Promise.any([
+            playwrightPage(page).locator(postSubmitDestination(action))
+              .first()
+              .waitFor({ state: "attached", timeout: 10_000 }),
+            locator.waitFor({ state: "attached", timeout: 10_000 }),
+          ]);
+        }
       }
     }
   }
+}
+
+function postSubmitDestination(
+  action: "submit_sign_in" | "submit_create_account",
+): string {
+  const opposingAccountPage = action === "submit_sign_in"
+    ? '[data-automation-id="createAccountPage"]'
+    : '[data-automation-id="signInPage"]';
+  return [opposingAccountPage, ...POST_SUBMIT_DESTINATIONS].join(", ");
 }
 
 function playwrightPage(page: PersistentPage): Pick<Page, "locator"> {
