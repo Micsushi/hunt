@@ -11,14 +11,28 @@ const LEGACY_V2_ACCOUNT_SCRIPT = String.raw`
 param([string]$sourcePath, [string]$expectedSha256)
 $ErrorActionPreference = 'Stop'
 if (-not [System.IO.Path]::IsPathRooted($sourcePath)) { exit 31 }
-$actualSha256 = (Get-FileHash -LiteralPath $sourcePath -Algorithm SHA256).Hash.ToLowerInvariant()
-if ($actualSha256 -cne $expectedSha256) { exit 32 }
-$legacySource = [System.IO.File]::ReadAllText($sourcePath, [System.Text.Encoding]::UTF8)
-$emailMatch = [regex]::Match($legacySource, 'DEFAULT_ACCOUNT_EMAIL\s*=\s*"([^"\\\r\n]{1,320})"\s*;', 'CultureInvariant')
-$passwordMatch = [regex]::Match($legacySource, 'DEFAULT_ACCOUNT_PASSWORD\s*=.*?\|\|\s*"([^"\\\r\n]{1,4096})"\s*;', 'Singleline,CultureInvariant')
-if (-not $emailMatch.Success -or -not $passwordMatch.Success) { exit 33 }
+$legacyBytes = $null
+$hashBytes = $null
+$sha256 = $null
+$legacySource = $null
+$emailMatch = $null
+$passwordMatch = $null
+try {
+    $item = Get-Item -LiteralPath $sourcePath -Force
+    if ($item.PSIsContainer -or (($item.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) -or $item.Length -lt 1 -or $item.Length -gt 65536) { exit 34 }
+    $legacyBytes = [System.IO.File]::ReadAllBytes($sourcePath)
+    if ($legacyBytes.Length -lt 1 -or $legacyBytes.Length -gt 65536) { exit 34 }
+    $sha256 = [System.Security.Cryptography.SHA256]::Create()
+    $hashBytes = $sha256.ComputeHash($legacyBytes)
+    $actualSha256 = [System.BitConverter]::ToString($hashBytes).Replace('-', '').ToLowerInvariant()
+    if ($actualSha256 -cne $expectedSha256) { exit 32 }
+    $strictUtf8 = New-Object System.Text.UTF8Encoding($false, $true)
+    $legacySource = $strictUtf8.GetString($legacyBytes)
+    $emailMatch = [regex]::Match($legacySource, 'DEFAULT_ACCOUNT_EMAIL\s*=\s*"([^"\\\r\n]{1,320})"\s*;', 'CultureInvariant')
+    $passwordMatch = [regex]::Match($legacySource, 'DEFAULT_ACCOUNT_PASSWORD\s*=.*?\|\|\s*"([^"\\\r\n]{1,4096})"\s*;', 'Singleline,CultureInvariant')
+    if (-not $emailMatch.Success -or -not $passwordMatch.Success) { exit 33 }
 
-$source = @'
+    $source = @'
 using System;
 using System.IO;
 using System.Security.Cryptography;
@@ -96,10 +110,12 @@ public static class HuntLegacyV2AccountSealer
     }
 }
 '@
-Add-Type -TypeDefinition $source -ReferencedAssemblies 'System.Security.dll'
-try {
+    Add-Type -TypeDefinition $source -ReferencedAssemblies 'System.Security.dll'
     [HuntLegacyV2AccountSealer]::Run($emailMatch.Groups[1].Value, $passwordMatch.Groups[1].Value)
 } finally {
+    if ($null -ne $hashBytes) { [System.Array]::Clear($hashBytes, 0, $hashBytes.Length) }
+    if ($null -ne $legacyBytes) { [System.Array]::Clear($legacyBytes, 0, $legacyBytes.Length) }
+    if ($null -ne $sha256) { $sha256.Dispose() }
     $legacySource = $null
     $emailMatch = $null
     $passwordMatch = $null

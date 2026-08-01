@@ -72,7 +72,10 @@ test("trusted migration helper reads the pinned legacy file and emits ciphertext
     "utf8",
   );
   assert.match(source, /DataProtectionScope\.CurrentUser/u);
-  assert.match(source, /Get-FileHash/u);
+  assert.match(source, /ReadAllBytes/u);
+  assert.match(source, /SHA256/u);
+  assert.match(source, /ReparsePoint/u);
+  assert.match(source, /legacyBytes\.Length -gt 65536/u);
   assert.match(source, /expectedSha256/u);
   assert.match(source, /DEFAULT_ACCOUNT_EMAIL/u);
   assert.match(source, /DEFAULT_ACCOUNT_PASSWORD/u);
@@ -80,6 +83,7 @@ test("trusted migration helper reads the pinned legacy file and emits ciphertext
   assert.match(source, /shell:\s*false/u);
   assert.match(source, /stdio:\s*\["pipe",\s*"pipe",\s*"ignore"\]/u);
   assert.doesNotMatch(source, /process\.env/u);
+  assert.doesNotMatch(source, /Get-FileHash/u);
   assert.doesNotMatch(source, /Write-(?:Output|Error|Host)|console\.(?:log|error)|stderr:/iu);
 });
 
