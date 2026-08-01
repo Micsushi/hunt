@@ -272,6 +272,26 @@ test("the architecture owner does not widen to other live source", () => {
   );
 });
 
+test("the live runner and live evidence lanes have exact F9 and F11 owners", () => {
+  assert.deepEqual(
+    componentSourceOwners.filter(({ pattern }) => pattern.startsWith("src/live/")),
+    [
+      { pattern: "src/live/runner/**", owner: "F9" },
+      { pattern: "src/live/evidence/**", owner: "F11" },
+    ],
+  );
+  assert.deepEqual(dependencyViolations([
+    {
+      path: "src/live/runner/account-access.ts",
+      source: 'import type { SecretStore } from "../../contracts/live/index.ts";',
+    },
+    {
+      path: "src/live/evidence/account-access-evidence.ts",
+      source: 'import { openSync } from "node:fs";',
+    },
+  ]), []);
+});
+
 test("composition may not import test-only source", () => {
   const files: SourceFile[] = [
     {
