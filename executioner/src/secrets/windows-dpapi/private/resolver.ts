@@ -1,18 +1,22 @@
 import type {
-  AccountCredentialCapability,
   GmailAuthorizationCapability,
 } from "../../../contracts/live/private/privileged-capabilities.ts";
 import {
-  useEphemeralByteBatch,
   useEphemeralBytes,
 } from "../../../contracts/live/private/privileged-capabilities.ts";
 import type {
   ActiveAccountSecretHandle,
   ActiveGmailSecretHandle,
   CredentialMutationResult,
+  LivePortResult,
   MailboxPollResultV1,
+  SecretStoreErrorCode,
   SecretHandleMetadataV1,
 } from "../../../contracts/live/index.ts";
+import {
+  decodeAccountCredentialBundleV1,
+  type AccountCredentialBytesV1,
+} from "./account-credential-bundle.ts";
 import { WindowsDpapiBridge } from "../bridge.ts";
 import {
   approvedSecretRoot,
@@ -30,7 +34,15 @@ export interface WindowsDpapiSecretResolverOptions {
   readonly bridge?: WindowsDpapiBridge;
 }
 
-export class WindowsDpapiSecretResolver {
+export interface AccountCredentialResolver {
+  useAccountCredentials<Result extends CredentialMutationResult>(
+    handle: ActiveAccountSecretHandle,
+    signal: AbortSignal,
+    operation: (value: AccountCredentialBytesV1) => Promise<Result>,
+  ): Promise<LivePortResult<Result, SecretStoreErrorCode>>;
+}
+
+export class WindowsDpapiSecretResolver implements AccountCredentialResolver {
   readonly #root: string;
   readonly #now: () => string;
   readonly #bridge: WindowsDpapiBridge;
@@ -44,16 +56,19 @@ export class WindowsDpapiSecretResolver {
   async useAccountCredentials<Result extends CredentialMutationResult>(
     handle: ActiveAccountSecretHandle,
     signal: AbortSignal,
-    operation: Parameters<AccountCredentialCapability["use"]>[0],
+    operation: (value: AccountCredentialBytesV1) => Promise<Result>,
   ) {
     const loaded = await this.#load(handle, signal);
     if (!loaded.ok) return loaded;
-    const decoded = decodeBatch(loaded.value, 2);
+    const decoded = decodeAccountCredentialBundleV1(loaded.value);
+    loaded.value.fill(0);
     if (decoded === null) return secretError("secret_store_unavailable");
-    const capability: AccountCredentialCapability = {
-      use: (callback) => useEphemeralByteBatch(decoded, callback),
-    };
-    return ok(await capability.use(operation) as Result);
+    try {
+      return ok(await operation(decoded));
+    } finally {
+      decoded.email.fill(0);
+      decoded.password.fill(0);
+    }
   }
 
   async useGmailAuthorization<Result extends MailboxPollResultV1>(

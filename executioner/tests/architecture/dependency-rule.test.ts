@@ -216,6 +216,23 @@ test("repository ignore policy admits only the intended SecretStore source and t
   assert.match(ignore, /^!executioner\/tests\/secrets\/\*\*$/mu);
 });
 
+test("the account credential resolver stays private and the public secret surface does not widen", () => {
+  const publicSurface = readFileSync("src/secrets/index.ts", "utf8").trim();
+  const privateResolver = readFileSync(
+    "src/secrets/windows-dpapi/private/resolver.ts",
+    "utf8",
+  );
+  assert.equal(
+    publicSurface,
+    'export { WindowsDpapiSecretStore } from "./windows-dpapi/store.ts";',
+  );
+  assert.match(
+    privateResolver,
+    /export interface AccountCredentialResolver \{/u,
+  );
+  assert.doesNotMatch(publicSurface, /Resolver|Custodian|CredentialBundle/u);
+});
+
 test("the architecture owner does not widen to other live source", () => {
   assert.deepEqual(
     dependencyViolations([

@@ -6,6 +6,10 @@ import type {
 import type { JourneyId } from "../../../contracts/index.ts";
 import { WindowsDpapiBridge } from "../bridge.ts";
 import {
+  encodeAccountCredentialBundleV1,
+  type AccountCredentialBytesV1,
+} from "./account-credential-bundle.ts";
+import {
   approvedSecretRoot,
   deleteSecretRecord,
   expectedConsumer,
@@ -42,10 +46,15 @@ export class WindowsDpapiSecretCustodian {
 
   provisionAccount(
     request: SecretProvisionRequest,
-    values: readonly Readonly<Uint8Array>[],
+    value: AccountCredentialBytesV1,
     signal: AbortSignal,
   ) {
-    return this.#provision("account_credentials", request, values, signal);
+    return this.#provision(
+      "account_credentials",
+      request,
+      encodeAccountCredentialBundleV1(value),
+      signal,
+    );
   }
 
   provisionGmail(
@@ -53,7 +62,12 @@ export class WindowsDpapiSecretCustodian {
     value: Readonly<Uint8Array>,
     signal: AbortSignal,
   ) {
-    return this.#provision("gmail_oauth", request, [value], signal);
+    return this.#provision(
+      "gmail_oauth",
+      request,
+      value.byteLength === 0 ? null : encodeBatch([value]),
+      signal,
+    );
   }
 
   async rotateGmail(
@@ -73,10 +87,10 @@ export class WindowsDpapiSecretCustodian {
   async rotateAccount(
     previous: SecretHandleMetadataV1,
     request: SecretProvisionRequest,
-    values: readonly Readonly<Uint8Array>[],
+    value: AccountCredentialBytesV1,
     signal: AbortSignal,
   ) {
-    const created = await this.provisionAccount(request, values, signal);
+    const created = await this.provisionAccount(request, value, signal);
     if (!created.ok) return created;
     const revoked = await this.#revoke(previous, signal);
     if (revoked.ok) return created;
@@ -107,15 +121,16 @@ export class WindowsDpapiSecretCustodian {
   async #provision(
     purpose: "account_credentials" | "gmail_oauth",
     request: SecretProvisionRequest,
-    values: readonly Readonly<Uint8Array>[],
+    payload: Uint8Array | null,
     signal: AbortSignal,
   ) {
-    if (signal.aborted) return cancelled;
-    if (
-      values.length !== (purpose === "account_credentials" ? 2 : 1) ||
-      values.some((value) => value.byteLength === 0) ||
-      Date.parse(request.expiresAt) <= Date.parse(this.#now())
-    ) {
+    if (payload === null) return secretError("secret_handle_mismatched");
+    if (signal.aborted) {
+      payload.fill(0);
+      return cancelled;
+    }
+    if (Date.parse(request.expiresAt) <= Date.parse(this.#now())) {
+      payload.fill(0);
       return secretError("secret_handle_mismatched");
     }
     const metadata: StoredSecretMetadata = {
@@ -131,7 +146,6 @@ export class WindowsDpapiSecretCustodian {
       expiresAt: request.expiresAt,
       state: "active",
     };
-    const payload = encodeBatch(values);
     const entropy = metadataBytes(metadata);
     try {
       const sealed = await this.#bridge.protect(payload, entropy, signal);

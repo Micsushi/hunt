@@ -10,6 +10,8 @@ import { WindowsDpapiSecretStore } from "../../src/secrets/windows-dpapi/store.t
 import { WindowsDpapiBridge } from "../../src/secrets/windows-dpapi/bridge.ts";
 import { WindowsDpapiSecretCustodian } from "../../src/secrets/windows-dpapi/private/custodian.ts";
 import { WindowsDpapiSecretResolver } from "../../src/secrets/windows-dpapi/private/resolver.ts";
+import type { AccountCredentialResolver } from "../../src/secrets/windows-dpapi/private/resolver.ts";
+import { encodeAccountCredentialBundleV1 } from "../../src/secrets/windows-dpapi/private/account-credential-bundle.ts";
 
 const activeSignal = () => new AbortController().signal;
 const syntheticBytes = (...values: number[]) => Uint8Array.from(values);
@@ -18,6 +20,21 @@ const externalOptions = (root: string, now: () => string) => ({
   now,
   forbiddenRoots: [process.cwd()],
 });
+
+class ControlledUnprotectBridge extends WindowsDpapiBridge {
+  calls = 0;
+  readonly #payload: Uint8Array;
+
+  constructor(payload: Uint8Array) {
+    super();
+    this.#payload = payload;
+  }
+
+  override async unprotect(): Promise<Uint8Array> {
+    this.calls += 1;
+    return this.#payload.slice();
+  }
+}
 
 async function withSecretRoot(
   operation: (root: string) => Promise<void>,
@@ -41,7 +58,10 @@ test("custodian provisions opaque scoped handles and public inspection returns m
     const now = () => liveFixtures.issuedAt;
     const custodian = new WindowsDpapiSecretCustodian(externalOptions(root, now));
     const store = new WindowsDpapiSecretStore(externalOptions(root, now));
-    const source = [syntheticBytes(19, 23, 29), syntheticBytes(31, 37, 41)];
+    const source = {
+      email: syntheticBytes(19, 23, 29),
+      password: syntheticBytes(31, 37, 41),
+    };
 
     const provisioned = await custodian.provisionAccount(
       {
@@ -81,7 +101,7 @@ test("custodian provisions opaque scoped handles and public inspection returns m
     const files = await readdir(root);
     assert.equal(files.length, 1);
     const record = await readFile(join(root, files[0]!));
-    for (const value of source) {
+    for (const value of [source.email, source.password]) {
       assert.equal(record.includes(Buffer.from(value)), false);
     }
   });
@@ -95,7 +115,7 @@ test("inspection fails closed for purpose, consumer, journey, expiry, revoke, an
     const store = new WindowsDpapiSecretStore(externalOptions(root, now));
     const created = await custodian.provisionAccount(
       { journeyId: liveFixtures.journeyId, expiresAt: liveFixtures.expiresAt },
-      [syntheticBytes(47), syntheticBytes(53)],
+      { email: syntheticBytes(47), password: syntheticBytes(53) },
       activeSignal(),
     );
     assert.equal(created.ok, true);
@@ -166,9 +186,10 @@ test("only the two frozen consumers resolve plaintext inside a callback and byte
     const now = () => liveFixtures.issuedAt;
     const custodian = new WindowsDpapiSecretCustodian(externalOptions(root, now));
     const resolver = new WindowsDpapiSecretResolver(externalOptions(root, now));
+    const accountResolver: AccountCredentialResolver = resolver;
     const account = await custodian.provisionAccount(
       { journeyId: liveFixtures.journeyId, expiresAt: liveFixtures.expiresAt },
-      [syntheticBytes(59, 61), syntheticBytes(67, 71)],
+      { email: syntheticBytes(59, 61), password: syntheticBytes(67, 71) },
       activeSignal(),
     );
     const gmail = await custodian.provisionGmail(
@@ -186,13 +207,16 @@ test("only the two frozen consumers resolve plaintext inside a callback and byte
     assert.equal(gmail.value.purpose, "gmail_oauth");
     assert.equal(gmail.value.consumer, "gmail_auth_executor");
 
-    let accountViews: readonly Readonly<Uint8Array>[] = [];
-    const accountResult = await resolver.useAccountCredentials(
+    let accountViews:
+      | { readonly email: Readonly<Uint8Array>; readonly password: Readonly<Uint8Array> }
+      | undefined;
+    const accountResult = await accountResolver.useAccountCredentials(
       account.value as typeof liveFixtures.accountSecret,
       activeSignal(),
       async (values) => {
         accountViews = values;
-        assert.deepEqual(values.map((value) => [...value]), [[59, 61], [67, 71]]);
+        assert.deepEqual([...values.email], [59, 61]);
+        assert.deepEqual([...values.password], [67, 71]);
         return { kind: "verification_required", attemptedFields: ["email", "password"] };
       },
     );
@@ -200,7 +224,8 @@ test("only the two frozen consumers resolve plaintext inside a callback and byte
       ok: true,
       value: { kind: "verification_required", attemptedFields: ["email", "password"] },
     });
-    assert.deepEqual(accountViews.map((value) => [...value]), [[0, 0], [0, 0]]);
+    assert.deepEqual([...(accountViews?.email ?? [])], [0, 0]);
+    assert.deepEqual([...(accountViews?.password ?? [])], [0, 0]);
 
     let gmailView: Readonly<Uint8Array> | undefined;
     const gmailResult = await resolver.useGmailAuthorization(
@@ -221,10 +246,20 @@ test("resolver rejects supplied metadata widening before invoking a privileged c
   await withSecretRoot(async (root) => {
     const now = () => liveFixtures.issuedAt;
     const custodian = new WindowsDpapiSecretCustodian(externalOptions(root, now));
-    const resolver = new WindowsDpapiSecretResolver(externalOptions(root, now));
+    const payload = encodeAccountCredentialBundleV1({
+      email: syntheticBytes(65),
+      password: syntheticBytes(66),
+    });
+    assert.notEqual(payload, null);
+    if (payload === null) return;
+    const bridge = new ControlledUnprotectBridge(payload);
+    const resolver = new WindowsDpapiSecretResolver({
+      ...externalOptions(root, now),
+      bridge,
+    });
     const account = await custodian.provisionAccount(
       { journeyId: liveFixtures.journeyId, expiresAt: liveFixtures.expiresAt },
-      [syntheticBytes(127), syntheticBytes(131)],
+      { email: syntheticBytes(127), password: syntheticBytes(65) },
       activeSignal(),
     );
     assert.equal(account.ok, true);
@@ -243,6 +278,178 @@ test("resolver rejects supplied metadata widening before invoking a privileged c
       error: { code: "secret_handle_mismatched", retryable: false },
     });
     assert.equal(invoked, false);
+    assert.equal(bridge.calls, 0);
+  });
+});
+
+test("resolver rejects every malformed or legacy account bundle before callback", async () => {
+  await withSecretRoot(async (root) => {
+    const now = () => liveFixtures.issuedAt;
+    const custodian = new WindowsDpapiSecretCustodian(externalOptions(root, now));
+    const account = await custodian.provisionAccount(
+      { journeyId: liveFixtures.journeyId, expiresAt: liveFixtures.expiresAt },
+      { email: syntheticBytes(65), password: syntheticBytes(66) },
+      activeSignal(),
+    );
+    assert.equal(account.ok, true);
+    if (!account.ok) return;
+    const valid = encodeAccountCredentialBundleV1({
+      email: syntheticBytes(65),
+      password: syntheticBytes(66),
+    });
+    assert.notEqual(valid, null);
+    if (valid === null) return;
+
+    const magic = valid.slice();
+    magic[0] = 0;
+    const version = valid.slice();
+    version[4] = 2;
+    const tag = valid.slice();
+    tag[6] = 9;
+    const order = valid.slice();
+    order[6] = 2;
+    order[12] = 1;
+    const count = valid.slice();
+    count[5] = 3;
+    const truncated = valid.subarray(0, valid.length - 1);
+    const trailing = Uint8Array.from([...valid, 0]);
+    const legacy = syntheticBytes(2, 0, 0, 0, 1, 0, 0, 0, 65, 1, 0, 0, 0, 66);
+
+    for (const candidate of [
+      magic,
+      version,
+      tag,
+      order,
+      count,
+      truncated,
+      trailing,
+      legacy,
+    ]) {
+      const bridge = new ControlledUnprotectBridge(candidate);
+      const resolver = new WindowsDpapiSecretResolver({
+        ...externalOptions(root, now),
+        bridge,
+      });
+      let invoked = false;
+      assert.deepEqual(await resolver.useAccountCredentials(
+        account.value as typeof liveFixtures.accountSecret,
+        activeSignal(),
+        async () => {
+          invoked = true;
+          return { kind: "verification_required", attemptedFields: ["email", "password"] };
+        },
+      ), {
+        ok: false,
+        error: { code: "secret_store_unavailable", retryable: true },
+      });
+      assert.equal(invoked, false);
+      assert.equal(bridge.calls, 1);
+    }
+  });
+});
+
+test("named account bytes are cleared after callback throw and cancellation", async () => {
+  await withSecretRoot(async (root) => {
+    const now = () => liveFixtures.issuedAt;
+    const custodian = new WindowsDpapiSecretCustodian(externalOptions(root, now));
+    const resolver = new WindowsDpapiSecretResolver(externalOptions(root, now));
+    const account = await custodian.provisionAccount(
+      { journeyId: liveFixtures.journeyId, expiresAt: liveFixtures.expiresAt },
+      { email: syntheticBytes(67, 68), password: syntheticBytes(69, 70) },
+      activeSignal(),
+    );
+    assert.equal(account.ok, true);
+    if (!account.ok) return;
+
+    for (const cancel of [false, true]) {
+      const controller = new AbortController();
+      let views:
+        | { readonly email: Readonly<Uint8Array>; readonly password: Readonly<Uint8Array> }
+        | undefined;
+      await assert.rejects(
+        resolver.useAccountCredentials(
+          account.value as typeof liveFixtures.accountSecret,
+          controller.signal,
+          async (value) => {
+            views = value;
+            if (cancel) controller.abort(new Error("synthetic cancellation"));
+            throw new Error(cancel ? "synthetic cancellation" : "synthetic callback failure");
+          },
+        ),
+        cancel ? /synthetic cancellation/u : /synthetic callback failure/u,
+      );
+      assert.deepEqual([...(views?.email ?? [])], [0, 0]);
+      assert.deepEqual([...(views?.password ?? [])], [0, 0]);
+    }
+  });
+});
+
+test("invalid account bytes and failed account provisioning leave no record", async () => {
+  await withSecretRoot(async (root) => {
+    const custodian = new WindowsDpapiSecretCustodian({
+      ...externalOptions(root, () => liveFixtures.issuedAt),
+      bridge: new WindowsDpapiBridge({ executable: join(root, "missing.exe") }),
+    });
+    const request = {
+      journeyId: liveFixtures.journeyId,
+      expiresAt: liveFixtures.expiresAt,
+    };
+    for (const value of [
+      { email: new Uint8Array(), password: syntheticBytes(65) },
+      { email: syntheticBytes(65), password: new Uint8Array() },
+      { email: new Uint8Array(321).fill(65), password: syntheticBytes(65) },
+      { email: syntheticBytes(65), password: new Uint8Array(4097).fill(65) },
+      { email: syntheticBytes(0xc0, 0xaf), password: syntheticBytes(65) },
+      { email: syntheticBytes(65), password: syntheticBytes(0xc0, 0xaf) },
+    ]) {
+      assert.deepEqual(await custodian.provisionAccount(request, value, activeSignal()), {
+        ok: false,
+        error: { code: "secret_handle_mismatched", retryable: false },
+      });
+    }
+    assert.deepEqual(await custodian.provisionAccount(
+      request,
+      [syntheticBytes(65), syntheticBytes(66)] as never,
+      activeSignal(),
+    ), {
+      ok: false,
+      error: { code: "secret_handle_mismatched", retryable: false },
+    });
+    assert.deepEqual(await custodian.provisionAccount(
+      request,
+      { email: syntheticBytes(65), password: syntheticBytes(66) },
+      activeSignal(),
+    ), {
+      ok: false,
+      error: { code: "secret_store_unavailable", retryable: true },
+    });
+    assert.deepEqual(await readdir(root), []);
+  });
+});
+
+test("failed account rotation removes the newly provisioned record", async () => {
+  await withSecretRoot(async (root) => {
+    const now = () => liveFixtures.issuedAt;
+    const custodian = new WindowsDpapiSecretCustodian(externalOptions(root, now));
+    const first = await custodian.provisionAccount(
+      { journeyId: liveFixtures.journeyId, expiresAt: liveFixtures.expiresAt },
+      { email: syntheticBytes(71), password: syntheticBytes(72) },
+      activeSignal(),
+    );
+    assert.equal(first.ok, true);
+    if (!first.ok) return;
+    await custodian.delete(first.value, activeSignal());
+
+    assert.deepEqual(await custodian.rotateAccount(
+      first.value,
+      { journeyId: liveFixtures.journeyId, expiresAt: liveFixtures.expiresAt },
+      { email: syntheticBytes(73), password: syntheticBytes(74) },
+      activeSignal(),
+    ), {
+      ok: false,
+      error: { code: "secret_handle_mismatched", retryable: false },
+    });
+    assert.deepEqual(await readdir(root), []);
   });
 });
 
