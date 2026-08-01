@@ -4,6 +4,7 @@ import { test } from "node:test";
 
 import { livePortNames } from "../../../src/contracts/live/index.ts";
 import {
+  createLiveCheckpointStoreFake,
   createMailboxProviderFake,
   createPersistentBrowserSessionFake,
   createSecretStoreFake,
@@ -169,6 +170,34 @@ test("mailbox query replay is stable, invalid time fails closed, and expired nav
     ok: false,
     error: { code: "verification_artifact_replayed", retryable: false },
   });
+});
+
+test("checkpoint removal clears durable fake state", async () => {
+  const signal = new AbortController().signal;
+  const checkpoint = createLiveCheckpointStoreFake();
+  assert.deepEqual(
+    await checkpoint.port.remove(
+      {
+        schemaVersion: 1,
+        journeyId: liveFixtures.journeyId,
+        operationId: liveFixtures.operationIds.checkpointRemove,
+        checkpointId: liveFixtures.checkpoint.checkpointId,
+      },
+      signal,
+    ),
+    { ok: true, value: undefined },
+  );
+  assert.deepEqual(
+    await checkpoint.port.load(
+      {
+        schemaVersion: 1,
+        journeyId: liveFixtures.journeyId,
+        expectedRevisionId: liveFixtures.checkpoint.revisionId,
+      },
+      signal,
+    ),
+    { ok: true, value: null },
+  );
 });
 
 test("private values are callback-only, cleared in finally, and absent from every observable graph", async () => {

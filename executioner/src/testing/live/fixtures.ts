@@ -127,6 +127,7 @@ const checkpoint: LiveCheckpointV1 = {
   phase: "account_access",
   target,
   sessionId,
+  profileLeaseId,
   verificationHandle: null,
   leaseExpiresAt: expiresAt,
 };

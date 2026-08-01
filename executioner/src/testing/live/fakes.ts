@@ -5,6 +5,7 @@ import {
 import type {
   CredentialMutationAdapter,
   LiveCheckpointStore,
+  LiveCheckpointV1,
   LiveEvidenceSink,
   MailboxPollResultV1,
   MailboxProvider,
@@ -145,9 +146,16 @@ export function createSecretStoreFake(
 export function createCredentialMutationAdapterFake(
   overrides: LiveFakeResponseOverrides<CredentialMutationAdapter> = {},
 ): LiveFake<CredentialMutationAdapter> {
+  const applied = new Map<string, string>();
   return createFake<CredentialMutationAdapter>(
     {
       mutate: (request) => {
+        if (request.credential.state !== "active") {
+          return error("secret_handle_invalid");
+        }
+        if (Date.parse(request.credential.expiresAt) <= Date.parse(request.now)) {
+          return error("secret_handle_expired");
+        }
         if (
           request.credential.journeyId !== request.journeyId ||
           request.credential.provider !== "windows_dpapi_current_user_v1" ||
@@ -158,6 +166,18 @@ export function createCredentialMutationAdapterFake(
         if (request.credential.consumer !== "credential_mutation_adapter") {
           return error("secret_consumer_forbidden");
         }
+        if (
+          request.sessionId !== liveFixtures.session.sessionId ||
+          !sameTarget(request.target, liveFixtures.target)
+        ) {
+          return error("credential_mutation_denied");
+        }
+        const fingerprint = JSON.stringify(request);
+        const previous = applied.get(request.operationId);
+        if (previous !== undefined && previous !== fingerprint) {
+          return error("credential_effect_uncertain");
+        }
+        applied.set(request.operationId, fingerprint);
         return ok({
           kind: "verification_required",
           attemptedFields: request.fields,
@@ -174,6 +194,12 @@ export function createPrivilegedGmailAuthExecutorFake(
   return createFake<PrivilegedGmailAuthExecutor>(
     {
       query: (request) => {
+        if (request.authorization.state !== "active") {
+          return error("secret_handle_invalid");
+        }
+        if (Date.parse(request.authorization.expiresAt) <= Date.parse(request.now)) {
+          return error("secret_handle_expired");
+        }
         if (
           request.authorization.journeyId !== request.journeyId ||
           request.authorization.provider !== "windows_dpapi_current_user_v1" ||
@@ -184,6 +210,9 @@ export function createPrivilegedGmailAuthExecutorFake(
         if (request.authorization.consumer !== "gmail_auth_executor") {
           return error("secret_consumer_forbidden");
         }
+        if (!validMailboxRequest(request, liveFixtures.mailboxPollRequest)) {
+          return error("mailbox_query_invalid");
+        }
         return ok(liveFixtures.mailboxAvailable);
       },
     },
@@ -193,18 +222,29 @@ export function createPrivilegedGmailAuthExecutorFake(
 
 export interface MailboxProviderFakeOptions {
   readonly result?: MailboxPollResultV1;
+  readonly expectedRequest?: typeof liveFixtures.mailboxPollRequest;
   readonly responses?: LiveFakeResponseOverrides<MailboxProvider>;
 }
 
 export function createMailboxProviderFake(
   options: MailboxProviderFakeOptions = {},
 ): LiveFake<MailboxProvider> {
+  const queries = new Map<string, string>();
+  const expectedRequest = options.expectedRequest ?? liveFixtures.mailboxPollRequest;
   return createFake<MailboxProvider>(
     {
-      poll: (request) =>
-        Date.parse(request.notBefore) < Date.parse(request.notAfter)
-          ? ok(options.result ?? liveFixtures.mailboxAvailable)
-          : error("mailbox_query_invalid"),
+      poll: (request) => {
+        if (!validMailboxRequest(request, expectedRequest)) {
+          return error("mailbox_query_invalid");
+        }
+        const fingerprint = JSON.stringify(request);
+        const previous = queries.get(request.queryId);
+        if (previous !== undefined && previous !== fingerprint) {
+          return error("mailbox_query_invalid");
+        }
+        queries.set(request.queryId, fingerprint);
+        return ok(options.result ?? liveFixtures.mailboxAvailable);
+      },
     },
     options.responses,
   );
@@ -257,13 +297,44 @@ export function createVerificationArtifactFake(
 export function createPrivilegedVerificationNavigatorFake(
   overrides: LiveFakeResponseOverrides<PrivilegedVerificationNavigator> = {},
 ): LiveFake<PrivilegedVerificationNavigator> {
+  const operations = new Map<string, string>();
+  const consumedHandles = new Set<string>();
   return createFake<PrivilegedVerificationNavigator>(
     {
-      navigate: (request) =>
-        request.artifact.state === "available" &&
-        request.artifact.journeyId === request.journeyId
-          ? ok({ kind: "navigated" })
-          : error("verification_artifact_replayed"),
+      navigate: (request) => {
+        if (request.artifact.state !== "available") {
+          return error("verification_artifact_replayed");
+        }
+        if (
+          request.journeyId !== liveFixtures.journeyId ||
+          request.sessionId !== liveFixtures.session.sessionId ||
+          request.artifact.journeyId !== request.journeyId ||
+          request.artifact.provider !== "gmail_api_v1" ||
+          request.expectedRecipientBindingId !==
+            liveFixtures.verificationArtifact.recipientBindingId ||
+          request.artifact.recipientBindingId !==
+            request.expectedRecipientBindingId ||
+          !sameTarget(request.expectedTarget, liveFixtures.target) ||
+          !sameTarget(request.artifact.target, request.expectedTarget) ||
+          Date.parse(request.artifact.issuedAt) > Date.parse(request.now) ||
+          Date.parse(request.artifact.expiresAt) <= Date.parse(request.now) ||
+          Date.parse(liveFixtures.session.leaseExpiresAt) <= Date.parse(request.now)
+        ) {
+          return error("verification_navigation_denied");
+        }
+        const fingerprint = JSON.stringify(request);
+        const previous = operations.get(request.operationId);
+        if (previous === fingerprint) return ok({ kind: "navigated" });
+        if (
+          previous !== undefined ||
+          consumedHandles.has(request.artifact.handleId)
+        ) {
+          return error("verification_artifact_replayed");
+        }
+        operations.set(request.operationId, fingerprint);
+        consumedHandles.add(request.artifact.handleId);
+        return ok({ kind: "navigated" });
+      },
     },
     overrides,
   );
@@ -272,10 +343,11 @@ export function createPrivilegedVerificationNavigatorFake(
 export function createLiveCheckpointStoreFake(
   overrides: LiveFakeResponseOverrides<LiveCheckpointStore> = {},
 ): LiveFake<LiveCheckpointStore> {
-  let checkpoint = liveFixtures.checkpoint;
+  let checkpoint: LiveCheckpointV1 | null = liveFixtures.checkpoint;
   return createFake<LiveCheckpointStore>(
     {
       load: (request) => {
+        if (checkpoint === null) return ok(null);
         if (request.journeyId !== checkpoint.journeyId) {
           return error("recovery_checkpoint_invalid");
         }
@@ -292,12 +364,14 @@ export function createLiveCheckpointStoreFake(
         return ok(checkpoint);
       },
       remove: (request) => {
+        if (checkpoint === null) return ok(undefined);
         if (
           request.journeyId !== checkpoint.journeyId ||
           request.checkpointId !== checkpoint.checkpointId
         ) {
           return error("recovery_checkpoint_invalid");
         }
+        checkpoint = null;
         return ok(undefined);
       },
     },
@@ -340,3 +414,24 @@ export const liveFakeFactories = {
 } as const satisfies {
   readonly [N in keyof LivePortMap]: () => LiveFake<LivePortMap[N]>;
 };
+
+function sameTarget(
+  left: typeof liveFixtures.target,
+  right: typeof liveFixtures.target,
+): boolean {
+  return left.hostId === right.hostId &&
+    left.tenantId === right.tenantId &&
+    left.postingId === right.postingId;
+}
+
+function validMailboxRequest(
+  request: typeof liveFixtures.mailboxPollRequest,
+  expected: typeof liveFixtures.mailboxPollRequest,
+): boolean {
+  return request.journeyId === expected.journeyId &&
+    request.recipientBindingId === expected.recipientBindingId &&
+    sameTarget(request.target, expected.target) &&
+    Number.isFinite(Date.parse(request.notBefore)) &&
+    Number.isFinite(Date.parse(request.notAfter)) &&
+    Date.parse(request.notBefore) < Date.parse(request.notAfter);
+}

@@ -5,6 +5,7 @@ import {
 import { journeyId } from "../types.ts";
 import type {
   CheckpointId,
+  CredentialMutationResult,
   LiveBrowserSessionV1,
   LiveCheckpointPhase,
   LiveCheckpointV1,
@@ -161,6 +162,22 @@ function nonnegativeInteger(value: unknown, path: string): number {
   return value;
 }
 
+function attemptedCredentialFields(
+  value: unknown,
+  path: string,
+): readonly ("email" | "password")[] {
+  if (!Array.isArray(value) || value.length !== 2) {
+    throw new ContractParseError("invalid_value", path);
+  }
+  const fields = value.map((field, index) =>
+    oneOf(field, ["email", "password"], `${path}[${index}]`)
+  );
+  if (fields[0] !== "email" || fields[1] !== "password") {
+    throw new ContractParseError("invalid_value", path);
+  }
+  return fields;
+}
+
 export function parseTargetIdentity(value: unknown): TargetIdentityV1 {
   const input = versioned(snapshot(value), "$", [
     "atsFamily",
@@ -303,8 +320,7 @@ export function parseMailboxPollResult(value: unknown): MailboxPollResultV1 {
       ) as VerificationHandleId,
   );
   if (
-    (candidateCount === 1 &&
-      (bucket === null || expiresAt === null || verificationHandle === null)) ||
+    (candidateCount === 1 && (bucket === null || expiresAt === null)) ||
     (candidateCount !== 1 && verificationHandle !== null)
   ) {
     throw new ContractParseError("invalid_value", "$.verificationHandle");
@@ -315,6 +331,47 @@ export function parseMailboxPollResult(value: unknown): MailboxPollResultV1 {
     expiresAt,
     candidateCount,
     verificationHandle,
+  };
+}
+
+export function parseCredentialMutationResult(
+  value: unknown,
+): CredentialMutationResult {
+  const copied = snapshot(value);
+  const candidate = record(copied, "$");
+  const kind = oneOf(
+    candidate.kind,
+    [
+      "existing_account",
+      "create_account",
+      "verification_required",
+      "application_ready",
+      "manual_intervention",
+    ],
+    "$.kind",
+  );
+  if (kind === "manual_intervention") {
+    const input = exact(copied, "$", ["kind", "reason", "attemptedFields"]);
+    return {
+      kind,
+      reason: oneOf(
+        input.reason,
+        ["captcha", "mfa", "access_control"],
+        "$.reason",
+      ),
+      attemptedFields: attemptedCredentialFields(
+        input.attemptedFields,
+        "$.attemptedFields",
+      ),
+    };
+  }
+  const input = exact(copied, "$", ["kind", "attemptedFields"]);
+  return {
+    kind,
+    attemptedFields: attemptedCredentialFields(
+      input.attemptedFields,
+      "$.attemptedFields",
+    ),
   };
 }
 
@@ -367,9 +424,42 @@ export function parseLiveCheckpoint(value: unknown): LiveCheckpointV1 {
     "phase",
     "target",
     "sessionId",
+    "profileLeaseId",
     "verificationHandle",
     "leaseExpiresAt",
   ]);
+  const phase = oneOf(
+    input.phase,
+    [
+      "preflight",
+      "account_access",
+      "mailbox_verification",
+      "verification_navigation",
+      "live_application",
+      "recovery",
+      "review",
+    ],
+    "$.phase",
+  ) as LiveCheckpointPhase;
+  const sessionId = nullable(input.sessionId, (candidate) =>
+    prefixedIdentifier(candidate, "live_session", "$.sessionId") as LiveSessionId,
+  );
+  const profileLeaseId = nullable(input.profileLeaseId, (candidate) =>
+    prefixedIdentifier(
+      candidate,
+      "profile_lease",
+      "$.profileLeaseId",
+    ) as ProfileLeaseId,
+  );
+  if (
+    (phase === "mailbox_verification" || phase === "live_application") &&
+    (sessionId === null || profileLeaseId === null)
+  ) {
+    throw new ContractParseError(
+      "invalid_value",
+      sessionId === null ? "$.sessionId" : "$.profileLeaseId",
+    );
+  }
   return {
     schemaVersion: 1,
     journeyId: parseJourneyId(input.journeyId, "$.journeyId"),
@@ -383,23 +473,10 @@ export function parseLiveCheckpoint(value: unknown): LiveCheckpointV1 {
       "revision",
       "$.revisionId",
     ) as LiveRevisionId,
-    phase: oneOf(
-      input.phase,
-      [
-        "preflight",
-        "account_access",
-        "mailbox_verification",
-        "verification_navigation",
-        "live_application",
-        "recovery",
-        "review",
-      ],
-      "$.phase",
-    ) as LiveCheckpointPhase,
+    phase,
     target: nestedTarget(input.target, "$.target"),
-    sessionId: nullable(input.sessionId, (candidate) =>
-      prefixedIdentifier(candidate, "live_session", "$.sessionId") as LiveSessionId,
-    ),
+    sessionId,
+    profileLeaseId,
     verificationHandle: nullable(input.verificationHandle, (candidate) =>
       prefixedIdentifier(
         candidate,

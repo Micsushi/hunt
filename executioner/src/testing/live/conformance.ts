@@ -60,6 +60,8 @@ export const liveOperationCases = {
         journeyId: liveFixtures.journeyId,
         operationId: operations.credentialMutation,
         sessionId: liveFixtures.session.sessionId,
+        target: liveFixtures.target,
+        now: liveFixtures.issuedAt,
         mode: "create_account",
         credential: liveFixtures.accountSecret,
         fields: ["email", "password"],
@@ -74,6 +76,7 @@ export const liveOperationCases = {
     query: {
       request: {
         ...liveFixtures.mailboxPollRequest,
+        now: liveFixtures.issuedAt,
         authorization: liveFixtures.gmailSecret,
       },
       expected: liveFixtures.mailboxAvailable,
@@ -114,6 +117,10 @@ export const liveOperationCases = {
         journeyId: liveFixtures.journeyId,
         operationId: operations.verificationNavigation,
         sessionId: liveFixtures.session.sessionId,
+        expectedRecipientBindingId:
+          liveFixtures.verificationArtifact.recipientBindingId,
+        expectedTarget: liveFixtures.target,
+        now: liveFixtures.issuedAt,
         artifact: liveFixtures.verificationArtifact,
       },
       expected: { kind: "navigated" },

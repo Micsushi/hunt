@@ -169,19 +169,27 @@ export interface CredentialMutationRequest {
   readonly journeyId: JourneyId;
   readonly operationId: OperationId;
   readonly sessionId: LiveSessionId;
+  readonly target: TargetIdentityV1;
+  readonly now: string;
   readonly mode: "create_account" | "sign_in";
   readonly credential: ActiveAccountSecretHandle;
   readonly fields: readonly ("email" | "password")[];
 }
 
-export type CredentialMutationResult = {
-  readonly kind:
-    | "existing_account"
-    | "create_account"
-    | "verification_required"
-    | "application_ready";
-  readonly attemptedFields: readonly ("email" | "password")[];
-};
+export type CredentialMutationResult =
+  | {
+      readonly kind:
+        | "existing_account"
+        | "create_account"
+        | "verification_required"
+        | "application_ready";
+      readonly attemptedFields: readonly ("email" | "password")[];
+    }
+  | {
+      readonly kind: "manual_intervention";
+      readonly reason: "captcha" | "mfa" | "access_control";
+      readonly attemptedFields: readonly ("email" | "password")[];
+    };
 
 export type CredentialMutationErrorCode =
   | "credential_mutation_denied"
@@ -203,6 +211,7 @@ export interface MailboxPollRequest {
 }
 
 export interface PrivilegedGmailQueryRequest extends MailboxPollRequest {
+  readonly now: string;
   readonly authorization: ActiveGmailSecretHandle;
 }
 
@@ -218,6 +227,7 @@ export type GmailAuthErrorCode =
   | "gmail_auth_denied"
   | "gmail_rate_limited"
   | "gmail_network_unavailable"
+  | "mailbox_query_invalid"
   | "secret_handle_invalid"
   | "secret_handle_expired"
   | "secret_handle_mismatched"
@@ -271,6 +281,9 @@ export interface VerificationNavigationRequest {
   readonly journeyId: JourneyId;
   readonly operationId: OperationId;
   readonly sessionId: LiveSessionId;
+  readonly expectedRecipientBindingId: RecipientBindingId;
+  readonly expectedTarget: TargetIdentityV1;
+  readonly now: string;
   readonly artifact: AvailableVerificationArtifact;
 }
 
@@ -305,6 +318,7 @@ export interface LiveCheckpointV1 {
   readonly phase: LiveCheckpointPhase;
   readonly target: TargetIdentityV1;
   readonly sessionId: LiveSessionId | null;
+  readonly profileLeaseId: ProfileLeaseId | null;
   readonly verificationHandle: VerificationHandleId | null;
   readonly leaseExpiresAt: string;
 }

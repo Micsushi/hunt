@@ -106,6 +106,36 @@ export const liveContractSchemas = {
       },
     ],
   },
+  credentialMutationResult: {
+    ...closed(
+      ["kind", "attemptedFields"],
+      {
+        kind: {
+          enum: [
+            "existing_account",
+            "create_account",
+            "verification_required",
+            "application_ready",
+            "manual_intervention",
+          ],
+        },
+        reason: { enum: ["captcha", "mfa", "access_control"] },
+        attemptedFields: {
+          type: "array",
+          minItems: 2,
+          maxItems: 2,
+          prefixItems: [{ const: "email" }, { const: "password" }],
+        },
+      },
+    ),
+    allOf: [
+      {
+        if: { properties: { kind: { const: "manual_intervention" } } },
+        then: { required: ["reason"] },
+        else: { not: { required: ["reason"] } },
+      },
+    ],
+  },
   mailboxPollResult: {
     ...closed(
       [
@@ -134,7 +164,6 @@ export const liveContractSchemas = {
           properties: {
             receivedTimeBucket,
             expiresAt: timestamp,
-            verificationHandle: opaqueIdentifier("verification_handle"),
           },
         },
         else: { properties: { verificationHandle: { type: "null" } } },
@@ -165,19 +194,21 @@ export const liveContractSchemas = {
       state: { enum: ["available", "expired", "consumed", "invalidated"] },
     },
   ),
-  liveCheckpoint: closed(
-    [
-      "schemaVersion",
-      "journeyId",
-      "checkpointId",
-      "revisionId",
-      "phase",
-      "target",
-      "sessionId",
-      "verificationHandle",
-      "leaseExpiresAt",
-    ],
-    {
+  liveCheckpoint: {
+    ...closed(
+      [
+        "schemaVersion",
+        "journeyId",
+        "checkpointId",
+        "revisionId",
+        "phase",
+        "target",
+        "sessionId",
+        "profileLeaseId",
+        "verificationHandle",
+        "leaseExpiresAt",
+      ],
+      {
       schemaVersion: { const: 1 },
       journeyId: journeyIdentifier,
       checkpointId: opaqueIdentifier("checkpoint"),
@@ -197,12 +228,31 @@ export const liveContractSchemas = {
       sessionId: {
         oneOf: [opaqueIdentifier("live_session"), { type: "null" }],
       },
+      profileLeaseId: {
+        oneOf: [opaqueIdentifier("profile_lease"), { type: "null" }],
+      },
       verificationHandle: {
         oneOf: [opaqueIdentifier("verification_handle"), { type: "null" }],
       },
       leaseExpiresAt: timestamp,
-    },
-  ),
+      },
+    ),
+    allOf: [
+      {
+        if: {
+          properties: {
+            phase: { enum: ["mailbox_verification", "live_application"] },
+          },
+        },
+        then: {
+          properties: {
+            sessionId: opaqueIdentifier("live_session"),
+            profileLeaseId: opaqueIdentifier("profile_lease"),
+          },
+        },
+      },
+    ],
+  },
   liveEvidence: closed(
     [
       "schemaVersion",

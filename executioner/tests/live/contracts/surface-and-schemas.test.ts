@@ -13,6 +13,7 @@ import {
   parseLiveBrowserSession,
   parseLiveCheckpoint,
   parseLiveEvidenceSeal,
+  parseCredentialMutationResult,
   parseMailboxPollResult,
   parseSecretHandleMetadata,
   parseTargetIdentity,
@@ -300,6 +301,68 @@ test("mailbox poll returns exactly the safe five fields", () => {
     "invalid_value",
     "$.verificationHandle",
   );
+
+  const consumed = { ...result, verificationHandle: null };
+  assert.deepEqual(parseMailboxPollResult(consumed), consumed);
+  assert.deepEqual(
+    parseMailboxPollResult({ ...result, candidateCount: 0, verificationHandle: null }),
+    { ...result, candidateCount: 0, verificationHandle: null },
+  );
+  assert.deepEqual(
+    parseMailboxPollResult({
+      ...result,
+      candidateCount: 2,
+      receivedTimeBucket: null,
+      expiresAt: null,
+      verificationHandle: null,
+    }),
+    {
+      ...result,
+      candidateCount: 2,
+      receivedTimeBucket: null,
+      expiresAt: null,
+      verificationHandle: null,
+    },
+  );
+
+  for (const invalid of [
+    { ...result, candidateCount: 0 },
+    { ...result, candidateCount: 2 },
+  ]) {
+    expectCode(
+      () => parseMailboxPollResult(invalid),
+      "invalid_value",
+    );
+  }
+});
+
+test("credential mutation result preserves exact account and manual states", () => {
+  const attemptedFields = ["email", "password"] as const;
+  for (const kind of [
+    "existing_account",
+    "create_account",
+    "verification_required",
+    "application_ready",
+  ] as const) {
+    const value = { kind, attemptedFields };
+    assert.deepEqual(parseCredentialMutationResult(value), value);
+  }
+  for (const reason of ["captcha", "mfa", "access_control"] as const) {
+    const value = { kind: "manual_intervention" as const, reason, attemptedFields };
+    assert.deepEqual(parseCredentialMutationResult(value), value);
+  }
+  assert.equal(
+    liveContractSchemas.credentialMutationResult.additionalProperties,
+    false,
+  );
+  for (const invalid of [
+    { kind: "unknown", attemptedFields },
+    { kind: "manual_intervention", attemptedFields },
+    { kind: "application_ready", reason: "captcha", attemptedFields },
+    { kind: "existing_account", attemptedFields: ["email"] },
+  ]) {
+    assert.throws(() => parseCredentialMutationResult(invalid), ContractParseError);
+  }
 });
 
 test("verification artifacts preserve factual state while replay stays explicit", () => {
@@ -343,6 +406,7 @@ test("checkpoint and evidence parsers keep only value-blind admitted state", () 
     phase: "mailbox_verification",
     target,
     sessionId: session.sessionId,
+    profileLeaseId: session.profileLeaseId,
     verificationHandle: artifact.handleId,
     leaseExpiresAt: expiresAt,
   } as const;
@@ -358,6 +422,14 @@ test("checkpoint and evidence parsers keep only value-blind admitted state", () 
   assert.deepEqual(parseLiveEvidenceSeal(evidence), evidence);
   assert.equal(liveContractSchemas.liveCheckpoint.additionalProperties, false);
   assert.equal(liveContractSchemas.liveEvidence.additionalProperties, false);
+
+  for (const key of ["sessionId", "profileLeaseId"] as const) {
+    expectCode(
+      () => parseLiveCheckpoint({ ...checkpoint, [key]: null }),
+      "invalid_value",
+      `$.${key}`,
+    );
+  }
 
   for (const key of ["url", "dom", "screenshot", "password", "rawValue"] as const) {
     expectCode(
