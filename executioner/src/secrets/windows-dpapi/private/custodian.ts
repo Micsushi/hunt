@@ -21,6 +21,8 @@ import {
 } from "../record.ts";
 import { cancelled, ok, secretError } from "../result.ts";
 
+const MAX_RETENTION_MS = 30 * 24 * 60 * 60 * 1_000;
+
 export interface SecretProvisionRequest {
   readonly journeyId: JourneyId;
   readonly expiresAt: string;
@@ -129,7 +131,15 @@ export class WindowsDpapiSecretCustodian {
       payload.fill(0);
       return cancelled;
     }
-    if (Date.parse(request.expiresAt) <= Date.parse(this.#now())) {
+    const issuedAt = this.#now();
+    const issuedAtMs = Date.parse(issuedAt);
+    const expiresAtMs = Date.parse(request.expiresAt);
+    if (
+      !Number.isFinite(issuedAtMs) ||
+      !Number.isFinite(expiresAtMs) ||
+      expiresAtMs <= issuedAtMs ||
+      expiresAtMs - issuedAtMs > MAX_RETENTION_MS
+    ) {
       payload.fill(0);
       return secretError("secret_handle_mismatched");
     }
@@ -142,7 +152,7 @@ export class WindowsDpapiSecretCustodian {
       purpose,
       consumer: expectedConsumer(purpose),
       scope: expectedScope(purpose),
-      issuedAt: this.#now(),
+      issuedAt,
       expiresAt: request.expiresAt,
       state: "active",
     };
@@ -171,7 +181,7 @@ export class WindowsDpapiSecretCustodian {
       if (record === null || record.metadata.journeyId !== metadata.journeyId) {
         return secretError("secret_handle_mismatched");
       }
-      await writeSecretRecord(this.#root, { ...record.metadata, state: "revoked" }, new Uint8Array());
+      await deleteSecretRecord(this.#root, metadata.handleId);
       return signal.aborted ? cancelled : ok(undefined);
     } catch {
       return secretError("secret_store_unavailable");

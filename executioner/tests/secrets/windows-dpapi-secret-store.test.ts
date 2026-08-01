@@ -146,6 +146,7 @@ test("inspection fails closed for purpose, consumer, journey, expiry, revoke, an
       ok: false,
       error: { code: "secret_handle_expired", retryable: false },
     });
+    assert.deepEqual(await readdir(root), []);
     currentTime = liveFixtures.issuedAt;
 
     const cancelled = new AbortController();
@@ -155,17 +156,26 @@ test("inspection fails closed for purpose, consumer, journey, expiry, revoke, an
       error: { code: "operation_cancelled", retryable: false },
     });
 
+    const replacement = await custodian.provisionAccount(
+      { journeyId: liveFixtures.journeyId, expiresAt: liveFixtures.expiresAt },
+      { email: syntheticBytes(59), password: syntheticBytes(61) },
+      activeSignal(),
+    );
+    assert.equal(replacement.ok, true);
+    if (!replacement.ok) return;
+    const replacementBase = { ...base, handleId: replacement.value.handleId };
     const revoked = await store.revoke(
       {
         schemaVersion: 1,
         journeyId: liveFixtures.journeyId,
         operationId: liveFixtures.operationIds.secretRevoke,
-        handleId: created.value.handleId,
+        handleId: replacement.value.handleId,
       },
       activeSignal(),
     );
     assert.deepEqual(revoked, { ok: true, value: undefined });
-    assert.deepEqual(await store.inspect(base, activeSignal()), {
+    assert.deepEqual(await readdir(root), []);
+    assert.deepEqual(await store.inspect(replacementBase, activeSignal()), {
       ok: false,
       error: { code: "secret_handle_invalid", retryable: false },
     });
@@ -174,10 +184,73 @@ test("inspection fails closed for purpose, consumer, journey, expiry, revoke, an
         schemaVersion: 1,
         journeyId: liveFixtures.journeyId,
         operationId: liveFixtures.operationIds.secretRevoke,
-        handleId: created.value.handleId,
+        handleId: replacement.value.handleId,
       },
       activeSignal(),
     ), { ok: true, value: undefined });
+    assert.deepEqual(await readdir(root), []);
+  });
+});
+
+test("provisioning admits at most thirty days from one issued-at instant", async () => {
+  await withSecretRoot(async (root) => {
+    const issuedAt = "2026-08-01T12:00:00.000Z";
+    const custodian = new WindowsDpapiSecretCustodian(
+      externalOptions(root, () => issuedAt),
+    );
+    const exactCap = new Date(Date.parse(issuedAt) + 30 * 24 * 60 * 60 * 1_000)
+      .toISOString();
+    const beyondCap = new Date(Date.parse(exactCap) + 1).toISOString();
+
+    const admitted = await custodian.provisionAccount(
+      { journeyId: liveFixtures.journeyId, expiresAt: exactCap },
+      { email: syntheticBytes(67), password: syntheticBytes(71) },
+      activeSignal(),
+    );
+    assert.equal(admitted.ok, true);
+    if (!admitted.ok) return;
+    await custodian.delete(admitted.value, activeSignal());
+
+    assert.deepEqual(await custodian.provisionAccount(
+      { journeyId: liveFixtures.journeyId, expiresAt: beyondCap },
+      { email: syntheticBytes(73), password: syntheticBytes(79) },
+      activeSignal(),
+    ), {
+      ok: false,
+      error: { code: "secret_handle_mismatched", retryable: false },
+    });
+    assert.deepEqual(await readdir(root), []);
+  });
+});
+
+test("resolver expiry deletes ciphertext before denying the callback", async () => {
+  await withSecretRoot(async (root) => {
+    let currentTime: string = liveFixtures.issuedAt;
+    const now = () => currentTime;
+    const custodian = new WindowsDpapiSecretCustodian(externalOptions(root, now));
+    const resolver = new WindowsDpapiSecretResolver(externalOptions(root, now));
+    const created = await custodian.provisionAccount(
+      { journeyId: liveFixtures.journeyId, expiresAt: liveFixtures.expiresAt },
+      { email: syntheticBytes(83), password: syntheticBytes(89) },
+      activeSignal(),
+    );
+    assert.equal(created.ok, true);
+    if (!created.ok) return;
+    currentTime = liveFixtures.expiresAt;
+    let invoked = false;
+    assert.deepEqual(await resolver.useAccountCredentials(
+      created.value as typeof liveFixtures.accountSecret,
+      activeSignal(),
+      async () => {
+        invoked = true;
+        return { kind: "verification_required", attemptedFields: ["email", "password"] };
+      },
+    ), {
+      ok: false,
+      error: { code: "secret_handle_expired", retryable: false },
+    });
+    assert.equal(invoked, false);
+    assert.deepEqual(await readdir(root), []);
   });
 });
 
