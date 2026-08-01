@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="en" data-ats="workday" data-page-type="profile" data-fixture-page-id="fixture-profile" data-hunt-page-id="page-profile">
+<head>
+  <meta charset="utf-8">
+  <title>Synthetic applicant profile</title>
+  <style>body{font:16px system-ui;margin:2rem auto;max-width:48rem}label{display:block;margin:1rem 0}input,select,[role=listbox]{display:block;min-width:20rem;padding:.4rem}[role=option]{padding:.2rem}button{padding:.6rem 1rem}</style>
+</head>
+<body>
+  <main>
+    <h1>Applicant profile</h1>
+    <form action="/questionnaire" method="get">
+      <label>Given name<input data-field-id="s1-field-given-name" data-hunt-target-token="target-s1-field-given-name" data-question-id="s1-question-given-name" data-question-label="Given name" name="givenName" required type="text"></label>
+      <label>Family name<input data-field-id="s1-field-family-name" data-hunt-target-token="target-s1-field-family-name" data-question-id="s1-question-family-name" data-question-label="Family name" name="familyName" required type="text"></label>
+      <label>Phone number<input data-field-id="s1-field-phone-number" data-hunt-target-token="target-s1-field-phone-number" data-question-id="s1-question-phone-number" data-question-label="Phone number" name="phoneNumber" required type="tel"></label>
+      <label>Country<div role="listbox" data-field-id="s1-field-country" data-hunt-target-token="target-s1-field-country" data-question-id="s1-question-country" data-question-label="Country" aria-label="Country" aria-required="true" tabindex="0"><div role="option" aria-selected="false" data-option-id="s1-option-country-us" data-option-value="US">United States</div><div role="option" aria-selected="false" data-option-id="s1-option-country-ca" data-option-value="CA">Canada</div></div></label>
+      <label>Available start date<input data-field-id="s1-field-start-date" data-hunt-target-token="target-s1-field-start-date" data-question-id="s1-question-earliest-start-date" data-question-label="Available start date" name="startDate" required type="date"></label>
+      <label>Resume<input accept=".pdf" data-field-id="s1-field-resume" data-hunt-target-token="target-s1-field-resume" data-question-id="s1-question-resume" data-question-label="Resume" name="resume" required type="file"></label>
+      <button type="submit" data-action="next" data-hunt-target-token="target-next-profile">Continue</button>
+    </form>
+  </main>
+</body>
+</html>

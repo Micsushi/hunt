@@ -1,0 +1,15 @@
+<!doctype html>
+<html lang="en" data-ats="workday" data-page-type="review" data-fixture-page-id="fixture-review" data-hunt-page-id="page-review">
+<head>
+  <meta charset="utf-8">
+  <title>Synthetic application Review</title>
+  <style>body{font:16px system-ui;margin:2rem auto;max-width:48rem}button{padding:.6rem 1rem}</style>
+</head>
+<body>
+  <main>
+    <h1>Review</h1>
+    <p>The controlled application is ready for review. No values are displayed.</p>
+    <button type="button" disabled aria-disabled="true">Submit application</button>
+  </main>
+</body>
+</html>

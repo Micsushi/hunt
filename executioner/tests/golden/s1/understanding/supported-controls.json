@@ -1,0 +1,110 @@
+{
+  "ok": true,
+  "value": {
+    "kind": "understood",
+    "snapshot": {
+      "pageIdentity": { "kind": "workday", "page": "profile" },
+      "fields": [
+        {
+          "fieldId": "s1-field-age-requirement",
+          "target": "target-s1-field-age-requirement",
+          "label": "I am at least 18 years of age.",
+          "required": true,
+          "behavior": "checkbox",
+          "options": [],
+          "state": "populated"
+        },
+        {
+          "fieldId": "s1-field-country",
+          "target": "target-s1-field-country",
+          "label": "Country",
+          "required": true,
+          "behavior": "listbox",
+          "options": [
+            { "id": "s1-option-country-us", "label": "United States" },
+            { "id": "s1-option-country-ca", "label": "Canada" }
+          ],
+          "state": "populated"
+        },
+        {
+          "fieldId": "s1-field-family-name",
+          "target": "target-s1-field-family-name",
+          "label": "Family name",
+          "required": true,
+          "behavior": "text",
+          "options": [],
+          "state": "populated"
+        },
+        {
+          "fieldId": "s1-field-given-name",
+          "target": "target-s1-field-given-name",
+          "label": "Given name",
+          "required": true,
+          "behavior": "text",
+          "options": [],
+          "state": "populated"
+        },
+        {
+          "fieldId": "s1-field-interest",
+          "target": "target-s1-field-interest",
+          "label": "Brief interest statement",
+          "required": true,
+          "behavior": "textarea",
+          "options": [],
+          "state": "populated"
+        },
+        {
+          "fieldId": "s1-field-phone-number",
+          "target": "target-s1-field-phone-number",
+          "label": "Phone number",
+          "required": true,
+          "behavior": "text",
+          "options": [],
+          "state": "populated"
+        },
+        {
+          "fieldId": "s1-field-resume",
+          "target": "target-s1-field-resume",
+          "label": "Resume",
+          "required": true,
+          "behavior": "file_upload",
+          "options": [],
+          "state": "populated"
+        },
+        {
+          "fieldId": "s1-field-sponsorship",
+          "target": "target-s1-field-sponsorship",
+          "label": "Will you require sponsorship?",
+          "required": true,
+          "behavior": "select",
+          "options": [
+            { "id": "s1-option-sponsorship-yes", "label": "Yes" },
+            { "id": "s1-option-sponsorship-no", "label": "No" }
+          ],
+          "state": "populated"
+        },
+        {
+          "fieldId": "s1-field-start-date",
+          "target": "target-s1-field-start-date",
+          "label": "Available start date",
+          "required": true,
+          "behavior": "date",
+          "options": [],
+          "state": "populated"
+        },
+        {
+          "fieldId": "s1-field-work-authorization",
+          "target": "target-s1-field-work-authorization",
+          "label": "Are you authorized to work in this location?",
+          "required": true,
+          "behavior": "radio",
+          "options": [
+            { "id": "s1-option-work-authorization-yes", "label": "Yes" },
+            { "id": "s1-option-work-authorization-no", "label": "No" }
+          ],
+          "state": "populated"
+        }
+      ]
+    }
+  }
+}

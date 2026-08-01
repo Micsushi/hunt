@@ -1,0 +1,10 @@
+{
+  "schemaVersion": 2,
+  "fixtureSet": "workday-s1",
+  "pages": [
+    { "id": "fixture-account", "path": "/account", "semanticHash": "sha256.06f975c580de2078bc3924d295fd43cc186f2a2ed1742d39fc40e0c8a6b5280d" },
+    { "id": "fixture-profile", "path": "/profile", "semanticHash": "sha256.1374fb99f1052914d7e0fdcac2f3de3b73bad0eeaa308f22a462d1e9f4b20c04" },
+    { "id": "fixture-questionnaire", "path": "/questionnaire", "semanticHash": "sha256.b328b0a9a27f68a9dfa77eefbfe528830b80b58df36e12d62767a54d6efdab7b" },
+    { "id": "fixture-review", "path": "/review", "semanticHash": "sha256.ce2617ca34b5ae23a5db5537cfd20263ec5a74450faf744591f15be2992ff16c" }
+  ]
+}
