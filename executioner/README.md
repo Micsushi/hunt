@@ -71,5 +71,20 @@ Verify the dry boundary before any live runner is assembled:
 npm test -- tests/live/preflight
 ```
 
+After the accepted browser navigation capability is integrated, run the
+bounded account-access checkpoint from a clean committed worktree:
+
+```text
+npm run live:s2 -- --config C:\private\s2-owner-inputs.json --stop-after account_access --evidence-root C:\private\s2-evidence
+```
+
+The runner verifies the exact checked-out Git SHA and rejects tracked, staged,
+or untracked production changes before browser creation. It inspects both
+scoped secret handles without resolving Gmail authorization, proves account
+field entry, closes the owned browser with an independent cleanup signal, and
+then atomically writes a value-free `acceptance.json`. The recorded
+`submitActivated: false` refers only to final job-application Submit; account
+Create or Sign In is activated as part of account-access proof.
+
 Tests use Node's built-in runner. Components may depend on shared contracts but
 not on peer implementations or C3 v2 source.
