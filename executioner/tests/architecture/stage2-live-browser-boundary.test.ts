@@ -72,7 +72,10 @@ test("account-page access remains private, semantic, and value-free", async () =
   assert.equal(publicFacade.includes("OwnedAccountPageAccess"), false);
   assert.equal(publicFacade.includes("AccountFieldName"), false);
   assert.equal(publicFacade.includes("SemanticAccountPageAdapter"), false);
-  assert.equal(factory.includes("new PlaywrightAccountPageAdapter()"), true);
+  assert.equal(
+    factory.includes("new PlaywrightAccountPageAdapter({ trace: options.accountTrace })"),
+    true,
+  );
 });
 
 test("posting navigation is private, semantic, bounded, and submit-free", async () => {
