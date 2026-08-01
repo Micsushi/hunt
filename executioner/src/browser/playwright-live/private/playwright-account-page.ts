@@ -8,6 +8,16 @@ import type {
 } from "./account-page-types.ts";
 import type { PersistentPage } from "./types.ts";
 
+export type PlaywrightAccountPageTraceEvent =
+  | "submit_control_remained_visible"
+  | "submit_destination_observed"
+  | "submit_rejection_reappeared"
+  | "submit_stabilization_failed";
+
+export interface PlaywrightAccountPageAdapterOptions {
+  readonly trace?: (event: PlaywrightAccountPageTraceEvent) => void;
+}
+
 const POST_SUBMIT_DESTINATIONS = [
   '[data-automation-id="emailVerificationPage"]',
   '[data-automation-id="verifyEmailPage"]',
@@ -24,6 +34,12 @@ const POST_SUBMIT_DESTINATIONS = [
 ];
 
 export class PlaywrightAccountPageAdapter implements SemanticAccountPageAdapter {
+  readonly #trace: PlaywrightAccountPageAdapterOptions["trace"];
+
+  constructor(options: PlaywrightAccountPageAdapterOptions = {}) {
+    this.#trace = options.trace;
+  }
+
   async inspect(
     page: PersistentPage,
     control: AccountFieldName | AccountActionIntent,
@@ -86,14 +102,35 @@ export class PlaywrightAccountPageAdapter implements SemanticAccountPageAdapter 
           timeout: 10_000,
         }).then(() => true, () => false);
         if (transitioned) {
-          await Promise.any([
-            playwrightPage(page).locator(postSubmitDestination(action))
+          let observed: "destination" | "rejection";
+          try {
+            observed = await Promise.any([
+              playwrightPage(page).locator(postSubmitDestination(action))
               .first()
-              .waitFor({ state: "attached", timeout: 10_000 }),
-            locator.waitFor({ state: "attached", timeout: 10_000 }),
-          ]);
-        }
+              .waitFor({ state: "attached", timeout: 10_000 })
+                .then(() => "destination" as const),
+              locator.waitFor({ state: "attached", timeout: 10_000 })
+                .then(() => "rejection" as const),
+            ]);
+          } catch (error) {
+            this.#emit("submit_stabilization_failed");
+            throw error;
+          }
+          this.#emit(
+            observed === "destination"
+              ? "submit_destination_observed"
+              : "submit_rejection_reappeared",
+          );
+        } else this.#emit("submit_control_remained_visible");
       }
+    }
+  }
+
+  #emit(event: PlaywrightAccountPageTraceEvent): void {
+    try {
+      this.#trace?.(event);
+    } catch {
+      // Diagnostic observation cannot affect browser behavior.
     }
   }
 }

@@ -215,6 +215,7 @@ test("accepting terms uses idempotent checkbox semantics", async () => {
 });
 
 test("a visible rejected submit does not wait for a new destination", async () => {
+  const events: string[] = [];
   const locator = new FakeLocator({
     count: 1,
     visible: true,
@@ -224,7 +225,9 @@ test("a visible rejected submit does not wait for a new destination", async () =
   });
   const page = new FakePage(locator);
 
-  await new PlaywrightAccountPageAdapter().activate(page, "submit_sign_in");
+  await new PlaywrightAccountPageAdapter({
+    trace: (event) => events.push(event),
+  }).activate(page, "submit_sign_in");
 
   assert.deepEqual(page.calls, [
     { method: "locator", selector: '[data-automation-id="signInSubmitButton"]' },
@@ -232,9 +235,11 @@ test("a visible rejected submit does not wait for a new destination", async () =
   assert.deepEqual(locator.waitForArguments, [
     { state: "hidden", timeout: 10_000 },
   ]);
+  assert.deepEqual(events, ["submit_control_remained_visible"]);
 });
 
 test("a markerless rejected submit may detach then reattach before classification", async () => {
+  const events: string[] = [];
   const submit = new FakeLocator({
     count: 1,
     visible: true,
@@ -249,7 +254,9 @@ test("a markerless rejected submit may detach then reattach before classificatio
     attachedWaitFails: true,
   });
 
-  await new PlaywrightAccountPageAdapter().activate(
+  await new PlaywrightAccountPageAdapter({
+    trace: (event) => events.push(event),
+  }).activate(
     new FakePage(submit, absentDestination),
     "submit_sign_in",
   );
@@ -261,6 +268,7 @@ test("a markerless rejected submit may detach then reattach before classificatio
   assert.deepEqual(absentDestination.waitForArguments, [
     { state: "attached", timeout: 10_000 },
   ]);
+  assert.deepEqual(events, ["submit_rejection_reappeared"]);
 });
 
 test("submit stabilization excludes the stale current account container", async () => {
@@ -282,6 +290,7 @@ test("submit stabilization excludes the stale current account container", async 
 });
 
 test("submit stabilization fails closed when no known state appears", async () => {
+  const events: string[] = [];
   const submit = new FakeLocator({
     count: 1,
     visible: true,
@@ -297,10 +306,13 @@ test("submit stabilization fails closed when no known state appears", async () =
     attachedWaitFails: true,
   });
 
-  await assert.rejects(() => new PlaywrightAccountPageAdapter().activate(
+  await assert.rejects(() => new PlaywrightAccountPageAdapter({
+    trace: (event) => events.push(event),
+  }).activate(
     new FakePage(submit, absentDestination),
     "submit_sign_in",
   ));
+  assert.deepEqual(events, ["submit_stabilization_failed"]);
 });
 
 class FakePage {

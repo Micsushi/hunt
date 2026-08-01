@@ -153,8 +153,12 @@ export async function runStage2AccountAccessFromOwnerConfig(
       forbiddenRoots: [source.repositoryRoot],
       now: () => now,
     });
+    const valueFreeTrace = process.env.HUNT_C3_VALUE_FREE_ACCOUNT_TRACE === "1"
+      ? (event: string) => process.stderr.write(`${JSON.stringify({ trace: event })}\n`)
+      : undefined;
     const browser = createPlaywrightPersistentBrowserSession({
       binding: admission.binding,
+      accountTrace: valueFreeTrace,
     });
     const navigator = browser as PlaywrightPersistentBrowserSession &
       AccountEntryNavigator;
@@ -172,9 +176,7 @@ export async function runStage2AccountAccessFromOwnerConfig(
       classified,
       resolver,
       owner.accountMode,
-      process.env.HUNT_C3_VALUE_FREE_ACCOUNT_TRACE === "1"
-        ? (event) => process.stderr.write(`${JSON.stringify({ trace: event })}\n`)
-        : undefined,
+      valueFreeTrace,
     );
     const targetSuffix = opaqueSuffix(owner.target.handleId, "target_ref_");
     const profileSuffix = opaqueSuffix(owner.profileRef, "profile_ref_");
