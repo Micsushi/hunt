@@ -69,7 +69,7 @@ function dependencies(stop?: StopKind, cancelAt?: ClassificationLayer) {
       atsFamily: { async classify(_request: unknown, signal: AbortSignal) {
         calls.push("ats_family"); const aborted = check(signal); if (aborted || cancelAt === "ats_family") return aborted ?? cancelled;
         if (stop?.startsWith("ats_")) return { ok: true as const, value: stop === "ats_unsupported"
-          ? { schemaVersion: 1 as const, kind: stop, familyId: "ats_family_other000000000" as never, sourceRevisionId: revision }
+          ? { schemaVersion: 1 as const, kind: stop, familyId: "ats_family_other00000000000" as never, sourceRevisionId: revision }
           : { schemaVersion: 1 as const, kind: stop, sourceRevisionId: revision } };
         return { ok: true as const, value: { schemaVersion: 1 as const, kind: "classified" as const, atsFamily: "workday" as const, classificationId: ids.ats as never, sourceRevisionId: revision } };
       } },
@@ -99,7 +99,7 @@ function dependencies(stop?: StopKind, cancelAt?: ClassificationLayer) {
       visibleOption: { async map(_request: unknown, signal: AbortSignal) {
         calls.push("visible_option"); const aborted = check(signal); if (aborted || cancelAt === "visible_option") return aborted ?? cancelled;
         if (stop?.startsWith("option_")) return { ok: true as const, value: { schemaVersion: 1 as const, kind: stop, sourceRevisionId: revision } };
-        return { ok: true as const, value: { schemaVersion: 1 as const, kind: "mapped" as const, optionId: "option-country-us" as never, classificationId: "classification_option000000000" as never, sourceRevisionId: revision } };
+        return { ok: true as const, value: { schemaVersion: 1 as const, kind: "mapped" as const, optionId: "option-country-us" as never, classificationId: "classification_option0000000000" as never, sourceRevisionId: revision } };
       } },
       allocateCandidateId() { allocations += 1; return `unknown_candidate_${allocations.toString().padStart(16, "0")}` as never; },
     } as ClassificationSkeletonDependencies,

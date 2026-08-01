@@ -2,6 +2,9 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { test } from "node:test";
 
+import * as classificationSerialized from "../../../src/contracts/live/classification-serialized.ts";
+import * as liveContracts from "../../../src/contracts/live/index.ts";
+
 import {
   ContractParseError,
   deriveSanitizedUnknownCandidate,
@@ -31,6 +34,32 @@ const observation = {
   requiredControlCount: 2,
   optionCount: 4,
 } as const;
+
+test("the compatibility facade keeps exactly ten parsers and hides primitives", () => {
+  assert.deepEqual(Object.keys(classificationSerialized).sort(), [
+    "deriveSanitizedUnknownCandidate",
+    "parseAtsFamilyClassificationResult",
+    "parseCanonicalAnswerTypeClassificationResult",
+    "parseQuestionClassificationResult",
+    "parseReviewedPromotionRecord",
+    "parseSanitizedStructuralObservation",
+    "parseSanitizedUnknownCandidate",
+    "parseUiBehaviorClassificationResult",
+    "parseVisibleOptionMappingResult",
+    "parseWorkdayPageTypeClassificationResult",
+  ]);
+  for (const privateName of [
+    "classificationId",
+    "exact",
+    "identifier",
+    "record",
+    "revisionId",
+    "snapshot",
+    "versioned",
+  ]) {
+    assert.equal(privateName in liveContracts, false, privateName);
+  }
+});
 
 function expectInvalid(run: () => unknown, path: string): void {
   assert.throws(
