@@ -25,7 +25,10 @@
       "F5",
       "F6",
       "F7",
-      "F8"
+      "F8",
+      "F9",
+      "F10",
+      "F11"
     ],
     "f12Paths": [
       "executioner/tests/connections/component-manifest.test.ts",
@@ -90,9 +93,9 @@
     },
     {
       "feature": "F9",
-      "tip": "a09317752f68ecba5e9864ec2a2994c6f6ffe311",
-      "tipTreeOid": "481bf716ae66db0d35a24bc68dc03d45a3249e05",
-      "pathSetSha256": "ec10a9cbf39773a71469501f8e6f505c0cf97bce02850770eee1b302db9d7b1a",
+      "tip": "94a43a5cd41c501a142051016718dd7b57b71f15",
+      "tipTreeOid": "287aca8345907c127d960686897266fd1d65eed1",
+      "pathSetSha256": "64846fef3d6c1b1aa1f167b7e5f673e88a2c8b36f4b1ceb65eb55f4280018c26",
       "conformance": "passed"
     },
     {
