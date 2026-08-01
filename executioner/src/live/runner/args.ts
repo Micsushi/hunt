@@ -1,13 +1,16 @@
 import { isAbsolute, normalize } from "node:path";
 
-export interface Stage2AccountAccessArgs {
+export type Stage2AcceptanceCheckpoint = "account_access" | "mailbox_candidate";
+
+export interface Stage2AcceptanceArgs {
+  readonly checkpoint: Stage2AcceptanceCheckpoint;
   readonly configPath: string;
   readonly evidenceRoot: string;
 }
 
-export function parseStage2AccountAccessArgs(
+export function parseStage2AcceptanceArgs(
   values: readonly string[],
-): Stage2AccountAccessArgs {
+): Stage2AcceptanceArgs {
   if (values.length !== 6) invalid();
   const parsed = new Map<string, string>();
   for (let index = 0; index < values.length; index += 2) {
@@ -23,14 +26,15 @@ export function parseStage2AccountAccessArgs(
   }
   const configPath = parsed.get("--config");
   const evidenceRoot = parsed.get("--evidence-root");
+  const checkpoint = parsed.get("--stop-after");
   if (
     configPath === undefined ||
     evidenceRoot === undefined ||
-    parsed.get("--stop-after") !== "account_access" ||
+    (checkpoint !== "account_access" && checkpoint !== "mailbox_candidate") ||
     !canonicalAbsolute(configPath) ||
     !canonicalAbsolute(evidenceRoot)
   ) invalid();
-  return Object.freeze({ configPath, evidenceRoot });
+  return Object.freeze({ checkpoint, configPath, evidenceRoot });
 }
 
 function canonicalAbsolute(value: string): boolean {

@@ -21,3 +21,14 @@ test("terminal output emits only admitted success references", () => {
     },
   }), '{"status":"passed","checkpoint":"account_access","sourceRevision":"0123456789abcdef0123456789abcdef01234567","revisionId":"revision_abcdefghijklmnop"}\n');
 });
+
+test("terminal output admits mailbox-candidate success without mailbox values", () => {
+  assert.equal(formatStage2TerminalResult({
+    ok: true,
+    acceptance: {
+      checkpoint: "mailbox_candidate",
+      sourceRevision: "0123456789abcdef0123456789abcdef01234567",
+      revisionId: "revision_abcdefghijklmnop",
+    },
+  }), '{"status":"passed","checkpoint":"mailbox_candidate","sourceRevision":"0123456789abcdef0123456789abcdef01234567","revisionId":"revision_abcdefghijklmnop"}\n');
+});

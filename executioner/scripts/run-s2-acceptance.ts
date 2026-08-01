@@ -1,5 +1,4 @@
-import { runStage2AccountAccessFromOwnerConfig } from "../src/composition/s2-account-access-runner.ts";
-import { parseStage2AccountAccessArgs } from "../src/live/runner/args.ts";
+import { parseStage2AcceptanceArgs } from "../src/live/runner/args.ts";
 import { formatStage2TerminalResult } from "../src/live/runner/terminal.ts";
 
 const controller = new AbortController();
@@ -8,11 +7,12 @@ process.once("SIGINT", cancel);
 process.once("SIGTERM", cancel);
 
 try {
-  const args = parseStage2AccountAccessArgs(process.argv.slice(2));
-  const result = await runStage2AccountAccessFromOwnerConfig(
-    args,
-    controller.signal,
-  );
+  const args = parseStage2AcceptanceArgs(process.argv.slice(2));
+  const result = args.checkpoint === "mailbox_candidate"
+    ? await (await import("../src/composition/s2-mailbox-candidate-runner.ts"))
+      .runStage2MailboxCandidateFromOwnerConfig(args, controller.signal)
+    : await (await import("../src/composition/s2-account-access-runner.ts"))
+      .runStage2AccountAccessFromOwnerConfig(args, controller.signal);
   process.stdout.write(formatStage2TerminalResult(result));
   if (result.ok) {
     process.exitCode = 0;

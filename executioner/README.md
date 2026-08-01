@@ -149,5 +149,21 @@ mailbox, sender, and bundle values stay in that child; Node receives only DPAPI
 CurrentUser ciphertext. Recreate both short-lived handles instead of mixing F1
 and F2 expiry values. This command does not query Gmail or consume the message.
 
+### Mailbox-candidate acceptance slice
+
+Run this only from the clean committed revision used to provision the short-lived
+F2 handles:
+
+```text
+npm run live:s2 -- --config C:\private\f2-owner-inputs.json --stop-after mailbox_candidate --evidence-root C:\private\s2-evidence
+```
+
+The runner queries only `gmail-api-v1` through the scoped Gmail handle and an
+exact trailing 60-minute window. Recipient, sender, tenant, target, and journey
+remain independently bound. It passes only for one unexpired candidate, releases
+the process-local verification artifact, and seals value-free evidence with
+`messageBodyRetained: false`. It never launches the Workday browser or navigates
+the verification link.
+
 Tests use Node's built-in runner. Components may depend on shared contracts but
 not on peer implementations or C3 v2 source.

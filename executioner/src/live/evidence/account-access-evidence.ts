@@ -1,20 +1,4 @@
-import { randomBytes } from "node:crypto";
-import {
-  chmodSync,
-  existsSync,
-  lstatSync,
-  openSync,
-  realpathSync,
-  renameSync,
-  rmSync,
-  statSync,
-  writeSync,
-  fsyncSync,
-  closeSync,
-} from "node:fs";
-import { isAbsolute, join, normalize, resolve } from "node:path";
-
-const MAX_ACCEPTANCE_BYTES = 16 * 1024;
+import { writeAtomicJsonEvidence } from "./private/atomic-json-evidence.ts";
 
 export interface AccountAccessAcceptanceV1 {
   readonly schemaVersion: 1;
@@ -45,58 +29,12 @@ export interface WriteAccountAccessEvidenceRequest {
 export async function writeAccountAccessEvidence(
   request: WriteAccountAccessEvidenceRequest,
 ): Promise<void> {
-  const root = admittedRoot(request.root);
-  const target = join(root, "acceptance.json");
-  if (existsSync(target)) unavailable();
-  const acceptance = exactAcceptance(request.acceptance);
-  const payload = Buffer.from(`${JSON.stringify(acceptance, null, 2)}\n`, "utf8");
-  if (payload.byteLength > MAX_ACCEPTANCE_BYTES) denied();
-  for (const sensitive of request.sensitiveValues) {
-    if (sensitive.length >= 3 && payload.includes(Buffer.from(sensitive, "utf8"))) {
-      payload.fill(0);
-      denied();
-    }
-  }
-
-  const partial = join(root, `.acceptance-${randomBytes(16).toString("hex")}.partial`);
-  let descriptor: number | undefined;
-  try {
-    descriptor = openSync(partial, "wx", 0o600);
-    writeSync(descriptor, payload);
-    fsyncSync(descriptor);
-    closeSync(descriptor);
-    descriptor = undefined;
-    chmodSync(partial, 0o600);
-    if (existsSync(target)) unavailable();
-    renameSync(partial, target);
-  } catch {
-    unavailable();
-  } finally {
-    payload.fill(0);
-    if (descriptor !== undefined) {
-      try {
-        closeSync(descriptor);
-      } catch {
-        // The cleanup result is represented by the bounded public failure.
-      }
-    }
-    if (existsSync(partial)) rmSync(partial, { force: true });
-  }
-}
-
-function admittedRoot(value: string): string {
-  try {
-    if (
-      !isAbsolute(value) ||
-      normalize(value) !== value ||
-      lstatSync(value).isSymbolicLink() ||
-      !statSync(value).isDirectory() ||
-      comparable(realpathSync.native(value)) !== comparable(resolve(value))
-    ) unavailable();
-    return realpathSync.native(value);
-  } catch {
-    return unavailable();
-  }
+  writeAtomicJsonEvidence({
+    root: request.root,
+    value: exactAcceptance(request.acceptance),
+    sensitiveValues: request.sensitiveValues,
+    label: "account-access",
+  });
 }
 
 function exactAcceptance(value: AccountAccessAcceptanceV1): AccountAccessAcceptanceV1 {
@@ -140,15 +78,6 @@ function exactArray(value: readonly string[], expected: readonly string[]): bool
     value.every((entry, index) => entry === expected[index]);
 }
 
-function comparable(value: string): string {
-  const normalized = normalize(value);
-  return process.platform === "win32" ? normalized.toLowerCase() : normalized;
-}
-
 function denied(): never {
   throw new Error("account-access evidence denied");
-}
-
-function unavailable(): never {
-  throw new Error("account-access evidence unavailable");
 }
