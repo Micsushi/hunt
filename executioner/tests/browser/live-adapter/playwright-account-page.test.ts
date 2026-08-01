@@ -191,7 +191,7 @@ test("activates each exact semantic link or button without returning page state"
       action.startsWith("submit_")
         ? [
             { state: "hidden", timeout: 10_000 },
-            { state: "attached", timeout: 10_000 },
+            { state: "visible", timeout: 10_000 },
           ]
         : [],
     );
@@ -273,7 +273,7 @@ test("a markerless rejected submit may detach then reattach before classificatio
 
   assert.deepEqual(submit.waitForArguments, [
     { state: "hidden", timeout: 10_000 },
-    { state: "attached", timeout: 10_000 },
+    { state: "visible", timeout: 10_000 },
     { state: "visible", timeout: 10_000 },
   ]);
   assert.deepEqual(email.waitForArguments, [{ state: "visible", timeout: 10_000 }]);
@@ -286,6 +286,42 @@ test("a markerless rejected submit may detach then reattach before classificatio
     "submit_click_started",
     "submit_click_succeeded",
     "submit_rejection_reappeared",
+  ]);
+});
+
+test("a hidden attached submit owner cannot beat a known destination", async () => {
+  const events: string[] = [];
+  const submit = new FakeLocator({
+    count: 1,
+    visible: false,
+    enabled: true,
+    editable: false,
+    visibleWaitFails: true,
+  });
+  const destination = new FakeLocator({
+    count: 1,
+    visible: true,
+    enabled: true,
+    editable: false,
+    attachedWaitYields: true,
+  });
+
+  await new PlaywrightAccountPageAdapter({
+    trace: (event) => events.push(event),
+  }).activate(new FakePage(submit, destination), "submit_sign_in");
+
+  assert.deepEqual(submit.waitForArguments, [
+    { state: "hidden", timeout: 10_000 },
+    { state: "visible", timeout: 10_000 },
+  ]);
+  assert.deepEqual(destination.waitForArguments, [
+    { state: "attached", timeout: 10_000 },
+  ]);
+  assert.deepEqual(events, [
+    "submit_hit_target_clear",
+    "submit_click_started",
+    "submit_click_succeeded",
+    "submit_destination_observed",
   ]);
 });
 
@@ -314,7 +350,7 @@ test("a sign-in rejection waits for the complete semantic form to become visible
 
   assert.deepEqual(submit.waitForArguments, [
     { state: "hidden", timeout: 10_000 },
-    { state: "attached", timeout: 10_000 },
+    { state: "visible", timeout: 10_000 },
     { state: "visible", timeout: 10_000 },
   ]);
   assert.deepEqual(email.waitForArguments, [{ state: "visible", timeout: 10_000 }]);
@@ -354,7 +390,7 @@ test("a create-account rejection waits for confirmation with the semantic form",
 
   assert.deepEqual(submit.waitForArguments, [
     { state: "hidden", timeout: 10_000 },
-    { state: "attached", timeout: 10_000 },
+    { state: "visible", timeout: 10_000 },
     { state: "visible", timeout: 10_000 },
   ]);
   for (const field of [email, password, confirmation]) {
@@ -464,7 +500,7 @@ test("submit stabilization fails closed when no known state appears", async () =
     visible: true,
     enabled: true,
     editable: false,
-    attachedWaitFails: true,
+    visibleWaitFails: true,
   });
   const absentDestination = new FakeLocator({
     count: 0,
@@ -484,6 +520,7 @@ test("submit stabilization fails closed when no known state appears", async () =
     "submit_hit_target_clear",
     "submit_click_started",
     "submit_click_succeeded",
+    "submit_rejection_submit_owner_wait_failed",
     "submit_stabilization_failed",
   ]);
 });
@@ -636,6 +673,7 @@ class FakeLocator {
     inputValue?: string;
     hiddenWaitFails?: boolean;
     attachedWaitFails?: boolean;
+    attachedWaitYields?: boolean;
     visibleWaitFails?: boolean;
     clickFails?: boolean;
     clickError?: Error;
@@ -656,6 +694,7 @@ class FakeLocator {
     inputValue?: string;
     hiddenWaitFails?: boolean;
     attachedWaitFails?: boolean;
+    attachedWaitYields?: boolean;
     visibleWaitFails?: boolean;
     clickFails?: boolean;
     clickError?: Error;
@@ -703,6 +742,10 @@ class FakeLocator {
       this.values.attachedWaitFails &&
       (options as { readonly state?: string }).state === "attached"
     ) throw new Error("state remained detached");
+    if (
+      this.values.attachedWaitYields &&
+      (options as { readonly state?: string }).state === "attached"
+    ) await new Promise<void>((resolve) => queueMicrotask(resolve));
     if (
       this.values.visibleWaitFails &&
       (options as { readonly state?: string }).state === "visible"

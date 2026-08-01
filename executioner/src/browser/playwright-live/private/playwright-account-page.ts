@@ -151,14 +151,19 @@ export class PlaywrightAccountPageAdapter implements SemanticAccountPageAdapter 
         if (transitioned) {
           let observed: "destination" | "rejection";
           try {
-            observed = await Promise.any([
-              playwrightPage(page).locator(postSubmitDestination(action))
-                .first()
-                .waitFor({ state: "attached", timeout: 10_000 })
-                .then(() => "destination" as const),
-              locator.waitFor({ state: "attached", timeout: 10_000 })
-                .then(() => "rejection" as const),
-            ]);
+            try {
+              observed = await Promise.any([
+                playwrightPage(page).locator(postSubmitDestination(action))
+                  .first()
+                  .waitFor({ state: "attached", timeout: 10_000 })
+                  .then(() => "destination" as const),
+                locator.waitFor({ state: "visible", timeout: 10_000 })
+                  .then(() => "rejection" as const),
+              ]);
+            } catch (error) {
+              this.#emit("submit_rejection_submit_owner_wait_failed");
+              throw error;
+            }
             if (observed === "rejection") {
               const readinessWaits: Array<readonly [
                 Locator,
