@@ -25,6 +25,7 @@ interface ParsedWorkdayTarget {
 
 export class WorkdayOwnedTargetProbe implements OwnedTargetProbe {
   readonly #accountPage = new PlaywrightAccountPageAdapter();
+  readonly #matchedLineage = new WeakMap<object, string>();
 
   async inspect(
     page: PersistentPage,
@@ -34,24 +35,46 @@ export class WorkdayOwnedTargetProbe implements OwnedTargetProbe {
     if (signal.aborted) throw signal.reason;
     const probePage = page as unknown as WorkdayProbePage;
     const parsed = parseWorkdayTarget(probePage.url());
-    if (parsed === undefined) return { ownership: "foreign" };
+    if (parsed === undefined) {
+      this.#matchedLineage.delete(probePage);
+      return { ownership: "foreign" };
+    }
     const expected = parseExpectedHost(expectedTarget.approved.host);
-    if (expected === undefined) return { ownership: "foreign" };
+    if (expected === undefined) {
+      this.#matchedLineage.delete(probePage);
+      return { ownership: "foreign" };
+    }
 
     if (parsed.hostFamily !== expected.hostFamily) {
+      this.#matchedLineage.delete(probePage);
       return ownedMismatch("host", emptyWorkdaySnapshot());
     }
     if (parsed.tenant !== expectedTarget.approved.tenant) {
+      this.#matchedLineage.delete(probePage);
       return ownedMismatch("tenant", emptyWorkdaySnapshot());
     }
     if (parsed.host !== expectedTarget.approved.host) {
+      this.#matchedLineage.delete(probePage);
       return ownedMismatch("host", emptyWorkdaySnapshot());
     }
-    if (parsed.postings.length !== 1) {
+    if (parsed.postings.length > 1) {
+      this.#matchedLineage.delete(probePage);
       return owned(emptyWorkdaySnapshot(), { kind: "target_ambiguous" });
     }
-    if (parsed.postings[0] !== expectedTarget.approved.posting) {
+    if (
+      parsed.postings.length === 1 &&
+      parsed.postings[0] !== expectedTarget.approved.posting
+    ) {
+      this.#matchedLineage.delete(probePage);
       return ownedMismatch("posting", emptyWorkdaySnapshot());
+    }
+    const lineageKey = targetLineageKey(expectedTarget);
+    if (
+      parsed.postings.length === 0 &&
+      this.#matchedLineage.get(probePage) !== lineageKey
+    ) {
+      this.#matchedLineage.delete(probePage);
+      return owned(emptyWorkdaySnapshot(), { kind: "target_ambiguous" });
     }
     const preliminary = await inspectWorkdayStructure(
       probePage,
@@ -64,16 +87,50 @@ export class WorkdayOwnedTargetProbe implements OwnedTargetProbe {
       ? preliminary.snapshot
       : emptyWorkdaySnapshot();
     if (preliminary.kind === "ambiguous") {
+      this.#matchedLineage.delete(probePage);
       return owned(snapshot, { kind: "target_ambiguous" });
     }
     if (preliminary.kind === "posting_unavailable") {
+      this.#matchedLineage.delete(probePage);
       return owned(snapshot, {
         kind: "posting_unavailable",
         reason: preliminary.reason,
       });
     }
+    if (
+      parsed.postings.length === 0 &&
+      !hasExactlyOnePostingFreeDescendantTrait(preliminary.snapshot)
+    ) {
+      this.#matchedLineage.delete(probePage);
+      return owned(preliminary.snapshot, { kind: "target_ambiguous" });
+    }
+    if (parsed.postings.length === 1) {
+      this.#matchedLineage.set(probePage, lineageKey);
+    }
     return owned(preliminary.snapshot, { kind: "matched" });
   }
+}
+
+const postingFreeDescendantTraits = Object.freeze(new Set([
+  "structural_trait_page_account_entry_v1",
+  "structural_trait_page_email_verification_v1",
+  "structural_trait_page_candidate_home_v1",
+  "structural_trait_page_profile_step_v1",
+  "structural_trait_page_questionnaire_v1",
+  "structural_trait_page_review_step_v1",
+]));
+
+function hasExactlyOnePostingFreeDescendantTrait(
+  snapshot: ValueFreeOwnedPageSnapshot,
+): boolean {
+  return snapshot.traitIds.filter((trait) =>
+    postingFreeDescendantTraits.has(trait)
+  ).length === 1;
+}
+
+function targetLineageKey(expectedTarget: ApprovedTargetBinding): string {
+  const { host, tenant, posting } = expectedTarget.approved;
+  return `${host}\u0000${tenant}\u0000${posting}`;
 }
 
 function parseWorkdayTarget(value: string): ParsedWorkdayTarget | undefined {

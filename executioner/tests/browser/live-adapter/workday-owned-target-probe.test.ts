@@ -111,6 +111,93 @@ test("production probe recognizes the exact semantic sign-in boundary", async ()
   ));
 });
 
+test("only an exactly matched page may continue onto a posting-free account descendant", async () => {
+  const probe = new WorkdayOwnedTargetProbe();
+  const page = new ProbePage(
+    "https://approved.wd5.myworkdayjobs.invalid/en-US/Careers/job/Example_R12345/apply/applyManually",
+    { '[data-automation-id="createAccountPage"]': 1 },
+  );
+
+  assert.equal(
+    (await probe.inspect(page, expected, new AbortController().signal)).ownership,
+    "owned",
+  );
+  page.currentUrl =
+    "https://approved.wd5.myworkdayjobs.invalid/en-US/Careers/account/emailVerification";
+  page.counts = { '[data-automation-id="emailVerificationPage"]': 1 };
+
+  assert.deepEqual(
+    await probe.inspect(page, expected, new AbortController().signal),
+    owned(
+      { kind: "matched" },
+      [
+        "structural_trait_ats_workday_family_v1",
+        "structural_trait_page_email_verification_v1",
+      ],
+    ),
+  );
+  assert.deepEqual(
+    await new WorkdayOwnedTargetProbe().inspect(
+      page,
+      expected,
+      new AbortController().signal,
+    ),
+    owned({ kind: "target_ambiguous" }),
+  );
+});
+
+test("a target contradiction revokes posting-free lineage for that page", async () => {
+  const probe = new WorkdayOwnedTargetProbe();
+  const page = new ProbePage(
+    "https://approved.wd5.myworkdayjobs.invalid/en-US/Careers/job/Example_R12345",
+  );
+  assert.equal(
+    (await probe.inspect(page, expected, new AbortController().signal)).ownership,
+    "owned",
+  );
+
+  page.currentUrl =
+    "https://approved.wd5.myworkdayjobs.invalid/en-US/Careers/job/Other_R99999";
+  assert.deepEqual(
+    await probe.inspect(page, expected, new AbortController().signal),
+    owned({ kind: "target_mismatch", dimension: "posting" }),
+  );
+
+  page.currentUrl =
+    "https://approved.wd5.myworkdayjobs.invalid/en-US/Careers/account/emailVerification";
+  page.counts = { '[data-automation-id="emailVerificationPage"]': 1 };
+  assert.deepEqual(
+    await probe.inspect(page, expected, new AbortController().signal),
+    owned({ kind: "target_ambiguous" }),
+  );
+});
+
+test("posting-free lineage rejects conflicting descendant page types", async () => {
+  const probe = new WorkdayOwnedTargetProbe();
+  const page = new ProbePage(
+    "https://approved.wd5.myworkdayjobs.invalid/en-US/Careers/job/Example_R12345",
+  );
+  await probe.inspect(page, expected, new AbortController().signal);
+  page.currentUrl =
+    "https://approved.wd5.myworkdayjobs.invalid/en-US/Careers/account/emailVerification";
+  page.counts = {
+    '[data-automation-id="emailVerificationPage"]': 1,
+    '[data-automation-id="candidateHomePage"]': 1,
+  };
+
+  assert.deepEqual(
+    await probe.inspect(page, expected, new AbortController().signal),
+    owned(
+      { kind: "target_ambiguous" },
+      [
+        "structural_trait_ats_workday_family_v1",
+        "structural_trait_page_email_verification_v1",
+        "structural_trait_page_candidate_home_v1",
+      ],
+    ),
+  );
+});
+
 test("site route underscores before the job boundary are not posting identities", async () => {
   const result = await new WorkdayOwnedTargetProbe().inspect(
     new ProbePage(
@@ -214,8 +301,8 @@ test("production probe emits the closed apply-choice navigation trait", async ()
 });
 
 class ProbePage {
-  readonly currentUrl: string;
-  readonly counts: Readonly<Record<string, number>>;
+  currentUrl: string;
+  counts: Readonly<Record<string, number>>;
   readonly semanticCounts: Readonly<Record<string, number>>;
 
   constructor(

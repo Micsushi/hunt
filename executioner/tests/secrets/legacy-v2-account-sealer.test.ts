@@ -92,7 +92,7 @@ test("production child seals a pinned synthetic v2 defaults file", async () => {
   try {
     const sourcePath = join(root, "c3_p_chrome_defaults.js");
     const source = [
-      'const DEFAULT_ACCOUNT_EMAIL = "synthetic@example.test";',
+      'const DEFAULT_ACCOUNT_EMAIL = "synthetic@example.invalid";',
       'const DEFAULT_ACCOUNT_PASSWORD = process.env.IGNORED || "synthetic-only";',
     ].join("\n");
     await writeFile(sourcePath, source, "utf8");

@@ -149,7 +149,12 @@ export async function runStage2AccountAccess(
         operationId: dependencies.nextOperationId(),
         sessionId: opened.sessionId,
       }, new AbortController().signal);
-      if (!cleanup.ok) return failure(cleanup.error.code);
+      if (!cleanup.ok) {
+        if (
+          cleanup.error.code !== "browser_session_missing" ||
+          pending.ok
+        ) return failure(cleanup.error.code);
+      }
     } catch {
       return failure("browser_profile_cleanup_failed");
     }

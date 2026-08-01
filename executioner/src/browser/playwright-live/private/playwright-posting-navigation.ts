@@ -8,8 +8,9 @@ import type { PersistentPage } from "./types.ts";
 
 const ACCOUNT_OR_APPLICATION_DESTINATION = [
   '[data-automation-id="email"]',
-  '[data-automation-id="signInSubmitButton"]',
-  '[data-automation-id="createAccountSubmitButton"]',
+  '[data-automation-id="signInPage"]',
+  '[data-automation-id="createAccountPage"]',
+  '[data-automation-id="authPage"]',
   '[data-automation-id="emailVerificationPage"]',
   '[data-automation-id="candidateHomePage"]',
   '[data-automation-id="applyFlowMyInfoPage"]',

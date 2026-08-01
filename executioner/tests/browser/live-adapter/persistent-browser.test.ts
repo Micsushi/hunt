@@ -396,6 +396,47 @@ test("failed target admission closes the launched context and removes only its p
   assert.equal(profiles.partialCleanupCount, 1);
 });
 
+test("close succeeds after account ownership invalidation cleaned the exact session", async () => {
+  const { provider, opened } = await openedProviderThatInvalidatesAfterFill();
+  if (!opened.ok) return;
+
+  const invalidated = await invalidateWithOneFill(provider, opened.value.session.sessionId);
+  assert.deepEqual(invalidated, {
+    ok: false,
+    error: { code: "browser_effect_uncertain", retryable: false },
+  });
+  assert.deepEqual(
+    await provider.close({
+      schemaVersion: 1,
+      journeyId: liveFixtures.journeyId,
+      operationId: generatedOperationId("operation_close_invalidated_ok_1"),
+      sessionId: opened.value.session.sessionId,
+    }, new AbortController().signal),
+    { ok: true, value: undefined },
+  );
+});
+
+test("close preserves account invalidation cleanup failure for the exact session", async () => {
+  const profiles = new MemoryProfiles();
+  profiles.failCleanup = true;
+  const { provider, opened } = await openedProviderThatInvalidatesAfterFill(profiles);
+  if (!opened.ok) return;
+
+  await invalidateWithOneFill(provider, opened.value.session.sessionId);
+  assert.deepEqual(
+    await provider.close({
+      schemaVersion: 1,
+      journeyId: liveFixtures.journeyId,
+      operationId: generatedOperationId("operation_close_invalidated_fail_1"),
+      sessionId: opened.value.session.sessionId,
+    }, new AbortController().signal),
+    {
+      ok: false,
+      error: { code: "browser_profile_cleanup_failed", retryable: false },
+    },
+  );
+});
+
 test("failed-open cleanup releases Chromium before deleting its locked profile", async () => {
   const context = new FakeContext([]);
   context.delayCloseMs = 5;
@@ -653,6 +694,57 @@ test("reconcile preserves each exact target fact without normalization", async (
     assert.deepEqual(result, { ok: true, value: fact });
   }
 });
+
+async function openedProviderThatInvalidatesAfterFill(
+  profiles = new MemoryProfiles(),
+) {
+  let inspections = 0;
+  const provider = new PlaywrightPersistentBrowserSession({
+    binding: binding(),
+    launcher: {
+      async launchPersistentContext() {
+        return new FakeContext([]);
+      },
+    },
+    probe: {
+      async inspect() {
+        inspections += 1;
+        return inspections < 3 ? ownedMatched() : { ownership: "foreign" };
+      },
+    },
+    profiles,
+    accountPage: {
+      async inspect() { return { cardinality: 1, actionable: true }; },
+      async fill() {},
+      async matches() { return true; },
+      async clear() {},
+      async isEmpty() { return true; },
+      async activate() {},
+    },
+    ids: () => liveFixtures.session.sessionId,
+    timeoutMs: 100,
+  });
+  return {
+    provider,
+    opened: await provider.open(openRequest(), new AbortController().signal),
+  };
+}
+
+async function invalidateWithOneFill(
+  provider: PlaywrightPersistentBrowserSession,
+  sessionId: LiveSessionId,
+) {
+  return provider.withOwnedAccountPageAccess({
+    schemaVersion: 1,
+    journeyId: liveFixtures.journeyId,
+    operationId: generatedOperationId("operation_account_invalidate_1"),
+    sessionId,
+    target: liveFixtures.target,
+    now: liveFixtures.issuedAt,
+  }, new AbortController().signal, async (access) => {
+    await access.fill("email", new Uint8Array([1]));
+  });
+}
 
 function openRequest(): PersistentBrowserOpenRequest {
   return {

@@ -39,45 +39,55 @@ export class PlaywrightPersistentContextLauncher
     options: { readonly headless: boolean },
   ): Promise<PersistentContext> {
     const visibleWindow = options.headless ? undefined : this.#visibleWindow();
-    const context = await this.#launch(
-      profilePath,
-      visibleWindow === undefined
-        ? { headless: options.headless }
-        : {
-            headless: false,
-            viewport: null,
-            args: [
-              "--start-minimized",
-              `--window-position=${visibleWindow.x},${visibleWindow.y}`,
-              `--window-size=${visibleWindow.width},${visibleWindow.height}`,
-            ],
-          },
-    );
+    const context = await this.#launch(profilePath, visibleWindow === undefined
+      ? { headless: options.headless }
+      : visiblePersistentLaunchOptions(visibleWindow));
     if (visibleWindow === undefined) return context;
     try {
-      const page = context.pages()[0] ?? await context.newPage();
-      const session = await context.newCDPSession(page);
-      try {
-        const { windowId } = await session.send("Browser.getWindowForTarget") as {
-          readonly windowId: number;
-        };
-        await session.send("Browser.setWindowBounds", {
-          windowId,
-          bounds: {
-            left: visibleWindow.x,
-            top: visibleWindow.y,
-            width: visibleWindow.width,
-            height: visibleWindow.height,
-            windowState: "normal",
-          },
-        });
-      } finally {
-        await session.detach();
-      }
+      await revealVisibleWindow(context, visibleWindow);
       return context;
     } catch (error) {
       await context.close().catch(() => undefined);
       throw error;
     }
+  }
+}
+
+export function visiblePersistentLaunchOptions(
+  window: VisibleSecondaryWindow,
+): NonNullable<Parameters<typeof chromium.launchPersistentContext>[1]> {
+  return {
+    headless: false,
+    viewport: null,
+    args: [
+      "--start-minimized",
+      `--window-position=${window.x},${window.y}`,
+      `--window-size=${window.width},${window.height}`,
+    ],
+  };
+}
+
+export async function revealVisibleWindow(
+  context: Pick<BrowserContext, "pages" | "newPage" | "newCDPSession">,
+  window: VisibleSecondaryWindow,
+): Promise<void> {
+  const page = context.pages()[0] ?? await context.newPage();
+  const session = await context.newCDPSession(page);
+  try {
+    const { windowId } = await session.send("Browser.getWindowForTarget") as {
+      readonly windowId: number;
+    };
+    await session.send("Browser.setWindowBounds", {
+      windowId,
+      bounds: {
+        left: window.x,
+        top: window.y,
+        width: window.width,
+        height: window.height,
+        windowState: "normal",
+      },
+    });
+  } finally {
+    await session.detach();
   }
 }

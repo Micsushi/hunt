@@ -300,6 +300,32 @@ test("thrown cleanup is converted to a bounded cleanup failure", async () => {
   );
 });
 
+test("an already-invalidated browser cleanup does not mask credential effect uncertainty", async () => {
+  const dependencies = successfulDependencies();
+  dependencies.credentials = {
+    async mutate() {
+      return {
+        ok: false,
+        error: { code: "credential_effect_uncertain", retryable: false },
+      } as const;
+    },
+  };
+  dependencies.browser = {
+    ...dependencies.browser,
+    async close() {
+      return {
+        ok: false,
+        error: { code: "browser_session_missing", retryable: false },
+      } as const;
+    },
+  };
+
+  assert.deepEqual(
+    await runStage2AccountAccess(input(), dependencies, new AbortController().signal),
+    { ok: false, code: "credential_effect_uncertain" },
+  );
+});
+
 function successfulDependencies() {
   return {
     secretStore: {
