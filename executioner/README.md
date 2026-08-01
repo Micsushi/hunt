@@ -79,10 +79,12 @@ npm run live:s2 -- --config C:\private\s2-owner-inputs.json --stop-after account
 ```
 
 The runner verifies the exact checked-out Git SHA and rejects tracked, staged,
-or untracked production changes before browser creation. It inspects both
-scoped secret handles without resolving Gmail authorization, proves account
-field entry, closes the owned browser with an independent cleanup signal, and
-then atomically writes a value-free `acceptance.json`. The recorded
+or untracked production changes before browser creation. At the account-access
+checkpoint it inspects only the scoped account handle; the admitted Gmail
+reference and its future record remain untouched until the mailbox-verification
+lane. It proves account field entry, closes the owned browser with an
+independent cleanup signal, and then atomically writes a value-free
+`acceptance.json`. The recorded
 `submitActivated: false` refers only to final job-application Submit; account
 Create or Sign In is activated as part of account-access proof.
 

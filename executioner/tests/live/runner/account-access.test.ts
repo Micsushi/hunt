@@ -45,8 +45,6 @@ function input(): Stage2AccountAccessInput {
     target,
     accountSecretHandleId: "secret_handle_accountabcdefghijkl" as never,
     accountSecretExpiresAt: "2026-08-02T11:00:00.000Z",
-    gmailAuthorizationHandleId: "secret_handle_gmailabcdefghijklxx" as never,
-    gmailAuthorizationExpiresAt: "2026-08-02T11:00:00.000Z",
     now: "2026-08-01T12:00:00.000Z",
   };
 }
@@ -58,7 +56,7 @@ function metadata(
     schemaVersion: 1,
     handleId: purpose === "account_credentials"
       ? input().accountSecretHandleId
-      : input().gmailAuthorizationHandleId,
+      : "secret_handle_gmailabcdefghijklxx" as never,
     journeyId: input().journeyId,
     provider: "windows_dpapi_current_user_v1",
     purpose,
@@ -71,7 +69,7 @@ function metadata(
   };
 }
 
-test("account access inspects both handles before browser and seals only after fresh-signal cleanup", async () => {
+test("account access inspects only the account handle before browser and seals after fresh-signal cleanup", async () => {
   const order: string[] = [];
   const signals: AbortSignal[] = [];
   const secretStore: SecretStore = {
@@ -145,7 +143,6 @@ test("account access inspects both handles before browser and seals only after f
   assert.equal(result.ok, true);
   assert.deepEqual(order, [
     "inspect:account_credentials",
-    "inspect:gmail_oauth",
     "open",
     "reconcile",
     "advance",
@@ -157,15 +154,17 @@ test("account access inspects both handles before browser and seals only after f
   assert.equal(signals[0]?.aborted, false);
 });
 
-test("invalid Gmail metadata stops before browser and never writes evidence", async () => {
+test("an absent or invalid Gmail record is untouched and cannot affect account access", async () => {
   let browserCalls = 0;
-  let evidenceCalls = 0;
+  let gmailInspections = 0;
   const dependencies = successfulDependencies();
   dependencies.secretStore = {
     async inspect(request) {
-      return request.expectedPurpose === "account_credentials"
-        ? { ok: true, value: metadata("account_credentials") }
-        : { ok: false, error: { code: "secret_handle_invalid", retryable: false } };
+      if (request.expectedPurpose === "gmail_oauth") {
+        gmailInspections += 1;
+        return { ok: false, error: { code: "secret_handle_invalid", retryable: false } };
+      }
+      return { ok: true, value: metadata("account_credentials") };
     },
     async revoke() {
       throw new Error("not used");
@@ -178,23 +177,17 @@ test("invalid Gmail metadata stops before browser and never writes evidence", as
       return { ok: true, value: { kind: "opened", session } };
     },
   };
-  dependencies.evidence = {
-    async write() {
-      evidenceCalls += 1;
-    },
-  };
-
   const result = await runStage2AccountAccess(
     input(),
     dependencies,
     new AbortController().signal,
   );
-  assert.deepEqual(result, { ok: false, code: "secret_handle_invalid" });
-  assert.equal(browserCalls, 0);
-  assert.equal(evidenceCalls, 0);
+  assert.equal(result.ok, true);
+  assert.equal(browserCalls, 1);
+  assert.equal(gmailInspections, 0);
 });
 
-test("owner and stored secret expiry must match before browser", async () => {
+test("owner and stored account-secret expiry must match before browser", async () => {
   let browserCalls = 0;
   const dependencies = successfulDependencies();
   dependencies.secretStore = {
@@ -202,9 +195,10 @@ test("owner and stored secret expiry must match before browser", async () => {
       const value = metadata(request.expectedPurpose);
       return {
         ok: true,
-        value: request.expectedPurpose === "gmail_oauth"
-          ? { ...value, expiresAt: "2026-08-02T10:00:00.000Z" }
-          : value,
+        value: {
+          ...value,
+          expiresAt: "2026-08-02T10:00:00.000Z",
+        },
       };
     },
     async revoke() { throw new Error("not used"); },
