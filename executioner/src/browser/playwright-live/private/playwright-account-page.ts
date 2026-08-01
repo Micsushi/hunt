@@ -32,6 +32,7 @@ export type PlaywrightAccountPageTraceEvent =
   | "submit_hit_target_iframe_overlay"
   | "submit_hit_target_generic_overlay"
   | "submit_hit_target_unavailable"
+  | "submit_centered"
   | "submit_control_remained_visible"
   | "submit_destination_observed"
   | "submit_rejection_reappeared"
@@ -120,7 +121,17 @@ export class PlaywrightAccountPageAdapter implements SemanticAccountPageAdapter 
     else {
       const submit = action === "submit_sign_in" || action === "submit_create_account";
       if (submit) {
-        this.#emit(await inspectSubmitHitTarget(locator));
+        let hitTarget = await inspectSubmitHitTarget(locator);
+        this.#emit(hitTarget);
+        if (
+          hitTarget === "submit_hit_target_generic_overlay" ||
+          hitTarget === "submit_hit_target_fixed_overlay"
+        ) {
+          await centerSubmit(locator);
+          this.#emit("submit_centered");
+          hitTarget = await inspectSubmitHitTarget(locator);
+          this.#emit(hitTarget);
+        }
         this.#emit("submit_click_started");
       }
       try {
@@ -170,6 +181,16 @@ export class PlaywrightAccountPageAdapter implements SemanticAccountPageAdapter 
       // Diagnostic observation cannot affect browser behavior.
     }
   }
+}
+
+async function centerSubmit(locator: Locator): Promise<void> {
+  await locator.evaluate((element) => {
+    element.scrollIntoView({
+      behavior: "instant",
+      block: "center",
+      inline: "nearest",
+    });
+  });
 }
 
 async function inspectSubmitHitTarget(

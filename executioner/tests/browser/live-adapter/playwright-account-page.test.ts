@@ -347,6 +347,8 @@ test("submit click failure emits only fixed value-free stage identifiers", async
 
   assert.deepEqual(events, [
     "submit_hit_target_fixed_overlay",
+    "submit_centered",
+    "submit_hit_target_fixed_overlay",
     "submit_click_started",
     "submit_click_failed",
     "submit_click_other",
