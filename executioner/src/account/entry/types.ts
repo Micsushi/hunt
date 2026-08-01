@@ -19,6 +19,28 @@ export type AccountActionIntent =
   | "submit_create_account"
   | "accept_terms";
 
+export type AccountEntryTraceEvent =
+  | "initial_existing_account"
+  | "initial_create_account"
+  | "owned_access_started"
+  | "fields_admitted"
+  | "credentials_resolved"
+  | "email_verified"
+  | "password_verified"
+  | "submit_activate_started"
+  | "submit_activate_failed"
+  | "submit_activated"
+  | "post_submit_classify_started"
+  | "post_submit_classify_failed"
+  | "post_submit_existing_account"
+  | "post_submit_create_account"
+  | "post_submit_verification_required"
+  | "post_submit_application_ready"
+  | "post_submit_manual_intervention"
+  | "cleanup_succeeded"
+  | "cleanup_failed"
+  | "page_scope_failed";
+
 export interface SemanticControlFact {
   readonly cardinality: number;
   readonly actionable: boolean;
@@ -95,6 +117,7 @@ export interface AccountEntryDependencies {
   readonly classifiedAccount: ClassifiedAccountStateSource;
   readonly accountPage: AccountPageAccessProvider;
   readonly credentials: ScopedAccountCredentialResolver;
+  readonly trace?: (event: AccountEntryTraceEvent) => void;
 }
 
 export function accountStateResult(

@@ -2,6 +2,7 @@ export { createAccountEntryCredentialMutationAdapter } from "./adapter.ts";
 export type {
   AccountActionIntent,
   AccountEntryDependencies,
+  AccountEntryTraceEvent,
   AccountFieldName,
   AccountPageAccess,
   AccountPageAccessProvider,

@@ -1,4 +1,5 @@
 import type { ClassifiedAccountObservationSource } from "../ats/workday/live/index.ts";
+import type { AccountEntryTraceEvent } from "../account/entry/index.ts";
 import type { PlaywrightPersistentBrowserSession } from "../browser/playwright-live/session.ts";
 import { createAccountEntryCredentialMutationAdapter } from "../account/entry/index.ts";
 import type { CredentialMutationAdapter } from "../contracts/live/index.ts";
@@ -10,6 +11,7 @@ export function createStage2AccountEntryCredentialMutationAdapter(
   classifiedAccount: ClassifiedAccountObservationSource,
   credentials: AccountCredentialResolver,
   accountMode: RealRunAccountMode,
+  trace?: (event: AccountEntryTraceEvent) => void,
 ): CredentialMutationAdapter {
   if (accountMode !== "fresh_create" && accountMode !== "sign_in") {
     throw new RangeError("account mode is outside the admitted preflight set");
@@ -18,6 +20,7 @@ export function createStage2AccountEntryCredentialMutationAdapter(
     accountPage: browser,
     classifiedAccount,
     credentials,
+    trace,
   });
   const adapter: CredentialMutationAdapter = {
     mutate: (request, signal) => entry.mutate({

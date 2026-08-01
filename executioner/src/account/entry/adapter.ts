@@ -55,6 +55,12 @@ async function mutateOnce(
   if (initial.value.kind !== "classified_account") {
     return failure("credential_mutation_denied");
   }
+  emit(
+    dependencies,
+    initial.value.state.kind === "existing_account"
+      ? "initial_existing_account"
+      : "initial_create_account",
+  );
   if (noSecretState(initial.value)) {
     return { ok: true, value: accountStateResult(initial.value.state, []) };
   }
@@ -73,6 +79,7 @@ async function mutateOnce(
     },
     signal,
     async (access) => {
+      emit(dependencies, "owned_access_started");
       const expected = request.mode === "sign_in"
         ? "existing_account"
         : "create_account";
@@ -117,6 +124,7 @@ async function mutateOnce(
           return;
         }
       }
+      emit(dependencies, "fields_admitted");
       let acceptTerms = false;
       if (request.mode === "create_account") {
         const consent = await access.inspectAction("accept_terms");
@@ -141,20 +149,23 @@ async function mutateOnce(
         request.credential,
         signal,
         async (credential) => {
+          emit(dependencies, "credentials_resolved");
           const populated: AccountFieldName[] = [];
           const email = await fillAndVerify(access, "email", credential.email);
           if (!email.ok) {
             localFailure = email.failure;
             return accountStateResult(state.state, []);
           }
+          emit(dependencies, "email_verified");
           populated.push("email");
           const password = await fillAndVerify(access, "password", credential.password);
           if (!password.ok) {
-            localFailure = await cleanupPopulated(access, populated)
+            localFailure = await cleanupPopulated(access, populated, dependencies)
               ? password.failure
               : failure("credential_effect_uncertain");
             return accountStateResult(state.state, ["email"]);
           }
+          emit(dependencies, "password_verified");
           populated.push("password");
           if (request.mode === "create_account") {
             const confirmation = await fillAndVerify(
@@ -163,7 +174,7 @@ async function mutateOnce(
               credential.password,
             );
             if (!confirmation.ok) {
-              localFailure = await cleanupPopulated(access, populated)
+              localFailure = await cleanupPopulated(access, populated, dependencies)
                 ? confirmation.failure
                 : failure("credential_effect_uncertain");
               return accountStateResult(state.state, ["email", "password"]);
@@ -172,7 +183,7 @@ async function mutateOnce(
             if (acceptTerms) {
               const accepted = await access.activate("accept_terms");
               if (!accepted.ok) {
-                localFailure = await cleanupPopulated(access, populated)
+                localFailure = await cleanupPopulated(access, populated, dependencies)
                   ? mapBrowserFailure(accepted.error.code)
                   : failure("credential_effect_uncertain");
                 return accountStateResult(
@@ -182,23 +193,29 @@ async function mutateOnce(
               }
             }
           }
+          emit(dependencies, "submit_activate_started");
           const activated = await access.activate(submit);
           if (!activated.ok) {
+            emit(dependencies, "submit_activate_failed");
             const activationFailure = mapBrowserFailure(activated.error.code);
-            localFailure = await cleanupPopulated(access, populated)
+            localFailure = await cleanupPopulated(access, populated, dependencies)
               ? activationFailure
               : failure("credential_effect_uncertain");
             return accountStateResult(state.state, ["email", "password"]);
           }
+          emit(dependencies, "submit_activated");
+          emit(dependencies, "post_submit_classify_started");
           const reconciled = await classify(dependencies, request, signal);
           if (!reconciled.ok || reconciled.value.kind !== "classified_account") {
+            emit(dependencies, "post_submit_classify_failed");
             throw new Error("credential effect could not be reconciled");
           }
+          emit(dependencies, postSubmitEvent(reconciled.value.state.kind));
           if (
             reconciled.value.state.kind === "existing_account" ||
             reconciled.value.state.kind === "create_account"
           ) {
-            localFailure = await cleanupPopulated(access, populated)
+            localFailure = await cleanupPopulated(access, populated, dependencies)
               ? failure("credential_mutation_denied")
               : failure("credential_effect_uncertain");
             return accountStateResult(
@@ -216,7 +233,10 @@ async function mutateOnce(
       else if (localFailure === undefined) result = resolved.value;
     },
   );
-  if (!page.ok) return mapBrowserFailure(page.error.code);
+  if (!page.ok) {
+    emit(dependencies, "page_scope_failed");
+    return mapBrowserFailure(page.error.code);
+  }
   if (localFailure !== undefined) return localFailure;
   return result === undefined
     ? failure("credential_mutation_denied")
@@ -226,6 +246,7 @@ async function mutateOnce(
 async function cleanupPopulated(
   access: AccountPageAccess,
   populated: readonly AccountFieldName[],
+  dependencies: AccountEntryDependencies,
 ): Promise<boolean> {
   let clean = true;
   for (const field of [...populated].reverse()) {
@@ -237,7 +258,26 @@ async function cleanupPopulated(
     const empty = await access.isEmpty(field);
     if (!empty.ok || !empty.value) clean = false;
   }
+  emit(dependencies, clean ? "cleanup_succeeded" : "cleanup_failed");
   return clean;
+}
+
+function postSubmitEvent(
+  kind: "existing_account" | "create_account" | "verification_required" |
+    "application_ready" | "manual_intervention",
+) {
+  return `post_submit_${kind}` as const;
+}
+
+function emit(
+  dependencies: AccountEntryDependencies,
+  event: Parameters<NonNullable<AccountEntryDependencies["trace"]>>[0],
+): void {
+  try {
+    dependencies.trace?.(event);
+  } catch {
+    // Diagnostic observation cannot affect account behavior.
+  }
 }
 
 function admitRequest(request: CredentialMutationRequest): MutationFailure | undefined {

@@ -165,6 +165,30 @@ test("matching sign-in fills, independently matches, activates, and reclassifies
   assert.equal(fixture.classificationCalls, 2);
 });
 
+test("value-free trace reports only fixed account-stage identifiers", async () => {
+  const fixture = accountFixture(["existing_account", "verification_required"]);
+  const events: string[] = [];
+
+  await createAccountEntryCredentialMutationAdapter({
+    ...fixture.dependencies,
+    trace: (event) => events.push(event),
+  }).mutate(request("sign_in"), new AbortController().signal);
+
+  assert.deepEqual(events, [
+    "initial_existing_account",
+    "owned_access_started",
+    "fields_admitted",
+    "credentials_resolved",
+    "email_verified",
+    "password_verified",
+    "submit_activate_started",
+    "submit_activated",
+    "post_submit_classify_started",
+    "post_submit_verification_required",
+  ]);
+  assert.equal(JSON.stringify(events).includes("@"), false);
+});
+
 test("sign-in that remains on an entry state clears fields and is denied", async () => {
   const fixture = accountFixture(["existing_account", "existing_account"]);
 
