@@ -4,6 +4,7 @@ export * from "./classification-serialized.ts";
 export * from "./classification.ts";
 export * from "./learning.ts";
 export * from "./ownership.ts";
+export * from "./page-loop-binding.ts";
 export * from "./ports.ts";
 export * from "./schemas.ts";
 export * from "./serialized.ts";
