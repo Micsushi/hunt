@@ -39,5 +39,29 @@ Its source, fixtures, tests, and supporting tools remain available on branch
 - Final Submit is outside C3 v3 scope.
 - Unknown personal facts stop with `profile_answer_missing`.
 
+## Stage 2 real-run preflight
+
+The owner input file belongs outside the repository and every worktree. Never
+copy the owner input file into the repository. It contains one exact approved
+Workday URL and identity, opaque profile and resume references, scoped secret
+handles, owner approval, and three absolute current-user-only roots for runtime,
+secrets, and evidence. The roots must exist, must not overlap, and must resolve
+outside all repository and worktree roots supplied by the runner.
+
+The dry preflight does not launch a browser, contact Gmail or Workday, or
+resolve a secret. It admits only `windows-dpapi-current-user-v1` and
+`gmail-api-v1`, a 24-hour crash-recovery lease, and a 30-day retention ceiling.
+Account and Gmail handles must be separate and bound to the exact journey,
+purpose, consumer, scope, and approval expiry. Its public report contains only
+opaque IDs, provider IDs, policy numbers, and the approved host, tenant, and
+posting dimension names. Raw URLs and filesystem paths remain in a private
+in-memory runtime binding.
+
+Verify the dry boundary before any live runner is assembled:
+
+```text
+npm test -- tests/live/preflight
+```
+
 Tests use Node's built-in runner. Components may depend on shared contracts but
 not on peer implementations or C3 v2 source.
