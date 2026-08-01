@@ -31,6 +31,11 @@ export type PlaywrightAccountPageTraceEvent =
   | "submit_hit_target_dialog_overlay"
   | "submit_hit_target_iframe_overlay"
   | "submit_hit_target_generic_overlay"
+  | "submit_hit_target_ancestor_overlay"
+  | "submit_hit_target_sibling_overlay"
+  | "submit_hit_target_same_form_overlay"
+  | "submit_hit_target_large_overlay"
+  | "submit_hit_target_small_overlay"
   | "submit_hit_target_unavailable"
   | "submit_centered"
   | "submit_control_remained_visible"
@@ -125,6 +130,11 @@ export class PlaywrightAccountPageAdapter implements SemanticAccountPageAdapter 
         this.#emit(hitTarget);
         if (
           hitTarget === "submit_hit_target_generic_overlay" ||
+          hitTarget === "submit_hit_target_ancestor_overlay" ||
+          hitTarget === "submit_hit_target_sibling_overlay" ||
+          hitTarget === "submit_hit_target_same_form_overlay" ||
+          hitTarget === "submit_hit_target_large_overlay" ||
+          hitTarget === "submit_hit_target_small_overlay" ||
           hitTarget === "submit_hit_target_fixed_overlay"
         ) {
           await centerSubmit(locator);
@@ -205,6 +215,12 @@ async function inspectSubmitHitTarget(
       );
       if (top === null) return "unavailable";
       if (top === element || element.contains(top)) return "clear";
+      if (top.contains(element)) return "ancestor_overlay";
+      if (top.parentElement === element.parentElement) return "sibling_overlay";
+      const targetForm = element.closest("form");
+      if (targetForm !== null && top.closest("form") === targetForm) {
+        return "same_form_overlay";
+      }
       if (top.closest('[role="dialog"], [aria-modal="true"]') !== null) {
         return "dialog_overlay";
       }
@@ -213,7 +229,10 @@ async function inspectSubmitHitTarget(
         const position = getComputedStyle(current).position;
         if (position === "fixed" || position === "sticky") return "fixed_overlay";
       }
-      return "generic_overlay";
+      const topRect = top.getBoundingClientRect();
+      const viewportArea = Math.max(1, innerWidth * innerHeight);
+      const topArea = Math.max(0, topRect.width * topRect.height);
+      return topArea >= viewportArea / 4 ? "large_overlay" : "small_overlay";
     });
     return `submit_hit_target_${result}` as PlaywrightAccountPageTraceEvent;
   } catch {
