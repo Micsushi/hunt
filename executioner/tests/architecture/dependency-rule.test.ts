@@ -32,6 +32,28 @@ test("components may import contracts and their own implementation", () => {
   assert.deepEqual(dependencyViolations(files), []);
 });
 
+test("the Stage 2 mailbox policy has one narrow provider owner", () => {
+  const files: SourceFile[] = [
+    {
+      path: "src/mailbox/policy.ts",
+      source: 'import type { MailboxProvider } from "../contracts/live/index.ts";',
+    },
+    {
+      path: "src/mailbox/helper.ts",
+      source: "export const helper = true;",
+    },
+    {
+      path: "src/mailbox/policy.ts",
+      source: 'import { BrowserSession } from "../browser/session.ts";',
+    },
+  ];
+
+  assert.deepEqual(dependencyViolations(files), [
+    "src/mailbox/helper.ts has no component owner",
+    "src/mailbox/policy.ts imports peer implementation src/browser/session.ts",
+  ]);
+});
+
 test("components may not import peer implementations", () => {
   const files: SourceFile[] = [
     {
