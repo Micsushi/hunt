@@ -38,6 +38,7 @@ import { createFieldVerifier } from "../interaction/verification/field-verifier.
 import { FileJourneyStateStore } from "../journey/state-store.ts";
 import { FactualFailureReporter } from "../observability/errors/reporter.ts";
 import { JsonlEventStore } from "../observability/events/store.ts";
+import type { NotificationAdapter } from "../observability/notifications/adapter.ts";
 import { createProfileQuery } from "../profile/profile.ts";
 import { createPrivacyGuard, createSafetyGuard } from "../safety/guards.ts";
 import { FixtureServer } from "../testing/fixture-server.ts";
@@ -58,6 +59,7 @@ export interface S1ControlledJourneyConfig {
   readonly nextEvidenceId: () => EvidenceId;
   readonly guardRevision: GuardRevision;
   readonly clock: () => string;
+  readonly notifyFailure?: NotificationAdapter;
   readonly wrapBrowser?: (browser: BrowserSession) => BrowserSession;
 }
 
@@ -156,7 +158,7 @@ export async function createS1ControlledJourney(
       completion: createCompletionNavigation(),
       safety,
       events,
-      failures: new FactualFailureReporter(),
+      failures: new FactualFailureReporter(config.notifyFailure),
       privacy,
       evidence: createEvidenceStore(join(config.storageRoot, "evidence")),
       nextOperationId: config.ids.operationId,
