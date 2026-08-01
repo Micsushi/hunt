@@ -146,6 +146,24 @@ test("production probe fails ambiguous routes and contradictory unavailability c
   assert.deepEqual(contradictory, owned({ kind: "target_ambiguous" }));
 });
 
+test("production probe emits the closed apply-choice navigation trait", async () => {
+  const result = await new WorkdayOwnedTargetProbe().inspect(
+    new ProbePage(
+      "https://approved.wd5.myworkdayjobs.invalid/en-US/Careers/job/Example_R12345/apply",
+      { '[data-automation-id="applyManually"]': 1 },
+    ),
+    expected,
+    new AbortController().signal,
+  );
+  assert.equal(result.ownership, "owned");
+  if (result.ownership !== "owned") return;
+  assert.equal(result.target.kind, "matched");
+  assert.deepEqual(result.snapshot.traitIds, [
+    "structural_trait_ats_workday_family_v1",
+    "structural_trait_navigation_apply_choice_v1",
+  ]);
+});
+
 class ProbePage {
   readonly currentUrl: string;
   readonly counts: Readonly<Record<string, number>>;

@@ -75,6 +75,21 @@ test("account-page access remains private, semantic, and value-free", async () =
   assert.equal(factory.includes("new PlaywrightAccountPageAdapter()"), true);
 });
 
+test("posting navigation is private, semantic, bounded, and submit-free", async () => {
+  const navigator = await source("private/playwright-posting-navigation.ts");
+  const capability = await source("private/account-navigation-types.ts");
+  const session = await source("session.ts");
+  const publicFacade = await source("index.ts");
+  for (const required of ["start_application", "apply_manually"]) {
+    assert.equal((navigator + capability).includes(required), true, required);
+  }
+  for (const forbidden of ["credential", "password", "submit", "rawHtml", "rawText"]) {
+    assert.equal((navigator + session).toLowerCase().includes(forbidden.toLowerCase()), false, forbidden);
+  }
+  assert.equal(publicFacade.includes("PostingNavigation"), false);
+  assert.match(session, /transitionCount < 2/u);
+});
+
 async function source(relativePath: string): Promise<string> {
   return readFile(
     new URL(`../../src/browser/playwright-live/${relativePath}`, import.meta.url),
