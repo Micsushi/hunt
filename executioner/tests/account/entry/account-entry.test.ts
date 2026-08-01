@@ -160,6 +160,7 @@ test("matching sign-in fills, independently matches, activates, and reclassifies
     "matches:email",
     "fill:password",
     "matches:password",
+    "inspectAction:submit_sign_in",
     "activate:submit_sign_in",
   ]);
   assert.equal(fixture.classificationCalls, 2);
@@ -181,6 +182,7 @@ test("value-free trace reports only fixed account-stage identifiers", async () =
     "credentials_resolved",
     "email_verified",
     "password_verified",
+    "submit_reinspect_succeeded",
     "submit_activate_started",
     "submit_activated",
     "post_submit_classify_started",
@@ -278,6 +280,7 @@ test("fresh-create switches semantically, reclassifies, and keeps confirmation i
     "fill:password_confirmation",
     "matches:password_confirmation",
     "activate:accept_terms",
+    "inspectAction:submit_create_account",
     "activate:submit_create_account",
   ]);
   assert.equal(fixture.classificationCalls, 3);
@@ -390,6 +393,34 @@ test("a submit denial after verified fills clears every credential field", async
     "isEmpty:password",
     "clear:email",
     "isEmpty:email",
+  ]);
+});
+
+test("a submit that becomes disabled after verified fills is traced and never activated", async () => {
+  const fixture = accountFixture(["existing_account"]);
+  const events: string[] = [];
+  let submitInspections = 0;
+  fixture.access.inspectAction = async (action) => {
+    fixture.operations.push(`inspectAction:${action}`);
+    if (action === "submit_sign_in" && ++submitInspections === 2) {
+      return { ok: true, value: { cardinality: 1, actionable: false } };
+    }
+    return { ok: true, value: fixture.controls.get(action)! };
+  };
+
+  const result = await createAccountEntryCredentialMutationAdapter({
+    ...fixture.dependencies,
+    trace: (event) => events.push(event),
+  }).mutate(request("sign_in"), new AbortController().signal);
+
+  assert.deepEqual(result, {
+    ok: false,
+    error: { code: "credential_mutation_denied", retryable: false },
+  });
+  assert.equal(fixture.operations.includes("activate:submit_sign_in"), false);
+  assert.deepEqual(events.slice(-2), [
+    "submit_reinspect_failed",
+    "cleanup_succeeded",
   ]);
 });
 

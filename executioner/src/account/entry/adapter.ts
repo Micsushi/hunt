@@ -193,6 +193,15 @@ async function mutateOnce(
               }
             }
           }
+          const finalSubmit = await uniqueActionableAction(access, submit);
+          if (!finalSubmit.ok) {
+            emit(dependencies, "submit_reinspect_failed");
+            localFailure = await cleanupPopulated(access, populated, dependencies)
+              ? mapBrowserFailure(finalSubmit.error.code)
+              : failure("credential_effect_uncertain");
+            return accountStateResult(state.state, ["email", "password"]);
+          }
+          emit(dependencies, "submit_reinspect_succeeded");
           emit(dependencies, "submit_activate_started");
           const activated = await access.activate(submit);
           if (!activated.ok) {
@@ -252,11 +261,15 @@ async function cleanupPopulated(
   for (const field of [...populated].reverse()) {
     const cleared = await access.clear(field);
     if (!cleared.ok) {
+      emit(dependencies, "cleanup_clear_failed");
       clean = false;
       continue;
     }
     const empty = await access.isEmpty(field);
-    if (!empty.ok || !empty.value) clean = false;
+    if (!empty.ok || !empty.value) {
+      emit(dependencies, "cleanup_empty_failed");
+      clean = false;
+    }
   }
   emit(dependencies, clean ? "cleanup_succeeded" : "cleanup_failed");
   return clean;

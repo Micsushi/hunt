@@ -27,6 +27,8 @@ export type AccountEntryTraceEvent =
   | "credentials_resolved"
   | "email_verified"
   | "password_verified"
+  | "submit_reinspect_succeeded"
+  | "submit_reinspect_failed"
   | "submit_activate_started"
   | "submit_activate_failed"
   | "submit_activated"
@@ -39,6 +41,8 @@ export type AccountEntryTraceEvent =
   | "post_submit_manual_intervention"
   | "cleanup_succeeded"
   | "cleanup_failed"
+  | "cleanup_clear_failed"
+  | "cleanup_empty_failed"
   | "page_scope_failed";
 
 export interface SemanticControlFact {
