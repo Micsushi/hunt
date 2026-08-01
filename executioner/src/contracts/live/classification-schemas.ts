@@ -49,9 +49,16 @@ const lineageEntry = closed(["layer", "classificationId"], {
   classificationId: opaqueIdentifier("classification"),
 });
 
+const structuralCount = {
+  type: "integer",
+  minimum: 0,
+  maximum: 64,
+} as const;
+
 const structuralFields = {
   observationId: opaqueIdentifier("structural_observation"),
   layer: { enum: classificationLayers },
+  sourceRevisionId: opaqueIdentifier("classification_revision"),
   parentLineage: {
     type: "array",
     maxItems: 5,
@@ -67,6 +74,9 @@ const structuralFields = {
   observedVariantId: {
     oneOf: [opaqueIdentifier("ui_variant"), { type: "null" }],
   },
+  controlCount: structuralCount,
+  requiredControlCount: structuralCount,
+  optionCount: structuralCount,
 } as const;
 
 const outcomesByLayer = {
@@ -78,11 +88,7 @@ const outcomesByLayer = {
     "ui_variant_unreviewed",
   ],
   question: ["question_unknown", "question_ambiguous"],
-  answer_type: [
-    "answer_type_unknown",
-    "answer_type_ambiguous",
-    "profile_answer_missing",
-  ],
+  answer_type: ["answer_type_unknown", "answer_type_ambiguous"],
   visible_option: ["option_no_match", "option_ambiguous"],
 } as const;
 
@@ -117,8 +123,27 @@ function layerConstraints(includeOutcome: boolean) {
   }));
 }
 
+const requiredControlCountConstraints = Array.from(
+  { length: 65 },
+  (_, requiredControlCount) => ({
+    if: {
+      properties: {
+        requiredControlCount: { const: requiredControlCount },
+      },
+    },
+    then: {
+      properties: {
+        controlCount: { minimum: requiredControlCount },
+      },
+    },
+  }),
+);
+
 const factual = (kinds: readonly string[]) =>
-  versioned(["kind"], { kind: { enum: kinds } });
+  versioned(["kind", "sourceRevisionId"], {
+    kind: { enum: kinds },
+    sourceRevisionId: opaqueIdentifier("classification_revision"),
+  });
 
 const classifiedCommon = {
   kind: { const: "classified" },
@@ -167,9 +192,10 @@ export const liveClassificationSchemas = {
         },
       ),
       factual(["ui_behavior_unknown", "ui_behavior_ambiguous"]),
-      versioned(["kind", "variantId"], {
+      versioned(["kind", "variantId", "sourceRevisionId"], {
         kind: { const: "ui_variant_unreviewed" },
         variantId: opaqueIdentifier("ui_variant"),
+        sourceRevisionId: opaqueIdentifier("classification_revision"),
       }),
     ],
   },
@@ -184,10 +210,19 @@ export const liveClassificationSchemas = {
   },
   canonicalAnswerTypeClassification: {
     oneOf: [
-      versioned(["kind", "questionId", "answerType", "provenance"], {
+      versioned(
+        [
+          "kind",
+          "answerType",
+          "classificationId",
+          "sourceRevisionId",
+          "provenance",
+        ],
+        {
         kind: { const: "classified" },
-        questionId: boundedIdentifier,
         answerType: { enum: canonicalAnswerTypes },
+        classificationId: opaqueIdentifier("classification"),
+        sourceRevisionId: opaqueIdentifier("classification_revision"),
         provenance: versioned(
           ["provenanceId", "source", "sourceRevisionId"],
           {
@@ -196,34 +231,27 @@ export const liveClassificationSchemas = {
             sourceRevisionId: opaqueIdentifier("answer_source_revision"),
           },
         ),
-      }),
-      versioned(["kind", "questionId"], {
-        kind: {
-          enum: [
-            "answer_type_unknown",
-            "answer_type_ambiguous",
-            "profile_answer_missing",
-          ],
         },
-        questionId: boundedIdentifier,
-      }),
+      ),
+      factual([
+        "answer_type_unknown",
+        "answer_type_ambiguous",
+        "profile_answer_missing",
+      ]),
     ],
   },
   visibleOptionMapping: {
     oneOf: [
       versioned(
-        ["kind", "questionId", "optionId", "sourceRevisionId"],
+        ["kind", "optionId", "classificationId", "sourceRevisionId"],
         {
           kind: { const: "mapped" },
-          questionId: boundedIdentifier,
           optionId: boundedIdentifier,
+          classificationId: opaqueIdentifier("classification"),
           sourceRevisionId: opaqueIdentifier("classification_revision"),
         },
       ),
-      versioned(["kind", "questionId"], {
-        kind: { enum: ["option_no_match", "option_ambiguous"] },
-        questionId: boundedIdentifier,
-      }),
+      factual(["option_no_match", "option_ambiguous"]),
     ],
   },
   sanitizedStructuralObservation: {
@@ -231,13 +259,17 @@ export const liveClassificationSchemas = {
       [
         "observationId",
         "layer",
+        "sourceRevisionId",
         "parentLineage",
         "traitIds",
         "observedVariantId",
+        "controlCount",
+        "requiredControlCount",
+        "optionCount",
       ],
       structuralFields,
     ),
-    allOf: layerConstraints(false),
+    allOf: [...layerConstraints(false), ...requiredControlCountConstraints],
   },
   sanitizedUnknownCandidate: {
     ...versioned(
@@ -246,9 +278,13 @@ export const liveClassificationSchemas = {
         "observationId",
         "layer",
         "outcome",
+        "sourceRevisionId",
         "parentLineage",
         "traitIds",
         "observedVariantId",
+        "controlCount",
+        "requiredControlCount",
+        "optionCount",
       ],
       {
         candidateId: opaqueIdentifier("unknown_candidate"),
@@ -258,7 +294,7 @@ export const liveClassificationSchemas = {
         },
       },
     ),
-    allOf: layerConstraints(true),
+    allOf: [...layerConstraints(true), ...requiredControlCountConstraints],
   },
   reviewedPromotionRecord: {
     ...versioned(
@@ -267,8 +303,12 @@ export const liveClassificationSchemas = {
         "candidateId",
         "layer",
         "scope",
+        "reviewerDecisionId",
+        "reviewedFixtureIds",
+        "testEvidenceIds",
         "sourceRevisionId",
         "decision",
+        "sourceChangeId",
         "acceptedRevisionId",
       ],
       {
@@ -276,8 +316,26 @@ export const liveClassificationSchemas = {
         candidateId: opaqueIdentifier("unknown_candidate"),
         layer: { enum: classificationLayers },
         scope: { const: "between_runs" },
+        reviewerDecisionId: opaqueIdentifier("reviewer_decision"),
+        reviewedFixtureIds: {
+          type: "array",
+          minItems: 1,
+          maxItems: 32,
+          uniqueItems: true,
+          items: opaqueIdentifier("reviewed_fixture"),
+        },
+        testEvidenceIds: {
+          type: "array",
+          minItems: 1,
+          maxItems: 32,
+          uniqueItems: true,
+          items: opaqueIdentifier("test_evidence"),
+        },
         sourceRevisionId: opaqueIdentifier("classification_revision"),
         decision: { enum: ["accepted", "rejected"] },
+        sourceChangeId: {
+          oneOf: [opaqueIdentifier("source_change"), { type: "null" }],
+        },
         acceptedRevisionId: {
           oneOf: [
             opaqueIdentifier("classification_revision"),
@@ -291,13 +349,19 @@ export const liveClassificationSchemas = {
         if: { properties: { decision: { const: "accepted" } } },
         then: {
           properties: {
+            sourceChangeId: opaqueIdentifier("source_change"),
             acceptedRevisionId: opaqueIdentifier("classification_revision"),
           },
         },
       },
       {
         if: { properties: { decision: { const: "rejected" } } },
-        then: { properties: { acceptedRevisionId: { type: "null" } } },
+        then: {
+          properties: {
+            sourceChangeId: { type: "null" },
+            acceptedRevisionId: { type: "null" },
+          },
+        },
       },
     ],
   },

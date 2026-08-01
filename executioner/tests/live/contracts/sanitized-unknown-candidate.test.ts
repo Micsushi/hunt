@@ -18,9 +18,13 @@ const observation = {
   schemaVersion: 1,
   observationId: "structural_observation_0123456789abcdef",
   layer: "question",
+  sourceRevisionId: "classification_revision_0123456789abcdef",
   parentLineage,
   traitIds: ["structural_trait_0123456789abcdef", "structural_trait_fedcba9876543210"],
   observedVariantId: null,
+  controlCount: 4,
+  requiredControlCount: 2,
+  optionCount: 5,
 } as const;
 
 const candidate = {
@@ -29,9 +33,13 @@ const candidate = {
   observationId: observation.observationId,
   layer: observation.layer,
   outcome: "question_unknown",
+  sourceRevisionId: observation.sourceRevisionId,
   parentLineage,
   traitIds: observation.traitIds,
   observedVariantId: null,
+  controlCount: observation.controlCount,
+  requiredControlCount: observation.requiredControlCount,
+  optionCount: observation.optionCount,
 } as const;
 
 function expectInvalid(run: () => unknown, path?: string): void {
@@ -56,11 +64,14 @@ test("sanitized observations and unknown candidates preserve only closed structu
 test("published schemas encode every layer's lineage and outcome constraints", () => {
   assert.equal(liveClassificationSchemas.sanitizedStructuralObservation.additionalProperties, false);
   assert.equal(liveClassificationSchemas.sanitizedUnknownCandidate.additionalProperties, false);
-  assert.equal(liveClassificationSchemas.sanitizedStructuralObservation.allOf.length, 6);
-  assert.equal(liveClassificationSchemas.sanitizedUnknownCandidate.allOf.length, 6);
+  assert.equal(liveClassificationSchemas.sanitizedStructuralObservation.allOf.length, 71);
+  assert.equal(liveClassificationSchemas.sanitizedUnknownCandidate.allOf.length, 71);
   assert.deepEqual(
-    liveClassificationSchemas.sanitizedUnknownCandidate.allOf.map(
-      ({ if: condition }) => condition.properties.layer.const,
+    liveClassificationSchemas.sanitizedUnknownCandidate.allOf.slice(0, 6).map(
+      ({ if: condition }) =>
+        "layer" in condition.properties
+          ? condition.properties.layer.const
+          : null,
     ),
     ["ats_family", "workday_page_type", "ui_behavior", "question", "answer_type", "visible_option"],
   );

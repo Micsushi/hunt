@@ -26,11 +26,15 @@ import type {
   ClassificationLineageV1,
   LearningIdentifier,
   ReviewedPromotionRecordV1,
+  ReviewedFixtureId,
+  ReviewerDecisionId,
   SanitizedStructuralObservationV1,
   SanitizedUnknownCandidateV1,
   SanitizedUnknownOutcome,
+  SourceChangeId,
   StructuralObservationId,
   StructuralTraitId,
+  TestEvidenceId,
   UnknownCandidateId,
 } from "./learning.ts";
 import { classificationLayers } from "./learning.ts";
@@ -214,6 +218,39 @@ function parseTraits(value: unknown, path: string): readonly StructuralTraitId[]
   });
 }
 
+function structuralCount(value: unknown, path: string): number {
+  if (!Number.isInteger(value) || (value as number) < 0 || (value as number) > 64) {
+    throw new ContractParseError(
+      typeof value === "number" ? "invalid_value" : "invalid_type",
+      path,
+    );
+  }
+  return value as number;
+}
+
+function orderedUniqueIdentifiers<Kind extends string>(
+  value: unknown,
+  prefix: string,
+  path: string,
+): readonly LearningIdentifier<Kind>[] {
+  if (!Array.isArray(value) || value.length === 0 || value.length > 32) {
+    throw new ContractParseError(
+      Array.isArray(value) ? "invalid_value" : "invalid_type",
+      path,
+    );
+  }
+  const seen = new Set<string>();
+  return value.map((entry, index) => {
+    const entryPath = `${path}[${index}]`;
+    const parsed = identifier(entry, prefix, entryPath) as LearningIdentifier<Kind>;
+    if (seen.has(parsed)) {
+      throw new ContractParseError("invalid_value", entryPath);
+    }
+    seen.add(parsed);
+    return parsed;
+  });
+}
+
 const outcomesByLayer = {
   ats_family: ["ats_unsupported", "ats_unknown", "ats_ambiguous"],
   workday_page_type: ["workday_page_unknown", "workday_page_ambiguous"],
@@ -223,11 +260,7 @@ const outcomesByLayer = {
     "ui_variant_unreviewed",
   ],
   question: ["question_unknown", "question_ambiguous"],
-  answer_type: [
-    "answer_type_unknown",
-    "answer_type_ambiguous",
-    "profile_answer_missing",
-  ],
+  answer_type: ["answer_type_unknown", "answer_type_ambiguous"],
   visible_option: ["option_no_match", "option_ambiguous"],
 } as const satisfies Record<
   ClassificationLayer,
@@ -250,9 +283,13 @@ export function parseSanitizedStructuralObservation(
   const input = versioned(snapshot(value), "$", [
     "observationId",
     "layer",
+    "sourceRevisionId",
     "parentLineage",
     "traitIds",
     "observedVariantId",
+    "controlCount",
+    "requiredControlCount",
+    "optionCount",
   ]);
   const layer = oneOf(input.layer, classificationLayers, "$.layer");
   const observedVariantId = nullableVariant(
@@ -260,6 +297,14 @@ export function parseSanitizedStructuralObservation(
     "$.observedVariantId",
   );
   validateVariant(layer, observedVariantId, "$.observedVariantId");
+  const controlCount = structuralCount(input.controlCount, "$.controlCount");
+  const requiredControlCount = structuralCount(
+    input.requiredControlCount,
+    "$.requiredControlCount",
+  );
+  if (requiredControlCount > controlCount) {
+    throw new ContractParseError("invalid_value", "$.requiredControlCount");
+  }
   return {
     schemaVersion: 1,
     observationId: identifier(
@@ -268,9 +313,13 @@ export function parseSanitizedStructuralObservation(
       "$.observationId",
     ) as StructuralObservationId,
     layer,
+    sourceRevisionId: revisionId(input.sourceRevisionId, "$.sourceRevisionId"),
     parentLineage: parseLineage(input.parentLineage, layer, "$.parentLineage"),
     traitIds: parseTraits(input.traitIds, "$.traitIds"),
     observedVariantId,
+    controlCount,
+    requiredControlCount,
+    optionCount: structuralCount(input.optionCount, "$.optionCount"),
   };
 }
 
@@ -282,9 +331,13 @@ export function parseSanitizedUnknownCandidate(
     "observationId",
     "layer",
     "outcome",
+    "sourceRevisionId",
     "parentLineage",
     "traitIds",
     "observedVariantId",
+    "controlCount",
+    "requiredControlCount",
+    "optionCount",
   ]);
   const layer = oneOf(input.layer, classificationLayers, "$.layer");
   const observedVariantId = nullableVariant(
@@ -298,6 +351,14 @@ export function parseSanitizedUnknownCandidate(
     allowedOutcomes,
     "$.outcome",
   ) as SanitizedUnknownOutcome;
+  const controlCount = structuralCount(input.controlCount, "$.controlCount");
+  const requiredControlCount = structuralCount(
+    input.requiredControlCount,
+    "$.requiredControlCount",
+  );
+  if (requiredControlCount > controlCount) {
+    throw new ContractParseError("invalid_value", "$.requiredControlCount");
+  }
   return {
     schemaVersion: 1,
     candidateId: identifier(
@@ -312,10 +373,39 @@ export function parseSanitizedUnknownCandidate(
     ) as StructuralObservationId,
     layer,
     outcome,
+    sourceRevisionId: revisionId(input.sourceRevisionId, "$.sourceRevisionId"),
     parentLineage: parseLineage(input.parentLineage, layer, "$.parentLineage"),
     traitIds: parseTraits(input.traitIds, "$.traitIds"),
     observedVariantId,
+    controlCount,
+    requiredControlCount,
+    optionCount: structuralCount(input.optionCount, "$.optionCount"),
   };
+}
+
+export function deriveSanitizedUnknownCandidate(
+  value: unknown,
+): SanitizedUnknownCandidateV1 {
+  const input = exact(snapshot(value), "$", [
+    "candidateId",
+    "observation",
+    "outcome",
+  ]);
+  const observation = parseSanitizedStructuralObservation(input.observation);
+  return parseSanitizedUnknownCandidate({
+    schemaVersion: 1,
+    candidateId: input.candidateId,
+    observationId: observation.observationId,
+    layer: observation.layer,
+    outcome: input.outcome,
+    sourceRevisionId: observation.sourceRevisionId,
+    parentLineage: observation.parentLineage,
+    traitIds: observation.traitIds,
+    observedVariantId: observation.observedVariantId,
+    controlCount: observation.controlCount,
+    requiredControlCount: observation.requiredControlCount,
+    optionCount: observation.optionCount,
+  });
 }
 
 export function parseReviewedPromotionRecord(
@@ -326,8 +416,12 @@ export function parseReviewedPromotionRecord(
     "candidateId",
     "layer",
     "scope",
+    "reviewerDecisionId",
+    "reviewedFixtureIds",
+    "testEvidenceIds",
     "sourceRevisionId",
     "decision",
+    "sourceChangeId",
     "acceptedRevisionId",
   ]);
   const sourceRevisionId = revisionId(
@@ -353,9 +447,29 @@ export function parseReviewedPromotionRecord(
     ) as UnknownCandidateId,
     layer: oneOf(input.layer, classificationLayers, "$.layer"),
     scope: oneOf(input.scope, ["between_runs"], "$.scope"),
+    reviewerDecisionId: identifier(
+      input.reviewerDecisionId,
+      "reviewer_decision",
+      "$.reviewerDecisionId",
+    ) as ReviewerDecisionId,
+    reviewedFixtureIds: orderedUniqueIdentifiers(
+      input.reviewedFixtureIds,
+      "reviewed_fixture",
+      "$.reviewedFixtureIds",
+    ) as readonly ReviewedFixtureId[],
+    testEvidenceIds: orderedUniqueIdentifiers(
+      input.testEvidenceIds,
+      "test_evidence",
+      "$.testEvidenceIds",
+    ) as readonly TestEvidenceId[],
     sourceRevisionId,
   };
   if (decision === "accepted") {
+    const sourceChangeId = identifier(
+      input.sourceChangeId,
+      "source_change",
+      "$.sourceChangeId",
+    ) as SourceChangeId;
     const acceptedRevisionId = revisionId(
       input.acceptedRevisionId,
       "$.acceptedRevisionId",
@@ -363,22 +477,43 @@ export function parseReviewedPromotionRecord(
     if (acceptedRevisionId === sourceRevisionId) {
       throw new ContractParseError("invalid_value", "$.acceptedRevisionId");
     }
-    return { ...common, decision, acceptedRevisionId } as ReviewedPromotionRecordV1;
+    return {
+      ...common,
+      decision,
+      sourceChangeId,
+      acceptedRevisionId,
+    } as ReviewedPromotionRecordV1;
+  }
+  if (input.sourceChangeId !== null) {
+    throw new ContractParseError("invalid_value", "$.sourceChangeId");
   }
   if (input.acceptedRevisionId !== null) {
     throw new ContractParseError("invalid_value", "$.acceptedRevisionId");
   }
-  return { ...common, decision, acceptedRevisionId: null } as ReviewedPromotionRecordV1;
+  return {
+    ...common,
+    decision,
+    sourceChangeId: null,
+    acceptedRevisionId: null,
+  } as ReviewedPromotionRecordV1;
 }
 
 function factualResult(
   value: unknown,
   kinds: readonly string[],
-): { readonly schemaVersion: 1; readonly kind: string } | undefined {
+): {
+  readonly schemaVersion: 1;
+  readonly kind: string;
+  readonly sourceRevisionId: ClassificationRevisionId;
+} | undefined {
   const input = record(value, "$");
   if (input.schemaVersion === 1 && typeof input.kind === "string" && kinds.includes(input.kind)) {
-    exact(input, "$", ["schemaVersion", "kind"]);
-    return { schemaVersion: 1, kind: input.kind };
+    exact(input, "$", ["schemaVersion", "kind", "sourceRevisionId"]);
+    return {
+      schemaVersion: 1,
+      kind: input.kind,
+      sourceRevisionId: revisionId(input.sourceRevisionId, "$.sourceRevisionId"),
+    };
   }
   return undefined;
 }
@@ -433,11 +568,12 @@ export function parseUiBehaviorClassificationResult(
   if (factual !== undefined) return factual as UiBehaviorClassificationResultV1;
   const base = record(copied, "$");
   if (base.kind === "ui_variant_unreviewed") {
-    const input = versioned(base, "$", ["kind", "variantId"]);
+    const input = versioned(base, "$", ["kind", "variantId", "sourceRevisionId"]);
     return {
       schemaVersion: 1,
       kind: oneOf(input.kind, ["ui_variant_unreviewed"], "$.kind"),
       variantId: uiVariantId(input.variantId, "$.variantId"),
+      sourceRevisionId: revisionId(input.sourceRevisionId, "$.sourceRevisionId"),
     };
   }
   const input = versioned(base, "$", ["kind", "behavior", "reviewedVariantId", "classificationId", "sourceRevisionId"]);
@@ -483,19 +619,26 @@ export function parseCanonicalAnswerTypeClassificationResult(
   const copied = snapshot(value);
   const base = record(copied, "$");
   if (["answer_type_unknown", "answer_type_ambiguous", "profile_answer_missing"].includes(String(base.kind))) {
-    const input = versioned(base, "$", ["kind", "questionId"]);
+    const input = versioned(base, "$", ["kind", "sourceRevisionId"]);
     return {
       schemaVersion: 1,
       kind: oneOf(input.kind, ["answer_type_unknown", "answer_type_ambiguous", "profile_answer_missing"], "$.kind"),
-      questionId: parseQuestionId(input.questionId, "$.questionId"),
+      sourceRevisionId: revisionId(input.sourceRevisionId, "$.sourceRevisionId"),
     };
   }
-  const input = versioned(base, "$", ["kind", "questionId", "answerType", "provenance"]);
+  const input = versioned(base, "$", [
+    "kind",
+    "answerType",
+    "classificationId",
+    "sourceRevisionId",
+    "provenance",
+  ]);
   return {
     schemaVersion: 1,
     kind: oneOf(input.kind, ["classified"], "$.kind"),
-    questionId: parseQuestionId(input.questionId, "$.questionId"),
     answerType: oneOf(input.answerType, canonicalAnswerTypes, "$.answerType"),
+    classificationId: classificationId(input.classificationId, "$.classificationId"),
+    sourceRevisionId: revisionId(input.sourceRevisionId, "$.sourceRevisionId"),
     provenance: parseProvenance(input.provenance, "$.provenance"),
   };
 }
@@ -506,19 +649,24 @@ export function parseVisibleOptionMappingResult(
   const copied = snapshot(value);
   const base = record(copied, "$");
   if (["option_no_match", "option_ambiguous"].includes(String(base.kind))) {
-    const input = versioned(base, "$", ["kind", "questionId"]);
+    const input = versioned(base, "$", ["kind", "sourceRevisionId"]);
     return {
       schemaVersion: 1,
       kind: oneOf(input.kind, ["option_no_match", "option_ambiguous"], "$.kind"),
-      questionId: parseQuestionId(input.questionId, "$.questionId"),
+      sourceRevisionId: revisionId(input.sourceRevisionId, "$.sourceRevisionId"),
     };
   }
-  const input = versioned(base, "$", ["kind", "questionId", "optionId", "sourceRevisionId"]);
+  const input = versioned(base, "$", [
+    "kind",
+    "optionId",
+    "classificationId",
+    "sourceRevisionId",
+  ]);
   return {
     schemaVersion: 1,
     kind: oneOf(input.kind, ["mapped"], "$.kind"),
-    questionId: parseQuestionId(input.questionId, "$.questionId"),
     optionId: parseOptionId(input.optionId, "$.optionId"),
+    classificationId: classificationId(input.classificationId, "$.classificationId"),
     sourceRevisionId: revisionId(input.sourceRevisionId, "$.sourceRevisionId"),
   };
 }

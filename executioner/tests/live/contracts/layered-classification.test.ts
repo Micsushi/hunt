@@ -74,7 +74,8 @@ test("each layer preserves recognized and exact factual outcomes", () => {
     sourceRevisionId: revisionId,
   });
   for (const kind of ["ats_unknown", "ats_ambiguous"] as const) {
-    assert.deepEqual(parseAtsFamilyClassificationResult({ schemaVersion: 1, kind }), { schemaVersion: 1, kind });
+    const factual = { schemaVersion: 1, kind, sourceRevisionId: revisionId } as const;
+    assert.deepEqual(parseAtsFamilyClassificationResult(factual), factual);
   }
 
   assert.deepEqual(parseWorkdayPageTypeClassificationResult({
@@ -91,7 +92,8 @@ test("each layer preserves recognized and exact factual outcomes", () => {
     sourceRevisionId: revisionId,
   });
   for (const kind of ["workday_page_unknown", "workday_page_ambiguous"] as const) {
-    assert.deepEqual(parseWorkdayPageTypeClassificationResult({ schemaVersion: 1, kind }), { schemaVersion: 1, kind });
+    const factual = { schemaVersion: 1, kind, sourceRevisionId: revisionId } as const;
+    assert.deepEqual(parseWorkdayPageTypeClassificationResult(factual), factual);
   }
 
   assert.deepEqual(parseUiBehaviorClassificationResult({
@@ -113,13 +115,16 @@ test("each layer preserves recognized and exact factual outcomes", () => {
     schemaVersion: 1,
     kind: "ui_variant_unreviewed",
     variantId: "ui_variant_0123456789abcdef",
+    sourceRevisionId: revisionId,
   }), {
     schemaVersion: 1,
     kind: "ui_variant_unreviewed",
     variantId: "ui_variant_0123456789abcdef",
+    sourceRevisionId: revisionId,
   });
   for (const kind of ["ui_behavior_unknown", "ui_behavior_ambiguous"] as const) {
-    assert.deepEqual(parseUiBehaviorClassificationResult({ schemaVersion: 1, kind }), { schemaVersion: 1, kind });
+    const factual = { schemaVersion: 1, kind, sourceRevisionId: revisionId } as const;
+    assert.deepEqual(parseUiBehaviorClassificationResult(factual), factual);
   }
 
   assert.deepEqual(parseQuestionClassificationResult({
@@ -136,7 +141,8 @@ test("each layer preserves recognized and exact factual outcomes", () => {
     sourceRevisionId: revisionId,
   });
   for (const kind of ["question_unknown", "question_ambiguous"] as const) {
-    assert.deepEqual(parseQuestionClassificationResult({ schemaVersion: 1, kind }), { schemaVersion: 1, kind });
+    const factual = { schemaVersion: 1, kind, sourceRevisionId: revisionId } as const;
+    assert.deepEqual(parseQuestionClassificationResult(factual), factual);
   }
 });
 
@@ -144,8 +150,9 @@ test("answer types carry value-free provenance and visible option mapping stays 
   const classified = {
     schemaVersion: 1,
     kind: "classified",
-    questionId: "question-country",
     answerType: "single_choice",
+    classificationId,
+    sourceRevisionId: revisionId,
     provenance: {
       schemaVersion: 1,
       provenanceId: "answer_provenance_0123456789abcdef",
@@ -155,20 +162,20 @@ test("answer types carry value-free provenance and visible option mapping stays 
   } as const;
   assert.deepEqual(parseCanonicalAnswerTypeClassificationResult(classified), classified);
   for (const kind of ["answer_type_unknown", "answer_type_ambiguous", "profile_answer_missing"] as const) {
-    const factual = { schemaVersion: 1, kind, questionId: "question-country" } as const;
+    const factual = { schemaVersion: 1, kind, sourceRevisionId: revisionId } as const;
     assert.deepEqual(parseCanonicalAnswerTypeClassificationResult(factual), factual);
   }
 
   const mapped = {
     schemaVersion: 1,
     kind: "mapped",
-    questionId: "question-country",
     optionId: "option-united-states",
+    classificationId,
     sourceRevisionId: revisionId,
   } as const;
   assert.deepEqual(parseVisibleOptionMappingResult(mapped), mapped);
   for (const kind of ["option_no_match", "option_ambiguous"] as const) {
-    const factual = { schemaVersion: 1, kind, questionId: "question-country" } as const;
+    const factual = { schemaVersion: 1, kind, sourceRevisionId: revisionId } as const;
     assert.deepEqual(parseVisibleOptionMappingResult(factual), factual);
   }
 });

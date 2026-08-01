@@ -13,6 +13,9 @@ const base = {
   candidateId: "unknown_candidate_0123456789abcdef",
   layer: "question",
   scope: "between_runs",
+  reviewerDecisionId: "reviewer_decision_0123456789abcdef",
+  reviewedFixtureIds: ["reviewed_fixture_0123456789abcdef"],
+  testEvidenceIds: ["test_evidence_0123456789abcdef"],
   sourceRevisionId: "classification_revision_0123456789abcdef",
 } as const;
 
@@ -27,6 +30,7 @@ test("accepted promotion records require a new immutable revision", () => {
   const accepted = {
     ...base,
     decision: "accepted",
+    sourceChangeId: "source_change_0123456789abcdef",
     acceptedRevisionId: "classification_revision_fedcba9876543210",
   } as const;
   assert.deepEqual(parseReviewedPromotionRecord(accepted), accepted);
@@ -34,10 +38,16 @@ test("accepted promotion records require a new immutable revision", () => {
   expectInvalid({ ...accepted, acceptedRevisionId: null }, "$.acceptedRevisionId");
 });
 
-test("rejected promotion records have no accepted revision and remain between-run data", () => {
-  const rejected = { ...base, decision: "rejected", acceptedRevisionId: null } as const;
+test("rejected promotion records have no source change or accepted revision and remain between-run data", () => {
+  const rejected = {
+    ...base,
+    decision: "rejected",
+    sourceChangeId: null,
+    acceptedRevisionId: null,
+  } as const;
   assert.deepEqual(parseReviewedPromotionRecord(rejected), rejected);
   expectInvalid({ ...rejected, acceptedRevisionId: "classification_revision_fedcba9876543210" }, "$.acceptedRevisionId");
+  expectInvalid({ ...rejected, sourceChangeId: "source_change_0123456789abcdef" }, "$.sourceChangeId");
   expectInvalid({ ...rejected, scope: "active_journey" }, "$.scope");
   expectInvalid({ ...rejected, fixture: "raw" }, "$.fixture");
 });

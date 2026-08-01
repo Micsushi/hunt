@@ -83,8 +83,11 @@ export type AtsFamilyClassificationResultV1 =
       readonly familyId: AtsFamilyId;
       readonly sourceRevisionId: ClassificationRevisionId;
     }
-  | { readonly schemaVersion: 1; readonly kind: "ats_unknown" }
-  | { readonly schemaVersion: 1; readonly kind: "ats_ambiguous" };
+  | {
+      readonly schemaVersion: 1;
+      readonly kind: "ats_unknown" | "ats_ambiguous";
+      readonly sourceRevisionId: ClassificationRevisionId;
+    };
 
 export interface AtsFamilyClassifier {
   classify(
@@ -109,8 +112,11 @@ export type WorkdayPageTypeClassificationResultV1 =
       readonly classificationId: ClassificationId;
       readonly sourceRevisionId: ClassificationRevisionId;
     }
-  | { readonly schemaVersion: 1; readonly kind: "workday_page_unknown" }
-  | { readonly schemaVersion: 1; readonly kind: "workday_page_ambiguous" };
+  | {
+      readonly schemaVersion: 1;
+      readonly kind: "workday_page_unknown" | "workday_page_ambiguous";
+      readonly sourceRevisionId: ClassificationRevisionId;
+    };
 
 export interface WorkdayPageTypeClassifier {
   classify(
@@ -138,12 +144,16 @@ export type UiBehaviorClassificationResultV1 =
       readonly classificationId: ClassificationId;
       readonly sourceRevisionId: ClassificationRevisionId;
     }
-  | { readonly schemaVersion: 1; readonly kind: "ui_behavior_unknown" }
-  | { readonly schemaVersion: 1; readonly kind: "ui_behavior_ambiguous" }
+  | {
+      readonly schemaVersion: 1;
+      readonly kind: "ui_behavior_unknown" | "ui_behavior_ambiguous";
+      readonly sourceRevisionId: ClassificationRevisionId;
+    }
   | {
       readonly schemaVersion: 1;
       readonly kind: "ui_variant_unreviewed";
       readonly variantId: UiVariantId;
+      readonly sourceRevisionId: ClassificationRevisionId;
     };
 
 export interface UiBehaviorClassifier {
@@ -169,8 +179,11 @@ export type QuestionClassificationResultV1 =
       readonly classificationId: ClassificationId;
       readonly sourceRevisionId: ClassificationRevisionId;
     }
-  | { readonly schemaVersion: 1; readonly kind: "question_unknown" }
-  | { readonly schemaVersion: 1; readonly kind: "question_ambiguous" };
+  | {
+      readonly schemaVersion: 1;
+      readonly kind: "question_unknown" | "question_ambiguous";
+      readonly sourceRevisionId: ClassificationRevisionId;
+    };
 
 export interface QuestionClassifier {
   classify(
@@ -192,8 +205,9 @@ export type CanonicalAnswerTypeClassificationResultV1 =
   | {
       readonly schemaVersion: 1;
       readonly kind: "classified";
-      readonly questionId: QuestionId;
       readonly answerType: CanonicalAnswerType;
+      readonly classificationId: ClassificationId;
+      readonly sourceRevisionId: ClassificationRevisionId;
       readonly provenance: CanonicalAnswerProvenanceV1;
     }
   | {
@@ -202,7 +216,7 @@ export type CanonicalAnswerTypeClassificationResultV1 =
         | "answer_type_unknown"
         | "answer_type_ambiguous"
         | "profile_answer_missing";
-      readonly questionId: QuestionId;
+      readonly sourceRevisionId: ClassificationRevisionId;
     };
 
 export type CanonicalAnswerTypeClassificationError =
@@ -224,6 +238,7 @@ export interface CanonicalAnswerTypeClassifier {
 export interface VisibleOptionMappingRequestV1 {
   readonly schemaVersion: 1;
   readonly questionId: QuestionId;
+  readonly answerTypeClassificationId: ClassificationId;
   readonly canonicalOptionId: OptionId;
   readonly visibleOptionIds: readonly OptionId[];
   readonly observation: SanitizedStructuralObservationV1 & {
@@ -235,14 +250,14 @@ export type VisibleOptionMappingResultV1 =
   | {
       readonly schemaVersion: 1;
       readonly kind: "mapped";
-      readonly questionId: QuestionId;
       readonly optionId: OptionId;
+      readonly classificationId: ClassificationId;
       readonly sourceRevisionId: ClassificationRevisionId;
     }
   | {
       readonly schemaVersion: 1;
       readonly kind: "option_no_match" | "option_ambiguous";
-      readonly questionId: QuestionId;
+      readonly sourceRevisionId: ClassificationRevisionId;
     };
 
 export interface VisibleOptionMapper {

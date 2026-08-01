@@ -35,4 +35,16 @@ test("classification ownership is separate from the nine frozen live ports", () 
     liveClassificationOwnership.map(({ mutability }) => mutability),
     ["read_only", "read_only", "read_only", "read_only", "read_only", "read_only", "data_only", "data_only"],
   );
+  assert.deepEqual(
+    liveClassificationOwnership.find(
+      ({ contract }) => contract === "CanonicalAnswerTypeClassifier",
+    )?.consumers,
+    ["VisibleOptionMapper", "F9 live coordinator", "F7 reviewed driver dispatch"],
+  );
+  assert.deepEqual(
+    liveClassificationOwnership.find(
+      ({ contract }) => contract === "VisibleOptionMapper",
+    )?.consumers,
+    ["F9 live coordinator", "F7 reviewed driver dispatch"],
+  );
 });

@@ -14,6 +14,10 @@ export type StructuralObservationId =
 export type StructuralTraitId = LearningIdentifier<"structural_trait">;
 export type UnknownCandidateId = LearningIdentifier<"unknown_candidate">;
 export type PromotionId = LearningIdentifier<"promotion">;
+export type ReviewerDecisionId = LearningIdentifier<"reviewer_decision">;
+export type ReviewedFixtureId = LearningIdentifier<"reviewed_fixture">;
+export type TestEvidenceId = LearningIdentifier<"test_evidence">;
+export type SourceChangeId = LearningIdentifier<"source_change">;
 
 export const classificationLayers = [
   "ats_family",
@@ -34,9 +38,13 @@ export interface SanitizedStructuralObservationV1 {
   readonly schemaVersion: 1;
   readonly observationId: StructuralObservationId;
   readonly layer: ClassificationLayer;
+  readonly sourceRevisionId: ClassificationRevisionId;
   readonly parentLineage: readonly ClassificationLineageV1[];
   readonly traitIds: readonly StructuralTraitId[];
   readonly observedVariantId: UiVariantId | null;
+  readonly controlCount: number;
+  readonly requiredControlCount: number;
+  readonly optionCount: number;
 }
 
 export type SanitizedUnknownOutcome =
@@ -52,7 +60,6 @@ export type SanitizedUnknownOutcome =
   | "question_ambiguous"
   | "answer_type_unknown"
   | "answer_type_ambiguous"
-  | "profile_answer_missing"
   | "option_no_match"
   | "option_ambiguous";
 
@@ -62,29 +69,35 @@ export interface SanitizedUnknownCandidateV1 {
   readonly observationId: StructuralObservationId;
   readonly layer: ClassificationLayer;
   readonly outcome: SanitizedUnknownOutcome;
+  readonly sourceRevisionId: ClassificationRevisionId;
   readonly parentLineage: readonly ClassificationLineageV1[];
   readonly traitIds: readonly StructuralTraitId[];
   readonly observedVariantId: UiVariantId | null;
+  readonly controlCount: number;
+  readonly requiredControlCount: number;
+  readonly optionCount: number;
+}
+
+interface ReviewedPromotionEvidenceV1 {
+  readonly schemaVersion: 1;
+  readonly promotionId: PromotionId;
+  readonly candidateId: UnknownCandidateId;
+  readonly layer: ClassificationLayer;
+  readonly scope: "between_runs";
+  readonly reviewerDecisionId: ReviewerDecisionId;
+  readonly reviewedFixtureIds: readonly ReviewedFixtureId[];
+  readonly testEvidenceIds: readonly TestEvidenceId[];
+  readonly sourceRevisionId: ClassificationRevisionId;
 }
 
 export type ReviewedPromotionRecordV1 =
-  | {
-      readonly schemaVersion: 1;
-      readonly promotionId: PromotionId;
-      readonly candidateId: UnknownCandidateId;
-      readonly layer: ClassificationLayer;
-      readonly scope: "between_runs";
-      readonly sourceRevisionId: ClassificationRevisionId;
+  | (ReviewedPromotionEvidenceV1 & {
       readonly decision: "accepted";
+      readonly sourceChangeId: SourceChangeId;
       readonly acceptedRevisionId: ClassificationRevisionId;
-    }
-  | {
-      readonly schemaVersion: 1;
-      readonly promotionId: PromotionId;
-      readonly candidateId: UnknownCandidateId;
-      readonly layer: ClassificationLayer;
-      readonly scope: "between_runs";
-      readonly sourceRevisionId: ClassificationRevisionId;
+    })
+  | (ReviewedPromotionEvidenceV1 & {
       readonly decision: "rejected";
+      readonly sourceChangeId: null;
       readonly acceptedRevisionId: null;
-    };
+    });

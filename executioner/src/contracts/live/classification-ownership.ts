@@ -26,13 +26,17 @@ export const liveClassificationOwnership = [
   {
     contract: "CanonicalAnswerTypeClassifier",
     owner: "F6",
-    consumers: ["F7 reviewed driver dispatch"],
+    consumers: [
+      "VisibleOptionMapper",
+      "F9 live coordinator",
+      "F7 reviewed driver dispatch",
+    ],
     mutability: "read_only",
   },
   {
     contract: "VisibleOptionMapper",
     owner: "F6",
-    consumers: ["CanonicalAnswerTypeClassifier", "F7 reviewed driver dispatch"],
+    consumers: ["F9 live coordinator", "F7 reviewed driver dispatch"],
     mutability: "read_only",
   },
   {
