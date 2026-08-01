@@ -21,7 +21,6 @@ import {
   type JobIntake,
   type JourneyId,
   type JourneyIdentityError,
-  type JourneyIntake,
   type McpJourneyApi,
   type PortResult,
   type ResolvedResumeArtifact,
@@ -60,13 +59,16 @@ export interface S1ControlledJourneyConfig {
   readonly guardRevision: GuardRevision;
   readonly clock: () => string;
   readonly notifyFailure?: NotificationAdapter;
+  readonly createFixtureRuntime?: (
+    root: string,
+  ) => FixtureRuntime & { close(): Promise<void> };
+  readonly onResumeArtifact?: (artifact: ResolvedResumeArtifact) => void;
   readonly wrapBrowser?: (browser: BrowserSession) => BrowserSession;
 }
 
 export interface S1ControlledJourney {
   readonly api: McpJourneyApi;
   readonly journeyId: JourneyId;
-  readonly fixture: FixtureRuntime;
   close(): Promise<void>;
 }
 
@@ -82,7 +84,9 @@ export async function createS1ControlledJourney(
   const allocatedJourney = generatedJourneyId(config.ids);
   if (!allocatedJourney.ok) return allocatedJourney;
 
-  const fixture = new FixtureServer(config.fixtureRoot);
+  const fixture =
+    config.createFixtureRuntime?.(config.fixtureRoot) ??
+    new FixtureServer(config.fixtureRoot);
   const startedFixture = await fixture.start(
     { fixtureRunId: config.fixtureRunId },
     signal,
@@ -90,6 +94,22 @@ export async function createS1ControlledJourney(
   if (!startedFixture.ok) {
     await fixture.close();
     return startedFixture;
+  }
+  const resetFixture = await fixture.reset(
+    { fixtureRunId: config.fixtureRunId },
+    signal,
+  );
+  if (!resetFixture.ok) {
+    await fixture.close();
+    return resetFixture;
+  }
+  if (
+    resetFixture.value.fixtureRunId !== config.fixtureRunId ||
+    typeof resetFixture.value.semanticHash !== "string" ||
+    resetFixture.value.semanticHash.length === 0
+  ) {
+    await fixture.close();
+    throw new TypeError("fixture reset result must match the requested run");
   }
 
   let engine: Browser | undefined;
@@ -128,7 +148,7 @@ export async function createS1ControlledJourney(
     const privacy = createPrivacyGuard();
     const safety = createSafetyGuard();
     let resumeArtifact: ResolvedResumeArtifact | undefined;
-    const realIntake = createJourneyIntake(
+    const intake = createJourneyIntake(
       {
         ...config.source,
         job: { ...config.source.job, applyUrl: target },
@@ -136,14 +156,11 @@ export async function createS1ControlledJourney(
       config.resumeBytes,
       allocatedJourney.value,
       state.initialize.bind(state),
-    );
-    const intake: JourneyIntake = {
-      async bootstrap(request, activeSignal) {
-        const result = await realIntake.bootstrap(request, activeSignal);
-        if (result.ok) resumeArtifact = result.value.inputs.resumeArtifact;
-        return result;
+      (artifact) => {
+        resumeArtifact = artifact;
+        config.onResumeArtifact?.(artifact);
       },
-    };
+    );
     const control = createJourneyOrchestrator({
       intake,
       state,
@@ -183,14 +200,13 @@ export async function createS1ControlledJourney(
       value: Object.freeze({
         api,
         journeyId: allocatedJourney.value,
-        fixture,
         async close() {
           if (closed) return;
           closed = true;
           const cleanupSignal = new AbortController().signal;
           await Promise.allSettled(
             [...openSessions].map((sessionId) =>
-              realBrowser.close({ sessionId }, cleanupSignal)
+              realBrowser.close({ sessionId }, cleanupSignal),
             ),
           );
           openSessions.clear();
@@ -229,6 +245,7 @@ function fixtureAccountTarget(origin: string): string {
     parsed.username !== "" ||
     parsed.password !== "" ||
     parsed.pathname !== "/"
-  ) throw new TypeError("fixture origin must be an exact loopback origin");
+  )
+    throw new TypeError("fixture origin must be an exact loopback origin");
   return new URL("/account", parsed).href;
 }

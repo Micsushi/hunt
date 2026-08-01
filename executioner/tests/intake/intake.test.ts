@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import { test } from "node:test";
 
 import {
+  disposeResumeArtifact,
   journeyId,
   providerError,
   upstreamJobId,
@@ -11,6 +12,7 @@ import {
   useResumeArtifactUpload,
   type DurableJourneyState,
   type JourneyBootstrapRequest,
+  type ResolvedResumeArtifact,
 } from "../../src/contracts/index.ts";
 import {
   createJourneyIntake,
@@ -79,6 +81,150 @@ test("intake uses an injected journey ID and memoizes successful persistence", a
     (captured) => ({ ok: true, value: new TextDecoder().decode(captured) }),
   );
   assert.deepEqual(upload, { ok: true, value: "synthetic resume" });
+});
+
+test("intake exposes one opaque disposable resume handle before bootstrap", async () => {
+  let initializations = 0;
+  let captured: ResolvedResumeArtifact | undefined;
+  createJourneyIntake(
+    source,
+    bytes,
+    generatedId,
+    async () => {
+      initializations += 1;
+      return { ok: true, value: readyState() };
+    },
+    (artifact) => {
+      captured = artifact;
+    },
+  );
+
+  assert.equal(initializations, 0);
+  assert.ok(captured);
+  assert.equal(Object.isFrozen(captured), true);
+  assert.deepEqual(Reflect.ownKeys(captured).sort(), [
+    "byteLength",
+    "resumeId",
+    "sha256",
+  ]);
+  assert.deepEqual(disposeResumeArtifact(captured), { ok: true, value: undefined });
+  assert.deepEqual(
+    await useResumeArtifactUpload(captured, () => ({ ok: true, value: "leaked" })),
+    { ok: false, error: providerError("artifact_already_consumed") },
+  );
+});
+
+test("captured handles preserve every bootstrap result and remain disposable", async (t) => {
+  function createCaptured(
+    initialize: JourneyStateInitializer,
+  ): {
+    intake: ReturnType<typeof createJourneyIntake>;
+    artifact: ResolvedResumeArtifact;
+  } {
+    let artifact: ResolvedResumeArtifact | undefined;
+    const intake = createJourneyIntake(
+      source,
+      bytes,
+      generatedId,
+      initialize,
+      (captured) => {
+        artifact = captured;
+      },
+    );
+    assert.ok(artifact);
+    return { intake, artifact };
+  }
+
+  async function assertDisposable(artifact: ResolvedResumeArtifact): Promise<void> {
+    assert.deepEqual(disposeResumeArtifact(artifact), { ok: true, value: undefined });
+    assert.deepEqual(
+      await useResumeArtifactUpload(artifact, () => ({ ok: true, value: "leaked" })),
+      { ok: false, error: providerError("artifact_already_consumed") },
+    );
+  }
+
+  await t.test("invalid request", async () => {
+    let initializations = 0;
+    const { intake, artifact } = createCaptured(async () => {
+      initializations += 1;
+      return { ok: true, value: readyState() };
+    });
+    assert.deepEqual(
+      await intake.bootstrap(
+        { ...request, jobId: upstreamJobId("job-other") },
+        new AbortController().signal,
+      ),
+      { ok: false, error: providerError("journey_input_invalid") },
+    );
+    assert.equal(initializations, 0);
+    await assertDisposable(artifact);
+  });
+
+  await t.test("cancelled request", async () => {
+    let initializations = 0;
+    const { intake, artifact } = createCaptured(async () => {
+      initializations += 1;
+      return { ok: true, value: readyState() };
+    });
+    assert.deepEqual(await intake.bootstrap(request, AbortSignal.abort()), {
+      ok: false,
+      error: providerError("operation_cancelled"),
+    });
+    assert.equal(initializations, 0);
+    await assertDisposable(artifact);
+  });
+
+  await t.test("persistence failure", async () => {
+    const { intake, artifact } = createCaptured(async () => ({
+      ok: false,
+      error: providerError("journey_state_unavailable"),
+    }));
+    assert.deepEqual(await intake.bootstrap(request, new AbortController().signal), {
+      ok: false,
+      error: providerError("journey_persistence_unavailable"),
+    });
+    await assertDisposable(artifact);
+  });
+
+  await t.test("successful bootstrap", async () => {
+    const { intake, artifact } = createCaptured(async () => ({
+      ok: true,
+      value: readyState(),
+    }));
+    const result = await intake.bootstrap(request, new AbortController().signal);
+    assert.equal(result.ok, true);
+    assert.equal(result.ok && result.value.inputs.resumeArtifact, artifact);
+    await assertDisposable(artifact);
+  });
+});
+
+test("a failing resume observer disposes its handle and fails closed", async () => {
+  let captured: ResolvedResumeArtifact | undefined;
+  let initializations = 0;
+  const intake = createJourneyIntake(
+    source,
+    bytes,
+    generatedId,
+    async () => {
+      initializations += 1;
+      return { ok: true, value: readyState() };
+    },
+    (artifact) => {
+      captured = artifact;
+      throw new Error("observer failed");
+    },
+  );
+
+  assert.deepEqual(await intake.bootstrap(request, new AbortController().signal), {
+    ok: false,
+    error: providerError("journey_input_invalid"),
+  });
+  assert.equal(initializations, 0);
+  assert.ok(captured);
+  assert.deepEqual(
+    await useResumeArtifactUpload(captured, () => ({ ok: true, value: "leaked" })),
+    { ok: false, error: providerError("artifact_already_consumed") },
+  );
 });
 
 test("intake rejects malformed and mismatched requests without persistence", async () => {

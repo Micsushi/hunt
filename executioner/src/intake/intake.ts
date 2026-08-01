@@ -17,6 +17,7 @@ import {
   type JourneyIntake,
   type JourneyStateError,
   type PortResult,
+  type ResolvedResumeArtifact,
 } from "../contracts/index.ts";
 import { immutableApplicantProfile } from "../profile/profile.ts";
 
@@ -74,6 +75,7 @@ function validApplyUrl(value: string): boolean {
 function resolveInputs(
   value: unknown,
   bytes: Uint8Array,
+  onResumeArtifact?: (artifact: ResolvedResumeArtifact) => void,
 ): PortResult<JourneyInputs, JourneyInputError> {
   try {
     const source = exactDataRecord(value, ["job", "resume", "profile"]);
@@ -115,6 +117,12 @@ function resolveInputs(
         artifact.error.code === "artifact_size_invalid" ||
         artifact.error.code === "artifact_digest_mismatch"
       ) return { ok: false, error: artifact.error };
+      return { ok: false, error: providerError("journey_input_invalid") };
+    }
+    try {
+      onResumeArtifact?.(artifact.value);
+    } catch {
+      disposeResumeArtifact(artifact.value);
       return { ok: false, error: providerError("journey_input_invalid") };
     }
     return {
@@ -159,8 +167,9 @@ export function createJourneyIntake(
   bytes: Uint8Array,
   generatedJourneyId: JourneyId,
   initialize: JourneyStateInitializer,
+  onResumeArtifact?: (artifact: ResolvedResumeArtifact) => void,
 ): JourneyIntake {
-  const resolved = resolveInputs(source, bytes);
+  const resolved = resolveInputs(source, bytes, onResumeArtifact);
   let successfulBootstrap:
     | Extract<PortResult<JourneyBootstrapResult, JourneyInputError | CancellationError>, { readonly ok: true }>
     | undefined;

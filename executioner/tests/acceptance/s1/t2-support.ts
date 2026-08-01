@@ -26,6 +26,7 @@ import {
 import { createEvidenceStore } from "../../../src/evidence/store.ts";
 import { requiredFieldFlowCases } from "../../../src/testing/contracts/field-flow-cases.ts";
 import {
+  assertResumeArtifactDisposed,
   controlledConfig,
   privateSentinels,
   startRequest,
@@ -57,16 +58,25 @@ interface EvidenceProjection {
 }
 
 type TerminalProjection =
-  | { readonly status: "review_reached" | "cancelled"; readonly completedPages: number }
+  | {
+      readonly status: "review_reached" | "cancelled";
+      readonly completedPages: number;
+    }
   | {
       readonly status: "failed";
       readonly completedPages: number;
-      readonly errorCode: Extract<TerminalResult, { readonly status: "failed" }>["errorCode"];
+      readonly errorCode: Extract<
+        TerminalResult,
+        { readonly status: "failed" }
+      >["errorCode"];
     }
   | {
       readonly status: "blocked";
       readonly completedPages: number;
-      readonly factualOutcome: Extract<TerminalResult, { readonly status: "blocked" }>["factualOutcome"];
+      readonly factualOutcome: Extract<
+        TerminalResult,
+        { readonly status: "blocked" }
+      >["factualOutcome"];
     };
 
 export interface ScenarioProjection {
@@ -107,8 +117,14 @@ export interface S1AcceptanceReport {
   readonly candidate: string;
   readonly repetitions: { readonly happy: 3; readonly fault: 3 };
   readonly scenarios: {
-    readonly happy: { readonly runs: 3; readonly projection: ScenarioProjection };
-    readonly fault: { readonly runs: 3; readonly projection: ScenarioProjection };
+    readonly happy: {
+      readonly runs: 3;
+      readonly projection: ScenarioProjection;
+    };
+    readonly fault: {
+      readonly runs: 3;
+      readonly projection: ScenarioProjection;
+    };
   };
 }
 
@@ -133,7 +149,9 @@ export async function runDeterministicAcceptance(options: {
     happy.push(await runScenario("happy", run, options.fixtureRoot));
   }
   for (let run = 1; run <= 3; run += 1) {
-    fault.push(await runScenario("f3_observe_invalid", run, options.fixtureRoot));
+    fault.push(
+      await runScenario("f3_observe_invalid", run, options.fixtureRoot),
+    );
   }
   assertSameScenario(happy);
   assertSameScenario(fault);
@@ -157,7 +175,8 @@ async function runScenario(
   fixtureRoot: string,
 ): Promise<ScenarioProjection> {
   const root = await mkdtemp(join(tmpdir(), `hunt-f13-t2-${scenario}-`));
-  const { config, browser, resumeSha256 } = controlledConfig(root, fixtureRoot);
+  const { config, browser, fixture, resumeArtifacts, resumeSha256 } =
+    controlledConfig(root, fixtureRoot);
   const sourceBytes = config.resumeBytes;
   const reports: FailureReport[] = [];
   let observeCalls = 0;
@@ -194,14 +213,22 @@ async function runScenario(
   let core: Omit<ScenarioProjection, "privacy" | "cleanupVerified"> | undefined;
   let cleanupFailure: unknown;
   try {
-    const created = await createS1ControlledJourney(scenarioConfig, new AbortController().signal);
-    if (!created.ok) throw new Error(`S1 composition failed: ${created.error.code}`);
+    const created = await createS1ControlledJourney(
+      scenarioConfig,
+      new AbortController().signal,
+    );
+    if (!created.ok)
+      throw new Error(`S1 composition failed: ${created.error.code}`);
     runtime = created.value;
     const accepted = await runtime.api.handle(
       startRequest(scenarioConfig),
       new AbortController().signal,
     );
-    if (!accepted.ok || !accepted.value.ok || accepted.value.result.kind !== "accepted") {
+    if (
+      !accepted.ok ||
+      !accepted.value.ok ||
+      accepted.value.result.kind !== "accepted"
+    ) {
       throw new Error(`journey was not accepted: ${JSON.stringify(accepted)}`);
     }
     const polled = await pollTerminal(
@@ -211,36 +238,51 @@ async function runScenario(
     );
     fixtureTarget = browser.starts[0];
     const events = await readEvents(join(root, "events", "events.jsonl"));
-    const terminalEvents = events.filter(({ kind }) => kind === "journey_terminal");
+    const terminalEvents = events.filter(
+      ({ kind }) => kind === "journey_terminal",
+    );
     if (terminalEvents.length !== 1) {
-      throw new Error(`expected one terminal event, received ${terminalEvents.length}`);
+      throw new Error(
+        `expected one terminal event, received ${terminalEvents.length}`,
+      );
     }
     const persisted = await readPersistedText(root);
     assertNoSentinels(persisted);
-    const evidenceResult = await createEvidenceStore(join(root, "evidence")).read(
-      { journeyId: runtime.journeyId },
-      new AbortController().signal,
-    );
+    const evidenceResult = await createEvidenceStore(
+      join(root, "evidence"),
+    ).read({ journeyId: runtime.journeyId }, new AbortController().signal);
     if (!evidenceResult.ok) {
       throw new Error(`evidence read failed: ${evidenceResult.error.code}`);
     }
-    const finalPage = browser.observations.at(-1)?.path === "/review"
-      ? "review" as const
-      : null;
+    const finalPage =
+      browser.observations.at(-1)?.path === "/review"
+        ? ("review" as const)
+        : null;
     assertScenarioOutcome(scenario, polled.terminal, finalPage);
-    const verifiedFields = scenario === "happy"
-      ? projectVerifiedFields(browser.observations, resumeSha256)
-      : [];
+    const verifiedFields =
+      scenario === "happy"
+        ? projectVerifiedFields(browser.observations, resumeSha256)
+        : [];
     const failure = projectFailure(scenario, reports, runtime.journeyId);
     if (scenario === "f3_observe_invalid") {
-      if (observeCalls !== 1 || browser.mutations.length !== 0 || browser.navigations.length !== 0) {
-        throw new Error("nonretryable F3 observation fault reached a later browser effect");
+      if (
+        observeCalls !== 1 ||
+        browser.mutations.length !== 0 ||
+        browser.navigations.length !== 0
+      ) {
+        throw new Error(
+          "nonretryable F3 observation fault reached a later browser effect",
+        );
       }
     }
     if (browser.closes.length !== 1) {
-      throw new Error(`expected one owned session close, received ${browser.closes.length}`);
+      throw new Error(
+        `expected one owned session close, received ${browser.closes.length}`,
+      );
     }
-    if (browser.mutations.some((kind) => kind.toLowerCase().includes("submit"))) {
+    if (
+      browser.mutations.some((kind) => kind.toLowerCase().includes("submit"))
+    ) {
       throw new Error("Submit was touched");
     }
     core = {
@@ -256,7 +298,8 @@ async function runScenario(
       submitTouched: false,
       failure,
       browserEffects: {
-        observeCalls: scenario === "happy" ? browser.observations.length : observeCalls,
+        observeCalls:
+          scenario === "happy" ? browser.observations.length : observeCalls,
         mutations: browser.mutations.length,
         navigations: browser.navigations.length,
       },
@@ -267,7 +310,9 @@ async function runScenario(
         phase,
         step,
       })),
-      evidence: evidenceResult.value.records.map(projectEvidence).sort(compareProjection),
+      evidence: evidenceResult.value.records
+        .map(projectEvidence)
+        .sort(compareProjection),
     };
   } finally {
     try {
@@ -280,14 +325,36 @@ async function runScenario(
     await rm(root, { recursive: true, force: true });
   }
   if (cleanupFailure !== undefined) throw cleanupFailure;
+  if (resumeArtifacts.length !== 1) {
+    throw new Error(
+      `expected one owned resume artifact, received ${resumeArtifacts.length}`,
+    );
+  }
+  await assertResumeArtifactDisposed(resumeArtifacts[0]!);
+  if (
+    !isDeepStrictEqual(fixture.lifecycle, [
+      "fixture.start",
+      "fixture.reset",
+      "browser.start",
+      "browser.close",
+      "fixture.close",
+    ])
+  ) {
+    throw new Error(
+      `unexpected fixture lifecycle: ${JSON.stringify(fixture.lifecycle)}`,
+    );
+  }
   if (sourceBytes.some((byte) => byte !== 0)) {
     throw new Error("acceptance-owned resume bytes were not disposed");
   }
   await access(root).then(
-    () => { throw new Error("acceptance temporary root was not removed"); },
+    () => {
+      throw new Error("acceptance temporary root was not removed");
+    },
     () => undefined,
   );
-  if (core === undefined) throw new Error("scenario did not produce a projection");
+  if (core === undefined)
+    throw new Error("scenario did not produce a projection");
   return {
     ...core,
     privacy: { sentinelsAbsent: true, resumeBytesDisposed: true },
@@ -299,18 +366,26 @@ async function pollTerminal(
   api: McpJourneyApi,
   journeyId: TerminalResult["journeyId"],
   scope: string,
-): Promise<{ readonly terminal: TerminalResult; readonly progress: JourneyProgress }> {
+): Promise<{
+  readonly terminal: TerminalResult;
+  readonly progress: JourneyProgress;
+}> {
   const deadline = Date.now() + 30_000;
   const progress: JourneyProgress[] = [];
   let attempt = 0;
   while (Date.now() < deadline) {
     attempt += 1;
-    const status = await api.handle({
-      schemaVersion: 2,
-      requestId: mcpRequestId(`request-t2-${scope}-status-${String(attempt).padStart(4, "0")}`),
-      method: "journey_status",
-      params: { journeyId },
-    }, new AbortController().signal);
+    const status = await api.handle(
+      {
+        schemaVersion: 2,
+        requestId: mcpRequestId(
+          `request-t2-${scope}-status-${String(attempt).padStart(4, "0")}`,
+        ),
+        method: "journey_status",
+        params: { journeyId },
+      },
+      new AbortController().signal,
+    );
     if (status.ok && status.value.ok && status.value.result.kind === "status") {
       progress.push(status.value.result.progress);
       assertMonotonic(progress);
@@ -322,21 +397,39 @@ async function pollTerminal(
       throw new Error(`unexpected MCP status: ${JSON.stringify(status)}`);
     }
 
-    const result = await api.handle({
-      schemaVersion: 2,
-      requestId: mcpRequestId(`request-t2-${scope}-result-${String(attempt).padStart(4, "0")}`),
-      method: "journey_result",
-      params: { journeyId },
-    }, new AbortController().signal);
-    if (result.ok && result.value.ok && result.value.result.kind === "terminal") {
-      const finalStatus = await api.handle({
+    const result = await api.handle(
+      {
         schemaVersion: 2,
-        requestId: mcpRequestId(`request-t2-${scope}-status-final`),
-        method: "journey_status",
+        requestId: mcpRequestId(
+          `request-t2-${scope}-result-${String(attempt).padStart(4, "0")}`,
+        ),
+        method: "journey_result",
         params: { journeyId },
-      }, new AbortController().signal);
-      if (!finalStatus.ok || !finalStatus.value.ok || finalStatus.value.result.kind !== "status") {
-        throw new Error(`final MCP status failed: ${JSON.stringify(finalStatus)}`);
+      },
+      new AbortController().signal,
+    );
+    if (
+      result.ok &&
+      result.value.ok &&
+      result.value.result.kind === "terminal"
+    ) {
+      const finalStatus = await api.handle(
+        {
+          schemaVersion: 2,
+          requestId: mcpRequestId(`request-t2-${scope}-status-final`),
+          method: "journey_status",
+          params: { journeyId },
+        },
+        new AbortController().signal,
+      );
+      if (
+        !finalStatus.ok ||
+        !finalStatus.value.ok ||
+        finalStatus.value.result.kind !== "status"
+      ) {
+        throw new Error(
+          `final MCP status failed: ${JSON.stringify(finalStatus)}`,
+        );
       }
       progress.push(finalStatus.value.result.progress);
       assertMonotonic(progress);
@@ -345,7 +438,11 @@ async function pollTerminal(
         progress: finalStatus.value.result.progress,
       };
     }
-    if (!result.ok || result.value.ok || result.value.error.code !== "journey_busy") {
+    if (
+      !result.ok ||
+      result.value.ok ||
+      result.value.error.code !== "journey_busy"
+    ) {
       throw new Error(`unexpected MCP result: ${JSON.stringify(result)}`);
     }
     await new Promise<void>((resolve) => setTimeout(resolve, 10));
@@ -367,13 +464,24 @@ function projectVerifiedFields(
 ): FieldProjection[] {
   return requiredFieldFlowCases.map((field) => {
     const readbacks = observations.flatMap(({ targets }) =>
-      targets.filter(({ name, required }) => required && name === field.fieldLabel)
-        .map(({ readback }) => readback)
+      targets
+        .filter(({ name, required }) => required && name === field.fieldLabel)
+        .map(({ readback }) => readback),
     );
-    if (!readbacks.some((readback) => verifiedReadback(field.behavior, readback, resumeSha256))) {
-      throw new Error(`required field was not independently verified: ${field.fieldId}`);
+    if (
+      !readbacks.some((readback) =>
+        verifiedReadback(field.behavior, readback, resumeSha256),
+      )
+    ) {
+      throw new Error(
+        `required field was not independently verified: ${field.fieldId}`,
+      );
     }
-    return { fieldId: field.fieldId, behavior: field.behavior, verification: "verified" };
+    return {
+      fieldId: field.fieldId,
+      behavior: field.behavior,
+      verification: "verified",
+    };
   });
 }
 
@@ -382,7 +490,8 @@ function verifiedReadback(
   readback: BrowserReadback,
   resumeSha256: string,
 ): boolean {
-  if (behavior === "checkbox") return readback.kind === "checked" && readback.checked;
+  if (behavior === "checkbox")
+    return readback.kind === "checked" && readback.checked;
   if (["radio", "select", "listbox"].includes(behavior)) {
     return readback.kind === "selected" && readback.option !== null;
   }
@@ -398,11 +507,14 @@ function projectFailure(
   journeyId: TerminalResult["journeyId"],
 ): ScenarioProjection["failure"] {
   if (scenario === "happy") {
-    if (reports.length !== 0) throw new Error("happy journey emitted a failure report");
+    if (reports.length !== 0)
+      throw new Error("happy journey emitted a failure report");
     return null;
   }
   if (reports.length !== 1) {
-    throw new Error(`expected one factual failure report, received ${reports.length}`);
+    throw new Error(
+      `expected one factual failure report, received ${reports.length}`,
+    );
   }
   const context = reports[0]!.context;
   const expected = {
@@ -414,8 +526,13 @@ function projectFailure(
     retryable: false,
     source: context.source,
   } as const;
-  if (!isDeepStrictEqual(context, expected) || context.source.kind !== "operation") {
-    throw new Error(`unexpected factual failure report: ${JSON.stringify(context)}`);
+  if (
+    !isDeepStrictEqual(context, expected) ||
+    context.source.kind !== "operation"
+  ) {
+    throw new Error(
+      `unexpected factual failure report: ${JSON.stringify(context)}`,
+    );
   }
   return {
     component: "F3",
@@ -431,14 +548,15 @@ function assertScenarioOutcome(
   terminal: TerminalResult,
   finalPage: "review" | null,
 ): void {
-  const expected = scenario === "happy"
-    ? { status: "review_reached", completedPages: 3, finalPage: "review" }
-    : {
-        status: "failed",
-        completedPages: 0,
-        errorCode: "browser_target_invalid",
-        finalPage: null,
-      };
+  const expected =
+    scenario === "happy"
+      ? { status: "review_reached", completedPages: 3, finalPage: "review" }
+      : {
+          status: "failed",
+          completedPages: 0,
+          errorCode: "browser_target_invalid",
+          finalPage: null,
+        };
   const projected = {
     status: terminal.status,
     completedPages: terminal.completedPages,
@@ -446,13 +564,16 @@ function assertScenarioOutcome(
     finalPage,
   };
   if (!isDeepStrictEqual(projected, expected)) {
-    throw new Error(`unexpected ${scenario} terminal: ${JSON.stringify(projected)}`);
+    throw new Error(
+      `unexpected ${scenario} terminal: ${JSON.stringify(projected)}`,
+    );
   }
 }
 
 function projectTerminal(terminal: TerminalResult): TerminalProjection {
   const { status, completedPages } = terminal;
-  if (status === "failed") return { status, completedPages, errorCode: terminal.errorCode };
+  if (status === "failed")
+    return { status, completedPages, errorCode: terminal.errorCode };
   if (status === "blocked") {
     return { status, completedPages, factualOutcome: terminal.factualOutcome };
   }
@@ -469,13 +590,19 @@ function projectEvidence(record: EvidenceRecord): EvidenceProjection {
   };
 }
 
-function compareProjection(left: EvidenceProjection, right: EvidenceProjection): number {
+function compareProjection(
+  left: EvidenceProjection,
+  right: EvidenceProjection,
+): number {
   return JSON.stringify(left).localeCompare(JSON.stringify(right));
 }
 
 async function readEvents(path: string): Promise<EventEnvelope[]> {
   const serialized = await readFile(path, "utf8");
-  return serialized.trim().split("\n").filter(Boolean)
+  return serialized
+    .trim()
+    .split("\n")
+    .filter(Boolean)
     .map((line) => parseEventEnvelope(JSON.parse(line) as unknown));
 }
 
@@ -492,7 +619,8 @@ async function readPersistedText(root: string): Promise<string> {
 
 function assertNoSentinels(serialized: string): void {
   for (const sentinel of privateSentinels) {
-    if (serialized.includes(sentinel)) throw new Error(`private sentinel persisted: ${sentinel}`);
+    if (serialized.includes(sentinel))
+      throw new Error(`private sentinel persisted: ${sentinel}`);
   }
 }
 
@@ -506,7 +634,11 @@ async function assertFixtureClosed(target: string): Promise<void> {
 }
 
 function assertSameScenario(runs: readonly ScenarioProjection[]): void {
-  if (runs.length !== 3 || !isDeepStrictEqual(runs[0], runs[1]) || !isDeepStrictEqual(runs[0], runs[2])) {
+  if (
+    runs.length !== 3 ||
+    !isDeepStrictEqual(runs[0], runs[1]) ||
+    !isDeepStrictEqual(runs[0], runs[2])
+  ) {
     throw new Error("three clean scenario projections were not identical");
   }
 }
@@ -517,7 +649,19 @@ function assertSanitizedReport(report: S1AcceptanceReport): void {
     throw new Error("acceptance report exceeds 64 KiB");
   }
   assertNoSentinels(serialized);
-  for (const forbidden of ["http://", "https://", "base64", "requestId", "journeyId", "operationId", "reportId", "eventId", "evidenceId", '"path"', '"message"']) {
+  for (const forbidden of [
+    "http://",
+    "https://",
+    "base64",
+    "requestId",
+    "journeyId",
+    "operationId",
+    "reportId",
+    "eventId",
+    "evidenceId",
+    '"path"',
+    '"message"',
+  ]) {
     if (serialized.includes(forbidden)) {
       throw new Error(`volatile or private report field present: ${forbidden}`);
     }

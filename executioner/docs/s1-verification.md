@@ -25,8 +25,8 @@ component=F3 phase=browser step=observe
 code=browser_target_invalid retryable=false
 ```
 
-The local same-commit gate recorded 124/124 architecture, component,
-connection, acceptance, and privacy tests and 510/510 tests in the full
+The local same-commit gate recorded 131/131 architecture, component,
+connection, acceptance, and privacy tests and 524/524 tests in the full
 Executioner quality suite. The acceptance CLI recorded three happy and three
 fault runs.
 
