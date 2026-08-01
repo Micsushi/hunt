@@ -6,6 +6,17 @@ import type {
 } from "./account-navigation-types.ts";
 import type { PersistentPage } from "./types.ts";
 
+const ACCOUNT_OR_APPLICATION_DESTINATION = [
+  '[data-automation-id="email"]',
+  '[data-automation-id="signInSubmitButton"]',
+  '[data-automation-id="createAccountSubmitButton"]',
+  '[data-automation-id="emailVerificationPage"]',
+  '[data-automation-id="candidateHomePage"]',
+  '[data-automation-id="applyFlowMyInfoPage"]',
+  '[data-automation-id="applyFlowApplicationQuestionsPage"]',
+  '[data-automation-id="applyFlowReviewPage"]',
+].join(", ");
+
 export class PlaywrightPostingNavigationAdapter
   implements SemanticPostingNavigationAdapter
 {
@@ -33,6 +44,13 @@ export class PlaywrightPostingNavigationAdapter
       !await candidates[0]!.isEnabled()
     ) throw new TypeError("posting navigation control changed before activation");
     await candidates[0]!.click();
+    if (action === "apply_manually") {
+      const semanticPage = page as unknown as Pick<Page, "locator">;
+      await semanticPage.locator(ACCOUNT_OR_APPLICATION_DESTINATION).first().waitFor({
+        state: "attached",
+        timeout: 10_000,
+      });
+    }
   }
 }
 

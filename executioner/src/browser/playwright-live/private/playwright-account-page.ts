@@ -55,8 +55,8 @@ export class PlaywrightAccountPageAdapter implements SemanticAccountPageAdapter 
   }
 }
 
-function playwrightPage(page: PersistentPage): Pick<Page, "getByLabel" | "getByRole"> {
-  return page as unknown as Pick<Page, "getByLabel" | "getByRole">;
+function playwrightPage(page: PersistentPage): Pick<Page, "locator"> {
+  return page as unknown as Pick<Page, "locator">;
 }
 
 function semanticLocator(
@@ -67,37 +67,37 @@ function semanticLocator(
   switch (control) {
     case "email":
       return {
-        locator: semanticPage.getByLabel("Email Address", { exact: true }),
+        locator: semanticPage.locator('[data-automation-id="email"]'),
         field: true,
       };
     case "password":
       return {
-        locator: semanticPage.getByLabel("Password", { exact: true }),
+        locator: semanticPage.locator('[data-automation-id="password"]'),
         field: true,
       };
     case "password_confirmation":
       return {
-        locator: semanticPage.getByLabel("Verify New Password", { exact: true }),
+        locator: semanticPage.locator('[data-automation-id="verifyPassword"]'),
         field: true,
       };
     case "show_sign_in":
       return {
-        locator: semanticPage.getByRole("link", { name: "Sign In", exact: true }),
+        locator: semanticPage.locator('[data-automation-id="signInLink"]'),
         field: false,
       };
     case "show_create_account":
       return {
-        locator: semanticPage.getByRole("link", { name: "Create Account", exact: true }),
+        locator: semanticPage.locator('[data-automation-id="createAccountLink"]'),
         field: false,
       };
     case "submit_sign_in":
       return {
-        locator: semanticPage.getByRole("button", { name: "Sign In", exact: true }),
+        locator: semanticPage.locator('[data-automation-id="signInSubmitButton"]'),
         field: false,
       };
     case "submit_create_account":
       return {
-        locator: semanticPage.getByRole("button", { name: "Create Account", exact: true }),
+        locator: semanticPage.locator('[data-automation-id="createAccountSubmitButton"]'),
         field: false,
       };
   }

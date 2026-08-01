@@ -12,19 +12,19 @@ test("inspects one exact semantic field without exposing its locator", async () 
 
   assert.deepEqual(fact, { cardinality: 1, actionable: true });
   assert.deepEqual(page.calls, [
-    { method: "getByLabel", name: "Email Address", exact: true },
+    { method: "locator", selector: '[data-automation-id="email"]' },
   ]);
   assert.equal(JSON.stringify(fact).includes("locator"), false);
 });
 
 test("maps every closed control to its exact Workday semantic locator", async () => {
   const cases = [
-    ["password", { method: "getByLabel", name: "Password", exact: true }],
-    ["password_confirmation", { method: "getByLabel", name: "Verify New Password", exact: true }],
-    ["show_sign_in", { method: "getByRole", role: "link", name: "Sign In", exact: true }],
-    ["show_create_account", { method: "getByRole", role: "link", name: "Create Account", exact: true }],
-    ["submit_sign_in", { method: "getByRole", role: "button", name: "Sign In", exact: true }],
-    ["submit_create_account", { method: "getByRole", role: "button", name: "Create Account", exact: true }],
+    ["password", { method: "locator", selector: '[data-automation-id="password"]' }],
+    ["password_confirmation", { method: "locator", selector: '[data-automation-id="verifyPassword"]' }],
+    ["show_sign_in", { method: "locator", selector: '[data-automation-id="signInLink"]' }],
+    ["show_create_account", { method: "locator", selector: '[data-automation-id="createAccountLink"]' }],
+    ["submit_sign_in", { method: "locator", selector: '[data-automation-id="signInSubmitButton"]' }],
+    ["submit_create_account", { method: "locator", selector: '[data-automation-id="createAccountSubmitButton"]' }],
   ] as const;
   const adapter = new PlaywrightAccountPageAdapter();
 
@@ -81,7 +81,7 @@ test("fills field bytes through the exact locator without retaining value materi
 
   assert.equal(result, undefined);
   assert.deepEqual(page.calls, [
-    { method: "getByLabel", name: "Verify New Password", exact: true },
+    { method: "locator", selector: '[data-automation-id="verifyPassword"]' },
   ]);
   assert.deepEqual(locator.fillArguments, ["A\u0000B"]);
   assert.deepEqual([...bytes], [65, 0, 66]);
@@ -116,7 +116,7 @@ test("clears only the exact semantic field locator", async () => {
 
   assert.equal(await adapter.clear(page, "password"), undefined);
   assert.deepEqual(page.calls, [
-    { method: "getByLabel", name: "Password", exact: true },
+    { method: "locator", selector: '[data-automation-id="password"]' },
   ]);
   assert.equal(locator.clearCalls, 1);
 });
@@ -145,10 +145,10 @@ test("reports only whether the exact semantic field is empty", async () => {
 
 test("activates each exact semantic link or button without returning page state", async () => {
   const cases = [
-    ["show_sign_in", { method: "getByRole", role: "link", name: "Sign In", exact: true }],
-    ["show_create_account", { method: "getByRole", role: "link", name: "Create Account", exact: true }],
-    ["submit_sign_in", { method: "getByRole", role: "button", name: "Sign In", exact: true }],
-    ["submit_create_account", { method: "getByRole", role: "button", name: "Create Account", exact: true }],
+    ["show_sign_in", { method: "locator", selector: '[data-automation-id="signInLink"]' }],
+    ["show_create_account", { method: "locator", selector: '[data-automation-id="createAccountLink"]' }],
+    ["submit_sign_in", { method: "locator", selector: '[data-automation-id="signInSubmitButton"]' }],
+    ["submit_create_account", { method: "locator", selector: '[data-automation-id="createAccountSubmitButton"]' }],
   ] as const;
   const adapter = new PlaywrightAccountPageAdapter();
 
@@ -164,15 +164,19 @@ test("activates each exact semantic link or button without returning page state"
 
 class FakePage {
   readonly calls: unknown[] = [];
-  readonly locator: FakeLocator;
-  constructor(locator: FakeLocator) { this.locator = locator; }
+  readonly resultLocator: FakeLocator;
+  constructor(locator: FakeLocator) { this.resultLocator = locator; }
   getByLabel(name: string, options: { exact: boolean }): FakeLocator {
     this.calls.push({ method: "getByLabel", name, exact: options.exact });
-    return this.locator;
+    return this.resultLocator;
   }
   getByRole(role: string, options: { name: string; exact: boolean }): FakeLocator {
     this.calls.push({ method: "getByRole", role, name: options.name, exact: options.exact });
-    return this.locator;
+    return this.resultLocator;
+  }
+  locator(selector: string): FakeLocator {
+    this.calls.push({ method: "locator", selector });
+    return this.resultLocator;
   }
   async goto(): Promise<void> {}
   isClosed(): boolean { return false; }

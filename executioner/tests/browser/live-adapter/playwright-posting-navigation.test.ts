@@ -59,8 +59,18 @@ test("inspection admits a control that hydrates within the bounded semantic wait
   });
 });
 
+test("Apply Manually waits for an admitted account or application destination", async () => {
+  const page = new SemanticPage({ "button:Apply Manually": locator() });
+  const adapter = new PlaywrightPostingNavigationAdapter();
+
+  await adapter.activate(page, "apply_manually");
+
+  assert.equal(page.destinationWaits, 1);
+});
+
 class SemanticPage {
   readonly clicked: string[] = [];
+  destinationWaits = 0;
   readonly #locators: Readonly<Record<string, LocatorState>>;
   constructor(locators: Readonly<Record<string, LocatorState>>) {
     this.#locators = locators;
@@ -69,6 +79,13 @@ class SemanticPage {
     const key = `${role}:${options.name}`;
     const item = this.#locators[key] ?? locator(false, false, 0);
     return { ...item, click: async () => { this.clicked.push(key); } };
+  }
+  locator(): LocatorState {
+    const item = locator();
+    return {
+      ...item,
+      waitFor: async () => { this.destinationWaits += 1; },
+    };
   }
   async goto(): Promise<void> {}
   isClosed(): boolean { return false; }
