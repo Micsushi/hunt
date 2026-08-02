@@ -4,7 +4,7 @@ export type Stage2TerminalResult =
   | {
       readonly ok: true;
       readonly acceptance: {
-        readonly checkpoint: "account_access" | "mailbox_candidate";
+        readonly checkpoint: "account_access" | "mailbox_candidate" | "account_verified";
         readonly sourceRevision: string;
         readonly revisionId: string;
       };

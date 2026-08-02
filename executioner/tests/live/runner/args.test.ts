@@ -30,6 +30,19 @@ test("mailbox-candidate CLI accepts the same exact bounded flag set", () => {
   ]), { checkpoint: "mailbox_candidate", configPath: config, evidenceRoot: evidence });
 });
 
+test("account-verified CLI accepts the same exact bounded flag set", () => {
+  const config = resolve("owner-inputs.json");
+  const evidence = resolve("evidence");
+  assert.deepEqual(parseStage2AcceptanceArgs([
+    "--config",
+    config,
+    "--stop-after",
+    "account_verified",
+    "--evidence-root",
+    evidence,
+  ]), { checkpoint: "account_verified", configPath: config, evidenceRoot: evidence });
+});
+
 test("account-access CLI rejects missing, duplicate, relative, and widened arguments", () => {
   const config = resolve("owner-inputs.json");
   const evidence = resolve("evidence");

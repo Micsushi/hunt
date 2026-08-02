@@ -1,0 +1,109 @@
+import assert from "node:assert/strict";
+import test from "node:test";
+
+import {
+  runStage2AccountVerified,
+  type Stage2AccountVerifiedInput,
+} from "../../../src/live/runner/account-verified.ts";
+
+function input(): Stage2AccountVerifiedInput {
+  return {
+    sourceRevision: "0123456789abcdef0123456789abcdef01234567",
+    revisionId: "revision_abcdefghijklmnop",
+    approvalId: "approval_abcdefghijklmnop",
+    journeyId: "journey_abcdefghijklmnop" as never,
+    targetHandleId: "target_ref_abcdefghijklmnop",
+  };
+}
+
+const verified = {
+  ok: true as const,
+  value: {
+    kind: "account_ready" as const,
+    path: "verified_account" as const,
+    independentlyObserved: true as const,
+    verificationCandidateCount: 1 as const,
+    verificationConsumed: true as const,
+  },
+};
+
+test("account-verified runner seals only one independently observed consumed verification", async () => {
+  let written: unknown;
+  const result = await runStage2AccountVerified(input(), {
+    lifecycle: { run: async () => verified },
+    evidence: { write: async (value) => { written = value; } },
+  }, new AbortController().signal);
+  assert.equal(result.ok, true);
+  if (!result.ok) return;
+  assert.deepEqual(result.acceptance, {
+    schemaVersion: 1,
+    evidenceRevision: "s2-account-verified-acceptance-v1",
+    checkpoint: "account_verified",
+    status: "passed",
+    sourceRevision: input().sourceRevision,
+    revisionId: input().revisionId,
+    approvalId: input().approvalId,
+    journeyId: input().journeyId,
+    targetHandleId: input().targetHandleId,
+    accountState: "application_ready",
+    independentlyObservedVerifiedState: true,
+    provider: "gmail-api-v1",
+    consumedCandidateCount: 1,
+    messageBodyRetained: false,
+    submitActivated: false,
+    privacyScan: "pass",
+    cleanup: "pass",
+  });
+  assert.deepEqual(written, result.acceptance);
+  assert.doesNotMatch(JSON.stringify(result), /https?:|password|token|oauth|raw|verification_handle/iu);
+});
+
+test("account-verified runner rejects non-verification ready paths and widened successes", async () => {
+  for (const value of [
+    { ...verified.value, path: "already_ready", verificationCandidateCount: 0, verificationConsumed: false },
+    { ...verified.value, independentlyObserved: false },
+    { ...verified.value, verificationCandidateCount: 2 },
+    { ...verified.value, verificationConsumed: false },
+    { ...verified.value, extra: "widened" },
+  ]) {
+    let writes = 0;
+    const result = await runStage2AccountVerified(input(), {
+      lifecycle: { run: async () => ({ ok: true, value } as never) },
+      evidence: { write: async () => { writes += 1; } },
+    }, new AbortController().signal);
+    assert.deepEqual(result, { ok: false, code: "account_proof_invalid" });
+    assert.equal(writes, 0);
+  }
+});
+
+test("account-verified runner preserves exact errors, factual stops, cancellation, and evidence failure", async () => {
+  const failed = await runStage2AccountVerified(input(), {
+    lifecycle: { run: async () => ({ ok: false, error: { code: "browser_timeout", retryable: true } }) },
+    evidence: { write: async () => undefined },
+  }, new AbortController().signal);
+  assert.deepEqual(failed, { ok: false, code: "browser_timeout" });
+
+  const blocked = await runStage2AccountVerified(input(), {
+    lifecycle: { run: async () => ({
+      ok: true,
+      value: {
+        kind: "blocked",
+        factualOutcome: { source: "mailbox_verification", result: { kind: "mailbox_none" } },
+      },
+    }) },
+    evidence: { write: async () => undefined },
+  }, new AbortController().signal);
+  assert.deepEqual(blocked, { ok: false, code: "mailbox_none" });
+
+  const controller = new AbortController();
+  controller.abort();
+  assert.deepEqual(await runStage2AccountVerified(input(), {
+    lifecycle: { run: async () => verified },
+    evidence: { write: async () => undefined },
+  }, controller.signal), { ok: false, code: "operation_cancelled" });
+
+  assert.deepEqual(await runStage2AccountVerified(input(), {
+    lifecycle: { run: async () => verified },
+    evidence: { write: async () => { throw new Error("denied"); } },
+  }, new AbortController().signal), { ok: false, code: "evidence_unavailable" });
+});

@@ -1,6 +1,9 @@
 import { isAbsolute, normalize } from "node:path";
 
-export type Stage2AcceptanceCheckpoint = "account_access" | "mailbox_candidate";
+export type Stage2AcceptanceCheckpoint =
+  | "account_access"
+  | "mailbox_candidate"
+  | "account_verified";
 
 export interface Stage2AcceptanceArgs {
   readonly checkpoint: Stage2AcceptanceCheckpoint;
@@ -30,7 +33,9 @@ export function parseStage2AcceptanceArgs(
   if (
     configPath === undefined ||
     evidenceRoot === undefined ||
-    (checkpoint !== "account_access" && checkpoint !== "mailbox_candidate") ||
+    (checkpoint !== "account_access" &&
+      checkpoint !== "mailbox_candidate" &&
+      checkpoint !== "account_verified") ||
     !canonicalAbsolute(configPath) ||
     !canonicalAbsolute(evidenceRoot)
   ) invalid();
