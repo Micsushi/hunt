@@ -50,7 +50,7 @@ export function resolveLiveInspectionHoldPolicy(
 ): { readonly holdMs: number; readonly timeoutMs: number } {
   const timeoutMs = requestedTimeoutMs ?? 30_000;
   return flag === "1"
-    ? { holdMs: 45_000, timeoutMs: Math.max(timeoutMs, 70_000) }
+    ? { holdMs: 180_000, timeoutMs: Math.max(timeoutMs, 210_000) }
     : { holdMs: 0, timeoutMs };
 }
 

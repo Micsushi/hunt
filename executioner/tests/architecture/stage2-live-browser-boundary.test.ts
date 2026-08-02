@@ -90,16 +90,16 @@ test("live inspection hold is exact opt-in with a bounded operation-timeout floo
     timeoutMs: 12_000,
   });
   assert.deepEqual(resolveLiveInspectionHoldPolicy("1", undefined), {
-    holdMs: 45_000,
-    timeoutMs: 70_000,
+    holdMs: 180_000,
+    timeoutMs: 210_000,
   });
   assert.deepEqual(resolveLiveInspectionHoldPolicy("1", 69_999), {
-    holdMs: 45_000,
-    timeoutMs: 70_000,
+    holdMs: 180_000,
+    timeoutMs: 210_000,
   });
-  assert.deepEqual(resolveLiveInspectionHoldPolicy("1", 90_000), {
-    holdMs: 45_000,
-    timeoutMs: 90_000,
+  assert.deepEqual(resolveLiveInspectionHoldPolicy("1", 240_000), {
+    holdMs: 180_000,
+    timeoutMs: 240_000,
   });
 });
 
