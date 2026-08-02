@@ -9,6 +9,13 @@ import {
   type SourceFile,
 } from "./dependency-rule.ts";
 import { componentBoundaries } from "../../src/contracts/ownership.ts";
+import type { AccountLifecycleObservation } from "../../src/account/lifecycle/index.ts";
+import type { ClassifiedAccountObservation } from "../../src/ats/workday/live/index.ts";
+
+const acceptLifecycleObservation = (_value: AccountLifecycleObservation): void => undefined;
+const proveF5ObservationAssignable = (value: ClassifiedAccountObservation): void =>
+  acceptLifecycleObservation(value);
+void proveF5ObservationAssignable;
 
 test("component source ownership comes from the boundary matrix", () => {
   assert.deepEqual(
@@ -234,6 +241,39 @@ test("account entry owns policy only and composition owns peer capability wiring
     ]),
     [
       "src/account/entry/adapter.ts imports peer implementation src/browser/playwright-live/session.ts",
+    ],
+  );
+});
+
+test("the exact Stage 2 account lifecycle subtree shares F9 ownership", () => {
+  assert.deepEqual(
+    dependencyViolations([
+      {
+        path: "src/account/lifecycle/lifecycle.ts",
+        source:
+          'import { liveCoordinatorError } from "../../control/orchestrator/live/types.ts";',
+      },
+      {
+        path: "src/composition/s2-account-verified-runner.ts",
+        source: 'import { lifecycle } from "../account/lifecycle/index.ts";',
+      },
+    ]),
+    [],
+  );
+});
+
+test("the Stage 2 lifecycle owner does not widen unrelated account paths", () => {
+  assert.deepEqual(
+    dependencyViolations([
+      { path: "src/account/other.ts", source: "export const other = true;" },
+      {
+        path: "src/account/lifecycles/other.ts",
+        source: "export const other = true;",
+      },
+    ]),
+    [
+      "src/account/other.ts has no component owner",
+      "src/account/lifecycles/other.ts has no component owner",
     ],
   );
 });
