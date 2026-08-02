@@ -25,12 +25,15 @@ test("loads exactly two external bounded files and forwards no secret surface", 
     const ownerPath = join(root, "owner.json");
     const bootstrapPath = join(root, "gmail.json");
     await writeFile(ownerPath, '{"schemaVersion":1}');
-    await writeFile(bootstrapPath, '{"schemaVersion":1}');
+    await writeFile(bootstrapPath, '{"schemaVersion":1,"installedClientConfigPath":"C:\\\\protected\\\\google.json"}');
     let calls = 0;
     const operation: GmailBootstrapOperation = async (owner, bootstrap, context) => {
       calls += 1;
       assert.deepEqual(owner, { schemaVersion: 1 });
-      assert.deepEqual(bootstrap, { schemaVersion: 1 });
+      assert.deepEqual(bootstrap, {
+        schemaVersion: 1,
+        installedClientConfigPath: "C:\\protected\\google.json",
+      });
       assert.equal(context.ownerConfigPath, ownerPath);
       assert.equal(context.bootstrapInputPath, bootstrapPath);
       return success;

@@ -12,12 +12,13 @@ const expected = {
   gmailHandleId: "secret_handle_fedcba9876543210fedcba9876543210",
 };
 
-test("admits one exact bound desktop-client and verification-host input", () => {
+test("admits one exact bound installed-client path and verification-host input", () => {
   const input = {
     schemaVersion: 1,
-    contractRevision: "s2-gmail-bootstrap-v1",
+    contractRevision: "s2-gmail-bootstrap-v2",
     ...expected,
     desktopClientId: "1234567890-example1.apps.googleusercontent.com",
+    installedClientConfigPath: "C:\\Users\\example\\AppData\\Local\\Hunt\\google-installed-client.json",
     verificationHost: "wd5.myworkday.com",
   };
   assert.deepEqual(admitGmailBootstrapInput(input, expected), input);
@@ -31,15 +32,19 @@ test("admits one exact bound desktop-client and verification-host input", () => 
 test("rejects extra fields, wrong binding, web clients, and unsafe hosts", () => {
   const base = {
     schemaVersion: 1,
-    contractRevision: "s2-gmail-bootstrap-v1",
+    contractRevision: "s2-gmail-bootstrap-v2",
     ...expected,
     desktopClientId: "1234567890-example1.apps.googleusercontent.com",
+    installedClientConfigPath: "C:\\Users\\example\\AppData\\Local\\Hunt\\google-installed-client.json",
     verificationHost: "wd5.myworkday.com",
   };
   for (const value of [
     { ...base, senderAddress: "private@example.invalid" },
     { ...base, journeyId: "journey_fedcba9876543210" },
     { ...base, desktopClientId: "client-secret-value" },
+    { ...base, installedClientConfigPath: "relative.json" },
+    { ...base, installedClientConfigPath: "C:\\Users\\example\\..\\google.json" },
+    { ...base, installedClientConfigPath: `C:\\${"x".repeat(4094)}` },
     { ...base, verificationHost: "https://wd5.myworkday.com/token" },
     { ...base, verificationHost: "127.0.0.1" },
   ]) {

@@ -91,18 +91,19 @@ function fixture() {
     secrets: join(root, "secrets"),
     evidence: join(root, "evidence"),
     ownerConfig: join(root, "owner-inputs.json"),
+    oauthClientConfig: join(root, "google-installed-client.json"),
     accountRecord: join(root, "account.s2secret"),
     gmailRecord: join(root, "gmail.s2secret"),
   };
   for (const path of [paths.runtime, paths.secrets, paths.evidence]) mkdirSync(path);
-  for (const path of [paths.ownerConfig, paths.accountRecord, paths.gmailRecord]) writeFileSync(path, "x");
+  for (const path of [paths.ownerConfig, paths.oauthClientConfig, paths.accountRecord, paths.gmailRecord]) writeFileSync(path, "x");
   return { root, paths };
 }
 
 test("admits current-user-owned protected ACLs and permits only current user and SYSTEM allows", () => {
   const record = fixture();
   try {
-    const process = new ReplyProcess(reply(Array.from({ length: 6 }, () => ({
+    const process = new ReplyProcess(reply(Array.from({ length: 7 }, () => ({
       aces: [
         { sid: USER, allow: true },
         { sid: SYSTEM, allow: true },
@@ -135,7 +136,7 @@ test("rejects shared, inherited, unprotected, and wrong-owner ACLs with value-fr
       [{ aces: [{ sid: USER, allow: true, rights: 1 }] }, "current_user_access"],
     ];
     for (const [entry, reason] of cases) {
-      const process = new ReplyProcess(reply([entry, {}, {}, {}, {}, {}]));
+      const process = new ReplyProcess(reply([entry, {}, {}, {}, {}, {}, {}]));
       const result = new WindowsCurrentUserAclAdmission({ process }).admit(record.paths);
       assert.deepEqual(result, {
         ok: false,
@@ -155,7 +156,7 @@ test("fails closed for timeout, malformed output, helper unavailability, and hel
       [new Error("timeout"), "helper_failed"],
       [Buffer.from("malformed"), "helper_failed"],
       [new Error("ENOENT"), "helper_failed"],
-      [reply([{ status: 1 }, {}, {}, {}, {}, {}]), "reparse"],
+      [reply([{ status: 1 }, {}, {}, {}, {}, {}, {}]), "reparse"],
     ];
     for (const [response, reason] of cases) {
       const result = new WindowsCurrentUserAclAdmission({
@@ -176,7 +177,7 @@ test("rejects local reparse targets before invoking the helper", () => {
   try {
     const linkedRuntime = join(record.root, "runtime-link");
     symlinkSync(record.paths.runtime, linkedRuntime, "junction");
-    const process = new ReplyProcess(reply(Array.from({ length: 6 }, () => ({}))));
+    const process = new ReplyProcess(reply(Array.from({ length: 7 }, () => ({}))));
     const result = new WindowsCurrentUserAclAdmission({ process }).admit({
       ...record.paths,
       runtime: linkedRuntime,
@@ -196,10 +197,11 @@ test("maps owner config and existing secret record failures to their exact priva
   try {
     for (const [index, target] of [
       [3, "owner_config"],
-      [4, "secret_record"],
+      [4, "oauth_client_config"],
       [5, "secret_record"],
+      [6, "secret_record"],
     ] as const) {
-      const entries = Array.from({ length: 6 }, () => ({} as Entry));
+      const entries = Array.from({ length: 7 }, () => ({} as Entry));
       entries[index] = { owner: SYSTEM };
       assert.deepEqual(
         new WindowsCurrentUserAclAdmission({ process: new ReplyProcess(reply(entries)) })
@@ -258,7 +260,7 @@ foreach ($index in 0..2) {
   $acl.AddAccessRule([System.Security.AccessControl.FileSystemAccessRule]::new($system, 'FullControl', $inherit, $propagation, $allow))
   [System.IO.Directory]::SetAccessControl($paths[$index], $acl)
 }
-foreach ($index in 3..5) {
+foreach ($index in 3..6) {
   $acl = New-Object System.Security.AccessControl.FileSecurity
   $acl.SetOwner($current)
   $acl.SetAccessRuleProtection($true, $false)
@@ -284,6 +286,7 @@ foreach ($index in 3..5) {
         paths.secrets,
         paths.evidence,
         paths.ownerConfig,
+        paths.oauthClientConfig,
         paths.accountRecord,
         paths.gmailRecord,
       ]),

@@ -1,0 +1,26 @@
+[
+  {
+    "value": "expected_desktop_client_id",
+    "ordinaryNode": "exact_equality_input",
+    "trustedWindowsHelper": "exact_equality_check",
+    "durableOutput": "none"
+  },
+  {
+    "value": "installed_client_canonical_path",
+    "ordinaryNode": "admission_and_acl_only",
+    "trustedWindowsHelper": "bounded_file_open",
+    "durableOutput": "none"
+  },
+  {
+    "value": "installed_client_json_and_client_secret",
+    "ordinaryNode": "none",
+    "trustedWindowsHelper": "sole_reader_token_form_only",
+    "durableOutput": "none"
+  },
+  {
+    "value": "gmail_access_token_and_mailbox_identity",
+    "ordinaryNode": "none",
+    "trustedWindowsHelper": "oauth_profile_and_bundle_sealing",
+    "durableOutput": "dpapi_ciphertext_only"
+  }
+]

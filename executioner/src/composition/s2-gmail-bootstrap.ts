@@ -1,5 +1,5 @@
-import { existsSync } from "node:fs";
-import { join } from "node:path";
+import { existsSync, lstatSync, realpathSync } from "node:fs";
+import { isAbsolute, join, normalize, relative, resolve } from "node:path";
 
 import type {
   JourneyId,
@@ -56,6 +56,7 @@ export type GmailBootstrapErrorCode =
   | "account_handle_invalid"
   | "gmail_handle_invalid"
   | "gmail_handle_exists"
+  | "gmail_oauth_client_invalid"
   | "gmail_oauth_cancelled"
   | "gmail_oauth_denied"
   | "gmail_identity_mismatch"
@@ -102,6 +103,11 @@ export async function bootstrapS2GmailAuthorization(
     gmailHandleId: owner.gmailAuthorization.handleId,
   });
   if (bootstrap === null) return failure("gmail_bootstrap_input_invalid");
+  const installedClientConfigPath = admitInstalledClientConfigPath(
+    bootstrap.installedClientConfigPath,
+    options.forbiddenRoots,
+  );
+  if (installedClientConfigPath === null) return failure("gmail_oauth_client_invalid");
   const accountRecordPath = recordPath(owner, owner.accountSecret.handleId);
   const gmailRecordPath = recordPath(owner, owner.gmailAuthorization.handleId);
   if (!existsSync(accountRecordPath)) return failure("account_handle_invalid");
@@ -110,11 +116,18 @@ export async function bootstrapS2GmailAuthorization(
     secrets: owner.roots.secrets.path,
     evidence: owner.roots.evidence.path,
     ownerConfig: options.bootstrapInputPath,
+    oauthClientConfig: installedClientConfigPath,
     accountRecord: accountRecordPath,
   });
-  if (!policyAcl.ok) return failure(policyAcl.failure.target === "owner_config"
-    ? "gmail_bootstrap_input_invalid"
-    : "secret_root_invalid");
+  if (!policyAcl.ok) {
+    if (policyAcl.failure.target === "owner_config") {
+      return failure("gmail_bootstrap_input_invalid");
+    }
+    if (policyAcl.failure.target === "oauth_client_config") {
+      return failure("gmail_oauth_client_invalid");
+    }
+    return failure("secret_root_invalid");
+  }
 
   const account = await readSecretRecord(
     owner.roots.secrets.path,
@@ -149,6 +162,7 @@ export async function bootstrapS2GmailAuthorization(
       accountMetadata: account.metadataBytes,
       accountCiphertext: account.sealedBytes,
       clientId: bootstrap.desktopClientId,
+      installedClientConfigPath,
       binding: {
         journeyId: owner.journeyId,
         recipientBindingId: owner.recipientBindingId,
@@ -183,6 +197,7 @@ export async function bootstrapS2GmailAuthorization(
     secrets: owner.roots.secrets.path,
     evidence: owner.roots.evidence.path,
     ownerConfig: options.bootstrapInputPath,
+    oauthClientConfig: installedClientConfigPath,
     accountRecord: accountRecordPath,
     gmailRecord: gmailRecordPath,
   });
@@ -302,11 +317,43 @@ function sealerError(error: unknown, signal: AbortSignal): GmailBootstrapErrorCo
   const message = error instanceof Error ? error.message : "";
   if (signal.aborted || message === "Gmail OAuth cancelled") return "gmail_oauth_cancelled";
   if (message === "Gmail OAuth denied") return "gmail_oauth_denied";
+  if (message === "Gmail OAuth client invalid") return "gmail_oauth_client_invalid";
   if (message === "Gmail mailbox identity mismatched") return "gmail_identity_mismatch";
   if (message === "Gmail OAuth scope invalid") return "gmail_scope_invalid";
   if (message === "Gmail OAuth token expiry invalid") return "gmail_token_expiry_invalid";
   if (message === "Gmail OAuth timeout") return "gmail_oauth_timeout";
   return "gmail_seal_failed";
+}
+
+function admitInstalledClientConfigPath(
+  value: string,
+  forbiddenRoots: readonly string[],
+): string | null {
+  try {
+    if (!isAbsolute(value) || normalize(value) !== value) return null;
+    const info = lstatSync(value);
+    if (!info.isFile() || info.isSymbolicLink() || info.size < 2 || info.size > 64 * 1024) {
+      return null;
+    }
+    const canonical = realpathSync.native(value);
+    if (comparable(canonical) !== comparable(resolve(value))) return null;
+    for (const root of forbiddenRoots) {
+      if (within(realpathSync.native(root), canonical)) return null;
+    }
+    return canonical;
+  } catch {
+    return null;
+  }
+}
+
+function within(parent: string, child: string): boolean {
+  const path = relative(parent, child);
+  return path === "" || (!path.startsWith("..") && !isAbsolute(path));
+}
+
+function comparable(path: string): string {
+  const value = normalize(path);
+  return process.platform === "win32" ? value.toLowerCase() : value;
 }
 
 function failure(code: GmailBootstrapErrorCode): GmailBootstrapResult {
