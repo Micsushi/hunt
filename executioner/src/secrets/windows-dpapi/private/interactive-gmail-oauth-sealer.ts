@@ -43,6 +43,7 @@ public static class HuntInteractiveGmailOAuthSealer
         byte[][] input = null;
         byte[] account = null;
         byte[] bundle = null;
+        byte[] framedBundle = null;
         byte[] sealedValue = null;
         Token token = null;
         InstalledClient installedClient = null;
@@ -85,7 +86,8 @@ public static class HuntInteractiveGmailOAuthSealer
             bundle = new UTF8Encoding(false, true).GetBytes(
                 new JavaScriptSerializer().Serialize(exactBundle)
             );
-            sealedValue = ProtectedData.Protect(bundle, input[0], DataProtectionScope.CurrentUser);
+            framedBundle = FrameBundle(bundle);
+            sealedValue = ProtectedData.Protect(framedBundle, input[0], DataProtectionScope.CurrentUser);
             WriteOutput(sealedValue);
             return 0;
         }
@@ -94,6 +96,7 @@ public static class HuntInteractiveGmailOAuthSealer
         finally
         {
             Clear(sealedValue);
+            Clear(framedBundle);
             Clear(bundle);
             Clear(account);
             if (token != null) token.Clear();
@@ -585,6 +588,20 @@ public static class HuntInteractiveGmailOAuthSealer
         writer.Write(ciphertext.Length);
         writer.Write(ciphertext);
         writer.Flush();
+    }
+
+    private static byte[] FrameBundle(byte[] bundle)
+    {
+        if (bundle == null || bundle.Length < 1 || bundle.Length > MaximumSection - 8)
+            throw new InvalidDataException();
+        byte[] output = new byte[8 + bundle.Length];
+        output[0] = 1;
+        output[4] = (byte)bundle.Length;
+        output[5] = (byte)(bundle.Length >> 8);
+        output[6] = (byte)(bundle.Length >> 16);
+        output[7] = (byte)(bundle.Length >> 24);
+        Buffer.BlockCopy(bundle, 0, output, 8, bundle.Length);
+        return output;
     }
 
     private static void Clear(byte[] value)
