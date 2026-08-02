@@ -1146,9 +1146,15 @@ public static class HuntInteractiveGmailOAuthSealer
     )
     {
         bool hasRefresh = response != null && response.ContainsKey("refresh_token");
+        bool hasRefreshExpiry = response != null &&
+            response.ContainsKey("refresh_token_expires_in");
         string[] keys = hasRefresh
-            ? new string[] { "access_token", "expires_in", "refresh_token", "scope", "token_type" }
-            : new string[] { "access_token", "expires_in", "scope", "token_type" };
+            ? hasRefreshExpiry
+                ? new string[] { "access_token", "expires_in", "refresh_token", "refresh_token_expires_in", "scope", "token_type" }
+                : new string[] { "access_token", "expires_in", "refresh_token", "scope", "token_type" }
+            : hasRefreshExpiry
+                ? new string[] { "access_token", "expires_in", "refresh_token_expires_in", "scope", "token_type" }
+                : new string[] { "access_token", "expires_in", "scope", "token_type" };
         if (response == null || (requireRefresh && !hasRefresh)) throw new FlowException(3);
         ExactKeys(response, keys);
         string access = StringField(response, "access_token", 1, 4096);
@@ -1158,6 +1164,8 @@ public static class HuntInteractiveGmailOAuthSealer
         if (StringField(response, "scope", Scope.Length, Scope.Length) != Scope)
             throw new FlowException(5);
         int expires = IntegerField(response, "expires_in", 120, 7200);
+        if (hasRefreshExpiry)
+            IntegerField(response, "refresh_token_expires_in", 1, 31536000);
         byte[] refresh = null;
         try
         {
