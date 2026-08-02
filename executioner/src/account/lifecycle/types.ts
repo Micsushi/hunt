@@ -73,9 +73,20 @@ export interface AccountLifecycleAccountStateObserver {
 export type AccountLifecycleCredentialMutationResult =
   | CredentialMutationResult
   | {
-      readonly kind: "account_absent" | "account_exists";
+      readonly kind: "account_absent" | "account_exists" | "sign_in_required";
       readonly attemptedFields: readonly ["email", "password"];
     };
+
+export type AccountLifecycleTraceEvent =
+  | "lifecycle_page_sign_in"
+  | "lifecycle_page_create_account"
+  | "lifecycle_page_verification_required"
+  | "lifecycle_page_application_ready"
+  | "lifecycle_page_manual_intervention"
+  | "lifecycle_action_sign_in"
+  | "lifecycle_action_create_account"
+  | "lifecycle_action_verification_link"
+  | "lifecycle_cycle_stopped";
 
 export interface AccountLifecycleCredentialMutationAdapter {
   mutate(
@@ -93,6 +104,7 @@ export interface AccountLifecycleDependencies {
   readonly artifacts: VerificationArtifact;
   readonly navigator: PrivilegedVerificationNavigator;
   readonly accountState: AccountLifecycleAccountStateObserver;
+  readonly trace?: (event: AccountLifecycleTraceEvent) => void;
 }
 
 export interface AccountLifecycleInput {

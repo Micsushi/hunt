@@ -103,12 +103,7 @@ export class AccountVerificationLifecycle {
     ) {
       return mailboxInvalid();
     }
-    const observed = await this.#dependencies.accountState.observe({
-      schemaVersion: 1,
-      journeyId: input.journeyId,
-      sessionId: input.session.sessionId,
-      target: input.target,
-    }, signal);
+    const observed = await this.#observe(input, signal);
     if (!observed.ok) return observed;
     if (observed.value.kind === "target_mismatch") {
       return targetBlocked({
@@ -238,6 +233,23 @@ export class AccountVerificationLifecycle {
     if (result.kind === "application_ready") {
       return this.#confirmReady(input, signal, "created_account");
     }
+    if (result.kind === "sign_in_required") {
+      const confirmed = await this.#observe(input, signal);
+      if (!confirmed.ok) return confirmed;
+      if (
+        confirmed.value.kind !== "classified_account" ||
+        confirmed.value.state.kind !== "existing_account" ||
+        confirmed.value.state.accountFact !== undefined
+      ) {
+        if (
+          confirmed.value.kind === "classified_account" &&
+          confirmed.value.state.kind === "existing_account" &&
+          confirmed.value.state.accountFact === "absent"
+        ) this.#emit("lifecycle_cycle_stopped");
+        return denied();
+      }
+      return this.#signInAfterCreate(input, signal, "created_account");
+    }
     if (result.kind !== "account_exists") return denied();
     const confirmed = await this.#observe(input, signal);
     if (!confirmed.ok) return confirmed;
@@ -246,6 +258,14 @@ export class AccountVerificationLifecycle {
       confirmed.value.state.kind !== "create_account" ||
       confirmed.value.state.accountFact !== "exists"
     ) return denied();
+    return this.#signInAfterCreate(input, signal, "reused_account");
+  }
+
+  async #signInAfterCreate(
+    input: AccountLifecycleInput,
+    signal: AbortSignal,
+    path: "created_account" | "reused_account",
+  ): Promise<AccountLifecycleResult> {
     const signedIn = await this.#credentialMutation(
       input,
       signal,
@@ -266,9 +286,11 @@ export class AccountVerificationLifecycle {
       });
     }
     if (signInResult.kind === "verification_required") return this.#verify(input, signal);
-    return signInResult.kind === "application_ready"
-      ? this.#confirmReady(input, signal, "reused_account")
-      : denied();
+    if (signInResult.kind === "application_ready") {
+      return this.#confirmReady(input, signal, path);
+    }
+    this.#emit("lifecycle_cycle_stopped");
+    return denied();
   }
 
   #credentialMutation(
@@ -277,6 +299,11 @@ export class AccountVerificationLifecycle {
     mode: "sign_in" | "create_account",
     operationId: AccountLifecycleInput["operationId"],
   ) {
+    this.#emit(
+      mode === "sign_in"
+        ? "lifecycle_action_sign_in"
+        : "lifecycle_action_create_account",
+    );
     return this.#dependencies.credentialMutation.mutate({
       schemaVersion: 1,
       journeyId: input.journeyId,
@@ -290,13 +317,17 @@ export class AccountVerificationLifecycle {
     }, signal);
   }
 
-  #observe(input: AccountLifecycleInput, signal: AbortSignal) {
-    return this.#dependencies.accountState.observe({
+  async #observe(input: AccountLifecycleInput, signal: AbortSignal) {
+    const observed = await this.#dependencies.accountState.observe({
       schemaVersion: 1,
       journeyId: input.journeyId,
       sessionId: input.session.sessionId,
       target: input.target,
     }, signal);
+    if (observed.ok && observed.value.kind === "classified_account") {
+      this.#emit(accountPageTrace(observed.value.state.kind));
+    }
+    return observed;
   }
 
   async #confirmReady(
@@ -360,6 +391,7 @@ export class AccountVerificationLifecycle {
     }
     if (artifact.state === "expired") return mailboxBlocked("mailbox_expired");
     if (artifact.state !== "available") return mailboxBlocked("mailbox_consumed");
+    this.#emit("lifecycle_action_verification_link");
     const navigated = await this.#dependencies.navigator.navigate({
       schemaVersion: 1,
       journeyId: input.journeyId,
@@ -377,12 +409,7 @@ export class AccountVerificationLifecycle {
     if (navigated.value.kind !== "navigated") {
       return navigationDenied();
     }
-    const confirmed = await this.#dependencies.accountState.observe({
-      schemaVersion: 1,
-      journeyId: input.journeyId,
-      sessionId: input.session.sessionId,
-      target: input.target,
-    }, signal);
+    const confirmed = await this.#observe(input, signal);
     if (!confirmed.ok) return confirmed;
     if (confirmed.value.kind !== "classified_account") return denied();
     if (confirmed.value.state.kind === "application_ready") {
@@ -398,17 +425,12 @@ export class AccountVerificationLifecycle {
       confirmed.value.state.kind !== "existing_account" &&
       confirmed.value.state.kind !== "create_account"
     ) return denied();
-    const signedIn = await this.#dependencies.credentialMutation.mutate({
-      schemaVersion: 1,
-      journeyId: input.journeyId,
-      operationId: input.operations.postVerificationSignIn,
-      sessionId: input.session.sessionId,
-      target: input.target,
-      now: input.now,
-      mode: "sign_in",
-      credential: input.credential,
-      fields: ["email", "password"],
-    }, signal);
+    const signedIn = await this.#credentialMutation(
+      input,
+      signal,
+      "sign_in",
+      input.operations.postVerificationSignIn,
+    );
     if (!signedIn.ok) return signedIn;
     try {
       const result = parseLifecycleCredentialMutationResult(signedIn.value);
@@ -418,22 +440,37 @@ export class AccountVerificationLifecycle {
           reason: result.reason,
         });
       }
-      if (result.kind !== "application_ready") return denied();
+      if (result.kind !== "application_ready") {
+        this.#emit("lifecycle_cycle_stopped");
+        return denied();
+      }
     } catch {
       return denied();
     }
-    const final = await this.#dependencies.accountState.observe({
-      schemaVersion: 1,
-      journeyId: input.journeyId,
-      sessionId: input.session.sessionId,
-      target: input.target,
-    }, signal);
+    const final = await this.#observe(input, signal);
     if (!final.ok) return final;
     return final.value.kind === "classified_account" &&
         final.value.state.kind === "application_ready"
       ? ready("verified_account", 1, true)
       : denied();
   }
+
+  #emit(event: Parameters<NonNullable<AccountLifecycleDependencies["trace"]>>[0]): void {
+    try {
+      this.#dependencies.trace?.(event);
+    } catch {
+      // Value-free diagnostics cannot affect account behavior.
+    }
+  }
+}
+
+function accountPageTrace(
+  kind: "existing_account" | "create_account" | "verification_required" |
+    "application_ready" | "manual_intervention",
+): Parameters<NonNullable<AccountLifecycleDependencies["trace"]>>[0] {
+  return kind === "existing_account"
+    ? "lifecycle_page_sign_in"
+    : `lifecycle_page_${kind}`;
 }
 
 function parseLifecycleCredentialMutationResult(
@@ -452,7 +489,9 @@ function parseLifecycleCredentialMutationResult(
       readonly attemptedFields?: unknown;
     };
     if (
-      (candidate.kind === "account_absent" || candidate.kind === "account_exists") &&
+      (candidate.kind === "account_absent" ||
+        candidate.kind === "account_exists" ||
+        candidate.kind === "sign_in_required") &&
       Array.isArray(candidate.attemptedFields) &&
       candidate.attemptedFields.length === 2 &&
       candidate.attemptedFields[0] === "email" &&

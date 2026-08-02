@@ -58,7 +58,9 @@ export function createAccountEntryCredentialMutationAdapter(
       const result = internal.then((settled) => {
         if (
           settled.ok &&
-          (settled.value.kind === "account_absent" || settled.value.kind === "account_exists")
+          (settled.value.kind === "account_absent" ||
+            settled.value.kind === "account_exists" ||
+            settled.value.kind === "sign_in_required")
         ) return failure("credential_mutation_denied");
         return settled as Awaited<ReturnType<CredentialMutationAdapter["mutate"]>>;
       });
@@ -261,6 +263,17 @@ async function mutateOnce(
               return accountStateResult(reconciled.value.state, ["email", "password"]);
             }
             result = factualResult;
+            return accountStateResult(reconciled.value.state, ["email", "password"]);
+          }
+          if (
+            request.mode === "create_account" &&
+            reconciled.value.state.kind === "existing_account"
+          ) {
+            emit(dependencies, "post_submit_sign_in_required");
+            result = {
+              kind: "sign_in_required",
+              attemptedFields: ["email", "password"],
+            };
             return accountStateResult(reconciled.value.state, ["email", "password"]);
           }
           if (

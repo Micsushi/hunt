@@ -305,6 +305,38 @@ test("fresh-create switches semantically, reclassifies, and keeps confirmation i
   ]);
 });
 
+test("create-account that reaches sign-in reports the next required page", async () => {
+  const fixture = accountFixture(["create_account", "existing_account"]);
+  const events: string[] = [];
+
+  const adapter = createAccountEntryCredentialMutationAdapter({
+    ...fixture.dependencies,
+    trace: (event) => events.push(event),
+  });
+  const accountRequest = request("create_account");
+  const result = await adapter.lifecycle.mutate(
+    accountRequest,
+    new AbortController().signal,
+  );
+
+  assert.deepEqual(result, {
+    ok: true,
+    value: { kind: "sign_in_required", attemptedFields: ["email", "password"] },
+  });
+  assert.equal(fixture.operations.some((operation) => operation.startsWith("clear:")), false);
+  assert.deepEqual(events.slice(-2), [
+    "post_submit_existing_account",
+    "post_submit_sign_in_required",
+  ]);
+  assert.deepEqual(
+    await adapter.mutate(accountRequest, new AbortController().signal),
+    {
+      ok: false,
+      error: { code: "credential_mutation_denied", retryable: false },
+    },
+  );
+});
+
 test("sign-in traces its semantic switch from an initial create page", async () => {
   const fixture = accountFixture([
     "create_account",

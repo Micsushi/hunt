@@ -248,15 +248,23 @@ Provision both active secret handles before running this checkpoint:
 npm run live:s2 -- --config C:\private\f2-owner-inputs.json --stop-after account_verified --evidence-root C:\private\s2-evidence
 ```
 
-The runner inspects both handles before browser creation. The lifecycle first
-observes the page. An application-ready page is a no-op and a verification page
-enters verification. Existing-account intent signs in, while fresh-create intent
-switches to Create Account and creates first even when Workday defaults to the
-Sign In page. Ordinary sign-in rejection never implies account absence. If
-create returns the exact private `account_exists` fact, the lifecycle
-independently observes it and switches once to sign-in. This prevents an
-ambiguous sign-in error from blocking first-time signup while still preventing
-duplicate account creation.
+The runner inspects both handles before browser creation and classifies the
+current page before every account decision. Fresh-create intent uses Create
+Account first even when Workday defaults to Sign In. After account creation,
+the observed page determines the next step:
+
+- `application_ready` means signup authenticated the session and no login or
+  email verification is required.
+- `verification_required` starts the bounded Gmail verification path. The
+  verification destination is classified again and may require one Sign In.
+- a transition from Create Account to Sign In performs one Sign In and then
+  requires an independently observed `application_ready` page.
+
+The lifecycle emits only fixed page and action identifiers. If the fallback
+returns toward Create Account or repeats verification instead of advancing, it
+emits `lifecycle_cycle_stopped` and fails closed. It never creates again from
+that fallback. An exact private `account_exists` fact may also switch once to
+Sign In, while an ordinary sign-in rejection never implies account absence.
 
 Tests use Node's built-in runner. Components may depend on shared contracts but
 not on peer implementations or C3 v2 source.

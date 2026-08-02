@@ -43,6 +43,7 @@ export type AccountEntryTraceEvent =
   | "post_submit_create_account"
   | "post_submit_account_absent"
   | "post_submit_account_exists"
+  | "post_submit_sign_in_required"
   | "post_submit_no_progress"
   | "post_submit_verification_required"
   | "post_submit_application_ready"
@@ -139,7 +140,7 @@ export interface AccountEntryDependencies {
 export type AccountLifecycleCredentialMutationResult =
   | CredentialMutationResult
   | {
-      readonly kind: "account_absent" | "account_exists";
+      readonly kind: "account_absent" | "account_exists" | "sign_in_required";
       readonly attemptedFields: readonly ["email", "password"];
     };
 
@@ -168,9 +169,10 @@ export function accountStateResult(
 
 export function accountFactResult(
   state: AccountState,
-): Extract<AccountLifecycleCredentialMutationResult, {
+): {
   readonly kind: "account_absent" | "account_exists";
-}> | undefined {
+  readonly attemptedFields: readonly ["email", "password"];
+} | undefined {
   if (state.kind === "existing_account" && state.accountFact === "absent") {
     return { kind: "account_absent", attemptedFields: ["email", "password"] };
   }

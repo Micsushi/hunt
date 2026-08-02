@@ -487,6 +487,7 @@ export async function runStage2AccountVerifiedFromOwnerConfig(
               sessionId: session.sessionId,
               target: bindings.target,
             }),
+            trace: valueFreeTrace,
           }, authorization),
         );
         return lifecycle.run({
@@ -700,6 +701,7 @@ export function createAuthorizationBoundLifecycleDependencies(
     artifacts,
     navigator,
     accountState,
+    trace: dependencies.trace,
   };
   return Object.freeze(bounded);
 }

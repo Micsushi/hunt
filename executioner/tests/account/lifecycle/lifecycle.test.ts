@@ -252,6 +252,107 @@ test("exact account-exists after create switches to sign-in once", async () => {
   );
 });
 
+test("fresh signup may land on sign-in and then reach the application", async () => {
+  const credential = privateCredential(
+    { kind: "sign_in_required", attemptedFields: ["email", "password"] },
+    { kind: "application_ready", attemptedFields: ["email", "password"] },
+  );
+  const accountState = observer(
+    "existing_account",
+    "existing_account",
+    "application_ready",
+  );
+  const events: string[] = [];
+  const lifecycle = new AccountVerificationLifecycle({
+    credentialMutation: credential.port,
+    mailbox: createMailboxProviderFake().port,
+    artifacts: createVerificationArtifactFake().port,
+    navigator: createPrivilegedVerificationNavigatorFake().port,
+    accountState: accountState.port,
+    trace: (event) => events.push(event),
+  });
+
+  const result = await lifecycle.run({
+    ...input(),
+    accountIntent: "fresh_create",
+  }, new AbortController().signal);
+
+  assert.equal(result.ok && result.value.kind, "account_ready");
+  assert.equal(result.ok && result.value.kind === "account_ready" && result.value.path, "created_account");
+  assert.deepEqual(
+    credential.calls.map(({ request }) => (request as { readonly mode: string }).mode),
+    ["create_account", "sign_in"],
+  );
+  assert.deepEqual(events, [
+    "lifecycle_page_sign_in",
+    "lifecycle_action_create_account",
+    "lifecycle_page_sign_in",
+    "lifecycle_action_sign_in",
+    "lifecycle_page_application_ready",
+  ]);
+});
+
+test("create-to-sign-in fallback stops instead of cycling back to signup", async () => {
+  const credential = privateCredential(
+    { kind: "sign_in_required", attemptedFields: ["email", "password"] },
+    { kind: "account_absent", attemptedFields: ["email", "password"] },
+  );
+  const events: string[] = [];
+  const lifecycle = new AccountVerificationLifecycle({
+    credentialMutation: credential.port,
+    mailbox: createMailboxProviderFake().port,
+    artifacts: createVerificationArtifactFake().port,
+    navigator: createPrivilegedVerificationNavigatorFake().port,
+    accountState: observer("existing_account", "existing_account").port,
+    trace: (event) => events.push(event),
+  });
+
+  const result = await lifecycle.run({
+    ...input(),
+    accountIntent: "fresh_create",
+  }, new AbortController().signal);
+
+  assert.deepEqual(result, {
+    ok: false,
+    error: { code: "credential_mutation_denied", retryable: false },
+  });
+  assert.deepEqual(
+    credential.calls.map(({ request }) => (request as { readonly mode: string }).mode),
+    ["create_account", "sign_in"],
+  );
+  assert.equal(events.at(-1), "lifecycle_cycle_stopped");
+});
+
+test("create-to-sign-in fallback rejects an independently observed absent account", async () => {
+  const credential = privateCredential(
+    { kind: "sign_in_required", attemptedFields: ["email", "password"] },
+  );
+  const events: string[] = [];
+  const lifecycle = new AccountVerificationLifecycle({
+    credentialMutation: credential.port,
+    mailbox: createMailboxProviderFake().port,
+    artifacts: createVerificationArtifactFake().port,
+    navigator: createPrivilegedVerificationNavigatorFake().port,
+    accountState: observer("existing_account", "account_absent").port,
+    trace: (event) => events.push(event),
+  });
+
+  const result = await lifecycle.run({
+    ...input(),
+    accountIntent: "fresh_create",
+  }, new AbortController().signal);
+
+  assert.deepEqual(result, {
+    ok: false,
+    error: { code: "credential_mutation_denied", retryable: false },
+  });
+  assert.deepEqual(
+    credential.calls.map(({ request }) => (request as { readonly mode: string }).mode),
+    ["create_account"],
+  );
+  assert.equal(events.at(-1), "lifecycle_cycle_stopped");
+});
+
 test("create completion requires an independent application-ready observation", async () => {
   const credential = privateCredential(
     { kind: "application_ready", attemptedFields: ["email", "password"] },
@@ -344,12 +445,14 @@ test("post-navigation create-account state switches to sign-in and is reclassifi
     "create_account",
     "application_ready",
   );
+  const events: string[] = [];
   const lifecycle = new AccountVerificationLifecycle({
     credentialMutation: credential.port,
     mailbox: mailbox.port,
     artifacts: artifacts.port,
     navigator: navigator.port,
     accountState: accountState.port,
+    trace: (event) => events.push(event),
   });
 
   const result = await lifecycle.run(input(), new AbortController().signal);
@@ -366,6 +469,13 @@ test("post-navigation create-account state switches to sign-in and is reclassifi
     }],
   );
   assert.equal(accountState.calls.length, 3);
+  assert.deepEqual(events, [
+    "lifecycle_page_verification_required",
+    "lifecycle_action_verification_link",
+    "lifecycle_page_create_account",
+    "lifecycle_action_sign_in",
+    "lifecycle_page_application_ready",
+  ]);
 });
 
 test("a reused account may require mailbox verification after sign-in", async () => {
