@@ -8,7 +8,7 @@ const expected = {
   schemaVersion: 1,
   stage: "s2",
   feature: "s2-f2-t3",
-  assemblyBaseRevision: "c8bc005338942d414bb41b00c6c4b13cb6550895",
+  assemblyBaseRevision: "a9a1854ff6ce840f253e2fb64926c59b7a2ed239",
   acceptedInputs: {
     s2F0: "730846b57a8ab7901a9818794921f8f9da01e0ed",
     s2F1T5: "d6602abf41f181376164eac2d32d587fc6bf5a5b",
@@ -36,6 +36,8 @@ const expected = {
     s2F2AccountOwnershipRepair: "6c6263da88c60711b0bc9d6c4761bb90381edf5f",
     s2F2AccountComposition: "ade576baa49568299e95f5505eed7420a09c7e2b",
     s2F2PollingOwnership: "c8bc005338942d414bb41b00c6c4b13cb6550895",
+    s2F2HelperPhaseClassification: "949c2cb9e346bb98ff376f0d81eb8bdac699adb8",
+    s2F2WindowsHelperLaunch: "a9a1854ff6ce840f253e2fb64926c59b7a2ed239",
   },
   frozenContractRevision: "100b6bbf360f2c2e3cd93384e1fba7c115a92f15",
   frozenContractTree: "13a8406e9c296b77aead3a0f961beba1110fba61",
