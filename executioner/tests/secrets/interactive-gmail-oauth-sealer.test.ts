@@ -1390,6 +1390,62 @@ test("embedded Gmail helper compiles without opening UI or network", async () =>
   assert.equal(result.status, 0, result.stderr);
 });
 
+test("production Gmail helper launch stays below the Windows command-line limit", async () => {
+  const source = await readFile(
+    "src/secrets/windows-dpapi/private/interactive-gmail-oauth-sealer.ts",
+    "utf8",
+  );
+  assert.doesNotMatch(
+    source,
+    /"-Command",\s*INTERACTIVE_GMAIL_OAUTH_SCRIPT/u,
+  );
+  assert.match(source, /"-Command",\s*INTERACTIVE_GMAIL_OAUTH_LAUNCHER/u);
+  const launcher = /const INTERACTIVE_GMAIL_OAUTH_LAUNCHER = String\.raw`([\s\S]*?)`;/u
+    .exec(source)?.[1] ?? "";
+  assert.ok(launcher.length > 100);
+  assert.ok(Buffer.byteLength(launcher, "utf16le") < 32_767 * 2);
+});
+
+test("digest-bound Gmail launcher reaches typed local validation and rejects tampered helper source", async () => {
+  const sourcePath = join(
+    process.cwd(),
+    "src/secrets/windows-dpapi/private/interactive-gmail-oauth-sealer.ts",
+  );
+  const source = await readFile(sourcePath, "utf8");
+  const helper = /const INTERACTIVE_GMAIL_OAUTH_SCRIPT = String\.raw`([\s\S]*?)`;/u
+    .exec(source)?.[1] ?? "";
+  const launcher = /const INTERACTIVE_GMAIL_OAUTH_LAUNCHER = String\.raw`([\s\S]*?)`;/u
+    .exec(source)?.[1] ?? "";
+  const digest = createHash("sha256").update(helper, "utf8").digest("hex");
+  const input = helperFrame("HAGR", [
+    "recipient_abcdefghijklmnop",
+    "1234567890-example1.apps.googleusercontent.com",
+    "C:\\missing\\google-installed-client.json",
+  ]);
+  const root = await mkdtemp(join(tmpdir(), "hunt-gmail-launch-integrity-"));
+  try {
+    const typed = launchHelper(launcher, sourcePath, digest, input);
+    assert.equal(typed.error, undefined);
+    assert.equal(typed.status, 9);
+    assert.equal(typed.stdout, "");
+    assert.equal(typed.stderr, "");
+
+    const tamperedPath = join(root, "interactive-gmail-oauth-sealer.ts");
+    await writeFile(
+      tamperedPath,
+      source.replace("private const int MaximumSection = 1048576;", "private const int MaximumSection = 1048575;"),
+    );
+    const rejected = launchHelper(launcher, tamperedPath, digest, input);
+    assert.equal(rejected.error, undefined);
+    assert.equal(rejected.status, 7);
+    assert.equal(rejected.stdout, "");
+    assert.equal(rejected.stderr, "");
+  } finally {
+    input.fill(0);
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("embedded helper exact-parses only the matching installed loopback client", async () => {
   const source = await readFile(
     "src/secrets/windows-dpapi/private/interactive-gmail-oauth-sealer.ts",
@@ -1580,4 +1636,51 @@ function installedClient(
       redirect_uris: [redirect],
     },
   };
+}
+
+function helperFrame(magic: "HAGR", values: readonly string[]): Buffer {
+  const sections = values.map((value) => Buffer.from(value, "utf8"));
+  const output = Buffer.allocUnsafe(
+    6 + sections.reduce((total, value) => total + 4 + value.byteLength, 0),
+  );
+  output.write(magic, 0, "ascii");
+  output.writeUInt8(1, 4);
+  output.writeUInt8(sections.length, 5);
+  let offset = 6;
+  for (const section of sections) {
+    output.writeUInt32LE(section.byteLength, offset);
+    section.copy(output, offset + 4);
+    section.fill(0);
+    offset += 4 + section.byteLength;
+  }
+  return output;
+}
+
+function launchHelper(
+  launcher: string,
+  sourcePath: string,
+  digest: string,
+  input: Uint8Array,
+) {
+  return spawnSync(
+    "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
+    [
+      "-NoLogo", "-NoProfile", "-STA", "-ExecutionPolicy", "Bypass",
+      "-Command", launcher,
+    ],
+    {
+      input,
+      shell: false,
+      windowsHide: true,
+      stdio: ["pipe", "pipe", "pipe"],
+      encoding: "utf8",
+      timeout: 15_000,
+      env: {
+        SystemRoot: "C:\\Windows",
+        WINDIR: "C:\\Windows",
+        HUNT_GMAIL_HELPER_SOURCE: sourcePath,
+        HUNT_GMAIL_HELPER_SHA256: digest,
+      },
+    },
+  );
 }

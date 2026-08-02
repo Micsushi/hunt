@@ -1,4 +1,7 @@
 import { spawn } from "node:child_process";
+import { createHash } from "node:crypto";
+import { lstatSync, realpathSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 
 import type { TargetIdentityV1 } from "../../../contracts/live/index.ts";
 
@@ -1560,6 +1563,62 @@ try {
 } catch { exit 7 }
 `;
 
+const INTERACTIVE_GMAIL_OAUTH_SOURCE = trustedHelperSourcePath();
+const INTERACTIVE_GMAIL_OAUTH_SHA256 = createHash("sha256")
+  .update(INTERACTIVE_GMAIL_OAUTH_SCRIPT, "utf8")
+  .digest("hex");
+const INTERACTIVE_GMAIL_OAUTH_LAUNCHER = String.raw`
+$ErrorActionPreference = 'Stop'
+$bytes = $null
+$hashBytes = $null
+$scriptBytes = $null
+$sha256 = $null
+try {
+    $sourcePath = $env:HUNT_GMAIL_HELPER_SOURCE
+    $expectedSha256 = $env:HUNT_GMAIL_HELPER_SHA256
+    if (
+        -not [System.IO.Path]::IsPathRooted($sourcePath) -or
+        $expectedSha256 -notmatch '^[0-9a-f]{64}$'
+    ) { exit 7 }
+    $item = Get-Item -LiteralPath $sourcePath -Force
+    if (
+        $item.PSIsContainer -or
+        (($item.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) -or
+        $item.Length -lt 10000 -or
+        $item.Length -gt 131072
+    ) { exit 7 }
+    $bytes = [System.IO.File]::ReadAllBytes($sourcePath)
+    if (
+        $bytes.Length -ne $item.Length -or
+        ($bytes.Length -ge 3 -and $bytes[0] -eq 239 -and $bytes[1] -eq 187 -and $bytes[2] -eq 191)
+    ) { exit 7 }
+    $utf8 = New-Object System.Text.UTF8Encoding($false, $true)
+    $typescript = $utf8.GetString($bytes)
+    $prefix = 'const INTERACTIVE_GMAIL_OAUTH_SCRIPT = String.raw' + [char]96
+    $suffix = [string][char]96 + ';'
+    $start = $typescript.IndexOf($prefix, [System.StringComparison]::Ordinal)
+    if ($start -lt 0 -or $typescript.LastIndexOf($prefix, [System.StringComparison]::Ordinal) -ne $start) {
+        exit 7
+    }
+    $start += $prefix.Length
+    $end = $typescript.IndexOf($suffix, $start, [System.StringComparison]::Ordinal)
+    if ($end -lt $start) { exit 7 }
+    $script = $typescript.Substring($start, $end - $start)
+    $scriptBytes = $utf8.GetBytes($script)
+    $sha256 = [System.Security.Cryptography.SHA256]::Create()
+    $hashBytes = $sha256.ComputeHash($scriptBytes)
+    $actualSha256 = [System.BitConverter]::ToString($hashBytes).Replace('-', '').ToLowerInvariant()
+    if ($actualSha256 -cne $expectedSha256) { exit 7 }
+    Invoke-Expression $script
+} catch { exit 7 }
+finally {
+    if ($null -ne $hashBytes) { [System.Array]::Clear($hashBytes, 0, $hashBytes.Length) }
+    if ($null -ne $scriptBytes) { [System.Array]::Clear($scriptBytes, 0, $scriptBytes.Length) }
+    if ($null -ne $bytes) { [System.Array]::Clear($bytes, 0, $bytes.Length) }
+    if ($null -ne $sha256) { $sha256.Dispose() }
+}
+`;
+
 export interface GmailOAuthSealRequest {
   readonly gmailMetadata: Readonly<Uint8Array>;
   readonly accountMetadata: Readonly<Uint8Array>;
@@ -1723,12 +1782,17 @@ class PowerShellInteractiveGmailOAuthProcess implements InteractiveGmailOAuthPro
     return new Promise((resolve, reject) => {
       const child = spawn(this.#executable, [
         "-NoLogo", "-NoProfile", "-STA", "-ExecutionPolicy", "Bypass",
-        "-Command", INTERACTIVE_GMAIL_OAUTH_SCRIPT,
+        "-Command", INTERACTIVE_GMAIL_OAUTH_LAUNCHER,
       ], {
         shell: false,
         windowsHide,
         stdio: ["pipe", "pipe", "ignore"],
-        env: { SystemRoot: "C:\\Windows", WINDIR: "C:\\Windows" },
+        env: {
+          SystemRoot: "C:\\Windows",
+          WINDIR: "C:\\Windows",
+          HUNT_GMAIL_HELPER_SOURCE: INTERACTIVE_GMAIL_OAUTH_SOURCE,
+          HUNT_GMAIL_HELPER_SHA256: INTERACTIVE_GMAIL_OAUTH_SHA256,
+        },
       });
       const chunks: Buffer[] = [];
       let size = 0;
@@ -1787,6 +1851,20 @@ class PowerShellInteractiveGmailOAuthProcess implements InteractiveGmailOAuthPro
       child.stdin.end(input);
     });
   }
+}
+
+function trustedHelperSourcePath(): string {
+  const candidate = fileURLToPath(
+    new URL("./interactive-gmail-oauth-sealer.ts", import.meta.url),
+  );
+  const info = lstatSync(candidate);
+  if (
+    !info.isFile() || info.isSymbolicLink() || info.size < 10_000 || info.size > 128 * 1024 ||
+    realpathSync.native(candidate) !== candidate
+  ) {
+    throw new Error("Gmail OAuth helper invalid");
+  }
+  return candidate;
 }
 
 function encodeSections(request: GmailOAuthSealRequest): Buffer {

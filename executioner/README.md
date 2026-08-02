@@ -110,10 +110,10 @@ Create or Sign In is activated as part of account-access proof.
 
 ### Gmail authorization bootstrap
 
-This is a separate short-window step after the fresh-account run stops at
-`verification_required`. Do not edit the F1 owner file. Create a new F2 owner
-file that preserves the journey, revision, and target but uses a new approval
-and preallocated account and Gmail handles. Its
+This is a separate short-window step before the `account_verified` checkpoint.
+Do not edit an expired F1 owner file. Create a new F2 owner file that preserves
+the journey, revision, and target but uses a new approval and preallocated
+account and Gmail handles. Its
 approval, account secret, and Gmail authorization must share one expiry no
 more than 30 minutes after the planned F2 bootstrap. Provision the new account
 handle first with the account command.
@@ -176,8 +176,10 @@ refresh grant. After the profile email matches, the trusted child stores that
 grant as a bounded Generic Credential for the current Windows user. Its target
 contains only a versioned SHA-256 binding of the client ID, normalized email, and
 exact `gmail.readonly` scope; it contains no raw email. The grant is limited to
-512 UTF-8 bytes. Later bootstraps for the same binding refresh silently and do not
-open a browser. A missing grant starts the consent flow, but a malformed, revoked,
+512 UTF-8 bytes. It also stores a separate durable lookup under an opaque
+SHA-256 binding of the client ID and recipient binding. That lookup contains
+only the 64-character grant locator. Later bootstraps for the same binding
+refresh silently and do not open a browser. A missing grant starts the consent flow, but a malformed, revoked,
 rejected, or wrong-scope existing grant fails as `gmail_refresh_grant_invalid`
 with no same-attempt interactive fallback. A network or timeout failure, or HTTP
 408, 429, or 5xx, fails as `gmail_refresh_unavailable`; it preserves the stored
@@ -195,14 +197,17 @@ with the same protected owner and bootstrap files:
 npm run revoke:s2-gmail-grant -- --config C:\absolute\external\f2-owner-inputs.json --gmail-bootstrap C:\absolute\external\gmail-bootstrap-input.json
 ```
 
-The command never opens a browser. The trusted child is the sole reader of the
-account, installed-client secret, and refresh grant. It posts only the grant to
-Google's exact HTTPS revocation endpoint and deletes only the derived exact-target
-credential after HTTP success or the exact provider `invalid_token` response. A
-missing credential is idempotent success. Network and timeout failures, HTTP 408,
-429, and 5xx return `gmail_refresh_unavailable` and preserve the credential;
-malformed or unexpected responses return `gmail_refresh_grant_invalid` and also
-preserve it. Output is limited to the value-free revoked or absent result.
+The command never opens a browser and needs neither active account/Gmail secret
+records nor account bytes. Historical owner/bootstrap bindings plus current
+path and ACL checks admit the operation. The trusted child validates the
+installed client, resolves the durable lookup to the exact grant, and posts
+only that grant to Google's exact HTTPS revocation endpoint. It clears grant
+bytes and deletes both the exact grant and lookup only after HTTP success or
+the exact provider `invalid_token` response. A missing lookup is idempotent
+success. Malformed or missing paired state is invalid and cleaned. Network and
+timeout failures, HTTP 408, 429, and 5xx return `gmail_refresh_unavailable` and
+preserve both entries. Output is limited to the value-free revoked or absent
+result.
 
 | Value | Bootstrap/Node owner | Trusted Windows helper owner | Durable output |
 | --- | --- | --- | --- |
@@ -223,12 +228,35 @@ F2 handles:
 npm run live:s2 -- --config C:\private\f2-owner-inputs.json --stop-after mailbox_candidate --evidence-root C:\private\s2-evidence
 ```
 
-The runner queries only `gmail-api-v1` through the scoped Gmail handle and an
-exact trailing 24-hour window. Recipient, sender, tenant, target, and journey
-remain independently bound. It passes only for one unexpired candidate, releases
-the process-local verification artifact, and seals value-free evidence with
+The runner queries only `gmail-api-v1` through the scoped Gmail handle. It holds
+the lower query bound at start minus 24 hours, advances the upper bound per
+attempt, and uses a fresh query ID and provider instance on every attempt. F9
+polls for at most 60 seconds and never beyond approval expiry, backing off from
+250 milliseconds to at most 5 seconds. It retries only exact zero-candidate and
+approved availability outcomes; ambiguity, non-retryable failures, and final
+exhaustion remain exact. Recipient, sender, tenant, target, and journey remain
+independently bound. It passes only for one unexpired candidate, releases the
+process-local verification artifact, and seals value-free evidence with
 `messageBodyRetained: false`. It never launches the Workday browser or navigates
 the verification link.
+
+### Account-verified acceptance slice
+
+Provision both active secret handles before running this checkpoint:
+
+```text
+npm run live:s2 -- --config C:\private\f2-owner-inputs.json --stop-after account_verified --evidence-root C:\private\s2-evidence
+```
+
+The runner inspects both handles before browser creation. The lifecycle first
+observes the page. An application-ready page is a no-op and a verification page
+enters verification. Existing-account and create-account pages both attempt
+sign-in first. Fresh-create intent may create only after sign-in returns the
+exact private `account_absent` fact and a separate observation confirms absence;
+ordinary sign-in rejection never implies absence. If create returns the exact
+private `account_exists` fact, the lifecycle independently observes it and
+switches once to sign-in. This prevents duplicate account creation while keeping
+the private existence facts out of the public terminal contract.
 
 Tests use Node's built-in runner. Components may depend on shared contracts but
 not on peer implementations or C3 v2 source.
