@@ -4,6 +4,7 @@ import type {
 } from "../../../contracts/live/index.ts";
 import type { SemanticAccountPageAdapter } from "./account-page-types.ts";
 import type { SemanticPostingNavigationAdapter } from "./account-navigation-types.ts";
+import type { SemanticVerificationNavigationAdapter } from "./verification-navigation-types.ts";
 
 export interface PersistentBrowserRuntimeValues {
   readonly targetUrl: string;
@@ -107,6 +108,7 @@ export interface PlaywrightPersistentBrowserSessionOptions {
   readonly profiles: ProfileStore;
   readonly accountPage?: SemanticAccountPageAdapter;
   readonly postingNavigation?: SemanticPostingNavigationAdapter;
+  readonly verificationNavigation?: SemanticVerificationNavigationAdapter;
   readonly ids: () => LiveSessionId;
   readonly timeoutMs: number;
 }

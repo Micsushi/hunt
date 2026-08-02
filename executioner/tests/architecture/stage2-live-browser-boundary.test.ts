@@ -93,6 +93,37 @@ test("posting navigation is private, semantic, bounded, and submit-free", async 
   assert.match(session, /transitionCount < 2/u);
 });
 
+test("verification navigation is private, byte-scoped, one-shot, and value-free", async () => {
+  const capability = await source("private/verification-navigation-types.ts");
+  const scope = await source("private/owned-verification-navigation-access.ts");
+  const coordinator = await source("private/owned-verification-navigation-coordinator.ts");
+  const factory = await source("factory.ts");
+  const publicFacade = await source("index.ts");
+  for (const required of [
+    "verificationTarget",
+    "approvedHost",
+    "approvedTenant",
+    "navigateVerificationTarget",
+  ]) assert.equal(capability.includes(required), true, required);
+  for (const forbidden of [
+    "readonly page",
+    "readonly url",
+    "readonly href",
+    "readonly token",
+    "readonly text",
+    "accountState",
+  ]) {
+    assert.equal(capability.includes(forbidden), false, forbidden);
+  }
+  assert.match(scope, /targetBytes\.fill\(0\)/u);
+  assert.match(scope, /hostBytes\.fill\(0\)/u);
+  assert.match(scope, /tenantBytes\.fill\(0\)/u);
+  assert.match(coordinator, /isStablePostVerificationState/u);
+  assert.equal(factory.includes("new PlaywrightVerificationNavigationAdapter()"), true);
+  assert.equal(publicFacade.includes("VerificationNavigationAccess"), false);
+  assert.equal(publicFacade.includes("ByteScopedVerification"), false);
+});
+
 async function source(relativePath: string): Promise<string> {
   return readFile(
     new URL(`../../src/browser/playwright-live/${relativePath}`, import.meta.url),

@@ -21,10 +21,15 @@ import type {
   PostingNavigationAction,
 } from "./private/account-navigation-types.ts";
 import { OwnedAccountPageCoordinator } from "./private/owned-account-page-coordinator.ts";
+import { OwnedVerificationNavigationCoordinator } from "./private/owned-verification-navigation-coordinator.ts";
 import { bounded, cancelled, failure } from "./private/port-results.ts";
 import { isExactMarker, sessionFromMarker } from "./private/profile-marker.ts";
 import { bindApprovedTarget, sameSession, sameTarget } from "./private/target-binding.ts";
 import { classifyWorkdayAccountNavigation } from "./private/workday-account-navigation.ts";
+import type {
+  ByteScopedVerificationBrowserCapability,
+  OwnedVerificationNavigationAccessRequest,
+} from "./private/verification-navigation-types.ts";
 import type {
   PersistentContext,
   PersistentPage,
@@ -49,6 +54,7 @@ export class PlaywrightPersistentBrowserSession
   #cleanupFailedSessionId: LiveBrowserSessionV1["sessionId"] | undefined;
   #cleanupFailedJourneyId: LiveBrowserSessionV1["journeyId"] | undefined;
   readonly #accountAccess: OwnedAccountPageCoordinator;
+  readonly #verificationNavigation: OwnedVerificationNavigationCoordinator;
   readonly #openOperations = new Map<
     string,
     { readonly fingerprint: string; readonly result: Promise<OpenPortResult> }
@@ -70,6 +76,18 @@ export class PlaywrightPersistentBrowserSession
     this.#options = options;
     this.#accountAccess = new OwnedAccountPageCoordinator({
       adapter: options.accountPage,
+      probe: options.probe,
+      timeoutMs: options.timeoutMs,
+      state: () => ({
+        page: this.#page,
+        session: this.#session,
+        approvedTarget: this.#approvedTarget,
+        marker: this.#marker,
+      }),
+      invalidate: () => this.#invalidateAccountSession(),
+    });
+    this.#verificationNavigation = new OwnedVerificationNavigationCoordinator({
+      adapter: options.verificationNavigation,
       probe: options.probe,
       timeoutMs: options.timeoutMs,
       state: () => ({
@@ -410,6 +428,14 @@ export class PlaywrightPersistentBrowserSession
     use: (access: OwnedAccountPageAccess) => Promise<void>,
   ): Promise<LivePortResult<void, PersistentBrowserErrorCode>> {
     return this.#accountAccess.withAccess(request, signal, use);
+  }
+
+  async withOwnedVerificationNavigationAccess(
+    request: OwnedVerificationNavigationAccessRequest,
+    signal: AbortSignal,
+    use: (access: ByteScopedVerificationBrowserCapability) => Promise<void>,
+  ) {
+    return this.#verificationNavigation.withAccess(request, signal, use);
   }
 
   async advanceToAccountEntry(

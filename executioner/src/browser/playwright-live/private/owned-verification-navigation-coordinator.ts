@@ -1,0 +1,179 @@
+import type {
+  LiveBrowserSessionV1,
+  LivePortResult,
+  PersistentBrowserErrorCode,
+  VerificationNavigationResult,
+} from "../../../contracts/live/index.ts";
+import { OwnedVerificationNavigationAccessScope } from "./owned-verification-navigation-access.ts";
+import { inspectPinnedTarget } from "./owned-page-inspection.ts";
+import { cancelled, failure } from "./port-results.ts";
+import { sameTarget } from "./target-binding.ts";
+import type {
+  ApprovedTargetBinding,
+  OwnedTargetProbe,
+  PersistentPage,
+  ProfileMarkerV1,
+} from "./types.ts";
+import type {
+  ByteScopedVerificationBrowserCapability,
+  OwnedVerificationNavigationAccessRequest,
+  SemanticVerificationNavigationAdapter,
+} from "./verification-navigation-types.ts";
+import { isStablePostVerificationState } from "./workday-verification-navigation.ts";
+
+interface VerificationOwnershipState {
+  readonly page: PersistentPage | undefined;
+  readonly session: LiveBrowserSessionV1 | undefined;
+  readonly approvedTarget: ApprovedTargetBinding | undefined;
+  readonly marker: ProfileMarkerV1 | undefined;
+}
+
+interface CoordinatorOptions {
+  readonly adapter: SemanticVerificationNavigationAdapter | undefined;
+  readonly probe: OwnedTargetProbe;
+  readonly timeoutMs: number;
+  readonly state: () => VerificationOwnershipState;
+  readonly invalidate: () => Promise<void>;
+}
+
+type NavigationPortResult = LivePortResult<
+  VerificationNavigationResult,
+  PersistentBrowserErrorCode
+>;
+
+export class OwnedVerificationNavigationCoordinator {
+  readonly #options: CoordinatorOptions;
+  #active = false;
+
+  constructor(options: CoordinatorOptions) { this.#options = options; }
+
+  async withAccess(
+    request: OwnedVerificationNavigationAccessRequest,
+    signal: AbortSignal,
+    use: (access: ByteScopedVerificationBrowserCapability) => Promise<void>,
+  ): Promise<NavigationPortResult> {
+    if (signal.aborted) return cancelled();
+    if (this.#active) return failure("browser_operation_replayed");
+    const state = this.#options.state();
+    if (!validAdmission(state, this.#options.adapter, request)) {
+      return failure("browser_session_missing");
+    }
+    const page = state.page!;
+    const approvedTarget = state.approvedTarget!;
+    const initial = await this.#inspect(page, approvedTarget, request, signal);
+    if (!initial.ok) return initial;
+    if (initial.value.target.kind !== "matched") return failure("browser_target_invalid");
+    this.#active = true;
+    const scope = new OwnedVerificationNavigationAccessScope(
+      page,
+      this.#options.adapter!,
+      approvedTarget,
+      signal,
+      this.#options.timeoutMs,
+      (effectSignal) => this.#revalidateBeforeEffect(
+        page, approvedTarget, request, effectSignal,
+      ),
+      (effectSignal) => this.#observeAfterEffect(
+        page, approvedTarget, request, effectSignal,
+      ),
+      this.#options.invalidate,
+    );
+    try {
+      await use(scope.capability);
+    } catch {
+      await scope.failCallback();
+    } finally {
+      scope.deactivate();
+      this.#active = false;
+    }
+    if (scope.terminalError === "operation_cancelled") return cancelled();
+    if (scope.terminalError !== undefined) return failure(scope.terminalError);
+    return scope.used && scope.result !== undefined
+      ? { ok: true, value: scope.result }
+      : failure("browser_target_invalid");
+  }
+
+  async #inspect(
+    page: PersistentPage,
+    approvedTarget: ApprovedTargetBinding,
+    request: OwnedVerificationNavigationAccessRequest,
+    signal: AbortSignal,
+  ) {
+    return inspectPinnedTarget(
+      page,
+      this.#options.probe,
+      approvedTarget,
+      request.target,
+      signal,
+      this.#options.timeoutMs,
+    );
+  }
+
+  async #revalidateBeforeEffect(
+    page: PersistentPage,
+    approvedTarget: ApprovedTargetBinding,
+    request: OwnedVerificationNavigationAccessRequest,
+    signal: AbortSignal,
+  ): Promise<LivePortResult<void, PersistentBrowserErrorCode>> {
+    if (!sameOwnership(this.#options.state(), page, approvedTarget, request)) {
+      return failure("browser_session_invalidated");
+    }
+    const inspected = await this.#inspect(page, approvedTarget, request, signal);
+    return inspected.ok && inspected.value.target.kind === "matched"
+      ? { ok: true, value: undefined }
+      : inspected.ok
+        ? failure("browser_session_invalidated")
+        : inspected;
+  }
+
+  async #observeAfterEffect(
+    page: PersistentPage,
+    approvedTarget: ApprovedTargetBinding,
+    request: OwnedVerificationNavigationAccessRequest,
+    signal: AbortSignal,
+  ): Promise<NavigationPortResult> {
+    if (!sameOwnership(this.#options.state(), page, approvedTarget, request)) {
+      return failure("browser_session_invalidated");
+    }
+    const inspected = await this.#inspect(page, approvedTarget, request, signal);
+    if (!inspected.ok) return inspected;
+    if (inspected.value.target.kind === "posting_unavailable") {
+      return { ok: true, value: { kind: "target_unavailable" } };
+    }
+    if (
+      inspected.value.target.kind !== "matched" ||
+      !isStablePostVerificationState(inspected.value.snapshot)
+    ) return failure("browser_target_invalid");
+    return { ok: true, value: { kind: "navigated" } };
+  }
+}
+
+function validAdmission(
+  state: VerificationOwnershipState,
+  adapter: SemanticVerificationNavigationAdapter | undefined,
+  request: OwnedVerificationNavigationAccessRequest,
+): boolean {
+  const now = Date.parse(request.now);
+  return request.schemaVersion === 1 && adapter !== undefined &&
+    state.page !== undefined && !state.page.isClosed() &&
+    state.session !== undefined && state.approvedTarget !== undefined &&
+    state.marker !== undefined && request.journeyId === state.session.journeyId &&
+    request.sessionId === state.session.sessionId &&
+    sameTarget(request.target, state.session.target) &&
+    request.journeyId === state.marker.journeyId &&
+    request.sessionId === state.marker.sessionId &&
+    sameTarget(request.target, state.marker.target) && Number.isFinite(now) &&
+    now >= Date.parse(state.marker.admittedAt) &&
+    now < Date.parse(state.session.leaseExpiresAt);
+}
+
+function sameOwnership(
+  state: VerificationOwnershipState,
+  page: PersistentPage,
+  approvedTarget: ApprovedTargetBinding,
+  request: OwnedVerificationNavigationAccessRequest,
+): boolean {
+  return state.page === page && state.approvedTarget === approvedTarget &&
+    state.session?.sessionId === request.sessionId &&
+    sameTarget(state.session.target, request.target);
+}
