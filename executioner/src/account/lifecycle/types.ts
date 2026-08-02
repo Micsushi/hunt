@@ -1,6 +1,9 @@
 import type { JourneyId, OperationId } from "../../contracts/index.ts";
 import type {
   ActiveAccountSecretHandle,
+  CredentialMutationErrorCode,
+  CredentialMutationRequest,
+  CredentialMutationResult,
   LiveBrowserSessionV1,
   LivePortResult,
   LiveSessionId,
@@ -11,7 +14,6 @@ import type {
   TargetIdentityV1,
   VerificationArtifact,
 } from "../../contracts/live/index.ts";
-import type { AccountLifecycleCredentialMutationAdapter } from "../entry/types.ts";
 import type {
   LiveBlocked,
   LiveCoordinatorResult,
@@ -66,6 +68,23 @@ export interface AccountLifecycleAccountStateObserver {
     request: AccountLifecycleObservationRequest,
     signal: AbortSignal,
   ): Promise<LivePortResult<AccountLifecycleObservation, PersistentBrowserErrorCode>>;
+}
+
+export type AccountLifecycleCredentialMutationResult =
+  | CredentialMutationResult
+  | {
+      readonly kind: "account_absent" | "account_exists";
+      readonly attemptedFields: readonly ["email", "password"];
+    };
+
+export interface AccountLifecycleCredentialMutationAdapter {
+  mutate(
+    request: CredentialMutationRequest,
+    signal: AbortSignal,
+  ): Promise<LivePortResult<
+    AccountLifecycleCredentialMutationResult,
+    CredentialMutationErrorCode
+  >>;
 }
 
 export interface AccountLifecycleDependencies {

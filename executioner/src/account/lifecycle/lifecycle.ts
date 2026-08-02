@@ -5,11 +5,11 @@ import {
 } from "../../contracts/live/index.ts";
 import { liveCoordinatorError } from "../../control/orchestrator/live/types.ts";
 import type {
+  AccountLifecycleCredentialMutationResult,
   AccountLifecycleDependencies,
   AccountLifecycleInput,
   AccountLifecycleResult,
 } from "./types.ts";
-import type { AccountLifecycleCredentialMutationResult } from "../entry/types.ts";
 import {
   blocked,
   classificationBlocked,

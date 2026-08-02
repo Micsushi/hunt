@@ -10,11 +10,9 @@ import {
 } from "../../../src/testing/live/index.ts";
 import {
   AccountVerificationLifecycle,
+  type AccountLifecycleCredentialMutationAdapter,
+  type AccountLifecycleCredentialMutationResult,
 } from "../../../src/account/lifecycle/index.ts";
-import type {
-  AccountLifecycleCredentialMutationAdapter,
-  AccountLifecycleCredentialMutationResult,
-} from "../../../src/account/entry/index.ts";
 import { accountObserver as observer, lifecycleInput as input } from "./support.ts";
 
 test("independently observed application-ready state skips every effect", async () => {
