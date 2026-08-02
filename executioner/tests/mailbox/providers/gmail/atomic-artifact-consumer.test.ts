@@ -83,12 +83,15 @@ test("atomic consume removes safe and raw state, clears bytes, and replays one e
       assert.equal(new TextDecoder().decode(values[0]), new TextDecoder().decode(rawTarget()));
       assert.equal(new TextDecoder().decode(values[1]), "tenant.example.invalid");
       assert.equal(new TextDecoder().decode(values[2]), "example-tenant");
-      return { kind: "navigated", accountState: "verified" };
+      return {
+        ok: true,
+        value: { kind: "navigated", accountState: "verified" },
+      } as const;
     },
   );
   assert.deepEqual(first, {
     ok: true,
-    value: { kind: "navigated", accountState: "verified" },
+    value: { kind: "navigated" },
   });
   assert.equal(callbackCalls, 1);
   assert.deepEqual(views.map((value) => [...value]), [
@@ -115,10 +118,31 @@ test("atomic consume removes safe and raw state, clears bytes, and replays one e
     },
   );
 
+  const cancelledReplay = new AbortController();
+  cancelledReplay.abort();
+  assert.deepEqual(
+    await current.consumer.consume(request(), cancelledReplay.signal, async () => {
+      callbackCalls += 1;
+      return { ok: true, value: { kind: "target_unavailable" } } as const;
+    }),
+    first,
+  );
+  assert.deepEqual(
+    await current.consumer.consume(
+      { ...request(), now: "2026-08-01T12:00:00.001Z" },
+      cancelledReplay.signal,
+      async () => ({ ok: true, value: { kind: "target_unavailable" } } as const),
+    ),
+    {
+      ok: false,
+      error: { code: "verification_artifact_replayed", retryable: false },
+    },
+  );
+
   assert.deepEqual(
     await current.consumer.consume(request(), signal(), async () => {
       callbackCalls += 1;
-      return { kind: "target_unavailable" };
+      return { ok: true, value: { kind: "target_unavailable" } } as const;
     }),
     first,
   );
@@ -127,7 +151,7 @@ test("atomic consume removes safe and raw state, clears bytes, and replays one e
     await current.consumer.consume(
       { ...request(), now: "2026-08-01T12:00:00.001Z" },
       signal(),
-      async () => ({ kind: "target_unavailable" }),
+      async () => ({ ok: true, value: { kind: "target_unavailable" } } as const),
     ),
     {
       ok: false,
@@ -154,7 +178,7 @@ test("different operation, expiry, and every cross-scope admission clear both st
         signal(),
         async () => {
           invoked = true;
-          return { kind: "target_unavailable" };
+          return { ok: true, value: { kind: "target_unavailable" } } as const;
         },
       ),
       {
@@ -201,10 +225,15 @@ test("callback failure and cancellation clear all bytes and expose no private de
         throw new Error("synthetic-private-callback-detail");
       },
     );
-    assert.deepEqual(result, {
-      ok: false,
-      error: { code: "verification_artifact_replayed", retryable: false },
-    });
+    assert.deepEqual(result, cancelled
+      ? {
+        ok: false,
+        error: { code: "operation_cancelled", retryable: false },
+      }
+      : {
+        ok: false,
+        error: { code: "verification_artifact_replayed", retryable: false },
+      });
     assert.equal(callbackCalls, cancelled ? 0 : 1);
     assert.doesNotMatch(JSON.stringify(result), /synthetic-private/u);
     assert.equal(current.rawVault.committedCount, 0);
@@ -221,7 +250,7 @@ test("safe admission failure clears both stores and cannot escape its detail", a
   const result = await current.consumer.consume(
     request(),
     signal(),
-    async () => ({ kind: "target_unavailable" }),
+    async () => ({ ok: true, value: { kind: "target_unavailable" } } as const),
   );
   assert.deepEqual(result, {
     ok: false,
@@ -232,4 +261,73 @@ test("safe admission failure clears both stores and cannot escape its detail", a
   assert.deepEqual([...current.target], new Array(current.target.length).fill(0));
   assert.deepEqual([...current.host], new Array(current.host.length).fill(0));
   assert.deepEqual([...current.tenant], new Array(current.tenant.length).fill(0));
+});
+
+test("atomic consume preserves an exact downstream navigation failure after clearing bytes", async () => {
+  const current = harness();
+  let views: readonly Readonly<Uint8Array>[] = [];
+
+  const result = await current.consumer.consume(
+    request(),
+    signal(),
+    async (values) => {
+      views = values;
+      return {
+        ok: false,
+        error: { code: "browser_timeout", retryable: true },
+      } as const;
+    },
+  );
+
+  assert.deepEqual(result, {
+    ok: false,
+    error: { code: "browser_timeout", retryable: true },
+  });
+  assert.deepEqual(
+    views.map((value) => [...value]),
+    [
+      new Array(current.target.length).fill(0),
+      new Array(current.host.length).fill(0),
+      new Array(current.tenant.length).fill(0),
+    ],
+  );
+  assert.equal(current.rawVault.committedCount, 0);
+  assert.deepEqual(
+    await current.consumer.consume(
+      request(),
+      signal(),
+      async () => ({ ok: true, value: { kind: "navigated" } } as const),
+    ),
+    {
+      ok: false,
+      error: { code: "verification_artifact_replayed", retryable: false },
+    },
+  );
+});
+
+test("atomic consume rejects a malformed downstream success instead of minting a safe receipt", async () => {
+  const current = harness();
+  assert.deepEqual(
+    await current.consumer.consume(
+      request(),
+      signal(),
+      async () => ({ ok: true, value: { kind: "unknown" } } as never),
+    ),
+    {
+      ok: false,
+      error: { code: "verification_artifact_replayed", retryable: false },
+    },
+  );
+  assert.equal(current.rawVault.committedCount, 0);
+  assert.deepEqual(
+    await current.consumer.consume(
+      request(),
+      signal(),
+      async () => ({ ok: true, value: { kind: "navigated" } } as const),
+    ),
+    {
+      ok: false,
+      error: { code: "verification_artifact_replayed", retryable: false },
+    },
+  );
 });

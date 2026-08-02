@@ -1,4 +1,3 @@
-import { useEphemeralByteBatch } from "../../../../contracts/live/private/privileged-capabilities.ts";
 import type {
   AvailableVerificationArtifact,
   LivePortResult,
@@ -6,6 +5,7 @@ import type {
   TargetIdentityV1,
   VerificationArtifactInspectRequest,
   VerificationHandleId,
+  VerificationNavigationErrorCode,
   VerificationNavigationResult,
 } from "../../../../contracts/live/index.ts";
 import type { JourneyId, OperationId } from "../../../../contracts/index.ts";
@@ -34,9 +34,14 @@ interface GmailAtomicArtifactConsumerOptions {
   readonly artifacts: AtomicSafeArtifactStore;
 }
 
-type ConsumeResult = LivePortResult<
-  VerificationNavigationResult,
+type DownstreamNavigationErrorCode = Exclude<
+  VerificationNavigationErrorCode,
   "verification_artifact_replayed"
+>;
+
+type ConsumeResult<Code extends DownstreamNavigationErrorCode> = LivePortResult<
+  VerificationNavigationResult,
+  Code | "verification_artifact_replayed"
 >;
 
 export class GmailAtomicArtifactConsumer {
@@ -52,11 +57,16 @@ export class GmailAtomicArtifactConsumer {
     this.#artifacts = options.artifacts;
   }
 
-  async consume<Result extends VerificationNavigationResult>(
+  async consume<
+    Result extends VerificationNavigationResult,
+    Code extends DownstreamNavigationErrorCode,
+  >(
     request: AtomicArtifactConsumeRequest,
     signal: AbortSignal,
-    operation: (values: readonly Readonly<Uint8Array>[]) => Promise<Result>,
-  ): Promise<ConsumeResult> {
+    operation: (
+      values: readonly Readonly<Uint8Array>[],
+    ) => Promise<LivePortResult<Result, Code>>,
+  ): Promise<ConsumeResult<Code>> {
     const fingerprint = requestFingerprint(request);
     const replay = this.#receipts.get(request.operationId);
     if (replay !== undefined) {
@@ -65,6 +75,10 @@ export class GmailAtomicArtifactConsumer {
       }
       this.#clearRequest(request);
       return replayed();
+    }
+    if (signal.aborted) {
+      this.#clearRequest(request);
+      return cancelled();
     }
     if (!validRequest(request)) {
       this.#clearRequest(request);
@@ -91,12 +105,15 @@ export class GmailAtomicArtifactConsumer {
     );
     if (values === null) return replayed();
     try {
-      const result = await useEphemeralByteBatch(values, operation);
-      this.#receipts.set(request.operationId, { fingerprint, result });
-      return { ok: true, value: result };
+      const result = await operation(values);
+      if (!result.ok) return result;
+      const safeResult = exactResult(result.value);
+      this.#receipts.set(request.operationId, { fingerprint, result: safeResult });
+      return { ok: true, value: safeResult };
     } catch {
-      for (const value of values) value.fill(0);
       return replayed();
+    } finally {
+      for (const value of values) value.fill(0);
     }
   }
 
@@ -106,6 +123,12 @@ export class GmailAtomicArtifactConsumer {
     this.#rawVault.invalidate(request.handleId);
     this.#rawVault.invalidate(request.artifact.handleId);
   }
+}
+
+function exactResult(value: VerificationNavigationResult): VerificationNavigationResult {
+  if (value.kind === "navigated") return { kind: "navigated" };
+  if (value.kind === "target_unavailable") return { kind: "target_unavailable" };
+  throw new TypeError("invalid verification navigation result");
 }
 
 function validRequest(request: AtomicArtifactConsumeRequest): boolean {
@@ -153,5 +176,12 @@ function replayed() {
   return {
     ok: false,
     error: { code: "verification_artifact_replayed", retryable: false },
+  } as const;
+}
+
+function cancelled() {
+  return {
+    ok: false,
+    error: { code: "operation_cancelled", retryable: false },
   } as const;
 }
