@@ -12,10 +12,10 @@ export const acceptedStage1Base =
   "87c77e538d8bba378ec93516dbea3f4747beb822" as const;
 
 export const s2ContractSource =
-  "100b6bbf360f2c2e3cd93384e1fba7c115a92f15" as const;
+  "6dde499f0e5a82047c8ce6fbbf5cc87b5de3dd47" as const;
 
 export const s2ContractSourceTree =
-  "13a8406e9c296b77aead3a0f961beba1110fba61" as const;
+  "5c7d874a6821ddd593d299ca489f0257f07e0f25" as const;
 
 export const s2ContractRevisionStatus = "frozen" as const;
 

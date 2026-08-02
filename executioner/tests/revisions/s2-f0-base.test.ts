@@ -38,7 +38,7 @@ test("the Stage 2 F0 manifest freezes exact trees, versions, and adapters", () =
       "executioner/src/testing/live":
         "377d167ace83fa4d95798c221f4f776d86f209ac",
       "executioner/tests/live/contracts":
-        "3f5ff07db80edbbc2c8852c31204d7fadd522dff",
+        "32c8faf32b4fb6ad5a9a768154efd2ee1bddfb9e",
       "executioner/tests/live/walking-skeleton":
         "745b301fcc177e7feeefc1d65eb521a56a3d2292",
     },

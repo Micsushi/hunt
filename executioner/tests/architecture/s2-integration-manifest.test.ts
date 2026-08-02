@@ -8,7 +8,7 @@ const expected = {
   schemaVersion: 1,
   stage: "s2",
   feature: "s2-f2-t3",
-  assemblyBaseRevision: "b5ea86563d34e1e9d8412823bbc203c33460f630",
+  assemblyBaseRevision: "6dde499f0e5a82047c8ce6fbbf5cc87b5de3dd47",
   acceptedInputs: {
     s2F0: "730846b57a8ab7901a9818794921f8f9da01e0ed",
     s2F1T5: "d6602abf41f181376164eac2d32d587fc6bf5a5b",
@@ -43,9 +43,10 @@ const expected = {
     s2F2LiveInspectionHold: "ebaf396b497afb0b446e1f2cc726c7bfba77d512",
     s2F2LiveVerificationAlert: "4e8243a770898aad77be62e626b1393f936df92d",
     s2F2VerificationContinuation: "b5ea86563d34e1e9d8412823bbc203c33460f630",
+    s2F0VerificationMailboxJourneyBinding: "6dde499f0e5a82047c8ce6fbbf5cc87b5de3dd47",
   },
-  frozenContractRevision: "100b6bbf360f2c2e3cd93384e1fba7c115a92f15",
-  frozenContractTree: "13a8406e9c296b77aead3a0f961beba1110fba61",
+  frozenContractRevision: "6dde499f0e5a82047c8ce6fbbf5cc87b5de3dd47",
+  frozenContractTree: "5c7d874a6821ddd593d299ca489f0257f07e0f25",
 };
 
 test("S2-F2-T3 manifest pins the exact accepted non-self-referential assembly", () => {
