@@ -2,6 +2,15 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import { PlaywrightAccountPageAdapter } from "../../../src/browser/playwright-live/private/playwright-account-page.ts";
+import {
+  WORKDAY_ACCOUNT_FACT_SELECTORS,
+  WORKDAY_INLINE_VERIFICATION_SELECTORS,
+} from "../../../src/browser/playwright-live/private/workday-structural-catalog.ts";
+
+const SIGN_IN_EXACT_FACT_SELECTORS = [
+  WORKDAY_ACCOUNT_FACT_SELECTORS.absent,
+  ...WORKDAY_INLINE_VERIFICATION_SELECTORS,
+] as const;
 
 test("inspects one exact semantic field without exposing its locator", async () => {
   const locator = new FakeLocator({ count: 1, visible: true, enabled: true, editable: true });
@@ -163,6 +172,9 @@ test("activates each exact semantic link or button without returning page state"
     assert.deepEqual(page.calls, action.startsWith("submit_")
       ? [
           expectedCall,
+          ...(action === "submit_sign_in"
+            ? SIGN_IN_EXACT_FACT_SELECTORS.map((selector) => ({ method: "locator", selector }))
+            : [{ method: "locator", selector: WORKDAY_ACCOUNT_FACT_SELECTORS.exists }]),
           {
             method: "locator",
             selector: [
@@ -214,7 +226,7 @@ test("accepting terms uses idempotent checkbox semantics", async () => {
   assert.equal(locator.clickCalls, 0);
 });
 
-test("a visible rejected submit does not wait for a new destination", async () => {
+test("a submit that remains visible never claims a settled effect", async () => {
   const events: string[] = [];
   const locator = new FakeLocator({
     count: 1,
@@ -225,12 +237,16 @@ test("a visible rejected submit does not wait for a new destination", async () =
   });
   const page = new FakePage(locator);
 
-  await new PlaywrightAccountPageAdapter({
-    trace: (event) => events.push(event),
-  }).activate(page, "submit_sign_in");
+  await assert.rejects(
+    new PlaywrightAccountPageAdapter({
+      trace: (event) => events.push(event),
+    }).activate(page, "submit_sign_in"),
+    /submit effect did not settle/u,
+  );
 
   assert.deepEqual(page.calls, [
     { method: "locator", selector: '[data-automation-id="noCaptchaWrapper"]:has([data-automation-id="signInSubmitButton"]) [data-automation-id="click_filter"][role="button"]' },
+    ...SIGN_IN_EXACT_FACT_SELECTORS.map((selector) => ({ method: "locator", selector })),
   ]);
   assert.deepEqual(locator.waitForArguments, [
     { state: "hidden", timeout: 10_000 },
@@ -241,6 +257,172 @@ test("a visible rejected submit does not wait for a new destination", async () =
     "submit_click_succeeded",
     "submit_control_remained_visible",
   ]);
+});
+
+test("only the action-specific exact account fact settles a visible submit", async () => {
+  const cases = [
+    ["submit_sign_in", WORKDAY_ACCOUNT_FACT_SELECTORS.absent, WORKDAY_ACCOUNT_FACT_SELECTORS.exists],
+    ["submit_create_account", WORKDAY_ACCOUNT_FACT_SELECTORS.exists, WORKDAY_ACCOUNT_FACT_SELECTORS.absent],
+  ] as const;
+  for (const [action, exactSelector, opposingSelector] of cases) {
+    const events: string[] = [];
+    const submit = new FakeLocator({
+      count: 1,
+      visible: true,
+      enabled: true,
+      editable: false,
+      hiddenWaitFails: true,
+    });
+    const fact = new FakeLocator({
+      count: 1,
+      visible: true,
+      visibleResults: [false],
+      enabled: false,
+      editable: false,
+    });
+    const absent = new FakeLocator({
+      count: 0,
+      visible: false,
+      enabled: false,
+      editable: false,
+      attachedWaitFails: true,
+      visibleWaitFails: true,
+    });
+    const page = new FakePage(submit, absent, new Map([
+      [exactSelector, fact],
+      [opposingSelector, absent],
+    ]));
+
+    await new PlaywrightAccountPageAdapter({
+      trace: (event) => events.push(event),
+    }).activate(page, action);
+
+    assert.deepEqual(fact.waitForArguments, [{ state: "visible", timeout: 10_000 }]);
+    assert.deepEqual(absent.waitForArguments, []);
+    assert.equal(events.at(-1), "submit_exact_fact_observed");
+  }
+});
+
+test("an exact inline verification marker settles sign-in while its submit remains visible", async () => {
+  const events: string[] = [];
+  const submit = new FakeLocator({
+    count: 1,
+    visible: true,
+    enabled: true,
+    editable: false,
+    hiddenWaitFails: true,
+  });
+  const verification = new FakeLocator({ count: 1, visible: true, enabled: false, editable: false });
+  const page = new FakePage(submit, undefined, new Map([[
+    WORKDAY_INLINE_VERIFICATION_SELECTORS[0]!,
+    verification,
+  ]]));
+  verification.values.visibleResults = [false];
+
+  await new PlaywrightAccountPageAdapter({
+    trace: (event) => events.push(event),
+  }).activate(page, "submit_sign_in");
+
+  assert.deepEqual(verification.waitForArguments, [{ state: "visible", timeout: 10_000 }]);
+  assert.equal(events.at(-1), "submit_exact_fact_observed");
+});
+
+test("the exact account fact remains recognized after submit hide and reappearance", async () => {
+  const events: string[] = [];
+  let release!: () => void;
+  let markStarted!: () => void;
+  const started = new Promise<void>((resolve) => { markStarted = resolve; });
+  const wait = new Promise<void>((resolve) => { release = resolve; });
+  const submit = new FakeLocator({ count: 1, visible: true, enabled: true, editable: false });
+  const absentDestination = new FakeLocator({
+    count: 0,
+    visible: false,
+    enabled: false,
+    editable: false,
+    attachedWaitFails: true,
+  });
+  const fact = new FakeLocator({
+    count: 1,
+    visible: true,
+    enabled: false,
+    editable: false,
+    visibleResults: [false],
+    visibleWaitGate: { started, wait, markStarted: () => markStarted() },
+  });
+  const page = new FakePage(submit, absentDestination, new Map([
+    [WORKDAY_ACCOUNT_FACT_SELECTORS.absent, fact],
+    [SIGN_IN_EXACT_FACT_SELECTORS.join(", "), fact],
+  ]));
+
+  let settled = false;
+  const pending = new PlaywrightAccountPageAdapter({
+    trace: (event) => events.push(event),
+  }).activate(page, "submit_sign_in").then(() => { settled = true; });
+  await started;
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  assert.equal(settled, false);
+  release();
+  await pending;
+
+  assert.deepEqual(fact.waitForArguments, [{ state: "visible", timeout: 10_000 }]);
+  assert.equal(events.at(-1), "submit_exact_fact_observed");
+});
+
+test("a hidden earlier marker cannot starve a later visible exact marker", async () => {
+  const submit = new FakeLocator({
+    count: 1,
+    visible: true,
+    enabled: true,
+    editable: false,
+    hiddenWaitFails: true,
+  });
+  const hidden = new FakeLocator({
+    count: 1,
+    visible: false,
+    visibleResults: [false],
+    enabled: false,
+    editable: false,
+    visibleWaitFails: true,
+  });
+  const visible = new FakeLocator({
+    count: 1,
+    visible: true,
+    visibleResults: [false],
+    enabled: false,
+    editable: false,
+  });
+  const page = new FakePage(submit, undefined, new Map([
+    [SIGN_IN_EXACT_FACT_SELECTORS[0]!, hidden],
+    [SIGN_IN_EXACT_FACT_SELECTORS[1]!, visible],
+  ]));
+
+  await new PlaywrightAccountPageAdapter().activate(page, "submit_sign_in");
+
+  assert.deepEqual(hidden.waitForArguments, [{ state: "visible", timeout: 10_000 }]);
+  assert.deepEqual(visible.waitForArguments, [{ state: "visible", timeout: 10_000 }]);
+});
+
+test("a pre-existing visible marker cannot settle a new submit effect", async () => {
+  const submit = new FakeLocator({
+    count: 1,
+    visible: true,
+    enabled: true,
+    editable: false,
+    hiddenWaitFails: true,
+  });
+  const stale = new FakeLocator({ count: 1, visible: true, enabled: false, editable: false });
+  const page = new FakePage(submit, undefined, new Map([
+    [WORKDAY_ACCOUNT_FACT_SELECTORS.absent, stale],
+    [SIGN_IN_EXACT_FACT_SELECTORS.join(", "), stale],
+  ]));
+
+  await assert.rejects(
+    new PlaywrightAccountPageAdapter().activate(page, "submit_sign_in"),
+    /submit effect did not settle/u,
+  );
+
+  assert.equal(stale.isVisibleCalls, 1);
+  assert.deepEqual(stale.waitForArguments, []);
 });
 
 test("a markerless rejected submit may detach then reattach before classification", async () => {
@@ -487,7 +669,9 @@ test("submit stabilization excludes the stale current account container", async 
 
     await new PlaywrightAccountPageAdapter().activate(page, action);
 
-    const destination = (page.calls[1] as { readonly selector: string }).selector;
+    const destination = (page.calls as Array<{ readonly selector?: string }>).find(({ selector }) =>
+      selector?.includes("candidateHomePage")
+    )?.selector ?? "";
     assert.equal(destination.includes(`[data-automation-id="${staleMarker}"]`), false);
     assert.equal(destination.includes('[data-automation-id="authPage"]'), false);
   }
@@ -634,6 +818,13 @@ class FakePage {
   readonly resultLocator: FakeLocator;
   readonly destinationLocator: FakeLocator;
   readonly selectorLocators: ReadonlyMap<string, FakeLocator>;
+  readonly absentExactFactLocator = new FakeLocator({
+    count: 0,
+    visible: false,
+    enabled: false,
+    editable: false,
+    visibleWaitFails: true,
+  });
   constructor(
     locator: FakeLocator,
     destinationLocator: FakeLocator = locator,
@@ -655,6 +846,11 @@ class FakePage {
     this.calls.push({ method: "locator", selector });
     const selected = this.selectorLocators.get(selector);
     if (selected !== undefined) return selected;
+    if (
+      selector.includes("accountNotFoundError") ||
+      selector.includes("accountAlreadyExistsError") ||
+      selector.includes('signInPage"]:has-text')
+    ) return this.absentExactFactLocator;
     return selector.includes("candidateHomePage")
       ? this.destinationLocator
       : this.resultLocator;
@@ -675,12 +871,20 @@ class FakeLocator {
     attachedWaitFails?: boolean;
     attachedWaitYields?: boolean;
     visibleWaitFails?: boolean;
+    visibleWaitYields?: boolean;
+    visibleResults?: boolean[];
+    visibleWaitGate?: {
+      readonly started: Promise<void>;
+      readonly wait: Promise<void>;
+      readonly markStarted: () => void;
+    };
     clickFails?: boolean;
     clickError?: Error;
     hitTarget?: string;
   };
   readonly fillArguments: string[] = [];
   inputValueCalls = 0;
+  isVisibleCalls = 0;
   clearCalls = 0;
   evaluateCalls = 0;
   clickCalls = 0;
@@ -696,6 +900,13 @@ class FakeLocator {
     attachedWaitFails?: boolean;
     attachedWaitYields?: boolean;
     visibleWaitFails?: boolean;
+    visibleWaitYields?: boolean;
+    visibleResults?: boolean[];
+    visibleWaitGate?: {
+      readonly started: Promise<void>;
+      readonly wait: Promise<void>;
+      readonly markStarted: () => void;
+    };
     clickFails?: boolean;
     clickError?: Error;
     hitTarget?: string;
@@ -703,7 +914,10 @@ class FakeLocator {
     this.values = values;
   }
   async count(): Promise<number> { return this.values.count; }
-  async isVisible(): Promise<boolean> { return this.values.visible; }
+  async isVisible(): Promise<boolean> {
+    this.isVisibleCalls += 1;
+    return this.values.visibleResults?.shift() ?? this.values.visible;
+  }
   async isEnabled(): Promise<boolean> { return this.values.enabled; }
   async isEditable(): Promise<boolean> { return this.values.editable; }
   async fill(value: string): Promise<void> { this.fillArguments.push(value); }
@@ -750,6 +964,17 @@ class FakeLocator {
       this.values.visibleWaitFails &&
       (options as { readonly state?: string }).state === "visible"
     ) throw new Error("state remained hidden");
+    if (
+      this.values.visibleWaitYields &&
+      (options as { readonly state?: string }).state === "visible"
+    ) await new Promise<void>((resolve) => queueMicrotask(resolve));
+    if (
+      this.values.visibleWaitGate !== undefined &&
+      (options as { readonly state?: string }).state === "visible"
+    ) {
+      this.values.visibleWaitGate.markStarted();
+      await this.values.visibleWaitGate.wait;
+    }
   }
   first(): FakeLocator { return this; }
   async check(): Promise<void> { this.checkCalls += 1; }

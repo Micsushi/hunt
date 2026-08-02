@@ -45,11 +45,16 @@ const pageRules = Object.freeze([
   rule("structural_trait_page_review_step_v1", '[data-automation-id="applyFlowReviewPage"]'),
 ] satisfies readonly TraitRule[]);
 
-const inlineVerificationSelectors = Object.freeze([
+export const WORKDAY_INLINE_VERIFICATION_SELECTORS = Object.freeze([
   '[data-automation-id="signInPage"]:has-text("An email has been sent to you. Please verify your account.")',
   '[data-automation-id="signInPage"]:has-text("verify your account before you sign in")',
   '[data-automation-id="signInPage"]:has-text("request a verification email")',
 ]);
+
+export const WORKDAY_ACCOUNT_FACT_SELECTORS = Object.freeze({
+  absent: '[data-automation-id="accountNotFoundError"]',
+  exists: '[data-automation-id="accountAlreadyExistsError"]',
+});
 
 const accountRules = Object.freeze([
   rule("structural_trait_account_sign_in_v1", '[data-automation-id="signInPage"]'),
@@ -59,8 +64,8 @@ const accountRules = Object.freeze([
 ] satisfies readonly TraitRule[]);
 
 const accountFactRules = Object.freeze([
-  rule("structural_trait_account_absent_v1", '[data-automation-id="accountNotFoundError"]'),
-  rule("structural_trait_account_exists_v1", '[data-automation-id="accountAlreadyExistsError"]'),
+  rule("structural_trait_account_absent_v1", WORKDAY_ACCOUNT_FACT_SELECTORS.absent),
+  rule("structural_trait_account_exists_v1", WORKDAY_ACCOUNT_FACT_SELECTORS.exists),
 ] satisfies readonly TraitRule[]);
 
 const challengeRules = Object.freeze([
@@ -105,7 +110,7 @@ export async function inspectWorkdayStructure(
   if (routeIsPosting) traitIds.push("structural_trait_page_job_posting_v1");
   const inlineVerification = await anyExactVisible(
     page,
-    inlineVerificationSelectors,
+    WORKDAY_INLINE_VERIFICATION_SELECTORS,
   );
   if (inlineVerification) {
     traitIds.push("structural_trait_page_email_verification_v1");

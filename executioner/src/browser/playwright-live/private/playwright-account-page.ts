@@ -7,6 +7,10 @@ import type {
   SemanticControlFact,
 } from "./account-page-types.ts";
 import type { PersistentPage } from "./types.ts";
+import {
+  WORKDAY_ACCOUNT_FACT_SELECTORS,
+  WORKDAY_INLINE_VERIFICATION_SELECTORS,
+} from "./workday-structural-catalog.ts";
 
 export type PlaywrightAccountPageTraceEvent =
   | "submit_click_started"
@@ -38,6 +42,7 @@ export type PlaywrightAccountPageTraceEvent =
   | "submit_hit_target_small_overlay"
   | "submit_hit_target_unavailable"
   | "submit_control_remained_visible"
+  | "submit_exact_fact_observed"
   | "submit_destination_observed"
   | "submit_rejection_reappeared"
   | "submit_rejection_submit_owner_wait_failed"
@@ -128,7 +133,17 @@ export class PlaywrightAccountPageAdapter implements SemanticAccountPageAdapter 
     if (action === "accept_terms") await locator.check();
     else {
       const submit = action === "submit_sign_in" || action === "submit_create_account";
+      let postClickExactFactLocators: readonly Locator[] = [];
       if (submit) {
+        const candidates = postSubmitExactFactSelectors(action).map((selector) =>
+          playwrightPage(page).locator(selector)
+        );
+        const visibleBeforeClick = await Promise.all(candidates.map((candidate) =>
+          candidate.isVisible()
+        ));
+        postClickExactFactLocators = candidates.filter(
+          (_candidate, index) => !visibleBeforeClick[index],
+        );
         const hitTarget = await inspectSubmitHitTarget(locator);
         this.#emit(hitTarget);
         this.#emit("submit_click_started");
@@ -144,15 +159,28 @@ export class PlaywrightAccountPageAdapter implements SemanticAccountPageAdapter 
       }
       if (submit) {
         this.#emit("submit_click_succeeded");
-        const transitioned = await locator.waitFor({
-          state: "hidden",
-          timeout: 10_000,
-        }).then(() => true, () => false);
-        if (transitioned) {
-          let observed: "destination" | "rejection";
+        const exactFact = waitForExactFact(postClickExactFactLocators);
+        let initial: "transition" | "exact_fact";
+        try {
+          initial = await Promise.any([
+            locator.waitFor({
+              state: "hidden",
+              timeout: 10_000,
+            }).then(() => "transition" as const),
+            exactFact,
+          ]);
+        } catch {
+          this.#emit("submit_control_remained_visible");
+          throw new Error("submit effect did not settle");
+        }
+        if (initial === "exact_fact") {
+          this.#emit("submit_exact_fact_observed");
+        } else {
+          let observed: "destination" | "rejection" | "exact_fact";
           try {
             try {
               observed = await Promise.any([
+                exactFact,
                 playwrightPage(page).locator(postSubmitDestination(action))
                   .first()
                   .waitFor({ state: "attached", timeout: 10_000 })
@@ -163,6 +191,10 @@ export class PlaywrightAccountPageAdapter implements SemanticAccountPageAdapter 
             } catch (error) {
               this.#emit("submit_rejection_submit_owner_wait_failed");
               throw error;
+            }
+            if (observed === "exact_fact") {
+              this.#emit("submit_exact_fact_observed");
+              return;
             }
             if (observed === "rejection") {
               const readinessWaits: Array<readonly [
@@ -193,6 +225,13 @@ export class PlaywrightAccountPageAdapter implements SemanticAccountPageAdapter 
                   throw error;
                 }
               }));
+              try {
+                await exactFact;
+                this.#emit("submit_exact_fact_observed");
+                return;
+              } catch {
+                // The exact-marker boundary elapsed; F5 may now classify the stable rejection.
+              }
             }
           } catch (error) {
             this.#emit("submit_stabilization_failed");
@@ -203,7 +242,7 @@ export class PlaywrightAccountPageAdapter implements SemanticAccountPageAdapter 
               ? "submit_destination_observed"
               : "submit_rejection_reappeared",
           );
-        } else this.#emit("submit_control_remained_visible");
+        }
       }
     }
   }
@@ -298,6 +337,25 @@ function postSubmitDestination(
     ? '[data-automation-id="createAccountPage"]'
     : '[data-automation-id="signInPage"]';
   return [opposingAccountPage, ...POST_SUBMIT_DESTINATIONS].join(", ");
+}
+
+function postSubmitExactFactSelectors(
+  action: "submit_sign_in" | "submit_create_account",
+): readonly string[] {
+  return action === "submit_sign_in"
+    ? [
+        WORKDAY_ACCOUNT_FACT_SELECTORS.absent,
+        ...WORKDAY_INLINE_VERIFICATION_SELECTORS,
+      ]
+    : [WORKDAY_ACCOUNT_FACT_SELECTORS.exists];
+}
+
+function waitForExactFact(
+  locators: readonly Locator[],
+): Promise<"exact_fact"> {
+  return Promise.any(locators.map((locator) =>
+    locator.waitFor({ state: "visible", timeout: 10_000 })
+  )).then(() => "exact_fact" as const);
 }
 
 function playwrightPage(page: PersistentPage): Pick<Page, "locator"> {

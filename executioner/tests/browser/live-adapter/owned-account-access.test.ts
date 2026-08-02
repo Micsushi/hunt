@@ -632,6 +632,44 @@ test("timeout after a fill begins is uncertain and invalidates the session", asy
   assert.equal(semantic.receivedBuffers.every((bytes) => bytes.every((value) => value === 0)), true);
 });
 
+test("an unsettled submit effect is uncertain and invalidates the session", async () => {
+  const context = new FakeContext();
+  const semantic = new FakeSemanticAccountPage();
+  semantic.activateError = new Error("submit effect did not settle");
+  const provider = new PlaywrightPersistentBrowserSession({
+    binding: binding(),
+    launcher: { async launchPersistentContext() { return context; } },
+    probe: { async inspect() { return ownedMatched(); } },
+    profiles: new MemoryProfiles(),
+    accountPage: semantic,
+    ids: () => liveFixtures.session.sessionId as LiveSessionId,
+    timeoutMs: 100,
+  });
+  const opened = await provider.open(
+    { ...openRequest(), operationId: generatedOperationId("operation_8100000000000034") },
+    AbortSignal.any([]),
+  );
+  assert.equal(opened.ok, true);
+  if (!opened.ok) return;
+  let activation: unknown;
+
+  const result = await provider.withOwnedAccountPageAccess(
+    {
+      ...accessRequest(opened.value.session.sessionId),
+      operationId: generatedOperationId("operation_8200000000000034"),
+    },
+    AbortSignal.any([]),
+    async (access) => { activation = await access.activate("submit_sign_in"); },
+  );
+
+  assert.deepEqual(activation, {
+    ok: false,
+    error: { code: "browser_effect_uncertain", retryable: false },
+  });
+  assert.deepEqual(result, activation);
+  assert.equal(context.closeCount, 1);
+});
+
 test("ownership loss during independent field verification preserves effect uncertainty", async () => {
   const context = new FakeContext();
   let checks = 0;
@@ -754,6 +792,7 @@ class FakeSemanticAccountPage {
   readonly facts = new Map<string, { cardinality: number; actionable: boolean }>();
   readonly activated: string[] = [];
   fillCalls = 0;
+  activateError?: Error;
   fillGate?: {
     readonly started: Promise<void>;
     readonly wait: Promise<void>;
@@ -782,5 +821,6 @@ class FakeSemanticAccountPage {
   }
   async activate(_page: unknown, action: string): Promise<void> {
     this.activated.push(action);
+    if (this.activateError !== undefined) throw this.activateError;
   }
 }
