@@ -54,7 +54,7 @@ test("account-verified bindings share the one navigation operation with Gmail", 
   assert.equal(value.lifecycle.target, value.target);
   assert.equal(value.runner.targetHandleId, "target_ref_abcdefghijklmnop");
   assert.equal(value.mailboxRequest.notBefore, now);
-  assert.equal(value.mailboxRequest.notAfter, now);
+  assert.equal(value.mailboxRequest.notAfter, ownerInputs().approval.expiresAt);
   assert.match(value.mailboxRequest.queryId, /^mailbox_query_/u);
   assert.notEqual(value.mailboxRequest.queryId, operations.navigateVerification);
   assert.equal(JSON.stringify(value).includes("myworkdayjobs.com"), false);

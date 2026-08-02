@@ -138,7 +138,7 @@ export function createAccountVerifiedBindings(
     recipientBindingId: owner.recipientBindingId as RecipientBindingId,
     target,
     notBefore,
-    notAfter: now,
+    notAfter: owner.approval.expiresAt,
   });
   const lifecycle = Object.freeze({
     schemaVersion: 1 as const,
@@ -166,7 +166,7 @@ export function createAccountVerifiedBindings(
     }) as SenderPolicyId,
     target,
     notBefore,
-    notAfter: now,
+    notAfter: owner.approval.expiresAt,
     verificationOperationId: operations.navigateVerification,
   });
   const runner: Stage2AccountVerifiedInput = Object.freeze({
