@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "stage": "s2",
   "feature": "s2-f2-t3",
-  "assemblyBaseRevision": "c5fa00156f282487fefa6dc8adfde5d8a75a1c91",
+  "assemblyBaseRevision": "c8bc005338942d414bb41b00c6c4b13cb6550895",
   "acceptedInputs": {
     "s2F0": "730846b57a8ab7901a9818794921f8f9da01e0ed",
     "s2F1T5": "d6602abf41f181376164eac2d32d587fc6bf5a5b",
@@ -22,7 +22,14 @@
     "s2F2ReviewLiveExpiry": "ac925c4b8c76e5f2e3f59d9ed4de627372e79fee",
     "s2F2ReviewGrantLookup": "816f5126922208b3c27395f63adc20dfdba444d8",
     "s2F2ReviewRevocationAdmission": "fc1415cd8749c526fa053c6c3b1a418821245495",
-    "s2F2ReviewTypeNarrowing": "c5fa00156f282487fefa6dc8adfde5d8a75a1c91"
+    "s2F2ReviewTypeNarrowing": "c5fa00156f282487fefa6dc8adfde5d8a75a1c91",
+    "s2F2GoogleRefreshExpiry": "c33d9249ea88bcf22727e57045d52675d011138c",
+    "s2F2MailboxPolling": "6f24fa1fff27b06d74030ef6e8f64ca1ef79a451",
+    "s2F2AccountReuseLoginFirst": "b3cbbe5af4a5b12354544b5d82735cdf70985547",
+    "s2F2AccountExistencePrivacy": "834e40cc4d44440f67a974bf9860a4be89266dd3",
+    "s2F2AccountOwnershipRepair": "6c6263da88c60711b0bc9d6c4761bb90381edf5f",
+    "s2F2AccountComposition": "ade576baa49568299e95f5505eed7420a09c7e2b",
+    "s2F2PollingOwnership": "c8bc005338942d414bb41b00c6c4b13cb6550895"
   },
   "frozenContractRevision": "100b6bbf360f2c2e3cd93384e1fba7c115a92f15",
   "frozenContractTree": "13a8406e9c296b77aead3a0f961beba1110fba61"
