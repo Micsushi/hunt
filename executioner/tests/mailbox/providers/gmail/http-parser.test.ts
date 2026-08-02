@@ -1,7 +1,11 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { parseGmailMessage } from "../../../../src/mailbox/providers/gmail/http-parser.ts";
+import {
+  GmailProviderFailure,
+  parseGmailMessage,
+  parseMessageIds,
+} from "../../../../src/mailbox/providers/gmail/http-parser.ts";
 
 const expected = {
   senderAddress: "workday@example.invalid",
@@ -38,6 +42,30 @@ function message(overrides: Record<string, unknown> = {}) {
     ...overrides,
   };
 }
+
+test("list parsing fails closed on pagination and result overflow", () => {
+  const invalid = [
+    { messages: [{ id: "one" }], nextPageToken: "private-page-token" },
+    { messages: [{ id: "one" }], nextPageToken: "" },
+    { messages: [{ id: "one" }], resultSizeEstimate: 2 },
+    { messages: [], resultSizeEstimate: 1 },
+    { messages: [{ id: "one" }], resultSizeEstimate: "1" },
+  ];
+  for (const value of invalid) {
+    assert.throws(
+      () => parseMessageIds(value),
+      (error: unknown) =>
+        error instanceof GmailProviderFailure &&
+        error.code === "mailbox_query_invalid",
+    );
+  }
+
+  assert.deepEqual(
+    parseMessageIds({ messages: [{ id: "one" }], resultSizeEstimate: 1 }),
+    ["one"],
+  );
+  assert.deepEqual(parseMessageIds({ resultSizeEstimate: 0 }), []);
+});
 
 test("finds an admitted target in a bounded later MIME part", () => {
   const parsed = parseGmailMessage(message(), expected);

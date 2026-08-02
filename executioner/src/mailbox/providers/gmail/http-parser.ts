@@ -22,11 +22,24 @@ export interface ParsedGmailMessage {
 
 export function parseMessageIds(value: unknown): readonly string[] {
   if (!record(value)) throw new GmailProviderFailure("mailbox_query_invalid");
-  if (!("messages" in value)) return [];
-  if (!Array.isArray(value.messages) || value.messages.length > 2) {
+  if ("nextPageToken" in value) {
     throw new GmailProviderFailure("mailbox_query_invalid");
   }
-  return value.messages.map((item) => {
+  const messages = "messages" in value ? value.messages : [];
+  if (!Array.isArray(messages) || messages.length > 2) {
+    throw new GmailProviderFailure("mailbox_query_invalid");
+  }
+  if (
+    "resultSizeEstimate" in value &&
+    (
+      typeof value.resultSizeEstimate !== "number" ||
+      !Number.isSafeInteger(value.resultSizeEstimate) ||
+      value.resultSizeEstimate !== messages.length
+    )
+  ) {
+    throw new GmailProviderFailure("mailbox_query_invalid");
+  }
+  return messages.map((item) => {
     if (!record(item) || typeof item.id !== "string" || !bounded(item.id, 1, 256)) {
       throw new GmailProviderFailure("mailbox_query_invalid");
     }

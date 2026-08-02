@@ -34,7 +34,7 @@ function failureCode(expected: string) {
     error instanceof GmailProviderFailure && error.code === expected;
 }
 
-test("never follows redirects or pagination and stays within two message fetches", async () => {
+test("never follows redirects and fails closed before pagination", async () => {
   let redirectCalls = 0;
   const redirect = createServer((_request, response) => {
     redirectCalls += 1;
@@ -83,12 +83,14 @@ test("never follows redirects or pagination and stays within two message fetches
   });
   const paginationBase = await listen(pagination);
   try {
-    const result = await new GmailHttpClient({
-      baseUrl: paginationBase,
-      allowLoopbackHttp: true,
-    }).query(authority, window, new AbortController().signal);
-    assert.equal(result.length, 1);
-    assert.equal(paginationCalls, 2);
+    await assert.rejects(
+      new GmailHttpClient({
+        baseUrl: paginationBase,
+        allowLoopbackHttp: true,
+      }).query(authority, window, new AbortController().signal),
+      failureCode("mailbox_query_invalid"),
+    );
+    assert.equal(paginationCalls, 1);
   } finally {
     await close(pagination);
   }
