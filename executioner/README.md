@@ -228,8 +228,8 @@ F2 handles:
 npm run live:s2 -- --config C:\private\f2-owner-inputs.json --stop-after mailbox_candidate --evidence-root C:\private\s2-evidence
 ```
 
-The runner queries only `gmail-api-v1` through the scoped Gmail handle. It holds
-the lower query bound at start minus 24 hours, advances the upper bound per
+The runner queries only `gmail-api-v1` through the scoped Gmail handle across an
+exact trailing 24-hour window. It holds the lower query bound at start minus 24 hours, advances the upper bound per
 attempt, and uses a fresh query ID and provider instance on every attempt. F9
 polls for at most 60 seconds and never beyond approval expiry, backing off from
 250 milliseconds to at most 5 seconds. It retries only exact zero-candidate and
