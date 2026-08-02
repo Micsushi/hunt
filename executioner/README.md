@@ -250,13 +250,13 @@ npm run live:s2 -- --config C:\private\f2-owner-inputs.json --stop-after account
 
 The runner inspects both handles before browser creation. The lifecycle first
 observes the page. An application-ready page is a no-op and a verification page
-enters verification. Existing-account and create-account pages both attempt
-sign-in first. Fresh-create intent may create only after sign-in returns the
-exact private `account_absent` fact and a separate observation confirms absence;
-ordinary sign-in rejection never implies absence. If create returns the exact
-private `account_exists` fact, the lifecycle independently observes it and
-switches once to sign-in. This prevents duplicate account creation while keeping
-the private existence facts out of the public terminal contract.
+enters verification. Existing-account intent signs in, while fresh-create intent
+switches to Create Account and creates first even when Workday defaults to the
+Sign In page. Ordinary sign-in rejection never implies account absence. If
+create returns the exact private `account_exists` fact, the lifecycle
+independently observes it and switches once to sign-in. This prevents an
+ambiguous sign-in error from blocking first-time signup while still preventing
+duplicate account creation.
 
 Tests use Node's built-in runner. Components may depend on shared contracts but
 not on peer implementations or C3 v2 source.
