@@ -62,7 +62,7 @@ public static class HuntInteractiveGmailOAuthSealer
             installedClient = ReadInstalledClient(installedClientConfigPath, clientId);
             sender = ReadSenderPolicy(senderPolicyConfigPath);
 
-            token = Authorize(clientId, installedClient.Secret);
+            token = Authorize(clientId, installedClient.Secret, accountEmail);
             ValidateExpiry(gmailMetadata, token.ExpiresIn, token.ReceivedAt);
             string profileEmail = ProfileEmail(token.AccessValue);
             if (!String.Equals(accountEmail, profileEmail, StringComparison.OrdinalIgnoreCase))
@@ -267,7 +267,7 @@ public static class HuntInteractiveGmailOAuthSealer
         finally { Clear(bytes); }
     }
 
-    private static Token Authorize(string clientId, string clientSecret)
+    private static Token Authorize(string clientId, string clientSecret, string loginHint)
     {
         byte[] verifierBytes = RandomBytes(64);
         byte[] stateBytes = RandomBytes(32);
@@ -284,11 +284,7 @@ public static class HuntInteractiveGmailOAuthSealer
             listener.Start(1);
             int port = ((IPEndPoint)listener.LocalEndpoint).Port;
             string redirect = "http://127.0.0.1:" + port + "/oauth2callback";
-            string authorization = AuthorizationEndpoint + "?" + Form(new Dictionary<string, string> {
-                { "client_id", clientId }, { "redirect_uri", redirect },
-                { "response_type", "code" }, { "scope", Scope }, { "state", state },
-                { "code_challenge", challenge }, { "code_challenge_method", "S256" }
-            });
+            string authorization = AuthorizationUrl(clientId, redirect, state, challenge, loginHint);
             Process.Start(new ProcessStartInfo(authorization) { UseShellExecute = true });
             string code = ReceiveCode(listener, port, state);
             DateTimeOffset receivedAt = DateTimeOffset.UtcNow;
@@ -319,8 +315,26 @@ public static class HuntInteractiveGmailOAuthSealer
         finally
         {
             clientSecret = null;
+            loginHint = null;
             listener.Stop();
         }
+    }
+
+    private static string AuthorizationUrl(
+        string clientId,
+        string redirect,
+        string state,
+        string challenge,
+        string loginHint
+    )
+    {
+        if (!ValidEmail(loginHint)) throw new FlowException(3);
+        return AuthorizationEndpoint + "?" + Form(new Dictionary<string, string> {
+            { "client_id", clientId }, { "redirect_uri", redirect },
+            { "response_type", "code" }, { "scope", Scope }, { "state", state },
+            { "code_challenge", challenge }, { "code_challenge_method", "S256" },
+            { "login_hint", loginHint }
+        });
     }
 
     private static string ReceiveCode(TcpListener listener, int port, string state)
