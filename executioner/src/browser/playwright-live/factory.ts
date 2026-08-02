@@ -8,6 +8,7 @@ import {
   type PlaywrightAccountPageTraceEvent,
 } from "./private/playwright-account-page.ts";
 import { PlaywrightPostingNavigationAdapter } from "./private/playwright-posting-navigation.ts";
+import { PlaywrightVerificationNavigationAdapter } from "./private/playwright-verification-navigation.ts";
 import type { PersistentBrowserRuntimeBinding } from "./private/types.ts";
 import { WorkdayOwnedTargetProbe } from "./private/workday-owned-target-probe.ts";
 import { PlaywrightPersistentBrowserSession } from "./session.ts";
@@ -28,6 +29,7 @@ export function createPlaywrightPersistentBrowserSession(
     profiles: new FileProfileStore(),
     accountPage: new PlaywrightAccountPageAdapter({ trace: options.accountTrace }),
     postingNavigation: new PlaywrightPostingNavigationAdapter(),
+    verificationNavigation: new PlaywrightVerificationNavigationAdapter(),
     ids: nextSessionId,
     timeoutMs: options.timeoutMs ?? 30_000,
   });
