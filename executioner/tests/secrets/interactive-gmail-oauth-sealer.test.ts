@@ -34,6 +34,31 @@ class ReplyProcess implements InteractiveGmailOAuthProcess {
     if (this.#reply instanceof Error) throw this.#reply;
     return this.#reply;
   }
+
+  async reconcile(): Promise<void> {}
+}
+
+class PersistThenFailProcess implements InteractiveGmailOAuthProcess {
+  persisted = false;
+  reconcileInput?: Uint8Array;
+  readonly #failure: Error;
+  readonly #reconcileFailure?: Error;
+
+  constructor(failure: Error, reconcileFailure?: Error) {
+    this.#failure = failure;
+    this.#reconcileFailure = reconcileFailure;
+  }
+
+  async run(): Promise<Uint8Array> {
+    this.persisted = true;
+    throw this.#failure;
+  }
+
+  async reconcile(input: Uint8Array): Promise<void> {
+    this.reconcileInput = Uint8Array.from(input);
+    if (this.#reconcileFailure !== undefined) throw this.#reconcileFailure;
+    this.persisted = false;
+  }
 }
 
 class ControlledUnprotectBridge extends WindowsDpapiBridge {
@@ -266,6 +291,45 @@ test("fails closed for cancellation, helper failure, and malformed output", asyn
   );
 });
 
+test("timeout and cancellation reconcile an uncertain durable refresh grant before failing", async () => {
+  for (const message of ["Gmail OAuth timeout", "Gmail OAuth cancelled"] as const) {
+    const process = new PersistThenFailProcess(new Error(message));
+    await assert.rejects(
+      new WindowsInteractiveGmailOAuthSealer({ process }).seal(
+        request,
+        new AbortController().signal,
+      ),
+      new RegExp(message, "u"),
+    );
+    assert.equal(process.persisted, false);
+    const input = Buffer.from(process.reconcileInput ?? []);
+    assert.equal(input.subarray(0, 4).toString("ascii"), "HAGC");
+    assert.equal(input[4], 1);
+    assert.equal(input[5], 4);
+    assert.equal(input.includes(Buffer.from(request.clientId)), true);
+    assert.equal(input.includes(Buffer.from(request.installedClientConfigPath)), true);
+    assert.equal(input.includes(Buffer.from("person@example.invalid")), false);
+    assert.equal(input.includes(Buffer.from("refresh")), false);
+  }
+});
+
+test("failed durable-grant reconciliation outranks a timeout or cancellation report", async () => {
+  for (const message of ["Gmail OAuth timeout", "Gmail OAuth cancelled"] as const) {
+    const process = new PersistThenFailProcess(
+      new Error(message),
+      new Error("synthetic cleanup detail"),
+    );
+    await assert.rejects(
+      new WindowsInteractiveGmailOAuthSealer({ process }).seal(
+        request,
+        new AbortController().signal,
+      ),
+      /^Error: Gmail OAuth reconciliation failed$/u,
+    );
+    assert.equal(process.persisted, true);
+  }
+});
+
 test("production helper pins PKCE loopback Gmail readonly profile equality and DPAPI", async () => {
   const source = await readFile(
     "src/secrets/windows-dpapi/private/interactive-gmail-oauth-sealer.ts",
@@ -296,6 +360,7 @@ test("production helper pins PKCE loopback Gmail readonly profile equality and D
   assert.match(source, /EntryPoint = "CredReadW"/u);
   assert.match(source, /EntryPoint = "CredWriteW"/u);
   assert.match(source, /EntryPoint = "CredDeleteW"/u);
+  assert.match(source, /WriteReconcileOutput\(DeleteFromInput\(input\)\)/u);
   assert.match(source, /LocalMachinePersistence = 2/u);
   assert.match(source, /MaximumRefreshGrantBytes = 512/u);
   assert.match(source, /Comment = null/u);
@@ -336,6 +401,14 @@ test("production helper pins PKCE loopback Gmail readonly profile equality and D
   assert.doesNotMatch(bundleBlock, /login_hint|loginHint|accountEmail/u);
   assert.match(source, /windowsHide:\s*false/u);
   assert.match(source, /shell:\s*false/u);
+  const cancelBlock = /const cancel = \(\) => \{[\s\S]*?\n      \};/u.exec(source)?.[0] ?? "";
+  assert.match(cancelBlock, /terminalError = new Error\("Gmail OAuth cancelled"\)/u);
+  assert.match(cancelBlock, /child\.kill\(\)/u);
+  assert.doesNotMatch(cancelBlock, /finish\(/u);
+  assert.match(
+    source,
+    /child\.once\("close", \(code\) => \{\s*if \(terminalError !== undefined\) \{\s*finish\(terminalError\)/u,
+  );
   assert.doesNotMatch(source, /process\.env|refresh_token[^\n]*bundle/iu);
   assert.doesNotMatch(source, /Write-(?:Output|Error|Host)|console\.(?:log|error)/iu);
 });

@@ -8,6 +8,8 @@ const INPUT_MAGIC = Buffer.from("HAGI", "ascii");
 const OUTPUT_MAGIC = Buffer.from("HAGS", "ascii");
 const REVOKE_INPUT_MAGIC = Buffer.from("HAGR", "ascii");
 const REVOKE_OUTPUT_MAGIC = Buffer.from("HAGR", "ascii");
+const RECONCILE_INPUT_MAGIC = Buffer.from("HAGC", "ascii");
+const RECONCILE_OUTPUT_MAGIC = Buffer.from("HAGC", "ascii");
 
 const INTERACTIVE_GMAIL_OAUTH_SCRIPT = String.raw`
 $ErrorActionPreference = 'Stop'
@@ -261,6 +263,7 @@ public static class HuntInteractiveGmailOAuthSealer
     {
         byte[][] input = null;
         bool revoke = false;
+        bool reconcile = false;
         byte[] account = null;
         byte[] bundle = null;
         byte[] framedBundle = null;
@@ -270,10 +273,15 @@ public static class HuntInteractiveGmailOAuthSealer
         string sender = null;
         try
         {
-            input = ReadInput(out revoke);
+            input = ReadInput(out revoke, out reconcile);
             if (revoke)
             {
                 WriteRevokeOutput(RevokeFromInput(input));
+                return 0;
+            }
+            if (reconcile)
+            {
+                WriteReconcileOutput(DeleteFromInput(input));
                 return 0;
             }
             account = ProtectedData.Unprotect(input[2], input[1], DataProtectionScope.CurrentUser);
@@ -350,6 +358,31 @@ public static class HuntInteractiveGmailOAuthSealer
                 accountEmail,
                 new WindowsCredentialManagerGrantStore(),
                 new WindowsGmailGrantRevocationClient()
+            );
+        }
+        finally
+        {
+            Clear(account);
+            if (installedClient != null) installedClient.Clear();
+        }
+    }
+
+    private static bool DeleteFromInput(byte[][] input)
+    {
+        byte[] account = null;
+        InstalledClient installedClient = null;
+        try
+        {
+            account = ProtectedData.Unprotect(input[1], input[0], DataProtectionScope.CurrentUser);
+            string accountEmail = ReadAccountEmail(account);
+            string clientId = StrictUtf8(input[2]);
+            string installedClientConfigPath = StrictUtf8(input[3]);
+            ValidateClient(clientId);
+            installedClient = ReadInstalledClient(installedClientConfigPath, clientId);
+            return DeleteGrant(
+                clientId,
+                accountEmail,
+                new WindowsCredentialManagerGrantStore()
             );
         }
         finally
@@ -513,15 +546,16 @@ public static class HuntInteractiveGmailOAuthSealer
         catch { return false; }
     }
 
-    private static byte[][] ReadInput(out bool revoke)
+    private static byte[][] ReadInput(out bool revoke, out bool reconcile)
     {
         BinaryReader reader = new BinaryReader(Console.OpenStandardInput());
         byte[] magic = reader.ReadBytes(4);
         if (magic.Length != 4 || magic[0] != 72 || magic[1] != 65 || magic[2] != 71 ||
-            (magic[3] != 73 && magic[3] != 82))
+            (magic[3] != 73 && magic[3] != 82 && magic[3] != 67))
             throw new InvalidDataException();
         revoke = magic[3] == 82;
-        int count = revoke ? 4 : 7;
+        reconcile = magic[3] == 67;
+        int count = revoke || reconcile ? 4 : 7;
         if (reader.ReadByte() != 1 || reader.ReadByte() != count) throw new InvalidDataException();
         byte[][] sections = new byte[count][];
         for (int index = 0; index < sections.Length; index++)
@@ -1210,6 +1244,15 @@ public static class HuntInteractiveGmailOAuthSealer
         writer.Flush();
     }
 
+    private static void WriteReconcileOutput(bool removed)
+    {
+        BinaryWriter writer = new BinaryWriter(Console.OpenStandardOutput());
+        writer.Write(new byte[] { 72, 65, 71, 67 });
+        writer.Write((byte)1);
+        writer.Write((byte)(removed ? 1 : 0));
+        writer.Flush();
+    }
+
     private static byte[] FrameBundle(byte[] bundle)
     {
         if (bundle == null || bundle.Length < 1 || bundle.Length > MaximumSection - 8)
@@ -1256,6 +1299,7 @@ export interface GmailOAuthSealRequest {
 
 export interface InteractiveGmailOAuthProcess {
   run(input: Uint8Array, signal: AbortSignal): Promise<Uint8Array>;
+  reconcile(input: Uint8Array): Promise<void>;
 }
 
 export interface WindowsInteractiveGmailOAuthSealerOptions {
@@ -1337,6 +1381,16 @@ export class WindowsInteractiveGmailOAuthSealer {
         framed.fill(0);
       }
     } catch (error) {
+      if (requiresReconciliation(error)) {
+        const reconciliation = encodeReconcileSections(request);
+        try {
+          await this.#process.reconcile(reconciliation);
+        } catch {
+          throw new Error("Gmail OAuth reconciliation failed");
+        } finally {
+          reconciliation.fill(0);
+        }
+      }
       if (recognized(error)) throw error;
       throw new Error(signal.aborted ? "Gmail OAuth cancelled" : "Gmail OAuth sealing failed");
     } finally {
@@ -1367,19 +1421,39 @@ class PowerShellInteractiveGmailOAuthProcess implements InteractiveGmailOAuthPro
   }
 
   run(input: Uint8Array, signal: AbortSignal): Promise<Uint8Array> {
+    return this.#run(input, signal, this.#maxOutputBytes, this.#windowsHide, this.#timeoutMs);
+  }
+
+  async reconcile(input: Uint8Array): Promise<void> {
+    const output = await this.#run(input, new AbortController().signal, 6, true, 10_000);
+    try {
+      parseReconcileResult(output);
+    } finally {
+      output.fill(0);
+    }
+  }
+
+  #run(
+    input: Uint8Array,
+    signal: AbortSignal,
+    maxOutputBytes: number,
+    windowsHide: boolean,
+    timeoutMs: number,
+  ): Promise<Uint8Array> {
     return new Promise((resolve, reject) => {
       const child = spawn(this.#executable, [
         "-NoLogo", "-NoProfile", "-STA", "-ExecutionPolicy", "Bypass",
         "-Command", INTERACTIVE_GMAIL_OAUTH_SCRIPT,
       ], {
         shell: false,
-        windowsHide: this.#windowsHide,
+        windowsHide,
         stdio: ["pipe", "pipe", "ignore"],
         env: { SystemRoot: "C:\\Windows", WINDIR: "C:\\Windows" },
       });
       const chunks: Buffer[] = [];
       let size = 0;
       let settled = false;
+      let terminalError: Error | undefined;
       const finish = (error?: Error, value?: Uint8Array) => {
         if (settled) return;
         settled = true;
@@ -1389,27 +1463,33 @@ class PowerShellInteractiveGmailOAuthProcess implements InteractiveGmailOAuthPro
         error === undefined ? resolve(value!) : reject(error);
       };
       const cancel = () => {
+        if (terminalError !== undefined) return;
+        terminalError = new Error("Gmail OAuth cancelled");
         child.kill();
-        finish(new Error("Gmail OAuth cancelled"));
       };
       const timer = setTimeout(() => {
+        if (terminalError !== undefined) return;
+        terminalError = new Error("Gmail OAuth timeout");
         child.kill();
-        finish(new Error("Gmail OAuth timeout"));
-      }, this.#timeoutMs);
+      }, timeoutMs);
       signal.addEventListener("abort", cancel, { once: true });
       child.once("error", () => finish(new Error("Gmail OAuth sealing failed")));
       child.stdout.on("data", (chunk: Buffer) => {
         size += chunk.byteLength;
-        if (size > this.#maxOutputBytes) {
+        if (size > maxOutputBytes) {
           chunk.fill(0);
+          terminalError = new Error("Gmail OAuth sealing failed");
           child.kill();
-          finish(new Error("Gmail OAuth sealing failed"));
           return;
         }
         chunks.push(Buffer.from(chunk));
         chunk.fill(0);
       });
       child.once("close", (code) => {
+        if (terminalError !== undefined) {
+          finish(terminalError);
+          return;
+        }
         if (code !== 0) {
           finish(childFailure(code));
           return;
@@ -1492,6 +1572,35 @@ function encodeRevokeSections(request: GmailRefreshGrantRevokeRequest): Buffer {
   }
 }
 
+function encodeReconcileSections(request: GmailOAuthSealRequest): Buffer {
+  const values = [
+    Buffer.from(request.accountMetadata),
+    Buffer.from(request.accountCiphertext),
+    Buffer.from(request.clientId, "utf8"),
+    Buffer.from(request.installedClientConfigPath, "utf8"),
+  ];
+  try {
+    if (values.some((value) => value.byteLength < 1 || value.byteLength > DEFAULT_BOUND)) {
+      throw new Error("Gmail OAuth reconciliation failed");
+    }
+    const output = Buffer.allocUnsafe(
+      6 + values.reduce((sum, value) => sum + 4 + value.byteLength, 0),
+    );
+    RECONCILE_INPUT_MAGIC.copy(output, 0);
+    output.writeUInt8(1, 4);
+    output.writeUInt8(values.length, 5);
+    let offset = 6;
+    for (const value of values) {
+      output.writeUInt32LE(value.byteLength, offset);
+      value.copy(output, offset + 4);
+      offset += 4 + value.byteLength;
+    }
+    return output;
+  } finally {
+    for (const value of values) value.fill(0);
+  }
+}
+
 function parseRevokeResult(value: Uint8Array): "revoked" | "absent" {
   const input = Buffer.from(value.buffer, value.byteOffset, value.byteLength);
   if (
@@ -1501,6 +1610,16 @@ function parseRevokeResult(value: Uint8Array): "revoked" | "absent" {
     (input.readUInt8(5) !== 0 && input.readUInt8(5) !== 1)
   ) throw new Error("Gmail OAuth sealing failed");
   return input.readUInt8(5) === 1 ? "revoked" : "absent";
+}
+
+function parseReconcileResult(value: Uint8Array): void {
+  const input = Buffer.from(value.buffer, value.byteOffset, value.byteLength);
+  if (
+    input.byteLength !== 6 ||
+    !input.subarray(0, 4).equals(RECONCILE_OUTPUT_MAGIC) ||
+    input.readUInt8(4) !== 1 ||
+    (input.readUInt8(5) !== 0 && input.readUInt8(5) !== 1)
+  ) throw new Error("Gmail OAuth reconciliation failed");
 }
 
 function parseCiphertext(value: Uint8Array, bound: number): Uint8Array {
@@ -1547,4 +1666,12 @@ function childFailure(code: number | null): Error {
 function recognized(error: unknown): error is Error {
   return error instanceof Error &&
     /^Gmail (?:OAuth|mailbox identity|refresh (?:grant|unavailable))/u.test(error.message);
+}
+
+function requiresReconciliation(error: unknown): boolean {
+  return error instanceof Error && (
+    error.message === "Gmail OAuth cancelled" ||
+    error.message === "Gmail OAuth timeout" ||
+    error.message === "Gmail OAuth sealing failed"
+  );
 }
