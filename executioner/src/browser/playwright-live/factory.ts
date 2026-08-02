@@ -22,17 +22,40 @@ export interface PlaywrightPersistentBrowserFactoryOptions {
 export function createPlaywrightPersistentBrowserSession(
   options: PlaywrightPersistentBrowserFactoryOptions,
 ): PlaywrightPersistentBrowserSession {
+  const inspection = resolveLiveInspectionHoldPolicy(
+    process.env.HUNT_C3_LIVE_INSPECTION_HOLD,
+    options.timeoutMs,
+  );
   return new PlaywrightPersistentBrowserSession({
     binding: options.binding,
     launcher: new PlaywrightPersistentContextLauncher(),
     probe: new WorkdayOwnedTargetProbe(),
     profiles: new FileProfileStore(),
-    accountPage: new PlaywrightAccountPageAdapter({ trace: options.accountTrace }),
+    accountPage: new PlaywrightAccountPageAdapter({
+      trace: options.accountTrace,
+      unsettledInspectionHold: inspection.holdMs === 0
+        ? undefined
+        : () => delay(inspection.holdMs),
+    }),
     postingNavigation: new PlaywrightPostingNavigationAdapter(),
     verificationNavigation: new PlaywrightVerificationNavigationAdapter(),
     ids: nextSessionId,
-    timeoutMs: options.timeoutMs ?? 30_000,
+    timeoutMs: inspection.timeoutMs,
   });
+}
+
+export function resolveLiveInspectionHoldPolicy(
+  flag: string | undefined,
+  requestedTimeoutMs: number | undefined,
+): { readonly holdMs: number; readonly timeoutMs: number } {
+  const timeoutMs = requestedTimeoutMs ?? 30_000;
+  return flag === "1"
+    ? { holdMs: 45_000, timeoutMs: Math.max(timeoutMs, 70_000) }
+    : { holdMs: 0, timeoutMs };
+}
+
+function delay(milliseconds: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, milliseconds));
 }
 
 function nextSessionId(): LiveSessionId {

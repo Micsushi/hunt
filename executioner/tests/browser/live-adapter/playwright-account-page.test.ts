@@ -259,6 +259,75 @@ test("a submit that remains visible never claims a settled effect", async () => 
   ]);
 });
 
+test("an opted-in unsettled submit holds without another browser read or action", async () => {
+  const events: string[] = [];
+  let releaseHold!: () => void;
+  let markHoldStarted!: () => void;
+  const holdStarted = new Promise<void>((resolve) => { markHoldStarted = resolve; });
+  const hold = new Promise<void>((resolve) => { releaseHold = resolve; });
+  const submit = new FakeLocator({
+    count: 1,
+    visible: true,
+    enabled: true,
+    editable: false,
+    hiddenWaitFails: true,
+  });
+  const page = new FakePage(submit);
+  const adapter = new PlaywrightAccountPageAdapter({
+    trace: (event) => events.push(event),
+    unsettledInspectionHold: async () => {
+      markHoldStarted();
+      await hold;
+    },
+  });
+
+  let settled = false;
+  const pending = adapter.activate(page, "submit_sign_in")
+    .then(() => { settled = true; }, (error: unknown) => {
+      settled = true;
+      throw error;
+    });
+  await holdStarted;
+  const callsAtHold = structuredClone(page.calls);
+  const clickCallsAtHold = submit.clickCalls;
+  const waitsAtHold = structuredClone(submit.waitForArguments);
+  const exactFactReadsAtHold = page.absentExactFactLocator.isVisibleCalls;
+  const exactFactWaitsAtHold = structuredClone(
+    page.absentExactFactLocator.waitForArguments,
+  );
+
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  assert.equal(settled, false);
+  assert.deepEqual(page.calls, callsAtHold);
+  assert.equal(submit.clickCalls, clickCallsAtHold);
+  assert.deepEqual(submit.waitForArguments, waitsAtHold);
+  assert.equal(page.absentExactFactLocator.isVisibleCalls, exactFactReadsAtHold);
+  assert.deepEqual(page.absentExactFactLocator.waitForArguments, exactFactWaitsAtHold);
+  assert.deepEqual(events, [
+    "submit_hit_target_clear",
+    "submit_click_started",
+    "submit_click_succeeded",
+    "submit_control_remained_visible",
+    "submit_inspection_hold_started",
+  ]);
+
+  releaseHold();
+  await assert.rejects(pending, /submit effect did not settle/u);
+  assert.equal(submit.clickCalls, 1);
+  assert.deepEqual(page.calls, callsAtHold);
+  assert.deepEqual(submit.waitForArguments, waitsAtHold);
+  assert.equal(page.absentExactFactLocator.isVisibleCalls, exactFactReadsAtHold);
+  assert.deepEqual(page.absentExactFactLocator.waitForArguments, exactFactWaitsAtHold);
+  assert.deepEqual(events, [
+    "submit_hit_target_clear",
+    "submit_click_started",
+    "submit_click_succeeded",
+    "submit_control_remained_visible",
+    "submit_inspection_hold_started",
+    "submit_inspection_hold_ended",
+  ]);
+});
+
 test("only the action-specific exact account fact settles a visible submit", async () => {
   const cases = [
     ["submit_sign_in", WORKDAY_ACCOUNT_FACT_SELECTORS.absent, WORKDAY_ACCOUNT_FACT_SELECTORS.exists],

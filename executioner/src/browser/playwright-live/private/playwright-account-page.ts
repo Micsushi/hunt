@@ -42,6 +42,8 @@ export type PlaywrightAccountPageTraceEvent =
   | "submit_hit_target_small_overlay"
   | "submit_hit_target_unavailable"
   | "submit_control_remained_visible"
+  | "submit_inspection_hold_started"
+  | "submit_inspection_hold_ended"
   | "submit_exact_fact_observed"
   | "submit_destination_observed"
   | "submit_rejection_reappeared"
@@ -53,6 +55,7 @@ export type PlaywrightAccountPageTraceEvent =
 
 export interface PlaywrightAccountPageAdapterOptions {
   readonly trace?: (event: PlaywrightAccountPageTraceEvent) => void;
+  readonly unsettledInspectionHold?: () => Promise<void>;
 }
 
 const POST_SUBMIT_DESTINATIONS = [
@@ -72,9 +75,13 @@ const POST_SUBMIT_DESTINATIONS = [
 
 export class PlaywrightAccountPageAdapter implements SemanticAccountPageAdapter {
   readonly #trace: PlaywrightAccountPageAdapterOptions["trace"];
+  readonly #unsettledInspectionHold: PlaywrightAccountPageAdapterOptions[
+    "unsettledInspectionHold"
+  ];
 
   constructor(options: PlaywrightAccountPageAdapterOptions = {}) {
     this.#trace = options.trace;
+    this.#unsettledInspectionHold = options.unsettledInspectionHold;
   }
 
   async inspect(
@@ -171,6 +178,15 @@ export class PlaywrightAccountPageAdapter implements SemanticAccountPageAdapter 
           ]);
         } catch {
           this.#emit("submit_control_remained_visible");
+          if (this.#unsettledInspectionHold !== undefined) {
+            this.#emit("submit_inspection_hold_started");
+            try {
+              await this.#unsettledInspectionHold();
+            } catch {
+              // Diagnostic holding cannot alter the fixed browser outcome.
+            }
+            this.#emit("submit_inspection_hold_ended");
+          }
           throw new Error("submit effect did not settle");
         }
         if (initial === "exact_fact") {

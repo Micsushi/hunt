@@ -3,6 +3,7 @@ import { readFile } from "node:fs/promises";
 import { test } from "node:test";
 
 import { livePortNames } from "../../src/contracts/live/index.ts";
+import { resolveLiveInspectionHoldPolicy } from "../../src/browser/playwright-live/factory.ts";
 
 test("F1-T2 remains inside F3 ownership and does not widen the frozen live ports", async () => {
   assert.deepEqual(livePortNames, [
@@ -73,9 +74,42 @@ test("account-page access remains private, semantic, and value-free", async () =
   assert.equal(publicFacade.includes("AccountFieldName"), false);
   assert.equal(publicFacade.includes("SemanticAccountPageAdapter"), false);
   assert.equal(
-    factory.includes("new PlaywrightAccountPageAdapter({ trace: options.accountTrace })"),
+    factory.includes("new PlaywrightAccountPageAdapter({"),
     true,
   );
+  assert.equal(factory.includes("trace: options.accountTrace"), true);
+});
+
+test("live inspection hold is exact opt-in with a bounded operation-timeout floor", () => {
+  assert.deepEqual(resolveLiveInspectionHoldPolicy(undefined, undefined), {
+    holdMs: 0,
+    timeoutMs: 30_000,
+  });
+  assert.deepEqual(resolveLiveInspectionHoldPolicy("true", 12_000), {
+    holdMs: 0,
+    timeoutMs: 12_000,
+  });
+  assert.deepEqual(resolveLiveInspectionHoldPolicy("1", undefined), {
+    holdMs: 45_000,
+    timeoutMs: 70_000,
+  });
+  assert.deepEqual(resolveLiveInspectionHoldPolicy("1", 69_999), {
+    holdMs: 45_000,
+    timeoutMs: 70_000,
+  });
+  assert.deepEqual(resolveLiveInspectionHoldPolicy("1", 90_000), {
+    holdMs: 45_000,
+    timeoutMs: 90_000,
+  });
+});
+
+test("factory wires the private hold without widening the public browser facade", async () => {
+  const factory = await source("factory.ts");
+  const publicFacade = await source("index.ts");
+  assert.equal(factory.includes("HUNT_C3_LIVE_INSPECTION_HOLD"), true);
+  assert.equal(factory.includes("unsettledInspectionHold"), true);
+  assert.equal(publicFacade.includes("resolveLiveInspectionHoldPolicy"), false);
+  assert.equal(publicFacade.includes("unsettledInspectionHold"), false);
 });
 
 test("posting navigation is private, semantic, bounded, and submit-free", async () => {
