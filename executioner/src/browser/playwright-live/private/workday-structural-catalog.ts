@@ -49,6 +49,7 @@ export const WORKDAY_INLINE_VERIFICATION_SELECTORS = Object.freeze([
   '[data-automation-id="signInPage"]:has-text("An email has been sent to you. Please verify your account.")',
   '[data-automation-id="signInPage"]:has-text("verify your account before you sign in")',
   '[data-automation-id="signInPage"]:has-text("request a verification email")',
+  ':text-is("Verify your account before you sign in or request a verification email.")',
 ]);
 
 export const WORKDAY_ACCOUNT_FACT_SELECTORS = Object.freeze({

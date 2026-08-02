@@ -11,6 +11,8 @@ const SIGN_IN_EXACT_FACT_SELECTORS = [
   WORKDAY_ACCOUNT_FACT_SELECTORS.absent,
   ...WORKDAY_INLINE_VERIFICATION_SELECTORS,
 ] as const;
+const LIVE_VERIFICATION_REQUIRED_SELECTOR =
+  ':text-is("Verify your account before you sign in or request a verification email.")';
 
 test("inspects one exact semantic field without exposing its locator", async () => {
   const locator = new FakeLocator({ count: 1, visible: true, enabled: true, editable: true });
@@ -387,6 +389,34 @@ test("an exact inline verification marker settles sign-in while its submit remai
     verification,
   ]]));
   verification.values.visibleResults = [false];
+
+  await new PlaywrightAccountPageAdapter({
+    trace: (event) => events.push(event),
+  }).activate(page, "submit_sign_in");
+
+  assert.deepEqual(verification.waitForArguments, [{ state: "visible", timeout: 10_000 }]);
+  assert.equal(events.at(-1), "submit_exact_fact_observed");
+});
+
+test("the observed live verification-required alert settles sign-in without a page transition", async () => {
+  const events: string[] = [];
+  const submit = new FakeLocator({
+    count: 1,
+    visible: true,
+    enabled: true,
+    editable: false,
+    hiddenWaitFails: true,
+  });
+  const verification = new FakeLocator({
+    count: 1,
+    visible: true,
+    enabled: false,
+    editable: false,
+    visibleResults: [false],
+  });
+  const page = new FakePage(submit, undefined, new Map([
+    [LIVE_VERIFICATION_REQUIRED_SELECTOR, verification],
+  ]));
 
   await new PlaywrightAccountPageAdapter({
     trace: (event) => events.push(event),
@@ -918,7 +948,8 @@ class FakePage {
     if (
       selector.includes("accountNotFoundError") ||
       selector.includes("accountAlreadyExistsError") ||
-      selector.includes('signInPage"]:has-text')
+      selector.includes('signInPage"]:has-text') ||
+      selector === LIVE_VERIFICATION_REQUIRED_SELECTOR
     ) return this.absentExactFactLocator;
     return selector.includes("candidateHomePage")
       ? this.destinationLocator

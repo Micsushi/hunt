@@ -8,6 +8,9 @@ import {
 } from "../../../src/browser/playwright-live/private/workday-structural-catalog.ts";
 import { classifyLiveAccountState } from "../../../src/ats/workday/live/index.ts";
 
+const LIVE_VERIFICATION_REQUIRED_SELECTOR =
+  ':text-is("Verify your account before you sign in or request a verification email.")';
+
 test("an inline verification gate outranks retained sign-in controls", async () => {
   const messages = [
     "An email has been sent to you. Please verify your account.",
@@ -40,6 +43,23 @@ test("an inline verification gate outranks retained sign-in controls", async () 
     );
     assert.equal(JSON.stringify(result).includes(message), false);
   }
+});
+
+test("the live verification-required alert does not depend on stale sign-in-page ownership", async () => {
+  const page: WorkdayStructuralPage = {
+    locator: (selector) => ({
+      count: async () => selector === LIVE_VERIFICATION_REQUIRED_SELECTOR ? 1 : 0,
+      isVisible: async () => true,
+    }),
+  };
+
+  const result = await inspectWorkdayStructure(page, false, signInInspector());
+
+  assert.equal(result.kind, "snapshot");
+  assert.deepEqual(result.kind === "snapshot" ? result.snapshot.traitIds : [], [
+    "structural_trait_ats_workday_family_v1",
+    "structural_trait_page_email_verification_v1",
+  ]);
 });
 
 test("hidden or ambiguous inline messages do not overclaim verification", async () => {
