@@ -8,7 +8,7 @@ const expected = {
   schemaVersion: 1,
   stage: "s2",
   feature: "s2-f2-t3",
-  assemblyBaseRevision: "3c6b8c9323af5a76ef1b8040eafd5647ede512b5",
+  assemblyBaseRevision: "4962e5c85ee4b664e623b32d67cbaa5a2f7f677b",
   acceptedInputs: {
     s2F0: "730846b57a8ab7901a9818794921f8f9da01e0ed",
     s2F1T5: "d6602abf41f181376164eac2d32d587fc6bf5a5b",
@@ -45,9 +45,10 @@ const expected = {
     s2F2VerificationContinuation: "b5ea86563d34e1e9d8412823bbc203c33460f630",
     s2F0VerificationMailboxJourneyBinding: "6dde499f0e5a82047c8ce6fbbf5cc87b5de3dd47",
     s2F2VerificationMailboxAdmission: "3c6b8c9323af5a76ef1b8040eafd5647ede512b5",
+    s2F0AccountSubmitDiagnosticAndFreshCreate: "4962e5c85ee4b664e623b32d67cbaa5a2f7f677b",
   },
-  frozenContractRevision: "6dde499f0e5a82047c8ce6fbbf5cc87b5de3dd47",
-  frozenContractTree: "5c7d874a6821ddd593d299ca489f0257f07e0f25",
+  frozenContractRevision: "4962e5c85ee4b664e623b32d67cbaa5a2f7f677b",
+  frozenContractTree: "8de764c33ad1ae8a7bb3f0b83d1b7052878a3e59",
 };
 
 test("S2-F2-T3 manifest pins the exact accepted non-self-referential assembly", () => {
