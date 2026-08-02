@@ -95,11 +95,8 @@ export class GmailHttpClient {
       if (!response.ok) {
         throw new GmailProviderFailure("gmail_network_unavailable");
       }
-      const bytes = new Uint8Array(await response.arrayBuffer());
+      const bytes = await readBoundedResponse(response, signal);
       try {
-        if (bytes.byteLength > maximumResponseBytes) {
-          throw new GmailProviderFailure("mailbox_query_invalid");
-        }
         return JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes));
       } catch (error) {
         if (error instanceof GmailProviderFailure) throw error;
@@ -113,6 +110,52 @@ export class GmailHttpClient {
         signal.aborted ? "operation_cancelled" : "gmail_network_unavailable",
       );
     }
+  }
+}
+
+async function readBoundedResponse(
+  response: Response,
+  signal: AbortSignal,
+): Promise<Uint8Array> {
+  const contentLength = response.headers.get("content-length");
+  if (
+    contentLength !== null &&
+    /^\d+$/u.test(contentLength) &&
+    Number(contentLength) > maximumResponseBytes
+  ) {
+    await response.body?.cancel().catch(() => undefined);
+    throw new GmailProviderFailure("mailbox_query_invalid");
+  }
+
+  if (response.body === null) return new Uint8Array();
+  const reader = response.body.getReader();
+  const output = new Uint8Array(maximumResponseBytes);
+  let length = 0;
+  let completed = false;
+  try {
+    while (true) {
+      if (signal.aborted) {
+        await reader.cancel().catch(() => undefined);
+        throw new GmailProviderFailure("operation_cancelled");
+      }
+      const { done, value } = await reader.read();
+      if (done) break;
+      try {
+        if (length + value.byteLength > maximumResponseBytes) {
+          await reader.cancel().catch(() => undefined);
+          throw new GmailProviderFailure("mailbox_query_invalid");
+        }
+        output.set(value, length);
+        length += value.byteLength;
+      } finally {
+        value.fill(0);
+      }
+    }
+    completed = true;
+    return output.subarray(0, length);
+  } finally {
+    reader.releaseLock();
+    if (!completed) output.fill(0);
   }
 }
 

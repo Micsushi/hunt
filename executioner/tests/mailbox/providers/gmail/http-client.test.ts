@@ -114,6 +114,88 @@ test("rejects oversized and malformed responses without retaining diagnostics", 
   }
 });
 
+test("rejects an advertised oversized response before reading its body", async () => {
+  const originalFetch = globalThis.fetch;
+  let pulls = 0;
+  let cancelled = false;
+  const body = new ReadableStream<Uint8Array>({
+    pull(controller) {
+      pulls += 1;
+      if (pulls === 1) {
+        controller.enqueue(new Uint8Array([123]));
+        return;
+      }
+      controller.close();
+    },
+    cancel() {
+      cancelled = true;
+    },
+  }, { highWaterMark: 0 });
+  globalThis.fetch = async () => new Response(body, {
+    status: 200,
+    headers: { "content-length": "1048577" },
+  });
+
+  try {
+    await assert.rejects(
+      new GmailHttpClient().query(
+        authority,
+        window,
+        new AbortController().signal,
+      ),
+      failureCode("mailbox_query_invalid"),
+    );
+    assert.equal(pulls, 0);
+    assert.equal(cancelled, true);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("stops an unadvertised oversized stream and clears rejected chunks", async () => {
+  const originalFetch = globalThis.fetch;
+  const chunks = [
+    new Uint8Array(524_288).fill(120),
+    new Uint8Array(524_289).fill(121),
+    new Uint8Array([122]),
+  ];
+  let nextChunk = 0;
+  let cancelled = false;
+  const body = new ReadableStream<Uint8Array>({
+    pull(controller) {
+      const chunk = chunks[nextChunk];
+      nextChunk += 1;
+      if (chunk === undefined) {
+        controller.close();
+        return;
+      }
+      controller.enqueue(chunk);
+    },
+    cancel() {
+      cancelled = true;
+    },
+  }, { highWaterMark: 0 });
+  globalThis.fetch = async () => new Response(body, { status: 200 });
+
+  try {
+    await assert.rejects(
+      new GmailHttpClient().query(
+        authority,
+        window,
+        new AbortController().signal,
+      ),
+      failureCode("mailbox_query_invalid"),
+    );
+    assert.equal(nextChunk, 2);
+    assert.equal(cancelled, true);
+    assert.equal(chunks[0]?.every((byte) => byte === 0), true);
+    assert.equal(chunks[1]?.every((byte) => byte === 0), true);
+    assert.equal(chunks[2]?.[0], 122);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
 test("cancellation and network failure map to value-free stable sentinels", async () => {
   const pending = createServer(() => undefined);
   const baseUrl = await listen(pending);
