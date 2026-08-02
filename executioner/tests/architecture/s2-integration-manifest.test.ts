@@ -8,7 +8,7 @@ const expected = {
   schemaVersion: 1,
   stage: "s2",
   feature: "s2-f2-t3",
-  assemblyBaseRevision: "15aaf41cf70c167e4937fb2f0cf7c6620e1b195e",
+  assemblyBaseRevision: "e194d1c85dda8e70e847589da40d78dcef42c270",
   acceptedInputs: {
     s2F0: "730846b57a8ab7901a9818794921f8f9da01e0ed",
     s2F1T5: "d6602abf41f181376164eac2d32d587fc6bf5a5b",
@@ -40,6 +40,7 @@ const expected = {
     s2F2WindowsHelperLaunch: "a9a1854ff6ce840f253e2fb64926c59b7a2ed239",
     s2F2RunbookReconciliation: "8b7e4cc132dee3fff06bddaf411bdafe3bdfb205",
     s2F2SubmitSettlement: "15aaf41cf70c167e4937fb2f0cf7c6620e1b195e",
+    s2F2LiveInspectionHold: "e194d1c85dda8e70e847589da40d78dcef42c270",
   },
   frozenContractRevision: "100b6bbf360f2c2e3cd93384e1fba7c115a92f15",
   frozenContractTree: "13a8406e9c296b77aead3a0f961beba1110fba61",
