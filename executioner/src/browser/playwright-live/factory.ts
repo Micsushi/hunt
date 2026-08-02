@@ -26,6 +26,9 @@ export function createPlaywrightPersistentBrowserSession(
     process.env.HUNT_C3_LIVE_INSPECTION_HOLD,
     options.timeoutMs,
   );
+  const inspectionHold = inspection.holdMs === 0
+    ? undefined
+    : oneShot(() => delay(inspection.holdMs));
   return new PlaywrightPersistentBrowserSession({
     binding: options.binding,
     launcher: new PlaywrightPersistentContextLauncher(),
@@ -33,13 +36,12 @@ export function createPlaywrightPersistentBrowserSession(
     profiles: new FileProfileStore(),
     accountPage: new PlaywrightAccountPageAdapter({
       trace: options.accountTrace,
-      unsettledInspectionHold: inspection.holdMs === 0
-        ? undefined
-        : () => delay(inspection.holdMs),
+      unsettledInspectionHold: inspectionHold,
     }),
     postingNavigation: new PlaywrightPostingNavigationAdapter(),
     verificationNavigation: new PlaywrightVerificationNavigationAdapter(),
     ids: nextSessionId,
+    inspectionHoldBeforeCleanup: inspectionHold,
     timeoutMs: inspection.timeoutMs,
   });
 }
@@ -56,6 +58,11 @@ export function resolveLiveInspectionHoldPolicy(
 
 function delay(milliseconds: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, milliseconds));
+}
+
+function oneShot(action: () => Promise<void>): () => Promise<void> {
+  let held: Promise<void> | undefined;
+  return () => held ??= action();
 }
 
 function nextSessionId(): LiveSessionId {

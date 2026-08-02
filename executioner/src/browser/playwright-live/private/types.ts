@@ -109,6 +109,7 @@ export interface PlaywrightPersistentBrowserSessionOptions {
   readonly accountPage?: SemanticAccountPageAdapter;
   readonly postingNavigation?: SemanticPostingNavigationAdapter;
   readonly verificationNavigation?: SemanticVerificationNavigationAdapter;
+  readonly inspectionHoldBeforeCleanup?: () => Promise<void>;
   readonly ids: () => LiveSessionId;
   readonly timeoutMs: number;
 }

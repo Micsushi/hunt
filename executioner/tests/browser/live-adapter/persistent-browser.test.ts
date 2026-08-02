@@ -396,6 +396,72 @@ test("failed target admission closes the launched context and removes only its p
   assert.equal(profiles.partialCleanupCount, 1);
 });
 
+test("diagnostic hold runs before failed-open browser cleanup", async () => {
+  const context = new FakeContext([]);
+  let holdCount = 0;
+  let closedDuringHold: boolean | undefined;
+  const provider = new PlaywrightPersistentBrowserSession({
+    binding: binding(),
+    launcher: { async launchPersistentContext() { return context; } },
+    probe: {
+      async inspect() {
+        return {
+          ownership: "owned",
+          target: { kind: "target_mismatch", dimension: "posting" },
+          snapshot: structuralSnapshot,
+        } as const;
+      },
+    },
+    profiles: new MemoryProfiles(),
+    inspectionHoldBeforeCleanup: async () => {
+      holdCount += 1;
+      closedDuringHold = context.closed;
+    },
+    ids: () => liveFixtures.session.sessionId,
+    timeoutMs: 100,
+  });
+
+  const result = await provider.open(openRequest(), new AbortController().signal);
+
+  assert.equal(result.ok, false);
+  assert.equal(holdCount, 1);
+  assert.equal(closedDuringHold, false);
+  assert.equal(context.closed, true);
+});
+
+test("diagnostic hold runs before successful browser close", async () => {
+  const context = new FakeContext([]);
+  let holdCount = 0;
+  let closedDuringHold: boolean | undefined;
+  const provider = new PlaywrightPersistentBrowserSession({
+    binding: binding(),
+    launcher: { async launchPersistentContext() { return context; } },
+    probe: { async inspect() { return ownedMatched(); } },
+    profiles: new MemoryProfiles(),
+    inspectionHoldBeforeCleanup: async () => {
+      holdCount += 1;
+      closedDuringHold = context.closed;
+    },
+    ids: () => liveFixtures.session.sessionId,
+    timeoutMs: 100,
+  });
+  const opened = await provider.open(openRequest(), new AbortController().signal);
+  assert.equal(opened.ok, true);
+  if (!opened.ok) return;
+
+  const result = await provider.close({
+    schemaVersion: 1,
+    journeyId: liveFixtures.journeyId,
+    operationId: generatedOperationId("operation_diagnostic_hold_close_1"),
+    sessionId: opened.value.session.sessionId,
+  }, new AbortController().signal);
+
+  assert.deepEqual(result, { ok: true, value: undefined });
+  assert.equal(holdCount, 1);
+  assert.equal(closedDuringHold, false);
+  assert.equal(context.closed, true);
+});
+
 test("close succeeds after account ownership invalidation cleaned the exact session", async () => {
   const { provider, opened } = await openedProviderThatInvalidatesAfterFill();
   if (!opened.ok) return;

@@ -611,6 +611,7 @@ export class PlaywrightPersistentBrowserSession
     const profilePath = this.#profilePath;
     const marker = this.#marker;
     const closedSession = this.#session;
+    await this.#holdBeforeCleanup(context);
     const contextCleanup = await this.#boundedCleanup(() => context.close());
     const profileCleanup = await this.#boundedCleanup(
       () => this.#options.profiles.cleanup(profilePath, marker),
@@ -639,6 +640,7 @@ export class PlaywrightPersistentBrowserSession
   ): Promise<boolean> {
     const context = this.#context;
     const failedSession = this.#session;
+    await this.#holdBeforeCleanup(context);
     const contextCleaned = await this.#boundedCleanup(
       () => context?.close() ?? Promise.resolve(),
     );
@@ -675,10 +677,20 @@ export class PlaywrightPersistentBrowserSession
     context: PersistentContext,
     profilePath: string,
   ): Promise<void> {
+    await this.#holdBeforeCleanup(context);
     await this.#boundedCleanup(() => context.close());
     await this.#boundedCleanup(
       () => this.#options.profiles.cleanupPartial(profilePath),
     );
+  }
+
+  async #holdBeforeCleanup(context: PersistentContext | undefined): Promise<void> {
+    if (context === undefined || this.#options.inspectionHoldBeforeCleanup === undefined) return;
+    try {
+      await this.#options.inspectionHoldBeforeCleanup();
+    } catch {
+      // Diagnostics cannot prevent guaranteed browser cleanup.
+    }
   }
 
   async #boundedCleanup(action: () => Promise<unknown>): Promise<boolean> {
