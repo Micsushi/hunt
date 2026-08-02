@@ -44,18 +44,21 @@ public static class HuntInteractiveGmailOAuthSealer
         byte[] bundle = null;
         byte[] sealedValue = null;
         Token token = null;
+        InstalledClient installedClient = null;
         try
         {
             input = ReadInput();
             account = ProtectedData.Unprotect(input[2], input[1], DataProtectionScope.CurrentUser);
             string accountEmail = ReadAccountEmail(account);
             string clientId = StrictUtf8(input[3]);
-            IDictionary<string, object> binding = ExactObject(StrictUtf8(input[4]));
+            string installedClientConfigPath = StrictUtf8(input[4]);
+            IDictionary<string, object> binding = ExactObject(StrictUtf8(input[5]));
             IDictionary<string, object> gmailMetadata = ExactObject(StrictUtf8(input[0]));
             ValidateClient(clientId);
             ValidateBinding(binding);
+            installedClient = ReadInstalledClient(installedClientConfigPath, clientId);
 
-            token = Authorize(clientId);
+            token = Authorize(clientId, installedClient.Secret);
             ValidateExpiry(gmailMetadata, token.ExpiresIn, token.ReceivedAt);
             string profileEmail = ProfileEmail(token.AccessValue);
             if (!String.Equals(accountEmail, profileEmail, StringComparison.OrdinalIgnoreCase))
@@ -99,6 +102,7 @@ public static class HuntInteractiveGmailOAuthSealer
             Clear(bundle);
             Clear(account);
             if (token != null) token.Clear();
+            if (installedClient != null) installedClient.Clear();
             if (input != null) foreach (byte[] section in input) Clear(section);
         }
     }
@@ -109,8 +113,8 @@ public static class HuntInteractiveGmailOAuthSealer
         byte[] magic = reader.ReadBytes(4);
         if (magic.Length != 4 || magic[0] != 72 || magic[1] != 65 || magic[2] != 71 || magic[3] != 73)
             throw new InvalidDataException();
-        if (reader.ReadByte() != 1 || reader.ReadByte() != 5) throw new InvalidDataException();
-        byte[][] sections = new byte[5][];
+        if (reader.ReadByte() != 1 || reader.ReadByte() != 6) throw new InvalidDataException();
+        byte[][] sections = new byte[6][];
         for (int index = 0; index < sections.Length; index++)
         {
             int length = reader.ReadInt32();
@@ -156,7 +160,75 @@ public static class HuntInteractiveGmailOAuthSealer
         public void Clear() { AccessValue = null; }
     }
 
-    private static Token Authorize(string clientId)
+    private sealed class InstalledClient
+    {
+        public string Id;
+        public string Secret;
+        public void Clear() { Id = null; Secret = null; }
+    }
+
+    private static InstalledClient ReadInstalledClient(string path, string expectedClientId)
+    {
+        byte[] bytes = null;
+        try
+        {
+            if (String.IsNullOrWhiteSpace(path) || path.Length > 32768 ||
+                !String.Equals(Path.GetFullPath(path), path, StringComparison.OrdinalIgnoreCase))
+                throw new InvalidDataException();
+            FileInfo info = new FileInfo(path);
+            if (!info.Exists || info.Length < 2 || info.Length > 65536 ||
+                (info.Attributes & FileAttributes.ReparsePoint) != 0)
+                throw new InvalidDataException();
+            bytes = File.ReadAllBytes(path);
+            if (bytes.Length != info.Length || bytes.Length < 2 || bytes.Length > 65536 ||
+                (bytes.Length >= 3 && bytes[0] == 239 && bytes[1] == 187 && bytes[2] == 191))
+                throw new InvalidDataException();
+            IDictionary<string, object> root = ExactObject(StrictUtf8(bytes));
+            ExactKeys(root, new string[] { "installed" });
+            IDictionary<string, object> installed = root["installed"] as IDictionary<string, object>;
+            if (installed == null) throw new InvalidDataException();
+            ExactKeys(installed, new string[] {
+                "auth_provider_x509_cert_url", "auth_uri", "client_id", "client_secret",
+                "project_id", "redirect_uris", "token_uri"
+            });
+            string id = StringField(installed, "client_id", 30, 200);
+            ValidateClient(id);
+            if (!String.Equals(id, expectedClientId, StringComparison.Ordinal))
+                throw new InvalidDataException();
+            if (StringField(installed, "auth_uri", AuthorizationEndpoint.Length, AuthorizationEndpoint.Length) != AuthorizationEndpoint ||
+                StringField(installed, "token_uri", TokenEndpoint.Length, TokenEndpoint.Length) != TokenEndpoint ||
+                StringField(installed, "auth_provider_x509_cert_url", 42, 42) != "https://www.googleapis.com/oauth2/v1/certs")
+                throw new InvalidDataException();
+            StringField(installed, "project_id", 1, 200);
+            string secret = StringField(installed, "client_secret", 1, 4096);
+            ValidateLoopbackRedirects(installed);
+            return new InstalledClient { Id = id, Secret = secret };
+        }
+        catch { throw new FlowException(9); }
+        finally { Clear(bytes); }
+    }
+
+    private static void ValidateLoopbackRedirects(IDictionary<string, object> installed)
+    {
+        object raw;
+        if (!installed.TryGetValue("redirect_uris", out raw)) throw new InvalidDataException();
+        object[] redirects = raw as object[];
+        if (redirects == null || redirects.Length < 1 || redirects.Length > 4)
+            throw new InvalidDataException();
+        foreach (object item in redirects)
+        {
+            string text = item as string;
+            Uri uri;
+            if (text == null || text.Length < 1 || text.Length > 256 ||
+                !Uri.TryCreate(text, UriKind.Absolute, out uri) || uri.Scheme != "http" ||
+                !(uri.Host == "localhost" || uri.Host == "127.0.0.1" || uri.Host == "[::1]") ||
+                !String.IsNullOrEmpty(uri.UserInfo) || !String.IsNullOrEmpty(uri.Query) ||
+                !String.IsNullOrEmpty(uri.Fragment) || uri.AbsolutePath != "/")
+                throw new InvalidDataException();
+        }
+    }
+
+    private static Token Authorize(string clientId, string clientSecret)
     {
         byte[] verifierBytes = RandomBytes(64);
         byte[] stateBytes = RandomBytes(32);
@@ -186,6 +258,7 @@ public static class HuntInteractiveGmailOAuthSealer
                 "POST",
                 Form(new Dictionary<string, string> {
                     { "code", code }, { "client_id", clientId },
+                    { "client_secret", clientSecret },
                     { "code_verifier", verifier }, { "redirect_uri", redirect },
                     { "grant_type", "authorization_code" }
                 }),
@@ -204,7 +277,11 @@ public static class HuntInteractiveGmailOAuthSealer
             challenge = null;
             return new Token { AccessValue = access, ExpiresIn = expires, ReceivedAt = receivedAt };
         }
-        finally { listener.Stop(); }
+        finally
+        {
+            clientSecret = null;
+            listener.Stop();
+        }
     }
 
     private static string ReceiveCode(TcpListener listener, int port, string state)
@@ -345,6 +422,12 @@ public static class HuntInteractiveGmailOAuthSealer
         return value;
     }
 
+    private static void ExactKeys(IDictionary<string, object> value, string[] keys)
+    {
+        if (value.Count != keys.Length) throw new InvalidDataException();
+        foreach (string key in keys) if (!value.ContainsKey(key)) throw new InvalidDataException();
+    }
+
     private static string StringField(IDictionary<string, object> value, string key, int minimum, int maximum)
     {
         object raw;
@@ -468,6 +551,7 @@ export interface GmailOAuthSealRequest {
   readonly accountMetadata: Readonly<Uint8Array>;
   readonly accountCiphertext: Readonly<Uint8Array>;
   readonly clientId: string;
+  readonly installedClientConfigPath: string;
   readonly binding: {
     readonly journeyId: string;
     readonly recipientBindingId: string;
@@ -606,11 +690,13 @@ class PowerShellInteractiveGmailOAuthProcess implements InteractiveGmailOAuthPro
 function encodeSections(request: GmailOAuthSealRequest): Buffer {
   const binding = Buffer.from(JSON.stringify(request.binding), "utf8");
   const clientId = Buffer.from(request.clientId, "utf8");
+  const installedClientConfigPath = Buffer.from(request.installedClientConfigPath, "utf8");
   const values = [
     Buffer.from(request.gmailMetadata),
     Buffer.from(request.accountMetadata),
     Buffer.from(request.accountCiphertext),
     clientId,
+    installedClientConfigPath,
     binding,
   ];
   try {
@@ -662,6 +748,8 @@ function childFailure(code: number | null): Error {
             ? "Gmail OAuth token expiry invalid"
             : code === 8
               ? "Gmail OAuth timeout"
+              : code === 9
+                ? "Gmail OAuth client invalid"
               : "Gmail OAuth sealing failed";
   return new Error(message);
 }

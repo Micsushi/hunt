@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import { isIP } from "node:net";
+import { isAbsolute, normalize } from "node:path";
 
 const EXACT_KEYS = [
   "schemaVersion",
@@ -8,6 +9,7 @@ const EXACT_KEYS = [
   "journeyId",
   "gmailHandleId",
   "desktopClientId",
+  "installedClientConfigPath",
   "verificationHost",
 ].sort();
 
@@ -17,21 +19,22 @@ export interface GmailBootstrapExpectedBinding {
   readonly gmailHandleId: string;
 }
 
-export interface GmailBootstrapInputV1 extends GmailBootstrapExpectedBinding {
+export interface GmailBootstrapInputV2 extends GmailBootstrapExpectedBinding {
   readonly schemaVersion: 1;
-  readonly contractRevision: "s2-gmail-bootstrap-v1";
+  readonly contractRevision: "s2-gmail-bootstrap-v2";
   readonly desktopClientId: string;
+  readonly installedClientConfigPath: string;
   readonly verificationHost: string;
 }
 
 export function admitGmailBootstrapInput(
   value: unknown,
   expected: GmailBootstrapExpectedBinding,
-): GmailBootstrapInputV1 | null {
+): GmailBootstrapInputV2 | null {
   if (!record(value) || !exactKeys(value)) return null;
   if (
     value.schemaVersion !== 1 ||
-    value.contractRevision !== "s2-gmail-bootstrap-v1" ||
+    value.contractRevision !== "s2-gmail-bootstrap-v2" ||
     value.revisionId !== expected.revisionId ||
     value.journeyId !== expected.journeyId ||
     value.gmailHandleId !== expected.gmailHandleId ||
@@ -39,6 +42,10 @@ export function admitGmailBootstrapInput(
     !/^\d{6,32}-[A-Za-z0-9_-]{8,128}\.apps\.googleusercontent\.com$/u.test(
       value.desktopClientId,
     ) ||
+    typeof value.installedClientConfigPath !== "string" ||
+    value.installedClientConfigPath.length > 4096 ||
+    !isAbsolute(value.installedClientConfigPath) ||
+    normalize(value.installedClientConfigPath) !== value.installedClientConfigPath ||
     typeof value.verificationHost !== "string" ||
     !validHost(value.verificationHost)
   ) {
@@ -46,11 +53,12 @@ export function admitGmailBootstrapInput(
   }
   return Object.freeze({
     schemaVersion: 1,
-    contractRevision: "s2-gmail-bootstrap-v1",
+    contractRevision: "s2-gmail-bootstrap-v2",
     revisionId: value.revisionId,
     journeyId: value.journeyId,
     gmailHandleId: value.gmailHandleId,
     desktopClientId: value.desktopClientId,
+    installedClientConfigPath: value.installedClientConfigPath,
     verificationHost: value.verificationHost,
   });
 }

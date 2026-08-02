@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -52,6 +52,12 @@ class Sealer implements GmailCiphertextSealer {
   }
 }
 
+class ErrorSealer implements GmailCiphertextSealer {
+  async seal(): Promise<Uint8Array> {
+    throw new Error("Gmail OAuth client invalid");
+  }
+}
+
 test("preflights both inputs before sealing the exact Gmail handle", async () => {
   const record = await fixture();
   try {
@@ -80,6 +86,7 @@ test("preflights both inputs before sealing the exact Gmail handle", async () =>
     });
     assert.equal(sealer.calls, 1);
     assert.equal(sealer.request?.clientId, record.bootstrap.desktopClientId);
+    assert.equal(sealer.request?.installedClientConfigPath, record.installedClientConfigPath);
     assert.equal(sealer.request?.binding.verificationHost, record.bootstrap.verificationHost);
     assert.equal(sealer.request?.binding.verificationTenant, record.owner.target.tenant);
     assert.equal(sealer.request?.binding.verificationTtlSeconds, 86_400);
@@ -94,6 +101,7 @@ test("preflights both inputs before sealing the exact Gmail handle", async () =>
     assert.equal(acl.calls.length, 3);
     assert.equal(acl.calls[0]?.gmailRecord, undefined);
     assert.equal(acl.calls[1]?.ownerConfig, record.bootstrapInputPath);
+    assert.equal(acl.calls[1]?.oauthClientConfig, record.installedClientConfigPath);
     assert.equal(acl.calls[2]?.gmailRecord, join(record.secrets, `${GMAIL_HANDLE}.s2secret`));
     assert.equal(existsSync(join(record.secrets, `${GMAIL_HANDLE}.s2secret`)), true);
   } finally {
@@ -223,6 +231,83 @@ test("rejects mixed F1/F2 expiries before child and cleans only a newly written 
   }
 });
 
+test("rejects missing, reparse, oversized, and repository-owned installed-client files before UI", async () => {
+  const record = await fixture();
+  try {
+    const linkedRoot = join(record.root, "client-link");
+    symlinkSync(record.runtime, linkedRoot, "junction");
+    const linked = join(linkedRoot, "google-installed-client.json");
+    const oversized = join(record.root, "oversized-client.json");
+    writeFileSync(oversized, "x".repeat(65_537));
+    const repositoryClient = join(record.repository, "client.json");
+    writeFileSync(repositoryClient, "{}");
+    for (const installedClientConfigPath of [
+      join(record.root, "missing-client.json"),
+      linked,
+      oversized,
+      repositoryClient,
+    ]) {
+      const sealer = new Sealer();
+      assert.deepEqual(await bootstrapS2GmailAuthorization(
+        record.owner,
+        { ...record.bootstrap, installedClientConfigPath },
+        {
+          now: NOW,
+          ownerConfigPath: record.ownerConfigPath,
+          bootstrapInputPath: record.bootstrapInputPath,
+          forbiddenRoots: [record.repository],
+          aclAdmission: new AclAdmission(),
+          sealer,
+        },
+        new AbortController().signal,
+      ), { ok: false, error: { code: "gmail_oauth_client_invalid" } });
+      assert.equal(sealer.calls, 0);
+    }
+  } finally {
+    rmSync(record.root, { recursive: true, force: true });
+  }
+});
+
+test("maps installed-client ACL and trusted-child parse failures without values", async () => {
+  const record = await fixture();
+  try {
+    assert.deepEqual(await bootstrapS2GmailAuthorization(
+      record.owner,
+      record.bootstrap,
+      {
+        now: NOW,
+        ownerConfigPath: record.ownerConfigPath,
+        bootstrapInputPath: record.bootstrapInputPath,
+        forbiddenRoots: [record.repository],
+        aclAdmission: new AclAdmission([
+          { ok: true },
+          { ok: false, failure: { target: "oauth_client_config", reason: "other_principal" } },
+        ]),
+        sealer: new Sealer(),
+      },
+      new AbortController().signal,
+    ), { ok: false, error: { code: "gmail_oauth_client_invalid" } });
+
+    const childFailure = await bootstrapS2GmailAuthorization(
+      record.owner,
+      record.bootstrap,
+      {
+        now: NOW,
+        ownerConfigPath: record.ownerConfigPath,
+        bootstrapInputPath: record.bootstrapInputPath,
+        forbiddenRoots: [record.repository],
+        aclAdmission: new AclAdmission(),
+        sealer: new ErrorSealer(),
+      },
+      new AbortController().signal,
+    );
+    assert.deepEqual(childFailure, { ok: false, error: { code: "gmail_oauth_client_invalid" } });
+    assert.equal(JSON.stringify(childFailure).includes(record.installedClientConfigPath), false);
+  } finally {
+    rmSync(record.root, { recursive: true, force: true });
+  }
+});
+
 async function fixture() {
   const root = mkdtempSync(join(tmpdir(), "hunt-gmail-bootstrap-"));
   const repository = join(root, "repository");
@@ -233,17 +318,20 @@ async function fixture() {
   const owner = ownerInputs(runtime, secrets, evidence);
   const ownerConfigPath = join(runtime, "owner-inputs.json");
   const bootstrapInputPath = join(runtime, "gmail-bootstrap-input.json");
+  const installedClientConfigPath = join(runtime, "google-installed-client.json");
   const bootstrap = {
     schemaVersion: 1 as const,
-    contractRevision: "s2-gmail-bootstrap-v1" as const,
+    contractRevision: "s2-gmail-bootstrap-v2" as const,
     revisionId: owner.revisionId,
     journeyId: owner.journeyId,
     gmailHandleId: owner.gmailAuthorization.handleId,
     desktopClientId: "1234567890-example1.apps.googleusercontent.com",
+    installedClientConfigPath,
     verificationHost: "wd5.myworkday.com",
   };
   writeFileSync(ownerConfigPath, JSON.stringify(owner));
   writeFileSync(bootstrapInputPath, JSON.stringify(bootstrap));
+  writeFileSync(installedClientConfigPath, '{"installed":{"client_secret":"synthetic"}}');
   await writeSecretRecord(secrets, {
     storageVersion: 1,
     schemaVersion: 1,
@@ -257,7 +345,7 @@ async function fixture() {
     expiresAt: ACCOUNT_EXPIRES,
     state: "active",
   }, Uint8Array.from([2, 3, 5]));
-  return { root, repository, runtime, secrets, evidence, ownerConfigPath, bootstrapInputPath, owner, bootstrap };
+  return { root, repository, runtime, secrets, evidence, ownerConfigPath, bootstrapInputPath, installedClientConfigPath, owner, bootstrap };
 }
 
 function ownerInputs(runtime: string, secrets: string, evidence: string): RealRunOwnerInputsV1 {

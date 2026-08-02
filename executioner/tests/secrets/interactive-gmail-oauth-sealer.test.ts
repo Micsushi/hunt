@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { readFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import test from "node:test";
 
 import type { TargetIdentityV1 } from "../../src/contracts/live/index.ts";
@@ -12,6 +14,7 @@ import {
 
 class ReplyProcess implements InteractiveGmailOAuthProcess {
   input?: Uint8Array;
+  capturedInput?: Uint8Array;
   readonly #reply: Uint8Array | Error;
 
   constructor(reply: Uint8Array | Error) {
@@ -20,6 +23,7 @@ class ReplyProcess implements InteractiveGmailOAuthProcess {
 
   async run(input: Uint8Array): Promise<Uint8Array> {
     this.input = input;
+    this.capturedInput = Uint8Array.from(input);
     if (this.#reply instanceof Error) throw this.#reply;
     return this.#reply;
   }
@@ -39,6 +43,7 @@ const request = {
   accountMetadata: new TextEncoder().encode('{"purpose":"account_credentials"}'),
   accountCiphertext: Uint8Array.from([3, 5, 7]),
   clientId: "1234567890-example1.apps.googleusercontent.com",
+  installedClientConfigPath: "C:\\Users\\example\\AppData\\Local\\Hunt\\google-installed-client.json",
   binding: {
     journeyId: "journey_abcdefghijklmnop",
     recipientBindingId: "recipient_abcdefghijklmnop",
@@ -65,6 +70,9 @@ test("accepts only one bounded ciphertext frame and clears its child input", asy
   assert.deepEqual([...sealed], [11, 13, 17]);
   assert.equal(Buffer.from(process.input?.subarray(0, 4) ?? []).toString("ascii"), "\0\0\0\0");
   assert.equal(process.input?.every((value) => value === 0), true);
+  assert.equal(process.capturedInput?.[5], 6);
+  assert.equal(Buffer.from(process.capturedInput ?? []).includes(Buffer.from(request.installedClientConfigPath)), true);
+  assert.equal(Buffer.from(process.capturedInput ?? []).includes(Buffer.from("synthetic-client-secret")), false);
   assert.deepEqual([...request.accountCiphertext], [3, 5, 7]);
 });
 
@@ -105,6 +113,16 @@ test("production helper pins PKCE loopback Gmail readonly profile equality and D
   assert.match(source, /https:\/\/www\.googleapis\.com\/auth\/gmail\.readonly/u);
   assert.match(source, /https:\/\/gmail\.googleapis\.com\/gmail\/v1\/users\/me\/profile/u);
   assert.match(source, /DataProtectionScope\.CurrentUser/u);
+  assert.match(source, /ReadInstalledClient/u);
+  assert.match(source, /File\.ReadAllBytes/u);
+  assert.match(source, /client_secret/u);
+  assert.match(source, /\{ "client_secret", clientSecret \}/u);
+  assert.match(source, /code === 9[\s\S]*Gmail OAuth client invalid/u);
+  assert.equal(source.match(/\{ "client_secret", clientSecret \}/gu)?.length, 1);
+  assert.match(source, /ExactKeys\(root, new string\[\] \{ "installed" \}\)/u);
+  assert.match(source, /redirects\.Length < 1 \|\| redirects\.Length > 4/u);
+  const authorizationBlock = /string authorization[\s\S]*?Process\.Start/u.exec(source)?.[0] ?? "";
+  assert.doesNotMatch(authorizationBlock, /clientSecret|client_secret/u);
   assert.match(
     source,
     /IntegerField\(value, "verificationTtlSeconds", 86400, 86400\) != 86400/u,
@@ -112,7 +130,7 @@ test("production helper pins PKCE loopback Gmail readonly profile equality and D
   assert.match(source, /InputBox/u);
   assert.match(source, /windowsHide:\s*false/u);
   assert.match(source, /shell:\s*false/u);
-  assert.doesNotMatch(source, /client_secret|process\.env|refresh_token[^\n]*bundle/iu);
+  assert.doesNotMatch(source, /process\.env|refresh_token[^\n]*bundle/iu);
   assert.doesNotMatch(source, /Write-(?:Output|Error|Host)|console\.(?:log|error)/iu);
 });
 
@@ -141,3 +159,73 @@ test("embedded Gmail helper compiles without opening UI or network", async () =>
   );
   assert.equal(result.status, 0, result.stderr);
 });
+
+test("embedded helper exact-parses only the matching installed loopback client", async () => {
+  const source = await readFile(
+    "src/secrets/windows-dpapi/private/interactive-gmail-oauth-sealer.ts",
+    "utf8",
+  );
+  const csharp = /\$source = @'\r?\n([\s\S]*?)\r?\n'@/u.exec(source)?.[1] ?? "";
+  const root = await mkdtemp(join(tmpdir(), "hunt-installed-client-parser-"));
+  try {
+    const sourcePath = join(root, "helper.cs");
+    const validPath = join(root, "valid.json");
+    const extraPath = join(root, "extra.json");
+    const wrongIdPath = join(root, "wrong-id.json");
+    const webRedirectPath = join(root, "web-redirect.json");
+    const clientId = request.clientId;
+    const valid = installedClient(clientId, "http://localhost");
+    await Promise.all([
+      writeFile(sourcePath, csharp),
+      writeFile(validPath, JSON.stringify(valid)),
+      writeFile(extraPath, JSON.stringify({ ...valid, extra: true })),
+      writeFile(wrongIdPath, JSON.stringify(installedClient(
+        "1234567890-different.apps.googleusercontent.com",
+        "http://localhost",
+      ))),
+      writeFile(webRedirectPath, JSON.stringify(installedClient(clientId, "https://example.invalid/callback"))),
+    ]);
+    const result = spawnSync(
+      "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
+      [
+        "-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
+        "-Command",
+        "$invalid=@($env:HUNT_TEST_EXTRA,$env:HUNT_TEST_WRONG_ID,$env:HUNT_TEST_WEB_REDIRECT); Add-Type -Path $env:HUNT_TEST_SOURCE -ReferencedAssemblies 'System.Security.dll','System.Web.dll','System.Web.Extensions.dll','Microsoft.VisualBasic.dll'; $method=[HuntInteractiveGmailOAuthSealer].GetMethod('ReadInstalledClient',[Reflection.BindingFlags]'NonPublic,Static'); try { $null=$method.Invoke($null,@($env:HUNT_TEST_VALID,$env:HUNT_TEST_CLIENT_ID)) } catch { exit 11 }; foreach($path in $invalid) { try { $null=$method.Invoke($null,@($path,$env:HUNT_TEST_CLIENT_ID)); exit 12 } catch {} }; exit 0",
+      ],
+      {
+        shell: false,
+        windowsHide: true,
+        stdio: ["ignore", "ignore", "pipe"],
+        encoding: "utf8",
+        timeout: 15_000,
+        env: {
+          SystemRoot: "C:\\Windows",
+          WINDIR: "C:\\Windows",
+          HUNT_TEST_SOURCE: sourcePath,
+          HUNT_TEST_CLIENT_ID: clientId,
+          HUNT_TEST_VALID: validPath,
+          HUNT_TEST_EXTRA: extraPath,
+          HUNT_TEST_WRONG_ID: wrongIdPath,
+          HUNT_TEST_WEB_REDIRECT: webRedirectPath,
+        },
+      },
+    );
+    assert.equal(result.status, 0, result.stderr);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+function installedClient(clientId: string, redirect: string): object {
+  return {
+    installed: {
+      client_id: clientId,
+      project_id: "synthetic-project",
+      auth_uri: "https://accounts.google.com/o/oauth2/v2/auth",
+      token_uri: "https://oauth2.googleapis.com/token",
+      auth_provider_x509_cert_url: "https://www.googleapis.com/oauth2/v1/certs",
+      client_secret: "synthetic-client-secret",
+      redirect_uris: [redirect],
+    },
+  };
+}

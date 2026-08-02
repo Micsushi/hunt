@@ -124,30 +124,45 @@ every repository with exactly these fields:
 ```json
 {
   "schemaVersion": 1,
-  "contractRevision": "s2-gmail-bootstrap-v1",
+  "contractRevision": "s2-gmail-bootstrap-v2",
   "revisionId": "revision_...",
   "journeyId": "journey_...",
   "gmailHandleId": "secret_handle_...",
   "desktopClientId": "...apps.googleusercontent.com",
+  "installedClientConfigPath": "C:\\absolute\\protected\\google-installed-client.json",
   "verificationHost": "wd5.myworkday.com"
 }
 ```
 
-Use an owner-approved Google Desktop OAuth client ID with Gmail API access. Do
-not add a client secret. Enter only the verification link hostname, never the
-full link or token. Then run:
+Use an owner-approved Google Desktop OAuth client JSON with Gmail API access.
+Keep that regular, bounded file outside every repository under a protected
+current-user ACL. The bootstrap file contains only its canonical absolute path
+and expected client ID; never copy the client secret into the bootstrap file,
+arguments, environment, logs, or Node configuration. Enter only the verification
+link hostname, never the full link or token. Then run:
 
 ```text
 npm run provision:s2-gmail -- --config C:\absolute\external\f2-owner-inputs.json --gmail-bootstrap C:\absolute\external\gmail-bootstrap-input.json
 ```
 
-All ACL and exact-handle checks finish before a browser or prompt. The trusted
-Windows child uses the system browser, an ephemeral IPv4 loopback callback,
-PKCE S256, and only `gmail.readonly`. It confirms the Gmail profile matches the
+All path, ACL, and exact-handle checks finish before a browser or prompt. Node
+sees the canonical client-file path and expected client ID but never reads the
+client JSON. The trusted Windows child is its sole content reader: it accepts
+only the exact installed-client shape, matching client ID, pinned Google
+endpoints, bounded loopback redirects, and a bounded secret. The child uses the
+secret only in the token exchange, alongside an ephemeral IPv4 loopback
+callback, PKCE S256, and only `gmail.readonly`. It confirms the Gmail profile matches the
 DPAPI-protected Workday email and asks for the exact lowercase sender. OAuth,
 mailbox, sender, and bundle values stay in that child; Node receives only DPAPI
 CurrentUser ciphertext. Recreate both short-lived handles instead of mixing F1
 and F2 expiry values. This command does not query Gmail or consume the message.
+
+| Value | Bootstrap/Node owner | Trusted Windows helper owner | Durable output |
+| --- | --- | --- | --- |
+| expected desktop client ID | exact equality input | exact equality check | none |
+| installed-client canonical path | admission and ACL only | bounded file open | none |
+| installed-client JSON and client secret | none | sole reader; token form only | none |
+| Gmail access token and mailbox identity | none | OAuth/profile/bundle sealing | DPAPI ciphertext only |
 
 ### Mailbox-candidate acceptance slice
 
