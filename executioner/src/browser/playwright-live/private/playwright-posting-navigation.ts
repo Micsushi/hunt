@@ -18,9 +18,27 @@ const ACCOUNT_OR_APPLICATION_DESTINATION = [
   '[data-automation-id="applyFlowReviewPage"]',
 ].join(", ");
 
+export type PlaywrightPostingNavigationTraceEvent =
+  | `posting_${PostingNavigationAction}_click_started`
+  | `posting_${PostingNavigationAction}_click_succeeded`
+  | `posting_${PostingNavigationAction}_click_failed`
+  | "posting_apply_manually_same_page_destination_observed"
+  | "posting_apply_manually_popup_destination_observed"
+  | "posting_apply_manually_destination_wait_failed";
+
+export interface PlaywrightPostingNavigationAdapterOptions {
+  readonly trace?: (event: PlaywrightPostingNavigationTraceEvent) => void;
+}
+
 export class PlaywrightPostingNavigationAdapter
   implements SemanticPostingNavigationAdapter
 {
+  readonly #trace: PlaywrightPostingNavigationAdapterOptions["trace"];
+
+  constructor(options: PlaywrightPostingNavigationAdapterOptions = {}) {
+    this.#trace = options.trace;
+  }
+
   async inspect(
     page: PersistentPage,
     action: PostingNavigationAction,
@@ -44,15 +62,60 @@ export class PlaywrightPostingNavigationAdapter
       !await candidates[0]!.isVisible() ||
       !await candidates[0]!.isEnabled()
     ) throw new TypeError("posting navigation control changed before activation");
-    await candidates[0]!.click();
+    const semanticPage = page as unknown as Pick<Page, "locator" | "waitForEvent">;
+    const popupDestination = action === "apply_manually"
+      ? waitForPopupDestination(semanticPage)
+      : undefined;
+    void popupDestination?.catch(() => undefined);
+    this.#emit(`posting_${action}_click_started`);
+    try {
+      await candidates[0]!.click();
+    } catch (error) {
+      this.#emit(`posting_${action}_click_failed`);
+      throw error;
+    }
+    this.#emit(`posting_${action}_click_succeeded`);
     if (action === "apply_manually") {
-      const semanticPage = page as unknown as Pick<Page, "locator">;
-      await semanticPage.locator(ACCOUNT_OR_APPLICATION_DESTINATION).first().waitFor({
-        state: "attached",
-        timeout: 10_000,
-      });
+      const samePage = waitForDestination(semanticPage).then(
+        () => "same_page" as const,
+      );
+      let destination: "same_page" | "popup";
+      try {
+        destination = await Promise.any([samePage, popupDestination!]);
+      } catch {
+        this.#emit("posting_apply_manually_destination_wait_failed");
+        throw new TypeError("account or application destination did not settle");
+      }
+      this.#emit(
+        destination === "popup"
+          ? "posting_apply_manually_popup_destination_observed"
+          : "posting_apply_manually_same_page_destination_observed",
+      );
     }
   }
+
+  #emit(event: PlaywrightPostingNavigationTraceEvent): void {
+    try {
+      this.#trace?.(event);
+    } catch {
+      // Diagnostics must never change navigation behavior.
+    }
+  }
+}
+
+async function waitForDestination(page: Pick<Page, "locator">): Promise<void> {
+  await page.locator(ACCOUNT_OR_APPLICATION_DESTINATION).first().waitFor({
+    state: "attached",
+    timeout: 10_000,
+  });
+}
+
+async function waitForPopupDestination(
+  page: Pick<Page, "waitForEvent">,
+): Promise<"popup"> {
+  const popup = await page.waitForEvent("popup", { timeout: 10_000 });
+  await waitForDestination(popup);
+  return "popup";
 }
 
 async function matchingCandidates(

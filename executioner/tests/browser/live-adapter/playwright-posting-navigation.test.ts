@@ -68,24 +68,72 @@ test("Apply Manually waits for an admitted account or application destination", 
   assert.equal(page.destinationWaits, 1);
 });
 
+test("Apply Manually accepts an admitted destination opened in a popup", async () => {
+  const trace: string[] = [];
+  const popup = new SemanticPage({}, { destinationAvailable: true });
+  const page = new SemanticPage(
+    { "button:Apply Manually": locator() },
+    { destinationAvailable: false, popup },
+  );
+  const adapter = new PlaywrightPostingNavigationAdapter({
+    trace: (event) => trace.push(event),
+  });
+
+  await adapter.activate(page, "apply_manually");
+
+  assert.equal(page.destinationWaits, 1);
+  assert.equal(popup.destinationWaits, 1);
+  assert.deepEqual(trace, [
+    "posting_apply_manually_click_started",
+    "posting_apply_manually_click_succeeded",
+    "posting_apply_manually_popup_destination_observed",
+  ]);
+});
+
 class SemanticPage {
   readonly clicked: string[] = [];
   destinationWaits = 0;
   readonly #locators: Readonly<Record<string, LocatorState>>;
-  constructor(locators: Readonly<Record<string, LocatorState>>) {
+  readonly #destinationAvailable: boolean;
+  readonly #popup: SemanticPage | undefined;
+  #effectStarted = false;
+  constructor(
+    locators: Readonly<Record<string, LocatorState>>,
+    options: {
+      readonly destinationAvailable?: boolean;
+      readonly popup?: SemanticPage;
+    } = {},
+  ) {
     this.#locators = locators;
+    this.#destinationAvailable = options.destinationAvailable ?? true;
+    this.#popup = options.popup;
   }
   getByRole(role: string, options: { readonly name: string }): LocatorState {
     const key = `${role}:${options.name}`;
     const item = this.#locators[key] ?? locator(false, false, 0);
-    return { ...item, click: async () => { this.clicked.push(key); } };
+    return {
+      ...item,
+      click: async () => {
+        this.#effectStarted = true;
+        this.clicked.push(key);
+      },
+    };
   }
   locator(): LocatorState {
     const item = locator();
     return {
       ...item,
-      waitFor: async () => { this.destinationWaits += 1; },
+      waitFor: async () => {
+        this.destinationWaits += 1;
+        if (!this.#destinationAvailable) throw new Error("destination absent");
+      },
     };
+  }
+  async waitForEvent(event: "popup"): Promise<SemanticPage> {
+    assert.equal(event, "popup");
+    if (this.#effectStarted) throw new Error("popup listener armed after click");
+    if (this.#popup === undefined) throw new Error("popup absent");
+    return this.#popup;
   }
   async goto(): Promise<void> {}
   isClosed(): boolean { return false; }
