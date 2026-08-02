@@ -1,4 +1,3 @@
-import type { ClassifiedAccountObservation } from "../../ats/workday/live/index.ts";
 import type { JourneyId, OperationId } from "../../contracts/index.ts";
 import type {
   ActiveAccountSecretHandle,
@@ -25,11 +24,48 @@ export interface AccountLifecycleObservationRequest {
   readonly target: TargetIdentityV1;
 }
 
+export type AccountLifecycleObservation =
+  | {
+      readonly kind: "target_mismatch";
+      readonly dimension: "host" | "tenant" | "posting";
+    }
+  | { readonly kind: "target_ambiguous" }
+  | {
+      readonly kind: "posting_unavailable";
+      readonly reason: "not_found" | "closed" | "removed" | "unavailable";
+    }
+  | {
+      readonly kind: "classified_account";
+      readonly state:
+        | {
+            readonly kind:
+              | "existing_account"
+              | "create_account"
+              | "verification_required"
+              | "application_ready";
+          }
+        | {
+            readonly kind: "manual_intervention";
+            readonly reason: "captcha" | "mfa" | "access_control";
+          };
+    }
+  | {
+      readonly kind: "classification_stopped";
+      readonly outcome:
+        | "ats_unsupported"
+        | "ats_unknown"
+        | "ats_ambiguous"
+        | "workday_page_unknown"
+        | "workday_page_ambiguous"
+        | "account_state_unknown"
+        | "account_state_ambiguous";
+    };
+
 export interface AccountLifecycleAccountStateObserver {
   observe(
     request: AccountLifecycleObservationRequest,
     signal: AbortSignal,
-  ): Promise<LivePortResult<ClassifiedAccountObservation, PersistentBrowserErrorCode>>;
+  ): Promise<LivePortResult<AccountLifecycleObservation, PersistentBrowserErrorCode>>;
 }
 
 export interface AccountLifecycleDependencies {
