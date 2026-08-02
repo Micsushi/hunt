@@ -73,7 +73,11 @@ test("mailbox none, ambiguity, expiry, and consumed facts stop before artifact u
       "mailbox_ambiguous",
     ],
     [
-      { ...liveFixtures.mailboxAvailable, expiresAt: liveFixtures.pastAt },
+      {
+        ...liveFixtures.mailboxAvailable,
+        expiresAt: liveFixtures.pastAt,
+        verificationHandle: null,
+      },
       "mailbox_expired",
     ],
     [

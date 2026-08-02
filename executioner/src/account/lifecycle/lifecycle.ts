@@ -324,11 +324,14 @@ export class AccountVerificationLifecycle {
     }
     if (mailbox.candidateCount === 0) return mailboxBlocked("mailbox_none");
     if (mailbox.candidateCount > 1) return mailboxBlocked("mailbox_ambiguous");
-    if (mailbox.verificationHandle === null) return mailboxBlocked("mailbox_consumed");
     if (
-      mailbox.expiresAt === null ||
+      mailbox.expiresAt !== null &&
       Date.parse(mailbox.expiresAt) <= Date.parse(input.now)
     ) {
+      return mailboxBlocked("mailbox_expired");
+    }
+    if (mailbox.verificationHandle === null) return mailboxBlocked("mailbox_consumed");
+    if (mailbox.expiresAt === null) {
       return mailboxBlocked("mailbox_expired");
     }
     const inspected = await this.#dependencies.artifacts.inspect({
@@ -389,7 +392,10 @@ export class AccountVerificationLifecycle {
         reason: confirmed.value.state.reason,
       });
     }
-    if (confirmed.value.state.kind !== "existing_account") return denied();
+    if (
+      confirmed.value.state.kind !== "existing_account" &&
+      confirmed.value.state.kind !== "create_account"
+    ) return denied();
     const signedIn = await this.#dependencies.credentialMutation.mutate({
       schemaVersion: 1,
       journeyId: input.journeyId,

@@ -84,8 +84,8 @@ test("post-navigation observation admits only exact verified lifecycle states", 
     ["structural_trait_page_profile_step_v1"],
     ["structural_trait_page_questionnaire_v1"],
     ["structural_trait_page_review_step_v1"],
-    ["structural_trait_page_email_verification_v1"],
     ["structural_trait_page_account_entry_v1", "structural_trait_account_sign_in_v1"],
+    ["structural_trait_page_account_entry_v1", "structural_trait_account_create_v1"],
   ] as const;
   for (const traits of admitted) {
     const harness = await openedHarness({ traits });
@@ -102,7 +102,7 @@ test("post-navigation observation admits only exact verified lifecycle states", 
   }
 
   const rejected = [
-    ["structural_trait_page_account_entry_v1", "structural_trait_account_create_v1"],
+    ["structural_trait_page_email_verification_v1"],
     ["structural_trait_page_job_posting_v1"],
     ["structural_trait_page_candidate_home_v1", "structural_trait_page_review_step_v1"],
   ] as const;

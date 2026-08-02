@@ -25,9 +25,8 @@ export function isStablePostVerificationState(
   ].filter((trait) => traits.has(trait));
   if (pageTraits.length !== 1) return false;
   if (pageTraits[0] === "structural_trait_page_account_entry_v1") {
-    return traits.has("structural_trait_account_sign_in_v1") &&
-      !traits.has("structural_trait_account_create_v1");
+    return traits.has("structural_trait_account_sign_in_v1") !==
+      traits.has("structural_trait_account_create_v1");
   }
-  return pageTraits[0] === "structural_trait_page_email_verification_v1" ||
-    readyTraits.has(pageTraits[0]!);
+  return readyTraits.has(pageTraits[0]!);
 }

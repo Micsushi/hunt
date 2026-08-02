@@ -331,6 +331,48 @@ test("post-navigation existing-account state signs in and is reclassified", asyn
   assert.equal(accountState.calls.length, 3);
 });
 
+test("post-navigation create-account state switches to sign-in and is reclassified", async () => {
+  const credential = createCredentialMutationAdapterFake({
+    mutate: {
+      ok: true,
+      value: {
+        kind: "application_ready",
+        attemptedFields: ["email", "password"],
+      },
+    },
+  });
+  const mailbox = createMailboxProviderFake({ result: liveFixtures.mailboxAvailable });
+  const artifacts = createVerificationArtifactFake();
+  const navigator = createPrivilegedVerificationNavigatorFake();
+  const accountState = observer(
+    "verification_required",
+    "create_account",
+    "application_ready",
+  );
+  const lifecycle = new AccountVerificationLifecycle({
+    credentialMutation: credential.port,
+    mailbox: mailbox.port,
+    artifacts: artifacts.port,
+    navigator: navigator.port,
+    accountState: accountState.port,
+  });
+
+  const result = await lifecycle.run(input(), new AbortController().signal);
+
+  assert.equal(result.ok && result.value.kind, "account_ready");
+  assert.deepEqual(
+    credential.calls.map(({ request }) => ({
+      mode: (request as { readonly mode: string }).mode,
+      operationId: (request as { readonly operationId: string }).operationId,
+    })),
+    [{
+      mode: "sign_in",
+      operationId: input().operations.postVerificationSignIn,
+    }],
+  );
+  assert.equal(accountState.calls.length, 3);
+});
+
 test("a reused account may require mailbox verification after sign-in", async () => {
   const credential = createCredentialMutationAdapterFake({
     mutate: {
