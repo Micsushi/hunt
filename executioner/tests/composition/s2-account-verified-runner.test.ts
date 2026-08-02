@@ -238,6 +238,39 @@ test("an already-failed invalidated session preserves its original failure", asy
   });
 });
 
+test("authorization expiry cancels before the next privileged effect and still closes", async () => {
+  const events: string[] = [];
+  const session = browserSession();
+  let current = now;
+  const browser = fakeBrowser(session, events);
+  const originalOpen = browser.open;
+  browser.open = async () => {
+    const opened = await originalOpen();
+    current = "2026-08-02T02:30:00.000Z";
+    return opened;
+  };
+  const lifecycle = createCleanupBoundAccountVerifiedLifecycle({
+    browser,
+    openRequest: openRequest(),
+    reconcileOperationId: "operation_reconcileabcdef" as OperationId,
+    advanceOperationId: "operation_advanceabcdefghijkl" as OperationId,
+    closeOperationId: "operation_close_abcdefghijkl" as OperationId,
+    now,
+    clock: () => current,
+    authorizationExpiresAt: "2026-08-02T02:30:00.000Z",
+    runLifecycle: async () => {
+      events.push("lifecycle");
+      throw new Error("must not run after authorization expiry");
+    },
+  });
+
+  assert.deepEqual(await lifecycle.run(new AbortController().signal), {
+    ok: false,
+    error: { code: "operation_cancelled" },
+  });
+  assert.deepEqual(events, ["open", "close"]);
+});
+
 test("production assembly shares raw vault and artifact registry without owner mode locking", async () => {
   const source = await readFile(
     new URL("../../src/composition/s2-account-verified-runner.ts", import.meta.url),
@@ -253,6 +286,21 @@ test("production assembly shares raw vault and artifact registry without owner m
   assert.equal(source.includes("verificationTarget.toString"), false);
   assert.equal(source.includes("credential.email.toString"), false);
   assert.equal(source.includes("credential.password.toString"), false);
+});
+
+test("production assembly refreshes authorization time at every privileged boundary", async () => {
+  const source = await readFile(
+    new URL("../../src/composition/s2-account-verified-runner.ts", import.meta.url),
+    "utf8",
+  );
+  assert.equal(source.includes("const now = new Date().toISOString()"), false);
+  assert.match(source, /const liveClock = systemClock/u);
+  assert.match(source, /new WindowsDpapiSecretStore\(\{[\s\S]*?now: liveClock,/u);
+  assert.match(source, /new WindowsDpapiSecretResolver\(\{[\s\S]*?now: liveClock,/u);
+  assert.match(source, /new GmailMailboxProvider\(\{[\s\S]*?now: liveClock,/u);
+  assert.match(source, /createAuthorizationBoundLifecycleDependencies\(/u);
+  assert.match(source, /createAuthorizationBoundEvidenceWriter\(/u);
+  assert.match(source, /signal\.aborted \|\| authorizationSignal\?\.aborted/u);
 });
 
 test("account observer denies mismatched ownership before classified inspection", async () => {

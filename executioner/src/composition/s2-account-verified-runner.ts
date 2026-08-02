@@ -8,6 +8,7 @@ import {
 } from "../account/entry/index.ts";
 import {
   AccountVerificationLifecycle,
+  type AccountLifecycleDependencies,
   type AccountLifecycleAccountStateObserver,
   type AccountLifecycleObservationRequest,
   type AccountLifecycleInput,
@@ -43,7 +44,9 @@ import type {
   PersistentBrowserOpenResult,
   PersistentBrowserReconcileRequest,
   PersistentBrowserReconcileResult,
+  SecretInspectRequest,
   SecretHandleMetadataV1,
+  SecretStore,
   TargetIdentityV1,
   VerificationNavigationResult,
 } from "../contracts/live/index.ts";
@@ -52,6 +55,8 @@ import { createPrivateRealRunAdmission } from "../live/preflight/private/runtime
 import type { RealRunOwnerInputsV1 } from "../live/preflight/types.ts";
 import {
   runStage2AccountVerified,
+  type AccountVerifiedAcceptance,
+  type AccountVerifiedEvidenceWriter,
   type AccountVerifiedLifecycleResult,
   type AccountVerifiedLifecycleRunner,
   type Stage2AccountVerifiedInput,
@@ -221,6 +226,8 @@ export function createCleanupBoundAccountVerifiedLifecycle(options: {
   readonly advanceOperationId: OperationId;
   readonly closeOperationId: OperationId;
   readonly now: string;
+  readonly clock?: () => string;
+  readonly authorizationExpiresAt?: string;
   readonly runLifecycle: (
     session: LiveBrowserSessionV1,
     signal: AbortSignal,
@@ -228,40 +235,54 @@ export function createCleanupBoundAccountVerifiedLifecycle(options: {
 }): AccountVerifiedLifecycleRunner {
   return Object.freeze({
     async run(signal: AbortSignal): Promise<AccountVerifiedLifecycleResult> {
+      if (authorizedEffectNow(options, signal) === null) {
+        return lifecycleFailure("operation_cancelled");
+      }
       const opened = await options.browser.open(options.openRequest, signal);
       if (!opened.ok) return lifecycleFailure(opened.error.code);
       const session = opened.value.session;
       let result: AccountVerifiedLifecycleResult;
       try {
-        const reconciled = await options.browser.reconcile({
-          schemaVersion: 1,
-          journeyId: options.openRequest.journeyId,
-          operationId: options.reconcileOperationId,
-          session,
-          expectedTarget: options.openRequest.target,
-        }, signal);
-        if (!reconciled.ok) {
-          result = lifecycleFailure(reconciled.error.code);
-        } else if (reconciled.value.kind !== "matched") {
-          result = factualLifecycleResult(reconciled.value);
+        if (authorizedEffectNow(options, signal) === null) {
+          result = lifecycleFailure("operation_cancelled");
         } else {
-          const advanced = await options.browser.advanceToAccountEntry({
-          schemaVersion: 1,
-          journeyId: options.openRequest.journeyId,
-          operationId: options.advanceOperationId,
-          sessionId: session.sessionId,
-          target: options.openRequest.target,
-          now: options.now,
-        }, signal);
-          if (!advanced.ok) {
-            result = lifecycleFailure(advanced.error.code);
-          } else if (advanced.value.kind !== "account_boundary") {
-            result = factualLifecycleResult(advanced.value);
+          const reconciled = await options.browser.reconcile({
+            schemaVersion: 1,
+            journeyId: options.openRequest.journeyId,
+            operationId: options.reconcileOperationId,
+            session,
+            expectedTarget: options.openRequest.target,
+          }, signal);
+          if (!reconciled.ok) {
+            result = lifecycleFailure(reconciled.error.code);
+          } else if (reconciled.value.kind !== "matched") {
+            result = factualLifecycleResult(reconciled.value);
           } else {
-            const lifecycle = await options.runLifecycle(session, signal);
-            result = lifecycle.ok
-              ? { ok: true, cleanup: "pass", value: lifecycle.value }
-              : lifecycleFailure(lifecycle.error.code);
+            const advanceNow = authorizedEffectNow(options, signal);
+            if (advanceNow === null) {
+              result = lifecycleFailure("operation_cancelled");
+            } else {
+              const advanced = await options.browser.advanceToAccountEntry({
+                schemaVersion: 1,
+                journeyId: options.openRequest.journeyId,
+                operationId: options.advanceOperationId,
+                sessionId: session.sessionId,
+                target: options.openRequest.target,
+                now: advanceNow,
+              }, signal);
+              if (!advanced.ok) {
+                result = lifecycleFailure(advanced.error.code);
+              } else if (advanced.value.kind !== "account_boundary") {
+                result = factualLifecycleResult(advanced.value);
+              } else if (authorizedEffectNow(options, signal) === null) {
+                result = lifecycleFailure("operation_cancelled");
+              } else {
+                const lifecycle = await options.runLifecycle(session, signal);
+                result = lifecycle.ok
+                  ? { ok: true, cleanup: "pass", value: lifecycle.value }
+                  : lifecycleFailure(lifecycle.error.code);
+              }
+            }
           }
         }
       } catch {
@@ -292,14 +313,16 @@ export async function runStage2AccountVerifiedFromOwnerConfig(
   options: Stage2AccountVerifiedProductionOptions,
   signal: AbortSignal,
 ): Promise<Stage2AccountVerifiedResult> {
+  let authorizationSignal: AbortSignal | undefined;
   try {
+    const liveClock = systemClock;
     const executionerRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
     const source = inspectCleanSourceRevision(executionerRoot);
     const configPath = admittedFile(options.configPath);
     const value = readOwnerConfig(configPath);
-    const now = new Date().toISOString();
+    const admittedNow = liveClock();
     const admission = createPrivateRealRunAdmission(value, {
-      now,
+      now: admittedNow,
       forbiddenRoots: [source.repositoryRoot],
       ownerConfigPath: configPath,
     });
@@ -309,27 +332,35 @@ export async function runStage2AccountVerifiedFromOwnerConfig(
         !samePath(owner.roots.evidence.path, options.evidenceRoot)) {
       return failure("owner_config_invalid");
     }
-    const secretStore = new WindowsDpapiSecretStore({
-      root: owner.roots.secrets.path,
-      forbiddenRoots: [source.repositoryRoot],
-      now: () => now,
-    });
-    const [accountInspection, gmailInspection] = await Promise.all([
-      secretStore.inspect({
-        schemaVersion: 1,
-        journeyId: owner.journeyId as never,
-        handleId: owner.accountSecret.handleId as SecretHandleId,
-        expectedPurpose: "account_credentials",
-        expectedConsumer: "credential_mutation_adapter",
-      }, signal),
-      secretStore.inspect({
-        schemaVersion: 1,
-        journeyId: owner.journeyId as never,
-        handleId: owner.gmailAuthorization.handleId as SecretHandleId,
-        expectedPurpose: "gmail_oauth",
-        expectedConsumer: "gmail_auth_executor",
-      }, signal),
-    ]);
+    const authorization = createAuthorizationRuntime(
+      owner.approval.expiresAt,
+      signal,
+      liveClock,
+    );
+    authorizationSignal = authorization.signal;
+    try {
+      if (authorization.current() === null) return failure("operation_cancelled");
+      const secretStore = new WindowsDpapiSecretStore({
+        root: owner.roots.secrets.path,
+        forbiddenRoots: [source.repositoryRoot],
+        now: liveClock,
+      });
+      const [accountInspection, gmailInspection] = await Promise.all([
+        inspectAuthorizedSecret(secretStore, {
+          schemaVersion: 1,
+          journeyId: owner.journeyId as never,
+          handleId: owner.accountSecret.handleId as SecretHandleId,
+          expectedPurpose: "account_credentials",
+          expectedConsumer: "credential_mutation_adapter",
+        }, authorization),
+        inspectAuthorizedSecret(secretStore, {
+          schemaVersion: 1,
+          journeyId: owner.journeyId as never,
+          handleId: owner.gmailAuthorization.handleId as SecretHandleId,
+          expectedPurpose: "gmail_oauth",
+          expectedConsumer: "gmail_auth_executor",
+        }, authorization),
+      ]);
     if (!accountInspection.ok) return failure(accountInspection.error.code);
     if (!gmailInspection.ok) return failure(gmailInspection.error.code);
     if (!exactAccountMetadata(accountInspection.value, owner) ||
@@ -337,12 +368,12 @@ export async function runStage2AccountVerifiedFromOwnerConfig(
       return failure("secret_handle_mismatched");
     }
     const account = accountInspection.value as ActiveAccountSecretHandle;
-    const authorization = gmailInspection.value as ActiveGmailSecretHandle;
+    const gmailAuthorization = gmailInspection.value as ActiveGmailSecretHandle;
     const operations = operationIds();
     const bindings = createAccountVerifiedBindings(
       owner,
       source.sourceRevision,
-      now,
+      admittedNow,
       operations,
     );
     const valueFreeTrace = process.env.HUNT_C3_VALUE_FREE_ACCOUNT_TRACE === "1"
@@ -359,7 +390,7 @@ export async function runStage2AccountVerifiedFromOwnerConfig(
     const resolver = new WindowsDpapiSecretResolver({
       root: owner.roots.secrets.path,
       forbiddenRoots: [source.repositoryRoot],
-      now: () => now,
+      now: liveClock,
     });
     const credentialMutation = createAccountEntryCredentialMutationAdapter({
       accountPage: browser,
@@ -390,9 +421,9 @@ export async function runStage2AccountVerifiedFromOwnerConfig(
       },
     });
     const mailbox = new GmailMailboxProvider({
-      authorization,
+      authorization: gmailAuthorization,
       binding: bindings.mailboxRequest,
-      now: () => now,
+      now: liveClock,
       secretStore,
       authExecutor,
       artifacts: artifacts.port,
@@ -410,48 +441,269 @@ export async function runStage2AccountVerifiedFromOwnerConfig(
       reconcileOperationId: operations.browserReconcile,
       advanceOperationId: operations.accountAdvance,
       closeOperationId: operations.browserClose,
-      now,
+      now: admittedNow,
+      clock: liveClock,
+      authorizationExpiresAt: owner.approval.expiresAt,
       runLifecycle: (session, lifecycleSignal) => {
-        const lifecycle = new AccountVerificationLifecycle({
-          credentialMutation,
-          mailbox,
-          artifacts: artifacts.port,
-          navigator,
-          accountState: createBoundAccountStateObserver(classified, {
-            journeyId: bindings.lifecycle.journeyId,
-            sessionId: session.sessionId,
-            target: bindings.target,
-          }),
-        });
+        const current = authorization.current();
+        if (current === null) {
+          return Promise.resolve({
+            ok: false,
+            error: { code: "operation_cancelled", retryable: false },
+          });
+        }
+        const lifecycle = new AccountVerificationLifecycle(
+          createAuthorizationBoundLifecycleDependencies({
+            credentialMutation,
+            mailbox,
+            artifacts: artifacts.port,
+            navigator,
+            accountState: createBoundAccountStateObserver(classified, {
+              journeyId: bindings.lifecycle.journeyId,
+              sessionId: session.sessionId,
+              target: bindings.target,
+            }),
+          }, authorization),
+        );
         return lifecycle.run({
           ...bindings.lifecycle,
+          now: current,
           session,
           credential: account,
         }, lifecycleSignal);
       },
     });
-    return await runStage2AccountVerified(bindings.runner, {
-      lifecycle: cleanupBoundLifecycle,
-      evidence: {
-        write: async (acceptance) => writeAccountVerifiedEvidence({
-          root: owner.roots.evidence.path,
-          acceptance,
-          sensitiveValues: [
-            owner.target.url,
-            owner.target.host,
-            owner.target.tenant,
-            owner.target.posting,
-            owner.roots.runtime.path,
-            owner.roots.secrets.path,
-            owner.roots.evidence.path,
-            configPath,
-          ],
-        }),
-      },
-    }, signal);
+    const evidence = createAuthorizationBoundEvidenceWriter(
+      authorization,
+      async (acceptance) => writeAccountVerifiedEvidence({
+        root: owner.roots.evidence.path,
+        acceptance,
+        sensitiveValues: [
+          owner.target.url,
+          owner.target.host,
+          owner.target.tenant,
+          owner.target.posting,
+          owner.roots.runtime.path,
+          owner.roots.secrets.path,
+          owner.roots.evidence.path,
+          configPath,
+        ],
+      }),
+    );
+      const result = await runStage2AccountVerified(bindings.runner, {
+        lifecycle: cleanupBoundLifecycle,
+        evidence: evidence.writer,
+      }, authorization.signal);
+      return !result.ok && result.code === "evidence_unavailable" && evidence.expired()
+        ? failure("operation_cancelled")
+        : result;
+    } finally {
+      authorization.dispose();
+    }
   } catch {
-    return failure(signal.aborted ? "operation_cancelled" : "owner_config_invalid");
+    return failure(
+      signal.aborted || authorizationSignal?.aborted
+        ? "operation_cancelled"
+        : "owner_config_invalid",
+    );
   }
+}
+
+function systemClock(): string {
+  return new Date().toISOString();
+}
+
+interface AuthorizationRuntime {
+  readonly signal: AbortSignal;
+  current(): string | null;
+  dispose(): void;
+}
+
+function createAuthorizationRuntime(
+  expiresAt: string,
+  parentSignal: AbortSignal,
+  clock: () => string,
+): AuthorizationRuntime {
+  const deadline = Date.parse(expiresAt);
+  const controller = new AbortController();
+  const cancel = () => controller.abort();
+  parentSignal.addEventListener("abort", cancel, { once: true });
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const schedule = () => {
+    const current = readExactClock(clock);
+    const remaining = current === null ? 0 : deadline - Date.parse(current);
+    if (!Number.isFinite(deadline) || remaining <= 0) {
+      cancel();
+      return;
+    }
+    const delay = Math.min(remaining, 2_147_483_647);
+    timer = setTimeout(remaining > delay ? schedule : cancel, delay);
+    timer.unref();
+  };
+  schedule();
+  if (parentSignal.aborted) cancel();
+  return Object.freeze({
+    signal: controller.signal,
+    current() {
+      if (controller.signal.aborted) return null;
+      const value = readExactClock(clock);
+      if (value === null || Date.parse(value) >= deadline) {
+        cancel();
+        return null;
+      }
+      return value;
+    },
+    dispose() {
+      if (timer !== undefined) clearTimeout(timer);
+      parentSignal.removeEventListener("abort", cancel);
+    },
+  });
+}
+
+function authorizedEffectNow(
+  options: {
+    readonly now: string;
+    readonly clock?: () => string;
+    readonly authorizationExpiresAt?: string;
+  },
+  signal: AbortSignal,
+): string | null {
+  if (signal.aborted) return null;
+  const value = options.clock === undefined
+    ? readExactClock(() => options.now)
+    : readExactClock(options.clock);
+  if (value === null) return null;
+  return options.authorizationExpiresAt !== undefined &&
+      Date.parse(value) >= Date.parse(options.authorizationExpiresAt)
+    ? null
+    : value;
+}
+
+function readExactClock(clock: () => string): string | null {
+  try {
+    const value = clock();
+    const timestamp = Date.parse(value);
+    return Number.isFinite(timestamp) && new Date(timestamp).toISOString() === value
+      ? value
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+async function inspectAuthorizedSecret(
+  store: SecretStore,
+  request: SecretInspectRequest,
+  authorization: AuthorizationRuntime,
+) {
+  if (authorization.current() === null) return cancelledPortResult();
+  return store.inspect(request, authorization.signal);
+}
+
+export function createAuthorizationBoundLifecycleDependencies(
+  dependencies: AccountLifecycleDependencies,
+  authorization: Pick<AuthorizationRuntime, "signal" | "current">,
+): AccountLifecycleDependencies {
+  const admit = (signal: AbortSignal) =>
+    !signal.aborted && !authorization.signal.aborted
+      ? authorization.current()
+      : null;
+  const credentialMutation: AccountLifecycleDependencies["credentialMutation"] =
+    Object.freeze({
+      mutate(
+        request: Parameters<AccountLifecycleDependencies["credentialMutation"]["mutate"]>[0],
+        signal: AbortSignal,
+      ) {
+        const current = admit(signal);
+        return current === null
+          ? Promise.resolve(cancelledPortResult())
+          : dependencies.credentialMutation.mutate({ ...request, now: current }, signal);
+      },
+    });
+  const mailbox: AccountLifecycleDependencies["mailbox"] = Object.freeze({
+    poll(
+      request: Parameters<AccountLifecycleDependencies["mailbox"]["poll"]>[0],
+      signal: AbortSignal,
+    ) {
+      return admit(signal) === null
+        ? Promise.resolve(cancelledPortResult())
+        : dependencies.mailbox.poll(request, signal);
+    },
+  });
+  const artifacts: AccountLifecycleDependencies["artifacts"] = Object.freeze({
+    inspect(
+      request: Parameters<AccountLifecycleDependencies["artifacts"]["inspect"]>[0],
+      signal: AbortSignal,
+    ) {
+      return admit(signal) === null
+        ? Promise.resolve(cancelledPortResult())
+        : dependencies.artifacts.inspect(request, signal);
+    },
+    invalidate(
+      request: Parameters<AccountLifecycleDependencies["artifacts"]["invalidate"]>[0],
+      signal: AbortSignal,
+    ) {
+      return admit(signal) === null
+        ? Promise.resolve(cancelledPortResult())
+        : dependencies.artifacts.invalidate(request, signal);
+    },
+  });
+  const navigator: AccountLifecycleDependencies["navigator"] = Object.freeze({
+    navigate(
+      request: Parameters<AccountLifecycleDependencies["navigator"]["navigate"]>[0],
+      signal: AbortSignal,
+    ) {
+      const current = admit(signal);
+      return current === null
+        ? Promise.resolve(cancelledPortResult())
+        : dependencies.navigator.navigate({ ...request, now: current }, signal);
+    },
+  });
+  const accountState: AccountLifecycleDependencies["accountState"] = Object.freeze({
+    observe(
+      request: Parameters<AccountLifecycleDependencies["accountState"]["observe"]>[0],
+      signal: AbortSignal,
+    ) {
+      return admit(signal) === null
+        ? Promise.resolve(cancelledPortResult())
+        : dependencies.accountState.observe(request, signal);
+    },
+  });
+  const bounded: AccountLifecycleDependencies = {
+    credentialMutation,
+    mailbox,
+    artifacts,
+    navigator,
+    accountState,
+  };
+  return Object.freeze(bounded);
+}
+
+function createAuthorizationBoundEvidenceWriter(
+  authorization: Pick<AuthorizationRuntime, "current">,
+  write: (acceptance: AccountVerifiedAcceptance) => Promise<void>,
+): { readonly writer: AccountVerifiedEvidenceWriter; expired(): boolean } {
+  let expired = false;
+  const writer: AccountVerifiedEvidenceWriter = {
+    async write(acceptance) {
+      if (authorization.current() === null) {
+        expired = true;
+        throw new Error("authorization expired");
+      }
+      await write(acceptance);
+    },
+  };
+  return Object.freeze({
+    writer: Object.freeze(writer),
+    expired: () => expired,
+  });
+}
+
+function cancelledPortResult() {
+  return {
+    ok: false,
+    error: { code: "operation_cancelled", retryable: false },
+  } as const;
 }
 
 export function createBoundAccountStateObserver(
