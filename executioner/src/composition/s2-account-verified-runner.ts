@@ -130,7 +130,7 @@ export function createAccountVerifiedBindings(
     tenantId: `tenant_${targetSuffix}` as TargetTenantId,
     postingId: `posting_${targetSuffix}` as TargetPostingId,
   });
-  const notBefore = new Date(Date.parse(now) - 24 * 60 * 60 * 1_000).toISOString();
+  const notBefore = now;
   const mailboxRequest = Object.freeze({
     schemaVersion: 1 as const,
     journeyId: owner.journeyId as never,
@@ -410,7 +410,7 @@ export async function runStage2AccountVerifiedFromOwnerConfig(
     const mailbox = createBoundedVerificationMailboxPolling({
       clock: liveClock,
       authorizationExpiresAt: owner.approval.expiresAt,
-      maxDurationMs: 60_000,
+      maxDurationMs: 5 * 60_000,
       baseDelayMs: 250,
       maxDelayMs: 5_000,
       createQueryId: () =>

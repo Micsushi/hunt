@@ -36,8 +36,7 @@ export interface BoundedVerificationMailboxPollingOptions {
   readonly trace?: (event: MailboxPollingTraceEvent) => void;
 }
 
-const maximumDurationMs = 60_000;
-const mailboxWindowMs = 24 * 60 * 60 * 1_000;
+const maximumDurationMs = 5 * 60_000;
 const queryIdPattern = /^mailbox_query_[A-Za-z0-9_-]{16,64}$/u;
 const retryableAvailabilityErrors = new Set<string>([
   "secret_store_unavailable",
@@ -75,7 +74,7 @@ async function pollUntilBounded(
     startedAtMs + options.maxDurationMs,
     authorizationDeadline,
   );
-  const notBefore = new Date(startedAtMs - mailboxWindowMs).toISOString();
+  const notBefore = request.notBefore;
   const controller = new AbortController();
   let deadlineReached = false;
   let lastResult: MailboxResult | undefined;

@@ -39,7 +39,21 @@ const reorderedEmpty: MailboxPollResultV1 = {
   provider: "gmail_api_v1",
 };
 
-test("polls delayed mail with fresh query IDs, moving upper bounds, and fixed 24h lower bound", async () => {
+test("admits an exact five-minute mailbox polling window", () => {
+  const runtime = fakeRuntime(startedAt);
+  assert.doesNotThrow(() => createBoundedVerificationMailboxPolling({
+    clock: runtime.clock,
+    authorizationExpiresAt: "2026-08-02T12:10:00.000Z",
+    maxDurationMs: 5 * 60_000,
+    baseDelayMs: 250,
+    maxDelayMs: 1_000,
+    createQueryId: queryIds(),
+    createAttemptProvider: providerSequence([], []),
+    scheduler: runtime.scheduler,
+  }));
+});
+
+test("polls delayed mail without widening the journey lower bound", async () => {
   const runtime = fakeRuntime(startedAt);
   const requests: MailboxPollRequest[] = [];
   const traces: string[] = [];
@@ -75,7 +89,7 @@ test("polls delayed mail with fresh query IDs, moving upper bounds, and fixed 24
   );
   assert.deepEqual(
     requests.map(({ notBefore }) => notBefore),
-    Array(3).fill("2026-08-01T12:00:00.000Z"),
+    Array(3).fill(baseRequest().notBefore),
   );
   assert.deepEqual(
     requests.map(({ notAfter }) => notAfter),
@@ -208,6 +222,7 @@ test("production composition rebuilds an exact Gmail provider for every F9 attem
     "utf8",
   );
   assert.match(source, /createBoundedVerificationMailboxPolling\(\{/u);
+  assert.match(source, /maxDurationMs: 5 \* 60_000,/u);
   assert.match(source, /createAttemptProvider: \(attemptRequest\) =>/u);
   assert.match(source, /binding: attemptRequest,/u);
   assert.match(source, /notBefore: attemptRequest\.notBefore,/u);
