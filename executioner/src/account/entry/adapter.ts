@@ -2,13 +2,15 @@ import type {
   CredentialMutationAdapter,
   CredentialMutationErrorCode,
   CredentialMutationRequest,
-  CredentialMutationResult,
   LivePortResult,
   PersistentBrowserErrorCode,
 } from "../../contracts/live/index.ts";
 import { s2StableErrorPolicy } from "../../contracts/s2-common-wire.ts";
 import {
   accountStateResult,
+  accountFactResult,
+  type AccountEntryCredentialMutationAdapter,
+  type AccountLifecycleCredentialMutationResult,
   type AccountActionIntent,
   type AccountEntryDependencies,
   type AccountFieldName,
@@ -16,17 +18,20 @@ import {
   type ClassifiedAccountObservation,
 } from "./types.ts";
 
-type MutationResult = LivePortResult<CredentialMutationResult, CredentialMutationErrorCode>;
+type MutationResult = LivePortResult<
+  AccountLifecycleCredentialMutationResult,
+  CredentialMutationErrorCode
+>;
 type MutationFailure = Extract<MutationResult, { readonly ok: false }>;
 
 export function createAccountEntryCredentialMutationAdapter(
   dependencies: AccountEntryDependencies,
-): CredentialMutationAdapter {
+): AccountEntryCredentialMutationAdapter {
   const operations = new Map<string, {
     readonly fingerprint: string;
     readonly result: Promise<MutationResult>;
   }>();
-  return Object.freeze({
+  const lifecycle = Object.freeze({
     mutate(request: CredentialMutationRequest, signal: AbortSignal): Promise<MutationResult> {
       const fingerprint = JSON.stringify(request);
       const previous = operations.get(request.operationId);
@@ -40,6 +45,28 @@ export function createAccountEntryCredentialMutationAdapter(
       return result;
     },
   });
+  const publicResults = new WeakMap<
+    Promise<MutationResult>,
+    ReturnType<CredentialMutationAdapter["mutate"]>
+  >();
+  const adapter: AccountEntryCredentialMutationAdapter = {
+    lifecycle,
+    mutate(request, signal) {
+      const internal = lifecycle.mutate(request, signal);
+      const replay = publicResults.get(internal);
+      if (replay !== undefined) return replay;
+      const result = internal.then((settled) => {
+        if (
+          settled.ok &&
+          (settled.value.kind === "account_absent" || settled.value.kind === "account_exists")
+        ) return failure("credential_mutation_denied");
+        return settled as Awaited<ReturnType<CredentialMutationAdapter["mutate"]>>;
+      });
+      publicResults.set(internal, result);
+      return result;
+    },
+  };
+  return Object.freeze(adapter);
 }
 
 async function mutateOnce(
@@ -66,7 +93,7 @@ async function mutateOnce(
   }
 
   let state = initial.value;
-  let result: CredentialMutationResult | undefined;
+  let result: AccountLifecycleCredentialMutationResult | undefined;
   let localFailure: MutationFailure | undefined;
   const page = await dependencies.accountPage.withOwnedAccountPageAccess(
     {
@@ -222,20 +249,17 @@ async function mutateOnce(
             emit(dependencies, "post_submit_classify_failed");
             throw new Error("credential effect could not be reconciled");
           }
-          const reconciledResult = accountStateResult(
-            reconciled.value.state,
-            ["email", "password"],
-          );
-          emit(dependencies, postSubmitEvent(reconciledResult.kind));
-          if (
-            reconciledResult.kind === "account_absent" ||
-            reconciledResult.kind === "account_exists"
-          ) {
+          const factualResult = accountFactResult(reconciled.value.state);
+          emit(dependencies, postSubmitEvent(
+            factualResult?.kind ?? reconciled.value.state.kind,
+          ));
+          if (factualResult !== undefined) {
             if (!await cleanupPopulated(access, populated, dependencies)) {
               localFailure = failure("credential_effect_uncertain");
               return accountStateResult(reconciled.value.state, ["email", "password"]);
             }
-            return reconciledResult;
+            result = factualResult;
+            return accountStateResult(reconciled.value.state, ["email", "password"]);
           }
           if (
             reconciled.value.state.kind === "existing_account" ||
@@ -257,7 +281,7 @@ async function mutateOnce(
         },
       );
       if (!resolved.ok) localFailure = copyFailure(resolved);
-      else if (localFailure === undefined) result = resolved.value;
+      else if (localFailure === undefined && result === undefined) result = resolved.value;
     },
   );
   if (!page.ok) {

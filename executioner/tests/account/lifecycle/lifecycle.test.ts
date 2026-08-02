@@ -11,6 +11,10 @@ import {
 import {
   AccountVerificationLifecycle,
 } from "../../../src/account/lifecycle/index.ts";
+import type {
+  AccountLifecycleCredentialMutationAdapter,
+  AccountLifecycleCredentialMutationResult,
+} from "../../../src/account/entry/index.ts";
 import { accountObserver as observer, lifecycleInput as input } from "./support.ts";
 
 test("independently observed application-ready state skips every effect", async () => {
@@ -139,14 +143,10 @@ test("verification consumes through one navigator call and never invalidates sep
 });
 
 test("fresh-create is login-first and creates only after independently confirmed absence", async () => {
-  const credential = createCredentialMutationAdapterFake({
-    mutate: (_request, _signal, callIndex) => ({
-      ok: true,
-      value: callIndex === 0
-        ? { kind: "account_absent", attemptedFields: ["email", "password"] }
-        : { kind: "verification_required", attemptedFields: ["email", "password"] },
-    }),
-  });
+  const credential = privateCredential(
+    { kind: "account_absent", attemptedFields: ["email", "password"] },
+    { kind: "verification_required", attemptedFields: ["email", "password"] },
+  );
   const mailbox = createMailboxProviderFake({ result: liveFixtures.mailboxAvailable });
   const artifacts = createVerificationArtifactFake();
   const navigator = createPrivilegedVerificationNavigatorFake();
@@ -227,16 +227,11 @@ test("fresh-create stops after an ordinary sign-in rejection and never infers ab
 });
 
 test("exact account-exists after create switches to sign-in once", async () => {
-  const credential = createCredentialMutationAdapterFake({
-    mutate: (_request, _signal, callIndex) => ({
-      ok: true,
-      value: [
-        { kind: "account_absent", attemptedFields: ["email", "password"] },
-        { kind: "account_exists", attemptedFields: ["email", "password"] },
-        { kind: "application_ready", attemptedFields: ["email", "password"] },
-      ][callIndex] as never,
-    }),
-  });
+  const credential = privateCredential(
+    { kind: "account_absent", attemptedFields: ["email", "password"] },
+    { kind: "account_exists", attemptedFields: ["email", "password"] },
+    { kind: "application_ready", attemptedFields: ["email", "password"] },
+  );
   const accountState = observer(
     "create_account",
     "account_absent",
@@ -264,14 +259,10 @@ test("exact account-exists after create switches to sign-in once", async () => {
 });
 
 test("create completion requires an independent application-ready observation", async () => {
-  const credential = createCredentialMutationAdapterFake({
-    mutate: (_request, _signal, callIndex) => ({
-      ok: true,
-      value: callIndex === 0
-        ? { kind: "account_absent", attemptedFields: ["email", "password"] }
-        : { kind: "application_ready", attemptedFields: ["email", "password"] },
-    }),
-  });
+  const credential = privateCredential(
+    { kind: "account_absent", attemptedFields: ["email", "password"] },
+    { kind: "application_ready", attemptedFields: ["email", "password"] },
+  );
   const accountState = observer("create_account", "account_absent", "application_ready");
   const lifecycle = new AccountVerificationLifecycle({
     credentialMutation: credential.port,
@@ -371,3 +362,25 @@ test("a reused account may require mailbox verification after sign-in", async ()
   assert.equal(navigator.calls.length, 1);
   assert.equal(accountState.calls.length, 2);
 });
+
+function privateCredential(
+  ...results: readonly AccountLifecycleCredentialMutationResult[]
+) {
+  const calls: Array<{ readonly request: unknown }> = [];
+  let index = 0;
+  const port: AccountLifecycleCredentialMutationAdapter = {
+    async mutate(request, signal) {
+      calls.push({ request });
+      if (signal.aborted) {
+        return {
+          ok: false,
+          error: { code: "operation_cancelled", retryable: false },
+        };
+      }
+      const value = results[Math.min(index, results.length - 1)]!;
+      index += 1;
+      return { ok: true, value };
+    },
+  };
+  return { calls, port };
+}

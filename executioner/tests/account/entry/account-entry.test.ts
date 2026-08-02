@@ -342,7 +342,7 @@ test("post-submit exact account facts survive while unchanged entry pages remain
     ]);
 
     const result = await createAccountEntryCredentialMutationAdapter(fixture.dependencies)
-      .mutate(request(mode), new AbortController().signal);
+      .lifecycle.mutate(request(mode), new AbortController().signal);
 
     assert.deepEqual(result, {
       ok: true,

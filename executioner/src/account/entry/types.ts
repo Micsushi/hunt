@@ -4,6 +4,9 @@ import type {
   ClassificationId,
   ClassificationRevisionId,
   CredentialMutationResult,
+  CredentialMutationAdapter,
+  CredentialMutationErrorCode,
+  CredentialMutationRequest,
   LivePortResult,
   LiveSessionId,
   PersistentBrowserErrorCode,
@@ -132,17 +135,46 @@ export interface AccountEntryDependencies {
   readonly trace?: (event: AccountEntryTraceEvent) => void;
 }
 
+export type AccountLifecycleCredentialMutationResult =
+  | CredentialMutationResult
+  | {
+      readonly kind: "account_absent" | "account_exists";
+      readonly attemptedFields: readonly ["email", "password"];
+    };
+
+export interface AccountLifecycleCredentialMutationAdapter {
+  mutate(
+    request: CredentialMutationRequest,
+    signal: AbortSignal,
+  ): Promise<LivePortResult<
+    AccountLifecycleCredentialMutationResult,
+    CredentialMutationErrorCode
+  >>;
+}
+
+export interface AccountEntryCredentialMutationAdapter extends CredentialMutationAdapter {
+  readonly lifecycle: AccountLifecycleCredentialMutationAdapter;
+}
+
 export function accountStateResult(
   state: AccountState,
   attemptedFields: readonly ("email" | "password")[],
 ): CredentialMutationResult {
-  if (state.kind === "existing_account" && state.accountFact === "absent") {
-    return { kind: "account_absent", attemptedFields };
-  }
-  if (state.kind === "create_account" && state.accountFact === "exists") {
-    return { kind: "account_exists", attemptedFields };
-  }
   return state.kind === "manual_intervention"
     ? { kind: state.kind, reason: state.reason, attemptedFields }
     : { kind: state.kind, attemptedFields };
+}
+
+export function accountFactResult(
+  state: AccountState,
+): Extract<AccountLifecycleCredentialMutationResult, {
+  readonly kind: "account_absent" | "account_exists";
+}> | undefined {
+  if (state.kind === "existing_account" && state.accountFact === "absent") {
+    return { kind: "account_absent", attemptedFields: ["email", "password"] };
+  }
+  if (state.kind === "create_account" && state.accountFact === "exists") {
+    return { kind: "account_exists", attemptedFields: ["email", "password"] };
+  }
+  return undefined;
 }

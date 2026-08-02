@@ -1,7 +1,6 @@
 import type { JourneyId, OperationId } from "../../contracts/index.ts";
 import type {
   ActiveAccountSecretHandle,
-  CredentialMutationAdapter,
   LiveBrowserSessionV1,
   LivePortResult,
   LiveSessionId,
@@ -12,6 +11,7 @@ import type {
   TargetIdentityV1,
   VerificationArtifact,
 } from "../../contracts/live/index.ts";
+import type { AccountLifecycleCredentialMutationAdapter } from "../entry/types.ts";
 import type {
   LiveBlocked,
   LiveCoordinatorResult,
@@ -69,7 +69,7 @@ export interface AccountLifecycleAccountStateObserver {
 }
 
 export interface AccountLifecycleDependencies {
-  readonly credentialMutation: CredentialMutationAdapter;
+  readonly credentialMutation: AccountLifecycleCredentialMutationAdapter;
   readonly mailbox: MailboxProvider;
   readonly artifacts: VerificationArtifact;
   readonly navigator: PrivilegedVerificationNavigator;

@@ -9,6 +9,7 @@ import type {
   AccountLifecycleInput,
   AccountLifecycleResult,
 } from "./types.ts";
+import type { AccountLifecycleCredentialMutationResult } from "../entry/types.ts";
 import {
   blocked,
   classificationBlocked,
@@ -181,7 +182,7 @@ export class AccountVerificationLifecycle {
     if (!mutation.ok) return mutation;
     let result;
     try {
-      result = parseCredentialMutationResult(mutation.value);
+      result = parseLifecycleCredentialMutationResult(mutation.value);
     } catch {
       return denied();
     }
@@ -221,7 +222,7 @@ export class AccountVerificationLifecycle {
     if (!mutation.ok) return mutation;
     let result;
     try {
-      result = parseCredentialMutationResult(mutation.value);
+      result = parseLifecycleCredentialMutationResult(mutation.value);
     } catch {
       return denied();
     }
@@ -252,7 +253,7 @@ export class AccountVerificationLifecycle {
     if (!signedIn.ok) return signedIn;
     let signInResult;
     try {
-      signInResult = parseCredentialMutationResult(signedIn.value);
+      signInResult = parseLifecycleCredentialMutationResult(signedIn.value);
     } catch {
       return denied();
     }
@@ -402,7 +403,7 @@ export class AccountVerificationLifecycle {
     }, signal);
     if (!signedIn.ok) return signedIn;
     try {
-      const result = parseCredentialMutationResult(signedIn.value);
+      const result = parseLifecycleCredentialMutationResult(signedIn.value);
       if (result.kind === "manual_intervention") {
         return blocked("account_access", {
           kind: "manual_intervention",
@@ -425,4 +426,35 @@ export class AccountVerificationLifecycle {
       ? ready("verified_account", 1, true)
       : denied();
   }
+}
+
+function parseLifecycleCredentialMutationResult(
+  value: unknown,
+): AccountLifecycleCredentialMutationResult {
+  if (
+    typeof value === "object" &&
+    value !== null &&
+    !Array.isArray(value) &&
+    Object.keys(value).length === 2 &&
+    Object.prototype.hasOwnProperty.call(value, "kind") &&
+    Object.prototype.hasOwnProperty.call(value, "attemptedFields")
+  ) {
+    const candidate = value as {
+      readonly kind?: unknown;
+      readonly attemptedFields?: unknown;
+    };
+    if (
+      (candidate.kind === "account_absent" || candidate.kind === "account_exists") &&
+      Array.isArray(candidate.attemptedFields) &&
+      candidate.attemptedFields.length === 2 &&
+      candidate.attemptedFields[0] === "email" &&
+      candidate.attemptedFields[1] === "password"
+    ) {
+      return {
+        kind: candidate.kind,
+        attemptedFields: ["email", "password"] as const,
+      };
+    }
+  }
+  return parseCredentialMutationResult(value);
 }
