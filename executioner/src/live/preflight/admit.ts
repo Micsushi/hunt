@@ -256,13 +256,19 @@ export function admitGmailGrantRevocationOwner(
   }
   const approval = record(input.approval, approvalKeys);
   const now = parseTimestamp(context.now);
-  const approvedAt = approval === null ? null : parseTimestamp(approval.approvedAt);
-  if (now === null || approvedAt === null || approvedAt > now) {
+  const approvedAtValue = approval?.approvedAt;
+  const approvedAt = parseTimestamp(approvedAtValue);
+  if (
+    typeof approvedAtValue !== "string" ||
+    now === null ||
+    approvedAt === null ||
+    approvedAt > now
+  ) {
     return failure("owner_config_invalid", "approval");
   }
   const historical = admitRealRunPreflight(value, {
     ...context,
-    now: approval.approvedAt as string,
+    now: approvedAtValue,
   });
   if (!historical.ok) return historical;
   const owner = value as RealRunOwnerInputsV1;
