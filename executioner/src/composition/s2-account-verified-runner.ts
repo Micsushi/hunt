@@ -50,6 +50,9 @@ import type {
   TargetIdentityV1,
   VerificationNavigationResult,
 } from "../contracts/live/index.ts";
+import {
+  createBoundedVerificationMailboxPolling,
+} from "../control/orchestrator/live/mailbox-polling.ts";
 import { writeAccountVerifiedEvidence } from "../live/evidence/account-verified-evidence.ts";
 import { createPrivateRealRunAdmission } from "../live/preflight/private/runtime-binding.ts";
 import type { RealRunOwnerInputsV1 } from "../live/preflight/types.ts";
@@ -400,34 +403,51 @@ export async function runStage2AccountVerifiedFromOwnerConfig(
     });
     const rawVault = new GmailRawArtifactVault();
     const artifacts = new GmailSafeArtifactRegistry();
-    const authExecutor = new GmailApiAuthExecutor({
-      binding: bindings.gmail,
-      resolver,
-      httpClient: new GmailHttpClient(),
-      rawVault,
-      artifactRegistry: artifacts,
-      approvedPolicy: approvedPolicy(owner),
-      createHandle: () =>
-        `verification_handle_${randomBytes(16).toString("hex")}` as VerificationHandleId,
-      policyFactory: {
-        create(candidateSource, admittedNow) {
-          return createBoundedMailboxPolicy({
-            binding: bindings.gmail,
-            candidateSource,
-            clock: () => admittedNow,
-            timeoutMs: 60_000,
-          });
-        },
+    const mailbox = createBoundedVerificationMailboxPolling({
+      clock: liveClock,
+      authorizationExpiresAt: owner.approval.expiresAt,
+      maxDurationMs: 60_000,
+      baseDelayMs: 250,
+      maxDelayMs: 5_000,
+      createQueryId: () =>
+        `mailbox_query_${randomBytes(16).toString("hex")}` as LiveIdentifier<"mailbox_query">,
+      createAttemptProvider: (attemptRequest) => {
+        const attemptBinding = Object.freeze({
+          ...bindings.gmail,
+          notBefore: attemptRequest.notBefore,
+          notAfter: attemptRequest.notAfter,
+        });
+        const authExecutor = new GmailApiAuthExecutor({
+          binding: attemptBinding,
+          resolver,
+          httpClient: new GmailHttpClient(),
+          rawVault,
+          artifactRegistry: artifacts,
+          approvedPolicy: approvedPolicy(owner),
+          createHandle: () =>
+            `verification_handle_${randomBytes(16).toString("hex")}` as VerificationHandleId,
+          policyFactory: {
+            create(candidateSource, admittedNow) {
+              return createBoundedMailboxPolicy({
+                binding: attemptBinding,
+                candidateSource,
+                clock: () => admittedNow,
+                timeoutMs: 60_000,
+              });
+            },
+          },
+        });
+        return new GmailMailboxProvider({
+          authorization: gmailAuthorization,
+          binding: attemptRequest,
+          now: liveClock,
+          secretStore,
+          authExecutor,
+          artifacts: artifacts.port,
+          timeoutMs: 60_000,
+        });
       },
-    });
-    const mailbox = new GmailMailboxProvider({
-      authorization: gmailAuthorization,
-      binding: bindings.mailboxRequest,
-      now: liveClock,
-      secretStore,
-      authExecutor,
-      artifacts: artifacts.port,
-      timeoutMs: 60_000,
+      trace: valueFreeTrace,
     });
     const consumer = new GmailAtomicArtifactConsumer({ rawVault, artifacts });
     const navigator = createGmailPrivilegedVerificationNavigator({
