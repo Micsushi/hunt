@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "stage": "s2",
   "feature": "s2-f2-t3",
-  "assemblyBaseRevision": "6dde499f0e5a82047c8ce6fbbf5cc87b5de3dd47",
+  "assemblyBaseRevision": "3c6b8c9323af5a76ef1b8040eafd5647ede512b5",
   "acceptedInputs": {
     "s2F0": "730846b57a8ab7901a9818794921f8f9da01e0ed",
     "s2F1T5": "d6602abf41f181376164eac2d32d587fc6bf5a5b",
@@ -37,7 +37,8 @@
     "s2F2LiveInspectionHold": "ebaf396b497afb0b446e1f2cc726c7bfba77d512",
     "s2F2LiveVerificationAlert": "4e8243a770898aad77be62e626b1393f936df92d",
     "s2F2VerificationContinuation": "b5ea86563d34e1e9d8412823bbc203c33460f630",
-    "s2F0VerificationMailboxJourneyBinding": "6dde499f0e5a82047c8ce6fbbf5cc87b5de3dd47"
+    "s2F0VerificationMailboxJourneyBinding": "6dde499f0e5a82047c8ce6fbbf5cc87b5de3dd47",
+    "s2F2VerificationMailboxAdmission": "3c6b8c9323af5a76ef1b8040eafd5647ede512b5"
   },
   "frozenContractRevision": "6dde499f0e5a82047c8ce6fbbf5cc87b5de3dd47",
   "frozenContractTree": "5c7d874a6821ddd593d299ca489f0257f07e0f25"
