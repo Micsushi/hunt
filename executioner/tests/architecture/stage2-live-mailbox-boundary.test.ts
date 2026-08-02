@@ -8,6 +8,8 @@ test("mailbox checkpoint dispatch stays browser-free and evidence stays value-fr
   const evidence = await read("src/live/evidence/mailbox-candidate-evidence.ts");
   assert.match(script, /checkpoint === "mailbox_candidate"/u);
   assert.match(script, /import\("\.\.\/src\/composition\/s2-mailbox-candidate-runner\.ts"\)/u);
+  assert.match(script, /checkpoint === "account_verified"/u);
+  assert.match(script, /import\("\.\.\/src\/composition\/s2-account-verified-runner\.ts"\)/u);
   assert.equal(composition.includes("browser/playwright-live"), false);
   assert.equal(composition.includes("s2-account-access-runner"), false);
   for (const forbidden of [

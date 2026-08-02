@@ -11,6 +11,9 @@ try {
   const result = args.checkpoint === "mailbox_candidate"
     ? await (await import("../src/composition/s2-mailbox-candidate-runner.ts"))
       .runStage2MailboxCandidateFromOwnerConfig(args, controller.signal)
+    : args.checkpoint === "account_verified"
+    ? await (await import("../src/composition/s2-account-verified-runner.ts"))
+      .runStage2AccountVerifiedFromOwnerConfig(args, controller.signal)
     : await (await import("../src/composition/s2-account-access-runner.ts"))
       .runStage2AccountAccessFromOwnerConfig(args, controller.signal);
   process.stdout.write(formatStage2TerminalResult(result));
