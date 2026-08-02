@@ -103,6 +103,9 @@ test("production helper pins PKCE loopback Gmail readonly profile equality and D
   );
   assert.match(source, /const INTERACTIVE_GMAIL_OAUTH_SCRIPT = String\.raw/u);
   assert.match(source, /127\.0\.0\.1/u);
+  assert.match(source, /AuthorizationEndpoint = "https:\/\/accounts\.google\.com\/o\/oauth2\/v2\/auth"/u);
+  assert.match(source, /InstalledClientAuthUri = "https:\/\/accounts\.google\.com\/o\/oauth2\/auth"/u);
+  assert.match(source, /CertificateEndpoint = "https:\/\/www\.googleapis\.com\/oauth2\/v1\/certs"/u);
   assert.match(source, /TcpListener\(IPAddress\.Loopback, 0\)/u);
   assert.match(source, /first\[0\] != "GET"/u);
   assert.match(source, /AbsolutePath != "\/oauth2callback"/u);
@@ -170,27 +173,70 @@ test("embedded helper exact-parses only the matching installed loopback client",
   try {
     const sourcePath = join(root, "helper.cs");
     const validPath = join(root, "valid.json");
+    const validMinimumProjectPath = join(root, "valid-project-minimum.json");
+    const validMaximumProjectPath = join(root, "valid-project-maximum.json");
     const extraPath = join(root, "extra.json");
+    const missingPath = join(root, "missing.json");
     const wrongIdPath = join(root, "wrong-id.json");
+    const wrongAuthPath = join(root, "wrong-auth.json");
+    const wrongTokenPath = join(root, "wrong-token.json");
+    const wrongCertPath = join(root, "wrong-cert.json");
     const webRedirectPath = join(root, "web-redirect.json");
+    const invalidProjects = [
+      "a1234",
+      "1abcde",
+      "Abcdef",
+      "abcde-",
+      `a${"x".repeat(29)}0`,
+    ];
+    const invalidProjectPaths = invalidProjects.map((_, index) =>
+      join(root, `invalid-project-${index}.json`)
+    );
     const clientId = request.clientId;
     const valid = installedClient(clientId, "http://localhost");
+    const { project_id: _omitted, ...missingInstalled } = valid.installed;
     await Promise.all([
       writeFile(sourcePath, csharp),
       writeFile(validPath, JSON.stringify(valid)),
-      writeFile(extraPath, JSON.stringify({ ...valid, extra: true })),
+      writeFile(validMinimumProjectPath, JSON.stringify(installedClient(
+        clientId,
+        "http://localhost",
+        "a12345",
+      ))),
+      writeFile(validMaximumProjectPath, JSON.stringify(installedClient(
+        clientId,
+        "http://localhost",
+        `a${"x".repeat(28)}0`,
+      ))),
+      writeFile(extraPath, JSON.stringify({
+        installed: { ...valid.installed, unexpected: "rejected" },
+      })),
+      writeFile(missingPath, JSON.stringify({ installed: missingInstalled })),
       writeFile(wrongIdPath, JSON.stringify(installedClient(
         "1234567890-different.apps.googleusercontent.com",
         "http://localhost",
       ))),
+      writeFile(wrongAuthPath, JSON.stringify({
+        installed: { ...valid.installed, auth_uri: "https://accounts.google.com/o/oauth2/v2/auth" },
+      })),
+      writeFile(wrongTokenPath, JSON.stringify({
+        installed: { ...valid.installed, token_uri: "https://example.invalid/token" },
+      })),
+      writeFile(wrongCertPath, JSON.stringify({
+        installed: { ...valid.installed, auth_provider_x509_cert_url: "https://www.googleapis.com/oauth2/v1/certs/" },
+      })),
       writeFile(webRedirectPath, JSON.stringify(installedClient(clientId, "https://example.invalid/callback"))),
+      ...invalidProjects.map((projectId, index) => writeFile(
+        invalidProjectPaths[index]!,
+        JSON.stringify(installedClient(clientId, "http://localhost", projectId)),
+      )),
     ]);
     const result = spawnSync(
       "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
       [
         "-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
         "-Command",
-        "$invalid=@($env:HUNT_TEST_EXTRA,$env:HUNT_TEST_WRONG_ID,$env:HUNT_TEST_WEB_REDIRECT); Add-Type -Path $env:HUNT_TEST_SOURCE -ReferencedAssemblies 'System.Security.dll','System.Web.dll','System.Web.Extensions.dll','Microsoft.VisualBasic.dll'; $method=[HuntInteractiveGmailOAuthSealer].GetMethod('ReadInstalledClient',[Reflection.BindingFlags]'NonPublic,Static'); try { $null=$method.Invoke($null,@($env:HUNT_TEST_VALID,$env:HUNT_TEST_CLIENT_ID)) } catch { exit 11 }; foreach($path in $invalid) { try { $null=$method.Invoke($null,@($path,$env:HUNT_TEST_CLIENT_ID)); exit 12 } catch {} }; exit 0",
+        "$valid=$env:HUNT_TEST_VALIDS | ConvertFrom-Json; $invalid=$env:HUNT_TEST_INVALIDS | ConvertFrom-Json; Add-Type -Path $env:HUNT_TEST_SOURCE -ReferencedAssemblies 'System.Security.dll','System.Web.dll','System.Web.Extensions.dll','Microsoft.VisualBasic.dll'; $method=[HuntInteractiveGmailOAuthSealer].GetMethod('ReadInstalledClient',[Reflection.BindingFlags]'NonPublic,Static'); foreach($path in $valid) { try { $null=$method.Invoke($null,@($path,$env:HUNT_TEST_CLIENT_ID)) } catch { exit 11 } }; foreach($path in $invalid) { try { $null=$method.Invoke($null,@($path,$env:HUNT_TEST_CLIENT_ID)); exit 12 } catch {} }; exit 0",
       ],
       {
         shell: false,
@@ -203,10 +249,21 @@ test("embedded helper exact-parses only the matching installed loopback client",
           WINDIR: "C:\\Windows",
           HUNT_TEST_SOURCE: sourcePath,
           HUNT_TEST_CLIENT_ID: clientId,
-          HUNT_TEST_VALID: validPath,
-          HUNT_TEST_EXTRA: extraPath,
-          HUNT_TEST_WRONG_ID: wrongIdPath,
-          HUNT_TEST_WEB_REDIRECT: webRedirectPath,
+          HUNT_TEST_VALIDS: JSON.stringify([
+            validPath,
+            validMinimumProjectPath,
+            validMaximumProjectPath,
+          ]),
+          HUNT_TEST_INVALIDS: JSON.stringify([
+            extraPath,
+            missingPath,
+            wrongIdPath,
+            wrongAuthPath,
+            wrongTokenPath,
+            wrongCertPath,
+            webRedirectPath,
+            ...invalidProjectPaths,
+          ]),
         },
       },
     );
@@ -216,12 +273,16 @@ test("embedded helper exact-parses only the matching installed loopback client",
   }
 });
 
-function installedClient(clientId: string, redirect: string): object {
+function installedClient(
+  clientId: string,
+  redirect: string,
+  projectId = "synthetic-project",
+) {
   return {
     installed: {
       client_id: clientId,
-      project_id: "synthetic-project",
-      auth_uri: "https://accounts.google.com/o/oauth2/v2/auth",
+      project_id: projectId,
+      auth_uri: "https://accounts.google.com/o/oauth2/auth",
       token_uri: "https://oauth2.googleapis.com/token",
       auth_provider_x509_cert_url: "https://www.googleapis.com/oauth2/v1/certs",
       client_secret: "synthetic-client-secret",
