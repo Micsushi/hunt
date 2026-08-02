@@ -25,9 +25,16 @@ test("Gmail bootstrap keeps OAuth and mailbox values inside the trusted child", 
   const embedded = /\$source = @'\r?\n[\s\S]*?\r?\n'@/u.exec(child)?.[0] ?? "";
   const ordinaryNodeSurface = child.replace(embedded, "");
   assert.match(embedded, /client_secret/u);
+  assert.match(embedded, /refresh_token/u);
+  assert.match(embedded, /CredReadW/u);
+  assert.match(embedded, /CredWriteW/u);
+  assert.match(embedded, /CredDeleteW/u);
   assert.match(embedded, /senderAddress/u);
   assert.doesNotMatch(embedded, /InputBox|Microsoft\.VisualBasic|Interaction\./u);
-  assert.doesNotMatch(ordinaryNodeSurface, /process\.env|process\.argv|client_secret|senderAddress/iu);
+  assert.doesNotMatch(
+    ordinaryNodeSurface,
+    /process\.env|process\.argv|client_secret|refresh_token|senderAddress/iu,
+  );
   assert.doesNotMatch(
     [
       ordinaryNodeSurface,
@@ -81,6 +88,12 @@ test("Gmail bootstrap keeps OAuth and mailbox values inside the trusted child", 
       ordinaryNode: "none",
       trustedWindowsHelper: "oauth_profile_and_bundle_sealing",
       durableOutput: "dpapi_ciphertext_only",
+    },
+    {
+      value: "gmail_refresh_grant",
+      ordinaryNode: "none",
+      trustedWindowsHelper: "oauth_refresh_and_credential_manager_only",
+      durableOutput: "bounded_current_user_generic_credential_opaque_target",
     },
   ]);
 });

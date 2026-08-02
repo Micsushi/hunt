@@ -64,6 +64,12 @@ class SenderErrorSealer implements GmailCiphertextSealer {
   }
 }
 
+class RefreshGrantErrorSealer implements GmailCiphertextSealer {
+  async seal(): Promise<Uint8Array> {
+    throw new Error("Gmail refresh grant invalid");
+  }
+}
+
 test("preflights both inputs before sealing the exact Gmail handle", async () => {
   const record = await fixture();
   try {
@@ -311,6 +317,33 @@ test("maps installed-client ACL and trusted-child parse failures without values"
     );
     assert.deepEqual(childFailure, { ok: false, error: { code: "gmail_oauth_client_invalid" } });
     assert.equal(JSON.stringify(childFailure).includes(record.installedClientConfigPath), false);
+  } finally {
+    rmSync(record.root, { recursive: true, force: true });
+  }
+});
+
+test("maps an invalid stored Gmail refresh grant without values", async () => {
+  const record = await fixture();
+  try {
+    const result = await bootstrapS2GmailAuthorization(
+      record.owner,
+      record.bootstrap,
+      {
+        now: NOW,
+        ownerConfigPath: record.ownerConfigPath,
+        bootstrapInputPath: record.bootstrapInputPath,
+        forbiddenRoots: [record.repository],
+        aclAdmission: new AclAdmission(),
+        sealer: new RefreshGrantErrorSealer(),
+      },
+      new AbortController().signal,
+    );
+    assert.deepEqual(result, {
+      ok: false,
+      error: { code: "gmail_refresh_grant_invalid" },
+    });
+    assert.equal(JSON.stringify(result).includes(record.bootstrap.desktopClientId), false);
+    assert.equal(JSON.stringify(result).includes("person@example.invalid"), false);
   } finally {
     rmSync(record.root, { recursive: true, force: true });
   }

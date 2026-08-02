@@ -170,6 +170,19 @@ bundle values stay in that child; Node receives only DPAPI CurrentUser
 ciphertext. Recreate both short-lived handles instead of mixing F1 and F2 expiry
 values. This command does not query Gmail or consume the message.
 
+The first bootstrap for an exact desktop client and normalized Gmail account
+requests offline access with explicit consent and requires Google to return a
+refresh grant. After the profile email matches, the trusted child stores that
+grant as a bounded Generic Credential for the current Windows user. Its target
+contains only a versioned SHA-256 binding of the client ID and normalized email;
+it contains no raw email. Later bootstraps for the same binding refresh silently
+and do not open a browser. A missing grant starts the consent flow, but a malformed,
+revoked, or rejected existing grant fails as `gmail_refresh_grant_invalid` with no
+same-attempt interactive fallback. The provider can invalidate a grant at any
+time, so this error requires explicit deletion followed by a separately initiated
+bootstrap. The implementation includes a tested exact-target deletion boundary;
+an operator-facing revocation command remains the next bounded task.
+
 | Value | Bootstrap/Node owner | Trusted Windows helper owner | Durable output |
 | --- | --- | --- | --- |
 | expected desktop client ID | exact equality input | exact equality check | none |
@@ -178,6 +191,7 @@ values. This command does not query Gmail or consume the message.
 | sender-policy canonical path | admission and ACL only | bounded file open | none |
 | sender address | none | sole reader; current bundle binding | DPAPI ciphertext only |
 | Gmail access token and mailbox identity | none | OAuth/profile/bundle sealing | DPAPI ciphertext only |
+| Gmail refresh grant | none | OAuth refresh and Windows Credential Manager only | bounded current-user Generic Credential under an opaque target |
 
 ### Mailbox-candidate acceptance slice
 
