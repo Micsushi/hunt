@@ -27,7 +27,9 @@ public static class HuntInteractiveGmailOAuthSealer
 {
     private const string Scope = "https://www.googleapis.com/auth/gmail.readonly";
     private const string AuthorizationEndpoint = "https://accounts.google.com/o/oauth2/v2/auth";
+    private const string InstalledClientAuthUri = "https://accounts.google.com/o/oauth2/auth";
     private const string TokenEndpoint = "https://oauth2.googleapis.com/token";
+    private const string CertificateEndpoint = "https://www.googleapis.com/oauth2/v1/certs";
     private const string ProfileEndpoint = "https://gmail.googleapis.com/gmail/v1/users/me/profile?fields=emailAddress";
     private const int MaximumSection = 1048576;
 
@@ -195,11 +197,11 @@ public static class HuntInteractiveGmailOAuthSealer
             ValidateClient(id);
             if (!String.Equals(id, expectedClientId, StringComparison.Ordinal))
                 throw new InvalidDataException();
-            if (StringField(installed, "auth_uri", AuthorizationEndpoint.Length, AuthorizationEndpoint.Length) != AuthorizationEndpoint ||
+            if (StringField(installed, "auth_uri", InstalledClientAuthUri.Length, InstalledClientAuthUri.Length) != InstalledClientAuthUri ||
                 StringField(installed, "token_uri", TokenEndpoint.Length, TokenEndpoint.Length) != TokenEndpoint ||
-                StringField(installed, "auth_provider_x509_cert_url", 42, 42) != "https://www.googleapis.com/oauth2/v1/certs")
+                StringField(installed, "auth_provider_x509_cert_url", CertificateEndpoint.Length, CertificateEndpoint.Length) != CertificateEndpoint)
                 throw new InvalidDataException();
-            StringField(installed, "project_id", 1, 200);
+            ValidateProjectId(StringField(installed, "project_id", 6, 30));
             string secret = StringField(installed, "client_secret", 1, 4096);
             ValidateLoopbackRedirects(installed);
             return new InstalledClient { Id = id, Secret = secret };
@@ -226,6 +228,19 @@ public static class HuntInteractiveGmailOAuthSealer
                 !String.IsNullOrEmpty(uri.Fragment) || uri.AbsolutePath != "/")
                 throw new InvalidDataException();
         }
+    }
+
+    private static void ValidateProjectId(string value)
+    {
+        if (value.Length < 6 || value.Length > 30 || value[0] < 'a' || value[0] > 'z')
+            throw new InvalidDataException();
+        char last = value[value.Length - 1];
+        if (!((last >= 'a' && last <= 'z') || (last >= '0' && last <= '9')))
+            throw new InvalidDataException();
+        foreach (char character in value)
+            if (!((character >= 'a' && character <= 'z') ||
+                (character >= '0' && character <= '9') || character == '-'))
+                throw new InvalidDataException();
     }
 
     private static Token Authorize(string clientId, string clientSecret)
