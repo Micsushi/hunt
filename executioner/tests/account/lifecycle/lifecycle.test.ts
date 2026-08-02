@@ -140,15 +140,14 @@ test("verification consumes through one navigator call and never invalidates sep
   assert.equal(accountState.calls.length, 2);
 });
 
-test("fresh-create is login-first and creates only after independently confirmed absence", async () => {
+test("fresh-create submits create first even when Workday initially shows sign-in", async () => {
   const credential = privateCredential(
-    { kind: "account_absent", attemptedFields: ["email", "password"] },
     { kind: "verification_required", attemptedFields: ["email", "password"] },
   );
   const mailbox = createMailboxProviderFake({ result: liveFixtures.mailboxAvailable });
   const artifacts = createVerificationArtifactFake();
   const navigator = createPrivilegedVerificationNavigatorFake();
-  const accountState = observer("create_account", "account_absent", "application_ready");
+  const accountState = observer("existing_account", "application_ready");
   const lifecycle = new AccountVerificationLifecycle({
     credentialMutation: credential.port,
     mailbox: mailbox.port,
@@ -165,7 +164,7 @@ test("fresh-create is login-first and creates only after independently confirmed
   assert.equal(result.ok && result.value.kind, "account_ready");
   assert.deepEqual(
     credential.calls.map(({ request }) => (request as { readonly mode: string }).mode),
-    ["sign_in", "create_account"],
+    ["create_account"],
   );
   assert.equal(mailbox.calls.length, 1);
   assert.equal(navigator.calls.length, 1);
@@ -196,11 +195,11 @@ test("sign-in intent submits sign-in from a create-account page and never create
   );
 });
 
-test("fresh-create stops after an ordinary sign-in rejection and never infers absence", async () => {
+test("fresh-create never uses an ambiguous sign-in rejection as an existence probe", async () => {
   const credential = createCredentialMutationAdapterFake({
     mutate: {
       ok: true,
-      value: { kind: "existing_account", attemptedFields: ["email", "password"] },
+      value: { kind: "verification_required", attemptedFields: ["email", "password"] },
     },
   });
   const lifecycle = new AccountVerificationLifecycle({
@@ -208,7 +207,7 @@ test("fresh-create stops after an ordinary sign-in rejection and never infers ab
     mailbox: createMailboxProviderFake().port,
     artifacts: createVerificationArtifactFake().port,
     navigator: createPrivilegedVerificationNavigatorFake().port,
-    accountState: observer("create_account").port,
+    accountState: observer("existing_account", "application_ready").port,
   });
 
   const result = await lifecycle.run({
@@ -216,23 +215,20 @@ test("fresh-create stops after an ordinary sign-in rejection and never infers ab
     accountIntent: "fresh_create",
   }, new AbortController().signal);
 
-  assert.equal(result.ok, false);
-  assert.equal(!result.ok && result.error.code, "credential_mutation_denied");
+  assert.equal(result.ok && result.value.kind, "account_ready");
   assert.deepEqual(
     credential.calls.map(({ request }) => (request as { readonly mode: string }).mode),
-    ["sign_in"],
+    ["create_account"],
   );
 });
 
 test("exact account-exists after create switches to sign-in once", async () => {
   const credential = privateCredential(
-    { kind: "account_absent", attemptedFields: ["email", "password"] },
     { kind: "account_exists", attemptedFields: ["email", "password"] },
     { kind: "application_ready", attemptedFields: ["email", "password"] },
   );
   const accountState = observer(
-    "create_account",
-    "account_absent",
+    "existing_account",
     "account_exists",
     "application_ready",
   );
@@ -252,16 +248,15 @@ test("exact account-exists after create switches to sign-in once", async () => {
   assert.equal(result.ok && result.value.kind, "account_ready");
   assert.deepEqual(
     credential.calls.map(({ request }) => (request as { readonly mode: string }).mode),
-    ["sign_in", "create_account", "sign_in"],
+    ["create_account", "sign_in"],
   );
 });
 
 test("create completion requires an independent application-ready observation", async () => {
   const credential = privateCredential(
-    { kind: "account_absent", attemptedFields: ["email", "password"] },
     { kind: "application_ready", attemptedFields: ["email", "password"] },
   );
-  const accountState = observer("create_account", "account_absent", "application_ready");
+  const accountState = observer("create_account", "application_ready");
   const lifecycle = new AccountVerificationLifecycle({
     credentialMutation: credential.port,
     mailbox: createMailboxProviderFake().port,
@@ -277,7 +272,7 @@ test("create completion requires an independent application-ready observation", 
 
   assert.equal(result.ok && result.value.kind, "account_ready");
   assert.equal(result.ok && result.value.kind === "account_ready" && result.value.path, "created_account");
-  assert.equal(accountState.calls.length, 3);
+  assert.equal(accountState.calls.length, 2);
 });
 
 test("post-navigation existing-account state signs in and is reclassified", async () => {

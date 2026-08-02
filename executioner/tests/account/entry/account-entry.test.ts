@@ -264,7 +264,11 @@ test("fresh-create switches semantically, reclassifies, and keeps confirmation i
     "create_account",
     "verification_required",
   ]);
-  const result = await createAccountEntryCredentialMutationAdapter(fixture.dependencies)
+  const events: string[] = [];
+  const result = await createAccountEntryCredentialMutationAdapter({
+    ...fixture.dependencies,
+    trace: (event) => events.push(event),
+  })
     .mutate(request("create_account"), new AbortController().signal);
 
   assert.deepEqual(result, {
@@ -294,6 +298,11 @@ test("fresh-create switches semantically, reclassifies, and keeps confirmation i
   ]);
   assert.equal(fixture.classificationCalls, 3);
   assert.equal(fixture.resolverCalls, 1);
+  assert.deepEqual(events.slice(0, 3), [
+    "initial_existing_account",
+    "owned_access_started",
+    "account_mode_switched_to_create_account",
+  ]);
 });
 
 test("sign-in traces its semantic switch from an initial create page", async () => {

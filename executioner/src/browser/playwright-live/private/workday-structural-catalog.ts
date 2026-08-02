@@ -57,6 +57,11 @@ export const WORKDAY_ACCOUNT_FACT_SELECTORS = Object.freeze({
   exists: '[data-automation-id="accountAlreadyExistsError"]',
 });
 
+export const WORKDAY_SIGN_IN_REJECTION_SELECTORS = Object.freeze({
+  credentialsOrLocked:
+    ':text-is("You may have entered the wrong email address or password or your account might be locked.")',
+});
+
 const accountRules = Object.freeze([
   rule("structural_trait_account_sign_in_v1", '[data-automation-id="signInPage"]'),
   rule("structural_trait_account_sign_in_v1", '[data-automation-id="signInSubmitButton"]'),

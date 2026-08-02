@@ -27,6 +27,7 @@ export type AccountEntryTraceEvent =
   | "initial_create_account"
   | "owned_access_started"
   | "account_mode_switched_to_sign_in"
+  | "account_mode_switched_to_create_account"
   | "fields_admitted"
   | "credentials_resolved"
   | "email_verified"

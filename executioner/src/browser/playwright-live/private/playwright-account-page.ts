@@ -10,6 +10,7 @@ import type { PersistentPage } from "./types.ts";
 import {
   WORKDAY_ACCOUNT_FACT_SELECTORS,
   WORKDAY_INLINE_VERIFICATION_SELECTORS,
+  WORKDAY_SIGN_IN_REJECTION_SELECTORS,
 } from "./workday-structural-catalog.ts";
 
 export type PlaywrightAccountPageTraceEvent =
@@ -42,6 +43,18 @@ export type PlaywrightAccountPageTraceEvent =
   | "submit_hit_target_small_overlay"
   | "submit_hit_target_unavailable"
   | "submit_control_remained_visible"
+  | "submit_diagnostic_page_sign_in"
+  | "submit_diagnostic_page_create_account"
+  | "submit_diagnostic_page_unknown"
+  | "submit_diagnostic_alert_credentials_or_locked"
+  | "submit_diagnostic_alert_unknown"
+  | "submit_diagnostic_alert_none"
+  | "submit_diagnostic_create_account_available"
+  | "submit_diagnostic_create_account_unavailable"
+  | "submit_diagnostic_submit_visible"
+  | "submit_diagnostic_submit_hidden"
+  | "submit_diagnostic_action_sign_in"
+  | "submit_diagnostic_action_create_account"
   | "submit_inspection_hold_started"
   | "submit_inspection_hold_ended"
   | "submit_exact_fact_observed"
@@ -53,10 +66,23 @@ export type PlaywrightAccountPageTraceEvent =
   | "submit_rejection_password_confirmation_wait_failed"
   | "submit_stabilization_failed";
 
+interface AccountSubmitFailureDiagnosticV1 {
+  readonly schemaVersion: 1;
+  readonly action: "submit_sign_in" | "submit_create_account";
+  readonly page: "sign_in" | "create_account" | "unknown";
+  readonly alert: "credentials_or_locked" | "unknown_visible" | "none";
+  readonly createAccountActionAvailable: boolean;
+  readonly submitControlVisible: boolean;
+  readonly rawPageTextRetained: false;
+  readonly credentialValuesRetained: false;
+}
+
 export interface PlaywrightAccountPageAdapterOptions {
   readonly trace?: (event: PlaywrightAccountPageTraceEvent) => void;
   readonly unsettledInspectionHold?: () => Promise<void>;
 }
+
+const WORKDAY_VISIBLE_ALERT_SELECTOR = '[role="alert"]';
 
 const POST_SUBMIT_DESTINATIONS = [
   '[data-automation-id="emailVerificationPage"]',
@@ -141,8 +167,10 @@ export class PlaywrightAccountPageAdapter implements SemanticAccountPageAdapter 
     else {
       const submit = action === "submit_sign_in" || action === "submit_create_account";
       let postClickExactFactLocators: readonly Locator[] = [];
+      let credentialsOrLockedCanSettle = false;
       if (submit) {
-        const candidates = postSubmitExactFactSelectors(action).map((selector) =>
+        const factSelectors = postSubmitExactFactSelectors(action);
+        const candidates = factSelectors.map((selector) =>
           playwrightPage(page).locator(selector)
         );
         const visibleBeforeClick = await Promise.all(candidates.map((candidate) =>
@@ -150,6 +178,10 @@ export class PlaywrightAccountPageAdapter implements SemanticAccountPageAdapter 
         ));
         postClickExactFactLocators = candidates.filter(
           (_candidate, index) => !visibleBeforeClick[index],
+        );
+        credentialsOrLockedCanSettle = factSelectors.some((selector, index) =>
+          selector === WORKDAY_SIGN_IN_REJECTION_SELECTORS.credentialsOrLocked &&
+          !visibleBeforeClick[index]
         );
         const hitTarget = await inspectSubmitHitTarget(locator);
         this.#emit(hitTarget);
@@ -178,6 +210,30 @@ export class PlaywrightAccountPageAdapter implements SemanticAccountPageAdapter 
           ]);
         } catch {
           this.#emit("submit_control_remained_visible");
+          const diagnostic = await inspectSubmitFailure(page, action, locator);
+          this.#emit(`submit_diagnostic_page_${diagnostic.page}`);
+          this.#emit(
+            diagnostic.action === "submit_sign_in"
+              ? "submit_diagnostic_action_sign_in"
+              : "submit_diagnostic_action_create_account",
+          );
+          this.#emit(
+            diagnostic.alert === "credentials_or_locked"
+              ? "submit_diagnostic_alert_credentials_or_locked"
+              : diagnostic.alert === "unknown_visible"
+                ? "submit_diagnostic_alert_unknown"
+                : "submit_diagnostic_alert_none",
+          );
+          this.#emit(
+            diagnostic.createAccountActionAvailable
+              ? "submit_diagnostic_create_account_available"
+              : "submit_diagnostic_create_account_unavailable",
+          );
+          this.#emit(
+            diagnostic.submitControlVisible
+              ? "submit_diagnostic_submit_visible"
+              : "submit_diagnostic_submit_hidden",
+          );
           if (this.#unsettledInspectionHold !== undefined) {
             this.#emit("submit_inspection_hold_started");
             try {
@@ -190,6 +246,12 @@ export class PlaywrightAccountPageAdapter implements SemanticAccountPageAdapter 
           throw new Error("submit effect did not settle");
         }
         if (initial === "exact_fact") {
+          if (
+            credentialsOrLockedCanSettle &&
+            await exactVisible(playwrightPage(page).locator(
+              WORKDAY_SIGN_IN_REJECTION_SELECTORS.credentialsOrLocked,
+            ))
+          ) this.#emit("submit_diagnostic_alert_credentials_or_locked");
           this.#emit("submit_exact_fact_observed");
         } else {
           let observed: "destination" | "rejection" | "exact_fact";
@@ -209,6 +271,12 @@ export class PlaywrightAccountPageAdapter implements SemanticAccountPageAdapter 
               throw error;
             }
             if (observed === "exact_fact") {
+              if (
+                credentialsOrLockedCanSettle &&
+                await exactVisible(playwrightPage(page).locator(
+                  WORKDAY_SIGN_IN_REJECTION_SELECTORS.credentialsOrLocked,
+                ))
+              ) this.#emit("submit_diagnostic_alert_credentials_or_locked");
               this.#emit("submit_exact_fact_observed");
               return;
             }
@@ -270,6 +338,54 @@ export class PlaywrightAccountPageAdapter implements SemanticAccountPageAdapter 
       // Diagnostic observation cannot affect browser behavior.
     }
   }
+}
+
+async function inspectSubmitFailure(
+  page: PersistentPage,
+  action: "submit_sign_in" | "submit_create_account",
+  submit: Locator,
+): Promise<AccountSubmitFailureDiagnosticV1> {
+  try {
+    const source = playwrightPage(page);
+    const [signIn, createAccount, knownAlert, anyAlert, createAccountAction, submitVisible] =
+      await Promise.all([
+        exactVisible(source.locator('[data-automation-id="signInPage"]')),
+        exactVisible(source.locator('[data-automation-id="createAccountPage"]')),
+        exactVisible(source.locator(WORKDAY_SIGN_IN_REJECTION_SELECTORS.credentialsOrLocked)),
+        exactVisible(source.locator(WORKDAY_VISIBLE_ALERT_SELECTOR)),
+        exactActionable(source.locator('[data-automation-id="createAccountLink"]')),
+        submit.isVisible(),
+      ]);
+    return Object.freeze({
+      schemaVersion: 1,
+      action,
+      page: signIn === createAccount ? "unknown" : signIn ? "sign_in" : "create_account",
+      alert: knownAlert ? "credentials_or_locked" : anyAlert ? "unknown_visible" : "none",
+      createAccountActionAvailable: createAccountAction,
+      submitControlVisible: submitVisible,
+      rawPageTextRetained: false,
+      credentialValuesRetained: false,
+    });
+  } catch {
+    return Object.freeze({
+      schemaVersion: 1,
+      action,
+      page: "unknown",
+      alert: "none",
+      createAccountActionAvailable: false,
+      submitControlVisible: true,
+      rawPageTextRetained: false,
+      credentialValuesRetained: false,
+    });
+  }
+}
+
+async function exactVisible(locator: Locator): Promise<boolean> {
+  return await locator.count() === 1 && await locator.isVisible();
+}
+
+async function exactActionable(locator: Locator): Promise<boolean> {
+  return await locator.count() === 1 && await locator.isVisible() && await locator.isEnabled();
 }
 
 async function inspectSubmitHitTarget(
@@ -362,6 +478,7 @@ function postSubmitExactFactSelectors(
     ? [
         WORKDAY_ACCOUNT_FACT_SELECTORS.absent,
         ...WORKDAY_INLINE_VERIFICATION_SELECTORS,
+        WORKDAY_SIGN_IN_REJECTION_SELECTORS.credentialsOrLocked,
       ]
     : [WORKDAY_ACCOUNT_FACT_SELECTORS.exists];
 }

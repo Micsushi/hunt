@@ -138,6 +138,8 @@ async function mutateOnce(
         }
         if (request.mode === "sign_in") {
           emit(dependencies, "account_mode_switched_to_sign_in");
+        } else {
+          emit(dependencies, "account_mode_switched_to_create_account");
         }
       }
 

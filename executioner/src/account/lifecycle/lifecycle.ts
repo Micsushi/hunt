@@ -166,7 +166,9 @@ export class AccountVerificationLifecycle {
       (observed.value.state.kind !== "existing_account" &&
         observed.value.state.kind !== "create_account")
     ) return denied();
-    return this.#signIn(input, signal);
+    return input.accountIntent === "fresh_create"
+      ? this.#create(input, signal)
+      : this.#signIn(input, signal);
   }
 
   async #signIn(

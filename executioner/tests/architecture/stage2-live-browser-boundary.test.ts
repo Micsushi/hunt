@@ -112,6 +112,35 @@ test("factory wires the private hold without widening the public browser facade"
   assert.equal(publicFacade.includes("unsettledInspectionHold"), false);
 });
 
+test("account-submit diagnostics remain fixed, value-free, and private", async () => {
+  const accountPage = await source("private/playwright-account-page.ts");
+  const publicFacade = await source("index.ts");
+  const start = accountPage.indexOf("async function inspectSubmitFailure(");
+  const end = accountPage.indexOf("async function exactVisible(", start);
+  assert.notEqual(start, -1);
+  assert.notEqual(end, -1);
+  const diagnostic = accountPage.slice(start, end);
+  for (const required of [
+    "submit_diagnostic_page_sign_in",
+    "submit_diagnostic_alert_credentials_or_locked",
+    "submit_diagnostic_create_account_available",
+    "submit_diagnostic_action_sign_in",
+    "submit_diagnostic_submit_visible",
+    "rawPageTextRetained: false",
+    "credentialValuesRetained: false",
+  ]) assert.equal(accountPage.includes(required), true, required);
+  for (const forbidden of [
+    "textContent",
+    "innerText",
+    "screenshot",
+    "inputValue",
+    ".url(",
+    ".evaluate(",
+  ]) assert.equal(diagnostic.includes(forbidden), false, forbidden);
+  assert.equal(publicFacade.includes("AccountSubmitFailureDiagnostic"), false);
+  assert.equal(publicFacade.includes("submit_diagnostic_"), false);
+});
+
 test("posting navigation is private, semantic, bounded, and submit-free", async () => {
   const navigator = await source("private/playwright-posting-navigation.ts");
   const capability = await source("private/account-navigation-types.ts");

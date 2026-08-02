@@ -5,14 +5,23 @@ import { PlaywrightAccountPageAdapter } from "../../../src/browser/playwright-li
 import {
   WORKDAY_ACCOUNT_FACT_SELECTORS,
   WORKDAY_INLINE_VERIFICATION_SELECTORS,
+  WORKDAY_SIGN_IN_REJECTION_SELECTORS,
 } from "../../../src/browser/playwright-live/private/workday-structural-catalog.ts";
 
 const SIGN_IN_EXACT_FACT_SELECTORS = [
   WORKDAY_ACCOUNT_FACT_SELECTORS.absent,
   ...WORKDAY_INLINE_VERIFICATION_SELECTORS,
+  WORKDAY_SIGN_IN_REJECTION_SELECTORS.credentialsOrLocked,
 ] as const;
 const LIVE_VERIFICATION_REQUIRED_SELECTOR =
   ':text-is("Verify your account before you sign in or request a verification email.")';
+const SIGN_IN_FAILURE_DIAGNOSTIC_SELECTORS = [
+  '[data-automation-id="signInPage"]',
+  '[data-automation-id="createAccountPage"]',
+  ':text-is("You may have entered the wrong email address or password or your account might be locked.")',
+  '[role="alert"]',
+  '[data-automation-id="createAccountLink"]',
+] as const;
 
 test("inspects one exact semantic field without exposing its locator", async () => {
   const locator = new FakeLocator({ count: 1, visible: true, enabled: true, editable: true });
@@ -249,6 +258,7 @@ test("a submit that remains visible never claims a settled effect", async () => 
   assert.deepEqual(page.calls, [
     { method: "locator", selector: '[data-automation-id="noCaptchaWrapper"]:has([data-automation-id="signInSubmitButton"]) [data-automation-id="click_filter"][role="button"]' },
     ...SIGN_IN_EXACT_FACT_SELECTORS.map((selector) => ({ method: "locator", selector })),
+    ...SIGN_IN_FAILURE_DIAGNOSTIC_SELECTORS.map((selector) => ({ method: "locator", selector })),
   ]);
   assert.deepEqual(locator.waitForArguments, [
     { state: "hidden", timeout: 10_000 },
@@ -258,7 +268,117 @@ test("a submit that remains visible never claims a settled effect", async () => 
     "submit_click_started",
     "submit_click_succeeded",
     "submit_control_remained_visible",
+    "submit_diagnostic_page_unknown",
+    "submit_diagnostic_action_sign_in",
+    "submit_diagnostic_alert_none",
+    "submit_diagnostic_create_account_available",
+    "submit_diagnostic_submit_visible",
   ]);
+});
+
+test("an unsettled sign-in reports only allowlisted page facts", async () => {
+  const events: string[] = [];
+  const visible = new FakeLocator({
+    count: 1,
+    visible: true,
+    enabled: true,
+    editable: false,
+  });
+  const submit = new FakeLocator({
+    count: 1,
+    visible: true,
+    enabled: true,
+    editable: false,
+    hiddenWaitFails: true,
+  });
+  const page = new FakePage(submit, submit, new Map([
+    ['[data-automation-id="signInPage"]', visible],
+    ['[data-automation-id="createAccountLink"]', visible],
+    [':text-is("You may have entered the wrong email address or password or your account might be locked.")', visible],
+  ]));
+
+  visible.values.visibleResults = [false];
+  await new PlaywrightAccountPageAdapter({
+    trace: (event) => events.push(event),
+  }).activate(page, "submit_sign_in");
+
+  assert.deepEqual(events, [
+    "submit_hit_target_clear",
+    "submit_click_started",
+    "submit_click_succeeded",
+    "submit_diagnostic_alert_credentials_or_locked",
+    "submit_exact_fact_observed",
+  ]);
+  assert.equal(JSON.stringify(events).includes("@"), false);
+});
+
+test("a stale credentials-or-locked alert is reported but cannot settle a new click", async () => {
+  const events: string[] = [];
+  const visible = new FakeLocator({
+    count: 1,
+    visible: true,
+    enabled: true,
+    editable: false,
+  });
+  const submit = new FakeLocator({
+    count: 1,
+    visible: true,
+    enabled: true,
+    editable: false,
+    hiddenWaitFails: true,
+  });
+  const page = new FakePage(submit, submit, new Map([
+    ['[data-automation-id="signInPage"]', visible],
+    ['[data-automation-id="createAccountLink"]', visible],
+    [WORKDAY_SIGN_IN_REJECTION_SELECTORS.credentialsOrLocked, visible],
+  ]));
+
+  await assert.rejects(
+    new PlaywrightAccountPageAdapter({
+      trace: (event) => events.push(event),
+    }).activate(page, "submit_sign_in"),
+    /submit effect did not settle/u,
+  );
+
+  assert.equal(events.includes("submit_exact_fact_observed"), false);
+  assert.deepEqual(events.slice(-5), [
+    "submit_diagnostic_page_sign_in",
+    "submit_diagnostic_action_sign_in",
+    "submit_diagnostic_alert_credentials_or_locked",
+    "submit_diagnostic_create_account_available",
+    "submit_diagnostic_submit_visible",
+  ]);
+});
+
+test("an unknown visible alert is reduced to one fixed category without reading text", async () => {
+  const events: string[] = [];
+  const visible = new FakeLocator({
+    count: 1,
+    visible: true,
+    enabled: true,
+    editable: false,
+  });
+  const submit = new FakeLocator({
+    count: 1,
+    visible: true,
+    enabled: true,
+    editable: false,
+    hiddenWaitFails: true,
+  });
+  const page = new FakePage(submit, submit, new Map([
+    ['[data-automation-id="signInPage"]', visible],
+    ['[role="alert"]', visible],
+  ]));
+
+  await assert.rejects(
+    new PlaywrightAccountPageAdapter({
+      trace: (event) => events.push(event),
+    }).activate(page, "submit_sign_in"),
+    /submit effect did not settle/u,
+  );
+
+  assert.equal(events.includes("submit_diagnostic_alert_unknown"), true);
+  assert.equal(page.calls.some((call) => Object.hasOwn(call as object, "textContent")), false);
 });
 
 test("an opted-in unsettled submit holds without another browser read or action", async () => {
@@ -310,6 +430,11 @@ test("an opted-in unsettled submit holds without another browser read or action"
     "submit_click_started",
     "submit_click_succeeded",
     "submit_control_remained_visible",
+    "submit_diagnostic_page_unknown",
+    "submit_diagnostic_action_sign_in",
+    "submit_diagnostic_alert_none",
+    "submit_diagnostic_create_account_available",
+    "submit_diagnostic_submit_visible",
     "submit_inspection_hold_started",
   ]);
 
@@ -325,6 +450,11 @@ test("an opted-in unsettled submit holds without another browser read or action"
     "submit_click_started",
     "submit_click_succeeded",
     "submit_control_remained_visible",
+    "submit_diagnostic_page_unknown",
+    "submit_diagnostic_action_sign_in",
+    "submit_diagnostic_alert_none",
+    "submit_diagnostic_create_account_available",
+    "submit_diagnostic_submit_visible",
     "submit_inspection_hold_started",
     "submit_inspection_hold_ended",
   ]);
@@ -949,7 +1079,11 @@ class FakePage {
       selector.includes("accountNotFoundError") ||
       selector.includes("accountAlreadyExistsError") ||
       selector.includes('signInPage"]:has-text') ||
-      selector === LIVE_VERIFICATION_REQUIRED_SELECTOR
+      selector === LIVE_VERIFICATION_REQUIRED_SELECTOR ||
+      selector === '[data-automation-id="signInPage"]' ||
+      selector === '[data-automation-id="createAccountPage"]' ||
+      selector === WORKDAY_SIGN_IN_REJECTION_SELECTORS.credentialsOrLocked ||
+      selector === '[role="alert"]'
     ) return this.absentExactFactLocator;
     return selector.includes("candidateHomePage")
       ? this.destinationLocator
