@@ -8,7 +8,7 @@ const expected = {
   schemaVersion: 1,
   stage: "s2",
   feature: "s2-f2-t3",
-  assemblyBaseRevision: "4e8243a770898aad77be62e626b1393f936df92d",
+  assemblyBaseRevision: "b5ea86563d34e1e9d8412823bbc203c33460f630",
   acceptedInputs: {
     s2F0: "730846b57a8ab7901a9818794921f8f9da01e0ed",
     s2F1T5: "d6602abf41f181376164eac2d32d587fc6bf5a5b",
@@ -42,6 +42,7 @@ const expected = {
     s2F2SubmitSettlement: "15aaf41cf70c167e4937fb2f0cf7c6620e1b195e",
     s2F2LiveInspectionHold: "ebaf396b497afb0b446e1f2cc726c7bfba77d512",
     s2F2LiveVerificationAlert: "4e8243a770898aad77be62e626b1393f936df92d",
+    s2F2VerificationContinuation: "b5ea86563d34e1e9d8412823bbc203c33460f630",
   },
   frozenContractRevision: "100b6bbf360f2c2e3cd93384e1fba7c115a92f15",
   frozenContractTree: "13a8406e9c296b77aead3a0f961beba1110fba61",
