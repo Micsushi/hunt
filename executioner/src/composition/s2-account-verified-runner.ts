@@ -97,6 +97,8 @@ export interface AccountVerifiedOperationIds {
   readonly accountAdvance: OperationId;
   readonly lifecycle: OperationId;
   readonly initialCredentialMutation: OperationId;
+  readonly createCredentialMutation: OperationId;
+  readonly accountExistsSignIn: OperationId;
   readonly navigateVerification: OperationId;
   readonly postVerificationSignIn: OperationId;
   readonly browserClose: OperationId;
@@ -147,6 +149,8 @@ export function createAccountVerifiedBindings(
     now,
     operations: Object.freeze({
       initialCredentialMutation: operations.initialCredentialMutation,
+      createCredentialMutation: operations.createCredentialMutation,
+      accountExistsSignIn: operations.accountExistsSignIn,
       navigateVerification: operations.navigateVerification,
       postVerificationSignIn: operations.postVerificationSignIn,
     }),
@@ -474,7 +478,7 @@ export async function runStage2AccountVerifiedFromOwnerConfig(
         }
         const lifecycle = new AccountVerificationLifecycle(
           createAuthorizationBoundLifecycleDependencies({
-            credentialMutation,
+            credentialMutation: credentialMutation.lifecycle,
             mailbox,
             artifacts: artifacts.port,
             navigator,
@@ -488,6 +492,7 @@ export async function runStage2AccountVerifiedFromOwnerConfig(
         return lifecycle.run({
           ...bindings.lifecycle,
           now: current,
+          accountIntent: owner.accountMode,
           session,
           credential: account,
         }, lifecycleSignal);
@@ -935,6 +940,8 @@ function operationIds(): AccountVerifiedOperationIds {
     accountAdvance: next(),
     lifecycle: next(),
     initialCredentialMutation: next(),
+    createCredentialMutation: next(),
+    accountExistsSignIn: next(),
     navigateVerification: next(),
     postVerificationSignIn: next(),
     browserClose: next(),

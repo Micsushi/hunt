@@ -34,6 +34,22 @@ test("account-verified bindings share the one navigation operation with Gmail", 
     value.lifecycle.operations.navigateVerification,
     operations.navigateVerification,
   );
+  assert.equal(
+    value.lifecycle.operations.createCredentialMutation,
+    operations.createCredentialMutation,
+  );
+  assert.equal(
+    value.lifecycle.operations.accountExistsSignIn,
+    operations.accountExistsSignIn,
+  );
+  assert.notEqual(
+    value.lifecycle.operations.initialCredentialMutation,
+    value.lifecycle.operations.createCredentialMutation,
+  );
+  assert.notEqual(
+    value.lifecycle.operations.createCredentialMutation,
+    value.lifecycle.operations.accountExistsSignIn,
+  );
   assert.equal(value.lifecycle.mailboxRequest, value.mailboxRequest);
   assert.equal(value.lifecycle.target, value.target);
   assert.equal(value.runner.targetHandleId, "target_ref_abcdefghijklmnop");
@@ -391,6 +407,8 @@ function operationIds() {
     accountAdvance: "operation_advanceabcdefghijkl" as OperationId,
     lifecycle: "operation_lifecycleabcdefg" as OperationId,
     initialCredentialMutation: "operation_initial_abcdefgh" as OperationId,
+    createCredentialMutation: "operation_create_abcdefgh" as OperationId,
+    accountExistsSignIn: "operation_exists_abcdefgh" as OperationId,
     navigateVerification: "operation_navigateabcdefg" as OperationId,
     postVerificationSignIn: "operation_signin_abcdefgh" as OperationId,
     browserClose: "operation_close_abcdefghijkl" as OperationId,
