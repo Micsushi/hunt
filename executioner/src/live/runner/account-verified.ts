@@ -94,9 +94,10 @@ export async function runStage2AccountVerified(
     return failure(signal.aborted ? "operation_cancelled" : "account_proof_invalid");
   }
   if (!lifecycle.ok) return failure(stableCode(lifecycle.error.code));
+  if (lifecycle.cleanup !== "pass") return failure("account_proof_invalid");
   const factual = factualResult(lifecycle.value);
   if (factual !== null) return failure(factual.code, factual.fact);
-  if (lifecycle.cleanup !== "pass" || !exactVerified(lifecycle.value)) {
+  if (!exactVerified(lifecycle.value)) {
     return failure("account_proof_invalid");
   }
 

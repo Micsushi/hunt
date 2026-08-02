@@ -83,6 +83,23 @@ test("account-verified runner requires cleanup proof and rejects secret-shaped d
     evidence: { write: async () => undefined },
   }, new AbortController().signal), { ok: false, code: "account_proof_invalid" });
 
+  for (const cleanup of [undefined, "failed"] as const) {
+    assert.deepEqual(await runStage2AccountVerified(input(), {
+      lifecycle: { run: async () => ({
+        ok: true,
+        ...(cleanup === undefined ? {} : { cleanup }),
+        value: {
+          kind: "blocked",
+          factualOutcome: {
+            source: "mailbox_verification",
+            result: { kind: "mailbox_none" },
+          },
+        },
+      } as never) },
+      evidence: { write: async () => undefined },
+    }, new AbortController().signal), { ok: false, code: "account_proof_invalid" });
+  }
+
   assert.deepEqual(await runStage2AccountVerified(input(), {
     lifecycle: { run: async () => ({
       ok: false,
