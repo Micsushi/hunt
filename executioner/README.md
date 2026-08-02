@@ -182,7 +182,10 @@ rejected, or wrong-scope existing grant fails as `gmail_refresh_grant_invalid`
 with no same-attempt interactive fallback. A network or timeout failure, or HTTP
 408, 429, or 5xx, fails as `gmail_refresh_unavailable`; it preserves the stored
 grant and permits a separately initiated later provisioning attempt, without
-opening a browser in the failed attempt. Neither failure deletes the grant. The
+opening a browser in the failed attempt. The same classification applies when
+that transient response occurs during the post-refresh Gmail profile check;
+profile denial, malformed profile, or wrong mailbox identity instead keeps the
+existing grant and returns `gmail_refresh_grant_invalid`. Neither failure deletes the grant. The
 provider can invalidate a grant at any time, so `gmail_refresh_grant_invalid`
 requires explicit deletion followed by a separately initiated bootstrap. The
 implementation includes a tested exact-target deletion boundary; an operator-facing

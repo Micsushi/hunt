@@ -35,7 +35,7 @@ public interface IHuntGmailOAuthClient
 {
     HuntGmailToken AuthorizeInteractive(string clientId, string clientSecret, string loginHint);
     HuntGmailToken Refresh(string clientId, string clientSecret, byte[] refreshValue);
-    string ProfileEmail(string accessValue);
+    string ProfileEmail(string accessValue, bool usedExistingGrant);
 }
 
 public sealed class HuntGmailRefreshUnavailableException : Exception
@@ -96,9 +96,12 @@ public static class HuntInteractiveGmailOAuthSealer
             return RefreshToken(clientId, clientSecret, refreshValue);
         }
 
-        public string ProfileEmail(string accessValue)
+        public string ProfileEmail(string accessValue, bool usedExistingGrant)
         {
-            return HuntInteractiveGmailOAuthSealer.ProfileEmail(accessValue);
+            return HuntInteractiveGmailOAuthSealer.ProfileEmail(
+                accessValue,
+                usedExistingGrant
+            );
         }
     }
 
@@ -337,10 +340,21 @@ public static class HuntInteractiveGmailOAuthSealer
                 if (token == null) throw new FlowException(11);
             }
 
-            string profileEmail = oauth.ProfileEmail(token.AccessValue);
+            bool usedExistingGrant = existing != null;
+            string profileEmail;
+            try
+            {
+                profileEmail = oauth.ProfileEmail(token.AccessValue, usedExistingGrant);
+            }
+            catch (HuntGmailRefreshUnavailableException) { throw new FlowException(12); }
+            catch
+            {
+                if (usedExistingGrant) throw new FlowException(11);
+                throw;
+            }
             if (!String.Equals(accountEmail, profileEmail, StringComparison.OrdinalIgnoreCase) ||
                 !ValidEmail(profileEmail) || profileEmail != profileEmail.ToLowerInvariant())
-                throw new FlowException(4);
+                throw new FlowException(usedExistingGrant ? 11 : 4);
             token.ProfileEmail = profileEmail;
 
             if (existing == null || token.RefreshValue != null)
@@ -790,10 +804,15 @@ public static class HuntInteractiveGmailOAuthSealer
         }
     }
 
-    private static string ProfileEmail(string access)
+    private static string ProfileEmail(string access, bool usedExistingGrant)
     {
         IDictionary<string, object> profile = RequestJson(
-            ProfileEndpoint, "GET", null, "Bearer " + access, 16384, false
+            ProfileEndpoint,
+            "GET",
+            null,
+            "Bearer " + access,
+            16384,
+            usedExistingGrant
         );
         return StringField(profile, "emailAddress", 3, 254);
     }

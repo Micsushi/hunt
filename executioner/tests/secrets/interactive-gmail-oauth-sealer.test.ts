@@ -552,7 +552,7 @@ public sealed class HuntTestOAuthClient : IHuntGmailOAuthClient
         return token;
     }
 
-    public string ProfileEmail(string accessValue)
+    public string ProfileEmail(string accessValue, bool usedExistingGrant)
     {
         ProfileCalls++;
         return Scenario == "mismatch" ? "other@example.invalid" : "person@example.invalid";
@@ -672,7 +672,7 @@ public sealed class HuntRefreshRepairOAuth : IHuntGmailOAuthClient
         };
     }
 
-    public string ProfileEmail(string accessValue)
+    public string ProfileEmail(string accessValue, bool usedExistingGrant)
     {
         ProfileCalls++;
         return "person@example.invalid";
@@ -728,6 +728,120 @@ public sealed class HuntRefreshRepairOAuth : IHuntGmailOAuthClient
         readCleared: true,
         preserved: true,
       },
+    });
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("trusted grant flow classifies post-refresh profile failures without losing the grant", async () => {
+  const source = await readFile(
+    "src/secrets/windows-dpapi/private/interactive-gmail-oauth-sealer.ts",
+    "utf8",
+  );
+  const csharp = /\$source = @'\r?\n([\s\S]*?)\r?\n'@/u.exec(source)?.[1] ?? "";
+  const fakes = String.raw`
+public sealed class HuntProfileRepairStore : IHuntGmailGrantStore
+{
+    public byte[] Value = Encoding.UTF8.GetBytes("stored-refresh");
+    public int Reads;
+    public int Writes;
+    public int Deletes;
+
+    public byte[] Read(string target) { Reads++; return (byte[])Value.Clone(); }
+    public void Write(string target, byte[] value) { Writes++; }
+    public bool Delete(string target) { Deletes++; return true; }
+}
+
+public sealed class HuntProfileRepairOAuth : IHuntGmailOAuthClient
+{
+    public string Scenario;
+    public int InteractiveCalls;
+    public int RefreshCalls;
+    public int ProfileCalls;
+    public bool LastProfileUsedGrant;
+
+    public HuntProfileRepairOAuth(string scenario) { Scenario = scenario; }
+
+    public HuntGmailToken AuthorizeInteractive(string clientId, string clientSecret, string loginHint)
+    {
+        InteractiveCalls++;
+        throw new InvalidOperationException();
+    }
+
+    public HuntGmailToken Refresh(string clientId, string clientSecret, byte[] refreshValue)
+    {
+        RefreshCalls++;
+        return new HuntGmailToken {
+            AccessValue = "refreshed-access",
+            RefreshValue = null,
+            ExpiresIn = 3600,
+            ReceivedAt = DateTimeOffset.Parse("2026-08-01T12:00:00.000Z")
+        };
+    }
+
+    public string ProfileEmail(string accessValue, bool usedExistingGrant)
+    {
+        ProfileCalls++;
+        LastProfileUsedGrant = usedExistingGrant;
+        if (Scenario == "unavailable_once" && ProfileCalls == 1)
+            throw new HuntGmailRefreshUnavailableException();
+        if (Scenario == "invalid") throw new InvalidOperationException();
+        if (Scenario == "mismatch") return "other@example.invalid";
+        return "person@example.invalid";
+    }
+}
+`;
+  const root = await mkdtemp(join(tmpdir(), "hunt-gmail-profile-repair-"));
+  try {
+    const sourcePath = join(root, "helper.cs");
+    const outputPath = join(root, "result.json");
+    await writeFile(sourcePath, `${csharp}\n${fakes}`);
+    const result = spawnSync(
+      "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
+      [
+        "-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
+        "-Command",
+        `$refs='System.Security.dll','System.Web.dll','System.Web.Extensions.dll'; Add-Type -Path $env:HUNT_TEST_SOURCE -ReferencedAssemblies $refs; $method=[HuntInteractiveGmailOAuthSealer].GetMethod('AcquireToken',[Reflection.BindingFlags]'NonPublic,Static'); if($null -eq $method) { exit 111 }; function InvokeAcquire($store,$oauth) { try { $token=$method.Invoke($null,@('1234567890-example1.apps.googleusercontent.com','client-secret','person@example.invalid',$store,$oauth)); $token.Clear(); return 0 } catch { $inner=$_.Exception.InnerException; if($null -ne $inner -and $null -ne $inner.GetType().GetProperty('ExitCode')) { return $inner.ExitCode }; return 99 } }; function Case($scenario) { $store=[HuntProfileRepairStore]::new(); $oauth=[HuntProfileRepairOAuth]::new($scenario); $exitCode=InvokeAcquire $store $oauth; return [pscustomobject]@{ exitCode=$exitCode; interactive=$oauth.InteractiveCalls; refresh=$oauth.RefreshCalls; profile=$oauth.ProfileCalls; profileUsedGrant=$oauth.LastProfileUsedGrant; writes=$store.Writes; deletes=$store.Deletes; preserved=([Text.Encoding]::UTF8.GetString($store.Value) -eq 'stored-refresh') } }; $transientStore=[HuntProfileRepairStore]::new(); $transientOauth=[HuntProfileRepairOAuth]::new('unavailable_once'); $first=InvokeAcquire $transientStore $transientOauth; $second=InvokeAcquire $transientStore $transientOauth; $output=[pscustomobject]@{ transient=[pscustomobject]@{ first=$first; second=$second; interactive=$transientOauth.InteractiveCalls; refresh=$transientOauth.RefreshCalls; profile=$transientOauth.ProfileCalls; profileUsedGrant=$transientOauth.LastProfileUsedGrant; writes=$transientStore.Writes; deletes=$transientStore.Deletes; preserved=([Text.Encoding]::UTF8.GetString($transientStore.Value) -eq 'stored-refresh') }; invalid=(Case 'invalid'); mismatch=(Case 'mismatch') }; $utf8=New-Object Text.UTF8Encoding($false); [IO.File]::WriteAllText($env:HUNT_TEST_OUTPUT,($output | ConvertTo-Json -Depth 5 -Compress),$utf8); exit 0`,
+      ],
+      {
+        shell: false,
+        windowsHide: true,
+        stdio: ["ignore", "ignore", "pipe"],
+        encoding: "utf8",
+        timeout: 15_000,
+        env: {
+          SystemRoot: "C:\\Windows",
+          WINDIR: "C:\\Windows",
+          HUNT_TEST_SOURCE: sourcePath,
+          HUNT_TEST_OUTPUT: outputPath,
+        },
+      },
+    );
+    assert.equal(result.status, 0, result.stderr);
+    const failure = {
+      interactive: 0,
+      refresh: 1,
+      profile: 1,
+      profileUsedGrant: true,
+      writes: 0,
+      deletes: 0,
+      preserved: true,
+    };
+    assert.deepEqual(JSON.parse(await readFile(outputPath, "utf8")), {
+      transient: {
+        first: 12,
+        second: 0,
+        interactive: 0,
+        refresh: 2,
+        profile: 2,
+        profileUsedGrant: true,
+        writes: 0,
+        deletes: 0,
+        preserved: true,
+      },
+      invalid: { exitCode: 11, ...failure },
+      mismatch: { exitCode: 11, ...failure },
     });
   } finally {
     await rm(root, { recursive: true, force: true });
